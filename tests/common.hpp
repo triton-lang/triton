@@ -186,7 +186,7 @@ void init_rand(simple_matrix<T> & A)
 {
   for (unsigned int i = 0; i < A.size1(); ++i)
     for (unsigned int j = 0; j < A.size2(); ++j)
-      A(i, j) = T(0.1) * rand()/RAND_MAX;
+      A(i, j) = rand()/RAND_MAX;
 }
 
 
@@ -194,7 +194,7 @@ template<typename T>
 void init_rand(simple_vector<T> & x)
 {
   for (unsigned int i = 0; i < x.size(); ++i)
-    x[i] = T(0.1) * rand()/RAND_MAX;
+    x[i] = rand()/RAND_MAX;
 }
 
 template<class T>

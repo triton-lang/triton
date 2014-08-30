@@ -1,14 +1,18 @@
 
 #include "common.hpp"
+#include <cmath>
 #include "viennacl/vector.hpp"
 
 #include "atidlas/templates/vector_axpy_template.hpp"
 #include "atidlas/execute.hpp"
 
 template<typename NumericT, class XType, class YType, class ZType>
-int test_vectors(NumericT epsilon, atidlas::vector_axpy_parameters const & vector_axpy_parameters,
+void test_vectors(NumericT epsilon, atidlas::vector_axpy_parameters const & vector_axpy_parameters,
                  XType & cx, YType & cy, ZType & cz)
 {
+  using namespace viennacl::linalg;
+  using namespace std;
+
   int failure_count = 0;
   ZType buffer = cz;
 
@@ -25,7 +29,7 @@ int test_vectors(NumericT epsilon, atidlas::vector_axpy_parameters const & vecto
 
 
 #define RUN_TEST_VECTOR_AXPY(NAME, CPU_LOOP, GPU_STATEMENT) \
-  std::cout << NAME "..." << std::flush;\
+  cout << NAME "..." << flush;\
   for(int_t i = 0 ; i < cz.size() ; ++i)\
     CPU_LOOP;\
   atidlas::execute(atidlas::vector_axpy_template(vector_axpy_parameters),\
@@ -35,10 +39,10 @@ int test_vectors(NumericT epsilon, atidlas::vector_axpy_parameters const & vecto
   if(failure_vector(cz, buffer, epsilon))\
   {\
     failure_count++;\
-    std::cout << " [Failure!]" << std::endl;\
+    cout << " [Failure!]" << endl;\
   }\
   else\
-    std::cout << std::endl;
+    cout << endl;
 
   RUN_TEST_VECTOR_AXPY("z = x", cz[i] = cx[i], viennacl::scheduler::statement(z, viennacl::op_assign(), x))
   RUN_TEST_VECTOR_AXPY("z = x + y", cz[i] = cx[i] + cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), x + y))
@@ -51,13 +55,44 @@ int test_vectors(NumericT epsilon, atidlas::vector_axpy_parameters const & vecto
   RUN_TEST_VECTOR_AXPY("z = da*x + b*y", cz[i] = a*cx[i] + b*cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), da*x + b*y))
   RUN_TEST_VECTOR_AXPY("z = a*x + db*y", cz[i] = a*cx[i] + b*cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), a*x + db*y))
   RUN_TEST_VECTOR_AXPY("z = da*x + db*y", cz[i] = a*cx[i] + b*cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), da*x + db*y))
+
+  RUN_TEST_VECTOR_AXPY("z = exp(x)", cz[i] = exp(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_exp(x)))
+//  RUN_TEST_VECTOR_AXPY("z = abs(x)", cz[i] = abs(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_abs(x)))
+  RUN_TEST_VECTOR_AXPY("z = acos(x)", cz[i] = acos(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_acos(x)))
+  RUN_TEST_VECTOR_AXPY("z = asin(x)", cz[i] = asin(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_asin(x)))
+  RUN_TEST_VECTOR_AXPY("z = atan(x)", cz[i] = atan(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_atan(x)))
+  RUN_TEST_VECTOR_AXPY("z = ceil(x)", cz[i] = ceil(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_ceil(x)))
+  RUN_TEST_VECTOR_AXPY("z = cos(x)", cz[i] = cos(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_cos(x)))
+  RUN_TEST_VECTOR_AXPY("z = cosh(x)", cz[i] = cosh(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_cosh(x)))
+  RUN_TEST_VECTOR_AXPY("z = exp(x)", cz[i] = exp(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_exp(x)))
+  RUN_TEST_VECTOR_AXPY("z = fabs(x)", cz[i] = fabs(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_fabs(x)))
+  RUN_TEST_VECTOR_AXPY("z = floor(x)", cz[i] = floor(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_floor(x)))
+  RUN_TEST_VECTOR_AXPY("z = log(x)", cz[i] = log(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_log(x)))
+  RUN_TEST_VECTOR_AXPY("z = log10(x)", cz[i] = log10(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_log10(x)))
+  RUN_TEST_VECTOR_AXPY("z = sin(x)", cz[i] = sin(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_sin(x)))
+  RUN_TEST_VECTOR_AXPY("z = sinh(x)", cz[i] = sinh(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_sinh(x)))
+  RUN_TEST_VECTOR_AXPY("z = sqrt(x)", cz[i] = sqrt(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_sqrt(x)))
+  RUN_TEST_VECTOR_AXPY("z = tan(x)", cz[i] = tan(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_tan(x)))
+  RUN_TEST_VECTOR_AXPY("z = tanh(x)", cz[i] = tanh(cx[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_tanh(x)))
+
+  RUN_TEST_VECTOR_AXPY("z = x./y", cz[i] = cx[i]/cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), element_div(x,y)))
+  RUN_TEST_VECTOR_AXPY("z = x==y", cz[i] = cx[i]==cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), element_eq(x,y)))
+  RUN_TEST_VECTOR_AXPY("z = x>=y", cz[i] = cx[i]>=cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), element_geq(x,y)))
+  RUN_TEST_VECTOR_AXPY("z = x>y", cz[i] = cx[i]>cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), element_greater(x,y)))
+  RUN_TEST_VECTOR_AXPY("z = x<=y", cz[i] = cx[i]<=cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), element_leq(x,y)))
+  RUN_TEST_VECTOR_AXPY("z = x<y", cz[i] = cx[i]<cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), element_less(x,y)))
+  RUN_TEST_VECTOR_AXPY("z = x!=y", cz[i] = cx[i]!=cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), element_neq(x,y)))
+  RUN_TEST_VECTOR_AXPY("z = pow(x,y)", cz[i] = pow(cx[i], cy[i]), viennacl::scheduler::statement(z, viennacl::op_assign(), element_pow(x,y)))
+  RUN_TEST_VECTOR_AXPY("z = x.*y", cz[i] = cx[i]*cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), element_prod(x,y)))
+
 #undef RUN_TEST_VECTOR_AXPY
 
-  return failure_count;
+  if(failure_count > 0)
+      exit(EXIT_FAILURE);
 }
 
 template<typename NumericT>
-int test_impl(NumericT epsilon)
+void test_impl(NumericT epsilon)
 {
   int_t N = 24378;
   int x_start = 4, y_start = 7, z_start = 15;
@@ -91,14 +126,12 @@ int test_impl(NumericT epsilon)
   simple_vector_range< simple_vector<NumericT> > z_range(z_range_holder, zr);
   simple_vector_slice< simple_vector<NumericT> > z_slice(z_slice_holder, zs);
 
-  int_t failure_count = 0;
-
   atidlas::vector_axpy_parameters vector_axpy_parameters(4, 32, 128, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS);
 
 
 #define TEST_OPERATIONS(XTYPE, YTYPE, ZTYPE)\
   std::cout << "> x : " #XTYPE " | y : " #YTYPE " | z : " #ZTYPE << std::endl;\
-  failure_count += test_vectors(epsilon, vector_axpy_parameters, x_ ## XTYPE, y_ ## YTYPE, z_ ## ZTYPE);\
+  test_vectors(epsilon, vector_axpy_parameters, x_ ## XTYPE, y_ ## YTYPE, z_ ## ZTYPE);\
 
   TEST_OPERATIONS(vector, vector, vector)
   TEST_OPERATIONS(vector, vector, range)
@@ -129,19 +162,16 @@ int test_impl(NumericT epsilon)
   TEST_OPERATIONS(slice, slice, vector)
   TEST_OPERATIONS(slice, slice, range)
   TEST_OPERATIONS(slice, slice, slice)
-
-  return failure_count;
 }
 
 int main()
 {
-  int n_failures = 0;
   std::cout << ">> float" << std::endl;
-  n_failures += test_impl<float>(1e-5);
+  test_impl<float>(1e-5);
   std::cout << ">> double" << std::endl;
-  n_failures += test_impl<double>(1e-9);
+  test_impl<double>(1e-9);
+  std::cout << "---" << std::endl;
+  std::cout << "Passed" << std::endl;
 
-  if(n_failures>0)
-    return EXIT_FAILURE;
   return EXIT_SUCCESS;
 }
