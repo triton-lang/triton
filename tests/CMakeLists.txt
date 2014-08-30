@@ -1,0 +1,6 @@
+foreach(PROG blas1 blas3)
+     add_executable(${PROG}-test ${PROG}.cpp)
+     add_test(${PROG} ${PROG}-test)
+     target_link_libraries(${PROG}-test ${OPENCL_LIBRARIES})
+     set_target_properties(${PROG}-test PROPERTIES COMPILE_FLAGS "-DVIENNACL_WITH_OPENCL -Wall -Wextra")
+endforeach(PROG)
