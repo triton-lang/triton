@@ -1,5 +1,5 @@
-#ifndef VIENNACL_DEVICE_SPECIFIC_TEMPLATES_ROW_WISE_REDUCTION_HPP
-#define VIENNACL_DEVICE_SPECIFIC_TEMPLATES_ROW_WISE_REDUCTION_HPP
+#ifndef ATIDLAS_TEMPLATES_ROW_WISE_REDUCTION_HPP
+#define ATIDLAS_TEMPLATES_ROW_WISE_REDUCTION_HPP
 
 
 #include <vector>
@@ -46,7 +46,7 @@ private:
     return p_.local_size_0*(p_.local_size_1+1);
   }
 
-  static void parse(scheduler::statement const & statement, std::vector<size_t> & idx, bool & is_trans, scheduler::lhs_rhs_element & matrix)
+  static void parse(viennacl::scheduler::statement const & statement, std::vector<size_t> & idx, bool & is_trans, viennacl::scheduler::lhs_rhs_element & matrix)
   {
     idx = tree_parsing::filter_nodes(&utils::is_reduction, statement, false);
     is_trans = is_node_trans(statement.array(), idx[0], LHS_NODE_TYPE);
@@ -132,7 +132,7 @@ private:
             accessors["vector"] = str[a];
             accessors["scalar"] = "#namereg";
             std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
-            if (exprs[k]->root_node().op.type==scheduler::OPERATION_BINARY_MAT_VEC_PROD_TYPE)
+            if (exprs[k]->root_node().op.type==viennacl::scheduler::OPERATION_BINARY_MAT_VEC_PROD_TYPE)
               value+= "*" + exprs[k]->evaluate_recursive(RHS_NODE_TYPE, accessors);
 
             if (exprs[k]->is_index_reduction())
@@ -209,7 +209,7 @@ private:
     for (mit = mappings.begin(), sit = statements.data().begin(); mit != mappings.end(); ++mit, ++sit)
     {
       std::vector<size_t> idx;
-      scheduler::lhs_rhs_element A;
+      viennacl::scheduler::lhs_rhs_element A;
       parse(*sit, idx, is_trans, A);
       row_major = utils::call_on_matrix(A, utils::row_major_fun());
       for (unsigned int j = 0; j < idx.size(); ++j)
@@ -234,7 +234,7 @@ public:
   void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
   {
     std::vector<size_t> idx;
-    scheduler::lhs_rhs_element A;
+    viennacl::scheduler::lhs_rhs_element A;
     bool is_trans;
     parse(statements.data().front(), idx, is_trans, A);
     bool row_major = utils::call_on_matrix(A, utils::row_major_fun());

@@ -1,4 +1,4 @@
-foreach(PROG blas1 blas3)
+foreach(PROG blas1 blas2 blas3)
      add_executable(${PROG}-test ${PROG}.cpp)
      add_test(${PROG} ${PROG}-test)
      target_link_libraries(${PROG}-test ${OPENCL_LIBRARIES})

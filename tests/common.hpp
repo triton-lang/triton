@@ -130,6 +130,8 @@ public:
     simple_matrix(size_t M, size_t N) : data_(M*N), M_(M), N_(N){ }
     size_t size1() const { return M_; }
     size_t size2() const { return N_; }
+    size_t internal_size1() const { return M_; }
+    size_t internal_size2() const { return N_; }
     value_type & operator()(size_t i, size_t j) { return data_[i + M_*j]; }
     value_type operator()(size_t i, size_t j) const { return data_[i + M_*j]; }
 private:
@@ -147,6 +149,8 @@ public:
     simple_matrix_range(T & A, viennacl::range const & r1, viennacl::range const & r2) : A_(A), r1_(r1), r2_(r2){ }
     size_t size1() const { return r1_.size(); }
     size_t size2() const { return r2_.size(); }
+    size_t internal_size1() const { return A_.internal_size1(); }
+    size_t internal_size2() const { return A_.internal_size2(); }
     viennacl::range const & r1() const { return r1_; }
     viennacl::range const & r2() const { return r2_; }
     value_type & operator()(size_t i, size_t j) { return A_(i+r1_.start(), j+r2_.start()); }
@@ -166,6 +170,8 @@ public:
     simple_matrix_slice(T & A,  viennacl::slice const & s1,  viennacl::slice const & s2) : A_(A), s1_(s1), s2_(s2){ }
     viennacl::slice::size_type size1() const { return s1_.size(); }
     viennacl::slice::size_type size2() const { return s2_.size(); }
+    size_t internal_size1() const { return A_.internal_size1(); }
+    size_t internal_size2() const { return A_.internal_size2(); }
     viennacl::slice const & s1() const { return s1_; }
     viennacl::slice const & s2() const { return s2_; }
     value_type & operator()(size_t i, size_t j) { return A_(i*s1_.stride() + s1_.start(), j*s2_.stride() + s2_.start()); }

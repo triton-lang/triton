@@ -7,7 +7,7 @@
 #include "atidlas/execute.hpp"
 
 template<typename NumericT, class XType, class YType, class ZType>
-void test_vectors(NumericT epsilon, atidlas::vector_axpy_parameters const & vector_axpy_parameters,
+void test_element_wise_vector(NumericT epsilon, atidlas::vector_axpy_parameters const & vector_axpy_parameters,
                  XType & cx, YType & cy, ZType & cz)
 {
   using namespace viennacl::linalg;
