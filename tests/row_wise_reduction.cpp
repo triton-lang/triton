@@ -1,3 +1,4 @@
+//#define VIENNACL_DEBUG_ALL
 #include <cmath>
 #include "common.hpp"
 
@@ -59,7 +60,7 @@ void test_row_wise_reduction(NumericT epsilon, YType & cy, AType & cA, AType & c
 //  TEST_OPERATION("y = A'.x", cA(i,j)*cx[j], yi, 'T', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(trans(ATrow), x)));
   std::cout << "> col" << std::endl;
   TEST_OPERATION("y = A.x", cA(i,j)*cx[j], yi, 'N', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(Acol, x)));
-  TEST_OPERATION("y = A'.x", cA(i,j)*cx[j], yi, 'T', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(trans(ATcol), x)));
+  TEST_OPERATION("y = A'.x", cAT(j,i)*cx[j], yi, 'T', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(trans(ATcol), x)));
 
   if(failure_count>0)
     exit(EXIT_FAILURE);
@@ -70,12 +71,9 @@ void test_impl(NumericT epsilon)
 {
   int_t M = 328;
   int_t N = 391;
-  int x_start = 14, y_start = 25, M_start = 33, N_start = 51;
-  int x_stride = 5, y_stride = 8, M_stride = 3, N_stride = 7;
-
-  INIT_VECTOR_AND_PROXIES(M, y_start, y_stride, y);
-  INIT_MATRIX_AND_PROXIES(M, M_start, M_stride, N, N_start, N_stride, A);
-  INIT_VECTOR_AND_PROXIES(N, x_start, x_stride, x);
+  INIT_VECTOR_AND_PROXIES(M, 25, 8, y);
+  INIT_MATRIX_AND_PROXIES(M, 33, 4, N, 51, 2, A);
+  INIT_VECTOR_AND_PROXIES(N, 14, 5, x);
 
 
 #define TEST_OPERATIONS(YTYPE, ATYPE, XTYPE)\

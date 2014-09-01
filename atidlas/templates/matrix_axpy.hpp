@@ -109,7 +109,7 @@ public:
     kernel.global_work_size(0,p_.local_size_0*p_.num_groups_0);
     kernel.global_work_size(1,p_.local_size_1*p_.num_groups_1);
 
-    scheduler::statement_node const & root = statements.data().front().array()[statements.data().front().root()];
+    viennacl::scheduler::statement_node const & root = statements.data().front().array()[statements.data().front().root()];
     unsigned int current_arg = 0;
     if (up_to_internal_size_)
     {

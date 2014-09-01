@@ -155,7 +155,7 @@ private:
             accessors["matrix_diag"] = str[a];
             accessors["scalar"] = "#namereg";
             std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
-            if (exprs[k]->root_node().op.type==scheduler::OPERATION_BINARY_INNER_PROD_TYPE)
+            if (exprs[k]->root_node().op.type==viennacl::scheduler::OPERATION_BINARY_INNER_PROD_TYPE)
               value+= "*" + exprs[k]->evaluate_recursive(RHS_NODE_TYPE, accessors);
 
             if (exprs[k]->is_index_reduction())
@@ -278,7 +278,7 @@ public:
 
   void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
   {
-    std::vector<scheduler::statement_node const *> reductions;
+    std::vector<viennacl::scheduler::statement_node const *> reductions;
     cl_uint size = 0;
     for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
     {
@@ -288,7 +288,7 @@ public:
         reductions.push_back(&it->array()[*itt]);
     }
 
-    scheduler::statement const & statement = statements.data().front();
+    viennacl::scheduler::statement const & statement = statements.data().front();
     unsigned int scalartype_size = utils::size_of(lhs_most(statement.array(), statement.root()).lhs.numeric_type);
 
     viennacl::ocl::kernel * kernels[2];
@@ -302,12 +302,12 @@ public:
       kernels[0] = &programs[1].program().get_kernel(kernel_prefix+"_0");
       kernels[1] = &programs[1].program().get_kernel(kernel_prefix+"_1");
     }
-
     kernels[0]->local_work_size(0, p_.local_size_0);
     kernels[0]->global_work_size(0,p_.local_size_0*p_.num_groups);
 
     kernels[1]->local_work_size(0, p_.local_size_0);
     kernels[1]->global_work_size(0,p_.local_size_0);
+
 
     for (unsigned int k = 0; k < 2; k++)
     {
@@ -315,7 +315,7 @@ public:
       kernels[k]->arg(n_arg++, size);
       unsigned int i = 0;
       unsigned int j = 0;
-      for (std::vector<scheduler::statement_node const *>::const_iterator it = reductions.begin(); it != reductions.end(); ++it)
+      for (std::vector<viennacl::scheduler::statement_node const *>::const_iterator it = reductions.begin(); it != reductions.end(); ++it)
       {
         if (utils::is_index_reduction((*it)->op))
         {

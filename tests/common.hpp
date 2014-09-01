@@ -175,7 +175,7 @@ public:
     viennacl::slice const & s1() const { return s1_; }
     viennacl::slice const & s2() const { return s2_; }
     value_type & operator()(size_t i, size_t j) { return A_(i*s1_.stride() + s1_.start(), j*s2_.stride() + s2_.start()); }
-    value_type operator()(size_t i, size_t j) const { return A_(i+s1_.start(), j+s2_.start()); }
+    value_type operator()(size_t i, size_t j) const { return A_(i*s1_.stride()+s1_.start(), j*s2_.stride()+s2_.start()); }
 private:
     T & A_;
     viennacl::slice s1_;
@@ -288,21 +288,24 @@ bool failure_vector(VectorType const & x, VectorType const & y, typename VectorT
   {
     value_type delta = std::abs(x[i] - y[i])/(std::max(x[i], y[i]));
     if(delta > epsilon)
+    {
+      std::cout << i << " " << x[i] << " " << y[i] << std::endl;
       return true;
+    }
   }
   return false;
 }
 
-template<class NumericT>
-bool failure(simple_matrix<NumericT> const & A, simple_matrix<NumericT> const & B, NumericT epsilon)
+template<class MatrixT>
+bool failure_matrix(MatrixT const & A, MatrixT const & B, typename MatrixT::value_type epsilon)
 {
+  typedef typename MatrixT::value_type value_type;
   int M = A.size1();
   int N = A.size2();
-  for(int i = 0 ; i < M ; ++i)
-    for(int j = 0 ; j < N ; ++j)
+  for(int_t i = 0 ; i < M ; ++i)
+    for(int_t j = 0 ; j < N ; ++j)
     {
-      NumericT delta = std::abs(A(i,j) - B(i,j));
-//      std::cout << i << "," << j << "\t" << A(i,j) << " " << B(i,j) << std::endl;
+      value_type delta = std::abs(A(i,j) - B(i,j));
       if(delta > epsilon)
         return true;
     }
@@ -338,8 +341,8 @@ template<class T> int size2(simple_matrix<T> const & M) { return M.size2(); }
   viennacl::slice PREFIX ## s1(START1, STRIDE1, M);\
   viennacl::slice PREFIX ## s2(START2, STRIDE2, N);\
   simple_matrix<NumericT> PREFIX ## _matrix(M, N);\
-  simple_matrix<NumericT> PREFIX ## _range_holder(M_start + M, N_start + N);\
-  simple_matrix<NumericT> PREFIX ## _slice_holder(M_start + M*M_stride, N_start + N*N_stride);\
+  simple_matrix<NumericT> PREFIX ## _range_holder(START1 + M, START2 + N);\
+  simple_matrix<NumericT> PREFIX ## _slice_holder(START1 + M*STRIDE1, START2 + N*STRIDE2);\
   init_rand(PREFIX ## _matrix);\
   init_rand(PREFIX ## _range_holder);\
   init_rand(PREFIX ## _slice_holder);\

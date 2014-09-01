@@ -26,7 +26,7 @@ int test_layout(CType & C, T alpha, AType const & A, AType const & AT, BType con
                    GPU_STATEMENT,\
                    viennacl::ocl::current_context(), true);\
   viennacl::copy(C, tmp);\
-  if (failure(ground, tmp, epsilon))\
+  if (failure_matrix(ground, tmp, epsilon))\
   {\
     std::cout << " [Failure!]" << std::endl;\
     failures_count++;\

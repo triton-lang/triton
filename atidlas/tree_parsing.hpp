@@ -8,6 +8,7 @@
 #include "viennacl/forwards.h"
 #include "viennacl/scheduler/forwards.h"
 
+#include "atidlas/mapped_objects.hpp"
 #include "atidlas/utils.hpp"
 #include "atidlas/forwards.h"
 
