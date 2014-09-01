@@ -11,9 +11,6 @@
 #include "viennacl/tools/tools.hpp"
 
 #include "atidlas/templates/template_base.hpp"
-#include "atidlas/mapped_objects.hpp"
-#include "atidlas/utils.hpp"
-#include "atidlas/tree_parsing.hpp"
 #include "atidlas/tools/align.hpp"
 
 namespace atidlas
@@ -113,7 +110,7 @@ private:
                     atidlas_int_t & A_idx, leaf_t & A_leaf, bool& A_trans, atidlas_int_t & B_idx, leaf_t & B_leaf, bool& B_trans,
                     atidlas_int_t & beta_idx, leaf_t & beta_leaf)
   {
-    using namespace tree_parsing;
+    using namespace tools;
     using namespace viennacl::scheduler;
 
     viennacl::scheduler::statement::container_type const & array = s.array();
@@ -159,7 +156,7 @@ private:
     beta_leaf = RHS_NODE_TYPE;
   }
 
-  void handle_bounds(bool fallback, utils::kernel_generation_stream & stream, std::string const & inbounds, std::string const & do_if, std::string do_else) const
+  void handle_bounds(bool fallback, tools::kernel_generation_stream & stream, std::string const & inbounds, std::string const & do_if, std::string do_else) const
   {
     if (fallback)
     {
@@ -195,7 +192,7 @@ private:
     //////////////////
     /// INIT
     /// //////////////
-    utils::kernel_generation_stream stream;
+    tools::kernel_generation_stream stream;
     viennacl::scheduler::statement const & st = statements.data().front();
     mapping_type const & mapping = mappings.front();
 
@@ -214,8 +211,8 @@ private:
     /// DECLARATIONS
     /// //////////////
     stream << " __attribute__((reqd_work_group_size(" << p.local_size_0 << "," << p.local_size_1 << ",1)))" << std::endl;
-    stream << "__kernel void " << kernel_prefix << "(unsigned int M, unsigned int N,  unsigned int K, " << generate_arguments(mappings, utils::create_process_accessors(A->name(), matrix_arguments(utils::append_width("#scalartype", p.simd_width)))
-                                                                                                                                                                       (B->name(), matrix_arguments(utils::append_width("#scalartype", p.simd_width)))
+    stream << "__kernel void " << kernel_prefix << "(unsigned int M, unsigned int N,  unsigned int K, " << generate_arguments(mappings, tools::create_process_accessors(A->name(), matrix_arguments(tools::append_width("#scalartype", p.simd_width)))
+                                                                                                                                                                       (B->name(), matrix_arguments(tools::append_width("#scalartype", p.simd_width)))
                                                                                                                                                                        ("matrix", matrix_arguments("#scalartype"))
                                                                                                                                                                        ("host_scalar", "#scalartype #name,"),statements) << ")" << std::endl;
     stream << "{" << std::endl;
@@ -227,7 +224,7 @@ private:
       stream << B->process("#start1/= "  + to_string(p.simd_width) + ";") << std::endl;
       stream << B->process("#ld /= " + to_string(p.simd_width) + ";") << std::endl;
     }
-    tree_parsing::process(stream, PARENT_NODE_TYPE, utils::create_process_accessors("matrix", "#pointer += $OFFSET{#start1, #start2};")
+    tools::process(stream, PARENT_NODE_TYPE, tools::create_process_accessors("matrix", "#pointer += $OFFSET{#start1, #start2};")
                                                                                   ("matrix", "#ld *= #nldstride;"), statements, mappings);
 
     ///Result Values
@@ -235,11 +232,11 @@ private:
     if (p.A_fetching_policy==FETCH_FROM_LOCAL)
       stream << A->process("#scalartype rA[" + to_string(p.kS) + "][" + to_string(p.mS) + "];") << std::endl;
     else
-      stream << A->process(utils::append_width("#scalartype",p.simd_width) + " rA[" + to_string(p.kS) + "][" + to_string(p.mS/p.simd_width) + "];") << std::endl;
+      stream << A->process(tools::append_width("#scalartype",p.simd_width) + " rA[" + to_string(p.kS) + "][" + to_string(p.mS/p.simd_width) + "];") << std::endl;
     if (p.B_fetching_policy==FETCH_FROM_LOCAL)
       stream << B->process("#scalartype rB[" + to_string(p.kS) + "][" + to_string(p.nS) + "];");
     else
-      stream << B->process(utils::append_width("#scalartype",p.simd_width) + " rB[" + to_string(p.kS) + "][" + to_string(p.nS/p.simd_width) + "];") << std::endl;
+      stream << B->process(tools::append_width("#scalartype",p.simd_width) + " rB[" + to_string(p.kS) + "][" + to_string(p.nS/p.simd_width) + "];") << std::endl;
 
 
     if (p.A_fetching_policy==FETCH_FROM_LOCAL)
@@ -711,7 +708,7 @@ private:
                     viennacl::scheduler::statement & statement, viennacl::scheduler::lhs_rhs_element & A, viennacl::scheduler::lhs_rhs_element & B, viennacl::scheduler::lhs_rhs_element & C, viennacl::scheduler::lhs_rhs_element & beta,
                     NumericT beta_value, std::vector<lazy_program_compiler> & programs, std::string const & kernel_prefix)
   {
-    using namespace utils;
+    using namespace tools;
     atidlas_int_t ldstrideA = call_on_matrix(A, leading_stride_fun());
     atidlas_int_t ldstrideB = call_on_matrix(B, leading_stride_fun());
     atidlas_int_t ldstrideC = call_on_matrix(C, leading_stride_fun());
@@ -762,8 +759,8 @@ public:
 
   virtual void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
   {
-    using namespace utils;
-    using namespace tree_parsing;
+    using namespace tools;
+    using namespace tools;
 
     viennacl::scheduler::statement const & st = statements.data().front();
     bool A_trans, B_trans;
@@ -772,10 +769,10 @@ public:
     parse(st, C_idx, C_leaf, alpha_idx, alpha_leaf, A_idx, A_leaf, A_trans, B_idx, B_leaf, B_trans, beta_idx, beta_leaf);
 
     viennacl::scheduler::statement stcopy = st;
-    viennacl::scheduler::lhs_rhs_element& A = utils::lhs_rhs_element(stcopy, A_idx, A_leaf);
-    viennacl::scheduler::lhs_rhs_element& B = utils::lhs_rhs_element(stcopy, B_idx, B_leaf);
-    viennacl::scheduler::lhs_rhs_element& C = utils::lhs_rhs_element(stcopy, C_idx, C_leaf);
-    viennacl::scheduler::lhs_rhs_element& beta = utils::lhs_rhs_element(stcopy, beta_idx, beta_leaf);
+    viennacl::scheduler::lhs_rhs_element& A = tools::lhs_rhs_element(stcopy, A_idx, A_leaf);
+    viennacl::scheduler::lhs_rhs_element& B = tools::lhs_rhs_element(stcopy, B_idx, B_leaf);
+    viennacl::scheduler::lhs_rhs_element& C = tools::lhs_rhs_element(stcopy, C_idx, C_leaf);
+    viennacl::scheduler::lhs_rhs_element& beta = tools::lhs_rhs_element(stcopy, beta_idx, beta_leaf);
 
     if (C.numeric_type==viennacl::scheduler::FLOAT_TYPE)
       enqueue_impl<float>(&viennacl::scheduler::lhs_rhs_element::matrix_float, stcopy, A, B, C, beta, beta.host_float, programs, kernel_prefix);

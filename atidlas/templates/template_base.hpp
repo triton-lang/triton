@@ -12,10 +12,10 @@
 #include "viennacl/scheduler/forwards.h"
 #include "viennacl/scheduler/io.hpp"
 
-#include "atidlas/lazy_program_compiler.hpp"
+#include "atidlas/tools/lazy_program_compiler.hpp"
+#include "atidlas/tools/tree_parsing.hpp"
+#include "atidlas/tools/misc.hpp"
 #include "atidlas/mapped_objects.hpp"
-#include "atidlas/tree_parsing.hpp"
-#include "atidlas/utils.hpp"
 
 namespace atidlas
 {
@@ -42,7 +42,7 @@ public:
 
 private:
   /** @brief Functor to map the statements to the types defined in mapped_objects.hpp */
-  class map_functor : public tree_parsing::traversal_functor
+  class map_functor : public tools::traversal_functor
   {
 
     viennacl::scheduler::statement_node_numeric_type numeric_type(viennacl::scheduler::statement const * statement, atidlas_int_t root_idx) const
@@ -62,48 +62,48 @@ private:
     template<class T>
     result_type binary_leaf(viennacl::scheduler::statement const * statement, atidlas_int_t root_idx, mapping_type const * mapping) const
     {
-      return result_type(new T(utils::numeric_type_to_string(numeric_type(statement,root_idx)), binder_.get(NULL), mapped_object::node_info(mapping, statement, root_idx)));
+      return result_type(new T(tools::numeric_type_to_string(numeric_type(statement,root_idx)), binder_.get(NULL), mapped_object::node_info(mapping, statement, root_idx)));
     }
 
     template<class NumericT>
     result_type operator()(NumericT const & /*scalar*/) const
     {
-      return result_type(new mapped_host_scalar(utils::type_to_string<NumericT>::value(), binder_.get(NULL)));
+      return result_type(new mapped_host_scalar(tools::type_to_string<NumericT>::value(), binder_.get(NULL)));
     }
 
     /** @brief Scalar mapping */
     template<class NumericT>
     result_type operator()(viennacl::scalar<NumericT> const & scal) const
     {
-      return result_type(new mapped_scalar(utils::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(scal))));
+      return result_type(new mapped_scalar(tools::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(scal))));
     }
 
     /** @brief Vector mapping */
     template<class NumericT>
     result_type operator()(viennacl::vector_base<NumericT> const & vec) const
     {
-      return result_type(new mapped_vector(utils::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(vec))));
+      return result_type(new mapped_vector(tools::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(vec))));
     }
 
     /** @brief Implicit vector mapping */
     template<class NumericT>
     result_type operator()(viennacl::implicit_vector_base<NumericT> const & /*vec*/) const
     {
-      return result_type(new mapped_implicit_vector(utils::type_to_string<NumericT>::value(), binder_.get(NULL)));
+      return result_type(new mapped_implicit_vector(tools::type_to_string<NumericT>::value(), binder_.get(NULL)));
     }
 
     /** @brief Matrix mapping */
     template<class NumericT>
     result_type operator()(viennacl::matrix_base<NumericT> const & mat) const
     {
-      return result_type(new mapped_matrix(utils::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(mat))));
+      return result_type(new mapped_matrix(tools::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(mat))));
     }
 
     /** @brief Implicit matrix mapping */
     template<class NumericT>
     result_type operator()(viennacl::implicit_matrix_base<NumericT> const & /*mat*/) const
     {
-      return result_type(new mapped_implicit_matrix(utils::type_to_string<NumericT>::value(), binder_.get(NULL)));
+      return result_type(new mapped_implicit_matrix(tools::type_to_string<NumericT>::value(), binder_.get(NULL)));
     }
 
     /** @brief Traversal functor */
@@ -112,9 +112,9 @@ private:
       viennacl::scheduler::statement_node const & root_node = statement.array()[root_idx];
 
       if (leaf_t == LHS_NODE_TYPE && root_node.lhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-        mapping_.insert(mapping_type::value_type(key, utils::call_on_element(root_node.lhs, *this)));
+        mapping_.insert(mapping_type::value_type(key, tools::call_on_element(root_node.lhs, *this)));
       else if (leaf_t == RHS_NODE_TYPE && root_node.rhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-        mapping_.insert(mapping_type::value_type(key,  utils::call_on_element(root_node.rhs, *this)));
+        mapping_.insert(mapping_type::value_type(key,  tools::call_on_element(root_node.rhs, *this)));
       else if ( leaf_t== PARENT_NODE_TYPE)
       {
         if (root_node.op.type==viennacl::scheduler::OPERATION_BINARY_VECTOR_DIAG_TYPE)
@@ -142,7 +142,7 @@ private:
   };
 
   /** @brief functor for setting the arguments of a kernel */
-  class set_arguments_functor : public tree_parsing::traversal_functor
+  class set_arguments_functor : public tools::traversal_functor
   {
   public:
     typedef void result_type;
@@ -213,9 +213,9 @@ private:
     {
       viennacl::scheduler::statement_node const & root_node = statement.array()[root_idx];
       if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-        utils::call_on_element(root_node.lhs, *this);
+        tools::call_on_element(root_node.lhs, *this);
       else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-        utils::call_on_element(root_node.rhs, *this);
+        tools::call_on_element(root_node.rhs, *this);
     }
 
   private:
@@ -226,15 +226,15 @@ private:
 
 protected:
 
-  static inline void compute_reduction(utils::kernel_generation_stream & os, std::string acc, std::string cur, viennacl::scheduler::op_element const & op)
+  static inline void compute_reduction(tools::kernel_generation_stream & os, std::string acc, std::string cur, viennacl::scheduler::op_element const & op)
   {
-    if (utils::elementwise_function(op))
-      os << acc << "=" << tree_parsing::evaluate(op.type) << "(" << acc << "," << cur << ");" << std::endl;
+    if (tools::elementwise_function(op))
+      os << acc << "=" << tools::evaluate(op.type) << "(" << acc << "," << cur << ");" << std::endl;
     else
-      os << acc << "= (" << acc << ")" << tree_parsing::evaluate(op.type)  << "(" << cur << ");" << std::endl;
+      os << acc << "= (" << acc << ")" << tools::evaluate(op.type)  << "(" << cur << ");" << std::endl;
   }
 
-  static inline void compute_index_reduction(utils::kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, viennacl::scheduler::op_element const & op)
+  static inline void compute_index_reduction(tools::kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, viennacl::scheduler::op_element const & op)
   {
     //        os << acc << " = " << cur_value << ">" << acc_value  << "?" << cur << ":" << acc << ";" << std::endl;
     os << acc << "= select(" << acc << "," << cur << "," << cur_value << ">" << acc_value << ");" << std::endl;
@@ -247,7 +247,7 @@ protected:
   }
 
   static inline void process_all(std::string const & type_key, std::string const & str,
-                          utils::kernel_generation_stream & stream, std::vector<mapping_type> const & mappings)
+                          tools::kernel_generation_stream & stream, std::vector<mapping_type> const & mappings)
   {
     for (std::vector<mapping_type>::const_iterator mit = mappings.begin(); mit != mappings.end(); ++mit)
       for (mapping_type::const_iterator mmit = mit->begin(); mmit != mit->end(); ++mmit)
@@ -257,7 +257,7 @@ protected:
 
 
   static inline void process_all_at(std::string const & type_key, std::string const & str,
-                             utils::kernel_generation_stream & stream, std::vector<mapping_type> const & mappings,
+                             tools::kernel_generation_stream & stream, std::vector<mapping_type> const & mappings,
                              size_t root_idx, leaf_t leaf)
   {
     for (std::vector<mapping_type>::const_iterator mit = mappings.begin(); mit != mappings.end(); ++mit)
@@ -290,8 +290,8 @@ protected:
 
   static std::string generate_arguments(std::vector<mapping_type> const & mappings, std::multimap<std::string, std::string> const & accessors, statements_container const & statements)
   {
-    utils::kernel_generation_stream stream;
-    tree_parsing::process(stream, PARENT_NODE_TYPE, accessors, statements, mappings);
+    tools::kernel_generation_stream stream;
+    tools::process(stream, PARENT_NODE_TYPE, accessors, statements, mappings);
     std::string res = stream.str();
     res.erase(res.rfind(','));
     return res;
@@ -309,7 +309,7 @@ protected:
 
   static std::string generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings, statements_container const & statements)
   {
-    return generate_arguments(mappings, utils::create_process_accessors("scalar", "__global #scalartype* #pointer,")
+    return generate_arguments(mappings, tools::create_process_accessors("scalar", "__global #scalartype* #pointer,")
                                                                       ("host_scalar", "#scalartype #name,")
                                                                       ("matrix", matrix_arguments(data_type))
                                                                       ("vector", vector_arguments(data_type))
@@ -323,7 +323,7 @@ protected:
   {
     tools::shared_ptr<symbolic_binder> binder = make_binder(binding_policy_);
     for (statements_container::data_type::const_iterator itt = statements.data().begin(); itt != statements.data().end(); ++itt)
-      tree_parsing::traverse(*itt, itt->root(), set_arguments_functor(*binder,current_arg,kernel), true);
+      tools::traverse(*itt, itt->root(), set_arguments_functor(*binder,current_arg,kernel), true);
   }
 
   class invalid_template_exception : public std::exception
@@ -340,7 +340,7 @@ protected:
     std::string message_;
   };
 
-  static void fetching_loop_info(fetching_policy_type policy, std::string const & bound, utils::kernel_generation_stream & stream, std::string & init, std::string & upper_bound, std::string & inc, std::string const & domain_id, std::string const & domain_size)
+  static void fetching_loop_info(fetching_policy_type policy, std::string const & bound, tools::kernel_generation_stream & stream, std::string & init, std::string & upper_bound, std::string & inc, std::string const & domain_id, std::string const & domain_size)
   {
     if (policy==FETCH_FROM_GLOBAL_STRIDED)
     {
@@ -396,18 +396,18 @@ protected:
     for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
     {
       //checks for vectors
-      std::vector<viennacl::scheduler::lhs_rhs_element> vectors = tree_parsing::filter_elements(viennacl::scheduler::DENSE_VECTOR_TYPE, *it);
+      std::vector<viennacl::scheduler::lhs_rhs_element> vectors = tools::filter_elements(viennacl::scheduler::DENSE_VECTOR_TYPE, *it);
       for (std::vector<viennacl::scheduler::lhs_rhs_element>::iterator itt = vectors.begin(); itt != vectors.end(); ++itt)
-        if (utils::call_on_vector(*itt, utils::stride_fun())>1)
+        if (tools::call_on_vector(*itt, tools::stride_fun())>1)
           return true;
 
       //checks for matrix
-      std::vector<viennacl::scheduler::lhs_rhs_element> matrices = tree_parsing::filter_elements(viennacl::scheduler::DENSE_MATRIX_TYPE, *it);
+      std::vector<viennacl::scheduler::lhs_rhs_element> matrices = tools::filter_elements(viennacl::scheduler::DENSE_MATRIX_TYPE, *it);
       for (std::vector<viennacl::scheduler::lhs_rhs_element>::iterator itt = matrices.begin(); itt != matrices.end(); ++itt)
-        if (utils::call_on_matrix(*itt, utils::stride1_fun())>1 || utils::call_on_matrix(*itt, utils::stride2_fun())>2)
+        if (tools::call_on_matrix(*itt, tools::stride1_fun())>1 || tools::call_on_matrix(*itt, tools::stride2_fun())>2)
           return true;
 
-      if(tree_parsing::filter_nodes(&is_offset_modifier, *it, true).empty()==false)
+      if(tools::filter_nodes(&is_offset_modifier, *it, true).empty()==false)
         return true;
     }
     return false;
@@ -416,7 +416,7 @@ protected:
   static atidlas_int_t vector_size(viennacl::scheduler::statement_node const & node, bool up_to_internal_size)
   {
     using namespace viennacl::scheduler;
-    using namespace utils;
+    using namespace tools;
     if (node.op.type==OPERATION_BINARY_MATRIX_DIAG_TYPE)
     {
       atidlas_int_t size1 = up_to_internal_size?call_on_matrix(node.lhs, internal_size1_fun()):call_on_matrix(node.lhs, size1_fun());
@@ -434,10 +434,10 @@ protected:
   //NB : templates are not used here because declaring a functor out of the generate() functions would be harder to read
   struct loop_body_base
   {
-    virtual void operator()(utils::kernel_generation_stream & stream, unsigned int simd_width) const = 0;
+    virtual void operator()(tools::kernel_generation_stream & stream, unsigned int simd_width) const = 0;
   };
 
-  static void element_wise_loop_1D(utils::kernel_generation_stream & stream, loop_body_base const & loop_body,
+  static void element_wise_loop_1D(tools::kernel_generation_stream & stream, loop_body_base const & loop_body,
                                    fetching_policy_type fetch, unsigned int simd_width, std::string const & i, std::string const & bound, std::string const & domain_id, std::string const & domain_size)
   {
     std::string strwidth = tools::to_string(simd_width);
@@ -468,7 +468,7 @@ protected:
     if (simd_width==1)
       return "(" + ptr + ")[" + offset + "] = " + value;
     else
-      return utils::append_width("vstore", simd_width) + "(" + value + ", " + offset + ", " + ptr + ")";
+      return tools::append_width("vstore", simd_width) + "(" + value + ", " + offset + ", " + ptr + ")";
   }
 
   static std::string vload(unsigned int simd_width, std::string const & offset, std::string const & ptr)
@@ -476,7 +476,7 @@ protected:
     if (simd_width==1)
       return "(" + ptr + ")[" + offset + "]";
     else
-      return utils::append_width("vload", simd_width) + "(" + offset + ", " + ptr + ")";
+      return tools::append_width("vload", simd_width) + "(" + offset + ", " + ptr + ")";
   }
 
 private:
@@ -500,7 +500,7 @@ public:
     std::vector<mapping_type> mappings(statements.data().size());
     tools::shared_ptr<symbolic_binder> binder = make_binder(binding_policy_);
     for (mit = mappings.begin(), sit = statements.data().begin(); sit != statements.data().end(); ++sit, ++mit)
-      tree_parsing::traverse(*sit, sit->root(), map_functor(*binder,*mit), true);
+      tools::traverse(*sit, sit->root(), map_functor(*binder,*mit), true);
 
     return generate_impl(kernel_prefix, statements, mappings);
   }
@@ -530,15 +530,15 @@ protected:
     for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
     {
       //checks for vectors
-      std::vector<viennacl::scheduler::lhs_rhs_element> vectors = tree_parsing::filter_elements(viennacl::scheduler::DENSE_VECTOR_TYPE, *it);
+      std::vector<viennacl::scheduler::lhs_rhs_element> vectors = tools::filter_elements(viennacl::scheduler::DENSE_VECTOR_TYPE, *it);
       for (std::vector<viennacl::scheduler::lhs_rhs_element>::iterator itt = vectors.begin(); itt != vectors.end(); ++itt)
-        if (utils::call_on_vector(*itt, utils::stride_fun())>1)
+        if (tools::call_on_vector(*itt, tools::stride_fun())>1)
           return true;
 
       //checks for matrix
-      std::vector<viennacl::scheduler::lhs_rhs_element> matrices = tree_parsing::filter_elements(viennacl::scheduler::DENSE_MATRIX_TYPE, *it);
+      std::vector<viennacl::scheduler::lhs_rhs_element> matrices = tools::filter_elements(viennacl::scheduler::DENSE_MATRIX_TYPE, *it);
       for (std::vector<viennacl::scheduler::lhs_rhs_element>::iterator itt = matrices.begin(); itt != matrices.end(); ++itt)
-        if (utils::call_on_matrix(*itt, utils::stride1_fun())>1 || utils::call_on_matrix(*itt, utils::stride2_fun())>2)
+        if (tools::call_on_matrix(*itt, tools::stride1_fun())>1 || tools::call_on_matrix(*itt, tools::stride2_fun())>2)
           return true;
     }
     return false;
@@ -566,7 +566,7 @@ public:
     using namespace viennacl::tools;
 
     viennacl::scheduler::statement const & statement = statements.data().front();
-    unsigned int scalartype_size = utils::size_of(lhs_most(statement.array(), statement.root()).lhs.numeric_type);
+    unsigned int scalartype_size = tools::size_of(lhs_most(statement.array(), statement.root()).lhs.numeric_type);
 
     //Query device informations
     size_t lmem_available = static_cast<size_t>(device.local_mem_size());

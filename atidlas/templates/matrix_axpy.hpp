@@ -4,9 +4,6 @@
 
 #include <vector>
 
-#include "atidlas/mapped_objects.hpp"
-#include "atidlas/tree_parsing.hpp"
-#include "atidlas/utils.hpp"
 #include "atidlas/templates/template_base.hpp"
 
 #include "viennacl/scheduler/forwards.h"
@@ -40,7 +37,7 @@ private:
 
   std::string generate_impl(std::string const & kernel_prefix, statements_container const & statements, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
   {
-    utils::kernel_generation_stream stream;
+    tools::kernel_generation_stream stream;
 
     std::string init0, upper_bound0, inc0, init1, upper_bound1, inc1;
 
@@ -49,7 +46,7 @@ private:
     stream << "{" << std::endl;
     stream.inc_tab();
 
-    tree_parsing::process(stream, PARENT_NODE_TYPE, utils::create_process_accessors("scalar", "#scalartype #namereg = *#pointer;")
+    tools::process(stream, PARENT_NODE_TYPE, tools::create_process_accessors("scalar", "#scalartype #namereg = *#pointer;")
                                                                                                ("matrix", "#pointer += $OFFSET{#start1, #start2};")
                                                                                                ("vector", "#pointer += #start;"), statements, mappings);
 
@@ -62,16 +59,16 @@ private:
     stream << "{" << std::endl;
     stream.inc_tab();
 
-    tree_parsing::process(stream, PARENT_NODE_TYPE, utils::create_process_accessors("matrix", utils::append_width("#scalartype",simd_width) + " #namereg = #pointer[$OFFSET{i*#stride1,j*#stride2}];")
+    tools::process(stream, PARENT_NODE_TYPE, tools::create_process_accessors("matrix", tools::append_width("#scalartype",simd_width) + " #namereg = #pointer[$OFFSET{i*#stride1,j*#stride2}];")
                                                                                   ("vector_diag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:#pointer[min(i*#stride, j*#stride)];")
                                                                                               , statements, mappings);
 
-    tree_parsing::evaluate(stream, PARENT_NODE_TYPE, utils::create_evaluate_accessors("matrix", "#namereg")
+    tools::evaluate(stream, PARENT_NODE_TYPE, tools::create_evaluate_accessors("matrix", "#namereg")
                                                                                       ("vector_diag", "#namereg")
                                                                                       ("scalar", "#namereg")
                                                     , statements, mappings);
 
-    tree_parsing::process(stream, LHS_NODE_TYPE, utils::create_process_accessors("matrix", "#pointer[$OFFSET{i*#stride1,j*#stride2}] = #namereg;")
+    tools::process(stream, LHS_NODE_TYPE, tools::create_process_accessors("matrix", "#pointer[$OFFSET{i*#stride1,j*#stride2}] = #namereg;")
                                                , statements, mappings);
 
     stream.dec_tab();
@@ -113,13 +110,13 @@ public:
     unsigned int current_arg = 0;
     if (up_to_internal_size_)
     {
-      kernel.arg(current_arg++, cl_uint(utils::call_on_matrix(root.lhs, utils::internal_size1_fun())));
-      kernel.arg(current_arg++, cl_uint(utils::call_on_matrix(root.lhs, utils::internal_size2_fun())));
+      kernel.arg(current_arg++, cl_uint(tools::call_on_matrix(root.lhs, tools::internal_size1_fun())));
+      kernel.arg(current_arg++, cl_uint(tools::call_on_matrix(root.lhs, tools::internal_size2_fun())));
     }
     else
     {
-      kernel.arg(current_arg++, cl_uint(utils::call_on_matrix(root.lhs, utils::size1_fun())));
-      kernel.arg(current_arg++, cl_uint(utils::call_on_matrix(root.lhs, utils::size2_fun())));
+      kernel.arg(current_arg++, cl_uint(tools::call_on_matrix(root.lhs, tools::size1_fun())));
+      kernel.arg(current_arg++, cl_uint(tools::call_on_matrix(root.lhs, tools::size2_fun())));
     }
 
     set_arguments(statements, kernel, current_arg);

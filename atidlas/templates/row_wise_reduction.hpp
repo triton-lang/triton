@@ -8,9 +8,6 @@
 #include "viennacl/tools/tools.hpp"
 #include "viennacl/scheduler/io.hpp"
 
-#include "atidlas/mapped_objects.hpp"
-#include "atidlas/tree_parsing.hpp"
-#include "atidlas/utils.hpp"
 #include "atidlas/templates/template_base.hpp"
 
 namespace atidlas
@@ -44,7 +41,7 @@ private:
 
   static void parse(viennacl::scheduler::statement const & statement, std::vector<size_t> & idx, bool & is_trans, viennacl::scheduler::lhs_rhs_element & matrix)
   {
-    idx = tree_parsing::filter_nodes(&utils::is_reduction, statement, false);
+    idx = tools::filter_nodes(&tools::is_reduction, statement, false);
     is_trans = is_node_trans(statement.array(), idx[0], LHS_NODE_TYPE);
     matrix = lhs_most(statement.array(), idx[0]).lhs;
   }
@@ -57,15 +54,15 @@ private:
     unsigned int lsize1 = p_.local_size_1+1;
     std::string lsize1str = to_string(lsize1);
 
-    utils::kernel_generation_stream stream;
+    tools::kernel_generation_stream stream;
 
     stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
     stream << "__kernel void " << kernel_prefix << "(unsigned int M, unsigned int N, " << generate_arguments("#scalartype", mappings, statements) << ")" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
 
-    tree_parsing::process(stream, PARENT_NODE_TYPE,
-                          utils::create_process_accessors("scalar", "#scalartype #namereg = *#pointer;")
+    tools::process(stream, PARENT_NODE_TYPE,
+                          tools::create_process_accessors("scalar", "#scalartype #namereg = *#pointer;")
                                                           ("matrix", "#pointer += #start1 + #start2*#ld;")
                                                           ("matrix", "#ld *= #nldstride;")
                                                           ("vector", "#pointer += #start;"), statements, mappings);
@@ -91,9 +88,9 @@ private:
     public:
       loop_body(std::vector<mapped_row_wise_reduction*> const & _exprs, bool _is_trans) : exprs(_exprs), is_trans(_is_trans){ }
 
-      void operator()(utils::kernel_generation_stream & stream, unsigned int simd_width) const
+      void operator()(tools::kernel_generation_stream & stream, unsigned int simd_width) const
       {
-        std::string data_type = utils::append_width("#scalartype",simd_width);
+        std::string data_type = tools::append_width("#scalartype",simd_width);
 
         for (std::vector<mapped_row_wise_reduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
         {
@@ -181,7 +178,7 @@ private:
     std::map<std::string, std::string> accessors;
     accessors["row_wise_reduction"] = "#name_buf[lid0*" + lsize1str + "]";
     accessors["vector"] = "#pointer[r*#stride]";
-    tree_parsing::evaluate(stream, PARENT_NODE_TYPE, accessors, statements, mappings);
+    tools::evaluate(stream, PARENT_NODE_TYPE, accessors, statements, mappings);
     stream.dec_tab();
     stream << "}" << std::endl;
 
@@ -250,13 +247,13 @@ public:
     unsigned int current_arg = 0;
     if (is_trans)
     {
-      kernel->arg(current_arg++, cl_uint(utils::call_on_matrix(A, utils::size2_fun())));
-      kernel->arg(current_arg++, cl_uint(utils::call_on_matrix(A, utils::size1_fun())));
+      kernel->arg(current_arg++, cl_uint(tools::call_on_matrix(A, tools::size2_fun())));
+      kernel->arg(current_arg++, cl_uint(tools::call_on_matrix(A, tools::size1_fun())));
     }
     else
     {
-      kernel->arg(current_arg++, cl_uint(utils::call_on_matrix(A, utils::size1_fun())));
-      kernel->arg(current_arg++, cl_uint(utils::call_on_matrix(A, utils::size2_fun())));
+      kernel->arg(current_arg++, cl_uint(tools::call_on_matrix(A, tools::size1_fun())));
+      kernel->arg(current_arg++, cl_uint(tools::call_on_matrix(A, tools::size2_fun())));
     }
 
 

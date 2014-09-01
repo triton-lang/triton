@@ -7,10 +7,6 @@
 #include "viennacl/scheduler/forwards.h"
 #include "viennacl/tools/tools.hpp"
 
-#include "atidlas/mapped_objects.hpp"
-#include "atidlas/tree_parsing.hpp"
-#include "atidlas/forwards.h"
-#include "atidlas/utils.hpp"
 #include "atidlas/templates/template_base.hpp"
 
 namespace atidlas
@@ -41,18 +37,18 @@ private:
     std::vector<std::string> result;
     for (unsigned int i = 0; i < 2; ++i)
     {
-      utils::kernel_generation_stream stream;
+      tools::kernel_generation_stream stream;
       unsigned int simd_width = (i==0)?1:p_.simd_width;
       std::string str_simd_width = tools::to_string(simd_width);
-      std::string data_type = utils::append_width("#scalartype",simd_width);
+      std::string data_type = tools::append_width("#scalartype",simd_width);
 
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
       stream << "__kernel void " << kernel_prefix << i << "(unsigned int N," << generate_arguments(data_type, mappings, statements) << ")" << std::endl;
       stream << "{" << std::endl;
       stream.inc_tab();
 
-      tree_parsing::process(stream, PARENT_NODE_TYPE,
-                            utils::create_process_accessors("scalar", "#scalartype #namereg = *#pointer;")
+      tools::process(stream, PARENT_NODE_TYPE,
+                            tools::create_process_accessors("scalar", "#scalartype #namereg = *#pointer;")
                                                                        ("matrix", "#pointer += #start1 + #start2*#ld;")
                                                                        ("vector", "#pointer += #start;")
                                                                        ("vector", "#start/=" + str_simd_width + ";"), statements, mappings);
@@ -62,20 +58,20 @@ private:
       stream << "for(unsigned int i = " << init << "; i < " << upper_bound << "; i += " << inc << ")" << std::endl;
       stream << "{" << std::endl;
       stream.inc_tab();
-      tree_parsing::process(stream, PARENT_NODE_TYPE,
-                            utils::create_process_accessors("vector", data_type + " #namereg = #pointer[i*#stride];")
+      tools::process(stream, PARENT_NODE_TYPE,
+                            tools::create_process_accessors("vector", data_type + " #namereg = #pointer[i*#stride];")
                                                                        ("matrix_row", "#scalartype #namereg = #pointer[$OFFSET{#row*#stride1, i*#stride2}];")
                                                                        ("matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride1,#column*#stride2}];")
                                                                        ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];")
                                                                        , statements, mappings);
 
-      tree_parsing::evaluate(stream, PARENT_NODE_TYPE, utils::create_evaluate_accessors("vector", "#namereg")
+      tools::evaluate(stream, PARENT_NODE_TYPE, tools::create_evaluate_accessors("vector", "#namereg")
                                                                                                   ("matrix_row", "#namereg")
                                                                                                   ("matrix_column", "#namereg")
                                                                                                   ("matrix_diag", "#namereg")
                                                                                                   ("scalar", "#namereg"), statements, mappings);
 
-      tree_parsing::process(stream, LHS_NODE_TYPE, utils::create_process_accessors("vector", "#pointer[i*#stride] = #namereg;")
+      tools::process(stream, LHS_NODE_TYPE, tools::create_process_accessors("vector", "#pointer[i*#stride] = #namereg;")
                                                                                              ("matrix_row", "#pointer[$OFFSET{#row, i}] = #namereg;")
                                                                                              ("matrix_column", "#pointer[$OFFSET{i, #column}] = #namereg;")
                                                                                              ("matrix_diag", "#pointer[#diag_offset<0?$OFFSET{i - #diag_offset, i}:$OFFSET{i, i + #diag_offset}] = #namereg;")

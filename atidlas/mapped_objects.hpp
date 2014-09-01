@@ -7,7 +7,7 @@
 
 #include "atidlas/forwards.h"
 #include "atidlas/tools/find_and_replace.hpp"
-#include "atidlas/utils.hpp"
+#include "atidlas/tools/misc.hpp"
 
 namespace atidlas
 {
@@ -118,15 +118,15 @@ class binary_leaf
 public:
   binary_leaf(mapped_object::node_info info) : info_(info){ }
 
-  void process_recursive(utils::kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors)
+  void process_recursive(tools::kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors)
   {
     std::set<std::string> already_fetched;
-    tree_parsing::process(stream, leaf, accessors, *info_.statement, info_.root_idx, *info_.mapping, already_fetched);
+    tools::process(stream, leaf, accessors, *info_.statement, info_.root_idx, *info_.mapping, already_fetched);
   }
 
   std::string evaluate_recursive(leaf_t leaf, std::map<std::string, std::string> const & accessors)
   {
-    return tree_parsing::evaluate(leaf, accessors, *info_.statement, info_.root_idx, *info_.mapping);
+    return tools::evaluate(leaf, accessors, *info_.statement, info_.root_idx, *info_.mapping);
   }
 
 protected:
@@ -155,7 +155,7 @@ public:
   atidlas_int_t root_idx() const { return info_.root_idx; }
   viennacl::scheduler::statement const & statement() const { return *info_.statement; }
   viennacl::scheduler::statement_node root_node() const { return statement().array()[root_idx()]; }
-  bool is_index_reduction() const { return utils::is_index_reduction(info_.statement->array()[info_.root_idx].op); }
+  bool is_index_reduction() const { return tools::is_index_reduction(info_.statement->array()[info_.root_idx].op); }
 
   viennacl::scheduler::op_element root_op() const
   {
@@ -302,9 +302,9 @@ private:
   void postprocess(std::string &res) const
   {
     std::map<std::string, std::string> accessors;
-    tools::find_and_replace(res, "#diag_offset", tree_parsing::evaluate(RHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping));
+    tools::find_and_replace(res, "#diag_offset", tools::evaluate(RHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping));
     accessors["vector"] = res;
-    res = tree_parsing::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
+    res = tools::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
   }
 
 public:
@@ -323,7 +323,7 @@ private:
   {
     std::map<std::string, std::string> accessors;
     accessors["matrix"] = res;
-    res = tree_parsing::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
+    res = tools::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
   }
 
 public:
@@ -340,9 +340,9 @@ private:
   void postprocess(std::string &res) const
   {
     std::map<std::string, std::string> accessors;
-    tools::find_and_replace(res, "#row", tree_parsing::evaluate(RHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping));
+    tools::find_and_replace(res, "#row", tools::evaluate(RHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping));
     accessors["matrix"] = res;
-    res = tree_parsing::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
+    res = tools::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
   }
 
 public:
@@ -361,9 +361,9 @@ private:
   void postprocess(std::string &res) const
   {
     std::map<std::string, std::string> accessors;
-    tools::find_and_replace(res, "#column", tree_parsing::evaluate(RHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping));
+    tools::find_and_replace(res, "#column", tools::evaluate(RHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping));
     accessors["matrix"] = res;
-    res = tree_parsing::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
+    res = tools::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
   }
 
 public:
@@ -381,9 +381,9 @@ private:
   void postprocess(std::string &res) const
   {
     std::map<std::string, std::string> accessors;
-    tools::find_and_replace(res, "#diag_offset", tree_parsing::evaluate(RHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping));
+    tools::find_and_replace(res, "#diag_offset", tools::evaluate(RHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping));
     accessors["matrix"] = res;
-    res = tree_parsing::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
+    res = tools::evaluate(LHS_NODE_TYPE, accessors, *info_.statement, info_.root_idx, *info_.mapping);
   }
 
 public:

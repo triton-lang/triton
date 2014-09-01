@@ -137,7 +137,7 @@ private:
   std::string message_;
 };
 
-namespace utils
+namespace tools
 {
   class kernel_generation_stream;
 }
@@ -157,13 +157,13 @@ typedef std::pair<atidlas_int_t, leaf_t> mapping_key;
 typedef std::map<mapping_key, tools::shared_ptr<mapped_object> > mapping_type;
 
 
-namespace tree_parsing
+namespace tools
 {
 
   template<class Fun>
   inline void traverse(viennacl::scheduler::statement const & statement, atidlas_int_t root_idx, Fun const & fun, bool inspect);
 
-  inline void process(utils::kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors,
+  inline void process(tools::kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors,
                       viennacl::scheduler::statement const & statement, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed);
   inline std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & accessors, viennacl::scheduler::statement const & statement, atidlas_int_t root_idx,mapping_type const & mapping);
 }

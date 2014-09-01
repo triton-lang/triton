@@ -9,13 +9,13 @@
 #include "viennacl/scheduler/forwards.h"
 
 #include "atidlas/mapped_objects.hpp"
-#include "atidlas/utils.hpp"
+#include "atidlas/tools/misc.hpp"
 #include "atidlas/forwards.h"
 
 namespace atidlas
 {
 
-namespace tree_parsing
+namespace tools
 {
 
 /** @brief base functor class for traversing a statement */
@@ -31,7 +31,7 @@ template<class Fun>
 inline void traverse(viennacl::scheduler::statement const & statement, atidlas_int_t root_idx, Fun const & fun, bool inspect)
 {
   viennacl::scheduler::statement_node const & root_node = statement.array()[root_idx];
-  bool recurse = utils::node_leaf(root_node.op)?inspect:true;
+  bool recurse = tools::node_leaf(root_node.op)?inspect:true;
 
   fun.call_before_expansion(statement, root_idx);
 
@@ -80,7 +80,7 @@ private:
 std::vector<size_t> filter_nodes(bool (*pred)(viennacl::scheduler::statement_node const & node), viennacl::scheduler::statement const & statement, bool inspect)
 {
   std::vector<size_t> res;
-  tree_parsing::traverse(statement, statement.root(), filter_fun(pred, res), inspect);
+  tools::traverse(statement, statement.root(), filter_fun(pred, res), inspect);
   return res;
 }
 
@@ -105,7 +105,7 @@ private:
 std::vector<viennacl::scheduler::lhs_rhs_element> filter_elements(viennacl::scheduler::statement_node_subtype subtype, viennacl::scheduler::statement const & statement)
 {
   std::vector<viennacl::scheduler::lhs_rhs_element> res;
-  tree_parsing::traverse(statement, statement.root(), filter_elements_fun(subtype, res), true);
+  tools::traverse(statement, statement.root(), filter_elements_fun(subtype, res), true);
   return res;
 }
 
@@ -227,7 +227,7 @@ inline const char * operator_string(viennacl::scheduler::operation_node_type typ
 }
 
 /** @brief functor for generating the expression string from a statement */
-class evaluate_expression_traversal: public tree_parsing::traversal_functor
+class evaluate_expression_traversal: public tools::traversal_functor
 {
 private:
   std::map<std::string, std::string> const & accessors_;
@@ -240,9 +240,9 @@ public:
   void call_before_expansion(viennacl::scheduler::statement const & statement, atidlas_int_t root_idx) const
   {
     viennacl::scheduler::statement_node const & root_node = statement.array()[root_idx];
-    if ((root_node.op.type_family==viennacl::scheduler::OPERATION_UNARY_TYPE_FAMILY || utils::elementwise_function(root_node.op))
-        && !utils::node_leaf(root_node.op))
-      str_+=tree_parsing::evaluate(root_node.op.type);
+    if ((root_node.op.type_family==viennacl::scheduler::OPERATION_UNARY_TYPE_FAMILY || tools::elementwise_function(root_node.op))
+        && !tools::node_leaf(root_node.op))
+      str_+=tools::evaluate(root_node.op.type);
     str_+="(";
 
   }
@@ -258,11 +258,11 @@ public:
     mapping_type::key_type key = std::make_pair(root_idx, leaf);
     if (leaf==PARENT_NODE_TYPE)
     {
-      if (utils::node_leaf(root_node.op))
+      if (tools::node_leaf(root_node.op))
         str_ += mapping_.at(key)->evaluate(accessors_);
-      else if (utils::elementwise_operator(root_node.op))
-        str_ += tree_parsing::evaluate(root_node.op.type);
-      else if (root_node.op.type_family!=viennacl::scheduler::OPERATION_UNARY_TYPE_FAMILY && utils::elementwise_function(root_node.op))
+      else if (tools::elementwise_operator(root_node.op))
+        str_ += tools::evaluate(root_node.op.type);
+      else if (root_node.op.type_family!=viennacl::scheduler::OPERATION_UNARY_TYPE_FAMILY && tools::elementwise_function(root_node.op))
         str_ += ",";
     }
     else
@@ -292,24 +292,24 @@ inline std::string evaluate(leaf_t leaf, std::map<std::string, std::string> cons
   if (leaf==RHS_NODE_TYPE)
   {
     if (root_node.rhs.type_family==viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-      tree_parsing::traverse(statement, root_node.rhs.node_index, traversal_functor, false);
+      tools::traverse(statement, root_node.rhs.node_index, traversal_functor, false);
     else
       traversal_functor(statement, root_idx, leaf);
   }
   else if (leaf==LHS_NODE_TYPE)
   {
     if (root_node.lhs.type_family==viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-      tree_parsing::traverse(statement, root_node.lhs.node_index, traversal_functor, false);
+      tools::traverse(statement, root_node.lhs.node_index, traversal_functor, false);
     else
       traversal_functor(statement, root_idx, leaf);
   }
   else
-    tree_parsing::traverse(statement, root_idx, traversal_functor, false);
+    tools::traverse(statement, root_idx, traversal_functor, false);
 
   return res;
 }
 
-inline void evaluate(utils::kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
+inline void evaluate(tools::kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
                      statements_container const & statements, std::vector<mapping_type> const & mappings)
 {
   statements_container::data_type::const_iterator sit;
@@ -321,10 +321,10 @@ inline void evaluate(utils::kernel_generation_stream & stream, leaf_t leaf, std:
 
 
 /** @brief functor for fetching or writing-back the elements in a statement */
-class process_traversal : public tree_parsing::traversal_functor
+class process_traversal : public tools::traversal_functor
 {
 public:
-  process_traversal(std::multimap<std::string, std::string> const & accessors, utils::kernel_generation_stream & stream,
+  process_traversal(std::multimap<std::string, std::string> const & accessors, tools::kernel_generation_stream & stream,
                     mapping_type const & mapping, std::set<std::string> & already_processed) : accessors_(accessors),  stream_(stream), mapping_(mapping), already_processed_(already_processed){ }
 
   void operator()(viennacl::scheduler::statement const & /*statement*/, atidlas_int_t root_idx, leaf_t leaf) const
@@ -347,12 +347,12 @@ public:
 
 private:
   std::multimap<std::string, std::string> accessors_;
-  utils::kernel_generation_stream & stream_;
+  tools::kernel_generation_stream & stream_;
   mapping_type const & mapping_;
   std::set<std::string> & already_processed_;
 };
 
-inline void process(utils::kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors,
+inline void process(tools::kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors,
                     viennacl::scheduler::statement const & statement, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed)
 {
   process_traversal traversal_functor(accessors, stream, mapping, already_processed);
@@ -361,24 +361,24 @@ inline void process(utils::kernel_generation_stream & stream, leaf_t leaf, std::
   if (leaf==RHS_NODE_TYPE)
   {
     if (root_node.rhs.type_family==viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-      tree_parsing::traverse(statement, root_node.rhs.node_index, traversal_functor, true);
+      tools::traverse(statement, root_node.rhs.node_index, traversal_functor, true);
     else
       traversal_functor(statement, root_idx, leaf);
   }
   else if (leaf==LHS_NODE_TYPE)
   {
     if (root_node.lhs.type_family==viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-      tree_parsing::traverse(statement, root_node.lhs.node_index, traversal_functor, true);
+      tools::traverse(statement, root_node.lhs.node_index, traversal_functor, true);
     else
       traversal_functor(statement, root_idx, leaf);
   }
   else
   {
-    tree_parsing::traverse(statement, root_idx, traversal_functor, true);
+    tools::traverse(statement, root_idx, traversal_functor, true);
   }
 }
 
-inline void process(utils::kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors,
+inline void process(tools::kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors,
                     statements_container const & statements, std::vector<mapping_type> const & mappings)
 {
   statements_container::data_type::const_iterator sit;
@@ -414,7 +414,7 @@ public:
   {
     *ptr_++='h'; //host
     *ptr_++='s'; //scalar
-    *ptr_++=utils::first_letter_of_type<NumericT>::value();
+    *ptr_++=tools::first_letter_of_type<NumericT>::value();
   }
 
   /** @brief Scalar mapping */
@@ -422,7 +422,7 @@ public:
   inline result_type operator()(viennacl::scalar<NumericT> const & scal) const
   {
     *ptr_++='s'; //scalar
-    *ptr_++=utils::first_letter_of_type<NumericT>::value();
+    *ptr_++=tools::first_letter_of_type<NumericT>::value();
     append_id(ptr_, binder_.get(&viennacl::traits::handle(scal)));
   }
 
@@ -431,7 +431,7 @@ public:
   inline result_type operator()(viennacl::vector_base<NumericT> const & vec) const
   {
     *ptr_++='v'; //vector
-    *ptr_++=utils::first_letter_of_type<NumericT>::value();
+    *ptr_++=tools::first_letter_of_type<NumericT>::value();
     append_id(ptr_, binder_.get(&viennacl::traits::handle(vec)));
   }
 
@@ -441,7 +441,7 @@ public:
   {
     *ptr_++='i'; //implicit
     *ptr_++='v'; //vector
-    *ptr_++=utils::first_letter_of_type<NumericT>::value();
+    *ptr_++=tools::first_letter_of_type<NumericT>::value();
   }
 
   /** @brief Matrix mapping */
@@ -449,7 +449,7 @@ public:
   inline result_type operator()(viennacl::matrix_base<NumericT> const & mat) const
   {
     *ptr_++='m'; //Matrix
-    *ptr_++=utils::first_letter_of_type<NumericT>::value();
+    *ptr_++=tools::first_letter_of_type<NumericT>::value();
     append_id(ptr_, binder_.get(&viennacl::traits::handle(mat)));
   }
 
@@ -459,7 +459,7 @@ public:
   {
     *ptr_++='i'; //implicit
     *ptr_++='m'; //matrix
-    *ptr_++=utils::first_letter_of_type<NumericT>::value();
+    *ptr_++=tools::first_letter_of_type<NumericT>::value();
   }
 
   static inline void append(char*& p, const char * str)
@@ -473,9 +473,9 @@ public:
   {
     viennacl::scheduler::statement_node const & root_node = statement.array()[root_idx];
     if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-      utils::call_on_element(root_node.lhs, *this);
+      tools::call_on_element(root_node.lhs, *this);
     else if (root_node.op.type_family==viennacl::scheduler::OPERATION_BINARY_TYPE_FAMILY && leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-      utils::call_on_element(root_node.rhs, *this);
+      tools::call_on_element(root_node.rhs, *this);
     else if (leaf_t==PARENT_NODE_TYPE)
       append_id(ptr_,root_node.op.type);
   }
@@ -495,7 +495,7 @@ inline std::string statements_representation(statements_container const & statem
     *program_name++='s';
   tools::shared_ptr<symbolic_binder> binder = make_binder(binding_policy);
   for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
-    tree_parsing::traverse(*it, it->root(), tree_parsing::statement_representation_functor(*binder, program_name),true);
+    tools::traverse(*it, it->root(), tools::statement_representation_functor(*binder, program_name),true);
   *program_name='\0';
   return std::string(program_name_vector.data());
 }

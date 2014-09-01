@@ -19,7 +19,7 @@
 
 namespace atidlas
 {
-namespace utils
+namespace tools
 {
 
 //CUDA Conversion
@@ -492,7 +492,7 @@ inline bool elementwise_function(viennacl::scheduler::op_element const & op)
 
 inline viennacl::scheduler::lhs_rhs_element & lhs_rhs_element(viennacl::scheduler::statement const & st, atidlas_int_t idx, leaf_t leaf)
 {
-  using namespace tree_parsing;
+  using namespace tools;
   assert(leaf==LHS_NODE_TYPE || leaf==RHS_NODE_TYPE);
   if (leaf==LHS_NODE_TYPE)
     return const_cast<viennacl::scheduler::lhs_rhs_element &>(st.array()[idx].lhs);

@@ -8,8 +8,6 @@
 #include "viennacl/scheduler/forwards.h"
 #include "viennacl/tools/tools.hpp"
 
-#include "atidlas/tree_parsing.hpp"
-#include "atidlas/utils.hpp"
 #include "atidlas/templates/template_base.hpp"
 
 namespace atidlas
@@ -41,7 +39,7 @@ private:
     return TEMPLATE_VALID;
   }
 
-  inline void reduce_1d_local_memory(utils::kernel_generation_stream & stream, unsigned int size, std::vector<mapped_scalar_reduction*> exprs,
+  inline void reduce_1d_local_memory(tools::kernel_generation_stream & stream, unsigned int size, std::vector<mapped_scalar_reduction*> exprs,
                                      std::string const & buf_str, std::string const & buf_value_str) const
   {
     stream << "#pragma unroll" << std::endl;
@@ -68,7 +66,7 @@ private:
 
   std::string generate_impl(std::string const & kernel_prefix,  statements_container const & statements, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
   {
-    utils::kernel_generation_stream stream;
+    tools::kernel_generation_stream stream;
 
     std::vector<mapped_scalar_reduction*> exprs;
     for (std::vector<mapping_type>::const_iterator it = mappings.begin(); it != mappings.end(); ++it)
@@ -80,7 +78,7 @@ private:
     std::string arguments = generate_value_kernel_argument("unsigned int", "N");
     for (unsigned int k = 0; k < N; ++k)
     {
-      std::string numeric_type = utils::numeric_type_to_string(lhs_most(exprs[k]->statement().array(),
+      std::string numeric_type = tools::numeric_type_to_string(lhs_most(exprs[k]->statement().array(),
                                                                         exprs[k]->statement().root()).lhs.numeric_type);
       if (exprs[k]->is_index_reduction())
       {
@@ -101,7 +99,7 @@ private:
     stream.inc_tab();
 
     stream << "unsigned int lid = get_local_id(0);" << std::endl;
-    tree_parsing::process(stream, PARENT_NODE_TYPE, utils::create_process_accessors("scalar", "#scalartype #namereg = *#pointer;")
+    tools::process(stream, PARENT_NODE_TYPE, tools::create_process_accessors("scalar", "#scalartype #namereg = *#pointer;")
                                                                                                 ("vector", "#pointer += #start;"), statements, mappings);
 
     for (unsigned int k = 0; k < N; ++k)
@@ -125,12 +123,12 @@ private:
     public:
       loop_body(std::vector<mapped_scalar_reduction*> const & _exprs) : exprs(_exprs){ }
 
-      void operator()(utils::kernel_generation_stream & stream, unsigned int simd_width) const
+      void operator()(tools::kernel_generation_stream & stream, unsigned int simd_width) const
       {
         std::string i = (simd_width==1)?"i*#stride":"i";
         //Fetch vector entry
         for (std::vector<mapped_scalar_reduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
-          (*it)->process_recursive(stream, PARENT_NODE_TYPE, utils::create_process_accessors("vector",  utils::append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";")
+          (*it)->process_recursive(stream, PARENT_NODE_TYPE, tools::create_process_accessors("vector",  tools::append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";")
                                                                                            ("matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride1, i*#stride2}];")
                                                                                            ("matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride1,#column*#stride2}];")
                                                                                            ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];"));
@@ -256,7 +254,7 @@ private:
     accessors["scalar_reduction"] = "#name_buf[0]";
     accessors["scalar"] = "*#pointer";
     accessors["vector"] = "#pointer[#start]";
-    tree_parsing::evaluate(stream, PARENT_NODE_TYPE, accessors, statements, mappings);
+    tools::evaluate(stream, PARENT_NODE_TYPE, accessors, statements, mappings);
     stream.dec_tab();
     stream << "}" << std::endl;
 
@@ -282,14 +280,14 @@ public:
     cl_uint size = 0;
     for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
     {
-      std::vector<size_t> reductions_idx = tree_parsing::filter_nodes(&utils::is_reduction, *it, false);
+      std::vector<size_t> reductions_idx = tools::filter_nodes(&tools::is_reduction, *it, false);
       size = static_cast<cl_uint>(vector_size(lhs_most(it->array(), reductions_idx[0]), false));
       for (std::vector<size_t>::iterator itt = reductions_idx.begin(); itt != reductions_idx.end(); ++itt)
         reductions.push_back(&it->array()[*itt]);
     }
 
     viennacl::scheduler::statement const & statement = statements.data().front();
-    unsigned int scalartype_size = utils::size_of(lhs_most(statement.array(), statement.root()).lhs.numeric_type);
+    unsigned int scalartype_size = tools::size_of(lhs_most(statement.array(), statement.root()).lhs.numeric_type);
 
     viennacl::ocl::kernel * kernels[2];
     if (has_strided_access(statements) && p_.simd_width > 1)
@@ -317,7 +315,7 @@ public:
       unsigned int j = 0;
       for (std::vector<viennacl::scheduler::statement_node const *>::const_iterator it = reductions.begin(); it != reductions.end(); ++it)
       {
-        if (utils::is_index_reduction((*it)->op))
+        if (tools::is_index_reduction((*it)->op))
         {
           if (tmpidx_.size() <= j)
             tmpidx_.push_back(kernels[k]->context().create_memory(CL_MEM_READ_WRITE, p_.num_groups*4));
