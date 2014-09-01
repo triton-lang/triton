@@ -6,7 +6,7 @@
 #include "viennacl/matrix_proxy.hpp"
 #include "viennacl/linalg/prod.hpp"
 
-#include "atidlas/templates/matrix_product_template.hpp"
+#include "atidlas/templates/matrix_product.hpp"
 #include "atidlas/execute.hpp"
 
 template<typename T, typename CType, typename AType, typename BType>

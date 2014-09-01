@@ -226,7 +226,7 @@ private:
 
 protected:
 
-  inline void compute_reduction(utils::kernel_generation_stream & os, std::string acc, std::string cur, viennacl::scheduler::op_element const & op)
+  static inline void compute_reduction(utils::kernel_generation_stream & os, std::string acc, std::string cur, viennacl::scheduler::op_element const & op)
   {
     if (utils::elementwise_function(op))
       os << acc << "=" << tree_parsing::evaluate(op.type) << "(" << acc << "," << cur << ");" << std::endl;
@@ -234,7 +234,7 @@ protected:
       os << acc << "= (" << acc << ")" << tree_parsing::evaluate(op.type)  << "(" << cur << ");" << std::endl;
   }
 
-  inline void compute_index_reduction(utils::kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, viennacl::scheduler::op_element const & op)
+  static inline void compute_index_reduction(utils::kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, viennacl::scheduler::op_element const & op)
   {
     //        os << acc << " = " << cur_value << ">" << acc_value  << "?" << cur << ":" << acc << ";" << std::endl;
     os << acc << "= select(" << acc << "," << cur << "," << cur_value << ">" << acc_value << ");" << std::endl;
@@ -246,7 +246,7 @@ protected:
     os << "(" << acc_value << "," << cur_value << ");"<< std::endl;
   }
 
-  inline void process_all(std::string const & type_key, std::string const & str,
+  static inline void process_all(std::string const & type_key, std::string const & str,
                           utils::kernel_generation_stream & stream, std::vector<mapping_type> const & mappings)
   {
     for (std::vector<mapping_type>::const_iterator mit = mappings.begin(); mit != mappings.end(); ++mit)
@@ -256,7 +256,7 @@ protected:
   }
 
 
-  inline void process_all_at(std::string const & type_key, std::string const & str,
+  static inline void process_all_at(std::string const & type_key, std::string const & str,
                              utils::kernel_generation_stream & stream, std::vector<mapping_type> const & mappings,
                              size_t root_idx, leaf_t leaf)
   {
@@ -268,7 +268,7 @@ protected:
     }
   }
 
-  inline std::string neutral_element(viennacl::scheduler::op_element const & op)
+  static inline std::string neutral_element(viennacl::scheduler::op_element const & op)
   {
     switch (op.type)
     {

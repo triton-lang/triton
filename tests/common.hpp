@@ -318,4 +318,38 @@ template<class T> int size2(simple_matrix<T> const & M) { return M.size2(); }
 }
 }
 
+
+#define INIT_VECTOR_AND_PROXIES(N, START, STRIDE, PREFIX) \
+  viennacl::range PREFIX ## r(START, N + START);\
+  viennacl::slice PREFIX ## s(START, STRIDE, N);\
+  simple_vector<NumericT> PREFIX ## _vector = simple_vector<NumericT>(N);\
+  simple_vector<NumericT> PREFIX ## _range_holder = simple_vector<NumericT>(N + START);\
+  simple_vector<NumericT> PREFIX ## _slice_holder = simple_vector<NumericT>(START + N*STRIDE);\
+  init_rand(PREFIX ## _vector);\
+  init_rand(PREFIX ## _range_holder);\
+  init_rand(PREFIX ## _slice_holder);\
+  simple_vector_range< simple_vector<NumericT> > PREFIX ## _range = simple_vector_range< simple_vector<NumericT> >(PREFIX ## _range_holder, PREFIX ## r);\
+  simple_vector_slice< simple_vector<NumericT> > PREFIX ## _slice = simple_vector_slice< simple_vector<NumericT> >(PREFIX ## _slice_holder, PREFIX ## s);
+
+
+#define INIT_MATRIX_AND_PROXIES(M, START1, STRIDE1, N, START2, STRIDE2, PREFIX) \
+  viennacl::range PREFIX ## r1(START1, M + START1);\
+  viennacl::range PREFIX ## r2(START2, N + START2);\
+  viennacl::slice PREFIX ## s1(START1, STRIDE1, M);\
+  viennacl::slice PREFIX ## s2(START2, STRIDE2, N);\
+  simple_matrix<NumericT> PREFIX ## _matrix(M, N);\
+  simple_matrix<NumericT> PREFIX ## _range_holder(M_start + M, N_start + N);\
+  simple_matrix<NumericT> PREFIX ## _slice_holder(M_start + M*M_stride, N_start + N*N_stride);\
+  init_rand(PREFIX ## _matrix);\
+  init_rand(PREFIX ## _range_holder);\
+  init_rand(PREFIX ## _slice_holder);\
+  simple_matrix_range< simple_matrix<NumericT> > PREFIX ## _range(PREFIX ## _range_holder, PREFIX ## r1, PREFIX ## r2);\
+  simple_matrix_slice< simple_matrix<NumericT> > PREFIX ## _slice(PREFIX ## _slice_holder, PREFIX ## s1, PREFIX ## s2);\
+\
+  simple_matrix<NumericT> PREFIX ## T_matrix = simple_trans(PREFIX ## _matrix);\
+  simple_matrix<NumericT> PREFIX ## T_range_holder = simple_trans(PREFIX ## _range_holder);\
+  simple_matrix<NumericT> PREFIX ## T_slice_holder = simple_trans(PREFIX ## _slice_holder);\
+  simple_matrix_range< simple_matrix<NumericT> > PREFIX ## T_range(PREFIX ## T_range_holder, PREFIX ## r2, PREFIX ## r1);\
+  simple_matrix_slice< simple_matrix<NumericT> > PREFIX ## T_slice(PREFIX ## T_slice_holder, PREFIX ## s2, PREFIX ## s1);\
+
 #endif

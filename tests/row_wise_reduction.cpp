@@ -5,15 +5,15 @@
 #include "viennacl/matrix.hpp"
 #include "viennacl/linalg/prod.hpp"
 
-#include "atidlas/templates/row_wise_reduction_template.hpp"
+#include "atidlas/templates/row_wise_reduction.hpp"
 #include "atidlas/execute.hpp"
 
 template<typename NumericT, class AType, class XType, class YType>
-void test_row_wise_reduction(NumericT epsilon, atidlas::row_wise_reduction_parameters const & parameters,
-                  YType & cy, AType & cA, AType & cAT, XType & cx)
+void test_row_wise_reduction(NumericT epsilon, YType & cy, AType & cA, AType & cAT, XType & cx)
 {
   using viennacl::trans;
 
+  atidlas::row_wise_reduction_parameters parameters(4, 8, 8, 128, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS);
   int failure_count = 0;
 
 //  viennacl::matrix<NumericT, viennacl::row_major> ArowTmp(cA.internal_size1(), cA.internal_size2());
@@ -28,7 +28,7 @@ void test_row_wise_reduction(NumericT epsilon, atidlas::row_wise_reduction_param
   typename matrix_maker<AType, viennacl::column_major>::result_type Acol = matrix_maker<AType, viennacl::column_major>::make(AcolTmp, cA);
   typename matrix_maker<AType, viennacl::column_major>::result_type ATcol = matrix_maker<AType, viennacl::column_major>::make(ATcolTmp, cAT);
   typename vector_maker<XType>::result_type x = vector_maker<XType>::make(xtmp, cx);
-  typename vector_maker<XType>::result_type y = vector_maker<XType>::make(ytmp, cy);
+  typename vector_maker<YType>::result_type y = vector_maker<YType>::make(ytmp, cy);
 
   simple_vector<NumericT> ground(cA.size1());
   simple_vector<NumericT> buffer(cA.size1());
@@ -68,83 +68,49 @@ void test_row_wise_reduction(NumericT epsilon, atidlas::row_wise_reduction_param
 template<typename NumericT>
 void test_impl(NumericT epsilon)
 {
-  atidlas::row_wise_reduction_parameters parameters(4, 8, 8, 128, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS);
-
   int_t M = 328;
   int_t N = 391;
   int x_start = 14, y_start = 25, M_start = 33, N_start = 51;
   int x_stride = 5, y_stride = 8, M_stride = 3, N_stride = 7;
-  viennacl::range xr(x_start, N + x_start), yr(y_start, M + y_start), Mr(M_start, M + M_start), Nr(N_start, N + N_start);
-  viennacl::slice xs(x_start, x_stride, N), ys(y_start, y_stride, M), Ms(M_start, M_stride, M), Ns(N_start, N_stride, N);
 
-
-  simple_vector<NumericT> x_vector(N);
-  simple_vector<NumericT> x_range_holder(N + x_start);
-  simple_vector<NumericT> x_slice_holder(x_start + N*x_stride);
-  init_rand(x_vector);
-  init_rand(x_range_holder);
-  init_rand(x_slice_holder);
-  simple_vector_range< simple_vector<NumericT> > x_range(x_range_holder, xr);
-  simple_vector_slice< simple_vector<NumericT> > x_slice(x_slice_holder, xs);
-
-  simple_vector<NumericT> y_vector(M);
-  simple_vector<NumericT> y_range_holder(M + y_start);
-  simple_vector<NumericT> y_slice_holder(y_start + M*y_stride);
-  init_rand(y_vector);
-  init_rand(y_range_holder);
-  init_rand(y_slice_holder);
-  simple_vector_range< simple_vector<NumericT> > y_range(y_range_holder, xr);
-  simple_vector_slice< simple_vector<NumericT> > y_slice(y_slice_holder, xs);
-
-  simple_matrix<NumericT> A_matrix(M, N);
-  simple_matrix<NumericT> A_range_holder(M_start + M, N_start + N);
-  simple_matrix<NumericT> A_slice_holder(M_start + M*M_stride, N_start + N*N_stride);
-  init_rand(A_matrix);
-  init_rand(A_range_holder);
-  init_rand(A_slice_holder);
-  simple_matrix_range< simple_matrix<NumericT> > A_range(A_range_holder, Mr, Nr);
-  simple_matrix_slice< simple_matrix<NumericT> > A_slice(A_slice_holder, Ms, Ns);
-
-  simple_matrix<NumericT> AT_matrix = simple_trans(A_matrix);
-  simple_matrix<NumericT> AT_range_holder = simple_trans(A_range_holder);
-  simple_matrix<NumericT> AT_slice_holder = simple_trans(A_slice_holder);
-  simple_matrix_range< simple_matrix<NumericT> > AT_range(AT_range_holder, Nr, Mr);
-  simple_matrix_slice< simple_matrix<NumericT> > AT_slice(AT_slice_holder, Ns, Ms);
+  INIT_VECTOR_AND_PROXIES(M, y_start, y_stride, y);
+  INIT_MATRIX_AND_PROXIES(M, M_start, M_stride, N, N_start, N_stride, A);
+  INIT_VECTOR_AND_PROXIES(N, x_start, x_stride, x);
 
 
 #define TEST_OPERATIONS(YTYPE, ATYPE, XTYPE)\
   std::cout << ">> y : " #YTYPE " | A : " #ATYPE " | x : " #XTYPE << std::endl;\
-  test_row_wise_reduction(epsilon, parameters, y_ ## YTYPE, A_ ## ATYPE, AT_ ## ATYPE, x_ ## XTYPE);\
+  test_row_wise_reduction(epsilon, y_ ## YTYPE, A_ ## ATYPE, AT_ ## ATYPE, x_ ## XTYPE);\
 
   TEST_OPERATIONS(vector, matrix, vector)
-//  TEST_OPERATIONS(vector, vector, range)
-//  TEST_OPERATIONS(vector, vector, slice)
-//  TEST_OPERATIONS(vector, range, vector)
-//  TEST_OPERATIONS(vector, range, range)
-//  TEST_OPERATIONS(vector, range, slice)
-//  TEST_OPERATIONS(vector, slice, vector)
-//  TEST_OPERATIONS(vector, slice, range)
-//  TEST_OPERATIONS(vector, slice, slice)
+  TEST_OPERATIONS(vector, matrix, range)
+  TEST_OPERATIONS(vector, matrix, slice)
+  TEST_OPERATIONS(vector, range, vector)
+  TEST_OPERATIONS(vector, range, range)
+  TEST_OPERATIONS(vector, range, slice)
+  TEST_OPERATIONS(vector, slice, vector)
+  TEST_OPERATIONS(vector, slice, range)
+  TEST_OPERATIONS(vector, slice, slice)
 
-//  TEST_OPERATIONS(range, vector, vector)
-//  TEST_OPERATIONS(range, vector, range)
-//  TEST_OPERATIONS(range, vector, slice)
-//  TEST_OPERATIONS(range, range, vector)
-//  TEST_OPERATIONS(range, range, range)
-//  TEST_OPERATIONS(range, range, slice)
-//  TEST_OPERATIONS(range, slice, vector)
-//  TEST_OPERATIONS(range, slice, range)
-//  TEST_OPERATIONS(range, slice, slice)
+  TEST_OPERATIONS(range, matrix, vector)
+  TEST_OPERATIONS(range, matrix, range)
+  TEST_OPERATIONS(range, matrix, slice)
+  TEST_OPERATIONS(range, range, vector)
+  TEST_OPERATIONS(range, range, range)
+  TEST_OPERATIONS(range, range, slice)
+  TEST_OPERATIONS(range, slice, vector)
+  TEST_OPERATIONS(range, slice, range)
+  TEST_OPERATIONS(range, slice, slice)
 
-//  TEST_OPERATIONS(slice, vector, vector)
-//  TEST_OPERATIONS(slice, vector, range)
-//  TEST_OPERATIONS(slice, vector, slice)
-//  TEST_OPERATIONS(slice, range, vector)
-//  TEST_OPERATIONS(slice, range, range)
-//  TEST_OPERATIONS(slice, range, slice)
-//  TEST_OPERATIONS(slice, slice, vector)
-//  TEST_OPERATIONS(slice, slice, range)
-//  TEST_OPERATIONS(slice, slice, slice)
+  TEST_OPERATIONS(slice, matrix, vector)
+  TEST_OPERATIONS(slice, matrix, range)
+  TEST_OPERATIONS(slice, matrix, slice)
+  TEST_OPERATIONS(slice, range, vector)
+  TEST_OPERATIONS(slice, range, range)
+  TEST_OPERATIONS(slice, range, slice)
+  TEST_OPERATIONS(slice, slice, vector)
+  TEST_OPERATIONS(slice, slice, range)
+  TEST_OPERATIONS(slice, slice, slice)
 }
 
 int main()

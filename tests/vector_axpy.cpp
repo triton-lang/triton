@@ -3,16 +3,16 @@
 #include <cmath>
 #include "viennacl/vector.hpp"
 
-#include "atidlas/templates/vector_axpy_template.hpp"
+#include "atidlas/templates/vector_axpy.hpp"
 #include "atidlas/execute.hpp"
 
 template<typename NumericT, class XType, class YType, class ZType>
-void test_element_wise_vector(NumericT epsilon, atidlas::vector_axpy_parameters const & vector_axpy_parameters,
-                 XType & cx, YType & cy, ZType & cz)
+void test_element_wise_vector(NumericT epsilon,  XType & cx, YType & cy, ZType & cz)
 {
   using namespace viennacl::linalg;
   using namespace std;
 
+  atidlas::vector_axpy_parameters parameters(4, 32, 128, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS);
   int failure_count = 0;
   ZType buffer = cz;
 
@@ -20,11 +20,10 @@ void test_element_wise_vector(NumericT epsilon, atidlas::vector_axpy_parameters 
   viennacl::scalar<NumericT> da(a), db(b);
 
   viennacl::vector<NumericT> xtmp(cx.internal_size());
-  viennacl::vector<NumericT> ytmp(cy.internal_size());
-  viennacl::vector<NumericT> ztmp(cz.internal_size());
-
   typename vector_maker<XType>::result_type x = vector_maker<XType>::make(xtmp, cx);
+  viennacl::vector<NumericT> ytmp(cy.internal_size());
   typename vector_maker<YType>::result_type y = vector_maker<YType>::make(ytmp, cy);
+  viennacl::vector<NumericT> ztmp(cz.internal_size());
   typename vector_maker<ZType>::result_type z = vector_maker<ZType>::make(ztmp, cz);
 
 
@@ -32,7 +31,7 @@ void test_element_wise_vector(NumericT epsilon, atidlas::vector_axpy_parameters 
   cout << NAME "..." << flush;\
   for(int_t i = 0 ; i < cz.size() ; ++i)\
     CPU_LOOP;\
-  atidlas::execute(atidlas::vector_axpy_template(vector_axpy_parameters),\
+  atidlas::execute(atidlas::vector_axpy_template(parameters),\
                    GPU_STATEMENT,\
                    viennacl::ocl::current_context(), true);\
   viennacl::copy(z, buffer);\
@@ -95,43 +94,13 @@ template<typename NumericT>
 void test_impl(NumericT epsilon)
 {
   int_t N = 24378;
-  int x_start = 4, y_start = 7, z_start = 15;
-  int x_stride = 5, y_stride = 8, z_stride = 12;
-  viennacl::range xr(x_start, N + x_start), yr(y_start, N + y_start), zr(z_start, N + z_start);
-  viennacl::slice xs(x_start, x_stride, N), ys(y_start, y_stride, N), zs(z_start, z_stride, N);
-
-  simple_vector<NumericT> x_vector(N), y_vector(N), z_vector(N);
-  init_rand(x_vector);
-  init_rand(y_vector);
-  init_rand(z_vector);
-
-  simple_vector<NumericT> x_range_holder(N + x_start);
-  simple_vector<NumericT> x_slice_holder(x_start + N*x_stride);
-  init_rand(x_range_holder);
-  init_rand(x_slice_holder);
-  simple_vector_range< simple_vector<NumericT> > x_range(x_range_holder, xr);
-  simple_vector_slice< simple_vector<NumericT> > x_slice(x_slice_holder, xs);
-
-  simple_vector<NumericT> y_range_holder(N + y_start);
-  simple_vector<NumericT> y_slice_holder(y_start + N*y_stride);
-  init_rand(y_range_holder);
-  init_rand(y_slice_holder);
-  simple_vector_range< simple_vector<NumericT> > y_range(y_range_holder, yr);
-  simple_vector_slice< simple_vector<NumericT> > y_slice(y_slice_holder, ys);
-
-  simple_vector<NumericT> z_range_holder(N + z_start);
-  simple_vector<NumericT> z_slice_holder(z_start + N*z_stride);
-  init_rand(z_range_holder);
-  init_rand(z_slice_holder);
-  simple_vector_range< simple_vector<NumericT> > z_range(z_range_holder, zr);
-  simple_vector_slice< simple_vector<NumericT> > z_slice(z_slice_holder, zs);
-
-  atidlas::vector_axpy_parameters vector_axpy_parameters(4, 32, 128, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS);
-
+  INIT_VECTOR_AND_PROXIES(N, 4, 5, x);
+  INIT_VECTOR_AND_PROXIES(N, 7, 8, y);
+  INIT_VECTOR_AND_PROXIES(N, 15, 12, z);
 
 #define TEST_OPERATIONS(XTYPE, YTYPE, ZTYPE)\
   std::cout << "> x : " #XTYPE " | y : " #YTYPE " | z : " #ZTYPE << std::endl;\
-  test_element_wise_vector(epsilon, vector_axpy_parameters, x_ ## XTYPE, y_ ## YTYPE, z_ ## ZTYPE);\
+  test_element_wise_vector(epsilon, x_ ## XTYPE, y_ ## YTYPE, z_ ## ZTYPE);\
 
   TEST_OPERATIONS(vector, vector, vector)
   TEST_OPERATIONS(vector, vector, range)
