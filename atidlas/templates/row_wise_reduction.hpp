@@ -5,17 +5,13 @@
 #include <vector>
 
 #include "viennacl/scheduler/forwards.h"
+#include "viennacl/tools/tools.hpp"
+#include "viennacl/scheduler/io.hpp"
 
 #include "atidlas/mapped_objects.hpp"
 #include "atidlas/tree_parsing.hpp"
 #include "atidlas/utils.hpp"
-
 #include "atidlas/templates/template_base.hpp"
-#include "atidlas/templates/utils.hpp"
-
-#include "viennacl/tools/tools.hpp"
-
-#include "viennacl/scheduler/io.hpp"
 
 namespace atidlas
 {
@@ -203,7 +199,6 @@ private:
   {
     std::vector<mapped_row_wise_reduction*> exprs;
     bool is_trans = false;
-    bool row_major = false;
     statements_container::data_type::const_iterator sit;
     std::vector<mapping_type>::const_iterator mit;
     for (mit = mappings.begin(), sit = statements.data().begin(); mit != mappings.end(); ++mit, ++sit)
@@ -211,11 +206,9 @@ private:
       std::vector<size_t> idx;
       viennacl::scheduler::lhs_rhs_element A;
       parse(*sit, idx, is_trans, A);
-      row_major = utils::call_on_matrix(A, utils::row_major_fun());
       for (unsigned int j = 0; j < idx.size(); ++j)
         exprs.push_back((mapped_row_wise_reduction*)(mit->at(mapping_key(idx[j], PARENT_NODE_TYPE)).get()));
     }
-    is_trans = is_trans ^ row_major;
 
     std::vector<std::string> res;
     if (is_trans && p_.simd_width>1)
@@ -237,10 +230,9 @@ public:
     viennacl::scheduler::lhs_rhs_element A;
     bool is_trans;
     parse(statements.data().front(), idx, is_trans, A);
-    bool row_major = utils::call_on_matrix(A, utils::row_major_fun());
 
     viennacl::ocl::kernel * kernel;
-    if((is_trans  ^ row_major)&& p_.simd_width>1)
+    if(is_trans  && p_.simd_width>1)
     {
       if (has_strided_access(statements))
         kernel = &programs[1].program().get_kernel(kernel_prefix);

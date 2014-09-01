@@ -12,17 +12,19 @@ template<typename NumericT, class AType, class XType, class YType>
 void test_row_wise_reduction(NumericT epsilon, atidlas::row_wise_reduction_parameters const & parameters,
                   YType & cy, AType & cA, AType & cAT, XType & cx)
 {
+  using viennacl::trans;
+
   int failure_count = 0;
 
-  viennacl::matrix<NumericT, viennacl::row_major> ArowTmp(cA.internal_size1(), cA.internal_size2());
-  viennacl::matrix<NumericT, viennacl::row_major> ATrowTmp(cAT.internal_size1(), cAT.internal_size2());
+//  viennacl::matrix<NumericT, viennacl::row_major> ArowTmp(cA.internal_size1(), cA.internal_size2());
+//  viennacl::matrix<NumericT, viennacl::row_major> ATrowTmp(cAT.internal_size1(), cAT.internal_size2());
   viennacl::matrix<NumericT, viennacl::column_major> AcolTmp(cA.internal_size1(), cA.internal_size2());
   viennacl::matrix<NumericT, viennacl::column_major> ATcolTmp(cAT.internal_size1(), cAT.internal_size2());
   viennacl::vector<NumericT> xtmp(cx.internal_size());
   viennacl::vector<NumericT> ytmp(cy.internal_size());
 
-  typename matrix_maker<AType, viennacl::row_major>::result_type Arow = matrix_maker<AType, viennacl::row_major>::make(ArowTmp, cA);
-  typename matrix_maker<AType, viennacl::row_major>::result_type ATrow = matrix_maker<AType, viennacl::row_major>::make(ATrowTmp, cAT);
+//  typename matrix_maker<AType, viennacl::row_major>::result_type Arow = matrix_maker<AType, viennacl::row_major>::make(ArowTmp, cA);
+//  typename matrix_maker<AType, viennacl::row_major>::result_type ATrow = matrix_maker<AType, viennacl::row_major>::make(ATrowTmp, cAT);
   typename matrix_maker<AType, viennacl::column_major>::result_type Acol = matrix_maker<AType, viennacl::column_major>::make(AcolTmp, cA);
   typename matrix_maker<AType, viennacl::column_major>::result_type ATcol = matrix_maker<AType, viennacl::column_major>::make(ATcolTmp, cAT);
   typename vector_maker<XType>::result_type x = vector_maker<XType>::make(xtmp, cx);
@@ -52,7 +54,12 @@ void test_row_wise_reduction(NumericT epsilon, atidlas::row_wise_reduction_param
   else\
     std::cout << std::endl;
 
-  TEST_OPERATION("y = A.x", cA(i,j)*cx[j], yi, 'N', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(Arow, x)));
+//  std::cout << "> row" << std::endl;
+//  TEST_OPERATION("y = A.x", cA(i,j)*cx[j], yi, 'N', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(Arow, x)));
+//  TEST_OPERATION("y = A'.x", cA(i,j)*cx[j], yi, 'T', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(trans(ATrow), x)));
+  std::cout << "> col" << std::endl;
+  TEST_OPERATION("y = A.x", cA(i,j)*cx[j], yi, 'N', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(Acol, x)));
+  TEST_OPERATION("y = A'.x", cA(i,j)*cx[j], yi, 'T', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(trans(ATcol), x)));
 
   if(failure_count>0)
     exit(EXIT_FAILURE);
@@ -63,9 +70,9 @@ void test_impl(NumericT epsilon)
 {
   atidlas::row_wise_reduction_parameters parameters(4, 8, 8, 128, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS);
 
-  int_t M = 329;
+  int_t M = 328;
   int_t N = 391;
-  int x_start = 145, y_start = 93, M_start = 243, N_start = 351;
+  int x_start = 14, y_start = 25, M_start = 33, N_start = 51;
   int x_stride = 5, y_stride = 8, M_stride = 3, N_stride = 7;
   viennacl::range xr(x_start, N + x_start), yr(y_start, M + y_start), Mr(M_start, M + M_start), Nr(N_start, N + N_start);
   viennacl::slice xs(x_start, x_stride, N), ys(y_start, y_stride, M), Ms(M_start, M_stride, M), Ns(N_start, N_stride, N);
@@ -80,9 +87,9 @@ void test_impl(NumericT epsilon)
   simple_vector_range< simple_vector<NumericT> > x_range(x_range_holder, xr);
   simple_vector_slice< simple_vector<NumericT> > x_slice(x_slice_holder, xs);
 
-  simple_vector<NumericT> y_vector(N);
-  simple_vector<NumericT> y_range_holder(N + y_start);
-  simple_vector<NumericT> y_slice_holder(y_start + N*y_stride);
+  simple_vector<NumericT> y_vector(M);
+  simple_vector<NumericT> y_range_holder(M + y_start);
+  simple_vector<NumericT> y_slice_holder(y_start + M*y_stride);
   init_rand(y_vector);
   init_rand(y_range_holder);
   init_rand(y_slice_holder);
@@ -106,7 +113,7 @@ void test_impl(NumericT epsilon)
 
 
 #define TEST_OPERATIONS(YTYPE, ATYPE, XTYPE)\
-  std::cout << "> y : " #YTYPE " | A : " #ATYPE " | x : " #XTYPE << std::endl;\
+  std::cout << ">> y : " #YTYPE " | A : " #ATYPE " | x : " #XTYPE << std::endl;\
   test_row_wise_reduction(epsilon, parameters, y_ ## YTYPE, A_ ## ATYPE, AT_ ## ATYPE, x_ ## XTYPE);\
 
   TEST_OPERATIONS(vector, matrix, vector)
@@ -142,9 +149,9 @@ void test_impl(NumericT epsilon)
 
 int main()
 {
-  std::cout << ">> float" << std::endl;
-  test_impl<float>(1e-5);
-  std::cout << ">> double" << std::endl;
+  std::cout << ">>> float" << std::endl;
+  test_impl<float>(1e-4);
+  std::cout << ">>> double" << std::endl;
   test_impl<double>(1e-9);
   std::cout << "---" << std::endl;
   std::cout << "Passed" << std::endl;

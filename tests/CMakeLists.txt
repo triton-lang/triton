@@ -1,4 +1,4 @@
-foreach(PROG blas1 blas2 blas3)
+foreach(PROG vector_axpy row_wise_reduction matrix_product)
      add_executable(${PROG}-test ${PROG}.cpp)
      add_test(${PROG} ${PROG}-test)
      target_link_libraries(${PROG}-test ${OPENCL_LIBRARIES})

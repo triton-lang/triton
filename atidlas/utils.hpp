@@ -13,7 +13,6 @@
 
 #include "viennacl/traits/size.hpp"
 #include "viennacl/traits/handle.hpp"
-#include "viennacl/traits/row_major.hpp"
 
 #include "atidlas/tools/to_string.hpp"
 #include "atidlas/forwards.h"
@@ -273,13 +272,13 @@ struct start2_fun
 struct leading_stride_fun
 {
   typedef atidlas_int_t result_type;
-  template<class T> result_type operator()(T const &t) const { return viennacl::traits::row_major(t)?viennacl::traits::stride2(t):viennacl::traits::stride1(t); }
+  template<class T> result_type operator()(T const &t) const { return viennacl::traits::stride1(t); }
 };
 
 struct leading_start_fun
 {
   typedef atidlas_int_t result_type;
-  template<class T> result_type operator()(T const &t) const { return viennacl::traits::row_major(t)?viennacl::traits::start2(t):viennacl::traits::start1(t); }
+  template<class T> result_type operator()(T const &t) const { return viennacl::traits::start1(t); }
 };
 
 struct stride1_fun
@@ -306,13 +305,6 @@ struct internal_size1_fun
   typedef atidlas_int_t result_type;
   template<class T>
   result_type operator()(T const &t) const { return viennacl::traits::internal_size1(t); }
-};
-
-struct row_major_fun
-{
-  typedef bool result_type;
-  template<class T>
-  result_type operator()(T const &t) const { return viennacl::traits::row_major(t); }
 };
 
 struct internal_size2_fun

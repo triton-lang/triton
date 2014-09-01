@@ -192,7 +192,7 @@ void init_rand(simple_matrix<T> & A)
 {
   for (unsigned int i = 0; i < A.size1(); ++i)
     for (unsigned int j = 0; j < A.size2(); ++j)
-      A(i, j) = rand()/RAND_MAX;
+      A(i, j) = 0.5 + 0.5*(T)rand()/RAND_MAX;
 }
 
 
@@ -200,7 +200,7 @@ template<typename T>
 void init_rand(simple_vector<T> & x)
 {
   for (unsigned int i = 0; i < x.size(); ++i)
-    x[i] = rand()/RAND_MAX;
+    x[i] = 0.5 + 0.5*(T)rand()/RAND_MAX;
 }
 
 template<class T>
@@ -217,8 +217,8 @@ simple_matrix<T> simple_trans(simple_matrix<T> const & A)
   return result;
 }
 
-template<class T, class U, class V>
-simple_matrix<T> simple_prod(U const & A, V const & B)
+template<class T, class U, class V, class W>
+simple_matrix<T> simple_prod(W & C, T alpha, U const & A, V const & B, T beta)
 {
     int M = A.size1();
     int N = B.size2();
@@ -231,7 +231,7 @@ simple_matrix<T> simple_prod(U const & A, V const & B)
         T val = 0;
         for(int k = 0 ; k < K ; ++k)
           val+= A(i, k)*B(k,j);
-        result(i, j) = val;
+        result(i, j) = alpha*val + beta*C(i,j);
       }
 
     return result;
@@ -286,7 +286,7 @@ bool failure_vector(VectorType const & x, VectorType const & y, typename VectorT
   typedef typename VectorType::value_type value_type;
   for(int_t i = 0 ; i < x.size() ; ++i)
   {
-    value_type delta = std::abs(x[i] - y[i]);
+    value_type delta = std::abs(x[i] - y[i])/(std::max(x[i], y[i]));
     if(delta > epsilon)
       return true;
   }
@@ -302,6 +302,7 @@ bool failure(simple_matrix<NumericT> const & A, simple_matrix<NumericT> const & 
     for(int j = 0 ; j < N ; ++j)
     {
       NumericT delta = std::abs(A(i,j) - B(i,j));
+//      std::cout << i << "," << j << "\t" << A(i,j) << " " << B(i,j) << std::endl;
       if(delta > epsilon)
         return true;
     }

@@ -262,37 +262,26 @@ private:
   {
     struct Morph : public MorphBase2D
     {
-      Morph(bool _is_row_major, std::string const & _ld) : is_row_major(_is_row_major), ld(_ld){ }
+      Morph(std::string const & _ld) : ld(_ld){ }
       std::string operator()(std::string const & i, std::string const & j) const
       {
-        if (is_row_major)
-          return "(" + i + ") * " + ld +  " + (" + j + ")";
         return "(" + i + ") +  (" + j + ") * " + ld;
       }
     private:
-      bool is_row_major;
       std::string const & ld;
     };
-    replace_offset(str, Morph(row_major_, ld_));
+    replace_offset(str, Morph(ld_));
   }
 
 public:
-  mapped_matrix(std::string const & scalartype, unsigned int id, bool row_major) : mapped_buffer(scalartype, id, "matrix"), row_major_(row_major)
+  mapped_matrix(std::string const & scalartype, unsigned int id) : mapped_buffer(scalartype, id, "matrix")
   {
     register_attribute(ld_, "#ld", name_ + "_ld");
     register_attribute(start1_, "#start1", name_ + "_start1");
     register_attribute(start2_, "#start2", name_ + "_start2");
     register_attribute(stride1_, "#stride1", name_ + "_stride1");
     register_attribute(stride2_, "#stride2", name_ + "_stride2");
-    if (row_major_)
-      keywords_["#nldstride"] = "#stride1";
-    else
-      keywords_["#nldstride"] = "#stride2";
-  }
-
-  bool row_major() const
-  {
-    return row_major_;
+    keywords_["#nldstride"] = "#stride2";
   }
 
 private:
@@ -301,7 +290,6 @@ private:
   std::string start2_;
   std::string stride1_;
   std::string stride2_;
-  bool row_major_;
 };
 
 /** @brief Vector diag

@@ -131,7 +131,7 @@ void test_impl(NumericT epsilon)
 
 #define TEST_OPERATIONS(XTYPE, YTYPE, ZTYPE)\
   std::cout << "> x : " #XTYPE " | y : " #YTYPE " | z : " #ZTYPE << std::endl;\
-  test_vectors(epsilon, vector_axpy_parameters, x_ ## XTYPE, y_ ## YTYPE, z_ ## ZTYPE);\
+  test_element_wise_vector(epsilon, vector_axpy_parameters, x_ ## XTYPE, y_ ## YTYPE, z_ ## ZTYPE);\
 
   TEST_OPERATIONS(vector, vector, vector)
   TEST_OPERATIONS(vector, vector, range)
@@ -167,7 +167,7 @@ void test_impl(NumericT epsilon)
 int main()
 {
   std::cout << ">> float" << std::endl;
-  test_impl<float>(1e-5);
+  test_impl<float>(1e-4);
   std::cout << ">> double" << std::endl;
   test_impl<double>(1e-9);
   std::cout << "---" << std::endl;

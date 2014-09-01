@@ -332,8 +332,13 @@ public:
     if (it!=mapping_.end())
     {
       mapped_object * obj = it->second.get();
+      std::string name = obj->name();
+      if(accessors_.find(name)!=accessors_.end() && already_processed_.insert(obj->process("#name")).second)
+        for(std::multimap<std::string, std::string>::const_iterator it = accessors_.lower_bound(name) ; it != accessors_.upper_bound(name) ; ++it)
+          stream_ << obj->process(it->second) << std::endl;
+
       std::string key = obj->type_key();
-      if(already_processed_.insert(obj->process("#name")).second  && accessors_.find(obj->type_key())!=accessors_.end())
+      if(accessors_.find(key)!=accessors_.end() && already_processed_.insert(obj->process("#name")).second)
         for(std::multimap<std::string, std::string>::const_iterator it = accessors_.lower_bound(key) ; it != accessors_.upper_bound(key) ; ++it)
           stream_ << obj->process(it->second) << std::endl;
     }
@@ -443,7 +448,6 @@ public:
   inline result_type operator()(viennacl::matrix_base<NumericT> const & mat) const
   {
     *ptr_++='m'; //Matrix
-    *ptr_++=mat.row_major()?'r':'c';
     *ptr_++=utils::first_letter_of_type<NumericT>::value();
     append_id(ptr_, binder_.get(&viennacl::traits::handle(mat)));
   }

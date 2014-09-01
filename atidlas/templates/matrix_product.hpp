@@ -5,17 +5,16 @@
 #include <vector>
 
 #include "viennacl/scheduler/forwards.h"
-
 #include "viennacl/matrix_def.hpp"
 #include "viennacl/matrix_proxy.hpp"
+#include "viennacl/forwards.h"
+#include "viennacl/tools/tools.hpp"
 
 #include "atidlas/templates/template_base.hpp"
 #include "atidlas/mapped_objects.hpp"
 #include "atidlas/utils.hpp"
 #include "atidlas/tree_parsing.hpp"
-#include "viennacl/forwards.h"
-
-#include "viennacl/tools/tools.hpp"
+#include "atidlas/tools/align.hpp"
 
 namespace atidlas
 {
@@ -66,9 +65,6 @@ private:
     if (p_.A_fetching_policy!=FETCH_FROM_LOCAL && p_.B_fetching_policy!=FETCH_FROM_LOCAL&& (p_.local_fetch_0!=0 || p_.local_fetch_1!=0))
       return TEMPLATE_GLOBAL_MEMORY_REQUIRES_ZERO_LOCAL_FETCH;
 
-    if (viennacl::dense_padding_size % p_.mL > 0 || viennacl::dense_padding_size % p_.kL > 0 || viennacl::dense_padding_size % p_.nL > 0)
-      return TEMPLATE_AlignmentV_MUST_BE_BLOCK_SIZE_MULTIPLE;
-
     if ((p_.mS % p_.simd_width) > 0 || (p_.nS % p_.simd_width) > 0)
       return TEMPLATE_MS_NS_MUST_BE_SIMD_WIDTH_MULTIPLE;
 
@@ -112,15 +108,15 @@ private:
     return TEMPLATE_VALID;
   }
 
-  static void parse(scheduler::statement const & s,
+  static void parse(viennacl::scheduler::statement const & s,
                     atidlas_int_t & C_idx, leaf_t & C_leaf, atidlas_int_t & alpha_idx, leaf_t & alpha_leaf,
                     atidlas_int_t & A_idx, leaf_t & A_leaf, bool& A_trans, atidlas_int_t & B_idx, leaf_t & B_leaf, bool& B_trans,
                     atidlas_int_t & beta_idx, leaf_t & beta_leaf)
   {
     using namespace tree_parsing;
-    using namespace scheduler;
+    using namespace viennacl::scheduler;
 
-    scheduler::statement::container_type const & array = s.array();
+    viennacl::scheduler::statement::container_type const & array = s.array();
     atidlas_int_t root_idx = s.root();
 
     C_idx = root_idx;
@@ -200,7 +196,7 @@ private:
     /// INIT
     /// //////////////
     utils::kernel_generation_stream stream;
-    scheduler::statement const & st = statements.data().front();
+    viennacl::scheduler::statement const & st = statements.data().front();
     mapping_type const & mapping = mappings.front();
 
     bool A_trans = false, B_trans = false;
@@ -217,12 +213,11 @@ private:
     //////////////////
     /// DECLARATIONS
     /// //////////////
-
     stream << " __attribute__((reqd_work_group_size(" << p.local_size_0 << "," << p.local_size_1 << ",1)))" << std::endl;
-    std::map<std::string, unsigned int> widths;
-    widths[A->name()] = p.simd_width;
-    widths[B->name()] = p.simd_width;
-    generate_prototype(stream, kernel_prefix, "unsigned int M, unsigned int N, unsigned int K, ", mappings, statements, widths);
+    stream << "__kernel void " << kernel_prefix << "(unsigned int M, unsigned int N,  unsigned int K, " << generate_arguments(mappings, utils::create_process_accessors(A->name(), matrix_arguments(utils::append_width("#scalartype", p.simd_width)))
+                                                                                                                                                                       (B->name(), matrix_arguments(utils::append_width("#scalartype", p.simd_width)))
+                                                                                                                                                                       ("matrix", matrix_arguments("#scalartype"))
+                                                                                                                                                                       ("host_scalar", "#scalartype #name,"),statements) << ")" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
     if(!fallback)
@@ -603,70 +598,34 @@ private:
     stream.dec_tab();
     stream << "}" << std::endl;
 
+    unsigned int ministartstride0 = p.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p.mS:p.simd_width;
+    unsigned int ministartstride1 = p.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p.nS:p.simd_width;
 
-    if (C->row_major())
+    stream << C->process("#pointer += gidx*" + to_string(p.mL) + "*#stride1;") << std::endl;
+    stream << C->process("#pointer += idx*" + to_string(ministartstride0) + "*#stride1;") << std::endl;
+    stream << C->process("#pointer += gidy*" + to_string(p.nL) + "*#ld;") << std::endl;
+    stream << C->process("#pointer += idy*" + to_string(ministartstride1) + "*#ld;") << std::endl;
+
+    for (unsigned int m=0; m < p.mS; ++m)
     {
-      unsigned int ministartstride0 = p.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p.mS:p.simd_width;
-      unsigned int ministartstride1 = p.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p.nS:p.simd_width;
-
-      stream << C->process("#pointer += gidx*" + to_string(p.mL) + "*#ld;") << std::endl;
-      stream << C->process("#pointer += idx*" + to_string(ministartstride0) + "*#ld;") << std::endl;
-      stream << C->process("#pointer += gidy*" + to_string(p.nL) + "*#stride2;") << std::endl;
-      stream << C->process("#pointer += idy*" + to_string(ministartstride1) + "*#stride2;") << std::endl;
-
       for (unsigned int n=0; n < p.nS; ++n)
       {
-        for (unsigned int m=0; m < p.mS; ++m)
+        unsigned int ministride1 = p.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?1:p.local_size_1;
+        string Cj = to_string((n/p.simd_width)*(ministride1*p.simd_width) + n%p.simd_width);
+        if (fallback)
         {
-          unsigned int ministride1 = p.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?1:p.local_size_0;
-          string Cj = to_string((m/p.simd_width)*(ministride1*p.simd_width) + m%p.simd_width);
-          if (fallback)
-          {
-            stream << "if (in_bounds_m[" + to_string(m) + "] && in_bounds_n[" + to_string(n) + "])" << std::endl;
-            stream.inc_tab();
-          }
-          stream << C->process("#pointer[" + Cj + "*#ld] = rC[" + to_string(m) + "][" + to_string(n) + "]*" + alpha->name() + "+ #pointer[" + Cj + "*#ld]*" + beta->name() + ";") << std::endl;
-          if (fallback)
-            stream.dec_tab();
+          stream << "if (in_bounds_m[" + to_string(m) + "] && in_bounds_n[" + to_string(n) + "])" << std::endl;
+          stream.inc_tab();
         }
-        if ((n+1)%p.simd_width>0 || p.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS)
-          stream << C->process("#pointer += #stride2;") << std::endl;
-        else
-          stream << C->process("#pointer += " + to_string((p.local_size_1*p.simd_width) - (p.simd_width-1)) + "*#stride2;") << std::endl;
+        stream << C->process("#pointer[" + Cj + "*#ld] = rC[" + to_string(m) + "][" + to_string(n) + "]*" + alpha->name() + " + #pointer[" + Cj + "*#ld]*" + beta->name() + ";") << std::endl;
+        if (fallback)
+          stream.dec_tab();
       }
 
-    }
-    else
-    {
-      unsigned int ministartstride0 = p.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p.mS:p.simd_width;
-      unsigned int ministartstride1 = p.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p.nS:p.simd_width;
-
-      stream << C->process("#pointer += gidx*" + to_string(p.mL) + "*#stride1;") << std::endl;
-      stream << C->process("#pointer += idx*" + to_string(ministartstride0) + "*#stride1;") << std::endl;
-      stream << C->process("#pointer += gidy*" + to_string(p.nL) + "*#ld;") << std::endl;
-      stream << C->process("#pointer += idy*" + to_string(ministartstride1) + "*#ld;") << std::endl;
-
-      for (unsigned int m=0; m < p.mS; ++m)
-      {
-        for (unsigned int n=0; n < p.nS; ++n)
-        {
-          unsigned int ministride1 = p.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?1:p.local_size_1;
-          string Cj = to_string((n/p.simd_width)*(ministride1*p.simd_width) + n%p.simd_width);
-          if (fallback)
-          {
-            stream << "if (in_bounds_m[" + to_string(m) + "] && in_bounds_n[" + to_string(n) + "])" << std::endl;
-            stream.inc_tab();
-          }
-          stream << C->process("#pointer[" + Cj + "*#ld] = rC[" + to_string(m) + "][" + to_string(n) + "]*" + alpha->name() + " + #pointer[" + Cj + "*#ld]*" + beta->name() + ";") << std::endl;
-          if (fallback)
-            stream.dec_tab();
-        }
-
-        if ((m+1)%p.simd_width>0 || p.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS)
-          stream << C->process("#pointer += #stride1;") << std::endl;
-        else
-          stream << C->process("#pointer += " + to_string((p.local_size_0*p.simd_width) - (p.simd_width-1)) + "*#stride1;") << std::endl;
-      }
+      if ((m+1)%p.simd_width>0 || p.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS)
+        stream << C->process("#pointer += #stride1;") << std::endl;
+      else
+        stream << C->process("#pointer += " + to_string((p.local_size_0*p.simd_width) - (p.simd_width-1)) + "*#stride1;") << std::endl;
     }
 
     stream.dec_tab();
@@ -689,9 +648,9 @@ private:
   }
 
   template<class NumericT>
-  void enqueue_block(scheduler::statement & statement, atidlas_int_t M, atidlas_int_t N, atidlas_int_t K,
-                     scheduler::lhs_rhs_element& eA, scheduler::lhs_rhs_element& eB, scheduler::lhs_rhs_element& eC, scheduler::lhs_rhs_element& ebeta,
-                     matrix_base<NumericT> const & A, matrix_base<NumericT> const & B, matrix_base<NumericT> const & C, NumericT beta,
+  void enqueue_block(viennacl::scheduler::statement & statement, atidlas_int_t M, atidlas_int_t N, atidlas_int_t K,
+                     viennacl::scheduler::lhs_rhs_element& eA, viennacl::scheduler::lhs_rhs_element& eB, viennacl::scheduler::lhs_rhs_element& eC, viennacl::scheduler::lhs_rhs_element& ebeta,
+                     viennacl::matrix_base<NumericT> const & A, viennacl::matrix_base<NumericT> const & B, viennacl::matrix_base<NumericT> const & C, NumericT beta,
                      std::vector<lazy_program_compiler> & programs, std::string const & kernel_prefix, int id)
   {
     if (A.size1()==0 || A.size2()==0 || B.size1()==0 || B.size2()==0 || C.size1()==0 || C.size2()==0)
@@ -702,15 +661,15 @@ private:
     kernel.local_work_size(0, p_.local_size_0);
     kernel.local_work_size(1, p_.local_size_1);
 
-    scheduler::statement::assign_element(eA, A);
-    scheduler::statement::assign_element(eB, B);
-    scheduler::statement::assign_element(eC, C);
-    scheduler::statement::assign_element(ebeta, beta);
+    viennacl::scheduler::statement::assign_element(eA, A);
+    viennacl::scheduler::statement::assign_element(eB, B);
+    viennacl::scheduler::statement::assign_element(eC, C);
+    viennacl::scheduler::statement::assign_element(ebeta, beta);
 
     if (id==1)
     {
-      kernel.global_work_size(0, tools::align_to_multiple(tools::align_to_multiple((unsigned int)M,p_.mS)/p_.mS, p_.local_size_0));
-      kernel.global_work_size(1, tools::align_to_multiple(tools::align_to_multiple((unsigned int)N,p_.nS)/p_.nS, p_.local_size_1));
+      kernel.global_work_size(0, tools::align_to_next_multiple(tools::align_to_next_multiple((unsigned int)M,p_.mS)/p_.mS, p_.local_size_0));
+      kernel.global_work_size(1, tools::align_to_next_multiple(tools::align_to_next_multiple((unsigned int)N,p_.nS)/p_.nS, p_.local_size_1));
     }
     else
     {
@@ -727,32 +686,32 @@ private:
   }
 
   template<class NumericT>
-  matrix_slice< viennacl::matrix_base<NumericT> >  create_slice(viennacl::matrix_base<NumericT>* scheduler::lhs_rhs_element::*ptr, scheduler::lhs_rhs_element const & element,
+  viennacl::matrix_slice< viennacl::matrix_base<NumericT> >  create_slice(viennacl::matrix_base<NumericT>* viennacl::scheduler::lhs_rhs_element::*ptr, viennacl::scheduler::lhs_rhs_element const & element,
                                                                           atidlas_int_t s0_0, atidlas_int_t s0_1, atidlas_int_t s1_0, atidlas_int_t s1_1, bool swap)
   {
-    matrix_base<NumericT> & M = *(element.*ptr);
+    viennacl::matrix_base<NumericT> & M = *(element.*ptr);
     atidlas_int_t start1 = M.start1();
     atidlas_int_t start2 = M.start2();
     atidlas_int_t stride1 = M.stride1();
     atidlas_int_t stride2 = M.stride2();
-    if (swap ^ M.row_major())
+    if (swap)
     {
       std::swap(start1, start2);
       std::swap(stride1, stride2);
     }
-    slice s0(start1 + s0_0, stride1, s0_1 - s0_0);
-    slice s1(start2 + s1_0, stride2, s1_1 - s1_0);
+    viennacl::slice s0(start1 + s0_0, stride1, s0_1 - s0_0);
+    viennacl::slice s1(start2 + s1_0, stride2, s1_1 - s1_0);
     if(swap)
       std::swap(s0, s1);
-    return matrix_slice<viennacl::matrix_base<NumericT> >(M, s0, s1);
+    return viennacl::matrix_slice<viennacl::matrix_base<NumericT> >(M, s0, s1);
   }
 
   template<class NumericT>
-  void enqueue_impl(viennacl::matrix_base<NumericT>* scheduler::lhs_rhs_element::*ptr_matrix,
-                    scheduler::statement & statement, scheduler::lhs_rhs_element & A, scheduler::lhs_rhs_element & B, scheduler::lhs_rhs_element & C, scheduler::lhs_rhs_element & beta,
+  void enqueue_impl(viennacl::matrix_base<NumericT>* viennacl::scheduler::lhs_rhs_element::*ptr_matrix,
+                    viennacl::scheduler::statement & statement, viennacl::scheduler::lhs_rhs_element & A, viennacl::scheduler::lhs_rhs_element & B, viennacl::scheduler::lhs_rhs_element & C, viennacl::scheduler::lhs_rhs_element & beta,
                     NumericT beta_value, std::vector<lazy_program_compiler> & programs, std::string const & kernel_prefix)
   {
-    using namespace device_specific::utils;
+    using namespace utils;
     atidlas_int_t ldstrideA = call_on_matrix(A, leading_stride_fun());
     atidlas_int_t ldstrideB = call_on_matrix(B, leading_stride_fun());
     atidlas_int_t ldstrideC = call_on_matrix(C, leading_stride_fun());
@@ -764,10 +723,7 @@ private:
     atidlas_int_t M = call_on_matrix(C, size1_fun());
     atidlas_int_t N = call_on_matrix(C, size2_fun());
     atidlas_int_t K = call_on_matrix(A, size2_fun());
-    if (utils::call_on_matrix(A, row_major_fun()))
-      K = A_trans_=='T'?call_on_matrix(A, size2_fun()):call_on_matrix(A, size1_fun());
-    else
-      K = A_trans_=='N'?call_on_matrix(A, size2_fun()):call_on_matrix(A, size1_fun());
+    K = A_trans_=='N'?call_on_matrix(A, size2_fun()):call_on_matrix(A, size1_fun());
 
     if (M < p_.mL || N < p_.nL || K < p_.kL || ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1 ||
         (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0)))
@@ -779,9 +735,9 @@ private:
     }
 
 
-    scheduler::lhs_rhs_element Acopy = A;
-    scheduler::lhs_rhs_element Bcopy = B;
-    scheduler::lhs_rhs_element Ccopy = C;
+    viennacl::scheduler::lhs_rhs_element Acopy = A;
+    viennacl::scheduler::lhs_rhs_element Bcopy = B;
+    viennacl::scheduler::lhs_rhs_element Ccopy = C;
 
     atidlas_int_t lM = M / p_.mL * p_.mL;
     atidlas_int_t lN = N / p_.nL * p_.nL;
@@ -806,30 +762,25 @@ public:
 
   virtual void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
   {
-    using namespace device_specific::utils;
+    using namespace utils;
     using namespace tree_parsing;
 
-    scheduler::statement const & st = statements.data().front();
+    viennacl::scheduler::statement const & st = statements.data().front();
     bool A_trans, B_trans;
     atidlas_int_t C_idx=0, A_idx=0, B_idx=0, alpha_idx=0, beta_idx = 0;
     leaf_t C_leaf=LHS_NODE_TYPE, A_leaf=LHS_NODE_TYPE, B_leaf=LHS_NODE_TYPE, alpha_leaf=LHS_NODE_TYPE, beta_leaf=LHS_NODE_TYPE;
     parse(st, C_idx, C_leaf, alpha_idx, alpha_leaf, A_idx, A_leaf, A_trans, B_idx, B_leaf, B_trans, beta_idx, beta_leaf);
 
-    scheduler::statement stcopy = st;
-    scheduler::lhs_rhs_element& A = utils::lhs_rhs_element(stcopy, A_idx, A_leaf);
-    scheduler::lhs_rhs_element& B = utils::lhs_rhs_element(stcopy, B_idx, B_leaf);
-    scheduler::lhs_rhs_element& C = utils::lhs_rhs_element(stcopy, C_idx, C_leaf);
-    scheduler::lhs_rhs_element& beta = utils::lhs_rhs_element(stcopy, beta_idx, beta_leaf);
+    viennacl::scheduler::statement stcopy = st;
+    viennacl::scheduler::lhs_rhs_element& A = utils::lhs_rhs_element(stcopy, A_idx, A_leaf);
+    viennacl::scheduler::lhs_rhs_element& B = utils::lhs_rhs_element(stcopy, B_idx, B_leaf);
+    viennacl::scheduler::lhs_rhs_element& C = utils::lhs_rhs_element(stcopy, C_idx, C_leaf);
+    viennacl::scheduler::lhs_rhs_element& beta = utils::lhs_rhs_element(stcopy, beta_idx, beta_leaf);
 
-
-
-
-
-
-    if (C.numeric_type==scheduler::FLOAT_TYPE)
-      enqueue_impl<float>(&scheduler::lhs_rhs_element::matrix_float, stcopy, A, B, C, beta, beta.host_float, programs, kernel_prefix);
-    else if (C.numeric_type==scheduler::DOUBLE_TYPE)
-      enqueue_impl<double>(&scheduler::lhs_rhs_element::matrix_double, stcopy, A, B, C, beta, beta.host_double, programs, kernel_prefix);
+    if (C.numeric_type==viennacl::scheduler::FLOAT_TYPE)
+      enqueue_impl<float>(&viennacl::scheduler::lhs_rhs_element::matrix_float, stcopy, A, B, C, beta, beta.host_float, programs, kernel_prefix);
+    else if (C.numeric_type==viennacl::scheduler::DOUBLE_TYPE)
+      enqueue_impl<double>(&viennacl::scheduler::lhs_rhs_element::matrix_double, stcopy, A, B, C, beta, beta.host_double, programs, kernel_prefix);
     else
       throw generator_not_supported_exception("GEMM only supported for float/double");
 

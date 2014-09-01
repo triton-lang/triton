@@ -6,20 +6,25 @@
 #include "viennacl/matrix_proxy.hpp"
 #include "viennacl/linalg/prod.hpp"
 
+#include "atidlas/templates/matrix_product_template.hpp"
+#include "atidlas/execute.hpp"
 
 template<typename T, typename CType, typename AType, typename BType>
-int test_layout(CType & C, AType const & A, AType const & AT, BType const & B, BType const & BT,
-                simple_matrix<T> const & ground, T epsilon)
+int test_layout(CType & C, T alpha, AType const & A, AType const & AT, BType const & B, BType const & BT, T beta,
+                atidlas::matrix_product_parameters const & parameters, simple_matrix<T> const & ground, T epsilon)
 {
+  CType Cinit = C;
+
   using viennacl::linalg::prod;
   using viennacl::trans;
   int failures_count = 0;
-
   simple_matrix<T> tmp(C.size1(), C.size2());
 
-#define TEST_OP(NAME, OPERATION)\
+#define TEST_OP(NAME, GPU_STATEMENT, TRANS_A, TRANS_B) \
   std::cout << NAME " ..." << std::flush;\
-  OPERATION;\
+  atidlas::execute(atidlas::matrix_product_template(parameters,TRANS_A, TRANS_B),\
+                   GPU_STATEMENT,\
+                   viennacl::ocl::current_context(), true);\
   viennacl::copy(C, tmp);\
   if (failure(ground, tmp, epsilon))\
   {\
@@ -27,12 +32,13 @@ int test_layout(CType & C, AType const & A, AType const & AT, BType const & B, B
     failures_count++;\
   }\
   else\
-    std::cout << std::endl;
+    std::cout << std::endl;\
+  C = Cinit;
 
-  TEST_OP("C = A.B", C = prod(A, B));
-  TEST_OP("C = A'.B", C = prod(trans(AT), B));
-  TEST_OP("C = A.B'", C = prod(A, trans(BT)));
-  TEST_OP("C = A'.B'", C = prod(trans(AT), trans(BT)));
+  TEST_OP("C = alpha.A.B + beta.C" , viennacl::scheduler::statement(C, viennacl::op_assign(), prod(A, B)*alpha + C*beta),'N','N');
+  TEST_OP("C = alpha.A'.B + beta.C", viennacl::scheduler::statement(C, viennacl::op_assign(), prod(trans(AT), B)*alpha + C*beta),'T','N');
+  TEST_OP("C = alpha.A.B' + beta.C", viennacl::scheduler::statement(C, viennacl::op_assign(), prod(A, trans(BT))*alpha + C*beta),'N','T');
+  TEST_OP("C = alpha.A'.B' + beta.C", viennacl::scheduler::statement(C, viennacl::op_assign(), prod(trans(AT), trans(BT))*alpha + C*beta),'T','T');
 
   return failures_count;
 }
@@ -40,48 +46,52 @@ int test_layout(CType & C, AType const & A, AType const & AT, BType const & B, B
 template<typename T, typename RefAType, typename RefBType, typename RefCType>
 int test_all_layouts(int CM, int CN, RefCType & cC, int AM, int AK, RefAType & cA, RefAType & cAT, int BK, int BN, RefBType & cB,  RefBType & cBT, T epsilon)
 {
-
-  viennacl::matrix<T, viennacl::row_major> ArowTmp(AM, AK);
-  viennacl::matrix<T, viennacl::row_major> ATrowTmp(AK, AM);
-  viennacl::matrix<T, viennacl::row_major> BrowTmp(BK, BN);
-  viennacl::matrix<T, viennacl::row_major> BTrowTmp(BN, BK);
-  viennacl::matrix<T, viennacl::row_major> CrowTmp(CM, CN);
+  int failures_count = 0;
+  T alpha = 0;
+  T beta = 0;
+  simple_matrix<T> ground = simple_prod<T>(cC, alpha, cA, cB, beta);
+//  viennacl::matrix<T, viennacl::row_major> ArowTmp(AM, AK);
+//  viennacl::matrix<T, viennacl::row_major> ATrowTmp(AK, AM);
+//  viennacl::matrix<T, viennacl::row_major> BrowTmp(BK, BN);
+//  viennacl::matrix<T, viennacl::row_major> BTrowTmp(BN, BK);
+//  viennacl::matrix<T, viennacl::row_major> CrowTmp(CM, CN);
+//  typename matrix_maker<RefCType, viennacl::row_major>::result_type Crow = matrix_maker<RefCType, viennacl::row_major>::make(CrowTmp, cC);
+//  typename matrix_maker<RefAType, viennacl::row_major>::result_type Arow = matrix_maker<RefAType, viennacl::row_major>::make(ArowTmp, cA);
+//  typename matrix_maker<RefAType, viennacl::row_major>::result_type ATrow = matrix_maker<RefAType, viennacl::row_major>::make(ATrowTmp, cAT);
+//  typename matrix_maker<RefBType, viennacl::row_major>::result_type Brow = matrix_maker<RefBType, viennacl::row_major>::make(BrowTmp, cB);
+//  typename matrix_maker<RefBType, viennacl::row_major>::result_type BTrow = matrix_maker<RefBType, viennacl::row_major>::make(BTrowTmp, cBT);
 
   viennacl::matrix<T, viennacl::column_major> AcolTmp(AM, AK);
   viennacl::matrix<T, viennacl::column_major> ATcolTmp(AK, AM);
   viennacl::matrix<T, viennacl::column_major> BcolTmp(BK, BN);
   viennacl::matrix<T, viennacl::column_major> BTcolTmp(BN, BK);
   viennacl::matrix<T, viennacl::column_major> CcolTmp(CM, CN);
-
-
-  typename matrix_maker<RefCType, viennacl::row_major>::result_type Crow = matrix_maker<RefCType, viennacl::row_major>::make(CrowTmp, cC);
-  typename matrix_maker<RefAType, viennacl::row_major>::result_type Arow = matrix_maker<RefAType, viennacl::row_major>::make(ArowTmp, cA);
-  typename matrix_maker<RefAType, viennacl::row_major>::result_type ATrow = matrix_maker<RefAType, viennacl::row_major>::make(ATrowTmp, cAT);
-  typename matrix_maker<RefBType, viennacl::row_major>::result_type Brow = matrix_maker<RefBType, viennacl::row_major>::make(BrowTmp, cB);
-  typename matrix_maker<RefBType, viennacl::row_major>::result_type BTrow = matrix_maker<RefBType, viennacl::row_major>::make(BTrowTmp, cBT);
-
   typename matrix_maker<RefCType, viennacl::column_major>::result_type Ccol = matrix_maker<RefCType, viennacl::column_major>::make(CcolTmp, cC);
   typename matrix_maker<RefAType, viennacl::column_major>::result_type Acol = matrix_maker<RefAType, viennacl::column_major>::make(AcolTmp, cA);
   typename matrix_maker<RefAType, viennacl::column_major>::result_type ATcol = matrix_maker<RefAType, viennacl::column_major>::make(ATcolTmp, cAT);
   typename matrix_maker<RefBType, viennacl::column_major>::result_type Bcol = matrix_maker<RefBType, viennacl::column_major>::make(BcolTmp, cB);
   typename matrix_maker<RefBType, viennacl::column_major>::result_type BTcol = matrix_maker<RefBType, viennacl::column_major>::make(BTcolTmp, cBT);
 
-
-  simple_matrix<T> ground = simple_prod<T>(cA, cB);
-
-  int failures_count = 0;
+  atidlas::matrix_product_parameters parameters_local(1, 8, 16, 16, 4, 2, 6, atidlas::FETCH_FROM_LOCAL, atidlas::FETCH_FROM_LOCAL, 16, 8);
+  atidlas::matrix_product_parameters parameters_global_contiguous(1, 8, 16, 16, 4, 2, 6, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS, 0, 0);
+  atidlas::matrix_product_parameters parameters_global_strided(1, 8, 16, 16, 4, 2, 6, atidlas::FETCH_FROM_GLOBAL_STRIDED, atidlas::FETCH_FROM_GLOBAL_STRIDED, 0, 0);
 
 #define TEST_LAYOUT(Clayout, Alayout, Blayout) \
-  std::cout << "> "  #Clayout " = " #Alayout "." #Blayout << std::endl;  \
-  failures_count += test_layout(C ## Clayout, A ## Alayout, AT ## Alayout, B ## Blayout, BT ## Blayout, ground, epsilon);
+  std::cout << ">> "  #Clayout " = " #Alayout "." #Blayout << std::endl;  \
+  std::cout << "> local" << std::endl;\
+  failures_count += test_layout(C ## Clayout, alpha, A ## Alayout, AT ## Alayout, B ## Blayout, BT ## Blayout, beta, parameters_local, ground, epsilon);\
+  std::cout << "> global contiguous" << std::endl;\
+  failures_count += test_layout(C ## Clayout, alpha, A ## Alayout, AT ## Alayout, B ## Blayout, BT ## Blayout, beta, parameters_global_strided, ground, epsilon);\
+  std::cout << "> global strided" << std::endl;\
+  failures_count += test_layout(C ## Clayout, alpha, A ## Alayout, AT ## Alayout, B ## Blayout, BT ## Blayout, beta, parameters_global_contiguous, ground, epsilon);
 
-  TEST_LAYOUT(row, row, row);
-  TEST_LAYOUT(row, row, col);
-  TEST_LAYOUT(row, col, row);
-  TEST_LAYOUT(row, col, col);
-  TEST_LAYOUT(col, row, row);
-  TEST_LAYOUT(col, row, col);
-  TEST_LAYOUT(col, col, row);
+//  TEST_LAYOUT(row, row, row);
+//  TEST_LAYOUT(row, row, col);
+//  TEST_LAYOUT(row, col, row);
+//  TEST_LAYOUT(row, col, col);
+//  TEST_LAYOUT(col, row, row);
+//  TEST_LAYOUT(col, row, col);
+//  TEST_LAYOUT(col, col, row);
   TEST_LAYOUT(col, col, col);
 
 #undef TEST_LAYOUT
@@ -151,7 +161,7 @@ int run_test(T epsilon)
 #undef DECLARE
 
 #define TEST_ALL_LAYOUTS(C_TYPE, A_TYPE, B_TYPE)\
-    std::cout << ">> " #C_TYPE " = " #A_TYPE "." #B_TYPE << std::endl;\
+    std::cout << ">>> " #C_TYPE " = " #A_TYPE "." #B_TYPE << std::endl;\
     failures_count += test_all_layouts<T>(C_TYPE ## _holder_M, C_TYPE ## _holder_N, C_ ## C_TYPE,\
                             A_TYPE ## _holder_M, A_TYPE ## _holder_K, A_ ## A_TYPE, AT_ ## A_TYPE,\
                             B_TYPE ## _holder_K, B_TYPE ## _holder_N, B_ ## B_TYPE, BT_ ## B_TYPE, epsilon);
@@ -203,12 +213,14 @@ int run_test(T epsilon)
 int main()
 {
     int n_failures = 0;
-    std::cout << ">>> float" << std::endl;
-    n_failures += run_test<float>(1e-5);
-    std::cout << ">>> double" << std::endl;
+    std::cout << ">>>> float" << std::endl;
+    n_failures += run_test<float>(1e-4);
+    std::cout << ">>>> double" << std::endl;
     n_failures += run_test<double>(1e-9);
 
     if(n_failures>0)
       return EXIT_FAILURE;
+    std::cout << "---" << std::endl;
+    std::cout << "Passed" << std::endl;
     return EXIT_SUCCESS;
 }

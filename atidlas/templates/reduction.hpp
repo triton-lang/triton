@@ -5,15 +5,12 @@
 #include <vector>
 
 #include "viennacl/backend/opencl.hpp"
-
 #include "viennacl/scheduler/forwards.h"
+#include "viennacl/tools/tools.hpp"
+
 #include "atidlas/tree_parsing.hpp"
 #include "atidlas/utils.hpp"
-
 #include "atidlas/templates/template_base.hpp"
-#include "atidlas/templates/utils.hpp"
-
-#include "viennacl/tools/tools.hpp"
 
 namespace atidlas
 {

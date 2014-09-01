@@ -5,16 +5,13 @@
 #include <cmath>
 
 #include "viennacl/scheduler/forwards.h"
+#include "viennacl/tools/tools.hpp"
 
 #include "atidlas/mapped_objects.hpp"
 #include "atidlas/tree_parsing.hpp"
 #include "atidlas/forwards.h"
 #include "atidlas/utils.hpp"
-
 #include "atidlas/templates/template_base.hpp"
-#include "atidlas/templates/utils.hpp"
-
-#include "viennacl/tools/tools.hpp"
 
 namespace atidlas
 {
@@ -25,9 +22,6 @@ public:
   vector_axpy_parameters(unsigned int _simd_width,
                          unsigned int _group_size, unsigned int _num_groups,
                          fetching_policy_type _fetching_policy) : template_base::parameters_type(_simd_width, _group_size, 1, 1), num_groups(_num_groups), fetching_policy(_fetching_policy){ }
-
-
-
   unsigned int num_groups;
   fetching_policy_type fetching_policy;
 };

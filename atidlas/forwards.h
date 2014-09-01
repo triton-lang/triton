@@ -26,7 +26,7 @@ static const int TEMPLATE_LOCAL_SIZE_1_OVERFLOW = -4;
 static const int TEMPLATE_LOCAL_SIZE_2_OVERFLOW = -5;
 static const int TEMPLATE_LOCAL_SIZE_NOT_WARP_MULTIPLE = -6;
 static const int TEMPLATE_INVALID_SIMD_WIDTH = -7;
-static const int TEMPLATE_AlignmentV_MUST_BE_BLOCK_SIZE_MULTIPLE = -8;
+static const int TEMPLATE_ALIGNMENT_MUST_BE_BLOCK_SIZE_MULTIPLE = -8;
 static const int TEMPLATE_INVALID_FETCHING_POLICY_TYPE= -9;
 
 static const int TEMPLATE_GLOBAL_MEMORY_REQUIRES_ZERO_LOCAL_FETCH = -10;
@@ -103,13 +103,13 @@ inline const char * expression_type_to_string(expression_type type)
 }
 
 /** @brief generate the string for a pointer kernel argument */
-static std::string generate_value_kernel_argument(std::string const & scalartype, std::string const & name)
+inline std::string generate_value_kernel_argument(std::string const & scalartype, std::string const & name)
 {
   return scalartype + ' ' + name + ",";
 }
 
 /** @brief generate the string for a pointer kernel argument */
-static std::string generate_pointer_kernel_argument(std::string const & address_space, std::string const & scalartype, std::string const & name)
+inline std::string generate_pointer_kernel_argument(std::string const & address_space, std::string const & scalartype, std::string const & name)
 {
   return address_space +  " " + scalartype + "* " + name + ",";
 }

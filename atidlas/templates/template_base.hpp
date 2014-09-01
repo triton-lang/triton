@@ -96,8 +96,7 @@ private:
     template<class NumericT>
     result_type operator()(viennacl::matrix_base<NumericT> const & mat) const
     {
-      return result_type(new mapped_matrix(utils::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(mat)),
-                                           viennacl::traits::row_major(mat)));
+      return result_type(new mapped_matrix(utils::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(mat))));
     }
 
     /** @brief Implicit matrix mapping */
@@ -227,20 +226,98 @@ private:
 
 protected:
 
-  static std::string generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings, statements_container const & statements)
+  inline void compute_reduction(utils::kernel_generation_stream & os, std::string acc, std::string cur, viennacl::scheduler::op_element const & op)
+  {
+    if (utils::elementwise_function(op))
+      os << acc << "=" << tree_parsing::evaluate(op.type) << "(" << acc << "," << cur << ");" << std::endl;
+    else
+      os << acc << "= (" << acc << ")" << tree_parsing::evaluate(op.type)  << "(" << cur << ");" << std::endl;
+  }
+
+  inline void compute_index_reduction(utils::kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, viennacl::scheduler::op_element const & op)
+  {
+    //        os << acc << " = " << cur_value << ">" << acc_value  << "?" << cur << ":" << acc << ";" << std::endl;
+    os << acc << "= select(" << acc << "," << cur << "," << cur_value << ">" << acc_value << ");" << std::endl;
+    os << acc_value << "=";
+    if (op.type==viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGFMAX_TYPE) os << "fmax";
+    if (op.type==viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGMAX_TYPE) os << "max";
+    if (op.type==viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGFMIN_TYPE) os << "fmin";
+    if (op.type==viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGMIN_TYPE) os << "min";
+    os << "(" << acc_value << "," << cur_value << ");"<< std::endl;
+  }
+
+  inline void process_all(std::string const & type_key, std::string const & str,
+                          utils::kernel_generation_stream & stream, std::vector<mapping_type> const & mappings)
+  {
+    for (std::vector<mapping_type>::const_iterator mit = mappings.begin(); mit != mappings.end(); ++mit)
+      for (mapping_type::const_iterator mmit = mit->begin(); mmit != mit->end(); ++mmit)
+        if (mmit->second->type_key()==type_key)
+          stream << mmit->second->process(str) << std::endl;
+  }
+
+
+  inline void process_all_at(std::string const & type_key, std::string const & str,
+                             utils::kernel_generation_stream & stream, std::vector<mapping_type> const & mappings,
+                             size_t root_idx, leaf_t leaf)
+  {
+    for (std::vector<mapping_type>::const_iterator mit = mappings.begin(); mit != mappings.end(); ++mit)
+    {
+      mapped_object * obj = mit->at(mapping_key(root_idx, leaf)).get();
+      if (obj->type_key()==type_key)
+        stream << obj->process(str) << std::endl;
+    }
+  }
+
+  inline std::string neutral_element(viennacl::scheduler::op_element const & op)
+  {
+    switch (op.type)
+    {
+    case viennacl::scheduler::OPERATION_BINARY_ADD_TYPE : return "0";
+    case viennacl::scheduler::OPERATION_BINARY_MULT_TYPE : return "1";
+    case viennacl::scheduler::OPERATION_BINARY_DIV_TYPE : return "1";
+    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_FMAX_TYPE : return "-INFINITY";
+    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGFMAX_TYPE : return "-INFINITY";
+    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_MAX_TYPE : return "-INFINITY";
+    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGMAX_TYPE : return "-INFINITY";
+    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_FMIN_TYPE : return "INFINITY";
+    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGFMIN_TYPE : return "INFINITY";
+    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_MIN_TYPE : return "INFINITY";
+    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGMIN_TYPE : return "INFINITY";
+
+    default: throw generator_not_supported_exception("Unsupported reduction operator : no neutral element known");
+    }
+  }
+
+  static std::string generate_arguments(std::vector<mapping_type> const & mappings, std::multimap<std::string, std::string> const & accessors, statements_container const & statements)
   {
     utils::kernel_generation_stream stream;
-    tree_parsing::process(stream, PARENT_NODE_TYPE, utils::create_process_accessors("scalar", "__global #scalartype* #pointer,")
-                                                                                   ("host_scalar", "#scalartype #name,")
-                                                                                   ("matrix", "__global " + data_type + "* #pointer, uint #ld, uint #start1, uint #start2, uint #stride1, uint #stride2,")
-                                                                                   ("vector", "__global " + data_type + "* #pointer, uint #start, uint #stride,")
-                                                                                   ("implicit_vector", "#scalartype #name,")
-                                                                                   ("implicit_matrix", "#scalartype #name,")
-                                ,statements, mappings);
+    tree_parsing::process(stream, PARENT_NODE_TYPE, accessors, statements, mappings);
     std::string res = stream.str();
     res.erase(res.rfind(','));
     return res;
   }
+
+  static std::string matrix_arguments(std::string const & data_type)
+  {
+    return "__global " + data_type + "* #pointer, uint #ld, uint #start1, uint #start2, uint #stride1, uint #stride2,";
+  }
+
+  static std::string vector_arguments(std::string const & data_type)
+  {
+    return "__global " + data_type + "* #pointer, uint #start, uint #stride,";
+  }
+
+  static std::string generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings, statements_container const & statements)
+  {
+    return generate_arguments(mappings, utils::create_process_accessors("scalar", "__global #scalartype* #pointer,")
+                                                                      ("host_scalar", "#scalartype #name,")
+                                                                      ("matrix", matrix_arguments(data_type))
+                                                                      ("vector", vector_arguments(data_type))
+                                                                      ("implicit_vector", "#scalartype #name,")
+                                                                      ("implicit_matrix", "#scalartype #name,"), statements);
+  }
+
+
 
   void set_arguments(statements_container const & statements, viennacl::ocl::kernel & kernel, unsigned int & current_arg)
   {
