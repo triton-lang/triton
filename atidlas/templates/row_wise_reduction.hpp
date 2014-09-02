@@ -27,7 +27,7 @@ struct row_wise_reduction_parameters : public template_base::parameters_type
 class row_wise_reduction_template : public template_base_impl<row_wise_reduction_template, row_wise_reduction_parameters>
 {
 private:
-  virtual int check_invalid_impl(viennacl::ocl::device const & /*dev*/) const
+  virtual int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const
   {
     if (p_.fetch_policy==FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
@@ -219,7 +219,7 @@ private:
     return res;
   }
 public:
-  row_wise_reduction_template(row_wise_reduction_template::parameters_type const & parameters, char A_trans, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<row_wise_reduction_template, row_wise_reduction_parameters>(parameters, binding_policy), A_trans_(A_trans){ }
+  row_wise_reduction_template(row_wise_reduction_template::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<row_wise_reduction_template, row_wise_reduction_parameters>(parameters, binding_policy){ }
 
   void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
   {
@@ -260,9 +260,6 @@ public:
     set_arguments(statements, *kernel, current_arg);
     viennacl::ocl::enqueue(*kernel);
   }
-
-private:
-  const char A_trans_;
 };
 
 }

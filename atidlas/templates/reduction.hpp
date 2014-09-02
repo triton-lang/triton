@@ -32,7 +32,7 @@ private:
     return p_.local_size_0;
   }
 
-  int check_invalid_impl(viennacl::ocl::device const & /*dev*/) const
+  int check_invalid_impl(viennacl::ocl::device const &, statements_container const & statements) const
   {
     if (p_.fetching_policy==FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;

@@ -28,7 +28,7 @@ public:
 class matrix_axpy_template : public template_base_impl<matrix_axpy_template, matrix_axpy_parameters_type>
 {
 private:
-  int check_invalid_impl(viennacl::ocl::device const & /*dev*/) const
+  int check_invalid_impl(viennacl::ocl::device const &,, statements_container const &) const
   {
     if (p_.simd_width>1)
       return TEMPLATE_INVALID_SIMD_WIDTH;

@@ -520,7 +520,7 @@ template<class TemplateType, class ParametersType>
 class template_base_impl : public template_base
 {
 private:
-  virtual int check_invalid_impl(viennacl::ocl::device const & /*dev*/) const { return TEMPLATE_VALID; }
+  virtual int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const { return TEMPLATE_VALID; }
   virtual unsigned int n_lmem_elements() const { return 0; }
 
 protected:
@@ -604,7 +604,7 @@ public:
         p_.simd_width!=16)
       return TEMPLATE_INVALID_SIMD_WIDTH;
 
-    return check_invalid_impl(device);
+    return check_invalid_impl(device, statements);
   }
 
 protected:

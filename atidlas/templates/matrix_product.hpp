@@ -57,7 +57,7 @@ private:
     return N;
   }
 
-  int check_invalid_impl(viennacl::ocl::device const & /*device*/) const
+  int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const
   {
     if (p_.A_fetching_policy!=FETCH_FROM_LOCAL && p_.B_fetching_policy!=FETCH_FROM_LOCAL&& (p_.local_fetch_0!=0 || p_.local_fetch_1!=0))
       return TEMPLATE_GLOBAL_MEMORY_REQUIRES_ZERO_LOCAL_FETCH;

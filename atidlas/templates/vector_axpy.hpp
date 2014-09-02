@@ -25,7 +25,7 @@ public:
 class vector_axpy_template : public template_base_impl<vector_axpy_template, vector_axpy_parameters>
 {
 private:
-  virtual int check_invalid_impl(viennacl::ocl::device const & /*dev*/) const
+  virtual int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const
   {
     if (p_.fetching_policy==FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
@@ -89,9 +89,13 @@ private:
   }
 
 public:
-  vector_axpy_template(vector_axpy_template::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<vector_axpy_template, vector_axpy_parameters>(parameters, binding_policy), up_to_internal_size_(false){ }
+  vector_axpy_template(vector_axpy_template::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<vector_axpy_template, vector_axpy_parameters>(parameters, binding_policy), up_to_internal_size_(false)
+  { }
 
-  void up_to_internal_size(bool v) { up_to_internal_size_ = v; }
+  void up_to_internal_size(bool v)
+  {
+    up_to_internal_size_ = v;
+  }
 
   void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs,  statements_container const & statements)
   {

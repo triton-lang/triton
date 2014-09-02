@@ -34,7 +34,7 @@ void test_row_wise_reduction(NumericT epsilon, YType & cy, AType & cA, AType & c
   simple_vector<NumericT> ground(cA.size1());
   simple_vector<NumericT> buffer(cA.size1());
 
-#define TEST_OPERATION(NAME, REDUCTION, ASSIGNMENT, TRANS_FLAG, GPU_STATEMENT)\
+#define TEST_OPERATION(NAME, REDUCTION, ASSIGNMENT, GPU_STATEMENT)\
   std::cout << NAME "..." << std::flush;\
   for(int i = 0 ; i < ground.size() ; ++i)\
   {\
@@ -43,7 +43,7 @@ void test_row_wise_reduction(NumericT epsilon, YType & cy, AType & cA, AType & c
       yi+=REDUCTION;\
     ground[i] = ASSIGNMENT;\
   }\
-  atidlas::execute(atidlas::row_wise_reduction_template(parameters,TRANS_FLAG),\
+  atidlas::execute(atidlas::row_wise_reduction_template(parameters),\
                    GPU_STATEMENT,\
                    viennacl::ocl::current_context(), true);\
   viennacl::copy(y, buffer);\
@@ -56,11 +56,11 @@ void test_row_wise_reduction(NumericT epsilon, YType & cy, AType & cA, AType & c
     std::cout << std::endl;
 
 //  std::cout << "> row" << std::endl;
-//  TEST_OPERATION("y = A.x", cA(i,j)*cx[j], yi, 'N', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(Arow, x)));
-//  TEST_OPERATION("y = A'.x", cA(i,j)*cx[j], yi, 'T', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(trans(ATrow), x)));
+//  TEST_OPERATION("y = A.x", cA(i,j)*cx[j], yi, viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(Arow, x)));
+//  TEST_OPERATION("y = A'.x", cA(i,j)*cx[j], yi, viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(trans(ATrow), x)));
   std::cout << "> col" << std::endl;
-  TEST_OPERATION("y = A.x", cA(i,j)*cx[j], yi, 'N', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(Acol, x)));
-  TEST_OPERATION("y = A'.x", cAT(j,i)*cx[j], yi, 'T', viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(trans(ATcol), x)));
+  TEST_OPERATION("y = A.x", cA(i,j)*cx[j], yi, viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(Acol, x)));
+  TEST_OPERATION("y = A'.x", cAT(j,i)*cx[j], yi, viennacl::scheduler::statement(y, viennacl::op_assign(), viennacl::linalg::prod(trans(ATcol), x)));
 
   if(failure_count>0)
     exit(EXIT_FAILURE);
