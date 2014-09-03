@@ -77,7 +77,7 @@ private:
   std::vector<size_t> & out_;
 };
 
-std::vector<size_t> filter_nodes(bool (*pred)(viennacl::scheduler::statement_node const & node), viennacl::scheduler::statement const & statement, bool inspect)
+inline std::vector<size_t> filter_nodes(bool (*pred)(viennacl::scheduler::statement_node const & node), viennacl::scheduler::statement const & statement, bool inspect)
 {
   std::vector<size_t> res;
   tools::traverse(statement, statement.root(), filter_fun(pred, res), inspect);
@@ -102,7 +102,7 @@ private:
   std::vector<viennacl::scheduler::lhs_rhs_element> & out_;
 };
 
-std::vector<viennacl::scheduler::lhs_rhs_element> filter_elements(viennacl::scheduler::statement_node_subtype subtype, viennacl::scheduler::statement const & statement)
+inline std::vector<viennacl::scheduler::lhs_rhs_element> filter_elements(viennacl::scheduler::statement_node_subtype subtype, viennacl::scheduler::statement const & statement)
 {
   std::vector<viennacl::scheduler::lhs_rhs_element> res;
   tools::traverse(statement, statement.root(), filter_elements_fun(subtype, res), true);
