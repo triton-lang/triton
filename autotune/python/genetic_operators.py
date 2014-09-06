@@ -33,7 +33,7 @@ class GeneticOperators(object):
         lmem_usage = template.lmem_usage(vcl.atidlas.StatementsTuple(self.statement))
         local_size = template.parameters.local_size_0*template.parameters.local_size_1
         occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
-        if template.check(self.statement) and occupancy_record.occupancy >= 10 :
+        if template.check(self.statement)==0 and occupancy_record.occupancy >= 10 :
           return result
 
   @staticmethod
@@ -108,7 +108,7 @@ class GeneticOperators(object):
     for i in range(len(individual)):
         if random.random() < indpb:
             j = self.parameters[i].index(individual[i])
-            j = max(0,min(random.randint(j-1, j+1),len(self.parameters[i])-1))
+            j = max(0,min(random.randint(j-2, j+2),len(self.parameters[i])-1))
             individual[i] = self.parameters[i][j]
     return individual,
       
