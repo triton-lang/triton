@@ -50,7 +50,7 @@ def parameter_space(operation):
   pow2_1D = [2**k for k in range(12)]
   pow2_2D = [2**k for k in range(10)]
   pow2_2D_unrolled = [2**k for k in range(6)]
-  FetchingPolicy = vcl.device_specific.FetchingPolicy
+  FetchingPolicy = vcl.atidlas.FetchingPolicy
   fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS]
   if operation == 'vector-axpy': return [simd, pow2_1D, pow2_1D, fetch]
   if operation == 'reduction': return [simd, pow2_1D, pow2_1D, fetch]
