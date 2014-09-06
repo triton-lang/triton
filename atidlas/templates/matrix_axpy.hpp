@@ -32,6 +32,8 @@ private:
   {
     if (p_.simd_width>1)
       return TEMPLATE_INVALID_SIMD_WIDTH;
+    if(p_.fetching_policy==FETCH_FROM_LOCAL)
+      return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
     return TEMPLATE_VALID;
   }
 

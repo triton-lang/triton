@@ -47,14 +47,26 @@ class matrix_product_template : public template_base_impl<matrix_product_templat
 {
 
 private:
-  unsigned int n_lmem_elements() const
+  unsigned int lmem_usage(statements_container const & statements) const
   {
+    viennacl::scheduler::statement const & statement = statements.data().front();
+    viennacl::scheduler::statement_node_numeric_type numeric_type = lhs_most(statement.array(), statement.root()).lhs.numeric_type;
+
     unsigned int N = 0;
     if (p_.A_fetching_policy==FETCH_FROM_LOCAL)
       N += p_.kL * (p_.mL+1);
     if (p_.B_fetching_policy==FETCH_FROM_LOCAL)
       N += p_.nL * (p_.kL+1);
-    return N;
+    return N*tools::size_of(numeric_type);
+  }
+
+  unsigned int registers_usage(statements_container const & statements) const
+  {
+    viennacl::scheduler::statement const & statement = statements.data().front();
+    viennacl::scheduler::statement_node_numeric_type numeric_type = lhs_most(statement.array(), statement.root()).lhs.numeric_type;
+
+    unsigned int N = p_.mS * p_.nS + p_.mS * p_.kS + p_.kS * p_.nS;
+    return N*tools::size_of(numeric_type);
   }
 
   int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const

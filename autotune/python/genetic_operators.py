@@ -1,5 +1,6 @@
 import random
 import time
+import tools
 import pyviennacl as vcl
 
 from collections import OrderedDict as odict
@@ -25,10 +26,15 @@ class GeneticOperators(object):
       self.cache = {}
     
   def init(self):
-      result = [random.choice(L) for L in self.parameters]
-      while self.build_template(self.TemplateType.Parameters(*result)).check(self.statement)!=0:
+      while True:
         result = [random.choice(L) for L in self.parameters]
-      return result
+        template = self.build_template(self.TemplateType.Parameters(*result))
+        registers_usage = template.registers_usage(vcl.atidlas.StatementsTuple(self.statement))/4
+        lmem_usage = template.lmem_usage(vcl.atidlas.StatementsTuple(self.statement))
+        local_size = template.parameters.local_size_0*template.parameters.local_size_1
+        occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
+        if template.check(self.statement) and occupancy_record.occupancy >= 10 :
+          return result
 
   @staticmethod
   def min_to_hyperbol(a, tup):
@@ -100,27 +106,35 @@ class GeneticOperators(object):
 
   def mutate(self, individual, indpb):
     for i in range(len(individual)):
-      if random.random() < indpb:
-          individual[i] = random.choice(self.parameters[i])
+        if random.random() < indpb:
+            j = self.parameters[i].index(individual[i])
+            j = max(0,min(random.randint(j-1, j+1),len(self.parameters[i])-1))
+            individual[i] = self.parameters[i][j]
     return individual,
       
   def evaluate(self, individual):
     tupindividual = tuple(individual)
-    print tupindividual
     if tupindividual not in self.cache:
       template = self.build_template(self.TemplateType.Parameters(*individual))
-      if template.check(self.statement)!=0:
-        self.cache[tupindividual] = 100
+      registers_usage = template.registers_usage(vcl.atidlas.StatementsTuple(self.statement))/4
+      lmem_usage = template.lmem_usage(vcl.atidlas.StatementsTuple(self.statement))
+      local_size = template.parameters.local_size_0*template.parameters.local_size_1
+      occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
+      if occupancy_record.occupancy < 10 :
+        self.cache[tupindividual] = 10
       else:
-        template.execute(self.statement, True)
-        self.statement.result.context.finish_all_queues()
-        N = 0
-        current_time = 0
-        while current_time < 1e-2:
-          time_before = time.time()
-          template.execute(self.statement,False)
+        try:
+          template.execute(self.statement, True)
           self.statement.result.context.finish_all_queues()
-          current_time += time.time() - time_before
-          N+=1
-        self.cache[tupindividual] = current_time/N
+          N = 0
+          current_time = 0
+          while current_time < 1e-2:
+            time_before = time.time()
+            template.execute(self.statement,False)
+            self.statement.result.context.finish_all_queues()
+            current_time += time.time() - time_before
+            N+=1
+          self.cache[tupindividual] = current_time/N
+        except:
+          self.cache[tupindividual] = 10
     return self.cache[tupindividual],

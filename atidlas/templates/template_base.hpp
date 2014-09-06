@@ -486,6 +486,10 @@ private:
 public:
   template_base(binding_policy_t binding_policy) : binding_policy_(binding_policy) {}
 
+  virtual unsigned int lmem_usage(statements_container const &) const  { return 0; }
+
+  virtual unsigned int registers_usage(statements_container const &) const { return 0; }
+
   virtual ~template_base(){ }
 
   std::vector<std::string> generate(std::string const & kernel_prefix, statements_container const & statements, viennacl::ocl::device const & device)
@@ -521,10 +525,8 @@ class template_base_impl : public template_base
 {
 private:
   virtual int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const { return TEMPLATE_VALID; }
-  virtual unsigned int n_lmem_elements() const { return 0; }
 
 protected:
-
   bool has_misaligned_offset(statements_container const & statements)
   {
     for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
@@ -565,13 +567,10 @@ public:
   {
     using namespace viennacl::tools;
 
-    viennacl::scheduler::statement const & statement = statements.data().front();
-    unsigned int scalartype_size = tools::size_of(lhs_most(statement.array(), statement.root()).lhs.numeric_type);
-
     //Query device informations
     size_t lmem_available = static_cast<size_t>(device.local_mem_size());
-    size_t lmem_usage = scalartype_size*n_lmem_elements();
-    if (lmem_usage>lmem_available)
+    size_t lmem_used = lmem_usage(statements);
+    if (lmem_used>lmem_available)
       return TEMPLATE_LOCAL_MEMORY_OVERFLOW;
 
     //Invalid work group size

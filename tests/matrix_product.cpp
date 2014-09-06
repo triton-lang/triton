@@ -72,7 +72,8 @@ int test_all_layouts(int CM, int CN, RefCType & cC, int AM, int AK, RefAType & c
   typename matrix_maker<RefBType, viennacl::column_major>::result_type Bcol = matrix_maker<RefBType, viennacl::column_major>::make(BcolTmp, cB);
   typename matrix_maker<RefBType, viennacl::column_major>::result_type BTcol = matrix_maker<RefBType, viennacl::column_major>::make(BTcolTmp, cBT);
 
-  atidlas::matrix_product_parameters parameters_local(1, 8, 16, 16, 4, 2, 6, atidlas::FETCH_FROM_LOCAL, atidlas::FETCH_FROM_LOCAL, 16, 8);
+
+  atidlas::matrix_product_parameters parameters_local(1, 8, 32, 16, 32, 32, 4, atidlas::FETCH_FROM_LOCAL, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS, 32, 4);
   atidlas::matrix_product_parameters parameters_global_contiguous(1, 8, 16, 16, 4, 2, 6, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS, 0, 0);
   atidlas::matrix_product_parameters parameters_global_strided(1, 8, 16, 16, 4, 2, 6, atidlas::FETCH_FROM_GLOBAL_STRIDED, atidlas::FETCH_FROM_GLOBAL_STRIDED, 0, 0);
 

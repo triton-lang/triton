@@ -27,9 +27,17 @@ class reduction_template : public template_base_impl<reduction_template, reducti
 {
 
 private:
-  unsigned int n_lmem_elements() const
+
+  unsigned int num_lmem_elements(statements_container const & statements) const
   {
-    return p_.local_size_0;
+    unsigned int res = 0;
+    for(statements_container::data_type::const_iterator it = statements.data().begin() ; it != statements.data().end() ; ++it)
+    {
+      viennacl::scheduler::statement const & statement = statements.data().front();
+      viennacl::scheduler::statement_node_numeric_type numeric_type = lhs_most(statement.array(), statement.root()).lhs.numeric_type;
+      res += p_.local_size_0*tools::size_of(numeric_type);
+    }
+    return res;
   }
 
   int check_invalid_impl(viennacl::ocl::device const &, statements_container const & statements) const

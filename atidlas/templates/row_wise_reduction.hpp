@@ -34,7 +34,7 @@ private:
     return TEMPLATE_VALID;
   }
 
-  unsigned int n_lmem_elements() const
+  unsigned int lmem_usage() const
   {
     return p_.local_size_0*(p_.local_size_1+1);
   }

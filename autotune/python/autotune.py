@@ -18,30 +18,32 @@ import optimize
 import sys
 
 DATATYPES = { 'single' : vcl.float32,
-              'double' : vcl.float64
-}
+              'double' : vcl.float64 }
 
-TYPES = { 'vector-axpy': vcl.atidlas.VectorAxpyTemplate,
-          'matrix-axpy': vcl.atidlas.MatrixAxpyTemplate,
-          'reduction': vcl.atidlas.ReductionTemplate,
-          'row-wise-reduction': vcl.atidlas.RowWiseReductionTemplate,
-          'matrix-product': vcl.atidlas.MatrixProductTemplate
-}
-
-PNAMES = { 
-           'vector-axpy': ['simd-width', 'local-size-0', 'num-groups-0', 'fetch'],
-           'matrix-axpy': ['simd-width', 'local-size-0', 'local-size-1', 'num-groups-0', 'num-groups-1', 'fetch'],
-           'reduction': ['simd-width', 'local-size-0', 'num-groups-0', 'fetch'],
-           'row-wise-reduction': ['simd-width', 'local-size-0', 'local-size-1', 'num-groups-0', 'fetch'],
-           'matrix-product': ['simd-width', 'local-size-0', 'kL', 'local-size-1', 'mS', 'kS', 'nS', 'A-fetch-policy', 'B-fetch-policy', 'local-fetch-size-0', 'local-fetch-size-1']
-}
-
-PERFINDEX = { 'vector-axpy' : (lambda x: 3*x[0]*x[1][0]/x[2]*1e-9, 'GB/s') ,
-              'matrix-axpy' : (lambda x: 3*x[0]*x[1][0]*x[1][1]/x[2]*1e-9, 'GB/s'),
-              'reduction' : (lambda x: 2*x[0]*x[1][0]*x[1][1]/x[2]*1e-9, 'GB/s'),
-              'row-wise-reduction' : (lambda x: x[0]*x[1][0]*x[1][1]/x[2]*1e-9, 'GB/s'),
-              'matrix-product': (lambda x: 2*x[1][0]*x[1][1]*x[1][2]/x[2]*1e-9, 'GFLOPs/s')
-}
+TYPES = { 'vector-axpy': {'template':vcl.atidlas.VectorAxpyTemplate,
+                          'parameter-names':['simd-width', 'local-size-0', 'num-groups-0', 'fetch'],
+                          'perf-index':lambda x: 3*x[0]*x[1][0]/x[2]*1e-9,
+                          'perf-measure':'GB/s'},
+                          
+          'matrix-axpy': {'template':vcl.atidlas.MatrixAxpyTemplate,
+                          'parameter-names':['simd-width', 'local-size-0', 'local-size-1', 'num-groups-0', 'num-groups-1', 'fetch'],
+                          'perf-index':lambda x: 3*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
+                          'perf-measure':'GB/s'},
+                          
+          'reduction': {'template':vcl.atidlas.ReductionTemplate,
+                        'parameter-names':['simd-width', 'local-size-0', 'num-groups-0', 'fetch'],
+                        'perf-index':lambda x: 2*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
+                        'perf-measure':'GB/s'},
+          
+          'row-wise-reduction': {'template':vcl.atidlas.RowWiseReductionTemplate,
+                                'parameter-names':['simd-width', 'local-size-0', 'local-size-1', 'num-groups-0', 'fetch'],
+                                'perf-index':lambda x: x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
+                                'perf-measure':'GB/s'},
+          
+          'matrix-product': {'template':vcl.atidlas.MatrixProductTemplate,
+                            'parameter-names':['simd-width', 'local-size-0', 'kL', 'local-size-1', 'mS', 'kS', 'nS', 'A-fetch-policy', 'B-fetch-policy', 'local-fetch-size-0', 'local-fetch-size-1'],
+                            'perf-index': lambda x: 2*x[1][0]*x[1][1]*x[1][2]/x[2]*1e-9,
+                            'perf-measure': 'GFLOP/s'} }
     
 def parameter_space(operation):
   simd = [1, 2, 4, 8]
@@ -54,25 +56,22 @@ def parameter_space(operation):
   if operation == 'reduction': return [simd, pow2_1D, pow2_1D, fetch]
   if operation == 'matrix-axpy': return [simd, pow2_2D, pow2_2D, pow2_2D, pow2_2D, fetch]
   if operation == 'row-wise-reduction': return [simd, pow2_2D, pow2_2D, pow2_1D, fetch]
-  if operation == 'matrix-product': return [simd, pow2_2D, pow2_2D, pow2_2D, pow2_2D_unrolled,  pow2_2D_unrolled,  pow2_2D_unrolled, fetch, fetch, pow2_2D, pow2_2D]
+  if operation == 'matrix-product': return [simd, pow2_2D, pow2_2D, pow2_2D, pow2_2D_unrolled,  pow2_2D_unrolled,  pow2_2D_unrolled, fetch, fetch, [0] + pow2_2D, [0] + pow2_2D]
   
 def do_tuning(config_fname, spec_fname, viennacl_root):    
 
   config = ConfigObj(config_fname, configspec=spec_fname)
   map_to_list = lambda T: list(map(T[0], T[1] if isinstance(T[1], list) else [T[1]])) 
+ 
   for operation in ['vector-axpy', 'matrix-axpy', 'row-wise-reduction', 'matrix-product']:
     
     tmp_folder = config['tmp-folder'] if 'tmp-folder' in config else ""
     
-
     if operation in config:
-      p = config[operation]
-        
+      p = config[operation]        
       confdevices = p['devices']
       devices = utils.DEVICES_PRESETS[confdevices] if confdevices in utils.DEVICES_PRESETS else [utils.all_devices[int(i)] for i in confdevices]
-      
       precisions =  ['single', 'double'] if 'all' in p['precision'] else p['precision']
-      
       datatypes = [DATATYPES[k] for k in precisions]
       s = map_to_list((int, p['size']))
       
@@ -98,8 +97,8 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
             fname = os.devnull
           with open(fname, "w+") as archive:
             with vcl.Statement(node) as statement:
-              result = optimize.genetic(statement, ctx, TYPES[operation], lambda p: TYPES[operation](p, *other_params),
-                                    PNAMES[operation], parameter_space(operation), lambda t: PERFINDEX[operation][0]([datatype().itemsize, s, t]), PERFINDEX[operation][1], archive)
+              result = optimize.genetic(statement, ctx, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
+                                    TYPES[operation]['parameter-names'], parameter_space(operation), lambda t: TYPES[operation]['perf-index']([datatype().itemsize, s, t]), TYPES[operation]['perf-measure'], archive)
             if result and viennacl_root:
               vclio.generate_viennacl_headers(viennacl_root, device, datatype, operation, other_params, result[1])
         
@@ -121,7 +120,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
             A = vcl.Matrix(s if A_trans=='N' else s[::-1], context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
             x = vcl.Vector(s[1] if A_trans=='N' else s[0], context=ctx, dtype=datatype)
             LHS = A if A_trans=='N' else A.T
-            execute(LHS*x, (A_trans,))
+            execute(LHS*x, ())
           
         if operation=='matrix-product':
           layouts = map_to_list((str,p['layout']))
