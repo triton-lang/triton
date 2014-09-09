@@ -120,7 +120,7 @@ class GeneticOperators(object):
       lmem_usage = template.lmem_usage(vcl.atidlas.StatementsTuple(self.statement))
       local_size = template.parameters.local_size_0*template.parameters.local_size_1
       occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
-      if occupancy_record.occupancy < 10 :
+      if occupancy_record.occupancy < 15 :
         self.cache[tupindividual] = 10
       else:
         try:
