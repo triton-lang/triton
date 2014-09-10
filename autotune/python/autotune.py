@@ -71,7 +71,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
       p = config[operation]        
       confdevices = p['devices']
       devices = utils.DEVICES_PRESETS[confdevices] if confdevices in utils.DEVICES_PRESETS else [utils.all_devices[int(i)] for i in confdevices]
-      precisions =  ['single', 'double'] if 'all' in p['precision'] else p['precision']
+      precisions =  map_to_list((str, p['precision']))
       datatypes = [DATATYPES[k] for k in precisions]
       s = map_to_list((int, p['size']))
       

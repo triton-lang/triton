@@ -60,15 +60,14 @@ def genetic(statement, context, TemplateType, build_template, parameter_names, a
   toolbox = base.Toolbox()
   toolbox.register("individual", tools.initIterate, creator.Individual, gen.init)
   toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-  toolbox.decorate("population", gen.repair)
   toolbox.register("evaluate", gen.evaluate)
-  toolbox.register("mate", tools.cxUniform, indpb=0.1)
+  toolbox.register("mate", tools.cxTwoPoint)
   toolbox.decorate("mate", gen.repair)
-  toolbox.register("mutate", gen.mutate, indpb=0.1)
+  toolbox.register("mutate", gen.mutate)
   toolbox.decorate("mutate", gen.repair)
   toolbox.register("select", tools.selNSGA2)
     
-  pop = toolbox.population(n=70)
+  pop = toolbox.population(n=30)
   hof = tools.HallOfFame(1)
 
   best_performer = lambda x: max([compute_perf(hof[0].fitness.values[0]) for t in x])
@@ -81,4 +80,4 @@ def genetic(statement, context, TemplateType, build_template, parameter_names, a
   stats.register("max (" + perf_metric + ")", lambda x: max([compute_perf(hof[0].fitness.values[0]) for t in x]))
   stats.register("profile ", lambda x: '(%s)'%','.join(map(str,hof[0])))
 
-  pop = eaMuPlusLambda(pop, toolbox, 70, 100, cxpb=0.1, mutpb=0.1, maxtime='5m0s', maxgen=1000, halloffame=hof, compute_perf=compute_perf, perf_metric=perf_metric)
+  pop = eaMuPlusLambda(pop, toolbox, 30, 50, cxpb=0.2, mutpb=0.3, maxtime='5m0s', maxgen=200, halloffame=hof, compute_perf=compute_perf, perf_metric=perf_metric)

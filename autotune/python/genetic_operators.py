@@ -53,10 +53,13 @@ class GeneticOperators(object):
     return (new_x, new_y)
       
   def repair(self,func):
+    
     def repair_impl(child):
       D = odict(zip(self.parameter_names, child))
       dummy_template = self.build_template(self.ParameterType(*D.values()))
       FetchingPolicy = vcl.atidlas.FetchingPolicy;
+      D['local-size-0'] = max(1, D['local-size-0'])
+      D['local-size-1'] = max(1, D['local-size-1'])
       if 'local-size-1' not in D:
         D['local-size-0'] = min(D['local-size-0'], self.device.max_work_group_size)
       elif D['local-size-0']*D['local-size-1'] > self.device.max_work_group_size:
@@ -67,11 +70,13 @@ class GeneticOperators(object):
       if self.ParameterType is vcl.atidlas.MatrixProductTemplate.Parameters:
         if dummy_template.A_trans != 'N' and dummy_template.B_trans != 'T':
           D['simd-width'] = 1
-          
-        D['mS'] = max(D['mS'], D['simd-width'])
-        D['mS'] = D['mS'] - D['mS']%D['simd-width']
         
+        D['kL'] = max(1, D['kL'])
+        D['kS'] = max(1, D['kS'])
+        
+        D['mS'] = max(D['mS'], D['simd-width'])
         D['nS'] = max(D['nS'], D['simd-width'])
+        D['mS'] = D['mS'] - D['mS']%D['simd-width']
         D['nS'] = D['nS'] - D['nS']%D['simd-width']
         
         
@@ -100,16 +105,48 @@ class GeneticOperators(object):
         for i in range(len(child)):
           if child[i] != new_child[i]:
             child[i] = new_child[i]
-            
       return offspring
     return wrappper
 
-  def mutate(self, individual, indpb):
-    for i in range(len(individual)):
-        if random.random() < indpb:
-            j = self.parameters[i].index(individual[i])
-            j = max(0,min(random.randint(j-2, j+2),len(self.parameters[i])-1))
-            individual[i] = self.parameters[i][j]
+  def mutate(self, individual):
+    p = random.random()
+    coef = random.choice([2, 4])
+    multiply_or_divide = random.choice([lambda x:x/coef, lambda x:x*coef])
+    if p < 0.1 :
+      individual[0] = random.choice(self.parameters[0])
+    elif p < 0.2:
+      idx = random.choice([1, 4])
+      nidx = 4 if idx==1 else 1
+      individual[idx] = individual[idx]*coef
+      individual[nidx] = individual[nidx]/coef
+    elif p < 0.3:
+      idx = random.choice([1, 4])
+      individual[idx] = multiply_or_divide(individual[idx])
+      if idx==1:
+        individual[9] = multiply_or_divide(individual[9])
+    elif p < 0.4:
+      idx = random.choice([3, 6])
+      nidx = 6 if idx==3 else 3
+      individual[idx] = individual[idx]*coef
+      individual[nidx] = individual[nidx]/coef
+    elif p < 0.5:
+      idx = random.choice([3, 6])
+      individual[idx] = multiply_or_divide(individual[idx])
+      if idx==3:
+        individual[10] = multiply_or_divide(individual[10])
+    elif p < 0.6:
+      individual[2] = multiply_or_divide(individual[2])
+    elif p < 0.7:
+      individual[4] = multiply_or_divide(individual[4])
+    elif p < 0.8:
+      individual[7] = random.choice([x for x in self.parameters[7] if x!=individual[7]])
+    elif p < 0.9:
+      individual[8] = random.choice([x for x in self.parameters[8] if x!=individual[8]])
+    elif p < 1:
+      idx = random.choice([9, 10])
+      nidx = 10 if idx==9 else 9
+      individual[idx] = individual[idx]*coef
+      individual[nidx] = individual[nidx]/coef
     return individual,
       
   def evaluate(self, individual):
