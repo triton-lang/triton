@@ -30,8 +30,11 @@ def exhaustive(statement, context, TemplateType, build_template, parameter_names
         minT = T
         best = individual
       sys.stdout.write('%d / %d , Best is %d %s for %s\r'%(current, nvalid, compute_perf(minT), perf_metric, best))
+      sys.stdout.flush()
     except:
       pass
+  sys.stdout.write('\n')
+  sys.stdout.flush()
     
   
 def genetic(statement, context, TemplateType, build_template, parameter_names, all_parameters, compute_perf, perf_metric, out):
