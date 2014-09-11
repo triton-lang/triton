@@ -202,6 +202,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, maxtime, maxge
         
         best_profile = '(%s)'%','.join(map(str,halloffame[0]));
         best_performance = compute_perf(halloffame[0].fitness.values[0])
-        sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\n'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
+        sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\r'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
+        sys.stdout.flush()
     sys.stdout.write('\n')
     return population
