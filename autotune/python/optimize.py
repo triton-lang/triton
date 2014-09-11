@@ -29,7 +29,7 @@ def exhaustive(statement, context, TemplateType, build_template, parameter_names
       if T < minT:
         minT = T
         best = individual
-      print '%d / %d , Best is %d %s for %s\r'%(current, nvalid, compute_perf(minT), perf_metric, best)
+      sys.stdout.write('%d / %d , Best is %d %s for %s\r'%(current, nvalid, compute_perf(minT), perf_metric, best))
     except:
       pass
     
