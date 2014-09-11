@@ -1,5 +1,7 @@
 from __future__ import division
 import pyopencl
+import time
+from pyviennacl.atidlas import StatementsTuple
 
 class PhysicalLimits:
     def __init__(self, dev):
@@ -100,5 +102,37 @@ class OccupancyRecord:
       self.warps_per_mp = self.limit*allocated_warps
       self.occupancy = 100*self.warps_per_mp/physical_limits.warps_per_mp
         
+
+def skip(template, statement, device):
+      statements = StatementsTuple(statement)
+      registers_usage = template.registers_usage(statements)/4
+      lmem_usage = template.lmem_usage(statements)
+      local_size = template.parameters.local_size_0*template.parameters.local_size_1
+      occupancy_record = OccupancyRecord(device, local_size, lmem_usage, registers_usage)
+      if template.check(statement) or occupancy_record.occupancy < 15:
+        return True
+      return False
       
-      
+def benchmark(template, statement, device):
+      statements = StatementsTuple(statement)
+      registers_usage = template.registers_usage(statements)/4
+      lmem_usage = template.lmem_usage(statements)
+      local_size = template.parameters.local_size_0*template.parameters.local_size_1
+      occupancy_record = OccupancyRecord(device, local_size, lmem_usage, registers_usage)
+      if occupancy_record.occupancy < 15 :
+        raise ValueError("Template has too low occupancy")
+      else:
+        try:
+          template.execute(statement, True)
+          statement.result.context.finish_all_queues()
+          N = 0
+          current_time = 0
+          while current_time < 1e-2:
+            time_before = time.time()
+            template.execute(statement,False)
+            statement.result.context.finish_all_queues()
+            current_time += time.time() - time_before
+            N+=1
+          return current_time/N
+        except:
+          raise ValueError("Invalid template")

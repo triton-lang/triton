@@ -48,10 +48,10 @@ TYPES = { 'vector-axpy': {'template':vcl.atidlas.VectorAxpyTemplate,
 def parameter_space(operation):
   simd = [1, 2, 4, 8]
   pow2_1D = [2**k for k in range(12)]
-  pow2_2D = [2**k for k in range(10)]
-  pow2_2D_unrolled = [2**k for k in range(6)]
+  pow2_2D = [8, 16]
+  pow2_2D_unrolled = [1, 2, 4, 8]
   FetchingPolicy = vcl.atidlas.FetchingPolicy
-  fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS]
+  fetch = [FetchingPolicy.FETCH_FROM_LOCAL]
   if operation == 'vector-axpy': return [simd, pow2_1D, pow2_1D, fetch]
   if operation == 'reduction': return [simd, pow2_1D, pow2_1D, fetch]
   if operation == 'matrix-axpy': return [simd, pow2_2D, pow2_2D, pow2_2D, pow2_2D, fetch]
@@ -97,7 +97,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
             fname = os.devnull
           with open(fname, "w+") as archive:
             with vcl.Statement(node) as statement:
-              result = optimize.genetic(statement, ctx, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
+              result = optimize.exhaustive(statement, ctx, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
                                     TYPES[operation]['parameter-names'], parameter_space(operation), lambda t: TYPES[operation]['perf-index']([datatype().itemsize, s, t]), TYPES[operation]['perf-measure'], archive)
             if result and viennacl_root:
               vclio.generate_viennacl_headers(viennacl_root, device, datatype, operation, other_params, result[1])

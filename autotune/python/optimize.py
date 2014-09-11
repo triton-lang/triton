@@ -1,57 +1,39 @@
 import array
 import numpy as np
 import random
-import time
-import sys
 
-from deap import algorithms
+import itertools
+
+import tools
+import deap.tools
+
 from deap import base
 from deap import creator
-from deap import tools
+from genetic import GeneticOperators
+from genetic import eaMuPlusLambda
 
-from genetic_operators import GeneticOperators
-
-def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, maxtime, maxgen, halloffame, compute_perf, perf_metric):
-    # Evaluate the individuals with an invalid fitness
-    invalid_ind = [ind for ind in population if not ind.fitness.valid]
-    fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
-    for ind, fit in zip(invalid_ind, fitnesses):
-        ind.fitness.values = fit
-
-    if halloffame is not None:
-        halloffame.update(population)
-
-    # Begin the generational process
-    gen = 0
-    maxtime = time.strptime(maxtime, '%Mm%Ss')
-    maxtime = maxtime.tm_min*60 + maxtime.tm_sec
-    start_time = time.time()
-    while time.time() - start_time < maxtime and gen < maxgen:
-        # Vary the population
-        offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
-        
-        # Evaluate the individuals with an invalid fitness
-        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
-        for ind, fit in zip(invalid_ind, fitnesses):
-            ind.fitness.values = fit
-        
-        # Update the hall of fame with the generated individuals
-        if halloffame is not None:
-            halloffame.update(offspring)
-
-        # Select the next generation population
-        population[:] = toolbox.select(population + offspring, mu)
-
-        # Update the statistics with the new population
-        gen = gen + 1
-        
-        best_profile = '(%s)'%','.join(map(str,halloffame[0]));
-        best_performance = compute_perf(halloffame[0].fitness.values[0])
-        sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\n'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
-    sys.stdout.write('\n')
-    return population
+def exhaustive(statement, context, TemplateType, build_template, parameter_names, all_parameters, compute_perf, perf_metric, out):
+  device = context.devices[0]
+  nvalid = 0
+  current = 0
+  minT = float('inf')
+  for individual in itertools.product(*all_parameters):
+    template = build_template(TemplateType.Parameters(*individual))
+    if not tools.skip(template, statement, device):
+      nvalid = nvalid + 1
+  for individual in itertools.product(*all_parameters):
+    template = build_template(TemplateType.Parameters(*individual))
+    try:
+      T = tools.benchmark(template,statement,device)
+      current = current + 1
+      if T < minT:
+        minT = T
+        best = individual
+      print '%d / %d , Best is %d %s for %s\r'%(current, nvalid, compute_perf(minT), perf_metric, best)
+    except:
+      pass
     
+  
 def genetic(statement, context, TemplateType, build_template, parameter_names, all_parameters, compute_perf, perf_metric, out):
   gen = GeneticOperators(context.devices[0], statement, all_parameters, parameter_names, TemplateType, build_template)
   creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
@@ -68,12 +50,12 @@ def genetic(statement, context, TemplateType, build_template, parameter_names, a
   toolbox.register("select", tools.selBest)
     
   pop = toolbox.population(n=30)
-  hof = tools.HallOfFame(1)
+  hof = deap.tools.HallOfFame(1)
 
   best_performer = lambda x: max([compute_perf(hof[0].fitness.values[0]) for t in x])
   best_profile = lambda x: '(%s)'%','.join(map(str,hof[0]))
   
-  stats = tools.Statistics(lambda ind: ind.fitness.values)
+  stats = deap.tools.Statistics(lambda ind: ind.fitness.values)
   stats.register("max (" + perf_metric + ")", lambda x: max([compute_perf(hof[0].fitness.values[0]) for t in x]))
   stats.register("profile ", lambda x: '(%s)'%','.join(map(str,hof[0])))
 

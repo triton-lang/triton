@@ -1,8 +1,11 @@
 import random
 import time
+import sys
 import tools
 import pyviennacl as vcl
 import numpy
+
+from deap import algorithms
 
 from collections import OrderedDict as odict
 
@@ -154,28 +157,51 @@ class GeneticOperators(object):
     return individual,
       
   def evaluate(self, individual):
-    tupindividual = tuple(individual)
-    if tupindividual not in self.cache:
+    if tuple(individual) not in self.cache:
       template = self.build_template(self.TemplateType.Parameters(*individual))
-      registers_usage = template.registers_usage(vcl.atidlas.StatementsTuple(self.statement))/4
-      lmem_usage = template.lmem_usage(vcl.atidlas.StatementsTuple(self.statement))
-      local_size = template.parameters.local_size_0*template.parameters.local_size_1
-      occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
-      if occupancy_record.occupancy < 15 :
-        self.cache[tupindividual] = 10
-      else:
-        try:
-          template.execute(self.statement, True)
-          self.statement.result.context.finish_all_queues()
-          N = 0
-          current_time = 0
-          while current_time < 1e-2:
-            time_before = time.time()
-            template.execute(self.statement,False)
-            self.statement.result.context.finish_all_queues()
-            current_time += time.time() - time_before
-            N+=1
-          self.cache[tupindividual] = current_time/N
-        except:
-          self.cache[tupindividual] = 10
-    return self.cache[tupindividual],
+      try:
+        self.cache[tuple(individual)] = tools.benchmark(template, self.statement, self.device)
+      except:
+        self.cache[tuple(individual)] = 10
+    return self.cache[tuple(individual)],
+
+def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, maxtime, maxgen, halloffame, compute_perf, perf_metric):
+    # Evaluate the individuals with an invalid fitness
+    invalid_ind = [ind for ind in population if not ind.fitness.valid]
+    fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
+    for ind, fit in zip(invalid_ind, fitnesses):
+        ind.fitness.values = fit
+
+    if halloffame is not None:
+        halloffame.update(population)
+
+    # Begin the generational process
+    gen = 0
+    maxtime = time.strptime(maxtime, '%Mm%Ss')
+    maxtime = maxtime.tm_min*60 + maxtime.tm_sec
+    start_time = time.time()
+    while time.time() - start_time < maxtime and gen < maxgen:
+        # Vary the population
+        offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
+        
+        # Evaluate the individuals with an invalid fitness
+        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+        fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
+        for ind, fit in zip(invalid_ind, fitnesses):
+            ind.fitness.values = fit
+        
+        # Update the hall of fame with the generated individuals
+        if halloffame is not None:
+            halloffame.update(offspring)
+
+        # Select the next generation population
+        population[:] = toolbox.select(population + offspring, mu)
+
+        # Update the statistics with the new population
+        gen = gen + 1
+        
+        best_profile = '(%s)'%','.join(map(str,halloffame[0]));
+        best_performance = compute_perf(halloffame[0].fitness.values[0])
+        sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\n'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
+    sys.stdout.write('\n')
+    return population
