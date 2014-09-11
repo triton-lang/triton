@@ -2,6 +2,7 @@ import random
 import time
 import tools
 import pyviennacl as vcl
+import numpy
 
 from collections import OrderedDict as odict
 
@@ -108,45 +109,48 @@ class GeneticOperators(object):
       return offspring
     return wrappper
 
-  def mutate(self, individual):
-    p = random.random()
-    coef = random.choice([2, 4])
-    multiply_or_divide = random.choice([lambda x:x/coef, lambda x:x*coef])
-    if p < 0.1 :
-      individual[0] = random.choice(self.parameters[0])
-    elif p < 0.2:
-      idx = random.choice([1, 4])
-      nidx = 4 if idx==1 else 1
-      individual[idx] = individual[idx]*coef
-      individual[nidx] = individual[nidx]/coef
-    elif p < 0.3:
-      idx = random.choice([1, 4])
-      individual[idx] = multiply_or_divide(individual[idx])
-      if idx==1:
-        individual[9] = multiply_or_divide(individual[9])
-    elif p < 0.4:
-      idx = random.choice([3, 6])
-      nidx = 6 if idx==3 else 3
-      individual[idx] = individual[idx]*coef
-      individual[nidx] = individual[nidx]/coef
-    elif p < 0.5:
-      idx = random.choice([3, 6])
-      individual[idx] = multiply_or_divide(individual[idx])
-      if idx==3:
-        individual[10] = multiply_or_divide(individual[10])
-    elif p < 0.6:
-      individual[2] = multiply_or_divide(individual[2])
-    elif p < 0.7:
-      individual[4] = multiply_or_divide(individual[4])
-    elif p < 0.8:
-      individual[7] = random.choice([x for x in self.parameters[7] if x!=individual[7]])
-    elif p < 0.9:
-      individual[8] = random.choice([x for x in self.parameters[8] if x!=individual[8]])
-    elif p < 1:
-      idx = random.choice([9, 10])
-      nidx = 10 if idx==9 else 9
-      individual[idx] = individual[idx]*coef
-      individual[nidx] = individual[nidx]/coef
+  def mutate(self, individual, indpb = 0.15):
+    for i in individual:
+      if random.random() < indpb:
+        coef = 2**(1 + numpy.random.poisson())
+        funs = [lambda x:x/coef, lambda x:x*coef]
+        F = random.choice(funs)
+        nF = funs[1] if F==funs[0] else funs[0]
+        #swapping-based mutations
+        def m0():
+          individual[1], individual[3] = individual[3], individual[1]
+        def m1():
+          individual[4], individual[6] = individual[6], individual[4]
+        def m2():
+          individual[9], individual[10] = individual[10], individual[9]
+        #value modification mutations
+        def m3():
+          individual[0] = random.choice(self.parameters[0])
+        def m4():
+          individual[1] = F(individual[1])
+          individual[9] = F(individual[9])
+        def m5():
+          individual[2] = F(individual[2])
+        def m6():
+          individual[3] = F(individual[3])
+          individual[10] = F(individual[10])
+        def m7():
+          individual[4] = F(individual[4])
+        def m8():
+          individual[5] = F(individual[5])
+        def m9():
+          individual[6] = F(individual[6])
+        def m10():
+          individual[7] = random.choice([x for x in self.parameters[7] if x!=individual[7]])
+        def m11():
+          individual[8] = random.choice([x for x in self.parameters[8] if x!=individual[8]])
+        def m12():
+          individual[9] = F(individual[9])
+          individual[10] = nF(individual[10])
+        def m13():
+          individual[10] = F(individual[10])
+          individual[9] = nF(individual[9])
+        random.choice([m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13])()
     return individual,
       
   def evaluate(self, individual):
