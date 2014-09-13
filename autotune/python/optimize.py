@@ -38,21 +38,19 @@ def exhaustive(statement, context, TemplateType, build_template, parameter_names
     
   
 def genetic(statement, context, TemplateType, build_template, parameter_names, all_parameters, compute_perf, perf_metric, out):
-  gen = GeneticOperators(context.devices[0], statement, all_parameters, parameter_names, TemplateType, build_template)
+  GA = GeneticOperators(context.devices[0], statement, all_parameters, parameter_names, TemplateType, build_template)
   creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
   creator.create("Individual", list, fitness=creator.FitnessMin)
 
   toolbox = base.Toolbox()
-  toolbox.register("individual", tools.initIterate, creator.Individual, gen.init)
-  toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-  toolbox.register("evaluate", gen.evaluate)
-  toolbox.register("mate", tools.cxTwoPoint)
-  toolbox.decorate("mate", gen.repair)
-  toolbox.register("mutate", gen.mutate)
-  toolbox.decorate("mutate", gen.repair)
-  toolbox.register("select", tools.selBest)
+  toolbox.register("individual", deap.tools.initIterate, creator.Individual, GA.init)
+  toolbox.register("population", deap.tools.initRepeat, list, toolbox.individual)
+  toolbox.register("evaluate", GA.evaluate)
+  toolbox.register("mate", deap.tools.cxTwoPoint)
+  toolbox.register("mutate", GA.mutate)
+  toolbox.register("select", deap.tools.selBest)
     
-  pop = toolbox.population(n=30)
+  pop = toolbox.population(n=50)
   hof = deap.tools.HallOfFame(1)
 
   best_performer = lambda x: max([compute_perf(hof[0].fitness.values[0]) for t in x])
@@ -62,4 +60,4 @@ def genetic(statement, context, TemplateType, build_template, parameter_names, a
   stats.register("max (" + perf_metric + ")", lambda x: max([compute_perf(hof[0].fitness.values[0]) for t in x]))
   stats.register("profile ", lambda x: '(%s)'%','.join(map(str,hof[0])))
 
-  pop = eaMuPlusLambda(pop, toolbox, 30, 50, cxpb=0.2, mutpb=0.3, maxtime='3m0s', maxgen=200, halloffame=hof, compute_perf=compute_perf, perf_metric=perf_metric)
+  pop = eaMuPlusLambda(pop, toolbox, 50, 70, cxpb=0.2, mutpb=0.3, maxtime='5m0s', maxgen=500, halloffame=hof, compute_perf=compute_perf, perf_metric=perf_metric)

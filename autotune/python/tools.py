@@ -79,7 +79,7 @@ class OccupancyRecord:
     def __init__(self, dev, threads, shared_mem=0, registers=0):
       physical_limits = PhysicalLimits(dev)
       limits = [];
-      allocated_warps =  _int_ceiling(threads/physical_limits.threads_per_warp)
+      allocated_warps =  max(1,_int_ceiling(threads/physical_limits.threads_per_warp))
       max_warps_per_mp = physical_limits.warps_per_mp;
       limits.append((min(physical_limits.thread_blocks_per_mp, _int_floor(max_warps_per_mp/allocated_warps)), 'warps'))
       
