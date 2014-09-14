@@ -46,11 +46,11 @@ def genetic(statement, context, TemplateType, build_template, parameter_names, a
   toolbox.register("individual", deap.tools.initIterate, creator.Individual, GA.init)
   toolbox.register("population", deap.tools.initRepeat, list, toolbox.individual)
   toolbox.register("evaluate", GA.evaluate)
-  toolbox.register("mate", GA.crossover)
+  toolbox.register("mate", deap.tools.cxTwoPoint)
   toolbox.register("mutate", GA.mutate)
   toolbox.register("select", deap.tools.selBest)
     
-  pop = toolbox.population(n=70)
+  pop = toolbox.population(n=50)
   hof = deap.tools.HallOfFame(1)
 
   best_performer = lambda x: max([compute_perf(hof[0].fitness.values[0]) for t in x])
@@ -60,4 +60,4 @@ def genetic(statement, context, TemplateType, build_template, parameter_names, a
   stats.register("max (" + perf_metric + ")", lambda x: max([compute_perf(hof[0].fitness.values[0]) for t in x]))
   stats.register("profile ", lambda x: '(%s)'%','.join(map(str,hof[0])))
 
-  pop = eaMuPlusLambda(pop, toolbox, 70, 100, cxpb=0.2, mutpb=0.3, maxtime='5m0s', maxgen=1000, halloffame=hof, compute_perf=compute_perf, perf_metric=perf_metric)
+  pop = eaMuPlusLambda(pop, toolbox, 50, 70, cxpb=0.2, mutpb=0.3, maxtime='5m0s', maxgen=1000, halloffame=hof, compute_perf=compute_perf, perf_metric=perf_metric)
