@@ -142,11 +142,8 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser();
-  
   subparsers = parser.add_subparsers(dest='action')
-
   print_devices_parser = subparsers.add_parser('list-devices', help='list the devices available')
-  
   tune_parser = subparsers.add_parser('tune', help='tune using a specific configuration file')
   tune_parser.add_argument("--config", default="config.ini", required=False, type=str)
   tune_parser.add_argument("--viennacl-root", default='', required=False, type=str)
