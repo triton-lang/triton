@@ -16,9 +16,19 @@ def closest_divisor(N, x):
   while N % x_high > 0 and x_high < N:
     x_high = x_high + 1
   return x_low if x - x_low < x_high - x else x_high
-    
-class GeneticOperators(object):
   
+def b_gray_to_bin(A='00000000', endian='big'):
+    assert type(endian) is str
+    assert endian == 'little' or endian == 'big'
+    if endian == 'little': A = A[::-1] # Make sure endianness is big before conversion
+    b = A[0]
+    for i in range(1, len(A)): b += str( int(b[i-1] != A[i]) )
+    assert len(A) == len(b), 'Error in this function! len(A) must equal len(b). Oh dear.'
+    if endian == 'little': b = b[::-1] # Convert back to little endian if necessary
+    return b
+      
+class GeneticOperators(object):
+      
   def __init__(self, device, statement, parameters, parameter_names, TemplateType, build_template):
       self.device = device
       self.statement = statement
@@ -32,21 +42,21 @@ class GeneticOperators(object):
   
   @staticmethod
   def decode(s):
-    s = ''.join(s)
-    decode_element = lambda x:2**int(x, 2)
-    simd = decode_element(s[0:3])
-    ls0 = decode_element(s[2:5])
-    ls1 = decode_element(s[5:8])
-    kL = decode_element(s[8:11])
-    mS = decode_element(s[11:14])
-    kS = decode_element(s[14:17])
-    nS = decode_element(s[17:20])
     FetchingPolicy = vcl.atidlas.FetchingPolicy
     fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED]
-    fetchA = fetch[0]
-    fetchB = fetch[0]
+    fetchA = fetch[s[0]]
+    fetchB = fetch[s[1]]
+    bincode = ''.join(s[2:])
+    decode_element = lambda x:2**int(b_gray_to_bin(x), 2)
+    simd = decode_element(bincode[0:3])
+    ls0 = decode_element(bincode[2:5])
+    ls1 = decode_element(bincode[5:8])
+    kL = decode_element(bincode[8:11])
+    mS = decode_element(bincode[11:14])
+    kS = decode_element(bincode[14:17])
+    nS = decode_element(bincode[17:20])
     if fetchA==FetchingPolicy.FETCH_FROM_LOCAL or fetchB==FetchingPolicy.FETCH_FROM_LOCAL:
-      lf0 = decode_element(s[24:27])
+      lf0 = decode_element(bincode[20:23])
       lf1 = ls0*ls1/lf0
     else:
       lf0, lf1 = 0, 0
@@ -54,24 +64,28 @@ class GeneticOperators(object):
     
   def init(self):
     while True:
-      result = [str(random.randint(0,1)) for i in range(27)]
+      result = [random.randint(0,2), random.randint(0,2)] + [str(random.randint(0,1)) for i in range(23)]
       template = self.build_template(self.TemplateType.Parameters(*self.decode(result)))
       registers_usage = template.registers_usage(vcl.atidlas.StatementsTuple(self.statement))/4
       lmem_usage = template.lmem_usage(vcl.atidlas.StatementsTuple(self.statement))
       local_size = template.parameters.local_size_0*template.parameters.local_size_1
       occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
-      if template.check(self.statement)==0 and occupancy_record.occupancy >= 10 :
+      if not tools.skip(template, self.statement, self.device):
         return result
 
   def mutate(self, individual):
     while True:
       new_individual = copy.deepcopy(individual)
       for i in range(len(new_individual)):
-        if(random.random() < self.indpb):
-          new_individual[i] = '1' if new_individual[i]=='0' else '0'
+        if random.random() < self.indpb:
+          if i < 2:
+            while new_individual[i] == individual[i]:
+              new_individual[i] = random.randint(0, 2)
+          else:
+            new_individual[i] = '1' if new_individual[i]=='0' else '0'
       parameters = self.decode(new_individual)
       template = self.build_template(self.TemplateType.Parameters(*parameters))
-      print parameters, tools.skip(template, self.statement, self.device)
+      #print tools.skip(template, self.statement, self.device), parameters
       if not tools.skip(template, self.statement, self.device):
         break
     return new_individual,
