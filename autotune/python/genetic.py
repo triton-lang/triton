@@ -5,7 +5,11 @@ import tools
 import pyviennacl as vcl
 import numpy as np
 import copy
+
 from deap import algorithms
+from deap import base
+from deap import creator
+from deap import tools as deap_tools
 
 from collections import OrderedDict as odict
 
@@ -39,7 +43,17 @@ class GeneticOperators(object):
       self.build_template = build_template
       self.cache = {}
       self.indpb = 0.1
-  
+      
+      creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+      creator.create("Individual", list, fitness=creator.FitnessMin)
+    
+      self.toolbox = base.Toolbox()
+      self.toolbox.register("population", self.init)
+      self.toolbox.register("evaluate", self.evaluate)
+      self.toolbox.register("mate", deap_tools.cxTwoPoint)
+      self.toolbox.register("mutate", self.mutate)
+      self.toolbox.register("select", deap_tools.selBest)
+
   @staticmethod
   def decode(s):
     FetchingPolicy = vcl.atidlas.FetchingPolicy
@@ -62,30 +76,41 @@ class GeneticOperators(object):
       lf0, lf1 = 0, 0
     return [simd, ls0, kL, ls1, mS, kS, nS, fetchA, fetchB, lf0, lf1]
     
-  def init(self):
-    while True:
-      result = [random.randint(0,2), random.randint(0,2)] + [str(random.randint(0,1)) for i in range(23)]
-      template = self.build_template(self.TemplateType.Parameters(*self.decode(result)))
-      registers_usage = template.registers_usage(vcl.atidlas.StatementsTuple(self.statement))/4
-      lmem_usage = template.lmem_usage(vcl.atidlas.StatementsTuple(self.statement))
-      local_size = template.parameters.local_size_0*template.parameters.local_size_1
-      occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
-      if not tools.skip(template, self.statement, self.device):
-        return result
+  def init(self, N):
+    result = []
+
+
+    def generate(Afetch, Bfetch, K):
+      result = []
+      while len(result) < K:
+        bincode = [Afetch, Bfetch] + [str(random.randint(0,1)) for i in range(23)]
+        parameters = self.decode(bincode)
+        template = self.build_template(self.TemplateType.Parameters(*parameters))
+        registers_usage = template.registers_usage(vcl.atidlas.StatementsTuple(self.statement))/4
+        lmem_usage = template.lmem_usage(vcl.atidlas.StatementsTuple(self.statement))
+        local_size = template.parameters.local_size_0*template.parameters.local_size_1
+        occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
+        if not tools.skip(template, self.statement, self.device):
+          result.append(creator.Individual(bincode))
+      return result
+    
+    result += generate(0,0,N/3)
+    result += generate(1,1,N/3)
+    result += generate(2,2,N/3)
+
+    return result
 
   def mutate(self, individual):
     while True:
       new_individual = copy.deepcopy(individual)
       for i in range(len(new_individual)):
-        if random.random() < self.indpb:
-          if i < 2:
-            while new_individual[i] == individual[i]:
-              new_individual[i] = random.randint(0, 2)
-          else:
-            new_individual[i] = '1' if new_individual[i]=='0' else '0'
+        if i < 2 and random.random() < self.indpb:
+          while new_individual[i] == individual[i]:
+            new_individual[i] = random.randint(0, 2)
+        elif i >= 2 and random.random() < self.indpb:
+          new_individual[i] = '1' if new_individual[i]=='0' else '0'
       parameters = self.decode(new_individual)
       template = self.build_template(self.TemplateType.Parameters(*parameters))
-      #print tools.skip(template, self.statement, self.device), parameters
       if not tools.skip(template, self.statement, self.device):
         break
     return new_individual,
@@ -100,44 +125,58 @@ class GeneticOperators(object):
         self.cache[tuple(individual)] = 10
     return self.cache[tuple(individual)],
 
-def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, maxtime, maxgen, halloffame, compute_perf, perf_metric):
-    # Evaluate the individuals with an invalid fitness
-    invalid_ind = [ind for ind in population if not ind.fitness.valid]
-    fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
-    for ind, fit in zip(invalid_ind, fitnesses):
+  def optimize(self, maxtime, maxgen, compute_perf, perf_metric):
+      hof = deap_tools.HallOfFame(1)
+      # Begin the generational process
+      gen = 0
+      maxtime = time.strptime(maxtime, '%Mm%Ss')
+      maxtime = maxtime.tm_min*60 + maxtime.tm_sec
+      start_time = time.time()
+      
+      mu = 30
+      _lambda = 50
+      cxpb = 0.4
+      mutpb = 0.5
+      
+      population = self.init(mu)
+      invalid_ind = [ind for ind in population if not ind.fitness.valid]
+      fitnesses = self.toolbox.map(self.evaluate, invalid_ind)
+      for ind, fit in zip(invalid_ind, fitnesses):
         ind.fitness.values = fit
-
-    if halloffame is not None:
-        halloffame.update(population)
-
-    # Begin the generational process
-    gen = 0
-    maxtime = time.strptime(maxtime, '%Mm%Ss')
-    maxtime = maxtime.tm_min*60 + maxtime.tm_sec
-    start_time = time.time()
-    while time.time() - start_time < maxtime and gen < maxgen:
-        # Vary the population
-        offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
-        
+      hof.update(population)
+      
+      while time.time() - start_time < maxtime:
+        # Vary the population        
+        offspring = []
+        for _ in xrange(_lambda):
+            op_choice = random.random()
+            if op_choice < cxpb:            # Apply crossover
+                ind1, ind2 = map(self.toolbox.clone, random.sample(population, 2))
+                ind1, ind2 = self.toolbox.mate(ind1, ind2)
+                del ind1.fitness.values
+                offspring.append(ind1)
+            elif op_choice < cxpb + mutpb:  # Apply mutation
+                ind = self.toolbox.clone(random.choice(population))
+                ind, = self.toolbox.mutate(ind)
+                del ind.fitness.values
+                offspring.append(ind)
+            else:                           # Apply reproduction
+                offspring.append(random.choice(population))
         # Evaluate the individuals with an invalid fitness
         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
+        fitnesses = self.toolbox.map(self.evaluate, invalid_ind)
         for ind, fit in zip(invalid_ind, fitnesses):
             ind.fitness.values = fit
-        
         # Update the hall of fame with the generated individuals
-        if halloffame is not None:
-            halloffame.update(offspring)
-
+        hof.update(offspring)
         # Select the next generation population
-        population[:] = toolbox.select(population + offspring, mu)
-
-        # Update the statistics with the new population
+        population[:] = self.toolbox.select(population + offspring, mu)
         gen = gen + 1
-        
-        best_profile = '(%s)'%','.join(map(str,GeneticOperators.decode(halloffame[0])));
-        best_performance = compute_perf(halloffame[0].fitness.values[0])
+        best_profile = '(%s)'%','.join(map(str,GeneticOperators.decode(hof[0])));
+        best_performance = compute_perf(hof[0].fitness.values[0])
         sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\n'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
         sys.stdout.flush()
-    sys.stdout.write('\n')
-    return population
+      sys.stdout.write('\n')
+      return population
+    
+          
