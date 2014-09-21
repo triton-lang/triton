@@ -27,7 +27,6 @@ def b_gray_to_bin(A='00000000', endian='big'):
     if endian == 'little': A = A[::-1] # Make sure endianness is big before conversion
     b = A[0]
     for i in range(1, len(A)): b += str( int(b[i-1] != A[i]) )
-    assert len(A) == len(b), 'Error in this function! len(A) must equal len(b). Oh dear.'
     if endian == 'little': b = b[::-1] # Convert back to little endian if necessary
     return b
       
@@ -42,7 +41,7 @@ class GeneticOperators(object):
       self.ParameterType = TemplateType.Parameters
       self.build_template = build_template
       self.cache = {}
-      self.indpb = 0.1
+      self.indpb = 0.05
       
       creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
       creator.create("Individual", list, fitness=creator.FitnessMin)
@@ -52,7 +51,7 @@ class GeneticOperators(object):
       self.toolbox.register("evaluate", self.evaluate)
       self.toolbox.register("mate", deap_tools.cxTwoPoint)
       self.toolbox.register("mutate", self.mutate)
-      self.toolbox.register("select", deap_tools.selBest)
+      self.toolbox.register("select", deap_tools.selNSGA2)
 
   @staticmethod
   def decode(s):
@@ -78,12 +77,11 @@ class GeneticOperators(object):
     
   def init(self, N):
     result = []
-
-
-    def generate(Afetch, Bfetch, K):
-      result = []
-      while len(result) < K:
-        bincode = [Afetch, Bfetch] + [str(random.randint(0,1)) for i in range(23)]
+    fetchcount = [0, 0, 0]
+    while len(result) < N:
+      while True:
+        fetch = random.randint(0,2)
+        bincode = [fetch, fetch] + [str(random.randint(0,1)) for i in range(23)]
         parameters = self.decode(bincode)
         template = self.build_template(self.TemplateType.Parameters(*parameters))
         registers_usage = template.registers_usage(vcl.atidlas.StatementsTuple(self.statement))/4
@@ -91,26 +89,26 @@ class GeneticOperators(object):
         local_size = template.parameters.local_size_0*template.parameters.local_size_1
         occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
         if not tools.skip(template, self.statement, self.device):
-          result.append(creator.Individual(bincode))
-      return result
-    
-    result += generate(0,0,N/3)
-    result += generate(1,1,N/3)
-    result += generate(2,2,N/3)
-
+          fetchcount[fetch] = fetchcount[fetch] + 1
+          if max(fetchcount) - min(fetchcount) <= 1:
+            result.append(creator.Individual(bincode))
+            break
+          else:
+            fetchcount[fetch] = fetchcount[fetch] - 1
     return result
 
   def mutate(self, individual):
     while True:
       new_individual = copy.deepcopy(individual)
       for i in range(len(new_individual)):
-        if i < 2 and random.random() < self.indpb:
+        if i < 2 and random.random() < 0.1:
           while new_individual[i] == individual[i]:
             new_individual[i] = random.randint(0, 2)
         elif i >= 2 and random.random() < self.indpb:
           new_individual[i] = '1' if new_individual[i]=='0' else '0'
       parameters = self.decode(new_individual)
       template = self.build_template(self.TemplateType.Parameters(*parameters))
+      #print tools.skip(template, self.statement, self.device), parameters
       if not tools.skip(template, self.statement, self.device):
         break
     return new_individual,
@@ -133,10 +131,10 @@ class GeneticOperators(object):
       maxtime = maxtime.tm_min*60 + maxtime.tm_sec
       start_time = time.time()
       
-      mu = 30
-      _lambda = 50
-      cxpb = 0.4
-      mutpb = 0.5
+      mu = 70
+      _lambda = 100
+      cxpb = 0.2
+      mutpb = 0.7
       
       population = self.init(mu)
       invalid_ind = [ind for ind in population if not ind.fitness.valid]
@@ -174,7 +172,7 @@ class GeneticOperators(object):
         gen = gen + 1
         best_profile = '(%s)'%','.join(map(str,GeneticOperators.decode(hof[0])));
         best_performance = compute_perf(hof[0].fitness.values[0])
-        sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\n'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
+        sys.stdout.write('Time %d | Best %d %s [ for %s ]\r'%(time.time() - start_time, best_performance, perf_metric, best_profile))
         sys.stdout.flush()
       sys.stdout.write('\n')
       return population
