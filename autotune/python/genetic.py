@@ -13,6 +13,13 @@ from deap import tools as deap_tools
 
 from collections import OrderedDict as odict
 
+def hamming_distance(ind1, ind2):
+  res = 0
+  for x,y in enumerate(ind1, ind2):
+    if x==y:
+      res = res + 1
+  return res
+  
 def closest_divisor(N, x):
   x_low=x_high=max(1,min(round(x),N))
   while N % x_low > 0 and x_low>0:
@@ -122,7 +129,7 @@ class GeneticOperators(object):
       except:
         self.cache[tuple(individual)] = 10
     return self.cache[tuple(individual)],
-
+        
   def optimize(self, maxtime, maxgen, compute_perf, perf_metric):
       hof = deap_tools.HallOfFame(1)
       # Begin the generational process
@@ -131,8 +138,7 @@ class GeneticOperators(object):
       maxtime = maxtime.tm_min*60 + maxtime.tm_sec
       start_time = time.time()
       
-      mu = 70
-      _lambda = 100
+      mu = 30
       cxpb = 0.2
       mutpb = 0.7
       
@@ -146,7 +152,7 @@ class GeneticOperators(object):
       while time.time() - start_time < maxtime:
         # Vary the population        
         offspring = []
-        for _ in xrange(_lambda):
+        for _ in xrange(mu):
             op_choice = random.random()
             if op_choice < cxpb:            # Apply crossover
                 ind1, ind2 = map(self.toolbox.clone, random.sample(population, 2))
@@ -160,6 +166,7 @@ class GeneticOperators(object):
                 offspring.append(ind)
             else:                           # Apply reproduction
                 offspring.append(random.choice(population))
+                
         # Evaluate the individuals with an invalid fitness
         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
         fitnesses = self.toolbox.map(self.evaluate, invalid_ind)
@@ -169,6 +176,7 @@ class GeneticOperators(object):
         hof.update(offspring)
         # Select the next generation population
         population[:] = self.toolbox.select(population + offspring, mu)
+        #Update
         gen = gen + 1
         best_profile = '(%s)'%','.join(map(str,GeneticOperators.decode(hof[0])));
         best_performance = compute_perf(hof[0].fitness.values[0])
