@@ -108,7 +108,7 @@ class GeneticOperators(object):
     while True:
       new_individual = copy.deepcopy(individual)
       for i in range(len(new_individual)):
-        if i < 2 and random.random() < 0.1:
+        if i < 2 and random.random() < 0.2:
           while new_individual[i] == individual[i]:
             new_individual[i] = random.randint(0, 2)
         elif i >= 2 and random.random() < self.indpb:
@@ -148,7 +148,7 @@ class GeneticOperators(object):
       for ind, fit in zip(invalid_ind, fitnesses):
         ind.fitness.values = fit
       hof.update(population)
-      
+        
       while time.time() - start_time < maxtime:
         # Vary the population        
         offspring = []
@@ -166,7 +166,9 @@ class GeneticOperators(object):
                 offspring.append(ind)
             else:                           # Apply reproduction
                 offspring.append(random.choice(population))
-                
+        
+        #~ for x in offspring:
+          #~ print self.decode(x)
         # Evaluate the individuals with an invalid fitness
         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
         fitnesses = self.toolbox.map(self.evaluate, invalid_ind)
