@@ -11,6 +11,7 @@ import pyviennacl as vcl
 from pyviennacl import backend
 from pyviennacl import opencl
 from pyviennacl import atidlas
+from dataset import generate_dataset
 
 import utils
 import vclio
@@ -45,99 +46,72 @@ TYPES = { 'vector-axpy': {'template':vcl.atidlas.VectorAxpyTemplate,
                             'perf-index': lambda x: 2*x[1][0]*x[1][1]*x[1][2]/x[2]*1e-9,
                             'perf-measure': 'GFLOP/s'} }
     
-def parameter_space(operation):
-  simd = [1, 2, 4, 8]
-  pow2_1D = [2**k for k in range(12)]
-  pow2_2D = [2**i for i in range(8)]
-  pow2_2D_unrolled = [2**i for i in range(8)]
-  FetchingPolicy = vcl.atidlas.FetchingPolicy
-  fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED]
-  if operation == 'vector-axpy': return [simd, pow2_1D, pow2_1D, fetch]
-  if operation == 'reduction': return [simd, pow2_1D, pow2_1D, fetch]
-  if operation == 'matrix-axpy': return [simd, pow2_2D, pow2_2D, pow2_2D, pow2_2D, fetch]
-  if operation == 'row-wise-reduction': return [simd, pow2_2D, pow2_2D, pow2_1D, fetch]
-  if operation == 'matrix-product': return [simd, pow2_2D, pow2_2D, pow2_2D, pow2_2D_unrolled,  pow2_2D_unrolled,  pow2_2D_unrolled, fetch, fetch, [0] + pow2_2D, [0] + pow2_2D]
-  
 def do_tuning(config_fname, spec_fname, viennacl_root):    
-
   config = ConfigObj(config_fname, configspec=spec_fname)
   map_to_list = lambda T: list(map(T[0], T[1] if isinstance(T[1], list) else [T[1]])) 
- 
   for operation in ['vector-axpy', 'matrix-axpy', 'row-wise-reduction', 'matrix-product']:
-    
-    tmp_folder = config['tmp-folder'] if 'tmp-folder' in config else ""
-    
-    if operation in config:
-      p = config[operation]        
-      confdevices = p['devices']
-      devices = utils.DEVICES_PRESETS[confdevices] if confdevices in utils.DEVICES_PRESETS else [utils.all_devices[int(i)] for i in confdevices]
-      precisions =  map_to_list((str, p['precision']))
-      datatypes = [DATATYPES[k] for k in precisions]
-      s = map_to_list((int, p['size']))
-      
-      for datatype, device in itertools.product(datatypes, devices):
-        ctx = cl.Context([device])
-        ctx = vcl.backend.Context(ctx)
-        device = ctx.current_device
-
-        if datatype is vcl.float64 and not device.double_fp_config:
-          sys.stderr.write('Warning : The device ' + device.name + ' does not support double precision! Skipping ...')
-          continue
-
-        pairs = []
-        
-        def execute(node, other_params):
-          print('-----')
-          print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(other_params), '[' + device.name, '(' + device.platform.name + ')]'))))
-          tmp_file = os.path.join(tmp_folder, utils.sanitize_string(device.name) + "-" + datatype.__name__ + "-" + operation + '-'.join(other_params) + ".dat")
-          if tmp_folder:
-            print('Saving history to ' + tmp_file)
-            fname = tmp_file
-          else:
-            fname = os.devnull
-          with open(fname, "w+") as archive:
-            with vcl.Statement(node) as statement:
-              result = optimize.genetic(statement, ctx, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
-                                    TYPES[operation]['parameter-names'], parameter_space(operation), lambda t: TYPES[operation]['perf-index']([datatype().itemsize, s, t]), TYPES[operation]['perf-measure'], archive)
-            if result and viennacl_root:
-              vclio.generate_viennacl_headers(viennacl_root, device, datatype, operation, other_params, result[1])
-        
-        if operation=='vector-axpy':
-          x = vcl.Vector(s[0], context=ctx, dtype=datatype)
-          y = vcl.Vector(s[0], context=ctx, dtype=datatype)
-          execute(vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y)), ())
-        
-        if operation=='matrix-axpy':
-          A = vcl.Matrix(s, context=ctx, dtype=datatype)
-          B = vcl.Matrix(s, context=ctx, dtype=datatype)
-          execute(A+B, ())
-        
-        if operation=='row-wise-reduction':
-          layouts = map_to_list((str,p['layout']))
-          if 'all' in layouts:
-            layouts = ['N', 'T']
-          for A_trans in layouts:
-            A = vcl.Matrix(s if A_trans=='N' else s[::-1], context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
-            x = vcl.Vector(s[1] if A_trans=='N' else s[0], context=ctx, dtype=datatype)
-            LHS = A if A_trans=='N' else A.T
-            execute(LHS*x, ())
-          
-        if operation=='matrix-product':
-          layouts = map_to_list((str,p['layout']))
-          if 'all' in layouts:
-            layouts = ['NN', 'NT', 'TN', 'TT']
-          for layout in layouts:
-            A_trans = layout[0]
-            B_trans = layout[1]
-            
-            A = vcl.Matrix((s[0], s[1]) if A_trans=='N' else (s[1],s[0]), context=ctx, dtype=datatype, layout=vcl.COL_MAJOR);
-            B = vcl.Matrix((s[1], s[2]) if B_trans=='N' else (s[2],s[1]), context=ctx, dtype=datatype, layout=vcl.COL_MAJOR);
-            LHS = A if A_trans=='N' else A.T
-            RHS = B if B_trans=='N' else B.T
-            alpha = vcl.HostScalar(1.0,  context=ctx, dtype = datatype)
-            beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
-            C = vcl.Matrix((s[0], s[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
-            execute(vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans, B_trans))
+   if operation in config:
+     p = config[operation]        
+     confdevices = p['devices']
+     devices = utils.DEVICES_PRESETS[confdevices] if confdevices in utils.DEVICES_PRESETS else [utils.all_devices[int(i)] for i in confdevices]
+     precisions =  map_to_list((str, p['precision']))
+     datatypes = [DATATYPES[k] for k in precisions]
+     #Iterate through the datatypes and the devices
+     for datatype, device in itertools.product(datatypes, devices):
+       ctx = cl.Context([device])
+       ctx = vcl.backend.Context(ctx)
+       device = ctx.current_device
+       #Check data-type
+       if datatype is vcl.float64 and not device.double_fp_config:
+         sys.stderr.write('Warning : The device ' + device.name + ' does not support double precision! Skipping ...')
+         continue
+       #Helper
+       def execute(node, other_params, sizes, fname = os.devnull):
+         print('-----')
+         print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(other_params), '[' + device.name, '(' + device.platform.name + ')] for sizes', sizes))))
+         with open(fname, "w+") as archive:
+           with vcl.Statement(node) as statement:
+             return optimize.genetic(statement, ctx, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
+                         TYPES[operation]['parameter-names'], lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
+       s = map_to_list((int, p['size']))
+       #Vector AXPY
+       if operation=='vector-axpy':
+         x = vcl.Vector(s[0], context=ctx, dtype=datatype)
+         y = vcl.Vector(s[0], context=ctx, dtype=datatype)
+         execute(vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y)), ())
+       #Matrix AXPY
+       if operation=='matrix-axpy':
+         A = vcl.Matrix(s, context=ctx, dtype=datatype)
+         B = vcl.Matrix(s, context=ctx, dtype=datatype)
+         execute(A+B, ())
+       #Row-wise reduction
+       if operation=='row-wise-reduction':
+         layouts = map_to_list((str,p['layout']))
+         if 'all' in layouts:
+           layouts = ['N', 'T']
+         for A_trans in layouts:
+           A = vcl.Matrix(s if A_trans=='N' else s[::-1], context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
+           x = vcl.Vector(s[1] if A_trans=='N' else s[0], context=ctx, dtype=datatype)
+           LHS = A if A_trans=='N' else A.T
+           execute(LHS*x, ())
+       #Matrix Product
+       if operation=='matrix-product':
+         layouts = map_to_list((str,p['layout']))
+         if 'all' in layouts:
+           layouts = ['NN', 'NT', 'TN', 'TT']
+         for layout in layouts:
+           def execution_handler(sizes, fname):
+             A_trans = layout[0]
+             B_trans = layout[1]
+             A = vcl.Matrix((sizes[0], sizes[1]) if A_trans=='N' else (sizes[1],sizes[0]), context=ctx, dtype=datatype, layout=vcl.COL_MAJOR);
+             B = vcl.Matrix((sizes[1], sizes[2]) if B_trans=='N' else (sizes[2],sizes[1]), context=ctx, dtype=datatype, layout=vcl.COL_MAJOR);
+             LHS = A if A_trans=='N' else A.T
+             RHS = B if B_trans=='N' else B.T
+             alpha = vcl.HostScalar(1.0,  context=ctx, dtype = datatype)
+             beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
+             C = vcl.Matrix((sizes[0], sizes[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
+             execute(vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans, B_trans), sizes, fname)
+           generate_dataset(operation, execution_handler)
             
 
 if __name__ == "__main__":

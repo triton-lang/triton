@@ -13,12 +13,6 @@ from deap import tools as deap_tools
 
 from collections import OrderedDict as odict
 
-def hamming_distance(ind1, ind2):
-  res = 0
-  for x,y in enumerate(ind1, ind2):
-    if x==y:
-      res = res + 1
-  return res
   
 def closest_divisor(N, x):
   x_low=x_high=max(1,min(round(x),N))
@@ -39,16 +33,16 @@ def b_gray_to_bin(A='00000000', endian='big'):
       
 class GeneticOperators(object):
       
-  def __init__(self, device, statement, parameters, parameter_names, TemplateType, build_template):
+  def __init__(self, device, statement, parameter_names, TemplateType, build_template, out):
       self.device = device
       self.statement = statement
-      self.parameters = parameters
       self.parameter_names = parameter_names
       self.TemplateType = TemplateType
       self.ParameterType = TemplateType.Parameters
       self.build_template = build_template
       self.cache = {}
       self.indpb = 0.05
+      self.out = out
       
       creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
       creator.create("Individual", list, fitness=creator.FitnessMin)
@@ -108,7 +102,7 @@ class GeneticOperators(object):
     while True:
       new_individual = copy.deepcopy(individual)
       for i in range(len(new_individual)):
-        if i < 2 and random.random() < 0.2:
+        if i < 2 and random.random() < self.indpb:
           while new_individual[i] == individual[i]:
             new_individual[i] = random.randint(0, 2)
         elif i >= 2 and random.random() < self.indpb:
@@ -122,10 +116,12 @@ class GeneticOperators(object):
       
   def evaluate(self, individual):
     if tuple(individual) not in self.cache:
-      parameters = self.decode(individual)
+      parameters = self.decode(individual)      
       template = self.build_template(self.TemplateType.Parameters(*parameters))
       try:
-        self.cache[tuple(individual)] = tools.benchmark(template, self.statement, self.device)
+        tt = tools.benchmark(template, self.statement, self.device)
+        self.out.write(','.join([str(tt)]+map(str,map(int,parameters)))+'\n')
+        self.cache[tuple(individual)] = tt
       except:
         self.cache[tuple(individual)] = 10
     return self.cache[tuple(individual)],
