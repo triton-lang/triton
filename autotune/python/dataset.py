@@ -1,14 +1,22 @@
 import os
+import sys
 import re
 import random
 import numpy as np
 from sklearn.neighbors.kde import KernelDensity;
+from pyviennacl.atidlas import FetchingPolicy
 
-def generate_dataset(operation, execution_handler):
-  I = 5
+def decode(y):
+  fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED]
+  y[7] = fetch[y[7]]
+  y[8] = fetch[y[8]]
+  return y
+    
+def generate_dataset(TemplateType, execution_handler):
+  I = 0
   step = 64;
   max_size = 4000;
-
+  
   #Retrieves the existing data
   print "Retrieving data..."
   path = "./data"
@@ -56,7 +64,6 @@ def generate_dataset(operation, execution_handler):
       if tuple(x) not in Xtuples:
         break;
     x = x.astype(int)
-    x = [2048, 2048, 512]
     fname = os.path.join(path, `x[0]` +"-"+ `x[1]` +"-"+ `x[2]` +".csv")
     #Execute auto-tuning procedure
     execution_handler(x, fname)
@@ -75,11 +82,10 @@ def generate_dataset(operation, execution_handler):
     #Update density estimator p(M,N,K | t=idx)
     kdes[idx].fit(X[t[0:len(files)+i+1]==idx,:]);
 
-
+  
   print "Exporting data...";
   #Shuffle the list of file
   files = os.listdir(path)
-  random.shuffle(files)
   X = np.empty((len(files),3))
   Y = np.zeros((len(files), len(profiles)))
   for i,fname in enumerate(files):
@@ -89,11 +95,7 @@ def generate_dataset(operation, execution_handler):
     A = np.loadtxt(fl,delimiter=',')
     for j,y in enumerate(profiles):
       idx = np.where(np.all(A[:,1:]==y,axis=1))[0]
-      if idx.size:
-        Y[i,j] = 2*1e-9*X[i,0]*X[i,1]*X[i,2]/A[idx[0],0]
-      else:
-        sys.exit('Data invalid! Were all the data csv files generated using the same auto-tuner options?')
-  np.savetxt(export_path+'X.csv', X)
-  np.savetxt(export_path+'Y.csv', Y)
-  np.savetxt(export_path+'profiles.csv', profiles)
-  open(export_path+'pad.csv', 'w').write(str(pad))
+      T = A[idx[0], 0] if idx.size else execution_handler(map(int,X[i,:]), '', decode(map(int, y)))
+      Y[i,j] = 2*1e-9*X[i,0]*X[i,1]*X[i,2]/T
+  
+  return X, Y, profiles

@@ -12,6 +12,8 @@ from pyviennacl import backend
 from pyviennacl import opencl
 from pyviennacl import atidlas
 from dataset import generate_dataset
+from model import train_model
+import tools
 
 import utils
 import vclio
@@ -66,12 +68,11 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
          sys.stderr.write('Warning : The device ' + device.name + ' does not support double precision! Skipping ...')
          continue
        #Helper
-       def execute(node, other_params, sizes, fname = os.devnull):
+       def execute(statement, other_params, sizes, fname = os.devnull):
          print('-----')
          print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(other_params), '[' + device.name, '(' + device.platform.name + ')] for sizes', sizes))))
          with open(fname, "w+") as archive:
-           with vcl.Statement(node) as statement:
-             return optimize.genetic(statement, ctx, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
+           return optimize.genetic(statement, ctx, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
                          TYPES[operation]['parameter-names'], lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
        s = map_to_list((int, p['size']))
        #Vector AXPY
@@ -100,7 +101,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
          if 'all' in layouts:
            layouts = ['NN', 'NT', 'TN', 'TT']
          for layout in layouts:
-           def execution_handler(sizes, fname):
+           def execution_handler(sizes, fname, parameters=None):
              A_trans = layout[0]
              B_trans = layout[1]
              A = vcl.Matrix((sizes[0], sizes[1]) if A_trans=='N' else (sizes[1],sizes[0]), context=ctx, dtype=datatype, layout=vcl.COL_MAJOR);
@@ -110,8 +111,15 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
              alpha = vcl.HostScalar(1.0,  context=ctx, dtype = datatype)
              beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
              C = vcl.Matrix((sizes[0], sizes[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
-             execute(vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans, B_trans), sizes, fname)
-           generate_dataset(operation, execution_handler)
+             statement = vcl.Statement(vcl.Assign(C,LHS*RHS*alpha + C*beta))
+             if parameters:
+               TemplateType = TYPES[operation]['template']
+               return tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),A_trans,B_trans), statement, device)
+             else:
+               execute(statement,(A_trans, B_trans), sizes, fname)
+           X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler)
+           train_model(X, Y, profiles)
+           
             
 
 if __name__ == "__main__":
