@@ -21,8 +21,8 @@ from genetic import GeneticOperators
   #~ if operation == 'matrix-axpy': return [simd, pow2_2D, pow2_2D, pow2_2D, pow2_2D, fetch]
   #~ if operation == 'row-wise-reduction': return [simd, pow2_2D, pow2_2D, pow2_1D, fetch]
   #~ if operation == 'matrix-product': return [simd, pow2_2D, pow2_2D, pow2_2D, pow2_2D_unrolled,  pow2_2D_unrolled,  pow2_2D_unrolled, fetch, fetch, [0] + pow2_2D, [0] + pow2_2D]
-  #~ 
-  
+  #~
+
 #~ def exhaustive(statement, context, TemplateType, build_template, parameter_names, all_parameters, compute_perf, perf_metric, out):
   #~ device = context.devices[0]
   #~ nvalid = 0
@@ -46,8 +46,8 @@ from genetic import GeneticOperators
       #~ pass
   #~ sys.stdout.write('\n')
   #~ sys.stdout.flush()
-    #~ 
-  
+    #~
+
 def genetic(statement, context, TemplateType, build_template, parameter_names, compute_perf, perf_metric, out):
-  GA = GeneticOperators(context.devices[0], statement, parameter_names, TemplateType, build_template, out)
-  GA.optimize(maxtime='2m30s', maxgen=1000, compute_perf=compute_perf, perf_metric=perf_metric)
+    GA = GeneticOperators(context.devices[0], statement, parameter_names, TemplateType, build_template, out)
+    GA.optimize(maxtime='2m30s', maxgen=1000, compute_perf=compute_perf, perf_metric=perf_metric)
