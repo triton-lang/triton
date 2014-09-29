@@ -13,7 +13,7 @@ def decode(y):
     return y
 
 def generate_dataset(TemplateType, execution_handler):
-    I = 0
+    I = 2
     step = 64;
     max_size = 4000;
 
@@ -64,6 +64,7 @@ def generate_dataset(TemplateType, execution_handler):
             if tuple(x) not in Xtuples:
                 break;
         x = x.astype(int)
+        x = [1536,1536,1536]
         fname = os.path.join(path, `x[0]` +"-"+ `x[1]` +"-"+ `x[2]` +".csv")
         #Execute auto-tuning procedure
         execution_handler(x, fname)

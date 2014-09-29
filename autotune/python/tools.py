@@ -3,7 +3,7 @@ import pyopencl
 import time
 from pyviennacl.atidlas import StatementsTuple
 
-class PhysicalLimits:
+class PhysicalLimitsNV:
     def __init__(self, dev):
         self.compute_capability = pyopencl.characterize.nv_compute_capability(dev)
         if self.compute_capability[0]==1:
@@ -60,25 +60,36 @@ class PhysicalLimits:
         else:
             raise Exception('Compute capability not supported!')
 
+class PhysicalLimitsAMD:
+    def __init__(self, dev):
+        self.wavefront_size = 64
+        WFmax_cu = {'Cypress': 27.6}
+        LDS_cu = {'Cypress': 32768}
+        GPR_cu = {'Cypress': 16384}
+        self.WFmax_cu = WFmax_cu[dev.name]
+        self.LDS_cu = LDS_cu[dev.name]
+        self.GPR_cu = GPR_cu[dev.name]
+        pass
+
+def _int_floor(value, multiple_of=1):
+    """Round C{value} down to be a C{multiple_of} something."""
+    # Mimicks the Excel "floor" function (for code stolen from occupancy calculator)
+    from math import floor
+    return int(floor(value/multiple_of))*multiple_of
+
+def _int_ceiling(value, multiple_of=1):
+    """Round C{value} up to be a C{multiple_of} something."""
+    # Mimicks the Excel "floor" function (for code stolen from occupancy calculator)
+    from math import ceil
+    return int(ceil(value/multiple_of))*multiple_of
+
 class OccupancyRecord:
 
-    def _int_floor(value, multiple_of=1):
-        """Round C{value} down to be a C{multiple_of} something."""
-        # Mimicks the Excel "floor" function (for code stolen from occupancy calculator)
-        from math import floor
-        return int(floor(value/multiple_of))*multiple_of
-
-    def _int_ceiling(value, multiple_of=1):
-        """Round C{value} up to be a C{multiple_of} something."""
-        # Mimicks the Excel "floor" function (for code stolen from occupancy calculator)
-        from math import ceil
-        return int(ceil(value/multiple_of))*multiple_of
-
     def init_nvidia(self, dev, threads, shared_mem, registers):
-        physical_limits = PhysicalLimits(dev)
-        limits = [];
+        physical_limits = PhysicalLimitsNV(dev)
+        limits = []
         allocated_warps =  max(1,_int_ceiling(threads/physical_limits.threads_per_warp))
-        max_warps_per_mp = physical_limits.warps_per_mp;
+        max_warps_per_mp = physical_limits.warps_per_mp
         limits.append((min(physical_limits.thread_blocks_per_mp, _int_floor(max_warps_per_mp/allocated_warps)), 'warps'))
 
         if registers>0:
@@ -96,12 +107,35 @@ class OccupancyRecord:
             max_shared_mem_per_mp = physical_limits.shared_mem_per_mp
             limits.append((_int_floor(max_shared_mem_per_mp/allocated_shared_mem), 'shared memory'))
 
-        self.limit, self.limited_by = min(limits)
-        self.warps_per_mp = self.limit*allocated_warps
-        self.occupancy = 100*self.warps_per_mp/physical_limits.warps_per_mp
+        limit, limited_by = min(limits)
+        warps_per_mp = limit*allocated_warps
+        self.occupancy = 100*warps_per_mp/physical_limits.warps_per_mp
+
+    def init_amd(self, dev, threads, shared_mem, NReg):
+        limits = []
+        physical_limits = PhysicalLimitsAMD(dev)
+        WFmax_cu = physical_limits.WFmax_cu
+        WFsize = physical_limits.wavefront_size
+        #WFmax without constraint
+        WFwg = _int_ceiling(threads/WFsize)
+        WFcu = WFmax_cu if WFwg > WFmax_cu else _int_floor(WFmax_cu,WFwg)
+        limits.append(WFcu)
+        #WFmax with LDS constraints
+        if shared_mem > 0:
+            WGmax = _int_floor(physical_limits.LDS_cu/shared_mem)
+            limits.append(WGmax*WFwg)
+        #WFmax with GPR constraints
+        if NReg > 0:
+            WFgpr =  _int_floor(physical_limits.GPR_cu/(NReg*WFsize))
+            limits.append(_int_floor(WFgpr, WFwg))
+        self.occupancy = 100*min(limits)/physical_limits.WFmax_cu
+
 
     def __init__(self, dev, threads, shared_mem=0, registers=0):
-        self.init_nvidia(self, dev, threads, shared_mem, registers)
+        if 'Advanced Micro Devices' in dev.vendor:
+            self.init_amd(dev, threads, shared_mem, registers)
+        elif 'NVidia' in dev.vendor:
+            self.init_nvidia(dev, threads, shared_mem, registers)
 
 
 
