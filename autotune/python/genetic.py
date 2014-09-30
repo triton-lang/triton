@@ -181,4 +181,4 @@ class GeneticOperators(object):
             sys.stdout.write('Time %d | Best %d %s [ for %s ]\r'%(time.time() - start_time, best_performance, perf_metric, best_profile))
             sys.stdout.flush()
         sys.stdout.write('\n')
-        return population
+        return self.decode(hof[0])

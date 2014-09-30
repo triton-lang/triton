@@ -9,8 +9,6 @@ def train_model(X, Y, profiles):
     X = scaler.transform(X);
     ref = np.argmax(np.bincount(np.argmax(Y, axis=1))) #most common profile
 
-    print Y
-    print np.bincount(np.argmax(Y, axis=1))
     #Cross-validation data-sets
     cut = int(0.5*X.shape[0]+1);
     XTr = X[0:cut, :];

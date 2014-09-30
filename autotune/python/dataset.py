@@ -3,7 +3,7 @@ import sys
 import re
 import random
 import numpy as np
-from sklearn.neighbors.kde import KernelDensity;
+from sklearn.neighbors.kde import KernelDensity
 from pyviennacl.atidlas import FetchingPolicy
 
 def decode(y):
@@ -12,91 +12,83 @@ def decode(y):
     y[8] = fetch[y[8]]
     return y
 
+def resample(X, tbincount, densities, step):
+    Xtuples = [tuple(x) for x in X]
+    r = random.random()
+    while(True):
+        if(len(tbincount)==0 or len(densities)==0 or r<=1.0/len(densities)):
+            x = np.array([step*random.randint(1,40), step*random.randint(1,40), step*random.randint(1,40)]);
+        else:
+            probs = [1.0/x if x>0 else 0 for x in tbincount]
+            distr = np.random.choice(range(tbincount.size), p = probs/np.sum(probs))
+            x = densities[distr].sample()[0]
+            x = np.maximum(np.ones(x.shape),(x - step/2).astype(int)/step + 1)*step
+        if tuple(x) not in Xtuples:
+            break
+    return x.astype(int)
+
 def generate_dataset(TemplateType, execution_handler):
-    I = 2
-    step = 64;
-    max_size = 4000;
-
-    #Retrieves the existing data
-    print "Retrieving data..."
+    I = 0
+    step = 64
+    max_size = 4000
     path = "./data"
-    files = os.listdir(path)
-    X = np.empty((len(files),3))
-    t = np.empty(len(files))
-    profiles = []
-    nonemptyfiles = []
-    for i,fname in enumerate(files):
-        if os.path.getsize(os.path.join(path,fname))>0:
-            nonemptyfiles.append(fname)
-    files = nonemptyfiles
 
-    for i,fname in enumerate(files):
-        MNK = re.search(r"([0-9]+)-([0-9]+)-([0-9]+).csv", fname)
-        fl = open(os.path.join(path,fname),"rb")
-        A = np.loadtxt(fl,delimiter=',')
-        x = np.array([MNK.group(1), MNK.group(2), MNK.group(3)]).astype(float)
-        y = tuple(A[np.argmin(A[:,0]),1:])
-        if y not in profiles:
-            profiles.append(y)
-        idx = profiles.index(y)
-        X[i,:] = x
-        t[i] = idx
+    #Tries to resume
+    try:
+        X = np.loadtxt(open(os.path.join(path, "X.csv"),"rb"))
+        t = np.loadtxt(open(os.path.join(path, "t.csv"),"rb"))
+        profiles = np.loadtxt(open(os.path.join(path, "profiles.csv"),"rb")).tolist()
+        if not isinstance(profiles[0], list):
+            profiles = [profiles]
+        N = t.size
+        X.resize((N+I, 3), refcheck=False)
+        t.resize(N+I, refcheck=False)
+        print 'Resuming dataset generation...'
+    except:
+        X = np.empty((I,I))
+        t = np.empty(I)
+        profiles = []
+        N = 0
+        pass
+
 
     #Generates new data
-    print "Generating new data..."
-    kdes = [KernelDensity(kernel='gaussian', bandwidth=2*step).fit(X[t==i,:]) for i in range(int(max(t))+1)] if files else [];
-    X.resize((len(files)+I, 3), refcheck=False);
-    t.resize(len(files)+I, refcheck=False);
+    print "Getting some good profiles..."
+    densities = [KernelDensity(kernel='gaussian', bandwidth=2*step).fit(X[t==i,:]) for i in range(int(max(t))+1)] if N else [];
+    X.resize((N+I, 3), refcheck=False)
+    t.resize(N+I, refcheck=False)
 
-    max_square = max_size/step
     for i in range(I):
-        n_per_label = np.bincount(t[0:i+1].astype(int));
-        Xtuples = [tuple(x) for x in X];
-        r = random.random();
-        while(True):
-            if(len(kdes)==0 or r<=1.0/len(kdes)):
-                x = np.array([step*random.randint(1,40), step*random.randint(1,40), step*random.randint(1,40)]);
-            else:
-                probs = (1.0/n_per_label)
-                distr = np.random.choice(range(n_per_label.size), p = probs/np.sum(probs))
-                x = kdes[distr].sample()[0]
-                x = np.maximum(np.ones(x.shape),(x - step/2).astype(int)/step + 1)*step
-            if tuple(x) not in Xtuples:
-                break;
-        x = x.astype(int)
-        x = [1536,1536,1536]
-        fname = os.path.join(path, `x[0]` +"-"+ `x[1]` +"-"+ `x[2]` +".csv")
-        #Execute auto-tuning procedure
-        execution_handler(x, fname)
-        #Load csv into matrix
-        fl = open(fname,"rb");
-        A = np.loadtxt(fl,delimiter=',');
-        #Update the kernel density estimators
-        y = tuple(A[np.argmin(A[:,0]),1:]);
+        tbincount = np.bincount(t[0:i+1].astype(int))
+        x = resample(X, tbincount, densities, step)
+        y = execution_handler(x)
         if y not in profiles:
-            profiles.append(y);
-            kdes.append(KernelDensity(kernel='gaussian', bandwidth=2*step));
-        idx = profiles.index(y);
-        #Update data
-        X[len(files)+i,:] = x;
-        t[len(files)+i] = idx;
-        #Update density estimator p(M,N,K | t=idx)
-        kdes[idx].fit(X[t[0:len(files)+i+1]==idx,:]);
+            profiles.append(y)
+            densities.append(KernelDensity(kernel='gaussian', bandwidth=2*step))
+        idx = profiles.index(y)
+        X[N+i,:] = x
+        t[N+i] = idx
+        densities[idx].fit(X[t[0:N+i+1]==idx,:])
+        np.savetxt(os.path.join(path,"X.csv"), X)
+        np.savetxt(os.path.join(path,"t.csv"), t)
+        np.savetxt(os.path.join(path,"profiles.csv"), profiles)
 
-
-    print "Exporting data...";
-    #Shuffle the list of file
-    files = os.listdir(path)
-    X = np.empty((len(files),3))
-    Y = np.zeros((len(files), len(profiles)))
-    for i,fname in enumerate(files):
-        MNK = re.search(r"([0-9]+)-([0-9]+)-([0-9]+).csv", fname)
-        X[i,:] = map(float,[MNK.group(k) for k in range(1,4)])
-        fl = open(os.path.join(path,fname),"rb");
-        A = np.loadtxt(fl,delimiter=',')
+    print "Generating the dataset..."
+    N = 500
+    Y = np.empty((N, len(profiles)))
+    X = np.empty((N,3))
+    t = []
+    for i in range(N):
+        x = resample(X, np.bincount(t), densities, step)
         for j,y in enumerate(profiles):
-            idx = np.where(np.all(A[:,1:]==y,axis=1))[0]
-            T = A[idx[0], 0] if idx.size else execution_handler(map(int,X[i,:]), '', decode(map(int, y)))
-            Y[i,j] = 2*1e-9*X[i,0]*X[i,1]*X[i,2]/T
+            T = execution_handler(x, os.devnull, decode(map(int, y)))
+            Y[i,j] = 2*1e-9*x[0]*x[1]*x[2]/T
+        idx = np.argmax(Y[i,:])
+        X[i,:] = x
+        t = np.argmax(Y[:i+1,], axis=1)
+        densities[idx].fit(X[t==idx,:])
+
+    np.savetxt(os.path.join(path,"Y.csv"), Y)
+
 
     return X, Y, profiles

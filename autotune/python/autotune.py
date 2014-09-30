@@ -101,7 +101,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                     if 'all' in layouts:
                         layouts = ['NN', 'NT', 'TN', 'TT']
                     for layout in layouts:
-                        def execution_handler(sizes, fname, parameters=None):
+                        def execution_handler(sizes, fname=os.devnull, parameters=None):
                             A_trans = layout[0]
                             B_trans = layout[1]
                             A = vcl.Matrix((sizes[0], sizes[1]) if A_trans=='N' else (sizes[1],sizes[0]), context=ctx, dtype=datatype, layout=vcl.COL_MAJOR);
@@ -116,7 +116,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                                 TemplateType = TYPES[operation]['template']
                                 return tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),A_trans,B_trans), statement, device)
                             else:
-                                execute(statement,(A_trans, B_trans), sizes, fname)
+                                return execute(statement,(A_trans, B_trans), sizes, fname)
                         X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler)
                         train_model(X, Y, profiles)
 

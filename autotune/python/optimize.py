@@ -50,4 +50,4 @@ from genetic import GeneticOperators
 
 def genetic(statement, context, TemplateType, build_template, parameter_names, compute_perf, perf_metric, out):
     GA = GeneticOperators(context.devices[0], statement, parameter_names, TemplateType, build_template, out)
-    GA.optimize(maxtime='2m30s', maxgen=1000, compute_perf=compute_perf, perf_metric=perf_metric)
+    return GA.optimize(maxtime='2m30s', maxgen=1000, compute_perf=compute_perf, perf_metric=perf_metric)
