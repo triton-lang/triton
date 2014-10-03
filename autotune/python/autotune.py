@@ -24,39 +24,35 @@ DATATYPES = { 'single' : vcl.float32,
               'double' : vcl.float64 }
 
 TYPES = { 'vector-axpy': {'template':vcl.atidlas.VectorAxpyTemplate,
-                          'parameter-names':['simd-width', 'local-size-0', 'num-groups-0', 'fetch'],
                           'perf-index':lambda x: 3*x[0]*x[1][0]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
           'matrix-axpy': {'template':vcl.atidlas.MatrixAxpyTemplate,
-                          'parameter-names':['simd-width', 'local-size-0', 'local-size-1', 'num-groups-0', 'num-groups-1', 'fetch'],
                           'perf-index':lambda x: 3*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
           'reduction': {'template':vcl.atidlas.ReductionTemplate,
-                        'parameter-names':['simd-width', 'local-size-0', 'num-groups-0', 'fetch'],
                         'perf-index':lambda x: 2*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
                         'perf-measure':'GB/s'},
 
           'row-wise-reduction': {'template':vcl.atidlas.RowWiseReductionTemplate,
-                                'parameter-names':['simd-width', 'local-size-0', 'local-size-1', 'num-groups-0', 'fetch'],
                                 'perf-index':lambda x: x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
                                 'perf-measure':'GB/s'},
 
           'matrix-product': {'template':vcl.atidlas.MatrixProductTemplate,
-                            'parameter-names':['simd-width', 'local-size-0', 'kL', 'local-size-1', 'mS', 'kS', 'nS', 'A-fetch-policy', 'B-fetch-policy', 'local-fetch-size-0', 'local-fetch-size-1'],
                             'perf-index': lambda x: 2*x[1][0]*x[1][1]*x[1][2]/x[2]*1e-9,
                             'perf-measure': 'GFLOP/s'} }
 
 def do_tuning(config_fname, spec_fname, viennacl_root):
     config = ConfigObj(config_fname, configspec=spec_fname)
-    map_to_list = lambda T: list(map(T[0], T[1] if isinstance(T[1], list) else [T[1]]))
+    def map_to_list(T, x):
+        return list(map(T, x if isinstance(x, list) else [x]))
     for operation in ['vector-axpy', 'matrix-axpy', 'row-wise-reduction', 'matrix-product']:
         if operation in config:
             p = config[operation]
             confdevices = p['devices']
             devices = utils.DEVICES_PRESETS[confdevices] if confdevices in utils.DEVICES_PRESETS else [utils.all_devices[int(i)] for i in confdevices]
-            precisions =  map_to_list((str, p['precision']))
+            precisions =  map_to_list(str, p['precision'])
             datatypes = [DATATYPES[k] for k in precisions]
             #Iterate through the datatypes and the devices
             for datatype, device in itertools.product(datatypes, devices):
@@ -68,18 +64,23 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                     sys.stderr.write('Warning : The device ' + device.name + ' does not support double precision! Skipping ...')
                     continue
                 #Helper
-                def execute(statement, other_params, sizes, fname = os.devnull):
+                def execute(device, statement, other_params, sizes, fname = os.devnull, parameters = None):
+                    if parameters:
+                        TemplateType = TYPES[operation]['template']
+                        return tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),*other_params), statement, device)
                     print('-----')
                     print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(other_params), '[' + device.name, '(' + device.platform.name + ')] for sizes', sizes))))
                     with open(fname, "w+") as archive:
-                        return optimize.genetic(statement, ctx, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
-                                      TYPES[operation]['parameter-names'], lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
-                s = map_to_list((int, p['size']))
+                        return optimize.genetic(statement, device, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
+                                                lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
                 #Vector AXPY
                 if operation=='vector-axpy':
-                    x = vcl.Vector(s[0], context=ctx, dtype=datatype)
-                    y = vcl.Vector(s[0], context=ctx, dtype=datatype)
-                    execute(vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y)), ())
+                    def execution_handler(sizes, fname=os.devnull, parameters=None):
+                        x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
+                        y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
+                        return execute(device, vcl.Statement(vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y))), (), sizes, fname, parameters)
+                    if 'size' in p:
+                        profile = execution_handler(map_to_list(int, p['size']))
                 #Matrix AXPY
                 if operation=='matrix-axpy':
                     A = vcl.Matrix(s, context=ctx, dtype=datatype)
@@ -112,13 +113,12 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                             beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
                             C = vcl.Matrix((sizes[0], sizes[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
                             statement = vcl.Statement(vcl.Assign(C,LHS*RHS*alpha + C*beta))
-                            if parameters:
-                                TemplateType = TYPES[operation]['template']
-                                return tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),A_trans,B_trans), statement, device)
-                            else:
-                                return execute(statement,(A_trans, B_trans), sizes, fname)
-                        X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler)
-                        train_model(X, Y, profiles)
+                            return execute(device, statement,(A_trans, B_trans), sizes, fname, parameters)
+                        if 'size' in p:
+                            profile = execution_handler(map(int, p['size']))
+                        else:
+                            X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler)
+                            train_model(X, Y, profiles)
 
 
 

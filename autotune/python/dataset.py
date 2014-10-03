@@ -28,7 +28,7 @@ def resample(X, tbincount, densities, step):
     return x.astype(int)
 
 def generate_dataset(TemplateType, execution_handler):
-    I = 10
+    I = 50
     step = 64
     path = "./data"
 
@@ -47,13 +47,13 @@ def generate_dataset(TemplateType, execution_handler):
     # densities = [KernelDensity(kernel='gaussian', bandwidth=2*step).fit(X[t==i,:]) for i in range(int(max(t))+1)];
     #
     # print "Generating the dataset..."
-    # N = 1000
+    # N = 10000
     # Y = np.empty((N, len(profiles)))
     # X = np.empty((N,3))
     # t = []
     #
     # for i in range(N):
-    #     x = resample(X, np.bincount(t), densities, step)
+    #     x = resample(X, [], [], step)
     #     for j,y in enumerate(profiles):
     #         T = execution_handler(x, os.devnull, decode(map(int, y)))
     #         Y[i,j] = 2*1e-9*x[0]*x[1]*x[2]/T
@@ -61,6 +61,9 @@ def generate_dataset(TemplateType, execution_handler):
     #     X[i,:] = x
     #     t = np.argmax(Y[:i+1,], axis=1)
     #     densities[idx].fit(X[t==idx,:])
+    #     if i%10==0:
+    #         sys.stdout.write('%d data points generated\r'%i)
+    #         sys.stdout.flush()
     #
     # np.savetxt(os.path.join(path,"profiles.csv"), profiles)
     # np.savetxt(os.path.join(path,"X.csv"), X)

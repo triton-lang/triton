@@ -33,16 +33,20 @@ def b_gray_to_bin(A='00000000', endian='big'):
 
 class GeneticOperators(object):
 
-    def __init__(self, device, statement, parameter_names, TemplateType, build_template, out):
+    def __init__(self, device, statement, TemplateType, build_template, out):
         self.device = device
         self.statement = statement
-        self.parameter_names = parameter_names
         self.TemplateType = TemplateType
         self.ParameterType = TemplateType.Parameters
         self.build_template = build_template
         self.cache = {}
         self.indpb = 0.05
         self.out = out
+
+        self.genome_info = {
+                            vcl.atidlas.VectorAxpyTemplate: [3,4,4,vcl.atidlas.FetchingPolicy],
+                            vcl.atidlas.MatrixProductTemplate: [3,3,3,3,3,3,3,vcl.atidlas.FetchingPolicy,vcl.atidlas.FetchingPolicy,3]
+                           }[TemplateType]
 
         creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
         creator.create("Individual", list, fitness=creator.FitnessMin)
@@ -54,35 +58,39 @@ class GeneticOperators(object):
         self.toolbox.register("mutate", self.mutate)
         self.toolbox.register("select", deap_tools.selNSGA2)
 
-    @staticmethod
-    def decode(s):
+    def decode(self, genome):
         FetchingPolicy = vcl.atidlas.FetchingPolicy
         fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED]
-        fetchA = fetch[s[0]]
-        fetchB = fetch[s[1]]
-        bincode = ''.join(s[2:])
-        decode_element = lambda x:2**int(b_gray_to_bin(x), 2)
-        simd = decode_element(bincode[0:3])
-        ls0 = decode_element(bincode[2:5])
-        ls1 = decode_element(bincode[5:8])
-        kL = decode_element(bincode[8:11])
-        mS = decode_element(bincode[11:14])
-        kS = decode_element(bincode[14:17])
-        nS = decode_element(bincode[17:20])
-        if fetchA==FetchingPolicy.FETCH_FROM_LOCAL or fetchB==FetchingPolicy.FETCH_FROM_LOCAL:
-            lf0 = decode_element(bincode[20:23])
-            lf1 = ls0*ls1/lf0
-        else:
-            lf0, lf1 = 0, 0
-        return [simd, ls0, kL, ls1, mS, kS, nS, fetchA, fetchB, lf0, lf1]
+        decode_element = lambda x:2**int(b_gray_to_bin(''.join(x)), 2)
+        result = []
+        offset = 0
+        for x in self.genome_info:
+            if x==vcl.atidlas.FetchingPolicy:
+                result.append(fetch[genome[offset]])
+                offset = offset + 1
+            else:
+                result.append(decode_element(genome[offset:offset+x]))
+                offset = offset + x
+        #GEMM peculiarities
+        if self.TemplateType==vcl.atidlas.MatrixProductTemplate:
+            if FetchingPolicy.FETCH_FROM_LOCAL in result:
+                lf1 = result[1]*result[3]/result[9]
+            else:
+                result[9] = 0
+                lf1 = 0
+            result.append(lf1)
+        return result
 
     def init(self, N):
         result = []
-        fetchcount = [0, 0, 0]
         while len(result) < N:
             while True:
-                fetch = random.randint(0,2)
-                bincode = [fetch, fetch] + [str(random.randint(0,1)) for i in range(23)]
+                bincode = []
+                for x in self.genome_info:
+                    if x==vcl.atidlas.FetchingPolicy:
+                        bincode = bincode + [random.randint(0,2)]
+                    else:
+                        bincode = bincode + [str(random.randint(0,1)) for i in range(x)]
                 parameters = self.decode(bincode)
                 template = self.build_template(self.TemplateType.Parameters(*parameters))
                 registers_usage = template.registers_usage(vcl.atidlas.StatementsTuple(self.statement))/4
@@ -90,22 +98,18 @@ class GeneticOperators(object):
                 local_size = template.parameters.local_size_0*template.parameters.local_size_1
                 occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
                 if not tools.skip(template, self.statement, self.device):
-                    fetchcount[fetch] = fetchcount[fetch] + 1
-                    if max(fetchcount) - min(fetchcount) <= 1:
-                        result.append(creator.Individual(bincode))
-                        break
-                    else:
-                        fetchcount[fetch] = fetchcount[fetch] - 1
+                    result.append(creator.Individual(bincode))
+                    break
         return result
 
     def mutate(self, individual):
         while True:
             new_individual = copy.deepcopy(individual)
             for i in range(len(new_individual)):
-                if i < 2 and random.random() < self.indpb:
+                if isinstance(individual[i], int) and random.random() < self.indpb:
                     while new_individual[i] == individual[i]:
                         new_individual[i] = random.randint(0, 2)
-                elif i >= 2 and random.random() < self.indpb:
+                elif not isinstance(individual[i], int) and random.random() < self.indpb:
                     new_individual[i] = '1' if new_individual[i]=='0' else '0'
             parameters = self.decode(new_individual)
             template = self.build_template(self.TemplateType.Parameters(*parameters))
@@ -176,7 +180,7 @@ class GeneticOperators(object):
             population[:] = self.toolbox.select(population + offspring, mu)
             #Update
             gen = gen + 1
-            best_profile = '(%s)'%','.join(map(str,GeneticOperators.decode(hof[0])));
+            best_profile = '(%s)'%','.join(map(str,self.decode(hof[0])));
             best_performance = compute_perf(hof[0].fitness.values[0])
             sys.stdout.write('Time %d | Best %d %s [ for %s ]\r'%(time.time() - start_time, best_performance, perf_metric, best_profile))
             sys.stdout.flush()
