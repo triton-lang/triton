@@ -8,7 +8,7 @@ from pybrain.supervised.trainers import BackpropTrainer
 from pybrain.structure 			 import LinearLayer, TanhLayer, SigmoidLayer, SoftmaxLayer, FeedForwardNetwork, BiasUnit
 from pybrain.tools.neuralnets import NNregression, Trainer
 
-def train_model(X, Y, profiles):
+def train_model(X, Y, profiles, metric):
     #Preprocessing
     Xmean = np.mean(X, axis=0)
     Xstd = np.std(X, axis=0)
@@ -43,7 +43,7 @@ def train_model(X, Y, profiles):
     np.set_printoptions(precision=2)
     print("-----------------")
     print("Average testing speedup : %f (Optimal : %f)"%(sp.stats.gmean(speedups), sp.stats.gmean(optspeedups)))
-    print("Average GFLOP/s : %f (Default %f, Optimal %f)"%(np.mean(np.multiply(GFlops,speedups)), np.mean(GFlops), np.mean(np.multiply(GFlops,optspeedups))))
-    print("Minimum speedup is %f wrt %i GFlops"%(np.min(speedups), GFlops[np.argmin(speedups)]))
-    print("Maximum speedup is %f wrt %i GFlops for %s"%(np.max(speedups), GFlops[np.argmax(speedups)], X[np.argmax(speedups)]*Xstd+Xmean))
+    print("Average %s: %f (Default %f, Optimal %f)"%(metric, np.mean(np.multiply(GFlops,speedups)), np.mean(GFlops), np.mean(np.multiply(GFlops,optspeedups))))
+    print("Minimum speedup is %f wrt %i %s"%(np.min(speedups), GFlops[np.argmin(speedups)], metric))
+    print("Maximum speedup is %f wrt %i %s"%(np.max(speedups), GFlops[np.argmax(speedups)], metric))
     print("--------")

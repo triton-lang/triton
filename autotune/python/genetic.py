@@ -40,13 +40,15 @@ class GeneticOperators(object):
         self.ParameterType = TemplateType.Parameters
         self.build_template = build_template
         self.cache = {}
-        self.indpb = 0.05
         self.out = out
 
         self.genome_info = {
                             vcl.atidlas.VectorAxpyTemplate: [3,4,4,vcl.atidlas.FetchingPolicy],
+                            vcl.atidlas.MatrixAxpyTemplate: [3,3,3,3,3,vcl.atidlas.FetchingPolicy],
+                            vcl.atidlas.RowWiseReductionTemplate: [3,3,3,4,vcl.atidlas.FetchingPolicy],
                             vcl.atidlas.MatrixProductTemplate: [3,3,3,3,3,3,3,vcl.atidlas.FetchingPolicy,vcl.atidlas.FetchingPolicy,3]
                            }[TemplateType]
+        self.indpb = 1.0/sum([1 if x==vcl.atidlas.FetchingPolicy else x for x in self.genome_info])
 
         creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
         creator.create("Individual", list, fitness=creator.FitnessMin)
@@ -149,7 +151,7 @@ class GeneticOperators(object):
             ind.fitness.values = fit
         hof.update(population)
 
-        while time.time() - start_time < maxtime:
+        while time.time() - start_time < maxtime and gen < maxgen:
             # Vary the population
             offspring = []
             for _ in xrange(mu):
@@ -166,9 +168,8 @@ class GeneticOperators(object):
                     offspring.append(ind)
                 else:                           # Apply reproduction
                     offspring.append(random.choice(population))
-
-            #~ for x in offspring:
-                    #~ print self.decode(x)
+            #for x in offspring:
+                    #print self.decode(x)
             # Evaluate the individuals with an invalid fitness
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
             fitnesses = self.toolbox.map(self.evaluate, invalid_ind)
@@ -180,9 +181,9 @@ class GeneticOperators(object):
             population[:] = self.toolbox.select(population + offspring, mu)
             #Update
             gen = gen + 1
-            best_profile = '(%s)'%','.join(map(str,self.decode(hof[0])));
+            best_profile = '(%s)'%','.join(map(str,self.decode(hof[0])))
             best_performance = compute_perf(hof[0].fitness.values[0])
-            sys.stdout.write('Time %d | Best %d %s [ for %s ]\r'%(time.time() - start_time, best_performance, perf_metric, best_profile))
+            sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\r'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
             sys.stdout.flush()
         sys.stdout.write('\n')
         return self.decode(hof[0])

@@ -8,6 +8,7 @@ from external.configobj import ConfigObj
 
 import pyopencl as cl
 import pyviennacl as vcl
+import numpy as np
 from pyviennacl import backend
 from pyviennacl import opencl
 from pyviennacl import atidlas
@@ -73,32 +74,45 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                     with open(fname, "w+") as archive:
                         return optimize.genetic(statement, device, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
                                                 lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
+                #Helper
+                def tune(execution_handler, nTuning, nDataPoints, draw):
+                    if 'size' in p:
+                        profile = execution_handler(map_to_list(int, p['size']))
+                    else:
+                        def compute_perf(x, t):
+                            return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
+                        X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler, nTuning, nDataPoints, compute_perf, draw)
+                        train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
+
                 #Vector AXPY
                 if operation=='vector-axpy':
                     def execution_handler(sizes, fname=os.devnull, parameters=None):
                         x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                         y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                         return execute(device, vcl.Statement(vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y))), (), sizes, fname, parameters)
-                    if 'size' in p:
-                        profile = execution_handler(map_to_list(int, p['size']))
+                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=10, high=100000, size=1))
                 #Matrix AXPY
                 if operation=='matrix-axpy':
-                    A = vcl.Matrix(s, context=ctx, dtype=datatype)
-                    B = vcl.Matrix(s, context=ctx, dtype=datatype)
-                    execute(A+B, ())
+                    def execution_handler(sizes, fname=os.devnull, parameters=None):
+                        A = vcl.Matrix(sizes, context=ctx, dtype=datatype)
+                        B = vcl.Matrix(sizes, context=ctx, dtype=datatype)
+                        return execute(device, vcl.Statement(A+B), (), sizes, fname, parameters)
+                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=5, high=100, size=2))
                 #Row-wise reduction
                 if operation=='row-wise-reduction':
-                    layouts = map_to_list((str,p['layout']))
+                    layouts = map_to_list(str,p['layout'])
                     if 'all' in layouts:
                         layouts = ['N', 'T']
                     for A_trans in layouts:
-                        A = vcl.Matrix(s if A_trans=='N' else s[::-1], context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
-                        x = vcl.Vector(s[1] if A_trans=='N' else s[0], context=ctx, dtype=datatype)
-                        LHS = A if A_trans=='N' else A.T
-                        execute(LHS*x, ())
+                        def execution_handler(sizes, fname=os.devnull, parameters=None):
+                            A = vcl.Matrix(sizes if A_trans=='N' else sizes[::-1], context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
+                            x = vcl.Vector(sizes[1] if A_trans=='N' else sizes[0], context=ctx, dtype=datatype)
+                            LHS = A if A_trans=='N' else A.T
+                            execute(device, vcl.Statement(LHS*x), (), sizes, fname, parameters)
+                        tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=5, high=100, size=2))
                 #Matrix Product
                 if operation=='matrix-product':
-                    layouts = map_to_list((str,p['layout']))
+                    layouts = map_to_list(str,p['layout'])
                     if 'all' in layouts:
                         layouts = ['NN', 'NT', 'TN', 'TT']
                     for layout in layouts:
@@ -114,11 +128,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                             C = vcl.Matrix((sizes[0], sizes[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
                             statement = vcl.Statement(vcl.Assign(C,LHS*RHS*alpha + C*beta))
                             return execute(device, statement,(A_trans, B_trans), sizes, fname, parameters)
-                        if 'size' in p:
-                            profile = execution_handler(map(int, p['size']))
-                        else:
-                            X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler)
-                            train_model(X, Y, profiles)
+                        tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=1, high=40, size=3))
 
 
 
