@@ -3,7 +3,6 @@ import sys
 import re
 import random
 import numpy as np
-from sklearn.neighbors.kde import KernelDensity
 from pyviennacl.atidlas import FetchingPolicy
 
 def resample(X, draw):
