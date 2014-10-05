@@ -44,6 +44,7 @@ class GeneticOperators(object):
 
         self.genome_info = {
                             vcl.atidlas.VectorAxpyTemplate: [3,4,4,vcl.atidlas.FetchingPolicy],
+                            vcl.atidlas.ReductionTemplate: [3,4,4,vcl.atidlas.FetchingPolicy],
                             vcl.atidlas.MatrixAxpyTemplate: [3,3,3,3,3,vcl.atidlas.FetchingPolicy],
                             vcl.atidlas.RowWiseReductionTemplate: [3,3,3,4,vcl.atidlas.FetchingPolicy],
                             vcl.atidlas.MatrixProductTemplate: [3,3,3,3,3,3,3,vcl.atidlas.FetchingPolicy,vcl.atidlas.FetchingPolicy,3]

@@ -33,7 +33,7 @@ TYPES = { 'vector-axpy': {'template':vcl.atidlas.VectorAxpyTemplate,
                           'perf-measure':'GB/s'},
 
           'reduction': {'template':vcl.atidlas.ReductionTemplate,
-                        'perf-index':lambda x: 2*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
+                        'perf-index':lambda x: 2*x[0]*x[1][0]/x[2]*1e-9,
                         'perf-measure':'GB/s'},
 
           'row-wise-reduction': {'template':vcl.atidlas.RowWiseReductionTemplate,
@@ -48,7 +48,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
     config = ConfigObj(config_fname, configspec=spec_fname)
     def map_to_list(T, x):
         return list(map(T, x if isinstance(x, list) else [x]))
-    for operation in ['vector-axpy', 'matrix-axpy', 'row-wise-reduction', 'matrix-product']:
+    for operation in ['vector-axpy', 'matrix-axpy', 'reduction', 'row-wise-reduction', 'matrix-product']:
         if operation in config:
             p = config[operation]
             confdevices = p['devices']
@@ -96,6 +96,14 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                         y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                         z = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                         return execute(device, vcl.Assign(z, vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y))), (), sizes, fname, parameters)
+                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
+                #Reduction
+                if operation=='reduction':
+                    def execution_handler(sizes, fname=os.devnull, parameters=None):
+                        x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
+                        y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
+                        s = vcl.Scalar(0, context=ctx, dtype=datatype)
+                        return execute(device, vcl.Assign(s, vcl.Dot(x,y)), (), sizes, fname, parameters)
                     tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
                 #Matrix AXPY
                 if operation=='matrix-axpy':
