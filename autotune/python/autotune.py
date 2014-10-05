@@ -15,9 +15,6 @@ from pyviennacl import atidlas
 from dataset import generate_dataset
 from model import train_model
 import tools
-
-import utils
-import vclio
 import optimize
 import sys
 
@@ -52,7 +49,13 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
         if operation in config:
             p = config[operation]
             confdevices = p['devices']
-            devices = utils.DEVICES_PRESETS[confdevices] if confdevices in utils.DEVICES_PRESETS else [utils.all_devices[int(i)] for i in confdevices]
+            all_devices = [d for platform in cl.get_platforms() for d in platform.get_devices()]
+            DEVICES_PRESETS = {'all': all_devices,
+                               'gpus': [d for d in all_devices if d.type==cl.device_type.GPU],
+                               'cpus': [d for d in all_devices if d.type==cl.device_type.CPU],
+                               'accelerators': [d for d in all_devices if d.type==cl.device_type.ACCELERATOR]
+            }
+            devices = DEVICES_PRESETS[confdevices] if confdevices in DEVICES_PRESETS else [all_devices[int(i)] for i in confdevices]
             precisions =  map_to_list(str, p['precision'])
             if 'all' in precisions:
                 precisions = ['single','double']
@@ -162,7 +165,7 @@ if __name__ == "__main__":
         print("----------------")
         devices = [d for platform in cl.get_platforms() for d in platform.get_devices()]
         for (i, d) in enumerate(devices):
-            print('Device', i, ':', utils.DEVICE_TYPE_PREFIX[d.type].upper() + ':', d.name, 'on', d.platform.name)
+            print('Device', i, ':', tools.DEVICE_TYPE_PREFIX[d.type].upper() + ':', d.name, 'on', d.platform.name)
         print("----------------")
     else:
         print("------")
