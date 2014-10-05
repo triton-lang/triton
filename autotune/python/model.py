@@ -2,11 +2,6 @@ from sklearn import *;
 from sklearn import ensemble;
 import numpy as np
 import scipy as sp
-from pybrain.datasets import SupervisedDataSet
-from pybrain.tools.shortcuts     import buildNetwork
-from pybrain.supervised.trainers import BackpropTrainer
-from pybrain.structure 			 import LinearLayer, TanhLayer, SigmoidLayer, SoftmaxLayer, FeedForwardNetwork, BiasUnit
-from pybrain.tools.neuralnets import NNregression, Trainer
 
 def train_model(X, Y, profiles, metric):
     #Preprocessing
