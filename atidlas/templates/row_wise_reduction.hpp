@@ -110,7 +110,7 @@ private:
           str[0] = "#namereg";
         else
           for (unsigned int a = 0; a < simd_width; ++a)
-            str[a] = "#namereg.s" + to_string(a);
+            str[a] = append_simd_suffix("#namereg.s",a);
 
 
         for (unsigned int k = 0; k < exprs.size(); ++k)

@@ -54,6 +54,8 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
             confdevices = p['devices']
             devices = utils.DEVICES_PRESETS[confdevices] if confdevices in utils.DEVICES_PRESETS else [utils.all_devices[int(i)] for i in confdevices]
             precisions =  map_to_list(str, p['precision'])
+            if 'all' in precisions:
+                precisions = ['single','double']
             datatypes = [DATATYPES[k] for k in precisions]
             #Iterate through the datatypes and the devices
             for datatype, device in itertools.product(datatypes, devices):
@@ -64,20 +66,23 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                 if datatype is vcl.float64 and not device.double_fp_config:
                     sys.stderr.write('Warning : The device ' + device.name + ' does not support double precision! Skipping ...')
                     continue
-                #Helper
-                def execute(device, statement, other_params, sizes, fname = os.devnull, parameters = None):
+                #Helper for execution
+                def execute(device, node, other_params, sizes, fname = os.devnull, parameters = None):
                     if parameters:
                         TemplateType = TYPES[operation]['template']
                         return tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),*other_params), statement, device)
                     print('-----')
                     print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(other_params), '[' + device.name, '(' + device.platform.name + ')] for sizes', sizes))))
                     with open(fname, "w+") as archive:
-                        return optimize.genetic(statement, device, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
+                        with vcl.Statement(node) as statement:
+                            return optimize.genetic(statement, device, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
                                                 lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
-                #Helper
-                def tune(execution_handler, nTuning, nDataPoints, draw):
+                #Helper for tuning
+                def tune(execution_handler, nTuning, nDataPoints, draw, additional_parameters):
                     if 'size' in p:
                         profile = execution_handler(map_to_list(int, p['size']))
+                        if 'viennacl-src-root' in config:
+                            tools.update_viennacl_headers(config['viennacl-src-root'],device,datatype,operation,additional_parameters,profile)
                     else:
                         def compute_perf(x, t):
                             return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
@@ -89,15 +94,17 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                     def execution_handler(sizes, fname=os.devnull, parameters=None):
                         x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                         y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
-                        return execute(device, vcl.Statement(vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y))), (), sizes, fname, parameters)
-                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=10, high=100000, size=1))
+                        z = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
+                        return execute(device, vcl.Assign(z, vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y))), (), sizes, fname, parameters)
+                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
                 #Matrix AXPY
                 if operation=='matrix-axpy':
                     def execution_handler(sizes, fname=os.devnull, parameters=None):
                         A = vcl.Matrix(sizes, context=ctx, dtype=datatype)
                         B = vcl.Matrix(sizes, context=ctx, dtype=datatype)
-                        return execute(device, vcl.Statement(A+B), (), sizes, fname, parameters)
-                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=5, high=100, size=2))
+                        C = vcl.Matrix(sizes, context=ctx, dtype=datatype)
+                        return execute(device, vcl.Assign(C,A+B), (), sizes, fname, parameters)
+                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=5, high=100, size=2), ())
                 #Row-wise reduction
                 if operation=='row-wise-reduction':
                     layouts = map_to_list(str,p['layout'])
@@ -107,9 +114,10 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                         def execution_handler(sizes, fname=os.devnull, parameters=None):
                             A = vcl.Matrix(sizes if A_trans=='N' else sizes[::-1], context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
                             x = vcl.Vector(sizes[1] if A_trans=='N' else sizes[0], context=ctx, dtype=datatype)
+                            y = vcl.Vector(sizes[0] if A_trans=='N' else sizes[1], context=ctx, dtype=datatype)
                             LHS = A if A_trans=='N' else A.T
-                            execute(device, vcl.Statement(LHS*x), (), sizes, fname, parameters)
-                        tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=5, high=100, size=2))
+                            return execute(device, vcl.Assign(y, LHS*x), (), sizes, fname, parameters)
+                        tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=5, high=100, size=2), (A_trans,))
                 #Matrix Product
                 if operation=='matrix-product':
                     layouts = map_to_list(str,p['layout'])
@@ -126,9 +134,8 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                             alpha = vcl.HostScalar(1.0,  context=ctx, dtype = datatype)
                             beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
                             C = vcl.Matrix((sizes[0], sizes[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
-                            statement = vcl.Statement(vcl.Assign(C,LHS*RHS*alpha + C*beta))
-                            return execute(device, statement,(A_trans, B_trans), sizes, fname, parameters)
-                        tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=1, high=40, size=3))
+                            return execute(device, vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans, B_trans), sizes, fname, parameters)
+                        tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=1, high=40, size=3),(layout[0], layout[1]))
 
 
 
