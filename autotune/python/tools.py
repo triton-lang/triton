@@ -67,13 +67,40 @@ class PhysicalLimitsNV:
 
 class PhysicalLimitsAMD:
     def __init__(self, dev):
+
+        infos =\
+        {
+            #HD5000
+            'Cedar': {'arch': 'VLIW', 'WFmax_cu': 96, 'LDS_cu': 32768, 'GPR_cu': 8192},
+            'Redwood': {'arch': 'VLIW', 'WFmax_cu': 62, 'LDS_cu': 32768, 'GPR_cu': 16384},
+            'Juniper': {'arch': 'VLIW', 'WFmax_cu': 24.8, 'LDS_cu': 32768, 'GPR_cu': 16384},
+            'Cypress': {'arch': 'VLIW', 'WFmax_cu': 27.6, 'LDS_cu': 32768, 'GPR_cu': 16384},
+            'Hemlock': {'arch': 'VLIW', 'WFmax_cu': 24.8, 'LDS_cu': 32768, 'GPR_cu': 16384},
+
+            #HD6000
+            'Seymour': {'arch': 'VLIW', 'WFmax_cu': 96, 'LDS_cu': 32768, 'GPR_cu': 16384},
+            'Caicos': {'arch': 'VLIW', 'WFmax_cu': 96, 'LDS_cu': 32768, 'GPR_cu': 16384},
+            'Turks': {'arch': 'VLIW', 'WFmax_cu': 41.3, 'LDS_cu': 32768, 'GPR_cu': 16384},
+            'Whistler': {'arch': 'VLIW', 'WFmax_cu': 41.3, 'LDS_cu': 32768, 'GPR_cu': 16384},
+            'Bart': {'arch': 'VLIW', 'WFmax_cu': 49.6, 'LDS_cu': 32768, 'GPR_cu': 16384},
+
+            #HD7000
+            'Capeverde': {'arch': 'GCN', 'WFmax_cu': 40, 'LDS_cu': 65536, 'GPR_cu': 65536},
+            'Pitcairn': {'arch': 'GCN', 'WFmax_cu': 40, 'LDS_cu': 65536, 'GPR_cu': 65536},
+            'Bonaire': {'arch': 'GCN', 'WFmax_cu': 40, 'LDS_cu': 65536, 'GPR_cu': 65536},
+            'Tahiti': {'arch': 'GCN', 'WFmax_cu': 40, 'LDS_cu': 65536, 'GPR_cu': 65536},
+
+            #Rx 200
+            'Oland': {'arch': 'GCN', 'WFmax_cu': 40, 'LDS_cu': 65536, 'GPR_cu': 65536},
+            'Tonga': {'arch': 'GCN', 'WFmax_cu': 40, 'LDS_cu': 65536, 'GPR_cu': 65536},
+            'Hawaii': {'arch': 'GCN', 'WFmax_cu': 40, 'LDS_cu': 65536, 'GPR_cu': 65536}
+        }
+
         self.wavefront_size = 64
-        WFmax_cu = {'Cypress': 27.6}
-        LDS_cu = {'Cypress': 32768}
-        GPR_cu = {'Cypress': 16384}
-        self.WFmax_cu = WFmax_cu[dev.name]
-        self.LDS_cu = LDS_cu[dev.name]
-        self.GPR_cu = GPR_cu[dev.name]
+        self.WFmax_cu = infos[dev.name]['WFmax_cu']
+        self.LDS_cu = infos[dev.name]['LDS_cu']
+        self.GPR_cu = infos[dev.name]['GPR_cu']
+        self.arch =  infos[dev.name]['arch']
         pass
 
 def _int_floor(value, multiple_of=1):
@@ -91,49 +118,53 @@ def _int_ceiling(value, multiple_of=1):
 class OccupancyRecord:
 
     def init_nvidia(self, dev, threads, shared_mem, registers):
-        physical_limits = PhysicalLimitsNV(dev)
+        pl = PhysicalLimitsAMD(dev)
         limits = []
-        allocated_warps =  max(1,_int_ceiling(threads/physical_limits.threads_per_warp))
-        max_warps_per_mp = physical_limits.warps_per_mp
-        limits.append((min(physical_limits.thread_blocks_per_mp, _int_floor(max_warps_per_mp/allocated_warps)), 'warps'))
+        allocated_warps =  max(1,_int_ceiling(threads/pl.threads_per_warp))
+        max_warps_per_mp = pl.warps_per_mp
+        limits.append((min(pl.thread_blocks_per_mp, _int_floor(max_warps_per_mp/allocated_warps)), 'warps'))
 
         if registers>0:
-            if registers > physical_limits.reg_per_thread:
+            if registers > pl.reg_per_thread:
                 limits.append((0, 'registers'))
             else:
                 allocated_regs = {'warp': allocated_warps,
-                                  'block': _int_ceiling(_int_ceiling(allocated_warps, physical_limits.warp_alloc_granularity)*registers*physical_limits.threads_per_warp,allocated_warps)}[physical_limits.reg_alloc_granularity]
-                max_reg_per_mp = {'warp': _int_floor(physical_limits.num_32b_reg_per_mp/_int_ceiling(registers*physical_limits.threads_per_warp, physical_limits.reg_alloc_unit_size), physical_limits.warp_alloc_granularity),
-                                  'block':physical_limits.num_32b_reg_per_mp}[physical_limits.reg_alloc_granularity]
+                                  'block': _int_ceiling(_int_ceiling(allocated_warps, pl.warp_alloc_granularity)*registers*pl.threads_per_warp,allocated_warps)}[pl.reg_alloc_granularity]
+                max_reg_per_mp = {'warp': _int_floor(pl.num_32b_reg_per_mp/_int_ceiling(registers*pl.threads_per_warp, pl.reg_alloc_unit_size), pl.warp_alloc_granularity),
+                                  'block':pl.num_32b_reg_per_mp}[pl.reg_alloc_granularity]
                 limits.append((_int_floor(max_reg_per_mp/allocated_regs), 'registers'))
 
         if shared_mem>0:
-            allocated_shared_mem = _int_ceiling(shared_mem, physical_limits.shared_mem_alloc_unit_size)
-            max_shared_mem_per_mp = physical_limits.shared_mem_per_mp
+            allocated_shared_mem = _int_ceiling(shared_mem, pl.shared_mem_alloc_unit_size)
+            max_shared_mem_per_mp = pl.shared_mem_per_mp
             limits.append((_int_floor(max_shared_mem_per_mp/allocated_shared_mem), 'shared memory'))
 
         limit, limited_by = min(limits)
         warps_per_mp = limit*allocated_warps
-        self.occupancy = 100*warps_per_mp/physical_limits.warps_per_mp
+        self.occupancy = 100*warps_per_mp/pl.warps_per_mp
 
     def init_amd(self, dev, threads, shared_mem, NReg):
-        limits = []
-        physical_limits = PhysicalLimitsAMD(dev)
-        WFmax_cu = physical_limits.WFmax_cu
-        WFsize = physical_limits.wavefront_size
+        pl = PhysicalLimitsAMD(dev)
+        limits = {}
+
+        WFwg = _int_ceiling(threads/pl.WFsize)
         #WFmax without constraint
-        WFwg = _int_ceiling(threads/WFsize)
-        WFcu = WFmax_cu if WFwg > WFmax_cu else _int_floor(WFmax_cu,WFwg)
-        limits.append(WFcu)
+        if pl.arch=='VLIW':
+            limits['wg'] = pl.WFmax_cu if WFwg > pl.WFmax_cu else _int_floor(pl.WFmax_cu,WFwg)
+        else:
+            limits['wg'] = min(16*WFwg, pl.WFmax_cu)
         #WFmax with LDS constraints
         if shared_mem > 0:
-            WGmax = _int_floor(physical_limits.LDS_cu/shared_mem)
-            limits.append(WGmax*WFwg)
+            WGmax = _int_floor(pl.LDS_cu/shared_mem)
+            limits['lds'] = WGmax*WFwg
         #WFmax with GPR constraints
         if NReg > 0:
-            WFgpr =  _int_floor(physical_limits.GPR_cu/(NReg*WFsize))
-            limits.append(_int_floor(WFgpr, WFwg))
-        self.occupancy = 100*min(limits)/physical_limits.WFmax_cu
+            #Amount of work group per CU
+            NRegWG = NReg*pl.WFsize*WFwg
+            WGmax = _int_floor(pl.GPR_cu/NRegWG)
+            limits['gpr'] = WFwg*WGmax
+
+        self.occupancy = 100.0*min(list(limits.values()))/pl.WFmax_cu
 
 
     def __init__(self, dev, threads, shared_mem=0, registers=0):
