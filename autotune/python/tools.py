@@ -96,7 +96,7 @@ class PhysicalLimitsAMD:
             'Hawaii': {'arch': 'GCN', 'WFmax_cu': 40, 'LDS_cu': 65536, 'GPR_cu': 65536}
         }
 
-        self.wavefront_size = 64
+        self.WFsize = 64
         self.WFmax_cu = infos[dev.name]['WFmax_cu']
         self.LDS_cu = infos[dev.name]['LDS_cu']
         self.GPR_cu = infos[dev.name]['GPR_cu']
