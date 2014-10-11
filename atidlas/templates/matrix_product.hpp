@@ -452,9 +452,9 @@ private:
     stream.inc_tab();
 
     ///Fetch LHS to registers
-    stream << "#pragma unroll" << std::endl;
+    stream << "#pragma unroll " << p.kS << std::endl;
     stream << "for(unsigned int kk = 0; kk < " << p.kS << "; kk++)" << std::endl;
-    stream << "#pragma unroll" << std::endl;
+    stream << "#pragma unroll " << p.mS/p.simd_width << std::endl;
     stream << "for(unsigned int mm = 0; mm < " << p.mS/p.simd_width << "; mm++)" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
@@ -490,9 +490,9 @@ private:
     stream.dec_tab();
     stream << "}" << std::endl;
 
-    stream << "#pragma unroll" << std::endl;
+    stream << "#pragma unroll " << p.kS << std::endl;
     stream << "for(unsigned int kk = 0; kk < " << p.kS << "; kk++)" << std::endl;
-    stream << "#pragma unroll" << std::endl;
+    stream << "#pragma unroll " << p.nS/p.simd_width << std::endl;
     stream << "for(unsigned int nn = 0; nn < " << p.nS/p.simd_width << "; nn++)" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
@@ -558,7 +558,7 @@ private:
     }
 
 
-    stream << "#pragma unroll" << std::endl;
+    stream << "#pragma unroll " << p.kS << std::endl;
     stream << "for(unsigned int kk = 0; kk <" << p.kS << "; ++kk)" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();

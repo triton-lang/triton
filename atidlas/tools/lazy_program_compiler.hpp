@@ -22,7 +22,6 @@ namespace atidlas
     {
       if(program_==NULL)
       {
-//        std::cout << src_ << std::endl;
         if (force_recompilation_ && ctx_->has_program(name_))
           ctx_->delete_program(name_);
         if (!ctx_->has_program(name_))
