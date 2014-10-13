@@ -41,8 +41,8 @@ TYPES = { 'vector-axpy': {'template':vcl.atidlas.VectorAxpyTemplate,
                             'perf-index': lambda x: 2*x[1][0]*x[1][1]*x[1][2]/x[2]*1e-9,
                             'perf-measure': 'GFLOP/s'} }
 
-def do_tuning(config_fname, spec_fname, viennacl_root):
-    config = ConfigObj(config_fname, configspec=spec_fname)
+def do_tuning(config_fname, viennacl_root):
+    config = ConfigObj(config_fname)
     def map_to_list(T, x):
         return list(map(T, x if isinstance(x, list) else [x]))
     for operation in ['vector-axpy', 'matrix-axpy', 'reduction', 'row-wise-reduction', 'matrix-product']:
@@ -71,15 +71,15 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                     continue
                 #Helper for execution
                 def execute(device, node, other_params, sizes, fname = os.devnull, parameters = None):
-                    if parameters:
-                        TemplateType = TYPES[operation]['template']
-                        return tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),*other_params), statement, device)
-                    print('-----')
-                    print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(other_params), '[' + device.name, '(' + device.platform.name + ')] for sizes', sizes))))
-                    with open(fname, "w+") as archive:
-                        with vcl.Statement(node) as statement:
+                    with vcl.Statement(node) as statement:
+                        if parameters:
+                            TemplateType = TYPES[operation]['template']
+                            return tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),*other_params), statement, device)
+                        print('-----')
+                        print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(other_params), '[' + device.name, '(' + device.platform.name + ')] for sizes', sizes))))
+                        with open(fname, "w+") as archive:
                             return optimize.genetic(statement, device, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
-                                                lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
+                                                    lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
                 #Helper for tuning
                 def tune(execution_handler, nTuning, nDataPoints, draw, additional_parameters):
                     if 'size' in p:
@@ -89,7 +89,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                     else:
                         def compute_perf(x, t):
                             return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
-                        X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler, nTuning, nDataPoints, compute_perf, draw)
+                        X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler, nTuning, nDataPoints, draw)
                         train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
 
                 #Vector AXPY
@@ -99,7 +99,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                         y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                         z = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                         return execute(device, vcl.Assign(z, vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y))), (), sizes, fname, parameters)
-                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
+                    tune(execution_handler, 30, 1000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
                 #Reduction
                 if operation=='reduction':
                     def execution_handler(sizes, fname=os.devnull, parameters=None):
@@ -107,7 +107,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                         y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                         s = vcl.Scalar(0, context=ctx, dtype=datatype)
                         return execute(device, vcl.Assign(s, vcl.Dot(x,y)), (), sizes, fname, parameters)
-                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
+                    tune(execution_handler, 50, 1000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
                 #Matrix AXPY
                 if operation=='matrix-axpy':
                     def execution_handler(sizes, fname=os.devnull, parameters=None):
@@ -115,7 +115,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                         B = vcl.Matrix(sizes, context=ctx, dtype=datatype)
                         C = vcl.Matrix(sizes, context=ctx, dtype=datatype)
                         return execute(device, vcl.Assign(C,A+B), (), sizes, fname, parameters)
-                    tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=5, high=100, size=2), ())
+                    tune(execution_handler, 50, 1000, lambda : 64*np.random.randint(low=5, high=100, size=2), ())
                 #Row-wise reduction
                 if operation=='row-wise-reduction':
                     layouts = map_to_list(str,p['layout'])
@@ -128,7 +128,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                             y = vcl.Vector(sizes[0] if A_trans=='N' else sizes[1], context=ctx, dtype=datatype)
                             LHS = A if A_trans=='N' else A.T
                             return execute(device, vcl.Assign(y, LHS*x), (), sizes, fname, parameters)
-                        tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=5, high=100, size=2), (A_trans,))
+                        tune(execution_handler, 50, 1000, lambda : 64*np.random.randint(low=5, high=100, size=2), (A_trans,))
                 #Matrix Product
                 if operation=='matrix-product':
                     layouts = map_to_list(str,p['layout'])
@@ -146,7 +146,7 @@ def do_tuning(config_fname, spec_fname, viennacl_root):
                             beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
                             C = vcl.Matrix((sizes[0], sizes[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
                             return execute(device, vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans, B_trans), sizes, fname, parameters)
-                        tune(execution_handler, 50, 10000, lambda : 64*np.random.randint(low=1, high=40, size=3),(layout[0], layout[1]))
+                        tune(execution_handler, 50, 2000, lambda : 64*np.random.randint(low=1, high=40, size=3),(layout[0], layout[1]))
 
 
 
@@ -171,4 +171,4 @@ if __name__ == "__main__":
         print("------")
         print("Auto-tuning")
         print("------")
-        do_tuning(args.config, 'config_spec.ini', args.viennacl_root)
+        do_tuning(args.config, args.viennacl_root)

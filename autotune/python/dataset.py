@@ -14,7 +14,7 @@ def resample(X, draw):
             break
     return x.astype(int)
 
-def generate_dataset(TemplateType, execution_handler, nTuning, nDataPoints, compute_perf, draw):
+def generate_dataset(TemplateType, execution_handler, nTuning, nDataPoints, draw):
 
     print "Getting some good profiles..."
     nDim = draw().size
@@ -39,7 +39,7 @@ def generate_dataset(TemplateType, execution_handler, nTuning, nDataPoints, comp
         x = resample(X, draw)
         for j,y in enumerate(profiles):
             T = execution_handler(x, os.devnull, y)
-            Y[i,j] = compute_perf(x, T)
+            Y[i,j] = T
         idx = np.argmax(Y[i,:])
         X[i,:] = x
         t = np.argmax(Y[:i+1,], axis=1)

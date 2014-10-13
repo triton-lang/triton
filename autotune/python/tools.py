@@ -198,11 +198,11 @@ def benchmark(template, statement, device):
         statement.result.context.finish_all_queues()
         N = 0
         current_time = 0
-        while current_time < 1e-2:
+        while current_time < 1e-1:
             time_before = time.time()
             template.execute(statement,False)
             statement.result.context.finish_all_queues()
-            current_time += time.time() - time_before
+            current_time = current_time + time.time() - time_before
             N+=1
         return current_time/N
 
