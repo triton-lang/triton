@@ -1,4 +1,5 @@
 from __future__ import division
+
 import pyopencl
 import time
 import os
@@ -118,7 +119,7 @@ def _int_ceiling(value, multiple_of=1):
 class OccupancyRecord:
 
     def init_nvidia(self, dev, threads, shared_mem, registers):
-        pl = PhysicalLimitsAMD(dev)
+        pl = PhysicalLimitsNV(dev)
         limits = []
         allocated_warps =  max(1,_int_ceiling(threads/pl.threads_per_warp))
         max_warps_per_mp = pl.warps_per_mp
@@ -168,9 +169,9 @@ class OccupancyRecord:
 
 
     def __init__(self, dev, threads, shared_mem=0, registers=0):
-        if 'Advanced Micro Devices' in dev.vendor:
+        if 'advanced micro devices' in dev.vendor.lower():
             self.init_amd(dev, threads, shared_mem, registers)
-        elif 'NVidia' in dev.vendor:
+        elif 'nvidia' in dev.vendor.lower():
             self.init_nvidia(dev, threads, shared_mem, registers)
 
 
