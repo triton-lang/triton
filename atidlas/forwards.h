@@ -12,6 +12,7 @@
 #include "viennacl/ocl/forwards.h"
 #include "viennacl/scheduler/forwards.h"
 #include "viennacl/backend/mem_handle.hpp"
+#include "viennacl/device_specific/forwards.h"
 
 namespace atidlas
 {
@@ -225,34 +226,7 @@ inline tools::shared_ptr<symbolic_binder> make_binder(binding_policy_t policy)
 template<char C>
 struct char_to_type{ };
 
-class statements_container
-{
-public:
-  typedef std::list<viennacl::scheduler::statement> data_type;
-  enum order_type { SEQUENTIAL, INDEPENDENT };
-
-  statements_container(data_type const & data, order_type order) : data_(data), order_(order)
-  { }
-
-  statements_container(viennacl::scheduler::statement const & s0) : order_(INDEPENDENT)
-  {
-    data_.push_back(s0);
-  }
-
-  statements_container(viennacl::scheduler::statement const & s0, viennacl::scheduler::statement const & s1, order_type order) : order_(order)
-  {
-    data_.push_back(s0);
-    data_.push_back(s1);
-  }
-
-  std::list<viennacl::scheduler::statement> const & data() const { return data_; }
-
-  order_type order() const { return order_; }
-
-private:
-  std::list<viennacl::scheduler::statement> data_;
-  order_type order_;
-};
+typedef viennacl::device_specific::statements_container statements_container;
 
 }
 #endif

@@ -2,9 +2,11 @@ import random
 import time
 import sys
 import tools
-import pyviennacl as vcl
-import numpy as np
 import copy
+
+import numpy as np
+import pyatidlas as atd
+import pyviennacl as vcl
 
 from deap import algorithms
 from deap import base
@@ -43,13 +45,13 @@ class GeneticOperators(object):
         self.out = out
 
         self.genome_info = {
-                            vcl.atidlas.VectorAxpyTemplate: [3,4,4,vcl.atidlas.FetchingPolicy],
-                            vcl.atidlas.ReductionTemplate: [3,4,4,vcl.atidlas.FetchingPolicy],
-                            vcl.atidlas.MatrixAxpyTemplate: [3,3,3,3,3,vcl.atidlas.FetchingPolicy],
-                            vcl.atidlas.RowWiseReductionTemplate: [3,3,3,4,vcl.atidlas.FetchingPolicy],
-                            vcl.atidlas.MatrixProductTemplate: [3,3,3,3,3,3,3,vcl.atidlas.FetchingPolicy,vcl.atidlas.FetchingPolicy,3]
+                            atd.VectorAxpyTemplate: [3,4,4,atd.FetchingPolicy],
+                            atd.ReductionTemplate: [3,4,4,atd.FetchingPolicy],
+                            atd.MatrixAxpyTemplate: [3,3,3,3,3,atd.FetchingPolicy],
+                            atd.RowWiseReductionTemplate: [3,3,3,4,atd.FetchingPolicy],
+                            atd.MatrixProductTemplate: [3,3,3,3,3,3,3,atd.FetchingPolicy,atd.FetchingPolicy,3]
                            }[TemplateType]
-        self.indpb = 1.0/sum([1 if x==vcl.atidlas.FetchingPolicy else x for x in self.genome_info])
+        self.indpb = 1.0/sum([1 if x==atd.FetchingPolicy else x for x in self.genome_info])
 
         creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
         creator.create("Individual", list, fitness=creator.FitnessMin)
@@ -62,20 +64,20 @@ class GeneticOperators(object):
         self.toolbox.register("select", deap_tools.selNSGA2)
 
     def decode(self, genome):
-        FetchingPolicy = vcl.atidlas.FetchingPolicy
+        FetchingPolicy = atd.FetchingPolicy
         fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED]
         decode_element = lambda x:2**int(b_gray_to_bin(''.join(x)), 2)
         result = []
         offset = 0
         for x in self.genome_info:
-            if x==vcl.atidlas.FetchingPolicy:
+            if x==atd.FetchingPolicy:
                 result.append(fetch[genome[offset]])
                 offset = offset + 1
             else:
                 result.append(decode_element(genome[offset:offset+x]))
                 offset = offset + x
         #GEMM peculiarities
-        if self.TemplateType==vcl.atidlas.MatrixProductTemplate:
+        if self.TemplateType==atd.MatrixProductTemplate:
             if FetchingPolicy.FETCH_FROM_LOCAL in result:
                 lf1 = result[1]*result[3]/result[9]
             else:
@@ -90,14 +92,14 @@ class GeneticOperators(object):
             while True:
                 bincode = []
                 for x in self.genome_info:
-                    if x==vcl.atidlas.FetchingPolicy:
+                    if x==atd.FetchingPolicy:
                         bincode = bincode + [random.randint(0,2)]
                     else:
                         bincode = bincode + [str(random.randint(0,1)) for i in range(x)]
                 parameters = self.decode(bincode)
                 template = self.build_template(self.TemplateType.Parameters(*parameters))
-                registers_usage = template.registers_usage(vcl.atidlas.StatementsTuple(self.statement))/4
-                lmem_usage = template.lmem_usage(vcl.atidlas.StatementsTuple(self.statement))
+                registers_usage = template.registers_usage(vcl.pycore.StatementsTuple(self.statement))/4
+                lmem_usage = template.lmem_usage(vcl.pycore.StatementsTuple(self.statement))
                 local_size = template.parameters.local_size_0*template.parameters.local_size_1
                 occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
                 if not tools.skip(template, self.statement, self.device):

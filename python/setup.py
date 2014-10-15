@@ -38,13 +38,16 @@ def main():
         return optlist
 
     cvars = sysconfig.get_config_vars()
-    cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-O', '-Wstrict-prototypes', '-DNDEBUG']))
+    cvars['OPT'] = "-DNDEBUG -O3 " + str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-O', '-Wstrict-prototypes', '-DNDEBUG']))
+    cvars["CFLAGS"] = cvars["BASECFLAGS"] + " " + cvars["OPT"]
 
-    DEFINES = [('VIENNACL_WITH_OPENCL','1')]
-    INCLUDE_DIRS = [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+    DEFINES = [('VIENNACL_WITH_OPENCL',None), ('VIENNACL_WITH_OPENMP', None)]
+    INCLUDE_DIRS = ['${PROJECT_SOURCE_DIR}','/home/philippe/Development/pyviennacl-dev/external/viennacl-dev']
+    LIBRARY_DIRS = ['/home/philippe/Development/pyviennacl-dev/build/lib.linux-x86_64-2.7/pyviennacl/']
 
     setup(
-		name="atidlas",
+		name="pyatidlas",
+		package_dir={ '': '${CMAKE_CURRENT_SOURCE_DIR}' },
 		version=[],
 		description="Auto-tuned input-dependent linear algebra subroutines",
 		author='Philippe Tillet',
@@ -72,20 +75,32 @@ def main():
 		    'Topic :: Scientific/Engineering :: Machine Learning',
 		],
 
-		packages=["atidlas"],
-		ext_package="atidlas",
+		packages=["pyatidlas"],
+		ext_package="pyatidlas",
 		ext_modules=[Extension(
-		    '_atidlas',[os.path.join("src", "_atidlas.cpp")],
+		    '_atidlas',[os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', '_atidlas.cpp')],
 		    extra_compile_args= [],
 		    extra_link_args=[],
 		    define_macros=DEFINES,
 		    undef_macros=[],
 		    include_dirs=INCLUDE_DIRS,
-		    library_dirs=[],
-		    libraries=['OpenCL']
+		    library_dirs=LIBRARY_DIRS,
+		    libraries=['OpenCL', 'boost_python',':_viennacl.so']
 		)],
 		cmdclass={'build_ext': build_ext_subclass}
     )
+
+#from cx_Freeze import setup, Executable
+#buildOptions = dict(packages = [], excludes = ['matplotlib'])
+#base = 'Console'
+#executables = [
+#    Executable('autotune/autotune.py', base=base)
+#]
+#setup(name='atidlas-tune',
+#      version = '1.0',
+#      description = 'Auto-tuning facility for ATIDLAS',
+#      options = dict(build_exe = buildOptions),
+#      executables = executables)
 
 if __name__ == "__main__":
     main()

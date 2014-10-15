@@ -7,7 +7,6 @@ import sys
 
 import pyopencl as cl
 import pyviennacl as vcl
-from pyviennacl.atidlas import StatementsTuple
 
 class PhysicalLimitsNV:
     def __init__(self, dev):
@@ -177,7 +176,7 @@ class OccupancyRecord:
 
 
 def skip(template, statement, device):
-    statements = StatementsTuple(statement)
+    statements = vcl.pycore.StatementsTuple(statement)
     registers_usage = template.registers_usage(statements)/4
     lmem_usage = template.lmem_usage(statements)
     local_size = template.parameters.local_size_0*template.parameters.local_size_1
@@ -187,7 +186,7 @@ def skip(template, statement, device):
     return False
 
 def benchmark(template, statement, device):
-    statements = StatementsTuple(statement)
+    statements = vcl.pycore.StatementsTuple(statement)
     registers_usage = template.registers_usage(statements)/4
     lmem_usage = template.lmem_usage(statements)
     local_size = template.parameters.local_size_0*template.parameters.local_size_1

@@ -4,38 +4,39 @@ import argparse
 import itertools
 import os
 
-from configobj import ConfigObj
-from numpy import random
-
 import pyopencl as cl
 import pyviennacl as vcl
-from pyviennacl import backend, opencl, atidlas
-from dataset import generate_dataset
-from model import train_model
+import pyatidlas as atd
+
 import tools
 import optimize
 import sys
 
+from configobj import ConfigObj
+from numpy import random
+from dataset import generate_dataset
+from model import train_model
+
 DATATYPES = { 'single' : vcl.float32,
               'double' : vcl.float64 }
 
-TYPES = { 'vector-axpy': {'template':vcl.atidlas.VectorAxpyTemplate,
+TYPES = { 'vector-axpy': {'template':atd.VectorAxpyTemplate,
                           'perf-index':lambda x: 3*x[0]*x[1][0]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
-          'matrix-axpy': {'template':vcl.atidlas.MatrixAxpyTemplate,
+          'matrix-axpy': {'template':atd.MatrixAxpyTemplate,
                           'perf-index':lambda x: 3*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
-          'reduction': {'template':vcl.atidlas.ReductionTemplate,
+          'reduction': {'template':atd.ReductionTemplate,
                         'perf-index':lambda x: 2*x[0]*x[1][0]/x[2]*1e-9,
                         'perf-measure':'GB/s'},
 
-          'row-wise-reduction': {'template':vcl.atidlas.RowWiseReductionTemplate,
+          'row-wise-reduction': {'template':atd.RowWiseReductionTemplate,
                                 'perf-index':lambda x: x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
                                 'perf-measure':'GB/s'},
 
-          'matrix-product': {'template':vcl.atidlas.MatrixProductTemplate,
+          'matrix-product': {'template': atd.MatrixProductTemplate,
                             'perf-index': lambda x: 2*x[1][0]*x[1][1]*x[1][2]/x[2]*1e-9,
                             'perf-measure': 'GFLOP/s'} }
 
@@ -149,7 +150,7 @@ def do_tuning(config_fname, viennacl_root):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser();
+    parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest='action')
     print_devices_parser = subparsers.add_parser('list-devices', help='list the devices available')
     tune_parser = subparsers.add_parser('tune', help='tune using a specific configuration file')
@@ -163,7 +164,7 @@ if __name__ == "__main__":
         print("----------------")
         devices = [d for platform in cl.get_platforms() for d in platform.get_devices()]
         for (i, d) in enumerate(devices):
-            print('Device', i, ':', tools.DEVICE_TYPE_PREFIX[d.type].upper() + ':', d.name, 'on', d.platform.name)
+            print 'Device', i, '|',  cl.device_type.to_string(d.type), '|', d.name, 'on', d.platform.name
         print("----------------")
     else:
         print("------")

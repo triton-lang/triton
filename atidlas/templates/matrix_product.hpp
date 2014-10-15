@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "viennacl/scheduler/forwards.h"
+
 #include "viennacl/matrix_def.hpp"
 #include "viennacl/matrix_proxy.hpp"
 #include "viennacl/forwards.h"

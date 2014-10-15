@@ -3,7 +3,6 @@ import sys
 import re
 import random
 import numpy as np
-from pyviennacl.atidlas import FetchingPolicy
 
 def resample(X, draw):
     Xtuples = [tuple(x) for x in X]
