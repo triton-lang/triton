@@ -4,14 +4,12 @@ import argparse
 import itertools
 import os
 
-from external.configobj import ConfigObj
+from configobj import ConfigObj
+from numpy import random
 
 import pyopencl as cl
 import pyviennacl as vcl
-import numpy as np
-from pyviennacl import backend
-from pyviennacl import opencl
-from pyviennacl import atidlas
+from pyviennacl import backend, opencl, atidlas
 from dataset import generate_dataset
 from model import train_model
 import tools

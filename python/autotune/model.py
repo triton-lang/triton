@@ -1,9 +1,8 @@
-from sklearn import *
 from sklearn import tree
 from sklearn import ensemble
 
-import numpy as np
-import scipy as sp
+from numpy import array, bincount, mean, std, max, argmax, min, argmin, median
+from scipy.stats import gmean
 
 
 # def random_forest(Xtr, Ytr):
@@ -62,24 +61,23 @@ import scipy as sp
 def train_model(X, Y, profiles, metric):
     print("Building the model...")
 
-    Xmean = np.mean(X)
-    Xstd = np.std(X)
+    Xmean = mean(X)
+    Xstd = std(X)
     X = (X - Xmean)/Xstd
 
     Y = Y[:, :]
-    Ymax = np.max(Y)
+    Ymax = max(Y)
     Y = Y/Ymax
 
-    ref = np.argmax(np.bincount(np.argmin(Y, axis=1))) #most common profile
+    ref = argmax(bincount(argmin(Y, axis=1))) #most common profile
     cut = int(0.800*X.shape[0]+1)
 
     #Train the model
     clf = ensemble.RandomForestRegressor(10, max_depth=10).fit(X[:cut,:], Y[:cut,:])
 
-    t = np.argmin(clf.predict(X[cut:,:]), axis = 1)
-    s = np.array([y[ref]/y[k] for y,k in zip(Y[cut:,:], t)])
-    # s = np.maximum(s, 1.0)
-    tt = np.argmin(Y[cut:,:], axis = 1)
-    ss = np.array([y[ref]/y[k] for y,k in zip(Y[cut:,:], tt)])
-    print("Testing speedup : mean = %.3f, median = %.3f, min = %.3f,  max %.3f"%(sp.stats.gmean(s), np.median(s), np.min(s), np.max(s)))
-    print("Optimal speedup : mean = %.3f, median = %.3f, min = %.3f,  max %.3f"%(sp.stats.gmean(ss), np.median(ss), np.min(ss), np.max(ss)))
+    t = argmin(clf.predict(X[cut:,:]), axis = 1)
+    s = array([y[ref]/y[k] for y,k in zip(Y[cut:,:], t)])
+    tt = argmin(Y[cut:,:], axis = 1)
+    ss = array([y[ref]/y[k] for y,k in zip(Y[cut:,:], tt)])
+    print("Testing speedup : mean = %.3f, median = %.3f, min = %.3f,  max %.3f"%(gmean(s), median(s), min(s), max(s)))
+    print("Optimal speedup : mean = %.3f, median = %.3f, min = %.3f,  max %.3f"%(gmean(ss), median(ss), min(ss), max(ss)))
