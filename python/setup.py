@@ -42,7 +42,9 @@ def main():
     cvars["CFLAGS"] = cvars["BASECFLAGS"] + " " + cvars["OPT"]
 
     DEFINES = [('VIENNACL_WITH_OPENCL',None), ('VIENNACL_WITH_OPENMP', None)]
-    INCLUDE_DIRS = ['${PROJECT_SOURCE_DIR}','/home/philippe/Development/pyviennacl-dev/external/viennacl-dev']
+    INCLUDE_DIRS = ['/home/philippe/Development/pyviennacl-dev/external/boost-python-ublas-subset/boost_subset/',
+                    '${PROJECT_SOURCE_DIR}',
+                    '/home/philippe/Development/pyviennacl-dev/external/viennacl-dev']
     LIBRARY_DIRS = ['/home/philippe/Development/pyviennacl-dev/build/lib.linux-x86_64-2.7/pyviennacl/']
 
     setup(
@@ -85,7 +87,7 @@ def main():
 		    undef_macros=[],
 		    include_dirs=INCLUDE_DIRS,
 		    library_dirs=LIBRARY_DIRS,
-		    libraries=['OpenCL', 'boost_python',':_viennacl.so']
+		    libraries=['OpenCL',':_viennacl.so']
 		)],
 		cmdclass={'build_ext': build_ext_subclass}
     )
