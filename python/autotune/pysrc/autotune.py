@@ -1,16 +1,12 @@
 from __future__ import division
 
-import argparse
-import itertools
-import os
+import argparse, itertools, os, sys
+import misc_tools, optimize
 
 import pyopencl as cl
 import pyviennacl as vcl
 import pyatidlas as atd
 
-import tools
-import optimize
-import sys
 
 from configobj import ConfigObj
 from numpy import random
@@ -73,7 +69,7 @@ def do_tuning(config_fname, viennacl_root):
                     with vcl.Statement(node) as statement:
                         if parameters:
                             TemplateType = TYPES[operation]['template']
-                            return tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),*other_params), statement, device)
+                            return misc_tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),*other_params), statement, device)
                         print('-----')
                         print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(other_params), '[' + device.name, '(' + device.platform.name + ')] for sizes', sizes))))
                         with open(fname, "w+") as archive:
@@ -84,7 +80,7 @@ def do_tuning(config_fname, viennacl_root):
                     if 'size' in p:
                         profile = execution_handler(map_to_list(int, p['size']))
                         if 'viennacl-src-root' in config:
-                            tools.update_viennacl_headers(config['viennacl-src-root'],device,datatype,operation,additional_parameters,profile)
+                            misc_tools.update_viennacl_headers(config['viennacl-src-root'],device,datatype,operation,additional_parameters,profile)
                     else:
                         def compute_perf(x, t):
                             return TYPES[operation]['perf-index']([datatype().itemsize, x, t])

@@ -1,11 +1,6 @@
-import array
-import numpy as np
-import random
-import sys
-
-import itertools
-import tools
+import array, random, itertools
 import deap.tools
+import numpy as np
 
 from genetic import GeneticOperators
 

@@ -1,8 +1,5 @@
-import random
-import time
-import sys
-import tools
-import copy
+import random, time, sys, copy
+import misc_tools
 
 import numpy as np
 import pyatidlas as atd
@@ -101,8 +98,8 @@ class GeneticOperators(object):
                 registers_usage = template.registers_usage(vcl.pycore.StatementsTuple(self.statement))/4
                 lmem_usage = template.lmem_usage(vcl.pycore.StatementsTuple(self.statement))
                 local_size = template.parameters.local_size_0*template.parameters.local_size_1
-                occupancy_record = tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
-                if not tools.skip(template, self.statement, self.device):
+                occupancy_record = misc_tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
+                if not misc_tools.skip(template, self.statement, self.device):
                     result.append(creator.Individual(bincode))
                     break
         return result
@@ -119,7 +116,7 @@ class GeneticOperators(object):
             parameters = self.decode(new_individual)
             template = self.build_template(self.TemplateType.Parameters(*parameters))
             #print tools.skip(template, self.statement, self.device), parameters
-            if not tools.skip(template, self.statement, self.device):
+            if not misc_tools.skip(template, self.statement, self.device):
                 break
         return new_individual,
 
@@ -128,7 +125,7 @@ class GeneticOperators(object):
             parameters = self.decode(individual)
             template = self.build_template(self.TemplateType.Parameters(*parameters))
             try:
-                tt = tools.benchmark(template, self.statement, self.device)
+                tt = misc_tools.benchmark(template, self.statement, self.device)
                 self.out.write(','.join([str(tt)]+map(str,map(int,parameters)))+'\n')
                 self.cache[tuple(individual)] = tt
             except:

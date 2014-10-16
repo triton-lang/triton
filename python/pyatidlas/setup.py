@@ -40,8 +40,10 @@ def main():
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = "-DNDEBUG -O3 " + str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-O', '-Wstrict-prototypes', '-DNDEBUG']))
     cvars["CFLAGS"] = cvars["BASECFLAGS"] + " " + cvars["OPT"]
-
-    DEFINES = [('VIENNACL_WITH_OPENCL',None), ('VIENNACL_WITH_OPENMP', None)]
+    cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
+    
+    DEFINES = [('VIENNACL_WITH_OPENCL',None), ('VIENNACL_WITH_OPENMP', None),
+               ('boost','pyviennaclboost')]
     INCLUDE_DIRS = ['/home/philippe/Development/pyviennacl-dev/external/boost-python-ublas-subset/boost_subset/',
                     '${PROJECT_SOURCE_DIR}',
                     '/home/philippe/Development/pyviennacl-dev/external/viennacl-dev']
@@ -56,7 +58,7 @@ def main():
 		author_email='ptillet@g.harvard.edu',
 		classifiers=[
 		    'Environment :: Console',
-		    'Development Status :: 5 - Production/Stable',
+		    'Development Status :: 1 - Experimental',
 		    'Intended Audience :: Developers',
 		    'Intended Audience :: Other Audience',
 		    'Intended Audience :: Science/Research',
@@ -91,18 +93,6 @@ def main():
 		)],
 		cmdclass={'build_ext': build_ext_subclass}
     )
-
-#from cx_Freeze import setup, Executable
-#buildOptions = dict(packages = [], excludes = ['matplotlib'])
-#base = 'Console'
-#executables = [
-#    Executable('autotune/autotune.py', base=base)
-#]
-#setup(name='atidlas-tune',
-#      version = '1.0',
-#      description = 'Auto-tuning facility for ATIDLAS',
-#      options = dict(build_exe = buildOptions),
-#      executables = executables)
 
 if __name__ == "__main__":
     main()
