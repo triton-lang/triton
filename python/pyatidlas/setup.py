@@ -82,14 +82,14 @@ def main():
 		packages=["pyatidlas"],
 		ext_package="pyatidlas",
 		ext_modules=[Extension(
-		    '_atidlas',[os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', '_atidlas.cpp')],
+		    '_atidlas',[ os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', '_atidlas.cpp')],
 		    extra_compile_args= [],
-		    extra_link_args=[],
+		    extra_link_args=['-Wl,-soname=_atidlas.so'],
 		    define_macros=DEFINES,
 		    undef_macros=[],
 		    include_dirs=INCLUDE_DIRS,
 		    library_dirs=LIBRARY_DIRS,
-		    libraries=['OpenCL',':_viennacl.so']
+		    libraries=['OpenCL', ':_viennacl.so']
 		)],
 		cmdclass={'build_ext': build_ext_subclass}
     )
