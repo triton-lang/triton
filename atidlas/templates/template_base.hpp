@@ -439,6 +439,23 @@ protected:
       return up_to_internal_size?call_on_vector(node.lhs, internal_size_fun()):call_on_vector(node.lhs, size_fun());
   }
 
+  static std::pair<atidlas_int_t, atidlas_int_t> matrix_size(viennacl::scheduler::statement_node const & node, bool up_to_internal_size)
+  {
+    using namespace tools;
+    if (node.op.type==viennacl::scheduler::OPERATION_BINARY_VECTOR_DIAG_TYPE)
+    {
+      atidlas_int_t is = call_on_vector(node.lhs, internal_size_fun());
+      atidlas_int_t s = call_on_vector(node.lhs, size_fun());
+      return up_to_internal_size?std::make_pair(is,is):std::make_pair(s,s);
+    }
+    else
+    {
+      atidlas_int_t size1 = up_to_internal_size?call_on_matrix(node.lhs, internal_size1_fun()):call_on_matrix(node.lhs, size1_fun());
+      atidlas_int_t size2 = up_to_internal_size?call_on_matrix(node.lhs, internal_size2_fun()):call_on_matrix(node.lhs, size2_fun());
+      return std::make_pair(size1, size2);
+    }
+  }
+
   //NB : templates are not used here because declaring a functor out of the generate() functions would be harder to read
   struct loop_body_base
   {
@@ -498,6 +515,8 @@ public:
 
   virtual unsigned int registers_usage(statements_container const &) const { return 0; }
 
+  virtual std::vector<atidlas_int_t> input_sizes(statements_container const & statements) = 0;
+
   virtual ~template_base(){ }
 
   std::vector<std::string> generate(std::string const & kernel_prefix, statements_container const & statements, viennacl::ocl::device const & device)
@@ -523,6 +542,7 @@ public:
   virtual void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements) = 0;
 
   virtual tools::shared_ptr<template_base> clone() const = 0;
+
 private:
   binding_policy_t binding_policy_;
 };
@@ -561,14 +581,10 @@ public:
   template_base_impl(parameters_type const & parameters, binding_policy_t binding_policy) : template_base(binding_policy), p_(parameters){ }
 
   parameters_type const & parameters() const
-  {
-    return p_;
-  }
+  { return p_; }
 
   tools::shared_ptr<template_base> clone() const
-  {
-    return tools::shared_ptr<template_base>(new TemplateType(*dynamic_cast<TemplateType const *>(this)));
-  }
+  { return tools::shared_ptr<template_base>(new TemplateType(*dynamic_cast<TemplateType const *>(this))); }
 
   /** @brief returns whether or not the profile has undefined behavior on particular device */
   int check_invalid(statements_container const & statements, viennacl::ocl::device const & device) const

@@ -653,7 +653,7 @@ private:
   {
     std::vector<std::string> res;
     res.push_back(generate_impl(kernel_prefix, statements, mappings, false));
-    res.push_back(generate_impl(kernel_prefix, statements, mappings, true));
+    res.push_back(generate_impl(kernel_prefix + "_fb", statements, mappings, true));
     return res;
   }
 
@@ -700,28 +700,23 @@ private:
                                                                           atidlas_int_t s0_0, atidlas_int_t s0_1, atidlas_int_t s1_0, atidlas_int_t s1_1, bool swap)
   {
     viennacl::matrix_base<NumericT> & M = *(element.*ptr);
-    atidlas_int_t start1 = M.start1();
-    atidlas_int_t start2 = M.start2();
-    atidlas_int_t stride1 = M.stride1();
-    atidlas_int_t stride2 = M.stride2();
+    viennacl::slice s0(s0_0, 1, s0_1 - s0_0);
+    viennacl::slice s1(s1_0, 1, s1_1 - s1_0);
     if (swap)
-    {
-      std::swap(start1, start2);
-      std::swap(stride1, stride2);
-    }
-    viennacl::slice s0(start1 + s0_0, stride1, s0_1 - s0_0);
-    viennacl::slice s1(start2 + s1_0, stride2, s1_1 - s1_0);
-    if(swap)
       std::swap(s0, s1);
     return viennacl::matrix_slice<viennacl::matrix_base<NumericT> >(M, s0, s1);
   }
 
   template<class NumericT>
   void enqueue_impl(viennacl::matrix_base<NumericT>* viennacl::scheduler::lhs_rhs_element::*ptr_matrix,
-                    viennacl::scheduler::statement & statement, viennacl::scheduler::lhs_rhs_element & A, viennacl::scheduler::lhs_rhs_element & B, viennacl::scheduler::lhs_rhs_element & C, viennacl::scheduler::lhs_rhs_element & beta,
+                    viennacl::scheduler::statement & statement, atidlas_int_t M, atidlas_int_t N, atidlas_int_t K,
+                    viennacl::scheduler::lhs_rhs_element & A, viennacl::scheduler::lhs_rhs_element & B, viennacl::scheduler::lhs_rhs_element & C, viennacl::scheduler::lhs_rhs_element & beta,
                     NumericT beta_value, std::vector<lazy_program_compiler> & programs, std::string const & kernel_prefix)
   {
     using namespace tools;
+
+    std::string kernel_prefix_fb = kernel_prefix + "_fb";
+
     atidlas_int_t ldstrideA = call_on_matrix(A, leading_stride_fun());
     atidlas_int_t ldstrideB = call_on_matrix(B, leading_stride_fun());
     atidlas_int_t ldstrideC = call_on_matrix(C, leading_stride_fun());
@@ -730,17 +725,12 @@ private:
     bool swap_A = (A_trans_=='T');
     bool swap_B = (B_trans_=='T');
 
-    atidlas_int_t M = call_on_matrix(C, size1_fun());
-    atidlas_int_t N = call_on_matrix(C, size2_fun());
-    atidlas_int_t K = call_on_matrix(A, size2_fun());
-    K = A_trans_=='N'?call_on_matrix(A, size2_fun()):call_on_matrix(A, size1_fun());
-
     if (M < p_.mL || N < p_.nL || K < p_.kL || ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1 ||
         (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0)))
     {
       enqueue_block(statement, M, N, K, A, B, C, beta, create_slice(ptr_matrix, A, 0, M, 0, K, swap_A),
                     create_slice(ptr_matrix, B, 0, K, 0, N,  swap_B),
-                    create_slice(ptr_matrix, C, 0, M, 0, N, false), beta_value, programs, kernel_prefix, 1);
+                    create_slice(ptr_matrix, C, 0, M, 0, N, false), beta_value, programs, kernel_prefix_fb, 1);
       return;
     }
 
@@ -755,42 +745,67 @@ private:
 
 
     enqueue_block(statement, lM, lN, lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, 0, lM, 0, lK, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, 0, lK, 0, lN, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, 0, lM, 0, lN, false), beta_value, programs, kernel_prefix, 0);
-    enqueue_block(statement, lM, lN, K - lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, 0, lM, lK, K, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, lK, K, 0, lN, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, 0, lM, 0, lN, false), (NumericT)1, programs, kernel_prefix, 1);
+    enqueue_block(statement, lM, lN, K - lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, 0, lM, lK, K, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, lK, K, 0, lN, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, 0, lM, 0, lN, false), (NumericT)1, programs, kernel_prefix_fb, 1);
 
-    enqueue_block(statement, lM, N - lN, lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, 0, lM, 0, lK, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, 0, lK, lN, N, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, 0, lM, lN, N, false), beta_value, programs, kernel_prefix, 1);
-    enqueue_block(statement, lM, N - lN, K - lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, 0, lM, lK, K, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, lK, K, lN, N, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, 0, lM, lN, N, false), (NumericT)1, programs, kernel_prefix, 1);
+    enqueue_block(statement, lM, N - lN, lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, 0, lM, 0, lK, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, 0, lK, lN, N, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, 0, lM, lN, N, false), beta_value, programs, kernel_prefix_fb, 1);
+    enqueue_block(statement, lM, N - lN, K - lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, 0, lM, lK, K, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, lK, K, lN, N, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, 0, lM, lN, N, false), (NumericT)1, programs, kernel_prefix_fb, 1);
 
-    enqueue_block(statement, M - lM, lN, lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, lM, M, 0, lK, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, 0, lK, 0, lN, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, lM, M, 0, lN, false), beta_value, programs, kernel_prefix, 1);
-    enqueue_block(statement, M - lM, lN, K - lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, lM, M, lK, K, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, lK, K, 0, lN, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, lM, M, 0, lN, false), (NumericT)1, programs, kernel_prefix, 1);
+    enqueue_block(statement, M - lM, lN, lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, lM, M, 0, lK, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, 0, lK, 0, lN, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, lM, M, 0, lN, false), beta_value, programs, kernel_prefix_fb, 1);
+    enqueue_block(statement, M - lM, lN, K - lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, lM, M, lK, K, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, lK, K, 0, lN, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, lM, M, 0, lN, false), (NumericT)1, programs, kernel_prefix_fb, 1);
 
-    enqueue_block(statement, M - lM, N - lN, lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, lM, M, 0, lK, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, 0, lK, lN, N, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, lM, M, lN, N, false), beta_value, programs, kernel_prefix, 1);
-    enqueue_block(statement, M - lM, N - lN, K - lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, lM, M, lK, K, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, lK, K, lN, N, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, lM, M, lN, N, false), (NumericT)1, programs, kernel_prefix, 1);
+    enqueue_block(statement, M - lM, N - lN, lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, lM, M, 0, lK, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, 0, lK, lN, N, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, lM, M, lN, N, false), beta_value, programs, kernel_prefix_fb, 1);
+    enqueue_block(statement, M - lM, N - lN, K - lK, A, B, C, beta, create_slice<NumericT>(ptr_matrix, Acopy, lM, M, lK, K, swap_A), create_slice<NumericT>(ptr_matrix, Bcopy, lK, K, lN, N, swap_B), create_slice<NumericT>(ptr_matrix, Ccopy, lM, M, lN, N, false), (NumericT)1, programs, kernel_prefix_fb, 1);
+  }
+
+  std::vector<atidlas_int_t> infos(statements_container const & statements,
+                                   bool & A_trans, bool & B_trans,
+                                   atidlas_int_t & C_idx, atidlas_int_t & A_idx, atidlas_int_t & B_idx, atidlas_int_t & alpha_idx, atidlas_int_t & beta_idx,
+                                   leaf_t& C_leaf, leaf_t& A_leaf, leaf_t& B_leaf, leaf_t& alpha_leaf, leaf_t & beta_leaf)
+  {
+    using namespace tools;
+
+    viennacl::scheduler::statement const & st = statements.data().front();
+    parse(st, C_idx, C_leaf, alpha_idx, alpha_leaf, A_idx, A_leaf, A_trans, B_idx, B_leaf, B_trans, beta_idx, beta_leaf);
+    viennacl::scheduler::lhs_rhs_element const & A = tools::lhs_rhs_element(st, A_idx, A_leaf);
+    viennacl::scheduler::lhs_rhs_element const & C = tools::lhs_rhs_element(st, C_idx, C_leaf);
+
+    atidlas_int_t M = call_on_matrix(C, size1_fun());
+    atidlas_int_t N = call_on_matrix(C, size2_fun());
+    atidlas_int_t K = A_trans_?call_on_matrix(A, size1_fun()):call_on_matrix(A, size2_fun());
+
+    return tools::make_vector<atidlas_int_t>() << M << N << K;
   }
 
 public:
   matrix_product_template(matrix_product_template::parameters_type const & parameters, char A_trans, char B_trans) : template_base_impl<matrix_product_template, matrix_product_parameters>(parameters, BIND_ALL_UNIQUE), A_trans_(A_trans), B_trans_(B_trans){ }
 
-  virtual void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
+  std::vector<atidlas_int_t> input_sizes(statements_container const & statements)
   {
-    using namespace tools;
-    using namespace tools;
-
-    viennacl::scheduler::statement const & st = statements.data().front();
     bool A_trans, B_trans;
     atidlas_int_t C_idx=0, A_idx=0, B_idx=0, alpha_idx=0, beta_idx = 0;
     leaf_t C_leaf=LHS_NODE_TYPE, A_leaf=LHS_NODE_TYPE, B_leaf=LHS_NODE_TYPE, alpha_leaf=LHS_NODE_TYPE, beta_leaf=LHS_NODE_TYPE;
-    parse(st, C_idx, C_leaf, alpha_idx, alpha_leaf, A_idx, A_leaf, A_trans, B_idx, B_leaf, B_trans, beta_idx, beta_leaf);
+    return infos(statements,A_trans,B_trans,C_idx,A_idx,B_idx,alpha_idx,beta_idx,C_leaf,A_leaf,B_leaf,alpha_leaf,beta_leaf);
+  }
 
-    viennacl::scheduler::statement stcopy = st;
+  void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
+  {
+    using namespace tools;
+
+    bool A_trans, B_trans;
+    atidlas_int_t C_idx=0, A_idx=0, B_idx=0, alpha_idx=0, beta_idx = 0;
+    leaf_t C_leaf=LHS_NODE_TYPE, A_leaf=LHS_NODE_TYPE, B_leaf=LHS_NODE_TYPE, alpha_leaf=LHS_NODE_TYPE, beta_leaf=LHS_NODE_TYPE;
+    std::vector<atidlas_int_t> MNK = infos(statements,A_trans,B_trans,C_idx,A_idx,B_idx,alpha_idx,beta_idx,C_leaf,A_leaf,B_leaf,alpha_leaf,beta_leaf);
+
+    viennacl::scheduler::statement stcopy = statements.data().front();
     viennacl::scheduler::lhs_rhs_element& A = tools::lhs_rhs_element(stcopy, A_idx, A_leaf);
     viennacl::scheduler::lhs_rhs_element& B = tools::lhs_rhs_element(stcopy, B_idx, B_leaf);
     viennacl::scheduler::lhs_rhs_element& C = tools::lhs_rhs_element(stcopy, C_idx, C_leaf);
     viennacl::scheduler::lhs_rhs_element& beta = tools::lhs_rhs_element(stcopy, beta_idx, beta_leaf);
 
     if (C.numeric_type==viennacl::scheduler::FLOAT_TYPE)
-      enqueue_impl<float>(&viennacl::scheduler::lhs_rhs_element::matrix_float, stcopy, A, B, C, beta, beta.host_float, programs, kernel_prefix);
+      enqueue_impl<float>(&viennacl::scheduler::lhs_rhs_element::matrix_float, stcopy, MNK[0], MNK[1], MNK[2], A, B, C, beta, beta.host_float, programs, kernel_prefix);
     else if (C.numeric_type==viennacl::scheduler::DOUBLE_TYPE)
-      enqueue_impl<double>(&viennacl::scheduler::lhs_rhs_element::matrix_double, stcopy, A, B, C, beta, beta.host_double, programs, kernel_prefix);
+      enqueue_impl<double>(&viennacl::scheduler::lhs_rhs_element::matrix_double, stcopy, MNK[0], MNK[1], MNK[2], A, B, C, beta, beta.host_double, programs, kernel_prefix);
     else
       throw generator_not_supported_exception("GEMM only supported for float/double");
 

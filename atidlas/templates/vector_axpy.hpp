@@ -93,15 +93,18 @@ public:
   { }
 
   void up_to_internal_size(bool v)
+  { up_to_internal_size_ = v; }
+
+  std::vector<atidlas_int_t> input_sizes(statements_container const & statements)
   {
-    up_to_internal_size_ = v;
+    viennacl::scheduler::statement const & statement = statements.data().front();
+    atidlas_int_t size = vector_size(lhs_most(statement.array(), statement.root()), up_to_internal_size_);
+    return tools::make_vector<atidlas_int_t>() << size;
   }
 
   void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs,  statements_container const & statements)
   {
-    viennacl::scheduler::statement const & statement = statements.data().front();
-    atidlas_int_t size = vector_size(lhs_most(statement.array(), statement.root()), up_to_internal_size_);
-
+    atidlas_int_t size = input_sizes(statements)[0];
     viennacl::ocl::kernel * kernel;
     if(p_.simd_width > 1 && (has_strided_access(statements) || (size%p_.simd_width>0) || has_misaligned_offset(statements)))
       kernel = &programs[0].program().get_kernel(kernel_prefix+"0");

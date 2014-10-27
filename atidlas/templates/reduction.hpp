@@ -279,17 +279,25 @@ private:
     result.push_back(generate_impl(kernel_prefix, statements, mappings, p_.simd_width));
     return result;
   }
+
 public:
   reduction_template(reduction_template::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<reduction_template, reduction_parameters>(parameters, binding_policy) { }
 
+  std::vector<atidlas_int_t> input_sizes(statements_container const & statements)
+  {
+    std::vector<size_t> reductions_idx = tools::filter_nodes(&tools::is_reduction, statements.data().front(), false);
+    atidlas_int_t N = vector_size(lhs_most(statements.data().front().array(), reductions_idx[0]), false);
+    return tools::make_vector<atidlas_int_t>() << N;
+  }
+
   void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
   {
+    std::vector<atidlas_int_t> size = input_sizes(statements);
+
     std::vector<viennacl::scheduler::statement_node const *> reductions;
-    cl_uint size = 0;
     for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
     {
       std::vector<size_t> reductions_idx = tools::filter_nodes(&tools::is_reduction, *it, false);
-      size = static_cast<cl_uint>(vector_size(lhs_most(it->array(), reductions_idx[0]), false));
       for (std::vector<size_t>::iterator itt = reductions_idx.begin(); itt != reductions_idx.end(); ++itt)
         reductions.push_back(&it->array()[*itt]);
     }
@@ -318,7 +326,7 @@ public:
     for (unsigned int k = 0; k < 2; k++)
     {
       unsigned int n_arg = 0;
-      kernels[k]->arg(n_arg++, size);
+      kernels[k]->arg(n_arg++, cl_uint(size[0]));
       unsigned int i = 0;
       unsigned int j = 0;
       for (std::vector<viennacl::scheduler::statement_node const *>::const_iterator it = reductions.begin(); it != reductions.end(); ++it)

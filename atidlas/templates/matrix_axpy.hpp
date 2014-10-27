@@ -12,10 +12,10 @@
 namespace atidlas
 {
 
-class matrix_axpy_parameters_type : public template_base::parameters_type
+class matrix_axpy_parameters : public template_base::parameters_type
 {
 public:
-  matrix_axpy_parameters_type(unsigned int _simd_width,
+  matrix_axpy_parameters(unsigned int _simd_width,
                               unsigned int _local_size_0, unsigned int _local_size_1,
                               unsigned int _num_groups_0, unsigned int _num_groups_1,
                               fetching_policy_type _fetching_policy) : template_base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1), num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetching_policy(_fetching_policy){ }
@@ -25,7 +25,7 @@ public:
   fetching_policy_type fetching_policy;
 };
 
-class matrix_axpy_template : public template_base_impl<matrix_axpy_template, matrix_axpy_parameters_type>
+class matrix_axpy_template : public template_base_impl<matrix_axpy_template, matrix_axpy_parameters>
 {
 private:
   int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const
@@ -92,11 +92,16 @@ private:
   }
 
 public:
-  matrix_axpy_template(parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<matrix_axpy_template, matrix_axpy_parameters_type>(parameters, binding_policy), up_to_internal_size_(false){ }
+  matrix_axpy_template(parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<matrix_axpy_template, matrix_axpy_parameters>(parameters, binding_policy), up_to_internal_size_(false){ }
 
   void up_to_internal_size(bool v)
+  { up_to_internal_size_ = v; }
+
+  std::vector<atidlas_int_t> input_sizes(statements_container const & statements)
   {
-    up_to_internal_size_ = v;
+    viennacl::scheduler::statement const & statement = statements.data().front();
+    std::pair<atidlas_int_t, atidlas_int_t> size = matrix_size(lhs_most(statement.array(), statement.root()), up_to_internal_size_);
+    return tools::make_vector<atidlas_int_t>() << size.first << size.second;
   }
 
   void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
@@ -108,19 +113,10 @@ public:
     kernel.global_work_size(0,p_.local_size_0*p_.num_groups_0);
     kernel.global_work_size(1,p_.local_size_1*p_.num_groups_1);
 
-    viennacl::scheduler::statement_node const & root = statements.data().front().array()[statements.data().front().root()];
     unsigned int current_arg = 0;
-    if (up_to_internal_size_)
-    {
-      kernel.arg(current_arg++, cl_uint(tools::call_on_matrix(root.lhs, tools::internal_size1_fun())));
-      kernel.arg(current_arg++, cl_uint(tools::call_on_matrix(root.lhs, tools::internal_size2_fun())));
-    }
-    else
-    {
-      kernel.arg(current_arg++, cl_uint(tools::call_on_matrix(root.lhs, tools::size1_fun())));
-      kernel.arg(current_arg++, cl_uint(tools::call_on_matrix(root.lhs, tools::size2_fun())));
-    }
-
+    std::vector<atidlas_int_t> MN = input_sizes(statements);
+    kernel.arg(current_arg++, cl_uint(MN[0]));
+    kernel.arg(current_arg++, cl_uint(MN[1]));
     set_arguments(statements, kernel, current_arg);
 
     viennacl::ocl::enqueue(kernel);

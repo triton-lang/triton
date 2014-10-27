@@ -218,15 +218,32 @@ private:
 
     return res;
   }
-public:
-  row_wise_reduction_template(row_wise_reduction_template::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<row_wise_reduction_template, row_wise_reduction_parameters>(parameters, binding_policy){ }
 
-  void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
+  std::vector<atidlas_int_t> infos(statements_container const & statements, bool & is_trans)
   {
     std::vector<size_t> idx;
     viennacl::scheduler::lhs_rhs_element A;
-    bool is_trans;
     parse(statements.data().front(), idx, is_trans, A);
+    atidlas_int_t M = tools::call_on_matrix(A, tools::size1_fun());
+    atidlas_int_t N = tools::call_on_matrix(A, tools::size2_fun());
+    if(is_trans)
+      std::swap(M,N);
+    return tools::make_vector<atidlas_int_t>() << M << N;
+  }
+
+public:
+  row_wise_reduction_template(row_wise_reduction_template::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<row_wise_reduction_template, row_wise_reduction_parameters>(parameters, binding_policy){ }
+
+  virtual std::vector<atidlas_int_t> input_sizes(statements_container const & statements)
+  {
+    bool dummy;
+    return infos(statements, dummy);
+  }
+
+  void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
+  {
+    bool is_trans;
+    std::vector<atidlas_int_t> MN = infos(statements, is_trans);
 
     viennacl::ocl::kernel * kernel;
     if(is_trans  && p_.simd_width>1)
@@ -243,20 +260,9 @@ public:
     kernel->local_work_size(1,p_.local_size_1);
     kernel->global_work_size(0,p_.local_size_0*p_.num_groups_0);
     kernel->global_work_size(1,p_.local_size_1);
-
     unsigned int current_arg = 0;
-    if (is_trans)
-    {
-      kernel->arg(current_arg++, cl_uint(tools::call_on_matrix(A, tools::size2_fun())));
-      kernel->arg(current_arg++, cl_uint(tools::call_on_matrix(A, tools::size1_fun())));
-    }
-    else
-    {
-      kernel->arg(current_arg++, cl_uint(tools::call_on_matrix(A, tools::size1_fun())));
-      kernel->arg(current_arg++, cl_uint(tools::call_on_matrix(A, tools::size2_fun())));
-    }
-
-
+    kernel->arg(current_arg++, cl_uint(MN[0]));
+    kernel->arg(current_arg++, cl_uint(MN[1]));
     set_arguments(statements, *kernel, current_arg);
     viennacl::ocl::enqueue(*kernel);
   }
