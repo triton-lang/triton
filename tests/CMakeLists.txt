@@ -1,4 +1,4 @@
-foreach(PROG vector_axpy reduction matrix_axpy row_wise_reduction matrix_product)
+foreach(PROG vector_axpy reduction matrix_axpy row_wise_reduction matrix_product model)
      add_executable(${PROG}-test ${PROG}.cpp)
      add_test(${PROG} ${PROG}-test)
      target_link_libraries(${PROG}-test ${OPENCL_LIBRARIES})

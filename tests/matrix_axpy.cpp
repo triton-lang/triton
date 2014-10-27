@@ -11,7 +11,7 @@ void test_element_wise_matrix(NumericT epsilon,  AType & cA, BType & cB, CType &
   using namespace viennacl::linalg;
   using namespace std;
 
-  atidlas::matrix_axpy_parameters_type parameters(1, 8, 8, 32, 32, atidlas::FETCH_FROM_GLOBAL_STRIDED);
+  atidlas::matrix_axpy_parameters parameters(1, 8, 8, 32, 32, atidlas::FETCH_FROM_GLOBAL_STRIDED);
   int failure_count = 0;
   CType tmp = cC;
 
