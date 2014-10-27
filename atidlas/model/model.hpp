@@ -4,6 +4,7 @@
 #include "rapidjson/document.h"
 
 #include "viennacl/ocl/program.hpp"
+#include "viennacl/tools/timer.hpp"
 
 #include "atidlas/model/tools.hpp"
 #include "atidlas/tools/shared_ptr.hpp"
@@ -100,7 +101,7 @@ namespace atidlas
           viennacl::ocl::context & context, viennacl::ocl::device const & device) : predictor_(predictor), templates_(templates), context_(context), device_(device)
     {  }
 
-    void execute(statements_container const & statements)
+    void execute(statements_container const & statements, bool bypass_predictor = false)
     {
       if(lazy_programs_.empty())
       {
@@ -119,17 +120,48 @@ namespace atidlas
 
       //Prediction
       std::vector<atidlas_int_t> x = templates_[0]->input_sizes(statements);
-      std::vector<float> predictions = predictor_.predict(x);
-      atidlas_int_t label = std::distance(predictions.begin(),std::min_element(predictions.begin(), predictions.end()));
-      std::cout << label << std::endl;
+
+      int label;
+      //The user tuned the model specifically for this input size
+      if(hardcoded_.find(x)!=hardcoded_.end())
+        label = hardcoded_.at(x);
+      //The user bypasses the random forest
+      else if(bypass_predictor)
+        label = 0;
+      //Default
+      else
+      {
+        std::vector<float> predictions = predictor_.predict(x);
+        label = std::distance(predictions.begin(),std::min_element(predictions.begin(), predictions.end()));
+      }
+
       //Execution
       templates_[label]->enqueue("k" + tools::to_string(label), lazy_programs_, statements);
+    }
+
+    void tune(statements_container const & statements)
+    {
+      //Collect the timings
+      std::vector<float> timings(templates_.size());
+      viennacl::tools::timer timer;
+      for(size_t i = 0 ; i < templates_.size() ; ++i)
+      {
+        timer.start();
+        templates_[i]->enqueue("k"+tools::to_string(i), lazy_programs_, statements);
+        timings[i] = timer.get();
+      }
+
+      //Fill the override
+      std::vector<atidlas_int_t> x = templates_[0]->input_sizes(statements);
+      hardcoded_[x] = std::distance(timings.begin(),std::min_element(timings.begin(), timings.end()));
     }
 
   private:
     random_forest predictor_;
 
     templates_container templates_;
+
+    std::map<std::vector<atidlas_int_t>, int> hardcoded_;
 
     viennacl::ocl::context & context_;
     viennacl::ocl::device const & device_;
