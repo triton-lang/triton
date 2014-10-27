@@ -1,17 +1,18 @@
 from __future__ import division
 
-import argparse, itertools, os, sys
+import argparse, itertools, os, sys, json
 import misc_tools, optimize
 
 import pyopencl as cl
 import pyviennacl as vcl
 import pyatidlas as atd
-
+import numpy as np
 
 from configobj import ConfigObj
 from numpy import random
 from dataset import generate_dataset
 from model import train_model
+
 
 DATATYPES = { 'single' : vcl.float32,
               'double' : vcl.float64 }
@@ -36,34 +37,34 @@ TYPES = { 'vector-axpy': {'template':atd.VectorAxpyTemplate,
                             'perf-index': lambda x: 2*x[1][0]*x[1][1]*x[1][2]/x[2]*1e-9,
                             'perf-measure': 'GFLOP/s'} }
 
-def do_tuning(config_fname, viennacl_root):
+
+def do_tuning(config_fname, viennacl_root, device):
+    json_out = {}
     config = ConfigObj(config_fname)
+
     def map_to_list(T, x):
         return list(map(T, x if isinstance(x, list) else [x]))
+
     for operation in ['vector-axpy', 'matrix-axpy', 'reduction', 'row-wise-reduction', 'matrix-product']:
+
         if operation in config:
             p = config[operation]
-            confdevices = p['devices']
-            all_devices = [d for platform in cl.get_platforms() for d in platform.get_devices()]
-            DEVICES_PRESETS = {'all': all_devices,
-                               'gpus': [d for d in all_devices if d.type==cl.device_type.GPU],
-                               'cpus': [d for d in all_devices if d.type==cl.device_type.CPU],
-                               'accelerators': [d for d in all_devices if d.type==cl.device_type.ACCELERATOR]
-            }
-            devices = DEVICES_PRESETS[confdevices] if confdevices in DEVICES_PRESETS else [all_devices[int(i)] for i in confdevices]
             precisions =  map_to_list(str, p['precision'])
             if 'all' in precisions:
                 precisions = ['single','double']
             datatypes = [DATATYPES[k] for k in precisions]
-            #Iterate through the datatypes and the devices
-            for datatype, device in itertools.product(datatypes, devices):
+
+            #Iterate through the datatypes
+            for datatype in datatypes:
+
                 ctx = cl.Context([device])
                 ctx = vcl.backend.Context(ctx)
-                device = ctx.current_device
+
                 #Check data-type
                 if datatype is vcl.float64 and not device.double_fp_config:
                     sys.stderr.write('Warning : The device ' + device.name + ' does not support double precision! Skipping ...')
                     continue
+
                 #Helper for execution
                 def execute(device, node, other_params, sizes, fname = os.devnull, parameters = None):
                     with vcl.Statement(node) as statement:
@@ -75,6 +76,7 @@ def do_tuning(config_fname, viennacl_root):
                         with open(fname, "w+") as archive:
                             return optimize.genetic(statement, device, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
                                                     lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
+
                 #Helper for tuning
                 def tune(execution_handler, nTuning, nDataPoints, draw, additional_parameters):
                     if 'size' in p:
@@ -85,7 +87,20 @@ def do_tuning(config_fname, viennacl_root):
                         def compute_perf(x, t):
                             return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
                         X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler, nTuning, nDataPoints, draw)
-                        train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
+                        clf = train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
+
+                        #Update JSON
+                        full_operation = operation + ''.join(additional_parameters)
+                        if full_operation not in json_out:
+                            json_out[full_operation] = {}
+                        json_out[full_operation][datatype.__name__] = {}
+                        D = json_out[full_operation][datatype.__name__]
+                        D['profiles'] = [ prof.astype('int').tolist() for prof in profiles]
+                        D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
+                                       'children_right': e.tree_.children_right.tolist(),
+                                       'threshold': e.tree_.threshold.astype('float32').tolist(),
+                                       'feature': e.tree_.feature.astype('float32').tolist(),
+                                       'value': e.tree_.value[:,:,0].astype('float32').tolist()} for e in clf.estimators_]
 
                 #Vector AXPY
                 if operation=='vector-axpy':
@@ -143,6 +158,10 @@ def do_tuning(config_fname, viennacl_root):
                             return execute(device, vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans, B_trans), sizes, fname, parameters)
                         tune(execution_handler, 50, 2000, lambda : 64*np.random.randint(low=1, high=40, size=3),(layout[0], layout[1]))
 
+    dname = misc_tools.sanitize_string(device.name)
+    json_out["version"] = "1.0"
+    json.dump(json_out, open(dname + '.json','w'))
+
 
 
 if __name__ == "__main__":
@@ -151,14 +170,15 @@ if __name__ == "__main__":
     print_devices_parser = subparsers.add_parser('list-devices', help='list the devices available')
     tune_parser = subparsers.add_parser('tune', help='tune using a specific configuration file')
     tune_parser.add_argument("--config", default="config.ini", required=False, type=str)
+    tune_parser.add_argument("--device", default=0, required=False, type=str)
     tune_parser.add_argument("--viennacl-root", default='', required=False, type=str)
     args = parser.parse_args()
 
+    devices = [d for platform in cl.get_platforms() for d in platform.get_devices()]
     if(args.action=='list-devices'):
         print("----------------")
         print("Devices available:")
         print("----------------")
-        devices = [d for platform in cl.get_platforms() for d in platform.get_devices()]
         for (i, d) in enumerate(devices):
             print 'Device', i, '|',  cl.device_type.to_string(d.type), '|', d.name, 'on', d.platform.name
         print("----------------")
@@ -166,4 +186,4 @@ if __name__ == "__main__":
         print("------")
         print("Auto-tuning")
         print("------")
-        do_tuning(args.config, args.viennacl_root)
+        do_tuning(args.config, args.viennacl_root, devices[args.device])

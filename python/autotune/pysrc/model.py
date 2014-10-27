@@ -1,7 +1,6 @@
 from sklearn import tree
 from sklearn import ensemble
-from numpy import array, bincount, mean, std, max, argmax, min, argmin, median
-
+import numpy as np
 
 def gmean(a, axis=0, dtype=None):
     if not isinstance(a, np.ndarray):  # if not an ndarray object attempt to convert it
@@ -16,25 +15,30 @@ def gmean(a, axis=0, dtype=None):
     return np.exp(log_a.mean(axis=axis))
     
 def train_model(X, Y, profiles, metric):
-    print("Building the model...")
-
-    Xmean = mean(X)
-    Xstd = std(X)
-    X = (X - Xmean)/Xstd
-
-    Y = Y[:, :]
-    Ymax = max(Y)
+    Y=Y[:,:]
+    profiles=profiles[:]
+    Ymax = np.max(Y)
     Y = Y/Ymax
 
-    ref = argmax(bincount(argmin(Y, axis=1))) #most common profile
-    cut = int(0.800*X.shape[0]+1)
-
     #Train the model
-    clf = ensemble.RandomForestRegressor(10, max_depth=10).fit(X[:cut,:], Y[:cut,:])
+    cut = int(0.75*X.shape[0])
+    clf = ensemble.RandomForestRegressor(10, max_depth=4).fit(X[:cut,:], Y[:cut,:])
 
-    t = argmin(clf.predict(X[cut:,:]), axis = 1)
-    s = array([y[ref]/y[k] for y,k in zip(Y[cut:,:], t)])
-    tt = argmin(Y[cut:,:], axis = 1)
-    ss = array([y[ref]/y[k] for y,k in zip(Y[cut:,:], tt)])
-    print("Testing speedup : mean = %.3f, median = %.3f, min = %.3f,  max %.3f"%(gmean(s), median(s), min(s), max(s)))
-    print("Optimal speedup : mean = %.3f, median = %.3f, min = %.3f,  max %.3f"%(gmean(ss), median(ss), min(ss), max(ss)))
+    print clf.predict([10000])
+
+    t = np.argmin(clf.predict(X[cut:,:]), axis = 1)
+    s = np.array([y[0]/y[k] for y,k in zip(Y[cut:,:], t)])
+    tt = np.argmin(Y[cut:,:], axis = 1)
+    ss = np.array([y[0]/y[k] for y,k in zip(Y[cut:,:], tt)])
+
+    p5 = lambda a: np.percentile(a, 5)
+    p25 = lambda a: np.percentile(a, 25)
+    p50 = lambda a: np.percentile(a, 50)
+    p75 = lambda a: np.percentile(a, 75)
+    p95 = lambda a: np.percentile(a, 95)
+
+    print("Percentile     :\t 5 \t 25 \t 50 \t 75 \t 95")
+    print("Testing speedup:\t %.2f\t %.2f\t %.2f\t %.2f\t %.3f"%(p5(s), p25(s), p50(s), p75(s), p95(s)))
+    print("Optimal speedup:\t %.2f\t %.2f\t %.2f\t %.2f\t %.3f"%(p5(ss), p25(ss), p50(ss), p75(ss), p95(ss)))
+
+    return clf

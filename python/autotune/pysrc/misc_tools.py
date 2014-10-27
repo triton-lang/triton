@@ -207,12 +207,12 @@ def benchmark(template, statement, device):
         return current_time/N
 
 
+def sanitize_string(string, keep_chars = ['_']):
+    string = string.replace(' ', '_').replace('-', '_').lower()
+    string = "".join(c for c in string if c.isalnum() or c in keep_chars).rstrip()
+    return string
+
 def update_viennacl_headers(viennacl_root, device, datatype, operation, additional_parameters, parameters):
-    
-    def sanitize_string(string, keep_chars = ['_']):
-        string = string.replace(' ', '_').replace('-', '_').lower()
-        string = "".join(c for c in string if c.isalnum() or c in keep_chars).rstrip()
-        return string
     
     def append_include(data, path):
         include_name = '#include "' + path +'"\n'
