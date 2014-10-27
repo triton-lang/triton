@@ -148,6 +148,7 @@ namespace atidlas
       {
         timer.start();
         templates_[i]->enqueue("k"+tools::to_string(i), lazy_programs_, statements);
+        viennacl::backend::finish();
         timings[i] = timer.get();
       }
 

@@ -16,5 +16,5 @@ include_directories(${PROJECT_SOURCE_DIR})
 
 INCLUDE(CTest)
 add_subdirectory(tests)
-
+add_subdirectory(bench)
 add_subdirectory(python)
