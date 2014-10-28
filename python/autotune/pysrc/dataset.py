@@ -4,64 +4,65 @@ import re
 import random
 import numpy as np
 
-def resample(X, draw):
+def resample(X, sampler):
     Xtuples = [tuple(x) for x in X]
     r = random.random()
     while(True):
-        x = draw()
+        x = sampler()
         if tuple(x) not in Xtuples:
             break
     return x.astype(int)
 
-def generate_dataset(TemplateType, execution_handler, nTuning, nDataPoints, draw):
+def sample_profiles(execution_handler, nTuning, sampler):
+    print "Sampling profiles..."
+    nDim = sampler().size
+    X = np.empty((nTuning, nDim))
+    t = np.empty(nTuning)
+    profiles = []
+    for i in range(nTuning):
+        x = resample(X, sampler)
+        y = execution_handler(x)
+        if y not in profiles:
+            profiles.append(y)
+        idx = profiles.index(y)
+        X[i,:] = x
+        t[i] = idx
 
-    # print "Getting some good profiles..."
-    # nDim = draw().size
-    # X = np.empty((nTuning, nDim))
-    # t = np.empty(nTuning)
-    # profiles = []
-    # for i in range(nTuning):
-    #     x = resample(X, draw)
-    #     y = execution_handler(x)
-    #     if y not in profiles:
-    #         profiles.append(y)
-    #     idx = profiles.index(y)
-    #     X[i,:] = x
-    #     t[i] = idx
-    #
-    # print "Generating the dataset..."
-    # Y = np.empty((nDataPoints, len(profiles)))
-    # X = np.empty((nDataPoints, nDim))
-    # t = []
-    #
-    # for i in range(nDataPoints):
-    #     x = resample(X, draw)
-    #     for j,y in enumerate(profiles):
-    #         T = execution_handler(x, os.devnull, y)
-    #         Y[i,j] = T
-    #     idx = np.argmax(Y[i,:])
-    #     X[i,:] = x
-    #     t = np.argmax(Y[:i+1,], axis=1)
-    #     if i%10==0:
-    #         sys.stdout.write('%d data points generated\r'%i)
-    #         sys.stdout.flush()
+    idx = int(t[np.argmax(np.linalg.norm(X, axis=1))])
+    profiles = np.array([profiles[idx]] + [x for i,x in enumerate(profiles) if i!=idx])
+    return profiles
 
-    template_name = TemplateType.__name__
-    dir = os.path.join("data", template_name)
-    if not os.path.exists(dir):
-        os.makedirs(dir)
+def sample_dataset(prefix_name, profiles, execution_handler, nDataPoints, sampler):
 
-    # np.savetxt(os.path.join(dir,"profiles.csv"), profiles)
-    # np.savetxt(os.path.join(dir,"X.csv"), X)
-    # np.savetxt(os.path.join(dir,"Y.csv"), Y)
+    print "Generating the dataset..."
+    Y = np.empty((nDataPoints, len(profiles)))
+    X = np.empty((nDataPoints, len(profiles[0])))
+    t = []
 
-    profiles = np.loadtxt(os.path.join(dir, "profiles.csv"))
-    X = np.loadtxt(os.path.join(dir, "X.csv"),ndmin=2)
-    Y = np.loadtxt(os.path.join(dir, "Y.csv"),ndmin=2)
+    for i in range(nDataPoints):
+        x = resample(X, sampler)
+        for j,y in enumerate(profiles):
+            T = execution_handler(x, os.devnull, y)
+            Y[i,j] = T
+        idx = np.argmax(Y[i,:])
+        X[i,:] = x
+        t = np.argmax(Y[:i+1,], axis=1)
+        if i%10==0:
+            sys.stdout.write('%d data points generated\r'%i)
+            sys.stdout.flush()
 
-    #idx = np.argsort(np.bincount(np.argmin(Y, axis=1)))
     idx = np.argsort(Y[np.argmax(X),:])
     Y = Y[:, idx]
     profiles = profiles[idx]
+    
+    dir = os.path.join("data", prefix_name)
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    np.savetxt(os.path.join(dir,"X.csv"), X)
+    np.savetxt(os.path.join(dir,"Y.csv"), Y)
+    np.savetxt(os.path.join(dir,"profiles.csv"), profiles)
+    X = np.loadtxt(os.path.join(dir, "X.csv"),ndmin=2)
+    Y = np.loadtxt(os.path.join(dir, "Y.csv"),ndmin=2)
+    profiles = np.loadtxt(os.path.join(dir, "profiles.csv"))
 
-    return X, Y, profiles
+    return X, Y

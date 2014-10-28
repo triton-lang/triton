@@ -1,8 +1,7 @@
 from __future__ import division
 
 import argparse, itertools, os, sys, json
-import misc_tools, optimize
-
+import misc_tools, optimize, dataset
 import pyopencl as cl
 import pyviennacl as vcl
 import pyatidlas as atd
@@ -10,7 +9,6 @@ import numpy as np
 
 from configobj import ConfigObj
 from numpy import random
-from dataset import generate_dataset
 from model import train_model
 
 
@@ -42,10 +40,10 @@ def do_tuning(args, devices):
     def map_to_list(T, x):
         return list(map(T, x if isinstance(x, list) else [x]))
 
-    if(args.method=='unique'):
-        default_tuning_sizes = {'vector-axpy': tuple(args.sizes[:1]), 'reduction': tuple(args.sizes[:1]),
-                                'matrix-axpy' : tuple(args.sizes[1:3]), 'row-wise-reduction' : tuple(args.sizes[1:3]),
-                                'matrix-product': tuple(args.sizes[3:])}
+    if(args.method=='simple'):
+        default_tuning_sizes = {'vector-axpy': [args.blas1_size], 'reduction': [args.blas1_size],
+                                'matrix-axpy' : args.blas2_size, 'row-wise-reduction' : args.blas2_size,
+                                'matrix-product': args.blas3_size}
     for operation in ['vector-axpy', 'matrix-axpy', 'reduction', 'row-wise-reduction', 'matrix-product']:
 
           #Iterate through the datatypes
@@ -72,7 +70,7 @@ def do_tuning(args, devices):
                                                   lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
 
               #Helper for tuning
-              def tune(execution_handler, nTuning, nDataPoints, draw, additional_parameters):
+              def tune(execution_handler, n_datapoints, sampler, additional_parameters):
                   #Update JSON
                   full_operation = operation + ''.join(additional_parameters)
                   if full_operation not in json_out:
@@ -80,20 +78,22 @@ def do_tuning(args, devices):
                   json_out[full_operation][datatype.__name__] = {}
                   D = json_out[full_operation][datatype.__name__]
 
-                  if args.method == 'unique':
+                  if args.method == 'simple':
                       profiles = [execution_handler(map(int,default_tuning_sizes[operation]))]
-                      if args.viennacl_src_path:
-                          misc_tools.update_viennacl_headers(args.viennacl_src_path,device,datatype,operation,additional_parameters,profiles[0])
                   else:
                       def compute_perf(x, t):
                           return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
-                      X, Y, profiles = generate_dataset(TYPES[operation]['template'], execution_handler, nTuning, nDataPoints, draw)
-                      clf = train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
-                      D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
-                                     'children_right': e.tree_.children_right.tolist(),
-                                     'threshold': e.tree_.threshold.astype('float32').tolist(),
-                                     'feature': e.tree_.feature.astype('float32').tolist(),
-                                     'value': e.tree_.value[:,:,0].astype('float32').tolist()} for e in clf.estimators_]
+                      profiles = dataset.sample_profiles(execution_handler, args.sample_size, sampler)
+                      if args.build_model:
+                        X, Y = dataset.sample_dataset(os.path.join(full_operation,datatype.__name__), profiles, execution_handler, n_datapoints, sampler)
+                        clf = train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
+                        D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
+                                       'children_right': e.tree_.children_right.tolist(),
+                                       'threshold': e.tree_.threshold.astype('float32').tolist(),
+                                       'feature': e.tree_.feature.astype('float32').tolist(),
+                                       'value': e.tree_.value[:,:,0].astype('float32').tolist()} for e in clf.estimators_]
+                  if args.viennacl_src_path:
+                    misc_tools.update_viennacl_headers(args.viennacl_src_path,device,datatype,operation,additional_parameters,profiles[0])
                   D['profiles'] = [ prof.astype('int').tolist() for prof in profiles]
 
 
@@ -104,7 +104,7 @@ def do_tuning(args, devices):
                       y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       z = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       return execute(device, vcl.Assign(z, vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y))), (), sizes, fname, parameters)
-                  tune(execution_handler, 30, 1000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
+                  tune(execution_handler, 1000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
               #Reduction
               if operation=='reduction':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
@@ -112,7 +112,7 @@ def do_tuning(args, devices):
                       y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       s = vcl.Scalar(0, context=ctx, dtype=datatype)
                       return execute(device, vcl.Assign(s, vcl.Dot(x,y)), (), sizes, fname, parameters)
-                  tune(execution_handler, 30, 1000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
+                  tune(execution_handler, 1000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
               #Matrix AXPY
               if operation=='matrix-axpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
@@ -120,7 +120,7 @@ def do_tuning(args, devices):
                       B = vcl.Matrix(sizes, context=ctx, dtype=datatype)
                       C = vcl.Matrix(sizes, context=ctx, dtype=datatype)
                       return execute(device, vcl.Assign(C,A+B), (), sizes, fname, parameters)
-                  tune(execution_handler, 30, 1000, lambda : 64*np.random.randint(low=5, high=100, size=2), ())
+                  tune(execution_handler, 1000, lambda : 64*np.random.randint(low=5, high=100, size=2), ())
               #Row-wise reduction
               if operation=='row-wise-reduction':
                   layouts = ['N', 'T']
@@ -131,7 +131,7 @@ def do_tuning(args, devices):
                           y = vcl.Vector(sizes[0] if A_trans=='N' else sizes[1], context=ctx, dtype=datatype)
                           LHS = A if A_trans=='N' else A.T
                           return execute(device, vcl.Assign(y, LHS*x), (), sizes, fname, parameters)
-                      tune(execution_handler, 30, 1000, lambda : 64*np.random.randint(low=5, high=100, size=2), (A_trans,))
+                      tune(execution_handler, 1000, lambda : 64*np.random.randint(low=5, high=100, size=2), (A_trans,))
               #Matrix Product
               if operation=='matrix-product':
                   layouts = ['NN', 'NT', 'TN', 'TT']
@@ -147,7 +147,7 @@ def do_tuning(args, devices):
                           beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
                           C = vcl.Matrix((sizes[0], sizes[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
                           return execute(device, vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans, B_trans), sizes, fname, parameters)
-                      tune(execution_handler, 30, 1000, lambda : 64*np.random.randint(low=1, high=40, size=3),(layout[0], layout[1]))
+                      tune(execution_handler, 1000, lambda : 64*np.random.randint(low=1, high=40, size=3),(layout[0], layout[1]))
 
     dname = misc_tools.sanitize_string(device.name)
     json_out["version"] = "1.0"
@@ -161,14 +161,18 @@ if __name__ == "__main__":
     print_devices_parser = subparsers.add_parser('list-devices', help='list the devices available')
     tune_parser = subparsers.add_parser('tune', help='tune using a specific configuration file')
     tune_parser.add_argument("--device", default=0, required=False, type=str)
+    tune_parser.add_argument("--viennacl-src-path", default='', type=str)
 
     tune_subparsers = tune_parser.add_subparsers(dest='method')
-    big_sizes_parser = tune_subparsers.add_parser('unique', help = 'Tune each operation for unique sizes')
-    big_sizes_parser.add_argument("--sizes", nargs='+', default=[10e6,2560,2560,1536,1536,1536], required=False, type=int, help = '6 = 1 + 2 + 3 sizes for respectively BLAS1, BLAS2, BLAS3')
-    big_sizes_parser.add_argument("--viennacl-src-path", default='', required=False, type=str)
+    simple_parser = tune_subparsers.add_parser('simple', help = 'Tune each operation for unique sizes')
 
-    model_parser = tune_subparsers.add_parser('build-model', help = 'Build an input-dependent model')
+    simple_parser.add_argument("--blas1-size", default = 10e6, type=int)
+    simple_parser.add_argument("--blas2-size", nargs=2, default=[2560,2560], type=int)
+    simple_parser.add_argument("--blas3-size", nargs=3, default=[1536,1536,1536],type=int)
 
+    full_parser = tune_subparsers.add_parser('full', help = 'Tune each operation for randomly chosen sizes')
+    full_parser.add_argument("--build-model", default=False, type=bool)
+    full_parser.add_argument("--sample-size", default=30, type=int)
 
     args = parser.parse_args()
 
