@@ -1,5 +1,5 @@
 from . import _atidlas as _atd
-
+import pyviennacl.pycore as vcl
 
 FetchingPolicy = _atd.fetching_policy_type
 
@@ -21,15 +21,15 @@ class TemplateBase(object):
         return self._vcl_template.registers_usage(statements.vcl_tuple)
         
     def check(self, statement):
-        vcl_statement = statement.vcl_statement;
-        vcl_context = statement.result.context.vcl_sub_context;
-        return vcl_statement.check_template(self._vcl_template, vcl_context);
+        vcl_statements = vcl.StatementsTuple(statement).vcl_tuple
+        vcl_context = statement.result.context.vcl_sub_context
+        return self._vcl_template.check_invalid(vcl_statements, vcl_context.current_device)
 
     def execute(self, statement, force_compilation=False):
-        vcl_statement = statement.vcl_statement;
-        vcl_context = statement.result.context.vcl_sub_context;
-        vcl_statement.execute_template(self._vcl_template, vcl_context, force_compilation);
-        return statement.result;
+        vcl_statements = vcl.StatementsTuple(statement).vcl_tuple
+        vcl_context = statement.result.context.vcl_sub_context
+        _atd.execute(self._vcl_template, vcl_statements, vcl_context, force_compilation)
+        return statement.result
 
 
 class VectorAxpyTemplate(TemplateBase):

@@ -10,6 +10,8 @@
 #include "atidlas/templates/row_wise_reduction.hpp"
 #include "atidlas/templates/matrix_product.hpp"
 
+#include "atidlas/execute.hpp"
+
 #define ENUM_VALUE(NS, V) .value( #V, NS :: V )
 
 namespace bp = boost::python;
@@ -17,6 +19,8 @@ namespace vcl = viennacl;
 
 void export_atidlas()
 {
+
+  bp::def("execute", &atidlas::execute);
 
   bp::enum_<atidlas::fetching_policy_type>
       ("fetching_policy_type")
@@ -30,7 +34,8 @@ void export_atidlas()
     #define __PROP(name) .def_readonly(#name, &atidlas::template_base::parameters_type::name)
     bp::scope outer = bp::class_<atidlas::template_base, boost::noncopyable>("template_base", bp::no_init)
             .def("lmem_usage", &atidlas::template_base::lmem_usage)
-            .def("registers_usage", &atidlas::template_base::registers_usage);
+            .def("registers_usage", &atidlas::template_base::registers_usage)
+            .def("check_invalid", &atidlas::template_base::check_invalid);
     bp::class_<atidlas::template_base::parameters_type>("parameters_type", bp::no_init)
               __PROP(simd_width)
               __PROP(local_size_0)

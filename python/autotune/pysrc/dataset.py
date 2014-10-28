@@ -54,7 +54,7 @@ def sample_dataset(prefix_name, profiles, execution_handler, nDataPoints, sample
     idx = np.argsort(Y[np.argmax(X),:])
     Y = Y[:, idx]
     profiles = profiles[idx]
-    
+
     dir = os.path.join("data", prefix_name)
     if not os.path.exists(dir):
         os.makedirs(dir)
