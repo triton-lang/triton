@@ -15,16 +15,17 @@ def gmean(a, axis=0, dtype=None):
     return np.exp(log_a.mean(axis=axis))
     
 def train_model(X, Y, profiles, metric):
-    Y=Y[:,:]
-    profiles=profiles[:]
+    #Shuffle
+    p = np.random.permutation(X.shape[0])
+    X = X[p,:]
+    Y = Y[p,:]
+    #Normalize
     Ymax = np.max(Y)
     Y = Y/Ymax
 
     #Train the model
     cut = int(0.75*X.shape[0])
-    clf = ensemble.RandomForestRegressor(10, max_depth=4).fit(X[:cut,:], Y[:cut,:])
-
-    print clf.predict([10000])
+    clf = ensemble.RandomForestRegressor(10, max_depth=3).fit(X[:cut,:], Y[:cut,:])
 
     t = np.argmin(clf.predict(X[cut:,:]), axis = 1)
     s = np.array([y[0]/y[k] for y,k in zip(Y[cut:,:], t)])

@@ -62,7 +62,7 @@ class GeneticOperators(object):
 
     def decode(self, genome):
         FetchingPolicy = atd.FetchingPolicy
-        fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED]
+        fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS]
         decode_element = lambda x:2**int(b_gray_to_bin(''.join(x)), 2)
         result = []
         offset = 0

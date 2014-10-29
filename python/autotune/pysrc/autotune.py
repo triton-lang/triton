@@ -7,17 +7,16 @@ import pyviennacl as vcl
 import pyatidlas as atd
 import numpy as np
 
-from configobj import ConfigObj
 from numpy import random
 from model import train_model
 
 
 TYPES = { 'vector-axpy': {'template':atd.VectorAxpyTemplate,
-                          'perf-index':lambda x: 3*x[0]*x[1][0]/x[2]*1e-9,
+                          'perf-index':lambda x: 2*x[0]*x[1][0]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
           'matrix-axpy': {'template':atd.MatrixAxpyTemplate,
-                          'perf-index':lambda x: 3*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
+                          'perf-index':lambda x: 2*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
           'reduction': {'template':atd.ReductionTemplate,
@@ -34,8 +33,11 @@ TYPES = { 'vector-axpy': {'template':atd.VectorAxpyTemplate,
 
 
 def do_tuning(args, devices):
-    json_out = {}
     device = devices[args.device]
+    dname = misc_tools.sanitize_string(device.name)
+
+    json_out = {}
+    json_out["version"] = "1.0"
 
     def map_to_list(T, x):
         return list(map(T, x if isinstance(x, list) else [x]))
@@ -44,10 +46,14 @@ def do_tuning(args, devices):
         default_tuning_sizes = {'vector-axpy': [args.blas1_size], 'reduction': [args.blas1_size],
                                 'matrix-axpy' : args.blas2_size, 'row-wise-reduction' : args.blas2_size,
                                 'matrix-product': args.blas3_size}
-    for operation in ['vector-axpy', 'matrix-axpy', 'reduction', 'row-wise-reduction', 'matrix-product']:
+
+    for operation in ['matrix-product']:
 
           #Iterate through the datatypes
           for datatype in [vcl.float32, vcl.float64]:
+
+              if operation=='matrix-product' and datatype==vcl.float64 and args.no_dgemm:
+                  continue
 
               ctx = cl.Context([device])
               ctx = vcl.backend.Context(ctx)
@@ -60,17 +66,17 @@ def do_tuning(args, devices):
               #Helper for execution
               def execute(device, node, other_params, sizes, fname = os.devnull, parameters = None):
                   with vcl.Statement(node) as statement:
-                      if parameters:
+                      if parameters is not None:
                           TemplateType = TYPES[operation]['template']
                           return misc_tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),*other_params), statement, device)
-                      print('-----')
-                      print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(other_params), '[' + device.name, '(' + device.platform.name + ')] for sizes', sizes))))
                       with open(fname, "w+") as archive:
                           return optimize.genetic(statement, device, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
                                                   lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
 
               #Helper for tuning
-              def tune(execution_handler, n_datapoints, sampler, additional_parameters):
+              def tune(execution_handler, profiles_generator, dataset_generator, additional_parameters):
+                  print('-----')
+                  print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(additional_parameters), '[' + device.name, '(' + device.platform.name + ')]'))))
                   #Update JSON
                   full_operation = operation + ''.join(additional_parameters)
                   if full_operation not in json_out:
@@ -79,13 +85,14 @@ def do_tuning(args, devices):
                   D = json_out[full_operation][datatype.__name__]
 
                   if args.method == 'simple':
+                      print default_tuning_sizes[operation]
                       profiles = [execution_handler(map(int,default_tuning_sizes[operation]))]
                   else:
                       def compute_perf(x, t):
                           return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
-                      profiles = dataset.sample_profiles(execution_handler, args.sample_size, sampler)
+                      profiles = dataset.sample_profiles(execution_handler, profiles_generator)
                       if args.build_model:
-                        X, Y = dataset.sample_dataset(os.path.join(full_operation,datatype.__name__), profiles, execution_handler, n_datapoints, sampler)
+                        X, Y, profiles = dataset.sample_dataset(os.path.join(full_operation,datatype.__name__), profiles, execution_handler, dataset_generator)
                         clf = train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
                         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
                                        'children_right': e.tree_.children_right.tolist(),
@@ -94,17 +101,27 @@ def do_tuning(args, devices):
                                        'value': e.tree_.value[:,:,0].astype('float32').tolist()} for e in clf.estimators_]
                   if args.viennacl_src_path:
                     misc_tools.update_viennacl_headers(args.viennacl_src_path,device,datatype,operation,additional_parameters,profiles[0])
-                  D['profiles'] = [ prof.astype('int').tolist() for prof in profiles]
+                  D['profiles'] = [map(int, x) for x in profiles]
 
+              def log_uniform_sample(a,b):
+                  return np.exp(np.random.uniform(low=np.log(a), high=np.log(b), size=1)).astype(int)
+
+              def log_space_gen_product(a,b,N,dim):
+                  N = int(N**(1.0/dim))
+                  def log_space_gen(a,b):
+                      for i in range(N):
+                          v = int(np.exp(np.log(a) + (np.log(b) - np.log(a))*(i+1)/N))
+                          yield (v//64 + 1)*64
+
+                  return tuple(itertools.product(*[log_space_gen(a,b) for i in range(dim)]))
 
               #Vector AXPY
               if operation=='vector-axpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
                       x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
-                      y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       z = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
-                      return execute(device, vcl.Assign(z, vcl.ElementProd(vcl.exp(x + y),vcl.cos(x + y))), (), sizes, fname, parameters)
-                  tune(execution_handler, 1000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
+                      return execute(device, vcl.Assign(z, x), (), sizes, fname, parameters)
+                  tune(execution_handler, log_space_gen_product(1e3, 1e7, args.sample_size, 1), log_space_gen_product(1e3, 1e7, 1000, 1), ())
               #Reduction
               if operation=='reduction':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
@@ -112,26 +129,25 @@ def do_tuning(args, devices):
                       y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       s = vcl.Scalar(0, context=ctx, dtype=datatype)
                       return execute(device, vcl.Assign(s, vcl.Dot(x,y)), (), sizes, fname, parameters)
-                  tune(execution_handler, 1000, lambda : 64*np.random.randint(low=10, high=100000, size=1), ())
+                  tune(execution_handler, log_space_gen_product(1e3, 1e7, args.sample_size, 1), log_space_gen_product(1e3, 1e7, 1000, 1), ())
               #Matrix AXPY
               if operation=='matrix-axpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
                       A = vcl.Matrix(sizes, context=ctx, dtype=datatype)
-                      B = vcl.Matrix(sizes, context=ctx, dtype=datatype)
                       C = vcl.Matrix(sizes, context=ctx, dtype=datatype)
-                      return execute(device, vcl.Assign(C,A+B), (), sizes, fname, parameters)
-                  tune(execution_handler, 1000, lambda : 64*np.random.randint(low=5, high=100, size=2), ())
+                      return execute(device, vcl.Assign(C,A), (), sizes, fname, parameters)
+                  tune(execution_handler, log_space_gen_product(100, 4000, args.sample_size, 2), log_space_gen_product(100, 4000, 1000, 2), ())
               #Row-wise reduction
               if operation=='row-wise-reduction':
                   layouts = ['N', 'T']
                   for A_trans in layouts:
                       def execution_handler(sizes, fname=os.devnull, parameters=None):
                           A = vcl.Matrix(sizes if A_trans=='N' else sizes[::-1], context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
-                          x = vcl.Vector(sizes[1] if A_trans=='N' else sizes[0], context=ctx, dtype=datatype)
-                          y = vcl.Vector(sizes[0] if A_trans=='N' else sizes[1], context=ctx, dtype=datatype)
+                          x = vcl.Vector(sizes[1], context=ctx, dtype=datatype)
+                          y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                           LHS = A if A_trans=='N' else A.T
                           return execute(device, vcl.Assign(y, LHS*x), (), sizes, fname, parameters)
-                      tune(execution_handler, 1000, lambda : 64*np.random.randint(low=5, high=100, size=2), (A_trans,))
+                      tune(execution_handler, log_space_gen_product(100, 4000, args.sample_size, 2), log_space_gen_product(100, 4000, 1000, 2), (A_trans,))
               #Matrix Product
               if operation=='matrix-product':
                   layouts = ['NN', 'NT', 'TN', 'TT']
@@ -147,11 +163,12 @@ def do_tuning(args, devices):
                           beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
                           C = vcl.Matrix((sizes[0], sizes[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
                           return execute(device, vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans, B_trans), sizes, fname, parameters)
-                      tune(execution_handler, 1000, lambda : 64*np.random.randint(low=1, high=40, size=3),(layout[0], layout[1]))
+                      tune(execution_handler, log_space_gen_product(100, 4000, args.sample_size, 3), log_space_gen_product(100, 4000, 1000, 3),(layout[0], layout[1]))
 
-    dname = misc_tools.sanitize_string(device.name)
-    json_out["version"] = "1.0"
-    json.dump(json_out, open(dname + '.json','w'))
+              json.dump(json_out, open(dname + '.json','w'))
+
+
+
 
 
 
@@ -160,7 +177,8 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest='action')
     print_devices_parser = subparsers.add_parser('list-devices', help='list the devices available')
     tune_parser = subparsers.add_parser('tune', help='tune using a specific configuration file')
-    tune_parser.add_argument("--device", default=0, required=False, type=str)
+    tune_parser.add_argument("--device", default=0, type=str)
+    tune_parser.add_argument("--no-dgemm", default=True, type=bool)
     tune_parser.add_argument("--viennacl-src-path", default='', type=str)
 
     tune_subparsers = tune_parser.add_subparsers(dest='method')
