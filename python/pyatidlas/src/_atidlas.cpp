@@ -25,8 +25,8 @@ void export_atidlas()
   bp::enum_<atidlas::fetching_policy_type>
       ("fetching_policy_type")
       ENUM_VALUE(atidlas, FETCH_FROM_LOCAL)
-      ENUM_VALUE(atidlas, FETCH_FROM_GLOBAL_CONTIGUOUS)
       ENUM_VALUE(atidlas, FETCH_FROM_GLOBAL_STRIDED)
+      ENUM_VALUE(atidlas, FETCH_FROM_GLOBAL_CONTIGUOUS)
       ;
 
   //Base
