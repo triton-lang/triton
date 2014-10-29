@@ -771,7 +771,7 @@ private:
 
     atidlas_int_t M = call_on_matrix(C, size1_fun());
     atidlas_int_t N = call_on_matrix(C, size2_fun());
-    atidlas_int_t K = A_trans_?call_on_matrix(A, size1_fun()):call_on_matrix(A, size2_fun());
+    atidlas_int_t K = A_trans?call_on_matrix(A, size1_fun()):call_on_matrix(A, size2_fun());
 
     return tools::make_vector<atidlas_int_t>() << M << N << K;
   }
