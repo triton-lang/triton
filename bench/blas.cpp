@@ -2,6 +2,7 @@
 #include "viennacl/vector.hpp"
 #include "viennacl/tools/timer.hpp"
 
+#include "atidlas/tools/misc.hpp"
 #include "atidlas/model/import.hpp"
 #include "atidlas/model/model.hpp"
 
@@ -15,13 +16,23 @@ template<class T>
 void bench(std::vector<int_t> BLAS1_N, std::map<std::string, ad::tools::shared_ptr<ad::model> > & models)
 {
   viennacl::tools::timer timer;
+  float total_time = 0;
+  std::vector<T> times;
+
 #define BENCHMARK(OP, resname) \
+  times.clear();\
+  total_time = 0;\
   OP;\
   viennacl::backend::finish();\
-  timer.start(); \
-  OP;\
+  while(total_time < 1e-1){\
+    timer.start(); \
+    OP;\
+    viennacl::backend::finish();\
+    times.push_back(timer.get());\
+    total_time += times.back();\
+  }\
   viennacl::backend::finish();\
-  float resname = timer.get()
+  float resname = ad::tools::median(times);
 
   //BLAS1
   {
@@ -29,13 +40,13 @@ void bench(std::vector<int_t> BLAS1_N, std::map<std::string, ad::tools::shared_p
     {
       viennacl::vector<T> x(*it), y(*it), z(*it);
       viennacl::scheduler::statement statement(z, viennacl::op_assign(), x + y);
-
       BENCHMARK(models["vector-axpy-float32"]->execute(statement), time_model);
       BENCHMARK(models["vector-axpy-float32"]->execute(statement, true), time_unique_kernel);
       models["vector-axpy-float32"]->tune(statement);
       BENCHMARK(models["vector-axpy-float32"]->execute(statement), time_opt);
 
-      std::cout << *it << " " << time_unique_kernel << " " << time_model << " " << time_opt << std::endl;
+      std::cout << *it << " " << 3*(*it)*sizeof(T)*1e-9/time_unique_kernel << " " << 3*(*it)*sizeof(T)*1e-9/time_model << " " << 3*(*it)*sizeof(T)*1e-9/time_opt << std::endl;
+
     }
   }
 
@@ -51,11 +62,15 @@ std::vector<int_t> create_log_range(int_t min, int_t max, int_t N)
   return res;
 }
 
-int main()
+int main(int argc, char* argv[])
 {
-  std::map<std::string, ad::tools::shared_ptr<ad::model> > models = ad::import("geforce_gt_540m.json");
+  if(argc != 2)
+  {
+      std::cerr << "Usage : PROG model_file" << std::endl;
+  }
+  std::map<std::string, ad::tools::shared_ptr<ad::model> > models = ad::import(argv[1]);
 
-  std::vector<int_t> BLAS1_N = create_log_range(1e3, 1e7, 20);
+  std::vector<int_t> BLAS1_N = create_log_range(1e3, 2e7, 50);
 
   std::cout << "Benchmark : BLAS" << std::endl;
   std::cout << "----------------" << std::endl;

@@ -22,6 +22,17 @@ namespace atidlas
 namespace tools
 {
 
+template<class T>
+T median(std::vector<T> x)
+{
+  size_t size = x.size();
+  std::sort(x.begin(), x.end());
+  if (size  % 2 == 0)
+      return (x[size / 2 - 1] + x[size / 2]) / 2;
+  else
+      return x[size / 2];
+}
+
 template <typename T>
 class make_vector {
 public:
