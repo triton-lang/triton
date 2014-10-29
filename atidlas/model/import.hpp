@@ -18,7 +18,7 @@ namespace atidlas
   {
     tools::shared_ptr<template_base> create(std::string const & template_name, std::vector<int> const & a)
     {
-      fetching_policy_type fetch[] = {FETCH_FROM_LOCAL, FETCH_FROM_GLOBAL_CONTIGUOUS, FETCH_FROM_GLOBAL_STRIDED};
+      fetching_policy_type fetch[] = {FETCH_FROM_LOCAL, FETCH_FROM_GLOBAL_STRIDED, FETCH_FROM_GLOBAL_CONTIGUOUS};
       if(template_name=="vector-axpy")
         return tools::shared_ptr<template_base>(new vector_axpy_template( vector_axpy_parameters(a[0], a[1], a[2], fetch[a[3]])));
       if(template_name=="reduction")
