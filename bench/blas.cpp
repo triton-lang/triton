@@ -48,11 +48,12 @@ void bench(std::vector<int_t> BLAS1_N, std::map<std::string, ad::tools::shared_p
     {\
       declarations;\
       viennacl::scheduler::statement statement(statement_op);\
+      BENCHMARK(y = x + y, time_viennacl);\
       BENCHMARK(models[key]->execute(statement), time_model);\
       BENCHMARK(models[key]->execute(statement, true), time_unique_kernel);\
       models[key]->tune(statement);\
       BENCHMARK(models[key]->execute(statement), time_opt);\
-      std::cout << *it << " " << measure<T>(N,time_unique_kernel) << " " << measure<T>(N,time_model) << " " << measure<T>(N,time_opt) << std::endl;\
+      std::cout << *it << " " << measure<T>(N, time_viennacl) << " " << measure<T>(N,time_unique_kernel) << " " << measure<T>(N,time_model) << " " << measure<T>(N,time_opt) << std::endl;\
     }\
 
 #define DECLARE(type, ...) type __VA_ARGS__
