@@ -36,9 +36,14 @@ def do_tuning(args, devices):
     device = devices[args.device]
     dname = misc_tools.sanitize_string(device.name)
 
-    json_out = {}
-    json_out["version"] = "1.0"
+    if args.update:
+        json_out = json.load(open(args.update, 'r'))
+    else:
+        json_out = {}
+        json_out["version"] = "1.0"
 
+    print json_out
+    
     def map_to_list(T, x):
         return list(map(T, x if isinstance(x, list) else [x]))
 
@@ -57,6 +62,7 @@ def do_tuning(args, devices):
               ctx = cl.Context([device])
               ctx = vcl.backend.Context(ctx)
 
+
               #Check data-type
               if datatype is vcl.float64 and not device.double_fp_config:
                   sys.stderr.write('Warning : The device ' + device.name + ' does not support double precision! Skipping ...')
@@ -72,8 +78,21 @@ def do_tuning(args, devices):
                           return optimize.genetic(statement, device, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
                                                   lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
 
+              def log_uniform_sample(a,b):
+                  return np.exp(np.random.uniform(low=np.log(a), high=np.log(b), size=1)).astype(int)
+
+              def log_space_gen_product(a,b,N,dim):
+                  N = int(N**(1.0/dim))
+                  def log_space_gen(a,b):
+                      for i in range(N):
+                          v = int(np.exp(np.log(a) + (np.log(b) - np.log(a))*(i+1)/N))
+                          yield (v//64 + 1)*64
+
+                  return tuple(itertools.product(*[log_space_gen(a,b) for i in range(dim)]))
+
+
               #Helper for tuning
-              def tune(execution_handler, profiles_generator, dataset_generator, additional_parameters):
+              def tune(execution_handler, a, b, dimsample, additional_parameters):
                   print('-----')
                   print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(additional_parameters), '[' + device.name, '(' + device.platform.name + ')]'))))
                   #Update JSON
@@ -89,8 +108,10 @@ def do_tuning(args, devices):
                   else:
                       def compute_perf(x, t):
                           return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
+                      profiles_generator = log_space_gen_product(a, b, args.sample_size, dimsample)
                       profiles = dataset.sample_profiles(execution_handler, profiles_generator)
                       if args.build_model:
+                        dataset_generator = log_space_gen_product(a, b, 1000, dimsample)
                         X, Y, profiles = dataset.sample_dataset(os.path.join(full_operation,datatype.__name__), profiles, execution_handler, dataset_generator)
                         clf = train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
                         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
@@ -102,17 +123,6 @@ def do_tuning(args, devices):
                     misc_tools.update_viennacl_headers(args.viennacl_src_path,device,datatype,operation,additional_parameters,profiles[0])
                   D['profiles'] = [map(int, x) for x in profiles]
 
-              def log_uniform_sample(a,b):
-                  return np.exp(np.random.uniform(low=np.log(a), high=np.log(b), size=1)).astype(int)
-
-              def log_space_gen_product(a,b,N,dim):
-                  N = int(N**(1.0/dim))
-                  def log_space_gen(a,b):
-                      for i in range(N):
-                          v = int(np.exp(np.log(a) + (np.log(b) - np.log(a))*(i+1)/N))
-                          yield (v//64 + 1)*64
-
-                  return tuple(itertools.product(*[log_space_gen(a,b) for i in range(dim)]))
 
               #Vector AXPY
               if operation=='vector-axpy':
@@ -120,7 +130,7 @@ def do_tuning(args, devices):
                       x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       z = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       return execute(device, vcl.Assign(z, x), (), sizes, fname, parameters)
-                  tune(execution_handler, log_space_gen_product(1e3, 1e7, args.sample_size, 1), log_space_gen_product(1e3, 1e7, 1000, 1), ())
+                  tune(execution_handler, 1e4, 1e7, 1, ())
               #Reduction
               if operation=='reduction':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
@@ -128,14 +138,14 @@ def do_tuning(args, devices):
                       y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       s = vcl.Scalar(0, context=ctx, dtype=datatype)
                       return execute(device, vcl.Assign(s, vcl.Dot(x,y)), (), sizes, fname, parameters)
-                  tune(execution_handler, log_space_gen_product(1e3, 1e7, args.sample_size, 1), log_space_gen_product(1e3, 1e7, 1000, 1), ())
+                  tune(execution_handler, 1e4, 1e7, 1, ())
               #Matrix AXPY
               if operation=='matrix-axpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
-                      A = vcl.Matrix(sizes, context=ctx, dtype=datatype)
-                      C = vcl.Matrix(sizes, context=ctx, dtype=datatype)
+                      A = vcl.Matrix(sizes, context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
+                      C = vcl.Matrix(sizes, context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
                       return execute(device, vcl.Assign(C,A), (), sizes, fname, parameters)
-                  tune(execution_handler, log_space_gen_product(100, 4000, args.sample_size, 2), log_space_gen_product(100, 4000, 1000, 2), ())
+                  tune(execution_handler, 100, 4000, 2, ())
               #Row-wise reduction
               if operation=='row-wise-reduction':
                   for A_trans in  args.gemv_layouts.split(','):
@@ -145,7 +155,7 @@ def do_tuning(args, devices):
                           y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                           LHS = A if A_trans=='N' else A.T
                           return execute(device, vcl.Assign(y, LHS*x), (), sizes, fname, parameters)
-                      tune(execution_handler, log_space_gen_product(100, 4000, args.sample_size, 2), log_space_gen_product(100, 4000, 1000, 2), (A_trans,))
+                      tune(execution_handler, 100, 4000, 2, (A_trans,))
               #Matrix Product
               if operation=='matrix-product':
                   for layout in args.gemm_layouts.split(','):
@@ -160,7 +170,7 @@ def do_tuning(args, devices):
                           beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
                           C = vcl.Matrix((sizes[0], sizes[2]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
                           return execute(device, vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans, B_trans), sizes, fname, parameters)
-                      tune(execution_handler, log_space_gen_product(100, 4000, args.sample_size, 3), log_space_gen_product(100, 4000, 1000, 3),(layout[0], layout[1]))
+                      tune(execution_handler, 100, 4000, 3,(layout[0], layout[1]))
 
               json.dump(json_out, open(dname + '.json','w'))
 
@@ -174,10 +184,11 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest='action')
     print_devices_parser = subparsers.add_parser('list-devices', help='list the devices available')
     tune_parser = subparsers.add_parser('tune', help='tune using a specific configuration file')
-    tune_parser.add_argument("--device", default=0, type=str)
+    tune_parser.add_argument("--device", default=0, type=int)
     tune_parser.add_argument("--exclude-operations", default = '', type=str)
     tune_parser.add_argument("--gemm-layouts", default='NN,NT,TN,TT', type=str)
     tune_parser.add_argument("--gemv-layouts", default='N,T', type=str)
+    tune_parser.add_argument("--update", default='', type=str)
     tune_parser.add_argument("--viennacl-src-path", default='', type=str)
 
     tune_subparsers = tune_parser.add_subparsers(dest='method')
