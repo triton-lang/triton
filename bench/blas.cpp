@@ -48,23 +48,17 @@ void bench(std::vector<int_t> BLAS1_N, std::map<std::string, ad::tools::shared_p
     {\
       declarations;\
       viennacl::scheduler::statement statement(statement_op);\
-      BENCHMARK(models["vector-axpy-float32"]->execute(statement), time_model);\
-      BENCHMARK(models["vector-axpy-float32"]->execute(statement, true), time_unique_kernel);\
-      models["vector-axpy-float32"]->tune(statement);\
-      BENCHMARK(models["vector-axpy-float32"]->execute(statement), time_opt);\
+      BENCHMARK(models[key]->execute(statement), time_model);\
+      BENCHMARK(models[key]->execute(statement, true), time_unique_kernel);\
+      models[key]->tune(statement);\
+      BENCHMARK(models[key]->execute(statement), time_opt);\
       std::cout << *it << " " << measure<T>(N,time_unique_kernel) << " " << measure<T>(N,time_model) << " " << measure<T>(N,time_opt) << std::endl;\
     }\
 
 #define DECLARE(type, ...) type __VA_ARGS__
 #define ARGS(...) __VA_ARGS__
 
-  BENCH(DECLARE(viennacl::vector<T>, x(*it), y(*it), z(*it)), ARGS(z, viennacl::op_assign(), x + y), BLAS1_N, bandwidth, 3*(*it), "vector-axpy-float32");
-  std::cout << std::endl;
-  std::cout << std::endl;
-  BENCH(DECLARE(viennacl::vector<T>, x(*it), y(*it), z(*it)), ARGS(z, viennacl::op_assign(), x + y), BLAS1_N, bandwidth, 3*(*it), "reduction-float32");
-  std::cout << std::endl;
-  std::cout << std::endl;
-  BENCH(DECLARE(viennacl::vector<T>, x(*it), y(*it), z(*it)), ARGS(z, viennacl::op_assign(), x + y), BLAS1_N, bandwidth, 3*(*it), "row-wise-reduction-float32");
+  BENCH(DECLARE(viennacl::vector<T>, x(*it), y(*it)), ARGS(y, viennacl::op_assign(), x + y), BLAS1_N, bandwidth, 3*(*it), "vector-axpy-float32");
   std::cout << std::endl;
   std::cout << std::endl;
 }
