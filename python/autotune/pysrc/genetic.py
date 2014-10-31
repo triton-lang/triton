@@ -187,7 +187,7 @@ class GeneticOperators(object):
             gen = gen + 1
             best_profile = '(%s)'%','.join(map(str,self.decode(hof[0])))
             best_performance = compute_perf(hof[0].fitness.values[0])
-            sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\n'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
+            sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\r'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
             sys.stdout.flush()
         sys.stdout.write('\n')
         return self.decode(hof[0])
