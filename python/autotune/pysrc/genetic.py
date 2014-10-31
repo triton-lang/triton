@@ -85,23 +85,27 @@ class GeneticOperators(object):
 
     def init(self, N):
         result = []
-        while len(result) < N:
-            while True:
-                bincode = []
-                for x in self.genome_info:
-                    if x==atd.FetchingPolicy:
-                        bincode = bincode + [random.randint(0,2)]
-                    else:
-                        bincode = bincode + [str(random.randint(0,1)) for i in range(x)]
-                parameters = self.decode(bincode)
-                template = self.build_template(self.TemplateType.Parameters(*parameters))
-                registers_usage = template.registers_usage(vcl.pycore.StatementsTuple(self.statement))/4
-                lmem_usage = template.lmem_usage(vcl.pycore.StatementsTuple(self.statement))
-                local_size = template.parameters.local_size_0*template.parameters.local_size_1
-                occupancy_record = misc_tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
-                if not misc_tools.skip(template, self.statement, self.device):
-                    result.append(creator.Individual(bincode))
-                    break
+        allowed_idx = [0,1,2] if self.TemplateType==atd.MatrixProductTemplate else [1,2]
+        for idx in allowed_idx:
+            current = []
+            while len(current) < N/len(allowed_idx):
+                while True:
+                    bincode = []
+                    for i, x in enumerate(self.genome_info):
+                        if x==atd.FetchingPolicy:
+                            bincode = bincode + [idx]
+                        else:
+                            bincode = bincode + [str(random.randint(0,1)) for i in range(x)]
+                    parameters = self.decode(bincode)
+                    template = self.build_template(self.TemplateType.Parameters(*parameters))
+                    registers_usage = template.registers_usage(vcl.pycore.StatementsTuple(self.statement))/4
+                    lmem_usage = template.lmem_usage(vcl.pycore.StatementsTuple(self.statement))
+                    local_size = template.parameters.local_size_0*template.parameters.local_size_1
+                    occupancy_record = misc_tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
+                    if not misc_tools.skip(template, self.statement, self.device):
+                        current.append(creator.Individual(bincode))
+                        break
+            result = result + current
         return result
 
     def mutate(self, individual):
@@ -183,7 +187,7 @@ class GeneticOperators(object):
             gen = gen + 1
             best_profile = '(%s)'%','.join(map(str,self.decode(hof[0])))
             best_performance = compute_perf(hof[0].fitness.values[0])
-            sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\r'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
+            sys.stdout.write('Generation %d | Time %d | Best %d %s [ for %s ]\n'%(gen, time.time() - start_time, best_performance, perf_metric, best_profile))
             sys.stdout.flush()
         sys.stdout.write('\n')
         return self.decode(hof[0])
