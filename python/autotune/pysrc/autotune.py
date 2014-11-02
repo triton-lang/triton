@@ -12,11 +12,11 @@ from model import train_model
 
 
 TYPES = { 'vector-axpy': {'template':atd.VectorAxpyTemplate,
-                          'perf-index':lambda x: 2*x[0]*x[1][0]/x[2]*1e-9,
+                          'perf-index':lambda x: 3*x[0]*x[1][0]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
           'matrix-axpy': {'template':atd.MatrixAxpyTemplate,
-                          'perf-index':lambda x: 2*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
+                          'perf-index':lambda x: 3*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
           'reduction': {'template':atd.ReductionTemplate,
@@ -53,7 +53,7 @@ def do_tuning(args):
 
           for datatype in [vcl.float32, vcl.float64]:
 
-              if any(x in args.exclude_operations for x in [operation, operation + '-' + datatype.__name__]):
+              if not any(x in args.operations for x in [operation + '-' + datatype.__name__]):
                   continue
 
               ctx = cl.Context([device])
@@ -106,10 +106,13 @@ def do_tuning(args):
                       def compute_perf(x, t):
                           return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
                       profiles_generator = log_space_gen_product(a, b, args.sample_size, dimsample)
-                      profiles = dataset.sample_profiles(execution_handler, profiles_generator)
+                      # profiles = dataset.sample_profiles(execution_handler, profiles_generator)
                       if args.build_model:
                         dataset_generator = log_space_gen_product(a, b, 1000, dimsample)
-                        X, Y, profiles = dataset.sample_dataset(os.path.join(full_operation,datatype.__name__), profiles, execution_handler, dataset_generator)
+                        # X, Y, profiles = dataset.sample_dataset(os.path.join(full_operation,datatype.__name__), profiles, execution_handler, dataset_generator)
+                        profiles = np.loadtxt('data/vector-axpy/float32/profiles.csv')
+                        X = np.loadtxt('data/vector-axpy/float32/X.csv',ndmin=2)
+                        Y = np.loadtxt('data/vector-axpy/float32/Y.csv',ndmin=2)
                         clf = train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
                         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
                                        'children_right': e.tree_.children_right.tolist(),
@@ -125,9 +128,9 @@ def do_tuning(args):
               if operation=='vector-axpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
                       x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
-                      z = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
-                      return execute(device, vcl.Assign(z, x), (), sizes, fname, parameters)
-                  tune(execution_handler, 1e4, 1e7, 1, ())
+                      y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
+                      return execute(device, vcl.Assign(y, x + y), (), sizes, fname, parameters)
+                  tune(execution_handler, 1e4, 2e7, 1, ())
               #Reduction
               if operation=='reduction':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
@@ -135,13 +138,13 @@ def do_tuning(args):
                       y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       s = vcl.Scalar(0, context=ctx, dtype=datatype)
                       return execute(device, vcl.Assign(s, vcl.Dot(x,y)), (), sizes, fname, parameters)
-                  tune(execution_handler, 1e4, 1e7, 1, ())
+                  tune(execution_handler, 1e4, 2e7, 1, ())
               #Matrix AXPY
               if operation=='matrix-axpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
                       A = vcl.Matrix(sizes, context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
                       C = vcl.Matrix(sizes, context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
-                      return execute(device, vcl.Assign(C,A), (), sizes, fname, parameters)
+                      return execute(device, vcl.Assign(C,A + C), (), sizes, fname, parameters)
                   tune(execution_handler, 100, 4000, 2, ())
               #Row-wise reduction
               if operation=='row-wise-reduction':
@@ -178,52 +181,53 @@ class ArgumentsHandler:
 
     def __init__(self):
 
-        #Command line arguments
-        parent_parser = argparse.ArgumentParser('parent', add_help=False)
-        parent_parser.add_argument('--version', action='version', version='%(prog)s 2.0')
-
-        parser = argparse.ArgumentParser(parents=[parent_parser])
-        subparsers = parser.add_subparsers(dest='action')
-        print_devices_parser = subparsers.add_parser('list-devices', help='List the devices available', parents=[parent_parser])
-        tune_parser = subparsers.add_parser('tune', help='Auto-tuning', parents=[parent_parser])
-        tune_parser.add_argument("--device", default=0, type=int)
-        tune_parser.add_argument("--exclude-operations", default = '', type=str)
-        tune_parser.add_argument("--gemm-layouts", default='NN,NT,TN,TT', type=str)
-        tune_parser.add_argument("--gemv-layouts", default='N,T', type=str)
-        tune_parser.add_argument("--json-file", default='', type=str)
-        tune_parser.add_argument("--viennacl-src-path", default='', type=str)
-
-        tune_subparsers = tune_parser.add_subparsers(dest='method')
-        simple_parser = tune_subparsers.add_parser('simple', help = 'Tune each operation for unique sizes')
-
-        simple_parser.add_argument("--blas1-size", default = 10e6, type=int)
-        simple_parser.add_argument("--blas2-size", nargs=2, default=[2560,2560], type=int)
-        simple_parser.add_argument("--blas3-size", nargs=3, default=[1536,1536,1536],type=int)
-
-        full_parser = tune_subparsers.add_parser('full', help = 'Tune each operation for randomly chosen sizes')
-        full_parser.add_argument("--build-model", default=False, type=bool)
-        full_parser.add_argument("--sample-size", default=30, type=int)
-
-        args = parent_parser.parse_args()
-        self.__dict__ = args.__dict__.copy()
-
         #No action argument -> interactive tuning
-        if 'action' not in vars(args):
-                def add_input(help, default):
-                    return raw_input(help + "[" + default + "] : ") or default
+        if len(sys.argv)==1:
+            def add_input(help, default):
+                return raw_input(help + "[" + default + "] : ") or default
 
-                self.device = add_input('Device to tune for','0')
-                self.exclude_operations = add_input('Operations to exclude','vector-axpy,matrix-axpy,reduction,row-wise-reduction,matrix-product-float64').split(',')
-                self.gemm_layouts = '' if 'matrix-product' in self.exclude_operations else add_input('GEMV Layouts', 'NN,NT,TN,TT')
-                self.gemv_layouts = '' if 'row-wise-reduction' in self.exclude_operations else add_input('GEMV Layouts', 'N,T')
-                self.json_file = add_input('JSON File', misc_tools.sanitize_string(devices[int(self.device)].name) + '.json')
-                self.method = add_input('Tuning type', 'simple')
-                if self.method == 'simple':
-                    self.blas1_size = add_input('BLAS1 size', '10e6')
-                    self.blas2_size = add_input('BLAS2 sizes (M,N)', '2560,2560').split(',')
-                    self.blas3_size = add_input('BLAS3 sizes (M,N,K)', '1024,1024,1024').split(',')
-                self.build_model = True
-                self.sample_size = 30
+            self.device = add_input('Device to tune for','0')
+            self.operations = add_input('Operations to tune for','vector-axpy,matrix-axpy,reduction,row-wise-reduction,matrix-product-float32').split(',')
+            self.gemm_layouts = add_input('GEMV Layouts', 'NN,NT,TN,TT') if 'matrix-product' in self.operations else ''
+            self.gemv_layouts =  add_input('GEMV Layouts', 'N,T') if 'row-wise-reduction' in self.operations else ''
+            self.json_file = add_input('JSON File', misc_tools.sanitize_string(devices[int(self.device)].name) + '.json')
+            self.method = add_input('Tuning type', 'simple')
+            if self.method == 'simple':
+                self.blas1_size = add_input('BLAS1 size', '10e6')
+                self.blas2_size = add_input('BLAS2 sizes (M,N)', '2560,2560').split(',')
+                self.blas3_size = add_input('BLAS3 sizes (M,N,K)', '1024,1024,1024').split(',')
+            else:
+              self.build_model = True
+              self.sample_size = 30
+            self.viennacl_src_path= add_input('ViennaCL src path', '')
+        else:
+            #Command line arguments
+            parser = argparse.ArgumentParser()
+            subparsers = parser.add_subparsers(dest='action')
+            print_devices_parser = subparsers.add_parser('list-devices', help='List the devices available')
+            tune_parser = subparsers.add_parser('tune', help='Auto-tuning')
+            tune_parser.add_argument("--device", default=0, type=int)
+            tune_parser.add_argument("--operations", default = 'vector-axpy,matrix-axpy,reduction,row-wise-reduction,matrix-product-float32', type=str)
+            tune_parser.add_argument("--gemm-layouts", default='NN,NT,TN,TT', type=str)
+            tune_parser.add_argument("--gemv-layouts", default='N,T', type=str)
+            tune_parser.add_argument("--json-file", default='', type=str)
+            tune_parser.add_argument("--viennacl-src-path", default='', type=str)
+
+            tune_subparsers = tune_parser.add_subparsers(dest='method')
+            simple_parser = tune_subparsers.add_parser('simple', help = 'Tune each operation for unique sizes')
+
+            simple_parser.add_argument("--blas1-size", default = 10e6, type=int)
+            simple_parser.add_argument("--blas2-size", nargs=2, default=[2560,2560], type=int)
+            simple_parser.add_argument("--blas3-size", nargs=3, default=[1536,1536,1536],type=int)
+
+            full_parser = tune_subparsers.add_parser('full', help = 'Tune each operation for randomly chosen sizes')
+            full_parser.add_argument("--build-model", default=True, type=bool)
+            full_parser.add_argument("--sample-size", default=30, type=int)
+
+            args = parser.parse_args()
+            self.__dict__ = args.__dict__.copy()
+
+
 
         #Retypes
         self.device = devices[int(self.device)]

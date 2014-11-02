@@ -7,6 +7,7 @@ import sys
 
 import pyopencl as cl
 import pyviennacl as vcl
+import numpy as np
 
 class PhysicalLimitsNV:
     def __init__(self, dev):
@@ -196,15 +197,15 @@ def benchmark(template, statement, device):
     else:
         template.execute(statement, True)
         statement.result.context.finish_all_queues()
-        N = 0
         current_time = 0
+        timings = []
         while current_time < 1e-1:
             time_before = time.time()
             template.execute(statement,False)
             statement.result.context.finish_all_queues()
-            current_time = current_time + time.time() - time_before
-            N+=1
-        return current_time/N
+            timings.append(time.time() - time_before)
+            current_time = current_time + timings[-1]
+        return np.median(timings)
 
 
 def sanitize_string(string, keep_chars = ['_']):

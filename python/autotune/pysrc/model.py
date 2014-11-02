@@ -13,7 +13,12 @@ def gmean(a, axis=0, dtype=None):
     else:
         log_a = np.log(a)
     return np.exp(log_a.mean(axis=axis))
-    
+
+def nrmse(y_ground, y):
+    N = y.size
+    rmsd = np.sqrt(np.sum((y_ground - y)**2)/N)
+    return rmsd/(np.max(y_ground) - np.min(y_ground))
+
 def train_model(X, Y, profiles, metric):
     #Shuffle
     p = np.random.permutation(X.shape[0])
@@ -22,24 +27,19 @@ def train_model(X, Y, profiles, metric):
     #Normalize
     Ymax = np.max(Y)
     Y = Y/Ymax
-
     #Train the model
-    cut = int(0.75*X.shape[0])
-    clf = ensemble.RandomForestRegressor(10, max_depth=3).fit(X[:cut,:], Y[:cut,:])
+    cut = int(0.9*X.shape[0])
+    nrmses = {}
+    for depth in range(1,10):
+        clf = ensemble.RandomForestRegressor(5, max_depth=4).fit(X[:cut,:], Y[:cut,:])
+        t = np.argmin(clf.predict(X[cut:,:]), axis = 1)
+        y = np.array([Y[cut+i,t[i]] for i in range(t.size)])
+        y_ground = np.min(Y[cut:,:], axis=1)
+        # for i in range(t.size):
+        #     print X[cut+i,:], y[i], y_ground[i]
+        nrmses[clf] = nrmse(y_ground, y)
+        print depth, nrmses[clf]
 
-    t = np.argmin(clf.predict(X[cut:,:]), axis = 1)
-    s = np.array([y[0]/y[k] for y,k in zip(Y[cut:,:], t)])
-    tt = np.argmin(Y[cut:,:], axis = 1)
-    ss = np.array([y[0]/y[k] for y,k in zip(Y[cut:,:], tt)])
-
-    p5 = lambda a: np.percentile(a, 5)
-    p25 = lambda a: np.percentile(a, 25)
-    p50 = lambda a: np.percentile(a, 50)
-    p75 = lambda a: np.percentile(a, 75)
-    p95 = lambda a: np.percentile(a, 95)
-
-    print("Percentile     :\t 5 \t 25 \t 50 \t 75 \t 95")
-    print("Testing speedup:\t %.2f\t %.2f\t %.2f\t %.2f\t %.3f"%(p5(s), p25(s), p50(s), p75(s), p95(s)))
-    print("Optimal speedup:\t %.2f\t %.2f\t %.2f\t %.2f\t %.3f"%(p5(ss), p25(ss), p50(ss), p75(ss), p95(ss)))
+    clf = min(nrmses, key=nrmses.get)
 
     return clf
