@@ -71,6 +71,10 @@ class PhysicalLimitsAMD:
 
         infos =\
         {
+            #APU:
+            'Devastator': {'arch': 'VLIW', 'WFmax_cu': 96, 'LDS_cu': 32768, 'GPR_cu': 8192},
+            'Scrapper': {'arch': 'VLIW', 'WFmax_cu': 96, 'LDS_cu': 32768, 'GPR_cu': 8192},
+            
             #HD5000
             'Cedar': {'arch': 'VLIW', 'WFmax_cu': 96, 'LDS_cu': 32768, 'GPR_cu': 8192},
             'Redwood': {'arch': 'VLIW', 'WFmax_cu': 62, 'LDS_cu': 32768, 'GPR_cu': 16384},
