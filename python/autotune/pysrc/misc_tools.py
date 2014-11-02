@@ -273,7 +273,7 @@ def update_viennacl_headers(viennacl_root, device, datatype, operation, addition
         data = ''
 
     if not data:
-        ifndef_suffix = ('_'.join(header_hierarchy) + '_hpp_').upper()
+        ifndef_suffix = ('_'.join(header_hierarchy + [cpp_device_name]) + '_hpp_').upper()
         data =  ('#ifndef VIENNACL_DEVICE_SPECIFIC_BUILTIN_DATABASE_' + ifndef_suffix + '\n'
             '#define VIENNACL_DEVICE_SPECIFIC_BUILTIN_DATABASE_' + ifndef_suffix + '\n'
             '\n'

@@ -53,7 +53,7 @@ def do_tuning(args):
 
           for datatype in [vcl.float32, vcl.float64]:
 
-              if not any(x in args.operations for x in [operation + '-' + datatype.__name__]):
+              if not any(x in args.operations for x in [operation, operation + '-' + datatype.__name__]):
                   continue
 
               ctx = cl.Context([device])
@@ -188,8 +188,8 @@ class ArgumentsHandler:
 
             self.device = add_input('Device to tune for','0')
             self.operations = add_input('Operations to tune for','vector-axpy,matrix-axpy,reduction,row-wise-reduction,matrix-product-float32').split(',')
-            self.gemm_layouts = add_input('GEMV Layouts', 'NN,NT,TN,TT') if 'matrix-product' in self.operations else ''
-            self.gemv_layouts =  add_input('GEMV Layouts', 'N,T') if 'row-wise-reduction' in self.operations else ''
+            self.gemm_layouts = add_input('GEMV Layouts', 'NN,NT,TN,TT')
+            self.gemv_layouts =  add_input('GEMV Layouts', 'N,T')
             self.json_file = add_input('JSON File', misc_tools.sanitize_string(devices[int(self.device)].name) + '.json')
             self.method = add_input('Tuning type', 'simple')
             if self.method == 'simple':
