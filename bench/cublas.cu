@@ -8,8 +8,11 @@
 
 #include "common.hpp"
 
+#include "CL/cl.h"
+#include "atidlas/execute.hpp"
+
 template<class NumericT>
-void run(std::vector<int> const & BLAS1_N, std::vector<int> const & BLAS2_N, std::vector<int> const & BLAS3_N)
+void run()
 {
     #define FILL_TIMINGS(OP, timings) \
     {\
@@ -74,25 +77,28 @@ void run(std::vector<int> const & BLAS1_N, std::vector<int> const & BLAS2_N, std
 
     std::cout << "#GEMV" << std::endl;
     std::cout << "#N Perf" << std::endl;
-    for(std::vector<int>::const_iterator it = BLAS2_N.begin() ; it != BLAS2_N.end() ; ++it)
+    for(std::vector<int>::const_iterator Mit = BLAS2_M.begin() ; Mit != BLAS2_M.end() ; ++Mit)
     {
-      int M = *it;
-      int N = *it;
-      NumericT *x, *y, *A;
-      cudaMalloc((void**) &A, M * N * sizeof(NumericT));
-      cudaMalloc((void**) &x, M * sizeof(NumericT));
-      cudaMalloc((void**) &y, N * sizeof(NumericT));
-      //Bench
-      std::vector<float> timings;
-      FILL_TIMINGS(cublasSgemv('T', M, N, 1.0, A, M, x, 1, 1.0, y, 1), timings);
-      std::cout << N << " " << (M + N + M*N)*sizeof(NumericT)*1e-9/median(timings) << std::endl;
-      //Free
-      cudaFree(A);
-      cudaFree(x);
-      cudaFree(y);
+        for(std::vector<int>::const_iterator it = BLAS2_N.begin() ; it != BLAS2_N.end() ; ++it)
+        {
+          int M = *Mit;
+          int N = *it;
+          NumericT *x, *y, *A;
+          cudaMalloc((void**) &A, M * N * sizeof(NumericT));
+          cudaMalloc((void**) &x, M * sizeof(NumericT));
+          cudaMalloc((void**) &y, N * sizeof(NumericT));
+          //Bench
+          std::vector<float> timings;
+          FILL_TIMINGS(cublasSgemv('N', M, N, 1.0, A, M, x, 1, 1.0, y, 1), timings);
+          std::cout << N << " " << (M + N + M*N)*sizeof(NumericT)*1e-9/median(timings) << std::endl;
+          //Free
+          cudaFree(A);
+          cudaFree(x);
+          cudaFree(y);
+        }
+        std::cout << std::endl;
+        std::cout << std::endl;
     }
-    std::cout << std::endl;
-    std::cout << std::endl;
 
     std::cout << "#GEMM" << std::endl;
     std::cout << "#N Perf" << std::endl;
@@ -124,10 +130,5 @@ int main(int argc, char** argv)
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
   std::cout << "Device: " << prop.name << std::endl;
-
-  std::vector<int> BLAS1_N = create_log_range(1e3, 2e7, 50);
-  std::vector<int> BLAS2_N = create_log_range(100, 4000, 50);
-  std::vector<int> BLAS3_N = create_log_range(100, 4000, 50);
-
-  run<float>(BLAS1_N, BLAS2_N, BLAS3_N);
+  run<float>();
 }

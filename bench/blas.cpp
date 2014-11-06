@@ -1,26 +1,31 @@
+//#define VIENNACL_DEBUG_ALL
+
 #include "viennacl/matrix.hpp"
 #include "viennacl/vector.hpp"
 #include "viennacl/tools/timer.hpp"
+#include "viennacl/linalg/prod.hpp"
+#include "viennacl/linalg/inner_prod.hpp"
+#include "viennacl/scheduler/execute.hpp"
 
 #include "atidlas/tools/misc.hpp"
 #include "atidlas/model/import.hpp"
 #include "atidlas/model/model.hpp"
 
+#include "common.hpp"
+
 #include <iomanip>
 #include <stdlib.h>
+
 
 namespace ad = atidlas;
 typedef atidlas::atidlas_int_t int_t;
 
 template<class T>
-float bandwidth(std::size_t N, float t)
+void bench(std::map<std::string, ad::tools::shared_ptr<ad::model> > & models)
 {
-    return N * sizeof(T) * 1e-9 / t;
-}
+  typedef viennacl::matrix<T,viennacl::column_major> matrix_type;
+  typedef viennacl::vector<T> vector_type;
 
-template<class T>
-void bench(std::vector<int_t> BLAS1_N, std::map<std::string, ad::tools::shared_ptr<ad::model> > & models)
-{
   viennacl::tools::timer timer;
   float total_time = 0;
   std::vector<T> times;
@@ -30,7 +35,7 @@ void bench(std::vector<int_t> BLAS1_N, std::map<std::string, ad::tools::shared_p
   total_time = 0;\
   OP;\
   viennacl::backend::finish();\
-  while(total_time < 1e-1){\
+  while(total_time < 1e-2){\
     timer.start(); \
     OP;\
     viennacl::backend::finish();\
@@ -40,36 +45,67 @@ void bench(std::vector<int_t> BLAS1_N, std::map<std::string, ad::tools::shared_p
   viennacl::backend::finish();\
   float resname = ad::tools::median(times);
 
-  std::cout << "#N PerfNaive PerfModel PerfOpt" << std::endl;
-
 #define BENCH(declarations, statement_op, sizes, measure, N, key) \
-    std::cout << "#"  << key << std::endl;\
-    for(std::vector<int_t>::const_iterator it = sizes.begin() ; it != sizes.end() ; ++it)\
-    {\
-      declarations;\
-      viennacl::scheduler::statement statement(statement_op);\
-      BENCHMARK(y = x + y, time_viennacl);\
-      BENCHMARK(models[key]->execute(statement), time_model);\
-      BENCHMARK(models[key]->execute(statement, true), time_unique_kernel);\
-      models[key]->tune(statement);\
-      BENCHMARK(models[key]->execute(statement), time_opt);\
-      std::cout << *it << " " << measure<T>(N, time_viennacl) << " " << measure<T>(N,time_unique_kernel) << " " << measure<T>(N,time_model) << " " << measure<T>(N,time_opt) << std::endl;\
+    if(models.find(key)!=models.end()){\
+        if(!first)\
+        {\
+          std::cout << std::endl;\
+          std::cout << std::endl;\
+        }\
+        std::cout << "#"  << key << std::endl;\
+        for(std::vector<int_t>::const_iterator it = sizes.begin() ; it != sizes.end() ; ++it)\
+        {\
+          declarations;\
+          viennacl::scheduler::statement statement(statement_op);\
+          BENCHMARK(models.at(key)->execute(statement), time_model);\
+          BENCHMARK(models[key]->execute(statement, true), time_unique_kernel);\
+          models[key]->tune(statement);\
+          BENCHMARK(models[key]->execute(statement), time_opt);\
+          std::cout << *it << " " << measure<T>(N,time_unique_kernel) << " " << measure<T>(N,time_model) << " " << measure<T>(N,time_opt) << std::endl;\
+        }\
     }\
 
 #define DECLARE(type, ...) type __VA_ARGS__
 #define ARGS(...) __VA_ARGS__
 
-  BENCH(DECLARE(viennacl::vector<T>, x(*it), y(*it)), ARGS(y, viennacl::op_assign(), x + y), BLAS1_N, bandwidth, 3*(*it), "vector-axpy-float32");
-  std::cout << std::endl;
-  std::cout << std::endl;
-}
+  /*---------*/
+  /*--BLAS1--*/
+  /*---------*/
 
-std::vector<int_t> create_log_range(int_t min, int_t max, int_t N)
-{
-  std::vector<int_t> res(N);
-  for(int_t i = 0 ; i < N ; ++i)
-    res[i] = std::exp(std::log(min) + (float)(std::log(max) - std::log(min))*i/N);
-  return res;
+  //AXPY
+  bool first =true;
+  BENCH(DECLARE(viennacl::vector<T>, x(*it), y(*it)), ARGS(y, viennacl::op_assign(), x + y),
+        BLAS1_N, bandwidth, 3*(*it), "vector-axpy-float32");
+  first=false;
+
+
+  //DOT
+  BENCH(DECLARE(viennacl::scalar<T> s(0)); DECLARE(vector_type, x(*it), y(*it)), ARGS(s, viennacl::op_assign(), viennacl::linalg::inner_prod(x,y)),
+          BLAS1_N, bandwidth, 2*(*it), "reduction-float32");
+
+
+  /*---------*/
+  /*--BLAS2--*/
+  /*---------*/
+
+  //N-layout
+  for(std::vector<int>::const_iterator Mit = BLAS2_M.begin() ; Mit != BLAS2_M.end() ; ++Mit)
+  {
+      BENCH(DECLARE(matrix_type, A(*Mit,*it)); DECLARE(vector_type, y(*Mit), x(*it)),ARGS(y, viennacl::op_assign(), viennacl::linalg::prod(A,x)), BLAS2_N,
+             bandwidth, (*Mit)*(*it), "row-wise-reductionN-float32");
+  }
+
+
+  //T-layout
+  for(std::vector<int>::const_iterator Mit = BLAS2_M.begin() ; Mit != BLAS2_M.end() ; ++Mit)
+  {
+      BENCH(DECLARE(matrix_type, A(*it,*Mit)) ; DECLARE(vector_type, y(*Mit), x(*it)), ARGS(y, viennacl::op_assign(), viennacl::linalg::prod(viennacl::trans(A),x)), BLAS2_N,
+             bandwidth, (*Mit)*(*it), "row-wise-reductionT-float32");
+  }
+
+  /*---------*/
+  /*--BLAS3--*/
+  /*---------*/
 }
 
 int main(int argc, char* argv[])
@@ -81,9 +117,7 @@ int main(int argc, char* argv[])
   }
   std::map<std::string, ad::tools::shared_ptr<ad::model> > models = ad::import(argv[1]);
 
-  std::vector<int_t> BLAS1_N = create_log_range(1e3, 2e7, 50);
-
   std::cout << "#Benchmark : BLAS" << std::endl;
   std::cout << "#----------------" << std::endl;
-  bench<float>(BLAS1_N, models);
+  bench<float>(models);
 }
