@@ -51,9 +51,10 @@ def do_tuning(args):
 
     for operation in ['vector-axpy', 'reduction', 'matrix-axpy', 'row-wise-reduction', 'matrix-product']:
 
+
           for datatype in [vcl.float32, vcl.float64]:
 
-              if not any(x in args.operations for x in [operation, operation + '-' + datatype.__name__]):
+              if operation not in args.operations and operation + '-' + datatype.__name__ not in args.operations:
                   continue
 
               ctx = cl.Context([device])
@@ -78,22 +79,25 @@ def do_tuning(args):
               def log_uniform_sample(a,b):
                   return np.exp(np.random.uniform(low=np.log(a), high=np.log(b), size=1)).astype(int)
 
-              def log_space_gen_product(a,b,N,dim):
+              def space_gen_product(a,b,N,dim,method):
                   N = int(N**(1.0/dim))
-                  def log_space_gen(a,b):
+                  def space_gen(a,b,method):
                       for i in range(N):
-                          v = int(np.exp(np.log(a) + (np.log(b) - np.log(a))*(i+1)/N))
+                          if method == 'linear':
+                              v = int(a + (b-a)*i/N)
+                          if method == 'log':
+                              v = int(np.exp(np.log(a) + (np.log(b) - np.log(a))*i/N))
                           yield (v//64 + 1)*64
-
-                  return tuple(itertools.product(*[log_space_gen(a,b) for i in range(dim)]))
+                  return tuple(itertools.product(*[space_gen(a,b,method) for i in range(dim)]))
 
 
               #Helper for tuning
-              def tune(execution_handler, a, b, dimsample, additional_parameters):
+              def tune(execution_handler, a, b, dimsample, layouts, sample_method_profiles, sample_method_dataset):
+                  print args.build_model
                   print('-----')
-                  print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(additional_parameters), '[' + device.name, '(' + device.platform.name + ')]'))))
+                  print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(layouts), '[' + device.name, '(' + device.platform.name + ')]'))))
                   #Update JSON
-                  full_operation = operation + ''.join(additional_parameters)
+                  full_operation = operation + ''.join(layouts)
                   if full_operation not in json_out:
                       json_out[full_operation] = {}
                   json_out[full_operation][datatype.__name__] = {}
@@ -105,14 +109,14 @@ def do_tuning(args):
                   else:
                       def compute_perf(x, t):
                           return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
-                      profiles_generator = log_space_gen_product(a, b, args.sample_size, dimsample)
-                      # profiles = dataset.sample_profiles(execution_handler, profiles_generator)
+                      profiles_generator = space_gen_product(a, b, args.sample_size, dimsample, sample_method_profiles)
+                      profiles = dataset.sample_profiles(execution_handler, profiles_generator)
                       if args.build_model:
-                        dataset_generator = log_space_gen_product(a, b, 1000, dimsample)
-                        # X, Y, profiles = dataset.sample_dataset(os.path.join(full_operation,datatype.__name__), profiles, execution_handler, dataset_generator)
-                        profiles = np.loadtxt('data/vector-axpy/float32/profiles.csv')
-                        X = np.loadtxt('data/vector-axpy/float32/X.csv',ndmin=2)
-                        Y = np.loadtxt('data/vector-axpy/float32/Y.csv',ndmin=2)
+                        dataset_generator = space_gen_product(a, b, 1000, dimsample, sample_method_dataset)
+                        X, Y, profiles = dataset.sample_dataset(os.path.join(full_operation,datatype.__name__), profiles, execution_handler, dataset_generator)
+                        # profiles = np.loadtxt('data/'+full_operation+'/'+datatype.__name__+'/profiles.csv')
+                        # X = np.loadtxt('data/'+full_operation+'/'+datatype.__name__+'/X.csv',ndmin=2)
+                        # Y = np.loadtxt('data/'+full_operation+'/'+datatype.__name__+'/Y.csv',ndmin=2)
                         clf = train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
                         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
                                        'children_right': e.tree_.children_right.tolist(),
@@ -120,7 +124,7 @@ def do_tuning(args):
                                        'feature': e.tree_.feature.astype('float64').tolist(),
                                        'value': e.tree_.value[:,:,0].astype('float64').tolist()} for e in clf.estimators_]
                   if args.viennacl_src_path:
-                    misc_tools.update_viennacl_headers(args.viennacl_src_path, device,datatype,operation,additional_parameters,profiles[0])
+                    misc_tools.update_viennacl_headers(args.viennacl_src_path, device,datatype,operation,layouts,profiles[0])
                   D['profiles'] = [map(int, x) for x in profiles]
 
 
@@ -130,7 +134,7 @@ def do_tuning(args):
                       x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       return execute(device, vcl.Assign(y, x + y), (), sizes, fname, parameters)
-                  tune(execution_handler, 1e4, 2e7, 1, ())
+                  tune(execution_handler, 1e3, 2e7, 1, (),'log', 'log')
               #Reduction
               if operation=='reduction':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
@@ -138,14 +142,14 @@ def do_tuning(args):
                       y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                       s = vcl.Scalar(0, context=ctx, dtype=datatype)
                       return execute(device, vcl.Assign(s, vcl.Dot(x,y)), (), sizes, fname, parameters)
-                  tune(execution_handler, 1e4, 2e7, 1, ())
+                  tune(execution_handler, 1e3, 2e7, 1, (),'log', 'log')
               #Matrix AXPY
               if operation=='matrix-axpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
                       A = vcl.Matrix(sizes, context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
                       C = vcl.Matrix(sizes, context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
                       return execute(device, vcl.Assign(C,A + C), (), sizes, fname, parameters)
-                  tune(execution_handler, 100, 4000, 2, ())
+                  tune(execution_handler, 100, 5000, 2, (),'log', 'log')
               #Row-wise reduction
               if operation=='row-wise-reduction':
                   for A_trans in  args.gemv_layouts:
@@ -155,7 +159,7 @@ def do_tuning(args):
                           y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
                           LHS = A if A_trans=='N' else A.T
                           return execute(device, vcl.Assign(y, LHS*x), (), sizes, fname, parameters)
-                      tune(execution_handler, 100, 4000, 2, (A_trans,))
+                      tune(execution_handler, 100, 5000, 2, (A_trans,),'log', 'log')
               #Matrix Product
               if operation=='matrix-product':
                   for L in args.gemm_layouts:
@@ -170,7 +174,7 @@ def do_tuning(args):
                           beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
                           C = vcl.Matrix((sizes[0], sizes[1]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
                           return execute(device, vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans,B_trans), sizes, fname, parameters)
-                      tune(execution_handler, 100, 2000, 3,(A_trans,B_trans))
+                      tune(execution_handler, 100, 2000, 3,(A_trans,B_trans), 'linear')
 
               json.dump(json_out, open(args.json_file,'w'))
 
@@ -227,10 +231,12 @@ class ArgumentsHandler:
             args = parser.parse_args()
             self.__dict__ = args.__dict__.copy()
 
-
-
         #Retypes
+        self.operations = [self.operations] if not isinstance(self.operations, list) else self.operations
         self.device = devices[int(self.device)]
+        if not self.json_file:
+            self.json_file = misc_tools.sanitize_string(self.device.name) + '.json'
+
         self.gemm_layouts = self.gemm_layouts.split(',')
         self.gemv_layouts = self.gemv_layouts.split(',')
         if self.method == 'simple':

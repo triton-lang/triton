@@ -90,7 +90,7 @@ private:
 
 public:
   vector_axpy_template(vector_axpy_template::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE) : template_base_impl<vector_axpy_template, vector_axpy_parameters>(parameters, binding_policy), up_to_internal_size_(false)
-  { }
+  {}
 
   void up_to_internal_size(bool v)
   { up_to_internal_size_ = v; }
@@ -105,11 +105,12 @@ public:
   void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs,  statements_container const & statements)
   {
     atidlas_int_t size = input_sizes(statements)[0];
-    viennacl::ocl::kernel * kernel;
-    if(p_.simd_width > 1 && (has_strided_access(statements) || (size%p_.simd_width>0) || has_misaligned_offset(statements)))
-      kernel = &programs[0].program().get_kernel(kernel_prefix+"0");
-    else
-      kernel = &programs[1].program().get_kernel(kernel_prefix+"1");
+    std::string kfallback = kernel_prefix;
+    kfallback+='0';
+    std::string kopt = kernel_prefix;
+    kopt+='1';
+    bool fallback = p_.simd_width > 1 && (has_strided_access(statements) || (size%p_.simd_width>0) || has_misaligned_offset(statements));
+    viennacl::ocl::kernel * kernel = &programs[fallback?0:1].program().get_kernel(fallback?kfallback:kopt);
     kernel->local_work_size(0, p_.local_size_0);
     kernel->global_work_size(0, p_.local_size_0*p_.num_groups);
     unsigned int current_arg = 0;

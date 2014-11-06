@@ -44,10 +44,10 @@ def main():
     
     DEFINES = [('VIENNACL_WITH_OPENCL',None), ('VIENNACL_WITH_OPENMP', None),
                ('boost','pyviennaclboost')]
-    INCLUDE_DIRS = ['/home/philippe/Development/pyviennacl-dev/external/boost-python-ublas-subset/boost_subset/',
+    INCLUDE_DIRS = ['${CMAKE_CURRENT_SOURCE_DIR}/external/pyviennacl-dev/external/boost-python-ublas-subset/boost_subset/',
                     '${PROJECT_SOURCE_DIR}',
-                    '/home/philippe/Development/pyviennacl-dev/external/viennacl-dev']
-    LIBRARY_DIRS = ['/home/philippe/Development/pyviennacl-dev/build/lib.linux-x86_64-2.7/pyviennacl/']
+                    '${CMAKE_CURRENT_SOURCE_DIR}/external/pyviennacl-dev/external/viennacl-dev']
+    LIBRARY_DIRS = ['${CMAKE_CURRENT_SOURCE_DIR}/external/pyviennacl-dev/build/lib.linux-x86_64-2.7/pyviennacl/']
 
     setup(
 		name="pyatidlas",

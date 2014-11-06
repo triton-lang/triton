@@ -71,6 +71,9 @@ namespace atidlas
       return res;
     }
 
+    std::vector<tree> const & estimators() const
+    { return estimators_; }
+
   private:
     std::vector<tree> estimators_;
   };
@@ -93,17 +96,27 @@ namespace atidlas
 
   public:
     model(random_forest const & predictor, std::vector< tools::shared_ptr<template_base> > const & templates,
-          viennacl::ocl::context & context, viennacl::ocl::device const & device) : predictor_(predictor), templates_(templates), context_(context), device_(device)
+          viennacl::ocl::context & context, viennacl::ocl::device const & device) : predictor_(new random_forest(predictor)), templates_(templates), context_(context), device_(device)
     {  }
 
-    void execute(statements_container const & statements, bool bypass_predictor = false)
+    model(std::vector< tools::shared_ptr<template_base> > const & templates, viennacl::ocl::context & context, viennacl::ocl::device const & device) :
+        templates_(templates), context_(context), device_(device)
+    {}
+
+    model(template_base const & tp, viennacl::ocl::context & context, viennacl::ocl::device const & device) :
+        templates_(1,tp.clone()), context_(context), device_(device)
+    {}
+
+    void execute(statements_container const & statements, bool bypass_predictor = false, bool force_recompilation = false)
     {
+      bypass_predictor = bypass_predictor || predictor_.get()==NULL;
+
       if(lazy_programs_.empty())
       {
         std::string pname = tools::statements_representation(statements, BIND_TO_HANDLE);
 
-        init_program_compiler(pname, false);
-        init_program_compiler(pname + "_fb", false);
+        init_program_compiler(pname, force_recompilation);
+        init_program_compiler(pname + "_fb", force_recompilation);
 
         for(size_t i = 0 ; i < templates_.size() ; ++i)
         {
@@ -126,10 +139,9 @@ namespace atidlas
       //Default
       else
       {
-        std::vector<float> predictions = predictor_.predict(x);
+        std::vector<float> predictions = predictor_->predict(x);
         label = std::distance(predictions.begin(),std::min_element(predictions.begin(), predictions.end()));
       }
-
 
       //Execution
       templates_[label]->enqueue("k" + tools::to_string(label), lazy_programs_, statements);
@@ -154,10 +166,9 @@ namespace atidlas
     }
 
   private:
-    random_forest predictor_;
+    tools::shared_ptr<random_forest> predictor_;
 
     templates_container templates_;
-
     std::map<std::vector<atidlas_int_t>, int> hardcoded_;
 
     viennacl::ocl::context & context_;

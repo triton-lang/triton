@@ -132,7 +132,7 @@ class GeneticOperators(object):
                 tt = misc_tools.benchmark(template, self.statement, self.device)
                 self.out.write(','.join([str(tt)]+map(str,map(int,parameters)))+'\n')
                 self.cache[tuple(individual)] = tt
-            except:
+            except ValueError:
                 self.cache[tuple(individual)] = 10
         return self.cache[tuple(individual)],
 
@@ -161,9 +161,14 @@ class GeneticOperators(object):
             for _ in xrange(mu):
                 op_choice = random.random()
                 if op_choice < cxpb:            # Apply crossover
-                    ind1, ind2 = map(self.toolbox.clone, random.sample(population, 2))
-                    ind1, ind2 = self.toolbox.mate(ind1, ind2)
-                    del ind1.fitness.values
+                    while True:
+                        ind1, ind2 = map(self.toolbox.clone, random.sample(population, 2))
+                        ind1, ind2 = self.toolbox.mate(ind1, ind2)
+                        del ind1.fitness.values
+                        parameters = self.decode(ind1)
+                        template = self.build_template(self.TemplateType.Parameters(*parameters))
+                        if not misc_tools.skip(template, self.statement, self.device):
+                            break
                     offspring.append(ind1)
                 elif op_choice < cxpb + mutpb:  # Apply mutation
                     ind = self.toolbox.clone(random.choice(population))

@@ -7,6 +7,7 @@ import sys
 
 import pyopencl as cl
 import pyviennacl as vcl
+import pyatidlas as atd
 import numpy as np
 
 class PhysicalLimitsNV:
@@ -214,13 +215,16 @@ def benchmark(template, statement, device):
     if occupancy_record.occupancy < 15 :
         raise ValueError("Template has too low occupancy")
     else:
-        template.execute(statement, True)
+        vcl_statements = statements.vcl_tuple
+        vcl_context = statement.result.context.vcl_sub_context
+        model = atd._atidlas.model(template._vcl_template, vcl_context, vcl_context.current_device)
+        model.execute(vcl_statements, False, True)
         statement.result.context.finish_all_queues()
         current_time = 0
         timings = []
         while current_time < 1e-1:
             time_before = time.time()
-            template.execute(statement,False)
+            model.execute(vcl_statements, False, False)
             statement.result.context.finish_all_queues()
             timings.append(time.time() - time_before)
             current_time = current_time + timings[-1]

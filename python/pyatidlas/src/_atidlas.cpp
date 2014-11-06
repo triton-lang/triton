@@ -10,18 +10,22 @@
 #include "atidlas/templates/row_wise_reduction.hpp"
 #include "atidlas/templates/matrix_product.hpp"
 
-#include "atidlas/execute.hpp"
+#include "atidlas/model/model.hpp"
 
 #define ENUM_VALUE(NS, V) .value( #V, NS :: V )
 
 namespace bp = boost::python;
 namespace vcl = viennacl;
+namespace atd = atidlas;
 
 void export_atidlas()
 {
 
-  bp::def("execute", &atidlas::execute);
 
+  bp::class_<atidlas::model>("model", bp::init<atd::template_base const &, vcl::ocl::context &, vcl::ocl::device const & >())
+                  .def("execute", &atd::model::execute)
+                  ;
+  
   bp::enum_<atidlas::fetching_policy_type>
       ("fetching_policy_type")
       ENUM_VALUE(atidlas, FETCH_FROM_LOCAL)
