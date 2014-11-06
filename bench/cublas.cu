@@ -8,9 +8,6 @@
 
 #include "common.hpp"
 
-#include "CL/cl.h"
-#include "atidlas/execute.hpp"
-
 template<class NumericT>
 void run()
 {

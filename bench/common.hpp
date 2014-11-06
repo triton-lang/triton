@@ -2,7 +2,21 @@
 #define ATIDLAS_BENCH_COMMON_HPP_
 
 #include "vector"
-#include "atidlas/tools/misc.hpp"
+
+template <typename T>
+class make_vector {
+public:
+  typedef make_vector<T> my_type;
+  my_type& operator<< (const T& val) {
+    data_.push_back(val);
+    return *this;
+  }
+  operator std::vector<T>() const {
+    return data_;
+  }
+private:
+  std::vector<T> data_;
+};
 
 int ceil(int N, int pad)
 {
@@ -32,7 +46,7 @@ std::vector<int> create_full_range(int min, int max, int pad)
 static const std::vector<int> BLAS1_N = create_log_range(1e3, 2e7, 50, 64);
 
 // BLAS2 Sizes
-static const std::vector<int> BLAS2_M = atidlas::tools::make_vector<int>() << 256;
+static const std::vector<int> BLAS2_M = make_vector<int>() << 256;
 static const std::vector<int> BLAS2_N = create_full_range(128, 5000, 64);
 
 // BLAS3 Sizes
