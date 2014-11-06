@@ -26,7 +26,7 @@ namespace atidlas
       if(template_name=="matrix-axpy")
         return tools::shared_ptr<template_base>(new matrix_axpy_template( matrix_axpy_parameters(a[0], a[1], a[2], a[3], a[4], fetch[a[5]])));
       if(template_name.find("row-wise-reduction")!=std::string::npos)
-        return tools::shared_ptr<template_base>(new row_wise_reduction_template( row_wise_reduction_parameters(a[0], a[1], a[2], a[3], fetch[a[5]])));
+        return tools::shared_ptr<template_base>(new row_wise_reduction_template( row_wise_reduction_parameters(a[0], a[1], a[2], a[3], fetch[a[4]])));
       if(template_name.find("matrix-product")!=std::string::npos)
       {
         char A_trans = template_name[15];
@@ -60,7 +60,8 @@ namespace atidlas
 
     //Deserialize
     std::vector<std::string> operations = tools::make_vector<std::string>() << "vector-axpy" << "reduction"
-                                                                            << "matrix-axpy" << "row-wise-reduction" << "matrix-product";
+                                                                            << "matrix-axpy" << "row-wise-reductionN" << "row-wise-reductionT"
+                                                                            << "matrix-productNN" << "matrix-productTN" << "matrix-productNT" << "matrix-productTT";
     std::vector<std::string> dtype = tools::make_vector<std::string>() << "float32" << "float64";
     for(std::vector<std::string>::iterator op = operations.begin() ; op != operations.end() ; ++op)
     {
@@ -78,7 +79,6 @@ namespace atidlas
               templates.push_back(detail::create(*op, tools::to_int_array<int>(profiles[id])));
             // Get predictor
             random_forest predictor(document[opcstr][dtcstr]["predictor"]);
-
             result[*op + "-" + *dt] = tools::shared_ptr<model>(new model(predictor, templates, context, device));
           }
         }

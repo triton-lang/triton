@@ -35,12 +35,7 @@ namespace atidlas
       {
         atidlas_int_t idx = 0;
         while(children_left_[idx]!=-1)
-        {
-          if(x[feature_[idx]] <= threshold_[idx])
-            idx = children_left_[idx];
-          else
-            idx = children_right_[idx];
-        }
+          idx = (x[feature_[idx]] <= threshold_[idx])?children_left_[idx]:children_right_[idx];
         return value_[idx];
       }
 
@@ -134,6 +129,7 @@ namespace atidlas
         std::vector<float> predictions = predictor_.predict(x);
         label = std::distance(predictions.begin(),std::min_element(predictions.begin(), predictions.end()));
       }
+
 
       //Execution
       templates_[label]->enqueue("k" + tools::to_string(label), lazy_programs_, statements);
