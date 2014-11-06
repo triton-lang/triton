@@ -63,6 +63,21 @@ class PhysicalLimitsNV:
             self.warp_alloc_granularity = 4
             self.max_thread_block_size = 1024
 
+        elif self.compute_capability[0]==5:  #[KR]: copy-pasted from Kepler and adjusted according to http://en.wikipedia.org/wiki/CUDA
+            self.threads_per_warp = 32
+            self.warps_per_mp = 64
+            self.threads_per_mp = 2048
+            self.thread_blocks_per_mp = 32
+            self.num_32b_reg_per_mp = 65536
+            self.reg_alloc_unit_size = 256
+            self.reg_alloc_granularity = 'warp'
+            self.reg_per_thread = 255
+            self.shared_mem_per_mp = 65536
+            self.shared_mem_alloc_unit_size = 256
+            self.warp_alloc_granularity = 4
+            self.max_thread_block_size = 1024
+
+
         else:
             raise Exception('Compute capability not supported!')
 
