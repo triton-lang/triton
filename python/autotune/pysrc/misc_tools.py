@@ -103,7 +103,7 @@ class PhysicalLimitsAMD:
             'Caicos': {'arch': 'VLIW', 'WFmax_cu': 96, 'LDS_cu': 32768, 'GPR_cu': 16384},
             'Turks': {'arch': 'VLIW', 'WFmax_cu': 41.3, 'LDS_cu': 32768, 'GPR_cu': 16384},
             'Whistler': {'arch': 'VLIW', 'WFmax_cu': 41.3, 'LDS_cu': 32768, 'GPR_cu': 16384},
-            'Bart': {'arch': 'VLIW', 'WFmax_cu': 49.6, 'LDS_cu': 32768, 'GPR_cu': 16384},
+            'Barts': {'arch': 'VLIW', 'WFmax_cu': 49.6, 'LDS_cu': 32768, 'GPR_cu': 16384},
 
             #HD7000
             'Capeverde': {'arch': 'GCN', 'WFmax_cu': 40, 'LDS_cu': 65536, 'GPR_cu': 65536},
