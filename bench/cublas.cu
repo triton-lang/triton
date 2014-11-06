@@ -52,50 +52,50 @@ void run()
     std::cout << std::endl;
     std::cout << std::endl;
 
-    std::cout << "#dot" << std::endl;
-    std::cout << "#N Perf" << std::endl;
-    for(std::vector<int>::const_iterator it = BLAS1_N.begin() ; it != BLAS1_N.end() ; ++it)
-    {
-      int N = *it;
-      NumericT *x, *y;
-      cudaMalloc((void**) &x, N * sizeof(NumericT));
-      cudaMalloc((void**) &y, N * sizeof(NumericT));
-      //Bench
-      std::vector<float> timings;
-      FILL_TIMINGS(cublasSdot(N, x, 1, y, 1), timings);
-      std::cout << N << " " << 2*N*sizeof(NumericT)*1e-9/median(timings) << std::endl;
-      //Free
-      cudaFree(x);
-      cudaFree(y);
-    }
-    std::cout << std::endl;
-    std::cout << std::endl;
+//    std::cout << "#dot" << std::endl;
+//    std::cout << "#N Perf" << std::endl;
+//    for(std::vector<int>::const_iterator it = BLAS1_N.begin() ; it != BLAS1_N.end() ; ++it)
+//    {
+//      int N = *it;
+//      NumericT *x, *y;
+//      cudaMalloc((void**) &x, N * sizeof(NumericT));
+//      cudaMalloc((void**) &y, N * sizeof(NumericT));
+//      //Bench
+//      std::vector<float> timings;
+//      FILL_TIMINGS(cublasSdot(N, x, 1, y, 1), timings);
+//      std::cout << N << " " << 2*N*sizeof(NumericT)*1e-9/median(timings) << std::endl;
+//      //Free
+//      cudaFree(x);
+//      cudaFree(y);
+//    }
+//    std::cout << std::endl;
+//    std::cout << std::endl;
 
 
-    std::cout << "#GEMV" << std::endl;
-    std::cout << "#N Perf" << std::endl;
-    for(std::vector<int>::const_iterator Mit = BLAS2_M.begin() ; Mit != BLAS2_M.end() ; ++Mit)
-    {
-        for(std::vector<int>::const_iterator it = BLAS2_N.begin() ; it != BLAS2_N.end() ; ++it)
-        {
-          int M = *Mit;
-          int N = *it;
-          NumericT *x, *y, *A;
-          cudaMalloc((void**) &A, M * N * sizeof(NumericT));
-          cudaMalloc((void**) &x, M * sizeof(NumericT));
-          cudaMalloc((void**) &y, N * sizeof(NumericT));
-          //Bench
-          std::vector<float> timings;
-          FILL_TIMINGS(cublasSgemv('N', M, N, 1.0, A, M, x, 1, 1.0, y, 1), timings);
-          std::cout << N << " " << (M + N + M*N)*sizeof(NumericT)*1e-9/median(timings) << std::endl;
-          //Free
-          cudaFree(A);
-          cudaFree(x);
-          cudaFree(y);
-        }
-        std::cout << std::endl;
-        std::cout << std::endl;
-    }
+//    std::cout << "#GEMV" << std::endl;
+//    std::cout << "#N Perf" << std::endl;
+//    for(std::vector<int>::const_iterator Mit = BLAS2_M.begin() ; Mit != BLAS2_M.end() ; ++Mit)
+//    {
+//        for(std::vector<int>::const_iterator it = BLAS2_N.begin() ; it != BLAS2_N.end() ; ++it)
+//        {
+//          int M = *Mit;
+//          int N = *it;
+//          NumericT *x, *y, *A;
+//          cudaMalloc((void**) &A, M * N * sizeof(NumericT));
+//          cudaMalloc((void**) &x, M * sizeof(NumericT));
+//          cudaMalloc((void**) &y, N * sizeof(NumericT));
+//          //Bench
+//          std::vector<float> timings;
+//          FILL_TIMINGS(cublasSgemv('N', M, N, 1.0, A, M, x, 1, 1.0, y, 1), timings);
+//          std::cout << N << " " << median(timings) << " " << (M + N + M*N)*sizeof(NumericT)*1e-9/median(timings) << std::endl;
+//          //Free
+//          cudaFree(A);
+//          cudaFree(x);
+//          cudaFree(y);
+//        }
+//        std::cout << std::endl;
+//        std::cout << std::endl;
+//    }
 
     std::cout << "#GEMM" << std::endl;
     std::cout << "#N Perf" << std::endl;

@@ -47,21 +47,22 @@ void bench(std::map<std::string, ad::tools::shared_ptr<ad::model> > & models)
 
 #define BENCH(declarations, statement_op, sizes, measure, N, key) \
     if(models.find(key)!=models.end()){\
-        if(!first)\
+        if(first==false)\
         {\
-          std::cout << std::endl;\
-          std::cout << std::endl;\
+            std::cout << std::endl;\
+            std::cout << std::endl;\
         }\
         std::cout << "#"  << key << std::endl;\
         for(std::vector<int_t>::const_iterator it = sizes.begin() ; it != sizes.end() ; ++it)\
         {\
           declarations;\
           viennacl::scheduler::statement statement(statement_op);\
+          BENCHMARK(viennacl::scheduler::execute(statement), time_viennacl);\
           BENCHMARK(models.at(key)->execute(statement), time_model);\
           BENCHMARK(models[key]->execute(statement, true), time_unique_kernel);\
           models[key]->tune(statement);\
           BENCHMARK(models[key]->execute(statement), time_opt);\
-          std::cout << *it << " " << measure<T>(N,time_unique_kernel) << " " << measure<T>(N,time_model) << " " << measure<T>(N,time_opt) << std::endl;\
+          std::cout << *it << " " << measure<T>(N,time_viennacl) << " " << measure<T>(N,time_model) << " " << measure<T>(N,time_opt) << std::endl;\
         }\
     }\
 
