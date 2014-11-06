@@ -40,7 +40,7 @@ private:
     return res;
   }
 
-  int check_invalid_impl(viennacl::ocl::device const &, statements_container const & statements) const
+  int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const
   {
     if (p_.fetching_policy==FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
