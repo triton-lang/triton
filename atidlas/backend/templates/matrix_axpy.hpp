@@ -4,7 +4,7 @@
 
 #include <vector>
 
-#include "atidlas/templates/template_base.hpp"
+#include "atidlas/backend/templates/template_base.hpp"
 
 #include "viennacl/scheduler/forwards.h"
 #include "viennacl/tools/tools.hpp"

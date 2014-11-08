@@ -8,8 +8,8 @@
 #include "viennacl/forwards.h"
 #include "viennacl/scheduler/forwards.h"
 
-#include "atidlas/mapped_objects.hpp"
-#include "atidlas/tools/misc.hpp"
+#include "atidlas/backend/mapped_objects.hpp"
+#include "atidlas/backend/tools/misc.hpp"
 #include "atidlas/forwards.h"
 
 namespace atidlas

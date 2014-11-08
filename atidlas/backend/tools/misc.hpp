@@ -16,7 +16,7 @@
 
 #include "atidlas/tools/to_string.hpp"
 #include "atidlas/forwards.h"
-
+#include "atidlas/backend/forwards.h"
 namespace atidlas
 {
 namespace tools

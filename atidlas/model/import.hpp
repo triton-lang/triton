@@ -1,11 +1,11 @@
 #ifndef ATIDLAS_MODEL_IMPORT_HPP
 #define ATIDLAS_MODEL_IMPORT_HPP
 
-#include "atidlas/templates/vector_axpy.hpp"
-#include "atidlas/templates/reduction.hpp"
-#include "atidlas/templates/matrix_axpy.hpp"
-#include "atidlas/templates/row_wise_reduction.hpp"
-#include "atidlas/templates/matrix_product.hpp"
+#include "atidlas/backend/templates/vector_axpy.hpp"
+#include "atidlas/backend/templates/reduction.hpp"
+#include "atidlas/backend/templates/matrix_axpy.hpp"
+#include "atidlas/backend/templates/row_wise_reduction.hpp"
+#include "atidlas/backend/templates/matrix_product.hpp"
 
 #include "atidlas/model/tools.hpp"
 #include "atidlas/model/rapidjson/document.h"

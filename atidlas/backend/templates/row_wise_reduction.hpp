@@ -8,7 +8,7 @@
 #include "viennacl/tools/tools.hpp"
 #include "viennacl/scheduler/io.hpp"
 
-#include "atidlas/templates/template_base.hpp"
+#include "atidlas/backend/templates/template_base.hpp"
 
 namespace atidlas
 {

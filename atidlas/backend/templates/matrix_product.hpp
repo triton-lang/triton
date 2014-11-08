@@ -11,7 +11,7 @@
 #include "viennacl/forwards.h"
 #include "viennacl/tools/tools.hpp"
 
-#include "atidlas/templates/template_base.hpp"
+#include "atidlas/backend/templates/template_base.hpp"
 #include "atidlas/tools/align.hpp"
 
 namespace atidlas

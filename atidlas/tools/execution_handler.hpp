@@ -6,7 +6,7 @@
 #include "viennacl/tools/shared_ptr.hpp"
 
 #include "atidlas/tools/lazy_program_compiler.hpp"
-#include "atidlas/templates/template_base.hpp"
+#include "atidlas/backend/templates/template_base.hpp"
 
 namespace atidlas
 {

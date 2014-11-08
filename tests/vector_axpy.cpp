@@ -3,8 +3,8 @@
 #include <cmath>
 #include "viennacl/vector.hpp"
 
-#include "atidlas/templates/vector_axpy.hpp"
-#include "atidlas/execute.hpp"
+#include "atidlas/backend/templates/vector_axpy.hpp"
+#include "atidlas/model/model.hpp"
 
 template<typename NumericT, class XType, class YType, class ZType>
 void test_element_wise_vector(NumericT epsilon,  XType & cx, YType & cy, ZType & cz)
@@ -13,6 +13,7 @@ void test_element_wise_vector(NumericT epsilon,  XType & cx, YType & cy, ZType &
   using namespace std;
 
   atidlas::vector_axpy_parameters parameters(4, 32, 128, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS);
+
   int failure_count = 0;
   ZType buffer = cz;
 
@@ -28,12 +29,12 @@ void test_element_wise_vector(NumericT epsilon,  XType & cx, YType & cy, ZType &
 
 
 #define RUN_TEST_VECTOR_AXPY(NAME, CPU_LOOP, GPU_STATEMENT) \
+  {\
+  atidlas::model model(atidlas::vector_axpy_template(parameters), viennacl::ocl::current_context(), viennacl::ocl::current_device());\
   cout << NAME "..." << flush;\
   for(int_t i = 0 ; i < cz.size() ; ++i)\
     CPU_LOOP;\
-  atidlas::execute(atidlas::vector_axpy_template(parameters),\
-                   GPU_STATEMENT,\
-                   viennacl::ocl::current_context(), true);\
+  model.execute(GPU_STATEMENT);\
   viennacl::copy(z, buffer);\
   if(failure_vector(cz, buffer, epsilon))\
   {\
@@ -41,7 +42,8 @@ void test_element_wise_vector(NumericT epsilon,  XType & cx, YType & cy, ZType &
     cout << " [Failure!]" << endl;\
   }\
   else\
-    cout << endl;
+    cout << endl;\
+  }
 
   RUN_TEST_VECTOR_AXPY("z = x", cz[i] = cx[i], viennacl::scheduler::statement(z, viennacl::op_assign(), x))
   RUN_TEST_VECTOR_AXPY("z = x + y", cz[i] = cx[i] + cy[i], viennacl::scheduler::statement(z, viennacl::op_assign(), x + y))

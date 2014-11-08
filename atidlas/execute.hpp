@@ -11,8 +11,8 @@
 #include "viennacl/scheduler/io.hpp"
 
 #include "atidlas/forwards.h"
-#include "atidlas/templates/template_base.hpp"
-#include "atidlas/tools/tree_parsing.hpp"
+#include "atidlas/backend/templates/template_base.hpp"
+#include "atidlas/backend/tools/tree_parsing.hpp"
 #include "atidlas/tools/execution_handler.hpp"
 
 namespace atidlas

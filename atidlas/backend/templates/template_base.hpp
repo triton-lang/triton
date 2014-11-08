@@ -13,9 +13,10 @@
 #include "viennacl/scheduler/io.hpp"
 
 #include "atidlas/tools/lazy_program_compiler.hpp"
-#include "atidlas/tools/tree_parsing.hpp"
-#include "atidlas/tools/misc.hpp"
-#include "atidlas/mapped_objects.hpp"
+#include "atidlas/backend/templates/template_base.hpp"
+#include "atidlas/backend/tools/misc.hpp"
+#include "atidlas/backend/tools/tree_parsing.hpp"
+#include "atidlas/backend/mapped_objects.hpp"
 
 namespace atidlas
 {
