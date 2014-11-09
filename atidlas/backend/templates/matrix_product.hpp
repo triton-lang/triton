@@ -4,14 +4,9 @@
 
 #include <vector>
 
-#include "viennacl/scheduler/forwards.h"
-
-#include "viennacl/matrix_def.hpp"
-#include "viennacl/matrix_proxy.hpp"
-#include "viennacl/forwards.h"
-#include "viennacl/tools/tools.hpp"
-
+#include "atidlas/forwards.h"
 #include "atidlas/backend/templates/template_base.hpp"
+#include "atidlas/scheduler/forwards.h"
 #include "atidlas/tools/align.hpp"
 
 namespace atidlas
@@ -50,8 +45,8 @@ class matrix_product_template : public template_base_impl<matrix_product_templat
 private:
   unsigned int lmem_usage(statements_container const & statements) const
   {
-    viennacl::scheduler::statement const & statement = statements.data().front();
-    viennacl::scheduler::statement_node_numeric_type numeric_type = lhs_most(statement.array(), statement.root()).lhs.numeric_type;
+    scheduler::statement const & statement = statements.data().front();
+    scheduler::numeric_type numeric_type = lhs_most(statement.array(), statement.root()).lhs.numeric_type;
 
     unsigned int N = 0;
     if (p_.A_fetching_policy==FETCH_FROM_LOCAL)
@@ -63,14 +58,14 @@ private:
 
   unsigned int registers_usage(statements_container const & statements) const
   {
-    viennacl::scheduler::statement const & statement = statements.data().front();
-    viennacl::scheduler::statement_node_numeric_type numeric_type = lhs_most(statement.array(), statement.root()).lhs.numeric_type;
+    scheduler::statement const & statement = statements.data().front();
+    scheduler::numeric_type numeric_type = lhs_most(statement.array(), statement.root()).lhs.numeric_type;
 
     unsigned int N = p_.mS * p_.nS + p_.mS * p_.kS + p_.kS * p_.nS;
     return N*tools::size_of(numeric_type);
   }
 
-  int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const
+  int check_invalid_impl(cl::Device const &, statements_container const &) const
   {
     if (p_.A_fetching_policy!=FETCH_FROM_LOCAL && p_.B_fetching_policy!=FETCH_FROM_LOCAL&& (p_.local_fetch_0!=0 || p_.local_fetch_1!=0))
       return TEMPLATE_GLOBAL_MEMORY_REQUIRES_ZERO_LOCAL_FETCH;
@@ -118,15 +113,15 @@ private:
     return TEMPLATE_VALID;
   }
 
-  static void parse(viennacl::scheduler::statement const & s,
+  static void parse(scheduler::statement const & s,
                     atidlas_int_t & C_idx, leaf_t & C_leaf, atidlas_int_t & alpha_idx, leaf_t & alpha_leaf,
                     atidlas_int_t & A_idx, leaf_t & A_leaf, bool& A_trans, atidlas_int_t & B_idx, leaf_t & B_leaf, bool& B_trans,
                     atidlas_int_t & beta_idx, leaf_t & beta_leaf)
   {
     using namespace tools;
-    using namespace viennacl::scheduler;
+    using namespace scheduler;
 
-    viennacl::scheduler::statement::container_type const & array = s.array();
+    scheduler::statement::container_type const & array = s.array();
     atidlas_int_t root_idx = s.root();
 
     C_idx = root_idx;
@@ -206,7 +201,7 @@ private:
     /// INIT
     /// //////////////
     tools::kernel_generation_stream stream;
-    viennacl::scheduler::statement const & st = statements.data().front();
+    scheduler::statement const & st = statements.data().front();
     mapping_type const & mapping = mappings.front();
 
     bool A_trans = false, B_trans = false;
@@ -658,23 +653,23 @@ private:
   }
 
   template<class NumericT>
-  void enqueue_block(viennacl::scheduler::statement & statement, atidlas_int_t M, atidlas_int_t N, atidlas_int_t K,
-                     viennacl::scheduler::lhs_rhs_element& eA, viennacl::scheduler::lhs_rhs_element& eB, viennacl::scheduler::lhs_rhs_element& eC, viennacl::scheduler::lhs_rhs_element& ebeta,
+  void enqueue_block(scheduler::statement & statement, atidlas_int_t M, atidlas_int_t N, atidlas_int_t K,
+                     scheduler::lhs_rhs_element& eA, scheduler::lhs_rhs_element& eB, scheduler::lhs_rhs_element& eC, scheduler::lhs_rhs_element& ebeta,
                      viennacl::matrix_base<NumericT> const & A, viennacl::matrix_base<NumericT> const & B, viennacl::matrix_base<NumericT> const & C, NumericT beta,
                      std::vector<lazy_program_compiler> & programs, std::string const & kernel_prefix, int id)
   {
     if (A.size1()==0 || A.size2()==0 || B.size1()==0 || B.size2()==0 || C.size1()==0 || C.size2()==0)
       return;
 
-    viennacl::ocl::kernel& kernel = programs[id].program().get_kernel(kernel_prefix);
+    cl::Kernel& kernel = programs[id].program().get_kernel(kernel_prefix);
 
     kernel.local_work_size(0, p_.local_size_0);
     kernel.local_work_size(1, p_.local_size_1);
 
-    viennacl::scheduler::statement::assign_element(eA, A);
-    viennacl::scheduler::statement::assign_element(eB, B);
-    viennacl::scheduler::statement::assign_element(eC, C);
-    viennacl::scheduler::statement::assign_element(ebeta, beta);
+    scheduler::statement::assign_element(eA, A);
+    scheduler::statement::assign_element(eB, B);
+    scheduler::statement::assign_element(eC, C);
+    scheduler::statement::assign_element(ebeta, beta);
 
     if (id==1)
     {
@@ -691,12 +686,12 @@ private:
     kernel.arg(current_arg++, cl_uint(N));
     kernel.arg(current_arg++, cl_uint(K));
     set_arguments(statement, kernel, current_arg);
-    viennacl::ocl::enqueue(kernel);
+//    viennacl::ocl::enqueue(kernel);
 
   }
 
   template<class NumericT>
-  viennacl::matrix_slice< viennacl::matrix_base<NumericT> >  create_slice(viennacl::matrix_base<NumericT>* viennacl::scheduler::lhs_rhs_element::*ptr, viennacl::scheduler::lhs_rhs_element const & element,
+  viennacl::matrix_slice< viennacl::matrix_base<NumericT> >  create_slice(viennacl::matrix_base<NumericT>* scheduler::lhs_rhs_element::*ptr, scheduler::lhs_rhs_element const & element,
                                                                           atidlas_int_t s0_0, atidlas_int_t s0_1, atidlas_int_t s1_0, atidlas_int_t s1_1, bool swap)
   {
     viennacl::matrix_base<NumericT> & M = *(element.*ptr);
@@ -708,20 +703,20 @@ private:
   }
 
   template<class NumericT>
-  void enqueue_impl(viennacl::matrix_base<NumericT>* viennacl::scheduler::lhs_rhs_element::*ptr_matrix,
-                    viennacl::scheduler::statement & statement, atidlas_int_t M, atidlas_int_t N, atidlas_int_t K,
-                    viennacl::scheduler::lhs_rhs_element & A, viennacl::scheduler::lhs_rhs_element & B, viennacl::scheduler::lhs_rhs_element & C, viennacl::scheduler::lhs_rhs_element & beta,
+  void enqueue_impl(viennacl::matrix_base<NumericT>* scheduler::lhs_rhs_element::*ptr_matrix,
+                    scheduler::statement & statement, atidlas_int_t M, atidlas_int_t N, atidlas_int_t K,
+                    scheduler::lhs_rhs_element & A, scheduler::lhs_rhs_element & B, scheduler::lhs_rhs_element & C, scheduler::lhs_rhs_element & beta,
                     NumericT beta_value, std::vector<lazy_program_compiler> & programs, std::string const & kernel_prefix)
   {
     using namespace tools;
 
     std::string kernel_prefix_fb = kernel_prefix + "_fb";
 
-    atidlas_int_t ldstrideA = call_on_matrix(A, leading_stride_fun());
-    atidlas_int_t ldstrideB = call_on_matrix(B, leading_stride_fun());
-    atidlas_int_t ldstrideC = call_on_matrix(C, leading_stride_fun());
-    atidlas_int_t ldstartA = call_on_matrix(A, leading_start_fun());
-    atidlas_int_t ldstartB = call_on_matrix(B, leading_start_fun());
+    atidlas_int_t ldstrideA = traits::ldstride(*A.matrix);
+    atidlas_int_t ldstrideB = traits::ldstride(*B.matrix);
+    atidlas_int_t ldstrideC = traits::ldstride(*C.matrix);
+    atidlas_int_t ldstartA = traits::ldstart(*A.matrix);
+    atidlas_int_t ldstartB = traits::ldstart(*B.matrix);
     bool swap_A = (A_trans_=='T');
     bool swap_B = (B_trans_=='T');
 
@@ -735,9 +730,9 @@ private:
     }
 
 
-    viennacl::scheduler::lhs_rhs_element Acopy = A;
-    viennacl::scheduler::lhs_rhs_element Bcopy = B;
-    viennacl::scheduler::lhs_rhs_element Ccopy = C;
+    scheduler::lhs_rhs_element Acopy = A;
+    scheduler::lhs_rhs_element Bcopy = B;
+    scheduler::lhs_rhs_element Ccopy = C;
 
     atidlas_int_t lM = M / p_.mL * p_.mL;
     atidlas_int_t lN = N / p_.nL * p_.nL;
@@ -764,14 +759,14 @@ private:
   {
     using namespace tools;
 
-    viennacl::scheduler::statement const & st = statements.data().front();
+    scheduler::statement const & st = statements.data().front();
     parse(st, C_idx, C_leaf, alpha_idx, alpha_leaf, A_idx, A_leaf, A_trans, B_idx, B_leaf, B_trans, beta_idx, beta_leaf);
-    viennacl::scheduler::lhs_rhs_element const & A = tools::lhs_rhs_element(st, A_idx, A_leaf);
-    viennacl::scheduler::lhs_rhs_element const & C = tools::lhs_rhs_element(st, C_idx, C_leaf);
+    scheduler::lhs_rhs_element const & A = tools::lhs_rhs_element(st, A_idx, A_leaf);
+    scheduler::lhs_rhs_element const & C = tools::lhs_rhs_element(st, C_idx, C_leaf);
 
-    atidlas_int_t M = call_on_matrix(C, size1_fun());
-    atidlas_int_t N = call_on_matrix(C, size2_fun());
-    atidlas_int_t K = A_trans?call_on_matrix(A, size1_fun()):call_on_matrix(A, size2_fun());
+    atidlas_int_t M = traits::size1(*C.matrix);
+    atidlas_int_t N = traits::size2(*C.matrix);
+    atidlas_int_t K = A_trans?traits::size1(*A.matrix):traits::size2(*A.matrix);
 
     return tools::make_vector<atidlas_int_t>() << M << N << K;
   }
@@ -796,16 +791,16 @@ public:
     leaf_t C_leaf=LHS_NODE_TYPE, A_leaf=LHS_NODE_TYPE, B_leaf=LHS_NODE_TYPE, alpha_leaf=LHS_NODE_TYPE, beta_leaf=LHS_NODE_TYPE;
     std::vector<atidlas_int_t> MNK = infos(statements,A_trans,B_trans,C_idx,A_idx,B_idx,alpha_idx,beta_idx,C_leaf,A_leaf,B_leaf,alpha_leaf,beta_leaf);
 
-    viennacl::scheduler::statement stcopy = statements.data().front();
-    viennacl::scheduler::lhs_rhs_element& A = tools::lhs_rhs_element(stcopy, A_idx, A_leaf);
-    viennacl::scheduler::lhs_rhs_element& B = tools::lhs_rhs_element(stcopy, B_idx, B_leaf);
-    viennacl::scheduler::lhs_rhs_element& C = tools::lhs_rhs_element(stcopy, C_idx, C_leaf);
-    viennacl::scheduler::lhs_rhs_element& beta = tools::lhs_rhs_element(stcopy, beta_idx, beta_leaf);
+    scheduler::statement stcopy = statements.data().front();
+    scheduler::lhs_rhs_element& A = tools::lhs_rhs_element(stcopy, A_idx, A_leaf);
+    scheduler::lhs_rhs_element& B = tools::lhs_rhs_element(stcopy, B_idx, B_leaf);
+    scheduler::lhs_rhs_element& C = tools::lhs_rhs_element(stcopy, C_idx, C_leaf);
+    scheduler::lhs_rhs_element& beta = tools::lhs_rhs_element(stcopy, beta_idx, beta_leaf);
 
-    if (C.numeric_type==viennacl::scheduler::FLOAT_TYPE)
-      enqueue_impl<float>(&viennacl::scheduler::lhs_rhs_element::matrix_float, stcopy, MNK[0], MNK[1], MNK[2], A, B, C, beta, beta.host_float, programs, kernel_prefix);
-    else if (C.numeric_type==viennacl::scheduler::DOUBLE_TYPE)
-      enqueue_impl<double>(&viennacl::scheduler::lhs_rhs_element::matrix_double, stcopy, MNK[0], MNK[1], MNK[2], A, B, C, beta, beta.host_double, programs, kernel_prefix);
+    if (C.numeric_type==scheduler::FLOAT_TYPE)
+      enqueue_impl<float>(&scheduler::lhs_rhs_element::matrix_float, stcopy, MNK[0], MNK[1], MNK[2], A, B, C, beta, beta.host_float, programs, kernel_prefix);
+    else if (C.numeric_type==scheduler::DOUBLE_TYPE)
+      enqueue_impl<double>(&scheduler::lhs_rhs_element::matrix_double, stcopy, MNK[0], MNK[1], MNK[2], A, B, C, beta, beta.host_double, programs, kernel_prefix);
     else
       throw generator_not_supported_exception("GEMM only supported for float/double");
 

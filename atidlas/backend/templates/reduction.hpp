@@ -4,10 +4,7 @@
 
 #include <vector>
 
-#include "viennacl/backend/opencl.hpp"
-#include "viennacl/scheduler/forwards.h"
-#include "viennacl/tools/tools.hpp"
-
+#include "atidlas/scheduler/forwards.h"
 #include "atidlas/backend/templates/template_base.hpp"
 
 namespace atidlas
@@ -33,8 +30,8 @@ private:
     unsigned int res = 0;
     for(statements_container::data_type::const_iterator it = statements.data().begin() ; it != statements.data().end() ; ++it)
     {
-      viennacl::scheduler::statement const & statement = statements.data().front();
-      viennacl::scheduler::statement_node_numeric_type numeric_type = lhs_most(statement.array(), statement.root()).lhs.numeric_type;
+      scheduler::statement const & statement = statements.data().front();
+      scheduler::numeric_type numeric_type = lhs_most(statement.array(), statement.root()).lhs.numeric_type;
       res += p_.local_size_0*tools::size_of(numeric_type);
     }
     return res;
@@ -161,7 +158,7 @@ private:
             accessors["matrix_diag"] = str[a];
             accessors["scalar"] = "#namereg";
             std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
-            if (exprs[k]->root_node().op.type==viennacl::scheduler::OPERATION_BINARY_INNER_PROD_TYPE)
+            if (exprs[k]->root_node().op.type==scheduler::OPERATION_BINARY_INNER_PROD_TYPE)
               value+= "*" + exprs[k]->evaluate_recursive(RHS_NODE_TYPE, accessors);
 
             if (exprs[k]->is_index_reduction())
@@ -294,7 +291,7 @@ public:
   {
     std::vector<atidlas_int_t> size = input_sizes(statements);
 
-    std::vector<viennacl::scheduler::statement_node const *> reductions;
+    std::vector<scheduler::statement_node const *> reductions;
     for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
     {
       std::vector<size_t> reductions_idx = tools::filter_nodes(&tools::is_reduction, *it, false);
@@ -302,7 +299,7 @@ public:
         reductions.push_back(&it->array()[*itt]);
     }
 
-    viennacl::scheduler::statement const & statement = statements.data().front();
+    scheduler::statement const & statement = statements.data().front();
     unsigned int scalartype_size = tools::size_of(lhs_most(statement.array(), statement.root()).lhs.numeric_type);
 
     viennacl::ocl::kernel * kernels[2];
@@ -329,7 +326,7 @@ public:
       kernels[k]->arg(n_arg++, cl_uint(size[0]));
       unsigned int i = 0;
       unsigned int j = 0;
-      for (std::vector<viennacl::scheduler::statement_node const *>::const_iterator it = reductions.begin(); it != reductions.end(); ++it)
+      for (std::vector<scheduler::statement_node const *>::const_iterator it = reductions.begin(); it != reductions.end(); ++it)
       {
         if (tools::is_index_reduction((*it)->op))
         {

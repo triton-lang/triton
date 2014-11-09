@@ -5,9 +5,7 @@
 #include <vector>
 
 #include "atidlas/backend/templates/template_base.hpp"
-
-#include "viennacl/scheduler/forwards.h"
-#include "viennacl/tools/tools.hpp"
+#include "atidlas/scheduler/forwards.h"
 
 namespace atidlas
 {
@@ -28,7 +26,7 @@ public:
 class matrix_axpy_template : public template_base_impl<matrix_axpy_template, matrix_axpy_parameters>
 {
 private:
-  int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const
+  int check_invalid_impl(cl::Device const &, statements_container const &) const
   {
     if (p_.simd_width>1)
       return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -99,14 +97,14 @@ public:
 
   std::vector<atidlas_int_t> input_sizes(statements_container const & statements)
   {
-    viennacl::scheduler::statement const & statement = statements.data().front();
+    scheduler::statement const & statement = statements.data().front();
     std::pair<atidlas_int_t, atidlas_int_t> size = matrix_size(lhs_most(statement.array(), statement.root()), up_to_internal_size_);
     return tools::make_vector<atidlas_int_t>() << size.first << size.second;
   }
 
   void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements)
   {
-    viennacl::ocl::kernel & kernel = programs[0].program().get_kernel(kernel_prefix);
+    cl::Kernel & kernel = programs[0].program().get_kernel(kernel_prefix);
 
     kernel.local_work_size(0, p_.local_size_0);
     kernel.local_work_size(1, p_.local_size_1);
@@ -119,7 +117,7 @@ public:
     kernel.arg(current_arg++, cl_uint(MN[1]));
     set_arguments(statements, kernel, current_arg);
 
-    viennacl::ocl::enqueue(kernel);
+//    viennacl::ocl::enqueue(kernel);
   }
 
 

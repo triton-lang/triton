@@ -3,9 +3,9 @@
 
 #include <string>
 
-#include "viennacl/scheduler/forwards.h"
 
 #include "atidlas/forwards.h"
+#include "atidlas/scheduler/forwards.h"
 #include "atidlas/tools/find_and_replace.hpp"
 #include "atidlas/backend/tools/misc.hpp"
 
@@ -63,10 +63,10 @@ protected:
 public:
   struct node_info
   {
-    node_info(mapping_type const * _mapping, viennacl::scheduler::statement const * _statement, atidlas_int_t _root_idx) :
+    node_info(mapping_type const * _mapping, scheduler::statement const * _statement, atidlas_int_t _root_idx) :
       mapping(_mapping), statement(_statement), root_idx(_root_idx) { }
     mapping_type const * mapping;
-    viennacl::scheduler::statement const * statement;
+    scheduler::statement const * statement;
     atidlas_int_t root_idx;
   };
 
@@ -153,16 +153,16 @@ public:
   mapped_reduction(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key) : mapped_object(scalartype, id, type_key), binary_leaf(info){ }
 
   atidlas_int_t root_idx() const { return info_.root_idx; }
-  viennacl::scheduler::statement const & statement() const { return *info_.statement; }
-  viennacl::scheduler::statement_node root_node() const { return statement().array()[root_idx()]; }
+  scheduler::statement const & statement() const { return *info_.statement; }
+  scheduler::statement_node root_node() const { return statement().array()[root_idx()]; }
   bool is_index_reduction() const { return tools::is_index_reduction(info_.statement->array()[info_.root_idx].op); }
 
-  viennacl::scheduler::op_element root_op() const
+  scheduler::op_element root_op() const
   {
-    viennacl::scheduler::op_element res = info_.statement->array()[info_.root_idx].op;
-    if (res.type==viennacl::scheduler::OPERATION_BINARY_MAT_VEC_PROD_TYPE
-        ||res.type==viennacl::scheduler::OPERATION_BINARY_INNER_PROD_TYPE)
-      res.type = viennacl::scheduler::OPERATION_BINARY_ADD_TYPE;
+    scheduler::op_element res = info_.statement->array()[info_.root_idx].op;
+    if (res.type==scheduler::OPERATION_BINARY_MAT_VEC_PROD_TYPE
+        ||res.type==scheduler::OPERATION_BINARY_INNER_PROD_TYPE)
+      res.type = scheduler::OPERATION_BINARY_ADD_TYPE;
     return res;
   }
 };

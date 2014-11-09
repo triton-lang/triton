@@ -7,13 +7,7 @@
 #include <stdexcept>
 
 #include "atidlas/tools/shared_ptr.hpp"
-
-#include "viennacl/scheduler/io.hpp"
-#include "viennacl/ocl/forwards.h"
-#include "viennacl/scheduler/forwards.h"
-#include "viennacl/backend/mem_handle.hpp"
-#include "viennacl/device_specific/forwards.h"
-
+#include "atidlas/scheduler/forwards.h"
 
 namespace atidlas
 {
@@ -50,22 +44,22 @@ struct atidlas_int_tuple
   std::string bound1;
 };
 
-inline bool is_scalar_reduction(viennacl::scheduler::statement_node const & node)
+inline bool is_scalar_reduction(scheduler::statement_node const & node)
 {
-  return node.op.type==viennacl::scheduler::OPERATION_BINARY_INNER_PROD_TYPE || node.op.type_family==viennacl::scheduler::OPERATION_VECTOR_REDUCTION_TYPE_FAMILY;
+  return node.op.type==scheduler::OPERATION_BINARY_INNER_PROD_TYPE || node.op.type_family==scheduler::OPERATION_VECTOR_REDUCTION_TYPE_FAMILY;
 }
 
-inline bool is_vector_reduction(viennacl::scheduler::statement_node const & node)
+inline bool is_vector_reduction(scheduler::statement_node const & node)
 {
-  return node.op.type==viennacl::scheduler::OPERATION_BINARY_MAT_VEC_PROD_TYPE
-      || node.op.type_family==viennacl::scheduler::OPERATION_ROWS_REDUCTION_TYPE_FAMILY
-      || node.op.type_family==viennacl::scheduler::OPERATION_COLUMNS_REDUCTION_TYPE_FAMILY;
+  return node.op.type==scheduler::OPERATION_BINARY_MAT_VEC_PROD_TYPE
+      || node.op.type_family==scheduler::OPERATION_ROWS_REDUCTION_TYPE_FAMILY
+      || node.op.type_family==scheduler::OPERATION_COLUMNS_REDUCTION_TYPE_FAMILY;
 }
 
-inline viennacl::scheduler::statement_node const & lhs_most(viennacl::scheduler::statement::container_type const & array, size_t root)
+inline scheduler::statement_node const & lhs_most(scheduler::statement::container_type const & array, size_t root)
 {
-  viennacl::scheduler::statement_node const * current = &array[root];
-  while (current->lhs.type_family==viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
+  scheduler::statement_node const * current = &array[root];
+  while (current->lhs.type_family==scheduler::COMPOSITE_OPERATION_FAMILY)
     current = &array[current->lhs.node_index];
   return *current;
 }
@@ -162,38 +156,27 @@ namespace tools
 {
 
   template<class Fun>
-  inline void traverse(viennacl::scheduler::statement const & statement, atidlas_int_t root_idx, Fun const & fun, bool inspect);
+  inline void traverse(scheduler::statement const & statement, atidlas_int_t root_idx, Fun const & fun, bool inspect);
 
   inline void process(tools::kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors,
-                      viennacl::scheduler::statement const & statement, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed);
-  inline std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & accessors, viennacl::scheduler::statement const & statement, atidlas_int_t root_idx,mapping_type const & mapping);
+                      scheduler::statement const & statement, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed);
+  inline std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & accessors, scheduler::statement const & statement, atidlas_int_t root_idx,mapping_type const & mapping);
 }
-
-using viennacl::scheduler::INT_TYPE;
-using viennacl::scheduler::UINT_TYPE;
-using viennacl::scheduler::ULONG_TYPE;
-using viennacl::scheduler::LONG_TYPE;
-using viennacl::scheduler::FLOAT_TYPE;
-using viennacl::scheduler::DOUBLE_TYPE;
-
-typedef cl_uint vendor_id_type;
-typedef cl_device_type device_type;
-typedef std::string device_name_type;
 
 class symbolic_binder
 {
 public:
   virtual ~symbolic_binder(){ }
-  virtual bool bind(viennacl::backend::mem_handle const * ph) = 0;
-  virtual unsigned int get(viennacl::backend::mem_handle const * ph) = 0;
+  virtual bool bind(cl::Buffer const * ph) = 0;
+  virtual unsigned int get(cl::Buffer const * ph) = 0;
 };
 
 class bind_to_handle : public symbolic_binder
 {
 public:
   bind_to_handle() : current_arg_(0){ }
-  bool bind(viennacl::backend::mem_handle const * ph) {return (ph==NULL)?true:memory.insert(std::make_pair((void*)ph, current_arg_)).second; }
-  unsigned int get(viennacl::backend::mem_handle const * ph){ return bind(ph)?current_arg_++:memory.at((void*)ph); }
+  bool bind(cl::Buffer const * ph) {return (ph==NULL)?true:memory.insert(std::make_pair((void*)ph, current_arg_)).second; }
+  unsigned int get(cl::Buffer const * ph){ return bind(ph)?current_arg_++:memory.at((void*)ph); }
 private:
   unsigned int current_arg_;
   std::map<void*,unsigned int> memory;
@@ -203,8 +186,8 @@ class bind_all_unique : public symbolic_binder
 {
 public:
   bind_all_unique() : current_arg_(0){ }
-  bool bind(viennacl::backend::mem_handle const *) {return true; }
-  unsigned int get(viennacl::backend::mem_handle const *){ return current_arg_++; }
+  bool bind(cl::Buffer const *) {return true; }
+  unsigned int get(cl::Buffer const *){ return current_arg_++; }
 private:
   unsigned int current_arg_;
   std::map<void*,unsigned int> memory;
@@ -225,8 +208,6 @@ inline tools::shared_ptr<symbolic_binder> make_binder(binding_policy_t policy)
 
 template<char C>
 struct char_to_type{ };
-
-typedef viennacl::device_specific::statements_container statements_container;
 
 }
 

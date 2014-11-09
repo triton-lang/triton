@@ -5,13 +5,7 @@
 #include <list>
 #include <set>
 
-#include "viennacl/ocl/kernel.hpp"
-#include "viennacl/ocl/device.hpp"
-#include "viennacl/ocl/device_utils.hpp"
-
-#include "viennacl/scheduler/forwards.h"
-#include "viennacl/scheduler/io.hpp"
-
+#include "atidlas/scheduler/forwards.h"
 #include "atidlas/tools/lazy_program_compiler.hpp"
 #include "atidlas/backend/templates/template_base.hpp"
 #include "atidlas/backend/tools/misc.hpp"
@@ -45,94 +39,95 @@ private:
   /** @brief Functor to map the statements to the types defined in mapped_objects.hpp */
   class map_functor : public tools::traversal_functor
   {
-
-    viennacl::scheduler::statement_node_numeric_type numeric_type(viennacl::scheduler::statement const * statement, atidlas_int_t root_idx) const
+    numeric_type get_numeric_type(scheduler::statement const * statement, atidlas_int_t root_idx) const
     {
-      viennacl::scheduler::statement_node const * root_node = &statement->array()[root_idx];
-      while (root_node->lhs.numeric_type==viennacl::scheduler::INVALID_NUMERIC_TYPE)
+      scheduler::statement_node const * root_node = &statement->array()[root_idx];
+      while (root_node->lhs.numeric_t==INVALID_NUMERIC_TYPE)
         root_node = &statement->array()[root_node->lhs.node_index];
-      return root_node->lhs.numeric_type;
+      return root_node->lhs.numeric_t;
     }
-
-  public:
-    typedef tools::shared_ptr<mapped_object> result_type;
-
-    map_functor(symbolic_binder & binder, mapping_type & mapping) : binder_(binder), mapping_(mapping){ }
 
     /** @brief Binary leaf */
     template<class T>
-    result_type binary_leaf(viennacl::scheduler::statement const * statement, atidlas_int_t root_idx, mapping_type const * mapping) const
+    tools::shared_ptr<mapped_object> binary_leaf(scheduler::statement const * statement, atidlas_int_t root_idx, mapping_type const * mapping) const
     {
-      return result_type(new T(tools::numeric_type_to_string(numeric_type(statement,root_idx)), binder_.get(NULL), mapped_object::node_info(mapping, statement, root_idx)));
+      return tools::shared_ptr<mapped_object>(new T(tools::numeric_type_to_string(get_numeric_type(statement,root_idx)), binder_.get(NULL), mapped_object::node_info(mapping, statement, root_idx)));
     }
 
-    template<class NumericT>
-    result_type operator()(NumericT const & /*scalar*/) const
-    {
-      return result_type(new mapped_host_scalar(tools::type_to_string<NumericT>::value(), binder_.get(NULL)));
-    }
+//    template<class NumericT>
+//    tools::shared_ptr<mapped_object> operator()(NumericT const & /*scalar*/) const
+//    {
+//      return tools::shared_ptr<mapped_object>(new mapped_host_scalar(tools::type_to_string<NumericT>::value(), binder_.get(NULL)));
+//    }
 
-    /** @brief Scalar mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::scalar<NumericT> const & scal) const
-    {
-      return result_type(new mapped_scalar(tools::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(scal))));
-    }
+//    /** @brief Scalar mapping */
+//    template<class NumericT>
+//    tools::shared_ptr<mapped_object> operator()(viennacl::scalar<NumericT> const & scal) const
+//    {
+//      return tools::shared_ptr<mapped_object>(new mapped_scalar(tools::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(scal))));
+//    }
 
     /** @brief Vector mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::vector_base<NumericT> const & vec) const
+    tools::shared_ptr<mapped_object> create_vector(vector_base const & vector) const
+    { return tools::shared_ptr<mapped_object>(new mapped_vector(tools::numeric_type_to_string(vector.dtype()), binder_.get(&vector.data()))); }
+
+//    /** @brief Implicit vector mapping */
+//    template<class NumericT>
+//    tools::shared_ptr<mapped_object> operator()(viennacl::implicit_vector_base<NumericT> const & /*vec*/) const
+//    {
+//      return tools::shared_ptr<mapped_object>(new mapped_implicit_vector(tools::type_to_string<NumericT>::value(), binder_.get(NULL)));
+//    }
+
+//    /** @brief Matrix mapping */
+//    template<class NumericT>
+//    tools::shared_ptr<mapped_object> operator()(viennacl::matrix_base<NumericT> const & mat) const
+//    {
+//      return tools::shared_ptr<mapped_object>(new mapped_matrix(tools::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(mat))));
+//    }
+
+//    /** @brief Implicit matrix mapping */
+//    template<class NumericT>
+//    tools::shared_ptr<mapped_object> operator()(viennacl::implicit_matrix_base<NumericT> const & /*mat*/) const
+//    {
+//      return tools::shared_ptr<mapped_object>(new mapped_implicit_matrix(tools::type_to_string<NumericT>::value(), binder_.get(NULL)));
+//    }
+
+    tools::shared_ptr<mapped_object> create(scheduler::lhs_rhs_element const & lhs_rhs) const
     {
-      return result_type(new mapped_vector(tools::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(vec))));
+//      if(lhs_rhs.subtype==scheduler::DENSE_VECTOR_TYPE)
+        return create_vector(*lhs_rhs.vector);
     }
 
-    /** @brief Implicit vector mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::implicit_vector_base<NumericT> const & /*vec*/) const
-    {
-      return result_type(new mapped_implicit_vector(tools::type_to_string<NumericT>::value(), binder_.get(NULL)));
-    }
+  public:
 
-    /** @brief Matrix mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::matrix_base<NumericT> const & mat) const
-    {
-      return result_type(new mapped_matrix(tools::type_to_string<NumericT>::value(), binder_.get(&viennacl::traits::handle(mat))));
-    }
-
-    /** @brief Implicit matrix mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::implicit_matrix_base<NumericT> const & /*mat*/) const
-    {
-      return result_type(new mapped_implicit_matrix(tools::type_to_string<NumericT>::value(), binder_.get(NULL)));
-    }
+    map_functor(symbolic_binder & binder, mapping_type & mapping) : binder_(binder), mapping_(mapping){ }
 
     /** @brief Traversal functor */
-    void operator()(viennacl::scheduler::statement const & statement, atidlas_int_t root_idx, leaf_t leaf_t) const {
+    void operator()(scheduler::statement const & statement, atidlas_int_t root_idx, leaf_t leaf_t) const {
       mapping_type::key_type key(root_idx, leaf_t);
-      viennacl::scheduler::statement_node const & root_node = statement.array()[root_idx];
+      scheduler::statement_node const & root_node = statement.array()[root_idx];
 
-      if (leaf_t == LHS_NODE_TYPE && root_node.lhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-        mapping_.insert(mapping_type::value_type(key, tools::call_on_element(root_node.lhs, *this)));
-      else if (leaf_t == RHS_NODE_TYPE && root_node.rhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-        mapping_.insert(mapping_type::value_type(key,  tools::call_on_element(root_node.rhs, *this)));
+      if (leaf_t == LHS_NODE_TYPE && root_node.lhs.type_family != scheduler::COMPOSITE_OPERATION_FAMILY)
+        mapping_.insert(mapping_type::value_type(key, create(root_node.lhs)));
+      else if (leaf_t == RHS_NODE_TYPE && root_node.rhs.type_family != scheduler::COMPOSITE_OPERATION_FAMILY)
+        mapping_.insert(mapping_type::value_type(key, create(root_node.rhs)));
       else if ( leaf_t== PARENT_NODE_TYPE)
       {
-        if (root_node.op.type==viennacl::scheduler::OPERATION_BINARY_VECTOR_DIAG_TYPE)
+        if (root_node.op.type==scheduler::OPERATION_BINARY_VECTOR_DIAG_TYPE)
           mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_vector_diag>(&statement, root_idx, &mapping_)));
-        else if (root_node.op.type==viennacl::scheduler::OPERATION_BINARY_MATRIX_DIAG_TYPE)
+        else if (root_node.op.type==scheduler::OPERATION_BINARY_MATRIX_DIAG_TYPE)
           mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_diag>(&statement, root_idx, &mapping_)));
-        else if (root_node.op.type==viennacl::scheduler::OPERATION_BINARY_MATRIX_ROW_TYPE)
+        else if (root_node.op.type==scheduler::OPERATION_BINARY_MATRIX_ROW_TYPE)
           mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_row>(&statement, root_idx, &mapping_)));
-        else if (root_node.op.type==viennacl::scheduler::OPERATION_BINARY_MATRIX_COLUMN_TYPE)
+        else if (root_node.op.type==scheduler::OPERATION_BINARY_MATRIX_COLUMN_TYPE)
           mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_column>(&statement, root_idx, &mapping_)));
         else if (is_scalar_reduction(root_node))
           mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_scalar_reduction>(&statement, root_idx, &mapping_)));
         else if (is_vector_reduction(root_node))
           mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_row_wise_reduction>(&statement, root_idx, &mapping_)));
-        else if (root_node.op.type == viennacl::scheduler::OPERATION_BINARY_MAT_MAT_PROD_TYPE)
+        else if (root_node.op.type == scheduler::OPERATION_BINARY_MAT_MAT_PROD_TYPE)
           mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_product>(&statement, root_idx, &mapping_)));
-        else if (root_node.op.type == viennacl::scheduler::OPERATION_UNARY_TRANS_TYPE)
+        else if (root_node.op.type == scheduler::OPERATION_UNARY_TRANS_TYPE)
           mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_trans>(&statement, root_idx, &mapping_)));
       }
     }
@@ -148,86 +143,91 @@ private:
   public:
     typedef void result_type;
 
-    set_arguments_functor(symbolic_binder & binder, unsigned int & current_arg, viennacl::ocl::kernel & kernel) : binder_(binder), current_arg_(current_arg), kernel_(kernel){ }
+    set_arguments_functor(symbolic_binder & binder, unsigned int & current_arg, cl::Kernel & kernel) : binder_(binder), current_arg_(current_arg), kernel_(kernel){ }
 
-    template<class NumericT>
-    result_type operator()(NumericT const & scal) const
-    {
-      typedef typename viennacl::result_of::cl_type<NumericT>::type cl_scalartype;
-      kernel_.arg(current_arg_++, cl_scalartype(scal));
-    }
+//    template<class NumericT>
+//    void operator()(NumericT const & scal) const
+//    {
+//      typedef typename viennacl::result_of::cl_type<NumericT>::type cl_scalartype;
+//      kernel_.arg(current_arg_++, cl_scalartype(scal));
+//    }
 
-    /** @brief Scalar mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::scalar<NumericT> const & scal) const
-    {
-      if (binder_.bind(&viennacl::traits::handle(scal)))
-        kernel_.arg(current_arg_++, scal.handle().opencl_handle());
-    }
+//    /** @brief Scalar mapping */
+//    template<class NumericT>
+//    void operator()(viennacl::scalar<NumericT> const & scal) const
+//    {
+//      if (binder_.bind(&viennacl::traits::handle(scal)))
+//        kernel_.arg(current_arg_++, scal.handle().opencl_handle());
+//    }
 
     /** @brief Vector mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::vector_base<NumericT> const & vec) const
+    void set_vector_arguments(vector_base const & v) const
     {
-      if (binder_.bind(&viennacl::traits::handle(vec)))
+      if (binder_.bind(&v.data()))
       {
-        kernel_.arg(current_arg_++, vec.handle().opencl_handle());
-        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::start(vec)));
-        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::stride(vec)));
+        kernel_.setArg(current_arg_++, v.data());
+        kernel_.setArg(current_arg_++, cl_uint(v.start()));
+        kernel_.setArg(current_arg_++, cl_uint(v.stride()));
       }
     }
 
-    /** @brief Implicit vector mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::implicit_vector_base<NumericT> const & vec) const
-    {
-      typedef typename viennacl::result_of::cl_type<NumericT>::type cl_scalartype;
-      kernel_.arg(current_arg_++, cl_scalartype(vec.value()));
-      if (vec.has_index())
-        kernel_.arg(current_arg_++, cl_uint(vec.index()));
-    }
+//    /** @brief Implicit vector mapping */
+//    template<class NumericT>
+//    void operator()(viennacl::implicit_vector_base<NumericT> const & vec) const
+//    {
+//      typedef typename viennacl::result_of::cl_type<NumericT>::type cl_scalartype;
+//      kernel_.arg(current_arg_++, cl_scalartype(vec.value()));
+//      if (vec.has_index())
+//        kernel_.arg(current_arg_++, cl_uint(vec.index()));
+//    }
 
-    /** @brief Matrix mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::matrix_base<NumericT> const & mat) const
-    {
-      if (binder_.bind(&viennacl::traits::handle(mat)))
-      {
-        kernel_.arg(current_arg_++, mat.handle().opencl_handle());
-        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::ld(mat)));
-        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::start1(mat)));
-        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::start2(mat)));
-        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::stride1(mat)));
-        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::stride2(mat)));
-      }
-    }
+//    /** @brief Matrix mapping */
+//    template<class NumericT>
+//    void operator()(viennacl::matrix_base<NumericT> const & mat) const
+//    {
+//      if (binder_.bind(&viennacl::traits::handle(mat)))
+//      {
+//        kernel_.arg(current_arg_++, mat.handle().opencl_handle());
+//        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::ld(mat)));
+//        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::start1(mat)));
+//        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::start2(mat)));
+//        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::stride1(mat)));
+//        kernel_.arg(current_arg_++, cl_uint(viennacl::traits::stride2(mat)));
+//      }
+//    }
 
-    /** @brief Implicit matrix mapping */
-    template<class NumericT>
-    result_type operator()(viennacl::implicit_matrix_base<NumericT> const & mat) const
+//    /** @brief Implicit matrix mapping */
+//    template<class NumericT>
+//    void operator()(viennacl::implicit_matrix_base<NumericT> const & mat) const
+//    {
+//      kernel_.arg(current_arg_++, typename viennacl::result_of::cl_type<NumericT>::type(mat.value()));
+//    }
+
+    void set_arguments(scheduler::lhs_rhs_element const & lhs_rhs) const
     {
-      kernel_.arg(current_arg_++, typename viennacl::result_of::cl_type<NumericT>::type(mat.value()));
+//      if(lhs_rhs.subtype==scheduler::DENSE_VECTOR_TYPE)
+        set_vector_arguments(*lhs_rhs.vector);
     }
 
     /** @brief Traversal functor: */
-    void operator()(viennacl::scheduler::statement const & statement, atidlas_int_t root_idx, leaf_t leaf_t) const
+    void operator()(scheduler::statement const & statement, atidlas_int_t root_idx, leaf_t leaf_t) const
     {
-      viennacl::scheduler::statement_node const & root_node = statement.array()[root_idx];
-      if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-        tools::call_on_element(root_node.lhs, *this);
-      else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
-        tools::call_on_element(root_node.rhs, *this);
+      scheduler::statement_node const & root_node = statement.array()[root_idx];
+      if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != scheduler::COMPOSITE_OPERATION_FAMILY)
+        set_arguments(root_node.lhs);
+      else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != scheduler::COMPOSITE_OPERATION_FAMILY)
+        set_arguments(root_node.rhs);
     }
 
   private:
     symbolic_binder & binder_;
     unsigned int & current_arg_;
-    viennacl::ocl::kernel & kernel_;
+    cl::Kernel & kernel_;
   };
 
 protected:
 
-  static inline void compute_reduction(tools::kernel_generation_stream & os, std::string acc, std::string cur, viennacl::scheduler::op_element const & op)
+  static inline void compute_reduction(tools::kernel_generation_stream & os, std::string acc, std::string cur, scheduler::op_element const & op)
   {
     if (tools::elementwise_function(op))
       os << acc << "=" << tools::evaluate(op.type) << "(" << acc << "," << cur << ");" << std::endl;
@@ -235,15 +235,15 @@ protected:
       os << acc << "= (" << acc << ")" << tools::evaluate(op.type)  << "(" << cur << ");" << std::endl;
   }
 
-  static inline void compute_index_reduction(tools::kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, viennacl::scheduler::op_element const & op)
+  static inline void compute_index_reduction(tools::kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, scheduler::op_element const & op)
   {
     //        os << acc << " = " << cur_value << ">" << acc_value  << "?" << cur << ":" << acc << ";" << std::endl;
     os << acc << "= select(" << acc << "," << cur << "," << cur_value << ">" << acc_value << ");" << std::endl;
     os << acc_value << "=";
-    if (op.type==viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGFMAX_TYPE) os << "fmax";
-    if (op.type==viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGMAX_TYPE) os << "max";
-    if (op.type==viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGFMIN_TYPE) os << "fmin";
-    if (op.type==viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGMIN_TYPE) os << "min";
+    if (op.type==scheduler::OPERATION_BINARY_ELEMENT_ARGFMAX_TYPE) os << "fmax";
+    if (op.type==scheduler::OPERATION_BINARY_ELEMENT_ARGMAX_TYPE) os << "max";
+    if (op.type==scheduler::OPERATION_BINARY_ELEMENT_ARGFMIN_TYPE) os << "fmin";
+    if (op.type==scheduler::OPERATION_BINARY_ELEMENT_ARGMIN_TYPE) os << "min";
     os << "(" << acc_value << "," << cur_value << ");"<< std::endl;
   }
 
@@ -269,27 +269,27 @@ protected:
     }
   }
 
-  static inline std::string neutral_element(viennacl::scheduler::op_element const & op)
+  static inline std::string neutral_element(scheduler::op_element const & op)
   {
     switch (op.type)
     {
-    case viennacl::scheduler::OPERATION_BINARY_ADD_TYPE : return "0";
-    case viennacl::scheduler::OPERATION_BINARY_MULT_TYPE : return "1";
-    case viennacl::scheduler::OPERATION_BINARY_DIV_TYPE : return "1";
-    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_FMAX_TYPE : return "-INFINITY";
-    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGFMAX_TYPE : return "-INFINITY";
-    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_MAX_TYPE : return "-INFINITY";
-    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGMAX_TYPE : return "-INFINITY";
-    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_FMIN_TYPE : return "INFINITY";
-    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGFMIN_TYPE : return "INFINITY";
-    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_MIN_TYPE : return "INFINITY";
-    case viennacl::scheduler::OPERATION_BINARY_ELEMENT_ARGMIN_TYPE : return "INFINITY";
+    case scheduler::OPERATION_BINARY_ADD_TYPE : return "0";
+    case scheduler::OPERATION_BINARY_MULT_TYPE : return "1";
+    case scheduler::OPERATION_BINARY_DIV_TYPE : return "1";
+    case scheduler::OPERATION_BINARY_ELEMENT_FMAX_TYPE : return "-INFINITY";
+    case scheduler::OPERATION_BINARY_ELEMENT_ARGFMAX_TYPE : return "-INFINITY";
+    case scheduler::OPERATION_BINARY_ELEMENT_MAX_TYPE : return "-INFINITY";
+    case scheduler::OPERATION_BINARY_ELEMENT_ARGMAX_TYPE : return "-INFINITY";
+    case scheduler::OPERATION_BINARY_ELEMENT_FMIN_TYPE : return "INFINITY";
+    case scheduler::OPERATION_BINARY_ELEMENT_ARGFMIN_TYPE : return "INFINITY";
+    case scheduler::OPERATION_BINARY_ELEMENT_MIN_TYPE : return "INFINITY";
+    case scheduler::OPERATION_BINARY_ELEMENT_ARGMIN_TYPE : return "INFINITY";
 
     default: throw generator_not_supported_exception("Unsupported reduction operator : no neutral element known");
     }
   }
 
-  static std::string generate_arguments(std::vector<mapping_type> const & mappings, std::multimap<std::string, std::string> const & accessors, statements_container const & statements)
+  static std::string generate_arguments(std::vector<mapping_type> const & mappings, std::multimap<std::string, std::string> const & accessors, scheduler::statements_container const & statements)
   {
     tools::kernel_generation_stream stream;
     tools::process(stream, PARENT_NODE_TYPE, accessors, statements, mappings);
@@ -308,7 +308,7 @@ protected:
     return "__global " + data_type + "* #pointer, uint #start, uint #stride,";
   }
 
-  static std::string generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings, statements_container const & statements)
+  static std::string generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings, scheduler::statements_container const & statements)
   {
     return generate_arguments(mappings, tools::create_process_accessors("scalar", "__global #scalartype* #pointer,")
                                                                       ("host_scalar", "#scalartype #name,")
@@ -320,11 +320,11 @@ protected:
 
 
 
-  void set_arguments(statements_container const & statements, viennacl::ocl::kernel & kernel, unsigned int & current_arg)
+  void set_arguments(scheduler::statements_container const & statements, cl::Kernel & kernel, unsigned int & current_arg)
   {
     tools::shared_ptr<symbolic_binder> binder = make_binder(binding_policy_);
-    for (statements_container::data_type::const_iterator itt = statements.data().begin(); itt != statements.data().end(); ++itt)
-      tools::traverse(*itt, itt->root(), set_arguments_functor(*binder,current_arg,kernel), true);
+    for (scheduler::statements_container::data_type::const_iterator itt = statements.data().begin(); itt != statements.data().end(); ++itt)
+      tools::traverse(*itt, itt->root(), set_arguments_functor(*binder, current_arg, kernel), true);
   }
 
   class invalid_template_exception : public std::exception
@@ -364,18 +364,18 @@ protected:
     }
   }
 
-  static bool is_node_trans(viennacl::scheduler::statement::container_type const & array, size_t root_idx, leaf_t leaf_type)
+  static bool is_node_trans(scheduler::statement::container_type const & array, size_t root_idx, leaf_t leaf_type)
   {
     bool res = false;
-    viennacl::scheduler::lhs_rhs_element viennacl::scheduler::statement_node::*ptr;
+    scheduler::lhs_rhs_element scheduler::statement_node::*ptr;
     if (leaf_type==LHS_NODE_TYPE)
-      ptr = &viennacl::scheduler::statement_node::lhs;
+      ptr = &scheduler::statement_node::lhs;
     else
-      ptr = &viennacl::scheduler::statement_node::rhs;
-    viennacl::scheduler::statement_node const * node = &array[root_idx];
-    while ((node->*ptr).type_family==viennacl::scheduler::COMPOSITE_OPERATION_FAMILY)
+      ptr = &scheduler::statement_node::rhs;
+    scheduler::statement_node const * node = &array[root_idx];
+    while ((node->*ptr).type_family==scheduler::COMPOSITE_OPERATION_FAMILY)
     {
-      if (array[(node->*ptr).node_index].op.type==viennacl::scheduler::OPERATION_UNARY_TRANS_TYPE)
+      if (array[(node->*ptr).node_index].op.type==scheduler::OPERATION_UNARY_TRANS_TYPE)
         res = !res;
       node = &array[(node->*ptr).node_index];
     }
@@ -392,28 +392,28 @@ protected:
     return str + tools::to_string(suffixes[i]);
   }
   
-  static bool is_offset_modifier(viennacl::scheduler::statement_node const & node)
+  static bool is_offset_modifier(scheduler::statement_node const & node)
   {
-    return node.op.type==viennacl::scheduler::OPERATION_BINARY_VECTOR_DIAG_TYPE
-        || node.op.type==viennacl::scheduler::OPERATION_BINARY_MATRIX_DIAG_TYPE
-        || node.op.type==viennacl::scheduler::OPERATION_BINARY_MATRIX_ROW_TYPE
-        || node.op.type==viennacl::scheduler::OPERATION_BINARY_MATRIX_COLUMN_TYPE;
+    return node.op.type==scheduler::OPERATION_BINARY_VECTOR_DIAG_TYPE
+        || node.op.type==scheduler::OPERATION_BINARY_MATRIX_DIAG_TYPE
+        || node.op.type==scheduler::OPERATION_BINARY_MATRIX_ROW_TYPE
+        || node.op.type==scheduler::OPERATION_BINARY_MATRIX_COLUMN_TYPE;
   }
 
-  static bool has_strided_access(statements_container const & statements)
+  static bool has_strided_access(scheduler::statements_container const & statements)
   {
-    for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
+    for (scheduler::statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
     {
       //checks for vectors
-      std::vector<viennacl::scheduler::lhs_rhs_element> vectors = tools::filter_elements(viennacl::scheduler::DENSE_VECTOR_TYPE, *it);
-      for (std::vector<viennacl::scheduler::lhs_rhs_element>::iterator itt = vectors.begin(); itt != vectors.end(); ++itt)
-        if (tools::call_on_vector(*itt, tools::stride_fun())>1)
+      std::vector<scheduler::lhs_rhs_element> vectors = tools::filter_elements(scheduler::DENSE_VECTOR_TYPE, *it);
+      for (std::vector<scheduler::lhs_rhs_element>::iterator itt = vectors.begin(); itt != vectors.end(); ++itt)
+        if(itt->vector->stride())
           return true;
 
       //checks for matrix
-      std::vector<viennacl::scheduler::lhs_rhs_element> matrices = tools::filter_elements(viennacl::scheduler::DENSE_MATRIX_TYPE, *it);
-      for (std::vector<viennacl::scheduler::lhs_rhs_element>::iterator itt = matrices.begin(); itt != matrices.end(); ++itt)
-        if (tools::call_on_matrix(*itt, tools::stride1_fun())>1 || tools::call_on_matrix(*itt, tools::stride2_fun())>2)
+      std::vector<scheduler::lhs_rhs_element> matrices = tools::filter_elements(scheduler::DENSE_MATRIX_TYPE, *it);
+      for (std::vector<scheduler::lhs_rhs_element>::iterator itt = matrices.begin(); itt != matrices.end(); ++itt)
+        if (itt->matrix->stride1() > 1 || itt->matrix->stride2() > 1)
           return true;
 
       if(tools::filter_nodes(&is_offset_modifier, *it, true).empty()==false)
@@ -422,42 +422,42 @@ protected:
     return false;
   }
 
-  static atidlas_int_t vector_size(viennacl::scheduler::statement_node const & node, bool up_to_internal_size)
+  static atidlas_int_t vector_size(scheduler::statement_node const & node, bool up_to_internal_size)
   {
-    using namespace viennacl::scheduler;
+    using namespace scheduler;
     using namespace tools;
+
+    atidlas_int_t (vector_base::*funsize)(void) const = up_to_internal_size?&vector_base::internal_size:&vector_base::size;
+    atidlas_int_t (matrix_base::*funsize1)(void) const = up_to_internal_size?&matrix_base::internal_size1:&matrix_base::size1;
+    atidlas_int_t (matrix_base::*funsize2)(void) const = up_to_internal_size?&matrix_base::internal_size2:&matrix_base::size2;
+
     if (node.op.type==OPERATION_BINARY_MATRIX_DIAG_TYPE)
-    {
-      atidlas_int_t size1 = up_to_internal_size?call_on_matrix(node.lhs, internal_size1_fun()):call_on_matrix(node.lhs, size1_fun());
-      atidlas_int_t size2 = up_to_internal_size?call_on_matrix(node.lhs, internal_size2_fun()):call_on_matrix(node.lhs, size2_fun());
-      return std::min<atidlas_int_t>(size1, size2);
-    }
+      return std::min<atidlas_int_t>((node.lhs.matrix->*funsize1)(), (node.lhs.matrix->*funsize2)());
     else if (node.op.type==OPERATION_BINARY_MATRIX_ROW_TYPE)
-      return up_to_internal_size?call_on_matrix(node.lhs, internal_size2_fun()):call_on_matrix(node.lhs, size2_fun());
+      return (node.lhs.matrix->*funsize2)();
     else if (node.op.type==OPERATION_BINARY_MATRIX_COLUMN_TYPE)
-      return up_to_internal_size?call_on_matrix(node.lhs, internal_size1_fun()):call_on_matrix(node.lhs, size1_fun());
+      return (node.lhs.matrix->*funsize1)();
     else
-      return up_to_internal_size?call_on_vector(node.lhs, internal_size_fun()):call_on_vector(node.lhs, size_fun());
+      return (node.lhs.vector->*funsize)();
+
   }
 
-  static std::pair<atidlas_int_t, atidlas_int_t> matrix_size(viennacl::scheduler::statement_node const & node, bool up_to_internal_size)
+  static std::pair<atidlas_int_t, atidlas_int_t> matrix_size(scheduler::statement_node const & node, bool up_to_internal_size)
   {
     using namespace tools;
-    if (node.op.type==viennacl::scheduler::OPERATION_BINARY_VECTOR_DIAG_TYPE)
+    atidlas_int_t (vector_base::*funsize)() const = up_to_internal_size?&vector_base::internal_size:&vector_base::size;
+    atidlas_int_t (matrix_base::*funsize1)() const = up_to_internal_size?&matrix_base::internal_size1:&matrix_base::size1;
+    atidlas_int_t (matrix_base::*funsize2)() const = up_to_internal_size?&matrix_base::internal_size2:&matrix_base::size2;
+
+    if (node.op.type==scheduler::OPERATION_BINARY_VECTOR_DIAG_TYPE)
     {
-      atidlas_int_t is = call_on_vector(node.lhs, internal_size_fun());
-      atidlas_int_t s = call_on_vector(node.lhs, size_fun());
-      return up_to_internal_size?std::make_pair(is,is):std::make_pair(s,s);
+      atidlas_int_t size = (node.lhs.vector->*funsize)();
+      return std::make_pair(size,size);
     }
     else
-    {
-      atidlas_int_t size1 = up_to_internal_size?call_on_matrix(node.lhs, internal_size1_fun()):call_on_matrix(node.lhs, size1_fun());
-      atidlas_int_t size2 = up_to_internal_size?call_on_matrix(node.lhs, internal_size2_fun()):call_on_matrix(node.lhs, size2_fun());
-      return std::make_pair(size1, size2);
-    }
+      return std::make_pair((node.lhs.matrix->*funsize1)(), (node.lhs.matrix->*funsize2)());
   }
 
-  //NB : templates are not used here because declaring a functor out of the generate() functions would be harder to read
   struct loop_body_base
   {
     virtual void operator()(tools::kernel_generation_stream & stream, unsigned int simd_width) const = 0;
@@ -507,22 +507,22 @@ protected:
 
 private:
   /** @brief Generates the body of the associated kernel function */
-  virtual std::vector<std::string> generate_impl(std::string const & kernel_prefix, statements_container const & statements, std::vector<mapping_type> const & mapping) const = 0;
+  virtual std::vector<std::string> generate_impl(std::string const & kernel_prefix, scheduler::statements_container const & statements, std::vector<mapping_type> const & mapping) const = 0;
 
 public:
   template_base(binding_policy_t binding_policy) : binding_policy_(binding_policy) {}
 
-  virtual unsigned int lmem_usage(statements_container const &) const  { return 0; }
+  virtual unsigned int lmem_usage(scheduler::statements_container const &) const  { return 0; }
 
-  virtual unsigned int registers_usage(statements_container const &) const { return 0; }
+  virtual unsigned int registers_usage(scheduler::statements_container const &) const { return 0; }
 
-  virtual std::vector<atidlas_int_t> input_sizes(statements_container const & statements) = 0;
+  virtual std::vector<atidlas_int_t> input_sizes(scheduler::statements_container const & statements) = 0;
 
   virtual ~template_base(){ }
 
-  std::vector<std::string> generate(std::string const & kernel_prefix, statements_container const & statements, viennacl::ocl::device const & device)
+  std::vector<std::string> generate(std::string const & kernel_prefix, scheduler::statements_container const & statements, cl::Device const & device)
   {
-    statements_container::data_type::const_iterator sit;
+    scheduler::statements_container::data_type::const_iterator sit;
     std::vector<mapping_type>::iterator mit;
 
     if(int err = check_invalid(statements, device))
@@ -538,9 +538,9 @@ public:
   }
 
   /** @brief returns whether or not the profile has undefined behavior on particular device */
-  virtual int check_invalid(statements_container const & statements, viennacl::ocl::device const & device) const = 0;
+  virtual int check_invalid(scheduler::statements_container const & statements, cl::Device const & device) const = 0;
 
-  virtual void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, statements_container const & statements) = 0;
+  virtual void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs, scheduler::statements_container const & statements) = 0;
 
   virtual tools::shared_ptr<template_base> clone() const = 0;
 
@@ -553,23 +553,23 @@ template<class TemplateType, class ParametersType>
 class template_base_impl : public template_base
 {
 private:
-  virtual int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const { return TEMPLATE_VALID; }
+  virtual int check_invalid_impl(cl::Device const &, scheduler::statements_container const &) const { return TEMPLATE_VALID; }
 
 protected:
-  bool has_misaligned_offset(statements_container const & statements)
+  bool has_misaligned_offset(scheduler::statements_container const & statements)
   {
-    for (statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
+    for (scheduler::statements_container::data_type::const_iterator it = statements.data().begin(); it != statements.data().end(); ++it)
     {
       //checks for vectors
-      std::vector<viennacl::scheduler::lhs_rhs_element> vectors = tools::filter_elements(viennacl::scheduler::DENSE_VECTOR_TYPE, *it);
-      for (std::vector<viennacl::scheduler::lhs_rhs_element>::iterator itt = vectors.begin(); itt != vectors.end(); ++itt)
-        if (tools::call_on_vector(*itt, tools::stride_fun())>1)
+      std::vector<scheduler::lhs_rhs_element> vectors = tools::filter_elements(scheduler::DENSE_VECTOR_TYPE, *it);
+      for (std::vector<scheduler::lhs_rhs_element>::iterator itt = vectors.begin(); itt != vectors.end(); ++itt)
+        if (itt->vector->stride()>1)
           return true;
 
       //checks for matrix
-      std::vector<viennacl::scheduler::lhs_rhs_element> matrices = tools::filter_elements(viennacl::scheduler::DENSE_MATRIX_TYPE, *it);
-      for (std::vector<viennacl::scheduler::lhs_rhs_element>::iterator itt = matrices.begin(); itt != matrices.end(); ++itt)
-        if (tools::call_on_matrix(*itt, tools::stride1_fun())>1 || tools::call_on_matrix(*itt, tools::stride2_fun())>2)
+      std::vector<scheduler::lhs_rhs_element> matrices = tools::filter_elements(scheduler::DENSE_MATRIX_TYPE, *it);
+      for (std::vector<scheduler::lhs_rhs_element>::iterator itt = matrices.begin(); itt != matrices.end(); ++itt)
+        if (itt->matrix->stride1()>1 || itt->matrix->stride2()>1)
           return true;
     }
     return false;
@@ -588,19 +588,17 @@ public:
   { return tools::shared_ptr<template_base>(new TemplateType(*dynamic_cast<TemplateType const *>(this))); }
 
   /** @brief returns whether or not the profile has undefined behavior on particular device */
-  int check_invalid(statements_container const & statements, viennacl::ocl::device const & device) const
+  int check_invalid(scheduler::statements_container const & statements, cl::Device const & device) const
   {
-    using namespace viennacl::tools;
-
     //Query device informations
-    size_t lmem_available = static_cast<size_t>(device.local_mem_size());
+    size_t lmem_available = device.getInfo<CL_DEVICE_LOCAL_MEM_SIZE>();
     size_t lmem_used = lmem_usage(statements);
     if (lmem_used>lmem_available)
       return TEMPLATE_LOCAL_MEMORY_OVERFLOW;
 
     //Invalid work group size
-    size_t max_workgroup_size = device.max_work_group_size();
-    std::vector<size_t> max_work_item_sizes = device.max_work_item_sizes();
+    size_t max_workgroup_size = device.getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
+    std::vector<size_t> max_work_item_sizes = device.getInfo<CL_DEVICE_MAX_WORK_ITEM_SIZES>();
     if (p_.local_size_0*p_.local_size_1 > max_workgroup_size)
       return TEMPLATE_WORK_GROUP_SIZE_OVERFLOW;
     if (p_.local_size_0 > max_work_item_sizes[0])
@@ -611,12 +609,12 @@ public:
 
     //Advice from the Intel guide
     unsigned int warp_size = 8;
-    if (device.type()==CL_DEVICE_TYPE_GPU)
+    if (device.getInfo<CL_DEVICE_TYPE>()==CL_DEVICE_TYPE_GPU)
     {
       //Advice from the nvidia guide
       warp_size = 32;
       //Advice from the AMD guide
-      if (device.vendor_id()==4098)
+      if (device.getInfo<CL_DEVICE_VENDOR_ID>()==4098)
         warp_size = 64;
     }
     if (((p_.local_size_0*p_.local_size_1)%warp_size)>0)

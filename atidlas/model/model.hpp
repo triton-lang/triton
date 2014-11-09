@@ -3,13 +3,11 @@
 
 #include "rapidjson/document.h"
 
-#include "viennacl/ocl/program.hpp"
-#include "viennacl/tools/timer.hpp"
-
+#include "atidlas/backend/templates/template_base.hpp"
 #include "atidlas/model/tools.hpp"
 #include "atidlas/tools/shared_ptr.hpp"
 #include "atidlas/tools/lazy_program_compiler.hpp"
-#include "atidlas/backend/templates/template_base.hpp"
+#include "atidlas/tools/timer.hpp"
 
 namespace atidlas
 {
@@ -107,7 +105,7 @@ namespace atidlas
         templates_(1,tp.clone()), context_(context), device_(device)
     {}
 
-    void execute(statements_container const & statements, bool bypass_predictor = false, bool force_recompilation = false)
+    void execute(scheduler::statements_container const & statements, bool bypass_predictor = false, bool force_recompilation = false)
     {
       bypass_predictor = bypass_predictor || predictor_.get()==NULL;
 
@@ -147,11 +145,11 @@ namespace atidlas
       templates_[label]->enqueue("k" + tools::to_string(label), lazy_programs_, statements);
     }
 
-    void tune(statements_container const & statements)
+    void tune(scheduler::statements_container const & statements)
     {
       //Collect the timings
       std::vector<float> timings(templates_.size());
-      viennacl::tools::timer timer;
+      tools::timer timer;
       for(size_t i = 0 ; i < templates_.size() ; ++i)
       {
         timer.start();

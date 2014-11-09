@@ -4,10 +4,8 @@
 
 #include <vector>
 
-#include "viennacl/scheduler/forwards.h"
-#include "viennacl/tools/tools.hpp"
-#include "viennacl/scheduler/io.hpp"
-
+#include "atidlas/scheduler/forwards.h"
+#include "atidlas/traits/size.hpp"
 #include "atidlas/backend/templates/template_base.hpp"
 
 namespace atidlas
@@ -27,7 +25,7 @@ struct row_wise_reduction_parameters : public template_base::parameters_type
 class row_wise_reduction_template : public template_base_impl<row_wise_reduction_template, row_wise_reduction_parameters>
 {
 private:
-  virtual int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const
+  virtual int check_invalid_impl(cl::Device const &, statements_container const &) const
   {
     if (p_.fetch_policy==FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
@@ -39,7 +37,7 @@ private:
     return p_.local_size_0*(p_.local_size_1+1);
   }
 
-  static void parse(viennacl::scheduler::statement const & statement, std::vector<size_t> & idx, bool & is_trans, viennacl::scheduler::lhs_rhs_element & matrix)
+  static void parse(scheduler::statement const & statement, std::vector<size_t> & idx, bool & is_trans, scheduler::lhs_rhs_element & matrix)
   {
     idx = tools::filter_nodes(&tools::is_reduction, statement, false);
     is_trans = is_node_trans(statement.array(), idx[0], LHS_NODE_TYPE);
@@ -125,7 +123,7 @@ private:
             accessors["vector"] = str[a];
             accessors["scalar"] = "#namereg";
             std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
-            if (exprs[k]->root_node().op.type==viennacl::scheduler::OPERATION_BINARY_MAT_VEC_PROD_TYPE)
+            if (exprs[k]->root_node().op.type==scheduler::OPERATION_BINARY_MAT_VEC_PROD_TYPE)
               value+= "*" + exprs[k]->evaluate_recursive(RHS_NODE_TYPE, accessors);
 
             if (exprs[k]->is_index_reduction())
@@ -201,7 +199,7 @@ private:
     for (mit = mappings.begin(), sit = statements.data().begin(); mit != mappings.end(); ++mit, ++sit)
     {
       std::vector<size_t> idx;
-      viennacl::scheduler::lhs_rhs_element A;
+      scheduler::lhs_rhs_element A;
       parse(*sit, idx, is_trans, A);
       for (unsigned int j = 0; j < idx.size(); ++j)
         exprs.push_back((mapped_row_wise_reduction*)(mit->at(mapping_key(idx[j], PARENT_NODE_TYPE)).get()));
@@ -222,10 +220,10 @@ private:
   std::vector<atidlas_int_t> infos(statements_container const & statements, bool & is_trans)
   {
     std::vector<size_t> idx;
-    viennacl::scheduler::lhs_rhs_element A;
+    scheduler::lhs_rhs_element A;
     parse(statements.data().front(), idx, is_trans, A);
-    atidlas_int_t M = tools::call_on_matrix(A, tools::size1_fun());
-    atidlas_int_t N = tools::call_on_matrix(A, tools::size2_fun());
+    atidlas_int_t M = traits::size1(*A.matrix);
+    atidlas_int_t N = traits::size2(*A.matrix);
     if(is_trans)
       std::swap(M,N);
     return tools::make_vector<atidlas_int_t>() << M << N;
@@ -245,7 +243,7 @@ public:
     bool is_trans;
     std::vector<atidlas_int_t> MN = infos(statements, is_trans);
 
-    viennacl::ocl::kernel * kernel;
+    cl::Kernel * kernel;
     if(is_trans  && p_.simd_width>1)
     {
       if (has_strided_access(statements))
@@ -264,7 +262,7 @@ public:
     kernel->arg(current_arg++, cl_uint(MN[0]));
     kernel->arg(current_arg++, cl_uint(MN[1]));
     set_arguments(statements, *kernel, current_arg);
-    viennacl::ocl::enqueue(*kernel);
+//    cl::CommandQueue().enqueue()
   }
 };
 

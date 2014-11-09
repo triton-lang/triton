@@ -4,9 +4,7 @@
 #include <vector>
 #include <cmath>
 
-#include "viennacl/scheduler/forwards.h"
-#include "viennacl/tools/tools.hpp"
-
+#include "atidlas/scheduler/forwards.h"
 #include "atidlas/backend/templates/template_base.hpp"
 
 namespace atidlas
@@ -25,14 +23,14 @@ public:
 class vector_axpy_template : public template_base_impl<vector_axpy_template, vector_axpy_parameters>
 {
 private:
-  virtual int check_invalid_impl(viennacl::ocl::device const &, statements_container const &) const
+  virtual int check_invalid_impl(cl::Device const &, scheduler::statements_container const &) const
   {
     if (p_.fetching_policy==FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
     return TEMPLATE_VALID;
   }
 
-  std::vector<std::string> generate_impl(std::string const & kernel_prefix, statements_container const & statements, std::vector<mapping_type> const & mappings) const
+  std::vector<std::string> generate_impl(std::string const & kernel_prefix, scheduler::statements_container const & statements, std::vector<mapping_type> const & mappings) const
   {
     std::vector<std::string> result;
     for (unsigned int i = 0; i < 2; ++i)
@@ -95,28 +93,28 @@ public:
   void up_to_internal_size(bool v)
   { up_to_internal_size_ = v; }
 
-  std::vector<atidlas_int_t> input_sizes(statements_container const & statements)
+  std::vector<atidlas_int_t> input_sizes(scheduler::statements_container const & statements)
   {
-    viennacl::scheduler::statement const & statement = statements.data().front();
+    scheduler::statement const & statement = statements.data().front();
     atidlas_int_t size = vector_size(lhs_most(statement.array(), statement.root()), up_to_internal_size_);
     return tools::make_vector<atidlas_int_t>() << size;
   }
 
-  void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs,  statements_container const & statements)
+  void enqueue(std::string const & kernel_prefix, std::vector<lazy_program_compiler> & programs,  scheduler::statements_container const & statements)
   {
-    atidlas_int_t size = input_sizes(statements)[0];
-    std::string kfallback = kernel_prefix;
-    kfallback+='0';
-    std::string kopt = kernel_prefix;
-    kopt+='1';
-    bool fallback = p_.simd_width > 1 && (has_strided_access(statements) || (size%p_.simd_width>0) || has_misaligned_offset(statements));
-    viennacl::ocl::kernel * kernel = &programs[fallback?0:1].program().get_kernel(fallback?kfallback:kopt);
-    kernel->local_work_size(0, p_.local_size_0);
-    kernel->global_work_size(0, p_.local_size_0*p_.num_groups);
-    unsigned int current_arg = 0;
-    kernel->arg(current_arg++, static_cast<cl_uint>(size));
-    set_arguments(statements, *kernel, current_arg);
-    viennacl::ocl::enqueue(*kernel);
+//    atidlas_int_t size = input_sizes(statements)[0];
+//    std::string kfallback = kernel_prefix;
+//    kfallback+='0';
+//    std::string kopt = kernel_prefix;
+//    kopt+='1';
+//    bool fallback = p_.simd_width > 1 && (has_strided_access(statements) || (size%p_.simd_width>0) || has_misaligned_offset(statements));
+//    cl::Kernel * kernel = &programs[fallback?0:1].program().get_kernel(fallback?kfallback:kopt);
+//    kernel->local_work_size(0, p_.local_size_0);
+//    kernel->global_work_size(0, p_.local_size_0*p_.num_groups);
+//    unsigned int current_arg = 0;
+//    kernel->arg(current_arg++, static_cast<cl_uint>(size));
+//    set_arguments(statements, *kernel, current_arg);
+//    cl::CommandQueue().enqueueNDRangeKernel(kernel);
   }
 
 private:
