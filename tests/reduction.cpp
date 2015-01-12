@@ -1,39 +1,35 @@
-#include "common.hpp"
 #include <cmath>
-#include "viennacl/vector.hpp"
-#include "viennacl/linalg/inner_prod.hpp"
+#include <iostream>
 
-#include "atidlas/templates/reduction.hpp"
-#include "atidlas/execute.hpp"
+#include "common.hpp"
+#include "atidlas/array.h"
 
-template<typename NumericT, class XType, class YType>
-void test_reduction(NumericT epsilon,  XType & cx, YType & cy)
+namespace ad = atidlas;
+typedef ad::int_t int_t;
+
+template<typename T>
+void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T> & cy,
+                                ad::array & x, ad::array & y)
 {
-  using namespace viennacl::linalg;
   using namespace std;
 
-  atidlas::reduction_parameters parameters(1, 32, 128, atidlas::FETCH_FROM_GLOBAL_CONTIGUOUS);
-  int failure_count = 0;
-  NumericT cs = 0;
-  NumericT tmp = 0;
-  viennacl::scalar<NumericT> s(0);
+  int_t N = cx.size();
+  unsigned int failure_count = 0;
 
-  viennacl::vector<NumericT> xtmp(cx.internal_size());
-  typename vector_maker<XType>::result_type x = vector_maker<XType>::make(xtmp, cx);
-  viennacl::vector<NumericT> ytmp(cy.internal_size());
-  typename vector_maker<YType>::result_type y = vector_maker<YType>::make(ytmp, cy);
+  atidlas::numeric_type dtype = ad::to_numeric_type<T>::value;
 
+  T cs = 0;
+  T tmp = 0;
+  atidlas::scalar ds(dtype);
 
-#define RUN_TEST(NAME, CPU_REDUCTION, ASSIGNMENT, GPU_STATEMENT) \
+#define RUN_TEST(NAME, CPU_REDUCTION, INIT, ASSIGNMENT, GPU_REDUCTION) \
   cout << NAME "..." << flush;\
-  cs = 0;\
-  for(int_t i = 0 ; i < cx.size() ; ++i)\
+  cs = INIT;\
+  for(int_t i = 0 ; i < N ; ++i)\
     CPU_REDUCTION;\
   cs= ASSIGNMENT ;\
-  atidlas::execute(atidlas::reduction_template(parameters),\
-                   GPU_STATEMENT,\
-                   viennacl::ocl::current_context(), true);\
-  tmp = s;\
+  GPU_REDUCTION;\
+  tmp = ds.to_type<T>();\
   if((std::abs(cs - tmp)/std::max(cs, tmp)) > epsilon)\
   {\
     failure_count++;\
@@ -42,7 +38,11 @@ void test_reduction(NumericT epsilon,  XType & cx, YType & cy)
   else\
     cout << endl;
 
-  RUN_TEST("s = x.y", cs+=cx[i]*cy[i], cs, viennacl::scheduler::statement(s, viennacl::op_assign(), viennacl::linalg::inner_prod(x, y)))
+  RUN_TEST("s = x'.y", cs+=cx[i]*cy[i], 0, cs, ds = dot(x,y));
+  RUN_TEST("s = x'.y + y'.y", cs+= cx[i]*cy[i] + cy[i]*cy[i], 0, cs, ds = dot(x,y) + dot(y,y));
+  RUN_TEST("s = max(x)", cs = std::max(cs, cx[i]), -INFINITY, cs, ds = max(x));
+  RUN_TEST("s = min(x)", cs = std::min(cs, cx[i]), INFINITY, cs, ds = min(x));
+
 
 #undef RUN_TEST
 
@@ -50,26 +50,26 @@ void test_reduction(NumericT epsilon,  XType & cx, YType & cy)
       exit(EXIT_FAILURE);
 }
 
-template<typename NumericT>
-void test_impl(NumericT epsilon)
+template<typename T>
+void test_impl(T epsilon)
 {
+  using atidlas::_;
+
   int_t N = 24378;
-  INIT_VECTOR_AND_PROXIES(N, 4, 5, x);
-  INIT_VECTOR_AND_PROXIES(N, 7, 8, y);
+  int_t SUBN = 531;
+
+  INIT_VECTOR(N, SUBN, 2, 4, cx, x);
+  INIT_VECTOR(N, SUBN, 5, 8, cy, y);
 
 #define TEST_OPERATIONS(XTYPE, YTYPE)\
-  std::cout << "> x : " #XTYPE " | y : " #YTYPE  << std::endl;\
-  test_reduction(epsilon, x_ ## XTYPE, y_ ## YTYPE);\
+  test_reduction(epsilon, cx_ ## XTYPE, cy_ ## YTYPE,\
+                                    x_ ## XTYPE, y_ ## YTYPE);\
 
-  TEST_OPERATIONS(vector, vector)
-  TEST_OPERATIONS(vector, range)
-  TEST_OPERATIONS(vector, slice)
-  TEST_OPERATIONS(range, vector)
-  TEST_OPERATIONS(range, range)
-  TEST_OPERATIONS(range, slice)
-  TEST_OPERATIONS(slice, vector)
-  TEST_OPERATIONS(slice, range)
-  TEST_OPERATIONS(slice, slice)
+  std::cout << "> standard..." << std::endl;
+  TEST_OPERATIONS(vector, vector);
+  std::cout << std::endl;
+  std::cout << "> slice..." << std::endl;
+  TEST_OPERATIONS(slice, slice);
 }
 
 int main()

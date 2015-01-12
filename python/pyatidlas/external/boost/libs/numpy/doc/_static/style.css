@@ -1,0 +1,11 @@
+@import url(boost.css);
+
+#contents 
+{ 
+/*    border-bottom: solid thin black;*/
+}
+
+.highlight
+{
+  border: 1px solid #aaaaaa;    
+}

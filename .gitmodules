@@ -1,3 +1,0 @@
-[submodule "python/pyatidlas/external/pyviennacl-dev"]
-	path = python/pyatidlas/external/pyviennacl-dev
-	url = https://github.com/viennacl/pyviennacl-dev.git

@@ -1,0 +1,4 @@
+set local
+set PYTHONPATH=@CMAKE_LIBRARY_OUTPUT_DIRECTORY@/@cfg@;%PYTHONPATH%
+python %1
+endlocal

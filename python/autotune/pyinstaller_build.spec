@@ -4,7 +4,6 @@ import os, sys
 prefix = sys.argv[2]
 
 sys.path.append('/home/philippe/Development/ATIDLAS/build/python/pyatidlas/build/lib.linux-x86_64-2.7/')
-sys.path.append('/home/philippe/Development/pyviennacl-dev/build/lib.linux-x86_64-2.7/')
 sys.path.append(os.path.join(prefix, 'pysrc'))
 
 a = Analysis([os.path.join(prefix, 'pysrc','autotune.py')],

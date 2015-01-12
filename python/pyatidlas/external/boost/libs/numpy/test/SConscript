@@ -1,0 +1,35 @@
+# -*- python -*-
+
+# Copyright Jim Bosch 2010-2012.
+# Distributed under the Boost Software License, Version 1.0.
+#    (See accompanying file LICENSE_1_0.txt or copy at
+#          http://www.boost.org/LICENSE_1_0.txt)
+
+Import("env")
+
+import os
+import sys
+
+test_env = env.Clone()
+lib_path = os.path.abspath(os.path.join("..", "src"))
+test_env.Append(LIBPATH=[lib_path])
+test_env.Append(RPATH=[lib_path])
+test_env.Append(LINKFLAGS = ["$__RPATH"])  # workaround for SCons bug #1644t
+test_env.Append(LIBS=["boost_numpy"])
+
+test = []
+
+def RunPythonUnitTest(target, source, env):
+    if not env.Execute('%s %s' % (sys.executable, source[0].abspath)):
+        env.Execute(Touch(target))
+
+def PythonUnitTest(env, script, dependencies):
+    run = env.Command(".%s.succeeded" % str(script), script, RunPythonUnitTest)
+    env.Depends(run, dependencies)
+    return run
+
+for name in ("dtype", "ufunc", "templates", "ndarray", "indexing", "shapes"):
+    mod = test_env.LoadableModule("%s_mod" % name, "%s_mod.cpp" % name, LDMODULEPREFIX="")
+    test.extend(PythonUnitTest(test_env, "%s.py" % name, mod))
+
+Return("test")

@@ -1,0 +1,23 @@
+import testing ;
+import python ;
+
+use-project /boost/numpy : ../src ;
+project /boost/numpy/test ;
+
+rule numpy-test ( name : sources * : requirements * )
+{
+    sources ?= $(name).py $(name)_mod.cpp ;
+    return [ testing.make-test run-pyd : $(sources) /boost/numpy//boost_numpy
+        : $(requirements) : $(name) ] ;
+}
+
+test-suite numpy
+  :
+
+    [ numpy-test templates ]
+    [ numpy-test ufunc ]
+    [ numpy-test shapes ]
+    [ numpy-test ndarray ]
+    [ numpy-test indexing ]
+
+  ;

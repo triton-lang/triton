@@ -1,0 +1,27 @@
+# -*- python -*-
+
+# Copyright Jim Bosch 2010-2012.
+# Distributed under the Boost Software License, Version 1.0.
+#    (See accompanying file LICENSE_1_0.txt or copy at
+#          http://www.boost.org/LICENSE_1_0.txt)
+
+Import("env")
+
+import os
+
+example_env = env.Clone()
+lib_path = os.path.abspath(os.path.join("..", "src"))
+example_env.Append(LIBPATH=[lib_path])
+example_env.Append(RPATH=[lib_path])
+example_env.Append(LINKFLAGS = ["$__RPATH"])  # workaround for SCons bug #1644
+example_env.Append(LIBS=["boost_numpy"])
+
+example = []
+
+for name in ("ufunc", "dtype", "fromdata", "ndarray", "simple"):
+    example.extend(example_env.Program(name, "%s.cpp" % name))
+
+for name in ("gaussian",):
+    example.extend(example_env.SharedLibrary(name, "%s.cpp" % name, SHLIBPREFIX=""))
+
+Return("example")

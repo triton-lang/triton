@@ -4,15 +4,12 @@ import pyopencl
 import time
 import os
 import sys
-
-import pyopencl as cl
-import pyviennacl as vcl
 import pyatidlas as atd
 import numpy as np
 
 class PhysicalLimitsNV:
     def __init__(self, dev):
-        self.compute_capability = pyopencl.characterize.nv_compute_capability(dev)
+        self.compute_capability = dev.nv_compute_capability
         if self.compute_capability[0]==1:
             if self.compute_capability[1]<=1:
                 self.warps_per_mp = 24
@@ -196,36 +193,37 @@ class OccupancyRecord:
 
 
 
-def skip(template, statement, device):
-    statements = vcl.pycore.StatementsTuple(statement)
-    registers_usage = template.registers_usage(statements)/4
-    lmem_usage = template.lmem_usage(statements)
-    local_size = template.parameters.local_size_0*template.parameters.local_size_1
+def skip(template, symbolic):
+    device = symbolic.context.queues[0].device
+    symbolic_expressions = atd.symbolic_expression_container(symbolic)
+    registers_usage = template.registers_usage(symbolic_expressions)/4
+    lmem_usage = template.lmem_usage(symbolic_expressions)
+    local_size = template.local_size_0*template.local_size_1
     occupancy_record = OccupancyRecord(device, local_size, lmem_usage, registers_usage)
-    if template.check(statement) or occupancy_record.occupancy < 15:
+    if template.check_invalid(symbolic_expressions, device) or occupancy_record.occupancy < 15:
         return True
     return False
 
-def benchmark(template, statement, device):
-    statements = vcl.pycore.StatementsTuple(statement)
-    registers_usage = template.registers_usage(statements)/4
-    lmem_usage = template.lmem_usage(statements)
-    local_size = template.parameters.local_size_0*template.parameters.local_size_1
+def benchmark(template, symbolic):
+    queue = symbolic.context.queues[0]
+    device = queue.device
+    symbolic_expressions = atd.symbolic_expression_container(symbolic)
+    registers_usage = template.registers_usage(symbolic_expressions)/4
+    lmem_usage = template.lmem_usage(symbolic_expressions)
+    local_size = template.local_size_0*template.local_size_1
     occupancy_record = OccupancyRecord(device, local_size, lmem_usage, registers_usage)
     if occupancy_record.occupancy < 15 :
         raise ValueError("Template has too low occupancy")
     else:
-        vcl_statements = statements.vcl_tuple
-        vcl_context = statement.result.context.vcl_sub_context
-        model = atd._atidlas.model(template._vcl_template, vcl_context, vcl_context.current_device)
-        model.execute(vcl_statements, False, True)
-        statement.result.context.finish_all_queues()
+        queue.models[template, atd.float32] = atd.model(template, queue)
+        x = atd.array(symbolic)
+        atd.synchronize(symbolic.context)
         current_time = 0
         timings = []
         while current_time < 1e-1:
             time_before = time.time()
-            model.execute(vcl_statements, False, False)
-            statement.result.context.finish_all_queues()
+            x = atd.array(symbolic)
+            atd.synchronize(symbolic.context)
             timings.append(time.time() - time_before)
             current_time = current_time + timings[-1]
         return np.median(timings)
@@ -235,132 +233,3 @@ def sanitize_string(string, keep_chars = ['_']):
     string = string.replace(' ', '_').replace('-', '_').lower()
     string = "".join(c for c in string if c.isalnum() or c in keep_chars).rstrip()
     return string
-
-def update_viennacl_headers(viennacl_root, device, datatype, operation, additional_parameters, parameters):
-    
-    def append_include(data, path):
-        include_name = '#include "' + path +'"\n'
-        already_included = data.find(include_name)
-        if already_included == -1:
-            insert_index = data.index('\n', data.index('#define')) + 1
-            return data[:insert_index] + '\n' + include_name + data[insert_index:]
-        return data
-
-
-    builtin_database_dir = os.path.join(viennacl_root, "device_specific", "builtin_database")
-    if not os.path.isdir(builtin_database_dir):
-        raise EnvironmentError('ViennaCL root path is incorrect. Cannot access ' + builtin_database_dir + '!\n'
-                                'Your version of ViennaCL may be too old and/or corrupted.')
-
-    function_name_dict = { vcl.float32: 'add_4B',
-                           vcl.float64: 'add_8B' }
-
-    additional_parameters_dict = {'N':  "char_to_type<'N'>",
-                                  'T':  "char_to_type<'T'>"}
-
-    #Create the device-specific headers
-    cpp_device_name = sanitize_string(device.name)
-    function_name = function_name_dict[datatype]
-    operation = operation.replace('-','_')
-
-    cpp_class_name = operation + '_template'
-    header_name = cpp_device_name + ".hpp"
-    function_declaration = 'inline void ' + function_name + '(' + ', '.join(['database_type<' + cpp_class_name + '::parameters_type> & db'] + \
-                                                                          [additional_parameters_dict[x] for x in additional_parameters]) + ')'
-
-
-    device_type_prefix = {  
-                            cl.device_type.GPU: 'gpu',
-                            cl.device_type.CPU: 'cpu',
-                            cl.device_type.ACCELERATOR: 'accelerator'
-                         }[device.type]
-    vendor_prefix = {   
-                        vcl.opencl.VendorId.beignet_id: 'beignet',
-                        vcl.opencl.VendorId.nvidia_id: 'nvidia',
-                        vcl.opencl.VendorId.amd_id: 'amd',
-                        vcl.opencl.VendorId.intel_id: 'intel'
-                    }[device.vendor_id]
-    architecture_family = vcl.opencl.architecture_family(device.vendor_id, device.name)
-
-    header_hierarchy = ["devices", device_type_prefix, vendor_prefix, architecture_family]
-    header_directory = os.path.join(builtin_database_dir, *header_hierarchy)
-    header_path = os.path.join(header_directory, header_name)
-
-    if not os.path.exists(header_directory):
-        os.makedirs(header_directory)
-
-    if os.path.exists(header_path):
-        with open (header_path, "r") as myfile:
-            data=myfile.read()
-    else:
-        data = ''
-
-    if not data:
-        ifndef_suffix = ('_'.join(header_hierarchy + [cpp_device_name]) + '_hpp_').upper()
-        data =  ('#ifndef VIENNACL_DEVICE_SPECIFIC_BUILTIN_DATABASE_' + ifndef_suffix + '\n'
-            '#define VIENNACL_DEVICE_SPECIFIC_BUILTIN_DATABASE_' + ifndef_suffix + '\n'
-            '\n'
-            '#include "viennacl/device_specific/forwards.h"\n'
-            '#include "viennacl/device_specific/builtin_database/common.hpp"\n'
-            '\n'
-            'namespace viennacl{\n'
-            'namespace device_specific{\n'
-            'namespace builtin_database{\n'
-            'namespace devices{\n'
-            'namespace '  + device_type_prefix + '{\n'
-            'namespace '  + vendor_prefix + '{\n'
-            'namespace '  + architecture_family + '{\n'
-            'namespace '  + cpp_device_name + '{\n'
-            '\n'
-            '}\n'
-            '}\n'
-            '}\n'
-            '}\n'
-            '}\n'
-            '}\n'
-            '}\n'
-            '}\n'
-            '#endif\n'
-            '')
-
-    data = append_include(data, 'viennacl/device_specific/templates/' + cpp_class_name + '.hpp')
-    device_type = { 
-                    cl.device_type.GPU: 'CL_DEVICE_TYPE_GPU',
-                    cl.device_type.CPU: 'CL_DEVICE_TYPE_CPU',
-                    cl.device_type.ACCELERATOR: 'CL_DEVICE_TYPE_ACCELERATOR'
-                  }[device.type]
-    add_to_database_arguments = [vendor_prefix + '_id', device_type, 'ocl::'+architecture_family,
-                  '"' + device.name + '"',  cpp_class_name + '::parameters_type(' + ','.join(map(str,parameters)) + ')']
-    core = '  db.' + function_name + '(' + ', '.join(add_to_database_arguments) + ');'
-
-    already_declared = data.find(function_declaration)
-    if already_declared==-1:
-        substr = 'namespace '  + cpp_device_name + '{\n'
-        insert_index = data.index(substr) + len(substr)
-        data = data[:insert_index] + '\n' + function_declaration + '\n{\n' + core + '\n}\n' + data[insert_index:]
-    else:
-        i1 = data.find('{', already_declared)
-        if data[i1-1]=='\n':
-            i1 = i1 - 1
-        i2 = data.find('}', already_declared) + 1
-        data = data[:i1]  + '\n{\n' + core + '\n}' + data[i2:]
-
-    #Write the header file
-    with open(header_path, "w+") as myfile:
-        myfile.write(data)
-
-    #Updates the global ViennaCL headers
-    with open(os.path.join(builtin_database_dir, operation + '.hpp'), 'r+') as operation_header:
-        data = operation_header.read()
-        data = append_include(data, os.path.relpath(header_path, os.path.join(viennacl_root, os.pardir)))
-
-        scope_name = '_'.join(('init', operation) + additional_parameters)
-        scope = data.index(scope_name)
-        function_call = '  ' + '::'.join(header_hierarchy + [cpp_device_name, function_name]) + '(' + ', '.join(['result'] + [additional_parameters_dict[k] + '()' for k in additional_parameters]) + ')'
-        if function_call not in data:
-            insert_index = data.rindex('\n', 0, data.index('return result', scope))
-            data = data[:insert_index] + function_call + ';\n' + data[insert_index:]
-
-        operation_header.seek(0)
-        operation_header.truncate()
-        operation_header.write(data)

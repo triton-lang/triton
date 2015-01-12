@@ -1,0 +1,64 @@
+import python ;
+#import numpy ;
+import regex ;
+using python ;
+
+libraries = ;
+
+if [ python.configured ]
+{
+
+project boost/numpy
+  : source-location .
+#  : requirements
+  ;
+
+lib boost_python ;
+
+rule numpy-includes ( properties * )
+{
+  import feature ;
+  local python-interpreter = [ feature.get-values python.interpreter : $(properties) ] ;
+  if $(python-interpreter)
+  {
+    local full-cmd =
+      $(python-interpreter)" -c \"from numpy.distutils import misc_util; print ':'.join(misc_util.get_numpy_include_dirs())\" " ;
+    local output = [ SHELL $(full-cmd) ] ;
+    local includes = [ regex.split $(output) ":" ] ;
+    return <include>$(includes) ;
+  }
+}
+
+lib boost_numpy
+  : # sources
+    dtype.cpp
+    scalars.cpp
+    ndarray.cpp
+    matrix.cpp
+    ufunc.cpp
+    numpy.cpp
+  : # requirements
+    <library>/python//python_for_extensions
+    #<library>/boost/python//boost_python
+    <library>boost_python
+    <conditional>@numpy-includes
+  : # default build
+    <link>shared
+  : # usage requirements
+    <conditional>@numpy-includes
+  ;
+
+libraries += boost_numpy ;  
+
+}
+else if ! ( --without-python in [ modules.peek : ARGV ] )
+{
+    message boost_numpy
+        : "warning: No python installation configured and autoconfiguration"
+        : "note: failed.  See http://www.boost.org/libs/python/doc/building.html"
+        : "note: for configuration instructions or pass --without-python to"
+        : "note: suppress this message and silently skip all Boost.NumPy targets"
+        ;
+}
+
+#boost-install $(libraries) ;

@@ -1,358 +1,184 @@
 #ifndef TEST_COMMON_HPP_
 #define TEST_COMMON_HPP_
 
-#include "vector"
-#include "viennacl/matrix.hpp"
-#include "viennacl/matrix_proxy.hpp"
-#include "atidlas/forwards.h"
+#include <vector>
+#include "atidlas/array.h"
 
-typedef atidlas::atidlas_int_t  int_t;
+typedef atidlas::int_t int_t;
 
-/*---------
- * Vector
- * -------*/
-
-template<class NumericT>
-class simple_vector
+/*------ Simple Vector ---------*/
+template<class T>
+class simple_vector_base
 {
 public:
-    typedef NumericT value_type;
-    typedef size_t size_type;
+    typedef T value_type;
 
-    simple_vector(size_t N) : N_(N), data_(N){ }
-    size_t size() const { return N_; }
-    value_type & operator[](size_t i) { return data_[i]; }
-    value_type operator[](size_t i) const { return data_[i]; }
-    size_t internal_size() const { return data_.size(); }
-    typename std::vector<value_type>::iterator begin() { return data_.begin(); }
-    typename std::vector<value_type>::iterator end() { return data_.begin() + size(); }
-    typename std::vector<value_type>::const_iterator begin() const { return data_.begin(); }
-    typename std::vector<value_type>::const_iterator end() const { return data_.begin() + size(); }
+    simple_vector_base(int_t start, int_t end, int_t stride, std::vector<T> & data) : N_((end-start)/stride), start_(start),
+                                                                                     stride_(stride), data_(data)
+    { }
+    int_t size() const { return N_; }
+    int_t start() const { return start_; }
+    int_t stride() const { return stride_; }
+    std::vector<T> & data() { return data_; }
+    T & operator[](int_t i) { return data_[start_ + i*stride_]; }
+    T operator[](int_t i) const { return data_[start_ + i*stride_]; }
 private:
-    size_t N_;
-    std::vector<value_type> data_;
+    int_t N_;
+    int_t start_;
+    int_t stride_;
+    std::vector<T> & data_;
 };
 
 template<class T>
-class simple_vector_range
+class simple_vector : public simple_vector_base<T>
 {
 public:
-    typedef typename T::value_type value_type;
-    typedef typename T::size_type size_type;
-
-    simple_vector_range(simple_vector<value_type> & data, viennacl::range const & r) : data_(data), r_(r) { }
-    size_t size() const { return r_.size(); }
-    viennacl::range const & range() const { return r_; }
-    value_type & operator[](size_t i) { return data_[i]; }
-    value_type operator[](size_t i) const { return data_[i]; }
-    size_t internal_size() const { return data_.size(); }
-    typename std::vector<value_type>::iterator begin() { return data_.begin(); }
-    typename std::vector<value_type>::iterator end() { return data_.begin() + size(); }
-    typename std::vector<value_type>::const_iterator begin() const { return data_.begin(); }
-    typename std::vector<value_type>::const_iterator end() const { return data_.begin() + size(); }
+    simple_vector(size_t N) :  simple_vector_base<T>(0, N, 1, data_), data_(N){}
 private:
-    simple_vector<value_type> & data_;
-    viennacl::range r_;
+    std::vector<T> data_;
 };
 
 template<class T>
-class simple_vector_slice
+class simple_vector_slice : public simple_vector_base<T>
 {
 public:
-    typedef typename T::value_type value_type;
-    typedef typename T::size_type size_type;
-
-    simple_vector_slice(simple_vector<value_type> & data, viennacl::slice const & s) : data_(data), s_(s) { }
-    size_type size() const { return s_.size(); }
-    size_t internal_size() const { return data_.size(); }
-    viennacl::slice const & slice() const { return s_; }
-    value_type & operator[](size_t i) { return data_[i]; }
-    value_type operator[](size_t i) const { return data_[i]; }
-private:
-    simple_vector<value_type> & data_;
-    viennacl::slice s_;
+    simple_vector_slice(simple_vector_base<T> & x, int_t start, int_t end, int_t stride) :
+        simple_vector_base<T>(start, end, stride, x.data()){ }
 };
 
-
-//Helper to initialize a viennacl vector from a simple type
-
-template<class SimpleType>
-struct vector_maker;
-
-template<class NumericT>
-struct vector_maker< simple_vector<NumericT> >
-{
-  typedef viennacl::vector<NumericT> result_type;
-  static result_type make(viennacl::vector<NumericT> const &, simple_vector<NumericT> & base)
-  {
-    viennacl::vector<NumericT> result(base.size());
-    viennacl::copy(base, result);
-    return result;
-  }
-};
-
-template<class NumericT>
-struct vector_maker< simple_vector_range< simple_vector<NumericT> > >
-{
-  typedef viennacl::vector_range< viennacl::vector<NumericT> > result_type;
-  static result_type make(viennacl::vector<NumericT> & x, simple_vector_range< simple_vector<NumericT> > & base)
-  {
-    result_type result(x, base.range());
-    viennacl::copy(base, result);
-    return result;
-  }
-};
-
-template<class NumericT>
-struct vector_maker< simple_vector_slice<simple_vector<NumericT> > >
-{
-  typedef viennacl::vector_slice< viennacl::vector<NumericT> > result_type;
-  static result_type make(viennacl::vector<NumericT> & M, simple_vector_slice< simple_vector<NumericT> > & base)
-  {
-    result_type result(M, base.slice());
-    viennacl::copy(base, result);
-    return result;
-  }
-};
-
-
-/*---------
- * Matrix
- * -------*/
-
-template<class NumericT>
-class simple_matrix
+/*------ Simple Matrix ---------*/
+template<class T>
+class simple_matrix_base
 {
 public:
-    typedef NumericT value_type;
-    typedef size_t size_type;
+    simple_matrix_base(int_t start1, int_t end1, int_t stride1,
+                       int_t start2, int_t end2, int_t stride2,
+                       int_t ld, std::vector<T> & data) : M_((end1 - start1)/stride1), start1_(start1), stride1_(stride1),
+                                                                                         N_((end2-start2)/stride2), start2_(start2), stride2_(stride2),
+                                                                                         ld_(ld), data_(data)
+    {}
 
-    simple_matrix(size_t M, size_t N) : data_(M*N), M_(M), N_(N){ }
-    size_t size1() const { return M_; }
-    size_t size2() const { return N_; }
-    size_t internal_size1() const { return M_; }
-    size_t internal_size2() const { return N_; }
-    value_type & operator()(size_t i, size_t j) { return data_[i + M_*j]; }
-    value_type operator()(size_t i, size_t j) const { return data_[i + M_*j]; }
+    int_t size1() const { return M_; }
+    int_t start1() const { return start1_; }
+    int_t stride1() const { return stride1_; }
+
+    int_t size2() const { return N_; }
+    int_t start2() const { return start2_; }
+    int_t stride2() const { return stride2_; }
+
+    std::vector<T> & data() { return data_; }
+
+    int_t ld() const { return ld_; }
+
+    T operator()(int_t i, int_t j) const
+    {
+      int_t ii = start1_ + i*stride1_;
+      int_t jj = start2_ + j*stride2_;
+      return data_[ii + jj*ld_];
+    }
+
+    T& operator()(int_t i, int_t j)
+    {
+      int_t ii = start1_ + i*stride1_;
+      int_t jj = start2_ + j*stride2_;
+      return data_[ii + jj*ld_];
+    }
 private:
-    std::vector<value_type> data_;
-    size_t M_;
-    size_t N_;
+    int_t M_;
+    int_t start1_;
+    int_t stride1_;
+
+    int_t N_;
+    int_t start2_;
+    int_t stride2_;
+
+    int_t ld_;
+
+    std::vector<T> & data_;
+};
+
+
+template<class T>
+class simple_matrix : public simple_matrix_base<T>
+{
+public:
+    simple_matrix(int_t M, int_t N) :  simple_matrix_base<T>(0, M, 1, 0, N, 1, M, data_), data_(M*N){}
+private:
+    std::vector<T> data_;
 };
 
 template<class T>
-class simple_matrix_range
+class simple_matrix_slice : public simple_matrix_base<T>
 {
 public:
-    typedef typename T::value_type value_type;
-
-    simple_matrix_range(T & A, viennacl::range const & r1, viennacl::range const & r2) : A_(A), r1_(r1), r2_(r2){ }
-    size_t size1() const { return r1_.size(); }
-    size_t size2() const { return r2_.size(); }
-    size_t internal_size1() const { return A_.internal_size1(); }
-    size_t internal_size2() const { return A_.internal_size2(); }
-    viennacl::range const & r1() const { return r1_; }
-    viennacl::range const & r2() const { return r2_; }
-    value_type & operator()(size_t i, size_t j) { return A_(i+r1_.start(), j+r2_.start()); }
-    value_type operator()(size_t i, size_t j) const { return A_(i+r1_.start(), j+r2_.start()); }
-private:
-    T & A_;
-    viennacl::range r1_;
-    viennacl::range r2_;
+    simple_matrix_slice(simple_matrix_base<T> & A,
+                        int_t start1, int_t end1, int_t stride1,
+                        int_t start2, int_t end2, int_t stride2) :
+        simple_matrix_base<T>(start1, end1, stride1, start2, end2, stride2, A.ld(), A.data()){ }
 };
 
-template<class T>
-class simple_matrix_slice
-{
-public:
-    typedef typename T::value_type value_type;
-
-    simple_matrix_slice(T & A,  viennacl::slice const & s1,  viennacl::slice const & s2) : A_(A), s1_(s1), s2_(s2){ }
-    viennacl::slice::size_type size1() const { return s1_.size(); }
-    viennacl::slice::size_type size2() const { return s2_.size(); }
-    size_t internal_size1() const { return A_.internal_size1(); }
-    size_t internal_size2() const { return A_.internal_size2(); }
-    viennacl::slice const & s1() const { return s1_; }
-    viennacl::slice const & s2() const { return s2_; }
-    value_type & operator()(size_t i, size_t j) { return A_(i*s1_.stride() + s1_.start(), j*s2_.stride() + s2_.start()); }
-    value_type operator()(size_t i, size_t j) const { return A_(i*s1_.stride()+s1_.start(), j*s2_.stride()+s2_.start()); }
-private:
-    T & A_;
-    viennacl::slice s1_;
-    viennacl::slice s2_;
-};
-
-
-/*-------
- * Helpers
- *-------*/
-
+/*------ Initializer ---------*/
 template<typename T>
-void init_rand(simple_matrix<T> & A)
-{
-  for (unsigned int i = 0; i < A.size1(); ++i)
-    for (unsigned int j = 0; j < A.size2(); ++j)
-      A(i, j) = 0.5 + 0.5*(T)rand()/RAND_MAX;
-}
-
-
-template<typename T>
-void init_rand(simple_vector<T> & x)
+void init_rand(simple_vector_base<T> & x)
 {
   for (unsigned int i = 0; i < x.size(); ++i)
-    x[i] = 0.5 + 0.5*(T)rand()/RAND_MAX;
+    x[i] = (T)rand()/RAND_MAX;
 }
 
-template<class T>
-simple_matrix<T> simple_trans(simple_matrix<T> const & A)
+template<typename T>
+void init_rand(simple_matrix_base<T> & A)
 {
-  int M = A.size1();
-  int N = A.size2();
-  simple_matrix<T> result(N, M);
-
-  for(int i = 0; i < N; ++i)
-    for(int j = 0; j < M; ++j)
-      result(i,j) = A(j,i);
-
-  return result;
+  for (unsigned int i = 0; i < A.size1(); ++i)
+    for(unsigned int j = 0 ; j < A.size2() ; ++j)
+      A(i,j) = i+j;
 }
 
-template<class T, class U, class V, class W>
-simple_matrix<T> simple_prod(W & C, T alpha, U const & A, V const & B, T beta)
+template<typename T>
+simple_matrix<T> simple_trans(simple_matrix_base<T> const & A)
 {
-    int M = A.size1();
-    int N = B.size2();
-    int K = A.size2();
-    simple_matrix<T> result(M, N);
-
-    for(int i = 0 ; i < M ; ++i)
-      for(int j = 0 ; j < N ; ++j)
-      {
-        T val = 0;
-        for(int k = 0 ; k < K ; ++k)
-          val+= A(i, k)*B(k,j);
-        result(i, j) = alpha*val + beta*C(i,j);
-      }
-
-    return result;
+  simple_matrix<T> res(A.size2(), A.size1());
+  for(unsigned int i = 0 ; i < A.size1(); ++i)
+    for(unsigned int j = 0; j < A.size2(); ++j)
+      res(j, i) = A(i, j);
+  return res;
 }
 
-template<class SimpleType, class F>
-struct matrix_maker;
-
-template<class T, class F>
-struct matrix_maker< simple_matrix<T>, F>
+/*------ Compare -----------*/
+template<class VecType1, class VecType2>
+bool failure_vector(VecType1 const & x, VecType2 const & y, typename VecType1::value_type epsilon)
 {
-  typedef viennacl::matrix<T, F> result_type;
-  static result_type make(viennacl::matrix<T, F> const &, simple_matrix<T> & base)
-  {
-    viennacl::matrix<T, F> result(base.size1(), base.size2());
-    viennacl::copy(base, result);
-    return result;
-  }
-};
-
-template<class MatrixT, class F>
-struct matrix_maker< simple_matrix_range<MatrixT>, F>
-{
-  typedef typename MatrixT::value_type T;
-  typedef viennacl::matrix_range< viennacl::matrix<T, F> > result_type;
-
-  static result_type make(viennacl::matrix<T, F> & M, simple_matrix_range<MatrixT> & base)
-  {
-    result_type result(M, base.r1(), base.r2());
-    viennacl::copy(base, result);
-    return result;
-  }
-};
-
-template<class MatrixT, class F>
-struct matrix_maker< simple_matrix_slice<MatrixT>, F>
-{
-  typedef typename MatrixT::value_type T;
-  typedef viennacl::matrix_slice< viennacl::matrix<T, F> > result_type;
-
-  static result_type make(viennacl::matrix<T, F> & M, simple_matrix_slice<MatrixT> & base)
-  {
-    result_type result(M, base.s1(), base.s2());
-    viennacl::copy(base, result);
-    return result;
-  }
-};
-
-template<class VectorType>
-bool failure_vector(VectorType const & x, VectorType const & y, typename VectorType::value_type epsilon)
-{
-  typedef typename VectorType::value_type value_type;
+  typedef typename VecType1::value_type T;
   for(int_t i = 0 ; i < x.size() ; ++i)
   {
-    value_type delta = std::abs(x[i] - y[i])/(std::max(x[i], y[i]));
+    T delta = std::abs(x[i] - y[i]);
+    if(std::max(x[i], y[i])!=0)
+      delta/=std::abs(std::max(x[i], y[i]));
     if(delta > epsilon)
-    {
-      std::cout << i << " " << x[i] << " " << y[i] << std::endl;
       return true;
-    }
   }
   return false;
 }
 
-template<class MatrixT>
-bool failure_matrix(MatrixT const & A, MatrixT const & B, typename MatrixT::value_type epsilon)
-{
-  typedef typename MatrixT::value_type value_type;
-  int M = A.size1();
-  int N = A.size2();
-  for(int_t i = 0 ; i < M ; ++i)
-    for(int_t j = 0 ; j < N ; ++j)
-    {
-      value_type delta = std::abs(A(i,j) - B(i,j));
-      if(delta > epsilon)
-        return true;
-    }
-  return false;
-}
 
-namespace viennacl
-{
-namespace traits
-{
-template<class T> int size1(simple_matrix<T> const & M) { return M.size1(); }
-template<class T> int size2(simple_matrix<T> const & M) { return M.size2(); }
-}
-}
+#define INIT_VECTOR(N, SUBN, START, STRIDE, CPREFIX, PREFIX) \
+    simple_vector<T> CPREFIX ## _vector(N);\
+    simple_vector_slice<T> CPREFIX ## _slice(CPREFIX ## _vector, START, START + STRIDE*SUBN, STRIDE);\
+    init_rand(CPREFIX ## _vector);\
+    atidlas::array PREFIX ## _vector(CPREFIX ## _vector.data());\
+    atidlas::array PREFIX ## _slice = PREFIX ## _vector[atidlas::_(START, START + STRIDE*SUBN, STRIDE)];
 
+#define INIT_MATRIX(M, SUBM, START1, STRIDE1, N, SUBN, START2, STRIDE2, CPREFIX, PREFIX) \
+    simple_matrix<T> CPREFIX ## _matrix(M, N);\
+    simple_matrix_slice<T> CPREFIX ## _slice(CPREFIX ## _matrix, START1, START1 + STRIDE1*SUBM, STRIDE1,\
+                                                                 START2, START2 + STRIDE2*SUBN, STRIDE2);\
+    init_rand(CPREFIX ## _matrix);\
+    atidlas::array PREFIX ## _matrix(M, N, CPREFIX ## _matrix.data());\
+    atidlas::array PREFIX ## _slice(PREFIX ## _matrix(atidlas::_(START1, START1 + STRIDE1*SUBM, STRIDE1),\
+                                                        atidlas::_(START2, START2 + STRIDE2*SUBN, STRIDE2)));\
+    simple_matrix<T> CPREFIX ## T_matrix = simple_trans(CPREFIX ## _matrix);\
+    atidlas::array PREFIX ## T_matrix(N, M, CPREFIX ## T_matrix.data());\
+    atidlas::array PREFIX ## T_slice(PREFIX ## T_matrix(atidlas::_(START2, START2 + STRIDE2*SUBN, STRIDE2),\
+                                                              atidlas::_(START1, START1 + STRIDE1*SUBM, STRIDE1)));\
 
-#define INIT_VECTOR_AND_PROXIES(N, START, STRIDE, PREFIX) \
-  viennacl::range PREFIX ## r(START, N + START);\
-  viennacl::slice PREFIX ## s(START, STRIDE, N);\
-  simple_vector<NumericT> PREFIX ## _vector = simple_vector<NumericT>(N);\
-  simple_vector<NumericT> PREFIX ## _range_holder = simple_vector<NumericT>(N + START);\
-  simple_vector<NumericT> PREFIX ## _slice_holder = simple_vector<NumericT>(START + N*STRIDE);\
-  init_rand(PREFIX ## _vector);\
-  init_rand(PREFIX ## _range_holder);\
-  init_rand(PREFIX ## _slice_holder);\
-  simple_vector_range< simple_vector<NumericT> > PREFIX ## _range = simple_vector_range< simple_vector<NumericT> >(PREFIX ## _range_holder, PREFIX ## r);\
-  simple_vector_slice< simple_vector<NumericT> > PREFIX ## _slice = simple_vector_slice< simple_vector<NumericT> >(PREFIX ## _slice_holder, PREFIX ## s);
-
-
-#define INIT_MATRIX_AND_PROXIES(M, START1, STRIDE1, N, START2, STRIDE2, PREFIX) \
-  viennacl::range PREFIX ## r1(START1, M + START1);\
-  viennacl::range PREFIX ## r2(START2, N + START2);\
-  viennacl::slice PREFIX ## s1(START1, STRIDE1, M);\
-  viennacl::slice PREFIX ## s2(START2, STRIDE2, N);\
-  simple_matrix<NumericT> PREFIX ## _matrix(M, N);\
-  simple_matrix<NumericT> PREFIX ## _range_holder(START1 + M, START2 + N);\
-  simple_matrix<NumericT> PREFIX ## _slice_holder(START1 + M*STRIDE1, START2 + N*STRIDE2);\
-  init_rand(PREFIX ## _matrix);\
-  init_rand(PREFIX ## _range_holder);\
-  init_rand(PREFIX ## _slice_holder);\
-  simple_matrix_range< simple_matrix<NumericT> > PREFIX ## _range(PREFIX ## _range_holder, PREFIX ## r1, PREFIX ## r2);\
-  simple_matrix_slice< simple_matrix<NumericT> > PREFIX ## _slice(PREFIX ## _slice_holder, PREFIX ## s1, PREFIX ## s2);\
-\
-  simple_matrix<NumericT> PREFIX ## T_matrix = simple_trans(PREFIX ## _matrix);\
-  simple_matrix<NumericT> PREFIX ## T_range_holder = simple_trans(PREFIX ## _range_holder);\
-  simple_matrix<NumericT> PREFIX ## T_slice_holder = simple_trans(PREFIX ## _slice_holder);\
-  simple_matrix_range< simple_matrix<NumericT> > PREFIX ## T_range(PREFIX ## T_range_holder, PREFIX ## r2, PREFIX ## r1);\
-  simple_matrix_slice< simple_matrix<NumericT> > PREFIX ## T_slice(PREFIX ## T_slice_holder, PREFIX ## s2, PREFIX ## s1);\
 
 #endif

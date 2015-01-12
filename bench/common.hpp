@@ -2,21 +2,7 @@
 #define ATIDLAS_BENCH_COMMON_HPP_
 
 #include "vector"
-
-template <typename T>
-class make_vector {
-public:
-  typedef make_vector<T> my_type;
-  my_type& operator<< (const T& val) {
-    data_.push_back(val);
-    return *this;
-  }
-  operator std::vector<T>() const {
-    return data_;
-  }
-private:
-  std::vector<T> data_;
-};
+#include <cmath>
 
 int ceil(int N, int pad)
 {
@@ -42,6 +28,21 @@ std::vector<int> create_full_range(int min, int max, int pad)
     return N;
 }
 
+template <typename T>
+class make_vector {
+public:
+  typedef make_vector<T> my_type;
+  my_type& operator<< (const T& val) {
+    data_.push_back(val);
+    return *this;
+  }
+  operator std::vector<T>() const {
+    return data_;
+  }
+private:
+  std::vector<T> data_;
+};
+
 // BLAS1 Sizes
 static const std::vector<int> BLAS1_N = create_log_range(1e3, 2e7, 50, 64);
 
@@ -53,10 +54,9 @@ static const std::vector<int> BLAS2_N = create_full_range(128, 5000, 64);
 static const std::vector<int> BLAS3_N = create_full_range(128, 5000, 64);
 
 
-template<class T>
-float bandwidth(std::size_t N, float t)
+float bandwidth(std::size_t N, float t, unsigned int dtsize)
 {
-  return N * sizeof(T) * 1e-9 / t;
+  return N * dtsize * 1e-9 / t;
 }
 
 template<class T>

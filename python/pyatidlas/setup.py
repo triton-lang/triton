@@ -1,8 +1,10 @@
-import os
+import os, sys
 from distutils.command.build_ext import build_ext
 from setuptools import Extension, setup
 from distutils.sysconfig import get_python_inc
 from distutils import sysconfig
+from imp import find_module
+from glob import glob
 
 platform_cflags = {}
 platform_ldflags = {}
@@ -29,6 +31,11 @@ class build_ext_subclass(build_ext):
 
 def main():
 
+    def recursive_glob(rootdir='.', suffix=''):
+        return [os.path.join(looproot, filename)
+                for looproot, _, filenames in os.walk(rootdir)
+                for filename in filenames if filename.endswith(suffix)]
+
     def remove_prefixes(optlist, bad_prefixes):
         for bad_prefix in bad_prefixes:
             for i, flag in enumerate(optlist):
@@ -42,12 +49,26 @@ def main():
     cvars["CFLAGS"] = cvars["BASECFLAGS"] + " " + cvars["OPT"]
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
     
-    DEFINES = [('VIENNACL_WITH_OPENCL',None), ('VIENNACL_WITH_OPENMP', None),
-               ('boost','pyviennaclboost')]
-    INCLUDE_DIRS = ['${CMAKE_CURRENT_SOURCE_DIR}/external/pyviennacl-dev/external/boost-python-ublas-subset/boost_subset/',
-                    '${PROJECT_SOURCE_DIR}',
-                    '${CMAKE_CURRENT_SOURCE_DIR}/external/pyviennacl-dev/external/viennacl-dev']
-    LIBRARY_DIRS = ['${CMAKE_CURRENT_SOURCE_DIR}/external/pyviennacl-dev/build/lib.linux-x86_64-2.7/pyviennacl/']
+    DEFINES = []
+    INCLUDE_DIRS = ['${CMAKE_CURRENT_SOURCE_DIR}/external/boost/include',
+                     os.path.join(find_module("numpy")[1], "core", "include"),
+                    '${PROJECT_SOURCE_DIR}/include']
+    LIBRARY_DIRS = ['${LIBATIDLAS_DIR}']
+
+    src = [os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', sf) for sf in ['_atidlas.cpp']]
+
+    boostsrc = '${CMAKE_CURRENT_SOURCE_DIR}/external/boost/libs/'
+    for s in ['numpy','python','smart_ptr','system','thread']:
+        src = src + [x for x in recursive_glob('${CMAKE_CURRENT_SOURCE_DIR}/external/boost/libs/' + s + '/src/','.cpp') if 'win32' not in x and 'pthread' not in x]
+    # make sure next line succeeds even on Windows
+    src = [f.replace("\\", "/") for f in src]
+    if sys.platform == "win32":
+        src += glob(boostsrc + "/thread/src/win32/*.cpp")
+        src += glob(boostsrc + "/thread/src/tss_null.cpp")
+    else:
+        src += glob(boostsrc + "/thread/src/pthread/*.cpp")
+    src= [f for f in src  if not f.endswith("once_atomic.cpp")]
+
 
     setup(
 		name="pyatidlas",
@@ -82,14 +103,14 @@ def main():
 		packages=["pyatidlas"],
 		ext_package="pyatidlas",
 		ext_modules=[Extension(
-		    '_atidlas',[ os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', '_atidlas.cpp')],
-		    extra_compile_args= [],
-		    extra_link_args=['-Wl,-soname=_atidlas.so'],
+                    '_atidlas',src,
+		    extra_compile_args= ['-Wno-unused-function', '-Wno-unused-local-typedefs'],
+                    extra_link_args=['-Wl,-soname=_atidlas.so'],
 		    define_macros=DEFINES,
 		    undef_macros=[],
 		    include_dirs=INCLUDE_DIRS,
 		    library_dirs=LIBRARY_DIRS,
-		    libraries=['OpenCL', ':_viennacl.so']
+                    libraries=['OpenCL', 'atidlas']
 		)],
 		cmdclass={'build_ext': build_ext_subclass}
     )

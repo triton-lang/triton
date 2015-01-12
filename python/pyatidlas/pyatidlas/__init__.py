@@ -1,1 +1,1 @@
-from .pycore import *
+from _atidlas import *

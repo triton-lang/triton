@@ -3,8 +3,6 @@ import misc_tools
 
 import numpy as np
 import pyatidlas as atd
-import pyviennacl as vcl
-
 from deap import algorithms
 from deap import base
 from deap import creator
@@ -32,23 +30,26 @@ def b_gray_to_bin(A='00000000', endian='big'):
 
 class GeneticOperators(object):
 
-    def __init__(self, device, statement, TemplateType, build_template, out):
-        self.device = device
-        self.statement = statement
-        self.TemplateType = TemplateType
-        self.ParameterType = TemplateType.Parameters
-        self.build_template = build_template
+    def __init__(self, symbolic, Template, out):
+        self.device = symbolic.context.queues[0].device
+        self.symbolic = symbolic
+        self.Template = Template
         self.cache = {}
         self.out = out
 
+  
         self.genome_info = {
-                            atd.VectorAxpyTemplate: [3,4,4,atd.FetchingPolicy],
-                            atd.ReductionTemplate: [3,4,4,atd.FetchingPolicy],
-                            atd.MatrixAxpyTemplate: [3,3,3,3,3,atd.FetchingPolicy],
-                            atd.RowWiseReductionTemplate: [3,3,3,4,atd.FetchingPolicy],
-                            atd.MatrixProductTemplate: [3,3,3,3,3,3,3,atd.FetchingPolicy,atd.FetchingPolicy,3]
-                           }[TemplateType]
-        self.indpb = 1.0/sum([1 if x==atd.FetchingPolicy else x for x in self.genome_info])
+                            atd.vaxpy: [3,4,4,atd.fetching_policy_type],
+                            atd.reduction: [3,4,4,atd.fetching_policy_type],
+                            atd.maxpy: [3,3,3,3,3,atd.fetching_policy_type],
+                            atd.mreduction_rows: [3,3,3,4,atd.fetching_policy_type],
+                            atd.mreduction_cols: [3,3,3,4,atd.fetching_policy_type],
+                            atd.mproduct_nn: [3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3],
+                            atd.mproduct_nt: [3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3],
+                            atd.mproduct_tn: [3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3],
+                            atd.mproduct_tt: [3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3]
+                           }[Template]
+        self.indpb = 1.0/sum([1 if x==atd.fetching_policy_type else x for x in self.genome_info])
 
         creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
         creator.create("Individual", list, fitness=creator.FitnessMin)
@@ -61,21 +62,21 @@ class GeneticOperators(object):
         self.toolbox.register("select", deap_tools.selNSGA2)
 
     def decode(self, genome):
-        FetchingPolicy = atd.FetchingPolicy
-        fetch = [FetchingPolicy.FETCH_FROM_LOCAL, FetchingPolicy.FETCH_FROM_GLOBAL_STRIDED, FetchingPolicy.FETCH_FROM_GLOBAL_CONTIGUOUS]
+        fetching_policy_type = atd.fetching_policy_type
+        fetch = [fetching_policy_type.FETCH_FROM_LOCAL, fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED, fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS]
         decode_element = lambda x:2**int(b_gray_to_bin(''.join(x)), 2)
         result = []
         offset = 0
         for x in self.genome_info:
-            if x==atd.FetchingPolicy:
+            if x==atd.fetching_policy_type:
                 result.append(fetch[genome[offset]])
                 offset = offset + 1
             else:
                 result.append(decode_element(genome[offset:offset+x]))
                 offset = offset + x
         #GEMM peculiarities
-        if self.TemplateType==atd.MatrixProductTemplate:
-            if FetchingPolicy.FETCH_FROM_LOCAL in result:
+        if self.Template in [atd.mproduct_nn, atd.mproduct_nt, atd.mproduct_tn, atd.mproduct_tt]:
+            if fetching_policy_type.FETCH_FROM_LOCAL in result:
                 lf1 = result[1]*result[3]/result[9]
             else:
                 result[9] = 0
@@ -85,24 +86,25 @@ class GeneticOperators(object):
 
     def init(self, N):
         result = []
-        allowed_idx = [0,1,2] if self.TemplateType==atd.MatrixProductTemplate else [1,2]
+        allowed_idx = [0,1,2] if self.Template in [atd.mproduct_nn, atd.mproduct_nt, atd.mproduct_tn, atd.mproduct_tt] else [1,2]
         for idx in allowed_idx:
             current = []
             while len(current) < N/len(allowed_idx):
                 while True:
                     bincode = []
                     for i, x in enumerate(self.genome_info):
-                        if x==atd.FetchingPolicy:
+                        if x==atd.fetching_policy_type:
                             bincode = bincode + [idx]
                         else:
                             bincode = bincode + [str(random.randint(0,1)) for i in range(x)]
                     parameters = self.decode(bincode)
-                    template = self.build_template(self.TemplateType.Parameters(*parameters))
-                    registers_usage = template.registers_usage(vcl.pycore.StatementsTuple(self.statement))/4
-                    lmem_usage = template.lmem_usage(vcl.pycore.StatementsTuple(self.statement))
-                    local_size = template.parameters.local_size_0*template.parameters.local_size_1
+                    template = self.Template(*parameters)
+                    symbolic_expressions = atd.symbolic_expression_container(self.symbolic)
+                    registers_usage = template.registers_usage(symbolic_expressions)/4
+                    lmem_usage = template.lmem_usage(symbolic_expressions)
+                    local_size = parameters[1]*parameters[3]
                     occupancy_record = misc_tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
-                    if not misc_tools.skip(template, self.statement, self.device):
+                    if not misc_tools.skip(template, self.symbolic):
                         current.append(creator.Individual(bincode))
                         break
             result = result + current
@@ -118,18 +120,18 @@ class GeneticOperators(object):
                 elif not isinstance(individual[i], int) and random.random() < self.indpb:
                     new_individual[i] = '1' if new_individual[i]=='0' else '0'
             parameters = self.decode(new_individual)
-            template = self.build_template(self.TemplateType.Parameters(*parameters))
-            #print tools.skip(template, self.statement, self.device), parameters
-            if not misc_tools.skip(template, self.statement, self.device):
+            template = self.Template(*parameters)
+            #print tools.skip(template, self.symbolic), parameters
+            if not misc_tools.skip(template, self.symbolic):
                 break
         return new_individual,
 
     def evaluate(self, individual):
         if tuple(individual) not in self.cache:
             parameters = self.decode(individual)
-            template = self.build_template(self.TemplateType.Parameters(*parameters))
+            template = self.Template(*parameters)
             try:
-                tt = misc_tools.benchmark(template, self.statement, self.device)
+                tt = misc_tools.benchmark(template, self.symbolic)
                 self.out.write(','.join([str(tt)]+map(str,map(int,parameters)))+'\n')
                 self.cache[tuple(individual)] = tt
             except ValueError:
@@ -166,8 +168,8 @@ class GeneticOperators(object):
                         ind1, ind2 = self.toolbox.mate(ind1, ind2)
                         del ind1.fitness.values
                         parameters = self.decode(ind1)
-                        template = self.build_template(self.TemplateType.Parameters(*parameters))
-                        if not misc_tools.skip(template, self.statement, self.device):
+                        template = self.Template(*parameters)
+                        if not misc_tools.skip(template, self.symbolic):
                             break
                     offspring.append(ind1)
                 elif op_choice < cxpb + mutpb:  # Apply mutation

@@ -1,0 +1,120 @@
+{%- macro navbar() %}
+    <div class="navbar" style="text-align:right;">
+      {#%- if parents|count > 0 %#}
+      {#{ parents[1].title }#}
+      {%- if prev %}
+      <a class="prev" title="{{ prev.title|striptags|e }}" href="{{ prev.link|e }}"><img src="{{ pathto('_static/prev.png', 1) }}" alt="prev"/></a>
+      {%- endif %}
+      {%- if parents %}
+      <a class="up" title="{{ parents[-1].title|striptags|e }}" href="{{ parents[-1].link|e }}"><img src="{{ pathto('_static/up.png', 1) }}" alt="up"/></a>
+      {%- endif %}
+      {%- if next %}
+      <a class="next" title="{{ next.title|striptags|e }}" href="{{ next.link|e }}"><img src="{{ pathto('_static/next.png', 1) }}" alt="next"/></a>
+      {%- endif %}
+      {#%- endif %#}
+    </div>
+{%- endmacro %}
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    {{ metatags }}
+    {%- if builder != 'htmlhelp' %}
+      {%- set titlesuffix = docstitle|e %}
+      {%- set titlesuffix = " - " + titlesuffix %}
+    {%- endif %}
+    <title>{{ title|striptags }}{{ titlesuffix }}</title>
+    {%- if builder == 'web' %}
+    <link rel="stylesheet" href="{{ pathto('index') }}?do=stylesheet{%
+      if in_admin_panel %}&admin=yes{% endif %}" type="text/css" />
+    {%- for link, type, title in page_links %}
+    <link rel="alternate" type="{{ type|e(true) }}" title="{{ title|e(true) }}" href="{{ link|e(true) }}" />
+    {%- endfor %}
+    {%- else %}
+    <link rel="stylesheet" href="{{ pathto('_static/style.css', 1) }}" type="text/css" />
+    <link rel="stylesheet" href="{{ pathto('_static/pygments.css', 1) }}" type="text/css" />
+
+    {%- endif %}
+    {%- if builder != 'htmlhelp' %}
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+          URL_ROOT:    '{{ pathto("", 1) }}',
+          VERSION:     '{{ release|e }}',
+          COLLAPSE_MODINDEX: false,
+          FILE_SUFFIX: '{{ file_suffix }}'
+      };
+    </script>
+    {%- for scriptfile in script_files %}
+    <script type="text/javascript" src="{{ pathto(scriptfile, 1) }}"></script>
+    {%- endfor %}
+    {%- if use_opensearch %}
+    <link rel="search" type="application/opensearchdescription+xml"
+          title="{% trans docstitle=docstitle|e %}Search within {{ docstitle }}{% endtrans %}"
+          href="{{ pathto('_static/opensearch.xml', 1) }}"/>
+    {%- endif %}
+    {%- if favicon %}
+    <link rel="shortcut icon" href="{{ pathto('_static/' + favicon, 1) }}"/>
+    {%- endif %}
+    {%- endif %}
+{%- block linktags %}
+    {%- if hasdoc('about') %}
+    <link rel="author" title="{{ _('About these documents') }}" href="{{ pathto('about') }}" />
+    {%- endif %}
+    <link rel="index" title="{{ _('Index') }}" href="{{ pathto('genindex') }}" />
+    <link rel="search" title="{{ _('Search') }}" href="{{ pathto('search') }}" />
+    {%- if hasdoc('copyright') %}
+    <link rel="copyright" title="{{ _('Copyright') }}" href="{{ pathto('copyright') }}" />
+    {%- endif %}
+    <link rel="top" title="{{ docstitle|e }}" href="{{ pathto('index') }}" />
+    {%- if parents %}
+    <link rel="up" title="{{ parents[-1].title|striptags }}" href="{{ parents[-1].link|e }}" />
+    {%- endif %}
+    {%- if next %}
+    <link rel="next" title="{{ next.title|striptags }}" href="{{ next.link|e }}" />
+    {%- endif %}
+    {%- if prev %}
+    <link rel="prev" title="{{ prev.title|striptags }}" href="{{ prev.link|e }}" />
+    {%- endif %}
+{%- endblock %}
+{%- block extrahead %} {% endblock %}
+  </head>
+  <body>
+    <div class="header">
+    <table border="0" cellpadding="7" cellspacing="0" width="100%" summary=
+    "header">
+      <tr>
+        <td valign="top" width="300">
+          <h3><a href="{{ pathto('index') }}"><img height="86" width="277"
+          alt="C++ Boost" src="{{ pathto('_static/' + logo, 1) }}" border="0"></a></h3>
+        </td>
+
+        <td valign="top">
+          <h1 align="center"><a href="{{ pathto('index') }}">Boost.NumPy</a></h1>
+<!--          <h2 align="center">CallPolicies Concept</h2>-->
+        </td>
+	<td>
+      {%- if pagename != "search" %}
+      <div id="searchbox" style="display: none">
+        <form class="search" action="{{ pathto('search') }}" method="get">
+          <input type="text" name="q" size="18" />
+          <input type="submit" value="{{ _('Search') }}" />
+          <input type="hidden" name="check_keywords" value="yes" />
+          <input type="hidden" name="area" value="default" />
+        </form>
+      </div>
+      <script type="text/javascript">$('#searchbox').show(0);</script>
+      {%- endif %}
+	</td>
+      </tr>
+    </table>
+    </div>
+    <hr/>
+    <div class="content">
+      {%- block top_navbar %}{{ navbar() }}{% endblock %}
+      {% block body %} {% endblock %}
+      {%- block bottom_navbar %}{{ navbar() }}{% endblock %}
+    </div>
+  </body>
+</html>

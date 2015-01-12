@@ -2,32 +2,32 @@ from __future__ import division
 
 import argparse, itertools, os, sys, json
 import misc_tools, optimize, dataset
-import pyopencl as cl
-import pyviennacl as vcl
 import pyatidlas as atd
+import pyopencl as cl
 import numpy as np
 
 from numpy import random
 from model import train_model
 
 
-TYPES = { 'vector-axpy': {'template':atd.VectorAxpyTemplate,
+TYPES = { 'vaxpy': {'template':atd.vaxpy,
                           'perf-index':lambda x: 3*x[0]*x[1][0]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
-          'matrix-axpy': {'template':atd.MatrixAxpyTemplate,
+          'maxpy': {'template':atd.maxpy,
                           'perf-index':lambda x: 3*x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
                           'perf-measure':'GB/s'},
 
-          'reduction': {'template':atd.ReductionTemplate,
+          'dot': {'template':atd.reduction,
                         'perf-index':lambda x: 2*x[0]*x[1][0]/x[2]*1e-9,
                         'perf-measure':'GB/s'},
 
-          'row-wise-reduction': {'template':atd.RowWiseReductionTemplate,
+          'gemv': {'template': {'N': atd.mreduction_rows, 'T': atd.mreduction_cols},
                                 'perf-index':lambda x: x[0]*x[1][0]*x[1][1]/x[2]*1e-9,
                                 'perf-measure':'GB/s'},
 
-          'matrix-product': {'template': atd.MatrixProductTemplate,
+          'gemm': {'template': {('N','N'): atd.mproduct_nn, ('T','N'): atd.mproduct_tn, 
+                                          ('N','T'): atd.mproduct_nt, ('T','T'): atd.mproduct_tt},
                             'perf-index': lambda x: 2*x[1][0]*x[1][1]*x[1][2]/x[2]*1e-9,
                             'perf-measure': 'GFLOP/s'} }
 
@@ -45,37 +45,32 @@ def do_tuning(args):
         return list(map(T, x if isinstance(x, list) else [x]))
 
     if(args.method=='simple'):
-        default_tuning_sizes = {'vector-axpy': args.blas1_size, 'reduction': args.blas1_size,
-                                'matrix-axpy' : args.blas2_size, 'row-wise-reduction' : args.blas2_size,
-                                'matrix-product': args.blas3_size}
+        default_tuning_sizes = {'vaxpy': args.blas1_size, 'dot': args.blas1_size,
+                                'maxpy' : args.blas2_size, 'gemv' : args.blas2_size,
+                                'gemm': args.blas3_size}
 
-    for operation in ['vector-axpy', 'reduction', 'matrix-axpy', 'row-wise-reduction', 'matrix-product']:
+    for operation in ['vaxpy', 'dot', 'maxpy', 'gemv', 'gemm']:
 
-
-          for datatype in [vcl.float32, vcl.float64]:
-
-              if operation not in args.operations and operation + '-' + datatype.__name__ not in args.operations:
+          for datatype in [atd.float32, atd.float64]:
+              
+              dtypestr = datatype.__name__
+              
+              if operation not in args.operations and operation + '-' + dtypestr not in args.operations:
                   continue
 
-              ctx = cl.Context([device])
-              ctx = vcl.backend.Context(ctx)
-
-
               #Check data-type
-              if datatype is vcl.float64 and not device.double_fp_config:
+              if datatype is atd.float64 and not device.double_fp_config:
                   sys.stderr.write('Warning : The device ' + device.name + ' does not support double precision! Skipping ...')
                   continue
 
-              #Helper for execution
-              def execute(device, node, other_params, sizes, fname = os.devnull, parameters = None):
-                  with vcl.Statement(node) as statement:
-                      if parameters is not None:
-                          TemplateType = TYPES[operation]['template']
-                          return misc_tools.benchmark(TemplateType(TemplateType.Parameters(*parameters),*other_params), statement, device)
-                      with open(fname, "w+") as archive:
-                          return optimize.genetic(statement, device, TYPES[operation]['template'], lambda p: TYPES[operation]['template'](p, *other_params),
-                                                  lambda t: TYPES[operation]['perf-index']([datatype().itemsize, sizes, t]), TYPES[operation]['perf-measure'], archive)
-
+              #~ #Helper for execution
+              def execute(symbolic, sizes, Template, parameters = None, fname = os.devnull):
+                  if parameters is not None:
+                    return misc_tools.benchmark(Template(*parameters), symbolic)
+                  with open(fname, "w+") as archive:
+                    return optimize.genetic(symbolic, Template, lambda t: TYPES[operation]['perf-index']([datatype(0).size, sizes, t]), 
+                                             TYPES[operation]['perf-measure'], archive)
+             
               def log_uniform_sample(a,b):
                   return np.exp(np.random.uniform(low=np.log(a), high=np.log(b), size=1)).astype(int)
 
@@ -93,87 +88,84 @@ def do_tuning(args):
 
               #Helper for tuning
               def tune(execution_handler, a, b, dimsample, layouts, sample_method_profiles, sample_method_dataset):
-                  print args.build_model
                   print('-----')
-                  print(' '.join(map(str, ("Now tuning:", datatype.__name__, '-', operation, '-'.join(layouts), '[' + device.name, '(' + device.platform.name + ')]'))))
+                  print(' '.join(map(str, ("Now tuning:", dtypestr, '-', operation, '-'.join(layouts), '[' + device.name, '(' + device.platform.name + ')]'))))
                   #Update JSON
                   full_operation = operation + ''.join(layouts)
                   if full_operation not in json_out:
                       json_out[full_operation] = {}
-                  json_out[full_operation][datatype.__name__] = {}
-                  D = json_out[full_operation][datatype.__name__]
+                  json_out[full_operation][dtypestr] = {}
+                  D = json_out[full_operation][dtypestr]
 
                   if args.method == 'simple':
                       print default_tuning_sizes[operation]
                       profiles = [execution_handler(map(int,default_tuning_sizes[operation]))]
                   else:
                       def compute_perf(x, t):
-                          return TYPES[operation]['perf-index']([datatype().itemsize, x, t])
+                          return TYPES[operation]['perf-index']([datatype(0).size, x, t])
                       profiles_generator = space_gen_product(a, b, args.sample_size, dimsample, sample_method_profiles)
                       profiles = dataset.sample_profiles(execution_handler, profiles_generator)
                       if args.build_model:
                         dataset_generator = space_gen_product(a, b, 1000, dimsample, sample_method_dataset)
-                        X, Y, profiles = dataset.sample_dataset(os.path.join(full_operation,datatype.__name__), profiles, execution_handler, dataset_generator)
-                        # profiles = np.loadtxt('data/'+full_operation+'/'+datatype.__name__+'/profiles.csv')
-                        # X = np.loadtxt('data/'+full_operation+'/'+datatype.__name__+'/X.csv',ndmin=2)
-                        # Y = np.loadtxt('data/'+full_operation+'/'+datatype.__name__+'/Y.csv',ndmin=2)
+                        X, Y, profiles = dataset.sample_dataset(os.path.join(full_operation,dtypestr), profiles, execution_handler, dataset_generator)
+                        # profiles = np.loadtxt('data/'+full_operation+'/'+datatype+'/profiles.csv')
+                        # X = np.loadtxt('data/'+full_operation+'/'+datatype+'/X.csv',ndmin=2)
+                        # Y = np.loadtxt('data/'+full_operation+'/'+datatype+'/Y.csv',ndmin=2)
                         clf = train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
                         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
                                        'children_right': e.tree_.children_right.tolist(),
                                        'threshold': e.tree_.threshold.astype('float64').tolist(),
                                        'feature': e.tree_.feature.astype('float64').tolist(),
                                        'value': e.tree_.value[:,:,0].astype('float64').tolist()} for e in clf.estimators_]
-                  if args.viennacl_src_path:
-                    misc_tools.update_viennacl_headers(args.viennacl_src_path, device,datatype,operation,layouts,profiles[0])
                   D['profiles'] = [map(int, x) for x in profiles]
 
 
+              Template = TYPES[operation]['template']
+
               #Vector AXPY
-              if operation=='vector-axpy':
+              if operation=='vaxpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
-                      x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
-                      y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
-                      return execute(device, vcl.Assign(y, x + y), (), sizes, fname, parameters)
+                      x = atd.empty(sizes[0], datatype)
+                      y = atd.empty(sizes[0], datatype)
+                      return execute(x + y, sizes, Template, parameters, fname)
                   tune(execution_handler, 1e3, 2e7, 1, (),'log', 'log')
-              #Reduction
-              if operation=='reduction':
+              #dot
+              if operation=='dot':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
-                      x = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
-                      y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
-                      s = vcl.Scalar(0, context=ctx, dtype=datatype)
-                      return execute(device, vcl.Assign(s, vcl.Dot(x,y)), (), sizes, fname, parameters)
+                      x = atd.empty(sizes[0], datatype)
+                      y = atd.empty(sizes[0], datatype)
+                      s = atd.scalar(datatype)
+                      return execute(atd.dot(x, y), sizes, Template, parameters, fname)
                   tune(execution_handler, 1e3, 2e7, 1, (),'log', 'log')
               #Matrix AXPY
-              if operation=='matrix-axpy':
+              if operation=='maxpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
-                      A = vcl.Matrix(sizes, context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
-                      C = vcl.Matrix(sizes, context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
-                      return execute(device, vcl.Assign(C,A + C), (), sizes, fname, parameters)
+                      A = atd.empty(sizes, datatype)
+                      C = atd.empty(sizes, datatype)
+                      return execute(A + C, sizes, Template, parameters, fname)
                   tune(execution_handler, 100, 5000, 2, (),'log', 'log')
-              #Row-wise reduction
-              if operation=='row-wise-reduction':
+              #Row-wise dot
+              if operation=='gemv':
                   for A_trans in  args.gemv_layouts:
                       def execution_handler(sizes, fname=os.devnull, parameters=None):
-                          A = vcl.Matrix(sizes if A_trans=='N' else sizes[::-1], context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
-                          x = vcl.Vector(sizes[1], context=ctx, dtype=datatype)
-                          y = vcl.Vector(sizes[0], context=ctx, dtype=datatype)
+                          Template = Template[A_trans]
+                          A = atd.empty(sizes if A_trans=='N' else sizes[::-1], datatype)
+                          x = atd.empty(sizes[1], datatype)
                           LHS = A if A_trans=='N' else A.T
-                          return execute(device, vcl.Assign(y, LHS*x), (), sizes, fname, parameters)
+                          return execute(device, atd.dot(LHS, x), sizes, Template, parameters, fname)
                       tune(execution_handler, 100, 5000, 2, (A_trans,),'log', 'log')
               #Matrix Product
-              if operation=='matrix-product':
+              if operation=='gemm':
                   for L in args.gemm_layouts:
                       A_trans = L[0]
                       B_trans = L[1]
                       def execution_handler(sizes, fname=os.devnull, parameters=None):
-                          A = vcl.Matrix((sizes[0], sizes[2]) if A_trans=='N' else (sizes[2],sizes[0]), context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
-                          B = vcl.Matrix((sizes[2], sizes[1]) if B_trans=='N' else (sizes[1],sizes[2]), context=ctx, dtype=datatype, layout=vcl.COL_MAJOR)
+                          Template = Template[A_trans, B_trans]
+                          A = atd.empty((sizes[0], sizes[2]) if A_trans=='N' else (sizes[2], sizes[0]), datatype)
+                          B = atd.empty((sizes[2], sizes[1]) if B_trans=='N' else (sizes[1], sizes[2]), datatype)
                           LHS = A if A_trans=='N' else A.T
                           RHS = B if B_trans=='N' else B.T
-                          alpha = vcl.HostScalar(1.0,  context=ctx, dtype = datatype)
-                          beta = vcl.HostScalar(1.0, context=ctx, dtype = datatype)
-                          C = vcl.Matrix((sizes[0], sizes[1]), context=ctx, dtype = datatype, layout=vcl.COL_MAJOR)
-                          return execute(device, vcl.Assign(C,LHS*RHS*alpha + C*beta),(A_trans,B_trans), sizes, fname, parameters)
+                          return execute(device, atd.dot(LHS, RHS),(A_trans,B_trans), sizes, fname, parameters)
                       tune(execution_handler, 100, 2000, 3,(A_trans,B_trans), 'linear')
 
               json.dump(json_out, open(args.json_file,'w'))
@@ -191,7 +183,7 @@ class ArgumentsHandler:
                 return raw_input(help + "[" + default + "] : ") or default
 
             self.device = add_input('Device to tune for','0')
-            self.operations = add_input('Operations to tune for','vector-axpy,matrix-axpy,reduction,row-wise-reduction,matrix-product-float32').split(',')
+            self.operations = add_input('Operations to tune for','vaxpy,maxpy,dot,gemv,gemm-float32')
             self.gemm_layouts = add_input('GEMV Layouts', 'NN,NT,TN,TT')
             self.gemv_layouts =  add_input('GEMV Layouts', 'N,T')
             self.json_file = add_input('JSON File', misc_tools.sanitize_string(devices[int(self.device)].name) + '.json')
@@ -203,7 +195,6 @@ class ArgumentsHandler:
             else:
               self.build_model = True
               self.sample_size = 30
-            self.viennacl_src_path= add_input('ViennaCL src path', '')
         else:
             #Command line arguments
             parser = argparse.ArgumentParser()
@@ -211,7 +202,7 @@ class ArgumentsHandler:
             print_devices_parser = subparsers.add_parser('list-devices', help='List the devices available')
             tune_parser = subparsers.add_parser('tune', help='Auto-tuning')
             tune_parser.add_argument("--device", default=0, type=int)
-            tune_parser.add_argument("--operations", default = 'vector-axpy,matrix-axpy,reduction,row-wise-reduction,matrix-product-float32', type=str)
+            tune_parser.add_argument("--operations", default = 'vaxpy,maxpy,dot,gemv,gemm-float32', type=str)
             tune_parser.add_argument("--gemm-layouts", default='NN,NT,TN,TT', type=str)
             tune_parser.add_argument("--gemv-layouts", default='N,T', type=str)
             tune_parser.add_argument("--json-file", default='', type=str)
@@ -230,13 +221,12 @@ class ArgumentsHandler:
 
             args = parser.parse_args()
             self.__dict__ = args.__dict__.copy()
-
+            
         #Retypes
-        self.operations = [self.operations] if not isinstance(self.operations, list) else self.operations
         self.device = devices[int(self.device)]
         if not self.json_file:
             self.json_file = misc_tools.sanitize_string(self.device.name) + '.json'
-
+        self.operations = self.operations.split(',')
         self.gemm_layouts = self.gemm_layouts.split(',')
         self.gemv_layouts = self.gemv_layouts.split(',')
         if self.method == 'simple':
