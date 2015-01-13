@@ -76,6 +76,11 @@ INSTANTIATE(cl_double);
 #undef INSTANTIATE
 
 // General
+array::array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, cl::Context context):
+  dtype_(dtype), shape_(s1.size, s2.size), start_(s1.start, s2.start), stride_(s1.stride, s2.stride),
+  context_(context), ld_(shape_._1), data_(data)
+{ }
+
 array::array(array_expression const & proxy) :
   dtype_(proxy.dtype()),
   shape_(proxy.shape()), start_(0,0), stride_(1, 1), context_(proxy.context()),
@@ -182,6 +187,12 @@ array & array::operator/=(array_expression const & rhs)
 
 /*--- Indexing operators -----*/
 //---------------------------------------
+scalar array::operator [](int_t idx)
+{
+  assert(nshape()==1);
+  return scalar(dtype_, data_, idx, context_);
+}
+
 array array::operator[](slice const & e1)
 {
   assert(nshape()==1);
@@ -203,6 +214,9 @@ void copy(cl::Context & ctx, cl::Buffer const & data, T value)
 }
 
 }
+
+scalar::scalar(numeric_type dtype, const cl::Buffer &data, int_t offset, cl::Context context): array(dtype, data, _(offset, offset+1), _(1,1), context)
+{ }
 
 scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype(), context)
 {
@@ -228,43 +242,90 @@ scalar::scalar(numeric_type dtype, cl::Context context) : array(1, dtype, contex
 scalar::scalar(array_expression const & proxy) : array(proxy){ }
 
 template<class T>
-T scalar::to_type() const
+T scalar::cast() const
 {
-  assert(dtype_==to_numeric_type<T>::value);
-  T t;
-  cl::queues[context_].front().enqueueReadBuffer(data_, CL_TRUE, 0, sizeof(T), &t);
-  return t;
+  values_holder v;
+
+#define HANDLE_CASE(DTYPE, VAL) \
+case DTYPE:\
+  cl::queues[context_].front().enqueueReadBuffer(data_, CL_TRUE, start_._1, size_of(dtype_), (void*)&v.VAL);\
+  return v.VAL
+
+  switch(dtype_)
+  {
+    HANDLE_CASE(CHAR_TYPE, int8);
+    HANDLE_CASE(UCHAR_TYPE, uint8);
+    HANDLE_CASE(SHORT_TYPE, int16);
+    HANDLE_CASE(USHORT_TYPE, uint16);
+    HANDLE_CASE(INT_TYPE, int32);
+    HANDLE_CASE(UINT_TYPE, uint32);
+    HANDLE_CASE(LONG_TYPE, int64);
+    HANDLE_CASE(ULONG_TYPE, uint64);
+    HANDLE_CASE(FLOAT_TYPE, float32);
+    HANDLE_CASE(DOUBLE_TYPE, float64);
+    default: throw "Datatype not recognized";
+  }
+#undef HANDLE_CASE
+
+}
+
+scalar& scalar::operator=(value_scalar const & s)
+{
+  cl::CommandQueue& queue = cl::queues[context_].front();
+
+#define HANDLE_CASE(TYPE, CLTYPE) case TYPE:\
+                            {\
+                            CLTYPE v = s.value<CLTYPE>();\
+                            queue.enqueueWriteBuffer(data_, CL_TRUE, start_._1, size_of(dtype_), (void*)&v);\
+                            return *this;\
+                            }
+  switch(dtype_)
+  {
+    HANDLE_CASE(CHAR_TYPE, cl_char)
+    HANDLE_CASE(UCHAR_TYPE, cl_uchar)
+    HANDLE_CASE(SHORT_TYPE, cl_short)
+    HANDLE_CASE(USHORT_TYPE, cl_ushort)
+    HANDLE_CASE(INT_TYPE, cl_int)
+    HANDLE_CASE(UINT_TYPE, cl_uint)
+    HANDLE_CASE(LONG_TYPE, cl_long)
+    HANDLE_CASE(ULONG_TYPE, cl_ulong)
+    HANDLE_CASE(FLOAT_TYPE, cl_float)
+    HANDLE_CASE(DOUBLE_TYPE, cl_double)
+    default: throw "Datatype not recognized";
+  }
 }
 
 scalar& scalar::operator=(scalar const & s)
 { array::operator =(s); }
 
-template cl_char scalar::to_type<cl_char>() const;
-template cl_uchar scalar::to_type<cl_uchar>() const;
-template cl_short scalar::to_type<cl_short>() const;
-template cl_ushort scalar::to_type<cl_ushort>() const;
-template cl_int scalar::to_type<cl_int>() const;
-template cl_uint scalar::to_type<cl_uint>() const;
-template cl_long scalar::to_type<cl_long>() const;
-template cl_ulong scalar::to_type<cl_ulong>() const;
-template cl_float scalar::to_type<cl_float>() const;
-template cl_double scalar::to_type<cl_double>() const;
+#define INSTANTIATE(type) scalar::operator type() const { return cast<type>(); }
+  INSTANTIATE(cl_char)
+  INSTANTIATE(cl_uchar)
+  INSTANTIATE(cl_short)
+  INSTANTIATE(cl_ushort)
+  INSTANTIATE(cl_int)
+  INSTANTIATE(cl_uint)
+  INSTANTIATE(cl_long)
+  INSTANTIATE(cl_ulong)
+  INSTANTIATE(cl_float)
+  INSTANTIATE(cl_double)
+#undef INSTANTIATE
 
 inline std::ostream & operator<<(std::ostream & os, scalar const & s)
 {
   switch(s.dtype())
   {
-    case CHAR_TYPE: return os << s.to_type<cl_char>();
-    case UCHAR_TYPE: return os << s.to_type<cl_uchar>();
-    case SHORT_TYPE: return os << s.to_type<cl_short>();
-    case USHORT_TYPE: return os << s.to_type<cl_ushort>();
-    case INT_TYPE: return os << s.to_type<cl_int>();
-    case UINT_TYPE: return os << s.to_type<cl_uint>();
-    case LONG_TYPE: return os << s.to_type<cl_long>();
-    case ULONG_TYPE: return os << s.to_type<cl_ulong>();
-    case HALF_TYPE: return os << s.to_type<cl_half>();
-    case FLOAT_TYPE: return os << s.to_type<cl_float>();
-    case DOUBLE_TYPE: return os << s.to_type<cl_double>();
+    case CHAR_TYPE: return os << static_cast<cl_char>(s);
+    case UCHAR_TYPE: return os << static_cast<cl_uchar>(s);
+    case SHORT_TYPE: return os << static_cast<cl_short>(s);
+    case USHORT_TYPE: return os << static_cast<cl_ushort>(s);
+    case INT_TYPE: return os << static_cast<cl_int>(s);
+    case UINT_TYPE: return os << static_cast<cl_uint>(s);
+    case LONG_TYPE: return os << static_cast<cl_long>(s);
+    case ULONG_TYPE: return os << static_cast<cl_ulong>(s);
+    case HALF_TYPE: return os << static_cast<cl_half>(s);
+    case FLOAT_TYPE: return os << static_cast<cl_float>(s);
+    case DOUBLE_TYPE: return os << static_cast<cl_double>(s);
     default: throw "";
   }
 }

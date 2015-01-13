@@ -11,6 +11,8 @@
 namespace atidlas
 {
 
+class scalar;
+
 class array: public obj_base
 {
 public:
@@ -27,6 +29,7 @@ public:
   array(array & M, slice const & s1, slice const & s2);
 
   //General constructor
+  array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, cl::Context context = cl::default_context());
   explicit array(array_expression const & proxy);
 
   //Getters
@@ -56,6 +59,7 @@ public:
   array& operator/=(array_expression const &);
 
   //Indexing operators
+  scalar operator[](int_t);
   array operator[](slice const &);
   array operator()(slice const &, slice const &);
 protected:
@@ -72,12 +76,29 @@ protected:
 
 class scalar : public array
 {
+private:
+  template<class T> T cast() const;
 public:
+  explicit scalar(numeric_type dtype, cl::Buffer const & data, int_t offset, cl::Context context = cl::default_context());
   explicit scalar(value_scalar value, cl::Context context = cl::default_context());
   explicit scalar(numeric_type dtype, cl::Context context = cl::default_context());
   explicit scalar(array_expression const & proxy);
-  template<class T> T to_type() const;
 
+
+#define INSTANTIATE(type) operator type() const;
+  INSTANTIATE(cl_char)
+  INSTANTIATE(cl_uchar)
+  INSTANTIATE(cl_short)
+  INSTANTIATE(cl_ushort)
+  INSTANTIATE(cl_int)
+  INSTANTIATE(cl_uint)
+  INSTANTIATE(cl_long)
+  INSTANTIATE(cl_ulong)
+  INSTANTIATE(cl_float)
+  INSTANTIATE(cl_double)
+#undef INSTANTIATE
+
+  scalar& operator=(value_scalar const &);
   scalar& operator=(scalar const &);
   using array::operator=;
 };
