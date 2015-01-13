@@ -29,7 +29,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
     CPU_REDUCTION;\
   cs= ASSIGNMENT ;\
   GPU_REDUCTION;\
-  tmp = ds.to_type<T>();\
+  tmp = ds;\
   if((std::abs(cs - tmp)/std::max(cs, tmp)) > epsilon)\
   {\
     failure_count++;\
@@ -39,10 +39,11 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
     cout << endl;
 
   RUN_TEST("s = x'.y", cs+=cx[i]*cy[i], 0, cs, ds = dot(x,y));
+  RUN_TEST("s = exp(x'.y)", cs += cx[i]*cy[i], 0, std::exp(cs), ds = exp(dot(x,y)));
+  RUN_TEST("s = 1 + x'.y", cs += cx[i]*cy[i], 0, 1 + cs, ds = 1 + dot(x,y));
   RUN_TEST("s = x'.y + y'.y", cs+= cx[i]*cy[i] + cy[i]*cy[i], 0, cs, ds = dot(x,y) + dot(y,y));
   RUN_TEST("s = max(x)", cs = std::max(cs, cx[i]), -INFINITY, cs, ds = max(x));
   RUN_TEST("s = min(x)", cs = std::min(cs, cx[i]), INFINITY, cs, ds = min(x));
-
 
 #undef RUN_TEST
 
@@ -67,7 +68,6 @@ void test_impl(T epsilon)
 
   std::cout << "> standard..." << std::endl;
   TEST_OPERATIONS(vector, vector);
-  std::cout << std::endl;
   std::cout << "> slice..." << std::endl;
   TEST_OPERATIONS(slice, slice);
 }
