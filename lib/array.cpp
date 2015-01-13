@@ -245,10 +245,10 @@ template<class T>
 T scalar::cast() const
 {
   values_holder v;
-
+  int_t dtsize = size_of(dtype_);
 #define HANDLE_CASE(DTYPE, VAL) \
 case DTYPE:\
-  cl::queues[context_].front().enqueueReadBuffer(data_, CL_TRUE, start_._1, size_of(dtype_), (void*)&v.VAL);\
+  cl::queues[context_].front().enqueueReadBuffer(data_, CL_TRUE, start_._1*dtsize, dtsize, (void*)&v.VAL);\
   return v.VAL
 
   switch(dtype_)
@@ -272,12 +272,13 @@ case DTYPE:\
 scalar& scalar::operator=(value_scalar const & s)
 {
   cl::CommandQueue& queue = cl::queues[context_].front();
+  int_t dtsize = size_of(dtype_);
 
 #define HANDLE_CASE(TYPE, CLTYPE) case TYPE:\
                             {\
-                            CLTYPE v = s.value<CLTYPE>();\
-                            queue.enqueueWriteBuffer(data_, CL_TRUE, start_._1, size_of(dtype_), (void*)&v);\
-                            return *this;\
+                              CLTYPE v = s.value<CLTYPE>();\
+                              queue.enqueueWriteBuffer(data_, CL_TRUE, start_._1*dtsize, dtsize, (void*)&v);\
+                              return *this;\
                             }
   switch(dtype_)
   {
@@ -723,13 +724,9 @@ namespace detail
     size_t upper = std::min(WINDOW,N);
     for(size_t j = 0; j < upper ; j++)
     {
-      if(col)
-        os << "\t|" << *begin << "|";
-      else{
-        os << *begin;
-        if(j<upper - 1)
-          os << ",";
-      }
+      os << *begin;
+      if(j<upper - 1)
+        os << ",";
       begin+=stride;
     }
     if(upper < N)
@@ -738,11 +735,7 @@ namespace detail
         os << ", ... ";
       for(size_t j = std::max(N - WINDOW, upper) ; j < N ; j++)
       {
-        if(col)
-          os << "\t|" << *begin << "|";
-        else{
-          os << "," << *begin;
-        }
+        os << "," << *begin;
         begin+=stride;
       }
     }
@@ -759,6 +752,9 @@ std::ostream& operator<<(std::ostream & os, array const & a)
 
   size_t M = a.shape()._1;
   size_t N = a.shape()._2;
+
+  if(M>1 && N==1)
+    std::swap(M, N);
 
   std::vector<float> tmp(M*N);
   copy(a, tmp);
