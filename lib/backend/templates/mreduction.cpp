@@ -200,7 +200,7 @@ std::vector<int_t> mreduction::input_sizes(symbolic_expressions_container const 
 {
   symbolic_expression const & first_expression = *symbolic_expressions.data().front();
   std::vector<std::size_t> idx = filter_nodes(&is_reduction, first_expression, false);
-  std::pair<int_t, int_t> MN = matrix_size(lhs_most(first_expression.array(), idx[0]));
+  std::pair<int_t, int_t> MN = matrix_size(lhs_most(first_expression.tree(), idx[0]));
   if(reduction_type_==REDUCE_COLUMNS)
     std::swap(MN.first,MN.second);
   return tools::make_vector<int_t>() << MN.first << MN.second;

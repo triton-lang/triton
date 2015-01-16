@@ -59,48 +59,48 @@ symbolic_expression_node::symbolic_expression_node(lhs_rhs_element const & _lhs,
 
 //
 symbolic_expression::symbolic_expression(lhs_rhs_element const & lhs, lhs_rhs_element const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype) :
-  array_(1, symbolic_expression_node(lhs, op, rhs)), root_(0), context_(context), dtype_(dtype)
+  tree_(1, symbolic_expression_node(lhs, op, rhs)), root_(0), context_(context), dtype_(dtype)
 { }
 
 symbolic_expression::symbolic_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op) :
   context_(lhs.context_), dtype_(lhs.dtype_)
 {
-  array_.reserve(lhs.array_.size() + 1);
-  array_.insert(array_.end(), lhs.array_.begin(), lhs.array_.end());
-  array_.push_back(value_type(lhs_rhs_element(lhs.root_), op, rhs));
-  root_ = array_.size() - 1;
+  tree_.reserve(lhs.tree_.size() + 1);
+  tree_.insert(tree_.end(), lhs.tree_.begin(), lhs.tree_.end());
+  tree_.push_back(value_type(lhs_rhs_element(lhs.root_), op, rhs));
+  root_ = tree_.size() - 1;
 }
 
 symbolic_expression::symbolic_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op) :
   context_(rhs.context_), dtype_(rhs.dtype_)
 {
-  array_.reserve(rhs.array_.size() + 1);
-  array_.insert(array_.end(), rhs.array_.begin(), rhs.array_.end());
-  array_.push_back(value_type(lhs, op, lhs_rhs_element(rhs.root_)));
-  root_ = array_.size() - 1;
+  tree_.reserve(rhs.tree_.size() + 1);
+  tree_.insert(tree_.end(), rhs.tree_.begin(), rhs.tree_.end());
+  tree_.push_back(value_type(lhs, op, lhs_rhs_element(rhs.root_)));
+  root_ = tree_.size() - 1;
 }
 
 symbolic_expression::symbolic_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op):
   context_(lhs.context_), dtype_(lhs.dtype_)
 {
-  std::size_t lsize = lhs.array_.size();
-  std::size_t rsize = rhs.array_.size();
-  array_.reserve(lsize + rsize + 1);
-  array_.insert(array_.end(), lhs.array_.begin(), lhs.array_.end());
-  array_.insert(array_.end(), rhs.array_.begin(), rhs.array_.end());
-  array_.push_back(value_type(lhs_rhs_element(lhs.root_), op, lhs_rhs_element(lsize+rhs.root_)));
-  for(container_type::iterator it = array_.begin() + lsize ; it != array_.end() - 1 ; ++it){
+  std::size_t lsize = lhs.tree_.size();
+  std::size_t rsize = rhs.tree_.size();
+  tree_.reserve(lsize + rsize + 1);
+  tree_.insert(tree_.end(), lhs.tree_.begin(), lhs.tree_.end());
+  tree_.insert(tree_.end(), rhs.tree_.begin(), rhs.tree_.end());
+  tree_.push_back(value_type(lhs_rhs_element(lhs.root_), op, lhs_rhs_element(lsize+rhs.root_)));
+  for(container_type::iterator it = tree_.begin() + lsize ; it != tree_.end() - 1 ; ++it){
     if(it->lhs.type_family==COMPOSITE_OPERATOR_FAMILY) it->lhs.node_index+=lsize;
     if(it->rhs.type_family==COMPOSITE_OPERATOR_FAMILY) it->rhs.node_index+=lsize;
   }
-  root_ = array_.size() - 1;
+  root_ = tree_.size() - 1;
 }
 
-symbolic_expression::container_type & symbolic_expression::array()
-{ return array_; }
+symbolic_expression::container_type & symbolic_expression::tree()
+{ return tree_; }
 
-symbolic_expression::container_type const & symbolic_expression::array() const
-{ return array_; }
+symbolic_expression::container_type const & symbolic_expression::tree() const
+{ return tree_; }
 
 std::size_t symbolic_expression::root() const
 { return root_; }

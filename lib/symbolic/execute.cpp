@@ -150,7 +150,7 @@ namespace atidlas
   {
     cl::Context const & context = symbolic_expression.context();
     size_t rootidx = symbolic_expression.root();
-    symbolic_expression::container_type & tree = const_cast<symbolic_expression::container_type &>(symbolic_expression.array());
+    symbolic_expression::container_type & tree = const_cast<symbolic_expression::container_type &>(symbolic_expression.tree());
     symbolic_expression_node root_save = tree[rootidx];
 
     //Todo: technically the datatype should be per temporary
@@ -199,25 +199,6 @@ namespace atidlas
         default: throw "This shouldn't happen. Ever.";
       }
       temporaries_.push_back(tmp);
-
-      //Updates the symbolic_expression to compute the temporary
-      symbolic_expression_node_type_family tmp_family;
-      switch(rit->first)
-      {
-        case REDUCTION_TYPE:            tmp_family = VALUE_TYPE_FAMILY; break;
-
-        case VECTOR_AXPY_TYPE:
-        case ROW_WISE_REDUCTION_TYPE:
-        case COL_WISE_REDUCTION_TYPE:
-        case MATRIX_AXPY_TYPE:
-        case MATRIX_PRODUCT_NN_TYPE:
-        case MATRIX_PRODUCT_NT_TYPE:
-        case MATRIX_PRODUCT_TN_TYPE:
-        case MATRIX_PRODUCT_TT_TYPE:    tmp_family = ARRAY_TYPE_FAMILY; break;
-
-        default: throw "This shouldn't happen. Ever.";
-
-      }
 
       tree[rootidx].op.type = OPERATOR_ASSIGN_TYPE;
       tree[rootidx].lhs = lhs_rhs_element((array const &)*tmp);

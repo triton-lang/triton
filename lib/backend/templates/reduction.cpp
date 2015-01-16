@@ -18,7 +18,7 @@ unsigned int reduction::lmem_usage(symbolic_expressions_container const & symbol
   unsigned int res = 0;
   for(symbolic_expressions_container::data_type::const_iterator it = symbolic_expressions.data().begin() ; it != symbolic_expressions.data().end() ; ++it)
   {
-    numeric_type numeric_t= lhs_most((*it)->array(), (*it)->root()).lhs.dtype;
+    numeric_type numeric_t= lhs_most((*it)->tree(), (*it)->root()).lhs.dtype;
     res += p_.local_size_0*size_of(numeric_t);
   }
   return res;
@@ -70,7 +70,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
   std::string arguments = "unsigned int N, ";
   for (unsigned int k = 0; k < N; ++k)
   {
-    std::string numeric_type = numeric_type_to_string(lhs_most(exprs[k]->symbolic_expression().array(),
+    std::string numeric_type = numeric_type_to_string(lhs_most(exprs[k]->symbolic_expression().tree(),
                                                                       exprs[k]->symbolic_expression().root()).lhs.dtype);
     if (exprs[k]->is_index_reduction())
     {
@@ -274,7 +274,7 @@ reduction::reduction(unsigned int simd, unsigned int ls, unsigned int ng,
 std::vector<int_t> reduction::input_sizes(symbolic_expressions_container const & symbolic_expressions)
 {
   std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, *(symbolic_expressions.data().front()), false);
-  int_t N = vector_size(lhs_most(symbolic_expressions.data().front()->array(), reductions_idx[0]));
+  int_t N = vector_size(lhs_most(symbolic_expressions.data().front()->tree(), reductions_idx[0]));
   return tools::make_vector<int_t>() << N;
 }
 
@@ -290,7 +290,7 @@ void reduction::enqueue(cl::CommandQueue & queue,
   {
     std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, **it, false);
     for (std::vector<size_t>::iterator itt = reductions_idx.begin(); itt != reductions_idx.end(); ++itt)
-      reductions.push_back(&(*it)->array()[*itt]);
+      reductions.push_back(&(*it)->tree()[*itt]);
   }
 
   //Kernel
@@ -313,7 +313,7 @@ void reduction::enqueue(cl::CommandQueue & queue,
   //Arguments
   cl::Context context = symbolic_expressions.context();
   symbolic_expression const & s = *(symbolic_expressions.data().front());
-  unsigned int dtype_size = size_of(lhs_most(s.array(), s.root()).lhs.dtype);
+  unsigned int dtype_size = size_of(lhs_most(s.tree(), s.root()).lhs.dtype);
   for (unsigned int k = 0; k < 2; k++)
   {
     unsigned int n_arg = 0;

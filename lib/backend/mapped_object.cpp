@@ -113,7 +113,7 @@ atidlas::symbolic_expression const & mapped_reduction::symbolic_expression() con
 { return *info_.symbolic_expression; }
 
 symbolic_expression_node mapped_reduction::root_node() const
-{ return symbolic_expression().array()[root_idx()]; }
+{ return symbolic_expression().tree()[root_idx()]; }
 
 bool mapped_reduction::is_index_reduction() const
 {
@@ -126,7 +126,7 @@ bool mapped_reduction::is_index_reduction() const
 
 op_element mapped_reduction::root_op() const
 {
-    return info_.symbolic_expression->array()[info_.root_idx].op;
+    return info_.symbolic_expression->tree()[info_.root_idx].op;
 }
 
 

@@ -89,7 +89,7 @@ maxpy::maxpy(unsigned int simd, unsigned int ls1, unsigned int ls2,
 std::vector<int_t> maxpy::input_sizes(symbolic_expressions_container const & symbolic_expressions)
 {
   atidlas::symbolic_expression const & symbolic_expression = *(symbolic_expressions.data().front());
-  std::pair<int_t, int_t> size = matrix_size(lhs_most(symbolic_expression.array(), symbolic_expression.root()));
+  std::pair<int_t, int_t> size = matrix_size(lhs_most(symbolic_expression.tree(), symbolic_expression.root()));
   return tools::make_vector<int_t>() << size.first << size.second;
 }
 

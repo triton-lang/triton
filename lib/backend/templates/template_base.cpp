@@ -20,9 +20,9 @@ template_base::parameters_type::parameters_type(unsigned int _simd_width, int_t 
 
 numeric_type template_base::map_functor::get_numeric_type(atidlas::symbolic_expression const * symbolic_expression, int_t root_idx) const
 {
-  symbolic_expression_node const * root_node = &symbolic_expression->array()[root_idx];
+  symbolic_expression_node const * root_node = &symbolic_expression->tree()[root_idx];
   while (root_node->lhs.dtype==INVALID_NUMERIC_TYPE)
-    root_node = &symbolic_expression->array()[root_node->lhs.node_index];
+    root_node = &symbolic_expression->tree()[root_node->lhs.node_index];
   return root_node->lhs.dtype;
 }
 
@@ -84,7 +84,7 @@ template_base::map_functor::map_functor(symbolic_binder & binder, mapping_type &
 /** @brief Traversal functor */
 void template_base::map_functor::operator()(atidlas::symbolic_expression const & symbolic_expression, int_t root_idx, leaf_t leaf_t) const {
   mapping_type::key_type key(root_idx, leaf_t);
-  symbolic_expression_node const & root_node = symbolic_expression.array()[root_idx];
+  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
 
   if (leaf_t == LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
     mapping_.insert(mapping_type::value_type(key, create(root_node.lhs)));
@@ -181,7 +181,7 @@ void template_base::set_arguments_functor::set_arguments(lhs_rhs_element const &
 /** @brief Traversal functor: */
 void template_base::set_arguments_functor::operator()(atidlas::symbolic_expression const & symbolic_expression, int_t root_idx, leaf_t leaf_t) const
 {
-  symbolic_expression_node const & root_node = symbolic_expression.array()[root_idx];
+  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
   if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
     set_arguments(root_node.lhs);
   else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != COMPOSITE_OPERATOR_FAMILY)

@@ -20,7 +20,7 @@ array::array(int_t size1, numeric_type dtype, cl::Context context) :
 
 template<class T>
 array::array(std::vector<T> const & x, cl::Context context):
-  shape_(x.size(), 1), dtype_(to_numeric_type<T>::value), start_(0, 0), stride_(1, 1), ld_(shape_._1),
+  dtype_(to_numeric_type<T>::value), shape_(x.size(), 1), start_(0, 0), stride_(1, 1), ld_(shape_._1),
   context_(context), data_(context, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 { *this = x; }
 
@@ -78,13 +78,13 @@ INSTANTIATE(cl_double);
 // General
 array::array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, cl::Context context):
   dtype_(dtype), shape_(s1.size, s2.size), start_(s1.start, s2.start), stride_(s1.stride, s2.stride),
-  context_(context), ld_(shape_._1), data_(data)
+   ld_(shape_._1), context_(context), data_(data)
 { }
 
 array::array(array_expression const & proxy) :
   dtype_(proxy.dtype()),
-  shape_(proxy.shape()), start_(0,0), stride_(1, 1), context_(proxy.context()),
-  ld_(shape_._1), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
+  shape_(proxy.shape()), start_(0,0), stride_(1, 1), ld_(shape_._1),
+  context_(proxy.context()), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 {
   *this = proxy;
 }
@@ -222,16 +222,16 @@ scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype()
 {
   switch(dtype_)
   {
-    case CHAR_TYPE: detail::copy(context_, data_, value.value<cl_char>()); break;
-    case UCHAR_TYPE: detail::copy(context_, data_, value.value<cl_uchar>()); break;
-    case SHORT_TYPE: detail::copy(context_, data_, value.value<cl_short>()); break;
-    case USHORT_TYPE: detail::copy(context_, data_, value.value<cl_ushort>()); break;
-    case INT_TYPE: detail::copy(context_, data_, value.value<cl_int>()); break;
-    case UINT_TYPE: detail::copy(context_, data_, value.value<cl_uint>()); break;
-    case LONG_TYPE: detail::copy(context_, data_, value.value<cl_long>()); break;
-    case ULONG_TYPE: detail::copy(context_, data_, value.value<cl_ulong>()); break;
-    case FLOAT_TYPE: detail::copy(context_, data_, value.value<cl_float>()); break;
-    case DOUBLE_TYPE: detail::copy(context_, data_, value.value<cl_double>()); break;
+    case CHAR_TYPE: detail::copy(context_, data_, (cl_char)value); break;
+    case UCHAR_TYPE: detail::copy(context_, data_, (cl_uchar)value); break;
+    case SHORT_TYPE: detail::copy(context_, data_, (cl_short)value); break;
+    case USHORT_TYPE: detail::copy(context_, data_, (cl_ushort)value); break;
+    case INT_TYPE: detail::copy(context_, data_, (cl_int)value); break;
+    case UINT_TYPE: detail::copy(context_, data_, (cl_uint)value); break;
+    case LONG_TYPE: detail::copy(context_, data_, (cl_long)value); break;
+    case ULONG_TYPE: detail::copy(context_, data_, (cl_ulong)value); break;
+    case FLOAT_TYPE: detail::copy(context_, data_, (cl_float)value); break;
+    case DOUBLE_TYPE: detail::copy(context_, data_, (cl_double)value); break;
     default: throw "unrecognized datatype";
   }
 }
@@ -276,7 +276,7 @@ scalar& scalar::operator=(value_scalar const & s)
 
 #define HANDLE_CASE(TYPE, CLTYPE) case TYPE:\
                             {\
-                              CLTYPE v = s.value<CLTYPE>();\
+                              CLTYPE v = s;\
                               queue.enqueueWriteBuffer(data_, CL_TRUE, start_._1*dtsize, dtsize, (void*)&v);\
                               return *this;\
                             }
@@ -297,7 +297,7 @@ scalar& scalar::operator=(value_scalar const & s)
 }
 
 scalar& scalar::operator=(scalar const & s)
-{ array::operator =(s); }
+{ return (scalar&)array::operator =(s); }
 
 #define INSTANTIATE(type) scalar::operator type() const { return cast<type>(); }
   INSTANTIATE(cl_char)
@@ -312,7 +312,7 @@ scalar& scalar::operator=(scalar const & s)
   INSTANTIATE(cl_double)
 #undef INSTANTIATE
 
-inline std::ostream & operator<<(std::ostream & os, scalar const & s)
+std::ostream & operator<<(std::ostream & os, scalar const & s)
 {
   switch(s.dtype())
   {
@@ -501,7 +501,7 @@ namespace detail
     operation_node_type type = OPERATOR_MATRIX_PRODUCT_NN_TYPE;
     size4 shape(A.shape()._1, B.shape()._2);
 
-    symbolic_expression_node & A_root = const_cast<symbolic_expression_node &>(A.array()[A.root()]);
+    symbolic_expression_node & A_root = const_cast<symbolic_expression_node &>(A.tree()[A.root()]);
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
     if(A_trans){
       type = OPERATOR_MATRIX_PRODUCT_TN_TYPE;
@@ -509,7 +509,7 @@ namespace detail
     }
 
     array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), shape);
-    symbolic_expression_node & res_root = const_cast<symbolic_expression_node &>(res.array()[res.root()]);
+    symbolic_expression_node & res_root = const_cast<symbolic_expression_node &>(res.tree()[res.root()]);
     if(A_trans) res_root.lhs = A_root.lhs;
     return res;
   }
@@ -519,14 +519,14 @@ namespace detail
     operation_node_type type = OPERATOR_MATRIX_PRODUCT_NN_TYPE;
     size4 shape(A.shape()._1, B.shape()._2);
 
-    symbolic_expression_node & B_root = const_cast<symbolic_expression_node &>(B.array()[B.root()]);
+    symbolic_expression_node & B_root = const_cast<symbolic_expression_node &>(B.tree()[B.root()]);
     bool B_trans = B_root.op.type==OPERATOR_TRANS_TYPE;
     if(B_trans){
       type = OPERATOR_MATRIX_PRODUCT_NT_TYPE;
       shape._2 = B.shape()._1;
     }
     array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), shape);
-    symbolic_expression_node & res_root = const_cast<symbolic_expression_node &>(res.array()[res.root()]);
+    symbolic_expression_node & res_root = const_cast<symbolic_expression_node &>(res.tree()[res.root()]);
     if(B_trans) res_root.rhs = B_root.lhs;
     return res;
   }
@@ -534,8 +534,8 @@ namespace detail
   array_expression matmatprod(array_expression const & A, array_expression const & B)
   {
     operation_node_type type = OPERATOR_MATRIX_PRODUCT_NN_TYPE;
-    symbolic_expression_node & A_root = const_cast<symbolic_expression_node &>(A.array()[A.root()]);
-    symbolic_expression_node & B_root = const_cast<symbolic_expression_node &>(B.array()[B.root()]);
+    symbolic_expression_node & A_root = const_cast<symbolic_expression_node &>(A.tree()[A.root()]);
+    symbolic_expression_node & B_root = const_cast<symbolic_expression_node &>(B.tree()[B.root()]);
     size4 shape(A.shape()._1, B.shape()._2);
 
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
@@ -548,7 +548,7 @@ namespace detail
     else type = OPERATOR_MATRIX_PRODUCT_NN_TYPE;
 
     array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), shape);
-    symbolic_expression_node & res_root = const_cast<symbolic_expression_node &>(res.array()[res.root()]);
+    symbolic_expression_node & res_root = const_cast<symbolic_expression_node &>(res.tree()[res.root()]);
     if(A_trans) res_root.lhs = A_root.lhs;
     if(B_trans) res_root.rhs = B_root.lhs;
     return res;
@@ -568,12 +568,12 @@ namespace detail
   {
     int_t M = A.shape()._1;
     int_t N = A.shape()._2;
-    symbolic_expression_node & A_root = const_cast<symbolic_expression_node &>(A.array()[A.root()]);
+    symbolic_expression_node & A_root = const_cast<symbolic_expression_node &>(A.tree()[A.root()]);
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
     if(A_trans){
       array_expression tmp(A, repmat(const_cast<T&>(x), 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), size4(N, M));
       //Remove trans
-      tmp.array()[tmp.root()].lhs = A.array()[A.root()].lhs;
+      tmp.tree()[tmp.root()].lhs = A.tree()[A.root()].lhs;
       return sum(tmp, 1);
     }
     else
@@ -617,7 +617,21 @@ DEFINE_DOT(array_expression, array_expression)
 
 #undef DEFINE_DOT
 
+#define DEFINE_NORM(TYPE)\
+array_expression norm(TYPE const & x, unsigned int order)\
+{\
+  assert(order > 0 && order < 3);\
+  switch(order)\
+  {\
+    case 1: return sum(abs(x));\
+    default: return sqrt(sum(pow(x,2)));\
+  }\
+}
 
+DEFINE_NORM(array)
+DEFINE_NORM(array_expression)
+
+#undef DEFINE_NORM
 
 /*--- Copy ----*/
 //---------------------------------------

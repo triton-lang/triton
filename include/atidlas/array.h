@@ -44,6 +44,7 @@ public:
   int_t dsize() const;
 
   //Setters
+  array& resize(int_t size1, int_t size2=1);
   array& reshape(int_t size1, int_t size2=1);
 
   //Numeric operators
@@ -51,6 +52,13 @@ public:
   array& operator=(array_expression const &);
   template<class T> array & operator=(std::vector<T> const & rhs);
 
+  array& operator-();
+  array& operator+=(value_scalar const &);
+  array& operator+=(array const &);
+  array& operator+=(array_expression const &);
+  array& operator-=(value_scalar const &);
+  array& operator-=(array const &);
+  array& operator-=(array_expression const &);
   array& operator*=(value_scalar const &);
   array& operator*=(array const &);
   array& operator*=(array_expression const &);
@@ -82,10 +90,14 @@ public:
   explicit scalar(numeric_type dtype, cl::Buffer const & data, int_t offset, cl::Context context = cl::default_context());
   explicit scalar(value_scalar value, cl::Context context = cl::default_context());
   explicit scalar(numeric_type dtype, cl::Context context = cl::default_context());
-  explicit scalar(array_expression const & proxy);
+  scalar(array_expression const & proxy);
 
+  scalar& operator=(value_scalar const &);
+  scalar& operator=(scalar const &);
+  using array::operator=;
 
 #define INSTANTIATE(type) operator type() const;
+  INSTANTIATE(bool)
   INSTANTIATE(cl_char)
   INSTANTIATE(cl_uchar)
   INSTANTIATE(cl_short)
@@ -97,11 +109,12 @@ public:
   INSTANTIATE(cl_float)
   INSTANTIATE(cl_double)
 #undef INSTANTIATE
-
-  scalar& operator=(value_scalar const &);
-  scalar& operator=(scalar const &);
-  using array::operator=;
 };
+
+
+atidlas::array_expression diag(std::size_t, atidlas::value_scalar const &);
+
+array_expression zeros(std::size_t N, numeric_type dtype);
 
 //copy
 
@@ -144,6 +157,7 @@ ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(min)
 ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(pow)
 
 ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(dot)
+ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(outer)
 
 namespace detail
 {
@@ -176,6 +190,9 @@ ATIDLAS_DECLARE_UNARY_OPERATOR(sqrt)
 ATIDLAS_DECLARE_UNARY_OPERATOR(tan)
 ATIDLAS_DECLARE_UNARY_OPERATOR(tanh)
 ATIDLAS_DECLARE_UNARY_OPERATOR(trans)
+
+array_expression norm(array const &, unsigned int order = 2);
+array_expression norm(array_expression const &, unsigned int order = 2);
 
 #undef ATIDLAS_DECLARE_UNARY_OPERATOR
 

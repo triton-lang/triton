@@ -44,7 +44,7 @@ namespace detail
   /** @brief Recursive worker routine for printing a whole symbolic_expression */
   inline void print_node(std::ostream & os, atidlas::symbolic_expression const & s, size_t node_index, size_t indent = 0)
   {
-    symbolic_expression::container_type const & nodes = s.array();
+    symbolic_expression::container_type const & nodes = s.tree();
     symbolic_expression_node const & current_node = nodes[node_index];
 
     for (size_t i=0; i<indent; ++i)

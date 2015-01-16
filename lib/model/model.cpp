@@ -70,7 +70,7 @@ std::vector<cl::lazy_compiler>& model::init(symbolic_expressions_container const
 }
 
 model::model(predictors::random_forest const & predictor, std::vector< tools::shared_ptr<template_base> > const & templates, cl::CommandQueue & queue) :
-  predictor_(new predictors::random_forest(predictor)), templates_(templates), queue_(queue)
+  templates_(templates), predictor_(new predictors::random_forest(predictor)), queue_(queue)
 {}
 
 model::model(std::vector< tools::shared_ptr<template_base> > const & templates, cl::CommandQueue & queue) :  templates_(templates), queue_(queue)

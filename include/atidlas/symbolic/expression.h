@@ -181,13 +181,13 @@ public:
   symbolic_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op);
   symbolic_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op);
 
-  container_type & array();
-  container_type const & array() const;
+  container_type & tree();
+  container_type const & tree() const;
   std::size_t root() const;
   cl::Context const & context() const;
   numeric_type const & dtype() const;
 protected:
-  container_type array_;
+  container_type tree_;
   std::size_t root_;
   cl::Context context_;
   numeric_type dtype_;
@@ -202,6 +202,20 @@ struct array_expression: public symbolic_expression
   size4 shape() const;
   array_expression& reshape(int_t size1, int_t size2=1);
   int_t nshape() const;
+
+  array_expression& operator-();
+  array_expression& operator+=(value_scalar const &);
+  array_expression& operator+=(array const &);
+  array_expression& operator+=(array_expression const &);
+  array_expression& operator-=(value_scalar const &);
+  array_expression& operator-=(array const &);
+  array_expression& operator-=(array_expression const &);
+  array_expression& operator*=(value_scalar const &);
+  array_expression& operator*=(array const &);
+  array_expression& operator*=(array_expression const &);
+  array_expression& operator/=(value_scalar const &);
+  array_expression& operator/=(array const &);
+  array_expression& operator/=(array_expression const &);
 private:
   size4 shape_;
 };

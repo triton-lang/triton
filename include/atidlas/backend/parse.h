@@ -35,7 +35,7 @@ public:
 template<class Fun>
 inline void traverse(atidlas::symbolic_expression const & symbolic_expression, int_t root_idx, Fun const & fun, bool inspect)
 {
-  symbolic_expression_node const & root_node = symbolic_expression.array()[root_idx];
+  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
   bool recurse = detail::is_node_leaf(root_node.op)?inspect:true;
 
   fun.call_before_expansion(symbolic_expression, root_idx);

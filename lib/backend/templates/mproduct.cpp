@@ -20,7 +20,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   unsigned int mproduct::lmem_usage(symbolic_expressions_container const & symbolic_expressions) const
   {
     atidlas::symbolic_expression const & symbolic_expression = (*symbolic_expressions.data().front());
-    numeric_type numeric_t = lhs_most(symbolic_expression.array(), symbolic_expression.root()).lhs.dtype;
+    numeric_type numeric_t = lhs_most(symbolic_expression.tree(), symbolic_expression.root()).lhs.dtype;
 
     unsigned int N = 0;
     if (p_.A_fetching_policy==FETCH_FROM_LOCAL)
@@ -33,7 +33,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   unsigned int mproduct::registers_usage(symbolic_expressions_container const & symbolic_expressions) const
   {
     atidlas::symbolic_expression const & symbolic_expression = (*symbolic_expressions.data().front());
-    numeric_type numeric_t = lhs_most(symbolic_expression.array(), symbolic_expression.root()).lhs.dtype;
+    numeric_type numeric_t = lhs_most(symbolic_expression.tree(), symbolic_expression.root()).lhs.dtype;
 
     unsigned int N = p_.mS * p_.nS + p_.mS * p_.kS + p_.kS * p_.nS;
     return N*size_of(numeric_t);
@@ -107,7 +107,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     /// //////////////
     kernel_generation_stream stream;
     symbolic_expression const & st = (*symbolic_expressions.data().front());
-    numeric_type dtype = lhs_most(st.array(), st.root()).lhs.dtype;
+    numeric_type dtype = lhs_most(st.tree(), st.root()).lhs.dtype;
     std::string dtypestr = numeric_type_to_string(dtype);
 
     mapped_array C(dtypestr, 0, 'm');
@@ -607,7 +607,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                                    lhs_rhs_element & C, lhs_rhs_element & A, lhs_rhs_element & B)
   {
     atidlas::symbolic_expression const & symbolic_expression = (*symbolic_expressions.data().front());
-    symbolic_expression::container_type const & array = symbolic_expression.array();
+    symbolic_expression::container_type const & array = symbolic_expression.tree();
     std::size_t root = symbolic_expression.root();
 
     C = array[root].lhs;
