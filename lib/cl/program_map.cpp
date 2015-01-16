@@ -22,6 +22,7 @@ program_map::program_map()
 
 cl::Program program_map::add(cl::Context & context, std::string const & pname, std::string const & source)
 {
+
   cl_context clctx = context.operator ()();
   container_type::mapped_type map = data_[clctx];
   container_type::mapped_type::iterator it = map.find(pname);
@@ -34,6 +35,7 @@ cl::Program program_map::add(cl::Context & context, std::string const & pname, s
   cl::Program res;
 
   // Retrieves the program in the cache
+  bool compile = true;
   if (cache_path_.size())
   {
     std::string prefix;
@@ -45,17 +47,17 @@ cl::Program program_map::add(cl::Context & context, std::string const & pname, s
     if (cached)
     {
       std::size_t len;
-      std::vector<unsigned char> buffer;
+      std::vector<char> buffer;
       cached.read((char*)&len, sizeof(std::size_t));
       buffer.resize(len);
       cached.read((char*)buffer.data(), std::streamsize(len));
-      unsigned char* cbuffer = buffer.data();
-
-      res = cl::Program(context, devices, cl::Program::Binaries(1, std::make_pair((void*)&cbuffer, len)), NULL, &err);
+      char* cbuffer = buffer.data();
+      res = cl::Program(context, devices, cl::Program::Binaries(1, std::make_pair(cbuffer, len)), NULL, &err);
+      compile = false;
     }
   }
   //Gets from source
-  else
+  if(compile)
   {
     const char * csrc = source.c_str();
     std::size_t srclen = source.size();
@@ -71,7 +73,7 @@ cl::Program program_map::add(cl::Context & context, std::string const & pname, s
 
 
   // Store the program in the cache
-  if (cache_path_.size())
+  if (cache_path_.size() && compile)
   {
     std::vector<std::size_t> sizes = res.getInfo<CL_PROGRAM_BINARY_SIZES>();
     std::vector<char*> binaries = res.getInfo<CL_PROGRAM_BINARIES>();
