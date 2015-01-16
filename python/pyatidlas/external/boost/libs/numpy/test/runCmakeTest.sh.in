@@ -1,3 +1,0 @@
-#!/bin/bash
-export PYTHONPATH=@CMAKE_LIBRARY_OUTPUT_DIRECTORY@:${PYTHONPATH}
-python $1
