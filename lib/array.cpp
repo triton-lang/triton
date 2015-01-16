@@ -334,6 +334,14 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
 /*--- Binary Operators ----*/
 //-----------------------------------
 template<class U, class V>
+size4 elementwise_size(U const & u, V const & v)
+{
+  if(max(u.shape())==1)
+    return v.shape();
+  return u.shape();
+}
+
+template<class U, class V>
 bool check_elementwise(U const & u, V const & v)
 {
   return max(u.shape())==1 || max(v.shape())==1 || u.shape()==v.shape();
@@ -342,19 +350,19 @@ bool check_elementwise(U const & u, V const & v)
 #define DEFINE_ELEMENT_BINARY_OPERATOR(OP, OPNAME) \
 array_expression OPNAME (array_expression const & x, array_expression const & y) \
 { assert(check_elementwise(x, y));\
-  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), std::max(max(x.shape()), max(y.shape())) ); } \
+  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), elementwise_size(x, y) ); } \
  \
 array_expression OPNAME (array const & x, array_expression const & y) \
 { assert(check_elementwise(x, y));\
-  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), std::max(max(x.shape()), max(y.shape()))); } \
+  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), elementwise_size(x, y)); } \
 \
 array_expression OPNAME (array_expression const & x, array const & y) \
 { assert(check_elementwise(x, y));\
-  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), std::max(max(x.shape()), max(y.shape()))); } \
+  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), elementwise_size(x, y)); } \
 \
 array_expression OPNAME (array const & x, array const & y) \
 { assert(check_elementwise(x, y));\
-  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), x.dtype(), std::max(max(x.shape()), max(y.shape()))); }\
+  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), x.dtype(), elementwise_size(x, y)); }\
 \
 array_expression OPNAME (array_expression const & x, value_scalar const & y) \
 { return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.shape()); } \

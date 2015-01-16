@@ -1,5 +1,5 @@
 get_property(ATIDLAS_PATH TARGET atidlas PROPERTY LOCATION)
-foreach(PROG vaxpy reduction mreduction mproduct)
+foreach(PROG maxpy vaxpy reduction mreduction mproduct)
      add_executable(${PROG}-test ${PROG}.cpp)
      add_test(${PROG} ${PROG}-test)
      target_link_libraries(${PROG}-test atidlas ${OPENCL_LIBRARIES})

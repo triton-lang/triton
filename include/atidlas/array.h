@@ -67,6 +67,7 @@ public:
   array& operator/=(array_expression const &);
 
   //Indexing operators
+  const scalar operator[](int_t) const;
   scalar operator[](int_t);
   array operator[](slice const &);
   array operator()(slice const &, slice const &);
