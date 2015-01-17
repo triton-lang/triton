@@ -1,5 +1,5 @@
-#ifndef ATIDLAS_TEMPLATES_TEMPLATE_BASE_
-#define ATIDLAS_TEMPLATES_TEMPLATE_BASE_
+#ifndef ATIDLAS_TEMPLATES_base_
+#define ATIDLAS_TEMPLATES_base_
 
 
 #include <list>
@@ -44,7 +44,7 @@ static const int TEMPLATE_LOCAL_FETCH_0_MUST_BE_NL_MULTIPLE = -16;
 static const int TEMPLATE_LOCAL_FETCH_1_MUST_BE_KL_MULTIPLE = -17;
 static const int TEMPLATE_LOCAL_FETCH_1_MUST_BE_ML_MULTIPLE = -18;
 
-class template_base
+class base
 {
 public:
   struct parameters_type
@@ -81,7 +81,7 @@ protected:
     /** @brief Creates a vector mapping */
     tools::shared_ptr<mapped_object> create(array const &) const;
     /** @brief Creates a tuple mapping */
-    tools::shared_ptr<mapped_object> create(array_repeat_infos const &) const;
+    tools::shared_ptr<mapped_object> create(repeat_infos const &) const;
     /** @brief Creates a mapping */
     tools::shared_ptr<mapped_object> create(lhs_rhs_element const &) const;
   public:
@@ -102,7 +102,7 @@ protected:
     set_arguments_functor(symbolic_binder & binder, unsigned int & current_arg, cl::Kernel & kernel);
     void set_arguments(numeric_type dtype, values_holder const & scal) const;
     void set_arguments(array const & ) const;
-    void set_arguments(array_repeat_infos const & i) const;
+    void set_arguments(repeat_infos const & i) const;
     void set_arguments(lhs_rhs_element const & lhs_rhs) const;
 
     void operator()(atidlas::symbolic_expression const & symbolic_expression, int_t root_idx, leaf_t leaf_t) const;
@@ -129,14 +129,14 @@ protected:
                              kernel_generation_stream & stream, std::vector<mapping_type> const & mappings,
                              size_t root_idx, leaf_t leaf);
   static std::string neutral_element(op_element const & op);
-  static std::string generate_arguments(std::vector<mapping_type> const & mappings, std::multimap<std::string, std::string> const & accessors,
+  static std::string generate_arguments(std::vector<mapping_type> const & mappings, std::map<std::string, std::string> const & accessors,
                                         symbolic_expressions_container const & symbolic_expressions);
   static std::string generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings,
                                         symbolic_expressions_container const & symbolic_expressions);
   static void fill_kernel_name(char * ptr, unsigned int label, const char * suffix);
   static bool is_node_trans(symbolic_expression::container_type const & array, size_t root_idx, leaf_t leaf_type);
   static std::string append_simd_suffix(std::string const & str, unsigned int i);
-  static bool is_offset_modifier(symbolic_expression_node const & node);
+  static bool is_strided(symbolic_expression_node const & node);
   static int_t vector_size(symbolic_expression_node const & node);
   static std::pair<int_t, int_t> matrix_size(symbolic_expression_node const & node);
   static unsigned int align(unsigned int to_round, unsigned int base);
@@ -155,24 +155,24 @@ private:
   virtual std::vector<std::string> generate_impl(unsigned int label, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mapping) const = 0;
 
 public:
-  template_base(binding_policy_t binding_policy);
+  base(binding_policy_t binding_policy);
   virtual unsigned int lmem_usage(symbolic_expressions_container const &) const;
   virtual unsigned int registers_usage(symbolic_expressions_container const &) const;
   virtual std::vector<int_t> input_sizes(symbolic_expressions_container const & symbolic_expressions) = 0;
-  virtual ~template_base();
+  virtual ~base();
   std::vector<std::string> generate(unsigned int label, symbolic_expressions_container const & symbolic_expressions, cl::Device const & device);
   virtual int check_invalid(symbolic_expressions_container const & symbolic_expressions, cl::Device const & device) const = 0;
   virtual void enqueue(cl::CommandQueue & queue,
                        std::vector<cl::lazy_compiler> & programs,
                        unsigned int label, symbolic_expressions_container const & symbolic_expressions) = 0;
-  virtual tools::shared_ptr<template_base> clone() const = 0;
+  virtual tools::shared_ptr<base> clone() const = 0;
 private:
   binding_policy_t binding_policy_;
 };
 
 
 template<class TemplateType, class ParametersType>
-class template_base_impl : public template_base
+class base_impl : public base
 {
 private:
   virtual int check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const;
@@ -180,10 +180,10 @@ protected:
   bool has_misaligned_offset(symbolic_expressions_container const & symbolic_expressions);
 public:
   typedef ParametersType parameters_type;
-  template_base_impl(parameters_type const & parameters, binding_policy_t binding_policy);
+  base_impl(parameters_type const & parameters, binding_policy_t binding_policy);
   int_t local_size_0() const;
   int_t local_size_1() const;
-  tools::shared_ptr<template_base> clone() const;
+  tools::shared_ptr<base> clone() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
   int check_invalid(symbolic_expressions_container const & symbolic_expressions, cl::Device const & device) const;
 protected:

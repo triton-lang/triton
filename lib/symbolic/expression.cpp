@@ -39,12 +39,12 @@ lhs_rhs_element::lhs_rhs_element(atidlas::value_scalar const & x)
   vscalar = x.values();
 }
 
-lhs_rhs_element::lhs_rhs_element(atidlas::array_repeat_infos const & x)
+lhs_rhs_element::lhs_rhs_element(atidlas::repeat_infos const & x)
 {
   type_family = INFOS_TYPE_FAMILY;
-  subtype = MATRIX_REPEAT_INFOS_TYPE;
+  subtype = REPEAT_INFOS_TYPE;
   dtype = INVALID_NUMERIC_TYPE;
-  repeat_infos = (atidlas::array_repeat_infos*)&x;
+  tuple = (atidlas::repeat_infos*)&x;
 }
 
 //

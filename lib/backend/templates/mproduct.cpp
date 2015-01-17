@@ -11,7 +11,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                           , int_t local_size_0, int_t KL, int_t local_size_1
                           , int_t ms, int_t ks, int_t ns
                           , fetching_policy_type A_fetching_policy, fetching_policy_type B_fetching_policy
-                          , int_t local_fetch_0, int_t local_fetch_1): template_base::parameters_type(simd_width, local_size_0, local_size_1, 1),
+                          , int_t local_fetch_0, int_t local_fetch_1): base::parameters_type(simd_width, local_size_0, local_size_1, 1),
   kL(KL), mS(ms), kS(ks), nS(ns), A_fetching_policy(A_fetching_policy), B_fetching_policy(B_fetching_policy),
   local_fetch_0(local_fetch_0), local_fetch_1(local_fetch_1),
   mL(ms*local_size_0), nL(ns*local_size_1){}
@@ -625,7 +625,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return tools::make_vector<int_t>() << M << N << K;
   }
 
-  mproduct::mproduct(mproduct_parameters const & parameters, char A_trans, char B_trans) : template_base_impl<mproduct, mproduct_parameters>(parameters, BIND_ALL_UNIQUE), A_trans_(A_trans), B_trans_(B_trans){ }
+  mproduct::mproduct(mproduct_parameters const & parameters, char A_trans, char B_trans) : base_impl<mproduct, mproduct_parameters>(parameters, BIND_ALL_UNIQUE), A_trans_(A_trans), B_trans_(B_trans){ }
 
   std::vector<int_t> mproduct::input_sizes(symbolic_expressions_container const & symbolic_expressions)
   {

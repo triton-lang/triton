@@ -12,7 +12,7 @@ namespace atidlas
 vaxpy_parameters::vaxpy_parameters(unsigned int _simd_width,
                        unsigned int _group_size, unsigned int _num_groups,
                        fetching_policy_type _fetching_policy) :
-      template_base::parameters_type(_simd_width, _group_size, 1, 1), num_groups(_num_groups), fetching_policy(_fetching_policy)
+      base::parameters_type(_simd_width, _group_size, 1, 1), num_groups(_num_groups), fetching_policy(_fetching_policy)
 { }
 
 
@@ -39,7 +39,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
     stream.inc_tab();
 
     process(stream, PARENT_NODE_TYPE,
-                          tools::make_map<std::multimap<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
+                          tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
                                                                      ("array", "#pointer += #start1 + #start2*#ld;")
                                                                      ("array", "#start1/=" + str_simd_width + ";"), symbolic_expressions, mappings);
 
@@ -49,7 +49,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
     stream << "{" << std::endl;
     stream.inc_tab();
     process(stream, PARENT_NODE_TYPE,
-                          tools::make_map<std::multimap<std::string, std::string> >("array", data_type + " #namereg = #pointer[i*#stride1];")
+                          tools::make_map<std::map<std::string, std::string> >("array", data_type + " #namereg = #pointer[i*#stride1];")
                                                                      ("matrix_row", "#scalartype #namereg = $VALUE{#row*#stride1, i*#stride2};")
                                                                      ("matrix_column", "#scalartype #namereg = $VALUE{i*#stride1,#column*#stride2};")
                                                                      ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];")
@@ -61,7 +61,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
                                                                                                 ("matrix_diag", "#namereg")
                                                                                                 ("scalar", "#namereg"), symbolic_expressions, mappings);
 
-    process(stream, LHS_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("array", "#pointer[i*#stride1] = #namereg;")
+    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array", "#pointer[i*#stride1] = #namereg;")
                                                                                            ("matrix_row", "$VALUE{#row, i} = #namereg;")
                                                                                            ("matrix_column", "$VALUE{i, #column} = #namereg;")
                                                                                            ("matrix_diag", "#diag_offset<0?$VALUE{(i - #diag_offset)*#stride1, i*#stride2}:$VALUE{i*#stride1, (i + #diag_offset)*#stride2} = #namereg;")
@@ -73,7 +73,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
     stream << "if(get_global_id(0)==0)" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
-    process(stream, LHS_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("scalar", "*#pointer = #namereg;"), symbolic_expressions, mappings);
+    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("scalar", "*#pointer = #namereg;"), symbolic_expressions, mappings);
     stream.dec_tab();
     stream << "}" << std::endl;
 
@@ -88,12 +88,12 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
 
 vaxpy::vaxpy(vaxpy_parameters const & parameters,
                                binding_policy_t binding_policy) :
-    template_base_impl<vaxpy, vaxpy_parameters>(parameters, binding_policy)
+    base_impl<vaxpy, vaxpy_parameters>(parameters, binding_policy)
 {}
 
 vaxpy::vaxpy(unsigned int simd, unsigned int ls, unsigned int ng,
                                fetching_policy_type fetch, binding_policy_t bind):
-    template_base_impl<vaxpy, vaxpy_parameters>(vaxpy_parameters(simd,ls,ng,fetch), bind)
+    base_impl<vaxpy, vaxpy_parameters>(vaxpy_parameters(simd,ls,ng,fetch), bind)
 {}
 
 

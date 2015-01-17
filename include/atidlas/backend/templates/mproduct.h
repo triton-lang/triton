@@ -1,12 +1,12 @@
 #ifndef ATIDLAS_BACKEND_TEMPLATES_MPRODUCT_H
 #define ATIDLAS_BACKEND_TEMPLATES_MPRODUCT_H
 
-#include "atidlas/backend/templates/template_base.h"
+#include "atidlas/backend/templates/base.h"
 
 namespace atidlas
 {
 
-struct mproduct_parameters : public template_base::parameters_type
+struct mproduct_parameters : public base::parameters_type
 {
   mproduct_parameters(unsigned int simd_width
                             , int_t local_size_0, int_t KL, int_t local_size_1
@@ -30,7 +30,7 @@ struct mproduct_parameters : public template_base::parameters_type
   int_t nL;
 };
 
-class mproduct : public template_base_impl<mproduct, mproduct_parameters>
+class mproduct : public base_impl<mproduct, mproduct_parameters>
 {
 private:
   unsigned int lmem_usage(symbolic_expressions_container const & symbolic_expressions) const;

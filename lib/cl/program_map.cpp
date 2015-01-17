@@ -64,12 +64,15 @@ cl::Program program_map::add(cl::Context & context, std::string const & pname, s
     res = cl::Program(context, cl::Program::Sources(1, std::make_pair(csrc, srclen)));
   }
 
-  err = res.build(devices);
-  if (err != CL_SUCCESS)
-    for(std::vector< cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
-      std::cout << "Device : " << it->getInfo<CL_DEVICE_NAME>()
-              << "Build Status = " << res.getBuildInfo<CL_PROGRAM_BUILD_STATUS>(*it) << std::endl
-              << "Build Log = " << res.getBuildInfo<CL_PROGRAM_BUILD_LOG>(*it) << std::endl;
+  try{
+    err = res.build(devices);
+  }catch(cl::Error const & e){
+      if (err != CL_SUCCESS)
+        for(std::vector< cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
+          std::cout << "Device : " << it->getInfo<CL_DEVICE_NAME>()
+                  << "Build Status = " << res.getBuildInfo<CL_PROGRAM_BUILD_STATUS>(*it) << std::endl
+                  << "Build Log = " << res.getBuildInfo<CL_PROGRAM_BUILD_LOG>(*it) << std::endl;
+  }
 
 
   // Store the program in the cache

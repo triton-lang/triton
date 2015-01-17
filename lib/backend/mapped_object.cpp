@@ -13,8 +13,9 @@
 namespace atidlas
 {
 
-
 void mapped_object::preprocess(std::string &) const { }
+
+void mapped_object::postprocess(std::string &) const { }
 
 void mapped_object::replace_macro(std::string & str, std::string const & macro, MorphBase const & morph)
 {
@@ -75,6 +76,7 @@ std::string mapped_object::process(std::string const & in) const
   preprocess(res);
   for (std::map<std::string,std::string>::const_iterator it = keywords_.begin(); it != keywords_.end(); ++it)
     tools::find_and_replace(res, it->first, it->second);
+  postprocess(res);
   return res;
 }
 
@@ -88,7 +90,7 @@ std::string mapped_object::evaluate(std::map<std::string, std::string> const & a
 
 binary_leaf::binary_leaf(mapped_object::node_info info) : info_(info){ }
 
-void binary_leaf::process_recursive(kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors)
+void binary_leaf::process_recursive(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors)
 {
   std::set<std::string> already_fetched;
   process(stream, leaf, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping, already_fetched);
@@ -232,20 +234,19 @@ mapped_array::mapped_array(std::string const & scalartype, unsigned int id, char
 }
 
 //
-void mapped_vector_diag::preprocess(std::string &res) const
+void mapped_vdiag::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#diag_offset", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping));
   accessors["array"] = res;
   accessors["host_scalar"] = res;
   res = atidlas::evaluate(LHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping);
-  std::cout << res << std::endl;
 }
 
-mapped_vector_diag::mapped_vector_diag(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "vector_diag"), binary_leaf(info){}
+mapped_vdiag::mapped_vdiag(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "vdiag"), binary_leaf(info){}
 
 //
-void mapped_trans::preprocess(std::string &res) const
+void mapped_trans::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   accessors["array"] = res;
@@ -255,7 +256,7 @@ void mapped_trans::preprocess(std::string &res) const
 mapped_trans::mapped_trans(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_trans"), binary_leaf(info){ }
 
 //
-void mapped_matrix_row::preprocess(std::string &res) const
+void mapped_matrix_row::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#row", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping));
@@ -267,7 +268,7 @@ mapped_matrix_row::mapped_matrix_row(std::string const & scalartype, unsigned in
 { }
 
 //
-void mapped_matrix_column::preprocess(std::string &res) const
+void mapped_matrix_column::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#column", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping));
@@ -279,25 +280,24 @@ mapped_matrix_column::mapped_matrix_column(std::string const & scalartype, unsig
 { }
 
 //
-void mapped_matrix_repeat::preprocess(std::string &res) const
+void mapped_repeat::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   mapped_object& args = *(info_.mapping->at(std::make_pair(info_.root_idx,RHS_NODE_TYPE)));
+  tools::find_and_replace(res, "#tuplearg0", args.process("#tuplearg0"));
   tools::find_and_replace(res, "#tuplearg1", args.process("#tuplearg1"));
   tools::find_and_replace(res, "#tuplearg2", args.process("#tuplearg2"));
   tools::find_and_replace(res, "#tuplearg3", args.process("#tuplearg3"));
-  tools::find_and_replace(res, "#tuplearg4", args.process("#tuplearg4"));
   accessors["array"] = res;
   res = atidlas::evaluate(LHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping);
 }
 
-mapped_matrix_repeat::mapped_matrix_repeat(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_repeat"), binary_leaf(info)
-{
-}
+mapped_repeat::mapped_repeat(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "repeat"), binary_leaf(info)
+{}
 
 
 //
-void mapped_matrix_diag::preprocess(std::string &res) const
+void mapped_matrix_diag::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#diag_offset", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping));
@@ -308,6 +308,29 @@ void mapped_matrix_diag::preprocess(std::string &res) const
 mapped_matrix_diag::mapped_matrix_diag(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_diag"), binary_leaf(info)
 { }
 
+//
+void mapped_outer::postprocess(std::string &res) const
+{
+    struct Morph : public MorphBase
+    {
+      Morph(leaf_t const & leaf, node_info const & i) : leaf_(leaf), i_(i){}
+      std::string operator()(std::string const & i) const
+      {
+        std::map<std::string, std::string> accessors;
+        accessors["array"] = "$VALUE{"+i+"}";
+        return atidlas::evaluate(leaf_, accessors, *i_.symbolic_expression, i_.root_idx, *i_.mapping);
+      }
+      std::string operator()(std::string const &, std::string const &) const{return "";}
+    private:
+      leaf_t leaf_;
+      node_info i_;
+    };
 
+    replace_macro(res, "$LVALUE", Morph(LHS_NODE_TYPE, info_));
+    replace_macro(res, "$RVALUE", Morph(RHS_NODE_TYPE, info_));
+}
+
+mapped_outer::mapped_outer(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "outer"), binary_leaf(info)
+{ }
 
 }

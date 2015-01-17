@@ -7,10 +7,10 @@
 namespace atidlas
 {
 
-inline std::string to_string(symbolic_expression_node_subtype const & f);
-inline std::string to_string(lhs_rhs_element const & e);
-inline std::ostream & operator<<(std::ostream & os, symbolic_expression_node const & s_node);
-inline std::string to_string(atidlas::symbolic_expression const & s);
+std::string to_string(symbolic_expression_node_subtype const & f);
+std::string to_string(lhs_rhs_element const & e);
+std::ostream & operator<<(std::ostream & os, symbolic_expression_node const & s_node);
+std::string to_string(atidlas::symbolic_expression const & s);
 
 }
 

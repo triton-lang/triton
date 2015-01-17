@@ -10,7 +10,7 @@ namespace atidlas
 maxpy_parameters::maxpy_parameters(unsigned int _simd_width,
                           unsigned int _local_size_0, unsigned int _local_size_1,
                           unsigned int _num_groups_0, unsigned int _num_groups_1,
-                          fetching_policy_type _fetching_policy) : template_base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1), num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetching_policy(_fetching_policy){ }
+                          fetching_policy_type _fetching_policy) : base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1), num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetching_policy(_fetching_policy){ }
 
 
 
@@ -34,8 +34,8 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  process(stream, PARENT_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
-                                                                          ("array", "#pointer = &$VALUE{#start1, #start2};"), symbolic_expressions, mappings);
+  process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
+                                                                                        ("array", "#pointer = &$VALUE{#start1, #start2};"), symbolic_expressions, mappings);
 
   fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0, "get_global_id(0)", "get_global_size(0)");
   stream << "for(unsigned int i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
@@ -46,18 +46,22 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  process(stream, PARENT_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >
+  process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >
                                                                           ("array", append_width("#scalartype",simd_width) + " #namereg = $VALUE{i*#stride1,j*#stride2};")
-                                                                          ("vector_diag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride1, j*#stride1)};")
-                                                                          ("matrix_repeat", "#scalartype #namereg = $VALUE{(i%#tuplearg0)*#stride1, (j%#tuplearg1)*#stride2};"), symbolic_expressions, mappings);
+                                                                          ("vdiag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride1, j*#stride1)};")
+                                                                          ("repeat", "#scalartype #namereg = $VALUE{(i%#tuplearg0)*#stride1, (j%#tuplearg1)*#stride2};")
+                                                                          ("outer", "#scalartype #namereg = ($LVALUE{i*#stride1})*($RVALUE{j*#stride1});")
+           , symbolic_expressions, mappings);
 
-  evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array", "#namereg")
-                                                                            ("vector_diag", "#namereg")
-                                                                            ("matrix_repeat", "#namereg")
+  evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >
+                                                                            ("array", "#namereg")
+                                                                            ("vdiag", "#namereg")
+                                                                            ("repeat", "#namereg")
                                                                             ("scalar", "#namereg")
+                                                                            ("outer", "#namereg")
                                                   , symbolic_expressions, mappings);
 
-  process(stream, LHS_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("array", "$VALUE{i*#stride1,j*#stride2} = #namereg;")
+  process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array", "$VALUE{i*#stride1,j*#stride2} = #namereg;")
                                              , symbolic_expressions, mappings);
 
   stream.dec_tab();
@@ -81,12 +85,12 @@ std::vector<std::string> maxpy::generate_impl(unsigned int label, symbolic_expre
 }
 
 maxpy::maxpy(parameters_type const & parameters, binding_policy_t binding_policy) :
-  template_base_impl<maxpy, maxpy_parameters>(parameters, binding_policy){ }
+  base_impl<maxpy, maxpy_parameters>(parameters, binding_policy){ }
 
 maxpy::maxpy(unsigned int simd, unsigned int ls1, unsigned int ls2,
                                unsigned int ng1, unsigned int ng2, fetching_policy_type fetch,
                                binding_policy_t bind):
-    template_base_impl<maxpy, maxpy_parameters>(maxpy_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
+    base_impl<maxpy, maxpy_parameters>(maxpy_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
 {}
 
 std::vector<int_t> maxpy::input_sizes(symbolic_expressions_container const & symbolic_expressions)
@@ -115,6 +119,6 @@ void maxpy::enqueue(cl::CommandQueue & queue,
   queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
 }
 
-template class template_base_impl<maxpy, maxpy_parameters>;
+template class base_impl<maxpy, maxpy_parameters>;
 
 }

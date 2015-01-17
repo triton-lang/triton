@@ -31,6 +31,7 @@ class mapped_object
 {
 private:
   virtual void preprocess(std::string &) const;
+  virtual void postprocess(std::string &) const;
 
 protected:
   struct MorphBase {
@@ -73,7 +74,7 @@ class binary_leaf
 public:
   binary_leaf(mapped_object::node_info info);
 
-  void process_recursive(kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors);
+  void process_recursive(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors);
   std::string evaluate_recursive(leaf_t leaf, std::map<std::string, std::string> const & accessors);
 protected:
   mapped_object::node_info info_;
@@ -197,18 +198,18 @@ private:
   char type_;
 };
 
-class mapped_vector_diag : public mapped_object, public binary_leaf
+class mapped_vdiag : public mapped_object, public binary_leaf
 {
 private:
-  void preprocess(std::string &res) const;
+  void postprocess(std::string &res) const;
 public:
-  mapped_vector_diag(std::string const & scalartype, unsigned int id, node_info info);
+  mapped_vdiag(std::string const & scalartype, unsigned int id, node_info info);
 };
 
 class mapped_trans: public mapped_object, public binary_leaf
 {
 private:
-  void preprocess(std::string &res) const;
+  void postprocess(std::string &res) const;
 public:
   mapped_trans(std::string const & scalartype, unsigned int id, node_info info);
 };
@@ -216,7 +217,7 @@ public:
 class mapped_matrix_row : public mapped_object, binary_leaf
 {
 private:
-  void preprocess(std::string &res) const;
+  void postprocess(std::string &res) const;
 public:
   mapped_matrix_row(std::string const & scalartype, unsigned int id, node_info info);
 };
@@ -224,26 +225,35 @@ public:
 class mapped_matrix_column : public mapped_object, binary_leaf
 {
 private:
-  void preprocess(std::string &res) const;
+  void postprocess(std::string &res) const;
 public:
   mapped_matrix_column(std::string const & scalartype, unsigned int id, node_info info);
 };
 
-class mapped_matrix_repeat : public mapped_object, binary_leaf
+class mapped_repeat : public mapped_object, binary_leaf
 {
 private:
-  void preprocess(std::string &res) const;
+  void postprocess(std::string &res) const;
 public:
-  mapped_matrix_repeat(std::string const & scalartype, unsigned int id, node_info info);
+  mapped_repeat(std::string const & scalartype, unsigned int id, node_info info);
 };
 
 class mapped_matrix_diag : public mapped_object, binary_leaf
 {
 private:
-  void preprocess(std::string &res) const;
+  void postprocess(std::string &res) const;
 public:
   mapped_matrix_diag(std::string const & scalartype, unsigned int id, node_info info);
 };
+
+class mapped_outer : public mapped_object, binary_leaf
+{
+private:
+  void postprocess(std::string &res) const;
+public:
+  mapped_outer(std::string const & scalartype, unsigned int id, node_info info);
+};
+
 
 }
 #endif

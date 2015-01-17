@@ -7,8 +7,8 @@ namespace ad = atidlas;
 typedef atidlas::int_t int_t;
 
 template<typename T>
-void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simple_matrix_base<T>& cC,
-          ad::array& A, ad::array& B, ad::array& C)
+void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simple_matrix_base<T>& cC, simple_vector_base<T>& cx, simple_vector_base<T>& cy,
+          ad::array& A, ad::array& B, ad::array& C, ad::array& x, ad::array& y)
 {
   using namespace std;
 
@@ -83,6 +83,8 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
   RUN_TEST("C = pow(A,B)", cC(i,j) = pow(cA(i,j), cB(i,j)), C= pow(A,B))
 
   RUN_TEST("C = eye(M, N)", cC(i,j) = i==j, C= eye(M, N, C.dtype()))
+  RUN_TEST("C = outer(x, y)", cC(i,j) = cx[i]*cy[j], C= outer(x,y))
+
 #undef RUN_TEST
 
   if(failure_count > 0)
@@ -102,14 +104,15 @@ void test_impl(T epsilon)
   INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cA, A);
   INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cB, B);
   INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cC, C);
-
-#define TEST_OPERATIONS(XTYPE, YTYPE, ZTYPE)\
-  test(epsilon, cA_ ## XTYPE, cB_ ## YTYPE, cC_ ## ZTYPE, A_ ## XTYPE, B_ ## YTYPE, C_ ## ZTYPE);\
+  INIT_VECTOR(M, SUBM, 5, 3, cx, x);
+  INIT_VECTOR(N, SUBN, 7, 2, cy, y);
+#define TEST_OPERATIONS(TYPE)\
+  test(epsilon, cA_ ## TYPE, cB_ ## TYPE, cC_ ## TYPE, cx_ ## TYPE, cy_ ## TYPE, A_ ## TYPE, B_ ## TYPE, C_ ## TYPE, x_ ## TYPE, y_ ## TYPE);\
 
   std::cout << "> standard..." << std::endl;
-  TEST_OPERATIONS(matrix, matrix, matrix);
+  TEST_OPERATIONS(full);
   std::cout << "> slice..." << std::endl;
-  TEST_OPERATIONS(slice, slice, slice);
+  TEST_OPERATIONS(slice);
 }
 
 int main()

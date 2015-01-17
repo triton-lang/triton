@@ -60,7 +60,7 @@ namespace detail
   }
 }
 
-inline std::string express(atidlas::symbolic_expression const & s)
+std::string to_string(atidlas::symbolic_expression const & s)
 {
   std::ostringstream os;
   detail::print_node(os, s, s.root());

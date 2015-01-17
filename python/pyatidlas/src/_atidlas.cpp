@@ -530,7 +530,7 @@ void export_scalar()
 void export_model()
 {
 
-  bp::class_<atidlas::model>("model", bp::init<atd::template_base const &, atd::cl::CommandQueue&>())
+  bp::class_<atidlas::model>("model", bp::init<atd::base const &, atd::cl::CommandQueue&>())
                   .def("execute", &atd::model::execute);
   
   bp::enum_<atidlas::fetching_policy_type>
@@ -542,17 +542,17 @@ void export_model()
 
   //Base
   {
-    #define __PROP(name) .def_readonly(#name, &atidlas::template_base::parameters_type::name)
-    bp::class_<atidlas::template_base, boost::noncopyable>("template_base", bp::no_init)
-            .def("lmem_usage", &atidlas::template_base::lmem_usage)
-            .def("registers_usage", &atidlas::template_base::registers_usage)
-            .def("check_invalid", &atidlas::template_base::check_invalid)
+    #define __PROP(name) .def_readonly(#name, &atidlas::base::parameters_type::name)
+    bp::class_<atidlas::base, boost::noncopyable>("base", bp::no_init)
+            .def("lmem_usage", &atidlas::base::lmem_usage)
+            .def("registers_usage", &atidlas::base::registers_usage)
+            .def("check_invalid", &atidlas::base::check_invalid)
         ;
     #undef __PROP
   }
 
-  #define WRAP_TEMPLATE(name, ...) bp::class_<atidlas::template_base_impl<atidlas::name, atidlas::name::parameters_type>, bp::bases<atidlas::template_base>, boost::noncopyable>(#name "_base_impl", bp::no_init);\
-                                   bp::class_<atidlas::name, bp::bases<atidlas::template_base_impl<atidlas::name, atidlas::name::parameters_type> > >(#name, bp::init<__VA_ARGS__>())\
+  #define WRAP_TEMPLATE(name, ...) bp::class_<atidlas::base_impl<atidlas::name, atidlas::name::parameters_type>, bp::bases<atidlas::base>, boost::noncopyable>(#name "_base_impl", bp::no_init);\
+                                   bp::class_<atidlas::name, bp::bases<atidlas::base_impl<atidlas::name, atidlas::name::parameters_type> > >(#name, bp::init<__VA_ARGS__>())\
                                       .add_property("local_size_0", &atd::name::local_size_0)\
                                       .add_property("local_size_1", &atd::name::local_size_1);
 

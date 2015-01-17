@@ -1,12 +1,12 @@
 #ifndef ATIDLAS_BACKEND_TEMPLATES_VAXPY_H
 #define ATIDLAS_BACKEND_TEMPLATES_VAXPY_H
 
-#include "atidlas/backend/templates/template_base.h"
+#include "atidlas/backend/templates/base.h"
 
 namespace atidlas
 {
 
-class vaxpy_parameters : public template_base::parameters_type
+class vaxpy_parameters : public base::parameters_type
 {
 public:
   vaxpy_parameters(unsigned int _simd_width, unsigned int _group_size, unsigned int _num_groups, fetching_policy_type _fetching_policy);
@@ -14,7 +14,7 @@ public:
   fetching_policy_type fetching_policy;
 };
 
-class vaxpy : public template_base_impl<vaxpy, vaxpy_parameters>
+class vaxpy : public base_impl<vaxpy, vaxpy_parameters>
 {
 private:
   virtual int check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const;

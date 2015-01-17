@@ -197,9 +197,9 @@ array_expression norm(array_expression const &, unsigned int order = 2);
 
 #undef ATIDLAS_DECLARE_UNARY_OPERATOR
 
-struct array_repeat_infos
+struct repeat_infos
 {
-    array_repeat_infos(size4 const & _sub, size4 const & _rep) : sub(_sub), rep(_rep){ }
+    repeat_infos(size4 const & _sub, size4 const & _rep) : sub(_sub), rep(_rep){ }
     size4 sub;
     size4 rep;
 };

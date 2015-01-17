@@ -4,12 +4,12 @@
 #include <vector>
 
 #include "atidlas/symbolic/expression.h"
-#include "atidlas/backend/templates/template_base.h"
+#include "atidlas/backend/templates/base.h"
 
 namespace atidlas
 {
 
-struct mreduction_parameters : public template_base::parameters_type
+struct mreduction_parameters : public base::parameters_type
 {
   mreduction_parameters(unsigned int _simd_width,
                                 unsigned int _local_size_0, unsigned int _local_size_1,
@@ -19,7 +19,7 @@ struct mreduction_parameters : public template_base::parameters_type
 };
 
 
-class mreduction : public template_base_impl<mreduction, mreduction_parameters>
+class mreduction : public base_impl<mreduction, mreduction_parameters>
 {
 protected:
   enum reduction_type

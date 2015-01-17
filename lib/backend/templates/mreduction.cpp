@@ -10,7 +10,7 @@ namespace atidlas
 
 mreduction_parameters::mreduction_parameters(unsigned int _simd_width,
                               unsigned int _local_size_0, unsigned int _local_size_1,
-                              unsigned int _num_groups_0, fetching_policy_type _fetch_policy): template_base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1),
+                              unsigned int _num_groups_0, fetching_policy_type _fetch_policy): base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1),
 num_groups_0(_num_groups_0), fetch_policy(_fetch_policy) { }
 
 
@@ -42,7 +42,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE,
-                        tools::make_map<std::multimap<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
+                        tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
                                                         ("array", "#pointer += #start1 + #start2*#ld;")
                                                         ("array", "#ld *= #nldstride;")
                                                         ("array", "#pointer += #start1;"), symbolic_expressions, mappings);
@@ -74,12 +74,12 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
 
       for (std::vector<mapped_mreduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
       {
-        std::multimap<std::string, std::string> accessors;
-        accessors.insert(std::make_pair("matrix_repeat", "#scalartype #namereg = $VALUE{(r%#tuplearg0)*#stride1, (c%#tuplearg1)*#stride2};"));
+        std::map<std::string, std::string> accessors;
+        accessors["repeat"] = "#scalartype #namereg = $VALUE{(r%#tuplearg0)*#stride1, (c%#tuplearg1)*#stride2};";
         if(reduction==REDUCE_COLUMNS)
-          accessors.insert(std::make_pair("array", data_type + " #namereg = " + vload(simd_width, "c*#stride1", "#pointer + r*#ld")+";"));
+          accessors["array"] = data_type + " #namereg = " + vload(simd_width, "c*#stride1", "#pointer + r*#ld")+";";
         else
-          accessors.insert(std::make_pair("array","#scalartype #namereg = #pointer[r*#stride1 + c*#ld];"));
+          accessors["array"] = "#scalartype #namereg = #pointer[r*#stride1 + c*#ld];";
         (*it)->process_recursive(stream, PARENT_NODE_TYPE, accessors);
       }
 
@@ -99,7 +99,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
         {
           std::map<std::string, std::string> accessors;
           accessors["array"] = str[a];
-          accessors["matrix_repeat"] = "#namereg";
+          accessors["repeat"] = "#namereg";
           accessors["scalar"] = "#namereg";
           std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
           if (exprs[k]->is_index_reduction())
@@ -162,6 +162,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
 
   stream.dec_tab();
   stream << "}" << std::endl;
+
   return stream.str();
 }
 
@@ -192,7 +193,7 @@ std::vector<std::string> mreduction::generate_impl(unsigned int label, symbolic_
 mreduction::mreduction(mreduction::parameters_type const & parameters,
                                          mreduction::reduction_type rtype,
                                          binding_policy_t binding_policy) :
-  template_base_impl<mreduction, mreduction_parameters>(parameters, binding_policy),
+  base_impl<mreduction, mreduction_parameters>(parameters, binding_policy),
   reduction_type_(rtype){ }
 
 std::vector<int_t> mreduction::input_sizes(symbolic_expressions_container const & symbolic_expressions)
@@ -252,7 +253,7 @@ mreduction_cols::mreduction_cols(unsigned int simd, unsigned int ls1, unsigned i
   mreduction(mreduction_parameters(simd, ls1, ls2, ng, fetch), REDUCE_COLUMNS, bind)
 {}
 
-template class template_base_impl<mreduction, mreduction_parameters>;
+template class base_impl<mreduction, mreduction_parameters>;
 
 
 }

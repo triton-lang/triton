@@ -5,7 +5,7 @@
 #include <vector>
 #include <map>
 
-#include "atidlas/backend/templates/template_base.h"
+#include "atidlas/backend/templates/base.h"
 #include "atidlas/cl/compare.hpp"
 #include "atidlas/cl/lazy_compiler.h"
 #include "atidlas/model/predictors/random_forest.h"
@@ -16,7 +16,7 @@ namespace atidlas
 
   class model
   {
-    typedef std::vector< tools::shared_ptr<template_base> > templates_container;
+    typedef std::vector< tools::shared_ptr<base> > templates_container;
 
   private:
     std::string define_extension(std::string const & extensions, std::string const & ext);
@@ -24,9 +24,9 @@ namespace atidlas
     std::vector<cl::lazy_compiler>& init(symbolic_expressions_container const & symbolic_expressions, cl::Context const & context, cl::Device const & device, bool force_recompilation);
 
   public:
-    model(predictors::random_forest const &, std::vector< tools::shared_ptr<template_base> > const &, cl::CommandQueue &);
-    model(std::vector< tools::shared_ptr<template_base> > const &, cl::CommandQueue &);
-    model(template_base const &, cl::CommandQueue &);
+    model(predictors::random_forest const &, std::vector< tools::shared_ptr<base> > const &, cl::CommandQueue &);
+    model(std::vector< tools::shared_ptr<base> > const &, cl::CommandQueue &);
+    model(base const &, cl::CommandQueue &);
 
     void execute(symbolic_expressions_container const &, bool bypass_predictor = false, bool force_recompilation = false);
     void tune(symbolic_expressions_container const &);

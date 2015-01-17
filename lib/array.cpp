@@ -347,6 +347,7 @@ bool check_elementwise(U const & u, V const & v)
   return max(u.shape())==1 || max(v.shape())==1 || u.shape()==v.shape();
 }
 
+
 #define DEFINE_ELEMENT_BINARY_OPERATOR(OP, OPNAME) \
 array_expression OPNAME (array_expression const & x, array_expression const & y) \
 { assert(check_elementwise(x, y));\
@@ -392,6 +393,12 @@ DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_MAX_TYPE, max)
 DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_MIN_TYPE, min)
 DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_POW_TYPE, pow)
 
+array_expression outer(array const & x, array const & y)
+{
+  assert(x.nshape()==1 && y.nshape()==1);
+  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_OUTER_PROD_TYPE), x.context(), x.dtype(), size4(max(x.shape()), max(y.shape())) );
+}
+
 namespace detail
 {
   DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ASSIGN_TYPE, assign)
@@ -433,7 +440,7 @@ DEFINE_ELEMENT_UNARY_OPERATOR(OPERATOR_TANH_TYPE, tanh)
 ////---------------------------------------
 atidlas::array_expression eye(std::size_t M, std::size_t N, atidlas::numeric_type dtype, cl::Context ctx)
 {
-  return array_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VECTOR_DIAG_TYPE), ctx, dtype, size4(M, N));
+  return array_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VDIAG_TYPE), ctx, dtype, size4(M, N));
 }
 
 inline size4 trans(size4 const & shape)
@@ -450,18 +457,18 @@ array_expression trans(array_expression const & x) \
 
 array_expression repmat(array const & A, int_t const & rep1, int_t const & rep2)
 {
-  static array_repeat_infos infos(A.shape(), size4(rep1, rep2));
-  infos = array_repeat_infos(A.shape(), size4(rep1, rep2));
+  static repeat_infos infos(A.shape(), size4(rep1, rep2));
+  infos = repeat_infos(A.shape(), size4(rep1, rep2));
   size4 newshape = prod(infos.sub, infos.rep);
-  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MATRIX_REPEAT_TYPE), A.context(), A.dtype(), newshape);
+  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), A.context(), A.dtype(), newshape);
 }
 
 array_expression repmat(array_expression const & A, int_t const & rep1, int_t const & rep2)
 {
-  static array_repeat_infos infos(A.shape(), size4(rep1, rep2));
-  infos = array_repeat_infos(A.shape(), size4(rep1, rep2));
+  static repeat_infos infos(A.shape(), size4(rep1, rep2));
+  infos = repeat_infos(A.shape(), size4(rep1, rep2));
   size4 newshape = prod(infos.sub, infos.rep);
-  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MATRIX_REPEAT_TYPE), newshape);
+  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), newshape);
 }
 
 ////---------------------------------------
@@ -630,6 +637,7 @@ DEFINE_DOT(array, array_expression)
 DEFINE_DOT(array_expression, array_expression)
 
 #undef DEFINE_DOT
+
 
 #define DEFINE_NORM(TYPE)\
 array_expression norm(TYPE const & x, unsigned int order)\

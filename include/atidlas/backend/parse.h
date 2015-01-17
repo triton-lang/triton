@@ -119,20 +119,20 @@ void evaluate(kernel_generation_stream & stream, leaf_t leaf, std::map<std::stri
 class process_traversal : public traversal_functor
 {
 public:
-  process_traversal(std::multimap<std::string, std::string> const & accessors, kernel_generation_stream & stream,
+  process_traversal(std::map<std::string, std::string> const & accessors, kernel_generation_stream & stream,
                     mapping_type const & mapping, std::set<std::string> & already_processed);
   void operator()(symbolic_expression const & symbolic_expression, int_t root_idx, leaf_t leaf) const;
 private:
-  std::multimap<std::string, std::string> accessors_;
+  std::map<std::string, std::string> accessors_;
   kernel_generation_stream & stream_;
   mapping_type const & mapping_;
   std::set<std::string> & already_processed_;
 };
 
-void process(kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors,
+void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
              atidlas::symbolic_expression const & symbolic_expression, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed);
 
-void process(kernel_generation_stream & stream, leaf_t leaf, std::multimap<std::string, std::string> const & accessors,
+void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
                     symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings);
 
 

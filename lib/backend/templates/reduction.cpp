@@ -10,7 +10,7 @@ namespace atidlas
 
 reduction_parameters::reduction_parameters(unsigned int _simd_width,
                      unsigned int _group_size, unsigned int _num_groups,
-                     fetching_policy_type _fetching_policy) : template_base::parameters_type(_simd_width, _group_size, 1, 2), num_groups(_num_groups), fetching_policy(_fetching_policy)
+                     fetching_policy_type _fetching_policy) : base::parameters_type(_simd_width, _group_size, 1, 2), num_groups(_num_groups), fetching_policy(_fetching_policy)
 { }
 
 unsigned int reduction::lmem_usage(symbolic_expressions_container const & symbolic_expressions) const
@@ -91,7 +91,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
   stream.inc_tab();
 
   stream << "unsigned int lid = get_local_id(0);" << std::endl;
-  process(stream, PARENT_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
+  process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
                                                                                               ("array", "#pointer += #start1;"), symbolic_expressions, mappings);
 
   for (unsigned int k = 0; k < N; ++k)
@@ -120,7 +120,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
       std::string i = (simd_width==1)?"i*#stride1":"i";
       //Fetch vector entry
       for (std::vector<mapped_scalar_reduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
-        (*it)->process_recursive(stream, PARENT_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("array",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";")
+        (*it)->process_recursive(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";")
                                                                                          ("matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride1, i*#stride2}];")
                                                                                          ("matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride1,#column*#stride2}];")
                                                                                          ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];"));
@@ -263,12 +263,12 @@ std::vector<std::string> reduction::generate_impl(unsigned int label,  symbolic_
 }
 
 reduction::reduction(reduction::parameters_type const & parameters,
-                                       binding_policy_t binding) : template_base_impl<reduction, reduction_parameters>(parameters, binding)
+                                       binding_policy_t binding) : base_impl<reduction, reduction_parameters>(parameters, binding)
 { }
 
 reduction::reduction(unsigned int simd, unsigned int ls, unsigned int ng,
                                fetching_policy_type fetch, binding_policy_t bind):
-    template_base_impl<reduction, reduction_parameters>(reduction_parameters(simd,ls,ng,fetch), bind)
+    base_impl<reduction, reduction_parameters>(reduction_parameters(simd,ls,ng,fetch), bind)
 {}
 
 std::vector<int_t> reduction::input_sizes(symbolic_expressions_container const & symbolic_expressions)
@@ -343,6 +343,6 @@ void reduction::enqueue(cl::CommandQueue & queue,
     queue.enqueueNDRangeKernel(kernels[k], cl::NullRange, grange[k], lrange[k]);
 }
 
-template class template_base_impl<reduction, reduction_parameters>;
+template class base_impl<reduction, reduction_parameters>;
 
 }

@@ -1,12 +1,12 @@
 #ifndef ATIDLAS_BACKEND_TEMPLATES_REDUCTION_H
 #define ATIDLAS_BACKEND_TEMPLATES_REDUCTION_H
 
-#include "atidlas/backend/templates/template_base.h"
+#include "atidlas/backend/templates/base.h"
 
 namespace atidlas
 {
 
-struct reduction_parameters : public template_base::parameters_type
+struct reduction_parameters : public base::parameters_type
 {
   reduction_parameters(unsigned int _simd_width,
                        unsigned int _group_size, unsigned int _num_groups,
@@ -15,7 +15,7 @@ struct reduction_parameters : public template_base::parameters_type
   fetching_policy_type fetching_policy;
 };
 
-class reduction : public template_base_impl<reduction, reduction_parameters>
+class reduction : public base_impl<reduction, reduction_parameters>
 {
 private:
   unsigned int lmem_usage(symbolic_expressions_container const & symbolic_expressions) const;

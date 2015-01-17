@@ -69,14 +69,14 @@ std::vector<cl::lazy_compiler>& model::init(symbolic_expressions_container const
   return to_init;
 }
 
-model::model(predictors::random_forest const & predictor, std::vector< tools::shared_ptr<template_base> > const & templates, cl::CommandQueue & queue) :
+model::model(predictors::random_forest const & predictor, std::vector< tools::shared_ptr<base> > const & templates, cl::CommandQueue & queue) :
   templates_(templates), predictor_(new predictors::random_forest(predictor)), queue_(queue)
 {}
 
-model::model(std::vector< tools::shared_ptr<template_base> > const & templates, cl::CommandQueue & queue) :  templates_(templates), queue_(queue)
+model::model(std::vector< tools::shared_ptr<base> > const & templates, cl::CommandQueue & queue) :  templates_(templates), queue_(queue)
 {}
 
-model::model(template_base const & tp, cl::CommandQueue & queue) : templates_(1,tp.clone()), queue_(queue)
+model::model(base const & tp, cl::CommandQueue & queue) : templates_(1,tp.clone()), queue_(queue)
 {}
 
 void model::execute(symbolic_expressions_container const & symbolic_expressions, bool bypass_predictor, bool force_recompilation)
@@ -160,24 +160,24 @@ namespace detail
     throw "Unsupported operation";
   }
 
-  static tools::shared_ptr<template_base> create(std::string const & template_name, std::vector<int> const & a)
+  static tools::shared_ptr<base> create(std::string const & template_name, std::vector<int> const & a)
   {
     fetching_policy_type fetch[] = {FETCH_FROM_LOCAL, FETCH_FROM_GLOBAL_STRIDED, FETCH_FROM_GLOBAL_CONTIGUOUS};
     if(template_name=="vector-axpy")
-      return tools::shared_ptr<template_base>(new vaxpy( vaxpy_parameters(a[0], a[1], a[2], fetch[a[3]])));
+      return tools::shared_ptr<base>(new vaxpy( vaxpy_parameters(a[0], a[1], a[2], fetch[a[3]])));
     else if(template_name=="reduction")
-      return tools::shared_ptr<template_base>(new reduction( reduction_parameters(a[0], a[1], a[2], fetch[a[3]])));
+      return tools::shared_ptr<base>(new reduction( reduction_parameters(a[0], a[1], a[2], fetch[a[3]])));
     else if(template_name=="matrix-axpy")
-      return tools::shared_ptr<template_base>(new maxpy( maxpy_parameters(a[0], a[1], a[2], a[3], a[4], fetch[a[5]])));
+      return tools::shared_ptr<base>(new maxpy( maxpy_parameters(a[0], a[1], a[2], a[3], a[4], fetch[a[5]])));
     else if(template_name.find("row-wise-reduction")!=std::string::npos)
     {
-      return tools::shared_ptr<template_base>(new mreduction_rows( mreduction_parameters(a[0], a[1], a[2], a[3], fetch[a[4]])));
+      return tools::shared_ptr<base>(new mreduction_rows( mreduction_parameters(a[0], a[1], a[2], a[3], fetch[a[4]])));
     }
     else if(template_name.find("matrix-product")!=std::string::npos)
     {
       char A_trans = template_name[15];
       char B_trans = template_name[16];
-      return tools::shared_ptr<template_base>(new mproduct( mproduct_parameters(a[0], a[1], a[2], a[3], a[4], a[5], a[6],
+      return tools::shared_ptr<base>(new mproduct( mproduct_parameters(a[0], a[1], a[2], a[3], a[4], a[5], a[6],
                                                                                                 fetch[a[7]], fetch[a[8]], a[9], a[10]), A_trans, B_trans));
     }
     else
@@ -217,7 +217,7 @@ model_map_t import(std::string const & fname, cl::CommandQueue & queue)
           numeric_type dtype = detail::get_dtype(*dt);
 
           // Get profiles
-          std::vector<tools::shared_ptr<template_base> > templates;
+          std::vector<tools::shared_ptr<base> > templates;
           js::Value const & profiles = document[opcstr][dtcstr]["profiles"];
           for (js::SizeType id = 0 ; id < profiles.Size() ; ++id)
             templates.push_back(detail::create(*op, tools::to_int_array<int>(profiles[id])));

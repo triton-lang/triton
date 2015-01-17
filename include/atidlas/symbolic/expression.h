@@ -12,7 +12,7 @@ namespace atidlas
 {
 
 class array;
-class array_repeat_infos;
+class repeat_infos;
 
 /** @brief Optimization enum for grouping operations into unary or binary operations. Just for optimization of lookups. */
 enum operation_node_type_family
@@ -99,11 +99,12 @@ enum operation_node_type
   OPERATOR_ELEMENT_MAX_TYPE,
   OPERATOR_ELEMENT_MIN_TYPE,
 
+  OPERATOR_OUTER_PROD_TYPE,
   OPERATOR_MATRIX_DIAG_TYPE,
   OPERATOR_MATRIX_ROW_TYPE,
   OPERATOR_MATRIX_COLUMN_TYPE,
-  OPERATOR_MATRIX_REPEAT_TYPE,
-  OPERATOR_VECTOR_DIAG_TYPE,
+  OPERATOR_REPEAT_TYPE,
+  OPERATOR_VDIAG_TYPE,
 
   OPERATOR_MATRIX_PRODUCT_NN_TYPE,
   OPERATOR_MATRIX_PRODUCT_TN_TYPE,
@@ -129,7 +130,7 @@ enum symbolic_expression_node_subtype
   INVALID_SUBTYPE = 0,
   VALUE_SCALAR_TYPE,
   DENSE_ARRAY_TYPE,
-  MATRIX_REPEAT_INFOS_TYPE
+  REPEAT_INFOS_TYPE
 };
 
 struct lhs_rhs_element
@@ -138,7 +139,7 @@ struct lhs_rhs_element
   lhs_rhs_element(unsigned int _node_index);
   lhs_rhs_element(atidlas::array const & x);
   lhs_rhs_element(value_scalar const & x);
-  lhs_rhs_element(array_repeat_infos const & x);
+  lhs_rhs_element(repeat_infos const & x);
 
   symbolic_expression_node_type_family   type_family;
   symbolic_expression_node_subtype       subtype;
@@ -149,7 +150,7 @@ struct lhs_rhs_element
     unsigned int        node_index;
     atidlas::array * array;
     values_holder vscalar;
-    array_repeat_infos * repeat_infos;
+    atidlas::repeat_infos * tuple;
   };
 };
 

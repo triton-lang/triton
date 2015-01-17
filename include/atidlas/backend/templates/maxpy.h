@@ -2,12 +2,12 @@
 #define ATIDLAS_BACKEND_TEMPLATES_MAXPY_H
 
 #include <vector>
-#include "atidlas/backend/templates/template_base.h"
+#include "atidlas/backend/templates/base.h"
 
 namespace atidlas
 {
 
-class maxpy_parameters : public template_base::parameters_type
+class maxpy_parameters : public base::parameters_type
 {
 public:
   maxpy_parameters(unsigned int _simd_width,
@@ -20,7 +20,7 @@ public:
   fetching_policy_type fetching_policy;
 };
 
-class maxpy : public template_base_impl<maxpy, maxpy_parameters>
+class maxpy : public base_impl<maxpy, maxpy_parameters>
 {
 private:
   int check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const;
