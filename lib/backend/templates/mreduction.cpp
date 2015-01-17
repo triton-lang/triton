@@ -75,7 +75,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
       for (std::vector<mapped_mreduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
       {
         std::multimap<std::string, std::string> accessors;
-        accessors.insert(std::make_pair("matrix_repeat", "#scalartype #namereg = #pointer[$OFFSET{(r%#tuplearg0)*#stride1, (c%#tuplearg1)*#stride2}];"));
+        accessors.insert(std::make_pair("matrix_repeat", "#scalartype #namereg = $VALUE{(r%#tuplearg0)*#stride1, (c%#tuplearg1)*#stride2};"));
         if(reduction==REDUCE_COLUMNS)
           accessors.insert(std::make_pair("array", data_type + " #namereg = " + vload(simd_width, "c*#stride1", "#pointer + r*#ld")+";"));
         else
@@ -162,7 +162,6 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
 
   stream.dec_tab();
   stream << "}" << std::endl;
-
   return stream.str();
 }
 

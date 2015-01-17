@@ -50,8 +50,8 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
     stream.inc_tab();
     process(stream, PARENT_NODE_TYPE,
                           tools::make_map<std::multimap<std::string, std::string> >("array", data_type + " #namereg = #pointer[i*#stride1];")
-                                                                     ("matrix_row", "#scalartype #namereg = #pointer[$OFFSET{#row*#stride1, i*#stride2}];")
-                                                                     ("matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride1,#column*#stride2}];")
+                                                                     ("matrix_row", "#scalartype #namereg = $VALUE{#row*#stride1, i*#stride2};")
+                                                                     ("matrix_column", "#scalartype #namereg = $VALUE{i*#stride1,#column*#stride2};")
                                                                      ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];")
                                                                      , symbolic_expressions, mappings);
 
@@ -62,9 +62,9 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
                                                                                                 ("scalar", "#namereg"), symbolic_expressions, mappings);
 
     process(stream, LHS_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("array", "#pointer[i*#stride1] = #namereg;")
-                                                                                           ("matrix_row", "#pointer[$OFFSET{#row, i}] = #namereg;")
-                                                                                           ("matrix_column", "#pointer[$OFFSET{i, #column}] = #namereg;")
-                                                                                           ("matrix_diag", "#pointer[#diag_offset<0?$OFFSET{i - #diag_offset, i}:$OFFSET{i, i + #diag_offset}] = #namereg;")
+                                                                                           ("matrix_row", "$VALUE{#row, i} = #namereg;")
+                                                                                           ("matrix_column", "$VALUE{i, #column} = #namereg;")
+                                                                                           ("matrix_diag", "#diag_offset<0?$VALUE{(i - #diag_offset)*#stride1, i*#stride2}:$VALUE{i*#stride1, (i + #diag_offset)*#stride2} = #namereg;")
                                                                                            ,symbolic_expressions, mappings);
 
     stream.dec_tab();

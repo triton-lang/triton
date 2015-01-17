@@ -113,7 +113,7 @@ public:
 };
 
 
-atidlas::array_expression diag(std::size_t, atidlas::value_scalar const &);
+atidlas::array_expression eye(std::size_t, std::size_t, atidlas::numeric_type, cl::Context ctx = cl::default_context());
 
 array_expression zeros(std::size_t N, numeric_type dtype);
 

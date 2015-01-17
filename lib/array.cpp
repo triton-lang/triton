@@ -428,8 +428,14 @@ DEFINE_ELEMENT_UNARY_OPERATOR(OPERATOR_TANH_TYPE, tanh)
 #undef DEFINE_ELEMENT_UNARY_OPERATOR
 //---------------------------------------
 
+
 ///*--- Misc----*/
 ////---------------------------------------
+atidlas::array_expression eye(std::size_t M, std::size_t N, atidlas::numeric_type dtype, cl::Context ctx)
+{
+  return array_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VECTOR_DIAG_TYPE), ctx, dtype, size4(M, N));
+}
+
 inline size4 trans(size4 const & shape)
 { return size4(shape._2, shape._1);}
 

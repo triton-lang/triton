@@ -2,6 +2,8 @@
 #include "atidlas/tools/make_map.hpp"
 #include "atidlas/tools/make_vector.hpp"
 
+#include <iostream>
+
 namespace atidlas
 {
 
@@ -33,7 +35,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
-                                                                          ("array", "#pointer += $OFFSET{#start1, #start2};"), symbolic_expressions, mappings);
+                                                                          ("array", "#pointer = &$VALUE{#start1, #start2};"), symbolic_expressions, mappings);
 
   fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0, "get_global_id(0)", "get_global_size(0)");
   stream << "for(unsigned int i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
@@ -44,9 +46,10 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  process(stream, PARENT_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("array", append_width("#scalartype",simd_width) + " #namereg = #pointer[$OFFSET{i*#stride1,j*#stride2}];")
-                                                                          ("vector_diag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:#pointer[min(i*#stride, j*#stride)];")
-                                                                          ("matrix_repeat", "#scalartype #namereg = #pointer[$OFFSET{(i%#tuplearg0)*#stride1, (j%#tuplearg1)*#stride2}];"), symbolic_expressions, mappings);
+  process(stream, PARENT_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >
+                                                                          ("array", append_width("#scalartype",simd_width) + " #namereg = $VALUE{i*#stride1,j*#stride2};")
+                                                                          ("vector_diag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride1, j*#stride1)};")
+                                                                          ("matrix_repeat", "#scalartype #namereg = $VALUE{(i%#tuplearg0)*#stride1, (j%#tuplearg1)*#stride2};"), symbolic_expressions, mappings);
 
   evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array", "#namereg")
                                                                             ("vector_diag", "#namereg")
@@ -54,7 +57,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
                                                                             ("scalar", "#namereg")
                                                   , symbolic_expressions, mappings);
 
-  process(stream, LHS_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("array", "#pointer[$OFFSET{i*#stride1,j*#stride2}] = #namereg;")
+  process(stream, LHS_NODE_TYPE, tools::make_map<std::multimap<std::string, std::string> >("array", "$VALUE{i*#stride1,j*#stride2} = #namereg;")
                                              , symbolic_expressions, mappings);
 
   stream.dec_tab();

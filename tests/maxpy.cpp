@@ -72,16 +72,17 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
   RUN_TEST("C = tan(A)", cC(i,j) = tan(cA(i,j)), C= tan(A))
   RUN_TEST("C = tanh(A)", cC(i,j) = tanh(cA(i,j)), C= tanh(A))
 
-  RUN_TEST("z = x.*y", cC(i,j) = cA(i,j)*cB(i,j), C= A*B)
-  RUN_TEST("z = x./y", cC(i,j) = cA(i,j)/cB(i,j), C= A/B)
-  RUN_TEST("z = x==y", cC(i,j) = cA(i,j)==cB(i,j), C= A==B)
-  RUN_TEST("z = x>=y", cC(i,j) = cA(i,j)>=cB(i,j), C= A>=B)
-  RUN_TEST("z = x>y", cC(i,j) = cA(i,j)>cB(i,j), C= A>B)
-  RUN_TEST("z = x<=y", cC(i,j) = cA(i,j)<=cB(i,j), C= A<=B)
-  RUN_TEST("z = x<y", cC(i,j) = cA(i,j)<cB(i,j), C= A<B)
-  RUN_TEST("z = x!=y", cC(i,j) = cA(i,j)!=cB(i,j), C= A!=B)
-  RUN_TEST("z = pow(x,y)", cC(i,j) = pow(cA(i,j), cB(i,j)), C= pow(A,B))
+  RUN_TEST("C = A.*B", cC(i,j) = cA(i,j)*cB(i,j), C= A*B)
+  RUN_TEST("C = A./B", cC(i,j) = cA(i,j)/cB(i,j), C= A/B)
+  RUN_TEST("C = A==B", cC(i,j) = cA(i,j)==cB(i,j), C= A==B)
+  RUN_TEST("C = A>=B", cC(i,j) = cA(i,j)>=cB(i,j), C= A>=B)
+  RUN_TEST("C = A>B", cC(i,j) = cA(i,j)>cB(i,j), C= A>B)
+  RUN_TEST("C = A<=B", cC(i,j) = cA(i,j)<=cB(i,j), C= A<=B)
+  RUN_TEST("C = A<B", cC(i,j) = cA(i,j)<cB(i,j), C= A<B)
+  RUN_TEST("C = A!=B", cC(i,j) = cA(i,j)!=cB(i,j), C= A!=B)
+  RUN_TEST("C = pow(A,B)", cC(i,j) = pow(cA(i,j), cB(i,j)), C= pow(A,B))
 
+  RUN_TEST("C = eye(M, N)", cC(i,j) = i==j, C= eye(M, N, C.dtype()))
 #undef RUN_TEST
 
   if(failure_count > 0)

@@ -1,6 +1,8 @@
 #include <set>
 #include <string>
 
+#include <iostream>
+
 #include "atidlas/backend/mapped_object.h"
 #include "atidlas/backend/parse.h"
 #include "atidlas/backend/stream.h"
@@ -12,30 +14,29 @@ namespace atidlas
 {
 
 
-void mapped_object::postprocess(std::string &) const { }
+void mapped_object::preprocess(std::string &) const { }
 
-void mapped_object::replace_offset(std::string & str, MorphBase const & morph)
+void mapped_object::replace_macro(std::string & str, std::string const & macro, MorphBase const & morph)
 {
   size_t pos = 0;
-  while ((pos=str.find("$OFFSET", pos))!=std::string::npos)
+  while ((pos=str.find(macro, pos))!=std::string::npos)
   {
     std::string postprocessed;
     size_t pos_po = str.find('{', pos);
     size_t pos_pe = str.find('}', pos_po);
 
-    if (MorphBase2D const * p = dynamic_cast<MorphBase2D const *>(&morph))
+    size_t pos_comma = str.find(',', pos_po);
+    if(pos_comma > pos_pe)
     {
-      size_t pos_comma = str.find(',', pos_po);
-      std::string i = str.substr(pos_po + 1, pos_comma - pos_po - 1);
-      std::string j = str.substr(pos_comma + 1, pos_pe - pos_comma - 1);
-      postprocessed = (*p)(i, j);
+        std::string i = str.substr(pos_po + 1, pos_pe - pos_po - 1);
+        postprocessed = morph(i);
     }
-    else if (MorphBase1D const * p = dynamic_cast<MorphBase1D const *>(&morph))
+    else
     {
-      std::string i = str.substr(pos_po + 1, pos_pe - pos_po - 1);
-      postprocessed = (*p)(i);
+        std::string i = str.substr(pos_po + 1, pos_comma - pos_po - 1);
+        std::string j = str.substr(pos_comma + 1, pos_pe - pos_comma - 1);
+        postprocessed = morph(i, j);
     }
-
     str.replace(pos, pos_pe + 1 - pos, postprocessed);
     pos = pos_pe;
   }
@@ -71,9 +72,9 @@ std::map<std::string, std::string> const & mapped_object::keywords() const
 std::string mapped_object::process(std::string const & in) const
 {
   std::string res(in);
+  preprocess(res);
   for (std::map<std::string,std::string>::const_iterator it = keywords_.begin(); it != keywords_.end(); ++it)
     tools::find_and_replace(res, it->first, it->second);
-  postprocess(res);
   return res;
 }
 
@@ -137,6 +138,20 @@ mapped_scalar_reduction::mapped_scalar_reduction(std::string const & scalartype,
 mapped_mreduction::mapped_mreduction(std::string const & scalartype, unsigned int id, node_info info) : mapped_reduction(scalartype, id, info, "mreduction") { }
 
 //
+void mapped_host_scalar::preprocess(std::string & str) const
+{
+  struct Morph : public MorphBase
+  {
+    std::string operator()(std::string const &) const
+    { return "#name"; }
+
+    std::string operator()(std::string const &, std::string const &) const
+    { return "#name"; }
+  };
+  replace_macro(str, "$VALUE", Morph());
+}
+
+
 mapped_host_scalar::mapped_host_scalar(std::string const & scalartype, unsigned int id) : mapped_object(scalartype, id, "host_scalar"){ }
 
 //
@@ -157,11 +172,37 @@ mapped_scalar::mapped_scalar(std::string const & scalartype, unsigned int id) : 
 mapped_buffer::mapped_buffer(std::string const & scalartype, unsigned int id, std::string const & type_key) : mapped_handle(scalartype, id, type_key){ }
 
 //
-void mapped_array::postprocess(std::string & str) const
+void mapped_array::preprocess(std::string & str) const
 {
-  struct Morph : public MorphBase2D
+
+  struct MorphValue : public MorphBase
   {
-    Morph(std::string const & _ld, char _type) : ld(_ld), type(_type){ }
+    MorphValue(std::string const & _ld, char _type) : ld(_ld), type(_type){ }
+
+    std::string operator()(std::string const & i) const
+    { return "#pointer[" + i + "]"; }
+
+    std::string operator()(std::string const & i, std::string const & j) const
+    {
+      if(type=='c')
+        return "#pointer["+i+"]";
+      else if(type=='r')
+        return "#pointer["+j+"]";
+      else
+        return "#pointer[(" + i + ") +  (" + j + ") * " + ld + "]";
+    }
+  private:
+    std::string const & ld;
+    char type;
+  };
+
+  struct MorphOffset : public MorphBase
+  {
+    MorphOffset(std::string const & _ld, char _type) : ld(_ld), type(_type){ }
+
+    std::string operator()(std::string const & i) const
+    { return i; }
+
     std::string operator()(std::string const & i, std::string const & j) const
     {
       if(type=='c')
@@ -175,7 +216,9 @@ void mapped_array::postprocess(std::string & str) const
     std::string const & ld;
     char type;
   };
-  replace_offset(str, Morph(ld_, type_));
+
+  replace_macro(str, "$VALUE", MorphValue(ld_, type_));
+  replace_macro(str, "$OFFSET", MorphOffset(ld_, type_));
 }
 
 mapped_array::mapped_array(std::string const & scalartype, unsigned int id, char type) : mapped_buffer(scalartype, id, "array"), type_(type)
@@ -189,18 +232,20 @@ mapped_array::mapped_array(std::string const & scalartype, unsigned int id, char
 }
 
 //
-void mapped_vector_diag::postprocess(std::string &res) const
+void mapped_vector_diag::preprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#diag_offset", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping));
   accessors["array"] = res;
+  accessors["host_scalar"] = res;
   res = atidlas::evaluate(LHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping);
+  std::cout << res << std::endl;
 }
 
-mapped_vector_diag::mapped_vector_diag(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "vector_diag"), binary_leaf(info){ }
+mapped_vector_diag::mapped_vector_diag(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "vector_diag"), binary_leaf(info){}
 
 //
-void mapped_trans::postprocess(std::string &res) const
+void mapped_trans::preprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   accessors["array"] = res;
@@ -210,7 +255,7 @@ void mapped_trans::postprocess(std::string &res) const
 mapped_trans::mapped_trans(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_trans"), binary_leaf(info){ }
 
 //
-void mapped_matrix_row::postprocess(std::string &res) const
+void mapped_matrix_row::preprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#row", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping));
@@ -222,7 +267,7 @@ mapped_matrix_row::mapped_matrix_row(std::string const & scalartype, unsigned in
 { }
 
 //
-void mapped_matrix_column::postprocess(std::string &res) const
+void mapped_matrix_column::preprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#column", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping));
@@ -234,19 +279,25 @@ mapped_matrix_column::mapped_matrix_column(std::string const & scalartype, unsig
 { }
 
 //
-void mapped_matrix_repeat::postprocess(std::string &res) const
+void mapped_matrix_repeat::preprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  accessors["array"] = info_.mapping->at(std::make_pair(info_.root_idx,RHS_NODE_TYPE))->process(res);
+  mapped_object& args = *(info_.mapping->at(std::make_pair(info_.root_idx,RHS_NODE_TYPE)));
+  tools::find_and_replace(res, "#tuplearg1", args.process("#tuplearg1"));
+  tools::find_and_replace(res, "#tuplearg2", args.process("#tuplearg2"));
+  tools::find_and_replace(res, "#tuplearg3", args.process("#tuplearg3"));
+  tools::find_and_replace(res, "#tuplearg4", args.process("#tuplearg4"));
+  accessors["array"] = res;
   res = atidlas::evaluate(LHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping);
 }
 
 mapped_matrix_repeat::mapped_matrix_repeat(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_repeat"), binary_leaf(info)
-{ }
+{
+}
 
 
 //
-void mapped_matrix_diag::postprocess(std::string &res) const
+void mapped_matrix_diag::preprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#diag_offset", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.symbolic_expression, info_.root_idx, *info_.mapping));

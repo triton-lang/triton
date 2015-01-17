@@ -30,7 +30,7 @@ numeric_type template_base::map_functor::get_numeric_type(atidlas::symbolic_expr
 template<class T>
 tools::shared_ptr<mapped_object> template_base::map_functor::binary_leaf(atidlas::symbolic_expression const * symbolic_expression, int_t root_idx, mapping_type const * mapping) const
 {
-  return tools::shared_ptr<mapped_object>(new T(numeric_type_to_string(get_numeric_type(symbolic_expression,root_idx)), binder_.get(NULL), mapped_object::node_info(mapping, symbolic_expression, root_idx)));
+  return tools::shared_ptr<mapped_object>(new T(numeric_type_to_string(symbolic_expression->dtype()), binder_.get(NULL), mapped_object::node_info(mapping, symbolic_expression, root_idx)));
 }
 
 /** @brief Scalar mapping */
