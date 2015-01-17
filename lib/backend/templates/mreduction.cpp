@@ -43,9 +43,9 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
 
   process(stream, PARENT_NODE_TYPE,
                         tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
-                                                        ("array", "#pointer += #start1 + #start2*#ld;")
-                                                        ("array", "#ld *= #nldstride;")
-                                                        ("array", "#pointer += #start1;"), symbolic_expressions, mappings);
+                                                                            ("array1", "#pointer += #start;")
+                                                                            ("array2", "#pointer += #start1 + #start2*#ld; "
+                                                                                       "#ld *= #nldstride; "), symbolic_expressions, mappings);
 
   for (std::vector<mapped_mreduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
     stream << (*it)->process("__local #scalartype #name_buf[" + to_string(lsize0*lsize1) + "];") << std::endl;
@@ -75,11 +75,16 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
       for (std::vector<mapped_mreduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
       {
         std::map<std::string, std::string> accessors;
-        accessors["repeat"] = "#scalartype #namereg = $VALUE{(r%#tuplearg0)*#stride1, (c%#tuplearg1)*#stride2};";
         if(reduction==REDUCE_COLUMNS)
-          accessors["array"] = data_type + " #namereg = " + vload(simd_width, "c*#stride1", "#pointer + r*#ld")+";";
+        {
+          accessors["array2"] = data_type + " #namereg = " + vload(simd_width, "c*#stride1", "#pointer + r*#ld")+";";
+          accessors["repeat"] = "#scalartype #namereg = $VALUE{(c%#tuplearg0)*#stride, (r%#tuplearg1)*#stride};";
+        }
         else
-          accessors["array"] = "#scalartype #namereg = #pointer[r*#stride1 + c*#ld];";
+        {
+          accessors["array2"] = "#scalartype #namereg = #pointer[r*#stride1 + c*#ld];";
+          accessors["repeat"] = "#scalartype #namereg = $VALUE{(r%#tuplearg0)*#stride, (c%#tuplearg1)*#stride};";
+        }
         (*it)->process_recursive(stream, PARENT_NODE_TYPE, accessors);
       }
 
@@ -98,7 +103,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
         for (unsigned int a = 0; a < simd_width; ++a)
         {
           std::map<std::string, std::string> accessors;
-          accessors["array"] = str[a];
+          accessors["array2"] = str[a];
           accessors["repeat"] = "#namereg";
           accessors["scalar"] = "#namereg";
           std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
@@ -151,7 +156,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
   stream.inc_tab();
   std::map<std::string, std::string> accessors;
   accessors["mreduction"] = "#name_buf[lid0*" + lsize1str + "]";
-  accessors["array"] = "#pointer[r*#stride1]";
+  accessors["array1"] = "#pointer[r*#stride]";
   evaluate(stream, PARENT_NODE_TYPE, accessors, symbolic_expressions, mappings);
   stream.dec_tab();
   stream << "}" << std::endl;

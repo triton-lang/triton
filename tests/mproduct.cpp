@@ -68,7 +68,7 @@ void test_impl(T epsilon)
   INIT_MATRIX(K, SUBK, 9, 4, N, SUBN, 6, 2, cB, B);
 
   std::cout << "full..." << std::endl;
-  test_impl(epsilon, cC_matrix, cA_matrix, cB_matrix, C_matrix, A_matrix, AT_matrix, B_matrix, BT_matrix);
+  test_impl(epsilon, cC_full, cA_full, cB_full, C_full, A_full, AT_full, B_full, BT_full);
   std::cout << "slice..." << std::endl;
   test_impl(epsilon, cC_slice, cA_slice, cB_slice, C_slice, A_slice, AT_slice, B_slice, BT_slice);
 }

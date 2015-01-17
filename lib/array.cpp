@@ -26,8 +26,7 @@ array::array(std::vector<T> const & x, cl::Context context):
 
 array::array(array & v, slice const & s1) : dtype_(v.dtype_), shape_(s1.size, 1), start_(v.start_._1 + v.stride_._1*s1.start, 0), stride_(v.stride_._1*s1.stride, 1),
                                             ld_(v.ld_), context_(v.data_.getInfo<CL_MEM_CONTEXT>()), data_(v.data_)
-{
-}
+{}
 
 #define INSTANTIATE(T) template array::array<T>(std::vector<T> const &, cl::Context)
 INSTANTIATE(cl_char);
@@ -122,6 +121,7 @@ array& array::reshape(int_t size1, int_t size2)
 {
   assert(size1*size2==prod(shape_));
   shape_ = size4(size1, size2);
+  ld_ = size1;
   return *this;
 }
 
@@ -591,7 +591,8 @@ namespace detail
     int_t N = A.shape()._2;
     symbolic_expression_node & A_root = const_cast<symbolic_expression_node &>(A.tree()[A.root()]);
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
-    if(A_trans){
+    if(A_trans)
+    {
       array_expression tmp(A, repmat(const_cast<T&>(x), 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), size4(N, M));
       //Remove trans
       tmp.tree()[tmp.root()].lhs = A.tree()[A.root()].lhs;

@@ -35,7 +35,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
-                                                                                        ("array", "#pointer = &$VALUE{#start1, #start2};"), symbolic_expressions, mappings);
+                                                                                        ("array2", "#pointer = &$VALUE{#start1, #start2};"), symbolic_expressions, mappings);
 
   fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0, "get_global_id(0)", "get_global_size(0)");
   stream << "for(unsigned int i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
@@ -47,21 +47,21 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >
-                                                                          ("array", append_width("#scalartype",simd_width) + " #namereg = $VALUE{i*#stride1,j*#stride2};")
+                                                                          ("array2", append_width("#scalartype",simd_width) + " #namereg = $VALUE{i*#stride1,j*#stride2};")
                                                                           ("vdiag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride1, j*#stride1)};")
                                                                           ("repeat", "#scalartype #namereg = $VALUE{(i%#tuplearg0)*#stride1, (j%#tuplearg1)*#stride2};")
-                                                                          ("outer", "#scalartype #namereg = ($LVALUE{i*#stride1})*($RVALUE{j*#stride1});")
+                                                                          ("outer", "#scalartype #namereg = ($LVALUE{i*#stride})*($RVALUE{j*#stride});")
            , symbolic_expressions, mappings);
 
   evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >
-                                                                            ("array", "#namereg")
+                                                                            ("array2", "#namereg")
                                                                             ("vdiag", "#namereg")
                                                                             ("repeat", "#namereg")
                                                                             ("scalar", "#namereg")
                                                                             ("outer", "#namereg")
                                                   , symbolic_expressions, mappings);
 
-  process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array", "$VALUE{i*#stride1,j*#stride2} = #namereg;")
+  process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array2", "$VALUE{i*#stride1,j*#stride2} = #namereg;")
                                              , symbolic_expressions, mappings);
 
   stream.dec_tab();

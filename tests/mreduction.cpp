@@ -10,13 +10,15 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 {
   int failure_count = 0;
 
+
   ad::int_t M = A.shape()._1;
   ad::int_t N = A.shape()._2;
 
-  simple_vector<T> buffer(M);
+  simple_vector<T> bufy(M);
+  simple_vector<T> bufx(N);
 
   T yi = 0, xi = 0;
-#define TEST_OPERATION(NAME, SIZE1, SIZE2, REDUCTION, ASSIGNMENT, GPU_REDUCTION)\
+#define TEST_OPERATION(NAME, SIZE1, SIZE2, REDUCTION, ASSIGNMENT, GPU_REDUCTION, RES, BUF, CRES)\
   std::cout << NAME "..." << std::flush;\
   for(int i = 0 ; i < SIZE1 ; ++i)\
   {\
@@ -27,8 +29,8 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
     ASSIGNMENT;\
   }\
   GPU_REDUCTION;\
-  ad::copy(y, buffer.data());\
-  if(failure_vector(cy, buffer, epsilon))\
+  ad::copy(RES, BUF.data());\
+  if(failure_vector(CRES, BUF, epsilon))\
   {\
     failure_count++;\
     std::cout << " [Failure!]" << std::endl;\
@@ -36,8 +38,8 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   else\
     std::cout << std::endl;
 
-  TEST_OPERATION("y = A.x", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x));
-  TEST_OPERATION("x = A'.y", N, M, xi+=cA(j, i)*cy[j], cx[i] = xi, x = dot(trans(A),y));
+  TEST_OPERATION("y = A.x", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x), y, bufy, cy);
+  TEST_OPERATION("x = A'.y", N, M, xi+=cA(j,i)*cy[j], cx[i] = xi, x = dot(trans(A),y), x, bufx, cx);
 
   if(failure_count>0)
     exit(EXIT_FAILURE);
@@ -55,7 +57,10 @@ void test_impl(T epsilon)
   INIT_VECTOR(M, SUBM, 6, 2, cy, y);
   INIT_VECTOR(N, SUBN, 4, 3, cx, x);
 
-  test_row_wise_reduction(epsilon, cy_vector, cA_matrix, cx_vector, y_vector, A_matrix, x_vector);
+//  std::cout << "full..." << std::endl;
+//  test_row_wise_reduction(epsilon, cy_full, cA_full, cx_full, y_full, A_full, x_full);
+  std::cout << "slice..." << std::endl;
+  test_row_wise_reduction(epsilon, cy_slice, cA_slice, cx_slice, y_slice, A_slice, x_slice);
 }
 
 int main()

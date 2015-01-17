@@ -62,14 +62,14 @@ void test_impl(T epsilon)
   INIT_VECTOR(N, SUBN, 2, 4, cx, x);
   INIT_VECTOR(N, SUBN, 5, 8, cy, y);
 
-#define TEST_OPERATIONS(XTYPE, YTYPE)\
-  test_reduction(epsilon, cx_ ## XTYPE, cy_ ## YTYPE,\
-                                    x_ ## XTYPE, y_ ## YTYPE);\
+#define TEST_OPERATIONS(TYPE)\
+  test_reduction(epsilon, cx_ ## TYPE, cy_ ## TYPE,\
+                                    x_ ## TYPE, y_ ## TYPE);\
 
   std::cout << "> standard..." << std::endl;
-  TEST_OPERATIONS(vector, vector);
+  TEST_OPERATIONS(full);
   std::cout << "> slice..." << std::endl;
-  TEST_OPERATIONS(slice, slice);
+  TEST_OPERATIONS(slice);
 }
 
 int main()

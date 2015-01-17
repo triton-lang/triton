@@ -206,14 +206,6 @@ public:
   mapped_vdiag(std::string const & scalartype, unsigned int id, node_info info);
 };
 
-class mapped_trans: public mapped_object, public binary_leaf
-{
-private:
-  void postprocess(std::string &res) const;
-public:
-  mapped_trans(std::string const & scalartype, unsigned int id, node_info info);
-};
-
 class mapped_matrix_row : public mapped_object, binary_leaf
 {
 private:

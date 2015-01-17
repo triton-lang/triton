@@ -40,8 +40,8 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
 
     process(stream, PARENT_NODE_TYPE,
                           tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
-                                                                     ("array", "#pointer += #start1 + #start2*#ld;")
-                                                                     ("array", "#start1/=" + str_simd_width + ";"), symbolic_expressions, mappings);
+                                                                     ("array1", "#pointer += #start;")
+                                                                     ("array1", "#start1/=" + str_simd_width + ";"), symbolic_expressions, mappings);
 
     std::string init, upper_bound, inc;
     fetching_loop_info(p_.fetching_policy, "N/"+str_simd_width, stream, init, upper_bound, inc, "get_global_id(0)", "get_global_size(0)");
@@ -49,19 +49,19 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
     stream << "{" << std::endl;
     stream.inc_tab();
     process(stream, PARENT_NODE_TYPE,
-                          tools::make_map<std::map<std::string, std::string> >("array", data_type + " #namereg = #pointer[i*#stride1];")
+                          tools::make_map<std::map<std::string, std::string> >("array1", data_type + " #namereg = #pointer[i*#stride];")
                                                                      ("matrix_row", "#scalartype #namereg = $VALUE{#row*#stride1, i*#stride2};")
                                                                      ("matrix_column", "#scalartype #namereg = $VALUE{i*#stride1,#column*#stride2};")
                                                                      ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];")
                                                                      , symbolic_expressions, mappings);
 
-    evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array", "#namereg")
+    evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1", "#namereg")
                                                                                                 ("matrix_row", "#namereg")
                                                                                                 ("matrix_column", "#namereg")
                                                                                                 ("matrix_diag", "#namereg")
                                                                                                 ("scalar", "#namereg"), symbolic_expressions, mappings);
 
-    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array", "#pointer[i*#stride1] = #namereg;")
+    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1", "#pointer[i*#stride] = #namereg;")
                                                                                            ("matrix_row", "$VALUE{#row, i} = #namereg;")
                                                                                            ("matrix_column", "$VALUE{i, #column} = #namereg;")
                                                                                            ("matrix_diag", "#diag_offset<0?$VALUE{(i - #diag_offset)*#stride1, i*#stride2}:$VALUE{i*#stride1, (i + #diag_offset)*#stride2} = #namereg;")

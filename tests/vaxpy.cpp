@@ -97,14 +97,14 @@ void test_impl(T epsilon)
   INIT_VECTOR(N, SUBN, 3, 2, cz, z);
 
 
-#define TEST_OPERATIONS(XTYPE, YTYPE, ZTYPE)\
-  test_element_wise_vector(epsilon, cx_ ## XTYPE, cy_ ## YTYPE, cz_ ## ZTYPE,\
-                                    x_ ## XTYPE, y_ ## YTYPE, z_ ## ZTYPE);\
+#define TEST_OPERATIONS(TYPE)\
+  test_element_wise_vector(epsilon, cx_ ## TYPE, cy_ ## TYPE, cz_ ## TYPE,\
+                                    x_ ## TYPE, y_ ## TYPE, z_ ## TYPE);\
 
   std::cout << "> standard..." << std::endl;
-  TEST_OPERATIONS(vector, vector, vector);
+  TEST_OPERATIONS(full);
   std::cout << "> slice..." << std::endl;
-  TEST_OPERATIONS(slice, slice, slice);
+  TEST_OPERATIONS(slice);
 }
 
 int main()

@@ -154,7 +154,9 @@ bool failure_vector(VecType1 const & x, VecType2 const & y, typename VecType1::v
     if(std::max(x[i], y[i])!=0)
       delta/=std::abs(std::max(x[i], y[i]));
     if(delta > epsilon)
+    {
       return true;
+    }
   }
   return false;
 }

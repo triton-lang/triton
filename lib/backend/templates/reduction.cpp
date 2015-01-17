@@ -92,7 +92,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
 
   stream << "unsigned int lid = get_local_id(0);" << std::endl;
   process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
-                                                                                              ("array", "#pointer += #start1;"), symbolic_expressions, mappings);
+                                                                                              ("array1", "#pointer += #start;"), symbolic_expressions, mappings);
 
   for (unsigned int k = 0; k < N; ++k)
   {
@@ -117,13 +117,13 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
 
     void operator()(kernel_generation_stream & stream, unsigned int simd_width) const
     {
-      std::string i = (simd_width==1)?"i*#stride1":"i";
+      std::string i = (simd_width==1)?"i*#stride":"i";
       //Fetch vector entry
       for (std::vector<mapped_scalar_reduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
-        (*it)->process_recursive(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";")
-                                                                                         ("matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride1, i*#stride2}];")
-                                                                                         ("matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride1,#column*#stride2}];")
-                                                                                         ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];"));
+        (*it)->process_recursive(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";")
+                                                                                         ("matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i*#stride2}];")
+                                                                                         ("matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column*#stride2}];")
+                                                                                         ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i*#stride2}:$OFFSET{i*#stride, (i + #diag_offset)*#stride2}];"));
 
 
       //Update accumulators
@@ -139,7 +139,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
         for (unsigned int a = 0; a < simd_width; ++a)
         {
           std::map<std::string, std::string> accessors;
-          accessors["array"] = str[a];
+          accessors["array1"] = str[a];
           accessors["matrix_row"] = str[a];
           accessors["matrix_column"] = str[a];
           accessors["matrix_diag"] = str[a];
@@ -243,7 +243,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
   std::map<std::string, std::string> accessors;
   accessors["scalar_reduction"] = "#name_buf[0]";
   accessors["scalar"] = "*#pointer";
-  accessors["array"] = "#pointer[#start1]";
+  accessors["array1"] = "#pointer[#start]";
   evaluate(stream, PARENT_NODE_TYPE, accessors, symbolic_expressions, mappings);
   stream.dec_tab();
   stream << "}" << std::endl;
