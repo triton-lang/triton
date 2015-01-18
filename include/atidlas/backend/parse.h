@@ -139,7 +139,7 @@ void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::strin
 class symbolic_expression_representation_functor : public traversal_functor{
 private:
   static void append_id(char * & ptr, unsigned int val);
-  void append(cl::Buffer const * h, numeric_type dtype, char prefix) const;
+  void append(cl_mem h, numeric_type dtype, char prefix) const;
   void append(lhs_rhs_element const & lhs_rhs) const;
 public:
   symbolic_expression_representation_functor(symbolic_binder & binder, char *& ptr);

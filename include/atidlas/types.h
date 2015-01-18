@@ -6,19 +6,28 @@
 namespace atidlas
 {
 
-  typedef int int_t;
+typedef int int_t;
 
-  struct size4
-  {
-    size4(int_t s1, int_t s2 = 1) : _1(s1), _2(s2){ }
-    int_t prod() const { return _1*_2; }
-    bool operator==(size4 const & other) const { return _1==other._1 && _2==other._2; }
-    int_t _1;
-    int_t _2;
-  };
-  inline int_t prod(size4 const & s) { return s._1*s._2; }
-  inline int_t max(size4 const & s) { return std::max(s._1, s._2); }
-  inline int_t min(size4 const & s) { return std::min(s._1, s._2); }
+struct size4
+{
+  size4(int_t s1, int_t s2 = 1) : _1(s1), _2(s2){ }
+  int_t prod() const { return _1*_2; }
+  bool operator==(size4 const & other) const { return _1==other._1 && _2==other._2; }
+  int_t _1;
+  int_t _2;
+};
+inline int_t prod(size4 const & s) { return s._1*s._2; }
+inline int_t max(size4 const & s) { return std::max(s._1, s._2); }
+inline int_t min(size4 const & s) { return std::min(s._1, s._2); }
+
+struct repeat_infos
+{
+  int_t sub1;
+  int_t sub2;
+  int_t rep1;
+  int_t rep2;
+};
+
 
 enum numeric_type
 {

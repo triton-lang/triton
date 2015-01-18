@@ -35,6 +35,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
+                                                                                        ("array1", "#pointer += #start;")
                                                                                         ("array2", "#pointer = &$VALUE{#start1, #start2};"), symbolic_expressions, mappings);
 
   fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0, "get_global_id(0)", "get_global_size(0)");
@@ -72,7 +73,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream.dec_tab();
   stream << "}" << std::endl;
 
-//    std::cout << stream.str() << std::endl;
+//  std::cout << stream.str() << std::endl;
 //    std::cout << symbolic_expressions.data().front() << std::endl;
   return stream.str();
 }

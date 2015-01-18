@@ -419,7 +419,7 @@ void symbolic_expression_representation_functor::append_id(char * & ptr, unsigne
     }
 }
 
-void symbolic_expression_representation_functor::append(cl::Buffer const * h, numeric_type dtype, char prefix) const
+void symbolic_expression_representation_functor::append(cl_mem h, numeric_type dtype, char prefix) const
 {
   *ptr_++=prefix;
   *ptr_++=(char)dtype;
@@ -429,7 +429,7 @@ void symbolic_expression_representation_functor::append(cl::Buffer const * h, nu
 void symbolic_expression_representation_functor::append(lhs_rhs_element const & lhs_rhs) const
 {
   if(lhs_rhs.subtype==DENSE_ARRAY_TYPE)
-    append(&lhs_rhs.array->data(), lhs_rhs.array->dtype(), (char)(((int)'0')+lhs_rhs.array->nshape()));
+    append(lhs_rhs.array.data, lhs_rhs.array.dtype, (char)(((int)'0')+((int)(lhs_rhs.array.shape1>1) + (int)(lhs_rhs.array.shape2>1))));
 }
 
 symbolic_expression_representation_functor::symbolic_expression_representation_functor(symbolic_binder & binder, char *& ptr) : binder_(binder), ptr_(ptr){ }

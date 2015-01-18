@@ -562,11 +562,11 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   }
 
   void mproduct::enqueue_block(cl::CommandQueue & queue, int_t M, int_t N, int_t K,
-                     array const & A, array const & B, array const & C,
+                     array_infos const & A, array_infos const & B, array_infos const & C,
                      value_scalar const & alpha, value_scalar const & beta,
                      std::vector<cl::lazy_compiler> & programs, unsigned int label, int id)
   {
-    if (min(A.shape())==0 || min(B.shape())==0 || min(C.shape())==0)
+    if (A.shape1==0 || A.shape2==0 || B.shape1==0 || B.shape2==0 || C.shape1==0 || C.shape2==0)
       return;
 
     char kname[10];
@@ -594,13 +594,21 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
   }
 
-  array mproduct::create_slice(array & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap)
+  array_infos mproduct::create_slice(array_infos & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap)
   {
-    slice s0(s0_0, s0_1);
-    slice s1(s1_0, s1_1);
+    slice s1(s0_0, s0_1);
+    slice s2(s1_0, s1_1);
     if (swap)
-      std::swap(s0, s1);
-    return array(M, s0, s1);
+      std::swap(s1, s2);
+
+    array_infos result = M;
+    result.shape1 = s1.size;
+    result.shape2 = s2.size;
+    result.start1 = M.start1 + M.stride1*s1.start;
+    result.start2 = M.start2 + M.stride2*s2.start;
+    result.stride1 = s1.stride*M.stride1;
+    result.stride2 = s2.stride*M.stride2;
+    return result;
   }
 
   std::vector<int_t> mproduct::infos(symbolic_expressions_container const & symbolic_expressions,
@@ -618,14 +626,15 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     int_t B_idx = array[root].rhs.node_index;
     B = array[B_idx].rhs;
 
-    int_t M = C.array->shape()._1;
-    int_t N = C.array->shape()._2;
-    int_t K = (A_trans_=='T')?A.array->shape()._1:A.array->shape()._2;
+    int_t M = C.array.shape1;
+    int_t N = C.array.shape2;
+    int_t K = (A_trans_=='T')?A.array.shape1:A.array.shape2;
 
     return tools::make_vector<int_t>() << M << N << K;
   }
 
-  mproduct::mproduct(mproduct_parameters const & parameters, char A_trans, char B_trans) : base_impl<mproduct, mproduct_parameters>(parameters, BIND_ALL_UNIQUE), A_trans_(A_trans), B_trans_(B_trans){ }
+  mproduct::mproduct(mproduct_parameters const & parameters, char A_trans, char B_trans) : base_impl<mproduct, mproduct_parameters>(parameters, BIND_ALL_UNIQUE), A_trans_(A_trans), B_trans_(B_trans)
+  { }
 
   std::vector<int_t> mproduct::input_sizes(symbolic_expressions_container const & symbolic_expressions)
   {
@@ -633,10 +642,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return infos(symbolic_expressions, d0, d1, d2);
   }
 
-  void mproduct::enqueue(cl::CommandQueue & queue,
-               std::vector<cl::lazy_compiler> & programs,
-               unsigned int label,
-               symbolic_expressions_container const & symbolic_expressions)
+  void mproduct::enqueue(cl::CommandQueue & queue, std::vector<cl::lazy_compiler> & programs, unsigned int label, symbolic_expressions_container const & symbolic_expressions)
   {
     using namespace tools;
 
@@ -648,15 +654,15 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     int_t K = MNK[2];
 
 
-    array* pA = A.array;
-    array* pB = B.array;
-    array* pC = C.array;
+    array_infos& pA = A.array;
+    array_infos& pB = B.array;
+    array_infos& pC = C.array;
 
-    int_t ldstrideA = pA->stride()._1;
-    int_t ldstrideB = pB->stride()._1;
-    int_t ldstrideC = pC->stride()._1;
-    int_t ldstartA = pA->start()._1;
-    int_t ldstartB = pB->start()._1;
+    int_t ldstrideA = pA.stride1;
+    int_t ldstrideB = pB.stride1;
+    int_t ldstrideC = pC.stride1;
+    int_t ldstartA = pA.start1;
+    int_t ldstartB = pB.start1;
 
     bool swap_A = (A_trans_=='T');
     bool swap_B = (B_trans_=='T');
@@ -669,13 +675,12 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     value_scalar _1d(cl_double(1));
     value_scalar* _1 = C.dtype==FLOAT_TYPE?&_1f:&_1d;
 
-    if (M < p_.mL || N < p_.nL || K < p_.kL ||
-        ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1 ||
-        (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0)))
+    if (M < p_.mL || N < p_.nL || K < p_.kL || ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
+        || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0)))
     {
-      enqueue_block(queue, M, N, K, create_slice(*pA, 0, M, 0, K, swap_A),
-                    create_slice(*pB, 0, K, 0, N,  swap_B),
-                    create_slice(*pC, 0, M, 0, N, false), *_1, *_0, programs, label, 1);
+      enqueue_block(queue, M, N, K, create_slice(pA, 0, M, 0, K, swap_A),
+                    create_slice(pB, 0, K, 0, N,  swap_B),
+                    create_slice(pC, 0, M, 0, N, false), *_1, *_0, programs, label, 1);
       return;
     }
 
@@ -683,17 +688,17 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     int_t lN = N / p_.nL * p_.nL;
     int_t lK = K / p_.kL * p_.kL;
 
-    enqueue_block(queue,  lM, lN, lK, create_slice(*pA, 0, lM, 0, lK, swap_A), create_slice(*pB, 0, lK, 0, lN, swap_B), create_slice(*pC, 0, lM, 0, lN, false), *_1, *_0, programs, label, 0);
-    enqueue_block(queue,  lM, lN, K - lK, create_slice(*pA, 0, lM, lK, K, swap_A), create_slice(*pB, lK, K, 0, lN, swap_B), create_slice(*pC, 0, lM, 0, lN, false), *_1, *_1, programs, label, 1);
+    enqueue_block(queue,  lM, lN, lK, create_slice(pA, 0, lM, 0, lK, swap_A), create_slice(pB, 0, lK, 0, lN, swap_B), create_slice(pC, 0, lM, 0, lN, false), *_1, *_0, programs, label, 0);
+    enqueue_block(queue,  lM, lN, K - lK, create_slice(pA, 0, lM, lK, K, swap_A), create_slice(pB, lK, K, 0, lN, swap_B), create_slice(pC, 0, lM, 0, lN, false), *_1, *_1, programs, label, 1);
 
-    enqueue_block(queue,  lM, N - lN, lK, create_slice(*pA, 0, lM, 0, lK, swap_A), create_slice(*pB, 0, lK, lN, N, swap_B), create_slice(*pC, 0, lM, lN, N, false), *_1, *_0, programs, label, 1);
-    enqueue_block(queue,  lM, N - lN, K - lK, create_slice(*pA, 0, lM, lK, K, swap_A), create_slice(*pB, lK, K, lN, N, swap_B), create_slice(*pC, 0, lM, lN, N, false), *_1, *_1, programs, label, 1);
+    enqueue_block(queue,  lM, N - lN, lK, create_slice(pA, 0, lM, 0, lK, swap_A), create_slice(pB, 0, lK, lN, N, swap_B), create_slice(pC, 0, lM, lN, N, false), *_1, *_0, programs, label, 1);
+    enqueue_block(queue,  lM, N - lN, K - lK, create_slice(pA, 0, lM, lK, K, swap_A), create_slice(pB, lK, K, lN, N, swap_B), create_slice(pC, 0, lM, lN, N, false), *_1, *_1, programs, label, 1);
 
-    enqueue_block(queue,  M - lM, lN, lK, create_slice(*pA, lM, M, 0, lK, swap_A), create_slice(*pB, 0, lK, 0, lN, swap_B), create_slice(*pC, lM, M, 0, lN, false), *_1, *_0, programs, label, 1);
-    enqueue_block(queue,  M - lM, lN, K - lK, create_slice(*pA, lM, M, lK, K, swap_A), create_slice(*pB, lK, K, 0, lN, swap_B), create_slice(*pC, lM, M, 0, lN, false), *_1, *_1, programs, label, 1);
+    enqueue_block(queue,  M - lM, lN, lK, create_slice(pA, lM, M, 0, lK, swap_A), create_slice(pB, 0, lK, 0, lN, swap_B), create_slice(pC, lM, M, 0, lN, false), *_1, *_0, programs, label, 1);
+    enqueue_block(queue,  M - lM, lN, K - lK, create_slice(pA, lM, M, lK, K, swap_A), create_slice(pB, lK, K, 0, lN, swap_B), create_slice(pC, lM, M, 0, lN, false), *_1, *_1, programs, label, 1);
 
-    enqueue_block(queue,  M - lM, N - lN, lK, create_slice(*pA, lM, M, 0, lK, swap_A), create_slice(*pB, 0, lK, lN, N, swap_B), create_slice(*pC, lM, M, lN, N, false), *_1, *_0, programs, label, 1);
-    enqueue_block(queue,  M - lM, N - lN, K - lK, create_slice(*pA, lM, M, lK, K, swap_A), create_slice(*pB, lK, K, lN, N, swap_B), create_slice(*pC, lM, M, lN, N, false), *_1, *_1, programs, label, 1);
+    enqueue_block(queue,  M - lM, N - lN, lK, create_slice(pA, lM, M, 0, lK, swap_A), create_slice(pB, 0, lK, lN, N, swap_B), create_slice(pC, lM, M, lN, N, false), *_1, *_0, programs, label, 1);
+    enqueue_block(queue,  M - lM, N - lN, K - lK, create_slice(pA, lM, M, lK, K, swap_A), create_slice(pB, lK, K, lN, N, swap_B), create_slice(pC, lM, M, lN, N, false), *_1, *_1, programs, label, 1);
   }
 
   //

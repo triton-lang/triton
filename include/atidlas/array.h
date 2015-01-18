@@ -15,6 +15,7 @@ class scalar;
 
 class array: public obj_base
 {
+  friend array reshape(array const &, int_t, int_t);
 public:
   //1D Constructors
   array(int_t size1, numeric_type dtype, cl::Context context = cl::default_context());
@@ -29,9 +30,10 @@ public:
   array(array & M, slice const & s1, slice const & s2);
 
   //General constructor
-  array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, cl::Context context = cl::default_context());
-  explicit array(array_expression const & proxy);
+  array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, int_t ld, cl::Context context = cl::default_context());
+  array(array_expression const & proxy);
 
+  array(array const &);
   //Getters
   numeric_type dtype() const;
   size4 shape() const;
@@ -45,7 +47,6 @@ public:
 
   //Setters
   array& resize(int_t size1, int_t size2=1);
-  array& reshape(int_t size1, int_t size2=1);
 
   //Numeric operators
   array& operator=(array const &);
@@ -114,8 +115,8 @@ public:
 
 
 atidlas::array_expression eye(std::size_t, std::size_t, atidlas::numeric_type, cl::Context ctx = cl::default_context());
-
 array_expression zeros(std::size_t N, numeric_type dtype);
+array reshape(array const &, int_t, int_t);
 
 //copy
 
@@ -196,13 +197,6 @@ array_expression norm(array const &, unsigned int order = 2);
 array_expression norm(array_expression const &, unsigned int order = 2);
 
 #undef ATIDLAS_DECLARE_UNARY_OPERATOR
-
-struct repeat_infos
-{
-    repeat_infos(size4 const & _sub, size4 const & _rep) : sub(_sub), rep(_rep){ }
-    size4 sub;
-    size4 rep;
-};
 
 array_expression repmat(array const &, int_t const & rep1, int_t const & rep2);
 

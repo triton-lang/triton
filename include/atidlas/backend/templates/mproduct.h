@@ -39,10 +39,10 @@ private:
   std::string generate_impl(unsigned int label, char id, const symbolic_expressions_container &symbolic_expressions, const std::vector<mapping_type> &, bool fallback) const;
   std::vector<std::string> generate_impl(unsigned int label, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const;
   void enqueue_block(cl::CommandQueue & queue, int_t M, int_t N, int_t K,
-                     array const & A, array const & B, array const & C,
+                     array_infos const & A, array_infos const & B, array_infos const & C,
                      value_scalar const & alpha, value_scalar const & beta,
                      std::vector<cl::lazy_compiler> & programs, unsigned int label, int id);
-  array create_slice(array & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap);
+  array_infos create_slice(array_infos & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap);
   std::vector<int_t> infos(symbolic_expressions_container const & symbolic_expressions,
                                    lhs_rhs_element & C, lhs_rhs_element & A, lhs_rhs_element & B);
 public:

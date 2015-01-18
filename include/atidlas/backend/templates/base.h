@@ -79,7 +79,7 @@ protected:
     /** @brief Creates a value scalar mapping */
     tools::shared_ptr<mapped_object> create(numeric_type dtype, values_holder) const;
     /** @brief Creates a vector mapping */
-    tools::shared_ptr<mapped_object> create(array const &) const;
+    tools::shared_ptr<mapped_object> create(array_infos const &) const;
     /** @brief Creates a tuple mapping */
     tools::shared_ptr<mapped_object> create(repeat_infos const &) const;
     /** @brief Creates a mapping */
@@ -101,7 +101,7 @@ protected:
 
     set_arguments_functor(symbolic_binder & binder, unsigned int & current_arg, cl::Kernel & kernel);
     void set_arguments(numeric_type dtype, values_holder const & scal) const;
-    void set_arguments(array const & ) const;
+    void set_arguments(array_infos const & ) const;
     void set_arguments(repeat_infos const & i) const;
     void set_arguments(lhs_rhs_element const & lhs_rhs) const;
 

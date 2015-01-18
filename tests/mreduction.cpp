@@ -57,8 +57,8 @@ void test_impl(T epsilon)
   INIT_VECTOR(M, SUBM, 6, 2, cy, y);
   INIT_VECTOR(N, SUBN, 4, 3, cx, x);
 
-//  std::cout << "full..." << std::endl;
-//  test_row_wise_reduction(epsilon, cy_full, cA_full, cx_full, y_full, A_full, x_full);
+  std::cout << "full..." << std::endl;
+  test_row_wise_reduction(epsilon, cy_full, cA_full, cx_full, y_full, A_full, x_full);
   std::cout << "slice..." << std::endl;
   test_row_wise_reduction(epsilon, cy_slice, cA_slice, cx_slice, y_slice, A_slice, x_slice);
 }

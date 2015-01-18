@@ -133,6 +133,20 @@ enum symbolic_expression_node_subtype
   REPEAT_INFOS_TYPE
 };
 
+struct array_infos
+{
+  numeric_type dtype;
+  cl_mem data;
+  int_t shape1;
+  int_t shape2;
+  int_t start1;
+  int_t start2;
+  int_t stride1;
+  int_t stride2;
+  int_t ld;
+};
+
+void fill(array const & a, array_infos& i);
 struct lhs_rhs_element
 {
   lhs_rhs_element();
@@ -144,14 +158,14 @@ struct lhs_rhs_element
   symbolic_expression_node_type_family   type_family;
   symbolic_expression_node_subtype       subtype;
   numeric_type  dtype;
-
   union
   {
     unsigned int        node_index;
-    atidlas::array * array;
     values_holder vscalar;
-    atidlas::repeat_infos * tuple;
+    repeat_infos  tuple;
+    array_infos array;
   };
+  cl::Buffer memory_;
 };
 
 

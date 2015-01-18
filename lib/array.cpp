@@ -75,9 +75,9 @@ INSTANTIATE(cl_double);
 #undef INSTANTIATE
 
 // General
-array::array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, cl::Context context):
+array::array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, int_t ld, cl::Context context):
   dtype_(dtype), shape_(s1.size, s2.size), start_(s1.start, s2.start), stride_(s1.stride, s2.stride),
-   ld_(shape_._1), context_(context), data_(data)
+   ld_(ld), context_(context), data_(data)
 { }
 
 array::array(array_expression const & proxy) :
@@ -87,6 +87,15 @@ array::array(array_expression const & proxy) :
 {
   *this = proxy;
 }
+
+array::array(array const & other) :
+  dtype_(other.dtype()),
+  shape_(other.shape()), start_(0,0), stride_(1, 1), ld_(shape_._1),
+  context_(other.context()), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
+{
+  *this = other;
+}
+
 
 /*--- Getters ---*/
 numeric_type array::dtype() const
@@ -115,15 +124,6 @@ cl::Buffer const & array::data() const
 
 int_t array::dsize() const
 { return ld_*shape_._2; }
-
-/*--- Setters ---*/
-array& array::reshape(int_t size1, int_t size2)
-{
-  assert(size1*size2==prod(shape_));
-  shape_ = size4(size1, size2);
-  ld_ = size1;
-  return *this;
-}
 
 /*--- Assignment Operators ----*/
 //---------------------------------------
@@ -215,7 +215,7 @@ void copy(cl::Context & ctx, cl::Buffer const & data, T value)
 
 }
 
-scalar::scalar(numeric_type dtype, const cl::Buffer &data, int_t offset, cl::Context context): array(dtype, data, _(offset, offset+1), _(1,1), context)
+scalar::scalar(numeric_type dtype, const cl::Buffer &data, int_t offset, cl::Context context): array(dtype, data, _(offset, offset+1), _(1,1), 1, context)
 { }
 
 scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype(), context)
@@ -457,18 +457,22 @@ array_expression trans(array_expression const & x) \
 
 array_expression repmat(array const & A, int_t const & rep1, int_t const & rep2)
 {
-  static repeat_infos infos(A.shape(), size4(rep1, rep2));
-  infos = repeat_infos(A.shape(), size4(rep1, rep2));
-  size4 newshape = prod(infos.sub, infos.rep);
-  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), A.context(), A.dtype(), newshape);
+  repeat_infos infos;
+  infos.rep1 = rep1;
+  infos.rep2 = rep2;
+  infos.sub1 = A.shape()._1;
+  infos.sub2 = A.shape()._2;
+  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), A.context(), A.dtype(), size4(infos.rep1*infos.sub1, infos.rep2*infos.sub2));
 }
 
 array_expression repmat(array_expression const & A, int_t const & rep1, int_t const & rep2)
 {
-  static repeat_infos infos(A.shape(), size4(rep1, rep2));
-  infos = repeat_infos(A.shape(), size4(rep1, rep2));
-  size4 newshape = prod(infos.sub, infos.rep);
-  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), newshape);
+  repeat_infos infos;
+  infos.rep1 = rep1;
+  infos.rep2 = rep2;
+  infos.sub1 = A.shape()._1;
+  infos.sub2 = A.shape()._2;
+  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), size4(infos.rep1*infos.sub1, infos.rep2*infos.sub2));
 }
 
 ////---------------------------------------
@@ -575,13 +579,12 @@ namespace detail
     return res;
   }
 
-
   template<class T>
   array_expression matvecprod(array const & A, T const & x)
   {
     int_t M = A.shape()._1;
     int_t N = A.shape()._2;
-    return sum(A*repmat(const_cast<T&>(x).reshape(1, N), M, 1), 0);
+    return sum(A*repmat(reshape(x, 1, N), M, 1), 0);
   }
 
   template<class T>
@@ -593,13 +596,13 @@ namespace detail
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
     if(A_trans)
     {
-      array_expression tmp(A, repmat(const_cast<T&>(x), 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), size4(N, M));
+      array_expression tmp(A, repmat(x, 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), size4(N, M));
       //Remove trans
       tmp.tree()[tmp.root()].lhs = A.tree()[A.root()].lhs;
       return sum(tmp, 1);
     }
     else
-      return sum(A*repmat(const_cast<T&>(x).reshape(1, N), M, 1), 0);
+      return sum(A*repmat(reshape(x, 1, N), M, 1), 0);
 
   }
 
@@ -610,6 +613,15 @@ namespace detail
 
 
 }
+
+array reshape(array const & a, int_t size1, int_t size2)
+{
+  array tmp(a);
+  tmp.shape_._1 = size1;
+  tmp.shape_._2 = size2;
+  return tmp;
+}
+
 
 #define DEFINE_DOT(LTYPE, RTYPE) \
 array_expression dot(LTYPE const & x, RTYPE const & y)\

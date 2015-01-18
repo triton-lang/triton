@@ -8,6 +8,19 @@
 namespace atidlas
 {
 
+void fill(array const & a, array_infos& i)
+{
+  i.dtype = a.dtype();
+  i.data = a.data()();
+  i.shape1 = a.shape()._1;
+  i.shape2 = a.shape()._2;
+  i.start1 = a.start()._1;
+  i.start2 = a.start()._2;
+  i.stride1 = a.stride()._1;
+  i.stride2 = a.stride()._2;
+  i.ld = a.ld();
+}
+
 lhs_rhs_element::lhs_rhs_element()
 {
   type_family = INVALID_TYPE_FAMILY;
@@ -28,7 +41,8 @@ lhs_rhs_element::lhs_rhs_element(atidlas::array const & x)
   type_family = ARRAY_TYPE_FAMILY;
   subtype = DENSE_ARRAY_TYPE;
   dtype = x.dtype();
-  array = (atidlas::array*)&x;
+  fill(x, array);
+  memory_ = x.data();
 }
 
 lhs_rhs_element::lhs_rhs_element(atidlas::value_scalar const & x)
@@ -44,7 +58,7 @@ lhs_rhs_element::lhs_rhs_element(atidlas::repeat_infos const & x)
   type_family = INFOS_TYPE_FAMILY;
   subtype = REPEAT_INFOS_TYPE;
   dtype = INVALID_NUMERIC_TYPE;
-  tuple = (atidlas::repeat_infos*)&x;
+  tuple = x;
 }
 
 //
