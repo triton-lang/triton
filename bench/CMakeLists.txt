@@ -2,8 +2,8 @@ set(CMAKE_BUILD_TYPE Release)
 
 find_package(CUDA)
 
-foreach(PROG blas)
-     add_executable(${PROG}-bench ${PROG}.cpp)
+foreach(PROG blas overhead)
+     add_executable(${PROG}-bench  ${PROG}.cpp)
      target_link_libraries(${PROG}-bench atidlas ${OPENCL_LIBRARIES})
      set_target_properties(${PROG}-bench PROPERTIES COMPILE_FLAGS "-Wall -Wextra")
 
