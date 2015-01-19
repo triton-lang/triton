@@ -157,9 +157,9 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
 
     if (p.A_fetching_policy==FETCH_FROM_LOCAL)
-      stream << A.process("__local #scalartype lA[" + to_string(p.kL*(p.mL+1)) + "];");
+      stream << A.process("__local #scalartype lA[" + to_string(p.kL*(p.mL+1)) + "];") << std::endl;
     if (p.B_fetching_policy==FETCH_FROM_LOCAL)
-      stream << B.process("__local #scalartype lB[" + to_string(p.kL*(p.nL+1)) + "];");
+      stream << B.process("__local #scalartype lB[" + to_string(p.kL*(p.nL+1)) + "];") << std::endl;
     stream << std::endl;
 
     stream << "uint gidx = get_group_id(0);" << std::endl;
@@ -193,17 +193,6 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       }
       stream.dec_tab();
 
-      //Bounds checking for A if Local
-      if (p.A_fetching_policy==FETCH_FROM_LOCAL)
-      {
-        unsigned int fetch_size = (A_trans_=='N'?p.local_fetch_0*p.simd_width:p.local_fetch_1);
-        stream << "bool in_bounds_m_local[" << p.mL/fetch_size << "];" << std::endl;
-        stream << "for(unsigned int m = 0; m < " << p.mL/fetch_size << "; m++)" << std::endl;
-        stream.inc_tab();
-        stream << "in_bounds_m_local[m] = gidx*" << p.mL << " + " << (A_trans_=='N'?"idxT":"idyT") << " + m*" << fetch_size << " < M;" << std::endl;
-        stream.dec_tab();
-      }
-
       //Bounds checking for N (in B, C)
       stream << "bool in_bounds_n[" << p.nS << "];" << std::endl;
       stream << "for(unsigned int n = 0; n < " << p.nS << "; n++)" << std::endl;
@@ -219,14 +208,25 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       }
       stream.dec_tab();
 
+      //Bounds checking for A if Local
+      if (p.A_fetching_policy==FETCH_FROM_LOCAL)
+      {
+        unsigned int fetch_size = (A_trans_=='N'?p.local_fetch_0*p.simd_width:p.local_fetch_1);
+        stream << "bool in_bounds_A[" << p.mL/fetch_size << "];" << std::endl;
+        stream << "for(unsigned int m = 0; m < " << p.mL/fetch_size << "; m++)" << std::endl;
+        stream.inc_tab();
+        stream << "in_bounds_A[m] = (gidx*" << p.mL << " + " << (A_trans_=='N'?"idxT":"idyT") << " + m*" << fetch_size << ") < M;" << std::endl;
+        stream.dec_tab();
+      }
+
       //Bounds checking for B if Local
       if (p.B_fetching_policy==FETCH_FROM_LOCAL)
       {
         unsigned int fetch_size = (B_trans_=='T'?p.local_fetch_0*p.simd_width:p.local_fetch_1);
-        stream << "bool in_bounds_n_local[" << p.nL/fetch_size << "];" << std::endl;
+        stream << "bool in_bounds_B[" << p.nL/fetch_size << "];" << std::endl;
         stream << "for(unsigned int n = 0; n < " <<  p.nL/fetch_size << "; n++)" << std::endl;
         stream.inc_tab();
-        stream << "in_bounds_n_local[n] = gidy*" << p.nL << " + " << (B_trans_=='T'?"idxT":"idyT") << " + n*" << fetch_size << " < N;" << std::endl;
+        stream << "in_bounds_B[n] = (gidy*" << p.nL << " + " << (B_trans_=='T'?"idxT":"idyT") << " + n*" << fetch_size << ") < N;" << std::endl;
         stream.dec_tab();
       }
     }
@@ -313,7 +313,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       for(int_t k = 0; k < p.kL; k += p.local_fetch_1)
         for(int_t m = 0; m < p.mL; m += p.local_fetch_0*p.simd_width)
         {
-          string in_bounds = "in_bounds_m_local[" + to_string(m/(p.local_fetch_0*p.simd_width)) + "]";
+          string in_bounds = "in_bounds_A[" + to_string(m/(p.local_fetch_0*p.simd_width)) + "] && (idyT + block_k < K)";
           string to_load = "#pointer[" + to_string(k) + "*#ld + " + to_string(m/p.simd_width) + MUL_STRIDE1 + "]";
           stream << A.process(VSTORE(HANDLE_BOUNDS(in_bounds, to_load), "0", "plA + " + to_string(k*(p.mL+1)+m))) << ";" << std::endl;
         }
@@ -321,7 +321,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       for(int_t k = 0; k < p.mL; k += p.local_fetch_1)
         for(int_t m = 0; m < p.kL; m += p.local_fetch_0*p.simd_width)
         {
-          string in_bounds = "in_bounds_m_local[" + to_string(k/p.local_fetch_1) + "]";
+          string in_bounds = "in_bounds_A[" + to_string(k/p.local_fetch_1) + "]";
           string to_load = "#pointer[" + to_string(k) + "*#ld + " + to_string(m/p.simd_width) + MUL_STRIDE1 + "]";
           stream << A.process(VSTORE(HANDLE_BOUNDS(in_bounds, to_load), "0", "plA + " + to_string(m*(p.mL+1)+k))) << ";" << std::endl;
         }
@@ -330,7 +330,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       for(int_t k = 0; k < p.kL; k += p.local_fetch_1)
         for(int_t n = 0; n < p.nL; n += p.local_fetch_0*p.simd_width)
         {
-          string in_bounds = "in_bounds_n_local[" + to_string(n/(p.local_fetch_0*p.simd_width)) + "]";
+          string in_bounds = "in_bounds_B[" + to_string(n/(p.local_fetch_0*p.simd_width)) + "]";
           string to_load = "#pointer[" + to_string(k) + "*#ld + " + to_string(n/p.simd_width) + MUL_STRIDE1 + "]";
           stream << B.process(VSTORE(HANDLE_BOUNDS(in_bounds, to_load), "0", "plB + " + to_string(k*(p.nL+1)+n))) << ";" << std::endl;
         }
@@ -338,7 +338,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       for(int_t k = 0; k < p.nL; k += p.local_fetch_1)
         for(int_t n = 0; n < p.kL; n += p.local_fetch_0*p.simd_width)
         {
-          string in_bounds = "in_bounds_n_local[" + to_string(k/p.local_fetch_1) + "]";
+          string in_bounds = "in_bounds_B[" + to_string(k/p.local_fetch_1) + "]";
           string to_load = "#pointer[" + to_string(k) + "*#ld + " + to_string(n/p.simd_width) + MUL_STRIDE1 + "]";
           stream << B.process(VSTORE(HANDLE_BOUNDS(in_bounds, to_load), "0", "plB + " + to_string(n*(p.nL+1)+k))) << ";" << std::endl;
         }
@@ -545,6 +545,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     stream.dec_tab();
     stream << "}" << std::endl;
 
+//    std::cout << stream.str() << std::endl;
     return stream.str();
 
 #undef MUL_STRIDE1
