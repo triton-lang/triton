@@ -162,23 +162,23 @@ bool failure_vector(VecType1 const & x, VecType2 const & y, typename VecType1::v
 }
 
 
-#define INIT_VECTOR(N, SUBN, START, STRIDE, CPREFIX, PREFIX) \
+#define INIT_VECTOR(N, SUBN, START, STRIDE, CPREFIX, PREFIX, CTX) \
     simple_vector<T> CPREFIX ## _full(N);\
     simple_vector_slice<T> CPREFIX ## _slice(CPREFIX ## _full, START, START + STRIDE*SUBN, STRIDE);\
     init_rand(CPREFIX ## _full);\
-    atidlas::array PREFIX ## _full(CPREFIX ## _full.data());\
+    atidlas::array PREFIX ## _full(CPREFIX ## _full.data(), CTX);\
     atidlas::array PREFIX ## _slice = PREFIX ## _full[atidlas::_(START, START + STRIDE*SUBN, STRIDE)];
 
-#define INIT_MATRIX(M, SUBM, START1, STRIDE1, N, SUBN, START2, STRIDE2, CPREFIX, PREFIX) \
+#define INIT_MATRIX(M, SUBM, START1, STRIDE1, N, SUBN, START2, STRIDE2, CPREFIX, PREFIX, CTX) \
     simple_matrix<T> CPREFIX ## _full(M, N);\
     simple_matrix_slice<T> CPREFIX ## _slice(CPREFIX ## _full, START1, START1 + STRIDE1*SUBM, STRIDE1,\
                                                                  START2, START2 + STRIDE2*SUBN, STRIDE2);\
     init_rand(CPREFIX ## _full);\
-    atidlas::array PREFIX ## _full(M, N, CPREFIX ## _full.data());\
+    atidlas::array PREFIX ## _full(M, N, CPREFIX ## _full.data(), CTX);\
     atidlas::array PREFIX ## _slice(PREFIX ## _full(atidlas::_(START1, START1 + STRIDE1*SUBM, STRIDE1),\
                                                         atidlas::_(START2, START2 + STRIDE2*SUBN, STRIDE2)));\
     simple_matrix<T> CPREFIX ## T_full = simple_trans(CPREFIX ## _full);\
-    atidlas::array PREFIX ## T_full(N, M, CPREFIX ## T_full.data());\
+    atidlas::array PREFIX ## T_full(N, M, CPREFIX ## T_full.data(), CTX);\
     atidlas::array PREFIX ## T_slice(PREFIX ## T_full(atidlas::_(START2, START2 + STRIDE2*SUBN, STRIDE2),\
                                                               atidlas::_(START1, START1 + STRIDE1*SUBM, STRIDE1)));\
 

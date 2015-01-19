@@ -13,12 +13,13 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   using namespace std;
 
   int failure_count = 0;
+  ad::cl::Context const & ctx = z.context();
 
   int_t N = cz.size();
 
   T aa = 3.12, bb=3.5;
   atidlas::value_scalar a(aa), b(bb);
-  atidlas::scalar da(a), db(b);
+  atidlas::scalar da(a, ctx), db(b, ctx);
 
   simple_vector<T> buffer(N);
 #define RUN_TEST_VECTOR_AXPY(NAME, CPU_LOOP, GPU_EXPR) \
@@ -84,7 +85,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 }
 
 template<typename T>
-void test_impl(T epsilon)
+void test_impl(T epsilon, ad::cl::Context const & ctx)
 {
   using atidlas::_;
 
@@ -92,9 +93,9 @@ void test_impl(T epsilon)
   int_t SUBN = 531;
 
 
-  INIT_VECTOR(N, SUBN, 5, 3, cx, x);
-  INIT_VECTOR(N, SUBN, 7, 8, cy, y);
-  INIT_VECTOR(N, SUBN, 3, 2, cz, z);
+  INIT_VECTOR(N, SUBN, 5, 3, cx, x, ctx);
+  INIT_VECTOR(N, SUBN, 7, 8, cy, y, ctx);
+  INIT_VECTOR(N, SUBN, 3, 2, cz, z, ctx);
 
 
 #define TEST_OPERATIONS(TYPE)\
@@ -109,12 +110,16 @@ void test_impl(T epsilon)
 
 int main()
 {
-  std::cout << ">> float" << std::endl;
-  test_impl<float>(1e-4);
-  std::cout << ">> double" << std::endl;
-  test_impl<double>(1e-9);
-  std::cout << "---" << std::endl;
-  std::cout << "Passed" << std::endl;
-
+  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  {
+    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    std::cout << "---" << std::endl;
+    std::cout << ">> float" << std::endl;
+    test_impl<float>(1e-4, it->first);
+    std::cout << ">> double" << std::endl;
+    test_impl<double>(1e-9, it->first);
+    std::cout << "---" << std::endl;
+  }
   return EXIT_SUCCESS;
 }

@@ -13,13 +13,15 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
   using namespace std;
 
   int failure_count = 0;
+  ad::cl::Context const & ctx = C.context();
 
   int_t M = cC.size1();
   int_t N = cC.size2();
 
+
   T aa = 3.12, bb=3.5;
   atidlas::value_scalar a(aa), b(bb);
-  atidlas::scalar da(a), db(b);
+  atidlas::scalar da(a, ctx), db(b, ctx);
 
   simple_vector<T> buffer(M*N);
 #define RUN_TEST(NAME, CPU_LOOP, GPU_EXPR) \
@@ -82,7 +84,7 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
   RUN_TEST("C = A!=B", cC(i,j) = cA(i,j)!=cB(i,j), C= A!=B)
   RUN_TEST("C = pow(A,B)", cC(i,j) = pow(cA(i,j), cB(i,j)), C= pow(A,B))
 
-  RUN_TEST("C = eye(M, N)", cC(i,j) = i==j, C= eye(M, N, C.dtype()))
+  RUN_TEST("C = eye(M, N)", cC(i,j) = i==j, C= eye(M, N, C.dtype(), C.context()))
   RUN_TEST("C = outer(x, y)", cC(i,j) = cx[i]*cy[j], C= outer(x,y))
 
 #undef RUN_TEST
@@ -92,7 +94,7 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
 }
 
 template<typename T>
-void test_impl(T epsilon)
+void test_impl(T epsilon, ad::cl::Context const & ctx)
 {
   using atidlas::_;
 
@@ -101,11 +103,11 @@ void test_impl(T epsilon)
   int_t SUBM = 184;
   int_t SUBN = 145;
 
-  INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cA, A);
-  INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cB, B);
-  INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cC, C);
-  INIT_VECTOR(M, SUBM, 5, 3, cx, x);
-  INIT_VECTOR(N, SUBN, 7, 2, cy, y);
+  INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cA, A, ctx);
+  INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cB, B, ctx);
+  INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cC, C, ctx);
+  INIT_VECTOR(M, SUBM, 5, 3, cx, x, ctx);
+  INIT_VECTOR(N, SUBN, 7, 2, cy, y, ctx);
 #define TEST_OPERATIONS(TYPE)\
   test(epsilon, cA_ ## TYPE, cB_ ## TYPE, cC_ ## TYPE, cx_ ## TYPE, cy_ ## TYPE, A_ ## TYPE, B_ ## TYPE, C_ ## TYPE, x_ ## TYPE, y_ ## TYPE);\
 
@@ -117,12 +119,16 @@ void test_impl(T epsilon)
 
 int main()
 {
-  std::cout << ">> float" << std::endl;
-  test_impl<float>(1e-4);
-  std::cout << ">> double" << std::endl;
-  test_impl<double>(1e-9);
-  std::cout << "---" << std::endl;
-  std::cout << "Passed" << std::endl;
-
+  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  {
+    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    std::cout << "---" << std::endl;
+    std::cout << ">> float" << std::endl;
+    test_impl<float>(1e-4, it->first);
+    std::cout << ">> double" << std::endl;
+    test_impl<double>(1e-9, it->first);
+    std::cout << "---" << std::endl;
+  }
   return EXIT_SUCCESS;
 }

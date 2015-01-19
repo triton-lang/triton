@@ -46,16 +46,16 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 }
 
 template<typename T>
-void test_impl(T epsilon)
+void test_impl(T epsilon, ad::cl::Context const & ctx)
 {
   int_t M = 1324;
   int_t N = 1143;
   int_t SUBM = 184;
   int_t SUBN = 145;
 
-  INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cA, A);
-  INIT_VECTOR(M, SUBM, 6, 2, cy, y);
-  INIT_VECTOR(N, SUBN, 4, 3, cx, x);
+  INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cA, A, ctx);
+  INIT_VECTOR(M, SUBM, 6, 2, cy, y, ctx);
+  INIT_VECTOR(N, SUBN, 4, 3, cx, x, ctx);
 
   std::cout << "full..." << std::endl;
   test_row_wise_reduction(epsilon, cy_full, cA_full, cx_full, y_full, A_full, x_full);
@@ -65,12 +65,16 @@ void test_impl(T epsilon)
 
 int main()
 {
-  std::cout << ">>> float" << std::endl;
-  test_impl<float>(1e-4);
-  std::cout << ">>> double" << std::endl;
-  test_impl<double>(1e-9);
-  std::cout << "---" << std::endl;
-  std::cout << "Passed" << std::endl;
-
+  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  {
+    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    std::cout << "---" << std::endl;
+    std::cout << ">> float" << std::endl;
+    test_impl<float>(1e-4, it->first);
+    std::cout << ">> double" << std::endl;
+    test_impl<double>(1e-9, it->first);
+    std::cout << "---" << std::endl;
+  }
   return EXIT_SUCCESS;
 }

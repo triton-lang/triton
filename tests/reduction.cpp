@@ -12,7 +12,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
                                 ad::array & x, ad::array & y)
 {
   using namespace std;
-
+  ad::cl::Context const & ctx = x.context();
   int_t N = cx.size();
   unsigned int failure_count = 0;
 
@@ -20,7 +20,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
 
   T cs = 0;
   T tmp = 0;
-  atidlas::scalar ds(dtype);
+  atidlas::scalar ds(dtype, ctx);
 
 #define RUN_TEST(NAME, CPU_REDUCTION, INIT, ASSIGNMENT, GPU_REDUCTION) \
   cout << NAME "..." << flush;\
@@ -52,15 +52,15 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
 }
 
 template<typename T>
-void test_impl(T epsilon)
+void test_impl(T epsilon, ad::cl::Context const & ctx)
 {
   using atidlas::_;
 
   int_t N = 24378;
   int_t SUBN = 531;
 
-  INIT_VECTOR(N, SUBN, 2, 4, cx, x);
-  INIT_VECTOR(N, SUBN, 5, 8, cy, y);
+  INIT_VECTOR(N, SUBN, 2, 4, cx, x, ctx);
+  INIT_VECTOR(N, SUBN, 5, 8, cy, y, ctx);
 
 #define TEST_OPERATIONS(TYPE)\
   test_reduction(epsilon, cx_ ## TYPE, cy_ ## TYPE,\
@@ -74,12 +74,16 @@ void test_impl(T epsilon)
 
 int main()
 {
-  std::cout << ">> float" << std::endl;
-  test_impl<float>(1e-4);
-  std::cout << ">> double" << std::endl;
-  test_impl<double>(1e-9);
-  std::cout << "---" << std::endl;
-  std::cout << "Passed" << std::endl;
-
+  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  {
+    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    std::cout << "---" << std::endl;
+    std::cout << ">> float" << std::endl;
+    test_impl<float>(1e-4, it->first);
+    std::cout << ">> double" << std::endl;
+    test_impl<double>(1e-9, it->first);
+    std::cout << "---" << std::endl;
+  }
   return EXIT_SUCCESS;
 }

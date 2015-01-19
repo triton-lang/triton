@@ -53,7 +53,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 }
 
 template<typename T>
-void test_impl(T epsilon)
+void test_impl(T epsilon, ad::cl::Context const & ctx)
 {
   int_t M = 412;
   int_t N = 245;
@@ -63,9 +63,9 @@ void test_impl(T epsilon)
   int_t SUBN = 74;
   int_t SUBK = 83;
 
-  INIT_MATRIX(M, SUBM, 5, 2, N, SUBN, 7, 3, cC, C);
-  INIT_MATRIX(M, SUBM, 8, 2, K, SUBK, 4, 3, cA, A);
-  INIT_MATRIX(K, SUBK, 9, 4, N, SUBN, 6, 2, cB, B);
+  INIT_MATRIX(M, SUBM, 5, 2, N, SUBN, 7, 3, cC, C, ctx);
+  INIT_MATRIX(M, SUBM, 8, 2, K, SUBK, 4, 3, cA, A, ctx);
+  INIT_MATRIX(K, SUBK, 9, 4, N, SUBN, 6, 2, cB, B, ctx);
 
   std::cout << "full..." << std::endl;
   test_impl(epsilon, cC_full, cA_full, cB_full, C_full, A_full, AT_full, B_full, BT_full);
@@ -75,12 +75,16 @@ void test_impl(T epsilon)
 
 int main()
 {
-  std::cout << ">>> float" << std::endl;
-  test_impl<float>(1e-4);
-  std::cout << ">>> double" << std::endl;
-  test_impl<double>(1e-9);
-  std::cout << "---" << std::endl;
-  std::cout << "Passed" << std::endl;
-
+  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  {
+    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    std::cout << "---" << std::endl;
+    std::cout << ">> float" << std::endl;
+    test_impl<float>(1e-4, it->first);
+    std::cout << ">> double" << std::endl;
+    test_impl<double>(1e-9, it->first);
+    std::cout << "---" << std::endl;
+  }
   return EXIT_SUCCESS;
 }
