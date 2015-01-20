@@ -13,7 +13,8 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   using namespace std;
 
   int failure_count = 0;
-  ad::cl::Context const & ctx = z.context();
+  ad::numeric_type dtype = x.dtype();
+  ad::cl::Context const & ctx = x.context();
 
   int_t N = cz.size();
 
@@ -37,6 +38,8 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   else\
     std::cout << std::endl;\
   }
+
+  RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, ctx))
 
   RUN_TEST_VECTOR_AXPY("z = x", cz[i] = cx[i], z = x)
   RUN_TEST_VECTOR_AXPY("z = -x", cz[i] = -cx[i], z = -x)

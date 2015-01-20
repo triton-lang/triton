@@ -26,7 +26,7 @@ inline std::string to_string(lhs_rhs_element const & e)
   {
     return"COMPOSITE [" + tools::to_string(e.node_index) + "]";
   }
-  return tools::to_string(e.dtype);
+  return tools::to_string(e.subtype);
 }
 
 inline std::ostream & operator<<(std::ostream & os, symbolic_expression_node const & s_node)

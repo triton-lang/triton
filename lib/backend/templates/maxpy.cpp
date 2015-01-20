@@ -1,7 +1,7 @@
 #include "atidlas/backend/templates/maxpy.h"
 #include "atidlas/tools/make_map.hpp"
 #include "atidlas/tools/make_vector.hpp"
-
+#include "atidlas/symbolic/io.h"
 #include <iostream>
 
 namespace atidlas
@@ -74,7 +74,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream << "}" << std::endl;
 
 //  std::cout << stream.str() << std::endl;
-//    std::cout << symbolic_expressions.data().front() << std::endl;
+//    std::cout << to_string(*symbolic_expressions.data().front()) << std::endl;
   return stream.str();
 }
 

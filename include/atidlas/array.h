@@ -114,7 +114,7 @@ public:
 
 
 atidlas::array_expression eye(std::size_t, std::size_t, atidlas::numeric_type, cl::Context ctx = cl::default_context());
-array_expression zeros(std::size_t N, numeric_type dtype);
+array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, cl::Context ctx = cl::default_context());
 array reshape(array const &, int_t, int_t);
 
 //copy
@@ -153,8 +153,8 @@ ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(operator <=)
 ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(operator ==)
 ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(operator !=)
 
-ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(max)
-ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(min)
+ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(maximum)
+ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(minimum)
 ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(pow)
 
 ATIDLAS_DECLARE_ELEMENT_BINARY_OPERATOR(dot)
