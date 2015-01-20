@@ -168,9 +168,6 @@ mapped_handle::mapped_handle(std::string const & scalartype, unsigned int id, st
 { register_attribute(pointer_, "#pointer", name_ + "_pointer"); }
 
 //
-mapped_scalar::mapped_scalar(std::string const & scalartype, unsigned int id) : mapped_handle(scalartype, id, "scalar") { }
-
-//
 mapped_buffer::mapped_buffer(std::string const & scalartype, unsigned int id, std::string const & type_key) : mapped_handle(scalartype, id, type_key){ }
 
 //
@@ -223,9 +220,13 @@ void mapped_array::preprocess(std::string & str) const
   replace_macro(str, "$OFFSET", MorphOffset(ld_, type_));
 }
 
-mapped_array::mapped_array(std::string const & scalartype, unsigned int id, char type) : mapped_buffer(scalartype, id, type=='m'?"array2":"array1"), type_(type)
+mapped_array::mapped_array(std::string const & scalartype, unsigned int id, char type) : mapped_buffer(scalartype, id, type=='s'?"array0":(type=='m'?"array2":"array1")), type_(type)
 {
-  if(type_=='m')
+  if(type_ == 's')
+  {
+    register_attribute(start1_, "#start", name_ + "_start");
+  }
+  else if(type_=='m')
   {
     register_attribute(start1_, "#start1", name_ + "_start1");
     register_attribute(start2_, "#start2", name_ + "_start2");

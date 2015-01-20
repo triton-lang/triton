@@ -39,6 +39,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   }
 
   RUN_TEST_VECTOR_AXPY("z = x", cz[i] = cx[i], z = x)
+  RUN_TEST_VECTOR_AXPY("z = -x", cz[i] = -cx[i], z = -x)
 
   RUN_TEST_VECTOR_AXPY("z = x + y", cz[i] = cx[i] + cy[i], z = x + y)
   RUN_TEST_VECTOR_AXPY("z = x - y", cz[i] = cx[i] - cy[i], z = x - y)

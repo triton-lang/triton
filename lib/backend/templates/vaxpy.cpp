@@ -39,7 +39,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
     stream.inc_tab();
 
     process(stream, PARENT_NODE_TYPE,
-                          tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
+                          tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
                                                                      ("array1", "#pointer += #start;")
                                                                      ("array1", "#start1/=" + str_simd_width + ";"), symbolic_expressions, mappings);
 
@@ -59,7 +59,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
                                                                                                 ("matrix_row", "#namereg")
                                                                                                 ("matrix_column", "#namereg")
                                                                                                 ("matrix_diag", "#namereg")
-                                                                                                ("scalar", "#namereg"), symbolic_expressions, mappings);
+                                                                                                ("array0", "#namereg"), symbolic_expressions, mappings);
 
     process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1", "#pointer[i*#stride] = #namereg;")
                                                                                            ("matrix_row", "$VALUE{#row, i} = #namereg;")
@@ -73,7 +73,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
     stream << "if(get_global_id(0)==0)" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
-    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("scalar", "*#pointer = #namereg;"), symbolic_expressions, mappings);
+    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#pointer[#start] = #namereg;"), symbolic_expressions, mappings);
     stream.dec_tab();
     stream << "}" << std::endl;
 

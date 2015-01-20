@@ -2,6 +2,7 @@
 #include <iostream>
 #include "atidlas/array.h"
 #include "atidlas/value_scalar.h"
+#include "atidlas/exception/unknown_datatype.h"
 
 namespace atidlas
 {
@@ -10,17 +11,17 @@ void value_scalar::init(scalar const & s)
 {
   switch(dtype_)
   {
-    case CHAR_TYPE: values_.int8 = s;
-    case UCHAR_TYPE: values_.uint8 = s;
-    case SHORT_TYPE: values_.int16 = s;
-    case USHORT_TYPE: values_.uint16 = s;
-    case INT_TYPE: values_.int32 = s;
-    case UINT_TYPE: values_.uint32 = s;
-    case LONG_TYPE: values_.int64 = s;
-    case ULONG_TYPE: values_.uint64 = s;
-    case FLOAT_TYPE: values_.float32 = s;
-    case DOUBLE_TYPE: values_.float64 = s;
-    default: throw;
+    case CHAR_TYPE: values_.int8 = s; break;
+    case UCHAR_TYPE: values_.uint8 = s; break;
+    case SHORT_TYPE: values_.int16 = s; break;
+    case USHORT_TYPE: values_.uint16 = s; break;
+    case INT_TYPE: values_.int32 = s; break;
+    case UINT_TYPE: values_.uint32 = s; break;
+    case LONG_TYPE: values_.int64 = s; break;
+    case ULONG_TYPE: values_.uint64 = s; break;
+    case FLOAT_TYPE: values_.float32 = s; break;
+    case DOUBLE_TYPE: values_.float64 = s; break;
+    default: throw unknown_datatype(dtype_);
   }
 }
 
@@ -61,11 +62,12 @@ T value_scalar::cast() const
 //    case HALF_TYPE: return values_.float16;
     case FLOAT_TYPE: return values_.float32;
     case DOUBLE_TYPE: return values_.float64;
-    default: throw; //unreachable
+    default: throw unknown_datatype(dtype_); //unreachable
   }
 }
 
 #define INSTANTIATE(type) value_scalar::operator type() const { return cast<type>(); }
+  INSTANTIATE(bool)
   INSTANTIATE(cl_char)
   INSTANTIATE(cl_uchar)
   INSTANTIATE(cl_short)
@@ -105,7 +107,7 @@ value_scalar NAME(LDEC, RDEC)\
   case ULONG_TYPE: return VALUE(cl_ulong, OP, x, y);\
   case FLOAT_TYPE: return VALUE(cl_float, OP, x, y);\
   case DOUBLE_TYPE: return VALUE(cl_double, OP, x, y);\
-  default: throw;\
+  default: throw unknown_datatype(x.dtype());\
   }\
 }
 
@@ -168,7 +170,7 @@ std::ostream & operator<<(std::ostream & os, value_scalar const & s)
     case ULONG_TYPE: return os << static_cast<cl_ulong>(s);
     case FLOAT_TYPE: return os << static_cast<cl_float>(s);
     case DOUBLE_TYPE: return os << static_cast<cl_double>(s);
-    default: throw "";
+    default: throw unknown_datatype(s.dtype());;
   }
 }
 

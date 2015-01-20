@@ -2,6 +2,7 @@
 
 #include "atidlas/array.h"
 #include "atidlas/cl/cl.hpp"
+#include "atidlas/exception/unknown_datatype.h"
 #include "atidlas/model/model.h"
 #include "atidlas/symbolic/execute.h"
 
@@ -138,11 +139,11 @@ array & array::operator=(array const & rhs)
 
 array & array::operator=(array_expression const & rhs)
 {
-    array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), shape_);
-    cl::CommandQueue & queue = cl::queues[context_].front();
-    model_map_t & mmap = atidlas::get_model_map(queue);
-    execute(expression, mmap);
-    return *this;
+  array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), shape_);
+  cl::CommandQueue & queue = cl::queues[context_].front();
+  model_map_t & mmap = atidlas::get_model_map(queue);
+  execute(expression, mmap);
+  return *this;
 }
 
 template<class T>
@@ -166,7 +167,29 @@ INSTANTIATE(cl_ulong);
 INSTANTIATE(cl_float);
 INSTANTIATE(cl_double);
 #undef INSTANTIATE
+
+array_expression array::operator-()
+{ return array_expression(*this, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
+
 //
+array & array::operator+=(value_scalar const & rhs)
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype_, shape_); }
+
+array & array::operator+=(array const & rhs)
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype_, shape_); }
+
+array & array::operator+=(array_expression const & rhs)
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), shape_); }
+//----
+array & array::operator-=(value_scalar const & rhs)
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
+
+array & array::operator-=(array const & rhs)
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
+
+array & array::operator-=(array_expression const & rhs)
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), shape_); }
+//----
 array & array::operator*=(value_scalar const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), context_, dtype_, shape_); }
 
@@ -175,7 +198,7 @@ array & array::operator*=(array const & rhs)
 
 array & array::operator*=(array_expression const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), shape_); }
-
+//----
 array & array::operator/=(value_scalar const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), context_, dtype_, shape_); }
 
@@ -192,6 +215,13 @@ scalar array::operator [](int_t idx)
   assert(nshape()==1);
   return scalar(dtype_, data_, idx, context_);
 }
+
+const scalar array::operator [](int_t idx) const
+{
+  assert(nshape()==1);
+  return scalar(dtype_, data_, idx, context_);
+}
+
 
 array array::operator[](slice const & e1)
 {
@@ -215,7 +245,7 @@ void copy(cl::Context & ctx, cl::Buffer const & data, T value)
 
 }
 
-scalar::scalar(numeric_type dtype, const cl::Buffer &data, int_t offset, cl::Context context): array(dtype, data, _(offset, offset+1), _(1,1), 1, context)
+scalar::scalar(numeric_type dtype, const cl::Buffer &data, int_t offset, cl::Context context): array(dtype, data, _(offset, offset+1), _(1,2), 1, context)
 { }
 
 scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype(), context)
@@ -232,12 +262,13 @@ scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype()
     case ULONG_TYPE: detail::copy(context_, data_, (cl_ulong)value); break;
     case FLOAT_TYPE: detail::copy(context_, data_, (cl_float)value); break;
     case DOUBLE_TYPE: detail::copy(context_, data_, (cl_double)value); break;
-    default: throw "unrecognized datatype";
+    default: throw unknown_datatype(dtype_);
   }
 }
 
 
-scalar::scalar(numeric_type dtype, cl::Context context) : array(1, dtype, context){ }
+scalar::scalar(numeric_type dtype, cl::Context context) : array(1, dtype, context)
+{ }
 
 scalar::scalar(array_expression const & proxy) : array(proxy){ }
 
@@ -263,7 +294,7 @@ case DTYPE:\
     HANDLE_CASE(ULONG_TYPE, uint64);
     HANDLE_CASE(FLOAT_TYPE, float32);
     HANDLE_CASE(DOUBLE_TYPE, float64);
-    default: throw "Datatype not recognized";
+    default: throw unknown_datatype(dtype_);
   }
 #undef HANDLE_CASE
 
@@ -292,12 +323,14 @@ scalar& scalar::operator=(value_scalar const & s)
     HANDLE_CASE(ULONG_TYPE, cl_ulong)
     HANDLE_CASE(FLOAT_TYPE, cl_float)
     HANDLE_CASE(DOUBLE_TYPE, cl_double)
-    default: throw "Datatype not recognized";
+    default: throw unknown_datatype(dtype_);
   }
 }
 
-scalar& scalar::operator=(scalar const & s)
-{ return (scalar&)array::operator =(s); }
+//scalar& scalar::operator=(scalar const & s)
+//{
+//  return scalar::operator =(value_scalar(s));
+//}
 
 #define INSTANTIATE(type) scalar::operator type() const { return cast<type>(); }
   INSTANTIATE(cl_char)
@@ -327,7 +360,7 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
     case HALF_TYPE: return os << static_cast<cl_half>(s);
     case FLOAT_TYPE: return os << static_cast<cl_float>(s);
     case DOUBLE_TYPE: return os << static_cast<cl_double>(s);
-    default: throw "";
+    default: throw unknown_datatype(s.dtype());
   }
 }
 
@@ -489,7 +522,7 @@ array_expression OPNAME(array const & x, int_t axis)\
   else if(axis==1)\
     return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()._2));\
   else\
-    throw "invalid shape";\
+    throw ;\
 }\
 \
 array_expression OPNAME(array_expression const & x, int_t axis)\
@@ -501,7 +534,7 @@ array_expression OPNAME(array_expression const & x, int_t axis)\
   else if(axis==1)\
     return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), size4(x.shape()._2));\
   else\
-    throw "invalid shape";\
+    throw ;\
 }
 
 DEFINE_REDUCTION(OPERATOR_ADD_TYPE, sum)

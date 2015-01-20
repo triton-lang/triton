@@ -150,14 +150,14 @@ namespace detail
     if(name=="matrix-productNT") return MATRIX_PRODUCT_NT_TYPE;
     if(name=="matrix-productTN") return MATRIX_PRODUCT_TN_TYPE;
     if(name=="matrix-productTT") return MATRIX_PRODUCT_TT_TYPE;
-    throw "Unsupported operation";
+    throw ;
   }
 
   static numeric_type get_dtype(std::string const & name)
   {
     if(name=="float32") return FLOAT_TYPE;
     if(name=="float64") return DOUBLE_TYPE;
-    throw "Unsupported operation";
+    throw;
   }
 
   static tools::shared_ptr<base> create(std::string const & template_name, std::vector<int> const & a)

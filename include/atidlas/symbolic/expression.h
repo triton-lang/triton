@@ -218,19 +218,7 @@ struct array_expression: public symbolic_expression
   array_expression& reshape(int_t size1, int_t size2=1);
   int_t nshape() const;
 
-  array_expression& operator-();
-  array_expression& operator+=(value_scalar const &);
-  array_expression& operator+=(array const &);
-  array_expression& operator+=(array_expression const &);
-  array_expression& operator-=(value_scalar const &);
-  array_expression& operator-=(array const &);
-  array_expression& operator-=(array_expression const &);
-  array_expression& operator*=(value_scalar const &);
-  array_expression& operator*=(array const &);
-  array_expression& operator*=(array_expression const &);
-  array_expression& operator/=(value_scalar const &);
-  array_expression& operator/=(array const &);
-  array_expression& operator/=(array_expression const &);
+  array_expression operator-();
 private:
   size4 shape_;
 };

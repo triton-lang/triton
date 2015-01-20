@@ -2,6 +2,7 @@
 #define ATIDLAS_TYPES_H
 
 #include "atidlas/cl/cl.hpp"
+#include "atidlas/exception/unknown_datatype.h"
 
 namespace atidlas
 {
@@ -59,7 +60,7 @@ inline std::string numeric_type_to_string(numeric_type const & type)
   case ULONG_TYPE: return "ulong";
   case FLOAT_TYPE : return "float";
   case DOUBLE_TYPE : return "double";
-  default : throw "Unsupported Scalartype";
+  default : throw unknown_datatype(type);
   }
 }
 
@@ -94,7 +95,7 @@ inline unsigned int size_of(numeric_type type)
   case LONG_TYPE:
   case DOUBLE_TYPE: return 8;
 
-  default: throw "Unsupported numeric type";
+  default: throw unknown_datatype(type);
   }
 }
 

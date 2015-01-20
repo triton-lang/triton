@@ -277,13 +277,13 @@ void evaluate_expression_traversal::operator()(atidlas::symbolic_expression cons
 {
   symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
   mapping_type::key_type key = std::make_pair(root_idx, leaf);
-  if (leaf==PARENT_NODE_TYPE)
+  if (leaf==PARENT_NODE_TYPE && root_node.op.type_family!=OPERATOR_UNARY_TYPE_FAMILY)
   {
     if (detail::is_node_leaf(root_node.op))
       str_ += mapping_.at(key)->evaluate(accessors_);
     else if (detail::is_elementwise_operator(root_node.op))
       str_ += evaluate(root_node.op.type);
-    else if (detail::is_elementwise_function(root_node.op) && root_node.op.type_family!=OPERATOR_UNARY_TYPE_FAMILY)
+    else if (detail::is_elementwise_function(root_node.op))
       str_ += ",";
   }
   else

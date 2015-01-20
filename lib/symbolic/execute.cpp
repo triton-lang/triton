@@ -196,7 +196,7 @@ namespace atidlas
         case MATRIX_PRODUCT_TN_TYPE:   tmp = tools::shared_ptr<obj_base>(new array(node.lhs.array.shape2, node.rhs.array.shape2, dtype, context));   break;
         case MATRIX_PRODUCT_TT_TYPE:   tmp = tools::shared_ptr<obj_base>(new array(node.lhs.array.shape2, node.rhs.array.shape1, dtype, context));   break;
 
-        default: throw "This shouldn't happen. Ever.";
+        default: throw ;
       }
       temporaries_.push_back(tmp);
 

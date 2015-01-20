@@ -21,6 +21,10 @@ void fill(array const & a, array_infos& i)
   i.ld = a.ld();
 }
 
+array_expression array_expression::operator-()
+{ return array_expression(*this, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), shape_); }
+
+
 lhs_rhs_element::lhs_rhs_element()
 {
   type_family = INVALID_TYPE_FAMILY;

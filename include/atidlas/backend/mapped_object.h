@@ -162,17 +162,6 @@ private:
   std::string pointer_;
 };
 
-
-/** @brief Scalar
- *
- * Maps a scalar passed by pointer
- */
-class mapped_scalar : public mapped_handle
-{
-public:
-  mapped_scalar(std::string const & scalartype, unsigned int id);
-};
-
 /** @brief Buffered
  *
  * Maps a buffered object (vector, matrix)

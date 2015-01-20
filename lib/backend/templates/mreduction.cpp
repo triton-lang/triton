@@ -42,7 +42,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE,
-                        tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
+                        tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
                                                                             ("array1", "#pointer += #start;")
                                                                             ("array2", "#pointer += #start1 + #start2*#ld; "
                                                                                        "#ld *= #nldstride; "), symbolic_expressions, mappings);
@@ -105,7 +105,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
           std::map<std::string, std::string> accessors;
           accessors["array2"] = str[a];
           accessors["repeat"] = "#namereg";
-          accessors["scalar"] = "#namereg";
+          accessors["array0"] = "#namereg";
           std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
           if (exprs[k]->is_index_reduction())
             compute_index_reduction(stream, exprs[k]->process("#name_acc"), "c*"+to_string(simd_width) + to_string(a), exprs[k]->process("#name_acc_value"), value,exprs[k]->root_op());

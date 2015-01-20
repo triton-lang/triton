@@ -32,8 +32,8 @@ public:
   //General constructor
   array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, int_t ld, cl::Context context = cl::default_context());
   array(array_expression const & proxy);
-
   array(array const &);
+
   //Getters
   numeric_type dtype() const;
   size4 shape() const;
@@ -53,7 +53,7 @@ public:
   array& operator=(array_expression const &);
   template<class T> array & operator=(std::vector<T> const & rhs);
 
-  array& operator-();
+  array_expression operator-();
   array& operator+=(value_scalar const &);
   array& operator+=(array const &);
   array& operator+=(array_expression const &);
@@ -93,10 +93,9 @@ public:
   explicit scalar(value_scalar value, cl::Context context = cl::default_context());
   explicit scalar(numeric_type dtype, cl::Context context = cl::default_context());
   scalar(array_expression const & proxy);
-
   scalar& operator=(value_scalar const &);
-  scalar& operator=(scalar const &);
-  using array::operator=;
+//  scalar& operator=(scalar const & s);
+  using array::operator =;
 
 #define INSTANTIATE(type) operator type() const;
   INSTANTIATE(bool)
@@ -212,7 +211,7 @@ ATIDLAS_DECLARE_REDUCTION(argmin)
 
 //
 std::ostream& operator<<(std::ostream &, array const &);
-std::ostream& operator<<(std::ostream &, array_expression const &);
+std::ostream& operator<<(std::ostream & os, scalar const & s);
 
 }
 #endif

@@ -2,6 +2,7 @@
 #define ATIDLAS_TOOLS_TO_STRING_HPP
 
 #include <string>
+#include <sstream>
 
 namespace atidlas
 {

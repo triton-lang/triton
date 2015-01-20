@@ -91,7 +91,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
   stream.inc_tab();
 
   stream << "unsigned int lid = get_local_id(0);" << std::endl;
-  process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("scalar", "#scalartype #namereg = *#pointer;")
+  process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
                                                                                               ("array1", "#pointer += #start;"), symbolic_expressions, mappings);
 
   for (unsigned int k = 0; k < N; ++k)
@@ -143,7 +143,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
           accessors["matrix_row"] = str[a];
           accessors["matrix_column"] = str[a];
           accessors["matrix_diag"] = str[a];
-          accessors["scalar"] = "#namereg";
+          accessors["array0"] = "#namereg";
           std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
           if (exprs[k]->is_index_reduction())
             compute_index_reduction(stream, exprs[k]->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+"
@@ -242,8 +242,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
   stream.inc_tab();
   std::map<std::string, std::string> accessors;
   accessors["scalar_reduction"] = "#name_buf[0]";
-  accessors["scalar"] = "*#pointer";
-  accessors["array1"] = "#pointer[#start]";
+  accessors["array0"] = "#pointer[#start]";
   evaluate(stream, PARENT_NODE_TYPE, accessors, symbolic_expressions, mappings);
   stream.dec_tab();
   stream << "}" << std::endl;
