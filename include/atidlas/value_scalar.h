@@ -27,20 +27,21 @@ union values_holder
 
 class value_scalar
 {
-  void init(scalar const &);
+  template<class T> void init(T const &);
   template<class T> T cast() const;
 public:
-  value_scalar(cl_char value);
-  value_scalar(cl_uchar value);
-  value_scalar(cl_short value);
-  value_scalar(cl_ushort value);
-  value_scalar(cl_int value);
-  value_scalar(cl_uint value);
-  value_scalar(cl_long value);
-  value_scalar(cl_ulong value);
-//  value_scalar(cl_half value);
-  value_scalar(cl_float value);
-  value_scalar(cl_double value);
+#define ATIDLAS_INSTANTIATE(CLTYPE, ADTYPE) value_scalar(CLTYPE value, numeric_type dtype = ADTYPE);
+  ATIDLAS_INSTANTIATE(cl_char, CHAR_TYPE)
+  ATIDLAS_INSTANTIATE(cl_uchar, UCHAR_TYPE)
+  ATIDLAS_INSTANTIATE(cl_short, SHORT_TYPE)
+  ATIDLAS_INSTANTIATE(cl_ushort, USHORT_TYPE)
+  ATIDLAS_INSTANTIATE(cl_int, INT_TYPE)
+  ATIDLAS_INSTANTIATE(cl_uint, UINT_TYPE)
+  ATIDLAS_INSTANTIATE(cl_long, LONG_TYPE)
+  ATIDLAS_INSTANTIATE(cl_ulong, ULONG_TYPE)
+  ATIDLAS_INSTANTIATE(cl_float, FLOAT_TYPE)
+  ATIDLAS_INSTANTIATE(cl_double, DOUBLE_TYPE)
+#undef ATIDLAS_INSTANTIATE
   explicit value_scalar(scalar const &);
   explicit value_scalar(array_expression const &);
   explicit value_scalar(numeric_type dtype);

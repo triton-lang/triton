@@ -7,7 +7,8 @@
 namespace atidlas
 {
 
-void value_scalar::init(scalar const & s)
+template<class T>
+void value_scalar::init(T const & s)
 {
   switch(dtype_)
   {
@@ -25,17 +26,21 @@ void value_scalar::init(scalar const & s)
   }
 }
 
-value_scalar::value_scalar(cl_char value) : dtype_(CHAR_TYPE) { values_.int8 = value; }
-value_scalar::value_scalar(cl_uchar value) : dtype_(UCHAR_TYPE) { values_.uint8 = value; }
-value_scalar::value_scalar(cl_short value) : dtype_(SHORT_TYPE) { values_.int16 = value; }
-value_scalar::value_scalar(cl_ushort value) : dtype_(USHORT_TYPE) { values_.uint16 = value; }
-value_scalar::value_scalar(cl_int value) : dtype_(INT_TYPE) { values_.int32 = value; }
-value_scalar::value_scalar(cl_uint value) : dtype_(UINT_TYPE) { values_.uint32 = value; }
-value_scalar::value_scalar(cl_long value) : dtype_(LONG_TYPE) { values_.int64 = value; }
-value_scalar::value_scalar(cl_ulong value) : dtype_(ULONG_TYPE) { values_.uint64 = value; }
-//value_scalar::value_scalar(cl_half value) : dtype_(HALF_TYPE) { values_.float16 = value; }
-value_scalar::value_scalar(cl_float value) : dtype_(FLOAT_TYPE) { values_.float32 = value; }
-value_scalar::value_scalar(cl_double value) : dtype_(DOUBLE_TYPE) { values_.float64 = value; }
+#define INSTANTIATE(CLTYPE, ADTYPE) value_scalar::value_scalar(CLTYPE value, numeric_type dtype) : dtype_(dtype) { init(value); }
+
+INSTANTIATE(cl_char, CHAR_TYPE)
+INSTANTIATE(cl_uchar, UCHAR_TYPE)
+INSTANTIATE(cl_short, SHORT_TYPE)
+INSTANTIATE(cl_ushort, USHORT_TYPE)
+INSTANTIATE(cl_int, INT_TYPE)
+INSTANTIATE(cl_uint, UINT_TYPE)
+INSTANTIATE(cl_long, LONG_TYPE)
+INSTANTIATE(cl_ulong, ULONG_TYPE)
+INSTANTIATE(cl_float, FLOAT_TYPE)
+INSTANTIATE(cl_double, DOUBLE_TYPE)
+
+#undef INSTANTIATE
+
 value_scalar::value_scalar(numeric_type dtype) : dtype_(dtype) {}
 value_scalar::value_scalar(scalar const & s) : dtype_(s.dtype()) { init(s); }
 value_scalar::value_scalar(array_expression const &expr) : dtype_(expr.dtype()) { init(scalar(expr)); }

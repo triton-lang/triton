@@ -836,23 +836,38 @@ namespace detail
 std::ostream& operator<<(std::ostream & os, array const & a)
 {
   size_t WINDOW = 10;
-
+  numeric_type dtype = a.dtype();
   size_t M = a.shape()._1;
   size_t N = a.shape()._2;
 
   if(M>1 && N==1)
     std::swap(M, N);
 
-  std::vector<float> tmp(M*N);
-  copy(a, tmp);
+  void* tmp = new char[M*N*size_of(dtype)];
+  copy(a, (void*)tmp);
 
   os << "[ " ;
   size_t upper = std::min(WINDOW,M);
+
+#define HANDLE(ADTYPE, CTYPE) case ADTYPE: detail::prettyprint(os, reinterpret_cast<CTYPE*>(tmp) + i, reinterpret_cast<CTYPE*>(tmp) + M*N + i, M, true, WINDOW); break;
   for(unsigned int i = 0 ; i < upper ; ++i)
   {
     if(i>0)
       os << "  ";
-    detail::prettyprint(os, tmp.begin() + i, tmp.end() + i, M, true, WINDOW);
+    switch(dtype)
+    {
+      HANDLE(CHAR_TYPE, cl_char)
+      HANDLE(UCHAR_TYPE, cl_uchar)
+      HANDLE(SHORT_TYPE, cl_short)
+      HANDLE(USHORT_TYPE, cl_ushort)
+      HANDLE(INT_TYPE, cl_int)
+      HANDLE(UINT_TYPE, cl_uint)
+      HANDLE(LONG_TYPE, cl_long)
+      HANDLE(ULONG_TYPE, cl_ulong)
+      HANDLE(FLOAT_TYPE, cl_float)
+      HANDLE(DOUBLE_TYPE, cl_double)
+      default: throw unknown_datatype(dtype);
+    }
     if(i < upper-1)
       os <<  std::endl;
   }
@@ -863,7 +878,20 @@ std::ostream& operator<<(std::ostream & os, array const & a)
     for(size_t i = std::max(N - WINDOW, upper) ; i < N ; i++)
     {
       os << std::endl << "  ";
-      detail::prettyprint(os, tmp.begin() + i, tmp.end() + i, M, true, WINDOW);
+      switch(dtype)
+      {
+        HANDLE(CHAR_TYPE, cl_char)
+        HANDLE(UCHAR_TYPE, cl_uchar)
+        HANDLE(SHORT_TYPE, cl_short)
+        HANDLE(USHORT_TYPE, cl_ushort)
+        HANDLE(INT_TYPE, cl_int)
+        HANDLE(UINT_TYPE, cl_uint)
+        HANDLE(LONG_TYPE, cl_long)
+        HANDLE(ULONG_TYPE, cl_ulong)
+        HANDLE(FLOAT_TYPE, cl_float)
+        HANDLE(DOUBLE_TYPE, cl_double)
+        default: throw unknown_datatype(dtype);
+      }
     }
   }
   os << " ]";
