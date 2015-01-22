@@ -85,13 +85,13 @@ bp::tuple get_shape(atd::array const & x)
   return bp::make_tuple(x.shape()._1, x.shape()._2);
 }
 
-void set_shape(atd::array & x, bp::tuple const & t)
-{
-  unsigned int len = bp::len(t);
-  atd::int_t size1 = bp::extract<atd::int_t>(t[0]);
-  atd::int_t size2 = len<2?1:bp::extract<atd::int_t>(t[1]);
-  x.reshape(size1, size2);
-}
+//void set_shape(atd::array & x, bp::tuple const & t)
+//{
+//  unsigned int len = bp::len(t);
+//  atd::int_t size1 = bp::extract<atd::int_t>(t[0]);
+//  atd::int_t size2 = len<2?1:bp::extract<atd::int_t>(t[1]);
+//  x.reshape(size1, size2);
+//}
 
 boost::python::dict create_queues(atd::cl::queues_t queues)
 {
@@ -182,6 +182,15 @@ void export_symbolic()
 
 namespace detail
 {
+  template<class IT>
+  bp::list to_list(IT const & begin, IT const & end)
+  {
+    bp::list res;
+    for (IT it = begin; it != end; ++it)
+      res.append(*it);
+    return res;
+  }
+
   bp::list nv_compute_capability(atd::cl::Device const & device)
   {
     bp::list res;
@@ -190,15 +199,22 @@ namespace detail
     return res;
   }
 
-  std::string vendor(atd::cl::Device const & device){
-    return device.getInfo<CL_DEVICE_VENDOR>();
+  bp::list get_platforms()
+  {
+    std::vector<atd::cl::Platform> platforms;
+    atd::cl::Platform::get(&platforms);
+    return to_list(platforms.begin(), platforms.end());
+  }
+
+  bp::list get_devices(atd::cl::Platform const & platform)
+  {
+    std::vector<atd::cl::Device> devices;
+    platform.getDevices(CL_DEVICE_TYPE_ALL, &devices);
+    return to_list(devices.begin(), devices.end());
   }
 
   std::vector<atd::cl::CommandQueue> & get_queue(atd::cl::Context const & ctx)
   { return atd::cl::queues[ctx]; }
-
-  atd::cl::Device get_device(atd::cl::CommandQueue & queue)
-  { return queue.getInfo<CL_QUEUE_DEVICE>(); }
 
   atd::numeric_type extract_dtype(bp::object const & odtype)
   {
@@ -272,20 +288,50 @@ namespace detail
       }
   };
 
+  atd::cl::Platform get_platform(atd::cl::Device const & device)
+  {  return atd::cl::Platform(device.getInfo<CL_DEVICE_PLATFORM>());  }
+
+  template<cl_int INFO>
+  typename atd::cl::detail::param_traits<atd::cl::detail::cl_device_info, INFO>::param_type
+  wrap_device_info(atd::cl::Device const & x)
+  { return x.getInfo<INFO>(NULL); }
+
+  template<cl_int INFO>
+  typename atd::cl::detail::param_traits<atd::cl::detail::cl_context_info, INFO>::param_type
+  wrap_context_info(atd::cl::Context const & x)
+  { return x.getInfo<INFO>(NULL); }
+
+  template<cl_int INFO>
+  typename atd::cl::detail::param_traits<atd::cl::detail::cl_platform_info, INFO>::param_type
+  wrap_platform_info(atd::cl::Platform const & x)
+  { return x.getInfo<INFO>(NULL); }
+
+  template<cl_int INFO>
+  typename atd::cl::detail::param_traits<atd::cl::detail::cl_command_queue_info, INFO>::param_type
+  wrap_command_queue_info(atd::cl::CommandQueue const & x)
+  { return x.getInfo<INFO>(NULL); }
+
+
+  std::string to_string(cl_device_type type)
+  {
+    if(type==CL_DEVICE_TYPE_ALL) return "ALL";
+    if(type==CL_DEVICE_TYPE_CPU) return "CPU";
+    if(type==CL_DEVICE_TYPE_GPU) return "GPU";
+    if(type==CL_DEVICE_TYPE_ACCELERATOR) return "ACCELERATOR";
+    throw;
+  }
 }
+
 
 void export_cl()
 {
   typedef std::vector<atd::cl::CommandQueue> queues_t;
-
   bp::class_<queues_t>("queues")
+      .def("__len__", &queues_t::size)
       .def("__getitem__", &bp::vector_indexing_suite<queues_t>::get_item, bp::return_internal_reference<>())
       .def("__setitem__", &bp::vector_indexing_suite<queues_t>::set_item, bp::with_custodian_and_ward<1,2>())
-      ;
+      .def("append", &bp::vector_indexing_suite<queues_t>::append)
 
-  bp::class_<atd::cl::Device>("device", bp::no_init)
-      .add_property("nv_compute_capability", &detail::nv_compute_capability)
-      .add_property("vendor", &detail::vendor)
       ;
 
   bp::class_<atd::model_map_t>("models")
@@ -293,18 +339,50 @@ void export_cl()
       .def("__setitem__", &detail::model_map_indexing::set_item, bp::with_custodian_and_ward<1,2>())
       ;
 
-  bp::class_<atd::cl::Context>("context", bp::no_init)
+  bp::enum_<cl_device_type>("device_type")
+      .value("CL_DEVICE_TYPE_ALL", CL_DEVICE_TYPE_ALL)
+      .value("CL_DEVICE_TYPE_CPU", CL_DEVICE_TYPE_CPU)
+      .value("CL_DEVICE_TYPE_GPU", CL_DEVICE_TYPE_GPU)
+      .value("CL_DEVICE_TYPE_ACCELERATOR", CL_DEVICE_TYPE_ACCELERATOR)
+      ;
+
+  bp::def("device_type_to_string", &detail::to_string);
+
+
+  bp::class_<atd::cl::Platform>("platform", bp::no_init)
+    #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_platform_info<NAME>)
+      WRAP("name", CL_PLATFORM_NAME)
+    #undef WRAP
+      .def("get_devices", &detail::get_devices)
+      ;
+
+  bp::class_<atd::cl::Device>("device", bp::no_init)
+    #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_device_info<NAME>)
+      .add_property("nv_compute_capability", &detail::nv_compute_capability)
+      .add_property("platform", &detail::get_platform)
+      WRAP("double_fp_config", CL_DEVICE_DOUBLE_FP_CONFIG)
+      WRAP("name", CL_DEVICE_NAME)
+      WRAP("type", CL_DEVICE_TYPE)
+      WRAP("vendor", CL_DEVICE_VENDOR)
+    #undef WRAP
+      ;
+
+  bp::class_<atd::cl::Context>("context", bp::init<atd::cl::Device>())
+    #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_context_info<NAME>)
+    #undef WRAP
       .add_property("queues", bp::make_function(&detail::get_queue, bp::return_internal_reference<>()))
       ;
 
-
-
-  bp::class_<atd::cl::CommandQueue>("command_queue", bp::no_init)
-      .add_property("device", &detail::get_device)
+  bp::class_<atd::cl::CommandQueue>("command_queue", bp::init<atd::cl::Context, atd::cl::Device>())
+    #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_command_queue_info<NAME>)
+      WRAP("device", CL_QUEUE_DEVICE)
+    #undef WRAP
       .add_property("models", bp::make_function(&atd::get_model_map, bp::return_internal_reference<>()));
       ;
 
   bp::def("synchronize", &atd::cl::synchronize);
+  bp::def("get_platforms", &detail::get_platforms);
+
 }
 
 namespace detail
@@ -446,6 +524,7 @@ void export_array()
       .def(bp::init<atd::array_expression>())
       .add_property("dtype", &atd::array::dtype)
       .add_property("context", bp::make_function(&atd::array::context, bp::return_internal_reference<>()))
+      .add_property("T", &atd::array::T)
 //      .add_property("shape", &detail::get_shape, &detail::set_shape)
       ADD_ARRAY_OPERATOR(+)
       ADD_ARRAY_OPERATOR(-)
@@ -477,8 +556,8 @@ void export_array()
       bp::def(#name, static_cast<atd::array_expression (*)(atd::array const &, atd::array_expression const &)>(&atd::name));\
       bp::def(#name, static_cast<atd::array_expression (*)(atd::array_expression const &, atd::array_expression const &)>(&atd::name));
 
-  MAP_FUNCTION(max)
-  MAP_FUNCTION(min)
+  MAP_FUNCTION(maximum)
+  MAP_FUNCTION(minimum)
   MAP_FUNCTION(pow)
   MAP_FUNCTION(dot)
 #undef MAP_FUNCTION
@@ -551,21 +630,24 @@ void export_model()
     #undef __PROP
   }
 
-  #define WRAP_TEMPLATE(name, ...) bp::class_<atidlas::base_impl<atidlas::name, atidlas::name::parameters_type>, bp::bases<atidlas::base>, boost::noncopyable>(#name "_base_impl", bp::no_init);\
-                                   bp::class_<atidlas::name, bp::bases<atidlas::base_impl<atidlas::name, atidlas::name::parameters_type> > >(#name, bp::init<__VA_ARGS__>())\
+  #define WRAP_BASE(name) bp::class_<atidlas::base_impl<atidlas::name, atidlas::name::parameters_type>, bp::bases<atidlas::base>, boost::noncopyable>(#name "_base_impl", bp::no_init);
+  #define WRAP_TEMPLATE(name, basename, ...) bp::class_<atidlas::name, bp::bases<atidlas::base_impl<atidlas::basename, atidlas::basename::parameters_type> > >(#name, bp::init<__VA_ARGS__>())\
                                       .add_property("local_size_0", &atd::name::local_size_0)\
                                       .add_property("local_size_1", &atd::name::local_size_1);
+  #define WRAP_SINGLE_TEMPLATE(name, ...) WRAP_BASE(name) WRAP_TEMPLATE(name, name, __VA_ARGS__)
 
   //Vector AXPY
-  WRAP_TEMPLATE(vaxpy, uint, uint, uint, atidlas::fetching_policy_type)
-  WRAP_TEMPLATE(maxpy, uint, uint, uint, uint, uint, atidlas::fetching_policy_type)
-  WRAP_TEMPLATE(reduction, uint, uint, uint, atidlas::fetching_policy_type)
-  WRAP_TEMPLATE(mreduction_rows, uint, uint, uint, uint, atidlas::fetching_policy_type)
-  WRAP_TEMPLATE(mreduction_cols, uint, uint, uint, uint, atidlas::fetching_policy_type)
-  WRAP_TEMPLATE(mproduct_nn, uint, uint, uint, uint, uint, uint, uint, atidlas::fetching_policy_type, atidlas::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(mproduct_tn, uint, uint, uint, uint, uint, uint, uint, atidlas::fetching_policy_type, atidlas::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(mproduct_nt, uint, uint, uint, uint, uint, uint, uint, atidlas::fetching_policy_type, atidlas::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(mproduct_tt, uint, uint, uint, uint, uint, uint, uint, atidlas::fetching_policy_type, atidlas::fetching_policy_type, uint, uint)
+  WRAP_SINGLE_TEMPLATE(vaxpy, uint, uint, uint, atidlas::fetching_policy_type)
+  WRAP_SINGLE_TEMPLATE(maxpy, uint, uint, uint, uint, uint, atidlas::fetching_policy_type)
+  WRAP_SINGLE_TEMPLATE(reduction, uint, uint, uint, atidlas::fetching_policy_type)
+  WRAP_BASE(mreduction)
+  WRAP_TEMPLATE(mreduction_rows, mreduction, uint, uint, uint, uint, atidlas::fetching_policy_type)
+  WRAP_TEMPLATE(mreduction_cols, mreduction, uint, uint, uint, uint, atidlas::fetching_policy_type)
+  WRAP_BASE(mproduct)
+  WRAP_TEMPLATE(mproduct_nn, mproduct, uint, uint, uint, uint, uint, uint, uint, atidlas::fetching_policy_type, atidlas::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(mproduct_tn, mproduct, uint, uint, uint, uint, uint, uint, uint, atidlas::fetching_policy_type, atidlas::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(mproduct_nt, mproduct, uint, uint, uint, uint, uint, uint, uint, atidlas::fetching_policy_type, atidlas::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(mproduct_tt, mproduct, uint, uint, uint, uint, uint, uint, uint, atidlas::fetching_policy_type, atidlas::fetching_policy_type, uint, uint)
 
 
 }

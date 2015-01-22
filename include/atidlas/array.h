@@ -19,14 +19,14 @@ class array: public obj_base
 public:
   //1D Constructors
   array(int_t size1, numeric_type dtype, cl::Context context = cl::default_context());
-  template<typename T>
-  array(std::vector<T> const & data, cl::Context context = cl::default_context());
+  template<typename DT>
+  array(std::vector<DT> const & data, cl::Context context = cl::default_context());
   array(array & v, slice const & s1);
 
   //2D Constructors
   array(int_t size1, int_t size2, numeric_type dtype, cl::Context context = cl::default_context());
-  template<typename T>
-  array(int_t size1, int_t size2, std::vector<T> const & data, cl::Context context = cl::default_context());
+  template<typename DT>
+  array(int_t size1, int_t size2, std::vector<DT> const & data, cl::Context context = cl::default_context());
   array(array & M, slice const & s1, slice const & s2);
 
   //General constructor
@@ -72,6 +72,8 @@ public:
   scalar operator[](int_t);
   array operator[](slice const &);
   array operator()(slice const &, slice const &);
+
+  array_expression T() const;
 protected:
   numeric_type dtype_;
 
@@ -113,9 +115,7 @@ public:
 };
 
 
-atidlas::array_expression eye(std::size_t, std::size_t, atidlas::numeric_type, cl::Context ctx = cl::default_context());
-array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, cl::Context ctx = cl::default_context());
-array reshape(array const &, int_t, int_t);
+
 
 //copy
 
@@ -208,6 +208,10 @@ ATIDLAS_DECLARE_REDUCTION(argmax)
 ATIDLAS_DECLARE_REDUCTION(max)
 ATIDLAS_DECLARE_REDUCTION(min)
 ATIDLAS_DECLARE_REDUCTION(argmin)
+
+atidlas::array_expression eye(std::size_t, std::size_t, atidlas::numeric_type, cl::Context ctx = cl::default_context());
+array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, cl::Context ctx = cl::default_context());
+array reshape(array const &, int_t, int_t);
 
 //
 std::ostream& operator<<(std::ostream &, array const &);

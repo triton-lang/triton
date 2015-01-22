@@ -19,9 +19,9 @@ array::array(int_t size1, numeric_type dtype, cl::Context context) :
   context_(context), data_(context_, CL_MEM_READ_WRITE, size_of(dtype)*dsize())
 { }
 
-template<class T>
-array::array(std::vector<T> const & x, cl::Context context):
-  dtype_(to_numeric_type<T>::value), shape_(x.size(), 1), start_(0, 0), stride_(1, 1), ld_(shape_._1),
+template<class DT>
+array::array(std::vector<DT> const & x, cl::Context context):
+  dtype_(to_numeric_type<DT>::value), shape_(x.size(), 1), start_(0, 0), stride_(1, 1), ld_(shape_._1),
   context_(context), data_(context, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 { *this = x; }
 
@@ -53,9 +53,9 @@ array::array(array & M, slice const & s1, slice const & s2) :  dtype_(M.dtype_),
                                                           context_(M.data_.getInfo<CL_MEM_CONTEXT>()), data_(M.data_)
 { }
 
-template<typename T>
-array::array(int_t size1, int_t size2, std::vector<T> const & data, cl::Context context)
-  : dtype_(to_numeric_type<T>::value),
+template<typename DT>
+array::array(int_t size1, int_t size2, std::vector<DT> const & data, cl::Context context)
+  : dtype_(to_numeric_type<DT>::value),
     shape_(size1, size2), start_(0, 0), stride_(1, 1), ld_(size1),
     context_(context), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 {
@@ -146,8 +146,8 @@ array & array::operator=(array_expression const & rhs)
   return *this;
 }
 
-template<class T>
-array & array::operator=(std::vector<T> const & rhs)
+template<class DT>
+array & array::operator=(std::vector<DT> const & rhs)
 {
   assert(nshape()==1);
   atidlas::copy(rhs, *this);
@@ -207,6 +207,9 @@ array & array::operator/=(array const & rhs)
 
 array & array::operator/=(array_expression const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), shape_); }
+
+array_expression array::T() const
+{ return atidlas::trans(*this) ;}
 
 /*--- Indexing operators -----*/
 //---------------------------------------
@@ -481,17 +484,17 @@ atidlas::array_expression zeros(std::size_t M, std::size_t N, atidlas::numeric_t
   return array_expression(value_scalar(0), lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), ctx, dtype, size4(M, N));
 }
 
-inline size4 trans(size4 const & shape)
+inline size4 flip(size4 const & shape)
 { return size4(shape._2, shape._1);}
 
 inline size4 prod(size4 const & shape1, size4 const & shape2)
 { return size4(shape1._1*shape2._1, shape1._2*shape2._2);}
 
 array_expression trans(array  const & x) \
-{ return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_TRANS_TYPE), x.context(), x.dtype(), trans(x.shape())); }\
+{ return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_TRANS_TYPE), x.context(), x.dtype(), flip(x.shape())); }\
 \
 array_expression trans(array_expression const & x) \
-{ return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_TRANS_TYPE), trans(x.shape())); }
+{ return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_TRANS_TYPE), flip(x.shape())); }
 
 array_expression repmat(array const & A, int_t const & rep1, int_t const & rep2)
 {

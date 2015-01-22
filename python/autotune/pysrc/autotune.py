@@ -3,7 +3,6 @@ from __future__ import division
 import argparse, itertools, os, sys, json
 import misc_tools, optimize, dataset
 import pyatidlas as atd
-import pyopencl as cl
 import numpy as np
 
 from numpy import random
@@ -34,7 +33,8 @@ TYPES = { 'vaxpy': {'template':atd.vaxpy,
 
 def do_tuning(args):
     device = args.device
-
+    context = atd.context(device)
+    context.queues.append(atd.command_queue(context, device))
     if os.path.isfile(args.json_file):
         json_out = json.load(open(args.json_file, 'r'))
     else:
@@ -98,7 +98,7 @@ def do_tuning(args):
                   D = json_out[full_operation][dtypestr]
 
                   if args.method == 'simple':
-                      print default_tuning_sizes[operation]
+                      print 'Size : ', ','.join(map(str, default_tuning_sizes[operation]))
                       profiles = [execution_handler(map(int,default_tuning_sizes[operation]))]
                   else:
                       def compute_perf(x, t):
@@ -121,52 +121,52 @@ def do_tuning(args):
 
 
               Template = TYPES[operation]['template']
-
+              
               #Vector AXPY
               if operation=='vaxpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
-                      x = atd.empty(sizes[0], datatype)
-                      y = atd.empty(sizes[0], datatype)
+                      x = atd.empty(sizes[0], datatype, context=context)
+                      y = atd.empty(sizes[0], datatype, context=context)
                       return execute(x + y, sizes, Template, parameters, fname)
                   tune(execution_handler, 1e3, 2e7, 1, (),'log', 'log')
               #dot
               if operation=='dot':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
-                      x = atd.empty(sizes[0], datatype)
-                      y = atd.empty(sizes[0], datatype)
+                      x = atd.empty(sizes[0], datatype, context=context)
+                      y = atd.empty(sizes[0], datatype, context=context)
                       s = atd.scalar(datatype)
                       return execute(atd.dot(x, y), sizes, Template, parameters, fname)
                   tune(execution_handler, 1e3, 2e7, 1, (),'log', 'log')
               #Matrix AXPY
               if operation=='maxpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
-                      A = atd.empty(sizes, datatype)
-                      C = atd.empty(sizes, datatype)
+                      A = atd.empty(sizes, datatype, context=context)
+                      C = atd.empty(sizes, datatype, context=context)
                       return execute(A + C, sizes, Template, parameters, fname)
                   tune(execution_handler, 100, 5000, 2, (),'log', 'log')
               #Row-wise dot
               if operation=='gemv':
                   for A_trans in  args.gemv_layouts:
+                      Template = Template[A_trans]
                       def execution_handler(sizes, fname=os.devnull, parameters=None):
-                          Template = Template[A_trans]
-                          A = atd.empty(sizes if A_trans=='N' else sizes[::-1], datatype)
-                          x = atd.empty(sizes[1], datatype)
+                          A = atd.empty(sizes if A_trans=='N' else sizes[::-1], datatype, context=context)
+                          x = atd.empty(sizes[1], datatype, context=context)
                           LHS = A if A_trans=='N' else A.T
-                          return execute(device, atd.dot(LHS, x), sizes, Template, parameters, fname)
+                          return execute(atd.dot(LHS, x), sizes, Template, parameters, fname)
                       tune(execution_handler, 100, 5000, 2, (A_trans,),'log', 'log')
               #Matrix Product
               if operation=='gemm':
                   for L in args.gemm_layouts:
                       A_trans = L[0]
                       B_trans = L[1]
+                      Template = Template[(A_trans, B_trans)]
                       def execution_handler(sizes, fname=os.devnull, parameters=None):
-                          Template = Template[A_trans, B_trans]
-                          A = atd.empty((sizes[0], sizes[2]) if A_trans=='N' else (sizes[2], sizes[0]), datatype)
-                          B = atd.empty((sizes[2], sizes[1]) if B_trans=='N' else (sizes[1], sizes[2]), datatype)
+                          A = atd.empty((sizes[0], sizes[2]) if A_trans=='N' else (sizes[2], sizes[0]), datatype, context=context)
+                          B = atd.empty((sizes[2], sizes[1]) if B_trans=='N' else (sizes[1], sizes[2]), datatype, context=context)
                           LHS = A if A_trans=='N' else A.T
                           RHS = B if B_trans=='N' else B.T
-                          return execute(device, atd.dot(LHS, RHS),(A_trans,B_trans), sizes, fname, parameters)
-                      tune(execution_handler, 100, 2000, 3,(A_trans,B_trans), 'linear')
+                          return execute(atd.dot(LHS, RHS), sizes, Template, parameters, fname)
+                      tune(execution_handler, 100, 2000, 3,(A_trans,B_trans), 'linear', 'linear')
 
               json.dump(json_out, open(args.json_file,'w'))
 
@@ -177,50 +177,31 @@ class ArgumentsHandler:
 
     def __init__(self):
 
-        #No action argument -> interactive tuning
-        if len(sys.argv)==1:
-            def add_input(help, default):
-                return raw_input(help + "[" + default + "] : ") or default
+        #Command line arguments
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest='action')
+        print_devices_parser = subparsers.add_parser('list-devices', help='List the devices available')
+        tune_parser = subparsers.add_parser('tune', help='Auto-tuning')
+        tune_parser.add_argument("--device", default=0, type=int)
+        tune_parser.add_argument("--operations", default = 'vaxpy,maxpy,dot,gemv,gemm-float32', type=str)
+        tune_parser.add_argument("--gemm-layouts", default='NN,NT,TN,TT', type=str)
+        tune_parser.add_argument("--gemv-layouts", default='N,T', type=str)
+        tune_parser.add_argument("--json-file", default='', type=str)
+        tune_parser.add_argument("--viennacl-src-path", default='', type=str)
 
-            self.device = add_input('Device to tune for','0')
-            self.operations = add_input('Operations to tune for','vaxpy,maxpy,dot,gemv,gemm-float32')
-            self.gemm_layouts = add_input('GEMV Layouts', 'NN,NT,TN,TT')
-            self.gemv_layouts =  add_input('GEMV Layouts', 'N,T')
-            self.json_file = add_input('JSON File', misc_tools.sanitize_string(devices[int(self.device)].name) + '.json')
-            self.method = add_input('Tuning type', 'simple')
-            if self.method == 'simple':
-                self.blas1_size = add_input('BLAS1 size', '10e6')
-                self.blas2_size = add_input('BLAS2 sizes (M,N)', '2560,2560').split(',')
-                self.blas3_size = add_input('BLAS3 sizes (M,N,K)', '1024,1024,1024').split(',')
-            else:
-              self.build_model = True
-              self.sample_size = 30
-        else:
-            #Command line arguments
-            parser = argparse.ArgumentParser()
-            subparsers = parser.add_subparsers(dest='action')
-            print_devices_parser = subparsers.add_parser('list-devices', help='List the devices available')
-            tune_parser = subparsers.add_parser('tune', help='Auto-tuning')
-            tune_parser.add_argument("--device", default=0, type=int)
-            tune_parser.add_argument("--operations", default = 'vaxpy,maxpy,dot,gemv,gemm-float32', type=str)
-            tune_parser.add_argument("--gemm-layouts", default='NN,NT,TN,TT', type=str)
-            tune_parser.add_argument("--gemv-layouts", default='N,T', type=str)
-            tune_parser.add_argument("--json-file", default='', type=str)
-            tune_parser.add_argument("--viennacl-src-path", default='', type=str)
+        tune_subparsers = tune_parser.add_subparsers(dest='method')
+        simple_parser = tune_subparsers.add_parser('simple', help = 'Tune each operation for unique sizes')
 
-            tune_subparsers = tune_parser.add_subparsers(dest='method')
-            simple_parser = tune_subparsers.add_parser('simple', help = 'Tune each operation for unique sizes')
+        simple_parser.add_argument("--blas1-size", default = 10e6, type=int)
+        simple_parser.add_argument("--blas2-size", nargs=2, default=[2560,2560], type=int)
+        simple_parser.add_argument("--blas3-size", nargs=3, default=[1536,1536,1536],type=int)
 
-            simple_parser.add_argument("--blas1-size", default = 10e6, type=int)
-            simple_parser.add_argument("--blas2-size", nargs=2, default=[2560,2560], type=int)
-            simple_parser.add_argument("--blas3-size", nargs=3, default=[1536,1536,1536],type=int)
+        full_parser = tune_subparsers.add_parser('full', help = 'Tune each operation for randomly chosen sizes')
+        full_parser.add_argument("--build-model", default=True, type=bool)
+        full_parser.add_argument("--sample-size", default=30, type=int)
 
-            full_parser = tune_subparsers.add_parser('full', help = 'Tune each operation for randomly chosen sizes')
-            full_parser.add_argument("--build-model", default=True, type=bool)
-            full_parser.add_argument("--sample-size", default=30, type=int)
-
-            args = parser.parse_args()
-            self.__dict__ = args.__dict__.copy()
+        args = parser.parse_args()
+        self.__dict__ = args.__dict__.copy()
             
         #Retypes
         self.device = devices[int(self.device)]
@@ -236,12 +217,13 @@ class ArgumentsHandler:
 
 if __name__ == "__main__":
 
-    devices = [d for platform in cl.get_platforms() for d in platform.get_devices()]
+    platforms = atd.get_platforms()
+    devices = [d for platform in platforms for d in platform.get_devices()]
     print("----------------")
     print("Devices available:")
     print("----------------")
     for (i, d) in enumerate(devices):
-        print 'Device', i, '|',  cl.device_type.to_string(d.type), '|', d.name, 'on', d.platform.name
+        print 'Device', i, '|',  atd.device_type_to_string(d.type), '|', d.name, 'on', d.platform.name
     print("----------------")
 
     args = ArgumentsHandler()

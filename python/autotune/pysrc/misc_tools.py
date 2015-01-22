@@ -1,6 +1,5 @@
 from __future__ import division
 
-import pyopencl
 import time
 import os
 import sys
@@ -186,10 +185,13 @@ class OccupancyRecord:
 
 
     def __init__(self, dev, threads, shared_mem=0, registers=0):
-        if 'advanced micro devices' in dev.vendor.lower():
+        vendor = dev.vendor.lower()
+        if any(X in vendor for X in ['advanced micro devices', 'amd']):
             self.init_amd(dev, threads, shared_mem, registers)
-        elif 'nvidia' in dev.vendor.lower():
+        elif 'nvidia' in vendor:
             self.init_nvidia(dev, threads, shared_mem, registers)
+        elif 'intel' in vendor:
+            self.occupancy = 100
 
 
 
