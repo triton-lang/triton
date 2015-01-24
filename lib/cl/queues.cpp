@@ -1,5 +1,6 @@
 #include "atidlas/cl/queues.h"
 #include <assert.h>
+#include <stdexcept>
 
 namespace atidlas
 {
@@ -9,7 +10,7 @@ namespace cl
 
 void synchronize(cl::Context const & context)
 {
-  std::vector<cl::CommandQueue> & q = queues[context];
+  std::vector<cl::CommandQueue> & q = get_queues(context);
   for(std::vector<cl::CommandQueue>::iterator it = q.begin() ; it != q.end() ; ++it)
     it->finish();
 }
@@ -30,15 +31,32 @@ queues_t init_queues()
       std::vector<cl::Device> current(1, *itt);
       cl::Context context(current);
       cl::CommandQueue queue(context, *itt);
-      result.insert(std::make_pair(context, std::vector<cl::CommandQueue>(1, queue)));
+      result.push_back(std::make_pair(context, std::vector<cl::CommandQueue>(1, queue)));
     }
   }
 
   return result;
 }
 
+
 cl::Context default_context()
-{ return queues.begin()->second.front().getInfo<CL_QUEUE_CONTEXT>(); }
+{
+  return queues[default_context_idx].second.front().getInfo<CL_QUEUE_CONTEXT>();
+}
+
+std::vector<cl::CommandQueue> & get_queues(cl::Context const & ctx)
+{
+  for(queues_t::iterator it = queues.begin() ; it != queues.end() ; ++it)
+    if(it->first()==ctx())
+      return it->second;
+  throw std::out_of_range("The context provided is not registered");
+}
+
+cl::CommandQueue & get_queue(cl::Context const & ctx, std::size_t idx)
+{ return get_queues(ctx)[idx]; }
+
+
+unsigned int default_context_idx = 0;
 
 queues_t queues = init_queues();
 kernels_t kernels = kernels_t();

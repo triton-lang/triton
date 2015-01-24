@@ -21,22 +21,6 @@ namespace bp = boost::python;
 namespace atd = atidlas;
 namespace np = boost::numpy;
 
-namespace atidlas{
-  namespace tools {
-    template <typename T> T* get_pointer(atd::tools::shared_ptr<T> const& p) {
-      return p.get();
-    }
-  }
-}
-
-namespace boost {
-  namespace python {
-    template <typename T> struct pointee<atd::tools::shared_ptr<T> > {
-      typedef T type;
-    };
-  }
-}
-
 namespace detail
 {
   
@@ -387,7 +371,7 @@ void export_cl()
 
 namespace detail
 {
-  atd::tools::shared_ptr<atd::array>
+  boost::shared_ptr<atd::array>
   ndarray_to_atdarray(const np::ndarray& array, const atd::cl::Context& ctx)
   {
 
@@ -404,19 +388,19 @@ namespace detail
     void* data = (void*)array.get_data();
     atd::copy(data, *v);
 
-    return atd::tools::shared_ptr<atd::array>(v);
+    return boost::shared_ptr<atd::array>(v);
   }
 
 
 
-  atd::tools::shared_ptr<atd::array> create_array(bp::object const & obj, bp::object odtype, atd::cl::Context context)
+  boost::shared_ptr<atd::array> create_array(bp::object const & obj, bp::object odtype, atd::cl::Context context)
   {
     return ndarray_to_atdarray(np::from_object(obj, to_np_dtype(extract_dtype(odtype))), context);
   }
 
-  atd::tools::shared_ptr<atd::array> create_empty_array(bp::object sizes, bp::object odtype, atd::cl::Context context)
+  boost::shared_ptr<atd::array> create_empty_array(bp::object sizes, bp::object odtype, atd::cl::Context context)
   {
-      typedef atd::tools::shared_ptr<atd::array> result_type;
+      typedef boost::shared_ptr<atd::array> result_type;
 
       std::size_t len;
       int size1;
@@ -451,9 +435,9 @@ namespace detail
       return bp::extract<std::string>(obj.attr("__class__").attr("__name__"))();
   }
 
-  atd::tools::shared_ptr<atd::scalar> construct_scalar(bp::object obj, atd::cl::Context const & context)
+  boost::shared_ptr<atd::scalar> construct_scalar(bp::object obj, atd::cl::Context const & context)
   {
-    typedef atd::tools::shared_ptr<atd::scalar> result_type;
+    typedef boost::shared_ptr<atd::scalar> result_type;
     std::string name = type_name(obj);
     if(name=="int") return result_type(new atd::scalar(bp::extract<int>(obj)(), context));
     else if(name=="float") return result_type(new atd::scalar(bp::extract<double>(obj)(), context));
@@ -518,7 +502,7 @@ void export_array()
   ADD_SCALAR_HANDLING(OP)
 
   bp::class_<atd::array,
-          atd::tools::shared_ptr<atd::array> >
+          boost::shared_ptr<atd::array> >
   ( "array", bp::no_init)
       .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=atd::cl::default_context())))
       .def(bp::init<atd::array_expression>())

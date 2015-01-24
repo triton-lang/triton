@@ -147,25 +147,23 @@ def do_tuning(args):
               #Row-wise dot
               if operation=='gemv':
                   for A_trans in  args.gemv_layouts:
-                      Template = Template[A_trans]
                       def execution_handler(sizes, fname=os.devnull, parameters=None):
                           A = atd.empty(sizes if A_trans=='N' else sizes[::-1], datatype, context=context)
                           x = atd.empty(sizes[1], datatype, context=context)
                           LHS = A if A_trans=='N' else A.T
-                          return execute(atd.dot(LHS, x), sizes, Template, parameters, fname)
+                          return execute(atd.dot(LHS, x), sizes, Template[A_trans], parameters, fname)
                       tune(execution_handler, 100, 5000, 2, (A_trans,),'log', 'log')
               #Matrix Product
               if operation=='gemm':
                   for L in args.gemm_layouts:
                       A_trans = L[0]
                       B_trans = L[1]
-                      Template = Template[(A_trans, B_trans)]
                       def execution_handler(sizes, fname=os.devnull, parameters=None):
                           A = atd.empty((sizes[0], sizes[2]) if A_trans=='N' else (sizes[2], sizes[0]), datatype, context=context)
                           B = atd.empty((sizes[2], sizes[1]) if B_trans=='N' else (sizes[1], sizes[2]), datatype, context=context)
                           LHS = A if A_trans=='N' else A.T
                           RHS = B if B_trans=='N' else B.T
-                          return execute(atd.dot(LHS, RHS), sizes, Template, parameters, fname)
+                          return execute(atd.dot(LHS, RHS), sizes, Template[(A_trans, B_trans)], parameters, fname)
                       tune(execution_handler, 100, 2000, 3,(A_trans,B_trans), 'linear', 'linear')
 
               json.dump(json_out, open(args.json_file,'w'))
