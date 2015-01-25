@@ -42,7 +42,6 @@ namespace atidlas
 
   typedef std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<model> > model_map_t;
 
-  model_map_t import(std::string const & fname);
   model_map_t init_models(cl::CommandQueue const & queue);
   model_map_t& get_model_map(cl::CommandQueue & queue);
   model& get_model(cl::CommandQueue & queue, expression_type, numeric_type);

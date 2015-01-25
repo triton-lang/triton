@@ -49,7 +49,8 @@ std::vector<cl::CommandQueue> & get_queues(cl::Context const & ctx)
   for(queues_t::iterator it = queues.begin() ; it != queues.end() ; ++it)
     if(it->first()==ctx())
       return it->second;
-  throw std::out_of_range("The context provided is not registered");
+  queues.push_back(std::make_pair(ctx, std::vector<cl::CommandQueue>(1, cl::CommandQueue(ctx, ctx.getInfo<CL_CONTEXT_DEVICES>()[0]))));
+  return queues.back().second;
 }
 
 cl::CommandQueue & get_queue(cl::Context const & ctx, std::size_t idx)

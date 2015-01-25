@@ -51,13 +51,16 @@ static const std::vector<int> BLAS2_M = make_vector<int>() << 256;
 static const std::vector<int> BLAS2_N = create_full_range(128, 5000, 64);
 
 // BLAS3 Sizes
-static const std::vector<int> BLAS3_N = create_full_range(128, 5000, 64);
+static const std::vector<int> BLAS3_M = make_vector<int>() << 128;
+static const std::vector<int> BLAS3_N = make_vector<int>() << 128;
+static const std::vector<int> BLAS3_K = create_full_range(128, 5000, 64);
 
 
 float bandwidth(std::size_t N, float t, unsigned int dtsize)
-{
-  return N * dtsize * 1e-9 / t;
-}
+{ return N * dtsize * 1e-9 / t; }
+
+double gflops(double nops, double t)
+{ return nops * 1e-9 / t; }
 
 template<class T>
 T median(std::vector<T> x)

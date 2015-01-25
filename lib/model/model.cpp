@@ -143,7 +143,7 @@ namespace detail
   {
     if(name=="vaxpy") return VECTOR_AXPY_TYPE;
     if(name=="reduction") return REDUCTION_TYPE;
-    if(name=="matrix-axpy") return MATRIX_AXPY_TYPE;
+    if(name=="maxpy") return MATRIX_AXPY_TYPE;
     if(name=="row-wise-reductionN") return ROW_WISE_REDUCTION_TYPE;
     if(name=="row-wise-reductionT") return COL_WISE_REDUCTION_TYPE;
     if(name=="matrix-productNN") return MATRIX_PRODUCT_NN_TYPE;
@@ -167,7 +167,7 @@ namespace detail
       return tools::shared_ptr<base>(new vaxpy( vaxpy_parameters(a[0], a[1], a[2], fetch[a[3]])));
     else if(template_name=="reduction")
       return tools::shared_ptr<base>(new reduction( reduction_parameters(a[0], a[1], a[2], fetch[a[3]])));
-    else if(template_name=="matrix-axpy")
+    else if(template_name=="maxpy")
       return tools::shared_ptr<base>(new maxpy( maxpy_parameters(a[0], a[1], a[2], a[3], a[4], fetch[a[5]])));
     else if(template_name.find("row-wise-reduction")!=std::string::npos)
     {
@@ -185,11 +185,9 @@ namespace detail
   }
 }
 
-model_map_t import(std::string const & fname, cl::CommandQueue & queue)
+void import(std::string const & fname, cl::CommandQueue & queue, model_map_t& result)
 {
-
   namespace js = rapidjson;
-  model_map_t result;
   //Parse the JSON document
   js::Document document;
   std::ifstream t(fname.c_str());
@@ -201,7 +199,7 @@ model_map_t import(std::string const & fname, cl::CommandQueue & queue)
   document.Parse<0>(str.c_str());
   //Deserialize
   std::vector<std::string> operations = tools::make_vector<std::string>() << "vaxpy" << "reduction"
-                                                                          << "matrix-axpy" << "row-wise-reductionN" << "row-wise-reductionT"
+                                                                          << "maxpy" << "row-wise-reductionN" << "row-wise-reductionT"
                                                                           << "matrix-productNN" << "matrix-productTN" << "matrix-productNT" << "matrix-productTT";
   std::vector<std::string> dtype = tools::make_vector<std::string>() << "float32" << "float64";
   for(std::vector<std::string>::iterator op = operations.begin() ; op != operations.end() ; ++op)
@@ -222,19 +220,18 @@ model_map_t import(std::string const & fname, cl::CommandQueue & queue)
           js::Value const & profiles = document[opcstr][dtcstr]["profiles"];
           for (js::SizeType id = 0 ; id < profiles.Size() ; ++id)
             templates.push_back(detail::create(*op, tools::to_int_array<int>(profiles[id])));
-          if(templates.size()>1){
+          if(templates.size()>1)
+          {
             // Get predictor
             predictors::random_forest predictor(document[opcstr][dtcstr]["predictor"]);
             result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(predictor, templates, queue));
-          }else{
-            result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(templates, queue));
           }
+          else
+            result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(templates, queue));
         }
       }
     }
   }
-
-  return result;
 }
 
 model_map_t init_models(cl::CommandQueue & queue)
@@ -243,7 +240,7 @@ model_map_t init_models(cl::CommandQueue & queue)
   typedef tools::shared_ptr<model> ptr_t;
   numeric_type types[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
 
-  for(size_t i = 0 ; i < 1 ; ++i){
+  for(size_t i = 0 ; i < 10 ; ++i){
     numeric_type DTYPE = types[i];
     res[std::make_pair(SCALAR_AXPY_TYPE, DTYPE)] = ptr_t(new model(vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED), queue));
     res[std::make_pair(VECTOR_AXPY_TYPE, DTYPE)] = ptr_t (new model(vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED), queue));
@@ -257,7 +254,7 @@ model_map_t init_models(cl::CommandQueue & queue)
     res[std::make_pair(MATRIX_PRODUCT_TT_TYPE, DTYPE)] = ptr_t(new model(mproduct_tt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
   }
   if(const char * cmodel_file = std::getenv("ATIDLAS_MODEL_DEVICE_0"))
-    return import(std::string(cmodel_file), queue);
+    import(std::string(cmodel_file), queue, res);
   return res;
 
 

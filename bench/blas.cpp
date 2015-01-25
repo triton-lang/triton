@@ -33,62 +33,119 @@ void bench(ad::numeric_type dtype)
     total_time += times.back();\
   }\
   float tres = median(times);\
-  std::cout << " " << PERF(N, tres, dtsize) << std::flush;\
+  std::cout << " " << PERF << std::flush;\
   }
 
-  /*---------*/
-  /*--BLAS1--*/
-  /*---------*/
-  std::cout << "#AXPY" << std::endl;
-  for(std::vector<int_t>::const_iterator it = BLAS1_N.begin() ; it != BLAS1_N.end() ; ++it)
-  {
-    int_t N = *it;
-    std::cout << N;
-    /* ATIDLAS */
-    atidlas::array x(N, dtype), y(N, dtype);
-    BENCHMARK(y = x + y, bandwidth);
-    /* clAmdBlas */
-#ifdef BENCH_CLAMDBLAS
-    BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &atidlas::cl::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth)
-#endif
-    /* BLAS */
-#ifdef BENCH_CBLAS
-    std::vector<float> cx(N), cy(N);
-    atidlas::copy(x, cx);
-    atidlas::copy(y, cy);
-    BENCHMARK(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), bandwidth);
-#endif
-    std::cout << std::endl;
-  }
-  std::cout << "\n\n" << std::flush;
+//  /*---------*/
+//  /*--BLAS1--*/
+//  /*---------*/
+//  std::cout << "#AXPY" << std::endl;
+//  for(std::vector<int_t>::const_iterator it = BLAS1_N.begin() ; it != BLAS1_N.end() ; ++it)
+//  {
+//    int_t N = *it;
+//    std::cout << N;
+//    /* ATIDLAS */
+//    atidlas::array x(N, dtype), y(N, dtype);
+//    BENCHMARK(y = x + y, bandwidth(3*N, tres, dtsize));
+//    /* clAmdBlas */
+//#ifdef BENCH_CLAMDBLAS
+//    BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &atidlas::cl::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(3*N, tres, dtsize))
+//#endif
+//    /* BLAS */
+//#ifdef BENCH_CBLAS
+//    std::vector<float> cx(N), cy(N);
+//    atidlas::copy(x, cx);
+//    atidlas::copy(y, cy);
+//    BENCHMARK(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), bandwidth(3*N, tres, dtsize));
+//#endif
+//    std::cout << std::endl;
+//  }
+//  std::cout << "\n\n" << std::flush;
 
-
-//  //DOT
-//  BENCH(DECLARE(ad::pointed_scalar s(dtype)); DECLARE(ad::vector, x(*it, dtype), y(*it, dtype)),  s = dot(x, y), BLAS1_N, bandwidth, 2*(*it), "dot");
-
+//  std::cout << "#DOT" << std::endl;
+//  for(std::vector<int_t>::const_iterator it = BLAS1_N.begin() ; it != BLAS1_N.end() ; ++it)
+//  {
+//    int_t N = *it;
+//    std::cout << N;
+//    /* ATIDLAS */
+//    atidlas::array x(N, dtype), y(N, dtype);
+//    atidlas::array scratch(N, dtype);
+//    atidlas::scalar s(dtype);
+//    BENCHMARK(s = dot(x,y), bandwidth(2*N, tres, dtsize));
+//    /* clAmdBlas */
+//#ifdef BENCH_CLAMDBLAS
+//    BENCHMARK(clAmdBlasSdot(N, s.data()(), 0, x.data()(), 0, 1, y.data()(), 0, 1, scratch.data()(), 1, &atidlas::cl::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(2*N, tres, dtsize))
+//#endif
+//    /* BLAS */
+//#ifdef BENCH_CBLAS
+//    std::vector<float> cx(N), cy(N);
+//    atidlas::copy(x, cx);
+//    atidlas::copy(y, cy);
+//    BENCHMARK(cblas_sdot(N, cx.data(), 1, cy.data(), 1), bandwidth(2*N, tres, dtsize));
+//#endif
+//    std::cout << std::endl;
+//  }
+//  std::cout << "\n\n" << std::flush;
 
 //  /*---------*/
 //  /*--BLAS2--*/
 //  /*---------*/
-
-//  //N-layout
-//  for(std::vector<int>::const_iterator Mit = BLAS2_M.begin() ; Mit != BLAS2_M.end() ; ++Mit)
-//  {
-//      BENCH(DECLARE(atidlas::matrix, A(*Mit,*it)); DECLARE(atidlas::vector, y(*Mit), x(*it)),ARGS(y, viennacl::op_assign(), viennacl::linalg::prod(A,x)), BLAS2_N,
-//             bandwidth, (*Mit)*(*it), "row-wise-reductionN-float32");
-//  }
-
-
 //  //T-layout
+//  std::cout << "#GEMV-T" << std::endl;
 //  for(std::vector<int>::const_iterator Mit = BLAS2_M.begin() ; Mit != BLAS2_M.end() ; ++Mit)
-//  {
-//      BENCH(DECLARE(atidlas::matrix, A(*it,*Mit)) ; DECLARE(atidlas::vector, y(*Mit), x(*it)), ARGS(y, viennacl::op_assign(), viennacl::linalg::prod(viennacl::trans(A),x)), BLAS2_N,
-//             bandwidth, (*Mit)*(*it), "row-wise-reductionT-float32");
-//  }
+//    for(std::vector<int_t>::const_iterator Nit = BLAS2_N.begin() ; Nit != BLAS2_N.end() ; ++Nit)
+//    {
+//      int_t M = *Mit;
+//      int_t N = *Nit;
+//      std::cout << M << "," << N;
+//      /* ATIDLAS */
+//      atidlas::array A(N, M, dtype), y(M, dtype), x(N, dtype);
+//      BENCHMARK(y = dot(trans(A),x), bandwidth(M*N + M + N, tres, dtsize));
+//      /* clAmdBlas */
+//  #ifdef BENCH_CLAMDBLAS
+//      BENCHMARK(clAmdBlasSgemv(clAmdBlasColumnMajor, clAmdBlasTrans, N, M, 1, A.data()(), A.ld(), x.data()(), 0, 1, 0, y.data()(), 0, 1, 1, &atidlas::cl::get_queue(x.context(), 0)(),0, NULL, NULL), bandwidth(M*N + M + N, tres, dtsize))
+//  #endif
+//      /* BLAS */
+//  #ifdef BENCH_CBLAS
+//      std::vector<float> cA(N*M), cx(N), cy(M);
+//      atidlas::copy(x, cx);
+//      atidlas::copy(y, cy);
+//      atidlas::copy(A, cA);
+//      BENCHMARK(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), N, cx.data(), 1, 0, cy.data(), 1), bandwidth(M*N + M + N, tres, dtsize));
+//  #endif
+//      std::cout << std::endl;
+//    }
+//    std::cout << "\n\n" << std::flush;
 
 //  /*---------*/
 //  /*--BLAS3--*/
 //  /*---------*/
+    std::cout << "#GEMM-NT" << std::endl;
+    for(std::vector<int_t>::const_iterator Mit = BLAS3_M.begin() ; Mit != BLAS3_M.end() ; ++Mit)
+    for(std::vector<int_t>::const_iterator Nit = BLAS3_N.begin() ; Nit != BLAS3_N.end() ; ++Nit)
+    for(std::vector<int_t>::const_iterator Kit = BLAS3_K.begin() ; Kit != BLAS3_K.end() ; ++Kit)
+    {
+      int_t M = *Mit, N = *Nit, K = *Kit;
+      std::cout << M << "," << N << "," << K;
+      /* ATIDLAS */
+      atidlas::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
+      BENCHMARK(C = dot(A,trans(B)), gflops((double)2*M*N*K, tres));
+      /* clAmdBlas */
+  #ifdef BENCH_CLAMDBLAS
+      BENCHMARK(clAmdBlasSgemm(clAmdBlasColumnMajor, clAmdBlasNoTrans, clAmdBlasTrans, M, N, K, 1, A.data()(), A.ld(), B.data()(), B.ld(),
+                               0, C.data()(), C.ld(), 1, &atidlas::cl::get_queue(C.context(), 0)(),0, NULL, NULL), gflops((double)2*M*N*K, tres))
+  #endif
+      /* BLAS */
+  #ifdef BENCH_CBLAS
+      std::vector<float> cC(M*N), cA(M*K), cB(N*K);
+      atidlas::copy(C, cC);
+      atidlas::copy(A, cA);
+      atidlas::copy(B, cB);
+      BENCHMARK(cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, M, N, K, 1, cA.data(), M, cB.data(), N, 1, cC.data(), M), gflops((double)2*M*N*K, tres));
+  #endif
+      std::cout << std::endl;
+    }
+
 }
 
 int main(int argc, char* argv[])

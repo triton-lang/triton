@@ -77,17 +77,17 @@ bp::tuple get_shape(atd::array const & x)
 //  x.reshape(size1, size2);
 //}
 
-boost::python::dict create_queues(atd::cl::queues_t queues)
-{
-  boost::python::dict dictionary;
-  for (atd::cl::queues_t::iterator it = queues.begin(); it != queues.end(); ++it) {
-    bp::list list;
-    for (atd::cl::queues_t::mapped_type::iterator itt = it->second.begin(); itt != it->second.end(); ++itt)
-      list.append(*itt);
-    dictionary[it->first] = list;
-  }
-  return dictionary;
-}
+//boost::python::dict create_queues(atd::cl::queues_t queues)
+//{
+//  boost::python::dict dictionary;
+//  for (atd::cl::queues_t::iterator it = queues.begin(); it != queues.end(); ++it) {
+//    bp::list list;
+//    for (atd::cl::queues_t::mapped_type::iterator itt = it->second.begin(); itt != it->second.end(); ++itt)
+//      list.append(*itt);
+//    dictionary[it->first] = list;
+//  }
+//  return dictionary;
+//}
 
 template<class T>
 struct datatype : public atd::value_scalar
@@ -198,7 +198,7 @@ namespace detail
   }
 
   std::vector<atd::cl::CommandQueue> & get_queue(atd::cl::Context const & ctx)
-  { return atd::cl::queues[ctx]; }
+  { return atd::cl::get_queues(ctx); }
 
   atd::numeric_type extract_dtype(bp::object const & odtype)
   {

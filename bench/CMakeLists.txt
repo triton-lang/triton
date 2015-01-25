@@ -17,7 +17,7 @@ include_directories(/opt/intel/system_studio_2015.1.045/mkl/include/)
 set(BLAS_DEF ${BLAS_DEF} "-DBENCH_CBLAS")
 set(MKLROOT /opt/intel/system_studio_2015.1.045/mkl/)
 set(CCROOT /opt/intel/system_studio_2015.1.045/compiler/)
-set(BLAS_LIBS ${MKLROOT}/lib/intel64/libmkl_intel_lp64.a ${MKLROOT}/lib/intel64/libmkl_intel_thread.a ${BLAS_LIBS} ${MKLROOT}/lib/intel64/libmkl_core.a ${CCROOT}/lib/intel64/libiomp5.so pthread dl m)
+set(BLAS_LIBS ${MKLROOT}/lib/intel64/libmkl_intel_lp64.so ${MKLROOT}/lib/intel64/libmkl_avx.so ${MKLROOT}/lib/intel64/libmkl_intel_thread.so ${BLAS_LIBS} ${MKLROOT}/lib/intel64/libmkl_core.so ${CCROOT}/lib/intel64/libiomp5.so pthread dl m)
 
 
 string(REPLACE ";" " " BLAS_DEF_STR "${BLAS_DEF}")
