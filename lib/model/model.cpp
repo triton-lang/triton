@@ -141,7 +141,7 @@ namespace detail
 {
   static expression_type get_expression_type(std::string const & name)
   {
-    if(name=="vector-axpy") return VECTOR_AXPY_TYPE;
+    if(name=="vaxpy") return VECTOR_AXPY_TYPE;
     if(name=="reduction") return REDUCTION_TYPE;
     if(name=="matrix-axpy") return MATRIX_AXPY_TYPE;
     if(name=="row-wise-reductionN") return ROW_WISE_REDUCTION_TYPE;
@@ -163,7 +163,7 @@ namespace detail
   static tools::shared_ptr<base> create(std::string const & template_name, std::vector<int> const & a)
   {
     fetching_policy_type fetch[] = {FETCH_FROM_LOCAL, FETCH_FROM_GLOBAL_STRIDED, FETCH_FROM_GLOBAL_CONTIGUOUS};
-    if(template_name=="vector-axpy")
+    if(template_name=="vaxpy")
       return tools::shared_ptr<base>(new vaxpy( vaxpy_parameters(a[0], a[1], a[2], fetch[a[3]])));
     else if(template_name=="reduction")
       return tools::shared_ptr<base>(new reduction( reduction_parameters(a[0], a[1], a[2], fetch[a[3]])));
@@ -187,6 +187,7 @@ namespace detail
 
 model_map_t import(std::string const & fname, cl::CommandQueue & queue)
 {
+
   namespace js = rapidjson;
   model_map_t result;
   //Parse the JSON document
@@ -199,7 +200,7 @@ model_map_t import(std::string const & fname, cl::CommandQueue & queue)
   str.assign((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
   document.Parse<0>(str.c_str());
   //Deserialize
-  std::vector<std::string> operations = tools::make_vector<std::string>() << "vector-axpy" << "reduction"
+  std::vector<std::string> operations = tools::make_vector<std::string>() << "vaxpy" << "reduction"
                                                                           << "matrix-axpy" << "row-wise-reductionN" << "row-wise-reductionT"
                                                                           << "matrix-productNN" << "matrix-productTN" << "matrix-productNT" << "matrix-productTT";
   std::vector<std::string> dtype = tools::make_vector<std::string>() << "float32" << "float64";
@@ -221,9 +222,13 @@ model_map_t import(std::string const & fname, cl::CommandQueue & queue)
           js::Value const & profiles = document[opcstr][dtcstr]["profiles"];
           for (js::SizeType id = 0 ; id < profiles.Size() ; ++id)
             templates.push_back(detail::create(*op, tools::to_int_array<int>(profiles[id])));
-          // Get predictor
-          predictors::random_forest predictor(document[opcstr][dtcstr]["predictor"]);
-          result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(predictor, templates, queue));
+          if(templates.size()>1){
+            // Get predictor
+            predictors::random_forest predictor(document[opcstr][dtcstr]["predictor"]);
+            result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(predictor, templates, queue));
+          }else{
+            result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(templates, queue));
+          }
         }
       }
     }
@@ -238,7 +243,7 @@ model_map_t init_models(cl::CommandQueue & queue)
   typedef tools::shared_ptr<model> ptr_t;
   numeric_type types[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
 
-  for(size_t i = 0 ; i < 10 ; ++i){
+  for(size_t i = 0 ; i < 1 ; ++i){
     numeric_type DTYPE = types[i];
     res[std::make_pair(SCALAR_AXPY_TYPE, DTYPE)] = ptr_t(new model(vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED), queue));
     res[std::make_pair(VECTOR_AXPY_TYPE, DTYPE)] = ptr_t (new model(vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED), queue));
@@ -251,10 +256,11 @@ model_map_t init_models(cl::CommandQueue & queue)
     res[std::make_pair(MATRIX_PRODUCT_NT_TYPE, DTYPE)] = ptr_t(new model(mproduct_nt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
     res[std::make_pair(MATRIX_PRODUCT_TT_TYPE, DTYPE)] = ptr_t(new model(mproduct_tt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
   }
+  if(const char * cmodel_file = std::getenv("ATIDLAS_MODEL_DEVICE_0"))
+    return import(std::string(cmodel_file), queue);
   return res;
 
-  //    if(const char * cmodel_file = std::getenv("ATIDLAS_MODEL_DEVICE_0"))
-  //      return import(std::string(cmodel_file));
+
   //    else
   //      throw "Please specify a model file";
 }

@@ -34,7 +34,9 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
     std::string data_type = append_width("#scalartype",simd_width);
 
     stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
-    stream << "__kernel void " << "k" << label << (i==0?"f":"o") << "(unsigned int N," << generate_arguments(data_type, mappings, symbolic_expressions) << ")" << std::endl;
+    char kprefix[10];
+    fill_kernel_name(kprefix, label, (i==0?"f":"o"));
+    stream << "__kernel void " << kprefix << "(unsigned int N," << generate_arguments(data_type, mappings, symbolic_expressions) << ")" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
 
@@ -119,9 +121,7 @@ void vaxpy::enqueue(cl::CommandQueue & queue,
   bool misaligned = has_misaligned_offset(symbolic_expressions);
   bool fallback = p_.simd_width > 1 && (strided || (size%p_.simd_width>0) || misaligned);
   cl::Program const & program = programs[fallback?0:1].program();
-  if(cl::kernels.find(program)==cl::kernels.end())
-    cl::kernels.insert(std::make_pair(program, cl::Kernel(program, fallback?kfb:kopt))).first->second;
-  cl::Kernel & kernel = cl::kernels.at(program);
+  cl::Kernel kernel(program, fallback?kfb:kopt);
   //NDRange
   cl::NDRange grange(p_.local_size_0*p_.num_groups);
   cl::NDRange lrange(p_.local_size_0);
