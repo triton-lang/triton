@@ -2,7 +2,18 @@ file( GLOB_RECURSE LIBATIDLAS_SRC *.cpp)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(atidlas SHARED ${LIBATIDLAS_SRC})
-set_target_properties(atidlas PROPERTIES COMPILE_FLAGS "-Wno-sign-compare -D__CL_ENABLE_EXCEPTIONS -Wall -Wextra -pedantic")
+set_target_properties(atidlas PROPERTIES
+   COMPILE_FLAGS "-Wno-sign-compare -D__CL_ENABLE_EXCEPTIONS -Wall -Wextra -pedantic")
 
-#add_library(atidlas_static STATIC ${LIBATIDLAS_SRC})
-#set_target_properties(atidlas_static PROPERTIES OUTPUT_NAME atidlas)
+set(PREINSTALL_PY "${CMAKE_CURRENT_BINARY_DIR}/preinstall.py")
+set(POSTINSTALL_PY "${CMAKE_CURRENT_BINARY_DIR}/postinstall.py")
+
+configure_file("${PROJECT_SOURCE_DIR}/python/preinstall.py" ${PREINSTALL_PY})
+configure_file("${PROJECT_SOURCE_DIR}/python/postinstall.py" ${POSTINSTALL_PY})
+
+install(CODE "execute_process(COMMAND ${PYTHON} ${PREINSTALL_PY})")
+install(TARGETS atidlas LIBRARY DESTINATION lib)
+set(INSTALL_INCLUDE_DIR /usr/local/include)
+install(DIRECTORY atidlas "${PROJECT_SOURCE_DIR}/include/atidlas"
+        DESTINATION "${INSTALL_INCLUDE_DIR}"  FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
+install(CODE "execute_process(COMMAND ${PYTHON} ${POST_INSTALL_SCRIPT_PY})")

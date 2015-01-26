@@ -11,4 +11,4 @@ add_custom_command(OUTPUT ${OUTPUT}
                    COMMAND ${CMAKE_COMMAND} -E touch ${OUTPUT}
                    DEPENDS atidlas ${PYATIDLAS_SRC} ${PYATIDLAS_PYSRC} ${SETUP_PY})
 add_custom_target(pyatidlas ALL DEPENDS ${OUTPUT})
-install(CODE "execute_process(COMMAND ${PYTHON} ${SETUP_PY} install)")
+#install(CODE "execute_process(COMMAND ${PYTHON} ${SETUP_PY} install)")

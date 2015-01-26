@@ -172,9 +172,7 @@ def do_tuning(args):
 
 
 class ArgumentsHandler:
-
-    def __init__(self):
-
+    def __init__(self, devices):
         #Command line arguments
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest='action')
@@ -200,34 +198,36 @@ class ArgumentsHandler:
 
         args = parser.parse_args()
         self.__dict__ = args.__dict__.copy()
-            
-        #Retypes
-        self.device = devices[int(self.device)]
-        if not self.json_file:
-            self.json_file = misc_tools.sanitize_string(self.device.name) + '.json'
-        self.operations = self.operations.split(',')
-        self.gemm_layouts = self.gemm_layouts.split(',')
-        self.gemv_layouts = self.gemv_layouts.split(',')
-        if self.method == 'simple':
-            self.blas1_size = [int(float(self.blas1_size))]
-            self.blas2_size = map(int, self.blas2_size)
-            self.blas3_size = map(int, self.blas3_size)
+        
+        if self.action == 'tune':
+            #Retypes
+            self.device = devices[int(self.device)]
+            if not self.json_file:
+                self.json_file = misc_tools.sanitize_string(self.device.name) + '.json'
+            self.operations = self.operations.split(',')
+            self.gemm_layouts = self.gemm_layouts.split(',')
+            self.gemv_layouts = self.gemv_layouts.split(',')
+            if self.method == 'simple':
+                self.blas1_size = [int(float(self.blas1_size))]
+                self.blas2_size = map(int, self.blas2_size)
+                self.blas3_size = map(int, self.blas3_size)
 
 if __name__ == "__main__":
 
     platforms = atd.get_platforms()
     devices = [d for platform in platforms for d in platform.get_devices()]
+    
+    args = ArgumentsHandler(devices)
+
     print("----------------")
     print("Devices available:")
     print("----------------")
     for (i, d) in enumerate(devices):
         print 'Device', i, '|',  atd.device_type_to_string(d.type), '|', d.name, 'on', d.platform.name
     print("----------------")
-
-    args = ArgumentsHandler()
-
-    print("------")
-    print("Auto-tuning")
-    print("------")
-
-    do_tuning(args)
+    
+    if args.action=='tune':
+        print("------")
+        print("Auto-tuning")
+        print("------")
+        do_tuning(args)
