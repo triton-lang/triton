@@ -2,16 +2,16 @@
 #define ATIDLAS_CL_QUEUES_H
 
 #include <map>
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/cl/compare.hpp"
 
 namespace atidlas
 {
 
-namespace cl
+namespace cl_ext
 {
 
-typedef std::map<cl::Program, cl::Kernel, cl::compare> kernels_t;
+typedef std::map<cl::Program, cl::Kernel, cl_ext::compare> kernels_t;
 typedef std::vector<std::pair<cl::Context, std::vector<cl::CommandQueue> > > queues_t;
 
 queues_t init_queues();

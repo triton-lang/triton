@@ -2,12 +2,12 @@
 #define ATIDLAS_CL_PROGRAM_MAP_H
 
 #include <map>
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 
 namespace atidlas
 {
 
-namespace cl
+namespace cl_ext
 {
 
 class program_map

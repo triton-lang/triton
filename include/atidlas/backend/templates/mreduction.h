@@ -35,7 +35,7 @@ private:
   std::vector<std::string> generate_impl(unsigned int, symbolic_expressions_container const &, std::vector<mapping_type> const &) const;
 public:
   virtual std::vector<int_t> input_sizes(symbolic_expressions_container const & symbolic_expressions);
-  void enqueue(cl::CommandQueue & queue,std::vector<cl::lazy_compiler> & programs,unsigned int label, symbolic_expressions_container const & symbolic_expressions);
+  void enqueue(cl::CommandQueue & queue,std::vector<cl_ext::lazy_compiler> & programs,unsigned int label, symbolic_expressions_container const & symbolic_expressions);
 private:
   reduction_type reduction_type_;
 };

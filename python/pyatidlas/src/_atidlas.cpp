@@ -77,12 +77,12 @@ bp::tuple get_shape(atd::array const & x)
 //  x.reshape(size1, size2);
 //}
 
-//boost::python::dict create_queues(atd::cl::queues_t queues)
+//boost::python::dict create_queues(atd::cl_ext::queues_t queues)
 //{
 //  boost::python::dict dictionary;
-//  for (atd::cl::queues_t::iterator it = queues.begin(); it != queues.end(); ++it) {
+//  for (atd::cl_ext::queues_t::iterator it = queues.begin(); it != queues.end(); ++it) {
 //    bp::list list;
-//    for (atd::cl::queues_t::mapped_type::iterator itt = it->second.begin(); itt != it->second.end(); ++itt)
+//    for (atd::cl_ext::queues_t::mapped_type::iterator itt = it->second.begin(); itt != it->second.end(); ++itt)
 //      list.append(*itt);
 //    dictionary[it->first] = list;
 //  }
@@ -175,7 +175,7 @@ namespace detail
     return res;
   }
 
-  bp::list nv_compute_capability(atd::cl::Device const & device)
+  bp::list nv_compute_capability(cl::Device const & device)
   {
     bp::list res;
     res.append(device.getInfo<CL_DEVICE_COMPUTE_CAPABILITY_MAJOR_NV>());
@@ -185,20 +185,20 @@ namespace detail
 
   bp::list get_platforms()
   {
-    std::vector<atd::cl::Platform> platforms;
-    atd::cl::Platform::get(&platforms);
+    std::vector<cl::Platform> platforms;
+    cl::Platform::get(&platforms);
     return to_list(platforms.begin(), platforms.end());
   }
 
-  bp::list get_devices(atd::cl::Platform const & platform)
+  bp::list get_devices(cl::Platform const & platform)
   {
-    std::vector<atd::cl::Device> devices;
+    std::vector<cl::Device> devices;
     platform.getDevices(CL_DEVICE_TYPE_ALL, &devices);
     return to_list(devices.begin(), devices.end());
   }
 
-  std::vector<atd::cl::CommandQueue> & get_queue(atd::cl::Context const & ctx)
-  { return atd::cl::get_queues(ctx); }
+  std::vector<cl::CommandQueue> & get_queue(cl::Context const & ctx)
+  { return atd::cl_ext::get_queues(ctx); }
 
   atd::numeric_type extract_dtype(bp::object const & odtype)
   {
@@ -272,27 +272,27 @@ namespace detail
       }
   };
 
-  atd::cl::Platform get_platform(atd::cl::Device const & device)
-  {  return atd::cl::Platform(device.getInfo<CL_DEVICE_PLATFORM>());  }
+  cl::Platform get_platform(cl::Device const & device)
+  {  return cl::Platform(device.getInfo<CL_DEVICE_PLATFORM>());  }
 
   template<cl_int INFO>
-  typename atd::cl::detail::param_traits<atd::cl::detail::cl_device_info, INFO>::param_type
-  wrap_device_info(atd::cl::Device const & x)
+  typename cl::detail::param_traits<cl::detail::cl_device_info, INFO>::param_type
+  wrap_device_info(cl::Device const & x)
   { return x.getInfo<INFO>(NULL); }
 
   template<cl_int INFO>
-  typename atd::cl::detail::param_traits<atd::cl::detail::cl_context_info, INFO>::param_type
-  wrap_context_info(atd::cl::Context const & x)
+  typename cl::detail::param_traits<cl::detail::cl_context_info, INFO>::param_type
+  wrap_context_info(cl::Context const & x)
   { return x.getInfo<INFO>(NULL); }
 
   template<cl_int INFO>
-  typename atd::cl::detail::param_traits<atd::cl::detail::cl_platform_info, INFO>::param_type
-  wrap_platform_info(atd::cl::Platform const & x)
+  typename cl::detail::param_traits<cl::detail::cl_platform_info, INFO>::param_type
+  wrap_platform_info(cl::Platform const & x)
   { return x.getInfo<INFO>(NULL); }
 
   template<cl_int INFO>
-  typename atd::cl::detail::param_traits<atd::cl::detail::cl_command_queue_info, INFO>::param_type
-  wrap_command_queue_info(atd::cl::CommandQueue const & x)
+  typename cl::detail::param_traits<cl::detail::cl_command_queue_info, INFO>::param_type
+  wrap_command_queue_info(cl::CommandQueue const & x)
   { return x.getInfo<INFO>(NULL); }
 
 
@@ -309,7 +309,7 @@ namespace detail
 
 void export_cl()
 {
-  typedef std::vector<atd::cl::CommandQueue> queues_t;
+  typedef std::vector<cl::CommandQueue> queues_t;
   bp::class_<queues_t>("queues")
       .def("__len__", &queues_t::size)
       .def("__getitem__", &bp::vector_indexing_suite<queues_t>::get_item, bp::return_internal_reference<>())
@@ -333,14 +333,14 @@ void export_cl()
   bp::def("device_type_to_string", &detail::to_string);
 
 
-  bp::class_<atd::cl::Platform>("platform", bp::no_init)
+  bp::class_<cl::Platform>("platform", bp::no_init)
     #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_platform_info<NAME>)
       WRAP("name", CL_PLATFORM_NAME)
     #undef WRAP
       .def("get_devices", &detail::get_devices)
       ;
 
-  bp::class_<atd::cl::Device>("device", bp::no_init)
+  bp::class_<cl::Device>("device", bp::no_init)
     #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_device_info<NAME>)
       .add_property("nv_compute_capability", &detail::nv_compute_capability)
       .add_property("platform", &detail::get_platform)
@@ -351,20 +351,20 @@ void export_cl()
     #undef WRAP
       ;
 
-  bp::class_<atd::cl::Context>("context", bp::init<atd::cl::Device>())
+  bp::class_<cl::Context>("context", bp::init<cl::Device>())
     #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_context_info<NAME>)
     #undef WRAP
       .add_property("queues", bp::make_function(&detail::get_queue, bp::return_internal_reference<>()))
       ;
 
-  bp::class_<atd::cl::CommandQueue>("command_queue", bp::init<atd::cl::Context, atd::cl::Device>())
+  bp::class_<cl::CommandQueue>("command_queue", bp::init<cl::Context, cl::Device>())
     #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_command_queue_info<NAME>)
       WRAP("device", CL_QUEUE_DEVICE)
     #undef WRAP
       .add_property("models", bp::make_function(&atd::get_model_map, bp::return_internal_reference<>()));
       ;
 
-  bp::def("synchronize", &atd::cl::synchronize);
+  bp::def("synchronize", &atd::cl_ext::synchronize);
   bp::def("get_platforms", &detail::get_platforms);
 
 }
@@ -372,7 +372,7 @@ void export_cl()
 namespace detail
 {
   boost::shared_ptr<atd::array>
-  ndarray_to_atdarray(const np::ndarray& array, const atd::cl::Context& ctx)
+  ndarray_to_atdarray(const np::ndarray& array, const cl::Context& ctx)
   {
 
     int d = array.get_nd();
@@ -393,12 +393,12 @@ namespace detail
 
 
 
-  boost::shared_ptr<atd::array> create_array(bp::object const & obj, bp::object odtype, atd::cl::Context context)
+  boost::shared_ptr<atd::array> create_array(bp::object const & obj, bp::object odtype, cl::Context context)
   {
     return ndarray_to_atdarray(np::from_object(obj, to_np_dtype(extract_dtype(odtype))), context);
   }
 
-  boost::shared_ptr<atd::array> create_empty_array(bp::object sizes, bp::object odtype, atd::cl::Context context)
+  boost::shared_ptr<atd::array> create_empty_array(bp::object sizes, bp::object odtype, cl::Context context)
   {
       typedef boost::shared_ptr<atd::array> result_type;
 
@@ -435,7 +435,7 @@ namespace detail
       return bp::extract<std::string>(obj.attr("__class__").attr("__name__"))();
   }
 
-  boost::shared_ptr<atd::scalar> construct_scalar(bp::object obj, atd::cl::Context const & context)
+  boost::shared_ptr<atd::scalar> construct_scalar(bp::object obj, cl::Context const & context)
   {
     typedef boost::shared_ptr<atd::scalar> result_type;
     std::string name = type_name(obj);
@@ -504,7 +504,7 @@ void export_array()
   bp::class_<atd::array,
           boost::shared_ptr<atd::array> >
   ( "array", bp::no_init)
-      .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=atd::cl::default_context())))
+      .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=atd::cl_ext::default_context())))
       .def(bp::init<atd::array_expression>())
       .add_property("dtype", &atd::array::dtype)
       .add_property("context", bp::make_function(&atd::array::context, bp::return_internal_reference<>()))
@@ -527,11 +527,11 @@ void export_array()
 
   bp::class_<atd::scalar, bp::bases<atd::array> >
       ("scalar", bp::no_init)
-      .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=atd::cl::default_context())))
+      .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=atd::cl_ext::default_context())))
       ;
 
   //Other numpy-like initializers
-  bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=atd::cl::default_context()));
+  bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=atd::cl_ext::default_context()));
 
 //Binary
 #define MAP_FUNCTION(name) \
@@ -593,7 +593,7 @@ void export_scalar()
 void export_model()
 {
 
-  bp::class_<atidlas::model>("model", bp::init<atd::base const &, atd::cl::CommandQueue&>())
+  bp::class_<atidlas::model>("model", bp::init<atd::base const &, cl::CommandQueue&>())
                   .def("execute", &atd::model::execute);
   
   bp::enum_<atidlas::fetching_policy_type>

@@ -5,7 +5,7 @@
 #include <list>
 #include "atidlas/types.h"
 #include "atidlas/value_scalar.h"
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/tools/shared_ptr.hpp"
 
 namespace atidlas

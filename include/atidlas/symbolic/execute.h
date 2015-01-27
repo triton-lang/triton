@@ -1,7 +1,7 @@
 #ifndef _ATIDLAS_SCHEDULER_EXECUTE_H
 #define _ATIDLAS_SCHEDULER_EXECUTE_H
 
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/model/model.h"
 #include "atidlas/symbolic/expression.h"
 

@@ -1,6 +1,6 @@
 #include <iostream>
 #include "atidlas/backend/templates/reduction.h"
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/tools/to_string.hpp"
 #include "atidlas/tools/make_map.hpp"
 #include "atidlas/tools/make_vector.hpp"
@@ -281,7 +281,7 @@ std::vector<int_t> reduction::input_sizes(symbolic_expressions_container const &
 }
 
 void reduction::enqueue(cl::CommandQueue & queue,
-             std::vector<cl::lazy_compiler> & programs,
+             std::vector<cl_ext::lazy_compiler> & programs,
              unsigned int label,
              symbolic_expressions_container const & symbolic_expressions)
 {

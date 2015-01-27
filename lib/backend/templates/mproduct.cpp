@@ -568,7 +568,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   void mproduct::enqueue_block(cl::CommandQueue & queue, int_t M, int_t N, int_t K,
                      array_infos const & A, array_infos const & B, array_infos const & C,
                      value_scalar const & alpha, value_scalar const & beta,
-                     std::vector<cl::lazy_compiler> & programs, unsigned int label, int id)
+                     std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, int id)
   {
     if (A.shape1==0 || A.shape2==0 || B.shape1==0 || B.shape2==0 || C.shape1==0 || C.shape2==0)
       return;
@@ -646,7 +646,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return infos(symbolic_expressions, d0, d1, d2);
   }
 
-  void mproduct::enqueue(cl::CommandQueue & queue, std::vector<cl::lazy_compiler> & programs, unsigned int label, symbolic_expressions_container const & symbolic_expressions)
+  void mproduct::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, symbolic_expressions_container const & symbolic_expressions)
   {
     using namespace tools;
 

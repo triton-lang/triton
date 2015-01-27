@@ -2,7 +2,7 @@
 #define ATIDLAS_VALUE_SCALAR_H
 
 #include "atidlas/types.h"
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 
 namespace atidlas
 {

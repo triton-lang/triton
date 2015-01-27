@@ -2,7 +2,7 @@
 #define ATIDLAS_BACKEND_BINDER_H
 
 #include <map>
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 
 namespace atidlas
 {

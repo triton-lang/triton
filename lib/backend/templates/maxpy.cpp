@@ -105,7 +105,7 @@ std::vector<int_t> maxpy::input_sizes(symbolic_expressions_container const & sym
 }
 
 void maxpy::enqueue(cl::CommandQueue & queue,
-             std::vector<cl::lazy_compiler> & programs,
+             std::vector<cl_ext::lazy_compiler> & programs,
              unsigned int label,
              symbolic_expressions_container const & symbolic_expressions)
 {

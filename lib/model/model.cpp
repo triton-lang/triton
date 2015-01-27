@@ -42,20 +42,20 @@ void model::fill_program_name(char* program_name, symbolic_expressions_container
   delete binder;
 }
 
-std::vector<cl::lazy_compiler>& model::init(symbolic_expressions_container const & symbolic_expressions, cl::Context const & context, cl::Device const & device, bool force_recompilation)
+std::vector<cl_ext::lazy_compiler>& model::init(symbolic_expressions_container const & symbolic_expressions, cl::Context const & context, cl::Device const & device, bool force_recompilation)
 {
   char program_name[256];
   fill_program_name(program_name, symbolic_expressions, BIND_TO_HANDLE);
   std::string pname(program_name);
-  std::vector<cl::lazy_compiler> & to_init = lazy_programs_[context()][pname];
+  std::vector<cl_ext::lazy_compiler> & to_init = lazy_programs_[context()][pname];
   if(to_init.empty())
   {
     std::string extensions = device.getInfo<CL_DEVICE_EXTENSIONS>();
 
-    to_init.push_back(cl::lazy_compiler(context, pname, force_recompilation));
+    to_init.push_back(cl_ext::lazy_compiler(context, pname, force_recompilation));
     to_init.back().add(define_extension(extensions, "cl_khr_fp64"));
 
-    to_init.push_back(cl::lazy_compiler(context, pname + "_fb", force_recompilation));
+    to_init.push_back(cl_ext::lazy_compiler(context, pname + "_fb", force_recompilation));
     to_init.back().add(define_extension(extensions, "cl_khr_fp64"));
 
     for(size_t i = 0 ; i < templates_.size() ; ++i)
@@ -86,7 +86,7 @@ void model::execute(symbolic_expressions_container const & symbolic_expressions,
   assert(context() == queue_.getInfo<CL_QUEUE_CONTEXT>()());
   cl::Device const & device = queue_.getInfo<CL_QUEUE_DEVICE>();
 
-  std::vector<cl::lazy_compiler> & compilers = init(symbolic_expressions, context, device, force_recompilation);
+  std::vector<cl_ext::lazy_compiler> & compilers = init(symbolic_expressions, context, device, force_recompilation);
 
   //Prediction
   std::vector<int_t> x = templates_[0]->input_sizes(symbolic_expressions);
@@ -114,7 +114,7 @@ void model::tune(symbolic_expressions_container const & symbolic_expressions)
   assert(context() == queue_.getInfo<CL_QUEUE_CONTEXT>()());
   cl::Device device = queue_.getInfo<CL_QUEUE_DEVICE>();
 
-  std::vector<cl::lazy_compiler> & compilers = init(symbolic_expressions, context, device, false);
+  std::vector<cl_ext::lazy_compiler> & compilers = init(symbolic_expressions, context, device, false);
 
   //Collect the timings
   std::vector<float> timings(templates_.size());
@@ -265,7 +265,7 @@ model_map_t init_models(cl::CommandQueue & queue)
 
 model_map_t& get_model_map(cl::CommandQueue & queue)
 {
-  std::map<cl::CommandQueue, model_map_t, cl::compare>::iterator it = models.find(queue);
+  std::map<cl::CommandQueue, model_map_t, cl_ext::compare>::iterator it = models.find(queue);
   if(it == models.end())
     return models.insert(std::make_pair(queue, init_models(queue))).first->second;
   return it->second;
@@ -277,6 +277,6 @@ model& get_model(cl::CommandQueue & queue, expression_type expression, numeric_t
   return *get_model_map(queue).at(key);
 }
 
-std::map<cl::CommandQueue, model_map_t, cl::compare> models;
+std::map<cl::CommandQueue, model_map_t, cl_ext::compare> models;
 
 }

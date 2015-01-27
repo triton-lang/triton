@@ -215,7 +215,7 @@ std::vector<int_t> mreduction::input_sizes(symbolic_expressions_container const 
 }
 
 void mreduction::enqueue(cl::CommandQueue & queue,
-             std::vector<cl::lazy_compiler> & programs,
+             std::vector<cl_ext::lazy_compiler> & programs,
              unsigned int label,
              symbolic_expressions_container const & symbolic_expressions)
 {

@@ -21,7 +21,7 @@ namespace atidlas
   private:
     std::string define_extension(std::string const & extensions, std::string const & ext);
     inline void fill_program_name(char* program_name, symbolic_expressions_container const & symbolic_expressions, binding_policy_t binding_policy);
-    std::vector<cl::lazy_compiler>& init(symbolic_expressions_container const & symbolic_expressions, cl::Context const & context, cl::Device const & device, bool force_recompilation);
+    std::vector<cl_ext::lazy_compiler>& init(symbolic_expressions_container const & symbolic_expressions, cl::Context const & context, cl::Device const & device, bool force_recompilation);
 
   public:
     model(predictors::random_forest const &, std::vector< tools::shared_ptr<base> > const &, cl::CommandQueue &);
@@ -36,7 +36,7 @@ namespace atidlas
     templates_container templates_;
     tools::shared_ptr<predictors::random_forest> predictor_;
     std::map<std::vector<int_t>, int> hardcoded_;
-    std::map<cl_context, std::map<std::string, std::vector<cl::lazy_compiler> > > lazy_programs_;
+    std::map<cl_context, std::map<std::string, std::vector<cl_ext::lazy_compiler> > > lazy_programs_;
     cl::CommandQueue & queue_;
   };
 
@@ -46,7 +46,7 @@ namespace atidlas
   model_map_t& get_model_map(cl::CommandQueue & queue);
   model& get_model(cl::CommandQueue & queue, expression_type, numeric_type);
 
-  extern std::map<cl::CommandQueue, model_map_t, cl::compare> models;
+  extern std::map<cl::CommandQueue, model_map_t, cl_ext::compare> models;
 
 }
 

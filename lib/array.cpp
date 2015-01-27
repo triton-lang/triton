@@ -1,7 +1,7 @@
 #include <cassert>
 
 #include "atidlas/array.h"
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/exception/unknown_datatype.h"
 #include "atidlas/model/model.h"
 #include "atidlas/symbolic/execute.h"
@@ -131,7 +131,7 @@ int_t array::dsize() const
 array & array::operator=(array const & rhs)
 {
   array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
-  cl::CommandQueue & queue = cl::get_queue(context_, 0);
+  cl::CommandQueue & queue = cl_ext::get_queue(context_, 0);
   model_map_t & mmap = atidlas::get_model_map(queue);
   execute(expression, mmap);
   return *this;
@@ -140,7 +140,7 @@ array & array::operator=(array const & rhs)
 array & array::operator=(array_expression const & rhs)
 {
   array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), shape_);
-  cl::CommandQueue & queue = cl::get_queue(context_, 0);
+  cl::CommandQueue & queue = cl_ext::get_queue(context_, 0);
   model_map_t & mmap = atidlas::get_model_map(queue);
   execute(expression, mmap);
   return *this;
@@ -243,7 +243,7 @@ namespace detail
 template<class T>
 void copy(cl::Context & ctx, cl::Buffer const & data, T value)
 {
-  cl::get_queue(ctx, 0).enqueueWriteBuffer(data, CL_TRUE, 0, sizeof(T), (void*)&value);
+  cl_ext::get_queue(ctx, 0).enqueueWriteBuffer(data, CL_TRUE, 0, sizeof(T), (void*)&value);
 }
 
 }
@@ -282,7 +282,7 @@ T scalar::cast() const
   int_t dtsize = size_of(dtype_);
 #define HANDLE_CASE(DTYPE, VAL) \
 case DTYPE:\
-  cl::get_queue(context_, 0).enqueueReadBuffer(data_, CL_TRUE, start_._1*dtsize, dtsize, (void*)&v.VAL);\
+  cl_ext::get_queue(context_, 0).enqueueReadBuffer(data_, CL_TRUE, start_._1*dtsize, dtsize, (void*)&v.VAL);\
   return v.VAL
 
   switch(dtype_)
@@ -305,7 +305,7 @@ case DTYPE:\
 
 scalar& scalar::operator=(value_scalar const & s)
 {
-  cl::CommandQueue& queue = cl::get_queue(context_, 0);
+  cl::CommandQueue& queue = cl_ext::get_queue(context_, 0);
   int_t dtsize = size_of(dtype_);
 
 #define HANDLE_CASE(TYPE, CLTYPE) case TYPE:\
@@ -727,7 +727,7 @@ void copy(void const * data, array& x, cl::CommandQueue & queue, bool blocking)
     x = tmp;
   }
   if(blocking)
-    cl::synchronize(x.context());
+    cl_ext::synchronize(x.context());
 }
 
 void copy(array const & x, void* data, cl::CommandQueue & queue, bool blocking)
@@ -744,14 +744,14 @@ void copy(array const & x, void* data, cl::CommandQueue & queue, bool blocking)
     queue.enqueueReadBuffer(tmp.data(), CL_FALSE, 0, tmp.dsize()*dtypesize, data);
   }
   if(blocking)
-    cl::synchronize(x.context());
+    cl_ext::synchronize(x.context());
 }
 
 void copy(void const *data, array &x, bool blocking)
-{ copy(data, x, cl::get_queue(x.context(), 0), blocking); }
+{ copy(data, x, cl_ext::get_queue(x.context(), 0), blocking); }
 
 void copy(array const & x, void* data, bool blocking)
-{ copy(x, data, cl::get_queue(x.context(), 0), blocking); }
+{ copy(x, data, cl_ext::get_queue(x.context(), 0), blocking); }
 
 //std::vector<>
 template<class T>
@@ -776,11 +776,11 @@ void copy(array const & x, std::vector<T> & cx, cl::CommandQueue & queue, bool b
 
 template<class T>
 void copy(std::vector<T> const & cx, array & x, bool blocking)
-{ copy(cx, x, cl::get_queue(x.context(), 0), blocking); }
+{ copy(cx, x, cl_ext::get_queue(x.context(), 0), blocking); }
 
 template<class T>
 void copy(array const & x, std::vector<T> & cx, bool blocking)
-{ copy(x, cx, cl::get_queue(x.context(), 0), blocking); }
+{ copy(x, cx, cl_ext::get_queue(x.context(), 0), blocking); }
 
 #define INSTANTIATE(T) \
   template void copy<T>(std::vector<T> const &, array &, cl::CommandQueue&, bool);\

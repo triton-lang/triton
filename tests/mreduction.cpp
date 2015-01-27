@@ -46,7 +46,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 }
 
 template<typename T>
-void test_impl(T epsilon, ad::cl::Context const & ctx)
+void test_impl(T epsilon, cl::Context const & ctx)
 {
   int_t M = 1324;
   int_t N = 1143;
@@ -65,9 +65,9 @@ void test_impl(T epsilon, ad::cl::Context const & ctx)
 
 int main()
 {
-  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  for(ad::cl_ext::queues_t::iterator it = ad::cl_ext::queues.begin() ; it != ad::cl_ext::queues.end() ; ++it)
   {
-    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
     std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;

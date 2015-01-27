@@ -23,7 +23,7 @@ public:
   vaxpy(vaxpy::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
   vaxpy(unsigned int _simd_width, unsigned int _group_size, unsigned int _num_groups, fetching_policy_type _fetching_policy, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
   std::vector<int_t> input_sizes(symbolic_expressions_container const & symbolic_expressions);
-  void enqueue(cl::CommandQueue & queue, std::vector<cl::lazy_compiler> & programs,
+  void enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
                unsigned int label, symbolic_expressions_container const & symbolic_expressions);
 };
 

@@ -3,7 +3,7 @@
 #include <vector>
 #include "atidlas/types.h"
 #include "atidlas/array.h"
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/model/model.h"
 #include "atidlas/symbolic/expression.h"
 

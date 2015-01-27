@@ -53,7 +53,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 }
 
 template<typename T>
-void test_impl(T epsilon, ad::cl::Context const & ctx)
+void test_impl(T epsilon, cl::Context const & ctx)
 {
   int_t M = 412;
   int_t N = 245;
@@ -75,9 +75,9 @@ void test_impl(T epsilon, ad::cl::Context const & ctx)
 
 int main()
 {
-  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  for(ad::cl_ext::queues_t::iterator it = ad::cl_ext::queues.begin() ; it != ad::cl_ext::queues.end() ; ++it)
   {
-    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
     std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;

@@ -3,7 +3,8 @@
 
 namespace atidlas
 {
-namespace cl
+
+namespace cl_ext
 {
 
 struct compare{

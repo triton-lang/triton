@@ -17,7 +17,7 @@ namespace boost {
 namespace intrusive {
 namespace detail {
 
-template<class Derived, bool DoClear = true>
+template<class Derived, bool Dcl_extear = true>
 class clear_on_destructor_base
 {
    protected:

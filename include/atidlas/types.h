@@ -1,7 +1,7 @@
 #ifndef ATIDLAS_TYPES_H
 #define ATIDLAS_TYPES_H
 
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/exception/unknown_datatype.h"
 
 namespace atidlas

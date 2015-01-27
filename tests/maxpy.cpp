@@ -13,7 +13,7 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
   using namespace std;
 
   int failure_count = 0;
-  ad::cl::Context const & ctx = C.context();
+  cl::Context const & ctx = C.context();
 
   int_t M = cC.size1();
   int_t N = cC.size2();
@@ -94,7 +94,7 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
 }
 
 template<typename T>
-void test_impl(T epsilon, ad::cl::Context const & ctx)
+void test_impl(T epsilon, cl::Context const & ctx)
 {
   using atidlas::_;
 
@@ -119,9 +119,9 @@ void test_impl(T epsilon, ad::cl::Context const & ctx)
 
 int main()
 {
-  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  for(ad::cl_ext::queues_t::iterator it = ad::cl_ext::queues.begin() ; it != ad::cl_ext::queues.end() ; ++it)
   {
-    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
     std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;

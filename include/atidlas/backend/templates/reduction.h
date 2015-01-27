@@ -30,7 +30,7 @@ public:
   reduction(unsigned int simd, unsigned int ls, unsigned int ng, fetching_policy_type fetch, binding_policy_t bind = BIND_ALL_UNIQUE);
   std::vector<int_t> input_sizes(symbolic_expressions_container const & symbolic_expressions);
   void enqueue(cl::CommandQueue & queue,
-               std::vector<cl::lazy_compiler> & programs,
+               std::vector<cl_ext::lazy_compiler> & programs,
                unsigned int label,
                symbolic_expressions_container const & symbolic_expressions);
 private:

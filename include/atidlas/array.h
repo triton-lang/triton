@@ -3,7 +3,7 @@
 
 #include <iostream>
 #include "atidlas/types.h"
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/cl/queues.h"
 #include "atidlas/symbolic/expression.h"
 
@@ -18,19 +18,19 @@ class array: public obj_base
   friend array reshape(array const &, int_t, int_t);
 public:
   //1D Constructors
-  array(int_t size1, numeric_type dtype, cl::Context context = cl::default_context());
+  array(int_t size1, numeric_type dtype, cl::Context context = cl_ext::default_context());
   template<typename DT>
-  array(std::vector<DT> const & data, cl::Context context = cl::default_context());
+  array(std::vector<DT> const & data, cl::Context context = cl_ext::default_context());
   array(array & v, slice const & s1);
 
   //2D Constructors
-  array(int_t size1, int_t size2, numeric_type dtype, cl::Context context = cl::default_context());
+  array(int_t size1, int_t size2, numeric_type dtype, cl::Context context = cl_ext::default_context());
   template<typename DT>
-  array(int_t size1, int_t size2, std::vector<DT> const & data, cl::Context context = cl::default_context());
+  array(int_t size1, int_t size2, std::vector<DT> const & data, cl::Context context = cl_ext::default_context());
   array(array & M, slice const & s1, slice const & s2);
 
   //General constructor
-  array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, int_t ld, cl::Context context = cl::default_context());
+  array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, int_t ld, cl::Context context = cl_ext::default_context());
   array(array_expression const & proxy);
   array(array const &);
 
@@ -91,9 +91,9 @@ class scalar : public array
 private:
   template<class T> T cast() const;
 public:
-  explicit scalar(numeric_type dtype, cl::Buffer const & data, int_t offset, cl::Context context = cl::default_context());
-  explicit scalar(value_scalar value, cl::Context context = cl::default_context());
-  explicit scalar(numeric_type dtype, cl::Context context = cl::default_context());
+  explicit scalar(numeric_type dtype, cl::Buffer const & data, int_t offset, cl::Context context = cl_ext::default_context());
+  explicit scalar(value_scalar value, cl::Context context = cl_ext::default_context());
+  explicit scalar(numeric_type dtype, cl::Context context = cl_ext::default_context());
   scalar(array_expression const & proxy);
   scalar& operator=(value_scalar const &);
 //  scalar& operator=(scalar const & s);
@@ -209,8 +209,8 @@ ATIDLAS_DECLARE_REDUCTION(max)
 ATIDLAS_DECLARE_REDUCTION(min)
 ATIDLAS_DECLARE_REDUCTION(argmin)
 
-atidlas::array_expression eye(std::size_t, std::size_t, atidlas::numeric_type, cl::Context ctx = cl::default_context());
-array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, cl::Context ctx = cl::default_context());
+atidlas::array_expression eye(std::size_t, std::size_t, atidlas::numeric_type, cl::Context ctx = cl_ext::default_context());
+array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, cl::Context ctx = cl_ext::default_context());
 array reshape(array const &, int_t, int_t);
 
 //

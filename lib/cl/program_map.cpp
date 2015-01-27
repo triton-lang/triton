@@ -9,7 +9,7 @@
 namespace atidlas
 {
 
-namespace cl
+namespace cl_ext
 {
 
 program_map::program_map()

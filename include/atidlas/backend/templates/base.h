@@ -8,7 +8,7 @@
 #include "atidlas/types.h"
 #include "atidlas/backend/parse.h"
 #include "atidlas/backend/stream.h"
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/cl/lazy_compiler.h"
 #include "atidlas/symbolic/expression.h"
 
@@ -163,7 +163,7 @@ public:
   std::vector<std::string> generate(unsigned int label, symbolic_expressions_container const & symbolic_expressions, cl::Device const & device);
   virtual int check_invalid(symbolic_expressions_container const & symbolic_expressions, cl::Device const & device) const = 0;
   virtual void enqueue(cl::CommandQueue & queue,
-                       std::vector<cl::lazy_compiler> & programs,
+                       std::vector<cl_ext::lazy_compiler> & programs,
                        unsigned int label, symbolic_expressions_container const & symbolic_expressions) = 0;
   virtual tools::shared_ptr<base> clone() const = 0;
 private:

@@ -1,13 +1,13 @@
 #ifndef ATIDLAS_CL_LAZY_COMPILER_H
 #define ATIDLAS_CL_LAZY_COMPILER_H
 
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/cl/program_map.h"
 
 namespace atidlas
 {
 
-namespace cl
+namespace cl_ext
 {
 
 class lazy_compiler

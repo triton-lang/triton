@@ -5,7 +5,7 @@
 namespace atidlas
 {
 
-namespace cl
+namespace cl_ext
 {
 
 void synchronize(cl::Context const & context)

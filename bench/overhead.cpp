@@ -7,19 +7,19 @@ namespace ad = atidlas;
 
 int main()
 {
-  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  for(ad::cl_ext::queues_t::iterator it = ad::cl_ext::queues.begin() ; it != ad::cl_ext::queues.end() ; ++it)
   {
     ad::array x(10, ad::FLOAT_TYPE, it->first);
-    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
     ad::tools::timer t;
     std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
     std::cout << "-------------------------" << std::endl;
     x = x + x;
-    ad::cl::synchronize(x.context());
+    ad::cl_ext::synchronize(x.context());
     t.start();\
     for(unsigned int i = 0 ; i < 100 ; ++i){
       x = x + x;
-      ad::cl::synchronize(x.context());
+      ad::cl_ext::synchronize(x.context());
     }
     std::cout << "Kernel launch overhead: " << t.get()/100 << std::endl;
     std::cout << "Expression tree creation:" << std::endl;

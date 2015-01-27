@@ -12,7 +12,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
                                 ad::array & x, ad::array & y)
 {
   using namespace std;
-  ad::cl::Context const & ctx = x.context();
+  cl::Context const & ctx = x.context();
   int_t N = cx.size();
   unsigned int failure_count = 0;
 
@@ -52,7 +52,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
 }
 
 template<typename T>
-void test_impl(T epsilon, ad::cl::Context const & ctx)
+void test_impl(T epsilon, cl::Context const & ctx)
 {
   using atidlas::_;
 
@@ -74,9 +74,9 @@ void test_impl(T epsilon, ad::cl::Context const & ctx)
 
 int main()
 {
-  for(ad::cl::queues_t::iterator it = ad::cl::queues.begin() ; it != ad::cl::queues.end() ; ++it)
+  for(ad::cl_ext::queues_t::iterator it = ad::cl_ext::queues.begin() ; it != ad::cl_ext::queues.end() ; ++it)
   {
-    ad::cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
     std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;

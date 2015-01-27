@@ -41,7 +41,7 @@ private:
   void enqueue_block(cl::CommandQueue & queue, int_t M, int_t N, int_t K,
                      array_infos const & A, array_infos const & B, array_infos const & C,
                      value_scalar const & alpha, value_scalar const & beta,
-                     std::vector<cl::lazy_compiler> & programs, unsigned int label, int id);
+                     std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, int id);
   array_infos create_slice(array_infos & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap);
   std::vector<int_t> infos(symbolic_expressions_container const & symbolic_expressions,
                                    lhs_rhs_element & C, lhs_rhs_element & A, lhs_rhs_element & B);
@@ -49,7 +49,7 @@ public:
   mproduct(mproduct::parameters_type const & parameters, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(symbolic_expressions_container const & symbolic_expressions);
   void enqueue(cl::CommandQueue & queue,
-               std::vector<cl::lazy_compiler> & programs,
+               std::vector<cl_ext::lazy_compiler> & programs,
                unsigned int label,
                symbolic_expressions_container const & symbolic_expressions);
 

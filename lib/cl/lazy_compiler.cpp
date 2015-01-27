@@ -3,7 +3,7 @@
 namespace atidlas
 {
 
-namespace cl
+namespace cl_ext
 {
 
 lazy_compiler::lazy_compiler(cl::Context const & ctx, std::string const & name, std::string const & src, bool force_recompilation) :

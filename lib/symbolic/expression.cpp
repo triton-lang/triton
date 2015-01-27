@@ -2,7 +2,7 @@
 #include <vector>
 #include "atidlas/array.h"
 #include "atidlas/value_scalar.h"
-#include "atidlas/cl/cl.hpp"
+#include <CL/cl.hpp>
 #include "atidlas/symbolic/expression.h"
 
 namespace atidlas

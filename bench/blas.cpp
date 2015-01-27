@@ -16,7 +16,7 @@
 
 
 namespace ad = atidlas;
-typedef atidlas::int_t int_t;
+typedef ad::int_t int_t;
 
 template<class T>
 void bench(ad::numeric_type dtype)
@@ -31,11 +31,11 @@ void bench(ad::numeric_type dtype)
   times.clear();\
   total_time = 0;\
   OP;\
-  ad::cl::synchronize(ad::cl::default_context());\
+  ad::cl_ext::synchronize(ad::cl_ext::default_context());\
   while(total_time < 1e-2){\
     timer.start(); \
     OP;\
-    ad::cl::synchronize(ad::cl::default_context());\
+    ad::cl_ext::synchronize(ad::cl_ext::default_context());\
     times.push_back(timer.get());\
     total_time += times.back();\
   }\
@@ -52,17 +52,17 @@ void bench(ad::numeric_type dtype)
     int_t N = *it;
     std::cout << N;
     /* ATIDLAS */
-    atidlas::array x(N, dtype), y(N, dtype);
+    ad::array x(N, dtype), y(N, dtype);
     BENCHMARK(y = x + y, bandwidth(3*N, tres, dtsize));
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
-    BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &atidlas::cl::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(3*N, tres, dtsize))
+    BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(3*N, tres, dtsize))
 #endif
     /* BLAS */
 #ifdef BENCH_CBLAS
     std::vector<float> cx(N), cy(N);
-    atidlas::copy(x, cx);
-    atidlas::copy(y, cy);
+    ad::copy(x, cx);
+    ad::copy(y, cy);
     BENCHMARK(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), bandwidth(3*N, tres, dtsize));
 #endif
     /* CuBLAS */
@@ -84,19 +84,19 @@ void bench(ad::numeric_type dtype)
     int_t N = *it;
     std::cout << N;
     /* ATIDLAS */
-    atidlas::array x(N, dtype), y(N, dtype);
-    atidlas::array scratch(N, dtype);
-    atidlas::scalar s(dtype);
+    ad::array x(N, dtype), y(N, dtype);
+    ad::array scratch(N, dtype);
+    ad::scalar s(dtype);
     BENCHMARK(s = dot(x,y), bandwidth(2*N, tres, dtsize));
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
-    BENCHMARK(clAmdBlasSdot(N, s.data()(), 0, x.data()(), 0, 1, y.data()(), 0, 1, scratch.data()(), 1, &atidlas::cl::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(2*N, tres, dtsize))
+    BENCHMARK(clAmdBlasSdot(N, s.data()(), 0, x.data()(), 0, 1, y.data()(), 0, 1, scratch.data()(), 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(2*N, tres, dtsize))
 #endif
     /* BLAS */
 #ifdef BENCH_CBLAS
     std::vector<float> cx(N), cy(N);
-    atidlas::copy(x, cx);
-    atidlas::copy(y, cy);
+    ad::copy(x, cx);
+    ad::copy(y, cy);
     BENCHMARK(cblas_sdot(N, cx.data(), 1, cy.data(), 1), bandwidth(2*N, tres, dtsize));
 #endif
     std::cout << std::endl;
@@ -115,18 +115,18 @@ void bench(ad::numeric_type dtype)
       int_t N = *Nit;
       std::cout << M << "," << N;
       /* ATIDLAS */
-      atidlas::array A(N, M, dtype), y(M, dtype), x(N, dtype);
+      ad::array A(N, M, dtype), y(M, dtype), x(N, dtype);
       BENCHMARK(y = dot(trans(A),x), bandwidth(M*N + M + N, tres, dtsize));
       /* clAmdBlas */
   #ifdef BENCH_CLAMDBLAS
-      BENCHMARK(clAmdBlasSgemv(clAmdBlasColumnMajor, clAmdBlasTrans, N, M, 1, A.data()(), A.ld(), x.data()(), 0, 1, 0, y.data()(), 0, 1, 1, &atidlas::cl::get_queue(x.context(), 0)(),0, NULL, NULL), bandwidth(M*N + M + N, tres, dtsize))
+      BENCHMARK(clAmdBlasSgemv(clAmdBlasColumnMajor, clAmdBlasTrans, N, M, 1, A.data()(), A.ld(), x.data()(), 0, 1, 0, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(),0, NULL, NULL), bandwidth(M*N + M + N, tres, dtsize))
   #endif
       /* BLAS */
   #ifdef BENCH_CBLAS
       std::vector<float> cA(N*M), cx(N), cy(M);
-      atidlas::copy(x, cx);
-      atidlas::copy(y, cy);
-      atidlas::copy(A, cA);
+      ad::copy(x, cx);
+      ad::copy(y, cy);
+      ad::copy(A, cA);
       BENCHMARK(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), N, cx.data(), 1, 0, cy.data(), 1), bandwidth(M*N + M + N, tres, dtsize));
   #endif
       std::cout << std::endl;
@@ -144,19 +144,19 @@ void bench(ad::numeric_type dtype)
       int_t M = *Mit, N = *Nit, K = *Kit;
       std::cout << M << "," << N << "," << K;
       /* ATIDLAS */
-      atidlas::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
+      ad::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
       BENCHMARK(C = dot(A,trans(B)), gflops((double)2*M*N*K, tres));
       /* clAmdBlas */
   #ifdef BENCH_CLAMDBLAS
       BENCHMARK(clAmdBlasSgemm(clAmdBlasColumnMajor, clAmdBlasNoTrans, clAmdBlasTrans, M, N, K, 1, A.data()(), A.ld(), B.data()(), B.ld(),
-                               0, C.data()(), C.ld(), 1, &atidlas::cl::get_queue(C.context(), 0)(),0, NULL, NULL), gflops((double)2*M*N*K, tres))
+                               0, C.data()(), C.ld(), 1, &ad::cl_ext::get_queue(C.context(), 0)(),0, NULL, NULL), gflops((double)2*M*N*K, tres))
   #endif
       /* BLAS */
   #ifdef BENCH_CBLAS
       std::vector<float> cC(M*N), cA(M*K), cB(N*K);
-      atidlas::copy(C, cC);
-      atidlas::copy(A, cA);
-      atidlas::copy(B, cB);
+      ad::copy(C, cC);
+      ad::copy(A, cA);
+      ad::copy(B, cB);
       BENCHMARK(cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, M, N, K, 1, cA.data(), M, cB.data(), N, 1, cC.data(), M), gflops((double)2*M*N*K, tres));
   #endif
       std::cout << std::endl;
@@ -171,16 +171,16 @@ int main(int argc, char* argv[])
 #endif
 
   int device_idx = 0;
-  if(atidlas::cl::queues.size()>1){
-    atidlas::cl::queues_t & queues = atidlas::cl::queues;
+  if(ad::cl_ext::queues.size()>1){
+    ad::cl_ext::queues_t & queues = ad::cl_ext::queues;
     if(argc!=2)
     {
       std::cerr << "usage : blas-bench [DEVICE_IDX]" << std::endl;
       std::cout << "Devices available: " << std::endl;
       unsigned int current=0;
-      for(atidlas::cl::queues_t::const_iterator it = queues.begin() ; it != queues.end() ; ++it){
-        atidlas::cl::Device device = it->first.getInfo<CL_CONTEXT_DEVICES>()[0];
-        std::cout << current++ << ": " << device.getInfo<CL_DEVICE_NAME>() << "(" << atidlas::cl::Platform(device.getInfo<CL_DEVICE_PLATFORM>()).getInfo<CL_PLATFORM_NAME>() << ")" << std::endl;
+      for(ad::cl_ext::queues_t::const_iterator it = queues.begin() ; it != queues.end() ; ++it){
+        cl::Device device = it->first.getInfo<CL_CONTEXT_DEVICES>()[0];
+        std::cout << current++ << ": " << device.getInfo<CL_DEVICE_NAME>() << "(" << cl::Platform(device.getInfo<CL_DEVICE_PLATFORM>()).getInfo<CL_PLATFORM_NAME>() << ")" << std::endl;
       }
       exit(EXIT_FAILURE);
     }
@@ -188,7 +188,7 @@ int main(int argc, char* argv[])
       device_idx = atoi(argv[1]);
   }
 
-  atidlas::cl::default_context_idx = device_idx;
+  ad::cl_ext::default_context_idx = device_idx;
   std::cout << "#Benchmark : BLAS" << std::endl;
   std::cout << "#----------------" << std::endl;
   bench<float>(ad::FLOAT_TYPE);
