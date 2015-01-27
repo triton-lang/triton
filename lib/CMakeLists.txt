@@ -3,7 +3,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(atidlas SHARED ${LIBATIDLAS_SRC})
 set_target_properties(atidlas PROPERTIES
-   COMPILE_FLAGS "-Wno-sign-compare -D__CL_ENABLE_EXCEPTIONS -Wall -Wextra -pedantic")
+   COMPILE_FLAGS "-Wno-sign-compare -DCL_USE_DEPRECATED_OPENCL_1_1_APIS -D__CL_ENABLE_EXCEPTIONS -Wall -Wextra -pedantic")
 
 
 #install(TARGETS atidlas LIBRARY DESTINATION lib)
