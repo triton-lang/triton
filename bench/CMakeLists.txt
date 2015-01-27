@@ -6,19 +6,24 @@ set(BLAS_LIBS atidlas)
 #CUBLAS
 find_package(CUDA)
 if(CUDA_FOUND)
-  set(BLAS_DEF ${BLAS_DEF} "-DBENCH_CUBLAS")
+    set(BLAS_DEF ${BLAS_DEF} "-DBENCH_CUBLAS")
 endif()
-#CLAMDBLAS
-include_directories(/opt/clAmdBlas-1.10.321/include/)
-set(BLAS_DEF ${BLAS_DEF} "-DBENCH_CLAMDBLAS")
-set(BLAS_LIBS ${BLAS_LIBS} /opt/clAmdBlas-1.10.321/lib64/libclAmdBlas.so)
-#CBLAS
-include_directories(/opt/intel/system_studio_2015.1.045/mkl/include/)
-set(BLAS_DEF ${BLAS_DEF} "-DBENCH_CBLAS")
-set(MKLROOT /opt/intel/system_studio_2015.1.045/mkl/)
-set(CCROOT /opt/intel/system_studio_2015.1.045/compiler/)
-set(BLAS_LIBS ${MKLROOT}/lib/intel64/libmkl_intel_lp64.so ${MKLROOT}/lib/intel64/libmkl_avx.so ${MKLROOT}/lib/intel64/libmkl_intel_thread.so ${BLAS_LIBS} ${MKLROOT}/lib/intel64/libmkl_core.so ${CCROOT}/lib/intel64/libiomp5.so pthread dl m)
 
+#CLAMDBLAS
+find_package(CLAMDBLAS)
+if(CLAMDBLAS_FOUND)
+    set(BLAS_DEF ${BLAS_DEF} "-DBENCH_CLAMDBLAS")
+    include_directories(${CLAMDBLAS_INCLUDE_DIR})
+    set(BLAS_LIBS ${BLAS_LIBS}  ${CLAMDBLAS_LIBRARIES} )
+endif()
+
+#CBLAS
+find_package(MKL)
+if(MKL_FOUND)
+    set(BLAS_DEF ${BLAS_DEF} "-DBENCH_CBLAS")
+    include_directories(${MKL_INCLUDE_DIR})
+    set(BLAS_LIBS ${BLAS_LIBS}  ${MKL_LIBRARIES} )
+endif()
 
 string(REPLACE ";" " " BLAS_DEF_STR "${BLAS_DEF}")
 
