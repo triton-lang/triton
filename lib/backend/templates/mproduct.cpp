@@ -87,7 +87,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return TEMPLATE_VALID;
   }
 
-  std::string mproduct::generate_impl(unsigned int label, char id, const symbolic_expressions_container &symbolic_expressions, const std::vector<mapping_type> &, bool fallback) const
+  std::string mproduct::generate_impl(unsigned int label, const char * id, const symbolic_expressions_container &symbolic_expressions, const std::vector<mapping_type> &, bool fallback) const
   {
     using std::string;
     using tools::to_string;
@@ -121,7 +121,10 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     /// //////////////
     std::string widthdtype = append_width("#scalartype", p.simd_width);
     stream << " __attribute__((reqd_work_group_size(" << p.local_size_0 << "," << p.local_size_1 << ",1)))" << std::endl;
-    stream << "__kernel void " << "k" << label << id << "(unsigned int M, unsigned int N,  unsigned int K, "
+    char kprefix[10];
+    fill_kernel_name(kprefix, label, id);
+
+    stream << "__kernel void " << kprefix << "(unsigned int M, unsigned int N,  unsigned int K, "
                                << C.process("__global #scalartype* #pointer, uint #ld, uint #start1, uint #start2, uint #stride1, uint #stride2,")
                                << alpha.process("#scalartype #name,")
                                << A.process("__global " + widthdtype + "* #pointer, uint #ld, uint #start1, uint #start2, uint #stride1, uint #stride2,")
@@ -557,8 +560,8 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   std::vector<std::string> mproduct::generate_impl(unsigned int label, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const
   {
     std::vector<std::string> res;
-    res.push_back(generate_impl(label, 'o', symbolic_expressions, mappings, false));
-    res.push_back(generate_impl(label, 'f', symbolic_expressions, mappings, true));
+    res.push_back(generate_impl(label, "o", symbolic_expressions, mappings, false));
+    res.push_back(generate_impl(label, "f", symbolic_expressions, mappings, true));
     return res;
   }
 

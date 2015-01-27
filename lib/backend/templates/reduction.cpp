@@ -56,7 +56,7 @@ inline void reduction::reduce_1d_local_memory(kernel_generation_stream & stream,
   stream << "}" << std::endl;
 }
 
-std::string reduction::generate_impl(unsigned int label, char type, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
+std::string reduction::generate_impl(unsigned int label, const char * type, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
 {
   kernel_generation_stream stream;
 
@@ -85,8 +85,11 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
   /* ------------------------
    * First Kernel
    * -----------------------*/
+  char kprefix[10];
+  fill_kernel_name(kprefix, label, type);
+
   stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
-  stream << "__kernel void " << "k" << label << type << "0" << "(" << arguments << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
+  stream << "__kernel void " << kprefix << "0" << "(" << arguments << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -191,7 +194,7 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
    * Second kernel
    * -----------------------*/
   stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
-  stream << "__kernel void " << "k" << label << type << "1" << "(" << arguments << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
+  stream << "__kernel void " << kprefix << "1" << "(" << arguments << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -256,8 +259,8 @@ std::string reduction::generate_impl(unsigned int label, char type, symbolic_exp
 std::vector<std::string> reduction::generate_impl(unsigned int label,  symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const
 {
   std::vector<std::string> result;
-  result.push_back(generate_impl(label, 'f', symbolic_expressions, mappings, 1));
-  result.push_back(generate_impl(label, 'o', symbolic_expressions, mappings, p_.simd_width));
+  result.push_back(generate_impl(label, "f", symbolic_expressions, mappings, 1));
+  result.push_back(generate_impl(label, "o", symbolic_expressions, mappings, p_.simd_width));
   return result;
 }
 

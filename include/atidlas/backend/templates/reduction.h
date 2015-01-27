@@ -22,7 +22,7 @@ private:
   int check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const;
   inline void reduce_1d_local_memory(kernel_generation_stream & stream, unsigned int size, std::vector<mapped_scalar_reduction*> exprs,
                                      std::string const & buf_str, std::string const & buf_value_str) const;
-  std::string generate_impl(unsigned int label, char type, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const;
+  std::string generate_impl(unsigned int label, const char * type, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const;
   std::vector<std::string> generate_impl(unsigned int label,  symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const;
 
 public:

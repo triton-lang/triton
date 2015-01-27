@@ -36,8 +36,11 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
 
   kernel_generation_stream stream;
 
+  char kprefix[10];
+  fill_kernel_name(kprefix, label, "d");
+
   stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
-  stream << "__kernel void " << "k" << label << "d" << "(unsigned int M, unsigned int N, " << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
+  stream << "__kernel void " << kprefix << "(unsigned int M, unsigned int N, " << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 

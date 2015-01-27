@@ -36,7 +36,7 @@ private:
   unsigned int lmem_usage(symbolic_expressions_container const & symbolic_expressions) const;
   unsigned int registers_usage(symbolic_expressions_container const & symbolic_expressions) const;
   int check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const;
-  std::string generate_impl(unsigned int label, char id, const symbolic_expressions_container &symbolic_expressions, const std::vector<mapping_type> &, bool fallback) const;
+  std::string generate_impl(unsigned int label, const char *  id, const symbolic_expressions_container &symbolic_expressions, const std::vector<mapping_type> &, bool fallback) const;
   std::vector<std::string> generate_impl(unsigned int label, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const;
   void enqueue_block(cl::CommandQueue & queue, int_t M, int_t N, int_t K,
                      array_infos const & A, array_infos const & B, array_infos const & C,

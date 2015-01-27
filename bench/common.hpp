@@ -47,8 +47,8 @@ private:
 static const std::vector<int> BLAS1_N = create_log_range(1e3, 2e7, 50, 64);
 
 // BLAS2 Sizes
-static const std::vector<int> BLAS2_M = make_vector<int>() << 256;
-static const std::vector<int> BLAS2_N = create_full_range(128, 5000, 64);
+static const std::vector<int> BLAS2_N = make_vector<int>() << 64;
+static const std::vector<int> BLAS2_M = create_full_range(128, 10000, 64);
 
 // BLAS3 Sizes
 static const std::vector<int> BLAS3_M = make_vector<int>() << 1024;
