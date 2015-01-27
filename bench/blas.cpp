@@ -1,9 +1,15 @@
 #include "atidlas/array.h"
 #include "atidlas/tools/timer.hpp"
-#include "clAmdBlas.h"
 #include "common.hpp"
-#include "cblas.h"
-
+#ifdef BENCH_CLAMDBLAS
+  #include "clAmdBlas.h"
+#endif
+#ifdef BENCH_CBLAS
+  #include "cblas.h"
+#endif
+#ifdef BENCH_CUBLAS
+  #include <cublas.h>
+#endif
 #include <iomanip>
 #include <stdlib.h>
 #include <cmath>
@@ -12,6 +18,7 @@
 namespace ad = atidlas;
 typedef atidlas::int_t int_t;
 
+template<class T>
 void bench(ad::numeric_type dtype)
 {
   unsigned int dtsize = ad::size_of(dtype);
@@ -57,6 +64,15 @@ void bench(ad::numeric_type dtype)
     atidlas::copy(x, cx);
     atidlas::copy(y, cy);
     BENCHMARK(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), bandwidth(3*N, tres, dtsize));
+#endif
+    /* CuBLAS */
+#ifdef BENCH_CUBLAS
+    T *cux, *cuy;
+    cudaMalloc((void**) &cux, N * sizeof(T));
+    cudaMalloc((void**) &cuy, N * sizeof(T));
+    BENCHMARK(cublasSaxpy(N, 2, x, 1, y, 1), bandwidth(3*N, tres, dtsize))
+    cudaFree(cux);
+    cudaFree(cuy);
 #endif
     std::cout << std::endl;
   }
@@ -175,7 +191,7 @@ int main(int argc, char* argv[])
   atidlas::cl::default_context_idx = device_idx;
   std::cout << "#Benchmark : BLAS" << std::endl;
   std::cout << "#----------------" << std::endl;
-  bench(ad::FLOAT_TYPE);
+  bench<float>(ad::FLOAT_TYPE);
 
 #ifdef BENCH_CLAMDBLAS
   clAmdBlasTeardown();

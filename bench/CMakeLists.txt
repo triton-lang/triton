@@ -1,7 +1,7 @@
 set(CMAKE_BUILD_TYPE Release)
 
 set(BLAS_DEF)
-set(BLAS_LIBS atidlas)
+set(BLAS_LIBS atidlas ${OPENCL_LIBRARIES})
 
 #CUBLAS
 find_package(CUDA)
@@ -28,7 +28,13 @@ endif()
 string(REPLACE ";" " " BLAS_DEF_STR "${BLAS_DEF}")
 
 foreach(PROG blas overhead)
-     add_executable(${PROG}-bench  ${PROG}.cpp)
-     target_link_libraries(${PROG}-bench ${BLAS_LIBS} ${OPENCL_LIBRARIES})
+    if(CUDA_FOUND)
+        set(CUPROG ${CMAKE_CURRENT_SOURCE_DIR}/${PROG}.cu)
+        file(COPY ${PROG}.cpp ${CUPROG})
+        cuda_add_executable(${PROG}-bench  ${CUPROG})
+    else()
+        add_executable(${PROG}-bench  ${PROG}.cpp)
+    endif()
+     target_link_libraries(${PROG}-bench ${BLAS_LIBS})
      set_target_properties(${PROG}-bench PROPERTIES COMPILE_FLAGS "-Wall -Wextra ${BLAS_DEF_STR}")
 endforeach(PROG)
