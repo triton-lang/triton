@@ -130,7 +130,7 @@ void base::set_arguments_functor::set_arguments(numeric_type dtype, values_holde
     case ULONG_TYPE: kernel_.setArg(current_arg_++, scal.uint64); break;
     case FLOAT_TYPE: kernel_.setArg(current_arg_++, scal.float32); break;
     case DOUBLE_TYPE: kernel_.setArg(current_arg_++, scal.float64); break;
-    default: throw ;
+    default: throw unknown_datatype(dtype);
   }
 }
 
@@ -178,7 +178,7 @@ void base::set_arguments_functor::set_arguments(lhs_rhs_element const & lhs_rhs)
     case VALUE_TYPE_FAMILY: return set_arguments(lhs_rhs.dtype, lhs_rhs.vscalar);
     case ARRAY_TYPE_FAMILY: return set_arguments(lhs_rhs.array);
     case INFOS_TYPE_FAMILY: return set_arguments(lhs_rhs.tuple);
-    default: throw ;
+    default: throw invalid_exception("Unrecognized type family");
   }
 }
 

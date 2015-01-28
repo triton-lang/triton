@@ -6,6 +6,8 @@
 #include "atidlas/model/model.h"
 #include "atidlas/symbolic/execute.h"
 
+#include <stdexcept>
+
 namespace atidlas
 {
 
@@ -523,26 +525,26 @@ array_expression repmat(array_expression const & A, int_t const & rep1, int_t co
 #define DEFINE_REDUCTION(OP, OPNAME)\
 array_expression OPNAME(array const & x, int_t axis)\
 {\
-  if(axis==-1)\
+  if(axis < -1 || axis > x.nshape())\
+    throw std::out_of_range("The axis entry is out of bounds");\
+  else if(axis==-1)\
     return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
   else if(axis==0)\
     return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()._1));\
-  else if(axis==1)\
-    return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()._2));\
   else\
-    throw ;\
+    return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()._2));\
 }\
 \
 array_expression OPNAME(array_expression const & x, int_t axis)\
 {\
+  if(axis < -1 || axis > x.nshape())\
+    throw std::out_of_range("The axis entry is out of bounds");\
   if(axis==-1)\
     return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY, OP), size4(1));\
   else if(axis==0)\
     return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), size4(x.shape()._1));\
-  else if(axis==1)\
-    return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), size4(x.shape()._2));\
   else\
-    throw ;\
+    return array_expression(x, lhs_rhs_element(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), size4(x.shape()._2));\
 }
 
 DEFINE_REDUCTION(OPERATOR_ADD_TYPE, sum)

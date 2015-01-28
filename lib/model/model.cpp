@@ -1,5 +1,7 @@
 #include <set>
 #include <fstream>
+#include <stdexcept>
+
 #include "rapidjson/document.h"
 #include "atidlas/backend/parse.h"
 #include "atidlas/backend/templates/vaxpy.h"
@@ -7,6 +9,7 @@
 #include "atidlas/backend/templates/maxpy.h"
 #include "atidlas/backend/templates/mreduction.h"
 #include "atidlas/backend/templates/mproduct.h"
+#include "atidlas/exception/unknown_datatype.h"
 #include "atidlas/exception/operation_not_supported.h"
 #include "atidlas/model/model.h"
 #include "atidlas/tools/make_vector.hpp"
@@ -150,14 +153,14 @@ namespace detail
     if(name=="gemmNT") return MATRIX_PRODUCT_NT_TYPE;
     if(name=="gemmTN") return MATRIX_PRODUCT_TN_TYPE;
     if(name=="gemmTT") return MATRIX_PRODUCT_TT_TYPE;
-    throw ;
+    throw std::invalid_argument("Invalid expression: " + name);
   }
 
   static numeric_type get_dtype(std::string const & name)
   {
     if(name=="float32") return FLOAT_TYPE;
     if(name=="float64") return DOUBLE_TYPE;
-    throw;
+    throw std::invalid_argument("Invalid datatype: " + name);
   }
 
   static tools::shared_ptr<base> create(std::string const & template_name, std::vector<int> const & a)
@@ -182,7 +185,7 @@ namespace detail
     else if(template_name.find("gemmTT")!=std::string::npos)
       return tools::shared_ptr<base>(new mproduct_tt(a[0], a[1], a[2], a[3], a[4], a[5], a[6], fetch[a[7]], fetch[a[8]], a[9], a[10]));
     else
-      throw operation_not_supported_exception("Cannot create the given operation");
+      throw std::invalid_argument("Invalid expression: " + template_name);
   }
 }
 

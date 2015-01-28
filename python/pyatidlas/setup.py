@@ -53,7 +53,7 @@ def main():
     INCLUDE_DIRS = ['${CMAKE_CURRENT_SOURCE_DIR}/external/boost/include',
                      os.path.join(find_module("numpy")[1], "core", "include"),
                     '${PROJECT_SOURCE_DIR}/include']
-    LIBRARY_DIRS = ['${LIBATIDLAS_DIR}']
+    LIBRARY_DIRS = ['${CMAKE_BINARY_DIR}/lib']
 
     src = [os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', sf) for sf in ['_atidlas.cpp']]
 

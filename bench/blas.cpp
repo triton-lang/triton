@@ -141,7 +141,7 @@ void bench(ad::numeric_type dtype)
     for(std::vector<int_t>::const_iterator Nit = BLAS3_N.begin() ; Nit != BLAS3_N.end() ; ++Nit)
     for(std::vector<int_t>::const_iterator Kit = BLAS3_K.begin() ; Kit != BLAS3_K.end() ; ++Kit)
     {
-      int_t M = *Mit, N = *Nit, K = *Kit;
+      int_t M = *Kit, N = *Kit, K = *Kit;
       std::cout << M << "," << N << "," << K;
       /* ATIDLAS */
       ad::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);

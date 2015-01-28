@@ -1,6 +1,7 @@
 #include <cassert>
 #include <list>
 #include <vector>
+#include <stdexcept>
 #include "atidlas/types.h"
 #include "atidlas/array.h"
 #include <CL/cl.hpp>
@@ -196,7 +197,7 @@ namespace atidlas
         case MATRIX_PRODUCT_TN_TYPE:   tmp = tools::shared_ptr<obj_base>(new array(node.lhs.array.shape2, node.rhs.array.shape2, dtype, context));   break;
         case MATRIX_PRODUCT_TT_TYPE:   tmp = tools::shared_ptr<obj_base>(new array(node.lhs.array.shape2, node.rhs.array.shape1, dtype, context));   break;
 
-        default: throw ;
+        default: throw std::invalid_argument("Unrecognized operation");
       }
       temporaries_.push_back(tmp);
 
