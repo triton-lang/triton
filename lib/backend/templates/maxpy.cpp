@@ -78,7 +78,6 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream << "}" << std::endl;
 
 //  std::cout << stream.str() << std::endl;
-//    std::cout << to_string(*symbolic_expressions.data().front()) << std::endl;
   return stream.str();
 }
 

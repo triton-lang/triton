@@ -35,7 +35,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   std::cout << NAME << "..." << std::flush;\
   GPU_OP;\
   ad::copy(C, buffer);\
-  if(failure_vector(buffer, cCbuffer, epsilon))\
+  if(diff(buffer, cCbuffer, epsilon))\
   {\
     failure_count++;\
     std::cout << " [Failure!]" << std::endl;\

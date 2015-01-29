@@ -339,6 +339,7 @@ std::string mapped_cast::operator_to_str(operation_node_type type)
 {
   switch(type)
   {
+    case OPERATOR_CAST_BOOL_TYPE : return "bool";
     case OPERATOR_CAST_CHAR_TYPE : return "char";
     case OPERATOR_CAST_UCHAR_TYPE : return "uchar";
     case OPERATOR_CAST_SHORT_TYPE : return "short";

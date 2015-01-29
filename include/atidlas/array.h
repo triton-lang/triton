@@ -54,6 +54,8 @@ public:
   template<class T> array & operator=(std::vector<T> const & rhs);
 
   array_expression operator-();
+  array_expression operator!();
+
   array& operator+=(value_scalar const &);
   array& operator+=(array const &);
   array& operator+=(array_expression const &);

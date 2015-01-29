@@ -43,7 +43,8 @@ namespace detail
 
   bool is_cast(op_element const & op)
   {
-        return op.type== OPERATOR_CAST_CHAR_TYPE
+        return op.type== OPERATOR_CAST_BOOL_TYPE
+            || op.type== OPERATOR_CAST_CHAR_TYPE
             || op.type== OPERATOR_CAST_UCHAR_TYPE
             || op.type== OPERATOR_CAST_SHORT_TYPE
             || op.type== OPERATOR_CAST_USHORT_TYPE
@@ -74,18 +75,7 @@ namespace detail
 
   bool is_elementwise_function(op_element const & op)
   {
-    return op.type == OPERATOR_CAST_CHAR_TYPE
-        || op.type == OPERATOR_CAST_UCHAR_TYPE
-        || op.type == OPERATOR_CAST_SHORT_TYPE
-        || op.type == OPERATOR_CAST_USHORT_TYPE
-        || op.type == OPERATOR_CAST_INT_TYPE
-        || op.type == OPERATOR_CAST_UINT_TYPE
-        || op.type == OPERATOR_CAST_LONG_TYPE
-        || op.type == OPERATOR_CAST_ULONG_TYPE
-        || op.type == OPERATOR_CAST_HALF_TYPE
-        || op.type == OPERATOR_CAST_FLOAT_TYPE
-        || op.type == OPERATOR_CAST_DOUBLE_TYPE
-
+    return is_cast(op)
         || op.type== OPERATOR_ABS_TYPE
         || op.type== OPERATOR_ACOS_TYPE
         || op.type== OPERATOR_ASIN_TYPE
@@ -201,6 +191,7 @@ const char * evaluate(operation_node_type type)
   case OPERATOR_ACCESS_TYPE : return "[]";
 
     //Relational
+  case OPERATOR_NEGATE_TYPE: return "!";
   case OPERATOR_ELEMENT_EQ_TYPE : return "==";
   case OPERATOR_ELEMENT_NEQ_TYPE : return "!=";
   case OPERATOR_ELEMENT_GREATER_TYPE : return ">";
@@ -229,38 +220,6 @@ const char * evaluate(operation_node_type type)
   default : throw operation_not_supported_exception("Unsupported operator");
   }
 }
-
-const char * operator_string(operation_node_type type)
-{
-  switch (type)
-  {
-  case OPERATOR_CAST_CHAR_TYPE : return "char";
-  case OPERATOR_CAST_UCHAR_TYPE : return "uchar";
-  case OPERATOR_CAST_SHORT_TYPE : return "short";
-  case OPERATOR_CAST_USHORT_TYPE : return "ushort";
-  case OPERATOR_CAST_INT_TYPE : return "int";
-  case OPERATOR_CAST_UINT_TYPE : return "uint";
-  case OPERATOR_CAST_LONG_TYPE : return "long";
-  case OPERATOR_CAST_ULONG_TYPE : return "ulong";
-  case OPERATOR_CAST_HALF_TYPE : return "half";
-  case OPERATOR_CAST_FLOAT_TYPE : return "float";
-  case OPERATOR_CAST_DOUBLE_TYPE : return "double";
-
-  case OPERATOR_MINUS_TYPE : return "umin";
-  case OPERATOR_ASSIGN_TYPE : return "assign";
-  case OPERATOR_INPLACE_ADD_TYPE : return "ip_add";
-  case OPERATOR_INPLACE_SUB_TYPE : return "ip_sub";
-  case OPERATOR_ADD_TYPE : return "add";
-  case OPERATOR_SUB_TYPE : return "sub";
-  case OPERATOR_MULT_TYPE : return "mult";
-  case OPERATOR_ELEMENT_PROD_TYPE : return "eprod";
-  case OPERATOR_DIV_TYPE : return "div";
-  case OPERATOR_ELEMENT_DIV_TYPE : return "ediv";
-  case OPERATOR_ACCESS_TYPE : return "acc";
-  default : return evaluate(type);
-  }
-}
-
 
 evaluate_expression_traversal::evaluate_expression_traversal(std::map<std::string, std::string> const & accessors, std::string & str, mapping_type const & mapping) :
   accessors_(accessors), str_(str), mapping_(mapping)

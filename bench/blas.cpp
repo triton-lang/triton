@@ -21,10 +21,10 @@ typedef ad::int_t int_t;
 template<class T>
 void bench(ad::numeric_type dtype)
 {
-  unsigned int dtsize = ad::size_of(dtype);
   float total_time = 0;
   std::vector<double> times;
   ad::tools::timer timer;
+  unsigned int dtsize = ad::size_of(dtype);
 
 #define BENCHMARK(OP, PERF, SYNC) \
   {\
@@ -40,7 +40,7 @@ void bench(ad::numeric_type dtype)
     total_time += times.back();\
   }\
   float tres = median(times);\
-  std::cout << " " << tres << std::flush;\
+  std::cout << " " << PERF << std::flush;\
   }
 
 #define CL_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, ad::cl_ext::synchronize(ad::cl_ext::default_context()))

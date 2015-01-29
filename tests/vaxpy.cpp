@@ -23,6 +23,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   atidlas::scalar da(a, ctx), db(b, ctx);
 
   simple_vector<T> buffer(N);
+#define CONVERT
 #define RUN_TEST_VECTOR_AXPY(NAME, CPU_LOOP, GPU_EXPR) \
   {\
   std::cout << NAME "..." << std::flush;\
@@ -30,7 +31,8 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
     CPU_LOOP;\
   GPU_EXPR;\
   atidlas::copy(z, buffer.data());\
-  if(failure_vector(cz, buffer, epsilon))\
+  CONVERT;\
+  if(diff(cz, buffer, epsilon))\
   {\
     failure_count++;\
     std::cout << " [Failure!]" << std::endl;\
@@ -74,13 +76,17 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 
   RUN_TEST_VECTOR_AXPY("z = x.*y", cz[i] = cx[i]*cy[i], z= x*y)
   RUN_TEST_VECTOR_AXPY("z = x./y", cz[i] = cx[i]/cy[i], z= x/y)
+
+  RUN_TEST_VECTOR_AXPY("z = pow(x,y)", cz[i] = pow(cx[i], cy[i]), z= pow(x,y))
+
+#undef CONVERT
+#define CONVERT for(int_t i = 0 ; i < N ; ++i) {cz[i] = !!cz[i] ; buffer[i] = !!buffer[i];}
   RUN_TEST_VECTOR_AXPY("z = x==y", cz[i] = cx[i]==cy[i], z= cast(x==y, dtype))
   RUN_TEST_VECTOR_AXPY("z = x>=y", cz[i] = cx[i]>=cy[i], z= cast(x>=y, dtype))
   RUN_TEST_VECTOR_AXPY("z = x>y", cz[i] = cx[i]>cy[i], z= cast(x>y, dtype))
   RUN_TEST_VECTOR_AXPY("z = x<=y", cz[i] = cx[i]<=cy[i], z= cast(x<=y, dtype))
   RUN_TEST_VECTOR_AXPY("z = x<y", cz[i] = cx[i]<cy[i], z= cast(x<y, dtype))
   RUN_TEST_VECTOR_AXPY("z = x!=y", cz[i] = cx[i]!=cy[i], z= cast(x!=y, dtype))
-  RUN_TEST_VECTOR_AXPY("z = pow(x,y)", cz[i] = pow(cx[i], cy[i]), z= pow(x,y))
 
 #undef RUN_TEST_VECTOR_AXPY
 

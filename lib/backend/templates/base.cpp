@@ -122,6 +122,7 @@ void base::set_arguments_functor::set_arguments(numeric_type dtype, values_holde
 {
   switch(dtype)
   {
+//    case BOOL_TYPE: kernel_.setArg(current_arg_++, scal.bool8); break;
     case CHAR_TYPE: kernel_.setArg(current_arg_++, scal.int8); break;
     case UCHAR_TYPE: kernel_.setArg(current_arg_++, scal.uint8); break;
     case SHORT_TYPE: kernel_.setArg(current_arg_++, scal.int16); break;
@@ -130,6 +131,7 @@ void base::set_arguments_functor::set_arguments(numeric_type dtype, values_holde
     case UINT_TYPE: kernel_.setArg(current_arg_++, scal.uint32); break;
     case LONG_TYPE: kernel_.setArg(current_arg_++, scal.int64); break;
     case ULONG_TYPE: kernel_.setArg(current_arg_++, scal.uint64); break;
+//    case HALF_TYPE: kernel_.setArg(current_arg_++, scal.float16); break;
     case FLOAT_TYPE: kernel_.setArg(current_arg_++, scal.float32); break;
     case DOUBLE_TYPE: kernel_.setArg(current_arg_++, scal.float64); break;
     default: throw unknown_datatype(dtype);

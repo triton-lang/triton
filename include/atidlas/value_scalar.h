@@ -12,6 +12,7 @@ class array_expression;
 
 union values_holder
 {
+//  cl_char bool8;
   cl_char int8;
   cl_uchar uint8;
   cl_short int16;
@@ -20,7 +21,7 @@ union values_holder
   cl_uint uint32;
   cl_long int64;
   cl_ulong uint64;
-//    cl_half float16;
+//  cl_half float16;
   cl_float float32;
   cl_double float64;
 };
@@ -31,6 +32,7 @@ class value_scalar
   template<class T> T cast() const;
 public:
 #define ATIDLAS_INSTANTIATE(CLTYPE, ADTYPE) value_scalar(CLTYPE value, numeric_type dtype = ADTYPE);
+//  ATIDLAS_INSTANTIATE(cl_bool, BOOL_TYPE)
   ATIDLAS_INSTANTIATE(cl_char, CHAR_TYPE)
   ATIDLAS_INSTANTIATE(cl_uchar, UCHAR_TYPE)
   ATIDLAS_INSTANTIATE(cl_short, SHORT_TYPE)
@@ -39,6 +41,7 @@ public:
   ATIDLAS_INSTANTIATE(cl_uint, UINT_TYPE)
   ATIDLAS_INSTANTIATE(cl_long, LONG_TYPE)
   ATIDLAS_INSTANTIATE(cl_ulong, ULONG_TYPE)
+//  ATIDLAS_INSTANTIATE(cl_half, HALF_TYPE)
   ATIDLAS_INSTANTIATE(cl_float, FLOAT_TYPE)
   ATIDLAS_INSTANTIATE(cl_double, DOUBLE_TYPE)
 #undef ATIDLAS_INSTANTIATE

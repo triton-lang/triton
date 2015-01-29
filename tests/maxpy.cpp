@@ -25,6 +25,7 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
   atidlas::scalar da(a, ctx), db(b, ctx);
 
   simple_vector<T> buffer(M*N);
+#define CONVERT
 #define RUN_TEST(NAME, CPU_LOOP, GPU_EXPR) \
   {\
   std::cout << NAME "..." << std::flush;\
@@ -37,7 +38,8 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
   for(int i = 0 ; i < M ; ++i)\
     for(int j = 0 ; j < N ; ++j)\
       cCbuffer[i + j*M] = cC(i,j);\
-  if(failure_vector(cCbuffer, buffer, epsilon))\
+  CONVERT;\
+  if(diff(cCbuffer, buffer, epsilon))\
   {\
     failure_count++;\
     std::cout << " [Failure!]" << std::endl;\
@@ -79,15 +81,17 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
   RUN_TEST("C = A./B", cC(i,j) = cA(i,j)/cB(i,j), C= A/B)
   RUN_TEST("C = pow(A,B)", cC(i,j) = pow(cA(i,j), cB(i,j)), C= pow(A,B))
 
+  RUN_TEST("C = eye(M, N)", cC(i,j) = i==j, C= eye(M, N, C.dtype(), C.context()))
+  RUN_TEST("C = outer(x, y)", cC(i,j) = cx[i]*cy[j], C= outer(x,y))
+
+#undef CONVERT
+#define CONVERT for(int_t i = 0 ; i < M*N ; ++i) {cCbuffer[i] = !!cCbuffer[i] ; buffer[i] = !!buffer[i];}
   RUN_TEST("C = A==B", cC(i,j) = cA(i,j)==cB(i,j), C= cast(A==B, dtype))
   RUN_TEST("C = A>=B", cC(i,j) = cA(i,j)>=cB(i,j), C= cast(A>=B, dtype))
   RUN_TEST("C = A>B", cC(i,j) = cA(i,j)>cB(i,j), C= cast(A>B, dtype))
   RUN_TEST("C = A<=B", cC(i,j) = cA(i,j)<=cB(i,j), C= cast(A<=B, dtype))
   RUN_TEST("C = A<B", cC(i,j) = cA(i,j)<cB(i,j), C= cast(A<B, dtype))
   RUN_TEST("C = A!=B", cC(i,j) = cA(i,j)!=cB(i,j), C= cast(A!=B, dtype))
-
-  RUN_TEST("C = eye(M, N)", cC(i,j) = i==j, C= eye(M, N, C.dtype(), C.context()))
-  RUN_TEST("C = outer(x, y)", cC(i,j) = cx[i]*cy[j], C= outer(x,y))
 
 #undef RUN_TEST
 

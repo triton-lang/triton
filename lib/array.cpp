@@ -175,6 +175,9 @@ INSTANTIATE(cl_double);
 array_expression array::operator-()
 { return array_expression(*this, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
 
+array_expression array::operator!()
+{ return array_expression(*this, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), context_, INT_TYPE, shape_); }
+
 //
 array & array::operator+=(value_scalar const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype_, shape_); }
@@ -259,6 +262,7 @@ scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype()
 {
   switch(dtype_)
   {
+//    case BOOL_TYPE: detail::copy(context_, data_, (cl_bool)value); break;
     case CHAR_TYPE: detail::copy(context_, data_, (cl_char)value); break;
     case UCHAR_TYPE: detail::copy(context_, data_, (cl_uchar)value); break;
     case SHORT_TYPE: detail::copy(context_, data_, (cl_short)value); break;
@@ -267,6 +271,7 @@ scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype()
     case UINT_TYPE: detail::copy(context_, data_, (cl_uint)value); break;
     case LONG_TYPE: detail::copy(context_, data_, (cl_long)value); break;
     case ULONG_TYPE: detail::copy(context_, data_, (cl_ulong)value); break;
+//    case HALF_TYPE: detail::copy(context_, data_, (cl_float)value); break;
     case FLOAT_TYPE: detail::copy(context_, data_, (cl_float)value); break;
     case DOUBLE_TYPE: detail::copy(context_, data_, (cl_double)value); break;
     default: throw unknown_datatype(dtype_);
@@ -291,6 +296,7 @@ case DTYPE:\
 
   switch(dtype_)
   {
+//    HANDLE_CASE(BOOL_TYPE, bool8);
     HANDLE_CASE(CHAR_TYPE, int8);
     HANDLE_CASE(UCHAR_TYPE, uint8);
     HANDLE_CASE(SHORT_TYPE, int16);
@@ -299,6 +305,7 @@ case DTYPE:\
     HANDLE_CASE(UINT_TYPE, uint32);
     HANDLE_CASE(LONG_TYPE, int64);
     HANDLE_CASE(ULONG_TYPE, uint64);
+//    HANDLE_CASE(HALF_TYPE, float16);
     HANDLE_CASE(FLOAT_TYPE, float32);
     HANDLE_CASE(DOUBLE_TYPE, float64);
     default: throw unknown_datatype(dtype_);
@@ -320,6 +327,7 @@ scalar& scalar::operator=(value_scalar const & s)
                             }
   switch(dtype_)
   {
+//    HANDLE_CASE(BOOL_TYPE, cl_bool)
     HANDLE_CASE(CHAR_TYPE, cl_char)
     HANDLE_CASE(UCHAR_TYPE, cl_uchar)
     HANDLE_CASE(SHORT_TYPE, cl_short)
@@ -328,6 +336,7 @@ scalar& scalar::operator=(value_scalar const & s)
     HANDLE_CASE(UINT_TYPE, cl_uint)
     HANDLE_CASE(LONG_TYPE, cl_long)
     HANDLE_CASE(ULONG_TYPE, cl_ulong)
+//    HANDLE_CASE(HALF_TYPE, cl_half)
     HANDLE_CASE(FLOAT_TYPE, cl_float)
     HANDLE_CASE(DOUBLE_TYPE, cl_double)
     default: throw unknown_datatype(dtype_);
@@ -356,6 +365,7 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
 {
   switch(s.dtype())
   {
+//    case BOOL_TYPE: return os << static_cast<cl_bool>(s);
     case CHAR_TYPE: return os << static_cast<cl_char>(s);
     case UCHAR_TYPE: return os << static_cast<cl_uchar>(s);
     case SHORT_TYPE: return os << static_cast<cl_short>(s);
@@ -364,7 +374,7 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
     case UINT_TYPE: return os << static_cast<cl_uint>(s);
     case LONG_TYPE: return os << static_cast<cl_long>(s);
     case ULONG_TYPE: return os << static_cast<cl_ulong>(s);
-    case HALF_TYPE: return os << static_cast<cl_half>(s);
+//    case HALF_TYPE: return os << static_cast<cl_half>(s);
     case FLOAT_TYPE: return os << static_cast<cl_float>(s);
     case DOUBLE_TYPE: return os << static_cast<cl_double>(s);
     default: throw unknown_datatype(s.dtype());
@@ -482,6 +492,7 @@ inline operation_node_type casted(numeric_type dtype)
 {
   switch(dtype)
   {
+//    case BOOL_TYPE: return OPERATOR_CAST_BOOL_TYPE;
     case CHAR_TYPE: return OPERATOR_CAST_CHAR_TYPE;
     case UCHAR_TYPE: return OPERATOR_CAST_UCHAR_TYPE;
     case SHORT_TYPE: return OPERATOR_CAST_SHORT_TYPE;
@@ -490,6 +501,7 @@ inline operation_node_type casted(numeric_type dtype)
     case UINT_TYPE: return OPERATOR_CAST_UINT_TYPE;
     case LONG_TYPE: return OPERATOR_CAST_LONG_TYPE;
     case ULONG_TYPE: return OPERATOR_CAST_ULONG_TYPE;
+//    case FLOAT_TYPE: return OPERATOR_CAST_HALF_TYPE;
     case FLOAT_TYPE: return OPERATOR_CAST_FLOAT_TYPE;
     case DOUBLE_TYPE: return OPERATOR_CAST_DOUBLE_TYPE;
     default: throw unknown_datatype(dtype);
@@ -883,6 +895,7 @@ std::ostream& operator<<(std::ostream & os, array const & a)
       os << "  ";
     switch(dtype)
     {
+//      HANDLE(BOOL_TYPE, cl_bool)
       HANDLE(CHAR_TYPE, cl_char)
       HANDLE(UCHAR_TYPE, cl_uchar)
       HANDLE(SHORT_TYPE, cl_short)
@@ -891,6 +904,7 @@ std::ostream& operator<<(std::ostream & os, array const & a)
       HANDLE(UINT_TYPE, cl_uint)
       HANDLE(LONG_TYPE, cl_long)
       HANDLE(ULONG_TYPE, cl_ulong)
+//      HANDLE(HALF_TYPE, cl_half)
       HANDLE(FLOAT_TYPE, cl_float)
       HANDLE(DOUBLE_TYPE, cl_double)
       default: throw unknown_datatype(dtype);
@@ -907,6 +921,7 @@ std::ostream& operator<<(std::ostream & os, array const & a)
       os << std::endl << "  ";
       switch(dtype)
       {
+//        HANDLE(BOOL_TYPE, cl_bool)
         HANDLE(CHAR_TYPE, cl_char)
         HANDLE(UCHAR_TYPE, cl_uchar)
         HANDLE(SHORT_TYPE, cl_short)
@@ -915,6 +930,7 @@ std::ostream& operator<<(std::ostream & os, array const & a)
         HANDLE(UINT_TYPE, cl_uint)
         HANDLE(LONG_TYPE, cl_long)
         HANDLE(ULONG_TYPE, cl_ulong)
+//        HANDLE(HALF_TYPE, cl_half)
         HANDLE(FLOAT_TYPE, cl_float)
         HANDLE(DOUBLE_TYPE, cl_double)
         default: throw unknown_datatype(dtype);

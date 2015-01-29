@@ -93,7 +93,6 @@ std::vector<size_t> filter_nodes(bool (*pred)(symbolic_expression_node const & n
 std::vector<lhs_rhs_element> filter_elements(symbolic_expression_node_subtype subtype,
                                              atidlas::symbolic_expression const & symbolic_expression);
 const char * evaluate(operation_node_type type);
-const char * operator_string(operation_node_type type);
 
 /** @brief functor for generating the expression string from a symbolic_expression */
 class evaluate_expression_traversal: public traversal_functor

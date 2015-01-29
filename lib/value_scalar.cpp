@@ -12,6 +12,7 @@ void value_scalar::init(T const & s)
 {
   switch(dtype_)
   {
+//    case BOOL_TYPE: values_.bool8 = s; break;
     case CHAR_TYPE: values_.int8 = s; break;
     case UCHAR_TYPE: values_.uint8 = s; break;
     case SHORT_TYPE: values_.int16 = s; break;
@@ -20,6 +21,7 @@ void value_scalar::init(T const & s)
     case UINT_TYPE: values_.uint32 = s; break;
     case LONG_TYPE: values_.int64 = s; break;
     case ULONG_TYPE: values_.uint64 = s; break;
+//    case HALF_TYPE: values_.float16 = s; break;
     case FLOAT_TYPE: values_.float32 = s; break;
     case DOUBLE_TYPE: values_.float64 = s; break;
     default: throw unknown_datatype(dtype_);

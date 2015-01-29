@@ -30,7 +30,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   }\
   GPU_REDUCTION;\
   ad::copy(RES, BUF.data());\
-  if(failure_vector(CRES, BUF, epsilon))\
+  if(diff(CRES, BUF, epsilon))\
   {\
     failure_count++;\
     std::cout << " [Failure!]" << std::endl;\

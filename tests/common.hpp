@@ -145,7 +145,7 @@ simple_matrix<T> simple_trans(simple_matrix_base<T> const & A)
 
 /*------ Compare -----------*/
 template<class VecType1, class VecType2>
-bool failure_vector(VecType1 const & x, VecType2 const & y, typename VecType1::value_type epsilon)
+bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type epsilon)
 {
   typedef typename VecType1::value_type T;
   for(int_t i = 0 ; i < x.size() ; ++i)

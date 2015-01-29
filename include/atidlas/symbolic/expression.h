@@ -39,8 +39,10 @@ enum operation_node_type
 
   // unary operator
   OPERATOR_MINUS_TYPE,
+  OPERATOR_NEGATE_TYPE,
 
   // unary expression
+  OPERATOR_CAST_BOOL_TYPE,
   OPERATOR_CAST_CHAR_TYPE,
   OPERATOR_CAST_UCHAR_TYPE,
   OPERATOR_CAST_SHORT_TYPE,
@@ -220,6 +222,7 @@ struct array_expression: public symbolic_expression
   int_t nshape() const;
 
   array_expression operator-();
+  array_expression operator!();
 private:
   size4 shape_;
 };

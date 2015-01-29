@@ -33,6 +33,7 @@ struct repeat_infos
 enum numeric_type
 {
   INVALID_NUMERIC_TYPE = 0,
+//  BOOL_TYPE,
   CHAR_TYPE,
   UCHAR_TYPE,
   SHORT_TYPE,
@@ -41,7 +42,7 @@ enum numeric_type
   UINT_TYPE,
   LONG_TYPE,
   ULONG_TYPE,
-  HALF_TYPE,
+//  HALF_TYPE,
   FLOAT_TYPE,
   DOUBLE_TYPE
 };
@@ -50,6 +51,7 @@ inline std::string numeric_type_to_string(numeric_type const & type)
 {
   switch (type)
   {
+//  case BOOL_TYPE: return "bool";
   case CHAR_TYPE: return "char";
   case UCHAR_TYPE: return "uchar";
   case SHORT_TYPE: return "short";
@@ -58,6 +60,7 @@ inline std::string numeric_type_to_string(numeric_type const & type)
   case UINT_TYPE: return "uint";
   case LONG_TYPE:  return "long";
   case ULONG_TYPE: return "ulong";
+//  case HALF_TYPE : return "half";
   case FLOAT_TYPE : return "float";
   case DOUBLE_TYPE : return "double";
   default : throw unknown_datatype(type);
@@ -65,6 +68,7 @@ inline std::string numeric_type_to_string(numeric_type const & type)
 }
 
 template<class T> struct to_numeric_type;
+//template<> struct to_numeric_type<cl_bool> { static const numeric_type value = BOOL_TYPE; };
 template<> struct to_numeric_type<cl_char> { static const numeric_type value = CHAR_TYPE; };
 template<> struct to_numeric_type<cl_uchar> { static const numeric_type value = UCHAR_TYPE; };
 template<> struct to_numeric_type<cl_short> { static const numeric_type value = SHORT_TYPE; };
@@ -73,6 +77,7 @@ template<> struct to_numeric_type<cl_int> { static const numeric_type value = IN
 template<> struct to_numeric_type<cl_uint> { static const numeric_type value = UINT_TYPE; };
 template<> struct to_numeric_type<cl_long> { static const numeric_type value = LONG_TYPE; };
 template<> struct to_numeric_type<cl_ulong> { static const numeric_type value = ULONG_TYPE; };
+//template<> struct to_numeric_type<cl_float> { static const numeric_type value = HALF_TYPE; };
 template<> struct to_numeric_type<cl_float> { static const numeric_type value = FLOAT_TYPE; };
 template<> struct to_numeric_type<cl_double> { static const numeric_type value = DOUBLE_TYPE; };
 
@@ -80,12 +85,13 @@ inline unsigned int size_of(numeric_type type)
 {
   switch (type)
   {
+//  case BOOL_TYPE:
   case UCHAR_TYPE:
   case CHAR_TYPE: return 1;
 
+//  case HALF_TYPE:
   case USHORT_TYPE:
-  case SHORT_TYPE:
-  case HALF_TYPE: return 2;
+  case SHORT_TYPE: return 2;
 
   case UINT_TYPE:
   case INT_TYPE:
