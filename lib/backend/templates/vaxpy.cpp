@@ -61,7 +61,9 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
                                                                                                 ("matrix_row", "#namereg")
                                                                                                 ("matrix_column", "#namereg")
                                                                                                 ("matrix_diag", "#namereg")
-                                                                                                ("array0", "#namereg"), symbolic_expressions, mappings);
+                                                                                                ("array0", "#namereg")
+                                                                                                ("cast", "convert_"+data_type)
+             , symbolic_expressions, mappings);
 
     process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1", "#pointer[i*#stride] = #namereg;")
                                                                                            ("matrix_row", "$VALUE{#row, i} = #namereg;")
@@ -82,6 +84,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, symbolic_expre
     stream.dec_tab();
     stream << "}" << std::endl;
 
+//    std::cout << stream.str() << std::endl;
     result.push_back(stream.str());
   }
 

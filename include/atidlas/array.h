@@ -2,8 +2,8 @@
 #define ATIDLAS_ARRAY_H_
 
 #include <iostream>
-#include "atidlas/types.h"
 #include <CL/cl.hpp>
+#include "atidlas/types.h"
 #include "atidlas/cl/queues.h"
 #include "atidlas/symbolic/expression.h"
 
@@ -118,7 +118,6 @@ public:
 
 
 //copy
-
 void copy(void const * data, array & gx, cl::CommandQueue & queue, bool blocking = true);
 void copy(array const & gx, void* data, cl::CommandQueue & queue, bool blocking = true);
 void copy(void const *data, array &gx, bool blocking = true);
@@ -191,6 +190,9 @@ ATIDLAS_DECLARE_UNARY_OPERATOR(sqrt)
 ATIDLAS_DECLARE_UNARY_OPERATOR(tan)
 ATIDLAS_DECLARE_UNARY_OPERATOR(tanh)
 ATIDLAS_DECLARE_UNARY_OPERATOR(trans)
+
+array_expression cast(array const &, numeric_type dtype);
+array_expression cast(array_expression const &, numeric_type dtype);
 
 array_expression norm(array const &, unsigned int order = 2);
 array_expression norm(array_expression const &, unsigned int order = 2);

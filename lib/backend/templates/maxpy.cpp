@@ -28,7 +28,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   kernel_generation_stream stream;
 
   std::string init0, upper_bound0, inc0, init1, upper_bound1, inc1;
-
+  std::string data_type = append_width("#scalartype",simd_width);
   char kprefix[10];
   fill_kernel_name(kprefix, label, "d");
 
@@ -51,7 +51,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >
-                                                                          ("array2", append_width("#scalartype",simd_width) + " #namereg = $VALUE{i*#stride1,j*#stride2};")
+                                                                          ("array2", data_type + " #namereg = $VALUE{i*#stride1,j*#stride2};")
                                                                           ("vdiag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride1, j*#stride1)};")
                                                                           ("repeat", "#scalartype #namereg = $VALUE{(i%#tuplearg0)*#stride1, (j%#tuplearg1)*#stride2};")
                                                                           ("outer", "#scalartype #namereg = ($LVALUE{i*#stride})*($RVALUE{j*#stride});")
@@ -63,6 +63,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
                                                                             ("repeat", "#namereg")
                                                                             ("array0", "#namereg")
                                                                             ("outer", "#namereg")
+                                                                            ("cast", "convert_"+data_type)
                                                   , symbolic_expressions, mappings);
 
   process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array2", "$VALUE{i*#stride1,j*#stride2} = #namereg;")

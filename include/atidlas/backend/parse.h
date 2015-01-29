@@ -17,6 +17,8 @@ namespace detail
   bool is_vector_reduction(symbolic_expression_node const & node);
   bool is_elementwise_operator(op_element const & op);
   bool is_elementwise_function(op_element const & op);
+  bool is_cast(op_element const & op);
+
 }
 
 class scalar;

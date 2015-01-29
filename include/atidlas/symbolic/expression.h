@@ -193,9 +193,9 @@ public:
   typedef std::vector<value_type>     container_type;
 
   symbolic_expression(lhs_rhs_element const & lhs, lhs_rhs_element const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype);
-  symbolic_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op);
-  symbolic_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op);
-  symbolic_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op);
+  symbolic_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, numeric_type const & dtype);
+  symbolic_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype);
+  symbolic_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype);
 
   container_type & tree();
   container_type const & tree() const;
@@ -212,9 +212,9 @@ protected:
 struct array_expression: public symbolic_expression
 {
   array_expression(lhs_rhs_element const & lhs, lhs_rhs_element const & rhs, op_element const & op, cl::Context const & ctx, numeric_type const & dtype, size4 shape);
-  array_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, size4 shape);
-  array_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, size4 shape);
-  array_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, size4 shape);
+  array_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, numeric_type const & dtype, size4 shape);
+  array_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 shape);
+  array_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 shape);
   size4 shape() const;
   array_expression& reshape(int_t size1, int_t size2=1);
   int_t nshape() const;

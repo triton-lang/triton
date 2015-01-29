@@ -235,6 +235,12 @@ public:
   mapped_outer(std::string const & scalartype, unsigned int id, node_info info);
 };
 
+class mapped_cast : public mapped_object
+{
+  static std::string operator_to_str(operation_node_type type);
+public:
+  mapped_cast(operation_node_type type, unsigned int id);
+};
 
 }
 #endif

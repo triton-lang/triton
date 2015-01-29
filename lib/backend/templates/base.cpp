@@ -110,6 +110,8 @@ void base::map_functor::operator()(atidlas::symbolic_expression const & symbolic
       mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_repeat>(&symbolic_expression, root_idx, &mapping_)));
     else if (root_node.op.type == OPERATOR_OUTER_PROD_TYPE)
       mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_outer>(&symbolic_expression, root_idx, &mapping_)));
+    else if (detail::is_cast(root_node.op))
+      mapping_.insert(mapping_type::value_type(key, tools::shared_ptr<mapped_object>(new mapped_cast(root_node.op.type, binder_.get(NULL)))));
   }
 }
 

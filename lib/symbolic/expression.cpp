@@ -22,7 +22,7 @@ void fill(array const & a, array_infos& i)
 }
 
 array_expression array_expression::operator-()
-{ return array_expression(*this, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), shape_); }
+{ return array_expression(*this, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), dtype_, shape_); }
 
 
 lhs_rhs_element::lhs_rhs_element()
@@ -80,8 +80,8 @@ symbolic_expression::symbolic_expression(lhs_rhs_element const & lhs, lhs_rhs_el
   tree_(1, symbolic_expression_node(lhs, op, rhs)), root_(0), context_(context), dtype_(dtype)
 { }
 
-symbolic_expression::symbolic_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op) :
-  context_(lhs.context_), dtype_(lhs.dtype_)
+symbolic_expression::symbolic_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, numeric_type const & dtype) :
+  context_(lhs.context_), dtype_(dtype)
 {
   tree_.reserve(lhs.tree_.size() + 1);
   tree_.insert(tree_.end(), lhs.tree_.begin(), lhs.tree_.end());
@@ -89,8 +89,8 @@ symbolic_expression::symbolic_expression(symbolic_expression const & lhs, lhs_rh
   root_ = tree_.size() - 1;
 }
 
-symbolic_expression::symbolic_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op) :
-  context_(rhs.context_), dtype_(rhs.dtype_)
+symbolic_expression::symbolic_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype) :
+  context_(rhs.context_), dtype_(dtype)
 {
   tree_.reserve(rhs.tree_.size() + 1);
   tree_.insert(tree_.end(), rhs.tree_.begin(), rhs.tree_.end());
@@ -98,8 +98,8 @@ symbolic_expression::symbolic_expression(lhs_rhs_element const & lhs, symbolic_e
   root_ = tree_.size() - 1;
 }
 
-symbolic_expression::symbolic_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op):
-  context_(lhs.context_), dtype_(lhs.dtype_)
+symbolic_expression::symbolic_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype):
+  context_(lhs.context_), dtype_(dtype)
 {
   std::size_t lsize = lhs.tree_.size();
   std::size_t rsize = rhs.tree_.size();
@@ -135,16 +135,16 @@ array_expression::array_expression(lhs_rhs_element const & lhs, lhs_rhs_element 
       symbolic_expression(lhs, rhs, op, ctx, dtype), shape_(shape)
 { }
 
-array_expression::array_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, size4 shape):
-      symbolic_expression(lhs, rhs, op), shape_(shape)
+array_expression::array_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, numeric_type const & dtype, size4 shape):
+      symbolic_expression(lhs, rhs, op, dtype), shape_(shape)
 { }
 
-array_expression::array_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, size4 shape):
-  symbolic_expression(lhs, rhs, op), shape_(shape)
+array_expression::array_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 shape):
+  symbolic_expression(lhs, rhs, op, dtype), shape_(shape)
 { }
 
-array_expression::array_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, size4 shape):
-  symbolic_expression(lhs, rhs, op), shape_(shape)
+array_expression::array_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 shape):
+  symbolic_expression(lhs, rhs, op, dtype), shape_(shape)
 { }
 
 size4 array_expression::shape() const

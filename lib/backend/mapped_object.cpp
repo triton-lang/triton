@@ -335,4 +335,27 @@ void mapped_outer::postprocess(std::string &res) const
 mapped_outer::mapped_outer(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "outer"), binary_leaf(info)
 { }
 
+std::string mapped_cast::operator_to_str(operation_node_type type)
+{
+  switch(type)
+  {
+    case OPERATOR_CAST_CHAR_TYPE : return "char";
+    case OPERATOR_CAST_UCHAR_TYPE : return "uchar";
+    case OPERATOR_CAST_SHORT_TYPE : return "short";
+    case OPERATOR_CAST_USHORT_TYPE : return "ushort";
+    case OPERATOR_CAST_INT_TYPE : return "int";
+    case OPERATOR_CAST_UINT_TYPE : return "uint";
+    case OPERATOR_CAST_LONG_TYPE : return "long";
+    case OPERATOR_CAST_ULONG_TYPE : return "ulong";
+    case OPERATOR_CAST_HALF_TYPE : return "half";
+    case OPERATOR_CAST_FLOAT_TYPE : return "float";
+    case OPERATOR_CAST_DOUBLE_TYPE : return "double";
+    default : return "invalid";
+  }
+}
+
+mapped_cast::mapped_cast(operation_node_type type, unsigned int id) : mapped_object(operator_to_str(type), id, "cast")
+{ }
+
+
 }
