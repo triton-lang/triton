@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2008-2010 The Khronos Group Inc.
+ * Copyright (c) 2008-2012 The Khronos Group Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and/or associated documentation files (the

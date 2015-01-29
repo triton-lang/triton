@@ -286,7 +286,7 @@ void reduction::enqueue(cl::CommandQueue & queue,
              symbolic_expressions_container const & symbolic_expressions)
 {
   //Preprocessing
-  std::vector<int_t> size = input_sizes(symbolic_expressions);
+  int_t size = input_sizes(symbolic_expressions)[0];
   std::vector<symbolic_expression_node const *> reductions;
   for (symbolic_expressions_container::data_type::const_iterator it = symbolic_expressions.data().begin(); it != symbolic_expressions.data().end(); ++it)
   {
@@ -303,7 +303,7 @@ void reduction::enqueue(cl::CommandQueue & queue,
   fill_kernel_name(kopt[0], label, "o0");
   fill_kernel_name(kopt[1], label, "o1");
 
-  bool fallback = has_strided_access(symbolic_expressions) && p_.simd_width > 1;
+  bool fallback = p_.simd_width > 1 && (requires_fallback(symbolic_expressions) || (size%p_.simd_width>0));
   cl::Program & program = programs[fallback?0:1].program();
   cl::Kernel kernels[2] = { cl::Kernel(program, fallback?kfallback[0]:kopt[0]),
                             cl::Kernel(program, fallback?kfallback[1]:kopt[1]) };
@@ -319,7 +319,7 @@ void reduction::enqueue(cl::CommandQueue & queue,
   for (unsigned int k = 0; k < 2; k++)
   {
     unsigned int n_arg = 0;
-    kernels[k].setArg(n_arg++, cl_uint(size[0]));
+    kernels[k].setArg(n_arg++, cl_uint(size));
 
     //Temporary buffers
     unsigned int i = 0;

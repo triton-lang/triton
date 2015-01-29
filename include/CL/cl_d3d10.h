@@ -1,5 +1,5 @@
 /**********************************************************************************
- * Copyright (c) 2008-2010 The Khronos Group Inc.
+ * Copyright (c) 2008-2012 The Khronos Group Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and/or associated documentation files (the
@@ -113,7 +113,7 @@ typedef CL_API_ENTRY cl_int (CL_API_CALL *clEnqueueAcquireD3D10ObjectsKHR_fn)(
 typedef CL_API_ENTRY cl_int (CL_API_CALL *clEnqueueReleaseD3D10ObjectsKHR_fn)(
     cl_command_queue command_queue,
     cl_uint          num_objects,
-    cl_mem *         mem_objects,
+    const cl_mem *   mem_objects,
     cl_uint          num_events_in_wait_list,
     const cl_event * event_wait_list,
     cl_event *       event) CL_API_SUFFIX__VERSION_1_0;

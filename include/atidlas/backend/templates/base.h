@@ -147,7 +147,7 @@ protected:
   static std::string vstore(unsigned int simd_width, std::string const & value, std::string const & offset, std::string const & ptr);
   static std::string vload(unsigned int simd_width, std::string const & offset, std::string const & ptr);
   static std::string append_width(std::string const & str, unsigned int width);
-  bool has_strided_access(symbolic_expressions_container const & symbolic_expressions) const;
+  static bool requires_fallback(symbolic_expressions_container const & symbolic_expressions);
   void set_arguments(symbolic_expressions_container const & symbolic_expressions, cl::Kernel & kernel, unsigned int & current_arg);
 
 
@@ -176,8 +176,6 @@ class base_impl : public base
 {
 private:
   virtual int check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const;
-protected:
-  bool has_misaligned_offset(symbolic_expressions_container const & symbolic_expressions);
 public:
   typedef ParametersType parameters_type;
   base_impl(parameters_type const & parameters, binding_policy_t binding_policy);

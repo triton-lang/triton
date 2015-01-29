@@ -117,11 +117,15 @@ void vaxpy::enqueue(cl::CommandQueue & queue,
   char kopt[10];
   fill_kernel_name(kfb, label, "f");
   fill_kernel_name(kopt, label, "o");
-  bool strided = has_strided_access(symbolic_expressions);
-  bool misaligned = has_misaligned_offset(symbolic_expressions);
-  bool fallback = p_.simd_width > 1 && (strided || (size%p_.simd_width>0) || misaligned);
+  bool fallback = p_.simd_width > 1 && (requires_fallback(symbolic_expressions) || (size%p_.simd_width>0));
+
   cl::Program const & program = programs[fallback?0:1].program();
-  cl::Kernel kernel(program, fallback?kfb:kopt);
+  cl_ext::kernels_t::key_type key(program(), label);
+  cl_ext::kernels_t::iterator it = cl_ext::kernels.find(key);
+  if(it==cl_ext::kernels.end())
+    it = cl_ext::kernels.insert(std::make_pair(key, cl::Kernel(program, fallback?kfb:kopt))).first;
+  cl::Kernel & kernel = it->second;
+
   //NDRange
   cl::NDRange grange(p_.local_size_0*p_.num_groups);
   cl::NDRange lrange(p_.local_size_0);

@@ -129,7 +129,6 @@ class GeneticOperators(object):
     def evaluate(self, individual):
         if tuple(individual) not in self.cache:
             parameters = self.decode(individual)
-            parameters = [2,16,16,16,6,1,6,atd.fetching_policy_type.FETCH_FROM_LOCAL,atd.fetching_policy_type.FETCH_FROM_LOCAL,16,16]
             template = self.Template(*parameters)
             try:
                 tt = misc_tools.benchmark(template, self.symbolic)

@@ -366,17 +366,13 @@ bool base::is_strided(symbolic_expression_node const & node)
       || node.op.type==OPERATOR_OUTER_PROD_TYPE;
 }
 
-bool base::has_strided_access(symbolic_expressions_container const & symbolic_expressions) const
+bool base::requires_fallback(symbolic_expressions_container const & symbolic_expressions)
 {
   for (symbolic_expressions_container::data_type::const_iterator it = symbolic_expressions.data().begin(); it != symbolic_expressions.data().end(); ++it)
-  {
-    std::vector<lhs_rhs_element> arrays = filter_elements(DENSE_ARRAY_TYPE, **it);
-    for (std::vector<lhs_rhs_element>::iterator itt = arrays.begin(); itt != arrays.end(); ++itt)
-      if(std::max(itt->array.stride1, itt->array.stride2)>1)
+    for(symbolic_expression::container_type::const_iterator itt = (*it)->tree().begin(); itt != (*it)->tree().end() ; ++itt)
+      if(   (itt->lhs.subtype==DENSE_ARRAY_TYPE && (std::max(itt->lhs.array.stride1, itt->lhs.array.stride2)>1 || std::max(itt->lhs.array.start1,itt->lhs.array.start2)>0))
+         || (itt->rhs.subtype==DENSE_ARRAY_TYPE && (std::max(itt->rhs.array.stride1, itt->rhs.array.stride2)>1 || std::max(itt->rhs.array.start1,itt->rhs.array.start2)>0)))
         return true;
-    if(filter_nodes(&is_strided, **it, true).empty()==false)
-      return true;
-  }
   return false;
 }
 
@@ -519,19 +515,6 @@ std::vector<std::string> base::generate(unsigned int label, symbolic_expressions
 template<class TType, class PType>
 int base_impl<TType, PType>::check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const
 { return TEMPLATE_VALID; }
-
-template<class TType, class PType>
-bool base_impl<TType, PType>::has_misaligned_offset(symbolic_expressions_container const & symbolic_expressions)
-{
-  for (symbolic_expressions_container::data_type::const_iterator it = symbolic_expressions.data().begin(); it != symbolic_expressions.data().end(); ++it)
-  {
-    std::vector<lhs_rhs_element> arrays = filter_elements(DENSE_ARRAY_TYPE, **it);
-    for (std::vector<lhs_rhs_element>::iterator itt = arrays.begin(); itt != arrays.end(); ++itt)
-      if (itt->array.start1>0 || itt->array.start2>0)
-        return true;
-  }
-  return false;
-}
 
 template<class TType, class PType>
 base_impl<TType, PType>::base_impl(parameters_type const & parameters, binding_policy_t binding_policy) : base(binding_policy), p_(parameters)

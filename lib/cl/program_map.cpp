@@ -36,27 +36,27 @@ cl::Program program_map::add(cl::Context & context, std::string const & pname, s
 
   // Retrieves the program in the cache
   bool compile = true;
-  if (cache_path_.size())
-  {
-    std::string prefix;
-    for(std::vector< cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
-      prefix += it->getInfo<CL_DEVICE_NAME>() + it->getInfo<CL_DEVICE_VENDOR>() + it->getInfo<CL_DEVICE_VERSION>();
-    std::string sha1 = tools::sha1(prefix + source);
+//  if (cache_path_.size())
+//  {
+//    std::string prefix;
+//    for(std::vector< cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
+//      prefix += it->getInfo<CL_DEVICE_NAME>() + it->getInfo<CL_DEVICE_VENDOR>() + it->getInfo<CL_DEVICE_VERSION>();
+//    std::string sha1 = tools::sha1(prefix + source);
 
-    std::ifstream cached((cache_path_+sha1).c_str(),std::ios::binary);
-    if (cached)
-    {
-      std::size_t len;
-      std::vector<char> buffer;
-      cached.read((char*)&len, sizeof(std::size_t));
-      buffer.resize(len);
-      cached.read((char*)buffer.data(), std::streamsize(len));
-      char* cbuffer = buffer.data();
-      res = cl::Program(context, devices, cl::Program::Binaries(1, std::make_pair(cbuffer, len)), NULL, &err);
-      compile = false;
-    }
-  }
-  //Gets from source
+//    std::ifstream cached((cache_path_+sha1).c_str(),std::ios::binary);
+//    if (cached)
+//    {
+//      std::size_t len;
+//      std::vector<char> buffer;
+//      cached.read((char*)&len, sizeof(std::size_t));
+//      buffer.resize(len);
+//      cached.read((char*)buffer.data(), std::streamsize(len));
+//      char* cbuffer = buffer.data();
+//      res = cl::Program(context, devices, cl::Program::Binaries(1, std::make_pair(cbuffer, len)), NULL, &err);
+//      compile = false;
+//    }
+//  }
+//  //Gets from source
   if(compile)
   {
     const char * csrc = source.c_str();
@@ -80,7 +80,6 @@ cl::Program program_map::add(cl::Context & context, std::string const & pname, s
   {
     std::vector<std::size_t> sizes = res.getInfo<CL_PROGRAM_BINARY_SIZES>();
     std::vector<char*> binaries = res.getInfo<CL_PROGRAM_BINARIES>();
-
     std::string prefix;
     for(std::vector< cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
       prefix += it->getInfo<CL_DEVICE_NAME>() + it->getInfo<CL_DEVICE_VENDOR>() + it->getInfo<CL_DEVICE_VERSION>();

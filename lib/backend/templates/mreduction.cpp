@@ -225,7 +225,7 @@ void mreduction::enqueue(cl::CommandQueue & queue,
 
   //Kernel
   int idx = 0;
-  if(reduction_type_==REDUCE_COLUMNS && p_.simd_width>1 && has_strided_access(symbolic_expressions))
+  if(reduction_type_==REDUCE_COLUMNS && p_.simd_width>1 && requires_fallback(symbolic_expressions))
     idx = 1;
   cl::Program & program = programs[idx].program();
   cl::Kernel kernel(program, kname);

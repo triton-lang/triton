@@ -195,6 +195,7 @@ void import(std::string const & fname, cl::CommandQueue & queue, model_map_t& re
   //Parse the JSON document
   js::Document document;
   std::ifstream t(fname.c_str());
+  if(!t) return;
   std::string str;
   t.seekg(0, std::ios::end);
   str.reserve(t.tellg());

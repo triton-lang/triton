@@ -11,7 +11,7 @@ namespace atidlas
 namespace cl_ext
 {
 
-typedef std::map<cl::Program, cl::Kernel, cl_ext::compare> kernels_t;
+typedef std::map<std::pair<cl_program, unsigned int>, cl::Kernel> kernels_t;
 typedef std::vector<std::pair<cl::Context, std::vector<cl::CommandQueue> > > queues_t;
 
 queues_t init_queues();
