@@ -70,7 +70,7 @@ void bench(ad::numeric_type dtype)
     T *cux, *cuy;
     cudaMalloc((void**) &cux, N * sizeof(T));
     cudaMalloc((void**) &cuy, N * sizeof(T));
-    BENCHMARK(cublasSaxpy(N, 2, x, 1, y, 1), bandwidth(3*N, tres, dtsize))
+    BENCHMARK(cublasSaxpy(N, 2, cux, 1, cuy, 1), bandwidth(3*N, tres, dtsize))
     cudaFree(cux);
     cudaFree(cuy);
 #endif
