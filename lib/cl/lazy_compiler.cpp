@@ -7,11 +7,11 @@ namespace cl_ext
 {
 
 lazy_compiler::lazy_compiler(cl::Context const & ctx, std::string const & name, std::string const & src, bool force_recompilation) :
-  context_(ctx), program_(NULL), pname_(name), src_(src), force_recompilation_(force_recompilation)
+  context_(ctx), pname_(name), src_(src), force_recompilation_(force_recompilation)
 { }
 
 lazy_compiler::lazy_compiler(cl::Context const & ctx, std::string const & name, bool force_recompilation) :
-  context_(ctx), program_(NULL), pname_(name), force_recompilation_(force_recompilation)
+  context_(ctx), pname_(name), force_recompilation_(force_recompilation)
 { }
 
 void lazy_compiler::add(std::string const & src)

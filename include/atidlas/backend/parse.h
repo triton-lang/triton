@@ -2,7 +2,6 @@
 #define ATIDLAS_BACKEND_PARSE_H
 
 #include <set>
-
 #include "atidlas/backend/mapped_object.h"
 #include "atidlas/backend/binder.h"
 #include "atidlas/symbolic/expression.h"
