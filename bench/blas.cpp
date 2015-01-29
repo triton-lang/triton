@@ -26,7 +26,7 @@ void bench(ad::numeric_type dtype)
   std::vector<double> times;
   ad::tools::timer timer;
 
-#define BENCHMARK(OP, PERF) \
+#define BENCHMARK(OP, PERF, SYNC) \
   {\
   times.clear();\
   total_time = 0;\
@@ -35,7 +35,7 @@ void bench(ad::numeric_type dtype)
   while(total_time < 1e-2){\
     timer.start(); \
     OP;\
-    ad::cl_ext::synchronize(ad::cl_ext::default_context());\
+    SYNC;\
     times.push_back(timer.get());\
     total_time += times.back();\
   }\
@@ -43,6 +43,14 @@ void bench(ad::numeric_type dtype)
   std::cout << " " << PERF << std::flush;\
   }
 
+#define CL_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, ad::cl_ext::synchronize(ad::cl_ext::default_context()))
+
+#define CPU_SYNCHRONIZE
+#define CPU_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, CPU_SYNCHRONIZE)
+
+#ifdef BENCH_CUBLAS
+#define CUDA_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, cudaThreadSynchronize())
+#endif
   /*---------*/
   /*--BLAS1--*/
   /*---------*/
@@ -53,24 +61,24 @@ void bench(ad::numeric_type dtype)
     std::cout << N;
     /* ATIDLAS */
     ad::array x(N, dtype), y(N, dtype);
-    BENCHMARK(y = x + y, bandwidth(3*N, tres, dtsize));
+    CL_BENCHMARK(y = x + y, bandwidth(3*N, tres, dtsize));
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
-    BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(3*N, tres, dtsize))
+    CL_BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(3*N, tres, dtsize))
 #endif
     /* BLAS */
 #ifdef BENCH_CBLAS
     std::vector<float> cx(N), cy(N);
     ad::copy(x, cx);
     ad::copy(y, cy);
-    BENCHMARK(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), bandwidth(3*N, tres, dtsize));
+    CPU_BENCHMARK(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), bandwidth(3*N, tres, dtsize));
 #endif
     /* CuBLAS */
 #ifdef BENCH_CUBLAS
     T *cux, *cuy;
     cudaMalloc((void**) &cux, N * sizeof(T));
     cudaMalloc((void**) &cuy, N * sizeof(T));
-    BENCHMARK(cublasSaxpy(N, 2, cux, 1, cuy, 1), bandwidth(3*N, tres, dtsize))
+    CUDA_BENCHMARK(cublasSaxpy(N, 2, cux, 1, cuy, 1), bandwidth(3*N, tres, dtsize))
     cudaFree(cux);
     cudaFree(cuy);
 #endif
@@ -87,17 +95,17 @@ void bench(ad::numeric_type dtype)
     ad::array x(N, dtype), y(N, dtype);
     ad::array scratch(N, dtype);
     ad::scalar s(dtype);
-    BENCHMARK(s = dot(x,y), bandwidth(2*N, tres, dtsize));
+    CL_BENCHMARK(s = dot(x,y), bandwidth(2*N, tres, dtsize));
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
-    BENCHMARK(clAmdBlasSdot(N, s.data()(), 0, x.data()(), 0, 1, y.data()(), 0, 1, scratch.data()(), 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(2*N, tres, dtsize))
+    CL_BENCHMARK(clAmdBlasSdot(N, s.data()(), 0, x.data()(), 0, 1, y.data()(), 0, 1, scratch.data()(), 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(2*N, tres, dtsize))
 #endif
     /* BLAS */
 #ifdef BENCH_CBLAS
     std::vector<float> cx(N), cy(N);
     ad::copy(x, cx);
     ad::copy(y, cy);
-    BENCHMARK(cblas_sdot(N, cx.data(), 1, cy.data(), 1), bandwidth(2*N, tres, dtsize));
+    CPU_BENCHMARK(cblas_sdot(N, cx.data(), 1, cy.data(), 1), bandwidth(2*N, tres, dtsize));
 #endif
     std::cout << std::endl;
   }
@@ -116,10 +124,10 @@ void bench(ad::numeric_type dtype)
       std::cout << M << "," << N;
       /* ATIDLAS */
       ad::array A(N, M, dtype), y(M, dtype), x(N, dtype);
-      BENCHMARK(y = dot(trans(A),x), bandwidth(M*N + M + N, tres, dtsize));
+      CL_BENCHMARK(y = dot(trans(A),x), bandwidth(M*N + M + N, tres, dtsize));
       /* clAmdBlas */
   #ifdef BENCH_CLAMDBLAS
-      BENCHMARK(clAmdBlasSgemv(clAmdBlasColumnMajor, clAmdBlasTrans, N, M, 1, A.data()(), A.ld(), x.data()(), 0, 1, 0, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(),0, NULL, NULL), bandwidth(M*N + M + N, tres, dtsize))
+      CL_BENCHMARK(clAmdBlasSgemv(clAmdBlasColumnMajor, clAmdBlasTrans, N, M, 1, A.data()(), A.ld(), x.data()(), 0, 1, 0, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(),0, NULL, NULL), bandwidth(M*N + M + N, tres, dtsize))
   #endif
       /* BLAS */
   #ifdef BENCH_CBLAS
@@ -127,7 +135,7 @@ void bench(ad::numeric_type dtype)
       ad::copy(x, cx);
       ad::copy(y, cy);
       ad::copy(A, cA);
-      BENCHMARK(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), N, cx.data(), 1, 0, cy.data(), 1), bandwidth(M*N + M + N, tres, dtsize));
+      CPU_BENCHMARK(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), N, cx.data(), 1, 0, cy.data(), 1), bandwidth(M*N + M + N, tres, dtsize));
   #endif
       std::cout << std::endl;
     }
@@ -145,10 +153,10 @@ void bench(ad::numeric_type dtype)
       std::cout << M << "," << N << "," << K;
       /* ATIDLAS */
       ad::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
-      BENCHMARK(C = dot(A,trans(B)), gflops((double)2*M*N*K, tres));
+      CL_BENCHMARK(C = dot(A,trans(B)), gflops((double)2*M*N*K, tres));
       /* clAmdBlas */
   #ifdef BENCH_CLAMDBLAS
-      BENCHMARK(clAmdBlasSgemm(clAmdBlasColumnMajor, clAmdBlasNoTrans, clAmdBlasTrans, M, N, K, 1, A.data()(), A.ld(), B.data()(), B.ld(),
+      CL_BENCHMARK(clAmdBlasSgemm(clAmdBlasColumnMajor, clAmdBlasNoTrans, clAmdBlasTrans, M, N, K, 1, A.data()(), A.ld(), B.data()(), B.ld(),
                                0, C.data()(), C.ld(), 1, &ad::cl_ext::get_queue(C.context(), 0)(),0, NULL, NULL), gflops((double)2*M*N*K, tres))
   #endif
       /* BLAS */
@@ -157,7 +165,7 @@ void bench(ad::numeric_type dtype)
       ad::copy(C, cC);
       ad::copy(A, cA);
       ad::copy(B, cB);
-      BENCHMARK(cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, M, N, K, 1, cA.data(), M, cB.data(), N, 1, cC.data(), M), gflops((double)2*M*N*K, tres));
+      CPU_BENCHMARK(cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, M, N, K, 1, cA.data(), M, cB.data(), N, 1, cC.data(), M), gflops((double)2*M*N*K, tres));
   #endif
       std::cout << std::endl;
     }
