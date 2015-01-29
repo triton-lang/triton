@@ -178,8 +178,11 @@ namespace detail
   bp::list nv_compute_capability(cl::Device const & device)
   {
     bp::list res;
-    res.append(device.getInfo<CL_DEVICE_COMPUTE_CAPABILITY_MAJOR_NV>());
-    res.append(device.getInfo<CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV>());
+    cl_uint cmin, cmaj;
+    clGetDeviceInfo(device(), CL_DEVICE_COMPUTE_CAPABILITY_MAJOR_NV, sizeof(cl_uint), (cl_uint*)&cmaj, NULL);
+    clGetDeviceInfo(device(), CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV, sizeof(cl_uint), (cl_uint*)&cmin, NULL);
+    res.append(cmaj);
+    res.append(cmin);
     return res;
   }
 
@@ -304,6 +307,10 @@ namespace detail
     if(type==CL_DEVICE_TYPE_ACCELERATOR) return "ACCELERATOR";
     throw;
   }
+
+  boost::shared_ptr<cl::Context> make_context(cl::Device const & dev)
+  { return boost::shared_ptr<cl::Context>(new cl::Context(std::vector<cl::Device>(1, dev))); }
+
 }
 
 
@@ -351,7 +358,8 @@ void export_cl()
     #undef WRAP
       ;
 
-  bp::class_<cl::Context>("context", bp::init<cl::Device>())
+  bp::class_<cl::Context>("context", bp::no_init)
+      .def("__init__", bp::make_constructor(&detail::make_context))
     #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_context_info<NAME>)
     #undef WRAP
       .add_property("queues", bp::make_function(&detail::get_queue, bp::return_internal_reference<>()))

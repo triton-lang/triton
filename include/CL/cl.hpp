@@ -1145,7 +1145,9 @@ static inline cl_int errHandler (
     return err;
 }
 #else
-static inline cl_int errHandler (cl_int err, const char * errStr = NULL)
+static inline cl_int errHandler (cl_int err, const char * errStr = NULL);
+
+static inline cl_int errHandler (cl_int err, const char *)
 {
     return err;
 }
