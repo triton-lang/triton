@@ -256,8 +256,8 @@ model_map_t init_models(cl::CommandQueue & queue)
     res[std::make_pair(MATRIX_PRODUCT_NT_TYPE, DTYPE)] = ptr_t(new model(mproduct_nt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
     res[std::make_pair(MATRIX_PRODUCT_TT_TYPE, DTYPE)] = ptr_t(new model(mproduct_tt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
   }
-//  if(const char * cmodel_file = std::getenv("ATIDLAS_MODEL_DEVICE_0"))
-//    import(std::string(cmodel_file), queue, res);
+  if(const char * cmodel_file = std::getenv("ATIDLAS_MODEL_DEVICE_0"))
+    import(std::string(cmodel_file), queue, res);
   return res;
 }
 
