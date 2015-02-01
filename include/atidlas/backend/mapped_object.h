@@ -24,7 +24,7 @@ typedef std::map<mapping_key, tools::shared_ptr<mapped_object> > mapping_type;
 
 /** @brief Mapped Object
 *
-* This object populates the symbolic mapping associated with a symbolic_expression. (root_id, LHS|RHS|PARENT) => mapped_object
+* This object populates the symbolic mapping associated with a array_expression. (root_id, LHS|RHS|PARENT) => mapped_object
 * The tree can then be reconstructed in its symbolic form
 */
 class mapped_object
@@ -46,9 +46,9 @@ protected:
 public:
   struct node_info
   {
-    node_info(mapping_type const * _mapping, symbolic_expression const * _symbolic_expression, int_t _root_idx);
+    node_info(mapping_type const * _mapping, array_expression const * _array_expression, int_t _root_idx);
     mapping_type const * mapping;
-    atidlas::symbolic_expression const * symbolic_expression;
+    atidlas::array_expression const * array_expression;
     int_t root_idx;
   };
 
@@ -100,8 +100,8 @@ public:
   mapped_reduction(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key);
 
   int_t root_idx() const;
-  atidlas::symbolic_expression const & symbolic_expression() const;
-  symbolic_expression_node root_node() const;
+  atidlas::array_expression const & array_expression() const;
+  array_expression::node root_node() const;
   bool is_index_reduction() const;
   op_element root_op() const;
 };

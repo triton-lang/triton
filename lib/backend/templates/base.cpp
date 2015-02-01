@@ -20,19 +20,19 @@ namespace atidlas
 base::parameters_type::parameters_type(unsigned int _simd_width, int_t _local_size_1, int_t _local_size_2, int_t _num_kernels) : simd_width(_simd_width), local_size_0(_local_size_1), local_size_1(_local_size_2), num_kernels(_num_kernels)
 { }
 
-numeric_type base::map_functor::get_numeric_type(atidlas::symbolic_expression const * symbolic_expression, int_t root_idx) const
+numeric_type base::map_functor::get_numeric_type(atidlas::array_expression const * array_expression, int_t root_idx) const
 {
-  symbolic_expression_node const * root_node = &symbolic_expression->tree()[root_idx];
+  array_expression::node const * root_node = &array_expression->tree()[root_idx];
   while (root_node->lhs.dtype==INVALID_NUMERIC_TYPE)
-    root_node = &symbolic_expression->tree()[root_node->lhs.node_index];
+    root_node = &array_expression->tree()[root_node->lhs.node_index];
   return root_node->lhs.dtype;
 }
 
 /** @brief Binary leaf */
 template<class T>
-tools::shared_ptr<mapped_object> base::map_functor::binary_leaf(atidlas::symbolic_expression const * symbolic_expression, int_t root_idx, mapping_type const * mapping) const
+tools::shared_ptr<mapped_object> base::map_functor::binary_leaf(atidlas::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const
 {
-  return tools::shared_ptr<mapped_object>(new T(numeric_type_to_string(symbolic_expression->dtype()), binder_.get(NULL), mapped_object::node_info(mapping, symbolic_expression, root_idx)));
+  return tools::shared_ptr<mapped_object>(new T(numeric_type_to_string(array_expression->dtype()), binder_.get(NULL), mapped_object::node_info(mapping, array_expression, root_idx)));
 }
 
 /** @brief Scalar mapping */
@@ -82,9 +82,9 @@ tools::shared_ptr<mapped_object> base::map_functor::create(lhs_rhs_element const
 base::map_functor::map_functor(symbolic_binder & binder, mapping_type & mapping) : binder_(binder), mapping_(mapping){ }
 
 /** @brief Traversal functor */
-void base::map_functor::operator()(atidlas::symbolic_expression const & symbolic_expression, int_t root_idx, leaf_t leaf_t) const {
+void base::map_functor::operator()(atidlas::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const {
   mapping_type::key_type key(root_idx, leaf_t);
-  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
+  array_expression::node const & root_node = array_expression.tree()[root_idx];
 
   if (leaf_t == LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
     mapping_.insert(mapping_type::value_type(key, create(root_node.lhs)));
@@ -93,23 +93,23 @@ void base::map_functor::operator()(atidlas::symbolic_expression const & symbolic
   else if ( leaf_t== PARENT_NODE_TYPE)
   {
     if (root_node.op.type==OPERATOR_VDIAG_TYPE)
-      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_vdiag>(&symbolic_expression, root_idx, &mapping_)));
+      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_vdiag>(&array_expression, root_idx, &mapping_)));
     else if (root_node.op.type==OPERATOR_MATRIX_DIAG_TYPE)
-      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_diag>(&symbolic_expression, root_idx, &mapping_)));
+      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_diag>(&array_expression, root_idx, &mapping_)));
     else if (root_node.op.type==OPERATOR_MATRIX_ROW_TYPE)
-      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_row>(&symbolic_expression, root_idx, &mapping_)));
+      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_row>(&array_expression, root_idx, &mapping_)));
     else if (root_node.op.type==OPERATOR_MATRIX_COLUMN_TYPE)
-      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_column>(&symbolic_expression, root_idx, &mapping_)));
+      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_column>(&array_expression, root_idx, &mapping_)));
     else if (detail::is_scalar_reduction(root_node))
-      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_scalar_reduction>(&symbolic_expression, root_idx, &mapping_)));
+      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_scalar_reduction>(&array_expression, root_idx, &mapping_)));
     else if (detail::is_vector_reduction(root_node))
-      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_mreduction>(&symbolic_expression, root_idx, &mapping_)));
+      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_mreduction>(&array_expression, root_idx, &mapping_)));
     else if (root_node.op.type_family == OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY)
-      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_mproduct>(&symbolic_expression, root_idx, &mapping_)));
+      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_mproduct>(&array_expression, root_idx, &mapping_)));
     else if (root_node.op.type == OPERATOR_REPEAT_TYPE)
-      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_repeat>(&symbolic_expression, root_idx, &mapping_)));
+      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_repeat>(&array_expression, root_idx, &mapping_)));
     else if (root_node.op.type == OPERATOR_OUTER_PROD_TYPE)
-      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_outer>(&symbolic_expression, root_idx, &mapping_)));
+      mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_outer>(&array_expression, root_idx, &mapping_)));
     else if (detail::is_cast(root_node.op))
       mapping_.insert(mapping_type::value_type(key, tools::shared_ptr<mapped_object>(new mapped_cast(root_node.op.type, binder_.get(NULL)))));
   }
@@ -187,9 +187,9 @@ void base::set_arguments_functor::set_arguments(lhs_rhs_element const & lhs_rhs)
 }
 
 /** @brief Traversal functor: */
-void base::set_arguments_functor::operator()(atidlas::symbolic_expression const & symbolic_expression, int_t root_idx, leaf_t leaf_t) const
+void base::set_arguments_functor::operator()(atidlas::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const
 {
-  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
+  array_expression::node const & root_node = array_expression.tree()[root_idx];
   if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
     set_arguments(root_node.lhs);
   else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != COMPOSITE_OPERATOR_FAMILY)
@@ -258,30 +258,30 @@ std::string base::neutral_element(op_element const & op)
   }
 }
 
-std::string base::generate_arguments(std::vector<mapping_type> const & mappings, std::map<std::string, std::string> const & accessors, symbolic_expressions_container const & symbolic_expressions)
+std::string base::generate_arguments(std::vector<mapping_type> const & mappings, std::map<std::string, std::string> const & accessors, array_expressions_container const & array_expressions)
 {
   kernel_generation_stream stream;
-  process(stream, PARENT_NODE_TYPE, accessors, symbolic_expressions, mappings);
+  process(stream, PARENT_NODE_TYPE, accessors, array_expressions, mappings);
   std::string res = stream.str();
   res.erase(res.rfind(','));
   return res;
 }
 
-std::string base::generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings, symbolic_expressions_container const & symbolic_expressions)
+std::string base::generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings, array_expressions_container const & array_expressions)
 {
   return generate_arguments(mappings, tools::make_map<std::map<std::string, std::string> >("array0", "__global #scalartype* #pointer, uint #start,")
                                                                     ("host_scalar", "#scalartype #name,")
                                                                     ("array1", "__global " + data_type + "* #pointer, uint #start, uint #stride,")
                                                                     ("array2", "__global " + data_type + "* #pointer, uint #ld, uint #start1, uint #start2, uint #stride1, uint #stride2,")
-                                                                    ("tuple4", "#scalartype #name0, #scalartype #name1, #scalartype #name2, #scalartype #name3,"), symbolic_expressions);
+                                                                    ("tuple4", "#scalartype #name0, #scalartype #name1, #scalartype #name2, #scalartype #name3,"), array_expressions);
 }
 
 
 
-void base::set_arguments(symbolic_expressions_container const & symbolic_expressions, cl::Kernel & kernel, unsigned int & current_arg)
+void base::set_arguments(array_expressions_container const & array_expressions, cl::Kernel & kernel, unsigned int & current_arg)
 {
   tools::shared_ptr<symbolic_binder> binder = make_binder();
-  for (symbolic_expressions_container::data_type::const_iterator itt = symbolic_expressions.data().begin(); itt != symbolic_expressions.data().end(); ++itt)
+  for (array_expressions_container::data_type::const_iterator itt = array_expressions.data().begin(); itt != array_expressions.data().end(); ++itt)
     traverse(**itt, (*itt)->root(), set_arguments_functor(*binder, current_arg, kernel), true);
 }
 
@@ -304,7 +304,7 @@ void base::fill_kernel_name(char * ptr, unsigned int label, const char * suffix)
 base::invalid_exception::invalid_exception() : message_() {}
 
 base::invalid_exception::invalid_exception(std::string message) :
-  message_("ViennaCL: Internal error: The generator cannot apply the given template to the given symbolic_expression: " + message + "\n"
+  message_("ViennaCL: Internal error: The generator cannot apply the given template to the given array_expression: " + message + "\n"
            "If you are using a builtin template, please report on viennacl-support@lists.sourceforge.net! We will provide a fix as soon as possible\n"
            "If you are using your own template, please try using other parameters") {}
 
@@ -335,15 +335,15 @@ void base::fetching_loop_info(fetching_policy_type policy, std::string const & b
   }
 }
 
-bool base::is_node_trans(symbolic_expression::container_type const & array, size_t root_idx, leaf_t leaf_type)
+bool base::is_node_trans(array_expression::container_type const & array, size_t root_idx, leaf_t leaf_type)
 {
   bool res = false;
-  lhs_rhs_element symbolic_expression_node::*ptr;
+  lhs_rhs_element array_expression::node::*ptr;
   if (leaf_type==LHS_NODE_TYPE)
-    ptr = &symbolic_expression_node::lhs;
+    ptr = &array_expression::node::lhs;
   else
-    ptr = &symbolic_expression_node::rhs;
-  symbolic_expression_node const * node = &array[root_idx];
+    ptr = &array_expression::node::rhs;
+  array_expression::node const * node = &array[root_idx];
   while ((node->*ptr).type_family==COMPOSITE_OPERATOR_FAMILY)
   {
     if (array[(node->*ptr).node_index].op.type==OPERATOR_TRANS_TYPE)
@@ -361,7 +361,7 @@ std::string base::append_simd_suffix(std::string const & str, unsigned int i)
   return str + tools::to_string(suffixes[i]);
 }
 
-bool base::is_strided(symbolic_expression_node const & node)
+bool base::is_strided(array_expression::node const & node)
 {
   return node.op.type==OPERATOR_VDIAG_TYPE
       || node.op.type==OPERATOR_MATRIX_DIAG_TYPE
@@ -370,17 +370,17 @@ bool base::is_strided(symbolic_expression_node const & node)
       || node.op.type==OPERATOR_OUTER_PROD_TYPE;
 }
 
-bool base::requires_fallback(symbolic_expressions_container const & symbolic_expressions)
+bool base::requires_fallback(array_expressions_container const & array_expressions)
 {
-  for (symbolic_expressions_container::data_type::const_iterator it = symbolic_expressions.data().begin(); it != symbolic_expressions.data().end(); ++it)
-    for(symbolic_expression::container_type::const_iterator itt = (*it)->tree().begin(); itt != (*it)->tree().end() ; ++itt)
+  for (array_expressions_container::data_type::const_iterator it = array_expressions.data().begin(); it != array_expressions.data().end(); ++it)
+    for(array_expression::container_type::const_iterator itt = (*it)->tree().begin(); itt != (*it)->tree().end() ; ++itt)
       if(   (itt->lhs.subtype==DENSE_ARRAY_TYPE && (std::max(itt->lhs.array.stride1, itt->lhs.array.stride2)>1 || std::max(itt->lhs.array.start1,itt->lhs.array.start2)>0))
          || (itt->rhs.subtype==DENSE_ARRAY_TYPE && (std::max(itt->rhs.array.stride1, itt->rhs.array.stride2)>1 || std::max(itt->rhs.array.start1,itt->rhs.array.start2)>0)))
         return true;
   return false;
 }
 
-int_t base::vector_size(symbolic_expression_node const & node)
+int_t base::vector_size(array_expression::node const & node)
 {
   using namespace tools;
   if (node.op.type==OPERATOR_MATRIX_DIAG_TYPE)
@@ -394,7 +394,7 @@ int_t base::vector_size(symbolic_expression_node const & node)
 
 }
 
-std::pair<int_t, int_t> base::matrix_size(symbolic_expression_node const & node)
+std::pair<int_t, int_t> base::matrix_size(array_expression::node const & node)
 {
   if (node.op.type==OPERATOR_VDIAG_TYPE)
   {
@@ -433,7 +433,7 @@ void base::element_wise_loop_1D(kernel_generation_stream & stream, loop_body_bas
   }
 }
 
-bool base::is_reduction(symbolic_expression_node const & node)
+bool base::is_reduction(array_expression::node const & node)
 {
   return node.op.type_family==OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY
       || node.op.type_family==OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY
@@ -490,34 +490,34 @@ tools::shared_ptr<symbolic_binder> base::make_binder()
 base::base(binding_policy_t binding_policy) : binding_policy_(binding_policy)
 {}
 
-unsigned int base::lmem_usage(symbolic_expressions_container const &) const
+unsigned int base::lmem_usage(array_expressions_container const &) const
 { return 0; }
 
-unsigned int base::registers_usage(symbolic_expressions_container const &) const
+unsigned int base::registers_usage(array_expressions_container const &) const
 { return 0; }
 
 base::~base()
 { }
 
-std::vector<std::string> base::generate(unsigned int label, symbolic_expressions_container const & symbolic_expressions, cl::Device const & device)
+std::vector<std::string> base::generate(unsigned int label, array_expressions_container const & array_expressions, cl::Device const & device)
 {
-  symbolic_expressions_container::data_type::const_iterator sit;
+  array_expressions_container::data_type::const_iterator sit;
   std::vector<mapping_type>::iterator mit;
 
-  if(int err = check_invalid(symbolic_expressions, device))
+  if(int err = check_invalid(array_expressions, device))
     throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
 
   //Create mapping
-  std::vector<mapping_type> mappings(symbolic_expressions.data().size());
+  std::vector<mapping_type> mappings(array_expressions.data().size());
   tools::shared_ptr<symbolic_binder> binder = make_binder();
-  for (mit = mappings.begin(), sit = symbolic_expressions.data().begin(); sit != symbolic_expressions.data().end(); ++sit, ++mit)
+  for (mit = mappings.begin(), sit = array_expressions.data().begin(); sit != array_expressions.data().end(); ++sit, ++mit)
     traverse(**sit, (*sit)->root(), map_functor(*binder,*mit), true);
 
-  return generate_impl(label, symbolic_expressions, mappings);
+  return generate_impl(label, array_expressions, mappings);
 }
 
 template<class TType, class PType>
-int base_impl<TType, PType>::check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const
+int base_impl<TType, PType>::check_invalid_impl(cl::Device const &, array_expressions_container const &) const
 { return TEMPLATE_VALID; }
 
 template<class TType, class PType>
@@ -537,11 +537,11 @@ tools::shared_ptr<base> base_impl<TType, PType>::clone() const
 { return tools::shared_ptr<base>(new TType(*dynamic_cast<TType const *>(this))); }
 
 template<class TType, class PType>
-int base_impl<TType, PType>::check_invalid(symbolic_expressions_container const & symbolic_expressions, cl::Device const & device) const
+int base_impl<TType, PType>::check_invalid(array_expressions_container const & array_expressions, cl::Device const & device) const
 {
   //Query device informations
   size_t lmem_available = device.getInfo<CL_DEVICE_LOCAL_MEM_SIZE>();
-  size_t lmem_used = lmem_usage(symbolic_expressions);
+  size_t lmem_used = lmem_usage(array_expressions);
   if (lmem_used>lmem_available)
     return TEMPLATE_LOCAL_MEMORY_OVERFLOW;
 
@@ -575,7 +575,7 @@ int base_impl<TType, PType>::check_invalid(symbolic_expressions_container const 
       p_.simd_width!=16)
     return TEMPLATE_INVALID_SIMD_WIDTH;
 
-  return check_invalid_impl(device, symbolic_expressions);
+  return check_invalid_impl(device, array_expressions);
 }
 
 template class base_impl<vaxpy, vaxpy_parameters>;

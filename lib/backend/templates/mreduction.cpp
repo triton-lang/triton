@@ -14,7 +14,7 @@ mreduction_parameters::mreduction_parameters(unsigned int _simd_width,
 num_groups_0(_num_groups_0), fetch_policy(_fetch_policy) { }
 
 
-int mreduction::check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const
+int mreduction::check_invalid_impl(cl::Device const &, array_expressions_container const &) const
 {
   if (p_.fetch_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
@@ -26,7 +26,7 @@ unsigned int mreduction::lmem_usage() const
   return p_.local_size_0*(p_.local_size_1+1);
 }
 
-std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width, std::vector<mapped_mreduction*> const & exprs) const
+std::string mreduction::generate_impl(unsigned int label, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width, std::vector<mapped_mreduction*> const & exprs) const
 {
   using tools::to_string;
 
@@ -40,7 +40,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
   fill_kernel_name(kprefix, label, "d");
 
   stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
-  stream << "__kernel void " << kprefix << "(unsigned int M, unsigned int N, " << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
+  stream << "__kernel void " << kprefix << "(unsigned int M, unsigned int N, " << generate_arguments("#scalartype", mappings, array_expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -48,7 +48,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
                         tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
                                                                             ("array1", "#pointer += #start;")
                                                                             ("array2", "#pointer += #start1 + #start2*#ld; "
-                                                                                       "#ld *= #nldstride; "), symbolic_expressions, mappings);
+                                                                                       "#ld *= #nldstride; "), array_expressions, mappings);
 
   for (std::vector<mapped_mreduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
     stream << (*it)->process("__local #scalartype #name_buf[" + to_string(lsize0*lsize1) + "];") << std::endl;
@@ -160,7 +160,7 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
   std::map<std::string, std::string> accessors;
   accessors["mreduction"] = "#name_buf[lid0*" + lsize1str + "]";
   accessors["array1"] = "#pointer[r*#stride]";
-  evaluate(stream, PARENT_NODE_TYPE, accessors, symbolic_expressions, mappings);
+  evaluate(stream, PARENT_NODE_TYPE, accessors, array_expressions, mappings);
   stream.dec_tab();
   stream << "}" << std::endl;
 
@@ -174,14 +174,14 @@ std::string mreduction::generate_impl(unsigned int label, symbolic_expressions_c
   return stream.str();
 }
 
-std::vector<std::string> mreduction::generate_impl(unsigned int label, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const
+std::vector<std::string> mreduction::generate_impl(unsigned int label, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings) const
 {
   std::vector<mapped_mreduction*> exprs;
-  symbolic_expressions_container::data_type::const_iterator sit;
+  array_expressions_container::data_type::const_iterator sit;
   std::vector<mapping_type>::const_iterator mit;
-  for (mit = mappings.begin(), sit = symbolic_expressions.data().begin(); mit != mappings.end(); ++mit, ++sit)
+  for (mit = mappings.begin(), sit = array_expressions.data().begin(); mit != mappings.end(); ++mit, ++sit)
   {
-    symbolic_expression const & first_expression = *symbolic_expressions.data().front();
+    array_expression const & first_expression = *array_expressions.data().front();
     std::vector<size_t> idx = filter_nodes(&is_reduction, first_expression, false);
     for (unsigned int j = 0; j < idx.size(); ++j)
       exprs.push_back((mapped_mreduction*)(mit->at(mapping_key(idx[j], PARENT_NODE_TYPE)).get()));
@@ -190,11 +190,11 @@ std::vector<std::string> mreduction::generate_impl(unsigned int label, symbolic_
   std::vector<std::string> res;
   if (reduction_type_ && p_.simd_width>1)
   {
-    res.push_back(generate_impl(label, symbolic_expressions, mappings, p_.simd_width, exprs));
-    res.push_back(generate_impl(label, symbolic_expressions, mappings, 1, exprs));
+    res.push_back(generate_impl(label, array_expressions, mappings, p_.simd_width, exprs));
+    res.push_back(generate_impl(label, array_expressions, mappings, 1, exprs));
   }
   else
-    res.push_back(generate_impl(label, symbolic_expressions, mappings, 1, exprs));
+    res.push_back(generate_impl(label, array_expressions, mappings, 1, exprs));
   return res;
 }
 
@@ -204,9 +204,9 @@ mreduction::mreduction(mreduction::parameters_type const & parameters,
   base_impl<mreduction, mreduction_parameters>(parameters, binding_policy),
   reduction_type_(rtype){ }
 
-std::vector<int_t> mreduction::input_sizes(symbolic_expressions_container const & symbolic_expressions)
+std::vector<int_t> mreduction::input_sizes(array_expressions_container const & array_expressions)
 {
-  symbolic_expression const & first_expression = *symbolic_expressions.data().front();
+  array_expression const & first_expression = *array_expressions.data().front();
   std::vector<std::size_t> idx = filter_nodes(&is_reduction, first_expression, false);
   std::pair<int_t, int_t> MN = matrix_size(lhs_most(first_expression.tree(), idx[0]));
   if(reduction_type_==REDUCE_COLUMNS)
@@ -217,15 +217,15 @@ std::vector<int_t> mreduction::input_sizes(symbolic_expressions_container const 
 void mreduction::enqueue(cl::CommandQueue & queue,
              std::vector<cl_ext::lazy_compiler> & programs,
              unsigned int label,
-             symbolic_expressions_container const & symbolic_expressions)
+             array_expressions_container const & array_expressions)
 {
   char kname[10];
   fill_kernel_name(kname, label, "d");
-  std::vector<int_t> MN = input_sizes(symbolic_expressions);
+  std::vector<int_t> MN = input_sizes(array_expressions);
 
   //Kernel
   int idx = 0;
-  if(reduction_type_==REDUCE_COLUMNS && p_.simd_width>1 && requires_fallback(symbolic_expressions))
+  if(reduction_type_==REDUCE_COLUMNS && p_.simd_width>1 && requires_fallback(array_expressions))
     idx = 1;
   cl::Program & program = programs[idx].program();
   cl::Kernel kernel(program, kname);
@@ -237,7 +237,7 @@ void mreduction::enqueue(cl::CommandQueue & queue,
   unsigned int current_arg = 0;
   kernel.setArg(current_arg++, cl_uint(MN[0]));
   kernel.setArg(current_arg++, cl_uint(MN[1]));
-  set_arguments(symbolic_expressions, kernel, current_arg);
+  set_arguments(array_expressions, kernel, current_arg);
 
   queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
 }

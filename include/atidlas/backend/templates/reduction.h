@@ -18,21 +18,21 @@ struct reduction_parameters : public base::parameters_type
 class reduction : public base_impl<reduction, reduction_parameters>
 {
 private:
-  unsigned int lmem_usage(symbolic_expressions_container const & symbolic_expressions) const;
-  int check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const;
+  unsigned int lmem_usage(array_expressions_container const & array_expressions) const;
+  int check_invalid_impl(cl::Device const &, array_expressions_container const &) const;
   inline void reduce_1d_local_memory(kernel_generation_stream & stream, unsigned int size, std::vector<mapped_scalar_reduction*> exprs,
                                      std::string const & buf_str, std::string const & buf_value_str) const;
-  std::string generate_impl(unsigned int label, const char * type, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const;
-  std::vector<std::string> generate_impl(unsigned int label,  symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const;
+  std::string generate_impl(unsigned int label, const char * type, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const;
+  std::vector<std::string> generate_impl(unsigned int label,  array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings) const;
 
 public:
   reduction(reduction::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
   reduction(unsigned int simd, unsigned int ls, unsigned int ng, fetching_policy_type fetch, binding_policy_t bind = BIND_ALL_UNIQUE);
-  std::vector<int_t> input_sizes(symbolic_expressions_container const & symbolic_expressions);
+  std::vector<int_t> input_sizes(array_expressions_container const & array_expressions);
   void enqueue(cl::CommandQueue & queue,
                std::vector<cl_ext::lazy_compiler> & programs,
                unsigned int label,
-               symbolic_expressions_container const & symbolic_expressions);
+               array_expressions_container const & array_expressions);
 private:
   std::vector< cl::Buffer > tmp_;
   std::vector< cl::Buffer > tmpidx_;

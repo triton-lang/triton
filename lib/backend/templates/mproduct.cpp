@@ -17,10 +17,10 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   mL(ms*local_size_0), nL(ns*local_size_1){}
 
 
-  unsigned int mproduct::lmem_usage(symbolic_expressions_container const & symbolic_expressions) const
+  unsigned int mproduct::lmem_usage(array_expressions_container const & array_expressions) const
   {
-    atidlas::symbolic_expression const & symbolic_expression = (*symbolic_expressions.data().front());
-    numeric_type numeric_t = lhs_most(symbolic_expression.tree(), symbolic_expression.root()).lhs.dtype;
+    atidlas::array_expression const & array_expression = (*array_expressions.data().front());
+    numeric_type numeric_t = lhs_most(array_expression.tree(), array_expression.root()).lhs.dtype;
 
     unsigned int N = 0;
     if (p_.A_fetching_policy==FETCH_FROM_LOCAL)
@@ -30,16 +30,16 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return N*size_of(numeric_t);
   }
 
-  unsigned int mproduct::registers_usage(symbolic_expressions_container const & symbolic_expressions) const
+  unsigned int mproduct::registers_usage(array_expressions_container const & array_expressions) const
   {
-    atidlas::symbolic_expression const & symbolic_expression = (*symbolic_expressions.data().front());
-    numeric_type numeric_t = lhs_most(symbolic_expression.tree(), symbolic_expression.root()).lhs.dtype;
+    atidlas::array_expression const & array_expression = (*array_expressions.data().front());
+    numeric_type numeric_t = lhs_most(array_expression.tree(), array_expression.root()).lhs.dtype;
 
     unsigned int N = p_.mS * p_.nS + p_.mS * p_.kS + p_.kS * p_.nS;
     return N*size_of(numeric_t);
   }
 
-  int mproduct::check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const
+  int mproduct::check_invalid_impl(cl::Device const &, array_expressions_container const &) const
   {
     if (p_.A_fetching_policy!=FETCH_FROM_LOCAL && p_.B_fetching_policy!=FETCH_FROM_LOCAL&& (p_.local_fetch_0!=0 || p_.local_fetch_1!=0))
       return TEMPLATE_GLOBAL_MEMORY_REQUIRES_ZERO_LOCAL_FETCH;
@@ -87,7 +87,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return TEMPLATE_VALID;
   }
 
-  std::string mproduct::generate_impl(unsigned int label, const char * id, const symbolic_expressions_container &symbolic_expressions, const std::vector<mapping_type> &, bool fallback) const
+  std::string mproduct::generate_impl(unsigned int label, const char * id, const array_expressions_container &array_expressions, const std::vector<mapping_type> &, bool fallback) const
   {
     using std::string;
     using tools::to_string;
@@ -106,7 +106,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     /// INIT
     /// //////////////
     kernel_generation_stream stream;
-    symbolic_expression const & st = (*symbolic_expressions.data().front());
+    array_expression const & st = (*array_expressions.data().front());
     numeric_type dtype = lhs_most(st.tree(), st.root()).lhs.dtype;
     std::string dtypestr = numeric_type_to_string(dtype);
 
@@ -557,11 +557,11 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 #undef VST0RE
   }
 
-  std::vector<std::string> mproduct::generate_impl(unsigned int label, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const
+  std::vector<std::string> mproduct::generate_impl(unsigned int label, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings) const
   {
     std::vector<std::string> res;
-    res.push_back(generate_impl(label, "o", symbolic_expressions, mappings, false));
-    res.push_back(generate_impl(label, "f", symbolic_expressions, mappings, true));
+    res.push_back(generate_impl(label, "o", array_expressions, mappings, false));
+    res.push_back(generate_impl(label, "f", array_expressions, mappings, true));
     return res;
   }
 
@@ -615,12 +615,12 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return result;
   }
 
-  std::vector<int_t> mproduct::infos(symbolic_expressions_container const & symbolic_expressions,
+  std::vector<int_t> mproduct::infos(array_expressions_container const & array_expressions,
                                    lhs_rhs_element & C, lhs_rhs_element & A, lhs_rhs_element & B)
   {
-    atidlas::symbolic_expression const & symbolic_expression = (*symbolic_expressions.data().front());
-    symbolic_expression::container_type const & array = symbolic_expression.tree();
-    std::size_t root = symbolic_expression.root();
+    atidlas::array_expression const & array_expression = (*array_expressions.data().front());
+    array_expression::container_type const & array = array_expression.tree();
+    std::size_t root = array_expression.root();
 
     C = array[root].lhs;
 
@@ -640,18 +640,18 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   mproduct::mproduct(mproduct_parameters const & parameters, char A_trans, char B_trans) : base_impl<mproduct, mproduct_parameters>(parameters, BIND_ALL_UNIQUE), A_trans_(A_trans), B_trans_(B_trans)
   { }
 
-  std::vector<int_t> mproduct::input_sizes(symbolic_expressions_container const & symbolic_expressions)
+  std::vector<int_t> mproduct::input_sizes(array_expressions_container const & array_expressions)
   {
     lhs_rhs_element d0, d1, d2;
-    return infos(symbolic_expressions, d0, d1, d2);
+    return infos(array_expressions, d0, d1, d2);
   }
 
-  void mproduct::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, symbolic_expressions_container const & symbolic_expressions)
+  void mproduct::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, array_expressions_container const & array_expressions)
   {
     using namespace tools;
 
     lhs_rhs_element C, A, B;
-    std::vector<int_t> MNK = infos(symbolic_expressions, C, A, B);
+    std::vector<int_t> MNK = infos(array_expressions, C, A, B);
 
     int_t M = MNK[0];
     int_t N = MNK[1];

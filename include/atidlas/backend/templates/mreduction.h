@@ -29,13 +29,13 @@ protected:
   };
   mreduction(mreduction::parameters_type const & , reduction_type, binding_policy_t);
 private:
-  virtual int check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const;
+  virtual int check_invalid_impl(cl::Device const &, array_expressions_container const &) const;
   unsigned int lmem_usage() const;
-  std::string generate_impl(unsigned int, symbolic_expressions_container const &, std::vector<mapping_type> const &, unsigned int, std::vector<mapped_mreduction*> const &) const;
-  std::vector<std::string> generate_impl(unsigned int, symbolic_expressions_container const &, std::vector<mapping_type> const &) const;
+  std::string generate_impl(unsigned int, array_expressions_container const &, std::vector<mapping_type> const &, unsigned int, std::vector<mapped_mreduction*> const &) const;
+  std::vector<std::string> generate_impl(unsigned int, array_expressions_container const &, std::vector<mapping_type> const &) const;
 public:
-  virtual std::vector<int_t> input_sizes(symbolic_expressions_container const & symbolic_expressions);
-  void enqueue(cl::CommandQueue & queue,std::vector<cl_ext::lazy_compiler> & programs,unsigned int label, symbolic_expressions_container const & symbolic_expressions);
+  virtual std::vector<int_t> input_sizes(array_expressions_container const & array_expressions);
+  void enqueue(cl::CommandQueue & queue,std::vector<cl_ext::lazy_compiler> & programs,unsigned int label, array_expressions_container const & array_expressions);
 private:
   reduction_type reduction_type_;
 };

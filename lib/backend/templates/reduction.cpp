@@ -13,10 +13,10 @@ reduction_parameters::reduction_parameters(unsigned int _simd_width,
                      fetching_policy_type _fetching_policy) : base::parameters_type(_simd_width, _group_size, 1, 2), num_groups(_num_groups), fetching_policy(_fetching_policy)
 { }
 
-unsigned int reduction::lmem_usage(symbolic_expressions_container const & symbolic_expressions) const
+unsigned int reduction::lmem_usage(array_expressions_container const & array_expressions) const
 {
   unsigned int res = 0;
-  for(symbolic_expressions_container::data_type::const_iterator it = symbolic_expressions.data().begin() ; it != symbolic_expressions.data().end() ; ++it)
+  for(array_expressions_container::data_type::const_iterator it = array_expressions.data().begin() ; it != array_expressions.data().end() ; ++it)
   {
     numeric_type numeric_t= lhs_most((*it)->tree(), (*it)->root()).lhs.dtype;
     res += p_.local_size_0*size_of(numeric_t);
@@ -24,7 +24,7 @@ unsigned int reduction::lmem_usage(symbolic_expressions_container const & symbol
   return res;
 }
 
-int reduction::check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const
+int reduction::check_invalid_impl(cl::Device const &, array_expressions_container const &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
@@ -56,7 +56,7 @@ inline void reduction::reduce_1d_local_memory(kernel_generation_stream & stream,
   stream << "}" << std::endl;
 }
 
-std::string reduction::generate_impl(unsigned int label, const char * type, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
+std::string reduction::generate_impl(unsigned int label, const char * type, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
 {
   kernel_generation_stream stream;
 
@@ -70,8 +70,8 @@ std::string reduction::generate_impl(unsigned int label, const char * type, symb
   std::string arguments = "unsigned int N, ";
   for (unsigned int k = 0; k < N; ++k)
   {
-    std::string numeric_type = numeric_type_to_string(lhs_most(exprs[k]->symbolic_expression().tree(),
-                                                                      exprs[k]->symbolic_expression().root()).lhs.dtype);
+    std::string numeric_type = numeric_type_to_string(lhs_most(exprs[k]->array_expression().tree(),
+                                                                      exprs[k]->array_expression().root()).lhs.dtype);
     if (exprs[k]->is_index_reduction())
     {
       arguments += exprs[k]->process("__global unsigned int* #name_temp, ");
@@ -89,13 +89,13 @@ std::string reduction::generate_impl(unsigned int label, const char * type, symb
   fill_kernel_name(kprefix, label, type);
 
   stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
-  stream << "__kernel void " << kprefix << "0" << "(" << arguments << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
+  stream << "__kernel void " << kprefix << "0" << "(" << arguments << generate_arguments("#scalartype", mappings, array_expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
   stream << "unsigned int lid = get_local_id(0);" << std::endl;
   process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
-                                                                                              ("array1", "#pointer += #start;"), symbolic_expressions, mappings);
+                                                                                              ("array1", "#pointer += #start;"), array_expressions, mappings);
 
   for (unsigned int k = 0; k < N; ++k)
   {
@@ -194,7 +194,7 @@ std::string reduction::generate_impl(unsigned int label, const char * type, symb
    * Second kernel
    * -----------------------*/
   stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
-  stream << "__kernel void " << kprefix << "1" << "(" << arguments << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
+  stream << "__kernel void " << kprefix << "1" << "(" << arguments << generate_arguments("#scalartype", mappings, array_expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -246,7 +246,7 @@ std::string reduction::generate_impl(unsigned int label, const char * type, symb
   std::map<std::string, std::string> accessors;
   accessors["scalar_reduction"] = "#name_buf[0]";
   accessors["array0"] = "#pointer[#start]";
-  evaluate(stream, PARENT_NODE_TYPE, accessors, symbolic_expressions, mappings);
+  evaluate(stream, PARENT_NODE_TYPE, accessors, array_expressions, mappings);
   stream.dec_tab();
   stream << "}" << std::endl;
 
@@ -256,11 +256,11 @@ std::string reduction::generate_impl(unsigned int label, const char * type, symb
   return stream.str();
 }
 
-std::vector<std::string> reduction::generate_impl(unsigned int label,  symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const
+std::vector<std::string> reduction::generate_impl(unsigned int label,  array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings) const
 {
   std::vector<std::string> result;
-  result.push_back(generate_impl(label, "f", symbolic_expressions, mappings, 1));
-  result.push_back(generate_impl(label, "o", symbolic_expressions, mappings, p_.simd_width));
+  result.push_back(generate_impl(label, "f", array_expressions, mappings, 1));
+  result.push_back(generate_impl(label, "o", array_expressions, mappings, p_.simd_width));
   return result;
 }
 
@@ -273,22 +273,22 @@ reduction::reduction(unsigned int simd, unsigned int ls, unsigned int ng,
     base_impl<reduction, reduction_parameters>(reduction_parameters(simd,ls,ng,fetch), bind)
 {}
 
-std::vector<int_t> reduction::input_sizes(symbolic_expressions_container const & symbolic_expressions)
+std::vector<int_t> reduction::input_sizes(array_expressions_container const & array_expressions)
 {
-  std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, *(symbolic_expressions.data().front()), false);
-  int_t N = vector_size(lhs_most(symbolic_expressions.data().front()->tree(), reductions_idx[0]));
+  std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, *(array_expressions.data().front()), false);
+  int_t N = vector_size(lhs_most(array_expressions.data().front()->tree(), reductions_idx[0]));
   return tools::make_vector<int_t>() << N;
 }
 
 void reduction::enqueue(cl::CommandQueue & queue,
              std::vector<cl_ext::lazy_compiler> & programs,
              unsigned int label,
-             symbolic_expressions_container const & symbolic_expressions)
+             array_expressions_container const & array_expressions)
 {
   //Preprocessing
-  int_t size = input_sizes(symbolic_expressions)[0];
-  std::vector<symbolic_expression_node const *> reductions;
-  for (symbolic_expressions_container::data_type::const_iterator it = symbolic_expressions.data().begin(); it != symbolic_expressions.data().end(); ++it)
+  int_t size = input_sizes(array_expressions)[0];
+  std::vector<array_expression::node const *> reductions;
+  for (array_expressions_container::data_type::const_iterator it = array_expressions.data().begin(); it != array_expressions.data().end(); ++it)
   {
     std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, **it, false);
     for (std::vector<size_t>::iterator itt = reductions_idx.begin(); itt != reductions_idx.end(); ++itt)
@@ -303,7 +303,7 @@ void reduction::enqueue(cl::CommandQueue & queue,
   fill_kernel_name(kopt[0], label, "o0");
   fill_kernel_name(kopt[1], label, "o1");
 
-  bool fallback = p_.simd_width > 1 && (requires_fallback(symbolic_expressions) || (size%p_.simd_width>0));
+  bool fallback = p_.simd_width > 1 && (requires_fallback(array_expressions) || (size%p_.simd_width>0));
   cl::Program & program = programs[fallback?0:1].program();
   cl::Kernel kernels[2] = { cl::Kernel(program, fallback?kfallback[0]:kopt[0]),
                             cl::Kernel(program, fallback?kfallback[1]:kopt[1]) };
@@ -313,8 +313,8 @@ void reduction::enqueue(cl::CommandQueue & queue,
   cl::NDRange lrange[2] = { cl::NDRange(p_.local_size_0), cl::NDRange(p_.local_size_0) };
 
   //Arguments
-  cl::Context context = symbolic_expressions.context();
-  symbolic_expression const & s = *(symbolic_expressions.data().front());
+  cl::Context context = array_expressions.context();
+  array_expression const & s = *(array_expressions.data().front());
   unsigned int dtype_size = size_of(lhs_most(s.tree(), s.root()).lhs.dtype);
   for (unsigned int k = 0; k < 2; k++)
   {
@@ -324,7 +324,7 @@ void reduction::enqueue(cl::CommandQueue & queue,
     //Temporary buffers
     unsigned int i = 0;
     unsigned int j = 0;
-    for (std::vector<symbolic_expression_node const *>::const_iterator it = reductions.begin(); it != reductions.end(); ++it)
+    for (std::vector<array_expression::node const *>::const_iterator it = reductions.begin(); it != reductions.end(); ++it)
     {
       if (is_index_reduction((*it)->op))
       {
@@ -338,7 +338,7 @@ void reduction::enqueue(cl::CommandQueue & queue,
       kernels[k].setArg(n_arg++, tmp_[i]);
       i++;
     }
-    set_arguments(symbolic_expressions, kernels[k], n_arg);
+    set_arguments(array_expressions, kernels[k], n_arg);
   }
 
   for (unsigned int k = 0; k < 2; k++)

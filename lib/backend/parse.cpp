@@ -10,12 +10,12 @@ namespace detail
 
 
 
-  bool is_scalar_reduction(symbolic_expression_node const & node)
+  bool is_scalar_reduction(array_expression::node const & node)
   {
     return node.op.type_family==OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY;
   }
 
-  bool is_vector_reduction(symbolic_expression_node const & node)
+  bool is_vector_reduction(array_expression::node const & node)
   {
     return node.op.type_family==OPERATOR_ROWS_REDUCTION_TYPE_FAMILY
         || node.op.type_family==OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY;
@@ -109,29 +109,29 @@ namespace detail
 filter_fun::filter_fun(pred_t pred, std::vector<size_t> & out) : pred_(pred), out_(out)
 { }
 
-void filter_fun::operator()(atidlas::symbolic_expression const & symbolic_expression, size_t root_idx, leaf_t) const
+void filter_fun::operator()(atidlas::array_expression const & array_expression, size_t root_idx, leaf_t) const
 {
-  symbolic_expression_node const * root_node = &symbolic_expression.tree()[root_idx];
+  array_expression::node const * root_node = &array_expression.tree()[root_idx];
   if (pred_(*root_node))
     out_.push_back(root_idx);
 }
 
 //
-std::vector<size_t> filter_nodes(bool (*pred)(symbolic_expression_node const & node), atidlas::symbolic_expression const & symbolic_expression, bool inspect)
+std::vector<size_t> filter_nodes(bool (*pred)(array_expression::node const & node), atidlas::array_expression const & array_expression, bool inspect)
 {
   std::vector<size_t> res;
-  traverse(symbolic_expression, symbolic_expression.root(), filter_fun(pred, res), inspect);
+  traverse(array_expression, array_expression.root(), filter_fun(pred, res), inspect);
   return res;
 }
 
 //
-filter_elements_fun::filter_elements_fun(symbolic_expression_node_subtype subtype, std::vector<lhs_rhs_element> & out) :
+filter_elements_fun::filter_elements_fun(array_expression_node_subtype subtype, std::vector<lhs_rhs_element> & out) :
   subtype_(subtype), out_(out)
 { }
 
-void filter_elements_fun::operator()(atidlas::symbolic_expression const & symbolic_expression, size_t root_idx, leaf_t) const
+void filter_elements_fun::operator()(atidlas::array_expression const & array_expression, size_t root_idx, leaf_t) const
 {
-  symbolic_expression_node const * root_node = &symbolic_expression.tree()[root_idx];
+  array_expression::node const * root_node = &array_expression.tree()[root_idx];
   if (root_node->lhs.subtype==subtype_)
     out_.push_back(root_node->lhs);
   if (root_node->rhs.subtype==subtype_)
@@ -139,10 +139,10 @@ void filter_elements_fun::operator()(atidlas::symbolic_expression const & symbol
 }
 
 
-std::vector<lhs_rhs_element> filter_elements(symbolic_expression_node_subtype subtype, atidlas::symbolic_expression const & symbolic_expression)
+std::vector<lhs_rhs_element> filter_elements(array_expression_node_subtype subtype, atidlas::array_expression const & array_expression)
 {
   std::vector<lhs_rhs_element> res;
-  traverse(symbolic_expression, symbolic_expression.root(), filter_elements_fun(subtype, res), true);
+  traverse(array_expression, array_expression.root(), filter_elements_fun(subtype, res), true);
   return res;
 }
 
@@ -225,9 +225,9 @@ evaluate_expression_traversal::evaluate_expression_traversal(std::map<std::strin
   accessors_(accessors), str_(str), mapping_(mapping)
 { }
 
-void evaluate_expression_traversal::call_before_expansion(atidlas::symbolic_expression const & symbolic_expression, int_t root_idx) const
+void evaluate_expression_traversal::call_before_expansion(atidlas::array_expression const & array_expression, int_t root_idx) const
 {
-  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
+  array_expression::node const & root_node = array_expression.tree()[root_idx];
   if(detail::is_cast(root_node.op))
     str_ += mapping_.at(std::make_pair(root_idx, PARENT_NODE_TYPE))->evaluate(accessors_);
   else if ((root_node.op.type_family==OPERATOR_UNARY_TYPE_FAMILY || detail::is_elementwise_function(root_node.op))
@@ -237,14 +237,14 @@ void evaluate_expression_traversal::call_before_expansion(atidlas::symbolic_expr
 
 }
 
-void evaluate_expression_traversal::call_after_expansion(symbolic_expression const & /*symbolic_expression*/, int_t /*root_idx*/) const
+void evaluate_expression_traversal::call_after_expansion(array_expression const & /*array_expression*/, int_t /*root_idx*/) const
 {
   str_+=")";
 }
 
-void evaluate_expression_traversal::operator()(atidlas::symbolic_expression const & symbolic_expression, int_t root_idx, leaf_t leaf) const
+void evaluate_expression_traversal::operator()(atidlas::array_expression const & array_expression, int_t root_idx, leaf_t leaf) const
 {
-  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
+  array_expression::node const & root_node = array_expression.tree()[root_idx];
   mapping_type::key_type key = std::make_pair(root_idx, leaf);
   if (leaf==PARENT_NODE_TYPE)
   {
@@ -276,39 +276,39 @@ void evaluate_expression_traversal::operator()(atidlas::symbolic_expression cons
 
 
 std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                            atidlas::symbolic_expression const & symbolic_expression, int_t root_idx, mapping_type const & mapping)
+                            atidlas::array_expression const & array_expression, int_t root_idx, mapping_type const & mapping)
 {
   std::string res;
   evaluate_expression_traversal traversal_functor(accessors, res, mapping);
-  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
+  array_expression::node const & root_node = array_expression.tree()[root_idx];
 
   if (leaf==RHS_NODE_TYPE)
   {
     if (root_node.rhs.type_family==COMPOSITE_OPERATOR_FAMILY)
-      traverse(symbolic_expression, root_node.rhs.node_index, traversal_functor, false);
+      traverse(array_expression, root_node.rhs.node_index, traversal_functor, false);
     else
-      traversal_functor(symbolic_expression, root_idx, leaf);
+      traversal_functor(array_expression, root_idx, leaf);
   }
   else if (leaf==LHS_NODE_TYPE)
   {
     if (root_node.lhs.type_family==COMPOSITE_OPERATOR_FAMILY)
-      traverse(symbolic_expression, root_node.lhs.node_index, traversal_functor, false);
+      traverse(array_expression, root_node.lhs.node_index, traversal_functor, false);
     else
-      traversal_functor(symbolic_expression, root_idx, leaf);
+      traversal_functor(array_expression, root_idx, leaf);
   }
   else
-    traverse(symbolic_expression, root_idx, traversal_functor, false);
+    traverse(array_expression, root_idx, traversal_functor, false);
 
   return res;
 }
 
 void evaluate(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                     symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings)
+                     array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings)
 {
-  symbolic_expressions_container::data_type::const_iterator sit;
+  array_expressions_container::data_type::const_iterator sit;
   std::vector<mapping_type>::const_iterator mit;
 
-  for (mit = mappings.begin(), sit = symbolic_expressions.data().begin(); sit != symbolic_expressions.data().end(); ++mit, ++sit)
+  for (mit = mappings.begin(), sit = array_expressions.data().begin(); sit != array_expressions.data().end(); ++mit, ++sit)
     stream << evaluate(leaf, accessors, **sit, (*sit)->root(), *mit) << ";" << std::endl;
 }
 
@@ -317,7 +317,7 @@ process_traversal::process_traversal(std::map<std::string, std::string> const & 
   accessors_(accessors),  stream_(stream), mapping_(mapping), already_processed_(already_processed)
 { }
 
-void process_traversal::operator()(symbolic_expression const & /*symbolic_expression*/, int_t root_idx, leaf_t leaf) const
+void process_traversal::operator()(array_expression const & /*array_expression*/, int_t root_idx, leaf_t leaf) const
 {
   mapping_type::const_iterator it = mapping_.find(std::make_pair(root_idx, leaf));
   if (it!=mapping_.end())
@@ -342,44 +342,44 @@ void process_traversal::operator()(symbolic_expression const & /*symbolic_expres
 
 
 void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                    atidlas::symbolic_expression const & symbolic_expression, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed)
+                    atidlas::array_expression const & array_expression, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed)
 {
   process_traversal traversal_functor(accessors, stream, mapping, already_processed);
-  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
+  array_expression::node const & root_node = array_expression.tree()[root_idx];
 
   if (leaf==RHS_NODE_TYPE)
   {
     if (root_node.rhs.type_family==COMPOSITE_OPERATOR_FAMILY)
-      traverse(symbolic_expression, root_node.rhs.node_index, traversal_functor, true);
+      traverse(array_expression, root_node.rhs.node_index, traversal_functor, true);
     else
-      traversal_functor(symbolic_expression, root_idx, leaf);
+      traversal_functor(array_expression, root_idx, leaf);
   }
   else if (leaf==LHS_NODE_TYPE)
   {
     if (root_node.lhs.type_family==COMPOSITE_OPERATOR_FAMILY)
-      traverse(symbolic_expression, root_node.lhs.node_index, traversal_functor, true);
+      traverse(array_expression, root_node.lhs.node_index, traversal_functor, true);
     else
-      traversal_functor(symbolic_expression, root_idx, leaf);
+      traversal_functor(array_expression, root_idx, leaf);
   }
   else
   {
-    traverse(symbolic_expression, root_idx, traversal_functor, true);
+    traverse(array_expression, root_idx, traversal_functor, true);
   }
 }
 
 void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                    symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings)
+                    array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings)
 {
-  symbolic_expressions_container::data_type::const_iterator sit;
+  array_expressions_container::data_type::const_iterator sit;
   std::vector<mapping_type>::const_iterator mit;
   std::set<std::string> already_processed;
 
-  for (mit = mappings.begin(), sit = symbolic_expressions.data().begin(); sit != symbolic_expressions.data().end(); ++mit, ++sit)
+  for (mit = mappings.begin(), sit = array_expressions.data().begin(); sit != array_expressions.data().end(); ++mit, ++sit)
     process(stream, leaf, accessors, **sit, (*sit)->root(), *mit, already_processed);
 }
 
 
-void symbolic_expression_representation_functor::append_id(char * & ptr, unsigned int val)
+void array_expression_representation_functor::append_id(char * & ptr, unsigned int val)
 {
   if (val==0)
     *ptr++='0';
@@ -391,31 +391,31 @@ void symbolic_expression_representation_functor::append_id(char * & ptr, unsigne
     }
 }
 
-void symbolic_expression_representation_functor::append(cl_mem h, numeric_type dtype, char prefix) const
+void array_expression_representation_functor::append(cl_mem h, numeric_type dtype, char prefix) const
 {
   *ptr_++=prefix;
   *ptr_++=(char)dtype;
   append_id(ptr_, binder_.get(h));
 }
 
-void symbolic_expression_representation_functor::append(lhs_rhs_element const & lhs_rhs) const
+void array_expression_representation_functor::append(lhs_rhs_element const & lhs_rhs) const
 {
   if(lhs_rhs.subtype==DENSE_ARRAY_TYPE)
     append(lhs_rhs.array.data, lhs_rhs.array.dtype, (char)(((int)'0')+((int)(lhs_rhs.array.shape1>1) + (int)(lhs_rhs.array.shape2>1))));
 }
 
-symbolic_expression_representation_functor::symbolic_expression_representation_functor(symbolic_binder & binder, char *& ptr) : binder_(binder), ptr_(ptr){ }
+array_expression_representation_functor::array_expression_representation_functor(symbolic_binder & binder, char *& ptr) : binder_(binder), ptr_(ptr){ }
 
-void symbolic_expression_representation_functor::append(char*& p, const char * str) const
+void array_expression_representation_functor::append(char*& p, const char * str) const
 {
   std::size_t n = std::strlen(str);
   std::memcpy(p, str, n);
   p+=n;
 }
 
-void symbolic_expression_representation_functor::operator()(atidlas::symbolic_expression const & symbolic_expression, int_t root_idx, leaf_t leaf_t) const
+void array_expression_representation_functor::operator()(atidlas::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const
 {
-  symbolic_expression_node const & root_node = symbolic_expression.tree()[root_idx];
+  array_expression::node const & root_node = array_expression.tree()[root_idx];
   if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
     append(root_node.lhs);
   else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != COMPOSITE_OPERATOR_FAMILY)

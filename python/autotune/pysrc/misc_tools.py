@@ -197,21 +197,21 @@ class OccupancyRecord:
 
 def skip(template, symbolic):
     device = symbolic.context.queues[0].device
-    symbolic_expressions = atd.symbolic_expression_container(symbolic)
-    registers_usage = template.registers_usage(symbolic_expressions)/4
-    lmem_usage = template.lmem_usage(symbolic_expressions)
+    array_expressions = atd.array_expression_container(symbolic)
+    registers_usage = template.registers_usage(array_expressions)/4
+    lmem_usage = template.lmem_usage(array_expressions)
     local_size = template.local_size_0*template.local_size_1
     occupancy_record = OccupancyRecord(device, local_size, lmem_usage, registers_usage)
-    if template.check_invalid(symbolic_expressions, device) or occupancy_record.occupancy < 15:
+    if template.check_invalid(array_expressions, device) or occupancy_record.occupancy < 15:
         return True
     return False
 
 def benchmark(template, symbolic):
     queue = symbolic.context.queues[0]
     device = queue.device
-    symbolic_expressions = atd.symbolic_expression_container(symbolic)
-    registers_usage = template.registers_usage(symbolic_expressions)/4
-    lmem_usage = template.lmem_usage(symbolic_expressions)
+    array_expressions = atd.array_expression_container(symbolic)
+    registers_usage = template.registers_usage(array_expressions)/4
+    lmem_usage = template.lmem_usage(array_expressions)
     local_size = template.local_size_0*template.local_size_1
     occupancy_record = OccupancyRecord(device, local_size, lmem_usage, registers_usage)
     if occupancy_record.occupancy < 15 :

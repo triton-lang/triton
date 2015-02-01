@@ -40,7 +40,7 @@ void bench(ad::numeric_type dtype)
     total_time += times.back();\
   }\
   float tres = median(times);\
-  std::cout << " " << PERF << std::flush;\
+  std::cout << " " << tres << std::flush;\
   }
 
 #define CL_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, ad::cl_ext::synchronize(ad::cl_ext::default_context()))

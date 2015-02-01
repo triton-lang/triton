@@ -28,9 +28,9 @@ std::string model::define_extension(std::string const & extensions, std::string 
   return std::string("");
 }
 
-void model::fill_program_name(char* program_name, symbolic_expressions_container const & symbolic_expressions, binding_policy_t binding_policy)
+void model::fill_program_name(char* program_name, array_expressions_container const & array_expressions, binding_policy_t binding_policy)
 {
-  if (symbolic_expressions.order()==symbolic_expressions_container::INDEPENDENT)
+  if (array_expressions.order()==array_expressions_container::INDEPENDENT)
     *program_name++='i';
   else
     *program_name++='s';
@@ -39,16 +39,16 @@ void model::fill_program_name(char* program_name, symbolic_expressions_container
     binder = new bind_to_handle();
   else
     binder = new bind_all_unique();
-  for (symbolic_expressions_container::data_type::const_iterator it = symbolic_expressions.data().begin(); it != symbolic_expressions.data().end(); ++it)
-    traverse(**it, (*it)->root(), symbolic_expression_representation_functor(*binder, program_name),true);
+  for (array_expressions_container::data_type::const_iterator it = array_expressions.data().begin(); it != array_expressions.data().end(); ++it)
+    traverse(**it, (*it)->root(), array_expression_representation_functor(*binder, program_name),true);
   *program_name='\0';
   delete binder;
 }
 
-std::vector<cl_ext::lazy_compiler>& model::init(symbolic_expressions_container const & symbolic_expressions, cl::Context const & context, cl::Device const & device, bool force_recompilation)
+std::vector<cl_ext::lazy_compiler>& model::init(array_expressions_container const & array_expressions, cl::Context const & context, cl::Device const & device, bool force_recompilation)
 {
   char program_name[256];
-  fill_program_name(program_name, symbolic_expressions, BIND_TO_HANDLE);
+  fill_program_name(program_name, array_expressions, BIND_TO_HANDLE);
   std::string pname(program_name);
   std::vector<cl_ext::lazy_compiler> & to_init = lazy_programs_[context()][pname];
   if(to_init.empty())
@@ -63,7 +63,7 @@ std::vector<cl_ext::lazy_compiler>& model::init(symbolic_expressions_container c
 
     for(size_t i = 0 ; i < templates_.size() ; ++i)
     {
-      std::vector<std::string> cur = templates_[i]->generate(i, symbolic_expressions, device);
+      std::vector<std::string> cur = templates_[i]->generate(i, array_expressions, device);
       for(size_t j = 0 ; j < cur.size() ; ++j){
         to_init[j].add(cur[j]);
       }
@@ -82,17 +82,17 @@ model::model(std::vector< tools::shared_ptr<base> > const & templates, cl::Comma
 model::model(base const & tp, cl::CommandQueue & queue) : templates_(1,tp.clone()), queue_(queue)
 {}
 
-void model::execute(symbolic_expressions_container const & symbolic_expressions, bool bypass_predictor, bool force_recompilation)
+void model::execute(array_expressions_container const & array_expressions, bool bypass_predictor, bool force_recompilation)
 {
   bypass_predictor = bypass_predictor || predictor_.get()==NULL;
-  cl::Context const & context = symbolic_expressions.context();
+  cl::Context const & context = array_expressions.context();
   assert(context() == queue_.getInfo<CL_QUEUE_CONTEXT>()());
   cl::Device const & device = queue_.getInfo<CL_QUEUE_DEVICE>();
 
-  std::vector<cl_ext::lazy_compiler> & compilers = init(symbolic_expressions, context, device, force_recompilation);
+  std::vector<cl_ext::lazy_compiler> & compilers = init(array_expressions, context, device, force_recompilation);
 
   //Prediction
-  std::vector<int_t> x = templates_[0]->input_sizes(symbolic_expressions);
+  std::vector<int_t> x = templates_[0]->input_sizes(array_expressions);
   int label;
   //The user tuned the model specifically for this input size
   if(hardcoded_.find(x)!=hardcoded_.end())
@@ -108,16 +108,16 @@ void model::execute(symbolic_expressions_container const & symbolic_expressions,
   }
 
   //Execution
-  templates_[label]->enqueue(queue_, compilers, label, symbolic_expressions);
+  templates_[label]->enqueue(queue_, compilers, label, array_expressions);
 }
 
-void model::tune(symbolic_expressions_container const & symbolic_expressions)
+void model::tune(array_expressions_container const & array_expressions)
 {
-  cl::Context const & context = symbolic_expressions.context();
+  cl::Context const & context = array_expressions.context();
   assert(context() == queue_.getInfo<CL_QUEUE_CONTEXT>()());
   cl::Device device = queue_.getInfo<CL_QUEUE_DEVICE>();
 
-  std::vector<cl_ext::lazy_compiler> & compilers = init(symbolic_expressions, context, device, false);
+  std::vector<cl_ext::lazy_compiler> & compilers = init(array_expressions, context, device, false);
 
   //Collect the timings
   std::vector<float> timings(templates_.size());
@@ -125,13 +125,13 @@ void model::tune(symbolic_expressions_container const & symbolic_expressions)
   for(size_t i = 0 ; i < templates_.size() ; ++i)
   {
     timer.start();
-    templates_[i]->enqueue(queue_, compilers, i, symbolic_expressions);
+    templates_[i]->enqueue(queue_, compilers, i, array_expressions);
     queue_.finish();
     timings[i] = timer.get();
   }
 
   //Fill the override
-  std::vector<int_t> x = templates_[0]->input_sizes(symbolic_expressions);
+  std::vector<int_t> x = templates_[0]->input_sizes(array_expressions);
   hardcoded_[x] = std::distance(timings.begin(),std::min_element(timings.begin(), timings.end()));
 }
 
@@ -203,9 +203,7 @@ void import(std::string const & fname, cl::CommandQueue & queue, model_map_t& re
   str.assign((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
   document.Parse<0>(str.c_str());
   //Deserialize
-  std::vector<std::string> operations = tools::make_vector<std::string>() << "vaxpy" << "dot"
-                                                                          << "maxpy" << "gemvN" << "gemvT"
-                                                                          << "gemmNN" << "gemmTN" << "gemmTT";
+  std::vector<std::string> operations = tools::make_vector<std::string>() << "vaxpy" << "dot"  << "maxpy" << "gemvN" << "gemvT"  << "gemmNN" << "gemmTN" << "gemmTT";
   std::vector<std::string> dtype = tools::make_vector<std::string>() << "float32" << "float64";
   for(std::vector<std::string>::iterator op = operations.begin() ; op != operations.end() ; ++op)
   {
@@ -258,13 +256,9 @@ model_map_t init_models(cl::CommandQueue & queue)
     res[std::make_pair(MATRIX_PRODUCT_NT_TYPE, DTYPE)] = ptr_t(new model(mproduct_nt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
     res[std::make_pair(MATRIX_PRODUCT_TT_TYPE, DTYPE)] = ptr_t(new model(mproduct_tt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
   }
-  if(const char * cmodel_file = std::getenv("ATIDLAS_MODEL_DEVICE_0"))
-    import(std::string(cmodel_file), queue, res);
+//  if(const char * cmodel_file = std::getenv("ATIDLAS_MODEL_DEVICE_0"))
+//    import(std::string(cmodel_file), queue, res);
   return res;
-
-
-  //    else
-  //      throw "Please specify a model file";
 }
 
 model_map_t& get_model_map(cl::CommandQueue & queue)

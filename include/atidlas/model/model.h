@@ -20,16 +20,16 @@ namespace atidlas
 
   private:
     std::string define_extension(std::string const & extensions, std::string const & ext);
-    inline void fill_program_name(char* program_name, symbolic_expressions_container const & symbolic_expressions, binding_policy_t binding_policy);
-    std::vector<cl_ext::lazy_compiler>& init(symbolic_expressions_container const & symbolic_expressions, cl::Context const & context, cl::Device const & device, bool force_recompilation);
+    inline void fill_program_name(char* program_name, array_expressions_container const & array_expressions, binding_policy_t binding_policy);
+    std::vector<cl_ext::lazy_compiler>& init(array_expressions_container const & array_expressions, cl::Context const & context, cl::Device const & device, bool force_recompilation);
 
   public:
     model(predictors::random_forest const &, std::vector< tools::shared_ptr<base> > const &, cl::CommandQueue &);
     model(std::vector< tools::shared_ptr<base> > const &, cl::CommandQueue &);
     model(base const &, cl::CommandQueue &);
 
-    void execute(symbolic_expressions_container const &, bool bypass_predictor = false, bool force_recompilation = false);
-    void tune(symbolic_expressions_container const &);
+    void execute(array_expressions_container const &, bool bypass_predictor = false, bool force_recompilation = false);
+    void tune(array_expressions_container const &);
 
     templates_container const & templates() const;
   private:

@@ -8,107 +8,101 @@
 namespace atidlas
 {
 
-void fill(array const & a, array_infos& i)
+void fill(lhs_rhs_element &x, invalid_node)
 {
-  i.dtype = a.dtype();
-  i.data = a.data()();
-  i.shape1 = a.shape()._1;
-  i.shape2 = a.shape()._2;
-  i.start1 = a.start()._1;
-  i.start2 = a.start()._2;
-  i.stride1 = a.stride()._1;
-  i.stride2 = a.stride()._2;
-  i.ld = a.ld();
+  x.type_family = INVALID_TYPE_FAMILY;
+  x.subtype = INVALID_SUBTYPE;
+  x.dtype = INVALID_NUMERIC_TYPE;
 }
 
-array_expression array_expression::operator-()
-{ return array_expression(*this, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), dtype_, shape_); }
-
-array_expression array_expression::operator!()
-{ return array_expression(*this, lhs_rhs_element(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), INT_TYPE, shape_); }
-
-lhs_rhs_element::lhs_rhs_element()
+void fill(lhs_rhs_element & x, unsigned int node_index)
 {
-  type_family = INVALID_TYPE_FAMILY;
-  subtype = INVALID_SUBTYPE;
-  dtype = INVALID_NUMERIC_TYPE;
+  x.type_family = COMPOSITE_OPERATOR_FAMILY;
+  x.subtype = INVALID_SUBTYPE;
+  x.dtype = INVALID_NUMERIC_TYPE;
+  x.node_index = node_index;
 }
 
-lhs_rhs_element::lhs_rhs_element(unsigned int _node_index)
+void fill(lhs_rhs_element & x, array const & a)
 {
-  type_family = COMPOSITE_OPERATOR_FAMILY;
-  subtype = INVALID_SUBTYPE;
-  dtype = INVALID_NUMERIC_TYPE;
-  node_index = _node_index;
+  x.type_family = ARRAY_TYPE_FAMILY;
+  x.subtype = DENSE_ARRAY_TYPE;
+  x.dtype = a.dtype();
+
+  x.array.dtype = a.dtype();
+  x.array.data = a.data()();
+  x.array.shape1 = a.shape()._1;
+  x.array.shape2 = a.shape()._2;
+  x.array.start1 = a.start()._1;
+  x.array.start2 = a.start()._2;
+  x.array.stride1 = a.stride()._1;
+  x.array.stride2 = a.stride()._2;
+  x.array.ld = a.ld();
+
+  x.memory_ = a.data();
 }
 
-lhs_rhs_element::lhs_rhs_element(atidlas::array const & x)
+void fill(lhs_rhs_element & x, value_scalar const & v)
 {
-  type_family = ARRAY_TYPE_FAMILY;
-  subtype = DENSE_ARRAY_TYPE;
-  dtype = x.dtype();
-  fill(x, array);
-  memory_ = x.data();
+  x.type_family = VALUE_TYPE_FAMILY;
+  x.dtype = v.dtype();
+  x.subtype = VALUE_SCALAR_TYPE;
+  x.vscalar = v.values();
 }
 
-lhs_rhs_element::lhs_rhs_element(atidlas::value_scalar const & x)
+void fill(lhs_rhs_element & x, repeat_infos const & r)
 {
-  type_family = VALUE_TYPE_FAMILY;
-  dtype = x.dtype();
-  subtype = VALUE_SCALAR_TYPE;
-  vscalar = x.values();
+  x.type_family = INFOS_TYPE_FAMILY;
+  x.subtype = REPEAT_INFOS_TYPE;
+  x.dtype = INVALID_NUMERIC_TYPE;
+  x.tuple = r;
 }
 
-lhs_rhs_element::lhs_rhs_element(atidlas::repeat_infos const & x)
-{
-  type_family = INFOS_TYPE_FAMILY;
-  subtype = REPEAT_INFOS_TYPE;
-  dtype = INVALID_NUMERIC_TYPE;
-  tuple = x;
-}
+lhs_rhs_element::lhs_rhs_element(){}
 
 //
-op_element::op_element(operation_node_type_family const & _type_family, operation_node_type const & _type) :
-  type_family(_type_family), type(_type)
-{ }
+op_element::op_element() {}
+op_element::op_element(operation_node_type_family const & _type_family, operation_node_type const & _type) : type_family(_type_family), type(_type){}
 
 //
-symbolic_expression_node::symbolic_expression_node(lhs_rhs_element const & _lhs, op_element const& _op, lhs_rhs_element const & _rhs) :
-  lhs(_lhs), op(_op), rhs(_rhs)
-{ }
-
-//
-symbolic_expression::symbolic_expression(lhs_rhs_element const & lhs, lhs_rhs_element const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype) :
-  tree_(1, symbolic_expression_node(lhs, op, rhs)), root_(0), context_(context), dtype_(dtype)
-{ }
-
-symbolic_expression::symbolic_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, numeric_type const & dtype) :
-  context_(lhs.context_), dtype_(dtype)
+template<class LT, class RT>
+array_expression::array_expression(LT const & lhs, RT const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape) :
+  tree_(1), root_(0), context_(context), dtype_(dtype), shape_(shape)
 {
-  tree_.reserve(lhs.tree_.size() + 1);
-  tree_.insert(tree_.end(), lhs.tree_.begin(), lhs.tree_.end());
-  tree_.push_back(value_type(lhs_rhs_element(lhs.root_), op, rhs));
-  root_ = tree_.size() - 1;
+  fill(tree_[0].lhs, lhs);
+  tree_[0].op = op;
+  fill(tree_[0].rhs, rhs);
 }
 
-symbolic_expression::symbolic_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype) :
-  context_(rhs.context_), dtype_(dtype)
+template<class RT>
+array_expression::array_expression(array_expression const & lhs, RT const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape) :
+ tree_(lhs.tree_.size() + 1), root_(tree_.size()-1), context_(lhs.context_), dtype_(dtype), shape_(shape)
 {
-  tree_.reserve(rhs.tree_.size() + 1);
-  tree_.insert(tree_.end(), rhs.tree_.begin(), rhs.tree_.end());
-  tree_.push_back(value_type(lhs, op, lhs_rhs_element(rhs.root_)));
-  root_ = tree_.size() - 1;
+  std::copy(lhs.tree_.begin(), lhs.tree_.end(), tree_.begin());
+  fill(tree_[root_].lhs, lhs.root_);
+  tree_[root_].op = op;
+  fill(tree_[root_].rhs, rhs);
 }
 
-symbolic_expression::symbolic_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype):
-  context_(lhs.context_), dtype_(dtype)
+template<class LT>
+array_expression::array_expression(LT const & lhs, array_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape) :
+  tree_(rhs.tree_.size() + 1), root_(tree_.size() - 1), context_(rhs.context_), dtype_(dtype), shape_(shape)
 {
+  std::copy(rhs.tree_.begin(), rhs.tree_.end(), tree_.begin());
+  fill(tree_[root_].lhs, lhs);
+  tree_[root_].op = op;
+  fill(tree_[root_].rhs, rhs.root_);
+}
+
+array_expression::array_expression(array_expression const & lhs, array_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape):
+  tree_(lhs.tree_.size() + rhs.tree_.size() + 1), root_(tree_.size()-1), context_(lhs.context_), dtype_(dtype), shape_(shape)
+{  
   std::size_t lsize = lhs.tree_.size();
-  std::size_t rsize = rhs.tree_.size();
-  tree_.reserve(lsize + rsize + 1);
-  tree_.insert(tree_.end(), lhs.tree_.begin(), lhs.tree_.end());
-  tree_.insert(tree_.end(), rhs.tree_.begin(), rhs.tree_.end());
-  tree_.push_back(value_type(lhs_rhs_element(lhs.root_), op, lhs_rhs_element(lsize+rhs.root_)));
+  std::copy(lhs.tree_.begin(), lhs.tree_.end(), tree_.begin());
+  std::copy(rhs.tree_.begin(), rhs.tree_.end(), tree_.begin() + lsize);
+  fill(tree_[root_].lhs, lhs.root_);
+  tree_[root_].op = op;
+  fill(tree_[root_].rhs, lsize + rhs.root_);
   for(container_type::iterator it = tree_.begin() + lsize ; it != tree_.end() - 1 ; ++it){
     if(it->lhs.type_family==COMPOSITE_OPERATOR_FAMILY) it->lhs.node_index+=lsize;
     if(it->rhs.type_family==COMPOSITE_OPERATOR_FAMILY) it->rhs.node_index+=lsize;
@@ -116,38 +110,50 @@ symbolic_expression::symbolic_expression(symbolic_expression const & lhs, symbol
   root_ = tree_.size() - 1;
 }
 
-symbolic_expression::container_type & symbolic_expression::tree()
+template array_expression::array_expression(array_expression const &, value_scalar const &, op_element const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, invalid_node const &, op_element const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, array const &,        op_element const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, repeat_infos const &, op_element const &, numeric_type const &, size4 const &);
+
+template array_expression::array_expression(value_scalar const &, array_expression const &, op_element const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, array_expression const &, op_element const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &, array_expression const &, op_element const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, array_expression const &, op_element const &, numeric_type const &, size4 const &);
+
+template array_expression::array_expression(value_scalar const &, value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &,        value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+
+template array_expression::array_expression(value_scalar const &, invalid_node const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, invalid_node const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &,        invalid_node const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, invalid_node const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+
+template array_expression::array_expression(value_scalar const &, array const &,        op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, array const &,        op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &,        array const &,        op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, array const &,        op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+
+template array_expression::array_expression(value_scalar const &, repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &,        repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+
+array_expression::container_type & array_expression::tree()
 { return tree_; }
 
-symbolic_expression::container_type const & symbolic_expression::tree() const
+array_expression::container_type const & array_expression::tree() const
 { return tree_; }
 
-std::size_t symbolic_expression::root() const
+std::size_t array_expression::root() const
 { return root_; }
 
-cl::Context const & symbolic_expression::context() const
+cl::Context const & array_expression::context() const
 { return context_; }
 
-numeric_type const & symbolic_expression::dtype() const
+numeric_type const & array_expression::dtype() const
 { return dtype_; }
-
-
-//
-array_expression::array_expression(lhs_rhs_element const & lhs, lhs_rhs_element const & rhs, op_element const & op, cl::Context const & ctx, numeric_type const & dtype, size4 shape):
-      symbolic_expression(lhs, rhs, op, ctx, dtype), shape_(shape)
-{ }
-
-array_expression::array_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, numeric_type const & dtype, size4 shape):
-      symbolic_expression(lhs, rhs, op, dtype), shape_(shape)
-{ }
-
-array_expression::array_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 shape):
-  symbolic_expression(lhs, rhs, op, dtype), shape_(shape)
-{ }
-
-array_expression::array_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 shape):
-  symbolic_expression(lhs, rhs, op, dtype), shape_(shape)
-{ }
 
 size4 array_expression::shape() const
 { return shape_; }
@@ -162,45 +168,51 @@ array_expression& array_expression::reshape(int_t size1, int_t size2)
   return *this;
 }
 
+array_expression array_expression::operator-()
+{ return array_expression(*this,  invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), dtype_, shape_); }
+
+array_expression array_expression::operator!()
+{ return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), INT_TYPE, shape_); }
+
 
 //
-tools::shared_ptr<symbolic_expression> symbolic_expressions_container::create(symbolic_expression const & s)
+tools::shared_ptr<array_expression> array_expressions_container::create(array_expression const & s)
 {
-  return tools::shared_ptr<symbolic_expression>(new array_expression(static_cast<array_expression const &>(s)));
+  return tools::shared_ptr<array_expression>(new array_expression(static_cast<array_expression const &>(s)));
 }
 
-symbolic_expressions_container::symbolic_expressions_container(data_type const & data, order_type order) : data_(data), order_(order)
+array_expressions_container::array_expressions_container(data_type const & data, order_type order) : data_(data), order_(order)
 { }
 
-symbolic_expressions_container::symbolic_expressions_container(symbolic_expression const & s0) : order_(INDEPENDENT)
+array_expressions_container::array_expressions_container(array_expression const & s0) : order_(INDEPENDENT)
 {
   data_.push_back(create(s0));
 }
 
-symbolic_expressions_container::symbolic_expressions_container(order_type order, symbolic_expression const & s0, symbolic_expression const & s1) : order_(order)
+array_expressions_container::array_expressions_container(order_type order, array_expression const & s0, array_expression const & s1) : order_(order)
 {
   data_.push_back(create(s0));
   data_.push_back(create(s1));
 }
 
-symbolic_expressions_container::data_type const & symbolic_expressions_container::data() const
+array_expressions_container::data_type const & array_expressions_container::data() const
 { return data_; }
 
-cl::Context const & symbolic_expressions_container::context() const
+cl::Context const & array_expressions_container::context() const
 { return data_.front()->context(); }
 
-symbolic_expressions_container::order_type symbolic_expressions_container::order() const
+array_expressions_container::order_type array_expressions_container::order() const
 { return order_; }
 
-symbolic_expression_node const & lhs_most(symbolic_expression::container_type const & array, symbolic_expression_node const & init)
+array_expression::node const & lhs_most(array_expression::container_type const & array, array_expression::node const & init)
 {
-  symbolic_expression_node const * current = &init;
+  array_expression::node const * current = &init;
   while (current->lhs.type_family==COMPOSITE_OPERATOR_FAMILY)
     current = &array[current->lhs.node_index];
   return *current;
 }
 
-symbolic_expression_node const & lhs_most(symbolic_expression::container_type const & array, size_t root)
+array_expression::node const & lhs_most(array_expression::container_type const & array, size_t root)
 { return lhs_most(array, array[root]); }
 
 

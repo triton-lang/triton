@@ -116,12 +116,12 @@ namespace atidlas
 
 
     /** @brief Parses the breakpoints for a given expression tree */
-    static void parse(symbolic_expression::container_type&array, size_t idx,
+    static void parse(array_expression::container_type&array, size_t idx,
                expression_type current_type,
                breakpoints_t & breakpoints,
                expression_type & final_type)
     {
-      symbolic_expression_node & node = array[idx];
+      array_expression::node & node = array[idx];
       if (node.lhs.type_family == COMPOSITE_OPERATOR_FAMILY)
       {
         std::pair<bool, expression_type> breakpoint = is_breakpoint(current_type, array[node.lhs.node_index].op);
@@ -146,13 +146,13 @@ namespace atidlas
 
   }
 
-  /** @brief Executes a symbolic_expression on the given models map*/
-  void execute(atidlas::symbolic_expression & symbolic_expression, model_map_t & models)
+  /** @brief Executes a array_expression on the given models map*/
+  void execute(atidlas::array_expression & array_expression, model_map_t & models)
   {
-    cl::Context const & context = symbolic_expression.context();
-    size_t rootidx = symbolic_expression.root();
-    symbolic_expression::container_type & tree = const_cast<symbolic_expression::container_type &>(symbolic_expression.tree());
-    symbolic_expression_node root_save = tree[rootidx];
+    cl::Context const & context = array_expression.context();
+    size_t rootidx = array_expression.root();
+    array_expression::container_type & tree = const_cast<array_expression::container_type &>(array_expression.tree());
+    array_expression::node root_save = tree[rootidx];
 
     //Todo: technically the datatype should be per temporary
     numeric_type dtype = root_save.lhs.dtype;
@@ -178,8 +178,8 @@ namespace atidlas
     for(detail::breakpoints_t::reverse_iterator rit = breakpoints.rbegin() ; rit != breakpoints.rend() ; ++rit)
     {
       tools::shared_ptr<model> const & pmodel = models[std::make_pair(rit->first, dtype)];
-      symbolic_expression_node const & node = tree[rit->second->node_index];
-      symbolic_expression_node const & lmost = lhs_most(tree, node);
+      array_expression::node const & node = tree[rit->second->node_index];
+      array_expression::node const & lmost = lhs_most(tree, node);
 
       //Creates temporary
       tools::shared_ptr<obj_base> tmp;
@@ -202,23 +202,20 @@ namespace atidlas
       temporaries_.push_back(tmp);
 
       tree[rootidx].op.type = OPERATOR_ASSIGN_TYPE;
-      tree[rootidx].lhs = lhs_rhs_element((array const &)*tmp);
+      fill(tree[rootidx].lhs, (array&)*tmp);
       tree[rootidx].rhs = *rit->second;
       tree[rootidx].rhs.type_family = rit->second->type_family;
 
       //Execute
-      pmodel->execute(symbolic_expression);
+      pmodel->execute(array_expression);
       tree[rootidx] = root_save;
 
-      //Incorporates the temporary within the symbolic_expression
-      rit->second->dtype = dtype;
-      rit->second->type_family = ARRAY_TYPE_FAMILY;
-      rit->second->subtype = DENSE_ARRAY_TYPE;
-      fill((array&)*tmp, rit->second->array);
+      //Incorporates the temporary within the array_expression
+      fill(*rit->second, (array&)*tmp);
     }
 
     /*-----Compute final expression-----*/
-    models[std::make_pair(final_type, dtype)]->execute(symbolic_expression);
+    models[std::make_pair(final_type, dtype)]->execute(array_expression);
   }
 
 }

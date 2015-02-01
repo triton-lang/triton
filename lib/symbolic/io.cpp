@@ -9,7 +9,7 @@ namespace atidlas
 
 #define ATIDLAS_MAP_TO_STRING(NAME) case NAME: return #NAME
 
-inline std::string to_string(symbolic_expression_node_subtype const & f)
+inline std::string to_string(array_expression_node_subtype const & f)
 {
   switch(f)
   {
@@ -29,7 +29,7 @@ inline std::string to_string(lhs_rhs_element const & e)
   return tools::to_string(e.subtype);
 }
 
-inline std::ostream & operator<<(std::ostream & os, symbolic_expression_node const & s_node)
+inline std::ostream & operator<<(std::ostream & os, array_expression::node const & s_node)
 {
   os << "LHS: " << to_string(s_node.lhs) << "|" << s_node.lhs.dtype << ", "
      << "OP: "  << s_node.op.type_family << " | " << s_node.op.type << ", "
@@ -41,11 +41,11 @@ inline std::ostream & operator<<(std::ostream & os, symbolic_expression_node con
 
 namespace detail
 {
-  /** @brief Recursive worker routine for printing a whole symbolic_expression */
-  inline void print_node(std::ostream & os, atidlas::symbolic_expression const & s, size_t node_index, size_t indent = 0)
+  /** @brief Recursive worker routine for printing a whole array_expression */
+  inline void print_node(std::ostream & os, atidlas::array_expression const & s, size_t node_index, size_t indent = 0)
   {
-    symbolic_expression::container_type const & nodes = s.tree();
-    symbolic_expression_node const & current_node = nodes[node_index];
+    array_expression::container_type const & nodes = s.tree();
+    array_expression::node const & current_node = nodes[node_index];
 
     for (size_t i=0; i<indent; ++i)
       os << " ";
@@ -60,7 +60,7 @@ namespace detail
   }
 }
 
-std::string to_string(atidlas::symbolic_expression const & s)
+std::string to_string(atidlas::array_expression const & s)
 {
   std::ostringstream os;
   detail::print_node(os, s, s.root());

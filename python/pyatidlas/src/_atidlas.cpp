@@ -153,16 +153,6 @@ void export_core()
     ;
 }
 
-void export_symbolic()
-{
-  bp::class_<atd::symbolic_expressions_container>
-      ("symbolic_expression_container", bp::init<atd::symbolic_expression const &>())
-  ;
-
-  bp::class_<atd::symbolic_expression>("symbolic_expression", bp::no_init)
-    .add_property("context", bp::make_function(&atd::symbolic_expression::context, bp::return_internal_reference<>()))
-  ;
-}
 
 namespace detail
 {
@@ -487,7 +477,11 @@ void export_array()
   .def(bp::self OP bp::self)\
   ADD_SCALAR_HANDLING(OP)
 
-  bp::class_<atd::array_expression, bp::bases<atd::symbolic_expression> >("array_expression", bp::no_init)
+  bp::class_<atd::array_expressions_container>
+      ("array_expression_container", bp::init<atd::array_expression const &>())
+  ;
+
+  bp::class_<atd::array_expression >("array_expression", bp::no_init)
       ADD_ARRAY_OPERATOR(+)
       ADD_ARRAY_OPERATOR(-)
       ADD_ARRAY_OPERATOR(*)
@@ -498,6 +492,7 @@ void export_array()
       ADD_ARRAY_OPERATOR(<=)
       ADD_ARRAY_OPERATOR(==)
       ADD_ARRAY_OPERATOR(!=)
+      .add_property("context", bp::make_function(&atd::array_expression::context, bp::return_internal_reference<>()))
       .def(bp::self_ns::abs(bp::self))
 //      .def(bp::self_ns::pow(bp::self))
   ;
@@ -657,6 +652,5 @@ BOOST_PYTHON_MODULE(_atidlas)
   export_core();
   export_cl();
   export_model();
-  export_symbolic();
   export_array();
 }

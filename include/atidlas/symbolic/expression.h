@@ -1,5 +1,5 @@
-#ifndef _ATIDLAS_SYMBOLIC_EXPRESSION_H
-#define _ATIDLAS_SYMBOLIC_EXPRESSION_H
+#ifndef _ATIDLAS_array_expression_H
+#define _ATIDLAS_array_expression_H
 
 #include <vector>
 #include <list>
@@ -117,8 +117,8 @@ enum operation_node_type
   OPERATOR_PAIR_TYPE
 };
 
-/** @brief Groups the type of a node in the symbolic_expression tree. Used for faster dispatching */
-enum symbolic_expression_node_type_family
+/** @brief Groups the type of a node in the array_expression tree. Used for faster dispatching */
+enum array_expression_node_type_family
 {
   INVALID_TYPE_FAMILY = 0,
   COMPOSITE_OPERATOR_FAMILY,
@@ -127,14 +127,23 @@ enum symbolic_expression_node_type_family
   INFOS_TYPE_FAMILY
 };
 
-/** @brief Encodes the type of a node in the symbolic_expression tree. */
-enum symbolic_expression_node_subtype
+/** @brief Encodes the type of a node in the array_expression tree. */
+enum array_expression_node_subtype
 {
   INVALID_SUBTYPE = 0,
   VALUE_SCALAR_TYPE,
   DENSE_ARRAY_TYPE,
   REPEAT_INFOS_TYPE
 };
+
+struct op_element
+{
+  op_element();
+  op_element(operation_node_type_family const & _type_family, operation_node_type const & _type);
+  operation_node_type_family   type_family;
+  operation_node_type          type;
+};
+
 
 struct array_infos
 {
@@ -149,17 +158,11 @@ struct array_infos
   int_t ld;
 };
 
-void fill(array const & a, array_infos& i);
 struct lhs_rhs_element
 {
   lhs_rhs_element();
-  lhs_rhs_element(unsigned int _node_index);
-  lhs_rhs_element(atidlas::array const & x);
-  lhs_rhs_element(value_scalar const & x);
-  lhs_rhs_element(repeat_infos const & x);
-
-  symbolic_expression_node_type_family   type_family;
-  symbolic_expression_node_subtype       subtype;
+  array_expression_node_type_family   type_family;
+  array_expression_node_subtype       subtype;
   numeric_type  dtype;
   union
   {
@@ -171,73 +174,65 @@ struct lhs_rhs_element
   cl::Buffer memory_;
 };
 
+struct invalid_node{};
 
-struct op_element
-{
-  op_element(operation_node_type_family const & _type_family, operation_node_type const & _type);
-  operation_node_type_family   type_family;
-  operation_node_type          type;
-};
+void fill(lhs_rhs_element &x, invalid_node);
+void fill(lhs_rhs_element & x, unsigned int node_index);
+void fill(lhs_rhs_element & x, array const & a);
+void fill(lhs_rhs_element & x, value_scalar const & v);
+void fill(lhs_rhs_element & x, repeat_infos const & r);
 
-
-struct symbolic_expression_node
-{
-  symbolic_expression_node(lhs_rhs_element const & _lhs, op_element const& _op, lhs_rhs_element const & _rhs);
-  lhs_rhs_element    lhs;
-  op_element         op;
-  lhs_rhs_element    rhs;
-};
-
-class symbolic_expression
+class array_expression
 {
 public:
-  typedef symbolic_expression_node              value_type;
-  typedef std::vector<value_type>     container_type;
+  struct node
+  {
+    lhs_rhs_element    lhs;
+    op_element         op;
+    lhs_rhs_element    rhs;
+  };
 
-  symbolic_expression(lhs_rhs_element const & lhs, lhs_rhs_element const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype);
-  symbolic_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, numeric_type const & dtype);
-  symbolic_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype);
-  symbolic_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype);
+  typedef std::vector<node>     container_type;
 
+public:
+  template<class LT, class RT>
+  array_expression(LT const & lhs, RT const & rhs, op_element const & op, cl::Context const & ctx, numeric_type const & dtype, size4 const & shape);
+  template<class RT>
+  array_expression(array_expression const & lhs, RT const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape);
+  template<class LT>
+  array_expression(LT const & lhs, array_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape);
+  array_expression(array_expression const & lhs, array_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape);
+
+  size4 shape() const;
+  array_expression& reshape(int_t size1, int_t size2=1);
+  int_t nshape() const;
   container_type & tree();
   container_type const & tree() const;
   std::size_t root() const;
   cl::Context const & context() const;
   numeric_type const & dtype() const;
-protected:
-  container_type tree_;
-  std::size_t root_;
-  cl::Context context_;
-  numeric_type dtype_;
-};
-
-struct array_expression: public symbolic_expression
-{
-  array_expression(lhs_rhs_element const & lhs, lhs_rhs_element const & rhs, op_element const & op, cl::Context const & ctx, numeric_type const & dtype, size4 shape);
-  array_expression(symbolic_expression const & lhs, lhs_rhs_element const & rhs, op_element const & op, numeric_type const & dtype, size4 shape);
-  array_expression(lhs_rhs_element const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 shape);
-  array_expression(symbolic_expression const & lhs, symbolic_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 shape);
-  size4 shape() const;
-  array_expression& reshape(int_t size1, int_t size2=1);
-  int_t nshape() const;
 
   array_expression operator-();
   array_expression operator!();
 private:
+  container_type tree_;
+  std::size_t root_;
+  cl::Context context_;
+  numeric_type dtype_;
   size4 shape_;
 };
 
-class symbolic_expressions_container
+class array_expressions_container
 {
 private:
-  tools::shared_ptr<symbolic_expression> create(symbolic_expression const & s);
+  tools::shared_ptr<array_expression> create(array_expression const & s);
 public:
-  typedef std::list<tools::shared_ptr<symbolic_expression> > data_type;
+  typedef std::list<tools::shared_ptr<array_expression> > data_type;
   enum order_type { SEQUENTIAL, INDEPENDENT };
 
-  symbolic_expressions_container(symbolic_expression const & s0);
-  symbolic_expressions_container(order_type order, symbolic_expression const & s0, symbolic_expression const & s1);
-  symbolic_expressions_container(data_type const & data, order_type order);
+  array_expressions_container(array_expression const & s0);
+  array_expressions_container(order_type order, array_expression const & s0, array_expression const & s1);
+  array_expressions_container(data_type const & data, order_type order);
 
   data_type const & data() const;
   cl::Context const & context() const;
@@ -247,8 +242,8 @@ private:
   order_type order_;
 };
 
-symbolic_expression_node const & lhs_most(symbolic_expression::container_type const & array, symbolic_expression_node const & init);
-symbolic_expression_node const & lhs_most(symbolic_expression::container_type const & array, size_t root);
+array_expression::node const & lhs_most(array_expression::container_type const & array, array_expression::node const & init);
+array_expression::node const & lhs_most(array_expression::container_type const & array, size_t root);
 
 }
 

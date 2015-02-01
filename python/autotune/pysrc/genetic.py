@@ -99,9 +99,9 @@ class GeneticOperators(object):
                             bincode = bincode + [str(random.randint(0,1)) for i in range(x)]
                     parameters = self.decode(bincode)
                     template = self.Template(*parameters)
-                    symbolic_expressions = atd.symbolic_expression_container(self.symbolic)
-                    registers_usage = template.registers_usage(symbolic_expressions)/4
-                    lmem_usage = template.lmem_usage(symbolic_expressions)
+                    array_expressions = atd.array_expression_container(self.symbolic)
+                    registers_usage = template.registers_usage(array_expressions)/4
+                    lmem_usage = template.lmem_usage(array_expressions)
                     local_size = parameters[1]*parameters[3]
                     occupancy_record = misc_tools.OccupancyRecord(self.device, local_size, lmem_usage, registers_usage)
                     if not misc_tools.skip(template, self.symbolic):

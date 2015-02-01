@@ -14,7 +14,7 @@ maxpy_parameters::maxpy_parameters(unsigned int _simd_width,
 
 
 
-int maxpy::check_invalid_impl(cl::Device const &, symbolic_expressions_container const &) const
+int maxpy::check_invalid_impl(cl::Device const &, array_expressions_container const &) const
 {
   if (p_.simd_width>1)
     return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -23,7 +23,7 @@ int maxpy::check_invalid_impl(cl::Device const &, symbolic_expressions_container
   return TEMPLATE_VALID;
 }
 
-std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
+std::string maxpy::generate_impl(unsigned int label, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
 {
   kernel_generation_stream stream;
 
@@ -33,13 +33,13 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   fill_kernel_name(kprefix, label, "d");
 
   stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
-  stream << "__kernel void " << kprefix << "(unsigned int M, unsigned int N, " << generate_arguments("#scalartype", mappings, symbolic_expressions) << ")" << std::endl;
+  stream << "__kernel void " << kprefix << "(unsigned int M, unsigned int N, " << generate_arguments("#scalartype", mappings, array_expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
                                                                                         ("array1", "#pointer += #start;")
-                                                                                        ("array2", "#pointer = &$VALUE{#start1, #start2};"), symbolic_expressions, mappings);
+                                                                                        ("array2", "#pointer = &$VALUE{#start1, #start2};"), array_expressions, mappings);
 
   fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0, "get_global_id(0)", "get_global_size(0)");
   stream << "for(unsigned int i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
@@ -55,7 +55,7 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
                                                                           ("vdiag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride1, j*#stride1)};")
                                                                           ("repeat", "#scalartype #namereg = $VALUE{(i%#tuplearg0)*#stride1, (j%#tuplearg1)*#stride2};")
                                                                           ("outer", "#scalartype #namereg = ($LVALUE{i*#stride})*($RVALUE{j*#stride});")
-           , symbolic_expressions, mappings);
+           , array_expressions, mappings);
 
   evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >
                                                                             ("array2", "#namereg")
@@ -64,10 +64,10 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
                                                                             ("array0", "#namereg")
                                                                             ("outer", "#namereg")
                                                                             ("cast", "convert_"+data_type)
-                                                  , symbolic_expressions, mappings);
+                                                  , array_expressions, mappings);
 
   process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array2", "$VALUE{i*#stride1,j*#stride2} = #namereg;")
-                                             , symbolic_expressions, mappings);
+                                             , array_expressions, mappings);
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -81,10 +81,10 @@ std::string maxpy::generate_impl(unsigned int label, symbolic_expressions_contai
   return stream.str();
 }
 
-std::vector<std::string> maxpy::generate_impl(unsigned int label, symbolic_expressions_container const & symbolic_expressions, std::vector<mapping_type> const & mappings) const
+std::vector<std::string> maxpy::generate_impl(unsigned int label, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings) const
 {
   std::vector<std::string> res;
-  res.push_back(generate_impl(label, symbolic_expressions, mappings, 1));
+  res.push_back(generate_impl(label, array_expressions, mappings, 1));
   return res;
 }
 
@@ -97,17 +97,17 @@ maxpy::maxpy(unsigned int simd, unsigned int ls1, unsigned int ls2,
     base_impl<maxpy, maxpy_parameters>(maxpy_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
 {}
 
-std::vector<int_t> maxpy::input_sizes(symbolic_expressions_container const & symbolic_expressions)
+std::vector<int_t> maxpy::input_sizes(array_expressions_container const & array_expressions)
 {
-  atidlas::symbolic_expression const & symbolic_expression = *(symbolic_expressions.data().front());
-  std::pair<int_t, int_t> size = matrix_size(lhs_most(symbolic_expression.tree(), symbolic_expression.root()));
+  atidlas::array_expression const & array_expression = *(array_expressions.data().front());
+  std::pair<int_t, int_t> size = matrix_size(lhs_most(array_expression.tree(), array_expression.root()));
   return tools::make_vector<int_t>() << size.first << size.second;
 }
 
 void maxpy::enqueue(cl::CommandQueue & queue,
              std::vector<cl_ext::lazy_compiler> & programs,
              unsigned int label,
-             symbolic_expressions_container const & symbolic_expressions)
+             array_expressions_container const & array_expressions)
 {
   char kname[10];
   fill_kernel_name(kname, label, "d");
@@ -116,10 +116,10 @@ void maxpy::enqueue(cl::CommandQueue & queue,
   cl::NDRange grange(p_.local_size_0*p_.num_groups_0, p_.local_size_1*p_.num_groups_1);
   cl::NDRange lrange(p_.local_size_0, p_.local_size_1);
   unsigned int current_arg = 0;
-  std::vector<int_t> MN = input_sizes(symbolic_expressions);
+  std::vector<int_t> MN = input_sizes(array_expressions);
   kernel.setArg(current_arg++, cl_uint(MN[0]));
   kernel.setArg(current_arg++, cl_uint(MN[1]));
-  set_arguments(symbolic_expressions, kernel, current_arg);
+  set_arguments(array_expressions, kernel, current_arg);
   queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
 }
 
