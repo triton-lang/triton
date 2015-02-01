@@ -1,4 +1,4 @@
-import sys
+import os, sys
 
 def add_input(help, default):
     sys.stdout.write(help + "[" + default + "] : ")
@@ -31,6 +31,6 @@ if retune=='y':
         print '----------------'
         opts += ['--blas3-size'] + [add_input('BLAS3 sizes (M,N,K)', '1024,1024,1024').split(',')]
     print '----------------'
-    subprocess.call(["${CMAKE_BINARY_DIR}/python/autotune/dist/autotune", "tune"] + opts +['--json', 'tmp.json'])
+    subprocess.call(["${CMAKE_BINARY_DIR}/python/autotune/dist/autotune", "tune"] + opts +['--json', os.environ['HOME'] + '/.atidlas/devices/device' + opts[1] + '.json'])
     
 

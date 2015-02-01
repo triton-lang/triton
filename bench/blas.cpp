@@ -32,7 +32,7 @@ void bench(ad::numeric_type dtype)
   total_time = 0;\
   OP;\
   ad::cl_ext::synchronize(ad::cl_ext::default_context());\
-  while(total_time < 1e-2){\
+  while(total_time < 1e-1){\
     timer.start(); \
     OP;\
     SYNC;\
