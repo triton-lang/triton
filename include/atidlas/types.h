@@ -47,6 +47,19 @@ enum numeric_type
   DOUBLE_TYPE
 };
 
+struct array_infos
+{
+  numeric_type dtype;
+  cl_mem data;
+  int_t shape1;
+  int_t shape2;
+  int_t start1;
+  int_t start2;
+  int_t stride1;
+  int_t stride2;
+  int_t ld;
+};
+
 inline std::string numeric_type_to_string(numeric_type const & type)
 {
   switch (type)

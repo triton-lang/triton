@@ -1,11 +1,11 @@
-#ifndef _ATIDLAS_array_expression_H
-#define _ATIDLAS_array_expression_H
+#ifndef _ATIDLAS_SYMBOLIC_EXPRESSION_H
+#define _ATIDLAS_SYMBOLIC_EXPRESSION_H
 
 #include <vector>
 #include <list>
+#include <CL/cl.hpp>
 #include "atidlas/types.h"
 #include "atidlas/value_scalar.h"
-#include <CL/cl.hpp>
 #include "atidlas/tools/shared_ptr.hpp"
 
 namespace atidlas
@@ -142,20 +142,6 @@ struct op_element
   op_element(operation_node_type_family const & _type_family, operation_node_type const & _type);
   operation_node_type_family   type_family;
   operation_node_type          type;
-};
-
-
-struct array_infos
-{
-  numeric_type dtype;
-  cl_mem data;
-  int_t shape1;
-  int_t shape2;
-  int_t start1;
-  int_t start2;
-  int_t stride1;
-  int_t stride2;
-  int_t ld;
 };
 
 struct lhs_rhs_element
