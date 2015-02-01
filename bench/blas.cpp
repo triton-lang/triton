@@ -1,4 +1,5 @@
 #include "atidlas/array.h"
+#include "atidlas/model/model.h"
 #include "atidlas/tools/timer.hpp"
 #include "common.hpp"
 #ifdef BENCH_CLAMDBLAS
@@ -61,7 +62,9 @@ void bench(ad::numeric_type dtype)
     std::cout << N;
     /* ATIDLAS */
     ad::array x(N, dtype), y(N, dtype);
-    CL_BENCHMARK(y = x + y, bandwidth(3*N, tres, dtsize));
+    ad::array_expression E = ad::detail::assign(y, x + y);
+    ad::model & model = ad::get_model(ad::cl_ext::get_queue(x.context(), 0), ad::VECTOR_AXPY_TYPE, dtype);
+    CL_BENCHMARK(model.execute(E), bandwidth(3*N, tres, dtsize));
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
     CL_BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(3*N, tres, dtsize))
