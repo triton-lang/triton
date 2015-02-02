@@ -27,16 +27,14 @@ void bench(ad::numeric_type dtype)
   ad::tools::timer timer;
   unsigned int dtsize = ad::size_of(dtype);
 
-#define BENCHMARK(OP, PERF, SYNC) \
+#define BENCHMARK(OP, PERF) \
   {\
   times.clear();\
   total_time = 0;\
   OP;\
-  SYNC;\
   while(total_time < 5e-1){\
     timer.start(); \
     OP;\
-    SYNC;\
     times.push_back(timer.get());\
     total_time += times.back();\
   }\
@@ -44,14 +42,6 @@ void bench(ad::numeric_type dtype)
   std::cout << " " << PERF << std::flush;\
   }
 
-#define CL_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, queue.flush(); queue.finish();)
-
-#define CPU_SYNCHRONIZE
-#define CPU_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, CPU_SYNCHRONIZE)
-
-#ifdef BENCH_CUBLAS
-#define CUDA_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, cudaThreadSynchronize())
-#endif
   /*---------*/
   /*--BLAS1--*/
   /*---------*/
@@ -70,24 +60,24 @@ void bench(ad::numeric_type dtype)
     model.execute(E, &cache);
     queue.flush();
     queue.finish();
-    CL_BENCHMARK(cache.enqueue(), bandwidth(3*N, tres, dtsize));
+    BENCHMARK(cache.enqueue(); queue.flush(); queue.finish();, bandwidth(3*N, tres, dtsize));
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
-    CL_BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(3*N, tres, dtsize))
+    BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &queue(), 0, NULL, NULL); queue.flush(); queue.finish();, bandwidth(3*N, tres, dtsize))
 #endif
     /* BLAS */
 #ifdef BENCH_CBLAS
     std::vector<float> cx(N), cy(N);
     ad::copy(x, cx);
     ad::copy(y, cy);
-    CPU_BENCHMARK(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), bandwidth(3*N, tres, dtsize));
+    BENCHMARK(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), bandwidth(3*N, tres, dtsize));
 #endif
     /* CuBLAS */
 #ifdef BENCH_CUBLAS
     T *cux, *cuy;
     cudaMalloc((void**) &cux, N * sizeof(T));
     cudaMalloc((void**) &cuy, N * sizeof(T));
-    CUDA_BENCHMARK(cublasSaxpy(N, 2, cux, 1, cuy, 1), bandwidth(3*N, tres, dtsize))
+    BENCHMARK(cublasSaxpy(N, 2, cux, 1, cuy, 1); cudaThreadSynchronize();, bandwidth(3*N, tres, dtsize))
     cudaFree(cux);
     cudaFree(cuy);
 #endif
