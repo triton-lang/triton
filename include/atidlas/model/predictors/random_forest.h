@@ -38,6 +38,7 @@ public:
   std::vector<tree> const & estimators() const;
 private:
   std::vector<tree> estimators_;
+  int_t D_;
 };
 
 }

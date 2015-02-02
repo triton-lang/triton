@@ -69,7 +69,7 @@ public:
 
 protected:
 
-  /** @brief Functor to map the array_expressions to the types defined in mapped_objects.hpp */
+  /** @brief Functor to map the expressions to the types defined in mapped_objects.hpp */
   class map_functor : public traversal_functor
   {
     /** @brief Accessor for the numeric type */
@@ -130,9 +130,9 @@ protected:
                              size_t root_idx, leaf_t leaf);
   static std::string neutral_element(op_element const & op);
   static std::string generate_arguments(std::vector<mapping_type> const & mappings, std::map<std::string, std::string> const & accessors,
-                                        array_expressions_container const & array_expressions);
+                                        expressions_tuple const & expressions);
   static std::string generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings,
-                                        array_expressions_container const & array_expressions);
+                                        expressions_tuple const & expressions);
   static void fill_kernel_name(char * ptr, unsigned int label, const char * suffix);
   static bool is_node_trans(array_expression::container_type const & array, size_t root_idx, leaf_t leaf_type);
   static std::string append_simd_suffix(std::string const & str, unsigned int i);
@@ -147,24 +147,24 @@ protected:
   static std::string vstore(unsigned int simd_width, std::string const & value, std::string const & offset, std::string const & ptr);
   static std::string vload(unsigned int simd_width, std::string const & offset, std::string const & ptr);
   static std::string append_width(std::string const & str, unsigned int width);
-  static bool requires_fallback(array_expressions_container const & array_expressions);
-  void set_arguments(array_expressions_container const & array_expressions, cl::Kernel & kernel, unsigned int & current_arg);
+  static bool requires_fallback(expressions_tuple const & expressions);
+  void set_arguments(expressions_tuple const & expressions, cl::Kernel & kernel, unsigned int & current_arg);
 
 
 private:
-  virtual std::vector<std::string> generate_impl(unsigned int label, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mapping) const = 0;
+  virtual std::vector<std::string> generate_impl(unsigned int label, expressions_tuple const & expressions, std::vector<mapping_type> const & mapping) const = 0;
 
 public:
   base(binding_policy_t binding_policy);
-  virtual unsigned int lmem_usage(array_expressions_container const &) const;
-  virtual unsigned int registers_usage(array_expressions_container const &) const;
-  virtual std::vector<int_t> input_sizes(array_expressions_container const & array_expressions) = 0;
+  virtual unsigned int lmem_usage(expressions_tuple const &) const;
+  virtual unsigned int registers_usage(expressions_tuple const &) const;
+  virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions) = 0;
   virtual ~base();
-  std::vector<std::string> generate(unsigned int label, array_expressions_container const & array_expressions, cl::Device const & device);
-  virtual int check_invalid(array_expressions_container const & array_expressions, cl::Device const & device) const = 0;
+  std::vector<std::string> generate(unsigned int label, expressions_tuple const & expressions, cl::Device const & device);
+  virtual int check_invalid(expressions_tuple const & expressions, cl::Device const & device) const = 0;
   virtual void enqueue(cl::CommandQueue & queue,
                        std::vector<cl_ext::lazy_compiler> & programs,
-                       unsigned int label, array_expressions_container const & array_expressions) = 0;
+                       unsigned int label, expressions_tuple const & expressions) = 0;
   virtual tools::shared_ptr<base> clone() const = 0;
 private:
   binding_policy_t binding_policy_;
@@ -175,7 +175,7 @@ template<class TemplateType, class ParametersType>
 class base_impl : public base
 {
 private:
-  virtual int check_invalid_impl(cl::Device const &, array_expressions_container const &) const;
+  virtual int check_invalid_impl(cl::Device const &, expressions_tuple const &) const;
 public:
   typedef ParametersType parameters_type;
   base_impl(parameters_type const & parameters, binding_policy_t binding_policy);
@@ -183,7 +183,7 @@ public:
   int_t local_size_1() const;
   tools::shared_ptr<base> clone() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
-  int check_invalid(array_expressions_container const & array_expressions, cl::Device const & device) const;
+  int check_invalid(expressions_tuple const & expressions, cl::Device const & device) const;
 protected:
   parameters_type p_;
   binding_policy_t binding_policy_;

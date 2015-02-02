@@ -176,32 +176,32 @@ array_expression array_expression::operator!()
 
 
 //
-tools::shared_ptr<array_expression> array_expressions_container::create(array_expression const & s)
+tools::shared_ptr<array_expression> expressions_tuple::create(array_expression const & s)
 {
   return tools::shared_ptr<array_expression>(new array_expression(static_cast<array_expression const &>(s)));
 }
 
-array_expressions_container::array_expressions_container(data_type const & data, order_type order) : data_(data), order_(order)
+expressions_tuple::expressions_tuple(data_type const & data, order_type order) : data_(data), order_(order)
 { }
 
-array_expressions_container::array_expressions_container(array_expression const & s0) : order_(INDEPENDENT)
+expressions_tuple::expressions_tuple(array_expression const & s0) : order_(INDEPENDENT)
 {
   data_.push_back(create(s0));
 }
 
-array_expressions_container::array_expressions_container(order_type order, array_expression const & s0, array_expression const & s1) : order_(order)
+expressions_tuple::expressions_tuple(order_type order, array_expression const & s0, array_expression const & s1) : order_(order)
 {
   data_.push_back(create(s0));
   data_.push_back(create(s1));
 }
 
-array_expressions_container::data_type const & array_expressions_container::data() const
+expressions_tuple::data_type const & expressions_tuple::data() const
 { return data_; }
 
-cl::Context const & array_expressions_container::context() const
+cl::Context const & expressions_tuple::context() const
 { return data_.front()->context(); }
 
-array_expressions_container::order_type array_expressions_container::order() const
+expressions_tuple::order_type expressions_tuple::order() const
 { return order_; }
 
 array_expression::node const & lhs_most(array_expression::container_type const & array, array_expression::node const & init)

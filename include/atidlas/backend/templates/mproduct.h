@@ -33,25 +33,25 @@ struct mproduct_parameters : public base::parameters_type
 class mproduct : public base_impl<mproduct, mproduct_parameters>
 {
 private:
-  unsigned int lmem_usage(array_expressions_container const & array_expressions) const;
-  unsigned int registers_usage(array_expressions_container const & array_expressions) const;
-  int check_invalid_impl(cl::Device const &, array_expressions_container const &) const;
-  std::string generate_impl(unsigned int label, const char *  id, const array_expressions_container &array_expressions, const std::vector<mapping_type> &, bool fallback) const;
-  std::vector<std::string> generate_impl(unsigned int label, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings) const;
+  unsigned int lmem_usage(expressions_tuple const & expressions) const;
+  unsigned int registers_usage(expressions_tuple const & expressions) const;
+  int check_invalid_impl(cl::Device const &, expressions_tuple const &) const;
+  std::string generate_impl(unsigned int label, const char *  id, const expressions_tuple &expressions, const std::vector<mapping_type> &, bool fallback) const;
+  std::vector<std::string> generate_impl(unsigned int label, expressions_tuple const & expressions, std::vector<mapping_type> const & mappings) const;
   void enqueue_block(cl::CommandQueue & queue, int_t M, int_t N, int_t K,
                      array_infos const & A, array_infos const & B, array_infos const & C,
                      value_scalar const & alpha, value_scalar const & beta,
                      std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, int id);
   array_infos create_slice(array_infos & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap);
-  std::vector<int_t> infos(array_expressions_container const & array_expressions,
+  std::vector<int_t> infos(expressions_tuple const & expressions,
                                    lhs_rhs_element & C, lhs_rhs_element & A, lhs_rhs_element & B);
 public:
   mproduct(mproduct::parameters_type const & parameters, char A_trans, char B_trans);
-  std::vector<int_t> input_sizes(array_expressions_container const & array_expressions);
+  std::vector<int_t> input_sizes(expressions_tuple const & expressions);
   void enqueue(cl::CommandQueue & queue,
                std::vector<cl_ext::lazy_compiler> & programs,
                unsigned int label,
-               array_expressions_container const & array_expressions);
+               expressions_tuple const & expressions);
 
 private:
   const char A_trans_;

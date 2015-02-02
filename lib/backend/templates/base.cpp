@@ -258,30 +258,30 @@ std::string base::neutral_element(op_element const & op)
   }
 }
 
-std::string base::generate_arguments(std::vector<mapping_type> const & mappings, std::map<std::string, std::string> const & accessors, array_expressions_container const & array_expressions)
+std::string base::generate_arguments(std::vector<mapping_type> const & mappings, std::map<std::string, std::string> const & accessors, expressions_tuple const & expressions)
 {
   kernel_generation_stream stream;
-  process(stream, PARENT_NODE_TYPE, accessors, array_expressions, mappings);
+  process(stream, PARENT_NODE_TYPE, accessors, expressions, mappings);
   std::string res = stream.str();
   res.erase(res.rfind(','));
   return res;
 }
 
-std::string base::generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings, array_expressions_container const & array_expressions)
+std::string base::generate_arguments(std::string const & data_type, std::vector<mapping_type> const & mappings, expressions_tuple const & expressions)
 {
   return generate_arguments(mappings, tools::make_map<std::map<std::string, std::string> >("array0", "__global #scalartype* #pointer, uint #start,")
                                                                     ("host_scalar", "#scalartype #name,")
                                                                     ("array1", "__global " + data_type + "* #pointer, uint #start, uint #stride,")
                                                                     ("array2", "__global " + data_type + "* #pointer, uint #ld, uint #start1, uint #start2, uint #stride1, uint #stride2,")
-                                                                    ("tuple4", "#scalartype #name0, #scalartype #name1, #scalartype #name2, #scalartype #name3,"), array_expressions);
+                                                                    ("tuple4", "#scalartype #name0, #scalartype #name1, #scalartype #name2, #scalartype #name3,"), expressions);
 }
 
 
 
-void base::set_arguments(array_expressions_container const & array_expressions, cl::Kernel & kernel, unsigned int & current_arg)
+void base::set_arguments(expressions_tuple const & expressions, cl::Kernel & kernel, unsigned int & current_arg)
 {
   tools::shared_ptr<symbolic_binder> binder = make_binder();
-  for (array_expressions_container::data_type::const_iterator itt = array_expressions.data().begin(); itt != array_expressions.data().end(); ++itt)
+  for (expressions_tuple::data_type::const_iterator itt = expressions.data().begin(); itt != expressions.data().end(); ++itt)
     traverse(**itt, (*itt)->root(), set_arguments_functor(*binder, current_arg, kernel), true);
 }
 
@@ -370,9 +370,9 @@ bool base::is_strided(array_expression::node const & node)
       || node.op.type==OPERATOR_OUTER_PROD_TYPE;
 }
 
-bool base::requires_fallback(array_expressions_container const & array_expressions)
+bool base::requires_fallback(expressions_tuple const & expressions)
 {
-  for (array_expressions_container::data_type::const_iterator it = array_expressions.data().begin(); it != array_expressions.data().end(); ++it)
+  for (expressions_tuple::data_type::const_iterator it = expressions.data().begin(); it != expressions.data().end(); ++it)
     for(array_expression::container_type::const_iterator itt = (*it)->tree().begin(); itt != (*it)->tree().end() ; ++itt)
       if(   (itt->lhs.subtype==DENSE_ARRAY_TYPE && (std::max(itt->lhs.array.stride1, itt->lhs.array.stride2)>1 || std::max(itt->lhs.array.start1,itt->lhs.array.start2)>0))
          || (itt->rhs.subtype==DENSE_ARRAY_TYPE && (std::max(itt->rhs.array.stride1, itt->rhs.array.stride2)>1 || std::max(itt->rhs.array.start1,itt->rhs.array.start2)>0)))
@@ -490,34 +490,34 @@ tools::shared_ptr<symbolic_binder> base::make_binder()
 base::base(binding_policy_t binding_policy) : binding_policy_(binding_policy)
 {}
 
-unsigned int base::lmem_usage(array_expressions_container const &) const
+unsigned int base::lmem_usage(expressions_tuple const &) const
 { return 0; }
 
-unsigned int base::registers_usage(array_expressions_container const &) const
+unsigned int base::registers_usage(expressions_tuple const &) const
 { return 0; }
 
 base::~base()
 { }
 
-std::vector<std::string> base::generate(unsigned int label, array_expressions_container const & array_expressions, cl::Device const & device)
+std::vector<std::string> base::generate(unsigned int label, expressions_tuple const & expressions, cl::Device const & device)
 {
-  array_expressions_container::data_type::const_iterator sit;
+  expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::iterator mit;
 
-  if(int err = check_invalid(array_expressions, device))
+  if(int err = check_invalid(expressions, device))
     throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
 
   //Create mapping
-  std::vector<mapping_type> mappings(array_expressions.data().size());
+  std::vector<mapping_type> mappings(expressions.data().size());
   tools::shared_ptr<symbolic_binder> binder = make_binder();
-  for (mit = mappings.begin(), sit = array_expressions.data().begin(); sit != array_expressions.data().end(); ++sit, ++mit)
+  for (mit = mappings.begin(), sit = expressions.data().begin(); sit != expressions.data().end(); ++sit, ++mit)
     traverse(**sit, (*sit)->root(), map_functor(*binder,*mit), true);
 
-  return generate_impl(label, array_expressions, mappings);
+  return generate_impl(label, expressions, mappings);
 }
 
 template<class TType, class PType>
-int base_impl<TType, PType>::check_invalid_impl(cl::Device const &, array_expressions_container const &) const
+int base_impl<TType, PType>::check_invalid_impl(cl::Device const &, expressions_tuple const &) const
 { return TEMPLATE_VALID; }
 
 template<class TType, class PType>
@@ -537,11 +537,11 @@ tools::shared_ptr<base> base_impl<TType, PType>::clone() const
 { return tools::shared_ptr<base>(new TType(*dynamic_cast<TType const *>(this))); }
 
 template<class TType, class PType>
-int base_impl<TType, PType>::check_invalid(array_expressions_container const & array_expressions, cl::Device const & device) const
+int base_impl<TType, PType>::check_invalid(expressions_tuple const & expressions, cl::Device const & device) const
 {
   //Query device informations
   size_t lmem_available = device.getInfo<CL_DEVICE_LOCAL_MEM_SIZE>();
-  size_t lmem_used = lmem_usage(array_expressions);
+  size_t lmem_used = lmem_usage(expressions);
   if (lmem_used>lmem_available)
     return TEMPLATE_LOCAL_MEMORY_OVERFLOW;
 
@@ -575,7 +575,7 @@ int base_impl<TType, PType>::check_invalid(array_expressions_container const & a
       p_.simd_width!=16)
     return TEMPLATE_INVALID_SIMD_WIDTH;
 
-  return check_invalid_impl(device, array_expressions);
+  return check_invalid_impl(device, expressions);
 }
 
 template class base_impl<vaxpy, vaxpy_parameters>;

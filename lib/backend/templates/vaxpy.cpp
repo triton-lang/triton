@@ -16,14 +16,14 @@ vaxpy_parameters::vaxpy_parameters(unsigned int _simd_width,
 { }
 
 
-int vaxpy::check_invalid_impl(cl::Device const &, array_expressions_container const &) const
+int vaxpy::check_invalid_impl(cl::Device const &, expressions_tuple const &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-std::vector<std::string> vaxpy::generate_impl(unsigned int label, array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings) const
+std::vector<std::string> vaxpy::generate_impl(unsigned int label, expressions_tuple const & expressions, std::vector<mapping_type> const & mappings) const
 {
   std::vector<std::string> result;
   for (unsigned int i = 0; i < 2; ++i)
@@ -36,14 +36,14 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, array_expressi
     stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
     char kprefix[10];
     fill_kernel_name(kprefix, label, (i==0?"f":"o"));
-    stream << "__kernel void " << kprefix << "(unsigned int N," << generate_arguments(data_type, mappings, array_expressions) << ")" << std::endl;
+    stream << "__kernel void " << kprefix << "(unsigned int N," << generate_arguments(data_type, mappings, expressions) << ")" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
 
     process(stream, PARENT_NODE_TYPE,
                           tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
                                                                      ("array1", "#pointer += #start;")
-                                                                     ("array1", "#start1/=" + str_simd_width + ";"), array_expressions, mappings);
+                                                                     ("array1", "#start1/=" + str_simd_width + ";"), expressions, mappings);
 
     std::string init, upper_bound, inc;
     fetching_loop_info(p_.fetching_policy, "N/"+str_simd_width, stream, init, upper_bound, inc, "get_global_id(0)", "get_global_size(0)");
@@ -55,7 +55,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, array_expressi
                                                                      ("matrix_row", "#scalartype #namereg = $VALUE{#row*#stride1, i*#stride2};")
                                                                      ("matrix_column", "#scalartype #namereg = $VALUE{i*#stride1,#column*#stride2};")
                                                                      ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];")
-                                                                     , array_expressions, mappings);
+                                                                     , expressions, mappings);
 
     evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1", "#namereg")
                                                                                                 ("matrix_row", "#namereg")
@@ -63,13 +63,13 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, array_expressi
                                                                                                 ("matrix_diag", "#namereg")
                                                                                                 ("array0", "#namereg")
                                                                                                 ("cast", "convert_"+data_type)
-             , array_expressions, mappings);
+             , expressions, mappings);
 
     process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1", "#pointer[i*#stride] = #namereg;")
                                                                                            ("matrix_row", "$VALUE{#row, i} = #namereg;")
                                                                                            ("matrix_column", "$VALUE{i, #column} = #namereg;")
                                                                                            ("matrix_diag", "#diag_offset<0?$VALUE{(i - #diag_offset)*#stride1, i*#stride2}:$VALUE{i*#stride1, (i + #diag_offset)*#stride2} = #namereg;")
-                                                                                           ,array_expressions, mappings);
+                                                                                           ,expressions, mappings);
 
     stream.dec_tab();
     stream << "}" << std::endl;
@@ -77,7 +77,7 @@ std::vector<std::string> vaxpy::generate_impl(unsigned int label, array_expressi
     stream << "if(get_global_id(0)==0)" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
-    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#pointer[#start] = #namereg;"), array_expressions, mappings);
+    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#pointer[#start] = #namereg;"), expressions, mappings);
     stream.dec_tab();
     stream << "}" << std::endl;
 
@@ -102,25 +102,25 @@ vaxpy::vaxpy(unsigned int simd, unsigned int ls, unsigned int ng,
 {}
 
 
-std::vector<int_t> vaxpy::input_sizes(array_expressions_container const & array_expressions)
+std::vector<int_t> vaxpy::input_sizes(expressions_tuple const & expressions)
 {
-  int_t size = static_cast<array_expression const *>(array_expressions.data().front().get())->shape()._1;
+  int_t size = static_cast<array_expression const *>(expressions.data().front().get())->shape()._1;
   return tools::make_vector<int_t>() << size;
 }
 
 void vaxpy::enqueue(cl::CommandQueue & queue,
              std::vector<cl_ext::lazy_compiler> & programs,
              unsigned int label,
-             array_expressions_container const & array_expressions)
+             expressions_tuple const & expressions)
 {
   //Size
-  int_t size = input_sizes(array_expressions)[0];
+  int_t size = input_sizes(expressions)[0];
   //Kernel
   char kfb[10];
   char kopt[10];
   fill_kernel_name(kfb, label, "f");
   fill_kernel_name(kopt, label, "o");
-  bool fallback = p_.simd_width > 1 && (requires_fallback(array_expressions) || (size%p_.simd_width>0));
+  bool fallback = p_.simd_width > 1 && (requires_fallback(expressions) || (size%p_.simd_width>0));
 
   cl::Program const & program = programs[fallback?0:1].program();
   cl_ext::kernels_t::key_type key(program(), label);
@@ -135,7 +135,7 @@ void vaxpy::enqueue(cl::CommandQueue & queue,
   //Arguments
   unsigned int current_arg = 0;
   kernel.setArg(current_arg++, cl_uint(size));
-  set_arguments(array_expressions, kernel, current_arg);
+  set_arguments(expressions, kernel, current_arg);
   queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
   queue.flush();
 }

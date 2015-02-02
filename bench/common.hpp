@@ -73,4 +73,14 @@ T median(std::vector<T> x)
       return x[size / 2];
 }
 
+template<class T>
+T mean(std::vector<T> x)
+{
+  T res = 0;
+  int N = x.size();
+  for(int i = 0 ; i < N ; ++i)
+    res += x[i];
+  return res/N;
+}
+
 #endif

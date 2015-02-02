@@ -303,12 +303,12 @@ std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & acc
 }
 
 void evaluate(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                     array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings)
+                     expressions_tuple const & expressions, std::vector<mapping_type> const & mappings)
 {
-  array_expressions_container::data_type::const_iterator sit;
+  expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::const_iterator mit;
 
-  for (mit = mappings.begin(), sit = array_expressions.data().begin(); sit != array_expressions.data().end(); ++mit, ++sit)
+  for (mit = mappings.begin(), sit = expressions.data().begin(); sit != expressions.data().end(); ++mit, ++sit)
     stream << evaluate(leaf, accessors, **sit, (*sit)->root(), *mit) << ";" << std::endl;
 }
 
@@ -368,13 +368,13 @@ void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::strin
 }
 
 void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                    array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings)
+                    expressions_tuple const & expressions, std::vector<mapping_type> const & mappings)
 {
-  array_expressions_container::data_type::const_iterator sit;
+  expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::const_iterator mit;
   std::set<std::string> already_processed;
 
-  for (mit = mappings.begin(), sit = array_expressions.data().begin(); sit != array_expressions.data().end(); ++mit, ++sit)
+  for (mit = mappings.begin(), sit = expressions.data().begin(); sit != expressions.data().end(); ++mit, ++sit)
     process(stream, leaf, accessors, **sit, (*sit)->root(), *mit, already_processed);
 }
 

@@ -33,7 +33,7 @@ void bench(ad::numeric_type dtype)
   total_time = 0;\
   OP;\
   ad::cl_ext::synchronize(ad::cl_ext::default_context());\
-  while(total_time < 1e-1){\
+  while(total_time < 5e-1){\
     timer.start(); \
     OP;\
     SYNC;\
@@ -41,7 +41,7 @@ void bench(ad::numeric_type dtype)
     total_time += times.back();\
   }\
   float tres = median(times);\
-  std::cout << " " << tres << std::flush;\
+  std::cout << " " << PERF << std::flush;\
   }
 
 #define CL_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, ad::cl_ext::synchronize(ad::cl_ext::default_context()))
@@ -64,7 +64,9 @@ void bench(ad::numeric_type dtype)
     ad::array x(N, dtype), y(N, dtype);
     ad::array_expression E = ad::detail::assign(y, x + y);
     ad::model & model = ad::get_model(ad::cl_ext::get_queue(x.context(), 0), ad::VECTOR_AXPY_TYPE, dtype);
-    CL_BENCHMARK(model.execute(E), bandwidth(3*N, tres, dtsize));
+    ad::model::runtime_options opt("saxpy");
+    model.tune(E);
+    CL_BENCHMARK(model.execute(E, opt), bandwidth(3*N, tres, dtsize));
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
     CL_BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(3*N, tres, dtsize))

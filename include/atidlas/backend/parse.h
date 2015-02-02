@@ -113,7 +113,7 @@ std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & acc
                             atidlas::array_expression const & array_expression, int_t root_idx, mapping_type const & mapping);
 
 void evaluate(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                     array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings);
+                     expressions_tuple const & expressions, std::vector<mapping_type> const & mappings);
 
 /** @brief functor for fetching or writing-back the elements in a array_expression */
 class process_traversal : public traversal_functor
@@ -133,7 +133,7 @@ void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::strin
              atidlas::array_expression const & array_expression, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed);
 
 void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                    array_expressions_container const & array_expressions, std::vector<mapping_type> const & mappings);
+                    expressions_tuple const & expressions, std::vector<mapping_type> const & mappings);
 
 
 class array_expression_representation_functor : public traversal_functor{

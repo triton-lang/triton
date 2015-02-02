@@ -477,7 +477,7 @@ void export_array()
   .def(bp::self OP bp::self)\
   ADD_SCALAR_HANDLING(OP)
 
-  bp::class_<atd::array_expressions_container>
+  bp::class_<atd::expressions_tuple>
       ("array_expression_container", bp::init<atd::array_expression const &>())
   ;
 

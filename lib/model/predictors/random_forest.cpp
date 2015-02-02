@@ -32,19 +32,19 @@ random_forest::random_forest(rapidjson::Value const & estimators)
 {
   for(rapidjson::SizeType i = 0 ; i < estimators.Size() ; ++i)
     estimators_.push_back(tree(estimators[i]));
+  D_ = estimators_.front().D();
 }
 
 std::vector<float> random_forest::predict(std::vector<int_t> const & x) const
 {
-  int_t D = estimators_.front().D();
-  std::vector<float> res(D, 0);
+  std::vector<float> res(D_, 0);
   for(std::vector<tree>::const_iterator it = estimators_.begin() ; it != estimators_.end() ; ++it)
   {
     std::vector<float> const & subres = it->predict(x);
-    for(int_t i = 0 ; i < D ; ++i)
+    for(int_t i = 0 ; i < D_ ; ++i)
       res[i] += subres[i];
   }
-  for(int_t i = 0 ; i < D ; ++i)
+  for(int_t i = 0 ; i < D_ ; ++i)
     res[i] /= estimators_.size();
   return res;
 }

@@ -208,7 +208,7 @@ private:
   size4 shape_;
 };
 
-class array_expressions_container
+class expressions_tuple
 {
 private:
   tools::shared_ptr<array_expression> create(array_expression const & s);
@@ -216,9 +216,9 @@ public:
   typedef std::list<tools::shared_ptr<array_expression> > data_type;
   enum order_type { SEQUENTIAL, INDEPENDENT };
 
-  array_expressions_container(array_expression const & s0);
-  array_expressions_container(order_type order, array_expression const & s0, array_expression const & s1);
-  array_expressions_container(data_type const & data, order_type order);
+  expressions_tuple(array_expression const & s0);
+  expressions_tuple(order_type order, array_expression const & s0, array_expression const & s1);
+  expressions_tuple(data_type const & data, order_type order);
 
   data_type const & data() const;
   cl::Context const & context() const;
