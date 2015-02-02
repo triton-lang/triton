@@ -9,7 +9,7 @@ namespace atidlas
 {
 
 /** @brief Executes a array_expression on the given queue for the given models map*/
-void execute(array_expression &, model_map_t &);
+void execute(array_expression &, model_map_t &, operation_cache * cache = NULL);
 
 }
 

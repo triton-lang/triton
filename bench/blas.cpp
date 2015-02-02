@@ -1,5 +1,5 @@
 #include "atidlas/array.h"
-#include "atidlas/model/model.h"
+#include "atidlas/symbolic/execute.h"
 #include "atidlas/tools/timer.hpp"
 #include "common.hpp"
 #ifdef BENCH_CLAMDBLAS
@@ -32,7 +32,7 @@ void bench(ad::numeric_type dtype)
   times.clear();\
   total_time = 0;\
   OP;\
-  ad::cl_ext::synchronize(ad::cl_ext::default_context());\
+  SYNC;\
   while(total_time < 5e-1){\
     timer.start(); \
     OP;\
@@ -44,7 +44,7 @@ void bench(ad::numeric_type dtype)
   std::cout << " " << PERF << std::flush;\
   }
 
-#define CL_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, ad::cl_ext::synchronize(ad::cl_ext::default_context()))
+#define CL_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, queue.flush(); queue.finish();)
 
 #define CPU_SYNCHRONIZE
 #define CPU_BENCHMARK(OP, PERF) BENCHMARK(OP, PERF, CPU_SYNCHRONIZE)
@@ -62,11 +62,15 @@ void bench(ad::numeric_type dtype)
     std::cout << N;
     /* ATIDLAS */
     ad::array x(N, dtype), y(N, dtype);
+    cl::CommandQueue & queue = ad::cl_ext::get_queue(x.context(), 0);
+    ad::model & model = ad::get_model(queue, ad::VECTOR_AXPY_TYPE, dtype);
     ad::array_expression E = ad::detail::assign(y, x + y);
-    ad::model & model = ad::get_model(ad::cl_ext::get_queue(x.context(), 0), ad::VECTOR_AXPY_TYPE, dtype);
-    ad::model::runtime_options opt("saxpy");
     model.tune(E);
-    CL_BENCHMARK(model.execute(E, opt), bandwidth(3*N, tres, dtsize));
+    ad::operation_cache cache;
+    model.execute(E, &cache);
+    queue.flush();
+    queue.finish();
+    CL_BENCHMARK(cache.enqueue(), bandwidth(3*N, tres, dtsize));
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
     CL_BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &ad::cl_ext::get_queue(x.context(), 0)(), 0, NULL, NULL), bandwidth(3*N, tres, dtsize))

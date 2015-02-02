@@ -147,7 +147,7 @@ namespace atidlas
   }
 
   /** @brief Executes a array_expression on the given models map*/
-  void execute(atidlas::array_expression & array_expression, model_map_t & models)
+  void execute(atidlas::array_expression & array_expression, model_map_t & models, operation_cache * cache)
   {
     cl::Context const & context = array_expression.context();
     size_t rootidx = array_expression.root();
@@ -215,7 +215,7 @@ namespace atidlas
     }
 
     /*-----Compute final expression-----*/
-    models[std::make_pair(final_type, dtype)]->execute(array_expression);
+    models[std::make_pair(final_type, dtype)]->execute(array_expression, cache);
   }
 
 }

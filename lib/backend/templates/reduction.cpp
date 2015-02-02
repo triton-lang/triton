@@ -280,10 +280,8 @@ std::vector<int_t> reduction::input_sizes(expressions_tuple const & expressions)
   return tools::make_vector<int_t>() << N;
 }
 
-void reduction::enqueue(cl::CommandQueue & queue,
-             std::vector<cl_ext::lazy_compiler> & programs,
-             unsigned int label,
-             expressions_tuple const & expressions)
+void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
+             unsigned int label, expressions_tuple const & expressions, operation_cache * cache)
 {
   //Preprocessing
   int_t size = input_sizes(expressions)[0];
@@ -343,6 +341,10 @@ void reduction::enqueue(cl::CommandQueue & queue,
 
   for (unsigned int k = 0; k < 2; k++)
     queue.enqueueNDRangeKernel(kernels[k], cl::NullRange, grange[k], lrange[k]);
+
+  if(cache)
+    for (unsigned int k = 0; k < 2; k++)
+      cache->push_back(queue, kernels[k], cl::NullRange, grange[k], lrange[k]);
 }
 
 template class base_impl<reduction, reduction_parameters>;

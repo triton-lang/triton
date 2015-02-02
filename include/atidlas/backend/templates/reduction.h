@@ -29,10 +29,7 @@ public:
   reduction(reduction::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
   reduction(unsigned int simd, unsigned int ls, unsigned int ng, fetching_policy_type fetch, binding_policy_t bind = BIND_ALL_UNIQUE);
   std::vector<int_t> input_sizes(expressions_tuple const & expressions);
-  void enqueue(cl::CommandQueue & queue,
-               std::vector<cl_ext::lazy_compiler> & programs,
-               unsigned int label,
-               expressions_tuple const & expressions);
+  void enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, expressions_tuple const & expressions, operation_cache * cache = NULL);
 private:
   std::vector< cl::Buffer > tmp_;
   std::vector< cl::Buffer > tmpidx_;

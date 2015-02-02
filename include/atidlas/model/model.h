@@ -38,7 +38,7 @@ namespace atidlas
     model(std::vector< tools::shared_ptr<base> > const &, cl::CommandQueue &);
     model(base const &, cl::CommandQueue &);
 
-    void execute(expressions_tuple const &, runtime_options const & opt = runtime_options());
+    void execute(expressions_tuple const &, operation_cache * cache = NULL, runtime_options const & opt = runtime_options());
     void tune(expressions_tuple const &);
 
     templates_container const & templates() const;

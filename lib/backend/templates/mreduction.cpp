@@ -214,10 +214,8 @@ std::vector<int_t> mreduction::input_sizes(expressions_tuple const & expressions
   return tools::make_vector<int_t>() << MN.first << MN.second;
 }
 
-void mreduction::enqueue(cl::CommandQueue & queue,
-             std::vector<cl_ext::lazy_compiler> & programs,
-             unsigned int label,
-             expressions_tuple const & expressions)
+void mreduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
+             unsigned int label,  expressions_tuple const & expressions, operation_cache * cache)
 {
   char kname[10];
   fill_kernel_name(kname, label, "d");
@@ -240,6 +238,9 @@ void mreduction::enqueue(cl::CommandQueue & queue,
   set_arguments(expressions, kernel, current_arg);
 
   queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
+
+  if(cache)
+    cache->push_back(queue, kernel, cl::NullRange, grange, lrange);
 }
 
 mreduction_rows::mreduction_rows(mreduction_parameters  const & parameters,

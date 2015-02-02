@@ -90,7 +90,7 @@ model::model(std::vector< tools::shared_ptr<base> > const & templates, cl::Comma
 model::model(base const & tp, cl::CommandQueue & queue) : templates_(1,tp.clone()), queue_(queue)
 {}
 
-void model::execute(expressions_tuple const & expressions, runtime_options const & opt)
+void model::execute(expressions_tuple const & expressions, operation_cache *cache, runtime_options const & opt)
 {
   std::vector<cl_ext::lazy_compiler> & compilers = init(expressions, opt);
 
@@ -115,7 +115,7 @@ void model::execute(expressions_tuple const & expressions, runtime_options const
   }
 
   //Execution
-  templates_[label]->enqueue(queue_, compilers, label, expressions);
+  return templates_[label]->enqueue(queue_, compilers, label, expressions, cache);
 }
 
 void model::tune(expressions_tuple const & expressions)

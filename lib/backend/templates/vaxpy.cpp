@@ -108,10 +108,8 @@ std::vector<int_t> vaxpy::input_sizes(expressions_tuple const & expressions)
   return tools::make_vector<int_t>() << size;
 }
 
-void vaxpy::enqueue(cl::CommandQueue & queue,
-             std::vector<cl_ext::lazy_compiler> & programs,
-             unsigned int label,
-             expressions_tuple const & expressions)
+void vaxpy::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
+                               unsigned int label, expressions_tuple const & expressions, operation_cache * cache)
 {
   //Size
   int_t size = input_sizes(expressions)[0];
@@ -137,7 +135,9 @@ void vaxpy::enqueue(cl::CommandQueue & queue,
   kernel.setArg(current_arg++, cl_uint(size));
   set_arguments(expressions, kernel, current_arg);
   queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
-  queue.flush();
+
+  if(cache)
+    cache->push_back(queue, kernel, cl::NullRange, grange, lrange);
 }
 
 
