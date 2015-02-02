@@ -35,8 +35,8 @@ def do_tuning(args):
     device = args.device
     context = atd.context(device)
     context.queues.append(atd.command_queue(context, device))
-    if os.path.isfile(args.json_file):
-        json_out = json.load(open(args.json_file, 'r'))
+    if os.path.isfile(args.out):
+        json_out = json.load(open(args.out, 'r'))
     else:
         json_out = {}
         json_out["version"] = "1.0"
@@ -166,7 +166,7 @@ def do_tuning(args):
                           return execute(atd.dot(LHS, RHS), sizes, Template[(A_trans, B_trans)], parameters, fname)
                       tune(execution_handler, 100, 2000, 3,(A_trans,B_trans), 'linear', 'linear')
 
-              json.dump(json_out, open(args.json_file,'w'))
+              json.dump(json_out, open(args.out,'w'))
 
 
 
@@ -182,7 +182,7 @@ class ArgumentsHandler:
         tune_parser.add_argument("--operations", default = 'vaxpy,maxpy,dot,gemv,gemm-float32', type=str)
         tune_parser.add_argument("--gemm-layouts", default='NN,NT,TN,TT', type=str)
         tune_parser.add_argument("--gemv-layouts", default='N,T', type=str)
-        tune_parser.add_argument("--json-file", default='', type=str)
+        tune_parser.add_argument("--out", default='', type=str)
         tune_parser.add_argument("--viennacl-src-path", default='', type=str)
 
         tune_subparsers = tune_parser.add_subparsers(dest='method')
@@ -202,8 +202,8 @@ class ArgumentsHandler:
         if self.action == 'tune':
             #Retypes
             self.device = devices[int(self.device)]
-            if not self.json_file:
-                self.json_file = misc_tools.sanitize_string(self.device.name) + '.json'
+            if not self.out:
+                self.out = misc_tools.sanitize_string(self.device.name) + '.json'
             self.operations = self.operations.split(',')
             self.gemm_layouts = self.gemm_layouts.split(',')
             self.gemv_layouts = self.gemv_layouts.split(',')
