@@ -15,6 +15,7 @@ class scalar;
 class array: public obj_base
 {
   friend array reshape(array const &, int_t, int_t);
+  friend array reshape(array_expression const &, int_t, int_t);
   static array_infos init_infos(numeric_type dtype, cl_mem data, int_t shape1, int_t shape2, int_t start1, int_t start2, int_t stride1, int_t stride2, int_t ld);
 public:
   //1D Constructors
@@ -31,7 +32,7 @@ public:
 
   //General constructor
   array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, int_t ld, cl::Context context = cl_ext::default_context());
-  array(array_expression const & proxy);
+  array(control const & proxy);
   array(array const &);
 
   //Getters
@@ -50,7 +51,7 @@ public:
 
   //Numeric operators
   array& operator=(array const &);
-  array& operator=(array_expression const &);
+  array& operator=(control const &);
   template<class T> array & operator=(std::vector<T> const & rhs);
 
   array_expression operator-();
@@ -90,7 +91,7 @@ public:
   explicit scalar(numeric_type dtype, cl::Buffer const & data, int_t offset, cl::Context context = cl_ext::default_context());
   explicit scalar(value_scalar value, cl::Context context = cl_ext::default_context());
   explicit scalar(numeric_type dtype, cl::Context context = cl_ext::default_context());
-  scalar(array_expression const & proxy);
+  scalar(control const & proxy);
   scalar& operator=(value_scalar const &);
 //  scalar& operator=(scalar const & s);
   using array::operator =;

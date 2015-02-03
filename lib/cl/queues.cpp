@@ -8,6 +8,11 @@ namespace atidlas
 namespace cl_ext
 {
 
+cl_command_queue_properties queue_properties = 0;
+unsigned int default_context_idx = 0;
+queues_t queues;
+kernels_t kernels;
+
 void synchronize(cl::Context const & context)
 {
   std::vector<cl::CommandQueue> & q = get_queues(context);
@@ -15,52 +20,43 @@ void synchronize(cl::Context const & context)
     it->finish();
 }
 
-queues_t init_queues()
+void init_queues()
 {
-  queues_t result;
-
-  std::vector<cl::Platform> platforms;
-  cl::Platform::get(&platforms);
-
-  for(std::vector<cl::Platform>::iterator it = platforms.begin() ; it != platforms.end() ; ++it)
-  {
-    std::vector<cl::Device> devices;
-    it->getDevices(CL_DEVICE_TYPE_ALL, &devices);
-    for(std::vector<cl::Device>::iterator itt = devices.begin() ; itt != devices.end() ; ++itt)
+    std::vector<cl::Platform> platforms;
+    cl::Platform::get(&platforms);
+    for(std::vector<cl::Platform>::iterator it = platforms.begin() ; it != platforms.end() ; ++it)
     {
-      std::vector<cl::Device> current(1, *itt);
-      cl::Context context(current);
-      cl::CommandQueue queue(context, *itt);
-      result.push_back(std::make_pair(context, std::vector<cl::CommandQueue>(1, queue)));
+      std::vector<cl::Device> devices;
+      it->getDevices(CL_DEVICE_TYPE_ALL, &devices);
+      for(std::vector<cl::Device>::iterator itt = devices.begin() ; itt != devices.end() ; ++itt)
+        queues.push_back(std::make_pair(cl::Context(std::vector<cl::Device>(1, *itt)), std::vector<cl::CommandQueue>()));
     }
-  }
-
-  return result;
+    for(queues_t::iterator it = queues.begin() ; it != queues.end() ; ++it)
+      it->second.push_back(cl::CommandQueue(it->first, it->first.getInfo<CL_CONTEXT_DEVICES>()[0], queue_properties));
 }
-
 
 cl::Context default_context()
 {
-  return queues[default_context_idx].second.front().getInfo<CL_QUEUE_CONTEXT>();
+  if(queues.empty())
+    init_queues();
+  return queues.begin()->first;
 }
 
 std::vector<cl::CommandQueue> & get_queues(cl::Context const & ctx)
 {
+  if(queues.empty())
+    init_queues();
   for(queues_t::iterator it = queues.begin() ; it != queues.end() ; ++it)
-    if(it->first()==ctx())
-      return it->second;
-  queues.push_back(std::make_pair(ctx, std::vector<cl::CommandQueue>(1, cl::CommandQueue(ctx, ctx.getInfo<CL_CONTEXT_DEVICES>()[0]))));
-  return queues.back().second;
+    if(it->first()==ctx()) return it->second;
+  throw std::out_of_range("No such context registered in the backend. Please run atidlas::cl_ext:;register(context, queues)");
 }
 
 cl::CommandQueue & get_queue(cl::Context const & ctx, std::size_t idx)
-{ return get_queues(ctx)[idx]; }
+{
+  return get_queues(ctx)[idx];
+}
 
 
-unsigned int default_context_idx = 0;
-
-queues_t queues = init_queues();
-kernels_t kernels = kernels_t();
 
 }
 

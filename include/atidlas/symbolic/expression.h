@@ -208,6 +208,27 @@ private:
   size4 shape_;
 };
 
+class control
+{
+public:
+  control(array_expression const & x, cl::Event* event = NULL, std::vector<cl::Event>* dependencies = NULL,
+          cl::CommandQueue* queue = NULL, operation_cache* cache = NULL) : x_(x), event_(event), dependencies_(dependencies), queue_(queue), cache_(cache){}
+
+  array_expression const & expression() const { return x_; }
+  cl::Event* event() const { return event_; }
+  std::vector<cl::Event>* dependencies() const { return dependencies_; }
+  cl::CommandQueue* queue() const { return queue_; }
+  operation_cache* cache() const { return cache_; }
+
+private:
+  array_expression const & x_;
+
+  cl::Event* event_;
+  std::vector<cl::Event>* dependencies_;
+  cl::CommandQueue* queue_;
+  operation_cache* cache_;
+};
+
 class expressions_tuple
 {
 private:

@@ -96,9 +96,9 @@ context_(context), data_(data),
 infos_(init_infos(dtype, data_(), s1.size, s2.size, s1.start, s2.start, s1.stride, s2.stride, ld))
 { }
 
-array::array(array_expression const & x):
-context_(x.context()), data_(context_, CL_MEM_READ_WRITE, size_of(x.dtype())*prod(x.shape())),
-infos_(init_infos(x.dtype(), data_(), x.shape()._1, x.shape()._2, 0, 0, 1, 1, x.shape()._1))
+array::array(control const & x):
+context_(x.expression().context()), data_(context_, CL_MEM_READ_WRITE, size_of(x.expression().dtype())*prod(x.expression().shape())),
+infos_(init_infos(x.expression().dtype(), data_(), x.expression().shape()._1, x.expression().shape()._2, 0, 0, 1, 1, x.expression().shape()._1))
 {
   *this = x;
 }
@@ -151,8 +151,10 @@ array & array::operator=(array const & rhs)
   return *this;
 }
 
-array & array::operator=(array_expression const & rhs)
+array & array::operator=(control const & x)
 {
+  array_expression const & rhs = x.expression();
+
   assert(dtype() == rhs.dtype());
   array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), dtype(), shape());
   cl::CommandQueue & queue = cl_ext::get_queue(context_, 0);
@@ -293,7 +295,7 @@ scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype()
 scalar::scalar(numeric_type dtype, cl::Context context) : array(1, dtype, context)
 { }
 
-scalar::scalar(array_expression const & proxy) : array(proxy){ }
+scalar::scalar(control const &proxy) : array(proxy){ }
 
 template<class T>
 T scalar::cast() const
@@ -710,6 +712,13 @@ array reshape(array const & a, int_t size1, int_t size2)
   return tmp;
 }
 
+array reshape(array_expression const & a, int_t size1, int_t size2)
+{
+  array tmp(a);
+  tmp.infos_.shape1 = size1;
+  tmp.infos_.shape2 = size2;
+  return tmp;
+}
 
 #define DEFINE_DOT(LTYPE, RTYPE) \
 array_expression dot(LTYPE const & x, RTYPE const & y)\

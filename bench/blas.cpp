@@ -32,7 +32,7 @@ void bench(ad::numeric_type dtype)
   times.clear();\
   total_time = 0;\
   OP;\
-  while(total_time < 5e-1){\
+  while(total_time < 1e-1){\
     timer.start(); \
     OP;\
     times.push_back(timer.get());\
