@@ -50,8 +50,8 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
                                                                             ("array2", "#pointer += #start1 + #start2*#ld; "
                                                                                        "#ld *= #nldstride; "), expressions, mappings);
 
-  for (std::vector<mapped_mreduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
-    stream << (*it)->process("__local #scalartype #name_buf[" + to_string(lsize0*lsize1) + "];") << std::endl;
+  for (const auto & expr : exprs)
+    stream << (expr)->process("__local #scalartype #name_buf[" + to_string(lsize0*lsize1) + "];") << std::endl;
 
   stream << "unsigned int lid0 = get_local_id(0);" << std::endl;
   stream << "unsigned int lid1 = get_local_id(1);" << std::endl;
@@ -59,8 +59,8 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream << "for(unsigned int r = get_global_id(0); r < upper_bound_0; r += get_global_size(0)){" << std::endl;
   stream.inc_tab();
 
-  for (std::vector<mapped_mreduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
-    stream << (*it)->process("#scalartype #name_acc = " + neutral_element((*it)->root_op()) + ";") << std::endl;
+  for (const auto & expr : exprs)
+    stream << (expr)->process("#scalartype #name_acc = " + neutral_element((expr)->root_op()) + ";") << std::endl;
 
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;
@@ -75,7 +75,7 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
     {
       std::string data_type = append_width("#scalartype",simd_width);
 
-      for (std::vector<mapped_mreduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
+      for (const auto & elem : exprs)
       {
         std::map<std::string, std::string> accessors;
         if(reduction==REDUCE_COLUMNS)
@@ -88,7 +88,7 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
           accessors["array2"] = "#scalartype #namereg = #pointer[r*#stride1 + c*#ld];";
           accessors["repeat"] = "#scalartype #namereg = $VALUE{(r%#tuplearg0)*#stride, (c%#tuplearg1)*#stride};";
         }
-        (*it)->process_recursive(stream, PARENT_NODE_TYPE, accessors);
+        (elem)->process_recursive(stream, PARENT_NODE_TYPE, accessors);
       }
 
 
@@ -101,7 +101,7 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
           str[a] = append_simd_suffix("#namereg.s",a);
 
 
-      for (unsigned int k = 0; k < exprs.size(); ++k)
+      for (auto & elem : exprs)
       {
         for (unsigned int a = 0; a < simd_width; ++a)
         {
@@ -109,11 +109,11 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
           accessors["array2"] = str[a];
           accessors["repeat"] = "#namereg";
           accessors["array0"] = "#namereg";
-          std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
-          if (exprs[k]->is_index_reduction())
-            compute_index_reduction(stream, exprs[k]->process("#name_acc"), "c*"+to_string(simd_width) + to_string(a), exprs[k]->process("#name_acc_value"), value,exprs[k]->root_op());
+          std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, accessors);
+          if (elem->is_index_reduction())
+            compute_index_reduction(stream, elem->process("#name_acc"), "c*"+to_string(simd_width) + to_string(a), elem->process("#name_acc_value"), value,elem->root_op());
           else
-            compute_reduction(stream, exprs[k]->process("#name_acc"), value,exprs[k]->root_op());
+            compute_reduction(stream, elem->process("#name_acc"), value,elem->root_op());
         }
       }
     }
@@ -126,8 +126,8 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream.dec_tab();
   stream << "}" << std::endl;
 
-  for (unsigned int k = 0; k < exprs.size(); ++k)
-    stream << exprs[k]->process("#name_buf[lid0*" + lsize1str + "+ lid1] = #name_acc;") << std::endl;
+  for (auto & expr : exprs)
+    stream << expr->process("#name_buf[lid0*" + lsize1str + "+ lid1] = #name_acc;") << std::endl;
 
   stream << "#pragma unroll" << std::endl;
   stream << "for(unsigned int stride = " << p_.local_size_1/2 << "; stride >0; stride /=2)" << std::endl;
@@ -139,13 +139,13 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  for (unsigned int k = 0; k < exprs.size(); k++)
-    if (exprs[k]->is_index_reduction())
-      compute_index_reduction(stream, exprs[k]->process("#name_buf[lid0*" + lsize1str + " + lid1]"), exprs[k]->process("#name_buf[lid0*" + lsize1str + " + lid1 + stride]")
-                              , exprs[k]->process("#name_buf_value[lid0*" + lsize1str + " + lid1]"), exprs[k]->process("#name_buf_value[lid0*" + lsize1str + " + lid1 + stride]"),
-                              exprs[k]->root_op());
+  for (auto & expr : exprs)
+    if (expr->is_index_reduction())
+      compute_index_reduction(stream, expr->process("#name_buf[lid0*" + lsize1str + " + lid1]"), expr->process("#name_buf[lid0*" + lsize1str + " + lid1 + stride]")
+                              , expr->process("#name_buf_value[lid0*" + lsize1str + " + lid1]"), expr->process("#name_buf_value[lid0*" + lsize1str + " + lid1 + stride]"),
+                              expr->root_op());
     else
-      compute_reduction(stream,exprs[k]->process("#name_buf[lid0*" + lsize1str + " + lid1]"), exprs[k]->process("#name_buf[lid0*" + lsize1str + " + lid1 + stride]"), exprs[k]->root_op());
+      compute_reduction(stream,expr->process("#name_buf[lid0*" + lsize1str + " + lid1]"), expr->process("#name_buf[lid0*" + lsize1str + " + lid1 + stride]"), expr->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -183,8 +183,8 @@ std::vector<std::string> mreduction::generate_impl(unsigned int label, expressio
   {
     array_expression const & first_expression = *expressions.data().front();
     std::vector<size_t> idx = filter_nodes(&is_reduction, first_expression, false);
-    for (unsigned int j = 0; j < idx.size(); ++j)
-      exprs.push_back((mapped_mreduction*)(mit->at(mapping_key(idx[j], PARENT_NODE_TYPE)).get()));
+    for (auto & elem : idx)
+      exprs.push_back((mapped_mreduction*)(mit->at(mapping_key(elem, PARENT_NODE_TYPE)).get()));
   }
 
   std::vector<std::string> res;

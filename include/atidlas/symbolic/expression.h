@@ -6,7 +6,7 @@
 #include <CL/cl.hpp>
 #include "atidlas/types.h"
 #include "atidlas/value_scalar.h"
-#include "atidlas/tools/shared_ptr.hpp"
+#include <memory>
 
 namespace atidlas
 {
@@ -168,7 +168,7 @@ void fill(lhs_rhs_element & x, array const & a);
 void fill(lhs_rhs_element & x, value_scalar const & v);
 void fill(lhs_rhs_element & x, repeat_infos const & r);
 
-class array_expression
+class array_expression : public array_base
 {
 public:
   struct node
@@ -208,21 +208,21 @@ private:
   size4 shape_;
 };
 
-class control
+template<class TYPE>
+class controller
 {
 public:
-  control(array_expression const & x, cl::Event* event = NULL, std::vector<cl::Event>* dependencies = NULL,
+  controller(TYPE const & x, cl::Event* event = NULL, std::vector<cl::Event>* dependencies = NULL,
           cl::CommandQueue* queue = NULL, operation_cache* cache = NULL) : x_(x), event_(event), dependencies_(dependencies), queue_(queue), cache_(cache){}
 
-  array_expression const & expression() const { return x_; }
+  TYPE const & x() const { return x_; }
   cl::Event* event() const { return event_; }
   std::vector<cl::Event>* dependencies() const { return dependencies_; }
   cl::CommandQueue* queue() const { return queue_; }
   operation_cache* cache() const { return cache_; }
 
 private:
-  array_expression const & x_;
-
+  TYPE const & x_;
   cl::Event* event_;
   std::vector<cl::Event>* dependencies_;
   cl::CommandQueue* queue_;
@@ -232,9 +232,9 @@ private:
 class expressions_tuple
 {
 private:
-  tools::shared_ptr<array_expression> create(array_expression const & s);
+  std::shared_ptr<array_expression> create(array_expression const & s);
 public:
-  typedef std::list<tools::shared_ptr<array_expression> > data_type;
+  typedef std::list<std::shared_ptr<array_expression> > data_type;
   enum order_type { SEQUENTIAL, INDEPENDENT };
 
   expressions_tuple(array_expression const & s0);

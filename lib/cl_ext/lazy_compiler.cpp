@@ -1,4 +1,4 @@
-#include "atidlas/cl/lazy_compiler.h"
+#include "atidlas/cl_ext/lazy_compiler.h"
 
 namespace atidlas
 {

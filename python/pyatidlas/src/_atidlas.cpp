@@ -1,4 +1,5 @@
 #include <list>
+#include <functional>
 
 #include <boost/python.hpp>
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
@@ -190,9 +191,6 @@ namespace detail
     return to_list(devices.begin(), devices.end());
   }
 
-  std::vector<cl::CommandQueue> & get_queue(cl::Context const & ctx)
-  { return atd::cl_ext::get_queues(ctx); }
-
   atd::numeric_type extract_dtype(bp::object const & odtype)
   {
       std::string name = bp::extract<std::string>(odtype.attr("__class__").attr("__name__"))();
@@ -352,7 +350,7 @@ void export_cl()
       .def("__init__", bp::make_constructor(&detail::make_context))
     #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_context_info<NAME>)
     #undef WRAP
-      .add_property("queues", bp::make_function(&detail::get_queue, bp::return_internal_reference<>()))
+      .add_property("queues", bp::make_function(static_cast<std::vector<cl::CommandQueue> & (*)(const cl::Context&)>( [](const cl::Context & ctx) -> std::vector<cl::CommandQueue> & { return atd::cl_ext::queues[ctx]; }) , bp::return_internal_reference<>()))
       ;
 
   bp::class_<cl::CommandQueue>("command_queue", bp::init<cl::Context, cl::Device>())

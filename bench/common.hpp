@@ -3,6 +3,7 @@
 
 #include "vector"
 #include <cmath>
+#include <algorithm>
 
 int ceil(int N, int pad)
 {

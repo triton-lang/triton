@@ -3,7 +3,7 @@
 #include <iostream>
 #include <fstream>
 
-#include "atidlas/cl/program_map.h"
+#include "atidlas/cl_ext/program_map.h"
 #include "sha1.hpp"
 
 namespace atidlas

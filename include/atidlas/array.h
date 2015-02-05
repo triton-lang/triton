@@ -4,7 +4,7 @@
 #include <iostream>
 #include <CL/cl.hpp>
 #include "atidlas/types.h"
-#include "atidlas/cl/queues.h"
+#include "atidlas/cl_ext/backend.h"
 #include "atidlas/symbolic/expression.h"
 
 
@@ -12,11 +12,10 @@ namespace atidlas
 {
 
 class scalar;
-class array: public obj_base
+
+class array: public array_base
 {
   friend array reshape(array const &, int_t, int_t);
-  friend array reshape(array_expression const &, int_t, int_t);
-  static array_infos init_infos(numeric_type dtype, cl_mem data, int_t shape1, int_t shape2, int_t start1, int_t start2, int_t stride1, int_t stride2, int_t ld);
 public:
   //1D Constructors
   array(int_t size1, numeric_type dtype, cl::Context context = cl_ext::default_context());
@@ -32,15 +31,15 @@ public:
 
   //General constructor
   array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, int_t ld, cl::Context context = cl_ext::default_context());
-  array(control const & proxy);
+  array(array_expression const & proxy);
   array(array const &);
 
   //Getters
   numeric_type dtype() const;
   size4 shape() const;
+  int_t nshape() const;
   size4 start() const;
   size4 stride() const;
-  int_t nshape() const;
   int_t ld() const;
   cl::Context const & context() const;
   cl::Buffer const & data() const;
@@ -51,7 +50,8 @@ public:
 
   //Numeric operators
   array& operator=(array const &);
-  array& operator=(control const &);
+  array& operator=(array_expression const &);
+
   template<class T> array & operator=(std::vector<T> const & rhs);
 
   array_expression operator-();
@@ -78,9 +78,15 @@ public:
 
   array_expression T() const;
 protected:
+  numeric_type dtype_;
+
+  size4 shape_;
+  size4 start_;
+  size4 stride_;
+  int_t ld_;
+
   cl::Context context_;
   cl::Buffer data_;
-  array_infos infos_;
 };
 
 class scalar : public array
@@ -91,7 +97,7 @@ public:
   explicit scalar(numeric_type dtype, cl::Buffer const & data, int_t offset, cl::Context context = cl_ext::default_context());
   explicit scalar(value_scalar value, cl::Context context = cl_ext::default_context());
   explicit scalar(numeric_type dtype, cl::Context context = cl_ext::default_context());
-  scalar(control const & proxy);
+  scalar(array_expression const & proxy);
   scalar& operator=(value_scalar const &);
 //  scalar& operator=(scalar const & s);
   using array::operator =;

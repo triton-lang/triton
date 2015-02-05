@@ -46,13 +46,13 @@ void bench(ad::numeric_type dtype)
   /*--BLAS1--*/
   /*---------*/
   std::cout << "#AXPY" << std::endl;
-  for(std::vector<int_t>::const_iterator it = BLAS1_N.begin() ; it != BLAS1_N.end() ; ++it)
+  for(auto N : BLAS1_N)
   {
-    int_t N = *it;
+    
     std::cout << N;
     /* ATIDLAS */
     ad::array x(N, dtype), y(N, dtype);
-    cl::CommandQueue & queue = ad::cl_ext::get_queue(x.context(), 0);
+    cl::CommandQueue & queue = ad::cl_ext::queues[x.context()][0];
     ad::model & model = ad::get_model(queue, ad::VECTOR_AXPY_TYPE, dtype);
     ad::array_expression E = ad::detail::assign(y, x + y);
     model.tune(E);
@@ -178,15 +178,16 @@ int main(int argc, char* argv[])
 #endif
 
   int device_idx = 0;
-  if(ad::cl_ext::queues.size()>1){
-    ad::cl_ext::queues_t & queues = ad::cl_ext::queues;
+  ad::cl_ext::queues_type::data_type const & queues = ad::cl_ext::queues.data();
+
+  if(queues.size()>1){
     if(argc!=2)
     {
       std::cerr << "usage : blas-bench [DEVICE_IDX]" << std::endl;
       std::cout << "Devices available: " << std::endl;
       unsigned int current=0;
-      for(ad::cl_ext::queues_t::const_iterator it = queues.begin() ; it != queues.end() ; ++it){
-        cl::Device device = it->first.getInfo<CL_CONTEXT_DEVICES>()[0];
+      for(const auto & queue : queues){
+        cl::Device device = queue.first.getInfo<CL_CONTEXT_DEVICES>()[0];
         std::cout << current++ << ": " << device.getInfo<CL_DEVICE_NAME>() << "(" << cl::Platform(device.getInfo<CL_DEVICE_PLATFORM>()).getInfo<CL_PLATFORM_NAME>() << ")" << std::endl;
       }
       exit(EXIT_FAILURE);

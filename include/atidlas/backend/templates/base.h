@@ -9,7 +9,7 @@
 #include "atidlas/backend/parse.h"
 #include "atidlas/backend/stream.h"
 #include <CL/cl.hpp>
-#include "atidlas/cl/lazy_compiler.h"
+#include "atidlas/cl_ext/lazy_compiler.h"
 #include "atidlas/symbolic/expression.h"
 
 namespace atidlas
@@ -75,15 +75,15 @@ protected:
     /** @brief Accessor for the numeric type */
     numeric_type get_numeric_type(atidlas::array_expression const * array_expression, int_t root_idx) const;
     /** @brief Creates a binary leaf */
-    template<class T> tools::shared_ptr<mapped_object> binary_leaf(atidlas::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const;
+    template<class T> std::shared_ptr<mapped_object> binary_leaf(atidlas::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const;
     /** @brief Creates a value scalar mapping */
-    tools::shared_ptr<mapped_object> create(numeric_type dtype, values_holder) const;
+    std::shared_ptr<mapped_object> create(numeric_type dtype, values_holder) const;
     /** @brief Creates a vector mapping */
-    tools::shared_ptr<mapped_object> create(array_infos const &) const;
+    std::shared_ptr<mapped_object> create(array_infos const &) const;
     /** @brief Creates a tuple mapping */
-    tools::shared_ptr<mapped_object> create(repeat_infos const &) const;
+    std::shared_ptr<mapped_object> create(repeat_infos const &) const;
     /** @brief Creates a mapping */
-    tools::shared_ptr<mapped_object> create(lhs_rhs_element const &) const;
+    std::shared_ptr<mapped_object> create(lhs_rhs_element const &) const;
   public:
     map_functor(symbolic_binder & binder, mapping_type & mapping);
     /** @brief Functor for traversing the tree */
@@ -143,7 +143,7 @@ protected:
   static bool is_reduction(array_expression::node const & node);
   static bool is_index_reduction(op_element const & op);
 
-  tools::shared_ptr<symbolic_binder> make_binder();
+  std::shared_ptr<symbolic_binder> make_binder();
   static std::string vstore(unsigned int simd_width, std::string const & value, std::string const & offset, std::string const & ptr);
   static std::string vload(unsigned int simd_width, std::string const & offset, std::string const & ptr);
   static std::string append_width(std::string const & str, unsigned int width);
@@ -164,7 +164,7 @@ public:
   virtual int check_invalid(expressions_tuple const & expressions, cl::Device const & device) const = 0;
   virtual void enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
                        unsigned int label, expressions_tuple const & expressions, operation_cache* cache = NULL) = 0;
-  virtual tools::shared_ptr<base> clone() const = 0;
+  virtual std::shared_ptr<base> clone() const = 0;
 private:
   binding_policy_t binding_policy_;
 };
@@ -180,7 +180,7 @@ public:
   base_impl(parameters_type const & parameters, binding_policy_t binding_policy);
   int_t local_size_0() const;
   int_t local_size_1() const;
-  tools::shared_ptr<base> clone() const;
+  std::shared_ptr<base> clone() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
   int check_invalid(expressions_tuple const & expressions, cl::Device const & device) const;
 protected:

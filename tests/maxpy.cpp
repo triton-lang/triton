@@ -125,15 +125,15 @@ void test_impl(T epsilon, cl::Context const & ctx)
 
 int main()
 {
-  for(ad::cl_ext::queues_t::iterator it = ad::cl_ext::queues.begin() ; it != ad::cl_ext::queues.end() ; ++it)
+  for(const auto & elem : ad::cl_ext::queues.data())
   {
-    cl::Device device = it->second[0].getInfo<CL_QUEUE_DEVICE>();
+    cl::Device device = elem.second[0].getInfo<CL_QUEUE_DEVICE>();
     std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, it->first);
+    test_impl<float>(1e-4, elem.first);
     std::cout << ">> double" << std::endl;
-    test_impl<double>(1e-9, it->first);
+    test_impl<double>(1e-9, elem.first);
     std::cout << "---" << std::endl;
   }
   return EXIT_SUCCESS;

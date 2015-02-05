@@ -1,5 +1,5 @@
 #include "atidlas/backend/templates/vaxpy.h"
-#include "atidlas/cl/queues.h"
+#include "atidlas/cl_ext/backend.h"
 #include "atidlas/tools/make_map.hpp"
 #include "atidlas/tools/make_vector.hpp"
 #include "atidlas/tools/to_string.hpp"
@@ -121,8 +121,8 @@ void vaxpy::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler>
   bool fallback = p_.simd_width > 1 && (requires_fallback(expressions) || (size%p_.simd_width>0));
 
   cl::Program const & program = programs[fallback?0:1].program();
-  cl_ext::kernels_t::key_type key(program(), label);
-  cl_ext::kernels_t::iterator it = cl_ext::kernels.find(key);
+  cl_ext::kernels_type::key_type key(program(), label);
+  cl_ext::kernels_type::iterator it = cl_ext::kernels.find(key);
   if(it==cl_ext::kernels.end())
     it = cl_ext::kernels.insert(std::make_pair(key, cl::Kernel(program, fallback?kfb:kopt))).first;
   cl::Kernel & kernel = it->second;

@@ -1,6 +1,6 @@
 #include "atidlas/array.h"
 #include "atidlas/backend/templates/mproduct.h"
-#include "atidlas/cl/lazy_compiler.h"
+#include "atidlas/cl_ext/lazy_compiler.h"
 #include "atidlas/tools/make_vector.hpp"
 #include "atidlas/tools/to_string.hpp"
 
@@ -587,7 +587,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     kernel.setArg(current_arg++, cl_uint(N));
     kernel.setArg(current_arg++, cl_uint(K));
 
-    tools::shared_ptr<symbolic_binder> binder = make_binder();
+    std::shared_ptr<symbolic_binder> binder = make_binder();
     set_arguments_functor fun(*binder, current_arg, kernel);
     fun.set_arguments(C);
     fun.set_arguments(alpha.dtype(), alpha.values());

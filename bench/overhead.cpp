@@ -12,9 +12,9 @@ __global__ void dummy(){}
 
 int main()
 {
-  for(ad::cl_ext::queues_t::iterator it = ad::cl_ext::queues.begin() ; it != ad::cl_ext::queues.end() ; ++it)
+  for(const auto & elem : ad::cl_ext::queues.data())
   {
-    cl::CommandQueue queue = it->second[0];
+    cl::CommandQueue queue = elem.second[0];
     cl::Device device = queue.getInfo<CL_QUEUE_DEVICE>();
     cl::Program program("__kernel void dummy(){}");
                 program.build();

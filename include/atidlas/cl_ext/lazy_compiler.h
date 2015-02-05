@@ -2,7 +2,7 @@
 #define ATIDLAS_CL_LAZY_COMPILER_H
 
 #include <CL/cl.hpp>
-#include "atidlas/cl/program_map.h"
+#include "atidlas/cl_ext/program_map.h"
 
 namespace atidlas
 {

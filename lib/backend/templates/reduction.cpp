@@ -16,9 +16,9 @@ reduction_parameters::reduction_parameters(unsigned int _simd_width,
 unsigned int reduction::lmem_usage(expressions_tuple const & expressions) const
 {
   unsigned int res = 0;
-  for(expressions_tuple::data_type::const_iterator it = expressions.data().begin() ; it != expressions.data().end() ; ++it)
+  for(const auto & elem : expressions.data())
   {
-    numeric_type numeric_t= lhs_most((*it)->tree(), (*it)->root()).lhs.dtype;
+    numeric_type numeric_t= lhs_most((elem)->tree(), (elem)->root()).lhs.dtype;
     res += p_.local_size_0*size_of(numeric_t);
   }
   return res;
@@ -43,13 +43,13 @@ inline void reduction::reduce_1d_local_memory(kernel_generation_stream & stream,
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  for (unsigned int k = 0; k < exprs.size(); k++)
-    if (exprs[k]->is_index_reduction())
-      compute_index_reduction(stream, exprs[k]->process(buf_str+"[lid]"), exprs[k]->process(buf_str+"[lid+stride]")
-                              , exprs[k]->process(buf_value_str+"[lid]"), exprs[k]->process(buf_value_str+"[lid+stride]"),
-                              exprs[k]->root_op());
+  for (auto & expr : exprs)
+    if (expr->is_index_reduction())
+      compute_index_reduction(stream, expr->process(buf_str+"[lid]"), expr->process(buf_str+"[lid+stride]")
+                              , expr->process(buf_value_str+"[lid]"), expr->process(buf_value_str+"[lid+stride]"),
+                              expr->root_op());
     else
-      compute_reduction(stream, exprs[k]->process(buf_str+"[lid]"), exprs[k]->process(buf_str+"[lid+stride]"), exprs[k]->root_op());
+      compute_reduction(stream, expr->process(buf_str+"[lid]"), expr->process(buf_str+"[lid+stride]"), expr->root_op());
   stream.dec_tab();
   stream << "}" << std::endl;
   stream.dec_tab();
@@ -61,8 +61,8 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
   kernel_generation_stream stream;
 
   std::vector<mapped_scalar_reduction*> exprs;
-  for (std::vector<mapping_type>::const_iterator it = mappings.begin(); it != mappings.end(); ++it)
-    for (mapping_type::const_iterator iit = it->begin(); iit != it->end(); ++iit)
+  for (const auto & mapping : mappings)
+    for (mapping_type::const_iterator iit = mapping.begin(); iit != mapping.end(); ++iit)
       if (mapped_scalar_reduction * p = dynamic_cast<mapped_scalar_reduction*>(iit->second.get()))
         exprs.push_back(p);
   std::size_t N = exprs.size();
@@ -122,8 +122,8 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
     {
       std::string i = (simd_width==1)?"i*#stride":"i";
       //Fetch vector entry
-      for (std::vector<mapped_scalar_reduction*>::const_iterator it = exprs.begin(); it != exprs.end(); ++it)
-        (*it)->process_recursive(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";")
+      for (const auto & elem : exprs)
+        (elem)->process_recursive(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";")
                                                                                          ("matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i*#stride2}];")
                                                                                          ("matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column*#stride2}];")
                                                                                          ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i*#stride2}:$OFFSET{i*#stride, (i + #diag_offset)*#stride2}];"));
@@ -137,7 +137,7 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
         for (unsigned int a = 0; a < simd_width; ++a)
           str[a] = append_simd_suffix("#namereg.s", a);
 
-      for (unsigned int k = 0; k < exprs.size(); ++k)
+      for (auto & elem : exprs)
       {
         for (unsigned int a = 0; a < simd_width; ++a)
         {
@@ -147,12 +147,12 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
           accessors["matrix_column"] = str[a];
           accessors["matrix_diag"] = str[a];
           accessors["array0"] = "#namereg";
-          std::string value = exprs[k]->evaluate_recursive(LHS_NODE_TYPE, accessors);
-          if (exprs[k]->is_index_reduction())
-            compute_index_reduction(stream, exprs[k]->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+"
-                                    + tools::to_string(a), exprs[k]->process("#name_acc_value"), value,exprs[k]->root_op());
+          std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, accessors);
+          if (elem->is_index_reduction())
+            compute_index_reduction(stream, elem->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+"
+                                    + tools::to_string(a), elem->process("#name_acc_value"), value,elem->root_op());
           else
-            compute_reduction(stream, exprs[k]->process("#name_acc"), value,exprs[k]->root_op());
+            compute_reduction(stream, elem->process("#name_acc"), value,elem->root_op());
         }
       }
     }
@@ -286,11 +286,11 @@ void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compi
   //Preprocessing
   int_t size = input_sizes(expressions)[0];
   std::vector<array_expression::node const *> reductions;
-  for (expressions_tuple::data_type::const_iterator it = expressions.data().begin(); it != expressions.data().end(); ++it)
+  for (const auto & elem : expressions.data())
   {
-    std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, **it, false);
-    for (std::vector<size_t>::iterator itt = reductions_idx.begin(); itt != reductions_idx.end(); ++itt)
-      reductions.push_back(&(*it)->tree()[*itt]);
+    std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, *elem, false);
+    for (auto & reductions_idx_itt : reductions_idx)
+      reductions.push_back(&(elem)->tree()[reductions_idx_itt]);
   }
 
   //Kernel
@@ -314,10 +314,10 @@ void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compi
   cl::Context context = expressions.context();
   array_expression const & s = *(expressions.data().front());
   unsigned int dtype_size = size_of(lhs_most(s.tree(), s.root()).lhs.dtype);
-  for (unsigned int k = 0; k < 2; k++)
+  for (auto & kernel : kernels)
   {
     unsigned int n_arg = 0;
-    kernels[k].setArg(n_arg++, cl_uint(size));
+    kernel.setArg(n_arg++, cl_uint(size));
 
     //Temporary buffers
     unsigned int i = 0;
@@ -328,15 +328,15 @@ void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compi
       {
         if (tmpidx_.size() <= j)
           tmpidx_.push_back(cl::Buffer(context, CL_MEM_READ_WRITE, p_.num_groups*4));
-        kernels[k].setArg(n_arg++, tmpidx_[j]);
+        kernel.setArg(n_arg++, tmpidx_[j]);
         j++;
       }
       if (tmp_.size() <= i)
         tmp_.push_back(cl::Buffer(context, CL_MEM_READ_WRITE, p_.num_groups*dtype_size));
-      kernels[k].setArg(n_arg++, tmp_[i]);
+      kernel.setArg(n_arg++, tmp_[i]);
       i++;
     }
-    set_arguments(expressions, kernels[k], n_arg);
+    set_arguments(expressions, kernel, n_arg);
   }
 
   for (unsigned int k = 0; k < 2; k++)

@@ -83,8 +83,8 @@ public:
 
   void enqueue()
   {
-    for(std::list<infos>::iterator it = l_.begin() ; it != l_.end() ; ++it)
-      it->queue.enqueueNDRangeKernel(it->kernel, it->offset, it->grange, it->lrange);
+    for(infos & elem : l_)
+      elem.queue.enqueueNDRangeKernel(elem.kernel, elem.offset, elem.grange, elem.lrange);
   }
 
 private:
@@ -173,7 +173,8 @@ struct slice
 };
 typedef slice _;
 
-class obj_base{};
+class array_base{ };
+
 
 }
 #endif

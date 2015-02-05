@@ -11,40 +11,27 @@
 namespace atidlas
 {
 
-array_infos array::init_infos(numeric_type dtype, cl_mem data, int_t shape1, int_t shape2, int_t start1, int_t start2, int_t stride1, int_t stride2, int_t ld)
-{
-  array_infos res;
-  res.dtype = dtype;
-  res.data = data;
-  res.shape1 = shape1;
-  res.shape2 = shape2;
-  res.start1 = start1;
-  res.start2 = start2;
-  res.stride1 = stride1;
-  res.stride2 = stride2;
-  res.ld = ld;
-  return res;
-}
+
 /*--- Constructors ---*/
 
 //1D Constructors
 
 array::array(int_t size1, numeric_type dtype, cl::Context context) :
-  context_(context), data_(context_, CL_MEM_READ_WRITE, size_of(dtype)*size1),
-  infos_(init_infos(dtype, data_(), size1, 1, 0, 0, 1, 1, size1))
-{}
+  dtype_(dtype), shape_(size1, 1), start_(0, 0), stride_(1, 1), ld_(shape_._1),
+  context_(context), data_(context_, CL_MEM_READ_WRITE, size_of(dtype)*dsize())
+{ }
 
 template<class DT>
 array::array(std::vector<DT> const & x, cl::Context context):
-  context_(context), data_(context, CL_MEM_READ_WRITE, size_of(to_numeric_type<DT>::value)*x.size()),
-  infos_(init_infos(to_numeric_type<DT>::value, data_(), x.size(), 1, 0, 0, 1, 1, x.size()))
+  dtype_(to_numeric_type<DT>::value), shape_(x.size(), 1), start_(0, 0), stride_(1, 1), ld_(shape_._1),
+  context_(context), data_(context, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 { *this = x; }
 
-array::array(array & v, slice const & s1) : context_(v.data_.getInfo<CL_MEM_CONTEXT>()), data_(v.data_),
- infos_(init_infos(v.infos_.dtype, data_(), s1.size, 1, v.infos_.start1 + v.infos_.stride1*s1.start, 0, v.infos_.stride1*s1.stride, 1, v.infos_.ld))
+array::array(array & v, slice const & s1) : dtype_(v.dtype_), shape_(s1.size, 1), start_(v.start_._1 + v.stride_._1*s1.start, 0), stride_(v.stride_._1*s1.stride, 1),
+                                            ld_(v.ld_), context_(v.data_.getInfo<CL_MEM_CONTEXT>()), data_(v.data_)
 {}
 
-#define INSTANTIATE(T) template array::array<T>(std::vector<T> const &, cl::Context)
+#define INSTANTIATE(T) template array::array(std::vector<T> const &, cl::Context)
 INSTANTIATE(cl_char);
 INSTANTIATE(cl_uchar);
 INSTANTIATE(cl_short);
@@ -58,26 +45,26 @@ INSTANTIATE(cl_double);
 #undef INSTANTIATE
 
 // 2D
-array::array(int_t size1, int_t size2, numeric_type dtype, cl::Context context) :
-context_(context), data_(context_, CL_MEM_READ_WRITE, size_of(dtype)*size1*size2),
-infos_(init_infos(dtype, data_(), size1, size2, 0, 0, 1, 1, size1))
+array::array(int_t size1, int_t size2, numeric_type dtype, cl::Context context) : dtype_(dtype), shape_(size1, size2), start_(0, 0), stride_(1, 1), ld_(size1),
+                                                                              context_(context), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 {}
 
-array::array(array & M, slice const & s1, slice const & s2) :
-context_(M.data_.getInfo<CL_MEM_CONTEXT>()), data_(M.data_),
-infos_(init_infos(M.dtype(), data_(), s1.size, s2.size, M.start()._1 + M.stride()._1*s1.start, M.start()._2 + M.stride()._2*s2.start,
-       M.stride()._1*s1.stride, M.stride()._2*s2.stride, M.ld()))
+array::array(array & M, slice const & s1, slice const & s2) :  dtype_(M.dtype_), shape_(s1.size, s2.size),
+                                                          start_(M.start_._1 + M.stride_._1*s1.start, M.start_._2 + M.stride_._2*s2.start),
+                                                          stride_(M.stride_._1*s1.stride, M.stride_._2*s2.stride), ld_(M.ld_),
+                                                          context_(M.data_.getInfo<CL_MEM_CONTEXT>()), data_(M.data_)
 { }
 
 template<typename DT>
-array::array(int_t size1, int_t size2, std::vector<DT> const & data, cl::Context context):
-context_(context), data_(context_, CL_MEM_READ_WRITE, size_of(to_numeric_type<DT>::value)*size1*size2),
-infos_(init_infos(to_numeric_type<DT>::value, data_(), size1, size2, 0, 0, 1, 1, size1))
+array::array(int_t size1, int_t size2, std::vector<DT> const & data, cl::Context context)
+  : dtype_(to_numeric_type<DT>::value),
+    shape_(size1, size2), start_(0, 0), stride_(1, 1), ld_(size1),
+    context_(context), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 {
   atidlas::copy(data, *this);
 }
 
-#define INSTANTIATE(T) template array::array<T>(int_t, int_t, std::vector<T> const &, cl::Context)
+#define INSTANTIATE(T) template array::array(int_t, int_t, std::vector<T> const &, cl::Context)
 INSTANTIATE(cl_char);
 INSTANTIATE(cl_uchar);
 INSTANTIATE(cl_short);
@@ -92,43 +79,45 @@ INSTANTIATE(cl_double);
 
 // General
 array::array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, int_t ld, cl::Context context):
-context_(context), data_(data),
-infos_(init_infos(dtype, data_(), s1.size, s2.size, s1.start, s2.start, s1.stride, s2.stride, ld))
+  dtype_(dtype), shape_(s1.size, s2.size), start_(s1.start, s2.start), stride_(s1.stride, s2.stride),
+   ld_(ld), context_(context), data_(data)
 { }
 
-array::array(control const & x):
-context_(x.expression().context()), data_(context_, CL_MEM_READ_WRITE, size_of(x.expression().dtype())*prod(x.expression().shape())),
-infos_(init_infos(x.expression().dtype(), data_(), x.expression().shape()._1, x.expression().shape()._2, 0, 0, 1, 1, x.expression().shape()._1))
+array::array(array_expression const & proxy) :
+  dtype_(proxy.dtype()),
+  shape_(proxy.shape()), start_(0,0), stride_(1, 1), ld_(shape_._1),
+  context_(proxy.context()), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 {
-  *this = x;
+  *this = proxy;
 }
 
-array::array(array const & x) :
-context_(x.context()), data_(context_, CL_MEM_READ_WRITE, size_of(x.dtype())*x.shape()._1*x.shape()._2),
-infos_(init_infos(x.dtype(), data_(), x.shape()._1, x.shape()._2, 0, 0, 1, 1, x.shape()._1))
+array::array(array const & other) :
+  dtype_(other.dtype()),
+  shape_(other.shape()), start_(0,0), stride_(1, 1), ld_(shape_._1),
+  context_(other.context()), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 {
-  *this = x;
+  *this = other;
 }
 
 
 /*--- Getters ---*/
 numeric_type array::dtype() const
-{ return infos_.dtype; }
+{ return dtype_; }
 
 size4 array::shape() const
-{ return size4(infos_.shape1, infos_.shape2); }
+{ return shape_; }
 
 int_t array::nshape() const
-{ return int_t((infos_.shape1 > 1) + (infos_.shape2 > 1)); }
+{ return int_t((shape_._1 > 1) + (shape_._2 > 1)); }
 
 size4 array::start() const
-{ return size4(infos_.start1, infos_.start2); }
+{ return start_; }
 
 size4 array::stride() const
-{ return size4(infos_.stride1, infos_.stride2); }
+{ return stride_; }
 
 int_t array::ld() const
-{ return infos_.ld; }
+{ return ld_; }
 
 cl::Context const & array::context() const
 { return context_; }
@@ -137,27 +126,25 @@ cl::Buffer const & array::data() const
 { return data_; }
 
 int_t array::dsize() const
-{ return infos_.ld*infos_.shape2; }
+{ return ld_*shape_._2; }
 
 /*--- Assignment Operators ----*/
 //---------------------------------------
 array & array::operator=(array const & rhs)
 {
-  assert(dtype() == rhs.dtype());
-  array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype(), shape());
-  cl::CommandQueue & queue = cl_ext::get_queue(context_, 0);
+  assert(dtype_ == rhs.dtype());
+  array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
+  cl::CommandQueue & queue = cl_ext::queues[context_][0];
   model_map_t & mmap = atidlas::get_model_map(queue);
   execute(expression, mmap);
   return *this;
 }
 
-array & array::operator=(control const & x)
+array & array::operator=(array_expression const & rhs)
 {
-  array_expression const & rhs = x.expression();
-
-  assert(dtype() == rhs.dtype());
-  array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), dtype(), shape());
-  cl::CommandQueue & queue = cl_ext::get_queue(context_, 0);
+  assert(dtype_ == rhs.dtype());
+  array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), dtype_, shape_);
+  cl::CommandQueue & queue = cl_ext::queues[context_][0];
   model_map_t & mmap = atidlas::get_model_map(queue);
   execute(expression, mmap);
   return *this;
@@ -186,47 +173,47 @@ INSTANTIATE(cl_double);
 #undef INSTANTIATE
 
 array_expression array::operator-()
-{ return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype(), shape()); }
+{ return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
 
 array_expression array::operator!()
-{ return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), context_, INT_TYPE, shape()); }
+{ return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), context_, INT_TYPE, shape_); }
 
 //
 array & array::operator+=(value_scalar const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype_, shape_); }
 
 array & array::operator+=(array const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype_, shape_); }
 
 array & array::operator+=(array_expression const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), dtype_, shape_); }
 //----
 array & array::operator-=(value_scalar const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
 
 array & array::operator-=(array const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
 
 array & array::operator-=(array_expression const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), dtype_, shape_); }
 //----
 array & array::operator*=(value_scalar const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), context_, dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), context_, dtype_, shape_); }
 
 array & array::operator*=(array const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), context_, dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), context_, dtype_, shape_); }
 
 array & array::operator*=(array_expression const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), dtype_, shape_); }
 //----
 array & array::operator/=(value_scalar const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), context_, dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), context_, dtype_, shape_); }
 
 array & array::operator/=(array const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), context_, dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), context_, dtype_, shape_); }
 
 array & array::operator/=(array_expression const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), dtype(), shape()); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), dtype_, shape_); }
 
 array_expression array::T() const
 { return atidlas::trans(*this) ;}
@@ -236,13 +223,13 @@ array_expression array::T() const
 scalar array::operator [](int_t idx)
 {
   assert(nshape()==1);
-  return scalar(dtype(), data_, idx, context_);
+  return scalar(dtype_, data_, idx, context_);
 }
 
 const scalar array::operator [](int_t idx) const
 {
   assert(nshape()==1);
-  return scalar(dtype(), data_, idx, context_);
+  return scalar(dtype_, data_, idx, context_);
 }
 
 
@@ -263,7 +250,7 @@ namespace detail
 template<class T>
 void copy(cl::Context & ctx, cl::Buffer const & data, T value)
 {
-  cl_ext::get_queue(ctx, 0).enqueueWriteBuffer(data, CL_TRUE, 0, sizeof(T), (void*)&value);
+  cl_ext::queues[ctx][0].enqueueWriteBuffer(data, CL_TRUE, 0, sizeof(T), (void*)&value);
 }
 
 }
@@ -273,7 +260,7 @@ scalar::scalar(numeric_type dtype, const cl::Buffer &data, int_t offset, cl::Con
 
 scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype(), context)
 {
-  switch(dtype())
+  switch(dtype_)
   {
 //    case BOOL_TYPE: detail::copy(context_, data_, (cl_bool)value); break;
     case CHAR_TYPE: detail::copy(context_, data_, (cl_char)value); break;
@@ -287,7 +274,7 @@ scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype()
 //    case HALF_TYPE: detail::copy(context_, data_, (cl_float)value); break;
     case FLOAT_TYPE: detail::copy(context_, data_, (cl_float)value); break;
     case DOUBLE_TYPE: detail::copy(context_, data_, (cl_double)value); break;
-    default: throw unknown_datatype(dtype());
+    default: throw unknown_datatype(dtype_);
   }
 }
 
@@ -295,19 +282,19 @@ scalar::scalar(value_scalar value, cl::Context context) : array(1, value.dtype()
 scalar::scalar(numeric_type dtype, cl::Context context) : array(1, dtype, context)
 { }
 
-scalar::scalar(control const &proxy) : array(proxy){ }
+scalar::scalar(array_expression const & proxy) : array(proxy){ }
 
 template<class T>
 T scalar::cast() const
 {
   values_holder v;
-  int_t dtsize = size_of(dtype());
+  int_t dtsize = size_of(dtype_);
 #define HANDLE_CASE(DTYPE, VAL) \
 case DTYPE:\
-  cl_ext::get_queue(context_, 0).enqueueReadBuffer(data_, CL_TRUE, infos_.start1*dtsize, dtsize, (void*)&v.VAL);\
+  cl_ext::queues[context_][0].enqueueReadBuffer(data_, CL_TRUE, start_._1*dtsize, dtsize, (void*)&v.VAL);\
   return v.VAL
 
-  switch(dtype())
+  switch(dtype_)
   {
 //    HANDLE_CASE(BOOL_TYPE, bool8);
     HANDLE_CASE(CHAR_TYPE, int8);
@@ -321,7 +308,7 @@ case DTYPE:\
 //    HANDLE_CASE(HALF_TYPE, float16);
     HANDLE_CASE(FLOAT_TYPE, float32);
     HANDLE_CASE(DOUBLE_TYPE, float64);
-    default: throw unknown_datatype(dtype());
+    default: throw unknown_datatype(dtype_);
   }
 #undef HANDLE_CASE
 
@@ -329,16 +316,16 @@ case DTYPE:\
 
 scalar& scalar::operator=(value_scalar const & s)
 {
-  cl::CommandQueue& queue = cl_ext::get_queue(context_, 0);
-  int_t dtsize = size_of(dtype());
+  cl::CommandQueue& queue = cl_ext::queues[context_][0];
+  int_t dtsize = size_of(dtype_);
 
 #define HANDLE_CASE(TYPE, CLTYPE) case TYPE:\
                             {\
                               CLTYPE v = s;\
-                              queue.enqueueWriteBuffer(data_, CL_TRUE, infos_.start1*dtsize, dtsize, (void*)&v);\
+                              queue.enqueueWriteBuffer(data_, CL_TRUE, start_._1*dtsize, dtsize, (void*)&v);\
                               return *this;\
                             }
-  switch(dtype())
+  switch(dtype_)
   {
 //    HANDLE_CASE(BOOL_TYPE, cl_bool)
     HANDLE_CASE(CHAR_TYPE, cl_char)
@@ -352,7 +339,7 @@ scalar& scalar::operator=(value_scalar const & s)
 //    HANDLE_CASE(HALF_TYPE, cl_half)
     HANDLE_CASE(FLOAT_TYPE, cl_float)
     HANDLE_CASE(DOUBLE_TYPE, cl_double)
-    default: throw unknown_datatype(dtype());
+    default: throw unknown_datatype(dtype_);
   }
 }
 
@@ -707,18 +694,11 @@ namespace detail
 array reshape(array const & a, int_t size1, int_t size2)
 {
   array tmp(a);
-  tmp.infos_.shape1 = size1;
-  tmp.infos_.shape2 = size2;
+  tmp.shape_._1 = size1;
+  tmp.shape_._2 = size2;
   return tmp;
 }
 
-array reshape(array_expression const & a, int_t size1, int_t size2)
-{
-  array tmp(a);
-  tmp.infos_.shape1 = size1;
-  tmp.infos_.shape2 = size2;
-  return tmp;
-}
 
 #define DEFINE_DOT(LTYPE, RTYPE) \
 array_expression dot(LTYPE const & x, RTYPE const & y)\
@@ -804,10 +784,10 @@ void copy(array const & x, void* data, cl::CommandQueue & queue, bool blocking)
 }
 
 void copy(void const *data, array &x, bool blocking)
-{ copy(data, x, cl_ext::get_queue(x.context(), 0), blocking); }
+{ copy(data, x, cl_ext::queues[x.context()][0], blocking); }
 
 void copy(array const & x, void* data, bool blocking)
-{ copy(x, data, cl_ext::get_queue(x.context(), 0), blocking); }
+{ copy(x, data, cl_ext::queues[x.context()][0], blocking); }
 
 //std::vector<>
 template<class T>
@@ -832,11 +812,11 @@ void copy(array const & x, std::vector<T> & cx, cl::CommandQueue & queue, bool b
 
 template<class T>
 void copy(std::vector<T> const & cx, array & x, bool blocking)
-{ copy(cx, x, cl_ext::get_queue(x.context(), 0), blocking); }
+{ copy(cx, x, cl_ext::queues[x.context()][0], blocking); }
 
 template<class T>
 void copy(array const & x, std::vector<T> & cx, bool blocking)
-{ copy(x, cx, cl_ext::get_queue(x.context(), 0), blocking); }
+{ copy(x, cx, cl_ext::queues[x.context()][0], blocking); }
 
 #define INSTANTIATE(T) \
   template void copy<T>(std::vector<T> const &, array &, cl::CommandQueue&, bool);\

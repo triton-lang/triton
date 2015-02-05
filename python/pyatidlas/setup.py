@@ -45,7 +45,7 @@ def main():
         return optlist
 
     cvars = sysconfig.get_config_vars()
-    cvars['OPT'] = "-DNDEBUG -O3 " + str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-O', '-Wstrict-prototypes', '-DNDEBUG']))
+    cvars['OPT'] = "-DNDEBUG -O3 -std=c++11 " + str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-O', '-Wstrict-prototypes', '-DNDEBUG']))
     cvars["CFLAGS"] = cvars["BASECFLAGS"] + " " + cvars["OPT"]
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
     

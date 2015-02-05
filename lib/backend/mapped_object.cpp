@@ -74,8 +74,8 @@ std::string mapped_object::process(std::string const & in) const
 {
   std::string res(in);
   preprocess(res);
-  for (std::map<std::string,std::string>::const_iterator it = keywords_.begin(); it != keywords_.end(); ++it)
-    tools::find_and_replace(res, it->first, it->second);
+  for (const auto & elem : keywords_)
+    tools::find_and_replace(res, elem.first, elem.second);
   postprocess(res);
   return res;
 }

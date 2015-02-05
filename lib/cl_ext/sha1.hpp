@@ -213,8 +213,8 @@ inline std::string sha1(std::string const & src)
   sha1.getDigest(hash);
 
   std::ostringstream oss;
-  for (int i = 0; i < 5; ++i)
-    oss << std::hex << std::setfill('0') << std::setw(8) << hash[i];
+  for (auto & elem : hash)
+    oss << std::hex << std::setfill('0') << std::setw(8) << elem;
 
   return oss.str();
 }
