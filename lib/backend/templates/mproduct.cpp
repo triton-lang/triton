@@ -568,7 +568,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   void mproduct::enqueue_block(cl::CommandQueue & queue, int_t M, int_t N, int_t K,
                      array_infos const & A, array_infos const & B, array_infos const & C,
                      value_scalar const & alpha, value_scalar const & beta,
-                     std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, int id, operation_cache * cache)
+                     std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, int id, execution_options_type const & options)
   {
     if (A.shape1==0 || A.shape2==0 || B.shape1==0 || B.shape2==0 || C.shape1==0 || C.shape2==0)
       return;
@@ -578,8 +578,8 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
     cl::Program & program = programs[id].program();
     cl::Kernel kernel(program, kname);
-    cl::NDRange lrange(p_.local_size_0, p_.local_size_1);
-    cl::NDRange grange = (id==1)?cl::NDRange(align(align(M,p_.mS)/p_.mS, p_.local_size_0), align(align(N,p_.nS)/p_.nS, p_.local_size_1)):
+    cl::NDRange local(p_.local_size_0, p_.local_size_1);
+    cl::NDRange global = (id==1)?cl::NDRange(align(align(M,p_.mS)/p_.mS, p_.local_size_0), align(align(N,p_.nS)/p_.nS, p_.local_size_1)):
                                  cl::NDRange(M/p_.mS, N/p_.nS);
 
     unsigned int current_arg = 0;
@@ -595,10 +595,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     fun.set_arguments(B);
     fun.set_arguments(beta.dtype(), beta.values());
 
-    queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
-
-    if(cache)
-      cache->push_back(queue, kernel, cl::NullRange, grange, lrange);
+    options.enqueue_cache(queue,kernel, cl::NullRange, global, local);
   }
 
   array_infos mproduct::create_slice(array_infos & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap)
@@ -649,12 +646,16 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return infos(expressions, d0, d1, d2);
   }
 
-  void mproduct::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, expressions_tuple const & expressions, operation_cache * cache)
+  void mproduct::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, controller<expressions_tuple> const & controller)
   {
     using namespace tools;
 
+    expressions_tuple const & expressions = controller.x();
+
     lhs_rhs_element C, A, B;
     std::vector<int_t> MNK = infos(expressions, C, A, B);
+
+    execution_options_type const & options = controller.execution_options();
 
     int_t M = MNK[0];
     int_t N = MNK[1];
@@ -687,7 +688,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     {
       enqueue_block(queue, M, N, K, create_slice(pA, 0, M, 0, K, swap_A),
                     create_slice(pB, 0, K, 0, N,  swap_B),
-                    create_slice(pC, 0, M, 0, N, false), *_1, *_0, programs, label, 1, cache);
+                    create_slice(pC, 0, M, 0, N, false), *_1, *_0, programs, label, 1, options);
       return;
     }
 
@@ -695,17 +696,17 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     int_t lN = N / p_.nL * p_.nL;
     int_t lK = K / p_.kL * p_.kL;
 
-    enqueue_block(queue,  lM, lN, lK, create_slice(pA, 0, lM, 0, lK, swap_A), create_slice(pB, 0, lK, 0, lN, swap_B), create_slice(pC, 0, lM, 0, lN, false), *_1, *_0, programs, label, 0, cache);
-    enqueue_block(queue,  lM, lN, K - lK, create_slice(pA, 0, lM, lK, K, swap_A), create_slice(pB, lK, K, 0, lN, swap_B), create_slice(pC, 0, lM, 0, lN, false), *_1, *_1, programs, label, 1, cache);
+    enqueue_block(queue,  lM, lN, lK, create_slice(pA, 0, lM, 0, lK, swap_A), create_slice(pB, 0, lK, 0, lN, swap_B), create_slice(pC, 0, lM, 0, lN, false), *_1, *_0, programs, label, 0, options);
+    enqueue_block(queue,  lM, lN, K - lK, create_slice(pA, 0, lM, lK, K, swap_A), create_slice(pB, lK, K, 0, lN, swap_B), create_slice(pC, 0, lM, 0, lN, false), *_1, *_1, programs, label, 1, options);
 
-    enqueue_block(queue,  lM, N - lN, lK, create_slice(pA, 0, lM, 0, lK, swap_A), create_slice(pB, 0, lK, lN, N, swap_B), create_slice(pC, 0, lM, lN, N, false), *_1, *_0, programs, label, 1, cache);
-    enqueue_block(queue,  lM, N - lN, K - lK, create_slice(pA, 0, lM, lK, K, swap_A), create_slice(pB, lK, K, lN, N, swap_B), create_slice(pC, 0, lM, lN, N, false), *_1, *_1, programs, label, 1, cache);
+    enqueue_block(queue,  lM, N - lN, lK, create_slice(pA, 0, lM, 0, lK, swap_A), create_slice(pB, 0, lK, lN, N, swap_B), create_slice(pC, 0, lM, lN, N, false), *_1, *_0, programs, label, 1, options);
+    enqueue_block(queue,  lM, N - lN, K - lK, create_slice(pA, 0, lM, lK, K, swap_A), create_slice(pB, lK, K, lN, N, swap_B), create_slice(pC, 0, lM, lN, N, false), *_1, *_1, programs, label, 1, options);
 
-    enqueue_block(queue,  M - lM, lN, lK, create_slice(pA, lM, M, 0, lK, swap_A), create_slice(pB, 0, lK, 0, lN, swap_B), create_slice(pC, lM, M, 0, lN, false), *_1, *_0, programs, label, 1, cache);
-    enqueue_block(queue,  M - lM, lN, K - lK, create_slice(pA, lM, M, lK, K, swap_A), create_slice(pB, lK, K, 0, lN, swap_B), create_slice(pC, lM, M, 0, lN, false), *_1, *_1, programs, label, 1, cache);
+    enqueue_block(queue,  M - lM, lN, lK, create_slice(pA, lM, M, 0, lK, swap_A), create_slice(pB, 0, lK, 0, lN, swap_B), create_slice(pC, lM, M, 0, lN, false), *_1, *_0, programs, label, 1, options);
+    enqueue_block(queue,  M - lM, lN, K - lK, create_slice(pA, lM, M, lK, K, swap_A), create_slice(pB, lK, K, 0, lN, swap_B), create_slice(pC, lM, M, 0, lN, false), *_1, *_1, programs, label, 1, options);
 
-    enqueue_block(queue,  M - lM, N - lN, lK, create_slice(pA, lM, M, 0, lK, swap_A), create_slice(pB, 0, lK, lN, N, swap_B), create_slice(pC, lM, M, lN, N, false), *_1, *_0, programs, label, 1, cache);
-    enqueue_block(queue,  M - lM, N - lN, K - lK, create_slice(pA, lM, M, lK, K, swap_A), create_slice(pB, lK, K, lN, N, swap_B), create_slice(pC, lM, M, lN, N, false), *_1, *_1, programs, label, 1, cache);
+    enqueue_block(queue,  M - lM, N - lN, lK, create_slice(pA, lM, M, 0, lK, swap_A), create_slice(pB, 0, lK, lN, N, swap_B), create_slice(pC, lM, M, lN, N, false), *_1, *_0, programs, label, 1, options);
+    enqueue_block(queue,  M - lM, N - lN, K - lK, create_slice(pA, lM, M, lK, K, swap_A), create_slice(pB, lK, K, lN, N, swap_B), create_slice(pC, lM, M, lN, N, false), *_1, *_1, programs, label, 1, options);
   }
 
   //

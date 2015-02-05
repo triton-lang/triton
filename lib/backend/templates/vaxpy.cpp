@@ -108,9 +108,9 @@ std::vector<int_t> vaxpy::input_sizes(expressions_tuple const & expressions)
   return tools::make_vector<int_t>() << size;
 }
 
-void vaxpy::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
-                               unsigned int label, expressions_tuple const & expressions, operation_cache * cache)
+void vaxpy::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, controller<expressions_tuple> const & controller)
 {
+  expressions_tuple const & expressions = controller.x();
   //Size
   int_t size = input_sizes(expressions)[0];
   //Kernel
@@ -128,16 +128,14 @@ void vaxpy::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler>
   cl::Kernel & kernel = it->second;
 
   //NDRange
-  cl::NDRange grange(p_.local_size_0*p_.num_groups);
-  cl::NDRange lrange(p_.local_size_0);
+  cl::NDRange global(p_.local_size_0*p_.num_groups);
+  cl::NDRange local(p_.local_size_0);
   //Arguments
   unsigned int current_arg = 0;
   kernel.setArg(current_arg++, cl_uint(size));
   set_arguments(expressions, kernel, current_arg);
-  queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
 
-  if(cache)
-    cache->push_back(queue, kernel, cl::NullRange, grange, lrange);
+  controller.execution_options().enqueue_cache(queue, kernel, cl::NullRange, global, local);
 }
 
 

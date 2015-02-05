@@ -61,36 +61,6 @@ struct array_infos
   int_t ld;
 };
 
-class operation_cache
-{
-  struct infos
-  {
-    infos(cl::CommandQueue & q, cl::Kernel const & k, cl::NDRange const & off, cl::NDRange const & g, cl::NDRange const & l)
-      : queue(q), kernel(k), offset(off), grange(g), lrange(l) {}
-
-    cl::CommandQueue & queue;
-    cl::Kernel kernel;
-    cl::NDRange offset;
-    cl::NDRange grange;
-    cl::NDRange lrange;
-  };
-
-public:
-  void push_back(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange const & offset, cl::NDRange const & grange, cl::NDRange const & lrange)
-  {
-    l_.push_back(infos(queue, kernel, offset, grange, lrange));
-  }
-
-  void enqueue()
-  {
-    for(infos & elem : l_)
-      elem.queue.enqueueNDRangeKernel(elem.kernel, elem.offset, elem.grange, elem.lrange);
-  }
-
-private:
-  std::list<infos> l_;
-};
-
 inline std::string numeric_type_to_string(numeric_type const & type)
 {
   switch (type)

@@ -35,7 +35,7 @@ private:
   std::vector<std::string> generate_impl(unsigned int, expressions_tuple const &, std::vector<mapping_type> const &) const;
 public:
   virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions);
-  void enqueue(cl::CommandQueue & queue,std::vector<cl_ext::lazy_compiler> & programs,unsigned int label, expressions_tuple const & expressions, operation_cache * cache = NULL);
+  void enqueue(cl::CommandQueue & queue,std::vector<cl_ext::lazy_compiler> & programs,unsigned int label, controller<expressions_tuple> const &);
 private:
   reduction_type reduction_type_;
 };

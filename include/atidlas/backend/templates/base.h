@@ -163,7 +163,7 @@ public:
   std::vector<std::string> generate(unsigned int label, expressions_tuple const & expressions, cl::Device const & device);
   virtual int check_invalid(expressions_tuple const & expressions, cl::Device const & device) const = 0;
   virtual void enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
-                       unsigned int label, expressions_tuple const & expressions, operation_cache* cache = NULL) = 0;
+                       unsigned int label, controller<expressions_tuple> const & expressions) = 0;
   virtual std::shared_ptr<base> clone() const = 0;
 private:
   binding_policy_t binding_policy_;

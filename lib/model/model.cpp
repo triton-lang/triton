@@ -46,18 +46,19 @@ void model::fill_program_name(char* program_name, expressions_tuple const & expr
   delete binder;
 }
 
-std::vector<cl_ext::lazy_compiler>& model::init(expressions_tuple const & expressions, runtime_options const & opt)
+std::vector<cl_ext::lazy_compiler>& model::init(controller<expressions_tuple> const & expressions)
 {
-  cl::Context const & context = expressions.context();
+  cl::Context const & context = expressions.x().context();
   std::string pname;
+  compilation_options_type const & opt = expressions.compilation_options();
   if(opt.program_name.empty())
   {
     char program_name[256];
-    fill_program_name(program_name, expressions, BIND_TO_HANDLE);
+    fill_program_name(program_name, expressions.x(), BIND_TO_HANDLE);
     pname = std::string(program_name);
   }
   else
-    pname = opt.program_name;
+    pname = expressions.compilation_options().program_name;
   std::vector<cl_ext::lazy_compiler> & to_init = lazy_programs_[context()][pname];
   if(to_init.empty())
   {
@@ -72,7 +73,7 @@ std::vector<cl_ext::lazy_compiler>& model::init(expressions_tuple const & expres
 
     for(size_t i = 0 ; i < templates_.size() ; ++i)
     {
-      std::vector<std::string> cur = templates_[i]->generate(i, expressions, device);
+      std::vector<std::string> cur = templates_[i]->generate(i, expressions.x(), device);
       for(size_t j = 0 ; j < cur.size() ; ++j){
         to_init[j].add(cur[j]);
       }
@@ -91,19 +92,19 @@ model::model(std::vector< std::shared_ptr<base> > const & templates, cl::Command
 model::model(base const & tp, cl::CommandQueue & queue) : templates_(1,tp.clone()), queue_(queue)
 {}
 
-void model::execute(expressions_tuple const & expressions, operation_cache *cache, runtime_options const & opt)
+void model::execute(controller<expressions_tuple> const & expressions)
 {
-  std::vector<cl_ext::lazy_compiler> & compilers = init(expressions, opt);
+  std::vector<cl_ext::lazy_compiler> & compilers = init(expressions);
 
   //Prediction
   int label = 0;
-  if(opt.label>=0)
+  if(expressions.dispatcher_options().label>=0)
   {
-      label = opt.label;
+      label = expressions.dispatcher_options().label;
   }
   else
   {
-    std::vector<int_t> x = templates_[0]->input_sizes(expressions);
+    std::vector<int_t> x = templates_[0]->input_sizes(expressions.x());
     //The user tuned the model specifically for this input size
     if(hardcoded_.find(x)!=hardcoded_.end())
       label = hardcoded_.at(x);
@@ -116,10 +117,10 @@ void model::execute(expressions_tuple const & expressions, operation_cache *cach
   }
 
   //Execution
-  return templates_[label]->enqueue(queue_, compilers, label, expressions, cache);
+  return templates_[label]->enqueue(queue_, compilers, label, expressions);
 }
 
-void model::tune(expressions_tuple const & expressions)
+void model::tune(controller<expressions_tuple> const & expressions)
 {
   std::vector<cl_ext::lazy_compiler> & compilers = init(expressions);
 
@@ -135,7 +136,7 @@ void model::tune(expressions_tuple const & expressions)
   }
 
   //Fill the override
-  std::vector<int_t> x = templates_[0]->input_sizes(expressions);
+  std::vector<int_t> x = templates_[0]->input_sizes(expressions.x());
   hardcoded_[x] = std::distance(timings.begin(),std::min_element(timings.begin(), timings.end()));
 }
 

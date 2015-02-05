@@ -27,44 +27,39 @@ void bench(ad::numeric_type dtype)
   ad::tools::timer timer;
   unsigned int dtsize = ad::size_of(dtype);
 
-#define BENCHMARK(OP, PERF) \
+#define BENCHMARK(OP, TIME, PERF) \
   {\
-  times.clear();\
   total_time = 0;\
-  OP;\
-  while(total_time < 1e-1){\
-    timer.start(); \
+  while(total_time < 1e-3){\
+    cl::Event event;\
     OP;\
-    times.push_back(timer.get());\
+    times.push_back(TIME);\
     total_time += times.back();\
   }\
   float tres = median(times);\
-  std::cout << " " << PERF << std::flush;\
+  std::cout << " " << tres << std::flush;\
   }
 
+#define CL_TIME
+#define CL_SYNC queue.flush(); queue.finish()
   /*---------*/
   /*--BLAS1--*/
   /*---------*/
   std::cout << "#AXPY" << std::endl;
   for(auto N : BLAS1_N)
   {
-    
     std::cout << N;
     /* ATIDLAS */
     ad::array x(N, dtype), y(N, dtype);
-    cl::CommandQueue & queue = ad::cl_ext::queues[x.context()][0];
-    ad::model & model = ad::get_model(queue, ad::VECTOR_AXPY_TYPE, dtype);
-    ad::array_expression E = ad::detail::assign(y, x + y);
-    model.tune(E);
-    ad::operation_cache cache;
-    model.execute(E, &cache);
-    queue.flush();
-    queue.finish();
-    BENCHMARK(cache.enqueue(); queue.flush(); queue.finish();, bandwidth(3*N, tres, dtsize));
-    /* clAmdBlas */
-#ifdef BENCH_CLAMDBLAS
-    BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &queue(), 0, NULL, NULL); queue.flush(); queue.finish();, bandwidth(3*N, tres, dtsize))
-#endif
+    cl::CommandQueue& queue = ad::cl_ext::queues[x.context()][0];
+    cl::Event event;
+    y = ad::controller<atidlas::array_expression>(x + y, ad::execution_options_type(0, &event));
+    queue.flush(); queue.finish();
+    std::cout << " " << bandwidth(3*N, 1e-9*(event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -  event.getProfilingInfo<CL_PROFILING_COMMAND_SUBMIT>()), dtsize) << std::flush;
+//    /* clAmdBlas */
+//#ifdef BENCH_CLAMDBLAS
+//    BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &queue(), 0, &event(), NULL); CL_SYNC,  CL_TIME, bandwidth(3*N, tres, dtsize))
+//#endif
     /* BLAS */
 #ifdef BENCH_CBLAS
     std::vector<float> cx(N), cy(N);
@@ -176,6 +171,8 @@ int main(int argc, char* argv[])
 #ifdef BENCH_CLAMDBLAS
   clAmdBlasSetup();
 #endif
+
+  ad::cl_ext::queue_properties = CL_QUEUE_PROFILING_ENABLE;
 
   int device_idx = 0;
   ad::cl_ext::queues_type::data_type const & queues = ad::cl_ext::queues.data();

@@ -17,29 +17,19 @@ namespace atidlas
   class model
   {
     typedef std::vector< std::shared_ptr<base> > templates_container;
-  public:
-    struct runtime_options
-    {
-      runtime_options() : label(-1), recompile(false){}
-      runtime_options(std::string const & p) : program_name(p), label(-1), recompile(false){}
-
-      std::string program_name;
-      int label;
-      bool recompile;
-    };
 
   private:
     std::string define_extension(std::string const & extensions, std::string const & ext);
     inline void fill_program_name(char* program_name, expressions_tuple const & expressions, binding_policy_t binding_policy);
-    std::vector<cl_ext::lazy_compiler>& init(expressions_tuple const & expressions, runtime_options const & opt = runtime_options());
+    std::vector<cl_ext::lazy_compiler>& init(controller<expressions_tuple> const &);
 
   public:
     model(predictors::random_forest const &, std::vector< std::shared_ptr<base> > const &, cl::CommandQueue &);
     model(std::vector< std::shared_ptr<base> > const &, cl::CommandQueue &);
     model(base const &, cl::CommandQueue &);
 
-    void execute(expressions_tuple const &, operation_cache * cache = NULL, runtime_options const & opt = runtime_options());
-    void tune(expressions_tuple const &);
+    void execute(controller<expressions_tuple> const &);
+    void tune(controller<expressions_tuple> const &);
 
     templates_container const & templates() const;
   private:

@@ -2,6 +2,7 @@
 #define ATIDLAS_ARRAY_H_
 
 #include <iostream>
+#include <type_traits>
 #include <CL/cl.hpp>
 #include "atidlas/types.h"
 #include "atidlas/cl_ext/backend.h"
@@ -16,6 +17,8 @@ class scalar;
 class array: public array_base
 {
   friend array reshape(array const &, int_t, int_t);
+  template<class T>
+  struct is_array { enum{ value = std::is_same<T, array>::value || std::is_same<T, array_expression>::value}; };
 public:
   //1D Constructors
   array(int_t size1, numeric_type dtype, cl::Context context = cl_ext::default_context());
@@ -51,8 +54,10 @@ public:
   //Numeric operators
   array& operator=(array const &);
   array& operator=(array_expression const &);
-
-  template<class T> array & operator=(std::vector<T> const & rhs);
+  template<class T>
+  array& operator=(controller<T> const &);
+  template<class T>
+  array & operator=(std::vector<T> const & rhs);
 
   array_expression operator-();
   array_expression operator!();

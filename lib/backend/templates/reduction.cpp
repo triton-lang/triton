@@ -280,9 +280,10 @@ std::vector<int_t> reduction::input_sizes(expressions_tuple const & expressions)
   return tools::make_vector<int_t>() << N;
 }
 
-void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
-             unsigned int label, expressions_tuple const & expressions, operation_cache * cache)
+void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, controller<expressions_tuple> const & controller)
 {
+  expressions_tuple const & expressions = controller.x();
+
   //Preprocessing
   int_t size = input_sizes(expressions)[0];
   std::vector<array_expression::node const *> reductions;
@@ -307,8 +308,8 @@ void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compi
                             cl::Kernel(program, fallback?kfallback[1]:kopt[1]) };
 
   //NDRange
-  cl::NDRange grange[2] = { cl::NDRange(p_.local_size_0*p_.num_groups), cl::NDRange(p_.local_size_0) };
-  cl::NDRange lrange[2] = { cl::NDRange(p_.local_size_0), cl::NDRange(p_.local_size_0) };
+  cl::NDRange global[2] = { cl::NDRange(p_.local_size_0*p_.num_groups), cl::NDRange(p_.local_size_0) };
+  cl::NDRange local[2] = { cl::NDRange(p_.local_size_0), cl::NDRange(p_.local_size_0) };
 
   //Arguments
   cl::Context context = expressions.context();
@@ -340,11 +341,7 @@ void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compi
   }
 
   for (unsigned int k = 0; k < 2; k++)
-    queue.enqueueNDRangeKernel(kernels[k], cl::NullRange, grange[k], lrange[k]);
-
-  if(cache)
-    for (unsigned int k = 0; k < 2; k++)
-      cache->push_back(queue, kernels[k], cl::NullRange, grange[k], lrange[k]);
+    controller.execution_options().enqueue_cache(queue, kernels[k], cl::NullRange, global[k], local[k]);
 }
 
 template class base_impl<reduction, reduction_parameters>;

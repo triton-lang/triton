@@ -209,7 +209,8 @@ namespace detail
       else if(name=="uint64") return atd::ULONG_TYPE;
       else if(name=="float32") return atd::FLOAT_TYPE;
       else if(name=="float64") return atd::DOUBLE_TYPE;
-      else{
+      else
+      {
           PyErr_SetString(PyExc_TypeError, "Data type not understood");
           bp::throw_error_already_set();
           throw;
@@ -233,7 +234,8 @@ namespace detail
       else if(name=="mproduct_tn") return atd::MATRIX_PRODUCT_TN_TYPE;
       else if(name=="mproduct_nt") return atd::MATRIX_PRODUCT_NT_TYPE;
       else if(name=="mproduct_tt") return atd::MATRIX_PRODUCT_TT_TYPE;
-      else{
+      else
+      {
           PyErr_SetString(PyExc_TypeError, "Template type not understood");
           bp::throw_error_already_set();
           throw;

@@ -147,11 +147,12 @@ namespace atidlas
   }
 
   /** @brief Executes a array_expression on the given models map*/
-  void execute(atidlas::array_expression & array_expression, model_map_t & models, operation_cache * cache)
+  void execute(controller<array_expression> const & c, model_map_t & models)
   {
-    cl::Context const & context = array_expression.context();
-    size_t rootidx = array_expression.root();
-    array_expression::container_type & tree = const_cast<array_expression::container_type &>(array_expression.tree());
+    array_expression expression = c.x();
+    cl::Context const & context = expression.context();
+    size_t rootidx = expression.root();
+    array_expression::container_type & tree = const_cast<array_expression::container_type &>(expression.tree());
     array_expression::node root_save = tree[rootidx];
 
     //Todo: technically the datatype should be per temporary
@@ -207,7 +208,7 @@ namespace atidlas
       tree[rootidx].rhs.type_family = rit->second->type_family;
 
       //Execute
-      pmodel->execute(array_expression);
+      pmodel->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
       tree[rootidx] = root_save;
 
       //Incorporates the temporary within the array_expression
@@ -215,7 +216,7 @@ namespace atidlas
     }
 
     /*-----Compute final expression-----*/
-    models[std::make_pair(final_type, dtype)]->execute(array_expression, cache);
+    models[std::make_pair(final_type, dtype)]->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
   }
 
 }

@@ -214,9 +214,10 @@ std::vector<int_t> mreduction::input_sizes(expressions_tuple const & expressions
   return tools::make_vector<int_t>() << MN.first << MN.second;
 }
 
-void mreduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
-             unsigned int label,  expressions_tuple const & expressions, operation_cache * cache)
+void mreduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label,  controller<expressions_tuple> const & controller)
 {
+  expressions_tuple const & expressions = controller.x();
+
   char kname[10];
   fill_kernel_name(kname, label, "d");
   std::vector<int_t> MN = input_sizes(expressions);
@@ -229,18 +230,15 @@ void mreduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_comp
   cl::Kernel kernel(program, kname);
 
   //NDRange
-  cl::NDRange grange(p_.local_size_0*p_.num_groups_0, p_.local_size_1);
-  cl::NDRange lrange(p_.local_size_0, p_.local_size_1);
+  cl::NDRange global(p_.local_size_0*p_.num_groups_0, p_.local_size_1);
+  cl::NDRange local(p_.local_size_0, p_.local_size_1);
 
   unsigned int current_arg = 0;
   kernel.setArg(current_arg++, cl_uint(MN[0]));
   kernel.setArg(current_arg++, cl_uint(MN[1]));
   set_arguments(expressions, kernel, current_arg);
 
-  queue.enqueueNDRangeKernel(kernel, cl::NullRange, grange, lrange);
-
-  if(cache)
-    cache->push_back(queue, kernel, cl::NullRange, grange, lrange);
+  controller.execution_options().enqueue_cache(queue, kernel, cl::NullRange, global, local);
 }
 
 mreduction_rows::mreduction_rows(mreduction_parameters  const & parameters,

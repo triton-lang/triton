@@ -208,26 +208,82 @@ private:
   size4 shape_;
 };
 
+class operation_cache
+{
+  struct infos
+  {
+    cl::CommandQueue & queue;
+    cl::Kernel kernel;
+    cl::NDRange offset;
+    cl::NDRange global;
+    cl::NDRange local;
+    std::vector<cl::Event>* dependencies;
+    cl::Event* event;
+  };
+
+public:
+  void push_back(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange const & offset, cl::NDRange const & global, cl::NDRange const & local, std::vector<cl::Event>* dependencies, cl::Event* event)
+  { l_.push_back({queue, kernel, offset, global, local, dependencies, event});  }
+
+  void enqueue()
+  {
+    for(infos & i : l_)
+      i.queue.enqueueNDRangeKernel(i.kernel, i.offset, i.global, i.local, i.dependencies, i.event);
+  }
+
+private:
+  std::list<infos> l_;
+};
+
+struct execution_options_type
+{
+  execution_options_type(unsigned int _queue_id = 0, cl::Event* _event = NULL, operation_cache* _cache = NULL, std::vector<cl::Event>* _dependencies = NULL) : queue_id(_queue_id), event(_event), cache(_cache), dependencies(_dependencies){}
+
+  void enqueue_cache(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange offset, cl::NDRange global, cl::NDRange local) const
+  {
+    queue.enqueueNDRangeKernel(kernel, offset, global, local, dependencies, event);
+    if(cache)
+      cache->push_back(queue, kernel, cl::NullRange, global, local, dependencies, event);
+  }
+
+  unsigned int queue_id;
+  cl::Event* event;
+  operation_cache* cache;
+  std::vector<cl::Event>* dependencies;
+};
+
+struct dispatcher_options_type
+{
+  dispatcher_options_type(int _label = -1) : label(_label){}
+  int label;
+};
+
+struct compilation_options_type
+{
+  compilation_options_type(std::string const & _program_name = "", bool _recompile = false) : program_name(_program_name), recompile(_recompile){}
+  std::string program_name;
+  bool recompile;
+};
+
 template<class TYPE>
 class controller
 {
 public:
-  controller(TYPE const & x, cl::Event* event = NULL, std::vector<cl::Event>* dependencies = NULL,
-          cl::CommandQueue* queue = NULL, operation_cache* cache = NULL) : x_(x), event_(event), dependencies_(dependencies), queue_(queue), cache_(cache){}
+  controller(TYPE const & x, execution_options_type const& execution_options = execution_options_type(),
+             dispatcher_options_type const & dispatcher_options = dispatcher_options_type(), compilation_options_type const & compilation_options = compilation_options_type())
+    : x_(x), execution_options_(execution_options), dispatcher_options_(dispatcher_options), compilation_options_(compilation_options){}
 
   TYPE const & x() const { return x_; }
-  cl::Event* event() const { return event_; }
-  std::vector<cl::Event>* dependencies() const { return dependencies_; }
-  cl::CommandQueue* queue() const { return queue_; }
-  operation_cache* cache() const { return cache_; }
-
+  execution_options_type const & execution_options() const { return execution_options_; }
+  dispatcher_options_type const & dispatcher_options() const { return dispatcher_options_; }
+  compilation_options_type const & compilation_options() const { return compilation_options_; }
 private:
   TYPE const & x_;
-  cl::Event* event_;
-  std::vector<cl::Event>* dependencies_;
-  cl::CommandQueue* queue_;
-  operation_cache* cache_;
+  execution_options_type execution_options_;
+  dispatcher_options_type dispatcher_options_;
+  compilation_options_type compilation_options_;
 };
+
 
 class expressions_tuple
 {

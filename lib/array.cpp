@@ -131,22 +131,17 @@ int_t array::dsize() const
 /*--- Assignment Operators ----*/
 //---------------------------------------
 array & array::operator=(array const & rhs)
-{
-  assert(dtype_ == rhs.dtype());
-  array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
-  cl::CommandQueue & queue = cl_ext::queues[context_][0];
-  model_map_t & mmap = atidlas::get_model_map(queue);
-  execute(expression, mmap);
-  return *this;
-}
+{ return *this = controller<array>(rhs); }
 
 array & array::operator=(array_expression const & rhs)
+{ return *this = controller<array_expression>(rhs); }
+
+template<class TYPE>
+array& array::operator=(controller<TYPE> const & c)
 {
-  assert(dtype_ == rhs.dtype());
-  array_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), dtype_, shape_);
-  cl::CommandQueue & queue = cl_ext::queues[context_][0];
-  model_map_t & mmap = atidlas::get_model_map(queue);
-  execute(expression, mmap);
+  assert(dtype_ == c.x().dtype());
+  execute(controller<array_expression>(detail::assign(*this, c.x()), c.execution_options(), c.dispatcher_options(), c.compilation_options()),
+          atidlas::get_model_map(cl_ext::queues[context_][c.execution_options().queue_id]));
   return *this;
 }
 
