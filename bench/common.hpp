@@ -57,7 +57,7 @@ static const std::vector<int> BLAS3_N = make_vector<int>() << 128;
 static const std::vector<int> BLAS3_K = create_full_range(128, 5000, 64);
 
 
-float bandwidth(std::size_t N, float t, unsigned int dtsize)
+double bandwidth(std::size_t N, double t, unsigned int dtsize)
 { return N * dtsize * 1e-9 / t; }
 
 double gflops(double nops, double t)

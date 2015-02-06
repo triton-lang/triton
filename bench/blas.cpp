@@ -1,6 +1,5 @@
 #include "atidlas/array.h"
 #include "atidlas/symbolic/execute.h"
-#include "atidlas/tools/timer.hpp"
 #include "common.hpp"
 #ifdef BENCH_CLAMDBLAS
   #include "clAmdBlas.h"
@@ -14,7 +13,7 @@
 #include <iomanip>
 #include <stdlib.h>
 #include <cmath>
-
+#include <chrono>
 
 namespace ad = atidlas;
 typedef ad::int_t int_t;
@@ -22,26 +21,55 @@ typedef ad::int_t int_t;
 template<class T>
 void bench(ad::numeric_type dtype)
 {
-  float total_time = 0;
-  std::vector<double> times;
-  ad::tools::timer timer;
   unsigned int dtsize = ad::size_of(dtype);
 
-#define BENCHMARK(OP, TIME, PERF) \
+#define BENCHMARK_OPENCL(OP, PERF) \
   {\
-  total_time = 0;\
-  while(total_time < 1e-3){\
+  std::vector<long> times;\
+  double total_time = 0;\
+  while(total_time*1e-9 < 1e-1){\
     cl::Event event;\
     OP;\
-    times.push_back(TIME);\
-    total_time += times.back();\
+    queue.flush();\
+    queue.finish();\
+    times.push_back(event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -  event.getProfilingInfo<CL_PROFILING_COMMAND_SUBMIT>());\
+    total_time+=times.back();\
   }\
-  float tres = median(times);\
-  std::cout << " " << tres << std::flush;\
+  double t = median(times);\
+  std::cout << " " << PERF << std::flush;\
   }
 
-#define CL_TIME
-#define CL_SYNC queue.flush(); queue.finish()
+#define BENCHMARK_HOST(OP, PERF) \
+  {\
+  std::vector<int> cache_flusher(10000000, 0);\
+  auto start = std::chrono::steady_clock::now();\
+  OP;\
+  auto end = std::chrono::steady_clock::now();\
+  double t = std::chrono::duration<double, std::nano>(end - start).count();\
+  std::cout << " " << PERF << std::flush;\
+  }
+
+#define BENCHMARK_CUDA(OP, PERF) \
+  {\
+  std::vector<long> times;\
+  double total_time = 0;\
+  double time;\
+  while(total_time*1e-3 < 1e-1){\
+    cudaEvent_t start, stop;\
+    cudaEventCreate(&start);\
+    cudaEventCreate(&stop);\
+    cudaEventRecord(start);\
+    OP;\
+    cudaEventRecord(stop);\
+    cudaEventSynchronize();\
+    cudaEventElapsedTime(&time, start, stop);\
+    times.push_back(time);\
+    total_time+=time;\
+  }\
+  double t = 1e-6*median(times);\
+  std::cout << " " << PERF << std::flush;\
+  }
+
   /*---------*/
   /*--BLAS1--*/
   /*---------*/
@@ -49,30 +77,28 @@ void bench(ad::numeric_type dtype)
   for(auto N : BLAS1_N)
   {
     std::cout << N;
-    /* ATIDLAS */
     ad::array x(N, dtype), y(N, dtype);
-    cl::CommandQueue& queue = ad::cl_ext::queues[x.context()][0];
-    cl::Event event;
-    y = ad::controller<atidlas::array_expression>(x + y, ad::execution_options_type(0, &event));
-    queue.flush(); queue.finish();
-    std::cout << " " << bandwidth(3*N, 1e-9*(event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -  event.getProfilingInfo<CL_PROFILING_COMMAND_SUBMIT>()), dtsize) << std::flush;
-//    /* clAmdBlas */
-//#ifdef BENCH_CLAMDBLAS
-//    BENCHMARK(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &queue(), 0, &event(), NULL); CL_SYNC,  CL_TIME, bandwidth(3*N, tres, dtsize))
-//#endif
+    cl::CommandQueue & queue = ad::cl_ext::queues[x.context()][0];
+    /* ATIDLAS */
+    y = x + y; queue.flush(); queue.finish();
+    BENCHMARK_OPENCL(y = ad::controller<atidlas::array_expression>(x + y, ad::execution_options_type(0, &event)), 3*N*dtsize/t)
+    /* clAmdBlas */
+#ifdef BENCH_CLAMDBLAS
+    BENCHMARK_OPENCL(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &queue(), 0, NULL, &event()), 3*N*dtsize/t)
+#endif
     /* BLAS */
 #ifdef BENCH_CBLAS
     std::vector<float> cx(N), cy(N);
     ad::copy(x, cx);
     ad::copy(y, cy);
-    BENCHMARK(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), bandwidth(3*N, tres, dtsize));
+    BENCHMARK_HOST(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), 3*N*dtsize/t);
 #endif
     /* CuBLAS */
 #ifdef BENCH_CUBLAS
     T *cux, *cuy;
     cudaMalloc((void**) &cux, N * sizeof(T));
     cudaMalloc((void**) &cuy, N * sizeof(T));
-    BENCHMARK(cublasSaxpy(N, 2, cux, 1, cuy, 1); cudaThreadSynchronize();, bandwidth(3*N, tres, dtsize))
+    BENCHMARK(cublasSaxpy(N, 2, cux, 1, cuy, 1), 3*N*dtsize/t)
     cudaFree(cux);
     cudaFree(cuy);
 #endif
