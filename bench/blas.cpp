@@ -53,20 +53,20 @@ void bench(ad::numeric_type dtype)
   {\
   std::vector<long> times;\
   double total_time = 0;\
-  double time;\
+  float time;\
+  cudaEvent_t start, stop;\
+  cudaEventCreate(&start);\
+  cudaEventCreate(&stop);\
   while(total_time*1e-3 < 1e-1){\
-    cudaEvent_t start, stop;\
-    cudaEventCreate(&start);\
-    cudaEventCreate(&stop);\
-    cudaEventRecord(start);\
+    cudaEventRecord(start,0);\
     OP;\
-    cudaEventRecord(stop);\
-    cudaEventSynchronize();\
+    cudaEventRecord(stop,0);\
+    cudaEventSynchronize(stop);\
     cudaEventElapsedTime(&time, start, stop);\
-    times.push_back(time);\
+    times.push_back(time*1e6);\
     total_time+=time;\
   }\
-  double t = 1e-6*median(times);\
+  double t = median(times);\
   std::cout << " " << PERF << std::flush;\
   }
 
@@ -98,7 +98,7 @@ void bench(ad::numeric_type dtype)
     T *cux, *cuy;
     cudaMalloc((void**) &cux, N * sizeof(T));
     cudaMalloc((void**) &cuy, N * sizeof(T));
-    BENCHMARK(cublasSaxpy(N, 2, cux, 1, cuy, 1), 3*N*dtsize/t)
+    BENCHMARK_CUDA(cublasSaxpy(N, 2, cux, 1, cuy, 1), 3*N*dtsize/t)
     cudaFree(cux);
     cudaFree(cuy);
 #endif
