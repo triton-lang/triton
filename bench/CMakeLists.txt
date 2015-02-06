@@ -33,11 +33,10 @@ else()
 endif()
 
 string(REPLACE ";" " " BLAS_DEF_STR "${BLAS_DEF}")
-
+set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} " ${BLAS_DEF_STR} -std=c++11")
 foreach(PROG blas overhead)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR})
     if(CUDA_FOUND)
-        set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} " ${BLAS_DEF_STR} -std=c++11")
         set(CUPROG ${CMAKE_CURRENT_BINARY_DIR}/${PROG}.cu)
         file(COPY ${PROG}.cpp DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 	file(RENAME ${CMAKE_CURRENT_BINARY_DIR}/${PROG}.cpp ${CUPROG})

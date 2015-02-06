@@ -15,9 +15,10 @@ int main()
   for(const auto & elem : ad::cl_ext::queues.data())
   {
     cl::CommandQueue queue = elem.second[0];
+    cl::Context context = elem.first;
     cl::Device device = queue.getInfo<CL_QUEUE_DEVICE>();
-    cl::Program program("__kernel void dummy(){}");
-                program.build();
+    cl::Program program(context,"__kernel void dummy(){}");
+    program.build();
     cl::Kernel kernel(program, "dummy");
 
     cl::NDRange offset = cl::NullRange;
@@ -32,17 +33,20 @@ int main()
     queue.flush();
     queue.finish();
 
-    float time = event.getProfilingInfo<CL_PROFILING_COMMAND_START>() - event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
+    {
+    long time = event.getProfilingInfo<CL_PROFILING_COMMAND_END>() - event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
     std::cout << "Kernel launch overhead: " << time << std::endl;
+    }
 
 #ifdef BENCH_CUBLAS
+    float time;
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
-    dummy<<1, 1>>>();
+    dummy<<<1, 1>>>();
     cudaEventRecord(stop);
-    cudaEventSynchronize();
+    cudaEventSynchronize(stop);
     cudaEventElapsedTime(&time, start, stop);
     std::cout << "CUDA Kernel launch overhead: " << time << std::endl;
 #endif
