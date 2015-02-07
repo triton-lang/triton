@@ -166,6 +166,16 @@ namespace detail
     return res;
   }
 
+  template<class T>
+  std::vector<T> to_vector(bp::list const & list)
+  {
+    std::size_t len = bp::len(list);
+    std::vector<T> res; res.reserve(len);
+    for(int i = 0 ; i < len ; ++i)
+      res.push_back(boost::python::extract<T>(list[i]));
+    return res;
+  }
+
   bp::list nv_compute_capability(cl::Device const & device)
   {
     bp::list res;
@@ -288,6 +298,10 @@ namespace detail
   wrap_command_queue_info(cl::CommandQueue const & x)
   { return x.getInfo<INFO>(NULL); }
 
+  template<cl_int INFO>
+  typename cl::detail::param_traits<cl::detail::cl_profiling_info, INFO>::param_type
+  wrap_profiling_info(cl::Event const & x)
+  { return x.getProfilingInfo<INFO>(NULL); }
 
   std::string to_string(cl_device_type type)
   {
@@ -301,8 +315,20 @@ namespace detail
   boost::shared_ptr<cl::Context> make_context(cl::Device const & dev)
   { return boost::shared_ptr<cl::Context>(new cl::Context(std::vector<cl::Device>(1, dev))); }
 
+  bp::tuple flush(atd::array_expression const & expression, unsigned int queue_id, bp::list dependencies, int label, std::string const & program_name, bool force_recompile)
+  {
+      cl::Event event;
+      atd::operation_cache cache;
+      std::vector<cl::Event> cdependencies = to_vector<cl::Event>(dependencies);
+      boost::shared_ptr<atd::array> parray(new atd::array(atd::control(expression, atd::execution_options_type(queue_id, &event, &cache, &cdependencies),
+                                                                       atd::dispatcher_options_type(label), atd::compilation_options_type(program_name, force_recompile))));
+
+      return bp::make_tuple(*parray, event, cache);
+  }
 }
 
+struct state_type{ };
+state_type state;
 
 void export_cl()
 {
@@ -362,9 +388,32 @@ void export_cl()
       .add_property("models", bp::make_function(&atd::get_model_map, bp::return_internal_reference<>()));
       ;
 
+  bp::class_<cl::Event>("event")
+    #define WRAP(PYNAME, NAME) .add_property(PYNAME, &detail::wrap_profiling_info<NAME>)
+      WRAP("start", CL_PROFILING_COMMAND_START)
+      WRAP("submit", CL_PROFILING_COMMAND_SUBMIT)
+      WRAP("end", CL_PROFILING_COMMAND_END)
+     ;
+
+  bp::class_<atd::operation_cache>("operation_cache", bp::no_init)
+      .def("enqueue", &atd::operation_cache::enqueue)
+      ;
+
   bp::def("synchronize", &atd::cl_ext::synchronize);
   bp::def("get_platforms", &detail::get_platforms);
 
+  bp::def("flush", &detail::flush, (bp::arg("expression"), bp::arg("queue_id") = 0, bp::arg("dependencies")=bp::list(), bp::arg("label")=-1, bp::arg("program_name")="", bp::arg("recompile") = false));
+
+  bp::enum_<cl_command_queue_properties>("queue_properties_type")
+      .value("CL_QUEUE_PROFILING_ENABLE", CL_QUEUE_PROFILING_ENABLE)
+      .value("CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE", CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE)
+      ;
+
+  bp::class_<state_type>("state_type")
+          .def_readwrite("queue_properties",&atd::cl_ext::queue_properties)
+      ;
+
+  bp::scope().attr("state") = bp::object(bp::ptr(&state));
 }
 
 namespace detail

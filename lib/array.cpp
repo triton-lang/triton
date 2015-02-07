@@ -83,22 +83,21 @@ array::array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const 
    ld_(ld), context_(context), data_(data)
 { }
 
-array::array(array_expression const & proxy) :
-  dtype_(proxy.dtype()),
-  shape_(proxy.shape()), start_(0,0), stride_(1, 1), ld_(shape_._1),
-  context_(proxy.context()), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
-{
-  *this = proxy;
-}
+array::array(array_expression const & proxy) : array(control(proxy)){}
+array::array(array const & other) : array(control(other)){}
 
-array::array(array const & other) :
-  dtype_(other.dtype()),
-  shape_(other.shape()), start_(0,0), stride_(1, 1), ld_(shape_._1),
-  context_(other.context()), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
+template<class TYPE>
+array::array(controller<TYPE> const & other) :
+  dtype_(other.x().dtype()),
+  shape_(other.x().shape()), start_(0,0), stride_(1, 1), ld_(shape_._1),
+  context_(other.x().context()), data_(context_, CL_MEM_READ_WRITE, size_of(dtype_)*dsize())
 {
   *this = other;
 }
 
+
+template array::array(controller<array> const&);
+template array::array(controller<array_expression> const&);
 
 /*--- Getters ---*/
 numeric_type array::dtype() const

@@ -34,9 +34,11 @@ public:
 
   //General constructor
   array(numeric_type dtype, cl::Buffer data, slice const & s1, slice const & s2, int_t ld, cl::Context context = cl_ext::default_context());
+
   array(array_expression const & proxy);
   array(array const &);
-
+  template<class T>
+  array(controller<T> const &);
   //Getters
   numeric_type dtype() const;
   size4 shape() const;

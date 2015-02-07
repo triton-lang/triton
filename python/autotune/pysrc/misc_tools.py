@@ -222,13 +222,9 @@ def benchmark(template, symbolic):
         atd.synchronize(symbolic.context)
         current_time = 0
         timings = []
-        while current_time < 1e-1:
-            time_before = time.time()
-            x = atd.array(symbolic)
-            atd.synchronize(symbolic.context)
-            timings.append(time.time() - time_before)
-            current_time = current_time + timings[-1]
-        return np.median(timings)
+        x, event, cache = atd.flush(symbolic)
+        atd.synchronize(symbolic.context)
+        return 1e-9*(event.end - event.start)
 
 
 def sanitize_string(string, keep_chars = ['_']):

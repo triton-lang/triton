@@ -284,6 +284,10 @@ private:
   compilation_options_type compilation_options_;
 };
 
+template<class TYPE>
+controller<TYPE> control(TYPE const & x, execution_options_type const& execution_options = execution_options_type(),
+                         dispatcher_options_type const & dispatcher_options = dispatcher_options_type(), compilation_options_type const & compilation_options = compilation_options_type())
+{ return controller<TYPE>(x, execution_options, dispatcher_options, compilation_options); }
 
 class expressions_tuple
 {
