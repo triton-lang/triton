@@ -182,12 +182,12 @@ public:
 
 public:
   template<class LT, class RT>
-  array_expression(LT const & lhs, RT const & rhs, op_element const & op, cl::Context const & ctx, numeric_type const & dtype, size4 const & shape);
+  array_expression(LT const & lhs, RT const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape);
   template<class RT>
-  array_expression(array_expression const & lhs, RT const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape);
+  array_expression(array_expression const & lhs, RT const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape);
   template<class LT>
-  array_expression(LT const & lhs, array_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape);
-  array_expression(array_expression const & lhs, array_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape);
+  array_expression(LT const & lhs, array_expression const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape);
+  array_expression(array_expression const & lhs, array_expression const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape);
 
   size4 shape() const;
   array_expression& reshape(int_t size1, int_t size2=1);
@@ -218,17 +218,18 @@ class operation_cache
     cl::NDRange global;
     cl::NDRange local;
     std::vector<cl::Event>* dependencies;
-    cl::Event* event;
   };
 
 public:
-  void push_back(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange const & offset, cl::NDRange const & global, cl::NDRange const & local, std::vector<cl::Event>* dependencies, cl::Event* event)
-  { l_.push_back({queue, kernel, offset, global, local, dependencies, event});  }
+  void push_back(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange const & offset, cl::NDRange const & global, cl::NDRange const & local, std::vector<cl::Event>* dependencies)
+  { l_.push_back({queue, kernel, offset, global, local, dependencies});  }
 
-  void enqueue()
+  void enqueue(std::list<cl::Event>* events = NULL)
   {
-    for(infos & i : l_)
-      i.queue.enqueueNDRangeKernel(i.kernel, i.offset, i.global, i.local, i.dependencies, i.event);
+    for(infos & i : l_){
+      events->push_back(cl::Event());
+      i.queue.enqueueNDRangeKernel(i.kernel, i.offset, i.global, i.local, i.dependencies, &events->back());
+    }
   }
 
 private:
@@ -237,17 +238,22 @@ private:
 
 struct execution_options_type
 {
-  execution_options_type(unsigned int _queue_id = 0, cl::Event* _event = NULL, operation_cache* _cache = NULL, std::vector<cl::Event>* _dependencies = NULL) : queue_id(_queue_id), event(_event), cache(_cache), dependencies(_dependencies){}
+  execution_options_type(unsigned int _queue_id = 0, std::list<cl::Event>* _events = NULL, operation_cache* _cache = NULL, std::vector<cl::Event>* _dependencies = NULL) : queue_id(_queue_id), events(_events), cache(_cache), dependencies(_dependencies){}
 
   void enqueue_cache(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange offset, cl::NDRange global, cl::NDRange local) const
   {
+    cl::Event* event = NULL;
+    if(events){
+      events->push_back(cl::Event());
+      event = &events->back();
+    }
     queue.enqueueNDRangeKernel(kernel, offset, global, local, dependencies, event);
     if(cache)
-      cache->push_back(queue, kernel, cl::NullRange, global, local, dependencies, event);
+      cache->push_back(queue, kernel, cl::NullRange, global, local, dependencies);
   }
 
   unsigned int queue_id;
-  cl::Event* event;
+  std::list<cl::Event>* events;
   operation_cache* cache;
   std::vector<cl::Event>* dependencies;
 };

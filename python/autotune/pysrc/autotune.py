@@ -213,7 +213,7 @@ class ArgumentsHandler:
                 self.blas3_size = map(int, self.blas3_size)
 
 if __name__ == "__main__":
-    atd.state.queue_properties = atd.queue_properties_type.CL_QUEUE_PROFILING_ENABLE
+    atd.state.queue_properties = atd.CL_QUEUE_PROFILING_ENABLE
     
     platforms = atd.get_platforms()
     devices = [d for platform in platforms for d in platform.get_devices()]

@@ -139,7 +139,8 @@ template<class TYPE>
 array& array::operator=(controller<TYPE> const & c)
 {
   assert(dtype_ == c.x().dtype());
-  execute(controller<array_expression>(detail::assign(*this, c.x()), c.execution_options(), c.dispatcher_options(), c.compilation_options()),
+  array_expression expression(*this, c.x(), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
+  execute(controller<array_expression>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()),
           atidlas::get_model_map(cl_ext::queues[context_][c.execution_options().queue_id]));
   return *this;
 }
@@ -180,7 +181,7 @@ array & array::operator+=(array const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype_, shape_); }
 
 array & array::operator+=(array_expression const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), dtype_, shape_); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), rhs.context(), dtype_, shape_); }
 //----
 array & array::operator-=(value_scalar const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
@@ -189,7 +190,7 @@ array & array::operator-=(array const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
 
 array & array::operator-=(array_expression const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), dtype_, shape_); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), rhs.context(), dtype_, shape_); }
 //----
 array & array::operator*=(value_scalar const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), context_, dtype_, shape_); }
@@ -198,7 +199,7 @@ array & array::operator*=(array const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), context_, dtype_, shape_); }
 
 array & array::operator*=(array_expression const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), dtype_, shape_); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), rhs.context(), dtype_, shape_); }
 //----
 array & array::operator/=(value_scalar const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), context_, dtype_, shape_); }
@@ -207,7 +208,7 @@ array & array::operator/=(array const & rhs)
 { return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), context_, dtype_, shape_); }
 
 array & array::operator/=(array_expression const & rhs)
-{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), dtype_, shape_); }
+{ return *this = array_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), rhs.context(), dtype_, shape_); }
 
 array_expression array::T() const
 { return atidlas::trans(*this) ;}
@@ -394,28 +395,28 @@ bool check_elementwise(U const & u, V const & v)
 #define DEFINE_ELEMENT_BINARY_OPERATOR(OP, OPNAME, DTYPE) \
 array_expression OPNAME (array_expression const & x, array_expression const & y) \
 { assert(check_elementwise(x, y));\
-  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), DTYPE, elementwise_size(x, y)); } \
+  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, elementwise_size(x, y)); } \
  \
 array_expression OPNAME (array const & x, array_expression const & y) \
 { assert(check_elementwise(x, y));\
-  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), DTYPE, elementwise_size(x, y)); } \
+  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, elementwise_size(x, y)); } \
 \
 array_expression OPNAME (array_expression const & x, array const & y) \
 { assert(check_elementwise(x, y));\
-  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), DTYPE, elementwise_size(x, y)); } \
+  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, elementwise_size(x, y)); } \
 \
 array_expression OPNAME (array const & x, array const & y) \
 { assert(check_elementwise(x, y));\
   return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, elementwise_size(x, y)); }\
 \
 array_expression OPNAME (array_expression const & x, value_scalar const & y) \
-{ return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), DTYPE, x.shape()); } \
+{ return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); } \
 \
 array_expression OPNAME (array const & x, value_scalar const & y) \
 { return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); }\
 \
 array_expression OPNAME (value_scalar const & y, array_expression const & x) \
-{ return array_expression(y, x, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), DTYPE, x.shape()); } \
+{ return array_expression(y, x, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); } \
 \
 array_expression OPNAME (value_scalar const & y, array const & x) \
 { return array_expression(y, x, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); }
@@ -458,7 +459,7 @@ array_expression OPNAME (array  const & x) \
 { return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OP), x.context(), x.dtype(), x.shape()); }\
 \
 array_expression OPNAME (array_expression const & x) \
-{ return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OP), x.dtype(), x.shape()); }
+{ return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OP), x.context(), x.dtype(), x.shape()); }
 
 DEFINE_ELEMENT_UNARY_OPERATOR((x.dtype()==FLOAT_TYPE || x.dtype()==DOUBLE_TYPE)?OPERATOR_FABS_TYPE:OPERATOR_ABS_TYPE,  abs)
 DEFINE_ELEMENT_UNARY_OPERATOR(OPERATOR_ACOS_TYPE, acos)
@@ -506,7 +507,7 @@ array_expression cast(array const & x, numeric_type dtype)
 { return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, casted(dtype)), x.context(), dtype, x.shape()); }
 
 array_expression cast(array_expression const & x, numeric_type dtype)
-{ return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, casted(dtype)), dtype, x.shape()); }
+{ return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, casted(dtype)), x.context(), dtype, x.shape()); }
 
 atidlas::array_expression eye(std::size_t M, std::size_t N, atidlas::numeric_type dtype, cl::Context ctx)
 { return array_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VDIAG_TYPE), ctx, dtype, size4(M, N)); }
@@ -524,7 +525,7 @@ array_expression trans(array  const & x) \
 { return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_TRANS_TYPE), x.context(), x.dtype(), flip(x.shape())); }\
 \
 array_expression trans(array_expression const & x) \
-{ return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_TRANS_TYPE), x.dtype(), flip(x.shape())); }
+{ return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_TRANS_TYPE), x.context(), x.dtype(), flip(x.shape())); }
 
 array_expression repmat(array const & A, int_t const & rep1, int_t const & rep2)
 {
@@ -543,7 +544,7 @@ array_expression repmat(array_expression const & A, int_t const & rep1, int_t co
   infos.rep2 = rep2;
   infos.sub1 = A.shape()._1;
   infos.sub2 = A.shape()._2;
-  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), A.dtype(), size4(infos.rep1*infos.sub1, infos.rep2*infos.sub2));
+  return array_expression(A, infos, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), A.context(), A.dtype(), size4(infos.rep1*infos.sub1, infos.rep2*infos.sub2));
 }
 
 ////---------------------------------------
@@ -568,11 +569,11 @@ array_expression OPNAME(array_expression const & x, int_t axis)\
   if(axis < -1 || axis > x.nshape())\
     throw std::out_of_range("The axis entry is out of bounds");\
   if(axis==-1)\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY, OP), x.dtype(), size4(1));\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
   else if(axis==0)\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), x.dtype(), size4(x.shape()._1));\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()._1));\
   else\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), x.dtype(), size4(x.shape()._2));\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()._2));\
 }
 
 DEFINE_REDUCTION(OPERATOR_ADD_TYPE, sum)
@@ -604,7 +605,7 @@ namespace detail
       shape._1 = A.shape()._2;
     }
 
-    array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), A.dtype(), shape);
+    array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), A.context(), A.dtype(), shape);
     array_expression::node & res_root = const_cast<array_expression::node &>(res.tree()[res.root()]);
     if(A_trans) res_root.lhs = A_root.lhs;
     return res;
@@ -621,7 +622,7 @@ namespace detail
       type = OPERATOR_MATRIX_PRODUCT_NT_TYPE;
       shape._2 = B.shape()._1;
     }
-    array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), A.dtype(), shape);
+    array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), A.context(), A.dtype(), shape);
     array_expression::node & res_root = const_cast<array_expression::node &>(res.tree()[res.root()]);
     if(B_trans) res_root.rhs = B_root.lhs;
     return res;
@@ -643,7 +644,7 @@ namespace detail
     else if(!A_trans && B_trans) type = OPERATOR_MATRIX_PRODUCT_NT_TYPE;
     else type = OPERATOR_MATRIX_PRODUCT_NN_TYPE;
 
-    array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), A.dtype(), shape);
+    array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), A.context(), A.dtype(), shape);
     array_expression::node & res_root = const_cast<array_expression::node &>(res.tree()[res.root()]);
     if(A_trans) res_root.lhs = A_root.lhs;
     if(B_trans) res_root.rhs = B_root.lhs;
@@ -667,7 +668,7 @@ namespace detail
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
     if(A_trans)
     {
-      array_expression tmp(A, repmat(x, 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), A.dtype(), size4(N, M));
+      array_expression tmp(A, repmat(x, 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), A.context(), A.dtype(), size4(N, M));
       //Remove trans
       tmp.tree()[tmp.root()].lhs = A.tree()[A.root()].lhs;
       return sum(tmp, 1);

@@ -220,11 +220,9 @@ def benchmark(template, symbolic):
         queue.models[template, atd.float32] = atd.model(template, queue)
         x = atd.array(symbolic)
         atd.synchronize(symbolic.context)
-        current_time = 0
-        timings = []
-        x, event, cache = atd.flush(symbolic)
+        x, events, cache = atd.flush(symbolic)
         atd.synchronize(symbolic.context)
-        return 1e-9*(event.end - event.start)
+        return 1e-9*sum([e.end - e.start for e in events])
 
 
 def sanitize_string(string, keep_chars = ['_']):

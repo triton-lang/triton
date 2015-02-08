@@ -75,8 +75,8 @@ array_expression::array_expression(LT const & lhs, RT const & rhs, op_element co
 }
 
 template<class RT>
-array_expression::array_expression(array_expression const & lhs, RT const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape) :
- tree_(lhs.tree_.size() + 1), root_(tree_.size()-1), context_(lhs.context_), dtype_(dtype), shape_(shape)
+array_expression::array_expression(array_expression const & lhs, RT const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape) :
+ tree_(lhs.tree_.size() + 1), root_(tree_.size()-1), context_(context), dtype_(dtype), shape_(shape)
 {
   std::copy(lhs.tree_.begin(), lhs.tree_.end(), tree_.begin());
   fill(tree_[root_].lhs, lhs.root_);
@@ -85,8 +85,8 @@ array_expression::array_expression(array_expression const & lhs, RT const & rhs,
 }
 
 template<class LT>
-array_expression::array_expression(LT const & lhs, array_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape) :
-  tree_(rhs.tree_.size() + 1), root_(tree_.size() - 1), context_(rhs.context_), dtype_(dtype), shape_(shape)
+array_expression::array_expression(LT const & lhs, array_expression const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape) :
+  tree_(rhs.tree_.size() + 1), root_(tree_.size() - 1), context_(context), dtype_(dtype), shape_(shape)
 {
   std::copy(rhs.tree_.begin(), rhs.tree_.end(), tree_.begin());
   fill(tree_[root_].lhs, lhs);
@@ -94,8 +94,8 @@ array_expression::array_expression(LT const & lhs, array_expression const & rhs,
   fill(tree_[root_].rhs, rhs.root_);
 }
 
-array_expression::array_expression(array_expression const & lhs, array_expression const & rhs, op_element const & op, numeric_type const & dtype, size4 const & shape):
-  tree_(lhs.tree_.size() + rhs.tree_.size() + 1), root_(tree_.size()-1), context_(lhs.context_), dtype_(dtype), shape_(shape)
+array_expression::array_expression(array_expression const & lhs, array_expression const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape):
+  tree_(lhs.tree_.size() + rhs.tree_.size() + 1), root_(tree_.size()-1), context_(context), dtype_(dtype), shape_(shape)
 {  
   std::size_t lsize = lhs.tree_.size();
   std::copy(lhs.tree_.begin(), lhs.tree_.end(), tree_.begin());
@@ -110,15 +110,15 @@ array_expression::array_expression(array_expression const & lhs, array_expressio
   root_ = tree_.size() - 1;
 }
 
-template array_expression::array_expression(array_expression const &, value_scalar const &, op_element const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array_expression const &, invalid_node const &, op_element const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array_expression const &, array const &,        op_element const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array_expression const &, repeat_infos const &, op_element const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, value_scalar const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, invalid_node const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, array const &,        op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, repeat_infos const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
 
-template array_expression::array_expression(value_scalar const &, array_expression const &, op_element const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(invalid_node const &, array_expression const &, op_element const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array const &, array_expression const &, op_element const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(repeat_infos const &, array_expression const &, op_element const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(value_scalar const &, array_expression const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, array_expression const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &, array_expression const &, op_element const &,         cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, array_expression const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
 
 template array_expression::array_expression(value_scalar const &, value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
 template array_expression::array_expression(invalid_node const &, value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
@@ -139,6 +139,8 @@ template array_expression::array_expression(value_scalar const &, repeat_infos c
 template array_expression::array_expression(invalid_node const &, repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
 template array_expression::array_expression(array const &,        repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
 template array_expression::array_expression(repeat_infos const &, repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+
+
 
 array_expression::container_type & array_expression::tree()
 { return tree_; }
@@ -169,10 +171,10 @@ array_expression& array_expression::reshape(int_t size1, int_t size2)
 }
 
 array_expression array_expression::operator-()
-{ return array_expression(*this,  invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), dtype_, shape_); }
+{ return array_expression(*this,  invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
 
 array_expression array_expression::operator!()
-{ return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), INT_TYPE, shape_); }
+{ return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), context_, INT_TYPE, shape_); }
 
 
 //
