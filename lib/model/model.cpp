@@ -95,49 +95,39 @@ model::model(base const & tp, cl::CommandQueue & queue) : templates_(1,tp.clone(
 void model::execute(controller<expressions_tuple> const & expressions)
 {
   std::vector<cl_ext::lazy_compiler> & compilers = init(expressions);
+  std::vector<int_t> x = templates_[0]->input_sizes(expressions.x());
+
+  //Specific tuning if requested
+  if(expressions.dispatcher_options().tune && hardcoded_.find(x)==hardcoded_.end())
+  {
+    std::vector<float> timings(templates_.size());
+    tools::timer timer;
+    for(size_t i = 0 ; i < templates_.size() ; ++i)
+    {
+      timer.start();
+      templates_[i]->enqueue(queue_, compilers, i, expressions);
+      queue_.finish();
+      timings[i] = timer.get();
+    }
+    //Fill the override
+    std::vector<int_t> x = templates_[0]->input_sizes(expressions.x());
+    hardcoded_[x] = std::distance(timings.begin(),std::min_element(timings.begin(), timings.end()));
+  }
 
   //Prediction
   int label = 0;
   if(expressions.dispatcher_options().label>=0)
+    label = expressions.dispatcher_options().label;
+  else  if(hardcoded_.find(x)!=hardcoded_.end())
+    label = hardcoded_.at(x);
+  else if(predictor_.get())
   {
-      label = expressions.dispatcher_options().label;
-  }
-  else
-  {
-    std::vector<int_t> x = templates_[0]->input_sizes(expressions.x());
-    //The user tuned the model specifically for this input size
-    if(hardcoded_.find(x)!=hardcoded_.end())
-      label = hardcoded_.at(x);
-    //The user bypasses the random forest
-    else if(predictor_.get())
-    {
-      std::vector<float> predictions = predictor_->predict(x);
-      label = std::distance(predictions.begin(),std::min_element(predictions.begin(), predictions.end()));
-    }
+    std::vector<float> predictions = predictor_->predict(x);
+    label = std::distance(predictions.begin(),std::min_element(predictions.begin(), predictions.end()));
   }
 
   //Execution
   return templates_[label]->enqueue(queue_, compilers, label, expressions);
-}
-
-void model::tune(controller<expressions_tuple> const & expressions)
-{
-  std::vector<cl_ext::lazy_compiler> & compilers = init(expressions);
-
-  //Collect the timings
-  std::vector<float> timings(templates_.size());
-  tools::timer timer;
-  for(size_t i = 0 ; i < templates_.size() ; ++i)
-  {
-    timer.start();
-    templates_[i]->enqueue(queue_, compilers, i, expressions);
-    queue_.finish();
-    timings[i] = timer.get();
-  }
-
-  //Fill the override
-  std::vector<int_t> x = templates_[0]->input_sizes(expressions.x());
-  hardcoded_[x] = std::distance(timings.begin(),std::min_element(timings.begin(), timings.end()));
 }
 
 model::templates_container const & model::templates() const

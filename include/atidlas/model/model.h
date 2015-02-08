@@ -29,8 +29,6 @@ namespace atidlas
     model(base const &, cl::CommandQueue &);
 
     void execute(controller<expressions_tuple> const &);
-    void tune(controller<expressions_tuple> const &);
-
     templates_container const & templates() const;
   private:
     templates_container templates_;

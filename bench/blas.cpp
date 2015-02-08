@@ -96,7 +96,7 @@ void bench(ad::numeric_type dtype)
     ad::array x(N, dtype), y(N, dtype);
     /* ATIDLAS */
     y = x + y; queue.flush(); queue.finish();
-    BENCHMARK_ATIDLAS(y = ad::controller<atidlas::array_expression>(x + y, ad::execution_options_type(0, &events)), 3*N*dtsize/t)
+    BENCHMARK_ATIDLAS(y = ad::control(x + y, ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), 3*N*dtsize/t)
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
     BENCHMARK_CLAMDBLAS(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &queue(), 0, NULL, &event()), 3*N*dtsize/t)

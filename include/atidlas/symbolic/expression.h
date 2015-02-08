@@ -260,7 +260,8 @@ struct execution_options_type
 
 struct dispatcher_options_type
 {
-  dispatcher_options_type(int _label = -1) : label(_label){}
+  dispatcher_options_type(bool _tune = false, int _label = -1) : tune(_tune), label(_label){}
+  bool tune;
   int label;
 };
 
