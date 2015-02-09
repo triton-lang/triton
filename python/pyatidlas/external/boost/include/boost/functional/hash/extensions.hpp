@@ -193,7 +193,7 @@ namespace boost
 
 #if !defined(BOOST_NO_CXX11_SMART_PTR)
     template <typename T>
-    inline std::size_t hash_value(std::shared_ptr<T> const& x) {
+    inline std::size_t hash_value(tools::shared_ptr<T> const& x) {
         return boost::hash_value(x.get());
     }
 

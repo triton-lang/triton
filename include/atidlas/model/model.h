@@ -16,7 +16,7 @@ namespace atidlas
 
   class model
   {
-    typedef std::vector< std::shared_ptr<base> > templates_container;
+    typedef std::vector< tools::shared_ptr<base> > templates_container;
 
   private:
     std::string define_extension(std::string const & extensions, std::string const & ext);
@@ -24,21 +24,21 @@ namespace atidlas
     std::vector<cl_ext::lazy_compiler>& init(controller<expressions_tuple> const &);
 
   public:
-    model(predictors::random_forest const &, std::vector< std::shared_ptr<base> > const &, cl::CommandQueue &);
-    model(std::vector< std::shared_ptr<base> > const &, cl::CommandQueue &);
+    model(predictors::random_forest const &, std::vector< tools::shared_ptr<base> > const &, cl::CommandQueue &);
+    model(std::vector< tools::shared_ptr<base> > const &, cl::CommandQueue &);
     model(base const &, cl::CommandQueue &);
 
     void execute(controller<expressions_tuple> const &);
     templates_container const & templates() const;
   private:
     templates_container templates_;
-    std::shared_ptr<predictors::random_forest> predictor_;
+    tools::shared_ptr<predictors::random_forest> predictor_;
     std::map<std::vector<int_t>, int> hardcoded_;
     std::map<cl_context, std::map<std::string, std::vector<cl_ext::lazy_compiler> > > lazy_programs_;
     cl::CommandQueue & queue_;
   };
 
-  typedef std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<model> > model_map_t;
+  typedef std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<model> > model_map_t;
 
   model_map_t init_models(cl::CommandQueue const & queue);
   model_map_t& get_model_map(cl::CommandQueue & queue);

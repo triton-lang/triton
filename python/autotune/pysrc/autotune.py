@@ -143,7 +143,7 @@ def do_tuning(args):
                       A = atd.empty(sizes, datatype, context=context)
                       C = atd.empty(sizes, datatype, context=context)
                       return execute(A + C, sizes, Template, parameters, fname)
-                  tune(execution_handler, 100, 5000, 2, (),'log', 'log')
+                  tune(execution_handler, 64, 5000, 2, (),'log', 'log')
               #Row-wise dot
               if operation=='gemv':
                   for A_trans in  args.gemv_layouts:
@@ -152,7 +152,7 @@ def do_tuning(args):
                           x = atd.empty(sizes[1], datatype, context=context)
                           LHS = A if A_trans=='N' else A.T
                           return execute(atd.dot(LHS, x), sizes, Template[A_trans], parameters, fname)
-                      tune(execution_handler, 100, 5000, 2, (A_trans,),'log', 'log')
+                      tune(execution_handler, 64, 6000, 2, (A_trans,),'log', 'log')
               #Matrix Product
               if operation=='gemm':
                   for L in args.gemm_layouts:
@@ -194,7 +194,7 @@ class ArgumentsHandler:
 
         full_parser = tune_subparsers.add_parser('full', help = 'Tune each operation for randomly chosen sizes')
         full_parser.add_argument("--build-model", default=True, type=bool)
-        full_parser.add_argument("--sample-size", default=30, type=int)
+        full_parser.add_argument("--sample-size", default=60, type=int)
 
         args = parser.parse_args()
         self.__dict__ = args.__dict__.copy()

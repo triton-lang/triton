@@ -6,7 +6,8 @@
 #include <CL/cl.hpp>
 #include "atidlas/types.h"
 #include "atidlas/value_scalar.h"
-#include <memory>
+#include "atidlas/tools/shared_ptr.hpp"
+#include <iostream>
 
 namespace atidlas
 {
@@ -221,20 +222,13 @@ class operation_cache
   };
 
 public:
-  void push_back(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange const & offset, cl::NDRange const & global, cl::NDRange const & local, std::vector<cl::Event>* dependencies)
-  { l_.push_back({queue, kernel, offset, global, local, dependencies});  }
-
-  void enqueue(std::list<cl::Event>* events = NULL)
-  {
-    for(infos & i : l_){
-      events->push_back(cl::Event());
-      i.queue.enqueueNDRangeKernel(i.kernel, i.offset, i.global, i.local, i.dependencies, &events->back());
-    }
-  }
-
+  void push_back(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange const & offset, cl::NDRange const & global, cl::NDRange const & local, std::vector<cl::Event>* dependencies);
+  void enqueue(std::list<cl::Event>* events = NULL);
 private:
   std::list<infos> l_;
 };
+
+
 
 struct execution_options_type
 {
@@ -299,9 +293,9 @@ controller<TYPE> control(TYPE const & x, execution_options_type const& execution
 class expressions_tuple
 {
 private:
-  std::shared_ptr<array_expression> create(array_expression const & s);
+  tools::shared_ptr<array_expression> create(array_expression const & s);
 public:
-  typedef std::list<std::shared_ptr<array_expression> > data_type;
+  typedef std::list<tools::shared_ptr<array_expression> > data_type;
   enum order_type { SEQUENTIAL, INDEPENDENT };
 
   expressions_tuple(array_expression const & s0);

@@ -173,30 +173,30 @@ namespace atidlas
 
     /*----Parse required temporaries-----*/
     detail::parse(tree, rootidx, current_type, breakpoints, final_type);
-    std::vector<std::shared_ptr<array> > temporaries_;
+    std::vector<tools::shared_ptr<array> > temporaries_;
 
     /*----Compute required temporaries----*/
     for(detail::breakpoints_t::reverse_iterator rit = breakpoints.rbegin() ; rit != breakpoints.rend() ; ++rit)
     {
-      std::shared_ptr<model> const & pmodel = models[std::make_pair(rit->first, dtype)];
+      tools::shared_ptr<model> const & pmodel = models[std::make_pair(rit->first, dtype)];
       array_expression::node const & node = tree[rit->second->node_index];
       array_expression::node const & lmost = lhs_most(tree, node);
 
       //Creates temporary
-      std::shared_ptr<array> tmp;
+      tools::shared_ptr<array> tmp;
       switch(rit->first){
         case SCALAR_AXPY_TYPE:
-        case REDUCTION_TYPE:           tmp = std::shared_ptr<array>(new array(1, dtype, context));                                                        break;
+        case REDUCTION_TYPE:           tmp = tools::shared_ptr<array>(new array(1, dtype, context));                                                        break;
 
-        case VECTOR_AXPY_TYPE:         tmp = std::shared_ptr<array>(new array(lmost.lhs.array.shape1, dtype, context));                              break;
-        case ROW_WISE_REDUCTION_TYPE:  tmp = std::shared_ptr<array>(new array(lmost.lhs.array.shape1, dtype, context));                              break;
-        case COL_WISE_REDUCTION_TYPE:  tmp = std::shared_ptr<array>(new array(lmost.lhs.array.shape2, dtype, context));                              break;
+        case VECTOR_AXPY_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array.shape1, dtype, context));                              break;
+        case ROW_WISE_REDUCTION_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array.shape1, dtype, context));                              break;
+        case COL_WISE_REDUCTION_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array.shape2, dtype, context));                              break;
 
-        case MATRIX_AXPY_TYPE:         tmp = std::shared_ptr<array>(new array(lmost.lhs.array.shape1, lmost.lhs.array.shape2, dtype, context)); break;
-        case MATRIX_PRODUCT_NN_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array.shape1, node.rhs.array.shape2, dtype, context));   break;
-        case MATRIX_PRODUCT_NT_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array.shape1, node.rhs.array.shape1, dtype, context));   break;
-        case MATRIX_PRODUCT_TN_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array.shape2, node.rhs.array.shape2, dtype, context));   break;
-        case MATRIX_PRODUCT_TT_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array.shape2, node.rhs.array.shape1, dtype, context));   break;
+        case MATRIX_AXPY_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array.shape1, lmost.lhs.array.shape2, dtype, context)); break;
+        case MATRIX_PRODUCT_NN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array.shape1, node.rhs.array.shape2, dtype, context));   break;
+        case MATRIX_PRODUCT_NT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array.shape1, node.rhs.array.shape1, dtype, context));   break;
+        case MATRIX_PRODUCT_TN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array.shape2, node.rhs.array.shape2, dtype, context));   break;
+        case MATRIX_PRODUCT_TT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array.shape2, node.rhs.array.shape1, dtype, context));   break;
 
         default: throw std::invalid_argument("Unrecognized operation");
       }

@@ -176,11 +176,24 @@ array_expression array_expression::operator-()
 array_expression array_expression::operator!()
 { return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), context_, INT_TYPE, shape_); }
 
+//
+void operation_cache::push_back(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange const & offset, cl::NDRange const & global, cl::NDRange const & local, std::vector<cl::Event>* dependencies)
+{
+  l_.push_back({queue, kernel, offset, global, local, dependencies});
+}
+
+void operation_cache::enqueue(std::list<cl::Event>* events)
+{
+  for(infos & i : l_){
+    events->push_back(cl::Event());
+    i.queue.enqueueNDRangeKernel(i.kernel, i.offset, i.global, i.local, i.dependencies, &events->back());
+  }
+}
 
 //
-std::shared_ptr<array_expression> expressions_tuple::create(array_expression const & s)
+tools::shared_ptr<array_expression> expressions_tuple::create(array_expression const & s)
 {
-  return std::shared_ptr<array_expression>(new array_expression(static_cast<array_expression const &>(s)));
+  return tools::shared_ptr<array_expression>(new array_expression(static_cast<array_expression const &>(s)));
 }
 
 expressions_tuple::expressions_tuple(data_type const & data, order_type order) : data_(data), order_(order)

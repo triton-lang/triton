@@ -218,11 +218,16 @@ def benchmark(template, symbolic):
         raise ValueError("Template has too low occupancy")
     else:
         queue.models[template, atd.float32] = atd.model(template, queue)
-        x = atd.array(symbolic)
-        atd.synchronize(symbolic.context)
         x, events, cache = atd.flush(symbolic)
         atd.synchronize(symbolic.context)
-        return 1e-9*sum([e.end - e.start for e in events])
+        timings = []
+        current_time = 0
+        while current_time < 1e-3:
+            x, events, cache = atd.flush(symbolic)
+            atd.synchronize(symbolic.context)
+            timings.append(1e-9*sum([e.end - e.start for e in events]))
+            current_time = current_time + timings[-1]
+        return np.median(timings)
 
 
 def sanitize_string(string, keep_chars = ['_']):

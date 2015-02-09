@@ -20,7 +20,7 @@ enum leaf_t
 class mapped_object;
 
 typedef std::pair<int_t, leaf_t> mapping_key;
-typedef std::map<mapping_key, std::shared_ptr<mapped_object> > mapping_type;
+typedef std::map<mapping_key, tools::shared_ptr<mapped_object> > mapping_type;
 
 /** @brief Mapped Object
 *

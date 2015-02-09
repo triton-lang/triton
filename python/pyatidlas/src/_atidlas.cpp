@@ -315,15 +315,14 @@ namespace detail
   boost::shared_ptr<cl::Context> make_context(cl::Device const & dev)
   { return boost::shared_ptr<cl::Context>(new cl::Context(std::vector<cl::Device>(1, dev))); }
 
-  bp::tuple flush(atd::array_expression const & expression, unsigned int queue_id, bp::list dependencies, int label, std::string const & program_name, bool force_recompile)
+  bp::tuple flush(atd::array_expression const & expression, unsigned int queue_id, bp::list dependencies, bool tune, int label, std::string const & program_name, bool force_recompile)
   {
       std::list<cl::Event> events;
       atd::operation_cache cache;
       std::vector<cl::Event> cdependencies = to_vector<cl::Event>(dependencies);
       boost::shared_ptr<atd::array> parray(new atd::array(atd::control(expression, atd::execution_options_type(queue_id, &events, &cache, &cdependencies),
-                                                                       atd::dispatcher_options_type(label), atd::compilation_options_type(program_name, force_recompile))));
-
-      return bp::make_tuple(*parray, to_list(events.begin(), events.end()), cache);
+                                                                       atd::dispatcher_options_type(tune, label), atd::compilation_options_type(program_name, force_recompile))));
+      return bp::make_tuple(parray, to_list(events.begin(), events.end()), cache);
   }
 }
 
@@ -402,7 +401,7 @@ void export_cl()
   bp::def("synchronize", &atd::cl_ext::synchronize);
   bp::def("get_platforms", &detail::get_platforms);
 
-  bp::def("flush", &detail::flush, (bp::arg("expression"), bp::arg("queue_id") = 0, bp::arg("dependencies")=bp::list(), bp::arg("label")=-1, bp::arg("program_name")="", bp::arg("recompile") = false));
+  bp::def("flush", &detail::flush, (bp::arg("expression"), bp::arg("queue_id") = 0, bp::arg("dependencies")=bp::list(), bp::arg("tune") = false, bp::arg("label")=-1, bp::arg("program_name")="", bp::arg("recompile") = false));
 
   bp::class_<state_type>("state_type")
           .def_readwrite("queue_properties",&atd::cl_ext::queue_properties)

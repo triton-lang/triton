@@ -587,7 +587,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     kernel.setArg(current_arg++, cl_uint(N));
     kernel.setArg(current_arg++, cl_uint(K));
 
-    std::shared_ptr<symbolic_binder> binder = make_binder();
+    tools::shared_ptr<symbolic_binder> binder = make_binder();
     set_arguments_functor fun(*binder, current_arg, kernel);
     fun.set_arguments(C);
     fun.set_arguments(alpha.dtype(), alpha.values());

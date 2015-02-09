@@ -36,7 +36,7 @@ template<class T> T * get_pointer( std::unique_ptr<T> const& p )
     return p.get();
 }
 
-template<class T> T * get_pointer( std::shared_ptr<T> const& p )
+template<class T> T * get_pointer( tools::shared_ptr<T> const& p )
 {
     return p.get();
 }
