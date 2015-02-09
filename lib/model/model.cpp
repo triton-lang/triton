@@ -2,6 +2,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <algorithm>
+#include <numeric>
 
 #include "rapidjson/document.h"
 #include "atidlas/backend/parse.h"
@@ -20,6 +21,9 @@
 
 namespace atidlas
 {
+
+static double time_event(unsigned long sum, cl::Event const & e)
+{ return sum + e.getProfilingInfo<CL_PROFILING_COMMAND_END>() -  e.getProfilingInfo<CL_PROFILING_COMMAND_START>();}
 
 
 std::string model::define_extension(std::string const & extensions, std::string const & ext)
@@ -92,32 +96,31 @@ model::model(std::vector< tools::shared_ptr<base> > const & templates, cl::Comma
 model::model(base const & tp, cl::CommandQueue & queue) : templates_(1,tp.clone()), queue_(queue)
 {}
 
-void model::execute(controller<expressions_tuple> const & expressions)
+void model::execute(controller<expressions_tuple> const & expr)
 {
-  std::vector<cl_ext::lazy_compiler> & compilers = init(expressions);
-  std::vector<int_t> x = templates_[0]->input_sizes(expressions.x());
+  std::vector<cl_ext::lazy_compiler> & compilers = init(expr);
+  std::vector<int_t> x = templates_[0]->input_sizes(expr.x());
 
   //Specific tuning if requested
-  if(expressions.dispatcher_options().tune && hardcoded_.find(x)==hardcoded_.end())
+  if(expr.dispatcher_options().tune && hardcoded_.find(x)==hardcoded_.end())
   {
-    std::vector<float> timings(templates_.size());
-    tools::timer timer;
+    std::vector<double> timings(templates_.size());
     for(size_t i = 0 ; i < templates_.size() ; ++i)
     {
-      timer.start();
-      templates_[i]->enqueue(queue_, compilers, i, expressions);
+      std::list<cl::Event> events;
+      templates_[i]->enqueue(queue_, compilers, i, control(expr.x(), execution_options_type(0, &events)));
       queue_.finish();
-      timings[i] = timer.get();
+      timings[i] = 1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event);
     }
     //Fill the override
-    std::vector<int_t> x = templates_[0]->input_sizes(expressions.x());
+    std::vector<int_t> x = templates_[0]->input_sizes(expr.x());
     hardcoded_[x] = std::distance(timings.begin(),std::min_element(timings.begin(), timings.end()));
   }
 
   //Prediction
   int label = 0;
-  if(expressions.dispatcher_options().label>=0)
-    label = expressions.dispatcher_options().label;
+  if(expr.dispatcher_options().label>=0)
+    label = expr.dispatcher_options().label;
   else  if(hardcoded_.find(x)!=hardcoded_.end())
     label = hardcoded_.at(x);
   else if(predictor_.get())
@@ -127,7 +130,7 @@ void model::execute(controller<expressions_tuple> const & expressions)
   }
 
   //Execution
-  return templates_[label]->enqueue(queue_, compilers, label, expressions);
+  return templates_[label]->enqueue(queue_, compilers, label, expr);
 }
 
 model::templates_container const & model::templates() const

@@ -92,7 +92,8 @@ void bench(ad::numeric_type dtype){
   {\
   std::vector<long> times;\
   double total_time = 0;\
-  while(total_time*1e-9 < 1e-2){\
+  queue.finish();\
+  while(total_time*1e-9 < 1e-3){\
     std::list<cl::Event> events;\
     OP;\
     queue.finish();\
@@ -107,11 +108,11 @@ void bench(ad::numeric_type dtype){
   {\
   std::vector<long> times;\
   double total_time = 0;\
-  while(total_time*1e-9 < 1e-2){\
+  while(total_time*1e-9 < 1e-3){\
     cl::Event event;\
     OP;\
     queue.finish();\
-    times.push_back(event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -  event.getProfilingInfo<CL_PROFILING_COMMAND_START>());\
+    times.push_back(time_event(0, event));\
     total_time+=times.back();\
   }\
   double t = median(times);\
@@ -167,72 +168,75 @@ cl::CommandQueue & queue = ad::cl_ext::queues[ad::cl_ext::default_context()][0];
 //  /*---------*/
 //  /*--BLAS1--*/
 //  /*---------*/
-//  std::cout << "#AXPY" << std::endl;
-//  for(int_t N : create_log_range(1e3, 2e7, 50, 64))
-//  {
-//    std::cout << N;
-//    ad::array x(N, dtype), y(N, dtype);
-//    /* ATIDLAS */
-//    y = x + y; queue.finish();
-//    BENCHMARK_ATIDLAS(y = ad::control(x + y, ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), 3*N*dtsize/t)
-//    /* clAmdBlas */
-//#ifdef BENCH_CLAMDBLAS
-//    BENCHMARK_CLAMDBLAS(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &queue(), 0, NULL, &event()), 3*N*dtsize/t)
-//#endif
-//    /* BLAS */
-//#ifdef BENCH_CBLAS
-//    std::vector<float> cx(N), cy(N);
-//    ad::copy(x, cx);
-//    ad::copy(y, cy);
-//    BENCHMARK_HOST(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), 3*N*dtsize/t);
-//#endif
-//    /* CuBLAS */
-//#ifdef BENCH_CUBLAS
-//    T *cux, *cuy;
-//    cudaMalloc((void**) &cux, N * sizeof(T));
-//    cudaMalloc((void**) &cuy, N * sizeof(T));
-//    BENCHMARK_CUDA(cublasSaxpy(N, 2, cux, 1, cuy, 1), 3*N*dtsize/t)
-//    cudaFree(cux);
-//    cudaFree(cuy);
-//#endif
-//    std::cout << std::endl;
-//  }
-//  std::cout << "\n\n" << std::flush;
-
-  std::cout << "#DOT" << std::endl;
+  std::cout << "#AXPY" << std::endl;
   for(int_t i = 0 ; i < BLAS1_N.size() ; ++i)
   {
     int_t N = BLAS1_N[i];
     std::cout << N;
-    /* ATIDLAS */
     ad::array x(N, dtype), y(N, dtype);
-    ad::array scratch(N, dtype);
-    ad::scalar s(dtype);
-    s = dot(x,y); queue.finish();
-    BENCHMARK_ATIDLAS(s = ad::control(dot(x,y), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), 2*N*dtsize/t)
+    /* ATIDLAS */
+    std::list<cl::Event> events;\
+    y = x + y;
+    queue.finish();
+    BENCHMARK_ATIDLAS(y = ad::control(x + y, ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)), 3*N*dtsize/t)
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
-    BENCHMARK_CLAMDBLAS(clAmdBlasSdot(N, s.data()(), 0, x.data()(), 0, 1, y.data()(), 0, 1, scratch.data()(), 1, &queue(), 0, NULL, &event()), 2*N*dtsize/t)
+    BENCHMARK_CLAMDBLAS(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &queue(), 0, NULL, &event()), 3*N*dtsize/t)
 #endif
     /* BLAS */
 #ifdef BENCH_CBLAS
     std::vector<float> cx(N), cy(N);
     ad::copy(x, cx);
     ad::copy(y, cy);
-    BENCHMARK_HOST(cblas_sdot(N, cx.data(), 1, cy.data(), 1), 2*N*dtsize/t);
+    BENCHMARK_HOST(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), 3*N*dtsize/t);
 #endif
+    /* CuBLAS */
 #ifdef BENCH_CUBLAS
     T *cux, *cuy;
-    T result;
     cudaMalloc((void**) &cux, N * sizeof(T));
     cudaMalloc((void**) &cuy, N * sizeof(T));
-    BENCHMARK_CUDA(cublasSdot(N, cux, 1, cuy, 1, &result), 2*N*dtsize/t)
+    BENCHMARK_CUDA(cublasSaxpy(N, 2, cux, 1, cuy, 1), 3*N*dtsize/t)
     cudaFree(cux);
     cudaFree(cuy);
 #endif
     std::cout << std::endl;
   }
   std::cout << "\n\n" << std::flush;
+
+//  std::cout << "#DOT" << std::endl;
+//  for(int_t i = 0 ; i < BLAS1_N.size() ; ++i)
+//  {
+//    int_t N = BLAS1_N[i];
+//    std::cout << N;
+//    /* ATIDLAS */
+//    ad::array x(N, dtype), y(N, dtype);
+//    ad::array scratch(N, dtype);
+//    ad::scalar s(dtype);
+//    s = dot(x,y); queue.finish();
+//    BENCHMARK_ATIDLAS(s = ad::control(dot(x,y), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), 2*N*dtsize/t)
+//    /* clAmdBlas */
+//#ifdef BENCH_CLAMDBLAS
+//    BENCHMARK_CLAMDBLAS(clAmdBlasSdot(N, s.data()(), 0, x.data()(), 0, 1, y.data()(), 0, 1, scratch.data()(), 1, &queue(), 0, NULL, &event()), 2*N*dtsize/t)
+//#endif
+//    /* BLAS */
+//#ifdef BENCH_CBLAS
+//    std::vector<float> cx(N), cy(N);
+//    ad::copy(x, cx);
+//    ad::copy(y, cy);
+//    BENCHMARK_HOST(cblas_sdot(N, cx.data(), 1, cy.data(), 1), 2*N*dtsize/t);
+//#endif
+//#ifdef BENCH_CUBLAS
+//    T *cux, *cuy;
+//    T result;
+//    cudaMalloc((void**) &cux, N * sizeof(T));
+//    cudaMalloc((void**) &cuy, N * sizeof(T));
+//    BENCHMARK_CUDA(cublasSdot(N, cux, 1, cuy, 1, &result), 2*N*dtsize/t)
+//    cudaFree(cux);
+//    cudaFree(cuy);
+//#endif
+//    std::cout << std::endl;
+//  }
+//  std::cout << "\n\n" << std::flush;
 
 //  /*---------*/
 //  /*--BLAS2--*/
