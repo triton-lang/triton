@@ -254,8 +254,8 @@ model_map_t init_models(cl::CommandQueue & queue)
     res[std::make_pair(MATRIX_PRODUCT_NT_TYPE, DTYPE)] = ptr_t(new model(mproduct_nt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
     res[std::make_pair(MATRIX_PRODUCT_TT_TYPE, DTYPE)] = ptr_t(new model(mproduct_tt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
   }
-  if(const char * homepath = std::getenv("HOME"))
-    import(std::string(homepath) + "/.atidlas/devices/device0.json", queue, res);
+//  if(const char * homepath = std::getenv("HOME"))
+//    import(std::string(homepath) + "/.atidlas/devices/device0.json", queue, res);
   return res;
 }
 

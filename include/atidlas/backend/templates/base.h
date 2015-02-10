@@ -11,7 +11,7 @@
 #include "atidlas/backend/stream.h"
 #include "atidlas/cl_ext/lazy_compiler.h"
 #include "atidlas/symbolic/expression.h"
-
+#include "atidlas/tools/to_string.hpp"
 namespace atidlas
 {
 
@@ -119,8 +119,34 @@ protected:
 
   static void fetching_loop_info(fetching_policy_type policy, std::string const & bound, kernel_generation_stream & stream,
                                  std::string & init, std::string & upper_bound, std::string & inc, std::string const & domain_id, std::string const & domain_size);
-  static void element_wise_loop_1D(kernel_generation_stream & stream, loop_body_base const & loop_body,
-                                   fetching_policy_type fetch, unsigned int simd_width, std::string const & i, std::string const & bound, std::string const & domain_id, std::string const & domain_size);
+
+  template<class Fun>
+  static void element_wise_loop_1D(kernel_generation_stream & stream, fetching_policy_type fetch, unsigned int simd_width,
+                                   std::string const & i, std::string const & bound, std::string const & domain_id, std::string const & domain_size, Fun const & generate_body)
+  {
+    std::string strwidth = tools::to_string(simd_width);
+    std::string boundround = bound + "/" + strwidth;
+
+    std::string init, upper_bound, inc;
+    fetching_loop_info(fetch, boundround, stream, init, upper_bound, inc, domain_id, domain_size);
+    stream << "for(unsigned int " << i << " = " << init << "; " << i << " < " << upper_bound << "; " << i << " += " << inc << ")" << std::endl;
+    stream << "{" << std::endl;
+    stream.inc_tab();
+    generate_body(simd_width);
+    stream.dec_tab();
+    stream << "}" << std::endl;
+
+    if (simd_width>1)
+    {
+      stream << "for(unsigned int " << i << " = " << boundround << "*" << strwidth << " + " << domain_id << "; " << i << " < " << bound << "; " << i << " += " + domain_size + ")" << std::endl;
+      stream << "{" << std::endl;
+      stream.inc_tab();
+      generate_body(1);
+      stream.dec_tab();
+      stream << "}" << std::endl;
+    }
+  }
+
   static void compute_reduction(kernel_generation_stream & os, std::string acc, std::string cur, op_element const & op);
   static void compute_index_reduction(kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, op_element const & op);
   static void process_all(std::string const & type_key, std::string const & str,

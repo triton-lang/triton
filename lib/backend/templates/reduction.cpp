@@ -94,8 +94,9 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
   stream.inc_tab();
 
   stream << "unsigned int lid = get_local_id(0);" << std::endl;
-  process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
-                                                                                              ("array1", "#pointer += #start;"), expressions, mappings);
+  process(stream, PARENT_NODE_TYPE, {{"array0", "#scalartype #namereg = #pointer[#start];"},
+                                     {"array1", "#pointer += #start;"}},
+                                    expressions, mappings);
 
   for (unsigned int k = 0; k < N; ++k)
   {
@@ -113,55 +114,44 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
     }
   }
 
-  class loop_body : public loop_body_base
+
+  element_wise_loop_1D(stream, p_.fetching_policy, simd_width, "i", "N", "get_global_id(0)", "get_global_size(0)",  [&](unsigned int simd_width)
   {
-  public:
-    loop_body(std::vector<mapped_scalar_reduction*> const & _exprs) : exprs(_exprs){ }
+    std::string i = (simd_width==1)?"i*#stride":"i";
+    //Fetch vector entry
+    for (const auto & elem : exprs)
+      (elem)->process_recursive(stream, PARENT_NODE_TYPE, {{"array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";"},
+                                                           {"matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i*#stride2}];"},
+                                                           {"matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column*#stride2}];"},
+                                                           {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i*#stride2}:$OFFSET{i*#stride, (i + #diag_offset)*#stride2}];"}});
 
-    void operator()(kernel_generation_stream & stream, unsigned int simd_width) const
+    //Update accumulators
+    std::vector<std::string> str(simd_width);
+    if (simd_width==1)
+      str[0] = "#namereg";
+    else
+      for (unsigned int a = 0; a < simd_width; ++a)
+        str[a] = append_simd_suffix("#namereg.s", a);
+
+    for (auto & elem : exprs)
     {
-      std::string i = (simd_width==1)?"i*#stride":"i";
-      //Fetch vector entry
-      for (const auto & elem : exprs)
-        (elem)->process_recursive(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";")
-                                                                                         ("matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i*#stride2}];")
-                                                                                         ("matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column*#stride2}];")
-                                                                                         ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i*#stride2}:$OFFSET{i*#stride, (i + #diag_offset)*#stride2}];"));
-
-
-      //Update accumulators
-      std::vector<std::string> str(simd_width);
-      if (simd_width==1)
-        str[0] = "#namereg";
-      else
-        for (unsigned int a = 0; a < simd_width; ++a)
-          str[a] = append_simd_suffix("#namereg.s", a);
-
-      for (auto & elem : exprs)
+      for (unsigned int a = 0; a < simd_width; ++a)
       {
-        for (unsigned int a = 0; a < simd_width; ++a)
-        {
-          std::map<std::string, std::string> accessors;
-          accessors["array1"] = str[a];
-          accessors["matrix_row"] = str[a];
-          accessors["matrix_column"] = str[a];
-          accessors["matrix_diag"] = str[a];
-          accessors["array0"] = "#namereg";
-          std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, accessors);
-          if (elem->is_index_reduction())
-            compute_index_reduction(stream, elem->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+"
-                                    + tools::to_string(a), elem->process("#name_acc_value"), value,elem->root_op());
-          else
-            compute_reduction(stream, elem->process("#name_acc"), value,elem->root_op());
-        }
+        std::map<std::string, std::string> accessors;
+        accessors["array1"] = str[a];
+        accessors["matrix_row"] = str[a];
+        accessors["matrix_column"] = str[a];
+        accessors["matrix_diag"] = str[a];
+        accessors["array0"] = "#namereg";
+        std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, accessors);
+        if (elem->is_index_reduction())
+          compute_index_reduction(stream, elem->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+"
+                                  + tools::to_string(a), elem->process("#name_acc_value"), value,elem->root_op());
+        else
+          compute_reduction(stream, elem->process("#name_acc"), value,elem->root_op());
       }
     }
-
-  private:
-    std::vector<mapped_scalar_reduction*> exprs;
-  };
-
-  element_wise_loop_1D(stream, loop_body(exprs), p_.fetching_policy, simd_width, "i", "N", "get_global_id(0)", "get_global_size(0)");
+  });
 
   //Fills local memory
   for (unsigned int k = 0; k < N; ++k)
@@ -200,31 +190,30 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
 
   stream << "unsigned int lid = get_local_id(0);" << std::endl;
 
-  for (unsigned int k = 0; k < N; ++k)
+  for (mapped_scalar_reduction* e: exprs)
   {
-    if (exprs[k]->is_index_reduction())
+    if (e->is_index_reduction())
     {
-      stream << exprs[k]->process("__local unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];");
-      stream << exprs[k]->process("unsigned int #name_acc = 0;") << std::endl;
-      stream << exprs[k]->process("__local #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
-      stream << exprs[k]->process("#scalartype #name_acc_value = " + neutral_element(exprs[k]->root_op()) + ";");
+      stream << e->process("__local unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];");
+      stream << e->process("unsigned int #name_acc = 0;") << std::endl;
+      stream << e->process("__local #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << e->process("#scalartype #name_acc_value = " + neutral_element(e->root_op()) + ";");
     }
     else
     {
-      stream << exprs[k]->process("__local #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
-      stream << exprs[k]->process("#scalartype #name_acc = " + neutral_element(exprs[k]->root_op()) + ";");
+      stream << e->process("__local #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << e->process("#scalartype #name_acc = " + neutral_element(e->root_op()) + ";");
     }
   }
 
   stream << "for(unsigned int i = lid; i < " << p_.num_groups << "; i += get_local_size(0))" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  for (unsigned int k = 0; k < N; ++k)
-    if (exprs[k]->is_index_reduction())
-      compute_index_reduction(stream, exprs[k]->process("#name_acc"), exprs[k]->process("#name_temp[i]"),
-                              exprs[k]->process("#name_acc_value"),exprs[k]->process("#name_temp_value[i]"),exprs[k]->root_op());
+  for (mapped_scalar_reduction* e: exprs)
+    if (e->is_index_reduction())
+      compute_index_reduction(stream, e->process("#name_acc"), e->process("#name_temp[i]"), e->process("#name_acc_value"),e->process("#name_temp_value[i]"),e->root_op());
     else
-      compute_reduction(stream, exprs[k]->process("#name_acc"), exprs[k]->process("#name_temp[i]"), exprs[k]->root_op());
+      compute_reduction(stream, e->process("#name_acc"), e->process("#name_temp[i]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;

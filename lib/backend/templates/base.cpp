@@ -407,32 +407,6 @@ std::pair<int_t, int_t> base::matrix_size(array_expression::node const & node)
     return std::make_pair(node.lhs.array.shape1,node.lhs.array.shape2);
 }
 
-void base::element_wise_loop_1D(kernel_generation_stream & stream, loop_body_base const & loop_body,
-                                 fetching_policy_type fetch, unsigned int simd_width, std::string const & i, std::string const & bound, std::string const & domain_id, std::string const & domain_size)
-{
-  std::string strwidth = tools::to_string(simd_width);
-  std::string boundround = bound + "/" + strwidth;
-
-  std::string init, upper_bound, inc;
-  fetching_loop_info(fetch, boundround, stream, init, upper_bound, inc, domain_id, domain_size);
-  stream << "for(unsigned int " << i << " = " << init << "; " << i << " < " << upper_bound << "; " << i << " += " << inc << ")" << std::endl;
-  stream << "{" << std::endl;
-  stream.inc_tab();
-  loop_body(stream, simd_width);
-  stream.dec_tab();
-  stream << "}" << std::endl;
-
-  if (simd_width>1)
-  {
-    stream << "for(unsigned int " << i << " = " << boundround << "*" << strwidth << " + " << domain_id << "; " << i << " < " << bound << "; " << i << " += " + domain_size + ")" << std::endl;
-    stream << "{" << std::endl;
-    stream.inc_tab();
-    loop_body(stream, 1);
-    stream.dec_tab();
-    stream << "}" << std::endl;
-  }
-}
-
 bool base::is_reduction(array_expression::node const & node)
 {
   return node.op.type_family==OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY

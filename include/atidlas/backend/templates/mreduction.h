@@ -15,6 +15,7 @@ struct mreduction_parameters : public base::parameters_type
                                 unsigned int _local_size_0, unsigned int _local_size_1,
                                 unsigned int _num_groups_0, fetching_policy_type _fetch_policy);
   unsigned int num_groups_0;
+  unsigned int num_groups_1;
   fetching_policy_type fetch_policy;
 };
 
