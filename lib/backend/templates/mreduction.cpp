@@ -81,7 +81,7 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
         if(reduction==REDUCE_COLUMNS)
         {
           accessors["array2"] = data_type + " #namereg = " + vload(simd_width, "c*#stride1", "#pointer + r*#ld")+";";
-          accessors["repeat"] = "#scalartype #namereg = $VALUE{(c%#tuplearg0)*#stride, (r%#tuplearg1)*#stride};";
+          accessors["repeat"] = data_type + " #namereg = " + vload(simd_width, "(c%#tuplearg0)*#stride", "#pointer + (r%#tuplearg1)*#stride ")+";";
         }
         else
         {
@@ -107,7 +107,7 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
         {
           std::map<std::string, std::string> accessors;
           accessors["array2"] = str[a];
-          accessors["repeat"] = "#namereg";
+          accessors["repeat"] = str[a];
           accessors["array0"] = "#namereg";
           std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, accessors);
           if (elem->is_index_reduction())

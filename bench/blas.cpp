@@ -157,7 +157,7 @@ cl::CommandQueue & queue = ad::cl_ext::queues[ad::cl_ext::default_context()][0];
   static const std::vector<int> BLAS1_N = create_log_range(1e3, 2e7, 50, 64);
 
   // BLAS2 Sizes
-  static const std::vector<int> BLAS2_N = make_vector<int>() << 64;
+  static const std::vector<int> BLAS2_N = make_vector<int>() << 128;
   static const std::vector<int> BLAS2_M = create_full_range(128, 10000, 64);
 
   // BLAS3 Sizes
@@ -176,9 +176,7 @@ cl::CommandQueue & queue = ad::cl_ext::queues[ad::cl_ext::default_context()][0];
     ad::array x(N, dtype), y(N, dtype);
     /* ATIDLAS */
     std::list<cl::Event> events;\
-    y = x + y;
-    queue.finish();
-    BENCHMARK_ATIDLAS(y = ad::control(x + y, ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)), 3*N*dtsize/t)
+    BENCHMARK_ATIDLAS(y = ad::control(x + y, ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), 3*N*dtsize/t)
     /* clAmdBlas */
 #ifdef BENCH_CLAMDBLAS
     BENCHMARK_CLAMDBLAS(clAmdBlasSaxpy(N, 1, x.data()(), 0, 1, y.data()(), 0, 1, 1, &queue(), 0, NULL, &event()), 3*N*dtsize/t)
@@ -243,9 +241,11 @@ cl::CommandQueue & queue = ad::cl_ext::queues[ad::cl_ext::default_context()][0];
 //  /*---------*/
 //  //T-layout
 //  std::cout << "#GEMV-T" << std::endl;
-//  for(int_t N: std::vector<int>{128})
-//    for(int_t M: create_full_range(128, 10000, 64))
+//  for(int_t i = 0 ; i < BLAS2_N.size() ; ++i)
+//    for(int_t j = 0 ; j < BLAS2_M.size() ; ++j)
 //    {
+//      int_t N = BLAS2_N[i];
+//      int_t M = BLAS2_M[j];
 //      std::cout << M << "," << N;
 //      /* ATIDLAS */
 //      ad::array A(N, M, dtype), y(M, dtype), x(N, dtype);
@@ -275,34 +275,34 @@ cl::CommandQueue & queue = ad::cl_ext::queues[ad::cl_ext::default_context()][0];
 //    }
 //    std::cout << "\n\n" << std::flush;
 
-//  /*---------*/
-//  /*--BLAS3--*/
-//  /*---------*/
-//    std::cout << "#GEMM-NT" << std::endl;
-//    for(std::vector<int_t>::const_iterator Mit = BLAS3_M.begin() ; Mit != BLAS3_M.end() ; ++Mit)
-//    for(std::vector<int_t>::const_iterator Nit = BLAS3_N.begin() ; Nit != BLAS3_N.end() ; ++Nit)
-//    for(std::vector<int_t>::const_iterator Kit = BLAS3_K.begin() ; Kit != BLAS3_K.end() ; ++Kit)
-//    {
-//      int_t M = *Kit, N = *Kit, K = *Kit;
-//      std::cout << M << "," << N << "," << K;
-//      /* ATIDLAS */
-//      ad::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
-//      CL_BENCHMARK(C = dot(A,trans(B)), gflops((double)2*M*N*K, tres));
-//      /* clAmdBlas */
-//  #ifdef BENCH_CLAMDBLAS
-//      CL_BENCHMARK(clAmdBlasSgemm(clAmdBlasColumnMajor, clAmdBlasNoTrans, clAmdBlasTrans, M, N, K, 1, A.data()(), A.ld(), B.data()(), B.ld(),
-//                               0, C.data()(), C.ld(), 1, &ad::cl_ext::get_queue(C.context(), 0)(),0, NULL, NULL), gflops((double)2*M*N*K, tres))
-//  #endif
-//      /* BLAS */
-//  #ifdef BENCH_CBLAS
-//      std::vector<float> cC(M*N), cA(M*K), cB(N*K);
-//      ad::copy(C, cC);
-//      ad::copy(A, cA);
-//      ad::copy(B, cB);
-//      CPU_BENCHMARK(cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, M, N, K, 1, cA.data(), M, cB.data(), N, 1, cC.data(), M), gflops((double)2*M*N*K, tres));
-//  #endif
-//      std::cout << std::endl;
-//    }
+  /*---------*/
+  /*--BLAS3--*/
+  /*---------*/
+    std::cout << "#GEMM-NT" << std::endl;
+    for(std::vector<int_t>::const_iterator Mit = BLAS3_M.begin() ; Mit != BLAS3_M.end() ; ++Mit)
+    for(std::vector<int_t>::const_iterator Nit = BLAS3_N.begin() ; Nit != BLAS3_N.end() ; ++Nit)
+    for(std::vector<int_t>::const_iterator Kit = BLAS3_K.begin() ; Kit != BLAS3_K.end() ; ++Kit)
+    {
+      int_t M = *Kit, N = *Kit, K = *Kit;
+      std::cout << M << "," << N << "," << K;
+      /* ATIDLAS */
+      ad::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
+      BENCHMARK_ATIDLAS(C = ad::control(dot(A,trans(B)), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), (double)2*M*N*K/t);
+      /* clAmdBlas */
+  #ifdef BENCH_CLAMDBLAS
+      BENCHMARK_CLAMDBLAS(clAmdBlasSgemm(clAmdBlasColumnMajor, clAmdBlasNoTrans, clAmdBlasTrans, M, N, K, 1, A.data()(), A.ld(), B.data()(), B.ld(),
+                                          0, C.data()(), C.ld(), 1, &queue(),0, NULL, &event()), (double)2*M*N*K/t)
+  #endif
+      /* BLAS */
+  #ifdef BENCH_CBLAS
+      std::vector<float> cC(M*N), cA(M*K), cB(N*K);
+      ad::copy(C, cC);
+      ad::copy(A, cA);
+      ad::copy(B, cB);
+      BENCHMARK_HOST(cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, M, N, K, 1, cA.data(), M, cB.data(), N, 1, cC.data(), M), (double)2*M*N*K/t);
+  #endif
+      std::cout << std::endl;
+    }
 
 }
 
