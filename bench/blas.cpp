@@ -236,44 +236,44 @@ cl::CommandQueue & queue = ad::cl_ext::queues[ad::cl_ext::default_context()][0];
 //  }
 //  std::cout << "\n\n" << std::flush;
 
-//  /*---------*/
-//  /*--BLAS2--*/
-//  /*---------*/
-//  //T-layout
-//  std::cout << "#GEMV-T" << std::endl;
-//  for(int_t i = 0 ; i < BLAS2_N.size() ; ++i)
-//    for(int_t j = 0 ; j < BLAS2_M.size() ; ++j)
-//    {
-//      int_t N = BLAS2_N[i];
-//      int_t M = BLAS2_M[j];
-//      std::cout << M << "," << N;
-//      /* ATIDLAS */
-//      ad::array A(N, M, dtype), y(M, dtype), x(N, dtype);
-//      y = dot(trans(A),x); queue.finish();
-//      BENCHMARK_ATIDLAS(y = ad::control(dot(trans(A),x), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
-//  #ifdef BENCH_CLAMDBLAS
-//      BENCHMARK_CLAMDBLAS(clAmdBlasSgemv(clAmdBlasColumnMajor, clAmdBlasTrans, N, M, 1, A.data()(), A.ld(), x.data()(), 0, 1, 0, y.data()(), 0, 1, 1, &queue(),0, NULL, &event()), (M*N + M + N)*dtsize/t)
-//  #endif
-//  #ifdef BENCH_CBLAS
-//      std::vector<float> cA(N*M), cx(N), cy(M);
-//      ad::copy(x, cx);
-//      ad::copy(y, cy);
-//      ad::copy(A, cA);
-//      BENCHMARK_HOST(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), N, cx.data(), 1, 0, cy.data(), 1), (M*N + M + N)*dtsize/t);
-//  #endif
-//  #ifdef BENCH_CUBLAS
-//      T *cuA, *cux, *cuy;
-//      cudaMalloc((void**) &cuA, N * M * sizeof(T));
-//      cudaMalloc((void**) &cux, N * sizeof(T));
-//      cudaMalloc((void**) &cuy, M * sizeof(T));
-//      BENCHMARK_CUDA(cublasSgemv(cublasTrans, N, M, 1, cuA, N, cux, 1, 0, cuy, 1), (M*N + M + N)*dtsize/t)
-//      cudaFree(cuA);
-//      cudaFree(cux);
-//      cudaFree(cuy);
-//  #endif
-//      std::cout << std::endl;
-//    }
-//    std::cout << "\n\n" << std::flush;
+  /*---------*/
+  /*--BLAS2--*/
+  /*---------*/
+  //T-layout
+  std::cout << "#GEMV-T" << std::endl;
+  for(int_t i = 0 ; i < BLAS2_N.size() ; ++i)
+    for(int_t j = 0 ; j < BLAS2_M.size() ; ++j)
+    {
+      int_t N = BLAS2_N[i];
+      int_t M = BLAS2_M[j];
+      std::cout << M << "," << N;
+      /* ATIDLAS */
+      ad::array A(N, M, dtype), y(M, dtype), x(N, dtype);
+      y = dot(trans(A),x); queue.finish();
+      BENCHMARK_ATIDLAS(y = ad::control(dot(trans(A),x), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
+  #ifdef BENCH_CLAMDBLAS
+      BENCHMARK_CLAMDBLAS(clAmdBlasSgemv(clAmdBlasColumnMajor, clAmdBlasTrans, N, M, 1, A.data()(), A.ld(), x.data()(), 0, 1, 0, y.data()(), 0, 1, 1, &queue(),0, NULL, &event()), (M*N + M + N)*dtsize/t)
+  #endif
+  #ifdef BENCH_CBLAS
+      std::vector<float> cA(N*M), cx(N), cy(M);
+      ad::copy(x, cx);
+      ad::copy(y, cy);
+      ad::copy(A, cA);
+      BENCHMARK_HOST(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), N, cx.data(), 1, 0, cy.data(), 1), (M*N + M + N)*dtsize/t);
+  #endif
+  #ifdef BENCH_CUBLAS
+      T *cuA, *cux, *cuy;
+      cudaMalloc((void**) &cuA, N * M * sizeof(T));
+      cudaMalloc((void**) &cux, N * sizeof(T));
+      cudaMalloc((void**) &cuy, M * sizeof(T));
+      BENCHMARK_CUDA(cublasSgemv(cublasTrans, N, M, 1, cuA, N, cux, 1, 0, cuy, 1), (M*N + M + N)*dtsize/t)
+      cudaFree(cuA);
+      cudaFree(cux);
+      cudaFree(cuy);
+  #endif
+      std::cout << std::endl;
+    }
+    std::cout << "\n\n" << std::flush;
 
   /*---------*/
   /*--BLAS3--*/

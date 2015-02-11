@@ -10,8 +10,8 @@ namespace atidlas
 
 mreduction_parameters::mreduction_parameters(unsigned int _simd_width,
                               unsigned int _local_size_0, unsigned int _local_size_1,
-                              unsigned int _num_groups_0, fetching_policy_type _fetch_policy): base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1),
-num_groups_0(_num_groups_0), num_groups_1(2), fetch_policy(_fetch_policy) { }
+                              unsigned int _num_groups_0, unsigned int _num_groups_1, fetching_policy_type _fetch_policy): base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1),
+num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetch_policy(_fetch_policy) { }
 
 
 int mreduction::check_invalid_impl(cl::Device const &, expressions_tuple const &) const
@@ -29,8 +29,7 @@ unsigned int mreduction::lmem_usage() const
 std::string mreduction::generate_impl(unsigned int label, expressions_tuple const & expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width, std::vector<mapped_mreduction*> const & exprs) const
 {
   using tools::to_string;
-  unsigned int local_size_1_ld = p_.local_size_1+1;
-  std::string local_size_1_ld_str = to_string(local_size_1_ld);
+
 
   kernel_generation_stream stream;
 
@@ -61,13 +60,16 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
                          {"array2", "#pointer += #start1 + #start2*#ld; "
                                     "#ld *= #nldstride; "}}, expressions, mappings);
 
+  unsigned int local_size_0_ld = p_.local_size_0+1;
+  std::string local_size_0_ld_str = to_string(local_size_0_ld);
+
   for (const auto & e : exprs)
-    stream << e->process("__local #scalartype #name_buf[" + to_string(p_.local_size_0*local_size_1_ld) + "];") << std::endl;
+    stream << e->process("__local #scalartype #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;
 
   stream << "unsigned int lid0 = get_local_id(0);" << std::endl;
   stream << "unsigned int lid1 = get_local_id(1);" << std::endl;
-  stream << "unsigned int upper_bound_0 = ( M +" << p_.local_size_0 - 1 << ")/" << p_.local_size_0 << "*" << p_.local_size_0 << ";" << std::endl;
-  stream << "for(unsigned int r = get_global_id(0); r < upper_bound_0; r += get_global_size(0)){" << std::endl;
+  stream << "unsigned int upper_bound_1 = ( M +" << p_.local_size_1 - 1 << ")/" << p_.local_size_1 << "*" << p_.local_size_1 << ";" << std::endl;
+  stream << "for(unsigned int r = get_global_id(1); r < upper_bound_1; r += get_global_size(1)){" << std::endl;
   stream.inc_tab();
 
   for (const auto & e : exprs)
@@ -77,7 +79,7 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  element_wise_loop_1D(stream, p_.fetch_policy, simd_width, "c", "N", "get_global_id(1)", "get_global_size(1)", [&](unsigned int simd_width)
+  element_wise_loop_1D(stream, p_.fetch_policy, simd_width, "c", "N", "get_global_id(0)", "get_global_size(0)", [&](unsigned int simd_width)
   {
     std::string data_type = append_width("#scalartype",simd_width);
 
@@ -121,25 +123,25 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream << "}" << std::endl;
 
   for (auto & expr : exprs)
-    stream << expr->process("#name_buf[lid0*" + local_size_1_ld_str + "+ lid1] = #name_acc;") << std::endl;
+    stream << expr->process("#name_buf[lid1*" + local_size_0_ld_str + "+ lid0] = #name_acc;") << std::endl;
 
   stream << "#pragma unroll" << std::endl;
-  stream << "for(unsigned int stride = " << p_.local_size_1/2 << "; stride >0; stride /=2)" << std::endl;
+  stream << "for(unsigned int stride = " << p_.local_size_0/2 << "; stride >0; stride /=2)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
   stream << "barrier(CLK_LOCAL_MEM_FENCE); " << std::endl;
-  stream <<  "if (lid1 < stride)" << std::endl;
+  stream <<  "if (lid0 < stride)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
   for (auto & e : exprs)
     if (e->is_index_reduction())
-      compute_index_reduction(stream, e->process("#name_buf[lid0*" + local_size_1_ld_str + " + lid1]"), e->process("#name_buf[lid0*" + local_size_1_ld_str + " + lid1 + stride]")
-                                    , e->process("#name_buf_value[lid0*" + local_size_1_ld_str + " + lid1]"), e->process("#name_buf_value[lid0*" + local_size_1_ld_str + " + lid1 + stride]")
+      compute_index_reduction(stream, e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
+                                    , e->process("#name_buf_value[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf_value[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
                                     , e->root_op());
     else
-      compute_reduction(stream,e->process("#name_buf[lid0*" + local_size_1_ld_str + " + lid1]"), e->process("#name_buf[lid0*" + local_size_1_ld_str + " + lid1 + stride]"), e->root_op());
+      compute_reduction(stream,e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -148,16 +150,25 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream << "}" << std::endl;
 
 
-  stream <<  "if (lid1 == 0 && r < M)";
+  stream <<  "if (lid0 == 0 && r < M)";
   stream << "{" << std::endl;
   stream.inc_tab();
-
+  if(p_.num_groups_0==1)
+  {
+    std::map<std::string, std::string> accessors;
+    accessors["mreduction"] = "#name_buf[lid1*" + local_size_0_ld_str + "]";
+    accessors["array1"] = "#pointer[r*#stride]";
+    evaluate(stream, PARENT_NODE_TYPE, accessors, expressions, mappings);
+  }
+  else
+  {
     for (mapped_reduction const * e : exprs)
     {
       if (e->is_index_reduction())
-        stream << e->process("#name_temp_value[r + M*get_group_id(1)] = #name_buf_value[lid0*" + local_size_1_ld_str + "];") << std::endl;
-      stream << e->process("#name_temp[r + M*get_group_id(1)] = #name_buf[lid0*" + local_size_1_ld_str + "];") << std::endl;
+        stream << e->process("#name_temp_value[r + M*get_group_id(0)] = #name_buf_value[lid1*" + local_size_0_ld_str + "];") << std::endl;
+      stream << e->process("#name_temp[r + M*get_group_id(0)] = #name_buf[lid1*" + local_size_0_ld_str + "];") << std::endl;
     }
+  }
   stream.dec_tab();
   stream << "}" << std::endl;
 
@@ -168,6 +179,8 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream.dec_tab();
   stream << "}" << std::endl;
 
+  if(p_.num_groups_0>1)
+  {
   /////////////////////////////////////////
   ////////////// Kernel 2
   ////////////////////////////////////////
@@ -184,12 +197,12 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
                                     "#ld *= #nldstride; "}}, expressions, mappings);
 
   for (const auto & e : exprs)
-    stream << e->process("__local #scalartype #name_buf[" + to_string(p_.local_size_0*local_size_1_ld) + "];") << std::endl;
+    stream << e->process("__local #scalartype #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;
 
   stream << "unsigned int lid0 = get_local_id(0);" << std::endl;
   stream << "unsigned int lid1 = get_local_id(1);" << std::endl;
-  stream << "unsigned int upper_bound_0 = ( M +" << p_.local_size_0 - 1 << ")/" << p_.local_size_0 << "*" << p_.local_size_0 << ";" << std::endl;
-  stream << "for(unsigned int r = get_global_id(0); r < upper_bound_0; r += get_global_size(0)){" << std::endl;
+  stream << "unsigned int upper_bound_1 = ( M +" << p_.local_size_1 - 1 << ")/" << p_.local_size_1 << "*" << p_.local_size_1 << ";" << std::endl;
+  stream << "for(unsigned int r = get_global_id(1); r < upper_bound_1; r += get_global_size(1)){" << std::endl;
   stream.inc_tab();
 
   for (const auto & e : exprs)
@@ -199,7 +212,7 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  stream << "for(unsigned int c = get_local_id(1); c < " << p_.num_groups_1 << "; c += get_local_size(1)){" << std::endl;
+  stream << "for(unsigned int c = get_local_id(0); c < " << p_.num_groups_0 << "; c += get_local_size(0)){" << std::endl;
   stream.inc_tab();
 
   for (mapped_reduction* e: exprs)
@@ -213,25 +226,25 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream << "}" << std::endl;
 
   for (auto & expr : exprs)
-    stream << expr->process("#name_buf[lid0*" + local_size_1_ld_str + "+ lid1] = #name_acc;") << std::endl;
+    stream << expr->process("#name_buf[lid1*" + local_size_0_ld_str + "+ lid0] = #name_acc;") << std::endl;
 
   stream << "#pragma unroll" << std::endl;
-  stream << "for(unsigned int stride = " << p_.local_size_1/2 << "; stride >0; stride /=2)" << std::endl;
+  stream << "for(unsigned int stride = " << p_.local_size_0/2 << "; stride >0; stride /=2)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
   stream << "barrier(CLK_LOCAL_MEM_FENCE); " << std::endl;
-  stream <<  "if (lid1 < stride)" << std::endl;
+  stream <<  "if (lid0 < stride)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
   for (auto & e : exprs)
     if (e->is_index_reduction())
-      compute_index_reduction(stream, e->process("#name_buf[lid0*" + local_size_1_ld_str + " + lid1]"), e->process("#name_buf[lid0*" + local_size_1_ld_str + " + lid1 + stride]")
-                                    , e->process("#name_buf_value[lid0*" + local_size_1_ld_str + " + lid1]"), e->process("#name_buf_value[lid0*" + local_size_1_ld_str + " + lid1 + stride]")
+      compute_index_reduction(stream, e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
+                                    , e->process("#name_buf_value[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf_value[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
                                     , e->root_op());
     else
-      compute_reduction(stream,e->process("#name_buf[lid0*" + local_size_1_ld_str + " + lid1]"), e->process("#name_buf[lid0*" + local_size_1_ld_str + " + lid1 + stride]"), e->root_op());
+      compute_reduction(stream,e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -240,12 +253,12 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
   stream << "}" << std::endl;
 
 
-  stream <<  "if (lid1 == 0 && r < M)";
+  stream <<  "if (lid0 == 0 && r < M)";
   stream << "{" << std::endl;
   stream.inc_tab();
 
   std::map<std::string, std::string> accessors;
-  accessors["mreduction"] = "#name_buf[lid0*" + local_size_1_ld_str + "]";
+  accessors["mreduction"] = "#name_buf[lid1*" + local_size_0_ld_str + "]";
   accessors["array1"] = "#pointer[r*#stride]";
   evaluate(stream, PARENT_NODE_TYPE, accessors, expressions, mappings);
 
@@ -258,7 +271,7 @@ std::string mreduction::generate_impl(unsigned int label, expressions_tuple cons
 
   stream.dec_tab();
   stream << "}" << std::endl;
-
+  }
 
 //  std::cout << stream.str() << std::endl;
   return stream.str();
@@ -309,11 +322,6 @@ void mreduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_comp
   expressions_tuple const & expressions = controller.x();
   cl::Context const & context = expressions.context();
 
-  char k0[10];
-  char k1[10];
-  fill_kernel_name(k0, label, "d0");
-  fill_kernel_name(k1, label, "d1");
-
   std::vector<int_t> MN = input_sizes(expressions);
   std::vector<array_expression::node const *> reductions;
   for (const auto & e : expressions.data())
@@ -330,21 +338,28 @@ void mreduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_comp
     idx = 1;
   cl::Program & program = programs[idx].program();
 
-  //NDRange
-  cl::Kernel kernels[2] = { cl::Kernel(program, k0), cl::Kernel(program, k1)};
-  cl::NDRange global[2] = { cl::NDRange(p_.local_size_0*p_.num_groups_0, p_.local_size_1*p_.num_groups_1), cl::NDRange(p_.local_size_0*p_.num_groups_0, p_.local_size_1) };
-  cl::NDRange local[2] = { cl::NDRange(p_.local_size_0, p_.local_size_1), cl::NDRange(p_.local_size_0, p_.local_size_1) };
-
   std::vector< cl::Buffer > tmp;
   std::vector< cl::Buffer > tmpidx;
   unsigned int dtype_size = size_of(lhs_most(expressions.data().front()->tree(), expressions.data().front()->root()).lhs.dtype);
-  for (auto & k : kernels)
+
+  char kname[2][10];
+  fill_kernel_name(kname[0], label, "d0");
+  fill_kernel_name(kname[1], label, "d1");
+
+  unsigned int nk = (p_.num_groups_0==1)?1:2;
+
+  std::vector<cl::Kernel> kernels;
+  for(unsigned int k = 0 ; k < nk ; ++k)
+    kernels.push_back(cl::Kernel(program, kname[k]));
+
+  for(unsigned int k = 0 ; k < nk ; ++k)
   {
+    cl::Kernel & kernel = kernels[k];
     unsigned int n_arg = 0;
     int_t M = MN[0];
     int_t N = MN[1];
-    k.setArg(n_arg++, cl_uint(M));
-    k.setArg(n_arg++, cl_uint(N));
+    kernel.setArg(n_arg++, cl_uint(M));
+    kernel.setArg(n_arg++, cl_uint(N));
 
     //Temporary buffers
     unsigned int i = 0;
@@ -354,19 +369,22 @@ void mreduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_comp
       if (is_index_reduction(r->op))
       {
         if (tmpidx.size() <= j)
-          tmpidx.push_back(cl::Buffer(context, CL_MEM_READ_WRITE, p_.num_groups_1*M*4));
-        k.setArg(n_arg++, tmpidx[j]);
+          tmpidx.push_back(cl::Buffer(context, CL_MEM_READ_WRITE, p_.num_groups_0*M*4));
+        kernel.setArg(n_arg++, tmpidx[j]);
         j++;
       }
       if (tmp.size() <= i)
-        tmp.push_back(cl::Buffer(context, CL_MEM_READ_WRITE, p_.num_groups_1*M*dtype_size));
-      k.setArg(n_arg++, tmp[i]);
+        tmp.push_back(cl::Buffer(context, CL_MEM_READ_WRITE, p_.num_groups_0*M*dtype_size));
+      kernel.setArg(n_arg++, tmp[i]);
       i++;
     }
-    set_arguments(expressions, k, n_arg);
+    set_arguments(expressions, kernel, n_arg);
   }
 
-  for(unsigned int i = 0 ; i < 2 ; ++i)
+  //NDRange
+  cl::NDRange global[2] = { cl::NDRange(p_.local_size_0*p_.num_groups_0, p_.local_size_1*p_.num_groups_1), cl::NDRange(p_.local_size_0, p_.local_size_1*p_.num_groups_1) };
+  cl::NDRange local[2] = { cl::NDRange(p_.local_size_0, p_.local_size_1), cl::NDRange(p_.local_size_0, p_.local_size_1) };
+  for(unsigned int i = 0 ; i < nk ; ++i)
     controller.execution_options().enqueue_cache(queue, kernels[i], cl::NullRange, global[i], local[i]);
 }
 
@@ -375,8 +393,8 @@ mreduction_rows::mreduction_rows(mreduction_parameters  const & parameters,
   mreduction(parameters, REDUCE_ROWS, binding_policy){}
 
 mreduction_rows::mreduction_rows(unsigned int simd, unsigned int ls1, unsigned int ls2,
-                                           unsigned int ng, fetching_policy_type fetch, binding_policy_t bind):
-  mreduction(mreduction_parameters(simd, ls1, ls2, ng, fetch), REDUCE_ROWS, bind)
+                                           unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind):
+  mreduction(mreduction_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS, bind)
 {}
 
 
@@ -385,8 +403,8 @@ mreduction_cols::mreduction_cols(mreduction::parameters_type  const & parameters
   mreduction(parameters, REDUCE_COLUMNS, binding_policy){}
 
 mreduction_cols::mreduction_cols(unsigned int simd, unsigned int ls1, unsigned int ls2,
-                                           unsigned int ng, fetching_policy_type fetch, binding_policy_t bind):
-  mreduction(mreduction_parameters(simd, ls1, ls2, ng, fetch), REDUCE_COLUMNS, bind)
+                                           unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind):
+  mreduction(mreduction_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS, bind)
 {}
 
 template class base_impl<mreduction, mreduction_parameters>;
