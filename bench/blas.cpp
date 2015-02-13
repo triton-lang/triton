@@ -241,32 +241,33 @@ cl::CommandQueue & queue = ad::cl_ext::queues[ad::cl_ext::default_context()][0];
   /*---------*/
   //T-layout
   std::cout << "#GEMV-T" << std::endl;
-  for(int_t i = 0 ; i < BLAS2_N.size() ; ++i)
-    for(int_t j = 0 ; j < BLAS2_M.size() ; ++j)
+  for(int_t i = 0 ; i < BLAS2_M.size() ; ++i)
+    for(int_t j = 0 ; j < BLAS2_N.size() ; ++j)
     {
-      int_t N = BLAS2_N[i];
-      int_t M = BLAS2_M[j];
+      int_t M = BLAS2_M[i];
+      int_t N = BLAS2_N[j];
       std::cout << M << "," << N;
       /* ATIDLAS */
       ad::array A(N, M, dtype), y(M, dtype), x(N, dtype);
+      int_t lda = A.ld();
       y = dot(trans(A),x); queue.finish();
       BENCHMARK_ATIDLAS(y = ad::control(dot(trans(A),x), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
   #ifdef BENCH_CLAMDBLAS
-      BENCHMARK_CLAMDBLAS(clAmdBlasSgemv(clAmdBlasColumnMajor, clAmdBlasTrans, N, M, 1, A.data()(), A.ld(), x.data()(), 0, 1, 0, y.data()(), 0, 1, 1, &queue(),0, NULL, &event()), (M*N + M + N)*dtsize/t)
+      BENCHMARK_CLAMDBLAS(clAmdBlasSgemv(clAmdBlasColumnMajor, clAmdBlasTrans, N, M, 1, A.data()(), lda, x.data()(), 0, 1, 0, y.data()(), 0, 1, 1, &queue(),0, NULL, &event()), (M*N + M + N)*dtsize/t)
   #endif
   #ifdef BENCH_CBLAS
       std::vector<float> cA(N*M), cx(N), cy(M);
       ad::copy(x, cx);
       ad::copy(y, cy);
       ad::copy(A, cA);
-      BENCHMARK_HOST(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), N, cx.data(), 1, 0, cy.data(), 1), (M*N + M + N)*dtsize/t);
+      BENCHMARK_HOST(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), lda, cx.data(), 1, 0, cy.data(), 1), (M*N + M + N)*dtsize/t);
   #endif
   #ifdef BENCH_CUBLAS
       T *cuA, *cux, *cuy;
       cudaMalloc((void**) &cuA, N * M * sizeof(T));
       cudaMalloc((void**) &cux, N * sizeof(T));
       cudaMalloc((void**) &cuy, M * sizeof(T));
-      BENCHMARK_CUDA(cublasSgemv(cublasTrans, N, M, 1, cuA, N, cux, 1, 0, cuy, 1), (M*N + M + N)*dtsize/t)
+      BENCHMARK_CUDA(cublasSgemv('t', N, M, 1, cuA, lda, cux, 1, 0, cuy, 1), (M*N + M + N)*dtsize/t)
       cudaFree(cuA);
       cudaFree(cux);
       cudaFree(cuy);
@@ -286,12 +287,13 @@ cl::CommandQueue & queue = ad::cl_ext::queues[ad::cl_ext::default_context()][0];
       int_t M = *Kit, N = *Kit, K = *Kit;
       std::cout << M << "," << N << "," << K;
       /* ATIDLAS */
-      ad::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
+      ad::array C(M, N, dtype), A(M, K, dtype), B(K, N, dtype);
+      int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
       BENCHMARK_ATIDLAS(C = ad::control(dot(A,trans(B)), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), (double)2*M*N*K/t);
       /* clAmdBlas */
   #ifdef BENCH_CLAMDBLAS
-      BENCHMARK_CLAMDBLAS(clAmdBlasSgemm(clAmdBlasColumnMajor, clAmdBlasNoTrans, clAmdBlasTrans, M, N, K, 1, A.data()(), A.ld(), B.data()(), B.ld(),
-                                          0, C.data()(), C.ld(), 1, &queue(),0, NULL, &event()), (double)2*M*N*K/t)
+      BENCHMARK_CLAMDBLAS(clAmdBlasSgemm(clAmdBlasColumnMajor, clAmdBlasNoTrans, clAmdBlasTrans, M, N, K, 1, A.data()(), lda, B.data()(), ldb,
+                                          0, C.data()(), ldc, 1, &queue(),0, NULL, &event()), (double)2*M*N*K/t)
   #endif
       /* BLAS */
   #ifdef BENCH_CBLAS
@@ -299,7 +301,17 @@ cl::CommandQueue & queue = ad::cl_ext::queues[ad::cl_ext::default_context()][0];
       ad::copy(C, cC);
       ad::copy(A, cA);
       ad::copy(B, cB);
-      BENCHMARK_HOST(cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, M, N, K, 1, cA.data(), M, cB.data(), N, 1, cC.data(), M), (double)2*M*N*K/t);
+      BENCHMARK_HOST(cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, M, N, K, 1, cA.data(), lda, cB.data(), ldb, 1, cC.data(), ldc), (double)2*M*N*K/t);
+  #endif
+  #ifdef BENCH_CUBLAS
+      T *cuA, *cuB, *cuC;
+      cudaMalloc((void**) &cuA, M * K * sizeof(T));
+      cudaMalloc((void**) &cuB, K * N * sizeof(T));
+      cudaMalloc((void**) &cuC, M * N * sizeof(T));
+      BENCHMARK_CUDA(cublasSgemm('n', 't', M, N, K, 1, cuA, lda, cuB, ldb, 1, cuC, ldc), (double)2*M*N*K/t)
+      cudaFree(cuA);
+      cudaFree(cuB);
+      cudaFree(cuC);
   #endif
       std::cout << std::endl;
     }
