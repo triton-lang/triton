@@ -16,6 +16,7 @@
 #include <numeric>
 #include <regex>
 
+#define HAS_A_BLAS defined(BENCH_CBLAS) or defined(BENCH_CLBLAS) or defined(BENCH_CUBLAS)
 namespace ad = isaac;
 typedef ad::int_t int_t;
 
@@ -256,7 +257,9 @@ void bench(ad::numeric_type dtype, std::string operation)
         std::cout << M << "," << N;
         /* ISAAC */
         ad::array A(N, M, dtype), y(M, dtype), x(N, dtype);
+    #if HAS_A_BLAS
         int_t lda = A.ld();
+    #endif
         y = dot(trans(A),x); queue.synchronize();
         BENCHMARK_ISAAC(y = ad::control(dot(trans(A),x), ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)),(M*N + M + N)*dtsize/t);
         BENCHMARK_ISAAC(y = ad::control(dot(trans(A),x), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
@@ -306,7 +309,9 @@ void bench(ad::numeric_type dtype, std::string operation)
         std::cout << M << "," << N << "," << K;
         /* ISAAC */
         ad::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
+    #if HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
+    #endif
         BENCHMARK_ISAAC(C = ad::control(dot(A,trans(B)), ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)), (double)2*M*N*K/t);
         //BENCHMARK_ISAAC(C = ad::control(dot(A,trans(B)), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
