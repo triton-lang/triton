@@ -1,11 +1,11 @@
 #include <iostream>
-#include "atidlas/backend/templates/reduction.h"
+#include "isaac/backend/templates/reduction.h"
 #include <CL/cl.hpp>
-#include "atidlas/tools/to_string.hpp"
-#include "atidlas/tools/make_map.hpp"
-#include "atidlas/tools/make_vector.hpp"
-
-namespace atidlas
+#include "isaac/tools/to_string.hpp"
+#include "isaac/tools/make_map.hpp"
+#include "isaac/tools/make_vector.hpp"
+#include "isaac/backend/keywords.h"
+namespace isaac
 {
 
 reduction_parameters::reduction_parameters(unsigned int _simd_width,
@@ -24,7 +24,7 @@ unsigned int reduction::lmem_usage(expressions_tuple const & expressions) const
   return res;
 }
 
-int reduction::check_invalid_impl(cl::Device const &, expressions_tuple const &) const
+int reduction::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
@@ -32,13 +32,13 @@ int reduction::check_invalid_impl(cl::Device const &, expressions_tuple const &)
 }
 
 inline void reduction::reduce_1d_local_memory(kernel_generation_stream & stream, unsigned int size, std::vector<mapped_scalar_reduction*> exprs,
-                                   std::string const & buf_str, std::string const & buf_value_str) const
+                                   std::string const & buf_str, std::string const & buf_value_str, driver::backend_type backend) const
 {
   stream << "#pragma unroll" << std::endl;
   stream << "for(unsigned int stride = " << size/2 << "; stride >0; stride /=2)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  stream << "barrier(CLK_LOCAL_MEM_FENCE); " << std::endl;
+  stream << LocalBarrier(backend) << ";" << std::endl;
   stream << "if (lid <  stride)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
@@ -56,7 +56,7 @@ inline void reduction::reduce_1d_local_memory(kernel_generation_stream & stream,
   stream << "}" << std::endl;
 }
 
-std::string reduction::generate_impl(unsigned int label, const char * type, expressions_tuple const & expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
+std::string reduction::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   kernel_generation_stream stream;
 
@@ -66,34 +66,41 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
       if (mapped_scalar_reduction * p = dynamic_cast<mapped_scalar_reduction*>(iit->second.get()))
         exprs.push_back(p);
   std::size_t N = exprs.size();
+  driver::backend_type backend = device.backend();
+  std::string _size_t = size_type(device);
 
-  std::string arguments = "unsigned int N, ";
+  std::string arguments = _size_t + " N, ";
   for (unsigned int k = 0; k < N; ++k)
   {
     std::string numeric_type = numeric_type_to_string(lhs_most(exprs[k]->array_expression().tree(),
                                                                       exprs[k]->array_expression().root()).lhs.dtype);
     if (exprs[k]->is_index_reduction())
     {
-      arguments += exprs[k]->process("__global unsigned int* #name_temp, ");
-      arguments += exprs[k]->process("__global " + tools::to_string(numeric_type) + "* #name_temp_value, ");
+      arguments += exprs[k]->process(Global(backend).get() + " unsigned int* #name_temp, ");
+      arguments += exprs[k]->process(Global(backend).get() + " " + tools::to_string(numeric_type) + "* #name_temp_value, ");
     }
     else
-      arguments += exprs[k]->process("__global " + tools::to_string(numeric_type) + "* #name_temp, ");
+      arguments += exprs[k]->process(Global(backend).get() + " " + tools::to_string(numeric_type) + "* #name_temp, ");
   }
 
+  char name[2][16] = {{"prod"}, {"reduce"}};
+  strcat(name[0], suffix);
+  strcat(name[1], suffix);
 
   /* ------------------------
    * First Kernel
    * -----------------------*/
-  char kprefix[10];
-  fill_kernel_name(kprefix, label, type);
-
-  stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
-  stream << "__kernel void " << kprefix << "0" << "(" << arguments << generate_arguments("#scalartype", mappings, expressions) << ")" << std::endl;
+  if(backend==driver::OPENCL)
+    stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[0] << "(" << arguments << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  stream << "unsigned int lid = get_local_id(0);" << std::endl;
+  stream << "unsigned int lid = " <<LocalIdx0(backend) << ";" << std::endl;
+  stream << "unsigned int gid = " <<GlobalIdx0(backend) << ";" << std::endl;
+  stream << "unsigned int gpid = " <<GroupIdx0(backend) << ";" << std::endl;
+  stream << "unsigned int gsize = " <<GlobalSize0(backend) << ";" << std::endl;
+
   process(stream, PARENT_NODE_TYPE, {{"array0", "#scalartype #namereg = #pointer[#start];"},
                                      {"array1", "#pointer += #start;"}},
                                     expressions, mappings);
@@ -102,25 +109,25 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
   {
     if (exprs[k]->is_index_reduction())
     {
-      stream << exprs[k]->process("__local #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << exprs[k]->process(Local(backend).get() + " #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << exprs[k]->process("#scalartype #name_acc_value = " + neutral_element(exprs[k]->root_op()) + ";") << std::endl;
-      stream << exprs[k]->process("__local unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << exprs[k]->process(Local(backend).get() + " unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << exprs[k]->process("unsigned int #name_acc = 0;") << std::endl;
     }
     else
     {
-      stream << exprs[k]->process("__local #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << exprs[k]->process(Local(backend).get() + " #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << exprs[k]->process("#scalartype #name_acc = " + neutral_element(exprs[k]->root_op()) + ";") << std::endl;
     }
   }
 
 
-  element_wise_loop_1D(stream, p_.fetching_policy, simd_width, "i", "N", "get_global_id(0)", "get_global_size(0)",  [&](unsigned int simd_width)
+  element_wise_loop_1D(stream, p_.fetching_policy, p_.simd_width, "i", "N", "get_global_id(0)", "get_global_size(0)", device, [&](unsigned int simd_width)
   {
     std::string i = (simd_width==1)?"i*#stride":"i";
     //Fetch vector entry
     for (const auto & elem : exprs)
-      (elem)->process_recursive(stream, PARENT_NODE_TYPE, {{"array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,i,"#pointer")+";"},
+      (elem)->process_recursive(stream, PARENT_NODE_TYPE, {{"array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,"#scalartype",i,"#pointer",backend)+";"},
                                                            {"matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i*#stride2}];"},
                                                            {"matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column*#stride2}];"},
                                                            {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i*#stride2}:$OFFSET{i*#stride, (i + #diag_offset)*#stride2}];"}});
@@ -162,7 +169,7 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
   }
 
   //Reduce local memory
-  reduce_1d_local_memory(stream, p_.local_size_0, exprs, "#name_buf", "#name_buf_value");
+  reduce_1d_local_memory(stream, p_.local_size_0, exprs, "#name_buf", "#name_buf_value", backend);
 
   //Write to temporary buffers
   stream << "if (lid==0)" << std::endl;
@@ -171,8 +178,8 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
   for (unsigned int k = 0; k < N; ++k)
   {
     if (exprs[k]->is_index_reduction())
-      stream << exprs[k]->process("#name_temp_value[get_group_id(0)] = #name_buf_value[0];") << std::endl;
-    stream << exprs[k]->process("#name_temp[get_group_id(0)] = #name_buf[0];") << std::endl;
+      stream << exprs[k]->process("#name_temp_value[gpid] = #name_buf_value[0];") << std::endl;
+    stream << exprs[k]->process("#name_temp[gpid] = #name_buf[0];") << std::endl;
   }
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -183,30 +190,32 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
   /* ------------------------
    * Second kernel
    * -----------------------*/
-  stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
-  stream << "__kernel void " << kprefix << "1" << "(" << arguments << generate_arguments("#scalartype", mappings, expressions) << ")" << std::endl;
+  if(backend==driver::OPENCL)
+    stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[1] << "(" << arguments << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  stream << "unsigned int lid = get_local_id(0);" << std::endl;
+  stream << "unsigned int lid = " <<LocalIdx0(backend) << ";" << std::endl;
+  stream << "unsigned int lsize = " <<LocalSize0(backend) << ";" << std::endl;
 
   for (mapped_scalar_reduction* e: exprs)
   {
     if (e->is_index_reduction())
     {
-      stream << e->process("__local unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];");
+      stream << e->process(Local(backend).get() + " unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];");
       stream << e->process("unsigned int #name_acc = 0;") << std::endl;
-      stream << e->process("__local #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << e->process(Local(backend).get() + " #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << e->process("#scalartype #name_acc_value = " + neutral_element(e->root_op()) + ";");
     }
     else
     {
-      stream << e->process("__local #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << e->process("#scalartype #name_acc = " + neutral_element(e->root_op()) + ";");
     }
   }
 
-  stream << "for(unsigned int i = lid; i < " << p_.num_groups << "; i += get_local_size(0))" << std::endl;
+  stream << "for(unsigned int i = lid; i < " << p_.num_groups << "; i += lsize)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
   for (mapped_scalar_reduction* e: exprs)
@@ -227,7 +236,7 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
 
 
   //Reduce and write final result
-  reduce_1d_local_memory(stream, p_.local_size_0, exprs, "#name_buf", "#name_buf_value");
+  reduce_1d_local_memory(stream, p_.local_size_0, exprs, "#name_buf", "#name_buf_value", backend);
 
   stream << "if (lid==0)" << std::endl;
   stream << "{" << std::endl;
@@ -243,14 +252,6 @@ std::string reduction::generate_impl(unsigned int label, const char * type, expr
   stream << "}" << std::endl;
 
   return stream.str();
-}
-
-std::vector<std::string> reduction::generate_impl(unsigned int label,  expressions_tuple const & expressions, std::vector<mapping_type> const & mappings) const
-{
-  std::vector<std::string> result;
-  result.push_back(generate_impl(label, "f", expressions, mappings, 1));
-  result.push_back(generate_impl(label, "o", expressions, mappings, p_.simd_width));
-  return result;
 }
 
 reduction::reduction(reduction::parameters_type const & parameters,
@@ -269,12 +270,20 @@ std::vector<int_t> reduction::input_sizes(expressions_tuple const & expressions)
   return tools::make_vector<int_t>() << N;
 }
 
-void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, controller<expressions_tuple> const & controller)
+void reduction::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
 
   //Preprocessing
   int_t size = input_sizes(expressions)[0];
+
+  //fallback
+  if(p_.simd_width > 1 && (requires_fallback(expressions) || (size%p_.simd_width>0)))
+  {
+      fallback.enqueue(queue, program, "fallback", fallback, controller);
+      return;
+  }
+
   std::vector<array_expression::node const *> reductions;
   for (const auto & elem : expressions.data())
   {
@@ -284,30 +293,24 @@ void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compi
   }
 
   //Kernel
-  char kfallback[2][10];
-  fill_kernel_name(kfallback[0], label, "f0");
-  fill_kernel_name(kfallback[1], label, "f1");
-  char kopt[2][10];
-  fill_kernel_name(kopt[0], label, "o0");
-  fill_kernel_name(kopt[1], label, "o1");
+  char name[2][32] = {{"prod"}, {"reduce"}};
+  strcat(name[0], suffix);
+  strcat(name[1], suffix);
 
-  bool fallback = p_.simd_width > 1 && (requires_fallback(expressions) || (size%p_.simd_width>0));
-  cl::Program & program = programs[fallback?0:1].program();
-  cl::Kernel kernels[2] = { cl::Kernel(program, fallback?kfallback[0]:kopt[0]),
-                            cl::Kernel(program, fallback?kfallback[1]:kopt[1]) };
+  driver::Kernel kernels[2] = { driver::Kernel(program,name[0]), driver::Kernel(program,name[1]) };
 
   //NDRange
-  cl::NDRange global[2] = { cl::NDRange(p_.local_size_0*p_.num_groups), cl::NDRange(p_.local_size_0) };
-  cl::NDRange local[2] = { cl::NDRange(p_.local_size_0), cl::NDRange(p_.local_size_0) };
+  driver::NDRange global[2] = { driver::NDRange(p_.local_size_0*p_.num_groups), driver::NDRange(p_.local_size_0) };
+  driver::NDRange local[2] = { driver::NDRange(p_.local_size_0), driver::NDRange(p_.local_size_0) };
 
   //Arguments
-  cl::Context context = expressions.context();
+  driver::Context context = expressions.context();
   array_expression const & s = *(expressions.data().front());
   unsigned int dtype_size = size_of(lhs_most(s.tree(), s.root()).lhs.dtype);
   for (auto & kernel : kernels)
   {
     unsigned int n_arg = 0;
-    kernel.setArg(n_arg++, cl_uint(size));
+    kernel.setSizeArg(n_arg++, size);
 
     //Temporary buffers
     unsigned int i = 0;
@@ -317,12 +320,12 @@ void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compi
       if (is_index_reduction((*it)->op))
       {
         if (tmpidx_.size() <= j)
-          tmpidx_.push_back(cl::Buffer(context, CL_MEM_READ_WRITE, p_.num_groups*4));
+          tmpidx_.push_back(driver::Buffer(context, p_.num_groups*4));
         kernel.setArg(n_arg++, tmpidx_[j]);
         j++;
       }
       if (tmp_.size() <= i)
-        tmp_.push_back(cl::Buffer(context, CL_MEM_READ_WRITE, p_.num_groups*dtype_size));
+        tmp_.push_back(driver::Buffer(context, p_.num_groups*dtype_size));
       kernel.setArg(n_arg++, tmp_[i]);
       i++;
     }
@@ -330,9 +333,7 @@ void reduction::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compi
   }
 
   for (unsigned int k = 0; k < 2; k++)
-    controller.execution_options().enqueue_cache(queue, kernels[k], cl::NullRange, global[k], local[k]);
+    controller.execution_options().enqueue_cache(queue, kernels[k], global[k], local[k]);
 }
-
-template class base_impl<reduction, reduction_parameters>;
 
 }

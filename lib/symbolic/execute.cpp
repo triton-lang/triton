@@ -2,13 +2,13 @@
 #include <list>
 #include <vector>
 #include <stdexcept>
-#include "atidlas/types.h"
-#include "atidlas/array.h"
+#include "isaac/types.h"
+#include "isaac/array.h"
 #include <CL/cl.hpp>
-#include "atidlas/model/model.h"
-#include "atidlas/symbolic/expression.h"
+#include "isaac/model/model.h"
+#include "isaac/symbolic/expression.h"
 
-namespace atidlas
+namespace isaac
 {
 
   namespace detail
@@ -20,7 +20,7 @@ namespace atidlas
     *  @return std::pair<bool, expression_type> the first element is weather or not a breakpoint is required
     *          The second element is the type of the new operation
     */
-    static std::pair<bool, expression_type> is_breakpoint(expression_type current_type, op_element op)
+    static std::pair<bool, expression_type> is_breakpoint(expression_type current_type, op_element op, bool is_first)
     {
       using std::make_pair;
 
@@ -41,10 +41,10 @@ namespace atidlas
 //BLAS3 Helpers
 #define HANDLE_MATRIX_PRODUCT(tmp)    case OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY:\
                                           switch(op.type){\
-                                              case OPERATOR_MATRIX_PRODUCT_NN_TYPE:      return make_pair(true, MATRIX_PRODUCT_NN_TYPE);\
-                                              case OPERATOR_MATRIX_PRODUCT_TN_TYPE:      return make_pair(true, MATRIX_PRODUCT_TN_TYPE);\
-                                              case OPERATOR_MATRIX_PRODUCT_NT_TYPE:      return make_pair(true, MATRIX_PRODUCT_NT_TYPE);\
-                                              case OPERATOR_MATRIX_PRODUCT_TT_TYPE:      return make_pair(true, MATRIX_PRODUCT_TT_TYPE);\
+                                              case OPERATOR_MATRIX_PRODUCT_NN_TYPE:      return make_pair(tmp, MATRIX_PRODUCT_NN_TYPE);\
+                                              case OPERATOR_MATRIX_PRODUCT_TN_TYPE:      return make_pair(tmp, MATRIX_PRODUCT_TN_TYPE);\
+                                              case OPERATOR_MATRIX_PRODUCT_NT_TYPE:      return make_pair(tmp, MATRIX_PRODUCT_NT_TYPE);\
+                                              case OPERATOR_MATRIX_PRODUCT_TT_TYPE:      return make_pair(tmp, MATRIX_PRODUCT_TT_TYPE);\
                                               default: assert(false && "This misformed expression shouldn't occur");\
                                           }
 
@@ -81,7 +81,7 @@ namespace atidlas
         case MATRIX_AXPY_TYPE:
           switch(op.type_family){
             HANDLE_VECTOR_REDUCTION(true);
-            HANDLE_MATRIX_PRODUCT(true);
+            HANDLE_MATRIX_PRODUCT(!is_first);
             default: break;
           }
           break;
@@ -114,33 +114,33 @@ namespace atidlas
       return make_pair(false, current_type);
     }
 
-
     /** @brief Parses the breakpoints for a given expression tree */
     static void parse(array_expression::container_type&array, size_t idx,
                expression_type current_type,
                breakpoints_t & breakpoints,
-               expression_type & final_type)
+               expression_type & final_type,
+               bool is_first = true)
     {
       array_expression::node & node = array[idx];
       if (node.lhs.type_family == COMPOSITE_OPERATOR_FAMILY)
       {
-        std::pair<bool, expression_type> breakpoint = is_breakpoint(current_type, array[node.lhs.node_index].op);
+        std::pair<bool, expression_type> breakpoint = is_breakpoint(current_type, array[node.lhs.node_index].op, is_first);
         expression_type next_type = breakpoint.second;
         if(breakpoint.first)
             breakpoints.push_back(std::make_pair(next_type, &node.lhs));
         else
             final_type = next_type;
-        parse(array, node.lhs.node_index, next_type, breakpoints, final_type);
+        parse(array, node.lhs.node_index, next_type, breakpoints, final_type, false);
       }
       if (node.rhs.type_family == COMPOSITE_OPERATOR_FAMILY)
       {
-        std::pair<bool, expression_type> breakpoint = is_breakpoint(current_type, array[node.rhs.node_index].op);
+        std::pair<bool, expression_type> breakpoint = is_breakpoint(current_type, array[node.rhs.node_index].op, is_first);
         expression_type next_type = breakpoint.second;
         if(breakpoint.first)
             breakpoints.push_back(std::make_pair(next_type, &node.rhs));
         else
             final_type = next_type;
-        parse(array, node.rhs.node_index, next_type, breakpoints, final_type);
+        parse(array, node.rhs.node_index, next_type, breakpoints, final_type, false);
       }
     }
 
@@ -150,7 +150,7 @@ namespace atidlas
   void execute(controller<array_expression> const & c, model_map_t & models)
   {
     array_expression expression = c.x();
-    cl::Context const & context = expression.context();
+    driver::Context const & context = expression.context();
     size_t rootidx = expression.root();
     array_expression::container_type & tree = const_cast<array_expression::container_type &>(expression.tree());
     array_expression::node root_save = tree[rootidx];
@@ -163,9 +163,9 @@ namespace atidlas
 
     //Init
     expression_type current_type;
-    if(root_save.lhs.array.shape1==1 && root_save.lhs.array.shape2==1)
+    if(root_save.lhs.array->nshape()==0)
       current_type = SCALAR_AXPY_TYPE;
-    else if(root_save.lhs.array.shape1==1 || root_save.lhs.array.shape2==1)
+    else if(root_save.lhs.array->nshape()==1)
       current_type=VECTOR_AXPY_TYPE;
     else
       current_type=MATRIX_AXPY_TYPE;
@@ -188,15 +188,15 @@ namespace atidlas
         case SCALAR_AXPY_TYPE:
         case REDUCTION_TYPE:           tmp = tools::shared_ptr<array>(new array(1, dtype, context));                                                        break;
 
-        case VECTOR_AXPY_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array.shape1, dtype, context));                              break;
-        case ROW_WISE_REDUCTION_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array.shape1, dtype, context));                              break;
-        case COL_WISE_REDUCTION_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array.shape2, dtype, context));                              break;
+        case VECTOR_AXPY_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
+        case ROW_WISE_REDUCTION_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
+        case COL_WISE_REDUCTION_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[1], dtype, context));                              break;
 
-        case MATRIX_AXPY_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array.shape1, lmost.lhs.array.shape2, dtype, context)); break;
-        case MATRIX_PRODUCT_NN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array.shape1, node.rhs.array.shape2, dtype, context));   break;
-        case MATRIX_PRODUCT_NT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array.shape1, node.rhs.array.shape1, dtype, context));   break;
-        case MATRIX_PRODUCT_TN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array.shape2, node.rhs.array.shape2, dtype, context));   break;
-        case MATRIX_PRODUCT_TT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array.shape2, node.rhs.array.shape1, dtype, context));   break;
+        case MATRIX_AXPY_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], lmost.lhs.array->shape()[1], dtype, context)); break;
+        case MATRIX_PRODUCT_NN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[1], dtype, context));   break;
+        case MATRIX_PRODUCT_NT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[0], dtype, context));   break;
+        case MATRIX_PRODUCT_TN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[1], dtype, context));   break;
+        case MATRIX_PRODUCT_TT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[0], dtype, context));   break;
 
         default: throw std::invalid_argument("Unrecognized operation");
       }

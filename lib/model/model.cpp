@@ -3,27 +3,28 @@
 #include <stdexcept>
 #include <algorithm>
 #include <numeric>
+#include <memory>
 
 #include "rapidjson/document.h"
-#include "atidlas/backend/parse.h"
-#include "atidlas/backend/templates/vaxpy.h"
-#include "atidlas/backend/templates/reduction.h"
-#include "atidlas/backend/templates/maxpy.h"
-#include "atidlas/backend/templates/mreduction.h"
-#include "atidlas/backend/templates/mproduct.h"
-#include "atidlas/exception/unknown_datatype.h"
-#include "atidlas/exception/operation_not_supported.h"
-#include "atidlas/model/model.h"
-#include "atidlas/tools/make_vector.hpp"
-#include "atidlas/tools/timer.hpp"
+#include "isaac/backend/parse.h"
+#include "isaac/backend/templates/vaxpy.h"
+#include "isaac/backend/templates/reduction.h"
+#include "isaac/backend/templates/maxpy.h"
+#include "isaac/backend/templates/mreduction.h"
+#include "isaac/backend/templates/mproduct.h"
+#include "isaac/exception/unknown_datatype.h"
+#include "isaac/exception/operation_not_supported.h"
+#include "isaac/model/model.h"
+#include "isaac/tools/make_vector.hpp"
+#include "isaac/tools/timer.hpp"
 #include "convert.hpp"
 
 
-namespace atidlas
+namespace isaac
 {
 
-static double time_event(unsigned long sum, cl::Event const & e)
-{ return sum + e.getProfilingInfo<CL_PROFILING_COMMAND_END>() -  e.getProfilingInfo<CL_PROFILING_COMMAND_START>();}
+static double time_event(unsigned long sum, driver::Event const & e)
+{ return sum + e.elapsed_time();}
 
 
 std::string model::define_extension(std::string const & extensions, std::string const & ext)
@@ -50,9 +51,9 @@ void model::fill_program_name(char* program_name, expressions_tuple const & expr
   delete binder;
 }
 
-std::vector<cl_ext::lazy_compiler>& model::init(controller<expressions_tuple> const & expressions)
+driver::Program& model::init(controller<expressions_tuple> const & expressions)
 {
-  cl::Context const & context = expressions.x().context();
+  driver::Context const & context = expressions.x().context();
   std::string pname;
   compilation_options_type const & opt = expressions.compilation_options();
   if(opt.program_name.empty())
@@ -63,54 +64,57 @@ std::vector<cl_ext::lazy_compiler>& model::init(controller<expressions_tuple> co
   }
   else
     pname = expressions.compilation_options().program_name;
-  std::vector<cl_ext::lazy_compiler> & to_init = lazy_programs_[context()][pname];
-  if(to_init.empty())
+
+  std::shared_ptr<driver::Program> & program = programs_[context][pname];
+  if(!program)
   {
-    cl::Device device = queue_.getInfo<CL_QUEUE_DEVICE>();
-    std::string extensions = device.getInfo<CL_DEVICE_EXTENSIONS>();
+    driver::Device device = queue_.device();
+    std::string extensions = device.extensions();
+    std::string all_extensions = define_extension(extensions, "cl_khr_fp64");
 
-    to_init.push_back(cl_ext::lazy_compiler(context, pname, opt.recompile));
-    to_init.back().add(define_extension(extensions, "cl_khr_fp64"));
-
-    to_init.push_back(cl_ext::lazy_compiler(context, pname + "_fb", opt.recompile));
-    to_init.back().add(define_extension(extensions, "cl_khr_fp64"));
-
-    for(size_t i = 0 ; i < templates_.size() ; ++i)
-    {
-      std::vector<std::string> cur = templates_[i]->generate(i, expressions.x(), device);
-      for(size_t j = 0 ; j < cur.size() ; ++j){
-        to_init[j].add(cur[j]);
-      }
+   std::string srcs;
+    for(int i = 0 ; i < templates_.size() ; ++i){
+      char buffer[16];
+      sprintf(buffer,"%d",i);
+      srcs += templates_[i]->generate(buffer, expressions.x(), device);
     }
+    srcs += fallback_->generate("fallback", expressions.x(), device);
+
+
+    program.reset(new driver::Program(context, all_extensions + srcs));
   }
-  return to_init;
+  return *program;
 }
 
-model::model(predictors::random_forest const & predictor, std::vector< tools::shared_ptr<base> > const & templates, cl::CommandQueue & queue) :
-  templates_(templates), predictor_(new predictors::random_forest(predictor)), queue_(queue)
+model::model(expression_type etype, numeric_type dtype, predictors::random_forest const & predictor, std::vector< tools::shared_ptr<base> > const & templates, driver::CommandQueue & queue) :
+  templates_(templates), fallback_(fallbacks[std::make_pair(etype, dtype)]), predictor_(new predictors::random_forest(predictor)), queue_(queue)
 {}
 
-model::model(std::vector< tools::shared_ptr<base> > const & templates, cl::CommandQueue & queue) :  templates_(templates), queue_(queue)
-{}
 
-model::model(base const & tp, cl::CommandQueue & queue) : templates_(1,tp.clone()), queue_(queue)
+model::model(expression_type etype, numeric_type dtype, base const & tp, driver::CommandQueue & queue) : templates_(1,tp.clone()), fallback_(fallbacks[std::make_pair(etype, dtype)]), queue_(queue)
 {}
 
 void model::execute(controller<expressions_tuple> const & expr)
 {
-  std::vector<cl_ext::lazy_compiler> & compilers = init(expr);
+  driver::Program & program = init(expr);
   std::vector<int_t> x = templates_[0]->input_sizes(expr.x());
 
   //Specific tuning if requested
   if(expr.dispatcher_options().tune && hardcoded_.find(x)==hardcoded_.end())
   {
     std::vector<double> timings(templates_.size());
-    for(size_t i = 0 ; i < templates_.size() ; ++i)
+    for(int i = 0 ; i < templates_.size() ; ++i)
     {
-      std::list<cl::Event> events;
-      templates_[i]->enqueue(queue_, compilers, i, control(expr.x(), execution_options_type(0, &events)));
-      queue_.finish();
-      timings[i] = 1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event);
+      std::list<driver::Event> events;
+      try{
+        char buffer[16];
+        sprintf(buffer,"%d",i);
+        templates_[i]->enqueue(queue_, program, buffer, *fallback_, control(expr.x(), execution_options_type(0, &events)));
+        queue_.synchronize();
+        timings[i] = 1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event);
+      }catch(...){
+        timings[i] = INFINITY;
+      }
     }
     //Fill the override
     std::vector<int_t> x = templates_[0]->input_sizes(expr.x());
@@ -126,11 +130,13 @@ void model::execute(controller<expressions_tuple> const & expr)
   else if(predictor_.get())
   {
     std::vector<float> predictions = predictor_->predict(x);
-    label = std::distance(predictions.begin(),std::min_element(predictions.begin(), predictions.end()));
+    label = std::distance(predictions.begin(),std::max_element(predictions.begin(), predictions.end()));
   }
 
   //Execution
-  return templates_[label]->enqueue(queue_, compilers, label, expr);
+  char buffer[16];
+  sprintf(buffer,"%d",label);
+  return templates_[label]->enqueue(queue_, program, buffer, *fallback_, expr);
 }
 
 model::templates_container const & model::templates() const
@@ -175,19 +181,19 @@ namespace detail
     else if(template_name.find("gemvT")!=std::string::npos)
       return tools::shared_ptr<base>(new mreduction_cols(a[0], a[1], a[2], a[3], a[4], fetch[a[5]]));
     else if(template_name.find("gemmNN")!=std::string::npos)
-      return tools::shared_ptr<base>(new mproduct_nn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], fetch[a[7]], fetch[a[8]], a[9], a[10]));
+      return tools::shared_ptr<base>(new mproduct_nn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
     else if(template_name.find("gemmTN")!=std::string::npos)
-      return tools::shared_ptr<base>(new mproduct_tn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], fetch[a[7]], fetch[a[8]], a[9], a[10]));
+      return tools::shared_ptr<base>(new mproduct_tn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
     else if(template_name.find("gemmNT")!=std::string::npos)
-      return tools::shared_ptr<base>(new mproduct_nt(a[0], a[1], a[2], a[3], a[4], a[5], a[6], fetch[a[7]], fetch[a[8]], a[9], a[10]));
+      return tools::shared_ptr<base>(new mproduct_nt(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
     else if(template_name.find("gemmTT")!=std::string::npos)
-      return tools::shared_ptr<base>(new mproduct_tt(a[0], a[1], a[2], a[3], a[4], a[5], a[6], fetch[a[7]], fetch[a[8]], a[9], a[10]));
+      return tools::shared_ptr<base>(new mproduct_tt(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
     else
       throw std::invalid_argument("Invalid expression: " + template_name);
   }
 }
 
-void import(std::string const & fname, cl::CommandQueue & queue, model_map_t& result)
+void import(std::string const & fname, driver::CommandQueue & queue, model_map_t& result)
 {
   namespace js = rapidjson;
   //Parse the JSON document
@@ -201,8 +207,8 @@ void import(std::string const & fname, cl::CommandQueue & queue, model_map_t& re
   str.assign((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
   document.Parse<0>(str.c_str());
   //Deserialize
-  std::vector<std::string> operations = tools::make_vector<std::string>() << "vaxpy" << "dot"  << "maxpy" << "gemvN" << "gemvT"  << "gemmNN" << "gemmTN" << "gemmTT";
-  std::vector<std::string> dtype = tools::make_vector<std::string>() << "float32" << "float64";
+  std::vector<std::string> operations = {"vaxpy", "dot", "maxpy", "gemvN", "gemvT", "gemmNN", "gemmTN", "gemmNT", "gemmTT"};
+  std::vector<std::string> dtype = {"float32", "float64"};
   for(auto & operation : operations)
   {
     const char * opcstr = operation.c_str();
@@ -221,58 +227,75 @@ void import(std::string const & fname, cl::CommandQueue & queue, model_map_t& re
           js::Value const & profiles = document[opcstr][dtcstr]["profiles"];
           for (js::SizeType id = 0 ; id < profiles.Size() ; ++id)
             templates.push_back(detail::create(operation, tools::to_int_array<int>(profiles[id])));
+
+          base const & fallback = *fallbacks[std::make_pair(etype, dtype)];
           if(templates.size()>1)
           {
             // Get predictor
             predictors::random_forest predictor(document[opcstr][dtcstr]["predictor"]);
-            result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(predictor, templates, queue));
+            result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(etype, dtype, predictor, templates, queue));
           }
           else
-            result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(templates, queue));
+            result[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(etype, dtype, *templates[0], queue));
         }
       }
     }
   }
 }
 
-model_map_t init_models(cl::CommandQueue & queue)
-{
-  model_map_t res;
-  typedef tools::shared_ptr<model> ptr_t;
-  numeric_type types[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
 
-  for(auto DTYPE : types){
-    
-    res[std::make_pair(SCALAR_AXPY_TYPE, DTYPE)] = ptr_t(new model(vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED), queue));
-    res[std::make_pair(VECTOR_AXPY_TYPE, DTYPE)] = ptr_t (new model(vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED), queue));
-    res[std::make_pair(REDUCTION_TYPE, DTYPE)] = ptr_t(new model(reduction(1,64,128,FETCH_FROM_GLOBAL_STRIDED), queue));
-    res[std::make_pair(MATRIX_AXPY_TYPE, DTYPE)] = ptr_t(new model(maxpy(1,8,8,8,8,FETCH_FROM_GLOBAL_STRIDED), queue));
-    res[std::make_pair(ROW_WISE_REDUCTION_TYPE, DTYPE)] = ptr_t(new model(mreduction_rows(1, 8, 8, 4, 16, FETCH_FROM_GLOBAL_STRIDED), queue));
-    res[std::make_pair(COL_WISE_REDUCTION_TYPE, DTYPE)] = ptr_t(new model(mreduction_cols(1, 8, 8, 64, 8, FETCH_FROM_GLOBAL_STRIDED), queue));
-    res[std::make_pair(MATRIX_PRODUCT_NN_TYPE, DTYPE)] = ptr_t(new model(mproduct_nn(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
-    res[std::make_pair(MATRIX_PRODUCT_TN_TYPE, DTYPE)] = ptr_t(new model(mproduct_tn(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
-    res[std::make_pair(MATRIX_PRODUCT_NT_TYPE, DTYPE)] = ptr_t(new model(mproduct_nt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
-    res[std::make_pair(MATRIX_PRODUCT_TT_TYPE, DTYPE)] = ptr_t(new model(mproduct_tt(1, 8, 8, 8, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8), queue));
+std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<base> > init_fallback()
+{
+  typedef tools::shared_ptr<base> ptr_t;
+  std::map<std::pair<expression_type, numeric_type>, ptr_t > res;
+  numeric_type types[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
+  for(auto DTYPE : types)
+  {
+    res[std::make_pair(SCALAR_AXPY_TYPE, DTYPE)] = ptr_t(new vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(VECTOR_AXPY_TYPE, DTYPE)] = ptr_t (new vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(REDUCTION_TYPE, DTYPE)] = ptr_t(new reduction(1,64,128,FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(MATRIX_AXPY_TYPE, DTYPE)] = ptr_t(new maxpy(1,8,8,8,8,FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(ROW_WISE_REDUCTION_TYPE, DTYPE)] = ptr_t(new mreduction_rows(1, 8, 8, 4, 16, FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(COL_WISE_REDUCTION_TYPE, DTYPE)] = ptr_t(new mreduction_cols(1, 8, 8, 64, 8, FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(MATRIX_PRODUCT_NN_TYPE, DTYPE)] = ptr_t(new mproduct_nn(1, 8, 8, 8, 1, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(MATRIX_PRODUCT_TN_TYPE, DTYPE)] = ptr_t(new mproduct_tn(1, 8, 8, 8, 1, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(MATRIX_PRODUCT_NT_TYPE, DTYPE)] = ptr_t(new mproduct_nt(1, 8, 8, 8, 1, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(MATRIX_PRODUCT_TT_TYPE, DTYPE)] = ptr_t(new mproduct_tt(1, 8, 8, 8, 1, 4, 1, 4, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8, true));
   }
-//  if(const char * homepath = std::getenv("HOME"))
-//    import(std::string(homepath) + "/.atidlas/devices/device0.json", queue, res);
   return res;
 }
 
-model_map_t& get_model_map(cl::CommandQueue & queue)
+//TODO: Clean everything by overloading operator[]
+model_map_t init_models(driver::CommandQueue & queue)
 {
-  std::map<cl::CommandQueue, model_map_t, cl_ext::compare>::iterator it = models.find(queue);
+  model_map_t res;
+  numeric_type dtypes[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
+  expression_type etypes[] = {SCALAR_AXPY_TYPE, VECTOR_AXPY_TYPE, REDUCTION_TYPE, MATRIX_AXPY_TYPE, ROW_WISE_REDUCTION_TYPE, COL_WISE_REDUCTION_TYPE, MATRIX_PRODUCT_NN_TYPE, MATRIX_PRODUCT_NT_TYPE, MATRIX_PRODUCT_TN_TYPE, MATRIX_PRODUCT_TT_TYPE};
+
+  for(numeric_type dtype: dtypes)
+    for(expression_type etype: etypes)
+      res[std::make_pair(etype, dtype)] = tools::shared_ptr<model>(new model(etype, dtype, *fallbacks[std::make_pair(etype, dtype)], queue));
+
+  if(const char * homepath = std::getenv("HOME"))
+    import(std::string(homepath) + "/.isaac/devices/device0.json", queue, res);
+  return res;
+}
+
+model_map_t& get_model_map(driver::CommandQueue & queue)
+{
+  std::map<driver::CommandQueue, model_map_t>::iterator it = models.find(queue);
   if(it == models.end())
     return models.insert(std::make_pair(queue, init_models(queue))).first->second;
   return it->second;
 }
 
-model& get_model(cl::CommandQueue & queue, expression_type expression, numeric_type dtype)
+model& get_model(driver::CommandQueue & queue, expression_type expression, numeric_type dtype)
 {
   std::pair<expression_type, numeric_type> key(expression, dtype);
   return *get_model_map(queue).at(key);
 }
 
-std::map<cl::CommandQueue, model_map_t, cl_ext::compare> models;
+std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<base> > fallbacks = init_fallback();
+std::map<driver::CommandQueue, model_map_t> models;
 
 }

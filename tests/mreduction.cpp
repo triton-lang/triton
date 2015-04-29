@@ -1,8 +1,8 @@
 #include <cmath>
 #include "common.hpp"
-#include "atidlas/array.h"
+#include "isaac/array.h"
 
-namespace ad = atidlas;
+namespace ad = isaac;
 
 template<typename T>
 void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matrix_base<T> const & cA, simple_vector_base<T> & cx,
@@ -11,8 +11,8 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   int failure_count = 0;
 
 
-  ad::int_t M = A.shape()._1;
-  ad::int_t N = A.shape()._2;
+  ad::int_t M = A.shape()[0];
+  ad::int_t N = A.shape()[1];
 
   simple_vector<T> bufy(M);
   simple_vector<T> bufx(N);
@@ -46,7 +46,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 }
 
 template<typename T>
-void test_impl(T epsilon, cl::Context const & ctx)
+void test_impl(T epsilon, ad::driver::Context const & ctx)
 {
   int_t M = 1324;
   int_t N = 1143;
@@ -65,10 +65,11 @@ void test_impl(T epsilon, cl::Context const & ctx)
 
 int main()
 {
-  for(const auto & elem : ad::cl_ext::queues.data())
+  auto data = ad::driver::queues.contexts();
+  for(const auto & elem : data)
   {
-    cl::Device device = elem.second[0].getInfo<CL_QUEUE_DEVICE>();
-    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    ad::driver::Device device = elem.second[0].device();
+    std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
     test_impl<float>(1e-4, elem.first);

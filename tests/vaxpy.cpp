@@ -1,10 +1,10 @@
 #include <cmath>
 #include <iostream>
 #include "common.hpp"
-#include "atidlas/array.h"
+#include "isaac/array.h"
 
-namespace ad = atidlas;
-typedef atidlas::int_t int_t;
+namespace ad = isaac;
+typedef isaac::int_t int_t;
 
 template<typename T>
 void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vector_base<T>& cy, simple_vector_base<T>& cz,
@@ -14,13 +14,13 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 
   int failure_count = 0;
   ad::numeric_type dtype = x.dtype();
-  cl::Context const & ctx = x.context();
+  ad::driver::Context const & ctx = x.context();
 
   int_t N = cz.size();
 
   T aa = 3.12, bb=3.5;
-  atidlas::value_scalar a(aa), b(bb);
-  atidlas::scalar da(a, ctx), db(b, ctx);
+  isaac::value_scalar a(aa), b(bb);
+  isaac::scalar da(a, ctx), db(b, ctx);
 
   simple_vector<T> buffer(N);
 #define CONVERT
@@ -30,7 +30,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   for(int_t i = 0 ; i < N ; ++i)\
     CPU_LOOP;\
   GPU_EXPR;\
-  atidlas::copy(z, buffer.data());\
+  isaac::copy(z, buffer.data());\
   CONVERT;\
   if(diff(cz, buffer, epsilon))\
   {\
@@ -95,9 +95,9 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 }
 
 template<typename T>
-void test_impl(T epsilon, cl::Context const & ctx)
+void test_impl(T epsilon, ad::driver::Context const & ctx)
 {
-  using atidlas::_;
+  using isaac::_;
 
   int_t N = 24378;
   int_t SUBN = 531;
@@ -120,10 +120,11 @@ void test_impl(T epsilon, cl::Context const & ctx)
 
 int main()
 {
-  for(const auto & elem : ad::cl_ext::queues.data())
+  auto data = ad::driver::queues.contexts();
+  for(const auto & elem : data)
   {
-    cl::Device device = elem.second[0].getInfo<CL_QUEUE_DEVICE>();
-    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    ad::driver::Device device = elem.second[0].device();
+    std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
     test_impl<float>(1e-4, elem.first);

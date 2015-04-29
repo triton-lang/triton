@@ -2,7 +2,7 @@ import random, time, sys, copy
 import misc_tools
 
 import numpy as np
-import pyatidlas as atd
+import pyisaac as atd
 from deap import algorithms
 from deap import base
 from deap import creator
@@ -30,6 +30,14 @@ def b_gray_to_bin(A='00000000', endian='big'):
 
 class GeneticOperators(object):
 
+    class Pow2(object):
+        def __init__(self, v):
+            self.value = v
+        
+        @property
+        def decoded():
+            return 2**self.value
+    
     def __init__(self, symbolic, Template, out):
         self.device = symbolic.context.queues[0].device
         self.symbolic = symbolic
@@ -39,15 +47,15 @@ class GeneticOperators(object):
 
   
         self.genome_info = {
-                            atd.vaxpy: [3,4,4,atd.fetching_policy_type],
-                            atd.reduction: [3,4,4,atd.fetching_policy_type],
-                            atd.maxpy: [3,3,3,3,3,atd.fetching_policy_type],
-                            atd.mreduction_rows: [3,3,3,3,3,atd.fetching_policy_type],
-                            atd.mreduction_cols: [3,3,3,3,3,atd.fetching_policy_type],
-                            atd.mproduct_nn: [3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3],
-                            atd.mproduct_nt: [3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3],
-                            atd.mproduct_tn: [3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3],
-                            atd.mproduct_tt: [3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3]
+                            atd.vaxpy: [2,4,4,atd.fetching_policy_type],
+                            atd.reduction: [2,4,4,atd.fetching_policy_type],
+                            atd.maxpy: [2,3,3,3,3,atd.fetching_policy_type],
+                            atd.mreduction_rows: [2,3,3,3,3,atd.fetching_policy_type],
+                            atd.mreduction_cols: [2,3,3,3,3,atd.fetching_policy_type],
+                            atd.mproduct_nn: [2,3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3],
+                            atd.mproduct_nt: [2,3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3],
+                            atd.mproduct_tn: [2,3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3],
+                            atd.mproduct_tt: [2,3,3,3,3,3,3,3,atd.fetching_policy_type,atd.fetching_policy_type,3]
                            }[Template]
         self.indpb = 1.0/sum([1 if x==atd.fetching_policy_type else x for x in self.genome_info])
 
@@ -64,29 +72,30 @@ class GeneticOperators(object):
     def decode(self, genome):
         fetching_policy_type = atd.fetching_policy_type
         fetch = [fetching_policy_type.FETCH_FROM_LOCAL, fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED, fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS]
-        decode_element = lambda x:2**int(b_gray_to_bin(''.join(x)), 2)
+        is_gemm = self.Template in [atd.mproduct_nn, atd.mproduct_nt, atd.mproduct_tn, atd.mproduct_tt]
         result = []
         offset = 0
-        for x in self.genome_info:
+        for i, x in enumerate(self.genome_info):
             if x==atd.fetching_policy_type:
                 result.append(fetch[genome[offset]])
                 offset = offset + 1
             else:
-                result.append(decode_element(genome[offset:offset+x]))
+                decoded = int(b_gray_to_bin(''.join(genome[offset:offset+x])), 2)
+                result.append(decoded if is_gemm and  i in [11, 12] else 2**decoded)
                 offset = offset + x
         #GEMM peculiarities
-        if self.Template in [atd.mproduct_nn, atd.mproduct_nt, atd.mproduct_tn, atd.mproduct_tt]:
+        if is_gemm:
             if fetching_policy_type.FETCH_FROM_LOCAL in result:
-                lf1 = result[1]*result[3]/result[9]
+                lf1 = result[1]*result[3]/result[10]
             else:
-                result[9] = 0
+                result[10] = 0
                 lf1 = 0
             result.append(lf1)
         return result
 
     def init(self, N):
         result = []
-        allowed_idx = [0,1,2] if self.Template in [atd.mproduct_nn, atd.mproduct_nt, atd.mproduct_tn, atd.mproduct_tt] else [1,2]
+        allowed_idx = [0] if self.Template in [atd.mproduct_nn, atd.mproduct_nt, atd.mproduct_tn, atd.mproduct_tt] else [1,2]
         for idx in allowed_idx:
             current = []
             while len(current) < N/len(allowed_idx):
@@ -114,14 +123,13 @@ class GeneticOperators(object):
         while True:
             new_individual = copy.deepcopy(individual)
             for i in range(len(new_individual)):
-                if isinstance(individual[i], int) and random.random() < self.indpb:
+                if isinstance(individual[i], int) and random.random() < 0.1:
                     while new_individual[i] == individual[i]:
                         new_individual[i] = random.randint(0, 2)
                 elif not isinstance(individual[i], int) and random.random() < self.indpb:
                     new_individual[i] = '1' if new_individual[i]=='0' else '0'
             parameters = self.decode(new_individual)
             template = self.Template(*parameters)
-            #print tools.skip(template, self.symbolic), parameters
             if not misc_tools.skip(template, self.symbolic):
                 break
         return new_individual,
@@ -130,12 +138,9 @@ class GeneticOperators(object):
         if tuple(individual) not in self.cache:
             parameters = self.decode(individual)
             template = self.Template(*parameters)
-            try:
-                tt = misc_tools.benchmark(template, self.symbolic)
-                self.out.write(','.join([str(tt)]+map(str,map(int,parameters)))+'\n')
-                self.cache[tuple(individual)] = tt
-            except ValueError:
-                self.cache[tuple(individual)] = 10
+            tt = misc_tools.benchmark(template, self.symbolic)
+            self.out.write(','.join([str(tt)]+map(str,map(int,parameters)))+'\n')
+            self.cache[tuple(individual)] = tt
         return self.cache[tuple(individual)],
 
     def optimize(self, maxtime, maxgen, compute_perf, perf_metric):

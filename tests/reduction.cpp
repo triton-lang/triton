@@ -2,9 +2,9 @@
 #include <iostream>
 
 #include "common.hpp"
-#include "atidlas/array.h"
+#include "isaac/array.h"
 
-namespace ad = atidlas;
+namespace ad = isaac;
 typedef ad::int_t int_t;
 
 template<typename T>
@@ -12,15 +12,15 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
                                 ad::array & x, ad::array & y)
 {
   using namespace std;
-  cl::Context const & ctx = x.context();
+  ad::driver::Context const & ctx = x.context();
   int_t N = cx.size();
   unsigned int failure_count = 0;
 
-  atidlas::numeric_type dtype = ad::to_numeric_type<T>::value;
+  isaac::numeric_type dtype = ad::to_numeric_type<T>::value;
 
   T cs = 0;
   T tmp = 0;
-  atidlas::scalar ds(dtype, ctx);
+  isaac::scalar ds(dtype, ctx);
 
 #define RUN_TEST(NAME, CPU_REDUCTION, INIT, ASSIGNMENT, GPU_REDUCTION) \
   cout << NAME "..." << flush;\
@@ -52,9 +52,9 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
 }
 
 template<typename T>
-void test_impl(T epsilon, cl::Context const & ctx)
+void test_impl(T epsilon, ad::driver::Context const & ctx)
 {
-  using atidlas::_;
+  using isaac::_;
 
   int_t N = 24378;
   int_t SUBN = 531;
@@ -74,10 +74,11 @@ void test_impl(T epsilon, cl::Context const & ctx)
 
 int main()
 {
-  for(const auto & elem : ad::cl_ext::queues.data())
+  auto data = ad::driver::queues.contexts();
+  for(const auto & elem : data)
   {
-    cl::Device device = elem.second[0].getInfo<CL_QUEUE_DEVICE>();
-    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    ad::driver::Device device = elem.second[0].device();
+    std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
     test_impl<float>(1e-4, elem.first);

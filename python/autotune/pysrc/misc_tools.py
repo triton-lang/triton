@@ -3,7 +3,7 @@ from __future__ import division
 import time
 import os
 import sys
-import pyatidlas as atd
+import pyisaac as atd
 import numpy as np
 
 class PhysicalLimitsNV:
@@ -185,24 +185,34 @@ class OccupancyRecord:
 
 
     def __init__(self, dev, threads, shared_mem=0, registers=0):
-        vendor = dev.vendor.lower()
-        if any(X in vendor for X in ['advanced micro devices', 'amd']):
+        vendor = dev.vendor
+        if vendor == atd.vendor.AMD:
             self.init_amd(dev, threads, shared_mem, registers)
-        elif 'nvidia' in vendor:
+        elif vendor == atd.vendor.NVIDIA:
             self.init_nvidia(dev, threads, shared_mem, registers)
-        elif 'intel' in vendor:
-            self.occupancy = 100
+        elif vendor == atd.vendor.INTEL:
+            if registers>128:
+                self.occupancy = 0
+            else:
+                self.occupancy = 100
 
 
 
 def skip(template, symbolic):
     device = symbolic.context.queues[0].device
+    local_size = template.local_size_0*template.local_size_1
+    vendor = device.vendor
+    if vendor == atd.vendor.AMD and local_size%64!=0:
+      return True
+    elif vendor == atd.vendor.NVIDIA and local_size%32!=0:
+      return True
+    elif vendor == atd.vendor.INTEL in vendor and local_size%8!=0:
+      return True
     array_expressions = atd.array_expression_container(symbolic)
     registers_usage = template.registers_usage(array_expressions)/4
     lmem_usage = template.lmem_usage(array_expressions)
-    local_size = template.local_size_0*template.local_size_1
     occupancy_record = OccupancyRecord(device, local_size, lmem_usage, registers_usage)
-    if template.check_invalid(array_expressions, device) or occupancy_record.occupancy < 15:
+    if template.is_invalid(array_expressions, device) or occupancy_record.occupancy < 10:
         return True
     return False
 
@@ -215,19 +225,19 @@ def benchmark(template, symbolic):
     local_size = template.local_size_0*template.local_size_1
     occupancy_record = OccupancyRecord(device, local_size, lmem_usage, registers_usage)
     if occupancy_record.occupancy < 15 :
-        raise ValueError("Template has too low occupancy")
+        return float("inf")
     else:
-        queue.models[template, atd.float32] = atd.model(template, queue)
-        x, events, cache = atd.flush(symbolic)
-        atd.synchronize(symbolic.context)
+        queue.models[template, atd.float32] = atd.model(atd.float32, template, queue)
         timings = []
         current_time = 0
+        x, events = atd.flush(symbolic)
+        symbolic.context.queues[0].synchronize()
         while current_time < 1e-3:
-            x, events, cache = atd.flush(symbolic)
-            atd.synchronize(symbolic.context)
-            timings.append(1e-9*sum([e.end - e.start for e in events]))
+            x, events = atd.flush(symbolic)
+            symbolic.context.queues[0].synchronize()
+            timings.append(1e-9*sum([e.elapsed_time for e in events]))
             current_time = current_time + timings[-1]
-        return np.median(timings)
+        return np.max(timings)
 
 
 def sanitize_string(string, keep_chars = ['_']):

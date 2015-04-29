@@ -1,6 +1,6 @@
-#include "atidlas/model/predictors/random_forest.h"
+#include "isaac/model/predictors/random_forest.h"
 #include "../convert.hpp"
-namespace atidlas
+namespace isaac
 {
 
 namespace predictors

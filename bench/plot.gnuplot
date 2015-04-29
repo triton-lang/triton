@@ -1,3 +1,4 @@
+
 set terminal pdf
 set output 'bench.pdf'
 

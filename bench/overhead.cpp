@@ -1,9 +1,9 @@
-#include "atidlas/array.h"
-#include "atidlas/tools/timer.hpp"
+#include "isaac/array.h"
+#include "isaac/tools/timer.hpp"
 
 #include <vector>
 
-namespace ad = atidlas;
+namespace ad = isaac;
 
 #ifdef BENCH_CUBLAS
 __global__ void dummy(){}
@@ -12,7 +12,7 @@ __global__ void dummy(){}
 
 int main()
 {
-  for(ad::cl_ext::queues_type::data_type::const_iterator it = ad::cl_ext::queues.data().begin() ; it != ad::cl_ext::queues.data().end() ; ++it)
+  for(ad::driver::queues_type::data_type::const_iterator it = ad::driver::queues.data().begin() ; it != ad::driver::queues.data().end() ; ++it)
   {
     cl::CommandQueue queue = it->second[0];
     cl::Context context = it->first;

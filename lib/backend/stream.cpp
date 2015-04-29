@@ -1,6 +1,6 @@
-#include "atidlas/backend/stream.h"
+#include "isaac/backend/stream.h"
 
-namespace atidlas
+namespace isaac
 {
 
 kernel_generation_stream::kgenstream::kgenstream(std::ostringstream& oss,unsigned int const & tab_count) :

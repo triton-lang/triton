@@ -1,8 +1,8 @@
-#include "atidlas/array.h"
-#include "atidlas/backend/parse.h"
-#include "atidlas/exception/operation_not_supported.h"
+#include "isaac/array.h"
+#include "isaac/backend/parse.h"
+#include "isaac/exception/operation_not_supported.h"
 
-namespace atidlas
+namespace isaac
 {
 
 namespace detail
@@ -40,6 +40,10 @@ namespace detail
         || op.type== OPERATOR_ELEMENT_LEQ_TYPE ;
   }
 
+  bool bypass(op_element const & op)
+  {
+        return op.type == OPERATOR_RESHAPE_TYPE;
+  }
 
   bool is_cast(op_element const & op)
   {
@@ -109,7 +113,7 @@ namespace detail
 filter_fun::filter_fun(pred_t pred, std::vector<size_t> & out) : pred_(pred), out_(out)
 { }
 
-void filter_fun::operator()(atidlas::array_expression const & array_expression, size_t root_idx, leaf_t) const
+void filter_fun::operator()(isaac::array_expression const & array_expression, size_t root_idx, leaf_t) const
 {
   array_expression::node const * root_node = &array_expression.tree()[root_idx];
   if (pred_(*root_node))
@@ -117,7 +121,7 @@ void filter_fun::operator()(atidlas::array_expression const & array_expression, 
 }
 
 //
-std::vector<size_t> filter_nodes(bool (*pred)(array_expression::node const & node), atidlas::array_expression const & array_expression, bool inspect)
+std::vector<size_t> filter_nodes(bool (*pred)(array_expression::node const & node), isaac::array_expression const & array_expression, bool inspect)
 {
   std::vector<size_t> res;
   traverse(array_expression, array_expression.root(), filter_fun(pred, res), inspect);
@@ -129,7 +133,7 @@ filter_elements_fun::filter_elements_fun(array_expression_node_subtype subtype, 
   subtype_(subtype), out_(out)
 { }
 
-void filter_elements_fun::operator()(atidlas::array_expression const & array_expression, size_t root_idx, leaf_t) const
+void filter_elements_fun::operator()(isaac::array_expression const & array_expression, size_t root_idx, leaf_t) const
 {
   array_expression::node const * root_node = &array_expression.tree()[root_idx];
   if (root_node->lhs.subtype==subtype_)
@@ -139,7 +143,7 @@ void filter_elements_fun::operator()(atidlas::array_expression const & array_exp
 }
 
 
-std::vector<lhs_rhs_element> filter_elements(array_expression_node_subtype subtype, atidlas::array_expression const & array_expression)
+std::vector<lhs_rhs_element> filter_elements(array_expression_node_subtype subtype, isaac::array_expression const & array_expression)
 {
   std::vector<lhs_rhs_element> res;
   traverse(array_expression, array_expression.root(), filter_elements_fun(subtype, res), true);
@@ -225,12 +229,12 @@ evaluate_expression_traversal::evaluate_expression_traversal(std::map<std::strin
   accessors_(accessors), str_(str), mapping_(mapping)
 { }
 
-void evaluate_expression_traversal::call_before_expansion(atidlas::array_expression const & array_expression, int_t root_idx) const
+void evaluate_expression_traversal::call_before_expansion(isaac::array_expression const & array_expression, int_t root_idx) const
 {
   array_expression::node const & root_node = array_expression.tree()[root_idx];
   if(detail::is_cast(root_node.op))
     str_ += mapping_.at(std::make_pair(root_idx, PARENT_NODE_TYPE))->evaluate(accessors_);
-  else if ((root_node.op.type_family==OPERATOR_UNARY_TYPE_FAMILY || detail::is_elementwise_function(root_node.op))
+  else if (( (root_node.op.type_family==OPERATOR_UNARY_TYPE_FAMILY&&root_node.op.type!=OPERATOR_ADD_TYPE) || detail::is_elementwise_function(root_node.op))
       && !detail::is_node_leaf(root_node.op))
     str_+=evaluate(root_node.op.type);
   str_+="(";
@@ -242,7 +246,7 @@ void evaluate_expression_traversal::call_after_expansion(array_expression const 
   str_+=")";
 }
 
-void evaluate_expression_traversal::operator()(atidlas::array_expression const & array_expression, int_t root_idx, leaf_t leaf) const
+void evaluate_expression_traversal::operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf) const
 {
   array_expression::node const & root_node = array_expression.tree()[root_idx];
   mapping_type::key_type key = std::make_pair(root_idx, leaf);
@@ -276,7 +280,7 @@ void evaluate_expression_traversal::operator()(atidlas::array_expression const &
 
 
 std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                            atidlas::array_expression const & array_expression, int_t root_idx, mapping_type const & mapping)
+                            isaac::array_expression const & array_expression, int_t root_idx, mapping_type const & mapping)
 {
   std::string res;
   evaluate_expression_traversal traversal_functor(accessors, res, mapping);
@@ -342,7 +346,7 @@ void process_traversal::operator()(array_expression const & /*array_expression*/
 
 
 void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                    atidlas::array_expression const & array_expression, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed)
+                    isaac::array_expression const & array_expression, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed)
 {
   process_traversal traversal_functor(accessors, stream, mapping, already_processed);
   array_expression::node const & root_node = array_expression.tree()[root_idx];
@@ -391,7 +395,7 @@ void array_expression_representation_functor::append_id(char * & ptr, unsigned i
     }
 }
 
-void array_expression_representation_functor::append(cl_mem h, numeric_type dtype, char prefix) const
+void array_expression_representation_functor::append(driver::Buffer const & h, numeric_type dtype, char prefix) const
 {
   *ptr_++=prefix;
   *ptr_++=(char)dtype;
@@ -401,7 +405,7 @@ void array_expression_representation_functor::append(cl_mem h, numeric_type dtyp
 void array_expression_representation_functor::append(lhs_rhs_element const & lhs_rhs) const
 {
   if(lhs_rhs.subtype==DENSE_ARRAY_TYPE)
-    append(lhs_rhs.array.data, lhs_rhs.array.dtype, (char)(((int)'0')+((int)(lhs_rhs.array.shape1>1) + (int)(lhs_rhs.array.shape2>1))));
+    append(lhs_rhs.array->data(), lhs_rhs.array->dtype(), (char)(((int)'0')+((int)(lhs_rhs.array->shape()[0]>1) + (int)(lhs_rhs.array->shape()[1]>1))));
 }
 
 array_expression_representation_functor::array_expression_representation_functor(symbolic_binder & binder, char *& ptr) : binder_(binder), ptr_(ptr){ }
@@ -413,7 +417,7 @@ void array_expression_representation_functor::append(char*& p, const char * str)
   p+=n;
 }
 
-void array_expression_representation_functor::operator()(atidlas::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const
+void array_expression_representation_functor::operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const
 {
   array_expression::node const & root_node = array_expression.tree()[root_idx];
   if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)

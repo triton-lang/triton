@@ -3,9 +3,9 @@
 #include "viennacl/vector.hpp"
 
 #include <memory>
-#include "atidlas/model/import.hpp"
+#include "isaac/model/import.hpp"
 
-namespace ad = atidlas;
+namespace ad = isaac;
 
 int main()
 {

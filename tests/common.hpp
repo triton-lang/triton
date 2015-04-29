@@ -2,9 +2,9 @@
 #define TEST_COMMON_HPP_
 
 #include <vector>
-#include "atidlas/array.h"
+#include "isaac/array.h"
 
-typedef atidlas::int_t int_t;
+typedef isaac::int_t int_t;
 
 /*------ Simple Vector ---------*/
 template<class T>
@@ -121,15 +121,15 @@ public:
 template<typename T>
 void init_rand(simple_vector_base<T> & x)
 {
-  for (unsigned int i = 0; i < x.size(); ++i)
+  for (int_t i = 0; i < x.size(); ++i)
     x[i] = (T)rand()/RAND_MAX;
 }
 
 template<typename T>
 void init_rand(simple_matrix_base<T> & A)
 {
-  for (unsigned int i = 0; i < A.size1(); ++i)
-    for(unsigned int j = 0 ; j < A.size2() ; ++j)
+  for (int_t i = 0; i < A.size1(); ++i)
+    for(int_t j = 0 ; j < A.size2() ; ++j)
       A(i,j) = i+j;
 }
 
@@ -137,8 +137,8 @@ template<typename T>
 simple_matrix<T> simple_trans(simple_matrix_base<T> const & A)
 {
   simple_matrix<T> res(A.size2(), A.size1());
-  for(unsigned int i = 0 ; i < A.size1(); ++i)
-    for(unsigned int j = 0; j < A.size2(); ++j)
+  for(int_t i = 0 ; i < A.size1(); ++i)
+    for(int_t j = 0; j < A.size2(); ++j)
       res(j, i) = A(i, j);
   return res;
 }
@@ -148,7 +148,7 @@ template<class VecType1, class VecType2>
 bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type epsilon)
 {
   typedef typename VecType1::value_type T;
-  for(int_t i = 0 ; i < x.size() ; ++i)
+  for(int_t i = 0 ; i < (int_t)x.size() ; ++i)
   {
     T delta = std::abs(x[i] - y[i]);
     if(std::max(x[i], y[i])!=0)
@@ -166,21 +166,21 @@ bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type 
     simple_vector<T> CPREFIX ## _full(N);\
     simple_vector_slice<T> CPREFIX ## _slice(CPREFIX ## _full, START, START + STRIDE*SUBN, STRIDE);\
     init_rand(CPREFIX ## _full);\
-    atidlas::array PREFIX ## _full(CPREFIX ## _full.data(), CTX);\
-    atidlas::array PREFIX ## _slice = PREFIX ## _full[atidlas::_(START, START + STRIDE*SUBN, STRIDE)];
+    isaac::array PREFIX ## _full(CPREFIX ## _full.data(), CTX);\
+    isaac::array PREFIX ## _slice = PREFIX ## _full[isaac::_(START, START + STRIDE*SUBN, STRIDE)];
 
 #define INIT_MATRIX(M, SUBM, START1, STRIDE1, N, SUBN, START2, STRIDE2, CPREFIX, PREFIX, CTX) \
     simple_matrix<T> CPREFIX ## _full(M, N);\
     simple_matrix_slice<T> CPREFIX ## _slice(CPREFIX ## _full, START1, START1 + STRIDE1*SUBM, STRIDE1,\
                                                                  START2, START2 + STRIDE2*SUBN, STRIDE2);\
     init_rand(CPREFIX ## _full);\
-    atidlas::array PREFIX ## _full(M, N, CPREFIX ## _full.data(), CTX);\
-    atidlas::array PREFIX ## _slice(PREFIX ## _full(atidlas::_(START1, START1 + STRIDE1*SUBM, STRIDE1),\
-                                                        atidlas::_(START2, START2 + STRIDE2*SUBN, STRIDE2)));\
+    isaac::array PREFIX ## _full(M, N, CPREFIX ## _full.data(), CTX);\
+    isaac::array PREFIX ## _slice(PREFIX ## _full(isaac::_(START1, START1 + STRIDE1*SUBM, STRIDE1),\
+                                                        isaac::_(START2, START2 + STRIDE2*SUBN, STRIDE2)));\
     simple_matrix<T> CPREFIX ## T_full = simple_trans(CPREFIX ## _full);\
-    atidlas::array PREFIX ## T_full(N, M, CPREFIX ## T_full.data(), CTX);\
-    atidlas::array PREFIX ## T_slice(PREFIX ## T_full(atidlas::_(START2, START2 + STRIDE2*SUBN, STRIDE2),\
-                                                              atidlas::_(START1, START1 + STRIDE1*SUBM, STRIDE1)));\
+    isaac::array PREFIX ## T_full(N, M, CPREFIX ## T_full.data(), CTX);\
+    isaac::array PREFIX ## T_slice(PREFIX ## T_full(isaac::_(START2, START2 + STRIDE2*SUBN, STRIDE2),\
+                                                              isaac::_(START1, START1 + STRIDE1*SUBM, STRIDE1)));\
 
 
 #endif

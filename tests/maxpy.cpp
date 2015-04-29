@@ -1,10 +1,8 @@
-#include <cmath>
-#include <iostream>
 #include "common.hpp"
-#include "atidlas/array.h"
+#include "isaac/array.h"
 
-namespace ad = atidlas;
-typedef atidlas::int_t int_t;
+namespace ad = isaac;
+typedef isaac::int_t int_t;
 
 template<typename T>
 void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simple_matrix_base<T>& cC, simple_vector_base<T>& cx, simple_vector_base<T>& cy,
@@ -14,15 +12,15 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
 
   int failure_count = 0;
   ad::numeric_type dtype = C.dtype();
-  cl::Context const & ctx = C.context();
+  ad::driver::Context const & ctx = C.context();
 
   int_t M = cC.size1();
   int_t N = cC.size2();
 
 
   T aa = 3.12, bb=3.5;
-  atidlas::value_scalar a(aa), b(bb);
-  atidlas::scalar da(a, ctx), db(b, ctx);
+  isaac::value_scalar a(aa), b(bb);
+  isaac::scalar da(a, ctx), db(b, ctx);
 
   simple_vector<T> buffer(M*N);
 #define CONVERT
@@ -33,7 +31,7 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
     for(int_t j = 0 ; j < N ; ++j)\
         CPU_LOOP;\
   GPU_EXPR;\
-  atidlas::copy(C, buffer.data());\
+  isaac::copy(C, buffer.data());\
   std::vector<T> cCbuffer(M*N);\
   for(int i = 0 ; i < M ; ++i)\
     for(int j = 0 ; j < N ; ++j)\
@@ -100,9 +98,9 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
 }
 
 template<typename T>
-void test_impl(T epsilon, cl::Context const & ctx)
+void test_impl(T epsilon, ad::driver::Context const & ctx)
 {
-  using atidlas::_;
+  using isaac::_;
 
   int_t M = 1324;
   int_t N = 1143;
@@ -125,10 +123,11 @@ void test_impl(T epsilon, cl::Context const & ctx)
 
 int main()
 {
-  for(const auto & elem : ad::cl_ext::queues.data())
+  auto data = ad::driver::queues.contexts();
+  for(const auto & elem : data)
   {
-    cl::Device device = elem.second[0].getInfo<CL_QUEUE_DEVICE>();
-    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    ad::driver::Device device = elem.second[0].device();
+    std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
     test_impl<float>(1e-4, elem.first);

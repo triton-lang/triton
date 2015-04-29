@@ -2,7 +2,7 @@ from __future__ import division
 
 import argparse, itertools, os, sys, json
 import misc_tools, optimize, dataset
-import pyatidlas as atd
+import pyisaac as atd
 import numpy as np
 
 from numpy import random
@@ -71,27 +71,20 @@ def do_tuning(args):
                     return optimize.genetic(symbolic, Template, lambda t: TYPES[operation]['perf-index']([datatype(0).size, sizes, t]), 
                                              TYPES[operation]['perf-measure'], archive)
              
-              def log_uniform_sample(a,b):
-                  return np.exp(np.random.uniform(low=np.log(a), high=np.log(b), size=1)).astype(int)
-
-              def space_gen_product(a,b,N,dim,method):
-                  N = int(N**(1.0/dim))
-                  def space_gen(a,b,method):
-                      for i in range(N):
-                          if method == 'linear':
-                              v = int(a + (b-a)*i/N)
-                          if method == 'log':
-                              v = int(np.exp(np.log(a) + (np.log(b) - np.log(a))*i/N))
-                          yield (v//64 + 1)*64
-                  return tuple(itertools.product(*[space_gen(a,b,method) for i in range(dim)]))
+              def log_spaced_points(a,b,N,r=128):
+                  t = np.ceil(np.exp(np.linspace(np.log(a), np.log(b), N))/r)*r
+                  return t.reshape(t.size,1).astype(int)
 
 
               #Helper for tuning
-              def tune(execution_handler, a, b, dimsample, layouts, sample_method_profiles, sample_method_dataset):
+              def tune(execution_handler, layouts, tuning_sizes, training_sizes):
                   print('-----')
                   print(' '.join(map(str, ("Now tuning:", dtypestr, '-', operation, '-'.join(layouts), '[' + device.name, '(' + device.platform.name + ')]'))))
                   #Update JSON
                   full_operation = operation + ''.join(layouts)
+                  prefix = os.path.join('data',os.path.join(full_operation,dtypestr))
+                  if not os.path.exists(prefix):
+                      os.makedirs(prefix)
                   if full_operation not in json_out:
                       json_out[full_operation] = {}
                   json_out[full_operation][dtypestr] = {}
@@ -103,15 +96,13 @@ def do_tuning(args):
                   else:
                       def compute_perf(x, t):
                           return TYPES[operation]['perf-index']([datatype(0).size, x, t])
-                      profiles_generator = space_gen_product(a, b, args.sample_size, dimsample, sample_method_profiles)
-                      profiles = dataset.sample_profiles(execution_handler, profiles_generator)
+                      #profiles = dataset.sample_profiles(execution_handler, tuning_sizes)
                       if args.build_model:
-                        dataset_generator = space_gen_product(a, b, 1000, dimsample, sample_method_dataset)
-                        X, Y, profiles = dataset.sample_dataset(os.path.join(full_operation,dtypestr), profiles, execution_handler, dataset_generator)
-                        # profiles = np.loadtxt('data/'+full_operation+'/'+datatype+'/profiles.csv')
-                        # X = np.loadtxt('data/'+full_operation+'/'+datatype+'/X.csv',ndmin=2)
-                        # Y = np.loadtxt('data/'+full_operation+'/'+datatype+'/Y.csv',ndmin=2)
-                        clf = train_model(X, Y, profiles, TYPES[operation]['perf-measure'])
+                        #X, Y, profiles = dataset.sample_dataset(prefix, profiles, execution_handler, training_sizes)
+                        profiles = np.loadtxt(prefix+'/profiles.csv')
+                        X = np.loadtxt(prefix+'/X.csv',ndmin=2)
+                        Y = np.loadtxt(prefix+'/Y.csv',ndmin=2)
+                        clf = train_model(X, Y, profiles, compute_perf, TYPES[operation]['perf-measure'])
                         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
                                        'children_right': e.tree_.children_right.tolist(),
                                        'threshold': e.tree_.threshold.astype('float64').tolist(),
@@ -128,15 +119,15 @@ def do_tuning(args):
                       x = atd.empty(sizes[0], datatype, context=context)
                       y = atd.empty(sizes[0], datatype, context=context)
                       return execute(x + y, sizes, Template, parameters, fname)
-                  tune(execution_handler, 1e3, 2e7, 1, (),'log', 'log')
-              #dot
+                  tune(execution_handler, (), log_spaced_points(1e4, 1e7, 20), log_spaced_points(1e4, 1e7, 1000))
+              #Dot
               if operation=='dot':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
                       x = atd.empty(sizes[0], datatype, context=context)
                       y = atd.empty(sizes[0], datatype, context=context)
                       s = atd.scalar(datatype)
                       return execute(atd.dot(x, y), sizes, Template, parameters, fname)
-                  tune(execution_handler, 1e3, 2e7, 1, (),'log', 'log')
+                  tune(execution_handler, (), log_spaced_points(1e4, 1e7, 50), log_spaced_points(1e4, 1e7, 1000))
               #Matrix AXPY
               if operation=='maxpy':
                   def execution_handler(sizes, fname=os.devnull, parameters=None):
@@ -152,7 +143,14 @@ def do_tuning(args):
                           x = atd.empty(sizes[1], datatype, context=context)
                           LHS = A if A_trans=='N' else A.T
                           return execute(atd.dot(LHS, x), sizes, Template[A_trans], parameters, fname)
-                      tune(execution_handler, 64, 6000, 2, (A_trans,),'log', 'log')
+                      tuning_sizes = itertools.chain( itertools.product([128, 512, 2048, 8192], [128, 512, 2048, 8192]),
+                                                     itertools.product([128, 512, 2048, 8192], [16384, 32768, 65536]),
+                                                     itertools.product([16384, 32768, 65536], [128, 512, 2048, 8192]))
+                      
+                      training_sizes = itertools.chain( itertools.product([2**k for k in range(4, 13)], [2**k for k in range(4, 13)]),
+                                                        itertools.product([2**k for k in range(4, 13)], [2**k for k in range(13, 17)]),
+                                                        itertools.product([2**k for k in range(13, 17)], [2**k for k in range(4, 13)]))
+                      tune(execution_handler, (A_trans,), tuning_sizes, training_sizes)
               #Matrix Product
               if operation=='gemm':
                   for L in args.gemm_layouts:
@@ -164,8 +162,11 @@ def do_tuning(args):
                           LHS = A if A_trans=='N' else A.T
                           RHS = B if B_trans=='N' else B.T
                           return execute(atd.dot(LHS, RHS), sizes, Template[(A_trans, B_trans)], parameters, fname)
-                      tune(execution_handler, 100, 2000, 3,(A_trans,B_trans), 'linear', 'linear')
-
+                      
+                      tuning_sizes = itertools.product([64, 256, 1024, 2560], [64, 256, 1024, 2560], [256, 2560, 32768, 65536])
+                      training_sizes = itertools.product([2**k for k in range(6, 13)], [2**k for k in range(6, 13)], [2**k for k in range(6, 17)])
+                      tune(execution_handler,(A_trans,B_trans), tuning_sizes, training_sizes)
+                      
               json.dump(json_out, open(args.out,'w'))
 
 
@@ -194,7 +195,7 @@ class ArgumentsHandler:
 
         full_parser = tune_subparsers.add_parser('full', help = 'Tune each operation for randomly chosen sizes')
         full_parser.add_argument("--build-model", default=True, type=bool)
-        full_parser.add_argument("--sample-size", default=60, type=int)
+        full_parser.add_argument("--sample-size", default=64, type=int)
 
         args = parser.parse_args()
         self.__dict__ = args.__dict__.copy()

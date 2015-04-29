@@ -1,10 +1,11 @@
-#include "atidlas/backend/templates/maxpy.h"
-#include "atidlas/tools/make_map.hpp"
-#include "atidlas/tools/make_vector.hpp"
-#include "atidlas/symbolic/io.h"
+#include "isaac/backend/templates/maxpy.h"
+#include "isaac/tools/make_map.hpp"
+#include "isaac/tools/make_vector.hpp"
+#include "isaac/symbolic/io.h"
+#include "isaac/backend/keywords.h"
 #include <iostream>
 
-namespace atidlas
+namespace isaac
 {
 
 maxpy_parameters::maxpy_parameters(unsigned int _simd_width,
@@ -14,7 +15,7 @@ maxpy_parameters::maxpy_parameters(unsigned int _simd_width,
 
 
 
-int maxpy::check_invalid_impl(cl::Device const &, expressions_tuple const &) const
+int maxpy::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
 {
   if (p_.simd_width>1)
     return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -23,17 +24,15 @@ int maxpy::check_invalid_impl(cl::Device const &, expressions_tuple const &) con
   return TEMPLATE_VALID;
 }
 
-std::string maxpy::generate_impl(unsigned int label, expressions_tuple const & expressions, std::vector<mapping_type> const & mappings, unsigned int simd_width) const
+std::string maxpy::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   kernel_generation_stream stream;
-
+  std::string _size_t = size_type(device);
   std::string init0, upper_bound0, inc0, init1, upper_bound1, inc1;
-  std::string data_type = append_width("#scalartype",simd_width);
-  char kprefix[10];
-  fill_kernel_name(kprefix, label, "d");
+  std::string data_type = append_width("#scalartype",p_.simd_width);
 
   stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
-  stream << "__kernel void " << kprefix << "(unsigned int M, unsigned int N, " << generate_arguments("#scalartype", mappings, expressions) << ")" << std::endl;
+  stream << "__kernel void axpy" << suffix << "(" << _size_t << " M, " << _size_t << " N, " << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -41,12 +40,12 @@ std::string maxpy::generate_impl(unsigned int label, expressions_tuple const & e
                                                                                         ("array1", "#pointer += #start;")
                                                                                         ("array2", "#pointer = &$VALUE{#start1, #start2};"), expressions, mappings);
 
-  fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0, "get_global_id(0)", "get_global_size(0)");
-  stream << "for(unsigned int i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
+  fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0, "get_global_id(0)", "get_global_size(0)", device);
+  stream << "for(" << _size_t << " i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  fetching_loop_info(p_.fetching_policy, "N", stream, init1, upper_bound1, inc1, "get_global_id(1)", "get_global_size(1)");
-  stream << "for(unsigned int j = " << init1 << "; j < " << upper_bound1 << "; j += " << inc1 << ")" << std::endl;
+  fetching_loop_info(p_.fetching_policy, "N", stream, init1, upper_bound1, inc1, "get_global_id(1)", "get_global_size(1)", device);
+  stream << "for(" << _size_t << " j = " << init1 << "; j < " << upper_bound1 << "; j += " << inc1 << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -81,13 +80,6 @@ std::string maxpy::generate_impl(unsigned int label, expressions_tuple const & e
   return stream.str();
 }
 
-std::vector<std::string> maxpy::generate_impl(unsigned int label, expressions_tuple const & expressions, std::vector<mapping_type> const & mappings) const
-{
-  std::vector<std::string> res;
-  res.push_back(generate_impl(label, expressions, mappings, 1));
-  return res;
-}
-
 maxpy::maxpy(parameters_type const & parameters, binding_policy_t binding_policy) :
   base_impl<maxpy, maxpy_parameters>(parameters, binding_policy){ }
 
@@ -99,30 +91,26 @@ maxpy::maxpy(unsigned int simd, unsigned int ls1, unsigned int ls2,
 
 std::vector<int_t> maxpy::input_sizes(expressions_tuple const & expressions)
 {
-  atidlas::array_expression const & array_expression = *(expressions.data().front());
+  isaac::array_expression const & array_expression = *(expressions.data().front());
   std::pair<int_t, int_t> size = matrix_size(lhs_most(array_expression.tree(), array_expression.root()));
   return tools::make_vector<int_t>() << size.first << size.second;
 }
 
-void maxpy::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs,
-                    unsigned int label, controller<expressions_tuple> const & controller)
+void maxpy::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base &, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
-  char kname[10];
-  fill_kernel_name(kname, label, "d");
-  cl::Program & program = programs[0].program();
-  cl::Kernel kernel(program, kname);
-  cl::NDRange global(p_.local_size_0*p_.num_groups_0, p_.local_size_1*p_.num_groups_1);
-  cl::NDRange local(p_.local_size_0, p_.local_size_1);
+  char name[32] = {"axpy"};
+  strcat(name, suffix);
+  driver::Kernel kernel(program, name);
+  driver::NDRange global(p_.local_size_0*p_.num_groups_0, p_.local_size_1*p_.num_groups_1);
+  driver::NDRange local(p_.local_size_0, p_.local_size_1);
   unsigned int current_arg = 0;
   std::vector<int_t> MN = input_sizes(expressions);
-  kernel.setArg(current_arg++, cl_uint(MN[0]));
-  kernel.setArg(current_arg++, cl_uint(MN[1]));
+  kernel.setSizeArg(current_arg++, MN[0]);
+  kernel.setSizeArg(current_arg++, MN[1]);
   set_arguments(expressions, kernel, current_arg);
 
-  controller.execution_options().enqueue_cache(queue, kernel, cl::NullRange, global, local);
+  controller.execution_options().enqueue_cache(queue, kernel, global, local);
 }
-
-template class base_impl<maxpy, maxpy_parameters>;
 
 }

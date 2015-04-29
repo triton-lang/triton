@@ -3,14 +3,14 @@
 
 #include <iostream>
 
-#include "atidlas/backend/mapped_object.h"
-#include "atidlas/backend/parse.h"
-#include "atidlas/backend/stream.h"
-#include "atidlas/symbolic/expression.h"
-#include "atidlas/tools/to_string.hpp"
-#include "atidlas/tools/find_and_replace.hpp"
+#include "isaac/backend/mapped_object.h"
+#include "isaac/backend/parse.h"
+#include "isaac/backend/stream.h"
+#include "isaac/symbolic/expression.h"
+#include "isaac/tools/to_string.hpp"
+#include "isaac/tools/find_and_replace.hpp"
 
-namespace atidlas
+namespace isaac
 {
 
 void mapped_object::preprocess(std::string &) const { }
@@ -49,7 +49,7 @@ void mapped_object::register_attribute(std::string & attribute, std::string cons
   keywords_[key] = attribute;
 }
 
-mapped_object::node_info::node_info(mapping_type const * _mapping, atidlas::array_expression const * _array_expression, int_t _root_idx) :
+mapped_object::node_info::node_info(mapping_type const * _mapping, isaac::array_expression const * _array_expression, int_t _root_idx) :
     mapping(_mapping), array_expression(_array_expression), root_idx(_root_idx) { }
 
 mapped_object::mapped_object(std::string const & scalartype, unsigned int id, std::string const & type_key) : type_key_(type_key)
@@ -112,7 +112,7 @@ mapped_reduction::mapped_reduction(std::string const & scalartype, unsigned int 
 int_t mapped_reduction::root_idx() const
 { return info_.root_idx; }
 
-atidlas::array_expression const & mapped_reduction::array_expression() const
+isaac::array_expression const & mapped_reduction::array_expression() const
 { return *info_.array_expression; }
 
 array_expression::node mapped_reduction::root_node() const
@@ -182,14 +182,7 @@ void mapped_array::preprocess(std::string & str) const
     { return "#pointer[" + i + "]"; }
 
     std::string operator()(std::string const & i, std::string const & j) const
-    {
-      if(type=='c')
-        return "#pointer["+i+"]";
-      else if(type=='r')
-        return "#pointer["+j+"]";
-      else
-        return "#pointer[(" + i + ") +  (" + j + ") * " + ld + "]";
-    }
+    { return "#pointer[(" + i + ") +  (" + j + ") * " + ld + "]"; }
   private:
     std::string const & ld;
     char type;
@@ -203,14 +196,7 @@ void mapped_array::preprocess(std::string & str) const
     { return i; }
 
     std::string operator()(std::string const & i, std::string const & j) const
-    {
-      if(type=='c')
-        return i;
-      else if(type=='r')
-        return j;
-      else
-        return "(" + i + ") +  (" + j + ") * " + ld;
-    }
+    {return "(" + i + ") +  (" + j + ") * " + ld; }
   private:
     std::string const & ld;
     char type;
@@ -247,10 +233,10 @@ mapped_array::mapped_array(std::string const & scalartype, unsigned int id, char
 void mapped_vdiag::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  tools::find_and_replace(res, "#diag_offset", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping));
+  tools::find_and_replace(res, "#diag_offset", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping));
   accessors["array1"] = res;
   accessors["host_scalar"] = res;
-  res = atidlas::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
 }
 
 mapped_vdiag::mapped_vdiag(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "vdiag"), binary_leaf(info){}
@@ -260,9 +246,9 @@ mapped_vdiag::mapped_vdiag(std::string const & scalartype, unsigned int id, node
 void mapped_matrix_row::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  tools::find_and_replace(res, "#row", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping));
+  tools::find_and_replace(res, "#row", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping));
   accessors["array2"] = res;
-  res = atidlas::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
 }
 
 mapped_matrix_row::mapped_matrix_row(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_row"), binary_leaf(info)
@@ -272,15 +258,26 @@ mapped_matrix_row::mapped_matrix_row(std::string const & scalartype, unsigned in
 void mapped_matrix_column::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  tools::find_and_replace(res, "#column", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping));
+  tools::find_and_replace(res, "#column", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping));
   accessors["array2"] = res;
-  res = atidlas::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
 }
 
 mapped_matrix_column::mapped_matrix_column(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_column"), binary_leaf(info)
 { }
 
 //
+char mapped_repeat::get_type(node_info const & info)
+{
+  repeat_infos const & infos = info.array_expression->tree()[info.root_idx].rhs.tuple;
+  if(infos.sub1>1 && infos.sub2==1)
+    return 'c';
+  else if(infos.sub1==1 && infos.sub2>1)
+    return 'r';
+  else
+    return 'm';
+}
+
 void mapped_repeat::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
@@ -289,22 +286,41 @@ void mapped_repeat::postprocess(std::string &res) const
   tools::find_and_replace(res, "#tuplearg1", args.process("#tuplearg1"));
   tools::find_and_replace(res, "#tuplearg2", args.process("#tuplearg2"));
   tools::find_and_replace(res, "#tuplearg3", args.process("#tuplearg3"));
+
+  struct MorphValue : public MorphBase
+  {
+    MorphValue(char _type): type(_type){ }
+
+    std::string operator()(std::string const &) const { return "";}
+
+    std::string operator()(std::string const & i, std::string const & j) const
+    {
+      if(type=='c') return "$VALUE{" + i + "}";
+      else if(type=='r') return "$VALUE{" + j + "}";
+      else return "$VALUE{" + i + "," + j + "}";
+    }
+  private:
+    char type;
+  };
+
+  replace_macro(res, "$VALUE", MorphValue(type_));
   accessors["array1"] = res;
   accessors["array2"] = res;
-  res = atidlas::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
 }
 
-mapped_repeat::mapped_repeat(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "repeat"), binary_leaf(info)
-{}
+mapped_repeat::mapped_repeat(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "repeat"), binary_leaf(info), type_(get_type(info))
+{
+}
 
 
 //
 void mapped_matrix_diag::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  tools::find_and_replace(res, "#diag_offset", atidlas::evaluate(RHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping));
+  tools::find_and_replace(res, "#diag_offset", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping));
   accessors["array2"] = res;
-  res = atidlas::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.array_expression, info_.root_idx, *info_.mapping);
 }
 
 mapped_matrix_diag::mapped_matrix_diag(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_diag"), binary_leaf(info)
@@ -320,7 +336,7 @@ void mapped_outer::postprocess(std::string &res) const
       {
         std::map<std::string, std::string> accessors;
         accessors["array1"] = "$VALUE{"+i+"}";
-        return atidlas::evaluate(leaf_, accessors, *i_.array_expression, i_.root_idx, *i_.mapping);
+        return isaac::evaluate(leaf_, accessors, *i_.array_expression, i_.root_idx, *i_.mapping);
       }
       std::string operator()(std::string const &, std::string const &) const{return "";}
     private:

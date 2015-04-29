@@ -210,6 +210,10 @@
 #include <string>
 #endif 
 
+#if defined(ANDROID)
+#include <alloca.h>
+#endif
+
 #if defined(linux) || defined(__APPLE__) || defined(__MACOSX)
 #include <alloca.h>
 
@@ -1034,7 +1038,11 @@ namespace detail {
 #endif // !_WIN32
     }
 
-    inline void fence() { _mm_mfence(); }
+	#ifdef __SSE2__
+		 inline void fence() { _mm_mfence(); }
+	#else
+		inline void fence() { } // NOOP
+	#endif
 } // namespace detail
 
     

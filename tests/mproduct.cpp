@@ -1,8 +1,8 @@
 #include <cmath>
 #include "common.hpp"
-#include "atidlas/array.h"
-
-namespace ad = atidlas;
+#include "isaac/array.h"
+#include "isaac/model/model.h"
+namespace ad = isaac;
 
 template<typename T>
 void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & cA, simple_matrix_base<T> const & cB,
@@ -10,9 +10,9 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 {
   int failure_count = 0;
 
-  ad::int_t M = C.shape()._1;
-  ad::int_t N = C.shape()._2;
-  ad::int_t K = A.shape()._2;
+  ad::int_t M = C.shape()[0];
+  ad::int_t N = C.shape()[1];
+  ad::int_t K = A.shape()[1];
 
   for(int i = 0 ; i < M ; ++i)
   {
@@ -53,20 +53,20 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 }
 
 template<typename T>
-void test_impl(T epsilon, cl::Context const & ctx)
+void test_impl(T epsilon, ad::driver::Context const & ctx)
 {
+
   int_t M = 412;
-  int_t N = 245;
-  int_t K = 373;
+  int_t N = 248;
+  int_t K = 376;
 
   int_t SUBM = 61;
-  int_t SUBN = 74;
+  int_t SUBN = 75;
   int_t SUBK = 83;
 
   INIT_MATRIX(M, SUBM, 5, 2, N, SUBN, 7, 3, cC, C, ctx);
   INIT_MATRIX(M, SUBM, 8, 2, K, SUBK, 4, 3, cA, A, ctx);
   INIT_MATRIX(K, SUBK, 9, 4, N, SUBN, 6, 2, cB, B, ctx);
-
   std::cout << "full..." << std::endl;
   test_impl(epsilon, cC_full, cA_full, cB_full, C_full, A_full, AT_full, B_full, BT_full);
   std::cout << "slice..." << std::endl;
@@ -75,10 +75,11 @@ void test_impl(T epsilon, cl::Context const & ctx)
 
 int main()
 {
-  for(const auto & elem : ad::cl_ext::queues.data())
+  auto data = ad::driver::queues.contexts();
+  for(const auto & elem : data)
   {
-    cl::Device device = elem.second[0].getInfo<CL_QUEUE_DEVICE>();
-    std::cout << "Device: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+    ad::driver::Device device = elem.second[0].device();
+    std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
     test_impl<float>(1e-4, elem.first);

@@ -1,10 +1,10 @@
 #include <cmath>
 #include <iostream>
-#include "atidlas/array.h"
-#include "atidlas/value_scalar.h"
-#include "atidlas/exception/unknown_datatype.h"
+#include "isaac/array.h"
+#include "isaac/value_scalar.h"
+#include "isaac/exception/unknown_datatype.h"
 
-namespace atidlas
+namespace isaac
 {
 
 template<class T>

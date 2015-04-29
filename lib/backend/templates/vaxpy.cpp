@@ -1,11 +1,12 @@
-#include "atidlas/backend/templates/vaxpy.h"
-#include "atidlas/cl_ext/backend.h"
-#include "atidlas/tools/make_map.hpp"
-#include "atidlas/tools/make_vector.hpp"
-#include "atidlas/tools/to_string.hpp"
+#include "isaac/backend/templates/vaxpy.h"
+#include "isaac/backend/keywords.h"
+#include "isaac/driver/backend.h"
+#include "isaac/tools/make_map.hpp"
+#include "isaac/tools/make_vector.hpp"
+#include "isaac/tools/to_string.hpp"
 #include <iostream>
 
-namespace atidlas
+namespace isaac
 {
 
 
@@ -16,79 +17,78 @@ vaxpy_parameters::vaxpy_parameters(unsigned int _simd_width,
 { }
 
 
-int vaxpy::check_invalid_impl(cl::Device const &, expressions_tuple const &) const
+int vaxpy::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-std::vector<std::string> vaxpy::generate_impl(unsigned int label, expressions_tuple const & expressions, std::vector<mapping_type> const & mappings) const
+std::string vaxpy::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
-  std::vector<std::string> result;
-  for (unsigned int i = 0; i < 2; ++i)
+  driver::backend_type backend = device.backend();
+  std::string _size_t = size_type(device);
+
+  kernel_generation_stream stream;
+  std::string str_simd_width = tools::to_string(p_.simd_width);
+  std::string dtype = append_width("#scalartype",p_.simd_width);
+
+  switch(backend)
   {
-    kernel_generation_stream stream;
-    unsigned int simd_width = (i==0)?1:p_.simd_width;
-    std::string str_simd_width = tools::to_string(simd_width);
-    std::string data_type = append_width("#scalartype",simd_width);
-
-    stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
-    char kprefix[10];
-    fill_kernel_name(kprefix, label, (i==0?"f":"o"));
-    stream << "__kernel void " << kprefix << "(unsigned int N," << generate_arguments(data_type, mappings, expressions) << ")" << std::endl;
-    stream << "{" << std::endl;
-    stream.inc_tab();
-
-    process(stream, PARENT_NODE_TYPE,
-                          tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
-                                                                     ("array1", "#pointer += #start;")
-                                                                     ("array1", "#start1/=" + str_simd_width + ";"), expressions, mappings);
-
-    std::string init, upper_bound, inc;
-    fetching_loop_info(p_.fetching_policy, "N/"+str_simd_width, stream, init, upper_bound, inc, "get_global_id(0)", "get_global_size(0)");
-    stream << "for(unsigned int i = " << init << "; i < " << upper_bound << "; i += " << inc << ")" << std::endl;
-    stream << "{" << std::endl;
-    stream.inc_tab();
-    process(stream, PARENT_NODE_TYPE,
-                          tools::make_map<std::map<std::string, std::string> >("array1", data_type + " #namereg = #pointer[i*#stride];")
-                                                                     ("matrix_row", "#scalartype #namereg = $VALUE{#row*#stride1, i*#stride2};")
-                                                                     ("matrix_column", "#scalartype #namereg = $VALUE{i*#stride1,#column*#stride2};")
-                                                                     ("matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];")
-                                                                     , expressions, mappings);
-
-    evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1", "#namereg")
-                                                                                                ("matrix_row", "#namereg")
-                                                                                                ("matrix_column", "#namereg")
-                                                                                                ("matrix_diag", "#namereg")
-                                                                                                ("array0", "#namereg")
-                                                                                                ("cast", "convert_"+data_type)
-             , expressions, mappings);
-
-    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array1", "#pointer[i*#stride] = #namereg;")
-                                                                                           ("matrix_row", "$VALUE{#row, i} = #namereg;")
-                                                                                           ("matrix_column", "$VALUE{i, #column} = #namereg;")
-                                                                                           ("matrix_diag", "#diag_offset<0?$VALUE{(i - #diag_offset)*#stride1, i*#stride2}:$VALUE{i*#stride1, (i + #diag_offset)*#stride2} = #namereg;")
-                                                                                           ,expressions, mappings);
-
-    stream.dec_tab();
-    stream << "}" << std::endl;
-
-    stream << "if(get_global_id(0)==0)" << std::endl;
-    stream << "{" << std::endl;
-    stream.inc_tab();
-    process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#pointer[#start] = #namereg;"), expressions, mappings);
-    stream.dec_tab();
-    stream << "}" << std::endl;
-
-    stream.dec_tab();
-    stream << "}" << std::endl;
-
-//    std::cout << stream.str() << std::endl;
-    result.push_back(stream.str());
+#ifdef ISAAC_WITH_CUDA
+    case driver::CUDA: stream << "#include  \"helper_math.h\"" << std::endl; break;
+#endif
+    case driver::OPENCL: stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl; break;
   }
 
-  return result;
+  stream << KernelPrefix(backend) << " void " << "axpy" << suffix << "(" << _size_t << " N," << generate_arguments(dtype, device, mappings, expressions) << ")" << std::endl;
+  stream << "{" << std::endl;
+  stream.inc_tab();
+
+  process(stream, PARENT_NODE_TYPE, {{"array0", "#scalartype #namereg = #pointer[#start];"},
+                                      {"array1", "#pointer += #start;"}}, expressions, mappings);
+
+  stream << _size_t << " idx = " << GlobalIdx0(backend) << ";" << std::endl;
+  stream << _size_t << " gsize = " << GlobalSize0(backend) << ";" << std::endl;
+
+  std::string init, upper_bound, inc;
+  fetching_loop_info(p_.fetching_policy, "N/"+str_simd_width, stream, init, upper_bound, inc, "idx", "gsize", device);
+
+  stream << "for(" << _size_t << " i = " << init << "; i < " << upper_bound << "; i += " << inc << ")" << std::endl;
+  stream << "{" << std::endl;
+  stream.inc_tab();
+  process(stream, PARENT_NODE_TYPE, {{"array1", dtype + " #namereg = #pointer[i*#stride];"},
+                                     {"matrix_row", "#scalartype #namereg = $VALUE{#row*#stride1, i*#stride2};"},
+                                     {"matrix_column", "#scalartype #namereg = $VALUE{i*#stride1,#column*#stride2};"},
+                                     {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];"}}, expressions, mappings);
+
+
+  evaluate(stream, PARENT_NODE_TYPE, {{"array0", "#namereg"}, {"array1", "#namereg"},
+                                      {"matrix_row", "#namereg"}, {"matrix_column", "#namereg"}, {"matrix_diag", "#namereg"},
+                                      {"cast", CastPrefix(backend, dtype).get()}, {"host_scalar", p_.simd_width==1?"#name": InitPrefix(backend, dtype).get() + "(#name)"}}, expressions, mappings);
+
+
+
+  process(stream, LHS_NODE_TYPE, {{"array1", "#pointer[i*#stride] = #namereg;"},
+                                  {"matrix_row", "$VALUE{#row, i} = #namereg;"},
+                                  {"matrix_column", "$VALUE{i, #column} = #namereg;"},
+                                  {"matrix_diag", "#diag_offset<0?$VALUE{(i - #diag_offset)*#stride1, i*#stride2}:$VALUE{i*#stride1, (i + #diag_offset)*#stride2} = #namereg;"}}, expressions, mappings);
+
+  stream.dec_tab();
+  stream << "}" << std::endl;
+
+  stream << "if(idx==0)" << std::endl;
+  stream << "{" << std::endl;
+  stream.inc_tab();
+  process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#pointer[#start] = #namereg;"), expressions, mappings);
+  stream.dec_tab();
+  stream << "}" << std::endl;
+
+  stream.dec_tab();
+  stream << "}" << std::endl;
+
+
+  return stream.str();
 }
 
 vaxpy::vaxpy(vaxpy_parameters const & parameters,
@@ -104,38 +104,33 @@ vaxpy::vaxpy(unsigned int simd, unsigned int ls, unsigned int ng,
 
 std::vector<int_t> vaxpy::input_sizes(expressions_tuple const & expressions)
 {
-  int_t size = static_cast<array_expression const *>(expressions.data().front().get())->shape()._1;
+  int_t size = static_cast<array_expression const *>(expressions.data().front().get())->shape()[0];
   return tools::make_vector<int_t>() << size;
 }
 
-void vaxpy::enqueue(cl::CommandQueue & queue, std::vector<cl_ext::lazy_compiler> & programs, unsigned int label, controller<expressions_tuple> const & controller)
+void vaxpy::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
   //Size
   int_t size = input_sizes(expressions)[0];
+  //Fallback
+  if(p_.simd_width > 1 && (requires_fallback(expressions) || (size%p_.simd_width>0)))
+  {
+      fallback.enqueue(queue, program, "fallback", fallback, controller);
+      return;
+  }
   //Kernel
-  char kfb[10];
-  char kopt[10];
-  fill_kernel_name(kfb, label, "f");
-  fill_kernel_name(kopt, label, "o");
-  bool fallback = p_.simd_width > 1 && (requires_fallback(expressions) || (size%p_.simd_width>0));
-
-  cl::Program const & program = programs[fallback?0:1].program();
-  cl_ext::kernels_type::key_type key(program(), label);
-  cl_ext::kernels_type::iterator it = cl_ext::kernels.find(key);
-  if(it==cl_ext::kernels.end())
-    it = cl_ext::kernels.insert(std::make_pair(key, cl::Kernel(program, fallback?kfb:kopt))).first;
-  cl::Kernel & kernel = it->second;
-
+  char name[32] = {"axpy"};
+  strcat(name, suffix);
+  driver::Kernel kernel(program, name);
   //NDRange
-  cl::NDRange global(p_.local_size_0*p_.num_groups);
-  cl::NDRange local(p_.local_size_0);
+  driver::NDRange global(p_.local_size_0*p_.num_groups);
+  driver::NDRange local(p_.local_size_0);
   //Arguments
   unsigned int current_arg = 0;
-  kernel.setArg(current_arg++, cl_uint(size));
+  kernel.setSizeArg(current_arg++, size);
   set_arguments(expressions, kernel, current_arg);
-
-  controller.execution_options().enqueue_cache(queue, kernel, cl::NullRange, global, local);
+  controller.execution_options().enqueue_cache(queue, kernel, global, local);
 }
 
 

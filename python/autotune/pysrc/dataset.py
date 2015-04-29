@@ -6,21 +6,21 @@ import numpy as np
 
 def sample_profiles(execution_handler, generator):
     print "Sampling profiles..."
-
     t = np.empty(0)
     profiles = []
     for i, x in enumerate(generator):
         print x
         if i==0:
             X = np.empty((0,len(x)))
-        y = execution_handler(x)
+        try:
+            y = execution_handler(x)
+        except:
+            continue
         if y not in profiles:
             profiles.append(y)
         idx = profiles.index(y)
-
         X = np.vstack((X, x))
         t = np.append(t, idx)
-
     idx = int(t[np.argmax(np.linalg.norm(X, axis=1))])
     profiles = [profiles[idx]] + [x for i,x in enumerate(profiles) if i!=idx]
     return profiles
@@ -34,8 +34,10 @@ def sample_dataset(prefix_name, profiles, execution_handler, generator):
             X = np.empty((0,len(x)))
         new_y = np.zeros(P)
         for j,y in enumerate(profiles):
-            T = execution_handler(x, os.devnull, y)
-            new_y[j] = T
+            try:
+                new_y[j] = execution_handler(x, os.devnull, y)
+            except:
+                new_y[j] = float('inf')
         X = np.vstack((X, x))
         Y = np.vstack((Y, new_y))
         if i%10==0:
@@ -46,11 +48,10 @@ def sample_dataset(prefix_name, profiles, execution_handler, generator):
     Y = Y[:, idx]
     profiles = [profiles[i] for i in idx]
 
-    dir = os.path.join("data", prefix_name)
-    if not os.path.exists(dir):
-        os.makedirs(dir)
-    np.savetxt(os.path.join(dir,"X.csv"), X)
-    np.savetxt(os.path.join(dir,"Y.csv"), Y)
-    np.savetxt(os.path.join(dir,"profiles.csv"), profiles)
+    if not os.path.exists(prefix_name):
+        os.makedirs(prefix_name)
+    np.savetxt(os.path.join(prefix_name,"X.csv"), X)
+    np.savetxt(os.path.join(prefix_name,"Y.csv"), Y)
+    np.savetxt(os.path.join(prefix_name,"profiles.csv"), profiles)
 
     return X, Y, profiles

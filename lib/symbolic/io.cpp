@@ -1,21 +1,21 @@
 #include <iostream>
 #include <sstream>
 
-#include "atidlas/symbolic/io.h"
-#include "atidlas/tools/to_string.hpp"
+#include "isaac/symbolic/io.h"
+#include "isaac/tools/to_string.hpp"
 
-namespace atidlas
+namespace isaac
 {
 
-#define ATIDLAS_MAP_TO_STRING(NAME) case NAME: return #NAME
+#define ISAAC_MAP_TO_STRING(NAME) case NAME: return #NAME
 
 inline std::string to_string(array_expression_node_subtype const & f)
 {
   switch(f)
   {
-    ATIDLAS_MAP_TO_STRING(INVALID_SUBTYPE);
-    ATIDLAS_MAP_TO_STRING(VALUE_SCALAR_TYPE);
-    ATIDLAS_MAP_TO_STRING(DENSE_ARRAY_TYPE);
+    ISAAC_MAP_TO_STRING(INVALID_SUBTYPE);
+    ISAAC_MAP_TO_STRING(VALUE_SCALAR_TYPE);
+    ISAAC_MAP_TO_STRING(DENSE_ARRAY_TYPE);
     default: return "UNKNOWN";
   }
 }
@@ -42,7 +42,7 @@ inline std::ostream & operator<<(std::ostream & os, array_expression::node const
 namespace detail
 {
   /** @brief Recursive worker routine for printing a whole array_expression */
-  inline void print_node(std::ostream & os, atidlas::array_expression const & s, size_t node_index, size_t indent = 0)
+  inline void print_node(std::ostream & os, isaac::array_expression const & s, size_t node_index, size_t indent = 0)
   {
     array_expression::container_type const & nodes = s.tree();
     array_expression::node const & current_node = nodes[node_index];
@@ -60,7 +60,7 @@ namespace detail
   }
 }
 
-std::string to_string(atidlas::array_expression const & s)
+std::string to_string(isaac::array_expression const & s)
 {
   std::ostringstream os;
   detail::print_node(os, s, s.root());

@@ -12,7 +12,7 @@ configure_file(${SPEC_IN} ${SPEC})
 add_custom_command(OUTPUT ${OUTPUT}
                    COMMAND ${PYINSTALLER} ${SPEC_IN} ${CMAKE_CURRENT_SOURCE_DIR}
                    COMMAND ${CMAKE_COMMAND} -E touch ${OUTPUT}
-                   DEPENDS ${DEPS} pyatidlas)
+                   DEPENDS ${DEPS} pyisaac)
 add_custom_target(autotune ALL DEPENDS ${OUTPUT})
 
 endif()

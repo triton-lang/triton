@@ -1,11 +1,11 @@
 #include <cassert>
 #include <vector>
-#include "atidlas/array.h"
-#include "atidlas/value_scalar.h"
+#include "isaac/array.h"
+#include "isaac/value_scalar.h"
 #include <CL/cl.hpp>
-#include "atidlas/symbolic/expression.h"
+#include "isaac/symbolic/expression.h"
 
-namespace atidlas
+namespace isaac
 {
 
 void fill(lhs_rhs_element &x, invalid_node)
@@ -28,18 +28,7 @@ void fill(lhs_rhs_element & x, array const & a)
   x.type_family = ARRAY_TYPE_FAMILY;
   x.subtype = DENSE_ARRAY_TYPE;
   x.dtype = a.dtype();
-
-  x.array.dtype = a.dtype();
-  x.array.data = a.data()();
-  x.array.shape1 = a.shape()._1;
-  x.array.shape2 = a.shape()._2;
-  x.array.start1 = a.start()._1;
-  x.array.start2 = a.start()._2;
-  x.array.stride1 = a.stride()._1;
-  x.array.stride2 = a.stride()._2;
-  x.array.ld = a.ld();
-
-  x.memory_ = a.data();
+  x.array = (array*)&a;
 }
 
 void fill(lhs_rhs_element & x, value_scalar const & v)
@@ -66,7 +55,7 @@ op_element::op_element(operation_node_type_family const & _type_family, operatio
 
 //
 template<class LT, class RT>
-array_expression::array_expression(LT const & lhs, RT const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape) :
+array_expression::array_expression(LT const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape) :
   tree_(1), root_(0), context_(context), dtype_(dtype), shape_(shape)
 {
   fill(tree_[0].lhs, lhs);
@@ -75,7 +64,7 @@ array_expression::array_expression(LT const & lhs, RT const & rhs, op_element co
 }
 
 template<class RT>
-array_expression::array_expression(array_expression const & lhs, RT const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape) :
+array_expression::array_expression(array_expression const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape) :
  tree_(lhs.tree_.size() + 1), root_(tree_.size()-1), context_(context), dtype_(dtype), shape_(shape)
 {
   std::copy(lhs.tree_.begin(), lhs.tree_.end(), tree_.begin());
@@ -85,7 +74,7 @@ array_expression::array_expression(array_expression const & lhs, RT const & rhs,
 }
 
 template<class LT>
-array_expression::array_expression(LT const & lhs, array_expression const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape) :
+array_expression::array_expression(LT const & lhs, array_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape) :
   tree_(rhs.tree_.size() + 1), root_(tree_.size() - 1), context_(context), dtype_(dtype), shape_(shape)
 {
   std::copy(rhs.tree_.begin(), rhs.tree_.end(), tree_.begin());
@@ -94,7 +83,7 @@ array_expression::array_expression(LT const & lhs, array_expression const & rhs,
   fill(tree_[root_].rhs, rhs.root_);
 }
 
-array_expression::array_expression(array_expression const & lhs, array_expression const & rhs, op_element const & op, cl::Context const & context, numeric_type const & dtype, size4 const & shape):
+array_expression::array_expression(array_expression const & lhs, array_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape):
   tree_(lhs.tree_.size() + rhs.tree_.size() + 1), root_(tree_.size()-1), context_(context), dtype_(dtype), shape_(shape)
 {  
   std::size_t lsize = lhs.tree_.size();
@@ -110,35 +99,35 @@ array_expression::array_expression(array_expression const & lhs, array_expressio
   root_ = tree_.size() - 1;
 }
 
-template array_expression::array_expression(array_expression const &, value_scalar const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array_expression const &, invalid_node const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array_expression const &, array const &,        op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array_expression const &, repeat_infos const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, value_scalar const &, op_element const &,  driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, invalid_node const &, op_element const &,  driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, array const &,        op_element const &,  driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array_expression const &, repeat_infos const &, op_element const &,  driver::Context const &, numeric_type const &, size4 const &);
 
-template array_expression::array_expression(value_scalar const &, array_expression const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(invalid_node const &, array_expression const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array const &, array_expression const &, op_element const &,         cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(repeat_infos const &, array_expression const &, op_element const &,  cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(value_scalar const &, array_expression const &, op_element const &,  driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, array_expression const &, op_element const &,  driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &, array_expression const &, op_element const &,         driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, array_expression const &, op_element const &,  driver::Context const &, numeric_type const &, size4 const &);
 
-template array_expression::array_expression(value_scalar const &, value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(invalid_node const &, value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array const &,        value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(repeat_infos const &, value_scalar const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(value_scalar const &, value_scalar const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, value_scalar const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &,        value_scalar const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, value_scalar const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
 
-template array_expression::array_expression(value_scalar const &, invalid_node const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(invalid_node const &, invalid_node const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array const &,        invalid_node const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(repeat_infos const &, invalid_node const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(value_scalar const &, invalid_node const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, invalid_node const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &,        invalid_node const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, invalid_node const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
 
-template array_expression::array_expression(value_scalar const &, array const &,        op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(invalid_node const &, array const &,        op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array const &,        array const &,        op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(repeat_infos const &, array const &,        op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(value_scalar const &, array const &,        op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, array const &,        op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &,        array const &,        op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, array const &,        op_element const &, driver::Context const &, numeric_type const &, size4 const &);
 
-template array_expression::array_expression(value_scalar const &, repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(invalid_node const &, repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(array const &,        repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
-template array_expression::array_expression(repeat_infos const &, repeat_infos const &, op_element const &, cl::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(value_scalar const &, repeat_infos const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(invalid_node const &, repeat_infos const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(array const &,        repeat_infos const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
+template array_expression::array_expression(repeat_infos const &, repeat_infos const &, op_element const &, driver::Context const &, numeric_type const &, size4 const &);
 
 
 
@@ -151,7 +140,7 @@ array_expression::container_type const & array_expression::tree() const
 std::size_t array_expression::root() const
 { return root_; }
 
-cl::Context const & array_expression::context() const
+driver::Context const & array_expression::context() const
 { return context_; }
 
 numeric_type const & array_expression::dtype() const
@@ -161,7 +150,7 @@ size4 array_expression::shape() const
 { return shape_; }
 
 int_t array_expression::nshape() const
-{ return int_t((shape_._1 > 1) + (shape_._2 > 1)); }
+{ return int_t((shape_[0] > 1) + (shape_[1] > 1)); }
 
 array_expression& array_expression::reshape(int_t size1, int_t size2)
 {
@@ -175,20 +164,6 @@ array_expression array_expression::operator-()
 
 array_expression array_expression::operator!()
 { return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), context_, INT_TYPE, shape_); }
-
-//
-void operation_cache::push_back(cl::CommandQueue & queue, cl::Kernel const & kernel, cl::NDRange const & offset, cl::NDRange const & global, cl::NDRange const & local, std::vector<cl::Event>* dependencies)
-{
-  l_.push_back({queue, kernel, offset, global, local, dependencies});
-}
-
-void operation_cache::enqueue(std::list<cl::Event>* events)
-{
-  for(infos & i : l_){
-    events->push_back(cl::Event());
-    i.queue.enqueueNDRangeKernel(i.kernel, i.offset, i.global, i.local, i.dependencies, &events->back());
-  }
-}
 
 //
 tools::shared_ptr<array_expression> expressions_tuple::create(array_expression const & s)
@@ -213,7 +188,7 @@ expressions_tuple::expressions_tuple(order_type order, array_expression const & 
 expressions_tuple::data_type const & expressions_tuple::data() const
 { return data_; }
 
-cl::Context const & expressions_tuple::context() const
+driver::Context const & expressions_tuple::context() const
 { return data_.front()->context(); }
 
 expressions_tuple::order_type expressions_tuple::order() const

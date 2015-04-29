@@ -19,8 +19,6 @@ a = Analysis([os.path.join(prefix, 'pysrc','autotune.py')],
          hookspath=None,
          excludes=['scipy.io.matlab','matplotlib','PyQt4'],
          runtime_hooks=None)
-dict_tree = Tree(os.path.join(prefix, 'external', 'pyopencl-2014.1-py2.7.egg-info'), prefix = 'pyopencl-2014.1-py2.7.egg-info')
-a.datas += dict_tree
 pyz = PYZ(a.pure)
 exe = EXE(pyz,
       a.scripts,

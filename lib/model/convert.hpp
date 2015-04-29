@@ -1,10 +1,10 @@
-#ifndef ATIDLAS_MODEL_TOOLS_HPP
-#define ATIDLAS_MODEL_TOOLS_HPP
+#ifndef ISAAC_MODEL_TOOLS_HPP
+#define ISAAC_MODEL_TOOLS_HPP
 
 #include <vector>
 #include "rapidjson/document.h"
 
-namespace atidlas
+namespace isaac
 {
 
   namespace tools
