@@ -58,7 +58,7 @@ def main():
                     '${CUDA_INCLUDE_DIRS}']
     LIBRARY_DIRS = ['${CMAKE_BINARY_DIR}/lib']
 
-    src = [os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', sf) for sf in ['_isaac.cpp', 'driver.cpp', 'model.cpp', 'core.cpp']]
+    src = [os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', sf) for sf in ['_isaac.cpp']]
 
     boostsrc = '${CMAKE_CURRENT_SOURCE_DIR}/external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:
@@ -81,7 +81,7 @@ def main():
                 author_email='ptillet@g.harvard.edu',
                 license='MPL 2.0',
                 packages=["isaac"],
-                #package_dir={ '': '${CMAKE_CURRENT_BINARY_DIR}' },
+                package_dir={ '': '${CMAKE_CURRENT_BINARY_DIR}' },
                 ext_package="isaac",
                 ext_modules=[Extension(
                     '_isaac',src,

@@ -1,1 +1,0 @@
-/usr/bin/c++       CMakeFiles/reduction-test.dir/reduction.cpp.o  -o reduction-test -rdynamic ../lib/libisaac.so -lOpenCL -Wl,-rpath,/home/philippe/Development/ISAAC/build/lib 

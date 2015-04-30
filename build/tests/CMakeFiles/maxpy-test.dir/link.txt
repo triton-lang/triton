@@ -1,1 +1,0 @@
-/usr/bin/c++       CMakeFiles/maxpy-test.dir/maxpy.cpp.o  -o maxpy-test -rdynamic ../lib/libisaac.so -lOpenCL -Wl,-rpath,/home/philippe/Development/ISAAC/build/lib 

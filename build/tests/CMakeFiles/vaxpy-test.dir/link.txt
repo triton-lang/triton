@@ -1,1 +1,0 @@
-/usr/bin/c++       CMakeFiles/vaxpy-test.dir/vaxpy.cpp.o  -o vaxpy-test -rdynamic ../lib/libisaac.so -lOpenCL -Wl,-rpath,/home/philippe/Development/ISAAC/build/lib 
