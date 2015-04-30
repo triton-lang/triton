@@ -18,8 +18,4 @@ endif()
 install(TARGETS isaac LIBRARY DESTINATION lib)
 set(INSTALL_INCLUDE_DIR /usr/local/include)
 install(DIRECTORY isaac "${PROJECT_SOURCE_DIR}/include/isaac"
-        DESTINATION "${INSTALL_INCLUDE_DIR}"  FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
-
-set(POSTINSTALL_PY "${CMAKE_CURRENT_BINARY_DIR}/postinstall.py")
-configure_file("${PROJECT_SOURCE_DIR}/python/postinstall.py" ${POSTINSTALL_PY})
-install(CODE "execute_process(COMMAND ${PYTHON} ${POSTINSTALL_PY})")
+           DESTINATION "${INSTALL_INCLUDE_DIR}"  FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
