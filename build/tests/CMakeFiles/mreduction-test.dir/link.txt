@@ -1,0 +1,1 @@
+/usr/bin/c++       CMakeFiles/mreduction-test.dir/mreduction.cpp.o  -o mreduction-test -rdynamic ../lib/libisaac.so -lOpenCL -Wl,-rpath,/home/philippe/Development/ISAAC/build/lib 

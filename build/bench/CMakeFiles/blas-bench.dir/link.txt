@@ -1,0 +1,1 @@
+/usr/bin/c++   -O3 -DNDEBUG    CMakeFiles/blas-bench.dir/blas.cpp.o  -o blas-bench -rdynamic ../lib/libisaac.so -lOpenCL -Wl,-rpath,/home/philippe/Development/ISAAC/build/lib 
