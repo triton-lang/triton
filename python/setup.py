@@ -58,7 +58,7 @@ def main():
                     '${CUDA_INCLUDE_DIRS}']
     LIBRARY_DIRS = ['${CMAKE_BINARY_DIR}/lib']
 
-    src = [os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', sf) for sf in ['_isaac.cpp']]
+    src = [os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', sf) for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
 
     boostsrc = '${CMAKE_CURRENT_SOURCE_DIR}/external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:

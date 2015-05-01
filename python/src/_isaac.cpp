@@ -1,5 +1,6 @@
 #include "core.h"
 #include "driver.h"
+#include "exceptions.h"
 #include "model.h"
 
 #include <boost/python.hpp>
@@ -18,6 +19,7 @@ BOOST_PYTHON_MODULE(_isaac)
   package.attr("__path__") = "_isaac";
 
   export_driver();
+  export_exceptions();
   export_model();
   export_core();
 }

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 2.8.10)
 
 # Add visibility of headers
 file( GLOB_RECURSE MAKE_HEADERS_VISIBLE_SRC *.hpp *.h)
