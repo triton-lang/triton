@@ -568,9 +568,9 @@ array_expression OPNAME(array const & x, int_t axis)\
   else if(axis==-1)\
     return array_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
   else if(axis==0)\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
-  else\
     return array_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[1]));\
+  else\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
 }\
 \
 array_expression OPNAME(array_expression const & x, int_t axis)\
@@ -580,9 +580,9 @@ array_expression OPNAME(array_expression const & x, int_t axis)\
   if(axis==-1)\
     return array_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
   else if(axis==0)\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
-  else\
     return array_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[1]));\
+  else\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
 }
 
 DEFINE_REDUCTION(OPERATOR_ADD_TYPE, sum)
@@ -664,7 +664,7 @@ namespace detail
   {
     int_t M = A.shape()[0];
     int_t N = A.shape()[1];
-    return sum(A*repmat(reshape(x, 1, N), M, 1), 0);
+    return sum(A*repmat(reshape(x, 1, N), M, 1), 1);
   }
 
   template<class T>
@@ -679,10 +679,10 @@ namespace detail
       array_expression tmp(A, repmat(x, 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), A.context(), A.dtype(), size4(N, M));
       //Remove trans
       tmp.tree()[tmp.root()].lhs = A.tree()[A.root()].lhs;
-      return sum(tmp, 1);
+      return sum(tmp, 0);
     }
     else
-      return sum(A*repmat(reshape(x, 1, N), M, 1), 0);
+      return sum(A*repmat(reshape(x, 1, N), M, 1), 1);
 
   }
 
