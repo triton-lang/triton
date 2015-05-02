@@ -13,6 +13,8 @@ if(CUDA_FOUND)
    include_directories(${CUDA_INCLUDE_DIRS})
 endif()
 
+ADD_DEFINITIONS(-Wno-sign-compare -D__CL_ENABLE_EXCEPTIONS ${BACKEND_DEFINES} -Wall -Wextra -pedantic -std=c++11)
+ADD_EXECUTABLE(bin2cpp ${CMAKE_MODULE_PATH}/bin2cpp.cpp)
 
 include(CTest)
 add_subdirectory(lib)

@@ -5,7 +5,6 @@ file( GLOB_RECURSE LIBISAAC_SRC *.cpp)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(isaac SHARED ${LIBISAAC_SRC})
-set_target_properties(isaac PROPERTIES COMPILE_FLAGS "-Wno-sign-compare -D__CL_ENABLE_EXCEPTIONS ${BACKEND_DEFINES} -Wall -Wextra -pedantic -std=c++11")
 
 if(OPENCL_FOUND)
     target_link_libraries(isaac ${OPENCL_LIBRARIES})
@@ -13,7 +12,14 @@ endif()
 if(CUDA_FOUND)
     cuda_find_library_local_first(CUDA_NVRTC_LIBRARY nvrtc "\"nvrtc\" library")
     target_link_libraries(isaac ${CUDA_CUDA_LIBRARY} ${CUDA_NVRTC_LIBRARY})
+    #Cuda JIT headers to file
+    file( GLOB_RECURSE CUDA_HELPERS_SRC driver/helpers/*.u)
+    INCLUDE("${CMAKE_MODULE_PATH}/CodeToH.cmake")
+    CODE_TO_H(SOURCES ${CUDA_HELPERS_SRC} VARNAME kernel_files EXTENSION "h"
+               OUTPUT_DIR driver/helpers TARGETS cl_kernel_targets EOF "0")
 endif()
+
+
 
 install(TARGETS isaac LIBRARY DESTINATION lib)
 set(INSTALL_INCLUDE_DIR /usr/local/include)

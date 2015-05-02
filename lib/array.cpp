@@ -13,7 +13,6 @@ namespace isaac
 
 
 /*--- Constructors ---*/
-
 //1D Constructors
 
 array::array(int_t shape0, numeric_type dtype, driver::Context context) :
@@ -245,8 +244,8 @@ array array::operator[](slice const & e1)
 
 array array::operator()(slice const & e1, slice const & e2)
 { return array(*this, e1, e2); }
-//---------------------------------------
 
+//---------------------------------------
 /*--- Scalar ---*/
 namespace detail
 {
