@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- IMPORTANT: Do not manually manipulate this automatically generated file, changes will be gone after the next build! -->
+
+<resources>
+    <string name="ApplicationName">${ANDROID_NAME}</string>
+</resources>
