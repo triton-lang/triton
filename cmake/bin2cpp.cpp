@@ -1,7 +1,7 @@
 // Umar Arshad
 // Copyright 2014
 
-
+#include <stdlib.h>
 #include <fstream>
 #include <sstream>
 #include <iostream>
