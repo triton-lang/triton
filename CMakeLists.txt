@@ -41,13 +41,16 @@ foreach(FILE ${INCLUDE_DIRECTORIES_LST})
 endforeach()
 
 configure_file(${SETUP_PY_IN} ${SETUP_PY})
-add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/build/timestamp"
-                    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/python/src/lib
-                    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/python/src/include
 
-                    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lib ${CMAKE_SOURCE_DIR}/python/src/lib
-                    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/python/src/include)
-add_custom_target(package-python ALL DEPENDS "${CMAKE_BINARY_DIR}/build/timestamp")
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/build/timestamp"
+                        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/python/src/lib
+                        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/python/src/include
+
+                        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lib ${CMAKE_SOURCE_DIR}/python/src/lib
+                        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/python/src/include)
+    add_custom_target(package-python ALL DEPENDS "${CMAKE_BINARY_DIR}/build/timestamp")
+endif()
 
 
 #Isaac
