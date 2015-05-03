@@ -37,14 +37,13 @@ get_property(INCLUDE_DIRECTORIES_LST DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPE
 set(INCLUDE_DIRECTORIES_STR)
 foreach(FILE ${INCLUDE_DIRECTORIES_LST})
     string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}" "src" _TMP ${FILE})
-    set(INCLUDE_DIRECTORIES "${INCLUDE_DIRECTORIES} ${_TMP}")
+    set(INCLUDE_DIRECTORIES_STR "${INCLUDE_DIRECTORIES_STR} ${_TMP}")
 endforeach()
 
 configure_file(${SETUP_PY_IN} ${SETUP_PY})
 
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/build/timestamp"
                     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/python ${CMAKE_BINARY_DIR}/python
-                    COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/python/CMakeLists.txt
                     COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/python/src/lib/CMakeLists.txt
 
                     COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/python/src/lib
@@ -56,7 +55,7 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/build/timestamp"
                     COMMAND ${CMAKE_COMMAND} -E tar czf python-isaac.tgz ${CMAKE_BINARY_DIR}/python
                     )
 
-add_custom_target(package-python ALL DEPENDS "${CMAKE_BINARY_DIR}/build/timestamp")
+add_custom_target(package-python DEPENDS "${CMAKE_BINARY_DIR}/build/timestamp")
 
 
 #Isaac

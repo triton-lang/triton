@@ -17,6 +17,8 @@ num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetch_policy(_fetch_po
 
 int mreduction::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
 {
+  if(reduction_type_==REDUCE_ROWS && p_.simd_width>1)
+    return TEMPLATE_INVALID_SIMD_WIDTH;
   if (p_.fetch_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
