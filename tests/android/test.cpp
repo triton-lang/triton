@@ -12,3 +12,4 @@ void android_main(struct android_app* state)
     __android_log_print(ANDROID_LOG_INFO, "IsaacAndroidTest", isaac::tools::to_string(test).c_str());
     ANativeActivity_finish(state->activity);
 }
+

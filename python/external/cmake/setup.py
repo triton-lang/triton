@@ -1,3 +1,6 @@
+#Thanks to Andreas Knoeckler for providing stand-alone boost.python
+#through PyOpenCL and PyCUDA
+
 import os, sys
 from distutils.command.build_ext import build_ext
 from distutils.command.build_py import build_py
@@ -12,9 +15,6 @@ platform_ldflags = {}
 platform_libs = {}
 
 class build_ext_subclass(build_ext):
-    """Shamelessly stolen from
-    https://stackoverflow.com/questions/724664
-    """
     def build_extensions(self):
         c = self.compiler.compiler_type
         if c in platform_cflags.keys():
@@ -46,20 +46,22 @@ def main():
                     break
         return optlist
 
+    #Compiler options
     cvars = sysconfig.get_config_vars()
-    cvars['OPT'] = "-DNDEBUG -O3 -std=c++11 ${BACKEND_DEFINES}" + str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-O', '-Wstrict-prototypes', '-DNDEBUG']))
+    cvars['BASECFLAGS'] = "-D__CL_ENABLE_EXCEPTIONS -fPIC -Wno-sign-compare -Wall -Wextra -pedantic -Wno-ignored-qualifiers -std=c++11 "
+    cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
     cvars["CFLAGS"] = cvars["BASECFLAGS"] + " " + cvars["OPT"]
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
     
-    DEFINES = []
-    INCLUDE_DIRS = ['${CMAKE_CURRENT_SOURCE_DIR}/external/boost/include',
-                     os.path.join(find_module("numpy")[1], "core", "include"),
-                    '${PROJECT_SOURCE_DIR}/include',
-                    '${CUDA_INCLUDE_DIRS}']
-    LIBRARY_DIRS = ['${CMAKE_BINARY_DIR}/lib']
+    #Includes
+    include ='${INCLUDE_DIRECTORIES_STR}'.split() +\
+                    ['${CMAKE_CURRENT_SOURCE_DIR}/external/boost/include',
+                      os.path.join(find_module("numpy")[1], "core", "include")]
 
-    src = [os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', sf) for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
-
+    #Sources
+    src =  '${LIBISAAC_SRC_STR}'.split() +\
+            [os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'src', sf) \
+                for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
     boostsrc = '${CMAKE_CURRENT_SOURCE_DIR}/external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:
         src = src + [x for x in recursive_glob('${CMAKE_CURRENT_SOURCE_DIR}/external/boost/libs/' + s + '/src/','.cpp') if 'win32' not in x and 'pthread' not in x]
@@ -87,10 +89,8 @@ def main():
                     '_isaac',src,
                     extra_compile_args= ['-Wno-unused-function', '-Wno-unused-local-typedefs'],
                     extra_link_args=['-Wl,-soname=_isaac.so'],
-                    define_macros=DEFINES,
                     undef_macros=[],
-                    include_dirs=INCLUDE_DIRS,
-                    library_dirs=LIBRARY_DIRS,
+                    include_dirs=include,
                     libraries=['OpenCL', 'isaac']
                 )],
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},

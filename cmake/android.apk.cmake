@@ -121,7 +121,7 @@ macro(android_create_apk name apk_package_name apk_directory libs_directory andr
     add_custom_command(TARGET ${ANDROID_NAME}
       COMMAND ant debug
       WORKING_DIRECTORY "${apk_directory}")
-    
+     
     # Install current version on the device/emulator
     if(ANDROID_APK_INSTALL OR ANDROID_APK_RUN)
       add_custom_command(TARGET ${ANDROID_NAME}
