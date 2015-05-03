@@ -1,4 +1,4 @@
-include("${CMAKE_MODULE_PATH}/android.apk.cmake" REQUIRED)
+include("${CMAKE_MODULE_PATH}/android/apk.cmake" REQUIRED)
 
 # Sources
 include_directories(${CMAKE_SOURCE_DIR}/include)
