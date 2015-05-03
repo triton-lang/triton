@@ -2,13 +2,13 @@ file( GLOB_RECURSE PYTHON_SRC *.cpp)
 file( GLOB_RECURSE PYTHON_PYSRC *.py)
 add_custom_target( MAKE_PYTHON_SRC_VISIBLE SOURCES ${PYTHON_SRC} ${PYTHON_PYSRC})
 
-set(SETUP_PY_IN "${CMAKE_CURRENT_SOURCE_DIR}/external/cmake/setup.py")
+set(SETUP_PY_IN "${CMAKE_MODULES_PATH}/python/setup.py")
 set(SETUP_PY    "${CMAKE_CURRENT_SOURCE_DIR}/setup.py")
 set(OUTPUT      "${CMAKE_CURRENT_BINARY_DIR}/build")
 
 function(JOIN VALUES GLUE OUTPUT)
   string (REGEX REPLACE "([^\\]|^);" "\\1${GLUE}" _TMP_STR "${VALUES}")
-  string (REGEX REPLACE "[\\](.)" "\\1" _TMP_STR "${_TMP_STR}") #fixes escaping
+  string (REGEX REPLACE "[\\](.)" "\\1" _TMP_STR "${_TMP_STR}")
   set (${OUTPUT} "${_TMP_STR}" PARENT_SCOPE)
 endfunction()
 join("${LIBISAAC_SRC}" " " LIBISAAC_SRC_STR)
