@@ -42,15 +42,21 @@ endforeach()
 
 configure_file(${SETUP_PY_IN} ${SETUP_PY})
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/build/timestamp"
-                        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/python/src/lib
-                        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/python/src/include
+add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/build/timestamp"
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/python ${CMAKE_BINARY_DIR}/python
+                    COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/python/CMakeLists.txt
+                    COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/python/src/lib/CMakeLists.txt
 
-                        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lib ${CMAKE_SOURCE_DIR}/python/src/lib
-                        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/python/src/include)
-    add_custom_target(package-python ALL DEPENDS "${CMAKE_BINARY_DIR}/build/timestamp")
-endif()
+                    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/python/src/lib
+                    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/python/src/include
+
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lib ${CMAKE_BINARY_DIR}/python/src/lib
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/python/src/include
+
+                    COMMAND ${CMAKE_COMMAND} -E tar czf python-isaac.tgz ${CMAKE_BINARY_DIR}/python
+                    )
+
+add_custom_target(package-python ALL DEPENDS "${CMAKE_BINARY_DIR}/build/timestamp")
 
 
 #Isaac
