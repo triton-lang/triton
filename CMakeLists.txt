@@ -21,6 +21,8 @@ ADD_DEFINITIONS(-Wno-sign-compare -D__CL_ENABLE_EXCEPTIONS ${BACKEND_DEFINES} -W
 ADD_EXECUTABLE(bin2cpp ${CMAKE_MODULE_PATH}/bin2cpp.cpp)
 
 include(CTest)
+
+file(GLOB_RECURSE LIBISAAC_SRC lib/*.cpp)
 add_subdirectory(lib)
 add_subdirectory(tests)
 add_subdirectory(bench)

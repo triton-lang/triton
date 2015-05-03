@@ -1,9 +1,3 @@
-set(CMAKE_BUILD_TYPE RELEASE)
-set(CMAKE_CXX_FLAGS_RELEASE "-O2")
-
-file( GLOB_RECURSE LIBISAAC_SRC *.cpp)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-
 if(ANDROID)
     add_library(isaac STATIC ${LIBISAAC_SRC})
 else()
