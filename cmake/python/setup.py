@@ -48,9 +48,8 @@ def main():
 
     #Compiler options
     cvars = sysconfig.get_config_vars()
-    cvars['BASECFLAGS'] = "-D__CL_ENABLE_EXCEPTIONS -fPIC -Wno-sign-compare -Wall -Wextra -pedantic -Wno-ignored-qualifiers -std=c++11 "
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
-    cvars["CFLAGS"] = cvars["BASECFLAGS"] + " " + cvars["OPT"]
+    cvars["CFLAGS"] = cvars["BASECFLAGS"] + cvars['OPT']
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
     #Includes
@@ -81,11 +80,11 @@ def main():
                 ext_package="isaac",
                 ext_modules=[Extension(
                     '_isaac',src,
-                    extra_compile_args= ['-Wno-unused-function', '-Wno-unused-local-typedefs'],
-                    extra_link_args=['-Wl,-soname=_isaac.so'],
+                    extra_compile_args= ['-D__CL_ENABLE_EXCEPTIONS', '-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare'],
+		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,
-                    libraries=['OpenCL', 'isaac']
+                    libraries=['OpenCL']
                 )],
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},
                 classifiers=[

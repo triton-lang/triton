@@ -48,15 +48,14 @@ def main():
 
     #Compiler options
     cvars = sysconfig.get_config_vars()
-    cvars['BASECFLAGS'] = "-D__CL_ENABLE_EXCEPTIONS -fPIC -Wno-sign-compare -Wall -Wextra -pedantic -Wno-ignored-qualifiers -std=c++11 "
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
-    cvars["CFLAGS"] = cvars["BASECFLAGS"] + " " + cvars["OPT"]
+    cvars["CFLAGS"] = cvars["BASECFLAGS"] + cvars['OPT']
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
     #Includes
     include =' src/include'.split() + ['external/boost/include', os.path.join(find_module("numpy")[1], "core", "include")]
     #Sources
-    src =  'src/lib/symbolic/execute.cpp src/lib/symbolic/io.cpp src/lib/symbolic/expression.cpp src/lib/model/model.cpp src/lib/model/predictors/random_forest.cpp src/lib/backend/templates/mreduction.cpp src/lib/backend/templates/reduction.cpp src/lib/backend/templates/mproduct.cpp src/lib/backend/templates/maxpy.cpp src/lib/backend/templates/base.cpp src/lib/backend/templates/vaxpy.cpp src/lib/backend/mapped_object.cpp src/lib/backend/stream.cpp src/lib/backend/parse.cpp src/lib/backend/keywords.cpp src/lib/backend/binder.cpp src/lib/array.cpp src/lib/value_scalar.cpp src/lib/driver/backend.cpp src/lib/driver/device.cpp src/lib/driver/kernel.cpp src/lib/driver/buffer.cpp src/lib/driver/platform.cpp src/lib/driver/check.cpp src/lib/driver/program.cpp src/lib/driver/command_queue.cpp src/lib/driver/context.cpp src/lib/driver/event.cpp src/lib/driver/ndrange.cpp src/lib/driver/handle.cpp src/lib/exception/unknown_datatype.cpp src/lib/exception/operation_not_supported.cpp '.split() + [os.path.join('src', 'wrap', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
+    src =  'src/lib/symbolic/execute.cpp src/lib/symbolic/io.cpp src/lib/symbolic/expression.cpp src/lib/model/model.cpp src/lib/model/predictors/random_forest.cpp src/lib/backend/stream.cpp src/lib/backend/keywords.cpp src/lib/backend/templates/mproduct.cpp src/lib/backend/templates/reduction.cpp src/lib/backend/templates/maxpy.cpp src/lib/backend/templates/base.cpp src/lib/backend/templates/vaxpy.cpp src/lib/backend/templates/mreduction.cpp src/lib/backend/binder.cpp src/lib/backend/mapped_object.cpp src/lib/backend/parse.cpp src/lib/driver/device.cpp src/lib/driver/buffer.cpp src/lib/driver/event.cpp src/lib/driver/handle.cpp src/lib/driver/check.cpp src/lib/driver/ndrange.cpp src/lib/driver/platform.cpp src/lib/driver/program.cpp src/lib/driver/backend.cpp src/lib/driver/kernel.cpp src/lib/driver/context.cpp src/lib/driver/command_queue.cpp src/lib/exception/unknown_datatype.cpp src/lib/exception/operation_not_supported.cpp src/lib/value_scalar.cpp src/lib/array.cpp '.split() + [os.path.join('src', 'wrap', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
     boostsrc = 'external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:
         src = src + [x for x in recursive_glob('external/boost/libs/' + s + '/src/','.cpp') if 'win32' not in x and 'pthread' not in x]
@@ -81,11 +80,11 @@ def main():
                 ext_package="isaac",
                 ext_modules=[Extension(
                     '_isaac',src,
-                    extra_compile_args= ['-Wno-unused-function', '-Wno-unused-local-typedefs'],
-                    extra_link_args=['-Wl,-soname=_isaac.so'],
+                    extra_compile_args= ['-D__CL_ENABLE_EXCEPTIONS', '-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare'],
+		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,
-                    libraries=['OpenCL', 'isaac']
+                    libraries=['OpenCL']
                 )],
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},
                 classifiers=[
