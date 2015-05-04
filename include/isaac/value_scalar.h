@@ -2,7 +2,7 @@
 #define ISAAC_VALUE_SCALAR_H
 
 #include "isaac/types.h"
-#include <CL/cl.hpp>
+#include "stdint.h"
 
 namespace isaac
 {
@@ -12,15 +12,15 @@ class array_expression;
 
 union values_holder
 {
-//  cl_char bool8;
-  cl_char int8;
-  cl_uchar uint8;
-  cl_short int16;
-  cl_ushort uint16;
-  cl_int int32;
-  cl_uint uint32;
-  cl_long int64;
-  cl_ulong uint64;
+//  int8_t bool8;
+  int8_t int8;
+  u_int8_t uint8;
+  int16_t int16;
+  u_int16_t uint16;
+  int32_t int32;
+  u_int32_t uint32;
+  int64_t int64;
+  u_int64_t uint64;
 //  cl_half float16;
   cl_float float32;
   cl_double float64;
@@ -33,14 +33,14 @@ class value_scalar
 public:
 #define ISAAC_INSTANTIATE(CLTYPE, ADTYPE) value_scalar(CLTYPE value, numeric_type dtype = ADTYPE);
 //  ISAAC_INSTANTIATE(cl_bool, BOOL_TYPE)
-  ISAAC_INSTANTIATE(cl_char, CHAR_TYPE)
-  ISAAC_INSTANTIATE(cl_uchar, UCHAR_TYPE)
-  ISAAC_INSTANTIATE(cl_short, SHORT_TYPE)
-  ISAAC_INSTANTIATE(cl_ushort, USHORT_TYPE)
-  ISAAC_INSTANTIATE(cl_int, INT_TYPE)
-  ISAAC_INSTANTIATE(cl_uint, UINT_TYPE)
-  ISAAC_INSTANTIATE(cl_long, LONG_TYPE)
-  ISAAC_INSTANTIATE(cl_ulong, ULONG_TYPE)
+  ISAAC_INSTANTIATE(int8_t, CHAR_TYPE)
+  ISAAC_INSTANTIATE(uint8_t, UCHAR_TYPE)
+  ISAAC_INSTANTIATE(int16_t, SHORT_TYPE)
+  ISAAC_INSTANTIATE(u_int16_t, USHORT_TYPE)
+  ISAAC_INSTANTIATE(int32_t, INT_TYPE)
+  ISAAC_INSTANTIATE(u_int32_t, UINT_TYPE)
+  ISAAC_INSTANTIATE(int64_t, LONG_TYPE)
+  ISAAC_INSTANTIATE(u_int64_t, ULONG_TYPE)
 //  ISAAC_INSTANTIATE(cl_half, HALF_TYPE)
   ISAAC_INSTANTIATE(cl_float, FLOAT_TYPE)
   ISAAC_INSTANTIATE(cl_double, DOUBLE_TYPE)
@@ -55,14 +55,14 @@ public:
 
 #define INSTANTIATE(type) operator type() const;
   INSTANTIATE(bool)
-  INSTANTIATE(cl_char)
-  INSTANTIATE(cl_uchar)
-  INSTANTIATE(cl_short)
-  INSTANTIATE(cl_ushort)
-  INSTANTIATE(cl_int)
-  INSTANTIATE(cl_uint)
-  INSTANTIATE(cl_long)
-  INSTANTIATE(cl_ulong)
+  INSTANTIATE(int8_t)
+  INSTANTIATE(uint8_t)
+  INSTANTIATE(int16_t)
+  INSTANTIATE(u_int16_t)
+  INSTANTIATE(int32_t)
+  INSTANTIATE(u_int32_t)
+  INSTANTIATE(int64_t)
+  INSTANTIATE(u_int64_t)
   INSTANTIATE(cl_float)
   INSTANTIATE(cl_double)
 #undef INSTANTIATE
@@ -71,14 +71,14 @@ private:
   numeric_type dtype_;
 };
 
-value_scalar int8(cl_char v);
-value_scalar uint8(cl_uchar v);
-value_scalar int16(cl_short v);
-value_scalar uint16(cl_ushort v);
-value_scalar int32(cl_int v);
-value_scalar uint32(cl_uint v);
-value_scalar int64(cl_long v);
-value_scalar uint64(cl_ulong v);
+value_scalar int8(int8_t v);
+value_scalar uint8(uint8_t v);
+value_scalar int16(int16_t v);
+value_scalar uint16(u_int16_t v);
+value_scalar int32(int32_t v);
+value_scalar uint32(u_int32_t v);
+value_scalar int64(int64_t v);
+value_scalar uint64(u_int64_t v);
 value_scalar float32(cl_float v);
 value_scalar float64(cl_double v);
 
@@ -86,24 +86,24 @@ template<class T>
 T cast(isaac::value_scalar const &);
 
 #define ISAAC_DECLARE_BINARY_OPERATOR(RET, OPNAME) \
-RET OPNAME (value_scalar const &, cl_char  );\
-RET OPNAME (value_scalar const &, cl_uchar );\
-RET OPNAME (value_scalar const &, cl_short );\
-RET OPNAME (value_scalar const &, cl_ushort);\
-RET OPNAME (value_scalar const &, cl_int   );\
-RET OPNAME (value_scalar const &, cl_uint  );\
-RET OPNAME (value_scalar const &, cl_long  );\
-RET OPNAME (value_scalar const &, cl_ulong );\
+RET OPNAME (value_scalar const &, int8_t  );\
+RET OPNAME (value_scalar const &, uint8_t );\
+RET OPNAME (value_scalar const &, int16_t );\
+RET OPNAME (value_scalar const &, u_int16_t);\
+RET OPNAME (value_scalar const &, int32_t   );\
+RET OPNAME (value_scalar const &, u_int32_t  );\
+RET OPNAME (value_scalar const &, int64_t  );\
+RET OPNAME (value_scalar const &, u_int64_t );\
 RET OPNAME (value_scalar const &, cl_float );\
 RET OPNAME (value_scalar const &, cl_double);\
-RET OPNAME (cl_char   , value_scalar const &);\
-RET OPNAME (cl_uchar  , value_scalar const &);\
-RET OPNAME (cl_short  , value_scalar const &);\
-RET OPNAME (cl_ushort , value_scalar const &);\
-RET OPNAME (cl_int    , value_scalar const &);\
-RET OPNAME (cl_uint   , value_scalar const &);\
-RET OPNAME (cl_long   , value_scalar const &);\
-RET OPNAME (cl_ulong  , value_scalar const &);\
+RET OPNAME (int8_t   , value_scalar const &);\
+RET OPNAME (uint8_t  , value_scalar const &);\
+RET OPNAME (int16_t  , value_scalar const &);\
+RET OPNAME (u_int16_t , value_scalar const &);\
+RET OPNAME (int32_t    , value_scalar const &);\
+RET OPNAME (u_int32_t   , value_scalar const &);\
+RET OPNAME (int64_t   , value_scalar const &);\
+RET OPNAME (u_int64_t  , value_scalar const &);\
 RET OPNAME (cl_float  , value_scalar const &);\
 RET OPNAME (cl_double , value_scalar const &);\
 RET OPNAME (value_scalar const &, value_scalar const &);
