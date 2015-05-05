@@ -1,7 +1,6 @@
 #include <cassert>
 
 #include "isaac/array.h"
-#include <CL/cl.hpp>
 #include "isaac/exception/unknown_datatype.h"
 #include "isaac/model/model.h"
 #include "isaac/symbolic/execute.h"
@@ -31,16 +30,16 @@ array::array(array & v, slice const & s0) : dtype_(v.dtype_), shape_(s0.size, 1,
 {}
 
 #define INSTANTIATE(T) template array::array(std::vector<T> const &, driver::Context)
-INSTANTIATE(cl_char);
-INSTANTIATE(cl_uchar);
-INSTANTIATE(cl_short);
-INSTANTIATE(cl_ushort);
-INSTANTIATE(cl_int);
-INSTANTIATE(cl_uint);
-INSTANTIATE(cl_long);
-INSTANTIATE(cl_ulong);
-INSTANTIATE(cl_float);
-INSTANTIATE(cl_double);
+INSTANTIATE(char);
+INSTANTIATE(unsigned char);
+INSTANTIATE(short);
+INSTANTIATE(unsigned short);
+INSTANTIATE(int);
+INSTANTIATE(unsigned int);
+INSTANTIATE(long);
+INSTANTIATE(unsigned long);
+INSTANTIATE(float);
+INSTANTIATE(double);
 #undef INSTANTIATE
 
 // 2D
@@ -69,16 +68,16 @@ array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::C
 }
 
 #define INSTANTIATE(T) template array::array(int_t, int_t, std::vector<T> const &, driver::Context)
-INSTANTIATE(cl_char);
-INSTANTIATE(cl_uchar);
-INSTANTIATE(cl_short);
-INSTANTIATE(cl_ushort);
-INSTANTIATE(cl_int);
-INSTANTIATE(cl_uint);
-INSTANTIATE(cl_long);
-INSTANTIATE(cl_ulong);
-INSTANTIATE(cl_float);
-INSTANTIATE(cl_double);
+INSTANTIATE(char);
+INSTANTIATE(unsigned char);
+INSTANTIATE(short);
+INSTANTIATE(unsigned short);
+INSTANTIATE(int);
+INSTANTIATE(unsigned int);
+INSTANTIATE(long);
+INSTANTIATE(unsigned long);
+INSTANTIATE(float);
+INSTANTIATE(double);
 #undef INSTANTIATE
 
 // General
@@ -163,16 +162,16 @@ array & array::operator=(std::vector<DT> const & rhs)
 
 #define INSTANTIATE(T) template array & array::operator=<T>(std::vector<T> const &)
 
-INSTANTIATE(cl_char);
-INSTANTIATE(cl_uchar);
-INSTANTIATE(cl_short);
-INSTANTIATE(cl_ushort);
-INSTANTIATE(cl_int);
-INSTANTIATE(cl_uint);
-INSTANTIATE(cl_long);
-INSTANTIATE(cl_ulong);
-INSTANTIATE(cl_float);
-INSTANTIATE(cl_double);
+INSTANTIATE(char);
+INSTANTIATE(unsigned char);
+INSTANTIATE(short);
+INSTANTIATE(unsigned short);
+INSTANTIATE(int);
+INSTANTIATE(unsigned int);
+INSTANTIATE(long);
+INSTANTIATE(unsigned long);
+INSTANTIATE(float);
+INSTANTIATE(double);
 #undef INSTANTIATE
 
 array_expression array::operator-()
@@ -265,18 +264,16 @@ scalar::scalar(value_scalar value, driver::Context context) : array(1, value.dty
 {
   switch(dtype_)
   {
-//    case BOOL_TYPE: detail::copy(context_, data_, (cl_bool)value); break;
-    case CHAR_TYPE: detail::copy(context_, data_, (cl_char)value); break;
-    case UCHAR_TYPE: detail::copy(context_, data_, (cl_uchar)value); break;
-    case SHORT_TYPE: detail::copy(context_, data_, (cl_short)value); break;
-    case USHORT_TYPE: detail::copy(context_, data_, (cl_ushort)value); break;
-    case INT_TYPE: detail::copy(context_, data_, (cl_int)value); break;
-    case UINT_TYPE: detail::copy(context_, data_, (cl_uint)value); break;
-    case LONG_TYPE: detail::copy(context_, data_, (cl_long)value); break;
-    case ULONG_TYPE: detail::copy(context_, data_, (cl_ulong)value); break;
-//    case HALF_TYPE: detail::copy(context_, data_, (cl_float)value); break;
-    case FLOAT_TYPE: detail::copy(context_, data_, (cl_float)value); break;
-    case DOUBLE_TYPE: detail::copy(context_, data_, (cl_double)value); break;
+    case CHAR_TYPE: detail::copy(context_, data_, (char)value); break;
+    case UCHAR_TYPE: detail::copy(context_, data_, (unsigned char)value); break;
+    case SHORT_TYPE: detail::copy(context_, data_, (short)value); break;
+    case USHORT_TYPE: detail::copy(context_, data_, (unsigned short)value); break;
+    case INT_TYPE: detail::copy(context_, data_, (int)value); break;
+    case UINT_TYPE: detail::copy(context_, data_, (unsigned int)value); break;
+    case LONG_TYPE: detail::copy(context_, data_, (long)value); break;
+    case ULONG_TYPE: detail::copy(context_, data_, (unsigned long)value); break;
+    case FLOAT_TYPE: detail::copy(context_, data_, (float)value); break;
+    case DOUBLE_TYPE: detail::copy(context_, data_, (double)value); break;
     default: throw unknown_datatype(dtype_);
   }
 }
@@ -287,19 +284,40 @@ scalar::scalar(numeric_type dtype, driver::Context context) : array(1, dtype, co
 
 scalar::scalar(array_expression const & proxy) : array(proxy){ }
 
+void scalar::inject(values_holder & v) const
+{
+    int_t dtsize = size_of(dtype_);
+  #define HANDLE_CASE(DTYPE, VAL) \
+  case DTYPE:\
+    driver::queues[context_][0].read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL);\
+
+    switch(dtype_)
+    {
+      HANDLE_CASE(CHAR_TYPE, int8);
+      HANDLE_CASE(UCHAR_TYPE, uint8);
+      HANDLE_CASE(SHORT_TYPE, int16);
+      HANDLE_CASE(USHORT_TYPE, uint16);
+      HANDLE_CASE(INT_TYPE, int32);
+      HANDLE_CASE(UINT_TYPE, uint32);
+      HANDLE_CASE(LONG_TYPE, int64);
+      HANDLE_CASE(ULONG_TYPE, uint64);
+      HANDLE_CASE(FLOAT_TYPE, float32);
+      HANDLE_CASE(DOUBLE_TYPE, float64);
+      default: throw unknown_datatype(dtype_);
+    }
+  #undef HANDLE_CASE
+}
+
 template<class T>
 T scalar::cast() const
 {
   values_holder v;
-  int_t dtsize = size_of(dtype_);
-#define HANDLE_CASE(DTYPE, VAL) \
-case DTYPE:\
-  driver::queues[context_][0].read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL);\
-  return v.VAL
+  inject(v);
+
+#define HANDLE_CASE(DTYPE, VAL) case DTYPE: return v.VAL
 
   switch(dtype_)
   {
-//    HANDLE_CASE(BOOL_TYPE, bool8);
     HANDLE_CASE(CHAR_TYPE, int8);
     HANDLE_CASE(UCHAR_TYPE, uint8);
     HANDLE_CASE(SHORT_TYPE, int16);
@@ -308,7 +326,6 @@ case DTYPE:\
     HANDLE_CASE(UINT_TYPE, uint32);
     HANDLE_CASE(LONG_TYPE, int64);
     HANDLE_CASE(ULONG_TYPE, uint64);
-//    HANDLE_CASE(HALF_TYPE, float16);
     HANDLE_CASE(FLOAT_TYPE, float32);
     HANDLE_CASE(DOUBLE_TYPE, float64);
     default: throw unknown_datatype(dtype_);
@@ -330,38 +347,31 @@ scalar& scalar::operator=(value_scalar const & s)
                             }
   switch(dtype_)
   {
-//    HANDLE_CASE(BOOL_TYPE, cl_bool)
-    HANDLE_CASE(CHAR_TYPE, cl_char)
-    HANDLE_CASE(UCHAR_TYPE, cl_uchar)
-    HANDLE_CASE(SHORT_TYPE, cl_short)
-    HANDLE_CASE(USHORT_TYPE, cl_ushort)
-    HANDLE_CASE(INT_TYPE, cl_int)
-    HANDLE_CASE(UINT_TYPE, cl_uint)
-    HANDLE_CASE(LONG_TYPE, cl_long)
-    HANDLE_CASE(ULONG_TYPE, cl_ulong)
-//    HANDLE_CASE(HALF_TYPE, cl_half)
-    HANDLE_CASE(FLOAT_TYPE, cl_float)
-    HANDLE_CASE(DOUBLE_TYPE, cl_double)
+    HANDLE_CASE(CHAR_TYPE, char)
+    HANDLE_CASE(UCHAR_TYPE, unsigned char)
+    HANDLE_CASE(SHORT_TYPE, short)
+    HANDLE_CASE(USHORT_TYPE, unsigned short)
+    HANDLE_CASE(INT_TYPE, int)
+    HANDLE_CASE(UINT_TYPE, unsigned int)
+    HANDLE_CASE(LONG_TYPE, long)
+    HANDLE_CASE(ULONG_TYPE, unsigned long)
+    HANDLE_CASE(FLOAT_TYPE, float)
+    HANDLE_CASE(DOUBLE_TYPE, double)
     default: throw unknown_datatype(dtype_);
   }
 }
 
-//scalar& scalar::operator=(scalar const & s)
-//{
-//  return scalar::operator =(value_scalar(s));
-//}
-
 #define INSTANTIATE(type) scalar::operator type() const { return cast<type>(); }
-  INSTANTIATE(cl_char)
-  INSTANTIATE(cl_uchar)
-  INSTANTIATE(cl_short)
-  INSTANTIATE(cl_ushort)
-  INSTANTIATE(cl_int)
-  INSTANTIATE(cl_uint)
-  INSTANTIATE(cl_long)
-  INSTANTIATE(cl_ulong)
-  INSTANTIATE(cl_float)
-  INSTANTIATE(cl_double)
+  INSTANTIATE(char)
+  INSTANTIATE(unsigned char)
+  INSTANTIATE(short)
+  INSTANTIATE(unsigned short)
+  INSTANTIATE(int)
+  INSTANTIATE(unsigned int)
+  INSTANTIATE(long)
+  INSTANTIATE(unsigned long)
+  INSTANTIATE(float)
+  INSTANTIATE(double)
 #undef INSTANTIATE
 
 std::ostream & operator<<(std::ostream & os, scalar const & s)
@@ -369,17 +379,17 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
   switch(s.dtype())
   {
 //    case BOOL_TYPE: return os << static_cast<cl_bool>(s);
-    case CHAR_TYPE: return os << static_cast<cl_char>(s);
-    case UCHAR_TYPE: return os << static_cast<cl_uchar>(s);
-    case SHORT_TYPE: return os << static_cast<cl_short>(s);
-    case USHORT_TYPE: return os << static_cast<cl_ushort>(s);
-    case INT_TYPE: return os << static_cast<cl_int>(s);
-    case UINT_TYPE: return os << static_cast<cl_uint>(s);
-    case LONG_TYPE: return os << static_cast<cl_long>(s);
-    case ULONG_TYPE: return os << static_cast<cl_ulong>(s);
+    case CHAR_TYPE: return os << static_cast<char>(s);
+    case UCHAR_TYPE: return os << static_cast<unsigned char>(s);
+    case SHORT_TYPE: return os << static_cast<short>(s);
+    case USHORT_TYPE: return os << static_cast<unsigned short>(s);
+    case INT_TYPE: return os << static_cast<int>(s);
+    case UINT_TYPE: return os << static_cast<unsigned int>(s);
+    case LONG_TYPE: return os << static_cast<long>(s);
+    case ULONG_TYPE: return os << static_cast<unsigned long>(s);
 //    case HALF_TYPE: return os << static_cast<cl_half>(s);
-    case FLOAT_TYPE: return os << static_cast<cl_float>(s);
-    case DOUBLE_TYPE: return os << static_cast<cl_double>(s);
+    case FLOAT_TYPE: return os << static_cast<float>(s);
+    case DOUBLE_TYPE: return os << static_cast<double>(s);
     default: throw unknown_datatype(s.dtype());
   }
 }
@@ -824,16 +834,16 @@ void copy(array const & x, std::vector<T> & cx, bool blocking)
   template void copy<T>(std::vector<T> const &, array &, bool);\
   template void copy<T>(array const &, std::vector<T> &, bool)
 
-INSTANTIATE(cl_char);
-INSTANTIATE(cl_uchar);
-INSTANTIATE(cl_short);
-INSTANTIATE(cl_ushort);
-INSTANTIATE(cl_int);
-INSTANTIATE(cl_uint);
-INSTANTIATE(cl_long);
-INSTANTIATE(cl_ulong);
-INSTANTIATE(cl_float);
-INSTANTIATE(cl_double);
+INSTANTIATE(char);
+INSTANTIATE(unsigned char);
+INSTANTIATE(short);
+INSTANTIATE(unsigned short);
+INSTANTIATE(int);
+INSTANTIATE(unsigned int);
+INSTANTIATE(long);
+INSTANTIATE(unsigned long);
+INSTANTIATE(float);
+INSTANTIATE(double);
 
 #undef INSTANTIATE
 /*--- Stream operators----*/
@@ -896,17 +906,17 @@ std::ostream& operator<<(std::ostream & os, array const & a)
     switch(dtype)
     {
 //      HANDLE(BOOL_TYPE, cl_bool)
-      HANDLE(CHAR_TYPE, cl_char)
-      HANDLE(UCHAR_TYPE, cl_uchar)
-      HANDLE(SHORT_TYPE, cl_short)
-      HANDLE(USHORT_TYPE, cl_ushort)
-      HANDLE(INT_TYPE, cl_int)
-      HANDLE(UINT_TYPE, cl_uint)
-      HANDLE(LONG_TYPE, cl_long)
-      HANDLE(ULONG_TYPE, cl_ulong)
+      HANDLE(CHAR_TYPE, char)
+      HANDLE(UCHAR_TYPE, unsigned char)
+      HANDLE(SHORT_TYPE, short)
+      HANDLE(USHORT_TYPE, unsigned short)
+      HANDLE(INT_TYPE, int)
+      HANDLE(UINT_TYPE, unsigned int)
+      HANDLE(LONG_TYPE, long)
+      HANDLE(ULONG_TYPE, unsigned long)
 //      HANDLE(HALF_TYPE, cl_half)
-      HANDLE(FLOAT_TYPE, cl_float)
-      HANDLE(DOUBLE_TYPE, cl_double)
+      HANDLE(FLOAT_TYPE, float)
+      HANDLE(DOUBLE_TYPE, double)
       default: throw unknown_datatype(dtype);
     }
     if(i < upper-1)
@@ -922,17 +932,17 @@ std::ostream& operator<<(std::ostream & os, array const & a)
       switch(dtype)
       {
 //        HANDLE(BOOL_TYPE, cl_bool)
-        HANDLE(CHAR_TYPE, cl_char)
-        HANDLE(UCHAR_TYPE, cl_uchar)
-        HANDLE(SHORT_TYPE, cl_short)
-        HANDLE(USHORT_TYPE, cl_ushort)
-        HANDLE(INT_TYPE, cl_int)
-        HANDLE(UINT_TYPE, cl_uint)
-        HANDLE(LONG_TYPE, cl_long)
-        HANDLE(ULONG_TYPE, cl_ulong)
+        HANDLE(CHAR_TYPE, char)
+        HANDLE(UCHAR_TYPE, unsigned char)
+        HANDLE(SHORT_TYPE, short)
+        HANDLE(USHORT_TYPE, unsigned short)
+        HANDLE(INT_TYPE, int)
+        HANDLE(UINT_TYPE, unsigned int)
+        HANDLE(LONG_TYPE, long)
+        HANDLE(ULONG_TYPE, unsigned long)
 //        HANDLE(HALF_TYPE, cl_half)
-        HANDLE(FLOAT_TYPE, cl_float)
-        HANDLE(DOUBLE_TYPE, cl_double)
+        HANDLE(FLOAT_TYPE, float)
+        HANDLE(DOUBLE_TYPE, double)
         default: throw unknown_datatype(dtype);
       }
     }
