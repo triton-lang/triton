@@ -38,6 +38,8 @@ INSTANTIATE(int);
 INSTANTIATE(unsigned int);
 INSTANTIATE(long);
 INSTANTIATE(unsigned long);
+INSTANTIATE(long long);
+INSTANTIATE(unsigned long long);
 INSTANTIATE(float);
 INSTANTIATE(double);
 #undef INSTANTIATE
@@ -76,6 +78,8 @@ INSTANTIATE(int);
 INSTANTIATE(unsigned int);
 INSTANTIATE(long);
 INSTANTIATE(unsigned long);
+INSTANTIATE(long long);
+INSTANTIATE(unsigned long long);
 INSTANTIATE(float);
 INSTANTIATE(double);
 #undef INSTANTIATE
@@ -170,6 +174,8 @@ INSTANTIATE(int);
 INSTANTIATE(unsigned int);
 INSTANTIATE(long);
 INSTANTIATE(unsigned long);
+INSTANTIATE(long long);
+INSTANTIATE(unsigned long long);
 INSTANTIATE(float);
 INSTANTIATE(double);
 #undef INSTANTIATE
@@ -370,6 +376,8 @@ scalar& scalar::operator=(value_scalar const & s)
   INSTANTIATE(unsigned int)
   INSTANTIATE(long)
   INSTANTIATE(unsigned long)
+  INSTANTIATE(long long)
+  INSTANTIATE(unsigned long long)
   INSTANTIATE(float)
   INSTANTIATE(double)
 #undef INSTANTIATE
@@ -842,6 +850,8 @@ INSTANTIATE(int);
 INSTANTIATE(unsigned int);
 INSTANTIATE(long);
 INSTANTIATE(unsigned long);
+INSTANTIATE(long long);
+INSTANTIATE(unsigned long long);
 INSTANTIATE(float);
 INSTANTIATE(double);
 
