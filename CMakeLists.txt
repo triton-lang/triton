@@ -46,13 +46,14 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/build/timestamp"
                     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/python ${CMAKE_BINARY_DIR}/python
                     COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/python/src/lib/CMakeLists.txt
 
+                    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/python/build
                     COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/python/src/lib
                     COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/python/src/include
 
                     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lib ${CMAKE_BINARY_DIR}/python/src/lib
                     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/python/src/include
 
-                    COMMAND ${CMAKE_COMMAND} -E tar czf python-isaac.tgz ${CMAKE_BINARY_DIR}/python
+                    COMMAND ${CMAKE_COMMAND} -E tar czf isaac-1.0.tar.gz ${CMAKE_BINARY_DIR}/python
                     )
 
 add_custom_target(package-python DEPENDS "${CMAKE_BINARY_DIR}/build/timestamp")
