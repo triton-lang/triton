@@ -28,24 +28,24 @@ void value_scalar::init(T const & s)
   }
 }
 
-#define INSTANTIATE(CLTYPE, ADTYPE) value_scalar::value_scalar(CLTYPE value, numeric_type dtype) : dtype_(dtype) { init(value); }
+#define INSTANTIATE(CLTYPE) value_scalar::value_scalar(CLTYPE value, numeric_type dtype) : dtype_(dtype) { init(value); }
 
-INSTANTIATE(int8_t, CHAR_TYPE)
-INSTANTIATE(u_int8_t, UCHAR_TYPE)
-INSTANTIATE(int16_t, SHORT_TYPE)
-INSTANTIATE(u_int16_t, USHORT_TYPE)
-INSTANTIATE(int32_t, INT_TYPE)
-INSTANTIATE(u_int32_t, UINT_TYPE)
-INSTANTIATE(int64_t, LONG_TYPE)
-INSTANTIATE(u_int64_t, ULONG_TYPE)
-INSTANTIATE(cl_float, FLOAT_TYPE)
-INSTANTIATE(cl_double, DOUBLE_TYPE)
+INSTANTIATE(char)
+INSTANTIATE(unsigned char)
+INSTANTIATE(short)
+INSTANTIATE(unsigned short)
+INSTANTIATE(int)
+INSTANTIATE(unsigned int)
+INSTANTIATE(long)
+INSTANTIATE(unsigned long)
+INSTANTIATE(float)
+INSTANTIATE(double)
 
 #undef INSTANTIATE
 
 value_scalar::value_scalar(numeric_type dtype) : dtype_(dtype) {}
-value_scalar::value_scalar(scalar const & s) : dtype_(s.dtype()) { init(s); }
-value_scalar::value_scalar(array_expression const &expr) : dtype_(expr.dtype()) { init(scalar(expr)); }
+value_scalar::value_scalar(scalar const & s) : dtype_(s.dtype()) { s.inject(values_); }
+value_scalar::value_scalar(array_expression const &expr) : dtype_(expr.dtype()) { scalar(expr).inject(values_); }
 
 values_holder value_scalar::values() const
 { return values_; }
@@ -66,7 +66,6 @@ T value_scalar::cast() const
     case UINT_TYPE: return values_.uint32;
     case LONG_TYPE: return values_.int64;
     case ULONG_TYPE: return values_.uint64;
-//    case HALF_TYPE: return values_.float16;
     case FLOAT_TYPE: return values_.float32;
     case DOUBLE_TYPE: return values_.float64;
     default: throw unknown_datatype(dtype_); //unreachable
@@ -75,16 +74,16 @@ T value_scalar::cast() const
 
 #define INSTANTIATE(type) value_scalar::operator type() const { return cast<type>(); }
   INSTANTIATE(bool)
-  INSTANTIATE(int8_t)
-  INSTANTIATE(u_int8_t)
-  INSTANTIATE(int16_t)
-  INSTANTIATE(u_int16_t)
-  INSTANTIATE(int32_t)
-  INSTANTIATE(u_int32_t)
-  INSTANTIATE(int64_t)
-  INSTANTIATE(u_int64_t)
-  INSTANTIATE(cl_float)
-  INSTANTIATE(cl_double)
+  INSTANTIATE(char)
+  INSTANTIATE(unsigned char)
+  INSTANTIATE(short)
+  INSTANTIATE(unsigned short)
+  INSTANTIATE(int)
+  INSTANTIATE(unsigned int)
+  INSTANTIATE(long)
+  INSTANTIATE(unsigned long)
+  INSTANTIATE(float)
+  INSTANTIATE(double)
 #undef INSTANTIATE
 
 value_scalar int8(int8_t v) { return value_scalar(v); }
@@ -104,41 +103,41 @@ value_scalar NAME(LDEC, RDEC)\
 {\
   switch(x.dtype())\
   {\
-  case CHAR_TYPE: return VALUE(int8_t, OP, x, y);\
-  case UCHAR_TYPE: return VALUE(u_int8_t, OP, x, y);\
-  case SHORT_TYPE: return VALUE(int16_t, OP, x, y);\
-  case USHORT_TYPE: return VALUE(u_int16_t, OP, x, y);\
-  case INT_TYPE: return VALUE(int32_t, OP, x, y);\
-  case UINT_TYPE: return VALUE(u_int32_t, OP, x, y);\
-  case LONG_TYPE: return VALUE(int64_t, OP, x, y);\
-  case ULONG_TYPE: return VALUE(u_int64_t, OP, x, y);\
-  case FLOAT_TYPE: return VALUE(cl_float, OP, x, y);\
-  case DOUBLE_TYPE: return VALUE(cl_double, OP, x, y);\
+  case CHAR_TYPE: return VALUE(char, OP, x, y);\
+  case UCHAR_TYPE: return VALUE(unsigned char, OP, x, y);\
+  case SHORT_TYPE: return VALUE(short, OP, x, y);\
+  case USHORT_TYPE: return VALUE(unsigned short, OP, x, y);\
+  case INT_TYPE: return VALUE(int, OP, x, y);\
+  case UINT_TYPE: return VALUE(unsigned int, OP, x, y);\
+  case LONG_TYPE: return VALUE(long, OP, x, y);\
+  case ULONG_TYPE: return VALUE(unsigned long, OP, x, y);\
+  case FLOAT_TYPE: return VALUE(float, OP, x, y);\
+  case DOUBLE_TYPE: return VALUE(double, OP, x, y);\
   default: throw unknown_datatype(x.dtype());\
   }\
 }
 
 #define INSTANTIATE_ALL(NAME, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, int8_t y, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, u_int8_t y, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, int16_t y, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, u_int16_t y, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, int32_t y, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, u_int32_t y, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, int64_t y, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, u_int64_t y, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, cl_float y, EXPR)\
-  INSTANTIATE(NAME, value_scalar const & x, cl_double y, EXPR)\
-  INSTANTIATE(NAME, int8_t y,   value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, u_int8_t y,  value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, int16_t y,  value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, u_int16_t y, value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, int32_t y,    value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, u_int32_t y,   value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, int64_t y,   value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, u_int64_t y,  value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, cl_float y,  value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, cl_double y, value_scalar const & x, EXPR)
+  INSTANTIATE(NAME, value_scalar const & x, char y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, unsigned char y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, short y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, unsigned short y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, int y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, unsigned int y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, long y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, unsigned long y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, float y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, double y, EXPR)\
+  INSTANTIATE(NAME, char y,   value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, unsigned char y,  value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, short y,  value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, unsigned short y, value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, int y,    value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, unsigned int y,   value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, long y,   value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, unsigned long y,  value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, float y,  value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, double y, value_scalar const & x, EXPR)
 
 INSTANTIATE_ALL(operator+, +)
 INSTANTIATE_ALL(operator-, -)
@@ -167,16 +166,16 @@ std::ostream & operator<<(std::ostream & os, value_scalar const & s)
 {
   switch(s.dtype())
   {
-    case CHAR_TYPE: return os << static_cast<int8_t>(s);
-    case UCHAR_TYPE: return os << static_cast<u_int8_t>(s);
-    case SHORT_TYPE: return os << static_cast<int16_t>(s);
-    case USHORT_TYPE: return os << static_cast<u_int16_t>(s);
-    case INT_TYPE: return os << static_cast<int32_t>(s);
-    case UINT_TYPE: return os << static_cast<u_int32_t>(s);
-    case LONG_TYPE: return os << static_cast<int64_t>(s);
-    case ULONG_TYPE: return os << static_cast<u_int64_t>(s);
-    case FLOAT_TYPE: return os << static_cast<cl_float>(s);
-    case DOUBLE_TYPE: return os << static_cast<cl_double>(s);
+    case CHAR_TYPE: return os << static_cast<char>(s);
+    case UCHAR_TYPE: return os << static_cast<unsigned char>(s);
+    case SHORT_TYPE: return os << static_cast<short>(s);
+    case USHORT_TYPE: return os << static_cast<unsigned short>(s);
+    case INT_TYPE: return os << static_cast<int>(s);
+    case UINT_TYPE: return os << static_cast<unsigned int>(s);
+    case LONG_TYPE: return os << static_cast<long>(s);
+    case ULONG_TYPE: return os << static_cast<unsigned long>(s);
+    case FLOAT_TYPE: return os << static_cast<float>(s);
+    case DOUBLE_TYPE: return os << static_cast<double>(s);
     default: throw unknown_datatype(s.dtype());;
   }
 }

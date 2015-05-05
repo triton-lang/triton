@@ -2,7 +2,6 @@
 #define ISAAC_ARRAY_H_
 
 #include <iostream>
-#include <CL/cl.hpp>
 #include "isaac/types.h"
 #include "isaac/driver/backend.h"
 #include "isaac/symbolic/expression.h"
@@ -98,7 +97,10 @@ protected:
 
 class scalar : public array
 {
+  friend value_scalar::value_scalar(const scalar &);
+  friend value_scalar::value_scalar(const array_expression &);
 private:
+  void inject(values_holder&) const;
   template<class T> T cast() const;
 public:
   explicit scalar(numeric_type dtype, driver::Buffer const & data, int_t offset, driver::Context context = driver::queues.default_context());
@@ -110,17 +112,16 @@ public:
   using array::operator =;
 
 #define INSTANTIATE(type) operator type() const;
-  INSTANTIATE(bool)
-  INSTANTIATE(cl_char)
-  INSTANTIATE(cl_uchar)
-  INSTANTIATE(cl_short)
-  INSTANTIATE(cl_ushort)
-  INSTANTIATE(cl_int)
-  INSTANTIATE(cl_uint)
-  INSTANTIATE(cl_long)
-  INSTANTIATE(cl_ulong)
-  INSTANTIATE(cl_float)
-  INSTANTIATE(cl_double)
+  INSTANTIATE(char)
+  INSTANTIATE(unsigned char)
+  INSTANTIATE(short)
+  INSTANTIATE(unsigned short)
+  INSTANTIATE(int)
+  INSTANTIATE(unsigned int)
+  INSTANTIATE(long)
+  INSTANTIATE(unsigned long)
+  INSTANTIATE(float)
+  INSTANTIATE(double)
 #undef INSTANTIATE
 };
 

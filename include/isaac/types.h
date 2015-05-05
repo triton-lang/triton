@@ -77,20 +77,6 @@ inline std::string numeric_type_to_string(numeric_type const & type)
   }
 }
 
-template<class T> struct to_numeric_type;
-//template<> struct to_numeric_type<cl_bool> { static const numeric_type value = BOOL_TYPE; };
-template<> struct to_numeric_type<cl_char> { static const numeric_type value = CHAR_TYPE; };
-template<> struct to_numeric_type<cl_uchar> { static const numeric_type value = UCHAR_TYPE; };
-template<> struct to_numeric_type<cl_short> { static const numeric_type value = SHORT_TYPE; };
-template<> struct to_numeric_type<cl_ushort> { static const numeric_type value = USHORT_TYPE; };
-template<> struct to_numeric_type<cl_int> { static const numeric_type value = INT_TYPE; };
-template<> struct to_numeric_type<cl_uint> { static const numeric_type value = UINT_TYPE; };
-template<> struct to_numeric_type<cl_long> { static const numeric_type value = LONG_TYPE; };
-template<> struct to_numeric_type<cl_ulong> { static const numeric_type value = ULONG_TYPE; };
-//template<> struct to_numeric_type<cl_float> { static const numeric_type value = HALF_TYPE; };
-template<> struct to_numeric_type<cl_float> { static const numeric_type value = FLOAT_TYPE; };
-template<> struct to_numeric_type<cl_double> { static const numeric_type value = DOUBLE_TYPE; };
-
 inline unsigned int size_of(numeric_type type)
 {
   switch (type)
@@ -114,6 +100,30 @@ inline unsigned int size_of(numeric_type type)
   default: throw unknown_datatype(type);
   }
 }
+
+template<size_t size, bool is_unsigned>
+struct to_int_numeric_type_impl;
+
+#define ISAAC_INSTANTIATE_INT_TYPE_IMPL(SIZE, IS_UNSIGNED, TYPE) \
+    template<> struct to_int_numeric_type_impl<SIZE, IS_UNSIGNED> { static const numeric_type value = TYPE; }
+ISAAC_INSTANTIATE_INT_TYPE_IMPL(1, false, CHAR_TYPE);
+ISAAC_INSTANTIATE_INT_TYPE_IMPL(2, false, SHORT_TYPE);
+ISAAC_INSTANTIATE_INT_TYPE_IMPL(4, false, INT_TYPE);
+ISAAC_INSTANTIATE_INT_TYPE_IMPL(8, false, LONG_TYPE);
+ISAAC_INSTANTIATE_INT_TYPE_IMPL(1, true, UCHAR_TYPE);
+ISAAC_INSTANTIATE_INT_TYPE_IMPL(2, true, USHORT_TYPE);
+ISAAC_INSTANTIATE_INT_TYPE_IMPL(4, true, UINT_TYPE);
+ISAAC_INSTANTIATE_INT_TYPE_IMPL(8, true, ULONG_TYPE);
+#undef ISAAC_INSTANTIATE_INT_TYPE_IMPL
+
+template<class T>
+struct to_int_numeric_type
+{ static const numeric_type value = to_int_numeric_type_impl<sizeof(T), std::is_unsigned<T>::value>::value; };
+
+template<class T> struct to_numeric_type { static const numeric_type value = to_int_numeric_type<T>::value; };
+template<> struct to_numeric_type<float> { static const numeric_type value = FLOAT_TYPE; };
+template<> struct to_numeric_type<double> { static const numeric_type value = DOUBLE_TYPE; };
+
 
 enum expression_type
 {
