@@ -38,6 +38,8 @@ INSTANTIATE(int)
 INSTANTIATE(unsigned int)
 INSTANTIATE(long)
 INSTANTIATE(unsigned long)
+INSTANTIATE(long long)
+INSTANTIATE(unsigned long long)
 INSTANTIATE(float)
 INSTANTIATE(double)
 
@@ -82,6 +84,8 @@ T value_scalar::cast() const
   INSTANTIATE(unsigned int)
   INSTANTIATE(long)
   INSTANTIATE(unsigned long)
+  INSTANTIATE(long long)
+  INSTANTIATE(unsigned long long)
   INSTANTIATE(float)
   INSTANTIATE(double)
 #undef INSTANTIATE
@@ -94,8 +98,8 @@ value_scalar int32(int32_t v) { return value_scalar(v); }
 value_scalar uint32(u_int32_t v) { return value_scalar(v); }
 value_scalar int64(int64_t v) { return value_scalar(v); }
 value_scalar uint64(u_int64_t v) { return value_scalar(v); }
-value_scalar float32(cl_float v) { return value_scalar(v); }
-value_scalar float64(cl_double v) { return value_scalar(v); }
+value_scalar float32(float v) { return value_scalar(v); }
+value_scalar float64(double v) { return value_scalar(v); }
 
 #define VALUE(type, OP, x, y) (type)x OP y
 #define INSTANTIATE(NAME, LDEC, RDEC, OP)\
@@ -126,6 +130,8 @@ value_scalar NAME(LDEC, RDEC)\
   INSTANTIATE(NAME, value_scalar const & x, unsigned int y, EXPR)\
   INSTANTIATE(NAME, value_scalar const & x, long y, EXPR)\
   INSTANTIATE(NAME, value_scalar const & x, unsigned long y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, long long y, EXPR)\
+  INSTANTIATE(NAME, value_scalar const & x, unsigned long long y, EXPR)\
   INSTANTIATE(NAME, value_scalar const & x, float y, EXPR)\
   INSTANTIATE(NAME, value_scalar const & x, double y, EXPR)\
   INSTANTIATE(NAME, char y,   value_scalar const & x, EXPR)\
@@ -136,6 +142,8 @@ value_scalar NAME(LDEC, RDEC)\
   INSTANTIATE(NAME, unsigned int y,   value_scalar const & x, EXPR)\
   INSTANTIATE(NAME, long y,   value_scalar const & x, EXPR)\
   INSTANTIATE(NAME, unsigned long y,  value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, long long y,   value_scalar const & x, EXPR)\
+  INSTANTIATE(NAME, unsigned long long y,  value_scalar const & x, EXPR)\
   INSTANTIATE(NAME, float y,  value_scalar const & x, EXPR)\
   INSTANTIATE(NAME, double y, value_scalar const & x, EXPR)
 

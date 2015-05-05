@@ -38,6 +38,8 @@ public:
   ISAAC_INSTANTIATE(unsigned int)
   ISAAC_INSTANTIATE(long)
   ISAAC_INSTANTIATE(unsigned long)
+  ISAAC_INSTANTIATE(long long)
+  ISAAC_INSTANTIATE(unsigned long long)
   ISAAC_INSTANTIATE(float)
   ISAAC_INSTANTIATE(double)
 #undef ISAAC_INSTANTIATE
@@ -59,6 +61,8 @@ public:
   INSTANTIATE(unsigned int)
   INSTANTIATE(long)
   INSTANTIATE(unsigned long)
+  INSTANTIATE(long long)
+  INSTANTIATE(unsigned long long)
   INSTANTIATE(float)
   INSTANTIATE(double)
 #undef INSTANTIATE
@@ -90,6 +94,8 @@ RET OPNAME (value_scalar const &, int   );\
 RET OPNAME (value_scalar const &, unsigned int  );\
 RET OPNAME (value_scalar const &, long  );\
 RET OPNAME (value_scalar const &, unsigned long );\
+RET OPNAME (value_scalar const &, long long);\
+RET OPNAME (value_scalar const &, unsigned long long);\
 RET OPNAME (value_scalar const &, float );\
 RET OPNAME (value_scalar const &, double);\
 RET OPNAME (char   , value_scalar const &);\
@@ -100,6 +106,8 @@ RET OPNAME (int    , value_scalar const &);\
 RET OPNAME (unsigned int   , value_scalar const &);\
 RET OPNAME (long   , value_scalar const &);\
 RET OPNAME (unsigned long  , value_scalar const &);\
+RET OPNAME (long long, value_scalar const &);\
+RET OPNAME (unsigned long long, value_scalar const &);\
 RET OPNAME (float  , value_scalar const &);\
 RET OPNAME (double , value_scalar const &);\
 RET OPNAME (value_scalar const &, value_scalar const &);
