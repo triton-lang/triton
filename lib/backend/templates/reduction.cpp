@@ -72,8 +72,7 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   std::string arguments = _size_t + " N, ";
   for (unsigned int k = 0; k < N; ++k)
   {
-    std::string numeric_type = numeric_type_to_string(lhs_most(exprs[k]->array_expression().tree(),
-                                                                      exprs[k]->array_expression().root()).lhs.dtype);
+    std::string numeric_type = numeric_type_to_string(lhs_most(exprs[k]->array_expression().tree(),  exprs[k]->array_expression().root()).lhs.dtype);
     if (exprs[k]->is_index_reduction())
     {
       arguments += exprs[k]->process(Global(backend).get() + " unsigned int* #name_temp, ");
@@ -90,8 +89,14 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   /* ------------------------
    * First Kernel
    * -----------------------*/
-  if(backend==driver::OPENCL)
-    stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
+  switch(backend)
+  {
+#ifdef ISAAC_WITH_CUDA
+    case driver::CUDA: stream << "#include  \"helper_math.h\"" << std::endl; break;
+#endif
+    case driver::OPENCL: stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl; break;
+  }
+
   stream << KernelPrefix(backend) << " void " << name[0] << "(" << arguments << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
@@ -110,19 +115,19 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
     if (exprs[k]->is_index_reduction())
     {
       stream << exprs[k]->process(Local(backend).get() + " #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
-      stream << exprs[k]->process("#scalartype #name_acc_value = " + neutral_element(exprs[k]->root_op()) + ";") << std::endl;
+      stream << exprs[k]->process("#scalartype #name_acc_value = " + neutral_element(exprs[k]->root_op(), backend, "#scalartype") + ";") << std::endl;
       stream << exprs[k]->process(Local(backend).get() + " unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << exprs[k]->process("unsigned int #name_acc = 0;") << std::endl;
     }
     else
     {
       stream << exprs[k]->process(Local(backend).get() + " #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
-      stream << exprs[k]->process("#scalartype #name_acc = " + neutral_element(exprs[k]->root_op()) + ";") << std::endl;
+      stream << exprs[k]->process("#scalartype #name_acc = " + neutral_element(exprs[k]->root_op(), backend, "#scalartype") + ";") << std::endl;
     }
   }
 
 
-  element_wise_loop_1D(stream, p_.fetching_policy, p_.simd_width, "i", "N", "get_global_id(0)", "get_global_size(0)", device, [&](unsigned int simd_width)
+  element_wise_loop_1D(stream, p_.fetching_policy, p_.simd_width, "i", "N", GlobalIdx0(backend).get(), GlobalSize0(backend).get(), device, [&](unsigned int simd_width)
   {
     std::string i = (simd_width==1)?"i*#stride":"i";
     //Fetch vector entry
@@ -190,8 +195,9 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   /* ------------------------
    * Second kernel
    * -----------------------*/
-  if(backend==driver::OPENCL)
-    stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl;
+
+
+
   stream << KernelPrefix(backend) << " void " << name[1] << "(" << arguments << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
@@ -206,12 +212,12 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
       stream << e->process(Local(backend).get() + " unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];");
       stream << e->process("unsigned int #name_acc = 0;") << std::endl;
       stream << e->process(Local(backend).get() + " #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
-      stream << e->process("#scalartype #name_acc_value = " + neutral_element(e->root_op()) + ";");
+      stream << e->process("#scalartype #name_acc_value = " + neutral_element(e->root_op(), backend, "#scalartype") + ";");
     }
     else
     {
       stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
-      stream << e->process("#scalartype #name_acc = " + neutral_element(e->root_op()) + ";");
+      stream << e->process("#scalartype #name_acc = " + neutral_element(e->root_op(), backend, "#scalartype") + ";");
     }
   }
 

@@ -1,3 +1,6 @@
+#Copyright (c) 2014, ArrayFire
+#All rights reserved.
+
 # Function to turn an OpenCL source file into a C string within a source file.
 # xxd uses its input's filename to name the string and its length, so we
 # need to move them to a name that depends only on the path output, not its
@@ -28,36 +31,31 @@ include(CMakeParseArguments)
 set(BIN2CPP_PROGRAM "bin2cpp")
 
 function(CODE_TO_H)
-    cmake_parse_arguments(RTCS "" "VARNAME;EXTENSION;OUTPUT_DIR;TARGETS;NAMESPACE;EOF" "SOURCES" ${ARGN})
+    cmake_parse_arguments(ARGS "" "VARNAME;EXTENSION;OUTPUT_DIR;TARGET;NAMESPACE;EOF" "SOURCES" ${ARGN})
 
     set(_output_files "")
-    foreach(_input_file ${RTCS_SOURCES})
+    foreach(_input_file ${ARGS_SOURCES})
         get_filename_component(_path "${_input_file}" PATH)
         get_filename_component(_name "${_input_file}" NAME)
-        get_filename_component(var_name "${_input_file}" NAME)
         get_filename_component(_name_we "${_input_file}" NAME_WE)
+        set(var_name ${_name_we})
 
-        set(_namespace "${RTCS_NAMESPACE}")
+        set(_namespace "${ARGS_NAMESPACE}")
         string(REPLACE "." "_" var_name ${var_name})
 
-        set(_output_path "${CMAKE_CURRENT_BINARY_DIR}/${RTCS_OUTPUT_DIR}")
-        set(_output_file "${_output_path}/${_name_we}.${RTCS_EXTENSION}")
+        set(_output_path "${ARGS_OUTPUT_DIR}")
+        set(_output_file "${_output_path}/${_name_we}.${ARGS_EXTENSION}")
 
-        ADD_CUSTOM_COMMAND(
+        add_custom_command(
             OUTPUT ${_output_file}
             DEPENDS ${_input_file} ${BIN2CPP_PROGRAM}
             COMMAND ${CMAKE_COMMAND} -E make_directory "${_output_path}"
             COMMAND ${CMAKE_COMMAND} -E echo "\\#include \\<${_path}/${_name_we}.hpp\\>"  >>"${_output_file}"
-            COMMAND ${BIN2CPP_PROGRAM} --file ${_name} --namespace ${_namespace} --output ${_output_file} --name ${var_name} --eof ${RTCS_EOF}
+            COMMAND ${BIN2CPP_PROGRAM} --file ${_name} --namespace ${_namespace} --output ${_output_file} --name ${var_name} --eof ${ARGS_EOF}
             WORKING_DIRECTORY "${_path}"
             COMMENT "Compiling ${_input_file} to C++ source"
         )
-
-
         list(APPEND _output_files ${_output_file})
     endforeach()
-    ADD_CUSTOM_TARGET(${RTCS_NAMESPACE}_bin_target DEPENDS ${_output_files})
-
-    set("${RTCS_VARNAME}" ${_output_files} PARENT_SCOPE)
-    set("${RTCS_TARGETS}" ${RTCS_NAMESPACE}_bin_target PARENT_SCOPE)
-endfunction(CL_KERNEL_TO_H)
+    add_custom_target(${ARGS_TARGET} ALL DEPENDS ${_output_files})
+endfunction()

@@ -65,8 +65,13 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
       arguments += e->process(Global(backend).get() + " " + to_string(numeric_type) + "* #name_temp, ");
   }
 
-  if(backend==driver::OPENCL)
-    stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
+  switch(backend)
+  {
+#ifdef ISAAC_WITH_CUDA
+    case driver::CUDA: stream << "#include  \"helper_math.h\"" << std::endl; break;
+#endif
+    case driver::OPENCL: stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
+  }
 
   stream << KernelPrefix(backend) << " void " << name[0] << "(" << arguments << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
@@ -99,7 +104,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream.inc_tab();
 
   for (const auto & e : reductions)
-    stream << e->process("#scalartype #name_acc = " + neutral_element((e)->root_op()) + ";") << std::endl;
+    stream << e->process("#scalartype #name_acc = " + neutral_element((e)->root_op(), backend, "#scalartype") + ";") << std::endl;
 
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;
@@ -240,7 +245,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream.inc_tab();
 
   for (const auto & e : reductions)
-    stream << e->process("#scalartype #name_acc = " + neutral_element((e)->root_op()) + ";") << std::endl;
+    stream << e->process("#scalartype #name_acc = " + neutral_element((e)->root_op(), backend, "#scalartype") + ";") << std::endl;
 
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;

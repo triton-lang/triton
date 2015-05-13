@@ -38,7 +38,7 @@ std::string vaxpy::generate_impl(const char * suffix, expressions_tuple const & 
 #ifdef ISAAC_WITH_CUDA
     case driver::CUDA: stream << "#include  \"helper_math.h\"" << std::endl; break;
 #endif
-    case driver::OPENCL: stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl; break;
+    case driver::OPENCL: stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
   }
 
   stream << KernelPrefix(backend) << " void " << "axpy" << suffix << "(" << _size_t << " N," << generate_arguments(dtype, device, mappings, expressions) << ")" << std::endl;
@@ -86,7 +86,6 @@ std::string vaxpy::generate_impl(const char * suffix, expressions_tuple const & 
 
   stream.dec_tab();
   stream << "}" << std::endl;
-
 
   return stream.str();
 }
