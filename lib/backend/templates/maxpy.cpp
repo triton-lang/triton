@@ -30,9 +30,17 @@ std::string maxpy::generate_impl(const char * suffix, expressions_tuple const & 
   std::string _size_t = size_type(device);
   std::string init0, upper_bound0, inc0, init1, upper_bound1, inc1;
   std::string data_type = append_width("#scalartype",p_.simd_width);
+  driver::backend_type backend = device.backend();
 
-  stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
-  stream << "__kernel void axpy" << suffix << "(" << _size_t << " M, " << _size_t << " N, " << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
+  switch(backend)
+  {
+#ifdef ISAAC_WITH_CUDA
+    case driver::CUDA: stream << "#include  \"helper_math.h\"" << std::endl; break;
+#endif
+    case driver::OPENCL: stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
+  }
+
+  stream << KernelPrefix(backend) << " void axpy" << suffix << "(" << _size_t << " M, " << _size_t << " N, " << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -40,11 +48,11 @@ std::string maxpy::generate_impl(const char * suffix, expressions_tuple const & 
                                                                                         ("array1", "#pointer += #start;")
                                                                                         ("array2", "#pointer = &$VALUE{#start1, #start2};"), expressions, mappings);
 
-  fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0, "get_global_id(0)", "get_global_size(0)", device);
+  fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0,  GlobalIdx0(backend).get(), GlobalSize0(backend).get(), device);
   stream << "for(" << _size_t << " i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  fetching_loop_info(p_.fetching_policy, "N", stream, init1, upper_bound1, inc1, "get_global_id(1)", "get_global_size(1)", device);
+  fetching_loop_info(p_.fetching_policy, "N", stream, init1, upper_bound1, inc1, GlobalIdx1(backend).get(), GlobalSize1(backend).get(), device);
   stream << "for(" << _size_t << " j = " << init1 << "; j < " << upper_bound1 << "; j += " << inc1 << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
@@ -62,7 +70,8 @@ std::string maxpy::generate_impl(const char * suffix, expressions_tuple const & 
                                                                             ("repeat", "#namereg")
                                                                             ("array0", "#namereg")
                                                                             ("outer", "#namereg")
-                                                                            ("cast", "convert_"+data_type)
+                                                                            ("cast", CastPrefix(backend, data_type).get())
+                                                                            ("host_scalar", p_.simd_width==1?"#name": InitPrefix(backend, data_type).get() + "(#name)")
                                                   , expressions, mappings);
 
   process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array2", "$VALUE{i*#stride1,j*#stride2} = #namereg;")
@@ -76,7 +85,6 @@ std::string maxpy::generate_impl(const char * suffix, expressions_tuple const & 
   stream.dec_tab();
   stream << "}" << std::endl;
 
-//  std::cout << stream.str() << std::endl;
   return stream.str();
 }
 

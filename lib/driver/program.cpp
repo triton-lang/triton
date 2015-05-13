@@ -5,6 +5,10 @@
 #include "isaac/driver/context.h"
 #include "isaac/tools/sha1.hpp"
 
+#ifdef ISAAC_WITH_CUDA
+#include "helpers/cuda/vector.hpp"
+#endif
+
 namespace isaac
 {
 
@@ -34,18 +38,9 @@ Program::Program(Context const & context, std::string const & source) : backend_
 
       nvrtcProgram prog;
 
-      std::ifstream ifs("/home/philippe/Development/ISAAC/lib/driver/helpers/cuda_vector_overload.h");
-      std::string str;
-
-      ifs.seekg(0, std::ios::end);
-      str.reserve(ifs.tellg());
-      ifs.seekg(0, std::ios::beg);
-
-      str.assign((std::istreambuf_iterator<char>(ifs)),
-                  std::istreambuf_iterator<char>());
-
       const char * includes[] = {"helper_math.h"};
-      const char * src[] = {str.c_str()};
+      const char * src[] = {helpers::cuda::vector};
+
       nvrtc::check(nvrtcCreateProgram(&prog, source.c_str(), NULL, 1, src, includes));
       try{
         const char * options[] = {"--gpu-architecture=compute_52", "--restrict"};

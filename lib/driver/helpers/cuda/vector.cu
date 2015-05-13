@@ -12,7 +12,14 @@
 #ifndef HELPER_MATH_H_
 #define HELPER_MATH_H_
 
-typedef unsigned int uint;
+
+template <class DTYPE>
+inline __device__ DTYPE infinity() { return __int_as_float(0x7f800000); }
+
+template<>
+inline __device__ double infinity<double>() { return __hiloint2double(0x7ff00000, 0x00000000) ; }
+
+typedef unsigned int uint; 
 typedef unsigned short ushort;
 
 template<bool B, class T = void>

@@ -151,7 +151,7 @@ protected:
   static void compute_index_reduction(kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, op_element const & op);
   static void process_all(std::string const & type_key, std::string const & str, kernel_generation_stream & stream, std::vector<mapping_type> const & mappings);
   static void process_all_at(std::string const & type_key, std::string const & str, kernel_generation_stream & stream, std::vector<mapping_type> const & mappings, size_t root_idx, leaf_t leaf);
-  static std::string neutral_element(op_element const & op);
+  static std::string neutral_element(op_element const & op, driver::backend_type backend, std::string const & datatype);
   static std::string generate_arguments(std::vector<mapping_type> const & mappings, std::map<std::string, std::string> const & accessors, expressions_tuple const & expressions);
   static std::string generate_arguments(std::string const & data_type, driver::Device const & device, std::vector<mapping_type> const & mappings,  expressions_tuple const & expressions);
   static bool is_node_trans(array_expression::container_type const & array, size_t root_idx, leaf_t leaf_type);

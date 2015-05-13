@@ -129,8 +129,14 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     strcat(gemm_name, suffix);
     strcat(reduce_name, suffix);
 
-    if(backend==driver::OPENCL)
-      stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
+    switch(backend)
+    {
+  #ifdef ISAAC_WITH_CUDA
+      case driver::CUDA: stream << "#include  \"helper_math.h\"" << std::endl; break;
+  #endif
+      case driver::OPENCL: stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
+    }
+
     stream << KernelPrefix(backend) << " void " << gemm_name << "(" << _size_t << " M, " << _size_t << " N, " << _size_t << " K, "
                                << Global(backend) << " " << sdtype << "* C, "  << _size_t << " Cld," << _size_t << " Coff," << _size_t << " Cstride1, "
                                << sdtype << " alpha,"

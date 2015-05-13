@@ -295,7 +295,7 @@ void scalar::inject(values_holder & v) const
     int_t dtsize = size_of(dtype_);
   #define HANDLE_CASE(DTYPE, VAL) \
   case DTYPE:\
-    driver::queues[context_][0].read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL);\
+    driver::queues[context_][0].read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL); break;\
 
     switch(dtype_)
     {

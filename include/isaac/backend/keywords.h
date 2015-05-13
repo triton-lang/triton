@@ -62,10 +62,11 @@ ADD_KEYWORD(GroupSize0, "get_num_groups(0)", "GridDim.x")
 ADD_KEYWORD(GroupSize1, "get_num_groups(1)", "GridDim.y")
 ADD_KEYWORD(GroupSize2, "get_num_groups(2)", "GridDim.z")
 
-
 ADD_KEYWORD(LocalBarrier, "barrier(CLK_LOCAL_MEM_FENCE)", "__syncthreads()")
 struct CastPrefix: public keyword{ CastPrefix(driver::backend_type backend, std::string const & datatype): keyword(backend, "convert_" + datatype, "make_" + datatype){} };
 struct InitPrefix: public keyword{ InitPrefix(driver::backend_type backend, std::string const & datatype): keyword(backend, "", "make_" + datatype){} };
+
+struct Infinity: public keyword{ Infinity(driver::backend_type backend, std::string const & datatype): keyword(backend, "INFINITY", "infinity<" + datatype + ">()"){} };
 #undef ADD_KEYWORD
 
 

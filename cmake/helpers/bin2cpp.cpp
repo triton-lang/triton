@@ -1,3 +1,5 @@
+// Copyright (c) 2014, ArrayFire
+// All rights reserved.
 // Umar Arshad
 // Copyright 2014
 

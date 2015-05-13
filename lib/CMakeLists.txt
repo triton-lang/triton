@@ -11,10 +11,11 @@ if(CUDA_FOUND)
     cuda_find_library_local_first(CUDA_NVRTC_LIBRARY nvrtc "\"nvrtc\" library")
     target_link_libraries(isaac ${CUDA_CUDA_LIBRARY} ${CUDA_NVRTC_LIBRARY})
     #Cuda JIT headers to file
-    file( GLOB_RECURSE CUDA_HELPERS_SRC driver/helpers/*.u)
-    include("${CMAKE_MODULE_PATH}/CodeToH.cmake")
-    CODE_TO_H(SOURCES ${CUDA_HELPERS_SRC} VARNAME kernel_files EXTENSION "h"
-               OUTPUT_DIR driver/helpers TARGETS cl_kernel_targets EOF "0")
+    set(CUDA_HELPERS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/driver/helpers/cuda/)
+    file(GLOB_RECURSE CUDA_HELPERS_SRC ${CUDA_HELPERS_PATH}/*.cu)
+    include("${CMAKE_MODULE_PATH}/helpers/CodeToH.cmake")
+    CODE_TO_H(SOURCES ${CUDA_HELPERS_SRC} VARNAME kernel_files EXTENSION "hpp"
+              OUTPUT_DIR ${CUDA_HELPERS_PATH} NAMESPACE "isaac helpers cuda" TARGET cuda_headers EOF "0")
 endif()
 
 

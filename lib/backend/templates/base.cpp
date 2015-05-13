@@ -240,21 +240,24 @@ void base::base::process_all_at(std::string const & type_key, std::string const 
   }
 }
 
-std::string base::neutral_element(op_element const & op)
+std::string base::neutral_element(op_element const & op, driver::backend_type backend, std::string const & dtype)
 {
+  std::string INF = Infinity(backend, dtype).get();
+  std::string N_INF = "-" + INF;
+
   switch (op.type)
   {
   case OPERATOR_ADD_TYPE : return "0";
   case OPERATOR_MULT_TYPE : return "1";
   case OPERATOR_DIV_TYPE : return "1";
-  case OPERATOR_ELEMENT_FMAX_TYPE : return "-INFINITY";
-  case OPERATOR_ELEMENT_ARGFMAX_TYPE : return "-INFINITY";
-  case OPERATOR_ELEMENT_MAX_TYPE : return "-INFINITY";
-  case OPERATOR_ELEMENT_ARGMAX_TYPE : return "-INFINITY";
-  case OPERATOR_ELEMENT_FMIN_TYPE : return "INFINITY";
-  case OPERATOR_ELEMENT_ARGFMIN_TYPE : return "INFINITY";
-  case OPERATOR_ELEMENT_MIN_TYPE : return "INFINITY";
-  case OPERATOR_ELEMENT_ARGMIN_TYPE : return "INFINITY";
+  case OPERATOR_ELEMENT_FMAX_TYPE : return N_INF;
+  case OPERATOR_ELEMENT_ARGFMAX_TYPE : return N_INF;
+  case OPERATOR_ELEMENT_MAX_TYPE : return N_INF;
+  case OPERATOR_ELEMENT_ARGMAX_TYPE : return N_INF;
+  case OPERATOR_ELEMENT_FMIN_TYPE : return INF;
+  case OPERATOR_ELEMENT_ARGFMIN_TYPE : return INF;
+  case OPERATOR_ELEMENT_MIN_TYPE : return INF;
+  case OPERATOR_ELEMENT_ARGMIN_TYPE : return INF;
 
   default: throw operation_not_supported_exception("Unsupported reduction operator : no neutral element known");
   }
@@ -292,7 +295,7 @@ void base::set_arguments(expressions_tuple const & expressions, driver::Kernel &
 base::invalid_exception::invalid_exception() : message_() {}
 
 base::invalid_exception::invalid_exception(std::string message) :
-  message_("ViennaCL: Internal error: The generator cannot apply the given template to the given array_expression: " + message + "\n"
+  message_("ISAAC: Internal error: The generator cannot apply the given template to the given array_expression: " + message + "\n"
            "If you are using a builtin template, please report on viennacl-support@lists.sourceforge.net! We will provide a fix as soon as possible\n"
            "If you are using your own template, please try using other parameters") {}
 
