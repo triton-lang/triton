@@ -2,6 +2,7 @@
 #through PyOpenCL and PyCUDA
 
 import os, sys
+from distutils.ccompiler import show_compilers,new_compiler
 from distutils.command.build_ext import build_ext
 from distutils.command.build_py import build_py
 from distutils.core import setup, Extension
@@ -9,6 +10,7 @@ from distutils.sysconfig import get_python_inc
 from distutils import sysconfig
 from imp import find_module
 from glob import glob
+from os.path import dirname
 
 platform_cflags = {}
 platform_ldflags = {}
@@ -46,16 +48,30 @@ def main():
                     break
         return optlist
 
-    #Compiler options
+    def find_library(name, cmake_glob_list):
+        compiler=new_compiler()
+        dirs = []
+        for gpath in cmake_glob_list.split(';'):
+            path = glob(gpath)
+            if path:
+                dirs += [path[0]]
+        return compiler.find_library_file(dirs, name)
+
+    #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
     cvars["CFLAGS"] = cvars["BASECFLAGS"] + cvars['OPT']
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
+    is_on_android = '-mandroid' in cvars['PY_CFLAGS']
+    opencl = find_library('OpenCL', '/opt/adreno-driver*/lib' if is_on_android else '/opt/AMDAPPSDK*/lib/x86_64')
+    
+    library_dirs = [dirname(library) for library in [opencl] if library is not None]
+
     #Includes
-    include =' src/include /usr/local/cuda/include'.split() + ['external/boost/include', os.path.join(find_module("numpy")[1], "core", "include")]
+    include =' /opt/android-ndk-r10d/platforms/android-19/arch-arm/usr/include /opt/android-ndk-r10d/sources/cxx-stl/gnu-libstdc++/4.9/include /opt/android-ndk-r10d/sources/cxx-stl/gnu-libstdc++/4.9/libs/armeabi-v7a/include /opt/android-ndk-r10d/sources/cxx-stl/gnu-libstdc++/4.9/include/backward src/include'.split() + ['external/boost/include', os.path.join(find_module("numpy")[1], "core", "include")]
     #Sources
-    src =  'src/lib/backend/templates/maxpy.cpp src/lib/backend/templates/mreduction.cpp src/lib/backend/templates/base.cpp src/lib/backend/templates/vaxpy.cpp src/lib/backend/templates/mproduct.cpp src/lib/backend/templates/reduction.cpp src/lib/backend/stream.cpp src/lib/backend/keywords.cpp src/lib/backend/mapped_object.cpp src/lib/backend/binder.cpp src/lib/backend/parse.cpp src/lib/exception/operation_not_supported.cpp src/lib/exception/unknown_datatype.cpp src/lib/value_scalar.cpp src/lib/model/predictors/random_forest.cpp src/lib/model/model.cpp src/lib/driver/check.cpp src/lib/driver/ndrange.cpp src/lib/driver/platform.cpp src/lib/driver/backend.cpp src/lib/driver/program.cpp src/lib/driver/command_queue.cpp src/lib/driver/event.cpp src/lib/driver/kernel.cpp src/lib/driver/handle.cpp src/lib/driver/device.cpp src/lib/driver/buffer.cpp src/lib/driver/context.cpp src/lib/symbolic/execute.cpp src/lib/symbolic/expression.cpp src/lib/symbolic/io.cpp src/lib/array.cpp '.split() + [os.path.join('src', 'wrap', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
+    src =  'src/lib/symbolic/execute.cpp src/lib/symbolic/io.cpp src/lib/symbolic/expression.cpp src/lib/model/model.cpp src/lib/model/predictors/random_forest.cpp src/lib/backend/templates/mreduction.cpp src/lib/backend/templates/reduction.cpp src/lib/backend/templates/mproduct.cpp src/lib/backend/templates/maxpy.cpp src/lib/backend/templates/base.cpp src/lib/backend/templates/vaxpy.cpp src/lib/backend/mapped_object.cpp src/lib/backend/stream.cpp src/lib/backend/parse.cpp src/lib/backend/keywords.cpp src/lib/backend/jinja/test.cpp src/lib/backend/binder.cpp src/lib/array.cpp src/lib/value_scalar.cpp src/lib/driver/backend.cpp src/lib/driver/device.cpp src/lib/driver/kernel.cpp src/lib/driver/buffer.cpp src/lib/driver/platform.cpp src/lib/driver/check.cpp src/lib/driver/program.cpp src/lib/driver/command_queue.cpp src/lib/driver/context.cpp src/lib/driver/event.cpp src/lib/driver/ndrange.cpp src/lib/driver/handle.cpp src/lib/exception/unknown_datatype.cpp src/lib/exception/operation_not_supported.cpp '.split() + [os.path.join('src', 'wrap', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
     boostsrc = 'external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:
         src = src + [x for x in recursive_glob('external/boost/libs/' + s + '/src/','.cpp') if 'win32' not in x and 'pthread' not in x]
@@ -84,6 +100,7 @@ def main():
 		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,
+                    library_dirs=library_dirs,
                     libraries=['OpenCL']
                 )],
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},

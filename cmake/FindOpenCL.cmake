@@ -1,10 +1,22 @@
+#Ideas for finding libOpenCL
+set(ANDROID_CL_GLOB_HINTS /opt/adreno-driver*/lib)
+set(X86_CL_GLOB_HINTS /opt/AMDAPPSDK*/lib/x86_64)
+
+#OpenCL Hints
+set(L_HINTS)
 if(ANDROID)
-    file(GLOB ADRENO_DRIVER_ROOT /opt/adreno-driver*)
-    set(L_HINTS ${ADRENO_DRIVER_ROOT}/lib/)
+    foreach(PATH ${ANDROID_GLOB_HINTS})
+        file(GLOB _TMP ${PATH})
+        set(L_HINTS ${L_HINTS} ${_TMP})
+    endforeach()
 else()
-    file(GLOB AMDAPPSDK_ROOT /opt/AMDAPPSDK*)
-    set(L_HINTS ${AMDAPPSDK_ROOT}/lib/x86_64/ ${CUDA_TOOLKIT_ROOT_DIR}/targets/x86_64-linux/lib/)
+    foreach(PATH ${X86_GLOB_HINTS})
+        file(GLOB _TMP ${PATH})
+        set(L_HINTS ${L_HINTS} ${_TMP})
+    endforeach()
+    set(L_HINTS ${L_HINTS} ${CUDA_TOOLKIT_ROOT_DIR}/targets/x86_64-linux/lib/)
 endif()
+
 find_library(OPENCL_LIBRARIES NAMES OpenCL NO_CMAKE_FIND_ROOT_PATH HINTS ${L_HINTS} )
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(OpenCL  DEFAULT_MSG OPENCL_LIBRARIES)

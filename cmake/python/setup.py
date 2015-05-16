@@ -2,6 +2,7 @@
 #through PyOpenCL and PyCUDA
 
 import os, sys
+from distutils.ccompiler import show_compilers,new_compiler
 from distutils.command.build_ext import build_ext
 from distutils.command.build_py import build_py
 from distutils.core import setup, Extension
@@ -9,6 +10,7 @@ from distutils.sysconfig import get_python_inc
 from distutils import sysconfig
 from imp import find_module
 from glob import glob
+from os.path import dirname
 
 platform_cflags = {}
 platform_ldflags = {}
@@ -46,11 +48,25 @@ def main():
                     break
         return optlist
 
-    #Compiler options
+    def find_library(name, cmake_glob_list):
+        compiler=new_compiler()
+        dirs = []
+        for gpath in cmake_glob_list.split(';'):
+            path = glob(gpath)
+            if path:
+                dirs += [path[0]]
+        return compiler.find_library_file(dirs, name)
+
+    #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
     cvars["CFLAGS"] = cvars["BASECFLAGS"] + cvars['OPT']
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
+
+    is_on_android = '-mandroid' in cvars['PY_CFLAGS']
+    opencl = find_library('OpenCL', '${ANDROID_CL_GLOB_HINTS}' if is_on_android else '${X86_CL_GLOB_HINTS}')
+    
+    library_dirs = [dirname(library) for library in [opencl] if library is not None]
 
     #Includes
     include ='${INCLUDE_DIRECTORIES_STR}'.split() + ['external/boost/include', os.path.join(find_module("numpy")[1], "core", "include")]
@@ -84,6 +100,7 @@ def main():
 		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,
+                    library_dirs=library_dirs,
                     libraries=['OpenCL']
                 )],
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},
