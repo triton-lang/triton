@@ -23,10 +23,11 @@ private:
   void init();
 public:
   queues_type();
-  std::vector<CommandQueue> & operator[](Context const &);
+  container_type const & contexts();
   Context default_context();
   std::vector<CommandQueue> & default_queues();
-  container_type const & contexts();
+  std::vector<CommandQueue> & operator[](Context const &);
+
 private:
   container_type data_;
 public:

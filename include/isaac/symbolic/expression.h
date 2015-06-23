@@ -3,12 +3,14 @@
 
 #include <vector>
 #include <list>
+#include "isaac/driver/backend.h"
 #include "isaac/driver/context.h"
 #include "isaac/driver/command_queue.h"
 #include "isaac/driver/event.h"
 #include "isaac/driver/kernel.h"
 #include "isaac/driver/ndrange.h"
 #include "isaac/driver/buffer.h"
+
 
 #include "isaac/types.h"
 #include "isaac/value_scalar.h"
@@ -217,18 +219,29 @@ private:
 
 struct execution_options_type
 {
-  execution_options_type(unsigned int _queue_id = 0, std::list<driver::Event>* _events = NULL, std::vector<driver::Event>* _dependencies = NULL) : queue_id(_queue_id), events(_events), dependencies(_dependencies){}
+  execution_options_type(unsigned int _queue_id = 0, std::list<driver::Event>* _events = NULL, std::vector<driver::Event>* _dependencies = NULL) :
+     events(_events), dependencies(_dependencies), queue_id_(_queue_id){}
 
-  void enqueue_cache(driver::CommandQueue & queue, driver::Kernel const & kernel, driver::NDRange global, driver::NDRange local) const
+  void enqueue(driver::Context const & context, driver::Kernel const & kernel, driver::NDRange global, driver::NDRange local) const
   {
-    driver::Event event = queue.enqueue(kernel, global, local, dependencies);
+    driver::Event event = queue(context).enqueue(kernel, global, local, dependencies);
     if(events)
       events->push_back(event);
   }
 
-  unsigned int queue_id;
+  driver::CommandQueue & queue(driver::Context const & context) const
+  {
+    if(queue_)
+        return *queue_;
+    return (driver::CommandQueue &)driver::queues[context][queue_id_];
+  }
+
   std::list<driver::Event>* events;
   std::vector<driver::Event>* dependencies;
+
+private:
+  unsigned int queue_id_;
+  std::shared_ptr<driver::CommandQueue> queue_;
 };
 
 struct dispatcher_options_type

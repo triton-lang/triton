@@ -7,6 +7,11 @@ namespace isaac
 namespace driver
 {
 
+Buffer::Buffer(cl::Buffer const & buffer) : backend_(OPENCL), context_(buffer.getInfo<CL_MEM_CONTEXT>()), h_(backend_)
+{
+  *h_.cl = buffer;
+}
+
 Buffer::Buffer(Context const & context, std::size_t size) : backend_(context.backend_), context_(context), h_(backend_)
 {
   switch(backend_)

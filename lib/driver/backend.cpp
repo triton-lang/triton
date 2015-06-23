@@ -24,7 +24,7 @@ void queues_type::cuinit()
   int N;
   cuda::check(cuDeviceGetCount(&N));
   for(int i = 0 ; i < N ; ++i)
-    append(Context(i));
+    append(Context(Device(i));
 #endif
 }
 
@@ -37,7 +37,7 @@ void queues_type::clinit()
     std::vector<cl::Device> devices;
     p.getDevices(CL_DEVICE_TYPE_ALL, &devices);
     for(auto & d : devices)
-      append(Context(d));
+      append(Context(Device(d)));
   }
 }
 

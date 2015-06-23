@@ -228,7 +228,6 @@ void import(std::string const & fname, driver::CommandQueue & queue, model_map_t
           for (js::SizeType id = 0 ; id < profiles.Size() ; ++id)
             templates.push_back(detail::create(operation, tools::to_int_array<int>(profiles[id])));
 
-          base const & fallback = *fallbacks[std::make_pair(etype, dtype)];
           if(templates.size()>1)
           {
             // Get predictor
@@ -281,21 +280,15 @@ model_map_t init_models(driver::CommandQueue & queue)
   return res;
 }
 
-model_map_t& get_model_map(driver::CommandQueue & queue)
+model_map_t& models(driver::CommandQueue & queue)
 {
-  std::map<driver::CommandQueue, model_map_t>::iterator it = models.find(queue);
-  if(it == models.end())
-    return models.insert(std::make_pair(queue, init_models(queue))).first->second;
+  std::map<driver::CommandQueue, model_map_t>::iterator it = models_.find(queue);
+  if(it == models_.end())
+    return models_.insert(std::make_pair(queue, init_models(queue))).first->second;
   return it->second;
 }
 
-model& get_model(driver::CommandQueue & queue, expression_type expression, numeric_type dtype)
-{
-  std::pair<expression_type, numeric_type> key(expression, dtype);
-  return *get_model_map(queue).at(key);
-}
-
 std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<base> > fallbacks = init_fallback();
-std::map<driver::CommandQueue, model_map_t> models;
+std::map<driver::CommandQueue, model_map_t> models_;
 
 }

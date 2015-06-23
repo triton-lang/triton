@@ -129,7 +129,7 @@ void vaxpy::enqueue(driver::CommandQueue & queue, driver::Program & program, con
   unsigned int current_arg = 0;
   kernel.setSizeArg(current_arg++, size);
   set_arguments(expressions, kernel, current_arg);
-  controller.execution_options().enqueue_cache(queue, kernel, global, local);
+  controller.execution_options().enqueue(program.context(), kernel, global, local);
 }
 
 

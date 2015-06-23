@@ -19,6 +19,11 @@ array::array(int_t shape0, numeric_type dtype, driver::Context context) :
   context_(context), data_(context_, size_of(dtype)*dsize())
 { }
 
+array::array(int_t shape0, numeric_type dtype, driver::Buffer data) :
+dtype_(dtype), shape_(shape0, 1, 1, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
+    context_(data.context()), data_(data)
+{ }
+
 template<class DT>
 array::array(std::vector<DT> const & x, driver::Context context):
   dtype_(to_numeric_type<DT>::value), shape_(x.size(), 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
@@ -152,7 +157,7 @@ array& array::operator=(controller<TYPE> const & c)
   assert(dtype_ == c.x().dtype());
   array_expression expression(*this, c.x(), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
   execute(controller<array_expression>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()),
-          isaac::get_model_map(driver::queues[context_][c.execution_options().queue_id]));
+          isaac::models(c.execution_options().queue(context_)));
   return *this;
 }
 

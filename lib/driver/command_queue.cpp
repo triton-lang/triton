@@ -12,6 +12,11 @@ namespace isaac
 namespace driver
 {
 
+CommandQueue::CommandQueue(cl::CommandQueue const & queue) : backend_(OPENCL), context_(queue.getInfo<CL_QUEUE_CONTEXT>()), device_(queue.getInfo<CL_QUEUE_DEVICE>()), h_(backend_)
+{
+  *h_.cl = queue;
+}
+
 CommandQueue::CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties): backend_(device.backend_), context_(context), device_(device), h_(backend_)
 {
   switch(backend_)
