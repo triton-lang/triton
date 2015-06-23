@@ -206,7 +206,7 @@ def skip(template, symbolic):
       return True
     elif vendor == isc.vendor.NVIDIA and local_size%32!=0:
       return True
-    elif vendor == isc.vendor.INTEL in vendor and local_size%8!=0:
+    elif vendor == isc.vendor.INTEL and local_size%8!=0:
       return True
     array_expressions = isc.array_expression_container(symbolic)
     registers_usage = template.registers_usage(array_expressions)/4

@@ -12,10 +12,7 @@ def sample_profiles(execution_handler, generator):
         print x
         if i==0:
             X = np.empty((0,len(x)))
-        try:
-            y = execution_handler(x)
-        except:
-            continue
+        y = execution_handler(x)
         if y not in profiles:
             profiles.append(y)
         idx = profiles.index(y)
