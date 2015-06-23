@@ -96,12 +96,12 @@ def do_tuning(args):
                   else:
                       def compute_perf(x, t):
                           return TYPES[operation]['perf-index']([datatype(0).size, x, t])
-                      #profiles = dataset.sample_profiles(execution_handler, tuning_sizes)
+                      profiles = dataset.sample_profiles(execution_handler, tuning_sizes)
                       if args.build_model:
-                        #X, Y, profiles = dataset.sample_dataset(prefix, profiles, execution_handler, training_sizes)
-                        profiles = np.loadtxt(prefix+'/profiles.csv')
-                        X = np.loadtxt(prefix+'/X.csv',ndmin=2)
-                        Y = np.loadtxt(prefix+'/Y.csv',ndmin=2)
+                        X, Y, profiles = dataset.sample_dataset(prefix, profiles, execution_handler, training_sizes)
+                        #profiles = np.loadtxt(prefix+'/profiles.csv')
+                        #X = np.loadtxt(prefix+'/X.csv',ndmin=2)
+                        #Y = np.loadtxt(prefix+'/Y.csv',ndmin=2)
                         clf = train_model(X, Y, profiles, compute_perf, TYPES[operation]['perf-measure'])
                         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
                                        'children_right': e.tree_.children_right.tolist(),
