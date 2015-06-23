@@ -7,6 +7,10 @@ namespace isaac
 namespace driver
 {
 
+Context::Context(cl::Context const & context) : backend_(OPENCL), device_(context.getInfo<CL_CONTEXT_DEVICES>()[0]), h_(backend_)
+{
+    *h_.cl = context;
+}
 
 Context::Context(Device const & device) : backend_(device.backend_), device_(device), h_(backend_)
 {

@@ -400,7 +400,7 @@ void mreduction::enqueue(driver::CommandQueue & queue, driver::Program & program
   driver::NDRange global[2] = { driver::NDRange(p_.local_size_0*p_.num_groups_0, p_.local_size_1*p_.num_groups_1), driver::NDRange(p_.local_size_0, p_.local_size_1*p_.num_groups_1) };
   driver::NDRange local[2] = { driver::NDRange(p_.local_size_0, p_.local_size_1), driver::NDRange(p_.local_size_0, p_.local_size_1) };
   for(unsigned int i = 0 ; i < nk ; ++i)
-    controller.execution_options().enqueue_cache(queue, kernels[i], global[i], local[i]);
+    controller.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }
 
 mreduction_rows::mreduction_rows(mreduction_parameters  const & parameters,

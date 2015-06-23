@@ -603,7 +603,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     gemm.setSizeArg(current_arg++, B.stride()[0]);
 
     helper.set_arguments(beta.dtype(), beta.values());
-    options.enqueue_cache(queue, gemm, global, local);
+    options.enqueue(program.context(), gemm, global, local);
 
     if(p_.depth > 1)
     {
@@ -624,7 +624,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       reduce.setSizeArg(current_arg++, C.stride()[0]);
       reduce.setSizeArg(current_arg++, C.stride()[1]);
       helper.set_arguments(beta.dtype(), beta.values());
-      options.enqueue_cache(queue, reduce, global, local);
+      options.enqueue(program.context(), reduce, global, local);
     }
   }
 

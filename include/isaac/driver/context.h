@@ -21,7 +21,8 @@ class Context
   friend class Buffer;
 
 public:
-  Context(Device const & device);
+  explicit Context(cl::Context const & context);
+  explicit Context(Device const & device);
   backend_type backend() const;
   Device const & device() const;
   bool operator==(Context const &) const;

@@ -17,6 +17,7 @@ class Buffer
   friend class CommandQueue;
   friend class Kernel;
 public:
+  Buffer(cl::Buffer const & Buffer);
   Buffer(Context const & context, std::size_t size);
   Context const & context() const;
   bool operator<(Buffer const &) const;

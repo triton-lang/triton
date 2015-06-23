@@ -339,7 +339,7 @@ void reduction::enqueue(driver::CommandQueue & queue, driver::Program & program,
   }
 
   for (unsigned int k = 0; k < 2; k++)
-    controller.execution_options().enqueue_cache(queue, kernels[k], global[k], local[k]);
+    controller.execution_options().enqueue(program.context(), kernels[k], global[k], local[k]);
 }
 
 }

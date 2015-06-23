@@ -40,11 +40,10 @@ namespace isaac
   typedef std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<model> > model_map_t;
 
   model_map_t init_models(driver::CommandQueue const & queue);
-  model_map_t& get_model_map(driver::CommandQueue & queue);
-  model& get_model(driver::CommandQueue & queue, expression_type, numeric_type);
+  model_map_t& models(driver::CommandQueue & queue);
 
   extern std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<base> > fallbacks;
-  extern std::map<driver::CommandQueue, model_map_t> models;
+  extern std::map<driver::CommandQueue, model_map_t> models_;
 
 }
 

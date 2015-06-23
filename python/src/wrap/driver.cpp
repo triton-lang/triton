@@ -140,7 +140,7 @@ void export_driver()
 
   bp::class_<isc::driver::CommandQueue>("command_queue", bp::init<isc::driver::Context, isc::driver::Device>())
       .def("synchronize", &isc::driver::CommandQueue::synchronize)
-      .add_property("models", bp::make_function(&isc::get_model_map, bp::return_internal_reference<>()))
+      .add_property("models", bp::make_function(&isc::models, bp::return_internal_reference<>()))
       .add_property("device", bp::make_function(&isc::driver::CommandQueue::device, bp::return_internal_reference<>()))
       ;
 

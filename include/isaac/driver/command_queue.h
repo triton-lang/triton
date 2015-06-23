@@ -22,6 +22,7 @@ class Buffer;
 class CommandQueue
 {
 public:
+  CommandQueue(cl::CommandQueue const & queue);
   CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties = 0);
   Context const & context() const;
   Device const & device() const;
