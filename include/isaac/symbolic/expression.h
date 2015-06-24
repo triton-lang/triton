@@ -224,7 +224,7 @@ struct execution_options_type
   {}
 
   execution_options_type(driver::CommandQueue const & queue, std::list<driver::Event> *_events = NULL, std::vector<driver::Event> *_dependencies = NULL) :
-      events(_events), dependencies(_dependencies), queue_(new driver::CommandQueue(queue))
+      events(_events), dependencies(_dependencies), queue_id_(-1), queue_(new driver::CommandQueue(queue))
   {}
 
   void enqueue(driver::Context const & context, driver::Kernel const & kernel, driver::NDRange global, driver::NDRange local) const
@@ -245,7 +245,7 @@ struct execution_options_type
   std::vector<driver::Event>* dependencies;
 
 private:
-  unsigned int queue_id_;
+  int queue_id_;
   std::shared_ptr<driver::CommandQueue> queue_;
 };
 
