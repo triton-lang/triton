@@ -11,12 +11,12 @@ if(CUDA_FOUND)
 endif()
 
 #CLAMDBLAS
-find_package(CLAMDBLAS)
-if(CLAMDBLAS_FOUND)
+#find_package(CLAMDBLAS)
+#if(CLAMDBLAS_FOUND)
     set(BLAS_DEF ${BLAS_DEF} "-DBENCH_CLBLAS")
-    include_directories(${CLAMDBLAS_INCLUDE_DIR})
-    set(BLAS_LIBS ${BLAS_LIBS}  ${CLAMDBLAS_LIBRARIES} )
-endif()
+    #include_directories(${CLAMDBLAS_INCLUDE_DIR})
+    #set(BLAS_LIBS ${BLAS_LIBS}  ${CLAMDBLAS_LIBRARIES} )
+#endif()
 
 #CBLAS
 find_package(MKL)

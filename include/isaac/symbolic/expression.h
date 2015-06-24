@@ -220,7 +220,12 @@ private:
 struct execution_options_type
 {
   execution_options_type(unsigned int _queue_id = 0, std::list<driver::Event>* _events = NULL, std::vector<driver::Event>* _dependencies = NULL) :
-     events(_events), dependencies(_dependencies), queue_id_(_queue_id){}
+     events(_events), dependencies(_dependencies), queue_id_(_queue_id)
+  {}
+
+  execution_options_type(driver::CommandQueue const & queue, std::list<driver::Event> *_events = NULL, std::vector<driver::Event> *_dependencies = NULL) :
+      events(_events), dependencies(_dependencies), queue_(new driver::CommandQueue(queue))
+  {}
 
   void enqueue(driver::Context const & context, driver::Kernel const & kernel, driver::NDRange global, driver::NDRange local) const
   {

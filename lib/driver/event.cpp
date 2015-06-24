@@ -21,6 +21,11 @@ Event::Event(backend_type backend) : backend_(backend), h_(backend_)
   }
 }
 
+Event::Event(cl::Event const & event) : backend_(OPENCL), h_(backend_)
+{
+  *h_.cl = event;
+}
+
 long Event::elapsed_time() const
 {
   switch(backend_)
@@ -38,6 +43,10 @@ long Event::elapsed_time() const
   }
 }
 
+Event::operator cl::Event()
+{
+    return *h_.cl;
+}
 }
 
 }
