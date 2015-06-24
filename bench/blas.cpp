@@ -2,7 +2,7 @@
 #include "isaac/symbolic/execute.h"
 #include "isaac/tools/timer.hpp"
 #ifdef BENCH_CLBLAS
-  #include "clBLAS.h"
+  #include "isaac/wrap/clBLAS.h"
 #endif
 #ifdef BENCH_CBLAS
   #include "cblas.h"
@@ -166,127 +166,127 @@ void bench(ad::numeric_type dtype, std::string operation)
 //  /*--BLAS1--*/
 //  /*---------*/
 
-  if(operation=="axpy")
-  {
-    for(int_t N: create_log_range(1e3, 2e7, 50, 64))
-    {
-      std::cout << N;
-      ad::array x(N, dtype), y(N, dtype);
-      /* ISAAC */
-      std::list<ad::driver::Event> events;\
-      BENCHMARK_ISAAC(y = ad::control(x + y, ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)), 3*N*dtsize/t)
-      BENCHMARK_ISAAC(y = ad::control(x + y, ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), 3*N*dtsize/t)
-      /* clblas */
-  #ifdef BENCH_CLBLAS
-      BENCHMARK_CLBLAS(clblasSaxpy(N, 1, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue), 0, NULL, &event()), 3*N*dtsize/t)
-  #endif
-      /* BLAS */
-  #ifdef BENCH_CBLAS
-      std::vector<float> cx(N), cy(N);
-      ad::copy(x, cx);
-      ad::copy(y, cy);
-      BENCHMARK_HOST(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), 3*N*dtsize/t);
-  #endif
-      /* CuBLAS */
-  #ifdef BENCH_CUBLAS
-      T *cux, *cuy;
-      cudaMalloc((void**) &cux, N * sizeof(T));
-      cudaMalloc((void**) &cuy, N * sizeof(T));
-      BENCHMARK_CUDA(cublasSaxpy(N, 2, cux, 1, cuy, 1), 3*N*dtsize/t)
-      cudaFree(cux);
-      cudaFree(cuy);
-  #endif
-      std::cout << std::endl;
-    }
-  }
+//  if(operation=="axpy")
+//  {
+//    for(int_t N: create_log_range(1e3, 2e7, 50, 64))
+//    {
+//      std::cout << N;
+//      ad::array x(N, dtype), y(N, dtype);
+//      /* ISAAC */
+//      std::list<ad::driver::Event> events;\
+//      BENCHMARK_ISAAC(y = ad::control(x + y, ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)), 3*N*dtsize/t)
+//      BENCHMARK_ISAAC(y = ad::control(x + y, ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), 3*N*dtsize/t)
+//      /* clblas */
+//  #ifdef BENCH_CLBLAS
+//      BENCHMARK_CLBLAS(clblasSaxpy(N, 1, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue), 0, NULL, &event()), 3*N*dtsize/t)
+//  #endif
+//      /* BLAS */
+//  #ifdef BENCH_CBLAS
+//      std::vector<float> cx(N), cy(N);
+//      ad::copy(x, cx);
+//      ad::copy(y, cy);
+//      BENCHMARK_HOST(cblas_saxpy(N, 1, cx.data(), 1, cy.data(), 1), 3*N*dtsize/t);
+//  #endif
+//      /* CuBLAS */
+//  #ifdef BENCH_CUBLAS
+//      T *cux, *cuy;
+//      cudaMalloc((void**) &cux, N * sizeof(T));
+//      cudaMalloc((void**) &cuy, N * sizeof(T));
+//      BENCHMARK_CUDA(cublasSaxpy(N, 2, cux, 1, cuy, 1), 3*N*dtsize/t)
+//      cudaFree(cux);
+//      cudaFree(cuy);
+//  #endif
+//      std::cout << std::endl;
+//    }
+//  }
 
-  if(operation=="dot")
-  {
-    for(int_t N: create_log_range(1e3, 2e7, 50, 64))
-    {
-      std::cout << N;
-      /* ISAAC */
-      ad::array x(N, dtype), y(N, dtype);
-      ad::array scratch(N, dtype);
-      ad::scalar s(dtype);
-      s = dot(x,y); queue.synchronize();
-      BENCHMARK_ISAAC(s = ad::control(dot(x,y), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), 2*N*dtsize/t)
-      /* clblas */
-  #ifdef BENCH_CLBLAS
-      BENCHMARK_CLBLAS(clblasSdot(N, CL_HANDLE(s.data()), 0, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, CL_HANDLE(scratch.data()), 1, &CL_HANDLE(queue), 0, NULL, &event()), 2*N*dtsize/t)
-  #endif
-      /* BLAS */
-  #ifdef BENCH_CBLAS
-      std::vector<float> cx(N), cy(N);
-      ad::copy(x, cx);
-      ad::copy(y, cy);
-      BENCHMARK_HOST(cblas_sdot(N, cx.data(), 1, cy.data(), 1), 2*N*dtsize/t);
-  #endif
-  #ifdef BENCH_CUBLAS
-      T *cux, *cuy;
-      T result;
-      cudaMalloc((void**) &cux, N * sizeof(T));
-      cudaMalloc((void**) &cuy, N * sizeof(T));
-      BENCHMARK_CUDA(cublasSdot(N, cux, 1, cuy, 1), 2*N*dtsize/t)
-      cudaFree(cux);
-      cudaFree(cuy);
-  #endif
-      std::cout << std::endl;
-    }
-    std::cout << "\n\n" << std::flush;
-  }
+//  if(operation=="dot")
+//  {
+//    for(int_t N: create_log_range(1e3, 2e7, 50, 64))
+//    {
+//      std::cout << N;
+//      /* ISAAC */
+//      ad::array x(N, dtype), y(N, dtype);
+//      ad::array scratch(N, dtype);
+//      ad::scalar s(dtype);
+//      s = dot(x,y); queue.synchronize();
+//      BENCHMARK_ISAAC(s = ad::control(dot(x,y), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), 2*N*dtsize/t)
+//      /* clblas */
+//  #ifdef BENCH_CLBLAS
+//      BENCHMARK_CLBLAS(clblasSdot(N, CL_HANDLE(s.data()), 0, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, CL_HANDLE(scratch.data()), 1, &CL_HANDLE(queue), 0, NULL, &event()), 2*N*dtsize/t)
+//  #endif
+//      /* BLAS */
+//  #ifdef BENCH_CBLAS
+//      std::vector<float> cx(N), cy(N);
+//      ad::copy(x, cx);
+//      ad::copy(y, cy);
+//      BENCHMARK_HOST(cblas_sdot(N, cx.data(), 1, cy.data(), 1), 2*N*dtsize/t);
+//  #endif
+//  #ifdef BENCH_CUBLAS
+//      T *cux, *cuy;
+//      T result;
+//      cudaMalloc((void**) &cux, N * sizeof(T));
+//      cudaMalloc((void**) &cuy, N * sizeof(T));
+//      BENCHMARK_CUDA(cublasSdot(N, cux, 1, cuy, 1), 2*N*dtsize/t)
+//      cudaFree(cux);
+//      cudaFree(cuy);
+//  #endif
+//      std::cout << std::endl;
+//    }
+//    std::cout << "\n\n" << std::flush;
+//  }
 
-  if(operation.substr(0, 4)=="gemv")
-  {
-    std::vector<std::tuple<int_t, int_t> > MNs;
-    MNs.push_back(std::make_tuple(896,896));
-    MNs.push_back(std::make_tuple(3072,3072));
-    MNs.push_back(std::make_tuple(64,32000));
-    MNs.push_back(std::make_tuple(896,32000));
-    MNs.push_back(std::make_tuple(32000, 64));
-    MNs.push_back(std::make_tuple(32000, 896));
+//  if(operation.substr(0, 4)=="gemv")
+//  {
+//    std::vector<std::tuple<int_t, int_t> > MNs;
+//    MNs.push_back(std::make_tuple(896,896));
+//    MNs.push_back(std::make_tuple(3072,3072));
+//    MNs.push_back(std::make_tuple(64,32000));
+//    MNs.push_back(std::make_tuple(896,32000));
+//    MNs.push_back(std::make_tuple(32000, 64));
+//    MNs.push_back(std::make_tuple(32000, 896));
 
-    /*---------*/
-    /*--BLAS2--*/
-    /*---------*/
-    //T-layout
-    for(std::tuple<int_t, int_t> MN: MNs)
-    {
-        int_t M = std::get<0>(MN);
-        int_t N = std::get<1>(MN);
-        std::cout << M << "," << N;
-        /* ISAAC */
-        ad::array A(N, M, dtype), y(M, dtype), x(N, dtype);
-    #if HAS_A_BLAS
-        int_t lda = A.ld();
-    #endif
-        y = dot(trans(A),x); queue.synchronize();
-        BENCHMARK_ISAAC(y = ad::control(dot(trans(A),x), ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)),(M*N + M + N)*dtsize/t);
-        BENCHMARK_ISAAC(y = ad::control(dot(trans(A),x), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
-    #ifdef BENCH_CLBLAS
-        BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, clblasTrans, N, M, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, &event()), (M*N + M + N)*dtsize/t)
-    #endif
-    #ifdef BENCH_CBLAS
-        std::vector<float> cA(N*M), cx(N), cy(M);
-        ad::copy(x, cx);
-        ad::copy(y, cy);
-        ad::copy(A, cA);
-        BENCHMARK_HOST(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), lda, cx.data(), 1, 0, cy.data(), 1), (M*N + M + N)*dtsize/t);
-    #endif
-    #ifdef BENCH_CUBLAS
-        T *cuA, *cux, *cuy;
-        cudaMalloc((void**) &cuA, N * M * sizeof(T));
-        cudaMalloc((void**) &cux, N * sizeof(T));
-        cudaMalloc((void**) &cuy, M * sizeof(T));
-        BENCHMARK_CUDA(cublasSgemv('t', N, M, 1, cuA, lda, cux, 1, 0, cuy, 1), (M*N + M + N)*dtsize/t)
-        cudaFree(cuA);
-        cudaFree(cux);
-        cudaFree(cuy);
-    #endif
-        std::cout << std::endl;
-      }
-      std::cout << "\n\n" << std::flush;
-  }
+//    /*---------*/
+//    /*--BLAS2--*/
+//    /*---------*/
+//    //T-layout
+//    for(std::tuple<int_t, int_t> MN: MNs)
+//    {
+//        int_t M = std::get<0>(MN);
+//        int_t N = std::get<1>(MN);
+//        std::cout << M << "," << N;
+//        /* ISAAC */
+//        ad::array A(N, M, dtype), y(M, dtype), x(N, dtype);
+//    #if HAS_A_BLAS
+//        int_t lda = A.ld();
+//    #endif
+//        y = dot(trans(A),x); queue.synchronize();
+//        BENCHMARK_ISAAC(y = ad::control(dot(trans(A),x), ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)),(M*N + M + N)*dtsize/t);
+//        BENCHMARK_ISAAC(y = ad::control(dot(trans(A),x), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
+//    #ifdef BENCH_CLBLAS
+//        BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, clblasTrans, N, M, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, &event()), (M*N + M + N)*dtsize/t)
+//    #endif
+//    #ifdef BENCH_CBLAS
+//        std::vector<float> cA(N*M), cx(N), cy(M);
+//        ad::copy(x, cx);
+//        ad::copy(y, cy);
+//        ad::copy(A, cA);
+//        BENCHMARK_HOST(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), lda, cx.data(), 1, 0, cy.data(), 1), (M*N + M + N)*dtsize/t);
+//    #endif
+//    #ifdef BENCH_CUBLAS
+//        T *cuA, *cux, *cuy;
+//        cudaMalloc((void**) &cuA, N * M * sizeof(T));
+//        cudaMalloc((void**) &cux, N * sizeof(T));
+//        cudaMalloc((void**) &cuy, M * sizeof(T));
+//        BENCHMARK_CUDA(cublasSgemv('t', N, M, 1, cuA, lda, cux, 1, 0, cuy, 1), (M*N + M + N)*dtsize/t)
+//        cudaFree(cuA);
+//        cudaFree(cux);
+//        cudaFree(cuy);
+//    #endif
+//        std::cout << std::endl;
+//      }
+//      std::cout << "\n\n" << std::flush;
+//  }
 
   if(operation.substr(0,4)=="gemm")
   {
@@ -312,7 +312,7 @@ void bench(ad::numeric_type dtype, std::string operation)
     #if HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
-        BENCHMARK_ISAAC(C = ad::control(dot(A,trans(B)), ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)), (double)2*M*N*K/t);
+//        BENCHMARK_ISAAC(C = ad::control(dot(A,trans(B)), ad::execution_options_type(0, &events), ad::dispatcher_options_type(false)), (double)2*M*N*K/t);
         //BENCHMARK_ISAAC(C = ad::control(dot(A,trans(B)), ad::execution_options_type(0, &events), ad::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS

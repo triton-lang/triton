@@ -14,8 +14,11 @@ class Event
 {
   friend class CommandQueue;
 public:
+  Event(cl::Event const & event);
   Event(backend_type backend);
   long elapsed_time() const;
+  operator cl::Event();
+
 private:
   backend_type backend_;
 #ifdef ISAAC_WITH_CUDA
