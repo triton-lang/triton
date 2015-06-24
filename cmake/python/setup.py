@@ -60,7 +60,7 @@ def main():
     #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
-    cvars["CFLAGS"] = cvars["BASECFLAGS"] + cvars['OPT']
+    cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT']
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
     is_on_android = '-mandroid' in cvars['PY_CFLAGS']
