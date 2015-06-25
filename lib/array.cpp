@@ -19,6 +19,11 @@ array::array(int_t shape0, numeric_type dtype, driver::Context context) :
   context_(context), data_(context_, size_of(dtype)*dsize())
 { }
 
+array::array(int_t shape0, numeric_type dtype, driver::Buffer data, int_t start, int_t inc):
+    dtype_(dtype), shape_(shape0), start_(start, 0, 0, 0), stride_(inc), ld_(shape_[0]), context_(data.context()), data_(data)
+{ }
+
+
 template<class DT>
 array::array(std::vector<DT> const & x, driver::Context context):
   dtype_(to_numeric_type<DT>::value), shape_(x.size(), 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
@@ -45,20 +50,19 @@ INSTANTIATE(double);
 #undef INSTANTIATE
 
 // 2D
-array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Context context) : dtype_(dtype), shape_(shape0, shape1, 1, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
+array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Context context) : dtype_(dtype), shape_(shape0, shape1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
                                                                                         context_(context), data_(context_, size_of(dtype_)*dsize())
 {}
+
+array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Buffer data, int_t start, int_t ld) :
+    dtype_(dtype), shape_(shape0, shape1), start_(start%ld, start/ld, 0, 0), stride_(1, 1, 1, 1), ld_(ld), context_(data.context()), data_(data)
+{ }
 
 array::array(array & M, slice const & s0, slice const & s1) :  dtype_(M.dtype_), shape_(s0.size, s1.size, 1, 1),
                                                           start_(M.start_[0] + M.stride_[0]*s0.start, M.start_[1] + M.stride_[1]*s1.start, 0, 0),
                                                           stride_(M.stride_[0]*s0.stride, M.stride_[1]*s1.stride, 1, 1), ld_(M.ld_),
                                                           context_(M.data_.context()), data_(M.data_)
 { }
-
-// 3D
-array::array(int_t shape0, int_t shape1, int_t shape2, numeric_type dtype, driver::Context context) : dtype_(dtype), shape_(shape0, shape1, shape2, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
-                                                                                        context_(context), data_(context_, size_of(dtype_)*dsize())
-{}
 
 template<typename DT>
 array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::Context context)
@@ -68,6 +72,19 @@ array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::C
 {
   isaac::copy(data, *this);
 }
+
+// 3D
+array::array(int_t shape0, int_t shape1, int_t shape2, numeric_type dtype, driver::Context context) : dtype_(dtype), shape_(shape0, shape1, shape2, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
+                                                                                        context_(context), data_(context_, size_of(dtype_)*dsize())
+{}
+
+//Slices
+array::array(numeric_type dtype, driver::Buffer data, slice const & s0, slice const & s1, int_t ld):
+  dtype_(dtype), shape_(s0.size, s1.size), start_(s0.start, s1.start), stride_(s0.stride, s1.stride),
+   ld_(ld), context_(data.context()), data_(data)
+{ }
+
+
 
 #define INSTANTIATE(T) template array::array(int_t, int_t, std::vector<T> const &, driver::Context)
 INSTANTIATE(char);
@@ -83,12 +100,6 @@ INSTANTIATE(unsigned long long);
 INSTANTIATE(float);
 INSTANTIATE(double);
 #undef INSTANTIATE
-
-// General
-array::array(numeric_type dtype, driver::Buffer data, slice const & s0, slice const & s1, int_t ld):
-  dtype_(dtype), shape_(s0.size, s1.size), start_(s0.start, s1.start), stride_(s0.stride, s1.stride),
-   ld_(ld), context_(data.context()), data_(data)
-{ }
 
 array::array(array_expression const & proxy) : array(control(proxy)){}
 array::array(array const & other) : array(control(other)){}

@@ -14,15 +14,22 @@ class scalar;
 
 class array: public array_base
 {
+protected:
+  //Slices
+  array(numeric_type dtype, driver::Buffer data, slice const & s1, slice const & s2, int_t ld);
+
 public:
   //1D Constructors
   array(int_t size1, numeric_type dtype, driver::Context context = driver::queues.default_context());
+  array(int_t size1, numeric_type dtype, driver::Buffer data, int_t start, int_t inc);
+
   template<typename DT>
   array(std::vector<DT> const & data, driver::Context context = driver::queues.default_context());
   array(array & v, slice const & s1);
 
   //2D Constructors
   array(int_t size1, int_t size2, numeric_type dtype, driver::Context context = driver::queues.default_context());
+  array(int_t size1, int_t size2, numeric_type dtype, driver::Buffer data, int_t start, int_t ld);
   template<typename DT>
   array(int_t size1, int_t size2, std::vector<DT> const & data, driver::Context context = driver::queues.default_context());
   array(array & M, slice const & s1, slice const & s2);
@@ -31,7 +38,6 @@ public:
   array(int_t size1, int_t size2, int_t size3, numeric_type dtype, driver::Context context = driver::queues.default_context());
 
   //General constructor
-  array(numeric_type dtype, driver::Buffer data, slice const & s1, slice const & s2, int_t ld);
 
   array(array_expression const & proxy);
   array(array const &);
