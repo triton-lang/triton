@@ -36,6 +36,9 @@ bool Buffer::operator<(Buffer const & other) const
 HANDLE_TYPE(cl::Buffer, CUdeviceptr) & Buffer::handle()
 { return h_; }
 
+HANDLE_TYPE(cl::Buffer, CUdeviceptr) const & Buffer::handle() const
+{ return h_; }
+
 }
 
 }

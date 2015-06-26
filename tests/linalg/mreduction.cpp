@@ -1,6 +1,7 @@
 #include <cmath>
 #include "common.hpp"
 #include "isaac/array.h"
+#include "isaac/wrap/clBLAS.h"
 
 namespace ad = isaac;
 
@@ -16,6 +17,9 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 
   simple_vector<T> bufy(M);
   simple_vector<T> bufx(N);
+
+  ad::driver::CommandQueue queue = ad::driver::queues[y.context()][0];
+  cl_command_queue clqueue = (*queue.handle().cl)();
 
   T yi = 0, xi = 0;
 #define TEST_OPERATION(NAME, SIZE1, SIZE2, REDUCTION, ASSIGNMENT, GPU_REDUCTION, RES, BUF, CRES)\
@@ -37,6 +41,14 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   }\
   else\
     std::cout << std::endl;
+
+  ad::int_t offA = A.start()[0] + A.start()[1]*A.ld();
+
+//  TEST_OPERATION("GEMV(COL, NoTrans)", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi,
+//                 BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasNoTrans, M, N, 1, CHANDLE(A), offA, A.ld(),
+//                            CHANDLE(x), x.start()[0], x.stride()[0], 0, CHANDLE(y), y.start()[0], y.start()[1],
+//                            1, &clqueue, 0, NULL, NULL), y, bufy, cy);
+
 
   TEST_OPERATION("y = A.x", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x), y, bufy, cy);
   TEST_OPERATION("x = A'.y", N, M, xi+=cA(j,i)*cy[j], cx[i] = xi, x = dot(trans(A),y), x, bufx, cx);

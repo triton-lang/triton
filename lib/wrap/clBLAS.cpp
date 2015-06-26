@@ -161,7 +161,7 @@ extern "C"
         is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
         clRetainMemObject(mx);\
         \
-        is::array y(N, TYPE_ISAAC, cl::Buffer(my), offy, incy);\
+        is::array y(M, TYPE_ISAAC, cl::Buffer(my), offy, incy);\
         clRetainMemObject(my);\
         \
         is::driver::Context const & context = A.context();\

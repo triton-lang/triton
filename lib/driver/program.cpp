@@ -17,13 +17,13 @@ namespace driver
 
 Program::Program(Context const & context, std::string const & source) : backend_(context.backend_), context_(context), source_(source), h_(backend_)
 {
+//  std::cout << source << std::endl;
   std::string cache_path = context.cache_path_;
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
     {
-//      std::cout << source << std::endl;
 
       std::string prefix = context_.device_.name() + "cuda";
       std::string sha1 = tools::sha1(prefix + source);
