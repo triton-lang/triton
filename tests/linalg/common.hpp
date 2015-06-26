@@ -10,6 +10,7 @@ template<class T> struct BLAS;
 template<> struct BLAS<float> { template<class FT, class DT> static FT F(FT SAXPY, DT ) { return SAXPY; } };
 template<> struct BLAS<double> { template<class FT, class DT> static DT F(FT , DT DAXPY) { return DAXPY; } };
 
+#define CHANDLE(X) (*X.data().handle().cl)()
 /*------ Simple Vector ---------*/
 template<class T>
 class simple_vector_base

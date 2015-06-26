@@ -23,6 +23,7 @@ public:
   bool operator<(Buffer const &) const;
   bool operator==(Buffer const &) const;
   HANDLE_TYPE(cl::Buffer, CUdeviceptr)&  handle();
+  HANDLE_TYPE(cl::Buffer, CUdeviceptr) const &  handle() const;
 private:
   backend_type backend_;
   Context context_;
