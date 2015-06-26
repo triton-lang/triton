@@ -134,9 +134,11 @@ std::string Device::extensions() const
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA
-    case CUDA: return "";
+    case CUDA:
+      return "";
 #endif
-    case OPENCL: return h_.cl->getInfo<CL_DEVICE_EXTENSIONS>();
+    case OPENCL:
+      return h_.cl->getInfo<CL_DEVICE_EXTENSIONS>();
     default: throw;
   }
 }

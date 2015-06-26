@@ -6,6 +6,10 @@
 
 typedef isaac::int_t int_t;
 
+template<class T> struct BLAS;
+template<> struct BLAS<float> { template<class FT, class DT> static FT F(FT SAXPY, DT ) { return SAXPY; } };
+template<> struct BLAS<double> { template<class FT, class DT> static DT F(FT , DT DAXPY) { return DAXPY; } };
+
 /*------ Simple Vector ---------*/
 template<class T>
 class simple_vector_base

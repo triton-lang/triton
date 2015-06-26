@@ -3,6 +3,7 @@
 
 #include "common.hpp"
 #include "isaac/array.h"
+#include "isaac/wrap/clBLAS.h"
 
 namespace ad = isaac;
 typedef ad::int_t int_t;
@@ -14,6 +15,9 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
   using namespace std;
   ad::driver::Context const & ctx = x.context();
   int_t N = cx.size();
+  ad::driver::CommandQueue queue = ad::driver::queues[ctx][0];
+  cl_command_queue clqueue = (*queue.handle().cl)();
+
   unsigned int failure_count = 0;
 
   isaac::numeric_type dtype = ad::to_numeric_type<T>::value;
@@ -23,7 +27,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
   isaac::scalar ds(dtype, ctx);
 
 #define RUN_TEST(NAME, CPU_REDUCTION, INIT, ASSIGNMENT, GPU_REDUCTION) \
-  cout << NAME "..." << flush;\
+  cout << PREFIX << " " << NAME "..." << flush;\
   cs = INIT;\
   for(int_t i = 0 ; i < N ; ++i)\
     CPU_REDUCTION;\
@@ -37,6 +41,16 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
   }\
   else\
     cout << endl;
+
+#define PREFIX "[C]"
+  RUN_TEST("DOT", cs+=cx[i]*cy[i], 0, cs, BLAS<T>::F(clblasSdot, clblasDdot)(N, (*ds.data().handle().cl)(), 0, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
+                                                                                 (*y.data().handle().cl)(), y.start()[0], y.stride()[0],
+                                                                                 0, 1, &clqueue, 0, NULL, NULL));
+
+  RUN_TEST("ASUM", cs+=std::fabs(cx[i]), 0, cs, BLAS<T>::F(clblasSasum, clblasDasum)(N, (*ds.data().handle().cl)(), 0, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
+                                                                                             0, 1, &clqueue, 0, NULL, NULL));
+#undef PREFIX
+#define PREFIX "[C++]"
 
   RUN_TEST("s = x'.y", cs+=cx[i]*cy[i], 0, cs, ds = dot(x,y));
   RUN_TEST("s = exp(x'.y)", cs += cx[i]*cy[i], 0, std::exp(cs), ds = exp(dot(x,y)));

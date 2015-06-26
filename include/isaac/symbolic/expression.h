@@ -238,7 +238,7 @@ struct execution_options_type
   {
     if(queue_)
         return *queue_;
-    return (driver::CommandQueue &)driver::queues[context][queue_id_];
+    return driver::queues[context][queue_id_];
   }
 
   std::list<driver::Event>* events;

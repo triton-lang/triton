@@ -2,6 +2,7 @@
 #include <iostream>
 #include "common.hpp"
 #include "isaac/array.h"
+#include "isaac/wrap/clBLAS.h"
 
 namespace ad = isaac;
 typedef isaac::int_t int_t;
@@ -15,7 +16,8 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   int failure_count = 0;
   ad::numeric_type dtype = x.dtype();
   ad::driver::Context const & ctx = x.context();
-
+  ad::driver::CommandQueue queue = ad::driver::queues[ctx][0];
+  cl_command_queue clqueue = (*queue.handle().cl)();
   int_t N = cz.size();
 
   T aa = 3.12, bb=3.5;
@@ -26,7 +28,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 #define CONVERT
 #define RUN_TEST_VECTOR_AXPY(NAME, CPU_LOOP, GPU_EXPR) \
   {\
-  std::cout << NAME "..." << std::flush;\
+  std::cout << PREFIX << " " << NAME "..." << std::flush;\
   for(int_t i = 0 ; i < N ; ++i)\
     CPU_LOOP;\
   GPU_EXPR;\
@@ -41,8 +43,20 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
     std::cout << std::endl;\
   }
 
-  RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, ctx))
+#define PREFIX "[C]"
+  RUN_TEST_VECTOR_AXPY("AXPY", cy[i] = cx[i] + a*cy[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
+                                                                                             (*y.data().handle().cl)(), y.start()[0], y.stride()[0],
+                                                                                             1, &clqueue, 0, NULL, NULL));
 
+  RUN_TEST_VECTOR_AXPY("COPY", cy[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
+                                                                                 (*y.data().handle().cl)(), y.start()[0], y.stride()[0],
+                                                                                 1, &clqueue, 0, NULL, NULL));
+
+  RUN_TEST_VECTOR_AXPY("SCAL", cx[i] = a*cx[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
+                                                                                     1, &clqueue, 0, NULL, NULL));
+#undef PREFIX
+#define PREFIX "[C++]"
+  RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, ctx))
   RUN_TEST_VECTOR_AXPY("z = x", cz[i] = cx[i], z = x)
   RUN_TEST_VECTOR_AXPY("z = -x", cz[i] = -cx[i], z = -x)
 
@@ -88,7 +102,9 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   RUN_TEST_VECTOR_AXPY("z = x<y", cz[i] = cx[i]<cy[i], z= cast(x<y, dtype))
   RUN_TEST_VECTOR_AXPY("z = x!=y", cz[i] = cx[i]!=cy[i], z= cast(x!=y, dtype))
 
+
 #undef RUN_TEST_VECTOR_AXPY
+
 
   if(failure_count > 0)
       exit(EXIT_FAILURE);
