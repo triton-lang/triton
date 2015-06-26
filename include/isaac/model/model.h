@@ -23,18 +23,22 @@ namespace isaac
     driver::Program& init(controller<expressions_tuple> const &);
 
   public:
-    model(expression_type, numeric_type, predictors::random_forest const &, std::vector< tools::shared_ptr<base> > const &, driver::CommandQueue &);
-    model(expression_type, numeric_type, base const &, driver::CommandQueue &);
+    model(expression_type, numeric_type, predictors::random_forest const &, std::vector< tools::shared_ptr<base> > const &, driver::CommandQueue const &);
+    model(expression_type, numeric_type, base const &, driver::CommandQueue const &);
 
     void execute(controller<expressions_tuple> const &);
     templates_container const & templates() const;
+
+    void test() const
+    { std::cout << queue_.device().backend() << std::endl;}
+
   private:
     templates_container templates_;
     template_pointer fallback_;
     tools::shared_ptr<predictors::random_forest> predictor_;
     std::map<std::vector<int_t>, int> hardcoded_;
     std::map<driver::Context, std::map<std::string, std::shared_ptr<driver::Program> > > programs_;
-    driver::CommandQueue & queue_;
+    driver::CommandQueue queue_;
   };
 
   typedef std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<model> > model_map_t;
