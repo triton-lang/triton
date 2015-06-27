@@ -178,38 +178,42 @@ extern "C"
     //*****************
     //BLAS3
     //*****************
-    clblasStatus clblasSgemm(clblasOrder order, clblasTranspose transA,  clblasTranspose transB,
-                            size_t M, size_t N, size_t K,
-                            cl_float alpha, const cl_mem mA, size_t offA, size_t lda,
-                            const cl_mem mB, size_t offB, size_t ldb, cl_float beta,
-                            cl_mem mC, size_t offC, size_t ldc,
-                            cl_uint numCommandQueues, cl_command_queue *commandQueues,
-                            cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)
-    {
-        is::int_t As1 = M, As2 = K;
-        is::int_t Bs1 = K, Bs2 = N;
-        //Trans
-        if(transA==clblasTrans) std::swap(As1, As2);
-        if(transB==clblasTrans) std::swap(Bs1, Bs2);
-        //Struct
-        is::array A(As1, As2, is::FLOAT_TYPE, cl::Buffer(mA), offA, lda);
-        clRetainMemObject(mA);
-        is::array B(Bs1, Bs2, is::FLOAT_TYPE, cl::Buffer(mB), offB, ldb);
-        clRetainMemObject(mB);
-        is::array C(M, N, is::FLOAT_TYPE, cl::Buffer(mC), offC, ldc);
-        clRetainMemObject(mC);
-        is::driver::Context const & context = C.context();
-        //Operation
-        if(transA==clblasTrans && transB==clblasTrans)
-            execute(is::detail::assign(C, alpha*dot(A.T(), B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
-        else if(transA==clblasTrans && transB==clblasNoTrans)
-            execute(is::detail::assign(C, alpha*dot(A.T(), B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
-        else if(transA==clblasNoTrans && transB==clblasTrans)
-            execute(is::detail::assign(C, alpha*dot(A, B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
-        else
-            execute(is::detail::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
-
-        return clblasSuccess;
+    #define MAKE_GEMM(TYPE_CHAR, TYPE_ISAAC, TYPE_CL) \
+    clblasStatus clblas ## TYPE_CHAR ## gemm(clblasOrder order, clblasTranspose transA,  clblasTranspose transB,\
+                            size_t M, size_t N, size_t K,\
+                            TYPE_CL alpha, const cl_mem mA, size_t offA, size_t lda,\
+                            const cl_mem mB, size_t offB, size_t ldb, TYPE_CL beta,\
+                            cl_mem mC, size_t offC, size_t ldc,\
+                            cl_uint numCommandQueues, cl_command_queue *commandQueues,\
+                            cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
+    {\
+        is::int_t As1 = M, As2 = K;\
+        is::int_t Bs1 = K, Bs2 = N;\
+        if(transA==clblasTrans) std::swap(As1, As2);\
+        if(transB==clblasTrans) std::swap(Bs1, Bs2);\
+        /*Struct*/\
+        is::array A(As1, As2, TYPE_ISAAC, cl::Buffer(mA), offA, lda);\
+        clRetainMemObject(mA);\
+        is::array B(Bs1, Bs2, TYPE_ISAAC, cl::Buffer(mB), offB, ldb);\
+        clRetainMemObject(mB);\
+        is::array C(M, N, TYPE_ISAAC, cl::Buffer(mC), offC, ldc);\
+        clRetainMemObject(mC);\
+        is::driver::Context const & context = C.context();\
+        bool AeffTrans = (transA==clblasTrans) ^ (order==clblasRowMajor);\
+        bool BeffTrans = (transB==clblasTrans) ^ (order==clblasRowMajor);\
+        /*Operation*/\
+        if(AeffTrans && BeffTrans)\
+            execute(is::detail::assign(C, alpha*dot(A.T(), B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        else if(AeffTrans && !BeffTrans)\
+            execute(is::detail::assign(C, alpha*dot(A.T(), B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        else if(!AeffTrans && BeffTrans)\
+            execute(is::detail::assign(C, alpha*dot(A, B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        else\
+            execute(is::detail::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        return clblasSuccess;\
     }
+
+    MAKE_GEMM(S, is::FLOAT_TYPE, cl_float)
+    MAKE_GEMM(D, is::FLOAT_TYPE, cl_double)
 
 }

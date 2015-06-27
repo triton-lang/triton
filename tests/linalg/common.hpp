@@ -10,6 +10,8 @@ template<class T> struct BLAS;
 template<> struct BLAS<float> { template<class FT, class DT> static FT F(FT SAXPY, DT ) { return SAXPY; } };
 template<> struct BLAS<double> { template<class FT, class DT> static DT F(FT , DT DAXPY) { return DAXPY; } };
 
+enum interface_t{clBLAS, CPP};
+
 #define CHANDLE(X) (*X.data().handle().cl)()
 /*------ Simple Vector ---------*/
 template<class T>
@@ -165,7 +167,6 @@ bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type 
   }
   return false;
 }
-
 
 #define INIT_VECTOR(N, SUBN, START, STRIDE, CPREFIX, PREFIX, CTX) \
     simple_vector<T> CPREFIX ## _full(N);\

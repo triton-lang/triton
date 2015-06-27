@@ -7,7 +7,7 @@ namespace ad = isaac;
 
 template<typename T>
 void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matrix_base<T> const & cA, simple_vector_base<T> & cx,
-                                        ad::array & y, ad::array const & A, ad::array & x)
+                                        ad::array & y, ad::array const & A, ad::array & x, interface_t interface)
 {
   int failure_count = 0;
 
@@ -19,11 +19,11 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   simple_vector<T> bufx(N);
 
   ad::driver::CommandQueue queue = ad::driver::queues[y.context()][0];
-  cl_command_queue clqueue = (*queue.handle().cl)();
 
   T yi = 0, xi = 0;
+  const char * PREFIX = interface==clBLAS?"[BLAS]":"[C++]";
 #define TEST_OPERATION(NAME, SIZE1, SIZE2, REDUCTION, ASSIGNMENT, GPU_REDUCTION, RES, BUF, CRES)\
-  std::cout << NAME "..." << std::flush;\
+  std::cout << PREFIX << " " << NAME "..." << std::flush;\
   for(int i = 0 ; i < SIZE1 ; ++i)\
   {\
     yi = 0;\
@@ -44,14 +44,25 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 
   ad::int_t offA = A.start()[0] + A.start()[1]*A.ld();
 
-//  TEST_OPERATION("GEMV(COL, NoTrans)", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi,
-//                 BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasNoTrans, M, N, 1, CHANDLE(A), offA, A.ld(),
-//                            CHANDLE(x), x.start()[0], x.stride()[0], 0, CHANDLE(y), y.start()[0], y.start()[1],
-//                            1, &clqueue, 0, NULL, NULL), y, bufy, cy);
+  if(interface==clBLAS)
+  {
+      cl_command_queue clqueue = (*queue.handle().cl)();
 
+      TEST_OPERATION("GEMV(COL, NoTrans)", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi,
+                     BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasNoTrans, M, N, 1, CHANDLE(A), offA, A.ld()*A.stride()[1],
+                                CHANDLE(x), x.start()[0], x.stride()[0], 0, CHANDLE(y), y.start()[0], y.stride()[0],
+                                1, &clqueue, 0, NULL, NULL), y, bufy, cy);
 
-  TEST_OPERATION("y = A.x", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x), y, bufy, cy);
-  TEST_OPERATION("x = A'.y", N, M, xi+=cA(j,i)*cy[j], cx[i] = xi, x = dot(trans(A),y), x, bufx, cx);
+      TEST_OPERATION("GEMV(COL, Trans)", N, M, xi+=cA(j,i)*cy[j], cx[i] = xi,
+                     BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasTrans, N, M, 1, CHANDLE(A), offA, A.ld()*A.stride()[1],
+                                CHANDLE(y), y.start()[0], y.stride()[0], 0, CHANDLE(x), x.start()[0], x.stride()[0],
+                                1, &clqueue, 0, NULL, NULL), x, bufx, cx);
+  }
+  else
+  {
+      TEST_OPERATION("y = A.x", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x), y, bufy, cy);
+      TEST_OPERATION("x = A'.y", N, M, xi+=cA(j,i)*cy[j], cx[i] = xi, x = dot(trans(A),y), x, bufx, cx);
+  }
 
   if(failure_count>0)
     exit(EXIT_FAILURE);
@@ -65,14 +76,18 @@ void test_impl(T epsilon, ad::driver::Context const & ctx)
   int_t SUBM = 184;
   int_t SUBN = 145;
 
-  INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cA, A, ctx);
-  INIT_VECTOR(M, SUBM, 6, 2, cy, y, ctx);
-  INIT_VECTOR(N, SUBN, 4, 3, cx, x, ctx);
+  INIT_VECTOR(M, SUBM, 7, 2, cy, y, ctx);
+  INIT_VECTOR(N, SUBN, 5, 3, cx, x, ctx);
+  INIT_MATRIX(M, SUBM, 9, 1, N, SUBN, 8, 4, cA, A, ctx);
+  INIT_MATRIX(M, SUBM, 9, 5, N, SUBN, 8, 4, cAPP, APP, ctx);
+
 
   std::cout << "full..." << std::endl;
-  test_row_wise_reduction(epsilon, cy_full, cA_full, cx_full, y_full, A_full, x_full);
+  test_row_wise_reduction(epsilon, cy_full, cA_full, cx_full, y_full, A_full, x_full, clBLAS);
+  test_row_wise_reduction(epsilon, cy_full, cAPP_full, cx_full, y_full, APP_full, x_full, CPP);
   std::cout << "slice..." << std::endl;
-  test_row_wise_reduction(epsilon, cy_slice, cA_slice, cx_slice, y_slice, A_slice, x_slice);
+  test_row_wise_reduction(epsilon, cy_slice, cA_slice, cx_slice, y_slice, A_slice, x_slice, clBLAS);
+  test_row_wise_reduction(epsilon, cy_slice, cAPP_slice, cx_slice, y_slice, APP_slice, x_slice, CPP);
 }
 
 int main()
