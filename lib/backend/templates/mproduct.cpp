@@ -252,6 +252,9 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
         stream.inc_tab();
         stream << "in_bounds_B[n] = (gidy*" << p_.nL << " + " << (B_trans_=='T'?"idxT":"idyT") << " + n*" << fetch_size << ") < N;" << std::endl;
         stream.dec_tab();
+
+//        for(unsigned int n = 0 ; n < p_.nL/fetch_size ; n++)
+//            stream << n>0?",":"" << "(gidy*" << p_.nL << " + " << (B_trans_=='T'?"idxT":"idyT") << " + " << n*fetch_size << ") < N";
       }
     }
 
@@ -340,7 +343,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           for(int_t k = 0; k < p_.mL; k += p_.local_fetch_1)
             for(int_t m = 0; m < p_.kL; m += p_.local_fetch_0*p_.simd_width)
             {
-              string in_bounds = "in_bounds_A[" + to_string(k/p_.local_fetch_1) + "]";
+              string in_bounds = "in_bounds_A[" + to_string(k/p_.local_fetch_1) + "] && (idxT + block_k < K)";
               string to_load = "A[" + to_string(k) + "*Ald + " + to_string(m/p_.simd_width) + ASTRIDE1 + "]";
               stream << VSTORE(HANDLE_BOUNDS(in_bounds, to_load), "0", "lAstore + lAstart + " + to_string(m*lAld+k)) << ";" << std::endl;
             }
@@ -350,7 +353,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           for(int_t k = 0; k < p_.kL; k += p_.local_fetch_1)
             for(int_t n = 0; n < p_.nL; n += p_.local_fetch_0*p_.simd_width)
             {
-              string in_bounds = "in_bounds_B[" + to_string(n/(p_.local_fetch_0*p_.simd_width)) + "]";
+              string in_bounds = "in_bounds_B[" + to_string(n/(p_.local_fetch_0*p_.simd_width)) + "] && (idyT + block_k < K)";
               string to_load = "B[" + to_string(k) + "*Bld + " + to_string(n/p_.simd_width) + BSTRIDE1 + "]";
               stream << VSTORE(HANDLE_BOUNDS(in_bounds, to_load), "0", "lBstore + lBstart + " + to_string(k*lBld+n)) << ";" << std::endl;
             }
@@ -358,7 +361,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           for(int_t k = 0; k < p_.nL; k += p_.local_fetch_1)
             for(int_t n = 0; n < p_.kL; n += p_.local_fetch_0*p_.simd_width)
             {
-              string in_bounds = "in_bounds_B[" + to_string(k/p_.local_fetch_1) + "]";
+              string in_bounds = "in_bounds_B[" + to_string(k/p_.local_fetch_1) + "]  && (idxT + block_k < K)";
               string to_load = "B[" + to_string(k) + "*Bld + " + to_string(n/p_.simd_width) + BSTRIDE1 + "]";
               stream << VSTORE(HANDLE_BOUNDS(in_bounds, to_load), "0", "lBstore + lBstart + " + to_string(n*lBld+k)) << ";" << std::endl;
             }
