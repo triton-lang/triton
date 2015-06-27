@@ -202,8 +202,9 @@ extern "C"
         bool AeffTrans = (transA==clblasTrans) ^ (order==clblasRowMajor);\
         bool BeffTrans = (transB==clblasTrans) ^ (order==clblasRowMajor);\
         /*Operation*/\
-        if(AeffTrans && BeffTrans)\
+        if(AeffTrans && BeffTrans){\
             execute(is::detail::assign(C, alpha*dot(A.T(), B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+}\
         else if(AeffTrans && !BeffTrans)\
             execute(is::detail::assign(C, alpha*dot(A.T(), B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else if(!AeffTrans && BeffTrans)\
@@ -214,6 +215,6 @@ extern "C"
     }
 
     MAKE_GEMM(S, is::FLOAT_TYPE, cl_float)
-    MAKE_GEMM(D, is::FLOAT_TYPE, cl_double)
+    MAKE_GEMM(D, is::DOUBLE_TYPE, cl_double)
 
 }

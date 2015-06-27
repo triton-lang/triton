@@ -56,14 +56,14 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   if(interface==clBLAS)
   {
       cl_command_queue clqueue = (*queue.handle().cl)();
-      ad::int_t offa = A.start()[0] + A.start()[1]*A.ld();
-      ad::int_t lda = A.ld()*A.stride()[1];
-      ad::int_t offb = B.start()[0] + B.start()[1]*A.ld();
-      ad::int_t ldb = B.ld()*B.stride()[1];
-      ad::int_t offc = C.start()[0] + C.start()[1]*A.ld();
-      ad::int_t ldc = C.ld()*C.stride()[1];
-      RUN_TEST("GEMM(COL, N, N)", clblasSgemm(clblasColumnMajor, clblasNoTrans, clblasNoTrans, M, N, K, alpha, CHANDLE(A), offa, lda, CHANDLE(B), offb, ldb, beta, CHANDLE(C), offc, ldc,
-                                  1, &clqueue, 0, NULL, NULL));
+      RUN_TEST("GEMM(N, N)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasColumnMajor, clblasNoTrans, clblasNoTrans, M, N, K, alpha, CHANDLE(A), OFF(A), LD(A),
+                                                                 CHANDLE(B), OFF(B), LD(B), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
+      RUN_TEST("GEMM(N, T)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasColumnMajor, clblasNoTrans, clblasTrans, M, N, K, alpha, CHANDLE(A), OFF(A), LD(A),
+                                                                 CHANDLE(BT), OFF(BT), LD(BT), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
+      RUN_TEST("GEMM(T, N)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasColumnMajor, clblasTrans, clblasNoTrans, M, N, K, alpha, CHANDLE(AT), OFF(AT), LD(AT),
+                                                                 CHANDLE(B), OFF(B), LD(B), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
+      RUN_TEST("GEMM(T, T)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasColumnMajor, clblasTrans, clblasTrans, M, N, K, alpha, CHANDLE(AT), OFF(AT), LD(AT),
+                                                                 CHANDLE(BT), OFF(BT), LD(BT), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
   }
   else
   {
@@ -93,6 +93,7 @@ void test_impl(T epsilon, ad::driver::Context const & ctx)
   INIT_MATRIX(M, SUBM, 8, 2, K, SUBK, 4, 3, cA, A, ctx);
   INIT_MATRIX(K, SUBK, 9, 4, N, SUBN, 6, 2, cB, B, ctx);
   std::cout << "full..." << std::endl;
+  test_impl(epsilon, cC_full, cA_full, cB_full, C_full, A_full, AT_full, B_full, BT_full, clBLAS);
   test_impl(epsilon, cC_full, cA_full, cB_full, C_full, A_full, AT_full, B_full, BT_full, CPP);
   std::cout << "slice..." << std::endl;
   test_impl(epsilon, cC_slice, cA_slice, cB_slice, C_slice, A_slice, AT_slice, B_slice, BT_slice, CPP);

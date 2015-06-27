@@ -677,8 +677,7 @@ namespace detail
 
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
     bool B_trans = B_root.op.type==OPERATOR_TRANS_TYPE;
-    if(A_trans) shape[0] = A.shape()[1];
-    if(B_trans) shape[1] = B.shape()[0];
+
     if(A_trans && B_trans)  type = OPERATOR_MATRIX_PRODUCT_TT_TYPE;
     else if(A_trans && !B_trans) type = OPERATOR_MATRIX_PRODUCT_TN_TYPE;
     else if(!A_trans && B_trans) type = OPERATOR_MATRIX_PRODUCT_NT_TYPE;
