@@ -28,7 +28,7 @@ namespace isaac
       {
 
 //BLAS1 Helpers
-#define HANDLE_VECTOR_AXPY(tmp)       case OPERATOR_BINARY_TYPE_FAMILY\
+#define HANDLE_VECTOR_AXPY(tmp)       case OPERATOR_BINARY_TYPE_FAMILY:\
                                       case OPERATOR_UNARY_TYPE_FAMILY:                  return make_pair(tmp, VECTOR_AXPY_TYPE)
 #define HANDLE_VECTOR_REDUCTION(tmp)  case OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY:      return make_pair(tmp, REDUCTION_TYPE)
 #define HANDLE_MATRIX_AXPY(tmp)       case OPERATOR_BINARY_TYPE_FAMILY:\
@@ -72,6 +72,19 @@ namespace isaac
           switch(op.type_family){
             HANDLE_VECTOR_REDUCTION(true);
             default: break;
+          }
+          break;
+
+        case COL_WISE_REDUCTION_TYPE:
+        case ROW_WISE_REDUCTION_TYPE:
+          switch(op.type_family){
+           case OPERATOR_BINARY_TYPE_FAMILY:
+           case OPERATOR_UNARY_TYPE_FAMILY: return std::make_pair(false, current_type);
+           HANDLE_ROWS_REDUCTION(true);
+           HANDLE_COLUMNS_REDUCTION(true);
+           HANDLE_VECTOR_REDUCTION(true);
+           HANDLE_MATRIX_PRODUCT(true);
+           default: break;
           }
           break;
 
@@ -132,6 +145,7 @@ namespace isaac
             final_type = next_type;
         parse(array, node.lhs.node_index, next_type, breakpoints, final_type, false);
       }
+      current_type = final_type;
       if (node.rhs.type_family == COMPOSITE_OPERATOR_FAMILY)
       {
         std::pair<bool, expression_type> breakpoint = is_breakpoint(current_type, array[node.rhs.node_index].op, is_first);

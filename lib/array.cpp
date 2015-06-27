@@ -55,7 +55,7 @@ array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Context con
 {}
 
 array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Buffer data, int_t start, int_t ld) :
-    dtype_(dtype), shape_(shape0, shape1), start_(start%ld, start/ld, 0, 0), stride_(1, 1, 1, 1), ld_(ld), context_(data.context()), data_(data)
+    dtype_(dtype), shape_(shape0, shape1), start_(start, 0, 0, 0), stride_(1, 1, 1, 1), ld_(ld), context_(data.context()), data_(data)
 { }
 
 array::array(array & M, slice const & s0, slice const & s1) :  dtype_(M.dtype_), shape_(s0.size, s1.size, 1, 1),
@@ -174,6 +174,10 @@ array & array::operator=(std::vector<DT> const & rhs)
   isaac::copy(rhs, *this);
   return *this;
 }
+
+array & array::operator=(value_scalar const & rhs)
+{ return *this = controller<value_scalar>(rhs); }
+
 
 #define INSTANTIATE(T) template array & array::operator=<T>(std::vector<T> const &)
 
