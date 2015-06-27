@@ -14,7 +14,7 @@ enum interface_t{clBLAS, CPP};
 
 #define CHANDLE(X) (*X.data().handle().cl)()
 #define OFF(X) X.start()[0] + X.start()[1]*X.ld()
-#define LD(X) X.ld()*X.stride()[1]
+#define LD(X) X.ld()
 
 /*------ Simple Vector ---------*/
 template<class T>
