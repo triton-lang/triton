@@ -127,6 +127,7 @@ template<> struct to_numeric_type<double> { static const numeric_type value = DO
 
 enum expression_type
 {
+  INVALID_EXPRESSION_TYPE,
   SCALAR_AXPY_TYPE,
   VECTOR_AXPY_TYPE,
   MATRIX_AXPY_TYPE,
@@ -136,8 +137,7 @@ enum expression_type
   MATRIX_PRODUCT_NN_TYPE,
   MATRIX_PRODUCT_TN_TYPE,
   MATRIX_PRODUCT_NT_TYPE,
-  MATRIX_PRODUCT_TT_TYPE,
-  INVALID_EXPRESSION_TYPE
+  MATRIX_PRODUCT_TT_TYPE
 };
 
 struct slice
