@@ -2,6 +2,8 @@
 #define ISAAC_BACKEND_TEMPLATES_MPRODUCT_H
 
 #include "isaac/backend/templates/base.h"
+#include "isaac/symbolic/expression.h"
+#include "isaac/symbolic/preset.h"
 
 namespace isaac
 {
@@ -46,7 +48,7 @@ private:
   void enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K, array const & A, array const & B, array const & C,
                      value_scalar const &alpha, value_scalar const &beta, driver::Program & program, const char * suffix, execution_options_type const & options);
   array create_slice(array & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap);
-  std::vector<int_t> infos(expressions_tuple const & expressions,  lhs_rhs_element *&C, lhs_rhs_element *&A, lhs_rhs_element *&B, lhs_rhs_element *&alpha, lhs_rhs_element *&beta);
+  std::vector<int_t> infos(expressions_tuple const & expressions,  isaac::symbolic::preset::gemm::args &arguments);
 public:
   mproduct(mproduct::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(expressions_tuple const & expressions);
