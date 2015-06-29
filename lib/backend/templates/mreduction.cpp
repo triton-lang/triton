@@ -26,7 +26,7 @@ int mreduction::is_invalid_impl(driver::Device const &, expressions_tuple const 
 
 unsigned int mreduction::lmem_usage() const
 {
-  return p_.local_size_0*(p_.local_size_1+1);
+  return (p_.local_size_0+1)*p_.local_size_1;
 }
 
 std::string mreduction::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
@@ -83,7 +83,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
                          {"array2", "#pointer += #start1 + #start2*#ld; "
                                     "#ld *= #nldstride; "}}, expressions, mappings);
 
-  unsigned int local_size_0_ld = p_.local_size_0+1;
+  unsigned int local_size_0_ld = p_.local_size_0;
   std::string local_size_0_ld_str = to_string(local_size_0_ld);
 
   for (const auto & e : reductions)
@@ -321,7 +321,7 @@ mreduction::mreduction(mreduction::parameters_type const & parameters,
   base_impl<mreduction, mreduction_parameters>(parameters, binding_policy),
   reduction_type_(rtype){ }
 
-std::vector<int_t> mreduction::input_sizes(expressions_tuple const & expressions)
+std::vector<int_t> mreduction::input_sizes(expressions_tuple const & expressions) const
 {
   array_expression const & first_expression = *expressions.data().front();
   std::vector<std::size_t> idx = filter_nodes(&is_reduction, first_expression, false);

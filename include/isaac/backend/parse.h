@@ -15,6 +15,7 @@ namespace detail
   bool is_node_leaf(op_element const & op);
   bool is_scalar_reduction(array_expression::node const & node);
   bool is_vector_reduction(array_expression::node const & node);
+  bool is_assignment(op_element const & op);
   bool is_elementwise_operator(op_element const & op);
   bool is_elementwise_function(op_element const & op);
   bool is_cast(op_element const & op);

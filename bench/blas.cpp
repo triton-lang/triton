@@ -112,10 +112,17 @@ void bench(ad::numeric_type dtype, std::string operation)
 #define BENCHMARK_HOST(OP, PERF) \
   {\
   ad::tools::timer tmr;\
-  std::vector<int> cache_flusher(10000000, 0);\
-  tmr.start();\
-  OP;\
-  double t = 1e9*tmr.get();\
+  double total_time = 0;\
+  std::vector<double> times;\
+  while(total_time < 1e-2){\
+    std::vector<int> cache_flusher(10000000, 0);\
+    tmr.start();\
+    OP;\
+    double time = tmr.get();\
+    times.push_back(time);\
+    total_time += time;\
+  }\
+  double t = 1e9*median(times);\
   std::cout << " " << PERF << std::flush;\
   }
 
@@ -127,6 +134,8 @@ void bench(ad::numeric_type dtype, std::string operation)
   cudaEvent_t start, stop;\
   cudaEventCreate(&start);\
   cudaEventCreate(&stop);\
+  OP;\
+  cudaThreadSynchronize();\
   while(total_time*1e-3 < 1e-3){\
     flush = ad::zeros(1e6, 1, dtype);\
     cudaEventRecord(start,0);\
@@ -290,15 +299,15 @@ void bench(ad::numeric_type dtype, std::string operation)
   if(operation.substr(0,4)=="gemm")
   {
     std::vector<std::tuple<int_t, int_t, int_t> > MNKs;
-//    MNKs.push_back(std::make_tuple(896,896,896));
-//    MNKs.push_back(std::make_tuple(3072,3072,3072));
-//    MNKs.push_back(std::make_tuple(1024,64,768));
-//    MNKs.push_back(std::make_tuple(768,64,128));
-//    MNKs.push_back(std::make_tuple(64,64,32000));
-//    MNKs.push_back(std::make_tuple(1024,1024,32000));
+    MNKs.push_back(std::make_tuple(896,896,896));
+    MNKs.push_back(std::make_tuple(3072,3072,3072));
+    MNKs.push_back(std::make_tuple(1024,64,768));
+    MNKs.push_back(std::make_tuple(768,64,128));
+    MNKs.push_back(std::make_tuple(64,64,32000));
+    MNKs.push_back(std::make_tuple(1024,1024,32000));
 
-    for(unsigned int N = 1 ; N <10 ; ++N)
-        MNKs.push_back(std::make_tuple(128*N, 128*N, 128*N));
+//    for(unsigned int N = 1 ; N <10 ; ++N)
+//        MNKs.push_back(std::make_tuple(128*N, 128*N, 128*N));
     /*---------*/
     /*--BLAS3--*/
     /*---------*/
@@ -308,6 +317,7 @@ void bench(ad::numeric_type dtype, std::string operation)
         int_t N = std::get<1>(MNK);
         int_t K = std::get<2>(MNK);
         std::cout << M << "," << N << "," << K;
+        std::cout << std::flush;
         /* ISAAC */
         ad::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
     #if HAS_A_BLAS

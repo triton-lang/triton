@@ -25,7 +25,7 @@ private:
 public:
   maxpy(parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
   maxpy(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_ALL_UNIQUE);
-  std::vector<int_t> input_sizes(expressions_tuple const & expressions);
+  std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const &);
 };
 

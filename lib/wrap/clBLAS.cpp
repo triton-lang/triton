@@ -59,7 +59,7 @@ extern "C"
         clRetainMemObject(mx); \
         is::array y(N, TYPE_ISAAC, cl::Buffer(my), offy, incy); \
         clRetainMemObject(my); \
-        execute(is::detail::assign(y, x + alpha*y), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
+        execute(is::assign(y, x + alpha*y), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
     }
 
@@ -75,7 +75,7 @@ extern "C"
     {\
         is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
         clRetainMemObject(mx);\
-        execute(is::detail::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        execute(is::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 
@@ -94,7 +94,7 @@ extern "C"
         clRetainMemObject(mx);\
         is::array y(N, TYPE_ISAAC, cl::Buffer(my), offy, incy);\
         clRetainMemObject(my);\
-        execute(is::detail::assign(y, x), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        execute(is::assign(y, x), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 
@@ -116,7 +116,7 @@ extern "C"
         clRetainMemObject(my); \
         is::scalar s(TYPE_ISAAC, cl::Buffer(dotProduct), offDP); \
         clRetainMemObject(dotProduct); \
-        execute(is::detail::assign(s, dot(x,y)), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
+        execute(is::assign(s, dot(x,y)), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
     }
 
@@ -134,7 +134,7 @@ extern "C"
         clRetainMemObject(mx);\
         is::scalar s(TYPE_ISAAC, cl::Buffer(asum), offAsum);\
         clRetainMemObject(asum);\
-        execute(is::detail::assign(s, sum(abs(x))), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        execute(is::assign(s, sum(abs(x))), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 
@@ -170,9 +170,9 @@ extern "C"
         \
         is::driver::Context const & context = A.context();\
         if(transA==clblasTrans)\
-            execute(is::detail::assign(y, alpha*dot(A.T(), x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(is::assign(y, alpha*dot(A.T(), x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else\
-            execute(is::detail::assign(y, alpha*dot(A, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(is::assign(y, alpha*dot(A, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 
@@ -215,14 +215,14 @@ extern "C"
         is::driver::Context const & context = C.context();\
         /*Operation*/\
         if((transA==clblasTrans) && (transB==clblasTrans)){\
-            execute(is::detail::assign(C, alpha*dot(A.T(), B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(is::assign(C, alpha*dot(A.T(), B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
 }\
         else if((transA==clblasTrans) && (transB==clblasNoTrans))\
-            execute(is::detail::assign(C, alpha*dot(A.T(), B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(is::assign(C, alpha*dot(A.T(), B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else if((transA==clblasNoTrans) && (transB==clblasTrans))\
-            execute(is::detail::assign(C, alpha*dot(A, B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(is::assign(C, alpha*dot(A, B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else\
-            execute(is::detail::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(is::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 

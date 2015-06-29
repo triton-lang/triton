@@ -1,4 +1,5 @@
 #include "isaac/driver/command_queue.h"
+#include "isaac/driver/common.h"
 #include "isaac/driver/context.h"
 #include "isaac/driver/device.h"
 #include "isaac/driver/event.h"
@@ -22,9 +23,15 @@ CommandQueue::CommandQueue(Context const & context, Device const & device, cl_co
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA
-    case CUDA: cuda::check(cuStreamCreate(h_.cu.get(), 0)); break;
+    case CUDA:
+      cuda::check(cuStreamCreate(h_.cu.get(), 0));
+      break;
 #endif
-    case OPENCL: *h_.cl = cl::CommandQueue(*context.h_.cl, *device.h_.cl, properties); break;
+    case OPENCL:
+      cl_int err;
+      *h_.cl = cl::CommandQueue(*context.h_.cl, *device.h_.cl, properties, &err);
+      ocl::check(err);
+      break;
     default: throw;
   }
 }
@@ -61,7 +68,7 @@ Event CommandQueue::enqueue(Kernel const & kernel, NDRange global, driver::NDRan
       break;
 #endif
     case OPENCL:
-      h_.cl->enqueueNDRangeKernel(*kernel.h_.cl, cl::NullRange, (cl::NDRange)global, (cl::NDRange)local, NULL, event.h_.cl.get());
+      ocl::check(h_.cl->enqueueNDRangeKernel(*kernel.h_.cl, cl::NullRange, (cl::NDRange)global, (cl::NDRange)local, NULL, event.h_.cl.get()));
       break;
     default: throw;
   }

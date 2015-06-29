@@ -97,7 +97,7 @@ maxpy::maxpy(unsigned int simd, unsigned int ls1, unsigned int ls2,
     base_impl<maxpy, maxpy_parameters>(maxpy_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
 {}
 
-std::vector<int_t> maxpy::input_sizes(expressions_tuple const & expressions)
+std::vector<int_t> maxpy::input_sizes(expressions_tuple const & expressions) const
 {
   isaac::array_expression const & array_expression = *(expressions.data().front());
   std::pair<int_t, int_t> size = matrix_size(lhs_most(array_expression.tree(), array_expression.root()));

@@ -48,10 +48,10 @@ private:
   void enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K, array const & A, array const & B, array const & C,
                      value_scalar const &alpha, value_scalar const &beta, driver::Program & program, const char * suffix, execution_options_type const & options);
   array create_slice(array & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap);
-  std::vector<int_t> infos(expressions_tuple const & expressions,  isaac::symbolic::preset::gemm::args &arguments);
+  std::vector<int_t> infos(expressions_tuple const & expressions,  isaac::symbolic::preset::gemm::args &arguments) const;
 public:
   mproduct(mproduct::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);
-  std::vector<int_t> input_sizes(expressions_tuple const & expressions);
+  std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;
   void cleanup(values_holder beta, controller<expressions_tuple> const & ctr, model & fallback,
                lhs_rhs_element* eA, lhs_rhs_element* eB, lhs_rhs_element* eC, lhs_rhs_element* ebeta, array const & A, array const & B, array const & C);
   void enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const &ctr);

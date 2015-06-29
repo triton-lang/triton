@@ -2,7 +2,9 @@
 
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
 #include <boost/python/suite/indexing/map_indexing_suite.hpp>
+
 #include "isaac/model/model.h"
+#include "isaac/symbolic/execute.h"
 
 #include "common.hpp"
 #include "driver.h"
@@ -65,15 +67,25 @@ namespace detail
   std::shared_ptr<isc::driver::Context> make_context(isc::driver::Device const & dev)
   { return std::shared_ptr<isc::driver::Context>(new isc::driver::Context(dev)); }
 
-  bp::tuple flush(isc::array_expression const & expression, unsigned int queue_id, bp::list dependencies, bool tune, int label, std::string const & program_name, bool force_recompile)
+  bp::object enqueue(isc::array_expression const & expression, unsigned int queue_id, bp::list dependencies, bool tune, int label, std::string const & program_name, bool force_recompile)
   {
       std::list<isc::driver::Event> events;
       std::vector<isc::driver::Event> cdependencies = tools::to_vector<isc::driver::Event>(dependencies);
-      std::shared_ptr<isc::array> parray(new isc::array(isc::control(expression,
-                                                                    isc::execution_options_type(queue_id, &events, &cdependencies),
-                                                                    isc::dispatcher_options_type(tune, label),
-                                                                    isc::compilation_options_type(program_name, force_recompile))));
-      return bp::make_tuple(parray, tools::to_list(events.begin(), events.end()));
+
+      isc::execution_options_type execution_options(queue_id, &events, &cdependencies);
+      isc::dispatcher_options_type dispatcher_options(tune, label);
+      isc::compilation_options_type compilation_options(program_name, force_recompile);
+      isc::array_expression::container_type::value_type root = expression.tree()[expression.root()];
+      if(isc::detail::is_assignment(root.op))
+      {
+          isc::execute(isc::control(expression, execution_options, dispatcher_options, compilation_options), isaac::models(execution_options.queue(expression.context())));
+          return bp::make_tuple(bp::ptr(root.lhs.array), tools::to_list(events.begin(), events.end()));
+      }
+      else
+      {
+          std::shared_ptr<isc::array> parray(new isc::array(isc::control(expression, execution_options, dispatcher_options, compilation_options)));
+          return bp::make_tuple(parray, tools::to_list(events.begin(), events.end()));
+      }
   }
 }
 
@@ -152,7 +164,7 @@ void export_driver()
 
   bp::def("get_platforms", &detail::get_platforms);
 
-  bp::def("flush", &detail::flush, (bp::arg("expression"), bp::arg("queue_id") = 0, bp::arg("dependencies")=bp::list(), bp::arg("tune") = false, bp::arg("label")=-1, bp::arg("program_name")="", bp::arg("recompile") = false));
+  bp::def("enqueue", &detail::enqueue, (bp::arg("expression"), bp::arg("queue_id") = 0, bp::arg("dependencies")=bp::list(), bp::arg("tune") = false, bp::arg("label")=-1, bp::arg("program_name")="", bp::arg("recompile") = false));
 
   bp::class_<state_type>("state_type")
           .def_readwrite("queue_properties",&isc::driver::queues.queue_properties)

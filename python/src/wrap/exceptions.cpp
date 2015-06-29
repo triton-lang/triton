@@ -2,6 +2,7 @@
 #include <boost/python.hpp>
 
 #include "isaac/exception/operation_not_supported.h"
+#include "isaac/driver/common.h"
 
 #include "common.hpp"
 #include "exceptions.h"
@@ -82,5 +83,13 @@ void export_exceptions()
 {
     wrap::exception<isaac::operation_not_supported_exception>("OperationNotSupported", bp::init<std::string>())
         .def("__str__", &isaac::operation_not_supported_exception::what)
+        ;
+
+    wrap::exception<isaac::driver::ocl::exception::out_of_resources>("LaunchOutOfResources")
+        .def("__str__", &isaac::driver::ocl::exception::out_of_resources::what)
+        ;
+
+    wrap::exception<isaac::driver::ocl::exception::mem_object_allocation_failure>("MemObjectAllocationFailure")
+        .def("__str__", &isaac::driver::ocl::exception::mem_object_allocation_failure::what)
         ;
 }

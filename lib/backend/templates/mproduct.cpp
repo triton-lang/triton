@@ -3,6 +3,7 @@
 #include "isaac/backend/keywords.h"
 #include "isaac/model/model.h"
 #include "isaac/symbolic/preset.h"
+#include "isaac/exception/operation_not_supported.h"
 #include "isaac/tools/make_vector.hpp"
 #include "isaac/tools/to_string.hpp"
 #include "isaac/tools/miscellaneous.hpp"
@@ -42,10 +43,13 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return N*size_of(numeric_t);
   }
 
-  int mproduct::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+  int mproduct::is_invalid_impl(driver::Device const &, expressions_tuple const & expressions) const
   {
-    if (p_.A_fetching_policy!=FETCH_FROM_LOCAL && p_.B_fetching_policy!=FETCH_FROM_LOCAL&& (p_.local_fetch_0!=0 || p_.local_fetch_1!=0))
-      return TEMPLATE_GLOBAL_MEMORY_REQUIRES_ZERO_LOCAL_FETCH;
+    std::vector<int_t> MNK = input_sizes(expressions);
+    int_t M = MNK[0]; int_t N = MNK[1];
+
+    if(p_.depth > 1 && M*N*p_.depth > 1e6)
+      throw operation_not_supported_exception("This would necessitate a temporary larger than 1MB");
 
     if ((p_.mS % p_.simd_width) > 0 || (p_.nS % p_.simd_width) > 0)
       return TEMPLATE_MS_NS_MUST_BE_SIMD_WIDTH_MULTIPLE;
@@ -642,7 +646,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return array(M, s0, s1);
   }
 
-  std::vector<int_t> mproduct::infos(expressions_tuple const & expressions, symbolic::preset::gemm::args& arguments)
+  std::vector<int_t> mproduct::infos(expressions_tuple const & expressions, symbolic::preset::gemm::args& arguments) const
   {
     isaac::array_expression & array_expression = (*expressions.data().front());
     array_expression::container_type & array = array_expression.tree();
@@ -663,7 +667,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     else throw;
   }
 
-  std::vector<int_t> mproduct::input_sizes(expressions_tuple const & expressions)
+  std::vector<int_t> mproduct::input_sizes(expressions_tuple const & expressions) const
   {
     symbolic::preset::gemm::args dummy;
     return infos(expressions, dummy);

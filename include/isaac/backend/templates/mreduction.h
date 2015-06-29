@@ -34,7 +34,7 @@ private:
   unsigned int lmem_usage() const;
   std::string generate_impl(const char * suffix, expressions_tuple const &, driver::Device const & device, std::vector<mapping_type> const &) const;
 public:
-  virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions);
+  virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const &);
 private:
   reduction_type reduction_type_;

@@ -35,7 +35,7 @@ inline void reduction::reduce_1d_local_memory(kernel_generation_stream & stream,
                                    std::string const & buf_str, std::string const & buf_value_str, driver::backend_type backend) const
 {
   stream << "#pragma unroll" << std::endl;
-  stream << "for(unsigned int stride = " << size/2 << "; stride >0; stride /=2)" << std::endl;
+  stream << "for(unsigned int stride = " << size/2 << "; stride > 0; stride /=2)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
   stream << LocalBarrier(backend) << ";" << std::endl;
@@ -269,7 +269,7 @@ reduction::reduction(unsigned int simd, unsigned int ls, unsigned int ng,
     base_impl<reduction, reduction_parameters>(reduction_parameters(simd,ls,ng,fetch), bind)
 {}
 
-std::vector<int_t> reduction::input_sizes(expressions_tuple const & expressions)
+std::vector<int_t> reduction::input_sizes(expressions_tuple const & expressions) const
 {
   std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, *(expressions.data().front()), false);
   int_t N = vector_size(lhs_most(expressions.data().front()->tree(), reductions_idx[0]));

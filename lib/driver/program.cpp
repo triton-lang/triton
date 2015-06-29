@@ -123,8 +123,8 @@ Program::Program(Context const & context, std::string const & source) : backend_
 
       *h_.cl = cl::Program(*context_.h_.cl, source);
       try{
-        h_.cl->build(devices);
-      }catch(cl::Error const & e){
+        ocl::check(h_.cl->build(devices));
+      }catch(ocl::exception::build_program_failure const & e){
             for(std::vector< cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
               std::cout << "Device : " << it->getInfo<CL_DEVICE_NAME>()
                       << "Build Status = " << h_.cl->getBuildInfo<CL_PROGRAM_BUILD_STATUS>(*it) << std::endl
