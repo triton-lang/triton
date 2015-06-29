@@ -27,7 +27,7 @@ private:
 public:
   reduction(reduction::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
   reduction(unsigned int simd, unsigned int ls, unsigned int ng, fetching_policy_type fetch, binding_policy_t bind = BIND_ALL_UNIQUE);
-  std::vector<int_t> input_sizes(expressions_tuple const & expressions);
+  std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const &);
 private:
   std::vector< driver::Buffer > tmp_;

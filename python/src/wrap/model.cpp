@@ -47,7 +47,7 @@ void export_model()
     #undef __PROP
   }
 
-  #define WRAP_BASE(name) bp::class_<isaac::base_impl<isaac::name, isaac::name::parameters_type>, bp::bases<isaac::base>, boost::noncopyable>(#name "_base_impl", bp::no_init);
+  #define WRAP_BASE(name) bp::class_<isaac::base_impl<isaac::name, isaac::name::parameters_type>, bp::bases<isaac::base>, boost::noncopyable>(#name, bp::no_init);
   #define WRAP_TEMPLATE(name, basename, ...) bp::class_<isaac::name, bp::bases<isaac::base_impl<isaac::basename, isaac::basename::parameters_type> > >(#name, bp::init<__VA_ARGS__>())\
                                       .add_property("local_size_0", &isc::name::local_size_0)\
                                       .add_property("local_size_1", &isc::name::local_size_1);

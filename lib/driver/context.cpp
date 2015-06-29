@@ -29,7 +29,9 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
       break;
 #endif
     case OPENCL:
-      *h_.cl = cl::Context(std::vector<cl::Device>(1, *device_.h_.cl));
+      cl_int err;
+      *h_.cl = cl::Context(std::vector<cl::Device>(1, *device_.h_.cl), NULL, NULL, NULL, &err);
+      ocl::check(err);
       break;
     default:
       throw;

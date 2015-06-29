@@ -101,7 +101,7 @@ vaxpy::vaxpy(unsigned int simd, unsigned int ls, unsigned int ng,
 {}
 
 
-std::vector<int_t> vaxpy::input_sizes(expressions_tuple const & expressions)
+std::vector<int_t> vaxpy::input_sizes(expressions_tuple const & expressions) const
 {
   int_t size = static_cast<array_expression const *>(expressions.data().front().get())->shape()[0];
   return tools::make_vector<int_t>() << size;

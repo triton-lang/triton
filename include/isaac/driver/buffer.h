@@ -1,6 +1,8 @@
 #ifndef ISAAC_DRIVER_BUFFER_H
 #define ISAAC_DRIVER_BUFFER_H
 
+#include "isaac/types.h"
+
 #include "isaac/driver/common.h"
 #include "isaac/driver/context.h"
 #include "isaac/driver/handle.h"

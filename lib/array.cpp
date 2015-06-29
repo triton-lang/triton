@@ -64,6 +64,7 @@ array::array(array & M, slice const & s0, slice const & s1) :  dtype_(M.dtype_),
                                                           context_(M.data_.context()), data_(M.data_)
 { }
 
+
 template<typename DT>
 array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::Context context)
   : dtype_(to_numeric_type<DT>::value),
@@ -471,8 +472,7 @@ DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_MAX_TYPE, maximum, x.dtype())
 DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_MIN_TYPE, minimum, x.dtype())
 DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_POW_TYPE, pow, x.dtype())
 
-namespace detail
-{ DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ASSIGN_TYPE, assign, x.dtype()) }
+DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ASSIGN_TYPE, assign, x.dtype())
 
 
 DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_GREATER_TYPE, operator >, INT_TYPE)

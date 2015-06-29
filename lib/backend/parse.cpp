@@ -21,11 +21,16 @@ namespace detail
         || node.op.type_family==OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY;
   }
 
+  bool is_assignment(op_element const & op)
+  {
+      return op.type== OPERATOR_ASSIGN_TYPE
+              || op.type== OPERATOR_INPLACE_ADD_TYPE
+              || op.type== OPERATOR_INPLACE_SUB_TYPE;
+  }
+
   bool is_elementwise_operator(op_element const & op)
   {
-    return op.type== OPERATOR_ASSIGN_TYPE
-        || op.type== OPERATOR_INPLACE_ADD_TYPE
-        || op.type== OPERATOR_INPLACE_SUB_TYPE
+    return is_assignment(op)
         || op.type== OPERATOR_ADD_TYPE
         || op.type== OPERATOR_SUB_TYPE
         || op.type== OPERATOR_ELEMENT_PROD_TYPE

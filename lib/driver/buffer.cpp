@@ -13,14 +13,22 @@ Buffer::Buffer(cl::Buffer const & buffer) : backend_(OPENCL), context_(buffer.ge
 }
 
 Buffer::Buffer(Context const & context, std::size_t size) : backend_(context.backend_), context_(context), h_(backend_)
+
 {
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA
-    case CUDA: cuda::check(cuMemAlloc(h_.cu.get(), size)); break;
+    case CUDA:
+      cuda::check(cuMemAlloc(h_.cu.get(), size));
+      break;
 #endif
-    case OPENCL: *h_.cl = cl::Buffer(*context.h_.cl, CL_MEM_READ_WRITE, size); break;
-    default: throw;
+    case OPENCL:
+      cl_int err;
+      *h_.cl = cl::Buffer(*context.h_.cl, CL_MEM_READ_WRITE, size, NULL, &err);
+      ocl::check(err);
+      break;
+    default:
+      throw;
   }
 }
 

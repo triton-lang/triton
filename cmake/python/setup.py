@@ -49,13 +49,44 @@ def main():
         return optlist
 
     def find_library(name, cmake_glob_list):
-        compiler=new_compiler()
+        cvars = sysconfig.get_config_vars()
+        compiler = new_compiler()
         dirs = []
         for gpath in cmake_glob_list.split(';'):
             path = glob(gpath)
             if path:
                 dirs += [path[0]]
-        return compiler.find_library_file(dirs, name)
+        return compiler.find_library_file(cvars['LIBDIR'].split(';') + dirs, name)
+
+    def find_opencl():
+        cvars = sysconfig.get_config_vars()
+        is_on_android = '-mandroid' in cvars['PY_CFLAGS']
+        lib = find_library('OpenCL', '${ANDROID_CL_GLOB_HINTS}' if is_on_android else '${X86_CL_GLOB_HINTS}')
+        return {'include': '', 'lib': dirname(lib)} if lib else None
+
+    def find_in_path(name, path):
+        "Find a file in a search path"
+        #adapted fom http://code.activestate.com/recipes/52224-find-a-file-given-a-search-path/
+        for dir in path.split(os.pathsep):
+            binpath = os.path.join(dir, name)
+            if os.path.exists(binpath):
+                return os.path.abspath(binpath)
+        return None
+
+    def find_cuda():
+        if 'CUDAHOME' in os.environ:
+            home = os.environ['CUDAHOME']
+            nvcc = os.path.join(home, 'bin', 'nvcc')
+        else:
+            nvcc = find_in_path('nvcc', os.environ['PATH'])
+
+        if nvcc:
+            home = dirname(os.path.dirname(nvcc))
+            return {'include': os.path.join(home, 'include'),
+                    'lib': os.path.join(home, 'lib64')}
+        else:
+            return None
+
 
     #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
@@ -63,14 +94,27 @@ def main():
     cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT']
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
-    is_on_android = '-mandroid' in cvars['PY_CFLAGS']
-    opencl = find_library('OpenCL', '${ANDROID_CL_GLOB_HINTS}' if is_on_android else '${X86_CL_GLOB_HINTS}')
-    
-    library_dirs = [dirname(library) for library in [opencl] if library is not None]
+    #OpenCL
+    opencl_config = find_opencl()
 
-    #Includes
+    #CUDA
+    cuda_config = find_cuda()
+
+    #Libraries
+    libraries = ['OpenCL']
+    if cuda_config: libraries += ['cuda', 'nvrtc']
+
+    #Backends:
+    backend_defines = ['-DISAAC_WITH_OPENCL']
+    if cuda_config: backend_defines += ['-DISAAC_WITH_CUDA']
+
+    #Library directories
+    library_dirs = [config['lib'] for config in [opencl_config, cuda_config] if config is not None]
+
+    #Include directories
     include ='${INCLUDE_DIRECTORIES_STR}'.split() + ['external/boost/include', os.path.join(find_module("numpy")[1], "core", "include")]
-    #Sources
+
+    #Source files
     src =  '${LIBISAAC_SRC_STR}'.split() + [os.path.join('src', 'wrap', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
     boostsrc = 'external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:
@@ -84,7 +128,7 @@ def main():
         src += glob(boostsrc + "/thread/src/pthread/*.cpp")
     src= [f for f in src  if not f.endswith("once_atomic.cpp")]
 
-
+    #Setup
     setup(
                 name='isaac',
                 version='1.0',
@@ -96,12 +140,12 @@ def main():
                 ext_package="isaac",
                 ext_modules=[Extension(
                     '_isaac',src,
-                    extra_compile_args= ['-D__CL_ENABLE_EXCEPTIONS', '-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare'],
+                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare'],
 		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,
                     library_dirs=library_dirs,
-                    libraries=['OpenCL']
+                    libraries=libraries
                 )],
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},
                 classifiers=[

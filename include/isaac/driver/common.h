@@ -27,6 +27,7 @@ enum device_type
   DEVICE_TYPE_ACCELERATOR = CL_DEVICE_TYPE_ACCELERATOR
 };
 
+
 #ifdef ISAAC_WITH_CUDA
 
 namespace nvrtc
@@ -34,7 +35,7 @@ namespace nvrtc
   namespace exception
   {
 
-  #define ISAAC_CREATE_NVRTC_EXCEPTION(name, msg) class name: public std::exception { const char * what() const throw(){ return "NVRTC: Error- " msg; } }
+#define ISAAC_CREATE_NVRTC_EXCEPTION(name, msg) class name: public std::exception { public: const char * what() const throw(){ return "NVRTC: Error- " msg; } }
 
   ISAAC_CREATE_NVRTC_EXCEPTION(out_of_memory              ,"out of memory exception");
   ISAAC_CREATE_NVRTC_EXCEPTION(program_creation_failure   ,"program creation failure");
@@ -59,7 +60,7 @@ namespace cuda
 
     class base: public std::exception{};
 
-    #define ISAAC_CREATE_CUDA_EXCEPTION(name, msg) class name: public base { const char * what() const throw(){ return "CUDA: Error- " msg; } }
+#define ISAAC_CREATE_CUDA_EXCEPTION(name, msg) class name: public base { public:const char * what() const throw(){ return "CUDA: Error- " msg; } }
 
 
     ISAAC_CREATE_CUDA_EXCEPTION(invalid_value                   ,"invalid value");
@@ -128,6 +129,72 @@ void check(CUresult);
 }
 
 #endif
+
+namespace ocl
+{
+  namespace exception
+  {
+
+    class base: public std::exception{};
+
+#define ISAAC_CREATE_CL_EXCEPTION(name, msg) class name: public base { public: const char * what() const throw(){ return "OpenCL: Error- " msg; } }
+
+
+   ISAAC_CREATE_CL_EXCEPTION(device_not_found,                  "device not found");
+   ISAAC_CREATE_CL_EXCEPTION(device_not_available,              "device not available");
+   ISAAC_CREATE_CL_EXCEPTION(compiler_not_available,            "compiler not available");
+   ISAAC_CREATE_CL_EXCEPTION(mem_object_allocation_failure,     "object allocation failure");
+   ISAAC_CREATE_CL_EXCEPTION(out_of_resources,                  "launch out of resources");
+   ISAAC_CREATE_CL_EXCEPTION(out_of_host_memory,                "out of host memory");
+   ISAAC_CREATE_CL_EXCEPTION(profiling_info_not_available,      "profiling info not available");
+   ISAAC_CREATE_CL_EXCEPTION(mem_copy_overlap,                  "mem copy overlap");
+   ISAAC_CREATE_CL_EXCEPTION(image_format_mismatch,             "image format mismatch");
+   ISAAC_CREATE_CL_EXCEPTION(image_format_not_supported,        "image format not supported");
+   ISAAC_CREATE_CL_EXCEPTION(build_program_failure,             "build program failure");
+   ISAAC_CREATE_CL_EXCEPTION(map_failure,                       "map failure");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_value,                     "invalid value");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_device_type,               "invalid device type");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_platform,                  "invalid platform");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_device,                    "invalid device");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_context,                   "invalid context");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_queue_properties,          "invalid queue properties");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_command_queue,             "invalid command queue");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_host_ptr,                  "invalid host pointer");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_mem_object,                "invalid mem object");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_image_format_descriptor,   "invalid image format descriptor");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_image_size,                "invalid image size");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_sampler,                   "invalid sampler");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_binary,                    "invalid binary");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_build_options,             "invalid build options");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_program,                   "invalid program");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_program_executable,        "invalid program executable");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_kernel_name,               "invalid kernel name");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_kernel_definition,         "invalid kernel definition");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_kernel,                    "invalid kernel");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_arg_index,                 "invalid arg index");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_arg_value,                 "invalid arg value");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_arg_size,                  "invalid arg size");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_kernel_args,               "invalid kernel args");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_work_dimension,            "invalid work dimension");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_work_group_size,           "invalid work group size");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_work_item_size,            "invalid work item size");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_global_offset,             "invalid global offset");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_event_wait_list,           "invalid event wait list");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_event,                     "invalid event");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_operation,                 "invalid operation");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_gl_object,                 "invalid GL object");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_buffer_size,               "invalid buffer size");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_mip_level,                 "invalid MIP level");
+   ISAAC_CREATE_CL_EXCEPTION(invalid_global_work_size,          "invalid global work size");
+#ifdef CL_INVALID_PROPERTY
+   ISAAC_CREATE_CL_EXCEPTION(invalid_property,                  "invalid property");
+#endif
+  }
+
+void check(cl_int err);
+
+}
+
 
 }
 }

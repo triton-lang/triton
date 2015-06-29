@@ -175,7 +175,7 @@ public:
   base(binding_policy_t binding_policy);
   virtual unsigned int lmem_usage(expressions_tuple const &) const;
   virtual unsigned int registers_usage(expressions_tuple const &) const;
-  virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions) = 0;
+  virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions) const = 0;
   virtual ~base();
   std::string generate(const char * suffix, expressions_tuple const & expressions, driver::Device const & device);
   virtual int is_invalid(expressions_tuple const & expressions, driver::Device const & device) const = 0;
