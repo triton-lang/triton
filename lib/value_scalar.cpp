@@ -48,7 +48,7 @@ INSTANTIATE(double)
 value_scalar::value_scalar(numeric_type dtype) : dtype_(dtype) {}
 value_scalar::value_scalar(scalar const & s) : dtype_(s.dtype()) { s.inject(values_); }
 value_scalar::value_scalar(array_expression const &expr) : dtype_(expr.dtype()) { scalar(expr).inject(values_); }
-
+value_scalar::value_scalar(values_holder values, numeric_type dtype) : values_(values), dtype_(dtype) {}
 values_holder value_scalar::values() const
 { return values_; }
 
