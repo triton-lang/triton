@@ -171,7 +171,7 @@ array& array::operator=(controller<TYPE> const & c)
 template<class DT>
 array & array::operator=(std::vector<DT> const & rhs)
 {
-  assert(nshape()==1);
+  assert(nshape()<=1);
   isaac::copy(rhs, *this);
   return *this;
 }
@@ -246,20 +246,20 @@ array_expression array::T() const
 //---------------------------------------
 scalar array::operator [](int_t idx)
 {
-  assert(nshape()==1);
+  assert(nshape()<=1);
   return scalar(dtype_, data_, idx);
 }
 
 const scalar array::operator [](int_t idx) const
 {
-  assert(nshape()==1);
+  assert(nshape()<=1);
   return scalar(dtype_, data_, idx);
 }
 
 
 array array::operator[](slice const & e1)
 {
-  assert(nshape()==1);
+  assert(nshape()<=1);
   return array(*this, e1);
 }
 

@@ -717,7 +717,10 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
 
     value_scalar beta(0, dtype);
+    if(args.beta) beta = value_scalar(args.beta->vscalar, dtype);
+
     value_scalar alpha(1, dtype);
+    if(args.alpha) alpha = value_scalar(args.alpha->vscalar, dtype);
 
 
     execution_options_type const & options = ctr.execution_options();

@@ -43,7 +43,7 @@ public:
   ISAAC_INSTANTIATE(float)
   ISAAC_INSTANTIATE(double)
 #undef ISAAC_INSTANTIATE
-  value_scalar(values_holder value, numeric_type dtype);
+  value_scalar(values_holder values, numeric_type dtype);
   explicit value_scalar(scalar const &);
   explicit value_scalar(array_expression const &);
   explicit value_scalar(numeric_type dtype);
