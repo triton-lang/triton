@@ -82,6 +82,13 @@ std::string maxpy::generate_impl(const char * suffix, expressions_tuple const & 
   stream.dec_tab();
   stream << "}" << std::endl;
 
+  stream << "if(" << GlobalIdx0(backend) << "==0 &&" << GlobalIdx1(backend) << "==0)" << std::endl;
+  stream << "{" << std::endl;
+  stream.inc_tab();
+  process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#pointer[#start] = #namereg;"), expressions, mappings);
+  stream.dec_tab();
+  stream << "}" << std::endl;
+
   stream.dec_tab();
   stream << "}" << std::endl;
 

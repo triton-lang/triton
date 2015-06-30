@@ -20,7 +20,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   cl_command_queue clqueue = (*queue.handle().cl)();
   int_t N = cz.size();
 
-  T aa = 3.12, bb=3.5;
+  T aa = 4.378, bb=3.5;
   isaac::value_scalar a(aa), b(bb);
   isaac::scalar da(a, ctx), db(b, ctx);
 
@@ -32,6 +32,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   for(int_t i = 0 ; i < N ; ++i)\
     CPU_LOOP;\
   GPU_EXPR;\
+  queue.synchronize();\
   isaac::copy(z, buffer.data());\
   CONVERT;\
   if(diff(cz, buffer, epsilon))\
@@ -44,16 +45,18 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   }
 
 #define PREFIX "[C]"
-  RUN_TEST_VECTOR_AXPY("AXPY", cy[i] = cx[i] + a*cy[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
-                                                                                             (*y.data().handle().cl)(), y.start()[0], y.stride()[0],
+  RUN_TEST_VECTOR_AXPY("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
+                                                                                             (*z.data().handle().cl)(), z.start()[0], z.stride()[0],
                                                                                              1, &clqueue, 0, NULL, NULL));
 
-  RUN_TEST_VECTOR_AXPY("COPY", cy[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
-                                                                                 (*y.data().handle().cl)(), y.start()[0], y.stride()[0],
+  RUN_TEST_VECTOR_AXPY("COPY", cz[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
+                                                                                 (*z.data().handle().cl)(), z.start()[0], z.stride()[0],
                                                                                  1, &clqueue, 0, NULL, NULL));
 
-  RUN_TEST_VECTOR_AXPY("SCAL", cx[i] = a*cx[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
+  RUN_TEST_VECTOR_AXPY("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, (*z.data().handle().cl)(), z.start()[0], z.stride()[0],
                                                                                      1, &clqueue, 0, NULL, NULL));
+
+
 #undef PREFIX
 #define PREFIX "[C++]"
   RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, ctx))
@@ -136,6 +139,7 @@ void test_impl(T epsilon, ad::driver::Context const & ctx)
 
 int main()
 {
+  clblasSetup();
   auto data = ad::driver::queues.contexts();
   for(const auto & elem : data)
   {
@@ -148,5 +152,6 @@ int main()
     test_impl<double>(1e-9, elem.first);
     std::cout << "---" << std::endl;
   }
+  clblasTeardown();
   return EXIT_SUCCESS;
 }

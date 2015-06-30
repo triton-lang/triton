@@ -17,6 +17,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
   int_t N = cx.size();
   ad::driver::CommandQueue queue = ad::driver::queues[ctx][0];
   cl_command_queue clqueue = (*queue.handle().cl)();
+  ad::array scratch(N, x.dtype());
 
   unsigned int failure_count = 0;
 
@@ -33,6 +34,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
     CPU_REDUCTION;\
   cs= ASSIGNMENT ;\
   GPU_REDUCTION;\
+  queue.synchronize();\
   tmp = ds;\
   if((std::abs(cs - tmp)/std::max(cs, tmp)) > epsilon)\
   {\
@@ -45,10 +47,9 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
 #define PREFIX "[C]"
   RUN_TEST("DOT", cs+=cx[i]*cy[i], 0, cs, BLAS<T>::F(clblasSdot, clblasDdot)(N, (*ds.data().handle().cl)(), 0, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
                                                                                  (*y.data().handle().cl)(), y.start()[0], y.stride()[0],
-                                                                                 0, 1, &clqueue, 0, NULL, NULL));
-
+                                                                                 CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
   RUN_TEST("ASUM", cs+=std::fabs(cx[i]), 0, cs, BLAS<T>::F(clblasSasum, clblasDasum)(N, (*ds.data().handle().cl)(), 0, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
-                                                                                             0, 1, &clqueue, 0, NULL, NULL));
+                                                                                             CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
 #undef PREFIX
 #define PREFIX "[C++]"
 
@@ -70,11 +71,11 @@ void test_impl(T epsilon, ad::driver::Context const & ctx)
 {
   using isaac::_;
 
-  int_t N = 24378;
-  int_t SUBN = 531;
+  int_t N =2 ;
+  int_t SUBN = 2;
 
-  INIT_VECTOR(N, SUBN, 2, 4, cx, x, ctx);
-  INIT_VECTOR(N, SUBN, 5, 8, cy, y, ctx);
+  INIT_VECTOR(N, SUBN, 0, 1, cx, x, ctx);
+  INIT_VECTOR(N, SUBN, 0, 1, cy, y, ctx);
 
 #define TEST_OPERATIONS(TYPE)\
   test_reduction(epsilon, cx_ ## TYPE, cy_ ## TYPE,\
@@ -88,6 +89,7 @@ void test_impl(T epsilon, ad::driver::Context const & ctx)
 
 int main()
 {
+  clblasSetup();
   auto data = ad::driver::queues.contexts();
   for(const auto & elem : data)
   {
@@ -100,5 +102,6 @@ int main()
     test_impl<double>(1e-9, elem.first);
     std::cout << "---" << std::endl;
   }
+  clblasTeardown();
   return EXIT_SUCCESS;
 }

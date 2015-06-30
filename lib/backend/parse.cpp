@@ -47,7 +47,8 @@ namespace detail
 
   bool bypass(op_element const & op)
   {
-        return op.type == OPERATOR_RESHAPE_TYPE;
+        return op.type == OPERATOR_RESHAPE_TYPE
+             ||op.type == OPERATOR_TRANS_TYPE;
   }
 
   bool is_cast(op_element const & op)
@@ -68,8 +69,7 @@ namespace detail
 
   bool is_node_leaf(op_element const & op)
   {
-    return op.type==OPERATOR_TRANS_TYPE
-        || op.type==OPERATOR_MATRIX_DIAG_TYPE
+    return op.type==OPERATOR_MATRIX_DIAG_TYPE
         || op.type==OPERATOR_VDIAG_TYPE
         || op.type==OPERATOR_REPEAT_TYPE
         || op.type==OPERATOR_MATRIX_ROW_TYPE
@@ -212,8 +212,6 @@ const char * evaluate(operation_node_type type)
   case OPERATOR_ELEMENT_FMIN_TYPE : return "fmin";
   case OPERATOR_ELEMENT_MAX_TYPE : return "max";
   case OPERATOR_ELEMENT_MIN_TYPE : return "min";
-    //Unary
-  case OPERATOR_TRANS_TYPE : return "trans";
 
     //Binary
   case OPERATOR_MATRIX_PRODUCT_NN_TYPE : return "prodNN";

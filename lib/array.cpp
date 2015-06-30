@@ -482,13 +482,17 @@ DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_LEQ_TYPE, operator <=, INT_TYPE)
 DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_EQ_TYPE, operator ==, INT_TYPE)
 DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_NEQ_TYPE, operator !=, INT_TYPE)
 
+#define DEFINE_OUTER(LTYPE, RTYPE) \
+array_expression outer(LTYPE const & x, RTYPE const & y)\
+{\
+    assert(x.nshape()==1 && y.nshape()==1);\
+    return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_OUTER_PROD_TYPE), x.context(), x.dtype(), size4(max(x.shape()), max(y.shape())) );\
+}\
 
-array_expression outer(array const & x, array const & y)
-{
-  assert(x.nshape()==1 && y.nshape()==1);
-  return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_OUTER_PROD_TYPE), x.context(), x.dtype(), size4(max(x.shape()), max(y.shape())) );
-}
-
+DEFINE_OUTER(array, array)
+DEFINE_OUTER(array_expression, array)
+DEFINE_OUTER(array, array_expression)
+DEFINE_OUTER(array_expression, array_expression)
 
 #undef DEFINE_ELEMENT_BINARY_OPERATOR
 //---------------------------------------
@@ -705,6 +709,10 @@ namespace detail
     int_t N = A.shape()[1];
     array_expression::node & A_root = const_cast<array_expression::node &>(A.tree()[A.root()]);
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
+    while(A_root.lhs.type_family==COMPOSITE_OPERATOR_FAMILY){
+        A_root = A.tree()[A_root.lhs.node_index];
+        A_trans ^= A_root.op.type==OPERATOR_TRANS_TYPE;
+    }
     if(A_trans)
     {
       array_expression tmp(A, repmat(x, 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), A.context(), A.dtype(), size4(N, M));
@@ -716,12 +724,6 @@ namespace detail
       return sum(A*repmat(reshape(x, 1, N), M, 1), 1);
 
   }
-
-  array_expression matvecprod(array_expression const & A, array_expression const & x)
-  {
-    return matvecprod(A, array(x));
-  }
-
 
 }
 
@@ -735,22 +737,23 @@ array_expression reshape(array_expression const & x, int_t shape0, int_t shape1)
 #define DEFINE_DOT(LTYPE, RTYPE) \
 array_expression dot(LTYPE const & x, RTYPE const & y)\
 {\
-  if(x.nshape()==1 && y.nshape()==1)\
-  {\
-    return sum(x*y);\
+  if(x.nshape()<1 || y.nshape()<1){\
+    return x*y;\
+  }\
+  if(x.nshape()==1 && y.nshape()==1){\
+    if(x.shape()[1]==1 && y.shape()[0]==1)\
+        return outer(x, y);\
+    else if(x.shape()[0]==1 && y.shape()[1]==1)\
+        return sum(x*trans(y));\
+    else\
+        return sum(x*y);\
   }\
   else if(x.nshape()==2 && y.nshape()==1)\
-  {\
     return detail::matvecprod(x, y);\
-  }\
   else if(x.nshape()==1 && y.nshape()==2)\
-  {\
-    return detail::matvecprod(trans(y), x);\
-  }\
+    return trans(detail::matvecprod(trans(y), trans(x)));\
   else /*if(x.nshape()==2 && y.nshape()==2)*/\
-  {\
     return detail::matmatprod(x, y);\
-  }\
 }
 
 DEFINE_DOT(array, array)

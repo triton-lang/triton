@@ -33,6 +33,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
 {
   using tools::to_string;
 
+
   std::vector<mapped_mreduction*> reductions;
   expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::const_iterator mit;
@@ -114,6 +115,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   {
     std::string data_type = append_width("#scalartype",simd_width);
 
+
     for (const auto & e : reductions)
     {
       std::map<std::string, std::string> accessors;
@@ -129,7 +131,6 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
       }
       e->process_recursive(stream, PARENT_NODE_TYPE, accessors);
     }
-
 
     //Update accumulators
     std::vector<std::string> str(simd_width);
@@ -238,6 +239,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream << _size_t << " lid1 = " << LocalIdx1(backend) <<";" << std::endl;
   stream << _size_t << " gid1 = " << GlobalIdx1(backend) <<";" << std::endl;
   stream << _size_t << " gsize1 = " << GlobalSize1(backend) <<";" << std::endl;
+
 
 
   stream << _size_t << " upper_bound_1 = ( M +" << p_.local_size_1 - 1 << ")/" << p_.local_size_1 << "*" << p_.local_size_1 << ";" << std::endl;
