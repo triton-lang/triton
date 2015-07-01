@@ -18,7 +18,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   simple_vector<T> bufy(M);
   simple_vector<T> bufx(N);
 
-  T alpha = 4.2, beta = 1.8;
+  T alpha = 4.2, beta = 5.6;
 
   ad::driver::CommandQueue queue = ad::driver::queues[y.context()][0];
 
@@ -62,7 +62,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 
       TEST_OPERATION("GEMV(COL, NoTrans)", M, N, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
                      BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasNoTrans, M, N, alpha, CHANDLE(A), OFF(A), LD(A),
-                                CHANDLE(x), x.start()[0], x.stride()[0], 0, CHANDLE(y), y.start()[0], y.stride()[0],
+                                CHANDLE(x), x.start()[0], x.stride()[0], beta, CHANDLE(y), y.start()[0], y.stride()[0],
                                 1, &clqueue, 0, NULL, NULL), y, bufy, cy);
 
       TEST_OPERATION("GEMV(COL, Trans)", N, M, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
