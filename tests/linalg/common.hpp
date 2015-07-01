@@ -140,7 +140,7 @@ void init_rand(simple_matrix_base<T> & A)
 {
   for (int_t i = 0; i < A.size1(); ++i)
     for(int_t j = 0 ; j < A.size2() ; ++j)
-      A(i,j) = i+j;
+      A(i,j) = (T)rand()/RAND_MAX;
 }
 
 template<typename T>
@@ -158,11 +158,13 @@ template<class VecType1, class VecType2>
 bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type epsilon)
 {
   typedef typename VecType1::value_type T;
+  T max = 0;
   for(int_t i = 0 ; i < (int_t)x.size() ; ++i)
   {
     T delta = std::abs(x[i] - y[i]);
     if(std::max(x[i], y[i])!=0)
       delta/=std::abs(std::max(x[i], y[i]));
+    max = std::max(max, delta);
     if(delta > epsilon)
     {
       return true;
