@@ -103,8 +103,9 @@ vaxpy::vaxpy(unsigned int simd, unsigned int ls, unsigned int ng,
 
 std::vector<int_t> vaxpy::input_sizes(expressions_tuple const & expressions) const
 {
+  size4 shape = static_cast<array_expression const *>(expressions.data().front().get())->shape();
   int_t size = static_cast<array_expression const *>(expressions.data().front().get())->shape()[0];
-  return tools::make_vector<int_t>() << size;
+  return tools::make_vector<int_t>() << std::max(shape[0], shape[1]);
 }
 
 void vaxpy::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
