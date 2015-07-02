@@ -380,10 +380,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
 
     stream << "//Inner loop" << std::endl;
-    if (check_bounds_)
-      stream << "for(unsigned int k = 0; k < " << p_.kL << " && (block_k + k < chunk_size); k+=" << p_.kS << "){" << std::endl;
-    else
-      stream << "for(unsigned int k = 0; k < " << p_.kL << "; k+=" << p_.kS << "){" << std::endl;
+    stream << "for(unsigned int k = 0; k < " << p_.kL << " && (block_k + k < chunk_size); k+=" << p_.kS << "){" << std::endl;
     stream.inc_tab();
 
     stream << "//Fetch A to registers" << std::endl;
@@ -504,7 +501,9 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     stream << "//Write back C" << std::endl;
     unsigned int ministartstride0 = p_.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p_.mS:p_.simd_width;
     unsigned int ministartstride1 = p_.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p_.nS:p_.simd_width;
-    stream << "C += (gidx*" << p_.mL << " + idx*" << ministartstride0 << ")" << CSTRIDE1 << "  + (gidy*" << p_.nL << " + idy*" << ministartstride1 << ")*Cld + gidz*Cld*N;" << std::endl;
+    stream << "size_t offx = (gidx*" << p_.mL << " + idx*" << ministartstride0 << ")" << ";" << std::endl;
+    stream << "size_t offy = (gidy*" << p_.nL << " + idy*" << ministartstride1 << ");" << std::endl;
+    stream << "C += " << "offx" << CSTRIDE1 << " + offy*Cld + gidz*Cld*N;" << std::endl;
     for(int_t m=0; m < p_.mS; ++m)
     for(int_t n=0; n < p_.nS; ++n)
     {
@@ -513,8 +512,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
       string Ci = to_string((m/p_.simd_width)*(ministride0*p_.simd_width) + m%p_.simd_width);
       string Cj = to_string((n/p_.simd_width)*(ministride1*p_.simd_width) + n%p_.simd_width);
-      if (check_bounds_)
-        stream << "if (in_bounds_m[" << m << "] && in_bounds_n[" << n << "]) " ;
+      stream << "if((offx + " << Ci  << ")<M && (" << Cj << " + offy)<N)"<< std::flush;
       stream << "C[" << Ci << CSTRIDE1 << " + " << Cj << "*Cld] = rC[" << m << "][" << n << "]*alpha + ((beta==0)?0:beta*C[" << Ci << " + " << Cj << "*Cld]);" << std::endl;
     }
     stream.dec_tab();
@@ -589,7 +587,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
 
     using tools::align;
-    driver::NDRange global = (strcmp(suffix,"fallback")==0)?driver::NDRange(align(align(M,p_.mS)/p_.mS, p_.local_size_0), align(align(N,p_.nS)/p_.nS, p_.local_size_1), p_.depth):driver::NDRange(M/p_.mS, N/p_.nS, p_.depth);
+    driver::NDRange global(align(align(M,p_.mS)/p_.mS, p_.local_size_0), align(align(N,p_.nS)/p_.nS, p_.local_size_1), p_.depth);
 
     unsigned int current_arg = 0;
     set_arguments_functor helper(binder, current_arg, gemm);
@@ -612,20 +610,18 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     gemm.setSizeArg(current_arg++, B.start()[0] + B.start()[1]*B.ld()/p_.simd_width);
     gemm.setSizeArg(current_arg++, B.stride()[0]);
 
-//    std::cout << "before " << *out << std::endl;
 
     helper.set_arguments(beta.dtype(), beta.values());
     options.enqueue(program.context(), gemm, global, local);
 
     options.queue(program.context()).synchronize();
-//    std::cout << "after " << *out << std::endl;
 
     if(p_.depth > 1)
     {
       unsigned int current_arg = 0;
       driver::Kernel reduce(program, reduce_name);
       driver::NDRange local(p_.local_size_0, p_.local_size_1);
-      driver::NDRange global = driver::NDRange(M, N);
+      driver::NDRange global(align(M, p_.local_size_0), align(N, p_.local_size_1));
       set_arguments_functor helper(binder, current_arg, reduce);
       reduce.setSizeArg(current_arg++, M);
       reduce.setSizeArg(current_arg++, N);
@@ -725,7 +721,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
     execution_options_type const & options = ctr.execution_options();
 
-    if (M < p_.mL || N < p_.nL || K < p_.kL || ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
+    if (ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
         || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0 || pA->ld()%p_.simd_width > 0 || pB->ld()%p_.simd_width > 0)))
     {
       fallback.enqueue_block(queue, M, N, K, create_slice(*pA, 0, M, 0, K, swap_A), create_slice(*pB, 0, K, 0, N,  swap_B),
@@ -733,22 +729,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       return;
     }
 
-    int_t lM = M / p_.mL * p_.mL;
-    int_t lN = N / p_.nL * p_.nL;
-    int_t lK = K / (p_.kL*p_.depth) * p_.kL*p_.depth;
-    value_scalar _1(1, dtype);
-
-    enqueue_block(queue,  lM, lN, lK, create_slice(*pA, 0, lM, 0, lK, swap_A), create_slice(*pB, 0, lK, 0, lN, swap_B), create_slice(*pC, 0, lM, 0, lN, false), alpha, beta, program, suffix, options);
-    fallback.enqueue_block(queue,  lM, lN, K - lK, create_slice(*pA, 0, lM, lK, K, swap_A), create_slice(*pB, lK, K, 0, lN, swap_B), create_slice(*pC, 0, lM, 0, lN, false), alpha, _1, program, "fallback", options);
-
-    fallback.enqueue_block(queue,  lM, N - lN, lK, create_slice(*pA, 0, lM, 0, lK, swap_A), create_slice(*pB, 0, lK, lN, N, swap_B), create_slice(*pC, 0, lM, lN, N, false), alpha, beta, program, "fallback", options);
-    fallback.enqueue_block(queue,  lM, N - lN, K - lK, create_slice(*pA, 0, lM, lK, K, swap_A), create_slice(*pB, lK, K, lN, N, swap_B), create_slice(*pC, 0, lM, lN, N, false), alpha, _1, program, "fallback", options);
-
-    fallback.enqueue_block(queue,  M - lM, lN, lK, create_slice(*pA, lM, M, 0, lK, swap_A), create_slice(*pB, 0, lK, 0, lN, swap_B), create_slice(*pC, lM, M, 0, lN, false), alpha, beta, program, "fallback", options);
-    fallback.enqueue_block(queue,  M - lM, lN, K - lK, create_slice(*pA, lM, M, lK, K, swap_A), create_slice(*pB, lK, K, 0, lN, swap_B), create_slice(*pC, lM, M, 0, lN, false), alpha, _1, program, "fallback", options);
-
-    fallback.enqueue_block(queue,  M - lM, N - lN, lK, create_slice(*pA, lM, M, 0, lK, swap_A), create_slice(*pB, 0, lK, lN, N, swap_B), create_slice(*pC, lM, M, lN, N, false), alpha, beta, program, "fallback", options);
-    fallback.enqueue_block(queue,  M - lM, N - lN, K - lK, create_slice(*pA, lM, M, lK, K, swap_A), create_slice(*pB, lK, K, lN, N, swap_B), create_slice(*pC, lM, M, lN, N, false), alpha, _1, program, "fallback", options);
+    enqueue_block(queue,  M, N, K, create_slice(*pA, 0, M, 0, K, swap_A), create_slice(*pB, 0, K, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, suffix, options);
   }
 
   //

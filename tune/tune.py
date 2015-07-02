@@ -22,12 +22,19 @@ def tune(device, operation, json_path):
     context = isc.context(device)
     
     #List of size tuples to use
-    sizes = list({isc.vaxpy: [(x,) for x in tools.expspace(1e3, 1e7, 4)],
-                  isc.mreduction_cols: product(pow2range(4,17), pow2range(4,17)),
-                  isc.mproduct_nt: product(pow2range(4, 17), pow2range(4, 17), pow2range(4, 17))}[operation])
-    sizes = unique(sizes)
+    sizes = {}
+    sizes[isc.vaxpy] = [(x,) for x in tools.expspace(1e3, 1e7, 4)]
+    sizes[isc.mreduction_rows] = product(pow2range(4,17), pow2range(4,17))
+    sizes[isc.mreduction_cols] = isc.mreduction_rows
+    sizes[isc.mproduct_nn]     = product(pow2range(5, 10), pow2range(5, 10), pow2range(5, 10))
+    sizes[isc.mproduct_nn]	   = [(169, 128, 1728)]    
+    sizes[isc.mproduct_tn]     = sizes[isc.mproduct_nn]
+    sizes[isc.mproduct_nt]     = sizes[isc.mproduct_nn]
+    sizes[isc.mproduct_tt]     = sizes[isc.mproduct_nn]
+    sizes = unique(list(sizes[operation]))
     sizes = [x for x in sizes if 1e-4 <= tools.memory_footprint(operation, x) <= 1e-1]
-    
+
+
     #Training data
     performance = tools.metric_of(operation)
     profiles = []
@@ -72,14 +79,11 @@ def tune(device, operation, json_path):
             y.append(0 if isinf(perf) else perf)
         X.append(x)
         Y.append(y)
-        
-    #Build model
-    clf, nrmse = model.train(X, Y, profiles)
-    print 'The optimal classifer has NRMSE = %.2g (%d estimators and the max depth is %d'%(nrmse, clf.n_estimators, clf.max_depth)
+
     
     #Export to JSON
     if os.path.isfile(json_path):
-        json_data = json.load(open(args.out, 'r'))
+        json_data = json.load(open(json_path, 'r'))
     else:
         json_data = {}
         json_data["version"] = "1.0"
@@ -89,6 +93,7 @@ def tune(device, operation, json_path):
     json_data[operation_name]['float32'] = {}
     D = json_data[operation_name]['float32']
     if len(profiles) > 1:
+        clf, nrmse = model.train(X, Y, profiles)
         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
                             'children_right': e.tree_.children_right.tolist(),
                             'threshold': e.tree_.threshold.astype('float64').tolist(),
@@ -113,14 +118,14 @@ def parse_arguments():
     print("Devices available:")
     print("----------------")
     for (i, d) in enumerate(devices):
-        selected = '[' + ('x' if device==d else '') + ']'
+        selected = '[' + ('x' if device==d else ' ') + ']'
         print selected , '-',  isc.device_type_to_string(d.type), '-', d.name, 'on', d.platform.name
     print("----------------")
     
     
     operation = {'vaxpy': isc.vaxpy, 'dot': isc.reduction,
                  'maxpy': isc.maxpy, 'gemv_n': isc.mreduction_rows, 'gemv_t': isc.mreduction_cols,
-                 'gemm_nn': isc.mproduct_nn, 'gemv_tn': isc.mproduct_tn, 'gemm_nt': isc.mproduct_nt, 'gemm_tt':isc.mproduct_tt}[args.operation]
+                 'gemm_nn': isc.mproduct_nn, 'gemm_tn': isc.mproduct_tn, 'gemm_nt': isc.mproduct_nt, 'gemm_tt':isc.mproduct_tt}[args.operation]
     if not args.json:
         json = tools.sanitize(device.name) + '.json'
     return (device, operation, json)
