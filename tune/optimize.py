@@ -16,8 +16,8 @@ import tools
 
 fetch_types = [isc.fetching_policy_type.FETCH_FROM_LOCAL,
                isc.fetching_policy_type.FETCH_FROM_LOCAL,
-               isc.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
-               isc.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED]
+               isc.fetching_policy_type.FETCH_FROM_LOCAL,
+               isc.fetching_policy_type.FETCH_FROM_LOCAL]
 
 def exhaustive(template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
