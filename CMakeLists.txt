@@ -14,7 +14,7 @@ if(CUDA_FOUND)
    include_directories(${CUDA_INCLUDE_DIRS})
 endif()
 
-add_definitions(-Wno-sign-compare -D__CL_ENABLE_EXCEPTIONS ${BACKEND_DEFINES} -Wall -Wextra -pedantic -std=c++11)
+add_definitions(-Wno-sign-compare ${BACKEND_DEFINES} -Wall -Wextra -pedantic -std=c++11)
 add_executable(bin2cpp ${CMAKE_MODULE_PATH}/helpers/bin2cpp.cpp)
 
 file(GLOB_RECURSE LIBISAAC_SRC lib/*.cpp)
