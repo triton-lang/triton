@@ -202,28 +202,30 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
     unsigned int npA = p_.mL/(A_trans_=='N'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
     unsigned int npB = p_.nL/(B_trans_=='T'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
-    if (A_trans_=='N')
-        stream << "__global " << vdtype << "* Ai[" << npA << "] = {A + (gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald};" << std::endl;
-    else
-        stream << "__global " << vdtype << "* Ai[" << npA << "] = {A + idxT" << ASTRIDE1 << " + gidx*" << p_.mL/p_.simd_width << "*Ald + offz};" << std::endl;
 
-    if(B_trans_=='T')
-    stream << "__global " << vdtype << "* Bi[" << npB << "] = {B};" << std::endl;
+    stream << "__global " << vdtype << "* Ai[" << npA << "];" << std::endl;
+    for(unsigned int i = 0 ; i < npA ; ++i)
+        if (A_trans_=='N')
+            stream << "Ai[" << i << "] = A + (gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald, A + (gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
+        else
+            stream << "Ai[" << i << "] = A + idxT" << ASTRIDE1 << " + gidx*" << p_.mL/p_.simd_width << "*Ald + offz;" << std::endl;
+
+
+    stream << "__global " << vdtype << "* Bi[" << npB << "];" << std::endl;
+    for(unsigned int i = 0 ; i < npB ; ++i)
+        if(B_trans_=='T')
+            stream << "Bi[" << i << "] = B + (gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld, B + (gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
+        else
+            stream << "Bi[" << i << "] = B + idxT" << BSTRIDE1 << " + gidy*" << p_.nL/p_.simd_width << "*Bld + offz;" << std::endl;
 
     switch (p_.A_fetching_policy)
     {
     case FETCH_FROM_LOCAL:
       for(unsigned int i = 0 ; i < npA ; i++ )
           if (A_trans_=='N')
-          {
-            stream << "Ai[" << i << "] += (gidx*" << p_.mL/p_.simd_width << ") " << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
-            stream << "if(gidx*" << p_.mL << " + idxT + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < M) Ai[" << i << "] += (idxT + " << i*p_.local_fetch_0 << ")" << ASTRIDE1 << ";" << std::endl;
-          }
+            stream << "if(gidx*" << p_.mL << " + idxT*" << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < M) Ai[" << i << "] += (idxT + " << i*p_.local_fetch_0 << ")" << ASTRIDE1 << ";" << std::endl;
           else
-          {
-            stream << "Ai[" << i << "] += idxT" << ASTRIDE1 << " + gidx*" << p_.mL/p_.simd_width << "*Ald + offz;" << std::endl;
             stream << "if(gidx*" << p_.mL << " + idyT + " << i << "*" << p_.local_fetch_1 << " < M) Ai[" << i << "] += (idyT + " << i*p_.local_fetch_1 << ")*Ald;" << std::endl;
-          }
       break;
 
     case FETCH_FROM_GLOBAL_CONTIGUOUS:
@@ -248,16 +250,9 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     case FETCH_FROM_LOCAL:
       for(unsigned int i = 0 ; i < npB ; i++ )
           if (B_trans_=='T')
-          {
-            stream << "Bi[" << i << "] += (gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
-            stream << "if(gidy*" << p_.nL << " + idxT + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < N) Bi[" << i << "] += (idxT + " << i*p_.local_fetch_0 << ")" << BSTRIDE1 << ";" << std::endl;
-          }
+            stream << "if(gidy*" << p_.nL << " + idxT* " << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < N) Bi[" << i << "] += (idxT + " << i*p_.local_fetch_0 << ")" << BSTRIDE1 << ";" << std::endl;
           else
-          {
-            stream << "Bi[" << i << "] += idxT" << BSTRIDE1 << " + gidy*" << p_.nL/p_.simd_width << "*Bld + offz;" << std::endl;
             stream << "if(gidy*" << p_.nL << " + idyT + " << i << "*" << p_.local_fetch_1 << " < N) Bi[" << i << "] += (idyT + " << i*p_.local_fetch_1 << ")*Bld;" << std::endl;
-
-          }
       break;
 
     case FETCH_FROM_GLOBAL_CONTIGUOUS:
@@ -309,7 +304,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           for(int_t k = 0; k < p_.mL; k += p_.local_fetch_1)
             for(int_t m = 0; m < p_.kL; m += p_.local_fetch_0*p_.simd_width)
             {
-              string to_load = "Ai[" + to_string(k) + "][" + to_string(m/p_.simd_width) + ASTRIDE1 + "]";
+              string to_load = "Ai[" + to_string(k/p_.local_fetch_1) + "][" + to_string(m/p_.simd_width) + ASTRIDE1 + "]";
               stream << VSTORE(to_load, "0", "lAstore + lAstart + " + to_string(m*lAld+k)) << ";" << std::endl;
             }
 
@@ -325,7 +320,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           for(int_t k = 0; k < p_.nL; k += p_.local_fetch_1)
             for(int_t n = 0; n < p_.kL; n += p_.local_fetch_0*p_.simd_width)
             {
-              string to_load = "Bi[" + to_string(k) + "][" + to_string(n/p_.simd_width) + BSTRIDE1 + "]";
+              string to_load = "Bi[" + to_string(k/p_.local_fetch_1) + "][" + to_string(n/p_.simd_width) + BSTRIDE1 + "]";
               stream << VSTORE(to_load, "0", "lBstore + lBstart + " + to_string(n*lBld+k)) << ";" << std::endl;
             }
         stream << LocalBarrier(backend) << ";" << std::endl;
@@ -513,7 +508,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       stream << "}" << std::endl;
     }
 
-    std::cout << stream.str() << std::endl;
+//    std::cout << stream.str() << std::endl;
     return stream.str();
 
 #undef HANDLE_BOUNDS
@@ -682,13 +677,13 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
     execution_options_type const & options = ctr.execution_options();
 
-    if (ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
-        || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0 || pA->ld()%p_.simd_width > 0 || pB->ld()%p_.simd_width > 0)))
-    {
-      fallback.enqueue_block(queue, M, N, K, create_slice(*pA, 0, M, 0, K, swap_A), create_slice(*pB, 0, K, 0, N,  swap_B),
-                             create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, "fallback", options);
-      return;
-    }
+//    if (ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
+//        || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0 || pA->ld()%p_.simd_width > 0 || pB->ld()%p_.simd_width > 0)))
+//    {
+//      fallback.enqueue_block(queue, M, N, K, create_slice(*pA, 0, M, 0, K, swap_A), create_slice(*pB, 0, K, 0, N,  swap_B),
+//                             create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, "fallback", options);
+//      return;
+//    }
 
     enqueue_block(queue,  M, N, K, create_slice(*pA, 0, M, 0, K, swap_A), create_slice(*pB, 0, K, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, suffix, options);
   }
@@ -699,7 +694,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), true, 'N', 'N')
+    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), false, 'N', 'N')
   { }
 
   //
@@ -708,7 +703,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), true, 'T', 'N')
+    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), false, 'T', 'N')
   { }
 
   //
@@ -717,7 +712,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), true, 'N', 'T')
+    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), false, 'N', 'T')
   { }
 
   //
@@ -726,7 +721,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), true, 'T', 'T')
+    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), false, 'T', 'T')
   { }
 }
 
