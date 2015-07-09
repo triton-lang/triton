@@ -703,7 +703,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
     int_t lK = K / (p_.kL*p_.depth) * p_.kL*p_.depth;
     if (lK==0 || ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
-        || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0 || pA->ld()%p_.simd_width > 0 || pB->ld()%p_.simd_width > 0)))
+        || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0)))
     {
       fallback.enqueue_block(queue, M, N, K, *pA, *pB, *pC, alpha, beta, program, "fallback", options);
     }
