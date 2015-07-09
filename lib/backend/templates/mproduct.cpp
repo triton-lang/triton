@@ -103,14 +103,12 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     using tools::to_string;
 
     driver::backend_type backend = device.backend();
-    bool is_a_fallback = check_bounds_ && p_.kS==1 && p_.depth==1;
 
-#define HANDLE_BOUNDS(in_bounds, to_load) (!check_bounds_?string(to_load):string( string(in_bounds) + "?" + string(to_load) + ":0"))
 #define VLOAD(offset, ptr) vload(p_.simd_width, sdtype, offset, ptr, backend)
 #define VSTORE(value, offset, ptr) vstore(p_.simd_width, sdtype, value, offset, ptr, backend)
-#define ASTRIDE1 string(is_a_fallback?"*Astride1":"")
-#define BSTRIDE1 string(is_a_fallback?"*Bstride1":"")
-#define CSTRIDE1 string(is_a_fallback?"*Cstride1":"")
+#define ASTRIDE1 string(check_bounds_?"*Astride1":"")
+#define BSTRIDE1 string(check_bounds_?"*Bstride1":"")
+#define CSTRIDE1 string(check_bounds_?"*Cstride1":"")
 
 
 
@@ -206,7 +204,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     stream << "__global " << vdtype << "* Ai[" << npA << "];" << std::endl;
     for(unsigned int i = 0 ; i < npA ; ++i)
         if (A_trans_=='N')
-            stream << "Ai[" << i << "] = A + (gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald, A + (gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
+            stream << "Ai[" << i << "] = A + (gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
         else
             stream << "Ai[" << i << "] = A + idxT" << ASTRIDE1 << " + gidx*" << p_.mL/p_.simd_width << "*Ald + offz;" << std::endl;
 
@@ -214,7 +212,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     stream << "__global " << vdtype << "* Bi[" << npB << "];" << std::endl;
     for(unsigned int i = 0 ; i < npB ; ++i)
         if(B_trans_=='T')
-            stream << "Bi[" << i << "] = B + (gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld, B + (gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
+            stream << "Bi[" << i << "] = B + (gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
         else
             stream << "Bi[" << i << "] = B + idxT" << BSTRIDE1 << " + gidy*" << p_.nL/p_.simd_width << "*Bld + offz;" << std::endl;
 
@@ -332,7 +330,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
 
     stream << "//Inner loop" << std::endl;
-    stream << "for(unsigned int k = 0; k < " << p_.kL << "; k+=" << p_.kS << "){" << std::endl;
+    stream << "for(unsigned int k = 0; k < " << p_.kL << (check_bounds_?"&& block_k + k < chunk_size":"") << "; k+=" << p_.kS << "){" << std::endl;
     stream.inc_tab();
 
     stream << "//Fetch A to registers" << std::endl;
@@ -347,16 +345,16 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     else if(p_.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS)
     {
       if (A_trans_=='N')
-        stream << "rA[kk][mm] = " << HANDLE_BOUNDS("in_bounds_m[mm]", "A[kk*Ald + mm" + ASTRIDE1 + "]") << ";" << std::endl;
+        stream << "rA[kk][mm] = A[kk*Ald + mm" + ASTRIDE1 + "]" << ";" << std::endl;
       else
-        stream << "rA[kk][mm] = " << HANDLE_BOUNDS("in_bounds_m[mm]", "A[mm*Ald + kk" + ASTRIDE1 + "]") << ";" << std::endl;
+        stream << "rA[kk][mm] = A[mm*Ald + kk" + ASTRIDE1 + "]" << ";" << std::endl;
     }
     else if(p_.A_fetching_policy==FETCH_FROM_GLOBAL_STRIDED)
     {
       if (A_trans_=='N')
-        stream << "rA[kk][mm] = " << HANDLE_BOUNDS("in_bounds_m[mm]", "A[kk*Ald + mm*" + to_string(p_.local_size_0) + ASTRIDE1 + "]") << ";" << std::endl;
+        stream << "rA[kk][mm] = A[kk*Ald + mm*" + to_string(p_.local_size_0) + ASTRIDE1 + "]" << ";" << std::endl;
       else
-        stream << "rA[kk][mm] = " << HANDLE_BOUNDS("in_bounds_m[mm]", "A[mm*Ald*" + to_string(p_.local_size_0) + " + kk" + ASTRIDE1 + "]") << ";" << std::endl;
+        stream << "rA[kk][mm] = A[mm*Ald*" + to_string(p_.local_size_0) + " + kk" + ASTRIDE1 + "]" << ";" << std::endl;
     }
     stream.dec_tab();
     stream << "}" << std::endl;
@@ -373,16 +371,16 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     else if(p_.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS)
     {
       if (B_trans_=='T')
-        stream << "rB[kk][nn] = " << HANDLE_BOUNDS("in_bounds_n[nn]", "B[kk*Bld + nn" + BSTRIDE1 + "]") << ";" << std::endl;
+        stream << "rB[kk][nn] = B[kk*Bld + nn" + BSTRIDE1 + "]" << ";" << std::endl;
       else
-        stream << "rB[kk][nn] = " << HANDLE_BOUNDS("in_bounds_n[nn]", "B[nn*Bld + kk" + BSTRIDE1 + "]") << ";" << std::endl;
+        stream << "rB[kk][nn] = B[nn*Bld + kk" + BSTRIDE1 + "]" << ";" << std::endl;
     }
     else if(p_.B_fetching_policy==FETCH_FROM_GLOBAL_STRIDED)
     {
       if (B_trans_=='T')
-        stream << "rB[kk][nn] = " << HANDLE_BOUNDS("in_bounds_n[nn]", "B[kk*Bld + nn*" + to_string(p_.local_size_1) + BSTRIDE1 + "]") << ";" << std::endl;
+        stream << "rB[kk][nn] = B[kk*Bld + nn*" + to_string(p_.local_size_1) + BSTRIDE1 + "]" << ";" << std::endl;
       else
-        stream << "rB[kk][nn] = " << HANDLE_BOUNDS("in_bounds_n[nn]", "B[nn*Bld*" + to_string(p_.local_size_1) + " + kk" + BSTRIDE1 + "]") << ";" << std::endl;
+        stream << "rB[kk][nn] = B[nn*Bld*" + to_string(p_.local_size_1) + " + kk" + BSTRIDE1 + "]" << ";" << std::endl;
     }
     stream.dec_tab();
     stream << "}" << std::endl;
@@ -511,7 +509,6 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 //    std::cout << stream.str() << std::endl;
     return stream.str();
 
-#undef HANDLE_BOUNDS
 #undef VLOAD
 #undef VST0RE
   }
@@ -685,7 +682,11 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 //      return;
 //    }
 
-    enqueue_block(queue,  M, N, K, create_slice(*pA, 0, M, 0, K, swap_A), create_slice(*pB, 0, K, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, suffix, options);
+    int_t lK = K / (p_.kL*p_.depth) * p_.kL*p_.depth;
+    value_scalar _1(1, dtype);
+
+    enqueue_block(queue,  M, N, lK, create_slice(*pA, 0, M, 0, lK, swap_A), create_slice(*pB, 0, lK, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, suffix, options);
+    fallback.enqueue_block(queue,  M, N, K - lK, create_slice(*pA, 0, M, lK, K, swap_A), create_slice(*pB, lK, K, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, _1, program, "fallback", options);
   }
 
   //
@@ -694,7 +695,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), false, 'N', 'N')
+    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'N')
   { }
 
   //
@@ -703,7 +704,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), false, 'T', 'N')
+    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'N')
   { }
 
   //
@@ -712,7 +713,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), false, 'N', 'T')
+    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'T')
   { }
 
   //
@@ -721,7 +722,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), false, 'T', 'T')
+    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'T')
   { }
 }
 
