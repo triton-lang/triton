@@ -27,7 +27,7 @@ def tune(device, operation, json_path):
     sizes[isc.mreduction_rows] = product(pow2range(4,17), pow2range(4,17))
     sizes[isc.mreduction_cols] = isc.mreduction_rows
     sizes[isc.mproduct_nn]     = product(pow2range(5, 10), pow2range(5, 10), pow2range(5, 10))
-    sizes[isc.mproduct_nn]	   = [(896, 896, 896)]    
+    sizes[isc.mproduct_nn]	   = [(128, 169, 1728)]    
     sizes[isc.mproduct_tn]     = sizes[isc.mproduct_nn]
     sizes[isc.mproduct_nt]     = sizes[isc.mproduct_nn]
     sizes[isc.mproduct_tt]     = sizes[isc.mproduct_nn]

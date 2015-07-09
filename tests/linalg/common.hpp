@@ -132,7 +132,7 @@ template<typename T>
 void init_rand(simple_vector_base<T> & x)
 {
   for (int_t i = 0; i < x.size(); ++i)
-    x[i] = i;
+    x[i] = (T)rand()/RAND_MAX;
 }
 
 template<typename T>
@@ -167,7 +167,6 @@ bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type 
     max = std::max(max, delta);
     if(delta > epsilon)
     {
-      std::cout << i << " " << x[i] << " " << y[i] << std::endl;
       return true;
     }
   }
