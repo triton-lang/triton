@@ -78,6 +78,9 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
                                                                  CHANDLE(B), OFF(B), LD(B), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
       RUN_TEST("GEMM(COL, T, T)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasColumnMajor, clblasTrans, clblasTrans, M, N, K, alpha, CHANDLE(AT), OFF(AT), LD(AT),
                                                                  CHANDLE(BT), OFF(BT), LD(BT), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
+
+
+
   }
   else
   {
@@ -94,9 +97,9 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 template<typename T>
 void test_impl(T epsilon, ad::driver::Context const & ctx)
 {
-    int_t M = 412;
-    int_t N = 248;
-    int_t K = 376;
+    int_t M = 476;
+    int_t N = 292;
+    int_t K = 325;
 
     int_t SUBM = 64;
     int_t SUBN = 64;

@@ -27,10 +27,8 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     numeric_type numeric_t = lhs_most(array_expression.tree(), array_expression.root()).lhs.dtype;
 
     unsigned int N = 0;
-    if (p_.A_fetching_policy==FETCH_FROM_LOCAL)
-      N += p_.kL * p_.mL;
-    if (p_.B_fetching_policy==FETCH_FROM_LOCAL)
-      N += p_.nL * p_.kL;
+    N += p_.kL * p_.mL;
+    N += p_.nL * p_.kL;
     return N*size_of(numeric_t);
   }
 
@@ -47,6 +45,9 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   {
     std::vector<int_t> MNK = input_sizes(expressions);
     int_t M = MNK[0]; int_t N = MNK[1];
+
+    if(p_.A_fetching_policy!=FETCH_FROM_LOCAL || p_.B_fetching_policy!=FETCH_FROM_LOCAL)
+      throw operation_not_supported_exception("Only local memory is supported for GEMM");
 
     if(p_.depth > 1 && M*N*p_.depth > 1e6)
       throw operation_not_supported_exception("This would necessitate a temporary larger than 1MB");
@@ -161,16 +162,8 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     stream << vdtype << " rB[" << p_.kS << "][" << p_.nS/p_.simd_width << "];" << std::endl;
 
     ///Result Values
-    if (p_.A_fetching_policy==FETCH_FROM_LOCAL)
-    {
-      stream << Local(backend) << " " << sdtype << " lA[" << p_.kL*lAld << "];" << std::endl;
-      stream << "size_t lAstart = 0;" << std::endl;
-    }
-    if (p_.B_fetching_policy==FETCH_FROM_LOCAL)
-    {
-      stream << Local(backend) << " " << sdtype << " lB[" << p_.kL*lBld << "];" << std::endl;
-      stream << "size_t lBstart = 0;" << std::endl;
-    }
+    stream << Local(backend) << " " << sdtype << " lA[" << p_.kL*lAld << "];" << std::endl;
+    stream << Local(backend) << " " << sdtype << " lB[" << p_.kL*lBld << "];" << std::endl;
     stream << std::endl;
 
     stream << "size_t gidx = " << GroupIdx0(backend) << ";" << std::endl;
@@ -189,171 +182,118 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       stream << "size_t offz = 0;" << std::endl;
     }
 
-    if (p_.A_fetching_policy==FETCH_FROM_LOCAL || p_.B_fetching_policy==FETCH_FROM_LOCAL)
-    {
-      stream << std::endl;
-      stream << "size_t idt = " << p_.local_size_0 << "*idy + idx;" << std::endl;
-      stream << "size_t idxT = idt % " << p_.local_fetch_0 << ";" << std::endl;
-      stream << "size_t idyT = idt / " << p_.local_fetch_0 << ";" << std::endl;
-    }
+
+    stream << std::endl;
+    stream << "size_t idt = " << p_.local_size_0 << "*idy + idx;" << std::endl;
+    stream << "size_t idxT = idt % " << p_.local_fetch_0 << ";" << std::endl;
+    stream << "size_t idyT = idt / " << p_.local_fetch_0 << ";" << std::endl;
     stream << std::endl;
 
     unsigned int npA = p_.mL/(A_trans_=='N'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
     unsigned int npB = p_.nL/(B_trans_=='T'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
 
     if (A_trans_=='N')
-        stream << "A += (gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
+        stream << "A += (idxT + gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
     else
-        stream << "A += idxT" << ASTRIDE1 << " + gidx*" << p_.mL/p_.simd_width << "*Ald + offz;" << std::endl;
+        stream << "A += idxT" << ASTRIDE1 << " + (idyT + gidx*" << p_.mL/p_.simd_width << ")*Ald + offz;" << std::endl;
 
     if(B_trans_=='T')
-        stream << "B += (gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
+        stream << "B += (idxT + gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
     else
-        stream << "B += idxT" << BSTRIDE1 << " + gidy*" << p_.nL/p_.simd_width << "*Bld + offz;" << std::endl;
+        stream << "B += idxT" << BSTRIDE1 << " + (idyT + gidy*" << p_.nL/p_.simd_width << ")*Bld + offz;" << std::endl;
 
 
     stream << "__global " << vdtype << "* Ai[" << npA << "];" << std::endl;
-    for(unsigned int i = 0 ; i < npA ; ++i)
+    stream << "for(unsigned int i = 0 ; i < " << npA << " ; ++i) Ai[i] = A;" << std::endl;
+
+    for(unsigned int i = 0 ; i < npA ; i++ )
         if (A_trans_=='N')
-            stream << "Ai[" << i << "] = A;" << std::endl;
+          stream << "if(gidx*" << p_.mL << " + idxT*" << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < M) Ai[" << i << "] += " << i*p_.local_fetch_0 << ASTRIDE1 << ";" << std::endl;
         else
-            stream << "Ai[" << i << "] = A;" << std::endl;
+          stream << "if(gidx*" << p_.mL << " + idyT + " << i << "*" << p_.local_fetch_1 << " < M) Ai[" << i << "] += " << i*p_.local_fetch_1 << "*Ald;" << std::endl;
 
 
     stream << "__global " << vdtype << "* Bi[" << npB << "];" << std::endl;
-    for(unsigned int i = 0 ; i < npB ; ++i)
-        if(B_trans_=='T')
-            stream << "Bi[" << i << "] = B;" << std::endl;
+    stream << "for(unsigned int i = 0 ; i < " << npB << " ; ++i) Bi[i] = B;" << std::endl;
+
+
+    for(unsigned int i = 0 ; i < npB ; i++ )
+        if (B_trans_=='T')
+          stream << "if(gidy*" << p_.nL << " + idxT* " << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < N) Bi[" << i << "] += " << i*p_.local_fetch_0 << BSTRIDE1 << ";" << std::endl;
         else
-            stream << "Bi[" << i << "] = B;" << std::endl;
+          stream << "if(gidy*" << p_.nL << " + idyT + " << i << "*" << p_.local_fetch_1 << " < N) Bi[" << i << "] += " << i*p_.local_fetch_1 << "*Bld;" << std::endl;
 
-    switch (p_.A_fetching_policy)
-    {
-    case FETCH_FROM_LOCAL:
-      for(unsigned int i = 0 ; i < npA ; i++ )
-          if (A_trans_=='N')
-            stream << "if(gidx*" << p_.mL << " + idxT*" << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < M) Ai[" << i << "] += (idxT + " << i*p_.local_fetch_0 << ")" << ASTRIDE1 << ";" << std::endl;
-          else
-            stream << "if(gidx*" << p_.mL << " + idyT + " << i << "*" << p_.local_fetch_1 << " < M) Ai[" << i << "] += (idyT + " << i*p_.local_fetch_1 << ")*Ald;" << std::endl;
-      break;
 
-    case FETCH_FROM_GLOBAL_CONTIGUOUS:
-      if (A_trans_=='N')
-        stream << "A += (gidx*" << p_.mL/p_.simd_width << "+ idx*" << p_.mS/p_.simd_width << "+ offz*Ald)" << ASTRIDE1 << ";" << std::endl;
-      else
-        stream << "A += (gidx*" << p_.mL/p_.simd_width << "+ idx*" << p_.mS/p_.simd_width << ")*Ald + offz;" << std::endl;
-      break;
 
-    case FETCH_FROM_GLOBAL_STRIDED:
-      if (A_trans_=='N')
-        stream << "A += (gidx*" << p_.mL/p_.simd_width << "+ idx + offz*Ald)" << ASTRIDE1 << ";" << std::endl;
-      else
-        stream << "A += (gidx*" << p_.mL/p_.simd_width << "+ idx)*Ald + offz" << std::endl;
-      break;
-
-    default: break;
-    }
-
-    switch (p_.B_fetching_policy)
-    {
-    case FETCH_FROM_LOCAL:
-      for(unsigned int i = 0 ; i < npB ; i++ )
-          if (B_trans_=='T')
-            stream << "if(gidy*" << p_.nL << " + idxT* " << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < N) Bi[" << i << "] += (idxT + " << i*p_.local_fetch_0 << ")" << BSTRIDE1 << ";" << std::endl;
-          else
-            stream << "if(gidy*" << p_.nL << " + idyT + " << i << "*" << p_.local_fetch_1 << " < N) Bi[" << i << "] += (idyT + " << i*p_.local_fetch_1 << ")*Bld;" << std::endl;
-      break;
-
-    case FETCH_FROM_GLOBAL_CONTIGUOUS:
-      if (B_trans_=='T')
-        stream << "B += (gidy*" << p_.nL/p_.simd_width << " + idy*" << p_.nS/p_.simd_width << " + offz*Bld)" << BSTRIDE1 << ";" << std::endl;
-      else
-        stream << "B += (gidy*" << p_.nL/p_.simd_width << " + idy*" << p_.nS/p_.simd_width << ")*Bld + offz;" << std::endl;
-      break;
-
-    case FETCH_FROM_GLOBAL_STRIDED:
-      if (B_trans_=='T')
-        stream << "B += (gidy*" << p_.nL/p_.simd_width << "+ idy + offz*Bld)" << BSTRIDE1 << ";" << std::endl;
-      else
-        stream << "B += (gidy*" << p_.nL/p_.simd_width << "+ idy)*Bld + offz;" << std::endl;
-      break;
-
-    default: break;
-    }
-
-    stream << std::endl;
-
-    if (p_.A_fetching_policy==FETCH_FROM_LOCAL && A_trans_=='N')
+    if (A_trans_=='N')
       stream << LocalPtr(backend) << " " << sdtype << "* lAstore = lA + idyT*" << lAld << " + idxT*" << p_.simd_width << ";" << std::endl;
-    else if (p_.A_fetching_policy==FETCH_FROM_LOCAL && A_trans_=='T')
+    else
       stream << LocalPtr(backend) << " " << sdtype << "* lAstore = lA + idxT*" << lAld << " + idyT;" << std::endl;
-    if (p_.B_fetching_policy==FETCH_FROM_LOCAL && B_trans_=='T')
+
+
+    if (B_trans_=='T')
       stream << LocalPtr(backend) << " " << sdtype << "* lBstore = lB + idyT*" << lBld << " + idxT*" << p_.simd_width << ";" << std::endl;
-    else if (p_.B_fetching_policy==FETCH_FROM_LOCAL && B_trans_=='N')
+    else if (B_trans_=='N')
       stream << LocalPtr(backend) << " " << sdtype << "* lBstore = lB + idxT*" << lBld << " + idyT;" << std::endl;
 
 
     stream << "//Outer loop" << std::endl;
     stream << "for(size_t block_k=0; block_k < chunk_size ; block_k+=" << p_.kL << "){" << std::endl;
     stream.inc_tab();
+    stream << LocalBarrier(backend) << ";" << std::endl;
 
-    if (p_.A_fetching_policy==FETCH_FROM_LOCAL || p_.B_fetching_policy==FETCH_FROM_LOCAL)
-    {
-      stream << LocalBarrier(backend) << ";" << std::endl;
 
-        stream << "//Fetch A to local memory" << std::endl;
-        if (p_.A_fetching_policy==FETCH_FROM_LOCAL && A_trans_=='N')
-          for(int_t k = 0; k < p_.kL; k += p_.local_fetch_1)
-            for(int_t m = 0; m < p_.mL; m += p_.local_fetch_0*p_.simd_width)
-            {
-              std::string mm = to_string(m/(p_.simd_width*p_.local_fetch_0));
-              std::string kk = to_string(k);
-              string to_load = "Ai[" + mm +"][" + kk + "*Ald]";
-              if(check_bounds_)
-                  to_load = "(block_k + idyT + " + kk + "< K)?" + to_load + ":0";
-              stream << VSTORE(to_load, "0", "lAstore + lAstart + " + to_string(k*lAld+m)) << ";" << std::endl;
-            }
-        else if (p_.A_fetching_policy==FETCH_FROM_LOCAL && A_trans_=='T')
-          for(int_t k = 0; k < p_.mL; k += p_.local_fetch_1)
-            for(int_t m = 0; m < p_.kL; m += p_.local_fetch_0*p_.simd_width)
-            {
-              std::string mm = to_string(k/p_.local_fetch_1);
-              std::string kk = to_string(m/p_.simd_width);
-              string to_load = "Ai[" + mm + "][" + kk + ASTRIDE1 + "]";
-              if(check_bounds_)
-                  to_load = "(block_k + idxT + " + kk + "< K)?" + to_load + ":0";
-              stream << VSTORE(to_load, "0", "lAstore + lAstart + " + to_string(m*lAld+k)) << ";" << std::endl;
-            }
+    stream << "//Fetch A to local memory" << std::endl;
+    if (A_trans_=='N')
+      for(int_t k = 0; k < p_.kL; k += p_.local_fetch_1)
+        for(int_t m = 0; m < p_.mL; m += p_.local_fetch_0*p_.simd_width)
+        {
+          std::string mm = to_string(m/(p_.simd_width*p_.local_fetch_0));
+          std::string kk = to_string(k);
+          string to_load = "Ai[" + mm +"][" + kk + "*Ald]";
+          if(check_bounds_)
+              to_load = "(block_k + idyT + " + kk + "< K)?" + to_load + ":0";
+          stream << VSTORE(to_load, "0", "lAstore + " + to_string(k*lAld+m)) << ";" << std::endl;
+        }
+    else
+      for(int_t k = 0; k < p_.mL; k += p_.local_fetch_1)
+        for(int_t m = 0; m < p_.kL; m += p_.local_fetch_0*p_.simd_width)
+        {
+          std::string mm = to_string(k/p_.local_fetch_1);
+          std::string kk = to_string(m/p_.simd_width);
+          string to_load = "Ai[" + mm + "][" + kk + ASTRIDE1 + "]";
+          if(check_bounds_)
+              to_load = "(block_k + idxT + " + kk + "< K)?" + to_load + ":0";
+          stream << VSTORE(to_load, "0", "lAstore + " + to_string(m*lAld+k)) << ";" << std::endl;
+        }
 
-        stream << "//Fetch B to local memory" << std::endl;
-        if (p_.B_fetching_policy==FETCH_FROM_LOCAL && B_trans_=='T')
-          for(int_t k = 0; k < p_.kL; k += p_.local_fetch_1)
-            for(int_t n = 0; n < p_.nL; n += p_.local_fetch_0*p_.simd_width)
-            {
-              std::string nn = to_string(n/(p_.simd_width*p_.local_fetch_0));
-              std::string kk = to_string(k);
-              string to_load = "Bi[" + nn + "][" + kk + "*Bld]";
-              if(check_bounds_)
-                  to_load = "(block_k + idyT + " + kk + "< K)?" + to_load + ":0";
-              stream << VSTORE(to_load, "0", "lBstore + lBstart + " + to_string(k*lBld+n)) << ";" << std::endl;
-            }
-        else if (p_.B_fetching_policy==FETCH_FROM_LOCAL && B_trans_=='N')
-          for(int_t k = 0; k < p_.nL; k += p_.local_fetch_1)
-            for(int_t n = 0; n < p_.kL; n += p_.local_fetch_0*p_.simd_width)
-            {
-              std::string nn = to_string(k/p_.local_fetch_1);
-              std::string kk = to_string(n/p_.simd_width);
-              string to_load = "Bi[" + nn + "][" + kk + BSTRIDE1 + "]";
-              if(check_bounds_)
-                  to_load = "(block_k + idxT + " + kk + "< K)?" + to_load + ":0";
-              stream << VSTORE(to_load, "0", "lBstore + lBstart + " + to_string(n*lBld+k)) << ";" << std::endl;
-            }
-        stream << LocalBarrier(backend) << ";" << std::endl;
-      }
-      if (p_.A_fetching_policy==FETCH_FROM_LOCAL)
-        stream << LocalPtr(backend) << " " << sdtype << "* readA = lA + idx*" << p_.simd_width << ";" << std::endl;
-      if(p_.B_fetching_policy==FETCH_FROM_LOCAL)
-        stream << LocalPtr(backend) << " " << sdtype << "* readB = lB + idy*" << p_.simd_width << ";" << std::endl;
+    stream << "//Fetch B to local memory" << std::endl;
+    if (B_trans_=='T')
+      for(int_t k = 0; k < p_.kL; k += p_.local_fetch_1)
+        for(int_t n = 0; n < p_.nL; n += p_.local_fetch_0*p_.simd_width)
+        {
+          std::string nn = to_string(n/(p_.simd_width*p_.local_fetch_0));
+          std::string kk = to_string(k);
+          string to_load = "Bi[" + nn + "][" + kk + "*Bld]";
+          if(check_bounds_)
+              to_load = "(block_k + idyT + " + kk + "< K)?" + to_load + ":0";
+          stream << VSTORE(to_load, "0", "lBstore + " + to_string(k*lBld+n)) << ";" << std::endl;
+        }
+    else
+      for(int_t k = 0; k < p_.nL; k += p_.local_fetch_1)
+        for(int_t n = 0; n < p_.kL; n += p_.local_fetch_0*p_.simd_width)
+        {
+          std::string nn = to_string(k/p_.local_fetch_1);
+          std::string kk = to_string(n/p_.simd_width);
+          string to_load = "Bi[" + nn + "][" + kk + BSTRIDE1 + "]";
+          if(check_bounds_)
+              to_load = "(block_k + idxT + " + kk + "< K)?" + to_load + ":0";
+          stream << VSTORE(to_load, "0", "lBstore + " + to_string(n*lBld+k)) << ";" << std::endl;
+        }
+    stream << LocalBarrier(backend) << ";" << std::endl;
+
+    stream << LocalPtr(backend) << " " << sdtype << "* readA = lA + idx*" << p_.simd_width << ";" << std::endl;
+    stream << LocalPtr(backend) << " " << sdtype << "* readB = lB + idy*" << p_.simd_width << ";" << std::endl;
 
 
     stream << "//Inner loop" << std::endl;
@@ -367,22 +307,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     stream << "for(unsigned int mm = 0; mm < " << p_.mS/p_.simd_width << "; mm++)" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
-    if(p_.A_fetching_policy==FETCH_FROM_LOCAL)
-      stream << "rA[kk][mm] = "  << VLOAD("0", "readA + k*" + to_string(lAld) + " + mm*" + to_string(p_.local_size_0*p_.simd_width) + "+ kk*" + to_string(lAld)) << ";" << std::endl;
-    else if(p_.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS)
-    {
-      if (A_trans_=='N')
-        stream << "rA[kk][mm] = A[kk*Ald + mm" + ASTRIDE1 + "]" << ";" << std::endl;
-      else
-        stream << "rA[kk][mm] = A[mm*Ald + kk" + ASTRIDE1 + "]" << ";" << std::endl;
-    }
-    else if(p_.A_fetching_policy==FETCH_FROM_GLOBAL_STRIDED)
-    {
-      if (A_trans_=='N')
-        stream << "rA[kk][mm] = A[kk*Ald + mm*" + to_string(p_.local_size_0) + ASTRIDE1 + "]" << ";" << std::endl;
-      else
-        stream << "rA[kk][mm] = A[mm*Ald*" + to_string(p_.local_size_0) + " + kk" + ASTRIDE1 + "]" << ";" << std::endl;
-    }
+    stream << "rA[kk][mm] = "  << VLOAD("0", "readA + k*" + to_string(lAld) + " + mm*" + to_string(p_.local_size_0*p_.simd_width) + "+ kk*" + to_string(lAld)) << ";" << std::endl;
     stream.dec_tab();
     stream << "}" << std::endl;
 
@@ -393,43 +318,9 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     stream << "for(unsigned int nn = 0; nn < " << p_.nS/p_.simd_width << "; nn++)" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
-    if(p_.B_fetching_policy==FETCH_FROM_LOCAL)
-      stream << "rB[kk][nn] = " << VLOAD("0", "readB + k*" + to_string(lBld) + " + nn*" + to_string(p_.local_size_1*p_.simd_width)  + "+ kk*" + to_string(lBld)) << ";" << std::endl;
-    else if(p_.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS)
-    {
-      if (B_trans_=='T')
-        stream << "rB[kk][nn] = B[kk*Bld + nn" + BSTRIDE1 + "]" << ";" << std::endl;
-      else
-        stream << "rB[kk][nn] = B[nn*Bld + kk" + BSTRIDE1 + "]" << ";" << std::endl;
-    }
-    else if(p_.B_fetching_policy==FETCH_FROM_GLOBAL_STRIDED)
-    {
-      if (B_trans_=='T')
-        stream << "rB[kk][nn] = B[kk*Bld + nn*" + to_string(p_.local_size_1) + BSTRIDE1 + "]" << ";" << std::endl;
-      else
-        stream << "rB[kk][nn] = B[nn*Bld*" + to_string(p_.local_size_1) + " + kk" + BSTRIDE1 + "]" << ";" << std::endl;
-    }
+    stream << "rB[kk][nn] = " << VLOAD("0", "readB + k*" + to_string(lBld) + " + nn*" + to_string(p_.local_size_1*p_.simd_width)  + "+ kk*" + to_string(lBld)) << ";" << std::endl;
     stream.dec_tab();
     stream << "}" << std::endl;
-
-
-   stream << "//Increment A pointers" << std::endl;
-   if(p_.A_fetching_policy!=FETCH_FROM_LOCAL)
-   {
-     if (A_trans_=='N')
-       stream << "A += " << p_.kS << "*Ald;" << std::endl;
-     else
-       stream << "A += " << p_.kS << ASTRIDE1 << ";" << std::endl;
-   }
-
-   stream << "//Increment B pointers" << std::endl;
-   if(p_.B_fetching_policy!=FETCH_FROM_LOCAL)
-   {
-     if (B_trans_=='T')
-       stream << "B += " << p_.kS << "*Bld;" << std::endl;
-     else
-       stream << "B += " << p_.kS << BSTRIDE1 << ";" << std::endl;
-   }
 
     stream << "//FMA computations" << std::endl;
     for(int_t kk=0 ; kk < p_.kS; ++kk)
@@ -452,44 +343,37 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     stream.dec_tab();
     stream << "}" << std::endl;
 
-    //Increment global pointer if local memory is used
-    //Else, it's incremented directly when fetching
-    if (p_.A_fetching_policy==FETCH_FROM_LOCAL)
-    {
-      if (A_trans_=='N')
-        for(unsigned int i = 0 ; i < npA ; ++i)
-            stream << "Ai[" << i << "] += "  << p_.kL << "*Ald;" << std::endl;
-      else
-        for(unsigned int i = 0 ; i < npA ; ++i)
-            stream << "Ai[" << i << "] += "  << p_.kL << ASTRIDE1 << ";" << std::endl;
-    }
+    //Increment A pointers to global memory
+    if (A_trans_=='N')
+      for(unsigned int i = 0 ; i < npA ; ++i)
+          stream << "Ai[" << i << "] += "  << p_.kL << "*Ald;" << std::endl;
+    else
+      for(unsigned int i = 0 ; i < npA ; ++i)
+          stream << "Ai[" << i << "] += "  << p_.kL << ASTRIDE1 << ";" << std::endl;
 
-    if (p_.B_fetching_policy==FETCH_FROM_LOCAL)
-    {
-      if (B_trans_=='T')
-        for(unsigned int i = 0 ; i < npB ; ++i)
-            stream << "Bi[" << i << "] += " << p_.kL << "*Bld;" << std::endl;
-      else
-        for(unsigned int i = 0 ; i < npB ; ++i)
-            stream << "Bi[" << i << "] += " << p_.kL << BSTRIDE1 << ";" << std::endl;
-    }
+    //Increment B pointers to global memory
+    if (B_trans_=='T')
+      for(unsigned int i = 0 ; i < npB ; ++i)
+          stream << "Bi[" << i << "] += " << p_.kL << "*Bld;" << std::endl;
+    else
+      for(unsigned int i = 0 ; i < npB ; ++i)
+          stream << "Bi[" << i << "] += " << p_.kL << BSTRIDE1 << ";" << std::endl;
 
     stream.dec_tab();
     stream << "}" << std::endl;
 
 
-
     stream << "//Write back C" << std::endl;
-    unsigned int ministartstride0 = p_.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p_.mS:p_.simd_width;
-    unsigned int ministartstride1 = p_.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?p_.nS:p_.simd_width;
+    unsigned int ministartstride0 = p_.simd_width;
+    unsigned int ministartstride1 = p_.simd_width;
     stream << "size_t offx = (gidx*" << p_.mL << " + idx*" << ministartstride0 << ")" << ";" << std::endl;
     stream << "size_t offy = (gidy*" << p_.nL << " + idy*" << ministartstride1 << ");" << std::endl;
     stream << "C += " << "offx" << CSTRIDE1 << " + offy*Cld + gidz*Cld*N;" << std::endl;
     for(int_t m=0; m < p_.mS; ++m)
     for(int_t n=0; n < p_.nS; ++n)
     {
-      unsigned int ministride0 = p_.A_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?1:p_.local_size_0;
-      unsigned int ministride1 = p_.B_fetching_policy==FETCH_FROM_GLOBAL_CONTIGUOUS?1:p_.local_size_1;
+      unsigned int ministride0 = p_.local_size_0;
+      unsigned int ministride1 = p_.local_size_1;
 
       string Ci = to_string((m/p_.simd_width)*(ministride0*p_.simd_width) + m%p_.simd_width);
       string Cj = to_string((n/p_.simd_width)*(ministride1*p_.simd_width) + n%p_.simd_width);
