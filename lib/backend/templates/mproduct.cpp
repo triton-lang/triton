@@ -306,14 +306,22 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           for(int_t k = 0; k < p_.kL; k += p_.local_fetch_1)
             for(int_t m = 0; m < p_.mL; m += p_.local_fetch_0*p_.simd_width)
             {
-              string to_load = "Ai[" + to_string(m/(p_.simd_width*p_.local_fetch_0)) +"][" + to_string(k) + "*Ald]";
+              std::string mm = to_string(m/(p_.simd_width*p_.local_fetch_0));
+              std::string kk = to_string(k);
+              string to_load = "Ai[" + mm +"][" + kk + "*Ald]";
+              if(check_bounds_)
+                  to_load = "(block_k + idyT + " + kk + "< K)?" + to_load + ":0";
               stream << VSTORE(to_load, "0", "lAstore + lAstart + " + to_string(k*lAld+m)) << ";" << std::endl;
             }
         else if (p_.A_fetching_policy==FETCH_FROM_LOCAL && A_trans_=='T')
           for(int_t k = 0; k < p_.mL; k += p_.local_fetch_1)
             for(int_t m = 0; m < p_.kL; m += p_.local_fetch_0*p_.simd_width)
             {
-              string to_load = "Ai[" + to_string(k/p_.local_fetch_1) + "][" + to_string(m/p_.simd_width) + ASTRIDE1 + "]";
+              std::string mm = to_string(k/p_.local_fetch_1);
+              std::string kk = to_string(m/p_.simd_width);
+              string to_load = "Ai[" + mm + "][" + kk + ASTRIDE1 + "]";
+              if(check_bounds_)
+                  to_load = "(block_k + idxT + " + kk + "< K)?" + to_load + ":0";
               stream << VSTORE(to_load, "0", "lAstore + lAstart + " + to_string(m*lAld+k)) << ";" << std::endl;
             }
 
@@ -322,14 +330,22 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           for(int_t k = 0; k < p_.kL; k += p_.local_fetch_1)
             for(int_t n = 0; n < p_.nL; n += p_.local_fetch_0*p_.simd_width)
             {
-              string to_load = "Bi[" + to_string(n/(p_.local_fetch_0*p_.simd_width)) + "][" + to_string(k) + "*Bld]";
+              std::string nn = to_string(n/(p_.simd_width*p_.local_fetch_0));
+              std::string kk = to_string(k);
+              string to_load = "Bi[" + nn + "][" + kk + "*Bld]";
+              if(check_bounds_)
+                  to_load = "(block_k + idyT + " + kk + "< K)?" + to_load + ":0";
               stream << VSTORE(to_load, "0", "lBstore + lBstart + " + to_string(k*lBld+n)) << ";" << std::endl;
             }
         else if (p_.B_fetching_policy==FETCH_FROM_LOCAL && B_trans_=='N')
           for(int_t k = 0; k < p_.nL; k += p_.local_fetch_1)
             for(int_t n = 0; n < p_.kL; n += p_.local_fetch_0*p_.simd_width)
             {
-              string to_load = "Bi[" + to_string(k/p_.local_fetch_1) + "][" + to_string(n/p_.simd_width) + BSTRIDE1 + "]";
+              std::string nn = to_string(k/p_.local_fetch_1);
+              std::string kk = to_string(n/p_.simd_width);
+              string to_load = "Bi[" + nn + "][" + kk + BSTRIDE1 + "]";
+              if(check_bounds_)
+                  to_load = "(block_k + idxT + " + kk + "< K)?" + to_load + ":0";
               stream << VSTORE(to_load, "0", "lBstore + lBstart + " + to_string(n*lBld+k)) << ";" << std::endl;
             }
         stream << LocalBarrier(backend) << ";" << std::endl;
@@ -341,7 +357,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
 
     stream << "//Inner loop" << std::endl;
-    stream << "for(unsigned int k = 0; k < " << p_.kL << (check_bounds_?"&& block_k + k < chunk_size":"") << "; k+=" << p_.kS << "){" << std::endl;
+    stream << "for(unsigned int k = 0; k < " << p_.kL << "; k+=" << p_.kS << "){" << std::endl;
     stream.inc_tab();
 
     stream << "//Fetch A to registers" << std::endl;
@@ -685,14 +701,14 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
     execution_options_type const & options = ctr.execution_options();
 
-    if (ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
+    int_t lK = K / (p_.kL*p_.depth) * p_.kL*p_.depth;
+    if (lK==0 || ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
         || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0 || pA->ld()%p_.simd_width > 0 || pB->ld()%p_.simd_width > 0)))
     {
       fallback.enqueue_block(queue, M, N, K, *pA, *pB, *pC, alpha, beta, program, "fallback", options);
     }
     else
     {
-        int_t lK = K / (p_.kL*p_.depth) * p_.kL*p_.depth;
         value_scalar _1(1, dtype);
         enqueue_block(queue,  M, N, lK, create_slice(*pA, 0, M, 0, lK, swap_A), create_slice(*pB, 0, lK, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, suffix, options);
         fallback.enqueue_block(queue,  M, N, K - lK, create_slice(*pA, 0, M, lK, K, swap_A), create_slice(*pB, lK, K, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, _1, program, "fallback", options);
