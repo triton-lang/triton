@@ -201,20 +201,31 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     unsigned int npA = p_.mL/(A_trans_=='N'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
     unsigned int npB = p_.nL/(B_trans_=='T'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
 
+    if (A_trans_=='N')
+        stream << "A += (gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
+    else
+        stream << "A += idxT" << ASTRIDE1 << " + gidx*" << p_.mL/p_.simd_width << "*Ald + offz;" << std::endl;
+
+    if(B_trans_=='T')
+        stream << "B += (gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
+    else
+        stream << "B += idxT" << BSTRIDE1 << " + gidy*" << p_.nL/p_.simd_width << "*Bld + offz;" << std::endl;
+
+
     stream << "__global " << vdtype << "* Ai[" << npA << "];" << std::endl;
     for(unsigned int i = 0 ; i < npA ; ++i)
         if (A_trans_=='N')
-            stream << "Ai[" << i << "] = A + (gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
+            stream << "Ai[" << i << "] = A;" << std::endl;
         else
-            stream << "Ai[" << i << "] = A + idxT" << ASTRIDE1 << " + gidx*" << p_.mL/p_.simd_width << "*Ald + offz;" << std::endl;
+            stream << "Ai[" << i << "] = A;" << std::endl;
 
 
     stream << "__global " << vdtype << "* Bi[" << npB << "];" << std::endl;
     for(unsigned int i = 0 ; i < npB ; ++i)
         if(B_trans_=='T')
-            stream << "Bi[" << i << "] = B + (gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
+            stream << "Bi[" << i << "] = B;" << std::endl;
         else
-            stream << "Bi[" << i << "] = B + idxT" << BSTRIDE1 << " + gidy*" << p_.nL/p_.simd_width << "*Bld + offz;" << std::endl;
+            stream << "Bi[" << i << "] = B;" << std::endl;
 
     switch (p_.A_fetching_policy)
     {
@@ -521,6 +532,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     if(M==0 || N==0 || K==0)
         return;
 
+
     char gemm_name[32] = {"gemm"};
     char reduce_name[32] = {"reduce"};
     strcat(gemm_name, suffix);
@@ -555,14 +567,13 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     helper.set_arguments(alpha.dtype(), alpha.values());
     gemm.setArg(current_arg++, A.data());
     gemm.setSizeArg(current_arg++, A.ld()*A.stride()[1]/p_.simd_width);
-    gemm.setSizeArg(current_arg++, A.start()[0] + A.start()[1]*A.ld()/p_.simd_width);
+    gemm.setSizeArg(current_arg++, (A.start()[0] + A.start()[1]*A.ld())/p_.simd_width);
     gemm.setSizeArg(current_arg++, A.stride()[0]);
 
     gemm.setArg(current_arg++, B.data());
     gemm.setSizeArg(current_arg++, B.ld()*B.stride()[1]/p_.simd_width);
-    gemm.setSizeArg(current_arg++, B.start()[0] + B.start()[1]*B.ld()/p_.simd_width);
+    gemm.setSizeArg(current_arg++, (B.start()[0] + B.start()[1]*B.ld())/p_.simd_width);
     gemm.setSizeArg(current_arg++, B.stride()[0]);
-
 
     helper.set_arguments(beta.dtype(), beta.values());
     options.enqueue(program.context(), gemm, global, local);
@@ -674,19 +685,18 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
     execution_options_type const & options = ctr.execution_options();
 
-//    if (ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
-//        || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0 || pA->ld()%p_.simd_width > 0 || pB->ld()%p_.simd_width > 0)))
-//    {
-//      fallback.enqueue_block(queue, M, N, K, create_slice(*pA, 0, M, 0, K, swap_A), create_slice(*pB, 0, K, 0, N,  swap_B),
-//                             create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, "fallback", options);
-//      return;
-//    }
-
-    int_t lK = K / (p_.kL*p_.depth) * p_.kL*p_.depth;
-    value_scalar _1(1, dtype);
-
-    enqueue_block(queue,  M, N, lK, create_slice(*pA, 0, M, 0, lK, swap_A), create_slice(*pB, 0, lK, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, suffix, options);
-    fallback.enqueue_block(queue,  M, N, K - lK, create_slice(*pA, 0, M, lK, K, swap_A), create_slice(*pB, lK, K, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, _1, program, "fallback", options);
+    if (ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
+        || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0 || pA->ld()%p_.simd_width > 0 || pB->ld()%p_.simd_width > 0)))
+    {
+      fallback.enqueue_block(queue, M, N, K, *pA, *pB, *pC, alpha, beta, program, "fallback", options);
+    }
+    else
+    {
+        int_t lK = K / (p_.kL*p_.depth) * p_.kL*p_.depth;
+        value_scalar _1(1, dtype);
+        enqueue_block(queue,  M, N, lK, create_slice(*pA, 0, M, 0, lK, swap_A), create_slice(*pB, 0, lK, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, beta, program, suffix, options);
+        fallback.enqueue_block(queue,  M, N, K - lK, create_slice(*pA, 0, M, lK, K, swap_A), create_slice(*pB, lK, K, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, _1, program, "fallback", options);
+    }
   }
 
   //
