@@ -142,8 +142,8 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     stream << KernelPrefix(backend) << " void " << gemm_name << "(" << _size_t << " M, " << _size_t << " N, " << _size_t << " K, "
                                << Global(backend) << " " << sdtype << "* C, "  << _size_t << " Cld," << _size_t << " Coff," << _size_t << " Cstride1, "
                                << sdtype << " alpha,"
-                               << Global(backend) << " " << vdtype << "* A, "  << _size_t << " Ald," << _size_t << " Aoff," << _size_t << " Astride1,"
-                               << Global(backend) << " " << vdtype << "* B, "  << _size_t << " Bld," << _size_t << " Boff," << _size_t << " Bstride1,"
+                               << Global(backend) << " " << sdtype << "* A, "  << _size_t << " Ald," << _size_t << " Aoff," << _size_t << " Astride1,"
+                               << Global(backend) << " " << sdtype << "* B, "  << _size_t << " Bld," << _size_t << " Boff," << _size_t << " Bstride1,"
                                << sdtype << " beta)"
                                << std::endl;
     stream << "{" << std::endl;
@@ -190,33 +190,33 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     unsigned int npB = p_.nL/(B_trans_=='T'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
 
     if (A_trans_=='N')
-        stream << "A += (idxT + gidx*" << p_.mL/p_.simd_width << ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
+        stream << "A += (idxT*" << p_.simd_width << " + gidx*" << p_.mL<< ")" << ASTRIDE1 << " + idyT*Ald + offz*Ald;" << std::endl;
     else
         stream << "A += idxT" << ASTRIDE1 << " + (idyT + gidx*" << p_.mL/p_.simd_width << ")*Ald + offz;" << std::endl;
 
     if(B_trans_=='T')
-        stream << "B += (idxT + gidy*" << p_.nL/p_.simd_width << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
+        stream << "B += (idxT*" << p_.simd_width << " + gidy*" << p_.nL << ")" << BSTRIDE1 << " + idyT*Bld + offz*Bld;" << std::endl;
     else
-        stream << "B += idxT" << BSTRIDE1 << " + (idyT + gidy*" << p_.nL/p_.simd_width << ")*Bld + offz;" << std::endl;
+        stream << "B += idxT" << BSTRIDE1 << " + (idyT + gidy*" << p_.nL << ")*Bld + offz;" << std::endl;
 
 
-    stream << "__global " << vdtype << "* Ai[" << npA << "];" << std::endl;
+    stream << "__global " << sdtype << "* Ai[" << npA << "];" << std::endl;
     stream << "for(unsigned int i = 0 ; i < " << npA << " ; ++i) Ai[i] = A;" << std::endl;
 
     for(unsigned int i = 0 ; i < npA ; i++ )
         if (A_trans_=='N')
-          stream << "if(gidx*" << p_.mL << " + idxT*" << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < M) Ai[" << i << "] += " << i*p_.local_fetch_0 << ASTRIDE1 << ";" << std::endl;
+          stream << "if(gidx*" << p_.mL << " + idxT*" << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < M) Ai[" << i << "] += " << i*p_.local_fetch_0*p_.simd_width << ASTRIDE1 << ";" << std::endl;
         else
           stream << "if(gidx*" << p_.mL << " + idyT + " << i << "*" << p_.local_fetch_1 << " < M) Ai[" << i << "] += " << i*p_.local_fetch_1 << "*Ald;" << std::endl;
 
 
-    stream << "__global " << vdtype << "* Bi[" << npB << "];" << std::endl;
+    stream << "__global " << sdtype << "* Bi[" << npB << "];" << std::endl;
     stream << "for(unsigned int i = 0 ; i < " << npB << " ; ++i) Bi[i] = B;" << std::endl;
 
 
     for(unsigned int i = 0 ; i < npB ; i++ )
         if (B_trans_=='T')
-          stream << "if(gidy*" << p_.nL << " + idxT* " << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < N) Bi[" << i << "] += " << i*p_.local_fetch_0 << BSTRIDE1 << ";" << std::endl;
+          stream << "if(gidy*" << p_.nL << " + idxT* " << p_.simd_width << " + " << i << "*" << p_.local_fetch_0*p_.simd_width << " < N) Bi[" << i << "] += " << i*p_.local_fetch_0*p_.simd_width << BSTRIDE1 << ";" << std::endl;
         else
           stream << "if(gidy*" << p_.nL << " + idyT + " << i << "*" << p_.local_fetch_1 << " < N) Bi[" << i << "] += " << i*p_.local_fetch_1 << "*Bld;" << std::endl;
 
@@ -225,7 +225,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     if (A_trans_=='N')
       stream << LocalPtr(backend) << " " << sdtype << "* lAstore = lA + idyT*" << lAld << " + idxT*" << p_.simd_width << ";" << std::endl;
     else
-      stream << LocalPtr(backend) << " " << sdtype << "* lAstore = lA + idxT*" << lAld << " + idyT;" << std::endl;
+      stream << LocalPtr(backend) << " " << sdtype << "* lAstore = lA + idxT*" << lAld*p_.simd_width << " + idyT;" << std::endl;
 
 
     if (B_trans_=='T')
@@ -247,7 +247,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
         {
           std::string mm = to_string(m/(p_.simd_width*p_.local_fetch_0));
           std::string kk = to_string(k);
-          string to_load = "Ai[" + mm +"][" + kk + "*Ald]";
+          string to_load = VLOAD("0" ,"&Ai[" + mm +"][" + kk + "*Ald]");
           if(check_bounds_)
               to_load = "(block_k + idyT + " + kk + "< K)?" + to_load + ":0";
           stream << VSTORE(to_load, "0", "lAstore + " + to_string(k*lAld+m)) << ";" << std::endl;
@@ -261,7 +261,15 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           string to_load = "Ai[" + mm + "][" + kk + ASTRIDE1 + "]";
           if(check_bounds_)
               to_load = "(block_k + idxT + " + kk + "< K)?" + to_load + ":0";
-          stream << VSTORE(to_load, "0", "lAstore + " + to_string(m*lAld+k)) << ";" << std::endl;
+          if(p_.simd_width==1)
+            stream << VSTORE(to_load, "0", "lAstore + " + to_string(m*lAld+k)) << ";" << std::endl;
+          else
+          {
+            stream << vdtype << " tmpA" << k << m << " = " << to_load << ";" << std::endl;
+            for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+                stream << "lAstore[" << k + (m + s)*lAld << "]= tmpA" << k << m << ".s" << s << ";" << std::endl;
+          }
+
         }
 
     stream << "//Fetch B to local memory" << std::endl;
@@ -271,7 +279,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
         {
           std::string nn = to_string(n/(p_.simd_width*p_.local_fetch_0));
           std::string kk = to_string(k);
-          string to_load = "Bi[" + nn + "][" + kk + "*Bld]";
+          string to_load = VLOAD("0", "&Bi[" + nn + "][" + kk + "*Bld]");
           if(check_bounds_)
               to_load = "(block_k + idyT + " + kk + "< K)?" + to_load + ":0";
           stream << VSTORE(to_load, "0", "lBstore + " + to_string(k*lBld+n)) << ";" << std::endl;
@@ -289,9 +297,9 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
             stream << VSTORE(to_load, "0", "lBstore + " + to_string(n*lBld+k)) << ";" << std::endl;
           else
           {
-            stream << vdtype << " tmp" << k << n << " = " << to_load << ";" << std::endl;
+            stream << vdtype << " tmpB" << k << n << " = " << to_load << ";" << std::endl;
             for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                stream << "lBstore[" << k + (n + s)*lBld << "]= tmp" << k << n << ".s" << s << ";" << std::endl;
+                stream << "lBstore[" << k + (n + s)*lBld << "]= tmpB" << k << n << ".s" << s << ";" << std::endl;
           }
         }
     stream << LocalBarrier(backend) << ";" << std::endl;
@@ -353,7 +361,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           stream << "Ai[" << i << "] += "  << p_.kL << "*Ald;" << std::endl;
     else
       for(unsigned int i = 0 ; i < npA ; ++i)
-          stream << "Ai[" << i << "] += "  << p_.kL << ASTRIDE1 << ";" << std::endl;
+          stream << "Ai[" << i << "] += "  << p_.kL/p_.simd_width << ASTRIDE1 << ";" << std::endl;
 
     //Increment B pointers to global memory
     if (B_trans_=='T')
@@ -361,7 +369,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           stream << "Bi[" << i << "] += " << p_.kL << "*Bld;" << std::endl;
     else
       for(unsigned int i = 0 ; i < npB ; ++i)
-          stream << "Bi[" << i << "] += " << p_.kL << BSTRIDE1 << ";" << std::endl;
+          stream << "Bi[" << i << "] += " << p_.kL/p_.simd_width << BSTRIDE1 << ";" << std::endl;
 
     stream.dec_tab();
     stream << "}" << std::endl;
@@ -421,7 +429,8 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
       stream << "}" << std::endl;
     }
 
-//    std::cout << stream.str() << std::endl;
+    if(p_.simd_width>1)
+        std::cout << stream.str() << std::endl;
     return stream.str();
 
 #undef VLOAD
@@ -470,13 +479,13 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 
     helper.set_arguments(alpha.dtype(), alpha.values());
     gemm.setArg(current_arg++, A.data());
-    gemm.setSizeArg(current_arg++, A.ld()*A.stride()[1]/p_.simd_width);
-    gemm.setSizeArg(current_arg++, (A.start()[0] + A.start()[1]*A.ld())/p_.simd_width);
+    gemm.setSizeArg(current_arg++, A.ld()*A.stride()[1]);
+    gemm.setSizeArg(current_arg++, (A.start()[0] + A.start()[1]*A.ld()));
     gemm.setSizeArg(current_arg++, A.stride()[0]);
 
     gemm.setArg(current_arg++, B.data());
-    gemm.setSizeArg(current_arg++, B.ld()*B.stride()[1]/p_.simd_width);
-    gemm.setSizeArg(current_arg++, (B.start()[0] + B.start()[1]*B.ld())/p_.simd_width);
+    gemm.setSizeArg(current_arg++, B.ld()*B.stride()[1]);
+    gemm.setSizeArg(current_arg++, B.start()[0] + B.start()[1]*B.ld());
     gemm.setSizeArg(current_arg++, B.stride()[0]);
 
     helper.set_arguments(beta.dtype(), beta.values());
@@ -590,8 +599,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     execution_options_type const & options = ctr.execution_options();
 
     int_t lK = K / (p_.kL*p_.depth) * p_.kL*p_.depth;
-    if (lK==0 || ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1
-        || (p_.simd_width>1 && (ldstartA % p_.simd_width > 0 || ldstartB % p_.simd_width > 0)))
+    if (lK==0 || ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1)
     {
       fallback.enqueue_block(queue, M, N, K, *pA, *pB, *pC, alpha, beta, program, "fallback", options);
     }
