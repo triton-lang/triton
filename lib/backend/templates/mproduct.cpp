@@ -61,9 +61,6 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     if ( p_.kS % p_.kL == 0)
       return TEMPLATE_KS_MUST_BE_SMALLER_THAN_KL;
 
-    if (!(A_trans_=='N' && B_trans_=='T') && p_.simd_width>1)
-      return TEMPLATE_SIMD_WIDTH_MUST_BE_ONE;
-
     if (p_.A_fetching_policy==FETCH_FROM_LOCAL || p_.B_fetching_policy==FETCH_FROM_LOCAL)
     {
       if ((p_.local_fetch_0*p_.local_fetch_1) !=(p_.local_size_0*p_.local_size_1))
@@ -234,7 +231,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     if (B_trans_=='T')
       stream << LocalPtr(backend) << " " << sdtype << "* lBstore = lB + idyT*" << lBld << " + idxT*" << p_.simd_width << ";" << std::endl;
     else if (B_trans_=='N')
-      stream << LocalPtr(backend) << " " << sdtype << "* lBstore = lB + idxT*" << lBld << " + idyT;" << std::endl;
+      stream << LocalPtr(backend) << " " << sdtype << "* lBstore = lB + idxT*" << lBld*p_.simd_width << " + idyT;" << std::endl;
 
 
     stream << "//Outer loop" << std::endl;
@@ -288,7 +285,14 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
           string to_load = "Bi[" + nn + "][" + kk + BSTRIDE1 + "]";
           if(check_bounds_)
               to_load = "(block_k + idxT + " + kk + "< K)?" + to_load + ":0";
-          stream << VSTORE(to_load, "0", "lBstore + " + to_string(n*lBld+k)) << ";" << std::endl;
+          if(p_.simd_width==1)
+            stream << VSTORE(to_load, "0", "lBstore + " + to_string(n*lBld+k)) << ";" << std::endl;
+          else
+          {
+            stream << vdtype << " tmp" << k << n << " = " << to_load << ";" << std::endl;
+            for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+                stream << "lBstore[" << k + (n + s)*lBld << "]= tmp" << k << n << ".s" << s << ";" << std::endl;
+          }
         }
     stream << LocalBarrier(backend) << ";" << std::endl;
 

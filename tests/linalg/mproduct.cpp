@@ -97,9 +97,9 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 template<typename T>
 void test_impl(T epsilon, ad::driver::Context const & ctx)
 {
-    int_t M = 476;
-    int_t N = 292;
-    int_t K = 325;
+    int_t M = 64;
+    int_t N = 64;
+    int_t K = 32;
 
     int_t SUBM = 64;
     int_t SUBN = 64;
