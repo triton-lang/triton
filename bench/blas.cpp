@@ -299,10 +299,11 @@ void bench(ad::numeric_type dtype, std::string operation)
   if(operation.substr(0,4)=="gemm")
   {
     std::vector<std::tuple<int_t, int_t, int_t> > MNKs;
-    MNKs.push_back(std::make_tuple(896,896,896));
-    MNKs.push_back(std::make_tuple(3072,3072,3072));
-    MNKs.push_back(std::make_tuple(1024,64,768));
-    MNKs.push_back(std::make_tuple(768,64,128));
+    MNKs.push_back(std::make_tuple(3025,96,363));
+    MNKs.push_back(std::make_tuple(729,128,1200));
+    MNKs.push_back(std::make_tuple(169,384,2304));
+    MNKs.push_back(std::make_tuple(169,192,1728));
+    MNKs.push_back(std::make_tuple(169,128,1728));
     MNKs.push_back(std::make_tuple(64,64,32000));
     MNKs.push_back(std::make_tuple(1024,1024,32000));
 
@@ -323,7 +324,7 @@ void bench(ad::numeric_type dtype, std::string operation)
     #if HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
-        BENCHMARK_ISAAC(C = ad::control(dot(A,trans(B)), ad::execution_options_type(0, &events)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = ad::control(dot(A,B), ad::execution_options_type(0, &events)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         BENCHMARK_CLBLAS(clblasSgemm(clblasColumnMajor, clblasNoTrans, clblasTrans, M, N, K, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(B.data()), 0, ldb,
