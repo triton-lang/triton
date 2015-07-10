@@ -167,6 +167,7 @@ bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type 
     max = std::max(max, delta);
     if(delta > epsilon)
     {
+      std::cout << i << " " << x[i] << " " << y[i]<<std::endl;
       return true;
     }
   }
