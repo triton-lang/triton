@@ -1,70 +1,71 @@
-#include "isaac/backend/templates/vaxpy.h"
-#include "isaac/backend/templates/maxpy.h"
-#include "isaac/backend/templates/reduction.h"
-#include "isaac/backend/templates/mreduction.h"
-#include "isaac/backend/templates/mproduct.h"
+#include "isaac/backend/templates/axpy.h"
+#include "isaac/backend/templates/ger.h"
+#include "isaac/backend/templates/dot.h"
+#include "isaac/backend/templates/gemv.h"
+#include "isaac/backend/templates/gemm.h"
 #include "isaac/model/model.h"
 
 #include "common.hpp"
 #include "model.h"
+
+
+namespace tpt = isaac::templates;
+
+
 namespace detail
 {
-  bp::list input_sizes(isaac::base & temp, isc::expressions_tuple const & tree)
+  bp::list input_sizes(tpt::base & temp, isc::expressions_tuple const & tree)
   {
       std::vector<int> tmp = temp.input_sizes(tree);
       return tools::to_list(tmp.begin(), tmp.end());
   }
-
-  std::shared_ptr<isc::model> construct_model(bp::object dtype, bp::object const & tp, isc::driver::CommandQueue & queue)
-  {
-      return std::shared_ptr<isc::model>(new isc::model(tools::extract_template_type(tp), tools::extract_dtype(dtype), (isc::base const &)bp::extract<isc::base>(tp), queue));
-  }
 }
 
-void export_model()
+void export_templates()
 {
 
-  bp::class_<isaac::model>("model", bp::no_init)
-                  .def("__init__", bp::make_constructor(detail::construct_model))
-                  .def("execute", &isc::model::execute);
+  bp::object templates_module(bp::handle<>(bp::borrowed(PyImport_AddModule("isaac.templates"))));
+  bp::scope().attr("templates") = templates_module;
+  bp::scope template_scope = templates_module;
 
-  bp::enum_<isaac::fetching_policy_type>
+
+  bp::enum_<tpt::fetching_policy_type>
       ("fetching_policy_type")
-      .value("FETCH_FROM_LOCAL", isc::FETCH_FROM_LOCAL)
-      .value("FETCH_FROM_GLOBAL_STRIDED", isc::FETCH_FROM_GLOBAL_STRIDED)
-      .value("FETCH_FROM_GLOBAL_CONTIGUOUS", isc::FETCH_FROM_GLOBAL_CONTIGUOUS)
+      .value("FETCH_FROM_LOCAL", tpt::FETCH_FROM_LOCAL)
+      .value("FETCH_FROM_GLOBAL_STRIDED", tpt::FETCH_FROM_GLOBAL_STRIDED)
+      .value("FETCH_FROM_GLOBAL_CONTIGUOUS", tpt::FETCH_FROM_GLOBAL_CONTIGUOUS)
       ;
 
   //Base
   {
-    #define __PROP(name) .def_readonly(#name, &isaac::base::parameters_type::name)
-    bp::class_<isaac::base, boost::noncopyable>("base", bp::no_init)
-            .def("lmem_usage", &isaac::base::lmem_usage)
-            .def("registers_usage", &isaac::base::registers_usage)
-            .def("is_invalid", &isaac::base::is_invalid)
+    #define __PROP(name) .def_readonly(#name, &tpt::base::parameters_type::name)
+    bp::class_<tpt::base, boost::noncopyable>("base", bp::no_init)
+            .def("lmem_usage", &tpt::base::lmem_usage)
+            .def("registers_usage", &tpt::base::registers_usage)
+            .def("is_invalid", &tpt::base::is_invalid)
             .def("input_sizes", &detail::input_sizes)
         ;
     #undef __PROP
   }
 
-  #define WRAP_BASE(name) bp::class_<isaac::base_impl<isaac::name, isaac::name::parameters_type>, bp::bases<isaac::base>, boost::noncopyable>(#name, bp::no_init);
-  #define WRAP_TEMPLATE(name, basename, ...) bp::class_<isaac::name, bp::bases<isaac::base_impl<isaac::basename, isaac::basename::parameters_type> > >(#name, bp::init<__VA_ARGS__>())\
-                                      .add_property("local_size_0", &isc::name::local_size_0)\
-                                      .add_property("local_size_1", &isc::name::local_size_1);
+  #define WRAP_BASE(name) bp::class_<tpt::base_impl<tpt::name, tpt::name::parameters_type>, bp::bases<tpt::base>, boost::noncopyable>(#name, bp::no_init);
+  #define WRAP_TEMPLATE(name, basename, ...) bp::class_<tpt::name, bp::bases<tpt::base_impl<tpt::basename, tpt::basename::parameters_type> > >(#name, bp::init<__VA_ARGS__>())\
+                                      .add_property("local_size_0", &tpt::name::local_size_0)\
+                                      .add_property("local_size_1", &tpt::name::local_size_1);
   #define WRAP_SINGLE_TEMPLATE(name, ...) WRAP_BASE(name) WRAP_TEMPLATE(name, name, __VA_ARGS__)
 
   //Vector AXPY
-  WRAP_SINGLE_TEMPLATE(vaxpy, uint, uint, uint, isaac::fetching_policy_type)
-  WRAP_SINGLE_TEMPLATE(maxpy, uint, uint, uint, uint, uint, isaac::fetching_policy_type)
-  WRAP_SINGLE_TEMPLATE(reduction, uint, uint, uint, isaac::fetching_policy_type)
-  WRAP_BASE(mreduction)
-  WRAP_TEMPLATE(mreduction_rows, mreduction, uint, uint, uint, uint, uint, isaac::fetching_policy_type)
-  WRAP_TEMPLATE(mreduction_cols, mreduction, uint, uint, uint, uint, uint, isaac::fetching_policy_type)
-  WRAP_BASE(mproduct)
-  WRAP_TEMPLATE(mproduct_nn, mproduct, uint, uint, uint, uint, uint, uint, uint, uint, isaac::fetching_policy_type, isaac::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(mproduct_tn, mproduct, uint, uint, uint, uint, uint, uint, uint, uint, isaac::fetching_policy_type, isaac::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(mproduct_nt, mproduct, uint, uint, uint, uint, uint, uint, uint, uint, isaac::fetching_policy_type, isaac::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(mproduct_tt, mproduct, uint, uint, uint, uint, uint, uint, uint, uint, isaac::fetching_policy_type, isaac::fetching_policy_type, uint, uint)
+  WRAP_SINGLE_TEMPLATE(axpy, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_SINGLE_TEMPLATE(ger, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_SINGLE_TEMPLATE(dot, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_BASE(gemv)
+  WRAP_TEMPLATE(gemv_n, gemv, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_TEMPLATE(gemv_t, gemv, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_BASE(gemm)
+  WRAP_TEMPLATE(gemm_nn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(gemm_tn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(gemm_nt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(gemm_tt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
 
 
 }

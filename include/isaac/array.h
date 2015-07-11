@@ -219,15 +219,15 @@ array_expression norm(array_expression const &, unsigned int order = 2);
 
 array_expression repmat(array const &, int_t const & rep1, int_t const & rep2);
 
-#define ISAAC_DECLARE_REDUCTION(OPNAME) \
+#define ISAAC_DECLARE_DOT(OPNAME) \
 array_expression OPNAME(array const & M, int_t axis = -1);\
 array_expression OPNAME(array_expression const & M, int_t axis = -1);
 
-ISAAC_DECLARE_REDUCTION(sum)
-ISAAC_DECLARE_REDUCTION(argmax)
-ISAAC_DECLARE_REDUCTION(max)
-ISAAC_DECLARE_REDUCTION(min)
-ISAAC_DECLARE_REDUCTION(argmin)
+ISAAC_DECLARE_DOT(sum)
+ISAAC_DECLARE_DOT(argmax)
+ISAAC_DECLARE_DOT(max)
+ISAAC_DECLARE_DOT(min)
+ISAAC_DECLARE_DOT(argmin)
 
 array_expression eye(std::size_t, std::size_t, isaac::numeric_type, driver::Context context = driver::queues.default_context());
 array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, driver::Context context = driver::queues.default_context());

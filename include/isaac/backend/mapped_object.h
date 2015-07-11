@@ -84,46 +84,46 @@ protected:
   *
   * Maps prod(matrix_expression, matrix_expression)
   */
-class mapped_mproduct : public mapped_object, public binary_leaf
+class mapped_gemm : public mapped_object, public binary_leaf
 {
 public:
-  mapped_mproduct(std::string const & scalartype, unsigned int id, node_info info);
+  mapped_gemm(std::string const & scalartype, unsigned int id, node_info info);
 };
 
 /** @brief Reduction
 *
-* Base class for mapping a reduction
+* Base class for mapping a dot
 */
-class mapped_reduction : public mapped_object, public binary_leaf
+class mapped_dot : public mapped_object, public binary_leaf
 {
 public:
-  mapped_reduction(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key);
+  mapped_dot(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key);
 
   int_t root_idx() const;
   isaac::array_expression const & array_expression() const;
   array_expression::node root_node() const;
-  bool is_index_reduction() const;
+  bool is_index_dot() const;
   op_element root_op() const;
 };
 
-/** @brief Scalar reduction
+/** @brief Scalar dot
 *
-* Maps a scalar reduction (max, min, argmax, inner_prod, etc..)
+* Maps a scalar dot (max, min, argmax, inner_prod, etc..)
 */
-class mapped_scalar_reduction : public mapped_reduction
+class mapped_scalar_dot : public mapped_dot
 {
 public:
-  mapped_scalar_reduction(std::string const & scalartype, unsigned int id, node_info info);
+  mapped_scalar_dot(std::string const & scalartype, unsigned int id, node_info info);
 };
 
-/** @brief Vector reduction
+/** @brief Vector dot
 *
-* Maps a row-wise reduction (max, min, argmax, matrix-vector product, etc..)
+* Maps a row-wise dot (max, min, argmax, matrix-vector product, etc..)
 */
-class mapped_mreduction : public mapped_reduction
+class mapped_gemv : public mapped_dot
 {
 public:
-  mapped_mreduction(std::string const & scalartype, unsigned int id, node_info info);
+  mapped_gemv(std::string const & scalartype, unsigned int id, node_info info);
 };
 
 /** @brief Host scalar

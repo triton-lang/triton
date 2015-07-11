@@ -10,15 +10,15 @@ namespace detail
 
 
 
-  bool is_scalar_reduction(array_expression::node const & node)
+  bool is_scalar_dot(array_expression::node const & node)
   {
-    return node.op.type_family==OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY;
+    return node.op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY;
   }
 
-  bool is_vector_reduction(array_expression::node const & node)
+  bool is_vector_dot(array_expression::node const & node)
   {
-    return node.op.type_family==OPERATOR_ROWS_REDUCTION_TYPE_FAMILY
-        || node.op.type_family==OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY;
+    return node.op.type_family==OPERATOR_ROWS_DOT_TYPE_FAMILY
+        || node.op.type_family==OPERATOR_COLUMNS_DOT_TYPE_FAMILY;
   }
 
   bool is_assignment(op_element const & op)
@@ -75,10 +75,10 @@ namespace detail
         || op.type==OPERATOR_MATRIX_ROW_TYPE
         || op.type==OPERATOR_MATRIX_COLUMN_TYPE
         || op.type==OPERATOR_OUTER_PROD_TYPE
-        || op.type_family==OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY
-        || op.type_family==OPERATOR_ROWS_REDUCTION_TYPE_FAMILY
-        || op.type_family==OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY
-        || op.type_family==OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY
+        || op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY
+        || op.type_family==OPERATOR_ROWS_DOT_TYPE_FAMILY
+        || op.type_family==OPERATOR_COLUMNS_DOT_TYPE_FAMILY
+        || op.type_family==OPERATOR_GEMM_TYPE_FAMILY
         ;
   }
 
@@ -214,10 +214,10 @@ const char * evaluate(operation_node_type type)
   case OPERATOR_ELEMENT_MIN_TYPE : return "min";
 
     //Binary
-  case OPERATOR_MATRIX_PRODUCT_NN_TYPE : return "prodNN";
-  case OPERATOR_MATRIX_PRODUCT_TN_TYPE : return "prodTN";
-  case OPERATOR_MATRIX_PRODUCT_NT_TYPE : return "prodNT";
-  case OPERATOR_MATRIX_PRODUCT_TT_TYPE : return "prodTT";
+  case OPERATOR_GEMM_NN_TYPE : return "prodNN";
+  case OPERATOR_GEMM_TN_TYPE : return "prodTN";
+  case OPERATOR_GEMM_NT_TYPE : return "prodNT";
+  case OPERATOR_GEMM_TT_TYPE : return "prodTT";
   case OPERATOR_VDIAG_TYPE : return "vdiag";
   case OPERATOR_MATRIX_DIAG_TYPE : return "mdiag";
   case OPERATOR_MATRIX_ROW_TYPE : return "row";

@@ -1,3 +1,4 @@
+#include "isaac/model/model.h"
 #include "common.hpp"
 #include "core.h"
 
@@ -79,6 +80,11 @@ unsigned int size(datatype<T> const & dt)
 
 namespace detail
 {
+  std::shared_ptr<isc::model> construct_model(bp::object dtype, bp::object const & tp, isc::driver::CommandQueue & queue)
+  {
+      return std::shared_ptr<isc::model>(new isc::model(tools::extract_template_type(tp), tools::extract_dtype(dtype), (isaac::templates::base const &)bp::extract<isaac::templates::base>(tp), queue));
+  }
+
   std::shared_ptr<isc::array>
   ndarray_to_iscarray(const np::ndarray& array, const isc::driver::Context& ctx)
   {
@@ -172,7 +178,6 @@ namespace detail
         bp::throw_error_already_set();
         throw;
     }
-
   }
 }
 
@@ -182,6 +187,10 @@ namespace detail
 /////////////
 void export_core()
 {
+
+    bp::class_<isaac::model>("model", bp::no_init)
+                    .def("__init__", bp::make_constructor(detail::construct_model))
+                    .def("execute", &isc::model::execute);
 
     bp::class_<isc::value_scalar>("value_scalar", bp::no_init)
               .add_property("dtype", &isc::value_scalar::dtype);
@@ -206,15 +215,15 @@ void export_core()
     #undef INSTANTIATE
 
     bp::enum_<isc::expression_type>("operations")
-      MAP_ENUM(VECTOR_AXPY_TYPE, isc)
-      MAP_ENUM(MATRIX_AXPY_TYPE, isc)
-      MAP_ENUM(REDUCTION_TYPE, isc)
-      MAP_ENUM(ROW_WISE_REDUCTION_TYPE, isc)
-      MAP_ENUM(COL_WISE_REDUCTION_TYPE, isc)
-      MAP_ENUM(VECTOR_AXPY_TYPE, isc)
-      MAP_ENUM(VECTOR_AXPY_TYPE, isc)
-      MAP_ENUM(VECTOR_AXPY_TYPE, isc)
-      MAP_ENUM(VECTOR_AXPY_TYPE, isc);
+      MAP_ENUM(AXPY_TYPE, isc)
+      MAP_ENUM(GER_TYPE, isc)
+      MAP_ENUM(DOT_TYPE, isc)
+      MAP_ENUM(GEMV_N_TYPE, isc)
+      MAP_ENUM(GEMV_T_TYPE, isc)
+      MAP_ENUM(GEMM_NN_TYPE, isc)
+      MAP_ENUM(GEMM_TN_TYPE, isc)
+      MAP_ENUM(GEMM_NT_TYPE, isc)
+      MAP_ENUM(GEMM_TT_TYPE, isc);
 
 #define ADD_SCALAR_HANDLING(OP)\
   .def(bp::self                                    OP int())\

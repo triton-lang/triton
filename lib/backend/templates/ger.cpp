@@ -1,4 +1,4 @@
-#include "isaac/backend/templates/maxpy.h"
+#include "isaac/backend/templates/ger.h"
 #include "isaac/tools/make_map.hpp"
 #include "isaac/tools/make_vector.hpp"
 #include "isaac/symbolic/io.h"
@@ -7,15 +7,17 @@
 
 namespace isaac
 {
+namespace templates
+{
 
-maxpy_parameters::maxpy_parameters(unsigned int _simd_width,
+ger_parameters::ger_parameters(unsigned int _simd_width,
                           unsigned int _local_size_0, unsigned int _local_size_1,
                           unsigned int _num_groups_0, unsigned int _num_groups_1,
                           fetching_policy_type _fetching_policy) : base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1), num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetching_policy(_fetching_policy){ }
 
 
 
-int maxpy::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+int ger::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
 {
   if (p_.simd_width>1)
     return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -24,7 +26,7 @@ int maxpy::is_invalid_impl(driver::Device const &, expressions_tuple const &) co
   return TEMPLATE_VALID;
 }
 
-std::string maxpy::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string ger::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   kernel_generation_stream stream;
   std::string _size_t = size_type(device);
@@ -95,23 +97,23 @@ std::string maxpy::generate_impl(const char * suffix, expressions_tuple const & 
   return stream.str();
 }
 
-maxpy::maxpy(parameters_type const & parameters, binding_policy_t binding_policy) :
-  base_impl<maxpy, maxpy_parameters>(parameters, binding_policy){ }
+ger::ger(parameters_type const & parameters, binding_policy_t binding_policy) :
+  base_impl<ger, ger_parameters>(parameters, binding_policy){ }
 
-maxpy::maxpy(unsigned int simd, unsigned int ls1, unsigned int ls2,
+ger::ger(unsigned int simd, unsigned int ls1, unsigned int ls2,
                                unsigned int ng1, unsigned int ng2, fetching_policy_type fetch,
                                binding_policy_t bind):
-    base_impl<maxpy, maxpy_parameters>(maxpy_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
+    base_impl<ger, ger_parameters>(ger_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
 {}
 
-std::vector<int_t> maxpy::input_sizes(expressions_tuple const & expressions) const
+std::vector<int_t> ger::input_sizes(expressions_tuple const & expressions) const
 {
   isaac::array_expression const & array_expression = *(expressions.data().front());
   std::pair<int_t, int_t> size = matrix_size(lhs_most(array_expression.tree(), array_expression.root()));
   return tools::make_vector<int_t>() << size.first << size.second;
 }
 
-void maxpy::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base &, controller<expressions_tuple> const & controller)
+void ger::enqueue(driver::CommandQueue & /*queue*/, driver::Program & program, const char * suffix, base &, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
   char name[32] = {"axpy"};
@@ -128,4 +130,5 @@ void maxpy::enqueue(driver::CommandQueue & queue, driver::Program & program, con
   controller.execution_options().enqueue(program.context(), kernel, global, local);
 }
 
+}
 }

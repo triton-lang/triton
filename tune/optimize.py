@@ -14,10 +14,10 @@ from numpy import cumsum
 
 import tools
 
-fetch_types = [isc.fetching_policy_type.FETCH_FROM_LOCAL,
-               isc.fetching_policy_type.FETCH_FROM_LOCAL,
-               isc.fetching_policy_type.FETCH_FROM_LOCAL,
-               isc.fetching_policy_type.FETCH_FROM_LOCAL]
+fetch_types = [isc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
+               isc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED,
+               isc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
+               isc.templates.fetching_policy_type.FETCH_FROM_LOCAL]
 
 def exhaustive(template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
@@ -159,15 +159,15 @@ def is_local_optimum(parameters, template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
     genetic_infos = tools.genetic_infos_of(template)
     
-    if issubclass(template, isc.vaxpy):
+    if issubclass(template, isc.axpy):
         sweep_over = [0,1,2]
-    elif issubclass(template, isc.reduction):
+    elif issubclass(template, isc.dot):
         sweep_over = [0,1,2]
-    elif issubclass(template, isc.maxpy):
+    elif issubclass(template, isc.ger):
         sweep_over = [0,1,2,3,4]
-    elif issubclass(template, isc.mreduction):
+    elif issubclass(template, isc.gemv):
         sweep_over = [0,1,2,3,4]
-    elif issubclass(template, isc.mproduct):
+    elif issubclass(template, isc.gemm):
         sweep_over = [1,2,3,4,5,7,10,11]
     
     #Evaluate the provided parameters guess

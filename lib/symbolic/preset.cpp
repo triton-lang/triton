@@ -12,16 +12,16 @@ namespace preset
 void gemm::handle_node(array_expression::container_type &tree, size_t rootidx, args & a)
 {
     //Matrix-Matrix product node
-    if(tree[rootidx].op.type_family==OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY)
+    if(tree[rootidx].op.type_family==OPERATOR_GEMM_TYPE_FAMILY)
     {
         if(tree[rootidx].lhs.type_family==ARRAY_TYPE_FAMILY) a.A = &tree[rootidx].lhs;
         if(tree[rootidx].rhs.type_family==ARRAY_TYPE_FAMILY) a.B = &tree[rootidx].rhs;
         switch(tree[rootidx].op.type)
         {
-          case OPERATOR_MATRIX_PRODUCT_NN_TYPE: a.type = MATRIX_PRODUCT_NN_TYPE; break;
-          case OPERATOR_MATRIX_PRODUCT_NT_TYPE: a.type = MATRIX_PRODUCT_NT_TYPE; break;
-          case OPERATOR_MATRIX_PRODUCT_TN_TYPE: a.type = MATRIX_PRODUCT_TN_TYPE; break;
-          case OPERATOR_MATRIX_PRODUCT_TT_TYPE: a.type = MATRIX_PRODUCT_TT_TYPE; break;
+          case OPERATOR_GEMM_NN_TYPE: a.type = GEMM_NN_TYPE; break;
+          case OPERATOR_GEMM_NT_TYPE: a.type = GEMM_NT_TYPE; break;
+          case OPERATOR_GEMM_TN_TYPE: a.type = GEMM_TN_TYPE; break;
+          case OPERATOR_GEMM_TT_TYPE: a.type = GEMM_TT_TYPE; break;
           default: break;
         }
     }
@@ -31,7 +31,7 @@ void gemm::handle_node(array_expression::container_type &tree, size_t rootidx, a
     {
         //alpha*PROD
         if(tree[rootidx].lhs.type_family==VALUE_TYPE_FAMILY  && tree[rootidx].rhs.type_family==COMPOSITE_OPERATOR_FAMILY
-           && tree[tree[rootidx].rhs.node_index].op.type_family==OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY)
+           && tree[tree[rootidx].rhs.node_index].op.type_family==OPERATOR_GEMM_TYPE_FAMILY)
         {
             a.alpha = &tree[rootidx].lhs;
             handle_node(tree, tree[rootidx].rhs.node_index, a);

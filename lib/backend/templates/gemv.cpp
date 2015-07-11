@@ -1,48 +1,50 @@
 #include <iostream>
 #include "isaac/backend/stream.h"
 #include "isaac/backend/keywords.h"
-#include "isaac/backend/templates/mreduction.h"
+#include "isaac/backend/templates/gemv.h"
 #include "isaac/tools/to_string.hpp"
 #include "isaac/tools/make_map.hpp"
 #include "isaac/tools/make_vector.hpp"
 
 namespace isaac
 {
+namespace templates
+{
 
-mreduction_parameters::mreduction_parameters(unsigned int _simd_width,
+gemv_parameters::gemv_parameters(unsigned int _simd_width,
                               unsigned int _local_size_0, unsigned int _local_size_1,
                               unsigned int _num_groups_0, unsigned int _num_groups_1, fetching_policy_type _fetch_policy): base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1),
 num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetch_policy(_fetch_policy) { }
 
 
-int mreduction::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+int gemv::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
 {
-  if(reduction_type_==REDUCE_ROWS && p_.simd_width>1)
+  if(dot_type_==REDUCE_ROWS && p_.simd_width>1)
     return TEMPLATE_INVALID_SIMD_WIDTH;
   if (p_.fetch_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-unsigned int mreduction::lmem_usage() const
+unsigned int gemv::lmem_usage() const
 {
   return (p_.local_size_0+1)*p_.local_size_1;
 }
 
-std::string mreduction::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string gemv::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   using tools::to_string;
 
 
-  std::vector<mapped_mreduction*> reductions;
+  std::vector<mapped_gemv*> dots;
   expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::const_iterator mit;
   for (mit = mappings.begin(), sit = expressions.data().begin(); mit != mappings.end(); ++mit, ++sit)
   {
     array_expression const & first_expression = *expressions.data().front();
-    std::vector<size_t> idx = filter_nodes(&is_reduction, first_expression, false);
+    std::vector<size_t> idx = filter_nodes(&is_dot, first_expression, false);
     for (auto & elem : idx)
-      reductions.push_back((mapped_mreduction*)(mit->at(mapping_key(elem, PARENT_NODE_TYPE)).get()));
+      dots.push_back((mapped_gemv*)(mit->at(mapping_key(elem, PARENT_NODE_TYPE)).get()));
   }
 
   kernel_generation_stream stream;
@@ -54,10 +56,10 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   strcat(name[1], suffix);
 
   std::string arguments = _size_t + " M, " + _size_t + " N, " ;
-  for (const auto & e : reductions)
+  for (const auto & e : dots)
   {
     std::string numeric_type = numeric_type_to_string(lhs_most(e->array_expression().tree(), e->array_expression().root()).lhs.dtype);
-    if (e->is_index_reduction())
+    if (e->is_index_dot())
     {
       arguments += e->process(Global(backend).get() + " unsigned int* #name_temp, ");
       arguments += e->process(Global(backend).get() + " " + to_string(numeric_type) + "* #name_temp_value,");
@@ -87,7 +89,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   unsigned int local_size_0_ld = p_.local_size_0;
   std::string local_size_0_ld_str = to_string(local_size_0_ld);
 
-  for (const auto & e : reductions)
+  for (const auto & e : dots)
     stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;
 
   stream << "" << _size_t << " lid0 = " << LocalIdx0(backend) << ";" << std::endl;
@@ -104,7 +106,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream << "for(" << _size_t << " r = gid1; r < upper_bound_1; r += gsize1){" << std::endl;
   stream.inc_tab();
 
-  for (const auto & e : reductions)
+  for (const auto & e : dots)
     stream << e->process("#scalartype #name_acc = " + neutral_element((e)->root_op(), backend, "#scalartype") + ";") << std::endl;
 
   stream << "if (r < M)" << std::endl;
@@ -116,10 +118,10 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
     std::string data_type = append_width("#scalartype",simd_width);
 
 
-    for (const auto & e : reductions)
+    for (const auto & e : dots)
     {
       std::map<std::string, std::string> accessors;
-      if(reduction_type_==REDUCE_COLUMNS)
+      if(dot_type_==REDUCE_COLUMNS)
       {
         accessors["array2"] = data_type + " #namereg = " + vload(simd_width, "#scalartype", "c*#stride1", "#pointer + r*#ld", backend)+";";
         accessors["repeat"] = data_type + " #namereg = " + vload(simd_width, "#scalartype", "(c%#tuplearg0)*#stride", "#pointer + (r%#tuplearg1)*#stride ", backend)+";";
@@ -141,20 +143,20 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
         str[a] = access_vector_type("#namereg",a);
 
 
-    for (auto & elem : reductions)
+    for (auto & elem : dots)
       for (unsigned int a = 0; a < simd_width; ++a)
       {
         std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, {{"array2", str[a]}, {"repeat", str[a]}, {"array0", "#namereg"}});
-        if (elem->is_index_reduction())
-          compute_index_reduction(stream, elem->process("#name_acc"), "c*"+to_string(simd_width) + to_string(a), elem->process("#name_acc_value"), value, elem->root_op());
+        if (elem->is_index_dot())
+          compute_index_dot(stream, elem->process("#name_acc"), "c*"+to_string(simd_width) + to_string(a), elem->process("#name_acc_value"), value, elem->root_op());
         else
-          compute_reduction(stream, elem->process("#name_acc"), value,elem->root_op());
+          compute_dot(stream, elem->process("#name_acc"), value,elem->root_op());
       }
   });
   stream.dec_tab();
   stream << "}" << std::endl;
 
-  for (auto & expr : reductions)
+  for (auto & expr : dots)
     stream << expr->process("#name_buf[lid1*" + local_size_0_ld_str + "+ lid0] = #name_acc;") << std::endl;
 
   stream << "#pragma unroll" << std::endl;
@@ -167,13 +169,13 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  for (auto & e : reductions)
-    if (e->is_index_reduction())
-      compute_index_reduction(stream, e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
+  for (auto & e : dots)
+    if (e->is_index_dot())
+      compute_index_dot(stream, e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
                                     , e->process("#name_buf_value[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf_value[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
                                     , e->root_op());
     else
-      compute_reduction(stream,e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]"), e->root_op());
+      compute_dot(stream,e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -188,15 +190,15 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   if(p_.num_groups_0==1)
   {
     std::map<std::string, std::string> accessors;
-    accessors["mreduction"] = "#name_buf[lid1*" + local_size_0_ld_str + "]";
+    accessors["gemv"] = "#name_buf[lid1*" + local_size_0_ld_str + "]";
     accessors["array1"] = "#pointer[r*#stride]";
     evaluate(stream, PARENT_NODE_TYPE, accessors, expressions, mappings);
   }
   else
   {
-    for (mapped_reduction const * e : reductions)
+    for (mapped_dot const * e : dots)
     {
-      if (e->is_index_reduction())
+      if (e->is_index_dot())
         stream << e->process("#name_temp_value[r + M*gpid0] = #name_buf_value[lid1*" + local_size_0_ld_str + "];") << std::endl;
       stream << e->process("#name_temp[r + M*gpid0] = #name_buf[lid1*" + local_size_0_ld_str + "];") << std::endl;
     }
@@ -230,7 +232,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
                          {"array2", "#pointer += #start1 + #start2*#ld; "
                                     "#ld *= #nldstride; "}}, expressions, mappings);
 
-  for (const auto & e : reductions)
+  for (const auto & e : dots)
     stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;
 
   stream << _size_t << " lid0 = " << LocalIdx0(backend) << ";" << std::endl;
@@ -246,7 +248,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream << "for(" << _size_t << " r = gid1; r < upper_bound_1; r += gsize1){" << std::endl;
   stream.inc_tab();
 
-  for (const auto & e : reductions)
+  for (const auto & e : dots)
     stream << e->process("#scalartype #name_acc = " + neutral_element((e)->root_op(), backend, "#scalartype") + ";") << std::endl;
 
   stream << "if (r < M)" << std::endl;
@@ -256,8 +258,8 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream << "for(" << _size_t << " c = lid0; c < " << p_.num_groups_0 << "; c += lsize0){" << std::endl;
   stream.inc_tab();
 
-  for (mapped_reduction* e: reductions)
-    compute_reduction(stream, e->process("#name_acc"), e->process("#name_temp[r + M*c]"), e->root_op());
+  for (mapped_dot* e: dots)
+    compute_dot(stream, e->process("#name_acc"), e->process("#name_temp[r + M*c]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -266,7 +268,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream.dec_tab();
   stream << "}" << std::endl;
 
-  for (auto & expr : reductions)
+  for (auto & expr : dots)
     stream << expr->process("#name_buf[lid1*" + local_size_0_ld_str + "+ lid0] = #name_acc;") << std::endl;
 
   stream << "#pragma unroll" << std::endl;
@@ -279,13 +281,13 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  for (auto & e : reductions)
-    if (e->is_index_reduction())
-      compute_index_reduction(stream, e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
+  for (auto & e : dots)
+    if (e->is_index_dot())
+      compute_index_dot(stream, e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
                                     , e->process("#name_buf_value[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf_value[lid1*" + local_size_0_ld_str + " + lid0 + stride]")
                                     , e->root_op());
     else
-      compute_reduction(stream,e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]"), e->root_op());
+      compute_dot(stream,e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0]"), e->process("#name_buf[lid1*" + local_size_0_ld_str + " + lid0 + stride]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -299,7 +301,7 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   stream.inc_tab();
 
   std::map<std::string, std::string> accessors;
-  accessors["mreduction"] = "#name_buf[lid1*" + local_size_0_ld_str + "]";
+  accessors["gemv"] = "#name_buf[lid1*" + local_size_0_ld_str + "]";
   accessors["array1"] = "#pointer[r*#stride]";
   evaluate(stream, PARENT_NODE_TYPE, accessors, expressions, mappings);
 
@@ -317,38 +319,38 @@ std::string mreduction::generate_impl(const char * suffix, expressions_tuple con
   return stream.str();
 }
 
-mreduction::mreduction(mreduction::parameters_type const & parameters,
-                                         mreduction::reduction_type rtype,
+gemv::gemv(gemv::parameters_type const & parameters,
+                                         gemv::dot_type rtype,
                                          binding_policy_t binding_policy) :
-  base_impl<mreduction, mreduction_parameters>(parameters, binding_policy),
-  reduction_type_(rtype){ }
+  base_impl<gemv, gemv_parameters>(parameters, binding_policy),
+  dot_type_(rtype){ }
 
-std::vector<int_t> mreduction::input_sizes(expressions_tuple const & expressions) const
+std::vector<int_t> gemv::input_sizes(expressions_tuple const & expressions) const
 {
   array_expression const & first_expression = *expressions.data().front();
-  std::vector<std::size_t> idx = filter_nodes(&is_reduction, first_expression, false);
+  std::vector<std::size_t> idx = filter_nodes(&is_dot, first_expression, false);
   std::pair<int_t, int_t> MN = matrix_size(lhs_most(first_expression.tree(), idx[0]));
-  if(reduction_type_==REDUCE_COLUMNS)
+  if(dot_type_==REDUCE_COLUMNS)
     std::swap(MN.first,MN.second);
   return tools::make_vector<int_t>() << MN.first << MN.second;
 }
 
-void mreduction::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
+void gemv::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
   driver::Context const & context = expressions.context();
 
   std::vector<int_t> MN = input_sizes(expressions);
-  std::vector<array_expression::node const *> reductions;
+  std::vector<array_expression::node const *> dots;
   for (const auto & e : expressions.data())
   {
-    std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, *e, false);
-    for (auto & r : reductions_idx)
-      reductions.push_back(&(e)->tree()[r]);
+    std::vector<size_t> dots_idx = filter_nodes(&is_dot, *e, false);
+    for (auto & r : dots_idx)
+      dots.push_back(&(e)->tree()[r]);
   }
 
   //Fallback
-  if(reduction_type_==REDUCE_COLUMNS && p_.simd_width>1 && requires_fallback(expressions))
+  if(dot_type_==REDUCE_COLUMNS && p_.simd_width>1 && requires_fallback(expressions))
   {
       fallback.enqueue(queue, program, "fallback", fallback, controller);
       return;
@@ -381,9 +383,9 @@ void mreduction::enqueue(driver::CommandQueue & queue, driver::Program & program
     //Temporary buffers
     unsigned int i = 0;
     unsigned int j = 0;
-    for (auto const & r : reductions)
+    for (auto const & r : dots)
     {
-      if (is_index_reduction(r->op))
+      if (is_index_dot(r->op))
       {
         if (tmpidx.size() <= j)
           tmpidx.push_back(driver::Buffer(context, p_.num_groups_0*M*4));
@@ -405,24 +407,25 @@ void mreduction::enqueue(driver::CommandQueue & queue, driver::Program & program
     controller.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }
 
-mreduction_rows::mreduction_rows(mreduction_parameters  const & parameters,
+gemv_n::gemv_n(gemv_parameters  const & parameters,
                                            binding_policy_t binding_policy):
-  mreduction(parameters, REDUCE_ROWS, binding_policy){}
+  gemv(parameters, REDUCE_ROWS, binding_policy){}
 
-mreduction_rows::mreduction_rows(unsigned int simd, unsigned int ls1, unsigned int ls2,
+gemv_n::gemv_n(unsigned int simd, unsigned int ls1, unsigned int ls2,
                                            unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind):
-  mreduction(mreduction_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS, bind)
+  gemv(gemv_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS, bind)
 {}
 
 
-mreduction_cols::mreduction_cols(mreduction::parameters_type  const & parameters,
+gemv_t::gemv_t(gemv::parameters_type  const & parameters,
                                            binding_policy_t binding_policy):
-  mreduction(parameters, REDUCE_COLUMNS, binding_policy){}
+  gemv(parameters, REDUCE_COLUMNS, binding_policy){}
 
-mreduction_cols::mreduction_cols(unsigned int simd, unsigned int ls1, unsigned int ls2,
+gemv_t::gemv_t(unsigned int simd, unsigned int ls1, unsigned int ls2,
                                            unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind):
-  mreduction(mreduction_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS, bind)
+  gemv(gemv_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS, bind)
 {}
 
 
+}
 }

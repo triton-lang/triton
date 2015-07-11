@@ -596,17 +596,17 @@ array_expression repmat(array_expression const & A, int_t const & rep1, int_t co
 
 ///*--- Reductions ---*/
 ////---------------------------------------
-#define DEFINE_REDUCTION(OP, OPNAME)\
+#define DEFINE_DOT(OP, OPNAME)\
 array_expression OPNAME(array const & x, int_t axis)\
 {\
   if(axis < -1 || axis > x.nshape())\
     throw std::out_of_range("The axis entry is out of bounds");\
   else if(axis==-1)\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
   else if(axis==0)\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[1]));\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[1]));\
   else\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
 }\
 \
 array_expression OPNAME(array_expression const & x, int_t axis)\
@@ -614,20 +614,20 @@ array_expression OPNAME(array_expression const & x, int_t axis)\
   if(axis < -1 || axis > x.nshape())\
     throw std::out_of_range("The axis entry is out of bounds");\
   if(axis==-1)\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
   else if(axis==0)\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[1]));\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[1]));\
   else\
-    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_REDUCTION_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
+    return array_expression(x, invalid_node(), op_element(OPERATOR_ROWS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
 }
 
-DEFINE_REDUCTION(OPERATOR_ADD_TYPE, sum)
-DEFINE_REDUCTION(OPERATOR_ELEMENT_ARGMAX_TYPE, argmax)
-DEFINE_REDUCTION(OPERATOR_ELEMENT_MAX_TYPE, max)
-DEFINE_REDUCTION(OPERATOR_ELEMENT_MIN_TYPE, min)
-DEFINE_REDUCTION(OPERATOR_ELEMENT_ARGMIN_TYPE, argmin)
+DEFINE_DOT(OPERATOR_ADD_TYPE, sum)
+DEFINE_DOT(OPERATOR_ELEMENT_ARGMAX_TYPE, argmax)
+DEFINE_DOT(OPERATOR_ELEMENT_MAX_TYPE, max)
+DEFINE_DOT(OPERATOR_ELEMENT_MIN_TYPE, min)
+DEFINE_DOT(OPERATOR_ELEMENT_ARGMIN_TYPE, argmin)
 
-#undef DEFINE_REDUCTION
+#undef DEFINE_DOT
 
 namespace detail
 {
@@ -635,21 +635,21 @@ namespace detail
   array_expression matmatprod(array const & A, array const & B)
   {
     size4 shape(A.shape()[0], B.shape()[1]);
-    return array_expression(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, OPERATOR_MATRIX_PRODUCT_NN_TYPE), A.context(), A.dtype(), shape);
+    return array_expression(A, B, op_element(OPERATOR_GEMM_TYPE_FAMILY, OPERATOR_GEMM_NN_TYPE), A.context(), A.dtype(), shape);
   }
 
   array_expression matmatprod(array_expression const & A, array const & B)
   {
-    operation_node_type type = OPERATOR_MATRIX_PRODUCT_NN_TYPE;
+    operation_node_type type = OPERATOR_GEMM_NN_TYPE;
     size4 shape(A.shape()[0], B.shape()[1]);
 
     array_expression::node & A_root = const_cast<array_expression::node &>(A.tree()[A.root()]);
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
     if(A_trans){
-      type = OPERATOR_MATRIX_PRODUCT_TN_TYPE;
+      type = OPERATOR_GEMM_TN_TYPE;
     }
 
-    array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), A.context(), A.dtype(), shape);
+    array_expression res(A, B, op_element(OPERATOR_GEMM_TYPE_FAMILY, type), A.context(), A.dtype(), shape);
     array_expression::node & res_root = const_cast<array_expression::node &>(res.tree()[res.root()]);
     if(A_trans) res_root.lhs = A_root.lhs;
     return res;
@@ -657,16 +657,16 @@ namespace detail
 
   array_expression matmatprod(array const & A, array_expression const & B)
   {
-    operation_node_type type = OPERATOR_MATRIX_PRODUCT_NN_TYPE;
+    operation_node_type type = OPERATOR_GEMM_NN_TYPE;
     size4 shape(A.shape()[0], B.shape()[1]);
 
     array_expression::node & B_root = const_cast<array_expression::node &>(B.tree()[B.root()]);
     bool B_trans = B_root.op.type==OPERATOR_TRANS_TYPE;
     if(B_trans){
-      type = OPERATOR_MATRIX_PRODUCT_NT_TYPE;
+      type = OPERATOR_GEMM_NT_TYPE;
     }
 
-    array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), A.context(), A.dtype(), shape);
+    array_expression res(A, B, op_element(OPERATOR_GEMM_TYPE_FAMILY, type), A.context(), A.dtype(), shape);
     array_expression::node & res_root = const_cast<array_expression::node &>(res.tree()[res.root()]);
     if(B_trans) res_root.rhs = B_root.lhs;
     return res;
@@ -674,7 +674,7 @@ namespace detail
 
   array_expression matmatprod(array_expression const & A, array_expression const & B)
   {
-    operation_node_type type = OPERATOR_MATRIX_PRODUCT_NN_TYPE;
+    operation_node_type type = OPERATOR_GEMM_NN_TYPE;
     array_expression::node & A_root = const_cast<array_expression::node &>(A.tree()[A.root()]);
     array_expression::node & B_root = const_cast<array_expression::node &>(B.tree()[B.root()]);
     size4 shape(A.shape()[0], B.shape()[1]);
@@ -682,12 +682,12 @@ namespace detail
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
     bool B_trans = B_root.op.type==OPERATOR_TRANS_TYPE;
 
-    if(A_trans && B_trans)  type = OPERATOR_MATRIX_PRODUCT_TT_TYPE;
-    else if(A_trans && !B_trans) type = OPERATOR_MATRIX_PRODUCT_TN_TYPE;
-    else if(!A_trans && B_trans) type = OPERATOR_MATRIX_PRODUCT_NT_TYPE;
-    else type = OPERATOR_MATRIX_PRODUCT_NN_TYPE;
+    if(A_trans && B_trans)  type = OPERATOR_GEMM_TT_TYPE;
+    else if(A_trans && !B_trans) type = OPERATOR_GEMM_TN_TYPE;
+    else if(!A_trans && B_trans) type = OPERATOR_GEMM_NT_TYPE;
+    else type = OPERATOR_GEMM_NN_TYPE;
 
-    array_expression res(A, B, op_element(OPERATOR_MATRIX_PRODUCT_TYPE_FAMILY, type), A.context(), A.dtype(), shape);
+    array_expression res(A, B, op_element(OPERATOR_GEMM_TYPE_FAMILY, type), A.context(), A.dtype(), shape);
     array_expression::node & res_root = const_cast<array_expression::node &>(res.tree()[res.root()]);
     if(A_trans) res_root.lhs = A_root.lhs;
     if(B_trans) res_root.rhs = B_root.lhs;

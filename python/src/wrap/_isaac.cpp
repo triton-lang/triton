@@ -20,6 +20,6 @@ BOOST_PYTHON_MODULE(_isaac)
 
   export_driver();
   export_exceptions();
-  export_model();
+  export_templates();
   export_core();
 }

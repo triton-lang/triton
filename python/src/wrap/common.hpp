@@ -70,15 +70,15 @@ namespace tools
         else
           name = bp::extract<std::string>(odtype.attr("__class__").attr("__name__"))();
 
-        if(name=="vaxpy") return isc::VECTOR_AXPY_TYPE;
-        else if(name=="maxpy") return isc::MATRIX_AXPY_TYPE;
-        else if(name=="reduction") return isc::REDUCTION_TYPE;
-        else if(name=="mreduction_rows") return isc::ROW_WISE_REDUCTION_TYPE;
-        else if(name=="mreduction_cols") return isc::COL_WISE_REDUCTION_TYPE;
-        else if(name=="mproduct_nn") return isc::MATRIX_PRODUCT_NN_TYPE;
-        else if(name=="mproduct_tn") return isc::MATRIX_PRODUCT_TN_TYPE;
-        else if(name=="mproduct_nt") return isc::MATRIX_PRODUCT_NT_TYPE;
-        else if(name=="mproduct_tt") return isc::MATRIX_PRODUCT_TT_TYPE;
+        if(name=="axpy") return isc::AXPY_TYPE;
+        else if(name=="ger") return isc::GER_TYPE;
+        else if(name=="dot") return isc::DOT_TYPE;
+        else if(name=="gemv_n") return isc::GEMV_N_TYPE;
+        else if(name=="gemm_t") return isc::GEMV_T_TYPE;
+        else if(name=="gemm_nn") return isc::GEMM_NN_TYPE;
+        else if(name=="gemm_tn") return isc::GEMM_TN_TYPE;
+        else if(name=="gemm_nt") return isc::GEMM_NT_TYPE;
+        else if(name=="gemm_tt") return isc::GEMM_TT_TYPE;
         else
         {
             PyErr_SetString(PyExc_TypeError, "Template type not understood");

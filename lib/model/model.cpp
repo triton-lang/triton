@@ -7,11 +7,11 @@
 
 #include "rapidjson/document.h"
 #include "isaac/backend/parse.h"
-#include "isaac/backend/templates/vaxpy.h"
-#include "isaac/backend/templates/reduction.h"
-#include "isaac/backend/templates/maxpy.h"
-#include "isaac/backend/templates/mreduction.h"
-#include "isaac/backend/templates/mproduct.h"
+#include "isaac/backend/templates/axpy.h"
+#include "isaac/backend/templates/dot.h"
+#include "isaac/backend/templates/ger.h"
+#include "isaac/backend/templates/gemv.h"
+#include "isaac/backend/templates/gemm.h"
 #include "isaac/exception/unknown_datatype.h"
 #include "isaac/exception/operation_not_supported.h"
 #include "isaac/model/model.h"
@@ -86,12 +86,12 @@ driver::Program& model::init(controller<expressions_tuple> const & expressions)
   return *program;
 }
 
-model::model(expression_type etype, numeric_type dtype, predictors::random_forest const & predictor, std::vector< tools::shared_ptr<base> > const & templates, driver::CommandQueue const & queue) :
+model::model(expression_type etype, numeric_type dtype, predictors::random_forest const & predictor, std::vector< tools::shared_ptr<templates::base> > const & templates, driver::CommandQueue const & queue) :
   templates_(templates), fallback_(fallbacks[std::make_pair(etype, dtype)]), predictor_(new predictors::random_forest(predictor)), queue_(queue)
 {}
 
 
-model::model(expression_type etype, numeric_type dtype, base const & tp, driver::CommandQueue const & queue) : templates_(1,tp.clone()), fallback_(fallbacks[std::make_pair(etype, dtype)]), queue_(queue)
+model::model(expression_type etype, numeric_type dtype, templates::base const & tp, driver::CommandQueue const & queue) : templates_(1,tp.clone()), fallback_(fallbacks[std::make_pair(etype, dtype)]), queue_(queue)
 {}
 
 void model::execute(controller<expressions_tuple> const & expr)
@@ -148,15 +148,15 @@ namespace detail
 {
   static expression_type get_expression_type(std::string const & name)
   {
-    if(name=="vaxpy") return VECTOR_AXPY_TYPE;
-    if(name=="dot") return REDUCTION_TYPE;
-    if(name=="maxpy") return MATRIX_AXPY_TYPE;
-    if(name=="mreduction_rows") return ROW_WISE_REDUCTION_TYPE;
-    if(name=="mreduction_cols") return COL_WISE_REDUCTION_TYPE;
-    if(name=="mproduct_nn") return MATRIX_PRODUCT_NN_TYPE;
-    if(name=="mproduct_nt") return MATRIX_PRODUCT_NT_TYPE;
-    if(name=="mproduct_tn") return MATRIX_PRODUCT_TN_TYPE;
-    if(name=="mproduct_tt") return MATRIX_PRODUCT_TT_TYPE;
+    if(name=="axpy") return AXPY_TYPE;
+    if(name=="dot") return DOT_TYPE;
+    if(name=="ger") return GER_TYPE;
+    if(name=="gemv_n") return GEMV_N_TYPE;
+    if(name=="gemv_t") return GEMV_T_TYPE;
+    if(name=="gemm_nn") return GEMM_NN_TYPE;
+    if(name=="gemm_nt") return GEMM_NT_TYPE;
+    if(name=="gemm_tn") return GEMM_TN_TYPE;
+    if(name=="gemm_tt") return GEMM_TT_TYPE;
     throw std::invalid_argument("Invalid expression: " + name);
   }
 
@@ -167,27 +167,27 @@ namespace detail
     throw std::invalid_argument("Invalid datatype: " + name);
   }
 
-  static tools::shared_ptr<base> create(std::string const & template_name, std::vector<int> const & a)
+  static tools::shared_ptr<templates::base> create(std::string const & template_name, std::vector<int> const & a)
   {
-    fetching_policy_type fetch[] = {FETCH_FROM_LOCAL, FETCH_FROM_GLOBAL_STRIDED, FETCH_FROM_GLOBAL_CONTIGUOUS};
-    if(template_name=="vaxpy")
-      return tools::shared_ptr<base>(new vaxpy(a[0], a[1], a[2], fetch[a[3]]));
+    templates::fetching_policy_type fetch[] = {templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_GLOBAL_STRIDED, templates::FETCH_FROM_GLOBAL_CONTIGUOUS};
+    if(template_name=="axpy")
+      return tools::shared_ptr<templates::base>(new templates::axpy(a[0], a[1], a[2], fetch[a[3]]));
     else if(template_name=="dot")
-      return tools::shared_ptr<base>(new reduction(a[0], a[1], a[2], fetch[a[3]]));
-    else if(template_name=="maxpy")
-      return tools::shared_ptr<base>(new maxpy(a[0], a[1], a[2], a[3], a[4], fetch[a[5]]));
-    else if(template_name.find("mreduction_rows")!=std::string::npos)
-      return tools::shared_ptr<base>(new mreduction_rows(a[0], a[1], a[2], a[3], a[4], fetch[a[5]]));
-    else if(template_name.find("mreduction_cols")!=std::string::npos)
-      return tools::shared_ptr<base>(new mreduction_cols(a[0], a[1], a[2], a[3], a[4], fetch[a[5]]));
-    else if(template_name.find("mproduct_nn")!=std::string::npos)
-      return tools::shared_ptr<base>(new mproduct_nn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
-    else if(template_name.find("mproduct_tn")!=std::string::npos)
-      return tools::shared_ptr<base>(new mproduct_tn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
-    else if(template_name.find("mproduct_nt")!=std::string::npos)
-      return tools::shared_ptr<base>(new mproduct_nt(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
-    else if(template_name.find("mproduct_tt")!=std::string::npos)
-      return tools::shared_ptr<base>(new mproduct_tt(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
+      return tools::shared_ptr<templates::base>(new templates::dot(a[0], a[1], a[2], fetch[a[3]]));
+    else if(template_name=="ger")
+      return tools::shared_ptr<templates::base>(new templates::ger(a[0], a[1], a[2], a[3], a[4], fetch[a[5]]));
+    else if(template_name.find("gemv_n")!=std::string::npos)
+      return tools::shared_ptr<templates::base>(new templates::gemv_n(a[0], a[1], a[2], a[3], a[4], fetch[a[5]]));
+    else if(template_name.find("gemv_t")!=std::string::npos)
+      return tools::shared_ptr<templates::base>(new templates::gemv_t(a[0], a[1], a[2], a[3], a[4], fetch[a[5]]));
+    else if(template_name.find("gemm_nn")!=std::string::npos)
+      return tools::shared_ptr<templates::base>(new templates::gemm_nn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
+    else if(template_name.find("gemm_tn")!=std::string::npos)
+      return tools::shared_ptr<templates::base>(new templates::gemm_tn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
+    else if(template_name.find("gemm_nt")!=std::string::npos)
+      return tools::shared_ptr<templates::base>(new templates::gemm_nt(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
+    else if(template_name.find("gemm_tt")!=std::string::npos)
+      return tools::shared_ptr<templates::base>(new templates::gemm_tt(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], fetch[a[8]], fetch[a[9]], a[10], a[11]));
     else
       throw std::invalid_argument("Invalid expression: " + template_name);
   }
@@ -207,7 +207,7 @@ void import(std::string const & fname, driver::CommandQueue & queue, model_map_t
   str.assign((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
   document.Parse<0>(str.c_str());
   //Deserialize
-  std::vector<std::string> operations = {"vaxpy", "dot", "maxpy", "gemv_n", "gemv_t", "mproduct_nn", "mproduct_tn", "mproduct_nt", "mproduct_tt"};
+  std::vector<std::string> operations = {"axpy", "dot", "ger", "gemv_n", "gemv_t", "gemm_nn", "gemm_tn", "gemm_nt", "gemm_tt"};
   std::vector<std::string> dtype = {"float32", "float64"};
   for(auto & operation : operations)
   {
@@ -223,7 +223,7 @@ void import(std::string const & fname, driver::CommandQueue & queue, model_map_t
           numeric_type dtype = detail::get_dtype(elem);
 
           // Get profiles
-          std::vector<tools::shared_ptr<base> > templates;
+          std::vector<tools::shared_ptr<templates::base> > templates;
           js::Value const & profiles = document[opcstr][dtcstr]["profiles"];
           for (js::SizeType id = 0 ; id < profiles.Size() ; ++id)
             templates.push_back(detail::create(operation, tools::to_int_array<int>(profiles[id])));
@@ -243,23 +243,22 @@ void import(std::string const & fname, driver::CommandQueue & queue, model_map_t
 }
 
 
-std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<base> > init_fallback()
+std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<templates::base> > init_fallback()
 {
-  typedef tools::shared_ptr<base> ptr_t;
+  typedef tools::shared_ptr<templates::base> ptr_t;
   std::map<std::pair<expression_type, numeric_type>, ptr_t > res;
   numeric_type types[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
   for(auto DTYPE : types)
   {
-    res[std::make_pair(SCALAR_AXPY_TYPE, DTYPE)] = ptr_t(new vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(VECTOR_AXPY_TYPE, DTYPE)] = ptr_t (new vaxpy(1,64,128,FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(REDUCTION_TYPE, DTYPE)] = ptr_t(new reduction(1,64,128,FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(MATRIX_AXPY_TYPE, DTYPE)] = ptr_t(new maxpy(1,8,8,8,8,FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(ROW_WISE_REDUCTION_TYPE, DTYPE)] = ptr_t(new mreduction_rows(1, 8, 8, 4, 16, FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(COL_WISE_REDUCTION_TYPE, DTYPE)] = ptr_t(new mreduction_cols(1, 8, 8, 64, 8, FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(MATRIX_PRODUCT_NN_TYPE, DTYPE)] = ptr_t(new mproduct_nn(1, 8, 32, 8, 1, 8, 1, 8, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(MATRIX_PRODUCT_TN_TYPE, DTYPE)] = ptr_t(new mproduct_tn(1, 8, 32, 8, 1, 8, 1, 8, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(MATRIX_PRODUCT_NT_TYPE, DTYPE)] = ptr_t(new mproduct_nt(1, 8, 16, 8, 1, 8, 1, 8, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(MATRIX_PRODUCT_TT_TYPE, DTYPE)] = ptr_t(new mproduct_tt(1, 8, 32, 8, 1, 8, 1, 8, FETCH_FROM_LOCAL, FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(AXPY_TYPE, DTYPE)] = ptr_t (new templates::axpy(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(DOT_TYPE, DTYPE)] = ptr_t(new templates::dot(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GER_TYPE, DTYPE)] = ptr_t(new templates::ger(1,8,8,8,8,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GEMV_N_TYPE, DTYPE)] = ptr_t(new templates::gemv_n(1, 8, 8, 4, 16, templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GEMV_T_TYPE, DTYPE)] = ptr_t(new templates::gemv_t(1, 8, 8, 64, 8, templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GEMM_NN_TYPE, DTYPE)] = ptr_t(new templates::gemm_nn(1, 8, 32, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(GEMM_TN_TYPE, DTYPE)] = ptr_t(new templates::gemm_tn(1, 8, 32, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(GEMM_NT_TYPE, DTYPE)] = ptr_t(new templates::gemm_nt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(GEMM_TT_TYPE, DTYPE)] = ptr_t(new templates::gemm_tt(1, 8, 32, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
   }
   return res;
 }
@@ -269,7 +268,7 @@ model_map_t init_models(driver::CommandQueue & queue)
 {
   model_map_t res;
   numeric_type dtypes[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
-  expression_type etypes[] = {SCALAR_AXPY_TYPE, VECTOR_AXPY_TYPE, REDUCTION_TYPE, MATRIX_AXPY_TYPE, ROW_WISE_REDUCTION_TYPE, COL_WISE_REDUCTION_TYPE, MATRIX_PRODUCT_NN_TYPE, MATRIX_PRODUCT_NT_TYPE, MATRIX_PRODUCT_TN_TYPE, MATRIX_PRODUCT_TT_TYPE};
+  expression_type etypes[] = {AXPY_TYPE, DOT_TYPE, GER_TYPE, GEMV_N_TYPE, GEMV_T_TYPE, GEMM_NN_TYPE, GEMM_NT_TYPE, GEMM_TN_TYPE, GEMM_TT_TYPE};
 
   for(numeric_type dtype: dtypes)
     for(expression_type etype: etypes)
@@ -288,7 +287,7 @@ model_map_t& models(driver::CommandQueue & queue)
   return it->second;
 }
 
-std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<base> > fallbacks = init_fallback();
+std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<templates::base> > fallbacks = init_fallback();
 std::map<driver::CommandQueue, model_map_t> models_;
 
 }

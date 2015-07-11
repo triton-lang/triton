@@ -4,7 +4,7 @@ if(CUDA_FOUND)
 endif()
 
 get_property(ISAAC_PATH TARGET isaac PROPERTY LOCATION)
-foreach(PROG maxpy vaxpy reduction mreduction mproduct)
+foreach(PROG axpy dot ger gemv gemm)
      add_executable(${PROG}-test ${PROG}.cpp)
      add_test(${PROG} ${PROG}-test)
      target_link_libraries(${PROG}-test isaac ${OPENCL_LIBRARIES})
