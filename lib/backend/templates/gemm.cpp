@@ -416,7 +416,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       stream << "{" << std::endl;
       stream.inc_tab();
       stream << sdtype << " acc = 0;" << std::endl;
-      stream << "for(unsigned int k = 0 ;  k < D ;  k++){" << std::endl;
+      stream << "for(unsigned int k = 0 ;  k < D ;  k++)" << std::endl;
       stream.inc_tab();
       stream << "acc += Z[i + j*Zld + k*Zld*N];" << std::endl;
       stream.dec_tab();
