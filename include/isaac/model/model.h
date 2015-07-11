@@ -14,7 +14,7 @@ namespace isaac
 
   class model
   {
-    typedef tools::shared_ptr<base> template_pointer;
+    typedef tools::shared_ptr<templates::base> template_pointer;
     typedef std::vector< template_pointer > templates_container;
 
   private:
@@ -23,8 +23,8 @@ namespace isaac
     driver::Program& init(controller<expressions_tuple> const &);
 
   public:
-    model(expression_type, numeric_type, predictors::random_forest const &, std::vector< tools::shared_ptr<base> > const &, driver::CommandQueue const &);
-    model(expression_type, numeric_type, base const &, driver::CommandQueue const &);
+    model(expression_type, numeric_type, predictors::random_forest const &, std::vector< tools::shared_ptr<templates::base> > const &, driver::CommandQueue const &);
+    model(expression_type, numeric_type, templates::base const &, driver::CommandQueue const &);
 
     void execute(controller<expressions_tuple> const &);
     templates_container const & templates() const;
@@ -46,7 +46,7 @@ namespace isaac
   model_map_t init_models(driver::CommandQueue const & queue);
   model_map_t& models(driver::CommandQueue & queue);
 
-  extern std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<base> > fallbacks;
+  extern std::map<std::pair<expression_type, numeric_type>, tools::shared_ptr<templates::base> > fallbacks;
   extern std::map<driver::CommandQueue, model_map_t> models_;
 
 }

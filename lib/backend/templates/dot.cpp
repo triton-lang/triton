@@ -1,5 +1,5 @@
 #include <iostream>
-#include "isaac/backend/templates/reduction.h"
+#include "isaac/backend/templates/dot.h"
 #include <CL/cl.hpp>
 #include "isaac/tools/to_string.hpp"
 #include "isaac/tools/make_map.hpp"
@@ -7,13 +7,14 @@
 #include "isaac/backend/keywords.h"
 namespace isaac
 {
-
-reduction_parameters::reduction_parameters(unsigned int _simd_width,
+namespace templates
+{
+dot_parameters::dot_parameters(unsigned int _simd_width,
                      unsigned int _group_size, unsigned int _num_groups,
                      fetching_policy_type _fetching_policy) : base::parameters_type(_simd_width, _group_size, 1, 2), num_groups(_num_groups), fetching_policy(_fetching_policy)
 { }
 
-unsigned int reduction::lmem_usage(expressions_tuple const & expressions) const
+unsigned int dot::lmem_usage(expressions_tuple const & expressions) const
 {
   unsigned int res = 0;
   for(const auto & elem : expressions.data())
@@ -24,14 +25,14 @@ unsigned int reduction::lmem_usage(expressions_tuple const & expressions) const
   return res;
 }
 
-int reduction::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+int dot::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-inline void reduction::reduce_1d_local_memory(kernel_generation_stream & stream, unsigned int size, std::vector<mapped_scalar_reduction*> exprs,
+inline void dot::reduce_1d_local_memory(kernel_generation_stream & stream, unsigned int size, std::vector<mapped_scalar_dot*> exprs,
                                    std::string const & buf_str, std::string const & buf_value_str, driver::backend_type backend) const
 {
   stream << "#pragma unroll" << std::endl;
@@ -44,26 +45,26 @@ inline void reduction::reduce_1d_local_memory(kernel_generation_stream & stream,
   stream.inc_tab();
 
   for (auto & expr : exprs)
-    if (expr->is_index_reduction())
-      compute_index_reduction(stream, expr->process(buf_str+"[lid]"), expr->process(buf_str+"[lid+stride]")
+    if (expr->is_index_dot())
+      compute_index_dot(stream, expr->process(buf_str+"[lid]"), expr->process(buf_str+"[lid+stride]")
                               , expr->process(buf_value_str+"[lid]"), expr->process(buf_value_str+"[lid+stride]"),
                               expr->root_op());
     else
-      compute_reduction(stream, expr->process(buf_str+"[lid]"), expr->process(buf_str+"[lid+stride]"), expr->root_op());
+      compute_dot(stream, expr->process(buf_str+"[lid]"), expr->process(buf_str+"[lid+stride]"), expr->root_op());
   stream.dec_tab();
   stream << "}" << std::endl;
   stream.dec_tab();
   stream << "}" << std::endl;
 }
 
-std::string reduction::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string dot::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   kernel_generation_stream stream;
 
-  std::vector<mapped_scalar_reduction*> exprs;
+  std::vector<mapped_scalar_dot*> exprs;
   for (const auto & mapping : mappings)
     for (mapping_type::const_iterator iit = mapping.begin(); iit != mapping.end(); ++iit)
-      if (mapped_scalar_reduction * p = dynamic_cast<mapped_scalar_reduction*>(iit->second.get()))
+      if (mapped_scalar_dot * p = dynamic_cast<mapped_scalar_dot*>(iit->second.get()))
         exprs.push_back(p);
   std::size_t N = exprs.size();
   driver::backend_type backend = device.backend();
@@ -73,7 +74,7 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   for (unsigned int k = 0; k < N; ++k)
   {
     std::string numeric_type = numeric_type_to_string(lhs_most(exprs[k]->array_expression().tree(),  exprs[k]->array_expression().root()).lhs.dtype);
-    if (exprs[k]->is_index_reduction())
+    if (exprs[k]->is_index_dot())
     {
       arguments += exprs[k]->process(Global(backend).get() + " unsigned int* #name_temp, ");
       arguments += exprs[k]->process(Global(backend).get() + " " + tools::to_string(numeric_type) + "* #name_temp_value, ");
@@ -112,7 +113,7 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
 
   for (unsigned int k = 0; k < N; ++k)
   {
-    if (exprs[k]->is_index_reduction())
+    if (exprs[k]->is_index_dot())
     {
       stream << exprs[k]->process(Local(backend).get() + " #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << exprs[k]->process("#scalartype #name_acc_value = " + neutral_element(exprs[k]->root_op(), backend, "#scalartype") + ";") << std::endl;
@@ -156,11 +157,11 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
         accessors["matrix_diag"] = str[a];
         accessors["array0"] = "#namereg";
         std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, accessors);
-        if (elem->is_index_reduction())
-          compute_index_reduction(stream, elem->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+"
+        if (elem->is_index_dot())
+          compute_index_dot(stream, elem->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+"
                                   + tools::to_string(a), elem->process("#name_acc_value"), value,elem->root_op());
         else
-          compute_reduction(stream, elem->process("#name_acc"), value,elem->root_op());
+          compute_dot(stream, elem->process("#name_acc"), value,elem->root_op());
       }
     }
   });
@@ -168,7 +169,7 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   //Fills local memory
   for (unsigned int k = 0; k < N; ++k)
   {
-    if (exprs[k]->is_index_reduction())
+    if (exprs[k]->is_index_dot())
       stream << exprs[k]->process("#name_buf_value[lid] = #name_acc_value;") << std::endl;
     stream << exprs[k]->process("#name_buf[lid] = #name_acc;") << std::endl;
   }
@@ -182,7 +183,7 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   stream.inc_tab();
   for (unsigned int k = 0; k < N; ++k)
   {
-    if (exprs[k]->is_index_reduction())
+    if (exprs[k]->is_index_dot())
       stream << exprs[k]->process("#name_temp_value[gpid] = #name_buf_value[0];") << std::endl;
     stream << exprs[k]->process("#name_temp[gpid] = #name_buf[0];") << std::endl;
   }
@@ -205,9 +206,9 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   stream << "unsigned int lid = " <<LocalIdx0(backend) << ";" << std::endl;
   stream << "unsigned int lsize = " <<LocalSize0(backend) << ";" << std::endl;
 
-  for (mapped_scalar_reduction* e: exprs)
+  for (mapped_scalar_dot* e: exprs)
   {
-    if (e->is_index_reduction())
+    if (e->is_index_dot())
     {
       stream << e->process(Local(backend).get() + " unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];");
       stream << e->process("unsigned int #name_acc = 0;") << std::endl;
@@ -224,18 +225,18 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   stream << "for(unsigned int i = lid; i < " << p_.num_groups << "; i += lsize)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  for (mapped_scalar_reduction* e: exprs)
-    if (e->is_index_reduction())
-      compute_index_reduction(stream, e->process("#name_acc"), e->process("#name_temp[i]"), e->process("#name_acc_value"),e->process("#name_temp_value[i]"),e->root_op());
+  for (mapped_scalar_dot* e: exprs)
+    if (e->is_index_dot())
+      compute_index_dot(stream, e->process("#name_acc"), e->process("#name_temp[i]"), e->process("#name_acc_value"),e->process("#name_temp_value[i]"),e->root_op());
     else
-      compute_reduction(stream, e->process("#name_acc"), e->process("#name_temp[i]"), e->root_op());
+      compute_dot(stream, e->process("#name_acc"), e->process("#name_temp[i]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
 
   for (unsigned int k = 0; k < N; ++k)
   {
-    if (exprs[k]->is_index_reduction())
+    if (exprs[k]->is_index_dot())
       stream << exprs[k]->process("#name_buf_value[lid] = #name_acc_value;") << std::endl;
     stream << exprs[k]->process("#name_buf[lid] = #name_acc;") << std::endl;
   }
@@ -248,7 +249,7 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   stream << "{" << std::endl;
   stream.inc_tab();
   std::map<std::string, std::string> accessors;
-  accessors["scalar_reduction"] = "#name_buf[0]";
+  accessors["scalar_dot"] = "#name_buf[0]";
   accessors["array0"] = "#pointer[#start]";
   evaluate(stream, PARENT_NODE_TYPE, accessors, expressions, mappings);
   stream.dec_tab();
@@ -260,23 +261,23 @@ std::string reduction::generate_impl(const char * suffix, expressions_tuple cons
   return stream.str();
 }
 
-reduction::reduction(reduction::parameters_type const & parameters,
-                                       binding_policy_t binding) : base_impl<reduction, reduction_parameters>(parameters, binding)
+dot::dot(dot::parameters_type const & parameters,
+                                       binding_policy_t binding) : base_impl<dot, dot_parameters>(parameters, binding)
 { }
 
-reduction::reduction(unsigned int simd, unsigned int ls, unsigned int ng,
+dot::dot(unsigned int simd, unsigned int ls, unsigned int ng,
                                fetching_policy_type fetch, binding_policy_t bind):
-    base_impl<reduction, reduction_parameters>(reduction_parameters(simd,ls,ng,fetch), bind)
+    base_impl<dot, dot_parameters>(dot_parameters(simd,ls,ng,fetch), bind)
 {}
 
-std::vector<int_t> reduction::input_sizes(expressions_tuple const & expressions) const
+std::vector<int_t> dot::input_sizes(expressions_tuple const & expressions) const
 {
-  std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, *(expressions.data().front()), false);
-  int_t N = vector_size(lhs_most(expressions.data().front()->tree(), reductions_idx[0]));
+  std::vector<size_t> dots_idx = filter_nodes(&is_dot, *(expressions.data().front()), false);
+  int_t N = vector_size(lhs_most(expressions.data().front()->tree(), dots_idx[0]));
   return tools::make_vector<int_t>() << N;
 }
 
-void reduction::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
+void dot::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
 
@@ -290,12 +291,12 @@ void reduction::enqueue(driver::CommandQueue & queue, driver::Program & program,
       return;
   }
 
-  std::vector<array_expression::node const *> reductions;
+  std::vector<array_expression::node const *> dots;
   for (const auto & elem : expressions.data())
   {
-    std::vector<size_t> reductions_idx = filter_nodes(&is_reduction, *elem, false);
-    for (auto & reductions_idx_itt : reductions_idx)
-      reductions.push_back(&(elem)->tree()[reductions_idx_itt]);
+    std::vector<size_t> dots_idx = filter_nodes(&is_dot, *elem, false);
+    for (auto & dots_idx_itt : dots_idx)
+      dots.push_back(&(elem)->tree()[dots_idx_itt]);
   }
 
   //Kernel
@@ -321,9 +322,9 @@ void reduction::enqueue(driver::CommandQueue & queue, driver::Program & program,
     //Temporary buffers
     unsigned int i = 0;
     unsigned int j = 0;
-    for (std::vector<array_expression::node const *>::const_iterator it = reductions.begin(); it != reductions.end(); ++it)
+    for (std::vector<array_expression::node const *>::const_iterator it = dots.begin(); it != dots.end(); ++it)
     {
-      if (is_index_reduction((*it)->op))
+      if (is_index_dot((*it)->op))
       {
         if (tmpidx_.size() <= j)
           tmpidx_.push_back(driver::Buffer(context, p_.num_groups*4));
@@ -342,4 +343,5 @@ void reduction::enqueue(driver::CommandQueue & queue, driver::Program & program,
     controller.execution_options().enqueue(program.context(), kernels[k], global[k], local[k]);
 }
 
+}
 }

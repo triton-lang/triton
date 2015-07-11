@@ -23,14 +23,14 @@ def tune(device, operation, json_path):
     
     #List of size tuples to use
     sizes = {}
-    sizes[isc.vaxpy] = [(x,) for x in tools.expspace(1e3, 1e7, 4)]
-    sizes[isc.mreduction_rows] = product(pow2range(4,17), pow2range(4,17))
-    sizes[isc.mreduction_cols] = isc.mreduction_rows
-    sizes[isc.mproduct_nn]     = product(pow2range(5, 10), pow2range(5, 10), pow2range(5, 10))
-    sizes[isc.mproduct_nn]	   = [(128, 169, 1728)]    
-    sizes[isc.mproduct_tn]     = sizes[isc.mproduct_nn]
-    sizes[isc.mproduct_nt]     = sizes[isc.mproduct_nn]
-    sizes[isc.mproduct_tt]     = sizes[isc.mproduct_nn]
+    sizes[isc.templates.axpy] = [(x,) for x in tools.expspace(1e3, 1e7, 4)]
+    sizes[isc.templates.gemv_n] = product(pow2range(4,17), pow2range(4,17))
+    sizes[isc.templates.gemv_t] = sizes[isc.templates.gemv_n]
+    sizes[isc.templates.gemm_nn]     = product(pow2range(5, 10), pow2range(5, 10), pow2range(5, 10))
+    sizes[isc.templates.gemm_nn]	   = [(128, 169, 1728)]    
+    sizes[isc.templates.gemm_tn]     = sizes[isc.templates.gemm_nn]
+    sizes[isc.templates.gemm_nt]     = sizes[isc.templates.gemm_nn]
+    sizes[isc.templates.gemm_tt]     = sizes[isc.templates.gemm_nn]
     sizes = unique(list(sizes[operation]))
     sizes = [x for x in sizes if 1e-4 <= tools.memory_footprint(operation, x) <= 1e-1]
 
@@ -123,9 +123,9 @@ def parse_arguments():
     print("----------------")
     
     
-    operation = {'vaxpy': isc.vaxpy, 'dot': isc.reduction,
-                 'maxpy': isc.maxpy, 'gemv_n': isc.mreduction_rows, 'gemv_t': isc.mreduction_cols,
-                 'gemm_nn': isc.mproduct_nn, 'gemm_tn': isc.mproduct_tn, 'gemm_nt': isc.mproduct_nt, 'gemm_tt':isc.mproduct_tt}[args.operation]
+    operation = {'axpy': isc.templates.axpy, 'dot': isc.templates.dot,
+                 'ger': isc.templates.ger, 'gemv_n': isc.templates.gemv_n, 'gemv_t': isc.templates.gemv_t,
+                 'gemm_nn': isc.templates.gemm_nn, 'gemm_tn': isc.templates.gemm_tn, 'gemm_nt': isc.templates.gemm_nt, 'gemm_tt':isc.templates.gemm_tt}[args.operation]
     if not args.json:
         json = tools.sanitize(device.name) + '.json'
     return (device, operation, json)

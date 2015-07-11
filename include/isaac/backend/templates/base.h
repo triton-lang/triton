@@ -14,6 +14,9 @@
 namespace isaac
 {
 
+namespace templates
+{
+
 enum fetching_policy_type
 {
   FETCH_FROM_LOCAL,
@@ -147,8 +150,8 @@ protected:
     }
   }
 
-  static void compute_reduction(kernel_generation_stream & os, std::string acc, std::string cur, op_element const & op);
-  static void compute_index_reduction(kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, op_element const & op);
+  static void compute_dot(kernel_generation_stream & os, std::string acc, std::string cur, op_element const & op);
+  static void compute_index_dot(kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, op_element const & op);
   static void process_all(std::string const & type_key, std::string const & str, kernel_generation_stream & stream, std::vector<mapping_type> const & mappings);
   static void process_all_at(std::string const & type_key, std::string const & str, kernel_generation_stream & stream, std::vector<mapping_type> const & mappings, size_t root_idx, leaf_t leaf);
   static std::string neutral_element(op_element const & op, driver::backend_type backend, std::string const & datatype);
@@ -159,8 +162,8 @@ protected:
   static bool is_strided(array_expression::node const & node);
   static int_t vector_size(array_expression::node const & node);
   static std::pair<int_t, int_t> matrix_size(array_expression::node const & node);
-  static bool is_reduction(array_expression::node const & node);
-  static bool is_index_reduction(op_element const & op);
+  static bool is_dot(array_expression::node const & node);
+  static bool is_index_dot(op_element const & op);
   static std::string access_vector_type(std::string const & v, int i);
 
   tools::shared_ptr<symbolic_binder> make_binder();
@@ -204,6 +207,7 @@ protected:
   binding_policy_t binding_policy_;
 };
 
+}
 }
 
 #endif

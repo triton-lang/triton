@@ -1,4 +1,4 @@
-#include "isaac/backend/templates/vaxpy.h"
+#include "isaac/backend/templates/axpy.h"
 #include "isaac/backend/keywords.h"
 #include "isaac/driver/backend.h"
 #include "isaac/tools/make_map.hpp"
@@ -8,23 +8,24 @@
 
 namespace isaac
 {
+namespace templates
+{
 
-
-vaxpy_parameters::vaxpy_parameters(unsigned int _simd_width,
+axpy_parameters::axpy_parameters(unsigned int _simd_width,
                        unsigned int _group_size, unsigned int _num_groups,
                        fetching_policy_type _fetching_policy) :
       base::parameters_type(_simd_width, _group_size, 1, 1), num_groups(_num_groups), fetching_policy(_fetching_policy)
 { }
 
 
-int vaxpy::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+int axpy::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-std::string vaxpy::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string axpy::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   driver::backend_type backend = device.backend();
   std::string _size_t = size_type(device);
@@ -90,25 +91,24 @@ std::string vaxpy::generate_impl(const char * suffix, expressions_tuple const & 
   return stream.str();
 }
 
-vaxpy::vaxpy(vaxpy_parameters const & parameters,
+axpy::axpy(axpy_parameters const & parameters,
                                binding_policy_t binding_policy) :
-    base_impl<vaxpy, vaxpy_parameters>(parameters, binding_policy)
+    base_impl<axpy, axpy_parameters>(parameters, binding_policy)
 {}
 
-vaxpy::vaxpy(unsigned int simd, unsigned int ls, unsigned int ng,
+axpy::axpy(unsigned int simd, unsigned int ls, unsigned int ng,
                                fetching_policy_type fetch, binding_policy_t bind):
-    base_impl<vaxpy, vaxpy_parameters>(vaxpy_parameters(simd,ls,ng,fetch), bind)
+    base_impl<axpy, axpy_parameters>(axpy_parameters(simd,ls,ng,fetch), bind)
 {}
 
 
-std::vector<int_t> vaxpy::input_sizes(expressions_tuple const & expressions) const
+std::vector<int_t> axpy::input_sizes(expressions_tuple const & expressions) const
 {
   size4 shape = static_cast<array_expression const *>(expressions.data().front().get())->shape();
-  int_t size = static_cast<array_expression const *>(expressions.data().front().get())->shape()[0];
   return tools::make_vector<int_t>() << std::max(shape[0], shape[1]);
 }
 
-void vaxpy::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
+void axpy::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
   //Size
@@ -134,4 +134,5 @@ void vaxpy::enqueue(driver::CommandQueue & queue, driver::Program & program, con
 }
 
 
+}
 }

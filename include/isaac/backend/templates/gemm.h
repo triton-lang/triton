@@ -7,12 +7,13 @@
 
 namespace isaac
 {
-
+namespace templates
+{
 class model;
 
-struct mproduct_parameters : public base::parameters_type
+struct gemm_parameters : public base::parameters_type
 {
-  mproduct_parameters(unsigned int simd_width
+  gemm_parameters(unsigned int simd_width
                             , int_t local_size_0, int_t KL, int_t local_size_1, int_t D
                             , int_t ms, int_t ks, int_t ns
                             , fetching_policy_type A_fetching_policy, fetching_policy_type B_fetching_policy
@@ -38,7 +39,7 @@ struct mproduct_parameters : public base::parameters_type
   bool unroll_outer;
 };
 
-class mproduct : public base_impl<mproduct, mproduct_parameters>
+class gemm : public base_impl<gemm, gemm_parameters>
 {
 private:
   unsigned int lmem_usage(expressions_tuple const & expressions) const;
@@ -50,7 +51,7 @@ private:
   array create_slice(array & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap);
   std::vector<int_t> infos(expressions_tuple const & expressions,  isaac::symbolic::preset::gemm::args &arguments) const;
 public:
-  mproduct(mproduct::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);
+  gemm(gemm::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;
   void cleanup(values_holder beta, controller<expressions_tuple> const & ctr, model & fallback,
                lhs_rhs_element* eA, lhs_rhs_element* eB, lhs_rhs_element* eC, lhs_rhs_element* ebeta, array const & A, array const & B, array const & C);
@@ -62,41 +63,41 @@ private:
   bool check_bounds_;
 };
 
-class mproduct_nn : public mproduct
+class gemm_nn : public gemm
 {
 public:
-  mproduct_nn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_nn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
                       , int_t lfetch0, int_t lfetch1, bool check_bound = false);
 };
 
-class mproduct_tn : public mproduct
+class gemm_tn : public gemm
 {
 public:
-  mproduct_tn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
-                      , int_t lfetch0, int_t lfetch1, bool check_bound = false);
-};
-
-
-class mproduct_nt : public mproduct
-{
-public:
-  mproduct_nt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_tn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
                       , int_t lfetch0, int_t lfetch1, bool check_bound = false);
 };
 
 
-class mproduct_tt : public mproduct
+class gemm_nt : public gemm
 {
 public:
-  mproduct_tt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_nt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
                       , int_t lfetch0, int_t lfetch1, bool check_bound = false);
 };
 
 
+class gemm_tt : public gemm
+{
+public:
+  gemm_tt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+                      , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
+                      , int_t lfetch0, int_t lfetch1, bool check_bound = false);
+};
+
+}
 }
 
 #endif

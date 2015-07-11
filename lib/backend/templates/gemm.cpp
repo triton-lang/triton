@@ -1,5 +1,5 @@
 #include "isaac/array.h"
-#include "isaac/backend/templates/mproduct.h"
+#include "isaac/backend/templates/gemm.h"
 #include "isaac/backend/keywords.h"
 #include "isaac/model/model.h"
 #include "isaac/symbolic/preset.h"
@@ -10,8 +10,10 @@
 
 namespace isaac
 {
+namespace templates
+{
 
-mproduct_parameters::mproduct_parameters(unsigned int simd_width
+gemm_parameters::gemm_parameters(unsigned int simd_width
                           , int_t local_size_0, int_t KL, int_t local_size_1, int_t D
                           , int_t ms, int_t ks, int_t ns
                           , fetching_policy_type A_fetching_policy, fetching_policy_type B_fetching_policy
@@ -21,7 +23,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   mL(ms*local_size_0), nL(ns*local_size_1){}
 
 
-  unsigned int mproduct::lmem_usage(expressions_tuple const & expressions) const
+  unsigned int gemm::lmem_usage(expressions_tuple const & expressions) const
   {
     isaac::array_expression const & array_expression = (*expressions.data().front());
     numeric_type numeric_t = lhs_most(array_expression.tree(), array_expression.root()).lhs.dtype;
@@ -32,7 +34,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return N*size_of(numeric_t);
   }
 
-  unsigned int mproduct::registers_usage(expressions_tuple const & expressions) const
+  unsigned int gemm::registers_usage(expressions_tuple const & expressions) const
   {
     isaac::array_expression const & array_expression = (*expressions.data().front());
     numeric_type numeric_t = lhs_most(array_expression.tree(), array_expression.root()).lhs.dtype;
@@ -41,7 +43,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return N*size_of(numeric_t);
   }
 
-  int mproduct::is_invalid_impl(driver::Device const &, expressions_tuple const & expressions) const
+  int gemm::is_invalid_impl(driver::Device const &, expressions_tuple const & expressions) const
   {
     std::vector<int_t> MNK = input_sizes(expressions);
     int_t M = MNK[0]; int_t N = MNK[1];
@@ -95,7 +97,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return TEMPLATE_VALID;
   }
 
-  std::string mproduct::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const &) const
+  std::string gemm::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const &) const
   {
     using std::string;
     using tools::to_string;
@@ -437,7 +439,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
 #undef VST0RE
   }
 
-  void mproduct::enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K,
+  void gemm::enqueue_block(driver::CommandQueue & /*queue*/, int_t M, int_t N, int_t K,
                      array const & A, array const & B, array const & C,
                      value_scalar const & alpha, value_scalar const & beta,
                      driver::Program & program, const char * suffix, execution_options_type const & options)
@@ -516,7 +518,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     }
   }
 
-  array mproduct::create_slice(array & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap)
+  array gemm::create_slice(array & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap)
   {
     slice s0(s0_0, s0_1);
     slice s1(s1_0, s1_1);
@@ -525,7 +527,7 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return array(M, s0, s1);
   }
 
-  std::vector<int_t> mproduct::infos(expressions_tuple const & expressions, symbolic::preset::gemm::args& arguments) const
+  std::vector<int_t> gemm::infos(expressions_tuple const & expressions, symbolic::preset::gemm::args& arguments) const
   {
     isaac::array_expression & array_expression = (*expressions.data().front());
     array_expression::container_type & array = array_expression.tree();
@@ -537,26 +539,26 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     return {M, N, K};
   }
 
-  mproduct::mproduct(mproduct_parameters const & parameters, bool check_bounds, char A_trans, char B_trans) : base_impl<mproduct, mproduct_parameters>(parameters, BIND_ALL_UNIQUE), A_trans_(A_trans), B_trans_(B_trans), check_bounds_(check_bounds)
+  gemm::gemm(gemm_parameters const & parameters, bool check_bounds, char A_trans, char B_trans) : base_impl<gemm, gemm_parameters>(parameters, BIND_ALL_UNIQUE), A_trans_(A_trans), B_trans_(B_trans), check_bounds_(check_bounds)
   {
-    if(A_trans_=='N' && B_trans_=='N') type_ = MATRIX_PRODUCT_NN_TYPE;
-    else if(A_trans_=='T' && B_trans_=='N') type_ = MATRIX_PRODUCT_TN_TYPE;
-    else if(A_trans_=='N' && B_trans_=='T') type_ = MATRIX_PRODUCT_NT_TYPE;
-    else if(A_trans_=='T' && B_trans_=='T') type_ = MATRIX_PRODUCT_TT_TYPE;
+    if(A_trans_=='N' && B_trans_=='N') type_ = GEMM_NN_TYPE;
+    else if(A_trans_=='T' && B_trans_=='N') type_ = GEMM_TN_TYPE;
+    else if(A_trans_=='N' && B_trans_=='T') type_ = GEMM_NT_TYPE;
+    else if(A_trans_=='T' && B_trans_=='T') type_ = GEMM_TT_TYPE;
     else throw;
   }
 
-  std::vector<int_t> mproduct::input_sizes(expressions_tuple const & expressions) const
+  std::vector<int_t> gemm::input_sizes(expressions_tuple const & expressions) const
   {
     symbolic::preset::gemm::args dummy;
     return infos(expressions, dummy);
   }
 
-  void mproduct::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback_base, controller<expressions_tuple> const & ctr)
+  void gemm::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback_base, controller<expressions_tuple> const & ctr)
   {
     using namespace tools;
 
-    mproduct & fallback = (mproduct&)fallback_base;
+    gemm & fallback = (gemm&)fallback_base;
     expressions_tuple const & expressions = ctr.x();
 
 
@@ -579,8 +581,6 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
     int_t ldstrideA = pA->stride()[0];
     int_t ldstrideB = pB->stride()[0];
     int_t ldstrideC = pC->stride()[0];
-    int_t ldstartA = pA->start()[0];
-    int_t ldstartB = pB->start()[0];
 
     numeric_type dtype = args.C->dtype;
 
@@ -613,40 +613,41 @@ mproduct_parameters::mproduct_parameters(unsigned int simd_width
   }
 
   //
-  mproduct_nn::mproduct_nn(unsigned int simd
+  gemm_nn::gemm_nn(unsigned int simd
                            , int_t ls0, int_t KL, int_t ls1, int_t D
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'N')
+    gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'N')
   { }
 
   //
-  mproduct_tn::mproduct_tn(unsigned int simd
+  gemm_tn::gemm_tn(unsigned int simd
                            , int_t ls0, int_t KL, int_t ls1, int_t D
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'N')
+    gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'N')
   { }
 
   //
-  mproduct_nt::mproduct_nt(unsigned int simd
+  gemm_nt::gemm_nt(unsigned int simd
                            , int_t ls0, int_t KL, int_t ls1, int_t D
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'T')
+    gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'T')
   { }
 
   //
-  mproduct_tt::mproduct_tt(unsigned int simd
+  gemm_tt::gemm_tt(unsigned int simd
                            , int_t ls0, int_t KL, int_t ls1, int_t D
                            , int_t ms, int_t ks, int_t ns
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
-    mproduct(mproduct_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'T')
+    gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'T')
   { }
+
 }
-
+}
 
