@@ -159,16 +159,16 @@ def is_local_optimum(parameters, template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
     genetic_infos = tools.genetic_infos_of(template)
     
-    if issubclass(template, isc.axpy):
+    if issubclass(template, isc.templates.axpy):
         sweep_over = [0,1,2]
-    elif issubclass(template, isc.dot):
+    elif issubclass(template, isc.templates.dot):
         sweep_over = [0,1,2]
-    elif issubclass(template, isc.ger):
+    elif issubclass(template, isc.templates.ger):
         sweep_over = [0,1,2,3,4]
-    elif issubclass(template, isc.gemv):
+    elif issubclass(template, isc.templates.gemv):
         sweep_over = [0,1,2,3,4]
-    elif issubclass(template, isc.gemm):
-        sweep_over = [1,2,3,4,5,7,10,11]
+    elif issubclass(template, isc.templates.gemm):
+        sweep_over = [1,3,5,7]
     
     #Evaluate the provided parameters guess
     try:
