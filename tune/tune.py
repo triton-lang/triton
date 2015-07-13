@@ -26,8 +26,7 @@ def tune(device, operation, json_path):
     sizes[isc.templates.axpy] = [(x,) for x in tools.expspace(1e3, 1e7, 4)]
     sizes[isc.templates.gemv_n] = product(pow2range(4,17), pow2range(4,17))
     sizes[isc.templates.gemv_t] = sizes[isc.templates.gemv_n]
-    sizes[isc.templates.gemm_nn]     = product(pow2range(5, 10), pow2range(5, 10), pow2range(5, 10))
-    sizes[isc.templates.gemm_nn]	   = [(128, 169, 1728)]    
+    sizes[isc.templates.gemm_nn]     = product(pow2range(6, 12), pow2range(6, 12), pow2range(6, 12))
     sizes[isc.templates.gemm_tn]     = sizes[isc.templates.gemm_nn]
     sizes[isc.templates.gemm_nt]     = sizes[isc.templates.gemm_nn]
     sizes[isc.templates.gemm_tt]     = sizes[isc.templates.gemm_nn]
@@ -68,14 +67,20 @@ def tune(device, operation, json_path):
                 if idx > 0:
                     for xx,yy in zip(X, Y):
                         _tree, _operands = tools.tree_of(operation, xx, context)
-                        time = tools.benchmark(operation, new, _tree)
-                        perf = performance(xx, time)
+                        try:
+                            time = tools.benchmark(operation, new, _tree)
+                            perf = performance(xx, time)
+                        except (isc.OperationNotSupported, isc.LaunchOutOfResources, isc.MemObjectAllocationFailure):
+                            perf = 0
                         yy.append(0 if isinf(perf) else perf)
         #Update dataset
         y = []
         fastest = max(predperf) if nparams > 1 else None
         for ip, p in enumerate(profiles):
-            perf = 0 if fastest and ip < nparams and predperf[ip]/fastest < .1 else performance(x,tools.benchmark(operation, p, tree))
+            try:
+                perf = 0 if fastest and ip < nparams and predperf[ip]/fastest < .1 else performance(x,tools.benchmark(operation, p, tree))
+            except (isc.OperationNotSupported, isc.LaunchOutOfResources, isc.MemObjectAllocationFailure):
+                perf = 0
             y.append(0 if isinf(perf) else perf)
         X.append(x)
         Y.append(y)
