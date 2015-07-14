@@ -20,6 +20,25 @@
 namespace ad = isaac;
 typedef ad::int_t int_t;
 
+template<std::size_t> struct int_{};
+
+template <class Tuple, size_t Pos>
+std::ostream& print_tuple(std::ostream& out, const Tuple& t, int_<Pos> ) {
+out << std::get< std::tuple_size<Tuple>::value-Pos >(t) << ',';
+return print_tuple(out, t, int_<Pos-1>());
+}
+
+template <class Tuple>
+std::ostream& print_tuple(std::ostream& out, const Tuple& t, int_<1> ) {
+return out << std::get<std::tuple_size<Tuple>::value-1>(t);
+}
+
+template <class... Args>
+std::ostream& operator<<(std::ostream& out, const std::tuple<Args...>& t) {
+print_tuple(out, t, int_<sizeof...(Args)>());
+return out;
+}
+
 int ceil(int N, int pad)
 {
     return (N%pad==0)?N:(N+pad-1)/pad*pad;
@@ -298,36 +317,55 @@ void bench(ad::numeric_type dtype, std::string operation)
 
   if(operation.substr(0,4)=="gemm")
   {
-    std::vector<std::tuple<int_t, int_t, int_t> > MNKs;
-    MNKs.push_back(std::make_tuple(3025,96,363));
-    MNKs.push_back(std::make_tuple(729,128,1200));
-    MNKs.push_back(std::make_tuple(169,384,2304));
-    MNKs.push_back(std::make_tuple(169,192,1728));
-    MNKs.push_back(std::make_tuple(169,128,1728));
-    MNKs.push_back(std::make_tuple(64,64,32000));
-    MNKs.push_back(std::make_tuple(1024,1024,32000));
+    std::vector<std::tuple<char, char, int_t, int_t, int_t> > MNKs;
+    //AlexNet (Forward)
+    MNKs.push_back(std::make_tuple('N','N',3025,96,363));
+    MNKs.push_back(std::make_tuple('N','N',729,128,1200));
+    MNKs.push_back(std::make_tuple('N','N',169,384,2304));
+    MNKs.push_back(std::make_tuple('N','N',169,192,1728));
+    MNKs.push_back(std::make_tuple('N','N',169,128,1728));
+    //AlexNet (Backward)
+    MNKs.push_back(std::make_tuple('T','N',1728,128,169));
+    MNKs.push_back(std::make_tuple('T','N',1728,192,169));
+    MNKs.push_back(std::make_tuple('T','N',2304,384,169));
+    MNKs.push_back(std::make_tuple('T','N',1200,128,729));
+    MNKs.push_back(std::make_tuple('T','N',363,96,3025));
 
-//    for(unsigned int N = 1 ; N <10 ; ++N)
-//        MNKs.push_back(std::make_tuple(128*N, 128*N, 128*N));
+    MNKs.push_back(std::make_tuple('N','T',169,1728,128));
+    MNKs.push_back(std::make_tuple('N','T',169,1728,192));
+    MNKs.push_back(std::make_tuple('N','T',169,2304,384));
+    MNKs.push_back(std::make_tuple('N','T',729,1200,128));
+
+    //Covariance (e.g., ICA)
+    MNKs.push_back(std::make_tuple('N','N',64,64,32000));
+    MNKs.push_back(std::make_tuple('N','N',1024,1024,32000));
+
     /*---------*/
     /*--BLAS3--*/
     /*---------*/
-    for(std::tuple<int_t, int_t, int_t> MNK: MNKs)
+    for(std::tuple<char, char, int_t, int_t, int_t> MNK: MNKs)
     {
-        int_t M = std::get<0>(MNK);
-        int_t N = std::get<1>(MNK);
-        int_t K = std::get<2>(MNK);
-        std::cout << M << "," << N << "," << K;
+        bool AT = std::get<0>(MNK)=='T';
+        bool BT = std::get<1>(MNK)=='T';
+        int_t M = std::get<2>(MNK);
+        int_t N = std::get<3>(MNK);
+        int_t K = std::get<4>(MNK);
+        std::cout << MNK;
         std::cout << std::flush;
         /* ISAAC */
-        ad::array C(M, N, dtype), A(M, K, dtype), B(N, K, dtype);
+        int_t As1 = M, As2 = K;
+        if(AT) std::swap(As1, As2);
+        int_t Bs1 = K, Bs2 = N;
+        if(BT) std::swap(Bs1, Bs2);
+
+        ad::array C(M, N, dtype), A(As1, As2, dtype), B(Bs1, Bs2, dtype);
     #if HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
-        BENCHMARK_ISAAC(C = ad::control(dot(A,B), ad::execution_options_type(0, &events)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = ad::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), ad::execution_options_type(0, &events)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
-        BENCHMARK_CLBLAS(clblasSgemm(clblasColumnMajor, clblasNoTrans, clblasTrans, M, N, K, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(B.data()), 0, ldb,
+        BENCHMARK_CLBLAS(clblasSgemm(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, BT?clblasTrans:clblasNoTrans, M, N, K, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(B.data()), 0, ldb,
                                             0, CL_HANDLE(C.data()), 0, ldc, 1, &CL_HANDLE(queue),0, NULL, &event()), (double)2*M*N*K/t)
     #endif
         /* BLAS */
