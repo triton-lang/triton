@@ -148,9 +148,16 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "{" << std::endl;
     stream.inc_tab();
 
+    ///Declare
     stream << sdtype << " rC[" << p_.mS << "][" << p_.nS << "];" << std::endl;
     stream << vdtype << " rA[" << p_.kS << "][" << p_.mS/p_.simd_width << "];" << std::endl;
     stream << vdtype << " rB[" << p_.kS << "][" << p_.nS/p_.simd_width << "];" << std::endl;
+
+    size_t llda = (A_trans_=='N')?p_.mL:p_.kL;
+    stream << Local(backend) << " " << sdtype << " lA[" << p_.kL*p_.mL << "];" << std::endl;
+    size_t lldb = (B_trans_=='T')?p_.nL:p_.kL;
+    stream << Local(backend) << " " << sdtype << " lB[" << p_.kL*p_.nL << "];" << std::endl;
+    stream << std::endl;
 
     for(int_t m=0; m < p_.mS; ++m)
         for(int_t n=0; n < p_.nS; ++n)
@@ -160,12 +167,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "B += offb;" << std::endl;
     stream << "C += offc;" << std::endl;
 
-    ///Result Values
-    size_t llda = (A_trans_=='N')?p_.mL:p_.kL;
-    stream << Local(backend) << " " << sdtype << " lA[" << p_.kL*p_.mL << "];" << std::endl;
-    size_t lldb = (B_trans_=='T')?p_.nL:p_.kL;
-    stream << Local(backend) << " " << sdtype << " lB[" << p_.kL*p_.nL << "];" << std::endl;
-    stream << std::endl;
+
 
     stream << "size_t gidx = " << GroupIdx0(backend) << ";" << std::endl;
     stream << "size_t gidy = " << GroupIdx1(backend) << ";" << std::endl;
