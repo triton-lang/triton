@@ -154,10 +154,15 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << vdtype << " rB[" << p_.kS << "][" << p_.nS/p_.simd_width << "];" << std::endl;
 
     size_t llda = (A_trans_=='N')?p_.mL:p_.kL;
-    stream << Local(backend) << " " << sdtype << " lA[" << p_.kL*p_.mL << "];" << std::endl;
     size_t lldb = (B_trans_=='T')?p_.nL:p_.kL;
+    stream << Local(backend) << " " << sdtype << " lA[" << p_.kL*p_.mL << "];" << std::endl;
     stream << Local(backend) << " " << sdtype << " lB[" << p_.kL*p_.nL << "];" << std::endl;
     stream << std::endl;
+
+    unsigned int npA = p_.mL/(A_trans_=='N'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
+    unsigned int npB = p_.nL/(B_trans_=='T'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
+    stream << "__global " << sdtype << "* Ai[" << npA << "];" << std::endl;
+    stream << "__global " << sdtype << "* Bi[" << npB << "];" << std::endl;
 
     for(int_t m=0; m < p_.mS; ++m)
         for(int_t n=0; n < p_.nS; ++n)
@@ -166,8 +171,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "A += offa;" << std::endl;
     stream << "B += offb;" << std::endl;
     stream << "C += offc;" << std::endl;
-
-
 
     stream << "size_t gidx = " << GroupIdx0(backend) << ";" << std::endl;
     stream << "size_t gidy = " << GroupIdx1(backend) << ";" << std::endl;
@@ -191,8 +194,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "size_t idyT = idt / " << p_.local_fetch_0 << ";" << std::endl;
     stream << std::endl;
 
-    unsigned int npA = p_.mL/(A_trans_=='N'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
-    unsigned int npB = p_.nL/(B_trans_=='T'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
+
 
     if (A_trans_=='N')
         stream << "A += (idxT*" << p_.simd_width << " + gidx*" << p_.mL<< ")" << ASTRIDE1 << " + idyT*lda" << (has_depth?"+ offz*lda":"") << ";" << std::endl;
@@ -204,8 +206,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     else
         stream << "B += idxT*" << p_.simd_width << BSTRIDE1 << " + (idyT + gidy*" << p_.nL << ")*ldb" << (has_depth?"+ offz":"") << ";" << std::endl;
 
-
-    stream << "__global " << sdtype << "* Ai[" << npA << "];" << std::endl;
     stream << "for(unsigned int i = 0 ; i < " << npA << " ; ++i) Ai[i] = A;" << std::endl;
 
     for(unsigned int i = 0 ; i < npA ; i++ )
@@ -215,7 +215,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
           stream << "if(gidx*" << p_.mL << " + idyT + " << i << "*" << p_.local_fetch_1 << " < M) Ai[" << i << "] += " << i*p_.local_fetch_1 << "*lda;" << std::endl;
 
 
-    stream << "__global " << sdtype << "* Bi[" << npB << "];" << std::endl;
     stream << "for(unsigned int i = 0 ; i < " << npB << " ; ++i) Bi[i] = B;" << std::endl;
 
 
