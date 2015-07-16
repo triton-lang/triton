@@ -393,7 +393,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
         {
             string Ci = to_string((m/p_.simd_width)*(p_.local_size_0*p_.simd_width) + m%p_.simd_width);
             stream << "if(ibm[" << m << "]) ";
-            stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "];" << std::endl;
+            stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "] + select((" << sdtype << ")0, C[" << Ci << CSTRIDE1 << "], beta>0);" << std::endl;
         }
         if((n+1)%p_.simd_width==0)
             stream << "C += ldc*" << p_.local_size_1*p_.simd_width - p_.simd_width + 1 << ";" << std::endl;
@@ -439,8 +439,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       stream << "}" << std::endl;
     }
 
-    if(p_.simd_width>1)
-        std::cout << stream.str() << std::endl;
+//    if(p_.simd_width>1)
+//        std::cout << stream.str() << std::endl;
     return stream.str();
 
 #undef VLOAD
