@@ -149,7 +149,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream.inc_tab();
 
     ///Declare
-    stream << sdtype << " rC[" << p_.mS << "][" << p_.nS << "];" << std::endl;
+    stream << sdtype << " rC[" << p_.mS << "][" << p_.nS << "] = {{0}};" << std::endl;
     stream << vdtype << " rA[" << p_.kS << "][" << p_.mS/p_.simd_width << "];" << std::endl;
     stream << vdtype << " rB[" << p_.kS << "][" << p_.nS/p_.simd_width << "];" << std::endl;
 
@@ -163,10 +163,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     unsigned int npB = p_.nL/(B_trans_=='T'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
     stream << "__global " << sdtype << "* Ai[" << npA << "];" << std::endl;
     stream << "__global " << sdtype << "* Bi[" << npB << "];" << std::endl;
-
-    for(int_t m=0; m < p_.mS; ++m)
-        for(int_t n=0; n < p_.nS; ++n)
-            stream << "rC[" << m << "][" << n << "] = 0;" << std::endl;
 
     stream << "A += offa;" << std::endl;
     stream << "B += offb;" << std::endl;
@@ -389,9 +385,9 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "//Write back C" << std::endl;
 
     //alpha
+    for(int_t n=0; n < p_.nS; ++n)
     for(int_t m=0; m < p_.mS; ++m)
-        for(int_t n=0; n < p_.nS; ++n)
-            stream << "rC[" << m << "][" << n << "] *= alpha;" << std::endl;
+    stream << "rC[" << m << "][" << n << "] *= alpha;" << std::endl;
 
     //beta
     unsigned int ministartstride0 = p_.simd_width;

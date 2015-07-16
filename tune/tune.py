@@ -32,6 +32,7 @@ def tune(device, operation, json_path):
     sizes[isc.templates.gemm_tt]     = sizes[isc.templates.gemm_nn]
     sizes = unique(list(sizes[operation]))
     sizes = [x for x in sizes if 1e-4 <= tools.memory_footprint(operation, x) <= 1e-1]
+    sizes = [(1536,1536,1536)]
 
 
     #Training data
