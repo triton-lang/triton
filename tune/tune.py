@@ -30,9 +30,28 @@ def tune(device, operation, json_path):
     sizes[isc.templates.gemm_tn]     = sizes[isc.templates.gemm_nn]
     sizes[isc.templates.gemm_nt]     = sizes[isc.templates.gemm_nn]
     sizes[isc.templates.gemm_tt]     = sizes[isc.templates.gemm_nn]
+    
+    #AlexNet sizes
+    sizes[isc.templates.gemm_nn]	 = [(3025,96,363),
+                                        (729,128,1200),
+                                        (169,384,2304),
+                                        (169,192,1728),
+                                        (169,128,1728)]
+    
+    sizes[isc.templates.gemm_nt]	 = [(169,1728,128),
+										(169,1728,192),
+										(169,2304,384),
+										(729,1200,128)]
+    
+    sizes[isc.templates.gemm_tn]	 = [(1728,128,169), 
+										(1728,192,169),
+										(2304,384,169),
+										(1200,128,729),
+										(363,96,3025)]
+    
+    
     sizes = unique(list(sizes[operation]))
     sizes = [x for x in sizes if 1e-4 <= tools.memory_footprint(operation, x) <= 1e-1]
-    sizes = [(1536,1536,1536)]
 
 
     #Training data
@@ -58,7 +77,8 @@ def tune(device, operation, json_path):
                 best = (-predperf).argsort()[:5]
                 perf = [performance(x, tools.benchmark(operation, profiles[b], tree)) for b in best]
                 predicted = profiles[best[argmax(perf)]]
-            tune = not optimize.is_local_optimum(predicted, operation, x, context)     
+            #tune = not optimize.is_local_optimum(predicted, operation, x, context)     
+            tune = True
         #Retune if necessary
         if tune:
             #new = optimize.exhaustive(operation, x, context)
