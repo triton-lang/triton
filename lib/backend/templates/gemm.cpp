@@ -51,8 +51,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     if(p_.A_fetching_policy!=FETCH_FROM_LOCAL || p_.B_fetching_policy!=FETCH_FROM_LOCAL)
       throw operation_not_supported_exception("Only local memory is supported for GEMM");
 
-//    if(p_.depth > 1 && M*N*p_.depth > 2e6)
-//      throw operation_not_supported_exception("This would necessitate a temporary larger than 1MB");
+    if(p_.depth > 1 && M*N*p_.depth > 2e6)
+      throw operation_not_supported_exception("This would necessitate a temporary larger than 1MB");
 
     if ((p_.mS % p_.simd_width) > 0 || (p_.nS % p_.simd_width) > 0)
       return TEMPLATE_MS_NS_MUST_BE_SIMD_WIDTH_MULTIPLE;
@@ -371,29 +371,37 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
     stream << "//Write back C" << std::endl;
 
-    //alpha
-    for(int_t n=0; n < p_.nS; ++n)
-    for(int_t m=0; m < p_.mS; ++m)
-    stream << "rC[" << m << "][" << n << "] *= alpha;" << std::endl;
-
-    //beta
-    unsigned int ministartstride0 = p_.simd_width;
-    unsigned int ministartstride1 = p_.simd_width;
-    stream << "size_t offx = (gidx*" << p_.mL << " + idx*" << ministartstride0 << ")" << ";" << std::endl;
-    stream << "size_t offy = (gidy*" << p_.nL << " + idy*" << ministartstride1 << ");" << std::endl;
+    stream << "size_t offx = (gidx*" << p_.mL << " + idx*" << p_.simd_width << ")" << ";" << std::endl;
+    stream << "size_t offy = (gidy*" << p_.nL << " + idy*" << p_.simd_width << ");" << std::endl;
     stream << "C += " << "offx" << CSTRIDE1 << " + offy*ldc" << (has_depth?" + gidz*ldc*N;":"") << ";" << std::endl;
-    stream << std::endl;
+    stream << "N -= offy;" << std::endl;
+    stream << "M -= offx;" << std::endl;
+    stream << "int ibm[" << p_.mS << "];" << std::endl;
     for(int_t m=0; m < p_.mS; ++m)
+    {
+        string Ci = to_string((m/p_.simd_width)*(p_.local_size_0*p_.simd_width) + m%p_.simd_width);
+        stream << "ibm[" << m << "] = " << Ci << " < M;" << std::endl;
+    }
+
     for(int_t n=0; n < p_.nS; ++n)
     {
-      unsigned int ministride0 = p_.local_size_0;
-      unsigned int ministride1 = p_.local_size_1;
+        string Cj = to_string((n/p_.simd_width)*(p_.local_size_1*p_.simd_width) + n%p_.simd_width);
+        stream << "if(" << Cj << " >= N) return;" << std::endl;
+        for(int_t m=0; m < p_.mS; ++m)
+            stream << "rC[" << m << "][" << n << "] *= alpha;" << std::endl;
+        for(int_t m=0; m < p_.mS; ++m)
+        {
+            string Ci = to_string((m/p_.simd_width)*(p_.local_size_0*p_.simd_width) + m%p_.simd_width);
+            stream << "if(ibm[" << m << "]) ";
+            stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "];" << std::endl;
+        }
+        if((n+1)%p_.simd_width==0)
+            stream << "C += ldc*" << p_.local_size_1*p_.simd_width - p_.simd_width + 1 << ";" << std::endl;
+        else
+            stream << "C += ldc;" << std::endl;
 
-      string Ci = to_string((m/p_.simd_width)*(ministride0*p_.simd_width) + m%p_.simd_width);
-      string Cj = to_string((n/p_.simd_width)*(ministride1*p_.simd_width) + n%p_.simd_width);
-      stream << "if((offx + " << Ci  << ")<M && (" << Cj << " + offy)<N)"<< std::flush;
-      stream << "C[" << Ci << CSTRIDE1 << " + " << Cj << "*ldc] = rC[" << m << "][" << n << "] + ((beta==0)?0:beta*C[" << Ci << " + " << Cj << "*ldc]);" << std::endl;
     }
+
     stream.dec_tab();
     stream << "}" << std::endl;
 
@@ -431,8 +439,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       stream << "}" << std::endl;
     }
 
-//    if(p_.simd_width>1)
-//        std::cout << stream.str() << std::endl;
+    if(p_.simd_width>1)
+        std::cout << stream.str() << std::endl;
     return stream.str();
 
 #undef VLOAD
