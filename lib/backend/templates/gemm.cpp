@@ -51,8 +51,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     if(p_.A_fetching_policy!=FETCH_FROM_LOCAL || p_.B_fetching_policy!=FETCH_FROM_LOCAL)
       throw operation_not_supported_exception("Only local memory is supported for GEMM");
 
-    if(p_.depth > 1 && M*N*p_.depth > 2e6)
-      throw operation_not_supported_exception("This would necessitate a temporary larger than 1MB");
+//    if(p_.depth > 1 && M*N*p_.depth > 2e6)
+//      throw operation_not_supported_exception("This would necessitate a temporary larger than 1MB");
 
     if ((p_.mS % p_.simd_width) > 0 || (p_.nS % p_.simd_width) > 0)
       return TEMPLATE_MS_NS_MUST_BE_SIMD_WIDTH_MULTIPLE;

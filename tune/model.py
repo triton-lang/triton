@@ -31,9 +31,10 @@ def train(X, Y, profiles):
     Y = Y[p,:]   
 
     #Train the model
-    cut = int(0.9*M)
-    XTr, YTr = X[:cut,:], Y[:cut,:]
-    XCv, YCv = X[cut:,:], Y[cut:,:]
+    cut = int(1.00*M)
+    CV = .1
+    XTr, YTr = X[:,:], Y[:,:]
+    XCv, YCv = X[:max(1,CV*M),:], Y[:max(1,CV*M),:]
 
     nrmses = {}
     for N in range(1,min(M+1,20)):
