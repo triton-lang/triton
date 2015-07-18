@@ -101,9 +101,9 @@ void test_impl(T epsilon, ad::driver::Context const & ctx)
     int_t N = 256;
     int_t K = 293;
 
-    int_t SUBM = 64;
-    int_t SUBN = 64;
-    int_t SUBK = 64;
+    int_t SUBM = 7;
+    int_t SUBN = 13;
+    int_t SUBK = 41;
 
     {
         INIT_MATRIX(M, SUBM, 5, 1, N, SUBN, 7, 1, cC, C, ctx);
