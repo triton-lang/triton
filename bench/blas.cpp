@@ -321,24 +321,24 @@ void bench(ad::numeric_type dtype, std::string operation)
     //AlexNet (Forward)
     MNKs.push_back(std::make_tuple('N','N',3025,96,363));
     MNKs.push_back(std::make_tuple('N','N',729,128,1200));
-    MNKs.push_back(std::make_tuple('N','N',169,384,2304));
-    MNKs.push_back(std::make_tuple('N','N',169,192,1728));
-    MNKs.push_back(std::make_tuple('N','N',169,128,1728));
-    //AlexNet (Backward)
-    MNKs.push_back(std::make_tuple('T','N',1728,128,169));
-    MNKs.push_back(std::make_tuple('T','N',1728,192,169));
-    MNKs.push_back(std::make_tuple('T','N',2304,384,169));
-    MNKs.push_back(std::make_tuple('T','N',1200,128,729));
-    MNKs.push_back(std::make_tuple('T','N',363,96,3025));
+//    MNKs.push_back(std::make_tuple('N','N',169,384,2304));
+//    MNKs.push_back(std::make_tuple('N','N',169,192,1728));
+//    MNKs.push_back(std::make_tuple('N','N',169,128,1728));
+//    //AlexNet (Backward)
+//    MNKs.push_back(std::make_tuple('T','N',1728,128,169));
+//    MNKs.push_back(std::make_tuple('T','N',1728,192,169));
+//    MNKs.push_back(std::make_tuple('T','N',2304,384,169));
+//    MNKs.push_back(std::make_tuple('T','N',1200,128,729));
+//    MNKs.push_back(std::make_tuple('T','N',363,96,3025));
 
-    MNKs.push_back(std::make_tuple('N','T',169,1728,128));
-    MNKs.push_back(std::make_tuple('N','T',169,1728,192));
-    MNKs.push_back(std::make_tuple('N','T',169,2304,384));
-    MNKs.push_back(std::make_tuple('N','T',729,1200,128));
+//    MNKs.push_back(std::make_tuple('N','T',169,1728,128));
+//    MNKs.push_back(std::make_tuple('N','T',169,1728,192));
+//    MNKs.push_back(std::make_tuple('N','T',169,2304,384));
+//    MNKs.push_back(std::make_tuple('N','T',729,1200,128));
 
-    //Covariance (e.g., ICA)
-    MNKs.push_back(std::make_tuple('N','N',64,64,32000));
-    MNKs.push_back(std::make_tuple('N','N',1024,1024,32000));
+//    //Covariance (e.g., ICA)
+//    MNKs.push_back(std::make_tuple('N','N',64,64,32000));
+//    MNKs.push_back(std::make_tuple('N','N',1024,1024,32000));
 
     /*---------*/
     /*--BLAS3--*/
