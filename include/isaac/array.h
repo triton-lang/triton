@@ -225,8 +225,8 @@ array_expression OPNAME(array_expression const & M, int_t axis = -1);
 
 ISAAC_DECLARE_DOT(sum)
 ISAAC_DECLARE_DOT(argmax)
-ISAAC_DECLARE_DOT(max)
-ISAAC_DECLARE_DOT(min)
+ISAAC_DECLARE_DOT((max))
+ISAAC_DECLARE_DOT((min))
 ISAAC_DECLARE_DOT(argmin)
 
 array_expression eye(std::size_t, std::size_t, isaac::numeric_type, driver::Context context = driver::queues.default_context());
