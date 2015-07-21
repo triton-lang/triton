@@ -101,7 +101,7 @@ value_scalar uint64(uint64_t v) { return value_scalar(v); }
 value_scalar float32(float v) { return value_scalar(v); }
 value_scalar float64(double v) { return value_scalar(v); }
 
-#define VALUE(type, OP, x, y) (type)x OP y
+#define VALUE(type, OP, x, y) (type)(x OP y)
 #define INSTANTIATE(NAME, LDEC, RDEC, OP)\
 value_scalar NAME(LDEC, RDEC)\
 {\
@@ -151,6 +151,7 @@ INSTANTIATE_ALL(operator+, +)
 INSTANTIATE_ALL(operator-, -)
 INSTANTIATE_ALL(operator*, *)
 INSTANTIATE_ALL(operator/, /)
+
 INSTANTIATE_ALL(operator>,  > )
 INSTANTIATE_ALL(operator>=, >=)
 INSTANTIATE_ALL(operator<,  < )

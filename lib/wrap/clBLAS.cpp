@@ -40,6 +40,7 @@ extern "C"
                 clRetainEvent(events[i]);
             }
         }
+
     }
 
     //*****************
