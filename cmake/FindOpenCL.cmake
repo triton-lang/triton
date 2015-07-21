@@ -1,16 +1,16 @@
-#Ideas for finding libOpenCL
-set(ANDROID_CL_GLOB_HINTS /opt/adreno-driver*/lib)
-set(X86_CL_GLOB_HINTS /opt/AMDAPPSDK*/lib/x86_64)
+#Hints for finding libOpenCL
 
 #OpenCL Hints
-set(L_HINTS)
+set(L_HINTS $ENV{INTELOCLSDKROOT}/lib/x86)
 if(ANDROID)
-    foreach(PATH ${ANDROID_GLOB_HINTS})
+    set(ANDROID_CL_GLOB_HINTS /opt/adreno-driver*/lib)
+    foreach(PATH ${ANDROID_CL_GLOB_HINTS})
         file(GLOB _TMP ${PATH})
         set(L_HINTS ${L_HINTS} ${_TMP})
     endforeach()
 else()
-    foreach(PATH ${X86_GLOB_HINTS})
+    set(X86_CL_GLOB_HINTS /opt/AMDAPPSDK*/lib/x86_64)
+    foreach(PATH ${X86_CL_GLOB_HINTS})
         file(GLOB _TMP ${PATH})
         set(L_HINTS ${L_HINTS} ${_TMP})
     endforeach()
@@ -19,5 +19,5 @@ endif()
 
 find_library(OPENCL_LIBRARIES NAMES OpenCL HINTS ${L_HINTS} )
 include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(OpenCL  DEFAULT_MSG OPENCL_LIBRARIES)
+find_package_handle_standard_args(OpenCL DEFAULT_MSG OPENCL_LIBRARIES)
 mark_as_advanced(OpenCL)
