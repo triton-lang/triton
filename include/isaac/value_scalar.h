@@ -124,8 +124,8 @@ ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, operator <=)
 ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, operator ==)
 ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, operator !=)
 
-ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, max)
-ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, min)
+ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, (max))
+ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, (min))
 ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, pow)
 
 #undef ISAAC_DECLARE_BINARY_OPERATOR

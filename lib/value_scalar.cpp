@@ -1,3 +1,5 @@
+#define NOMINMAX
+
 #include <cmath>
 #include <iostream>
 #include "isaac/array.h"
