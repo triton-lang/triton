@@ -57,7 +57,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   {
       cl_command_queue clqueue = (*queue.handle().cl)();
 
-      //Row-major
+////      //Row-major
       RUN_TEST("GEMM(ROW, N, N)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasRowMajor, clblasNoTrans, clblasNoTrans, N, M, K, alpha, CHANDLE(B), OFF(B), LD(B),
                                                                  CHANDLE(A), OFF(A), LD(A), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
       RUN_TEST("GEMM(ROW, N, T)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasRowMajor, clblasTrans, clblasNoTrans, N, M, K, alpha, CHANDLE(BT), OFF(BT), LD(BT),
@@ -102,8 +102,8 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
     int_t K = 293;
 
     int_t SUBM = 7;
-    int_t SUBN = 13;
-    int_t SUBK = 41;
+    int_t SUBN = 11;
+    int_t SUBK = 29;
 
     {
         INIT_MATRIX(M, SUBM, 5, 1, N, SUBN, 7, 1, cC, C, ctx);
@@ -125,8 +125,8 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 
 int main()
 {
-  clblasSetup();
   auto data = isc::driver::queues.contexts();
+  clblasSetup();
   for(const auto & elem : data)
   {
     isc::driver::Device device = elem.second[0].device();
