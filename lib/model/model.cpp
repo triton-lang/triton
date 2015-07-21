@@ -73,7 +73,7 @@ driver::Program& model::init(controller<expressions_tuple> const & expressions)
     std::string all_extensions = define_extension(extensions, "cl_khr_fp64");
 
    std::string srcs;
-    for(int i = 0 ; i < templates_.size() ; ++i){
+    for(unsigned int i = 0 ; i < templates_.size() ; ++i){
       char buffer[16];
       sprintf(buffer,"%d",i);
       srcs += templates_[i]->generate(buffer, expressions.x(), device);
@@ -103,7 +103,7 @@ void model::execute(controller<expressions_tuple> const & expr)
   if(expr.dispatcher_options().tune && hardcoded_.find(x)==hardcoded_.end())
   {
     std::vector<double> timings(templates_.size());
-    for(int i = 0 ; i < templates_.size() ; ++i)
+    for(unsigned int i = 0 ; i < templates_.size() ; ++i)
     {
       std::list<driver::Event> events;
       try{

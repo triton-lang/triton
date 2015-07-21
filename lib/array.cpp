@@ -10,6 +10,10 @@
 namespace isaac
 {
 
+  namespace detail
+  {
+    inline int_t max(size4 const & s) { return std::max(s[0], s[1]); }
+  }
 
 /*--- Constructors ---*/
 //1D Constructors
@@ -330,13 +334,13 @@ void scalar::inject(values_holder & v) const
   #undef HANDLE_CASE
 }
 
-template<class T>
-T scalar::cast() const
+template<class TYPE>
+TYPE scalar::cast() const
 {
   values_holder v;
   inject(v);
 
-#define HANDLE_CASE(DTYPE, VAL) case DTYPE: return v.VAL
+#define HANDLE_CASE(DTYPE, VAL) case DTYPE: return static_cast<TYPE>(v.VAL)
 
   switch(dtype_)
   {
@@ -402,7 +406,7 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
 {
   switch(s.dtype())
   {
-//    case BOOL_TYPE: return os << static_cast<cl_bool>(s);
+//    case BOOL_TYPE: return os << static_cast<bool>(s);
     case CHAR_TYPE: return os << static_cast<char>(s);
     case UCHAR_TYPE: return os << static_cast<unsigned char>(s);
     case SHORT_TYPE: return os << static_cast<short>(s);
@@ -411,7 +415,7 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
     case UINT_TYPE: return os << static_cast<unsigned int>(s);
     case LONG_TYPE: return os << static_cast<long>(s);
     case ULONG_TYPE: return os << static_cast<unsigned long>(s);
-//    case HALF_TYPE: return os << static_cast<cl_half>(s);
+//    case HALF_TYPE: return os << static_cast<half>(s);
     case FLOAT_TYPE: return os << static_cast<float>(s);
     case DOUBLE_TYPE: return os << static_cast<double>(s);
     default: throw unknown_datatype(s.dtype());
@@ -423,7 +427,7 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
 template<class U, class V>
 size4 elementwise_size(U const & u, V const & v)
 {
-  if(max(u.shape())==1)
+  if(detail::max(u.shape())==1)
     return v.shape();
   return u.shape();
 }
@@ -431,7 +435,7 @@ size4 elementwise_size(U const & u, V const & v)
 template<class U, class V>
 bool check_elementwise(U const & u, V const & v)
 {
-  return max(u.shape())==1 || max(v.shape())==1 || u.shape()==v.shape();
+  return detail::max(u.shape())==1 || detail::max(v.shape())==1 || u.shape()==v.shape();
 }
 
 #define DEFINE_ELEMENT_BINARY_OPERATOR(OP, OPNAME, DTYPE) \
@@ -486,7 +490,7 @@ DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_NEQ_TYPE, operator !=, INT_TYPE)
 array_expression outer(LTYPE const & x, RTYPE const & y)\
 {\
     assert(x.nshape()==1 && y.nshape()==1);\
-    return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_OUTER_PROD_TYPE), x.context(), x.dtype(), size4(max(x.shape()), max(y.shape())) );\
+    return array_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_OUTER_PROD_TYPE), x.context(), x.dtype(), size4(detail::max(x.shape()), detail::max(y.shape())) );\
 }\
 
 DEFINE_OUTER(array, array)

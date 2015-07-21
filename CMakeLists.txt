@@ -4,9 +4,11 @@ cmake_minimum_required(VERSION 2.8.10)
 file( GLOB_RECURSE MAKE_HEADERS_VISIBLE_SRC *.cpp *.hpp *.h)
 add_custom_target( MAKE_HEADERS_VISIBLE SOURCES ${MAKE_HEADERS_VISIBLE_SRC} )
 
+#Modules
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+#CUDA and OpenCL
 find_package(CUDA QUIET)
 find_package(OpenCL QUIET REQUIRED)
 if(CUDA_FOUND)
@@ -14,7 +16,14 @@ if(CUDA_FOUND)
    include_directories(${CUDA_INCLUDE_DIRS})
 endif()
 
-add_definitions(-Wno-sign-compare ${BACKEND_DEFINES} -Wall -Wextra -pedantic -std=c++11)
+#Compiler flags
+add_definitions(${BACKEND_DEFINES})
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+if(CMAKE_COMPILER_IS_GNUCXX)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -pedantic")
+endif()
+
+#Binary to convert .cu files to const char *
 add_executable(bin2cpp ${CMAKE_MODULE_PATH}/helpers/bin2cpp.cpp)
 file(GLOB_RECURSE LIBISAAC_SRC lib/*.cpp)
 

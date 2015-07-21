@@ -28,8 +28,6 @@ private:
 };
 
 inline int_t prod(size4 const & s) { return s[0]*s[1]; }
-inline int_t max(size4 const & s) { return std::max(s[0], s[1]); }
-inline int_t min(size4 const & s) { return std::min(s[0], s[1]); }
 
 struct repeat_infos
 {

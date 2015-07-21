@@ -46,7 +46,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
   int gemm::is_invalid_impl(driver::Device const &, expressions_tuple const & expressions) const
   {
     std::vector<int_t> MNK = input_sizes(expressions);
-    int_t M = MNK[0]; int_t N = MNK[1];
+//    int_t M = MNK[0]; int_t N = MNK[1];
 
     if(p_.A_fetching_policy!=FETCH_FROM_LOCAL || p_.B_fetching_policy!=FETCH_FROM_LOCAL)
       throw operation_not_supported_exception("Only local memory is supported for GEMM");
@@ -202,7 +202,9 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "N -= ids.y;" << std::endl;
 
     if (A_trans_=='N')
+    {
         stream << "A += (idT.x + ids.x)" << ASTRIDE1 << " + idT.y*lda" << (has_depth?"+ offz*lda":"") << ";" << std::endl;
+    }
     else
         stream << "A += idT.x" << ASTRIDE1 << " + idT.y*lda + ids.x*lda" << (has_depth?"+ offz":"") << ";" << std::endl;
 
@@ -526,8 +528,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     helper.set_arguments(beta.dtype(), beta.values());
     options.enqueue(program.context(), gemm, global, local);
 
-    options.queue(program.context()).synchronize();
-
     if(p_.depth > 1)
     {
       unsigned int current_arg = 0;
@@ -618,10 +618,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     numeric_type dtype = args.C->dtype;
 
     //Enqueue
-    bool swap_A = (A_trans_=='T');
-    bool swap_B = (B_trans_=='T');
-
-
     value_scalar beta(0, dtype);
     if(args.beta) beta = value_scalar(args.beta->vscalar, dtype);
 
@@ -637,10 +633,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     }
     else
     {
-//        std::cout << p_.local_size_0 << " " << p_.kL << " " << p_.local_size_1 << " " << p_.depth << std::endl;
-//        value_scalar _1(1, dtype);
         enqueue_block(queue,  M, N, K, *pA, *pB, *pC, alpha, beta, program, suffix, options);
-//        fallback.enqueue_block(queue,  M, N, K - lK, create_slice(*pA, 0, M, lK, K, swap_A), create_slice(*pB, lK, K, 0, N, swap_B), create_slice(*pC, 0, M, 0, N, false), alpha, _1, program, "fallback", options);
     }
   }
 
