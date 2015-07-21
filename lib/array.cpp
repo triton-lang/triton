@@ -1,11 +1,14 @@
+#define NOMINMAX
+
 #include <cassert>
+#include <algorithm>
+#include <stdexcept>
 
 #include "isaac/array.h"
 #include "isaac/exception/unknown_datatype.h"
 #include "isaac/model/model.h"
 #include "isaac/symbolic/execute.h"
 
-#include <stdexcept>
 
 namespace isaac
 {

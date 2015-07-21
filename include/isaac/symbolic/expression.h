@@ -21,7 +21,7 @@ namespace isaac
 {
 
 class array;
-class repeat_infos;
+struct repeat_infos;
 
 /** @brief Optimization enum for grouping operations into unary or binary operations. Just for optimization of lookups. */
 enum operation_node_type_family
