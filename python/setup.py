@@ -61,7 +61,7 @@ def main():
     def find_opencl():
         cvars = sysconfig.get_config_vars()
         is_on_android = '-mandroid' in cvars['PY_CFLAGS']
-        lib = find_library('OpenCL', '/opt/adreno-driver*/lib' if is_on_android else '/opt/AMDAPPSDK*/lib/x86_64')
+        lib = find_library('OpenCL', '' if is_on_android else '/opt/AMDAPPSDK*/lib/x86_64')
         return {'include': '', 'lib': dirname(lib)} if lib else None
 
     def find_in_path(name, path):
