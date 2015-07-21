@@ -10,7 +10,11 @@ template<class T> struct BLAS;
 template<> struct BLAS<float> { template<class FT, class DT> static FT F(FT SAXPY, DT ) { return SAXPY; } };
 template<> struct BLAS<double> { template<class FT, class DT> static DT F(FT , DT DAXPY) { return DAXPY; } };
 
-enum interface_t{clBLAS, CPP};
+enum interface_t
+{
+    clBLAS,
+    CPP
+};
 
 #define CHANDLE(X) (*X.data().handle().cl)()
 #define OFF(X) X.start()[0] + X.start()[1]*X.ld()

@@ -4,19 +4,19 @@
 #include "isaac/array.h"
 #include "isaac/wrap/clBLAS.h"
 
-namespace ad = isaac;
+namespace isc = isaac;
 typedef isaac::int_t int_t;
 
 template<typename T>
 void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vector_base<T>& cy, simple_vector_base<T>& cz,
-                                                 ad::array& x, ad::array& y, ad::array& z)
+                                                 isc::array& x, isc::array& y, isc::array& z)
 {
   using namespace std;
 
   int failure_count = 0;
-  ad::numeric_type dtype = x.dtype();
-  ad::driver::Context const & ctx = x.context();
-  ad::driver::CommandQueue queue = ad::driver::queues[ctx][0];
+  isc::numeric_type dtype = x.dtype();
+  isc::driver::Context const & ctx = x.context();
+  isc::driver::CommandQueue queue = isc::driver::queues[ctx][0];
   cl_command_queue clqueue = (*queue.handle().cl)();
   int_t N = cz.size();
 
@@ -114,7 +114,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 }
 
 template<typename T>
-void test_impl(T epsilon, ad::driver::Context const & ctx)
+void test_impl(T epsilon, isc::driver::Context const & ctx)
 {
   using isaac::_;
 
@@ -140,10 +140,10 @@ void test_impl(T epsilon, ad::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  auto data = ad::driver::queues.contexts();
+  auto data = isc::driver::queues.contexts();
   for(const auto & elem : data)
   {
-    ad::driver::Device device = elem.second[0].device();
+    isc::driver::Device device = elem.second[0].device();
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;

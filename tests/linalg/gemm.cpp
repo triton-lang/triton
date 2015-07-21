@@ -4,23 +4,23 @@
 #include "isaac/model/model.h"
 #include "isaac/wrap/clBLAS.h"
 
-namespace ad = isaac;
+namespace isc = isaac;
 
 template<typename T>
 void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & cA, simple_matrix_base<T> const & cB,
-                          ad::array & C, ad::array const & A, ad::array const & AT,  ad::array const & B, ad::array const & BT,
-                          interface_t interface, const char * prefix)
+                          isc::array & C, isc::array const & A, isc::array const & AT,  isc::array const & B, isc::array const & BT,
+                          interface_t interf, const char * prefix)
 {
   int failure_count = 0;
 
-  ad::int_t M = C.shape()[0];
-  ad::int_t N = C.shape()[1];
-  ad::int_t K = A.shape()[1];
+  isc::int_t M = C.shape()[0];
+  isc::int_t N = C.shape()[1];
+  isc::int_t K = A.shape()[1];
 
   T alpha = 1;
   T beta = 0;
 
-  ad::driver::CommandQueue queue = ad::driver::queues[C.context()][0];
+  isc::driver::CommandQueue queue = isc::driver::queues[C.context()][0];
 
   for(int i = 0 ; i < M ; ++i)
   {
@@ -44,7 +44,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   std::cout << "[" << prefix << "] \t" << NAME << "..." << std::flush;\
   GPU_OP;\
   queue.synchronize();\
-  ad::copy(C, buffer);\
+  isc::copy(C, buffer);\
   if(diff(buffer, cCbuffer, epsilon))\
   {\
     failure_count++;\
@@ -53,7 +53,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   else\
     std::cout << std::endl;
 
-  if(interface==clBLAS)
+  if(interf==clBLAS)
   {
       cl_command_queue clqueue = (*queue.handle().cl)();
 
@@ -95,7 +95,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 }
 
 template<typename T>
-void test_impl(T epsilon, ad::driver::Context const & ctx)
+void test_impl(T epsilon, isc::driver::Context const & ctx)
 {
     int_t M = 173;
     int_t N = 256;
@@ -126,10 +126,10 @@ void test_impl(T epsilon, ad::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  auto data = ad::driver::queues.contexts();
+  auto data = isc::driver::queues.contexts();
   for(const auto & elem : data)
   {
-    ad::driver::Device device = elem.second[0].device();
+    isc::driver::Device device = elem.second[0].device();
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
