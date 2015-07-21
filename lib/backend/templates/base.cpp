@@ -1,5 +1,3 @@
-#define NOMINMAX
-
 #include <cassert>
 
 #include "isaac/array.h"

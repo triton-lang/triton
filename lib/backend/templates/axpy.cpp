@@ -1,5 +1,3 @@
-#define NOMINMAX
-
 #include "isaac/backend/templates/axpy.h"
 #include "isaac/backend/keywords.h"
 #include "isaac/driver/backend.h"
