@@ -30,7 +30,8 @@ extern "C"
         for(cl_uint i = 0 ; i < numCommandQueues ; ++i)
         {
             std::list<is::driver::Event> levents;
-            is::driver::CommandQueue queue(cl::CommandQueue(commandQueues[i]));
+			cl::CommandQueue queuepp(commandQueues[i]);
+            is::driver::CommandQueue queue(queuepp);
             clRetainCommandQueue(commandQueues[i]);
             is::execution_options_type options(queue, &levents, &waitlist);
             is::execute(is::control(operation, options), is::models(options.queue(context)));

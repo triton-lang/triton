@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 2.8.10)
 
+if(WIN32)
+ SET(CMAKE_FIND_LIBRARY_PREFIXES "")
+ SET(CMAKE_FIND_LIBRARY_SUFFIXES ".lib" ".dll")
+endif()
 # Add visibility of headers
 file( GLOB_RECURSE MAKE_HEADERS_VISIBLE_SRC *.cpp *.hpp *.h)
 add_custom_target( MAKE_HEADERS_VISIBLE SOURCES ${MAKE_HEADERS_VISIBLE_SRC} )
