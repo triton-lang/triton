@@ -1,5 +1,3 @@
-#define NOMINMAX
-
 #include <cassert>
 #include <algorithm>
 #include <stdexcept>
