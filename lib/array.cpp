@@ -836,9 +836,9 @@ template<class T>
 void copy(std::vector<T> const & cx, array & x, driver::CommandQueue & queue, bool blocking)
 {
   if(x.ld()==x.shape()[0])
-    assert(cx.size()==x.dsize());
+    assert((int_t)cx.size()==x.dsize());
   else
-    assert(cx.size()==prod(x.shape()));
+    assert((int_t)cx.size()==prod(x.shape()));
   copy((void const*)cx.data(), x, queue, blocking);
 }
 
@@ -846,9 +846,9 @@ template<class T>
 void copy(array const & x, std::vector<T> & cx, driver::CommandQueue & queue, bool blocking)
 {
   if(x.ld()==x.shape()[0])
-    assert(cx.size()==x.dsize());
+    assert((int_t)cx.size()==x.dsize());
   else
-    assert(cx.size()==prod(x.shape()));
+    assert((int_t)cx.size()==prod(x.shape()));
   copy(x, (void*)cx.data(), queue, blocking);
 }
 

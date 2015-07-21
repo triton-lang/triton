@@ -14,26 +14,26 @@ class model;
 struct gemm_parameters : public base::parameters_type
 {
   gemm_parameters(unsigned int simd_width
-                            , int_t local_size_0, int_t KL, int_t local_size_1, int_t D
-                            , int_t ms, int_t ks, int_t ns
+                            , unsigned int local_size_0, unsigned int KL, unsigned int local_size_1, unsigned int D
+                            , unsigned int ms, unsigned int ks, unsigned int ns
                             , fetching_policy_type A_fetching_policy, fetching_policy_type B_fetching_policy
-                            , int_t local_fetch_0, int_t local_fetch_1);
+                            , unsigned int local_fetch_0, unsigned int local_fetch_1);
 
-  int_t kL;
-  int_t depth;
+  unsigned int kL;
+  unsigned int depth;
 
-  int_t mS;
-  int_t kS;
-  int_t nS;
+  unsigned int mS;
+  unsigned int kS;
+  unsigned int nS;
 
   fetching_policy_type A_fetching_policy;
   fetching_policy_type B_fetching_policy;
 
-  int_t local_fetch_0;
-  int_t local_fetch_1;
+  unsigned int local_fetch_0;
+  unsigned int local_fetch_1;
 
-  int_t mL;
-  int_t nL;
+  unsigned int mL;
+  unsigned int nL;
 
   bool prefetch;
   bool unroll_outer;

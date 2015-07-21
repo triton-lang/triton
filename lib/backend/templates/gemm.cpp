@@ -14,10 +14,10 @@ namespace templates
 {
 
 gemm_parameters::gemm_parameters(unsigned int simd_width
-                          , int_t local_size_0, int_t KL, int_t local_size_1, int_t D
-                          , int_t ms, int_t ks, int_t ns
+                          , unsigned int local_size_0, unsigned int KL, unsigned int local_size_1, unsigned int D
+                          , unsigned int ms, unsigned int ks, unsigned int ns
                           , fetching_policy_type A_fetching_policy, fetching_policy_type B_fetching_policy
-                          , int_t local_fetch_0, int_t local_fetch_1): base::parameters_type(simd_width, local_size_0, local_size_1, 1),
+                          , unsigned int local_fetch_0, unsigned int local_fetch_1): base::parameters_type(simd_width, local_size_0, local_size_1, 1),
   kL(KL), depth(D), mS(ms), kS(ks), nS(ns), A_fetching_policy(A_fetching_policy), B_fetching_policy(B_fetching_policy),
   local_fetch_0(local_fetch_0), local_fetch_1(local_fetch_1),
   mL(ms*local_size_0), nL(ns*local_size_1){}
@@ -268,8 +268,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "//Fetch A to local memory" << std::endl;
     if (A_trans_=='N')
     {
-      for(int_t k = 0; k < p_.kL; k += p_.local_fetch_1)
-        for(int_t m = 0; m < p_.mL; m += p_.local_fetch_0*p_.simd_width)
+      for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
+        for(unsigned int m = 0; m < p_.mL; m += p_.local_fetch_0*p_.simd_width)
         {
           std::string mm = to_string(m/(p_.simd_width*p_.local_fetch_0));
           std::string kk = to_string(k);
@@ -280,8 +280,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     }
     else
     {
-        for(int_t k = 0; k < p_.kL; k += p_.local_fetch_0*p_.simd_width)
-          for(int_t m = 0; m < p_.mL; m += p_.local_fetch_1)
+        for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_0*p_.simd_width)
+          for(unsigned int m = 0; m < p_.mL; m += p_.local_fetch_1)
           {
             std::string mm = to_string(m/p_.local_fetch_1);
             std::string kk = to_string(k);
@@ -294,8 +294,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "//Fetch B to local memory" << std::endl;
     if (B_trans_=='T')
     {
-      for(int_t k = 0; k < p_.kL; k += p_.local_fetch_1)
-        for(int_t n = 0; n < p_.nL; n += p_.local_fetch_0*p_.simd_width)
+      for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
+        for(unsigned int n = 0; n < p_.nL; n += p_.local_fetch_0*p_.simd_width)
         {
           std::string nn = to_string(n/(p_.simd_width*p_.local_fetch_0));
           std::string kk = to_string(k);
@@ -306,8 +306,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     }
     else
     {
-      for(int_t k = 0; k < p_.kL; k += p_.local_fetch_0*p_.simd_width)
-        for(int_t n = 0; n < p_.nL; n += p_.local_fetch_1)
+      for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_0*p_.simd_width)
+        for(unsigned int n = 0; n < p_.nL; n += p_.local_fetch_1)
         {
           std::string nn = to_string(n/p_.local_fetch_1);
           std::string kk = to_string(k);
@@ -376,9 +376,9 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "}" << std::endl;
 
     stream << "//FMA computations" << std::endl;
-    for(int_t kk=0 ; kk < p_.kS; ++kk)
-    for(int_t nn=0; nn < p_.nS; ++nn)
-    for(int_t mm=0; mm < p_.mS; ++mm)
+    for(unsigned int kk=0 ; kk < p_.kS; ++kk)
+    for(unsigned int nn=0; nn < p_.nS; ++nn)
+    for(unsigned int mm=0; mm < p_.mS; ++mm)
     {
       string res_str, lhs_str, rhs_str;
       res_str = "rC[" + to_string(mm) + "][" + to_string(nn) + "]";
@@ -425,20 +425,20 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "N -= offy;" << std::endl;
     stream << "M -= offx;" << std::endl;
     stream << "int ibm[" << p_.mS << "];" << std::endl;
-    for(int_t m=0; m < p_.mS; ++m)
+    for(unsigned int m=0; m < p_.mS; ++m)
     {
         string Ci = to_string((m/p_.simd_width)*(p_.local_size_0*p_.simd_width) + m%p_.simd_width);
         stream << "ibm[" << m << "] = " << Ci << " < M;" << std::endl;
     }
 
 
-    for(int_t n=0; n < p_.nS; ++n)
+    for(unsigned int n=0; n < p_.nS; ++n)
     {
         string Cj = to_string((n/p_.simd_width)*(p_.local_size_1*p_.simd_width) + n%p_.simd_width);
         stream << "if(" << Cj << " >= N) return;" << std::endl;
-        for(int_t m=0; m < p_.mS; ++m)
+        for(unsigned int m=0; m < p_.mS; ++m)
             stream << "rC[" << m << "][" << n << "] *= alpha;" << std::endl;
-        for(int_t m=0; m < p_.mS; ++m)
+        for(unsigned int m=0; m < p_.mS; ++m)
         {
             string Ci = to_string((m/p_.simd_width)*(p_.local_size_0*p_.simd_width) + m%p_.simd_width);
             stream << "if(ibm[" << m << "]) ";
