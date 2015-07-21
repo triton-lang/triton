@@ -91,13 +91,13 @@ T value_scalar::cast() const
 #undef INSTANTIATE
 
 value_scalar int8(int8_t v) { return value_scalar(v); }
-value_scalar uint8(u_int8_t v) { return value_scalar(v); }
+value_scalar uint8(uint8_t v) { return value_scalar(v); }
 value_scalar int16(int16_t v) { return value_scalar(v); }
-value_scalar uint16(u_int16_t v) { return value_scalar(v); }
+value_scalar uint16(uint16_t v) { return value_scalar(v); }
 value_scalar int32(int32_t v) { return value_scalar(v); }
-value_scalar uint32(u_int32_t v) { return value_scalar(v); }
+value_scalar uint32(uint32_t v) { return value_scalar(v); }
 value_scalar int64(int64_t v) { return value_scalar(v); }
-value_scalar uint64(u_int64_t v) { return value_scalar(v); }
+value_scalar uint64(uint64_t v) { return value_scalar(v); }
 value_scalar float32(float v) { return value_scalar(v); }
 value_scalar float64(double v) { return value_scalar(v); }
 

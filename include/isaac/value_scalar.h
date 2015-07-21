@@ -1,8 +1,8 @@
 #ifndef ISAAC_VALUE_SCALAR_H
 #define ISAAC_VALUE_SCALAR_H
 
+#include <inttypes.h>
 #include "isaac/types.h"
-#include "stdint.h"
 
 namespace isaac
 {
@@ -13,13 +13,13 @@ class array_expression;
 union values_holder
 {
   int8_t int8;
-  u_int8_t uint8;
+  uint8_t uint8;
   int16_t int16;
-  u_int16_t uint16;
+  uint16_t uint16;
   int32_t int32;
-  u_int32_t uint32;
+  uint32_t uint32;
   int64_t int64;
-  u_int64_t uint64;
+  uint64_t uint64;
   float float32;
   double float64;
 };
@@ -72,13 +72,13 @@ private:
 };
 
 value_scalar int8(int8_t v);
-value_scalar uint8(u_int8_t v);
+value_scalar uint8(uint8_t v);
 value_scalar int16(int16_t v);
-value_scalar uint16(u_int16_t v);
+value_scalar uint16(uint16_t v);
 value_scalar int32(int32_t v);
-value_scalar uint32(u_int32_t v);
+value_scalar uint32(uint32_t v);
 value_scalar int64(int64_t v);
-value_scalar uint64(u_int64_t v);
+value_scalar uint64(uint64_t v);
 value_scalar float32(float v);
 value_scalar float64(double v);
 

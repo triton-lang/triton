@@ -16,7 +16,6 @@ endif()
 
 add_definitions(-Wno-sign-compare ${BACKEND_DEFINES} -Wall -Wextra -pedantic -std=c++11)
 add_executable(bin2cpp ${CMAKE_MODULE_PATH}/helpers/bin2cpp.cpp)
-
 file(GLOB_RECURSE LIBISAAC_SRC lib/*.cpp)
 
 #Python wrapper
