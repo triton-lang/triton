@@ -53,9 +53,9 @@ public:
   {
     parameters_type(unsigned int _simd_width, int_t _local_size_1, int_t _local_size_2, int_t _num_kernels);
     unsigned int simd_width;
-    int_t local_size_0;
-    int_t local_size_1;
-    int_t num_kernels;
+    unsigned int local_size_0;
+    unsigned int local_size_1;
+    unsigned int num_kernels;
   };
 
   class invalid_exception : public std::exception
