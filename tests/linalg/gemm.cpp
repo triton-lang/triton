@@ -98,7 +98,7 @@ template<typename T>
 void test_impl(T epsilon, isc::driver::Context const & ctx)
 {
     int_t M = 173;
-    int_t N = 256;
+    int_t N = 241;
     int_t K = 293;
 
     int_t SUBM = 7;
