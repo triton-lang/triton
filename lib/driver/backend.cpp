@@ -77,16 +77,16 @@ queues_type::container_type const & queues_type::contexts()
 }
 
 
-void synchronize(std::vector<CommandQueue > & queues)
+ISAACAPI void synchronize(std::vector<CommandQueue > & queues)
 {
   for(CommandQueue & q: queues)
     q.synchronize();
 }
 
-void synchronize(Context const & context)
+ISAACAPI void synchronize(Context const & context)
 { synchronize(queues[context]); }
 
-queues_type queues;
+ISAACAPI queues_type queues;
 
 }
 
