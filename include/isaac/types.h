@@ -3,6 +3,7 @@
 
 #include <CL/cl.hpp>
 #include <list>
+#include "isaac/defines.h"
 #include "isaac/exception/unknown_datatype.h"
 
 namespace isaac
@@ -10,7 +11,7 @@ namespace isaac
 
 typedef int int_t;
 
-struct size4
+struct ISAACAPI size4
 {
   size4(int_t s0, int_t s1 = 1, int_t s2 = 1, int_t s3 = 1)
   {

@@ -18,7 +18,9 @@ endif()
 
 #Compiler flags
 add_definitions(${BACKEND_DEFINES})
-add_definitions("-DNOMINMAX")
+if(WIN32)
+	add_definitions("-DNOMINMAX -DISAAC_DLL")
+endif()
 if(CMAKE_COMPILER_IS_GNUCXX)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -Wall -Wextra -pedantic")
 endif()

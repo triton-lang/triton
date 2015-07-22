@@ -1,6 +1,9 @@
 if(ANDROID)
     add_library(isaac STATIC ${LIBISAAC_SRC})
 else()
+	if(MSVC)
+		set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DEF:${CMAKE_CURRENT_SOURCE_DIR}/wrap/clBLAS.def")
+	endif()
     add_library(isaac SHARED ${LIBISAAC_SRC})
 endif()
 

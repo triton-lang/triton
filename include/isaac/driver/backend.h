@@ -37,11 +37,10 @@ public:
 
 };
 
-void synchronize(std::vector<CommandQueue> const &);
-void synchronize(Context const &);
+ISAACAPI void synchronize(std::vector<CommandQueue> const &);
+ISAACAPI void synchronize(Context const &);
 
-extern queues_type queues;
-
+extern ISAACAPI queues_type queues;
 
 }
 }

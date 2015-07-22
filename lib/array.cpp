@@ -39,7 +39,7 @@ array::array(array & v, slice const & s0) : dtype_(v.dtype_), shape_(s0.size, 1,
                                             ld_(v.ld_), context_(v.data_.context()), data_(v.data_)
 {}
 
-#define INSTANTIATE(T) template array::array(std::vector<T> const &, driver::Context)
+#define INSTANTIATE(T) template ISAACAPI array::array(std::vector<T> const &, driver::Context)
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
 INSTANTIATE(short);
@@ -92,7 +92,7 @@ array::array(numeric_type dtype, driver::Buffer data, slice const & s0, slice co
 
 
 
-#define INSTANTIATE(T) template array::array(int_t, int_t, std::vector<T> const &, driver::Context)
+#define INSTANTIATE(T) template ISAACAPI array::array(int_t, int_t, std::vector<T> const &, driver::Context)
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
 INSTANTIATE(short);
@@ -120,8 +120,8 @@ array::array(controller<TYPE> const & other) :
 }
 
 
-template array::array(controller<array> const&);
-template array::array(controller<array_expression> const&);
+template ISAACAPI array::array(controller<array> const&);
+template ISAACAPI array::array(controller<array_expression> const&);
 
 /*--- Getters ---*/
 numeric_type array::dtype() const
@@ -185,7 +185,7 @@ array & array::operator=(value_scalar const & rhs)
 { return *this = controller<value_scalar>(rhs); }
 
 
-#define INSTANTIATE(T) template array & array::operator=<T>(std::vector<T> const &)
+#define INSTANTIATE(T) template ISAACAPI array & array::operator=<T>(std::vector<T> const &)
 
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
@@ -859,10 +859,10 @@ void copy(array const & x, std::vector<T> & cx, bool blocking)
 { copy(x, cx, driver::queues[x.context()][0], blocking); }
 
 #define INSTANTIATE(T) \
-  template void copy<T>(std::vector<T> const &, array &, driver::CommandQueue&, bool);\
-  template void copy<T>(array const &, std::vector<T> &, driver::CommandQueue&, bool);\
-  template void copy<T>(std::vector<T> const &, array &, bool);\
-  template void copy<T>(array const &, std::vector<T> &, bool)
+  template void ISAACAPI  copy<T>(std::vector<T> const &, array &, driver::CommandQueue&, bool);\
+  template void ISAACAPI  copy<T>(array const &, std::vector<T> &, driver::CommandQueue&, bool);\
+  template void ISAACAPI  copy<T>(std::vector<T> const &, array &, bool);\
+  template void ISAACAPI  copy<T>(array const &, std::vector<T> &, bool)
 
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
