@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 
+#include "isaac/defines.h"
 #include "isaac/driver/common.h"
 #include <iostream>
 namespace isaac
@@ -19,7 +20,7 @@ namespace driver
 #endif
 
 template<class CLType, class CUType>
-class Handle
+class ISAACAPI Handle
 {
 private:
 #ifdef ISAAC_WITH_CUDA

@@ -1,8 +1,10 @@
 #ifndef ISAAC_DRIVER_EVENT_H
 #define ISAAC_DRIVER_EVENT_H
 
+#include "isaac/defines.h"
 #include "isaac/driver/common.h"
 #include "isaac/driver/handle.h"
+
 namespace isaac
 {
 
@@ -10,7 +12,7 @@ namespace driver
 {
 
 // Event
-class Event
+class ISAACAPI Event
 {
   friend class CommandQueue;
 public:

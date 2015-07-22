@@ -2,7 +2,7 @@
 #define ISAAC_DRIVER_BUFFER_H
 
 #include "isaac/types.h"
-
+#include "isaac/defines.h"
 #include "isaac/driver/common.h"
 #include "isaac/driver/context.h"
 #include "isaac/driver/handle.h"
@@ -14,7 +14,7 @@ namespace driver
 {
 
 // Buffer
-class Buffer
+class ISAACAPI Buffer
 {
   friend class CommandQueue;
   friend class Kernel;

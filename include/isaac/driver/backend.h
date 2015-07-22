@@ -4,6 +4,7 @@
 #include <map>
 #include <list>
 
+#include "isaac/defines.h"
 #include "isaac/driver/command_queue.h"
 #include "isaac/driver/context.h"
 
@@ -12,7 +13,7 @@ namespace isaac
 namespace driver
 {
 
-class queues_type
+class ISAACAPI queues_type
 {
 public:
   typedef std::list<std::pair<Context, std::vector<CommandQueue> > > container_type;

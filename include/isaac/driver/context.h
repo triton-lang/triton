@@ -3,7 +3,7 @@
 
 #include <map>
 #include <memory>
-
+#include "isaac/defines.h"
 #include "isaac/driver/common.h"
 #include "isaac/driver/device.h"
 #include "isaac/driver/handle.h"
@@ -14,7 +14,7 @@ namespace isaac
 namespace driver
 {
 
-class Context
+class ISAACAPI Context
 {
   friend class Program;
   friend class CommandQueue;

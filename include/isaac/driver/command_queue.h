@@ -2,9 +2,10 @@
 #define ISAAC_DRIVER_COMMAND_QUEUE_H
 
 #include <map>
-#include "common.h"
-#include "context.h"
-#include "device.h"
+#include "isaac/defines.h"
+#include "isaac/driver/common.h"
+#include "isaac/driver/context.h"
+#include "isaac/driver/device.h"
 #include "isaac/driver/handle.h"
 
 namespace isaac
@@ -19,7 +20,7 @@ class NDRange;
 class Buffer;
 
 // Command Queue
-class CommandQueue
+class ISAACAPI CommandQueue
 {
 public:
   CommandQueue(cl::CommandQueue const & queue);
