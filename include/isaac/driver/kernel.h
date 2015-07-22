@@ -1,6 +1,7 @@
 #ifndef ISAAC_DRIVER_KERNEL_H
 #define ISAAC_DRIVER_KERNEL_H
 
+#include "isaac/defines.h"
 #include "isaac/driver/common.h"
 #include "isaac/driver/program.h"
 #include "isaac/driver/handle.h"
@@ -16,7 +17,7 @@ namespace driver
 class Buffer;
 
 // Kernel
-class Kernel
+class ISAACAPI Kernel
 {
   friend class CommandQueue;
 public:

@@ -1,6 +1,7 @@
 #ifndef ISAAC_DRIVER_PROGRAM_H
 #define ISAAC_DRIVER_PROGRAM_H
 
+#include "isaac/defines.h"
 #include "isaac/driver/common.h"
 #include "isaac/driver/context.h"
 #include "isaac/driver/handle.h"
@@ -13,7 +14,7 @@ namespace driver
 
 class Context;
 
-class Program
+class ISAACAPI Program
 {
   friend class Kernel;
 public:

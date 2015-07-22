@@ -1,6 +1,7 @@
 #ifndef ISAAC_DRIVER_DEVICE_H
 #define ISAAC_DRIVER_DEVICE_H
 
+#include "isaac/defines.h"
 #include "isaac/driver/common.h"
 #include "isaac/driver/platform.h"
 #include "isaac/driver/handle.h"
@@ -12,14 +13,14 @@ namespace driver
 {
 
 // Device
-class Device
+class ISAACAPI Device
 {
 private:
   friend class Context;
   friend class CommandQueue;
 
 public:
-  enum VENDOR
+  enum ISAACAPI VENDOR
   {
       AMD,
       INTEL,

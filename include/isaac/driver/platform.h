@@ -1,6 +1,7 @@
 #ifndef ISAAC_DRIVER_PLATFORM_H
 #define ISAAC_DRIVER_PLATFORM_H
 
+#include "isaac/defines.h"
 #include "isaac/driver/common.h"
 
 namespace isaac
@@ -11,7 +12,7 @@ namespace driver
 
 class Device;
 
-class Platform
+class ISAACAPI Platform
 {
 private:
 public:
