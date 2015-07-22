@@ -2,9 +2,10 @@
 #define ISAAC_ARRAY_H_
 
 #include <iostream>
-#include "isaac/types.h"
+#include "isaac/defines.h"
 #include "isaac/driver/backend.h"
 #include "isaac/symbolic/expression.h"
+#include "isaac/types.h"
 
 
 namespace isaac
@@ -12,7 +13,7 @@ namespace isaac
 
 class scalar;
 
-class array: public array_base
+class ISAACAPI array: public array_base
 {
 protected:
   //Slices
@@ -102,7 +103,7 @@ protected:
   driver::Buffer data_;
 };
 
-class scalar : public array
+class ISAACAPI scalar : public array
 {
   friend value_scalar::value_scalar(const scalar &);
   friend value_scalar::value_scalar(const array_expression &);
@@ -138,27 +139,27 @@ public:
 
 
 //copy
-void copy(void const * data, array & gx, driver::CommandQueue & queue, bool blocking = true);
-void copy(array const & gx, void* data, driver::CommandQueue & queue, bool blocking = true);
-void copy(void const *data, array &gx, bool blocking = true);
-void copy(array const & gx, void* data, bool blocking = true);
-template<class T> void copy(std::vector<T> const & cA, array& gA, driver::CommandQueue & queue, bool blocking = true);
-template<class T> void copy(array const & gA, std::vector<T> & cA, driver::CommandQueue & queue, bool blocking = true);
-template<class T> void copy(std::vector<T> const & cA, array & gA, bool blocking = true);
-template<class T> void copy(array const & gA, std::vector<T> & cA, bool blocking = true);
+ISAACAPI void copy(void const * data, array & gx, driver::CommandQueue & queue, bool blocking = true);
+ISAACAPI void copy(array const & gx, void* data, driver::CommandQueue & queue, bool blocking = true);
+ISAACAPI void copy(void const *data, array &gx, bool blocking = true);
+ISAACAPI void copy(array const & gx, void* data, bool blocking = true);
+template<class T> ISAACAPI void copy(std::vector<T> const & cA, array& gA, driver::CommandQueue & queue, bool blocking = true);
+template<class T> ISAACAPI void copy(array const & gA, std::vector<T> & cA, driver::CommandQueue & queue, bool blocking = true);
+template<class T> ISAACAPI void copy(std::vector<T> const & cA, array & gA, bool blocking = true);
+template<class T> ISAACAPI void copy(array const & gA, std::vector<T> & cA, bool blocking = true);
 
 //Operators
 //Binary operators
 
 #define ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(OPNAME) \
-array_expression OPNAME (array_expression const & x, array_expression const & y);\
-array_expression OPNAME (array const & x, array_expression const & y);\
-array_expression OPNAME (array_expression const & x, array const & y);\
-array_expression OPNAME (array const & x, array const & y);\
-array_expression OPNAME (array_expression const & x, value_scalar const & y);\
-array_expression OPNAME (array const & x, value_scalar const & y);\
-array_expression OPNAME (value_scalar const & y, array_expression const & x);\
-array_expression OPNAME (value_scalar const & y, array const & x);
+ISAACAPI array_expression OPNAME (array_expression const & x, array_expression const & y);\
+ISAACAPI array_expression OPNAME (array const & x, array_expression const & y);\
+ISAACAPI array_expression OPNAME (array_expression const & x, array const & y);\
+ISAACAPI array_expression OPNAME (array const & x, array const & y);\
+ISAACAPI array_expression OPNAME (array_expression const & x, value_scalar const & y);\
+ISAACAPI array_expression OPNAME (array const & x, value_scalar const & y);\
+ISAACAPI array_expression OPNAME (value_scalar const & y, array_expression const & x);\
+ISAACAPI array_expression OPNAME (value_scalar const & y, array const & x);
 
 ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(operator +)
 ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(operator -)
@@ -188,8 +189,8 @@ ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(assign)
 
 //Unary operators
 #define ISAAC_DECLARE_UNARY_OPERATOR(OPNAME) \
-  array_expression OPNAME (array const & x);\
-  array_expression OPNAME (array_expression const & x);
+  ISAACAPI array_expression OPNAME (array const & x);\
+  ISAACAPI array_expression OPNAME (array_expression const & x);
 
 ISAAC_DECLARE_UNARY_OPERATOR(abs)
 ISAAC_DECLARE_UNARY_OPERATOR(acos)
@@ -209,19 +210,19 @@ ISAAC_DECLARE_UNARY_OPERATOR(tan)
 ISAAC_DECLARE_UNARY_OPERATOR(tanh)
 ISAAC_DECLARE_UNARY_OPERATOR(trans)
 
-array_expression cast(array const &, numeric_type dtype);
-array_expression cast(array_expression const &, numeric_type dtype);
+ISAACAPI array_expression cast(array const &, numeric_type dtype);
+ISAACAPI array_expression cast(array_expression const &, numeric_type dtype);
 
-array_expression norm(array const &, unsigned int order = 2);
-array_expression norm(array_expression const &, unsigned int order = 2);
+ISAACAPI array_expression norm(array const &, unsigned int order = 2);
+ISAACAPI array_expression norm(array_expression const &, unsigned int order = 2);
 
 #undef ISAAC_DECLARE_UNARY_OPERATOR
 
-array_expression repmat(array const &, int_t const & rep1, int_t const & rep2);
+ISAACAPI array_expression repmat(array const &, int_t const & rep1, int_t const & rep2);
 
 #define ISAAC_DECLARE_DOT(OPNAME) \
-array_expression OPNAME(array const & M, int_t axis = -1);\
-array_expression OPNAME(array_expression const & M, int_t axis = -1);
+ISAACAPI array_expression OPNAME(array const & M, int_t axis = -1);\
+ISAACAPI array_expression OPNAME(array_expression const & M, int_t axis = -1);
 
 ISAAC_DECLARE_DOT(sum)
 ISAAC_DECLARE_DOT(argmax)
@@ -229,13 +230,13 @@ ISAAC_DECLARE_DOT((max))
 ISAAC_DECLARE_DOT((min))
 ISAAC_DECLARE_DOT(argmin)
 
-array_expression eye(std::size_t, std::size_t, isaac::numeric_type, driver::Context context = driver::queues.default_context());
-array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, driver::Context context = driver::queues.default_context());
-array_expression reshape(array const &, int_t, int_t);
+ISAACAPI array_expression eye(std::size_t, std::size_t, isaac::numeric_type, driver::Context context = driver::queues.default_context());
+ISAACAPI array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, driver::Context context = driver::queues.default_context());
+ISAACAPI array_expression reshape(array const &, int_t, int_t);
 
 //
-std::ostream& operator<<(std::ostream &, array const &);
-std::ostream& operator<<(std::ostream & os, scalar const & s);
+ISAACAPI std::ostream& operator<<(std::ostream &, array const &);
+ISAACAPI std::ostream& operator<<(std::ostream & os, scalar const & s);
 
 }
 #endif
