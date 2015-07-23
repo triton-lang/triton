@@ -171,7 +171,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << _size_t << " idt;" << std::endl;
     if(has_depth)
         stream << _size_t << " gidz, div, offz;" << std::endl;
-    stream << "int Ky, Kx;" << std::endl;
 
     stream << "A += offa;" << std::endl;
     stream << "B += offb;" << std::endl;
@@ -200,7 +199,16 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "idT.x *= " << p_.simd_width << ";" << std::endl;
 
     stream << "M -= ids.x;" << std::endl;
+    if(A_trans_=='N')
+        stream << "M -= idT.x;" << std::endl;
+    else
+        stream << "M -= idT.y;" << std::endl;
+
     stream << "N -= ids.y;" << std::endl;
+    if(B_trans_=='T')
+        stream << "N -= idT.x;" << std::endl;
+    else
+        stream << "N -= idT.y;" << std::endl;
 
     if (A_trans_=='N')
     {
@@ -247,206 +255,230 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
     for(unsigned int i = 0 ; i < npA ; i++ )
         if (A_trans_=='N')
-          stream << "if(idT.x + " << i*p_.local_fetch_0*p_.simd_width << " < M) Ai[" << i << "] += (idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << ASTRIDE1 << ";" << std::endl;
+          stream << "if( " << i*p_.local_fetch_0*p_.simd_width << " < M) Ai[" << i << "] += (idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << ASTRIDE1 << ";" << std::endl;
         else
-          stream << "if(idT.y + " << i*p_.local_fetch_1 << " < M) Ai[" << i << "] += (idT.y + " << i*p_.local_fetch_1 << ")*lda;" << std::endl;
+          stream << "if(" << i*p_.local_fetch_1 << " < M) Ai[" << i << "] += (idT.y + " << i*p_.local_fetch_1 << ")*lda;" << std::endl;
 
     for(unsigned int i = 0 ; i < npB ; i++ )
         if (B_trans_=='T')
-          stream << "if(idT.x + " << i*p_.local_fetch_0*p_.simd_width << " < N) Bi[" << i << "] += (idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << BSTRIDE1 << ";" << std::endl;
+          stream << "if(" << i*p_.local_fetch_0*p_.simd_width << " < N) Bi[" << i << "] += (idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << BSTRIDE1 << ";" << std::endl;
         else
-          stream << "if(idT.y + " << i*p_.local_fetch_1 << " < N) Bi[" << i << "] += (idT.y + " << i*p_.local_fetch_1 << ")*ldb;" << std::endl;
+          stream << "if(" << i*p_.local_fetch_1 << " < N) Bi[" << i << "] += (idT.y + " << i*p_.local_fetch_1 << ")*ldb;" << std::endl;
 
     stream << "storeA = lA + idT.y*" << llda << " + idT.x;" << std::endl;
     stream << "storeB = lB + idT.y*" << lldb << " + idT.x;" << std::endl;
 
-    if(A_trans_=='N' || B_trans_=='T')
-        stream << "Ky = K - idT.y;" << std::endl;
-    if(A_trans_=='T' || B_trans_=='N')
-        stream << "Kx = K - idT.x;" << std::endl;
 
     stream << "//Outer loop" << std::endl;
-    stream << "while(K > 0){" << std::endl;
+    stream << "while(K >=" << p_.kL << "){" << std::endl;
     stream.inc_tab();
-    stream << LocalBarrier(backend) << ";" << std::endl;
+
+
+    auto fetch_to_lds = [&](bool last_iteration)
+    {
+
+        stream << LocalBarrier(backend) << ";" << std::endl;
+
+        stream << "//Fetch A to local memory" << std::endl;
+        if (A_trans_=='N')
+        {
+          for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
+            for(unsigned int m = 0; m < p_.mL; m += p_.local_fetch_0*p_.simd_width)
+            {
+              std::string mm = to_string(m/(p_.simd_width*p_.local_fetch_0));
+              std::string kk = to_string(k);
+              if(last_iteration)
+                  for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+                      stream << "storeA[" << k*llda + m + s << "] = (condy" << k << " && " << s << "< M)? Ai[" << mm << "][" << k << "*lda + " << s << "] : 0;" << std::endl;
+              else
+                stream << VSTORE(VLOAD("0" ,"&Ai[" + mm +"][" + kk + "*lda]"), "0", "storeA + " + to_string(k*llda+m)) << ";" << std::endl;
+            }
+        }
+        else
+        {
+            for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_0*p_.simd_width)
+            for(unsigned int m = 0; m < p_.mL; m += p_.local_fetch_1)
+              {
+                std::string mm = to_string(m/p_.local_fetch_1);
+                std::string kk = to_string(k);
+                if(last_iteration)
+                    for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+                        stream << "storeA[" << m*llda + k + s << "] = condx" << k + s << "? Ai[" << mm << "][" << k + s << ASTRIDE1 << "] : 0;" << std::endl;
+
+                else
+                    stream << VSTORE(VLOAD("0", "&Ai[" + mm + "][" + kk + ASTRIDE1 + "]"), "0", "storeA + " + to_string(m*llda+k)) << ";" << std::endl;
+              }
+        }
+
+        stream << "//Fetch B to local memory" << std::endl;
+        if (B_trans_=='T')
+        {
+          for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
+            for(unsigned int n = 0; n < p_.nL; n += p_.local_fetch_0*p_.simd_width)
+            {
+              std::string nn = to_string(n/(p_.simd_width*p_.local_fetch_0));
+              std::string kk = to_string(k);
+              if(last_iteration)
+                  for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+                      stream << "storeB[" << k*lldb + n + s << "] = (condy" << k << " && " << s << "< N)? Bi[" <<  nn << "][" << kk << "*ldb +" << s << "] : 0;" << std::endl;
+              else
+                stream << VSTORE(VLOAD("0" ,"&Bi[" + nn +"][" + kk + "*ldb]"), "0", "storeB + " + to_string(k*lldb+n)) << ";" << std::endl;
+            }
+        }
+        else
+        {
+          for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_0*p_.simd_width)
+            for(unsigned int n = 0; n < p_.nL; n += p_.local_fetch_1)
+            {
+              std::string nn = to_string(n/p_.local_fetch_1);
+              std::string kk = to_string(k);
+              if(last_iteration)
+                  for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+                      stream << "storeB[" << n*lldb + k + s << "] = condx" << k + s << "? Bi[" << nn << "][" << k + s << BSTRIDE1 << "] : 0;" << std::endl;
+
+              else
+                  stream << VSTORE(VLOAD("0", "&Bi[" + nn + "][" + kk + BSTRIDE1 + "]"), "0", "storeB + " + to_string(n*lldb+k)) << ";" << std::endl;
+            }
+        }
+
+        if(A_trans_=='N')
+            stream << "readA = lA + ids.z*" << p_.simd_width << ";" << std::endl;
+        else
+            stream << "readA = lA + ids.z*" << llda*p_.simd_width << ";" << std::endl;
+
+        if(B_trans_=='T')
+            stream << "readB = lB + ids.w*" << p_.simd_width << ";" << std::endl;
+        else
+            stream << "readB = lB + ids.w*" << lldb*p_.simd_width << ";" << std::endl;
+
+        stream << LocalBarrier(backend) << ";" << std::endl;
+
+        stream << "//Inner loop" << std::endl;
+        stream << "for(unsigned int k = 0; k < " << p_.kL << "; k+=" << p_.kS << "){" << std::endl;
+        stream.inc_tab();
+
+        stream << "//Fetch A to registers" << std::endl;
+        stream << "#pragma unroll" << std::endl;
+        stream << "for(unsigned int kk = 0; kk < " << p_.kS << "; kk++)" << std::endl;
+        stream << "#pragma unroll " << p_.mS/p_.simd_width << std::endl;
+        stream << "for(unsigned int mm = 0; mm < " << p_.mS/p_.simd_width << "; mm++)" << std::endl;
+        stream << "{" << std::endl;
+        stream.inc_tab();
+        if(A_trans_=='N')
+            stream << "rA[kk][mm] = "  << VLOAD("0", "readA + k*" + to_string(llda) + " + mm*" + to_string(p_.local_size_0*p_.simd_width) + "+ kk*" + to_string(llda)) << ";" << std::endl;
+        else
+        {
+            if(p_.simd_width==1)
+                stream << "rA[kk][mm] = readA[k + mm*" << p_.local_size_0*llda <<  "+ kk"  << "];" << std::endl;
+            else
+                for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+                    stream << access_vector_type("rA[kk][mm]", s) << " = readA[k + (mm*" << p_.simd_width*p_.local_size_0 << " + " << s << ")*" << llda <<  "+ kk];" << std::endl;
+        }
+
+        stream.dec_tab();
+        stream << "}" << std::endl;
+
+        stream << "//Fetch B to registers" << std::endl;
+        stream << "#pragma unroll " << p_.kS << std::endl;
+        stream << "for(unsigned int kk = 0; kk < " << p_.kS << "; kk++)" << std::endl;
+        stream << "#pragma unroll " << p_.nS/p_.simd_width << std::endl;
+        stream << "for(unsigned int nn = 0; nn < " << p_.nS/p_.simd_width << "; nn++)" << std::endl;
+        stream << "{" << std::endl;
+        stream.inc_tab();
+        if(B_trans_=='T')
+            stream << "rB[kk][nn] = " << VLOAD("0", "readB + k*" + to_string(lldb) + " + nn*" + to_string(p_.local_size_1*p_.simd_width)  + "+ kk*" + to_string(lldb)) << ";" << std::endl;
+        else
+        {
+            if(p_.simd_width==1)
+                stream << "rB[kk][nn] = readB[k"  << " + nn*" << p_.local_size_1*lldb <<  "+ kk"  << "];" << std::endl;
+            else
+                for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+                    stream << access_vector_type("rB[kk][nn]", s) << " = readB[k"  << " + (nn*" << p_.simd_width*p_.local_size_1 << " + " << s << ")*" << lldb <<  "+ kk];" << std::endl;
+        }
+        stream.dec_tab();
+        stream << "}" << std::endl;
+
+        stream << "//FMA computations" << std::endl;
+        for(unsigned int kk=0 ; kk < p_.kS; ++kk)
+        for(unsigned int nn=0; nn < p_.nS; ++nn)
+        for(unsigned int mm=0; mm < p_.mS; ++mm)
+        {
+          string res_str, lhs_str, rhs_str;
+          res_str = "rC[" + to_string(mm) + "][" + to_string(nn) + "]";
+          if (p_.simd_width==1)
+            lhs_str = "rA[" + to_string(kk) + "][" + to_string(mm) + "]";
+          else
+            lhs_str = access_vector_type("rA[" + to_string(kk) + "][" + to_string(mm/p_.simd_width) + "]", mm%p_.simd_width);
+          if (p_.simd_width==1)
+            rhs_str = "rB[" + to_string(kk) + "]["+to_string(nn)+"]";
+          else
+            rhs_str = access_vector_type("rB[" + to_string(kk) + "]["+to_string(nn/p_.simd_width)+"]", nn%p_.simd_width);
+          stream << res_str << "=" << "fma(" << lhs_str << "," << rhs_str << "," << res_str << ");" << std::endl;
+        }
+
+        stream.dec_tab();
+        stream << "}" << std::endl;
+
+        stream << "K -= " << p_.kL << ";" << std::endl;
+
+
+
+        //Increment A pointers to global memory
+        if (A_trans_=='N')
+          for(unsigned int i = 0 ; i < npA ; ++i)
+              stream << "Ai[" << i << "] += "  << p_.kL << "*lda;" << std::endl;
+        else
+          for(unsigned int i = 0 ; i < npA ; ++i)
+              stream << "Ai[" << i << "] += "  << p_.kL << ASTRIDE1 << ";" << std::endl;
+
+        //Increment B pointers to global memory
+        if (B_trans_=='T')
+          for(unsigned int i = 0 ; i < npB ; ++i)
+              stream << "Bi[" << i << "] += " << p_.kL << "*ldb;" << std::endl;
+        else
+          for(unsigned int i = 0 ; i < npB ; ++i)
+              stream << "Bi[" << i << "] += " << p_.kL << BSTRIDE1 << ";" << std::endl;
+
+
+    };
+
+
+    fetch_to_lds(false);
+
+
+    stream.dec_tab();
+    stream << "}" << std::endl;
 
 
     if(A_trans_=='N' || B_trans_=='T')
-    {
+        stream << "int Ky = K - idT.y;" << std::endl;
+    if(A_trans_=='T' || B_trans_=='N')
+        stream << "int Kx = K - idT.x;" << std::endl;
+
+    if(A_trans_=='N' || B_trans_=='T')
         for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
-            stream << vint << " condy" << k << " = (" << vint << ")(" << k << ") < Ky;" << std::endl;
-    }
+            stream << "int condy" << k << " = " << k << " < Ky;" << std::endl;
 
     if(A_trans_=='T' || B_trans_=='N')
     {
         for(unsigned int k = 0 ; k < p_.kL ; k += p_.local_fetch_0*p_.simd_width)
-        {
-            stream << vint << " condx" << k << " = (" << vint << ")(";
             for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                stream << (s>0?",":"") << k + s;
-            stream << ") < Kx;" << std::endl;
-        }
+            stream << "int condx" << k + s << " = " << k + s << " < Kx;" << std::endl;
     }
 
-    stream << "//Fetch A to local memory" << std::endl;
-    if (A_trans_=='N')
-    {
-      for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
-        for(unsigned int m = 0; m < p_.mL; m += p_.local_fetch_0*p_.simd_width)
-        {
-          std::string mm = to_string(m/(p_.simd_width*p_.local_fetch_0));
-          std::string kk = to_string(k);
-          string to_load = VLOAD("0" ,"&Ai[" + mm +"][" + kk + "*lda]");
-          to_load = "(" + kk + " < Ky)?select((" + vdtype + ")0, " + to_load + ", condy" + kk + "):0";
-          stream << VSTORE(to_load, "0", "storeA + " + to_string(k*llda+m)) << ";" << std::endl;
-        }
-    }
-    else
-    {
-        for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_0*p_.simd_width)
-          for(unsigned int m = 0; m < p_.mL; m += p_.local_fetch_1)
-          {
-            std::string mm = to_string(m/p_.local_fetch_1);
-            std::string kk = to_string(k);
-            string to_load = VLOAD("0", "&Ai[" + mm + "][" + kk + ASTRIDE1 + "]");
-            to_load = "(" + kk + " < Kx)?select((" + vdtype + ")0, " + to_load + ", condx" + kk + "):0";
-            stream << VSTORE(to_load, "0", "storeA + " + to_string(m*llda+k)) << ";" << std::endl;
-          }
-    }
-
-    stream << "//Fetch B to local memory" << std::endl;
-    if (B_trans_=='T')
-    {
-      for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
-        for(unsigned int n = 0; n < p_.nL; n += p_.local_fetch_0*p_.simd_width)
-        {
-          std::string nn = to_string(n/(p_.simd_width*p_.local_fetch_0));
-          std::string kk = to_string(k);
-          string to_load = VLOAD("0", "&Bi[" + nn + "][" + kk + "*ldb]");
-          to_load = "(" + kk + " < Ky)?select((" + vdtype + ")0, " + to_load + ", condy" + kk + "):0";
-          stream << VSTORE(to_load, "0", "storeB + " + to_string(k*lldb+n)) << ";" << std::endl;
-        }
-    }
-    else
-    {
-      for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_0*p_.simd_width)
-        for(unsigned int n = 0; n < p_.nL; n += p_.local_fetch_1)
-        {
-          std::string nn = to_string(n/p_.local_fetch_1);
-          std::string kk = to_string(k);
-          string to_load = VLOAD("0", "&Bi[" + nn + "][" + kk + BSTRIDE1 + "]");
-          to_load = "(" + kk + " < Kx)?select((" + vdtype + ")0, " + to_load + ", condx" + kk + "):0";
-          stream << VSTORE(to_load, "0", "storeB + " + to_string(n*lldb+k)) << ";" << std::endl;
-        }
-    }
-
-    if(A_trans_=='N')
-        stream << "readA = lA + ids.z*" << p_.simd_width << ";" << std::endl;
-    else
-        stream << "readA = lA + ids.z*" << llda*p_.simd_width << ";" << std::endl;
-
-    if(B_trans_=='T')
-        stream << "readB = lB + ids.w*" << p_.simd_width << ";" << std::endl;
-    else
-        stream << "readB = lB + ids.w*" << lldb*p_.simd_width << ";" << std::endl;
-
-    stream << LocalBarrier(backend) << ";" << std::endl;
-
-
-    stream << "//Inner loop" << std::endl;
-    stream << "for(unsigned int k = 0; k < " << p_.kL << "; k+=" << p_.kS << "){" << std::endl;
-    stream.inc_tab();
-
-    stream << "//Fetch A to registers" << std::endl;
-    stream << "#pragma unroll" << std::endl;
-    stream << "for(unsigned int kk = 0; kk < " << p_.kS << "; kk++)" << std::endl;
-    stream << "#pragma unroll " << p_.mS/p_.simd_width << std::endl;
-    stream << "for(unsigned int mm = 0; mm < " << p_.mS/p_.simd_width << "; mm++)" << std::endl;
-    stream << "{" << std::endl;
-    stream.inc_tab();
-    if(A_trans_=='N')
-        stream << "rA[kk][mm] = "  << VLOAD("0", "readA + k*" + to_string(llda) + " + mm*" + to_string(p_.local_size_0*p_.simd_width) + "+ kk*" + to_string(llda)) << ";" << std::endl;
-    else
-    {
-        if(p_.simd_width==1)
-            stream << "rA[kk][mm] = readA[k + mm*" << p_.local_size_0*llda <<  "+ kk"  << "];" << std::endl;
-        else
-            for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                stream << access_vector_type("rA[kk][mm]", s) << " = readA[k + (mm*" << p_.simd_width*p_.local_size_0 << " + " << s << ")*" << llda <<  "+ kk];" << std::endl;
-    }
-
-    stream.dec_tab();
-    stream << "}" << std::endl;
-
-    stream << "//Fetch B to registers" << std::endl;
-    stream << "#pragma unroll " << p_.kS << std::endl;
-    stream << "for(unsigned int kk = 0; kk < " << p_.kS << "; kk++)" << std::endl;
-    stream << "#pragma unroll " << p_.nS/p_.simd_width << std::endl;
-    stream << "for(unsigned int nn = 0; nn < " << p_.nS/p_.simd_width << "; nn++)" << std::endl;
-    stream << "{" << std::endl;
-    stream.inc_tab();
-    if(B_trans_=='T')
-        stream << "rB[kk][nn] = " << VLOAD("0", "readB + k*" + to_string(lldb) + " + nn*" + to_string(p_.local_size_1*p_.simd_width)  + "+ kk*" + to_string(lldb)) << ";" << std::endl;
-    else
-    {
-        if(p_.simd_width==1)
-            stream << "rB[kk][nn] = readB[k"  << " + nn*" << p_.local_size_1*lldb <<  "+ kk"  << "];" << std::endl;
-        else
-            for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                stream << access_vector_type("rB[kk][nn]", s) << " = readB[k"  << " + (nn*" << p_.simd_width*p_.local_size_1 << " + " << s << ")*" << lldb <<  "+ kk];" << std::endl;
-    }
-    stream.dec_tab();
-    stream << "}" << std::endl;
-
-    stream << "//FMA computations" << std::endl;
-    for(unsigned int kk=0 ; kk < p_.kS; ++kk)
-    for(unsigned int nn=0; nn < p_.nS; ++nn)
-    for(unsigned int mm=0; mm < p_.mS; ++mm)
-    {
-      string res_str, lhs_str, rhs_str;
-      res_str = "rC[" + to_string(mm) + "][" + to_string(nn) + "]";
-      if (p_.simd_width==1)
-        lhs_str = "rA[" + to_string(kk) + "][" + to_string(mm) + "]";
-      else
-        lhs_str = access_vector_type("rA[" + to_string(kk) + "][" + to_string(mm/p_.simd_width) + "]", mm%p_.simd_width);
-      if (p_.simd_width==1)
-        rhs_str = "rB[" + to_string(kk) + "]["+to_string(nn)+"]";
-      else
-        rhs_str = access_vector_type("rB[" + to_string(kk) + "]["+to_string(nn/p_.simd_width)+"]", nn%p_.simd_width);
-      stream << res_str << "=" << "fma(" << lhs_str << "," << rhs_str << "," << res_str << ");" << std::endl;
-    }
-
-    stream.dec_tab();
-    stream << "}" << std::endl;
-
-
-    stream << "K -= " << p_.kL << ";" << std::endl;
-    if(A_trans_=='N' || B_trans_=='T')
-        stream << "Ky -= " << p_.kL << ";" << std::endl;
-    if(A_trans_=='T' || B_trans_=='N')
-        stream << "Kx -= " << p_.kL << ";" << std::endl;
-
-    //Increment A pointers to global memory
-    if (A_trans_=='N')
-      for(unsigned int i = 0 ; i < npA ; ++i)
-          stream << "Ai[" << i << "] += "  << p_.kL << "*lda;" << std::endl;
-    else
-      for(unsigned int i = 0 ; i < npA ; ++i)
-          stream << "Ai[" << i << "] += "  << p_.kL << ASTRIDE1 << ";" << std::endl;
-
-    //Increment B pointers to global memory
-    if (B_trans_=='T')
-      for(unsigned int i = 0 ; i < npB ; ++i)
-          stream << "Bi[" << i << "] += " << p_.kL << "*ldb;" << std::endl;
-    else
-      for(unsigned int i = 0 ; i < npB ; ++i)
-          stream << "Bi[" << i << "] += " << p_.kL << BSTRIDE1 << ";" << std::endl;
-
-    stream.dec_tab();
-    stream << "}" << std::endl;
+    fetch_to_lds(true);
 
     stream << "//Write back C" << std::endl;
     stream << "M += ids.x;" << std::endl;
+    if(A_trans_=='N')
+        stream << "M += idT.x;" << std::endl;
+    else
+        stream << "M += idT.y;" << std::endl;
+
+    if(B_trans_=='T')
+        stream << "N += idT.x;" << std::endl;
+    else
+        stream << "N += idT.y;" << std::endl;
     stream << "N += ids.y;" << std::endl;
     stream << _size_t << " offx = (ids.x + ids.z*" << p_.simd_width << ")" << ";" << std::endl;
     stream << _size_t << " offy = (ids.y + ids.w*" << p_.simd_width << ");" << std::endl;
