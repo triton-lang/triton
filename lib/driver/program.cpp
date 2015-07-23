@@ -95,7 +95,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
 #endif
     case OPENCL:
     {
-      std::vector<cl::Device> devices = context_.h_.cl->getInfo<CL_CONTEXT_DEVICES>();
+      std::vector<cl::Device> devices = context_.h_.cl().getInfo<CL_CONTEXT_DEVICES>();
 
       std::string prefix;
       for(std::vector<cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
@@ -115,29 +115,29 @@ Program::Program(Context const & context, std::string const & source) : backend_
           buffer.resize(len);
           cached.read((char*)buffer.data(), std::streamsize(len));
           char* cbuffer = buffer.data();
-          *h_.cl = cl::Program(*context_.h_.cl, devices, cl::Program::Binaries(1, std::make_pair(cbuffer, len)));
-          h_.cl->build();
+          h_.cl() = cl::Program(context_.h_.cl(), devices, cl::Program::Binaries(1, std::make_pair(cbuffer, len)));
+          h_.cl().build();
           return;
         }
       }
 
-      *h_.cl = cl::Program(*context_.h_.cl, source);
+      h_.cl() = cl::Program(context_.h_.cl(), source);
       try{
-        ocl::check(h_.cl->build(devices));
+        ocl::check(h_.cl().build(devices));
       }catch(ocl::exception::build_program_failure const & e){
             for(std::vector< cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
               std::cout << "Device : " << it->getInfo<CL_DEVICE_NAME>()
-                      << "Build Status = " << h_.cl->getBuildInfo<CL_PROGRAM_BUILD_STATUS>(*it) << std::endl
-                      << "Build Log = " << h_.cl->getBuildInfo<CL_PROGRAM_BUILD_LOG>(*it) << std::endl;
+                      << "Build Status = " << h_.cl().getBuildInfo<CL_PROGRAM_BUILD_STATUS>(*it) << std::endl
+                      << "Build Log = " << h_.cl().getBuildInfo<CL_PROGRAM_BUILD_LOG>(*it) << std::endl;
       }
 
       //Save cached program
       if (cache_path.size())
       {
         std::ofstream cached(fname.c_str(),std::ios::binary);
-        std::vector<std::size_t> sizes = h_.cl->getInfo<CL_PROGRAM_BINARY_SIZES>();
+        std::vector<std::size_t> sizes = h_.cl().getInfo<CL_PROGRAM_BINARY_SIZES>();
         cached.write((char*)&sizes[0], sizeof(std::size_t));
-        std::vector<char*> binaries = h_.cl->getInfo<CL_PROGRAM_BINARIES>();
+        std::vector<char*> binaries = h_.cl().getInfo<CL_PROGRAM_BINARIES>();
         cached.write((char*)binaries[0], std::streamsize(sizes[0]));
       }
       break;

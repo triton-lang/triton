@@ -95,7 +95,8 @@ void bench(isc::numeric_type dtype, std::string operation)
 //
 // MACROS FOR BENCHMARKING
 //
-#define CL_HANDLE(X) (*X.handle().cl)()
+#define CL_HANDLE(X) X.handle().cl()()
+
 #define BENCHMARK_ISAAC(OP, PERF) \
   {\
   std::vector<long> times;\

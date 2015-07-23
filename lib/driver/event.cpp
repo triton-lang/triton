@@ -23,7 +23,7 @@ Event::Event(backend_type backend) : backend_(backend), h_(backend_)
 
 Event::Event(cl::Event const & event) : backend_(OPENCL), h_(backend_)
 {
-  *h_.cl = event;
+  h_.cl() = event;
 }
 
 long Event::elapsed_time() const
@@ -37,7 +37,7 @@ long Event::elapsed_time() const
       return 1e6*time;
 #endif
     case OPENCL:
-      return (h_.cl->getProfilingInfo<CL_PROFILING_COMMAND_END>() - h_.cl->getProfilingInfo<CL_PROFILING_COMMAND_START>());
+      return (h_.cl().getProfilingInfo<CL_PROFILING_COMMAND_END>() - h_.cl().getProfilingInfo<CL_PROFILING_COMMAND_START>());
     default:
       throw;
   }
@@ -45,7 +45,7 @@ long Event::elapsed_time() const
 
 Event::operator cl::Event()
 {
-    return *h_.cl;
+    return h_.cl();
 }
 }
 

@@ -9,7 +9,7 @@ namespace driver
 
 Buffer::Buffer(cl::Buffer const & buffer) : backend_(OPENCL), context_(buffer.getInfo<CL_MEM_CONTEXT>()), h_(backend_)
 {
-  *h_.cl = buffer;
+  h_.cl() = buffer;
 }
 
 Buffer::Buffer(Context const & context, std::size_t size) : backend_(context.backend_), context_(context), h_(backend_)
@@ -24,7 +24,7 @@ Buffer::Buffer(Context const & context, std::size_t size) : backend_(context.bac
 #endif
     case OPENCL:
       cl_int err;
-      *h_.cl = cl::Buffer(*context.h_.cl, CL_MEM_READ_WRITE, size, NULL, &err);
+      h_.cl() = cl::Buffer(context.h_.cl(), CL_MEM_READ_WRITE, size, NULL, &err);
       ocl::check(err);
       break;
     default:

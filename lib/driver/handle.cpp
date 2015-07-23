@@ -41,9 +41,9 @@ Handle<CLType, CUType>::Handle(backend_type backend): backend_(backend)
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA
-    case CUDA: cu.reset(new CUType());
+    case CUDA: cu_.reset(new CUType());
 #endif
-    case OPENCL: cl.reset(new CLType());
+    case OPENCL: cl_.reset(new CLType());
   }
 }
 
@@ -52,10 +52,10 @@ bool Handle<CLType, CUType>::operator==(Handle const & other) const
 {
 #ifdef ISAAC_WITH_CUDA
   if(backend_==CUDA && other.backend_==CUDA)
-    return (*cu)==(*other.cu);
+    return cu()==other.cu();
 #endif
   if(backend_==OPENCL && other.backend_==OPENCL)
-    return (*cl)()==(*other.cl)();
+    return cl()()==other.cl()();
   return false;
 }
 
@@ -64,10 +64,10 @@ bool Handle<CLType, CUType>::operator<(Handle const & other) const
 {
 #ifdef ISAAC_WITH_CUDA
   if(backend_==CUDA && other.backend_==CUDA)
-    return (*cu)<(*other.cu);
+    return (*cu_)<(*other.cu_);
 #endif
   if(backend_==OPENCL && other.backend_==OPENCL)
-    return (*cl)()<(*other.cl)();
+    return (*cl_)()<(*other.cl_)();
 #ifdef ISAAC_WITH_CUDA
   if(backend_==CUDA && other.backend_==OPENCL)
     return true;
@@ -78,21 +78,33 @@ bool Handle<CLType, CUType>::operator<(Handle const & other) const
 template<class CLType, class CUType>
 Handle<CLType, CUType>::~Handle()
 {
-  if(cu && cu.unique())
+  if(cu_ && cu_.unique())
   {
     switch(backend_)
     {
 #ifdef ISAAC_WITH_CUDA
-      case CUDA: _delete(*cu); break;
+      case CUDA: _delete(*cu_); break;
 #endif
       default: break;
     }
   }
 }
 
+template<class CLType, class CUType>
+CLType &  Handle<CLType, CUType>::cl()
+{ return *cl_; }
 
+template<class CLType, class CUType>
+CLType const &  Handle<CLType, CUType>::cl() const
+{ return *cl_; }
 
 #ifdef ISAAC_WITH_CUDA
+template<class CLType, class CUType>
+CUType &  Handle<CLType, CUType>::cu()
+{
+    return *cu_;
+}
+
 template class Handle<cl::Buffer, CUdeviceptr>;
 template class Handle<cl::CommandQueue, CUstream>;
 template class Handle<cl::Context, CUcontext>;

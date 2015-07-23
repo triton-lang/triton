@@ -16,7 +16,7 @@ enum interface_t
     CPP
 };
 
-#define CHANDLE(X) (*X.data().handle().cl)()
+#define CHANDLE(X) X.data().handle().cl()()
 #define OFF(X) X.start()[0] + X.start()[1]*X.ld()
 #define LD(X) X.ld()
 

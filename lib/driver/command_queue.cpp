@@ -15,7 +15,7 @@ namespace driver
 
 CommandQueue::CommandQueue(cl::CommandQueue const & queue) : backend_(OPENCL), context_(queue.getInfo<CL_QUEUE_CONTEXT>()), device_(queue.getInfo<CL_QUEUE_DEVICE>()), h_(backend_)
 {
-  *h_.cl = queue;
+  h_.cl() = queue;
 }
 
 CommandQueue::CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties): backend_(device.backend_), context_(context), device_(device), h_(backend_)
@@ -29,7 +29,7 @@ CommandQueue::CommandQueue(Context const & context, Device const & device, cl_co
 #endif
     case OPENCL:
       cl_int err;
-      *h_.cl = cl::CommandQueue(*context.h_.cl, *device.h_.cl, properties, &err);
+      h_.cl() = cl::CommandQueue(context.h_.cl(), device.h_.cl(), properties, &err);
       ocl::check(err);
       break;
     default: throw;
@@ -49,7 +49,7 @@ void CommandQueue::synchronize()
 #ifdef ISAAC_WITH_CUDA
     case CUDA: cuda::check(cuStreamSynchronize(*h_.cu)); break;
 #endif
-    case OPENCL: h_.cl->finish(); break;
+    case OPENCL: h_.cl().finish(); break;
     default: throw;
   }
 }
@@ -68,7 +68,7 @@ Event CommandQueue::enqueue(Kernel const & kernel, NDRange global, driver::NDRan
       break;
 #endif
     case OPENCL:
-      ocl::check(h_.cl->enqueueNDRangeKernel(*kernel.h_.cl, cl::NullRange, (cl::NDRange)global, (cl::NDRange)local, NULL, event.h_.cl.get()));
+      ocl::check(h_.cl().enqueueNDRangeKernel(kernel.h_.cl(), cl::NullRange, (cl::NDRange)global, (cl::NDRange)local, NULL, &event.h_.cl()));
       break;
     default: throw;
   }
@@ -88,7 +88,7 @@ void CommandQueue::write(Buffer const & buffer, bool blocking, std::size_t offse
       break;
 #endif
     case OPENCL:
-      h_.cl->enqueueWriteBuffer(*buffer.h_.cl, blocking, offset, size, ptr);
+      h_.cl().enqueueWriteBuffer(buffer.h_.cl(), blocking, offset, size, ptr);
       break;
     default: throw;
   }
@@ -107,7 +107,7 @@ void CommandQueue::read(Buffer const & buffer, bool blocking, std::size_t offset
       break;
 #endif
     case OPENCL:
-      h_.cl->enqueueReadBuffer(*buffer.h_.cl, blocking, offset, size, ptr);
+      h_.cl().enqueueReadBuffer(buffer.h_.cl(), blocking, offset, size, ptr);
       break;
     default: throw;
   }

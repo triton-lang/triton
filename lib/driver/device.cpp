@@ -24,7 +24,7 @@ Device::Device(int ordinal): backend_(CUDA), h_(backend_)
 
 
 Device::Device(cl::Device const & device) : backend_(OPENCL), h_(backend_)
-{ *h_.cl = device; }
+{ h_.cl() = device; }
 
 backend_type Device::backend() const
 { return backend_; }
@@ -36,7 +36,7 @@ unsigned int Device::address_bits() const
 #ifdef ISAAC_WITH_CUDA
     case CUDA: return sizeof(long long)*8;
 #endif
-    case OPENCL: return h_.cl->getInfo<CL_DEVICE_ADDRESS_BITS>();
+    case OPENCL: return h_.cl().getInfo<CL_DEVICE_ADDRESS_BITS>();
     default: throw;
   }
 
@@ -50,7 +50,7 @@ driver::Platform Device::platform() const
 #ifdef ISAAC_WITH_CUDA
     case CUDA: return Platform(CUDA);
 #endif
-    case OPENCL: return Platform(h_.cl->getInfo<CL_DEVICE_PLATFORM>());
+    case OPENCL: return Platform(h_.cl().getInfo<CL_DEVICE_PLATFORM>());
     default: throw;
   }
 }
@@ -65,7 +65,7 @@ std::string Device::name() const
       cuda::check(cuDeviceGetName(tmp, 128, *h_.cu));
       return std::string(tmp);
 #endif
-    case OPENCL: return h_.cl->getInfo<CL_DEVICE_NAME>();
+    case OPENCL: return h_.cl().getInfo<CL_DEVICE_NAME>();
     default: throw;
   }
 }
@@ -77,7 +77,7 @@ std::string Device::vendor_str() const
 #ifdef ISAAC_WITH_CUDA
     case CUDA: return "NVidia";
 #endif
-    case OPENCL: return h_.cl->getInfo<CL_DEVICE_VENDOR>();
+    case OPENCL: return h_.cl().getInfo<CL_DEVICE_VENDOR>();
     default: throw;
   }
 }
@@ -111,7 +111,7 @@ std::vector<size_t> Device::max_work_item_sizes() const
     }
 #endif
     case OPENCL:
-      return h_.cl->getInfo<CL_DEVICE_MAX_WORK_ITEM_SIZES>();
+      return h_.cl().getInfo<CL_DEVICE_MAX_WORK_ITEM_SIZES>();
     default:
       throw;
   }
@@ -124,7 +124,7 @@ device_type Device::type() const
 #ifdef ISAAC_WITH_CUDA
     case CUDA: return DEVICE_TYPE_GPU;
 #endif
-    case OPENCL: return static_cast<device_type>(h_.cl->getInfo<CL_DEVICE_TYPE>());
+    case OPENCL: return static_cast<device_type>(h_.cl().getInfo<CL_DEVICE_TYPE>());
     default: throw;
   }
 }
@@ -138,7 +138,7 @@ std::string Device::extensions() const
       return "";
 #endif
     case OPENCL:
-      return h_.cl->getInfo<CL_DEVICE_EXTENSIONS>();
+      return h_.cl().getInfo<CL_DEVICE_EXTENSIONS>();
     default: throw;
   }
 }
@@ -155,7 +155,7 @@ std::string Device::extensions() const
     switch(backend_)\
     {\
       CUDACASE(CUNAME)\
-      case OPENCL: return h_.cl->getInfo<CLNAME>();\
+      case OPENCL: return h_.cl().getInfo<CLNAME>();\
       default: throw;\
     }\
   }\
@@ -172,7 +172,7 @@ std::pair<unsigned int, unsigned int> Device::nv_compute_capability() const
   switch(backend_)
   {
       case OPENCL:
-          return std::pair<unsigned int, unsigned int>( h_.cl->getInfo<CL_DEVICE_COMPUTE_CAPABILITY_MAJOR_NV>(), h_.cl->getInfo<CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV> ());
+          return std::pair<unsigned int, unsigned int>( h_.cl().getInfo<CL_DEVICE_COMPUTE_CAPABILITY_MAJOR_NV>(), h_.cl().getInfo<CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV> ());
 #ifdef ISAAC_WITH_CUDA
       case CUDA:
           return std::pair<unsigned int, unsigned int>(cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(), cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>());
