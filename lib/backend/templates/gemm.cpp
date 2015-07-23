@@ -483,11 +483,20 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     else
         stream << "N += idT.y;" << std::endl;
     stream << "N += ids.y;" << std::endl;
-    stream << _size_t << " offx = (ids.x + ids.z*" << p_.simd_width << ")" << ";" << std::endl;
-    stream << _size_t << " offy = (ids.y + ids.w*" << p_.simd_width << ");" << std::endl;
-    stream << "C += " << "offx" << CSTRIDE1 << " + offy*ldc" << (has_depth?" + gidz*ldc*N;":"") << ";" << std::endl;
-    stream << "M -= offx;" << std::endl;
-    stream << "N -= offy;" << std::endl;
+
+    stream << "C += ids.x" << CSTRIDE1 << ";" << std::endl;
+    stream << "C += ids.z*" << p_.simd_width << CSTRIDE1 << ";" << std::endl;
+    stream << "C += ids.y*ldc;" << std::endl;
+    stream << "C += ids.w*" << p_.simd_width << "*ldc;" << std::endl;
+    if(has_depth)
+        stream << "C += gidz*ldc*N;" << std::endl;
+
+    stream << "M -= ids.x;" << std::endl;
+    stream << "M -= ids.z*" << p_.simd_width << ";" << std::endl;
+
+    stream << "N -= ids.y;" << std::endl;
+    stream << "N -= ids.w*" << p_.simd_width <<  ";" << std::endl;
+
     stream << "int ibm[" << p_.mS << "];" << std::endl;
     for(unsigned int m=0; m < p_.mS; ++m)
     {
