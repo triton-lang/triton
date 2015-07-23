@@ -17,7 +17,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   isc::numeric_type dtype = x.dtype();
   isc::driver::Context const & ctx = x.context();
   isc::driver::CommandQueue queue = isc::driver::queues[ctx][0];
-  cl_command_queue clqueue = (*queue.handle().cl)();
+  cl_command_queue clqueue = queue.handle().cl()();
   int_t N = cz.size();
 
   T aa = -4.378, bb=3.5;
@@ -45,15 +45,15 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   }
 
 #define PREFIX "[C]"
-  RUN_TEST_VECTOR_AXPY("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
-                                                                                             (*z.data().handle().cl)(), z.start()[0], z.stride()[0],
+  RUN_TEST_VECTOR_AXPY("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                             CHANDLE(z), z.start()[0], z.stride()[0],
                                                                                              1, &clqueue, 0, NULL, NULL));
 
-  RUN_TEST_VECTOR_AXPY("COPY", cz[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
-                                                                                 (*z.data().handle().cl)(), z.start()[0], z.stride()[0],
+  RUN_TEST_VECTOR_AXPY("COPY", cz[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                 CHANDLE(z), z.start()[0], z.stride()[0],
                                                                                  1, &clqueue, 0, NULL, NULL));
 
-  RUN_TEST_VECTOR_AXPY("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, (*z.data().handle().cl)(), z.start()[0], z.stride()[0],
+  RUN_TEST_VECTOR_AXPY("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, CHANDLE(z), z.start()[0], z.stride()[0],
                                                                                      1, &clqueue, 0, NULL, NULL));
 
 

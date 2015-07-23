@@ -38,11 +38,16 @@ public:
   Handle(backend_type backend);
   bool operator==(Handle const & other) const;
   bool operator<(Handle const & other) const;
+  CLType & cl();
+  CLType const & cl() const;
+#ifdef ISAAC_WITH_CUDA
+  CUTYPE & cu();
+#endif
   ~Handle();
 
-public:
-  std::shared_ptr<CLType> cl;
-  std::shared_ptr<CUType> cu;
+private:
+  std::shared_ptr<CLType> cl_;
+  std::shared_ptr<CUType> cu_;
 private:
   backend_type backend_;
 };

@@ -47,7 +47,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 
   if(interf==clBLAS)
   {
-      cl_command_queue clqueue = (*queue.handle().cl)();
+      cl_command_queue clqueue = queue.handle().cl()();
 
 
       TEST_OPERATION("GEMV(ROW, NoTrans)", M, N, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],

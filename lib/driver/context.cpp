@@ -9,7 +9,7 @@ namespace driver
 
 Context::Context(cl::Context const & context) : backend_(OPENCL), device_(context.getInfo<CL_CONTEXT_DEVICES>()[0]), h_(backend_)
 {
-    *h_.cl = context;
+    h_.cl() = context;
 }
 
 Context::Context(Device const & device) : backend_(device.backend_), device_(device), h_(backend_)
@@ -30,7 +30,7 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
 #endif
     case OPENCL:
       cl_int err;
-      *h_.cl = cl::Context(std::vector<cl::Device>(1, *device_.h_.cl), NULL, NULL, NULL, &err);
+      h_.cl() = cl::Context(std::vector<cl::Device>(1, device_.h_.cl()), NULL, NULL, NULL, &err);
       ocl::check(err);
       break;
     default:
