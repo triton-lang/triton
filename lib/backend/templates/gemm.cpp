@@ -150,36 +150,35 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream.inc_tab();
 
     ///Declare
+    stream << "//blocks" << std::endl;
     stream << sdtype << " rC[" << p_.mS << "][" << p_.nS << "] = {{0}};" << std::endl;
     stream << vdtype << " rA[" << p_.kS << "][" << p_.mS/p_.simd_width << "];" << std::endl;
     stream << vdtype << " rB[" << p_.kS << "][" << p_.nS/p_.simd_width << "];" << std::endl;
+    stream << std::endl;
 
+    stream << "//pointers" << std::endl;
     size_t llda = (A_trans_=='N')?p_.mL:p_.kL;
     size_t lldb = (B_trans_=='T')?p_.nL:p_.kL;
     stream << Local(backend) << " " << sdtype << " lA[" << p_.kL*p_.mL << "];" << std::endl;
     stream << Local(backend) << " " << sdtype << " lB[" << p_.kL*p_.nL << "];" << std::endl;
-    stream << std::endl;
-
     unsigned int npA = p_.mL/(A_trans_=='N'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
     unsigned int npB = p_.nL/(B_trans_=='T'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
     stream << "__global " << sdtype << "* Ai[" << npA << "];" << std::endl;
     stream << "__global " << sdtype << "* Bi[" << npB << "];" << std::endl;
-    stream << LocalPtr(backend) << " " << sdtype << "* readA, * readB, * storeA, * storeB;" << std::endl;
+    stream << std::endl;
 
-    stream << "long4 ids;" << std::endl;
+    stream << "//identifiers" << std::endl;
     stream << "int2 idT;" << std::endl;
-    stream << _size_t << " idt;" << std::endl;
+    stream << "int idt;" << std::endl;
     if(has_depth)
-        stream << _size_t << " gidz, div, offz;" << std::endl;
+        stream << "int gidz, div, offz;" << std::endl;
+    stream << "int4 ids = (int4)(" << GroupIdx0(backend) << "," << GroupIdx1(backend) << "," << LocalIdx0(backend) << "," << LocalIdx1(backend) << ");" << std::endl;
+    stream << std::endl;
 
+    stream << "//offsets" << std::endl;
     stream << "A += offa;" << std::endl;
     stream << "B += offb;" << std::endl;
     stream << "C += offc;" << std::endl;
-
-    stream << "ids.x = " << GroupIdx0(backend) << ";" << std::endl;
-    stream << "ids.y = " << GroupIdx1(backend) << ";" << std::endl;
-    stream << "ids.z = " << LocalIdx0(backend) << ";" << std::endl;
-    stream << "ids.w = " << LocalIdx1(backend) << ";" << std::endl;
 
     if(has_depth)
     {
@@ -192,8 +191,9 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "idt = " << p_.local_size_0 << "*ids.w + ids.z;" << std::endl;
     stream << "idT.y = idt/" << p_.local_fetch_0 << ";" << std::endl;
     stream << "idT.x = idt - " << p_.local_fetch_0 << "*idT.y;" << std::endl;
+    stream << std::endl;
 
-
+    stream << "//Adjust pointers and bounds per work-item" << std::endl;
     stream << "ids.x *= " << p_.mL << ";" << std::endl;
     stream << "ids.y *= " << p_.nL << ";" << std::endl;
     stream << "idT.x *= " << p_.simd_width << ";" << std::endl;
@@ -242,42 +242,46 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     }
 
     stream << "#pragma unroll" << std::endl;
-    stream << "for(int i = 0 ; i < " << npA << " ; ++i) " << std::endl;
+    stream << "for(int i = 0 ; i < " << npA << " ; ++i){" << std::endl;
     stream.inc_tab();
     stream << "Ai[i] = A;" << std::endl;
     stream.dec_tab();
+    stream << "}" << std::endl;
+    stream << std::endl;
 
     stream << "#pragma unroll" << std::endl;
-    stream << "for(int i = 0 ; i < " << npB << " ; ++i)" << std::endl;
+    stream << "for(int i = 0 ; i < " << npB << " ; ++i){" << std::endl;
     stream.inc_tab();
     stream << "Bi[i] = B;" << std::endl;
     stream.dec_tab();
+    stream << "}" << std::endl;
+    stream << std::endl;
 
     for(unsigned int i = 0 ; i < npA ; i++ )
         if (A_trans_=='N')
-          stream << "if( " << i*p_.local_fetch_0*p_.simd_width << " < M) Ai[" << i << "] += (idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << ASTRIDE1 << ";" << std::endl;
+          stream << "Ai[" << i << "] += select(0, (int)((idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << ASTRIDE1 << "), " << i*p_.local_fetch_0*p_.simd_width << " < M);" << std::endl;
         else
-          stream << "if(" << i*p_.local_fetch_1 << " < M) Ai[" << i << "] += (idT.y + " << i*p_.local_fetch_1 << ")*lda;" << std::endl;
+          stream << "Ai[" << i << "] += select(0, (int)((idT.y + " << i*p_.local_fetch_1 << ")*lda), " << i*p_.local_fetch_1 << " < M);" << std::endl;
 
     for(unsigned int i = 0 ; i < npB ; i++ )
         if (B_trans_=='T')
-          stream << "if(" << i*p_.local_fetch_0*p_.simd_width << " < N) Bi[" << i << "] += (idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << BSTRIDE1 << ";" << std::endl;
+            stream << "Bi[" << i << "] += select(0, (int)((idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << BSTRIDE1 << "), " << i*p_.local_fetch_0*p_.simd_width << " < N);" << std::endl;
         else
-          stream << "if(" << i*p_.local_fetch_1 << " < N) Bi[" << i << "] += (idT.y + " << i*p_.local_fetch_1 << ")*ldb;" << std::endl;
-
-    stream << "storeA = lA + idT.y*" << llda << " + idT.x;" << std::endl;
-    stream << "storeB = lB + idT.y*" << lldb << " + idT.x;" << std::endl;
+            stream << "Bi[" << i << "] += select(0, (int)((idT.y + " << i*p_.local_fetch_1 << ")*ldb), " << i*p_.local_fetch_1 << " < N);" << std::endl;
 
 
+    stream << std::endl;
     stream << "//Outer loop" << std::endl;
-    stream << "while(K >=" << p_.kL << "){" << std::endl;
+    stream << "while(K >=" << p_.kL << ")" << std::endl;
+    stream << "{" << std::endl;
     stream.inc_tab();
 
 
     auto fetch_to_lds = [&](bool last_iteration)
     {
-
         stream << LocalBarrier(backend) << ";" << std::endl;
+        stream << LocalPtr(backend) << " " << sdtype << "* ldsA = lA + idT.y*" << llda << " + idT.x;" << std::endl;
+        stream << LocalPtr(backend) << " " << sdtype << "* ldsB = lB + idT.y*" << lldb << " + idT.x;" << std::endl;
 
         stream << "//Fetch A to local memory" << std::endl;
         if (A_trans_=='N')
@@ -289,9 +293,9 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
               std::string kk = to_string(k);
               if(last_iteration)
                   for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                      stream << "storeA[" << k*llda + m + s << "] = (condy" << k << " && " << s << "< M)? Ai[" << mm << "][" << k << "*lda + " << s << "] : 0;" << std::endl;
+                      stream << "ldsA[" << k*llda + m + s << "] = (condy" << k << " && " << s << "< M)? Ai[" << mm << "][" << k << "*lda + " << s << "] : 0;" << std::endl;
               else
-                stream << VSTORE(VLOAD("0" ,"&Ai[" + mm +"][" + kk + "*lda]"), "0", "storeA + " + to_string(k*llda+m)) << ";" << std::endl;
+                stream << VSTORE(VLOAD("0" ,"&Ai[" + mm +"][" + kk + "*lda]"), "0", "ldsA + " + to_string(k*llda+m)) << ";" << std::endl;
             }
         }
         else
@@ -303,10 +307,10 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
                 std::string kk = to_string(k);
                 if(last_iteration)
                     for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                        stream << "storeA[" << m*llda + k + s << "] = condx" << k + s << "? Ai[" << mm << "][" << k + s << ASTRIDE1 << "] : 0;" << std::endl;
+                        stream << "ldsA[" << m*llda + k + s << "] = condx" << k + s << "? Ai[" << mm << "][" << k + s << ASTRIDE1 << "] : 0;" << std::endl;
 
                 else
-                    stream << VSTORE(VLOAD("0", "&Ai[" + mm + "][" + kk + ASTRIDE1 + "]"), "0", "storeA + " + to_string(m*llda+k)) << ";" << std::endl;
+                    stream << VSTORE(VLOAD("0", "&Ai[" + mm + "][" + kk + ASTRIDE1 + "]"), "0", "ldsA + " + to_string(m*llda+k)) << ";" << std::endl;
               }
         }
 
@@ -320,9 +324,9 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
               std::string kk = to_string(k);
               if(last_iteration)
                   for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                      stream << "storeB[" << k*lldb + n + s << "] = (condy" << k << " && " << s << "< N)? Bi[" <<  nn << "][" << kk << "*ldb +" << s << "] : 0;" << std::endl;
+                      stream << "ldsB[" << k*lldb + n + s << "] = (condy" << k << " && " << s << "< N)? Bi[" <<  nn << "][" << kk << "*ldb +" << s << "] : 0;" << std::endl;
               else
-                stream << VSTORE(VLOAD("0" ,"&Bi[" + nn +"][" + kk + "*ldb]"), "0", "storeB + " + to_string(k*lldb+n)) << ";" << std::endl;
+                stream << VSTORE(VLOAD("0" ,"&Bi[" + nn +"][" + kk + "*ldb]"), "0", "ldsB + " + to_string(k*lldb+n)) << ";" << std::endl;
             }
         }
         else
@@ -334,22 +338,22 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
               std::string kk = to_string(k);
               if(last_iteration)
                   for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                      stream << "storeB[" << n*lldb + k + s << "] = condx" << k + s << "? Bi[" << nn << "][" << k + s << BSTRIDE1 << "] : 0;" << std::endl;
+                      stream << "ldsB[" << n*lldb + k + s << "] = condx" << k + s << "? Bi[" << nn << "][" << k + s << BSTRIDE1 << "] : 0;" << std::endl;
 
               else
-                  stream << VSTORE(VLOAD("0", "&Bi[" + nn + "][" + kk + BSTRIDE1 + "]"), "0", "storeB + " + to_string(n*lldb+k)) << ";" << std::endl;
+                  stream << VSTORE(VLOAD("0", "&Bi[" + nn + "][" + kk + BSTRIDE1 + "]"), "0", "ldsB + " + to_string(n*lldb+k)) << ";" << std::endl;
             }
         }
 
         if(A_trans_=='N')
-            stream << "readA = lA + ids.z*" << p_.simd_width << ";" << std::endl;
+            stream << "ldsA = lA + ids.z*" << p_.simd_width << ";" << std::endl;
         else
-            stream << "readA = lA + ids.z*" << llda*p_.simd_width << ";" << std::endl;
+            stream << "ldsA = lA + ids.z*" << llda*p_.simd_width << ";" << std::endl;
 
         if(B_trans_=='T')
-            stream << "readB = lB + ids.w*" << p_.simd_width << ";" << std::endl;
+            stream << "ldsB = lB + ids.w*" << p_.simd_width << ";" << std::endl;
         else
-            stream << "readB = lB + ids.w*" << lldb*p_.simd_width << ";" << std::endl;
+            stream << "ldsB = lB + ids.w*" << lldb*p_.simd_width << ";" << std::endl;
 
         stream << LocalBarrier(backend) << ";" << std::endl;
 
@@ -365,14 +369,14 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
         stream << "{" << std::endl;
         stream.inc_tab();
         if(A_trans_=='N')
-            stream << "rA[kk][mm] = "  << VLOAD("0", "readA + k*" + to_string(llda) + " + mm*" + to_string(p_.local_size_0*p_.simd_width) + "+ kk*" + to_string(llda)) << ";" << std::endl;
+            stream << "rA[kk][mm] = "  << VLOAD("0", "ldsA + k*" + to_string(llda) + " + mm*" + to_string(p_.local_size_0*p_.simd_width) + "+ kk*" + to_string(llda)) << ";" << std::endl;
         else
         {
             if(p_.simd_width==1)
-                stream << "rA[kk][mm] = readA[k + mm*" << p_.local_size_0*llda <<  "+ kk"  << "];" << std::endl;
+                stream << "rA[kk][mm] = ldsA[k + mm*" << p_.local_size_0*llda <<  "+ kk"  << "];" << std::endl;
             else
                 for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                    stream << access_vector_type("rA[kk][mm]", s) << " = readA[k + (mm*" << p_.simd_width*p_.local_size_0 << " + " << s << ")*" << llda <<  "+ kk];" << std::endl;
+                    stream << access_vector_type("rA[kk][mm]", s) << " = ldsA[k + (mm*" << p_.simd_width*p_.local_size_0 << " + " << s << ")*" << llda <<  "+ kk];" << std::endl;
         }
 
         stream.dec_tab();
@@ -386,14 +390,14 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
         stream << "{" << std::endl;
         stream.inc_tab();
         if(B_trans_=='T')
-            stream << "rB[kk][nn] = " << VLOAD("0", "readB + k*" + to_string(lldb) + " + nn*" + to_string(p_.local_size_1*p_.simd_width)  + "+ kk*" + to_string(lldb)) << ";" << std::endl;
+            stream << "rB[kk][nn] = " << VLOAD("0", "ldsB + k*" + to_string(lldb) + " + nn*" + to_string(p_.local_size_1*p_.simd_width)  + "+ kk*" + to_string(lldb)) << ";" << std::endl;
         else
         {
             if(p_.simd_width==1)
-                stream << "rB[kk][nn] = readB[k"  << " + nn*" << p_.local_size_1*lldb <<  "+ kk"  << "];" << std::endl;
+                stream << "rB[kk][nn] = ldsB[k"  << " + nn*" << p_.local_size_1*lldb <<  "+ kk"  << "];" << std::endl;
             else
                 for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-                    stream << access_vector_type("rB[kk][nn]", s) << " = readB[k"  << " + (nn*" << p_.simd_width*p_.local_size_1 << " + " << s << ")*" << lldb <<  "+ kk];" << std::endl;
+                    stream << access_vector_type("rB[kk][nn]", s) << " = ldsB[k"  << " + (nn*" << p_.simd_width*p_.local_size_1 << " + " << s << ")*" << lldb <<  "+ kk];" << std::endl;
         }
         stream.dec_tab();
         stream << "}" << std::endl;
