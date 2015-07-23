@@ -185,7 +185,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       stream << "gidz = " << GroupIdx2(backend) << ";" << std::endl;
       stream << "div = (K+" << p_.depth-1 << ")/" << p_.depth << ";" << std::endl;
       stream << "offz = div*gidz;" << std::endl;
-      stream << "K = min(K - div*gidz, div);" << std::endl;
+      stream << "K = min(K - div*gidz, (" << _size_t << ")div);" << std::endl;
     }
 
     stream << "idt = " << p_.local_size_0 << "*ids.w + ids.z;" << std::endl;
@@ -268,7 +268,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
             stream << "Bi[" << i << "] += select(0, (int)((idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << BSTRIDE1 << "), " << i*p_.local_fetch_0*p_.simd_width << " < N);" << std::endl;
         else
             stream << "Bi[" << i << "] += select(0, (int)((idT.y + " << i*p_.local_fetch_1 << ")*ldb), " << i*p_.local_fetch_1 << " < N);" << std::endl;
-
 
     stream << std::endl;
     stream << "//Outer loop" << std::endl;
