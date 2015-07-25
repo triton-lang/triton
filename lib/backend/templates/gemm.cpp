@@ -168,51 +168,34 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << std::endl;
 
     stream << "//identifiers" << std::endl;
+    stream << "int2 gpid = (int2)(" << p_.mL << "*" << GroupIdx0(backend) << "," << p_.nL << "*" << GroupIdx1(backend) << ");" << std::endl;
+    stream << "int2 lid = (int2)(" << LocalIdx0(backend) << "," << LocalIdx1(backend) << ");" << std::endl;
+    stream << "int idt = " << p_.local_size_0 << "*lid.y + lid.x;" << std::endl;
     stream << "int2 idT;" << std::endl;
-    stream << "int idt;" << std::endl;
+    stream << "idT.y = idt/" << p_.local_fetch_0 << ";" << std::endl;
+    stream << "idT.x = idt - " << p_.local_fetch_0 << "*idT.y;" << std::endl;
+    stream << "idT.x *= " << p_.simd_width << ";" << std::endl;
     if(has_depth)
-        stream << "int gidz, div, offz;" << std::endl;
-    stream << "int4 ids = (int4)(" << GroupIdx0(backend) << "," << GroupIdx1(backend) << "," << LocalIdx0(backend) << "," << LocalIdx1(backend) << ");" << std::endl;
+    {
+      stream << "int gidz = " << GroupIdx2(backend) << ";" << std::endl;
+      stream << "int div = (K+" << p_.depth-1 << ")/" << p_.depth << ";" << std::endl;
+      stream << "int offz = div*gidz;" << std::endl;
+      stream << "int K = min(K - div*gidz, (" << _size_t << ")div);" << std::endl;
+    }
     stream << std::endl;
 
+
+    stream << std::endl;
     stream << "//offsets" << std::endl;
     stream << "A += offa;" << std::endl;
     stream << "B += offb;" << std::endl;
     stream << "C += offc;" << std::endl;
 
-    if(has_depth)
-    {
-      stream << "gidz = " << GroupIdx2(backend) << ";" << std::endl;
-      stream << "div = (K+" << p_.depth-1 << ")/" << p_.depth << ";" << std::endl;
-      stream << "offz = div*gidz;" << std::endl;
-      stream << "K = min(K - div*gidz, (" << _size_t << ")div);" << std::endl;
-    }
-
-    stream << "idt = " << p_.local_size_0 << "*ids.w + ids.z;" << std::endl;
-    stream << "idT.y = idt/" << p_.local_fetch_0 << ";" << std::endl;
-    stream << "idT.x = idt - " << p_.local_fetch_0 << "*idT.y;" << std::endl;
     stream << std::endl;
-
-    stream << "//Adjust pointers and bounds per work-item" << std::endl;
-    stream << "ids.x *= " << p_.mL << ";" << std::endl;
-    stream << "ids.y *= " << p_.nL << ";" << std::endl;
-    stream << "idT.x *= " << p_.simd_width << ";" << std::endl;
-
-    stream << "M -= ids.x;" << std::endl;
-    if(A_trans_=='N')
-        stream << "M -= idT.x;" << std::endl;
-    else
-        stream << "M -= idT.y;" << std::endl;
-
-    stream << "N -= ids.y;" << std::endl;
-    if(B_trans_=='T')
-        stream << "N -= idT.x;" << std::endl;
-    else
-        stream << "N -= idT.y;" << std::endl;
-
+    stream << "//Adjust pointers" << std::endl;
     if (A_trans_=='N')
     {
-        stream << "A += ids.x" << ASTRIDE1 << ";" << std::endl;
+        stream << "A += gpid.x" << ASTRIDE1 << ";" << std::endl;
         stream << "A += idT.y*lda;" << std::endl;
         if(has_depth)
             stream << "A += offz*lda;" << std::endl;
@@ -220,7 +203,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     }
     else
     {
-        stream << "A += ids.x*lda;" << std::endl;
+        stream << "A += gpid.x*lda;" << std::endl;
         stream << "A += idT.x" << ASTRIDE1 << ";" << std::endl;
         if(has_depth)
             stream << "A += offz;" << std::endl;
@@ -228,46 +211,48 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
     if(B_trans_=='T')
     {
-        stream << "B += ids.y" << BSTRIDE1 << ";" << std::endl;
+        stream << "B += gpid.y" << BSTRIDE1 << ";" << std::endl;
         stream << "B += idT.y*ldb;" << std::endl;
         if(has_depth)
             stream << "B += offz*ldb;" << std::endl;
     }
     else
     {
-        stream << "B += ids.y*ldb;" << std::endl;
+        stream << "B += gpid.y*ldb;" << std::endl;
         stream << "B += idT.x" << BSTRIDE1 << ";" << std::endl;
         if(has_depth)
             stream << "B += offz;" << std::endl;
     }
 
-    stream << "#pragma unroll" << std::endl;
-    stream << "for(int i = 0 ; i < " << npA << " ; ++i){" << std::endl;
-    stream.inc_tab();
-    stream << "Ai[i] = A;" << std::endl;
-    stream.dec_tab();
-    stream << "}" << std::endl;
     stream << std::endl;
+    stream << "//Adjust bounds" << std::endl;
+    stream << "M -= gpid.x;" << std::endl;
+    if(A_trans_=='N')
+        stream << "M -= idT.x;" << std::endl;
+    else
+        stream << "M -= idT.y;" << std::endl;
 
-    stream << "#pragma unroll" << std::endl;
-    stream << "for(int i = 0 ; i < " << npB << " ; ++i){" << std::endl;
-    stream.inc_tab();
-    stream << "Bi[i] = B;" << std::endl;
-    stream.dec_tab();
-    stream << "}" << std::endl;
+    stream << "N -= gpid.y;" << std::endl;
+    if(B_trans_=='T')
+        stream << "N -= idT.x;" << std::endl;
+    else
+        stream << "N -= idT.y;" << std::endl;
+
     stream << std::endl;
-
+    stream << "//Lanes for A" << std::endl;
     for(unsigned int i = 0 ; i < npA ; i++ )
         if (A_trans_=='N')
-          stream << "Ai[" << i << "] += select(0, (int)((idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << ASTRIDE1 << "), " << i*p_.local_fetch_0*p_.simd_width << " < M);" << std::endl;
+          stream << "Ai[" << i << "] = A + select(0, (int)((idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << ASTRIDE1 << "), " << i*p_.local_fetch_0*p_.simd_width << " < M);" << std::endl;
         else
-          stream << "Ai[" << i << "] += select(0, (int)((idT.y + " << i*p_.local_fetch_1 << ")*lda), " << i*p_.local_fetch_1 << " < M);" << std::endl;
+          stream << "Ai[" << i << "] = A + select(0, (int)((idT.y + " << i*p_.local_fetch_1 << ")*lda), " << i*p_.local_fetch_1 << " < M);" << std::endl;
 
+    stream << std::endl;
+    stream << "//Lanes for B" << std::endl;
     for(unsigned int i = 0 ; i < npB ; i++ )
         if (B_trans_=='T')
-            stream << "Bi[" << i << "] += select(0, (int)((idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << BSTRIDE1 << "), " << i*p_.local_fetch_0*p_.simd_width << " < N);" << std::endl;
+            stream << "Bi[" << i << "] = B + select(0, (int)((idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << BSTRIDE1 << "), " << i*p_.local_fetch_0*p_.simd_width << " < N);" << std::endl;
         else
-            stream << "Bi[" << i << "] += select(0, (int)((idT.y + " << i*p_.local_fetch_1 << ")*ldb), " << i*p_.local_fetch_1 << " < N);" << std::endl;
+            stream << "Bi[" << i << "] = B + select(0, (int)((idT.y + " << i*p_.local_fetch_1 << ")*ldb), " << i*p_.local_fetch_1 << " < N);" << std::endl;
 
     stream << std::endl;
     stream << "//Outer loop" << std::endl;
@@ -345,14 +330,14 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
         }
 
         if(A_trans_=='N')
-            stream << "ldsA = lA + ids.z*" << p_.simd_width << ";" << std::endl;
+            stream << "ldsA = lA + lid.x*" << p_.simd_width << ";" << std::endl;
         else
-            stream << "ldsA = lA + ids.z*" << llda*p_.simd_width << ";" << std::endl;
+            stream << "ldsA = lA + lid.x*" << llda*p_.simd_width << ";" << std::endl;
 
         if(B_trans_=='T')
-            stream << "ldsB = lB + ids.w*" << p_.simd_width << ";" << std::endl;
+            stream << "ldsB = lB + lid.y*" << p_.simd_width << ";" << std::endl;
         else
-            stream << "ldsB = lB + ids.w*" << lldb*p_.simd_width << ";" << std::endl;
+            stream << "ldsB = lB + lid.y*" << lldb*p_.simd_width << ";" << std::endl;
 
         stream << LocalBarrier(backend) << ";" << std::endl;
 
@@ -472,7 +457,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     fetch_to_lds(true);
 
     stream << "//Write back C" << std::endl;
-    stream << "M += ids.x;" << std::endl;
+    stream << "M += gpid.x;" << std::endl;
     if(A_trans_=='N')
         stream << "M += idT.x;" << std::endl;
     else
@@ -482,20 +467,20 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
         stream << "N += idT.x;" << std::endl;
     else
         stream << "N += idT.y;" << std::endl;
-    stream << "N += ids.y;" << std::endl;
+    stream << "N += gpid.y;" << std::endl;
 
-    stream << "C += ids.x" << CSTRIDE1 << ";" << std::endl;
-    stream << "C += ids.z*" << p_.simd_width << CSTRIDE1 << ";" << std::endl;
-    stream << "C += ids.y*ldc;" << std::endl;
-    stream << "C += ids.w*" << p_.simd_width << "*ldc;" << std::endl;
+    stream << "C += gpid.x" << CSTRIDE1 << ";" << std::endl;
+    stream << "C += lid.x*" << p_.simd_width << CSTRIDE1 << ";" << std::endl;
+    stream << "C += gpid.y*ldc;" << std::endl;
+    stream << "C += lid.y*" << p_.simd_width << "*ldc;" << std::endl;
     if(has_depth)
         stream << "C += gidz*ldc*N;" << std::endl;
 
-    stream << "M -= ids.x;" << std::endl;
-    stream << "M -= ids.z*" << p_.simd_width << ";" << std::endl;
+    stream << "M -= gpid.x;" << std::endl;
+    stream << "M -= lid.x*" << p_.simd_width << ";" << std::endl;
 
-    stream << "N -= ids.y;" << std::endl;
-    stream << "N -= ids.w*" << p_.simd_width <<  ";" << std::endl;
+    stream << "N -= gpid.y;" << std::endl;
+    stream << "N -= lid.y*" << p_.simd_width <<  ";" << std::endl;
 
     stream << "int ibm[" << p_.mS << "];" << std::endl;
     for(unsigned int m=0; m < p_.mS; ++m)
