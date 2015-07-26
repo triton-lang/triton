@@ -1,7 +1,6 @@
 #ifndef ISAAC_TYPES_H
 #define ISAAC_TYPES_H
 
-#include <CL/cl.hpp>
 #include <list>
 #include "isaac/defines.h"
 #include "isaac/exception/unknown_datatype.h"

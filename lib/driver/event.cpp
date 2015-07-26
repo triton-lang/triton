@@ -1,4 +1,5 @@
 #include "isaac/driver/event.h"
+#include "helpers/ocl/infos.hpp"
 
 namespace isaac
 {
@@ -21,7 +22,7 @@ Event::Event(backend_type backend) : backend_(backend), h_(backend_)
   }
 }
 
-Event::Event(cl::Event const & event) : backend_(OPENCL), h_(backend_)
+Event::Event(cl_event const & event) : backend_(OPENCL), h_(backend_)
 {
   h_.cl() = event;
 }
@@ -37,16 +38,15 @@ long Event::elapsed_time() const
       return 1e6*time;
 #endif
     case OPENCL:
-      return (h_.cl().getProfilingInfo<CL_PROFILING_COMMAND_END>() - h_.cl().getProfilingInfo<CL_PROFILING_COMMAND_START>());
+      return ocl::info<CL_PROFILING_COMMAND_END>(h_.cl()) - ocl::info<CL_PROFILING_COMMAND_START>(h_.cl());
     default:
       throw;
   }
 }
 
-Event::operator cl::Event()
-{
-    return h_.cl();
-}
+HANDLE_TYPE(cl_event, cu_event_t) & Event::handle()
+{ return h_; }
+
 }
 
 }

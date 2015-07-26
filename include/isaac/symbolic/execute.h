@@ -1,7 +1,6 @@
 #ifndef _ISAAC_SCHEDULER_EXECUTE_H
 #define _ISAAC_SCHEDULER_EXECUTE_H
 
-#include <CL/cl.hpp>
 #include "isaac/model/model.h"
 #include "isaac/symbolic/expression.h"
 

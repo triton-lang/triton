@@ -1,6 +1,7 @@
 #include "isaac/driver/backend.h"
 #include <assert.h>
 #include <stdexcept>
+#include <vector>
 
 namespace isaac
 {
@@ -30,13 +31,17 @@ void queues_type::cuinit()
 
 void queues_type::clinit()
 {
-  std::vector<cl::Platform> platforms;
-  cl::Platform::get(&platforms);
-  for(auto & p : platforms)
+  cl_uint nplatforms;
+  ocl::check(clGetPlatformIDs(0, NULL, &nplatforms));
+  std::vector<cl_platform_id> platforms(nplatforms);
+  ocl::check(clGetPlatformIDs(nplatforms, platforms.data(), NULL));
+  for(cl_platform_id p : platforms)
   {
-    std::vector<cl::Device> devices;
-    p.getDevices(CL_DEVICE_TYPE_ALL, &devices);
-    for(auto & d : devices)
+    cl_uint ndevices;
+    ocl::check(clGetDeviceIDs(p, CL_DEVICE_TYPE_ALL, 0, NULL, &ndevices));
+    std::vector<cl_device_id> devices(ndevices);
+    ocl::check(clGetDeviceIDs(p, CL_DEVICE_TYPE_ALL, ndevices, devices.data(), NULL));
+    for(cl_device_id d : devices)
       append(Context(Device(d)));
   }
 }

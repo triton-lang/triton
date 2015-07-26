@@ -17,7 +17,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   isc::numeric_type dtype = x.dtype();
   isc::driver::Context const & ctx = x.context();
   isc::driver::CommandQueue queue = isc::driver::queues[ctx][0];
-  cl_command_queue clqueue = queue.handle().cl()();
+  cl_command_queue clqueue = queue.handle().cl();
   int_t N = cz.size();
 
   T aa = -4.378, bb=3.5;

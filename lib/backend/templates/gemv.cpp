@@ -1,3 +1,4 @@
+#include <cstring>
 #include <iostream>
 #include "isaac/backend/stream.h"
 #include "isaac/backend/keywords.h"

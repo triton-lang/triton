@@ -1,7 +1,11 @@
 #ifndef ISAAC_DRIVER_COMMON_H
 #define ISAAC_DRIVER_COMMON_H
 
-#include <CL/cl.hpp>
+
+#include <CL/cl.h>
+#include <CL/cl_ext.h>
+#include <exception>
+
 #ifdef ISAAC_WITH_CUDA
 #include <cuda.h>
 #include <nvrtc.h>

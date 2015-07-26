@@ -1,3 +1,5 @@
+#include <cstring>
+
 #include "isaac/array.h"
 #include "isaac/backend/parse.h"
 #include "isaac/exception/operation_not_supported.h"

@@ -55,7 +55,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 
   if(interf==clBLAS)
   {
-      cl_command_queue clqueue = queue.handle().cl()();
+      cl_command_queue clqueue = queue.handle().cl();
 
 ////      //Row-major
       RUN_TEST("GEMM(ROW, N, N)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasRowMajor, clblasNoTrans, clblasNoTrans, N, M, K, alpha, CHANDLE(B), OFF(B), LD(B),

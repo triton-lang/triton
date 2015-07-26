@@ -1,5 +1,6 @@
-#include "isaac/driver/buffer.h"
 #include <iostream>
+#include "isaac/driver/buffer.h"
+#include "helpers/ocl/infos.hpp"
 
 namespace isaac
 {
@@ -7,7 +8,7 @@ namespace isaac
 namespace driver
 {
 
-Buffer::Buffer(cl::Buffer const & buffer) : backend_(OPENCL), context_(buffer.getInfo<CL_MEM_CONTEXT>()), h_(backend_)
+Buffer::Buffer(cl_mem buffer) : backend_(OPENCL), context_(ocl::info<CL_MEM_CONTEXT>(buffer)), h_(backend_)
 {
   h_.cl() = buffer;
 }
@@ -24,7 +25,7 @@ Buffer::Buffer(Context const & context, std::size_t size) : backend_(context.bac
 #endif
     case OPENCL:
       cl_int err;
-      h_.cl() = cl::Buffer(context.h_.cl(), CL_MEM_READ_WRITE, size, NULL, &err);
+      h_.cl() = clCreateBuffer(context.h_.cl(), CL_MEM_READ_WRITE, size, NULL, &err);
       ocl::check(err);
       break;
     default:
@@ -41,10 +42,10 @@ bool Buffer::operator==(Buffer const & other) const
 bool Buffer::operator<(Buffer const & other) const
 { return h_<other.h_; }
 
-HANDLE_TYPE(cl::Buffer, CUdeviceptr) & Buffer::handle()
+HANDLE_TYPE(cl_mem, CUdeviceptr) & Buffer::handle()
 { return h_; }
 
-HANDLE_TYPE(cl::Buffer, CUdeviceptr) const & Buffer::handle() const
+HANDLE_TYPE(cl_mem, CUdeviceptr) const & Buffer::handle() const
 { return h_; }
 
 }

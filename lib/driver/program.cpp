@@ -8,6 +8,7 @@
 #ifdef ISAAC_WITH_CUDA
 #include "helpers/cuda/vector.hpp"
 #endif
+#include "helpers/ocl/infos.hpp"
 
 namespace isaac
 {
@@ -95,49 +96,56 @@ Program::Program(Context const & context, std::string const & source) : backend_
 #endif
     case OPENCL:
     {
-      std::vector<cl::Device> devices = context_.h_.cl().getInfo<CL_CONTEXT_DEVICES>();
+      cl_int err;
+      std::vector<cl_device_id> devices = ocl::info<CL_CONTEXT_DEVICES>(context_.h_.cl());
 
       std::string prefix;
-      for(std::vector<cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
-        prefix += it->getInfo<CL_DEVICE_NAME>() + it->getInfo<CL_DEVICE_VENDOR>() + it->getInfo<CL_DEVICE_VERSION>();
+      for(cl_device_id dev: devices)
+        prefix += ocl::info<CL_DEVICE_NAME>(dev) + ocl::info<CL_DEVICE_VENDOR>(dev) + ocl::info<CL_DEVICE_VERSION>(dev);
       std::string sha1 = tools::sha1(prefix + source);
       std::string fname(cache_path + sha1);
 
       //Load cached program
+      const char * build_opt = "";
       if(cache_path.size())
       {
         std::ifstream cached(fname, std::ios::binary);
         if (cached)
         {
           std::size_t len;
-          std::vector<char> buffer;
+          std::vector<unsigned char> buffer;
           cached.read((char*)&len, sizeof(std::size_t));
           buffer.resize(len);
           cached.read((char*)buffer.data(), std::streamsize(len));
-          char* cbuffer = buffer.data();
-          h_.cl() = cl::Program(context_.h_.cl(), devices, cl::Program::Binaries(1, std::make_pair(cbuffer, len)));
-          h_.cl().build();
+          unsigned char* cbuffer = buffer.data();
+          h_.cl() = clCreateProgramWithBinary(context_.h_.cl(), devices.size(), devices.data(), &len, (const unsigned char **)&cbuffer, NULL, &err);
+          ocl::check(err);
+          ocl::check(clBuildProgram(h_.cl(), devices.size(), devices.data(), build_opt, NULL, NULL));
           return;
         }
       }
 
-      h_.cl() = cl::Program(context_.h_.cl(), source);
+      std::size_t srclen = source.size();
+      const char * csrc = source.c_str();
+      h_.cl() = clCreateProgramWithSource(context_.h_.cl(), 1, &csrc, &srclen, &err);
       try{
-        ocl::check(h_.cl().build(devices));
+        ocl::check(clBuildProgram(h_.cl(), devices.size(), devices.data(), build_opt, NULL, NULL));
       }catch(ocl::exception::build_program_failure const & e){
-            for(std::vector< cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
-              std::cout << "Device : " << it->getInfo<CL_DEVICE_NAME>()
-                      << "Build Status = " << h_.cl().getBuildInfo<CL_PROGRAM_BUILD_STATUS>(*it) << std::endl
-                      << "Build Log = " << h_.cl().getBuildInfo<CL_PROGRAM_BUILD_LOG>(*it) << std::endl;
+            for(std::vector<cl_device_id>::const_iterator it = devices.begin(); it != devices.end(); ++it)
+            {
+              std::cout << "Device : " << ocl::info<CL_DEVICE_NAME>(*it)
+                        << "Build Status = " << ocl::info<CL_PROGRAM_BUILD_STATUS>(h_.cl(), *it) << std::endl
+                        << "Build Log = " << ocl::info<CL_PROGRAM_BUILD_LOG>(h_.cl(),*it) << std::endl;
+            }
       }
 
       //Save cached program
       if (cache_path.size())
       {
         std::ofstream cached(fname.c_str(),std::ios::binary);
-        std::vector<std::size_t> sizes = h_.cl().getInfo<CL_PROGRAM_BINARY_SIZES>();
+        std::vector<std::size_t> sizes = ocl::info<CL_PROGRAM_BINARY_SIZES>(h_.cl());
         cached.write((char*)&sizes[0], sizeof(std::size_t));
-        std::vector<char*> binaries = h_.cl().getInfo<CL_PROGRAM_BINARIES>();
+        std::vector<unsigned char*> binaries = ocl::info<CL_PROGRAM_BINARIES>(h_.cl());
         cached.write((char*)binaries[0], std::streamsize(sizes[0]));
       }
       break;

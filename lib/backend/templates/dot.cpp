@@ -1,6 +1,6 @@
+#include <cstring>
 #include <iostream>
 #include "isaac/backend/templates/dot.h"
-#include <CL/cl.hpp>
 #include "isaac/tools/to_string.hpp"
 #include "isaac/tools/make_map.hpp"
 #include "isaac/tools/make_vector.hpp"

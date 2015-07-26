@@ -20,7 +20,9 @@ Kernel::Kernel(Program const & program, const char * name) : backend_(program.ba
       break;
 #endif
     case OPENCL:
-      h_.cl() = cl::Kernel(program.h_.cl(), name);
+      cl_int err;
+      h_.cl() = clCreateKernel(program.h_.cl(), name, &err);
+      ocl::check(err);
       break;
     default:
       throw;
@@ -44,7 +46,7 @@ void Kernel::setArg(unsigned int index, std::size_t size, void* ptr)
       break;
 #endif
     case OPENCL:
-      h_.cl().setArg(index, size, ptr);
+      ocl::check(clSetKernelArg(h_.cl(), index, size, ptr));
       break;
     default:
       throw;
@@ -61,7 +63,9 @@ void Kernel::setArg(unsigned int index, Buffer const & data)
       setArg(index, sizeof(CUdeviceptr), data.h_.cu.get()); break;
     }
 #endif
-    case OPENCL: h_.cl().setArg(index, data.h_.cl()); break;
+    case OPENCL:
+      ocl::check(clSetKernelArg(h_.cl(), index, sizeof(cl_mem), (void*)&data.h_.cl()));
+      break;
     default: throw;
   }
 }
@@ -81,12 +85,12 @@ void Kernel::setSizeArg(unsigned int index, size_t N)
     case OPENCL:
       if(address_bits_==32){
         int32_t NN = N;
-        h_.cl().setArg(index, 4, &NN);
+        ocl::check(clSetKernelArg(h_.cl(), index, 4, &NN));
       }
       else if(address_bits_==64)
       {
         int64_t NN = N;
-        h_.cl().setArg(index, 8, &NN);
+        ocl::check(clSetKernelArg(h_.cl(), index, 8, &NN));
       }
       else
         throw;
