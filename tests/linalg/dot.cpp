@@ -16,7 +16,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
   isc::driver::Context const & ctx = x.context();
   int_t N = cx.size();
   isc::driver::CommandQueue queue = isc::driver::queues[ctx][0];
-  cl_command_queue clqueue = queue.handle().cl()();
+  cl_command_queue clqueue = queue.handle().cl();
   isc::array scratch(N, x.dtype());
 
   unsigned int failure_count = 0;

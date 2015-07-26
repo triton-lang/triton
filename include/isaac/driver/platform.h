@@ -1,6 +1,9 @@
 #ifndef ISAAC_DRIVER_PLATFORM_H
 #define ISAAC_DRIVER_PLATFORM_H
 
+#include <vector>
+#include <string>
+
 #include "isaac/defines.h"
 #include "isaac/driver/common.h"
 
@@ -19,15 +22,13 @@ public:
 #ifdef ISAAC_WITH_CUDA
   Platform(backend_type);
 #endif
-  Platform(cl::Platform const &);
+  Platform(cl_platform_id const &);
   std::string name() const;
   std::string version() const;
-  std::vector<Device> devices() const;
-  static std::vector<Platform> get();
-
+  void devices(std::vector<Device> &) const;
 private:
   backend_type backend_;
-  cl::Platform cl_platform_;
+  cl_platform_id cl_platform_;
 };
 
 }

@@ -16,17 +16,16 @@ class ISAACAPI Event
 {
   friend class CommandQueue;
 public:
-  Event(cl::Event const & event);
+  Event(cl_event const & event);
   Event(backend_type backend);
   long elapsed_time() const;
-  operator cl::Event();
-
+  HANDLE_TYPE(cl_event, cu_event_t)& handle();
 private:
   backend_type backend_;
 #ifdef ISAAC_WITH_CUDA
   typedef std::pair<CUevent, CUevent> cu_event_t;
 #endif
-  HANDLE_TYPE(cl::Event, cu_event_t) h_;
+  HANDLE_TYPE(cl_event, cu_event_t) h_;
 };
 
 }

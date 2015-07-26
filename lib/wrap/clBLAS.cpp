@@ -1,5 +1,3 @@
-#include "CL/cl.hpp"
-
 #include "isaac/wrap/clBLAS.h"
 #include "isaac/array.h"
 #include "isaac/symbolic/execute.h"
@@ -26,18 +24,17 @@ extern "C"
     {
         std::vector<is::driver::Event> waitlist;
         for(cl_uint i = 0 ; i < numEventsInWaitList ; ++i)
-            waitlist.push_back(cl::Event(eventWaitList[i]));
+            waitlist.push_back(eventWaitList[i]);
         for(cl_uint i = 0 ; i < numCommandQueues ; ++i)
         {
             std::list<is::driver::Event> levents;
-			cl::CommandQueue queuepp(commandQueues[i]);
-            is::driver::CommandQueue queue(queuepp);
+            is::driver::CommandQueue queue(commandQueues[i]);
             clRetainCommandQueue(commandQueues[i]);
             is::execution_options_type options(queue, &levents, &waitlist);
             is::execute(is::control(operation, options), is::models(options.queue(context)));
             if(events)
             {
-                events[i] = static_cast<cl::Event>(levents.front())();
+                events[i] = levents.front().handle().cl();
                 clRetainEvent(events[i]);
             }
         }
@@ -57,9 +54,9 @@ extern "C"
                             cl_uint numEventsInWaitList, const cl_event *eventWaitList, \
                             cl_event *events) \
     { \
-        is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx); \
+        is::array x(N, TYPE_ISAAC, mx, offx, incx); \
         clRetainMemObject(mx); \
-        is::array y(N, TYPE_ISAAC, cl::Buffer(my), offy, incy); \
+        is::array y(N, TYPE_ISAAC, my, offy, incy); \
         clRetainMemObject(my); \
         execute(is::assign(y, alpha*x + y), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
@@ -75,7 +72,7 @@ extern "C"
                              cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
+        is::array x(N, TYPE_ISAAC, mx, offx, incx);\
         clRetainMemObject(mx);\
         execute(is::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
@@ -92,9 +89,9 @@ extern "C"
                              cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        const is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
+        const is::array x(N, TYPE_ISAAC, mx, offx, incx);\
         clRetainMemObject(mx);\
-        is::array y(N, TYPE_ISAAC, cl::Buffer(my), offy, incy);\
+        is::array y(N, TYPE_ISAAC, my, offy, incy);\
         clRetainMemObject(my);\
         execute(is::assign(y, x), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
@@ -112,11 +109,11 @@ extern "C"
                cl_command_queue *commandQueues, cl_uint numEventsInWaitList, \
                const cl_event *eventWaitList, cl_event *events) \
     { \
-        is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx); \
+        is::array x(N, TYPE_ISAAC, mx, offx, incx); \
         clRetainMemObject(mx); \
-        is::array y(N, TYPE_ISAAC, cl::Buffer(my), offy, incy); \
+        is::array y(N, TYPE_ISAAC, my, offy, incy); \
         clRetainMemObject(my); \
-        is::scalar s(TYPE_ISAAC, cl::Buffer(dotProduct), offDP); \
+        is::scalar s(TYPE_ISAAC, dotProduct, offDP); \
         clRetainMemObject(dotProduct); \
         execute(is::assign(s, dot(x,y)), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
@@ -132,9 +129,9 @@ extern "C"
                              cl_mem /*scratchBuff*/, cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
+        is::array x(N, TYPE_ISAAC, mx, offx, incx);\
         clRetainMemObject(mx);\
-        is::scalar s(TYPE_ISAAC, cl::Buffer(asum), offAsum);\
+        is::scalar s(TYPE_ISAAC, asum, offAsum);\
         clRetainMemObject(asum);\
         execute(is::assign(s, sum(abs(x))), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
@@ -159,14 +156,14 @@ extern "C"
             std::swap(M, N);\
             transA = (transA==clblasTrans)?clblasNoTrans:clblasTrans;\
         }\
-        is::array A(M, N, TYPE_ISAAC, cl::Buffer(mA), offA, lda);\
+        is::array A(M, N, TYPE_ISAAC, mA, offA, lda);\
         clRetainMemObject(mA);\
         \
         is::int_t sx = N, sy = M;\
         if(transA) std::swap(sx, sy);\
-        is::array x(sx, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
+        is::array x(sx, TYPE_ISAAC, mx, offx, incx);\
         clRetainMemObject(mx);\
-        is::array y(sy, TYPE_ISAAC, cl::Buffer(my), offy, incy);\
+        is::array y(sy, TYPE_ISAAC, my, offy, incy);\
         clRetainMemObject(my);\
         \
         is::driver::Context const & context = A.context();\
@@ -207,11 +204,11 @@ extern "C"
         if(transA==clblasTrans) std::swap(As1, As2);\
         if(transB==clblasTrans) std::swap(Bs1, Bs2);\
         /*Struct*/\
-        is::array A(As1, As2, TYPE_ISAAC, cl::Buffer(mA), offA, lda);\
+        is::array A(As1, As2, TYPE_ISAAC, mA, offA, lda);\
         clRetainMemObject(mA);\
-        is::array B(Bs1, Bs2, TYPE_ISAAC, cl::Buffer(mB), offB, ldb);\
+        is::array B(Bs1, Bs2, TYPE_ISAAC, mB, offB, ldb);\
         clRetainMemObject(mB);\
-        is::array C(M, N, TYPE_ISAAC, cl::Buffer(mC), offC, ldc);\
+        is::array C(M, N, TYPE_ISAAC, mC, offC, ldc);\
         clRetainMemObject(mC);\
         is::driver::Context const & context = C.context();\
         /*Operation*/\

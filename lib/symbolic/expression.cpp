@@ -2,7 +2,6 @@
 #include <vector>
 #include "isaac/array.h"
 #include "isaac/value_scalar.h"
-#include <CL/cl.hpp>
 #include "isaac/symbolic/expression.h"
 #include "isaac/symbolic/preset.h"
 

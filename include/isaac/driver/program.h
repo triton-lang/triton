@@ -24,7 +24,7 @@ private:
   backend_type backend_;
   Context context_;
   std::string source_;
-  HANDLE_TYPE(cl::Program, CUmodule) h_;
+  HANDLE_TYPE(cl_program, CUmodule) h_;
 };
 
 }

@@ -34,7 +34,7 @@ private:
   std::vector<std::shared_ptr<void> >  cu_params_store_;
   std::vector<void*>  cu_params_;
 #endif
-  HANDLE_TYPE(cl::Kernel, CUfunction) h_;
+  HANDLE_TYPE(cl_kernel, CUfunction) h_;
 };
 
 }

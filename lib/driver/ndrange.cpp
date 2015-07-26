@@ -13,9 +13,9 @@ NDRange::NDRange(size_t size0, size_t size1, size_t size2)
     sizes_[2] = size2;
 }
 
-NDRange::operator cl::NDRange() const
+size_t NDRange::dimension() const
 {
-  return cl::NDRange(sizes_[0], sizes_[1], sizes_[2]);
+ return (int)(sizes_[0]>1) + (int)(sizes_[1]>1) + (int)(sizes_[2]>1);
 }
 
 NDRange::operator const size_t*() const

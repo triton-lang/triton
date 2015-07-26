@@ -55,7 +55,7 @@ bool Handle<CLType, CUType>::operator==(Handle const & other) const
     return cu()==other.cu();
 #endif
   if(backend_==OPENCL && other.backend_==OPENCL)
-    return cl()()==other.cl()();
+    return cl()==other.cl();
   return false;
 }
 
@@ -67,7 +67,7 @@ bool Handle<CLType, CUType>::operator<(Handle const & other) const
     return (*cu_)<(*other.cu_);
 #endif
   if(backend_==OPENCL && other.backend_==OPENCL)
-    return (*cl_)()<(*other.cl_)();
+    return (*cl_)<(*other.cl_);
 #ifdef ISAAC_WITH_CUDA
   if(backend_==CUDA && other.backend_==OPENCL)
     return true;
@@ -105,21 +105,21 @@ CUType &  Handle<CLType, CUType>::cu()
     return *cu_;
 }
 
-template class Handle<cl::Buffer, CUdeviceptr>;
-template class Handle<cl::CommandQueue, CUstream>;
-template class Handle<cl::Context, CUcontext>;
-template class Handle<cl::Device, CUdevice>;
-template class Handle<cl::Event, std::pair<CUevent, CUevent> >;
-template class Handle<cl::Kernel, CUfunction>;
-template class Handle<cl::Program, CUmodule>;
+template class Handle<cl_mem, CUdeviceptr>;
+template class Handle<cl_command_queue, CUstream>;
+template class Handle<cl_context, CUcontext>;
+template class Handle<cl_device_id, CUdevice>;
+template class Handle<cl_event, std::pair<CUevent, CUevent> >;
+template class Handle<cl_kernel, CUfunction>;
+template class Handle<cl_program, CUmodule>;
 #else
-template class Handle<cl::Buffer, void>;
-template class Handle<cl::CommandQueue, void>;
-template class Handle<cl::Context, void>;
-template class Handle<cl::Device, void>;
-template class Handle<cl::Event, void>;
-template class Handle<cl::Kernel, void>;
-template class Handle<cl::Program, void>;
+template class Handle<cl_mem, void>;
+template class Handle<cl_command_queue, void>;
+template class Handle<cl_context, void>;
+template class Handle<cl_device_id, void>;
+template class Handle<cl_event, void>;
+template class Handle<cl_kernel, void>;
+template class Handle<cl_program, void>;
 #endif
 
 

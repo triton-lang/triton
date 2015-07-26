@@ -37,7 +37,7 @@ public:
 #ifdef ISAAC_WITH_CUDA
   Device(int ordinal);
 #endif
-  Device(cl::Device const & device);
+  Device(cl_device_id const & device);
   backend_type backend() const;
   size_t clock_rate() const;
   unsigned int address_bits() const;
@@ -56,7 +56,7 @@ public:
 
 private:
   backend_type backend_;
-  HANDLE_TYPE(cl::Device, CUdevice) h_;
+  HANDLE_TYPE(cl_device_id, CUdevice) h_;
 };
 
 }

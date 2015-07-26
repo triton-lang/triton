@@ -1,5 +1,6 @@
-#include "isaac/driver/context.h"
 #include <iostream>
+#include "isaac/driver/context.h"
+#include "helpers/ocl/infos.hpp"
 
 namespace isaac
 {
@@ -7,7 +8,7 @@ namespace isaac
 namespace driver
 {
 
-Context::Context(cl::Context const & context) : backend_(OPENCL), device_(context.getInfo<CL_CONTEXT_DEVICES>()[0]), h_(backend_)
+Context::Context(cl_context const & context) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0]), h_(backend_)
 {
     h_.cl() = context;
 }
@@ -30,7 +31,7 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
 #endif
     case OPENCL:
       cl_int err;
-      h_.cl() = cl::Context(std::vector<cl::Device>(1, device_.h_.cl()), NULL, NULL, NULL, &err);
+      h_.cl() = clCreateContext(NULL, 1, &device_.h_.cl(), NULL, NULL, &err);
       ocl::check(err);
       break;
     default:

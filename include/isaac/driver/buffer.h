@@ -19,17 +19,17 @@ class ISAACAPI Buffer
   friend class CommandQueue;
   friend class Kernel;
 public:
-  Buffer(cl::Buffer const & Buffer);
+  Buffer(cl_mem Buffer);
   Buffer(Context const & context, std::size_t size);
   Context const & context() const;
   bool operator<(Buffer const &) const;
   bool operator==(Buffer const &) const;
-  HANDLE_TYPE(cl::Buffer, CUdeviceptr)&  handle();
-  HANDLE_TYPE(cl::Buffer, CUdeviceptr) const &  handle() const;
+  HANDLE_TYPE(cl_mem, CUdeviceptr)&  handle();
+  HANDLE_TYPE(cl_mem, CUdeviceptr) const &  handle() const;
 private:
   backend_type backend_;
   Context context_;
-  HANDLE_TYPE(cl::Buffer, CUdeviceptr) h_;
+  HANDLE_TYPE(cl_mem, CUdeviceptr) h_;
 };
 
 }

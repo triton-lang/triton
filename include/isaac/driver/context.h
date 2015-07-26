@@ -21,7 +21,7 @@ class ISAACAPI Context
   friend class Buffer;
 
 public:
-  explicit Context(cl::Context const & context);
+  explicit Context(cl_context const & context);
   explicit Context(Device const & device);
   backend_type backend() const;
   Device const & device() const;
@@ -32,7 +32,7 @@ private:
   Device device_;
 
   std::string cache_path_;
-  HANDLE_TYPE(cl::Context, CUcontext) h_;
+  HANDLE_TYPE(cl_context, CUcontext) h_;
 };
 
 }

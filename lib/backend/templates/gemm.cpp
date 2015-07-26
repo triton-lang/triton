@@ -1,3 +1,4 @@
+#include <cstring>
 #include "isaac/array.h"
 #include "isaac/backend/templates/gemm.h"
 #include "isaac/backend/keywords.h"

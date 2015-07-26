@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include "isaac/types.h"
 #include "isaac/array.h"
-#include <CL/cl.hpp>
 #include "isaac/model/model.h"
 #include "isaac/symbolic/expression.h"
 #include "isaac/symbolic/preset.h"
