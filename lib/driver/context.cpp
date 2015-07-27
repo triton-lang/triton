@@ -8,12 +8,12 @@ namespace isaac
 namespace driver
 {
 
-Context::Context(cl_context const & context) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0]), h_(backend_)
+Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], take_ownership), h_(backend_, take_ownership)
 {
     h_.cl() = context;
 }
 
-Context::Context(Device const & device) : backend_(device.backend_), device_(device), h_(backend_)
+Context::Context(Device const & device) : backend_(device.backend_), device_(device), h_(backend_, device.h_.has_ownership())
 {
 #ifndef ANDROID
   if (std::getenv("ISAAC_CACHE_PATH"))

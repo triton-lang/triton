@@ -7,7 +7,7 @@ namespace isaac
 namespace driver
 {
 
-Event::Event(backend_type backend) : backend_(backend), h_(backend_)
+Event::Event(backend_type backend) : backend_(backend), h_(backend_, true)
 {
   switch(backend_)
   {
@@ -22,7 +22,7 @@ Event::Event(backend_type backend) : backend_(backend), h_(backend_)
   }
 }
 
-Event::Event(cl_event const & event) : backend_(OPENCL), h_(backend_)
+Event::Event(cl_event const & event, bool take_ownership) : backend_(OPENCL), h_(backend_, take_ownership)
 {
   h_.cl() = event;
 }

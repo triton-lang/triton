@@ -8,12 +8,12 @@ namespace isaac
 namespace driver
 {
 
-Buffer::Buffer(cl_mem buffer) : backend_(OPENCL), context_(ocl::info<CL_MEM_CONTEXT>(buffer)), h_(backend_)
+Buffer::Buffer(cl_mem buffer, bool take_ownership) : backend_(OPENCL), context_(ocl::info<CL_MEM_CONTEXT>(buffer), take_ownership), h_(backend_, take_ownership)
 {
   h_.cl() = buffer;
 }
 
-Buffer::Buffer(Context const & context, std::size_t size) : backend_(context.backend_), context_(context), h_(backend_)
+Buffer::Buffer(Context const & context, std::size_t size) : backend_(context.backend_), context_(context), h_(backend_, context.h_.has_ownership())
 
 {
   switch(backend_)

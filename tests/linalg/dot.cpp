@@ -45,11 +45,11 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
     cout << endl;
 
 #define PREFIX "[C]"
-//  RUN_TEST("DOT", cs+=cx[i]*cy[i], 0, cs, BLAS<T>::F(clblasSdot, clblasDdot)(N, CHANDLE(ds), 0, CHANDLE(x), x.start()[0], x.stride()[0],
-//                                                                                 CHANDLE(y), y.start()[0], y.stride()[0],
-//                                                                                 CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
-//  RUN_TEST("ASUM", cs+=std::fabs(cx[i]), 0, cs, BLAS<T>::F(clblasSasum, clblasDasum)(N, CHANDLE(ds), 0, CHANDLE(x), x.start()[0], x.stride()[0],
-//                                                                                             CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
+  RUN_TEST("DOT", cs+=cx[i]*cy[i], 0, cs, BLAS<T>::F(clblasSdot, clblasDdot)(N, CHANDLE(ds), 0, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                 CHANDLE(y), y.start()[0], y.stride()[0],
+                                                                                 CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
+  RUN_TEST("ASUM", cs+=std::fabs(cx[i]), 0, cs, BLAS<T>::F(clblasSasum, clblasDasum)(N, CHANDLE(ds), 0, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                             CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
 #undef PREFIX
 #define PREFIX "[C++]"
 

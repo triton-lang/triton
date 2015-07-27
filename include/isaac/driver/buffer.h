@@ -19,7 +19,7 @@ class ISAACAPI Buffer
   friend class CommandQueue;
   friend class Kernel;
 public:
-  Buffer(cl_mem Buffer);
+  Buffer(cl_mem Buffer, bool take_ownership = true);
   Buffer(Context const & context, std::size_t size);
   Context const & context() const;
   bool operator<(Buffer const &) const;

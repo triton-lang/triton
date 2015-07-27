@@ -21,7 +21,7 @@ class ISAACAPI Context
   friend class Buffer;
 
 public:
-  explicit Context(cl_context const & context);
+  explicit Context(cl_context const & context, bool take_ownership = true);
   explicit Context(Device const & device);
   backend_type backend() const;
   Device const & device() const;

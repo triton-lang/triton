@@ -57,7 +57,7 @@ template<class CLType, class CUType>
 void Handle<CLType, CUType>::release(cl_program x) { ocl::check(clReleaseProgram(x)); }
 
 template<class CLType, class CUType>
-Handle<CLType, CUType>::Handle(backend_type backend): backend_(backend)
+Handle<CLType, CUType>::Handle(backend_type backend, bool take_ownership): backend_(backend), has_ownership_(take_ownership)
 {
   switch(backend_)
   {
@@ -100,10 +100,10 @@ template<class CLType, class CUType>
 Handle<CLType, CUType>::~Handle()
 {
 #ifdef ISAAC_WITH_CUDA
-  if(cu_ && cu_.unique())
+  if(has_ownership_ && cu_ && cu_.unique())
     _delete(*cu_);
 #endif
-  if(cl_ && cl_.unique())
+  if(has_ownership_ && cl_ && cl_.unique())
      release(*cl_);
 }
 
@@ -114,6 +114,10 @@ CLType &  Handle<CLType, CUType>::cl()
 template<class CLType, class CUType>
 CLType const &  Handle<CLType, CUType>::cl() const
 { return *cl_; }
+
+template<class CLType, class CUType>
+bool Handle<CLType,CUType>::has_ownership() const
+{ return has_ownership_; }
 
 #ifdef ISAAC_WITH_CUDA
 template<class CLType, class CUType>
