@@ -104,7 +104,6 @@ Program::Program(Context const & context, std::string const & source) : backend_
         prefix += ocl::info<CL_DEVICE_NAME>(dev) + ocl::info<CL_DEVICE_VENDOR>(dev) + ocl::info<CL_DEVICE_VERSION>(dev);
       std::string sha1 = tools::sha1(prefix + source);
       std::string fname(cache_path + sha1);
-
       //Load cached program
       std::string build_opt;
       if(cache_path.size())

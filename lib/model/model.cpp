@@ -65,6 +65,7 @@ driver::Program& model::init(controller<expressions_tuple> const & expressions)
   else
     pname = expressions.compilation_options().program_name;
 
+
   std::shared_ptr<driver::Program> & program = programs_[context][pname];
   if(!program)
   {
@@ -79,8 +80,6 @@ driver::Program& model::init(controller<expressions_tuple> const & expressions)
       srcs += templates_[i]->generate(buffer, expressions.x(), device);
     }
     srcs += fallback_->generate("fallback", expressions.x(), device);
-
-
     program.reset(new driver::Program(context, all_extensions + srcs));
   }
   return *program;
