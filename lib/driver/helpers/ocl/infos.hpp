@@ -336,6 +336,16 @@ typename detail::return_type<cl_program, param>::Result info(cl_program const & 
     return detail::get_info_impl<res_t>()(handle,param);
 }
 
+template<>
+inline typename detail::return_type<cl_program, CL_PROGRAM_BINARIES>::Result info<CL_PROGRAM_BINARIES>(cl_program const & handle)
+{
+    std::vector<unsigned char *> res;
+    std::vector<size_t> sizes = info<CL_PROGRAM_BINARY_SIZES>(handle);
+    for(unsigned int s: sizes)
+        res.push_back(new unsigned char[s]);
+    return res;
+}
+
 template<cl_program_build_info param>
 typename detail::return_type<cl_program, param>::Result info(cl_program const & phandle, cl_device_id const & dhandle){
     typedef typename detail::return_type<cl_program, param>::Result res_t;
@@ -387,6 +397,8 @@ template<class OCL_TYPE, typename detail::info<OCL_TYPE>::type param>
 typename detail::return_type<OCL_TYPE, param>::Result info(OCL_TYPE const & handle){
     return info(handle.get());
 }
+
+
 
 template<class OCL_TYPE, class OCL_TYPE_ARG, typename detail::info<OCL_TYPE>::type param>
 typename detail::return_type<OCL_TYPE, param>::Result info(OCL_TYPE const & handle, OCL_TYPE_ARG const & arg_handle){

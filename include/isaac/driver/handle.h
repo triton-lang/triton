@@ -34,6 +34,14 @@ private:
   static void _delete(std::pair<CUevent, CUevent> x);
 #endif
 
+  static void release(cl_context x);
+  static void release(cl_mem x);
+  static void release(cl_command_queue x);
+  static void release(cl_device_id x);
+  static void release(cl_event x);
+  static void release(cl_kernel x);
+  static void release(cl_program x);
+
 public:
   Handle(backend_type backend);
   bool operator==(Handle const & other) const;

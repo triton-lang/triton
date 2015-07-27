@@ -36,6 +36,27 @@ void Handle<CLType, CUType>::_delete(std::pair<CUevent, CUevent> x) { _delete(x.
 #endif
 
 template<class CLType, class CUType>
+void Handle<CLType, CUType>::release(cl_context x) { ocl::check(clReleaseContext(x)); }
+
+template<class CLType, class CUType>
+void Handle<CLType, CUType>::release(cl_mem x) { ocl::check(clReleaseMemObject(x)); }
+
+template<class CLType, class CUType>
+void Handle<CLType, CUType>::release(cl_command_queue x) { ocl::check(clReleaseCommandQueue(x)); }
+
+template<class CLType, class CUType>
+void Handle<CLType, CUType>::release(cl_device_id x) { ocl::check(clReleaseDevice(x)); }
+
+template<class CLType, class CUType>
+void Handle<CLType, CUType>::release(cl_event x) { ocl::check(clReleaseEvent(x)); }
+
+template<class CLType, class CUType>
+void Handle<CLType, CUType>::release(cl_kernel x) { ocl::check(clReleaseKernel(x)); }
+
+template<class CLType, class CUType>
+void Handle<CLType, CUType>::release(cl_program x) { ocl::check(clReleaseProgram(x)); }
+
+template<class CLType, class CUType>
 Handle<CLType, CUType>::Handle(backend_type backend): backend_(backend)
 {
   switch(backend_)
@@ -78,16 +99,12 @@ bool Handle<CLType, CUType>::operator<(Handle const & other) const
 template<class CLType, class CUType>
 Handle<CLType, CUType>::~Handle()
 {
-  if(cu_ && cu_.unique())
-  {
-    switch(backend_)
-    {
 #ifdef ISAAC_WITH_CUDA
-      case CUDA: _delete(*cu_); break;
+  if(cu_ && cu_.unique())
+    _delete(*cu_);
 #endif
-      default: break;
-    }
-  }
+  if(cl_ && cl_.unique())
+     release(*cl_);
 }
 
 template<class CLType, class CUType>
