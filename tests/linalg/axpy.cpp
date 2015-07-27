@@ -148,8 +148,11 @@ int main()
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
     test_impl<float>(1e-4, elem.first);
-    std::cout << ">> double" << std::endl;
-    test_impl<double>(1e-9, elem.first);
+    if(device.fp64_support())
+    {
+        std::cout << ">> double" << std::endl;
+        test_impl<double>(1e-9, elem.first);
+    }
     std::cout << "---" << std::endl;
   }
   clblasTeardown();

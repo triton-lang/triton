@@ -106,7 +106,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
       std::string fname(cache_path + sha1);
 
       //Load cached program
-      const char * build_opt = "";
+      std::string build_opt;
       if(cache_path.size())
       {
         std::ifstream cached(fname, std::ios::binary);
@@ -120,7 +120,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
           char* cbuffer = buffer.data();
           h_.cl() = clCreateProgramWithBinary(context_.h_.cl(), devices.size(), devices.data(), &len, (const unsigned char **)&cbuffer, NULL, &err);
           ocl::check(err);
-          ocl::check(clBuildProgram(h_.cl(), devices.size(), devices.data(), build_opt, NULL, NULL));
+          ocl::check(clBuildProgram(h_.cl(), devices.size(), devices.data(), build_opt.c_str(), NULL, NULL));
           return;
         }
       }
@@ -129,7 +129,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
       const char * csrc = source.c_str();
       h_.cl() = clCreateProgramWithSource(context_.h_.cl(), 1, &csrc, &srclen, &err);
       try{
-        ocl::check(clBuildProgram(h_.cl(), devices.size(), devices.data(), build_opt, NULL, NULL));
+        ocl::check(clBuildProgram(h_.cl(), devices.size(), devices.data(), build_opt.c_str(), NULL, NULL));
       }catch(ocl::exception::build_program_failure const & e){
             for(std::vector<cl_device_id>::const_iterator it = devices.begin(); it != devices.end(); ++it)
             {
