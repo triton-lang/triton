@@ -107,23 +107,23 @@ Program::Program(Context const & context, std::string const & source) : backend_
 
       //Load cached program
       const char * build_opt = "";
-//      if(cache_path.size())
-//      {
-//        std::ifstream cached(fname, std::ios::binary);
-//        if (cached)
-//        {
-//          std::size_t len;
-//          std::vector<char> buffer;
-//          cached.read((char*)&len, sizeof(std::size_t));
-//          buffer.resize(len);
-//          cached.read((char*)buffer.data(), std::streamsize(len));
-//          char* cbuffer = buffer.data();
-//          h_.cl() = clCreateProgramWithBinary(context_.h_.cl(), devices.size(), devices.data(), &len, (const unsigned char **)&cbuffer, NULL, &err);
-//          ocl::check(err);
-//          ocl::check(clBuildProgram(h_.cl(), devices.size(), devices.data(), build_opt, NULL, NULL));
-//          return;
-//        }
-//      }
+      if(cache_path.size())
+      {
+        std::ifstream cached(fname, std::ios::binary);
+        if (cached)
+        {
+          std::size_t len;
+          std::vector<char> buffer;
+          cached.read((char*)&len, sizeof(std::size_t));
+          buffer.resize(len);
+          cached.read((char*)buffer.data(), std::streamsize(len));
+          char* cbuffer = buffer.data();
+          h_.cl() = clCreateProgramWithBinary(context_.h_.cl(), devices.size(), devices.data(), &len, (const unsigned char **)&cbuffer, NULL, &err);
+          ocl::check(err);
+          ocl::check(clBuildProgram(h_.cl(), devices.size(), devices.data(), build_opt, NULL, NULL));
+          return;
+        }
+      }
 
       std::size_t srclen = source.size();
       const char * csrc = source.c_str();
@@ -147,6 +147,8 @@ Program::Program(Context const & context, std::string const & source) : backend_
         cached.write((char*)&sizes[0], sizeof(std::size_t));
         std::vector<unsigned char*> binaries = ocl::info<CL_PROGRAM_BINARIES>(h_.cl());
         cached.write((char*)binaries[0], std::streamsize(sizes[0]));
+        for(unsigned char * ptr: binaries)
+            delete[] ptr;
       }
       break;
     }
