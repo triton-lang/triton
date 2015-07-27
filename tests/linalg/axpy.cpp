@@ -144,6 +144,8 @@ int main()
   for(const auto & elem : data)
   {
     isc::driver::Device device = elem.second[0].device();
+    if(device.type() != isc::driver::DEVICE_TYPE_GPU)
+        continue;
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;

@@ -73,7 +73,9 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   else
   {
       TEST_OPERATION("y = A.x", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x), y, bufy, cy);
+      TEST_OPERATION("y = sum(A,1)", M, N, yi+=cA(i,j), cy[i] = yi, y = sum(A,1), y, bufy, cy);
       TEST_OPERATION("x = A'.y", N, M, xi+=cA(j,i)*cy[j], cx[i] = xi, x = dot(trans(A),y), x, bufx, cx);
+      TEST_OPERATION("x = sum(A,0)", N, M, xi+=cA(j,i), cx[i] = xi, x = sum(A,0), x, bufx, cx);
   }
 
   if(failure_count>0)

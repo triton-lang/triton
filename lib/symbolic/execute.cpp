@@ -85,7 +85,6 @@ namespace isaac
                 else if(left == AXPY_TYPE || right == AXPY_TYPE) return op.type==OPERATOR_OUTER_PROD_TYPE?GER_TYPE:AXPY_TYPE;
                 else if(left == GER_TYPE || right == GER_TYPE) return GER_TYPE;
                 else if(is_mmprod(left) || is_mmprod(right)) return GER_TYPE;
-                std::cout << left << " " << right << std::endl;
                 throw;
             case OPERATOR_VECTOR_DOT_TYPE_FAMILY:
                 return DOT_TYPE;
