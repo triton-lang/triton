@@ -144,6 +144,39 @@ std::string Device::extensions() const
   }
 }
 
+std::pair<unsigned int, unsigned int> Device::nv_compute_capability() const
+{
+  switch(backend_)
+  {
+      case OPENCL:
+          return std::pair<unsigned int, unsigned int>(ocl::info<CL_DEVICE_COMPUTE_CAPABILITY_MAJOR_NV>(h_.cl()), ocl::info<CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV>(h_.cl()));
+#ifdef ISAAC_WITH_CUDA
+      case CUDA:
+          return std::pair<unsigned int, unsigned int>(cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(), cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>());
+#endif
+      default:
+          throw;
+  }
+}
+
+bool Device::fp64_support() const
+{
+  switch(backend_)
+  {
+    case OPENCL:
+      return ocl::info<CL_DEVICE_DOUBLE_FP_CONFIG>(h_.cl());
+
+#ifdef ISAAC_WITH_CUDA
+    case CUDA:
+      return true;
+#endif
+
+    default:
+      throw;
+  }
+}
+
+
 #ifdef ISAAC_WITH_CUDA
     #define CUDACASE(CUNAME) case CUDA: return cuGetInfo<CUNAME>();
 #else
@@ -166,24 +199,6 @@ WRAP_ATTRIBUTE(size_t, max_work_group_size, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_
 WRAP_ATTRIBUTE(size_t, local_mem_size, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, CL_DEVICE_LOCAL_MEM_SIZE)
 WRAP_ATTRIBUTE(size_t, warp_wavefront_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, CL_DEVICE_WAVEFRONT_WIDTH_AMD)
 WRAP_ATTRIBUTE(size_t, clock_rate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, CL_DEVICE_MAX_CLOCK_FREQUENCY)
-
-
-std::pair<unsigned int, unsigned int> Device::nv_compute_capability() const
-{
-  switch(backend_)
-  {
-      case OPENCL:
-          return std::pair<unsigned int, unsigned int>(ocl::info<CL_DEVICE_COMPUTE_CAPABILITY_MAJOR_NV>(h_.cl()), ocl::info<CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV>(h_.cl()));
-#ifdef ISAAC_WITH_CUDA
-      case CUDA:
-          return std::pair<unsigned int, unsigned int>(cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(), cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>());
-#endif
-      default:
-          throw;
-  }
-
-
-}
 
 
 

@@ -51,7 +51,7 @@ public:
   size_t max_work_group_size() const;
   size_t local_mem_size() const;
   size_t warp_wavefront_size() const;
-
+  bool fp64_support() const;
   std::pair<unsigned int, unsigned int> nv_compute_capability() const;
 
 private:
