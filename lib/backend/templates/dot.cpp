@@ -258,6 +258,8 @@ std::string dot::generate_impl(const char * suffix, expressions_tuple const & ex
   stream.dec_tab();
   stream << "}" << std::endl;
 
+//  std::cout << stream.str() << std::endl;
+
   return stream.str();
 }
 
