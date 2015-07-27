@@ -8,7 +8,7 @@ namespace isaac
 namespace driver
 {
 
-Kernel::Kernel(Program const & program, const char * name) : backend_(program.backend_), address_bits_(program.context().device().address_bits()), h_(backend_, program.h_.has_ownership())
+Kernel::Kernel(Program const & program, const char * name) : backend_(program.backend_), address_bits_(program.context().device().address_bits()), h_(backend_, true)
 {
   switch(backend_)
   {

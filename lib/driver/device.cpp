@@ -18,7 +18,7 @@ int Device::cuGetInfo() const
   return res;
 }
 
-Device::Device(int ordinal, bool take_ownership): backend_(CUDA), h_(backend_, take_ownership)
+Device::Device(int ordinal): backend_(CUDA), h_(backend_, true)
 { cuda::check(cuDeviceGet(h_.cu.get(), ordinal)); }
 
 #endif
