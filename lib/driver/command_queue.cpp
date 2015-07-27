@@ -17,12 +17,12 @@ namespace isaac
 namespace driver
 {
 
-CommandQueue::CommandQueue(cl_command_queue const & queue) : backend_(OPENCL), context_(ocl::info<CL_QUEUE_CONTEXT>(queue)), device_(ocl::info<CL_QUEUE_DEVICE>(queue)), h_(backend_)
+CommandQueue::CommandQueue(cl_command_queue const & queue, bool take_ownership) : backend_(OPENCL), context_(ocl::info<CL_QUEUE_CONTEXT>(queue), take_ownership), device_(ocl::info<CL_QUEUE_DEVICE>(queue), take_ownership), h_(backend_, take_ownership)
 {
   h_.cl() = queue;
 }
 
-CommandQueue::CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties): backend_(device.backend_), context_(context), device_(device), h_(backend_)
+CommandQueue::CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties): backend_(device.backend_), context_(context), device_(device), h_(backend_, context.h_.has_ownership())
 {
   switch(backend_)
   {

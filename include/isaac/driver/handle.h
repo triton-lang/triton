@@ -43,9 +43,10 @@ private:
   static void release(cl_program x);
 
 public:
-  Handle(backend_type backend);
+  Handle(backend_type backend, bool take_ownership = true);
   bool operator==(Handle const & other) const;
   bool operator<(Handle const & other) const;
+  bool has_ownership() const;
   CLType & cl();
   CLType const & cl() const;
 #ifdef ISAAC_WITH_CUDA
@@ -58,6 +59,7 @@ private:
   std::shared_ptr<CUType> cu_;
 private:
   backend_type backend_;
+  bool has_ownership_;
 };
 
 }

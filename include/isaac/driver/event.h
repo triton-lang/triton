@@ -16,7 +16,7 @@ class ISAACAPI Event
 {
   friend class CommandQueue;
 public:
-  Event(cl_event const & event);
+  Event(cl_event const & event, bool take_ownership = true);
   Event(backend_type backend);
   long elapsed_time() const;
   HANDLE_TYPE(cl_event, cu_event_t)& handle();

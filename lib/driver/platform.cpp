@@ -11,7 +11,7 @@ namespace driver
 {
 
 #ifdef ISAAC_WITH_CUDA
-Platform::Platform(backend_type backend): backend_(backend){}
+Platform::Platform(backend_type backend): backend_(backend, take_ownership){}
 #endif
 
 Platform::Platform(cl_platform_id const & platform) : backend_(OPENCL)

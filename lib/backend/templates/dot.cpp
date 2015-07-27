@@ -338,6 +338,7 @@ void dot::enqueue(driver::CommandQueue & queue, driver::Program & program, const
       kernel.setArg(n_arg++, tmp_[i]);
       i++;
     }
+
     set_arguments(expressions, kernel, n_arg);
   }
 

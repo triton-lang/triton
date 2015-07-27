@@ -23,7 +23,7 @@ class Buffer;
 class ISAACAPI CommandQueue
 {
 public:
-  CommandQueue(cl_command_queue const & queue);
+  CommandQueue(cl_command_queue const & queue, bool take_ownership = true);
   CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties = 0);
   Context const & context() const;
   Device const & device() const;

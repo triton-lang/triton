@@ -37,7 +37,7 @@ public:
 #ifdef ISAAC_WITH_CUDA
   Device(int ordinal);
 #endif
-  Device(cl_device_id const & device);
+  Device(cl_device_id const & device, bool take_ownership = true);
   backend_type backend() const;
   size_t clock_rate() const;
   unsigned int address_bits() const;

@@ -18,13 +18,13 @@ int Device::cuGetInfo() const
   return res;
 }
 
-Device::Device(int ordinal): backend_(CUDA), h_(backend_)
+Device::Device(int ordinal, bool take_ownership): backend_(CUDA), h_(backend_, take_ownership)
 { cuda::check(cuDeviceGet(h_.cu.get(), ordinal)); }
 
 #endif
 
 
-Device::Device(cl_device_id const & device) : backend_(OPENCL), h_(backend_)
+Device::Device(cl_device_id const & device, bool take_ownership) : backend_(OPENCL), h_(backend_, take_ownership)
 { h_.cl() = device; }
 
 backend_type Device::backend() const
