@@ -21,7 +21,7 @@ Context::Context(cl_context const & context, bool take_ownership) : backend_(OPE
 
 }
 
-Context::Context(Device const & device) : backend_(device.backend_), device_(device), h_(backend_, device.h_.has_ownership())
+Context::Context(Device const & device) : backend_(device.backend_), device_(device), h_(backend_, true)
 {
 #ifndef ANDROID
   if (std::getenv("ISAAC_CACHE_PATH"))

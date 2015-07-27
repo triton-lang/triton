@@ -16,7 +16,7 @@ namespace isaac
 namespace driver
 {
 
-Program::Program(Context const & context, std::string const & source) : backend_(context.backend_), context_(context), source_(source), h_(backend_, context.h_.has_ownership())
+Program::Program(Context const & context, std::string const & source) : backend_(context.backend_), context_(context), source_(source), h_(backend_, true)
 {
 //  std::cout << source << std::endl;
   std::string cache_path = context.cache_path_;

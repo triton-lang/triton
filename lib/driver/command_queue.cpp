@@ -22,7 +22,7 @@ CommandQueue::CommandQueue(cl_command_queue const & queue, bool take_ownership) 
   h_.cl() = queue;
 }
 
-CommandQueue::CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties): backend_(device.backend_), context_(context), device_(device), h_(backend_, context.h_.has_ownership())
+CommandQueue::CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties): backend_(device.backend_), context_(context), device_(device), h_(backend_, true)
 {
   switch(backend_)
   {

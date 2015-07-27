@@ -46,7 +46,6 @@ public:
   Handle(backend_type backend, bool take_ownership = true);
   bool operator==(Handle const & other) const;
   bool operator<(Handle const & other) const;
-  bool has_ownership() const;
   CLType & cl();
   CLType const & cl() const;
 #ifdef ISAAC_WITH_CUDA

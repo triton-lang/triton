@@ -115,10 +115,6 @@ template<class CLType, class CUType>
 CLType const &  Handle<CLType, CUType>::cl() const
 { return *cl_; }
 
-template<class CLType, class CUType>
-bool Handle<CLType,CUType>::has_ownership() const
-{ return has_ownership_; }
-
 #ifdef ISAAC_WITH_CUDA
 template<class CLType, class CUType>
 CUType &  Handle<CLType, CUType>::cu()
