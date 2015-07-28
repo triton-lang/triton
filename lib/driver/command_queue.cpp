@@ -74,7 +74,7 @@ Event CommandQueue::enqueue(Kernel const & kernel, NDRange global, driver::NDRan
       break;
 #endif
     case OPENCL:
-      ocl::check(clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, &event.h_.cl()));
+      ocl::check(clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, &event.handle().cl()));
       break;
     default: throw;
   }
@@ -94,7 +94,7 @@ void CommandQueue::write(Buffer const & buffer, bool blocking, std::size_t offse
       break;
 #endif
     case OPENCL:
-      clEnqueueWriteBuffer(h_.cl(), buffer.h_.cl(), blocking, offset, size, ptr, 0, NULL, NULL);
+      ocl::check(clEnqueueWriteBuffer(h_.cl(), buffer.h_.cl(), blocking, offset, size, ptr, 0, NULL, NULL));
       break;
     default: throw;
   }
@@ -113,7 +113,7 @@ void CommandQueue::read(Buffer const & buffer, bool blocking, std::size_t offset
       break;
 #endif
     case OPENCL:
-      clEnqueueReadBuffer(h_.cl(), buffer.h_.cl(), blocking, offset, size, ptr, 0, NULL, NULL);
+      ocl::check(clEnqueueReadBuffer(h_.cl(), buffer.h_.cl(), blocking, offset, size, ptr, 0, NULL, NULL));
       break;
     default: throw;
   }
