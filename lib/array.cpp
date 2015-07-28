@@ -187,6 +187,7 @@ array & array::operator=(std::vector<DT> const & rhs)
 }
 
 #define INSTANTIATE(TYPE) template ISAACAPI array& array::operator=<TYPE>(std::vector<TYPE> const &)
+
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
 INSTANTIATE(short);
@@ -205,21 +206,7 @@ array & array::operator=(value_scalar const & rhs)
 { return *this = controller<value_scalar>(rhs); }
 
 
-#define INSTANTIATE(T) template ISAACAPI array & array::operator=<T>(std::vector<T> const &)
 
-INSTANTIATE(char);
-INSTANTIATE(unsigned char);
-INSTANTIATE(short);
-INSTANTIATE(unsigned short);
-INSTANTIATE(int);
-INSTANTIATE(unsigned int);
-INSTANTIATE(long);
-INSTANTIATE(unsigned long);
-INSTANTIATE(long long);
-INSTANTIATE(unsigned long long);
-INSTANTIATE(float);
-INSTANTIATE(double);
-#undef INSTANTIATE
 
 array_expression array::operator-()
 { return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
