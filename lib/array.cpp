@@ -173,6 +173,11 @@ array& array::operator=(controller<TYPE> const & c)
   return *this;
 }
 
+#define INSTANTIATE(TYPE) template ISAACAPI array& array::operator=<TYPE>(controller<TYPE> const &)
+INSTANTIATE(array);
+INSTANTIATE(array_expression);
+#undef INSTANTIATE
+
 template<class DT>
 array & array::operator=(std::vector<DT> const & rhs)
 {
@@ -180,6 +185,21 @@ array & array::operator=(std::vector<DT> const & rhs)
   isaac::copy(rhs, *this);
   return *this;
 }
+
+#define INSTANTIATE(TYPE) template ISAACAPI array& array::operator=<TYPE>(std::vector<TYPE> const &)
+INSTANTIATE(char);
+INSTANTIATE(unsigned char);
+INSTANTIATE(short);
+INSTANTIATE(unsigned short);
+INSTANTIATE(int);
+INSTANTIATE(unsigned int);
+INSTANTIATE(long);
+INSTANTIATE(unsigned long);
+INSTANTIATE(long long);
+INSTANTIATE(unsigned long long);
+INSTANTIATE(float);
+INSTANTIATE(double);
+#undef INSTANTIATE
 
 array & array::operator=(value_scalar const & rhs)
 { return *this = controller<value_scalar>(rhs); }

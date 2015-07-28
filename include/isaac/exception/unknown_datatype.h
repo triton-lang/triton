@@ -3,12 +3,13 @@
 
 #include <string>
 #include <exception>
+#include "isaac/defines.h"
 
 namespace isaac
 {
 
 /** @brief Exception for the case the generator is unable to deal with the operation */
-class unknown_datatype : public std::exception
+class ISAACAPI unknown_datatype : public std::exception
 {
 public:
   unknown_datatype(int);
