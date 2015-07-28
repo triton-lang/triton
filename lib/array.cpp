@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cmath>
 #include <algorithm>
 #include <stdexcept>
 
