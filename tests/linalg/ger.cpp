@@ -1,3 +1,4 @@
+#include <cmath>
 #include "common.hpp"
 #include "isaac/array.h"
 

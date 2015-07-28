@@ -166,9 +166,9 @@ array_expression array_expression::operator!()
 { return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), context_, INT_TYPE, shape_); }
 
 //
-tools::shared_ptr<array_expression> expressions_tuple::create(array_expression const & s)
+std::shared_ptr<array_expression> expressions_tuple::create(array_expression const & s)
 {
-  return tools::shared_ptr<array_expression>(new array_expression(static_cast<array_expression const &>(s)));
+  return std::shared_ptr<array_expression>(new array_expression(static_cast<array_expression const &>(s)));
 }
 
 expressions_tuple::expressions_tuple(data_type const & data, order_type order) : data_(data), order_(order)

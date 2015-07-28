@@ -177,29 +177,29 @@ namespace isaac
 
         /*----Parse required temporaries-----*/
         detail::parse(tree, rootidx, breakpoints, final_type);
-        std::vector<tools::shared_ptr<array> > temporaries_;
+        std::vector<std::shared_ptr<array> > temporaries_;
 
         /*----Compute required temporaries----*/
         for(detail::breakpoints_t::iterator it = breakpoints.begin() ; it != breakpoints.end() ; ++it)
         {
-          tools::shared_ptr<model> const & pmodel = models[std::make_pair(it->first, dtype)];
+          std::shared_ptr<model> const & pmodel = models[std::make_pair(it->first, dtype)];
           array_expression::node const & node = tree[it->second->node_index];
           array_expression::node const & lmost = lhs_most(tree, node);
 
           //Creates temporary
-          tools::shared_ptr<array> tmp;
+          std::shared_ptr<array> tmp;
           switch(it->first){
-            case DOT_TYPE:           tmp = tools::shared_ptr<array>(new array(1, dtype, context));                                                        break;
+            case DOT_TYPE:           tmp = std::shared_ptr<array>(new array(1, dtype, context));                                                        break;
 
-            case AXPY_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
-            case GEMV_N_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
-            case GEMV_T_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[1], dtype, context));                              break;
+            case AXPY_TYPE:         tmp = std::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
+            case GEMV_N_TYPE:  tmp = std::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
+            case GEMV_T_TYPE:  tmp = std::shared_ptr<array>(new array(lmost.lhs.array->shape()[1], dtype, context));                              break;
 
-            case GER_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], lmost.lhs.array->shape()[1], dtype, context)); break;
-            case GEMM_NN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[1], dtype, context));   break;
-            case GEMM_NT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[0], dtype, context));   break;
-            case GEMM_TN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[1], dtype, context));   break;
-            case GEMM_TT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[0], dtype, context));   break;
+            case GER_TYPE:         tmp = std::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], lmost.lhs.array->shape()[1], dtype, context)); break;
+            case GEMM_NN_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[1], dtype, context));   break;
+            case GEMM_NT_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[0], dtype, context));   break;
+            case GEMM_TN_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[1], dtype, context));   break;
+            case GEMM_TT_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[0], dtype, context));   break;
 
             default: throw std::invalid_argument("Unrecognized operation");
           }

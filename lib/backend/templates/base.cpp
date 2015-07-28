@@ -33,44 +33,44 @@ numeric_type base::map_functor::get_numeric_type(isaac::array_expression const *
 
 /** @brief Binary leaf */
 template<class T>
-tools::shared_ptr<mapped_object> base::map_functor::binary_leaf(isaac::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const
+std::shared_ptr<mapped_object> base::map_functor::binary_leaf(isaac::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const
 {
-  return tools::shared_ptr<mapped_object>(new T(numeric_type_to_string(array_expression->dtype()), binder_.get(), mapped_object::node_info(mapping, array_expression, root_idx)));
+  return std::shared_ptr<mapped_object>(new T(numeric_type_to_string(array_expression->dtype()), binder_.get(), mapped_object::node_info(mapping, array_expression, root_idx)));
 }
 
 /** @brief Scalar mapping */
-tools::shared_ptr<mapped_object> base::map_functor::create(numeric_type dtype, values_holder) const
+std::shared_ptr<mapped_object> base::map_functor::create(numeric_type dtype, values_holder) const
 {
   std::string strdtype = numeric_type_to_string(dtype);
-  return tools::shared_ptr<mapped_object>(new mapped_host_scalar(strdtype, binder_.get()));
+  return std::shared_ptr<mapped_object>(new mapped_host_scalar(strdtype, binder_.get()));
 }
 
 /** @brief Vector mapping */
-tools::shared_ptr<mapped_object> base::map_functor::create(array const * a) const
+std::shared_ptr<mapped_object> base::map_functor::create(array const * a) const
 {
   std::string dtype = numeric_type_to_string(a->dtype());
   unsigned int id = binder_.get(a->data());
   //Scalar
   if(a->shape()[0]==1 && a->shape()[1]==1)
-    return tools::shared_ptr<mapped_object>(new mapped_array(dtype, id, 's'));
+    return std::shared_ptr<mapped_object>(new mapped_array(dtype, id, 's'));
   //Column vector
   else if(a->shape()[0]>1 && a->shape()[1]==1)
-    return tools::shared_ptr<mapped_object>(new mapped_array(dtype, id, 'c'));
+    return std::shared_ptr<mapped_object>(new mapped_array(dtype, id, 'c'));
   //Row vector
   else if(a->shape()[0]==1 && a->shape()[1]>1)
-    return tools::shared_ptr<mapped_object>(new mapped_array(dtype, id, 'r'));
+    return std::shared_ptr<mapped_object>(new mapped_array(dtype, id, 'r'));
   //Matrix
   else
-    return tools::shared_ptr<mapped_object>(new mapped_array(dtype, id, 'm'));
+    return std::shared_ptr<mapped_object>(new mapped_array(dtype, id, 'm'));
 }
 
-tools::shared_ptr<mapped_object> base::map_functor::create(repeat_infos const &) const
+std::shared_ptr<mapped_object> base::map_functor::create(repeat_infos const &) const
 {
   //TODO: Make it less specific!
-  return tools::shared_ptr<mapped_object>(new mapped_tuple(size_type(device_),binder_.get(),4));
+  return std::shared_ptr<mapped_object>(new mapped_tuple(size_type(device_),binder_.get(),4));
 }
 
-tools::shared_ptr<mapped_object> base::map_functor::create(lhs_rhs_element const & lhs_rhs) const
+std::shared_ptr<mapped_object> base::map_functor::create(lhs_rhs_element const & lhs_rhs) const
 {
   switch(lhs_rhs.type_family)
   {
@@ -115,7 +115,7 @@ void base::map_functor::operator()(isaac::array_expression const & array_express
     else if (root_node.op.type == OPERATOR_OUTER_PROD_TYPE)
       mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_outer>(&array_expression, root_idx, &mapping_)));
     else if (detail::is_cast(root_node.op))
-      mapping_.insert(mapping_type::value_type(key, tools::shared_ptr<mapped_object>(new mapped_cast(root_node.op.type, binder_.get()))));
+      mapping_.insert(mapping_type::value_type(key, std::shared_ptr<mapped_object>(new mapped_cast(root_node.op.type, binder_.get()))));
   }
 }
 
@@ -289,7 +289,7 @@ std::string base::generate_arguments(std::string const & data_type, driver::Devi
 
 void base::set_arguments(expressions_tuple const & expressions, driver::Kernel & kernel, unsigned int & current_arg)
 {
-  tools::shared_ptr<symbolic_binder> binder = make_binder();
+  std::shared_ptr<symbolic_binder> binder = make_binder();
   for (const auto & elem : expressions.data())
     traverse(*elem, (elem)->root(), set_arguments_functor(*binder, current_arg, kernel), true);
 }
@@ -483,12 +483,12 @@ std::string base::append_width(std::string const & str, unsigned int width)
   return str + tools::to_string(width);
 }
 
-tools::shared_ptr<symbolic_binder> base::make_binder()
+std::shared_ptr<symbolic_binder> base::make_binder()
 {
   if (binding_policy_==BIND_TO_HANDLE)
-    return tools::shared_ptr<symbolic_binder>(new bind_to_handle());
+    return std::shared_ptr<symbolic_binder>(new bind_to_handle());
   else
-    return tools::shared_ptr<symbolic_binder>(new bind_all_unique());
+    return std::shared_ptr<symbolic_binder>(new bind_all_unique());
 }
 
 
@@ -514,7 +514,7 @@ std::string base::generate(const char * suffix, expressions_tuple const & expres
 
   //Create mapping
   std::vector<mapping_type> mappings(expressions.data().size());
-  tools::shared_ptr<symbolic_binder> binder = make_binder();
+  std::shared_ptr<symbolic_binder> binder = make_binder();
   for (mit = mappings.begin(), sit = expressions.data().begin(); sit != expressions.data().end(); ++sit, ++mit)
     traverse(**sit, (*sit)->root(), map_functor(*binder,*mit,device), true);
 
@@ -538,8 +538,8 @@ int_t base_impl<TType, PType>::local_size_1() const
 { return p_.local_size_1; }
 
 template<class TType, class PType>
-tools::shared_ptr<base> base_impl<TType, PType>::clone() const
-{ return tools::shared_ptr<base>(new TType(*dynamic_cast<TType const *>(this))); }
+std::shared_ptr<base> base_impl<TType, PType>::clone() const
+{ return std::shared_ptr<base>(new TType(*dynamic_cast<TType const *>(this))); }
 
 template<class TType, class PType>
 int base_impl<TType, PType>::is_invalid(expressions_tuple const & expressions, driver::Device const & device) const

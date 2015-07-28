@@ -76,15 +76,15 @@ protected:
     /** @brief Accessor for the numeric type */
     numeric_type get_numeric_type(isaac::array_expression const * array_expression, int_t root_idx) const;
     /** @brief Creates a binary leaf */
-    template<class T> tools::shared_ptr<mapped_object> binary_leaf(isaac::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const;
+    template<class T> std::shared_ptr<mapped_object> binary_leaf(isaac::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const;
     /** @brief Creates a value scalar mapping */
-    tools::shared_ptr<mapped_object> create(numeric_type dtype, values_holder) const;
+    std::shared_ptr<mapped_object> create(numeric_type dtype, values_holder) const;
     /** @brief Creates a vector mapping */
-    tools::shared_ptr<mapped_object> create(array const *) const;
+    std::shared_ptr<mapped_object> create(array const *) const;
     /** @brief Creates a tuple mapping */
-    tools::shared_ptr<mapped_object> create(repeat_infos const &) const;
+    std::shared_ptr<mapped_object> create(repeat_infos const &) const;
     /** @brief Creates a mapping */
-    tools::shared_ptr<mapped_object> create(lhs_rhs_element const &) const;
+    std::shared_ptr<mapped_object> create(lhs_rhs_element const &) const;
   public:
     map_functor(symbolic_binder & binder, mapping_type & mapping, const driver::Device &device);
     /** @brief Functor for traversing the tree */
@@ -165,7 +165,7 @@ protected:
   static bool is_index_dot(op_element const & op);
   static std::string access_vector_type(std::string const & v, int i);
 
-  tools::shared_ptr<symbolic_binder> make_binder();
+  std::shared_ptr<symbolic_binder> make_binder();
   static std::string vstore(unsigned int simd_width, std::string const & dtype, std::string const & value, std::string const & offset, std::string const & ptr, driver::backend_type backend);
   static std::string vload(unsigned int simd_width, std::string const & dtype, std::string const & offset, std::string const & ptr, driver::backend_type backend);
   static std::string append_width(std::string const & str, unsigned int width);
@@ -182,7 +182,7 @@ public:
   std::string generate(const char * suffix, expressions_tuple const & expressions, driver::Device const & device);
   virtual int is_invalid(expressions_tuple const & expressions, driver::Device const & device) const = 0;
   virtual void enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & expressions) = 0;
-  virtual tools::shared_ptr<base> clone() const = 0;
+  virtual std::shared_ptr<base> clone() const = 0;
 private:
   binding_policy_t binding_policy_;
 };
@@ -198,7 +198,7 @@ public:
   base_impl(parameters_type const & parameters, binding_policy_t binding_policy);
   int_t local_size_0() const;
   int_t local_size_1() const;
-  tools::shared_ptr<base> clone() const;
+  std::shared_ptr<base> clone() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
   int is_invalid(expressions_tuple const & expressions, driver::Device const & device) const;
 protected:
