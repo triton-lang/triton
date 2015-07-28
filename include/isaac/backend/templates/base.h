@@ -4,6 +4,7 @@
 
 #include <list>
 #include <set>
+#include <cmath>
 
 #include "isaac/types.h"
 #include "isaac/backend/parse.h"
