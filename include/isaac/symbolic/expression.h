@@ -14,7 +14,7 @@
 
 #include "isaac/types.h"
 #include "isaac/value_scalar.h"
-#include "isaac/tools/shared_ptr.hpp"
+#include <memory>
 #include <iostream>
 
 namespace isaac
@@ -290,9 +290,9 @@ controller<TYPE> control(TYPE const & x, execution_options_type const& execution
 class expressions_tuple
 {
 private:
-  tools::shared_ptr<array_expression> create(array_expression const & s);
+  std::shared_ptr<array_expression> create(array_expression const & s);
 public:
-  typedef std::list<tools::shared_ptr<array_expression> > data_type;
+  typedef std::list<std::shared_ptr<array_expression> > data_type;
   enum order_type { SEQUENTIAL, INDEPENDENT };
 
   expressions_tuple(array_expression const & s0);
