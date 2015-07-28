@@ -1,5 +1,5 @@
 #include <cassert>
-#include <cmath>
+#include <algorithm>
 
 #include "isaac/array.h"
 #include "isaac/backend/keywords.h"
