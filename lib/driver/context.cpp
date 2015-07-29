@@ -8,7 +8,7 @@ namespace isaac
 namespace driver
 {
 
-Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], take_ownership), h_(backend_, take_ownership)
+Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], false), h_(backend_, take_ownership)
 {
     h_.cl() = context;
 
