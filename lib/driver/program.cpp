@@ -159,6 +159,32 @@ Program::Program(Context const & context, std::string const & source) : backend_
 Context const & Program::context() const
 { return context_; }
 
+Program const & ProgramsHandler::add(Context const & context, std::string const & name, std::string const & src)
+{
+	std::map<std::string, Program> & pgms = programs_[context];
+    std::map<std::string, Program>::iterator it = pgms.find(name);
+    if(it==pgms.end())
+    {
+        std::string extensions;
+        std::string ext = "cl_khr_fp64";
+        if(context.device().extensions().find(ext)!=std::string::npos)
+          extensions = "#pragma OPENCL EXTENSION " + ext + " : enable\n";
+        return pgms.insert(std::make_pair(name, driver::Program(context, extensions + src))).first->second;
+    }
+    return it->second;
+}
+
+const Program * ProgramsHandler::find(Context const & context, const std::string &name)
+{
+	std::map<std::string, Program> & pgms = programs_[context];
+    std::map<std::string, Program>::const_iterator it = pgms.find(name);
+    if(it==pgms.end())
+        return NULL;
+    return &it->second;
+}
+
+std::map<driver::Context, std::map<std::string, Program>> ProgramsHandler::programs_;
+
 }
 
 }

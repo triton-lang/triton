@@ -27,6 +27,18 @@ Device::Device(int ordinal): backend_(CUDA), h_(backend_, true)
 Device::Device(cl_device_id const & device, bool take_ownership) : backend_(OPENCL), h_(backend_, take_ownership)
 { h_.cl() = device; }
 
+
+bool Device::operator==(Device const & other) const
+{
+    return h_==other.h_;
+}
+
+bool Device::operator<(Device const & other) const
+{
+    return h_<other.h_;
+}
+
+
 backend_type Device::backend() const
 { return backend_; }
 
