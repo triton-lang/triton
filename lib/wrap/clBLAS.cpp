@@ -35,6 +35,7 @@ extern "C"
                 events[i] = levents.front().handle().cl();
                 clRetainEvent(events[i]);
             }
+            clFlush(commandQueues[i]);
         }
 
     }

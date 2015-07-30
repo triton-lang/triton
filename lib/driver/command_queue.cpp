@@ -94,7 +94,7 @@ void CommandQueue::write(Buffer const & buffer, bool blocking, std::size_t offse
       break;
 #endif
     case OPENCL:
-      ocl::check(clEnqueueWriteBuffer(h_.cl(), buffer.h_.cl(), blocking, offset, size, ptr, 0, NULL, NULL));
+      ocl::check(clEnqueueWriteBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
       break;
     default: throw;
   }
@@ -113,7 +113,7 @@ void CommandQueue::read(Buffer const & buffer, bool blocking, std::size_t offset
       break;
 #endif
     case OPENCL:
-      ocl::check(clEnqueueReadBuffer(h_.cl(), buffer.h_.cl(), blocking, offset, size, ptr, 0, NULL, NULL));
+      ocl::check(clEnqueueReadBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
       break;
     default: throw;
   }
