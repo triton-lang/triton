@@ -182,7 +182,7 @@ public:
   virtual ~base();
   std::string generate(const char * suffix, expressions_tuple const & expressions, driver::Device const & device);
   virtual int is_invalid(expressions_tuple const & expressions, driver::Device const & device) const = 0;
-  virtual void enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & expressions) = 0;
+  virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, const char * suffix, base & fallback, controller<expressions_tuple> const & expressions) = 0;
   virtual std::shared_ptr<base> clone() const = 0;
 private:
   binding_policy_t binding_policy_;

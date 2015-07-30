@@ -574,7 +574,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
   void gemm::enqueue_block(driver::CommandQueue & /*queue*/, int_t M, int_t N, int_t K,
                      array const & A, array const & B, array const & C,
                      value_scalar const & alpha, value_scalar const & beta,
-                     driver::Program & program, const char * suffix, execution_options_type const & options)
+                     driver::Program const & program, const char * suffix, execution_options_type const & options)
   {
     using tools::align;
 
@@ -685,7 +685,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     return infos(expressions, dummy);
   }
 
-  void gemm::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback_base, controller<expressions_tuple> const & ctr)
+  void gemm::enqueue(driver::CommandQueue & queue, driver::Program const & program, const char * suffix, base & fallback_base, controller<expressions_tuple> const & ctr)
   {
     using namespace tools;
 //    std::cout << p_.simd_width << " " << p_.mL << " " << p_.kL << " " << p_.mS << " " << p_.depth << " " << p_.local_size_0 << std::endl;

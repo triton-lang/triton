@@ -279,7 +279,7 @@ std::vector<int_t> dot::input_sizes(expressions_tuple const & expressions) const
   return tools::make_vector<int_t>() << N;
 }
 
-void dot::enqueue(driver::CommandQueue & queue, driver::Program & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
+void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
 
