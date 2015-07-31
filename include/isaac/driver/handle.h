@@ -1,7 +1,6 @@
 #ifndef ISAAC_DRIVER_HANDLE_H
 #define ISAAC_DRIVER_HANDLE_H
 
-#include <map>
 #include <memory>
 
 #include "isaac/defines.h"

@@ -212,7 +212,7 @@ public:
 private:
   container_type tree_;
   std::size_t root_;
-  driver::Context context_;
+  driver::Context const & context_;
   numeric_type dtype_;
   size4 shape_;
 };

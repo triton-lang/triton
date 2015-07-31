@@ -313,7 +313,7 @@ void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program,
   driver::NDRange local[2] = { driver::NDRange(p_.local_size_0), driver::NDRange(p_.local_size_0) };
 
   //Arguments
-  driver::Context context = expressions.context();
+  driver::Context const & context = expressions.context();
   array_expression const & s = *(expressions.data().front());
   unsigned int dtype_size = size_of(lhs_most(s.tree(), s.root()).lhs.dtype);
   for (auto & kernel : kernels)

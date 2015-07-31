@@ -1,4 +1,7 @@
 #include "isaac/driver/backend.h"
+#include "isaac/driver/context.h"
+#include "isaac/driver/command_queue.h"
+
 #include <assert.h>
 #include <stdexcept>
 #include <vector>
@@ -9,12 +12,6 @@ namespace isaac
 namespace driver
 {
 
-std::vector<CommandQueue> & backend::append(Context const & context)
-{
-  data_.push_back(std::make_pair(context, std::vector<CommandQueue>(1, CommandQueue(context, context.device(), queue_properties))));
-  return data_.back().second;
-}
-
 void backend::cuinit()
 {
 #ifdef ISAAC_WITH_CUDA
@@ -22,7 +19,11 @@ void backend::cuinit()
   int N;
   cuda::check(cuDeviceGetCount(&N));
   for(int i = 0 ; i < N ; ++i)
-    append(Context(Device(i));
+  {
+      Device device(i);
+      contexts_.emplace_back(device);
+      queues_.insert(std::make_pair(&contexts_.back(), std::vector<CommandQueue>{CommandQueue(contexts_.back(), device, queue_properties)}));
+  }
 #endif
 }
 
@@ -38,14 +39,17 @@ void backend::clinit()
     ocl::check(clGetDeviceIDs(p, CL_DEVICE_TYPE_ALL, 0, NULL, &ndevices));
     std::vector<cl_device_id> devices(ndevices);
     ocl::check(clGetDeviceIDs(p, CL_DEVICE_TYPE_ALL, ndevices, devices.data(), NULL));
-    for(cl_device_id d : devices)
-      append(Context(Device(d)));
+    for(cl_device_id d : devices){
+      Device device(d);
+      contexts_.emplace_back(device);
+      queues_.insert(std::make_pair(&contexts_.back(), std::vector<CommandQueue>{CommandQueue(contexts_.back(), device, queue_properties)}));
+    }
   }
 }
 
 void backend::init()
 {
-  if(data_.empty())
+  if(contexts_.empty())
   {
     cuinit();
     clinit();
@@ -55,27 +59,34 @@ void backend::init()
 std::vector<CommandQueue> & backend::queues(Context const & context)
 {
   init();
-  for(auto & x : data_)
-    if(x.first==context) return x.second;
-  return append(context);
+  for(auto & x : queues_)
+    if(x.first==&context)
+        return x.second;
+  throw;
 }
 
-Context backend::default_context()
+Context const & backend::import(cl_context context)
+{
+  for(driver::Context const & x: contexts_)
+      if(x.handle().cl()==context)
+          return x;
+  contexts_.emplace_back(context, false);
+  return contexts_.back();
+}
+
+
+Context const & backend::default_context()
 {
   init();
-  container_type::iterator it = data_.begin();
+  std::list<Context>::const_iterator it = contexts_.begin();
   std::advance(it, default_device);
-  return it->first;
+  return *it;
 }
 
-std::vector<CommandQueue> & backend::default_queues()
-{ return backend::queues(default_context()); }
-
-
-backend::container_type const & backend::contexts()
+const std::list<Context> &backend::contexts()
 {
   init();
-  return data_;
+  return contexts_;
 }
 
 
@@ -95,7 +106,9 @@ unsigned int backend::default_device = 0;
 
 cl_command_queue_properties backend::queue_properties = 0;
 
-backend::container_type backend::data_ = backend::container_type();
+std::list<Context> backend::contexts_;
+
+std::map<Context*, std::vector<CommandQueue>> backend::queues_;
 
 }
 
