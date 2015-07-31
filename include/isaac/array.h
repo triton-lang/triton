@@ -21,22 +21,22 @@ protected:
 
 public:
   //1D Constructors
-  array(int_t size1, numeric_type dtype, driver::Context context = driver::queues.default_context());
+  array(int_t size1, numeric_type dtype, driver::Context context = driver::backend::default_context());
   array(int_t size1, numeric_type dtype, driver::Buffer data, int_t start, int_t inc);
 
   template<typename DT>
-  array(std::vector<DT> const & data, driver::Context context = driver::queues.default_context());
+  array(std::vector<DT> const & data, driver::Context context = driver::backend::default_context());
   array(array & v, slice const & s1);
 
   //2D Constructors
-  array(int_t size1, int_t size2, numeric_type dtype, driver::Context context = driver::queues.default_context());
+  array(int_t size1, int_t size2, numeric_type dtype, driver::Context context = driver::backend::default_context());
   array(int_t size1, int_t size2, numeric_type dtype, driver::Buffer data, int_t start, int_t ld);
   template<typename DT>
-  array(int_t size1, int_t size2, std::vector<DT> const & data, driver::Context context = driver::queues.default_context());
+  array(int_t size1, int_t size2, std::vector<DT> const & data, driver::Context context = driver::backend::default_context());
   array(array & M, slice const & s1, slice const & s2);
 
   //3D Constructors
-  array(int_t size1, int_t size2, int_t size3, numeric_type dtype, driver::Context context = driver::queues.default_context());
+  array(int_t size1, int_t size2, int_t size3, numeric_type dtype, driver::Context context = driver::backend::default_context());
 
   //General constructor
 
@@ -112,8 +112,8 @@ private:
   template<class T> T cast() const;
 public:
   explicit scalar(numeric_type dtype, driver::Buffer const & data, int_t offset);
-  explicit scalar(value_scalar value, driver::Context context = driver::queues.default_context());
-  explicit scalar(numeric_type dtype, driver::Context context = driver::queues.default_context());
+  explicit scalar(value_scalar value, driver::Context context = driver::backend::default_context());
+  explicit scalar(numeric_type dtype, driver::Context context = driver::backend::default_context());
   scalar(array_expression const & proxy);
   scalar& operator=(value_scalar const &);
 //  scalar& operator=(scalar const & s);
@@ -230,8 +230,8 @@ ISAAC_DECLARE_DOT((max))
 ISAAC_DECLARE_DOT((min))
 ISAAC_DECLARE_DOT(argmin)
 
-ISAACAPI array_expression eye(std::size_t, std::size_t, isaac::numeric_type, driver::Context context = driver::queues.default_context());
-ISAACAPI array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, driver::Context context = driver::queues.default_context());
+ISAACAPI array_expression eye(std::size_t, std::size_t, isaac::numeric_type, driver::Context context = driver::backend::default_context());
+ISAACAPI array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, driver::Context context = driver::backend::default_context());
 ISAACAPI array_expression reshape(array const &, int_t, int_t);
 
 //

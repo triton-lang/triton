@@ -146,7 +146,7 @@ void export_driver()
 
   bp::class_<isc::driver::Context>("context", bp::no_init)
       .def("__init__", bp::make_constructor(&detail::make_context))
-      .add_property("queues", bp::make_function(static_cast<std::vector<isc::driver::CommandQueue> & (*)(const isc::driver::Context&)>( [](const isc::driver::Context & ctx) -> std::vector<isc::driver::CommandQueue> & { return isc::driver::queues[ctx]; }) , bp::return_internal_reference<>()))
+      .add_property("queues", bp::make_function(static_cast<std::vector<isc::driver::CommandQueue> & (*)(const isc::driver::Context&)>( [](const isc::driver::Context & ctx) -> std::vector<isc::driver::CommandQueue> & { return isc::driver::backend[ctx]; }) , bp::return_internal_reference<>()))
       .add_property("backend", &isc::driver::Context::backend)
       ;
 
@@ -167,7 +167,7 @@ void export_driver()
   bp::def("enqueue", &detail::enqueue, (bp::arg("expression"), bp::arg("queue_id") = 0, bp::arg("dependencies")=bp::list(), bp::arg("tune") = false, bp::arg("label")=-1, bp::arg("program_name")="", bp::arg("recompile") = false));
 
   bp::class_<state_type>("state_type")
-          .def_readwrite("queue_properties",&isc::driver::queues.queue_properties)
+          .def_readwrite("queue_properties",&isc::driver::backend::queue_properties)
       ;
 
   bp::scope().attr("state") = bp::object(bp::ptr(&state));

@@ -12,7 +12,7 @@ __global__ void dummy(){}
 
 int main()
 {
-  for(isc::driver::queues_type::data_type::const_iterator it = isc::driver::queues.data().begin() ; it != isc::driver::queues.data().end() ; ++it)
+  for(isc::driver::backend::data_type::const_iterator it = isc::driver::queues.data().begin() ; it != isc::driver::queues.data().end() ; ++it)
   {
     cl::CommandQueue queue = it->second[0];
     cl::Context context = it->first;

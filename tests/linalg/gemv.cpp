@@ -20,7 +20,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 
   T alpha = 4.2, beta = 5.6;
 
-  isc::driver::CommandQueue queue = isc::driver::queues[y.context()][0];
+  isc::driver::CommandQueue queue = isc::driver::backend::queues(y.context())[0];
 
   T yi = 0, xi = 0;
 #define TEST_OPERATION(NAME, SIZE1, SIZE2, REDUCTION, ASSIGNMENT, GPU_REDUCTION, RES, BUF, CRES)\
@@ -108,7 +108,7 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  auto data = isc::driver::queues.contexts();
+  auto data = isc::driver::backend::contexts();
   for(const auto & elem : data)
   {
     isc::driver::Device device = elem.second[0].device();

@@ -13,34 +13,30 @@ namespace isaac
 namespace driver
 {
 
-class ISAACAPI queues_type
+class ISAACAPI backend
 {
 public:
   typedef std::list<std::pair<Context, std::vector<CommandQueue> > > container_type;
 private:
-  std::vector<CommandQueue> & append( Context const & context);
-  void cuinit();
-  void clinit();
-  void init();
+  static std::vector<CommandQueue> & append( Context const & context);
+  static void cuinit();
+  static void clinit();
+  static void init();
 public:
-  queues_type();
-  container_type const & contexts();
-  Context default_context();
-  std::vector<CommandQueue> & default_queues();
-  std::vector<CommandQueue> & operator[](Context const &);
-
+  static container_type const & contexts();
+  static Context default_context();
+  static std::vector<CommandQueue> & default_queues();
+  static std::vector<CommandQueue> & queues(Context const &);
 private:
-  container_type data_;
+  static container_type data_;
 public:
-  unsigned int default_device;
-  cl_command_queue_properties queue_properties;
+  static unsigned int default_device;
+  static cl_command_queue_properties queue_properties;
 
 };
 
 ISAACAPI void synchronize(std::vector<CommandQueue> const &);
 ISAACAPI void synchronize(Context const &);
-
-extern ISAACAPI queues_type queues;
 
 }
 }

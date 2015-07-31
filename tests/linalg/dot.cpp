@@ -15,7 +15,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
   using namespace std;
   isc::driver::Context const & ctx = x.context();
   int_t N = cx.size();
-  isc::driver::CommandQueue queue = isc::driver::queues[ctx][0];
+  isc::driver::CommandQueue queue = isc::driver::backend::queues(ctx)[0];
   cl_command_queue clqueue = queue.handle().cl();
   isc::array scratch(N, x.dtype());
 
@@ -90,7 +90,7 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  auto data = isc::driver::queues.contexts();
+  auto data = isc::driver::backend::contexts();
   for(const auto & elem : data)
   {
     isc::driver::Device device = elem.second[0].device();

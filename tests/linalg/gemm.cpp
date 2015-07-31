@@ -20,7 +20,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   T alpha = 1;
   T beta = 0;
 
-  isc::driver::CommandQueue queue = isc::driver::queues[C.context()][0];
+  isc::driver::CommandQueue queue = isc::driver::backend::queues(C.context())[0];
 
   for(int i = 0 ; i < M ; ++i)
   {
@@ -125,7 +125,7 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 
 int main()
 {
-  auto data = isc::driver::queues.contexts();
+  auto data = isc::driver::backend::contexts();
   clblasSetup();
   for(const auto & elem : data)
   {
