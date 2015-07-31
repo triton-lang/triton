@@ -15,14 +15,14 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 
   int failure_count = 0;
   isc::numeric_type dtype = x.dtype();
-  isc::driver::Context const & ctx = x.context();
-  isc::driver::CommandQueue queue = isc::driver::backend::queues(ctx)[0];
+  isc::driver::Context const & context = x.context();
+  isc::driver::CommandQueue queue = isc::driver::backend::queue(context,0);
   cl_command_queue clqueue = queue.handle().cl();
   int_t N = cz.size();
 
   T aa = -4.378, bb=3.5;
   isaac::value_scalar a(aa), b(bb);
-  isaac::scalar da(a, ctx), db(b, ctx);
+  isaac::scalar da(a, context), db(b, context);
 
   simple_vector<T> buffer(N);
 #define CONVERT
@@ -59,7 +59,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 
 #undef PREFIX
 #define PREFIX "[C++]"
-  RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, ctx))
+  RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, context))
   RUN_TEST_VECTOR_AXPY("z = x", cz[i] = cx[i], z = x)
   RUN_TEST_VECTOR_AXPY("z = -x", cz[i] = -cx[i], z = -x)
 
@@ -138,20 +138,20 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  std::list<isaac::driver::Context> const & data = isc::driver::backend::contexts();
-  for(isaac::driver::Context const & context : data)
+  std::list<isaac::driver::Context const *> const & data = isc::driver::backend::contexts();
+  for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = isc::driver::backend::queues(context)[0].device();
+    isc::driver::Device device = isc::driver::backend::queue(*context,0).device();
     if(device.type() != isc::driver::DEVICE_TYPE_GPU)
         continue;
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, context);
+    test_impl<float>(1e-4, *context);
     if(device.fp64_support())
     {
         std::cout << ">> double" << std::endl;
-        test_impl<double>(1e-9, context);
+        test_impl<double>(1e-9, *context);
     }
     std::cout << "---" << std::endl;
   }

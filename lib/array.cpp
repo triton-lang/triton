@@ -286,7 +286,7 @@ namespace detail
 template<class T>
 void copy(driver::Context const & context, driver::Buffer const & data, T value)
 {
-  driver::backend::queues(context)[0].write(data, CL_TRUE, 0, sizeof(T), (void*)&value);
+  driver::backend::queue(context,0).write(data, CL_TRUE, 0, sizeof(T), (void*)&value);
 }
 
 }
@@ -323,7 +323,7 @@ void scalar::inject(values_holder & v) const
     int_t dtsize = size_of(dtype_);
   #define HANDLE_CASE(DTYPE, VAL) \
   case DTYPE:\
-    driver::backend::queues(context_)[0].read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL); break;\
+    driver::backend::queue(context_, 0).read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL); break;\
 
     switch(dtype_)
     {
@@ -370,7 +370,7 @@ TYPE scalar::cast() const
 
 scalar& scalar::operator=(value_scalar const & s)
 {
-  driver::CommandQueue& queue = driver::backend::queues(context_)[0];
+  driver::CommandQueue& queue = driver::backend::queue(context_, 0);
   int_t dtsize = size_of(dtype_);
 
 #define HANDLE_CASE(TYPE, CLTYPE) case TYPE:\
@@ -801,16 +801,14 @@ void copy(void const * data, array& x, driver::CommandQueue & queue, bool blocki
   unsigned int dtypesize = size_of(x.dtype());
   if(x.ld()==x.shape()[0])
   {
-    queue.write(x.data(), CL_FALSE, 0, x.dsize()*dtypesize, data);
+    queue.write(x.data(), blocking, 0, x.dsize()*dtypesize, data);
   }
   else
   {
     array tmp(x.shape()[0], x.shape()[1], x.dtype(), x.context());
-    queue.write(x.data(), CL_FALSE, 0, tmp.dsize()*dtypesize, data);
+    queue.write(x.data(), blocking, 0, tmp.dsize()*dtypesize, data);
     x = tmp;
   }
-  if(blocking)
-    driver::synchronize(x.context());
 }
 
 void copy(array const & x, void* data, driver::CommandQueue & queue, bool blocking)
@@ -818,23 +816,21 @@ void copy(array const & x, void* data, driver::CommandQueue & queue, bool blocki
   unsigned int dtypesize = size_of(x.dtype());
   if(x.ld()==x.shape()[0])
   {
-    queue.read(x.data(), CL_FALSE, 0, x.dsize()*dtypesize, data);
+    queue.read(x.data(), blocking, 0, x.dsize()*dtypesize, data);
   }
   else
   {
     array tmp(x.shape()[0], x.shape()[1], x.dtype(), x.context());
     tmp = x;
-    queue.read(tmp.data(), CL_FALSE, 0, tmp.dsize()*dtypesize, data);
+    queue.read(tmp.data(), blocking, 0, tmp.dsize()*dtypesize, data);
   }
-  if(blocking)
-    driver::synchronize(x.context());
 }
 
 void copy(void const *data, array &x, bool blocking)
-{ copy(data, x, driver::backend::queues(x.context())[0], blocking); }
+{ copy(data, x, driver::backend::queue(x.context(), 0), blocking); }
 
 void copy(array const & x, void* data, bool blocking)
-{ copy(x, data, driver::backend::queues(x.context())[0], blocking); }
+{ copy(x, data, driver::backend::queue(x.context(), 0), blocking); }
 
 //std::vector<>
 template<class T>
@@ -859,11 +855,11 @@ void copy(array const & x, std::vector<T> & cx, driver::CommandQueue & queue, bo
 
 template<class T>
 void copy(std::vector<T> const & cx, array & x, bool blocking)
-{ copy(cx, x, driver::backend::queues(x.context())[0], blocking); }
+{ copy(cx, x, driver::backend::queue(x.context(), 0), blocking); }
 
 template<class T>
 void copy(array const & x, std::vector<T> & cx, bool blocking)
-{ copy(x, cx, driver::backend::queues(x.context())[0], blocking); }
+{ copy(x, cx, driver::backend::queue(x.context(), 0), blocking); }
 
 #define INSTANTIATE(T) \
   template void ISAACAPI  copy<T>(std::vector<T> const &, array &, driver::CommandQueue&, bool);\

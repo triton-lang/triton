@@ -171,7 +171,7 @@ void bench(isc::numeric_type dtype, std::string operation)
   }
 
   unsigned int dtsize = isc::size_of(dtype);
-  isc::driver::CommandQueue & queue = isc::driver::backend::queues(isc::driver::backend::default_context())[0];
+  isc::driver::CommandQueue & queue = isc::driver::backend::queue(isc::driver::backend::default_context(),0);
   std::map<std::string, std::string> metric{ {"axpy", "GB/s"}, {"dot", "GB/s"}, {"gemv", "GB/s"}, {"gemm", "GFLOPS"}};
   isc::array flush(1e6, dtype);
   std::cout << "#" << operation << " (" << metric[operation] << ")" << std::endl;
@@ -403,7 +403,7 @@ int main(int argc, char* argv[])
   isc::driver::backend::queue_properties = CL_QUEUE_PROFILING_ENABLE;
 
   int device_idx = 0;
-  std::list<isc::driver::Context> const & contexts = isc::driver::backend::contexts();
+  std::list<isc::driver::Context const *> const & contexts = isc::driver::backend::contexts();
 
   std::string operation;
   if(contexts.size() > 1)
@@ -413,12 +413,11 @@ int main(int argc, char* argv[])
       std::cerr << "usage : blas-bench DEVICE_IDX OPERATION" << std::endl;
       std::cout << "Devices available: " << std::endl;
       unsigned int current=0;
-      for(isc::driver::Context const & context: contexts)
-          for(isc::driver::CommandQueue const & queue: isc::driver::backend::queues(context))
-          {
-            isc::driver::Device device = queue.device();
-            std::cout << current++ << ": " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
-          }
+      for(isc::driver::Context const * context: contexts)
+      {
+          isc::driver::Device device = isc::driver::backend::queue(*context,0).device();
+          std::cout << current++ << ": " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
+      }
       exit(EXIT_FAILURE);
     }
     device_idx = atoi(argv[1]);

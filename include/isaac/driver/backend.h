@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "isaac/driver/common.h"
+#include "isaac/driver/program.h"
 #include "isaac/defines.h"
 
 namespace isaac
@@ -18,29 +19,36 @@ class CommandQueue;
 
 class ISAACAPI backend
 {
-public:
-  typedef std::list<Context> context_container;
-  typedef std::map<Context*, std::vector<CommandQueue>> queues_container;
 private:
   static void cuinit();
   static void clinit();
   static void init();
 public:
-  static std::list<Context> const & contexts();
+  class programs
+  {
+  public:
+      static Program const & add(Context const & scontext, std::string const & name, std::string const & src);
+      static Program const * find(Context const & context, std::string const & name);
+      static void release();
+  private:
+      static std::map<driver::Context const *, std::map<std::string, Program*> > programs_;
+  };
+
+  static std::list<Context const *> const  & contexts();
   static Context const & import(cl_context context);
   static Context const & default_context();
-  static std::vector<CommandQueue> & queues(Context const &);
+  static void synchronize(Context const &);
+  static CommandQueue & queue(Context const &, unsigned int id);
+
+  static void release();
 private:
-  static std::list<Context> contexts_;
-  static std::map<Context*, std::vector<CommandQueue>> queues_;
+  static std::list<Context const *> contexts_;
+  static std::map<Context const *, std::vector<CommandQueue*>> queues_;
 public:
   static unsigned int default_device;
   static cl_command_queue_properties queue_properties;
 
 };
-
-ISAACAPI void synchronize(std::vector<CommandQueue> const &);
-ISAACAPI void synchronize(Context const &);
 
 }
 }

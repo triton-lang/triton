@@ -15,7 +15,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
   using namespace std;
   isc::driver::Context const & ctx = x.context();
   int_t N = cx.size();
-  isc::driver::CommandQueue queue = isc::driver::backend::queues(ctx)[0];
+  isc::driver::CommandQueue queue = isc::driver::backend::queue(ctx,0);
   cl_command_queue clqueue = queue.handle().cl();
   isc::array scratch(N, x.dtype());
 
@@ -90,18 +90,18 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  std::list<isaac::driver::Context> const & data = isc::driver::backend::contexts();
-  for(isaac::driver::Context const & context : data)
+  std::list<isaac::driver::Context const *> const & data = isc::driver::backend::contexts();
+  for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = isc::driver::backend::queues(context)[0].device();
+    isc::driver::Device device = isc::driver::backend::queue(*context,0).device();
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, context);
+    test_impl<float>(1e-4, *context);
     if(device.fp64_support())
     {
         std::cout << ">> double" << std::endl;
-        test_impl<double>(1e-9, context);
+        test_impl<double>(1e-9, *context);
     }
     std::cout << "---" << std::endl;
   }

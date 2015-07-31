@@ -29,15 +29,6 @@ private:
   HANDLE_TYPE(cl_program, CUmodule) h_;
 };
 
-class ISAACAPI ProgramsHandler
-{
-public:
-    static Program const & add(Context const & scontext, std::string const & name, std::string const & src);
-    static Program const * find(Context const & context, std::string const & name);
-private:
-    static std::map<driver::Context const *, std::map<std::string, Program> > programs_;
-};
-
 }
 
 }
