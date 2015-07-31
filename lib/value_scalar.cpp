@@ -1,5 +1,6 @@
 #include <cmath>
 #include <iostream>
+#include <algorithm>
 #include "isaac/array.h"
 #include "isaac/value_scalar.h"
 #include "isaac/exception/unknown_datatype.h"
