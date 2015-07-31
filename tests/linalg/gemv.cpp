@@ -20,7 +20,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 
   T alpha = 4.2, beta = 5.6;
 
-  isc::driver::CommandQueue queue = isc::driver::backend::queues(y.context())[0];
+  isc::driver::CommandQueue queue = isc::driver::backend::queue(y.context(),0);
 
   T yi = 0, xi = 0;
 #define TEST_OPERATION(NAME, SIZE1, SIZE2, REDUCTION, ASSIGNMENT, GPU_REDUCTION, RES, BUF, CRES)\
@@ -108,18 +108,18 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  std::list<isaac::driver::Context> const & data = isc::driver::backend::contexts();
-  for(isaac::driver::Context const & context : data)
+  std::list<isaac::driver::Context const *> const & data = isc::driver::backend::contexts();
+  for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = isc::driver::backend::queues(context)[0].device();
+    isc::driver::Device device = isc::driver::backend::queue(*context,0).device();
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, context);
+    test_impl<float>(1e-4, *context);
     if(device.fp64_support())
     {
         std::cout << ">> double" << std::endl;
-        test_impl<double>(1e-9, context);
+        test_impl<double>(1e-9, *context);
     }
     std::cout << "---" << std::endl;
   }

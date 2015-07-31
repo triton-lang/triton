@@ -58,7 +58,7 @@ driver::Program const & model::init(controller<expressions_tuple> const & expres
   else
     pname = expressions.compilation_options().program_name;
 
-  driver::Program const * program = driver::ProgramsHandler::find(context, pname);
+  driver::Program const * program = driver::backend::programs::find(context, pname);
   if(program)
       return *program;
 
@@ -69,7 +69,7 @@ driver::Program const & model::init(controller<expressions_tuple> const & expres
      srcs += templates_[i]->generate(buffer, expressions.x(), context.device());
    }
    srcs += fallback_->generate("fallback", expressions.x(), context.device());
-   return driver::ProgramsHandler::add(context, pname, srcs);
+   return driver::backend::programs::add(context, pname, srcs);
 }
 
 model::model(expression_type etype, numeric_type dtype, predictors::random_forest const & predictor, std::vector< std::shared_ptr<templates::base> > const & templates, driver::CommandQueue const & queue) :
