@@ -3,32 +3,33 @@
 
 #include <map>
 #include <list>
+#include <vector>
 
+#include "isaac/driver/common.h"
 #include "isaac/defines.h"
-#include "isaac/driver/command_queue.h"
-#include "isaac/driver/context.h"
 
 namespace isaac
 {
 namespace driver
 {
 
+class Context;
+class CommandQueue;
+
 class ISAACAPI backend
 {
-public:
-  typedef std::list<std::pair<Context, std::vector<CommandQueue> > > container_type;
 private:
-  static std::vector<CommandQueue> & append( Context const & context);
   static void cuinit();
   static void clinit();
   static void init();
 public:
-  static container_type const & contexts();
-  static Context default_context();
-  static std::vector<CommandQueue> & default_queues();
+  static std::list<Context> const & contexts();
+  static Context const & import(cl_context context);
+  static Context const & default_context();
   static std::vector<CommandQueue> & queues(Context const &);
 private:
-  static container_type data_;
+  static std::list<Context> contexts_;
+  static std::map<Context*, std::vector<CommandQueue>> queues_;
 public:
   static unsigned int default_device;
   static cl_command_queue_properties queue_properties;

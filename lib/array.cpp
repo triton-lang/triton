@@ -19,7 +19,7 @@ namespace isaac
 /*--- Constructors ---*/
 //1D Constructors
 
-array::array(int_t shape0, numeric_type dtype, driver::Context context) :
+array::array(int_t shape0, numeric_type dtype, driver::Context const & context) :
   dtype_(dtype), shape_(shape0, 1, 1, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
   context_(context), data_(context_, size_of(dtype)*dsize())
 { }
@@ -30,7 +30,7 @@ array::array(int_t shape0, numeric_type dtype, driver::Buffer data, int_t start,
 
 
 template<class DT>
-array::array(std::vector<DT> const & x, driver::Context context):
+array::array(std::vector<DT> const & x, driver::Context const & context):
   dtype_(to_numeric_type<DT>::value), shape_(x.size(), 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
   context_(context), data_(context, size_of(dtype_)*dsize())
 { *this = x; }
@@ -39,7 +39,7 @@ array::array(array & v, slice const & s0) : dtype_(v.dtype_), shape_(s0.size, 1,
                                             ld_(v.ld_), context_(v.data_.context()), data_(v.data_)
 {}
 
-#define INSTANTIATE(T) template ISAACAPI array::array(std::vector<T> const &, driver::Context)
+#define INSTANTIATE(T) template ISAACAPI array::array(std::vector<T> const &, driver::Context const &)
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
 INSTANTIATE(short);
@@ -55,7 +55,7 @@ INSTANTIATE(double);
 #undef INSTANTIATE
 
 // 2D
-array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Context context) : dtype_(dtype), shape_(shape0, shape1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
+array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Context const & context) : dtype_(dtype), shape_(shape0, shape1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
                                                                                         context_(context), data_(context_, size_of(dtype_)*dsize())
 {}
 
@@ -71,7 +71,7 @@ array::array(array & M, slice const & s0, slice const & s1) :  dtype_(M.dtype_),
 
 
 template<typename DT>
-array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::Context context)
+array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::Context const & context)
   : dtype_(to_numeric_type<DT>::value),
     shape_(shape0, shape1), start_(0, 0), stride_(1, 1), ld_(shape0),
     context_(context), data_(context_, size_of(dtype_)*dsize())
@@ -80,7 +80,7 @@ array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::C
 }
 
 // 3D
-array::array(int_t shape0, int_t shape1, int_t shape2, numeric_type dtype, driver::Context context) : dtype_(dtype), shape_(shape0, shape1, shape2, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
+array::array(int_t shape0, int_t shape1, int_t shape2, numeric_type dtype, driver::Context const & context) : dtype_(dtype), shape_(shape0, shape1, shape2, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
                                                                                         context_(context), data_(context_, size_of(dtype_)*dsize())
 {}
 
@@ -92,7 +92,7 @@ array::array(numeric_type dtype, driver::Buffer data, slice const & s0, slice co
 
 
 
-#define INSTANTIATE(T) template ISAACAPI array::array(int_t, int_t, std::vector<T> const &, driver::Context)
+#define INSTANTIATE(T) template ISAACAPI array::array(int_t, int_t, std::vector<T> const &, driver::Context const &)
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
 INSTANTIATE(short);
@@ -284,7 +284,7 @@ namespace detail
 {
 
 template<class T>
-void copy(driver::Context & context, driver::Buffer const & data, T value)
+void copy(driver::Context const & context, driver::Buffer const & data, T value)
 {
   driver::backend::queues(context)[0].write(data, CL_TRUE, 0, sizeof(T), (void*)&value);
 }
@@ -294,7 +294,7 @@ void copy(driver::Context & context, driver::Buffer const & data, T value)
 scalar::scalar(numeric_type dtype, const driver::Buffer &data, int_t offset): array(dtype, data, _(offset, offset+1), _(1,2), 1)
 { }
 
-scalar::scalar(value_scalar value, driver::Context context) : array(1, value.dtype(), context)
+scalar::scalar(value_scalar value, driver::Context const & context) : array(1, value.dtype(), context)
 {
   switch(dtype_)
   {
@@ -313,7 +313,7 @@ scalar::scalar(value_scalar value, driver::Context context) : array(1, value.dty
 }
 
 
-scalar::scalar(numeric_type dtype, driver::Context context) : array(1, dtype, context)
+scalar::scalar(numeric_type dtype, driver::Context const & context) : array(1, dtype, context)
 { }
 
 scalar::scalar(array_expression const & proxy) : array(proxy){ }

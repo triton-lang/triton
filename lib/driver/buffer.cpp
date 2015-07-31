@@ -1,5 +1,6 @@
 #include <iostream>
 #include "isaac/driver/buffer.h"
+#include "isaac/driver/backend.h"
 #include "helpers/ocl/infos.hpp"
 
 namespace isaac
@@ -8,7 +9,7 @@ namespace isaac
 namespace driver
 {
 
-Buffer::Buffer(cl_mem buffer, bool take_ownership) : backend_(OPENCL), context_(ocl::info<CL_MEM_CONTEXT>(buffer), false), h_(backend_, take_ownership)
+Buffer::Buffer(cl_mem buffer, bool take_ownership) : backend_(OPENCL), context_(backend::import(ocl::info<CL_MEM_CONTEXT>(buffer))), h_(backend_, take_ownership)
 {
   h_.cl() = buffer;
 }

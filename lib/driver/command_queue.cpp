@@ -1,5 +1,6 @@
 #include <iostream>
 
+#include "isaac/driver/backend.h"
 #include "isaac/driver/command_queue.h"
 #include "isaac/driver/common.h"
 #include "isaac/driver/context.h"
@@ -17,7 +18,7 @@ namespace isaac
 namespace driver
 {
 
-CommandQueue::CommandQueue(cl_command_queue const & queue, bool take_ownership) : backend_(OPENCL), context_(ocl::info<CL_QUEUE_CONTEXT>(queue), false), device_(ocl::info<CL_QUEUE_DEVICE>(queue), false), h_(backend_, take_ownership)
+CommandQueue::CommandQueue(cl_command_queue const & queue, bool take_ownership) : backend_(OPENCL), context_(backend::import(ocl::info<CL_QUEUE_CONTEXT>(queue))), device_(ocl::info<CL_QUEUE_DEVICE>(queue), false), h_(backend_, take_ownership)
 {
   h_.cl() = queue;
 }
