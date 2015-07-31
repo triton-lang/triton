@@ -18,6 +18,9 @@ class CommandQueue;
 
 class ISAACAPI backend
 {
+public:
+  typedef std::list<Context> context_container;
+  typedef std::map<Context*, std::vector<CommandQueue>> queues_container;
 private:
   static void cuinit();
   static void clinit();
