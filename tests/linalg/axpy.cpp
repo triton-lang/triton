@@ -16,7 +16,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   int failure_count = 0;
   isc::numeric_type dtype = x.dtype();
   isc::driver::Context const & ctx = x.context();
-  isc::driver::CommandQueue queue = isc::driver::queues[ctx][0];
+  isc::driver::CommandQueue queue = isc::driver::backend::queues(ctx)[0];
   cl_command_queue clqueue = queue.handle().cl();
   int_t N = cz.size();
 
@@ -140,7 +140,7 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  auto data = isc::driver::queues.contexts();
+  auto data = isc::driver::backend::contexts();
   for(const auto & elem : data)
   {
     isc::driver::Device device = elem.second[0].device();

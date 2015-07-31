@@ -124,7 +124,7 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 
 int main()
 {
-  auto data = isc::driver::queues.contexts();
+  auto data = isc::driver::backend::contexts();
   for(const auto & elem : data)
   {
     isc::driver::Device device = elem.second[0].device();

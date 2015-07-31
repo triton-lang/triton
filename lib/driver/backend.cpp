@@ -9,16 +9,13 @@ namespace isaac
 namespace driver
 {
 
-queues_type::queues_type(): default_device(0), queue_properties(0)
-{}
-
-std::vector<CommandQueue> & queues_type::append(Context const & context)
+std::vector<CommandQueue> & backend::append(Context const & context)
 {
   data_.push_back(std::make_pair(context, std::vector<CommandQueue>(1, CommandQueue(context, context.device(), queue_properties))));
   return data_.back().second;
 }
 
-void queues_type::cuinit()
+void backend::cuinit()
 {
 #ifdef ISAAC_WITH_CUDA
   cuda::check(cuInit(0));
@@ -29,7 +26,7 @@ void queues_type::cuinit()
 #endif
 }
 
-void queues_type::clinit()
+void backend::clinit()
 {
   cl_uint nplatforms;
   ocl::check(clGetPlatformIDs(0, NULL, &nplatforms));
@@ -46,7 +43,7 @@ void queues_type::clinit()
   }
 }
 
-void queues_type::init()
+void backend::init()
 {
   if(data_.empty())
   {
@@ -55,7 +52,7 @@ void queues_type::init()
   }
 }
 
-std::vector<CommandQueue> & queues_type::operator[](Context const & context)
+std::vector<CommandQueue> & backend::queues(Context const & context)
 {
   init();
   for(auto & x : data_)
@@ -63,7 +60,7 @@ std::vector<CommandQueue> & queues_type::operator[](Context const & context)
   return append(context);
 }
 
-Context queues_type::default_context()
+Context backend::default_context()
 {
   init();
   container_type::iterator it = data_.begin();
@@ -71,11 +68,11 @@ Context queues_type::default_context()
   return it->first;
 }
 
-std::vector<CommandQueue> & queues_type::default_queues()
-{ return (*this)[default_context()]; }
+std::vector<CommandQueue> & backend::default_queues()
+{ return backend::queues(default_context()); }
 
 
-queues_type::container_type const & queues_type::contexts()
+backend::container_type const & backend::contexts()
 {
   init();
   return data_;
@@ -89,9 +86,16 @@ ISAACAPI void synchronize(std::vector<CommandQueue > & queues)
 }
 
 ISAACAPI void synchronize(Context const & context)
-{ synchronize(queues[context]); }
+{ synchronize(backend::queues(context)); }
 
-ISAACAPI queues_type queues;
+
+//Static variables
+
+unsigned int backend::default_device = 0;
+
+cl_command_queue_properties backend::queue_properties = 0;
+
+backend::container_type backend::data_ = backend::container_type();
 
 }
 
