@@ -2,6 +2,7 @@
 #define TEST_COMMON_HPP_
 
 #include <vector>
+#include <algorithm>
 #include "isaac/array.h"
 
 typedef isaac::int_t int_t;
