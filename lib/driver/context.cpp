@@ -8,7 +8,7 @@ namespace isaac
 namespace driver
 {
 
-Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], false), h_(backend_, take_ownership), programs_(*this)
+Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], false), h_(backend_, take_ownership)
 {
     h_.cl() = context;
 
@@ -21,7 +21,7 @@ Context::Context(cl_context const & context, bool take_ownership) : backend_(OPE
 
 }
 
-Context::Context(Device const & device) : backend_(device.backend_), device_(device), h_(backend_, true), programs_(*this)
+Context::Context(Device const & device) : backend_(device.backend_), device_(device), h_(backend_, true)
 {
 #ifndef ANDROID
   if (std::getenv("ISAAC_CACHE_PATH"))
@@ -62,33 +62,6 @@ Device const & Context::device() const
 
 backend_type Context::backend() const
 { return backend_; }
-
-
-///////////////////////
-
-Context::ProgramsHandler::ProgramsHandler(const Context &context) : context_(context){ }
-
-Program const & Context::ProgramsHandler::add(std::string const & name, std::string const & src)
-{
-    std::map<std::string, Program>::iterator it = programs_.find(name);
-    if(it==programs_.end())
-    {
-        std::string extensions;
-        std::string ext = "cl_khr_fp64";
-        if(context_.device().extensions().find(ext)!=std::string::npos)
-          extensions = "#pragma OPENCL EXTENSION " + ext + " : enable\n";
-        return programs_.insert(std::make_pair(name, driver::Program(context_, extensions + src))).first->second;
-    }
-    return it->second;
-}
-
-const Program * Context::ProgramsHandler::find(const std::string &name)
-{
-    std::map<std::string, Program>::const_iterator it = programs_.find(name);
-    if(it==programs_.end())
-        return NULL;
-    return &it->second;
-}
 
 }
 }
