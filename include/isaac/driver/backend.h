@@ -22,6 +22,7 @@ class ISAACAPI backend
 {
 private:
   static void init();
+
 public:
   class programs
   {
@@ -33,17 +34,35 @@ public:
       static std::map<driver::Context const *, std::map<std::string, Program*> > programs_;
   };
 
+  class contexts
+  {
+      friend class backend;
+  public:
+      static Context const & get_default();
+      static Context const & import(cl_context context);
+      static void get(std::list<Context const *> &);
+  private:
+      static void release();
+      static std::list<Context const *> contexts_;
+  };
+
+  class queues
+  {
+      friend class backend;
+  public:
+      static void get(Context const &, std::vector<CommandQueue*> queues);
+      static CommandQueue & get(Context const &, unsigned int id);
+  private:
+      static void release();
+      static std::map< Context const *, std::vector<CommandQueue*> > queues_;
+  };
+
   static void platforms(std::vector<Platform> &);
-  static std::list<Context const *> const  & contexts();
-  static Context const & import(cl_context context);
-  static Context const & default_context();
   static void synchronize(Context const &);
-  static CommandQueue & queue(Context const &, unsigned int id);
-  static void queues(Context const &, std::vector<CommandQueue*> queues);
   static void release();
+
 private:
-  static std::list<Context const *> contexts_;
-  static std::map< Context const *, std::vector<CommandQueue*> > queues_;
+
 public:
   static unsigned int default_device;
   static cl_command_queue_properties queue_properties;

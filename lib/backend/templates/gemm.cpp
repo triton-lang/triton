@@ -595,7 +595,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       out = tmp.get();
     }
 
-//    std::cout << C << std::endl;
     driver::Kernel gemm(program, gemm_name.c_str());
     driver::NDRange local(p_.local_size_0, p_.local_size_1);
 

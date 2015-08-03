@@ -84,12 +84,12 @@ void Kernel::setSizeArg(unsigned int index, size_t N)
 #endif
     case OPENCL:
       if(address_bits_==32){
-        int32_t NN = N;
+        cl_int NN = N;
         ocl::check(clSetKernelArg(h_.cl(), index, 4, &NN));
       }
       else if(address_bits_==64)
       {
-        int64_t NN = N;
+        cl_long NN = N;
         ocl::check(clSetKernelArg(h_.cl(), index, 8, &NN));
       }
       else

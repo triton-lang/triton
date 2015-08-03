@@ -286,7 +286,7 @@ namespace detail
 template<class T>
 void copy(driver::Context const & context, driver::Buffer const & data, T value)
 {
-  driver::backend::queue(context,0).write(data, CL_TRUE, 0, sizeof(T), (void*)&value);
+  driver::backend::queues::get(context,0).write(data, CL_TRUE, 0, sizeof(T), (void*)&value);
 }
 
 }
@@ -323,7 +323,7 @@ void scalar::inject(values_holder & v) const
     int_t dtsize = size_of(dtype_);
   #define HANDLE_CASE(DTYPE, VAL) \
   case DTYPE:\
-    driver::backend::queue(context_, 0).read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL); break;\
+    driver::backend::queues::get(context_, 0).read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL); break;\
 
     switch(dtype_)
     {
@@ -370,7 +370,7 @@ TYPE scalar::cast() const
 
 scalar& scalar::operator=(value_scalar const & s)
 {
-  driver::CommandQueue& queue = driver::backend::queue(context_, 0);
+  driver::CommandQueue& queue = driver::backend::queues::get(context_, 0);
   int_t dtsize = size_of(dtype_);
 
 #define HANDLE_CASE(TYPE, CLTYPE) case TYPE:\
@@ -827,10 +827,10 @@ void copy(array const & x, void* data, driver::CommandQueue & queue, bool blocki
 }
 
 void copy(void const *data, array &x, bool blocking)
-{ copy(data, x, driver::backend::queue(x.context(), 0), blocking); }
+{ copy(data, x, driver::backend::queues::get(x.context(), 0), blocking); }
 
 void copy(array const & x, void* data, bool blocking)
-{ copy(x, data, driver::backend::queue(x.context(), 0), blocking); }
+{ copy(x, data, driver::backend::queues::get(x.context(), 0), blocking); }
 
 //std::vector<>
 template<class T>
@@ -855,11 +855,11 @@ void copy(array const & x, std::vector<T> & cx, driver::CommandQueue & queue, bo
 
 template<class T>
 void copy(std::vector<T> const & cx, array & x, bool blocking)
-{ copy(cx, x, driver::backend::queue(x.context(), 0), blocking); }
+{ copy(cx, x, driver::backend::queues::get(x.context(), 0), blocking); }
 
 template<class T>
 void copy(array const & x, std::vector<T> & cx, bool blocking)
-{ copy(x, cx, driver::backend::queue(x.context(), 0), blocking); }
+{ copy(x, cx, driver::backend::queues::get(x.context(), 0), blocking); }
 
 #define INSTANTIATE(T) \
   template void ISAACAPI  copy<T>(std::vector<T> const &, array &, driver::CommandQueue&, bool);\

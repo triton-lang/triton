@@ -16,7 +16,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   int failure_count = 0;
   isc::numeric_type dtype = x.dtype();
   isc::driver::Context const & context = x.context();
-  isc::driver::CommandQueue queue = isc::driver::backend::queue(context,0);
+  isc::driver::CommandQueue queue = isc::driver::backend::queues::get(context,0);
   cl_command_queue clqueue = queue.handle().cl();
   int_t N = cz.size();
 
@@ -138,10 +138,11 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  std::list<isaac::driver::Context const *> const & data = isc::driver::backend::contexts();
+  std::list<isaac::driver::Context const *> data;
+  isc::driver::backend::contexts::get(data);
   for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = isc::driver::backend::queue(*context,0).device();
+    isc::driver::Device device = isc::driver::backend::queues::get(*context,0).device();
     if(device.type() != isc::driver::DEVICE_TYPE_GPU)
         continue;
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;

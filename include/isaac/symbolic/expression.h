@@ -238,7 +238,7 @@ struct execution_options_type
   {
     if(queue_)
         return *queue_;
-    return driver::backend::queue(context, queue_id_);
+    return driver::backend::queues::get(context, queue_id_);
   }
 
   std::list<driver::Event>* events;
