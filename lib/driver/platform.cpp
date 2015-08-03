@@ -57,6 +57,7 @@ void Platform::devices(std::vector<Device> & devices) const
       cuda::check(cuDeviceGetCount(&N));
       for(int i = 0 ; i < N ; ++i)
         devices.push_back(Device(i));
+      break;
     }
 #endif
     case OPENCL:
@@ -67,6 +68,7 @@ void Platform::devices(std::vector<Device> & devices) const
       ocl::check(clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, ndevices, device_ids.data(), NULL));
       for(cl_device_id d : device_ids)
         devices.push_back(Device(d));
+      break;
     }
     default:
       throw;

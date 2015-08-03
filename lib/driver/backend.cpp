@@ -12,47 +12,21 @@ namespace isaac
 namespace driver
 {
 
-void backend::cuinit()
-{
-#ifdef ISAAC_WITH_CUDA
-  cuda::check(cuInit(0));
-  int N;
-  cuda::check(cuDeviceGetCount(&N));
-  for(int i = 0 ; i < N ; ++i)
-  {
-      Device device(i);
-      contexts_.emplace_back(new Context(device));
-      queues_.insert(std::make_pair(contexts_.back(), std::vector<CommandQueue*>{new CommandQueue(contexts_.back(), device, queue_properties)}));
-  }
-#endif
-}
-
-void backend::clinit()
-{
-  cl_uint nplatforms;
-  ocl::check(clGetPlatformIDs(0, NULL, &nplatforms));
-  std::vector<cl_platform_id> platforms(nplatforms);
-  ocl::check(clGetPlatformIDs(nplatforms, platforms.data(), NULL));
-  for(cl_platform_id p : platforms)
-  {
-    cl_uint ndevices;
-    ocl::check(clGetDeviceIDs(p, CL_DEVICE_TYPE_ALL, 0, NULL, &ndevices));
-    std::vector<cl_device_id> devices(ndevices);
-    ocl::check(clGetDeviceIDs(p, CL_DEVICE_TYPE_ALL, ndevices, devices.data(), NULL));
-    for(cl_device_id d : devices){
-      Device device(d);
-      contexts_.emplace_back(new Context(device));
-      queues_.insert(std::make_pair(contexts_.back(), std::vector<CommandQueue*>{new CommandQueue(*contexts_.back(), device, queue_properties)}));
-    }
-  }
-}
-
 void backend::init()
 {
   if(contexts_.empty())
   {
-    cuinit();
-    clinit();
+      std::vector<Platform> platforms;
+      backend::platforms(platforms);
+      for(Platform const & platform: platforms)
+      {
+          std::vector<Device> devices;
+          platform.devices(devices);
+          for(Device const & device: devices){
+              contexts_.push_back(new Context(device));
+              queues_.insert(std::make_pair(contexts_.back(), std::vector<CommandQueue*>{new CommandQueue(*contexts_.back(), device, queue_properties)}));
+          }
+      }
   }
 }
 
@@ -65,6 +39,12 @@ CommandQueue & backend::queue(Context const & context, unsigned int id)
         return *x.second[id];
   throw;
 }
+
+void backend::queues(Context const & context, std::vector<CommandQueue*> queues)
+{
+    queues = queues_[&context];
+}
+
 
 Context const & backend::import(cl_context context)
 {
@@ -90,6 +70,18 @@ const std::list<Context const *> &backend::contexts()
   return contexts_;
 }
 
+void backend::platforms(std::vector<Platform> & platforms)
+{
+  #ifdef ISAAC_WITH_CUDA
+    platforms.push_back(Platform(CUDA));
+  #endif
+    cl_uint nplatforms;
+    ocl::check(clGetPlatformIDs(0, NULL, &nplatforms));
+    std::vector<cl_platform_id> clplatforms(nplatforms);
+    ocl::check(clGetPlatformIDs(nplatforms, clplatforms.data(), NULL));
+    for(cl_platform_id p: clplatforms)
+        platforms.push_back(Platform(p));
+}
 
 void backend::synchronize(Context const & context)
 {

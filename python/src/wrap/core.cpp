@@ -86,7 +86,7 @@ namespace detail
   }
 
   std::shared_ptr<isc::array>
-  ndarray_to_iscarray(const np::ndarray& array, const isc::driver::Context& ctx)
+  ndarray_to_iscarray(const np::ndarray& array, isc::driver::Context const & ctx)
   {
 
     int d = array.get_nd();
@@ -107,17 +107,17 @@ namespace detail
 
 
 
-  std::shared_ptr<isc::array> create_array(bp::object const & obj, bp::object odtype, isc::driver::Context context)
+  std::shared_ptr<isc::array> create_array(bp::object const & obj, bp::object odtype, isc::driver::Context const & context)
   {
     return ndarray_to_iscarray(np::from_object(obj, to_np_dtype(tools::extract_dtype(odtype))), context);
   }
 
-  std::shared_ptr<isc::array> create_zeros_array(isc::int_t M, isc::int_t N, bp::object odtype, isc::driver::Context context)
+  std::shared_ptr<isc::array> create_zeros_array(isc::int_t M, isc::int_t N, bp::object odtype, isc::driver::Context const & context)
   {
    return std::shared_ptr<isc::array>(new isc::array(isc::zeros(M, N, tools::extract_dtype(odtype), context)));
   }
 
-  std::shared_ptr<isc::array> create_empty_array(bp::object sizes, bp::object odtype, isc::driver::Context context)
+  std::shared_ptr<isc::array> create_empty_array(bp::object sizes, bp::object odtype, isc::driver::Context const & context)
   {
       typedef std::shared_ptr<isc::array> result_type;
 
@@ -269,7 +269,7 @@ void export_core()
   bp::class_<isc::array,
           std::shared_ptr<isc::array> >
   ( "array", bp::no_init)
-      .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=isc::driver::queues.default_context())))
+      .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=isc::driver::backend::default_context())))
       .def(bp::init<isc::array_expression>())
       .add_property("dtype", &isc::array::dtype)
       .add_property("context", bp::make_function(&isc::array::context, bp::return_internal_reference<>()))
@@ -292,11 +292,11 @@ void export_core()
 
   bp::class_<isc::scalar, bp::bases<isc::array> >
       ("scalar", bp::no_init)
-      .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=isc::driver::queues.default_context())))
+      .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=isc::driver::backend::default_context())))
       ;
 
 //Other numpy-like initializers
-  bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=isc::driver::queues.default_context()));
+  bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=isc::driver::backend::default_context()));
 
 //Assign
     bp::def("assign", static_cast<isc::array_expression (*)(isc::array const &, isc::array const &)>(&isc::assign));\
@@ -320,7 +320,7 @@ void export_core()
       bp::def(#name, static_cast<isc::array_expression (*)(isc::array const &)>(&isc::name));\
       bp::def(#name, static_cast<isc::array_expression (*)(isc::array_expression const &)>(&isc::name));
 
-      bp::def("zeros", &detail::create_zeros_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=isc::driver::queues.default_context()));
+      bp::def("zeros", &detail::create_zeros_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=isc::driver::backend::default_context()));
 
   MAP_FUNCTION(abs)
   MAP_FUNCTION(acos)
