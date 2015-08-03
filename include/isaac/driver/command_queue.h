@@ -36,7 +36,7 @@ public:
   HANDLE_TYPE(cl_command_queue, CUstream)& handle();
 private:
   backend_type backend_;
-  Context const & context_;
+  Context const * context_;
   Device device_;
   HANDLE_TYPE(cl_command_queue, CUstream) h_;
 };

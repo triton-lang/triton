@@ -1,7 +1,6 @@
 #include <memory>
 
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
-#include <boost/python/suite/indexing/map_indexing_suite.hpp>
 
 #include "isaac/model/model.h"
 #include "isaac/symbolic/execute.h"
@@ -23,14 +22,31 @@ namespace detail
 
   bp::list get_platforms()
   {
-    std::vector<isc::driver::Platform> platforms(isc::driver::Platform::get());
+    std::vector<isc::driver::Platform> platforms;
+    isc::driver::backend::platforms(platforms);
     return tools::to_list(platforms.begin(), platforms.end());
   }
 
   bp::list get_devices(isc::driver::Platform const & platform)
   {
-    std::vector<isc::driver::Device> devices(platform.devices());
+    std::vector<isc::driver::Device> devices;
+    platform.devices(devices);
     return tools::to_list(devices.begin(), devices.end());
+  }
+
+  bp::list get_queues(isc::driver::Context const & context)
+  {
+    std::vector<isc::driver::CommandQueue*> queues;
+    isc::driver::backend::queues(context, queues);
+    bp::list res;
+    for(isc::driver::CommandQueue* queue:queues)
+        res.append(*queue);
+    return res;
+  }
+
+  std::shared_ptr< isc::driver::CommandQueue> create_queue(isc::driver::Context const & context, isc::driver::Device const & device)
+  {
+      return std::shared_ptr<isc::driver::CommandQueue>(new isc::driver::CommandQueue(context, device));
   }
 
   struct model_map_indexing
@@ -144,13 +160,13 @@ void export_driver()
       .add_property("nv_compute_capability", &detail::nv_compute_capability)
       ;
 
-  bp::class_<isc::driver::Context>("context", bp::no_init)
+  bp::class_<isc::driver::Context, boost::noncopyable>("context", bp::no_init)
       .def("__init__", bp::make_constructor(&detail::make_context))
-      .add_property("queues", bp::make_function(static_cast<std::vector<isc::driver::CommandQueue> & (*)(const isc::driver::Context&)>( [](const isc::driver::Context & ctx) -> std::vector<isc::driver::CommandQueue> & { return isc::driver::backend[ctx]; }) , bp::return_internal_reference<>()))
+      .add_property("queues", &detail::get_queues)
       .add_property("backend", &isc::driver::Context::backend)
       ;
 
-  bp::class_<isc::driver::CommandQueue>("command_queue", bp::init<isc::driver::Context, isc::driver::Device>())
+  bp::class_<isc::driver::CommandQueue>("command_queue", bp::init<isc::driver::Context const &, isc::driver::Device const &>())
       .def("synchronize", &isc::driver::CommandQueue::synchronize)
       .add_property("models", bp::make_function(&isc::models, bp::return_internal_reference<>()))
       .add_property("device", bp::make_function(&isc::driver::CommandQueue::device, bp::return_internal_reference<>()))

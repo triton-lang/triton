@@ -14,14 +14,13 @@ namespace isaac
 namespace driver
 {
 
-class Context;
 class CommandQueue;
+class Context;
+class Platform;
 
 class ISAACAPI backend
 {
 private:
-  static void cuinit();
-  static void clinit();
   static void init();
 public:
   class programs
@@ -34,16 +33,17 @@ public:
       static std::map<driver::Context const *, std::map<std::string, Program*> > programs_;
   };
 
+  static void platforms(std::vector<Platform> &);
   static std::list<Context const *> const  & contexts();
   static Context const & import(cl_context context);
   static Context const & default_context();
   static void synchronize(Context const &);
   static CommandQueue & queue(Context const &, unsigned int id);
-
+  static void queues(Context const &, std::vector<CommandQueue*> queues);
   static void release();
 private:
   static std::list<Context const *> contexts_;
-  static std::map<Context const *, std::vector<CommandQueue*>> queues_;
+  static std::map< Context const *, std::vector<CommandQueue*> > queues_;
 public:
   static unsigned int default_device;
   static cl_command_queue_properties queue_properties;

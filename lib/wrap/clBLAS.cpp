@@ -14,7 +14,7 @@ extern "C"
 
     void clblasTeardown()
     {
-
+        isaac::driver::backend::release();
     }
 
     void execute(is::array_expression const & operation, is::driver::Context const & context,
