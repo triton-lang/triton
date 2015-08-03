@@ -9,7 +9,7 @@ namespace isaac
 namespace driver
 {
 
-Buffer::Buffer(cl_mem buffer, bool take_ownership) : backend_(OPENCL), context_(backend::import(ocl::info<CL_MEM_CONTEXT>(buffer))), h_(backend_, take_ownership)
+Buffer::Buffer(cl_mem buffer, bool take_ownership) : backend_(OPENCL), context_(backend::contexts::import(ocl::info<CL_MEM_CONTEXT>(buffer))), h_(backend_, take_ownership)
 {
   h_.cl() = buffer;
 }

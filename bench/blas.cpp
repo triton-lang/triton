@@ -171,7 +171,7 @@ void bench(isc::numeric_type dtype, std::string operation)
   }
 
   unsigned int dtsize = isc::size_of(dtype);
-  isc::driver::CommandQueue & queue = isc::driver::backend::queue(isc::driver::backend::default_context(),0);
+  isc::driver::CommandQueue & queue = isc::driver::backend::queues::get(isc::driver::backend::contexts::get_default(),0);
   std::map<std::string, std::string> metric{ {"axpy", "GB/s"}, {"dot", "GB/s"}, {"gemv", "GB/s"}, {"gemm", "GFLOPS"}};
   isc::array flush(1e6, dtype);
   std::cout << "#" << operation << " (" << metric[operation] << ")" << std::endl;
@@ -403,7 +403,8 @@ int main(int argc, char* argv[])
   isc::driver::backend::queue_properties = CL_QUEUE_PROFILING_ENABLE;
 
   int device_idx = 0;
-  std::list<isc::driver::Context const *> const & contexts = isc::driver::backend::contexts();
+  std::list<isc::driver::Context const *> contexts;
+  isc::driver::backend::contexts::get(contexts);
 
   std::string operation;
   if(contexts.size() > 1)
@@ -415,7 +416,7 @@ int main(int argc, char* argv[])
       unsigned int current=0;
       for(isc::driver::Context const * context: contexts)
       {
-          isc::driver::Device device = isc::driver::backend::queue(*context,0).device();
+          isc::driver::Device device = isc::driver::backend::queues::get(*context,0).device();
           std::cout << current++ << ": " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
       }
       exit(EXIT_FAILURE);

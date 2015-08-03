@@ -20,7 +20,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   T alpha = 1;
   T beta = 0;
 
-  isc::driver::CommandQueue queue = isc::driver::backend::queue(C.context(),0);
+  isc::driver::CommandQueue queue = isc::driver::backend::queues::get(C.context(),0);
 
   for(int i = 0 ; i < M ; ++i)
   {
@@ -126,10 +126,11 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  std::list<isaac::driver::Context const *> const & data = isc::driver::backend::contexts();
+  std::list<isaac::driver::Context const *> data;
+  isc::driver::backend::contexts::get(data);
   for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = isc::driver::backend::queue(*context,0).device();
+    isc::driver::Device device = isc::driver::backend::queues::get(*context,0).device();
     if(device.type() != isc::driver::DEVICE_TYPE_GPU)
         continue;
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;

@@ -14,7 +14,7 @@ namespace driver
 
 void backend::init()
 {
-  if(contexts_.empty())
+  if(contexts::contexts_.empty())
   {
       std::vector<Platform> platforms;
       backend::platforms(platforms);
@@ -23,14 +23,14 @@ void backend::init()
           std::vector<Device> devices;
           platform.devices(devices);
           for(Device const & device: devices){
-              contexts_.push_back(new Context(device));
-              queues_.insert(std::make_pair(contexts_.back(), std::vector<CommandQueue*>{new CommandQueue(*contexts_.back(), device, queue_properties)}));
+              contexts::contexts_.push_back(new Context(device));
+              queues::queues_.insert(std::make_pair(contexts::contexts_.back(), std::vector<CommandQueue*>{new CommandQueue(*contexts::contexts_.back(), device, queue_properties)}));
           }
       }
   }
 }
 
-CommandQueue & backend::queue(Context const & context, unsigned int id)
+CommandQueue & backend::queues::get(Context const & context, unsigned int id)
 {
   assert(id < queues_.size());
   init();
@@ -40,13 +40,13 @@ CommandQueue & backend::queue(Context const & context, unsigned int id)
   throw;
 }
 
-void backend::queues(Context const & context, std::vector<CommandQueue*> queues)
+void backend::queues::get(Context const & context, std::vector<CommandQueue*> queues)
 {
     queues = queues_[&context];
 }
 
 
-Context const & backend::import(cl_context context)
+Context const & backend::contexts::import(cl_context context)
 {
   for(driver::Context const * x: contexts_)
       if(x->handle().cl()==context)
@@ -56,7 +56,7 @@ Context const & backend::import(cl_context context)
 }
 
 
-Context const & backend::default_context()
+Context const & backend::contexts::get_default()
 {
   init();
   std::list<Context const *>::const_iterator it = contexts_.begin();
@@ -64,10 +64,19 @@ Context const & backend::default_context()
   return **it;
 }
 
-const std::list<Context const *> &backend::contexts()
+void backend::contexts::get(std::list<Context const *> & contexts)
 {
   init();
-  return contexts_;
+  contexts = contexts_;
+}
+
+void backend::contexts::release()
+{
+    for(auto & x: contexts_)
+    {
+        delete x;
+        x = NULL;
+    }
 }
 
 void backend::platforms(std::vector<Platform> & platforms)
@@ -85,29 +94,25 @@ void backend::platforms(std::vector<Platform> & platforms)
 
 void backend::synchronize(Context const & context)
 {
-    for(CommandQueue * queue: queues_.at(&context))
+    for(CommandQueue * queue: queues::queues_.at(&context))
         queue->synchronize();
 }
 
-void backend::release()
+void backend::queues::release()
 {
-    //programs
-    backend::programs::release();
-
-    //queues
     for(auto & x: queues_)
         for(auto & y: x.second)
         {
             delete y;
             y = NULL;
         }
+}
 
-    //context
-    for(auto & x: contexts_)
-    {
-        delete x;
-        x = NULL;
-    }
+void backend::release()
+{
+    backend::programs::release();
+    backend::queues::release();
+    backend::contexts::release();
 }
 
 /* ---- Programs -----*/
@@ -155,9 +160,9 @@ unsigned int backend::default_device = 0;
 
 cl_command_queue_properties backend::queue_properties = 0;
 
-std::list<Context const *> backend::contexts_;
+std::list<Context const *> backend::contexts::contexts_;
 
-std::map<Context const *, std::vector<CommandQueue*> > backend::queues_;
+std::map<Context const *, std::vector<CommandQueue*> > backend::queues::queues_;
 
 
 }
