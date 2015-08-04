@@ -36,7 +36,7 @@ array::array(std::vector<DT> const & x, driver::Context const & context):
 { *this = x; }
 
 array::array(array & v, slice const & s0) : dtype_(v.dtype_), shape_(s0.size, 1, 1, 1), start_(v.start_[0] + v.stride_[0]*s0.start, 0, 0, 0), stride_(v.stride_[0]*s0.stride, 1, 1, 1),
-                                            ld_(v.ld_), context_(v.data_.context()), data_(v.data_)
+                                            ld_(v.ld_), context_(v.context()), data_(v.data_)
 {}
 
 #define INSTANTIATE(T) template ISAACAPI array::array(std::vector<T> const &, driver::Context const &)

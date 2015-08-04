@@ -365,7 +365,7 @@ void bench(isc::numeric_type dtype, std::string operation)
     #if HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
-//        BENCHMARK_ISAAC(C = isc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), isc::execution_options_type(0, &events)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = isc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), isc::execution_options_type(0, &events)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         BENCHMARK_CLBLAS(clblasSgemm(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, BT?clblasTrans:clblasNoTrans, M, N, K, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(B.data()), 0, ldb,

@@ -28,7 +28,7 @@ public:
   HANDLE_TYPE(cl_mem, CUdeviceptr) const &  handle() const;
 private:
   backend_type backend_;
-  Context const & context_;
+  Context context_;
   HANDLE_TYPE(cl_mem, CUdeviceptr) h_;
 };
 

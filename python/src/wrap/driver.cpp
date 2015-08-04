@@ -37,7 +37,7 @@ namespace detail
   bp::list get_queues(isc::driver::Context const & context)
   {
     std::vector<isc::driver::CommandQueue*> queues;
-    isc::driver::backend::queues(context, queues);
+    isc::driver::backend::queues::get(context, queues);
     bp::list res;
     for(isc::driver::CommandQueue* queue:queues)
         res.append(*queue);
