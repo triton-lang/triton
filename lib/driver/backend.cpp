@@ -1,6 +1,7 @@
 #include "isaac/driver/backend.h"
 #include "isaac/driver/context.h"
 #include "isaac/driver/command_queue.h"
+#include "isaac/driver/program_cache.h"
 
 #include <assert.h>
 #include <stdexcept>

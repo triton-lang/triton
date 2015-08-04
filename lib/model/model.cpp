@@ -12,7 +12,7 @@
 #include "isaac/backend/templates/ger.h"
 #include "isaac/backend/templates/gemv.h"
 #include "isaac/backend/templates/gemm.h"
-#include "isaac/driver/program.h"
+#include "isaac/driver/program_cache.h"
 #include "isaac/exception/unknown_datatype.h"
 #include "isaac/exception/operation_not_supported.h"
 #include "isaac/model/model.h"
@@ -25,7 +25,9 @@ namespace isaac
 {
 
 static double time_event(unsigned long sum, driver::Event const & e)
-{ return sum + e.elapsed_time();}
+{
+    return sum + e.elapsed_time();
+}
 
 void model::fill_program_name(char* program_name, expressions_tuple const & expressions, binding_policy_t binding_policy)
 {
