@@ -37,13 +37,21 @@ namespace isaac
     driver::CommandQueue queue_;
   };
 
-  typedef std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<model> > model_map_t;
-
-  model_map_t init_models(driver::CommandQueue const & queue);
-  model_map_t& models(driver::CommandQueue & queue);
+  class models
+  {
+  public:
+      typedef std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<model> > map_type;
+  private:
+      static void import(std::string const & fname, driver::CommandQueue const & queue);
+      static map_type & init(driver::CommandQueue const & queue);
+  public:
+      static map_type & get(driver::CommandQueue const & queue);
+      static void set(driver::CommandQueue const & queue, expression_type operation, numeric_type dtype, std::shared_ptr<model> const & model);
+  private:
+      static std::map<driver::CommandQueue, map_type> data_;
+  };
 
   extern std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::base> > fallbacks;
-  extern std::map<driver::Device, model_map_t> models_;
 
 }
 
