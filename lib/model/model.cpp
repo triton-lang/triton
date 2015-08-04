@@ -132,7 +132,9 @@ void model::execute(controller<expressions_tuple> const & expr)
 }
 
 model::templates_container const & model::templates() const
-{ return templates_; }
+{
+    return templates_;
+}
 
 ///////////////////
 
