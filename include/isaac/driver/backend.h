@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "isaac/driver/common.h"
-#include "isaac/driver/program.h"
 #include "isaac/defines.h"
 #include "isaac/types.h"
 
@@ -18,6 +17,7 @@ namespace driver
 class CommandQueue;
 class Context;
 class Platform;
+class ProgramCache;
 
 class ISAACAPI backend
 {
