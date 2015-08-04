@@ -21,7 +21,6 @@ class Platform;
 class ISAACAPI backend
 {
 private:
-  static void init();
 
 public:
   class programs
@@ -32,37 +31,41 @@ public:
       static Program const * find(Context const & context, std::string const & name);
   private:
       static void release();
-      static std::map<driver::Context, std::map<std::string, Program*> > programs_;
+      static std::map<driver::Context, std::map<std::string, Program*> > cache_;
   };
 
   class contexts
   {
       friend class backend;
+  private:
+      static void init(std::vector<Platform> const &);
+      static void release();
   public:
       static Context const & get_default();
       static Context const & import(cl_context context);
       static void get(std::list<Context const *> &);
   private:
-      static void release();
-      static std::list<Context const *> contexts_;
+      static std::list<Context const *> cache_;
   };
 
   class queues
   {
       friend class backend;
+  private:
+      static void init(std::list<Context const *> const &);
+      static void release();
   public:
-      static void get(Context const &, std::vector<CommandQueue*> queues);
+      static void get(Context const &, std::vector<CommandQueue *> &queues);
       static CommandQueue & get(Context const &, unsigned int id);
   private:
-      static void release();
-      static std::map< Context, std::vector<CommandQueue*> > queues_;
+      static std::map< Context, std::vector<CommandQueue*> > cache_;
   };
+
+  static void init();
+  static void release();
 
   static void platforms(std::vector<Platform> &);
   static void synchronize(Context const &);
-  static void release();
-
-private:
 
 public:
   static unsigned int default_device;

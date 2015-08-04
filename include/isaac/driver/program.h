@@ -6,7 +6,7 @@
 #include "isaac/defines.h"
 #include "isaac/driver/common.h"
 #include "isaac/driver/handle.h"
-
+#include "isaac/driver/context.h"
 namespace isaac
 {
 
@@ -24,7 +24,7 @@ public:
   Context const & context() const;
 private:
   backend_type backend_;
-  Context const & context_;
+  Context context_;
   std::string source_;
   HANDLE_TYPE(cl_program, CUmodule) h_;
 };

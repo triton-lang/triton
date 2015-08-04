@@ -269,7 +269,7 @@ void export_core()
   bp::class_<isc::array,
           std::shared_ptr<isc::array> >
   ( "array", bp::no_init)
-      .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=isc::driver::backend::default_context())))
+      .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=boost::ref(isc::driver::backend::contexts::get_default()))))
       .def(bp::init<isc::array_expression>())
       .add_property("dtype", &isc::array::dtype)
       .add_property("context", bp::make_function(&isc::array::context, bp::return_internal_reference<>()))
@@ -292,11 +292,11 @@ void export_core()
 
   bp::class_<isc::scalar, bp::bases<isc::array> >
       ("scalar", bp::no_init)
-      .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=isc::driver::backend::default_context())))
+      .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=boost::ref(isc::driver::backend::contexts::get_default()))))
       ;
 
 //Other numpy-like initializers
-  bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=isc::driver::backend::default_context()));
+  bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=boost::ref(isc::driver::backend::contexts::get_default())));
 
 //Assign
     bp::def("assign", static_cast<isc::array_expression (*)(isc::array const &, isc::array const &)>(&isc::assign));\
@@ -320,7 +320,7 @@ void export_core()
       bp::def(#name, static_cast<isc::array_expression (*)(isc::array const &)>(&isc::name));\
       bp::def(#name, static_cast<isc::array_expression (*)(isc::array_expression const &)>(&isc::name));
 
-      bp::def("zeros", &detail::create_zeros_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=isc::driver::backend::default_context()));
+      bp::def("zeros", &detail::create_zeros_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=boost::ref(isc::driver::backend::contexts::get_default())));
 
   MAP_FUNCTION(abs)
   MAP_FUNCTION(acos)
