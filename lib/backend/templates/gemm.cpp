@@ -46,7 +46,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
   int gemm::is_invalid_impl(driver::Device const &, expressions_tuple const & expressions) const
   {
     std::vector<int_t> MNK = input_sizes(expressions);
-//    int_t M = MNK[0]; int_t N = MNK[1];
+    int_t M = MNK[0]; int_t N = MNK[1];
 
     if(p_.A_fetching_policy!=FETCH_FROM_LOCAL || p_.B_fetching_policy!=FETCH_FROM_LOCAL)
       throw operation_not_supported_exception("Only local memory is supported for GEMM");

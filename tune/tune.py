@@ -7,6 +7,10 @@ from sklearn import ensemble
 import isaac as isc
 import optimize, tools, model
 
+from json import encoder
+encoder.FLOAT_REPR = lambda o: format(o, '.2f')
+encoder.separators = (',',':')
+
 def unique(L):
     seen = set()
     seen_add = seen.add
@@ -23,7 +27,7 @@ def tune(device, operation, json_path):
     
     #List of size tuples to use
     sizes = {}
-    sizes[isc.templates.axpy] = [(x,) for x in tools.expspace(1e3, 1e7, 4)]
+    sizes[isc.templates.axpy] = [(x,) for x in tools.expspace(1e3, 1e8, 4)]
     sizes[isc.templates.gemv_n] = product(pow2range(4,17), pow2range(4,17))
     sizes[isc.templates.gemv_t] = sizes[isc.templates.gemv_n]
     sizes[isc.templates.gemm_nn]     = product(pow2range(6, 12), pow2range(6, 12), pow2range(6, 12))
@@ -31,6 +35,9 @@ def tune(device, operation, json_path):
     sizes[isc.templates.gemm_nt]     = sizes[isc.templates.gemm_nn]
     sizes[isc.templates.gemm_tt]     = sizes[isc.templates.gemm_nn]
     
+    #ger
+    sizes[isc.templates.ger] = [(1536,1536)]
+
     #AlexNet sizes
     sizes[isc.templates.gemm_nn]	 = [(3025,96,363),
                                         (729,128,1200),
