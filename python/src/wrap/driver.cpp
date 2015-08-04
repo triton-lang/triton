@@ -68,6 +68,7 @@ namespace detail
       {
           isc::expression_type expression = tools::extract_template_type(i_[0]);
           isc::numeric_type dtype = tools::extract_dtype(i_[1]);
+          isc::driver::backend::programs::release();
           container[std::make_pair(expression, dtype)].reset(new isc::model(v));
       }
   };
