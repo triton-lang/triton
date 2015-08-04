@@ -24,7 +24,6 @@ class ISAACAPI Context
 public:
   explicit Context(cl_context const & context, bool take_ownership = true);
   explicit Context(Device const & device);
-  Context(Context const &) = delete;
 
   backend_type backend() const;
   Device const & device() const;

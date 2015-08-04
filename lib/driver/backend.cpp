@@ -24,7 +24,7 @@ void backend::init()
           platform.devices(devices);
           for(Device const & device: devices){
               contexts::contexts_.push_back(new Context(device));
-              queues::queues_.insert(std::make_pair(contexts::contexts_.back(), std::vector<CommandQueue*>{new CommandQueue(*contexts::contexts_.back(), device, queue_properties)}));
+              queues::queues_.insert(std::make_pair(*contexts::contexts_.back(), std::vector<CommandQueue*>{new CommandQueue(*contexts::contexts_.back(), device, queue_properties)}));
           }
       }
   }
@@ -35,14 +35,14 @@ CommandQueue & backend::queues::get(Context const & context, unsigned int id)
   assert(id < queues_.size());
   init();
   for(auto & x : queues_)
-    if(x.first==&context)
+    if(x.first==context)
         return *x.second[id];
   throw;
 }
 
 void backend::queues::get(Context const & context, std::vector<CommandQueue*> queues)
 {
-    queues = queues_[&context];
+    queues = queues_[context];
 }
 
 
@@ -73,10 +73,8 @@ void backend::contexts::get(std::list<Context const *> & contexts)
 void backend::contexts::release()
 {
     for(auto & x: contexts_)
-    {
         delete x;
-        x = NULL;
-    }
+    contexts_.clear();
 }
 
 void backend::platforms(std::vector<Platform> & platforms)
@@ -94,7 +92,7 @@ void backend::platforms(std::vector<Platform> & platforms)
 
 void backend::synchronize(Context const & context)
 {
-    for(CommandQueue * queue: queues::queues_.at(&context))
+    for(CommandQueue * queue: queues::queues_.at(context))
         queue->synchronize();
 }
 
@@ -102,10 +100,8 @@ void backend::queues::release()
 {
     for(auto & x: queues_)
         for(auto & y: x.second)
-        {
             delete y;
-            y = NULL;
-        }
+    queues_.clear();
 }
 
 void backend::release()
@@ -119,7 +115,7 @@ void backend::release()
 
 Program const & backend::programs::add(Context const & context, std::string const & name, std::string const & src)
 {
-    std::map<std::string, Program*> & pgms = programs_.at(&context);
+    std::map<std::string, Program*> & pgms = programs_.at(context);
     std::map<std::string, Program*>::iterator it = pgms.find(name);
     if(it==pgms.end())
     {
@@ -134,7 +130,7 @@ Program const & backend::programs::add(Context const & context, std::string cons
 
 const Program * backend::programs::find(Context const & context, const std::string &name)
 {
-    std::map<std::string, Program*> & pgms = programs_[&context];
+    std::map<std::string, Program*> & pgms = programs_[context];
     std::map<std::string, Program*>::const_iterator it = pgms.find(name);
     if(it==pgms.end())
         return NULL;
@@ -145,13 +141,11 @@ void backend::programs::release()
 {
     for(auto & x: programs_)
         for(auto & y: x.second)
-        {
             delete y.second;
-            y.second = NULL;
-        }
+    programs_.clear();
 }
 
-std::map<driver::Context const *, std::map<std::string, Program*> > backend::programs::programs_;
+std::map<driver::Context, std::map<std::string, Program*> > backend::programs::programs_;
 
 
 //Static variables
@@ -162,7 +156,7 @@ cl_command_queue_properties backend::queue_properties = 0;
 
 std::list<Context const *> backend::contexts::contexts_;
 
-std::map<Context const *, std::vector<CommandQueue*> > backend::queues::queues_;
+std::map<Context, std::vector<CommandQueue*> > backend::queues::queues_;
 
 
 }

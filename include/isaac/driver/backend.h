@@ -26,12 +26,13 @@ private:
 public:
   class programs
   {
+      friend class backend;
   public:
-      static Program const & add(Context const & scontext, std::string const & name, std::string const & src);
+      static Program const & add(Context const & context, std::string const & name, std::string const & src);
       static Program const * find(Context const & context, std::string const & name);
-      static void release();
   private:
-      static std::map<driver::Context const *, std::map<std::string, Program*> > programs_;
+      static void release();
+      static std::map<driver::Context, std::map<std::string, Program*> > programs_;
   };
 
   class contexts
@@ -54,7 +55,7 @@ public:
       static CommandQueue & get(Context const &, unsigned int id);
   private:
       static void release();
-      static std::map< Context const *, std::vector<CommandQueue*> > queues_;
+      static std::map< Context, std::vector<CommandQueue*> > queues_;
   };
 
   static void platforms(std::vector<Platform> &);
