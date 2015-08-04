@@ -27,10 +27,10 @@ public:
   {
       friend class backend;
   public:
+      static void release();
       static Program const & add(Context const & context, std::string const & name, std::string const & src);
       static Program const * find(Context const & context, std::string const & name);
   private:
-      static void release();
       static std::map<driver::Context, std::map<std::string, Program*> > cache_;
   };
 

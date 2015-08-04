@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "isaac/driver/ndrange.h"
 
 namespace isaac
@@ -15,7 +16,7 @@ NDRange::NDRange(size_t size0, size_t size1, size_t size2)
 
 size_t NDRange::dimension() const
 {
- return (int)(sizes_[0]>1) + (int)(sizes_[1]>1) + (int)(sizes_[2]>1);
+ return std::max(1,(int)(sizes_[0]>1) + (int)(sizes_[1]>1) + (int)(sizes_[2]>1));
 }
 
 NDRange::operator const size_t*() const
