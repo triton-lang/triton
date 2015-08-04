@@ -29,6 +29,18 @@ private:
   HANDLE_TYPE(cl_program, CUmodule) h_;
 };
 
+class ProgramCache
+{
+    friend class backend;
+public:
+    void clear();
+    Program & add(Context const & context, std::string const & name, std::string const & src);
+    Program const *find(std::string const & name);
+private:
+    std::map<std::string, Program> cache_;
+};
+
+
 }
 
 }

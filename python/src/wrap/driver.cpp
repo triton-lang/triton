@@ -51,11 +51,11 @@ namespace detail
 
   struct model_map_indexing
   {
-      static isc::model& get_item(isc::model_map_t& container, bp::tuple i_)
+      static isc::model& get_item(isc::models::map_type& container, bp::tuple i_)
       {
           isc::expression_type expression = tools::extract_template_type(i_[0]);
           isc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          isc::model_map_t::iterator i = container.find(std::make_pair(expression, dtype));
+          isc::models::map_type::iterator i = container.find(std::make_pair(expression, dtype));
           if (i == container.end())
           {
               PyErr_SetString(PyExc_KeyError, "Invalid key");
@@ -64,11 +64,10 @@ namespace detail
           return *i->second;
       }
 
-      static void set_item(isc::model_map_t& container, bp::tuple i_, isc::model const & v)
+      static void set_item(isc::models::map_type& container, bp::tuple i_, isc::model const & v)
       {
           isc::expression_type expression = tools::extract_template_type(i_[0]);
           isc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          isc::driver::backend::programs::release();
           container[std::make_pair(expression, dtype)].reset(new isc::model(v));
       }
   };
@@ -95,7 +94,7 @@ namespace detail
       isc::array_expression::container_type::value_type root = expression.tree()[expression.root()];
       if(isc::detail::is_assignment(root.op))
       {
-          isc::execute(isc::control(expression, execution_options, dispatcher_options, compilation_options), isaac::models(execution_options.queue(expression.context())));
+          isc::execute(isc::control(expression, execution_options, dispatcher_options, compilation_options), isaac::models::get(execution_options.queue(expression.context())));
           return bp::make_tuple(bp::ptr(root.lhs.array), tools::to_list(events.begin(), events.end()));
       }
       else
@@ -119,7 +118,7 @@ void export_driver()
       .def("append", &bp::vector_indexing_suite<queues_t>::append)
       ;
 
-  bp::class_<isc::model_map_t>("models")
+  bp::class_<isc::models::map_type>("models")
       .def("__getitem__", &detail::model_map_indexing::get_item, bp::return_internal_reference<>())
       .def("__setitem__", &detail::model_map_indexing::set_item, bp::with_custodian_and_ward<1,2>())
       ;
@@ -169,7 +168,7 @@ void export_driver()
 
   bp::class_<isc::driver::CommandQueue>("command_queue", bp::init<isc::driver::Context const &, isc::driver::Device const &>())
       .def("synchronize", &isc::driver::CommandQueue::synchronize)
-      .add_property("models", bp::make_function(&isc::models, bp::return_internal_reference<>()))
+      .add_property("models", bp::make_function(&isc::models::get, bp::return_internal_reference<>()))
       .add_property("device", bp::make_function(&isc::driver::CommandQueue::device, bp::return_internal_reference<>()))
       ;
 

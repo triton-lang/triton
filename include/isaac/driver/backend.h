@@ -8,6 +8,7 @@
 #include "isaac/driver/common.h"
 #include "isaac/driver/program.h"
 #include "isaac/defines.h"
+#include "isaac/types.h"
 
 namespace isaac
 {
@@ -28,10 +29,9 @@ public:
       friend class backend;
   public:
       static void release();
-      static Program const & add(Context const & context, std::string const & name, std::string const & src);
-      static Program const * find(Context const & context, std::string const & name);
+      static ProgramCache & get(CommandQueue const & queue, expression_type expression, numeric_type dtype);
   private:
-      static std::map<driver::Context, std::map<std::string, Program*> > cache_;
+      static std::map<std::tuple<CommandQueue, expression_type, numeric_type>, ProgramCache * > cache_;
   };
 
   class contexts

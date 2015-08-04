@@ -35,6 +35,7 @@ namespace isaac
     std::shared_ptr<predictors::random_forest> predictor_;
     std::map<std::vector<int_t>, int> hardcoded_;
     driver::CommandQueue queue_;
+    driver::ProgramCache & cache_;
   };
 
   class models

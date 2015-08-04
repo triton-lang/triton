@@ -58,7 +58,7 @@ driver::Program const & model::init(controller<expressions_tuple> const & expres
   else
     pname = expressions.compilation_options().program_name;
 
-  driver::Program const * program = driver::backend::programs::find(context, pname);
+  driver::Program const * program = cache_.find(pname);
   if(program)
       return *program;
 
@@ -69,16 +69,20 @@ driver::Program const & model::init(controller<expressions_tuple> const & expres
      srcs += templates_[i]->generate(buffer, expressions.x(), context.device());
    }
    srcs += fallback_->generate("fallback", expressions.x(), context.device());
-   return driver::backend::programs::add(context, pname, srcs);
+   return cache_.add(context, pname, srcs);
 }
 
 model::model(expression_type etype, numeric_type dtype, predictors::random_forest const & predictor, std::vector< std::shared_ptr<templates::base> > const & templates, driver::CommandQueue const & queue) :
-  templates_(templates), fallback_(fallbacks[std::make_pair(etype, dtype)]), predictor_(new predictors::random_forest(predictor)), queue_(queue)
-{}
+  templates_(templates), fallback_(fallbacks[std::make_pair(etype, dtype)]), predictor_(new predictors::random_forest(predictor)), queue_(queue), cache_(driver::backend::programs::get(queue,etype,dtype))
+{
+  cache_.clear();
+}
 
 
-model::model(expression_type etype, numeric_type dtype, templates::base const & tp, driver::CommandQueue const & queue) : templates_(1,tp.clone()), fallback_(fallbacks[std::make_pair(etype, dtype)]), queue_(queue)
-{}
+model::model(expression_type etype, numeric_type dtype, templates::base const & tp, driver::CommandQueue const & queue) : templates_(1,tp.clone()), fallback_(fallbacks[std::make_pair(etype, dtype)]), queue_(queue), cache_(driver::backend::programs::get(queue,etype,dtype))
+{
+  cache_.clear();
+}
 
 void model::execute(controller<expressions_tuple> const & expr)
 {
@@ -260,6 +264,8 @@ void models::set(driver::CommandQueue const & queue, expression_type operation, 
   data_[queue][std::make_pair(operation,dtype)] = model;
 }
 
+std::map<driver::CommandQueue, models::map_type> models::data_;
+
 //
 
 std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::base> > init_fallback()
@@ -282,7 +288,6 @@ std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::ba
   return res;
 }
 
-std::map<driver::CommandQueue, models::map_type> models::data_;
 
 std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::base> > fallbacks = init_fallback();
 
