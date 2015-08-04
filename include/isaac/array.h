@@ -99,7 +99,7 @@ protected:
   size4 stride_;
   int_t ld_;
 
-  driver::Context const & context_;
+  driver::Context context_;
   driver::Buffer data_;
 };
 

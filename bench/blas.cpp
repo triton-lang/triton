@@ -120,6 +120,7 @@ void bench(isc::numeric_type dtype, std::string operation)
   while(total_time*1e-9 < 1e-3){\
     cl_event event;\
     flush = isc::zeros(1e6, 1, dtype);\
+    queue.synchronize();\
     OP;\
     queue.synchronize();\
     times.push_back(isc::driver::Event(event).elapsed_time());\
