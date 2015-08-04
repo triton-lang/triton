@@ -145,7 +145,7 @@ namespace isaac
   }
 
   /** @brief Executes a array_expression on the given models map*/
-  void execute(controller<array_expression> const & c, model_map_t & models)
+  void execute(controller<array_expression> const & c, models::map_type &models)
   {
     array_expression expression = c.x();
     driver::Context const & context = expression.context();

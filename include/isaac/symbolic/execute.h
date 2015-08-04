@@ -8,7 +8,7 @@ namespace isaac
 {
 
 /** @brief Executes a array_expression on the given queue for the given models map*/
-void execute(controller<array_expression> const & , model_map_t &);
+void execute(controller<array_expression> const & , models::map_type &);
 
 }
 
