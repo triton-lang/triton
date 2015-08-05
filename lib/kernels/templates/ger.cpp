@@ -27,7 +27,7 @@ int ger::is_invalid_impl(driver::Device const &, expressions_tuple const &) cons
   return TEMPLATE_VALID;
 }
 
-std::string ger::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string ger::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   kernel_generation_stream stream;
   std::string _size_t = size_type(device);
@@ -114,12 +114,12 @@ std::vector<int_t> ger::input_sizes(expressions_tuple const & expressions) const
   return tools::make_vector<int_t>() << size.first << size.second;
 }
 
-void ger::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, const char * suffix, base &, controller<expressions_tuple> const & controller)
+void ger::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, std::string const & suffix, base &, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
-  char name[32] = {"axpy"};
-  strcat(name, suffix);
-  driver::Kernel kernel(program, name);
+  std::string name = "axpy";
+  name +=suffix;
+  driver::Kernel kernel(program, name.c_str());
   driver::NDRange global(p_.local_size_0*p_.num_groups_0, p_.local_size_1*p_.num_groups_1);
   driver::NDRange local(p_.local_size_0, p_.local_size_1);
   unsigned int current_arg = 0;

@@ -57,7 +57,7 @@ inline void dot::reduce_1d_local_memory(kernel_generation_stream & stream, unsig
   stream << "}" << std::endl;
 }
 
-std::string dot::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string dot::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   kernel_generation_stream stream;
 
@@ -83,9 +83,9 @@ std::string dot::generate_impl(const char * suffix, expressions_tuple const & ex
       arguments += exprs[k]->process(Global(backend).get() + " " + tools::to_string(numeric_type) + "* #name_temp, ");
   }
 
-  char name[2][16] = {{"prod"}, {"reduce"}};
-  strcat(name[0], suffix);
-  strcat(name[1], suffix);
+  std::string name[2] = {"prod", "reduce"};
+  name[0] += suffix;
+  name[1] += suffix;
 
   /* ------------------------
    * First Kernel
@@ -279,7 +279,7 @@ std::vector<int_t> dot::input_sizes(expressions_tuple const & expressions) const
   return tools::make_vector<int_t>() << N;
 }
 
-void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
+void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
 
@@ -302,11 +302,11 @@ void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program,
   }
 
   //Kernel
-  char name[2][32] = {{"prod"}, {"reduce"}};
-  strcat(name[0], suffix);
-  strcat(name[1], suffix);
+  std::string name[2] = {"prod", "reduce"};
+  name[0] += suffix;
+  name[1] += suffix;
 
-  driver::Kernel kernels[2] = { driver::Kernel(program,name[0]), driver::Kernel(program,name[1]) };
+  driver::Kernel kernels[2] = { driver::Kernel(program,name[0].c_str()), driver::Kernel(program,name[1].c_str()) };
 
   //NDRange
   driver::NDRange global[2] = { driver::NDRange(p_.local_size_0*p_.num_groups), driver::NDRange(p_.local_size_0) };
