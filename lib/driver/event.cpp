@@ -38,7 +38,7 @@ long Event::elapsed_time() const
       return 1e6*time;
 #endif
     case OPENCL:
-      return ocl::info<CL_PROFILING_COMMAND_END>(h_.cl()) - ocl::info<CL_PROFILING_COMMAND_START>(h_.cl());
+      return static_cast<long>(ocl::info<CL_PROFILING_COMMAND_END>(h_.cl()) - ocl::info<CL_PROFILING_COMMAND_START>(h_.cl()));
     default:
       throw;
   }

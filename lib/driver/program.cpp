@@ -129,7 +129,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
       h_.cl() = clCreateProgramWithSource(context_.h_.cl(), 1, &csrc, &srclen, &err);
       try{
         ocl::check(clBuildProgram(h_.cl(), devices.size(), devices.data(), build_opt.c_str(), NULL, NULL));
-      }catch(ocl::exception::build_program_failure const & e){
+      }catch(ocl::exception::build_program_failure const &){
             for(std::vector<cl_device_id>::const_iterator it = devices.begin(); it != devices.end(); ++it)
             {
               std::cout << "Device : " << ocl::info<CL_DEVICE_NAME>(*it)
