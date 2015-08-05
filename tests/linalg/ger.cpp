@@ -19,7 +19,8 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
   int_t N = cC.size2();
 
 
-  T aa = 3.12, bb=3.5;
+  T aa = static_cast<T>(3.12);
+  T bb = static_cast<T>(3.5);
   isaac::value_scalar a(aa), b(bb);
   isaac::scalar da(a, ctx), db(b, ctx);
 
@@ -132,11 +133,11 @@ int main()
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, *context);
+    test_impl<float>(eps_float, *context);
     if(device.fp64_support())
     {
         std::cout << ">> double" << std::endl;
-        test_impl<double>(1e-9, *context);
+        test_impl<double>(eps_double, *context);
     }
     std::cout << "---" << std::endl;
   }

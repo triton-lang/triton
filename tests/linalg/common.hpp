@@ -7,6 +7,9 @@
 
 typedef isaac::int_t int_t;
 
+static const float eps_float = static_cast<float>(1e-4);
+static const double eps_double = static_cast<double>(1e-8);
+
 template<class T> struct BLAS;
 template<> struct BLAS<float> { template<class FT, class DT> static FT F(FT SAXPY, DT ) { return SAXPY; } };
 template<> struct BLAS<double> { template<class FT, class DT> static DT F(FT , DT DAXPY) { return DAXPY; } };
