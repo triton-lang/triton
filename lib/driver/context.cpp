@@ -2,34 +2,40 @@
 #include "isaac/driver/context.h"
 #include "helpers/ocl/infos.hpp"
 #include "isaac/driver/program.h"
+#include "isaac/tools/getenv.hpp"
+
 namespace isaac
 {
 
 namespace driver
 {
 
-Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], false), h_(backend_, take_ownership)
+void Context::init_cache_path()
 {
-    h_.cl() = context;
-
 #ifndef ANDROID
-  if (std::getenv("ISAAC_CACHE_PATH"))
-    cache_path_ = std::getenv("ISAAC_CACHE_PATH");
+  #ifdef _MSC_VER
+      char* cache_path = 0;
+      std::size_t sz = 0;
+      _dupenv_s(&cache_path, &sz, "ISAAC_CACHE_PATH");
+  #else
+      const char * cache_path = std::getenv("ISAAC_CACHE_PATH");
+  #endif
+  if (cache_path)
+    cache_path_ = cache_path;
   else
 #endif
     cache_path_ = "";
-
 }
 
-Context::Context(Device const & device) : backend_(device.backend_), device_(device), h_(backend_, true)
+Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], false), cache_path_(tools::getenv("ISAAC_CACHE_PATH")), h_(backend_, take_ownership)
 {
-#ifndef ANDROID
-  if (std::getenv("ISAAC_CACHE_PATH"))
-    cache_path_ = std::getenv("ISAAC_CACHE_PATH");
-  else
-#endif
-    cache_path_ = "";
+    init_cache_path();
+    h_.cl() = context;
+}
 
+Context::Context(Device const & device) : backend_(device.backend_), device_(device), cache_path_(tools::getenv("ISAAC_CACHE_PATH")), h_(backend_, true)
+{
+  init_cache_path();
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA

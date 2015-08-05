@@ -20,6 +20,8 @@ class ISAACAPI Context
   friend class CommandQueue;
   friend class Buffer;
 
+private:
+  void init_cache_path();
 
 public:
   explicit Context(cl_context const & context, bool take_ownership = true);
@@ -32,11 +34,12 @@ public:
 
   HANDLE_TYPE(cl_context, CUcontext) const & handle() const { return h_; }
 private:
+DISABLE_MSVC_WARNING_C4251
   backend_type backend_;
   Device device_;
-
   std::string cache_path_;
   HANDLE_TYPE(cl_context, CUcontext) h_;
+RESTORE_MSVC_WARNING_C4251
 };
 
 }

@@ -18,6 +18,8 @@
 #include "isaac/model/model.h"
 #include "isaac/tools/make_vector.hpp"
 #include "isaac/tools/timer.hpp"
+#include "isaac/tools/getenv.hpp"
+
 #include "convert.hpp"
 
 
@@ -249,8 +251,9 @@ models::map_type& models::init(driver::CommandQueue const & queue)
     for(expression_type etype: etypes)
       result[std::make_pair(etype, dtype)] = std::shared_ptr<model>(new model(etype, dtype, *fallbacks[std::make_pair(etype, dtype)], queue));
 
-  if(const char * homepath = std::getenv("HOME"))
-    import(std::string(homepath) + "/.isaac/devices/device0.json", queue);
+  std::string homepath = tools::getenv("HOME");
+  if(homepath.size())
+    import(homepath + "/.isaac/devices/device0.json", queue);
 
   return result;
 }
