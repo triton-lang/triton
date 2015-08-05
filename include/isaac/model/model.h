@@ -5,7 +5,7 @@
 #include <vector>
 #include <map>
 
-#include "isaac/backend/templates/base.h"
+#include "isaac/kernels/templates/base.h"
 #include "isaac/model/predictors/random_forest.h"
 #include "isaac/symbolic/expression.h"
 

@@ -6,12 +6,12 @@
 #include <memory>
 
 #include "rapidjson/document.h"
-#include "isaac/backend/parse.h"
-#include "isaac/backend/templates/axpy.h"
-#include "isaac/backend/templates/dot.h"
-#include "isaac/backend/templates/ger.h"
-#include "isaac/backend/templates/gemv.h"
-#include "isaac/backend/templates/gemm.h"
+#include "isaac/kernels/parse.h"
+#include "isaac/kernels/templates/axpy.h"
+#include "isaac/kernels/templates/dot.h"
+#include "isaac/kernels/templates/ger.h"
+#include "isaac/kernels/templates/gemv.h"
+#include "isaac/kernels/templates/gemm.h"
 #include "isaac/driver/program_cache.h"
 #include "isaac/exception/unknown_datatype.h"
 #include "isaac/exception/operation_not_supported.h"

@@ -4,7 +4,7 @@
 #include <map>
 #include <string>
 #include "isaac/types.h"
-#include "isaac/backend/stream.h"
+#include "isaac/kernels/stream.h"
 #include "isaac/symbolic/expression.h"
 
 namespace isaac

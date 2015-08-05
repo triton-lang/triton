@@ -1,8 +1,8 @@
-#include "isaac/backend/templates/axpy.h"
-#include "isaac/backend/templates/ger.h"
-#include "isaac/backend/templates/dot.h"
-#include "isaac/backend/templates/gemv.h"
-#include "isaac/backend/templates/gemm.h"
+#include "isaac/kernels/templates/axpy.h"
+#include "isaac/kernels/templates/ger.h"
+#include "isaac/kernels/templates/dot.h"
+#include "isaac/kernels/templates/gemv.h"
+#include "isaac/kernels/templates/gemm.h"
 #include "isaac/model/model.h"
 
 #include "common.hpp"

@@ -1,7 +1,7 @@
 #include <cstring>
 #include <algorithm>
-#include "isaac/backend/templates/axpy.h"
-#include "isaac/backend/keywords.h"
+#include "isaac/kernels/templates/axpy.h"
+#include "isaac/kernels/keywords.h"
 #include "isaac/driver/backend.h"
 #include "isaac/tools/make_map.hpp"
 #include "isaac/tools/make_vector.hpp"

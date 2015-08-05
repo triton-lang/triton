@@ -1,7 +1,7 @@
 #ifndef ISAAC_BACKEND_TEMPLATES_DOT_H
 #define ISAAC_BACKEND_TEMPLATES_DOT_H
 
-#include "isaac/backend/templates/base.h"
+#include "isaac/kernels/templates/base.h"
 
 namespace isaac
 {

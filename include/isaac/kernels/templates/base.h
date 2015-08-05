@@ -7,8 +7,8 @@
 #include <cmath>
 
 #include "isaac/types.h"
-#include "isaac/backend/parse.h"
-#include "isaac/backend/stream.h"
+#include "isaac/kernels/parse.h"
+#include "isaac/kernels/stream.h"
 #include "isaac/symbolic/expression.h"
 #include "isaac/tools/to_string.hpp"
 namespace isaac

@@ -2,8 +2,8 @@
 #define ISAAC_BACKEND_PARSE_H
 
 #include <set>
-#include "isaac/backend/mapped_object.h"
-#include "isaac/backend/binder.h"
+#include "isaac/kernels/mapped_object.h"
+#include "isaac/kernels/binder.h"
 #include "isaac/symbolic/expression.h"
 
 namespace isaac
