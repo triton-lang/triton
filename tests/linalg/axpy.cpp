@@ -20,7 +20,8 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   cl_command_queue clqueue = queue.handle().cl();
   int_t N = cz.size();
 
-  T aa = -4.378, bb=3.5;
+  T aa = -4.3;
+  T bb=3.5;
   isaac::value_scalar a(aa), b(bb);
   isaac::scalar da(a, context), db(b, context);
 

@@ -145,7 +145,7 @@ void init_rand(simple_matrix_base<T> & A)
 {
   for (int_t i = 0; i < A.size1(); ++i)
     for(int_t j = 0 ; j < A.size2() ; ++j)
-      A(i,j) = i + j;
+      A(i,j) = (T)rand()/RAND_MAX;
 }
 
 template<typename T>
