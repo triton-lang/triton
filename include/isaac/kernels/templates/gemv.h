@@ -32,7 +32,7 @@ protected:
   gemv(gemv::parameters_type const & , dot_type, binding_policy_t);
 private:
   virtual int is_invalid_impl(driver::Device const &, expressions_tuple const &) const;
-  unsigned int lmem_usage() const;
+  unsigned int lmem_usage(expressions_tuple const &) const;
   std::string generate_impl(const char * suffix, expressions_tuple const &, driver::Device const & device, std::vector<mapping_type> const &) const;
 public:
   virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;

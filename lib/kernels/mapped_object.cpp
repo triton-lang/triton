@@ -176,7 +176,7 @@ void mapped_array::preprocess(std::string & str) const
 
   struct MorphValue : public MorphBase
   {
-    MorphValue(std::string const & _ld, char _type) : ld(_ld), type(_type){ }
+    MorphValue(std::string const & _ld) : ld(_ld){ }
 
     std::string operator()(std::string const & i) const
     { return "#pointer[" + i + "]"; }
@@ -185,12 +185,11 @@ void mapped_array::preprocess(std::string & str) const
     { return "#pointer[(" + i + ") +  (" + j + ") * " + ld + "]"; }
   private:
     std::string const & ld;
-    char type;
   };
 
   struct MorphOffset : public MorphBase
   {
-    MorphOffset(std::string const & _ld, char _type) : ld(_ld), type(_type){ }
+    MorphOffset(std::string const & _ld) : ld(_ld){ }
 
     std::string operator()(std::string const & i) const
     { return i; }
@@ -199,11 +198,10 @@ void mapped_array::preprocess(std::string & str) const
     {return "(" + i + ") +  (" + j + ") * " + ld; }
   private:
     std::string const & ld;
-    char type;
   };
 
-  replace_macro(str, "$VALUE", MorphValue(ld_, type_));
-  replace_macro(str, "$OFFSET", MorphOffset(ld_, type_));
+  replace_macro(str, "$VALUE", MorphValue(ld_));
+  replace_macro(str, "$OFFSET", MorphOffset(ld_));
 }
 
 mapped_array::mapped_array(std::string const & scalartype, unsigned int id, char type) : mapped_buffer(scalartype, id, type=='s'?"array0":(type=='m'?"array2":"array1")), type_(type)
