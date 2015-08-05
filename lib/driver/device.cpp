@@ -176,7 +176,7 @@ bool Device::fp64_support() const
   switch(backend_)
   {
     case OPENCL:
-      return ocl::info<CL_DEVICE_DOUBLE_FP_CONFIG>(h_.cl());
+      return extensions().find("cl_khr_fp64")!=std::string::npos;
 
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
@@ -201,7 +201,7 @@ bool Device::fp64_support() const
     switch(backend_)\
     {\
       CUDACASE(CUNAME)\
-      case OPENCL: return ocl::info<CLNAME>(h_.cl());\
+      case OPENCL: return static_cast<ret>(ocl::info<CLNAME>(h_.cl()));\
       default: throw;\
     }\
   }\
