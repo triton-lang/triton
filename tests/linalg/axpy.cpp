@@ -20,8 +20,8 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   cl_command_queue clqueue = queue.handle().cl();
   int_t N = cz.size();
 
-  T aa = -4.3;
-  T bb=3.5;
+  T aa = static_cast<T>(-4.3);
+  T bb = static_cast<T>(3.5);
   isaac::value_scalar a(aa), b(bb);
   isaac::scalar da(a, context), db(b, context);
 
@@ -149,11 +149,11 @@ int main()
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, *context);
+    test_impl<float>(eps_float, *context);
     if(device.fp64_support())
     {
         std::cout << ">> double" << std::endl;
-        test_impl<double>(1e-9, *context);
+        test_impl<double>(eps_double, *context);
     }
     std::cout << "---" << std::endl;
   }

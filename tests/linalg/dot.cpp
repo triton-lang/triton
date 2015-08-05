@@ -99,11 +99,11 @@ int main()
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, *context);
+    test_impl<float>(eps_float, *context);
     if(device.fp64_support())
     {
         std::cout << ">> double" << std::endl;
-        test_impl<double>(1e-9, *context);
+        test_impl<double>(eps_double, *context);
     }
     std::cout << "---" << std::endl;
   }

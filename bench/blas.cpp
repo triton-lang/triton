@@ -103,7 +103,7 @@ void bench(isc::numeric_type dtype, std::string operation)
   double total_time = 0;\
   while(total_time*1e-9 < 1e-3){\
     std::list<isc::driver::Event> events;\
-    flush = isc::zeros(1e6, 1, dtype);\
+    flush = isc::zeros((isaac::int_t)1e6, 1, dtype);\
     queue.synchronize();\
     OP;\
     queue.synchronize();\
@@ -205,7 +205,7 @@ void bench(isc::numeric_type dtype, std::string operation)
       std::cout << N;
       isc::array x(N, dtype), y(N, dtype);
       /* ISAAC */
-      std::list<isc::driver::Event> events;\
+      std::list<isc::driver::Event> events;
       BENCHMARK_ISAAC(y = isc::control(x + alpha*y, isc::execution_options_type(0, &events)), 3*N*dtsize/t)
       /* clblas */
   #ifdef BENCH_CLBLAS
