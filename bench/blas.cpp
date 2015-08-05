@@ -99,7 +99,7 @@ void bench(isc::numeric_type dtype, std::string operation)
 
 #define BENCHMARK_ISAAC(OP, PERF) \
   {\
-  std::vector<long> times;\
+  std::vector<double> times;\
   double total_time = 0;\
   while(total_time*1e-9 < 1e-3){\
     std::list<isc::driver::Event> events;\
@@ -107,7 +107,7 @@ void bench(isc::numeric_type dtype, std::string operation)
     queue.synchronize();\
     OP;\
     queue.synchronize();\
-    times.push_back(std::accumulate(events.begin(), events.end(), 0, &time_event));\
+    times.push_back((double)std::accumulate(events.begin(), events.end(), 0, &time_event));\
     total_time+=times.back();\
   }\
   double t = median(times);\

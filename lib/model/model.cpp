@@ -26,7 +26,7 @@
 namespace isaac
 {
 
-static double time_event(unsigned long sum, driver::Event const & e)
+static long time_event(long sum, driver::Event const & e)
 {
     return sum + e.elapsed_time();
 }
