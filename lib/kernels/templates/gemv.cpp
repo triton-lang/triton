@@ -27,7 +27,7 @@ int gemv::is_invalid_impl(driver::Device const &, expressions_tuple const &) con
   return TEMPLATE_VALID;
 }
 
-unsigned int gemv::lmem_usage() const
+unsigned int gemv::lmem_usage(const expressions_tuple &) const
 {
   return (p_.local_size_0+1)*p_.local_size_1;
 }

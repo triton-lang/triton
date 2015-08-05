@@ -1,5 +1,5 @@
 #ifndef ISAAC_TOOLS_MAKE_MAP_HPP
-#define ISAAC_TOOLD_MAKE_MAP_HPP
+#define ISAAC_TOOLS_MAKE_MAP_HPP
 
 #include <vector>
 
