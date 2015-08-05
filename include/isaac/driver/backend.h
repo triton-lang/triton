@@ -24,7 +24,7 @@ class ISAACAPI backend
 private:
 
 public:
-  class programs
+  class ISAACAPI programs
   {
       friend class backend;
   public:
@@ -37,7 +37,7 @@ RESTORE_MSVC_WARNING_C4251
 
   };
 
-  class contexts
+  class ISAACAPI contexts
   {
       friend class backend;
   private:
@@ -53,7 +53,7 @@ DISABLE_MSVC_WARNING_C4251
 RESTORE_MSVC_WARNING_C4251
   };
 
-  class queues
+  class ISAACAPI queues
   {
       friend class backend;
   private:

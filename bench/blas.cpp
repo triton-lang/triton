@@ -49,7 +49,7 @@ std::vector<int> create_log_range(int min, int max, int N, int pad)
   std::vector<int> res(N);
   for(int i = 0 ; i < N ; ++i)
   {
-    res[i] = std::exp(std::log(min) + (float)(std::log(max) - std::log(min))*i/N);
+    res[i] = static_cast<int>(std::exp(std::log(min) + (float)(std::log(max) - std::log(min))*i/N));
     res[i] = ceil(res[i], pad);
   }
   return res;
@@ -85,7 +85,7 @@ T mean(std::vector<T> x)
   return res/N;
 }
 
-static double time_event(unsigned long sum, isc::driver::Event const & e)
+static long time_event(long sum, isc::driver::Event const & e)
 { return sum + e.elapsed_time();}
 
 template<class T>
@@ -175,7 +175,7 @@ void bench(isc::numeric_type dtype, std::string operation)
   unsigned int dtsize = isc::size_of(dtype);
   isc::driver::CommandQueue & queue = isc::driver::backend::queues::get(isc::driver::backend::contexts::get_default(),0);
   std::map<std::string, std::string> metric{ {"axpy", "GB/s"}, {"dot", "GB/s"}, {"gemv", "GB/s"}, {"gemm", "GFLOPS"}};
-  isc::array flush(1e6, dtype);
+  isc::array flush((int)1e6, isc::FLOAT_TYPE);
   std::cout << "#" << operation << " (" << metric[operation] << ")" << std::endl;
   std::cout << "N";
   std::cout << "\tISAAC";
@@ -200,7 +200,7 @@ void bench(isc::numeric_type dtype, std::string operation)
   if(operation=="axpy")
   {
     float alpha = 1;
-    for(int_t N: create_log_range(1e3, 2e7, 50, 64))
+    for(int_t N: create_log_range((int)1e3, (int)2e7, 50, 64))
     {
       std::cout << N;
       isc::array x(N, dtype), y(N, dtype);
@@ -233,7 +233,7 @@ void bench(isc::numeric_type dtype, std::string operation)
 
   if(operation=="dot")
   {
-    for(int_t N: create_log_range(1e3, 2e7, 50, 64))
+    for(int_t N: create_log_range((int)1e3, (int)2e7, 50, 64))
     {
       std::cout << N;
       /* ISAAC */
@@ -288,7 +288,7 @@ void bench(isc::numeric_type dtype, std::string operation)
         std::cout << M << "," << N;
         /* ISAAC */
         isc::array A(N, M, dtype), y(M, dtype), x(N, dtype);
-    #if HAS_A_BLAS
+    #ifdef HAS_A_BLAS
         int_t lda = A.ld();
     #endif
         y = dot(trans(A),x); queue.synchronize();
@@ -363,7 +363,7 @@ void bench(isc::numeric_type dtype, std::string operation)
         if(BT) std::swap(Bs1, Bs2);
 
         isc::array C(M, N, dtype), A(As1, As2, dtype), B(Bs1, Bs2, dtype);
-    #if HAS_A_BLAS
+    #ifdef HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
         BENCHMARK_ISAAC(C = isc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), isc::execution_options_type(0, &events)), (double)2*M*N*K/t);
