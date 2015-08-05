@@ -68,9 +68,7 @@ driver::Program const & model::init(controller<expressions_tuple> const & expres
 
   std::string srcs;
    for(unsigned int i = 0 ; i < templates_.size() ; ++i){
-     char buffer[16];
-     sprintf(buffer,"%d",i);
-     srcs += templates_[i]->generate(buffer, expressions.x(), context.device());
+     srcs += templates_[i]->generate(std::to_string(i), expressions.x(), context.device());
    }
    srcs += fallback_->generate("fallback", expressions.x(), context.device());
    return cache_.add(context, pname, srcs);
@@ -101,9 +99,7 @@ void model::execute(controller<expressions_tuple> const & expr)
     {
       std::list<driver::Event> events;
       try{
-        char buffer[16];
-        sprintf(buffer,"%d",i);
-        templates_[i]->enqueue(queue_, program, buffer, *fallback_, control(expr.x(), execution_options_type(0, &events)));
+        templates_[i]->enqueue(queue_, program, std::to_string(i), *fallback_, control(expr.x(), execution_options_type(0, &events)));
         queue_.synchronize();
         timings[i] = 1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event);
       }catch(...){
@@ -128,9 +124,7 @@ void model::execute(controller<expressions_tuple> const & expr)
   }
 
   //Execution
-  char buffer[16];
-  sprintf(buffer,"%d",label);
-  return templates_[label]->enqueue(queue_, program, buffer, *fallback_, expr);
+  return templates_[label]->enqueue(queue_, program, std::to_string(label), *fallback_, expr);
 }
 
 model::templates_container const & model::templates() const
