@@ -4,7 +4,7 @@
 #include <vector>
 
 #include "isaac/symbolic/expression.h"
-#include "isaac/backend/templates/base.h"
+#include "isaac/kernels/templates/base.h"
 
 namespace isaac
 {

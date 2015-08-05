@@ -1,8 +1,8 @@
 #include <cstring>
 #include <iostream>
-#include "isaac/backend/stream.h"
-#include "isaac/backend/keywords.h"
-#include "isaac/backend/templates/gemv.h"
+#include "isaac/kernels/stream.h"
+#include "isaac/kernels/keywords.h"
+#include "isaac/kernels/templates/gemv.h"
 #include "isaac/tools/to_string.hpp"
 #include "isaac/tools/make_map.hpp"
 #include "isaac/tools/make_vector.hpp"

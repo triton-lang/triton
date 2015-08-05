@@ -2,7 +2,7 @@
 #define ISAAC_BACKEND_TEMPLATES_MAXPY_H
 
 #include <vector>
-#include "isaac/backend/templates/base.h"
+#include "isaac/kernels/templates/base.h"
 
 namespace isaac
 {

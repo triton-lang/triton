@@ -1,4 +1,4 @@
-#include "isaac/backend/stream.h"
+#include "isaac/kernels/stream.h"
 
 namespace isaac
 {

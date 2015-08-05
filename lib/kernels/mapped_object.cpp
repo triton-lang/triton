@@ -3,9 +3,9 @@
 
 #include <iostream>
 
-#include "isaac/backend/mapped_object.h"
-#include "isaac/backend/parse.h"
-#include "isaac/backend/stream.h"
+#include "isaac/kernels/mapped_object.h"
+#include "isaac/kernels/parse.h"
+#include "isaac/kernels/stream.h"
 #include "isaac/symbolic/expression.h"
 #include "isaac/tools/to_string.hpp"
 #include "isaac/tools/find_and_replace.hpp"

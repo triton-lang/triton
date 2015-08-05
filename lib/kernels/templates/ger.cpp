@@ -1,10 +1,10 @@
 #include <cstring>
 #include <iostream>
-#include "isaac/backend/templates/ger.h"
+#include "isaac/kernels/templates/ger.h"
 #include "isaac/tools/make_map.hpp"
 #include "isaac/tools/make_vector.hpp"
 #include "isaac/symbolic/io.h"
-#include "isaac/backend/keywords.h"
+#include "isaac/kernels/keywords.h"
 
 namespace isaac
 {

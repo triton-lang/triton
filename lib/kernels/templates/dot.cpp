@@ -1,10 +1,10 @@
 #include <cstring>
 #include <iostream>
-#include "isaac/backend/templates/dot.h"
+#include "isaac/kernels/templates/dot.h"
 #include "isaac/tools/to_string.hpp"
 #include "isaac/tools/make_map.hpp"
 #include "isaac/tools/make_vector.hpp"
-#include "isaac/backend/keywords.h"
+#include "isaac/kernels/keywords.h"
 namespace isaac
 {
 namespace templates
