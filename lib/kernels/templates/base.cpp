@@ -505,7 +505,7 @@ unsigned int base::registers_usage(expressions_tuple const &) const
 base::~base()
 { }
 
-std::string base::generate(const char * suffix, expressions_tuple const & expressions, driver::Device const & device)
+std::string base::generate(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device)
 {
   expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::iterator mit;

@@ -173,16 +173,16 @@ protected:
   static bool requires_fallback(expressions_tuple const & expressions);
   void set_arguments(expressions_tuple const & expressions, driver::Kernel & kernel, unsigned int & current_arg);
 private:
-  virtual std::string generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mapping) const = 0;
+  virtual std::string generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mapping) const = 0;
 public:
   base(binding_policy_t binding_policy);
   virtual unsigned int lmem_usage(expressions_tuple const &) const;
   virtual unsigned int registers_usage(expressions_tuple const &) const;
   virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions) const = 0;
   virtual ~base();
-  std::string generate(const char * suffix, expressions_tuple const & expressions, driver::Device const & device);
+  std::string generate(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device);
   virtual int is_invalid(expressions_tuple const & expressions, driver::Device const & device) const = 0;
-  virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, const char * suffix, base & fallback, controller<expressions_tuple> const & expressions) = 0;
+  virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const & expressions) = 0;
   virtual std::shared_ptr<base> clone() const = 0;
 private:
   binding_policy_t binding_policy_;

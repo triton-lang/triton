@@ -32,7 +32,7 @@ unsigned int gemv::lmem_usage(const expressions_tuple &) const
   return (p_.local_size_0+1)*p_.local_size_1;
 }
 
-std::string gemv::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string gemv::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   using tools::to_string;
 
@@ -52,9 +52,9 @@ std::string gemv::generate_impl(const char * suffix, expressions_tuple const & e
   driver::backend_type backend = device.backend();
   std::string _size_t = size_type(device);
 
-  char name[2][16] = {{"prod"}, {"reduce"}};
-  strcat(name[0], suffix);
-  strcat(name[1], suffix);
+  std::string name[2] = {"prod", "reduce"};
+  name[0] += suffix;
+  name[1] += suffix;
 
   std::string arguments = _size_t + " M, " + _size_t + " N, " ;
   for (const auto & e : dots)
@@ -336,7 +336,7 @@ std::vector<int_t> gemv::input_sizes(expressions_tuple const & expressions) cons
   return tools::make_vector<int_t>() << MN.first << MN.second;
 }
 
-void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
+void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
   driver::Context const & context = expressions.context();
@@ -362,15 +362,15 @@ void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program
   std::vector< driver::Buffer > tmpidx;
   unsigned int dtype_size = size_of(lhs_most(expressions.data().front()->tree(), expressions.data().front()->root()).lhs.dtype);
 
-  char name[2][32] = {{"prod"}, {"reduce"}};
-  strcat(name[0], suffix);
-  strcat(name[1], suffix);
+  std::string name[2] = {"prod", "reduce"};
+  name[0] += suffix;
+  name[1] += suffix;
 
   unsigned int nk = (p_.num_groups_0==1)?1:2;
 
   std::vector<driver::Kernel> kernels;
   for(unsigned int k = 0 ; k < nk ; ++k)
-    kernels.push_back(driver::Kernel(program, name[k]));
+    kernels.push_back(driver::Kernel(program, name[k].c_str()));
 
   for(unsigned int k = 0 ; k < nk ; ++k)
   {

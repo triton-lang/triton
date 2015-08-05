@@ -27,7 +27,7 @@ int axpy::is_invalid_impl(driver::Device const &, expressions_tuple const &) con
   return TEMPLATE_VALID;
 }
 
-std::string axpy::generate_impl(const char * suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string axpy::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
   driver::backend_type backend = device.backend();
   std::string _size_t = size_type(device);
@@ -110,7 +110,7 @@ std::vector<int_t> axpy::input_sizes(expressions_tuple const & expressions) cons
   return tools::make_vector<int_t>() << std::max(shape[0], shape[1]);
 }
 
-void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program, const char * suffix, base & fallback, controller<expressions_tuple> const & controller)
+void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const & controller)
 {
   expressions_tuple const & expressions = controller.x();
   //Size
@@ -122,9 +122,9 @@ void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program
       return;
   }
   //Kernel
-  char name[32] = {"axpy"};
-  strcat(name, suffix);
-  driver::Kernel kernel(program, name);
+  std::string name = "axpy";
+  name += suffix;
+  driver::Kernel kernel(program, name.c_str());
   //NDRange
   driver::NDRange global(p_.local_size_0*p_.num_groups);
   driver::NDRange local(p_.local_size_0);

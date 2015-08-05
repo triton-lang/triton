@@ -24,13 +24,13 @@ private:
   int is_invalid_impl(driver::Device const &, expressions_tuple const &) const;
   inline void reduce_1d_local_memory(kernel_generation_stream & stream, unsigned int size, std::vector<mapped_scalar_dot*> exprs,
                                      std::string const & buf_str, std::string const & buf_value_str, driver::backend_type backend) const;
-  std::string generate_impl(const char * suffix,  expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const;
+  std::string generate_impl(std::string const & suffix,  expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const;
 
 public:
   dot(dot::parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
   dot(unsigned int simd, unsigned int ls, unsigned int ng, fetching_policy_type fetch, binding_policy_t bind = BIND_ALL_UNIQUE);
   std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;
-  void enqueue(driver::CommandQueue & queue, driver::Program const & program, const char * suffix, base & fallback, controller<expressions_tuple> const &);
+  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const &);
 private:
   std::vector< driver::Buffer > tmp_;
   std::vector< driver::Buffer > tmpidx_;
