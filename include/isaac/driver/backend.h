@@ -31,7 +31,10 @@ public:
       static void release();
       static ProgramCache & get(CommandQueue const & queue, expression_type expression, numeric_type dtype);
   private:
+DISABLE_MSVC_WARNING_C4251
       static std::map<std::tuple<CommandQueue, expression_type, numeric_type>, ProgramCache * > cache_;
+RESTORE_MSVC_WARNING_C4251
+
   };
 
   class contexts
@@ -45,7 +48,9 @@ public:
       static Context const & import(cl_context context);
       static void get(std::list<Context const *> &);
   private:
+DISABLE_MSVC_WARNING_C4251
       static std::list<Context const *> cache_;
+RESTORE_MSVC_WARNING_C4251
   };
 
   class queues
@@ -58,7 +63,9 @@ public:
       static void get(Context const &, std::vector<CommandQueue *> &queues);
       static CommandQueue & get(Context const &, unsigned int id);
   private:
+DISABLE_MSVC_WARNING_C4251
       static std::map< Context, std::vector<CommandQueue*> > cache_;
+RESTORE_MSVC_WARNING_C4251
   };
 
   static void init();

@@ -19,7 +19,9 @@ public:
     Program & add(Context const & context, std::string const & name, std::string const & src);
     Program const *find(std::string const & name);
 private:
+DISABLE_MSVC_WARNING_C4251
     std::map<std::string, Program> cache_;
+RESTORE_MSVC_WARNING_C4251
 };
 
 

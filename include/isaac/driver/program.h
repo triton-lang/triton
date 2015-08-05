@@ -23,10 +23,12 @@ public:
   Program(Context const & context, std::string const & source);
   Context const & context() const;
 private:
+DISABLE_MSVC_WARNING_C4251
   backend_type backend_;
   Context context_;
   std::string source_;
   HANDLE_TYPE(cl_program, CUmodule) h_;
+RESTORE_MSVC_WARNING_C4251
 };
 
 
