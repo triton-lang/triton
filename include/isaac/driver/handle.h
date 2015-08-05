@@ -53,8 +53,10 @@ public:
   ~Handle();
 
 private:
+DISABLE_MSVC_WARNING_C4251
   std::shared_ptr<CLType> cl_;
   std::shared_ptr<CUType> cu_;
+RESTORE_MSVC_WARNING_C4251
 private:
   backend_type backend_;
   bool has_ownership_;

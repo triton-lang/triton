@@ -12,6 +12,8 @@
 #endif
 #include "isaac/defines.h"
 
+DISABLE_MSVC_WARNING_C4275
+
 namespace isaac
 {
 namespace driver
@@ -203,5 +205,7 @@ ISAACAPI void check(cl_int err);
 
 }
 }
+
+RESTORE_MSVC_WARNING_C4275
 
 #endif
