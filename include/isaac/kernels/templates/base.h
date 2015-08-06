@@ -57,86 +57,10 @@ public:
     unsigned int local_size_1;
     unsigned int num_kernels;
   };
-
-  class invalid_exception : public std::exception
-  {
-  public:
-    invalid_exception();
-    invalid_exception(std::string message);
-    virtual const char* what() const throw();
-    virtual ~invalid_exception() throw();
-  private:
-    std::string message_;
-  };
-
 protected:
-
-  /** @brief Functor to map the expressions to the types defined in mapped_objects.hpp */
-  class map_functor : public traversal_functor
-  {
-    /** @brief Accessor for the numeric type */
-    numeric_type get_numeric_type(isaac::array_expression const * array_expression, int_t root_idx) const;
-    /** @brief Creates a binary leaf */
-    template<class T> std::shared_ptr<mapped_object> binary_leaf(isaac::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const;
-    /** @brief Creates a value scalar mapping */
-    std::shared_ptr<mapped_object> create(numeric_type dtype, values_holder) const;
-    /** @brief Creates a vector mapping */
-    std::shared_ptr<mapped_object> create(array const *) const;
-    /** @brief Creates a tuple mapping */
-    std::shared_ptr<mapped_object> create(repeat_infos const &) const;
-    /** @brief Creates a mapping */
-    std::shared_ptr<mapped_object> create(lhs_rhs_element const &) const;
-  public:
-    map_functor(symbolic_binder & binder, mapping_type & mapping, const driver::Device &device);
-    /** @brief Functor for traversing the tree */
-    void operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const;
-  private:
-    symbolic_binder & binder_;
-    mapping_type & mapping_;
-    driver::Device const & device_;
-  };
-
-  /** @brief functor for setting the arguments of a kernel */
-  class set_arguments_functor : public traversal_functor
-  {
-  public:
-    typedef void result_type;
-
-    set_arguments_functor(symbolic_binder & binder, unsigned int & current_arg, driver::Kernel & kernel);
-    void set_arguments(numeric_type dtype, values_holder const & scal) const;
-    void set_arguments(array const * ) const;
-    void set_arguments(repeat_infos const & i) const;
-    void set_arguments(lhs_rhs_element const & lhs_rhs) const;
-
-    void operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const;
-  private:
-    symbolic_binder & binder_;
-    unsigned int & current_arg_;
-    driver::Kernel & kernel_;
-  };
-
-  static void compute_dot(kernel_generation_stream & os, std::string acc, std::string cur, op_element const & op);
-  static void compute_index_dot(kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, op_element const & op);
-  static void process_all(std::string const & type_key, std::string const & str, kernel_generation_stream & stream, std::vector<mapping_type> const & mappings);
-  static void process_all_at(std::string const & type_key, std::string const & str, kernel_generation_stream & stream, std::vector<mapping_type> const & mappings, size_t root_idx, leaf_t leaf);
-  static std::string neutral_element(op_element const & op, driver::backend_type backend, std::string const & datatype);
-  static std::string generate_arguments(std::vector<mapping_type> const & mappings, std::map<std::string, std::string> const & accessors, expressions_tuple const & expressions);
-  static std::string generate_arguments(std::string const & data_type, driver::Device const & device, std::vector<mapping_type> const & mappings,  expressions_tuple const & expressions);
-  static bool is_node_trans(array_expression::container_type const & array, size_t root_idx, leaf_t leaf_type);
-  static std::string append_simd_suffix(std::string const & str, unsigned int i);
-  static bool is_strided(array_expression::node const & node);
   static int_t vector_size(array_expression::node const & node);
   static std::pair<int_t, int_t> matrix_size(array_expression::node const & node);
-  static bool is_dot(array_expression::node const & node);
-  static bool is_index_dot(op_element const & op);
-  static std::string access_vector_type(std::string const & v, int i);
-
-  std::shared_ptr<symbolic_binder> make_binder();
-  static std::string vstore(unsigned int simd_width, std::string const & dtype, std::string const & value, std::string const & offset, std::string const & ptr, driver::backend_type backend);
-  static std::string vload(unsigned int simd_width, std::string const & dtype, std::string const & offset, std::string const & ptr, driver::backend_type backend);
-  static std::string append_width(std::string const & str, unsigned int width);
   static bool requires_fallback(expressions_tuple const & expressions);
-  void set_arguments(expressions_tuple const & expressions, driver::Kernel & kernel, unsigned int & current_arg);
 private:
   virtual std::string generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mapping) const = 0;
 public:
