@@ -15,6 +15,7 @@ namespace isaac
 
 struct database
 {
+    typedef std::map<std::tuple<driver::Device::Vendor, driver::Device::Architecture> , const char *> presets_type;
 public:
     typedef std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<model> > map_type;
 private:
@@ -24,7 +25,7 @@ public:
     static map_type & get(driver::CommandQueue const & queue);
     static void set(driver::CommandQueue const & queue, expression_type operation, numeric_type dtype, std::shared_ptr<model> const & model);
 private:
-    static const std::map<std::tuple<driver::Device::Vendor, driver::Device::Architecture> , const char *> presets_;
+    static const presets_type presets_;
     static std::map<driver::CommandQueue, map_type> cache_;
 };
 

@@ -47,20 +47,13 @@ namespace detail
   }
 }
 
-void database::import(std::string const & fname, driver::CommandQueue const & queue)
+void database::import(std::string const & str, driver::CommandQueue const & queue)
 {
   namespace js = rapidjson;
   map_type & result = cache_[queue];
 
   //Parse the JSON document
   js::Document document;
-  std::ifstream t(fname.c_str());
-  if(!t) return;
-  std::string str;
-  t.seekg(0, std::ios::end);
-  str.reserve(t.tellg());
-  t.seekg(0, std::ios::beg);
-  str.assign((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
   document.Parse<0>(str.c_str());
   //Deserialize
   std::vector<std::string> operations = {"axpy", "dot", "ger", "gemv_n", "gemv_t", "gemm_nn", "gemm_tn", "gemm_nt", "gemm_tt"};
@@ -107,9 +100,26 @@ database::map_type& database::init(driver::CommandQueue const & queue)
     for(expression_type etype: etypes)
       result[std::make_pair(etype, dtype)] = std::shared_ptr<model>(new model(etype, dtype, *fallbacks[std::make_pair(etype, dtype)], queue));
 
+  driver::Device const & device = queue.device();
+  presets_type::const_iterator it = presets_.find(std::make_tuple(device.vendor(), device.architecture()));
+  if(it==presets_.end())
+      import(presets_.at(std::make_tuple(device.vendor(), driver::Device::Architecture::UNKNOWN)), queue);
+  else
+      import(it->second, queue);
   std::string homepath = tools::getenv("HOME");
   if(homepath.size())
-    import(homepath + "/.isaac/devices/device0.json", queue);
+  {
+    std::string json_path = homepath + "/.isaac/devices/device0.json";
+    std::ifstream t(json_path);
+    if(!t)
+        return result;
+    std::string str;
+    t.seekg(0, std::ios::end);
+    str.reserve(t.tellg());
+    t.seekg(0, std::ios::beg);
+    str.assign((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+    import(str, queue);
+  }
 
   return result;
 }
