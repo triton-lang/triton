@@ -1,8 +1,10 @@
 #include <iostream>
+
 #include "isaac/driver/context.h"
-#include "helpers/ocl/infos.hpp"
 #include "isaac/driver/program.h"
-#include "isaac/tools/getenv.hpp"
+
+#include "helpers/ocl/infos.hpp"
+#include "getenv.hpp"
 
 namespace isaac
 {
@@ -10,32 +12,13 @@ namespace isaac
 namespace driver
 {
 
-void Context::init_cache_path()
-{
-#ifndef ANDROID
-  #ifdef _MSC_VER
-      char* cache_path = 0;
-      std::size_t sz = 0;
-      _dupenv_s(&cache_path, &sz, "ISAAC_CACHE_PATH");
-  #else
-      const char * cache_path = std::getenv("ISAAC_CACHE_PATH");
-  #endif
-  if (cache_path)
-    cache_path_ = cache_path;
-  else
-#endif
-    cache_path_ = "";
-}
-
 Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], false), cache_path_(tools::getenv("ISAAC_CACHE_PATH")), h_(backend_, take_ownership)
 {
-    init_cache_path();
     h_.cl() = context;
 }
 
 Context::Context(Device const & device) : backend_(device.backend_), device_(device), cache_path_(tools::getenv("ISAAC_CACHE_PATH")), h_(backend_, true)
 {
-  init_cache_path();
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA

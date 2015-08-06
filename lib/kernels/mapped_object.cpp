@@ -7,8 +7,9 @@
 #include "isaac/kernels/parse.h"
 #include "isaac/kernels/stream.h"
 #include "isaac/symbolic/expression.h"
-#include "isaac/tools/to_string.hpp"
-#include "isaac/tools/find_and_replace.hpp"
+
+#include "to_string.hpp"
+#include "find_and_replace.hpp"
 
 namespace isaac
 {

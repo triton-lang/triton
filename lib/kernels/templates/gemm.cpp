@@ -4,9 +4,9 @@
 #include "isaac/model/model.h"
 #include "isaac/symbolic/preset.h"
 #include "isaac/exception/operation_not_supported.h"
-#include "isaac/tools/make_vector.hpp"
-#include "isaac/tools/to_string.hpp"
-#include "isaac/tools/miscellaneous.hpp"
+
+#include "to_string.hpp"
+#include "align.hpp"
 
 namespace isaac
 {
@@ -118,7 +118,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     kernel_generation_stream stream;
     array_expression const & st = (*expressions.data().front());
     numeric_type dtype = lhs_most(st.tree(), st.root()).lhs.dtype;
-    std::string sdtype = numeric_type_to_string(dtype);
+    std::string sdtype = to_string(dtype);
     std::string vdtype = append_width(sdtype, p_.simd_width);
     std::string _size_t = size_type(device);
     std::string vint = append_width("int", p_.simd_width);

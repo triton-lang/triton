@@ -143,7 +143,7 @@ void export_driver()
       .add_property("name",&isc::driver::Platform::name)
       ;
 
-  bp::enum_<isaac::driver::Device::VENDOR>
+  bp::enum_<isaac::driver::Device::Vendor>
       ("vendor")
       .value("AMD", isc::driver::Device::AMD)
       .value("INTEL", isc::driver::Device::INTEL)

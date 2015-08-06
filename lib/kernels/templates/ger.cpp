@@ -1,10 +1,10 @@
 #include <cstring>
 #include <iostream>
 #include "isaac/kernels/templates/ger.h"
-#include "isaac/tools/make_map.hpp"
-#include "isaac/tools/make_vector.hpp"
 #include "isaac/symbolic/io.h"
 #include "isaac/kernels/keywords.h"
+
+#include "tools/loop.hpp"
 
 namespace isaac
 {
@@ -47,9 +47,10 @@ std::string ger::generate_impl(std::string const & suffix, expressions_tuple con
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#scalartype #namereg = #pointer[#start];")
-                                                                                        ("array1", "#pointer += #start;")
-                                                                                        ("array2", "#pointer = &$VALUE{#start1, #start2};"), expressions, mappings);
+  process(stream, PARENT_NODE_TYPE, { {"array0", "#scalartype #namereg = #pointer[#start];"},
+                                      {"array1", "#pointer += #start;"},
+                                      {"array2", "#pointer = &$VALUE{#start1, #start2};"}}
+                                  , expressions, mappings);
 
   fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0,  GlobalIdx0(backend).get(), GlobalSize0(backend).get(), device);
   stream << "for(" << _size_t << " i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
@@ -60,25 +61,22 @@ std::string ger::generate_impl(std::string const & suffix, expressions_tuple con
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  process(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >
-                                                                          ("array2", data_type + " #namereg = $VALUE{i*#stride1,j*#stride2};")
-                                                                          ("vdiag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride1, j*#stride1)};")
-                                                                          ("repeat", "#scalartype #namereg = $VALUE{(i%#tuplearg0)*#stride1, (j%#tuplearg1)*#stride2};")
-                                                                          ("outer", "#scalartype #namereg = ($LVALUE{i*#stride})*($RVALUE{j*#stride});")
-           , expressions, mappings);
+  process(stream, PARENT_NODE_TYPE, { {"array2", data_type + " #namereg = $VALUE{i*#stride1,j*#stride2};"},
+                                      {"vdiag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride1, j*#stride1)};"},
+                                      {"repeat", "#scalartype #namereg = $VALUE{(i%#tuplearg0)*#stride1, (j%#tuplearg1)*#stride2};"},
+                                      {"outer", "#scalartype #namereg = ($LVALUE{i*#stride})*($RVALUE{j*#stride});"} }
+                                    , expressions, mappings);
 
-  evaluate(stream, PARENT_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >
-                                                                            ("array2", "#namereg")
-                                                                            ("vdiag", "#namereg")
-                                                                            ("repeat", "#namereg")
-                                                                            ("array0", "#namereg")
-                                                                            ("outer", "#namereg")
-                                                                            ("cast", CastPrefix(backend, data_type).get())
-                                                                            ("host_scalar", p_.simd_width==1?"#name": InitPrefix(backend, data_type).get() + "(#name)")
-                                                  , expressions, mappings);
+  evaluate(stream, PARENT_NODE_TYPE, { {"array2", "#namereg"},
+                                        {"vdiag", "#namereg"},
+                                        {"repeat", "#namereg"},
+                                        {"array0", "#namereg"},
+                                        {"outer", "#namereg"},
+                                        {"cast", CastPrefix(backend, data_type).get()},
+                                        {"host_scalar", p_.simd_width==1?"#name": InitPrefix(backend, data_type).get() + "(#name)"}}
+                                    , expressions, mappings);
 
-  process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array2", "$VALUE{i*#stride1,j*#stride2} = #namereg;")
-                                             , expressions, mappings);
+  process(stream, LHS_NODE_TYPE, { {"array2", "$VALUE{i*#stride1,j*#stride2} = #namereg;"} } , expressions, mappings);
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -88,7 +86,7 @@ std::string ger::generate_impl(std::string const & suffix, expressions_tuple con
   stream << "if(" << GlobalIdx0(backend) << "==0 &&" << GlobalIdx1(backend) << "==0)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#pointer[#start] = #namereg;"), expressions, mappings);
+  process(stream, LHS_NODE_TYPE, { {"array0", "#pointer[#start] = #namereg;"} }, expressions, mappings);
   stream.dec_tab();
   stream << "}" << std::endl;
 
@@ -111,7 +109,7 @@ std::vector<int_t> ger::input_sizes(expressions_tuple const & expressions) const
 {
   isaac::array_expression const & array_expression = *(expressions.data().front());
   std::pair<int_t, int_t> size = matrix_size(lhs_most(array_expression.tree(), array_expression.root()));
-  return tools::make_vector<int_t>() << size.first << size.second;
+  return {size.first, size.second};
 }
 
 void ger::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, std::string const & suffix, base &, controller<expressions_tuple> const & controller)

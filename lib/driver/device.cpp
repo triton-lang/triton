@@ -40,31 +40,31 @@ bool Device::operator<(Device const & other) const
 
 
 
-Device::VENDOR Device::vendor() const
+Device::Vendor Device::vendor() const
 {
     std::string vname = vendor_str();
     std::transform(vname.begin(), vname.end(), vname.begin(), ::tolower);
     if(vname.find("nvidia")!=std::string::npos)
-        return VENDOR::NVIDIA;
+        return Vendor::NVIDIA;
     else if(vname.find("intel")!=std::string::npos)
-        return VENDOR::INTEL;
+        return Vendor::INTEL;
     else if(vname.find("amd")!=std::string::npos || vname.find("advanced micro devices")!=std::string::npos)
-        return VENDOR::AMD;
+        return Vendor::AMD;
     else
-        return VENDOR::UNKNOWN;
+        return Vendor::UNKNOWN;
 }
 
-Device::ARCHITECTURE Device::architecture() const
+Device::Architecture Device::architecture() const
 {
     switch(vendor())
     {
-        case VENDOR::INTEL:
+        case Vendor::INTEL:
         {
-            return ARCHITECTURE::BROADWELL;
+            return Architecture::BROADWELL;
         }
         default:
         {
-            return ARCHITECTURE::UNKNOWN;
+            return Architecture::UNKNOWN;
         }
     }
 }

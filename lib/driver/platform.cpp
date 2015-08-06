@@ -1,8 +1,9 @@
 #include "isaac/driver/platform.h"
 #include "isaac/driver/device.h"
-#include "isaac/tools/to_string.hpp"
 
 #include "helpers/ocl/infos.hpp"
+
+#include "to_string.hpp"
 
 namespace isaac
 {

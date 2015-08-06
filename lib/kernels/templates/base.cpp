@@ -12,9 +12,9 @@
 #include "isaac/kernels/parse.h"
 #include "isaac/exception/operation_not_supported.h"
 #include "isaac/exception/unknown_datatype.h"
-#include "isaac/tools/to_string.hpp"
-#include "isaac/tools/make_map.hpp"
 #include "isaac/symbolic/io.h"
+
+#include "to_string.hpp"
 
 namespace isaac
 {
@@ -36,20 +36,20 @@ numeric_type base::map_functor::get_numeric_type(isaac::array_expression const *
 template<class T>
 std::shared_ptr<mapped_object> base::map_functor::binary_leaf(isaac::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const
 {
-  return std::shared_ptr<mapped_object>(new T(numeric_type_to_string(array_expression->dtype()), binder_.get(), mapped_object::node_info(mapping, array_expression, root_idx)));
+  return std::shared_ptr<mapped_object>(new T(to_string(array_expression->dtype()), binder_.get(), mapped_object::node_info(mapping, array_expression, root_idx)));
 }
 
 /** @brief Scalar mapping */
 std::shared_ptr<mapped_object> base::map_functor::create(numeric_type dtype, values_holder) const
 {
-  std::string strdtype = numeric_type_to_string(dtype);
+  std::string strdtype = to_string(dtype);
   return std::shared_ptr<mapped_object>(new mapped_host_scalar(strdtype, binder_.get()));
 }
 
 /** @brief Vector mapping */
 std::shared_ptr<mapped_object> base::map_functor::create(array const * a) const
 {
-  std::string dtype = numeric_type_to_string(a->dtype());
+  std::string dtype = to_string(a->dtype());
   unsigned int id = binder_.get(a->data());
   //Scalar
   if(a->shape()[0]==1 && a->shape()[1]==1)
@@ -279,11 +279,12 @@ std::string base::generate_arguments(std::string const & data_type, driver::Devi
 {
   std::string kwglobal = Global(device.backend()).get();
   std::string _size_t = size_type(device);
-  return generate_arguments(mappings, tools::make_map<std::map<std::string, std::string> >("array0", kwglobal + " #scalartype* #pointer, " + _size_t + " #start,")
-                                                                    ("host_scalar", "#scalartype #name,")
-                                                                    ("array1", kwglobal + " " + data_type + "* #pointer, " + _size_t + " #start, " + _size_t + " #stride,")
-                                                                    ("array2", kwglobal + " " + data_type + "* #pointer, " + _size_t + " #ld, " + _size_t + " #start1, " + _size_t + " #start2, " + _size_t + " #stride1, " + _size_t + " #stride2,")
-                                                                    ("tuple4", "#scalartype #name0, #scalartype #name1, #scalartype #name2, #scalartype #name3,"), expressions);
+  return generate_arguments(mappings, { {"array0", kwglobal + " #scalartype* #pointer, " + _size_t + " #start,"},
+                                        {"host_scalar", "#scalartype #name,"},
+                                        {"array1", kwglobal + " " + data_type + "* #pointer, " + _size_t + " #start, " + _size_t + " #stride,"},
+                                        {"array2", kwglobal + " " + data_type + "* #pointer, " + _size_t + " #ld, " + _size_t + " #start1, " + _size_t + " #start2, " + _size_t + " #stride1, " + _size_t + " #stride2,"},
+                                        {"tuple4", "#scalartype #name0, #scalartype #name1, #scalartype #name2, #scalartype #name3,"}}
+                                    , expressions);
 }
 
 
@@ -305,30 +306,6 @@ base::invalid_exception::invalid_exception(std::string message) :
 const char* base::invalid_exception::what() const throw() { return message_.c_str(); }
 
 base::invalid_exception::~invalid_exception() throw() {}
-
-void base::fetching_loop_info(fetching_policy_type policy, std::string const & bound, kernel_generation_stream & stream, std::string & init, std::string & upper_bound, std::string & inc, std::string const & domain_id, std::string const & domain_size, driver::Device const & device)
-{
-  if (policy==FETCH_FROM_GLOBAL_STRIDED)
-  {
-    init = domain_id;
-    upper_bound = bound;
-    inc = domain_size;
-  }
-  else if (policy==FETCH_FROM_GLOBAL_CONTIGUOUS)
-  {
-    std::string _size_t = size_type(device);
-    std::string chunk_size = "chunk_size";
-    std::string chunk_start = "chunk_start";
-    std::string chunk_end = "chunk_end";
-
-    stream << _size_t << " " << chunk_size << " = (" << bound << "+" << domain_size << "-1)/" << domain_size << ";" << std::endl;
-    stream << _size_t << " " << chunk_start << " =" << domain_id << "*" << chunk_size << ";" << std::endl;
-    stream << _size_t << " " << chunk_end << " = min(" << chunk_start << "+" << chunk_size << ", " << bound << ");" << std::endl;
-    init = chunk_start;
-    upper_bound = chunk_end;
-    inc = "1";
-  }
-}
 
 bool base::is_node_trans(array_expression::container_type const & array, size_t root_idx, leaf_t leaf_type)
 {

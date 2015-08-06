@@ -3,12 +3,13 @@
 
 #include "isaac/driver/program.h"
 #include "isaac/driver/context.h"
-#include "isaac/tools/sha1.hpp"
 
 #ifdef ISAAC_WITH_CUDA
 #include "helpers/cuda/vector.hpp"
 #endif
 #include "helpers/ocl/infos.hpp"
+
+#include "sha1.hpp"
 
 namespace isaac
 {

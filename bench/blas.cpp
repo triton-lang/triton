@@ -1,6 +1,5 @@
 #include "isaac/array.h"
 #include "isaac/symbolic/execute.h"
-#include "isaac/tools/timer.hpp"
 #ifdef BENCH_CLBLAS
   #include "isaac/wrap/clBLAS.h"
 #endif
@@ -15,6 +14,9 @@
 #include <cmath>
 #include <numeric>
 #include <regex>
+
+#include "timer.hpp"
+
 
 #define HAS_A_BLAS defined(BENCH_CBLAS) or defined(BENCH_CLBLAS) or defined(BENCH_CUBLAS)
 namespace isc = isaac;

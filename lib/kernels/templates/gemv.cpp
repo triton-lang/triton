@@ -3,9 +3,10 @@
 #include "isaac/kernels/stream.h"
 #include "isaac/kernels/keywords.h"
 #include "isaac/kernels/templates/gemv.h"
-#include "isaac/tools/to_string.hpp"
-#include "isaac/tools/make_map.hpp"
-#include "isaac/tools/make_vector.hpp"
+
+#include "to_string.hpp"
+
+#include "tools/loop.hpp"
 
 namespace isaac
 {
@@ -59,7 +60,7 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
   std::string arguments = _size_t + " M, " + _size_t + " N, " ;
   for (const auto & e : dots)
   {
-    std::string numeric_type = numeric_type_to_string(lhs_most(e->array_expression().tree(), e->array_expression().root()).lhs.dtype);
+    std::string numeric_type = to_string(lhs_most(e->array_expression().tree(), e->array_expression().root()).lhs.dtype);
     if (e->is_index_dot())
     {
       arguments += e->process(Global(backend).get() + " unsigned int* #name_temp, ");
@@ -333,7 +334,7 @@ std::vector<int_t> gemv::input_sizes(expressions_tuple const & expressions) cons
   std::pair<int_t, int_t> MN = matrix_size(lhs_most(first_expression.tree(), idx[0]));
   if(dot_type_==REDUCE_COLUMNS)
     std::swap(MN.first,MN.second);
-  return tools::make_vector<int_t>() << MN.first << MN.second;
+  return {MN.first, MN.second};
 }
 
 void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const & controller)

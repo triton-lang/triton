@@ -20,9 +20,6 @@ class ISAACAPI Context
   friend class CommandQueue;
   friend class Buffer;
 
-private:
-  void init_cache_path();
-
 public:
   explicit Context(cl_context const & context, bool take_ownership = true);
   explicit Context(Device const & device);
