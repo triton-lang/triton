@@ -20,6 +20,8 @@
 #include "isaac/tools/timer.hpp"
 #include "isaac/tools/getenv.hpp"
 
+#include "database/broadwell.hpp"
+
 #include "convert.hpp"
 
 
@@ -278,7 +280,7 @@ std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::ba
   {
     res[std::make_pair(AXPY_TYPE, DTYPE)] = ptr_t (new templates::axpy(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
     res[std::make_pair(DOT_TYPE, DTYPE)] = ptr_t(new templates::dot(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GER_TYPE, DTYPE)] = ptr_t(new templates::ger(1,8,8,8,8,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GER_TYPE, DTYPE)] = ptr_t(new templates::ger(1,128,1,16,32,templates::FETCH_FROM_GLOBAL_STRIDED));
     res[std::make_pair(GEMV_N_TYPE, DTYPE)] = ptr_t(new templates::gemv_n(1, 8, 8, 4, 16, templates::FETCH_FROM_GLOBAL_STRIDED));
     res[std::make_pair(GEMV_T_TYPE, DTYPE)] = ptr_t(new templates::gemv_t(1, 8, 8, 64, 8, templates::FETCH_FROM_GLOBAL_STRIDED));
     res[std::make_pair(GEMM_NN_TYPE, DTYPE)] = ptr_t(new templates::gemm_nn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
@@ -291,5 +293,8 @@ std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::ba
 
 
 std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::base> > fallbacks = init_fallback();
+
+const std::map<std::pair<driver::Device::VENDOR, driver::Device::ARCHITECTURE> , const char *>
+    models::database_ = { { {driver::Device::VENDOR::INTEL, driver::Device::ARCHITECTURE::BROADWELL}, database::broadwell } };
 
 }

@@ -20,11 +20,18 @@ private:
   friend class CommandQueue;
 
 public:
-  enum ISAACAPI VENDOR
+  enum class ISAACAPI VENDOR
   {
       AMD,
       INTEL,
       NVIDIA,
+      UNKNOWN
+  };
+
+  enum class ISAACAPI ARCHITECTURE
+  {
+      HASWELL,
+      BROADWELL,
       UNKNOWN
   };
 
@@ -42,13 +49,15 @@ public:
   bool operator==(Device const &) const;
   bool operator<(Device const &) const;
 
+  VENDOR vendor() const;
+  ARCHITECTURE architecture() const;
+
   backend_type backend() const;
   size_t clock_rate() const;
   unsigned int address_bits() const;
   driver::Platform platform() const;
   std::string name() const;
   std::string vendor_str() const;
-  VENDOR vendor() const;
   std::vector<size_t> max_work_item_sizes() const;
   device_type type() const;
   std::string extensions() const;

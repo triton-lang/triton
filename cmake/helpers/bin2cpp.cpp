@@ -11,6 +11,7 @@
 #include <vector>
 #include <map>
 #include <memory>
+#include <algorithm>
 
 using namespace std;
 typedef map<string, string> opt_t;
@@ -70,6 +71,7 @@ parse_options(const vector<string>& args) {
     options["--type"]       = "";
     options["--file"]       = "";
     options["--output"]     = "";
+    options["--extension"]     = "";
     options["--namespace"]  = "";
     options["--eof"]        = "";
 
@@ -132,9 +134,11 @@ int main(int argc, const char * const * const argv)
         cout.rdbuf(outfile->rdbuf());
     }
 
-    cout << "#pragma once\n";
+    if(options["--extension"] != "cpp")
+        cout << "#pragma once\n";
+    cout << "\n";
     cout << "#include <cstddef>\n"; // defines size_t
-
+    cout << "\n";
     int ns_cnt = 0;
     int level = 0;
     if(options["--namespace"] != "") {
@@ -143,7 +147,8 @@ int main(int argc, const char * const * const argv)
         namespaces >> name;
         do {
             add_tabs(level++);
-            cout << "namespace " << name << " { \n";
+            cout << "namespace " << name << "\n";
+            cout << "{\n";
             ns_cnt++;
             namespaces >> name;
         } while(!namespaces.fail());
@@ -153,6 +158,7 @@ int main(int argc, const char * const * const argv)
         options["--type"]     = "char";
     }
     add_tabs(level);
+    cout << "\n";
     cout << "static const " << options["--type"] << " " << options["--name"] << "[] = {\n";
 
 
@@ -176,7 +182,9 @@ int main(int argc, const char * const * const argv)
 
     cout << "};\n";
     add_tabs(--level);
-    cout << "static const size_t " << options["--name"] << "_len" << " = " << std::dec << char_cnt << ";\n";
+    cout << "\n";
+    cout << "static const std::size_t " << options["--name"] << "_len" << " = " << std::dec << char_cnt << ";\n";
+    cout << "\n";
 
     while(ns_cnt--) {
         add_tabs(--level);
