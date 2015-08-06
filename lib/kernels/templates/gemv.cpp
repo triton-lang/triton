@@ -4,9 +4,12 @@
 #include "isaac/kernels/keywords.h"
 #include "isaac/kernels/templates/gemv.h"
 
-#include "to_string.hpp"
-
+#include "tools/arguments.hpp"
 #include "tools/loop.hpp"
+#include "tools/reductions.hpp"
+#include "tools/vector_types.hpp"
+
+#include "to_string.hpp"
 
 namespace isaac
 {
@@ -399,7 +402,7 @@ void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program
       kernel.setArg(n_arg++, tmp[i]);
       i++;
     }
-    set_arguments(expressions, kernel, n_arg);
+    set_arguments(expressions, kernel, n_arg, binding_policy_);
   }
 
   //NDRange

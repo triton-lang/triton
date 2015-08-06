@@ -4,6 +4,10 @@
 #include "isaac/kernels/keywords.h"
 
 #include "tools/loop.hpp"
+#include "tools/reductions.hpp"
+#include "tools/vector_types.hpp"
+#include "tools/arguments.hpp"
+
 #include "to_string.hpp"
 
 
@@ -341,7 +345,7 @@ void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program,
       i++;
     }
 
-    set_arguments(expressions, kernel, n_arg);
+    set_arguments(expressions, kernel, n_arg, binding_policy_);
   }
 
   for (unsigned int k = 0; k < 2; k++)

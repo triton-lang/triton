@@ -7,6 +7,8 @@
 #include "isaac/driver/backend.h"
 
 #include "tools/loop.hpp"
+#include "tools/vector_types.hpp"
+#include "tools/arguments.hpp"
 
 #include "to_string.hpp"
 
@@ -133,7 +135,7 @@ void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program
   //Arguments
   unsigned int current_arg = 0;
   kernel.setSizeArg(current_arg++, size);
-  set_arguments(expressions, kernel, current_arg);
+  set_arguments(expressions, kernel, current_arg, binding_policy_);
   controller.execution_options().enqueue(program.context(), kernel, global, local);
 }
 

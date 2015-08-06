@@ -4,7 +4,9 @@
 #include "isaac/symbolic/io.h"
 #include "isaac/kernels/keywords.h"
 
+#include "tools/arguments.hpp"
 #include "tools/loop.hpp"
+#include "tools/vector_types.hpp"
 
 namespace isaac
 {
@@ -124,7 +126,7 @@ void ger::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & prog
   std::vector<int_t> MN = input_sizes(expressions);
   kernel.setSizeArg(current_arg++, MN[0]);
   kernel.setSizeArg(current_arg++, MN[1]);
-  set_arguments(expressions, kernel, current_arg);
+  set_arguments(expressions, kernel, current_arg, binding_policy_);
 
   controller.execution_options().enqueue(program.context(), kernel, global, local);
 }

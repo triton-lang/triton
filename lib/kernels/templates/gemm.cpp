@@ -5,6 +5,9 @@
 #include "isaac/symbolic/preset.h"
 #include "isaac/exception/operation_not_supported.h"
 
+#include "tools/arguments.hpp"
+#include "tools/vector_types.hpp"
+
 #include "to_string.hpp"
 #include "align.hpp"
 
