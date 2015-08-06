@@ -20,7 +20,7 @@ private:
   friend class CommandQueue;
 
 public:
-  enum class ISAACAPI VENDOR
+  enum class ISAACAPI Vendor
   {
       AMD,
       INTEL,
@@ -28,7 +28,7 @@ public:
       UNKNOWN
   };
 
-  enum class ISAACAPI ARCHITECTURE
+  enum class ISAACAPI Architecture
   {
       HASWELL,
       BROADWELL,
@@ -49,8 +49,8 @@ public:
   bool operator==(Device const &) const;
   bool operator<(Device const &) const;
 
-  VENDOR vendor() const;
-  ARCHITECTURE architecture() const;
+  Vendor vendor() const;
+  Architecture architecture() const;
 
   backend_type backend() const;
   size_t clock_rate() const;

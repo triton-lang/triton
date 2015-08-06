@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include "isaac/types.h"
 #include "isaac/array.h"
-#include "isaac/model/model.h"
+#include "isaac/model/database.h"
 #include "isaac/symbolic/expression.h"
 #include "isaac/symbolic/preset.h"
 
@@ -145,7 +145,7 @@ namespace isaac
   }
 
   /** @brief Executes a array_expression on the given models map*/
-  void execute(controller<array_expression> const & c, models::map_type &models)
+  void execute(controller<array_expression> const & c, database::map_type & models)
   {
     array_expression expression = c.x();
     driver::Context const & context = expression.context();

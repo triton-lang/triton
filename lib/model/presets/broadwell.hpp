@@ -4,7 +4,7 @@
 
 namespace isaac
 {
-namespace database
+namespace presets
 {
 
 static const char broadwell[] = {

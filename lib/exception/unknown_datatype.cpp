@@ -1,5 +1,6 @@
 #include "isaac/exception/unknown_datatype.h"
-#include "isaac/tools/to_string.hpp"
+
+#include "to_string.hpp"
 
 namespace isaac
 {

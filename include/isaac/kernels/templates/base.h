@@ -10,7 +10,7 @@
 #include "isaac/kernels/parse.h"
 #include "isaac/kernels/stream.h"
 #include "isaac/symbolic/expression.h"
-#include "isaac/tools/to_string.hpp"
+
 namespace isaac
 {
 
@@ -114,41 +114,6 @@ protected:
     unsigned int & current_arg_;
     driver::Kernel & kernel_;
   };
-
-  struct loop_body_base
-  {
-    virtual void operator()(kernel_generation_stream & stream, unsigned int simd_width) const = 0;
-  };
-
-  static void fetching_loop_info(fetching_policy_type policy, std::string const & bound, kernel_generation_stream & stream,
-                                 std::string & init, std::string & upper_bound, std::string & inc, std::string const & domain_id, std::string const & domain_size, driver::Device const & device);
-
-  template<class Fun>
-  static void element_wise_loop_1D(kernel_generation_stream & stream, fetching_policy_type fetch, unsigned int simd_width,
-                                   std::string const & i, std::string const & bound, std::string const & domain_id, std::string const & domain_size, driver::Device const & device, Fun const & generate_body)
-  {
-    std::string strwidth = tools::to_string(simd_width);
-    std::string boundround = bound + "/" + strwidth;
-
-    std::string init, upper_bound, inc;
-    fetching_loop_info(fetch, boundround, stream, init, upper_bound, inc, domain_id, domain_size, device);
-    stream << "for(unsigned int " << i << " = " << init << "; " << i << " < " << upper_bound << "; " << i << " += " << inc << ")" << std::endl;
-    stream << "{" << std::endl;
-    stream.inc_tab();
-    generate_body(simd_width);
-    stream.dec_tab();
-    stream << "}" << std::endl;
-
-    if (simd_width>1)
-    {
-      stream << "for(unsigned int " << i << " = " << boundround << "*" << strwidth << " + " << domain_id << "; " << i << " < " << bound << "; " << i << " += " + domain_size + ")" << std::endl;
-      stream << "{" << std::endl;
-      stream.inc_tab();
-      generate_body(1);
-      stream.dec_tab();
-      stream << "}" << std::endl;
-    }
-  }
 
   static void compute_dot(kernel_generation_stream & os, std::string acc, std::string cur, op_element const & op);
   static void compute_index_dot(kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, op_element const & op);

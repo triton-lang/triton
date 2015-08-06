@@ -1,12 +1,14 @@
+#include <iostream>
 #include <cstring>
 #include <algorithm>
+
 #include "isaac/kernels/templates/axpy.h"
 #include "isaac/kernels/keywords.h"
 #include "isaac/driver/backend.h"
-#include "isaac/tools/make_map.hpp"
-#include "isaac/tools/make_vector.hpp"
-#include "isaac/tools/to_string.hpp"
-#include <iostream>
+
+#include "tools/loop.hpp"
+
+#include "to_string.hpp"
 
 namespace isaac
 {
@@ -83,7 +85,7 @@ std::string axpy::generate_impl(std::string const & suffix, expressions_tuple co
   stream << "if(idx==0)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  process(stream, LHS_NODE_TYPE, tools::make_map<std::map<std::string, std::string> >("array0", "#pointer[#start] = #namereg;"), expressions, mappings);
+  process(stream, LHS_NODE_TYPE, { {"array0", "#pointer[#start] = #namereg;"} }, expressions, mappings);
   stream.dec_tab();
   stream << "}" << std::endl;
 
@@ -107,7 +109,7 @@ axpy::axpy(unsigned int simd, unsigned int ls, unsigned int ng,
 std::vector<int_t> axpy::input_sizes(expressions_tuple const & expressions) const
 {
   size4 shape = static_cast<array_expression const *>(expressions.data().front().get())->shape();
-  return tools::make_vector<int_t>() << std::max(shape[0], shape[1]);
+  return {std::max(shape[0], shape[1])};
 }
 
 void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const & controller)

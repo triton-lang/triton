@@ -1,10 +1,12 @@
 #include <cstring>
 #include <iostream>
 #include "isaac/kernels/templates/dot.h"
-#include "isaac/tools/to_string.hpp"
-#include "isaac/tools/make_map.hpp"
-#include "isaac/tools/make_vector.hpp"
 #include "isaac/kernels/keywords.h"
+
+#include "tools/loop.hpp"
+#include "to_string.hpp"
+
+
 namespace isaac
 {
 namespace templates
@@ -73,7 +75,7 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
   std::string arguments = _size_t + " N, ";
   for (unsigned int k = 0; k < N; ++k)
   {
-    std::string numeric_type = numeric_type_to_string(lhs_most(exprs[k]->array_expression().tree(),  exprs[k]->array_expression().root()).lhs.dtype);
+    std::string numeric_type = to_string(lhs_most(exprs[k]->array_expression().tree(),  exprs[k]->array_expression().root()).lhs.dtype);
     if (exprs[k]->is_index_dot())
     {
       arguments += exprs[k]->process(Global(backend).get() + " unsigned int* #name_temp, ");
@@ -276,7 +278,7 @@ std::vector<int_t> dot::input_sizes(expressions_tuple const & expressions) const
 {
   std::vector<size_t> dots_idx = filter_nodes(&is_dot, *(expressions.data().front()), false);
   int_t N = vector_size(lhs_most(expressions.data().front()->tree(), dots_idx[0]));
-  return tools::make_vector<int_t>() << N;
+  return {N};
 }
 
 void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const & controller)

@@ -4,7 +4,7 @@
 
 #include "isaac/array.h"
 #include "isaac/exception/unknown_datatype.h"
-#include "isaac/model/model.h"
+#include "isaac/model/database.h"
 #include "isaac/symbolic/execute.h"
 
 
@@ -169,7 +169,7 @@ array& array::operator=(controller<TYPE> const & c)
   assert(dtype_ == c.x().dtype());
   array_expression expression(*this, c.x(), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
   execute(controller<array_expression>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()),
-          isaac::models::get(c.execution_options().queue(context_)));
+          isaac::database::get(c.execution_options().queue(context_)));
   return *this;
 }
 
