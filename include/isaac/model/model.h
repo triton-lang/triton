@@ -50,6 +50,7 @@ namespace isaac
       static void set(driver::CommandQueue const & queue, expression_type operation, numeric_type dtype, std::shared_ptr<model> const & model);
   private:
       static std::map<driver::CommandQueue, map_type> data_;
+      static const std::map<std::pair<driver::Device::VENDOR, driver::Device::ARCHITECTURE> , const char *> database_;
   };
 
   extern std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::base> > fallbacks;

@@ -1,3 +1,10 @@
+#Database
+set(DATABASE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/model/database/")
+file(GLOB_RECURSE JSON_FILES "${DATABASE_PATH}/json/*.json")
+CODE_TO_H(SOURCES ${JSON_FILES} VARNAME json_files EXTENSION "hpp" OUTPUT_DIR "${DATABASE_PATH}"
+        NAMESPACE "isaac database" TARGET database EOF "0")
+
+#Compilation
 if(ANDROID)
     add_library(isaac STATIC ${LIBISAAC_SRC})
 else()
@@ -8,6 +15,7 @@ else()
 	endif()
 endif()
 
+#Linkage
 if(OPENCL_FOUND)
     target_link_libraries(isaac ${OPENCL_LIBRARIES})
 endif()
@@ -17,13 +25,11 @@ if(CUDA_FOUND)
     #Cuda JIT headers to file
     set(CUDA_HELPERS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/driver/helpers/cuda/)
     file(GLOB_RECURSE CUDA_HELPERS_SRC ${CUDA_HELPERS_PATH}/*.cu)
-    include("${CMAKE_MODULE_PATH}/helpers/CodeToH.cmake")
     CODE_TO_H(SOURCES ${CUDA_HELPERS_SRC} VARNAME kernel_files EXTENSION "hpp"
               OUTPUT_DIR ${CUDA_HELPERS_PATH} NAMESPACE "isaac helpers cuda" TARGET cuda_headers EOF "0")
 endif()
 
-
-
+#Installation
 install(TARGETS isaac LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
 set(INSTALL_INCLUDE_DIR /usr/local/include)
 install(DIRECTORY isaac "${PROJECT_SOURCE_DIR}/include/isaac"

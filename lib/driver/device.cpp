@@ -39,6 +39,36 @@ bool Device::operator<(Device const & other) const
 }
 
 
+
+Device::VENDOR Device::vendor() const
+{
+    std::string vname = vendor_str();
+    std::transform(vname.begin(), vname.end(), vname.begin(), ::tolower);
+    if(vname.find("nvidia")!=std::string::npos)
+        return VENDOR::NVIDIA;
+    else if(vname.find("intel")!=std::string::npos)
+        return VENDOR::INTEL;
+    else if(vname.find("amd")!=std::string::npos || vname.find("advanced micro devices")!=std::string::npos)
+        return VENDOR::AMD;
+    else
+        return VENDOR::UNKNOWN;
+}
+
+Device::ARCHITECTURE Device::architecture() const
+{
+    switch(vendor())
+    {
+        case VENDOR::INTEL:
+        {
+            return ARCHITECTURE::BROADWELL;
+        }
+        default:
+        {
+            return ARCHITECTURE::UNKNOWN;
+        }
+    }
+}
+
 backend_type Device::backend() const
 { return backend_; }
 
@@ -95,19 +125,6 @@ std::string Device::vendor_str() const
   }
 }
 
-Device::VENDOR Device::vendor() const
-{
-    std::string vname = vendor_str();
-    std::transform(vname.begin(), vname.end(), vname.begin(), ::tolower);
-    if(vname.find("nvidia")!=std::string::npos)
-        return NVIDIA;
-    else if(vname.find("intel")!=std::string::npos)
-        return INTEL;
-    else if(vname.find("amd")!=std::string::npos || vname.find("advanced micro devices")!=std::string::npos)
-        return AMD;
-    else
-        return UNKNOWN;
-}
 
 std::vector<size_t> Device::max_work_item_sizes() const
 {
