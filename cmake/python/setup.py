@@ -115,7 +115,7 @@ def main():
     include ='${INCLUDE_DIRECTORIES_STR}'.split() + ['external/boost/include', os.path.join(find_module("numpy")[1], "core", "include")]
 
     #Source files
-    src =  '${LIBISAAC_SRC_STR}'.split() + [os.path.join('src', 'wrap', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
+    src =  '${LIBISAAC_SRC_STR}'.split() + [os.path.join('src', 'bind', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
     boostsrc = 'external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:
         src = src + [x for x in recursive_glob('external/boost/libs/' + s + '/src/','.cpp') if 'win32' not in x and 'pthread' not in x]

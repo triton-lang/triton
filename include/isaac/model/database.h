@@ -19,6 +19,7 @@ struct database
 public:
     typedef std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<model> > map_type;
 private:
+    static std::shared_ptr<templates::base> create(std::string const & template_name, std::vector<int> const & x);
     static void import(std::string const & fname, driver::CommandQueue const & queue);
     static map_type & init(driver::CommandQueue const & queue);
 public:

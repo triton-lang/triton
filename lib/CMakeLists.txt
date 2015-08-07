@@ -5,7 +5,6 @@ CODE_TO_H(SOURCES ${JSON_FILES} VARNAME json_files EXTENSION "hpp" OUTPUT_DIR "$
         NAMESPACE "isaac presets" TARGET database EOF "1")
 
 #Compilation
-include_directories("${CMAKE_CURRENT_SOURCE_DIR}/tools")
 if(ANDROID)
     add_library(isaac STATIC ${LIBISAAC_SRC})
 else()

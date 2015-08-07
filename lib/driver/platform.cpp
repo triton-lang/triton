@@ -3,7 +3,7 @@
 
 #include "helpers/ocl/infos.hpp"
 
-#include "to_string.hpp"
+#include <string>
 
 namespace isaac
 {
@@ -28,7 +28,7 @@ std::string Platform::version() const
     case CUDA:
       int version;
       cuDriverGetVersion(&version);
-      return tools::to_string(version);
+      return std::to_string(version);
 #endif
     case OPENCL: return ocl::info<CL_PLATFORM_VERSION>(cl_platform_);
     default: throw;

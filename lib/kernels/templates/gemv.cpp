@@ -9,7 +9,7 @@
 #include "tools/reductions.hpp"
 #include "tools/vector_types.hpp"
 
-#include "to_string.hpp"
+#include <string>
 
 namespace isaac
 {
@@ -38,7 +38,7 @@ unsigned int gemv::lmem_usage(const expressions_tuple &) const
 
 std::string gemv::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
-  using tools::to_string;
+  using std::to_string;
 
 
   std::vector<mapped_gemv*> dots;
@@ -67,10 +67,10 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
     if (e->is_index_dot())
     {
       arguments += e->process(Global(backend).get() + " unsigned int* #name_temp, ");
-      arguments += e->process(Global(backend).get() + " " + to_string(numeric_type) + "* #name_temp_value,");
+      arguments += e->process(Global(backend).get() + " " + numeric_type + "* #name_temp_value,");
     }
     else
-      arguments += e->process(Global(backend).get() + " " + to_string(numeric_type) + "* #name_temp, ");
+      arguments += e->process(Global(backend).get() + " " + numeric_type + "* #name_temp, ");
   }
 
   switch(backend)

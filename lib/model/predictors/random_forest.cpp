@@ -1,5 +1,5 @@
 #include "isaac/model/predictors/random_forest.h"
-#include "../json/to_array.hpp"
+#include "rapidjson/to_array.hpp"
 
 namespace isaac
 {
@@ -10,12 +10,12 @@ namespace predictors
 
 random_forest::tree::tree(rapidjson::Value const & treerep)
 {
-  children_left_ = json::to_int_array<int>(treerep["children_left"]);
-  children_right_ = json::to_int_array<int>(treerep["children_right"]);
-  threshold_ = json::to_float_array<float>(treerep["threshold"]);
-  feature_ = json::to_float_array<float>(treerep["feature"]);
+  children_left_ = rapidjson::to_int_array<int>(treerep["children_left"]);
+  children_right_ = rapidjson::to_int_array<int>(treerep["children_right"]);
+  threshold_ = rapidjson::to_float_array<float>(treerep["threshold"]);
+  feature_ = rapidjson::to_float_array<float>(treerep["feature"]);
   for(rapidjson::SizeType i = 0 ; i < treerep["value"].Size() ; i++)
-    value_.push_back(json::to_float_array<float>(treerep["value"][i]));
+    value_.push_back(rapidjson::to_float_array<float>(treerep["value"][i]));
   D_ = value_[0].size();
 }
 
