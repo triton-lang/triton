@@ -2,7 +2,7 @@
 set(DATABASE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/model/presets/")
 file(GLOB_RECURSE JSON_FILES "${DATABASE_PATH}/json/*.json")
 CODE_TO_H(SOURCES ${JSON_FILES} VARNAME json_files EXTENSION "hpp" OUTPUT_DIR "${DATABASE_PATH}"
-        NAMESPACE "isaac presets" TARGET database EOF "0")
+        NAMESPACE "isaac presets" TARGET database EOF "1")
 
 #Compilation
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/tools")

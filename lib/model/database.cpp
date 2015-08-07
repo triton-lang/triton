@@ -51,7 +51,6 @@ void database::import(std::string const & str, driver::CommandQueue const & queu
 {
   namespace js = rapidjson;
   map_type & result = cache_[queue];
-
   //Parse the JSON document
   js::Document document;
   document.Parse<0>(str.c_str());
