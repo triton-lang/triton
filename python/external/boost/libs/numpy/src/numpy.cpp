@@ -12,19 +12,19 @@ namespace boost
 namespace numpy 
 {
 
-#if PY_MAJOR_VERSION >= 3
-int
-#else
-void
-#endif
-do_import_array()
-{
-  import_array();
+#if PY_MAJOR_VERSION == 2
+static void wrap_import_array() {
+    import_array();
 }
+#else
+static void * wrap_import_array() {
+    import_array();
+}
+#endif
 
 void initialize(bool register_scalar_converters) 
 {
-  do_import_array();
+  wrap_import_array();
   import_ufunc();
   if (register_scalar_converters)
 	dtype::register_scalar_converters();

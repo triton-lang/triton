@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_XML_OARCHIVE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -42,6 +42,10 @@ namespace std{
 namespace boost {
 namespace archive {
 
+namespace detail {
+    template<class Archive> class interface_oarchive;
+} // namespace detail
+
 template<class Archive>
 class xml_oarchive_impl : 
     public basic_text_oprimitive<std::ostream>,
@@ -50,10 +54,18 @@ class xml_oarchive_impl :
 #ifdef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
 public:
 #else
-    friend class detail::interface_oarchive<Archive>;
-    friend class basic_xml_oarchive<Archive>;
-    friend class save_access;
 protected:
+    #if BOOST_WORKAROUND(BOOST_MSVC, < 1500)
+        // for some inexplicable reason insertion of "class" generates compile erro
+        // on msvc 7.1
+        friend detail::interface_oarchive<Archive>;
+        friend basic_xml_oarchive<Archive>;
+        friend save_access;
+    #else
+        friend class detail::interface_oarchive<Archive>;
+        friend class basic_xml_oarchive<Archive>;
+        friend class save_access;
+    #endif
 #endif
     //void end_preamble(){
     //    basic_xml_oarchive<Archive>::end_preamble();
@@ -115,8 +127,6 @@ public:
     {}
     ~xml_oarchive(){}
 };
-
-typedef xml_oarchive naked_xml_oarchive;
 
 } // namespace archive
 } // namespace boost

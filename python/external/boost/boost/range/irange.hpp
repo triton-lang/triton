@@ -51,6 +51,7 @@ namespace boost
             typedef typename base_t::value_type value_type;
             typedef typename base_t::difference_type difference_type;
             typedef typename base_t::reference reference;
+            typedef std::random_access_iterator_tag iterator_category;
 
             integer_iterator() : m_value() {}
             explicit integer_iterator(value_type x) : m_value(x) {}
@@ -73,7 +74,11 @@ namespace boost
 
             difference_type distance_to(const integer_iterator& other) const
             {
-                return other.m_value - m_value;
+                return is_signed<value_type>::value
+                    ? (other.m_value - m_value)
+                    : (other.m_value >= m_value)
+                        ? static_cast<difference_type>(other.m_value - m_value)
+                        : -static_cast<difference_type>(m_value - other.m_value);
             }
 
             bool equal(const integer_iterator& other) const
@@ -123,6 +128,7 @@ namespace boost
             typedef typename base_t::value_type value_type;
             typedef typename base_t::difference_type difference_type;
             typedef typename base_t::reference reference;
+            typedef std::random_access_iterator_tag iterator_category;
 
             integer_iterator_with_step(value_type first, difference_type step, value_type step_size)
                 : m_first(first)
@@ -164,7 +170,7 @@ namespace boost
 
             friend class ::boost::iterator_core_access;
             value_type m_first;
-            value_type m_step;
+            difference_type m_step;
             difference_type m_step_size;
         };
 

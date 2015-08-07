@@ -2,7 +2,7 @@
 #define BOOST_SERIALIZATION_STATE_SAVER_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -30,7 +30,7 @@
 #include <boost/call_traits.hpp>
 #include <boost/noncopyable.hpp>
 #include <boost/type_traits/has_nothrow_copy.hpp>
-#include <boost/detail/no_exceptions_support.hpp>
+#include <boost/core/no_exceptions_support.hpp>
 
 #include <boost/mpl/eval_if.hpp>
 #include <boost/mpl/identity.hpp>
@@ -77,7 +77,7 @@ public:
     
     ~state_saver() {
         #ifndef BOOST_NO_EXCEPTIONS
-            typedef BOOST_DEDUCED_TYPENAME mpl::eval_if<
+            typedef typename mpl::eval_if<
                 has_nothrow_copy< T >,
                 mpl::identity<restore>,
                 mpl::identity<restore_with_exception>

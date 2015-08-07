@@ -39,5 +39,6 @@
 # include <boost/preprocessor/seq/to_list.hpp>
 # include <boost/preprocessor/seq/to_tuple.hpp>
 # include <boost/preprocessor/seq/transform.hpp>
+# include <boost/preprocessor/seq/variadic_seq_to_seq.hpp>
 #
 # endif

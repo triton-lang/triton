@@ -24,17 +24,10 @@
 #include <boost/config.hpp>
 #include <boost/detail/workaround.hpp>
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 #   include <boost/type_traits/detail/cv_traits_impl.hpp>
 #   if BOOST_WORKAROUND(BOOST_MSVC, < 1400)
 #       include <boost/type_traits/remove_bounds.hpp>
 #   endif
-#else
-#   include <boost/type_traits/is_reference.hpp>
-#   include <boost/type_traits/is_array.hpp>
-#   include <boost/type_traits/detail/yes_no_type.hpp>
-#   include <boost/type_traits/detail/false_result.hpp>
-#endif
 
 // should be the last #include
 #include <boost/type_traits/detail/bool_trait_def.hpp>
@@ -48,7 +41,7 @@ struct is_volatile_rval_filter
 #if BOOST_WORKAROUND(BOOST_MSVC, < 1400)
    BOOST_STATIC_CONSTANT(bool, value = ::boost::detail::cv_traits_imp<typename boost::remove_bounds<T>::type*>::is_volatile);
 #else
-   BOOST_STATIC_CONSTANT(bool, value = ::boost::detail::cv_traits_imp<T*>::is_volatile);
+   BOOST_STATIC_CONSTANT(bool, value = ::boost::detail::cv_traits_imp<BOOST_TT_AUX_CV_TRAITS_IMPL_PARAM(T)>::is_volatile);
 #endif
 };
 #ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
@@ -66,7 +59,7 @@ struct is_volatile_rval_filter<T&&>
 
 #if defined( __CODEGEARC__ )
 BOOST_TT_AUX_BOOL_TRAIT_DEF1(is_volatile,T,__is_volatile(T))
-#elif !defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
+#else
 
 //* is a type T declared volatile - is_volatile<T>
 BOOST_TT_AUX_BOOL_TRAIT_DEF1(is_volatile,T,::boost::detail::is_volatile_rval_filter<T>::value)
@@ -82,68 +75,7 @@ BOOST_TT_AUX_BOOL_TRAIT_PARTIAL_SPEC1_1(typename T,is_volatile,T& volatile,false
 BOOST_TT_AUX_BOOL_TRAIT_PARTIAL_SPEC1_1(typename T,is_volatile,T& const volatile,false)
 #endif
 
-#else
-
-namespace detail {
-
-using ::boost::type_traits::yes_type;
-using ::boost::type_traits::no_type;
-
-yes_type is_volatile_tester(void const volatile*);
-no_type is_volatile_tester(void const*);
-
-template <bool is_ref, bool array>
-struct is_volatile_helper
-    : public ::boost::type_traits::false_result
-{
-};
-
-template <>
-struct is_volatile_helper<false,false>
-{
-    template <typename T> struct result_
-    {
-        static T* t;
-        BOOST_STATIC_CONSTANT(bool, value = (
-            sizeof(boost::detail::yes_type) == sizeof(boost::detail::is_volatile_tester(t))
-            ));
-    };
-};
-
-template <>
-struct is_volatile_helper<false,true>
-{
-    template <typename T> struct result_
-    {
-        static T t;
-        BOOST_STATIC_CONSTANT(bool, value = (
-            sizeof(boost::detail::yes_type) == sizeof(boost::detail::is_volatile_tester(&t))
-            ));
-    };
-};
-
-template <typename T>
-struct is_volatile_impl
-    : public is_volatile_helper<
-          is_reference<T>::value
-        , is_array<T>::value
-        >::template result_<T>
-{
-};
-
-BOOST_TT_AUX_BOOL_TRAIT_IMPL_SPEC1(is_volatile,void,false)
-#ifndef BOOST_NO_CV_VOID_SPECIALIZATIONS
-BOOST_TT_AUX_BOOL_TRAIT_IMPL_SPEC1(is_volatile,void const,false)
-BOOST_TT_AUX_BOOL_TRAIT_IMPL_SPEC1(is_volatile,void volatile,true)
-BOOST_TT_AUX_BOOL_TRAIT_IMPL_SPEC1(is_volatile,void const volatile,true)
 #endif
-
-} // namespace detail
-
-//* is a type T declared volatile - is_volatile<T>
-BOOST_TT_AUX_BOOL_TRAIT_DEF1(is_volatile,T,::boost::detail::is_volatile_impl<T>::value)
-
-#endif // BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 } // namespace boost
 

@@ -171,14 +171,13 @@ std::codecvt_base::result utf8_codecvt_facet::do_out(
 // How many char objects can I process to get <= max_limit
 // wchar_t objects?
 int utf8_codecvt_facet::do_length(
-    BOOST_CODECVT_DO_LENGTH_CONST std::mbstate_t &,
+    const std::mbstate_t &,
     const char * from,
     const char * from_end, 
     std::size_t max_limit
-#if BOOST_WORKAROUND(__IBMCPP__, BOOST_TESTED_AT(600))
-) const throw()
-#else
 ) const
+#if BOOST_WORKAROUND(__IBMCPP__, BOOST_TESTED_AT(600))
+        throw()
 #endif
 { 
     // RG - this code is confusing!  I need a better way to express it.
@@ -217,9 +216,9 @@ unsigned int utf8_codecvt_facet::get_octet_count(
     else if (0xf8 <= lead_octet && lead_octet <= 0xfb) return 5;
     else return 6;
 }
-BOOST_UTF8_END_NAMESPACE
 
-namespace {
+namespace detail {
+
 template<std::size_t s>
 int get_cont_octet_out_count_impl(wchar_t word){
     if (word < 0x80) {
@@ -270,15 +269,14 @@ int get_cont_octet_out_count_impl<4>(wchar_t word){
 #endif
 }
 
-} // namespace anonymous
+} // namespace detail
 
-BOOST_UTF8_BEGIN_NAMESPACE
 // How many "continuing octets" will be needed for this word
 // ==   total octets - 1.
 int utf8_codecvt_facet::get_cont_octet_out_count(
     wchar_t word
 ) const {
-    return get_cont_octet_out_count_impl<sizeof(wchar_t)>(word);
+    return detail::get_cont_octet_out_count_impl<sizeof(wchar_t)>(word);
 }
 BOOST_UTF8_END_NAMESPACE
 

@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_XML_WOARCHIVE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -30,11 +30,21 @@ namespace std{
 
 #include <ostream>
 
+#include <boost/smart_ptr/scoped_ptr.hpp>
 #include <boost/archive/detail/auto_link_warchive.hpp>
 #include <boost/archive/basic_text_oprimitive.hpp>
 #include <boost/archive/basic_xml_oarchive.hpp>
 #include <boost/archive/detail/register_archive.hpp>
 #include <boost/serialization/item_version_type.hpp>
+
+#ifdef BOOST_NO_CXX11_HDR_CODECVT
+    #include <boost/archive/detail/utf8_codecvt_facet.hpp>
+#else
+    #include <codecvt>
+    namespace boost { namespace archive { namespace detail {
+        typedef std::codecvt_utf8<wchar_t> utf8_codecvt_facet;
+    } } }
+#endif
 
 #include <boost/archive/detail/abi_prefix.hpp> // must be the last header
 
@@ -46,6 +56,10 @@ namespace std{
 namespace boost {
 namespace archive {
 
+namespace detail {
+    template<class Archive> class interface_oarchive;
+} // namespace detail
+
 template<class Archive>
 class xml_woarchive_impl : 
     public basic_text_oprimitive<std::wostream>,
@@ -54,10 +68,18 @@ class xml_woarchive_impl :
 #ifdef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
 public:
 #else
-    friend class detail::interface_oarchive<Archive>;
-    friend class basic_xml_oarchive<Archive>;
-    friend class save_access;
 protected:
+    #if BOOST_WORKAROUND(BOOST_MSVC, < 1500)
+        // for some inexplicable reason insertion of "class" generates compile erro
+        // on msvc 7.1
+        friend detail::interface_oarchive<Archive>;
+        friend basic_xml_oarchive<Archive>;
+        friend save_access;
+    #else
+        friend class detail::interface_oarchive<Archive>;
+        friend class basic_xml_oarchive<Archive>;
+        friend class save_access;
+    #endif
 #endif
     //void end_preamble(){
     //    basic_xml_oarchive<Archive>::end_preamble();
@@ -89,7 +111,8 @@ protected:
     #endif
     BOOST_WARCHIVE_DECL(BOOST_PP_EMPTY()) 
     xml_woarchive_impl(std::wostream & os, unsigned int flags);
-    ~xml_woarchive_impl(){}
+    BOOST_WARCHIVE_DECL(BOOST_PP_EMPTY()) 
+    ~xml_woarchive_impl();
 public:
     void 
     save_binary(const void *address, std::size_t count){
@@ -121,8 +144,6 @@ public:
     {}
     ~xml_woarchive(){}
 };
-
-typedef xml_woarchive naked_xml_woarchive;
 
 } // namespace archive
 } // namespace boost

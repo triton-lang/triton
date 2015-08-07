@@ -38,7 +38,6 @@ namespace boost
 // It is needed in order to allow us to write using boost::vertices as
 // needed for ADL when using vector_as_graph below.
 #if !defined(BOOST_NO_ARGUMENT_DEPENDENT_LOOKUP)            \
- && !BOOST_WORKAROUND(__GNUC__, <= 2)                       \
  && !BOOST_WORKAROUND(__BORLANDC__, BOOST_TESTED_AT(0x564))
 # define BOOST_VECTOR_AS_GRAPH_GRAPH_ADL_HACK
 #endif
@@ -470,10 +469,10 @@ typename T::ThereReallyIsNoMemberByThisNameInT vertices(T const&);
 
             const_constraints(g);
         }
-        void const_constraints(const Graph& g)
+        void const_constraints(const Graph& g_)
         {
             typedef typename property_map<Graph, vertex_index_t>::const_type Map;
-            Map m = get(vertex_index, g);
+            Map m = get(vertex_index, g_);
             ignore_unused_variable_warning(m);
         }
     private:
@@ -497,10 +496,10 @@ typename T::ThereReallyIsNoMemberByThisNameInT vertices(T const&);
 
             const_constraints(g);
         }
-        void const_constraints(const Graph& g)
+        void const_constraints(const Graph& g_)
         {
             typedef typename property_map<Graph, edge_index_t>::const_type Map;
-            Map m = get(edge_index, g);
+            Map m = get(edge_index, g_);
             ignore_unused_variable_warning(m);
         }
     private:

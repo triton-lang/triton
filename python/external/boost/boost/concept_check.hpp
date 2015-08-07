@@ -32,6 +32,12 @@
 # include <boost/concept/usage.hpp>
 # include <boost/concept/detail/concept_def.hpp>
 
+#if (defined _MSC_VER)
+# pragma warning( push )
+# pragma warning( disable : 4510 ) // default constructor could not be generated
+# pragma warning( disable : 4610 ) // object 'class' can never be instantiated - user-defined constructor required
+#endif
+
 namespace boost
 {
 
@@ -175,11 +181,6 @@ namespace boost
     TT b;
   };
 
-#if (defined _MSC_VER)
-# pragma warning( push )
-# pragma warning( disable : 4510 ) // default constructor could not be generated
-# pragma warning( disable : 4610 ) // object 'class' can never be instantiated - user-defined constructor required
-#endif
   // The SGI STL version of Assignable requires copy constructor and operator=
   BOOST_concept(SGIAssignable,(TT))
   {
@@ -202,9 +203,6 @@ namespace boost
     TT a;
     TT b;
   };
-#if (defined _MSC_VER)
-# pragma warning( pop )
-#endif
 
   BOOST_concept(Convertible,(X)(Y))
   {
@@ -562,10 +560,10 @@ namespace boost
     : ForwardIterator<TT>
   {
       BOOST_CONCEPT_USAGE(Mutable_ForwardIterator) {
-        *i++ = *i;         // require postincrement and assignment
+        *i++ = *j;         // require postincrement and assignment
       }
    private:
-      TT i;
+      TT i, j;
   };
 
   BOOST_concept(BidirectionalIterator,(TT))
@@ -591,10 +589,10 @@ namespace boost
   {
       BOOST_CONCEPT_USAGE(Mutable_BidirectionalIterator)
       {
-          *i-- = *i;                  // require postdecrement and assignment
+          *i-- = *j;                  // require postdecrement and assignment
       }
    private:
-      TT i;
+      TT i, j;
   };
 
   BOOST_concept(RandomAccessIterator,(TT))
@@ -820,9 +818,8 @@ namespace boost
       BOOST_CONCEPT_USAGE(Sequence)
       {
           S
-              c(n),
-              c2(n, t),
-              c3(first, last);
+              c(n, t),
+              c2(first, last);
 
           c.insert(p, t);
           c.insert(p, n, t);
@@ -835,7 +832,6 @@ namespace boost
 
           ignore_unused_variable_warning(c);
           ignore_unused_variable_warning(c2);
-          ignore_unused_variable_warning(c3);
           ignore_unused_variable_warning(r);
           const_constraints(c);
       }
@@ -880,7 +876,7 @@ namespace boost
           typename BackInsertionSequence::const_reference
               r = cc.back();
           ignore_unused_variable_warning(r);
-      };
+      }
       S c;
       typename S::value_type t;
   };
@@ -1076,6 +1072,10 @@ namespace boost
       size_type n;
   };
 } // namespace boost
+
+#if (defined _MSC_VER)
+# pragma warning( pop )
+#endif
 
 # include <boost/concept/detail/concept_undef.hpp>
 

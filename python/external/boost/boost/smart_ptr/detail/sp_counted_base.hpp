@@ -10,7 +10,7 @@
 //
 //  detail/sp_counted_base.hpp
 //
-//  Copyright 2005, 2006 Peter Dimov
+//  Copyright 2005-2013 Peter Dimov
 //
 // Distributed under the Boost Software License, Version 1.0. (See
 // accompanying file LICENSE_1_0.txt or copy at
@@ -20,8 +20,17 @@
 #include <boost/config.hpp>
 #include <boost/smart_ptr/detail/sp_has_sync.hpp>
 
+#if defined( __clang__ ) && defined( __has_extension )
+# if __has_extension( __c_atomic__ )
+#   define BOOST_SP_HAS_CLANG_C11_ATOMICS
+# endif
+#endif
+
 #if defined( BOOST_SP_DISABLE_THREADS )
 # include <boost/smart_ptr/detail/sp_counted_base_nt.hpp>
+
+#elif defined( BOOST_SP_USE_STD_ATOMIC )
+# include <boost/smart_ptr/detail/sp_counted_base_std_atomic.hpp>
 
 #elif defined( BOOST_SP_USE_SPINLOCK )
 # include <boost/smart_ptr/detail/sp_counted_base_spin.hpp>
@@ -31,6 +40,9 @@
 
 #elif defined( BOOST_DISABLE_THREADS ) && !defined( BOOST_SP_ENABLE_THREADS ) && !defined( BOOST_DISABLE_WIN32 )
 # include <boost/smart_ptr/detail/sp_counted_base_nt.hpp>
+
+#elif defined( BOOST_SP_HAS_CLANG_C11_ATOMICS )
+# include <boost/smart_ptr/detail/sp_counted_base_clang.hpp>
 
 #elif defined( __SNC__ )
 # include <boost/smart_ptr/detail/sp_counted_base_snc_ps3.hpp>
@@ -75,5 +87,7 @@
 # include <boost/smart_ptr/detail/sp_counted_base_spin.hpp>
 
 #endif
+
+#undef BOOST_SP_HAS_CLANG_C11_ATOMICS
 
 #endif  // #ifndef BOOST_SMART_PTR_DETAIL_SP_COUNTED_BASE_HPP_INCLUDED

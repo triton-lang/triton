@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2013 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_BASE_TYPE_HPP
 #define BOOST_MULTI_INDEX_DETAIL_BASE_TYPE_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -20,7 +20,6 @@
 #include <boost/mpl/size.hpp>
 #include <boost/multi_index/detail/index_base.hpp>
 #include <boost/multi_index/detail/is_index_list.hpp>
-#include <boost/multi_index/detail/msvc_index_specifier.hpp>
 #include <boost/static_assert.hpp>
 
 namespace boost{
@@ -33,17 +32,6 @@ namespace detail{
  * a index list.
  */
 
-#if BOOST_WORKAROUND(BOOST_MSVC,<1310)
-struct index_applier
-{
-  template<typename IndexSpecifierMeta,typename SuperMeta>
-  struct apply:
-    msvc_index_specifier<IndexSpecifierMeta::type>::
-      template result_index_class<SuperMeta>
-  {
-  }; 
-};
-#else
 struct index_applier
 {
   template<typename IndexSpecifierMeta,typename SuperMeta>
@@ -54,7 +42,6 @@ struct index_applier
       BOOST_NESTED_TEMPLATE index_class<SuperMeta>::type type;
   }; 
 };
-#endif
 
 template<int N,typename Value,typename IndexSpecifierList,typename Allocator>
 struct nth_layer

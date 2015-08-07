@@ -38,6 +38,13 @@
 #include <boost/static_assert.hpp>
 #include <boost/assert.hpp>
 
+#ifdef BOOST_NO_CXX11_RVALUE_REFERENCES
+#define BOOST_GRAPH_MOVE_IF_POSSIBLE(x) (x)
+#else
+#include <utility>
+#define BOOST_GRAPH_MOVE_IF_POSSIBLE(x) (std::move((x)))
+#endif
+
 /*
   Outline for this file:
 
@@ -251,6 +258,7 @@ namespace boost {
     template <class Vertex>
     no_property stored_edge<Vertex>::s_prop;
 
+#if defined(BOOST_NO_CXX11_RVALUE_REFERENCES) || defined(BOOST_NO_CXX11_DEFAULTED_FUNCTIONS)
     template <class Vertex, class Property>
     class stored_edge_property : public stored_edge<Vertex> {
       typedef stored_edge_property self;
@@ -277,6 +285,44 @@ namespace boost {
       // a perfect fit for the job, but it is darn close.
       std::auto_ptr<Property> m_property;
     };
+#else
+    template <class Vertex, class Property>
+    class stored_edge_property : public stored_edge<Vertex> {
+      typedef stored_edge_property self;
+      typedef stored_edge<Vertex> Base;
+    public:
+      typedef Property property_type;
+      inline stored_edge_property() { }
+      inline stored_edge_property(Vertex target,
+                                  const Property& p = Property())
+        : stored_edge<Vertex>(target), m_property(new Property(p)) { }
+#if defined(BOOST_MSVC) || (defined(BOOST_GCC) && (BOOST_GCC / 100) < 406)
+      stored_edge_property(self&& x) : Base(static_cast< Base const& >(x)) {
+        m_property.swap(x.m_property);
+      }
+      stored_edge_property(self const& x) : Base(static_cast< Base const& >(x)) {
+        m_property.swap(const_cast<self&>(x).m_property);
+      }
+      self& operator=(self&& x) {
+        Base::operator=(static_cast< Base const& >(x));
+        m_property = std::move(x.m_property);
+        return *this;
+      }
+      self& operator=(self const& x) {
+        Base::operator=(static_cast< Base const& >(x));
+        m_property = std::move(const_cast<self&>(x).m_property);
+        return *this;
+      }
+#else
+      stored_edge_property(self&& x) = default;
+      self& operator=(self&& x) = default;
+#endif
+      inline Property& get_property() { return *m_property; }
+      inline const Property& get_property() const { return *m_property; }
+    protected:
+      std::unique_ptr<Property> m_property;
+    };
+#endif
 
 
     template <class Vertex, class Iter, class Property>
@@ -384,7 +430,7 @@ namespace boost {
         if (first != last)
           for (++i; i != last; ++i)
             if (!pred(*i)) {
-              *first.base() = *i.base();
+              *first.base() = BOOST_GRAPH_MOVE_IF_POSSIBLE(*i.base());
               ++first;
             }
         el.erase(first.base(), el.end());
@@ -432,7 +478,7 @@ namespace boost {
               self_loop_removed = false;
             }
             else if (!pred(*i)) {
-              *first.base() = *i.base();
+              *first.base() = BOOST_GRAPH_MOVE_IF_POSSIBLE(*i.base());
               ++first;
             } else {
               if (source(*i, g) == target(*i, g)) self_loop_removed = true;
@@ -1610,8 +1656,7 @@ namespace boost {
       typename Config::OutEdgeList::iterator first, last;
       typename Config::EdgeContainer fake_edge_container;
       boost::tie(first, last) = graph_detail::
-        equal_range(el, StoredEdge(v, fake_edge_container.end(),
-                                   &fake_edge_container));
+        equal_range(el, StoredEdge(v));
       return std::make_pair(out_edge_iterator(first, u),
                             out_edge_iterator(last, u));
     }
@@ -2722,7 +2767,6 @@ namespace boost {
 
 } // namespace boost
 
-#if !defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
 namespace boost {
 
   template <typename V>
@@ -2756,7 +2800,6 @@ namespace boost {
   };
 
 }
-#endif
 
 
 #endif // BOOST_GRAPH_DETAIL_DETAIL_ADJACENCY_LIST_CCT

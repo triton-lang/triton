@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_INSERT_LINEBREAKS_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -18,7 +18,7 @@
 
 #include <boost/assert.hpp>
 
-#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME
+#include <boost/config.hpp>
 #if defined(BOOST_NO_STDC_NAMESPACE)
 namespace std{ using ::memcpy; }
 #endif
@@ -37,7 +37,7 @@ namespace iterators {
 template<
     class Base, 
     int N, 
-    class CharType = BOOST_DEDUCED_TYPENAME boost::iterator_value<Base>::type
+    class CharType = typename boost::iterator_value<Base>::type
 >
 class insert_linebreaks : 
     public iterator_adaptor<

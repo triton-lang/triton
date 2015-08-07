@@ -11,11 +11,14 @@
 //  boost/detail/lwm_win32_cs.hpp
 //
 //  Copyright (c) 2002, 2003 Peter Dimov
+//  Copyright (c) Microsoft Corporation 2014
 //
 // Distributed under the Boost Software License, Version 1.0. (See
 // accompanying file LICENSE_1_0.txt or copy at
 // http://www.boost.org/LICENSE_1_0.txt)
 //
+
+#include <boost/predef.h>
 
 #ifdef BOOST_USE_WINDOWS_H
 #  include <windows.h>
@@ -43,7 +46,11 @@ struct critical_section
 #endif
 };
 
+#if BOOST_PLAT_WINDOWS_RUNTIME
+extern "C" __declspec(dllimport) void __stdcall InitializeCriticalSectionEx(critical_section *, unsigned long, unsigned long);
+#else
 extern "C" __declspec(dllimport) void __stdcall InitializeCriticalSection(critical_section *);
+#endif
 extern "C" __declspec(dllimport) void __stdcall EnterCriticalSection(critical_section *);
 extern "C" __declspec(dllimport) void __stdcall LeaveCriticalSection(critical_section *);
 extern "C" __declspec(dllimport) void __stdcall DeleteCriticalSection(critical_section *);
@@ -67,7 +74,11 @@ public:
 
     lightweight_mutex()
     {
+#if BOOST_PLAT_WINDOWS_RUNTIME
+        InitializeCriticalSectionEx(&cs_, 4000, 0);
+#else
         InitializeCriticalSection(&cs_);
+#endif
     }
 
     ~lightweight_mutex()

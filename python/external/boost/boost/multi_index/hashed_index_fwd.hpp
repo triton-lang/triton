@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2013 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_HASHED_INDEX_FWD_HPP
 #define BOOST_MULTI_INDEX_HASHED_INDEX_FWD_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -26,6 +26,22 @@ template<
   typename SuperMeta,typename TagList,typename Category
 >
 class hashed_index;
+
+template<
+  typename KeyFromValue,typename Hash,typename Pred,
+  typename SuperMeta,typename TagList,typename Category
+>
+bool operator==(
+  const hashed_index<KeyFromValue,Hash,Pred,SuperMeta,TagList,Category>& x,
+  const hashed_index<KeyFromValue,Hash,Pred,SuperMeta,TagList,Category>& y);
+
+template<
+  typename KeyFromValue,typename Hash,typename Pred,
+  typename SuperMeta,typename TagList,typename Category
+>
+bool operator!=(
+  const hashed_index<KeyFromValue,Hash,Pred,SuperMeta,TagList,Category>& x,
+  const hashed_index<KeyFromValue,Hash,Pred,SuperMeta,TagList,Category>& y);
 
 template<
   typename KeyFromValue,typename Hash,typename Pred,

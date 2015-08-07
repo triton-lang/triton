@@ -18,6 +18,16 @@
 // should be the last #include
 #include <boost/type_traits/detail/bool_trait_def.hpp>
 
+#if defined(new) 
+#  if BOOST_WORKAROUND(BOOST_MSVC, >= 1310)
+#     define BOOST_TT_AUX_MACRO_NEW_DEFINED
+#     pragma push_macro("new")
+#     undef new
+#  else
+#     error "Sorry but you can't include this header if 'new' is defined as a macro."
+#  endif
+#endif
+
 namespace boost {
 namespace detail {
     template <class U, U x> 
@@ -134,6 +144,10 @@ namespace detail {
 BOOST_TT_AUX_BOOL_TRAIT_DEF1(has_new_operator,T,::boost::detail::has_new_operator_impl<T>::value)
 
 } // namespace boost
+
+#if defined(BOOST_TT_AUX_MACRO_NEW_DEFINED)
+#  pragma pop_macro("new")
+#endif
 
 #include <boost/type_traits/detail/bool_trait_undef.hpp>
 

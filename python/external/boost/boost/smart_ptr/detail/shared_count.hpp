@@ -225,7 +225,16 @@ public:
 #endif
     {
         typedef sp_counted_impl_pda<P, D, A> impl_type;
+
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+        typedef typename std::allocator_traits<A>::template rebind_alloc< impl_type > A2;
+
+#else
+
         typedef typename A::template rebind< impl_type >::other A2;
+
+#endif
 
         A2 a2( a );
 
@@ -233,8 +242,18 @@ public:
 
         try
         {
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+            impl_type * pi = std::allocator_traits<A2>::allocate( a2, 1 );
+            pi_ = pi;
+            std::allocator_traits<A2>::construct( a2, pi, p, d, a );
+
+#else
+
             pi_ = a2.allocate( 1, static_cast< impl_type* >( 0 ) );
-            new( static_cast< void* >( pi_ ) ) impl_type( p, d, a );
+            ::new( static_cast< void* >( pi_ ) ) impl_type( p, d, a );
+
+#endif
         }
         catch(...)
         {
@@ -250,11 +269,28 @@ public:
 
 #else
 
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+        impl_type * pi = std::allocator_traits<A2>::allocate( a2, 1 );
+        pi_ = pi;
+
+#else
+
         pi_ = a2.allocate( 1, static_cast< impl_type* >( 0 ) );
+
+#endif
 
         if( pi_ != 0 )
         {
-            new( static_cast< void* >( pi_ ) ) impl_type( p, d, a );
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+            std::allocator_traits<A2>::construct( a2, pi, p, d, a );
+
+#else
+
+            ::new( static_cast< void* >( pi_ ) ) impl_type( p, d, a );
+
+#endif
         }
         else
         {
@@ -273,7 +309,16 @@ public:
 #endif
     {
         typedef sp_counted_impl_pda< P, D, A > impl_type;
+
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+        typedef typename std::allocator_traits<A>::template rebind_alloc< impl_type > A2;
+
+#else
+
         typedef typename A::template rebind< impl_type >::other A2;
+
+#endif
 
         A2 a2( a );
 
@@ -281,8 +326,18 @@ public:
 
         try
         {
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+            impl_type * pi = std::allocator_traits<A2>::allocate( a2, 1 );
+            pi_ = pi;
+            std::allocator_traits<A2>::construct( a2, pi, p, a );
+
+#else
+
             pi_ = a2.allocate( 1, static_cast< impl_type* >( 0 ) );
-            new( static_cast< void* >( pi_ ) ) impl_type( p, a );
+            ::new( static_cast< void* >( pi_ ) ) impl_type( p, a );
+
+#endif
         }
         catch(...)
         {
@@ -298,11 +353,28 @@ public:
 
 #else
 
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+        impl_type * pi = std::allocator_traits<A2>::allocate( a2, 1 );
+        pi_ = pi;
+
+#else
+
         pi_ = a2.allocate( 1, static_cast< impl_type* >( 0 ) );
+
+#endif
 
         if( pi_ != 0 )
         {
-            new( static_cast< void* >( pi_ ) ) impl_type( p, a );
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+            std::allocator_traits<A2>::construct( a2, pi, p, a );
+
+#else
+
+            ::new( static_cast< void* >( pi_ ) ) impl_type( p, a );
+
+#endif
         }
         else
         {

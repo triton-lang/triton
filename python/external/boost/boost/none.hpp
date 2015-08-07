@@ -1,4 +1,5 @@
 // Copyright (C) 2003, Fernando Luis Cacciola Carballal.
+// Copyright (C) 2014 Andrzej Krzemienski.
 //
 // Distributed under the Boost Software License, Version 1.0.
 // (See accompanying file LICENSE_1_0.txt or copy at
@@ -20,7 +21,31 @@
 
 namespace boost {
 
+#ifdef BOOST_OPTIONAL_USE_OLD_DEFINITION_OF_NONE
 none_t const none = (static_cast<none_t>(0)) ;
+#else
+
+namespace detail { namespace optional_detail {
+
+  // the trick here is to make boost::none defined once as a global but in a header file
+  template <typename T>
+  struct none_instance
+  {
+    static const T instance;
+  };
+  
+  template <typename T>
+  const T none_instance<T>::instance = T(); // global, but because 'tis a template, no cpp file required
+
+} } // namespace detail::optional_detail
+
+
+namespace {
+  // TU-local
+  const none_t& none = detail::optional_detail::none_instance<none_t>::instance; 
+}
+
+#endif
 
 } // namespace boost
 

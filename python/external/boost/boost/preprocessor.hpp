@@ -7,7 +7,7 @@
 #  * http://www.boost.org/LICENSE_1_0.txt)
 #  */
 #
-# /* Revised by Paul Mensonides (2002) */
+# /* Revised by Paul Mensonides (2002)  */
 #
 # /* See http://www.boost.org/libs/preprocessor for documentation. */
 #

@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_BASIC_TEXT_IARCHIVE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -40,21 +40,27 @@
 namespace boost {
 namespace archive {
 
+namespace detail {
+    template<class Archive> class interface_iarchive;
+} // namespace detail
+
 /////////////////////////////////////////////////////////////////////////
 // class basic_text_iarchive - read serialized objects from a input text stream
 template<class Archive>
 class basic_text_iarchive : 
     public detail::common_iarchive<Archive>
 {
-protected:
-#if BOOST_WORKAROUND(BOOST_MSVC, <= 1300)
+#ifdef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
 public:
-#elif defined(BOOST_MSVC)
-    // for some inexplicable reason insertion of "class" generates compile erro
-    // on msvc 7.1
-    friend detail::interface_iarchive<Archive>;
 #else
-    friend class detail::interface_iarchive<Archive>;
+protected:
+    #if BOOST_WORKAROUND(BOOST_MSVC, < 1500)
+        // for some inexplicable reason insertion of "class" generates compile erro
+        // on msvc 7.1
+        friend detail::interface_iarchive<Archive>;
+    #else
+        friend class detail::interface_iarchive<Archive>;
+    #endif
 #endif
     // intermediate level to support override of operators
     // fot templates in the absence of partial function 

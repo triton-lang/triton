@@ -329,7 +329,6 @@ namespace boost {
       : Base(num_vertices), m_property(new graph_property_type(p))
     { }
 
-#if !defined(BOOST_MSVC) || BOOST_MSVC >= 1300
     // Required by Iterator Constructible Graph
     template <class EdgeIterator>
     adjacency_list(EdgeIterator first, EdgeIterator last,
@@ -347,7 +346,6 @@ namespace boost {
                           const GraphProperty& p = GraphProperty())
       : Base(n, first, last, ep_iter), m_property(new graph_property_type(p))
     { }
-#endif
 
     void swap(adjacency_list& x) {
       // Is there a more efficient way to do this?

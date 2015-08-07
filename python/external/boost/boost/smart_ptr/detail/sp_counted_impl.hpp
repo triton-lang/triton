@@ -78,7 +78,7 @@ public:
         boost::checked_delete( px_ );
     }
 
-    virtual void * get_deleter( detail::sp_typeinfo const & )
+    virtual void * get_deleter( sp_typeinfo const & )
     {
         return 0;
     }
@@ -153,7 +153,7 @@ public:
         del( ptr );
     }
 
-    virtual void * get_deleter( detail::sp_typeinfo const & ti )
+    virtual void * get_deleter( sp_typeinfo const & ti )
     {
         return ti == BOOST_SP_TYPEID(D)? &reinterpret_cast<char&>( del ): 0;
     }
@@ -213,7 +213,7 @@ public:
     {
     }
 
-    sp_counted_impl_pda( P p, A a ): p_( p ), d_(), a_( a )
+    sp_counted_impl_pda( P p, A a ): p_( p ), d_( a ), a_( a )
     {
     }
 
@@ -224,15 +224,32 @@ public:
 
     virtual void destroy() // nothrow
     {
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+        typedef typename std::allocator_traits<A>::template rebind_alloc< this_type > A2;
+
+#else
+
         typedef typename A::template rebind< this_type >::other A2;
+
+#endif
 
         A2 a2( a_ );
 
+#if !defined( BOOST_NO_CXX11_ALLOCATOR )
+
+        std::allocator_traits<A2>::destroy( a2, this );
+
+#else
+
         this->~this_type();
+
+#endif
+
         a2.deallocate( this, 1 );
     }
 
-    virtual void * get_deleter( detail::sp_typeinfo const & ti )
+    virtual void * get_deleter( sp_typeinfo const & ti )
     {
         return ti == BOOST_SP_TYPEID( D )? &reinterpret_cast<char&>( d_ ): 0;
     }

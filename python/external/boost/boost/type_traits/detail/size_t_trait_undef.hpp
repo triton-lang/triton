@@ -8,8 +8,8 @@
 // http://www.boost.org/LICENSE_1_0.txt)
 
 // $Source$
-// $Date: 2004-09-02 08:41:37 -0700 (Thu, 02 Sep 2004) $
-// $Revision: 24874 $
+// $Date$
+// $Revision$
 
 #undef BOOST_TT_AUX_SIZE_T_TRAIT_DEF1
 #undef BOOST_TT_AUX_SIZE_T_TRAIT_SPEC1

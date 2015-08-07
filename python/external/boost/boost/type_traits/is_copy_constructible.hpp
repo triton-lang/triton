@@ -32,7 +32,10 @@ struct is_copy_constructible_impl2 {
 // error: function *function_name* cannot be referenced -- it is a deleted function
 // static boost::type_traits::yes_type test(T1&, decltype(T1(boost::declval<T1&>()))* = 0);
 //                                                        ^ 
-#if !defined(BOOST_NO_CXX11_DELETED_FUNCTIONS) && !defined(BOOST_INTEL_CXX_VERSION)
+//
+// MSVC 12.0 (Visual 2013) has problems when the copy constructor has been deleted. See:
+// https://connect.microsoft.com/VisualStudio/feedback/details/800328/std-is-copy-constructible-is-broken
+#if !defined(BOOST_NO_CXX11_DELETED_FUNCTIONS) && !defined(BOOST_INTEL_CXX_VERSION) && !(defined(BOOST_MSVC) && _MSC_VER == 1800)
 
 #ifdef BOOST_NO_CXX11_DECLTYPE
     template <class T1>

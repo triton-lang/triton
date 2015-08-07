@@ -148,6 +148,19 @@ protected:
 
 };  // boost::base_from_member
 
+template < typename MemberType, int UniqueID >
+class base_from_member<MemberType&, UniqueID>
+{
+protected:
+    MemberType& member;
+
+    explicit BOOST_CONSTEXPR base_from_member( MemberType& x )
+        BOOST_NOEXCEPT
+        : member( x )
+        {}
+
+};  // boost::base_from_member
+
 }  // namespace boost
 
 

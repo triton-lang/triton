@@ -7,12 +7,17 @@
 //
 // For more information, see http://www.boost.org/libs/range/
 //
+// Acknowledgments:
+// Ticket #8341: Arno Schoedl - improved handling of has_range_iterator upon
+// use-cases where T was const.
 #ifndef BOOST_RANGE_HAS_ITERATOR_HPP_INCLUDED
 #define BOOST_RANGE_HAS_ITERATOR_HPP_INCLUDED
 
 #include <boost/mpl/bool.hpp>
+#include <boost/mpl/eval_if.hpp>
 #include <boost/mpl/has_xxx.hpp>
 #include <boost/range/iterator.hpp>
+#include <boost/type_traits/remove_reference.hpp>
 #include <boost/utility/enable_if.hpp>
 
 namespace boost
@@ -28,7 +33,16 @@ namespace boost
         };
 
         template<class T>
-        struct has_range_iterator_impl<T, BOOST_DEDUCED_TYPENAME enable_if< has_type< range_mutable_iterator<T> > >::type>
+        struct has_range_iterator_impl<
+            T,
+            BOOST_DEDUCED_TYPENAME ::boost::enable_if<
+                BOOST_DEDUCED_TYPENAME mpl::eval_if<is_const<T>,
+                    has_type<range_const_iterator<
+                                BOOST_DEDUCED_TYPENAME remove_const<T>::type> >,
+                    has_type<range_mutable_iterator<T> >
+                >::type
+            >::type
+        >
             : boost::mpl::true_
         {
         };
@@ -40,7 +54,12 @@ namespace boost
         };
 
         template<class T>
-        struct has_range_const_iterator_impl<T, BOOST_DEDUCED_TYPENAME enable_if< has_type< range_const_iterator<T> > >::type>
+        struct has_range_const_iterator_impl<
+            T,
+            BOOST_DEDUCED_TYPENAME ::boost::enable_if<
+                has_type<range_const_iterator<T> >
+            >::type
+        >
             : boost::mpl::true_
         {
         };
@@ -49,12 +68,14 @@ namespace boost
 
     template<class T>
     struct has_range_iterator
-        : range_detail::has_range_iterator_impl<T>
+        : range_detail::has_range_iterator_impl<
+            BOOST_DEDUCED_TYPENAME remove_reference<T>::type>
     {};
 
     template<class T>
     struct has_range_const_iterator
-        : range_detail::has_range_const_iterator_impl<T>
+        : range_detail::has_range_const_iterator_impl<
+            BOOST_DEDUCED_TYPENAME remove_reference<T>::type>
     {};
 } // namespace boost
 

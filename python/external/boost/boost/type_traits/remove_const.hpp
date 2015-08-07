@@ -12,23 +12,17 @@
 #define BOOST_TT_REMOVE_CONST_HPP_INCLUDED
 
 #include <boost/type_traits/is_volatile.hpp>
-#include <boost/type_traits/broken_compiler_spec.hpp>
 #include <boost/type_traits/detail/cv_traits_impl.hpp>
 #include <boost/config.hpp>
 #include <boost/detail/workaround.hpp>
 
 #include <cstddef>
 
-#if BOOST_WORKAROUND(BOOST_MSVC,<=1300)
-#include <boost/type_traits/msvc/remove_const.hpp>
-#endif
-
 // should be the last #include
 #include <boost/type_traits/detail/type_trait_def.hpp>
 
 namespace boost {
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 namespace detail {
 
@@ -49,7 +43,7 @@ template <typename T>
 struct remove_const_impl
 {
     typedef typename remove_const_helper<
-          typename cv_traits_imp<T*>::unqualified_type
+       typename cv_traits_imp<BOOST_TT_AUX_CV_TRAITS_IMPL_PARAM(T)>::unqualified_type
         , ::boost::is_volatile<T>::value
         >::type type;
 };
@@ -77,11 +71,6 @@ BOOST_TT_AUX_TYPE_TRAIT_PARTIAL_SPEC1_2(typename T,std::size_t N,remove_const,T 
 BOOST_TT_AUX_TYPE_TRAIT_PARTIAL_SPEC1_2(typename T,std::size_t N,remove_const,T const volatile[N],T volatile type[N])
 #endif
 
-#elif !BOOST_WORKAROUND(BOOST_MSVC,<=1300)
-
-BOOST_TT_AUX_TYPE_TRAIT_DEF1(remove_const,T,typename boost::detail::remove_const_impl<T>::type)
-
-#endif // BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 } // namespace boost
 

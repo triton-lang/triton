@@ -237,11 +237,9 @@ BOOST_TT_AUX_BOOL_TRAIT_DEF2(
     , (::boost::detail::is_base_and_derived_impl<Base,Derived>::value)
     )
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 BOOST_TT_AUX_BOOL_TRAIT_PARTIAL_SPEC2_2(typename Base,typename Derived,is_base_and_derived,Base&,Derived,false)
 BOOST_TT_AUX_BOOL_TRAIT_PARTIAL_SPEC2_2(typename Base,typename Derived,is_base_and_derived,Base,Derived&,false)
 BOOST_TT_AUX_BOOL_TRAIT_PARTIAL_SPEC2_2(typename Base,typename Derived,is_base_and_derived,Base&,Derived&,false)
-#endif
 
 #if BOOST_WORKAROUND(__CODEGEARC__, BOOST_TESTED_AT(0x610))
 BOOST_TT_AUX_BOOL_TRAIT_PARTIAL_SPEC2_1(typename Base,is_base_and_derived,Base,Base,false)

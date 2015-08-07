@@ -27,12 +27,6 @@
 #include <boost/mpl/not.hpp>
 #include <boost/mpl/if.hpp>
 
-#if BOOST_WORKAROUND(BOOST_MSVC, < 1300)
-// Stay out of the way of the concept checking class
-# define Graph Graph_
-# define RandomAccessContainer RandomAccessContainer_
-#endif
-
 namespace boost {
 
   enum default_color_type { white_color, gray_color, green_color, red_color, black_color };
@@ -53,16 +47,6 @@ namespace boost {
   inline default_color_type red(default_color_type) { return red_color; }
   inline default_color_type black(default_color_type) { return black_color; }
 
-#ifdef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
-  template <>
-  struct property_traits<default_color_type*> {
-    typedef default_color_type value_type;
-    typedef std::ptrdiff_t key_type;
-    typedef default_color_type& reference;
-    typedef lvalue_property_map_tag category;
-  };
-  // get/put already defined for T*
-#endif
 
   struct graph_property_tag { };
   struct vertex_property_tag { };
@@ -339,9 +323,6 @@ namespace boost {
     return make_iterator_vertex_map(c.begin());
   }
 
-#if defined (BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
-#  define BOOST_GRAPH_NO_BUNDLED_PROPERTIES
-#endif
 
 #if BOOST_WORKAROUND(__SUNPRO_CC, BOOST_TESTED_AT(0x590)) && !defined (BOOST_GRAPH_NO_BUNDLED_PROPERTIES)
 // This compiler cannot define a partial specialization based on a

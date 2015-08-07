@@ -2,11 +2,11 @@
 #define BOOST_SERIALIZATION_SERIALIZATION_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
-#if defined(_MSC_VER) && (_MSC_VER >= 1310)
+#if defined(_MSC_VER)
 #  pragma warning (disable : 4675) // suppress ADL warning
 #endif
 

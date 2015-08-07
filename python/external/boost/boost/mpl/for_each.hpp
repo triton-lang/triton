@@ -10,9 +10,9 @@
 //
 // See http://www.boost.org/libs/mpl for documentation.
 
-// $Id: for_each.hpp 55648 2009-08-18 05:16:53Z agurtovoy $
-// $Date: 2009-08-17 22:16:53 -0700 (Mon, 17 Aug 2009) $
-// $Revision: 55648 $
+// $Id$
+// $Date$
+// $Revision$
 
 #include <boost/mpl/is_sequence.hpp>
 #include <boost/mpl/begin_end.hpp>
@@ -22,6 +22,7 @@
 #include <boost/mpl/deref.hpp>
 #include <boost/mpl/identity.hpp>
 #include <boost/mpl/assert.hpp>
+#include <boost/mpl/aux_/config/gpu.hpp>
 #include <boost/mpl/aux_/unwrap.hpp>
 
 #include <boost/type_traits/is_same.hpp>
@@ -40,6 +41,7 @@ struct for_each_impl
         , typename TransformFunc
         , typename F
         >
+    BOOST_MPL_CFG_GPU_ENABLED
     static void execute(
           Iterator*
         , LastIterator*
@@ -59,6 +61,7 @@ struct for_each_impl<false>
         , typename TransformFunc
         , typename F
         >
+    BOOST_MPL_CFG_GPU_ENABLED
     static void execute(
           Iterator*
         , LastIterator*
@@ -89,6 +92,7 @@ template<
     , typename TransformOp
     , typename F
     >
+BOOST_MPL_CFG_GPU_ENABLED
 inline
 void for_each(F f, Sequence* = 0, TransformOp* = 0)
 {
@@ -105,10 +109,13 @@ template<
       typename Sequence
     , typename F
     >
+BOOST_MPL_CFG_GPU_ENABLED
 inline
 void for_each(F f, Sequence* = 0)
 {
-    for_each<Sequence, identity<> >(f);
+  // jfalcou: fully qualifying this call so it doesnt clash with phoenix::for_each
+  // ons ome compilers -- done on 02/28/2011
+  boost::mpl::for_each<Sequence, identity<> >(f);
 }
 
 }}

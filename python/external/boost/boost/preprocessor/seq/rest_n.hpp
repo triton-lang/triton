@@ -14,17 +14,17 @@
 #
 # include <boost/preprocessor/arithmetic/inc.hpp>
 # include <boost/preprocessor/config/config.hpp>
-# include <boost/preprocessor/facilities/empty.hpp>
+# include <boost/preprocessor/facilities/identity.hpp>
 # include <boost/preprocessor/seq/detail/split.hpp>
 # include <boost/preprocessor/tuple/elem.hpp>
 #
 # /* BOOST_PP_SEQ_REST_N */
 #
 # if ~BOOST_PP_CONFIG_FLAGS() & BOOST_PP_CONFIG_EDG()
-#    define BOOST_PP_SEQ_REST_N(n, seq) BOOST_PP_TUPLE_ELEM(2, 1, BOOST_PP_SEQ_SPLIT(BOOST_PP_INC(n), (nil) seq BOOST_PP_EMPTY))()
+#    define BOOST_PP_SEQ_REST_N(n, seq) BOOST_PP_TUPLE_ELEM(2, 1, BOOST_PP_SEQ_SPLIT(BOOST_PP_INC(n), BOOST_PP_IDENTITY( (nil) seq )))()
 # else
 #    define BOOST_PP_SEQ_REST_N(n, seq) BOOST_PP_SEQ_REST_N_I(n, seq)
-#    define BOOST_PP_SEQ_REST_N_I(n, seq) BOOST_PP_TUPLE_ELEM(2, 1, BOOST_PP_SEQ_SPLIT(BOOST_PP_INC(n), (nil) seq BOOST_PP_EMPTY))()
+#    define BOOST_PP_SEQ_REST_N_I(n, seq) BOOST_PP_TUPLE_ELEM(2, 1, BOOST_PP_SEQ_SPLIT(BOOST_PP_INC(n), BOOST_PP_IDENTITY( (nil) seq )))()
 # endif
 #
 # endif

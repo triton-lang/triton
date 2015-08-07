@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2013 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,13 +9,12 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_ITER_ADAPTOR_HPP
 #define BOOST_MULTI_INDEX_DETAIL_ITER_ADAPTOR_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
 #include <boost/config.hpp> /* keep it first to prevent nasty warns in MSVC */
 #include <boost/mpl/apply.hpp>
-#include <boost/multi_index/detail/prevent_eti.hpp>
 #include <boost/operators.hpp>
 
 namespace boost{
@@ -294,12 +293,9 @@ template<class Derived,class Base>
 struct iter_adaptor_base
 {
   typedef iter_adaptor_selector<
-    typename Base::iterator_category>        selector;
-  typedef typename prevent_eti<
-    selector,
-    typename mpl::apply2<
-      selector,Derived,Base>::type
-  >::type                                    type;
+    typename Base::iterator_category> selector;
+  typedef typename mpl::apply2<
+    selector,Derived,Base>::type      type;
 };
 
 template<class Derived,class Base>

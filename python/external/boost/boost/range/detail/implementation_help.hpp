@@ -95,6 +95,17 @@ namespace boost
             return sz;
         }
 
+        inline bool is_same_address(const void* l, const void* r)
+        {
+            return l == r;
+        }
+
+        template<class T1, class T2>
+        inline bool is_same_object(const T1& l, const T2& r)
+        {
+            return range_detail::is_same_address(&l, &r);
+        }
+
     } // namespace 'range_detail'
 
 } // namespace 'boost'

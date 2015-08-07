@@ -97,14 +97,7 @@
 namespace boost {
 namespace detail {
 
-template <typename T> class empty_base {
-
-// Helmut Zeisel, empty base class optimization bug with GCC 3.0.0
-#if defined(__GNUC__) && __GNUC__==3 && __GNUC_MINOR__==0 && __GNU_PATCHLEVEL__==0
-  bool dummy; 
-#endif
-
-};
+template <typename T> class empty_base {};
 
 } // namespace detail
 } // namespace boost
@@ -711,7 +704,6 @@ struct random_access_iteratable
 // the xxxx, xxxx1, and xxxx2 templates, importing them into boost:: as
 // necessary.
 //
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 // is_chained_base<> - a traits class used to distinguish whether an operator
 // template argument is being used for base class chaining, or is specifying a
@@ -809,24 +801,6 @@ BOOST_OPERATOR_TEMPLATE2(template_name##2)                         \
 BOOST_OPERATOR_TEMPLATE1(template_name##1)
 
 
-#else // BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
-
-#  define BOOST_OPERATOR_TEMPLATE4(template_name4) \
-        BOOST_IMPORT_TEMPLATE4(template_name4)
-#  define BOOST_OPERATOR_TEMPLATE3(template_name3) \
-        BOOST_IMPORT_TEMPLATE3(template_name3)
-#  define BOOST_OPERATOR_TEMPLATE2(template_name2) \
-        BOOST_IMPORT_TEMPLATE2(template_name2)
-#  define BOOST_OPERATOR_TEMPLATE1(template_name1) \
-        BOOST_IMPORT_TEMPLATE1(template_name1)
-
-   // In this case we can only assume that template_name<> is equivalent to the
-   // more commonly needed template_name1<> form.
-#  define BOOST_OPERATOR_TEMPLATE(template_name)                   \
-   template <class T, class B = ::boost::detail::empty_base<T> >   \
-   struct template_name : template_name##1<T, B> {};
-
-#endif // BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 namespace boost {
     
@@ -897,14 +871,10 @@ struct operators2
     , bitwise2<T,U
       > > > {};
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 template <class T, class U = T>
 struct operators : operators2<T, U> {};
 
 template <class T> struct operators<T, T>
-#else
-template <class T> struct operators
-#endif
     : totally_ordered<T
     , integer_arithmetic<T
     , bitwise<T

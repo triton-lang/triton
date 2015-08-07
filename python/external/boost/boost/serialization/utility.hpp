@@ -2,7 +2,7 @@
 #define BOOST_SERIALIZATION_UTILITY_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -38,7 +38,7 @@ inline void serialize(
     // note: we remove any const-ness on the first argument.  The reason is that 
     // for stl maps, the type saved is pair<const key, T).  We remove
     // the const-ness in order to be able to load it.
-    typedef BOOST_DEDUCED_TYPENAME boost::remove_const<F>::type typef;
+    typedef typename boost::remove_const<F>::type typef;
     ar & boost::serialization::make_nvp("first", const_cast<typef &>(p.first));
     ar & boost::serialization::make_nvp("second", p.second);
 }

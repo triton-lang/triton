@@ -1,9 +1,9 @@
 /*
- * Copyright (c) 2012 Glen Joseph Fernandes 
+ * Copyright (c) 2012-2014 Glen Joseph Fernandes
  * glenfe at live dot com
  *
- * Distributed under the Boost Software License, 
- * Version 1.0. (See accompanying file LICENSE_1_0.txt 
+ * Distributed under the Boost Software License,
+ * Version 1.0. (See accompanying file LICENSE_1_0.txt
  * or copy at http://boost.org/LICENSE_1_0.txt)
  */
 #ifndef BOOST_SMART_PTR_DETAIL_ARRAY_UTILITY_HPP
@@ -12,31 +12,42 @@
 #include <boost/config.hpp>
 #include <boost/type_traits/has_trivial_constructor.hpp>
 #include <boost/type_traits/has_trivial_destructor.hpp>
+#if !defined(BOOST_NO_CXX11_ALLOCATOR)
+#include <memory>
+#endif
 
 namespace boost {
     namespace detail {
-        template<typename T>
-        inline void array_destroy(T*, std::size_t, boost::true_type) {
+        typedef boost::true_type  ms_is_trivial;
+        typedef boost::false_type ms_no_trivial;
+
+        template<class T>
+        inline void ms_destroy(T*, std::size_t, ms_is_trivial) {
         }
-        template<typename T>
-        inline void array_destroy(T* memory, std::size_t size, boost::false_type) {
-            for (std::size_t i = size; i > 0; ) {
+
+        template<class T>
+        inline void ms_destroy(T* memory, std::size_t size, ms_no_trivial) {
+            for (std::size_t i = size; i > 0;) {
                 memory[--i].~T();
             }
         }
-        template<typename T>
-        inline void array_destroy(T* memory, std::size_t size) {
-            boost::has_trivial_destructor<T> type;
-            array_destroy(memory, size, type);
+
+        template<class T>
+        inline void ms_destroy(T* memory, std::size_t size) {
+            boost::has_trivial_destructor<T> trivial;
+            ms_destroy(memory, size, trivial);
         }
-        template<typename T>
-        inline void array_init(T* memory, std::size_t size, boost::true_type) {
+
+        template<class T>
+        inline void ms_init(T* memory, std::size_t size, ms_is_trivial) {
             for (std::size_t i = 0; i < size; i++) {
-                memory[i] = T();
+                void* p1 = memory + i;
+                ::new(p1) T();
             }
         }
-        template<typename T>
-        inline void array_init(T* memory, std::size_t size, boost::false_type) {
+
+        template<class T>
+        inline void ms_init(T* memory, std::size_t size, ms_no_trivial) {
 #if !defined(BOOST_NO_EXCEPTIONS)
             std::size_t i = 0;
             try {
@@ -45,7 +56,7 @@ namespace boost {
                     ::new(p1) T();
                 }
             } catch (...) {
-                array_destroy(memory, i);
+                ms_destroy(memory, i);
                 throw;
             }
 #else
@@ -55,77 +66,15 @@ namespace boost {
             }
 #endif
         }
-        template<typename T>
-        inline void array_init(T* memory, std::size_t size) {
-            boost::has_trivial_default_constructor<T> type;            
-            array_init(memory, size, type);
+
+        template<class T>
+        inline void ms_init(T* memory, std::size_t size) {
+            boost::has_trivial_default_constructor<T> trivial;
+            ms_init(memory, size, trivial);
         }
-#if !defined(BOOST_NO_CXX11_RVALUE_REFERENCES)
-        template<typename T>
-        inline void array_init_value(T* memory, std::size_t size, T&& value) {
-#if !defined(BOOST_NO_EXCEPTIONS)
-            std::size_t i = 0;
-            try {
-                for (; i < size; i++) {
-                    void* p1 = memory + i;
-                    ::new(p1) T(value);
-                }
-            } catch (...) {
-                array_destroy(memory, i);
-                throw;
-            }
-#else
-            for (std::size_t i = 0; i < size; i++) {
-                void* p1 = memory + i;
-                ::new(p1) T(value);
-            }
-#endif
-        }
-#if !defined(BOOST_NO_CXX11_VARIADIC_TEMPLATES)
-        template<typename T, typename... Args>
-        inline void array_init_args(T* memory, std::size_t size, Args&&... args) {
-#if !defined(BOOST_NO_EXCEPTIONS)
-            std::size_t i = 0;
-            try {
-                for (; i < size; i++) {
-                    void* p1 = memory + i;
-                    ::new(p1) T(args...);
-                }
-            } catch (...) {
-                array_destroy(memory, i);
-                throw;
-            }
-#else
-            for (std::size_t i = 0; i < size; i++) {
-                void* p1 = memory + i;
-                ::new(p1) T(args...);
-            }
-#endif
-        }
-#endif
-#endif
-        template<typename T>
-        inline void array_init_list(T* memory, std::size_t size, const T* list) {
-#if !defined(BOOST_NO_EXCEPTIONS)
-            std::size_t i = 0;
-            try {
-                for (; i < size; i++) {
-                    void* p1 = memory + i;
-                    ::new(p1) T(list[i]);
-                }
-            } catch (...) {
-                array_destroy(memory, i);
-                throw;
-            }
-#else
-            for (std::size_t i = 0; i < size; i++) {
-                void* p1 = memory + i;
-                ::new(p1) T(list[i]);
-            }
-#endif
-        }
-        template<typename T, std::size_t N>
-        inline void array_init_list(T* memory, std::size_t size, const T* list) {
+
+        template<class T, std::size_t N>
+        inline void ms_init(T* memory, std::size_t size, const T* list) {
 #if !defined(BOOST_NO_EXCEPTIONS)
             std::size_t i = 0;
             try {
@@ -134,7 +83,7 @@ namespace boost {
                     ::new(p1) T(list[i % N]);
                 }
             } catch (...) {
-                array_destroy(memory, i);
+                ms_destroy(memory, i);
                 throw;
             }
 #else
@@ -144,11 +93,97 @@ namespace boost {
             }
 #endif
         }
-        template<typename T>
-        inline void array_noinit(T*, std::size_t, boost::true_type) {
+
+#if !defined(BOOST_NO_CXX11_ALLOCATOR)
+        template<class T, class A>
+        inline void as_destroy(const A& allocator, T* memory,
+            std::size_t size) {
+            typedef typename std::allocator_traits<A>::
+                template rebind_alloc<T> TA;
+            typedef typename std::allocator_traits<A>::
+                template rebind_traits<T> TT;
+            TA a2(allocator);
+            for (std::size_t i = size; i > 0;) {
+                TT::destroy(a2, &memory[--i]);
+            }
         }
-        template<typename T>
-        inline void array_noinit(T* memory, std::size_t size, boost::false_type) {
+
+        template<class T, class A>
+        inline void as_init(const A& allocator, T* memory, std::size_t size,
+            ms_is_trivial) {
+            typedef typename std::allocator_traits<A>::
+                template rebind_alloc<T> TA;
+            typedef typename std::allocator_traits<A>::
+                template rebind_traits<T> TT;
+            TA a2(allocator);
+            for (std::size_t i = 0; i < size; i++) {
+                TT::construct(a2, memory + i);
+            }
+        }
+
+        template<class T, class A>
+        inline void as_init(const A& allocator, T* memory, std::size_t size,
+            ms_no_trivial) {
+            typedef typename std::allocator_traits<A>::
+                template rebind_alloc<T> TA;
+            typedef typename std::allocator_traits<A>::
+                template rebind_traits<T> TT;
+            TA a2(allocator);
+#if !defined(BOOST_NO_EXCEPTIONS)
+            std::size_t i = 0;
+            try {
+                for (; i < size; i++) {
+                    TT::construct(a2, memory + i);
+                }
+            } catch (...) {
+                as_destroy(a2, memory, i);
+                throw;
+            }
+#else
+            for (std::size_t i = 0; i < size; i++) {
+                TT::construct(a2, memory + i);
+            }
+#endif
+        }
+
+        template<class T, class A>
+        inline void as_init(const A& allocator, T* memory, std::size_t size) {
+            boost::has_trivial_default_constructor<T> trivial;
+            as_init(allocator, memory, size, trivial);
+        }
+
+        template<class T, class A, std::size_t N>
+        inline void as_init(const A& allocator, T* memory, std::size_t size,
+            const T* list) {
+            typedef typename std::allocator_traits<A>::
+                template rebind_alloc<T> TA;
+            typedef typename std::allocator_traits<A>::
+                template rebind_traits<T> TT;
+            TA a2(allocator);
+#if !defined(BOOST_NO_EXCEPTIONS)
+            std::size_t i = 0;
+            try {
+                for (; i < size; i++) {
+                    TT::construct(a2, memory + i, list[i % N]);
+                }
+            } catch (...) {
+                as_destroy(a2, memory, i);
+                throw;
+            }
+#else
+            for (std::size_t i = 0; i < size; i++) {
+                TT::construct(a2, memory + i, list[i % N]);
+            }
+#endif
+        }
+#endif
+
+        template<class T>
+        inline void ms_noinit(T*, std::size_t, ms_is_trivial) {
+        }
+
+        template<class T>
+        inline void ms_noinit(T* memory, std::size_t size, ms_no_trivial) {
 #if !defined(BOOST_NO_EXCEPTIONS)
             std::size_t i = 0;
             try {
@@ -157,7 +192,7 @@ namespace boost {
                     ::new(p1) T;
                 }
             } catch (...) {
-                array_destroy(memory, i);
+                ms_destroy(memory, i);
                 throw;
             }
 #else
@@ -167,10 +202,11 @@ namespace boost {
             }
 #endif
         }
-        template<typename T>
-        inline void array_noinit(T* memory, std::size_t size) {
-            boost::has_trivial_default_constructor<T> type;
-            array_noinit(memory, size, type);
+
+        template<class T>
+        inline void ms_noinit(T* memory, std::size_t size) {
+            boost::has_trivial_default_constructor<T> trivial;
+            ms_noinit(memory, size, trivial);
         }
     }
 }

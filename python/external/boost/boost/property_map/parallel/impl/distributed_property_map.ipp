@@ -9,14 +9,10 @@
 //           Andrew Lumsdaine
 #include <boost/assert.hpp>
 #include <boost/property_map/parallel/distributed_property_map.hpp>
-#include <boost/graph/parallel/detail/untracked_pair.hpp>
+#include <boost/property_map/parallel/detail/untracked_pair.hpp>
 #include <boost/type_traits/is_base_and_derived.hpp>
 #include <boost/bind.hpp>
-#include <boost/graph/parallel/simple_trigger.hpp>
-
-#ifndef BOOST_GRAPH_USE_MPI
-#error "Parallel BGL files should not be included unless <boost/graph/use_mpi.hpp> has been included"
-#endif
+#include <boost/property_map/parallel/simple_trigger.hpp>
 
 namespace boost { namespace parallel {
 
@@ -243,7 +239,7 @@ void
 PBGL_DISTRIB_PMAP::handle_message<Reduce>::
 setup_triggers(process_group_type& pg)
 {
-  using boost::graph::parallel::simple_trigger;
+  using boost::parallel::simple_trigger;
 
   simple_trigger(pg, property_map_put, this, &handle_message::handle_put);
   simple_trigger(pg, property_map_get, this, &handle_message::handle_get);

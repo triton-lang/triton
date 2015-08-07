@@ -5,7 +5,7 @@
  * accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
  *
- * $Id: integer_traits.hpp 85813 2013-09-21 20:17:00Z jewillco $
+ * $Id$
  *
  * Idea by Beman Dawes, Ed Brey, Steve Cleary, and Nathan Myers
  */
@@ -119,11 +119,6 @@ class integer_traits<wchar_t>
     //  - Mac OS X with native library
     //  - gcc on FreeBSD, OpenBSD and NetBSD
     public detail::integer_traits_base<wchar_t, INT_MIN, INT_MAX>
-#elif defined(__hpux) && defined(__GNUC__) && (__GNUC__ == 2) && !defined(__SGI_STL_PORT)
-    // No WCHAR_MIN and WCHAR_MAX, wchar_t has the same range as unsigned int.
-    //  - gcc 2.95.x on HP-UX
-    // (also, std::numeric_limits<wchar_t> appears to return the wrong values).
-    public detail::integer_traits_base<wchar_t, 0, UINT_MAX>
 #else
 #error No WCHAR_MIN and WCHAR_MAX present, please adjust integer_traits<> for your compiler.
 #endif

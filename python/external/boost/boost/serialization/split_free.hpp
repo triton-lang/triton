@@ -2,7 +2,7 @@
 #define BOOST_SERIALIZATION_SPLIT_FREE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -66,8 +66,8 @@ inline void split_free(
     T & t, 
     const unsigned int file_version
 ){
-    typedef BOOST_DEDUCED_TYPENAME mpl::eval_if<
-        BOOST_DEDUCED_TYPENAME Archive::is_saving,
+    typedef typename mpl::eval_if<
+        typename Archive::is_saving,
         mpl::identity</* detail:: */ free_saver<Archive, T> >, 
         mpl::identity</* detail:: */ free_loader<Archive, T> >
     >::type typex;

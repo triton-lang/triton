@@ -32,7 +32,7 @@
   declare both the iterator and value variables. There is really only
   one loop. The stopping condition gets executed two more times than it
   usually would be, oh well. The reason for the bgl_first_9 = bgl_last_9
-  in the outer for-loop is in case the user puts a break symbolic_expressionexpression
+  in the outer for-loop is in case the user puts a break statement
   in the inner for-loop.
 
   The other macros work in a similar fashion.

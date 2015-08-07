@@ -2,7 +2,7 @@
 #define BOOST_SERIALIZATION_TYPE_INFO_IMPLEMENTATION_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -35,17 +35,17 @@ template<class T>
 struct type_info_implementation {
     template<class U>
     struct traits_class_typeinfo_implementation {
-      typedef BOOST_DEDUCED_TYPENAME U::type_info_implementation::type type;
+      typedef typename U::type_info_implementation::type type;
     };
     // note: at least one compiler complained w/o the full qualification
     // on basic traits below
     typedef 
-        BOOST_DEDUCED_TYPENAME mpl::eval_if<
+        typename mpl::eval_if<
             is_base_and_derived<boost::serialization::basic_traits, T>,
             traits_class_typeinfo_implementation< T >,
         //else
             mpl::identity<
-                BOOST_DEDUCED_TYPENAME extended_type_info_impl< T >::type
+                typename extended_type_info_impl< T >::type
             >
         >::type type;
 };

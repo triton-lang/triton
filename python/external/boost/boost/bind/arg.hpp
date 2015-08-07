@@ -21,6 +21,7 @@
 
 #include <boost/config.hpp>
 #include <boost/is_placeholder.hpp>
+#include <boost/static_assert.hpp>
 
 namespace boost
 {
@@ -33,8 +34,7 @@ template< int I > struct arg
 
     template< class T > arg( T const & /* t */ )
     {
-        // static assert I == is_placeholder<T>::value
-        typedef char T_must_be_placeholder[ I == is_placeholder<T>::value? 1: -1 ];
+        BOOST_STATIC_ASSERT( I == is_placeholder<T>::value );
     }
 };
 

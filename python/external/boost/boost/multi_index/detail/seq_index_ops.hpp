@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2013 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_SEQ_INDEX_OPS_HPP
 #define BOOST_MULTI_INDEX_DETAIL_SEQ_INDEX_OPS_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -79,8 +79,7 @@ template<typename Node,typename Compare>
 void sequenced_index_collate(
   BOOST_DEDUCED_TYPENAME Node::impl_type* x,
   BOOST_DEDUCED_TYPENAME Node::impl_type* y,
-  Compare comp
-  BOOST_APPEND_EXPLICIT_TEMPLATE_TYPE(Node))
+  Compare comp)
 {
   typedef typename Node::impl_type    impl_type;
   typedef typename Node::impl_pointer impl_pointer;

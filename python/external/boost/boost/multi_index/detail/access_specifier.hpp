@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2013 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_ACCESS_SPECIFIER_HPP
 #define BOOST_MULTI_INDEX_DETAIL_ACCESS_SPECIFIER_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -42,8 +42,7 @@
  * official Sun Studio 12.
  */
 
-#if BOOST_WORKAROUND(__GNUC__, <3)||\
-    BOOST_WORKAROUND(__GNUC__,==3)&&(__GNUC_MINOR__<4)||\
+#if BOOST_WORKAROUND(__GNUC__,==3)&&(__GNUC_MINOR__<4)||\
     BOOST_WORKAROUND(BOOST_MSVC,==1310)||\
     BOOST_WORKAROUND(BOOST_MSVC,==1400)||\
     BOOST_WORKAROUND(__SUNPRO_CC,BOOST_TESTED_AT(0x590))

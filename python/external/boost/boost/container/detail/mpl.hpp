@@ -1,6 +1,6 @@
 //////////////////////////////////////////////////////////////////////////////
 //
-// (C) Copyright Ion Gaztanaga 2005-2012.
+// (C) Copyright Ion Gaztanaga 2005-2013.
 //
 // Distributed under the Boost Software License, Version 1.0.
 // (See accompanying file LICENSE_1_0.txt or copy at
@@ -13,9 +13,16 @@
 #ifndef BOOST_CONTAINER_CONTAINER_DETAIL_MPL_HPP
 #define BOOST_CONTAINER_CONTAINER_DETAIL_MPL_HPP
 
-#if defined(_MSC_VER)
+#ifndef BOOST_CONFIG_HPP
+#  include <boost/config.hpp>
+#endif
+
+#if defined(BOOST_HAS_PRAGMA_ONCE)
 #  pragma once
 #endif
+
+#include <boost/container/detail/config_begin.hpp>
+#include <boost/container/detail/workaround.hpp>
 
 #include <cstddef>
 
@@ -35,6 +42,13 @@ struct bool_ : integral_constant<bool, C_>
 {
    static const bool value = C_;
    operator bool() const { return bool_::value; }
+};
+
+template< unsigned V_ >
+struct unsigned_ : integral_constant<unsigned, V_>
+{
+   static const unsigned value = V_;
+   operator unsigned() const { return unsigned_::value; }
 };
 
 typedef bool_<true>        true_;
@@ -66,17 +80,31 @@ struct disable_if : public enable_if_c<!Cond::value, T> {};
 template <bool B, class T = void>
 struct disable_if_c : public enable_if_c<!B, T> {};
 
+#if defined(_MSC_VER) && (_MSC_VER >= 1400)
+
+template <class T, class U>
+struct is_convertible
+{
+   static const bool value = __is_convertible_to(T, U);
+};
+
+#else
+
 template <class T, class U>
 class is_convertible
 {
    typedef char true_t;
    class false_t { char dummy[2]; };
-   static true_t dispatch(U);
+   //use any_conversion as first parameter since in MSVC
+   //overaligned types can't go through ellipsis
    static false_t dispatch(...);
-   static T trigger();
+   static true_t  dispatch(U);
+   static T &trigger();
    public:
-   enum { value = sizeof(dispatch(trigger())) == sizeof(true_t) };
+   static const bool value = sizeof(dispatch(trigger())) == sizeof(true_t);
 };
+
+#endif
 
 template<
       bool C
@@ -110,8 +138,10 @@ struct if_
 
 template <class Pair>
 struct select1st
-//   : public std::unary_function<Pair, typename Pair::first_type>
 {
+   typedef Pair                        argument_type;
+   typedef typename Pair::first_type   result_type;
+
    template<class OtherPair>
    const typename Pair::first_type& operator()(const OtherPair& x) const
    {  return x.first;   }
@@ -123,8 +153,10 @@ struct select1st
 // identity is an extension: it is not part of the standard.
 template <class T>
 struct identity
-//   : public std::unary_function<T,T>
 {
+   typedef T   argument_type;
+   typedef T   result_type;
+
    typedef T type;
    const T& operator()(const T& x) const
    { return x; }
@@ -148,6 +180,12 @@ struct ls_zeros<1>
    static const std::size_t value = 0;
 };
 
+template <std::size_t OrigSize, std::size_t RoundTo>
+struct ct_rounded_size
+{
+   static const std::size_t value = ((OrigSize-1)/RoundTo+1)*RoundTo;
+};
+
 template <typename T> struct unvoid { typedef T type; };
 template <> struct unvoid<void> { struct type { }; };
 template <> struct unvoid<const void> { struct type { }; };
@@ -155,6 +193,8 @@ template <> struct unvoid<const void> { struct type { }; };
 }  //namespace container_detail {
 }  //namespace container {
 }  //namespace boost {
+
+#include <boost/container/detail/config_end.hpp>
 
 #endif   //#ifndef BOOST_CONTAINER_CONTAINER_DETAIL_MPL_HPP
 

@@ -8,8 +8,8 @@
 // http://www.boost.org/LICENSE_1_0.txt)
 
 // $Source$
-// $Date: 2011-04-25 05:26:48 -0700 (Mon, 25 Apr 2011) $
-// $Revision: 71481 $
+// $Date$
+// $Revision$
 
 #include <boost/type_traits/detail/template_arity_spec.hpp>
 #include <boost/mpl/aux_/lambda_support.hpp>

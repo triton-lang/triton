@@ -2,7 +2,7 @@
 #define BOOST_SERIALIZATION_COLLECTIONS_SAVE_IMP_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -34,14 +34,16 @@ namespace stl {
 //
 
 template<class Archive, class Container>
-inline void save_collection(Archive & ar, const Container &s)
+inline void save_collection(
+    Archive & ar,
+    const Container &s,
+    collection_size_type count)
 {
-    // record number of elements
-    collection_size_type count(s.size());
-    const item_version_type item_version(
-        version<BOOST_DEDUCED_TYPENAME Container::value_type>::value
-    );
     ar << BOOST_SERIALIZATION_NVP(count);
+    // record number of elements
+    const item_version_type item_version(
+        version<typename Container::value_type>::value
+    );
     #if 0
         boost::archive::library_version_type library_version(
             ar.get_library_version()
@@ -53,7 +55,7 @@ inline void save_collection(Archive & ar, const Container &s)
         ar << BOOST_SERIALIZATION_NVP(item_version);
     #endif
 
-    BOOST_DEDUCED_TYPENAME Container::const_iterator it = s.begin();
+    typename Container::const_iterator it = s.begin();
     while(count-- > 0){
         // note borland emits a no-op without the explicit namespace
         boost::serialization::save_construct_data_adl(
@@ -63,6 +65,14 @@ inline void save_collection(Archive & ar, const Container &s)
         );
         ar << boost::serialization::make_nvp("item", *it++);
     }
+}
+
+template<class Archive, class Container>
+inline void save_collection(Archive & ar, const Container &s)
+{
+    // record number of elements
+    collection_size_type count(s.size());
+    save_collection(ar, s, count);
 }
 
 } // namespace stl 

@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_ISTREAM_ITERATOR_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -41,13 +41,13 @@ class istream_iterator :
 {
     friend class boost::iterator_core_access;
     typedef istream_iterator this_t ;
-    typedef BOOST_DEDUCED_TYPENAME boost::iterator_facade<
+    typedef typename boost::iterator_facade<
         istream_iterator<Elem>,
         Elem,
         std::input_iterator_tag,
         Elem
     > super_t;
-    typedef BOOST_DEDUCED_TYPENAME std::basic_istream<Elem> istream_type;
+    typedef typename std::basic_istream<Elem> istream_type;
  
     bool equal(const this_t & rhs) const {
         // note: only  works for comparison against end of stream

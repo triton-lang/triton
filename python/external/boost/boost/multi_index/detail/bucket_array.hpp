@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2014 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_BUCKET_ARRAY_HPP
 #define BOOST_MULTI_INDEX_DETAIL_BUCKET_ARRAY_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -17,8 +17,11 @@
 #include <algorithm>
 #include <boost/multi_index/detail/auto_space.hpp>
 #include <boost/multi_index/detail/hash_index_node.hpp>
-#include <boost/multi_index/detail/prevent_eti.hpp>
 #include <boost/noncopyable.hpp>
+#include <boost/preprocessor/repetition/repeat.hpp>
+#include <boost/preprocessor/seq/elem.hpp>
+#include <boost/preprocessor/seq/enum.hpp>
+#include <boost/preprocessor/seq/size.hpp>
 #include <cstddef>
 #include <limits.h>
 
@@ -36,115 +39,143 @@ namespace detail{
 
 /* bucket structure for use by hashed indices */
 
+#define BOOST_MULTI_INDEX_BA_SIZES_32BIT                                  \
+(53ul)(97ul)(193ul)(389ul)(769ul)                                         \
+(1543ul)(3079ul)(6151ul)(12289ul)(24593ul)                                \
+(49157ul)(98317ul)(196613ul)(393241ul)(786433ul)                          \
+(1572869ul)(3145739ul)(6291469ul)(12582917ul)(25165843ul)                 \
+(50331653ul)(100663319ul)(201326611ul)(402653189ul)(805306457ul)          \
+(1610612741ul)(3221225473ul)
+
+#if ((((ULONG_MAX>>16)>>16)>>16)>>15)==0 /* unsigned long less than 64 bits */
+#define BOOST_MULTI_INDEX_BA_SIZES                                         \
+BOOST_MULTI_INDEX_BA_SIZES_32BIT                                           \
+(4294967291ul)
+#else
+  /* obtained with aid from
+   *   http://javaboutique.internet.com/prime_numb/
+   *   http://www.rsok.com/~jrm/next_ten_primes.html
+   * and verified with
+   *   http://www.alpertron.com.ar/ECM.HTM
+   */
+
+#define BOOST_MULTI_INDEX_BA_SIZES                                         \
+BOOST_MULTI_INDEX_BA_SIZES_32BIT                                           \
+(6442450939ul)(12884901893ul)(25769803751ul)(51539607551ul)                \
+(103079215111ul)(206158430209ul)(412316860441ul)(824633720831ul)           \
+(1649267441651ul)(3298534883309ul)(6597069766657ul)(13194139533299ul)      \
+(26388279066623ul)(52776558133303ul)(105553116266489ul)(211106232532969ul) \
+(422212465066001ul)(844424930131963ul)(1688849860263953ul)                 \
+(3377699720527861ul)(6755399441055731ul)(13510798882111483ul)              \
+(27021597764222939ul)(54043195528445957ul)(108086391056891903ul)           \
+(216172782113783843ul)(432345564227567621ul)(864691128455135207ul)         \
+(1729382256910270481ul)(3458764513820540933ul)(6917529027641081903ul)      \
+(13835058055282163729ul)(18446744073709551557ul)
+#endif
+
+template<bool _=true> /* templatized to have in-header static var defs */
 class bucket_array_base:private noncopyable
 {
 protected:
-  inline static std::size_t next_prime(std::size_t n)
+  static const std::size_t sizes[];
+
+  static std::size_t size_index(std::size_t n)
   {
-    static const std::size_t prime_list[]={
-      53ul, 97ul, 193ul, 389ul, 769ul,
-      1543ul, 3079ul, 6151ul, 12289ul, 24593ul,
-      49157ul, 98317ul, 196613ul, 393241ul, 786433ul,
-      1572869ul, 3145739ul, 6291469ul, 12582917ul, 25165843ul,
-      50331653ul, 100663319ul, 201326611ul, 402653189ul, 805306457ul,
-      1610612741ul, 3221225473ul,
-
-#if ((((ULONG_MAX>>16)>>16)>>16)>>15)==0 /* unsigned long less than 64 bits */
-      4294967291ul
-#else
-      /* obtained with aid from
-       *   http://javaboutique.internet.com/prime_numb/
-       *   http://www.rsok.com/~jrm/next_ten_primes.html
-       * and verified with
-       *   http://www.alpertron.com.ar/ECM.HTM
-       */
-
-      6442450939ul, 12884901893ul, 25769803751ul, 51539607551ul,
-      103079215111ul, 206158430209ul, 412316860441ul, 824633720831ul,
-      1649267441651ul, 3298534883309ul, 6597069766657ul, 13194139533299ul,
-      26388279066623ul, 52776558133303ul, 105553116266489ul, 211106232532969ul,
-      422212465066001ul, 844424930131963ul, 1688849860263953ul,
-      3377699720527861ul, 6755399441055731ul, 13510798882111483ul,
-      27021597764222939ul, 54043195528445957ul, 108086391056891903ul,
-      216172782113783843ul, 432345564227567621ul, 864691128455135207ul,
-      1729382256910270481ul, 3458764513820540933ul, 6917529027641081903ul,
-      13835058055282163729ul, 18446744073709551557ul
-#endif
-
-    };
-    static const std::size_t prime_list_size=
-      sizeof(prime_list)/sizeof(prime_list[0]);
-
-    std::size_t const *bound=
-      std::lower_bound(prime_list,prime_list+prime_list_size,n);
-    if(bound==prime_list+prime_list_size)bound--;
-    return *bound;
+    const std::size_t *bound=std::lower_bound(sizes,sizes+sizes_length,n);
+    if(bound==sizes+sizes_length)--bound;
+    return bound-sizes;
   }
+
+#define BOOST_MULTI_INDEX_BA_POSITION_CASE(z,n,_)                    \
+  case n:return hash%BOOST_PP_SEQ_ELEM(n,BOOST_MULTI_INDEX_BA_SIZES);
+
+  static std::size_t position(std::size_t hash,std::size_t size_index_)
+  {
+    /* Accelerate hash%sizes[size_index_] by replacing with a switch on
+     * hash%Ci expressions, each Ci a compile-time constant, which the
+     * compiler can implement without using integer division.
+     */
+
+    switch(size_index_){
+      default: /* never used */
+      BOOST_PP_REPEAT(
+        BOOST_PP_SEQ_SIZE(BOOST_MULTI_INDEX_BA_SIZES),
+        BOOST_MULTI_INDEX_BA_POSITION_CASE,~)
+    }
+  }
+
+private:
+  static const std::size_t sizes_length;
 };
 
+template<bool _>
+const std::size_t bucket_array_base<_>::sizes[]={
+  BOOST_PP_SEQ_ENUM(BOOST_MULTI_INDEX_BA_SIZES)
+};
+
+template<bool _>
+const std::size_t bucket_array_base<_>::sizes_length=
+  sizeof(bucket_array_base<_>::sizes)/
+  sizeof(bucket_array_base<_>::sizes[0]);
+
+#undef BOOST_MULTI_INDEX_BA_POSITION_CASE
+#undef BOOST_MULTI_INDEX_BA_SIZES
+#undef BOOST_MULTI_INDEX_BA_SIZES_32BIT
+
 template<typename Allocator>
-class bucket_array:public bucket_array_base
+class bucket_array:bucket_array_base<>
 {
-  typedef typename prevent_eti<
-    Allocator,
-    hashed_index_node_impl<
-      typename boost::detail::allocator::rebind_to<
-        Allocator,
-        char
-      >::type
-    >
-  >::type                                           node_impl_type;
+  typedef bucket_array_base<>                        super;
+  typedef hashed_index_base_node_impl<
+    typename boost::detail::allocator::rebind_to<
+      Allocator,
+      char
+    >::type
+  >                                                  base_node_impl_type;
 
 public:
-  typedef typename node_impl_type::pointer          pointer;
+  typedef typename base_node_impl_type::base_pointer base_pointer;
+  typedef typename base_node_impl_type::pointer      pointer;
 
-  bucket_array(const Allocator& al,pointer end_,std::size_t size):
-    size_(bucket_array_base::next_prime(size)),
-    spc(al,size_+1)
+  bucket_array(const Allocator& al,pointer end_,std::size_t size_):
+    size_index_(super::size_index(size_)),
+    spc(al,super::sizes[size_index_]+1)
   {
-    clear();
-    end()->next()=end_;
-    end_->next()=end();
+    clear(end_);
   }
 
   std::size_t size()const
   {
-    return size_;
+    return super::sizes[size_index_];
   }
 
   std::size_t position(std::size_t hash)const
   {
-    return hash%size_;
+    return super::position(hash,size_index_);
   }
 
-  pointer begin()const{return buckets();}
-  pointer end()const{return buckets()+size_;}
-  pointer at(std::size_t n)const{return buckets()+n;}
+  base_pointer begin()const{return buckets();}
+  base_pointer end()const{return buckets()+size();}
+  base_pointer at(std::size_t n)const{return buckets()+n;}
 
-  std::size_t first_nonempty(std::size_t n)const
+  void clear(pointer end_)
   {
-    for(;;++n){
-      pointer x=at(n);
-      if(x->next()!=x)return n;
-    }
-  }
-
-  void clear()
-  {
-    for(pointer x=begin(),y=end();x!=y;++x)x->next()=x;
-  }
+    for(base_pointer x=begin(),y=end();x!=y;++x)x->prior()=pointer(0);
+    end()->prior()=end_->prior()=end_;
+    end_->next()=end();
+ }
 
   void swap(bucket_array& x)
   {
-    std::swap(size_,x.size_);
+    std::swap(size_index_,x.size_index_);
     spc.swap(x.spc);
   }
 
 private:
-  std::size_t                          size_;
-  auto_space<node_impl_type,Allocator> spc;
+  std::size_t                               size_index_;
+  auto_space<base_node_impl_type,Allocator> spc;
 
-  pointer buckets()const
+  base_pointer buckets()const
   {
     return spc.data();
   }

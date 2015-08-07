@@ -13,7 +13,7 @@
 
 #include <boost/detail/workaround.hpp>
 
-#if defined(_MSC_VER) && (_MSC_VER >= 1200)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -26,18 +26,14 @@
 #if BOOST_WORKAROUND(__BORLANDC__, BOOST_TESTED_AT(0x564))
 # define BOOST_RANGE_DEDUCED_TYPENAME typename
 #else
-# if BOOST_WORKAROUND(BOOST_MSVC, == 1300) && !defined(_MSC_EXTENSIONS)
-#  define BOOST_RANGE_DEDUCED_TYPENAME typename
-# else
-#  define BOOST_RANGE_DEDUCED_TYPENAME BOOST_DEDUCED_TYPENAME
-# endif
+#define BOOST_RANGE_DEDUCED_TYPENAME BOOST_DEDUCED_TYPENAME
 #endif
 
 #ifdef BOOST_RANGE_NO_ARRAY_SUPPORT
 #error "macro already defined!"
 #endif
 
-#if BOOST_WORKAROUND( BOOST_MSVC, < 1300 ) || BOOST_WORKAROUND( __MWERKS__, <= 0x3003 )
+#if BOOST_WORKAROUND( __MWERKS__, <= 0x3003 )
 #define BOOST_RANGE_NO_ARRAY_SUPPORT 1
 #endif
 
@@ -46,6 +42,12 @@
 #define BOOST_RANGE_NO_STATIC_ASSERT
 #else
 #define BOOST_RANGE_ARRAY_REF() (&boost_range_array)
+#endif
+
+#if defined(__GNUC__) && ((__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7)))
+#  define BOOST_RANGE_UNUSED __attribute__((unused))
+#else
+#  define BOOST_RANGE_UNUSED
 #endif
 
 

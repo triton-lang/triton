@@ -9,6 +9,8 @@
 #ifndef BOOST_TT_HAS_PRE_INCREMENT_HPP_INCLUDED
 #define BOOST_TT_HAS_PRE_INCREMENT_HPP_INCLUDED
 
+#include <boost/type_traits/is_array.hpp>
+
 #define BOOST_TT_TRAIT_NAME has_pre_increment
 #define BOOST_TT_TRAIT_OP ++
 #define BOOST_TT_FORBIDDEN_IF\
@@ -27,7 +29,9 @@
             ::boost::is_pointer< Rhs_noref >::value\
          >::value,\
          ::boost::is_const< Rhs_noref >::value\
-      >::value\
+      >::value,\
+      /* Arrays */ \
+      ::boost::is_array<Rhs_noref>::value\
    >::value
 
 

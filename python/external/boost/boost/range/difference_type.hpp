@@ -11,18 +11,24 @@
 #ifndef BOOST_RANGE_DIFFERENCE_TYPE_HPP
 #define BOOST_RANGE_DIFFERENCE_TYPE_HPP
 
-#if defined(_MSC_VER) && (_MSC_VER >= 1200)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
 #include <boost/range/config.hpp>
 #include <boost/range/iterator.hpp>
 #include <boost/iterator/iterator_traits.hpp>
+#include <boost/type_traits/remove_reference.hpp>
 
 namespace boost
 {
     template< class T >
-    struct range_difference : iterator_difference< typename range_iterator<T>::type >
+    struct range_difference
+            : iterator_difference<
+                BOOST_DEDUCED_TYPENAME range_iterator<
+                    BOOST_DEDUCED_TYPENAME remove_reference<T>::type
+                >::type
+            >
     { };
 }
 

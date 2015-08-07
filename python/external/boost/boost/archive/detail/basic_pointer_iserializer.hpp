@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_BASIC_POINTER_ISERIALIZER_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -52,10 +52,11 @@ protected:
     #endif
     ~basic_pointer_iserializer();
 public:
+    virtual void * heap_allocation() const = 0;
     virtual const basic_iserializer & get_basic_serializer() const = 0;
     virtual void load_object_ptr(
         basic_iarchive & ar, 
-        void * & x,
+        void * x,
         const unsigned int file_version
     ) const = 0;
 };

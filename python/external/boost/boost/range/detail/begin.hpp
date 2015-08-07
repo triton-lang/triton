@@ -15,9 +15,6 @@
 #include <boost/detail/workaround.hpp>
 #include <boost/range/iterator.hpp>
 #include <boost/range/detail/common.hpp>
-#if BOOST_WORKAROUND(BOOST_MSVC, < 1310)
-# include <boost/range/value_type.hpp>
-#endif
 
 namespace boost
 {
@@ -62,19 +59,11 @@ namespace boost
         template<>
         struct range_begin<array_>
         {
-        #if !BOOST_WORKAROUND(BOOST_MSVC, < 1310)
-            template< typename T, std::size_t sz >
-            static T* fun( T BOOST_RANGE_ARRAY_REF()[sz] )
-            {
-                return boost_range_array;
-            }
-        #else
             template<typename T>
             static BOOST_RANGE_DEDUCED_TYPENAME range_value<T>::type* fun(T& t)
             {
                 return t;
             }
-        #endif
         };
 
     } // namespace 'range_detail'

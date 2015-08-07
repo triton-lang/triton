@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_TEXT_WIARCHIVE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -39,6 +39,10 @@
 namespace boost { 
 namespace archive {
 
+namespace detail {
+    template<class Archive> class interface_iarchive;
+} // namespace detail
+
 template<class Archive>
 class text_wiarchive_impl : 
     public basic_text_iprimitive<std::wistream>,
@@ -47,10 +51,16 @@ class text_wiarchive_impl :
 #ifdef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
 public:
 #else
-    friend class detail::interface_iarchive<Archive>;
-    friend class basic_text_iarchive<Archive>;
-    friend class load_access;
 protected:
+    #if BOOST_WORKAROUND(BOOST_MSVC, < 1500)
+        // for some inexplicable reason insertion of "class" generates compile erro
+        // on msvc 7.1
+        friend detail::interface_iarchive<Archive>;
+        friend load_access;
+    #else
+        friend class detail::interface_iarchive<Archive>;
+        friend class load_access;
+    #endif
 #endif
     template<class T>
     void load(T & t){
@@ -89,21 +99,6 @@ protected:
     ~text_wiarchive_impl(){};
 };
 
-// do not derive from the classes below.  If you want to extend this functionality
-// via inhertance, derived from text_iarchive_impl instead.  This will
-// preserve correct static polymorphism.
-
-// same as text_wiarchive below - without the shared_ptr_helper
-class naked_text_wiarchive : 
-    public text_wiarchive_impl<naked_text_wiarchive>
-{
-public:
-    naked_text_wiarchive(std::wistream & is, unsigned int flags = 0) :
-        text_wiarchive_impl<naked_text_wiarchive>(is, flags)
-    {}
-    ~naked_text_wiarchive(){}
-};
-
 } // namespace archive
 } // namespace boost
 
@@ -112,12 +107,6 @@ public:
 #endif
 
 #include <boost/archive/detail/abi_suffix.hpp> // pops abi_suffix.hpp pragmas
-
-// note special treatment of shared_ptr. This type needs a special
-// structure associated with every archive.  We created a "mix-in"
-// class to provide this functionality.  Since shared_ptr holds a
-// special esteem in the boost library - we included it here by default.
-#include <boost/archive/shared_ptr_helper.hpp>
 
 #ifdef BOOST_MSVC
 #  pragma warning(push)
@@ -128,9 +117,7 @@ namespace boost {
 namespace archive {
 
 class text_wiarchive : 
-    public text_wiarchive_impl<text_wiarchive>,
-    public detail::shared_ptr_helper
-{
+    public text_wiarchive_impl<text_wiarchive>{
 public:
     text_wiarchive(std::wistream & is, unsigned int flags = 0) :
         text_wiarchive_impl<text_wiarchive>(is, flags)

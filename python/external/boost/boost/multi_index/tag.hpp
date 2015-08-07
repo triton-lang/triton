@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2013 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_TAG_HPP
 #define BOOST_MULTI_INDEX_TAG_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -34,11 +34,7 @@
  */
 
 #if !defined(BOOST_MULTI_INDEX_LIMIT_TAG_SIZE)
-#if defined(BOOST_MSVC)&&(BOOST_MSVC<1300)
-#define BOOST_MULTI_INDEX_LIMIT_TAG_SIZE 3
-#else
 #define BOOST_MULTI_INDEX_LIMIT_TAG_SIZE BOOST_MPL_LIMIT_VECTOR_SIZE
-#endif
 #endif
 
 #if BOOST_MULTI_INDEX_LIMIT_TAG_SIZE<BOOST_MPL_LIMIT_VECTOR_SIZE

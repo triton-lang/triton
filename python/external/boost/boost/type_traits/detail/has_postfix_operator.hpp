@@ -22,7 +22,7 @@
 #include <boost/type_traits/detail/bool_trait_def.hpp>
 
 // avoid warnings
-#if defined(__GNUC__) && ((__GNUC__==3 && __GNUC_MINOR__>=1) || (__GNUC__>3))
+#if defined(__GNUC__)
 #   pragma GCC system_header
 #elif defined(BOOST_MSVC)
 #   pragma warning ( push )
@@ -138,10 +138,10 @@ no_operator operator,(no_operator, has_operator);
 
 template < typename Lhs >
 struct operator_exists {
-   static ::boost::type_traits::yes_type check(has_operator); // this version is preferred when operator exists
-   static ::boost::type_traits::no_type check(no_operator); // this version is used otherwise
+   static ::boost::type_traits::yes_type s_check(has_operator); // this version is preferred when operator exists
+   static ::boost::type_traits::no_type s_check(no_operator); // this version is used otherwise
 
-   BOOST_STATIC_CONSTANT(bool, value = (sizeof(check(((make<Lhs>() BOOST_TT_TRAIT_OP),make<has_operator>())))==sizeof(::boost::type_traits::yes_type)));
+   BOOST_STATIC_CONSTANT(bool, value = (sizeof(s_check(((make<Lhs>() BOOST_TT_TRAIT_OP),make<has_operator>())))==sizeof(::boost::type_traits::yes_type)));
 };
 
 

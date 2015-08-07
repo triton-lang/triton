@@ -3,7 +3,7 @@
 
 /////////1/////////2/////////3/////////4/////////5/////////6/////////7/////////8
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -114,15 +114,15 @@ public:
         va_start(ap, count);
         switch(count){
         case 0:
-            return factory<BOOST_DEDUCED_TYPENAME boost::remove_const< T >::type, 0>(ap);
+            return factory<typename boost::remove_const< T >::type, 0>(ap);
         case 1:
-            return factory<BOOST_DEDUCED_TYPENAME boost::remove_const< T >::type, 1>(ap);
+            return factory<typename boost::remove_const< T >::type, 1>(ap);
         case 2:
-            return factory<BOOST_DEDUCED_TYPENAME boost::remove_const< T >::type, 2>(ap);
+            return factory<typename boost::remove_const< T >::type, 2>(ap);
         case 3:
-            return factory<BOOST_DEDUCED_TYPENAME boost::remove_const< T >::type, 3>(ap);
+            return factory<typename boost::remove_const< T >::type, 3>(ap);
         case 4:
-            return factory<BOOST_DEDUCED_TYPENAME boost::remove_const< T >::type, 4>(ap);
+            return factory<typename boost::remove_const< T >::type, 4>(ap);
         default:
             BOOST_ASSERT(false); // too many arguments
             // throw exception here?
@@ -150,7 +150,7 @@ public:
     namespace serialization {
     template<class T>
     struct extended_type_info_impl {
-        typedef BOOST_DEDUCED_TYPENAME 
+        typedef typename 
             boost::serialization::extended_type_info_typeid< T > type;
     };
     } // namespace serialization
