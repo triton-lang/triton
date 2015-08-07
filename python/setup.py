@@ -91,7 +91,7 @@ def main():
     #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
-    cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT'] + ' -Wno-attributes -DBOOST_PYTHON_SOURCE '
+    cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT']
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
     #OpenCL
@@ -115,7 +115,7 @@ def main():
     include =' src/include src/lib/external'.split() + ['external/boost/', 'external/boost/boost/', os.path.join(find_module("numpy")[1], "core", "include")]
 
     #Source files
-    src =  'src/lib/wrap/clBLAS.cpp src/lib/value_scalar.cpp src/lib/symbolic/preset.cpp src/lib/symbolic/io.cpp src/lib/symbolic/expression.cpp src/lib/symbolic/execute.cpp src/lib/model/presets.cpp src/lib/model/predictors/random_forest.cpp src/lib/model/model.cpp src/lib/model/database.cpp src/lib/kernels/templates/ger.cpp src/lib/kernels/templates/gemv.cpp src/lib/kernels/templates/gemm.cpp src/lib/kernels/templates/dot.cpp src/lib/kernels/templates/base.cpp src/lib/kernels/templates/axpy.cpp src/lib/kernels/stream.cpp src/lib/kernels/parse.cpp src/lib/kernels/mapped_object.cpp src/lib/kernels/keywords.cpp src/lib/kernels/binder.cpp src/lib/exception/unknown_datatype.cpp src/lib/exception/operation_not_supported.cpp src/lib/driver/program_cache.cpp src/lib/driver/program.cpp src/lib/driver/platform.cpp src/lib/driver/ndrange.cpp src/lib/driver/kernel.cpp src/lib/driver/handle.cpp src/lib/driver/event.cpp src/lib/driver/device.cpp src/lib/driver/context.cpp src/lib/driver/command_queue.cpp src/lib/driver/check.cpp src/lib/driver/buffer.cpp src/lib/driver/backend.cpp src/lib/array.cpp '.split() + [os.path.join('src', 'bind', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
+    src =  'src/lib/symbolic/preset.cpp src/lib/symbolic/execute.cpp src/lib/symbolic/io.cpp src/lib/symbolic/expression.cpp src/lib/model/model.cpp src/lib/model/presets.cpp src/lib/model/database.cpp src/lib/model/predictors/random_forest.cpp src/lib/array.cpp src/lib/value_scalar.cpp src/lib/driver/backend.cpp src/lib/driver/device.cpp src/lib/driver/kernel.cpp src/lib/driver/buffer.cpp src/lib/driver/platform.cpp src/lib/driver/check.cpp src/lib/driver/program.cpp src/lib/driver/command_queue.cpp src/lib/driver/program_cache.cpp src/lib/driver/context.cpp src/lib/driver/event.cpp src/lib/driver/ndrange.cpp src/lib/driver/handle.cpp src/lib/exception/unknown_datatype.cpp src/lib/exception/operation_not_supported.cpp src/lib/kernels/templates/gemv.cpp src/lib/kernels/templates/axpy.cpp src/lib/kernels/templates/gemm.cpp src/lib/kernels/templates/ger.cpp src/lib/kernels/templates/dot.cpp src/lib/kernels/templates/base.cpp src/lib/kernels/mapped_object.cpp src/lib/kernels/stream.cpp src/lib/kernels/parse.cpp src/lib/kernels/keywords.cpp src/lib/kernels/binder.cpp src/lib/wrap/clBLAS.cpp '.split() + [os.path.join('src', 'bind', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
     boostsrc = 'external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:
         src = src + [x for x in recursive_glob('external/boost/libs/' + s + '/src/','.cpp') if 'win32' not in x and 'pthread' not in x]
@@ -140,7 +140,7 @@ def main():
                 ext_package="isaac",
                 ext_modules=[Extension(
                     '_isaac',src,
-                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare'],
+                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
 		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,
