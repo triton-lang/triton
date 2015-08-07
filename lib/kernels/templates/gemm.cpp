@@ -8,7 +8,7 @@
 #include "tools/arguments.hpp"
 #include "tools/vector_types.hpp"
 
-#include "to_string.hpp"
+#include <string>
 #include "align.hpp"
 
 namespace isaac
@@ -103,7 +103,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
   std::string gemm::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const &) const
   {
     using std::string;
-    using tools::to_string;
+    using std::to_string;
 
     driver::backend_type backend = device.backend();
     bool has_depth = p_.depth > 1;

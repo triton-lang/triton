@@ -8,7 +8,7 @@
 #include "isaac/kernels/stream.h"
 #include "isaac/symbolic/expression.h"
 
-#include "to_string.hpp"
+#include <string>
 #include "find_and_replace.hpp"
 
 namespace isaac
@@ -56,7 +56,7 @@ mapped_object::node_info::node_info(mapping_type const * _mapping, isaac::array_
 mapped_object::mapped_object(std::string const & scalartype, unsigned int id, std::string const & type_key) : type_key_(type_key)
 {
   register_attribute(scalartype_, "#scalartype", scalartype);
-  register_attribute(name_, "#name", "obj" + tools::to_string(id));
+  register_attribute(name_, "#name", "obj" + std::to_string(id));
 }
 
 mapped_object::~mapped_object()
@@ -158,10 +158,10 @@ void mapped_host_scalar::preprocess(std::string & str) const
 mapped_host_scalar::mapped_host_scalar(std::string const & scalartype, unsigned int id) : mapped_object(scalartype, id, "host_scalar"){ }
 
 //
-mapped_tuple::mapped_tuple(std::string const & scalartype, unsigned int id, size_t size) : mapped_object(scalartype, id, "tuple"+tools::to_string(size)), size_(size), names_(size)
+mapped_tuple::mapped_tuple(std::string const & scalartype, unsigned int id, size_t size) : mapped_object(scalartype, id, "tuple"+std::to_string(size)), size_(size), names_(size)
 {
   for(size_t i = 0 ; i < size_ ; ++i)
-    register_attribute(names_[i], "#tuplearg"+tools::to_string(i), name_ + tools::to_string(i));
+    register_attribute(names_[i], "#tuplearg"+std::to_string(i), name_ + std::to_string(i));
 }
 
 //

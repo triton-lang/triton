@@ -1,12 +1,10 @@
-#ifndef ISAAC_MODEL_TOOLS_HPP
-#define ISAAC_MODEL_TOOLS_HPP
+#ifndef ISAAC_RAPIDJSON_TO_ARRAY_HPP
+#define ISAAC_RAPIDJSON_TO_ARRAY_HPP
 
 #include <vector>
 #include "rapidjson/document.h"
 
-namespace isaac
-{
-namespace json
+namespace rapidjson
 {
 
 template<class T>
@@ -27,7 +25,6 @@ std::vector<T> to_float_array(rapidjson::Value const & a)
   return res;
 }
 
-}
 }
 
 #endif

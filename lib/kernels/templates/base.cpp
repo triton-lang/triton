@@ -16,7 +16,7 @@
 
 #include "tools/map.hpp"
 
-#include "to_string.hpp"
+#include <string>
 
 namespace isaac
 {
@@ -39,7 +39,6 @@ bool base::requires_fallback(expressions_tuple const & expressions)
 
 int_t base::vector_size(array_expression::node const & node)
 {
-  using namespace tools;
   if (node.op.type==OPERATOR_MATRIX_DIAG_TYPE)
     return std::min<int_t>(node.lhs.array->shape()[0], node.lhs.array->shape()[1]);
   else if (node.op.type==OPERATOR_MATRIX_ROW_TYPE)
@@ -83,7 +82,7 @@ std::string base::generate(std::string const & suffix, expressions_tuple const &
   std::vector<mapping_type>::iterator mit;
 
   if(int err = is_invalid(expressions, device))
-    throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
+    throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + std::to_string(err));
 
   //Create mapping
   std::vector<mapping_type> mappings(expressions.data().size());

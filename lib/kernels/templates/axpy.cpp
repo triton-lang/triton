@@ -10,7 +10,7 @@
 #include "tools/vector_types.hpp"
 #include "tools/arguments.hpp"
 
-#include "to_string.hpp"
+#include <string>
 
 namespace isaac
 {
@@ -37,7 +37,7 @@ std::string axpy::generate_impl(std::string const & suffix, expressions_tuple co
   std::string _size_t = size_type(device);
 
   kernel_generation_stream stream;
-  std::string str_simd_width = tools::to_string(p_.simd_width);
+  std::string str_simd_width = std::to_string(p_.simd_width);
   std::string dtype = append_width("#scalartype",p_.simd_width);
 
   switch(backend)

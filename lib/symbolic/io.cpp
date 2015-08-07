@@ -3,7 +3,7 @@
 
 #include "isaac/symbolic/io.h"
 
-#include "to_string.hpp"
+#include <string>
 
 namespace isaac
 {
@@ -25,9 +25,9 @@ inline std::string to_string(lhs_rhs_element const & e)
 {
   if(e.type_family==COMPOSITE_OPERATOR_FAMILY)
   {
-    return"COMPOSITE [" + tools::to_string(e.node_index) + "]";
+    return"COMPOSITE [" + std::to_string(e.node_index) + "]";
   }
-  return tools::to_string(e.subtype);
+  return std::to_string(e.subtype);
 }
 
 inline std::ostream & operator<<(std::ostream & os, array_expression::node const & s_node)
