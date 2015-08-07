@@ -38,7 +38,7 @@ unsigned int gemv::lmem_usage(const expressions_tuple &) const
 
 std::string gemv::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
 {
-  using std::to_string;
+  using tools::to_string;
 
 
   std::vector<mapped_gemv*> dots;

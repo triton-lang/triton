@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <numeric>
 #include <memory>
+#include <string>
 
 #include "isaac/kernels/parse.h"
 #include "isaac/kernels/templates/axpy.h"
@@ -17,7 +18,7 @@
 #include "isaac/model/model.h"
 
 #include "getenv.hpp"
-
+#include "to_string.hpp"
 
 namespace isaac
 {
@@ -64,7 +65,7 @@ driver::Program const & model::init(controller<expressions_tuple> const & expres
 
   std::string srcs;
    for(unsigned int i = 0 ; i < templates_.size() ; ++i){
-     srcs += templates_[i]->generate(std::to_string(i), expressions.x(), context.device());
+     srcs += templates_[i]->generate(tools::to_string(i), expressions.x(), context.device());
    }
    srcs += fallback_->generate("fallback", expressions.x(), context.device());
    return cache_.add(context, pname, srcs);
@@ -95,7 +96,7 @@ void model::execute(controller<expressions_tuple> const & expr)
     {
       std::list<driver::Event> events;
       try{
-        templates_[i]->enqueue(queue_, program, std::to_string(i), *fallback_, control(expr.x(), execution_options_type(0, &events)));
+        templates_[i]->enqueue(queue_, program, tools::to_string(i), *fallback_, control(expr.x(), execution_options_type(0, &events)));
         queue_.synchronize();
         timings[i] = 1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event);
       }catch(...){
@@ -120,7 +121,7 @@ void model::execute(controller<expressions_tuple> const & expr)
   }
 
   //Execution
-  return templates_[label]->enqueue(queue_, program, std::to_string(label), *fallback_, expr);
+  return templates_[label]->enqueue(queue_, program, tools::to_string(label), *fallback_, expr);
 }
 
 model::templates_container const & model::templates() const
