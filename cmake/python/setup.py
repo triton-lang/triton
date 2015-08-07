@@ -91,7 +91,7 @@ def main():
     #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
-    cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT']
+    cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT'] + ' -DNPY_NO_DEPRECATED_API NPY_1_7_API_VERSION'
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
     #OpenCL
@@ -112,7 +112,7 @@ def main():
     library_dirs = [config['lib'] for config in [opencl_config, cuda_config] if config is not None]
 
     #Include directories
-    include ='${INCLUDE_DIRECTORIES_STR}'.split() + ['external/boost/include', os.path.join(find_module("numpy")[1], "core", "include")]
+    include ='${INCLUDE_DIRECTORIES_STR}'.split() + ['external/boost/', 'external/boost/boost/', os.path.join(find_module("numpy")[1], "core", "include")]
 
     #Source files
     src =  '${LIBISAAC_SRC_STR}'.split() + [os.path.join('src', 'bind', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
