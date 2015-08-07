@@ -121,14 +121,14 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
   {
     if (exprs[k]->is_index_dot())
     {
-      stream << exprs[k]->process(Local(backend).get() + " #scalartype #name_buf_value[" + std::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << exprs[k]->process(Local(backend).get() + " #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << exprs[k]->process("#scalartype #name_acc_value = " + neutral_element(exprs[k]->root_op(), backend, "#scalartype") + ";") << std::endl;
-      stream << exprs[k]->process(Local(backend).get() + " unsigned int #name_buf[" + std::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << exprs[k]->process(Local(backend).get() + " unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << exprs[k]->process("unsigned int #name_acc = 0;") << std::endl;
     }
     else
     {
-      stream << exprs[k]->process(Local(backend).get() + " #scalartype #name_buf[" + std::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << exprs[k]->process(Local(backend).get() + " #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << exprs[k]->process("#scalartype #name_acc = " + neutral_element(exprs[k]->root_op(), backend, "#scalartype") + ";") << std::endl;
     }
   }
@@ -164,8 +164,8 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
         accessors["array0"] = "#namereg";
         std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, accessors);
         if (elem->is_index_dot())
-          compute_index_dot(stream, elem->process("#name_acc"),  "i*" + std::to_string(simd_width) + "+"
-                                  + std::to_string(a), elem->process("#name_acc_value"), value,elem->root_op());
+          compute_index_dot(stream, elem->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+"
+                                  + tools::to_string(a), elem->process("#name_acc_value"), value,elem->root_op());
         else
           compute_dot(stream, elem->process("#name_acc"), value,elem->root_op());
       }
@@ -216,14 +216,14 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
   {
     if (e->is_index_dot())
     {
-      stream << e->process(Local(backend).get() + " unsigned int #name_buf[" + std::to_string(p_.local_size_0) + "];");
+      stream << e->process(Local(backend).get() + " unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];");
       stream << e->process("unsigned int #name_acc = 0;") << std::endl;
-      stream << e->process(Local(backend).get() + " #scalartype #name_buf_value[" + std::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << e->process(Local(backend).get() + " #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << e->process("#scalartype #name_acc_value = " + neutral_element(e->root_op(), backend, "#scalartype") + ";");
     }
     else
     {
-      stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + std::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
       stream << e->process("#scalartype #name_acc = " + neutral_element(e->root_op(), backend, "#scalartype") + ";");
     }
   }

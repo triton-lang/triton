@@ -103,7 +103,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
   std::string gemm::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const &) const
   {
     using std::string;
-    using std::to_string;
+    using tools::to_string;
 
     driver::backend_type backend = device.backend();
     bool has_depth = p_.depth > 1;
