@@ -2,6 +2,7 @@
 #define ISAAC_TOOLS_GETENV
 
 #include <string>
+#include <cstdlib>
 
 namespace isaac
 {

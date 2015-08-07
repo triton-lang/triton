@@ -13,7 +13,7 @@ template<class T>
 inline std::string to_string ( T const t )
 {
 
-#ifdef _GLIBCXX_HAVE_BROKEN_VSWPRINTF
+#ifdef __CYGWIN__
   std::stringstream ss;
   ss << t;
   return ss.str();
