@@ -34,7 +34,7 @@ namespace boost
 
 //  From <boost/cstdint.hpp>  ------------------------------------------------//
 
-// Only has typedefs or using statements, with #conditionals
+// Only has typedefs or using symbolic_expressionexpressions, with #conditionals
 
 
 //  From <boost/integer_traits.hpp>  -----------------------------------------//
@@ -157,29 +157,6 @@ template <static_min_max_unsigned_type Value1, static_min_max_unsigned_type Valu
 
 template <static_min_max_unsigned_type Value1, static_min_max_unsigned_type Value2>
     struct static_unsigned_max;
-
-
-//  From <boost/integer/common_factor_ct.hpp>
-
-#ifdef BOOST_NO_INTEGRAL_INT64_T
-     typedef unsigned long static_gcd_type;
-#else
-     typedef boost::uintmax_t static_gcd_type;
-#endif
-
-template < static_gcd_type Value1, static_gcd_type Value2 >
-    struct static_gcd;
-template < static_gcd_type Value1, static_gcd_type Value2 >
-    struct static_lcm;
-
-
-//  From <boost/integer/common_factor_rt.hpp>
-
-template < typename IntegerType >
-    class gcd_evaluator;
-template < typename IntegerType >
-    class lcm_evaluator;
-
 
 }  // namespace boost
 

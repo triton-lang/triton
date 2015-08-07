@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_HEADER_HOLDER_HPP
 #define BOOST_MULTI_INDEX_DETAIL_HEADER_HOLDER_HPP
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER)&&(_MSC_VER>=1200)
 #pragma once
 #endif
 

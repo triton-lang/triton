@@ -8,7 +8,7 @@
 
 #include <ostream>
 #include <iomanip>
-#include <algorithm> // std::copy
+#include <algorithm>
 #include <string>
 
 #include <cstring> // strlen

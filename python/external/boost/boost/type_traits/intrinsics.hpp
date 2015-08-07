@@ -32,8 +32,6 @@
 // BOOST_HAS_NOTHROW_COPY(T) should evaluate to true if T(t) can not throw
 // BOOST_HAS_NOTHROW_ASSIGN(T) should evaluate to true if t = u can not throw
 // BOOST_HAS_VIRTUAL_DESTRUCTOR(T) should evaluate to true T has a virtual destructor
-// BOOST_IS_NOTHROW_MOVE_CONSTRUCT(T) should evaluate to true if T has a non-throwing move constructor.
-// BOOST_IS_NOTHROW_MOVE_ASSIGN(T) should evaluate to true if T has a non-throwing move assignment operator.
 //
 // The following can also be defined: when detected our implementation is greatly simplified.
 //
@@ -111,13 +109,10 @@
 //  #   define BOOST_ALIGNMENT_OF(T) __alignof(T)
 
 #   if defined(_MSC_VER) && (_MSC_VER >= 1700)
-#       define BOOST_HAS_TRIVIAL_MOVE_CONSTRUCTOR(T) ((__has_trivial_move_constructor(T) || __is_pod(T)) && !::boost::is_volatile<T>::value && !::boost::is_reference<T>::value)
-#       define BOOST_HAS_TRIVIAL_MOVE_ASSIGN(T) ((__has_trivial_move_assign(T) || __is_pod(T)) && ! ::boost::is_const<T>::value && !::boost::is_volatile<T>::value && !::boost::is_reference<T>::value)
+#       define BOOST_HAS_TRIVIAL_MOVE_CONSTRUCTOR(T) ((__has_trivial_move_constructor(T) || ::boost::is_pod<T>::value) && !::boost::is_volatile<T>::value)
+#       define BOOST_HAS_TRIVIAL_MOVE_ASSIGN(T) ((__has_trivial_move_assign(T) || ::boost::is_pod<T>::value) && ! ::boost::is_const<T>::value && !::boost::is_volatile<T>::value)
 #   endif
-#if _MSC_FULL_VER >= 180020827
-#   define BOOST_IS_NOTHROW_MOVE_ASSIGN(T) (__is_nothrow_assignable(T&, T&&))
-#   define BOOST_IS_NOTHROW_MOVE_CONSTRUCT(T) (__is_nothrow_constructible(T, T&&))
-#endif
+
 #   define BOOST_HAS_TYPE_TRAITS_INTRINSICS
 #endif
 
@@ -137,13 +132,7 @@
 #   define BOOST_HAS_TYPE_TRAITS_INTRINSICS
 #endif
 
-#if defined(BOOST_CLANG) && defined(__has_feature) && !defined(__CUDACC__)
-//
-// Note that these intrinsics are disabled for the CUDA meta-compiler as it appears
-// to not support them, even though the underlying clang compiler does so.
-// This is a rubbish fix as it basically stops type traits from working correctly, 
-// but maybe the best we can do for now.  See https://svn.boost.org/trac/boost/ticket/10694
-//
+#if defined(BOOST_CLANG) && defined(__has_feature)
 #   include <cstddef>
 #   include <boost/type_traits/is_same.hpp>
 #   include <boost/type_traits/is_reference.hpp>
@@ -192,7 +181,8 @@
 #     define BOOST_IS_CLASS(T) __is_class(T)
 #   endif
 #   if __has_feature(is_convertible_to)
-#     define BOOST_IS_CONVERTIBLE(T,U) __is_convertible_to(T,U)
+#     include <boost/type_traits/is_abstract.hpp>
+#     define BOOST_IS_CONVERTIBLE(T,U) (__is_convertible_to(T,U) && !::boost::is_abstract<U>::value)
 #   endif
 #   if __has_feature(is_enum)
 #     define BOOST_IS_ENUM(T) __is_enum(T)
@@ -207,9 +197,6 @@
 #     define BOOST_HAS_TRIVIAL_MOVE_ASSIGN(T) __has_trivial_move_assign(T)
 #   endif
 #   define BOOST_ALIGNMENT_OF(T) __alignof(T)
-#   if __has_feature(is_final)
-#     define BOOST_IS_FINAL(T) __is_final(T)
-#   endif
 
 #   define BOOST_HAS_TYPE_TRAITS_INTRINSICS
 #endif
@@ -248,37 +235,6 @@
       // old implementation instead in that case:
 #     define BOOST_ALIGNMENT_OF(T) __alignof__(T)
 #   endif
-#   if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
-#     define BOOST_IS_FINAL(T) __is_final(T)
-#   endif
-
-#   define BOOST_HAS_TYPE_TRAITS_INTRINSICS
-#endif
-
-#if defined(__SUNPRO_CC) && (__SUNPRO_CC >= 0x5130)
-#   include <boost/type_traits/is_same.hpp>
-#   include <boost/type_traits/is_reference.hpp>
-#   include <boost/type_traits/is_volatile.hpp>
-
-#   define BOOST_IS_UNION(T) __oracle_is_union(T)
-#   define BOOST_IS_POD(T) __oracle_is_pod(T)
-#   define BOOST_IS_EMPTY(T) __oracle_is_empty(T)
-#   define BOOST_HAS_TRIVIAL_CONSTRUCTOR(T) (__oracle_has_trivial_constructor(T) && ! ::boost::is_volatile<T>::value)
-#   define BOOST_HAS_TRIVIAL_COPY(T) (__oracle_has_trivial_copy(T) && !is_reference<T>::value && ! ::boost::is_volatile<T>::value)
-#   define BOOST_HAS_TRIVIAL_ASSIGN(T) ((__oracle_has_trivial_assign(T) || __oracle_is_trivial(T)) && ! ::boost::is_volatile<T>::value && ! ::boost::is_const<T>::value)
-#   define BOOST_HAS_TRIVIAL_DESTRUCTOR(T) __oracle_has_trivial_destructor(T)
-#   define BOOST_HAS_NOTHROW_CONSTRUCTOR(T) (__oracle_has_nothrow_constructor(T) || __oracle_has_trivial_constructor(T) || __oracle_is_trivial(T))
-#   define BOOST_HAS_NOTHROW_COPY(T) ((__oracle_has_nothrow_copy(T) || __oracle_has_trivial_copy(T) || __oracle_is_trivial(T)) && !is_volatile<T>::value && !is_reference<T>::value)
-#   define BOOST_HAS_NOTHROW_ASSIGN(T) ((__oracle_has_nothrow_assign(T) || __oracle_has_trivial_assign(T) || __oracle_is_trivial(T)) && !is_volatile<T>::value && !is_const<T>::value)
-#   define BOOST_HAS_VIRTUAL_DESTRUCTOR(T) __oracle_has_virtual_destructor(T)
-
-#   define BOOST_IS_ABSTRACT(T) __oracle_is_abstract(T)
-//#   define BOOST_IS_BASE_OF(T,U) (__is_base_of(T,U) && !is_same<T,U>::value)
-#   define BOOST_IS_CLASS(T) __oracle_is_class(T)
-#   define BOOST_IS_ENUM(T) __oracle_is_enum(T)
-#   define BOOST_IS_POLYMORPHIC(T) __oracle_is_polymorphic(T)
-#   define BOOST_ALIGNMENT_OF(T) __alignof__(T)
-#   define BOOST_IS_FINAL(T) __oracle_is_final(T)
 
 #   define BOOST_HAS_TYPE_TRAITS_INTRINSICS
 #endif
@@ -306,6 +262,7 @@
 #   define BOOST_IS_ENUM(T) __is_enum(T)
 #   define BOOST_IS_POLYMORPHIC(T) __is_polymorphic(T)
 #   define BOOST_ALIGNMENT_OF(T) __alignof__(T)
+
 #   define BOOST_HAS_TYPE_TRAITS_INTRINSICS
 #endif
 

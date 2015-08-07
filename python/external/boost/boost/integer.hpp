@@ -42,15 +42,15 @@ namespace boost
   //  fast integers from least integers
   //  int_fast_t<> works correctly for unsigned too, in spite of the name.
   template< typename LeastInt >
-  struct int_fast_t
-  {
-     typedef LeastInt fast;
+  struct int_fast_t 
+  { 
+     typedef LeastInt fast; 
      typedef fast     type;
   }; // imps may specialize
 
   namespace detail{
 
-  //  convert category to type
+  //  convert category to type 
   template< int Category > struct int_least_helper {}; // default is empty
   template< int Category > struct uint_least_helper {}; // default is empty
 
@@ -91,8 +91,7 @@ namespace boost
   template <> struct exact_signed_base_helper<sizeof(int)* CHAR_BIT> { typedef int exact; };
   template <> struct exact_unsigned_base_helper<sizeof(unsigned int)* CHAR_BIT> { typedef unsigned int exact; };
 #endif
-#if ULONG_MAX != UINT_MAX && ( !defined __TI_COMPILER_VERSION__ || \
-    ( __TI_COMPILER_VERSION__ >= 7000000 && !defined __TI_40BIT_LONG__ ) )
+#if ULONG_MAX != UINT_MAX
   template <> struct exact_signed_base_helper<sizeof(long)* CHAR_BIT> { typedef long exact; };
   template <> struct exact_unsigned_base_helper<sizeof(unsigned long)* CHAR_BIT> { typedef unsigned long exact; };
 #endif
@@ -112,11 +111,11 @@ namespace boost
 
   //  signed
   template< int Bits >   // bits (including sign) required
-  struct int_t : public boost::detail::exact_signed_base_helper<Bits>
+  struct int_t : public detail::exact_signed_base_helper<Bits>
   {
       BOOST_STATIC_ASSERT_MSG(Bits <= (int)(sizeof(boost::intmax_t) * CHAR_BIT),
          "No suitable signed integer type with the requested number of bits is available.");
-      typedef typename boost::detail::int_least_helper
+      typedef typename detail::int_least_helper
         <
 #ifdef BOOST_HAS_LONG_LONG
           (Bits <= (int)(sizeof(boost::long_long_type) * CHAR_BIT)) +
@@ -133,13 +132,13 @@ namespace boost
 
   //  unsigned
   template< int Bits >   // bits required
-  struct uint_t : public boost::detail::exact_unsigned_base_helper<Bits>
+  struct uint_t : public detail::exact_unsigned_base_helper<Bits>
   {
      BOOST_STATIC_ASSERT_MSG(Bits <= (int)(sizeof(boost::uintmax_t) * CHAR_BIT),
          "No suitable unsigned integer type with the requested number of bits is available.");
 #if (defined(__BORLANDC__) || defined(__CODEGEAR__)) && defined(BOOST_NO_INTEGRAL_INT64_T)
      // It's really not clear why this workaround should be needed... shrug I guess!  JM
-     BOOST_STATIC_CONSTANT(int, s =
+     BOOST_STATIC_CONSTANT(int, s = 
            6 +
           (Bits <= ::std::numeric_limits<unsigned long>::digits) +
           (Bits <= ::std::numeric_limits<unsigned int>::digits) +
@@ -147,8 +146,8 @@ namespace boost
           (Bits <= ::std::numeric_limits<unsigned char>::digits));
      typedef typename detail::int_least_helper< ::boost::uint_t<Bits>::s>::least least;
 #else
-      typedef typename boost::detail::uint_least_helper
-        <
+      typedef typename detail::uint_least_helper
+        < 
 #ifdef BOOST_HAS_LONG_LONG
           (Bits <= (int)(sizeof(boost::long_long_type) * CHAR_BIT)) +
 #else
@@ -167,16 +166,16 @@ namespace boost
   //  integer templates specifying extreme value  ----------------------------//
 
   //  signed
-#if !defined(BOOST_NO_INTEGRAL_INT64_T) && !defined(BOOST_NO_INT64_T) && defined(BOOST_HAS_LONG_LONG)
+#if !defined(BOOST_NO_INTEGRAL_INT64_T) && defined(BOOST_HAS_LONG_LONG)
   template< boost::long_long_type MaxValue >   // maximum value to require support
 #else
   template< long MaxValue >   // maximum value to require support
 #endif
-  struct int_max_value_t
+  struct int_max_value_t 
   {
-      typedef typename boost::detail::int_least_helper
+      typedef typename detail::int_least_helper
         <
-#if !defined(BOOST_NO_INTEGRAL_INT64_T) && !defined(BOOST_NO_INT64_T) && defined(BOOST_HAS_LONG_LONG)
+#if !defined(BOOST_NO_INTEGRAL_INT64_T) && defined(BOOST_HAS_LONG_LONG)
           (MaxValue <= ::boost::integer_traits<boost::long_long_type>::const_max) +
 #else
            1 +
@@ -189,16 +188,16 @@ namespace boost
       typedef typename int_fast_t<least>::type  fast;
   };
 
-#if !defined(BOOST_NO_INTEGRAL_INT64_T) && !defined(BOOST_NO_INT64_T) && defined(BOOST_HAS_LONG_LONG)
+#if !defined(BOOST_NO_INTEGRAL_INT64_T) && defined(BOOST_HAS_LONG_LONG)
   template< boost::long_long_type MinValue >   // minimum value to require support
 #else
   template< long MinValue >   // minimum value to require support
 #endif
-  struct int_min_value_t
+  struct int_min_value_t 
   {
-      typedef typename boost::detail::int_least_helper
+      typedef typename detail::int_least_helper
         <
-#if !defined(BOOST_NO_INTEGRAL_INT64_T) && !defined(BOOST_NO_INT64_T) && defined(BOOST_HAS_LONG_LONG)
+#if !defined(BOOST_NO_INTEGRAL_INT64_T) && defined(BOOST_HAS_LONG_LONG)
           (MinValue >= ::boost::integer_traits<boost::long_long_type>::const_min) +
 #else
            1 +
@@ -217,12 +216,12 @@ namespace boost
 #else
   template< unsigned long MaxValue >   // minimum value to require support
 #endif
-  struct uint_value_t
+  struct uint_value_t 
   {
 #if (defined(__BORLANDC__) || defined(__CODEGEAR__))
      // It's really not clear why this workaround should be needed... shrug I guess!  JM
 #if defined(BOOST_NO_INTEGRAL_INT64_T)
-      BOOST_STATIC_CONSTANT(unsigned, which =
+      BOOST_STATIC_CONSTANT(unsigned, which = 
            1 +
           (MaxValue <= ::boost::integer_traits<unsigned long>::const_max) +
           (MaxValue <= ::boost::integer_traits<unsigned int>::const_max) +
@@ -230,7 +229,7 @@ namespace boost
           (MaxValue <= ::boost::integer_traits<unsigned char>::const_max));
       typedef typename detail::int_least_helper< ::boost::uint_value_t<MaxValue>::which>::least least;
 #else // BOOST_NO_INTEGRAL_INT64_T
-      BOOST_STATIC_CONSTANT(unsigned, which =
+      BOOST_STATIC_CONSTANT(unsigned, which = 
            1 +
           (MaxValue <= ::boost::integer_traits<boost::ulong_long_type>::const_max) +
           (MaxValue <= ::boost::integer_traits<unsigned long>::const_max) +
@@ -240,8 +239,8 @@ namespace boost
       typedef typename detail::uint_least_helper< ::boost::uint_value_t<MaxValue>::which>::least least;
 #endif // BOOST_NO_INTEGRAL_INT64_T
 #else
-      typedef typename boost::detail::uint_least_helper
-        <
+      typedef typename detail::uint_least_helper
+        < 
 #if !defined(BOOST_NO_INTEGRAL_INT64_T) && defined(BOOST_HAS_LONG_LONG)
           (MaxValue <= ::boost::integer_traits<boost::ulong_long_type>::const_max) +
 #else

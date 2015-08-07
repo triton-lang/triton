@@ -11,7 +11,7 @@
 #ifndef BOOST_RANGE_REND_HPP
 #define BOOST_RANGE_REND_HPP
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1200)
 # pragma once
 #endif
 

@@ -58,37 +58,6 @@
 #  define BOOST_NO_CXX11_ALIGNAS
 #  define BOOST_NO_CXX11_TRAILING_RESULT_TYPES
 #  define BOOST_NO_CXX11_INLINE_NAMESPACES
-#  define BOOST_NO_CXX11_REF_QUALIFIERS
-#define BOOST_NO_CXX11_FINAL
-
-// C++ 14:
-#if !defined(__cpp_aggregate_nsdmi) || (__cpp_aggregate_nsdmi < 201304)
-#  define BOOST_NO_CXX14_AGGREGATE_NSDMI
-#endif
-#if !defined(__cpp_binary_literals) || (__cpp_binary_literals < 201304)
-#  define BOOST_NO_CXX14_BINARY_LITERALS
-#endif
-#if !defined(__cpp_constexpr) || (__cpp_constexpr < 201304)
-#  define BOOST_NO_CXX14_CONSTEXPR
-#endif
-#if !defined(__cpp_decltype_auto) || (__cpp_decltype_auto < 201304)
-#  define BOOST_NO_CXX14_DECLTYPE_AUTO
-#endif
-#if (__cplusplus < 201304) // There's no SD6 check for this....
-#  define BOOST_NO_CXX14_DIGIT_SEPARATORS
-#endif
-#if !defined(__cpp_generic_lambdas) || (__cpp_generic_lambdas < 201304)
-#  define BOOST_NO_CXX14_GENERIC_LAMBDAS
-#endif
-#if !defined(__cpp_init_captures) || (__cpp_init_captures < 201304)
-#  define BOOST_NO_CXX14_INITIALIZED_LAMBDA_CAPTURES
-#endif
-#if !defined(__cpp_return_type_deduction) || (__cpp_return_type_deduction < 201304)
-#  define BOOST_NO_CXX14_RETURN_TYPE_DEDUCTION
-#endif
-#if !defined(__cpp_variable_templates) || (__cpp_variable_templates < 201304)
-#  define BOOST_NO_CXX14_VARIABLE_TEMPLATES
-#endif
 
 #define BOOST_COMPILER "GCC-XML C++ version " __GCCXML__
 

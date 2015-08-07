@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_XML_UNESCAPE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
 # pragma once
 #endif
 
@@ -17,6 +17,8 @@
 //  See http://www.boost.org for updates, documentation, and revision history.
 
 #include <boost/assert.hpp>
+
+#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME
 
 #include <boost/serialization/throw_exception.hpp>
 #include <boost/serialization/pfto.hpp>
@@ -37,7 +39,7 @@ class xml_unescape
     friend class boost::iterator_core_access;
     typedef xml_unescape<Base> this_t;
     typedef unescape<this_t, Base> super_t;
-    typedef typename boost::iterator_reference<this_t> reference_type;
+    typedef BOOST_DEDUCED_TYPENAME boost::iterator_reference<this_t> reference_type;
 
     reference_type dereference() const {
         return unescape<xml_unescape<Base>, Base>::dereference();
@@ -47,7 +49,7 @@ public:
     #if defined(BOOST_MSVC)
         typedef int value_type;
     #else
-        typedef typename this_t::value_type value_type;
+        typedef BOOST_DEDUCED_TYPENAME this_t::value_type value_type;
     #endif
 
     void drain_residue(const char *literal);
@@ -81,7 +83,7 @@ void xml_unescape<Base>::drain_residue(const char * literal){
 // iterator refenence which would make subsequent iterator comparisons
 // incorrect and thereby break the composiblity of iterators.
 template<class Base>
-typename xml_unescape<Base>::value_type 
+BOOST_DEDUCED_TYPENAME xml_unescape<Base>::value_type 
 //int 
 xml_unescape<Base>::drain(){
     value_type retval = * this->base_reference();

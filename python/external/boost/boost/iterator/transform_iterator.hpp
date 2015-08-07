@@ -26,17 +26,16 @@
 #if BOOST_WORKAROUND(BOOST_MSVC, BOOST_TESTED_AT(1310))
 # include <boost/type_traits/is_base_and_derived.hpp>
 
-#endif
+#endif 
 #include <boost/iterator/detail/config_def.hpp>
 
 
-namespace boost {
-namespace iterators {
-
+namespace boost
+{
   template <class UnaryFunction, class Iterator, class Reference = use_default, class Value = use_default>
   class transform_iterator;
 
-  namespace detail
+  namespace detail 
   {
     // Compute the iterator_adaptor instantiation to be used for transform_iterator
     template <class UnaryFunc, class Iterator, class Reference, class Value>
@@ -73,10 +72,10 @@ namespace iterators {
 
   template <class UnaryFunc, class Iterator, class Reference, class Value>
   class transform_iterator
-    : public boost::iterators::detail::transform_iterator_base<UnaryFunc, Iterator, Reference, Value>::type
+    : public boost::detail::transform_iterator_base<UnaryFunc, Iterator, Reference, Value>::type
   {
     typedef typename
-    boost::iterators::detail::transform_iterator_base<UnaryFunc, Iterator, Reference, Value>::type
+    boost::detail::transform_iterator_base<UnaryFunc, Iterator, Reference, Value>::type
     super_t;
 
     friend class iterator_core_access;
@@ -96,7 +95,7 @@ namespace iterators {
         // don't provide this constructor if UnaryFunc is a
         // function pointer type, since it will be 0.  Too dangerous.
         BOOST_STATIC_ASSERT(is_class<UnaryFunc>::value);
-#endif
+#endif 
     }
 
     template <
@@ -109,7 +108,7 @@ namespace iterators {
        , typename enable_if_convertible<OtherIterator, Iterator>::type* = 0
 #if !BOOST_WORKAROUND(BOOST_MSVC, == 1310)
        , typename enable_if_convertible<OtherUnaryFunction, UnaryFunc>::type* = 0
-#endif
+#endif 
     )
       : super_t(t.base()), m_f(t.functor())
    {}
@@ -127,7 +126,7 @@ namespace iterators {
   };
 
   template <class UnaryFunc, class Iterator>
-  inline transform_iterator<UnaryFunc, Iterator>
+  transform_iterator<UnaryFunc, Iterator>
   make_transform_iterator(Iterator it, UnaryFunc fun)
   {
       return transform_iterator<UnaryFunc, Iterator>(it, fun);
@@ -141,9 +140,16 @@ namespace iterators {
   // function pointer in the iterator be 0, leading to a runtime
   // crash.
   template <class UnaryFunc, class Iterator>
-  inline typename iterators::enable_if<
+#if BOOST_WORKAROUND(BOOST_MSVC, <= 1300)
+  typename mpl::if_<
+#else 
+  typename iterators::enable_if<
+#endif 
       is_class<UnaryFunc>   // We should probably find a cheaper test than is_class<>
     , transform_iterator<UnaryFunc, Iterator>
+#if BOOST_WORKAROUND(BOOST_MSVC, <= 1300)
+    , int[3]
+#endif 
   >::type
   make_transform_iterator(Iterator it)
   {
@@ -152,17 +158,12 @@ namespace iterators {
 
 #if defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION ) && !defined(BOOST_NO_FUNCTION_TEMPLATE_ORDERING)
   template <class Return, class Argument, class Iterator>
-  inline transform_iterator< Return (*)(Argument), Iterator, Return>
+  transform_iterator< Return (*)(Argument), Iterator, Return>
   make_transform_iterator(Iterator it, Return (*fun)(Argument))
   {
     return transform_iterator<Return (*)(Argument), Iterator, Return>(it, fun);
   }
 #endif
-
-} // namespace iterators
-
-using iterators::transform_iterator;
-using iterators::make_transform_iterator;
 
 } // namespace boost
 

@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_BASIC_TEXT_IPRIMITIVE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
 # pragma once
 #endif
 
@@ -64,8 +64,13 @@ namespace archive {
 #endif
 
 template<class IStream>
-class basic_text_iprimitive {
+class basic_text_iprimitive
+{
+#ifndef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
 protected:
+#else
+public:
+#endif
     IStream &is;
     io::ios_flags_saver flags_saver;
     io::ios_precision_saver precision_saver;
@@ -73,16 +78,18 @@ protected:
     #ifndef BOOST_NO_STD_LOCALE
     boost::scoped_ptr<std::locale> archive_locale;
     basic_streambuf_locale_saver<
-        typename IStream::char_type, 
-        typename IStream::traits_type
+        BOOST_DEDUCED_TYPENAME IStream::char_type, 
+        BOOST_DEDUCED_TYPENAME IStream::traits_type
     > locale_saver;
     #endif
 
     template<class T>
     void load(T & t)
     {
-        if(is >> t)
+        if(! is.fail()){
+            is >> t;
             return;
+        }
         boost::serialization::throw_exception(
             archive_exception(archive_exception::input_stream_error)
         );

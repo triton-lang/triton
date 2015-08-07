@@ -23,12 +23,11 @@ namespace std{
 #include <boost/detail/workaround.hpp> // fixup for RogueWave
 
 #include <boost/serialization/throw_exception.hpp>
+#include <boost/scoped_ptr.hpp>
 
-#include <boost/core/no_exceptions_support.hpp>
 #include <boost/archive/archive_exception.hpp>
 #include <boost/archive/codecvt_null.hpp>
 #include <boost/archive/add_facet.hpp>
-#include <boost/archive/basic_binary_iprimitive.hpp> 
 
 namespace boost {
 namespace archive {
@@ -152,16 +151,17 @@ basic_binary_iprimitive<Archive, Elem, Tr>::basic_binary_iprimitive(
 ) :
 #ifndef BOOST_NO_STD_LOCALE
     m_sb(sb),
+    archive_locale(NULL),
     locale_saver(m_sb)
 {
     if(! no_codecvt){
         archive_locale.reset(
-            add_facet(
+            boost::archive::add_facet(
                 std::locale::classic(),
                 new codecvt_null<Elem>
             )
         );
-        //m_sb.pubimbue(* archive_locale);
+        m_sb.pubimbue(* archive_locale);
     }
 }
 #else
@@ -198,12 +198,11 @@ BOOST_ARCHIVE_OR_WARCHIVE_DECL(BOOST_PP_EMPTY())
 basic_binary_iprimitive<Archive, Elem, Tr>::~basic_binary_iprimitive(){
     // push back unread characters
     //destructor can't throw !
-    BOOST_TRY{
+    try{
         static_cast<detail::input_streambuf_access<Elem, Tr> &>(m_sb).sync();
     }
-    BOOST_CATCH(...){
+    catch(...){
     }
-    BOOST_CATCH_END
 }
 
 } // namespace archive

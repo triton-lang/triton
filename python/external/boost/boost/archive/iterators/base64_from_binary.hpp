@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_BASE64_FROM_BINARY_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
 # pragma once
 #endif
 
@@ -19,6 +19,7 @@
 #include <boost/assert.hpp>
 
 #include <cstddef> // size_t
+#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME
 #if defined(BOOST_NO_STDC_NAMESPACE)
 namespace std{ 
     using ::size_t; 
@@ -56,7 +57,7 @@ struct from_6_bit {
 } // namespace detail
 
 // note: what we would like to do is
-// template<class Base, class CharType = typename Base::value_type>
+// template<class Base, class CharType = BOOST_DEDUCED_TYPENAME Base::value_type>
 //  typedef transform_iterator<
 //      from_6_bit<CharType>,
 //      transform_width<Base, 6, sizeof(Base::value_type) * 8, CharType>
@@ -68,10 +69,10 @@ struct from_6_bit {
 // a templated constructor.  This makes it incompatible with the dataflow
 // ideal.  This is also addressed here.
 
-//template<class Base, class CharType = typename Base::value_type>
+//template<class Base, class CharType = BOOST_DEDUCED_TYPENAME Base::value_type>
 template<
     class Base, 
-    class CharType = typename boost::iterator_value<Base>::type
+    class CharType = BOOST_DEDUCED_TYPENAME boost::iterator_value<Base>::type
 >
 class base64_from_binary : 
     public transform_iterator<
@@ -81,7 +82,7 @@ class base64_from_binary :
 {
     friend class boost::iterator_core_access;
     typedef transform_iterator<
-        typename detail::from_6_bit<CharType>,
+        BOOST_DEDUCED_TYPENAME detail::from_6_bit<CharType>,
         Base
     > super_t;
 

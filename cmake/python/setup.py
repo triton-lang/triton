@@ -91,7 +91,7 @@ def main():
     #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
-    cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT'] + ' -Wno-attributes -DBOOST_PYTHON_SOURCE '
+    cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT']
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
     #OpenCL
@@ -140,7 +140,7 @@ def main():
                 ext_package="isaac",
                 ext_modules=[Extension(
                     '_isaac',src,
-                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare'],
+                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
 		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,

@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_ESCAPE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
 # pragma once
 #endif
 
@@ -19,6 +19,7 @@
 #include <boost/assert.hpp>
 #include <cstddef> // NULL
 
+#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME
 #include <boost/iterator/iterator_adaptor.hpp>
 #include <boost/iterator/iterator_traits.hpp>
 
@@ -34,16 +35,16 @@ class escape :
     public boost::iterator_adaptor<
         Derived, 
         Base, 
-        typename boost::iterator_value<Base>::type,
+        BOOST_DEDUCED_TYPENAME boost::iterator_value<Base>::type,
         single_pass_traversal_tag,
-        typename boost::iterator_value<Base>::type
+        BOOST_DEDUCED_TYPENAME boost::iterator_value<Base>::type
     >
 {
-    typedef typename boost::iterator_value<Base>::type base_value_type;
-    typedef typename boost::iterator_reference<Base>::type reference_type;
+    typedef BOOST_DEDUCED_TYPENAME boost::iterator_value<Base>::type base_value_type;
+    typedef BOOST_DEDUCED_TYPENAME boost::iterator_reference<Base>::type reference_type;
     friend class boost::iterator_core_access;
 
-    typedef typename boost::iterator_adaptor<
+    typedef BOOST_DEDUCED_TYPENAME boost::iterator_adaptor<
         Derived, 
         Base, 
         base_value_type,

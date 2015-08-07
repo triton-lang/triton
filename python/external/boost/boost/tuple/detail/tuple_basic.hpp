@@ -41,11 +41,6 @@
 
 #include "boost/detail/workaround.hpp" // needed for BOOST_WORKAROUND
 
-#if BOOST_GCC >= 40700
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-local-typedefs"
-#endif
-
 namespace boost {
 namespace tuples {
 
@@ -213,7 +208,7 @@ template<int N, class HT, class TT>
 inline typename access_traits<
                   typename element<N, cons<HT, TT> >::type
                 >::non_const_type
-get(cons<HT, TT>& c) {
+get(cons<HT, TT>& c BOOST_APPEND_EXPLICIT_TEMPLATE_NON_TYPE(int, N)) {
   typedef BOOST_DEDUCED_TYPENAME detail::drop_front<N>::BOOST_NESTED_TEMPLATE
       apply<cons<HT, TT> > impl;
   typedef BOOST_DEDUCED_TYPENAME impl::type cons_element;
@@ -227,9 +222,10 @@ template<int N, class HT, class TT>
 inline typename access_traits<
                   typename element<N, cons<HT, TT> >::type
                 >::const_type
-get(const cons<HT, TT>& c) {
+get(const cons<HT, TT>& c BOOST_APPEND_EXPLICIT_TEMPLATE_NON_TYPE(int, N)) {
   typedef BOOST_DEDUCED_TYPENAME detail::drop_front<N>::BOOST_NESTED_TEMPLATE
       apply<cons<HT, TT> > impl;
+  typedef BOOST_DEDUCED_TYPENAME impl::type cons_element;
   return impl::call(c).head;
 }
 
@@ -403,7 +399,7 @@ struct cons<HT, null_type> {
   typename access_traits<
              typename element<N, self_type>::type
             >::non_const_type
-  get() {
+  get(BOOST_EXPLICIT_TEMPLATE_NON_TYPE(int, N)) {
     return boost::tuples::get<N>(*this);
   }
 
@@ -411,7 +407,7 @@ struct cons<HT, null_type> {
   typename access_traits<
              typename element<N, self_type>::type
            >::const_type
-  get() const {
+  get(BOOST_EXPLICIT_TEMPLATE_NON_TYPE(int, N)) const {
     return boost::tuples::get<N>(*this);
   }
 
@@ -977,11 +973,6 @@ inline void swap(tuple<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9>& lhs,
 
 } // end of namespace tuples
 } // end of namespace boost
-
-
-#if BOOST_GCC >= 40700
-#pragma GCC diagnostic pop
-#endif
 
 
 #endif // BOOST_TUPLE_BASIC_HPP

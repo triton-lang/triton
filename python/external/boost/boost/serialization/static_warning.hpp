@@ -5,7 +5,7 @@
 // Use, modification and distribution is subject to the Boost Software
 // License, Version 1.0. (See accompanying file LICENSE_1_0.txt or copy at
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
 # pragma once
 #endif
 
@@ -72,7 +72,6 @@
 #include <boost/mpl/bool.hpp>
 #include <boost/mpl/print.hpp>
 #include <boost/mpl/eval_if.hpp>
-#include <boost/static_assert.hpp>
 
 namespace boost {
 namespace serialization {
@@ -102,7 +101,8 @@ struct BOOST_SERIALIZATION_SS {};
 #define BOOST_SERIALIZATION_BSW(B, L) \
     typedef boost::serialization::BOOST_SERIALIZATION_SS< \
         sizeof( boost::serialization::static_warning_test< B, L > ) \
-    > BOOST_JOIN(STATIC_WARNING_LINE, L) BOOST_STATIC_ASSERT_UNUSED_ATTRIBUTE; 
+    > BOOST_JOIN(STATIC_WARNING_LINE, L);
+
 #define BOOST_STATIC_WARNING(B) BOOST_SERIALIZATION_BSW(B, __LINE__)
 
 #endif // BOOST_SERIALIZATION_STATIC_WARNING_HPP

@@ -51,7 +51,6 @@
 #include "boost/type_traits/is_const.hpp"
 #include "boost/type_traits/is_convertible.hpp"
 #include "boost/type_traits/is_copy_constructible.hpp"
-#include "boost/type_traits/is_copy_assignable.hpp"
 #include "boost/type_traits/is_empty.hpp"
 #include "boost/type_traits/is_enum.hpp"
 #include "boost/type_traits/is_float.hpp"

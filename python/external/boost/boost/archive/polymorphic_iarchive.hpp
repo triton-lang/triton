@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_POLYMORPHIC_IARCHIVE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
 # pragma once
 #endif
 
@@ -39,6 +39,8 @@ namespace std{
 #include <boost/archive/detail/abi_prefix.hpp> // must be the last header
 
 namespace boost {
+template<class T>
+class shared_ptr;
 namespace serialization {
     class extended_type_info;
 } // namespace serialization
@@ -153,11 +155,18 @@ public:
 
 #include <boost/archive/detail/abi_suffix.hpp> // pops abi_suffix.hpp pragmas
 
-namespace boost {
+// note special treatment of shared_ptr. This type needs a special
+// structure associated with every archive.  We created a "mix-in"
+// class to provide this functionality.  Since shared_ptr holds a
+// special esteem in the boost library - we included it here by default.
+#include <boost/archive/shared_ptr_helper.hpp>
+
+namespace boost { 
 namespace archive {
 
 class polymorphic_iarchive : 
-    public polymorphic_iarchive_impl
+    public polymorphic_iarchive_impl,
+    public detail::shared_ptr_helper
 {
 public:
     virtual ~polymorphic_iarchive(){};

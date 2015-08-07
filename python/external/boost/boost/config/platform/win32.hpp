@@ -41,10 +41,8 @@
 #endif
 
 #if defined(__MINGW32__) && (__GNUC__ >= 4)
-// Mingw has these functions but there are persistent problems
-// with calls to these crashing, so disable for now:
-//#  define BOOST_HAS_EXPM1
-//#  define BOOST_HAS_LOG1P
+#  define BOOST_HAS_EXPM1
+#  define BOOST_HAS_LOG1P
 #  define BOOST_HAS_GETTIMEOFDAY
 #endif
 //
@@ -57,21 +55,14 @@
 // all translation units (needed for shared_ptr etc).
 //
 
-#ifndef BOOST_HAS_PTHREADS
-#  define BOOST_HAS_WINTHREADS
-#endif
-
-//
-// WinCE configuration:
-//
-#if defined(_WIN32_WCE) || defined(UNDER_CE)
+#ifdef _WIN32_WCE
 #  define BOOST_NO_ANSI_APIS
-// Windows CE does not have a conforming signature for swprintf
-#  define BOOST_NO_SWPRINTF
 #else
 #  define BOOST_HAS_GETSYSTEMTIMEASFILETIME
-#  define BOOST_HAS_THREADEX
-#  define BOOST_HAS_GETSYSTEMTIMEASFILETIME
+#endif
+
+#ifndef BOOST_HAS_PTHREADS
+#  define BOOST_HAS_WINTHREADS
 #endif
 
 #ifndef BOOST_DISABLE_WIN32

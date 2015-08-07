@@ -10,7 +10,7 @@
 //
 // See http://www.boost.org/libs/mpl for documentation.
 
-// $Id$
+// $Id: bcc.hpp 49272 2008-10-11 06:50:46Z agurtovoy $
 // $Date: 2004-09-02 10:41:37 -0500 (Thu, 02 Sep 2004) $
 // $Revision: 24874 $
 

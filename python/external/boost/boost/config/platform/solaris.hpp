@@ -23,9 +23,6 @@
 # undef BOOST_HAS_PTHREADS
 #endif
 
-#define BOOST_HAS_STDINT_H 
-#define BOOST_HAS_PTHREAD_MUTEXATTR_SETTYPE 
-#define BOOST_HAS_LOG1P 
-#define BOOST_HAS_EXPM1
+
 
 

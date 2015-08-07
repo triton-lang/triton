@@ -16,6 +16,10 @@
 
 #include <boost/config.hpp>   // for broken compiler workarounds
 
+#if defined(BOOST_NO_MEMBER_TEMPLATES) && !defined(BOOST_MSVC6_MEMBER_TEMPLATES)
+#include <boost/smart_ptr/detail/shared_array_nmt.hpp>
+#else
+
 #include <memory>             // TR1 cyclic inclusion fix
 
 #include <boost/assert.hpp>
@@ -56,14 +60,6 @@ public:
     shared_array() BOOST_NOEXCEPT : px( 0 ), pn()
     {
     }
-
-#if !defined( BOOST_NO_CXX11_NULLPTR )
-
-    shared_array( boost::detail::sp_nullptr_t ) BOOST_NOEXCEPT : px( 0 ), pn()
-    {
-    }
-
-#endif
 
     template<class Y>
     explicit shared_array( Y * p ): px( p ), pn( p, checked_array_deleter<Y>() )
@@ -288,5 +284,7 @@ template< class D, class T > D * get_deleter( shared_array<T> const & p )
 }
 
 } // namespace boost
+
+#endif  // #if defined(BOOST_NO_MEMBER_TEMPLATES) && !defined(BOOST_MSVC6_MEMBER_TEMPLATES)
 
 #endif  // #ifndef BOOST_SMART_PTR_SHARED_ARRAY_HPP_INCLUDED

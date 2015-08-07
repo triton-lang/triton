@@ -20,12 +20,12 @@ object
 BOOST_PYTHON_DECL
 eval(str string, object global = object(), object local = object());
 
-// Execute an individual python statement from str.
+// Execute an individual python symbolic_expressionexpression from str.
 // global and local are the global and local scopes respectively,
 // used during execution.
 object 
 BOOST_PYTHON_DECL
-exec_statement(str string, object global = object(), object local = object());
+exec_symbolic_expressionexpression(str string, object global = object(), object local = object());
 
 // Execute python source code from str.
 // global and local are the global and local scopes respectively,

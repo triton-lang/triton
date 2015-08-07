@@ -7,9 +7,8 @@
 #ifndef BOOST_UNORDERED_DETAIL_MANAGER_HPP_INCLUDED
 #define BOOST_UNORDERED_DETAIL_MANAGER_HPP_INCLUDED
 
-#include <boost/config.hpp>
-#if defined(BOOST_HAS_PRAGMA_ONCE)
-#pragma once
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+# pragma once
 #endif
 
 #include <boost/unordered/detail/util.hpp>
@@ -45,9 +44,9 @@ namespace boost { namespace unordered { namespace iterator_detail {
     // all no throw
 
     template <typename Node> struct iterator;
-    template <typename Node> struct c_iterator;
+    template <typename Node, typename ConstNodePointer> struct c_iterator;
     template <typename Node, typename Policy> struct l_iterator;
-    template <typename Node, typename Policy>
+    template <typename Node, typename ConstNodePointer, typename Policy>
         struct cl_iterator;
 
     // Local Iterators
@@ -60,16 +59,16 @@ namespace boost { namespace unordered { namespace iterator_detail {
             std::forward_iterator_tag,
             typename Node::value_type,
             std::ptrdiff_t,
-            typename Node::value_type*,
+            typename Node::node_pointer,
             typename Node::value_type&>
     {
 #if !defined(BOOST_NO_MEMBER_TEMPLATE_FRIENDS)
-        template <typename Node2, typename Policy2>
+        template <typename Node2, typename ConstNodePointer, typename Policy2>
         friend struct boost::unordered::iterator_detail::cl_iterator;
     private:
 #endif
         typedef typename Node::node_pointer node_pointer;
-        typedef boost::unordered::iterator_detail::iterator<Node> n_iterator;
+        typedef boost::unordered::iterator_detail::iterator<Node> iterator;
         node_pointer ptr_;
         std::size_t bucket_;
         std::size_t bucket_count_;
@@ -80,7 +79,7 @@ namespace boost { namespace unordered { namespace iterator_detail {
 
         l_iterator() BOOST_NOEXCEPT : ptr_() {}
 
-        l_iterator(n_iterator x, std::size_t b, std::size_t c) BOOST_NOEXCEPT
+        l_iterator(iterator x, std::size_t b, std::size_t c) BOOST_NOEXCEPT
             : ptr_(x.node_), bucket_(b), bucket_count_(c) {}
 
         value_type& operator*() const {
@@ -114,13 +113,13 @@ namespace boost { namespace unordered { namespace iterator_detail {
         }
     };
 
-    template <typename Node, typename Policy>
+    template <typename Node, typename ConstNodePointer, typename Policy>
     struct cl_iterator
         : public boost::iterator<
             std::forward_iterator_tag,
             typename Node::value_type,
             std::ptrdiff_t,
-            typename Node::value_type const*,
+            ConstNodePointer,
             typename Node::value_type const&>
     {
         friend struct boost::unordered::iterator_detail::l_iterator
@@ -128,7 +127,7 @@ namespace boost { namespace unordered { namespace iterator_detail {
     private:
 
         typedef typename Node::node_pointer node_pointer;
-        typedef boost::unordered::iterator_detail::iterator<Node> n_iterator;
+        typedef boost::unordered::iterator_detail::iterator<Node> iterator;
         node_pointer ptr_;
         std::size_t bucket_;
         std::size_t bucket_count_;
@@ -139,7 +138,7 @@ namespace boost { namespace unordered { namespace iterator_detail {
 
         cl_iterator() BOOST_NOEXCEPT : ptr_() {}
 
-        cl_iterator(n_iterator x, std::size_t b, std::size_t c) BOOST_NOEXCEPT :
+        cl_iterator(iterator x, std::size_t b, std::size_t c) BOOST_NOEXCEPT :
             ptr_(x.node_), bucket_(b), bucket_count_(c) {}
 
         cl_iterator(boost::unordered::iterator_detail::l_iterator<
@@ -188,15 +187,15 @@ namespace boost { namespace unordered { namespace iterator_detail {
             std::forward_iterator_tag,
             typename Node::value_type,
             std::ptrdiff_t,
-            typename Node::value_type*,
+            typename Node::node_pointer,
             typename Node::value_type&>
     {
 #if !defined(BOOST_NO_MEMBER_TEMPLATE_FRIENDS)
-        template <typename>
+        template <typename, typename>
         friend struct boost::unordered::iterator_detail::c_iterator;
         template <typename, typename>
         friend struct boost::unordered::iterator_detail::l_iterator;
-        template <typename, typename>
+        template <typename, typename, typename>
         friend struct boost::unordered::iterator_detail::cl_iterator;
         template <typename>
         friend struct boost::unordered::detail::table;
@@ -223,7 +222,7 @@ namespace boost { namespace unordered { namespace iterator_detail {
         }
 
         value_type* operator->() const {
-            return node_->value_ptr();
+            return &node_->value();
         }
 
         iterator& operator++() {
@@ -246,13 +245,13 @@ namespace boost { namespace unordered { namespace iterator_detail {
         }
     };
 
-    template <typename Node>
+    template <typename Node, typename ConstNodePointer>
     struct c_iterator
         : public boost::iterator<
             std::forward_iterator_tag,
             typename Node::value_type,
             std::ptrdiff_t,
-            typename Node::value_type const*,
+            ConstNodePointer,
             typename Node::value_type const&>
     {
         friend struct boost::unordered::iterator_detail::iterator<Node>;
@@ -268,7 +267,7 @@ namespace boost { namespace unordered { namespace iterator_detail {
     private:
 #endif
         typedef typename Node::node_pointer node_pointer;
-        typedef boost::unordered::iterator_detail::iterator<Node> n_iterator;
+        typedef boost::unordered::iterator_detail::iterator<Node> iterator;
         node_pointer node_;
 
     public:
@@ -280,14 +279,14 @@ namespace boost { namespace unordered { namespace iterator_detail {
         explicit c_iterator(typename Node::link_pointer x) BOOST_NOEXCEPT :
             node_(static_cast<node_pointer>(x)) {}
 
-        c_iterator(n_iterator const& x) BOOST_NOEXCEPT : node_(x.node_) {}
+        c_iterator(iterator const& x) BOOST_NOEXCEPT : node_(x.node_) {}
 
         value_type const& operator*() const {
             return node_->value();
         }
 
         value_type const* operator->() const {
-            return node_->value_ptr();
+            return &node_->value();
         }
 
         c_iterator& operator++() {
@@ -402,7 +401,7 @@ namespace boost { namespace unordered { namespace detail {
             }
 
             if (node_constructed_) {
-                boost::unordered::detail::func::destroy(
+                node_allocator_traits::destroy(alloc_,
                     boost::addressof(*node_));
             }
 
@@ -419,7 +418,8 @@ namespace boost { namespace unordered { namespace detail {
 
             node_ = node_allocator_traits::allocate(alloc_, 1);
 
-            new ((void*) boost::addressof(*node_)) node();
+            node_allocator_traits::construct(alloc_,
+                boost::addressof(*node_), node());
             node_->init(node_);
             node_constructed_ = true;
         }
@@ -547,7 +547,7 @@ namespace boost { namespace unordered { namespace detail {
 
             boost::unordered::detail::func::destroy_value_impl(this->alloc_,
                 p->value_ptr());
-            boost::unordered::detail::func::destroy(boost::addressof(*p));
+            node_allocator_traits::destroy(this->alloc_, boost::addressof(*p));
             node_allocator_traits::deallocate(this->alloc_, p, 1);
         }
     }
@@ -665,50 +665,10 @@ namespace boost { namespace unordered { namespace detail {
         typedef mix64_policy<std::size_t> type;
     };
 
-    template <typename T>
     struct pick_policy :
         pick_policy_impl<
             std::numeric_limits<std::size_t>::digits,
             std::numeric_limits<std::size_t>::radix> {};
-
-    // While the mix policy is generally faster, the prime policy is a lot
-    // faster when a large number consecutive integers are used, because
-    // there are no collisions. Since that is probably quite common, use
-    // prime policy for integeral types. But not the smaller ones, as they
-    // don't have enough unique values for this to be an issue.
-
-    template <>
-    struct pick_policy<int> {
-        typedef prime_policy<std::size_t> type;
-    };
-
-    template <>
-    struct pick_policy<unsigned int> {
-        typedef prime_policy<std::size_t> type;
-    };
-
-    template <>
-    struct pick_policy<long> {
-        typedef prime_policy<std::size_t> type;
-    };
-
-    template <>
-    struct pick_policy<unsigned long> {
-        typedef prime_policy<std::size_t> type;
-    };
-
-    // TODO: Maybe not if std::size_t is smaller than long long.
-#if !defined(BOOST_NO_LONG_LONG)
-    template <>
-    struct pick_policy<long long> {
-        typedef prime_policy<std::size_t> type;
-    };
-
-    template <>
-    struct pick_policy<unsigned long long> {
-        typedef prime_policy<std::size_t> type;
-    };
-#endif
 
     ////////////////////////////////////////////////////////////////////////////
     // Functions

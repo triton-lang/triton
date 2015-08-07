@@ -10,7 +10,8 @@
 //
 /////////////////////////////////////////////////////////////////////////////
 
-#ifndef BOOST_CONFIG_HPP
+#ifndef BOOST_INTRUSIVE_CONFIG_INCLUDED
+#define BOOST_INTRUSIVE_CONFIG_INCLUDED
 #include <boost/config.hpp>
 #endif
 

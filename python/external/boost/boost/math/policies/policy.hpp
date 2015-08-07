@@ -94,7 +94,8 @@ namespace policies{
 #define BOOST_MATH_MAX_ROOT_ITERATION_POLICY 200
 #endif
 
-#if !defined(__BORLANDC__)
+#if !defined(__BORLANDC__) \
+   && !(defined(__GNUC__) && (__GNUC__ == 3) && (__GNUC_MINOR__ <= 2))
 #define BOOST_MATH_META_INT(type, name, Default)\
    template <type N = Default> struct name : public boost::mpl::int_<N>{};\
    namespace detail{\
@@ -815,7 +816,7 @@ struct precision
 #ifdef BOOST_MATH_USE_FLOAT128
 
 template <class Policy>
-struct precision<BOOST_MATH_FLOAT128_TYPE, Policy>
+struct precision<__float128, Policy>
 {
    typedef mpl::int_<113> type;
 };
@@ -849,11 +850,6 @@ inline int digits(BOOST_MATH_EXPLICIT_TEMPLATE_TYPE(T))
 {
    typedef mpl::bool_< std::numeric_limits<T>::is_specialized > tag_type;
    return detail::digits_imp<T, Policy>(tag_type());
-}
-template <class T, class Policy>
-inline int digits_base10(BOOST_MATH_EXPLICIT_TEMPLATE_TYPE(T))
-{
-   return boost::math::policies::digits<T, Policy>() * 301 / 1000L;
 }
 
 template <class Policy>

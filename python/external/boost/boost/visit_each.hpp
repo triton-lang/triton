@@ -10,6 +10,8 @@
 #ifndef BOOST_VISIT_EACH_HPP
 #define BOOST_VISIT_EACH_HPP
 
+#include <boost/config.hpp>
+
 namespace boost {
   template<typename Visitor, typename T>
   inline void visit_each(Visitor& visitor, const T& t, long)

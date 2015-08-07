@@ -14,7 +14,7 @@
 #include <boost/assert.hpp>
 #include <boost/config.hpp>
 #include <boost/static_assert.hpp>
-#include <cstddef>
+#include <boost/pending/cstddef.hpp>
 #include <boost/detail/iterator.hpp>
 #include <boost/concept_check.hpp>
 #include <boost/concept_archetype.hpp>
@@ -92,6 +92,60 @@ namespace boost {
   //=========================================================================
   // property_traits specialization for pointers
 
+#ifdef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
+  // The user will just have to create their own specializations for
+  // other pointers types if the compiler does not have partial
+  // specializations. Sorry!
+#define BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(TYPE) \
+  template <> \
+  struct property_traits<TYPE*> { \
+    typedef TYPE value_type; \
+    typedef value_type& reference; \
+    typedef std::ptrdiff_t key_type; \
+    typedef lvalue_property_map_tag   category; \
+  }; \
+  template <> \
+  struct property_traits<const TYPE*> { \
+    typedef TYPE value_type; \
+    typedef const value_type& reference; \
+    typedef std::ptrdiff_t key_type; \
+    typedef lvalue_property_map_tag   category; \
+  }
+
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(long);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(unsigned long);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(int);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(unsigned int);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(short);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(unsigned short);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(char);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(unsigned char);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(signed char);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(bool);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(float);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(double);
+  BOOST_SPECIALIZE_PROPERTY_TRAITS_PTR(long double);
+
+  // This may need to be turned off for some older compilers that don't have
+  // wchar_t intrinsically.
+# ifndef BOOST_NO_INTRINSIC_WCHAR_T
+  template <>
+  struct property_traits<wchar_t*> {
+    typedef wchar_t value_type;
+    typedef value_type& reference;
+    typedef std::ptrdiff_t key_type;
+    typedef lvalue_property_map_tag   category;
+  };
+  template <>
+  struct property_traits<const wchar_t*> {
+    typedef wchar_t value_type;
+    typedef const value_type& reference;
+    typedef std::ptrdiff_t key_type;
+    typedef lvalue_property_map_tag   category;
+  };
+# endif
+
+#else
   template <class T>
   struct property_traits<T*> {
     // BOOST_STATIC_ASSERT(boost::is_same<T, T*>::value && !"Using pointers as property maps is deprecated");
@@ -108,6 +162,7 @@ namespace boost {
     typedef std::ptrdiff_t key_type;
     typedef lvalue_property_map_tag category;
   };
+#endif
 
 #if !defined(BOOST_NO_ARGUMENT_DEPENDENT_LOOKUP)
   // MSVC doesn't have Koenig lookup, so the user has to
@@ -402,6 +457,7 @@ namespace boost {
     IndexMap index;
   };
 
+#if !defined BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
   template <class RAIter, class ID>
   inline safe_iterator_property_map<
     RAIter, ID,
@@ -415,6 +471,7 @@ namespace boost {
       typename boost::detail::iterator_traits<RAIter>::reference> PA;
     return PA(iter, n, id);
   }
+#endif
   template <class RAIter, class Value, class ID>
   inline safe_iterator_property_map<RAIter, ID, Value, Value&>
   make_safe_iterator_property_map(RAIter iter, std::size_t n, ID id, Value) {
@@ -486,14 +543,14 @@ namespace boost {
   //=========================================================================
   // A property map that always returns the same object by value.
   //
-  template <typename ValueType, typename KeyType = void>
+  template <typename ValueType>
   class static_property_map :
       public
   boost::put_get_helper<ValueType,static_property_map<ValueType> >
   { 
     ValueType value;
   public:
-    typedef KeyType key_type;
+    typedef void key_type;
     typedef ValueType value_type;
     typedef ValueType reference;
     typedef readable_property_map_tag category;
@@ -502,12 +559,6 @@ namespace boost {
     template<typename T>
     inline reference operator[](T) const { return value; }
   };
-
-  template <typename KeyType, typename ValueType>
-  static_property_map<ValueType, KeyType>
-  make_static_property_map(const ValueType& v) {
-    return static_property_map<ValueType, KeyType>(v);
-  }
 
   //=========================================================================
   // A property map that always returns a reference to the same object.
@@ -594,8 +645,204 @@ namespace boost {
 } // namespace boost
 
 #ifdef BOOST_GRAPH_USE_MPI
-#include <boost/property_map/parallel/parallel_property_maps.hpp>
-#endif
+#include <boost/property_map/parallel/distributed_property_map.hpp>
+#include <boost/property_map/parallel/local_property_map.hpp>
+
+namespace boost {
+/** Distributed iterator property map.
+ *
+ * This specialization of @ref iterator_property_map builds a
+ * distributed iterator property map given the local index maps
+ * generated by distributed graph types that automatically have index
+ * properties. 
+ *
+ * This specialization is useful when creating external distributed
+ * property maps via the same syntax used to create external
+ * sequential property maps.
+ */
+template<typename RandomAccessIterator, typename ProcessGroup,
+         typename GlobalMap, typename StorageMap, 
+         typename ValueType, typename Reference>
+class iterator_property_map
+        <RandomAccessIterator, 
+         local_property_map<ProcessGroup, GlobalMap, StorageMap>,
+         ValueType, Reference>
+  : public parallel::distributed_property_map
+             <ProcessGroup, 
+              GlobalMap, 
+              iterator_property_map<RandomAccessIterator, StorageMap,
+                                    ValueType, Reference> >
+{
+  typedef iterator_property_map<RandomAccessIterator, StorageMap, 
+                                ValueType, Reference> local_iterator_map;
+
+  typedef parallel::distributed_property_map<ProcessGroup, GlobalMap,
+                                             local_iterator_map> inherited;
+
+  typedef local_property_map<ProcessGroup, GlobalMap, StorageMap>
+    index_map_type;
+  typedef iterator_property_map self_type;
+
+public:
+  iterator_property_map() { }
+
+  iterator_property_map(RandomAccessIterator cc, const index_map_type& id)
+    : inherited(id.process_group(), id.global(), 
+                local_iterator_map(cc, id.base())) { }
+};
+
+/** Distributed iterator property map.
+ *
+ * This specialization of @ref iterator_property_map builds a
+ * distributed iterator property map given a distributed index
+ * map. Only the local portion of the distributed index property map
+ * is utilized.
+ *
+ * This specialization is useful when creating external distributed
+ * property maps via the same syntax used to create external
+ * sequential property maps.
+ */
+template<typename RandomAccessIterator, typename ProcessGroup,
+         typename GlobalMap, typename StorageMap, 
+         typename ValueType, typename Reference>
+class iterator_property_map<
+        RandomAccessIterator, 
+        parallel::distributed_property_map<ProcessGroup,GlobalMap,StorageMap>,
+        ValueType, Reference
+      >
+  : public parallel::distributed_property_map
+             <ProcessGroup, 
+              GlobalMap,
+              iterator_property_map<RandomAccessIterator, StorageMap,
+                                    ValueType, Reference> >
+{
+  typedef iterator_property_map<RandomAccessIterator, StorageMap,
+                                ValueType, Reference> local_iterator_map;
+
+  typedef parallel::distributed_property_map<ProcessGroup, GlobalMap,
+                                             local_iterator_map> inherited;
+
+  typedef parallel::distributed_property_map<ProcessGroup, GlobalMap, 
+                                             StorageMap>
+    index_map_type;
+
+public:
+  iterator_property_map() { }
+
+  iterator_property_map(RandomAccessIterator cc, const index_map_type& id)
+    : inherited(id.process_group(), id.global(),
+                local_iterator_map(cc, id.base())) { }
+};
+
+namespace parallel {
+// Generate an iterator property map with a specific kind of ghost
+// cells
+template<typename RandomAccessIterator, typename ProcessGroup,
+         typename GlobalMap, typename StorageMap>
+distributed_property_map<ProcessGroup, 
+                         GlobalMap,
+                         iterator_property_map<RandomAccessIterator, 
+                                               StorageMap> >
+make_iterator_property_map(RandomAccessIterator cc,
+                           local_property_map<ProcessGroup, GlobalMap, 
+                                              StorageMap> index_map)
+{
+  typedef distributed_property_map<
+            ProcessGroup, GlobalMap,
+            iterator_property_map<RandomAccessIterator, StorageMap> >
+    result_type;
+  return result_type(index_map.process_group(), index_map.global(),
+                     make_iterator_property_map(cc, index_map.base()));
+}
+
+} // end namespace parallel
+
+/** Distributed safe iterator property map.
+ *
+ * This specialization of @ref safe_iterator_property_map builds a
+ * distributed iterator property map given the local index maps
+ * generated by distributed graph types that automatically have index
+ * properties. 
+ *
+ * This specialization is useful when creating external distributed
+ * property maps via the same syntax used to create external
+ * sequential property maps.
+ */
+template<typename RandomAccessIterator, typename ProcessGroup,
+         typename GlobalMap, typename StorageMap, typename ValueType,
+         typename Reference>
+class safe_iterator_property_map
+        <RandomAccessIterator, 
+         local_property_map<ProcessGroup, GlobalMap, StorageMap>,
+         ValueType, Reference>
+  : public parallel::distributed_property_map
+             <ProcessGroup, 
+              GlobalMap,
+              safe_iterator_property_map<RandomAccessIterator, StorageMap,
+                                         ValueType, Reference> >
+{
+  typedef safe_iterator_property_map<RandomAccessIterator, StorageMap, 
+                                     ValueType, Reference> local_iterator_map;
+
+  typedef parallel::distributed_property_map<ProcessGroup, GlobalMap,
+                                             local_iterator_map> inherited;
+
+  typedef local_property_map<ProcessGroup, GlobalMap, StorageMap> index_map_type;
+
+public:
+  safe_iterator_property_map() { }
+
+  safe_iterator_property_map(RandomAccessIterator cc, std::size_t n, 
+                             const index_map_type& id)
+    : inherited(id.process_group(), id.global(),
+                local_iterator_map(cc, n, id.base())) { }
+};
+
+/** Distributed safe iterator property map.
+ *
+ * This specialization of @ref safe_iterator_property_map builds a
+ * distributed iterator property map given a distributed index
+ * map. Only the local portion of the distributed index property map
+ * is utilized.
+ *
+ * This specialization is useful when creating external distributed
+ * property maps via the same syntax used to create external
+ * sequential property maps.
+ */
+template<typename RandomAccessIterator, typename ProcessGroup,
+         typename GlobalMap, typename StorageMap, 
+         typename ValueType, typename Reference>
+class safe_iterator_property_map<
+        RandomAccessIterator, 
+        parallel::distributed_property_map<ProcessGroup,GlobalMap,StorageMap>,
+        ValueType, Reference>
+  : public parallel::distributed_property_map
+             <ProcessGroup, 
+              GlobalMap,
+              safe_iterator_property_map<RandomAccessIterator, StorageMap,
+                                         ValueType, Reference> >
+{
+  typedef safe_iterator_property_map<RandomAccessIterator, StorageMap,
+                                     ValueType, Reference> local_iterator_map;
+
+  typedef parallel::distributed_property_map<ProcessGroup, GlobalMap,
+                                             local_iterator_map> inherited;
+
+  typedef parallel::distributed_property_map<ProcessGroup, GlobalMap, 
+                                             StorageMap>
+    index_map_type;
+
+public:
+  safe_iterator_property_map() { }
+
+  safe_iterator_property_map(RandomAccessIterator cc, std::size_t n, 
+                             const index_map_type& id)
+    : inherited(id.process_group(), id.global(), 
+                local_iterator_map(cc, n, id.base())) { }
+};                                            
+
+}
+#endif // BOOST_GRAPH_USE_MPI
 
 #include <boost/property_map/vector_property_map.hpp>
 

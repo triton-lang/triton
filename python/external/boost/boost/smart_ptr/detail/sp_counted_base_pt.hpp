@@ -19,7 +19,6 @@
 //
 
 #include <boost/detail/sp_typeinfo.hpp>
-#include <boost/assert.hpp>
 #include <pthread.h>
 
 namespace boost
@@ -47,15 +46,15 @@ public:
 // HPUX 10.20 / DCE has a nonstandard pthread_mutex_init
 
 #if defined(__hpux) && defined(_DECTHREADS_)
-        BOOST_VERIFY( pthread_mutex_init( &m_, pthread_mutexattr_default ) == 0 );
+        pthread_mutex_init( &m_, pthread_mutexattr_default );
 #else
-        BOOST_VERIFY( pthread_mutex_init( &m_, 0 ) == 0 );
+        pthread_mutex_init( &m_, 0 );
 #endif
     }
 
     virtual ~sp_counted_base() // nothrow
     {
-        BOOST_VERIFY( pthread_mutex_destroy( &m_ ) == 0 );
+        pthread_mutex_destroy( &m_ );
     }
 
     // dispose() is called when use_count_ drops to zero, to release
@@ -75,24 +74,24 @@ public:
 
     void add_ref_copy()
     {
-        BOOST_VERIFY( pthread_mutex_lock( &m_ ) == 0 );
+        pthread_mutex_lock( &m_ );
         ++use_count_;
-        BOOST_VERIFY( pthread_mutex_unlock( &m_ ) == 0 );
+        pthread_mutex_unlock( &m_ );
     }
 
     bool add_ref_lock() // true on success
     {
-        BOOST_VERIFY( pthread_mutex_lock( &m_ ) == 0 );
+        pthread_mutex_lock( &m_ );
         bool r = use_count_ == 0? false: ( ++use_count_, true );
-        BOOST_VERIFY( pthread_mutex_unlock( &m_ ) == 0 );
+        pthread_mutex_unlock( &m_ );
         return r;
     }
 
     void release() // nothrow
     {
-        BOOST_VERIFY( pthread_mutex_lock( &m_ ) == 0 );
+        pthread_mutex_lock( &m_ );
         long new_use_count = --use_count_;
-        BOOST_VERIFY( pthread_mutex_unlock( &m_ ) == 0 );
+        pthread_mutex_unlock( &m_ );
 
         if( new_use_count == 0 )
         {
@@ -103,16 +102,16 @@ public:
 
     void weak_add_ref() // nothrow
     {
-        BOOST_VERIFY( pthread_mutex_lock( &m_ ) == 0 );
+        pthread_mutex_lock( &m_ );
         ++weak_count_;
-        BOOST_VERIFY( pthread_mutex_unlock( &m_ ) == 0 );
+        pthread_mutex_unlock( &m_ );
     }
 
     void weak_release() // nothrow
     {
-        BOOST_VERIFY( pthread_mutex_lock( &m_ ) == 0 );
+        pthread_mutex_lock( &m_ );
         long new_weak_count = --weak_count_;
-        BOOST_VERIFY( pthread_mutex_unlock( &m_ ) == 0 );
+        pthread_mutex_unlock( &m_ );
 
         if( new_weak_count == 0 )
         {
@@ -122,9 +121,9 @@ public:
 
     long use_count() const // nothrow
     {
-        BOOST_VERIFY( pthread_mutex_lock( &m_ ) == 0 );
+        pthread_mutex_lock( &m_ );
         long r = use_count_;
-        BOOST_VERIFY( pthread_mutex_unlock( &m_ ) == 0 );
+        pthread_mutex_unlock( &m_ );
 
         return r;
     }

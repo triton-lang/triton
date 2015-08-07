@@ -1,5 +1,5 @@
 //  Boost config.hpp configuration header file  ------------------------------//
-//  boostinspect:ndprecated_macros -- tell the inspect tool to ignore this file
+//	boostinspect:ndprecated_macros	-- tell the inspect tool to ignore this file
 
 //  Copyright (c) 2001-2003 John Maddock
 //  Copyright (c) 2001 Darin Adler
@@ -442,7 +442,7 @@ namespace std {
 // BOOST_UNREACHABLE_RETURN(x) workaround -------------------------------------//
 // Normally evaluates to nothing, unless BOOST_NO_UNREACHABLE_RETURN_DETECTION
 // is defined, in which case it evaluates to return x; Use when you have a return
-// statement that can never be reached.
+// symbolic_expressionexpression that can never be reached.
 
 #ifdef BOOST_NO_UNREACHABLE_RETURN_DETECTION
 #  define BOOST_UNREACHABLE_RETURN(x) return x;
@@ -591,30 +591,9 @@ namespace std{ using ::type_info; }
 #    define BOOST_NOINLINE __declspec(noinline)
 #  elif defined(__GNUC__) && __GNUC__ > 3
      // Clang also defines __GNUC__ (as 4)
-#    if defined(__CUDACC__)
-       // nvcc doesn't always parse __noinline__, 
-       // see: https://svn.boost.org/trac/boost/ticket/9392
-#      define BOOST_NOINLINE __attribute__ ((noinline))
-#    else
-#      define BOOST_NOINLINE __attribute__ ((__noinline__))
-#    endif
+#    define BOOST_NOINLINE __attribute__ ((__noinline__))
 #  else
 #    define BOOST_NOINLINE
-#  endif
-#endif
-
-// BOOST_NORETURN ---------------------------------------------//
-// Macro to use before a function declaration/definition to designate
-// the function as not returning normally (i.e. with a return statement
-// or by leaving the function scope, if the function return type is void).
-#if !defined(BOOST_NORETURN)
-#  if defined(_MSC_VER)
-#    define BOOST_NORETURN __declspec(noreturn)
-#  elif defined(__GNUC__)
-#    define BOOST_NORETURN __attribute__ ((__noreturn__))
-#  else
-#    define BOOST_NO_NORETURN
-#    define BOOST_NORETURN
 #  endif
 #endif
 
@@ -644,11 +623,6 @@ namespace std{ using ::type_info; }
 #else
 #  define BOOST_NO_ALIGNMENT
 #  define BOOST_ALIGNMENT(x)
-#endif
-
-// Lack of non-public defaulted functions is implied by the lack of any defaulted functions
-#if !defined(BOOST_NO_CXX11_NON_PUBLIC_DEFAULTED_FUNCTIONS) && defined(BOOST_NO_CXX11_DEFAULTED_FUNCTIONS)
-#  define BOOST_NO_CXX11_NON_PUBLIC_DEFAULTED_FUNCTIONS
 #endif
 
 // Defaulted and deleted function declaration helpers
@@ -686,7 +660,7 @@ namespace std{ using ::type_info; }
 // Set BOOST_NO_DECLTYPE_N3276 when BOOST_NO_DECLTYPE is defined
 //
 #if defined(BOOST_NO_CXX11_DECLTYPE) && !defined(BOOST_NO_CXX11_DECLTYPE_N3276)
-#define BOOST_NO_CXX11_DECLTYPE_N3276 BOOST_NO_CXX11_DECLTYPE
+#define	BOOST_NO_CXX11_DECLTYPE_N3276 BOOST_NO_CXX11_DECLTYPE
 #endif
 
 //  -------------------- Deprecated macros for 1.50 ---------------------------
@@ -921,7 +895,7 @@ namespace std{ using ::type_info; }
 //
 // Helper macro BOOST_FALLTHROUGH
 // Fallback definition of BOOST_FALLTHROUGH macro used to mark intended
-// fall-through between case labels in a switch statement. We use a definition
+// fall-through between case labels in a switch symbolic_expressionexpression. We use a definition
 // that requires a semicolon after it to avoid at least one type of misuse even
 // on unsupported compilers.
 //
@@ -938,18 +912,6 @@ namespace std{ using ::type_info; }
 #else
 #define BOOST_CONSTEXPR constexpr
 #define BOOST_CONSTEXPR_OR_CONST constexpr
-#endif
-#if defined(BOOST_NO_CXX14_CONSTEXPR)
-#define BOOST_CXX14_CONSTEXPR
-#else
-#define BOOST_CXX14_CONSTEXPR constexpr
-#endif
-
-//
-// Unused variable/typedef workarounds:
-//
-#ifndef BOOST_ATTRIBUTE_UNUSED
-#  define BOOST_ATTRIBUTE_UNUSED
 #endif
 
 #define BOOST_STATIC_CONSTEXPR  static BOOST_CONSTEXPR_OR_CONST
@@ -974,22 +936,6 @@ namespace std{ using ::type_info; }
 #if !defined(BOOST_NO_CXX11_VARIADIC_TEMPLATES) && !defined(BOOST_HAS_VARIADIC_TMPL)
 #define BOOST_HAS_VARIADIC_TMPL
 #endif
-//
-// Set BOOST_NO_CXX11_FIXED_LENGTH_VARIADIC_TEMPLATE_EXPANSION_PACKS when
-// BOOST_NO_CXX11_VARIADIC_TEMPLATES is set:
-//
-#if defined(BOOST_NO_CXX11_VARIADIC_TEMPLATES) && !defined(BOOST_NO_CXX11_FIXED_LENGTH_VARIADIC_TEMPLATE_EXPANSION_PACKS)
-#  define BOOST_NO_CXX11_FIXED_LENGTH_VARIADIC_TEMPLATE_EXPANSION_PACKS
-#endif
 
-//
-// Finish off with checks for macros that are depricated / no longer supported,
-// if any of these are set then it's very likely that much of Boost will no
-// longer work.  So stop with a #error for now, but give the user a chance
-// to continue at their own risk if they really want to:
-//
-#if defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION) && !defined(BOOST_CONFIG_ALLOW_DEPRECATED)
-#  error "You are using a compiler which lacks features which are now a minimum requirement in order to use Boost, define BOOST_CONFIG_ALLOW_DEPRECATED if you want to continue at your own risk!!!"
-#endif
 
 #endif

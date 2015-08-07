@@ -48,13 +48,15 @@ public:
   {}
 
   template<class T>
-  void* apply(void* address) const
+  void* apply(void* address
+      BOOST_APPEND_EXPLICIT_TEMPLATE_TYPE(T)) const
   {
     return new(address) T( BOOST_PP_ENUM_PARAMS(N, m_a) );
   }
 
   template<class T>
-  void* apply(void* address, std::size_t n) const
+  void* apply(void* address, std::size_t n
+      BOOST_APPEND_EXPLICIT_TEMPLATE_TYPE(T)) const
   {
     for(char* next = address = this->BOOST_NESTED_TEMPLATE apply<T>(address);
         !! --n;)

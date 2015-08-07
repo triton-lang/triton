@@ -2,7 +2,7 @@
 #define BOOST_SERIALIZATION_VERSION_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
 # pragma once
 #endif
 
@@ -37,14 +37,14 @@ struct version
 {
     template<class U>
     struct traits_class_version {
-        typedef typename U::version type;
+        typedef BOOST_DEDUCED_TYPENAME U::version type;
     };
 
     typedef mpl::integral_c_tag tag;
     // note: at least one compiler complained w/o the full qualification
     // on basic traits below
     typedef
-        typename mpl::eval_if<
+        BOOST_DEDUCED_TYPENAME mpl::eval_if<
             is_base_and_derived<boost::serialization::basic_traits,T>,
             traits_class_version< T >,
             mpl::int_<0>

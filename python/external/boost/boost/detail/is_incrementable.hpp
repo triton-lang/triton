@@ -55,7 +55,8 @@ namespace is_incrementable_
   
 # endif 
 
-# if BOOST_WORKAROUND(__MWERKS__, BOOST_TESTED_AT(0x3202)) 
+# if BOOST_WORKAROUND(__MWERKS__, BOOST_TESTED_AT(0x3202)) \
+    || BOOST_WORKAROUND(BOOST_MSVC, <= 1300)
 #  define BOOST_comma(a,b) (a)
 # else 
   // In case an operator++ is found that returns void, we'll use ++x,0
@@ -115,7 +116,7 @@ BOOST_TT_AUX_BOOL_C_BASE(::boost::detail::is_incrementable_::impl<T>::value)
 
 template<typename T> 
 struct is_postfix_incrementable 
-BOOST_TT_AUX_BOOL_C_BASE(::boost::detail::is_incrementable_::postfix_impl<T>::value)
+BOOST_TT_AUX_BOOL_C_BASE(::boost::detail::is_incrementable_::impl<T>::value)
 { 
     BOOST_TT_AUX_BOOL_TRAIT_VALUE_DECL(::boost::detail::is_incrementable_::postfix_impl<T>::value)
     BOOST_MPL_AUX_LAMBDA_SUPPORT(1,is_postfix_incrementable,(T))

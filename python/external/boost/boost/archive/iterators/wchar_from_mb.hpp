@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_WCHAR_FROM_MB_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
 # pragma once
 #endif
 
@@ -21,7 +21,7 @@
 #include <cstddef> // size_t
 #include <cstdlib> // mblen
 
-#include <boost/config.hpp>
+#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME
 #if defined(BOOST_NO_STDC_NAMESPACE)
 namespace std{ 
     using ::mblen; 
@@ -53,7 +53,7 @@ class wchar_from_mb
     >
 {
     friend class boost::iterator_core_access;
-    typedef typename boost::iterator_adaptor<
+    typedef BOOST_DEDUCED_TYPENAME boost::iterator_adaptor<
         wchar_from_mb<Base>, 
         Base, 
         wchar_t,

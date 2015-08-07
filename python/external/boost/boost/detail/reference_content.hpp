@@ -15,8 +15,13 @@
 
 #include "boost/config.hpp"
 
+#if !defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
 #   include "boost/mpl/bool.hpp"
 #   include "boost/type_traits/has_nothrow_copy.hpp"
+#else
+#   include "boost/mpl/if.hpp"
+#   include "boost/type_traits/is_reference.hpp"
+#endif
 
 #include "boost/mpl/void.hpp"
 
@@ -73,6 +78,7 @@ public: // queries
 
 template <typename T = mpl::void_> struct make_reference_content;
 
+#if !defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
 
 template <typename T>
 struct make_reference_content
@@ -86,6 +92,19 @@ struct make_reference_content< T& >
     typedef reference_content<T&> type;
 };
 
+#else // defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
+
+template <typename T>
+struct make_reference_content
+    : mpl::if_<
+          is_reference<T>
+        , reference_content<T>
+        , T
+        >
+{
+};
+
+#endif // BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION workaround
 
 template <>
 struct make_reference_content< mpl::void_ >
@@ -105,6 +124,7 @@ struct make_reference_content< mpl::void_ >
 // reference_content<T&> type traits specializations
 //
 
+#if !defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
 
 template <typename T>
 struct has_nothrow_copy<
@@ -114,6 +134,7 @@ struct has_nothrow_copy<
 {
 };
 
+#endif // !defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
 
 } // namespace boost
 

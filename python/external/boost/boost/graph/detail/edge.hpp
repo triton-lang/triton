@@ -11,7 +11,11 @@
 #ifndef BOOST_GRAPH_DETAIL_EDGE_HPP
 #define BOOST_GRAPH_DETAIL_EDGE_HPP
 
+#if __GNUC__ < 3
+#include <iostream>
+#else
 #include <iosfwd>
+#endif
 
 namespace boost {
 
@@ -96,6 +100,15 @@ namespace boost {
 } // namespace boost
 
 namespace std {
+
+#if __GNUC__ < 3
+  template <class D, class V>
+  std::ostream& 
+  operator<<(std::ostream& os, const boost::detail::edge_desc_impl<D,V>& e)
+  {
+    return os << "(" << e.m_source << "," << e.m_target << ")";
+  }
+#else
   template <class Char, class Traits, class D, class V>
   std::basic_ostream<Char, Traits>& 
   operator<<(std::basic_ostream<Char, Traits>& os,
@@ -103,16 +116,8 @@ namespace std {
   {
     return os << "(" << e.m_source << "," << e.m_target << ")";
   }
-}
+#endif
 
-// Boost's functional/hash
-namespace boost {
-  template<typename D, typename V>
-  struct hash<boost::detail::edge_desc_impl<D, V> >
-  {
-    std::size_t operator()(const boost::detail::edge_desc_impl<D, V> & x) const
-    { return hash_value(x.get_property()); }
-  };
 }
 
 

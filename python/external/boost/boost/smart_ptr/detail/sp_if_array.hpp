@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Glen Joseph Fernandes 
+ * Copyright (c) 2012 Glen Joseph Fernandes 
  * glenfe at live dot com
  *
  * Distributed under the Boost Software License, 
@@ -13,18 +13,15 @@
 
 namespace boost {
     namespace detail {
-        template<class T>
+        template<typename T> 
         struct sp_if_array;
-
-        template<class T>
+        template<typename T>
         struct sp_if_array<T[]> {
             typedef boost::shared_ptr<T[]> type;
         };
-
-        template<class T>
+        template<typename T>
         struct sp_if_size_array;
-
-        template<class T, std::size_t N>
+        template<typename T, std::size_t N>
         struct sp_if_size_array<T[N]> {
             typedef boost::shared_ptr<T[N]> type;
         };

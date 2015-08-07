@@ -26,7 +26,7 @@ namespace boost
 namespace detail
 {
 
-#if !defined( BOOST_NO_CXX11_DECLTYPE ) && ( ( defined( __clang__ ) && !defined( _LIBCPP_VERSION ) ) || defined( __INTEL_COMPILER ) )
+#if defined( __clang__ ) && !defined( _LIBCPP_VERSION ) && !defined( BOOST_NO_CXX11_DECLTYPE )
 
     typedef decltype(nullptr) sp_nullptr_t;
 

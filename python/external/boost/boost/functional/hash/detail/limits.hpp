@@ -9,9 +9,8 @@
 #if !defined(BOOST_FUNCTIONAL_HASH_DETAIL_LIMITS_HEADER)
 #define BOOST_FUNCTIONAL_HASH_DETAIL_LIMITS_HEADER
 
-#include <boost/config.hpp>
-#if defined(BOOST_HAS_PRAGMA_ONCE)
-#pragma once
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+# pragma once
 #endif
 
 #include <boost/limits.hpp>

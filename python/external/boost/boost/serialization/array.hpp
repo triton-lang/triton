@@ -6,14 +6,10 @@
 // License, Version 1.0. (See accompanying file LICENSE_1_0.txt or copy at
 // http://www.boost.org/LICENSE_1_0.txt)
 
-#include <boost/config.hpp> // msvc 6.0 needs this for warning suppression
-
 #include <iostream>
 #include <cstddef> // std::size_t
-#ifndef BOOST_NO_CXX11_HDR_ARRAY
-#include <array>
-#endif
-
+#include <cstddef>
+#include <boost/config.hpp> // msvc 6.0 needs this for warning suppression
 #if defined(BOOST_NO_STDC_NAMESPACE)
 namespace std{ 
     using ::size_t; 
@@ -101,9 +97,9 @@ public:
     template<class Archive>
     void serialize(Archive &ar, const unsigned int version)
     {
-      typedef typename 
+      typedef BOOST_DEDUCED_TYPENAME 
           boost::serialization::use_array_optimization<Archive>::template apply<
-                    typename remove_const< T >::type 
+                    BOOST_DEDUCED_TYPENAME remove_const< T >::type 
                 >::type use_optimized;
       serialize_optimized(ar,version,use_optimized());
     }
@@ -132,25 +128,11 @@ array< T > make_array( T* t, std::size_t s){
     return array< T >(t, s);
 }
 
-// implement serialization for boost::array
 template <class Archive, class T, std::size_t N>
 void serialize(Archive& ar, boost::array<T,N>& a, const unsigned int /* version */)
 {
-    ar & boost::serialization::make_nvp("elems", a.elems);
+  ar & boost::serialization::make_nvp("elems",a.elems);
 }
-
-#ifndef BOOST_NO_CXX11_HDR_ARRAY
-// implement serialization for std::array
-template <class Archive, class T, std::size_t N>
-void serialize(Archive& ar, std::array<T,N>& a, const unsigned int /* version */)
-{
-    ar & boost::serialization::make_nvp(
-        "elems",
-        *static_cast<T (*)[N]>(static_cast<void *>(a.data()))
-    );
-    
-}
-#endif
 
 } } // end namespace boost::serialization
 
@@ -163,7 +145,7 @@ namespace boost { namespace serialization {                           \
 template <> struct use_array_optimization<Archive> {                  \
   template <class ValueType>                                          \
   struct apply : boost::mpl::apply1<Archive::use_array_optimization   \
-      , typename boost::remove_const<ValueType>::type   \
+      , BOOST_DEDUCED_TYPENAME boost::remove_const<ValueType>::type   \
     >::type {};                                                       \
 }; }}
 #endif // __BORLANDC__

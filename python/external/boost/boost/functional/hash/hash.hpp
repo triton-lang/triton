@@ -1,17 +1,11 @@
 
-// Copyright 2005-2014 Daniel James.
+// Copyright 2005-2009 Daniel James.
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
 //  Based on Peter Dimov's proposal
 //  http://www.open-std.org/JTC1/SC22/WG21/docs/papers/2005/n1756.pdf
 //  issue 6.18. 
-//
-//  This also contains public domain code from MurmurHash. From the
-//  MurmurHash header:
-
-// MurmurHash3 was written by Austin Appleby, and is placed in the public
-// domain. The author hereby disclaims copyright to this source code.
 
 #if !defined(BOOST_FUNCTIONAL_HASH_HASH_HPP)
 #define BOOST_FUNCTIONAL_HASH_HASH_HPP
@@ -24,7 +18,6 @@
 #include <boost/type_traits/is_enum.hpp>
 #include <boost/type_traits/is_integral.hpp>
 #include <boost/utility/enable_if.hpp>
-#include <boost/cstdint.hpp>
 
 #if defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
 #include <boost/type_traits/is_pointer.hpp>
@@ -36,13 +29,9 @@
 
 #if defined(BOOST_MSVC)
 #pragma warning(push)
-
-#if BOOST_MSVC >= 1400
 #pragma warning(disable:6295) // Ill-defined for-loop : 'unsigned int' values
                               // are always of range '0' to '4294967295'.
                               // Loop executes infinitely.
-#endif
-
 #endif
 
 #if BOOST_WORKAROUND(__GNUC__, < 3) \
@@ -50,12 +39,6 @@
 #define BOOST_HASH_CHAR_TRAITS string_char_traits
 #else
 #define BOOST_HASH_CHAR_TRAITS char_traits
-#endif
-
-#if defined(_MSC_VER)
-#   define BOOST_FUNCTIONAL_HASH_ROTL32(x, r) _rotl(x,r)
-#else
-#   define BOOST_FUNCTIONAL_HASH_ROTL32(x, r) (x << r) | (x >> (32 - r))
 #endif
 
 namespace boost
@@ -205,51 +188,6 @@ namespace boost
 
              return seed;
         }
-
-        template <typename SizeT>
-        inline void hash_combine_impl(SizeT& seed, SizeT value)
-        {
-            seed ^= value + 0x9e3779b9 + (seed<<6) + (seed>>2);
-        }
-
-        template <typename SizeT>
-        inline void hash_combine_impl(boost::uint32_t& h1,
-                boost::uint32_t k1)
-        {
-            const uint32_t c1 = 0xcc9e2d51;
-            const uint32_t c2 = 0x1b873593;
-
-            k1 *= c1;
-            k1 = BOOST_FUNCTIONAL_HASH_ROTL32(k1,15);
-            k1 *= c2;
-
-            h1 ^= k1;
-            h1 = BOOST_FUNCTIONAL_HASH_ROTL32(h1,13);
-            h1 = h1*5+0xe6546b64;
-        }
-
-
-// Don't define 64-bit hash combine on platforms with 64 bit integers,
-// and also not for 32-bit gcc as it warns about the 64-bit constant.
-#if !defined(BOOST_NO_INT64_T) && \
-        !(defined(__GNUC__) && ULONG_MAX == 0xffffffff)
-
-        template <typename SizeT>
-        inline void hash_combine_impl(boost::uint64_t& h,
-                boost::uint64_t k)
-        {
-            const uint64_t m = UINT64_C(0xc6a4a7935bd1e995);
-            const int r = 47;
-
-            k *= m;
-            k ^= k >> r;
-            k *= m;
-
-            h ^= k;
-            h *= m;
-        }
-
-#endif // BOOST_NO_INT64_T
     }
 
     template <typename T>
@@ -306,11 +244,16 @@ namespace boost
 #endif
 #endif
 
+#if BOOST_WORKAROUND(BOOST_MSVC, < 1300)
+    template <class T>
+    inline void hash_combine(std::size_t& seed, T& v)
+#else
     template <class T>
     inline void hash_combine(std::size_t& seed, T const& v)
+#endif
     {
         boost::hash<T> hasher;
-        return boost::hash_detail::hash_combine_impl(seed, hasher(v));
+        seed ^= hasher(v) + 0x9e3779b9 + (seed<<6) + (seed>>2);
     }
 
 #if defined(BOOST_MSVC)
@@ -415,6 +358,7 @@ namespace boost
     //
     // These are undefined later.
 
+#if !BOOST_WORKAROUND(BOOST_MSVC, < 1300)
 #define BOOST_HASH_SPECIALIZE(type) \
     template <> struct hash<type> \
          : public std::unary_function<type, std::size_t> \
@@ -434,6 +378,45 @@ namespace boost
             return boost::hash_value(v); \
         } \
     };
+#else
+#define BOOST_HASH_SPECIALIZE(type) \
+    template <> struct hash<type> \
+         : public std::unary_function<type, std::size_t> \
+    { \
+        std::size_t operator()(type v) const \
+        { \
+            return boost::hash_value(v); \
+        } \
+    }; \
+    \
+    template <> struct hash<const type> \
+         : public std::unary_function<const type, std::size_t> \
+    { \
+        std::size_t operator()(const type v) const \
+        { \
+            return boost::hash_value(v); \
+        } \
+    };
+
+#define BOOST_HASH_SPECIALIZE_REF(type) \
+    template <> struct hash<type> \
+         : public std::unary_function<type, std::size_t> \
+    { \
+        std::size_t operator()(type const& v) const \
+        { \
+            return boost::hash_value(v); \
+        } \
+    }; \
+    \
+    template <> struct hash<const type> \
+         : public std::unary_function<const type, std::size_t> \
+    { \
+        std::size_t operator()(type const& v) const \
+        { \
+            return boost::hash_value(v); \
+        } \
+    };
+#endif
 
     BOOST_HASH_SPECIALIZE(bool)
     BOOST_HASH_SPECIALIZE(char)
@@ -541,7 +524,6 @@ namespace boost
 }
 
 #undef BOOST_HASH_CHAR_TRAITS
-#undef BOOST_FUNCTIONAL_HASH_ROTL32
 
 #if defined(BOOST_MSVC)
 #pragma warning(pop)

@@ -2,9 +2,7 @@
 // Distributed under the Boost Software License, Version 1.0.
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
-#ifdef _MSC_VER
-#include <boost/cstdint.hpp>
-#endif
+
 #define BOOST_NUMPY_INTERNAL
 #include <boost/numpy/internal.hpp>
 
@@ -57,7 +55,6 @@ BUILTIN_INT_DTYPE(8);
 BUILTIN_INT_DTYPE(16);
 BUILTIN_INT_DTYPE(32);
 BUILTIN_INT_DTYPE(64);
-BUILTIN_FLOAT_DTYPE(16);
 BUILTIN_FLOAT_DTYPE(32);
 BUILTIN_FLOAT_DTYPE(64);
 BUILTIN_COMPLEX_DTYPE(64);
@@ -90,32 +87,10 @@ python::detail::new_reference dtype::convert(python::object const & arg, bool al
 int dtype::get_itemsize() const { return reinterpret_cast<PyArray_Descr*>(ptr())->elsize;}
 
 bool equivalent(dtype const & a, dtype const & b) {
-    // On Windows x64, the behaviour described on 
-    // http://docs.scipy.org/doc/numpy/reference/c-api.array.html for
-    // PyArray_EquivTypes unfortunately does not extend as expected:
-    // "For example, on 32-bit platforms, NPY_LONG and NPY_INT are equivalent".
-    // This should also hold for 64-bit platforms (and does on Linux), but not
-    // on Windows. Implement an alternative:
-#ifdef _MSC_VER
-    if (sizeof(long) == sizeof(int) &&
-        // Manually take care of the type equivalence.
-        ((a == dtype::get_builtin<long>() || a == dtype::get_builtin<int>()) &&
-         (b == dtype::get_builtin<long>() || b == dtype::get_builtin<int>()) ||
-         (a == dtype::get_builtin<unsigned int>() || a == dtype::get_builtin<unsigned long>()) &&
-         (b == dtype::get_builtin<unsigned int>() || b == dtype::get_builtin<unsigned long>()))) {
-        return true;
-    } else {
-        return PyArray_EquivTypes(
-            reinterpret_cast<PyArray_Descr*>(a.ptr()),
-            reinterpret_cast<PyArray_Descr*>(b.ptr())
-        );
-    }
-#else
     return PyArray_EquivTypes(
         reinterpret_cast<PyArray_Descr*>(a.ptr()),
         reinterpret_cast<PyArray_Descr*>(b.ptr())
     );
-#endif
 }
 
 namespace {
@@ -139,13 +114,9 @@ public:
   static void * convertible(PyObject * obj) {
 	if (obj->ob_type == get_pytype()) {
 	  return obj;
-	} else {
-        dtype dt(python::detail::borrowed_reference(obj->ob_type));
-        if (equivalent(dt, dtype::get_builtin<T>())) {
-            return obj;
-        }
+	} else { 
+	  return 0;
 	}
-    return 0;
   }
 
   static void convert(PyObject * obj, pyconv::rvalue_from_python_stage1_data* data) {
@@ -177,13 +148,6 @@ void dtype::register_scalar_converters() {
   array_scalar_converter<npy_int16>::declare();
   array_scalar_converter<npy_uint32>::declare();
   array_scalar_converter<npy_int32>::declare();
-#ifdef _MSC_VER
-  // Since the npy_(u)int32 types are defined as long types and treated
-  // as being different from the int32 types, these converters must be declared
-  // explicitely.
-  array_scalar_converter<boost::uint32_t>::declare();
-  array_scalar_converter<boost::int32_t>::declare();
-#endif
   array_scalar_converter<npy_uint64>::declare();
   array_scalar_converter<npy_int64>::declare();
   array_scalar_converter<float>::declare();

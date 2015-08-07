@@ -17,11 +17,6 @@
 #include <boost/type_traits/detail/bool_trait_def.hpp>
 #include <boost/detail/workaround.hpp>
 
-#if defined(BOOST_MSVC) && (BOOST_MSVC >= 1700)
-#pragma warning(push)
-#pragma warning(disable:4250)
-#endif
-
 namespace boost{
 
 #ifndef BOOST_IS_POLYMORPHIC
@@ -115,9 +110,5 @@ BOOST_TT_AUX_BOOL_TRAIT_DEF1(is_polymorphic,T,BOOST_IS_POLYMORPHIC(T))
 } // namespace boost
 
 #include <boost/type_traits/detail/bool_trait_undef.hpp>
-
-#if defined(BOOST_MSVC) && (BOOST_MSVC >= 1700)
-#pragma warning(pop)
-#endif
 
 #endif

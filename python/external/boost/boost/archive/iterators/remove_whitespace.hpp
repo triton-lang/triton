@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_REMOVE_WHITESPACE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
 # pragma once
 #endif
 
@@ -18,11 +18,16 @@
 
 #include <boost/assert.hpp>
 
+#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME
+
 #include <boost/serialization/pfto.hpp>
 
 #include <boost/iterator/iterator_adaptor.hpp>
 #include <boost/iterator/filter_iterator.hpp>
 #include <boost/iterator/iterator_traits.hpp>
+
+//#include <boost/detail/workaround.hpp>
+//#if ! BOOST_WORKAROUND(BOOST_MSVC, <=1300)
 
 // here is the default standard implementation of the functor used
 // by the filter iterator to remove spaces.  Unfortunately usage
@@ -47,6 +52,8 @@ namespace std{ using ::isspace; }
 #undef isspace
 #undef iswspace
 #endif
+
+//#endif // BOOST_WORKAROUND
 
 namespace { // anonymous
 
@@ -93,14 +100,14 @@ class filter_iterator
     >
 {
     friend class boost::iterator_core_access;
-    typedef typename boost::iterator_adaptor<
+    typedef BOOST_DEDUCED_TYPENAME boost::iterator_adaptor<
         filter_iterator<Predicate, Base>,
         Base,
         use_default,
         single_pass_traversal_tag
     > super_t;
     typedef filter_iterator<Predicate, Base> this_t;
-    typedef typename super_t::reference reference_type;
+    typedef BOOST_DEDUCED_TYPENAME super_t::reference reference_type;
 
     reference_type dereference_impl(){
         if(! m_full){
@@ -135,8 +142,8 @@ template<class Base>
 class remove_whitespace : 
     public filter_iterator<
         remove_whitespace_predicate<
-            typename boost::iterator_value<Base>::type
-            //typename Base::value_type
+            BOOST_DEDUCED_TYPENAME boost::iterator_value<Base>::type
+            //BOOST_DEDUCED_TYPENAME Base::value_type
         >,
         Base
     >
@@ -144,8 +151,8 @@ class remove_whitespace :
     friend class boost::iterator_core_access;
     typedef filter_iterator<
         remove_whitespace_predicate<
-            typename boost::iterator_value<Base>::type
-            //typename Base::value_type
+            BOOST_DEDUCED_TYPENAME boost::iterator_value<Base>::type
+            //BOOST_DEDUCED_TYPENAME Base::value_type
         >,
         Base
     > super_t;

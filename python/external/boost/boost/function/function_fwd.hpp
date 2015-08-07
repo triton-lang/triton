@@ -19,7 +19,8 @@ namespace boost { namespace python { namespace objects {
 }}}
 #endif
 
-#if defined(BOOST_BCB_PARTIAL_SPECIALIZATION_BUG)                         \
+#if defined (BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)                    \
+ || defined(BOOST_BCB_PARTIAL_SPECIALIZATION_BUG)                         \
  || !(defined(BOOST_STRICT_CONFIG) || !defined(__SUNPRO_CC) || __SUNPRO_CC > 0x540)
 #  define BOOST_FUNCTION_NO_FUNCTION_TYPE_SYNTAX
 #endif

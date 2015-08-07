@@ -41,7 +41,7 @@ struct is_wrapper_impl :
 
 template<class T>
 struct is_wrapper {
-    typedef typename is_wrapper_impl<const T>::type type;
+    typedef BOOST_DEDUCED_TYPENAME is_wrapper_impl<const T>::type type;
 };
 
 } // serialization

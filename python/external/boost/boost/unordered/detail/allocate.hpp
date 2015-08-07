@@ -9,9 +9,8 @@
 #ifndef BOOST_UNORDERED_ALLOCATE_HPP
 #define BOOST_UNORDERED_ALLOCATE_HPP
 
-#include <boost/config.hpp>
-#if defined(BOOST_HAS_PRAGMA_ONCE)
-#pragma once
+#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+# pragma once
 #endif
 
 #include <boost/unordered/detail/fwd.hpp>
@@ -880,7 +879,7 @@ namespace boost { namespace unordered { namespace detail { namespace func {
 #   define BOOST_UNORDERED_CONSTRUCT_FROM_TUPLE(n, namespace_)              \
     template<typename Alloc, typename T>                                    \
     void construct_from_tuple_impl(                                         \
-            boost::unordered::detail::func::length<0>, Alloc&, T* ptr,      \
+            boost::unordered::detail::length<0>, Alloc&, T* ptr,            \
             namespace_ tuple<>)                                             \
     {                                                                       \
         new ((void*) ptr) T();                                              \
@@ -893,7 +892,7 @@ namespace boost { namespace unordered { namespace detail { namespace func {
     template<typename Alloc, typename T,                                    \
         BOOST_PP_ENUM_PARAMS_Z(z, n, typename A)>                           \
     void construct_from_tuple_impl(                                         \
-            boost::unordered::detail::func::length<n>, Alloc&, T* ptr,      \
+            boost::unordered::detail::length<n>, Alloc&, T* ptr,            \
             namespace_ tuple<BOOST_PP_ENUM_PARAMS_Z(z, n, A)> const& x)     \
     {                                                                       \
         new ((void*) ptr) T(                                                \
@@ -922,7 +921,7 @@ BOOST_UNORDERED_CONSTRUCT_FROM_TUPLE(10, boost::)
     void construct_from_tuple(Alloc& alloc, T* ptr, Tuple const& x)
     {
         construct_from_tuple_impl(
-            boost::unordered::detail::func::length<
+            boost::unordered::detail::length<
                 boost::tuples::length<Tuple>::value>(),
             alloc, ptr, x);
     }
@@ -1081,10 +1080,8 @@ namespace boost { namespace unordered { namespace detail {
 
         ~array_constructor() {
             if (ptr_) {
-                for(pointer p = ptr_; p != constructed_; ++p) {
-                    boost::unordered::detail::func::destroy(
-                            boost::addressof(*p));
-                }
+                for(pointer p = ptr_; p != constructed_; ++p)
+                    traits::destroy(alloc_, boost::addressof(*p));
 
                 traits::deallocate(alloc_, ptr_, length_);
             }
@@ -1097,9 +1094,8 @@ namespace boost { namespace unordered { namespace detail {
             length_ = l;
             ptr_ = traits::allocate(alloc_, length_);
             pointer end = ptr_ + static_cast<std::ptrdiff_t>(length_);
-            for(constructed_ = ptr_; constructed_ != end; ++constructed_) {
-                new ((void*) boost::addressof(*constructed_)) V(v);
-            }
+            for(constructed_ = ptr_; constructed_ != end; ++constructed_)
+                traits::construct(alloc_, boost::addressof(*constructed_), v);
         }
 
         pointer get() const
