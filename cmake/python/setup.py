@@ -91,7 +91,7 @@ def main():
     #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
-    cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT'] + ' -DNPY_NO_DEPRECATED_API NPY_1_7_API_VERSION'
+    cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT'] + ' -Wno-attributes -DBOOST_PYTHON_SOURCE '
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
     #OpenCL
