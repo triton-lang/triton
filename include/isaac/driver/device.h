@@ -20,7 +20,7 @@ private:
   friend class CommandQueue;
 
 public:
-  enum class ISAACAPI Vendor
+  enum class Vendor
   {
       AMD,
       INTEL,
@@ -28,7 +28,7 @@ public:
       UNKNOWN
   };
 
-  enum class ISAACAPI Architecture
+  enum class Architecture
   {
       HASWELL,
       BROADWELL,

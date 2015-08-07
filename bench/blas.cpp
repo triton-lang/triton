@@ -18,7 +18,6 @@
 #include "timer.hpp"
 
 
-#define HAS_A_BLAS defined(BENCH_CBLAS) or defined(BENCH_CLBLAS) or defined(BENCH_CUBLAS)
 namespace isc = isaac;
 typedef isc::int_t int_t;
 
