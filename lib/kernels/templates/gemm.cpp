@@ -599,7 +599,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     }
 
     driver::Kernel gemm(program, gemm_name.c_str());
-    driver::NDRange local(p_.local_size_0, p_.local_size_1);
+    driver::NDRange local(p_.local_size_0, p_.local_size_1, 1);
 
     driver::NDRange global(align(align(M,p_.mS)/p_.mS, p_.local_size_0), align(align(N,p_.nS)/p_.nS, p_.local_size_1), p_.depth);
 
@@ -690,7 +690,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
   void gemm::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback_base, controller<expressions_tuple> const & ctr)
   {
     using namespace tools;
-//    std::cout << p_.simd_width << " " << p_.mL << " " << p_.kL << " " << p_.mS << " " << p_.depth << " " << p_.local_size_0 << std::endl;
 
     gemm & fallback = (gemm&)fallback_base;
     expressions_tuple const & expressions = ctr.x();
