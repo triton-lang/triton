@@ -7,16 +7,30 @@ namespace isaac
 namespace driver
 {
 
+NDRange::NDRange(size_t size0)
+{
+    sizes_[0] = size0;
+    dimension_ = 1;
+}
+
+NDRange::NDRange(size_t size0, size_t size1)
+{
+    sizes_[0] = size0;
+    sizes_[1] = size1;
+    dimension_ = 2;
+}
+
 NDRange::NDRange(size_t size0, size_t size1, size_t size2)
 {
     sizes_[0] = size0;
     sizes_[1] = size1;
     sizes_[2] = size2;
+    dimension_ = 3;
 }
 
-size_t NDRange::dimension() const
+int NDRange::dimension() const
 {
- return std::max(1,(int)(sizes_[0]>1) + (int)(sizes_[1]>1) + (int)(sizes_[2]>1));
+ return dimension_;
 }
 
 NDRange::operator const size_t*() const
