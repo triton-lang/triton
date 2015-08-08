@@ -46,22 +46,22 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     return N*size_of(numeric_t);
   }
 
-  int gemm::is_invalid_impl(driver::Device const &, expressions_tuple const & ) const
+  int gemm::is_invalid_impl(driver::Device const &, expressions_tuple const & expressions) const
   {
-//    std::vector<int_t> MNK = input_sizes(expressions);
-//    int_t M = MNK[0]; int_t N = MNK[1];
+    std::vector<int_t> MNK = input_sizes(expressions);
+    int_t M = MNK[0]; int_t N = MNK[1];
 
     if(p_.A_fetching_policy!=FETCH_FROM_LOCAL || p_.B_fetching_policy!=FETCH_FROM_LOCAL)
-      throw operation_not_supported_exception("Only local memory is supported for GEMM");
+      return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
 
-//    if(p_.depth > 1 && M*N*p_.depth > 2e6)
-//      throw operation_not_supported_exception("This would necessitate a temporary larger than 1MB");
+    if(p_.depth > 1 && M*N*p_.depth > 2e6)
+      return TEMPLATE_TEMPORARY_TOO_LARGE;
 
     if ((p_.mS % p_.simd_width) > 0 || (p_.nS % p_.simd_width) > 0)
       return TEMPLATE_MS_NS_MUST_BE_SIMD_WIDTH_MULTIPLE;
 
     if(p_.mL > 256 || p_.nL > 256)
-       return 1;
+       return TEMPLATE_BLOCK_SIZE_TOO_LARGE;
 
     if ( p_.kS % p_.kL == 0)
       return TEMPLATE_KS_MUST_BE_SMALLER_THAN_KL;
