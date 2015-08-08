@@ -117,7 +117,10 @@ void model::execute(controller<expressions_tuple> const & expr)
   else if(predictor_.get())
   {
     std::vector<float> predictions = predictor_->predict(x);
-    label = std::distance(predictions.begin(),std::max_element(predictions.begin(), predictions.end()));
+    do{
+        label = std::distance(predictions.begin(),std::max_element(predictions.begin(), predictions.end()));
+        predictions[label] = 0;
+    }while(templates_[label]->is_invalid(expr.x(),queue_.device()));
   }
 
   //Execution
