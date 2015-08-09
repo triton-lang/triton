@@ -85,7 +85,7 @@
 #if defined(_WIN32) || defined(__CYGWIN__)
 # if defined(__GNUC__) && defined(__CYGWIN__)
 
-#  define SIZEOF_LONG 4
+// #  define SIZEOF_LONG 4
 
 #  if PY_MAJOR_VERSION < 2 || PY_MAJOR_VERSION == 2 && PY_MINOR_VERSION <= 2
 
