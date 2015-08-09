@@ -48,10 +48,12 @@ void export_templates()
     #undef __PROP
   }
 
-  #define WRAP_BASE(name) bp::class_<tpt::base_impl<tpt::name, tpt::name::parameters_type>, bp::bases<tpt::base>, boost::noncopyable>(#name, bp::no_init);
+  #define WRAP_BASE(name) bp::class_<tpt::base_impl<tpt::name, tpt::name::parameters_type>, bp::bases<tpt::base>, boost::noncopyable>(#name, bp::no_init)\
+                                      .add_property("local_size_0", &tpt::base_impl<tpt::name, tpt::name::parameters_type>::local_size_0)\
+                                      .add_property("local_size_0", &tpt::base_impl<tpt::name, tpt::name::parameters_type>::local_size_1);
+
   #define WRAP_TEMPLATE(name, basename, ...) bp::class_<tpt::name, bp::bases<tpt::base_impl<tpt::basename, tpt::basename::parameters_type> > >(#name, bp::init<__VA_ARGS__>())\
-                                      .add_property("local_size_0", &tpt::name::local_size_0)\
-                                      .add_property("local_size_1", &tpt::name::local_size_1);
+                                      ;
   #define WRAP_SINGLE_TEMPLATE(name, ...) WRAP_BASE(name) WRAP_TEMPLATE(name, name, __VA_ARGS__)
 
   //Vector AXPY
