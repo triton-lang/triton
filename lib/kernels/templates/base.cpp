@@ -73,6 +73,9 @@ unsigned int base::lmem_usage(expressions_tuple const &) const
 unsigned int base::registers_usage(expressions_tuple const &) const
 { return 0; }
 
+unsigned int base::temporary_workspace(expressions_tuple const &) const
+{ return 0; }
+
 base::~base()
 { }
 
@@ -81,7 +84,8 @@ std::string base::generate(std::string const & suffix, expressions_tuple const &
   expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::iterator mit;
 
-  if(int err = is_invalid(expressions, device))
+  int err = is_invalid(expressions, device);
+  if(err != 0 && err != TEMPLATE_TEMPORARY_TOO_LARGE)
     throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
 
   //Create mapping
@@ -141,6 +145,10 @@ int base_impl<TType, PType>::is_invalid(expressions_tuple const & expressions, d
   //Invalid SIMD Width
   if (p_.simd_width!=1 && p_.simd_width!=2 && p_.simd_width!=3 && p_.simd_width!=4)
     return TEMPLATE_INVALID_SIMD_WIDTH;
+
+  //Temporary workspace
+  if(temporary_workspace(expressions) > 2e6)
+      return TEMPLATE_TEMPORARY_TOO_LARGE;
 
   return is_invalid_impl(device, expressions);
 }

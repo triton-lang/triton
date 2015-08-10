@@ -42,6 +42,7 @@ struct gemm_parameters : public base::parameters_type
 class gemm : public base_impl<gemm, gemm_parameters>
 {
 private:
+  unsigned int temporary_workspace(expressions_tuple const & expressions) const;
   unsigned int lmem_usage(expressions_tuple const & expressions) const;
   unsigned int registers_usage(expressions_tuple const & expressions) const;
   int is_invalid_impl(driver::Device const &, expressions_tuple const &) const;

@@ -67,6 +67,7 @@ private:
   virtual std::string generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mapping) const = 0;
 public:
   base(binding_policy_t binding_policy);
+  virtual unsigned int temporary_workspace(expressions_tuple const &) const;
   virtual unsigned int lmem_usage(expressions_tuple const &) const;
   virtual unsigned int registers_usage(expressions_tuple const &) const;
   virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions) const = 0;

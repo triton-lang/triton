@@ -265,7 +265,6 @@ void bench(isc::numeric_type dtype, std::string operation)
   #endif
       std::cout << std::endl;
     }
-    std::cout << "\n\n" << std::flush;
   }
 
   if(operation.substr(0, 4)=="gemv")
@@ -334,6 +333,8 @@ void bench(isc::numeric_type dtype, std::string operation)
     MNKs.push_back(std::make_tuple('N','N',169,384,2304));
     MNKs.push_back(std::make_tuple('N','N',169,192,1728));
     MNKs.push_back(std::make_tuple('N','N',169,128,1728));
+    MNKs.push_back(std::make_tuple('N','T',256,4096,9216));
+
     //AlexNet (Backward)
     MNKs.push_back(std::make_tuple('T','N',1728,128,169));
     MNKs.push_back(std::make_tuple('T','N',1728,192,169));
