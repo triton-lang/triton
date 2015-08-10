@@ -322,7 +322,6 @@ void bench(isc::numeric_type dtype, std::string operation)
     #endif
         std::cout << std::endl;
       }
-      std::cout << "\n\n" << std::flush;
   }
 
   if(operation.substr(0,4)=="gemm")
