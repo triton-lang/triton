@@ -124,6 +124,7 @@ void model::execute(controller<expressions_tuple> const & expr)
   }
 
   //Execution
+//  std::cout << std::endl << "Label: " << label << std::endl;
   return templates_[label]->enqueue(queue_, program, tools::to_string(label), *fallback_, expr);
 }
 
