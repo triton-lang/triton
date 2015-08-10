@@ -270,46 +270,52 @@ void bench(isc::numeric_type dtype, std::string operation)
 
   if(operation.substr(0, 4)=="gemv")
   {
-    std::vector<std::tuple<int_t, int_t> > MNs;
-    MNs.push_back(std::make_tuple(896,896));
-    MNs.push_back(std::make_tuple(3072,3072));
-    MNs.push_back(std::make_tuple(64,32000));
-    MNs.push_back(std::make_tuple(896,32000));
-    MNs.push_back(std::make_tuple(32000, 64));
-    MNs.push_back(std::make_tuple(32000, 896));
+    std::vector<std::tuple<char,int_t, int_t> > MNs;
+    MNs.push_back(std::make_tuple('N',896,896));
+    MNs.push_back(std::make_tuple('N',3072,3072));
+    //AlexNet
+    MNs.push_back(std::make_tuple('N',1000,256));
+    MNs.push_back(std::make_tuple('N',4096,256));
+    MNs.push_back(std::make_tuple('T',169,256));
+    MNs.push_back(std::make_tuple('T',169,384));
+    MNs.push_back(std::make_tuple('T',729,256));
+    MNs.push_back(std::make_tuple('T',3025,96));
 
     /*---------*/
     /*--BLAS2--*/
     /*---------*/
     //T-layout
-    for(std::tuple<int_t, int_t> MN: MNs)
+    for(std::tuple<char, int_t, int_t> MN: MNs)
     {
-        int_t M = std::get<0>(MN);
-        int_t N = std::get<1>(MN);
-        std::cout << M << "," << N;
+        bool AT = std::get<0>(MN) == 'T';
+        int_t M = std::get<1>(MN);
+        int_t N = std::get<2>(MN);
+        std::cout << MN << ",";
+        int_t As1 = M, As2 = N;
+        if(AT) std::swap(As1, As2);
+
         /* ISAAC */
-        isc::array A(N, M, dtype), y(M, dtype), x(N, dtype);
+        isc::array A(As1, As2, dtype), y(M, dtype), x(N, dtype);
     #ifdef HAS_A_BLAS
         int_t lda = A.ld();
     #endif
-        y = dot(trans(A),x); queue.synchronize();
-        BENCHMARK_ISAAC(y = isc::control(dot(trans(A),x), isc::execution_options_type(0, &events)),(M*N + M + N)*dtsize/t);
+        BENCHMARK_ISAAC(y = isc::control(AT?dot(A.T(),x):dot(A,x), isc::execution_options_type(0, &events)),(M*N + M + N)*dtsize/t);
     #ifdef BENCH_CLBLAS
-        BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, clblasTrans, N, M, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, &event), (M*N + M + N)*dtsize/t)
+        BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, As1, As2, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, &event), (M*N + M + N)*dtsize/t)
     #endif
     #ifdef BENCH_CBLAS
-        std::vector<float> cA(N*M), cx(N), cy(M);
+        std::vector<float> cA(M*N), cx(N), cy(M);
         isc::copy(x, cx);
         isc::copy(y, cy);
         isc::copy(A, cA);
-        BENCHMARK_HOST(cblas_sgemv(CblasColMajor, CblasTrans, N, M, 1, cA.data(), lda, cx.data(), 1, 0, cy.data(), 1), (M*N + M + N)*dtsize/t);
+        BENCHMARK_HOST(cblas_sgemv(CblasColMajor, AT?CblasTrans:CblasNoTrans, As1, As2, 1, cA.data(), lda, cx.data(), 1, 0, cy.data(), 1), (M*N + M + N)*dtsize/t);
     #endif
     #ifdef BENCH_CUBLAS
         T *cuA, *cux, *cuy;
         cudaMalloc((void**) &cuA, N * M * sizeof(T));
         cudaMalloc((void**) &cux, N * sizeof(T));
         cudaMalloc((void**) &cuy, M * sizeof(T));
-        BENCHMARK_CUDA(cublasSgemv('t', N, M, 1, cuA, lda, cux, 1, 0, cuy, 1), (M*N + M + N)*dtsize/t)
+        BENCHMARK_CUDA(cublasSgemv(AT?'t':'n', As1, As2, 1, cuA, lda, cux, 1, 0, cuy, 1), (M*N + M + N)*dtsize/t)
         cudaFree(cuA);
         cudaFree(cux);
         cudaFree(cuy);
