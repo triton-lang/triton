@@ -74,7 +74,7 @@ namespace tools
         else if(name=="ger") return isc::GER_TYPE;
         else if(name=="dot") return isc::DOT_TYPE;
         else if(name=="gemv_n") return isc::GEMV_N_TYPE;
-        else if(name=="gemm_t") return isc::GEMV_T_TYPE;
+        else if(name=="gemv_t") return isc::GEMV_T_TYPE;
         else if(name=="gemm_nn") return isc::GEMM_NN_TYPE;
         else if(name=="gemm_tn") return isc::GEMM_TN_TYPE;
         else if(name=="gemm_nt") return isc::GEMM_NT_TYPE;
