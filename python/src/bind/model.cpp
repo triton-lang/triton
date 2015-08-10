@@ -50,7 +50,7 @@ void export_templates()
 
   #define WRAP_BASE(name) bp::class_<tpt::base_impl<tpt::name, tpt::name::parameters_type>, bp::bases<tpt::base>, boost::noncopyable>(#name, bp::no_init)\
                                       .add_property("local_size_0", &tpt::base_impl<tpt::name, tpt::name::parameters_type>::local_size_0)\
-                                      .add_property("local_size_0", &tpt::base_impl<tpt::name, tpt::name::parameters_type>::local_size_1);
+                                      .add_property("local_size_1", &tpt::base_impl<tpt::name, tpt::name::parameters_type>::local_size_1);
 
   #define WRAP_TEMPLATE(name, basename, ...) bp::class_<tpt::name, bp::bases<tpt::base_impl<tpt::basename, tpt::basename::parameters_type> > >(#name, bp::init<__VA_ARGS__>())\
                                       ;
