@@ -88,8 +88,7 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
   process(stream, PARENT_NODE_TYPE,
                         {{"array0", "#scalartype #namereg = #pointer[#start];"},
                          {"array1", "#pointer += #start;"},
-                         {"array2", "#pointer += #start1 + #start2*#ld; "
-                                    "#ld *= #nldstride; "}}, expressions, mappings);
+                         {"array2", "#pointer += #start;"}}, expressions, mappings);
 
   unsigned int local_size_0_ld = p_.local_size_0;
   std::string local_size_0_ld_str = to_string(local_size_0_ld);
@@ -128,12 +127,12 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
       std::map<std::string, std::string> accessors;
       if(dot_type_==REDUCE_COLUMNS)
       {
-        accessors["array2"] = data_type + " #namereg = " + vload(simd_width, "#scalartype", "c*#stride1", "#pointer + r*#ld", backend)+";";
+        accessors["array2"] = data_type + " #namereg = " + vload(simd_width, "#scalartype", "c*#stride", "#pointer + r*#ld", backend)+";";
         accessors["repeat"] = data_type + " #namereg = " + vload(simd_width, "#scalartype", "(c%#tuplearg0)*#stride", "#pointer + (r%#tuplearg1)*#stride ", backend)+";";
       }
       else
       {
-        accessors["array2"] = "#scalartype #namereg = #pointer[r*#stride1 + c*#ld];";
+        accessors["array2"] = "#scalartype #namereg = #pointer[r*#stride + c*#ld];";
         accessors["repeat"] = "#scalartype #namereg = $VALUE{(r%#tuplearg0)*#stride, (c%#tuplearg1)*#stride};";
       }
       e->process_recursive(stream, PARENT_NODE_TYPE, accessors);
@@ -234,8 +233,7 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
   process(stream, PARENT_NODE_TYPE,
                         {{"array0", "#scalartype #namereg = #pointer[#start];"},
                          {"array1", "#pointer += #start;"},
-                         {"array2", "#pointer += #start1 + #start2*#ld; "
-                                    "#ld *= #nldstride; "}}, expressions, mappings);
+                         {"array2", "#pointer += #start; "}}, expressions, mappings);
 
   for (const auto & e : dots)
     stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;

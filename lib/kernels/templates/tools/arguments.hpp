@@ -22,7 +22,7 @@ inline std::string generate_arguments(std::string const & data_type, driver::Dev
     process(stream, PARENT_NODE_TYPE, { {"array0", kwglobal + " #scalartype* #pointer, " + _size_t + " #start,"},
                                         {"host_scalar", "#scalartype #name,"},
                                         {"array1", kwglobal + " " + data_type + "* #pointer, " + _size_t + " #start, " + _size_t + " #stride,"},
-                                        {"array2", kwglobal + " " + data_type + "* #pointer, " + _size_t + " #ld, " + _size_t + " #start1, " + _size_t + " #start2, " + _size_t + " #stride1, " + _size_t + " #stride2,"},
+                                        {"array2", kwglobal + " " + data_type + "* #pointer, " + _size_t + " #ld, " + _size_t + " #start, " + _size_t + " #stride, "},
                                         {"tuple4", "#scalartype #name0, #scalartype #name1, #scalartype #name2, #scalartype #name3,"}}
             , expressions, mappings);
 
@@ -81,11 +81,9 @@ public:
             }
             else
             {
-                kernel_.setSizeArg(current_arg_++, a->ld());
-                kernel_.setSizeArg(current_arg_++, a->start()[0]);
-                kernel_.setSizeArg(current_arg_++, a->start()[1]);
+                kernel_.setSizeArg(current_arg_++, a->ld()*a->stride()[1]);
+                kernel_.setSizeArg(current_arg_++, a->start()[0] + a->start()[1]*a->ld());
                 kernel_.setSizeArg(current_arg_++, a->stride()[0]);
-                kernel_.setSizeArg(current_arg_++, a->stride()[1]);
             }
         }
     }

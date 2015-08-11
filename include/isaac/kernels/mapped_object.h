@@ -180,10 +180,8 @@ public:
   mapped_array(std::string const & scalartype, unsigned int id, char type);
 private:
   std::string ld_;
-  std::string start1_;
-  std::string start2_;
-  std::string stride1_;
-  std::string stride2_;
+  std::string start_;
+  std::string stride_;
   char type_;
 };
 

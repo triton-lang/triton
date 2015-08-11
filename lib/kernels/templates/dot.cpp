@@ -140,9 +140,9 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
     //Fetch vector entry
     for (const auto & elem : exprs)
       (elem)->process_recursive(stream, PARENT_NODE_TYPE, {{"array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,"#scalartype",i,"#pointer",backend)+";"},
-                                                           {"matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i*#stride2}];"},
-                                                           {"matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column*#stride2}];"},
-                                                           {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i*#stride2}:$OFFSET{i*#stride, (i + #diag_offset)*#stride2}];"}});
+                                                           {"matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i}];"},
+                                                           {"matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column}];"},
+                                                           {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i}:$OFFSET{i*#stride, (i + #diag_offset)}];"}});
 
     //Update accumulators
     std::vector<std::string> str(simd_width);

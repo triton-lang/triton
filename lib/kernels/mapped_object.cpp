@@ -210,21 +210,18 @@ mapped_array::mapped_array(std::string const & scalartype, unsigned int id, char
 {
   if(type_ == 's')
   {
-    register_attribute(start1_, "#start", name_ + "_start");
+    register_attribute(start_, "#start", name_ + "_start");
   }
   else if(type_=='m')
   {
-    register_attribute(start1_, "#start1", name_ + "_start1");
-    register_attribute(start2_, "#start2", name_ + "_start2");
-    register_attribute(stride1_, "#stride1", name_ + "_stride1");
-    register_attribute(stride2_, "#stride2", name_ + "_stride2");
+    register_attribute(start_, "#start", name_ + "_start");
+    register_attribute(stride_, "#stride", name_ + "_stride");
     register_attribute(ld_, "#ld", name_ + "_ld");
-    keywords_["#nldstride"] = "#stride2";
   }
   else
   {
-    register_attribute(start1_, "#start", name_ + "_start");
-    register_attribute(stride1_, "#stride", name_ + "_stride");
+    register_attribute(start_, "#start", name_ + "_start");
+    register_attribute(stride_, "#stride", name_ + "_stride");
   }
 
 }

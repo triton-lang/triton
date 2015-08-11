@@ -65,9 +65,9 @@ std::string axpy::generate_impl(std::string const & suffix, expressions_tuple co
   stream << "{" << std::endl;
   stream.inc_tab();
   process(stream, PARENT_NODE_TYPE, {{"array1", dtype + " #namereg = #pointer[i*#stride];"},
-                                     {"matrix_row", "#scalartype #namereg = $VALUE{#row*#stride1, i*#stride2};"},
-                                     {"matrix_column", "#scalartype #namereg = $VALUE{i*#stride1,#column*#stride2};"},
-                                     {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride1, i*#stride2}:$OFFSET{i*#stride1, (i + #diag_offset)*#stride2}];"}}, expressions, mappings);
+                                     {"matrix_row", "#scalartype #namereg = $VALUE{#row*#stride, i};"},
+                                     {"matrix_column", "#scalartype #namereg = $VALUE{i*#stride,#column};"},
+                                     {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i}:$OFFSET{i*#stride, (i + #diag_offset)}];"}}, expressions, mappings);
 
 
   evaluate(stream, PARENT_NODE_TYPE, {{"array0", "#namereg"}, {"array1", "#namereg"},
@@ -79,7 +79,7 @@ std::string axpy::generate_impl(std::string const & suffix, expressions_tuple co
   process(stream, LHS_NODE_TYPE, {{"array1", "#pointer[i*#stride] = #namereg;"},
                                   {"matrix_row", "$VALUE{#row, i} = #namereg;"},
                                   {"matrix_column", "$VALUE{i, #column} = #namereg;"},
-                                  {"matrix_diag", "#diag_offset<0?$VALUE{(i - #diag_offset)*#stride1, i*#stride2}:$VALUE{i*#stride1, (i + #diag_offset)*#stride2} = #namereg;"}}, expressions, mappings);
+                                  {"matrix_diag", "#diag_offset<0?$VALUE{(i - #diag_offset)*#stride, i}:$VALUE{i*#stride, (i + #diag_offset)} = #namereg;"}}, expressions, mappings);
 
   stream.dec_tab();
   stream << "}" << std::endl;
