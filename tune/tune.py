@@ -163,8 +163,8 @@ def parse_arguments():
     operation = {'axpy': isc.templates.axpy, 'dot': isc.templates.dot,
                  'ger': isc.templates.ger, 'gemv_n': isc.templates.gemv_n, 'gemv_t': isc.templates.gemv_t,
                  'gemm_nn': isc.templates.gemm_nn, 'gemm_tn': isc.templates.gemm_tn, 'gemm_nt': isc.templates.gemm_nt, 'gemm_tt':isc.templates.gemm_tt}[args.operation]
-    if not args.json:
-        json = tools.sanitize(device.name) + '.json'
+    json = tools.sanitize(device.name) + '.json' if not args.json else args.json
+        
     return (device, operation, json)
         
             
