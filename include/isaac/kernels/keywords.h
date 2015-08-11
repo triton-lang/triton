@@ -22,10 +22,13 @@ static inline std::string size_type(driver::Device const & device)
   switch(device.backend())
   {
 #ifdef ISAAC_WITH_CUDA
-    case driver::CUDA: return "int";
+    case driver::CUDA:
+      return "int";
 #endif
-    case driver::OPENCL: return device.address_bits()==32?"int":"long";
-    default: throw;
+    case driver::OPENCL:
+      return "int";
+    default:
+      throw;
   }
 }
 
