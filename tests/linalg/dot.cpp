@@ -71,8 +71,8 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 {
   using isaac::_;
 
-  int_t N =2 ;
-  int_t SUBN = 2;
+  int_t N = 10007;
+  int_t SUBN = 7;
 
   INIT_VECTOR(N, SUBN, 0, 1, cx, x, ctx);
   INIT_VECTOR(N, SUBN, 0, 1, cy, y, ctx);

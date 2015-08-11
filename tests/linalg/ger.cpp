@@ -104,10 +104,10 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 {
   using isaac::_;
 
-  int_t M = 1324;
-  int_t N = 1143;
-  int_t SUBM = 184;
-  int_t SUBN = 145;
+  int_t M = 173;
+  int_t N = 241;
+  int_t SUBM = 7;
+  int_t SUBN = 11;
 
   INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cA, A, ctx);
   INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cB, B, ctx);
