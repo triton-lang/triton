@@ -1,6 +1,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <algorithm>
 #include "isaac/kernels/mapped_object.h"
 #include "isaac/kernels/parse.h"
 #include "isaac/array.h"
