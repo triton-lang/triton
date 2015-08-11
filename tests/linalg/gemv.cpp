@@ -92,10 +92,10 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 template<typename T>
 void test_impl(T epsilon, isc::driver::Context const & ctx)
 {
-  int_t M = 1324;
-  int_t N = 1143;
-  int_t SUBM = 184;
-  int_t SUBN = 145;
+  int_t M = 173;
+  int_t N = 241;
+  int_t SUBM = 7;
+  int_t SUBN = 11;
 
   INIT_VECTOR(M, SUBM, 7, 2, cy, y, ctx);
   INIT_VECTOR(N, SUBN, 5, 3, cx, x, ctx);
