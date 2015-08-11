@@ -259,13 +259,13 @@ array_expression array::T() const
 scalar array::operator [](int_t idx)
 {
   assert(nshape()<=1);
-  return scalar(dtype_, data_, idx);
+  return scalar(dtype_, data_, start_[0] + ld_*start_[1] + idx);
 }
 
 const scalar array::operator [](int_t idx) const
 {
   assert(nshape()<=1);
-  return scalar(dtype_, data_, idx);
+  return scalar(dtype_, data_, start_[0] + ld_*start_[1] + idx);
 }
 
 
