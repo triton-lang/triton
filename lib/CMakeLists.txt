@@ -14,6 +14,7 @@ else()
 		set_target_properties(isaac PROPERTIES LINK_FLAGS "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/wrap/clBLAS.def")
 	endif()
 endif()
+add_dependencies(isaac database)
 
 #Linkage
 if(OPENCL_FOUND)
