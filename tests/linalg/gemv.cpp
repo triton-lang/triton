@@ -1,4 +1,6 @@
 #include <cmath>
+#include <algorithm>
+
 #include "common.hpp"
 #include "isaac/array.h"
 #include "isaac/wrap/clBLAS.h"
@@ -10,7 +12,6 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
                                         isc::array & y, isc::array const & A, isc::array & x, interface_t interf, const char * prefix)
 {
   int failure_count = 0;
-
 
   isc::int_t M = A.shape()[0];
   isc::int_t N = A.shape()[1];
@@ -24,12 +25,12 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   isc::driver::CommandQueue queue = isc::driver::backend::queues::get(y.context(),0);
 
   T yi = 0, xi = 0;
-#define TEST_OPERATION(NAME, SIZE1, SIZE2, REDUCTION, ASSIGNMENT, GPU_REDUCTION, RES, BUF, CRES)\
+#define TEST_OPERATION(NAME, SIZE1, SIZE2, NEUTRAL, REDUCTION, ASSIGNMENT, GPU_REDUCTION, RES, BUF, CRES)\
   std::cout << "[" << prefix << "] \t" << NAME "..." << std::flush;\
   for(int i = 0 ; i < SIZE1 ; ++i)\
   {\
-    yi = 0;\
-    xi = 0;\
+    yi = NEUTRAL;\
+    xi = NEUTRAL;\
     for(int j = 0 ; j < SIZE2 ; ++j)\
       REDUCTION;\
     ASSIGNMENT;\
@@ -51,32 +52,37 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
       cl_command_queue clqueue = queue.handle().cl();
 
 
-      TEST_OPERATION("GEMV(ROW, NoTrans)", M, N, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
+      TEST_OPERATION("GEMV(ROW, NoTrans)", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
                      BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasRowMajor, clblasTrans, N, M, alpha, CHANDLE(A), OFF(A), LD(A),
                                 CHANDLE(x), x.start()[0], x.stride()[0], beta, CHANDLE(y), y.start()[0], y.stride()[0],
                                 1, &clqueue, 0, NULL, NULL), y, bufy, cy);
 
-      TEST_OPERATION("GEMV(ROW, Trans)", N, M, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
+      TEST_OPERATION("GEMV(ROW, Trans)", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
                      BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasRowMajor, clblasNoTrans, N, M, alpha, CHANDLE(A), OFF(A), LD(A),
                                 CHANDLE(y), y.start()[0], y.stride()[0], beta, CHANDLE(x), x.start()[0], x.stride()[0],
                                 1, &clqueue, 0, NULL, NULL), x, bufx, cx);
 
-      TEST_OPERATION("GEMV(COL, NoTrans)", M, N, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
+      TEST_OPERATION("GEMV(COL, NoTrans)", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
                      BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasNoTrans, M, N, alpha, CHANDLE(A), OFF(A), LD(A),
                                 CHANDLE(x), x.start()[0], x.stride()[0], beta, CHANDLE(y), y.start()[0], y.stride()[0],
                                 1, &clqueue, 0, NULL, NULL), y, bufy, cy);
 
-      TEST_OPERATION("GEMV(COL, Trans)", N, M, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
+      TEST_OPERATION("GEMV(COL, Trans)", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
                      BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasTrans, M, N, alpha, CHANDLE(A), OFF(A), LD(A),
                                 CHANDLE(y), y.start()[0], y.stride()[0], beta, CHANDLE(x), x.start()[0], x.stride()[0],
                                 1, &clqueue, 0, NULL, NULL), x, bufx, cx);
   }
   else
   {
-      TEST_OPERATION("y = A.x", M, N, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x), y, bufy, cy);
-      TEST_OPERATION("y = sum(A,1)", M, N, yi+=cA(i,j), cy[i] = yi, y = sum(A,1), y, bufy, cy);
-      TEST_OPERATION("x = A'.y", N, M, xi+=cA(j,i)*cy[j], cx[i] = xi, x = dot(trans(A),y), x, bufx, cx);
-      TEST_OPERATION("x = sum(A,0)", N, M, xi+=cA(j,i), cx[i] = xi, x = sum(A,0), x, bufx, cx);
+      TEST_OPERATION("x = dot(A.T, y)", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = xi, x = dot(trans(A),y), x, bufx, cx);
+      TEST_OPERATION("x = sum(A, 0)", N, M, 0, xi+=cA(j,i), cx[i] = xi, x = sum(A,0), x, bufx, cx);
+      TEST_OPERATION("x = max(A, 0)", N, M, -INFINITY, xi=std::max(xi,cA(j,i)), cx[i] = xi, x = max(A,0), x, bufx, cx);
+      TEST_OPERATION("x = min(A, 0)", N, M, INFINITY, xi=std::min(xi,cA(j,i)), cx[i] = xi, x = min(A,0), x, bufx, cx);
+
+      TEST_OPERATION("y = dot(A, x)", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x), y, bufy, cy);
+      TEST_OPERATION("y = sum(A, 1)", M, N, 0, yi+=cA(i,j), cy[i] = yi, y = sum(A,1), y, bufy, cy);
+      TEST_OPERATION("y = max(A, 1)", M, N, -INFINITY, yi=std::max(yi,cA(i,j)), cy[i] = yi, y = max(A,1), y, bufy, cy);
+      TEST_OPERATION("y = min(A, 1)", M, N, INFINITY, yi=std::min(yi,cA(i,j)), cy[i] = yi, y = min(A,1), y, bufy, cy);
   }
 
   if(failure_count>0)
