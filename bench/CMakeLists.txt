@@ -1,7 +1,7 @@
 set(CMAKE_BUILD_TYPE Release)
 
 set(BLAS_DEF)
-set(BLAS_LIBS isaac ${OPENCL_LIBRARIES})
+set(BLAS_LIBS)
 
 #CUBLAS
 find_package(CUDA)
@@ -47,5 +47,5 @@ foreach(PROG blas)
        add_executable(${PROG}-bench  ${PROG}.cpp)
        set_target_properties(${PROG}-bench PROPERTIES COMPILE_FLAGS "${BLAS_DEF_STR}")
    endif()
-   target_link_libraries(${PROG}-bench ${BLAS_LIBS})
+   target_link_libraries(${PROG}-bench ${BLAS_LIBS} isaac ${OPENCL_LIBRARIES} )
 endforeach(PROG)
