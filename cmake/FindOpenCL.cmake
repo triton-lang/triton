@@ -1,7 +1,12 @@
 #Hints for finding libOpenCL
 
 #OpenCL Hints
-set(L_HINTS $ENV{INTELOCLSDKROOT}/lib/x86)
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(L_HINTS $ENV{INTELOCLSDKROOT}/lib/x64)
+else()
+    set(L_HINTS $ENV{INTELOCLSDKROOT}/lib/x86)
+endif()
+
 if(ANDROID)
     set(ANDROID_CL_GLOB_HINTS /opt/adreno-driver*/lib)
     foreach(PATH ${ANDROID_CL_GLOB_HINTS})
