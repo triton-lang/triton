@@ -1,7 +1,7 @@
 #ifndef _ISAAC_SCHEDULER_EXECUTE_H
 #define _ISAAC_SCHEDULER_EXECUTE_H
 
-#include "isaac/model/database.h"
+#include "isaac/database/database.h"
 #include "isaac/symbolic/expression.h"
 
 namespace isaac

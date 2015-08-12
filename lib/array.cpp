@@ -4,7 +4,7 @@
 
 #include "isaac/array.h"
 #include "isaac/exception/unknown_datatype.h"
-#include "isaac/model/database.h"
+#include "isaac/database/database.h"
 #include "isaac/symbolic/execute.h"
 
 

@@ -15,7 +15,7 @@
 #include "isaac/driver/program_cache.h"
 #include "isaac/exception/unknown_datatype.h"
 #include "isaac/exception/operation_not_supported.h"
-#include "isaac/model/model.h"
+#include "isaac/database/model.h"
 
 #include "getenv.hpp"
 #include "to_string.hpp"

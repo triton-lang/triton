@@ -1,5 +1,5 @@
 #include "isaac/driver/device.h"
-#include "isaac/model/database.h"
+#include "isaac/database/database.h"
 
 #include "presets/broadwell.hpp"
 

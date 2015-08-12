@@ -1,7 +1,7 @@
 #include "isaac/array.h"
 #include "isaac/kernels/templates/gemm.h"
 #include "isaac/kernels/keywords.h"
-#include "isaac/model/model.h"
+#include "isaac/database/model.h"
 #include "isaac/symbolic/preset.h"
 #include "isaac/exception/operation_not_supported.h"
 

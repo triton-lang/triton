@@ -3,10 +3,10 @@
 #include "isaac/kernels/templates/dot.h"
 #include "isaac/kernels/templates/gemv.h"
 #include "isaac/kernels/templates/gemm.h"
-#include "isaac/model/model.h"
+#include "isaac/database/model.h"
 
 #include "common.hpp"
-#include "model.h"
+#include "database.h"
 
 
 namespace tpt = isaac::templates;

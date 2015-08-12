@@ -1,4 +1,4 @@
-#include "isaac/model/predictors/random_forest.h"
+#include "isaac/database/predictors/random_forest.h"
 #include "rapidjson/to_array.hpp"
 
 namespace isaac

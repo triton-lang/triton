@@ -3,7 +3,7 @@
 #include "rapidjson/document.h"
 #include "rapidjson/to_array.hpp"
 
-#include "isaac/model/database.h"
+#include "isaac/database/database.h"
 #include "isaac/kernels/parse.h"
 #include "isaac/kernels/templates/axpy.h"
 #include "isaac/kernels/templates/dot.h"
