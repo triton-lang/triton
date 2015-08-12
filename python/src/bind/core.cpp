@@ -1,4 +1,4 @@
-#include "isaac/model/model.h"
+#include "isaac/database/model.h"
 #include "common.hpp"
 #include "core.h"
 
@@ -188,7 +188,7 @@ namespace detail
 void export_core()
 {
 
-    bp::class_<isaac::model>("model", bp::no_init)
+    bp::class_<isaac::model>("database", bp::no_init)
                     .def("__init__", bp::make_constructor(detail::construct_model))
                     .def("execute", &isc::model::execute);
 

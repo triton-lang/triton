@@ -8,7 +8,7 @@
 #include "isaac/driver/device.h"
 #include "isaac/common/expression_type.h"
 #include "isaac/common/numeric_type.h"
-#include "isaac/model/model.h"
+#include "isaac/database/model.h"
 
 namespace isaac
 {

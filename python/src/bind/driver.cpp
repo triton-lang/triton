@@ -2,7 +2,7 @@
 
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
 
-#include "isaac/model/model.h"
+#include "isaac/database/model.h"
 #include "isaac/symbolic/execute.h"
 
 #include "common.hpp"
@@ -118,7 +118,7 @@ void export_driver()
       .def("append", &bp::vector_indexing_suite<queues_t>::append)
       ;
 
-  bp::class_<isc::database::map_type>("models")
+  bp::class_<isc::database::map_type>("databases")
       .def("__getitem__", &detail::model_map_indexing::get_item, bp::return_internal_reference<>())
       .def("__setitem__", &detail::model_map_indexing::set_item, bp::with_custodian_and_ward<1,2>())
       ;
@@ -168,7 +168,7 @@ void export_driver()
 
   bp::class_<isc::driver::CommandQueue>("command_queue", bp::init<isc::driver::Context const &, isc::driver::Device const &>())
       .def("synchronize", &isc::driver::CommandQueue::synchronize)
-      .add_property("models", bp::make_function(&isc::database::get, bp::return_internal_reference<>()))
+      .add_property("databases", bp::make_function(&isc::database::get, bp::return_internal_reference<>()))
       .add_property("device", bp::make_function(&isc::driver::CommandQueue::device, bp::return_internal_reference<>()))
       ;
 
