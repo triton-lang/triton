@@ -409,7 +409,7 @@ int main(int argc, char* argv[])
 #ifdef BENCH_CLBLAS
   clblasSetup();
 #endif
-  isc::driver::backend::queue_properties = CL_QUEUE_PROFILING_ENABLE;
+  isc::driver::backend::default_queue_properties = CL_QUEUE_PROFILING_ENABLE;
 
   int device_idx = 0;
   std::list<isc::driver::Context const *> contexts;

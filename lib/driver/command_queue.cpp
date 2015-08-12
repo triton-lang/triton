@@ -44,10 +44,14 @@ CommandQueue::CommandQueue(Context const & context, Device const & device, cl_co
 }
 
 Context const & CommandQueue::context() const
-{ return context_; }
+{
+  return context_;
+}
 
 Device const & CommandQueue::device() const
-{ return device_; }
+{
+  return device_;
+}
 
 void CommandQueue::synchronize()
 {

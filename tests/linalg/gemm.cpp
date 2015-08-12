@@ -1,7 +1,6 @@
 #include <cmath>
 #include "common.hpp"
 #include "isaac/array.h"
-#include "isaac/database/model.h"
 #include "isaac/wrap/clBLAS.h"
 
 namespace isc = isaac;

@@ -1,4 +1,4 @@
-#include "isaac/database/model.h"
+#include "isaac/profiles/profiles.h"
 #include "common.hpp"
 #include "core.h"
 
@@ -80,9 +80,9 @@ unsigned int size(datatype<T> const & dt)
 
 namespace detail
 {
-  std::shared_ptr<isc::model> construct_model(bp::object dtype, bp::object const & tp, isc::driver::CommandQueue & queue)
+  std::shared_ptr<isc::profiles::value_type> construct_model(bp::object const & tp, bp::object dtype, isc::driver::CommandQueue & queue)
   {
-      return std::shared_ptr<isc::model>(new isc::model(tools::extract_template_type(tp), tools::extract_dtype(dtype), (isaac::templates::base const &)bp::extract<isaac::templates::base>(tp), queue));
+      return std::shared_ptr<isc::profiles::value_type>(new isc::profiles::value_type(tools::extract_template_type(tp), tools::extract_dtype(dtype), (isaac::templates::base const &)bp::extract<isaac::templates::base>(tp), queue));
   }
 
   std::shared_ptr<isc::array>
@@ -105,19 +105,30 @@ namespace detail
     return std::shared_ptr<isc::array>(v);
   }
 
-
-
-  std::shared_ptr<isc::array> create_array(bp::object const & obj, bp::object odtype, isc::driver::Context const & context)
+  isaac::driver::Context const & extract_context(bp::object context)
   {
-    return ndarray_to_iscarray(np::from_object(obj, to_np_dtype(tools::extract_dtype(odtype))), context);
+    if(context.is_none())
+        return isaac::driver::backend::contexts::get_default();
+    isaac::driver::Context const * ctx = bp::extract<isaac::driver::Context const *>(context);
+    if(ctx)
+        return *ctx;
+    PyErr_SetString(PyExc_TypeError, "Context type not understood");
+    bp::throw_error_already_set();
+    throw;
   }
 
-  std::shared_ptr<isc::array> create_zeros_array(isc::int_t M, isc::int_t N, bp::object odtype, isc::driver::Context const & context)
+
+  std::shared_ptr<isc::array> create_array(bp::object const & obj, bp::object odtype, bp::object pycontext)
   {
-   return std::shared_ptr<isc::array>(new isc::array(isc::zeros(M, N, tools::extract_dtype(odtype), context)));
+    return ndarray_to_iscarray(np::from_object(obj, to_np_dtype(tools::extract_dtype(odtype))), extract_context(pycontext));
   }
 
-  std::shared_ptr<isc::array> create_empty_array(bp::object sizes, bp::object odtype, isc::driver::Context const & context)
+  std::shared_ptr<isc::array> create_zeros_array(isc::int_t M, isc::int_t N, bp::object odtype, bp::object pycontext)
+  {
+   return std::shared_ptr<isc::array>(new isc::array(isc::zeros(M, N, tools::extract_dtype(odtype), extract_context(pycontext))));
+  }
+
+  std::shared_ptr<isc::array> create_empty_array(bp::object sizes, bp::object odtype, bp::object pycontext)
   {
       typedef std::shared_ptr<isc::array> result_type;
 
@@ -140,6 +151,8 @@ namespace detail
           PyErr_SetString(PyExc_TypeError, "Only 1-D and 2-D arrays are supported!");
           bp::throw_error_already_set();
       }
+
+      isc::driver::Context const & context = extract_context(pycontext);
       if(len==1)
           return result_type(new isc::array(size1, dtype, context));
       return result_type(new isc::array(size1, size2, dtype, context));
@@ -154,9 +167,10 @@ namespace detail
       return bp::extract<std::string>(obj.attr("__class__").attr("__name__"))();
   }
 
-  std::shared_ptr<isc::scalar> construct_scalar(bp::object obj, isc::driver::Context const & context)
+  std::shared_ptr<isc::scalar> construct_scalar(bp::object obj, bp::object pycontext)
   {
     typedef std::shared_ptr<isc::scalar> result_type;
+    isc::driver::Context const & context = extract_context(pycontext);
     std::string name = type_name(obj);
     if(name=="int") return result_type(new isc::scalar(bp::extract<int>(obj)(), context));
     else if(name=="float") return result_type(new isc::scalar(bp::extract<double>(obj)(), context));
@@ -179,6 +193,29 @@ namespace detail
         throw;
     }
   }
+
+  struct model_map_indexing
+  {
+      static isc::profiles::value_type& get_item(isc::profiles::map_type& container, bp::tuple i_)
+      {
+          isc::expression_type expression = tools::extract_template_type(i_[0]);
+          isc::numeric_type dtype = tools::extract_dtype(i_[1]);
+          isc::profiles::map_type::iterator i = container.find(std::make_pair(expression, dtype));
+          if (i == container.end())
+          {
+              PyErr_SetString(PyExc_KeyError, "Invalid key");
+              bp::throw_error_already_set();
+          }
+          return *i->second;
+      }
+
+      static void set_item(isc::profiles::map_type& container, bp::tuple i_, isc::profiles::value_type const & v)
+      {
+          isc::expression_type expression = tools::extract_template_type(i_[0]);
+          isc::numeric_type dtype = tools::extract_dtype(i_[1]);
+          container[std::make_pair(expression, dtype)].reset(new isc::profiles::value_type(v));
+      }
+  };
 }
 
 
@@ -188,9 +225,9 @@ namespace detail
 void export_core()
 {
 
-    bp::class_<isaac::model>("database", bp::no_init)
+    bp::class_<isaac::profiles::value_type>("profile", bp::no_init)
                     .def("__init__", bp::make_constructor(detail::construct_model))
-                    .def("execute", &isc::model::execute);
+                    .def("execute", &isc::profiles::value_type::execute);
 
     bp::class_<isc::value_scalar>("value_scalar", bp::no_init)
               .add_property("dtype", &isc::value_scalar::dtype);
@@ -269,7 +306,7 @@ void export_core()
   bp::class_<isc::array,
           std::shared_ptr<isc::array> >
   ( "array", bp::no_init)
-      .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=boost::ref(isc::driver::backend::contexts::get_default()))))
+      .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")= bp::object())))
       .def(bp::init<isc::array_expression>())
       .add_property("dtype", &isc::array::dtype)
       .add_property("context", bp::make_function(&isc::array::context, bp::return_internal_reference<>()))
@@ -292,11 +329,11 @@ void export_core()
 
   bp::class_<isc::scalar, bp::bases<isc::array> >
       ("scalar", bp::no_init)
-      .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=boost::ref(isc::driver::backend::contexts::get_default()))))
+      .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=bp::object())))
       ;
 
 //Other numpy-like initializers
-  bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=boost::ref(isc::driver::backend::contexts::get_default())));
+  bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=bp::object()));
 
 //Assign
     bp::def("assign", static_cast<isc::array_expression (*)(isc::array const &, isc::array const &)>(&isc::assign));\
@@ -320,7 +357,7 @@ void export_core()
       bp::def(#name, static_cast<isc::array_expression (*)(isc::array const &)>(&isc::name));\
       bp::def(#name, static_cast<isc::array_expression (*)(isc::array_expression const &)>(&isc::name));
 
-      bp::def("zeros", &detail::create_zeros_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=boost::ref(isc::driver::backend::contexts::get_default())));
+      bp::def("zeros", &detail::create_zeros_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=bp::object()));
 
   MAP_FUNCTION(abs)
   MAP_FUNCTION(acos)
@@ -352,4 +389,11 @@ void export_core()
   MAP_FUNCTION(argmax)
   MAP_FUNCTION(argmin)
 #undef MAP_FUNCTION
+
+  /*--- Profiles----*/
+  //---------------------------------------
+  bp::class_<isc::profiles::map_type>("profiles")
+      .def("__getitem__", &detail::model_map_indexing::get_item, bp::return_internal_reference<>())
+      .def("__setitem__", &detail::model_map_indexing::set_item, bp::with_custodian_and_ward<1,2>())
+      ;
 }
