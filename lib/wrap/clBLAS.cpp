@@ -29,7 +29,7 @@ extern "C"
         {
             std::list<is::driver::Event> levents;
             is::execution_options_type options(is::driver::CommandQueue(commandQueues[i],false), &levents, &waitlist);
-            is::execute(is::control(operation, options), is::database::get(options.queue(context)));
+            is::execute(is::control(operation, options), is::profiles::get(options.queue(context)));
             if(events)
             {
                 events[i] = levents.front().handle().cl();

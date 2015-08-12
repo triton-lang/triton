@@ -79,8 +79,7 @@ RESTORE_MSVC_WARNING_C4251
 
 public:
   static unsigned int default_device;
-  static cl_command_queue_properties queue_properties;
-
+  static cl_command_queue_properties default_queue_properties;
 };
 
 }

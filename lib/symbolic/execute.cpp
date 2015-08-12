@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include "isaac/types.h"
 #include "isaac/array.h"
-#include "isaac/database/database.h"
+#include "isaac/profiles/profiles.h"
 #include "isaac/symbolic/expression.h"
 #include "isaac/symbolic/preset.h"
 
@@ -145,7 +145,7 @@ namespace isaac
   }
 
   /** @brief Executes a array_expression on the given models map*/
-  void execute(controller<array_expression> const & c, database::map_type & models)
+  void execute(controller<array_expression> const & c, profiles::map_type & profiles)
   {
     array_expression expression = c.x();
     driver::Context const & context = expression.context();
@@ -182,7 +182,7 @@ namespace isaac
         /*----Compute required temporaries----*/
         for(detail::breakpoints_t::iterator it = breakpoints.begin() ; it != breakpoints.end() ; ++it)
         {
-          std::shared_ptr<model> const & pmodel = models[std::make_pair(it->first, dtype)];
+          std::shared_ptr<profiles::value_type> const & profile = profiles[std::make_pair(it->first, dtype)];
           array_expression::node const & node = tree[it->second->node_index];
           array_expression::node const & lmost = lhs_most(tree, node);
 
@@ -211,7 +211,7 @@ namespace isaac
           tree[rootidx].rhs.type_family = it->second->type_family;
 
           //Execute
-          pmodel->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
+          profile->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
           tree[rootidx] = root_save;
 
           //Incorporates the temporary within the array_expression
@@ -220,7 +220,7 @@ namespace isaac
     }
 
     /*-----Compute final expression-----*/
-    models[std::make_pair(final_type, dtype)]->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
+    profiles[std::make_pair(final_type, dtype)]->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
   }
 
 }

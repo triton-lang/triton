@@ -9,7 +9,6 @@ namespace isaac
 {
 namespace templates
 {
-class model;
 
 struct gemm_parameters : public base::parameters_type
 {
@@ -54,8 +53,6 @@ private:
 public:
   gemm(gemm::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;
-  void cleanup(values_holder beta, controller<expressions_tuple> const & ctr, model & fallback,
-               lhs_rhs_element* eA, lhs_rhs_element* eB, lhs_rhs_element* eC, lhs_rhs_element* ebeta, array const & A, array const & B, array const & C);
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const &ctr);
 private:
   const char A_trans_;

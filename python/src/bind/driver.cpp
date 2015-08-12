@@ -1,12 +1,11 @@
 #include <memory>
-
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
 
-#include "isaac/database/model.h"
 #include "isaac/symbolic/execute.h"
 
 #include "common.hpp"
 #include "driver.h"
+
 
 namespace detail
 {
@@ -49,28 +48,7 @@ namespace detail
       return std::shared_ptr<isc::driver::CommandQueue>(new isc::driver::CommandQueue(context, device));
   }
 
-  struct model_map_indexing
-  {
-      static isc::model& get_item(isc::database::map_type& container, bp::tuple i_)
-      {
-          isc::expression_type expression = tools::extract_template_type(i_[0]);
-          isc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          isc::database::map_type::iterator i = container.find(std::make_pair(expression, dtype));
-          if (i == container.end())
-          {
-              PyErr_SetString(PyExc_KeyError, "Invalid key");
-              bp::throw_error_already_set();
-          }
-          return *i->second;
-      }
 
-      static void set_item(isc::database::map_type& container, bp::tuple i_, isc::model const & v)
-      {
-          isc::expression_type expression = tools::extract_template_type(i_[0]);
-          isc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          container[std::make_pair(expression, dtype)].reset(new isc::model(v));
-      }
-  };
 
   std::string to_string(isc::driver::device_type type)
   {
@@ -94,7 +72,7 @@ namespace detail
       isc::array_expression::container_type::value_type root = expression.tree()[expression.root()];
       if(isc::detail::is_assignment(root.op))
       {
-          isc::execute(isc::control(expression, execution_options, dispatcher_options, compilation_options), isaac::database::get(execution_options.queue(expression.context())));
+          isc::execute(isc::control(expression, execution_options, dispatcher_options, compilation_options), isaac::profiles::get(execution_options.queue(expression.context())));
           return bp::make_tuple(bp::ptr(root.lhs.array), tools::to_list(events.begin(), events.end()));
       }
       else
@@ -105,12 +83,17 @@ namespace detail
   }
 }
 
-struct state_type{ };
-state_type state;
+struct default_driver_values_type{ };
+default_driver_values_type default_driver_parameters;
 
 void export_driver()
 {
   typedef std::vector<isc::driver::CommandQueue> queues_t;
+
+  bp::object driver_module(bp::handle<>(bp::borrowed(PyImport_AddModule("isaac.driver"))));
+  bp::scope().attr("driver") = driver_module;
+  bp::scope driver_scope = driver_module;
+
   bp::class_<queues_t>("queues")
       .def("__len__", &queues_t::size)
       .def("__getitem__", &bp::vector_indexing_suite<queues_t>::get_item, bp::return_internal_reference<>())
@@ -118,10 +101,7 @@ void export_driver()
       .def("append", &bp::vector_indexing_suite<queues_t>::append)
       ;
 
-  bp::class_<isc::database::map_type>("databases")
-      .def("__getitem__", &detail::model_map_indexing::get_item, bp::return_internal_reference<>())
-      .def("__setitem__", &detail::model_map_indexing::set_item, bp::with_custodian_and_ward<1,2>())
-      ;
+
 
   bp::enum_<isc::driver::backend_type>
       ("backend_type")
@@ -162,13 +142,14 @@ void export_driver()
 
   bp::class_<isc::driver::Context, boost::noncopyable>("context", bp::no_init)
       .def("__init__", bp::make_constructor(&detail::make_context))
+      .def("synchronize", &isc::driver::backend::synchronize)
       .add_property("queues", &detail::get_queues)
       .add_property("backend", &isc::driver::Context::backend)
       ;
 
   bp::class_<isc::driver::CommandQueue>("command_queue", bp::init<isc::driver::Context const &, isc::driver::Device const &>())
       .def("synchronize", &isc::driver::CommandQueue::synchronize)
-      .add_property("databases", bp::make_function(&isc::database::get, bp::return_internal_reference<>()))
+      .add_property("profiles", bp::make_function(&isc::profiles::get, bp::return_internal_reference<>()))
       .add_property("device", bp::make_function(&isc::driver::CommandQueue::device, bp::return_internal_reference<>()))
       ;
 
@@ -182,12 +163,11 @@ void export_driver()
 
   bp::def("enqueue", &detail::enqueue, (bp::arg("expression"), bp::arg("queue_id") = 0, bp::arg("dependencies")=bp::list(), bp::arg("tune") = false, bp::arg("label")=-1, bp::arg("program_name")="", bp::arg("recompile") = false));
 
-  bp::class_<state_type>("state_type")
-          .def_readwrite("queue_properties",&isc::driver::backend::queue_properties)
+  bp::class_<default_driver_values_type>("default_type")
+          .def_readwrite("queue_properties",&isc::driver::backend::default_queue_properties)
+          .def_readwrite("device", &isc::driver::backend::default_device)
       ;
 
-  bp::scope().attr("state") = bp::object(bp::ptr(&state));
-
-  bp::scope().attr("CL_QUEUE_PROFILING_ENABLE") = CL_QUEUE_PROFILING_ENABLE;
-  bp::scope().attr("CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE") = CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE;
+  bp::scope().attr("default") = bp::object(bp::ptr(&default_driver_parameters));
+  bp::scope().attr("PROFILING_ENABLE") = CL_QUEUE_PROFILING_ENABLE;
 }

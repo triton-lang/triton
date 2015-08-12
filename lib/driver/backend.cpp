@@ -42,7 +42,7 @@ void backend::queues::init(std::list<const Context *> const & contexts)
 {
     for(Context const * ctx : contexts)
         if(cache_.find(*ctx)==cache_.end())
-        cache_.insert(std::make_pair(*ctx, std::vector<CommandQueue*>{new CommandQueue(*ctx, ctx->device(), queue_properties)}));
+        cache_.insert(std::make_pair(*ctx, std::vector<CommandQueue*>{new CommandQueue(*ctx, ctx->device(), default_queue_properties)}));
 }
 
 void backend::queues::release()
@@ -165,7 +165,7 @@ void backend::init()
 
 unsigned int backend::default_device = 0;
 
-cl_command_queue_properties backend::queue_properties = 0;
+cl_command_queue_properties backend::default_queue_properties = 0;
 
 
 }

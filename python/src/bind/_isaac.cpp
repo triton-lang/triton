@@ -1,7 +1,7 @@
 #include "core.h"
 #include "driver.h"
 #include "exceptions.h"
-#include "database.h"
+#include "kernels.h"
 
 #include <boost/python.hpp>
 #include <boost/numpy.hpp>

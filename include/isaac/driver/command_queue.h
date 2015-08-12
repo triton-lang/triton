@@ -28,6 +28,8 @@ public:
   Context const & context() const;
   Device const & device() const;
   void synchronize();
+  void enable_profiling();
+  void disable_profiling();
   Event enqueue(Kernel const & kernel, NDRange global, driver::NDRange local, std::vector<Event> const *);
   void write(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
   void read(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr);

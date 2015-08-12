@@ -1,5 +1,5 @@
 #include "isaac/driver/device.h"
-#include "isaac/database/database.h"
+#include "isaac/profiles/profiles.h"
 
 #include "presets/broadwell.hpp"
 
@@ -10,7 +10,7 @@ namespace isaac
 #define DATABASE_ENTRY(VENDOR, ARCHITECTURE, STRING) \
             {std::make_tuple(driver::Device::Vendor::VENDOR, driver::Device::Architecture::ARCHITECTURE), STRING}
 
-const std::map<std::tuple<driver::Device::Vendor, driver::Device::Architecture> , const char *> database::presets_ =
+const std::map<std::tuple<driver::Device::Vendor, driver::Device::Architecture> , const char *> profiles::presets_ =
             { DATABASE_ENTRY(INTEL, BROADWELL, presets::broadwell) };
 
 
