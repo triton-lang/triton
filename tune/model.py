@@ -30,7 +30,7 @@ def train(X, Y, profiles):
     X = X[p,:]
     Y = Y[p,:]   
 
-    #Train the model
+    #Train the.profile
     cut = int(1.00*M)
     CV = .1
     XTr, YTr = X[:,:], Y[:,:]

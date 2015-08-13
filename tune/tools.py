@@ -21,13 +21,13 @@ def expspace(a,b,N,r=128):
                   
 def benchmark(template, setting, tree):
     queue = tree.context.queues[0]
-    queue.models[template, isc.float32] = isc.model(isc.float32, template(*setting), queue)
+    queue.profiles[template, isc.float32] = isc.profile(template(*setting), isc.float32, queue)
     times = []
     total = 0
     i = 0
     while total < 1e-2:
         #z = isc.zeros(1, 10000000, isc.float32, tree.context)
-        z, events = isc.enqueue(tree)
+        z, events = isc.driver.enqueue(tree)
         tree.context.queues[0].synchronize()
         times.append(1e-9*sum([e.elapsed_time for e in events]))
         total += times[-1]
