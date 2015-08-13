@@ -89,8 +89,8 @@ private:
 public:
   typedef ParametersType parameters_type;
   base_impl(parameters_type const & parameters, binding_policy_t binding_policy);
-  int_t local_size_0() const;
-  int_t local_size_1() const;
+  unsigned int local_size_0() const;
+  unsigned int local_size_1() const;
   std::shared_ptr<base> clone() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
   int is_invalid(expressions_tuple const & expressions, driver::Device const & device) const;

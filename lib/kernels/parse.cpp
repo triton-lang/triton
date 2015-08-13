@@ -234,7 +234,7 @@ evaluate_expression_traversal::evaluate_expression_traversal(std::map<std::strin
   accessors_(accessors), str_(str), mapping_(mapping)
 { }
 
-void evaluate_expression_traversal::call_before_expansion(isaac::array_expression const & array_expression, int_t root_idx) const
+void evaluate_expression_traversal::call_before_expansion(isaac::array_expression const & array_expression, std::size_t root_idx) const
 {
   array_expression::node const & root_node = array_expression.tree()[root_idx];
   if(detail::is_cast(root_node.op))
@@ -246,12 +246,12 @@ void evaluate_expression_traversal::call_before_expansion(isaac::array_expressio
 
 }
 
-void evaluate_expression_traversal::call_after_expansion(array_expression const & /*array_expression*/, int_t /*root_idx*/) const
+void evaluate_expression_traversal::call_after_expansion(array_expression const & /*array_expression*/, std::size_t /*root_idx*/) const
 {
   str_+=")";
 }
 
-void evaluate_expression_traversal::operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf) const
+void evaluate_expression_traversal::operator()(isaac::array_expression const & array_expression, std::size_t root_idx, leaf_t leaf) const
 {
   array_expression::node const & root_node = array_expression.tree()[root_idx];
   mapping_type::key_type key = std::make_pair(root_idx, leaf);
@@ -285,7 +285,7 @@ void evaluate_expression_traversal::operator()(isaac::array_expression const & a
 
 
 std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                            isaac::array_expression const & array_expression, int_t root_idx, mapping_type const & mapping)
+                            isaac::array_expression const & array_expression, std::size_t root_idx, mapping_type const & mapping)
 {
   std::string res;
   evaluate_expression_traversal traversal_functor(accessors, res, mapping);
@@ -326,7 +326,7 @@ process_traversal::process_traversal(std::map<std::string, std::string> const & 
   accessors_(accessors),  stream_(stream), mapping_(mapping), already_processed_(already_processed)
 { }
 
-void process_traversal::operator()(array_expression const & /*array_expression*/, int_t root_idx, leaf_t leaf) const
+void process_traversal::operator()(array_expression const & /*array_expression*/, std::size_t root_idx, leaf_t leaf) const
 {
   mapping_type::const_iterator it = mapping_.find(std::make_pair(root_idx, leaf));
   if (it!=mapping_.end())
@@ -422,7 +422,7 @@ void array_expression_representation_functor::append(char*& p, const char * str)
   p+=n;
 }
 
-void array_expression_representation_functor::operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const
+void array_expression_representation_functor::operator()(isaac::array_expression const & array_expression, std::size_t root_idx, leaf_t leaf_t) const
 {
   array_expression::node const & root_node = array_expression.tree()[root_idx];
   if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)

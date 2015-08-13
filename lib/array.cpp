@@ -566,10 +566,10 @@ array_expression cast(array const & x, numeric_type dtype)
 array_expression cast(array_expression const & x, numeric_type dtype)
 { return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, casted(dtype)), x.context(), dtype, x.shape()); }
 
-isaac::array_expression eye(std::size_t M, std::size_t N, isaac::numeric_type dtype, driver::Context const & ctx)
+isaac::array_expression eye(int_t M, int_t N, isaac::numeric_type dtype, driver::Context const & ctx)
 { return array_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VDIAG_TYPE), ctx, dtype, size4(M, N)); }
 
-isaac::array_expression zeros(std::size_t M, std::size_t N, isaac::numeric_type dtype, driver::Context  const & ctx)
+isaac::array_expression zeros(int_t M, int_t N, isaac::numeric_type dtype, driver::Context  const & ctx)
 { return array_expression(value_scalar(0, dtype), invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), ctx, dtype, size4(M, N)); }
 
 inline size4 flip(size4 const & shape)

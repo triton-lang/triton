@@ -20,7 +20,7 @@ class ISAACAPI Buffer
   friend class Kernel;
 public:
   Buffer(cl_mem Buffer, bool take_ownership = true);
-  Buffer(Context const & context, std::size_t size);
+  Buffer(Context const & context, int_t size);
   Context const & context() const;
   bool operator<(Buffer const &) const;
   bool operator==(Buffer const &) const;

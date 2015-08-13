@@ -232,8 +232,8 @@ ISAAC_DECLARE_DOT((max))
 ISAAC_DECLARE_DOT((min))
 ISAAC_DECLARE_DOT(argmin)
 
-ISAACAPI array_expression eye(std::size_t, std::size_t, isaac::numeric_type, driver::Context const & context = driver::backend::contexts::get_default());
-ISAACAPI array_expression zeros(std::size_t M, std::size_t N, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
+ISAACAPI array_expression eye(int_t, int_t, isaac::numeric_type, driver::Context const & context = driver::backend::contexts::get_default());
+ISAACAPI array_expression zeros(int_t M, int_t N, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
 ISAACAPI array_expression reshape(array const &, int_t, int_t);
 
 //
