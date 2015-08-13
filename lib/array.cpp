@@ -31,7 +31,7 @@ array::array(int_t shape0, numeric_type dtype, driver::Buffer data, int_t start,
 
 template<class DT>
 array::array(std::vector<DT> const & x, driver::Context const & context):
-  dtype_(to_numeric_type<DT>::value), shape_(x.size(), 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
+  dtype_(to_numeric_type<DT>::value), shape_((int_t)x.size(), 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
   context_(context), data_(context, size_of(dtype_)*dsize())
 { *this = x; }
 

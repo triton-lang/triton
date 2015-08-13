@@ -19,7 +19,7 @@ enum leaf_t
 
 class mapped_object;
 
-typedef std::pair<int_t, leaf_t> mapping_key;
+typedef std::pair<size_t, leaf_t> mapping_key;
 typedef std::map<mapping_key, std::shared_ptr<mapped_object> > mapping_type;
 
 /** @brief Mapped Object
@@ -46,10 +46,10 @@ protected:
 public:
   struct node_info
   {
-    node_info(mapping_type const * _mapping, array_expression const * _array_expression, int_t _root_idx);
+    node_info(mapping_type const * _mapping, array_expression const * _array_expression, size_t _root_idx);
     mapping_type const * mapping;
     isaac::array_expression const * array_expression;
-    int_t root_idx;
+    size_t root_idx;
   };
 
 public:
@@ -99,7 +99,7 @@ class mapped_dot : public mapped_object, public binary_leaf
 public:
   mapped_dot(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key);
 
-  int_t root_idx() const;
+  size_t root_idx() const;
   isaac::array_expression const & array_expression() const;
   array_expression::node root_node() const;
   bool is_index_dot() const;

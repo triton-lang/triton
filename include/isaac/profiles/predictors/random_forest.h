@@ -23,14 +23,14 @@ public:
   public:
     tree(rapidjson::Value const & treerep);
     std::vector<float> const & predict(std::vector<int_t> const & x) const;
-    int_t D() const;
+    size_t D() const;
   private:
     std::vector<int> children_left_;
     std::vector<int> children_right_;
     std::vector<float> threshold_;
     std::vector<float> feature_;
     std::vector<std::vector<float> > value_;
-    int_t D_;
+    size_t D_;
   };
 
   random_forest(rapidjson::Value const & estimators);
@@ -38,7 +38,7 @@ public:
   std::vector<tree> const & estimators() const;
 private:
   std::vector<tree> estimators_;
-  int_t D_;
+  size_t D_;
 };
 
 }

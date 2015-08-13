@@ -108,7 +108,7 @@ public:
         }
     }
 
-    void operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const
+    void operator()(isaac::array_expression const & array_expression, size_t root_idx, leaf_t leaf_t) const
     {
         array_expression::node const & root_node = array_expression.tree()[root_idx];
         if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
