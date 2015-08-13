@@ -4,19 +4,19 @@
 #include "isaac/array.h"
 #include "isaac/wrap/clBLAS.h"
 
-namespace isc = isaac;
+namespace sc = isaac;
 typedef isaac::int_t int_t;
 
 template<typename T>
 void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vector_base<T>& cy, simple_vector_base<T>& cz,
-                                                 isc::array& x, isc::array& y, isc::array& z)
+                                                 sc::array& x, sc::array& y, sc::array& z)
 {
   using namespace std;
 
   int failure_count = 0;
-  isc::numeric_type dtype = x.dtype();
-  isc::driver::Context const & context = x.context();
-  isc::driver::CommandQueue queue = isc::driver::backend::queues::get(context,0);
+  sc::numeric_type dtype = x.dtype();
+  sc::driver::Context const & context = x.context();
+  sc::driver::CommandQueue queue = sc::driver::backend::queues::get(context,0);
   cl_command_queue clqueue = queue.handle().cl();
   int_t N = cz.size();
 
@@ -113,7 +113,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 }
 
 template<typename T>
-void test_impl(T epsilon, isc::driver::Context const & ctx)
+void test_impl(T epsilon, sc::driver::Context const & ctx)
 {
   using isaac::_;
 
@@ -140,11 +140,11 @@ int main()
 {
   clblasSetup();
   std::list<isaac::driver::Context const *> data;
-  isc::driver::backend::contexts::get(data);
+  sc::driver::backend::contexts::get(data);
   for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = isc::driver::backend::queues::get(*context,0).device();
-    if(device.type() != isc::driver::DEVICE_TYPE_GPU)
+    sc::driver::Device device = sc::driver::backend::queues::get(*context,0).device();
+    if(device.type() != sc::driver::DEVICE_TYPE_GPU)
         continue;
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;

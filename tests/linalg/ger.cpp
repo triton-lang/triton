@@ -2,18 +2,18 @@
 #include "common.hpp"
 #include "isaac/array.h"
 
-namespace isc = isaac;
+namespace sc = isaac;
 typedef isaac::int_t int_t;
 
 template<typename T>
 void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simple_matrix_base<T>& cC, simple_vector_base<T>& cx, simple_vector_base<T>& cy,
-          isc::array& A, isc::array& B, isc::array& C, isc::array& x, isc::array& y)
+          sc::array& A, sc::array& B, sc::array& C, sc::array& x, sc::array& y)
 {
   using namespace std;
 
   int failure_count = 0;
-  isc::numeric_type dtype = C.dtype();
-  isc::driver::Context const & ctx = C.context();
+  sc::numeric_type dtype = C.dtype();
+  sc::driver::Context const & ctx = C.context();
 
   int_t M = cC.size1();
   int_t N = cC.size2();
@@ -100,7 +100,7 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
 }
 
 template<typename T>
-void test_impl(T epsilon, isc::driver::Context const & ctx)
+void test_impl(T epsilon, sc::driver::Context const & ctx)
 {
   using isaac::_;
 
@@ -126,10 +126,10 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
     std::list<isaac::driver::Context const *> data;
-    isc::driver::backend::contexts::get(data);
+    sc::driver::backend::contexts::get(data);
     for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = isc::driver::backend::queues::get(*context,0).device();
+    sc::driver::Device device = sc::driver::backend::queues::get(*context,0).device();
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;

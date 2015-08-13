@@ -13,7 +13,7 @@ namespace tpt = isaac::templates;
 
 namespace detail
 {
-  bp::list input_sizes(tpt::base & temp, isc::expressions_tuple const & tree)
+  bp::list input_sizes(tpt::base & temp, sc::expressions_tuple const & tree)
   {
       std::vector<int> tmp = temp.input_sizes(tree);
       return tools::to_list(tmp.begin(), tmp.end());
