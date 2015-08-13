@@ -17,7 +17,7 @@ namespace isaac
 
 struct profiles
 {
-    typedef std::map<std::tuple<driver::Device::Vendor, driver::Device::Architecture> , const char *> presets_type;
+    typedef std::map<std::tuple<driver::Device::Type, driver::Device::Vendor, driver::Device::Architecture> , const char *> presets_type;
 public:
     class value_type
     {

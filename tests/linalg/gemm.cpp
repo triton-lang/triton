@@ -130,7 +130,7 @@ int main()
   for(isaac::driver::Context const * context : data)
   {
     sc::driver::Device device = sc::driver::backend::queues::get(*context,0).device();
-    if(device.type() != sc::driver::DEVICE_TYPE_GPU)
+    if(device.type() != sc::driver::Device::Type::GPU)
         continue;
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;

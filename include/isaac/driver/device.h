@@ -20,6 +20,12 @@ private:
   friend class CommandQueue;
 
 public:
+  enum ISAACAPI Type
+  {
+    GPU = CL_DEVICE_TYPE_GPU,
+    CPU = CL_DEVICE_TYPE_CPU,
+    ACCELERATOR = CL_DEVICE_TYPE_ACCELERATOR
+  };
   enum class Vendor
   {
       AMD,
@@ -59,7 +65,7 @@ public:
   std::string name() const;
   std::string vendor_str() const;
   std::vector<size_t> max_work_item_sizes() const;
-  device_type type() const;
+  Type type() const;
   std::string extensions() const;
   size_t max_work_group_size() const;
   size_t local_mem_size() const;

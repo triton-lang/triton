@@ -209,9 +209,10 @@ profiles::map_type& profiles::init(driver::CommandQueue const & queue)
       result[std::make_pair(etype, dtype)] = std::shared_ptr<value_type>(new value_type(etype, dtype, *fallbacks[std::make_pair(etype, dtype)], queue));
 
   driver::Device const & device = queue.device();
-  presets_type::const_iterator it = presets_.find(std::make_tuple(device.vendor(), device.architecture()));
-  if(it==presets_.end())
-      import(presets_.at(std::make_tuple(device.vendor(), driver::Device::Architecture::UNKNOWN)), queue);
+  presets_type::const_iterator it = presets_.find(std::make_tuple(device.type(), device.vendor(), device.architecture()));
+  if(it==presets_.end()){
+//      import(presets_.at(std::make_tuple(device.type(), device.vendor(), driver::Device::Architecture::UNKNOWN)), queue);
+  }
   else
       import(it->second, queue);
   std::string homepath = tools::getenv("HOME");
