@@ -22,8 +22,8 @@ def pow2range(a, b):
 
 def tune(device, operation, json_path): 
     #List devices
-    platforms = isc.get_platforms()
-    context = isc.context(device)
+    platforms = isc.driver.get_platforms()
+    context = isc.driver.context(device)
     
     #List of size tuples to use
     sizes = {}
@@ -83,7 +83,7 @@ def tune(device, operation, json_path):
                 predicted = profiles[0]
             else:
                 clf = ensemble.RandomForestRegressor(min(10, idx+1), max_depth=min(10, idx+1)).fit(X, Y)
-                #clf, nrmse = model.train(X, Y, profiles)
+                #clf, nrmse = profile.train(X, Y, profiles)
                 predperf = clf.predict(x)[0]
                 best = (-predperf).argsort()[:5]
                 perf = [performance(x, tools.benchmark(operation, profiles[b], tree)) for b in best]
@@ -130,7 +130,7 @@ def tune(device, operation, json_path):
     json_data[operation_name]['float32'] = {}
     D = json_data[operation_name]['float32']
     if len(profiles) > 1:
-        clf, nrmse = model.train(X, Y, profiles)
+        clf, nrmse = profile.train(X, Y, profiles)
         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
                             'children_right': e.tree_.children_right.tolist(),
                             'threshold': e.tree_.threshold.astype('float64').tolist(),
@@ -141,7 +141,7 @@ def tune(device, operation, json_path):
     
 
 def parse_arguments():
-    platforms = isc.get_platforms()
+    platforms = isc.driver.get_platforms()
     devices = [d for platform in platforms for d in platform.get_devices()]
     #Command line arguments
     parser = argparse.ArgumentParser()
@@ -156,7 +156,7 @@ def parse_arguments():
     print("----------------")
     for (i, d) in enumerate(devices):
         selected = '[' + ('x' if device==d else ' ') + ']'
-        print selected , '-',  isc.device_type_to_string(d.type), '-', d.name, 'on', d.platform.name
+        print selected , '-',  isc.driver.device_type_to_string(d.type), '-', d.name, 'on', d.platform.name
     print("----------------")
     
     
@@ -169,7 +169,7 @@ def parse_arguments():
         
             
 if __name__ == "__main__":
-    isc.state.queue_properties = isc.CL_QUEUE_PROFILING_ENABLE
+    isc.driver.default.queue_properties = isc.driver.PROFILING_ENABLE
     args = parse_arguments()
     tune(*args)
 

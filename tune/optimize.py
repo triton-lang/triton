@@ -14,10 +14,10 @@ from numpy import cumsum
 
 import tools
 
-fetch_types = [isc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
-               isc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED,
-               isc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
-               isc.templates.fetching_policy_type.FETCH_FROM_LOCAL]
+fetch_types = [isc.templates.FETCH_FROM_GLOBAL_CONTIGUOUS,
+               isc.templates.FETCH_FROM_GLOBAL_STRIDED,
+               isc.templates.FETCH_FROM_LOCAL,
+               isc.templates.FETCH_FROM_LOCAL]
 
 def exhaustive(template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
