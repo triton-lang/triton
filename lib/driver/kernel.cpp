@@ -77,14 +77,14 @@ void Kernel::setSizeArg(unsigned int index, size_t N)
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
     {
-      int NN = N;
+      int NN = static_cast<cl_int>(N);
       setArg(index, sizeof(int), &NN);
       break;
     }
 #endif
     case OPENCL:
     {
-      cl_int NN = N;
+      cl_int NN = static_cast<cl_int>(N);
       setArg(index, 4, &NN);
       break;
     }

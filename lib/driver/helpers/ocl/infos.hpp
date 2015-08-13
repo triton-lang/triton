@@ -341,7 +341,7 @@ inline typename detail::return_type<cl_program, CL_PROGRAM_BINARIES>::Result inf
 {
     std::vector<unsigned char *> res;
     std::vector<size_t> sizes = info<CL_PROGRAM_BINARY_SIZES>(handle);
-    for(unsigned int s: sizes)
+    for(size_t s: sizes)
         res.push_back(new unsigned char[s]);
     clGetProgramInfo(handle, CL_PROGRAM_BINARIES, sizeof(unsigned char**), (void*)res.data(), NULL);
     return res;

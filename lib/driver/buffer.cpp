@@ -14,7 +14,7 @@ Buffer::Buffer(cl_mem buffer, bool take_ownership) : backend_(OPENCL), context_(
   h_.cl() = buffer;
 }
 
-Buffer::Buffer(Context const & context, int_t size) : backend_(context.backend_), context_(context), h_(backend_, true)
+Buffer::Buffer(Context const & context, size_t size) : backend_(context.backend_), context_(context), h_(backend_, true)
 {
   switch(backend_)
   {

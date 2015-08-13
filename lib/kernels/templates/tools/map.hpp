@@ -12,7 +12,7 @@ namespace templates
 class map_functor : public traversal_functor
 {
 
-  numeric_type get_numeric_type(isaac::array_expression const * array_expression, int_t root_idx) const
+  numeric_type get_numeric_type(isaac::array_expression const * array_expression, size_t root_idx) const
 {
   array_expression::node const * root_node = &array_expression->tree()[root_idx];
   while (root_node->lhs.dtype==INVALID_NUMERIC_TYPE)
@@ -21,7 +21,7 @@ class map_functor : public traversal_functor
 }
 
   template<class T>
-  std::shared_ptr<mapped_object> binary_leaf(isaac::array_expression const * array_expression, int_t root_idx, mapping_type const * mapping) const
+  std::shared_ptr<mapped_object> binary_leaf(isaac::array_expression const * array_expression, size_t root_idx, mapping_type const * mapping) const
 {
   return std::shared_ptr<mapped_object>(new T(to_string(array_expression->dtype()), binder_.get(), mapped_object::node_info(mapping, array_expression, root_idx)));
 }
@@ -74,7 +74,7 @@ public:
   {
   }
 
-  void operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const
+  void operator()(isaac::array_expression const & array_expression, size_t root_idx, leaf_t leaf_t) const
   {
       {
         mapping_type::key_type key(root_idx, leaf_t);

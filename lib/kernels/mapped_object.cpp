@@ -51,7 +51,7 @@ void mapped_object::register_attribute(std::string & attribute, std::string cons
   keywords_[key] = attribute;
 }
 
-mapped_object::node_info::node_info(mapping_type const * _mapping, isaac::array_expression const * _array_expression, int_t _root_idx) :
+mapped_object::node_info::node_info(mapping_type const * _mapping, isaac::array_expression const * _array_expression, size_t _root_idx) :
     mapping(_mapping), array_expression(_array_expression), root_idx(_root_idx) { }
 
 mapped_object::mapped_object(std::string const & scalartype, unsigned int id, std::string const & type_key) : type_key_(type_key)
@@ -111,7 +111,7 @@ mapped_dot::mapped_dot(std::string const & scalartype, unsigned int id, node_inf
   mapped_object(scalartype, id, type_key), binary_leaf(info)
 { }
 
-int_t mapped_dot::root_idx() const
+size_t mapped_dot::root_idx() const
 { return info_.root_idx; }
 
 isaac::array_expression const & mapped_dot::array_expression() const

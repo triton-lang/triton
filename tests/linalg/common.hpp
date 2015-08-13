@@ -51,7 +51,7 @@ template<class T>
 class simple_vector : public simple_vector_base<T>
 {
 public:
-    simple_vector(size_t N) :  simple_vector_base<T>(0, N, 1, data_), data_(N){}
+    simple_vector(int_t N) :  simple_vector_base<T>(0, N, 1, data_), data_(N){}
 private:
     std::vector<T> data_;
 };

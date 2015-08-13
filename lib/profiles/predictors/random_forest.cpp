@@ -27,7 +27,7 @@ std::vector<float> const & random_forest::tree::predict(std::vector<int_t> const
   return value_[idx];
 }
 
-int_t random_forest::tree::D() const { return D_; }
+size_t random_forest::tree::D() const { return D_; }
 
 random_forest::random_forest(rapidjson::Value const & estimators)
 {
@@ -42,10 +42,10 @@ std::vector<float> random_forest::predict(std::vector<int_t> const & x) const
   for(const auto & elem : estimators_)
   {
     std::vector<float> const & subres = elem.predict(x);
-    for(int_t i = 0 ; i < D_ ; ++i)
+    for(size_t i = 0 ; i < D_ ; ++i)
       res[i] += subres[i];
   }
-  for(int_t i = 0 ; i < D_ ; ++i)
+  for(size_t i = 0 ; i < D_ ; ++i)
     res[i] /= estimators_.size();
   return res;
 }
