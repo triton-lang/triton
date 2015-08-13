@@ -24,8 +24,6 @@ num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetch_policy(_fetch_po
 
 int gemv::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
 {
-  if(dot_type_==REDUCE_ROWS && p_.simd_width>1)
-    return TEMPLATE_INVALID_SIMD_WIDTH;
   if (p_.fetch_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
@@ -73,6 +71,7 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
       arguments += e->process(Global(backend).get() + " " + numeric_type + "* #name_temp, ");
   }
 
+  int col_simd_width = (dot_type_ == REDUCE_COLUMNS) ? 1 : p_.simd_width;
   switch(backend)
   {
 #ifdef ISAAC_WITH_CUDA
@@ -94,25 +93,27 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
   std::string local_size_0_ld_str = to_string(local_size_0_ld);
 
   for (const auto & e : dots)
-    stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;
+    stream << e->process(Local(backend).get() + " " + append_width("#scalartype", col_simd_width) + " #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;
 
-  stream << "for(" << _size_t << " r = " << GlobalIdx1(backend) << "; r < (M +" << p_.local_size_1 - 1 << ")/" << p_.local_size_1 << "*" << p_.local_size_1 << "; r += " << GlobalSize1(backend) << ")" << std::endl;
+  stream << "for(" << _size_t << " r = " << GlobalIdx1(backend) << "*" << col_simd_width << "; r < (M +" << p_.local_size_1 - 1 << ")/" << p_.local_size_1 << "*" << p_.local_size_1*col_simd_width << "; r += " << GlobalSize1(backend) << "*" << col_simd_width << ")" << std::endl;
   stream << "{" << std::endl;
 
   stream.inc_tab();
   stream << "" << _size_t << " lidx = " << LocalIdx0(backend) << ";" << std::endl;
   stream << "" << _size_t << " lidy = " << LocalIdx1(backend) <<";" << std::endl;
 
-  for (const auto & e : dots)
-    stream << e->process("#scalartype #name_acc = " + neutral_element((e)->root_op(), backend, "#scalartype") + ";") << std::endl;
+  for (const auto & e : dots){
+    std::string data_type = append_width("#scalartype",col_simd_width);
+
+    stream << e->process(data_type + " #name_acc = " + neutral_element((e)->root_op(), backend, "#scalartype") + ";") << std::endl;
+  }
 
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  element_wise_loop_1D(stream, p_.fetch_policy, p_.simd_width, "c", "N", GlobalIdx0(backend).get(), GlobalSize0(backend).get(), device, [&](unsigned int simd_width)
+  element_wise_loop_1D(stream, p_.fetch_policy, (dot_type_==REDUCE_COLUMNS)?p_.simd_width:1, "c", "N", GlobalIdx0(backend).get(), GlobalSize0(backend).get(), device, [&](unsigned int row_simd_width)
   {
-    std::string data_type = append_width("#scalartype",simd_width);
 
 
     for (const auto & e : dots)
@@ -120,32 +121,34 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
       std::map<std::string, std::string> accessors;
       if(dot_type_==REDUCE_COLUMNS)
       {
-        accessors["array2"] = data_type + " #namereg = " + vload(simd_width, "#scalartype", "c*#stride", "#pointer + r*#ld", backend)+";";
-        accessors["repeat"] = data_type + " #namereg = " + vload(simd_width, "#scalartype", "(c%#tuplearg0)*#stride", "#pointer + (r%#tuplearg1)*#stride ", backend)+";";
+        std::string data_type = append_width("#scalartype",row_simd_width);
+        accessors["array2"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "c*#stride", "#pointer + r*#ld", backend)+";";
+        accessors["repeat"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "(c%#tuplearg0)*#stride", "#pointer + (r%#tuplearg1)*#stride ", backend)+";";
       }
       else
       {
-        accessors["array2"] = "#scalartype #namereg = #pointer[r*#stride + c*#ld];";
+        std::string data_type = append_width("#scalartype",col_simd_width);
+        accessors["array2"] = data_type + " #namereg = " + vload(col_simd_width, "#scalartype", "0", "#pointer + r*#stride + c*#ld", backend) + ";";
         accessors["repeat"] = "#scalartype #namereg = $VALUE{(r%#tuplearg0)*#stride, (c%#tuplearg1)*#stride};";
       }
       e->process_recursive(stream, PARENT_NODE_TYPE, accessors);
     }
 
     //Update accumulators
-    std::vector<std::string> str(simd_width);
-    if (simd_width==1)
+    std::vector<std::string> str(row_simd_width);
+    if (row_simd_width==1)
       str[0] = "#namereg";
     else
-      for (unsigned int a = 0; a < simd_width; ++a)
+      for (unsigned int a = 0; a < row_simd_width; ++a)
         str[a] = access_vector_type("#namereg",a);
 
 
     for (auto & elem : dots)
-      for (unsigned int a = 0; a < simd_width; ++a)
+      for (unsigned int a = 0; a < row_simd_width; ++a)
       {
         std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, {{"array2", str[a]}, {"repeat", str[a]}, {"array0", "#namereg"}});
         if (elem->is_index_dot())
-          compute_index_dot(stream, elem->process("#name_acc"), "c*"+to_string(simd_width) + to_string(a), elem->process("#name_acc_value"), value, elem->root_op());
+          compute_index_dot(stream, elem->process("#name_acc"), "c*"+to_string(row_simd_width) + to_string(a), elem->process("#name_acc_value"), value, elem->root_op());
         else
           compute_dot(stream, elem->process("#name_acc"), value,elem->root_op());
       }
@@ -187,17 +190,37 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
   if(p_.num_groups_0==1)
   {
     std::map<std::string, std::string> accessors;
-    accessors["gemv"] = "#name_buf[lidy*" + local_size_0_ld_str + "]";
-    accessors["array1"] = "#pointer[r*#stride]";
-    evaluate(stream, PARENT_NODE_TYPE, accessors, expressions, mappings);
+    for(int s = 0 ; s < col_simd_width ; ++s)
+    {
+        accessors["gemv"] = "#name_buf[lidy*" + local_size_0_ld_str + "]";
+        if(col_simd_width > 1)
+            accessors["gemv"] = access_vector_type(accessors["gemv"], s);
+        accessors["array1"] = "#pointer[(r +" + to_string(s) + ")*#stride]";
+        evaluate(stream, PARENT_NODE_TYPE, accessors, expressions, mappings);
+    }
   }
   else
   {
     for (mapped_dot const * e : dots)
     {
+      if(col_simd_width > 1)
+          stream << "if(M - r > " << col_simd_width << "){" << std::endl;
       if (e->is_index_dot())
-        stream << e->process("#name_temp_value[r + M*" + GroupIdx0(backend).get() + "] = #name_buf_value[lidy*" + local_size_0_ld_str + "];") << std::endl;
-      stream << e->process("#name_temp[r + M*" + GroupIdx0(backend).get() + "] = #name_buf[lidy*" + local_size_0_ld_str + "];") << std::endl;
+          stream << e->process(vstore(col_simd_width,"uint", "#name_buf_value[lidy*" + local_size_0_ld_str + "]", "0", "#name_temp_value + r + M*" + GroupIdx0(backend).get(),backend)) << ";" << std::endl;
+      stream << e->process(vstore(col_simd_width,"#scalartype", "#name_buf[lidy*" + local_size_0_ld_str + "]", "0", "#name_temp + r + M*" + GroupIdx0(backend).get(),backend)) << ";" << std::endl;
+      if(col_simd_width > 1)
+      {
+          stream << "}" << std::endl;
+          stream << "else{" << std::endl;
+          stream.inc_tab();
+          for(int s = 0 ; s < col_simd_width ; ++s){
+              if (e->is_index_dot())
+                  stream << "if(r + " << s << "< M) " << e->process("#name_temp_value[r + " + to_string(s) + " + M*" + GroupIdx0(backend).get() + "] = " + access_vector_type("#name_buf_value[lidy*" + local_size_0_ld_str + "]", s)) << ";" << std::endl;
+              stream << "if(r + " << s << "< M) " << e->process("#name_temp[r + " + to_string(s) + " + M*" + GroupIdx0(backend).get() + "] = " + access_vector_type("#name_buf[lidy*" + local_size_0_ld_str + "]", s)) << ";" << std::endl;
+          }
+          stream.dec_tab();
+          stream << "}" << std::endl;
+      }
     }
   }
   stream.dec_tab();
@@ -209,6 +232,8 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
 
   stream.dec_tab();
   stream << "}" << std::endl;
+
+//  std::cout << stream.str() << std::endl;
 
   if(p_.num_groups_0>1)
   {
@@ -338,7 +363,7 @@ void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program
   }
 
   //Fallback
-  if(dot_type_==REDUCE_COLUMNS && p_.simd_width>1 && requires_fallback(expressions))
+  if(p_.simd_width>1 && requires_fallback(expressions))
   {
       fallback.enqueue(queue, program, "fallback", fallback, controller);
       return;
