@@ -4,7 +4,7 @@ from itertools import chain, product
 from numpy import argsort, argmax
 from operator import mul
 from sklearn import ensemble
-import isaac as isc
+import isaac as sc
 import optimize, tools, model
 
 from json import encoder
@@ -22,40 +22,40 @@ def pow2range(a, b):
 
 def tune(device, operation, json_path): 
     #List devices
-    platforms = isc.driver.get_platforms()
-    context = isc.driver.context(device)
+    platforms = sc.driver.get_platforms()
+    context = sc.driver.context(device)
     
     #List of size tuples to use
     sizes = {}
-    sizes[isc.templates.axpy] = [(x,) for x in tools.expspace(1e3, 1e8, 4)]
-    sizes[isc.templates.gemv_n] = product(pow2range(4,17), pow2range(4,17))
-    sizes[isc.templates.gemv_t] = sizes[isc.templates.gemv_n]
-    sizes[isc.templates.gemm_nn]     = product(pow2range(6, 12), pow2range(6, 12), pow2range(6, 12))
-    sizes[isc.templates.gemm_tn]     = sizes[isc.templates.gemm_nn]
-    sizes[isc.templates.gemm_nt]     = sizes[isc.templates.gemm_nn]
-    sizes[isc.templates.gemm_tt]     = sizes[isc.templates.gemm_nn]
+    sizes[sc.templates.axpy] = [(x,) for x in tools.expspace(1e3, 1e8, 4)]
+    sizes[sc.templates.gemv_n] = product(pow2range(4,17), pow2range(4,17))
+    sizes[sc.templates.gemv_t] = sizes[sc.templates.gemv_n]
+    sizes[sc.templates.gemm_nn]     = product(pow2range(6, 12), pow2range(6, 12), pow2range(6, 12))
+    sizes[sc.templates.gemm_tn]     = sizes[sc.templates.gemm_nn]
+    sizes[sc.templates.gemm_nt]     = sizes[sc.templates.gemm_nn]
+    sizes[sc.templates.gemm_tt]     = sizes[sc.templates.gemm_nn]
     
 
     #Quick tuning - AlexNet sizes + Intuition
-    sizes[isc.templates.ger] 		 = [(1536,1536)]
+    sizes[sc.templates.ger] 		 = [(1536,1536)]
 
-    sizes[isc.templates.gemv_n]		 = [(1000,256),
+    sizes[sc.templates.gemv_n]		 = [(1000,256),
                                         (4096,256)]
-    sizes[isc.templates.gemv_t]		 = [(169,256),
+    sizes[sc.templates.gemv_t]		 = [(169,256),
                                         (169,384),
                                         (729,256),
                                         (3025,96)]
 	
-    sizes[isc.templates.gemm_nn]	 = [(3025,96,363),
+    sizes[sc.templates.gemm_nn]	 = [(3025,96,363),
                                         (729,128,1200),
                                         (169,384,2304),
                                         (169,192,1728),
                                         (169,128,1728)]
-    sizes[isc.templates.gemm_nt]	 = [(169,1728,128),
+    sizes[sc.templates.gemm_nt]	 = [(169,1728,128),
 										(169,1728,192),
 										(169,2304,384),
 										(729,1200,128)]
-    sizes[isc.templates.gemm_tn]	 = [(1728,128,169), 
+    sizes[sc.templates.gemm_tn]	 = [(1728,128,169), 
 										(1728,192,169),
 										(2304,384,169),
 										(1200,128,729),
@@ -102,7 +102,7 @@ def tune(device, operation, json_path):
                         try:
                             time = tools.benchmark(operation, new, _tree)
                             perf = performance(xx, time)
-                        except (isc.OperationNotSupported, isc.LaunchOutOfResources, isc.MemObjectAllocationFailure):
+                        except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
                             perf = 0
                         yy.append(0 if isinf(perf) else perf)
         #Update dataset
@@ -111,7 +111,7 @@ def tune(device, operation, json_path):
         for ip, p in enumerate(profiles):
             try:
                 perf = 0 if fastest and ip < nparams and predperf[ip]/fastest < .1 else performance(x,tools.benchmark(operation, p, tree))
-            except (isc.OperationNotSupported, isc.LaunchOutOfResources, isc.MemObjectAllocationFailure):
+            except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
                 perf = 0
             y.append(0 if isinf(perf) else perf)
         X.append(x)
@@ -141,7 +141,7 @@ def tune(device, operation, json_path):
     
 
 def parse_arguments():
-    platforms = isc.driver.get_platforms()
+    platforms = sc.driver.get_platforms()
     devices = [d for platform in platforms for d in platform.get_devices()]
     #Command line arguments
     parser = argparse.ArgumentParser()
@@ -156,20 +156,20 @@ def parse_arguments():
     print("----------------")
     for (i, d) in enumerate(devices):
         selected = '[' + ('x' if device==d else ' ') + ']'
-        print selected , '-',  isc.driver.device_type_to_string(d.type), '-', d.name, 'on', d.platform.name
+        print selected , '-',  sc.driver.device_type_to_string(d.type), '-', d.name, 'on', d.platform.name
     print("----------------")
     
     
-    operation = {'axpy': isc.templates.axpy, 'dot': isc.templates.dot,
-                 'ger': isc.templates.ger, 'gemv_n': isc.templates.gemv_n, 'gemv_t': isc.templates.gemv_t,
-                 'gemm_nn': isc.templates.gemm_nn, 'gemm_tn': isc.templates.gemm_tn, 'gemm_nt': isc.templates.gemm_nt, 'gemm_tt':isc.templates.gemm_tt}[args.operation]
+    operation = {'axpy': sc.templates.axpy, 'dot': sc.templates.dot,
+                 'ger': sc.templates.ger, 'gemv_n': sc.templates.gemv_n, 'gemv_t': sc.templates.gemv_t,
+                 'gemm_nn': sc.templates.gemm_nn, 'gemm_tn': sc.templates.gemm_tn, 'gemm_nt': sc.templates.gemm_nt, 'gemm_tt':sc.templates.gemm_tt}[args.operation]
     json = tools.sanitize(device.name) + '.json' if not args.json else args.json
         
     return (device, operation, json)
         
             
 if __name__ == "__main__":
-    isc.driver.default.queue_properties = isc.driver.PROFILING_ENABLE
+    sc.driver.default.queue_properties = sc.driver.PROFILING_ENABLE
     args = parse_arguments()
     tune(*args)
 

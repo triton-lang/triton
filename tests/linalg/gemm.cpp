@@ -3,23 +3,23 @@
 #include "isaac/array.h"
 #include "isaac/wrap/clBLAS.h"
 
-namespace isc = isaac;
+namespace sc = isaac;
 
 template<typename T>
 void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & cA, simple_matrix_base<T> const & cB,
-                          isc::array & C, isc::array const & A, isc::array const & AT,  isc::array const & B, isc::array const & BT,
+                          sc::array & C, sc::array const & A, sc::array const & AT,  sc::array const & B, sc::array const & BT,
                           interface_t interf, const char * prefix)
 {
   int failure_count = 0;
 
-  isc::int_t M = C.shape()[0];
-  isc::int_t N = C.shape()[1];
-  isc::int_t K = A.shape()[1];
+  sc::int_t M = C.shape()[0];
+  sc::int_t N = C.shape()[1];
+  sc::int_t K = A.shape()[1];
 
   T alpha = 1;
   T beta = 0;
 
-  isc::driver::CommandQueue queue = isc::driver::backend::queues::get(C.context(),0);
+  sc::driver::CommandQueue queue = sc::driver::backend::queues::get(C.context(),0);
 
   for(int i = 0 ; i < M ; ++i)
   {
@@ -43,7 +43,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   std::cout << "[" << prefix << "] \t" << NAME << "..." << std::flush;\
   GPU_OP;\
   queue.synchronize();\
-  isc::copy(C, buffer);\
+  sc::copy(C, buffer);\
   if(diff(buffer, cCbuffer, epsilon))\
   {\
     failure_count++;\
@@ -94,7 +94,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 }
 
 template<typename T>
-void test_impl(T epsilon, isc::driver::Context const & ctx)
+void test_impl(T epsilon, sc::driver::Context const & ctx)
 {
     int_t M = 173;
     int_t N = 241;
@@ -126,11 +126,11 @@ int main()
 {
   clblasSetup();
   std::list<isaac::driver::Context const *> data;
-  isc::driver::backend::contexts::get(data);
+  sc::driver::backend::contexts::get(data);
   for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = isc::driver::backend::queues::get(*context,0).device();
-    if(device.type() != isc::driver::DEVICE_TYPE_GPU)
+    sc::driver::Device device = sc::driver::backend::queues::get(*context,0).device();
+    if(device.type() != sc::driver::DEVICE_TYPE_GPU)
         continue;
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;

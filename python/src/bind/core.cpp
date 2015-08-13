@@ -6,19 +6,19 @@ namespace detail
 {
 
 
-isc::numeric_type to_isc_dtype(np::dtype const & T)
+sc::numeric_type to_sc_dtype(np::dtype const & T)
 {
-  if(T==np::detail::get_int_dtype<8, false>()) return isc::CHAR_TYPE;
-  else if(T==np::detail::get_int_dtype<8, true>()) return isc::UCHAR_TYPE;
-  else if(T==np::detail::get_int_dtype<16, false>()) return isc::SHORT_TYPE;
-  else if(T==np::detail::get_int_dtype<16, true>()) return isc::USHORT_TYPE;
-  else if(T==np::detail::get_int_dtype<32, false>()) return isc::INT_TYPE;
-  else if(T==np::detail::get_int_dtype<32, true>()) return isc::UINT_TYPE;
-  else if(T==np::detail::get_int_dtype<64, false>()) return isc::LONG_TYPE;
-  else if(T==np::detail::get_int_dtype<64, true>()) return isc::ULONG_TYPE;
-//  else if(T==np::detail::get_float_dtype<16>()) return isc::HALF_TYPE;
-  else if(T==np::detail::get_float_dtype<32>()) return isc::FLOAT_TYPE;
-  else if(T==np::detail::get_float_dtype<64>()) return isc::DOUBLE_TYPE;
+  if(T==np::detail::get_int_dtype<8, false>()) return sc::CHAR_TYPE;
+  else if(T==np::detail::get_int_dtype<8, true>()) return sc::UCHAR_TYPE;
+  else if(T==np::detail::get_int_dtype<16, false>()) return sc::SHORT_TYPE;
+  else if(T==np::detail::get_int_dtype<16, true>()) return sc::USHORT_TYPE;
+  else if(T==np::detail::get_int_dtype<32, false>()) return sc::INT_TYPE;
+  else if(T==np::detail::get_int_dtype<32, true>()) return sc::UINT_TYPE;
+  else if(T==np::detail::get_int_dtype<64, false>()) return sc::LONG_TYPE;
+  else if(T==np::detail::get_int_dtype<64, true>()) return sc::ULONG_TYPE;
+//  else if(T==np::detail::get_float_dtype<16>()) return sc::HALF_TYPE;
+  else if(T==np::detail::get_float_dtype<32>()) return sc::FLOAT_TYPE;
+  else if(T==np::detail::get_float_dtype<64>()) return sc::DOUBLE_TYPE;
   else{
     PyErr_SetString(PyExc_TypeError, "Unrecognized datatype");
     bp::throw_error_already_set();
@@ -26,19 +26,19 @@ isc::numeric_type to_isc_dtype(np::dtype const & T)
   }
 }
 
-np::dtype to_np_dtype(isc::numeric_type const & T) throw()
+np::dtype to_np_dtype(sc::numeric_type const & T) throw()
 {
-  if(T==isc::CHAR_TYPE) return np::detail::get_int_dtype<8, false>();
-  else if(T==isc::UCHAR_TYPE) return np::detail::get_int_dtype<8, true>();
-  else if(T==isc::SHORT_TYPE) return np::detail::get_int_dtype<16, false>();
-  else if(T==isc::USHORT_TYPE) return np::detail::get_int_dtype<16, true>();
-  else if(T==isc::INT_TYPE) return np::detail::get_int_dtype<32, false>();
-  else if(T==isc::UINT_TYPE) return np::detail::get_int_dtype<32, true>();
-  else if(T==isc::LONG_TYPE) return np::detail::get_int_dtype<64, false>();
-  else if(T==isc::ULONG_TYPE) return np::detail::get_int_dtype<64, true>();
-//  else if(T==isc::HALF_TYPE) return np::detail::get_float_dtype<16>();
-  else if(T==isc::FLOAT_TYPE) return np::detail::get_float_dtype<32>();
-  else if(T==isc::DOUBLE_TYPE) return np::detail::get_float_dtype<64>();
+  if(T==sc::CHAR_TYPE) return np::detail::get_int_dtype<8, false>();
+  else if(T==sc::UCHAR_TYPE) return np::detail::get_int_dtype<8, true>();
+  else if(T==sc::SHORT_TYPE) return np::detail::get_int_dtype<16, false>();
+  else if(T==sc::USHORT_TYPE) return np::detail::get_int_dtype<16, true>();
+  else if(T==sc::INT_TYPE) return np::detail::get_int_dtype<32, false>();
+  else if(T==sc::UINT_TYPE) return np::detail::get_int_dtype<32, true>();
+  else if(T==sc::LONG_TYPE) return np::detail::get_int_dtype<64, false>();
+  else if(T==sc::ULONG_TYPE) return np::detail::get_int_dtype<64, true>();
+//  else if(T==sc::HALF_TYPE) return np::detail::get_float_dtype<16>();
+  else if(T==sc::FLOAT_TYPE) return np::detail::get_float_dtype<32>();
+  else if(T==sc::DOUBLE_TYPE) return np::detail::get_float_dtype<64>();
   else{
     PyErr_SetString(PyExc_TypeError, "Unrecognized datatype");
     bp::throw_error_already_set();
@@ -46,21 +46,21 @@ np::dtype to_np_dtype(isc::numeric_type const & T) throw()
   }
 }
 
-bp::tuple get_shape(isc::array const & x)
+bp::tuple get_shape(sc::array const & x)
 {
   return bp::make_tuple(x.shape()[0], x.shape()[1]);
 }
 
 template<class T>
-struct datatype : public isc::value_scalar
+struct datatype : public sc::value_scalar
 {
-  datatype(T t) : isc::value_scalar(t){ }
+  datatype(T t) : sc::value_scalar(t){ }
 
 };
 
 template<class T>
 unsigned int size(datatype<T> const & dt)
-{ return isc::size_of(dt.dtype()) ; }
+{ return sc::size_of(dt.dtype()) ; }
 
 #define INSTANTIATE(name, clname) \
   struct name : public detail::datatype<clname> {  name(clname value) : detail::datatype<clname>(value){} };
@@ -80,13 +80,13 @@ unsigned int size(datatype<T> const & dt)
 
 namespace detail
 {
-  std::shared_ptr<isc::profiles::value_type> construct_model(bp::object const & tp, bp::object dtype, isc::driver::CommandQueue & queue)
+  std::shared_ptr<sc::profiles::value_type> construct_model(bp::object const & tp, bp::object dtype, sc::driver::CommandQueue & queue)
   {
-      return std::shared_ptr<isc::profiles::value_type>(new isc::profiles::value_type(tools::extract_template_type(tp), tools::extract_dtype(dtype), (isaac::templates::base const &)bp::extract<isaac::templates::base>(tp), queue));
+      return std::shared_ptr<sc::profiles::value_type>(new sc::profiles::value_type(tools::extract_template_type(tp), tools::extract_dtype(dtype), (isaac::templates::base const &)bp::extract<isaac::templates::base>(tp), queue));
   }
 
-  std::shared_ptr<isc::array>
-  ndarray_to_iscarray(const np::ndarray& array, isc::driver::Context const & ctx)
+  std::shared_ptr<sc::array>
+  ndarray_to_scarray(const np::ndarray& array, sc::driver::Context const & ctx)
   {
 
     int d = array.get_nd();
@@ -95,14 +95,14 @@ namespace detail
       bp::throw_error_already_set();
     }
 
-    isc::numeric_type dtype = to_isc_dtype(array.get_dtype());
-    isc::int_t size = (isc::int_t)array.shape(0);
-    isc::array* v = new isc::array(size, dtype, ctx);
+    sc::numeric_type dtype = to_sc_dtype(array.get_dtype());
+    sc::int_t size = (sc::int_t)array.shape(0);
+    sc::array* v = new sc::array(size, dtype, ctx);
 
     void* data = (void*)array.get_data();
-    isc::copy(data, *v);
+    sc::copy(data, *v);
 
-    return std::shared_ptr<isc::array>(v);
+    return std::shared_ptr<sc::array>(v);
   }
 
   isaac::driver::Context const & extract_context(bp::object context)
@@ -118,19 +118,19 @@ namespace detail
   }
 
 
-  std::shared_ptr<isc::array> create_array(bp::object const & obj, bp::object odtype, bp::object pycontext)
+  std::shared_ptr<sc::array> create_array(bp::object const & obj, bp::object odtype, bp::object pycontext)
   {
-    return ndarray_to_iscarray(np::from_object(obj, to_np_dtype(tools::extract_dtype(odtype))), extract_context(pycontext));
+    return ndarray_to_scarray(np::from_object(obj, to_np_dtype(tools::extract_dtype(odtype))), extract_context(pycontext));
   }
 
-  std::shared_ptr<isc::array> create_zeros_array(isc::int_t M, isc::int_t N, bp::object odtype, bp::object pycontext)
+  std::shared_ptr<sc::array> create_zeros_array(sc::int_t M, sc::int_t N, bp::object odtype, bp::object pycontext)
   {
-   return std::shared_ptr<isc::array>(new isc::array(isc::zeros(M, N, tools::extract_dtype(odtype), extract_context(pycontext))));
+   return std::shared_ptr<sc::array>(new sc::array(sc::zeros(M, N, tools::extract_dtype(odtype), extract_context(pycontext))));
   }
 
-  std::shared_ptr<isc::array> create_empty_array(bp::object sizes, bp::object odtype, bp::object pycontext)
+  std::shared_ptr<sc::array> create_empty_array(bp::object sizes, bp::object odtype, bp::object pycontext)
   {
-      typedef std::shared_ptr<isc::array> result_type;
+      typedef std::shared_ptr<sc::array> result_type;
 
       std::size_t len;
       int size1;
@@ -145,17 +145,17 @@ namespace detail
         size1 = bp::extract<int>(sizes)();
       }
 
-      isc::numeric_type dtype = tools::extract_dtype(odtype);
+      sc::numeric_type dtype = tools::extract_dtype(odtype);
       if(len < 1 || len > 2)
       {
           PyErr_SetString(PyExc_TypeError, "Only 1-D and 2-D arrays are supported!");
           bp::throw_error_already_set();
       }
 
-      isc::driver::Context const & context = extract_context(pycontext);
+      sc::driver::Context const & context = extract_context(pycontext);
       if(len==1)
-          return result_type(new isc::array(size1, dtype, context));
-      return result_type(new isc::array(size1, size2, dtype, context));
+          return result_type(new sc::array(size1, dtype, context));
+      return result_type(new sc::array(size1, size2, dtype, context));
   }
 
   std::string type_name(bp::object const & obj)
@@ -167,26 +167,26 @@ namespace detail
       return bp::extract<std::string>(obj.attr("__class__").attr("__name__"))();
   }
 
-  std::shared_ptr<isc::scalar> construct_scalar(bp::object obj, bp::object pycontext)
+  std::shared_ptr<sc::scalar> construct_scalar(bp::object obj, bp::object pycontext)
   {
-    typedef std::shared_ptr<isc::scalar> result_type;
-    isc::driver::Context const & context = extract_context(pycontext);
+    typedef std::shared_ptr<sc::scalar> result_type;
+    sc::driver::Context const & context = extract_context(pycontext);
     std::string name = type_name(obj);
-    if(name=="int") return result_type(new isc::scalar(bp::extract<int>(obj)(), context));
-    else if(name=="float") return result_type(new isc::scalar(bp::extract<double>(obj)(), context));
-    else if(name=="long") return result_type(new isc::scalar(bp::extract<long>(obj)(), context));
-    else if(name=="int") return result_type(new isc::scalar(bp::extract<int>(obj)(), context));
+    if(name=="int") return result_type(new sc::scalar(bp::extract<int>(obj)(), context));
+    else if(name=="float") return result_type(new sc::scalar(bp::extract<double>(obj)(), context));
+    else if(name=="long") return result_type(new sc::scalar(bp::extract<long>(obj)(), context));
+    else if(name=="int") return result_type(new sc::scalar(bp::extract<int>(obj)(), context));
 
-    else if(name=="int8") return result_type(new isc::scalar(isc::CHAR_TYPE, context));
-    else if(name=="uint8") return result_type(new isc::scalar(isc::UCHAR_TYPE, context));
-    else if(name=="int16") return result_type(new isc::scalar(isc::SHORT_TYPE, context));
-    else if(name=="uint16") return result_type(new isc::scalar(isc::USHORT_TYPE, context));
-    else if(name=="int32") return result_type(new isc::scalar(isc::INT_TYPE, context));
-    else if(name=="uint32") return result_type(new isc::scalar(isc::UINT_TYPE, context));
-    else if(name=="int64") return result_type(new isc::scalar(isc::LONG_TYPE, context));
-    else if(name=="uint64") return result_type(new isc::scalar(isc::ULONG_TYPE, context));
-    else if(name=="float32") return result_type(new isc::scalar(isc::FLOAT_TYPE, context));
-    else if(name=="float64") return result_type(new isc::scalar(isc::DOUBLE_TYPE, context));
+    else if(name=="int8") return result_type(new sc::scalar(sc::CHAR_TYPE, context));
+    else if(name=="uint8") return result_type(new sc::scalar(sc::UCHAR_TYPE, context));
+    else if(name=="int16") return result_type(new sc::scalar(sc::SHORT_TYPE, context));
+    else if(name=="uint16") return result_type(new sc::scalar(sc::USHORT_TYPE, context));
+    else if(name=="int32") return result_type(new sc::scalar(sc::INT_TYPE, context));
+    else if(name=="uint32") return result_type(new sc::scalar(sc::UINT_TYPE, context));
+    else if(name=="int64") return result_type(new sc::scalar(sc::LONG_TYPE, context));
+    else if(name=="uint64") return result_type(new sc::scalar(sc::ULONG_TYPE, context));
+    else if(name=="float32") return result_type(new sc::scalar(sc::FLOAT_TYPE, context));
+    else if(name=="float64") return result_type(new sc::scalar(sc::DOUBLE_TYPE, context));
     else{
         PyErr_SetString(PyExc_TypeError, "Data type not understood");
         bp::throw_error_already_set();
@@ -196,11 +196,11 @@ namespace detail
 
   struct model_map_indexing
   {
-      static isc::profiles::value_type& get_item(isc::profiles::map_type& container, bp::tuple i_)
+      static sc::profiles::value_type& get_item(sc::profiles::map_type& container, bp::tuple i_)
       {
-          isc::expression_type expression = tools::extract_template_type(i_[0]);
-          isc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          isc::profiles::map_type::iterator i = container.find(std::make_pair(expression, dtype));
+          sc::expression_type expression = tools::extract_template_type(i_[0]);
+          sc::numeric_type dtype = tools::extract_dtype(i_[1]);
+          sc::profiles::map_type::iterator i = container.find(std::make_pair(expression, dtype));
           if (i == container.end())
           {
               PyErr_SetString(PyExc_KeyError, "Invalid key");
@@ -209,11 +209,11 @@ namespace detail
           return *i->second;
       }
 
-      static void set_item(isc::profiles::map_type& container, bp::tuple i_, isc::profiles::value_type const & v)
+      static void set_item(sc::profiles::map_type& container, bp::tuple i_, sc::profiles::value_type const & v)
       {
-          isc::expression_type expression = tools::extract_template_type(i_[0]);
-          isc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          container[std::make_pair(expression, dtype)].reset(new isc::profiles::value_type(v));
+          sc::expression_type expression = tools::extract_template_type(i_[0]);
+          sc::numeric_type dtype = tools::extract_dtype(i_[1]);
+          container[std::make_pair(expression, dtype)].reset(new sc::profiles::value_type(v));
       }
   };
 }
@@ -227,13 +227,13 @@ void export_core()
 
     bp::class_<isaac::profiles::value_type>("profile", bp::no_init)
                     .def("__init__", bp::make_constructor(detail::construct_model))
-                    .def("execute", &isc::profiles::value_type::execute);
+                    .def("execute", &sc::profiles::value_type::execute);
 
-    bp::class_<isc::value_scalar>("value_scalar", bp::no_init)
-              .add_property("dtype", &isc::value_scalar::dtype);
+    bp::class_<sc::value_scalar>("value_scalar", bp::no_init)
+              .add_property("dtype", &sc::value_scalar::dtype);
 
   #define INSTANTIATE(name, clname) \
-    bp::class_<detail::datatype<clname>, bp::bases<isc::value_scalar> >(#name, bp::init<clname>());\
+    bp::class_<detail::datatype<clname>, bp::bases<sc::value_scalar> >(#name, bp::init<clname>());\
     bp::class_<detail::name, bp::bases<detail::datatype<clname> > >(#name, bp::init<clname>())\
       .add_property("size", &detail::size<clname>)\
       ;
@@ -251,36 +251,36 @@ void export_core()
     INSTANTIATE(float64, cl_double)
     #undef INSTANTIATE
 
-    bp::enum_<isc::expression_type>("operations")
-      MAP_ENUM(AXPY_TYPE, isc)
-      MAP_ENUM(GER_TYPE, isc)
-      MAP_ENUM(DOT_TYPE, isc)
-      MAP_ENUM(GEMV_N_TYPE, isc)
-      MAP_ENUM(GEMV_T_TYPE, isc)
-      MAP_ENUM(GEMM_NN_TYPE, isc)
-      MAP_ENUM(GEMM_TN_TYPE, isc)
-      MAP_ENUM(GEMM_NT_TYPE, isc)
-      MAP_ENUM(GEMM_TT_TYPE, isc);
+    bp::enum_<sc::expression_type>("operations")
+      MAP_ENUM(AXPY_TYPE, sc)
+      MAP_ENUM(GER_TYPE, sc)
+      MAP_ENUM(DOT_TYPE, sc)
+      MAP_ENUM(GEMV_N_TYPE, sc)
+      MAP_ENUM(GEMV_T_TYPE, sc)
+      MAP_ENUM(GEMM_NN_TYPE, sc)
+      MAP_ENUM(GEMM_TN_TYPE, sc)
+      MAP_ENUM(GEMM_NT_TYPE, sc)
+      MAP_ENUM(GEMM_TT_TYPE, sc);
 
 #define ADD_SCALAR_HANDLING(OP)\
   .def(bp::self                                    OP int())\
   .def(bp::self                                    OP long())\
   .def(bp::self                                    OP double())\
-  .def(bp::self                                    OP bp::other<isc::value_scalar>())\
+  .def(bp::self                                    OP bp::other<sc::value_scalar>())\
   .def(int()                                       OP bp::self)\
   .def(long()                                      OP bp::self)\
   .def(double()                                     OP bp::self)\
-  .def(bp::other<isc::value_scalar>()              OP bp::self)
+  .def(bp::other<sc::value_scalar>()              OP bp::self)
 
 #define ADD_ARRAY_OPERATOR(OP)\
   .def(bp::self OP bp::self)\
   ADD_SCALAR_HANDLING(OP)
 
-  bp::class_<isc::expressions_tuple>
-      ("array_expression_container", bp::init<isc::array_expression const &>())
+  bp::class_<sc::expressions_tuple>
+      ("array_expression_container", bp::init<sc::array_expression const &>())
   ;
 
-  bp::class_<isc::array_expression >("array_expression", bp::no_init)
+  bp::class_<sc::array_expression >("array_expression", bp::no_init)
       ADD_ARRAY_OPERATOR(+)
       ADD_ARRAY_OPERATOR(-)
       ADD_ARRAY_OPERATOR(*)
@@ -291,7 +291,7 @@ void export_core()
       ADD_ARRAY_OPERATOR(<=)
       ADD_ARRAY_OPERATOR(==)
       ADD_ARRAY_OPERATOR(!=)
-      .add_property("context", bp::make_function(&isc::array_expression::context, bp::return_internal_reference<>()))
+      .add_property("context", bp::make_function(&sc::array_expression::context, bp::return_internal_reference<>()))
       .def(bp::self_ns::abs(bp::self))
 //      .def(bp::self_ns::pow(bp::self))
   ;
@@ -299,18 +299,18 @@ void export_core()
 
 #define ADD_ARRAY_OPERATOR(OP) \
   .def(bp::self                            OP bp::self)\
-  .def(bp::self                            OP bp::other<isc::array_expression>())\
-  .def(bp::other<isc::array_expression>() OP bp::self) \
+  .def(bp::self                            OP bp::other<sc::array_expression>())\
+  .def(bp::other<sc::array_expression>() OP bp::self) \
   ADD_SCALAR_HANDLING(OP)
 
-  bp::class_<isc::array,
-          std::shared_ptr<isc::array> >
+  bp::class_<sc::array,
+          std::shared_ptr<sc::array> >
   ( "array", bp::no_init)
       .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")= bp::object())))
-      .def(bp::init<isc::array_expression>())
-      .add_property("dtype", &isc::array::dtype)
-      .add_property("context", bp::make_function(&isc::array::context, bp::return_internal_reference<>()))
-      .add_property("T", &isc::array::T)
+      .def(bp::init<sc::array_expression>())
+      .add_property("dtype", &sc::array::dtype)
+      .add_property("context", bp::make_function(&sc::array::context, bp::return_internal_reference<>()))
+      .add_property("T", &sc::array::T)
       .add_property("shape", &detail::get_shape)
       ADD_ARRAY_OPERATOR(+)
       ADD_ARRAY_OPERATOR(-)
@@ -327,7 +327,7 @@ void export_core()
       .def(bp::self_ns::str(bp::self_ns::self))
   ;
 
-  bp::class_<isc::scalar, bp::bases<isc::array> >
+  bp::class_<sc::scalar, bp::bases<sc::array> >
       ("scalar", bp::no_init)
       .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=bp::object())))
       ;
@@ -336,15 +336,15 @@ void export_core()
   bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=bp::object()));
 
 //Assign
-    bp::def("assign", static_cast<isc::array_expression (*)(isc::array const &, isc::array const &)>(&isc::assign));\
-    bp::def("assign", static_cast<isc::array_expression (*)(isc::array const &, isc::array_expression const &)>(&isc::assign));\
+    bp::def("assign", static_cast<sc::array_expression (*)(sc::array const &, sc::array const &)>(&sc::assign));\
+    bp::def("assign", static_cast<sc::array_expression (*)(sc::array const &, sc::array_expression const &)>(&sc::assign));\
 
 //Binary
 #define MAP_FUNCTION(name) \
-      bp::def(#name, static_cast<isc::array_expression (*)(isc::array const &, isc::array const &)>(&isc::name));\
-      bp::def(#name, static_cast<isc::array_expression (*)(isc::array_expression const &, isc::array const &)>(&isc::name));\
-      bp::def(#name, static_cast<isc::array_expression (*)(isc::array const &, isc::array_expression const &)>(&isc::name));\
-      bp::def(#name, static_cast<isc::array_expression (*)(isc::array_expression const &, isc::array_expression const &)>(&isc::name));
+      bp::def(#name, static_cast<sc::array_expression (*)(sc::array const &, sc::array const &)>(&sc::name));\
+      bp::def(#name, static_cast<sc::array_expression (*)(sc::array_expression const &, sc::array const &)>(&sc::name));\
+      bp::def(#name, static_cast<sc::array_expression (*)(sc::array const &, sc::array_expression const &)>(&sc::name));\
+      bp::def(#name, static_cast<sc::array_expression (*)(sc::array_expression const &, sc::array_expression const &)>(&sc::name));
 
   MAP_FUNCTION(maximum)
   MAP_FUNCTION(minimum)
@@ -354,8 +354,8 @@ void export_core()
 
 //Unary
 #define MAP_FUNCTION(name) \
-      bp::def(#name, static_cast<isc::array_expression (*)(isc::array const &)>(&isc::name));\
-      bp::def(#name, static_cast<isc::array_expression (*)(isc::array_expression const &)>(&isc::name));
+      bp::def(#name, static_cast<sc::array_expression (*)(sc::array const &)>(&sc::name));\
+      bp::def(#name, static_cast<sc::array_expression (*)(sc::array_expression const &)>(&sc::name));
 
       bp::def("zeros", &detail::create_zeros_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=bp::object()));
 
@@ -380,8 +380,8 @@ void export_core()
   /*--- Reduction operators----*/
   //---------------------------------------
 #define MAP_FUNCTION(name) \
-      bp::def(#name, static_cast<isc::array_expression (*)(isc::array const &, isc::int_t)>(&isc::name));\
-      bp::def(#name, static_cast<isc::array_expression (*)(isc::array_expression const &, isc::int_t)>(&isc::name));
+      bp::def(#name, static_cast<sc::array_expression (*)(sc::array const &, sc::int_t)>(&sc::name));\
+      bp::def(#name, static_cast<sc::array_expression (*)(sc::array_expression const &, sc::int_t)>(&sc::name));
 
   MAP_FUNCTION(sum)
   MAP_FUNCTION(max)
@@ -392,7 +392,7 @@ void export_core()
 
   /*--- Profiles----*/
   //---------------------------------------
-  bp::class_<isc::profiles::map_type>("profiles")
+  bp::class_<sc::profiles::map_type>("profiles")
       .def("__getitem__", &detail::model_map_indexing::get_item, bp::return_internal_reference<>())
       .def("__setitem__", &detail::model_map_indexing::set_item, bp::with_custodian_and_ward<1,2>())
       ;

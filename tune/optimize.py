@@ -1,4 +1,4 @@
-import isaac as isc
+import isaac as sc
 import random
 
 from copy import deepcopy
@@ -14,10 +14,10 @@ from numpy import cumsum
 
 import tools
 
-fetch_types = [isc.templates.FETCH_FROM_GLOBAL_CONTIGUOUS,
-               isc.templates.FETCH_FROM_GLOBAL_STRIDED,
-               isc.templates.FETCH_FROM_LOCAL,
-               isc.templates.FETCH_FROM_LOCAL]
+fetch_types = [sc.templates.FETCH_FROM_GLOBAL_CONTIGUOUS,
+               sc.templates.FETCH_FROM_GLOBAL_STRIDED,
+               sc.templates.FETCH_FROM_LOCAL,
+               sc.templates.FETCH_FROM_LOCAL]
 
 def exhaustive(template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
@@ -34,7 +34,7 @@ def exhaustive(template, sizes, context):
             time = tools.benchmark(template, parameters, tree)
             if not best or time < best[1]:
                 best = parameters, time
-        except (isc.OperationNotSupported, isc.LaunchOutOfResources, isc.MemObjectAllocationFailure):
+        except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
             pass
         if best:
             stdout.write('%.2f %% | Best %.2f [ for %s ]\r'%(float(idx*100)/len(ranges),metric(sizes, best[1]), best[0]))
@@ -100,7 +100,7 @@ def genetic(template, sizes, context, naccept=200, niter = 1000, cxpb=0.4, mutpb
         try:
             individual.fitness.values = toolbox.evaluate(genome)
             population += [individual]
-        except (isc.OperationNotSupported, isc.LaunchOutOfResources, isc.MemObjectAllocationFailure ):
+        except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure ):
             pass
         genome = encode(list(initializer.next()))
     hof.update(population)
@@ -134,7 +134,7 @@ def genetic(template, sizes, context, naccept=200, niter = 1000, cxpb=0.4, mutpb
                 #Reproduction
                 else: 
                     offspring += [random.choice(population)]
-            except (isc.OperationNotSupported, isc.LaunchOutOfResources, isc.MemObjectAllocationFailure):
+            except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
                 pass
 
 
@@ -159,21 +159,21 @@ def is_local_optimum(parameters, template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
     genetic_infos = tools.genetic_infos_of(template)
     
-    if issubclass(template, isc.templates.axpy):
+    if issubclass(template, sc.templates.axpy):
         sweep_over = [0,1,2]
-    elif issubclass(template, isc.templates.dot):
+    elif issubclass(template, sc.templates.dot):
         sweep_over = [0,1,2]
-    elif issubclass(template, isc.templates.ger):
+    elif issubclass(template, sc.templates.ger):
         sweep_over = [0,1,2,3,4]
-    elif issubclass(template, isc.templates.gemv):
+    elif issubclass(template, sc.templates.gemv):
         sweep_over = [0,1,2,3,4]
-    elif issubclass(template, isc.templates.gemm):
+    elif issubclass(template, sc.templates.gemm):
         sweep_over = [1,3,5,7]
     
     #Evaluate the provided parameters guess
     try:
         reference = tools.benchmark(template, parameters, tree)
-    except (isc.OperationNotSupported, isc.LaunchOutOfResources, isc.MemObjectAllocationFailure):
+    except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
         return False
         
     #Latency bound -- ignore
@@ -190,7 +190,7 @@ def is_local_optimum(parameters, template, sizes, context):
             time = tools.benchmark(template, x, tree)
             if time/reference < .97:
                 return False
-        except (isc.OperationNotSupported, isc.LaunchOutOfResources, isc.MemObjectAllocationFailure):
+        except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
             pass
     return True
     

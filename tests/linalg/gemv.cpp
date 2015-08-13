@@ -5,16 +5,16 @@
 #include "isaac/array.h"
 #include "isaac/wrap/clBLAS.h"
 
-namespace isc = isaac;
+namespace sc = isaac;
 
 template<typename T>
 void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matrix_base<T> const & cA, simple_vector_base<T> & cx,
-                                        isc::array & y, isc::array const & A, isc::array & x, interface_t interf, const char * prefix)
+                                        sc::array & y, sc::array const & A, sc::array & x, interface_t interf, const char * prefix)
 {
   int failure_count = 0;
 
-  isc::int_t M = A.shape()[0];
-  isc::int_t N = A.shape()[1];
+  sc::int_t M = A.shape()[0];
+  sc::int_t N = A.shape()[1];
 
   simple_vector<T> bufy(M);
   simple_vector<T> bufx(N);
@@ -22,7 +22,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   T alpha = static_cast<T>(4.2);
   T beta = static_cast<T>(5.6);
 
-  isc::driver::CommandQueue queue = isc::driver::backend::queues::get(y.context(),0);
+  sc::driver::CommandQueue queue = sc::driver::backend::queues::get(y.context(),0);
 
   T yi = 0, xi = 0;
 #define TEST_OPERATION(NAME, SIZE1, SIZE2, NEUTRAL, REDUCTION, ASSIGNMENT, GPU_REDUCTION, RES, BUF, CRES)\
@@ -37,7 +37,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
   }\
   GPU_REDUCTION;\
   queue.synchronize();\
-  isc::copy(RES, BUF.data());\
+  sc::copy(RES, BUF.data());\
   if(diff(CRES, BUF, epsilon))\
   {\
     failure_count++;\
@@ -90,7 +90,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
 }
 
 template<typename T>
-void test_impl(T epsilon, isc::driver::Context const & ctx)
+void test_impl(T epsilon, sc::driver::Context const & ctx)
 {
   int_t M = 173;
   int_t N = 241;
@@ -116,10 +116,10 @@ int main()
 {
   clblasSetup();
   std::list<isaac::driver::Context const *> data;
-  isc::driver::backend::contexts::get(data);
+  sc::driver::backend::contexts::get(data);
   for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = isc::driver::backend::queues::get(*context,0).device();
+    sc::driver::Device device = sc::driver::backend::queues::get(*context,0).device();
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;

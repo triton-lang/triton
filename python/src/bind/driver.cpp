@@ -10,7 +10,7 @@
 namespace detail
 {
 
-  bp::list nv_compute_capability(isc::driver::Device const & device)
+  bp::list nv_compute_capability(sc::driver::Device const & device)
   {
     bp::list res;
     std::pair<unsigned int, unsigned int> cc = device.nv_compute_capability();
@@ -21,63 +21,63 @@ namespace detail
 
   bp::list get_platforms()
   {
-    std::vector<isc::driver::Platform> platforms;
-    isc::driver::backend::platforms(platforms);
+    std::vector<sc::driver::Platform> platforms;
+    sc::driver::backend::platforms(platforms);
     return tools::to_list(platforms.begin(), platforms.end());
   }
 
-  bp::list get_devices(isc::driver::Platform const & platform)
+  bp::list get_devices(sc::driver::Platform const & platform)
   {
-    std::vector<isc::driver::Device> devices;
+    std::vector<sc::driver::Device> devices;
     platform.devices(devices);
     return tools::to_list(devices.begin(), devices.end());
   }
 
-  bp::list get_queues(isc::driver::Context const & context)
+  bp::list get_queues(sc::driver::Context const & context)
   {
-    std::vector<isc::driver::CommandQueue*> queues;
-    isc::driver::backend::queues::get(context, queues);
+    std::vector<sc::driver::CommandQueue*> queues;
+    sc::driver::backend::queues::get(context, queues);
     bp::list res;
-    for(isc::driver::CommandQueue* queue:queues)
+    for(sc::driver::CommandQueue* queue:queues)
         res.append(*queue);
     return res;
   }
 
-  std::shared_ptr< isc::driver::CommandQueue> create_queue(isc::driver::Context const & context, isc::driver::Device const & device)
+  std::shared_ptr< sc::driver::CommandQueue> create_queue(sc::driver::Context const & context, sc::driver::Device const & device)
   {
-      return std::shared_ptr<isc::driver::CommandQueue>(new isc::driver::CommandQueue(context, device));
+      return std::shared_ptr<sc::driver::CommandQueue>(new sc::driver::CommandQueue(context, device));
   }
 
 
 
-  std::string to_string(isc::driver::device_type type)
+  std::string to_string(sc::driver::device_type type)
   {
-    if(type==isc::driver::DEVICE_TYPE_CPU) return "CPU";
-    if(type==isc::driver::DEVICE_TYPE_GPU) return "GPU";
-    if(type==isc::driver::DEVICE_TYPE_ACCELERATOR) return "ACCELERATOR";
+    if(type==sc::driver::DEVICE_TYPE_CPU) return "CPU";
+    if(type==sc::driver::DEVICE_TYPE_GPU) return "GPU";
+    if(type==sc::driver::DEVICE_TYPE_ACCELERATOR) return "ACCELERATOR";
     throw;
   }
 
-  std::shared_ptr<isc::driver::Context> make_context(isc::driver::Device const & dev)
-  { return std::shared_ptr<isc::driver::Context>(new isc::driver::Context(dev)); }
+  std::shared_ptr<sc::driver::Context> make_context(sc::driver::Device const & dev)
+  { return std::shared_ptr<sc::driver::Context>(new sc::driver::Context(dev)); }
 
-  bp::object enqueue(isc::array_expression const & expression, unsigned int queue_id, bp::list dependencies, bool tune, int label, std::string const & program_name, bool force_recompile)
+  bp::object enqueue(sc::array_expression const & expression, unsigned int queue_id, bp::list dependencies, bool tune, int label, std::string const & program_name, bool force_recompile)
   {
-      std::list<isc::driver::Event> events;
-      std::vector<isc::driver::Event> cdependencies = tools::to_vector<isc::driver::Event>(dependencies);
+      std::list<sc::driver::Event> events;
+      std::vector<sc::driver::Event> cdependencies = tools::to_vector<sc::driver::Event>(dependencies);
 
-      isc::execution_options_type execution_options(queue_id, &events, &cdependencies);
-      isc::dispatcher_options_type dispatcher_options(tune, label);
-      isc::compilation_options_type compilation_options(program_name, force_recompile);
-      isc::array_expression::container_type::value_type root = expression.tree()[expression.root()];
-      if(isc::detail::is_assignment(root.op))
+      sc::execution_options_type execution_options(queue_id, &events, &cdependencies);
+      sc::dispatcher_options_type dispatcher_options(tune, label);
+      sc::compilation_options_type compilation_options(program_name, force_recompile);
+      sc::array_expression::container_type::value_type root = expression.tree()[expression.root()];
+      if(sc::detail::is_assignment(root.op))
       {
-          isc::execute(isc::control(expression, execution_options, dispatcher_options, compilation_options), isaac::profiles::get(execution_options.queue(expression.context())));
+          sc::execute(sc::control(expression, execution_options, dispatcher_options, compilation_options), isaac::profiles::get(execution_options.queue(expression.context())));
           return bp::make_tuple(bp::ptr(root.lhs.array), tools::to_list(events.begin(), events.end()));
       }
       else
       {
-          std::shared_ptr<isc::array> parray(new isc::array(isc::control(expression, execution_options, dispatcher_options, compilation_options)));
+          std::shared_ptr<sc::array> parray(new sc::array(sc::control(expression, execution_options, dispatcher_options, compilation_options)));
           return bp::make_tuple(parray, tools::to_list(events.begin(), events.end()));
       }
   }
@@ -88,7 +88,7 @@ default_driver_values_type default_driver_parameters;
 
 void export_driver()
 {
-  typedef std::vector<isc::driver::CommandQueue> queues_t;
+  typedef std::vector<sc::driver::CommandQueue> queues_t;
 
   bp::object driver_module(bp::handle<>(bp::borrowed(PyImport_AddModule("isaac.driver"))));
   bp::scope().attr("driver") = driver_module;
@@ -103,58 +103,58 @@ void export_driver()
 
 
 
-  bp::enum_<isc::driver::backend_type>
+  bp::enum_<sc::driver::backend_type>
       ("backend_type")
-      .value("OPENCL", isc::driver::OPENCL)
+      .value("OPENCL", sc::driver::OPENCL)
   #ifdef ISAAC_WITH_CUDA
-      .value("CUDA", isc::driver::CUDA)
+      .value("CUDA", sc::driver::CUDA)
   #endif
       ;
 
-  bp::enum_<isc::driver::device_type>
+  bp::enum_<sc::driver::device_type>
       ("device_type")
-      .value("DEVICE_TYPE_GPU", isc::driver::DEVICE_TYPE_GPU)
-      .value("DEVICE_TYPE_CPU", isc::driver::DEVICE_TYPE_CPU)
+      .value("DEVICE_TYPE_GPU", sc::driver::DEVICE_TYPE_GPU)
+      .value("DEVICE_TYPE_CPU", sc::driver::DEVICE_TYPE_CPU)
       ;
 
 
-  bp::class_<isc::driver::Platform>("platform", bp::no_init)
+  bp::class_<sc::driver::Platform>("platform", bp::no_init)
       .def("get_devices", &detail::get_devices)
-      .add_property("name",&isc::driver::Platform::name)
+      .add_property("name",&sc::driver::Platform::name)
       ;
 
   bp::enum_<isaac::driver::Device::Vendor>
       ("vendor")
-      .value("AMD", isc::driver::Device::Vendor::AMD)
-      .value("INTEL", isc::driver::Device::Vendor::INTEL)
-      .value("NVIDIA", isc::driver::Device::Vendor::NVIDIA)
-      .value("UNKNOWN", isc::driver::Device::Vendor::UNKNOWN)
+      .value("AMD", sc::driver::Device::Vendor::AMD)
+      .value("INTEL", sc::driver::Device::Vendor::INTEL)
+      .value("NVIDIA", sc::driver::Device::Vendor::NVIDIA)
+      .value("UNKNOWN", sc::driver::Device::Vendor::UNKNOWN)
       ;
 
-  bp::class_<isc::driver::Device>("device", bp::no_init)
-      .add_property("clock_rate", &isc::driver::Device::clock_rate)
-      .add_property("name", &isc::driver::Device::name)
-      .add_property("type", &isc::driver::Device::type)
-      .add_property("platform", &isc::driver::Device::platform)
-      .add_property("vendor", &isc::driver::Device::vendor)
+  bp::class_<sc::driver::Device>("device", bp::no_init)
+      .add_property("clock_rate", &sc::driver::Device::clock_rate)
+      .add_property("name", &sc::driver::Device::name)
+      .add_property("type", &sc::driver::Device::type)
+      .add_property("platform", &sc::driver::Device::platform)
+      .add_property("vendor", &sc::driver::Device::vendor)
       .add_property("nv_compute_capability", &detail::nv_compute_capability)
       ;
 
-  bp::class_<isc::driver::Context, boost::noncopyable>("context", bp::no_init)
+  bp::class_<sc::driver::Context, boost::noncopyable>("context", bp::no_init)
       .def("__init__", bp::make_constructor(&detail::make_context))
-      .def("synchronize", &isc::driver::backend::synchronize)
+      .def("synchronize", &sc::driver::backend::synchronize)
       .add_property("queues", &detail::get_queues)
-      .add_property("backend", &isc::driver::Context::backend)
+      .add_property("backend", &sc::driver::Context::backend)
       ;
 
-  bp::class_<isc::driver::CommandQueue>("command_queue", bp::init<isc::driver::Context const &, isc::driver::Device const &>())
-      .def("synchronize", &isc::driver::CommandQueue::synchronize)
-      .add_property("profiles", bp::make_function(&isc::profiles::get, bp::return_internal_reference<>()))
-      .add_property("device", bp::make_function(&isc::driver::CommandQueue::device, bp::return_internal_reference<>()))
+  bp::class_<sc::driver::CommandQueue>("command_queue", bp::init<sc::driver::Context const &, sc::driver::Device const &>())
+      .def("synchronize", &sc::driver::CommandQueue::synchronize)
+      .add_property("profiles", bp::make_function(&sc::profiles::get, bp::return_internal_reference<>()))
+      .add_property("device", bp::make_function(&sc::driver::CommandQueue::device, bp::return_internal_reference<>()))
       ;
 
-  bp::class_<isc::driver::Event>("event", bp::init<isc::driver::backend_type>())
-      .add_property("elapsed_time", &isc::driver::Event::elapsed_time)
+  bp::class_<sc::driver::Event>("event", bp::init<sc::driver::backend_type>())
+      .add_property("elapsed_time", &sc::driver::Event::elapsed_time)
      ;
 
   bp::def("device_type_to_string", &detail::to_string);
@@ -164,8 +164,8 @@ void export_driver()
   bp::def("enqueue", &detail::enqueue, (bp::arg("expression"), bp::arg("queue_id") = 0, bp::arg("dependencies")=bp::list(), bp::arg("tune") = false, bp::arg("label")=-1, bp::arg("program_name")="", bp::arg("recompile") = false));
 
   bp::class_<default_driver_values_type>("default_type")
-          .def_readwrite("queue_properties",&isc::driver::backend::default_queue_properties)
-          .def_readwrite("device", &isc::driver::backend::default_device)
+          .def_readwrite("queue_properties",&sc::driver::backend::default_queue_properties)
+          .def_readwrite("device", &sc::driver::backend::default_device)
       ;
 
   bp::scope().attr("default") = bp::object(bp::ptr(&default_driver_parameters));
