@@ -39,11 +39,13 @@ public:
   array(int_t size1, int_t size2, int_t size3, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
 
   //General constructor
-
-  array(array_expression const & proxy);
-  array(array const &);
+  explicit array(array_expression const & proxy);
   template<class T>
-  array(controller<T> const &);
+  explicit array(controller<T> const &);
+  
+  //Copy Constructor
+  array(array const &);
+
   //Getters
   numeric_type dtype() const;
   size4 const & shape() const;
