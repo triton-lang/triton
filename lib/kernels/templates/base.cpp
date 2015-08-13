@@ -111,11 +111,11 @@ base_impl<TType, PType>::base_impl(parameters_type const & parameters, binding_p
 { }
 
 template<class TType, class PType>
-int_t base_impl<TType, PType>::local_size_0() const
+unsigned int base_impl<TType, PType>::local_size_0() const
 { return p_.local_size_0; }
 
 template<class TType, class PType>
-int_t base_impl<TType, PType>::local_size_1() const
+unsigned int base_impl<TType, PType>::local_size_1() const
 { return p_.local_size_1; }
 
 template<class TType, class PType>

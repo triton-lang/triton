@@ -53,8 +53,8 @@ extern "C"
                             cl_uint numEventsInWaitList, const cl_event *eventWaitList, \
                             cl_event *events) \
     { \
-        is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx,false), offx, incx); \
-        is::array y(N, TYPE_ISAAC, is::driver::Buffer(my,false), offy, incy); \
+        is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx,false), (is::int_t)offx, incx); \
+        is::array y(N, TYPE_ISAAC, is::driver::Buffer(my,false), (is::int_t)offy, incy); \
         execute(is::assign(y, alpha*x + y), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
     }
@@ -69,7 +69,7 @@ extern "C"
                              cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx,false), offx, incx);\
+        is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx,false), (is::int_t)offx, incx);\
         execute(is::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
@@ -85,8 +85,8 @@ extern "C"
                              cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        const is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx, false), offx, incx);\
-        is::array y(N, TYPE_ISAAC, is::driver::Buffer(my, false), offy, incy);\
+        const is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx);\
+        is::array y(N, TYPE_ISAAC, is::driver::Buffer(my, false), (is::int_t)offy, incy);\
         execute(is::assign(y, x), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
@@ -103,9 +103,9 @@ extern "C"
                cl_command_queue *commandQueues, cl_uint numEventsInWaitList, \
                const cl_event *eventWaitList, cl_event *events) \
     { \
-        is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx, false), offx, incx); \
-        is::array y(N, TYPE_ISAAC, is::driver::Buffer(my, false), offy, incy); \
-        is::scalar s(TYPE_ISAAC, is::driver::Buffer(dotProduct, false), offDP); \
+        is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx); \
+        is::array y(N, TYPE_ISAAC, is::driver::Buffer(my, false), (is::int_t)offy, incy); \
+        is::scalar s(TYPE_ISAAC, is::driver::Buffer(dotProduct, false), (is::int_t)offDP); \
         execute(is::assign(s, dot(x,y)), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
     }
@@ -120,8 +120,8 @@ extern "C"
                              cl_mem /*scratchBuff*/, cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx, false), offx, incx);\
-        is::scalar s(TYPE_ISAAC, is::driver::Buffer(asum, false), offAsum);\
+        is::array x(N, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx);\
+        is::scalar s(TYPE_ISAAC, is::driver::Buffer(asum, false), (is::int_t)offAsum);\
         execute(is::assign(s, sum(abs(x))), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
@@ -145,12 +145,12 @@ extern "C"
             std::swap(M, N);\
             transA = (transA==clblasTrans)?clblasNoTrans:clblasTrans;\
         }\
-        is::array A(M, N, TYPE_ISAAC, is::driver::Buffer(mA, false), offA, lda);\
+        is::array A(M, N, TYPE_ISAAC, is::driver::Buffer(mA, false), (is::int_t)offA, lda);\
         \
         is::int_t sx = N, sy = M;\
         if(transA) std::swap(sx, sy);\
-        is::array x(sx, TYPE_ISAAC, is::driver::Buffer(mx, false), offx, incx);\
-        is::array y(sy, TYPE_ISAAC, is::driver::Buffer(my, false), offy, incy);\
+        is::array x(sx, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx);\
+        is::array y(sy, TYPE_ISAAC, is::driver::Buffer(my, false), (is::int_t)offy, incy);\
         \
         is::driver::Context const & context = A.context();\
         if(transA==clblasTrans)\
@@ -191,9 +191,9 @@ extern "C"
         if(transA==clblasTrans) std::swap(As1, As2);\
         if(transB==clblasTrans) std::swap(Bs1, Bs2);\
         /*Struct*/\
-        is::array A(As1, As2, TYPE_ISAAC, is::driver::Buffer(mA, false), offA, lda);\
-        is::array B(Bs1, Bs2, TYPE_ISAAC, is::driver::Buffer(mB, false), offB, ldb);\
-        is::array C(M, N, TYPE_ISAAC, is::driver::Buffer(mC, false), offC, ldc);\
+        is::array A(As1, As2, TYPE_ISAAC, is::driver::Buffer(mA, false), (is::int_t)offA, lda);\
+        is::array B(Bs1, Bs2, TYPE_ISAAC, is::driver::Buffer(mB, false), (is::int_t)offB, ldb);\
+        is::array C(M, N, TYPE_ISAAC, is::driver::Buffer(mC, false), (is::int_t)offC, ldc);\
         is::driver::Context const & context = C.context();\
         /*Operation*/\
         if((transA==clblasTrans) && (transB==clblasTrans))\

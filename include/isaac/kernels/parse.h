@@ -28,14 +28,14 @@ class scalar;
 class traversal_functor
 {
 public:
-  void call_before_expansion(array_expression const &, int_t) const { }
-  void call_after_expansion(array_expression const &, int_t) const { }
+  void call_before_expansion(array_expression const &, std::size_t) const { }
+  void call_after_expansion(array_expression const &, std::size_t) const { }
 };
 
 
 /** @brief Recursively execute a functor on a array_expression */
 template<class Fun>
-inline void traverse(isaac::array_expression const & array_expression, int_t root_idx, Fun const & fun, bool inspect)
+inline void traverse(isaac::array_expression const & array_expression, std::size_t root_idx, Fun const & fun, bool inspect)
 {
   array_expression::node const & root_node = array_expression.tree()[root_idx];
   bool recurse = detail::is_node_leaf(root_node.op)?inspect:true;
@@ -109,13 +109,13 @@ private:
 
 public:
   evaluate_expression_traversal(std::map<std::string, std::string> const & accessors, std::string & str, mapping_type const & mapping);
-  void call_before_expansion(isaac::array_expression const & array_expression, int_t root_idx) const;
-  void call_after_expansion(array_expression const & /*array_expression*/, int_t /*root_idx*/) const;
-  void operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf) const;
+  void call_before_expansion(isaac::array_expression const & array_expression, std::size_t root_idx) const;
+  void call_after_expansion(array_expression const & /*array_expression*/, std::size_t /*root_idx*/) const;
+  void operator()(isaac::array_expression const & array_expression, std::size_t root_idx, leaf_t leaf) const;
 };
 
 std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                            isaac::array_expression const & array_expression, int_t root_idx, mapping_type const & mapping);
+                            isaac::array_expression const & array_expression, std::size_t root_idx, mapping_type const & mapping);
 
 void evaluate(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
                      expressions_tuple const & expressions, std::vector<mapping_type> const & mappings);
@@ -126,7 +126,7 @@ class process_traversal : public traversal_functor
 public:
   process_traversal(std::map<std::string, std::string> const & accessors, kernel_generation_stream & stream,
                     mapping_type const & mapping, std::set<std::string> & already_processed);
-  void operator()(array_expression const & array_expression, int_t root_idx, leaf_t leaf) const;
+  void operator()(array_expression const & array_expression, std::size_t root_idx, leaf_t leaf) const;
 private:
   std::map<std::string, std::string> accessors_;
   kernel_generation_stream & stream_;
@@ -149,7 +149,7 @@ private:
 public:
   array_expression_representation_functor(symbolic_binder & binder, char *& ptr);
   void append(char*& p, const char * str) const;
-  void operator()(isaac::array_expression const & array_expression, int_t root_idx, leaf_t leaf_t) const;
+  void operator()(isaac::array_expression const & array_expression, std::size_t root_idx, leaf_t leaf_t) const;
 private:
   symbolic_binder & binder_;
   char *& ptr_;

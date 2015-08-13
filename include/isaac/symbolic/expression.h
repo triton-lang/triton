@@ -162,7 +162,7 @@ struct lhs_rhs_element
   numeric_type  dtype;
   union
   {
-    unsigned int        node_index;
+    std::size_t   node_index;
     values_holder vscalar;
     repeat_infos  tuple;
     isaac::array* array;
@@ -172,7 +172,7 @@ struct lhs_rhs_element
 struct invalid_node{};
 
 void fill(lhs_rhs_element &x, invalid_node);
-void fill(lhs_rhs_element & x, unsigned int node_index);
+void fill(lhs_rhs_element & x, std::size_t node_index);
 void fill(lhs_rhs_element & x, array const & a);
 void fill(lhs_rhs_element & x, value_scalar const & v);
 void fill(lhs_rhs_element & x, repeat_infos const & r);

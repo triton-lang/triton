@@ -15,7 +15,7 @@ void fill(lhs_rhs_element &x, invalid_node)
   x.dtype = INVALID_NUMERIC_TYPE;
 }
 
-void fill(lhs_rhs_element & x, unsigned int node_index)
+void fill(lhs_rhs_element & x, std::size_t node_index)
 {
   x.type_family = COMPOSITE_OPERATOR_FAMILY;
   x.subtype = INVALID_SUBTYPE;
