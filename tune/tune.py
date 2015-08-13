@@ -3,8 +3,8 @@ from math import log, isinf
 from itertools import chain, product
 from numpy import argsort, argmax
 from operator import mul
-from sklearn import ensemble
 import isaac as sc
+from isaac.external.forest import RandomForestRegressor
 import optimize, tools, model
 
 from json import encoder
@@ -82,8 +82,8 @@ def tune(device, operation, json_path):
             if nparams==1:
                 predicted = profiles[0]
             else:
-                clf = ensemble.RandomForestRegressor(min(10, idx+1), max_depth=min(10, idx+1)).fit(X, Y)
-                #clf, nrmse = profile.train(X, Y, profiles)
+                clf = RandomForestRegressor(min(10, idx+1), max_depth=min(10, idx+1)).fit(X, Y)
+                #clf, nrmse = model.train(X, Y, profiles)
                 predperf = clf.predict(x)[0]
                 best = (-predperf).argsort()[:5]
                 perf = [performance(x, tools.benchmark(operation, profiles[b], tree)) for b in best]
@@ -130,7 +130,7 @@ def tune(device, operation, json_path):
     json_data[operation_name]['float32'] = {}
     D = json_data[operation_name]['float32']
     if len(profiles) > 1:
-        clf, nrmse = profile.train(X, Y, profiles)
+        clf, nrmse = model.train(X, Y, profiles)
         D['predictor'] = [{'children_left': e.tree_.children_left.tolist(),
                             'children_right': e.tree_.children_right.tolist(),
                             'threshold': e.tree_.threshold.astype('float64').tolist(),

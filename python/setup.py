@@ -112,7 +112,8 @@ def main():
     library_dirs = [config['lib'] for config in [opencl_config, cuda_config] if config is not None]
 
     #Include directories
-    include =' src/include src/lib/external'.split() + ['external/boost/', 'external/boost/boost/', os.path.join(find_module("numpy")[1], "core", "include")]
+    numpy_include = os.path.join(find_module("numpy")[1], "core", "include")
+    include =' src/include src/lib/external'.split() + ['external/boost/', 'external/boost/boost/', numpy_include]
 
     #Source files
     src =  'src/lib/symbolic/preset.cpp src/lib/symbolic/execute.cpp src/lib/symbolic/io.cpp src/lib/symbolic/expression.cpp src/lib/array.cpp src/lib/value_scalar.cpp src/lib/driver/backend.cpp src/lib/driver/device.cpp src/lib/driver/kernel.cpp src/lib/driver/buffer.cpp src/lib/driver/platform.cpp src/lib/driver/check.cpp src/lib/driver/program.cpp src/lib/driver/command_queue.cpp src/lib/driver/program_cache.cpp src/lib/driver/context.cpp src/lib/driver/event.cpp src/lib/driver/ndrange.cpp src/lib/driver/handle.cpp src/lib/exception/unknown_datatype.cpp src/lib/exception/operation_not_supported.cpp src/lib/profiles/presets.cpp src/lib/profiles/profiles.cpp src/lib/profiles/predictors/random_forest.cpp src/lib/kernels/templates/gemv.cpp src/lib/kernels/templates/axpy.cpp src/lib/kernels/templates/gemm.cpp src/lib/kernels/templates/ger.cpp src/lib/kernels/templates/dot.cpp src/lib/kernels/templates/base.cpp src/lib/kernels/mapped_object.cpp src/lib/kernels/stream.cpp src/lib/kernels/parse.cpp src/lib/kernels/keywords.cpp src/lib/kernels/binder.cpp src/lib/wrap/clBLAS.cpp '.split() + [os.path.join('src', 'bind', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'kernels.cpp', 'exceptions.cpp']]
@@ -129,6 +130,25 @@ def main():
     src= [f for f in src  if not f.endswith("once_atomic.cpp")]
 
     #Setup
+    extensions = []
+    
+    #ISAAC
+    extensions += [Extension(
+                    '_isaac',src,
+                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
+                    extra_link_args=['-Wl,-soname=_isaac.so'],
+                    undef_macros=[],
+                    include_dirs=include,
+                    library_dirs=library_dirs,
+                    libraries=libraries
+                    )]
+    
+    #External
+    extensions += [Extension('external._tree',
+                            ['isaac/external/_tree.c'], 
+                           extra_compile_args = ["-O3", "-Wall"], 
+                           include_dirs = ['.', numpy_include])]
+    
     setup(
                 name='isaac',
                 version='1.0',
@@ -136,17 +156,9 @@ def main():
                 author='Philippe Tillet',
                 author_email='ptillet@g.harvard.edu',
                 license='MPL 2.0',
-                packages=["isaac"],
+                packages=["isaac", "isaac.external"],
                 ext_package="isaac",
-                ext_modules=[Extension(
-                    '_isaac',src,
-                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
-		    extra_link_args=['-Wl,-soname=_isaac.so'],
-                    undef_macros=[],
-                    include_dirs=include,
-                    library_dirs=library_dirs,
-                    libraries=libraries
-                )],
+                ext_modules=extensions,
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},
                 classifiers=[
                     'Environment :: Console',

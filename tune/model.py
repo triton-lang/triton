@@ -1,4 +1,4 @@
-from sklearn import ensemble
+from isaac.external.forest import RandomForestRegressor
 import numpy as np
 
 def gmean(a, axis=0, dtype=None):
@@ -39,7 +39,7 @@ def train(X, Y, profiles):
     nrmses = {}
     for N in range(1,min(M+1,20)):
         for depth in range(1,min(M+1,20)):
-            clf = ensemble.RandomForestRegressor(N, max_depth=depth).fit(XTr, YTr)
+            clf = RandomForestRegressor(N, max_depth=depth).fit(XTr, YTr)
             t = np.argmax(clf.predict(XCv), axis = 1)
             y = np.array([YCv[i,t[i]] for i in range(t.size)])
             ground = np.max(YCv[:,:], axis=1)
