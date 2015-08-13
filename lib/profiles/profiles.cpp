@@ -1,6 +1,7 @@
 #include <fstream>
 #include <algorithm>
 #include <memory>
+#include <numeric>
 
 #include "rapidjson/document.h"
 #include "rapidjson/to_array.hpp"
