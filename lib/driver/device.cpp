@@ -147,14 +147,14 @@ std::vector<size_t> Device::max_work_item_sizes() const
   }
 }
 
-device_type Device::type() const
+Device::Type Device::type() const
 {
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA
     case CUDA: return DEVICE_TYPE_GPU;
 #endif
-    case OPENCL: return static_cast<device_type>(ocl::info<CL_DEVICE_TYPE>(h_.cl()));
+    case OPENCL: return static_cast<Type>(ocl::info<CL_DEVICE_TYPE>(h_.cl()));
     default: throw;
   }
 }

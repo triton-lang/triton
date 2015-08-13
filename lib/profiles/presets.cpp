@@ -7,11 +7,11 @@ namespace isaac
 {
 
 
-#define DATABASE_ENTRY(VENDOR, ARCHITECTURE, STRING) \
-            {std::make_tuple(driver::Device::Vendor::VENDOR, driver::Device::Architecture::ARCHITECTURE), STRING}
+#define DATABASE_ENTRY(TYPE, VENDOR, ARCHITECTURE, STRING) \
+            {std::make_tuple(driver::Device::Type::TYPE, driver::Device::Vendor::VENDOR, driver::Device::Architecture::ARCHITECTURE), STRING}
 
-const std::map<std::tuple<driver::Device::Vendor, driver::Device::Architecture> , const char *> profiles::presets_ =
-            { DATABASE_ENTRY(INTEL, BROADWELL, presets::broadwell) };
+const profiles::presets_type profiles::presets_ =
+            { DATABASE_ENTRY(GPU, INTEL, BROADWELL, presets::broadwell) };
 
 
 #undef DATABASE_ENTRY
