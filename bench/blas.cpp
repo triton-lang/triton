@@ -15,7 +15,7 @@
 #include <numeric>
 #include <regex>
 
-#include "timer.hpp"
+#include "common.hpp"
 
 
 namespace sc = isaac;
@@ -112,7 +112,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     total_time+=times.back();\
   }\
   double t = median(times);\
-  std::cout << " " << PERF << std::flush;\
+  std::cout << " " << (int)(PERF) << std::flush;\
   }
 
 #define BENCHMARK_CLBLAS(OP, PERF) \
@@ -129,24 +129,24 @@ void bench(sc::numeric_type dtype, std::string operation)
     total_time+=times.back();\
   }\
   double t = median(times);\
-  std::cout << " " << PERF << std::flush;\
+  std::cout << " " << (int)(PERF) << std::flush;\
   }
 
 #define BENCHMARK_HOST(OP, PERF) \
   {\
-  sc::tools::timer tmr;\
-  double total_time = 0;\
-  std::vector<double> times;\
-  while(total_time < 1e-2){\
+  Timer tmr;\
+  long total_time = 0;\
+  std::vector<long> times;\
+  while(total_time*1e-9 < 1e-3){\
     std::vector<int> cache_flusher(10000000, 0);\
     tmr.start();\
     OP;\
-    double time = tmr.get();\
+    long time = tmr.get().count();\
     times.push_back(time);\
     total_time += time;\
   }\
-  double t = 1e9*median(times);\
-  std::cout << " " << PERF << std::flush;\
+  double t = median(times);\
+  std::cout << " " << (int)(PERF) << std::flush;\
   }
 
 #define BENCHMARK_CUDA(OP, PERF) \
@@ -170,7 +170,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     total_time+=time;\
   }\
   double t = median(times);\
-  std::cout << "\t" << PERF << std::flush;\
+  std::cout << "\t" << (int)(PERF) << std::flush;\
   }
 
   unsigned int dtsize = sc::size_of(dtype);
@@ -385,7 +385,7 @@ void bench(sc::numeric_type dtype, std::string operation)
         sc::copy(C, cC);
         sc::copy(A, cA);
         sc::copy(B, cB);
-        BENCHMARK_HOST(cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, M, N, K, 1, cA.data(), lda, cB.data(), ldb, 1, cC.data(), ldc), (double)2*M*N*K/t);
+        BENCHMARK_HOST(cblas_sgemm(CblasColMajor, AT?CblasTrans:CblasNoTrans, BT?CblasTrans:CblasNoTrans, M, N, K, 1, cA.data(), lda, cB.data(), ldb, 1, cC.data(), ldc), (double)2*M*N*K/t);
     #endif
     #ifdef BENCH_CUBLAS
         T *cuA, *cuB, *cuC;
