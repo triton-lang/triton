@@ -1,6 +1,7 @@
 #include <memory>
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
 
+#include "isaac/driver/device.h"
 #include "isaac/symbolic/execute.h"
 
 #include "common.hpp"
@@ -50,11 +51,11 @@ namespace detail
 
 
 
-  std::string to_string(sc::driver::device_type type)
+  std::string to_string(sc::driver::Device::Type type)
   {
-    if(type==sc::driver::DEVICE_TYPE_CPU) return "CPU";
-    if(type==sc::driver::DEVICE_TYPE_GPU) return "GPU";
-    if(type==sc::driver::DEVICE_TYPE_ACCELERATOR) return "ACCELERATOR";
+    if(type==sc::driver::Device::Type::CPU) return "CPU";
+    if(type==sc::driver::Device::Type::GPU) return "GPU";
+    if(type==sc::driver::Device::Type::ACCELERATOR) return "ACCELERATOR";
     throw;
   }
 
@@ -111,10 +112,10 @@ void export_driver()
   #endif
       ;
 
-  bp::enum_<sc::driver::device_type>
+  bp::enum_<sc::driver::Device::Type>
       ("device_type")
-      .value("DEVICE_TYPE_GPU", sc::driver::DEVICE_TYPE_GPU)
-      .value("DEVICE_TYPE_CPU", sc::driver::DEVICE_TYPE_CPU)
+      .value("DEVICE_TYPE_GPU", sc::driver::Device::Type::GPU)
+      .value("DEVICE_TYPE_CPU", sc::driver::Device::Type::CPU)
       ;
 
 
