@@ -112,7 +112,8 @@ def main():
     library_dirs = [config['lib'] for config in [opencl_config, cuda_config] if config is not None]
 
     #Include directories
-    include ='${INCLUDE_DIRECTORIES_STR}'.split() + ['external/boost/', 'external/boost/boost/', os.path.join(find_module("numpy")[1], "core", "include")]
+    numpy_include = os.path.join(find_module("numpy")[1], "core", "include")
+    include ='${INCLUDE_DIRECTORIES_STR}'.split() + ['external/boost/', 'external/boost/boost/', numpy_include]
 
     #Source files
     src =  '${LIBISAAC_SRC_STR}'.split() + [os.path.join('src', 'bind', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'kernels.cpp', 'exceptions.cpp']]
@@ -128,6 +129,22 @@ def main():
         src += glob(boostsrc + "/thread/src/pthread/*.cpp")
     src= [f for f in src  if not f.endswith("once_atomic.cpp")]
 
+    extensions = []
+    
+    #isaac
+    extensions += [Extension(
+                    '_isaac',src,
+                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
+		    extra_link_args=['-Wl,-soname=_isaac.so'],
+                    undef_macros=[],
+                    include_dirs=include,
+                    library_dirs=library_dirs,
+                    libraries=libraries)]
+    
+    #External
+    extensions += [Extension('external._tree',
+                             ['external/sklearn/_tree.c'],
+                             include_dirs = [numpy_include])]
     #Setup
     setup(
                 name='isaac',
@@ -136,17 +153,9 @@ def main():
                 author='Philippe Tillet',
                 author_email='ptillet@g.harvard.edu',
                 license='MPL 2.0',
-                packages=["isaac"],
+                packages=['isaac','isaac.external'],
                 ext_package="isaac",
-                ext_modules=[Extension(
-                    '_isaac',src,
-                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
-		    extra_link_args=['-Wl,-soname=_isaac.so'],
-                    undef_macros=[],
-                    include_dirs=include,
-                    library_dirs=library_dirs,
-                    libraries=libraries
-                )],
+                ext_modules=extensions,
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},
                 classifiers=[
                     'Environment :: Console',
