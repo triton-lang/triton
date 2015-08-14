@@ -13,7 +13,7 @@ template<class T>
 inline std::string to_string ( T const t )
 {
 
-#ifdef __CYGWIN__
+#if defined(ANDROID) || defined(__CYGWIN__)
   std::stringstream ss;
   ss << t;
   return ss.str();
