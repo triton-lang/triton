@@ -25,8 +25,10 @@ else()
 endif()
 
 #Binary to convert .cu files to const char *
-add_executable(bin2cpp ${CMAKE_MODULE_PATH}/helpers/bin2cpp.cpp)
-include("${CMAKE_MODULE_PATH}/helpers/CodeToH.cmake")
+if(NOT ANDROID)
+    add_executable(bin2cpp ${CMAKE_MODULE_PATH}/helpers/bin2cpp.cpp)
+    include("${CMAKE_MODULE_PATH}/helpers/CodeToH.cmake")
+endif()
 
 #Source files
 file(GLOB_RECURSE LIBISAAC_SRC lib/*.cpp)

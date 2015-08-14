@@ -1,8 +1,10 @@
-#Database
-set(DATABASE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/profiles/presets/")
-file(GLOB_RECURSE JSON_FILES "${DATABASE_PATH}/json/*.json")
-CODE_TO_H(SOURCES ${JSON_FILES} VARNAME json_files EXTENSION "hpp" OUTPUT_DIR "${DATABASE_PATH}"
-        NAMESPACE "isaac presets" TARGET database EOF "1")
+if(NOT ANDROID)
+    #Presets
+    set(DATABASE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/profiles/presets/")
+    file(GLOB_RECURSE JSON_FILES "${DATABASE_PATH}/json/*.json")
+    CODE_TO_H(SOURCES ${JSON_FILES} VARNAME json_files EXTENSION "hpp" OUTPUT_DIR "${DATABASE_PATH}"
+            NAMESPACE "isaac presets" TARGET database EOF "1")
+endif()
 
 #Compilation
 if(ANDROID)
