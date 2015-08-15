@@ -11,7 +11,7 @@
 #include <boost/assert.hpp>
 #include <cstring>
 
-#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME
+#include <boost/config.hpp>
 #if defined(BOOST_NO_STDC_NAMESPACE)
 namespace std{ 
     using ::memcpy; 

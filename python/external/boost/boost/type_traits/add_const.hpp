@@ -36,9 +36,7 @@ BOOST_TT_AUX_TYPE_TRAIT_DEF1(add_const,T,T const)
 #   pragma warning(pop)
 #endif 
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 BOOST_TT_AUX_TYPE_TRAIT_PARTIAL_SPEC1_1(typename T,add_const,T&,T&)
-#endif
 
 } // namespace boost
 

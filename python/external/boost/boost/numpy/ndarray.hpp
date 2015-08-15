@@ -87,10 +87,10 @@ public:
   ndarray copy() const;
 
   /// @brief Return the size of the nth dimension.
-  int const shape(int n) const { return get_shape()[n]; }
+  Py_intptr_t const shape(int n) const { return get_shape()[n]; }
 
   /// @brief Return the stride of the nth dimension.
-  int const strides(int n) const { return get_strides()[n]; }
+  Py_intptr_t const strides(int n) const { return get_strides()[n]; }
     
   /**
    *  @brief Return the array's raw data pointer.

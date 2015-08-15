@@ -2,7 +2,7 @@
 #define BOOST_SERIALIZATION_LEVEL_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -29,7 +29,6 @@
 #include <boost/mpl/int.hpp>
 #include <boost/mpl/integral_c.hpp>
 #include <boost/mpl/integral_c_tag.hpp>
-#include <boost/mpl/aux_/nttp_decl.hpp>
 
 #include <boost/serialization/level_enum.hpp>
 
@@ -43,26 +42,26 @@ template<class T>
 struct implementation_level_impl {
     template<class U>
     struct traits_class_level {
-        typedef BOOST_DEDUCED_TYPENAME U::level type;
+        typedef typename U::level type;
     };
 
     typedef mpl::integral_c_tag tag;
     // note: at least one compiler complained w/o the full qualification
     // on basic traits below
     typedef
-        BOOST_DEDUCED_TYPENAME mpl::eval_if<
+        typename mpl::eval_if<
             is_base_and_derived<boost::serialization::basic_traits, T>,
             traits_class_level< T >,
         //else
-        BOOST_DEDUCED_TYPENAME mpl::eval_if<
+        typename mpl::eval_if<
             is_fundamental< T >,
             mpl::int_<primitive_type>,
         //else
-        BOOST_DEDUCED_TYPENAME mpl::eval_if<
+        typename mpl::eval_if<
             is_class< T >,
             mpl::int_<object_class_info>,
         //else
-        BOOST_DEDUCED_TYPENAME mpl::eval_if<
+        typename mpl::eval_if<
             is_array< T >,
             #if BOOST_WORKAROUND(__BORLANDC__, BOOST_TESTED_AT(0x560))
                 mpl::int_<not_serializable>,
@@ -70,7 +69,7 @@ struct implementation_level_impl {
                 mpl::int_<object_serializable>,
             #endif
         //else
-        BOOST_DEDUCED_TYPENAME mpl::eval_if<
+        typename mpl::eval_if<
             is_enum< T >,
             //#if BOOST_WORKAROUND(__BORLANDC__, BOOST_TESTED_AT(0x560))
             //    mpl::int_<not_serializable>,
@@ -94,7 +93,7 @@ struct implementation_level :
 {
 };
 
-template<class T, BOOST_MPL_AUX_NTTP_DECL(int, L) >
+template<class T, int L>
 inline bool operator>=(implementation_level< T > t, enum level_type l)
 {
     return t.value >= (int)l;

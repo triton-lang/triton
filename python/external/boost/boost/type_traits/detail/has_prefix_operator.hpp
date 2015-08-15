@@ -30,7 +30,7 @@
 //    warning C4146: unary minus operator applied to unsigned type, result still unsigned
 //    warning C4804: '-' : unsafe use of type 'bool' in operation
 // cannot find another implementation -> declared as system header to suppress these warnings.
-#if defined(__GNUC__) && ((__GNUC__==3 && __GNUC_MINOR__>=1) || (__GNUC__>3))
+#if defined(__GNUC__)
 #   pragma GCC system_header
 #elif defined(BOOST_MSVC)
 #   pragma warning ( push )
@@ -146,10 +146,10 @@ no_operator operator,(no_operator, has_operator);
 
 template < typename Rhs >
 struct operator_exists {
-   static ::boost::type_traits::yes_type check(has_operator); // this version is preferred when operator exists
-   static ::boost::type_traits::no_type check(no_operator); // this version is used otherwise
+   static ::boost::type_traits::yes_type s_check(has_operator); // this version is preferred when operator exists
+   static ::boost::type_traits::no_type s_check(no_operator); // this version is used otherwise
 
-   BOOST_STATIC_CONSTANT(bool, value = (sizeof(check(((BOOST_TT_TRAIT_OP make<Rhs>()),make<has_operator>())))==sizeof(::boost::type_traits::yes_type)));
+   BOOST_STATIC_CONSTANT(bool, value = (sizeof(s_check(((BOOST_TT_TRAIT_OP make<Rhs>()),make<has_operator>())))==sizeof(::boost::type_traits::yes_type)));
 };
 
 

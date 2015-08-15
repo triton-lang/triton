@@ -2,7 +2,7 @@
 #define BOOST_SERIALIZATION_VOID_CAST_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -181,13 +181,13 @@ void_caster_primitive<Derived, Base>::void_caster_primitive() :
     void_caster( 
         & type_info_implementation<Derived>::type::get_const_instance(), 
         & type_info_implementation<Base>::type::get_const_instance(),
-        // note:I wanted to display from 0 here, but at least one compiler
+        // note:I wanted to displace from 0 here, but at least one compiler
         // treated 0 by not shifting it at all.
         reinterpret_cast<std::ptrdiff_t>(
             static_cast<Derived *>(
-                reinterpret_cast<Base *>(1)
+                reinterpret_cast<Base *>(8)
             )
-        ) - 1
+        ) - 8
     )
 {
     recursive_register();
@@ -248,7 +248,7 @@ struct void_caster_base :
     public void_caster
 {
     typedef
-        BOOST_DEDUCED_TYPENAME mpl::eval_if<boost::is_virtual_base_of<Base,Derived>,
+        typename mpl::eval_if<boost::is_virtual_base_of<Base,Derived>,
             mpl::identity<
                 void_cast_detail::void_caster_virtual_base<Derived, Base>
             >
@@ -268,7 +268,7 @@ inline const void_cast_detail::void_caster & void_cast_register(
     Base const * /* bnull = NULL */
 ){
     typedef
-        BOOST_DEDUCED_TYPENAME mpl::eval_if<boost::is_virtual_base_of<Base,Derived>,
+        typename mpl::eval_if<boost::is_virtual_base_of<Base,Derived>,
             mpl::identity<
                 void_cast_detail::void_caster_virtual_base<Derived, Base>
             >

@@ -33,7 +33,6 @@ template< typename T > struct is_POD;
 
 namespace detail {
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 template <typename T> struct is_pod_impl
 { 
@@ -54,71 +53,6 @@ struct is_pod_impl<T[sz]>
 };
 #endif
 
-#else
-
-template <bool is_array = false>
-struct is_pod_helper
-{
-    template <typename T> struct result_
-    {
-        BOOST_STATIC_CONSTANT(
-            bool, value =
-            (::boost::type_traits::ice_or<
-                ::boost::is_scalar<T>::value,
-                ::boost::is_void<T>::value,
-                BOOST_INTERNAL_IS_POD(T)
-            >::value));
-    };
-};
-
-template <bool b>
-struct bool_to_yes_no_type
-{
-    typedef ::boost::type_traits::no_type type;
-};
-
-template <>
-struct bool_to_yes_no_type<true>
-{
-    typedef ::boost::type_traits::yes_type type;
-};
-
-template <typename ArrayType>
-struct is_pod_array_helper
-{
-    enum { is_pod = ::boost::is_POD<ArrayType>::value }; // MSVC workaround
-    typedef typename bool_to_yes_no_type<is_pod>::type type;
-    type instance() const;
-};
-
-template <typename T>
-is_pod_array_helper<T> is_POD_array(T*);
-
-template <>
-struct is_pod_helper<true>
-{
-    template <typename T> struct result_
-    {
-        static T& help();
-        BOOST_STATIC_CONSTANT(bool, value =
-            sizeof(is_POD_array(help()).instance()) == sizeof(::boost::type_traits::yes_type)
-            );
-    };
-};
-
-
-template <typename T> struct is_pod_impl
-{ 
-   BOOST_STATIC_CONSTANT(
-       bool, value = (
-           ::boost::detail::is_pod_helper<
-              ::boost::is_array<T>::value
-           >::template result_<T>::value
-           )
-       );
-};
-
-#endif // BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 // the following help compilers without partial specialization support:
 BOOST_TT_AUX_BOOL_TRAIT_IMPL_SPEC1(is_pod,void,true)

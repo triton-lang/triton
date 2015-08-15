@@ -8,7 +8,7 @@
 #  */
 #
 # /* Revised by Paul Mensonides (2002) */
-# /* Revised by Edward Diener (2011) */
+# /* Revised by Edward Diener (2011,2013) */
 #
 # /* See http://www.boost.org for most recent version. */
 #
@@ -18,7 +18,14 @@
 # include <boost/preprocessor/tuple/eat.hpp>
 # include <boost/preprocessor/tuple/elem.hpp>
 # include <boost/preprocessor/tuple/enum.hpp>
+# include <boost/preprocessor/tuple/insert.hpp>
+# include <boost/preprocessor/tuple/pop_back.hpp>
+# include <boost/preprocessor/tuple/pop_front.hpp>
+# include <boost/preprocessor/tuple/push_back.hpp>
+# include <boost/preprocessor/tuple/push_front.hpp>
 # include <boost/preprocessor/tuple/rem.hpp>
+# include <boost/preprocessor/tuple/remove.hpp>
+# include <boost/preprocessor/tuple/replace.hpp>
 # include <boost/preprocessor/tuple/reverse.hpp>
 # include <boost/preprocessor/tuple/size.hpp>
 # include <boost/preprocessor/tuple/to_array.hpp>

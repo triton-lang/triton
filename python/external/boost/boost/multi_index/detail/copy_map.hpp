@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2013 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_COPY_MAP_HPP
 #define BOOST_MULTI_INDEX_DETAIL_COPY_MAP_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <boost/detail/no_exceptions_support.hpp>
 #include <boost/multi_index/detail/auto_space.hpp>
-#include <boost/multi_index/detail/prevent_eti.hpp>
 #include <boost/noncopyable.hpp>
 #include <cstddef>
 #include <functional>
@@ -110,20 +109,18 @@ public:
   }
 
 private:
-  typedef typename prevent_eti<
-    Allocator,
-    typename boost::detail::allocator::rebind_to<
-      Allocator,Node>::type
-  >::type                                         allocator_type;
-  typedef typename allocator_type::pointer        allocator_pointer;
+  typedef typename boost::detail::allocator::rebind_to<
+    Allocator,Node
+  >::type                                               allocator_type;
+  typedef typename allocator_type::pointer              allocator_pointer;
 
-  allocator_type                                  al_;
-  std::size_t                                     size_;
-  auto_space<copy_map_entry<Node>,Allocator>      spc;
-  std::size_t                                     n;
-  Node*                                           header_org_;
-  Node*                                           header_cpy_;
-  bool                                            released;
+  allocator_type                                        al_;
+  std::size_t                                           size_;
+  auto_space<copy_map_entry<Node>,Allocator>            spc;
+  std::size_t                                           n;
+  Node*                                                 header_org_;
+  Node*                                                 header_cpy_;
+  bool                                                  released;
 
   void deallocate(Node* node)
   {

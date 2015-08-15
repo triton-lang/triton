@@ -11,16 +11,12 @@
 #ifndef BOOST_RANGE_VALUE_TYPE_HPP
 #define BOOST_RANGE_VALUE_TYPE_HPP
 
-#if defined(_MSC_VER) && (_MSC_VER >= 1200)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
 #include <boost/range/config.hpp>
 #include <boost/range/iterator.hpp>
-
-//#ifdef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
-//#include <boost/range/detail/value_type.hpp>
-//#else
 
 #include <boost/iterator/iterator_traits.hpp>
 

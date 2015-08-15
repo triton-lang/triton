@@ -8,7 +8,7 @@
 #if !defined(BOOST_DETAIL_CONTAINER_FWD_HPP)
 #define BOOST_DETAIL_CONTAINER_FWD_HPP
 
-#if defined(_MSC_VER) && (_MSC_VER >= 1020) && \
+#if defined(_MSC_VER) && \
     !defined(BOOST_DETAIL_TEST_CONFIG_ONLY)
 # pragma once
 #endif
@@ -119,12 +119,7 @@ namespace std
     template <class T> class allocator;
     template <class charT, class traits, class Allocator> class basic_string;
 
-#if BOOST_WORKAROUND(__GNUC__, < 3) && !defined(__SGI_STL_PORT) && !defined(_STLPORT_VERSION)
-
-    template <class charT> struct string_char_traits;
-#else
     template <class charT> struct char_traits;
-#endif
 
 #if defined(BOOST_CONTAINER_FWD_COMPLEX_STRUCT)
     template <class T> struct complex;

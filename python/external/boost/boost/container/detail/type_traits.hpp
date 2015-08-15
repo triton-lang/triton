@@ -1,6 +1,6 @@
 //////////////////////////////////////////////////////////////////////////////
 // (C) Copyright John Maddock 2000.
-// (C) Copyright Ion Gaztanaga 2005-2012.
+// (C) Copyright Ion Gaztanaga 2005-2015.
 //
 // Distributed under the Boost Software License, Version 1.0.
 // (See accompanying file LICENSE_1_0.txt or copy at
@@ -8,203 +8,60 @@
 //
 // See http://www.boost.org/libs/container for documentation.
 //
-// The alignment_of implementation comes from John Maddock's boost::alignment_of code
+// The alignment and Type traits implementation comes from
+// John Maddock's TypeTraits library.
 //
+// Some other tricks come from Howard Hinnant's papers and StackOverflow replies
 //////////////////////////////////////////////////////////////////////////////
-
 #ifndef BOOST_CONTAINER_CONTAINER_DETAIL_TYPE_TRAITS_HPP
 #define BOOST_CONTAINER_CONTAINER_DETAIL_TYPE_TRAITS_HPP
 
-#if defined(_MSC_VER)
+#ifndef BOOST_CONFIG_HPP
+#  include <boost/config.hpp>
+#endif
+
+#if defined(BOOST_HAS_PRAGMA_ONCE)
 #  pragma once
 #endif
 
-#include "config_begin.hpp"
-
-#include <boost/move/utility.hpp>
+#include <boost/move/detail/type_traits.hpp>
 
 namespace boost {
 namespace container {
 namespace container_detail {
 
-struct nat{};
+using ::boost::move_detail::is_same;
+using ::boost::move_detail::is_pointer;
+using ::boost::move_detail::add_reference;
+using ::boost::move_detail::add_const;
+using ::boost::move_detail::add_const_reference;
+using ::boost::move_detail::remove_const;
+using ::boost::move_detail::remove_reference;
+using ::boost::move_detail::make_unsigned;
+using ::boost::move_detail::is_floating_point;
+using ::boost::move_detail::is_integral;
+using ::boost::move_detail::is_enum;
+using ::boost::move_detail::is_pod;
+using ::boost::move_detail::is_empty;
+using ::boost::move_detail::is_trivially_destructible;
+using ::boost::move_detail::is_trivially_default_constructible;
+using ::boost::move_detail::is_trivially_copy_constructible;
+using ::boost::move_detail::is_trivially_move_constructible;
+using ::boost::move_detail::is_trivially_copy_assignable;
+using ::boost::move_detail::is_trivially_move_assignable;
+using ::boost::move_detail::is_nothrow_default_constructible;
+using ::boost::move_detail::is_nothrow_copy_constructible;
+using ::boost::move_detail::is_nothrow_move_constructible;
+using ::boost::move_detail::is_nothrow_copy_assignable;
+using ::boost::move_detail::is_nothrow_move_assignable;
+using ::boost::move_detail::is_nothrow_swappable;
+using ::boost::move_detail::alignment_of;
+using ::boost::move_detail::aligned_storage;
+using ::boost::move_detail::nat;
+using ::boost::move_detail::max_align_t;
 
-template <typename U>
-struct LowPriorityConversion
-{
-   // Convertible from T with user-defined-conversion rank.
-   LowPriorityConversion(const U&) { }
-};
-
-//boost::alignment_of yields to 10K lines of preprocessed code, so we
-//need an alternative
-template <typename T> struct alignment_of;
-
-template <typename T>
-struct alignment_of_hack
-{
-    char c;
-    T t;
-    alignment_of_hack();
-};
-
-template <unsigned A, unsigned S>
-struct alignment_logic
-{
-    enum{   value = A < S ? A : S  };
-};
-
-template< typename T >
-struct alignment_of
-{
-   enum{ value = alignment_logic
-            < sizeof(alignment_of_hack<T>) - sizeof(T)
-            , sizeof(T)>::value   };
-};
-
-//This is not standard, but should work with all compilers
-union max_align
-{
-   char        char_;
-   short       short_;
-   int         int_;
-   long        long_;
-   #ifdef BOOST_HAS_LONG_LONG
-   long long   long_long_;
-   #endif
-   float       float_;
-   double      double_;
-   long double long_double_;
-   void *      void_ptr_;
-};
-
-template<class T>
-struct remove_reference
-{
-   typedef T type;
-};
-
-template<class T>
-struct remove_reference<T&>
-{
-   typedef T type;
-};
-
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-
-template<class T>
-struct remove_reference<T&&>
-{
-   typedef T type;
-};
-
-#else
-
-template<class T>
-struct remove_reference< ::boost::rv<T> >
-{
-   typedef T type;
-};
-
-#endif
-
-template<class T>
-struct is_reference
-{
-   enum {  value = false   };
-};
-
-template<class T>
-struct is_reference<T&>
-{
-   enum {  value = true   };
-};
-
-template<class T>
-struct is_pointer
-{
-   enum {  value = false   };
-};
-
-template<class T>
-struct is_pointer<T*>
-{
-   enum {  value = true   };
-};
-
-template <typename T>
-struct add_reference
-{
-    typedef T& type;
-};
-
-template<class T>
-struct add_reference<T&>
-{
-    typedef T& type;
-};
-
-template<>
-struct add_reference<void>
-{
-    typedef nat &type;
-};
-
-template<>
-struct add_reference<const void>
-{
-    typedef const nat &type;
-};
-
-template <class T>
-struct add_const_reference
-{  typedef const T &type;   };
-
-template <class T>
-struct add_const_reference<T&>
-{  typedef T& type;   };
-
-template <typename T, typename U>
-struct is_same
-{
-   typedef char yes_type;
-   struct no_type
-   {
-      char padding[8];
-   };
-
-   template <typename V>
-   static yes_type is_same_tester(V*, V*);
-   static no_type is_same_tester(...);
-
-   static T *t;
-   static U *u;
-
-   static const bool value = sizeof(yes_type) == sizeof(is_same_tester(t,u));
-};
-
-template<class T>
-struct remove_const
-{
-   typedef T type;
-};
-
-template<class T>
-struct remove_const< const T>
-{
-   typedef T type;
-};
-
-template<class T>
-struct remove_ref_const
-{
-   typedef typename remove_const< typename remove_reference<T>::type >::type type;
-};
-
-} // namespace container_detail
+}  //namespace container_detail {
 }  //namespace container {
 }  //namespace boost {
-
-#include <boost/container/detail/config_end.hpp>
 
 #endif   //#ifndef BOOST_CONTAINER_CONTAINER_DETAIL_TYPE_TRAITS_HPP

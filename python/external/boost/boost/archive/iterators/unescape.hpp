@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_UNESCAPE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -18,9 +18,7 @@
 
 #include <boost/assert.hpp>
 
-#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME
 #include <boost/iterator/iterator_adaptor.hpp>
-//#include <boost/iterator/iterator_traits.hpp>
 #include <boost/pointee.hpp>
 
 namespace boost { 
@@ -35,24 +33,24 @@ class unescape
     : public boost::iterator_adaptor<
         unescape<Derived, Base>,
         Base, 
-        BOOST_DEDUCED_TYPENAME pointee<Base>::type,
+        typename pointee<Base>::type,
         single_pass_traversal_tag,
-        BOOST_DEDUCED_TYPENAME pointee<Base>::type
+        typename pointee<Base>::type
     >
 {
     friend class boost::iterator_core_access;
-    typedef BOOST_DEDUCED_TYPENAME boost::iterator_adaptor<
+    typedef typename boost::iterator_adaptor<
         unescape<Derived, Base>, 
         Base, 
-        BOOST_DEDUCED_TYPENAME pointee<Base>::type,
+        typename pointee<Base>::type,
         single_pass_traversal_tag,
-        BOOST_DEDUCED_TYPENAME pointee<Base>::type
+        typename pointee<Base>::type
     > super_t;
 
     typedef unescape<Derived, Base> this_t;
 public:
-    typedef BOOST_DEDUCED_TYPENAME this_t::value_type value_type;
-    typedef BOOST_DEDUCED_TYPENAME this_t::reference reference;
+    typedef typename this_t::value_type value_type;
+    typedef typename this_t::reference reference;
 private:
     value_type dereference_impl() {
         if(! m_full){

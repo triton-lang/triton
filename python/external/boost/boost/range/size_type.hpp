@@ -11,15 +11,13 @@
 #ifndef BOOST_RANGE_SIZE_TYPE_HPP
 #define BOOST_RANGE_SIZE_TYPE_HPP
 
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
 #include <boost/range/config.hpp>
 #include <boost/range/difference_type.hpp>
-#ifdef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
-#include <boost/range/detail/size_type.hpp>
-#else
+#include <boost/range/concepts.hpp>
 
 #include <boost/utility/enable_if.hpp>
 #include <boost/type_traits/make_unsigned.hpp>
@@ -45,8 +43,8 @@ namespace boost
             template<typename C>
             static yes_type test(BOOST_DEDUCED_TYPENAME C::size_type x);
 
-            template<typename C, typename Arg>
-            static no_type test(Arg x);
+            template<typename C>
+            static no_type test(...);
 
         public:
             static const bool value = sizeof(test<T>(0)) == sizeof(yes_type);
@@ -63,7 +61,7 @@ namespace boost
         template<typename C>
         struct range_size<
             C,
-            BOOST_DEDUCED_TYPENAME enable_if<has_size_type<C>, void>::type
+            BOOST_DEDUCED_TYPENAME ::boost::enable_if<has_size_type<C>, void>::type
         >
         {
             typedef BOOST_DEDUCED_TYPENAME C::size_type type;
@@ -74,16 +72,27 @@ namespace boost
     template< class T >
     struct range_size :
         detail::range_size<T>
-    { };
+    {
+// Very strange things happen on some compilers that have the range concept
+// asserts disabled. This preprocessor condition is clearly redundant on a
+// working compiler but is vital for at least some compilers such as clang 4.2
+// but only on the Mac!
+#if BOOST_RANGE_ENABLE_CONCEPT_ASSERT == 1
+        BOOST_RANGE_CONCEPT_ASSERT((boost::SinglePassRangeConcept<T>));
+#endif
+    };
 
     template< class T >
     struct range_size<const T >
         : detail::range_size<T>
-    { };
+    {
+#if BOOST_RANGE_ENABLE_CONCEPT_ASSERT == 1        
+        BOOST_RANGE_CONCEPT_ASSERT((boost::SinglePassRangeConcept<T>));
+#endif
+    };
 
 } // namespace boost
 
-#endif // BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 
 #endif

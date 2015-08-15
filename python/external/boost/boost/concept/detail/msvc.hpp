@@ -6,12 +6,17 @@
 
 # include <boost/preprocessor/cat.hpp>
 # include <boost/concept/detail/backward_compatibility.hpp>
+# include <boost/config.hpp>
 
 # ifdef BOOST_OLD_CONCEPT_SUPPORT
 #  include <boost/concept/detail/has_constraints.hpp>
 #  include <boost/mpl/if.hpp>
 # endif
 
+# ifdef BOOST_MSVC
+#  pragma warning(push)
+#  pragma warning(disable:4100)
+# endif
 
 namespace boost { namespace concepts {
 
@@ -110,5 +115,9 @@ enum                                                    \
   
 # endif
 }}
+
+# ifdef BOOST_MSVC
+#  pragma warning(pop)
+# endif
 
 #endif // BOOST_CONCEPT_CHECK_MSVC_DWA2006429_HPP

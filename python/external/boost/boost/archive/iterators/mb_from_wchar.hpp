@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_MB_FROM_WCHAR_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -20,7 +20,7 @@
 #include <cstddef> // size_t
 #include <cstdlib> // for wctomb()
 
-#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME
+#include <boost/config.hpp>
 #if defined(BOOST_NO_STDC_NAMESPACE)
 namespace std{ 
     using ::size_t; 
@@ -50,7 +50,7 @@ class mb_from_wchar
 {
     friend class boost::iterator_core_access;
 
-    typedef BOOST_DEDUCED_TYPENAME boost::iterator_adaptor<
+    typedef typename boost::iterator_adaptor<
         mb_from_wchar<Base>, 
         Base, 
         wchar_t,

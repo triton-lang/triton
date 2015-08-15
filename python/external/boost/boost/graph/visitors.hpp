@@ -21,11 +21,6 @@
 #include <boost/graph/graph_traits.hpp>
 #include <boost/limits.hpp>
 
-#if BOOST_WORKAROUND(BOOST_MSVC, < 1300)
-// Stay out of the way of the concept checking class
-# define Graph Graph_
-#endif
-
 namespace boost {
 
   // This is a bit more convenient than std::numeric_limits because
@@ -123,16 +118,6 @@ namespace boost {
     detail::invoke_dispatch(vlist.first, x, g, IsSameTag());
     invoke_visitors(vlist.second, x, g, tag);
   }
-#if defined(BOOST_MSVC) && BOOST_MSVC <= 1300
-  template <class Visitor, class T, class Graph, class Tag>
-  inline void
-  invoke_visitors(base_visitor<Visitor>& vis, T x, Graph& g, Tag) {
-    typedef typename Visitor::event_filter Category;
-    typedef typename is_same<Category, Tag>::type IsSameTag;
-    Visitor& v = static_cast<Visitor&>(vis);
-    detail::invoke_dispatch(v, x, g, IsSameTag());
-  }
-#else
   template <class Visitor, class T, class Graph, class Tag>
   inline void
   invoke_visitors(Visitor& v, T x, Graph& g, Tag) {
@@ -140,7 +125,6 @@ namespace boost {
     typedef typename is_same<Category, Tag>::type IsSameTag;
     detail::invoke_dispatch(v, x, g, IsSameTag());
   }
-#endif
 
   //========================================================================
   // predecessor_recorder
@@ -312,10 +296,5 @@ namespace boost {
     }
 
 } /* namespace boost */
-
-#if BOOST_WORKAROUND(BOOST_MSVC, < 1300)
-// Stay out of the way of the concept checking class
-# undef Graph
-#endif
 
 #endif

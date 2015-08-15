@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_BASIC_TEXT_OPRIMITIVE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -26,13 +26,14 @@
 
 #include <iomanip>
 #include <locale>
-#include <boost/config/no_tr1/cmath.hpp> // isnan
 #include <boost/assert.hpp>
 #include <cstddef> // size_t
 
 #include <boost/config.hpp>
 #include <boost/static_assert.hpp>
 #include <boost/detail/workaround.hpp>
+#include <boost/io/ios_state.hpp>
+
 #if BOOST_WORKAROUND(BOOST_DINKUMWARE_STDLIB, == 1)
 #include <boost/archive/dinkumware.hpp>
 #endif
@@ -46,6 +47,8 @@ namespace std{
 } // namespace std
 #endif
 
+#include <boost/type_traits/is_floating_point.hpp>
+#include <boost/mpl/bool.hpp>
 #include <boost/limits.hpp>
 #include <boost/integer.hpp>
 #include <boost/io/ios_state.hpp>
@@ -58,18 +61,12 @@ namespace std{
 namespace boost {
 namespace archive {
 
-class save_access;
-
 /////////////////////////////////////////////////////////////////////////
 // class basic_text_oprimitive - output of prmitives to stream
 template<class OStream>
 class basic_text_oprimitive
 {
-#ifndef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
 protected:
-#else
-public:
-#endif
     OStream &os;
     io::ios_flags_saver flags_saver;
     io::ios_precision_saver precision_saver;
@@ -77,20 +74,10 @@ public:
     #ifndef BOOST_NO_STD_LOCALE
     boost::scoped_ptr<std::locale> archive_locale;
     basic_streambuf_locale_saver<
-        BOOST_DEDUCED_TYPENAME OStream::char_type, 
-        BOOST_DEDUCED_TYPENAME OStream::traits_type
+        typename OStream::char_type, 
+        typename OStream::traits_type
     > locale_saver;
     #endif
-
-    // default saving of primitives.
-    template<class T>
-    void save(const T &t){
-        if(os.fail())
-            boost::serialization::throw_exception(
-                archive_exception(archive_exception::output_stream_error)
-            );
-        os << t;
-    }
 
     /////////////////////////////////////////////////////////
     // fundamental types that need special treatment
@@ -123,33 +110,77 @@ public:
         save(static_cast<int>(t));
     }
     #endif
-    void save(const float t)
-    {
+
+    /////////////////////////////////////////////////////////
+    // saving of any types not listed above
+
+    template<class T>
+    void save_impl(const T &t, boost::mpl::bool_<false> &){
+        if(os.fail())
+            boost::serialization::throw_exception(
+                archive_exception(archive_exception::output_stream_error)
+            );
+        os << t;
+    }
+
+    /////////////////////////////////////////////////////////
+    // floating point types need even more special treatment
+    // the following determines whether the type T is some sort
+    // of floating point type.  Note that we then assume that
+    // the stream << operator is defined on that type - if not
+    // we'll get a compile time error. This is meant to automatically
+    // support synthesized types which support floating point
+    // operations. Also it should handle compiler dependent types
+    // such long double.  Due to John Maddock.
+
+    template<class T>
+    struct is_float {
+        typedef typename mpl::bool_< 
+            boost::is_floating_point<T>::value 
+            || (std::numeric_limits<T>::is_specialized
+            && !std::numeric_limits<T>::is_integer
+            && !std::numeric_limits<T>::is_exact
+            && std::numeric_limits<T>::max_exponent) 
+        >::type type;
+    };
+
+    template<class T>
+    void save_impl(const T &t, boost::mpl::bool_<true> &){
         // must be a user mistake - can't serialize un-initialized data
         if(os.fail())
             boost::serialization::throw_exception(
                 archive_exception(archive_exception::output_stream_error)
             );
-        os << std::setprecision(std::numeric_limits<float>::digits10 + 2);
-        os << t;
+        // The formulae for the number of decimla digits required is given in
+        // http://www2.open-std.org/JTC1/SC22/WG21/docs/papers/2005/n1822.pdf
+        // which is derived from Kahan's paper:
+        // www.eecs.berkeley.edu/~wkahan/ieee754status/ieee754.ps
+        // const unsigned int digits = (std::numeric_limits<T>::digits * 3010) / 10000;
+        // note: I've commented out the above because I didn't get good results.  e.g.
+        // in one case I got a difference of 19 units.
+        #ifndef BOOST_NO_CXX11_NUMERIC_LIMITS
+            const unsigned int digits = std::numeric_limits<T>::max_digits10;
+        #else
+            const unsigned int digits = std::numeric_limits<T>::digits10 + 2;
+        #endif
+        os << std::setprecision(digits) << std::scientific << t;
     }
-    void save(const double t)
-    {
-        // must be a user mistake - can't serialize un-initialized data
-        if(os.fail())
-            boost::serialization::throw_exception(
-                archive_exception(archive_exception::output_stream_error)
-            );
-        os << std::setprecision(std::numeric_limits<double>::digits10 + 2);
-        os << t;
+
+    template<class T>
+    void save(const T & t){
+        boost::io::ios_flags_saver fs(os);
+        boost::io::ios_precision_saver ps(os);
+        typename is_float<T>::type tf;
+        save_impl(t, tf);
     }
+
     BOOST_ARCHIVE_OR_WARCHIVE_DECL(BOOST_PP_EMPTY())
     basic_text_oprimitive(OStream & os, bool no_codecvt);
     BOOST_ARCHIVE_OR_WARCHIVE_DECL(BOOST_PP_EMPTY()) 
     ~basic_text_oprimitive();
 public:
     // unformatted append of one character
-    void put(BOOST_DEDUCED_TYPENAME OStream::char_type c){
+    void put(typename OStream::char_type c){
         if(os.fail())
             boost::serialization::throw_exception(
                 archive_exception(archive_exception::output_stream_error)

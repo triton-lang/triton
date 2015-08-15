@@ -26,7 +26,6 @@
 //  http://www.boost.org/libs/utility/throw_exception.html
 //
 
-#include <boost/exception/detail/attribute_noreturn.hpp>
 #include <boost/detail/workaround.hpp>
 #include <boost/config.hpp>
 #include <exception>
@@ -60,7 +59,7 @@ void throw_exception( std::exception const & e ); // user defined
 
 inline void throw_exception_assert_compatibility( std::exception const & ) { }
 
-template<class E> BOOST_ATTRIBUTE_NORETURN inline void throw_exception( E const & e )
+template<class E> BOOST_NORETURN inline void throw_exception( E const & e )
 {
     //All boost exceptions are required to derive from std::exception,
     //to ensure compatibility with BOOST_NO_EXCEPTIONS.
@@ -80,7 +79,7 @@ template<class E> BOOST_ATTRIBUTE_NORETURN inline void throw_exception( E const 
     exception_detail
     {
         template <class E>
-        BOOST_ATTRIBUTE_NORETURN
+        BOOST_NORETURN
         void
         throw_exception_( E const & x, char const * current_function, char const * file, int line )
         {

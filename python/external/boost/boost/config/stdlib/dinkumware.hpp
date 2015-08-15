@@ -86,9 +86,18 @@
 #  define BOOST_NO_STD_LOCALE
 #endif
 
+// Fix for VC++ 8.0 on up ( I do not have a previous version to test )
+// or clang-cl. If exceptions are off you must manually include the 
+// <exception> header before including the <typeinfo> header. Admittedly 
+// trying to use Boost libraries or the standard C++ libraries without 
+// exception support is not suggested but currently clang-cl ( v 3.4 ) 
+// does not support exceptions and must be compiled with exceptions off.
+#if !_HAS_EXCEPTIONS && ((defined(BOOST_MSVC) && BOOST_MSVC >= 1400) || (defined(__clang__) && defined(_MSC_VER)))
+#include <exception>
+#endif
 #include <typeinfo>
-#if ( (!_HAS_EXCEPTIONS && !defined(__ghs__)) || (!_HAS_NAMESPACE && defined(__ghs__)) ) && !defined(__TI_COMPILER_VERSION__)
-#  define BOOST_NO_STD_TYPEINFO    
+#if ( (!_HAS_EXCEPTIONS && !defined(__ghs__)) || (!_HAS_NAMESPACE && defined(__ghs__)) ) && !defined(__TI_COMPILER_VERSION__) && !defined(__VISUALDSPVERSION__)
+#  define BOOST_NO_STD_TYPEINFO
 #endif  
 
 //  C++0x headers implemented in 520 (as shipped by Microsoft)
@@ -125,7 +134,6 @@
 #  define BOOST_NO_CXX11_HDR_MUTEX
 #  define BOOST_NO_CXX11_HDR_RATIO
 #  define BOOST_NO_CXX11_HDR_THREAD
-#  define BOOST_NO_CXX11_ALLOCATOR
 #  define BOOST_NO_CXX11_ATOMIC_SMART_PTR
 #endif
 
@@ -133,7 +141,21 @@
 //
 #if !defined(_CPPLIB_VER) || _CPPLIB_VER < 610
 #  define BOOST_NO_CXX11_HDR_INITIALIZER_LIST
+#  define BOOST_NO_CXX11_HDR_ATOMIC
+#  define BOOST_NO_CXX11_ALLOCATOR
+// 540 has std::align but it is not a conforming implementation
+#  define BOOST_NO_CXX11_STD_ALIGN
 #endif
+
+#if defined(BOOST_INTEL) && (BOOST_INTEL <= 1400)
+// Intel's compiler can't handle this header yet:
+#  define BOOST_NO_CXX11_HDR_ATOMIC
+#endif
+
+
+//  520..610 have std::addressof, but it doesn't support functions
+//
+#  define BOOST_NO_CXX11_ADDRESSOF
 
 #ifdef _CPPLIB_VER
 #  define BOOST_DINKUMWARE_STDLIB _CPPLIB_VER
@@ -146,12 +168,3 @@
 #else
 #  define BOOST_STDLIB "Dinkumware standard library version 1.x"
 #endif
-
-
-
-
-
-
-
-
-

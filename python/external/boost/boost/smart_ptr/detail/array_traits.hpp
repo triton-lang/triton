@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Glen Joseph Fernandes 
+ * Copyright (c) 2012-2014 Glen Joseph Fernandes 
  * glenfe at live dot com
  *
  * Distributed under the Boost Software License, 
@@ -13,37 +13,44 @@
 
 namespace boost {
     namespace detail {
-        template<typename T>
+        template<class T>
         struct array_base {
             typedef typename boost::remove_cv<T>::type type;
         };
-        template<typename T>
+
+        template<class T>
         struct array_base<T[]> {
             typedef typename array_base<T>::type type;
         };
-        template<typename T, std::size_t N>
+
+        template<class T, std::size_t N>
         struct array_base<T[N]> {
             typedef typename array_base<T>::type type;
         };
-        template<typename T>
+
+        template<class T>
         struct array_total {
             enum {
                 size = 1
             };
         };
-        template<typename T, std::size_t N>
+
+        template<class T, std::size_t N>
         struct array_total<T[N]> {
             enum {
                 size = N * array_total<T>::size
             };
         };
-        template<typename T> 
+
+        template<class T>
         struct array_inner;
-        template<typename T>
+
+        template<class T>
         struct array_inner<T[]> {
             typedef T type;
         };
-        template<typename T, std::size_t N>
+
+        template<class T, std::size_t N>
         struct array_inner<T[N]> {
             typedef T type;
         };

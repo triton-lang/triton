@@ -1,7 +1,7 @@
 #ifndef BOOST_TT_IS_ABSTRACT_CLASS_HPP
 #define BOOST_TT_IS_ABSTRACT_CLASS_HPP
 
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -19,7 +19,7 @@
 // Compile type discovery whether given type is abstract class or not.
 //
 //   Requires DR 337 to be supported by compiler
-//   (http://anubis.dkuug.dk/jtc1/sc22/wg21/docs/cwg_active.html#337).
+//   (http://www.open-std.org/jtc1/sc22/wg21/docs/cwg_active.html#337).
 //
 //
 // Believed (Jan 2004) to work on:

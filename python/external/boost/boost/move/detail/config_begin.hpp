@@ -7,17 +7,13 @@
 // See http://www.boost.org/libs/move for documentation.
 //
 //////////////////////////////////////////////////////////////////////////////
+#ifndef BOOST_CONFIG_HPP
 #include <boost/config.hpp>
+#endif
 
 #ifdef BOOST_MSVC
-   #ifndef _CRT_SECURE_NO_DEPRECATE
-      #define  BOOST_MOVE_CRT_SECURE_NO_DEPRECATE
-      #define _CRT_SECURE_NO_DEPRECATE
-   #endif
-   #ifndef _SCL_SECURE_NO_WARNINGS
-      #define  BOOST_MOVE_SCL_SECURE_NO_WARNINGS
-      #define _SCL_SECURE_NO_WARNINGS
-   #endif
-   #pragma warning (push)
-   #pragma warning (disable : 4996) // "function": was declared deprecated
+#  pragma warning (push)
+#  pragma warning (disable : 4324) // structure was padded due to __declspec(align())
+#  pragma warning (disable : 4675) // "function":  resolved overload was found by argument-dependent lookup
+#  pragma warning (disable : 4996) // "function": was declared deprecated (_CRT_SECURE_NO_DEPRECATE/_SCL_SECURE_NO_WARNINGS)
 #endif

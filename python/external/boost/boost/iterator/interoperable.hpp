@@ -14,8 +14,8 @@
 
 # include <boost/iterator/detail/config_def.hpp> // must appear last
 
-namespace boost
-{
+namespace boost {
+namespace iterators {
 
   //
   // Meta function that determines whether two
@@ -27,7 +27,7 @@ namespace boost
   // standards requirements on constant/mutable container
   // iterators (23.1 [lib.container.requirements]).
   //
-  // For compilers that don't support is_convertible 
+  // For compilers that don't support is_convertible
   // is_interoperable gives false positives. See comments
   // on operator implementation for consequences.
   //
@@ -40,8 +40,12 @@ namespace boost
           is_convertible< A, B >
         , is_convertible< B, A > >
 # endif
-  { 
+  {
   };
+
+} // namespace iterators
+
+using iterators::is_interoperable;
 
 } // namespace boost
 

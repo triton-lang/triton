@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2013 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_AUTO_SPACE_HPP
 #define BOOST_MULTI_INDEX_DETAIL_AUTO_SPACE_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <boost/detail/allocator_utilities.hpp>
 #include <boost/multi_index/detail/adl_swap.hpp>
-#include <boost/multi_index/detail/prevent_eti.hpp>
 #include <boost/noncopyable.hpp>
 #include <memory>
 
@@ -40,17 +39,14 @@ namespace detail{
  *    "of zero length", http://gcc.gnu.org/bugzilla/show_bug.cgi?id=14176
  *   C++ Standard Library Defect Report List (Revision 28), issue 199
  *     "What does allocate(0) return?",
- *     http://anubis.dkuug.dk/jtc1/sc22/wg21/docs/lwg-defects.html#199
+ *     http://www.open-std.org/jtc1/sc22/wg21/docs/lwg-defects.html#199
  */
 
 template<typename T,typename Allocator=std::allocator<T> >
 struct auto_space:private noncopyable
 {
-  typedef typename prevent_eti<
-    Allocator,
-    typename boost::detail::allocator::rebind_to<
-      Allocator,T
-    >::type
+  typedef typename boost::detail::allocator::rebind_to<
+    Allocator,T
   >::type::pointer pointer;
 
   explicit auto_space(const Allocator& al=Allocator(),std::size_t n=1):

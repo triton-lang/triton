@@ -1,4 +1,4 @@
-/* Copyright 2003-2008 Joaquin M Lopez Munoz.
+/* Copyright 2003-2014 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_BIDIR_NODE_ITERATOR_HPP
 #define BOOST_MULTI_INDEX_DETAIL_BIDIR_NODE_ITERATOR_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -41,6 +41,7 @@ class bidir_node_iterator:
     const typename Node::value_type&>
 {
 public:
+  /* coverity[uninit_ctor]: suppress warning */
   bidir_node_iterator(){}
   explicit bidir_node_iterator(Node* node_):node(node_){}
 

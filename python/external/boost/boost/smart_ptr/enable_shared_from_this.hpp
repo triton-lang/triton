@@ -58,6 +58,16 @@ public:
         return p;
     }
 
+    weak_ptr<T> weak_from_this() BOOST_NOEXCEPT
+    {
+        return weak_this_;
+    }
+
+    weak_ptr<T const> weak_from_this() const BOOST_NOEXCEPT
+    {
+        return weak_this_;
+    }
+
 public: // actually private, but avoids compiler template friendship issues
 
     // Note: invoked automatically by shared_ptr; do not call

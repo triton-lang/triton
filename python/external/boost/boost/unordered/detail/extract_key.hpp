@@ -6,6 +6,11 @@
 #ifndef BOOST_UNORDERED_DETAIL_EXTRACT_KEY_HPP_INCLUDED
 #define BOOST_UNORDERED_DETAIL_EXTRACT_KEY_HPP_INCLUDED
 
+#include <boost/config.hpp>
+#if defined(BOOST_HAS_PRAGMA_ONCE)
+#pragma once
+#endif
+
 #include <boost/unordered/detail/table.hpp>
 
 namespace boost {

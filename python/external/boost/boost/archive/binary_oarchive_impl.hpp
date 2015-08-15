@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_BINARY_OARCHIVE_IMPL_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -30,6 +30,10 @@
 namespace boost { 
 namespace archive {
 
+namespace detail {
+    template<class Archive> class interface_oarchive;
+} // namespace detail
+
 template<class Archive, class Elem, class Tr>
 class binary_oarchive_impl : 
     public basic_binary_oprimitive<Archive, Elem, Tr>,
@@ -38,10 +42,18 @@ class binary_oarchive_impl :
 #ifdef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
 public:
 #else
-    friend class detail::interface_oarchive<Archive>;
-    friend class basic_binary_oarchive<Archive>;
-    friend class save_access;
 protected:
+    #if BOOST_WORKAROUND(BOOST_MSVC, < 1500)
+        // for some inexplicable reason insertion of "class" generates compile erro
+        // on msvc 7.1
+        friend detail::interface_oarchive<Archive>;
+        friend basic_binary_oarchive<Archive>;
+        friend save_access;
+    #else
+        friend class detail::interface_oarchive<Archive>;
+        friend class basic_binary_oarchive<Archive>;
+        friend class save_access;
+    #endif
 #endif
     // note: the following should not needed - but one compiler (vc 7.1)
     // fails to compile one test (test_shared_ptr) without it !!!

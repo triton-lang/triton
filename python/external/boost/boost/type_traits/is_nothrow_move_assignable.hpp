@@ -29,7 +29,23 @@ namespace boost {
 
 namespace detail{
 
-#ifndef BOOST_NO_CXX11_NOEXCEPT
+#ifdef BOOST_IS_NOTHROW_MOVE_ASSIGN
+
+template <class T>
+struct is_nothrow_move_assignable_imp{ BOOST_STATIC_CONSTANT(bool, value = BOOST_IS_NOTHROW_MOVE_ASSIGN(T)); };
+template <class T>
+struct is_nothrow_move_assignable_imp<T const>{ BOOST_STATIC_CONSTANT(bool, value = false); };
+template <class T>
+struct is_nothrow_move_assignable_imp<T volatile>{ BOOST_STATIC_CONSTANT(bool, value = false); };
+template <class T>
+struct is_nothrow_move_assignable_imp<T const volatile>{ BOOST_STATIC_CONSTANT(bool, value = false); };
+template <class T>
+struct is_nothrow_move_assignable_imp<T&>{ BOOST_STATIC_CONSTANT(bool, value = false); };
+template <class T>
+struct is_nothrow_move_assignable_imp<T&&>{ BOOST_STATIC_CONSTANT(bool, value = false); };
+
+
+#elif !defined(BOOST_NO_CXX11_NOEXCEPT) && !defined(BOOST_NO_SFINAE_EXPR)
 
 template <class T, class Enable = void>
 struct false_or_cpp11_noexcept_move_assignable: public ::boost::false_type {};
@@ -43,13 +59,21 @@ struct false_or_cpp11_noexcept_move_assignable <
 
 template <class T>
 struct is_nothrow_move_assignable_imp{
-    BOOST_STATIC_CONSTANT(bool, value = (
-        ::boost::type_traits::ice_and<
-            ::boost::type_traits::ice_not< ::boost::is_volatile<T>::value >::value,
-            ::boost::type_traits::ice_not< ::boost::is_reference<T>::value >::value,
-            ::boost::detail::false_or_cpp11_noexcept_move_assignable<T>::value
-        >::value));
+    BOOST_STATIC_CONSTANT(bool, value = ::boost::detail::false_or_cpp11_noexcept_move_assignable<T>::value);
 };
+
+template <class T>
+struct is_nothrow_move_assignable_imp<T const> : public ::boost::false_type {};
+template <class T>
+struct is_nothrow_move_assignable_imp<T volatile> : public ::boost::false_type{};
+template <class T>
+struct is_nothrow_move_assignable_imp<T const volatile> : public ::boost::false_type{};
+template <class T>
+struct is_nothrow_move_assignable_imp<T&> : public ::boost::false_type{};
+#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
+template <class T>
+struct is_nothrow_move_assignable_imp<T&&> : public ::boost::false_type{};
+#endif
 
 #else
 

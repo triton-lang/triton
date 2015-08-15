@@ -31,7 +31,7 @@ namespace boost
                                 IteratorCategoryTag1,
                                 IteratorCategoryTag2 )
         {
-            while (true)
+            for (;;)
             {
                 // If we have reached the end of the left range then this is
                 // the end of the loop. They are equal if and only if we have
@@ -71,7 +71,7 @@ namespace boost
                                 IteratorCategoryTag1,
                                 IteratorCategoryTag2 )
         {
-            while (true)
+            for (;;)
             {
                 // If we have reached the end of the left range then this is
                 // the end of the loop. They are equal if and only if we have
@@ -120,7 +120,9 @@ namespace boost
                                 RandomAccessTraversalReadableIterator1 last1,
                                 RandomAccessTraversalReadableIterator2 first2,
                                 RandomAccessTraversalReadableIterator2 last2,
-                                BinaryPredicate                        pred )
+                                BinaryPredicate                        pred,
+                                std::random_access_iterator_tag,
+                                std::random_access_iterator_tag )
         {
             return ((last1 - first1) == (last2 - first2))
                 && std::equal(first1, last1, first2, pred);

@@ -36,9 +36,7 @@ BOOST_TT_AUX_TYPE_TRAIT_DEF1(add_volatile,T,T volatile)
 #   pragma warning(pop)
 #endif 
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 BOOST_TT_AUX_TYPE_TRAIT_PARTIAL_SPEC1_1(typename T,add_volatile,T&,T&)
-#endif
 
 } // namespace boost
 

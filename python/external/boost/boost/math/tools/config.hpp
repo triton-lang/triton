@@ -13,12 +13,16 @@
 #include <boost/config.hpp>
 #include <boost/cstdint.hpp> // for boost::uintmax_t
 #include <boost/detail/workaround.hpp>
+#include <boost/type_traits/is_integral.hpp>
 #include <algorithm>  // for min and max
 #include <boost/config/no_tr1/cmath.hpp>
 #include <climits>
 #include <cfloat>
 #if (defined(macintosh) || defined(__APPLE__) || defined(__APPLE_CC__))
 #  include <math.h>
+#endif
+#ifndef BOOST_NO_LIMITS_COMPILE_TIME_CONSTANTS
+#  include <limits>
 #endif
 
 #include <boost/math/tools/user.hpp>
@@ -45,6 +49,10 @@
 // pass at long double precision, but fail with real_concept, those tests
 // are disabled for now.  (JM 2012).
 #  define BOOST_MATH_NO_REAL_CONCEPT_TESTS
+#endif
+#ifdef sun
+// Any use of __float128 in program startup code causes a segfault  (tested JM 2015, Solaris 11).
+#  define BOOST_MATH_DISABLE_FLOAT128
 #endif
 #if (defined(macintosh) || defined(__APPLE__) || defined(__APPLE_CC__)) && ((LDBL_MANT_DIG == 106) || (__LDBL_MANT_DIG__ == 106)) && !defined(BOOST_MATH_NO_LONG_DOUBLE_MATH_FUNCTIONS)
 //
@@ -109,7 +117,7 @@
 #  define BOOST_MATH_NO_NATIVE_LONG_DOUBLE_FP_CLASSIFY
 #endif
 
-#if defined(BOOST_NO_EXPLICIT_FUNCTION_TEMPLATE_ARGUMENTS) || BOOST_WORKAROUND(__SUNPRO_CC, <= 0x590)
+#if BOOST_WORKAROUND(__SUNPRO_CC, <= 0x590)
 
 #  include "boost/type.hpp"
 #  include "boost/non_type.hpp"
@@ -143,12 +151,12 @@
 #  define BOOST_MATH_APPEND_EXPLICIT_TEMPLATE_NON_TYPE_SPEC(t, v)
 
 
-#endif // defined BOOST_NO_EXPLICIT_FUNCTION_TEMPLATE_ARGUMENTS
+#endif // __SUNPRO_CC
 
 #if (defined(__SUNPRO_CC) || defined(__hppa) || defined(__GNUC__)) && !defined(BOOST_MATH_SMALL_CONSTANT)
 // Sun's compiler emits a hard error if a constant underflows,
 // as does aCC on PA-RISC, while gcc issues a large number of warnings:
-#  define BOOST_MATH_SMALL_CONSTANT(x) 0
+#  define BOOST_MATH_SMALL_CONSTANT(x) 0.0
 #else
 #  define BOOST_MATH_SMALL_CONSTANT(x) x
 #endif
@@ -210,12 +218,27 @@
 //
 // Test whether to support __float128:
 //
-#if defined(_GLIBCXX_USE_FLOAT128) && defined(BOOST_GCC) && !defined(__STRICT_ANSI__)
+#if defined(_GLIBCXX_USE_FLOAT128) && defined(BOOST_GCC) && !defined(__STRICT_ANSI__) \
+   && !defined(BOOST_MATH_DISABLE_FLOAT128) || defined(BOOST_MATH_USE_FLOAT128)
 //
 // Only enable this when the compiler really is GCC as clang and probably 
 // intel too don't support __float128 yet :-(
 //
+#ifndef BOOST_MATH_USE_FLOAT128
 #  define BOOST_MATH_USE_FLOAT128
+#endif
+
+#  if defined(BOOST_INTEL) && defined(BOOST_INTEL_CXX_VERSION) && (BOOST_INTEL_CXX_VERSION >= 1310) && defined(__GNUC__)
+#    if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 6))
+#      define BOOST_MATH_FLOAT128_TYPE __float128
+#    endif
+#  elif defined(__GNUC__)
+#      define BOOST_MATH_FLOAT128_TYPE __float128
+#  endif
+
+#  ifndef BOOST_MATH_FLOAT128_TYPE
+#      define BOOST_MATH_FLOAT128_TYPE _Quad
+#  endif
 #endif
 //
 // Check for WinCE with no iostream support:
@@ -231,7 +254,7 @@
 #  define BOOST_MATH_CONTROL_FP
 #endif
 //
-// Helper macro for using symbolic_expressionexpressions:
+// Helper macro for using statements:
 //
 #define BOOST_MATH_STD_USING_CORE \
    using std::abs;\
@@ -283,9 +306,35 @@ void suppress_unused_variable_warning(const T&)
 {
 }
 
+namespace detail{
+
+template <class T>
+struct is_integer_for_rounding
+{
+   static const bool value = boost::is_integral<T>::value
+#ifndef BOOST_NO_LIMITS_COMPILE_TIME_CONSTANTS
+      || (std::numeric_limits<T>::is_specialized && std::numeric_limits<T>::is_integer)
+#endif
+      ;
+};
+
+}
+
 }} // namespace boost namespace math
 
-#if ((defined(__linux__) && !defined(__UCLIBC__)) || defined(__QNX__) || defined(__IBMCPP__)) && !defined(BOOST_NO_FENV_H)
+#ifdef __GLIBC_PREREQ
+#  if __GLIBC_PREREQ(2,14)
+#     define BOOST_MATH_HAVE_FIXED_GLIBC
+#  endif
+#endif
+
+#if ((defined(__linux__) && !defined(__UCLIBC__) && !defined(BOOST_MATH_HAVE_FIXED_GLIBC)) || defined(__QNX__) || defined(__IBMCPP__)) && !defined(BOOST_NO_FENV_H)
+//
+// This code was introduced in response to this glibc bug: http://sourceware.org/bugzilla/show_bug.cgi?id=2445
+// Basically powl and expl can return garbage when the result is small and certain exception flags are set
+// on entrance to these functions.  This appears to have been fixed in Glibc 2.14 (May 2011).
+// Much more information in this message thread: https://groups.google.com/forum/#!topic/boost-list/ZT99wtIFlb4
+//
 
    #include <boost/detail/fenv.hpp>
 

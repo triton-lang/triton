@@ -2,12 +2,12 @@
 #define BOOST_ARCHIVE_BASIC_STREAMBUF_LOCALE_SAVER_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
 /////////1/////////2/////////3/////////4/////////5/////////6/////////7/////////8
-// basic_streambuf_local_saver.hpp
+// basic_streambuf_locale_saver.hpp
 
 // (C) Copyright 2005 Robert Ramey - http://www.rrsd.com
 
@@ -50,13 +50,15 @@ public:
     explicit basic_streambuf_locale_saver( state_type &s )
         : s_save_( s ), a_save_( s.getloc() )
         {}
-    basic_streambuf_locale_saver( state_type &s, aspect_type const &a )
+    explicit basic_streambuf_locale_saver( state_type &s, aspect_type const &a )
         : s_save_( s ), a_save_( s.pubimbue(a) )
         {}
     ~basic_streambuf_locale_saver()
         { this->restore(); }
-    void  restore()
-        { s_save_.pubimbue( a_save_ ); }
+    void  restore(){
+        s_save_.pubsync();
+        s_save_.pubimbue( a_save_ );
+    }
 private:
     state_type &       s_save_;
     aspect_type const  a_save_;

@@ -11,13 +11,8 @@
 
 #include <boost/config.hpp>
 #include <boost/detail/workaround.hpp>
-#ifdef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
-#include <boost/type_traits/broken_compiler_spec.hpp>
-#endif
 
-#if BOOST_WORKAROUND(BOOST_MSVC,<=1300)
-#include <boost/type_traits/msvc/remove_pointer.hpp>
-#elif defined(BOOST_MSVC)
+#if defined(BOOST_MSVC)
 #include <boost/type_traits/remove_cv.hpp>
 #include <boost/type_traits/is_pointer.hpp>
 #endif
@@ -71,17 +66,13 @@ namespace detail{
 
 BOOST_TT_AUX_TYPE_TRAIT_DEF1(remove_pointer,T,typename boost::detail::remove_pointer_imp2<T>::type)
 
-#elif !defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION)
+#else
 
 BOOST_TT_AUX_TYPE_TRAIT_DEF1(remove_pointer,T,T)
 BOOST_TT_AUX_TYPE_TRAIT_PARTIAL_SPEC1_1(typename T,remove_pointer,T*,T)
 BOOST_TT_AUX_TYPE_TRAIT_PARTIAL_SPEC1_1(typename T,remove_pointer,T* const,T)
 BOOST_TT_AUX_TYPE_TRAIT_PARTIAL_SPEC1_1(typename T,remove_pointer,T* volatile,T)
 BOOST_TT_AUX_TYPE_TRAIT_PARTIAL_SPEC1_1(typename T,remove_pointer,T* const volatile,T)
-
-#elif !BOOST_WORKAROUND(BOOST_MSVC,<=1300)
-
-BOOST_TT_AUX_TYPE_TRAIT_DEF1(remove_pointer,T,typename boost::detail::remove_pointer_impl<T>::type)
 
 #endif
 

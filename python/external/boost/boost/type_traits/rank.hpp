@@ -24,7 +24,7 @@ struct rank_imp
 {
    BOOST_STATIC_CONSTANT(std::size_t, value = N);
 };
-#if !defined(BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION) && !defined(BOOST_NO_ARRAY_TYPE_SPECIALIZATIONS)
+#if !defined(BOOST_NO_ARRAY_TYPE_SPECIALIZATIONS)
 template <class T, std::size_t R, std::size_t N>
 struct rank_imp<T[R], N>
 {

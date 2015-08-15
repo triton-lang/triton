@@ -1,4 +1,4 @@
-/* Copyright 2003-2009 Joaquin M Lopez Munoz.
+/* Copyright 2003-2013 Joaquin M Lopez Munoz.
  * Distributed under the Boost Software License, Version 1.0.
  * (See accompanying file LICENSE_1_0.txt or copy at
  * http://www.boost.org/LICENSE_1_0.txt)
@@ -11,7 +11,6 @@
 
 #include <boost/config.hpp> /* keep it first to prevent nasty warns in MSVC */
 #include <boost/detail/workaround.hpp>
-#include <boost/mpl/aux_/msvc_never_true.hpp>
 #include <boost/mpl/eval_if.hpp>
 #include <boost/type_traits/is_same.hpp>
 #include <cstddef>
@@ -116,29 +115,6 @@ struct partial_std_allocator_rebind_to
 
 /* rebind operation in all other cases */
 
-#if BOOST_WORKAROUND(BOOST_MSVC,<1300)
-/* Workaround for a problem in MSVC with dependent template typedefs
- * when doing rebinding of allocators.
- * Modeled after <boost/mpl/aux_/msvc_dtw.hpp> (thanks, Aleksey!)
- */
-
-template<typename Allocator>
-struct rebinder
-{
-  template<bool> struct fake_allocator:Allocator{};
-  template<> struct fake_allocator<true>
-  {
-    template<typename Type> struct rebind{};
-  };
-
-  template<typename Type>
-  struct result:
-    fake_allocator<mpl::aux::msvc_never_true<Allocator>::value>::
-      template rebind<Type>
-  {
-  };
-};
-#else
 template<typename Allocator>
 struct rebinder
 {
@@ -149,7 +125,6 @@ struct rebinder
           rebind<Type>::other other;
   };
 };
-#endif
 
 template<typename Allocator,typename Type>
 struct compliant_allocator_rebind_to

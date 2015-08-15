@@ -9,7 +9,7 @@
 #ifndef BOOST_MULTI_INDEX_DETAIL_SAFE_MODE_HPP
 #define BOOST_MULTI_INDEX_DETAIL_SAFE_MODE_HPP
 
-#if defined(_MSC_VER)&&(_MSC_VER>=1200)
+#if defined(_MSC_VER)
 #pragma once
 #endif
 
@@ -116,6 +116,7 @@
 
 #if !defined(BOOST_MULTI_INDEX_DISABLE_SERIALIZATION)
 #include <boost/serialization/split_member.hpp>
+#include <boost/serialization/version.hpp>
 #endif
 
 #if defined(BOOST_HAS_THREADS)
@@ -566,6 +567,19 @@ public:
 } /* namespace multi_index::safe_mode */
 
 } /* namespace multi_index */
+
+#if !defined(BOOST_MULTI_INDEX_DISABLE_SERIALIZATION)
+namespace serialization{
+template<typename Iterator,typename Container>
+struct version<
+  boost::multi_index::safe_mode::safe_iterator<Iterator,Container>
+>
+{
+  BOOST_STATIC_CONSTANT(
+    int,value=boost::serialization::version<Iterator>::value);
+};
+} /* namespace serialization */
+#endif
 
 } /* namespace boost */
 

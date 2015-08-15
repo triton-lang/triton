@@ -2,7 +2,7 @@
 #define BOOST_SERIALIZATION_NVP_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -20,10 +20,6 @@
 
 #include <boost/config.hpp>
 #include <boost/detail/workaround.hpp>
-// supress noise
-#if BOOST_WORKAROUND(BOOST_MSVC, <= 1200)
-# pragma warning (disable : 4786) // too long name, harmless warning
-#endif
 
 #include <boost/mpl/integral_c.hpp>
 #include <boost/mpl/integral_c_tag.hpp>
@@ -104,7 +100,6 @@ nvp< T > make_nvp(const char * name, T & t){
 // Partial Template Specialization and doing so would mean that wrappers
 // wouldn't be treated the same on different platforms.  This would
 // break archive portability. Leave this here as reminder not to use it !!!
-#if 0 // #ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 template <class T>
 struct implementation_level<nvp< T > >
@@ -123,7 +118,6 @@ struct tracking_level<nvp< T > >
     BOOST_STATIC_CONSTANT(int, value = tracking_level::type::value);
 };
 
-#endif
 
 } // seralization
 } // boost

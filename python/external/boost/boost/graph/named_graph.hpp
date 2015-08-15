@@ -62,7 +62,6 @@ struct internal_vertex_name
   typedef void type;
 };
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 /**
  * Extract the internal vertex name from a @c property structure by
  * looking at its base.
@@ -70,7 +69,6 @@ struct internal_vertex_name
 template<typename Tag, typename T, typename Base>
 struct internal_vertex_name<property<Tag, T, Base> >
   : internal_vertex_name<Base> { };
-#endif
 
 /**
  * Construct an instance of @c VertexProperty directly from its
@@ -157,7 +155,6 @@ struct internal_vertex_constructor
   typedef cannot_add_vertex<VertexProperty> type;
 };
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 /**
  * Extract the internal vertex constructor from a @c property structure by
  * looking at its base.
@@ -165,7 +162,6 @@ struct internal_vertex_constructor
 template<typename Tag, typename T, typename Base>
 struct internal_vertex_constructor<property<Tag, T, Base> >
   : internal_vertex_constructor<Base> { };
-#endif
 
 /*******************************************************************
  * Named graph mixin                                               *
@@ -459,7 +455,6 @@ add_edge(typename BGL_NAMED_GRAPH::vertex_name_type const& u_name,
  * Maybe named graph mixin                                         *
  *******************************************************************/
 
-#ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 /**
  * A graph mixin that can provide a mapping from names to vertices,
  * and use that mapping to simplify creation and manipulation of
@@ -507,40 +502,6 @@ struct maybe_named_graph<Graph, Vertex, VertexProperty, void>
     return optional<Vertex>();
   }
 };
-#else
-template<typename Graph, typename Vertex, typename VertexProperty,
-         typename ExtractName
-           = typename internal_vertex_name<VertexProperty>::type>
-struct maybe_named_graph
-{
-  /// The type of the "bundled" property, from which the name can be
-  /// extracted.
-  typedef typename detail::extract_bundled_vertex<VertexProperty>::type
-    bundled_vertex_property_type;
-
-  /// Notify the named_graph that we have added the given vertex. This
-  /// is a no-op.
-  void added_vertex(Vertex) { }
-
-  /// Notify the named_graph that we are removing the given
-  /// vertex. This is a no-op.
-  template <typename VertexIterStability>
-  void removing_vertex(Vertex, VertexIterStability) { }
-
-  /// Notify the named_graph that we are clearing the graph. This is a
-  /// no-op.
-  void clearing_graph() { }
-
-  /// Search for a vertex that has the given property (based on its
-  /// name). This always returns an empty optional<>
-  template<typename Property>
-  optional<Vertex>
-  vertex_by_property(const bundled_vertex_property_type&)
-  {
-    return optional<Vertex>();
-  }
-};
-#endif // BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
 
 } } // end namespace boost::graph
 

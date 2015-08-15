@@ -70,7 +70,6 @@ execute_process(COMMAND "${PYTHON_EXECUTABLE}" "-c"
     "from distutils import sysconfig as s;import sys;import struct;
 print('.'.join(str(v) for v in sys.version_info));
 print(s.PREFIX);
-print(s.get_python_inc());
 print(s.get_python_inc(plat_specific=True));
 print(s.get_python_lib(plat_specific=True));
 print(s.get_config_var('SO'));
@@ -97,11 +96,10 @@ string(REGEX REPLACE "\n" ";" _PYTHON_VALUES ${_PYTHON_VALUES})
 list(GET _PYTHON_VALUES 0 _PYTHON_VERSION_LIST)
 list(GET _PYTHON_VALUES 1 PYTHON_PREFIX)
 list(GET _PYTHON_VALUES 2 PYTHON_INCLUDE_DIR)
-list(GET _PYTHON_VALUES 3 PYTHON_PLATFORM_INCLUDE_DIR)
-list(GET _PYTHON_VALUES 4 PYTHON_SITE_PACKAGES)
-list(GET _PYTHON_VALUES 5 PYTHON_MODULE_EXTENSION)
-list(GET _PYTHON_VALUES 6 PYTHON_IS_DEBUG)
-list(GET _PYTHON_VALUES 7 PYTHON_SIZEOF_VOID_P)
+list(GET _PYTHON_VALUES 3 PYTHON_SITE_PACKAGES)
+list(GET _PYTHON_VALUES 4 PYTHON_MODULE_EXTENSION)
+list(GET _PYTHON_VALUES 5 PYTHON_IS_DEBUG)
+list(GET _PYTHON_VALUES 6 PYTHON_SIZEOF_VOID_P)
 
 # Make sure the Python has the same pointer-size as the chosen compiler
 if(NOT ${PYTHON_SIZEOF_VOID_P} MATCHES ${CMAKE_SIZEOF_VOID_P})
@@ -165,7 +163,7 @@ MARK_AS_ADVANCED(
 # cache entries because they are meant to specify the location of a single
 # library. We now set the variables listed by the documentation for this
 # module.
-SET(PYTHON_INCLUDE_DIRS "${PYTHON_INCLUDE_DIR};${PYTHON_PLATFORM_INCLUDE_DIR}")
+SET(PYTHON_INCLUDE_DIRS "${PYTHON_INCLUDE_DIR}")
 SET(PYTHON_LIBRARIES "${PYTHON_LIBRARY}")
 SET(PYTHON_DEBUG_LIBRARIES "${PYTHON_DEBUG_LIBRARY}")
 

@@ -5,7 +5,7 @@
 //
 //  See http://www.boost.org/libs/utility for most recent version including documentation.
 
-//  See boost/detail/call_traits.hpp and boost/detail/ob_call_traits.hpp
+//  See boost/detail/call_traits.hpp
 //  for full copyright notices.
 
 #ifndef BOOST_CALL_TRAITS_HPP
@@ -15,10 +15,6 @@
 #include <boost/config.hpp>
 #endif
 
-#ifdef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
-#include <boost/detail/ob_call_traits.hpp>
-#else
 #include <boost/detail/call_traits.hpp>
-#endif
 
 #endif // BOOST_CALL_TRAITS_HPP

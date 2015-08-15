@@ -351,6 +351,13 @@ struct fp_traits_non_native<long double, extended_double_precision>
 // the Intel extended double precision format (80 bits) and
 // the IEEE extended double precision format with 15 exponent bits (128 bits).
 
+#elif defined(__GNUC__) && (LDBL_MANT_DIG == 106)
+
+//
+// Define nothing here and fall though to generic_tag:
+// We have GCC's "double double" in effect, and any attempt
+// to handle it via bit-fiddling is pretty much doomed to fail...
+//
 
 // long double (>64 bits), PowerPC ---------------------------------------------
 
@@ -546,7 +553,10 @@ struct select_native<long double>
    && !defined(__DECCXX)\
    && !defined(__osf__) \
    && !defined(__SGI_STL_PORT) && !defined(_STLPORT_VERSION)\
-   && !defined(BOOST_MATH_DISABLE_STD_FPCLASSIFY)
+   && !defined(__FAST_MATH__)\
+   && !defined(BOOST_MATH_DISABLE_STD_FPCLASSIFY)\
+   && !defined(BOOST_INTEL)\
+   && !defined(sun)
 #  define BOOST_MATH_USE_STD_FPCLASSIFY
 #endif
 

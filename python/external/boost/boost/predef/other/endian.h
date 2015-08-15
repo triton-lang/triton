@@ -1,5 +1,5 @@
 /*
-Copyright Redshift Software, Inc. 2013
+Copyright Rene Rivera 2013-2014
 Distributed under the Boost Software License, Version 1.0.
 (See accompanying file LICENSE_1_0.txt or copy at
 http://www.boost.org/LICENSE_1_0.txt)
@@ -13,6 +13,7 @@ http://www.boost.org/LICENSE_1_0.txt)
 #include <boost/predef/library/c/gnu.h>
 #include <boost/predef/os/macos.h>
 #include <boost/predef/os/bsd.h>
+#include <boost/predef/os/android.h>
 
 /*`
 [heading `BOOST_ENDIAN_*`]
@@ -53,7 +54,7 @@ information and acquired knowledge:
  */
 #if !BOOST_ENDIAN_BIG_BYTE && !BOOST_ENDIAN_BIG_WORD && \
     !BOOST_ENDIAN_LITTLE_BYTE && !BOOST_ENDIAN_LITTLE_WORD
-#   if BOOST_LIB_C_GNU
+#   if BOOST_LIB_C_GNU || BOOST_OS_ANDROID
 #       include <endian.h>
 #   else
 #       if BOOST_OS_MACOS
@@ -69,29 +70,29 @@ information and acquired knowledge:
 #       endif
 #   endif
 #   if defined(__BYTE_ORDER)
-#       if (__BYTE_ORDER == __BIG_ENDIAN)
+#       if defined(__BIG_ENDIAN) && (__BYTE_ORDER == __BIG_ENDIAN)
 #           undef BOOST_ENDIAN_BIG_BYTE
 #           define BOOST_ENDIAN_BIG_BYTE BOOST_VERSION_NUMBER_AVAILABLE
 #       endif
-#       if (__BYTE_ORDER == __LITTLE_ENDIAN)
+#       if defined(__LITTLE_ENDIAN) && (__BYTE_ORDER == __LITTLE_ENDIAN)
 #           undef BOOST_ENDIAN_LITTLE_BYTE
 #           define BOOST_ENDIAN_LITTLE_BYTE BOOST_VERSION_NUMBER_AVAILABLE
 #       endif
-#       if (__BYTE_ORDER == __PDP_ENDIAN)
+#       if defined(__PDP_ENDIAN) && (__BYTE_ORDER == __PDP_ENDIAN)
 #           undef BOOST_ENDIAN_LITTLE_WORD
 #           define BOOST_ENDIAN_LITTLE_WORD BOOST_VERSION_NUMBER_AVAILABLE
 #       endif
 #   endif
 #   if !defined(__BYTE_ORDER) && defined(_BYTE_ORDER)
-#       if (_BYTE_ORDER == _BIG_ENDIAN)
+#       if defined(_BIG_ENDIAN) && (_BYTE_ORDER == _BIG_ENDIAN)
 #           undef BOOST_ENDIAN_BIG_BYTE
 #           define BOOST_ENDIAN_BIG_BYTE BOOST_VERSION_NUMBER_AVAILABLE
 #       endif
-#       if (_BYTE_ORDER == _LITTLE_ENDIAN)
+#       if defined(_LITTLE_ENDIAN) && (_BYTE_ORDER == _LITTLE_ENDIAN)
 #           undef BOOST_ENDIAN_LITTLE_BYTE
 #           define BOOST_ENDIAN_LITTLE_BYTE BOOST_VERSION_NUMBER_AVAILABLE
 #       endif
-#       if (_BYTE_ORDER == _PDP_ENDIAN)
+#       if defined(_PDP_ENDIAN) && (_BYTE_ORDER == _PDP_ENDIAN)
 #           undef BOOST_ENDIAN_LITTLE_WORD
 #           define BOOST_ENDIAN_LITTLE_WORD BOOST_VERSION_NUMBER_AVAILABLE
 #       endif
@@ -102,17 +103,16 @@ information and acquired knowledge:
  */
 #if !BOOST_ENDIAN_BIG_BYTE && !BOOST_ENDIAN_BIG_WORD && \
     !BOOST_ENDIAN_LITTLE_BYTE && !BOOST_ENDIAN_LITTLE_WORD
-#   if !BOOST_ENDIAN_BIG_BYTE
-#       if (defined(__BIG_ENDIAN__) && !defined(__LITTLE_ENDIAN__)) || \
-            defined(__ARMEB__) || \
-            defined(__THUMBEB__) || \
-            defined(__AARCH64EB__) || \
-            defined(_MIPSEB) || \
-            defined(__MIPSEB) || \
-            defined(__MIPSEB__)
-#           undef BOOST_ENDIAN_BIG_BYTE
-#           define BOOST_ENDIAN_BIG_BYTE BOOST_VERSION_NUMBER_AVAILABLE
-#       endif
+#   if (defined(__BIG_ENDIAN__) && !defined(__LITTLE_ENDIAN__)) || \
+       (defined(_BIG_ENDIAN) && !defined(_LITTLE_ENDIAN)) || \
+        defined(__ARMEB__) || \
+        defined(__THUMBEB__) || \
+        defined(__AARCH64EB__) || \
+        defined(_MIPSEB) || \
+        defined(__MIPSEB) || \
+        defined(__MIPSEB__)
+#       undef BOOST_ENDIAN_BIG_BYTE
+#       define BOOST_ENDIAN_BIG_BYTE BOOST_VERSION_NUMBER_AVAILABLE
 #   endif
 #endif
 
@@ -120,17 +120,16 @@ information and acquired knowledge:
  */
 #if !BOOST_ENDIAN_BIG_BYTE && !BOOST_ENDIAN_BIG_WORD && \
     !BOOST_ENDIAN_LITTLE_BYTE && !BOOST_ENDIAN_LITTLE_WORD
-#   if !BOOST_ENDIAN_LITTLE_BYTE
-#       if (defined(__LITTLE_ENDIAN__) && !defined(__BIG_ENDIAN__)) || \
-            defined(__ARMEL__) || \
-            defined(__THUMBEL__) || \
-            defined(__AARCH64EL__) || \
-            defined(_MIPSEL) || \
-            defined(__MIPSEL) || \
-            defined(__MIPSEL__)
-#           undef BOOST_ENDIAN_LITTLE_BYTE
-#           define BOOST_ENDIAN_LITTLE_BYTE BOOST_VERSION_NUMBER_AVAILABLE
-#       endif
+#   if (defined(__LITTLE_ENDIAN__) && !defined(__BIG_ENDIAN__)) || \
+       (defined(_LITTLE_ENDIAN) && !defined(_BIG_ENDIAN)) || \
+        defined(__ARMEL__) || \
+        defined(__THUMBEL__) || \
+        defined(__AARCH64EL__) || \
+        defined(_MIPSEL) || \
+        defined(__MIPSEL) || \
+        defined(__MIPSEL__)
+#       undef BOOST_ENDIAN_LITTLE_BYTE
+#       define BOOST_ENDIAN_LITTLE_BYTE BOOST_VERSION_NUMBER_AVAILABLE
 #   endif
 #endif
 
@@ -142,6 +141,7 @@ information and acquired knowledge:
 #   include <boost/predef/architecture.h>
 #   if BOOST_ARCH_M68K || \
         BOOST_ARCH_PARISK || \
+        BOOST_ARCH_SPARC || \
         BOOST_ARCH_SYS370 || \
         BOOST_ARCH_SYS390 || \
         BOOST_ARCH_Z

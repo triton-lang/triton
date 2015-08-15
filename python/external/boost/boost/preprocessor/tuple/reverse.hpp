@@ -18,6 +18,8 @@
 # include <boost/preprocessor/cat.hpp>
 # include <boost/preprocessor/config/config.hpp>
 # include <boost/preprocessor/facilities/overload.hpp>
+# include <boost/preprocessor/tuple/size.hpp>
+# include <boost/preprocessor/variadic/size.hpp>
 #
 # /* BOOST_PP_TUPLE_REVERSE */
 #
@@ -26,10 +28,11 @@
 #        define BOOST_PP_TUPLE_REVERSE(...) BOOST_PP_TUPLE_REVERSE_I(BOOST_PP_OVERLOAD(BOOST_PP_TUPLE_REVERSE_O_, __VA_ARGS__), (__VA_ARGS__))
 #        define BOOST_PP_TUPLE_REVERSE_I(m, args) BOOST_PP_TUPLE_REVERSE_II(m, args)
 #        define BOOST_PP_TUPLE_REVERSE_II(m, args) BOOST_PP_CAT(m ## args,)
+#    	 define BOOST_PP_TUPLE_REVERSE_O_1(tuple) BOOST_PP_CAT(BOOST_PP_TUPLE_REVERSE_, BOOST_PP_TUPLE_SIZE(tuple)) tuple
 #    else
 #        define BOOST_PP_TUPLE_REVERSE(...) BOOST_PP_OVERLOAD(BOOST_PP_TUPLE_REVERSE_O_, __VA_ARGS__)(__VA_ARGS__)
+#    	 define BOOST_PP_TUPLE_REVERSE_O_1(tuple) BOOST_PP_CAT(BOOST_PP_TUPLE_REVERSE_, BOOST_PP_VARIADIC_SIZE tuple) tuple
 #    endif
-#    define BOOST_PP_TUPLE_REVERSE_O_1(tuple) BOOST_PP_CAT(BOOST_PP_TUPLE_REVERSE_, BOOST_PP_VARIADIC_SIZE tuple) tuple
 #    define BOOST_PP_TUPLE_REVERSE_O_2(size, tuple) BOOST_PP_TUPLE_REVERSE_O_1(tuple)
 # else
 #    if ~BOOST_PP_CONFIG_FLAGS() & BOOST_PP_CONFIG_MWCC()

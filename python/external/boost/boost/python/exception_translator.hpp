@@ -8,6 +8,7 @@
 # include <boost/python/detail/prefix.hpp>
 
 # include <boost/bind.hpp>
+# include <boost/bind/placeholders.hpp>
 # include <boost/type.hpp>
 # include <boost/python/detail/translate_exception.hpp>
 # include <boost/python/detail/exception_handler.hpp>

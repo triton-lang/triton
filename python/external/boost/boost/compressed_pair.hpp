@@ -5,7 +5,7 @@
 //
 //  See http://www.boost.org/libs/utility for most recent version including documentation.
 
-//  See boost/detail/compressed_pair.hpp and boost/detail/ob_compressed_pair.hpp
+//  See boost/detail/compressed_pair.hpp
 //  for full copyright notices.
 
 #ifndef BOOST_COMPRESSED_PAIR_HPP
@@ -15,10 +15,6 @@
 #include <boost/config.hpp>
 #endif
 
-#ifdef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
-#include <boost/detail/ob_compressed_pair.hpp>
-#else
 #include <boost/detail/compressed_pair.hpp>
-#endif
 
 #endif // BOOST_COMPRESSED_PAIR_HPP

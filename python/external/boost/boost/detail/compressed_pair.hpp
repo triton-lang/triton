@@ -6,7 +6,7 @@
 //  See http://www.boost.org/libs/utility for most recent version including documentation.
 
 // compressed_pair: pair that "compresses" empty members
-// (see libs/utility/compressed_pair.htm)
+// (see libs/utility/doc/html/compressed_pair.html)
 //
 // JM changes 25 Jan 2004:
 // For the case where T1 == T2 and both are empty, then first() and second()

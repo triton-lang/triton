@@ -859,7 +859,295 @@ public:
 
 // bind_t
 
-#ifndef BOOST_NO_VOID_RETURNS
+#if !defined( BOOST_NO_CXX11_RVALUE_REFERENCES )
+
+template< class A > struct list_add_cref
+{
+    typedef A const & type;
+};
+
+template< class A > struct list_add_cref< A& >
+{
+    typedef A & type;
+};
+
+template<class R, class F, class L> class bind_t
+{
+private:
+
+    F f_;
+    L l_;
+
+public:
+
+    typedef typename result_traits<R, F>::type result_type;
+    typedef bind_t this_type;
+
+    bind_t( F f, L const & l ): f_( f ), l_( l ) {}
+
+    //
+
+    result_type operator()()
+    {
+        list0 a;
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    result_type operator()() const
+    {
+        list0 a;
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1> result_type operator()( A1 && a1 )
+    {
+        list1< typename list_add_cref<A1>::type > a( a1 );
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1> result_type operator()( A1 && a1 ) const
+    {
+        list1< typename list_add_cref<A1>::type > a( a1 );
+        return l_(type<result_type>(), f_, a, 0);
+    }
+
+    template<class A1, class A2> result_type operator()( A1 && a1, A2 && a2 )
+    {
+        list2< typename list_add_cref<A1>::type, typename list_add_cref<A2>::type > a( a1, a2 );
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2> result_type operator()( A1 && a1, A2 && a2 ) const
+    {
+        list2< typename list_add_cref<A1>::type, typename list_add_cref<A2>::type > a( a1, a2 );
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3> result_type operator()( A1 && a1, A2 && a2, A3 && a3 )
+    {
+        list3<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type
+        > a( a1, a2, a3 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3> result_type operator()( A1 && a1, A2 && a2, A3 && a3 ) const
+    {
+        list3<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type
+        > a( a1, a2, a3 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4 )
+    {
+        list4<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type
+        > a( a1, a2, a3, a4 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4 ) const
+    {
+        list4<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type
+        > a( a1, a2, a3, a4 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5 )
+    {
+        list5<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type
+        > a( a1, a2, a3, a4, a5 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5 ) const
+    {
+        list5<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type
+        > a( a1, a2, a3, a4, a5 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5, class A6> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5, A6 && a6 )
+    {
+        list6<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type,
+            typename list_add_cref<A6>::type
+        > a( a1, a2, a3, a4, a5, a6 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5, class A6> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5, A6 && a6 ) const
+    {
+        list6<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type,
+            typename list_add_cref<A6>::type
+        > a( a1, a2, a3, a4, a5, a6 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5, class A6, class A7> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5, A6 && a6, A7 && a7 )
+    {
+        list7<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type,
+            typename list_add_cref<A6>::type,
+            typename list_add_cref<A7>::type
+        > a( a1, a2, a3, a4, a5, a6, a7 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5, class A6, class A7> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5, A6 && a6, A7 && a7 ) const
+    {
+        list7<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type,
+            typename list_add_cref<A6>::type,
+            typename list_add_cref<A7>::type
+        > a( a1, a2, a3, a4, a5, a6, a7 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5, class A6, class A7, class A8> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5, A6 && a6, A7 && a7, A8 && a8 )
+    {
+        list8<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type,
+            typename list_add_cref<A6>::type,
+            typename list_add_cref<A7>::type,
+            typename list_add_cref<A8>::type
+        > a( a1, a2, a3, a4, a5, a6, a7, a8 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5, class A6, class A7, class A8> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5, A6 && a6, A7 && a7, A8 && a8 ) const
+    {
+        list8<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type,
+            typename list_add_cref<A6>::type,
+            typename list_add_cref<A7>::type,
+            typename list_add_cref<A8>::type
+        > a( a1, a2, a3, a4, a5, a6, a7, a8 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5, class A6, class A7, class A8, class A9> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5, A6 && a6, A7 && a7, A8 && a8, A9 && a9 )
+    {
+        list9<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type,
+            typename list_add_cref<A6>::type,
+            typename list_add_cref<A7>::type,
+            typename list_add_cref<A8>::type,
+            typename list_add_cref<A9>::type
+        > a( a1, a2, a3, a4, a5, a6, a7, a8, a9 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A1, class A2, class A3, class A4, class A5, class A6, class A7, class A8, class A9> result_type operator()( A1 && a1, A2 && a2, A3 && a3, A4 && a4, A5 && a5, A6 && a6, A7 && a7, A8 && a8, A9 && a9 ) const
+    {
+        list9<
+            typename list_add_cref<A1>::type,
+            typename list_add_cref<A2>::type,
+            typename list_add_cref<A3>::type,
+            typename list_add_cref<A4>::type,
+            typename list_add_cref<A5>::type,
+            typename list_add_cref<A6>::type,
+            typename list_add_cref<A7>::type,
+            typename list_add_cref<A8>::type,
+            typename list_add_cref<A9>::type
+        > a( a1, a2, a3, a4, a5, a6, a7, a8, a9 );
+
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    //
+
+    template<class A> result_type eval( A & a )
+    {
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class A> result_type eval( A & a ) const
+    {
+        return l_( type<result_type>(), f_, a, 0 );
+    }
+
+    template<class V> void accept( V & v ) const
+    {
+#if !defined( BOOST_NO_ARGUMENT_DEPENDENT_LOOKUP ) && !defined( __BORLANDC__ )
+        using boost::visit_each;
+#endif
+
+        BOOST_BIND_VISIT_EACH( v, f_, 0 );
+        l_.accept( v );
+    }
+
+    bool compare( this_type const & rhs ) const
+    {
+        return ref_compare( f_, rhs.f_, 0 ) && l_ == rhs.l_;
+    }
+};
+
+#elif !defined( BOOST_NO_VOID_RETURNS )
 
 template<class R, class F, class L> class bind_t
 {
@@ -875,7 +1163,7 @@ public:
 
 };
 
-#else
+#else // no void returns
 
 template<class R> struct bind_t_generator
 {

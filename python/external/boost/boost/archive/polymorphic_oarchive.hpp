@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_POLYMORPHIC_OARCHIVE_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -38,8 +38,6 @@ namespace std{
 #include <boost/archive/detail/abi_prefix.hpp> // must be the last header
 
 namespace boost {
-template<class T>
-class shared_ptr;
 namespace serialization {
     class extended_type_info;
 } // namespace serialization

@@ -20,7 +20,7 @@
 #ifndef BOOST_FOREACH
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -32,7 +32,7 @@
 
 // Some compilers let us detect even const-qualified rvalues at compile-time
 #if !defined(BOOST_NO_CXX11_RVALUE_REFERENCES)                                                   \
- || BOOST_WORKAROUND(BOOST_MSVC, >= 1310) && !defined(_PREFAST_)                                 \
+ || defined(BOOST_MSVC) && !defined(_PREFAST_)                                 \
  || (BOOST_WORKAROUND(__GNUC__, == 4) && (__GNUC_MINOR__ <= 5) && !defined(BOOST_INTEL) &&       \
                                                                   !defined(BOOST_CLANG))         \
  || (BOOST_WORKAROUND(__GNUC__, == 3) && (__GNUC_MINOR__ >= 4) && !defined(BOOST_INTEL) &&       \
@@ -42,8 +42,7 @@
 // Some compilers allow temporaries to be bound to non-const references.
 // These compilers make it impossible to for BOOST_FOREACH to detect
 // temporaries and avoid reevaluation of the collection expression.
-# if BOOST_WORKAROUND(BOOST_MSVC, <= 1300)                                                      \
-  || BOOST_WORKAROUND(__BORLANDC__, < 0x593)                                                    \
+# if BOOST_WORKAROUND(__BORLANDC__, < 0x593)                                                    \
   || (BOOST_WORKAROUND(BOOST_INTEL_CXX_VERSION, <= 700) && defined(_MSC_VER))                   \
   || BOOST_WORKAROUND(__SUNPRO_CC, < 0x5100)                                                    \
   || BOOST_WORKAROUND(__DECCXX_VER, <= 60590042)
@@ -55,8 +54,6 @@
   || defined(BOOST_NO_SFINAE)                                                                   \
   || BOOST_WORKAROUND(BOOST_MSVC, BOOST_TESTED_AT(1400))                                        \
   || BOOST_WORKAROUND(BOOST_INTEL_WIN, BOOST_TESTED_AT(1400))                                   \
-  || BOOST_WORKAROUND(__GNUC__, < 3)                                                            \
-  || (BOOST_WORKAROUND(__GNUC__, == 3) && (__GNUC_MINOR__ <= 2))                                \
   || (BOOST_WORKAROUND(__GNUC__, == 3) && (__GNUC_MINOR__ <= 3) && defined(__APPLE_CC__))       \
   || BOOST_WORKAROUND(__IBMCPP__, BOOST_TESTED_AT(600))                                         \
   || BOOST_WORKAROUND(__MWERKS__, BOOST_TESTED_AT(0x3206))                                      \
@@ -245,7 +242,7 @@ inline boost::is_rvalue_reference<T &&> *is_rvalue_(T &&, int) { return 0; }
 struct auto_any_base
 {
     // auto_any_base must evaluate to false in boolean context so that
-    // they can be declared in if() symbolic_expressionexpressions.
+    // they can be declared in if() statements.
     operator bool() const
     {
         return false;
@@ -349,9 +346,7 @@ struct foreach_iterator
     //
     // To treat the container as an array, use boost::as_array() in <boost/range/as_array.hpp>,
     // as in BOOST_FOREACH( char ch, boost::as_array("hello") ) ...
-    #if !defined(BOOST_MSVC) || BOOST_MSVC > 1300
     BOOST_MPL_ASSERT_MSG( (!is_char_array<T>::value), IS_THIS_AN_ARRAY_OR_A_NULL_TERMINATED_STRING, (T&) );
-    #endif
 
     // If the type is a pointer to a null terminated string (as opposed 
     // to an array type), there is no ambiguity.
@@ -380,9 +375,7 @@ struct foreach_reverse_iterator
     //
     // To treat the container as an array, use boost::as_array() in <boost/range/as_array.hpp>,
     // as in BOOST_FOREACH( char ch, boost::as_array("hello") ) ...
-    #if !defined(BOOST_MSVC) || BOOST_MSVC > 1300
     BOOST_MPL_ASSERT_MSG( (!is_char_array<T>::value), IS_THIS_AN_ARRAY_OR_A_NULL_TERMINATED_STRING, (T&) );
-    #endif
 
     // If the type is a pointer to a null terminated string (as opposed 
     // to an array type), there is no ambiguity.
@@ -405,10 +398,16 @@ struct foreach_reference
 // encode_type
 //
 template<typename T>
-inline type2type<T> *encode_type(T &, boost::mpl::false_ *) { return 0; }
+inline type2type<T> *encode_type(T &, boost::false_type*) { return 0; }
 
 template<typename T>
-inline type2type<T, const_> *encode_type(T const &, boost::mpl::true_ *) { return 0; }
+inline type2type<T, const_> *encode_type(T const &, boost::true_type*) { return 0; }
+
+template<typename T>
+inline type2type<T> *encode_type(T &, boost::mpl::false_*) { return 0; }
+
+template<typename T>
+inline type2type<T, const_> *encode_type(T const &, boost::mpl::true_*) { return 0; }
 
 ///////////////////////////////////////////////////////////////////////////////
 // set_false

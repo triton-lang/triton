@@ -2,7 +2,7 @@
 #define BOOST_ARCHIVE_ITERATORS_TRANSFORM_WIDTH_HPP
 
 // MS compatible compilers support #pragma once
-#if defined(_MSC_VER) && (_MSC_VER >= 1020)
+#if defined(_MSC_VER)
 # pragma once
 #endif
 
@@ -24,11 +24,12 @@
 // character and 8 bit bytes. Lowest common multiple is 24 => 4 6 bit characters
 // or 3 8 bit characters
 
-#include <boost/config.hpp> // for BOOST_DEDUCED_TYPENAME & PTFO
 #include <boost/serialization/pfto.hpp>
 
 #include <boost/iterator/iterator_adaptor.hpp>
 #include <boost/iterator/iterator_traits.hpp>
+
+#include <algorithm> // std::min
 
 namespace boost { 
 namespace archive {
@@ -41,7 +42,7 @@ template<
     class Base, 
     int BitsOut, 
     int BitsIn, 
-    class CharType = BOOST_DEDUCED_TYPENAME boost::iterator_value<Base>::type // output character
+    class CharType = typename boost::iterator_value<Base>::type // output character
 >
 class transform_width : 
     public boost::iterator_adaptor<
@@ -53,7 +54,7 @@ class transform_width :
     >
 {
     friend class boost::iterator_core_access;
-    typedef BOOST_DEDUCED_TYPENAME boost::iterator_adaptor<
+    typedef typename boost::iterator_adaptor<
         transform_width<Base, BitsOut, BitsIn, CharType>,
         Base,
         CharType,
@@ -62,7 +63,7 @@ class transform_width :
     > super_t;
 
     typedef transform_width<Base, BitsOut, BitsIn, CharType> this_t;
-    typedef BOOST_DEDUCED_TYPENAME iterator_value<Base>::type base_value_type;
+    typedef typename iterator_value<Base>::type base_value_type;
 
     void fill();
 
@@ -112,6 +113,10 @@ public:
     transform_width(BOOST_PFTO_WRAPPER(T) start) : 
         super_t(Base(BOOST_MAKE_PFTO_WRAPPER(static_cast< T >(start)))),
         m_buffer_out_full(false),
+        // To disable GCC warning, but not truly necessary 
+	    //(m_buffer_in will be initialized later before being 
+	    //used because m_remaining_bits == 0)
+        m_buffer_in(0), 
         m_remaining_bits(0),
         m_end_of_sequence(false)
     {}
@@ -119,8 +124,9 @@ public:
     transform_width(const transform_width & rhs) : 
         super_t(rhs.base_reference()),
         m_buffer_out_full(rhs.m_buffer_out_full),
-        m_remaining_bits(rhs.m_remaining_bits),
+        m_buffer_out(rhs.m_buffer_out),
         m_buffer_in(rhs.m_buffer_in),
+        m_remaining_bits(rhs.m_remaining_bits),
         m_end_of_sequence(false)
     {}
 };
