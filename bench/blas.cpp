@@ -102,16 +102,15 @@ void bench(sc::numeric_type dtype, std::string operation)
   {\
   std::vector<double> times;\
   double total_time = 0;\
-  while(total_time*1e-9 < 1e-3){\
+  while(total_time*1e-9 < 1e-2){\
     std::list<sc::driver::Event> events;\
-    flush = sc::zeros((isaac::int_t)1e6, 1, dtype);\
     queue.synchronize();\
     OP;\
     queue.synchronize();\
     times.push_back((double)std::accumulate(events.begin(), events.end(), 0, &time_event));\
     total_time+=times.back();\
   }\
-  double t = median(times);\
+  double t = mean(times);\
   std::cout << " " << (int)(PERF) << std::flush;\
   }
 
@@ -119,16 +118,15 @@ void bench(sc::numeric_type dtype, std::string operation)
   {\
   std::vector<long> times;\
   double total_time = 0;\
-  while(total_time*1e-9 < 1e-3){\
+  while(total_time*1e-9 < 1e-2){\
     cl_event event;\
-    flush = sc::zeros(1e6, 1, dtype);\
     queue.synchronize();\
     OP;\
     queue.synchronize();\
     times.push_back(sc::driver::Event(event).elapsed_time());\
     total_time+=times.back();\
   }\
-  double t = median(times);\
+  double t = mean(times);\
   std::cout << " " << (int)(PERF) << std::flush;\
   }
 
@@ -137,15 +135,14 @@ void bench(sc::numeric_type dtype, std::string operation)
   Timer tmr;\
   long total_time = 0;\
   std::vector<long> times;\
-  while(total_time*1e-9 < 1e-3){\
-    std::vector<int> cache_flusher(10000000, 0);\
+  while(total_time*1e-9 < 1e-2){\
     tmr.start();\
     OP;\
     long time = tmr.get().count();\
     times.push_back(time);\
     total_time += time;\
   }\
-  double t = median(times);\
+  double t = mean(times);\
   std::cout << " " << (int)(PERF) << std::flush;\
   }
 
@@ -201,7 +198,7 @@ void bench(sc::numeric_type dtype, std::string operation)
   if(operation=="axpy")
   {
     float alpha = 1;
-    for(int_t N: create_log_range((int)1e3, (int)2e7, 50, 64))
+    for(int_t N: create_log_range((int)1e3, (int)1e8, 50, 64))
     {
       std::cout << N;
       sc::array x(N, dtype), y(N, dtype);
@@ -234,7 +231,7 @@ void bench(sc::numeric_type dtype, std::string operation)
 
   if(operation=="dot")
   {
-    for(int_t N: create_log_range((int)1e3, (int)2e7, 50, 64))
+    for(int_t N: create_log_range((int)1e3, (int)1e8, 50, 64))
     {
       std::cout << N;
       /* ISAAC */
@@ -325,43 +322,45 @@ void bench(sc::numeric_type dtype, std::string operation)
 
   if(operation.substr(0,4)=="gemm")
   {
-    std::vector<std::tuple<char, char, int_t, int_t, int_t> > MNKs;
-    MNKs.push_back(std::make_tuple('N','T',1536,1536,1536));
+    std::vector<std::tuple<std::string, char, char, int_t, int_t, int_t> > MNKs;
+    MNKs.push_back(std::make_tuple("Square [512]",'N','T',512,512,512));
+    MNKs.push_back(std::make_tuple("Square [1536]",'N','T',1536,1536,1536));
     //AlexNet (Forward)
-    MNKs.push_back(std::make_tuple('N','N',3025,96,363));
-    MNKs.push_back(std::make_tuple('N','N',729,128,1200));
-    MNKs.push_back(std::make_tuple('N','N',169,384,2304));
-    MNKs.push_back(std::make_tuple('N','N',169,192,1728));
-    MNKs.push_back(std::make_tuple('N','N',169,128,1728));
-    MNKs.push_back(std::make_tuple('N','T',256,4096,9216));
+    MNKs.push_back(std::make_tuple("F-Conv1",'N','N',3025,96,363));
+    MNKs.push_back(std::make_tuple("F-Conv2",'N','N',729,128,1200));
+    MNKs.push_back(std::make_tuple("F-Conv3",'N','N',169,384,2304));
+    MNKs.push_back(std::make_tuple("F-Conv4",'N','N',169,192,1728));
+    MNKs.push_back(std::make_tuple("F-Conv5",'N','N',169,128,1728));
+    //MNKs.push_back(std::make_tuple("F-FullyConnected",'N','T',256,4096,9216));
 
     //AlexNet (Backward)
-    MNKs.push_back(std::make_tuple('T','N',1728,128,169));
-    MNKs.push_back(std::make_tuple('T','N',1728,192,169));
-    MNKs.push_back(std::make_tuple('T','N',2304,384,169));
-    MNKs.push_back(std::make_tuple('T','N',1200,128,729));
-    MNKs.push_back(std::make_tuple('T','N',363,96,3025));
+    MNKs.push_back(std::make_tuple("B-Conv5",'T','N',1728,128,169));
+    MNKs.push_back(std::make_tuple("B-Conv4",'T','N',1728,192,169));
+    MNKs.push_back(std::make_tuple("B-Conv3",'T','N',2304,384,169));
+    MNKs.push_back(std::make_tuple("B-Conv2",'T','N',1200,128,729));
+    MNKs.push_back(std::make_tuple("B-Conv1",'T','N',363,96,3025));
 
-    MNKs.push_back(std::make_tuple('N','T',169,1728,128));
-    MNKs.push_back(std::make_tuple('N','T',169,1728,192));
-    MNKs.push_back(std::make_tuple('N','T',169,2304,384));
-    MNKs.push_back(std::make_tuple('N','T',729,1200,128));
+    MNKs.push_back(std::make_tuple("B-Conv5 [bottom]",'N','T',169,1728,128));
+    MNKs.push_back(std::make_tuple("B-Conv4 [bottom]",'N','T',169,1728,192));
+    MNKs.push_back(std::make_tuple("B-Conv3 [bottom]",'N','T',169,2304,384));
+    MNKs.push_back(std::make_tuple("B-Conv2 [bottom]",'N','T',729,1200,128));
+
 
     //Covariance (e.g., ICA)
-    MNKs.push_back(std::make_tuple('N','N',64,64,32000));
-    MNKs.push_back(std::make_tuple('N','N',1024,1024,32000));
+    MNKs.push_back(std::make_tuple("ICA [32 channels]",'N','N',32,32,32000));
+    MNKs.push_back(std::make_tuple("ICA [256 channels]",'N','N',256,256,32000));
 
     /*---------*/
     /*--BLAS3--*/
     /*---------*/
-    for(std::tuple<char, char, int_t, int_t, int_t> MNK: MNKs)
+    for(std::tuple<std::string, char, char, int_t, int_t, int_t> MNK: MNKs)
     {
-        bool AT = std::get<0>(MNK)=='T';
-        bool BT = std::get<1>(MNK)=='T';
-        int_t M = std::get<2>(MNK);
-        int_t N = std::get<3>(MNK);
-        int_t K = std::get<4>(MNK);
-        std::cout << MNK;
+        bool AT = std::get<1>(MNK)=='T';
+        bool BT = std::get<2>(MNK)=='T';
+        int_t M = std::get<3>(MNK);
+        int_t N = std::get<4>(MNK);
+        int_t K = std::get<5>(MNK);
+        std::cout << "\"" << std::get<0>(MNK) << "\"";
         std::cout << std::flush;
         /* ISAAC */
         int_t As1 = M, As2 = K;
