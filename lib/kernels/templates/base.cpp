@@ -12,6 +12,7 @@
 #include "isaac/kernels/templates/base.h"
 #include "isaac/kernels/parse.h"
 #include "isaac/exception/unknown_datatype.h"
+#include "isaac/exception/operation_not_supported.h"
 #include "isaac/symbolic/io.h"
 
 #include "tools/map.hpp"
@@ -83,6 +84,10 @@ std::string base::generate(std::string const & suffix, expressions_tuple const &
   expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::iterator mit;
 
+  int err = is_invalid(expressions, device);
+  if(err != 0)
+    throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
+
   //Create mapping
   std::vector<mapping_type> mappings(expressions.data().size());
   std::unique_ptr<symbolic_binder> binder;
@@ -140,10 +145,6 @@ int base_impl<TType, PType>::is_invalid(expressions_tuple const & expressions, d
   //Invalid SIMD Width
   if (p_.simd_width!=1 && p_.simd_width!=2 && p_.simd_width!=3 && p_.simd_width!=4)
     return TEMPLATE_INVALID_SIMD_WIDTH;
-
-  //Temporary workspace
-  if(temporary_workspace(expressions) > 2e6)
-      return TEMPLATE_TEMPORARY_TOO_LARGE;
 
   return is_invalid_impl(device, expressions);
 }

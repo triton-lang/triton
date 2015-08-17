@@ -109,6 +109,8 @@ void profiles::value_type::execute(controller<expressions_tuple> const & expr)
   }
 
   //Prediction
+  static const int MAX_TEMPORARY_WORKSPACE = 1e6;
+
   int label = 0;
   if(expr.dispatcher_options().label>=0)
     label = expr.dispatcher_options().label;
@@ -120,13 +122,13 @@ void profiles::value_type::execute(controller<expressions_tuple> const & expr)
     do{
         label = std::distance(predictions.begin(),std::max_element(predictions.begin(), predictions.end()));
         predictions[label] = 0;
-    }while(templates_[label]->is_invalid(expr.x(),queue_.device()));
+    }while(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE);
   }
 
   //Execution
-  int err = templates_[label]->is_invalid(expr.x(), queue_.device());
-  if(err != 0)
-    throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
+  if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
+    throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
+
   return templates_[label]->enqueue(queue_, program, tools::to_string(label), *fallback_, expr);
 }
 
