@@ -143,7 +143,7 @@ def main():
                     libraries=libraries)]
     
     #External
-    extensions += [Extension('external._tree',
+    extensions += [Extension('autotuning.external.sklearn._tree',
                              ['external/sklearn/_tree.c'],
                              include_dirs = [numpy_include])]
 
@@ -155,7 +155,7 @@ def main():
                 author='Philippe Tillet',
                 author_email='ptillet@g.harvard.edu',
                 license='MPL 2.0',
-                packages=['isaac','isaac.external'],
+                packages=['isaac','isaac.autotuning', 'isaac.autotuning.external', 'isaac.autotuning.external.deap', 'isaac.autotuning.external.deap.tools', 'isaac.autotuning.external.sklearn'],
                 ext_package="isaac",
                 ext_modules=extensions,
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},

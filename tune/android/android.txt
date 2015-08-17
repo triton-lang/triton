@@ -1,0 +1,3 @@
+title=Isaac
+author=Philippe Tillet
+orientation=portrait
