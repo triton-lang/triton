@@ -5,10 +5,9 @@ from copy import deepcopy
 from sys import stdout
 from itertools import product
 
-from deap import algorithms
-from deap import base
-from deap import creator
-from deap import tools as deap_tools
+from external.deap import base
+from external.deap import creator
+from external.deap import tools as deap_tools
 
 from numpy import cumsum
 
@@ -74,6 +73,7 @@ def genetic(template, sizes, context, naccept=200, niter = 1000, cxpb=0.4, mutpb
     def evaluate(genome):
         idx = tuple(genome)
         if idx not in cache:
+            print decode(genome)
             cache[idx] = tools.benchmark(template, decode(genome), tree)
         return cache[idx],
         

@@ -4,10 +4,11 @@ from itertools import chain, product
 from numpy import argsort, argmax
 from operator import mul
 import isaac as sc
-from isaac.external.forest import RandomForestRegressor
+from external.sklearn.forest import RandomForestRegressor
 import optimize, tools, model
-
 from json import encoder
+import json
+
 encoder.FLOAT_REPR = lambda o: format(o, '.2f')
 encoder.separators = (',',':')
 
@@ -21,8 +22,7 @@ def pow2range(a, b):
 
 
 def tune(device, operation, json_path): 
-    #List devices
-    platforms = sc.driver.get_platforms()
+    #Context
     context = sc.driver.context(device)
     
     #List of size tuples to use
@@ -119,6 +119,7 @@ def tune(device, operation, json_path):
 
     
     #Export to JSON
+    json_path = tools.sanitize(device.name) + '.json' if not json_path else json_path
     if os.path.isfile(json_path):
         json_data = json.load(open(json_path, 'r'))
     else:
@@ -138,38 +139,4 @@ def tune(device, operation, json_path):
                             'value': e.tree_.value[:,:,0].astype('float64').tolist()} for e in clf.estimators_]
     D['profiles'] = [map(int, x) for x in profiles]
     json.dump(json_data, open(json_path,'w'))
-    
-
-def parse_arguments():
-    platforms = sc.driver.get_platforms()
-    devices = [d for platform in platforms for d in platform.get_devices()]
-    #Command line arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--device", default=0, type=int, help='Device to tune for')
-    parser.add_argument("-o", "--operation", type=str, required=True, help='Operation to tune for')
-    parser.add_argument("-j", "--json", default='', type=str)
-    args = parser.parse_args()
-    
-    device = devices[int(args.device)]
-    print("----------------")
-    print("Devices available:")
-    print("----------------")
-    for (i, d) in enumerate(devices):
-        selected = '[' + ('x' if device==d else ' ') + ']'
-        print selected , '-',  sc.driver.device_type_to_string(d.type), '-', d.name, 'on', d.platform.name
-    print("----------------")
-    
-    
-    operation = {'axpy': sc.templates.axpy, 'dot': sc.templates.dot,
-                 'ger': sc.templates.ger, 'gemv_n': sc.templates.gemv_n, 'gemv_t': sc.templates.gemv_t,
-                 'gemm_nn': sc.templates.gemm_nn, 'gemm_tn': sc.templates.gemm_tn, 'gemm_nt': sc.templates.gemm_nt, 'gemm_tt':sc.templates.gemm_tt}[args.operation]
-    json = tools.sanitize(device.name) + '.json' if not args.json else args.json
-        
-    return (device, operation, json)
-        
-            
-if __name__ == "__main__":
-    sc.driver.default.queue_properties = sc.driver.PROFILING_ENABLE
-    args = parse_arguments()
-    tune(*args)
 
