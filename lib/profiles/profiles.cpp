@@ -14,6 +14,7 @@
 #include "isaac/kernels/templates/ger.h"
 #include "isaac/kernels/templates/gemv.h"
 #include "isaac/kernels/templates/gemm.h"
+#include "isaac/exception/operation_not_supported.h"
 
 
 #include "getenv.hpp"
@@ -123,7 +124,9 @@ void profiles::value_type::execute(controller<expressions_tuple> const & expr)
   }
 
   //Execution
-//  std::cout << std::endl << "Label: " << label << std::endl;
+  int err = templates_[label]->is_invalid(expr.x(), queue_.device());
+  if(err != 0)
+    throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
   return templates_[label]->enqueue(queue_, program, tools::to_string(label), *fallback_, expr);
 }
 
