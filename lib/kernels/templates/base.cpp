@@ -11,7 +11,6 @@
 #include "isaac/kernels/templates/gemm.h"
 #include "isaac/kernels/templates/base.h"
 #include "isaac/kernels/parse.h"
-#include "isaac/exception/operation_not_supported.h"
 #include "isaac/exception/unknown_datatype.h"
 #include "isaac/symbolic/io.h"
 
@@ -83,10 +82,6 @@ std::string base::generate(std::string const & suffix, expressions_tuple const &
 {
   expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::iterator mit;
-
-  int err = is_invalid(expressions, device);
-  if(err != 0 && err != TEMPLATE_TEMPORARY_TOO_LARGE)
-    throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
 
   //Create mapping
   std::vector<mapping_type> mappings(expressions.data().size());
