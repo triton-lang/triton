@@ -4,7 +4,7 @@ from itertools import chain, product
 from numpy import argsort, argmax
 from operator import mul
 import isaac as sc
-from external.sklearn.forest import RandomForestRegressor
+from isaac.external.sklearn.forest import RandomForestRegressor
 import optimize, tools, model
 from json import encoder
 import json
@@ -21,7 +21,7 @@ def pow2range(a, b):
     return [2**x for x in range(a, b)]
 
 
-def tune(device, operation, json_path): 
+def do_tuning(device, operation, json_path): 
     #Context
     context = sc.driver.context(device)
     

@@ -22,7 +22,9 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
                           , unsigned int local_fetch_0, unsigned int local_fetch_1): base::parameters_type(simd_width, local_size_0, local_size_1, 1),
   kL(KL), depth(D), mS(ms), kS(ks), nS(ns), A_fetching_policy(A_fetching_policy), B_fetching_policy(B_fetching_policy),
   local_fetch_0(local_fetch_0), local_fetch_1(local_fetch_1),
-  mL(ms*local_size_0), nL(ns*local_size_1){}
+  mL(ms*local_size_0), nL(ns*local_size_1)
+{
+}
 
 
   unsigned int gemm::lmem_usage(expressions_tuple const & expressions) const
@@ -58,7 +60,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
   {
     if(p_.A_fetching_policy!=FETCH_FROM_LOCAL || p_.B_fetching_policy!=FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
-
 
     if ((p_.mS % p_.simd_width) > 0 || (p_.nS % p_.simd_width) > 0)
       return TEMPLATE_MS_NS_MUST_BE_SIMD_WIDTH_MULTIPLE;
@@ -459,23 +460,23 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "}" << std::endl;
 
 
-    if(A_trans_=='N' || B_trans_=='T')
-        stream << "int Ky = K - idT.y;" << std::endl;
-    if(A_trans_=='T' || B_trans_=='N')
-        stream << "int Kx = K - idT.x;" << std::endl;
+//    if(A_trans_=='N' || B_trans_=='T')
+//        stream << "int Ky = K - idT.y;" << std::endl;
+//    if(A_trans_=='T' || B_trans_=='N')
+//        stream << "int Kx = K - idT.x;" << std::endl;
 
-    if(A_trans_=='N' || B_trans_=='T')
-        for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
-            stream << "int condy" << k << " = " << k << " < Ky;" << std::endl;
+//    if(A_trans_=='N' || B_trans_=='T')
+//        for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
+//            stream << "int condy" << k << " = " << k << " < Ky;" << std::endl;
 
-    if(A_trans_=='T' || B_trans_=='N')
-    {
-        for(unsigned int k = 0 ; k < p_.kL ; k += p_.local_fetch_0*p_.simd_width)
-            for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-            stream << "int condx" << k + s << " = " << k + s << " < Kx;" << std::endl;
-    }
+//    if(A_trans_=='T' || B_trans_=='N')
+//    {
+//        for(unsigned int k = 0 ; k < p_.kL ; k += p_.local_fetch_0*p_.simd_width)
+//            for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+//            stream << "int condx" << k + s << " = " << k + s << " < Kx;" << std::endl;
+//    }
 
-    fetch_to_lds(true);
+//    fetch_to_lds(true);
 
     stream << "//Write back C" << std::endl;
     stream << "M += ids.x;" << std::endl;
@@ -567,9 +568,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       stream << "}" << std::endl;
     }
 
-
-//    if(p_.simd_width>1)
-//        std::cout << stream.str() << std::endl;
     return stream.str();
 
 #undef VLOAD
@@ -746,7 +744,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
                            , fetching_policy_type Afetch , fetching_policy_type Bfetch
                            , int_t lfetch0, int_t lfetch1, bool check_bound) :
     gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'N')
-  { }
+  {
+  }
 
   //
   gemm_tn::gemm_tn(unsigned int simd

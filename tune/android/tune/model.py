@@ -1,4 +1,4 @@
-from external.sklearn.forest import RandomForestRegressor
+from isaac.external.sklearn.forest import RandomForestRegressor
 import numpy as np
 
 def gmean(a, axis=0, dtype=None):

@@ -1,5 +1,7 @@
-#include "isaac/driver/device.h"
 #include <algorithm>
+#include <sstream>
+
+#include "isaac/driver/device.h"
 #include "helpers/ocl/infos.hpp"
 
 namespace isaac
@@ -19,13 +21,17 @@ int Device::cuGetInfo() const
 }
 
 Device::Device(int ordinal): backend_(CUDA), h_(backend_, true)
-{ cuda::check(cuDeviceGet(h_.cu.get(), ordinal)); }
+{
+  cuda::check(cuDeviceGet(h_.cu.get(), ordinal));
+}
 
 #endif
 
 
 Device::Device(cl_device_id const & device, bool take_ownership) : backend_(OPENCL), h_(backend_, take_ownership)
-{ h_.cl() = device; }
+{
+    h_.cl() = device;
+}
 
 
 bool Device::operator==(Device const & other) const
@@ -205,6 +211,22 @@ bool Device::fp64_support() const
   }
 }
 
+std::string Device::infos() const
+{
+  std::ostringstream oss;
+  std::vector<size_t> max_wi_sizes = max_work_item_sizes();
+
+  oss << "Platform: " << platform().name() << std::endl;
+  oss << "Vendor: " << vendor_str() << std::endl;
+  oss << "Name: " << name() << std::endl;
+  oss << "Maximum total work-group size: " << max_work_group_size() << std::endl;
+  oss << "Maximum individual work-group sizes: " << max_wi_sizes[0] << ", " << max_wi_sizes[1] << ", " << max_wi_sizes[2] << std::endl;
+  oss << "Local memory size: " << local_mem_size() << std::endl;
+
+  return oss.str();
+}
+
+// Properties
 
 #ifdef ISAAC_WITH_CUDA
     #define CUDACASE(CUNAME) case CUDA: return cuGetInfo<CUNAME>();

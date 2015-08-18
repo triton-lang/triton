@@ -13,10 +13,12 @@ from numpy import cumsum
 
 import tools
 
-fetch_types = [sc.templates.FETCH_FROM_GLOBAL_CONTIGUOUS,
-               sc.templates.FETCH_FROM_GLOBAL_STRIDED,
-               sc.templates.FETCH_FROM_LOCAL,
-               sc.templates.FETCH_FROM_LOCAL]
+fetch_types = [sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
+               sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED,
+               sc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
+               sc.templates.fetching_policy_type.FETCH_FROM_LOCAL]
+
+to_catch = (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure, sc.InvalidWorkGroupSize, sc.OutOfHostMemory, sc.InvalidValue)
 
 def exhaustive(template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
@@ -33,7 +35,7 @@ def exhaustive(template, sizes, context):
             time = tools.benchmark(template, parameters, tree)
             if not best or time < best[1]:
                 best = parameters, time
-        except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
+        except to_catch:
             pass
         if best:
             stdout.write('%.2f %% | Best %.2f [ for %s ]\r'%(float(idx*100)/len(ranges),metric(sizes, best[1]), best[0]))
@@ -73,7 +75,6 @@ def genetic(template, sizes, context, naccept=200, niter = 1000, cxpb=0.4, mutpb
     def evaluate(genome):
         idx = tuple(genome)
         if idx not in cache:
-            print decode(genome)
             cache[idx] = tools.benchmark(template, decode(genome), tree)
         return cache[idx],
         
@@ -100,7 +101,7 @@ def genetic(template, sizes, context, naccept=200, niter = 1000, cxpb=0.4, mutpb
         try:
             individual.fitness.values = toolbox.evaluate(genome)
             population += [individual]
-        except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure ):
+        except to_catch:
             pass
         genome = encode(list(initializer.next()))
     hof.update(population)
@@ -134,7 +135,7 @@ def genetic(template, sizes, context, naccept=200, niter = 1000, cxpb=0.4, mutpb
                 #Reproduction
                 else: 
                     offspring += [random.choice(population)]
-            except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
+            except to_catch:
                 pass
 
 
@@ -173,7 +174,7 @@ def is_local_optimum(parameters, template, sizes, context):
     #Evaluate the provided parameters guess
     try:
         reference = tools.benchmark(template, parameters, tree)
-    except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
+    except to_catch:
         return False
         
     #Latency bound -- ignore
@@ -190,7 +191,7 @@ def is_local_optimum(parameters, template, sizes, context):
             time = tools.benchmark(template, x, tree)
             if time/reference < .97:
                 return False
-        except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
+        except to_catch:
             pass
     return True
     
