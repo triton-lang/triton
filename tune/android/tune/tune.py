@@ -30,48 +30,79 @@ def do_tuning(device, operation, json_path):
     sizes[sc.templates.axpy] = [(x,) for x in tools.expspace(1e3, 1e8, 4)]
     sizes[sc.templates.gemv_n] = product(pow2range(4,17), pow2range(4,17))
     sizes[sc.templates.gemv_t] = sizes[sc.templates.gemv_n]
-    sizes[sc.templates.gemm_nn]     = product(pow2range(6, 12), pow2range(6, 12), pow2range(6, 12))
+    sizes[sc.templates.gemm_nn]     = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 15))
     sizes[sc.templates.gemm_tn]     = sizes[sc.templates.gemm_nn]
     sizes[sc.templates.gemm_nt]     = sizes[sc.templates.gemm_nn]
     sizes[sc.templates.gemm_tt]     = sizes[sc.templates.gemm_nn]
     
 
     #Quick tuning - AlexNet sizes + Intuition
-    sizes[sc.templates.ger] 		 = [(1536,1536)]
+    quick_tuning = False
+    if quick_tuning:
+        sizes[sc.templates.ger] 		 = [(1536,1536)]
 
-    sizes[sc.templates.gemv_n]		 = [(1000,256),
-                                        (4096,256)]
-    sizes[sc.templates.gemv_t]		 = [(169,256),
-                                        (169,384),
-                                        (729,256),
-                                        (3025,96)]
-	
-    sizes[sc.templates.gemm_nn]	 = [(3025,96,363),
-                                        (729,128,1200),
-                                        (169,384,2304),
-                                        (169,192,1728),
-                                        (169,128,1728)]
-    sizes[sc.templates.gemm_nt]	 = [(169,1728,128),
-										(169,1728,192),
-										(169,2304,384),
-										(729,1200,128)]
-    sizes[sc.templates.gemm_tn]	 = [(1728,128,169), 
-										(1728,192,169),
-										(2304,384,169),
-										(1200,128,729),
-										(363,96,3025)]
+        sizes[sc.templates.gemv_n]		 = [(1000,256),
+                                            (4096,256)]
+        sizes[sc.templates.gemv_t]		 = [(169,256),
+                                            (169,384),
+                                            (729,256),
+                                            (3025,96)]
+        
+        sizes[sc.templates.gemm_nn]	 = [(3025,96,363),
+                                            (729,128,1200),
+                                            (169,384,2304),
+                                            (169,192,1728),
+                                            (169,128,1728)]
+        sizes[sc.templates.gemm_nt]	 = [(169,1728,128),
+                                            (169,1728,192),
+                                            (169,2304,384),
+                                            (729,1200,128)]
+        sizes[sc.templates.gemm_tn]	 = [(1728,128,169), 
+                                            (1728,192,169),
+                                            (2304,384,169),
+                                            (1200,128,729),
+                                            (363,96,3025)]
     
     #Remove duplicated
     sizes = unique(list(sizes[operation]))
     sizes = [x for x in sizes if 1e-4 <= tools.memory_footprint(operation, x) <= 1e-1]
+	
 
     #Training data
     performance = tools.metric_of(operation)
-    profiles = []
-    X = []
-    Y = []
+    profiles, X, Y = [], [], []
+    
+	#Restore previous run
+    import csv
+    savepath = os.path.join('save', operation.__name__)
+    if not os.path.exists(savepath):
+        os.makedirs(savepath)
+	
+    try:
+		with open(os.path.join(savepath, 'X.csv')) as f:
+			X = [tuple(map(int, row)) for row in csv.reader(f, delimiter=',')]
+			
+		with open(os.path.join(savepath, 'Y.csv')) as f:
+			Y = [map(float, row) for row in csv.reader(f, delimiter=',')]
+		
+		with open(os.path.join(savepath, 'profiles.csv')) as f:
+			def mmap(x):
+				if x=='FETCH_FROM_LOCAL':
+					return sc.templates.fetching_policy_type.FETCH_FROM_LOCAL
+				if x=='FETCH_FROM_GLOBAL_CONTIGUOUS':
+					return sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS
+				if x=='FETCH_FROM_GLOBAL_STRIDED':
+					return sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED
+				return int(x)
+			profiles = [map(mmap,row) for v in row for row in csv.reader(f, delimiter=',')]
+    except:
+		raise
+	
     for idx, x in enumerate(sizes):
+        if x in X:
+			continue
         print x
+        idx = len(X)
         nparams = len(profiles)
         tree, operands = tools.tree_of(operation, x, context)
         #Check if the current best prediction is not a local optimum
@@ -86,10 +117,15 @@ def do_tuning(device, operation, json_path):
                 #clf, nrmse = model.train(X, Y, profiles)
                 predperf = clf.predict(x)[0]
                 best = (-predperf).argsort()[:5]
-                perf = [performance(x, tools.benchmark(operation, profiles[b], tree)) for b in best]
+                perf = []
+                for b in best:
+                    try:
+                        perf += [performance(x, tools.benchmark(operation, profiles[b], tree))]
+                    except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
+                        pass
                 predicted = profiles[best[argmax(perf)]]
-            #tune = not optimize.is_local_optimum(predicted, operation, x, context)     
-            tune = True
+            tune = not optimize.is_local_optimum(predicted, operation, x, context)     
+            #tune = True
         #Retune if necessary
         if tune:
             #new = optimize.exhaustive(operation, x, context)
@@ -116,6 +152,10 @@ def do_tuning(device, operation, json_path):
             y.append(0 if isinf(perf) else perf)
         X.append(x)
         Y.append(y)
+        
+        for (fname, data) in zip(['X.csv', 'Y.csv', 'profiles.csv'], [X, Y, profiles]):
+            with open(os.path.join(savepath, fname), 'wb') as f:
+                csv.writer(f).writerows(data)
 
     
     #Export to JSON
