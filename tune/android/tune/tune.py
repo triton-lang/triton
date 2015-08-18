@@ -37,7 +37,7 @@ def do_tuning(device, operation, json_path):
     
 
     #Quick tuning - AlexNet sizes + Intuition
-    quick_tuning = False
+    quick_tuning = True
     if quick_tuning:
         sizes[sc.templates.ger] 		 = [(1536,1536)]
 
@@ -48,7 +48,7 @@ def do_tuning(device, operation, json_path):
                                             (729,256),
                                             (3025,96)]
         
-        sizes[sc.templates.gemm_nn]	 = [(3025,96,363),
+        sizes[sc.templates.gemm_nn]	 = [(576,20,25),(64,50,500),(3025,96,363),
                                             (729,128,1200),
                                             (169,384,2304),
                                             (169,192,1728),
@@ -57,7 +57,7 @@ def do_tuning(device, operation, json_path):
                                             (169,1728,192),
                                             (169,2304,384),
                                             (729,1200,128)]
-        sizes[sc.templates.gemm_tn]	 = [(1728,128,169), 
+        sizes[sc.templates.gemm_tn]	 = [(500,50,64),(25,20,576),(1728,128,169), 
                                             (1728,192,169),
                                             (2304,384,169),
                                             (1200,128,729),

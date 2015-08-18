@@ -176,7 +176,6 @@ extern "C"
                             cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                             cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        /*std::cout << transA << " " <<transB << " " << M << " " << N << " " << K << std::endl;*/\
         cl_mem mA = cmA;\
         cl_mem mB = cmB;\
         if(order==clblasRowMajor){\
