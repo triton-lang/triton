@@ -58,6 +58,8 @@ public:
   Vendor vendor() const;
   Architecture architecture() const;
 
+  std::string infos() const;
+
   backend_type backend() const;
   size_t clock_rate() const;
   unsigned int address_bits() const;

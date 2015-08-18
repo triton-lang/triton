@@ -1,6 +1,6 @@
 import argparse
 import isaac as sc
-from isaac.autotuning.tune import tune
+from tune.tune import do_tuning
 
 def parse_arguments():
     platforms = sc.driver.get_platforms()
@@ -32,4 +32,4 @@ def parse_arguments():
 if __name__ == "__main__":
     sc.driver.default.queue_properties = sc.driver.PROFILING_ENABLE
     args = parse_arguments()
-    tune(*args)
+    do_tuning(*args)

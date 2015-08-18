@@ -29,11 +29,11 @@ void export_templates()
 
 
   bp::enum_<tpt::fetching_policy_type>
-      ("fetching_policy_type");
+      ("fetching_policy_type")
+     .value("FETCH_FROM_LOCAL", tpt::FETCH_FROM_LOCAL)
+     .value("FETCH_FROM_GLOBAL_STRIDED", tpt::FETCH_FROM_GLOBAL_STRIDED)
+     .value("FETCH_FROM_GLOBAL_CONTIGUOUS", tpt::FETCH_FROM_GLOBAL_CONTIGUOUS);
 
-  bp::scope().attr("FETCH_FROM_LOCAL") = tpt::FETCH_FROM_LOCAL;
-  bp::scope().attr("FETCH_FROM_GLOBAL_STRIDED") = tpt::FETCH_FROM_GLOBAL_CONTIGUOUS;
-  bp::scope().attr("FETCH_FROM_GLOBAL_CONTIGUOUS") = tpt::FETCH_FROM_GLOBAL_STRIDED;
 
   //Base
   {

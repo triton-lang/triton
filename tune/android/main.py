@@ -13,7 +13,7 @@ from kivy.uix.settings import SettingsWithNoMenu
 import isaac as sc
 import json
 
-from isaac.autotuning.tune import tune
+from tune.tune import do_tuning
 
 __version__ = '1.0'
 
@@ -62,7 +62,8 @@ class IsaacApp(App):
         json_path = ''
         #FIXME: Move profiling logics into tuning
         sc.driver.default.queue_properties = sc.driver.PROFILING_ENABLE
-        tune(device, operation, json_path)
+        print device.infos
+        do_tuning(device, operation, json_path)
         
     def show_benchmark(self):
         pass

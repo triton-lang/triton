@@ -92,4 +92,16 @@ void export_exceptions()
     wrap::exception<isaac::driver::ocl::exception::mem_object_allocation_failure>("MemObjectAllocationFailure")
         .def("__str__", &isaac::driver::ocl::exception::mem_object_allocation_failure::what)
         ;
+
+    wrap::exception<isaac::driver::ocl::exception::out_of_host_memory>("OutOfHostMemory")
+        .def("__str__", &isaac::driver::ocl::exception::out_of_host_memory::what)
+        ;
+
+    wrap::exception<isaac::driver::ocl::exception::invalid_work_group_size>("InvalidWorkGroupSize")
+        .def("__str__", &isaac::driver::ocl::exception::invalid_work_group_size::what)
+        ;
+
+    wrap::exception<isaac::driver::ocl::exception::invalid_value>("InvalidValue")
+        .def("__str__", &isaac::driver::ocl::exception::invalid_value::what)
+        ;
 }

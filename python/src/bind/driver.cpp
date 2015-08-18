@@ -139,6 +139,7 @@ void export_driver()
       .add_property("platform", &sc::driver::Device::platform)
       .add_property("vendor", &sc::driver::Device::vendor)
       .add_property("nv_compute_capability", &detail::nv_compute_capability)
+      .add_property("infos", &sc::driver::Device::infos)
       ;
 
   bp::class_<sc::driver::Context, boost::noncopyable>("context", bp::no_init)

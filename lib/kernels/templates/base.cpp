@@ -77,13 +77,13 @@ unsigned int base::temporary_workspace(expressions_tuple const &) const
 { return 0; }
 
 base::~base()
-{ }
+{
+}
 
 std::string base::generate(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device)
 {
   expressions_tuple::data_type::const_iterator sit;
   std::vector<mapping_type>::iterator mit;
-
   int err = is_invalid(expressions, device);
   if(err != 0)
     throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
