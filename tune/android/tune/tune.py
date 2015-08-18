@@ -96,7 +96,7 @@ def do_tuning(device, operation, json_path):
 				return int(x)
 			profiles = [map(mmap,row) for v in row for row in csv.reader(f, delimiter=',')]
     except:
-		raise
+		pass
 	
     for idx, x in enumerate(sizes):
         if x in X:
