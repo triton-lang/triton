@@ -460,23 +460,23 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "}" << std::endl;
 
 
-//    if(A_trans_=='N' || B_trans_=='T')
-//        stream << "int Ky = K - idT.y;" << std::endl;
-//    if(A_trans_=='T' || B_trans_=='N')
-//        stream << "int Kx = K - idT.x;" << std::endl;
+    if(A_trans_=='N' || B_trans_=='T')
+        stream << "int Ky = K - idT.y;" << std::endl;
+    if(A_trans_=='T' || B_trans_=='N')
+        stream << "int Kx = K - idT.x;" << std::endl;
 
-//    if(A_trans_=='N' || B_trans_=='T')
-//        for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
-//            stream << "int condy" << k << " = " << k << " < Ky;" << std::endl;
+    if(A_trans_=='N' || B_trans_=='T')
+        for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
+            stream << "int condy" << k << " = " << k << " < Ky;" << std::endl;
 
-//    if(A_trans_=='T' || B_trans_=='N')
-//    {
-//        for(unsigned int k = 0 ; k < p_.kL ; k += p_.local_fetch_0*p_.simd_width)
-//            for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-//            stream << "int condx" << k + s << " = " << k + s << " < Kx;" << std::endl;
-//    }
+    if(A_trans_=='T' || B_trans_=='N')
+    {
+        for(unsigned int k = 0 ; k < p_.kL ; k += p_.local_fetch_0*p_.simd_width)
+            for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
+            stream << "int condx" << k + s << " = " << k + s << " < Kx;" << std::endl;
+    }
 
-//    fetch_to_lds(true);
+    fetch_to_lds(true);
 
     stream << "//Write back C" << std::endl;
     stream << "M += ids.x;" << std::endl;

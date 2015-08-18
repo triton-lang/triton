@@ -47,6 +47,11 @@ std::string Platform::name() const
   }
 }
 
+cl_platform_id Platform::cl_id() const
+{
+    return cl_platform_;
+}
+
 void Platform::devices(std::vector<Device> & devices) const
 {
   switch(backend_)
