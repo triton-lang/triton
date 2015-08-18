@@ -69,20 +69,6 @@ Device::Architecture Device::architecture() const
     {
         case Vendor::INTEL:
         {
-//            int64_t product;
-
-//            char* id = (char*)(platform().cl_id());
-//            for(unsigned int aa = 0 ; aa < 128 ; ++aa)
-//            {
-//                std::uintptr_t ptrid = (std::uintptr_t)id;
-//                if(aa && ptrid % aa)
-//                    ptrid += aa - ptrid % aa;
-//                id = (char*)(ptrid);
-
-//                std::memcpy(&product, id, sizeof(product));
-//                std::cout << product << std::endl;
-
-//            }
             return Architecture::BROADWELL;
         }
         default:
