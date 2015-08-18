@@ -143,7 +143,7 @@ def main():
                     libraries=libraries)]
     
     #External
-    extensions += [Extension('isaac.external.sklearn._tree',
+    extensions += [Extension('external.sklearn._tree',
                              ['external/sklearn/_tree.c'],
                              include_dirs = [numpy_include])]
 
