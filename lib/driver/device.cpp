@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <sstream>
+#include <cstring>
+#include <memory>
 
 #include "isaac/driver/device.h"
 #include "helpers/ocl/infos.hpp"
@@ -60,12 +62,27 @@ Device::Vendor Device::vendor() const
         return Vendor::UNKNOWN;
 }
 
+
 Device::Architecture Device::architecture() const
 {
     switch(vendor())
     {
         case Vendor::INTEL:
         {
+//            int64_t product;
+
+//            char* id = (char*)(platform().cl_id());
+//            for(unsigned int aa = 0 ; aa < 128 ; ++aa)
+//            {
+//                std::uintptr_t ptrid = (std::uintptr_t)id;
+//                if(aa && ptrid % aa)
+//                    ptrid += aa - ptrid % aa;
+//                id = (char*)(ptrid);
+
+//                std::memcpy(&product, id, sizeof(product));
+//                std::cout << product << std::endl;
+
+//            }
             return Architecture::BROADWELL;
         }
         default:

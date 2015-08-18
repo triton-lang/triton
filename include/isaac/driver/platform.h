@@ -26,6 +26,7 @@ public:
   std::string name() const;
   std::string version() const;
   void devices(std::vector<Device> &) const;
+  cl_platform_id cl_id() const;
 private:
   backend_type backend_;
   cl_platform_id cl_platform_;
