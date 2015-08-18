@@ -331,7 +331,9 @@ void bench(sc::numeric_type dtype, std::string operation)
     MNKs.push_back(std::make_tuple("F-Conv3",'N','N',169,384,2304));
     MNKs.push_back(std::make_tuple("F-Conv4",'N','N',169,192,1728));
     MNKs.push_back(std::make_tuple("F-Conv5",'N','N',169,128,1728));
-    //MNKs.push_back(std::make_tuple("F-FullyConnected",'N','T',256,4096,9216));
+    //LeNet (Forward)
+    MNKs.push_back(std::make_tuple("F-Conv1",'N','N',576,20,25));
+    MNKs.push_back(std::make_tuple("F-Conv2",'N','N',64,50,500));
 
     //AlexNet (Backward)
     MNKs.push_back(std::make_tuple("B-Conv5",'T','N',1728,128,169));
@@ -339,12 +341,17 @@ void bench(sc::numeric_type dtype, std::string operation)
     MNKs.push_back(std::make_tuple("B-Conv3",'T','N',2304,384,169));
     MNKs.push_back(std::make_tuple("B-Conv2",'T','N',1200,128,729));
     MNKs.push_back(std::make_tuple("B-Conv1",'T','N',363,96,3025));
+    //LeNet (Backward)
+    MNKs.push_back(std::make_tuple("B-Conv2",'T','N',500,50,64));
+    MNKs.push_back(std::make_tuple("B-Conv1",'T','N',25,20,576));
+
 
     MNKs.push_back(std::make_tuple("B-Conv5 [bottom]",'N','T',169,1728,128));
     MNKs.push_back(std::make_tuple("B-Conv4 [bottom]",'N','T',169,1728,192));
     MNKs.push_back(std::make_tuple("B-Conv3 [bottom]",'N','T',169,2304,384));
     MNKs.push_back(std::make_tuple("B-Conv2 [bottom]",'N','T',729,1200,128));
-
+    //LeNet (Backward)
+    MNKs.push_back(std::make_tuple("B-Conv2 [bottom]",'N','T',64,500,50));
 
     //Covariance (e.g., ICA)
     MNKs.push_back(std::make_tuple("ICA [32 channels]",'N','N',32,32,32000));
