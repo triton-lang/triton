@@ -1,9 +1,9 @@
 #include "isaac/driver/platform.h"
 #include "isaac/driver/device.h"
-
 #include "helpers/ocl/infos.hpp"
 
 #include <string>
+#include "to_string.hpp"
 
 namespace isaac
 {
@@ -12,7 +12,7 @@ namespace driver
 {
 
 #ifdef ISAAC_WITH_CUDA
-Platform::Platform(backend_type backend): backend_(backend, take_ownership){}
+Platform::Platform(backend_type backend): backend_(backend){}
 #endif
 
 Platform::Platform(cl_platform_id const & platform) : backend_(OPENCL)

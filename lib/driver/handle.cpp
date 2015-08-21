@@ -100,7 +100,7 @@ template<class CLType, class CUType>
 Handle<CLType, CUType>::~Handle()
 {
 #ifdef ISAAC_WITH_CUDA
-  if(has_ownership_ && cu_ && cu_.unique() && *cu_)
+  if(has_ownership_ && cu_.unique())
     _delete(*cu_);
 #endif
   if(has_ownership_ && cl_ && cl_.unique() && *cl_)
@@ -118,6 +118,12 @@ CLType const &  Handle<CLType, CUType>::cl() const
 #ifdef ISAAC_WITH_CUDA
 template<class CLType, class CUType>
 CUType &  Handle<CLType, CUType>::cu()
+{
+    return *cu_;
+}
+
+template<class CLType, class CUType>
+CUType const &  Handle<CLType, CUType>::cu() const
 {
     return *cu_;
 }

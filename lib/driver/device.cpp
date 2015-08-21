@@ -18,13 +18,13 @@ template<CUdevice_attribute attr>
 int Device::cuGetInfo() const
 {
   int res;
-  cuda::check(cuDeviceGetAttribute(&res, attr, *h_.cu));
+  cuda::check(cuDeviceGetAttribute(&res, attr, h_.cu()));
   return res;
 }
 
 Device::Device(int ordinal): backend_(CUDA), h_(backend_, true)
 {
-  cuda::check(cuDeviceGet(h_.cu.get(), ordinal));
+  cuda::check(cuDeviceGet(&h_.cu(), ordinal));
 }
 
 #endif
@@ -114,7 +114,7 @@ std::string Device::name() const
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
       char tmp[128];
-      cuda::check(cuDeviceGetName(tmp, 128, *h_.cu));
+      cuda::check(cuDeviceGetName(tmp, 128, h_.cu()));
       return std::string(tmp);
 #endif
     case OPENCL: return ocl::info<CL_DEVICE_NAME>(h_.cl());
@@ -161,7 +161,7 @@ Device::Type Device::type() const
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA
-    case CUDA: return DEVICE_TYPE_GPU;
+    case CUDA: return Type::GPU;
 #endif
     case OPENCL: return static_cast<Type>(ocl::info<CL_DEVICE_TYPE>(h_.cl()));
     default: throw;

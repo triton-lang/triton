@@ -20,7 +20,7 @@ Buffer::Buffer(Context const & context, size_t size) : backend_(context.backend_
   {
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cuda::check(cuMemAlloc(h_.cu.get(), size));
+      cuda::check(cuMemAlloc(&h_.cu(), size));
       break;
 #endif
     case OPENCL:
