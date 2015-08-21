@@ -13,12 +13,12 @@ from numpy import cumsum
 
 import tools
 
-fetch_types = [sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
-               sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED,
+fetch_types = [sc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
+               sc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
                sc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
                sc.templates.fetching_policy_type.FETCH_FROM_LOCAL]
 
-to_catch = (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure, sc.InvalidWorkGroupSize, sc.OutOfHostMemory, sc.InvalidValue)
+to_catch = (sc.OperationNotSupported, sc.OclLaunchOutOfResources, sc.CudaLaunchOutOfResources, sc.MemObjectAllocationFailure, sc.InvalidWorkGroupSize, sc.OutOfHostMemory, sc.InvalidValue)
 
 def exhaustive(template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)

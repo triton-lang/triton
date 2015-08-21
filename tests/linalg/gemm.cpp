@@ -52,7 +52,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   else\
     std::cout << std::endl;
 
-  if(interf==clBLAS)
+  if(C.context().backend()==sc::driver::OPENCL && interf==clBLAS)
   {
       cl_command_queue clqueue = queue.handle().cl();
 

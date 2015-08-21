@@ -119,15 +119,16 @@ void profiles::value_type::execute(controller<expressions_tuple> const & expr)
   else if(predictor_.get())
   {
     std::vector<float> predictions = predictor_->predict(x);
-    do{
+//    do{
         label = std::distance(predictions.begin(),std::max_element(predictions.begin(), predictions.end()));
-        predictions[label] = 0;
-    }while(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE);
+//        predictions[label] = 0;
+//    }while(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE);
   }
 
   //Execution
-  if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
-    throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
+//  std::cout << label << std::endl;
+//  if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
+//    throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
 
   return templates_[label]->enqueue(queue_, program, tools::to_string(label), *fallback_, expr);
 }

@@ -19,7 +19,7 @@ template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(CUstream x) { cuStreamDestroy(x); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUdevice) { }
+void Handle<CLType, CUType>::_delete(CUdevice) { std::cout << "CUdevice" << std::endl;}
 
 template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(CUevent x) { cuEventDestroy(x); }
@@ -31,7 +31,7 @@ template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(CUmodule x) { cuModuleUnload(x); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(std::pair<CUevent, CUevent> x) { _delete(x.first); _delete(x.second); }
+void Handle<CLType, CUType>::_delete(cu_event_t x) { _delete(x.first); _delete(x.second); }
 
 #endif
 
@@ -100,8 +100,9 @@ template<class CLType, class CUType>
 Handle<CLType, CUType>::~Handle()
 {
 #ifdef ISAAC_WITH_CUDA
-  if(has_ownership_ && cu_.unique())
+  if(has_ownership_ && cu_ && cu_.unique() && *cu_){
     _delete(*cu_);
+  }
 #endif
   if(has_ownership_ && cl_ && cl_.unique() && *cl_)
      release(*cl_);
@@ -132,7 +133,7 @@ template class Handle<cl_mem, CUdeviceptr>;
 template class Handle<cl_command_queue, CUstream>;
 template class Handle<cl_context, CUcontext>;
 template class Handle<cl_device_id, CUdevice>;
-template class Handle<cl_event, std::pair<CUevent, CUevent> >;
+template class Handle<cl_event, cu_event_t>;
 template class Handle<cl_kernel, CUfunction>;
 template class Handle<cl_program, CUmodule>;
 #else

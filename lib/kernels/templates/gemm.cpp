@@ -56,8 +56,11 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       return 0;
   }
 
-  int gemm::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+  int gemm::is_invalid_impl(driver::Device const & device, expressions_tuple const &) const
   {
+    if(device.vendor()==driver::Device::Vendor::NVIDIA && p_.simd_width > 1)
+      return TEMPLATE_INVALID_SIMD_WIDTH;
+
     if(p_.A_fetching_policy!=FETCH_FROM_LOCAL || p_.B_fetching_policy!=FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
 
@@ -170,8 +173,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << Local(backend) << " " << sdtype << " lB[" << p_.kL*p_.nL << "];" << std::endl;
     unsigned int npA = p_.mL/(A_trans_=='N'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
     unsigned int npB = p_.nL/(B_trans_=='T'?p_.local_fetch_0*p_.simd_width:p_.local_fetch_1);
-    stream << "__global " << sdtype << "* Ai[" << npA << "];" << std::endl;
-    stream << "__global " << sdtype << "* Bi[" << npB << "];" << std::endl;
+    stream << Global(backend) << " " << sdtype << "* Ai[" << npA << "];" << std::endl;
+    stream << Global(backend) << " " << sdtype << "* Bi[" << npB << "];" << std::endl;
     stream << std::endl;
 
     stream << "//identifiers" << std::endl;
@@ -179,7 +182,11 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "int idt;" << std::endl;
     if(has_depth)
         stream << "int gidz, div, offz;" << std::endl;
-    stream << "int4 ids = (int4)(" << GroupIdx0(backend) << "," << GroupIdx1(backend) << "," << LocalIdx0(backend) << "," << LocalIdx1(backend) << ");" << std::endl;
+    stream << "uint4 ids;" << std::endl;
+    stream << "ids.x = " << GroupIdx0(backend) << ";" << std::endl;
+    stream << "ids.y = " << GroupIdx1(backend) << ";" << std::endl;
+    stream << "ids.z = " << LocalIdx0(backend) << ";" << std::endl;
+    stream << "ids.w = " << LocalIdx1(backend) << ";" << std::endl;
     stream << std::endl;
 
     stream << "//offsets" << std::endl;
@@ -266,15 +273,15 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
     for(unsigned int i = 0 ; i < npA ; i++ )
         if (A_trans_=='N')
-          stream << "Ai[" << i << "] += select(0, (int)((idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << ASTRIDE1 << "), " << i*p_.local_fetch_0*p_.simd_width << " < M);" << std::endl;
+          stream << "Ai[" << i << "] += " << Select(backend, to_string(i*p_.local_fetch_0*p_.simd_width) + " < M", "(int)((idT.x + " + to_string(i*p_.local_fetch_0*p_.simd_width) + ")" + ASTRIDE1 + ")", "0") << ";" << std::endl;
         else
-          stream << "Ai[" << i << "] += select(0, (int)((idT.y + " << i*p_.local_fetch_1 << ")*lda), " << i*p_.local_fetch_1 << " < M);" << std::endl;
+          stream << "Ai[" << i << "] += " << Select(backend, to_string(i*p_.local_fetch_1) + " < M", "(int)((idT.y + " + to_string(i*p_.local_fetch_1) + ")*lda)", "0") << ";" << std::endl;
 
     for(unsigned int i = 0 ; i < npB ; i++ )
         if (B_trans_=='T')
-            stream << "Bi[" << i << "] += select(0, (int)((idT.x + " << i*p_.local_fetch_0*p_.simd_width << ")" << BSTRIDE1 << "), " << i*p_.local_fetch_0*p_.simd_width << " < N);" << std::endl;
+            stream << "Bi[" << i << "] += " << Select(backend, to_string(i*p_.local_fetch_0*p_.simd_width) + " < N", "(int)((idT.x + " + to_string(i*p_.local_fetch_0*p_.simd_width) + ")" + BSTRIDE1 + ")", "0") << ";" << std::endl;
         else
-            stream << "Bi[" << i << "] += select(0, (int)((idT.y + " << i*p_.local_fetch_1 << ")*ldb), " << i*p_.local_fetch_1 << " < N);" << std::endl;
+            stream << "Bi[" << i << "] += " << Select(backend, to_string(i*p_.local_fetch_1) + " < N", "(int)((idT.y + " + to_string(i*p_.local_fetch_1) + ")*ldb)", "0") << ";" << std::endl;
 
     stream << std::endl;
     stream << "//Outer loop" << std::endl;
@@ -504,14 +511,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     stream << "N -= ids.y;" << std::endl;
     stream << "N -= ids.w*" << p_.simd_width <<  ";" << std::endl;
 
-    stream << "int ibm[" << p_.mS << "];" << std::endl;
-    for(unsigned int m=0; m < p_.mS; ++m)
-    {
-        string Ci = to_string((m/p_.simd_width)*(p_.local_size_0*p_.simd_width) + m%p_.simd_width);
-        stream << "ibm[" << m << "] = " << Ci << " < M;" << std::endl;
-    }
-
-
     for(unsigned int n=0; n < p_.nS; ++n)
     {
         string Cj = to_string((n/p_.simd_width)*(p_.local_size_1*p_.simd_width) + n%p_.simd_width);
@@ -521,13 +520,15 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
         for(unsigned int m=0; m < p_.mS; ++m)
         {
             string Ci = to_string((m/p_.simd_width)*(p_.local_size_0*p_.simd_width) + m%p_.simd_width);
-            stream << "if(ibm[" << m << "]) ";
-            stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "] + select((" << sdtype << ")0, C[" << Ci << CSTRIDE1 << "], beta>0);" << std::endl;
+            stream << "if(" << Ci << "< M) ";
+            stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "];" << std::endl;
         }
-        if((n+1)%p_.simd_width==0)
+        if((n+1)%p_.simd_width==0){
             stream << "C += ldc*" << p_.local_size_1*p_.simd_width - p_.simd_width + 1 << ";" << std::endl;
-        else
+        }
+        else{
             stream << "C += ldc;" << std::endl;
+        }
 
     }
 

@@ -3,6 +3,7 @@
 #include "common.hpp"
 #include "isaac/array.h"
 #include "isaac/wrap/clBLAS.h"
+#include "isaac/driver/common.h"
 
 namespace sc = isaac;
 typedef isaac::int_t int_t;
@@ -45,6 +46,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
     std::cout << std::endl;\
   }
 
+  if(queue.device().backend()==sc::driver::OPENCL){
 #define PREFIX "[C]"
   RUN_TEST_VECTOR_AXPY("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, CHANDLE(x), x.start()[0], x.stride()[0],
                                                                                              CHANDLE(z), z.start()[0], z.stride()[0],
@@ -56,9 +58,9 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 
   RUN_TEST_VECTOR_AXPY("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, CHANDLE(z), z.start()[0], z.stride()[0],
                                                                                      1, &clqueue, 0, NULL, NULL));
-
-
 #undef PREFIX
+  }
+
 #define PREFIX "[C++]"
   RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, context))
   RUN_TEST_VECTOR_AXPY("z = x", cz[i] = cx[i], z = x)

@@ -44,7 +44,7 @@ long Event::elapsed_time() const
   }
 }
 
-HANDLE_TYPE(cl_event, Event::cu_event_t) & Event::handle()
+HANDLE_TYPE(cl_event, cu_event_t) & Event::handle()
 { return h_; }
 
 }

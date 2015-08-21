@@ -10,6 +10,8 @@ namespace driver
 NDRange::NDRange(size_t size0)
 {
     sizes_[0] = size0;
+    sizes_[1] = 1;
+    sizes_[2] = 1;
     dimension_ = 1;
 }
 
@@ -17,6 +19,7 @@ NDRange::NDRange(size_t size0, size_t size1)
 {
     sizes_[0] = size0;
     sizes_[1] = size1;
+    sizes_[2] = 1;
     dimension_ = 2;
 }
 
