@@ -23,7 +23,7 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
   {
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cuda::check(cuCtxCreate(h_.cu.get(), CU_CTX_SCHED_AUTO, *device.h_.cu));
+      cuda::check(cuCtxCreate(&h_.cu(), CU_CTX_SCHED_AUTO, device.h_.cu()));
       break;
 #endif
     case OPENCL:

@@ -35,6 +35,8 @@ else()
 endif()
 
 string(REPLACE ";" " " BLAS_DEF_STR "${BLAS_DEF}")
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 foreach(PROG blas)
    if(CUDA_FOUND)
        set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} " ${BLAS_DEF_STR} -std=c++11 ${BACKEND_DEFINES}")

@@ -34,7 +34,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
       //Load cached program
       if(cache_path.size() && std::ifstream(fname, std::ios::binary))
       {
-        cuda::check(cuModuleLoad(h_.cu.get(), fname.c_str()));
+        cuda::check(cuModuleLoad(&h_.cu(), fname.c_str()));
         break;
       }
 
@@ -61,7 +61,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
       nvrtc::check(nvrtcGetPTXSize(prog, &ptx_size));
       std::vector<char> ptx(ptx_size);
       nvrtc::check(nvrtcGetPTX(prog, ptx.data()));
-      cuda::check(cuModuleLoadDataEx(h_.cu.get(), ptx.data(), 0, NULL, NULL));
+      cuda::check(cuModuleLoadDataEx(&h_.cu(), ptx.data(), 0, NULL, NULL));
 
       //Save cached program
       if (cache_path.size())
@@ -90,7 +90,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
 
 //    str.assign((std::istreambuf_iterator<char>(ifs)),
 //                std::istreambuf_iterator<char>());
-//    cuda::check(cuModuleLoadDataEx(h_.cu.get(), str.c_str(), 0, NULL, NULL));
+//    cuda::check(cuModuleLoadDataEx(&h_.cu(), str.c_str(), 0, NULL, NULL));
 
       break;
     }

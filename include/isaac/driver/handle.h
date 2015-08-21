@@ -48,7 +48,8 @@ public:
   CLType & cl();
   CLType const & cl() const;
 #ifdef ISAAC_WITH_CUDA
-  CUTYPE & cu();
+  CUType & cu();
+  CUType const & cu() const;
 #endif
   ~Handle();
 

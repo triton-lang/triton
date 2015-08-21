@@ -15,6 +15,10 @@ namespace driver
 class ISAACAPI Event
 {
   friend class CommandQueue;
+private:
+#ifdef ISAAC_WITH_CUDA
+  typedef std::pair<CUevent, CUevent> cu_event_t;
+#endif
 public:
   Event(cl_event const & event, bool take_ownership = true);
   Event(backend_type backend);
@@ -22,9 +26,6 @@ public:
   HANDLE_TYPE(cl_event, cu_event_t)& handle();
 private:
   backend_type backend_;
-#ifdef ISAAC_WITH_CUDA
-  typedef std::pair<CUevent, CUevent> cu_event_t;
-#endif
   HANDLE_TYPE(cl_event, cu_event_t) h_;
 };
 

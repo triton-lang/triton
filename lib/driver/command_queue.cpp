@@ -29,7 +29,7 @@ CommandQueue::CommandQueue(Context const & context, Device const & device, cl_co
   {
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cuda::check(cuStreamCreate(h_.cu.get(), 0));
+      cuda::check(cuStreamCreate(&h_.cu(), 0));
       break;
 #endif
     case OPENCL:
@@ -58,7 +58,7 @@ void CommandQueue::synchronize()
   switch(backend_)
   {
 #ifdef ISAAC_WITH_CUDA
-    case CUDA: cuda::check(cuStreamSynchronize(*h_.cu)); break;
+    case CUDA: cuda::check(cuStreamSynchronize(h_.cu())); break;
 #endif
     case OPENCL: ocl::check(clFinish(h_.cl())); break;
     default: throw;
@@ -72,10 +72,10 @@ Event CommandQueue::enqueue(Kernel const & kernel, NDRange global, driver::NDRan
   {
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cuda::check(cuEventRecord(event.h_.cu->first, *h_.cu));
-      cuda::check(cuLaunchKernel(*kernel.h_.cu, global[0]/local[0], global[1]/local[1], global[2]/local[2],
-                    local[0], local[1], local[2], 0, *h_.cu,(void**)&kernel.cu_params_[0], NULL));
-      cuda::check(cuEventRecord(event.h_.cu->second, *h_.cu));
+      cuda::check(cuEventRecord(event.h_.cu().first, h_.cu()));
+      cuda::check(cuLaunchKernel(kernel.h_.cu(), global[0]/local[0], global[1]/local[1], global[2]/local[2],
+                    local[0], local[1], local[2], 0, h_.cu(),(void**)&kernel.cu_params_[0], NULL));
+      cuda::check(cuEventRecord(event.h_.cu().second, h_.cu()));
       break;
 #endif
     case OPENCL:
@@ -93,9 +93,9 @@ void CommandQueue::write(Buffer const & buffer, bool blocking, std::size_t offse
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
       if(blocking)
-        cuda::check(cuMemcpyHtoD(*buffer.h_.cu + offset, ptr, size));
+        cuda::check(cuMemcpyHtoD(buffer.h_.cu() + offset, ptr, size));
       else
-        cuda::check(cuMemcpyHtoDAsync(*buffer.h_.cu + offset, ptr, size, *h_.cu));
+        cuda::check(cuMemcpyHtoDAsync(buffer.h_.cu() + offset, ptr, size, h_.cu()));
       break;
 #endif
     case OPENCL:
@@ -112,9 +112,9 @@ void CommandQueue::read(Buffer const & buffer, bool blocking, std::size_t offset
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
       if(blocking)
-        cuda::check(cuMemcpyDtoH(ptr, *buffer.h_.cu + offset, size));
+        cuda::check(cuMemcpyDtoH(ptr, buffer.h_.cu() + offset, size));
       else
-        cuda::check(cuMemcpyDtoHAsync(ptr, *buffer.h_.cu + offset, size, *h_.cu));
+        cuda::check(cuMemcpyDtoHAsync(ptr, buffer.h_.cu() + offset, size, h_.cu()));
       break;
 #endif
     case OPENCL:

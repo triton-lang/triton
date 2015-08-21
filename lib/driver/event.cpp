@@ -13,8 +13,8 @@ Event::Event(backend_type backend) : backend_(backend), h_(backend_, true)
   {
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cuda::check(cuEventCreate(&h_.cu->first, CU_EVENT_DEFAULT));
-      cuda::check(cuEventCreate(&h_.cu->second, CU_EVENT_DEFAULT));
+      cuda::check(cuEventCreate(&h_.cu().first, CU_EVENT_DEFAULT));
+      cuda::check(cuEventCreate(&h_.cu().second, CU_EVENT_DEFAULT));
       break;
 #endif
     case OPENCL: break;
@@ -34,7 +34,7 @@ long Event::elapsed_time() const
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
       float time;
-      cuda::check(cuEventElapsedTime(&time, h_.cu->first, h_.cu->second));
+      cuda::check(cuEventElapsedTime(&time, h_.cu().first, h_.cu().second));
       return 1e6*time;
 #endif
     case OPENCL:
@@ -44,7 +44,7 @@ long Event::elapsed_time() const
   }
 }
 
-HANDLE_TYPE(cl_event, cu_event_t) & Event::handle()
+HANDLE_TYPE(cl_event, Event::cu_event_t) & Event::handle()
 { return h_; }
 
 }

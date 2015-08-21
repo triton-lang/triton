@@ -1,6 +1,7 @@
 #include "isaac/driver/kernel.h"
 #include "isaac/driver/buffer.h"
 #include <iostream>
+#include <cstring>
 
 namespace isaac
 {
@@ -16,7 +17,7 @@ Kernel::Kernel(Program const & program, const char * name) : backend_(program.ba
     case CUDA:
       cu_params_store_.reserve(32);
       cu_params_.reserve(32);
-      cuda::check(cuModuleGetFunction(h_.cu.get(), *program.h_.cu, name));\
+      cuda::check(cuModuleGetFunction(&h_.cu(), program.h_.cu(), name));\
       break;
 #endif
     case OPENCL:
@@ -60,7 +61,7 @@ void Kernel::setArg(unsigned int index, Buffer const & data)
 #ifdef ISAAC_WITH_CUDA
     case CUDA:
     {
-      setArg(index, sizeof(CUdeviceptr), data.h_.cu.get()); break;
+      setArg(index, sizeof(CUdeviceptr), (void*)&data.h_.cu()); break;
     }
 #endif
     case OPENCL:
