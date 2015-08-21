@@ -70,6 +70,7 @@ struct CastPrefix: public keyword{ CastPrefix(driver::backend_type backend, std:
 struct InitPrefix: public keyword{ InitPrefix(driver::backend_type backend, std::string const & datatype): keyword(backend, "", "make_" + datatype){} };
 
 struct Infinity: public keyword{ Infinity(driver::backend_type backend, std::string const & datatype): keyword(backend, "INFINITY", "infinity<" + datatype + ">()"){} };
+struct Select: public keyword{ Select(driver::backend_type backend, std::string cond, std::string if_value, std::string else_value): keyword(backend, "select(" + else_value + "," + if_value + "," + cond + ")", "(" + cond + ")?" + if_value + ":" + else_value) {} };
 #undef ADD_KEYWORD
 
 

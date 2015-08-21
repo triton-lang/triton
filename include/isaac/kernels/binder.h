@@ -21,7 +21,7 @@ public:
   virtual ~symbolic_binder();
   virtual bool bind(driver::Buffer const &) = 0;
   virtual unsigned int get(driver::Buffer const &) = 0;
-  virtual unsigned int get();
+  unsigned int get();
 protected:
   unsigned int current_arg_;
   std::map<driver::Buffer,unsigned int> memory;

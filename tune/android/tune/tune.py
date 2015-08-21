@@ -1,13 +1,15 @@
 import random, argparse, json, os
 from math import log, isinf
 from itertools import chain, product
-from numpy import argsort, argmax
+from numpy import argsort, argmax, where, delete, bincount
 from operator import mul
 import isaac as sc
 from isaac.external.sklearn.forest import RandomForestRegressor
 import optimize, tools, model
 from json import encoder
 import json
+
+to_catch = (sc.OperationNotSupported, sc.OclLaunchOutOfResources, sc.CudaLaunchOutOfResources, sc.MemObjectAllocationFailure, sc.InvalidWorkGroupSize, sc.OutOfHostMemory, sc.InvalidValue)
 
 encoder.FLOAT_REPR = lambda o: format(o, '.2f')
 encoder.separators = (',',':')
@@ -30,14 +32,14 @@ def do_tuning(device, operation, json_path):
     sizes[sc.templates.axpy] = [(x,) for x in tools.expspace(1e3, 1e8, 4)]
     sizes[sc.templates.gemv_n] = product(pow2range(4,17), pow2range(4,17))
     sizes[sc.templates.gemv_t] = sizes[sc.templates.gemv_n]
-    sizes[sc.templates.gemm_nn]     = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 15))
+    sizes[sc.templates.gemm_nn]     = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 17))
     sizes[sc.templates.gemm_tn]     = sizes[sc.templates.gemm_nn]
     sizes[sc.templates.gemm_nt]     = sizes[sc.templates.gemm_nn]
     sizes[sc.templates.gemm_tt]     = sizes[sc.templates.gemm_nn]
     
 
     #Quick tuning - AlexNet sizes + Intuition
-    quick_tuning = True
+    quick_tuning = False
     if quick_tuning:
         sizes[sc.templates.ger] 		 = [(1536,1536)]
 
@@ -48,12 +50,14 @@ def do_tuning(device, operation, json_path):
                                             (729,256),
                                             (3025,96)]
         
-        sizes[sc.templates.gemm_nn]	 = [(576,20,25),(64,50,500),(3025,96,363),
+        sizes[sc.templates.gemm_nn]	 = [(3025,96,363),
                                             (729,128,1200),
                                             (169,384,2304),
                                             (169,192,1728),
                                             (169,128,1728)]
-        sizes[sc.templates.gemm_nt]	 = [(169,1728,128),
+                                            
+        sizes[sc.templates.gemm_nt]	 = [(1536,1536,1536),
+                                            (169,1728,128),
                                             (169,1728,192),
                                             (169,2304,384),
                                             (729,1200,128)]
@@ -121,7 +125,7 @@ def do_tuning(device, operation, json_path):
                 for b in best:
                     try:
                         perf += [performance(x, tools.benchmark(operation, profiles[b], tree))]
-                    except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
+                    except to_catch:
                         pass
                 predicted = profiles[best[argmax(perf)]]
             tune = not optimize.is_local_optimum(predicted, operation, x, context)     
@@ -138,7 +142,7 @@ def do_tuning(device, operation, json_path):
                         try:
                             time = tools.benchmark(operation, new, _tree)
                             perf = performance(xx, time)
-                        except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
+                        except to_catch:
                             perf = 0
                         yy.append(0 if isinf(perf) else perf)
         #Update dataset
@@ -147,7 +151,7 @@ def do_tuning(device, operation, json_path):
         for ip, p in enumerate(profiles):
             try:
                 perf = 0 if fastest and ip < nparams and predperf[ip]/fastest < .1 else performance(x,tools.benchmark(operation, p, tree))
-            except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
+            except to_catch:
                 perf = 0
             y.append(0 if isinf(perf) else perf)
         X.append(x)
@@ -158,6 +162,10 @@ def do_tuning(device, operation, json_path):
                 csv.writer(f).writerows(data)
 
     
+    unused = where(bincount(argmax(Y, 1))==0)[0]
+    profiles = [x for ix,x in enumerate(profiles) if ix not in unused]
+    Y = delete(Y, unused, axis=1)
+
     #Export to JSON
     json_path = tools.sanitize(device.name) + '.json' if not json_path else json_path
     if os.path.isfile(json_path):

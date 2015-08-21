@@ -94,7 +94,7 @@ void bench(sc::numeric_type dtype, std::string operation)
   cudaEventCreate(&stop);\
   OP;\
   cudaThreadSynchronize();\
-  while(total_time*1e-3 < 1e-3){\
+  while(total_time*1e-3 < 1e-2){\
     flush = sc::zeros(1e6, 1, dtype);\
     cudaEventRecord(start,0);\
     OP;\
@@ -191,7 +191,6 @@ void bench(sc::numeric_type dtype, std::string operation)
   #endif
   #ifdef BENCH_CUBLAS
       T *cux, *cuy;
-      T result;
       cudaMalloc((void**) &cux, N * sizeof(T));
       cudaMalloc((void**) &cuy, N * sizeof(T));
       BENCHMARK_CUDA(cublasSdot(N, cux, 1, cuy, 1), 2*N*dtsize/t)
@@ -210,6 +209,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     //AlexNet
     MNs.push_back(std::make_tuple('N',1000,256));
     MNs.push_back(std::make_tuple('N',4096,256));
+
     MNs.push_back(std::make_tuple('T',169,256));
     MNs.push_back(std::make_tuple('T',169,384));
     MNs.push_back(std::make_tuple('T',729,256));
@@ -261,39 +261,43 @@ void bench(sc::numeric_type dtype, std::string operation)
   if(operation.substr(0,4)=="gemm")
   {
     std::vector<std::tuple<std::string, char, char, int_t, int_t, int_t> > MNKs;
-    MNKs.push_back(std::make_tuple("Square [512]",'N','T',512,512,512));
-    MNKs.push_back(std::make_tuple("Square [1536]",'N','T',1536,1536,1536));
-    //AlexNet (Forward)
-    MNKs.push_back(std::make_tuple("F-Conv1",'N','N',3025,96,363));
-    MNKs.push_back(std::make_tuple("F-Conv2",'N','N',729,128,1200));
-    MNKs.push_back(std::make_tuple("F-Conv3",'N','N',169,384,2304));
-    MNKs.push_back(std::make_tuple("F-Conv4",'N','N',169,192,1728));
-    MNKs.push_back(std::make_tuple("F-Conv5",'N','N',169,128,1728));
-    //LeNet (Forward)
-    MNKs.push_back(std::make_tuple("F-Conv1",'N','N',576,20,25));
-    MNKs.push_back(std::make_tuple("F-Conv2",'N','N',64,50,500));
+    //Square
+    MNKs.push_back(std::make_tuple("Square [N=896]",'N','T',896,896,896));
+    MNKs.push_back(std::make_tuple("Square [N=2560]",'N','T',2560,2560,2560));
 
-    //AlexNet (Backward)
-    MNKs.push_back(std::make_tuple("B-Conv5",'T','N',1728,128,169));
-    MNKs.push_back(std::make_tuple("B-Conv4",'T','N',1728,192,169));
-    MNKs.push_back(std::make_tuple("B-Conv3",'T','N',2304,384,169));
-    MNKs.push_back(std::make_tuple("B-Conv2",'T','N',1200,128,729));
-    MNKs.push_back(std::make_tuple("B-Conv1",'T','N',363,96,3025));
-    //LeNet (Backward)
-    MNKs.push_back(std::make_tuple("B-Conv2",'T','N',500,50,64));
-    MNKs.push_back(std::make_tuple("B-Conv1",'T','N',25,20,576));
+    //Convolution
+    MNKs.push_back(std::make_tuple("Convolution [AlexNet-1]",'N','N',3025,96,363));
+    MNKs.push_back(std::make_tuple("Convolution [AlexNet-2]",'N','N',729,128,1200));
+    MNKs.push_back(std::make_tuple("Convolution [AlexNet-3]",'N','N',169,384,2304));
+    MNKs.push_back(std::make_tuple("Convolution [AlexNet-4]",'N','N',169,192,1728));
+    MNKs.push_back(std::make_tuple("Convolution [AlexNet-5]",'N','N',169,128,1728));
+//    MNKs.push_back(std::make_tuple("Convolution [LeNet-1],'N','N',576,20,25));
+//    MNKs.push_back(std::make_tuple("Convolution [LeNet-2]",'N','N',64,50,500));
 
+    //Convolution Gradient-1
+    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-5]",'T','N',1728,128,169));
+    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-4]",'T','N',1728,192,169));
+    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-3]",'T','N',2304,384,169));
+    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-2]",'T','N',1200,128,729));
+    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-1]",'T','N',363,96,3025));
+//    MNKs.push_back(std::make_tuple("Conv. Gradient-1 [LeNet-2]",'T','N',500,50,64));
+//    MNKs.push_back(std::make_tuple("Conv. Gradient-1 [LeNet-1]",'T','N',25,20,576));
 
-    MNKs.push_back(std::make_tuple("B-Conv5 [bottom]",'N','T',169,1728,128));
-    MNKs.push_back(std::make_tuple("B-Conv4 [bottom]",'N','T',169,1728,192));
-    MNKs.push_back(std::make_tuple("B-Conv3 [bottom]",'N','T',169,2304,384));
-    MNKs.push_back(std::make_tuple("B-Conv2 [bottom]",'N','T',729,1200,128));
-    //LeNet (Backward)
-    MNKs.push_back(std::make_tuple("B-Conv2 [bottom]",'N','T',64,500,50));
+    //Convolution Gradient-2
+    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-5]",'N','T',169,1728,128));
+    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-4]",'N','T',169,1728,192));
+    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-3]",'N','T',169,2304,384));
+    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-2]",'N','T',729,1200,128));
+//    MNKs.push_back(std::make_tuple("Conv. Gradient-2 [LeNet-2]",'N','T',64,500,50));
 
-    //Covariance (e.g., ICA)
-    MNKs.push_back(std::make_tuple("ICA [32 channels]",'N','N',32,32,32000));
-    MNKs.push_back(std::make_tuple("ICA [256 channels]",'N','N',256,256,32000));
+    //Covariance (e.g., ICA, 10minutes/1khz)
+    MNKs.push_back(std::make_tuple("ICA [32 channels]",'N','T',32,32,600000));
+    MNKs.push_back(std::make_tuple("ICA [256 channels]",'N','T',256,256,600000));
+
+    //Bi-diagonalization
+    MNKs.push_back(std::make_tuple("Bidiagonalization [Iteration 1]",'N','T',4096,4096,32));
+    MNKs.push_back(std::make_tuple("Bidiagonalization [Iteration 10]",'N','T',3456,3456,32));
+    MNKs.push_back(std::make_tuple("Bidiagonalization [Iteration 50]",'N','T',896,896,32));
 
     /*---------*/
     /*--BLAS3--*/
@@ -317,7 +321,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
-        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         BENCHMARK_CLBLAS(clblasSgemm(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, BT?clblasTrans:clblasNoTrans, M, N, K, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(B.data()), 0, ldb,
@@ -336,7 +340,7 @@ void bench(sc::numeric_type dtype, std::string operation)
         cudaMalloc((void**) &cuA, M * K * sizeof(T));
         cudaMalloc((void**) &cuB, K * N * sizeof(T));
         cudaMalloc((void**) &cuC, M * N * sizeof(T));
-        BENCHMARK_CUDA(cublasSgemm('n', 't', M, N, K, 1, cuA, lda, cuB, ldb, 1, cuC, ldc), (double)2*M*N*K/t)
+        BENCHMARK_CUDA(cublasSgemm(AT?'t':'n', BT?'t':'n', M, N, K, 1, cuA, lda, cuB, ldb, 1, cuC, ldc), (double)2*M*N*K/t)
         cudaFree(cuA);
         cudaFree(cuB);
         cudaFree(cuC);

@@ -19,7 +19,7 @@ namespace isaac
 namespace driver
 {
 
-enum ISAACAPI backend_type
+enum backend_type
 {
   OPENCL
 #ifdef ISAAC_WITH_CUDA

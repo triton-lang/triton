@@ -81,27 +81,32 @@ private:
 
 void export_exceptions()
 {
-    wrap::exception<isaac::operation_not_supported_exception>("OperationNotSupported", bp::init<std::string>())
-        .def("__str__", &isaac::operation_not_supported_exception::what)
-        ;
 
-    wrap::exception<isaac::driver::ocl::exception::out_of_resources>("LaunchOutOfResources")
-        .def("__str__", &isaac::driver::ocl::exception::out_of_resources::what)
-        ;
+#define BIND_EXCEPTION(CPPNAME, PYTHONNAME) \
+    wrap::exception<isaac::CPPNAME>(PYTHONNAME, bp::init<std::string>())\
+        .def("__str__", &isaac::CPPNAME::what)
 
-    wrap::exception<isaac::driver::ocl::exception::mem_object_allocation_failure>("MemObjectAllocationFailure")
-        .def("__str__", &isaac::driver::ocl::exception::mem_object_allocation_failure::what)
-        ;
+    BIND_EXCEPTION(operation_not_supported_exception, "OperationNotSupported");
 
-    wrap::exception<isaac::driver::ocl::exception::out_of_host_memory>("OutOfHostMemory")
-        .def("__str__", &isaac::driver::ocl::exception::out_of_host_memory::what)
-        ;
+    //OCL
+    wrap::exception<isaac::driver::ocl::exception::base>("OclException", bp::no_init);
+#define BIND_OCL_EXCEPTION(CPPNAME, PYTHONNAME) \
+            wrap::exception<isaac::driver::ocl::exception::CPPNAME, bp::bases<isaac::driver::ocl::exception::base> >(PYTHONNAME)\
+                .def("__str__", &isaac::driver::ocl::exception::CPPNAME::what)
 
-    wrap::exception<isaac::driver::ocl::exception::invalid_work_group_size>("InvalidWorkGroupSize")
-        .def("__str__", &isaac::driver::ocl::exception::invalid_work_group_size::what)
-        ;
 
-    wrap::exception<isaac::driver::ocl::exception::invalid_value>("InvalidValue")
-        .def("__str__", &isaac::driver::ocl::exception::invalid_value::what)
-        ;
+    BIND_OCL_EXCEPTION(out_of_resources, "OclLaunchOutOfResources");
+    BIND_OCL_EXCEPTION(mem_object_allocation_failure, "MemObjectAllocationFailure");
+    BIND_OCL_EXCEPTION(out_of_host_memory, "OutOfHostMemory");
+    BIND_OCL_EXCEPTION(invalid_work_group_size, "InvalidWorkGroupSize");
+    BIND_OCL_EXCEPTION(invalid_value, "InvalidValue");
+
+    //CUDA
+    wrap::exception<isaac::driver::cuda::exception::base>("CudaException", bp::no_init);
+#define BIND_CUDA_EXCEPTION(CPPNAME, PYTHONNAME) \
+            wrap::exception<isaac::driver::cuda::exception::CPPNAME, bp::bases<isaac::driver::cuda::exception::base> >(PYTHONNAME)\
+                .def("__str__", &isaac::driver::cuda::exception::CPPNAME::what)
+
+
+    BIND_CUDA_EXCEPTION(launch_out_of_resources, "CudaLaunchOutOfResources");
 }

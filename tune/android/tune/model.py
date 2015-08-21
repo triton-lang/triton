@@ -24,26 +24,29 @@ def nrmse(y_ground, y):
 def train(X, Y, profiles):      
     X = np.array(X)
     Y = np.array(Y)
-    M = X.shape[0]
-
+    #Remove unused profiles
+    unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
+    profiles = [x in profiles for ix,x in enumerate(profiles) if ix not in unused]
+    Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1)
+    #Shuffle
     p = np.random.permutation(X.shape[0])
+    M = X.shape[0]
     X = X[p,:]
     Y = Y[p,:]   
 
     #Train the.profile
-    cut = int(1.00*M)
-    CV = .1
-    XTr, YTr = X[:,:], Y[:,:]
-    XCv, YCv = X[:max(1,CV*M),:], Y[:max(1,CV*M),:]
+    cut = int(.7*M)
+    XTr, YTr = X[:cut,:], Y[:cut,:]
+    XCv, YCv = X[cut:,:], Y[cut:,:]
 
     nrmses = {}
-    for N in range(1,min(M+1,20)):
+    for N in range(1,min(M+1,10)):
         for depth in range(1,min(M+1,20)):
             clf = RandomForestRegressor(N, max_depth=depth).fit(XTr, YTr)
             t = np.argmax(clf.predict(XCv), axis = 1)
             y = np.array([YCv[i,t[i]] for i in range(t.size)])
             ground = np.max(YCv[:,:], axis=1)
             nrmses[clf] = nrmse(ground, y)
-            
+         
     clf = min(nrmses, key=nrmses.get)
     return clf, nrmses[clf]

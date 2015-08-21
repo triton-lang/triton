@@ -20,7 +20,7 @@ private:
   friend class CommandQueue;
 
 public:
-  enum ISAACAPI Type
+  enum Type
   {
     GPU = CL_DEVICE_TYPE_GPU,
     CPU = CL_DEVICE_TYPE_CPU,
