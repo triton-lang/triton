@@ -155,7 +155,7 @@ def main():
                 author='Philippe Tillet',
                 author_email='ptillet@g.harvard.edu',
                 license='MPL 2.0',
-                packages=['isaac','isaac.external', 'isaac.external.sklearn'],
+                packages=['isaac', 'isaac.external', 'isaac.external.sklearn'],
                 ext_package="isaac",
                 ext_modules=extensions,
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},

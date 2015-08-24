@@ -2,6 +2,8 @@ import isaac as sc
 from numpy import mean, median
 from math import ceil, exp, log, sqrt
 
+profile_execution_failure = (sc.OperationNotSupported,  sc.OclLaunchOutOfResources, sc.CudaLaunchOutOfResources, sc.MemObjectAllocationFailure, sc.InvalidWorkGroupSize, sc.OutOfHostMemory, sc.InvalidValue)
+
 def sanitize(string, keep_chars = ['_']):
     string = string.replace(' ', '_').replace('-', '_').lower()
     string = "".join(c for c in string if c.isalnum() or c in keep_chars).rstrip()
@@ -86,7 +88,12 @@ def metric_of(template):
         return lambda sizes, t: memory_footprint(template, sizes)/t
     elif any([issubclass(template, x) for x in compute_bound]):
         return lambda sizes, t: 2*sizes[0]*sizes[1]*sizes[2]*1e-9/t
-                
+           
+def metric_name_of(template):
+    if issubclass(template, sc.templates.gemm):
+        return 'GFLOPS'
+    return 'GB/S'
+
 def genetic_infos_of(template):
     if issubclass(template, sc.templates.axpy):
         return {'categorical': [3], 'nbits': [3,4,4,2] }
