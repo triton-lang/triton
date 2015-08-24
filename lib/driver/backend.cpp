@@ -130,12 +130,12 @@ void backend::platforms(std::vector<Platform> & platforms)
   #ifdef ISAAC_WITH_CUDA
     platforms.push_back(Platform(CUDA));
   #endif
-//    cl_uint nplatforms;
-//    ocl::check(clGetPlatformIDs(0, NULL, &nplatforms));
-//    std::vector<cl_platform_id> clplatforms(nplatforms);
-//    ocl::check(clGetPlatformIDs(nplatforms, clplatforms.data(), NULL));
-//    for(cl_platform_id p: clplatforms)
-//        platforms.push_back(Platform(p));
+    cl_uint nplatforms;
+    ocl::check(clGetPlatformIDs(0, NULL, &nplatforms));
+    std::vector<cl_platform_id> clplatforms(nplatforms);
+    ocl::check(clGetPlatformIDs(nplatforms, clplatforms.data(), NULL));
+    for(cl_platform_id p: clplatforms)
+        platforms.push_back(Platform(p));
 }
 
 void backend::synchronize(Context const & context)

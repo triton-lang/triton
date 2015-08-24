@@ -1,15 +1,14 @@
 #ifndef ISAAC_DRIVER_COMMON_H
 #define ISAAC_DRIVER_COMMON_H
-
-
-#include <CL/cl.h>
-#include <CL/cl_ext.h>
 #include <exception>
 
-#ifdef ISAAC_WITH_CUDA
-#include <cuda.h>
-#include <nvrtc.h>
-#endif
+//OpenCL Backend
+#include "isaac/driver/external/CL/cl.h"
+#include "isaac/driver/external/CL/cl_ext.h"
+//CUDA Backend
+#include "isaac/driver/external/CUDA/cuda.h"
+#include "isaac/driver/external/CUDA/nvrtc.h"
+
 #include "isaac/defines.h"
 
 DISABLE_MSVC_WARNING_C4275
@@ -30,7 +29,6 @@ enum backend_type
 
 
 
-#ifdef ISAAC_WITH_CUDA
 
 namespace nvrtc
 {
@@ -130,7 +128,6 @@ namespace cuda
 void check(CUresult);
 }
 
-#endif
 
 namespace ocl
 {

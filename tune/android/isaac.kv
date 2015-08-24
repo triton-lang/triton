@@ -27,16 +27,26 @@ BoxLayout:
             ActionPrevious:
                 with_previous: False
 
-            ActionToggleButton:
-                id: Tune
-                text: 'Tune'
-                on_release: app.show_tune()
-                group: 'menu'
-    
-            ActionToggleButton:
+            ActionButton:
                 text: 'Settings'
                 on_release: app.open_settings()
                 group: 'menu'
-                
+    
+    BoxLayout:
+        orientation: 'horizontal'
+        size_hint: 1, .1
+
+        Button:
+            id: Tune
+            text: 'Tune'
+            on_release: app.show_tune()
+            group: 'menu'
+            
+        Button:
+            text: 'Benchmark'
+            group: 'menu'
+            
+            
+            
     ScreenManager:
         id: sm
