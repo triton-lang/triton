@@ -51,6 +51,7 @@ private:
     static void import(std::string const & fname, driver::CommandQueue const & queue);
     static map_type & init(driver::CommandQueue const & queue);
 public:
+    static void release();
     static map_type & get(driver::CommandQueue const & queue);
     static void set(driver::CommandQueue const & queue, expression_type operation, numeric_type dtype, std::shared_ptr<value_type> const & profile);
 private:

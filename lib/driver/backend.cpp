@@ -127,11 +127,15 @@ std::list<Context const *> backend::contexts::cache_;
 
 void backend::platforms(std::vector<Platform> & platforms)
 {
+    bool has_cuda = false;
+
     //if cuda is here
     if(dispatch::cuinit())
     {
-        if(dispatch::nvrtcinit())
+        if(dispatch::nvrtcinit()){
             platforms.push_back(Platform(CUDA));
+            has_cuda = true;
+        }
         else
             throw std::runtime_error("ISAAC: Unable to find NVRTC. Make sure you are using CUDA >= 7.0");
     }
@@ -143,8 +147,12 @@ void backend::platforms(std::vector<Platform> & platforms)
         ocl::check(dispatch::dispatch::clGetPlatformIDs(0, NULL, &nplatforms));
         std::vector<cl_platform_id> clplatforms(nplatforms);
         ocl::check(dispatch::dispatch::clGetPlatformIDs(nplatforms, clplatforms.data(), NULL));
-        for(cl_platform_id p: clplatforms)
-            platforms.push_back(Platform(p));
+        for(cl_platform_id p: clplatforms){
+            Platform tmp(p);
+            if(tmp.name().find("CUDA")!=std::string::npos && has_cuda)
+                continue;
+            platforms.push_back(tmp);
+        }
     }
 
     if(platforms.empty())
