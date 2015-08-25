@@ -253,6 +253,12 @@ void profiles::set(driver::CommandQueue const & queue, expression_type operation
   cache_[queue][std::make_pair(operation,dtype)] = profile;
 }
 
+void profiles::release()
+{
+    cache_.clear();
+}
+
+
 std::map<driver::CommandQueue, profiles::map_type> profiles::cache_;
 
 ///////////////////

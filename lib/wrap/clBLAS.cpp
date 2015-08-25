@@ -14,6 +14,7 @@ extern "C"
 
     void clblasTeardown()
     {
+        isaac::profiles::release();
         isaac::driver::backend::release();
     }
 
