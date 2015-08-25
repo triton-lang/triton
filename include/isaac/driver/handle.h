@@ -12,26 +12,18 @@ namespace isaac
 namespace driver
 {
 
-#ifdef ISAAC_WITH_CUDA
   struct cu_event_t{
       operator bool() const { return first && second; }
       CUevent first;
       CUevent second;
   };
 
-#endif
-
-#ifdef ISAAC_WITH_CUDA
 #define HANDLE_TYPE(CLTYPE, CUTYPE) Handle<CLTYPE, CUTYPE>
-#else
-#define HANDLE_TYPE(CLTYPE, CUTYPE) Handle<CLTYPE, void>
-#endif
 
 template<class CLType, class CUType>
 class ISAACAPI Handle
 {
 private:
-#ifdef ISAAC_WITH_CUDA
   static void _delete(CUcontext x);
   static void _delete(CUdeviceptr x);
   static void _delete(CUstream x);
@@ -40,7 +32,6 @@ private:
   static void _delete(CUfunction);
   static void _delete(CUmodule x);
   static void _delete(cu_event_t x);
-#endif
 
   static void release(cl_context x);
   static void release(cl_mem x);
@@ -56,10 +47,8 @@ public:
   bool operator<(Handle const & other) const;
   CLType & cl();
   CLType const & cl() const;
-#ifdef ISAAC_WITH_CUDA
   CUType & cu();
   CUType const & cu() const;
-#endif
   ~Handle();
 
 private:

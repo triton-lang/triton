@@ -13,16 +13,14 @@ Kernel::Kernel(Program const & program, const char * name) : backend_(program.ba
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cu_params_store_.reserve(32);
-      cu_params_.reserve(32);
-      cuda::check(cuModuleGetFunction(&h_.cu(), program.h_.cu(), name));\
+      cu_params_store_.reserve(64);
+      cu_params_.reserve(64);
+      cuda::check(dispatch::cuModuleGetFunction(&h_.cu(), program.h_.cu(), name));\
       break;
-#endif
     case OPENCL:
       cl_int err;
-      h_.cl() = clCreateKernel(program.h_.cl(), name, &err);
+      h_.cl() = dispatch::clCreateKernel(program.h_.cl(), name, &err);
       ocl::check(err);
       break;
     default:
@@ -34,7 +32,6 @@ void Kernel::setArg(unsigned int index, std::size_t size, void* ptr)
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
       if(index + 1> cu_params_store_.size())
       {
@@ -45,9 +42,8 @@ void Kernel::setArg(unsigned int index, std::size_t size, void* ptr)
       memcpy(cu_params_store_[index].get(), ptr, size);
       cu_params_[index] = cu_params_store_[index].get();
       break;
-#endif
     case OPENCL:
-      ocl::check(clSetKernelArg(h_.cl(), index, size, ptr));
+      ocl::check(dispatch::clSetKernelArg(h_.cl(), index, size, ptr));
       break;
     default:
       throw;
@@ -58,14 +54,12 @@ void Kernel::setArg(unsigned int index, Buffer const & data)
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
     {
       setArg(index, sizeof(CUdeviceptr), (void*)&data.h_.cu()); break;
     }
-#endif
     case OPENCL:
-      ocl::check(clSetKernelArg(h_.cl(), index, sizeof(cl_mem), (void*)&data.h_.cl()));
+      ocl::check(dispatch::clSetKernelArg(h_.cl(), index, sizeof(cl_mem), (void*)&data.h_.cl()));
       break;
     default: throw;
   }
@@ -75,14 +69,12 @@ void Kernel::setSizeArg(unsigned int index, size_t N)
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
     {
       int NN = static_cast<cl_int>(N);
       setArg(index, sizeof(int), &NN);
       break;
     }
-#endif
     case OPENCL:
     {
       cl_int NN = static_cast<cl_int>(N);

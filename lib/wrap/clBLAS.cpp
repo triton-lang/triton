@@ -33,9 +33,9 @@ extern "C"
             if(events)
             {
                 events[i] = levents.front().handle().cl();
-                clRetainEvent(events[i]);
+                is::driver::dispatch::clRetainEvent(events[i]);
             }
-            clFlush(commandQueues[i]);
+            is::driver::dispatch::clFlush(commandQueues[i]);
         }
 
     }

@@ -27,15 +27,14 @@ CommandQueue::CommandQueue(Context const & context, Device const & device, cl_co
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cuda::check(cuStreamCreate(&h_.cu(), 0));
+      cuda::check(dispatch::cuStreamCreate(&h_.cu(), 0));
       break;
-#endif
+
     case OPENCL:
     {
       cl_int err;
-      h_.cl() = clCreateCommandQueue(context.h_.cl(), device.h_.cl(), properties, &err);
+      h_.cl() = dispatch::clCreateCommandQueue(context.h_.cl(), device.h_.cl(), properties, &err);
       ocl::check(err);
       break;
     }
@@ -57,10 +56,8 @@ void CommandQueue::synchronize()
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
-    case CUDA: cuda::check(cuStreamSynchronize(h_.cu())); break;
-#endif
-    case OPENCL: ocl::check(clFinish(h_.cl())); break;
+    case CUDA: cuda::check(dispatch::cuStreamSynchronize(h_.cu())); break;
+    case OPENCL: ocl::check(dispatch::clFinish(h_.cl())); break;
     default: throw;
   }
 }
@@ -70,16 +67,14 @@ Event CommandQueue::enqueue(Kernel const & kernel, NDRange global, driver::NDRan
   Event event(backend_);
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cuda::check(cuEventRecord(event.h_.cu().first, h_.cu()));
-      cuda::check(cuLaunchKernel(kernel.h_.cu(), global[0]/local[0], global[1]/local[1], global[2]/local[2],
+      cuda::check(dispatch::cuEventRecord(event.h_.cu().first, h_.cu()));
+      cuda::check(dispatch::cuLaunchKernel(kernel.h_.cu(), global[0]/local[0], global[1]/local[1], global[2]/local[2],
                     local[0], local[1], local[2], 0, h_.cu(),(void**)&kernel.cu_params_[0], NULL));
-      cuda::check(cuEventRecord(event.h_.cu().second, h_.cu()));
+      cuda::check(dispatch::cuEventRecord(event.h_.cu().second, h_.cu()));
       break;
-#endif
     case OPENCL:
-      ocl::check(clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, &event.handle().cl()));
+      ocl::check(dispatch::clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, &event.handle().cl()));
       break;
     default: throw;
   }
@@ -90,16 +85,14 @@ void CommandQueue::write(Buffer const & buffer, bool blocking, std::size_t offse
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
       if(blocking)
-        cuda::check(cuMemcpyHtoD(buffer.h_.cu() + offset, ptr, size));
+        cuda::check(dispatch::cuMemcpyHtoD(buffer.h_.cu() + offset, ptr, size));
       else
-        cuda::check(cuMemcpyHtoDAsync(buffer.h_.cu() + offset, ptr, size, h_.cu()));
+        cuda::check(dispatch::cuMemcpyHtoDAsync(buffer.h_.cu() + offset, ptr, size, h_.cu()));
       break;
-#endif
     case OPENCL:
-      ocl::check(clEnqueueWriteBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
+      ocl::check(dispatch::clEnqueueWriteBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
       break;
     default: throw;
   }
@@ -109,16 +102,14 @@ void CommandQueue::read(Buffer const & buffer, bool blocking, std::size_t offset
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
       if(blocking)
-        cuda::check(cuMemcpyDtoH(ptr, buffer.h_.cu() + offset, size));
+        cuda::check(dispatch::cuMemcpyDtoH(ptr, buffer.h_.cu() + offset, size));
       else
-        cuda::check(cuMemcpyDtoHAsync(ptr, buffer.h_.cu() + offset, size, h_.cu()));
+        cuda::check(dispatch::cuMemcpyDtoHAsync(ptr, buffer.h_.cu() + offset, size, h_.cu()));
       break;
-#endif
     case OPENCL:
-      ocl::check(clEnqueueReadBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
+      ocl::check(dispatch::clEnqueueReadBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
       break;
     default: throw;
   }

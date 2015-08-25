@@ -21,14 +21,12 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cuda::check(cuCtxCreate(&h_.cu(), CU_CTX_SCHED_AUTO, device.h_.cu()));
+      cuda::check(dispatch::cuCtxCreate(&h_.cu(), CU_CTX_SCHED_AUTO, device.h_.cu()));
       break;
-#endif
     case OPENCL:
       cl_int err;
-      h_.cl() = clCreateContext(NULL, 1, &device_.h_.cl(), NULL, NULL, &err);
+      h_.cl() = dispatch::clCreateContext(NULL, 1, &device_.h_.cl(), NULL, NULL, &err);
       ocl::check(err);
       break;
     default:

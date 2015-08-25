@@ -107,9 +107,7 @@ void export_driver()
   bp::enum_<sc::driver::backend_type>
       ("backend_type")
       .value("OPENCL", sc::driver::OPENCL)
-  #ifdef ISAAC_WITH_CUDA
       .value("CUDA", sc::driver::CUDA)
-  #endif
       ;
 
   bp::enum_<sc::driver::Device::Type>

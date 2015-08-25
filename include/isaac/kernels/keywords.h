@@ -21,10 +21,8 @@ static inline std::string size_type(driver::Device const & device)
 {
   switch(device.backend())
   {
-#ifdef ISAAC_WITH_CUDA
     case driver::CUDA:
       return "int";
-#endif
     case driver::OPENCL:
       return "int";
     default:

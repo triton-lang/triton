@@ -143,10 +143,10 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
     switch(backend)
     {
-  #ifdef ISAAC_WITH_CUDA
-      case driver::CUDA: stream << "#include  \"helper_math.h\"" << std::endl; break;
-  #endif
-      case driver::OPENCL: stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
+      case driver::CUDA:
+        stream << "#include  \"helper_math.h\"" << std::endl; break;
+      case driver::OPENCL:
+        stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
     }
 
     stream << KernelPrefix(backend) << " void " << gemm_name << "(" << _size_t << " M, " << _size_t << " N, " << _size_t << " K, "

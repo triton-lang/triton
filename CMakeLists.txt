@@ -8,14 +8,6 @@ add_custom_target( MAKE_HEADERS_VISIBLE SOURCES ${MAKE_HEADERS_VISIBLE_SRC} )
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/lib/external/)
 
-#CUDA and OpenCL
-find_package(CUDA QUIET)
-find_package(OpenCL QUIET REQUIRED)
-if(CUDA_FOUND)
-   set(BACKEND_DEFINES "-DISAAC_WITH_CUDA")
-   include_directories(${CUDA_INCLUDE_DIRS})
-endif()
-
 #Compiler flags
 add_definitions(${BACKEND_DEFINES})
 if(WIN32)

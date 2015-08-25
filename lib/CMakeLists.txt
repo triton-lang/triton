@@ -18,19 +18,13 @@ else()
 endif()
 add_dependencies(isaac database)
 
-#Linkage
-if(OPENCL_FOUND)
-    target_link_libraries(isaac ${OPENCL_LIBRARIES})
-endif()
-if(CUDA_FOUND)
-    cuda_find_library_local_first(CUDA_NVRTC_LIBRARY nvrtc "\"nvrtc\" library")
-    target_link_libraries(isaac ${CUDA_CUDA_LIBRARY} ${CUDA_NVRTC_LIBRARY})
-    #Cuda JIT headers to file
-    set(CUDA_HELPERS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/driver/helpers/cuda/)
-    file(GLOB_RECURSE CUDA_HELPERS_SRC ${CUDA_HELPERS_PATH}/*.cu)
-    CODE_TO_H(SOURCES ${CUDA_HELPERS_SRC} VARNAME kernel_files EXTENSION "hpp"
-              OUTPUT_DIR ${CUDA_HELPERS_PATH} NAMESPACE "isaac helpers cuda" TARGET cuda_headers EOF "0")
-endif()
+target_link_libraries(isaac "dl")
+
+#Cuda JIT headers to file
+set(CUDA_HELPERS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/driver/helpers/cuda/)
+file(GLOB_RECURSE CUDA_HELPERS_SRC ${CUDA_HELPERS_PATH}/*.cu)
+CODE_TO_H(SOURCES ${CUDA_HELPERS_SRC} VARNAME kernel_files EXTENSION "hpp"
+          OUTPUT_DIR ${CUDA_HELPERS_PATH} NAMESPACE "isaac helpers cuda" TARGET cuda_headers EOF "0")
 
 #Installation
 install(TARGETS isaac LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
