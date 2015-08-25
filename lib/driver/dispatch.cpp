@@ -142,21 +142,21 @@ OCL_DEFINE1(cl_int, clReleaseKernel, cl_kernel)
 CUDA_DEFINE1(CUresult, cuCtxDestroy_v2, CUcontext)
 CUDA_DEFINE2(CUresult, cuEventCreate, CUevent *, unsigned int)
 CUDA_DEFINE2(CUresult, cuDeviceGet, CUdevice *, int)
-CUDA_DEFINE3(CUresult, dispatch::cuMemcpyDtoH_v2, void *, CUdeviceptr, size_t)
+CUDA_DEFINE3(CUresult, cuMemcpyDtoH_v2, void *, CUdeviceptr, size_t)
 CUDA_DEFINE2(CUresult, cuStreamCreate, CUstream *, unsigned int)
 CUDA_DEFINE3(CUresult, cuEventElapsedTime, float *, CUevent, CUevent)
-CUDA_DEFINE1(CUresult, dispatch::cuMemFree_v2, CUdeviceptr)
-CUDA_DEFINE4(CUresult, dispatch::cuMemcpyDtoHAsync_v2, void *, CUdeviceptr, size_t, CUstream)
+CUDA_DEFINE1(CUresult, cuMemFree_v2, CUdeviceptr)
+CUDA_DEFINE4(CUresult, cuMemcpyDtoHAsync_v2, void *, CUdeviceptr, size_t, CUstream)
 CUDA_DEFINE1(CUresult, cuDriverGetVersion, int *)
 CUDA_DEFINE3(CUresult, cuDeviceGetName, char *, int, CUdevice)
-CUDA_DEFINE4(CUresult, dispatch::cuMemcpyHtoDAsync_v2, CUdeviceptr, const void *, size_t, CUstream)
+CUDA_DEFINE4(CUresult, cuMemcpyHtoDAsync_v2, CUdeviceptr, const void *, size_t, CUstream)
 CUDA_DEFINE2(CUresult, cuModuleLoad, CUmodule *, const char *)
 CUDA_DEFINE11(CUresult, cuLaunchKernel, CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void **, void **)
 CUDA_DEFINE1(CUresult, cuModuleUnload, CUmodule)
 CUDA_DEFINE5(CUresult, cuModuleLoadDataEx, CUmodule *, const void *, unsigned int, CUjit_option *, void **)
 CUDA_DEFINE3(CUresult, cuDeviceGetAttribute, int *, CUdevice_attribute, CUdevice)
 CUDA_DEFINE1(CUresult, cuDeviceGetCount, int *)
-CUDA_DEFINE3(CUresult, dispatch::cuMemcpyHtoD_v2, CUdeviceptr, const void *, size_t )
+CUDA_DEFINE3(CUresult, cuMemcpyHtoD_v2, CUdeviceptr, const void *, size_t )
 CUDA_DEFINE1(CUresult, cuInit, unsigned int)
 CUDA_DEFINE2(CUresult, cuEventRecord, CUevent, CUstream)
 CUDA_DEFINE3(CUresult, cuCtxCreate_v2, CUcontext *, unsigned int, CUdevice)
@@ -175,8 +175,18 @@ NVRTC_DEFINE2(nvrtcResult, nvrtcGetProgramLog, nvrtcProgram, char *)
 
 void dispatch::release()
 {
-    if(opencl_)
+    if(opencl_){
         dlclose(opencl_);
+        opencl_ = nullptr;
+    }
+    if(cuda_){
+        dlclose(cuda_);
+        cuda_ = nullptr;
+    }
+    if(nvrtc_){
+        dlclose(nvrtc_);
+        nvrtc_ = nullptr;
+    }
 }
 
 void * dispatch::opencl_;

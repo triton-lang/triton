@@ -29,12 +29,7 @@
  * the AMD GPU hardware.
  */
 
-#if defined(__APPLE__) || defined(__MACOSX)
-#include <OpenCL/cl.h>
-#else
-#include <CL/cl.h>
-#endif
-
+#include "isaac/driver/external/CL/cl.h"
 #include "clBLAS-complex.h"
 
 #ifdef __cplusplus
