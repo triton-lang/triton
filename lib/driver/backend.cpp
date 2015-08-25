@@ -127,15 +127,28 @@ std::list<Context const *> backend::contexts::cache_;
 
 void backend::platforms(std::vector<Platform> & platforms)
 {
-  #ifdef ISAAC_WITH_CUDA
-    platforms.push_back(Platform(CUDA));
-  #endif
-    cl_uint nplatforms;
-    ocl::check(clGetPlatformIDs(0, NULL, &nplatforms));
-    std::vector<cl_platform_id> clplatforms(nplatforms);
-    ocl::check(clGetPlatformIDs(nplatforms, clplatforms.data(), NULL));
-    for(cl_platform_id p: clplatforms)
-        platforms.push_back(Platform(p));
+    //if cuda is here
+    if(dispatch::cuinit())
+    {
+        if(dispatch::nvrtcinit())
+            platforms.push_back(Platform(CUDA));
+        else
+            throw std::runtime_error("ISAAC: Unable to find NVRTC. Make sure you are using CUDA >= 7.0");
+    }
+
+    //if OpenCL is here
+    if(dispatch::clinit())
+    {
+        cl_uint nplatforms;
+        ocl::check(dispatch::dispatch::clGetPlatformIDs(0, NULL, &nplatforms));
+        std::vector<cl_platform_id> clplatforms(nplatforms);
+        ocl::check(dispatch::dispatch::clGetPlatformIDs(nplatforms, clplatforms.data(), NULL));
+        for(cl_platform_id p: clplatforms)
+            platforms.push_back(Platform(p));
+    }
+
+    if(platforms.empty())
+        throw std::runtime_error("ISAAC: No backend available. Make sure OpenCL and/or CUDA are available in your library path");
 }
 
 void backend::synchronize(Context const & context)

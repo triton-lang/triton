@@ -19,9 +19,7 @@ class ISAACAPI Platform
 {
 private:
 public:
-#ifdef ISAAC_WITH_CUDA
   Platform(backend_type);
-#endif
   Platform(cl_platform_id const &);
   std::string name() const;
   std::string version() const;

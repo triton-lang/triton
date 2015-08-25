@@ -2,13 +2,7 @@
 #define ISAAC_DRIVER_COMMON_H
 #include <exception>
 
-//OpenCL Backend
-#include "isaac/driver/external/CL/cl.h"
-#include "isaac/driver/external/CL/cl_ext.h"
-//CUDA Backend
-#include "isaac/driver/external/CUDA/cuda.h"
-#include "isaac/driver/external/CUDA/nvrtc.h"
-
+#include "isaac/driver/dispatch.h"
 #include "isaac/defines.h"
 
 DISABLE_MSVC_WARNING_C4275
@@ -20,10 +14,8 @@ namespace driver
 
 enum backend_type
 {
-  OPENCL
-#ifdef ISAAC_WITH_CUDA
-  ,CUDA
-#endif
+  OPENCL,
+  CUDA
 };
 
 

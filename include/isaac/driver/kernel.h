@@ -30,10 +30,8 @@ public:
 private:
   backend_type backend_;
   unsigned int address_bits_;
-#ifdef ISAAC_WITH_CUDA
   std::vector<std::shared_ptr<void> >  cu_params_store_;
   std::vector<void*>  cu_params_;
-#endif
   HANDLE_TYPE(cl_kernel, CUfunction) h_;
 };
 

@@ -8,7 +8,7 @@
 #include "isaac/common/expression_type.h"
 #include "isaac/common/numeric_type.h"
 
-#include "isaac/driver/common.h"
+#include "isaac/driver/dispatch.h"
 #include "isaac/defines.h"
 #include "isaac/types.h"
 

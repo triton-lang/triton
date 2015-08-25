@@ -42,10 +42,10 @@ std::string axpy::generate_impl(std::string const & suffix, expressions_tuple co
 
   switch(backend)
   {
-#ifdef ISAAC_WITH_CUDA
-    case driver::CUDA: stream << "#include  \"helper_math.h\"" << std::endl; break;
-#endif
-    case driver::OPENCL: stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
+    case driver::CUDA:
+      stream << "#include  \"helper_math.h\"" << std::endl; break;
+    case driver::OPENCL:
+      stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
   }
 
   stream << KernelPrefix(backend) << " void " << "axpy" << suffix << "(" << _size_t << " N," << generate_arguments(dtype, device, mappings, expressions) << ")" << std::endl;

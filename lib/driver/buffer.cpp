@@ -18,14 +18,12 @@ Buffer::Buffer(Context const & context, size_t size) : backend_(context.backend_
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cuda::check(cuMemAlloc(&h_.cu(), size));
+      cuda::check(dispatch::cuMemAlloc(&h_.cu(), size));
       break;
-#endif
     case OPENCL:
       cl_int err;
-      h_.cl() = clCreateBuffer(context.h_.cl(), CL_MEM_READ_WRITE, size, NULL, &err);
+      h_.cl() = dispatch::clCreateBuffer(context.h_.cl(), CL_MEM_READ_WRITE, size, NULL, &err);
       ocl::check(err);
       break;
     default:

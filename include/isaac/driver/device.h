@@ -26,6 +26,7 @@ public:
     CPU = CL_DEVICE_TYPE_CPU,
     ACCELERATOR = CL_DEVICE_TYPE_ACCELERATOR
   };
+
   enum class Vendor
   {
       AMD,
@@ -42,14 +43,11 @@ public:
   };
 
 private:
-#ifdef ISAAC_WITH_CUDA
   template<CUdevice_attribute attr>
   int cuGetInfo() const;
-#endif
+
 public:
-#ifdef ISAAC_WITH_CUDA
   Device(int ordinal);
-#endif
   Device(cl_device_id const & device, bool take_ownership = true);
 
   bool operator==(Device const &) const;

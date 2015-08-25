@@ -12,10 +12,10 @@ std::string const & keyword::get() const
 {
   switch(backend_)
   {
-    case driver::OPENCL: return opencl_;
-#ifdef ISAAC_WITH_CUDA
-    case driver::CUDA: return cuda_;
-#endif
+    case driver::OPENCL:
+      return opencl_;
+    case driver::CUDA:
+      return cuda_;
     default: throw;
   }
 }
