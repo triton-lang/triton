@@ -10,13 +10,12 @@ typedef sc::int_t int_t;
 
 template<typename T>
 void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T> & cy,
-                                sc::array & x, sc::array & y)
+                                sc::array & x, sc::array & y, interface_t interf)
 {
   using namespace std;
   sc::driver::Context const & ctx = x.context();
   int_t N = cx.size();
   sc::driver::CommandQueue queue = sc::driver::backend::queues::get(ctx,0);
-  cl_command_queue clqueue = queue.handle().cl();
   sc::array scratch(N, x.dtype());
 
   unsigned int failure_count = 0;
@@ -28,7 +27,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
   isaac::scalar ds(dtype, ctx);
 
 #define RUN_TEST(NAME, CPU_REDUCTION, INIT, ASSIGNMENT, GPU_REDUCTION) \
-  cout << PREFIX << " " << NAME "..." << flush;\
+  cout <<  NAME "..." << flush;\
   cs = INIT;\
   for(int_t i = 0 ; i < N ; ++i)\
     CPU_REDUCTION;\
@@ -44,14 +43,18 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
   else\
     cout << endl;
 
-#define PREFIX "[C]"
-  RUN_TEST("DOT", cs+=cx[i]*cy[i], 0, cs, BLAS<T>::F(clblasSdot, clblasDdot)(N, CHANDLE(ds), 0, CHANDLE(x), x.start()[0], x.stride()[0],
-                                                                                 CHANDLE(y), y.start()[0], y.stride()[0],
-                                                                                 CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
-  RUN_TEST("ASUM", cs+=std::fabs(cx[i]), 0, cs, BLAS<T>::F(clblasSasum, clblasDasum)(N, CHANDLE(ds), 0, CHANDLE(x), x.start()[0], x.stride()[0],
-                                                                                             CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
-#undef PREFIX
-#define PREFIX "[C++]"
+
+  if(ctx.backend()==sc::driver::OPENCL && interf==clBLAS)
+  {
+      cl_command_queue clqueue = queue.handle().cl();
+
+      RUN_TEST("DOT", cs+=cx[i]*cy[i], 0, cs, BLAS<T>::F(clblasSdot, clblasDdot)(N, CHANDLE(ds), 0, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                     CHANDLE(y), y.start()[0], y.stride()[0],
+                                                                                     CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
+      RUN_TEST("ASUM", cs+=std::fabs(cx[i]), 0, cs, BLAS<T>::F(clblasSasum, clblasDasum)(N, CHANDLE(ds), 0, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                                CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
+  }
+
 
   RUN_TEST("s = x'.y", cs+=cx[i]*cy[i], 0, cs, ds = dot(x,y));
   RUN_TEST("s = exp(x'.y)", cs += cx[i]*cy[i], 0, std::exp(cs), ds = exp(dot(x,y)));
@@ -77,14 +80,16 @@ void test_impl(T epsilon, sc::driver::Context const & ctx)
   INIT_VECTOR(N, SUBN, 0, 1, cx, x, ctx);
   INIT_VECTOR(N, SUBN, 0, 1, cy, y, ctx);
 
-#define TEST_OPERATIONS(TYPE)\
+#define TEST_OPERATIONS(TYPE, ITF)\
   test_reduction(epsilon, cx_ ## TYPE, cy_ ## TYPE,\
-                                    x_ ## TYPE, y_ ## TYPE);\
+                                    x_ ## TYPE, y_ ## TYPE, ITF);\
 
   std::cout << "> standard..." << std::endl;
-  TEST_OPERATIONS(full);
+  TEST_OPERATIONS(full, clBLAS);
+  TEST_OPERATIONS(full, CPP);
   std::cout << "> slice..." << std::endl;
-  TEST_OPERATIONS(slice);
+  TEST_OPERATIONS(slice, clBLAS);
+  TEST_OPERATIONS(slice, CPP);
 }
 
 

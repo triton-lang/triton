@@ -10,7 +10,7 @@ typedef isaac::int_t int_t;
 
 template<typename T>
 void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vector_base<T>& cy, simple_vector_base<T>& cz,
-                                                 sc::array& x, sc::array& y, sc::array& z)
+                                                 sc::array& x, sc::array& y, sc::array& z, interface_t interf)
 {
   using namespace std;
 
@@ -18,7 +18,6 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   sc::numeric_type dtype = x.dtype();
   sc::driver::Context const & context = x.context();
   sc::driver::CommandQueue queue = sc::driver::backend::queues::get(context,0);
-  cl_command_queue clqueue = queue.handle().cl();
   int_t N = cz.size();
 
   T aa = static_cast<T>(-4.3);
@@ -30,7 +29,7 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 #define CONVERT
 #define RUN_TEST_VECTOR_AXPY(NAME, CPU_LOOP, GPU_EXPR) \
   {\
-  std::cout << PREFIX << " " << NAME "..." << std::flush;\
+  std::cout << NAME "..." << std::flush;\
   for(int_t i = 0 ; i < N ; ++i)\
     CPU_LOOP;\
   GPU_EXPR;\
@@ -46,22 +45,23 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
     std::cout << std::endl;\
   }
 
-  if(queue.device().backend()==sc::driver::OPENCL){
-#define PREFIX "[C]"
-  RUN_TEST_VECTOR_AXPY("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, CHANDLE(x), x.start()[0], x.stride()[0],
-                                                                                             CHANDLE(z), z.start()[0], z.stride()[0],
-                                                                                             1, &clqueue, 0, NULL, NULL));
 
-  RUN_TEST_VECTOR_AXPY("COPY", cz[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, CHANDLE(x), x.start()[0], x.stride()[0],
-                                                                                 CHANDLE(z), z.start()[0], z.stride()[0],
-                                                                                 1, &clqueue, 0, NULL, NULL));
+  if(queue.device().backend()==sc::driver::OPENCL && interf==clBLAS)
+  {
+      cl_command_queue clqueue = queue.handle().cl();
 
-  RUN_TEST_VECTOR_AXPY("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, CHANDLE(z), z.start()[0], z.stride()[0],
+      RUN_TEST_VECTOR_AXPY("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                                 CHANDLE(z), z.start()[0], z.stride()[0],
+                                                                                                 1, &clqueue, 0, NULL, NULL));
+
+      RUN_TEST_VECTOR_AXPY("COPY", cz[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                     CHANDLE(z), z.start()[0], z.stride()[0],
                                                                                      1, &clqueue, 0, NULL, NULL));
-#undef PREFIX
+
+      RUN_TEST_VECTOR_AXPY("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, CHANDLE(z), z.start()[0], z.stride()[0],
+                                                                                         1, &clqueue, 0, NULL, NULL));
   }
 
-#define PREFIX "[C++]"
   RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, context))
   RUN_TEST_VECTOR_AXPY("z = x", cz[i] = cx[i], z = x)
   RUN_TEST_VECTOR_AXPY("z = -x", cz[i] = -cx[i], z = -x)
@@ -128,14 +128,16 @@ void test_impl(T epsilon, sc::driver::Context const & ctx)
   INIT_VECTOR(N, SUBN, 3, 2, cz, z, ctx);
 
 
-#define TEST_OPERATIONS(TYPE)\
+#define TEST_OPERATIONS(TYPE, INTERF)\
   test_element_wise_vector(epsilon, cx_ ## TYPE, cy_ ## TYPE, cz_ ## TYPE,\
-                                    x_ ## TYPE, y_ ## TYPE, z_ ## TYPE);\
+                                    x_ ## TYPE, y_ ## TYPE, z_ ## TYPE, INTERF);\
 
   std::cout << "> standard..." << std::endl;
-  TEST_OPERATIONS(full);
+  TEST_OPERATIONS(full, clBLAS);
+  TEST_OPERATIONS(full, CPP);
   std::cout << "> slice..." << std::endl;
-  TEST_OPERATIONS(slice);
+  TEST_OPERATIONS(slice, clBLAS);
+  TEST_OPERATIONS(slice, CPP);
 }
 
 int main()
