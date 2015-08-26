@@ -1,6 +1,7 @@
 #include "isaac/driver/kernel.h"
 #include "isaac/driver/buffer.h"
 #include <iostream>
+#include <cstring>
 
 namespace isaac
 {
@@ -8,19 +9,19 @@ namespace isaac
 namespace driver
 {
 
-Kernel::Kernel(Program const & program, const char * name) : backend_(program.backend_), address_bits_(program.context().device().address_bits()), h_(backend_)
+Kernel::Kernel(Program const & program, const char * name) : backend_(program.backend_), address_bits_(program.context().device().address_bits()), h_(backend_, true)
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
-      cu_params_store_.reserve(32);
-      cu_params_.reserve(32);
-      cuda::check(cuModuleGetFunction(h_.cu.get(), *program.h_.cu, name));\
+      cu_params_store_.reserve(64);
+      cu_params_.reserve(64);
+      cuda::check(dispatch::cuModuleGetFunction(&h_.cu(), program.h_.cu(), name));\
       break;
-#endif
     case OPENCL:
-      *h_.cl = cl::Kernel(*program.h_.cl, name);
+      cl_int err;
+      h_.cl() = dispatch::clCreateKernel(program.h_.cl(), name, &err);
+      ocl::check(err);
       break;
     default:
       throw;
@@ -31,7 +32,6 @@ void Kernel::setArg(unsigned int index, std::size_t size, void* ptr)
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
       if(index + 1> cu_params_store_.size())
       {
@@ -42,9 +42,8 @@ void Kernel::setArg(unsigned int index, std::size_t size, void* ptr)
       memcpy(cu_params_store_[index].get(), ptr, size);
       cu_params_[index] = cu_params_store_[index].get();
       break;
-#endif
     case OPENCL:
-      h_.cl->setArg(index, size, ptr);
+      ocl::check(dispatch::clSetKernelArg(h_.cl(), index, size, ptr));
       break;
     default:
       throw;
@@ -55,13 +54,13 @@ void Kernel::setArg(unsigned int index, Buffer const & data)
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
     {
-      setArg(index, sizeof(CUdeviceptr), data.h_.cu.get()); break;
+      setArg(index, sizeof(CUdeviceptr), (void*)&data.h_.cu()); break;
     }
-#endif
-    case OPENCL: h_.cl->setArg(index, *data.h_.cl); break;
+    case OPENCL:
+      ocl::check(dispatch::clSetKernelArg(h_.cl(), index, sizeof(cl_mem), (void*)&data.h_.cl()));
+      break;
     default: throw;
   }
 }
@@ -70,27 +69,18 @@ void Kernel::setSizeArg(unsigned int index, size_t N)
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
     {
-      int NN = N;
+      int NN = static_cast<cl_int>(N);
       setArg(index, sizeof(int), &NN);
       break;
     }
-#endif
     case OPENCL:
-      if(address_bits_==32){
-        int32_t NN = N;
-        h_.cl->setArg(index, 4, &NN);
-      }
-      else if(address_bits_==64)
-      {
-        int64_t NN = N;
-        h_.cl->setArg(index, 8, &NN);
-      }
-      else
-        throw;
+    {
+      cl_int NN = static_cast<cl_int>(N);
+      setArg(index, 4, &NN);
       break;
+    }
 
     default: throw;
   }

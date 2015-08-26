@@ -2,7 +2,6 @@
 #include <vector>
 #include "isaac/array.h"
 #include "isaac/value_scalar.h"
-#include <CL/cl.hpp>
 #include "isaac/symbolic/expression.h"
 #include "isaac/symbolic/preset.h"
 
@@ -16,7 +15,7 @@ void fill(lhs_rhs_element &x, invalid_node)
   x.dtype = INVALID_NUMERIC_TYPE;
 }
 
-void fill(lhs_rhs_element & x, unsigned int node_index)
+void fill(lhs_rhs_element & x, std::size_t node_index)
 {
   x.type_family = COMPOSITE_OPERATOR_FAMILY;
   x.subtype = INVALID_SUBTYPE;
@@ -167,9 +166,9 @@ array_expression array_expression::operator!()
 { return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), context_, INT_TYPE, shape_); }
 
 //
-tools::shared_ptr<array_expression> expressions_tuple::create(array_expression const & s)
+std::shared_ptr<array_expression> expressions_tuple::create(array_expression const & s)
 {
-  return tools::shared_ptr<array_expression>(new array_expression(static_cast<array_expression const &>(s)));
+  return std::shared_ptr<array_expression>(new array_expression(static_cast<array_expression const &>(s)));
 }
 
 expressions_tuple::expressions_tuple(data_type const & data, order_type order) : data_(data), order_(order)

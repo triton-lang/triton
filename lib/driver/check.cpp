@@ -5,8 +5,6 @@ namespace isaac
 namespace driver
 {
 
-#ifdef ISAAC_WITH_CUDA
-
 namespace nvrtc
 {
 
@@ -100,8 +98,6 @@ void check(CUresult err)
   }
 }
 }
-
-#endif
 
 namespace ocl
 {

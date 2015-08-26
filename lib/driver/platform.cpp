@@ -1,17 +1,23 @@
 #include "isaac/driver/platform.h"
 #include "isaac/driver/device.h"
-#include "isaac/tools/to_string.hpp"
+#include "helpers/ocl/infos.hpp"
+
+#include <string>
+#include "to_string.hpp"
+
 namespace isaac
 {
 
 namespace driver
 {
 
-#ifdef ISAAC_WITH_CUDA
-Platform::Platform(backend_type backend): backend_(backend){}
-#endif
+Platform::Platform(backend_type backend): backend_(backend)
+{
+  if(backend==CUDA)
+      dispatch::cuInit(0);
+}
 
-Platform::Platform(cl::Platform const & platform) : backend_(OPENCL)
+Platform::Platform(cl_platform_id const & platform) : backend_(OPENCL)
 {
   cl_platform_ = platform;
 }
@@ -20,13 +26,12 @@ std::string Platform::version() const
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
       int version;
-      cuDriverGetVersion(&version);
+      dispatch::cuDriverGetVersion(&version);
       return tools::to_string(version);
-#endif
-    case OPENCL: return cl_platform_.getInfo<CL_PLATFORM_VERSION>();
+    case OPENCL:
+      return ocl::info<CL_PLATFORM_VERSION>(cl_platform_);
     default: throw;
   }
 }
@@ -34,50 +39,38 @@ std::string Platform::name() const
 {
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA: return "CUDA";
-#endif
-
-    case OPENCL: return cl_platform_.getInfo<CL_PLATFORM_NAME>();
+    case OPENCL: return ocl::info<CL_PLATFORM_NAME>(cl_platform_);
     default: throw;
   }
 }
 
-std::vector<Platform> Platform::get()
+cl_platform_id Platform::cl_id() const
 {
-  std::vector<Platform> result;
-#ifdef ISAAC_WITH_CUDA
-  result.push_back(Platform(CUDA));
-#endif
-  std::vector<cl::Platform> clresult;
-  cl::Platform::get(&clresult);
-  for(cl::Platform const & p : clresult)
-    result.push_back(Platform(p));
-  return result;
+    return cl_platform_;
 }
 
-std::vector<Device> Platform::devices() const
+void Platform::devices(std::vector<Device> & devices) const
 {
-  std::vector<Device> result;
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
     {
       int N;
-      cuda::check(cuDeviceGetCount(&N));
+      cuda::check(dispatch::cuDeviceGetCount(&N));
       for(int i = 0 ; i < N ; ++i)
-        result.push_back(Device(i));
-      return result;
+        devices.push_back(Device(i));
+      break;
     }
-#endif
     case OPENCL:
     {
-      std::vector<cl::Device> clDevices;
-      cl_platform_.getDevices(CL_DEVICE_TYPE_ALL, &clDevices);
-      for(cl::Device const & d: clDevices)
-        result.push_back(Device(d));
-      return result;
+      cl_uint ndevices;
+      ocl::check(dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, 0, NULL, &ndevices));
+      std::vector<cl_device_id> device_ids(ndevices);
+      ocl::check(dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, ndevices, device_ids.data(), NULL));
+      for(cl_device_id d : device_ids)
+        devices.push_back(Device(d));
+      break;
     }
     default:
       throw;

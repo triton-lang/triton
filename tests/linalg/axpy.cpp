@@ -3,26 +3,28 @@
 #include "common.hpp"
 #include "isaac/array.h"
 #include "isaac/wrap/clBLAS.h"
+#include "isaac/driver/common.h"
 
-namespace isc = isaac;
+namespace sc = isaac;
 typedef isaac::int_t int_t;
 
 template<typename T>
 void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vector_base<T>& cy, simple_vector_base<T>& cz,
-                                                 isc::array& x, isc::array& y, isc::array& z)
+                                                 sc::array& x, sc::array& y, sc::array& z)
 {
   using namespace std;
 
   int failure_count = 0;
-  isc::numeric_type dtype = x.dtype();
-  isc::driver::Context const & ctx = x.context();
-  isc::driver::CommandQueue queue = isc::driver::queues[ctx][0];
-  cl_command_queue clqueue = (*queue.handle().cl)();
+  sc::numeric_type dtype = x.dtype();
+  sc::driver::Context const & context = x.context();
+  sc::driver::CommandQueue queue = sc::driver::backend::queues::get(context,0);
+  cl_command_queue clqueue = queue.handle().cl();
   int_t N = cz.size();
 
-  T aa = -4.378, bb=3.5;
+  T aa = static_cast<T>(-4.3);
+  T bb = static_cast<T>(3.5);
   isaac::value_scalar a(aa), b(bb);
-  isaac::scalar da(a, ctx), db(b, ctx);
+  isaac::scalar da(a, context), db(b, context);
 
   simple_vector<T> buffer(N);
 #define CONVERT
@@ -44,22 +46,23 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
     std::cout << std::endl;\
   }
 
+  if(queue.device().backend()==sc::driver::OPENCL){
 #define PREFIX "[C]"
-  RUN_TEST_VECTOR_AXPY("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
-                                                                                             (*z.data().handle().cl)(), z.start()[0], z.stride()[0],
+  RUN_TEST_VECTOR_AXPY("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                             CHANDLE(z), z.start()[0], z.stride()[0],
                                                                                              1, &clqueue, 0, NULL, NULL));
 
-  RUN_TEST_VECTOR_AXPY("COPY", cz[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, (*x.data().handle().cl)(), x.start()[0], x.stride()[0],
-                                                                                 (*z.data().handle().cl)(), z.start()[0], z.stride()[0],
+  RUN_TEST_VECTOR_AXPY("COPY", cz[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, CHANDLE(x), x.start()[0], x.stride()[0],
+                                                                                 CHANDLE(z), z.start()[0], z.stride()[0],
                                                                                  1, &clqueue, 0, NULL, NULL));
 
-  RUN_TEST_VECTOR_AXPY("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, (*z.data().handle().cl)(), z.start()[0], z.stride()[0],
+  RUN_TEST_VECTOR_AXPY("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, CHANDLE(z), z.start()[0], z.stride()[0],
                                                                                      1, &clqueue, 0, NULL, NULL));
-
-
 #undef PREFIX
+  }
+
 #define PREFIX "[C++]"
-  RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, ctx))
+  RUN_TEST_VECTOR_AXPY("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, context))
   RUN_TEST_VECTOR_AXPY("z = x", cz[i] = cx[i], z = x)
   RUN_TEST_VECTOR_AXPY("z = -x", cz[i] = -cx[i], z = -x)
 
@@ -104,8 +107,6 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
   RUN_TEST_VECTOR_AXPY("z = x<=y", cz[i] = cx[i]<=cy[i], z= cast(x<=y, dtype))
   RUN_TEST_VECTOR_AXPY("z = x<y", cz[i] = cx[i]<cy[i], z= cast(x<y, dtype))
   RUN_TEST_VECTOR_AXPY("z = x!=y", cz[i] = cx[i]!=cy[i], z= cast(x!=y, dtype))
-
-
 #undef RUN_TEST_VECTOR_AXPY
 
 
@@ -114,12 +115,12 @@ void test_element_wise_vector(T epsilon, simple_vector_base<T> & cx, simple_vect
 }
 
 template<typename T>
-void test_impl(T epsilon, isc::driver::Context const & ctx)
+void test_impl(T epsilon, sc::driver::Context const & ctx)
 {
   using isaac::_;
 
-  int_t N = 24378;
-  int_t SUBN = 531;
+    int_t N = 10007;
+    int_t SUBN = 7;
 
 
   INIT_VECTOR(N, SUBN, 5, 3, cx, x, ctx);
@@ -140,16 +141,22 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  auto data = isc::driver::queues.contexts();
-  for(const auto & elem : data)
+  std::list<isaac::driver::Context const *> data;
+  sc::driver::backend::contexts::get(data);
+  for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = elem.second[0].device();
+    sc::driver::Device device = sc::driver::backend::queues::get(*context,0).device();
+    if(device.type() != sc::driver::Device::Type::GPU)
+        continue;
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, elem.first);
-    std::cout << ">> double" << std::endl;
-    test_impl<double>(1e-9, elem.first);
+    test_impl<float>(eps_float, *context);
+    if(device.fp64_support())
+    {
+        std::cout << ">> double" << std::endl;
+        test_impl<double>(eps_double, *context);
+    }
     std::cout << "---" << std::endl;
   }
   clblasTeardown();

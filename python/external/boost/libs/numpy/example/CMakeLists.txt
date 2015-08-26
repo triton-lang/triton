@@ -3,7 +3,7 @@ macro( addPythonExe _name _srccpp )
   ADD_EXECUTABLE(${_name} ${_srccpp})
   
   # make the pyd library link against boost_numpy python and boost
-  TARGET_LINK_LIBRARIES(${_name} boost_numpy ${PYTHON_LIBRARIES} ${Boost_LIBRARIES})
+  TARGET_LINK_LIBRARIES(${_name} boost_numpy)
   
   # put the example target into a VS solution folder named example (should
   # be a no-op for Linux)
@@ -14,7 +14,7 @@ macro( addPythonMod _name _srccpp )
   PYTHON_ADD_MODULE(${_name} ${_srccpp})
   
   # make the pyd library link against boost_numpy python and boost
-  TARGET_LINK_LIBRARIES(${_name} boost_numpy ${PYTHON_LIBRARIES} ${Boost_LIBRARIES})
+  TARGET_LINK_LIBRARIES(${_name} boost_numpy)
   
   # put the example target into a VS solution folder named example (should
   # be a no-op for Linux)

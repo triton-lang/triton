@@ -1,5 +1,3 @@
-#include "CL/cl.hpp"
-
 #include "isaac/wrap/clBLAS.h"
 #include "isaac/array.h"
 #include "isaac/symbolic/execute.h"
@@ -16,7 +14,8 @@ extern "C"
 
     void clblasTeardown()
     {
-
+        isaac::profiles::release();
+        isaac::driver::backend::release();
     }
 
     void execute(is::array_expression const & operation, is::driver::Context const & context,
@@ -26,20 +25,18 @@ extern "C"
     {
         std::vector<is::driver::Event> waitlist;
         for(cl_uint i = 0 ; i < numEventsInWaitList ; ++i)
-            waitlist.push_back(cl::Event(eventWaitList[i]));
+            waitlist.push_back(eventWaitList[i]);
         for(cl_uint i = 0 ; i < numCommandQueues ; ++i)
         {
             std::list<is::driver::Event> levents;
-			cl::CommandQueue queuepp(commandQueues[i]);
-            is::driver::CommandQueue queue(queuepp);
-            clRetainCommandQueue(commandQueues[i]);
-            is::execution_options_type options(queue, &levents, &waitlist);
-            is::execute(is::control(operation, options), is::models(options.queue(context)));
+            is::execution_options_type options(is::driver::CommandQueue(commandQueues[i],false), &levents, &waitlist);
+            is::execute(is::control(operation, options), is::profiles::get(options.queue(context)));
             if(events)
             {
-                events[i] = static_cast<cl::Event>(levents.front())();
-                clRetainEvent(events[i]);
+                events[i] = levents.front().handle().cl();
+                is::driver::dispatch::clRetainEvent(events[i]);
             }
+            is::driver::dispatch::clFlush(commandQueues[i]);
         }
 
     }
@@ -57,10 +54,8 @@ extern "C"
                             cl_uint numEventsInWaitList, const cl_event *eventWaitList, \
                             cl_event *events) \
     { \
-        is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx); \
-        clRetainMemObject(mx); \
-        is::array y(N, TYPE_ISAAC, cl::Buffer(my), offy, incy); \
-        clRetainMemObject(my); \
+        is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx,false), (is::int_t)offx, incx); \
+        is::array y((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(my,false), (is::int_t)offy, incy); \
         execute(is::assign(y, alpha*x + y), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
     }
@@ -75,8 +70,7 @@ extern "C"
                              cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
-        clRetainMemObject(mx);\
+        is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx,false), (is::int_t)offx, incx);\
         execute(is::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
@@ -92,10 +86,8 @@ extern "C"
                              cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        const is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
-        clRetainMemObject(mx);\
-        is::array y(N, TYPE_ISAAC, cl::Buffer(my), offy, incy);\
-        clRetainMemObject(my);\
+        const is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx);\
+        is::array y((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(my, false), (is::int_t)offy, incy);\
         execute(is::assign(y, x), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
@@ -112,12 +104,9 @@ extern "C"
                cl_command_queue *commandQueues, cl_uint numEventsInWaitList, \
                const cl_event *eventWaitList, cl_event *events) \
     { \
-        is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx); \
-        clRetainMemObject(mx); \
-        is::array y(N, TYPE_ISAAC, cl::Buffer(my), offy, incy); \
-        clRetainMemObject(my); \
-        is::scalar s(TYPE_ISAAC, cl::Buffer(dotProduct), offDP); \
-        clRetainMemObject(dotProduct); \
+        is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx); \
+        is::array y((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(my, false), (is::int_t)offy, incy); \
+        is::scalar s(TYPE_ISAAC, is::driver::Buffer(dotProduct, false), (is::int_t)offDP); \
         execute(is::assign(s, dot(x,y)), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
     }
@@ -132,10 +121,8 @@ extern "C"
                              cl_mem /*scratchBuff*/, cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        is::array x(N, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
-        clRetainMemObject(mx);\
-        is::scalar s(TYPE_ISAAC, cl::Buffer(asum), offAsum);\
-        clRetainMemObject(asum);\
+        is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx);\
+        is::scalar s(TYPE_ISAAC, is::driver::Buffer(asum, false), (is::int_t)offAsum);\
         execute(is::assign(s, sum(abs(x))), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
@@ -159,15 +146,12 @@ extern "C"
             std::swap(M, N);\
             transA = (transA==clblasTrans)?clblasNoTrans:clblasTrans;\
         }\
-        is::array A(M, N, TYPE_ISAAC, cl::Buffer(mA), offA, lda);\
-        clRetainMemObject(mA);\
+        is::array A((is::int_t)M, (is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mA, false), (is::int_t)offA, (is::int_t)lda);\
         \
-        is::int_t sx = N, sy = M;\
+        is::int_t sx = (is::int_t)N, sy = (is::int_t)M;\
         if(transA) std::swap(sx, sy);\
-        is::array x(sx, TYPE_ISAAC, cl::Buffer(mx), offx, incx);\
-        clRetainMemObject(mx);\
-        is::array y(sy, TYPE_ISAAC, cl::Buffer(my), offy, incy);\
-        clRetainMemObject(my);\
+        is::array x(sx, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx);\
+        is::array y(sy, TYPE_ISAAC, is::driver::Buffer(my, false), (is::int_t)offy, incy);\
         \
         is::driver::Context const & context = A.context();\
         if(transA==clblasTrans)\
@@ -202,17 +186,14 @@ extern "C"
             std::swap(M, N);\
             std::swap(transA, transB);\
         }\
-        is::int_t As1 = M, As2 = K;\
-        is::int_t Bs1 = K, Bs2 = N;\
+        is::int_t As1 = (is::int_t)M, As2 = (is::int_t)K;\
+        is::int_t Bs1 = (is::int_t)K, Bs2 = (is::int_t)N;\
         if(transA==clblasTrans) std::swap(As1, As2);\
         if(transB==clblasTrans) std::swap(Bs1, Bs2);\
         /*Struct*/\
-        is::array A(As1, As2, TYPE_ISAAC, cl::Buffer(mA), offA, lda);\
-        clRetainMemObject(mA);\
-        is::array B(Bs1, Bs2, TYPE_ISAAC, cl::Buffer(mB), offB, ldb);\
-        clRetainMemObject(mB);\
-        is::array C(M, N, TYPE_ISAAC, cl::Buffer(mC), offC, ldc);\
-        clRetainMemObject(mC);\
+        is::array A(As1, As2, TYPE_ISAAC, is::driver::Buffer(mA, false), (is::int_t)offA, (is::int_t)lda);\
+        is::array B(Bs1, Bs2, TYPE_ISAAC, is::driver::Buffer(mB, false), (is::int_t)offB, (is::int_t)ldb);\
+        is::array C((is::int_t)M, (is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mC, false), (is::int_t)offC, (is::int_t)ldc);\
         is::driver::Context const & context = C.context();\
         /*Operation*/\
         if((transA==clblasTrans) && (transB==clblasTrans))\

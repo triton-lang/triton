@@ -10,25 +10,23 @@ add_custom_target( MAKE_HEADERS_VISIBLE SOURCES ${MAKE_HEADERS_VISIBLE_SRC} )
 
 #Modules
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-
-#CUDA and OpenCL
-find_package(CUDA QUIET)
-find_package(OpenCL QUIET REQUIRED)
-if(CUDA_FOUND)
-   set(BACKEND_DEFINES "-DISAAC_WITH_CUDA")
-   include_directories(${CUDA_INCLUDE_DIRS})
-endif()
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/lib/external/)
 
 #Compiler flags
 add_definitions(${BACKEND_DEFINES})
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-if(CMAKE_COMPILER_IS_GNUCXX)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -pedantic")
+if(WIN32)
+	add_definitions("-DNOMINMAX")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -Wall -Wextra -pedantic")
 endif()
 
 #Binary to convert .cu files to const char *
-add_executable(bin2cpp ${CMAKE_MODULE_PATH}/helpers/bin2cpp.cpp)
+if(NOT ANDROID)
+    add_executable(bin2cpp ${CMAKE_MODULE_PATH}/helpers/bin2cpp.cpp)
+    include("${CMAKE_MODULE_PATH}/helpers/CodeToH.cmake")
+endif()
+
+#Source files
 file(GLOB_RECURSE LIBISAAC_SRC lib/*.cpp)
 
 #Python wrapper

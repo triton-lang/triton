@@ -3,7 +3,7 @@
 
 #include <map>
 #include <memory>
-
+#include "isaac/defines.h"
 #include "isaac/driver/common.h"
 #include "isaac/driver/device.h"
 #include "isaac/driver/handle.h"
@@ -14,25 +14,29 @@ namespace isaac
 namespace driver
 {
 
-class Context
+class ISAACAPI Context
 {
   friend class Program;
   friend class CommandQueue;
   friend class Buffer;
 
 public:
-  explicit Context(cl::Context const & context);
+  explicit Context(cl_context const & context, bool take_ownership = true);
   explicit Context(Device const & device);
+
   backend_type backend() const;
   Device const & device() const;
   bool operator==(Context const &) const;
   bool operator<(Context const &) const;
+
+  HANDLE_TYPE(cl_context, CUcontext) const & handle() const { return h_; }
 private:
+DISABLE_MSVC_WARNING_C4251
   backend_type backend_;
   Device device_;
-
   std::string cache_path_;
-  HANDLE_TYPE(cl::Context, CUcontext) h_;
+  HANDLE_TYPE(cl_context, CUcontext) h_;
+RESTORE_MSVC_WARNING_C4251
 };
 
 }

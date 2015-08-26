@@ -60,8 +60,7 @@ def main():
 
     def find_opencl():
         cvars = sysconfig.get_config_vars()
-        is_on_android = '-mandroid' in cvars['PY_CFLAGS']
-        lib = find_library('OpenCL', '${ANDROID_CL_GLOB_HINTS}' if is_on_android else '${X86_CL_GLOB_HINTS}')
+        lib = find_library('OpenCL', '${ANDROID_CL_GLOB_HINTS}' if for_android else '${X86_CL_GLOB_HINTS}')
         return {'include': '', 'lib': dirname(lib)} if lib else None
 
     def find_in_path(name, path):
@@ -94,13 +93,15 @@ def main():
     cvars["CFLAGS"] = cvars["BASECFLAGS"] + ' ' + cvars['OPT']
     cvars["LDFLAGS"] = '-Wl,--no-as-needed ' + cvars["LDFLAGS"]
 
+    #Check Android
+    for_android = '-mandroid' in cvars['PY_CFLAGS']
+
     #OpenCL
     opencl_config = find_opencl()
 
     #CUDA
     cuda_config = find_cuda()
 
-    #Libraries
     libraries = ['OpenCL']
     if cuda_config: libraries += ['cuda', 'nvrtc']
 
@@ -112,21 +113,39 @@ def main():
     library_dirs = [config['lib'] for config in [opencl_config, cuda_config] if config is not None]
 
     #Include directories
-    include ='${INCLUDE_DIRECTORIES_STR}'.split() + ['external/boost/include', os.path.join(find_module("numpy")[1], "core", "include")]
+    numpy_include = os.path.join(find_module("numpy")[1], "core", "include")
+    include ='${INCLUDE_DIRECTORIES_STR}'.split() + ['external/boost/', 'external/boost/boost/', numpy_include]
+
+    #Android
+    if for_android:
+      ANDROID_ROOT = os.environ['ANDROIDNDK'] + '/sources/cxx-stl/gnu-libstdc++/' + os.environ['TOOLCHAIN_VERSION']
+      library_dirs += [ANDROID_ROOT + '/libs/armeabi']
+      include += [ANDROID_ROOT + '/include/', ANDROID_ROOT + '/libs/armeabi/include/']
+      libraries += ['gnustl_shared']
 
     #Source files
-    src =  '${LIBISAAC_SRC_STR}'.split() + [os.path.join('src', 'wrap', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'model.cpp', 'exceptions.cpp']]
+    src =  '${LIBISAAC_SRC_STR}'.split() + [os.path.join('src', 'bind', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'kernels.cpp', 'exceptions.cpp']]
     boostsrc = 'external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:
         src = src + [x for x in recursive_glob('external/boost/libs/' + s + '/src/','.cpp') if 'win32' not in x and 'pthread' not in x]
-    # make sure next line succeeds even on Windows
-    src = [f.replace("\\", "/") for f in src]
-    if sys.platform == "win32":
-        src += glob(boostsrc + "/thread/src/win32/*.cpp")
-        src += glob(boostsrc + "/thread/src/tss_null.cpp")
-    else:
-        src += glob(boostsrc + "/thread/src/pthread/*.cpp")
-    src= [f for f in src  if not f.endswith("once_atomic.cpp")]
+
+
+    extensions = []
+    
+    #isaac
+    extensions += [Extension(
+                    '_isaac',src,
+                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
+		    extra_link_args=['-Wl,-soname=_isaac.so'],
+                    undef_macros=[],
+                    include_dirs=include,
+                    library_dirs=library_dirs,
+                    libraries=libraries)]
+    
+    #External
+    extensions += [Extension('external.sklearn._tree',
+                             ['external/sklearn/_tree.c'],
+                             include_dirs = [numpy_include])]
 
     #Setup
     setup(
@@ -136,17 +155,9 @@ def main():
                 author='Philippe Tillet',
                 author_email='ptillet@g.harvard.edu',
                 license='MPL 2.0',
-                packages=["isaac"],
+                packages=['isaac', 'isaac.external', 'isaac.external.sklearn'],
                 ext_package="isaac",
-                ext_modules=[Extension(
-                    '_isaac',src,
-                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare'],
-		    extra_link_args=['-Wl,-soname=_isaac.so'],
-                    undef_macros=[],
-                    include_dirs=include,
-                    library_dirs=library_dirs,
-                    libraries=libraries
-                )],
+                ext_modules=extensions,
                 cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},
                 classifiers=[
                     'Environment :: Console',

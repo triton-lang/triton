@@ -2,9 +2,13 @@
 #define TEST_COMMON_HPP_
 
 #include <vector>
+#include <algorithm>
 #include "isaac/array.h"
 
 typedef isaac::int_t int_t;
+
+static const float eps_float = static_cast<float>(1e-4);
+static const double eps_double = static_cast<double>(1e-8);
 
 template<class T> struct BLAS;
 template<> struct BLAS<float> { template<class FT, class DT> static FT F(FT SAXPY, DT ) { return SAXPY; } };
@@ -16,7 +20,7 @@ enum interface_t
     CPP
 };
 
-#define CHANDLE(X) (*X.data().handle().cl)()
+#define CHANDLE(X) X.data().handle().cl()
 #define OFF(X) X.start()[0] + X.start()[1]*X.ld()
 #define LD(X) X.ld()
 
@@ -47,7 +51,7 @@ template<class T>
 class simple_vector : public simple_vector_base<T>
 {
 public:
-    simple_vector(size_t N) :  simple_vector_base<T>(0, N, 1, data_), data_(N){}
+    simple_vector(int_t N) :  simple_vector_base<T>(0, N, 1, data_), data_(N){}
 private:
     std::vector<T> data_;
 };
@@ -144,7 +148,7 @@ void init_rand(simple_matrix_base<T> & A)
 {
   for (int_t i = 0; i < A.size1(); ++i)
     for(int_t j = 0 ; j < A.size2() ; ++j)
-      A(i,j) = i + j;
+      A(i,j) = (T)rand()/RAND_MAX;
 }
 
 template<typename T>
