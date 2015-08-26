@@ -1,26 +1,25 @@
 #include <cmath>
 #include "common.hpp"
 #include "isaac/array.h"
-#include "isaac/model/model.h"
 #include "isaac/wrap/clBLAS.h"
 
-namespace isc = isaac;
+namespace sc = isaac;
 
 template<typename T>
 void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & cA, simple_matrix_base<T> const & cB,
-                          isc::array & C, isc::array const & A, isc::array const & AT,  isc::array const & B, isc::array const & BT,
+                          sc::array & C, sc::array const & A, sc::array const & AT,  sc::array const & B, sc::array const & BT,
                           interface_t interf, const char * prefix)
 {
   int failure_count = 0;
 
-  isc::int_t M = C.shape()[0];
-  isc::int_t N = C.shape()[1];
-  isc::int_t K = A.shape()[1];
+  sc::int_t M = C.shape()[0];
+  sc::int_t N = C.shape()[1];
+  sc::int_t K = A.shape()[1];
 
   T alpha = 1;
   T beta = 0;
 
-  isc::driver::CommandQueue queue = isc::driver::queues[C.context()][0];
+  sc::driver::CommandQueue queue = sc::driver::backend::queues::get(C.context(),0);
 
   for(int i = 0 ; i < M ; ++i)
   {
@@ -44,7 +43,7 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   std::cout << "[" << prefix << "] \t" << NAME << "..." << std::flush;\
   GPU_OP;\
   queue.synchronize();\
-  isc::copy(C, buffer);\
+  sc::copy(C, buffer);\
   if(diff(buffer, cCbuffer, epsilon))\
   {\
     failure_count++;\
@@ -53,11 +52,11 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
   else\
     std::cout << std::endl;
 
-  if(interf==clBLAS)
+  if(C.context().backend()==sc::driver::OPENCL && interf==clBLAS)
   {
-      cl_command_queue clqueue = (*queue.handle().cl)();
+      cl_command_queue clqueue = queue.handle().cl();
 
-      //Row-major
+////      //Row-major
       RUN_TEST("GEMM(ROW, N, N)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasRowMajor, clblasNoTrans, clblasNoTrans, N, M, K, alpha, CHANDLE(B), OFF(B), LD(B),
                                                                  CHANDLE(A), OFF(A), LD(A), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
       RUN_TEST("GEMM(ROW, N, T)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasRowMajor, clblasTrans, clblasNoTrans, N, M, K, alpha, CHANDLE(BT), OFF(BT), LD(BT),
@@ -95,15 +94,15 @@ void test_impl(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> cons
 }
 
 template<typename T>
-void test_impl(T epsilon, isc::driver::Context const & ctx)
+void test_impl(T epsilon, sc::driver::Context const & ctx)
 {
     int_t M = 173;
-    int_t N = 256;
+    int_t N = 241;
     int_t K = 293;
 
     int_t SUBM = 7;
-    int_t SUBN = 13;
-    int_t SUBK = 41;
+    int_t SUBN = 11;
+    int_t SUBK = 29;
 
     {
         INIT_MATRIX(M, SUBM, 5, 1, N, SUBN, 7, 1, cC, C, ctx);
@@ -126,16 +125,22 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 int main()
 {
   clblasSetup();
-  auto data = isc::driver::queues.contexts();
-  for(const auto & elem : data)
+  std::list<isaac::driver::Context const *> data;
+  sc::driver::backend::contexts::get(data);
+  for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = elem.second[0].device();
+    sc::driver::Device device = sc::driver::backend::queues::get(*context,0).device();
+    if(device.type() != sc::driver::Device::Type::GPU)
+        continue;
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, elem.first);
-    std::cout << ">> double" << std::endl;
-    test_impl<double>(1e-9, elem.first);
+    test_impl<float>(eps_float, *context);
+    if(device.fp64_support())
+    {
+        std::cout << ">> double" << std::endl;
+        test_impl<double>(eps_double, *context);
+    }
     std::cout << "---" << std::endl;
   }
   clblasTeardown();

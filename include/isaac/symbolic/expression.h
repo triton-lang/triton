@@ -14,7 +14,7 @@
 
 #include "isaac/types.h"
 #include "isaac/value_scalar.h"
-#include "isaac/tools/shared_ptr.hpp"
+#include <memory>
 #include <iostream>
 
 namespace isaac
@@ -162,7 +162,7 @@ struct lhs_rhs_element
   numeric_type  dtype;
   union
   {
-    unsigned int        node_index;
+    std::size_t   node_index;
     values_holder vscalar;
     repeat_infos  tuple;
     isaac::array* array;
@@ -172,7 +172,7 @@ struct lhs_rhs_element
 struct invalid_node{};
 
 void fill(lhs_rhs_element &x, invalid_node);
-void fill(lhs_rhs_element & x, unsigned int node_index);
+void fill(lhs_rhs_element & x, std::size_t node_index);
 void fill(lhs_rhs_element & x, array const & a);
 void fill(lhs_rhs_element & x, value_scalar const & v);
 void fill(lhs_rhs_element & x, repeat_infos const & r);
@@ -212,7 +212,7 @@ public:
 private:
   container_type tree_;
   std::size_t root_;
-  driver::Context context_;
+  driver::Context const & context_;
   numeric_type dtype_;
   size4 shape_;
 };
@@ -238,7 +238,7 @@ struct execution_options_type
   {
     if(queue_)
         return *queue_;
-    return driver::queues[context][queue_id_];
+    return driver::backend::queues::get(context, queue_id_);
   }
 
   std::list<driver::Event>* events;
@@ -290,9 +290,9 @@ controller<TYPE> control(TYPE const & x, execution_options_type const& execution
 class expressions_tuple
 {
 private:
-  tools::shared_ptr<array_expression> create(array_expression const & s);
+  std::shared_ptr<array_expression> create(array_expression const & s);
 public:
-  typedef std::list<tools::shared_ptr<array_expression> > data_type;
+  typedef std::list<std::shared_ptr<array_expression> > data_type;
   enum order_type { SEQUENTIAL, INDEPENDENT };
 
   expressions_tuple(array_expression const & s0);

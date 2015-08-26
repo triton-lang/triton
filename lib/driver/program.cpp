@@ -3,11 +3,11 @@
 
 #include "isaac/driver/program.h"
 #include "isaac/driver/context.h"
-#include "isaac/tools/sha1.hpp"
 
-#ifdef ISAAC_WITH_CUDA
 #include "helpers/cuda/vector.hpp"
-#endif
+#include "helpers/ocl/infos.hpp"
+
+#include "sha1.hpp"
 
 namespace isaac
 {
@@ -15,13 +15,12 @@ namespace isaac
 namespace driver
 {
 
-Program::Program(Context const & context, std::string const & source) : backend_(context.backend_), context_(context), source_(source), h_(backend_)
+Program::Program(Context const & context, std::string const & source) : backend_(context.backend_), context_(context), source_(source), h_(backend_, true)
 {
 //  std::cout << source << std::endl;
   std::string cache_path = context.cache_path_;
   switch(backend_)
   {
-#ifdef ISAAC_WITH_CUDA
     case CUDA:
     {
 
@@ -32,7 +31,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
       //Load cached program
       if(cache_path.size() && std::ifstream(fname, std::ios::binary))
       {
-        cuda::check(cuModuleLoad(h_.cu.get(), fname.c_str()));
+        cuda::check(dispatch::cuModuleLoad(&h_.cu(), fname.c_str()));
         break;
       }
 
@@ -41,25 +40,25 @@ Program::Program(Context const & context, std::string const & source) : backend_
       const char * includes[] = {"helper_math.h"};
       const char * src[] = {helpers::cuda::vector};
 
-      nvrtc::check(nvrtcCreateProgram(&prog, source.c_str(), NULL, 1, src, includes));
+      nvrtc::check(dispatch::nvrtcCreateProgram(&prog, source.c_str(), NULL, 1, src, includes));
       try{
         const char * options[] = {"--gpu-architecture=compute_52", "--restrict"};
-        nvrtc::check(nvrtcCompileProgram(prog, 2, options));
+        nvrtc::check(dispatch::nvrtcCompileProgram(prog, 2, options));
       }catch(nvrtc::exception::compilation const &)
       {
         size_t logsize;
-        nvrtc::check(nvrtcGetProgramLogSize(prog, &logsize));
+        nvrtc::check(dispatch::nvrtcGetProgramLogSize(prog, &logsize));
         std::string log(logsize, 0);
-        nvrtc::check(nvrtcGetProgramLog(prog, (char*)log.data()));
+        nvrtc::check(dispatch::nvrtcGetProgramLog(prog, (char*)log.data()));
         std::cout << "Compilation failed:" << std::endl;
         std::cout << log << std::endl;
       }
 
       size_t ptx_size;
-      nvrtc::check(nvrtcGetPTXSize(prog, &ptx_size));
+      nvrtc::check(dispatch::nvrtcGetPTXSize(prog, &ptx_size));
       std::vector<char> ptx(ptx_size);
-      nvrtc::check(nvrtcGetPTX(prog, ptx.data()));
-      cuda::check(cuModuleLoadDataEx(h_.cu.get(), ptx.data(), 0, NULL, NULL));
+      nvrtc::check(dispatch::nvrtcGetPTX(prog, ptx.data()));
+      cuda::check(dispatch::cuModuleLoadDataEx(&h_.cu(), ptx.data(), 0, NULL, NULL));
 
       //Save cached program
       if (cache_path.size())
@@ -75,8 +74,8 @@ Program::Program(Context const & context, std::string const & source) : backend_
 //    oss.close();
 
 //    system(("/usr/local/cuda-7.0/bin/nvcc " + sha1 + ".cu -gencode arch=compute_50,code=sm_50 -cubin").c_str());
-//    system(("perl /home/philippe/Development/maxas/maxas.pl -e " + sha1 + ".cubin > " + sha1 + ".sass").c_str());
-//    system(("perl /home/philippe/Development/maxas/maxas.pl -i --noreuse" + sha1 + ".sass " + sha1 + ".cubin").c_str());
+//    system(("perl /maxas.pl -e " + sha1 + ".cubin > " + sha1 + ".sass").c_str());
+//    system(("perl /maxas.pl -i --noreuse" + sha1 + ".sass " + sha1 + ".cubin").c_str());
 
 //    std::ifstream ifs(sha1 + ".cubin");
 //    std::cout << sha1 << std::endl;
@@ -88,22 +87,22 @@ Program::Program(Context const & context, std::string const & source) : backend_
 
 //    str.assign((std::istreambuf_iterator<char>(ifs)),
 //                std::istreambuf_iterator<char>());
-//    cuda::check(cuModuleLoadDataEx(h_.cu.get(), str.c_str(), 0, NULL, NULL));
+//    cuda::check(dispatch::cuModuleLoadDataEx(&h_.cu(), str.c_str(), 0, NULL, NULL));
 
       break;
     }
-#endif
     case OPENCL:
     {
-      std::vector<cl::Device> devices = context_.h_.cl->getInfo<CL_CONTEXT_DEVICES>();
+      cl_int err;
+      std::vector<cl_device_id> devices = ocl::info<CL_CONTEXT_DEVICES>(context_.h_.cl());
 
       std::string prefix;
-      for(std::vector<cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
-        prefix += it->getInfo<CL_DEVICE_NAME>() + it->getInfo<CL_DEVICE_VENDOR>() + it->getInfo<CL_DEVICE_VERSION>();
+      for(cl_device_id dev: devices)
+        prefix += ocl::info<CL_DEVICE_NAME>(dev) + ocl::info<CL_DEVICE_VENDOR>(dev) + ocl::info<CL_DEVICE_VERSION>(dev);
       std::string sha1 = tools::sha1(prefix + source);
       std::string fname(cache_path + sha1);
-
       //Load cached program
+      std::string build_opt;
       if(cache_path.size())
       {
         std::ifstream cached(fname, std::ios::binary);
@@ -115,30 +114,37 @@ Program::Program(Context const & context, std::string const & source) : backend_
           buffer.resize(len);
           cached.read((char*)buffer.data(), std::streamsize(len));
           char* cbuffer = buffer.data();
-          *h_.cl = cl::Program(*context_.h_.cl, devices, cl::Program::Binaries(1, std::make_pair(cbuffer, len)));
-          h_.cl->build();
+          h_.cl() = dispatch::clCreateProgramWithBinary(context_.h_.cl(), static_cast<cl_uint>(devices.size()), devices.data(), &len, (const unsigned char **)&cbuffer, NULL, &err);
+          ocl::check(err);
+          ocl::check(dispatch::clBuildProgram(h_.cl(), static_cast<cl_uint>(devices.size()), devices.data(), build_opt.c_str(), NULL, NULL));
           return;
         }
       }
 
-      *h_.cl = cl::Program(*context_.h_.cl, source);
+      std::size_t srclen = source.size();
+      const char * csrc = source.c_str();
+      h_.cl() = dispatch::clCreateProgramWithSource(context_.h_.cl(), 1, &csrc, &srclen, &err);
       try{
-        ocl::check(h_.cl->build(devices));
-      }catch(ocl::exception::build_program_failure const & e){
-            for(std::vector< cl::Device >::const_iterator it = devices.begin(); it != devices.end(); ++it)
-              std::cout << "Device : " << it->getInfo<CL_DEVICE_NAME>()
-                      << "Build Status = " << h_.cl->getBuildInfo<CL_PROGRAM_BUILD_STATUS>(*it) << std::endl
-                      << "Build Log = " << h_.cl->getBuildInfo<CL_PROGRAM_BUILD_LOG>(*it) << std::endl;
+        ocl::check(dispatch::clBuildProgram(h_.cl(), static_cast<cl_uint>(devices.size()), devices.data(), build_opt.c_str(), NULL, NULL));
+      }catch(ocl::exception::build_program_failure const &){
+            for(std::vector<cl_device_id>::const_iterator it = devices.begin(); it != devices.end(); ++it)
+            {
+              std::cout << "Device : " << ocl::info<CL_DEVICE_NAME>(*it)
+                        << "Build Status = " << ocl::info<CL_PROGRAM_BUILD_STATUS>(h_.cl(), *it) << std::endl
+                        << "Build Log = " << ocl::info<CL_PROGRAM_BUILD_LOG>(h_.cl(),*it) << std::endl;
+            }
       }
 
       //Save cached program
       if (cache_path.size())
       {
         std::ofstream cached(fname.c_str(),std::ios::binary);
-        std::vector<std::size_t> sizes = h_.cl->getInfo<CL_PROGRAM_BINARY_SIZES>();
+        std::vector<std::size_t> sizes = ocl::info<CL_PROGRAM_BINARY_SIZES>(h_.cl());
         cached.write((char*)&sizes[0], sizeof(std::size_t));
-        std::vector<char*> binaries = h_.cl->getInfo<CL_PROGRAM_BINARIES>();
+        std::vector<unsigned char*> binaries = ocl::info<CL_PROGRAM_BINARIES>(h_.cl());
         cached.write((char*)binaries[0], std::streamsize(sizes[0]));
+        for(unsigned char * ptr: binaries)
+            delete[] ptr;
       }
       break;
     }
@@ -148,7 +154,10 @@ Program::Program(Context const & context, std::string const & source) : backend_
 }
 
 Context const & Program::context() const
-{ return context_; }
+{
+    return context_;
+}
+
 
 }
 

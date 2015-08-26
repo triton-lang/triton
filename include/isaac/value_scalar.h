@@ -1,8 +1,9 @@
 #ifndef ISAAC_VALUE_SCALAR_H
 #define ISAAC_VALUE_SCALAR_H
 
-#include <inttypes.h>
+#include "isaac/defines.h"
 #include "isaac/types.h"
+#include <stdint.h>
 
 namespace isaac
 {
@@ -10,7 +11,7 @@ namespace isaac
 class scalar;
 class array_expression;
 
-union values_holder
+union ISAACAPI values_holder
 {
   int8_t int8;
   uint8_t uint8;
@@ -24,7 +25,7 @@ union values_holder
   double float64;
 };
 
-class value_scalar
+class ISAACAPI value_scalar
 {
   template<class T> void init(T const &);
   template<class T> T cast() const;
@@ -71,46 +72,46 @@ private:
   numeric_type dtype_;
 };
 
-value_scalar int8(int8_t v);
-value_scalar uint8(uint8_t v);
-value_scalar int16(int16_t v);
-value_scalar uint16(uint16_t v);
-value_scalar int32(int32_t v);
-value_scalar uint32(uint32_t v);
-value_scalar int64(int64_t v);
-value_scalar uint64(uint64_t v);
-value_scalar float32(float v);
-value_scalar float64(double v);
+ISAACAPI value_scalar int8(int8_t v);
+ISAACAPI value_scalar uint8(uint8_t v);
+ISAACAPI value_scalar int16(int16_t v);
+ISAACAPI value_scalar uint16(uint16_t v);
+ISAACAPI value_scalar int32(int32_t v);
+ISAACAPI value_scalar uint32(uint32_t v);
+ISAACAPI value_scalar int64(int64_t v);
+ISAACAPI value_scalar uint64(uint64_t v);
+ISAACAPI value_scalar float32(float v);
+ISAACAPI value_scalar float64(double v);
 
 template<class T>
-T cast(isaac::value_scalar const &);
+ISAACAPI T cast(isaac::value_scalar const &);
 
 #define ISAAC_DECLARE_BINARY_OPERATOR(RET, OPNAME) \
-RET OPNAME (value_scalar const &, char  );\
-RET OPNAME (value_scalar const &, unsigned char );\
-RET OPNAME (value_scalar const &, short );\
-RET OPNAME (value_scalar const &, unsigned short);\
-RET OPNAME (value_scalar const &, int   );\
-RET OPNAME (value_scalar const &, unsigned int  );\
-RET OPNAME (value_scalar const &, long  );\
-RET OPNAME (value_scalar const &, unsigned long );\
-RET OPNAME (value_scalar const &, long long);\
-RET OPNAME (value_scalar const &, unsigned long long);\
-RET OPNAME (value_scalar const &, float );\
-RET OPNAME (value_scalar const &, double);\
-RET OPNAME (char   , value_scalar const &);\
-RET OPNAME (unsigned char  , value_scalar const &);\
-RET OPNAME (short  , value_scalar const &);\
-RET OPNAME (unsigned short , value_scalar const &);\
-RET OPNAME (int    , value_scalar const &);\
-RET OPNAME (unsigned int   , value_scalar const &);\
-RET OPNAME (long   , value_scalar const &);\
-RET OPNAME (unsigned long  , value_scalar const &);\
-RET OPNAME (long long, value_scalar const &);\
-RET OPNAME (unsigned long long, value_scalar const &);\
-RET OPNAME (float  , value_scalar const &);\
-RET OPNAME (double , value_scalar const &);\
-RET OPNAME (value_scalar const &, value_scalar const &);
+ISAACAPI RET OPNAME (value_scalar const &, char  );\
+ISAACAPI RET OPNAME (value_scalar const &, unsigned char );\
+ISAACAPI RET OPNAME (value_scalar const &, short );\
+ISAACAPI RET OPNAME (value_scalar const &, unsigned short);\
+ISAACAPI RET OPNAME (value_scalar const &, int   );\
+ISAACAPI RET OPNAME (value_scalar const &, unsigned int  );\
+ISAACAPI RET OPNAME (value_scalar const &, long  );\
+ISAACAPI RET OPNAME (value_scalar const &, unsigned long );\
+ISAACAPI RET OPNAME (value_scalar const &, long long);\
+ISAACAPI RET OPNAME (value_scalar const &, unsigned long long);\
+ISAACAPI RET OPNAME (value_scalar const &, float );\
+ISAACAPI RET OPNAME (value_scalar const &, double);\
+ISAACAPI RET OPNAME (char   , value_scalar const &);\
+ISAACAPI RET OPNAME (unsigned char  , value_scalar const &);\
+ISAACAPI RET OPNAME (short  , value_scalar const &);\
+ISAACAPI RET OPNAME (unsigned short , value_scalar const &);\
+ISAACAPI RET OPNAME (int    , value_scalar const &);\
+ISAACAPI RET OPNAME (unsigned int   , value_scalar const &);\
+ISAACAPI RET OPNAME (long   , value_scalar const &);\
+ISAACAPI RET OPNAME (unsigned long  , value_scalar const &);\
+ISAACAPI RET OPNAME (long long, value_scalar const &);\
+ISAACAPI RET OPNAME (unsigned long long, value_scalar const &);\
+ISAACAPI RET OPNAME (float  , value_scalar const &);\
+ISAACAPI RET OPNAME (double , value_scalar const &);\
+ISAACAPI RET OPNAME (value_scalar const &, value_scalar const &);
 
 ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, operator +)
 ISAAC_DECLARE_BINARY_OPERATOR(value_scalar, operator -)
@@ -156,7 +157,7 @@ ISAAC_DECLARE_UNARY_OPERATOR(trans)
 
 #undef ISAAC_DECLARE_UNARY_OPERATOR
 
-std::ostream & operator<<(std::ostream & os, value_scalar const & s);
+ISAACAPI std::ostream & operator<<(std::ostream & os, value_scalar const & s);
 
 }
 

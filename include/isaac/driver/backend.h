@@ -3,44 +3,84 @@
 
 #include <map>
 #include <list>
+#include <vector>
 
-#include "isaac/driver/command_queue.h"
-#include "isaac/driver/context.h"
+#include "isaac/common/expression_type.h"
+#include "isaac/common/numeric_type.h"
+
+#include "isaac/driver/dispatch.h"
+#include "isaac/defines.h"
+#include "isaac/types.h"
 
 namespace isaac
 {
 namespace driver
 {
 
-class queues_type
+class CommandQueue;
+class Context;
+class Platform;
+class ProgramCache;
+
+class ISAACAPI backend
 {
-public:
-  typedef std::list<std::pair<Context, std::vector<CommandQueue> > > container_type;
 private:
-  std::vector<CommandQueue> & append( Context const & context);
-  void cuinit();
-  void clinit();
-  void init();
-public:
-  queues_type();
-  container_type const & contexts();
-  Context default_context();
-  std::vector<CommandQueue> & default_queues();
-  std::vector<CommandQueue> & operator[](Context const &);
 
-private:
-  container_type data_;
 public:
-  unsigned int default_device;
-  cl_command_queue_properties queue_properties;
+  class ISAACAPI programs
+  {
+      friend class backend;
+  public:
+      static void release();
+      static ProgramCache & get(CommandQueue const & queue, expression_type expression, numeric_type dtype);
+  private:
+DISABLE_MSVC_WARNING_C4251
+      static std::map<std::tuple<CommandQueue, expression_type, numeric_type>, ProgramCache * > cache_;
+RESTORE_MSVC_WARNING_C4251
 
+  };
+
+  class ISAACAPI contexts
+  {
+      friend class backend;
+  private:
+      static void init(std::vector<Platform> const &);
+      static void release();
+  public:
+      static Context const & get_default();
+      static Context const & import(cl_context context);
+      static void get(std::list<Context const *> &);
+  private:
+DISABLE_MSVC_WARNING_C4251
+      static std::list<Context const *> cache_;
+RESTORE_MSVC_WARNING_C4251
+  };
+
+  class ISAACAPI queues
+  {
+      friend class backend;
+  private:
+      static void init(std::list<Context const *> const &);
+      static void release();
+  public:
+      static void get(Context const &, std::vector<CommandQueue *> &queues);
+      static CommandQueue & get(Context const &, unsigned int id);
+  private:
+DISABLE_MSVC_WARNING_C4251
+      static std::map< Context, std::vector<CommandQueue*> > cache_;
+RESTORE_MSVC_WARNING_C4251
+  };
+
+  static void init();
+  static void release();
+
+  static void platforms(std::vector<Platform> &);
+  static void synchronize(Context const &);
+
+public:
+  static unsigned int default_device;
+  static cl_command_queue_properties default_queue_properties;
 };
-
-void synchronize(std::vector<CommandQueue> const &);
-void synchronize(Context const &);
-
-extern queues_type queues;
-
 
 }
 }

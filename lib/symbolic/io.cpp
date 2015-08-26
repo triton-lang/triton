@@ -1,8 +1,9 @@
 #include <iostream>
 #include <sstream>
+#include <string>
 
 #include "isaac/symbolic/io.h"
-#include "isaac/tools/to_string.hpp"
+#include "to_string.hpp"
 
 namespace isaac
 {

@@ -1,6 +1,11 @@
 #include "isaac/driver/backend.h"
+#include "isaac/driver/context.h"
+#include "isaac/driver/command_queue.h"
+#include "isaac/driver/program_cache.h"
+
 #include <assert.h>
 #include <stdexcept>
+#include <vector>
 
 namespace isaac
 {
@@ -8,85 +13,181 @@ namespace isaac
 namespace driver
 {
 
-queues_type::queues_type(): default_device(0), queue_properties(0)
-{}
+/*-----------------------------------*/
+//----------  Programs --------------*/
+/*-----------------------------------*/
 
-std::vector<CommandQueue> & queues_type::append(Context const & context)
+void backend::programs::release()
 {
-  data_.push_back(std::make_pair(context, std::vector<CommandQueue>(1, CommandQueue(context, context.device(), queue_properties))));
-  return data_.back().second;
+    for(auto & x: cache_)
+        delete x.second;
+    cache_.clear();
 }
 
-void queues_type::cuinit()
+ProgramCache & backend::programs::get(CommandQueue const & queue, expression_type expression, numeric_type dtype)
 {
-#ifdef ISAAC_WITH_CUDA
-  cuda::check(cuInit(0));
-  int N;
-  cuda::check(cuDeviceGetCount(&N));
-  for(int i = 0 ; i < N ; ++i)
-    append(Context(Device(i));
-#endif
+    std::tuple<CommandQueue, expression_type, numeric_type> key(queue, expression, dtype);
+    if(cache_.find(key)==cache_.end())
+        return *cache_.insert(std::make_pair(key, new ProgramCache())).first->second;
+    return *cache_.at(key);
 }
 
-void queues_type::clinit()
+std::map<std::tuple<CommandQueue, expression_type, numeric_type>, ProgramCache * >  backend::programs::cache_;
+
+/*-----------------------------------*/
+//------------  Queues --------------*/
+/*-----------------------------------*/
+
+void backend::queues::init(std::list<const Context *> const & contexts)
 {
-  std::vector<cl::Platform> platforms;
-  cl::Platform::get(&platforms);
-  for(auto & p : platforms)
-  {
-    std::vector<cl::Device> devices;
-    p.getDevices(CL_DEVICE_TYPE_ALL, &devices);
-    for(auto & d : devices)
-      append(Context(Device(d)));
-  }
+    for(Context const * ctx : contexts)
+        if(cache_.find(*ctx)==cache_.end())
+        cache_.insert(std::make_pair(*ctx, std::vector<CommandQueue*>{new CommandQueue(*ctx, ctx->device(), default_queue_properties)}));
 }
 
-void queues_type::init()
+void backend::queues::release()
 {
-  if(data_.empty())
-  {
-    cuinit();
-    clinit();
-  }
+    for(auto & x: cache_)
+        for(auto & y: x.second)
+            delete y;
+    cache_.clear();
 }
 
-std::vector<CommandQueue> & queues_type::operator[](Context const & context)
+
+CommandQueue & backend::queues::get(Context const & context, unsigned int id)
 {
-  init();
-  for(auto & x : data_)
-    if(x.first==context) return x.second;
-  return append(context);
+  init(std::list<Context const *>(1,&context));
+  for(auto & x : cache_)
+    if(x.first==context)
+        return *x.second[id];
+  throw;
 }
 
-Context queues_type::default_context()
+void backend::queues::get(Context const & context, std::vector<CommandQueue*> & queues)
 {
-  init();
-  container_type::iterator it = data_.begin();
+    init(std::list<Context const *>(1,&context));
+    queues = cache_.at(context);
+}
+
+std::map<Context, std::vector<CommandQueue*> > backend::queues::cache_;
+
+/*-----------------------------------*/
+//------------  Contexts ------------*/
+/*-----------------------------------*/
+
+void backend::contexts::init(std::vector<Platform> const & platforms)
+{
+    for(Platform const & platform: platforms)
+    {
+        std::vector<Device> devices;
+        platform.devices(devices);
+        for(Device const & device: devices)
+            cache_.push_back(new Context(device));
+    }
+}
+
+void backend::contexts::release()
+{
+    for(auto & x: cache_)
+        delete x;
+    cache_.clear();
+}
+
+Context const & backend::contexts::import(cl_context context)
+{
+  for(driver::Context const * x: cache_)
+      if(x->handle().cl()==context)
+          return *x;
+  cache_.emplace_back(new Context(context, false));
+  return *cache_.back();
+}
+
+
+Context const & backend::contexts::get_default()
+{
+  backend::init();
+  std::list<Context const *>::const_iterator it = cache_.begin();
   std::advance(it, default_device);
-  return it->first;
+  return **it;
 }
 
-std::vector<CommandQueue> & queues_type::default_queues()
-{ return (*this)[default_context()]; }
-
-
-queues_type::container_type const & queues_type::contexts()
+void backend::contexts::get(std::list<Context const *> & contexts)
 {
-  init();
-  return data_;
+  backend::init();
+  contexts = cache_;
 }
 
+std::list<Context const *> backend::contexts::cache_;
 
-void synchronize(std::vector<CommandQueue > & queues)
+
+
+/*-----------------------------------*/
+//------------  General -------------*/
+/*-----------------------------------*/
+
+void backend::platforms(std::vector<Platform> & platforms)
 {
-  for(CommandQueue & q: queues)
-    q.synchronize();
+    bool has_cuda = false;
+
+    //if cuda is here
+    if(dispatch::cuinit())
+    {
+        if(dispatch::nvrtcinit()){
+            platforms.push_back(Platform(CUDA));
+            has_cuda = true;
+        }
+        else
+            throw std::runtime_error("ISAAC: Unable to find NVRTC. Make sure you are using CUDA >= 7.0");
+    }
+
+    //if OpenCL is here
+    if(dispatch::clinit())
+    {
+        cl_uint nplatforms;
+        ocl::check(dispatch::dispatch::clGetPlatformIDs(0, NULL, &nplatforms));
+        std::vector<cl_platform_id> clplatforms(nplatforms);
+        ocl::check(dispatch::dispatch::clGetPlatformIDs(nplatforms, clplatforms.data(), NULL));
+        for(cl_platform_id p: clplatforms){
+            Platform tmp(p);
+            if(tmp.name().find("CUDA")!=std::string::npos && has_cuda)
+                continue;
+            platforms.push_back(tmp);
+        }
+    }
+
+    if(platforms.empty())
+        throw std::runtime_error("ISAAC: No backend available. Make sure OpenCL and/or CUDA are available in your library path");
 }
 
-void synchronize(Context const & context)
-{ synchronize(queues[context]); }
+void backend::synchronize(Context const & context)
+{
+    for(CommandQueue * queue: queues::cache_.at(context))
+        queue->synchronize();
+}
 
-queues_type queues;
+
+void backend::release()
+{
+    backend::programs::release();
+    backend::queues::release();
+    backend::contexts::release();
+}
+
+
+void backend::init()
+{
+  if(!contexts::cache_.empty())
+      return;
+  std::vector<Platform> platforms;
+  backend::platforms(platforms);
+  contexts::init(platforms);
+  queues::init(contexts::cache_);
+}
+
+unsigned int backend::default_device = 0;
+
+cl_command_queue_properties backend::default_queue_properties = 0;
+
 
 }
 

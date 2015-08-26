@@ -1,0 +1,26 @@
+<ScrollableLabel>:
+    Label:
+        size_hint_y: None
+        height: self.texture_size[1]
+        text_size: self.width, None
+        text: root.text
+        
+IsaacScreen:
+	name: 'Tune'
+	fullscreen: True
+
+    BoxLayout:
+        orientation: 'vertical'
+        
+        Button:
+            id: action_button
+            background_color: .3,.3,.3,.3
+            text: 'Run'
+            pos: 0, 0
+            size_hint: 1, .1
+            on_release: app.start_tuning()
+        
+        ScrollableLabel:
+            id: out
+            text: ''
+            

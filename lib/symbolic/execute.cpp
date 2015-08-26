@@ -4,8 +4,7 @@
 #include <stdexcept>
 #include "isaac/types.h"
 #include "isaac/array.h"
-#include <CL/cl.hpp>
-#include "isaac/model/model.h"
+#include "isaac/profiles/profiles.h"
 #include "isaac/symbolic/expression.h"
 #include "isaac/symbolic/preset.h"
 
@@ -86,7 +85,6 @@ namespace isaac
                 else if(left == AXPY_TYPE || right == AXPY_TYPE) return op.type==OPERATOR_OUTER_PROD_TYPE?GER_TYPE:AXPY_TYPE;
                 else if(left == GER_TYPE || right == GER_TYPE) return GER_TYPE;
                 else if(is_mmprod(left) || is_mmprod(right)) return GER_TYPE;
-                std::cout << left << " " << right << std::endl;
                 throw;
             case OPERATOR_VECTOR_DOT_TYPE_FAMILY:
                 return DOT_TYPE;
@@ -147,7 +145,7 @@ namespace isaac
   }
 
   /** @brief Executes a array_expression on the given models map*/
-  void execute(controller<array_expression> const & c, model_map_t & models)
+  void execute(controller<array_expression> const & c, profiles::map_type & profiles)
   {
     array_expression expression = c.x();
     driver::Context const & context = expression.context();
@@ -179,29 +177,29 @@ namespace isaac
 
         /*----Parse required temporaries-----*/
         detail::parse(tree, rootidx, breakpoints, final_type);
-        std::vector<tools::shared_ptr<array> > temporaries_;
+        std::vector<std::shared_ptr<array> > temporaries_;
 
         /*----Compute required temporaries----*/
         for(detail::breakpoints_t::iterator it = breakpoints.begin() ; it != breakpoints.end() ; ++it)
         {
-          tools::shared_ptr<model> const & pmodel = models[std::make_pair(it->first, dtype)];
+          std::shared_ptr<profiles::value_type> const & profile = profiles[std::make_pair(it->first, dtype)];
           array_expression::node const & node = tree[it->second->node_index];
           array_expression::node const & lmost = lhs_most(tree, node);
 
           //Creates temporary
-          tools::shared_ptr<array> tmp;
+          std::shared_ptr<array> tmp;
           switch(it->first){
-            case DOT_TYPE:           tmp = tools::shared_ptr<array>(new array(1, dtype, context));                                                        break;
+            case DOT_TYPE:           tmp = std::shared_ptr<array>(new array(1, dtype, context));                                                        break;
 
-            case AXPY_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
-            case GEMV_N_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
-            case GEMV_T_TYPE:  tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[1], dtype, context));                              break;
+            case AXPY_TYPE:         tmp = std::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
+            case GEMV_N_TYPE:  tmp = std::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], dtype, context));                              break;
+            case GEMV_T_TYPE:  tmp = std::shared_ptr<array>(new array(lmost.lhs.array->shape()[1], dtype, context));                              break;
 
-            case GER_TYPE:         tmp = tools::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], lmost.lhs.array->shape()[1], dtype, context)); break;
-            case GEMM_NN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[1], dtype, context));   break;
-            case GEMM_NT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[0], dtype, context));   break;
-            case GEMM_TN_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[1], dtype, context));   break;
-            case GEMM_TT_TYPE:   tmp = tools::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[0], dtype, context));   break;
+            case GER_TYPE:         tmp = std::shared_ptr<array>(new array(lmost.lhs.array->shape()[0], lmost.lhs.array->shape()[1], dtype, context)); break;
+            case GEMM_NN_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[1], dtype, context));   break;
+            case GEMM_NT_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array->shape()[0], node.rhs.array->shape()[0], dtype, context));   break;
+            case GEMM_TN_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[1], dtype, context));   break;
+            case GEMM_TT_TYPE:   tmp = std::shared_ptr<array>(new array(node.lhs.array->shape()[1], node.rhs.array->shape()[0], dtype, context));   break;
 
             default: throw std::invalid_argument("Unrecognized operation");
           }
@@ -213,7 +211,7 @@ namespace isaac
           tree[rootidx].rhs.type_family = it->second->type_family;
 
           //Execute
-          pmodel->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
+          profile->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
           tree[rootidx] = root_save;
 
           //Incorporates the temporary within the array_expression
@@ -222,7 +220,7 @@ namespace isaac
     }
 
     /*-----Compute final expression-----*/
-    models[std::make_pair(final_type, dtype)]->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
+    profiles[std::make_pair(final_type, dtype)]->execute(controller<expressions_tuple>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
   }
 
 }

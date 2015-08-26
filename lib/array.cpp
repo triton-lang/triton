@@ -6,7 +6,7 @@
 
 #include "isaac/array.h"
 #include "isaac/exception/unknown_datatype.h"
-#include "isaac/model/model.h"
+#include "isaac/profiles/profiles.h"
 #include "isaac/symbolic/execute.h"
 
 
@@ -21,7 +21,7 @@ namespace isaac
 /*--- Constructors ---*/
 //1D Constructors
 
-array::array(int_t shape0, numeric_type dtype, driver::Context context) :
+array::array(int_t shape0, numeric_type dtype, driver::Context const & context) :
   dtype_(dtype), shape_(shape0, 1, 1, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
   context_(context), data_(context_, size_of(dtype)*dsize())
 { }
@@ -32,16 +32,16 @@ array::array(int_t shape0, numeric_type dtype, driver::Buffer data, int_t start,
 
 
 template<class DT>
-array::array(std::vector<DT> const & x, driver::Context context):
-  dtype_(to_numeric_type<DT>::value), shape_(x.size(), 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
+array::array(std::vector<DT> const & x, driver::Context const & context):
+  dtype_(to_numeric_type<DT>::value), shape_((int_t)x.size(), 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
   context_(context), data_(context, size_of(dtype_)*dsize())
 { *this = x; }
 
 array::array(array & v, slice const & s0) : dtype_(v.dtype_), shape_(s0.size, 1, 1, 1), start_(v.start_[0] + v.stride_[0]*s0.start, 0, 0, 0), stride_(v.stride_[0]*s0.stride, 1, 1, 1),
-                                            ld_(v.ld_), context_(v.data_.context()), data_(v.data_)
+                                            ld_(v.ld_), context_(v.context()), data_(v.data_)
 {}
 
-#define INSTANTIATE(T) template array::array(std::vector<T> const &, driver::Context)
+#define INSTANTIATE(T) template ISAACAPI array::array(std::vector<T> const &, driver::Context const &)
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
 INSTANTIATE(short);
@@ -57,7 +57,7 @@ INSTANTIATE(double);
 #undef INSTANTIATE
 
 // 2D
-array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Context context) : dtype_(dtype), shape_(shape0, shape1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
+array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Context const & context) : dtype_(dtype), shape_(shape0, shape1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
                                                                                         context_(context), data_(context_, size_of(dtype_)*dsize())
 {}
 
@@ -73,7 +73,7 @@ array::array(array & M, slice const & s0, slice const & s1) :  dtype_(M.dtype_),
 
 
 template<typename DT>
-array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::Context context)
+array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::Context const & context)
   : dtype_(to_numeric_type<DT>::value),
     shape_(shape0, shape1), start_(0, 0), stride_(1, 1), ld_(shape0),
     context_(context), data_(context_, size_of(dtype_)*dsize())
@@ -82,7 +82,7 @@ array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::C
 }
 
 // 3D
-array::array(int_t shape0, int_t shape1, int_t shape2, numeric_type dtype, driver::Context context) : dtype_(dtype), shape_(shape0, shape1, shape2, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
+array::array(int_t shape0, int_t shape1, int_t shape2, numeric_type dtype, driver::Context const & context) : dtype_(dtype), shape_(shape0, shape1, shape2, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
                                                                                         context_(context), data_(context_, size_of(dtype_)*dsize())
 {}
 
@@ -94,7 +94,7 @@ array::array(numeric_type dtype, driver::Buffer data, slice const & s0, slice co
 
 
 
-#define INSTANTIATE(T) template array::array(int_t, int_t, std::vector<T> const &, driver::Context)
+#define INSTANTIATE(T) template ISAACAPI array::array(int_t, int_t, std::vector<T> const &, driver::Context const &)
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
 INSTANTIATE(short);
@@ -122,8 +122,8 @@ array::array(controller<TYPE> const & other) :
 }
 
 
-template array::array(controller<array> const&);
-template array::array(controller<array_expression> const&);
+template ISAACAPI array::array(controller<array> const&);
+template ISAACAPI array::array(controller<array_expression> const&);
 
 /*--- Getters ---*/
 numeric_type array::dtype() const
@@ -171,9 +171,14 @@ array& array::operator=(controller<TYPE> const & c)
   assert(dtype_ == c.x().dtype());
   array_expression expression(*this, c.x(), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
   execute(controller<array_expression>(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()),
-          isaac::models(c.execution_options().queue(context_)));
+          isaac::profiles::get(c.execution_options().queue(context_)));
   return *this;
 }
+
+#define INSTANTIATE(TYPE) template ISAACAPI array& array::operator=<TYPE>(controller<TYPE> const &)
+INSTANTIATE(array);
+INSTANTIATE(array_expression);
+#undef INSTANTIATE
 
 template<class DT>
 array & array::operator=(std::vector<DT> const & rhs)
@@ -183,11 +188,7 @@ array & array::operator=(std::vector<DT> const & rhs)
   return *this;
 }
 
-array & array::operator=(value_scalar const & rhs)
-{ return *this = controller<value_scalar>(rhs); }
-
-
-#define INSTANTIATE(T) template array & array::operator=<T>(std::vector<T> const &)
+#define INSTANTIATE(TYPE) template ISAACAPI array& array::operator=<TYPE>(std::vector<TYPE> const &)
 
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
@@ -202,6 +203,12 @@ INSTANTIATE(unsigned long long);
 INSTANTIATE(float);
 INSTANTIATE(double);
 #undef INSTANTIATE
+
+array & array::operator=(value_scalar const & rhs)
+{ return *this = controller<value_scalar>(rhs); }
+
+
+
 
 array_expression array::operator-()
 { return array_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
@@ -254,13 +261,13 @@ array_expression array::T() const
 scalar array::operator [](int_t idx)
 {
   assert(nshape()<=1);
-  return scalar(dtype_, data_, idx);
+  return scalar(dtype_, data_, start_[0] + ld_*start_[1] + idx);
 }
 
 const scalar array::operator [](int_t idx) const
 {
   assert(nshape()<=1);
-  return scalar(dtype_, data_, idx);
+  return scalar(dtype_, data_, start_[0] + ld_*start_[1] + idx);
 }
 
 
@@ -279,9 +286,9 @@ namespace detail
 {
 
 template<class T>
-void copy(driver::Context & ctx, driver::Buffer const & data, T value)
+void copy(driver::Context const & context, driver::Buffer const & data, T value)
 {
-  driver::queues[ctx][0].write(data, CL_TRUE, 0, sizeof(T), (void*)&value);
+  driver::backend::queues::get(context,0).write(data, CL_TRUE, 0, sizeof(T), (void*)&value);
 }
 
 }
@@ -289,7 +296,7 @@ void copy(driver::Context & ctx, driver::Buffer const & data, T value)
 scalar::scalar(numeric_type dtype, const driver::Buffer &data, int_t offset): array(dtype, data, _(offset, offset+1), _(1,2), 1)
 { }
 
-scalar::scalar(value_scalar value, driver::Context context) : array(1, value.dtype(), context)
+scalar::scalar(value_scalar value, driver::Context const & context) : array(1, value.dtype(), context)
 {
   switch(dtype_)
   {
@@ -308,7 +315,7 @@ scalar::scalar(value_scalar value, driver::Context context) : array(1, value.dty
 }
 
 
-scalar::scalar(numeric_type dtype, driver::Context context) : array(1, dtype, context)
+scalar::scalar(numeric_type dtype, driver::Context const & context) : array(1, dtype, context)
 { }
 
 scalar::scalar(array_expression const & proxy) : array(proxy){ }
@@ -318,7 +325,7 @@ void scalar::inject(values_holder & v) const
     int_t dtsize = size_of(dtype_);
   #define HANDLE_CASE(DTYPE, VAL) \
   case DTYPE:\
-    driver::queues[context_][0].read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL); break;\
+    driver::backend::queues::get(context_, 0).read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL); break;\
 
     switch(dtype_)
     {
@@ -365,7 +372,7 @@ TYPE scalar::cast() const
 
 scalar& scalar::operator=(value_scalar const & s)
 {
-  driver::CommandQueue& queue = driver::queues[context_][0];
+  driver::CommandQueue& queue = driver::backend::queues::get(context_, 0);
   int_t dtsize = size_of(dtype_);
 
 #define HANDLE_CASE(TYPE, CLTYPE) case TYPE:\
@@ -561,10 +568,10 @@ array_expression cast(array const & x, numeric_type dtype)
 array_expression cast(array_expression const & x, numeric_type dtype)
 { return array_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, casted(dtype)), x.context(), dtype, x.shape()); }
 
-isaac::array_expression eye(std::size_t M, std::size_t N, isaac::numeric_type dtype, driver::Context ctx)
+isaac::array_expression eye(int_t M, int_t N, isaac::numeric_type dtype, driver::Context const & ctx)
 { return array_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VDIAG_TYPE), ctx, dtype, size4(M, N)); }
 
-isaac::array_expression zeros(std::size_t M, std::size_t N, isaac::numeric_type dtype, driver::Context ctx)
+isaac::array_expression zeros(int_t M, int_t N, isaac::numeric_type dtype, driver::Context  const & ctx)
 { return array_expression(value_scalar(0, dtype), invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), ctx, dtype, size4(M, N)); }
 
 inline size4 flip(size4 const & shape)
@@ -796,16 +803,14 @@ void copy(void const * data, array& x, driver::CommandQueue & queue, bool blocki
   unsigned int dtypesize = size_of(x.dtype());
   if(x.ld()==x.shape()[0])
   {
-    queue.write(x.data(), CL_FALSE, 0, x.dsize()*dtypesize, data);
+    queue.write(x.data(), blocking, 0, x.dsize()*dtypesize, data);
   }
   else
   {
     array tmp(x.shape()[0], x.shape()[1], x.dtype(), x.context());
-    queue.write(x.data(), CL_FALSE, 0, tmp.dsize()*dtypesize, data);
+    queue.write(x.data(), blocking, 0, tmp.dsize()*dtypesize, data);
     x = tmp;
   }
-  if(blocking)
-    driver::synchronize(x.context());
 }
 
 void copy(array const & x, void* data, driver::CommandQueue & queue, bool blocking)
@@ -813,32 +818,30 @@ void copy(array const & x, void* data, driver::CommandQueue & queue, bool blocki
   unsigned int dtypesize = size_of(x.dtype());
   if(x.ld()==x.shape()[0])
   {
-    queue.read(x.data(), CL_FALSE, 0, x.dsize()*dtypesize, data);
+    queue.read(x.data(), blocking, 0, x.dsize()*dtypesize, data);
   }
   else
   {
     array tmp(x.shape()[0], x.shape()[1], x.dtype(), x.context());
     tmp = x;
-    queue.read(tmp.data(), CL_FALSE, 0, tmp.dsize()*dtypesize, data);
+    queue.read(tmp.data(), blocking, 0, tmp.dsize()*dtypesize, data);
   }
-  if(blocking)
-    driver::synchronize(x.context());
 }
 
 void copy(void const *data, array &x, bool blocking)
-{ copy(data, x, driver::queues[x.context()][0], blocking); }
+{ copy(data, x, driver::backend::queues::get(x.context(), 0), blocking); }
 
 void copy(array const & x, void* data, bool blocking)
-{ copy(x, data, driver::queues[x.context()][0], blocking); }
+{ copy(x, data, driver::backend::queues::get(x.context(), 0), blocking); }
 
 //std::vector<>
 template<class T>
 void copy(std::vector<T> const & cx, array & x, driver::CommandQueue & queue, bool blocking)
 {
   if(x.ld()==x.shape()[0])
-    assert(cx.size()==x.dsize());
+    assert((int_t)cx.size()==x.dsize());
   else
-    assert(cx.size()==prod(x.shape()));
+    assert((int_t)cx.size()==prod(x.shape()));
   copy((void const*)cx.data(), x, queue, blocking);
 }
 
@@ -846,25 +849,25 @@ template<class T>
 void copy(array const & x, std::vector<T> & cx, driver::CommandQueue & queue, bool blocking)
 {
   if(x.ld()==x.shape()[0])
-    assert(cx.size()==x.dsize());
+    assert((int_t)cx.size()==x.dsize());
   else
-    assert(cx.size()==prod(x.shape()));
+    assert((int_t)cx.size()==prod(x.shape()));
   copy(x, (void*)cx.data(), queue, blocking);
 }
 
 template<class T>
 void copy(std::vector<T> const & cx, array & x, bool blocking)
-{ copy(cx, x, driver::queues[x.context()][0], blocking); }
+{ copy(cx, x, driver::backend::queues::get(x.context(), 0), blocking); }
 
 template<class T>
 void copy(array const & x, std::vector<T> & cx, bool blocking)
-{ copy(x, cx, driver::queues[x.context()][0], blocking); }
+{ copy(x, cx, driver::backend::queues::get(x.context(), 0), blocking); }
 
 #define INSTANTIATE(T) \
-  template void copy<T>(std::vector<T> const &, array &, driver::CommandQueue&, bool);\
-  template void copy<T>(array const &, std::vector<T> &, driver::CommandQueue&, bool);\
-  template void copy<T>(std::vector<T> const &, array &, bool);\
-  template void copy<T>(array const &, std::vector<T> &, bool)
+  template void ISAACAPI  copy<T>(std::vector<T> const &, array &, driver::CommandQueue&, bool);\
+  template void ISAACAPI  copy<T>(array const &, std::vector<T> &, driver::CommandQueue&, bool);\
+  template void ISAACAPI  copy<T>(std::vector<T> const &, array &, bool);\
+  template void ISAACAPI  copy<T>(array const &, std::vector<T> &, bool)
 
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);

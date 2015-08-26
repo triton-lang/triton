@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <algorithm>
 #include "isaac/array.h"
 #include "isaac/value_scalar.h"
 #include "isaac/exception/unknown_datatype.h"
@@ -15,17 +16,17 @@ void value_scalar::init(T const & s)
   switch(dtype_)
   {
 //    case BOOL_TYPE: values_.bool8 = s; break;
-    case CHAR_TYPE: values_.int8 = s; break;
-    case UCHAR_TYPE: values_.uint8 = s; break;
-    case SHORT_TYPE: values_.int16 = s; break;
-    case USHORT_TYPE: values_.uint16 = s; break;
-    case INT_TYPE: values_.int32 = s; break;
-    case UINT_TYPE: values_.uint32 = s; break;
-    case LONG_TYPE: values_.int64 = s; break;
-    case ULONG_TYPE: values_.uint64 = s; break;
+    case CHAR_TYPE: values_.int8 = (int8_t)s; break;
+    case UCHAR_TYPE: values_.uint8 = (uint8_t)s; break;
+    case SHORT_TYPE: values_.int16 = (int16_t)s; break;
+    case USHORT_TYPE: values_.uint16 = (uint16_t)s; break;
+    case INT_TYPE: values_.int32 = (int32_t)s; break;
+    case UINT_TYPE: values_.uint32 = (uint32_t)s; break;
+    case LONG_TYPE: values_.int64 = (int64_t)s; break;
+    case ULONG_TYPE: values_.uint64 = (uint64_t)s; break;
 //    case HALF_TYPE: values_.float16 = s; break;
-    case FLOAT_TYPE: values_.float32 = s; break;
-    case DOUBLE_TYPE: values_.float64 = s; break;
+    case FLOAT_TYPE: values_.float32 = (float)s; break;
+    case DOUBLE_TYPE: values_.float64 = (double)s; break;
     default: throw unknown_datatype(dtype_);
   }
 }
@@ -62,22 +63,22 @@ T value_scalar::cast() const
 {
   switch(dtype_)
   {
-    case CHAR_TYPE: return values_.int8;
-    case UCHAR_TYPE: return values_.uint8;
-    case SHORT_TYPE: return values_.int16;
-    case USHORT_TYPE: return values_.uint16;
-    case INT_TYPE: return values_.int32;
-    case UINT_TYPE: return values_.uint32;
-    case LONG_TYPE: return values_.int64;
-    case ULONG_TYPE: return values_.uint64;
-    case FLOAT_TYPE: return values_.float32;
-    case DOUBLE_TYPE: return values_.float64;
+    case CHAR_TYPE: return static_cast<T>(values_.int8);
+    case UCHAR_TYPE: return static_cast<T>(values_.uint8);
+    case SHORT_TYPE: return static_cast<T>(values_.int16);
+    case USHORT_TYPE: return static_cast<T>(values_.uint16);
+    case INT_TYPE: return static_cast<T>(values_.int32);
+    case UINT_TYPE: return static_cast<T>(values_.uint32);
+    case LONG_TYPE: return static_cast<T>(values_.int64);
+    case ULONG_TYPE: return static_cast<T>(values_.uint64);
+    case FLOAT_TYPE: return static_cast<T>(values_.float32);
+    case DOUBLE_TYPE: return static_cast<T>(values_.float64);
     default: throw unknown_datatype(dtype_); //unreachable
   }
 }
 
 #define INSTANTIATE(type) value_scalar::operator type() const { return cast<type>(); }
-  INSTANTIATE(bool)
+  //INSTANTIATE(bool)
   INSTANTIATE(char)
   INSTANTIATE(unsigned char)
   INSTANTIATE(short)
@@ -103,7 +104,7 @@ value_scalar uint64(uint64_t v) { return value_scalar(v); }
 value_scalar float32(float v) { return value_scalar(v); }
 value_scalar float64(double v) { return value_scalar(v); }
 
-#define VALUE(type, OP, x, y) (type)(x OP y)
+#define VALUE(type, OP, x, y) (type)x OP y
 #define INSTANTIATE(NAME, LDEC, RDEC, OP)\
 value_scalar NAME(LDEC, RDEC)\
 {\
@@ -154,12 +155,12 @@ INSTANTIATE_ALL(operator-, -)
 INSTANTIATE_ALL(operator*, *)
 INSTANTIATE_ALL(operator/, /)
 
-INSTANTIATE_ALL(operator>,  > )
-INSTANTIATE_ALL(operator>=, >=)
-INSTANTIATE_ALL(operator<,  < )
-INSTANTIATE_ALL(operator<=, <=)
-INSTANTIATE_ALL(operator==, ==)
-INSTANTIATE_ALL(operator!=, !=)
+//INSTANTIATE_ALL(operator>,  > )
+//INSTANTIATE_ALL(operator>=, >=)
+//INSTANTIATE_ALL(operator<,  < )
+//INSTANTIATE_ALL(operator<=, <=)
+//INSTANTIATE_ALL(operator==, ==)
+//INSTANTIATE_ALL(operator!=, !=)
 
 #undef VALUE
 #define VALUE(type, OP, x, y) OP((type)x,(type)y)

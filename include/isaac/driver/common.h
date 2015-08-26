@@ -1,11 +1,11 @@
 #ifndef ISAAC_DRIVER_COMMON_H
 #define ISAAC_DRIVER_COMMON_H
+#include <exception>
 
-#include <CL/cl.hpp>
-#ifdef ISAAC_WITH_CUDA
-#include <cuda.h>
-#include <nvrtc.h>
-#endif
+#include "isaac/driver/dispatch.h"
+#include "isaac/defines.h"
+
+DISABLE_MSVC_WARNING_C4275
 
 namespace isaac
 {
@@ -14,28 +14,20 @@ namespace driver
 
 enum backend_type
 {
-  OPENCL
-#ifdef ISAAC_WITH_CUDA
-  ,CUDA
-#endif
-};
-
-enum device_type
-{
-  DEVICE_TYPE_GPU = CL_DEVICE_TYPE_GPU,
-  DEVICE_TYPE_CPU = CL_DEVICE_TYPE_CPU,
-  DEVICE_TYPE_ACCELERATOR = CL_DEVICE_TYPE_ACCELERATOR
+  OPENCL,
+  CUDA
 };
 
 
-#ifdef ISAAC_WITH_CUDA
+
+
 
 namespace nvrtc
 {
   namespace exception
   {
 
-#define ISAAC_CREATE_NVRTC_EXCEPTION(name, msg) class name: public std::exception { public: const char * what() const throw(){ return "NVRTC: Error- " msg; } }
+#define ISAAC_CREATE_NVRTC_EXCEPTION(name, msg) class ISAACAPI name: public std::exception { public: const char * what() const throw(){ return "NVRTC: Error- " msg; } }
 
   ISAAC_CREATE_NVRTC_EXCEPTION(out_of_memory              ,"out of memory exception");
   ISAAC_CREATE_NVRTC_EXCEPTION(program_creation_failure   ,"program creation failure");
@@ -60,7 +52,7 @@ namespace cuda
 
     class base: public std::exception{};
 
-#define ISAAC_CREATE_CUDA_EXCEPTION(name, msg) class name: public base { public:const char * what() const throw(){ return "CUDA: Error- " msg; } }
+#define ISAAC_CREATE_CUDA_EXCEPTION(name, msg) class ISAACAPI name: public base { public:const char * what() const throw(){ return "CUDA: Error- " msg; } }
 
 
     ISAAC_CREATE_CUDA_EXCEPTION(invalid_value                   ,"invalid value");
@@ -128,16 +120,15 @@ namespace cuda
 void check(CUresult);
 }
 
-#endif
 
 namespace ocl
 {
   namespace exception
   {
 
-    class base: public std::exception{};
+    class ISAACAPI base: public std::exception{};
 
-#define ISAAC_CREATE_CL_EXCEPTION(name, msg) class name: public base { public: const char * what() const throw(){ return "OpenCL: Error- " msg; } }
+#define ISAAC_CREATE_CL_EXCEPTION(name, msg) class ISAACAPI name: public base { public: const char * what() const throw(){ return "OpenCL: Error- " msg; } }
 
 
    ISAAC_CREATE_CL_EXCEPTION(device_not_found,                  "device not found");
@@ -191,12 +182,14 @@ namespace ocl
 #endif
   }
 
-void check(cl_int err);
+ISAACAPI void check(cl_int err);
 
 }
 
 
 }
 }
+
+RESTORE_MSVC_WARNING_C4275
 
 #endif

@@ -1,24 +1,26 @@
+#include <cmath>
 #include "common.hpp"
 #include "isaac/array.h"
 
-namespace isc = isaac;
+namespace sc = isaac;
 typedef isaac::int_t int_t;
 
 template<typename T>
 void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simple_matrix_base<T>& cC, simple_vector_base<T>& cx, simple_vector_base<T>& cy,
-          isc::array& A, isc::array& B, isc::array& C, isc::array& x, isc::array& y)
+          sc::array& A, sc::array& B, sc::array& C, sc::array& x, sc::array& y)
 {
   using namespace std;
 
   int failure_count = 0;
-  isc::numeric_type dtype = C.dtype();
-  isc::driver::Context const & ctx = C.context();
+  sc::numeric_type dtype = C.dtype();
+  sc::driver::Context const & ctx = C.context();
 
   int_t M = cC.size1();
   int_t N = cC.size2();
 
 
-  T aa = 3.12, bb=3.5;
+  T aa = static_cast<T>(3.12);
+  T bb = static_cast<T>(3.5);
   isaac::value_scalar a(aa), b(bb);
   isaac::scalar da(a, ctx), db(b, ctx);
 
@@ -98,14 +100,14 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
 }
 
 template<typename T>
-void test_impl(T epsilon, isc::driver::Context const & ctx)
+void test_impl(T epsilon, sc::driver::Context const & ctx)
 {
   using isaac::_;
 
-  int_t M = 1324;
-  int_t N = 1143;
-  int_t SUBM = 184;
-  int_t SUBN = 145;
+  int_t M = 173;
+  int_t N = 241;
+  int_t SUBM = 7;
+  int_t SUBN = 11;
 
   INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cA, A, ctx);
   INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cB, B, ctx);
@@ -123,16 +125,20 @@ void test_impl(T epsilon, isc::driver::Context const & ctx)
 
 int main()
 {
-  auto data = isc::driver::queues.contexts();
-  for(const auto & elem : data)
+    std::list<isaac::driver::Context const *> data;
+    sc::driver::backend::contexts::get(data);
+    for(isaac::driver::Context const * context : data)
   {
-    isc::driver::Device device = elem.second[0].device();
+    sc::driver::Device device = sc::driver::backend::queues::get(*context,0).device();
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(1e-4, elem.first);
-    std::cout << ">> double" << std::endl;
-    test_impl<double>(1e-9, elem.first);
+    test_impl<float>(eps_float, *context);
+    if(device.fp64_support())
+    {
+        std::cout << ">> double" << std::endl;
+        test_impl<double>(eps_double, *context);
+    }
     std::cout << "---" << std::endl;
   }
   return EXIT_SUCCESS;

@@ -1,23 +1,30 @@
-#Ideas for finding libOpenCL
+#Hints for finding libOpenCL
+
+#OpenCL Hints
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(L_HINTS $ENV{INTELOCLSDKROOT}/lib/x64)
+else()
+    set(L_HINTS $ENV{INTELOCLSDKROOT}/lib/x86)
+endif()
+
 set(ANDROID_CL_GLOB_HINTS /opt/adreno-driver*/lib)
 set(X86_CL_GLOB_HINTS /opt/AMDAPPSDK*/lib/x86_64)
 
-#OpenCL Hints
-set(L_HINTS)
 if(ANDROID)
-    foreach(PATH ${ANDROID_GLOB_HINTS})
+    foreach(PATH ${ANDROID_CL_GLOB_HINTS})
         file(GLOB _TMP ${PATH})
         set(L_HINTS ${L_HINTS} ${_TMP})
     endforeach()
+    find_library(OPENCL_LIBRARIES NAMES OpenCL NO_CMAKE_FIND_ROOT_PATH HINTS ${L_HINTS} )
 else()
-    foreach(PATH ${X86_GLOB_HINTS})
+    foreach(PATH ${X86_CL_GLOB_HINTS})
         file(GLOB _TMP ${PATH})
         set(L_HINTS ${L_HINTS} ${_TMP})
     endforeach()
     set(L_HINTS ${L_HINTS} ${CUDA_TOOLKIT_ROOT_DIR}/targets/x86_64-linux/lib/)
+    find_library(OPENCL_LIBRARIES NAMES OpenCL HINTS ${L_HINTS} )
 endif()
 
-find_library(OPENCL_LIBRARIES NAMES OpenCL HINTS ${L_HINTS} )
 include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(OpenCL  DEFAULT_MSG OPENCL_LIBRARIES)
+find_package_handle_standard_args(OpenCL DEFAULT_MSG OPENCL_LIBRARIES)
 mark_as_advanced(OpenCL)
