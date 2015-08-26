@@ -87,6 +87,7 @@ void profiles::value_type::execute(controller<expressions_tuple> const & expr)
 {
   driver::Program const & program = init(expr);
   std::vector<int_t> x = templates_[0]->input_sizes(expr.x());
+  static const int MAX_TEMPORARY_WORKSPACE = 1e6;
 
   //Specific tuning if requested
   if(expr.dispatcher_options().tune && hardcoded_.find(x)==hardcoded_.end())
@@ -94,6 +95,10 @@ void profiles::value_type::execute(controller<expressions_tuple> const & expr)
     std::vector<double> timings(templates_.size());
     for(unsigned int i = 0 ; i < templates_.size() ; ++i)
     {
+      if(templates_[i]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE){
+          timings[i] = INFINITY;
+          continue;
+      }
       std::list<driver::Event> events;
       try{
         templates_[i]->enqueue(queue_, program, tools::to_string(i), *fallback_, control(expr.x(), execution_options_type(0, &events)));
@@ -109,7 +114,6 @@ void profiles::value_type::execute(controller<expressions_tuple> const & expr)
   }
 
   //Prediction
-  static const int MAX_TEMPORARY_WORKSPACE = 1e6;
 
   int label = 0;
   if(expr.dispatcher_options().label>=0)
