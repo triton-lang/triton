@@ -39,7 +39,9 @@ private:
         initializer();
         if(cache == nullptr)
             cache = dlsym(lib_h, name);
-        return (*(FunPtrT)cache)(args...);
+        FunPtrT fptr;
+        *reinterpret_cast<void **>(&fptr) = cache;
+        return (*fptr)(args...);
     }
 
 public:
