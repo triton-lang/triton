@@ -14,8 +14,8 @@ from numpy import cumsum
 import tools
 from tools import profile_execution_failure
 
-fetch_types = [sc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
-               sc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
+fetch_types = [sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
+               sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED,
                sc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
                sc.templates.fetching_policy_type.FETCH_FROM_LOCAL]
 

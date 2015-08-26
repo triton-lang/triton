@@ -81,8 +81,18 @@ class IsaacApp(App):
             sc.driver.default.queue_properties = sc.driver.PROFILING_ENABLE 
             self.logger.info('Using ' + device.name)
             self.logger.info('')
-            tuner = Tuner(self.logger, device, sc.templates.axpy, '')
-            tid = thread.start_new_thread(Tuner.run, (tuner,))
+            
+            def run():
+                operations = [('blas1', (sc.templates.axpy,)),
+                              ('blas2', (sc.templates.ger, sc.templates.gemv_n, sc.templates.gemv_t)),
+                              ('blas3', (sc.templates.gemm_nn, sc.templates.gemm_tn, sc.templates.gemm_nt, sc.templates.gemm_tt))]
+                for opclass, optype in operations:
+                    for op in optype:
+                        tuner = Tuner(self.logger, device, op, '')
+                        tuner.run(self.config.get('autotuning', opclass).lower())
+                        self.logger.info('')
+            
+            tid = thread.start_new_thread(run, ())
         else:
             pass
         button.text = 'Running...' if button.text == 'Run' else button.text
