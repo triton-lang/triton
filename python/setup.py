@@ -48,45 +48,6 @@ def main():
                     break
         return optlist
 
-    def find_library(name, cmake_glob_list):
-        cvars = sysconfig.get_config_vars()
-        compiler = new_compiler()
-        dirs = []
-        for gpath in cmake_glob_list.split(';'):
-            path = glob(gpath)
-            if path:
-                dirs += [path[0]]
-        return compiler.find_library_file(cvars['LIBDIR'].split(';') + dirs, name)
-
-    def find_opencl():
-        cvars = sysconfig.get_config_vars()
-        lib = find_library('OpenCL', '' if for_android else '')
-        return {'include': '', 'lib': dirname(lib)} if lib else None
-
-    def find_in_path(name, path):
-        "Find a file in a search path"
-        #adapted fom http://code.activestate.com/recipes/52224-find-a-file-given-a-search-path/
-        for dir in path.split(os.pathsep):
-            binpath = os.path.join(dir, name)
-            if os.path.exists(binpath):
-                return os.path.abspath(binpath)
-        return None
-
-    def find_cuda():
-        if 'CUDAHOME' in os.environ:
-            home = os.environ['CUDAHOME']
-            nvcc = os.path.join(home, 'bin', 'nvcc')
-        else:
-            nvcc = find_in_path('nvcc', os.environ['PATH'])
-
-        if nvcc:
-            home = dirname(os.path.dirname(nvcc))
-            return {'include': os.path.join(home, 'include'),
-                    'lib': os.path.join(home, 'lib64')}
-        else:
-            return None
-
-
     #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
@@ -96,21 +57,8 @@ def main():
     #Check Android
     for_android = '-mandroid' in cvars['PY_CFLAGS']
 
-    #OpenCL
-    opencl_config = find_opencl()
-
-    #CUDA
-    cuda_config = find_cuda()
-
-    libraries = ['OpenCL']
-    if cuda_config: libraries += ['cuda', 'nvrtc']
-
-    #Backends:
-    backend_defines = ['-DISAAC_WITH_OPENCL']
-    if cuda_config: backend_defines += ['-DISAAC_WITH_CUDA']
-
-    #Library directories
-    library_dirs = [config['lib'] for config in [opencl_config, cuda_config] if config is not None]
+    #Dynamic load for backend switching
+    libraries = ['dl']
 
     #Include directories
     numpy_include = os.path.join(find_module("numpy")[1], "core", "include")
@@ -124,7 +72,7 @@ def main():
       libraries += ['gnustl_shared']
 
     #Source files
-    src =  'src/lib/exception/operation_not_supported.cpp src/lib/exception/unknown_datatype.cpp src/lib/value_scalar.cpp src/lib/driver/check.cpp src/lib/driver/ndrange.cpp src/lib/driver/platform.cpp src/lib/driver/backend.cpp src/lib/driver/program.cpp src/lib/driver/command_queue.cpp src/lib/driver/event.cpp src/lib/driver/kernel.cpp src/lib/driver/handle.cpp src/lib/driver/device.cpp src/lib/driver/program_cache.cpp src/lib/driver/buffer.cpp src/lib/driver/context.cpp src/lib/driver/dispatch.cpp src/lib/kernels/templates/axpy.cpp src/lib/kernels/templates/gemv.cpp src/lib/kernels/templates/dot.cpp src/lib/kernels/templates/base.cpp src/lib/kernels/templates/ger.cpp src/lib/kernels/templates/gemm.cpp src/lib/kernels/stream.cpp src/lib/kernels/keywords.cpp src/lib/kernels/mapped_object.cpp src/lib/kernels/binder.cpp src/lib/kernels/parse.cpp src/lib/wrap/clBLAS.cpp src/lib/profiles/predictors/random_forest.cpp src/lib/profiles/presets.cpp src/lib/profiles/profiles.cpp src/lib/symbolic/execute.cpp src/lib/symbolic/expression.cpp src/lib/symbolic/io.cpp src/lib/symbolic/preset.cpp src/lib/array.cpp '.split() + [os.path.join('src', 'bind', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'kernels.cpp', 'exceptions.cpp']]
+    src =  'src/lib/symbolic/preset.cpp src/lib/symbolic/execute.cpp src/lib/symbolic/io.cpp src/lib/symbolic/expression.cpp src/lib/array.cpp src/lib/value_scalar.cpp src/lib/driver/backend.cpp src/lib/driver/device.cpp src/lib/driver/kernel.cpp src/lib/driver/buffer.cpp src/lib/driver/platform.cpp src/lib/driver/check.cpp src/lib/driver/program.cpp src/lib/driver/command_queue.cpp src/lib/driver/dispatch.cpp src/lib/driver/program_cache.cpp src/lib/driver/context.cpp src/lib/driver/event.cpp src/lib/driver/ndrange.cpp src/lib/driver/handle.cpp src/lib/exception/unknown_datatype.cpp src/lib/exception/operation_not_supported.cpp src/lib/profiles/presets.cpp src/lib/profiles/profiles.cpp src/lib/profiles/predictors/random_forest.cpp src/lib/kernels/templates/gemv.cpp src/lib/kernels/templates/axpy.cpp src/lib/kernels/templates/gemm.cpp src/lib/kernels/templates/ger.cpp src/lib/kernels/templates/dot.cpp src/lib/kernels/templates/base.cpp src/lib/kernels/mapped_object.cpp src/lib/kernels/stream.cpp src/lib/kernels/parse.cpp src/lib/kernels/keywords.cpp src/lib/kernels/binder.cpp src/lib/wrap/clBLAS.cpp '.split() + [os.path.join('src', 'bind', sf)  for sf in ['_isaac.cpp', 'core.cpp', 'driver.cpp', 'kernels.cpp', 'exceptions.cpp']]
     boostsrc = 'external/boost/libs/'
     for s in ['numpy','python','smart_ptr','system','thread']:
         src = src + [x for x in recursive_glob('external/boost/libs/' + s + '/src/','.cpp') if 'win32' not in x and 'pthread' not in x]
@@ -135,11 +83,11 @@ def main():
     #isaac
     extensions += [Extension(
                     '_isaac',src,
-                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
+                    extra_compile_args= ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
 		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,
-                    library_dirs=library_dirs,
+                    library_dirs=[],
                     libraries=libraries)]
     
     #External
