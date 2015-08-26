@@ -44,7 +44,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
       nvrtc::check(dispatch::nvrtcCreateProgram(&prog, source.c_str(), NULL, 1, src, includes));
       try{
         std::pair<unsigned int, unsigned int> capability = context_.device().nv_compute_capability();
-        std::string capability_opt = "--compute_";
+        std::string capability_opt = "--gpu-architecture=compute_";
         capability_opt += tools::to_string(capability.first) + tools::to_string(capability.second);
         const char * options[] = {capability_opt.c_str(), "--restrict"};
         nvrtc::check(dispatch::nvrtcCompileProgram(prog, 2, options));
