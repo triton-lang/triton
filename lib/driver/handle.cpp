@@ -1,5 +1,7 @@
-#include "isaac/driver/handle.h"
+#include <cassert>
 #include <memory>
+
+#include "isaac/driver/handle.h"
 
 namespace isaac
 {
@@ -98,21 +100,29 @@ Handle<CLType, CUType>::~Handle()
 
 template<class CLType, class CUType>
 CLType &  Handle<CLType, CUType>::cl()
-{ return *cl_; }
+{
+    assert(backend_==OPENCL);
+    return *cl_;
+}
 
 template<class CLType, class CUType>
 CLType const &  Handle<CLType, CUType>::cl() const
-{ return *cl_; }
+{
+    assert(backend_==OPENCL);
+    return *cl_;
+}
 
 template<class CLType, class CUType>
 CUType &  Handle<CLType, CUType>::cu()
 {
+    assert(backend_==CUDA);
     return *cu_;
 }
 
 template<class CLType, class CUType>
 CUType const &  Handle<CLType, CUType>::cu() const
 {
+    assert(backend_==CUDA);
     return *cu_;
 }
 

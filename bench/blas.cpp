@@ -145,7 +145,8 @@ void bench(sc::numeric_type dtype, std::string operation)
       BENCHMARK_ISAAC(y = sc::control(x + alpha*y, sc::execution_options_type(0, &events)), 3*N*dtsize/t)
       /* clblas */
   #ifdef BENCH_CLBLAS
-      BENCHMARK_CLBLAS(clblasSaxpy(N, alpha, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue), 0, NULL, &event), 3*N*dtsize/t);
+      if(A.context().backend()==sc::driver::OPENCL)
+            BENCHMARK_CLBLAS(clblasSaxpy(N, alpha, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue), 0, NULL, &event), 3*N*dtsize/t);
   #endif
       /* BLAS */
   #ifdef BENCH_CBLAS
@@ -235,7 +236,8 @@ void bench(sc::numeric_type dtype, std::string operation)
     #endif
         BENCHMARK_ISAAC(y = sc::control(AT?dot(A.T(),x):dot(A,x), sc::execution_options_type(0, &events)),(M*N + M + N)*dtsize/t);
     #ifdef BENCH_CLBLAS
-        BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, As1, As2, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, &event), (M*N + M + N)*dtsize/t)
+        if(A.context().backend()==sc::driver::OPENCL)
+            BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, As1, As2, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, &event), (M*N + M + N)*dtsize/t)
     #endif
     #ifdef BENCH_CBLAS
         std::vector<float> cA(M*N), cx(N), cy(M);
@@ -324,8 +326,9 @@ void bench(sc::numeric_type dtype, std::string operation)
         BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
-        BENCHMARK_CLBLAS(clblasSgemm(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, BT?clblasTrans:clblasNoTrans, M, N, K, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(B.data()), 0, ldb,
-                                            0, CL_HANDLE(C.data()), 0, ldc, 1, &CL_HANDLE(queue),0, NULL, &event), (double)2*M*N*K/t)
+        if(A.context().backend()==sc::driver::OPENCL)
+            BENCHMARK_CLBLAS(clblasSgemm(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, BT?clblasTrans:clblasNoTrans, M, N, K, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(B.data()), 0, ldb,
+                                                0, CL_HANDLE(C.data()), 0, ldc, 1, &CL_HANDLE(queue),0, NULL, &event), (double)2*M*N*K/t)
     #endif
         /* BLAS */
     #ifdef BENCH_CBLAS

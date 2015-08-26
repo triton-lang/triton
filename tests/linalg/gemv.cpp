@@ -47,7 +47,7 @@ void test_row_wise_reduction(T epsilon, simple_vector_base<T> & cy, simple_matri
     std::cout << std::endl;
 
 
-  if(interf==clBLAS)
+  if(y.context().backend()==sc::driver::OPENCL && interf==clBLAS)
   {
       cl_command_queue clqueue = queue.handle().cl();
 
