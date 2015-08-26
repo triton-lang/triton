@@ -48,45 +48,6 @@ def main():
                     break
         return optlist
 
-    def find_library(name, cmake_glob_list):
-        cvars = sysconfig.get_config_vars()
-        compiler = new_compiler()
-        dirs = []
-        for gpath in cmake_glob_list.split(';'):
-            path = glob(gpath)
-            if path:
-                dirs += [path[0]]
-        return compiler.find_library_file(cvars['LIBDIR'].split(';') + dirs, name)
-
-    def find_opencl():
-        cvars = sysconfig.get_config_vars()
-        lib = find_library('OpenCL', '${ANDROID_CL_GLOB_HINTS}' if for_android else '${X86_CL_GLOB_HINTS}')
-        return {'include': '', 'lib': dirname(lib)} if lib else None
-
-    def find_in_path(name, path):
-        "Find a file in a search path"
-        #adapted fom http://code.activestate.com/recipes/52224-find-a-file-given-a-search-path/
-        for dir in path.split(os.pathsep):
-            binpath = os.path.join(dir, name)
-            if os.path.exists(binpath):
-                return os.path.abspath(binpath)
-        return None
-
-    def find_cuda():
-        if 'CUDAHOME' in os.environ:
-            home = os.environ['CUDAHOME']
-            nvcc = os.path.join(home, 'bin', 'nvcc')
-        else:
-            nvcc = find_in_path('nvcc', os.environ['PATH'])
-
-        if nvcc:
-            home = dirname(os.path.dirname(nvcc))
-            return {'include': os.path.join(home, 'include'),
-                    'lib': os.path.join(home, 'lib64')}
-        else:
-            return None
-
-
     #Tweaks warning, because boost-numpy and boost-python won't compile cleanly without these changes
     cvars = sysconfig.get_config_vars()
     cvars['OPT'] = str.join(' ', remove_prefixes(cvars['OPT'].split(), ['-g', '-Wstrict-prototypes']))
@@ -96,21 +57,8 @@ def main():
     #Check Android
     for_android = '-mandroid' in cvars['PY_CFLAGS']
 
-    #OpenCL
-    opencl_config = find_opencl()
-
-    #CUDA
-    cuda_config = find_cuda()
-
-    libraries = ['OpenCL']
-    if cuda_config: libraries += ['cuda', 'nvrtc']
-
-    #Backends:
-    backend_defines = ['-DISAAC_WITH_OPENCL']
-    if cuda_config: backend_defines += ['-DISAAC_WITH_CUDA']
-
-    #Library directories
-    library_dirs = [config['lib'] for config in [opencl_config, cuda_config] if config is not None]
+    #Dynamic load for backend switching
+    libraries = ['dl']
 
     #Include directories
     numpy_include = os.path.join(find_module("numpy")[1], "core", "include")
@@ -135,11 +83,11 @@ def main():
     #isaac
     extensions += [Extension(
                     '_isaac',src,
-                    extra_compile_args= backend_defines + ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
+                    extra_compile_args= ['-std=c++11', '-Wno-unused-function', '-Wno-unused-local-typedefs',  '-Wno-sign-compare', '-Wno-attributes', '-DBOOST_PYTHON_SOURCE '],
 		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,
-                    library_dirs=library_dirs,
+                    library_dirs=[],
                     libraries=libraries)]
     
     #External

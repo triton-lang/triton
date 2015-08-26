@@ -1,8 +1,3 @@
-if(CUDA_FOUND)
-   set(BACKEND_DEFINES "-DISAAC_WITH_CUDA")
-   include_directories(${CUDA_INCLUDE_DIRS})
-endif()
-
 get_property(ISAAC_PATH TARGET isaac PROPERTY LOCATION)
 foreach(PROG axpy dot ger gemv gemm)
      add_executable(${PROG}-test ${PROG}.cpp)
