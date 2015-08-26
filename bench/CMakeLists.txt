@@ -4,14 +4,14 @@ set(BLAS_DEF)
 set(BLAS_LIBS)
 
 #CUBLAS
-find_package(CUDA)
+find_package(CUDA QUIET)
 if(CUDA_FOUND)
     set(BLAS_DEF ${BLAS_DEF} "-DHAS_A_BLAS -DBENCH_CUBLAS")
     include_directories(${CUDA_INCLUDE_DIRS})
 endif()
 
 #CLAMDBLAS
-find_package(CLAMDBLAS)
+find_package(CLAMDBLAS QUIET)
 if(CLAMDBLAS_FOUND)
     set(BLAS_DEF ${BLAS_DEF} "-DHAS_A_BLAS -DBENCH_CLBLAS")
     include_directories(${CLAMDBLAS_INCLUDE_DIR})
@@ -19,7 +19,7 @@ if(CLAMDBLAS_FOUND)
 endif()
 
 #CBLAS
-find_package(MKL)
+find_package(MKL QUIET)
 if(MKL_FOUND)
     set(BLAS_DEF ${BLAS_DEF} "-DHAS_A_BLAS -DBENCH_CBLAS")
     include_directories(${MKL_INCLUDE_DIR})
