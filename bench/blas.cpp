@@ -324,7 +324,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
-        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         if(C.context().backend()==sc::driver::OPENCL)

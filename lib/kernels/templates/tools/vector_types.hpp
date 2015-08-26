@@ -48,10 +48,8 @@ inline std::string vstore(unsigned int simd_width, std::string const & dtype, st
     {
       switch(backend)
       {
-  #ifdef ISAAC_WITH_CUDA
         case driver::CUDA:
           return "reinterpret_cast<" + vdtype + "*>(" + ptr + ")[" + offset + "] = " + value;
-  #endif
         case driver::OPENCL:
           return append_width("vstore", simd_width) + "(" + value + ", " + offset + ", " + ptr + ")";
         default:
@@ -69,10 +67,8 @@ inline std::string vload(unsigned int simd_width, std::string const & dtype, std
     {
       switch(backend)
       {
-  #ifdef ISAAC_WITH_CUDA
         case driver::CUDA:
           return "reinterpret_cast<" + vdtype + "*>(" + ptr + ")[" + offset + "]";
-  #endif
         case driver::OPENCL:
           return append_width("vload", simd_width) + "(" + offset + ", " + ptr + ")";
         default:
