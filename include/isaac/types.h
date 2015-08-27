@@ -8,7 +8,7 @@
 namespace isaac
 {
 
-typedef int int_t;
+typedef long long int_t;
 
 struct ISAACAPI size4
 {
