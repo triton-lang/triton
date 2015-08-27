@@ -26,11 +26,12 @@ def pow2range(a, b):
 
 class Tuner:
 
-    def __init__(self, logger, device, operation, json_path):
+    def __init__(self, logger, device, operation, json_path, progress_bar = None):
         self.logger = logger
         self.device = device
         self.operation = operation
         self.json_path = json_path
+        self.progress_bar = progress_bar
         
         
     def pprint_datapoint(self, x, y):
@@ -128,16 +129,21 @@ class Tuner:
         except:
             pass
         
+        ##### Exploration #####
         for idx, x in enumerate(sizes):
+            self.progress_bar.set_prefix(', '.join(map(str, x)))
+            #Skip if saved
             if x in X:
-                self.pprint_datapoint(x, Y[X.index(x)])
+                self.progress_bar.update(1, 1, max(Y[X.index(x)]))
+                print ''
                 continue
+            
+            #Check if the current best prediction is not a local optimum
             idx = len(X)
             nparams = len(profiles)
             tree, operands = tools.tree_of(operation, x, context)
-            #Check if the current best prediction is not a local optimum
             if idx==0:
-                tune = True
+                retune = True
                 predicted = None
             else:
                 if nparams==1:
@@ -154,12 +160,10 @@ class Tuner:
                         except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
                             pass
                     predicted = profiles[best[argmax(perf)]]
-                tune = not optimize.is_local_optimum(predicted, operation, x, context)     
-                #tune = True
+                retune = not optimize.is_local_optimum(predicted, operation, x, context)
             #Retune if necessary
-            if tune:
-                #new = optimize.exhaustive(operation, x, context)
-                optimizer = optimize.GeneticOptimizer(self.logger, naccept=1000, niter=1000, cxpb=.4, mutpb=.4, popsize=20)
+            if retune:
+                optimizer = optimize.GeneticOptimizer(self.logger, naccept=1000, niter=1000, cxpb=.4, mutpb=.4, popsize=20, progress_bar = self.progress_bar)
                 new = optimizer.run(operation, x, context, prior=predicted)[0]
                 if new not in profiles:
                     profiles.append(new)
@@ -172,7 +176,9 @@ class Tuner:
                             except profile_execution_failure:
                                 perf = 0
                             yy.append(0 if isinf(perf) else perf)
-            #Update dataset
+                            
+                
+            ##### Training #####
             y = []
             fastest = max(predperf) if nparams > 1 else None
             for ip, p in enumerate(profiles):
@@ -187,12 +193,9 @@ class Tuner:
             for (fname, data) in zip(['X.csv', 'Y.csv', 'profiles.csv'], [X, Y, profiles]):
                 with open(os.path.join(savepath, fname), 'wb') as f:
                     csv.writer(f).writerows(data)
-            
-            #Update logging
-            self.pprint_datapoint(x, y)
 
         
-        #Export to JSON
+        ##### Exportation #####
         json_path = tools.sanitize(device.name) + '.json' if not self.json_path else self.json_path
         if os.path.isfile(json_path):
             json_data = json.load(open(json_path, 'r'))
