@@ -26,7 +26,7 @@ def pow2range(a, b):
 
 class Tuner:
 
-    def __init__(self, logger, device, operation, json_path, progress_bar = None):
+    def __init__(self, logger, device, operation, json_path, progress_bar):
         self.logger = logger
         self.device = device
         self.operation = operation
@@ -47,8 +47,9 @@ class Tuner:
         context = sc.driver.context(device)
         
         if self.logger:
-            self.logger.info('Now tuning ' + operation.__name__.replace('_','-').upper() + '...')
-         
+            self.logger.info(operation.__name__.replace('_','-').upper())
+            self.logger.info("----------------")
+
         #BLAS1 training sizes
         if operation in [sc.templates.axpy, sc.templates.dot]:
             if level=='simple':
@@ -131,6 +132,7 @@ class Tuner:
         
         ##### Exploration #####
         for idx, x in enumerate(sizes):
+            
             self.progress_bar.set_prefix(', '.join(map(str, x)))
             #Skip if saved
             if x in X:
@@ -161,6 +163,7 @@ class Tuner:
                             pass
                     predicted = profiles[best[argmax(perf)]]
                 retune = not optimize.is_local_optimum(predicted, operation, x, context)
+                
             #Retune if necessary
             if retune:
                 optimizer = optimize.GeneticOptimizer(self.logger, naccept=1000, niter=1000, cxpb=.4, mutpb=.4, popsize=20, progress_bar = self.progress_bar)
@@ -193,6 +196,11 @@ class Tuner:
             for (fname, data) in zip(['X.csv', 'Y.csv', 'profiles.csv'], [X, Y, profiles]):
                 with open(os.path.join(savepath, fname), 'wb') as f:
                     csv.writer(f).writerows(data)
+            
+            #print performance info in case no tuning was done
+            if not retune:
+                self.progress_bar.update(1, 1, max(Y[X.index(x)]))
+                print ''
 
         
         ##### Exportation #####
