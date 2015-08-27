@@ -35,6 +35,7 @@ void bench(sc::numeric_type dtype, std::string operation)
 // MACROS FOR BENCHMARKING
 //
 #define CL_HANDLE(X) X.handle().cl()
+#define CU_HANDLE(X) X.handle().cu()
 
 #define BENCHMARK_ISAAC(OP, PERF) \
   {\
@@ -157,12 +158,7 @@ void bench(sc::numeric_type dtype, std::string operation)
   #endif
       /* CuBLAS */
   #ifdef BENCH_CUBLAS
-      T *cux, *cuy;
-      cudaMalloc((void**) &cux, N * sizeof(T));
-      cudaMalloc((void**) &cuy, N * sizeof(T));
-      BENCHMARK_CUDA(cublasSaxpy(N, alpha, cux, 1, cuy, 1), 3*N*dtsize/t)
-      cudaFree(cux);
-      cudaFree(cuy);
+      BENCHMARK_CUDA(cublasSaxpy(N, alpha, (T*)CU_HANDLE(x.data()), 1, (T*)CU_HANDLE(y.data()), 1), 3*N*dtsize/t)
   #endif
       std::cout << std::endl;
     }
@@ -192,12 +188,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       BENCHMARK_HOST(cblas_sdot(N, cx.data(), 1, cy.data(), 1), 2*N*dtsize/t);
   #endif
   #ifdef BENCH_CUBLAS
-      T *cux, *cuy;
-      cudaMalloc((void**) &cux, N * sizeof(T));
-      cudaMalloc((void**) &cuy, N * sizeof(T));
-      BENCHMARK_CUDA(cublasSdot(N, cux, 1, cuy, 1), 2*N*dtsize/t)
-      cudaFree(cux);
-      cudaFree(cuy);
+      BENCHMARK_CUDA(cublasSdot(N, (T*)CU_HANDLE(x.data()), 1, (T*)CU_HANDLE(y.data()), 1), 2*N*dtsize/t)
   #endif
       std::cout << std::endl;
     }
@@ -248,14 +239,7 @@ void bench(sc::numeric_type dtype, std::string operation)
         BENCHMARK_HOST(cblas_sgemv(CblasColMajor, AT?CblasTrans:CblasNoTrans, As1, As2, 1, cA.data(), lda, cx.data(), 1, 0, cy.data(), 1), (M*N + M + N)*dtsize/t);
     #endif
     #ifdef BENCH_CUBLAS
-        T *cuA, *cux, *cuy;
-        cudaMalloc((void**) &cuA, N * M * sizeof(T));
-        cudaMalloc((void**) &cux, N * sizeof(T));
-        cudaMalloc((void**) &cuy, M * sizeof(T));
-        BENCHMARK_CUDA(cublasSgemv(AT?'t':'n', As1, As2, 1, cuA, lda, cux, 1, 0, cuy, 1), (M*N + M + N)*dtsize/t)
-        cudaFree(cuA);
-        cudaFree(cux);
-        cudaFree(cuy);
+        BENCHMARK_CUDA(cublasSgemv(AT?'t':'n', As1, As2, 1, (T*)CU_HANDLE(A.data()), lda, (T*)CU_HANDLE(x.data()), 1, 0, (T*)CU_HANDLE(y.data()), 1), (M*N + M + N)*dtsize/t)
     #endif
         std::cout << std::endl;
       }
@@ -297,7 +281,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     MNKs.push_back(std::make_tuple("ICA [32 channels]",'N','T',32,32,600000));
     MNKs.push_back(std::make_tuple("ICA [256 channels]",'N','T',256,256,600000));
 
-    //Bi-diagonalization
+//    //Bi-diagonalization
     MNKs.push_back(std::make_tuple("Bidiagonalization [Iteration 1]",'N','T',4096,4096,32));
     MNKs.push_back(std::make_tuple("Bidiagonalization [Iteration 10]",'N','T',3456,3456,32));
     MNKs.push_back(std::make_tuple("Bidiagonalization [Iteration 50]",'N','T',896,896,32));
@@ -324,7 +308,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
-        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         if(C.context().backend()==sc::driver::OPENCL)
@@ -340,14 +324,7 @@ void bench(sc::numeric_type dtype, std::string operation)
         BENCHMARK_HOST(cblas_sgemm(CblasColMajor, AT?CblasTrans:CblasNoTrans, BT?CblasTrans:CblasNoTrans, M, N, K, 1, cA.data(), lda, cB.data(), ldb, 1, cC.data(), ldc), (double)2*M*N*K/t);
     #endif
     #ifdef BENCH_CUBLAS
-        T *cuA, *cuB, *cuC;
-        cudaMalloc((void**) &cuA, M * K * sizeof(T));
-        cudaMalloc((void**) &cuB, K * N * sizeof(T));
-        cudaMalloc((void**) &cuC, M * N * sizeof(T));
-        BENCHMARK_CUDA(cublasSgemm(AT?'t':'n', BT?'t':'n', M, N, K, 1, cuA, lda, cuB, ldb, 1, cuC, ldc), (double)2*M*N*K/t)
-        cudaFree(cuA);
-        cudaFree(cuB);
-        cudaFree(cuC);
+        BENCHMARK_CUDA(cublasSgemm(AT?'t':'n', BT?'t':'n', M, N, K, 1, (T*)CU_HANDLE(A.data()), lda, (T*)CU_HANDLE(B.data()), ldb, 1, (T*)CU_HANDLE(C.data()), ldc), (double)2*M*N*K/t)
     #endif
         std::cout << std::endl;
       }
