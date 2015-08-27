@@ -1,6 +1,7 @@
-import argparse
+import argparse, logging, sys
 import isaac as sc
-from tune.tune import do_tuning
+from tune.tune import Tuner
+from tune.tools import metric_name_of
 
 def parse_arguments():
     platforms = sc.driver.get_platforms()
@@ -28,8 +29,32 @@ def parse_arguments():
     
     return (device, operation, args.json)
         
-            
-if __name__ == "__main__":
+
+class ProgressBar:
+    
+    def __init__(self, length,  metric_name):
+        self.length = length
+        self.metric_name = metric_name
+    
+    def set_prefix(self, prefix):
+        self.prefix = prefix
+        
+    def update(self, i, total, performance):
+        percent = float(i) / total
+        hashes = '#' * int(round(percent * self.length))
+        spaces = ' ' * (self.length - len(hashes))
+        sys.stdout.write(("\r" + self.prefix.ljust(10) + ": [{0}] {1: <3}% [{2} " + self.metric_name + "]").format(hashes + spaces, int(round(percent * 100)), int(performance)))
+        sys.stdout.flush()
+        
+if __name__ == "__main__":    
+    logger = logging.getLogger(__name__)
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(logging.Formatter('%(message)s'))
+    sh.setLevel(logging.INFO)
+    logger.addHandler(sh)
+    logger.setLevel(logging.INFO)
+
     sc.driver.default.queue_properties = sc.driver.PROFILING_ENABLE
-    args = parse_arguments()
-    do_tuning(*args)
+    device, operation, json = parse_arguments()
+    tuner = Tuner(logger, device, operation, json, ProgressBar(30, metric_name_of(operation)))
+    tuner.run()

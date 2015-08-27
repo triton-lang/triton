@@ -43,13 +43,14 @@ def exhaustive(template, sizes, context):
 
 class GeneticOptimizer:
     
-    def __init__(self, logger, naccept=500, niter=1000, cxpb=.4, mutpb=.4, popsize=10):
+    def __init__(self, logger, naccept=500, niter=1000, cxpb=.4, mutpb=.4, popsize=10, progress_bar = None):
         self.logger = logger
         self.naccept = naccept
         self.niter = niter
         self.cxpb = cxpb
         self.mutpb = mutpb
         self.popsize = popsize
+        self.progress_bar = progress_bar
         
     def run(self, template, sizes, context, initializer = None, prior = None):
         tree, _ = tools.tree_of(template, sizes, context)
@@ -85,6 +86,7 @@ class GeneticOptimizer:
             idx = tuple(genome)
             if idx not in cache:
                 cache[idx] = tools.benchmark(template, decode(genome), tree)
+            self.progress_bar.update(max(len(cache), it), self.niter, metric(sizes, min(cache.values())))
             return cache[idx],
             
         cache = {}
@@ -99,11 +101,14 @@ class GeneticOptimizer:
         toolbox.register("mutate", deap_tools.mutFlipBit)
         toolbox.register("select", deap_tools.selNSGA2)
 
+        x = []
+        y = []
+        it = 0
+        
+        population = [] 
         #Initialization
         if initializer is None:
             initializer = ([random.randint(0, 2**x) for x in nbits] for i in iter(int,1))
-        population = [] 
-
         genome = encode(prior if prior else list(initializer.next()))
         while len(population) < self.popsize:
             individual = creator.Individual(genome)
@@ -115,15 +120,10 @@ class GeneticOptimizer:
             genome = encode(list(initializer.next()))
         hof.update(population)
         
-        x = []
-        y = []
-        it = 0
-        
+        #Main iteration
         while len(cache) < self.naccept and it<self.niter:
-            pad = len(cache) - len(x)
-            x += [len(cache)]*pad
-            y += [metric(sizes, hof[0].fitness.values[0])]*pad
             
+            #Generate offspring
             offspring = []
             while len(offspring) < self.popsize:
                 try:
@@ -147,7 +147,6 @@ class GeneticOptimizer:
                 except profile_execution_failure:
                     pass
 
-
             #Update fitnesses
             fitnesses = toolbox.map(toolbox.evaluate, offspring)
             for ind, fit in zip(offspring, fitnesses):
@@ -157,9 +156,6 @@ class GeneticOptimizer:
             population[:] = toolbox.select(population + offspring, self.popsize)
             hof.update(population)
             
-            optimal = '(%s)'%','.join(map(str,decode(hof[0])))
-            stdout.write('Iter %d | %d evaluated | Best %.2f [ for %s ]\r'%(it, x[-1], y[-1], optimal))
-            stdout.flush()
             it += 1
         stdout.write('\n')
 
