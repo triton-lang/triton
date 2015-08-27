@@ -43,7 +43,7 @@ class ProgressBar:
         percent = float(i) / total
         hashes = '#' * int(round(percent * self.length))
         spaces = ' ' * (self.length - len(hashes))
-        sys.stdout.write(("\r" + self.prefix.ljust(10) + ": [{0}] {1: <3}% [{2} " + self.metric_name + "]").format(hashes + spaces, int(round(percent * 100)), int(performance)))
+        sys.stdout.write(("\r" + self.prefix.ljust(10) + ": [{0}] {1: >3}% [{2} " + self.metric_name + "]").format(hashes + spaces, int(round(percent * 100)), int(performance)))
         sys.stdout.flush()
         
 if __name__ == "__main__":    
