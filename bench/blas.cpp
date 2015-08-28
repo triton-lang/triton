@@ -43,7 +43,6 @@ void bench(sc::numeric_type dtype, std::string operation)
   double total_time = 0;\
   while(total_time*1e-9 < 1e-2){\
     std::list<sc::driver::Event> events;\
-    queue.synchronize();\
     OP;\
     queue.synchronize();\
     times.push_back((double)std::accumulate(events.begin(), events.end(), 0, &time_event));\
@@ -59,7 +58,6 @@ void bench(sc::numeric_type dtype, std::string operation)
   double total_time = 0;\
   while(total_time*1e-9 < 1e-2){\
     cl_event event;\
-    queue.synchronize();\
     OP;\
     queue.synchronize();\
     times.push_back(sc::driver::Event(event).elapsed_time());\
@@ -96,7 +94,6 @@ void bench(sc::numeric_type dtype, std::string operation)
   OP;\
   cudaThreadSynchronize();\
   while(total_time*1e-3 < 1e-2){\
-    flush = sc::zeros(1e6, 1, dtype);\
     cudaEventRecord(start,0);\
     OP;\
     cudaEventRecord(stop,0);\
@@ -105,7 +102,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     times.push_back(time*1e6);\
     total_time+=time;\
   }\
-  double t = median(times);\
+  double t = mean(times);\
   std::cout << "\t" << (int)(PERF) << std::flush;\
   }
 
@@ -262,19 +259,19 @@ void bench(sc::numeric_type dtype, std::string operation)
 //    MNKs.push_back(std::make_tuple("Convolution [LeNet-2]",'N','N',64,50,500));
 
     //Convolution Gradient-1
-    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-5]",'T','N',1728,128,169));
-    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-4]",'T','N',1728,192,169));
-    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-3]",'T','N',2304,384,169));
-    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-2]",'T','N',1200,128,729));
-    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-1]",'T','N',363,96,3025));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-5]",'T','N',1728,128,169));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-4]",'T','N',1728,192,169));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-3]",'T','N',2304,384,169));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-2]",'T','N',1200,128,729));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-1]",'T','N',363,96,3025));
 //    MNKs.push_back(std::make_tuple("Conv. Gradient-1 [LeNet-2]",'T','N',500,50,64));
 //    MNKs.push_back(std::make_tuple("Conv. Gradient-1 [LeNet-1]",'T','N',25,20,576));
 
     //Convolution Gradient-2
-    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-5]",'N','T',169,1728,128));
-    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-4]",'N','T',169,1728,192));
-    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-3]",'N','T',169,2304,384));
-    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-2]",'N','T',729,1200,128));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-5]",'N','T',169,1728,128));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-4]",'N','T',169,1728,192));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-3]",'N','T',169,2304,384));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-2]",'N','T',729,1200,128));
 //    MNKs.push_back(std::make_tuple("Conv. Gradient-2 [LeNet-2]",'N','T',64,500,50));
 
     //Covariance (e.g., ICA, 10minutes/1khz)
@@ -308,7 +305,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
-        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         if(C.context().backend()==sc::driver::OPENCL)
