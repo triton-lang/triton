@@ -56,7 +56,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       return 0;
   }
 
-  int gemm::is_invalid_impl(driver::Device const & device, expressions_tuple const &) const
+  int gemm::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
   {
 //    if(device.vendor()==driver::Device::Vendor::NVIDIA && p_.simd_width > 1)
 //      return TEMPLATE_INVALID_SIMD_WIDTH;

@@ -59,6 +59,7 @@ def main():
 
     #Dynamic load for backend switching
     libraries = ['dl']
+    library_dirs = []
 
     #Include directories
     numpy_include = os.path.join(find_module("numpy")[1], "core", "include")
@@ -87,7 +88,7 @@ def main():
 		    extra_link_args=['-Wl,-soname=_isaac.so'],
                     undef_macros=[],
                     include_dirs=include,
-                    library_dirs=[],
+                    library_dirs=library_dirs,
                     libraries=libraries)]
     
     #External

@@ -134,6 +134,9 @@ class IsaacApp(App):
         
     def show_benchmark(self):
         pass
+    
+    def on_pause(self):
+        return True
         
     def show_tune(self):
         if self.root.ids.sm.current != 'Tune':
