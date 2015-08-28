@@ -17,11 +17,13 @@ import json
 import thread
 
 from tune.tune import Tuner
+from tune.tools import metric_name_of
 
 __version__ = '1.0'
 
 class ScrollableLabel(ScrollView):
     text = StringProperty('')
+    font_name = StringProperty('')
 
 class LabelLogger:
     def __init__(self, label):
@@ -30,7 +32,33 @@ class LabelLogger:
     def info(self, msg):
         self.label.text += msg + '\n'
         
+class LabelProgressBar:
     
+    def __init__(self, length, label, metric_name):
+        self.prefix = ''
+        self.text = ''
+        self.label = label
+        self.metric_name = metric_name
+        self.length = length
+    
+    def set_prefix(self, prefix):
+        self.prefix = prefix
+        self.text_start = self.label.text
+    
+    def update(self, i, total, x, y, complete=False):
+        percent = float(i) / total
+        hashes = '#' * int(round(percent * self.length))
+        spaces = ' ' * (self.length - len(hashes))
+        #Format of structures to print
+        xformat = ','.join(map(str,map(int, x)))
+        yformat = int(y)
+        percentformat = int(round(percent * 100))
+        msg = (self.prefix.ljust(10) + ": [{0}] {1: >3}% [{2} " + self.metric_name + "] ({3})\n").format(hashes + spaces, percentformat, yformat, xformat)
+        self.label.text = self.text_start + msg
+        #if complete:
+        #    self.label.text += '\n'
+        
+        
 class IsaacScreen(Screen):
     fullscreen = BooleanProperty(False)
 
@@ -88,9 +116,9 @@ class IsaacApp(App):
                               ('blas3', (sc.templates.gemm_nn, sc.templates.gemm_tn, sc.templates.gemm_nt, sc.templates.gemm_tt))]
                 for opclass, optype in operations:
                     for op in optype:
-                        tuner = Tuner(self.logger, device, op, '')
+                        progress_bar = LabelProgressBar(10, self.logger.label, metric_name_of(op))
+                        tuner = Tuner(self.logger, device, op, json_path='', progress_bar=progress_bar)
                         tuner.run(self.config.get('autotuning', opclass).lower())
-                        self.logger.info('')
             
             tid = thread.start_new_thread(run, ())
         else:
