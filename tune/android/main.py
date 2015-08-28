@@ -46,6 +46,7 @@ class LabelProgressBar:
     def set_prefix(self, prefix):
         self.prefix = prefix
         self.text_start = self.label.text
+        self.label.text = self.text_start + "{0}: [{1}] {2: >3}%".format(prefix.ljust(17), ' '*self.length, 0)
     
     def set_finished(self):
         self.old_percent = 0
@@ -59,7 +60,7 @@ class LabelProgressBar:
         xformat = ','.join(map(str,map(int, x)))
         yformat = int(y)
         percent = int(round(percent * 100))
-        msg = (self.prefix.ljust(10) + ": [{0}] {1: >3}% [{2} " + self.metric_name + "] ({3})").format(hashes + spaces, percent, yformat, xformat)
+        msg = ("{0}: [{1}] {2: >3}% [{3} {4}] ({5})").format(self.prefix.ljust(17), hashes + spaces, percent, yformat, self.metric_name, xformat)
         if percent > self.old_percent:
             sleep(.01)
             self.label.text = self.text_start + msg
