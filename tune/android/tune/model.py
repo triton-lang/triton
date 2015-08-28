@@ -24,10 +24,6 @@ def nrmse(y_ground, y):
 def train(X, Y, profiles):      
     X = np.array(X)
     Y = np.array(Y)
-    #Remove unused profiles
-    unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
-    profiles = [x in profiles for ix,x in enumerate(profiles) if ix not in unused]
-    Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1)
     #Shuffle
     p = np.random.permutation(X.shape[0])
     M = X.shape[0]
