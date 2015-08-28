@@ -28,13 +28,12 @@ def benchmark(template, setting, tree):
     total = 0
     i = 0
     while total < 1e-2:
-        #z = sc.zeros(1, 10000000, sc.float32, tree.context)
         z, events = sc.driver.enqueue(tree)
         tree.context.queues[0].synchronize()
         times.append(1e-9*sum([e.elapsed_time for e in events]))
         total += times[-1]
         i+=1
-    return mean(times)
+    return median(times)
 
 
 def tree_of(template, sizes, context):
@@ -42,7 +41,7 @@ def tree_of(template, sizes, context):
         N, = sizes
         x = sc.empty(N, dtype=sc.float32, context=context)
         y = sc.empty(N, dtype=sc.float32, context=context)
-        return x + y, (x, y)
+        return sc.assign(y, x + y), (x, y)
     elif issubclass(template, sc.templates.dot):
         N, = sizes
         x = sc.empty(N, context=context)
@@ -75,7 +74,7 @@ def memory_footprint(template, sizes):
     elif issubclass(template, sc.templates.dot):
         return 4*2*sizes[0]*1e-9
     elif issubclass(template, sc.templates.ger):
-        return 4*3*sizes[0]*sizes[1]*1e-9
+        return 4*sizes[0]*sizes[1]*1e-9
     elif issubclass(template, sc.templates.gemv):
         return 4*sizes[0]*sizes[1]*1e-9
     elif issubclass(template, sc.templates.gemm):

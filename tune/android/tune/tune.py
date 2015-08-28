@@ -33,11 +33,7 @@ class Tuner:
         self.json_path = json_path
         self.progress_bar = progress_bar
         
-        
-    def pprint_datapoint(self, x, y):
-        if self.logger:
-            self.logger.info(', '.join(map(str, x)) + ': ' + str(int(max(y))) + ' ' + tools.metric_name_of(self.operation))
-            
+  
     def run(self, level = 'intermediate'): 
         
         assert level in ['simple', 'intermediate', 'full']
@@ -47,17 +43,18 @@ class Tuner:
         context = sc.driver.context(device)
         
         if self.logger:
+            self.logger.info("----------------")
             self.logger.info(operation.__name__.replace('_','-').upper())
             self.logger.info("----------------")
 
         #BLAS1 training sizes
         if operation in [sc.templates.axpy, sc.templates.dot]:
             if level=='simple':
-                sizes = [(1e7,)]
+                sizes = [(10000000,)]
             elif level=='intermediate':
                 sizes = [(x,) for x in tools.expspace(1e3, 1e8, 10)]
             else:
-                sizes = [(x,) for x in tools.expspace(1e3, 1e8, 30)] 
+                sizes = [(x,) for x in tools.expspace(1e3, 1e8, 100)] 
         
         #BLAS2 training sizes
         if operation in [sc.templates.ger, sc.templates.gemv_n, sc.templates.gemv_t]:
@@ -81,25 +78,25 @@ class Tuner:
                 sizes = [(1536,1536,1536)]
             elif level=='intermediate':
                 sizes = [(32, 32, 16000),
-                               (3025,96,363),
-                               (729,128,1200),
-                               (169,384,2304),
-                               (169,192,1728),
-                               (169,128,1728),
-                               (169,1728,128),
-                               (169,1728,192),
-                               (169,2304,384),
-                               (729,1200,128),
-                               (1728,128,169), 
-                               (1728,192,169),
-                               (2304,384,169),
-                               (1200,128,729),
-                               (363,96,3025)]
-        elif level=='full':
-            sizes = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 15))
-            
+                         (3025,96,363),
+                         (729,128,1200),
+                         (169,384,2304),
+                         (169,192,1728),
+                         (169,128,1728),
+                         (169,1728,128),
+                         (169,1728,192),
+                         (169,2304,384),
+                         (729,1200,128),
+                         (1728,128,169), 
+                         (1728,192,169),
+                         (2304,384,169),
+                         (1200,128,729),
+                         (363,96,3025)]
+            elif level=='full':
+			    sizes = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 15))
+
         #Remove duplicates and or too small/big tuples
-        sizes = [x for x in sizes if 1e-4 <= tools.memory_footprint(operation, x) <= 1e-1]
+        sizes = [x for x in sizes if 1e-4 <= tools.memory_footprint(operation, x) <= 2e-1]
         
         #Training data
         performance = tools.metric_of(operation)
@@ -136,8 +133,8 @@ class Tuner:
             self.progress_bar.set_prefix(', '.join(map(str, x)))
             #Skip if saved
             if x in X:
-                self.progress_bar.update(1, 1, max(Y[X.index(x)]))
-                print ''
+                row = Y[X.index(x)]
+                self.progress_bar.update(1, 1, profiles[argmax(row)], max(row), complete=True)
                 continue
             
             #Check if the current best prediction is not a local optimum
@@ -199,8 +196,8 @@ class Tuner:
             
             #print performance info in case no tuning was done
             if not retune:
-                self.progress_bar.update(1, 1, max(Y[X.index(x)]))
-                print ''
+                row = Y[X.index(x)]
+                self.progress_bar.update(1, 1, profiles[argmax(row)], max(row), complete=True)
 
         
         ##### Exportation #####
