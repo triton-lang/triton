@@ -9,8 +9,8 @@ from isaac.external.sklearn.forest import RandomForestRegressor
 import optimize, tools, model
 from json import encoder
 import json, csv
+import numpy as np
 
-to_catch = (sc.OperationNotSupported, sc.OclLaunchOutOfResources, sc.CudaLaunchOutOfResources, sc.MemObjectAllocationFailure, sc.InvalidWorkGroupSize, sc.OutOfHostMemory, sc.InvalidValue)
 
 encoder.FLOAT_REPR = lambda o: format(o, '.2f')
 encoder.separators = (',',':')
@@ -193,10 +193,11 @@ class Tuner:
             Y.append(y)
             
             #Remove unused profiles
-            unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
-            profiles = [x in profiles for ix,x in enumerate(profiles) if ix not in unused]
-            Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1)
-    
+            if len(Y[0]) > 1:
+                unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
+                profiles = [p for ip,p in enumerate(profiles) if ip not in unused]
+                Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1).tolist()          
+            
             #Save data
             for (fname, data) in zip(['X.csv', 'Y.csv', 'profiles.csv'], [X, Y, profiles]):
                 with open(os.path.join(savepath, fname), 'wb') as f:
