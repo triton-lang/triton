@@ -60,7 +60,7 @@ class LabelProgressBar:
         xformat = ','.join(map(str,map(int, x)))
         yformat = int(y)
         percent = int(round(percent * 100))
-        msg = ("{0}: [{1}] {2: >3}% [{3} {4}] ({5})").format(self.prefix.ljust(17), hashes + spaces, percent, yformat, self.metric_name, xformat)
+        msg = ("{0}: [{1}] {2: >3}% [{3} {4}]").format(self.prefix.ljust(17), hashes + spaces, percent, yformat, self.metric_name)
         if percent > self.old_percent:
             sleep(.01)
             self.label.text = self.text_start + msg
