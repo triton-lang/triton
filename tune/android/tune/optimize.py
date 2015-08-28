@@ -158,8 +158,6 @@ class GeneticOptimizer:
             hof.update(population)
             
             it += 1
-        stdout.write('\n')
-
         return tuple(decode(hof[0])), x, y
         
 def is_local_optimum(parameters, template, sizes, context):
