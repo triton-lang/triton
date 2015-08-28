@@ -192,6 +192,12 @@ class Tuner:
             X.append(x)
             Y.append(y)
             
+            #Remove unused profiles
+            unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
+            profiles = [x in profiles for ix,x in enumerate(profiles) if ix not in unused]
+            Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1)
+    
+            #Save data
             for (fname, data) in zip(['X.csv', 'Y.csv', 'profiles.csv'], [X, Y, profiles]):
                 with open(os.path.join(savepath, fname), 'wb') as f:
                     csv.writer(f).writerows(data)
