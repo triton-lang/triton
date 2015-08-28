@@ -157,7 +157,7 @@ class Tuner:
                     for b in best:
                         try:
                             perf += [performance(x, tools.benchmark(operation, profiles[b], tree))]
-                        except (sc.OperationNotSupported, sc.LaunchOutOfResources, sc.MemObjectAllocationFailure):
+                        except profile_execution_failure:
                             pass
                     predicted = profiles[best[argmax(perf)]]
                 retune = not optimize.is_local_optimum(predicted, operation, x, context)
