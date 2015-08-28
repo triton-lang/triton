@@ -86,7 +86,7 @@ class GeneticOptimizer:
             idx = tuple(genome)
             if idx not in cache:
                 cache[idx] = tools.benchmark(template, decode(genome), tree)
-            self.progress_bar.update(max(len(cache), it), self.niter, metric(sizes, min(cache.values())))
+            self.progress_bar.update(max(len(cache), it), self.niter, decode(min(cache, key=cache.get)), metric(sizes, min(cache.values())))
             return cache[idx],
             
         cache = {}
@@ -183,7 +183,7 @@ def is_local_optimum(parameters, template, sizes, context):
         return False
         
     #Latency bound -- ignore
-    if reference < 2e-5:
+    if reference < 1e-5:
         return True
         
     timings = {}
