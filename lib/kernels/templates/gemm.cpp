@@ -58,8 +58,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
   int gemm::is_invalid_impl(driver::Device const & device, expressions_tuple const &) const
   {
-    if(device.vendor()==driver::Device::Vendor::NVIDIA && p_.simd_width > 1)
-      return TEMPLATE_INVALID_SIMD_WIDTH;
+//    if(device.vendor()==driver::Device::Vendor::NVIDIA && p_.simd_width > 1)
+//      return TEMPLATE_INVALID_SIMD_WIDTH;
 
     if(p_.A_fetching_policy!=FETCH_FROM_LOCAL || p_.B_fetching_policy!=FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
@@ -113,7 +113,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
     driver::backend_type backend = device.backend();
     bool has_depth = p_.depth > 1;
-#define VLOAD(offset, ptr) vload(p_.simd_width, sdtype, offset, ptr, backend)
+#define VLOAD(offset, ptr) vload(p_.simd_width, sdtype, offset, ptr, backend, true)
+#define VLOAD_MISALIGNED(offset, ptr) vload(p_.simd_width, sdtype, offset, ptr, backend, false)
 #define VSTORE(value, offset, ptr) vstore(p_.simd_width, sdtype, value, offset, ptr, backend)
 #define ASTRIDE1 string(check_bounds_?"*Astride1":"")
 #define BSTRIDE1 string(check_bounds_?"*Bstride1":"")
@@ -308,7 +309,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
                   for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
                       stream << "ldsA[" << k*llda + m + s << "] = (condy" << k << " && " << s << "< M)? Ai[" << mm << "][" << k << "*lda + " << s << "] : 0;" << std::endl;
               else
-                stream << VSTORE(VLOAD("0" ,"&Ai[" + mm +"][" + kk + "*lda]"), "0", "ldsA + " + to_string(k*llda+m)) << ";" << std::endl;
+                stream << VSTORE(VLOAD_MISALIGNED("0" ,"&Ai[" + mm +"][" + kk + "*lda]"), "0", "ldsA + " + to_string(k*llda+m)) << ";" << std::endl;
             }
         }
         else
@@ -323,7 +324,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
                         stream << "ldsA[" << m*llda + k + s << "] = condx" << k + s << "? Ai[" << mm << "][" << k + s << ASTRIDE1 << "] : 0;" << std::endl;
 
                 else
-                    stream << VSTORE(VLOAD("0", "&Ai[" + mm + "][" + kk + ASTRIDE1 + "]"), "0", "ldsA + " + to_string(m*llda+k)) << ";" << std::endl;
+                    stream << VSTORE(VLOAD_MISALIGNED("0", "&Ai[" + mm + "][" + kk + ASTRIDE1 + "]"), "0", "ldsA + " + to_string(m*llda+k)) << ";" << std::endl;
               }
         }
 
@@ -339,7 +340,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
                   for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
                       stream << "ldsB[" << k*lldb + n + s << "] = (condy" << k << " && " << s << "< N)? Bi[" <<  nn << "][" << kk << "*ldb +" << s << "] : 0;" << std::endl;
               else
-                stream << VSTORE(VLOAD("0" ,"&Bi[" + nn +"][" + kk + "*ldb]"), "0", "ldsB + " + to_string(k*lldb+n)) << ";" << std::endl;
+                stream << VSTORE(VLOAD_MISALIGNED("0" ,"&Bi[" + nn +"][" + kk + "*ldb]"), "0", "ldsB + " + to_string(k*lldb+n)) << ";" << std::endl;
             }
         }
         else
@@ -354,7 +355,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
                       stream << "ldsB[" << n*lldb + k + s << "] = condx" << k + s << "? Bi[" << nn << "][" << k + s << BSTRIDE1 << "] : 0;" << std::endl;
 
               else
-                  stream << VSTORE(VLOAD("0", "&Bi[" + nn + "][" + kk + BSTRIDE1 + "]"), "0", "ldsB + " + to_string(n*lldb+k)) << ";" << std::endl;
+                  stream << VSTORE(VLOAD_MISALIGNED("0", "&Bi[" + nn + "][" + kk + BSTRIDE1 + "]"), "0", "ldsB + " + to_string(n*lldb+k)) << ";" << std::endl;
             }
         }
 
@@ -468,21 +469,19 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
 
     if(A_trans_=='N' || B_trans_=='T')
+    {
         stream << "int Ky = K - idT.y;" << std::endl;
-    if(A_trans_=='T' || B_trans_=='N')
-        stream << "int Kx = K - idT.x;" << std::endl;
-
-    if(A_trans_=='N' || B_trans_=='T')
         for(unsigned int k = 0; k < p_.kL; k += p_.local_fetch_1)
             stream << "int condy" << k << " = " << k << " < Ky;" << std::endl;
+    }
 
     if(A_trans_=='T' || B_trans_=='N')
     {
+        stream << "int Kx = K - idT.x;" << std::endl;
         for(unsigned int k = 0 ; k < p_.kL ; k += p_.local_fetch_0*p_.simd_width)
             for(unsigned int s = 0 ; s < p_.simd_width ; ++s)
-            stream << "int condx" << k + s << " = " << k + s << " < Kx;" << std::endl;
+                stream << "int condx" << k + s << " = " << k + s << " < Kx;" << std::endl;
     }
-
     fetch_to_lds(true);
 
     stream << "//Write back C" << std::endl;
@@ -534,7 +533,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
     stream.dec_tab();
     stream << "}" << std::endl;
-
 
     if(has_depth)
     {
