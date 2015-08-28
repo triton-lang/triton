@@ -11,6 +11,8 @@ def parse_arguments():
     parser.add_argument("-d", "--device", default=0, type=int, help='Device to tune for')
     parser.add_argument("-j", "--json", default='', type=str)
     parser.add_argument('--axpy', action='store_true', help='Tune AXPY')
+    parser.add_argument('--dot', action='store_true', help='Tune DOT')
+    parser.add_argument('--ger', action='store_true', help='Tune GER')
     parser.add_argument('--gemv_n', action='store_true', help='Tune GEMV-N')
     parser.add_argument('--gemv_t', action='store_true', help='Tune GEMV-T')
     parser.add_argument('--gemm_nn', action='store_true', help='Tune GEMM-NN')
@@ -29,7 +31,7 @@ def parse_arguments():
         print selected , '-',  sc.driver.device_type_to_string(d.type), '-', d.name, 'on', d.platform.name
     
     
-    operations = ['axpy', 'gemv_n', 'gemv_t', 'gemm_nn', 'gemm_tn', 'gemm_nt', 'gemm_tt']
+    operations = ['axpy', 'dot', 'ger', 'gemv_n', 'gemv_t', 'gemm_nn', 'gemm_tn', 'gemm_nt', 'gemm_tt']
     operations = [getattr(sc.templates,op) for op in operations  if getattr(args, op)]
         
     return (device, operations, args.json)
