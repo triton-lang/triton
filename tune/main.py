@@ -45,6 +45,9 @@ class ProgressBar:
     
     def set_prefix(self, prefix):
         self.prefix = prefix
+    
+    def set_finished(self):
+        sys.stdout.write("\n")
         
     def update(self, i, total, x, y, complete=False):
         percent = float(i) / total
@@ -55,8 +58,6 @@ class ProgressBar:
         yformat = int(y)
         percentformat = int(round(percent * 100))
         sys.stdout.write(("\r" + self.prefix.ljust(10) + ": [{0}] {1: >3}% [{2} " + self.metric_name + "] ({3})").format(hashes + spaces, percentformat, yformat, xformat))
-        if complete:
-			sys.stdout.write("\n")
         sys.stdout.flush()
         
 if __name__ == "__main__":    

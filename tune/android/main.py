@@ -15,6 +15,7 @@ from kivy.uix.settings import SettingsWithNoMenu
 import isaac as sc
 import json
 import thread
+from time import sleep
 
 from tune.tune import Tuner
 from tune.tools import metric_name_of
@@ -40,11 +41,16 @@ class LabelProgressBar:
         self.label = label
         self.metric_name = metric_name
         self.length = length
+        self.old_percent = 0
     
     def set_prefix(self, prefix):
         self.prefix = prefix
         self.text_start = self.label.text
     
+    def set_finished(self):
+        self.old_percent = 0
+        self.label.text += '\n'
+        
     def update(self, i, total, x, y, complete=False):
         percent = float(i) / total
         hashes = '#' * int(round(percent * self.length))
@@ -52,11 +58,12 @@ class LabelProgressBar:
         #Format of structures to print
         xformat = ','.join(map(str,map(int, x)))
         yformat = int(y)
-        percentformat = int(round(percent * 100))
-        msg = (self.prefix.ljust(10) + ": [{0}] {1: >3}% [{2} " + self.metric_name + "] ({3})\n").format(hashes + spaces, percentformat, yformat, xformat)
-        self.label.text = self.text_start + msg
-        #if complete:
-        #    self.label.text += '\n'
+        percent = int(round(percent * 100))
+        msg = (self.prefix.ljust(10) + ": [{0}] {1: >3}% [{2} " + self.metric_name + "] ({3})").format(hashes + spaces, percent, yformat, xformat)
+        if percent > self.old_percent:
+            sleep(.01)
+            self.label.text = self.text_start + msg
+            self.old_percent = percent
         
         
 class IsaacScreen(Screen):
@@ -112,7 +119,7 @@ class IsaacApp(App):
             
             def run():
                 operations = [('blas1', (sc.templates.axpy,)),
-                              ('blas2', (sc.templates.ger, sc.templates.gemv_n, sc.templates.gemv_t)),
+                              ('blas2', (sc.templates.gemv_n, sc.templates.gemv_t)),
                               ('blas3', (sc.templates.gemm_nn, sc.templates.gemm_tn, sc.templates.gemm_nt, sc.templates.gemm_tt))]
                 for opclass, optype in operations:
                     for op in optype:

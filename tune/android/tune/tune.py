@@ -129,12 +129,13 @@ class Tuner:
         
         ##### Exploration #####
         for idx, x in enumerate(sizes):
-            
+                        
             self.progress_bar.set_prefix(', '.join(map(str, x)))
             #Skip if saved
             if x in X:
                 row = Y[X.index(x)]
-                self.progress_bar.update(1, 1, profiles[argmax(row)], max(row), complete=True)
+                self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
+                self.progress_bar.set_finished()
                 continue
             
             #Check if the current best prediction is not a local optimum
@@ -197,7 +198,8 @@ class Tuner:
             #print performance info in case no tuning was done
             if not retune:
                 row = Y[X.index(x)]
-                self.progress_bar.update(1, 1, profiles[argmax(row)], max(row), complete=True)
+                self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
+                self.progress_bar.set_finished()
 
         
         ##### Exportation #####

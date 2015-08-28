@@ -13,6 +13,7 @@ from numpy import cumsum
 
 import tools
 from tools import profile_execution_failure
+from time import sleep
 
 fetch_types = [sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
                sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED,
