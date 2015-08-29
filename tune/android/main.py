@@ -1,5 +1,15 @@
+#System
 from os.path import dirname, realpath, join
+import isaac as sc
+import json
+import thread
+from time import sleep
 
+#Tuner
+from tune.tune import Tuner
+from tune.tools import metric_name_of
+
+#Kivy
 from kivy.logger import Logger
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.boxlayout import BoxLayout
@@ -12,13 +22,19 @@ from kivy.properties import NumericProperty, StringProperty, BooleanProperty,Lis
 from kivy.uix.screenmanager import Screen
 from kivy.uix.settings import SettingsWithNoMenu
 
-import isaac as sc
-import json
-import thread
-from time import sleep
 
-from tune.tune import Tuner
-from tune.tools import metric_name_of
+#Check if on Android
+import imp
+try:
+    imp.find_module('android')
+    on_android = True
+except ImportError:
+    on_android = False
+
+
+if on_android:
+    from android.runnable import run_on_ui_thread
+
 
 __version__ = '1.0'
 
@@ -108,6 +124,20 @@ class IsaacApp(App):
         #Logger
         self.logger = LabelLogger(self.screens['Tune'].ids.out)
     
+    if on_android:
+        @run_on_ui_thread
+        def lock_screen(self):
+            from jnius import autoclass
+            PythonActivity = autoclass('org.renpy.android.PythonActivity')
+            Params = autoclass('android.view.WindowManager$LayoutParams')
+            PythonActivity.mActivity.getWindow().addFlags(Params.FLAG_KEEP_SCREEN_ON)
+    
+        @run_on_ui_thread
+        def unlock_screen(self):
+            PythonActivity = autoclass('org.renpy.android.PythonActivity')
+            Params = autoclass('android.view.WindowManager$LayoutParams')
+            PythonActivity.mActivity.getWindow().clearFlags(Params.FLAG_KEEP_SCREEN_ON)
+        
     def start_tuning(self):
         button = self.screens['Tune'].ids.action_button
         if button.text == 'Run':
@@ -119,6 +149,8 @@ class IsaacApp(App):
             self.logger.info('')
             
             def run():
+                if on_android:
+                    self.lock_screen()
                 operations = [('blas1', (sc.templates.axpy,)),
                               ('blas2', (sc.templates.gemv_n, sc.templates.gemv_t)),
                               ('blas3', (sc.templates.gemm_nn, sc.templates.gemm_tn, sc.templates.gemm_nt, sc.templates.gemm_tt))]
@@ -137,6 +169,11 @@ class IsaacApp(App):
         pass
     
     def on_pause(self):
+        print 'pause'
+        return True
+    
+    def on_resume(self):
+        print 'resume'
         return True
         
     def show_tune(self):
