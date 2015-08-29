@@ -192,12 +192,6 @@ class Tuner:
             X.append(x)
             Y.append(y)
             
-            #Remove unused profiles
-            if len(Y[0]) > 1:
-                unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
-                profiles = [p for ip,p in enumerate(profiles) if ip not in unused]
-                Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1).tolist()          
-            
             #Save data
             for (fname, data) in zip(['X.csv', 'Y.csv', 'profiles.csv'], [X, Y, profiles]):
                 with open(os.path.join(savepath, fname), 'wb') as f:
@@ -208,6 +202,12 @@ class Tuner:
                 row = Y[X.index(x)]
                 self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
         self.progress_bar.set_finished()
+        
+        #Remove unused profiles
+        if len(Y[0]) > 1:
+            unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
+            profiles = [p for ip,p in enumerate(profiles) if ip not in unused]
+            Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1).tolist()          
         
         ##### Exportation #####
         json_path = tools.sanitize(device.name) + '.json' if not self.json_path else self.json_path
