@@ -39,7 +39,7 @@ inline std::string append_width(std::string const & str, unsigned int width)
 }
 
 
-inline std::string vstore(unsigned int simd_width, std::string const & dtype, std::string const & value, std::string const & offset, std::string const & ptr, driver::backend_type backend)
+inline std::string vstore(unsigned int simd_width, std::string const & dtype, std::string const & value, std::string const & offset, std::string const & ptr, driver::backend_type backend, bool aligned = true)
 {
     std::string vdtype = append_width(dtype,simd_width);
     if (simd_width==1)
@@ -49,7 +49,15 @@ inline std::string vstore(unsigned int simd_width, std::string const & dtype, st
       switch(backend)
       {
         case driver::CUDA:
-          return "reinterpret_cast<" + vdtype + "*>(" + ptr + ")[" + offset + "] = " + value;
+          if(aligned)
+              return "reinterpret_cast<" + vdtype + "*>(" + ptr + ")[" + offset + "] = " + value;
+          else
+          {
+              std::string res;
+              for(unsigned int s = 0 ; s < simd_width ; ++s)
+                  res +=  (s>0?";(":"(") + ptr + ")[" + offset + " + " + tools::to_string(s) + "] = " + access_vector_type(value, s);
+              return res;
+          }
         case driver::OPENCL:
           return append_width("vstore", simd_width) + "(" + value + ", " + offset + ", " + ptr + ")";
         default:
@@ -75,7 +83,7 @@ inline std::string vload(unsigned int simd_width, std::string const & dtype, std
           {
             std::string res = "make_" + vdtype + "(";
             for(unsigned int s = 0 ; s < simd_width ; ++s)
-                res += ((s>0)?",(":"(") + ptr + ")[" + offset + " + " + tools::to_string(s) + "]";
+                res += ((s>0)?",(":"(") + ptr + ")[" + offset + "*" + tools::to_string(simd_width) + " + " + tools::to_string(s) + "]";
             res += ")";
             return res;
           }

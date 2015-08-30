@@ -93,7 +93,7 @@ class Tuner:
                          (1200,128,729),
                          (363,96,3025)]
             elif level=='full':
-			    sizes = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 15))
+			    sizes = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 17))
 
         #Remove duplicates and or too small/big tuples
         sizes = [x for x in sizes if 1e-4 <= tools.memory_footprint(operation, x) <= 2e-1]

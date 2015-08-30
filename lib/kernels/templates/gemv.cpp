@@ -105,7 +105,7 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
   for (const auto & e : dots){
     std::string data_type = append_width("#scalartype",col_simd_width);
 
-    stream << e->process(data_type + " #name_acc = " + neutral_element((e)->root_op(), backend, "#scalartype") + ";") << std::endl;
+    stream << e->process(data_type + " #name_acc = " + InitPrefix(backend, data_type).get()  + "(" + neutral_element((e)->root_op(), backend, "#scalartype") + ");") << std::endl;
   }
 
   stream << "if (r < M)" << std::endl;
@@ -122,13 +122,13 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
       if(dot_type_==REDUCE_COLUMNS)
       {
         std::string data_type = append_width("#scalartype",row_simd_width);
-        accessors["array2"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "c*#stride", "#pointer + r*#ld", backend)+";";
-        accessors["repeat"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "(c%#tuplearg0)*#stride", "#pointer + (r%#tuplearg1)*#stride ", backend)+";";
+        accessors["array2"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "c*#stride", "#pointer + r*#ld", backend,false)+";";
+        accessors["repeat"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "(c%#tuplearg0)*#stride", "#pointer + (r%#tuplearg1)*#stride ", backend,false)+";";
       }
       else
       {
         std::string data_type = append_width("#scalartype",col_simd_width);
-        accessors["array2"] = data_type + " #namereg = " + vload(col_simd_width, "#scalartype", "0", "#pointer + r*#stride + c*#ld", backend) + ";";
+        accessors["array2"] = data_type + " #namereg = " + vload(col_simd_width, "#scalartype", "0", "#pointer + r*#stride + c*#ld", backend,false) + ";";
         accessors["repeat"] = "#scalartype #namereg = $VALUE{(r%#tuplearg0)*#stride, (c%#tuplearg1)*#stride};";
       }
       e->process_recursive(stream, PARENT_NODE_TYPE, accessors);
@@ -206,8 +206,8 @@ std::string gemv::generate_impl(std::string const & suffix, expressions_tuple co
       if(col_simd_width > 1)
           stream << "if(M - r > " << col_simd_width << "){" << std::endl;
       if (e->is_index_dot())
-          stream << e->process(vstore(col_simd_width,"uint", "#name_buf_value[lidy*" + local_size_0_ld_str + "]", "0", "#name_temp_value + r + M*" + GroupIdx0(backend).get(),backend)) << ";" << std::endl;
-      stream << e->process(vstore(col_simd_width,"#scalartype", "#name_buf[lidy*" + local_size_0_ld_str + "]", "0", "#name_temp + r + M*" + GroupIdx0(backend).get(),backend)) << ";" << std::endl;
+          stream << e->process(vstore(col_simd_width,"uint", "#name_buf_value[lidy*" + local_size_0_ld_str + "]", "0", "#name_temp_value + r + M*" + GroupIdx0(backend).get(),backend, false)) << ";" << std::endl;
+      stream << e->process(vstore(col_simd_width,"#scalartype", "#name_buf[lidy*" + local_size_0_ld_str + "]", "0", "#name_temp + r + M*" + GroupIdx0(backend).get(),backend, false)) << ";" << std::endl;
       if(col_simd_width > 1)
       {
           stream << "}" << std::endl;

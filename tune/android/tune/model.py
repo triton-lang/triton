@@ -31,12 +31,12 @@ def train(X, Y, profiles):
     Y = Y[p,:]   
 
     #Train the.profile
-    cut = int(.9*M)
+    cut = int(.5*M)
     XTr, YTr = X[:cut,:], Y[:cut,:]
     XCv, YCv = X[cut:,:], Y[cut:,:]
 
     nrmses = {}
-    for N in range(1,min(M+1,10)):
+    for N in range(1,min(M+1,20)):
         for depth in range(1,min(M+1,20)):
             clf = RandomForestRegressor(N, max_depth=depth).fit(XTr, YTr)
             t = np.argmax(clf.predict(XCv), axis = 1)

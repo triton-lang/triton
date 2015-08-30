@@ -41,7 +41,7 @@ void bench(sc::numeric_type dtype, std::string operation)
   {\
   std::vector<double> times;\
   double total_time = 0;\
-  while(total_time*1e-9 < 1e-2){\
+  while(total_time*1e-9 < 1e-1){\
     std::list<sc::driver::Event> events;\
     OP;\
     queue.synchronize();\
@@ -56,7 +56,7 @@ void bench(sc::numeric_type dtype, std::string operation)
   {\
   std::vector<long> times;\
   double total_time = 0;\
-  while(total_time*1e-9 < 1e-2){\
+  while(total_time*1e-9 < 1e-1){\
     cl_event event;\
     OP;\
     queue.synchronize();\
@@ -72,7 +72,7 @@ void bench(sc::numeric_type dtype, std::string operation)
   Timer tmr;\
   long total_time = 0;\
   std::vector<long> times;\
-  while(total_time*1e-9 < 1e-2){\
+  while(total_time*1e-9 < 1e-1){\
     tmr.start();\
     OP;\
     long time = tmr.get().count();\
@@ -93,7 +93,7 @@ void bench(sc::numeric_type dtype, std::string operation)
   cudaEventCreate(&stop);\
   OP;\
   cudaThreadSynchronize();\
-  while(total_time*1e-3 < 1e-2){\
+  while(total_time*1e-3 < 1e-1){\
     cudaEventRecord(start,0);\
     OP;\
     cudaEventRecord(stop,0);\
@@ -103,7 +103,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     total_time+=time;\
   }\
   double t = mean(times);\
-  std::cout << "\t" << (int)(PERF) << std::flush;\
+  std::cout << " " << (int)(PERF) << std::flush;\
   }
 
   unsigned int dtsize = sc::size_of(dtype);
@@ -111,16 +111,17 @@ void bench(sc::numeric_type dtype, std::string operation)
   std::map<std::string, std::string> metric{ {"axpy", "GB/s"}, {"dot", "GB/s"}, {"gemv", "GB/s"}, {"gemm", "GFLOPS"}};
   sc::array flush((int)1e6, sc::FLOAT_TYPE);
   std::cout << "#" << operation << " (" << metric[operation] << ")" << std::endl;
-  std::cout << "N";
-  std::cout << "\tISAAC";
+  std::cout << "\"N\"";
+  std::cout << " \"ISAAC (Pred impl.)\"";
+  std::cout << " \"ISAAC (Best impl.)\"";
 #ifdef BENCH_CLBLAS
-  std::cout << "\tclBLAS";
+  std::cout << " \"clBLAS\"";
 #endif
 #ifdef BENCH_CBLAS
-  std::cout << "\tBLAS";
+  std::cout << " \"BLAS\"";
 #endif
 #ifdef BENCH_CUBLAS
-  std::cout << "\tcuBLAS";
+  std::cout << " \"cuBLAS\"";
 #endif
   std::cout << std::endl;
   //
@@ -194,21 +195,23 @@ void bench(sc::numeric_type dtype, std::string operation)
   if(operation.substr(0, 4)=="gemv")
   {
     std::vector<std::tuple<char,int_t, int_t> > MNs;
-    MNs.push_back(std::make_tuple('N',896,896));
-    MNs.push_back(std::make_tuple('N',3072,3072));
-    //AlexNet
-    MNs.push_back(std::make_tuple('N',1000,256));
-    MNs.push_back(std::make_tuple('N',4096,256));
+    //Linear System
+    MNs.push_back(std::make_tuple('N',153,153));
+    MNs.push_back(std::make_tuple('N',1024,1024));
+    MNs.push_back(std::make_tuple('N',2867,2867));
 
-    MNs.push_back(std::make_tuple('T',169,256));
-    MNs.push_back(std::make_tuple('T',169,384));
-    MNs.push_back(std::make_tuple('T',729,256));
-    MNs.push_back(std::make_tuple('T',3025,96));
+    //Normalization
+    MNs.push_back(std::make_tuple('N', 32, 60000));
+    MNs.push_back(std::make_tuple('N', 256, 60000));
+
+    //Householder
+    MNs.push_back(std::make_tuple('N', 100, 60000));
+    MNs.push_back(std::make_tuple('N', 90, 60000));
+    MNs.push_back(std::make_tuple('N', 50, 60000));
 
     /*---------*/
     /*--BLAS2--*/
     /*---------*/
-    //T-layout
     for(std::tuple<char, int_t, int_t> MN: MNs)
     {
         bool AT = std::get<0>(MN) == 'T';
@@ -224,6 +227,7 @@ void bench(sc::numeric_type dtype, std::string operation)
         int_t lda = A.ld();
     #endif
         BENCHMARK_ISAAC(y = sc::control(AT?dot(A.T(),x):dot(A,x), sc::execution_options_type(0, &events)),(M*N + M + N)*dtsize/t);
+        BENCHMARK_ISAAC(y = sc::control(AT?dot(A.T(),x):dot(A,x), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
     #ifdef BENCH_CLBLAS
         if(y.context().backend()==sc::driver::OPENCL)
             BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, As1, As2, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, &event), (M*N + M + N)*dtsize/t)
@@ -274,14 +278,14 @@ void bench(sc::numeric_type dtype, std::string operation)
 //    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-2]",'N','T',729,1200,128));
 //    MNKs.push_back(std::make_tuple("Conv. Gradient-2 [LeNet-2]",'N','T',64,500,50));
 
-    //Covariance (e.g., ICA, 10minutes/1khz)
-    MNKs.push_back(std::make_tuple("ICA [32 channels]",'N','T',32,32,600000));
-    MNKs.push_back(std::make_tuple("ICA [256 channels]",'N','T',256,256,600000));
+    //Covariance (e.g., ICA, 10minutes/100Hz)
+    MNKs.push_back(std::make_tuple("ICA [32 channels]",'N','T',32,32,60000));
+    MNKs.push_back(std::make_tuple("ICA [256 channels]",'N','T',256,256,60000));
 
 //    //Bi-diagonalization
-    MNKs.push_back(std::make_tuple("Bidiagonalization [Iteration 1]",'N','T',4096,4096,32));
-    MNKs.push_back(std::make_tuple("Bidiagonalization [Iteration 10]",'N','T',3456,3456,32));
-    MNKs.push_back(std::make_tuple("Bidiagonalization [Iteration 50]",'N','T',896,896,32));
+    MNKs.push_back(std::make_tuple("Householder [Iteration 1]",'N','T',4096,4096,32));
+    MNKs.push_back(std::make_tuple("Householder [Iteration 10]",'N','T',3456,3456,32));
+    MNKs.push_back(std::make_tuple("Householder [Iteration 50]",'N','T',896,896,32));
 
     /*---------*/
     /*--BLAS3--*/
@@ -305,6 +309,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
+        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
         BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
