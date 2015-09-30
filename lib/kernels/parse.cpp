@@ -1,5 +1,7 @@
 #include <cstring>
 
+#include "to_string.hpp"
+
 #include "isaac/array.h"
 #include "isaac/kernels/parse.h"
 #include "isaac/exception/operation_not_supported.h"
@@ -12,12 +14,12 @@ namespace detail
 
 
 
-  bool is_scalar_dot(array_expression::node const & node)
+  bool is_scalar_dot(math_expression::node const & node)
   {
     return node.op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY;
   }
 
-  bool is_vector_dot(array_expression::node const & node)
+  bool is_vector_dot(math_expression::node const & node)
   {
     return node.op.type_family==OPERATOR_ROWS_DOT_TYPE_FAMILY
         || node.op.type_family==OPERATOR_COLUMNS_DOT_TYPE_FAMILY;
@@ -76,6 +78,7 @@ namespace detail
         || op.type==OPERATOR_REPEAT_TYPE
         || op.type==OPERATOR_MATRIX_ROW_TYPE
         || op.type==OPERATOR_MATRIX_COLUMN_TYPE
+        || op.type==OPERATOR_ACCESS_INDEX_TYPE
         || op.type==OPERATOR_OUTER_PROD_TYPE
         || op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY
         || op.type_family==OPERATOR_ROWS_DOT_TYPE_FAMILY
@@ -120,29 +123,29 @@ namespace detail
 filter_fun::filter_fun(pred_t pred, std::vector<size_t> & out) : pred_(pred), out_(out)
 { }
 
-void filter_fun::operator()(isaac::array_expression const & array_expression, size_t root_idx, leaf_t) const
+void filter_fun::operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t leaf) const
 {
-  array_expression::node const * root_node = &array_expression.tree()[root_idx];
-  if (pred_(*root_node))
+  math_expression::node const * root_node = &math_expression.tree()[root_idx];
+  if (leaf==PARENT_NODE_TYPE && pred_(*root_node))
     out_.push_back(root_idx);
 }
 
 //
-std::vector<size_t> filter_nodes(bool (*pred)(array_expression::node const & node), isaac::array_expression const & array_expression, bool inspect)
+std::vector<size_t> filter_nodes(bool (*pred)(math_expression::node const & node), isaac::math_expression const & math_expression, size_t root, bool inspect)
 {
   std::vector<size_t> res;
-  traverse(array_expression, array_expression.root(), filter_fun(pred, res), inspect);
+  traverse(math_expression, root, filter_fun(pred, res), inspect);
   return res;
 }
 
 //
-filter_elements_fun::filter_elements_fun(array_expression_node_subtype subtype, std::vector<lhs_rhs_element> & out) :
+filter_elements_fun::filter_elements_fun(math_expression_node_subtype subtype, std::vector<lhs_rhs_element> & out) :
   subtype_(subtype), out_(out)
 { }
 
-void filter_elements_fun::operator()(isaac::array_expression const & array_expression, size_t root_idx, leaf_t) const
+void filter_elements_fun::operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t) const
 {
-  array_expression::node const * root_node = &array_expression.tree()[root_idx];
+  math_expression::node const * root_node = &math_expression.tree()[root_idx];
   if (root_node->lhs.subtype==subtype_)
     out_.push_back(root_node->lhs);
   if (root_node->rhs.subtype==subtype_)
@@ -150,10 +153,10 @@ void filter_elements_fun::operator()(isaac::array_expression const & array_expre
 }
 
 
-std::vector<lhs_rhs_element> filter_elements(array_expression_node_subtype subtype, isaac::array_expression const & array_expression)
+std::vector<lhs_rhs_element> filter_elements(math_expression_node_subtype subtype, isaac::math_expression const & math_expression)
 {
   std::vector<lhs_rhs_element> res;
-  traverse(array_expression, array_expression.root(), filter_elements_fun(subtype, res), true);
+  traverse(math_expression, math_expression.root(), filter_elements_fun(subtype, res), true);
   return res;
 }
 
@@ -199,7 +202,6 @@ const char * evaluate(operation_node_type type)
   case OPERATOR_ELEMENT_PROD_TYPE : return "*";
   case OPERATOR_DIV_TYPE : return "/";
   case OPERATOR_ELEMENT_DIV_TYPE : return "/";
-  case OPERATOR_ACCESS_TYPE : return "[]";
 
     //Relational
   case OPERATOR_NEGATE_TYPE: return "!";
@@ -225,6 +227,10 @@ const char * evaluate(operation_node_type type)
   case OPERATOR_MATRIX_ROW_TYPE : return "row";
   case OPERATOR_MATRIX_COLUMN_TYPE : return "col";
   case OPERATOR_PAIR_TYPE: return "pair";
+  case OPERATOR_ACCESS_INDEX_TYPE: return "access";
+
+    //FOR
+  case OPERATOR_SFOR_TYPE: return "sfor";
 
   default : throw operation_not_supported_exception("Unsupported operator");
   }
@@ -234,26 +240,29 @@ evaluate_expression_traversal::evaluate_expression_traversal(std::map<std::strin
   accessors_(accessors), str_(str), mapping_(mapping)
 { }
 
-void evaluate_expression_traversal::call_before_expansion(isaac::array_expression const & array_expression, std::size_t root_idx) const
+void evaluate_expression_traversal::call_before_expansion(isaac::math_expression const & math_expression, std::size_t root_idx) const
 {
-  array_expression::node const & root_node = array_expression.tree()[root_idx];
+  math_expression::node const & root_node = math_expression.tree()[root_idx];
   if(detail::is_cast(root_node.op))
     str_ += mapping_.at(std::make_pair(root_idx, PARENT_NODE_TYPE))->evaluate(accessors_);
   else if (( (root_node.op.type_family==OPERATOR_UNARY_TYPE_FAMILY&&root_node.op.type!=OPERATOR_ADD_TYPE) || detail::is_elementwise_function(root_node.op))
       && !detail::is_node_leaf(root_node.op))
     str_+=evaluate(root_node.op.type);
-  str_+="(";
+  if(root_node.op.type!=OPERATOR_FUSE)
+    str_+="(";
 
 }
 
-void evaluate_expression_traversal::call_after_expansion(array_expression const & /*array_expression*/, std::size_t /*root_idx*/) const
+void evaluate_expression_traversal::call_after_expansion(math_expression const & math_expression, std::size_t root_idx) const
 {
-  str_+=")";
+  math_expression::node const & root_node = math_expression.tree()[root_idx];
+  if(root_node.op.type!=OPERATOR_FUSE)
+    str_+=")";
 }
 
-void evaluate_expression_traversal::operator()(isaac::array_expression const & array_expression, std::size_t root_idx, leaf_t leaf) const
+void evaluate_expression_traversal::operator()(isaac::math_expression const & math_expression, std::size_t root_idx, leaf_t leaf) const
 {
-  array_expression::node const & root_node = array_expression.tree()[root_idx];
+  math_expression::node const & root_node = math_expression.tree()[root_idx];
   mapping_type::key_type key = std::make_pair(root_idx, leaf);
   if (leaf==PARENT_NODE_TYPE)
   {
@@ -272,53 +281,59 @@ void evaluate_expression_traversal::operator()(isaac::array_expression const & a
     if (leaf==LHS_NODE_TYPE)
     {
       if (root_node.lhs.type_family!=COMPOSITE_OPERATOR_FAMILY)
-        str_ += mapping_.at(key)->evaluate(accessors_);
+      {
+        if (root_node.lhs.subtype==FOR_LOOP_INDEX_TYPE)
+          str_ += "sforidx" + tools::to_string(root_node.lhs.for_idx.level);
+        else
+          str_ += mapping_.at(key)->evaluate(accessors_);
+      }
     }
 
     if (leaf==RHS_NODE_TYPE)
     {
       if (root_node.rhs.type_family!=COMPOSITE_OPERATOR_FAMILY)
-        str_ += mapping_.at(key)->evaluate(accessors_);
+      {
+        if (root_node.rhs.subtype==FOR_LOOP_INDEX_TYPE)
+          str_ += "sforidx" + tools::to_string(root_node.rhs.for_idx.level);
+        else
+          str_ += mapping_.at(key)->evaluate(accessors_);
+      }
     }
   }
 }
 
 
 std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                            isaac::array_expression const & array_expression, std::size_t root_idx, mapping_type const & mapping)
+                            isaac::math_expression const & math_expression, std::size_t root_idx, mapping_type const & mapping)
 {
   std::string res;
   evaluate_expression_traversal traversal_functor(accessors, res, mapping);
-  array_expression::node const & root_node = array_expression.tree()[root_idx];
+  math_expression::node const & root_node = math_expression.tree()[root_idx];
 
   if (leaf==RHS_NODE_TYPE)
   {
     if (root_node.rhs.type_family==COMPOSITE_OPERATOR_FAMILY)
-      traverse(array_expression, root_node.rhs.node_index, traversal_functor, false);
+      traverse(math_expression, root_node.rhs.node_index, traversal_functor, false);
     else
-      traversal_functor(array_expression, root_idx, leaf);
+      traversal_functor(math_expression, root_idx, leaf);
   }
   else if (leaf==LHS_NODE_TYPE)
   {
     if (root_node.lhs.type_family==COMPOSITE_OPERATOR_FAMILY)
-      traverse(array_expression, root_node.lhs.node_index, traversal_functor, false);
+      traverse(math_expression, root_node.lhs.node_index, traversal_functor, false);
     else
-      traversal_functor(array_expression, root_idx, leaf);
+      traversal_functor(math_expression, root_idx, leaf);
   }
   else
-    traverse(array_expression, root_idx, traversal_functor, false);
+    traverse(math_expression, root_idx, traversal_functor, false);
 
   return res;
 }
 
 void evaluate(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                     expressions_tuple const & expressions, std::vector<mapping_type> const & mappings)
+                     math_expression const & x, mapping_type const & mapping)
 {
-  expressions_tuple::data_type::const_iterator sit;
-  std::vector<mapping_type>::const_iterator mit;
-
-  for (mit = mappings.begin(), sit = expressions.data().begin(); sit != expressions.data().end(); ++mit, ++sit)
-    stream << evaluate(leaf, accessors, **sit, (*sit)->root(), *mit) << ";" << std::endl;
+  stream << evaluate(leaf, accessors, x, x.root(), mapping) << std::endl;
 }
 
 process_traversal::process_traversal(std::map<std::string, std::string> const & accessors, kernel_generation_stream & stream,
@@ -326,7 +341,7 @@ process_traversal::process_traversal(std::map<std::string, std::string> const & 
   accessors_(accessors),  stream_(stream), mapping_(mapping), already_processed_(already_processed)
 { }
 
-void process_traversal::operator()(array_expression const & /*array_expression*/, std::size_t root_idx, leaf_t leaf) const
+void process_traversal::operator()(math_expression const & /*math_expression*/, std::size_t root_idx, leaf_t leaf) const
 {
   mapping_type::const_iterator it = mapping_.find(std::make_pair(root_idx, leaf));
   if (it!=mapping_.end())
@@ -336,59 +351,52 @@ void process_traversal::operator()(array_expression const & /*array_expression*/
 
     if(accessors_.find(name)!=accessors_.end() && already_processed_.insert(name).second)
       for(std::map<std::string, std::string>::const_iterator itt = accessors_.lower_bound(name) ; itt != accessors_.upper_bound(name) ; ++itt)
-      {
         stream_ << obj->process(itt->second) << std::endl;
-      }
 
     std::string key = obj->type_key();
     if(accessors_.find(key)!=accessors_.end() && already_processed_.insert(name).second)
       for(std::map<std::string, std::string>::const_iterator itt = accessors_.lower_bound(key) ; itt != accessors_.upper_bound(key) ; ++itt)
-      {
         stream_ << obj->process(itt->second) << std::endl;
-      }
   }
 }
 
 
 void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                    isaac::array_expression const & array_expression, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed)
+                    isaac::math_expression const & math_expression, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed)
 {
   process_traversal traversal_functor(accessors, stream, mapping, already_processed);
-  array_expression::node const & root_node = array_expression.tree()[root_idx];
+  math_expression::node const & root_node = math_expression.tree()[root_idx];
 
   if (leaf==RHS_NODE_TYPE)
   {
     if (root_node.rhs.type_family==COMPOSITE_OPERATOR_FAMILY)
-      traverse(array_expression, root_node.rhs.node_index, traversal_functor, true);
+      traverse(math_expression, root_node.rhs.node_index, traversal_functor, true);
     else
-      traversal_functor(array_expression, root_idx, leaf);
+      traversal_functor(math_expression, root_idx, leaf);
   }
   else if (leaf==LHS_NODE_TYPE)
   {
     if (root_node.lhs.type_family==COMPOSITE_OPERATOR_FAMILY)
-      traverse(array_expression, root_node.lhs.node_index, traversal_functor, true);
+      traverse(math_expression, root_node.lhs.node_index, traversal_functor, true);
     else
-      traversal_functor(array_expression, root_idx, leaf);
+      traversal_functor(math_expression, root_idx, leaf);
   }
   else
   {
-    traverse(array_expression, root_idx, traversal_functor, true);
+    traverse(math_expression, root_idx, traversal_functor, true);
   }
 }
 
-void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                    expressions_tuple const & expressions, std::vector<mapping_type> const & mappings)
-{
-  expressions_tuple::data_type::const_iterator sit;
-  std::vector<mapping_type>::const_iterator mit;
-  std::set<std::string> already_processed;
 
-  for (mit = mappings.begin(), sit = expressions.data().begin(); sit != expressions.data().end(); ++mit, ++sit)
-    process(stream, leaf, accessors, **sit, (*sit)->root(), *mit, already_processed);
+void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
+                    math_expression const & x, mapping_type const & mapping)
+{
+  std::set<std::string> processed;
+  process(stream, leaf, accessors, x, x.root(), mapping, processed);
 }
 
 
-void array_expression_representation_functor::append_id(char * & ptr, unsigned int val)
+void math_expression_representation_functor::append_id(char * & ptr, unsigned int val)
 {
   if (val==0)
     *ptr++='0';
@@ -400,35 +408,44 @@ void array_expression_representation_functor::append_id(char * & ptr, unsigned i
     }
 }
 
-void array_expression_representation_functor::append(driver::Buffer const & h, numeric_type dtype, char prefix) const
-{
-  *ptr_++=prefix;
-  *ptr_++=(char)dtype;
-  append_id(ptr_, binder_.get(h));
-}
+//void math_expression_representation_functor::append(driver::Buffer const & h, numeric_type dtype, char prefix, bool is_assigned) const
+//{
+//  *ptr_++=prefix;
+//  *ptr_++=(char)dtype;
+//  append_id(ptr_, binder_.get(h, is_assigned));
+//}
 
-void array_expression_representation_functor::append(lhs_rhs_element const & lhs_rhs) const
+void math_expression_representation_functor::append(lhs_rhs_element const & lhs_rhs, bool is_assigned) const
 {
   if(lhs_rhs.subtype==DENSE_ARRAY_TYPE)
-    append(lhs_rhs.array->data(), lhs_rhs.array->dtype(), (char)(((int)'0')+((int)(lhs_rhs.array->shape()[0]>1) + (int)(lhs_rhs.array->shape()[1]>1))));
+  {
+      char prefix = (char)(((int)'0')+((int)(lhs_rhs.array->shape()[0]>1) + (int)(lhs_rhs.array->shape()[1]>1)));
+      numeric_type dtype = lhs_rhs.array->dtype();
+      driver::Buffer const & data = lhs_rhs.array->data();
+
+      *ptr_++=prefix;
+      *ptr_++=(char)dtype;
+
+      append_id(ptr_, binder_.get(data, is_assigned));
+  }
 }
 
-array_expression_representation_functor::array_expression_representation_functor(symbolic_binder & binder, char *& ptr) : binder_(binder), ptr_(ptr){ }
+math_expression_representation_functor::math_expression_representation_functor(symbolic_binder & binder, char *& ptr) : binder_(binder), ptr_(ptr){ }
 
-void array_expression_representation_functor::append(char*& p, const char * str) const
+void math_expression_representation_functor::append(char*& p, const char * str) const
 {
   std::size_t n = std::strlen(str);
   std::memcpy(p, str, n);
   p+=n;
 }
 
-void array_expression_representation_functor::operator()(isaac::array_expression const & array_expression, std::size_t root_idx, leaf_t leaf_t) const
+void math_expression_representation_functor::operator()(isaac::math_expression const & math_expression, std::size_t root_idx, leaf_t leaf_t) const
 {
-  array_expression::node const & root_node = array_expression.tree()[root_idx];
+  math_expression::node const & root_node = math_expression.tree()[root_idx];
   if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
-    append(root_node.lhs);
+    append(root_node.lhs, detail::is_assignment(root_node.op));
   else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != COMPOSITE_OPERATOR_FAMILY)
-    append(root_node.rhs);
+    append(root_node.rhs, false);
   else if (leaf_t==PARENT_NODE_TYPE)
     append_id(ptr_,root_node.op.type);
 }

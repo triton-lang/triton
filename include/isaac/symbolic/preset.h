@@ -20,11 +20,11 @@ public:
     struct args
     {
         args(): alpha(NULL), A(NULL), B(NULL), beta(NULL), C(NULL), type(INVALID_EXPRESSION_TYPE){ }
-        lhs_rhs_element* alpha;
-        lhs_rhs_element* A;
-        lhs_rhs_element* B;
-        lhs_rhs_element* beta;
-        lhs_rhs_element* C;
+        lhs_rhs_element const * alpha;
+        lhs_rhs_element const * A;
+        lhs_rhs_element const * B;
+        lhs_rhs_element const * beta;
+        lhs_rhs_element const * C;
         expression_type type;
 
         operator bool() const
@@ -34,10 +34,10 @@ public:
     };
 
 private:
-    static void handle_node(array_expression::container_type &tree, size_t rootidx, args & a);
+    static void handle_node( math_expression::container_type const &tree, size_t rootidx, args & a);
 
 public:
-    static args check(array_expression::container_type & tree, size_t rootidx);
+    static args check(math_expression::container_type const &tree, size_t rootidx);
 };
 
 }

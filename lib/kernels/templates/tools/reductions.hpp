@@ -55,7 +55,7 @@ inline std::string neutral_element(op_element const & op, driver::backend_type b
   }
 }
 
-inline bool is_dot(array_expression::node const & node)
+inline bool is_dot(math_expression::node const & node)
 {
   return node.op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY
       || node.op.type_family==OPERATOR_COLUMNS_DOT_TYPE_FAMILY

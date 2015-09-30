@@ -9,7 +9,7 @@ namespace sc = isaac;
 typedef sc::int_t int_t;
 
 template<typename T>
-void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T> & cy,
+void test_impl(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T> & cy,
                                 sc::array & x, sc::array & y, interface_t interf)
 {
   using namespace std;
@@ -70,7 +70,7 @@ void test_reduction(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T
 }
 
 template<typename T>
-void test_impl(T epsilon, sc::driver::Context const & ctx)
+void test(T epsilon, sc::driver::Context const & ctx)
 {
   using isaac::_;
 
@@ -81,7 +81,7 @@ void test_impl(T epsilon, sc::driver::Context const & ctx)
   INIT_VECTOR(N, SUBN, 0, 1, cy, y, ctx);
 
 #define TEST_OPERATIONS(TYPE, ITF)\
-  test_reduction(epsilon, cx_ ## TYPE, cy_ ## TYPE,\
+  test_impl(epsilon, cx_ ## TYPE, cy_ ## TYPE,\
                                     x_ ## TYPE, y_ ## TYPE, ITF);\
 
   std::cout << "> standard..." << std::endl;
@@ -104,11 +104,11 @@ int main()
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(eps_float, *context);
+    test<float>(eps_float, *context);
     if(device.fp64_support())
     {
         std::cout << ">> double" << std::endl;
-        test_impl<double>(eps_double, *context);
+        test<double>(eps_double, *context);
     }
     std::cout << "---" << std::endl;
   }

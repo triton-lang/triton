@@ -7,8 +7,11 @@
 namespace isaac
 {
 
-/** @brief Executes a array_expression on the given queue for the given models map*/
-void execute(controller<array_expression> const & , profiles::map_type &);
+/** @brief Executes a math_expression on the given queue for the given models map*/
+void execute(execution_handler const & , profiles::map_type &);
+
+/** @brief Executes a math_expression on the default models map*/
+void execute(execution_handler const &);
 
 }
 

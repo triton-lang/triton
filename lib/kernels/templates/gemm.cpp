@@ -27,27 +27,24 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 }
 
 
-  unsigned int gemm::lmem_usage(expressions_tuple const & expressions) const
+  unsigned int gemm::lmem_usage(math_expression const & expression) const
   {
-    isaac::array_expression const & array_expression = (*expressions.data().front());
-    numeric_type numeric_t = lhs_most(array_expression.tree(), array_expression.root()).lhs.dtype;
-
+    numeric_type numeric_t = lhs_most(expression.tree(), expression.root()).lhs.dtype;
     unsigned int N = 0;
     N += p_.kL * p_.mL;
     N += p_.nL * p_.kL;
     return N*size_of(numeric_t);
   }
 
-  unsigned int gemm::registers_usage(expressions_tuple const & expressions) const
+  unsigned int gemm::registers_usage(math_expression const & expression) const
   {
-    isaac::array_expression const & array_expression = (*expressions.data().front());
-    numeric_type numeric_t = lhs_most(array_expression.tree(), array_expression.root()).lhs.dtype;
+    numeric_type numeric_t = lhs_most(expression.tree(), expression.root()).lhs.dtype;
 
     unsigned int N = p_.mS * p_.nS + p_.mS * p_.kS + p_.kS * p_.nS;
     return N*size_of(numeric_t);
   }
 
-  unsigned int gemm::temporary_workspace(expressions_tuple const & expressions) const
+  unsigned int gemm::temporary_workspace(math_expression const & expressions) const
   {
       std::vector<int_t> MNK = input_sizes(expressions);
       int_t M = MNK[0]; int_t N = MNK[1];
@@ -56,7 +53,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       return 0;
   }
 
-  int gemm::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+  int gemm::is_invalid_impl(driver::Device const &, math_expression const &) const
   {
 //    if(device.vendor()==driver::Device::Vendor::NVIDIA && p_.simd_width > 1)
 //      return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -106,16 +103,16 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     return TEMPLATE_VALID;
   }
 
-  std::string gemm::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const &) const
+  std::string gemm::generate_impl(std::string const & suffix, math_expression const & expression, driver::Device const & device, mapping_type const &) const
   {
     using std::string;
     using tools::to_string;
 
     driver::backend_type backend = device.backend();
     bool has_depth = p_.depth > 1;
-#define VLOAD(offset, ptr) vload(p_.simd_width, sdtype, offset, ptr, backend, true)
-#define VLOAD_MISALIGNED(offset, ptr) vload(p_.simd_width, sdtype, offset, ptr, backend, false)
-#define VSTORE(value, offset, ptr) vstore(p_.simd_width, sdtype, value, offset, ptr, backend)
+#define VLOAD(offset, ptr) vload(p_.simd_width, sdtype, offset, ptr, "1", backend, true)
+#define VLOAD_MISALIGNED(offset, ptr) vload(p_.simd_width, sdtype, offset, ptr, "1", backend, false)
+#define VSTORE(value, offset, ptr) vstore(p_.simd_width, sdtype, value, offset, ptr, "1", backend)
 #define ASTRIDE1 string(check_bounds_?"*Astride1":"")
 #define BSTRIDE1 string(check_bounds_?"*Bstride1":"")
 #define CSTRIDE1 string(check_bounds_?"*Cstride1":"")
@@ -126,8 +123,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     /// INIT
     /// //////////////
     kernel_generation_stream stream;
-    array_expression const & st = (*expressions.data().front());
-    numeric_type dtype = lhs_most(st.tree(), st.root()).lhs.dtype;
+    numeric_type dtype = lhs_most(expression.tree(), expression.root()).lhs.dtype;
     std::string sdtype = to_string(dtype);
     std::string vdtype = append_width(sdtype, p_.simd_width);
     std::string _size_t = size_type(device);
@@ -588,7 +584,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
     gemm_name += suffix;
     reduce_name += suffix;
-    bind_all_unique binder;
+    bind_independent binder;
 
     array const * out = &C;
     std::unique_ptr<array> tmp;
@@ -659,11 +655,10 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     return array(M, s0, s1);
   }
 
-  std::vector<int_t> gemm::infos(expressions_tuple const & expressions, symbolic::preset::gemm::args& arguments) const
+  std::vector<int_t> gemm::infos(math_expression const & expression, symbolic::preset::gemm::args& arguments) const
   {
-    isaac::array_expression & array_expression = (*expressions.data().front());
-    array_expression::container_type & array = array_expression.tree();
-    std::size_t root = array_expression.root();
+    math_expression::container_type const & array = expression.tree();
+    std::size_t root = expression.root();
     arguments = symbolic::preset::gemm::check(array, root);
     int_t M = arguments.C->array->shape()[0];
     int_t N = arguments.C->array->shape()[1];
@@ -671,7 +666,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     return {M, N, K};
   }
 
-  gemm::gemm(gemm_parameters const & parameters, bool check_bounds, char A_trans, char B_trans) : base_impl<gemm, gemm_parameters>(parameters, BIND_ALL_UNIQUE), A_trans_(A_trans), B_trans_(B_trans), check_bounds_(check_bounds)
+  gemm::gemm(gemm_parameters const & parameters, bool check_bounds, char A_trans, char B_trans) : base_impl<gemm, gemm_parameters>(parameters, BIND_INDEPENDENT), A_trans_(A_trans), B_trans_(B_trans), check_bounds_(check_bounds)
   {
     if(A_trans_=='N' && B_trans_=='N') type_ = GEMM_NN_TYPE;
     else if(A_trans_=='T' && B_trans_=='N') type_ = GEMM_TN_TYPE;
@@ -680,18 +675,18 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     else throw;
   }
 
-  std::vector<int_t> gemm::input_sizes(expressions_tuple const & expressions) const
+  std::vector<int_t> gemm::input_sizes(math_expression const & expressions) const
   {
     symbolic::preset::gemm::args dummy;
-    return infos(expressions, dummy);
+    return infos((math_expression&)expressions, dummy);
   }
 
-  void gemm::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback_base, controller<expressions_tuple> const & ctr)
+  void gemm::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback_base, execution_handler const & control)
   {
     using namespace tools;
 
     gemm & fallback = (gemm&)fallback_base;
-    expressions_tuple const & expressions = ctr.x();
+    math_expression const & expressions = control.x();
 
 
     symbolic::preset::gemm::args args;
@@ -724,7 +719,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     if(args.alpha) alpha = value_scalar(args.alpha->vscalar, dtype);
 
 
-    execution_options_type const & options = ctr.execution_options();
+    execution_options_type const & options = control.execution_options();
 
     if (ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1)
     {

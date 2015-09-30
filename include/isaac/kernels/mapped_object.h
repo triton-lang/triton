@@ -22,9 +22,12 @@ class mapped_object;
 typedef std::pair<size_t, leaf_t> mapping_key;
 typedef std::map<mapping_key, std::shared_ptr<mapped_object> > mapping_type;
 
+
+
+
 /** @brief Mapped Object
 *
-* This object populates the symbolic mapping associated with a array_expression. (root_id, LHS|RHS|PARENT) => mapped_object
+* This object populates the symbolic mapping associated with a math_expression. (root_id, LHS|RHS|PARENT) => mapped_object
 * The tree can then be reconstructed in its symbolic form
 */
 class mapped_object
@@ -46,13 +49,14 @@ protected:
 public:
   struct node_info
   {
-    node_info(mapping_type const * _mapping, array_expression const * _array_expression, size_t _root_idx);
+    node_info(mapping_type const * _mapping, math_expression const * _math_expression, size_t _root_idx);
     mapping_type const * mapping;
-    isaac::array_expression const * array_expression;
+    isaac::math_expression const * math_expression;
     size_t root_idx;
   };
 
 public:
+  mapped_object(std::string const & scalartype, std::string const & name, std::string const & type_key);
   mapped_object(std::string const & scalartype, unsigned int id, std::string const & type_key);
   virtual ~mapped_object();
 
@@ -63,18 +67,19 @@ public:
   std::string process(std::string const & in) const;
   std::string evaluate(std::map<std::string, std::string> const & accessors) const;
 protected:
+  std::string type_key_;
   std::string name_;
   std::string scalartype_;
-  std::string type_key_;
   std::map<std::string, std::string> keywords_;
 };
+
 
 class binary_leaf
 {
 public:
   binary_leaf(mapped_object::node_info info);
 
-  void process_recursive(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors);
+  void process_recursive(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors, std::set<std::string> & already_fetched);
   std::string evaluate_recursive(leaf_t leaf, std::map<std::string, std::string> const & accessors);
 protected:
   mapped_object::node_info info_;
@@ -100,8 +105,8 @@ public:
   mapped_dot(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key);
 
   size_t root_idx() const;
-  isaac::array_expression const & array_expression() const;
-  array_expression::node root_node() const;
+  isaac::math_expression const & math_expression() const;
+  math_expression::node root_node() const;
   bool is_index_dot() const;
   op_element root_op() const;
 };
@@ -137,17 +142,14 @@ public:
   mapped_host_scalar(std::string const & scalartype, unsigned int id);
 };
 
-/** @brief Tuple
-*
-* Maps an object passed by pointer
-*/
-class mapped_tuple : public mapped_object
+/** @brief Placeholder
+ *
+ * Maps a placeholder
+ */
+class mapped_placeholder : public mapped_object
 {
 public:
-  mapped_tuple(std::string const & scalartype, unsigned int id, size_t size);
-private:
-  size_t size_;
-  std::vector<std::string> names_;
+  mapped_placeholder(unsigned int level);
 };
 
 /** @brief Handle
@@ -191,6 +193,14 @@ private:
   void postprocess(std::string &res) const;
 public:
   mapped_vdiag(std::string const & scalartype, unsigned int id, node_info info);
+};
+
+class mapped_array_access: public mapped_object, binary_leaf
+{
+private:
+  void postprocess(std::string &res) const;
+public:
+  mapped_array_access(std::string const & scalartype, unsigned int id, node_info info);
 };
 
 class mapped_matrix_row : public mapped_object, binary_leaf
@@ -242,6 +252,8 @@ class mapped_cast : public mapped_object
 public:
   mapped_cast(operation_node_type type, unsigned int id);
 };
+
+extern mapped_object& get(math_expression::container_type const &, size_t, mapping_type const &, size_t);
 
 }
 #endif

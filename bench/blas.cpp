@@ -139,8 +139,8 @@ void bench(sc::numeric_type dtype, std::string operation)
       sc::array x(N, dtype), y(N, dtype);
       /* ISAAC */
       std::list<sc::driver::Event> events;
-      BENCHMARK_ISAAC(y = sc::control(x + alpha*y, sc::execution_options_type(0, &events)), 3*N*dtsize/t)
-      BENCHMARK_ISAAC(y = sc::control(x + alpha*y, sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), 3*N*dtsize/t)
+      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y, sc::execution_options_type(0, &events)), 3*N*dtsize/t)
+      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y, sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), 3*N*dtsize/t)
       /* clblas */
   #ifdef BENCH_CLBLAS
       if(x.context().backend()==sc::driver::OPENCL)
@@ -171,7 +171,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       sc::array scratch(N, dtype);
       sc::scalar s(dtype);
       s = dot(x,y); queue.synchronize();
-      BENCHMARK_ISAAC(s = sc::control(dot(x,y), sc::execution_options_type(0, &events)), 2*N*dtsize/t)
+      BENCHMARK_ISAAC(s = sc::execution_handler(dot(x,y), sc::execution_options_type(0, &events)), 2*N*dtsize/t)
       /* clblas */
   #ifdef BENCH_CLBLAS
       if(x.context().backend()==sc::driver::OPENCL)
@@ -234,8 +234,8 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.ld();
     #endif
-        BENCHMARK_ISAAC(y = sc::control(AT?dot(A.T(),x):dot(A,x), sc::execution_options_type(0, &events)),(M*N + M + N)*dtsize/t);
-        BENCHMARK_ISAAC(y = sc::control(AT?dot(A.T(),x):dot(A,x), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
+        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T(),x):dot(A,x), sc::execution_options_type(0, &events)),(M*N + M + N)*dtsize/t);
+        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T(),x):dot(A,x), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
     #ifdef BENCH_CLBLAS
         if(y.context().backend()==sc::driver::OPENCL)
             BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, As1, As2, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, &event), (M*N + M + N)*dtsize/t)
@@ -267,8 +267,8 @@ void bench(sc::numeric_type dtype, std::string operation)
     MNKs.push_back(std::make_tuple("ConvAlexNet3",'N','N',169,384,2304));
     MNKs.push_back(std::make_tuple("ConvAlexNet4",'N','N',169,192,1728));
     MNKs.push_back(std::make_tuple("ConvAlexNet5",'N','N',169,128,1728));
-//    MNKs.push_back(std::make_tuple("Convolution [LeNet-1],'N','N',576,20,25));
-//    MNKs.push_back(std::make_tuple("Convolution [LeNet-2]",'N','N',64,50,500));
+//    MNKs.push_back(std::make_tuple("ConvLeNet1,'N','N',576,20,25));
+//    MNKs.push_back(std::make_tuple("ConvLeNet2",'N','N',64,50,500));
 
     //Convolution Gradient-1
 //    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-5]",'T','N',1728,128,169));
@@ -276,15 +276,15 @@ void bench(sc::numeric_type dtype, std::string operation)
 //    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-3]",'T','N',2304,384,169));
 //    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-2]",'T','N',1200,128,729));
 //    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-1]",'T','N',363,96,3025));
-//    MNKs.push_back(std::make_tuple("Conv. Gradient-1 [LeNet-2]",'T','N',500,50,64));
-//    MNKs.push_back(std::make_tuple("Conv. Gradient-1 [LeNet-1]",'T','N',25,20,576));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [LeNet-2]",'T','N',500,50,64));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [LeNet-1]",'T','N',25,20,576));
 
     //Convolution Gradient-2
 //    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-5]",'N','T',169,1728,128));
 //    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-4]",'N','T',169,1728,192));
 //    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-3]",'N','T',169,2304,384));
 //    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-2]",'N','T',729,1200,128));
-//    MNKs.push_back(std::make_tuple("Conv. Gradient-2 [LeNet-2]",'N','T',64,500,50));
+//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [LeNet-2]",'N','T',64,500,50));
 
     //Covariance (e.g., ICA, 10minutes/100Hz)
     MNKs.push_back(std::make_tuple("ICA32",'N','T',32,32,60000));
@@ -317,8 +317,8 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     #endif
-        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
-        BENCHMARK_ISAAC(C = sc::control(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T(),B.T()):dot(A.T(),B)):(BT?dot(A,B.T()):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         if(C.context().backend()==sc::driver::OPENCL)

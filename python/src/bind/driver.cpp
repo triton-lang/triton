@@ -62,7 +62,7 @@ namespace detail
   std::shared_ptr<sc::driver::Context> make_context(sc::driver::Device const & dev)
   { return std::shared_ptr<sc::driver::Context>(new sc::driver::Context(dev)); }
 
-  bp::object enqueue(sc::array_expression const & expression, unsigned int queue_id, bp::list dependencies, bool tune, int label, std::string const & program_name, bool force_recompile)
+  bp::object enqueue(sc::math_expression const & expression, unsigned int queue_id, bp::list dependencies, bool tune, int label, std::string const & program_name, bool force_recompile)
   {
       std::list<sc::driver::Event> events;
       std::vector<sc::driver::Event> cdependencies = tools::to_vector<sc::driver::Event>(dependencies);
@@ -70,15 +70,15 @@ namespace detail
       sc::execution_options_type execution_options(queue_id, &events, &cdependencies);
       sc::dispatcher_options_type dispatcher_options(tune, label);
       sc::compilation_options_type compilation_options(program_name, force_recompile);
-      sc::array_expression::container_type::value_type root = expression.tree()[expression.root()];
+      sc::math_expression::container_type::value_type root = expression.tree()[expression.root()];
       if(sc::detail::is_assignment(root.op))
       {
-          sc::execute(sc::control(expression, execution_options, dispatcher_options, compilation_options), isaac::profiles::get(execution_options.queue(expression.context())));
+          sc::execute(sc::execution_handler(expression, execution_options, dispatcher_options, compilation_options), isaac::profiles::get(execution_options.queue(expression.context())));
           return bp::make_tuple(bp::ptr(root.lhs.array), tools::to_list(events.begin(), events.end()));
       }
       else
       {
-          std::shared_ptr<sc::array> parray(new sc::array(sc::control(expression, execution_options, dispatcher_options, compilation_options)));
+          std::shared_ptr<sc::array> parray(new sc::array(sc::execution_handler(expression, execution_options, dispatcher_options, compilation_options)));
           return bp::make_tuple(parray, tools::to_list(events.begin(), events.end()));
       }
   }

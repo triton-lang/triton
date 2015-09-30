@@ -26,14 +26,13 @@ public:
 
     private:
       std::string define_extension(std::string const & extensions, std::string const & ext);
-      inline void fill_program_name(char* program_name, expressions_tuple const & expressions, binding_policy_t binding_policy);
-      driver::Program const & init(controller<expressions_tuple> const &);
+      driver::Program const & init(execution_handler const &);
 
     public:
       value_type(expression_type, numeric_type, predictors::random_forest const &, std::vector< std::shared_ptr<templates::base> > const &, driver::CommandQueue const &);
       value_type(expression_type, numeric_type, templates::base const &, driver::CommandQueue const &);
 
-      void execute(controller<expressions_tuple> const &);
+      void execute(execution_handler const &);
       templates_container const & templates() const;
 
     private:

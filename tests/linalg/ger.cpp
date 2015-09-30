@@ -6,7 +6,7 @@ namespace sc = isaac;
 typedef isaac::int_t int_t;
 
 template<typename T>
-void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simple_matrix_base<T>& cC, simple_vector_base<T>& cx, simple_vector_base<T>& cy,
+void test_impl(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simple_matrix_base<T>& cC, simple_vector_base<T>& cx, simple_vector_base<T>& cy,
           sc::array& A, sc::array& B, sc::array& C, sc::array& x, sc::array& y)
 {
   using namespace std;
@@ -100,7 +100,7 @@ void test(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simp
 }
 
 template<typename T>
-void test_impl(T epsilon, sc::driver::Context const & ctx)
+void test(T epsilon, sc::driver::Context const & ctx)
 {
   using isaac::_;
 
@@ -115,7 +115,7 @@ void test_impl(T epsilon, sc::driver::Context const & ctx)
   INIT_VECTOR(M, SUBM, 5, 3, cx, x, ctx);
   INIT_VECTOR(N, SUBN, 7, 2, cy, y, ctx);
 #define TEST_OPERATIONS(TYPE)\
-  test(epsilon, cA_ ## TYPE, cB_ ## TYPE, cC_ ## TYPE, cx_ ## TYPE, cy_ ## TYPE, A_ ## TYPE, B_ ## TYPE, C_ ## TYPE, x_ ## TYPE, y_ ## TYPE);\
+  test_impl(epsilon, cA_ ## TYPE, cB_ ## TYPE, cC_ ## TYPE, cx_ ## TYPE, cy_ ## TYPE, A_ ## TYPE, B_ ## TYPE, C_ ## TYPE, x_ ## TYPE, y_ ## TYPE);\
 
   std::cout << "> standard..." << std::endl;
   TEST_OPERATIONS(full);
@@ -133,11 +133,11 @@ int main()
     std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
     std::cout << "---" << std::endl;
     std::cout << ">> float" << std::endl;
-    test_impl<float>(eps_float, *context);
+    test<float>(eps_float, *context);
     if(device.fp64_support())
     {
         std::cout << ">> double" << std::endl;
-        test_impl<double>(eps_double, *context);
+        test<double>(eps_double, *context);
     }
     std::cout << "---" << std::endl;
   }
