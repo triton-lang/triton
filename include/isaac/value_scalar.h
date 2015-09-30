@@ -9,7 +9,7 @@ namespace isaac
 {
 
 class scalar;
-class array_expression;
+class math_expression;
 
 union ISAACAPI values_holder
 {
@@ -46,7 +46,7 @@ public:
 #undef ISAAC_INSTANTIATE
   value_scalar(values_holder values, numeric_type dtype);
   explicit value_scalar(scalar const &);
-  explicit value_scalar(array_expression const &);
+  explicit value_scalar(math_expression const &);
   explicit value_scalar(numeric_type dtype);
 
   values_holder values() const;
@@ -158,6 +158,7 @@ ISAAC_DECLARE_UNARY_OPERATOR(trans)
 #undef ISAAC_DECLARE_UNARY_OPERATOR
 
 ISAACAPI std::ostream & operator<<(std::ostream & os, value_scalar const & s);
+
 
 }
 

@@ -12,7 +12,7 @@ namespace templates
 {
 
 //Generate
-inline std::string generate_arguments(std::string const & data_type, driver::Device const & device, std::vector<mapping_type> const & mappings, expressions_tuple const & expressions)
+inline std::string generate_arguments(std::string const &, driver::Device const & device, mapping_type const & mappings, math_expression const & expressions)
 {
     std::string kwglobal = Global(device.backend()).get();
     std::string _size_t = size_type(device);
@@ -21,8 +21,8 @@ inline std::string generate_arguments(std::string const & data_type, driver::Dev
 
     process(stream, PARENT_NODE_TYPE, { {"array0", kwglobal + " #scalartype* #pointer, " + _size_t + " #start,"},
                                         {"host_scalar", "#scalartype #name,"},
-                                        {"array1", kwglobal + " " + data_type + "* #pointer, " + _size_t + " #start, " + _size_t + " #stride,"},
-                                        {"array2", kwglobal + " " + data_type + "* #pointer, " + _size_t + " #ld, " + _size_t + " #start, " + _size_t + " #stride, "},
+                                        {"array1", kwglobal + " #scalartype* #pointer, " + _size_t + " #start, " + _size_t + " #stride,"},
+                                        {"array2", kwglobal + " #scalartype* #pointer, " + _size_t + " #ld, " + _size_t + " #start, " + _size_t + " #stride, "},
                                         {"tuple4", "#scalartype #name0, #scalartype #name1, #scalartype #name2, #scalartype #name3,"}}
             , expressions, mappings);
 
@@ -62,9 +62,9 @@ public:
         }
     }
 
-    void set_arguments(array const * a) const
+    void set_arguments(array const * a, bool is_assigned) const
     {
-        bool is_bound = binder_.bind(a->data());
+        bool is_bound = binder_.bind(a->data(), is_assigned);
         if (is_bound)
         {
             kernel_.setArg(current_arg_++, a->data());
@@ -88,33 +88,24 @@ public:
         }
     }
 
-    void set_arguments(repeat_infos const & i) const
-    {
-        kernel_.setSizeArg(current_arg_++, i.sub1);
-        kernel_.setSizeArg(current_arg_++, i.sub2);
-        kernel_.setSizeArg(current_arg_++, i.rep1);
-        kernel_.setSizeArg(current_arg_++, i.rep2);
-    }
-
-
-    void set_arguments(lhs_rhs_element const & lhs_rhs) const
+    void set_arguments(lhs_rhs_element const & lhs_rhs, bool is_assigned) const
     {
         switch(lhs_rhs.type_family)
         {
         case VALUE_TYPE_FAMILY: return set_arguments(lhs_rhs.dtype, lhs_rhs.vscalar);
-        case ARRAY_TYPE_FAMILY: return set_arguments(lhs_rhs.array);
-        case INFOS_TYPE_FAMILY: return set_arguments(lhs_rhs.tuple);
+        case ARRAY_TYPE_FAMILY: return set_arguments(lhs_rhs.array, is_assigned);
+        case PLACEHOLDER_TYPE_FAMILY: return;
         default: throw std::runtime_error("Unrecognized type family");
         }
     }
 
-    void operator()(isaac::array_expression const & array_expression, size_t root_idx, leaf_t leaf_t) const
+    void operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t leaf_t) const
     {
-        array_expression::node const & root_node = array_expression.tree()[root_idx];
+        math_expression::node const & root_node = math_expression.tree()[root_idx];
         if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
-            set_arguments(root_node.lhs);
+            set_arguments(root_node.lhs, detail::is_assignment(root_node.op));
         else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != COMPOSITE_OPERATOR_FAMILY)
-            set_arguments(root_node.rhs);
+            set_arguments(root_node.rhs, false);
     }
 
 
@@ -124,15 +115,15 @@ private:
     driver::Kernel & kernel_;
 };
 
-inline void set_arguments(expressions_tuple const & expressions, driver::Kernel & kernel, unsigned int & current_arg, binding_policy_t binding_policy)
+inline void set_arguments(math_expression const & expression, driver::Kernel & kernel, unsigned int & current_arg, binding_policy_t binding_policy)
 {
     std::unique_ptr<symbolic_binder> binder;
-    if (binding_policy==BIND_TO_HANDLE)
-        binder.reset(new bind_to_handle());
+    if (binding_policy==BIND_SEQUENTIAL)
+        binder.reset(new bind_sequential());
     else
-        binder.reset(new bind_all_unique());
-    for (const auto & elem : expressions.data())
-        traverse(*elem, (elem)->root(), set_arguments_functor(*binder, current_arg, kernel), true);
+        binder.reset(new bind_independent());
+    traverse(expression, expression.root(), set_arguments_functor(*binder, current_arg, kernel), true);
+
 }
 
 }

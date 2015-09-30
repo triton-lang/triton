@@ -28,46 +28,35 @@ static long time_event(long sum, driver::Event const & e)
     return sum + e.elapsed_time();
 }
 
-void profiles::value_type::fill_program_name(char* program_name, expressions_tuple const & expressions, binding_policy_t binding_policy)
+driver::Program const & profiles::value_type::init(execution_handler const & expression)
 {
-  if (expressions.order()==expressions_tuple::INDEPENDENT)
-    *program_name++='i';
-  else
-    *program_name++='s';
-  symbolic_binder* binder = NULL;
-  if(binding_policy==BIND_TO_HANDLE)
-    binder = new bind_to_handle();
-  else
-    binder = new bind_all_unique();
-  for (const auto & elem : expressions.data())
-    traverse(*elem, elem->root(), array_expression_representation_functor(*binder, program_name),true);
-  *program_name='\0';
-  delete binder;
-}
-
-driver::Program const & profiles::value_type::init(controller<expressions_tuple> const & expressions)
-{
-  driver::Context & context = (driver::Context&)expressions.x().context();
+  driver::Context & context = (driver::Context&)expression.x().context();
   std::string pname;
-  compilation_options_type const & opt = expressions.compilation_options();
+  compilation_options_type const & opt = expression.compilation_options();
   if(opt.program_name.empty())
   {
     char program_name[256];
-    fill_program_name(program_name, expressions.x(), BIND_TO_HANDLE);
+
+    char* ptr = program_name;
+    bind_independent binder;
+    traverse(expression.x(), expression.x().root(), math_expression_representation_functor(binder, ptr),true);
+    *ptr='\0';
     pname = std::string(program_name);
+
   }
   else
-    pname = expressions.compilation_options().program_name;
+    pname = expression.compilation_options().program_name;
 
   driver::Program const * program = cache_.find(pname);
+
   if(program)
       return *program;
 
   std::string srcs;
    for(unsigned int i = 0 ; i < templates_.size() ; ++i){
-     srcs += templates_[i]->generate(tools::to_string(i), expressions.x(), context.device());
+     srcs += templates_[i]->generate(tools::to_string(i), expression.x(), context.device());
    }
-   srcs += fallback_->generate("fallback", expressions.x(), context.device());
+   srcs += fallback_->generate("fallback", expression.x(), context.device());
    return cache_.add(context, pname, srcs);
 }
 
@@ -83,7 +72,7 @@ profiles::value_type::value_type(expression_type etype, numeric_type dtype, temp
   cache_.clear();
 }
 
-void profiles::value_type::execute(controller<expressions_tuple> const & expr)
+void profiles::value_type::execute(execution_handler const & expr)
 {
   driver::Program const & program = init(expr);
   std::vector<int_t> x = templates_[0]->input_sizes(expr.x());
@@ -101,7 +90,7 @@ void profiles::value_type::execute(controller<expressions_tuple> const & expr)
       }
       std::list<driver::Event> events;
       try{
-        templates_[i]->enqueue(queue_, program, tools::to_string(i), *fallback_, control(expr.x(), execution_options_type(0, &events)));
+        templates_[i]->enqueue(queue_, program, tools::to_string(i), *fallback_, execution_handler(expr.x(), execution_options_type(0, &events)));
         queue_.synchronize();
         timings[i] = 1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event);
       }catch(...){

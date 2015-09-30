@@ -31,12 +31,12 @@ protected:
   };
   gemv(gemv::parameters_type const & , dot_type, binding_policy_t);
 private:
-  virtual int is_invalid_impl(driver::Device const &, expressions_tuple const &) const;
-  unsigned int lmem_usage(expressions_tuple const &) const;
-  std::string generate_impl(std::string const & suffix, expressions_tuple const &, driver::Device const & device, std::vector<mapping_type> const &) const;
+  virtual int is_invalid_impl(driver::Device const &, math_expression const &) const;
+  unsigned int lmem_usage(math_expression const &) const;
+  std::string generate_impl(std::string const & suffix, math_expression const &, driver::Device const & device, mapping_type const &) const;
 public:
-  virtual std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;
-  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const &);
+  virtual std::vector<int_t> input_sizes(math_expression const & expressions) const;
+  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const &);
 private:
   dot_type dot_type_;
 };
@@ -44,15 +44,15 @@ private:
 class gemv_n : public gemv
 {
 public:
-  gemv_n(gemv::parameters_type  const &, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
-  gemv_n(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_ALL_UNIQUE);
+  gemv_n(gemv::parameters_type  const &, binding_policy_t binding_policy = BIND_INDEPENDENT);
+  gemv_n(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_INDEPENDENT);
 };
 
 class gemv_t : public gemv
 {
 public:
-  gemv_t(gemv::parameters_type  const &, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
-  gemv_t(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_ALL_UNIQUE);
+  gemv_t(gemv::parameters_type  const &, binding_policy_t binding_policy = BIND_INDEPENDENT);
+  gemv_t(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_INDEPENDENT);
 };
 
 }

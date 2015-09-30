@@ -21,7 +21,7 @@ protected:
 
 public:
   //1D Constructors
-  array(int_t size1, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
+  explicit array(int_t size1, numeric_type dtype = FLOAT_TYPE, driver::Context const & context = driver::backend::contexts::get_default());
   array(int_t size1, numeric_type dtype, driver::Buffer data, int_t start, int_t inc);
 
   template<typename DT>
@@ -29,19 +29,18 @@ public:
   array(array & v, slice const & s1);
 
   //2D Constructors
-  array(int_t size1, int_t size2, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
+  array(int_t size1, int_t size2, numeric_type dtype = FLOAT_TYPE, driver::Context const & context = driver::backend::contexts::get_default());
   array(int_t size1, int_t size2, numeric_type dtype, driver::Buffer data, int_t start, int_t ld);
   template<typename DT>
   array(int_t size1, int_t size2, std::vector<DT> const & data, driver::Context const & context = driver::backend::contexts::get_default());
   array(array & M, slice const & s1, slice const & s2);
 
   //3D Constructors
-  array(int_t size1, int_t size2, int_t size3, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
+  array(int_t size1, int_t size2, int_t size3, numeric_type dtype = FLOAT_TYPE, driver::Context const & context = driver::backend::contexts::get_default());
 
   //General constructor
-  explicit array(array_expression const & proxy);
-  template<class T>
-  explicit array(controller<T> const &);
+  explicit array(math_expression const & proxy);
+  explicit array(execution_handler const &);
   
   //Copy Constructor
   array(array const &);
@@ -63,36 +62,36 @@ public:
 
   //Numeric operators
   array& operator=(array const &);
-  array& operator=(array_expression const &);
-  template<class T>
-  array& operator=(controller<T> const &);
+  array& operator=(math_expression const &);
+  array& operator=(execution_handler const &);
   template<class T>
   array & operator=(std::vector<T> const & rhs);
   array & operator=(value_scalar const & rhs);
 
-  array_expression operator-();
-  array_expression operator!();
+  math_expression operator-();
+  math_expression operator!();
 
   array& operator+=(value_scalar const &);
   array& operator+=(array const &);
-  array& operator+=(array_expression const &);
+  array& operator+=(math_expression const &);
   array& operator-=(value_scalar const &);
   array& operator-=(array const &);
-  array& operator-=(array_expression const &);
+  array& operator-=(math_expression const &);
   array& operator*=(value_scalar const &);
   array& operator*=(array const &);
-  array& operator*=(array_expression const &);
+  array& operator*=(math_expression const &);
   array& operator/=(value_scalar const &);
   array& operator/=(array const &);
-  array& operator/=(array_expression const &);
+  array& operator/=(math_expression const &);
 
   //Indexing operators
+  math_expression operator[](for_idx_t idx) const;
   const scalar operator[](int_t) const;
   scalar operator[](int_t);
   array operator[](slice const &);
   array operator()(slice const &, slice const &);
 
-  array_expression T() const;
+  math_expression T() const;
 protected:
   numeric_type dtype_;
 
@@ -108,7 +107,7 @@ protected:
 class ISAACAPI scalar : public array
 {
   friend value_scalar::value_scalar(const scalar &);
-  friend value_scalar::value_scalar(const array_expression &);
+  friend value_scalar::value_scalar(const math_expression &);
 private:
   void inject(values_holder&) const;
   template<class T> T cast() const;
@@ -116,7 +115,7 @@ public:
   explicit scalar(numeric_type dtype, driver::Buffer const & data, int_t offset);
   explicit scalar(value_scalar value, driver::Context const & context = driver::backend::contexts::get_default());
   explicit scalar(numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
-  scalar(array_expression const & proxy);
+  scalar(math_expression const & proxy);
   scalar& operator=(value_scalar const &);
 //  scalar& operator=(scalar const & s);
   using array::operator =;
@@ -154,14 +153,24 @@ template<class T> ISAACAPI void copy(array const & gA, std::vector<T> & cA, bool
 //Binary operators
 
 #define ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(OPNAME) \
-ISAACAPI array_expression OPNAME (array_expression const & x, array_expression const & y);\
-ISAACAPI array_expression OPNAME (array const & x, array_expression const & y);\
-ISAACAPI array_expression OPNAME (array_expression const & x, array const & y);\
-ISAACAPI array_expression OPNAME (array const & x, array const & y);\
-ISAACAPI array_expression OPNAME (array_expression const & x, value_scalar const & y);\
-ISAACAPI array_expression OPNAME (array const & x, value_scalar const & y);\
-ISAACAPI array_expression OPNAME (value_scalar const & y, array_expression const & x);\
-ISAACAPI array_expression OPNAME (value_scalar const & y, array const & x);
+ISAACAPI math_expression OPNAME (array const & x, math_expression const & y);\
+ISAACAPI math_expression OPNAME (array const & x, value_scalar const & y);\
+ISAACAPI math_expression OPNAME (array const & x, for_idx_t const & y);\
+ISAACAPI math_expression OPNAME (array const & x, array const & y);\
+\
+ISAACAPI math_expression OPNAME (math_expression const & x, math_expression const & y);\
+ISAACAPI math_expression OPNAME (math_expression const & x, value_scalar const & y);\
+ISAACAPI math_expression OPNAME (math_expression const & x, for_idx_t const & y);\
+ISAACAPI math_expression OPNAME (math_expression const & x, array const & y);\
+\
+ISAACAPI math_expression OPNAME (value_scalar const & y, math_expression const & x);\
+ISAACAPI math_expression OPNAME (value_scalar const & y, for_idx_t const & x);\
+ISAACAPI math_expression OPNAME (value_scalar const & y, array const & x);\
+\
+ISAACAPI math_expression OPNAME (for_idx_t const & y, math_expression const & x);\
+ISAACAPI math_expression OPNAME (for_idx_t const & y, for_idx_t const & x);\
+ISAACAPI math_expression OPNAME (for_idx_t const & y, value_scalar const & x);\
+ISAACAPI math_expression OPNAME (for_idx_t const & y, array const & x);
 
 ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(operator +)
 ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(operator -)
@@ -184,15 +193,32 @@ ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(outer)
 
 ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(assign)
 
-
 #undef ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR
 
+#define ISAAC_DECLARE_ROT(LTYPE, RTYPE, CTYPE, STYPE) \
+  math_expression rot(LTYPE const & x, RTYPE const & y, CTYPE const & c, STYPE const & s);
+
+ISAAC_DECLARE_ROT(array, array, scalar, scalar)
+ISAAC_DECLARE_ROT(math_expression, array, scalar, scalar)
+ISAAC_DECLARE_ROT(array, math_expression, scalar, scalar)
+ISAAC_DECLARE_ROT(math_expression, math_expression, scalar, scalar)
+
+ISAAC_DECLARE_ROT(array, array, value_scalar, value_scalar)
+ISAAC_DECLARE_ROT(math_expression, array, value_scalar, value_scalar)
+ISAAC_DECLARE_ROT(array, math_expression, value_scalar, value_scalar)
+ISAAC_DECLARE_ROT(math_expression, math_expression, value_scalar, value_scalar)
+
+ISAAC_DECLARE_ROT(array, array, math_expression, math_expression)
+ISAAC_DECLARE_ROT(math_expression, array, math_expression, math_expression)
+ISAAC_DECLARE_ROT(array, math_expression, math_expression, math_expression)
+ISAAC_DECLARE_ROT(math_expression, math_expression, math_expression, math_expression)
 //--------------------------------
+
 
 //Unary operators
 #define ISAAC_DECLARE_UNARY_OPERATOR(OPNAME) \
-  ISAACAPI array_expression OPNAME (array const & x);\
-  ISAACAPI array_expression OPNAME (array_expression const & x);
+  ISAACAPI math_expression OPNAME (array const & x);\
+  ISAACAPI math_expression OPNAME (math_expression const & x);
 
 ISAAC_DECLARE_UNARY_OPERATOR(abs)
 ISAAC_DECLARE_UNARY_OPERATOR(acos)
@@ -212,19 +238,21 @@ ISAAC_DECLARE_UNARY_OPERATOR(tan)
 ISAAC_DECLARE_UNARY_OPERATOR(tanh)
 ISAAC_DECLARE_UNARY_OPERATOR(trans)
 
-ISAACAPI array_expression cast(array const &, numeric_type dtype);
-ISAACAPI array_expression cast(array_expression const &, numeric_type dtype);
+ISAACAPI math_expression cast(array const &, numeric_type dtype);
+ISAACAPI math_expression cast(math_expression const &, numeric_type dtype);
 
-ISAACAPI array_expression norm(array const &, unsigned int order = 2);
-ISAACAPI array_expression norm(array_expression const &, unsigned int order = 2);
+ISAACAPI math_expression norm(array const &, unsigned int order = 2);
+ISAACAPI math_expression norm(math_expression const &, unsigned int order = 2);
 
 #undef ISAAC_DECLARE_UNARY_OPERATOR
 
-ISAACAPI array_expression repmat(array const &, int_t const & rep1, int_t const & rep2);
+ISAACAPI math_expression repmat(array const &, int_t const & rep1, int_t const & rep2);
+
+//Matrix reduction
 
 #define ISAAC_DECLARE_DOT(OPNAME) \
-ISAACAPI array_expression OPNAME(array const & M, int_t axis = -1);\
-ISAACAPI array_expression OPNAME(array_expression const & M, int_t axis = -1);
+ISAACAPI math_expression OPNAME(array const & M, int_t axis = -1);\
+ISAACAPI math_expression OPNAME(math_expression const & M, int_t axis = -1);
 
 ISAAC_DECLARE_DOT(sum)
 ISAAC_DECLARE_DOT(argmax)
@@ -232,9 +260,45 @@ ISAAC_DECLARE_DOT((max))
 ISAAC_DECLARE_DOT((min))
 ISAAC_DECLARE_DOT(argmin)
 
-ISAACAPI array_expression eye(int_t, int_t, isaac::numeric_type, driver::Context const & context = driver::backend::contexts::get_default());
-ISAACAPI array_expression zeros(int_t M, int_t N, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
-ISAACAPI array_expression reshape(array const &, int_t, int_t);
+//Fusion
+ISAACAPI math_expression fuse(math_expression const & x, math_expression const & y);
+
+//For
+ISAACAPI math_expression sfor(math_expression const & start, math_expression const & end, math_expression const & inc, math_expression const & expression);
+static const for_idx_t _i0{0};
+static const for_idx_t _i1{1};
+static const for_idx_t _i2{2};
+static const for_idx_t _i3{3};
+static const for_idx_t _i4{4};
+static const for_idx_t _i5{5};
+static const for_idx_t _i6{6};
+static const for_idx_t _i7{7};
+static const for_idx_t _i8{8};
+static const for_idx_t _i9{9};
+
+//Misc.
+ISAACAPI math_expression eye(int_t, int_t, isaac::numeric_type, driver::Context const & context = driver::backend::contexts::get_default());
+ISAACAPI math_expression zeros(int_t M, int_t N, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
+ISAACAPI math_expression reshape(array const &, int_t, int_t);
+
+//Row
+ISAACAPI math_expression row(array const &, value_scalar const &);
+ISAACAPI math_expression row(array const &, for_idx_t const &);
+ISAACAPI math_expression row(array const &, math_expression const &);
+
+ISAACAPI math_expression row(math_expression const &, value_scalar const &);
+ISAACAPI math_expression row(math_expression const &, for_idx_t const &);
+ISAACAPI math_expression row(math_expression const &, math_expression const &);
+
+//col
+ISAACAPI math_expression col(array const &, value_scalar const &);
+ISAACAPI math_expression col(array const &, for_idx_t const &);
+ISAACAPI math_expression col(array const &, math_expression const &);
+
+ISAACAPI math_expression col(math_expression const &, value_scalar const &);
+ISAACAPI math_expression col(math_expression const &, for_idx_t const &);
+ISAACAPI math_expression col(math_expression const &, math_expression const &);
+
 
 //
 ISAACAPI std::ostream& operator<<(std::ostream &, array const &);

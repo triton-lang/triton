@@ -29,14 +29,6 @@ private:
 
 inline int_t prod(size4 const & s) { return s[0]*s[1]; }
 
-struct repeat_infos
-{
-  int_t sub1;
-  int_t sub2;
-  int_t rep1;
-  int_t rep2;
-};
-
 struct slice
 {
   slice(int_t _start, int_t _end, int_t _stride = 1) : start(_start), size((_end - _start)/_stride), stride(_stride) { }

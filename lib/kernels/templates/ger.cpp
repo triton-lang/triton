@@ -20,7 +20,7 @@ ger_parameters::ger_parameters(unsigned int _simd_width,
 
 
 
-int ger::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+int ger::is_invalid_impl(driver::Device const &, math_expression const  &) const
 {
   if (p_.simd_width>1)
     return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -29,7 +29,7 @@ int ger::is_invalid_impl(driver::Device const &, expressions_tuple const &) cons
   return TEMPLATE_VALID;
 }
 
-std::string ger::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string ger::generate_impl(std::string const & suffix, math_expression const  & expressions, driver::Device const & device, mapping_type const & mappings) const
 {
   kernel_generation_stream stream;
   std::string _size_t = size_type(device);
@@ -65,18 +65,18 @@ std::string ger::generate_impl(std::string const & suffix, expressions_tuple con
 
   process(stream, PARENT_NODE_TYPE, { {"array2", data_type + " #namereg = $VALUE{i*#stride,j};"},
                                       {"vdiag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride, j*#stride)};"},
-                                      {"repeat", "#scalartype #namereg = $VALUE{(i%#tuplearg0)*#stride, (j%#tuplearg1)};"},
+                                      {"repeat", "#scalartype #namereg = $VALUE{(i%#sub0)*#stride, (j%#sub1)};"},
                                       {"outer", "#scalartype #namereg = ($LVALUE{i*#stride})*($RVALUE{j*#stride});"} }
                                     , expressions, mappings);
 
-  evaluate(stream, PARENT_NODE_TYPE, { {"array2", "#namereg"},
+  stream << evaluate(PARENT_NODE_TYPE, { {"array2", "#namereg"},
                                         {"vdiag", "#namereg"},
                                         {"repeat", "#namereg"},
                                         {"array0", "#namereg"},
                                         {"outer", "#namereg"},
                                         {"cast", CastPrefix(backend, data_type).get()},
                                         {"host_scalar", p_.simd_width==1?"#name": InitPrefix(backend, data_type).get() + "(#name)"}}
-                                    , expressions, mappings);
+                                    , expressions, expressions.root(), mappings) << ";" << std::endl;
 
   process(stream, LHS_NODE_TYPE, { {"array2", "$VALUE{i*#stride,j} = #namereg;"} } , expressions, mappings);
 
@@ -107,16 +107,15 @@ ger::ger(unsigned int simd, unsigned int ls1, unsigned int ls2,
     base_impl<ger, ger_parameters>(ger_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
 {}
 
-std::vector<int_t> ger::input_sizes(expressions_tuple const & expressions) const
+std::vector<int_t> ger::input_sizes(math_expression const  & expression) const
 {
-  isaac::array_expression const & array_expression = *(expressions.data().front());
-  std::pair<int_t, int_t> size = matrix_size(lhs_most(array_expression.tree(), array_expression.root()));
+  std::pair<int_t, int_t> size = matrix_size(expression.tree(), lhs_most(expression.tree(), expression.root()));
   return {size.first, size.second};
 }
 
-void ger::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, std::string const & suffix, base &, controller<expressions_tuple> const & controller)
+void ger::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, std::string const & suffix, base &, execution_handler const & control)
 {
-  expressions_tuple const & expressions = controller.x();
+  math_expression const  & expressions = control.x();
   std::string name = "axpy";
   name +=suffix;
   driver::Kernel kernel(program, name.c_str());
@@ -128,7 +127,7 @@ void ger::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & prog
   kernel.setSizeArg(current_arg++, MN[1]);
   set_arguments(expressions, kernel, current_arg, binding_policy_);
 
-  controller.execution_options().enqueue(program.context(), kernel, global, local);
+  control.execution_options().enqueue(program.context(), kernel, global, local);
 }
 
 }

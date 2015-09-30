@@ -2,7 +2,7 @@
 #include "isaac/array.h"
 #include "isaac/symbolic/execute.h"
 
-namespace is = isaac;
+namespace sc = isaac;
 
 extern "C"
 {
@@ -18,25 +18,25 @@ extern "C"
         isaac::driver::backend::release();
     }
 
-    void execute(is::array_expression const & operation, is::driver::Context const & context,
+    void execute(sc::math_expression const & operation, sc::driver::Context const & context,
                  cl_uint numCommandQueues, cl_command_queue *commandQueues,
                  cl_uint numEventsInWaitList, const cl_event *eventWaitList,
                  cl_event *events)
     {
-        std::vector<is::driver::Event> waitlist;
+        std::vector<sc::driver::Event> waitlist;
         for(cl_uint i = 0 ; i < numEventsInWaitList ; ++i)
             waitlist.push_back(eventWaitList[i]);
         for(cl_uint i = 0 ; i < numCommandQueues ; ++i)
         {
-            std::list<is::driver::Event> levents;
-            is::execution_options_type options(is::driver::CommandQueue(commandQueues[i],false), &levents, &waitlist);
-            is::execute(is::control(operation, options), is::profiles::get(options.queue(context)));
+            std::list<sc::driver::Event> levents;
+            sc::execution_options_type options(sc::driver::CommandQueue(commandQueues[i],false), &levents, &waitlist);
+            sc::execute(sc::execution_handler(operation, options), sc::profiles::get(options.queue(context)));
             if(events)
             {
                 events[i] = levents.front().handle().cl();
-                is::driver::dispatch::clRetainEvent(events[i]);
+                sc::driver::dispatch::clRetainEvent(events[i]);
             }
-            is::driver::dispatch::clFlush(commandQueues[i]);
+            sc::driver::dispatch::clFlush(commandQueues[i]);
         }
 
     }
@@ -54,14 +54,14 @@ extern "C"
                             cl_uint numEventsInWaitList, const cl_event *eventWaitList, \
                             cl_event *events) \
     { \
-        is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx,false), (is::int_t)offx, incx); \
-        is::array y((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(my,false), (is::int_t)offy, incy); \
-        execute(is::assign(y, alpha*x + y), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
+        sc::array x((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mx,false), (sc::int_t)offx, incx); \
+        sc::array y((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(my,false), (sc::int_t)offy, incy); \
+        execute(sc::assign(y, alpha*x + y), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
     }
 
-    MAKE_AXPY(S, is::FLOAT_TYPE, cl_float)
-    MAKE_AXPY(D, is::DOUBLE_TYPE, cl_double)
+    MAKE_AXPY(S, sc::FLOAT_TYPE, cl_float)
+    MAKE_AXPY(D, sc::DOUBLE_TYPE, cl_double)
 
     //SCAL
     #define MAKE_SCAL(TYPE_CHAR, TYPE_ISAAC, TYPE_CL) \
@@ -70,13 +70,13 @@ extern "C"
                              cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx,false), (is::int_t)offx, incx);\
-        execute(is::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        sc::array x((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mx,false), (sc::int_t)offx, incx);\
+        execute(sc::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 
-    MAKE_SCAL(S, is::FLOAT_TYPE, cl_float)
-    MAKE_SCAL(D, is::DOUBLE_TYPE, cl_double)
+    MAKE_SCAL(S, sc::FLOAT_TYPE, cl_float)
+    MAKE_SCAL(D, sc::DOUBLE_TYPE, cl_double)
 
     //COPY
     #define MAKE_COPY(TYPE_CHAR, TYPE_ISAAC, TYPE_CL)\
@@ -86,14 +86,14 @@ extern "C"
                              cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        const is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx);\
-        is::array y((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(my, false), (is::int_t)offy, incy);\
-        execute(is::assign(y, x), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        const sc::array x((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mx, false), (sc::int_t)offx, incx);\
+        sc::array y((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(my, false), (sc::int_t)offy, incy);\
+        execute(sc::assign(y, x), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 
-    MAKE_COPY(S, is::FLOAT_TYPE, cl_float)
-    MAKE_COPY(D, is::DOUBLE_TYPE, cl_double)
+    MAKE_COPY(S, sc::FLOAT_TYPE, cl_float)
+    MAKE_COPY(D, sc::DOUBLE_TYPE, cl_double)
 
     //DOT
     #define MAKE_DOT(TYPE_CHAR, TYPE_ISAAC, TYPE_CL) \
@@ -104,15 +104,15 @@ extern "C"
                cl_command_queue *commandQueues, cl_uint numEventsInWaitList, \
                const cl_event *eventWaitList, cl_event *events) \
     { \
-        is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx); \
-        is::array y((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(my, false), (is::int_t)offy, incy); \
-        is::scalar s(TYPE_ISAAC, is::driver::Buffer(dotProduct, false), (is::int_t)offDP); \
-        execute(is::assign(s, dot(x,y)), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
+        sc::array x((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mx, false), (sc::int_t)offx, incx); \
+        sc::array y((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(my, false), (sc::int_t)offy, incy); \
+        sc::scalar s(TYPE_ISAAC, sc::driver::Buffer(dotProduct, false), (sc::int_t)offDP); \
+        execute(sc::assign(s, dot(x,y)), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events); \
         return clblasSuccess; \
     }
 
-    MAKE_DOT(S, is::FLOAT_TYPE, cl_float)
-    MAKE_DOT(D, is::DOUBLE_TYPE, cl_double)
+    MAKE_DOT(S, sc::FLOAT_TYPE, cl_float)
+    MAKE_DOT(D, sc::DOUBLE_TYPE, cl_double)
 
     //ASUM
     #define MAKE_ASUM(TYPE_CHAR, TYPE_ISAAC, TYPE_CL) \
@@ -121,14 +121,15 @@ extern "C"
                              cl_mem /*scratchBuff*/, cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
-        is::array x((is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx);\
-        is::scalar s(TYPE_ISAAC, is::driver::Buffer(asum, false), (is::int_t)offAsum);\
-        execute(is::assign(s, sum(abs(x))), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+        sc::array x((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mx, false), (sc::int_t)offx, incx);\
+        sc::scalar s(TYPE_ISAAC, sc::driver::Buffer(asum, false), (sc::int_t)offAsum);\
+        execute(sc::assign(s, sum(abs(x))), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 
-    MAKE_ASUM(S, is::FLOAT_TYPE, cl_float)
-    MAKE_ASUM(D, is::DOUBLE_TYPE, cl_double)
+    MAKE_ASUM(S, sc::FLOAT_TYPE, cl_float)
+    MAKE_ASUM(D, sc::DOUBLE_TYPE, cl_double)
+
 
     //*****************
     //BLAS2
@@ -146,23 +147,23 @@ extern "C"
             std::swap(M, N);\
             transA = (transA==clblasTrans)?clblasNoTrans:clblasTrans;\
         }\
-        is::array A((is::int_t)M, (is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mA, false), (is::int_t)offA, (is::int_t)lda);\
+        sc::array A((sc::int_t)M, (sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mA, false), (sc::int_t)offA, (sc::int_t)lda);\
         \
-        is::int_t sx = (is::int_t)N, sy = (is::int_t)M;\
+        sc::int_t sx = (sc::int_t)N, sy = (sc::int_t)M;\
         if(transA) std::swap(sx, sy);\
-        is::array x(sx, TYPE_ISAAC, is::driver::Buffer(mx, false), (is::int_t)offx, incx);\
-        is::array y(sy, TYPE_ISAAC, is::driver::Buffer(my, false), (is::int_t)offy, incy);\
+        sc::array x(sx, TYPE_ISAAC, sc::driver::Buffer(mx, false), (sc::int_t)offx, incx);\
+        sc::array y(sy, TYPE_ISAAC, sc::driver::Buffer(my, false), (sc::int_t)offy, incy);\
         \
-        is::driver::Context const & context = A.context();\
+        sc::driver::Context const & context = A.context();\
         if(transA==clblasTrans)\
-            execute(is::assign(y, alpha*dot(A.T(), x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(y, alpha*dot(A.T(), x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else\
-            execute(is::assign(y, alpha*dot(A, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(y, alpha*dot(A, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 
-    MAKE_GEMV(S, is::FLOAT_TYPE, cl_float)
-    MAKE_GEMV(D, is::DOUBLE_TYPE, cl_double)
+    MAKE_GEMV(S, sc::FLOAT_TYPE, cl_float)
+    MAKE_GEMV(D, sc::DOUBLE_TYPE, cl_double)
 
     //*****************
     //BLAS3
@@ -186,29 +187,29 @@ extern "C"
             std::swap(M, N);\
             std::swap(transA, transB);\
         }\
-        is::int_t As1 = (is::int_t)M, As2 = (is::int_t)K;\
-        is::int_t Bs1 = (is::int_t)K, Bs2 = (is::int_t)N;\
+        sc::int_t As1 = (sc::int_t)M, As2 = (sc::int_t)K;\
+        sc::int_t Bs1 = (sc::int_t)K, Bs2 = (sc::int_t)N;\
         if(transA==clblasTrans) std::swap(As1, As2);\
         if(transB==clblasTrans) std::swap(Bs1, Bs2);\
         /*Struct*/\
-        is::array A(As1, As2, TYPE_ISAAC, is::driver::Buffer(mA, false), (is::int_t)offA, (is::int_t)lda);\
-        is::array B(Bs1, Bs2, TYPE_ISAAC, is::driver::Buffer(mB, false), (is::int_t)offB, (is::int_t)ldb);\
-        is::array C((is::int_t)M, (is::int_t)N, TYPE_ISAAC, is::driver::Buffer(mC, false), (is::int_t)offC, (is::int_t)ldc);\
-        is::driver::Context const & context = C.context();\
+        sc::array A(As1, As2, TYPE_ISAAC, sc::driver::Buffer(mA, false), (sc::int_t)offA, (sc::int_t)lda);\
+        sc::array B(Bs1, Bs2, TYPE_ISAAC, sc::driver::Buffer(mB, false), (sc::int_t)offB, (sc::int_t)ldb);\
+        sc::array C((sc::int_t)M, (sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mC, false), (sc::int_t)offC, (sc::int_t)ldc);\
+        sc::driver::Context const & context = C.context();\
         /*Operation*/\
         if((transA==clblasTrans) && (transB==clblasTrans))\
-            execute(is::assign(C, alpha*dot(A.T(), B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(C, alpha*dot(A.T(), B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else if((transA==clblasTrans) && (transB==clblasNoTrans))\
-            execute(is::assign(C, alpha*dot(A.T(), B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(C, alpha*dot(A.T(), B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else if((transA==clblasNoTrans) && (transB==clblasTrans))\
-            execute(is::assign(C, alpha*dot(A, B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(C, alpha*dot(A, B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else\
-            execute(is::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
     }
 
-    MAKE_GEMM(S, is::FLOAT_TYPE, cl_float)
-    MAKE_GEMM(D, is::DOUBLE_TYPE, cl_double)
+    MAKE_GEMM(S, sc::FLOAT_TYPE, cl_float)
+    MAKE_GEMM(D, sc::DOUBLE_TYPE, cl_double)
 
 #undef DOT
 

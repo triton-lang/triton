@@ -9,6 +9,7 @@
 #include "tools/loop.hpp"
 #include "tools/vector_types.hpp"
 #include "tools/arguments.hpp"
+#include "isaac/symbolic/io.h"
 
 #include <string>
 
@@ -21,17 +22,18 @@ axpy_parameters::axpy_parameters(unsigned int _simd_width,
                        unsigned int _group_size, unsigned int _num_groups,
                        fetching_policy_type _fetching_policy) :
       base::parameters_type(_simd_width, _group_size, 1, 1), num_groups(_num_groups), fetching_policy(_fetching_policy)
-{ }
+{
+}
 
 
-int axpy::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+int axpy::is_invalid_impl(driver::Device const &, math_expression const &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-std::string axpy::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string axpy::generate_impl(std::string const & suffix, math_expression const & expressions, driver::Device const & device, mapping_type const & mappings) const
 {
   driver::backend_type backend = device.backend();
   std::string _size_t = size_type(device);
@@ -40,6 +42,10 @@ std::string axpy::generate_impl(std::string const & suffix, expressions_tuple co
   std::string str_simd_width = tools::to_string(p_.simd_width);
   std::string dtype = append_width("#scalartype",p_.simd_width);
 
+
+  std::vector<size_t> assigned_scalar = filter_nodes([](math_expression::node const & node) {
+                                                        return  detail::is_assignment(node.op) && node.lhs.subtype==DENSE_ARRAY_TYPE && node.lhs.array->nshape()==0;
+                                                        }, expressions, expressions.root(), true);
   switch(backend)
   {
     case driver::CUDA:
@@ -64,35 +70,102 @@ std::string axpy::generate_impl(std::string const & suffix, expressions_tuple co
   stream << "for(" << _size_t << " i = " << init << "; i < " << upper_bound << "; i += " << inc << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  process(stream, PARENT_NODE_TYPE, {{"array1", dtype + " #namereg = #pointer[i*#stride];"},
-                                     {"matrix_row", "#scalartype #namereg = $VALUE{#row*#stride, i};"},
-                                     {"matrix_column", "#scalartype #namereg = $VALUE{i*#stride,#column};"},
-                                     {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i}:$OFFSET{i*#stride, (i + #diag_offset)}];"}}, expressions, mappings);
 
 
-  evaluate(stream, PARENT_NODE_TYPE, {{"array0", "#namereg"}, {"array1", "#namereg"},
-                                      {"matrix_row", "#namereg"}, {"matrix_column", "#namereg"}, {"matrix_diag", "#namereg"},
-                                      {"cast", CastPrefix(backend, dtype).get()}, {"host_scalar", p_.simd_width==1?"#name": InitPrefix(backend, dtype).get() + "(#name)"}}, expressions, mappings);
+  math_expression::container_type const & tree = expressions.tree();
+  std::vector<std::size_t> sfors = filter_nodes([](math_expression::node const & node){return node.op.type==OPERATOR_SFOR_TYPE;}, expressions, expressions.root(), true);
+//  std::cout << sfors.size() << std::endl;
+
+  for(unsigned int i = 0 ; i < sfors.size() ; ++i)
+  {
+    std::string info[3];
+    int idx =  sfors[i];
+    for(int i = 0 ; i < 2 ; ++i){
+        idx = tree[idx].rhs.node_index;
+        info[i] = evaluate(LHS_NODE_TYPE, {{"placeholder", "#name"}}, expressions, idx, mappings);
+
+    }
+    info[2] = evaluate(RHS_NODE_TYPE, {{"placeholder", "#name"}}, expressions, idx, mappings);
+    info[0] = info[0].substr(1, info[0].size()-2);
+    stream << "for(int " << info[0] << " ; " << info[1] << "; " << info[2] << ")" << std::endl;
+
+//    stream << "int sforidx0 = 0 ;" << std::endl;
+  }
+
+  if(sfors.size()){
+    stream << "{" << std::endl;
+    stream.inc_tab();
+  }
+
+  size_t root = expressions.root();
+  if(sfors.size())
+      root = tree[sfors.back()].lhs.node_index;
+
+  std::vector<std::size_t> assigned = filter_nodes([](math_expression::node const & node){return detail::is_assignment(node.op);}, expressions, root, true);
+  std::set<std::string> processed;
+
+  //Declares register to store results
+  for(std::size_t idx: assigned)
+  {
+    process(stream, LHS_NODE_TYPE, {{"array1", dtype + " #namereg;"}, {"matrix_row", "#scalartype #namereg;"},
+                                       {"matrix_column", "#scalartype #namereg;"},  {"matrix_diag", "#scalartype #namereg;"}}, expressions, idx, mappings, processed);
+  }
+
+  //Fetches to registers
+  for(std::size_t idx: assigned)
+  {
+    std::string array1 = dtype + " #namereg = " + vload(p_.simd_width, "#scalartype", "i*#stride", "#pointer", "1", backend, false) + ";";
+    std::string array_access = "#scalartype #namereg = #pointer[#index];";
+    std::string matrix_row = dtype + " #namereg = " + vload(p_.simd_width, "#scalartype", "i", "#pointer + #row*#stride", "#ld", backend, false) + ";";
+    std::string matrix_column = dtype + " #namereg = " + vload(p_.simd_width, "#scalartype", "i*#stride", "#pointer + #column*#ld", "#stride", backend, false) + ";";
+    std::string matrix_diag = dtype + " #namereg = " + vload(p_.simd_width, "#scalartype", "i*(#ld + #stride)", "#pointer + (#diag_offset<0)?-#diag_offset:(#diag_offset*#ld)", "#ld + #stride", backend, false) + ";";
+    process(stream, RHS_NODE_TYPE, {{"array1", array1}, {"matrix_row", matrix_row}, {"matrix_column", matrix_column},
+                                    {"matrix_diag", matrix_diag}, {"array_access", array_access}}, expressions, idx, mappings, processed);
+  }
 
 
+  //Compute expressions
+  for(std::size_t idx: assigned)
+    stream << evaluate(PARENT_NODE_TYPE, {{"array0", "#namereg"}, {"array1", "#namereg"},
+                                        {"matrix_row", "#namereg"}, {"matrix_column", "#namereg"}, {"matrix_diag", "#namereg"}, {"array_access", "#namereg"},
+                                        {"cast", CastPrefix(backend, dtype).get()}, {"placeholder", "#name"}, {"host_scalar", p_.simd_width==1?"#name": InitPrefix(backend, dtype).get() + "(#name)"}},
+                                      expressions, idx, mappings) << ";" << std::endl;
 
-  process(stream, LHS_NODE_TYPE, {{"array1", "#pointer[i*#stride] = #namereg;"},
-                                  {"matrix_row", "$VALUE{#row, i} = #namereg;"},
-                                  {"matrix_column", "$VALUE{i, #column} = #namereg;"},
-                                  {"matrix_diag", "#diag_offset<0?$VALUE{(i - #diag_offset)*#stride, i}:$VALUE{i*#stride, (i + #diag_offset)} = #namereg;"}}, expressions, mappings);
+  //Writes back to registers
+  processed.clear();
+  for(std::size_t idx: assigned)
+  {
+    std::string array1 = vstore(p_.simd_width, "#scalartype", "#namereg", "i*#stride", "#pointer", "1", backend, false) + ";";
+    std::string matrix_row = vstore(p_.simd_width, "#scalartype", "#namereg", "i", "#pointer + #row*#stride", "#ld", backend, false) + ";";
+    std::string matrix_column = vstore(p_.simd_width, "#scalartype", "#namereg", "i*#stride", "#pointer + #column*#ld", "#stride", backend, false) + ";";
+    std::string matrix_diag = vstore(p_.simd_width, "#scalartype", "#namereg", "i*(#ld + #stride)", "#pointer + (#diag_offset<0)?-#diag_offset:(#diag_offset*#ld)", "#ld + #stride", backend, false) + ";";
+    process(stream, LHS_NODE_TYPE, {{"array1", array1}, {"matrix_row", matrix_row}, {"matrix_column", matrix_column}, {"matrix_diag", matrix_diag}}, expressions, idx, mappings, processed);
+  }
+
+  if(sfors.size()){
+    stream.dec_tab();
+    stream << "}" << std::endl;
+  }
 
   stream.dec_tab();
   stream << "}" << std::endl;
 
-  stream << "if(idx==0)" << std::endl;
-  stream << "{" << std::endl;
-  stream.inc_tab();
-  process(stream, LHS_NODE_TYPE, { {"array0", "#pointer[#start] = #namereg;"} }, expressions, mappings);
-  stream.dec_tab();
-  stream << "}" << std::endl;
+  processed.clear();
+  if(assigned_scalar.size())
+  {
+    stream << "if(idx==0)" << std::endl;
+    stream << "{" << std::endl;
+    stream.inc_tab();
+    for(std::size_t idx: assigned)
+      process(stream, LHS_NODE_TYPE, { {"array0", "#pointer[#start] = #namereg;"} }, expressions, idx, mappings, processed);
+    stream.dec_tab();
+    stream << "}" << std::endl;
+  }
 
   stream.dec_tab();
   stream << "}" << std::endl;
+
+//  std::cout << stream.str() << std::endl;
 
   return stream.str();
 }
@@ -108,21 +181,21 @@ axpy::axpy(unsigned int simd, unsigned int ls, unsigned int ng,
 {}
 
 
-std::vector<int_t> axpy::input_sizes(expressions_tuple const & expressions) const
+std::vector<int_t> axpy::input_sizes(math_expression const & expressions) const
 {
-  size4 shape = static_cast<array_expression const *>(expressions.data().front().get())->shape();
+  size4 shape = expressions.shape();
   return {std::max(shape[0], shape[1])};
 }
 
-void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const & controller)
+void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
 {
-  expressions_tuple const & expressions = controller.x();
+  math_expression const & expressions = control.x();
   //Size
   int_t size = input_sizes(expressions)[0];
   //Fallback
   if(p_.simd_width > 1 && (requires_fallback(expressions) || (size%p_.simd_width>0)))
   {
-      fallback.enqueue(queue, program, "fallback", fallback, controller);
+      fallback.enqueue(queue, program, "fallback", fallback, control);
       return;
   }
   //Kernel
@@ -136,7 +209,7 @@ void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program
   unsigned int current_arg = 0;
   kernel.setSizeArg(current_arg++, size);
   set_arguments(expressions, kernel, current_arg, binding_policy_);
-  controller.execution_options().enqueue(program.context(), kernel, global, local);
+  control.execution_options().enqueue(program.context(), kernel, global, local);
 }
 
 

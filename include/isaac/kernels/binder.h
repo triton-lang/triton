@@ -9,8 +9,8 @@ namespace isaac
 
 enum binding_policy_t
 {
-  BIND_ALL_UNIQUE,
-  BIND_TO_HANDLE
+  BIND_INDEPENDENT,
+  BIND_SEQUENTIAL
 };
 
 
@@ -19,8 +19,8 @@ class symbolic_binder
 public:
   symbolic_binder();
   virtual ~symbolic_binder();
-  virtual bool bind(driver::Buffer const &) = 0;
-  virtual unsigned int get(driver::Buffer const &) = 0;
+  virtual bool bind(driver::Buffer const &, bool) = 0;
+  virtual unsigned int get(driver::Buffer const &, bool) = 0;
   unsigned int get();
 protected:
   unsigned int current_arg_;
@@ -28,20 +28,20 @@ protected:
 };
 
 
-class bind_to_handle : public symbolic_binder
+class bind_sequential : public symbolic_binder
 {
 public:
-  bind_to_handle();
-  bool bind(driver::Buffer const &);
-  unsigned int get(driver::Buffer const &);
+  bind_sequential();
+  bool bind(driver::Buffer const &, bool);
+  unsigned int get(driver::Buffer const &, bool);
 };
 
-class bind_all_unique : public symbolic_binder
+class bind_independent : public symbolic_binder
 {
 public:
-  bind_all_unique();
-  bool bind(driver::Buffer const &);
-  unsigned int get(driver::Buffer const &);
+  bind_independent();
+  bool bind(driver::Buffer const &, bool);
+  unsigned int get(driver::Buffer const &, bool);
 };
 
 }

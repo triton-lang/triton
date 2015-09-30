@@ -22,13 +22,13 @@ public:
 class ger : public base_impl<ger, ger_parameters>
 {
 private:
-  int is_invalid_impl(driver::Device const &, expressions_tuple const &) const;
-  std::string generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const;
+  int is_invalid_impl(driver::Device const &, math_expression const  &) const;
+  std::string generate_impl(std::string const & suffix, math_expression const  & expressions, driver::Device const & device, mapping_type const & mapping) const;
 public:
-  ger(parameters_type const & parameters, binding_policy_t binding_policy = BIND_ALL_UNIQUE);
-  ger(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_ALL_UNIQUE);
-  std::vector<int_t> input_sizes(expressions_tuple const & expressions) const;
-  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const &);
+  ger(parameters_type const & parameters, binding_policy_t binding_policy = BIND_INDEPENDENT);
+  ger(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_INDEPENDENT);
+  std::vector<int_t> input_sizes(math_expression const  & expressions) const;
+  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const &);
 };
 
 }

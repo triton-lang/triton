@@ -21,7 +21,6 @@ namespace isaac
 {
 
 class array;
-struct repeat_infos;
 
 /** @brief Optimization enum for grouping operations into unary or binary operations. Just for optimization of lookups. */
 enum operation_node_type_family
@@ -84,7 +83,6 @@ enum operation_node_type
   OPERATOR_TRANS_TYPE,
 
   // binary expression
-  OPERATOR_ACCESS_TYPE,
   OPERATOR_ASSIGN_TYPE,
   OPERATOR_INPLACE_ADD_TYPE,
   OPERATOR_INPLACE_SUB_TYPE,
@@ -110,7 +108,14 @@ enum operation_node_type
   OPERATOR_ELEMENT_MAX_TYPE,
   OPERATOR_ELEMENT_MIN_TYPE,
 
+  //Products
   OPERATOR_OUTER_PROD_TYPE,
+  OPERATOR_GEMM_NN_TYPE,
+  OPERATOR_GEMM_TN_TYPE,
+  OPERATOR_GEMM_NT_TYPE,
+  OPERATOR_GEMM_TT_TYPE,
+
+  //Access modifiers
   OPERATOR_MATRIX_DIAG_TYPE,
   OPERATOR_MATRIX_ROW_TYPE,
   OPERATOR_MATRIX_COLUMN_TYPE,
@@ -118,32 +123,32 @@ enum operation_node_type
   OPERATOR_RESHAPE_TYPE,
   OPERATOR_SHIFT_TYPE,
   OPERATOR_VDIAG_TYPE,
+  OPERATOR_ACCESS_INDEX_TYPE,
 
-  OPERATOR_GEMM_NN_TYPE,
-  OPERATOR_GEMM_TN_TYPE,
-  OPERATOR_GEMM_NT_TYPE,
-  OPERATOR_GEMM_TT_TYPE,
 
-  OPERATOR_PAIR_TYPE
+  OPERATOR_PAIR_TYPE,
+
+  OPERATOR_FUSE,
+  OPERATOR_SFOR_TYPE,
 };
 
-/** @brief Groups the type of a node in the array_expression tree. Used for faster dispatching */
-enum array_expression_node_type_family
+/** @brief Groups the type of a node in the math_expression tree. Used for faster dispatching */
+enum math_expression_node_type_family
 {
   INVALID_TYPE_FAMILY = 0,
   COMPOSITE_OPERATOR_FAMILY,
   VALUE_TYPE_FAMILY,
   ARRAY_TYPE_FAMILY,
-  INFOS_TYPE_FAMILY
+  PLACEHOLDER_TYPE_FAMILY
 };
 
-/** @brief Encodes the type of a node in the array_expression tree. */
-enum array_expression_node_subtype
+/** @brief Encodes the type of a node in the math_expression tree. */
+enum math_expression_node_subtype
 {
   INVALID_SUBTYPE = 0,
   VALUE_SCALAR_TYPE,
   DENSE_ARRAY_TYPE,
-  REPEAT_INFOS_TYPE
+  FOR_LOOP_INDEX_TYPE
 };
 
 struct op_element
@@ -154,30 +159,43 @@ struct op_element
   operation_node_type          type;
 };
 
+struct for_idx_t
+{
+  math_expression operator=(value_scalar const & ) const;
+  math_expression operator=(math_expression const & ) const;
+
+  math_expression operator+=(value_scalar const & ) const;
+  math_expression operator-=(value_scalar const & ) const;
+  math_expression operator*=(value_scalar const & ) const;
+  math_expression operator/=(value_scalar const & ) const;
+
+  int level;
+};
+
 struct lhs_rhs_element
 {
   lhs_rhs_element();
-  array_expression_node_type_family   type_family;
-  array_expression_node_subtype       subtype;
+  math_expression_node_type_family   type_family;
+  math_expression_node_subtype       subtype;
   numeric_type  dtype;
   union
   {
     std::size_t   node_index;
     values_holder vscalar;
-    repeat_infos  tuple;
     isaac::array* array;
+    for_idx_t for_idx;
   };
 };
 
 struct invalid_node{};
 
+void fill(lhs_rhs_element &x, for_idx_t index);
 void fill(lhs_rhs_element &x, invalid_node);
 void fill(lhs_rhs_element & x, std::size_t node_index);
 void fill(lhs_rhs_element & x, array const & a);
 void fill(lhs_rhs_element & x, value_scalar const & v);
-void fill(lhs_rhs_element & x, repeat_infos const & r);
 
-class array_expression : public array_base
+class math_expression : public array_base
 {
 public:
   struct node
@@ -190,16 +208,20 @@ public:
   typedef std::vector<node>     container_type;
 
 public:
+  math_expression(value_scalar const &lhs, for_idx_t const &rhs, const op_element &op, const numeric_type &dtype);
+  math_expression(for_idx_t const &lhs, for_idx_t const &rhs, const op_element &op);
+  math_expression(for_idx_t const &lhs, value_scalar const &rhs, const op_element &op, const numeric_type &dtype);
+
   template<class LT, class RT>
-  array_expression(LT const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
+  math_expression(LT const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
   template<class RT>
-  array_expression(array_expression const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
+  math_expression(math_expression const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
   template<class LT>
-  array_expression(LT const & lhs, array_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
-  array_expression(array_expression const & lhs, array_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
+  math_expression(LT const & lhs, math_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
+  math_expression(math_expression const & lhs, math_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
 
   size4 shape() const;
-  array_expression& reshape(int_t size1, int_t size2=1);
+  math_expression& reshape(int_t size1, int_t size2=1);
   int_t nshape() const;
   container_type & tree();
   container_type const & tree() const;
@@ -207,15 +229,17 @@ public:
   driver::Context const & context() const;
   numeric_type const & dtype() const;
 
-  array_expression operator-();
-  array_expression operator!();
+  math_expression operator-();
+  math_expression operator!();
 private:
   container_type tree_;
   std::size_t root_;
-  driver::Context const & context_;
+  driver::Context const * context_;
   numeric_type dtype_;
   size4 shape_;
 };
+
+
 
 struct execution_options_type
 {
@@ -263,52 +287,28 @@ struct compilation_options_type
   bool recompile;
 };
 
-template<class TYPE>
-class controller
+class execution_handler
 {
 public:
-  controller(TYPE const & x, execution_options_type const& execution_options = execution_options_type(),
-             dispatcher_options_type const & dispatcher_options = dispatcher_options_type(), compilation_options_type const & compilation_options = compilation_options_type())
+  execution_handler(math_expression const & x, execution_options_type const& execution_options = execution_options_type(),
+             dispatcher_options_type const & dispatcher_options = dispatcher_options_type(),
+             compilation_options_type const & compilation_options = compilation_options_type())
                 : x_(x), execution_options_(execution_options), dispatcher_options_(dispatcher_options), compilation_options_(compilation_options){}
-  controller(TYPE const & x, controller const & other) : x_(x), execution_options_(other.execution_options_), dispatcher_options_(other.dispatcher_options_), compilation_options_(other.compilation_options_){}
-  TYPE const & x() const { return x_; }
+  execution_handler(math_expression const & x, execution_handler const & other) : x_(x), execution_options_(other.execution_options_), dispatcher_options_(other.dispatcher_options_), compilation_options_(other.compilation_options_){}
+  math_expression const & x() const { return x_; }
   execution_options_type const & execution_options() const { return execution_options_; }
   dispatcher_options_type const & dispatcher_options() const { return dispatcher_options_; }
   compilation_options_type const & compilation_options() const { return compilation_options_; }
 private:
-  TYPE const & x_;
+  math_expression x_;
   execution_options_type execution_options_;
   dispatcher_options_type dispatcher_options_;
   compilation_options_type compilation_options_;
 };
 
-template<class TYPE>
-controller<TYPE> control(TYPE const & x, execution_options_type const& execution_options = execution_options_type(),
-                         dispatcher_options_type const & dispatcher_options = dispatcher_options_type(), compilation_options_type const & compilation_options = compilation_options_type())
-{ return controller<TYPE>(x, execution_options, dispatcher_options, compilation_options); }
+math_expression::node const & lhs_most(math_expression::container_type const & array, math_expression::node const & init);
+math_expression::node const & lhs_most(math_expression::container_type const & array, size_t root);
 
-class expressions_tuple
-{
-private:
-  std::shared_ptr<array_expression> create(array_expression const & s);
-public:
-  typedef std::list<std::shared_ptr<array_expression> > data_type;
-  enum order_type { SEQUENTIAL, INDEPENDENT };
-
-  expressions_tuple(array_expression const & s0);
-  expressions_tuple(order_type order, array_expression const & s0, array_expression const & s1);
-  expressions_tuple(data_type const & data, order_type order);
-
-  data_type const & data() const;
-  driver::Context const & context() const;
-  order_type order() const;
-private:
-  data_type data_;
-  order_type order_;
-};
-
-array_expression::node const & lhs_most(array_expression::container_type const & array, array_expression::node const & init);
-array_expression::node const & lhs_most(array_expression::container_type const & array, size_t root);
 
 }
 

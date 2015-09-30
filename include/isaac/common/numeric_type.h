@@ -1,6 +1,7 @@
 #ifndef ISAAC_COMMON_NUMERIC_TYPE_H
 #define ISAAC_COMMON_NUMERIC_TYPE_H
 
+#include <stdexcept>
 #include "isaac/exception/unknown_datatype.h"
 
 namespace isaac
@@ -96,9 +97,20 @@ struct to_int_numeric_type
 };
 
 template<class T> struct to_numeric_type { static const numeric_type value = to_int_numeric_type<T>::value; };
+
+template<> struct to_numeric_type<char> { static const numeric_type value = CHAR_TYPE; };
+template<> struct to_numeric_type<unsigned char> { static const numeric_type value = UCHAR_TYPE ; };
+template<> struct to_numeric_type<short> { static const numeric_type value = SHORT_TYPE ; };
+template<> struct to_numeric_type<unsigned short> { static const numeric_type value = USHORT_TYPE ; };
+template<> struct to_numeric_type<int> { static const numeric_type value = INT_TYPE ; };
+template<> struct to_numeric_type<unsigned int> { static const numeric_type value = UINT_TYPE ; };
+template<> struct to_numeric_type<long> { static const numeric_type value = LONG_TYPE ; };
+template<> struct to_numeric_type<unsigned long> { static const numeric_type value = ULONG_TYPE ; };
 template<> struct to_numeric_type<float> { static const numeric_type value = FLOAT_TYPE; };
 template<> struct to_numeric_type<double> { static const numeric_type value = DOUBLE_TYPE; };
 
+template<class T> typename std::enable_if<std::is_arithmetic<T>::value, numeric_type>::type numeric_type_of(T) { return to_numeric_type<T>::value; }
+template<class T> typename std::enable_if<!std::is_arithmetic<T>::value, numeric_type>::type numeric_type_of(T const & x) { return x.dtype(); }
 }
 
 #endif

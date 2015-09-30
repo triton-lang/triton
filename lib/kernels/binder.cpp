@@ -3,32 +3,47 @@
 namespace isaac
 {
 
-symbolic_binder::~symbolic_binder(){ }
+symbolic_binder::~symbolic_binder()
+{
+}
 
 symbolic_binder::symbolic_binder() : current_arg_(0)
-{}
+{
+}
 
 unsigned int symbolic_binder::get()
-{ return current_arg_++; }
+{
+    return current_arg_++;
+}
 
-bind_to_handle::bind_to_handle()
-{ }
+//Sequential
+bind_sequential::bind_sequential()
+{
+}
 
-//
-bool bind_to_handle::bind(driver::Buffer const & ph)
-{ return memory.insert(std::make_pair(ph, current_arg_)).second; }
+bool bind_sequential::bind(driver::Buffer const & ph, bool)
+{
+    return memory.insert(std::make_pair(ph, current_arg_)).second;
+}
 
-unsigned int bind_to_handle::get(driver::Buffer const & ph)
-{ return bind(ph)?current_arg_++:memory.at(ph); }
+unsigned int bind_sequential::get(driver::Buffer const & ph, bool is_assigned)
+{
+    return bind(ph, is_assigned)?current_arg_++:memory.at(ph);
+}
 
-//
-bind_all_unique::bind_all_unique()
-{ }
+//Independent
+bind_independent::bind_independent()
+{
+}
 
-bool bind_all_unique::bind(driver::Buffer const &)
-{return true;}
+bool bind_independent::bind(driver::Buffer const & ph, bool is_assigned)
+{
+    return is_assigned?true:memory.insert(std::make_pair(ph, current_arg_)).second;
+}
 
-unsigned int bind_all_unique::get(driver::Buffer const &)
-{ return current_arg_++;}
+unsigned int bind_independent::get(driver::Buffer const & ph, bool is_assigned)
+{
+    return bind(ph, is_assigned)?current_arg_++:memory.at(ph);
+}
 
 }

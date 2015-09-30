@@ -9,7 +9,7 @@ namespace symbolic
 namespace preset
 {
 
-void gemm::handle_node(array_expression::container_type &tree, size_t rootidx, args & a)
+void gemm::handle_node(math_expression::container_type const & tree, size_t rootidx, args & a)
 {
     //Matrix-Matrix product node
     if(tree[rootidx].op.type_family==OPERATOR_GEMM_TYPE_FAMILY)
@@ -46,9 +46,9 @@ void gemm::handle_node(array_expression::container_type &tree, size_t rootidx, a
     }
 }
 
-gemm::args gemm::check(array_expression::container_type & tree, size_t rootidx)
+gemm::args gemm::check(math_expression::container_type const & tree, size_t rootidx)
 {
-    lhs_rhs_element * assigned = &tree[rootidx].lhs;
+    lhs_rhs_element const * assigned = &tree[rootidx].lhs;
     gemm::args result ;
     if(tree[rootidx].rhs.type_family==COMPOSITE_OPERATOR_FAMILY)
     {

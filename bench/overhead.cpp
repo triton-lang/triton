@@ -1,9 +1,7 @@
 #include "isaac/array.h"
-#include "isaac/tools/timer.hpp"
-
 #include <vector>
 
-namespace isc = isaac;
+namespace sc = isaac;
 
 #ifdef BENCH_CUBLAS
 __global__ void dummy(){}
@@ -12,7 +10,7 @@ __global__ void dummy(){}
 
 int main()
 {
-  for(isc::driver::backend::data_type::const_iterator it = isc::driver::queues.data().begin() ; it != isc::driver::queues.data().end() ; ++it)
+  for(sc::driver::backend::data_type::const_iterator it = sc::driver::queues.data().begin() ; it != sc::driver::queues.data().end() ; ++it)
   {
     cl::CommandQueue queue = it->second[0];
     cl::Context context = it->first;

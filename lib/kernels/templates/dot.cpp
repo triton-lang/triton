@@ -20,18 +20,13 @@ dot_parameters::dot_parameters(unsigned int _simd_width,
                      fetching_policy_type _fetching_policy) : base::parameters_type(_simd_width, _group_size, 1, 2), num_groups(_num_groups), fetching_policy(_fetching_policy)
 { }
 
-unsigned int dot::lmem_usage(expressions_tuple const & expressions) const
+unsigned int dot::lmem_usage(math_expression const  & x) const
 {
-  unsigned int res = 0;
-  for(const auto & elem : expressions.data())
-  {
-    numeric_type numeric_t= lhs_most((elem)->tree(), (elem)->root()).lhs.dtype;
-    res += p_.local_size_0*size_of(numeric_t);
-  }
-  return res;
+  numeric_type numeric_t= lhs_most(x.tree(), x.root()).lhs.dtype;
+  return p_.local_size_0*size_of(numeric_t);
 }
 
-int dot::is_invalid_impl(driver::Device const &, expressions_tuple const &) const
+int dot::is_invalid_impl(driver::Device const &, math_expression const  &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
@@ -63,15 +58,14 @@ inline void dot::reduce_1d_local_memory(kernel_generation_stream & stream, unsig
   stream << "}" << std::endl;
 }
 
-std::string dot::generate_impl(std::string const & suffix, expressions_tuple const & expressions, driver::Device const & device, std::vector<mapping_type> const & mappings) const
+std::string dot::generate_impl(std::string const & suffix, math_expression const  & expressions, driver::Device const & device, mapping_type const & mapping) const
 {
   kernel_generation_stream stream;
 
   std::vector<mapped_scalar_dot*> exprs;
-  for (const auto & mapping : mappings)
-    for (mapping_type::const_iterator iit = mapping.begin(); iit != mapping.end(); ++iit)
-      if (mapped_scalar_dot * p = dynamic_cast<mapped_scalar_dot*>(iit->second.get()))
-        exprs.push_back(p);
+  for (mapping_type::const_iterator iit = mapping.begin(); iit != mapping.end(); ++iit)
+    if (mapped_scalar_dot * p = dynamic_cast<mapped_scalar_dot*>(iit->second.get()))
+      exprs.push_back(p);
   std::size_t N = exprs.size();
   driver::backend_type backend = device.backend();
   std::string _size_t = size_type(device);
@@ -79,7 +73,7 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
   std::string arguments = _size_t + " N, ";
   for (unsigned int k = 0; k < N; ++k)
   {
-    std::string numeric_type = to_string(lhs_most(exprs[k]->array_expression().tree(),  exprs[k]->array_expression().root()).lhs.dtype);
+    std::string numeric_type = to_string(lhs_most(exprs[k]->math_expression().tree(),  exprs[k]->math_expression().root()).lhs.dtype);
     if (exprs[k]->is_index_dot())
     {
       arguments += exprs[k]->process(Global(backend).get() + " unsigned int* #name_temp, ");
@@ -104,7 +98,7 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl; break;
   }
 
-  stream << KernelPrefix(backend) << " void " << name[0] << "(" << arguments << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[0] << "(" << arguments << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -115,7 +109,7 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
 
   process(stream, PARENT_NODE_TYPE, {{"array0", "#scalartype #namereg = #pointer[#start];"},
                                      {"array1", "#pointer += #start;"}},
-                                    expressions, mappings);
+                                    expressions, mapping);
 
   for (unsigned int k = 0; k < N; ++k)
   {
@@ -138,11 +132,12 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
   {
     std::string i = (simd_width==1)?"i*#stride":"i";
     //Fetch vector entry
+    std::set<std::string> already_fetched;
     for (const auto & elem : exprs)
-      (elem)->process_recursive(stream, PARENT_NODE_TYPE, {{"array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,"#scalartype",i,"#pointer",backend)+";"},
+      (elem)->process_recursive(stream, PARENT_NODE_TYPE, {{"array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,"#scalartype",i,"#pointer","#1",backend)+";"},
                                                            {"matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i}];"},
                                                            {"matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column}];"},
-                                                           {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i}:$OFFSET{i*#stride, (i + #diag_offset)}];"}});
+                                                           {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i}:$OFFSET{i*#stride, (i + #diag_offset)}];"}}, already_fetched);
 
     //Update accumulators
     std::vector<std::string> str(simd_width);
@@ -205,7 +200,7 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
 
 
 
-  stream << KernelPrefix(backend) << " void " << name[1] << "(" << arguments << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[1] << "(" << arguments << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -257,7 +252,7 @@ std::string dot::generate_impl(std::string const & suffix, expressions_tuple con
   std::map<std::string, std::string> accessors;
   accessors["scalar_dot"] = "#name_buf[0]";
   accessors["array0"] = "#pointer[#start]";
-  evaluate(stream, PARENT_NODE_TYPE, accessors, expressions, mappings);
+  stream << evaluate(PARENT_NODE_TYPE, accessors, expressions, expressions.root(), mapping) << ";" << std::endl;
   stream.dec_tab();
   stream << "}" << std::endl;
 
@@ -278,34 +273,31 @@ dot::dot(unsigned int simd, unsigned int ls, unsigned int ng,
     base_impl<dot, dot_parameters>(dot_parameters(simd,ls,ng,fetch), bind)
 {}
 
-std::vector<int_t> dot::input_sizes(expressions_tuple const & expressions) const
+std::vector<int_t> dot::input_sizes(math_expression const  & x) const
 {
-  std::vector<size_t> dots_idx = filter_nodes(&is_dot, *(expressions.data().front()), false);
-  int_t N = vector_size(lhs_most(expressions.data().front()->tree(), dots_idx[0]));
+  std::vector<size_t> dots_idx = filter_nodes(&is_dot, x, x.root(), false);
+  int_t N = vector_size(lhs_most(x.tree(), dots_idx[0]));
   return {N};
 }
 
-void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, controller<expressions_tuple> const & controller)
+void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
 {
-  expressions_tuple const & expressions = controller.x();
+  math_expression const  & x = control.x();
 
   //Preprocessing
-  int_t size = input_sizes(expressions)[0];
+  int_t size = input_sizes(x)[0];
 
   //fallback
-  if(p_.simd_width > 1 && (requires_fallback(expressions) || (size%p_.simd_width>0)))
+  if(p_.simd_width > 1 && (requires_fallback(x) || (size%p_.simd_width>0)))
   {
-      fallback.enqueue(queue, program, "fallback", fallback, controller);
+      fallback.enqueue(queue, program, "fallback", fallback, control);
       return;
   }
 
-  std::vector<array_expression::node const *> dots;
-  for (const auto & elem : expressions.data())
-  {
-    std::vector<size_t> dots_idx = filter_nodes(&is_dot, *elem, false);
-    for (auto & dots_idx_itt : dots_idx)
-      dots.push_back(&(elem)->tree()[dots_idx_itt]);
-  }
+  std::vector<math_expression::node const *> dots;
+    std::vector<size_t> dots_idx = filter_nodes(&is_dot, x, x.root(), false);
+    for (size_t idx: dots_idx)
+      dots.push_back(&x.tree()[idx]);
 
   //Kernel
   std::string name[2] = {"prod", "reduce"};
@@ -319,9 +311,8 @@ void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program,
   driver::NDRange local[2] = { driver::NDRange(p_.local_size_0), driver::NDRange(p_.local_size_0) };
 
   //Arguments
-  driver::Context const & context = expressions.context();
-  array_expression const & s = *(expressions.data().front());
-  unsigned int dtype_size = size_of(lhs_most(s.tree(), s.root()).lhs.dtype);
+  driver::Context const & context = x.context();
+  unsigned int dtype_size = size_of(lhs_most(x.tree(), x.root()).lhs.dtype);
   for (auto & kernel : kernels)
   {
     unsigned int n_arg = 0;
@@ -330,7 +321,7 @@ void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program,
     //Temporary buffers
     unsigned int i = 0;
     unsigned int j = 0;
-    for (std::vector<array_expression::node const *>::const_iterator it = dots.begin(); it != dots.end(); ++it)
+    for (std::vector<math_expression::node const *>::const_iterator it = dots.begin(); it != dots.end(); ++it)
     {
       if (is_index_dot((*it)->op))
       {
@@ -345,11 +336,11 @@ void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program,
       i++;
     }
 
-    set_arguments(expressions, kernel, n_arg, binding_policy_);
+    set_arguments(x, kernel, n_arg, binding_policy_);
   }
 
   for (unsigned int k = 0; k < 2; k++)
-    controller.execution_options().enqueue(program.context(), kernels[k], global[k], local[k]);
+    control.execution_options().enqueue(program.context(), kernels[k], global[k], local[k]);
 }
 
 }
