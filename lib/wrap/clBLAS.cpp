@@ -156,7 +156,7 @@ extern "C"
         \
         sc::driver::Context const & context = A.context();\
         if(transA==clblasTrans)\
-            execute(sc::assign(y, alpha*dot(A.T(), x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(y, alpha*dot(A.T, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else\
             execute(sc::assign(y, alpha*dot(A, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
@@ -198,11 +198,11 @@ extern "C"
         sc::driver::Context const & context = C.context();\
         /*Operation*/\
         if((transA==clblasTrans) && (transB==clblasTrans))\
-            execute(sc::assign(C, alpha*dot(A.T(), B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(C, alpha*dot(A.T, B.T) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else if((transA==clblasTrans) && (transB==clblasNoTrans))\
-            execute(sc::assign(C, alpha*dot(A.T(), B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(C, alpha*dot(A.T, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else if((transA==clblasNoTrans) && (transB==clblasTrans))\
-            execute(sc::assign(C, alpha*dot(A, B.T()) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            execute(sc::assign(C, alpha*dot(A, B.T) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else\
             execute(sc::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
