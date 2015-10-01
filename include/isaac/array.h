@@ -91,7 +91,7 @@ public:
   array operator[](slice const &);
   array operator()(slice const &, slice const &);
 
-  math_expression T() const;
+
 protected:
   numeric_type dtype_;
 
@@ -102,6 +102,9 @@ protected:
 
   driver::Context context_;
   driver::Buffer data_;
+
+public:
+  math_expression T;
 };
 
 class ISAACAPI scalar : public array
