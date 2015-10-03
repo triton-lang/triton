@@ -646,15 +646,6 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 
   }
 
-  array gemm::create_slice(array & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap)
-  {
-    slice s0(s0_0, s0_1);
-    slice s1(s1_0, s1_1);
-    if (swap)
-      std::swap(s0, s1);
-    return array(M, s0, s1);
-  }
-
   std::vector<int_t> gemm::infos(math_expression const & expression, symbolic::preset::gemm::args& arguments) const
   {
     math_expression::container_type const & array = expression.tree();

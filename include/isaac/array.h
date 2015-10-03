@@ -14,10 +14,10 @@ namespace isaac
 class scalar;
 class view;
 
-class ISAACAPI array: public array_base
+class ISAACAPI array
 {
-protected:
-  array(numeric_type dtype, driver::Buffer data, slice const & s1, slice const & s2, int_t ld);
+//protected:
+//  array(numeric_type dtype, driver::Buffer data, slice const & s1, slice const & s2, int_t ld);
 public:
   //1D Constructors
   explicit array(int_t size1, numeric_type dtype = FLOAT_TYPE, driver::Context const & context = driver::backend::contexts::get_default());
@@ -121,7 +121,7 @@ private:
   void inject(values_holder&) const;
   template<class T> T cast() const;
 public:
-  explicit scalar(numeric_type dtype, driver::Buffer const & data, int_t offset);
+  explicit scalar(numeric_type dtype, const driver::Buffer &data, int_t offset);
   explicit scalar(value_scalar value, driver::Context const & context = driver::backend::contexts::get_default());
   explicit scalar(numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
   scalar(math_expression const & proxy);

@@ -187,7 +187,7 @@ bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type 
     simple_vector_slice<T> CPREFIX ## _slice(CPREFIX ## _full, START, START + STRIDE*SUBN, STRIDE);\
     init_rand(CPREFIX ## _full);\
     isaac::array PREFIX ## _full(CPREFIX ## _full.data(), CTX);\
-    isaac::view PREFIX ## _slice = PREFIX ## _full[isaac::_(START, START + STRIDE*SUBN, STRIDE)];
+    isaac::view PREFIX ## _slice = PREFIX ## _full[{START, START + STRIDE*SUBN, STRIDE}];
 
 #define INIT_MATRIX(M, SUBM, START1, STRIDE1, N, SUBN, START2, STRIDE2, CPREFIX, PREFIX, CTX) \
     simple_matrix<T> CPREFIX ## _full(M, N);\
@@ -195,12 +195,12 @@ bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type 
                                                                  START2, START2 + STRIDE2*SUBN, STRIDE2);\
     init_rand(CPREFIX ## _full);\
     isaac::array PREFIX ## _full(M, N, CPREFIX ## _full.data(), CTX);\
-    isaac::view PREFIX ## _slice(PREFIX ## _full(isaac::_(START1, START1 + STRIDE1*SUBM, STRIDE1),\
-                                                        isaac::_(START2, START2 + STRIDE2*SUBN, STRIDE2)));\
+    isaac::view PREFIX ## _slice(PREFIX ## _full({START1, START1 + STRIDE1*SUBM, STRIDE1},\
+                                                   {START2, START2 + STRIDE2*SUBN, STRIDE2}));\
     simple_matrix<T> CPREFIX ## T_full = simple_trans(CPREFIX ## _full);\
     isaac::array PREFIX ## T_full(N, M, CPREFIX ## T_full.data(), CTX);\
-    isaac::view PREFIX ## T_slice(PREFIX ## T_full(isaac::_(START2, START2 + STRIDE2*SUBN, STRIDE2),\
-                                                              isaac::_(START1, START1 + STRIDE1*SUBM, STRIDE1)));\
+    isaac::view PREFIX ## T_slice(PREFIX ## T_full( {START2, START2 + STRIDE2*SUBN, STRIDE2},\
+                                                    {START1, START1 + STRIDE1*SUBM, STRIDE1}));\
 
 
 #endif
