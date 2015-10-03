@@ -117,8 +117,6 @@ void test_impl(T epsilon, simple_vector_base<T> & cx, simple_vector_base<T>& cy,
 template<typename T>
 void test(T epsilon, sc::driver::Context const & ctx)
 {
-  using isaac::_;
-
   int_t N = 10007;
   int_t SUBN = 7;
 
@@ -162,5 +160,6 @@ int main()
     std::cout << "---" << std::endl;
   }
   clblasTeardown();
+
   return EXIT_SUCCESS;
 }

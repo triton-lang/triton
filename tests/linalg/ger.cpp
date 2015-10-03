@@ -102,8 +102,6 @@ void test_impl(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB,
 template<typename T>
 void test(T epsilon, sc::driver::Context const & ctx)
 {
-  using isaac::_;
-
   int_t M = 173;
   int_t N = 241;
   int_t SUBM = 7;

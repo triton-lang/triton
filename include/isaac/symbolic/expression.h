@@ -195,7 +195,7 @@ void fill(lhs_rhs_element & x, std::size_t node_index);
 void fill(lhs_rhs_element & x, array const & a);
 void fill(lhs_rhs_element & x, value_scalar const & v);
 
-class math_expression : public array_base
+class math_expression
 {
 public:
   struct node
