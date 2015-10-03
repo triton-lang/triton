@@ -12,13 +12,12 @@ namespace isaac
 {
 
 class scalar;
+class view;
 
 class ISAACAPI array: public array_base
 {
 protected:
-  //Slices
   array(numeric_type dtype, driver::Buffer data, slice const & s1, slice const & s2, int_t ld);
-
 public:
   //1D Constructors
   explicit array(int_t size1, numeric_type dtype = FLOAT_TYPE, driver::Context const & context = driver::backend::contexts::get_default());
@@ -88,8 +87,8 @@ public:
   math_expression operator[](for_idx_t idx) const;
   const scalar operator[](int_t) const;
   scalar operator[](int_t);
-  array operator[](slice const &);
-  array operator()(slice const &, slice const &);
+  view operator[](slice const &);
+  view operator()(slice const &, slice const &);
 
 
 protected:
@@ -105,6 +104,13 @@ protected:
 
 public:
   math_expression T;
+};
+
+class ISAACAPI view : public array
+{
+public:
+  view(array& data, slice const & s1);
+  view(array& data, slice const & s1, slice const & s2);
 };
 
 class ISAACAPI scalar : public array
