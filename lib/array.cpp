@@ -304,14 +304,20 @@ const scalar array::operator [](int_t idx) const
 }
 
 
-array array::operator[](slice const & e1)
+view array::operator[](slice const & e1)
 {
   assert(nshape()<=1);
-  return array(*this, e1);
+  return view(*this, e1);
 }
 
-array array::operator()(slice const & e1, slice const & e2)
-{ return array(*this, e1, e2); }
+view array::operator()(slice const & e1, slice const & e2)
+{ return view(*this, e1, e2); }
+
+//---------------------------------------
+/*--- View ---*/
+view::view(array& data, slice const & s1) : array(data, s1) {}
+view::view(array& data, slice const & s1, slice const & s2) : array(data, s1, s2) {}
+
 
 //---------------------------------------
 /*--- Scalar ---*/
