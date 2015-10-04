@@ -38,8 +38,8 @@ public:
   array(int_t size1, int_t size2, int_t size3, numeric_type dtype = FLOAT_TYPE, driver::Context const & context = driver::backend::contexts::get_default());
 
   //General constructor
-  explicit array(math_expression const & proxy);
-  explicit array(execution_handler const &);
+  array(math_expression const & proxy);
+  array(execution_handler const &);
   
   //Copy Constructor
   array(array const &);
