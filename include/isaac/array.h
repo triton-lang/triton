@@ -290,6 +290,10 @@ ISAACAPI math_expression eye(int_t, int_t, isaac::numeric_type, driver::Context 
 ISAACAPI math_expression zeros(int_t M, int_t N, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
 ISAACAPI math_expression reshape(array const &, int_t, int_t);
 
+//diag
+ISAACAPI math_expression diag(array const &, int offset = 0);
+ISAACAPI math_expression diag(math_expression const &, int offset = 0);
+
 //Row
 ISAACAPI math_expression row(array const &, value_scalar const &);
 ISAACAPI math_expression row(array const &, for_idx_t const &);
