@@ -285,9 +285,11 @@ static const for_idx_t _i7{7};
 static const for_idx_t _i8{8};
 static const for_idx_t _i9{9};
 
-//Misc.
+//Initializers
 ISAACAPI math_expression eye(int_t, int_t, isaac::numeric_type, driver::Context const & context = driver::backend::contexts::get_default());
 ISAACAPI math_expression zeros(int_t M, int_t N, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
+
+//Reshape
 ISAACAPI math_expression reshape(array const &, int_t, int_t);
 
 //diag
@@ -315,7 +317,6 @@ ISAACAPI math_expression col(math_expression const &, math_expression const &);
 
 //
 ISAACAPI std::ostream& operator<<(std::ostream &, array const &);
-ISAACAPI std::ostream& operator<<(std::ostream & os, scalar const & s);
 
 }
 #endif
