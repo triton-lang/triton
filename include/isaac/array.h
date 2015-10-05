@@ -83,11 +83,13 @@ public:
   array& operator/=(array const &);
   array& operator/=(math_expression const &);
 
-  //Indexing operators
+  //Indexing (1D)
   math_expression operator[](for_idx_t idx) const;
   const scalar operator[](int_t) const;
   scalar operator[](int_t);
   view operator[](slice const &);
+
+  //Indexing (2D)
   view operator()(slice const &, slice const &);
 
 
