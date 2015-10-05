@@ -661,7 +661,10 @@ isaac::math_expression eye(int_t M, int_t N, isaac::numeric_type dtype, driver::
 { return math_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VDIAG_TYPE), ctx, dtype, size4(M, N)); }
 
 isaac::math_expression diag(array const & x, int offset)
-{ return math_expression(x, value_scalar(offset), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_MATRIX_DIAG_TYPE), x.context(), x.dtype(), size4(detail::min(x.shape()), 1, 1, 1)); }
+{
+  int_t shape = std::min(x.shape()[0] + (offset<0)*offset, x.shape()[1] - (offset>0)*offset);
+  return math_expression(x, value_scalar(offset), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_MATRIX_DIAG_TYPE), x.context(), x.dtype(), size4(shape, 1, 1, 1));
+}
 
 
 isaac::math_expression zeros(int_t M, int_t N, isaac::numeric_type dtype, driver::Context  const & ctx)

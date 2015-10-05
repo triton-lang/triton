@@ -1,4 +1,4 @@
-foreach(PROG tie)
-     add_executable(${PROG}-example ${PROG}.cpp)
-     target_link_libraries(${PROG}-example isaac)
+foreach(PROG simple)
+     add_executable(example-${PROG} ${PROG}.cpp)
+     target_link_libraries(example-${PROG} isaac)
 endforeach(PROG)
