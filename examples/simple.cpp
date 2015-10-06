@@ -13,5 +13,7 @@ int main()
     std::cout << sc::diag(A, 1) << std::endl;
     std::cout << sc::diag(A, -1) << std::endl;
     std::cout << sc::diag(A, -7) << std::endl;
+    std::cout << A(3, {2,sc::end}) << std::endl;
+    std::cout << A({2,sc::end}, 4) << std::endl;
     std::cout << sc::row(A, 3) << std::endl;
 }

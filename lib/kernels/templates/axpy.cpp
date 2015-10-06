@@ -59,7 +59,8 @@ std::string axpy::generate_impl(std::string const & suffix, math_expression cons
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE, {{"array0", "#scalartype #namereg = #pointer[#start];"},
-                                      {"array1", "#pointer += #start;"}}, expressions, mappings);
+                                      {"array1", "#pointer += #start;"},
+                                      {"array2", "#pointer += #start;"}}, expressions, mappings);
 
   stream << _size_t << " idx = " << GlobalIdx0(backend) << ";" << std::endl;
   stream << _size_t << " gsize = " << GlobalSize0(backend) << ";" << std::endl;
@@ -107,7 +108,7 @@ std::string axpy::generate_impl(std::string const & suffix, math_expression cons
   //Declares register to store results
   for(std::size_t idx: assigned)
   {
-    process(stream, LHS_NODE_TYPE, {{"array1", dtype + " #namereg;"}, {"matrix_row", "#scalartype #namereg;"},
+    process(stream, LHS_NODE_TYPE, {{"array1", dtype + " #namereg;"}, {"array2", dtype + " #namereg;"}, {"matrix_row", "#scalartype #namereg;"},
                                        {"matrix_column", "#scalartype #namereg;"},  {"matrix_diag", "#scalartype #namereg;"}}, expressions, idx, mappings, processed);
   }
 
@@ -115,18 +116,19 @@ std::string axpy::generate_impl(std::string const & suffix, math_expression cons
   for(std::size_t idx: assigned)
   {
     std::string array1 = dtype + " #namereg = " + vload(p_.simd_width, "#scalartype", "i*#stride", "#pointer", "1", backend, false) + ";";
+    std::string array2 = dtype + " #namereg = " + vload(p_.simd_width, "#scalartype", "i*#ld", "#pointer", "1", backend, false) + ";";
     std::string array_access = "#scalartype #namereg = #pointer[#index];";
     std::string matrix_row = dtype + " #namereg = " + vload(p_.simd_width, "#scalartype", "i", "#pointer + #row*#stride", "#ld", backend, false) + ";";
     std::string matrix_column = dtype + " #namereg = " + vload(p_.simd_width, "#scalartype", "i*#stride", "#pointer + #column*#ld", "#stride", backend, false) + ";";
     std::string matrix_diag = dtype + " #namereg = " + vload(p_.simd_width, "#scalartype", "i*(#ld + #stride)", "#pointer + ((#diag_offset<0)?-#diag_offset:(#diag_offset*#ld))", "#ld + #stride", backend, false) + ";";
-    process(stream, RHS_NODE_TYPE, {{"array1", array1}, {"matrix_row", matrix_row}, {"matrix_column", matrix_column},
+    process(stream, RHS_NODE_TYPE, {{"array1", array1}, {"array2", array2}, {"matrix_row", matrix_row}, {"matrix_column", matrix_column},
                                     {"matrix_diag", matrix_diag}, {"array_access", array_access}}, expressions, idx, mappings, processed);
   }
 
 
   //Compute expressions
   for(std::size_t idx: assigned)
-    stream << evaluate(PARENT_NODE_TYPE, {{"array0", "#namereg"}, {"array1", "#namereg"},
+    stream << evaluate(PARENT_NODE_TYPE, {{"array0", "#namereg"}, {"array1", "#namereg"}, {"array2", "#namereg"},
                                         {"matrix_row", "#namereg"}, {"matrix_column", "#namereg"}, {"matrix_diag", "#namereg"}, {"array_access", "#namereg"},
                                         {"cast", CastPrefix(backend, dtype).get()}, {"placeholder", "#name"}, {"host_scalar", p_.simd_width==1?"#name": InitPrefix(backend, dtype).get() + "(#name)"}},
                                       expressions, idx, mappings) << ";" << std::endl;
@@ -136,10 +138,11 @@ std::string axpy::generate_impl(std::string const & suffix, math_expression cons
   for(std::size_t idx: assigned)
   {
     std::string array1 = vstore(p_.simd_width, "#scalartype", "#namereg", "i*#stride", "#pointer", "1", backend, false) + ";";
+    std::string array2 = vstore(p_.simd_width, "#scalartype", "#namereg", "i*#ld", "#pointer", "1", backend, false) + ";";
     std::string matrix_row = vstore(p_.simd_width, "#scalartype", "#namereg", "i", "#pointer + #row*#stride", "#ld", backend, false) + ";";
     std::string matrix_column = vstore(p_.simd_width, "#scalartype", "#namereg", "i*#stride", "#pointer + #column*#ld", "#stride", backend, false) + ";";
     std::string matrix_diag = vstore(p_.simd_width, "#scalartype", "#namereg", "i*(#ld + #stride)", "#pointer + (#diag_offset<0)?-#diag_offset:(#diag_offset*#ld)", "#ld + #stride", backend, false) + ";";
-    process(stream, LHS_NODE_TYPE, {{"array1", array1}, {"matrix_row", matrix_row}, {"matrix_column", matrix_column}, {"matrix_diag", matrix_diag}}, expressions, idx, mappings, processed);
+    process(stream, LHS_NODE_TYPE, {{"array1", array1}, {"array2", array2}, {"matrix_row", matrix_row}, {"matrix_column", matrix_column}, {"matrix_diag", matrix_diag}}, expressions, idx, mappings, processed);
   }
 
   if(sfors.size()){
