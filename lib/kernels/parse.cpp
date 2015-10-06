@@ -419,7 +419,11 @@ void math_expression_representation_functor::append(lhs_rhs_element const & lhs_
 {
   if(lhs_rhs.subtype==DENSE_ARRAY_TYPE)
   {
-      char prefix = (char)(((int)'0')+((int)(lhs_rhs.array->shape()[0]>1) + (int)(lhs_rhs.array->shape()[1]>1)));
+      size4 shape = lhs_rhs.array->shape();
+      char prefix;
+      if(shape[0]==1 && shape[1]==1) prefix = '0';
+      else if(shape[0]>1 && shape[1]==1) prefix = '1';
+      else prefix = '2';
       numeric_type dtype = lhs_rhs.array->dtype();
       driver::Buffer const & data = lhs_rhs.array->data();
 

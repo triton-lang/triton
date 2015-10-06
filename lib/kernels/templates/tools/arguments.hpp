@@ -74,9 +74,9 @@ public:
                 kernel_.setSizeArg(current_arg_++, a->start()[0]);
             }
             //array
-            else if(a->shape()[0]==1 || a->shape()[1]==1)
+            else if(a->shape()[0]>1 && a->shape()[1]==1)
             {
-                kernel_.setSizeArg(current_arg_++, std::max(a->start()[0], a->start()[1]));
+                kernel_.setSizeArg(current_arg_++, a->start()[0] + a->start()[1]*a->ld());
                 kernel_.setSizeArg(current_arg_++, std::max(a->stride()[0], a->stride()[1]));
             }
             else

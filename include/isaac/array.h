@@ -91,6 +91,8 @@ public:
 
   //Indexing (2D)
   view operator()(slice const &, slice const &);
+  view operator()(int_t, slice const &);
+  view operator()(slice const &, int_t);
 
 
 protected:
