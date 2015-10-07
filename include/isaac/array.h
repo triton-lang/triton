@@ -91,8 +91,6 @@ public:
 
   //Indexing (2D)
   view operator()(slice const &, slice const &);
-  view operator()(int_t, slice const &);
-  view operator()(slice const &, int_t);
 
 
 protected:
@@ -115,7 +113,7 @@ class ISAACAPI view : public array
 public:
   view(array& data, slice const & s1);
   view(array& data, slice const & s1, slice const & s2);
-  view(array& data, slice const & s1, slice const & s2, int_t ld);
+  using array::operator=;
 };
 
 class ISAACAPI scalar : public array

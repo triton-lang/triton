@@ -315,12 +315,6 @@ view array::operator[](slice const & e1)
 view array::operator()(slice const & s1, slice const & s2)
 { return view(*this, s1, s2); }
 
-view array::operator()(int_t x, slice const & s)
-{ return (*this)({x, x+1}, s); }
-
-view array::operator()(slice const & s, int_t x)
-{ return (*this)(s, {x, x+1}); }
-
 //---------------------------------------
 /*--- View ---*/
 view::view(array& data, slice const & s1) : array(data, s1) {}

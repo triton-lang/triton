@@ -33,6 +33,7 @@ static const int_t start = 0;
 static const int_t end = -1;
 struct slice
 {
+  slice(int_t _start) : start(_start), end(_start + 1), stride(1){}
   slice(int_t _start, int_t _end, int_t _stride = 1) : start(_start), end(_end), stride(_stride) { }
 
   int_t size(int_t bound) const
