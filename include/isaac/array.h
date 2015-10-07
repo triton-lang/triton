@@ -115,6 +115,7 @@ class ISAACAPI view : public array
 public:
   view(array& data, slice const & s1);
   view(array& data, slice const & s1, slice const & s2);
+  view(array& data, slice const & s1, slice const & s2, int_t ld);
 };
 
 class ISAACAPI scalar : public array
@@ -297,8 +298,7 @@ ISAACAPI math_expression zeros(int_t M, int_t N, numeric_type dtype, driver::Con
 ISAACAPI math_expression reshape(array const &, int_t, int_t);
 
 //diag
-ISAACAPI math_expression diag(array const &, int offset = 0);
-ISAACAPI math_expression diag(math_expression const &, int offset = 0);
+array diag(array & x, int offset);
 
 //Row
 ISAACAPI math_expression row(array const &, value_scalar const &);

@@ -666,10 +666,12 @@ math_expression cast(math_expression const & x, numeric_type dtype)
 isaac::math_expression eye(int_t M, int_t N, isaac::numeric_type dtype, driver::Context const & ctx)
 { return math_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VDIAG_TYPE), ctx, dtype, size4(M, N)); }
 
-isaac::math_expression diag(array const & x, int offset)
+isaac::array diag(array & x, int offset)
 {
-  int_t shape = std::min(x.shape()[0] + (offset<0)*offset, x.shape()[1] - (offset>0)*offset);
-  return math_expression(x, value_scalar(offset), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_MATRIX_DIAG_TYPE), x.context(), x.dtype(), size4(shape, 1, 1, 1));
+  int_t offi = -(offset<0)*offset, offj = (offset>0)*offset;
+  int_t size = std::min(x.shape()[0] - offi, x.shape()[1] - offj);
+  int_t start = offi + x.ld()*offj;
+  return array(size, x.dtype(), x.data(), start, x.ld()+1);
 }
 
 
@@ -935,7 +937,7 @@ ISAACAPI math_expression sfor(math_expression const & start, math_expression con
 void copy(void const * data, array& x, driver::CommandQueue & queue, bool blocking)
 {
   unsigned int dtypesize = size_of(x.dtype());
-  if(x.ld()==x.shape()[0])
+  if(detail::max(x.start())==0 && detail::max(x.stride())==1 && x.shape()[0]==x.ld())
   {
     queue.write(x.data(), blocking, 0, x.dsize()*dtypesize, data);
   }
@@ -950,7 +952,7 @@ void copy(void const * data, array& x, driver::CommandQueue & queue, bool blocki
 void copy(array const & x, void* data, driver::CommandQueue & queue, bool blocking)
 {
   unsigned int dtypesize = size_of(x.dtype());
-  if(x.ld()==x.shape()[0])
+  if(detail::max(x.start())==0 && detail::max(x.stride())==1 && x.shape()[0]==x.ld())
   {
     queue.read(x.data(), blocking, 0, x.dsize()*dtypesize, data);
   }
