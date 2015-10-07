@@ -71,7 +71,7 @@ public:
             //scalar
             if(a->shape()[0]==1 && a->shape()[1]==1)
             {
-                kernel_.setSizeArg(current_arg_++, a->start()[0]);
+                kernel_.setSizeArg(current_arg_++, a->start()[0] + a->start()[1]*a->ld());
             }
             //array
             else if(a->shape()[0]>1 && a->shape()[1]==1)
