@@ -47,7 +47,5 @@ struct slice
   int_t stride;
 };
 
-
-
 }
 #endif
