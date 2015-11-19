@@ -7,7 +7,7 @@ namespace sc = isaac;
 
 template<typename T>
 void test(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & cA, simple_matrix_base<T> const & cB,
-                          sc::array & C, sc::array const & A, sc::array const & AT,  sc::array const & B, sc::array const & BT,
+                          sc::array_base & C, sc::array_base const & A, sc::array_base const & AT,  sc::array_base const & B, sc::array_base const & BT,
                           interface_t interf, const char * prefix)
 {
   int failure_count = 0;
@@ -108,16 +108,16 @@ void test(T epsilon, sc::driver::Context const & ctx)
         INIT_MATRIX(M, SUBM, 5, 1, N, SUBN, 7, 1, cC, C, ctx);
         INIT_MATRIX(M, SUBM, 8, 1, K, SUBK, 4, 1, cA, A, ctx);
         INIT_MATRIX(K, SUBK, 9, 1, N, SUBN, 6, 1, cB, B, ctx);
-        test(epsilon, cC_full, cA_full, cB_full, C_full, A_full, AT_full, B_full, BT_full, clBLAS, "BLAS, FULL");
-        test(epsilon, cC_slice, cA_slice, cB_slice, C_slice, A_slice, AT_slice, B_slice, BT_slice, clBLAS, "BLAS, SUB");
+        test(epsilon, cC, cA, cB, C, A, AT, B, BT, clBLAS, "BLAS, FULL");
+        test(epsilon, cC_s, cA_s, cB_s, C_s, A_s, AT_s, B_s, BT_s, clBLAS, "BLAS, SUB");
     }
 
     {
         INIT_MATRIX(M, SUBM, 5, 2, N, SUBN, 7, 3, cC, C, ctx);
         INIT_MATRIX(M, SUBM, 8, 2, K, SUBK, 4, 3, cA, A, ctx);
         INIT_MATRIX(K, SUBK, 9, 4, N, SUBN, 6, 2, cB, B, ctx);
-        test(epsilon, cC_full, cA_full, cB_full, C_full, A_full, AT_full, B_full, BT_full, CPP, "C++, FULL");
-        test(epsilon, cC_slice, cA_slice, cB_slice, C_slice, A_slice, AT_slice, B_slice, BT_slice, CPP, "C++, SUB");
+        test(epsilon, cC, cA, cB, C, A, AT, B, BT, CPP, "C++, FULL");
+        test(epsilon, cC_s, cA_s, cB_s, C_s, A_s, AT_s, B_s, BT_s, CPP, "C++, SUB");
     }
 
 }

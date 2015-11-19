@@ -19,7 +19,7 @@ ISAACAPI typename std::conditional<std::is_arithmetic<T>::value, value_scalar, T
 
 template<typename T, typename... Args>
 ISAACAPI math_expression make_tuple(driver::Context const & context, T const & x, Args... args)
-{ return math_expression(wrap_generic(x), make_tuple(context, args...), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_PAIR_TYPE), context, numeric_type_of(x), size4(1)); }
+{ return math_expression(wrap_generic(x), make_tuple(context, args...), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_PAIR_TYPE), context, numeric_type_of(x), {1}); }
 
 inline value_scalar tuple_get(math_expression::container_type const & tree, size_t root, size_t idx)
 {

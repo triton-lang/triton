@@ -179,12 +179,12 @@ class mapped_array : public mapped_buffer
 private:
   void preprocess(std::string & str) const;
 public:
-  mapped_array(std::string const & scalartype, unsigned int id, char type);
+  mapped_array(std::string const & scalartype, unsigned int id, std::string const & type);
 private:
   std::string ld_;
   std::string start_;
   std::string stride_;
-  char type_;
+  unsigned int effdim_;
 };
 
 class mapped_vdiag : public mapped_object, public binary_leaf

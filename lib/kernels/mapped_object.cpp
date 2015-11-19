@@ -198,41 +198,16 @@ void mapped_array::preprocess(std::string & str) const
     std::string const & ld;
   };
 
-  struct MorphOffset : public MorphBase
-  {
-    MorphOffset(std::string const & _ld) : ld(_ld){ }
-
-    std::string operator()(std::string const & i) const
-    { return i; }
-
-    std::string operator()(std::string const & i, std::string const & j) const
-    {return "(" + i + ") +  (" + j + ") * " + ld; }
-  private:
-    std::string const & ld;
-  };
-
   replace_macro(str, "$VALUE", MorphValue(ld_));
-  replace_macro(str, "$OFFSET", MorphOffset(ld_));
 }
 
-mapped_array::mapped_array(std::string const & scalartype, unsigned int id, char type) : mapped_buffer(scalartype, id, type=='s'?"array0":(type=='m'?"array2":"array1")), type_(type)
+mapped_array::mapped_array(std::string const & scalartype, unsigned int id, std::string const & type) : mapped_buffer(scalartype, id, type), effdim_(std::count(type.begin(), type.end(), 'n'))
 {
-  if(type_ == 's')
-  {
-    register_attribute(start_, "#start", name_ + "_start");
-  }
-  else if(type_=='m')
-  {
-    register_attribute(start_, "#start", name_ + "_start");
+  register_attribute(start_, "#start", name_ + "_start");
+  if(effdim_ > 0)
     register_attribute(stride_, "#stride", name_ + "_stride");
+  if(effdim_ > 1)
     register_attribute(ld_, "#ld", name_ + "_ld");
-  }
-  else
-  {
-    register_attribute(start_, "#start", name_ + "_start");
-    register_attribute(stride_, "#stride", name_ + "_stride");
-  }
-
 }
 
 //
@@ -240,7 +215,7 @@ void mapped_vdiag::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#diag_offset", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
-  accessors["array1"] = res;
+  accessors["arrayn"] = res;
   accessors["host_scalar"] = res;
   res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
 }
@@ -252,8 +227,8 @@ void mapped_array_access::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#index", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
-  accessors["array1"] = res;
-  accessors["array2"] = res;
+  accessors["arrayn"] = res;
+  accessors["arraynn"] = res;
   res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
 }
 
@@ -265,7 +240,7 @@ void mapped_matrix_row::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#row", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
-  accessors["array2"] = res;
+  accessors["arraynn"] = res;
   res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
 }
 
@@ -277,7 +252,7 @@ void mapped_matrix_column::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#column", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
-  accessors["array2"] = res;
+  accessors["arraynn"] = res;
   res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
 }
 
@@ -333,8 +308,8 @@ void mapped_repeat::postprocess(std::string &res) const
   };
 
   replace_macro(res, "$VALUE", MorphValue(type_));
-  accessors["array1"] = res;
-  accessors["array2"] = res;
+  accessors["arrayn"] = res;
+  accessors["arraynn"] = res;
   res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
 }
 
@@ -348,7 +323,7 @@ void mapped_matrix_diag::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
   tools::find_and_replace(res, "#diag_offset", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
-  accessors["array2"] = res;
+  accessors["arraynn"] = res;
   res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
 }
 
@@ -364,7 +339,8 @@ void mapped_outer::postprocess(std::string &res) const
       std::string operator()(std::string const & i) const
       {
         std::map<std::string, std::string> accessors;
-        accessors["array1"] = "$VALUE{"+i+"}";
+        accessors["arrayn"] = "$VALUE{"+i+"}";
+        accessors["array1"] = "#namereg";
         return isaac::evaluate(leaf_, accessors, *i_.math_expression, i_.root_idx, *i_.mapping);
       }
       std::string operator()(std::string const &, std::string const &) const{return "";}

@@ -19,6 +19,7 @@ endif()
 add_dependencies(isaac database)
 
 target_link_libraries(isaac "dl")
+target_link_libraries(isaac "openblas")
 
 #Cuda JIT headers to file
 set(CUDA_HELPERS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/driver/helpers/cuda/)

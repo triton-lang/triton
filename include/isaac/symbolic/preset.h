@@ -19,11 +19,11 @@ class gemm
 public:
     struct args
     {
-        args(): alpha(NULL), A(NULL), B(NULL), beta(NULL), C(NULL), type(INVALID_EXPRESSION_TYPE){ }
-        lhs_rhs_element const * alpha;
+        args(): A(NULL), B(NULL), C(NULL), type(INVALID_EXPRESSION_TYPE){ }
+        value_scalar alpha;
         lhs_rhs_element const * A;
         lhs_rhs_element const * B;
-        lhs_rhs_element const * beta;
+        value_scalar beta;
         lhs_rhs_element const * C;
         expression_type type;
 

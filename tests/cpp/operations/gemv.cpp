@@ -9,7 +9,7 @@ namespace sc = isaac;
 
 template<typename T>
 void test_impl(T epsilon, simple_vector_base<T> & cy, simple_matrix_base<T> const & cA, simple_vector_base<T> & cx,
-                                        sc::array & y, sc::array const & A, sc::array & x, interface_t interf, const char * prefix)
+                                        sc::array_base & y, sc::array_base const & A, sc::array_base & x, interface_t interf, const char * prefix)
 {
   int failure_count = 0;
 
@@ -54,22 +54,22 @@ void test_impl(T epsilon, simple_vector_base<T> & cy, simple_matrix_base<T> cons
 
       RUN_TEST("GEMV(ROW, NoTrans)", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
                      BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasRowMajor, clblasTrans, N, M, alpha, CHANDLE(A), OFF(A), LD(A),
-                                CHANDLE(x), x.start()[0], x.stride()[0], beta, CHANDLE(y), y.start()[0], y.stride()[0],
+                                CHANDLE(x), OFF(x), INC(x), beta, CHANDLE(y), OFF(y), INC(y),
                                 1, &clqueue, 0, NULL, NULL), y, bufy, cy);
 
       RUN_TEST("GEMV(ROW, Trans)", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
                      BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasRowMajor, clblasNoTrans, N, M, alpha, CHANDLE(A), OFF(A), LD(A),
-                                CHANDLE(y), y.start()[0], y.stride()[0], beta, CHANDLE(x), x.start()[0], x.stride()[0],
+                                CHANDLE(y), OFF(y), INC(y), beta, CHANDLE(x), OFF(x), INC(x),
                                 1, &clqueue, 0, NULL, NULL), x, bufx, cx);
 
       RUN_TEST("GEMV(COL, NoTrans)", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
                      BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasNoTrans, M, N, alpha, CHANDLE(A), OFF(A), LD(A),
-                                CHANDLE(x), x.start()[0], x.stride()[0], beta, CHANDLE(y), y.start()[0], y.stride()[0],
+                                CHANDLE(x), OFF(x), INC(x), beta, CHANDLE(y), OFF(y), INC(y),
                                 1, &clqueue, 0, NULL, NULL), y, bufy, cy);
 
       RUN_TEST("GEMV(COL, Trans)", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
                      BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasTrans, M, N, alpha, CHANDLE(A), OFF(A), LD(A),
-                                CHANDLE(y), y.start()[0], y.stride()[0], beta, CHANDLE(x), x.start()[0], x.stride()[0],
+                                CHANDLE(y), OFF(y), INC(y), beta, CHANDLE(x), OFF(x), INC(x),
                                 1, &clqueue, 0, NULL, NULL), x, bufx, cx);
   }
   else
@@ -102,13 +102,13 @@ void test(T epsilon, sc::driver::Context const & ctx)
 
   {
       INIT_MATRIX(M, SUBM, 9, 1, N, SUBN, 8, 1, cA, A, ctx);
-      test_impl(epsilon, cy_full, cA_full, cx_full, y_full, A_full, x_full, clBLAS, "BLAS, FULL");
-      test_impl(epsilon, cy_slice, cA_slice, cx_slice, y_slice, A_slice, x_slice, clBLAS, "BLAS, SUB");
+      test_impl(epsilon, cy, cA, cx, y, A, x, clBLAS, "BLAS, FULL");
+      test_impl(epsilon, cy_s, cA_s, cx_s, y_s, A_s, x_s, clBLAS, "BLAS, SUB");
   }
   {
       INIT_MATRIX(M, SUBM, 9, 5, N, SUBN, 8, 4, cA, A, ctx);
-      test_impl(epsilon, cy_full, cA_full, cx_full, y_full, A_full, x_full, CPP, "C++, FULL");
-      test_impl(epsilon, cy_slice, cA_slice, cx_slice, y_slice, A_slice, x_slice, CPP, "C++, SUB");
+      test_impl(epsilon, cy, cA, cx, y, A, x, CPP, "C++, FULL");
+      test_impl(epsilon, cy_s, cA_s, cx_s, y_s, A_s, x_s, CPP, "C++, SUB");
   }
 }
 

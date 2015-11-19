@@ -191,7 +191,7 @@ const char * evaluate(operation_node_type type)
   case OPERATOR_ELEMENT_ARGMIN_TYPE : return "argmin";
   case OPERATOR_ELEMENT_POW_TYPE : return "pow";
 
-    //Arithmetic
+  //Arithmetic
   case OPERATOR_MINUS_TYPE : return "-";
   case OPERATOR_ASSIGN_TYPE : return "=";
   case OPERATOR_INPLACE_ADD_TYPE : return "+=";
@@ -203,7 +203,7 @@ const char * evaluate(operation_node_type type)
   case OPERATOR_DIV_TYPE : return "/";
   case OPERATOR_ELEMENT_DIV_TYPE : return "/";
 
-    //Relational
+  //Relational
   case OPERATOR_NEGATE_TYPE: return "!";
   case OPERATOR_ELEMENT_EQ_TYPE : return "==";
   case OPERATOR_ELEMENT_NEQ_TYPE : return "!=";
@@ -217,7 +217,7 @@ const char * evaluate(operation_node_type type)
   case OPERATOR_ELEMENT_MAX_TYPE : return "max";
   case OPERATOR_ELEMENT_MIN_TYPE : return "min";
 
-    //Binary
+  //Binary
   case OPERATOR_GEMM_NN_TYPE : return "prodNN";
   case OPERATOR_GEMM_TN_TYPE : return "prodTN";
   case OPERATOR_GEMM_NT_TYPE : return "prodNT";
@@ -229,7 +229,7 @@ const char * evaluate(operation_node_type type)
   case OPERATOR_PAIR_TYPE: return "pair";
   case OPERATOR_ACCESS_INDEX_TYPE: return "access";
 
-    //FOR
+  //FOR
   case OPERATOR_SFOR_TYPE: return "sfor";
 
   default : throw operation_not_supported_exception("Unsupported operator");
@@ -419,18 +419,18 @@ void math_expression_representation_functor::append(lhs_rhs_element const & lhs_
 {
   if(lhs_rhs.subtype==DENSE_ARRAY_TYPE)
   {
-      size4 shape = lhs_rhs.array->shape();
       char prefix;
-      if(shape[0]==1 && shape[1]==1) prefix = '0';
-      else if(shape[0]>1 && shape[1]==1) prefix = '1';
-      else prefix = '2';
+      if(lhs_rhs.array->shape().max()==1)
+        prefix = '0';
+      else if(lhs_rhs.array->dim()==1 || lhs_rhs.array->shape().min()==1)
+        prefix = '1';
+      else
+        prefix = '2';
       numeric_type dtype = lhs_rhs.array->dtype();
-      driver::Buffer const & data = lhs_rhs.array->data();
-
       *ptr_++=prefix;
       *ptr_++=(char)dtype;
 
-      append_id(ptr_, binder_.get(data, is_assigned));
+      append_id(ptr_, binder_.get(lhs_rhs.array, is_assigned));
   }
 }
 

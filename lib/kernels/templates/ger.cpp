@@ -49,9 +49,12 @@ std::string ger::generate_impl(std::string const & suffix, math_expression const
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  process(stream, PARENT_NODE_TYPE, { {"array0", "#scalartype #namereg = #pointer[#start];"},
-                                      {"array1", "#pointer += #start;"},
-                                      {"array2", "#pointer += #start;"}}
+  process(stream, PARENT_NODE_TYPE, { {"array1", "#scalartype #namereg = #pointer[#start];"},
+                                      {"array11", "#scalartype #namereg = #pointer[#start];"},
+                                      {"arrayn", "#pointer += #start;"},
+                                      {"array1n", "#pointer += #start;"},
+                                      {"arrayn1", "#pointer += #start;"},
+                                      {"arraynn", "#pointer += #start;"}}
                                   , expressions, mappings);
 
   fetching_loop_info(p_.fetching_policy, "M", stream, init0, upper_bound0, inc0,  GlobalIdx0(backend).get(), GlobalSize0(backend).get(), device);
@@ -63,37 +66,42 @@ std::string ger::generate_impl(std::string const & suffix, math_expression const
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  process(stream, PARENT_NODE_TYPE, { {"array2", data_type + " #namereg = $VALUE{i*#stride,j};"},
+  process(stream, PARENT_NODE_TYPE, { {"arraynn", data_type + " #namereg = $VALUE{i*#stride,j};"},
+                                      {"arrayn1", data_type + " #namereg = $VALUE{i*#stride};"},
+                                      {"arrayn", data_type + " #namereg = $VALUE{i*#stride};"},
+                                      {"array1n", data_type + " #namereg = $VALUE{j*#stride};"},
                                       {"vdiag", "#scalartype #namereg = ((i + ((#diag_offset<0)?#diag_offset:0))!=(j-((#diag_offset>0)?#diag_offset:0)))?0:$VALUE{min(i*#stride, j*#stride)};"},
                                       {"repeat", "#scalartype #namereg = $VALUE{(i%#sub0)*#stride, (j%#sub1)};"},
                                       {"outer", "#scalartype #namereg = ($LVALUE{i*#stride})*($RVALUE{j*#stride});"} }
                                     , expressions, mappings);
 
-  stream << evaluate(PARENT_NODE_TYPE, { {"array2", "#namereg"},
+  stream << evaluate(PARENT_NODE_TYPE, { {"arraynn", "#namereg"},
+                                         {"array1n", "#namereg"},
+                                         {"arrayn1", "#namereg"},
+                                         {"arrayn", "#namereg"},
                                         {"vdiag", "#namereg"},
                                         {"repeat", "#namereg"},
-                                        {"array0", "#namereg"},
+                                        {"array1", "#namereg"},
+                                         {"array11", "#namereg"},
                                         {"outer", "#namereg"},
                                         {"cast", CastPrefix(backend, data_type).get()},
                                         {"host_scalar", p_.simd_width==1?"#name": InitPrefix(backend, data_type).get() + "(#name)"}}
                                     , expressions, expressions.root(), mappings) << ";" << std::endl;
 
-  process(stream, LHS_NODE_TYPE, { {"array2", "$VALUE{i*#stride,j} = #namereg;"} } , expressions, mappings);
+  process(stream, LHS_NODE_TYPE, { {"arraynn", "$VALUE{i*#stride,j} = #namereg;"},
+                                   {"array1n", "$VALUE{j*#stride} = #namereg;"},
+                                   {"arrayn1", "$VALUE{i*#stride} = #namereg;"},
+                                   {"arrayn", "$VALUE{i*#stride} = #namereg;"}} , expressions, mappings);
 
   stream.dec_tab();
   stream << "}" << std::endl;
   stream.dec_tab();
   stream << "}" << std::endl;
 
-  stream << "if(" << GlobalIdx0(backend) << "==0 &&" << GlobalIdx1(backend) << "==0)" << std::endl;
-  stream << "{" << std::endl;
-  stream.inc_tab();
-  process(stream, LHS_NODE_TYPE, { {"array0", "#pointer[#start] = #namereg;"} }, expressions, mappings);
-  stream.dec_tab();
-  stream << "}" << std::endl;
 
   stream.dec_tab();
   stream << "}" << std::endl;
+
 
   return stream.str();
 }
