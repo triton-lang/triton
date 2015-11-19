@@ -1,6 +1,7 @@
 #ifndef TEST_COMMON_HPP_
 #define TEST_COMMON_HPP_
 
+#include <cassert>
 #include <vector>
 #include <algorithm>
 #include "isaac/array.h"
@@ -21,8 +22,19 @@ enum interface_t
 };
 
 #define CHANDLE(X) X.data().handle().cl()
-#define OFF(X) X.start()[0] + X.start()[1]*X.ld()
-#define LD(X) X.ld()
+#define OFF(X) X.start()
+#define INC(X) X.stride()[0]
+#define LD(X) X.stride()[1]
+
+template<class Iterator>
+std::string join(Iterator begin, Iterator end, std::string delimiter){
+  std::string result;
+  while(begin!=end){
+    result += *begin;
+    if(++begin!=end) result += delimiter;
+  }
+  return result;
+}
 
 /*------ Simple Vector ---------*/
 template<class T>
@@ -57,10 +69,10 @@ private:
 };
 
 template<class T>
-class simple_vector_slice : public simple_vector_base<T>
+class simple_vector_s : public simple_vector_base<T>
 {
 public:
-    simple_vector_slice(simple_vector_base<T> & x, int_t start, int_t end, int_t stride) :
+    simple_vector_s(simple_vector_base<T> & x, int_t start, int_t end, int_t stride) :
         simple_vector_base<T>(start, end, stride, x.data()){ }
 };
 
@@ -121,21 +133,43 @@ class simple_matrix : public simple_matrix_base<T>
 {
 public:
     simple_matrix(int_t M, int_t N) :  simple_matrix_base<T>(0, M, 1, 0, N, 1, M, data_), data_(M*N){}
+    simple_matrix(int_t M, int_t N, std::vector<T> data) : simple_matrix_base<T>(0, M, 1, 0, N, 1, M, data_), data_(data){}
 private:
     std::vector<T> data_;
 };
 
 template<class T>
-class simple_matrix_slice : public simple_matrix_base<T>
+class simple_matrix_s : public simple_matrix_base<T>
 {
 public:
-    simple_matrix_slice(simple_matrix_base<T> & A,
+    simple_matrix_s(simple_matrix_base<T> & A,
                         int_t start1, int_t end1, int_t stride1,
                         int_t start2, int_t end2, int_t stride2) :
         simple_matrix_base<T>(start1, end1, stride1, start2, end2, stride2, A.ld(), A.data()){ }
 };
 
+template<class T>
+std::ostream& operator<<(std::ostream& os, simple_matrix_base<T> const & x)
+{
+  for(size_t i = 0 ; i < (size_t)x.size1() ; i++){
+    for(size_t j = 0; j < (size_t)x.size2() ; j++)
+      os << ((j>0)?",":"") << x(i,j);
+    os << std::endl;
+  }
+  return os;
+}
+
 /*------ Initializer ---------*/
+
+template<class T>
+std::vector<T> random(size_t N)
+{
+  std::vector<T> res(N);
+  for (size_t i = 0; i < res.size(); ++i)
+    res[i] = (T)rand()/RAND_MAX;
+  return res;
+}
+
 template<typename T>
 void init_rand(simple_vector_base<T> & x)
 {
@@ -162,44 +196,61 @@ simple_matrix<T> simple_trans(simple_matrix_base<T> const & A)
 }
 
 /*------ Compare -----------*/
+template<typename T>
+bool diff(T a, T b, T epsilon, typename std::enable_if<std::is_arithmetic<T>::value>::type* = 0)
+{
+  T delta = std::abs(a - b);
+  if(std::max(a, b)!=0)
+    delta/=std::abs(std::max(a, b));
+  return delta > epsilon;
+}
+
 template<class VecType1, class VecType2>
 bool diff(VecType1 const & x, VecType2 const & y, typename VecType1::value_type epsilon)
 {
+  assert((size_t)x.size()==(size_t)y.size());
   typedef typename VecType1::value_type T;
   T max = 0;
   for(int_t i = 0 ; i < (int_t)x.size() ; ++i)
   {
-    T delta = std::abs(x[i] - y[i]);
-    if(std::max(x[i], y[i])!=0)
-      delta/=std::abs(std::max(x[i], y[i]));
-    max = std::max(max, delta);
-    if(delta > epsilon)
-    {
-      std::cout << i << " " << x[i] << " " << y[i]<<std::endl;
+    if(diff(x[i], y[i], epsilon)){
+      std::cout << i << " " << x[i] << " " << y[i] << std::endl;
       return true;
     }
   }
   return false;
 }
 
+template<class VecType>
+bool diff(VecType const & x, isaac::array const & iy, typename VecType::value_type epsilon)
+{
+  VecType y(x.size());
+  isaac::copy(iy, y);
+  return diff(x, y, epsilon);
+}
+
+template<class VecType>
+bool diff(isaac::array const & x, VecType const & y, typename VecType::value_type epsilon)
+{ return diff(y, x, epsilon); }
+
 #define INIT_VECTOR(N, SUBN, START, STRIDE, CPREFIX, PREFIX, CTX) \
-    simple_vector<T> CPREFIX ## _full(N);\
-    simple_vector_slice<T> CPREFIX ## _slice(CPREFIX ## _full, START, START + STRIDE*SUBN, STRIDE);\
-    init_rand(CPREFIX ## _full);\
-    isaac::array PREFIX ## _full(CPREFIX ## _full.data(), CTX);\
-    isaac::view PREFIX ## _slice = PREFIX ## _full[{START, START + STRIDE*SUBN, STRIDE}];
+    simple_vector<T> CPREFIX(N);\
+    simple_vector_s<T> CPREFIX ## _s(CPREFIX, START, START + STRIDE*SUBN, STRIDE);\
+    init_rand(CPREFIX);\
+    isaac::array PREFIX(CPREFIX.data(), CTX);\
+    isaac::view PREFIX ## _s = PREFIX[{START, START + STRIDE*SUBN, STRIDE}];
 
 #define INIT_MATRIX(M, SUBM, START1, STRIDE1, N, SUBN, START2, STRIDE2, CPREFIX, PREFIX, CTX) \
-    simple_matrix<T> CPREFIX ## _full(M, N);\
-    simple_matrix_slice<T> CPREFIX ## _slice(CPREFIX ## _full, START1, START1 + STRIDE1*SUBM, STRIDE1,\
+    simple_matrix<T> CPREFIX(M, N);\
+    simple_matrix_s<T> CPREFIX ## _s(CPREFIX, START1, START1 + STRIDE1*SUBM, STRIDE1,\
                                                                  START2, START2 + STRIDE2*SUBN, STRIDE2);\
-    init_rand(CPREFIX ## _full);\
-    isaac::array PREFIX ## _full(M, N, CPREFIX ## _full.data(), CTX);\
-    isaac::view PREFIX ## _slice(PREFIX ## _full({START1, START1 + STRIDE1*SUBM, STRIDE1},\
+    init_rand(CPREFIX);\
+    isaac::array PREFIX(M, N, CPREFIX.data(), CTX);\
+    isaac::view PREFIX ## _s(PREFIX({START1, START1 + STRIDE1*SUBM, STRIDE1},\
                                                    {START2, START2 + STRIDE2*SUBN, STRIDE2}));\
-    simple_matrix<T> CPREFIX ## T_full = simple_trans(CPREFIX ## _full);\
-    isaac::array PREFIX ## T_full(N, M, CPREFIX ## T_full.data(), CTX);\
-    isaac::view PREFIX ## T_slice(PREFIX ## T_full( {START2, START2 + STRIDE2*SUBN, STRIDE2},\
+    simple_matrix<T> CPREFIX ## T = simple_trans(CPREFIX);\
+    isaac::array PREFIX ## T(N, M, CPREFIX ## T.data(), CTX);\
+    isaac::view PREFIX ## T_s(PREFIX ## T( {START2, START2 + STRIDE2*SUBN, STRIDE2},\
                                                     {START1, START1 + STRIDE1*SUBM, STRIDE1}));\
 
 

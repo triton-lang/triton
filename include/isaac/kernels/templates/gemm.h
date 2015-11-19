@@ -46,9 +46,8 @@ private:
   unsigned int registers_usage(math_expression const & expressions) const;
   int is_invalid_impl(driver::Device const &, math_expression const &) const;
   std::string generate_impl(std::string const & suffix, math_expression const & expressions, driver::Device const & device, mapping_type const &) const;
-  void enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K, array const & A, array const & B, array const & C,
+  void enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K, array_base const & A, array_base const & B, array_base const & C,
                      value_scalar const &alpha, value_scalar const &beta, driver::Program const & program, std::string const & suffix, execution_options_type const & options);
-  array create_slice(array & M, int_t s0_0, int_t s0_1, int_t s1_0, int_t s1_1, bool swap);
   std::vector<int_t> infos(math_expression const & expressions,  isaac::symbolic::preset::gemm::args &arguments) const;
 public:
   gemm(gemm::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);

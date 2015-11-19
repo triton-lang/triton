@@ -47,7 +47,7 @@ public:
   value_scalar(values_holder values, numeric_type dtype);
   explicit value_scalar(scalar const &);
   explicit value_scalar(math_expression const &);
-  explicit value_scalar(numeric_type dtype);
+  explicit value_scalar(numeric_type dtype = INVALID_NUMERIC_TYPE);
 
   values_holder values() const;
   numeric_type dtype() const;

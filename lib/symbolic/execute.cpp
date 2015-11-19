@@ -82,8 +82,8 @@ namespace isaac
                 if(left == GEMV_N_TYPE || right == GEMV_N_TYPE) return GEMV_N_TYPE;
                 else if(left == GEMV_T_TYPE || right == GEMV_T_TYPE) return GEMV_T_TYPE;
                 else if(left == DOT_TYPE || right == DOT_TYPE) return DOT_TYPE;
-                else if(left == AXPY_TYPE || right == AXPY_TYPE) return op.type==OPERATOR_OUTER_PROD_TYPE?GER_TYPE:AXPY_TYPE;
                 else if(left == GER_TYPE || right == GER_TYPE) return GER_TYPE;
+                else if(left == AXPY_TYPE || right == AXPY_TYPE) return op.type==OPERATOR_OUTER_PROD_TYPE?GER_TYPE:AXPY_TYPE;
                 else if(is_mmprod(left) || is_mmprod(right)) return GER_TYPE;
                 else if(right == INVALID_EXPRESSION_TYPE) return left;
                 else if(left == INVALID_EXPRESSION_TYPE) return right;
@@ -118,7 +118,7 @@ namespace isaac
           parse(array, node.lhs.node_index, breakpoints, type_left, false);
       else if(node.lhs.subtype == DENSE_ARRAY_TYPE)
       {
-          if(node.lhs.array->nshape()==1)
+          if(node.op.type==OPERATOR_MATRIX_ROW_TYPE || node.op.type==OPERATOR_MATRIX_COLUMN_TYPE || node.lhs.array->dim()==1)
               type_left = AXPY_TYPE;
           else
               type_left = GER_TYPE;
@@ -130,7 +130,7 @@ namespace isaac
           parse(array, node.rhs.node_index, breakpoints, type_right, false);
       else if(node.rhs.subtype == DENSE_ARRAY_TYPE)
       {
-          if(node.rhs.array->nshape()==1)
+          if(node.op.type==OPERATOR_MATRIX_ROW_TYPE || node.op.type==OPERATOR_MATRIX_COLUMN_TYPE || node.rhs.array->dim()==1)
               type_right = AXPY_TYPE;
           else
               type_right = GER_TYPE;
@@ -157,6 +157,7 @@ namespace isaac
 
     //Todo: technically the datatype should be per temporary
     numeric_type dtype = expression.dtype();
+    std::vector<std::shared_ptr<array> > temporaries_;
 
     expression_type final_type;
     //GEMM
@@ -171,7 +172,7 @@ namespace isaac
 
         //Init
         expression_type current_type;
-        if(expression.nshape()<=1)
+        if(expression.dim()==1)
           current_type=AXPY_TYPE;
         else
           current_type=GER_TYPE;
@@ -179,7 +180,6 @@ namespace isaac
 
         /*----Parse required temporaries-----*/
         detail::parse(tree, rootidx, breakpoints, final_type);
-        std::vector<std::shared_ptr<array> > temporaries_;
 
         /*----Compute required temporaries----*/
         for(detail::breakpoints_t::iterator it = breakpoints.begin() ; it != breakpoints.end() ; ++it)
@@ -216,7 +216,7 @@ namespace isaac
           profile->execute(execution_handler(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
           tree[rootidx] = root_save;
 
-          //Incorporates the temporary within the math_expression
+          //Incorporates the temporary within, the math_expression
           fill(*it->second, (array&)*tmp);
         }
     }

@@ -19,10 +19,13 @@ inline std::string generate_arguments(std::string const &, driver::Device const 
 
     kernel_generation_stream stream;
 
-    process(stream, PARENT_NODE_TYPE, { {"array0", kwglobal + " #scalartype* #pointer, " + _size_t + " #start,"},
+    process(stream, PARENT_NODE_TYPE, {  {"array11", kwglobal + " #scalartype* #pointer, " + _size_t + " #start,"},
+                                         {"array1", kwglobal + " #scalartype* #pointer, " + _size_t + " #start,"},
                                         {"host_scalar", "#scalartype #name,"},
-                                        {"array1", kwglobal + " #scalartype* #pointer, " + _size_t + " #start, " + _size_t + " #stride,"},
-                                        {"array2", kwglobal + " #scalartype* #pointer, " + _size_t + " #ld, " + _size_t + " #start, " + _size_t + " #stride, "},
+                                        {"arrayn", kwglobal + " #scalartype* #pointer, " + _size_t + " #start, " + _size_t + " #stride,"},
+                                        {"array1n", kwglobal + " #scalartype* #pointer, " + _size_t + " #start, " + _size_t + " #stride,"},
+                                        {"arrayn1", kwglobal + " #scalartype* #pointer, " + _size_t + " #start, " + _size_t + " #stride,"},
+                                        {"arraynn", kwglobal + " #scalartype* #pointer, " + _size_t + " #start, " + _size_t + " #stride," +  _size_t + " #ld,"},
                                         {"tuple4", "#scalartype #name0, #scalartype #name1, #scalartype #name2, #scalartype #name3,"}}
             , expressions, mappings);
 
@@ -62,29 +65,16 @@ public:
         }
     }
 
-    void set_arguments(array const * a, bool is_assigned) const
+    void set_arguments(array_base const * a, bool is_assigned) const
     {
-        bool is_bound = binder_.bind(a->data(), is_assigned);
+        bool is_bound = binder_.bind(a, is_assigned);
         if (is_bound)
         {
             kernel_.setArg(current_arg_++, a->data());
-            //scalar
-            if(a->shape()[0]==1 && a->shape()[1]==1)
-            {
-                kernel_.setSizeArg(current_arg_++, a->start()[0] + a->start()[1]*a->ld());
-            }
-            //array
-            else if(a->shape()[0]>1 && a->shape()[1]==1)
-            {
-                kernel_.setSizeArg(current_arg_++, a->start()[0] + a->start()[1]*a->ld());
-                kernel_.setSizeArg(current_arg_++, std::max(a->stride()[0], a->stride()[1]));
-            }
-            else
-            {
-                kernel_.setSizeArg(current_arg_++, a->ld()*a->stride()[1]);
-                kernel_.setSizeArg(current_arg_++, a->start()[0] + a->start()[1]*a->ld());
-                kernel_.setSizeArg(current_arg_++, a->stride()[0]);
-            }
+            kernel_.setSizeArg(current_arg_++, a->start());
+            for(int_t i = 0 ; i < a->dim() ; i++)
+              if(a->shape()[i] > 1)
+                kernel_.setSizeArg(current_arg_++, a->stride()[i]);
         }
     }
 

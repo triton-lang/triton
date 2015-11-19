@@ -7,7 +7,7 @@ typedef isaac::int_t int_t;
 
 template<typename T>
 void test_impl(T epsilon, simple_matrix_base<T> & cA, simple_matrix_base<T>& cB, simple_matrix_base<T>& cC, simple_vector_base<T>& cx, simple_vector_base<T>& cy,
-          sc::array& A, sc::array& B, sc::array& C, sc::array& x, sc::array& y)
+          sc::array_base& A, sc::array_base& B, sc::array_base& C, sc::array_base& x, sc::array_base& y)
 {
   using namespace std;
 
@@ -112,13 +112,11 @@ void test(T epsilon, sc::driver::Context const & ctx)
   INIT_MATRIX(M, SUBM, 5, 3, N, SUBN, 7, 2, cC, C, ctx);
   INIT_VECTOR(M, SUBM, 5, 3, cx, x, ctx);
   INIT_VECTOR(N, SUBN, 7, 2, cy, y, ctx);
-#define TEST_OPERATIONS(TYPE)\
-  test_impl(epsilon, cA_ ## TYPE, cB_ ## TYPE, cC_ ## TYPE, cx_ ## TYPE, cy_ ## TYPE, A_ ## TYPE, B_ ## TYPE, C_ ## TYPE, x_ ## TYPE, y_ ## TYPE);\
 
   std::cout << "> standard..." << std::endl;
-  TEST_OPERATIONS(full);
+  test_impl(epsilon, cA, cB, cC, cx, cy, A, B, C, x, y);
   std::cout << "> slice..." << std::endl;
-  TEST_OPERATIONS(slice);
+  test_impl(epsilon, cA_s, cB_s, cC_s, cx_s, cy_s, A_s, B_s, C_s, x_s, y_s);
 }
 
 int main()

@@ -14,42 +14,39 @@
 namespace isaac
 {
 
-  namespace detail
-  {
-    inline int_t max(size4 const & s) { return std::max(s[0], s[1]); }
-    inline int_t min(size4 const & s) { return std::min(s[0], s[1]); }
-
-  }
-
 /*--- Constructors ---*/
 //1D Constructors
 
-array::array(int_t shape0, numeric_type dtype, driver::Context const & context) :
-  dtype_(dtype), shape_(shape0, 1, 1, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
-  context_(context), data_(context_, size_of(dtype)*dsize()),
+int_t array_base::dsize()
+{
+  return std::max((int_t)1, shape_.prod()*size_of(dtype_));
+}
+
+array_base::array_base(int_t shape0, numeric_type dtype, driver::Context const & context) :
+  dtype_(dtype), shape_{shape0}, start_(0), stride_(1),
+  context_(context), data_(context_, dsize()),
   T(isaac::trans(*this))
 { }
 
-array::array(int_t shape0, numeric_type dtype, driver::Buffer data, int_t start, int_t inc):
-  dtype_(dtype), shape_(shape0), start_(start, 0, 0, 0), stride_(inc), ld_(shape_[0]), context_(data.context()), data_(data),
+array_base::array_base(int_t shape0, numeric_type dtype, driver::Buffer data, int_t start, int_t inc):
+  dtype_(dtype), shape_{shape0}, start_(start), stride_(inc), context_(data.context()), data_(data),
   T(isaac::trans(*this))
 { }
 
 
 template<class DT>
-array::array(std::vector<DT> const & x, driver::Context const & context):
-  dtype_(to_numeric_type<DT>::value), shape_((int_t)x.size(), 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape_[0]),
-  context_(context), data_(context, size_of(dtype_)*dsize()),
+array_base::array_base(std::vector<DT> const & x, driver::Context const & context):
+  dtype_(to_numeric_type<DT>::value), shape_{(int_t)x.size()}, start_(0), stride_(1),
+  context_(context), data_(context, dsize()),
   T(isaac::trans(*this))
 { *this = x; }
 
-array::array(array & v, slice const & s0) :
-  dtype_(v.dtype_), shape_(s0.size(v.shape_[0]), 1, 1, 1), start_(v.start_[0] + v.stride_[0]*s0.start, 0, 0, 0), stride_(v.stride_[0]*s0.stride, 1, 1, 1),
-  ld_(v.ld_), context_(v.context()), data_(v.data_),
+array_base::array_base(array_base & v, slice const & s0) :
+  dtype_(v.dtype_), shape_{s0.size(v.shape_[0])}, start_(v.start_ + v.stride_[0]*s0.start), stride_(v.stride_[0]*s0.stride), context_(v.context()), data_(v.data_),
   T(isaac::trans(*this))
 {}
 
-#define INSTANTIATE(T) template ISAACAPI array::array(std::vector<T> const &, driver::Context const &)
+#define INSTANTIATE(T) template ISAACAPI array_base::array_base(std::vector<T> const &, driver::Context const &)
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
 INSTANTIATE(short);
@@ -65,54 +62,44 @@ INSTANTIATE(double);
 #undef INSTANTIATE
 
 // 2D
-array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Context const & context) :
-  dtype_(dtype), shape_(shape0, shape1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
-  context_(context), data_(context_, size_of(dtype_)*dsize()),
+array_base::array_base(int_t shape0, int_t shape1, numeric_type dtype, driver::Context const & context) :
+  dtype_(dtype), shape_{shape0, shape1}, start_(0), stride_(1,shape0),
+  context_(context), data_(context_, dsize()),
   T(isaac::trans(*this))
 {}
 
-array::array(int_t shape0, int_t shape1, numeric_type dtype, driver::Buffer data, int_t start, int_t ld) :
-  dtype_(dtype), shape_(shape0, shape1), start_(start, 0, 0, 0), stride_(1, 1, 1, 1),
-  ld_(ld), context_(data.context()), data_(data),
+array_base::array_base(int_t shape0, int_t shape1, numeric_type dtype, driver::Buffer data, int_t start, int_t ld) :
+  dtype_(dtype), shape_{shape0, shape1}, start_(start), stride_(1, ld), context_(data.context()), data_(data),
   T(isaac::trans(*this))
 { }
 
-array::array(array & M, slice const & s0, slice const & s1) :
-  dtype_(M.dtype_), shape_(s0.size(M.shape_[0]), s1.size(M.shape_[1]), 1, 1),
-  start_(M.start_[0] + M.stride_[0]*s0.start, M.start_[1] + M.stride_[1]*s1.start, 0, 0),
-  stride_(M.stride_[0]*s0.stride, M.stride_[1]*s1.stride, 1, 1), ld_(M.ld_),
+array_base::array_base(array_base & M, slice const & s0, slice const & s1) :
+  dtype_(M.dtype_), shape_{s0.size(M.shape_[0]), s1.size(M.shape_[1])},
+  start_(M.start_ + M.stride_[0]*s0.start + s1.start*M.stride_[1]),
+  stride_(M.stride_[0]*s0.stride, M.stride_[1]*s1.stride),
   context_(M.data_.context()), data_(M.data_),
   T(isaac::trans(*this))
 { }
 
 
 template<typename DT>
-array::array(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::Context const & context)
+array_base::array_base(int_t shape0, int_t shape1, std::vector<DT> const & data, driver::Context const & context)
   : dtype_(to_numeric_type<DT>::value),
-    shape_(shape0, shape1), start_(0, 0), stride_(1, 1), ld_(shape0),
-    context_(context), data_(context_, size_of(dtype_)*dsize()),
+    shape_{shape0, shape1}, start_(0), stride_(1, shape0),
+    context_(context), data_(context_, dsize()),
     T(isaac::trans(*this))
 {
   isaac::copy(data, *this);
 }
 
 // 3D
-array::array(int_t shape0, int_t shape1, int_t shape2, numeric_type dtype, driver::Context const & context) :
-  dtype_(dtype), shape_(shape0, shape1, shape2, 1), start_(0, 0, 0, 0), stride_(1, 1, 1, 1), ld_(shape0),
-  context_(context), data_(context_, size_of(dtype_)*dsize()),
+array_base::array_base(int_t shape0, int_t shape1, int_t shape2, numeric_type dtype, driver::Context const & context) :
+  dtype_(dtype), shape_{shape0, shape1, shape2}, start_(0), stride_(1, shape0),
+  context_(context), data_(context_, dsize()),
   T(isaac::trans(*this))
 {}
 
-////Slices
-//array::array(numeric_type dtype, driver::Buffer data, slice const & s0, slice const & s1, int_t ld):
-//  dtype_(dtype), shape_(s0.size, s1.size), start_(s0.start, s1.start), stride_(s0.stride, s1.stride),
-//  ld_(ld), context_(data.context()), data_(data),
-//  T(isaac::trans(*this))
-//{ }
-
-
-
-#define INSTANTIATE(T) template ISAACAPI array::array(int_t, int_t, std::vector<T> const &, driver::Context const &)
+#define INSTANTIATE(T) template ISAACAPI array_base::array_base(int_t, int_t, std::vector<T> const &, driver::Context const &)
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
 INSTANTIATE(short);
@@ -127,73 +114,69 @@ INSTANTIATE(float);
 INSTANTIATE(double);
 #undef INSTANTIATE
 
-array::array(math_expression const & proxy) : array(execution_handler(proxy)){}
 
-array::array(array const & other):
-    dtype_(other.dtype()),
-    shape_(other.shape()), start_(0,0), stride_(1, 1), ld_(shape_[0]),
-    context_(other.context()), data_(context_, size_of(dtype_)*dsize()),
+array_base::array_base(numeric_type dtype, shape_t const & shape, int_t start, shape_t const & stride, driver::Context const & context) :
+    dtype_(dtype), shape_(shape), start_(start), stride_(stride), context_(context), data_(context_, dsize()),
     T(isaac::trans(*this))
-{
-  *this = other;
-}
+{}
 
-array::array(execution_handler const & other) :
+array_base::array_base(numeric_type dtype, shape_t const & shape, driver::Context const & context) : array_base(dtype, shape, 0, {1, shape[0]}, context)
+{}
+
+array_base::array_base(execution_handler const & other) :
   dtype_(other.x().dtype()),
-  shape_(other.x().shape()), start_(0,0), stride_(1, 1), ld_(shape_[0]),
-  context_(other.x().context()), data_(context_, size_of(dtype_)*dsize()),
+  shape_(other.x().shape()), start_(0), stride_(1, shape_[0]),
+  context_(other.x().context()), data_(context_, dsize()),
   T(isaac::trans(*this))
 {
   *this = other;
 }
 
-/*--- Getters ---*/
-numeric_type array::dtype() const
-{
-  return dtype_;
-}
+//Destructor
+array_base::~array_base()
+{}
 
-size4 const & array::shape() const
+/*--- Getters ---*/
+numeric_type array_base::dtype() const
+{ return dtype_; }
+
+shape_t const & array_base::shape() const
 { return shape_; }
 
-int_t array::nshape() const
-{ return int_t((shape_[0] > 1) + (shape_[1] > 1)); }
+int_t array_base::dim() const
+{ return (int_t)shape_.size(); }
 
-size4 const & array::start() const
+int_t array_base::start() const
 { return start_; }
 
-size4 const & array::stride() const
+shape_t const & array_base::stride() const
 { return stride_; }
 
-int_t const & array::ld() const
-{ return ld_; }
-
-driver::Context const & array::context() const
+driver::Context const & array_base::context() const
 { return context_; }
 
-driver::Buffer const & array::data() const
+driver::Buffer const & array_base::data() const
 { return data_; }
 
-driver::Buffer & array::data()
+driver::Buffer & array_base::data()
 { return data_; }
 
-
-int_t array::dsize() const
-{ return ld_*shape_[1]*shape_[2]*shape_[3]; }
 
 /*--- Assignment Operators ----*/
 //---------------------------------------
 
-array & array::operator=(array const & rhs)
+array_base & array_base::operator=(array_base const & rhs)
 {
+    if(shape_.min()==0) return *this;
     assert(dtype_ == rhs.dtype());
     math_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
     execute(execution_handler(expression));
     return *this;
 }
 
-array & array::operator=(value_scalar const & rhs)
+array_base & array_base::operator=(value_scalar const & rhs)
 {
+    if(shape_.min()==0) return *this;
     assert(dtype_ == rhs.dtype());
     math_expression expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
     execute(execution_handler(expression));
@@ -201,29 +184,30 @@ array & array::operator=(value_scalar const & rhs)
 }
 
 
-array& array::operator=(execution_handler const & c)
+array_base& array_base::operator=(execution_handler const & c)
 {
+  if(shape_.min()==0) return *this;
   assert(dtype_ == c.x().dtype());
   math_expression expression(*this, c.x(), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ASSIGN_TYPE), context_, dtype_, shape_);
   execute(execution_handler(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
   return *this;
 }
 
-array & array::operator=(math_expression const & rhs)
+array_base & array_base::operator=(math_expression const & rhs)
 {
   return *this = execution_handler(rhs);
 }
 
 
 template<class DT>
-array & array::operator=(std::vector<DT> const & rhs)
+array_base & array_base::operator=(std::vector<DT> const & rhs)
 {
-  assert(nshape()<=1);
+  assert(dim()<=1);
   isaac::copy(rhs, *this);
   return *this;
 }
 
-#define INSTANTIATE(TYPE) template ISAACAPI array& array::operator=<TYPE>(std::vector<TYPE> const &)
+#define INSTANTIATE(TYPE) template ISAACAPI array_base& array_base::operator=<TYPE>(std::vector<TYPE> const &)
 
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
@@ -243,82 +227,118 @@ INSTANTIATE(double);
 
 
 
-math_expression array::operator-()
+math_expression array_base::operator-()
 { return math_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
 
-math_expression array::operator!()
+math_expression array_base::operator!()
 { return math_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), context_, INT_TYPE, shape_); }
 
 //
-array & array::operator+=(value_scalar const & rhs)
+array_base & array_base::operator+=(value_scalar const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype_, shape_); }
 
-array & array::operator+=(array const & rhs)
+array_base & array_base::operator+=(array_base const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), context_, dtype_, shape_); }
 
-array & array::operator+=(math_expression const & rhs)
+array_base & array_base::operator+=(math_expression const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), rhs.context(), dtype_, shape_); }
 //----
-array & array::operator-=(value_scalar const & rhs)
+array_base & array_base::operator-=(value_scalar const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
 
-array & array::operator-=(array const & rhs)
+array_base & array_base::operator-=(array_base const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), context_, dtype_, shape_); }
 
-array & array::operator-=(math_expression const & rhs)
+array_base & array_base::operator-=(math_expression const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), rhs.context(), dtype_, shape_); }
 //----
-array & array::operator*=(value_scalar const & rhs)
+array_base & array_base::operator*=(value_scalar const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), context_, dtype_, shape_); }
 
-array & array::operator*=(array const & rhs)
+array_base & array_base::operator*=(array_base const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), context_, dtype_, shape_); }
 
-array & array::operator*=(math_expression const & rhs)
+array_base & array_base::operator*=(math_expression const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_MULT_TYPE), rhs.context(), dtype_, shape_); }
 //----
-array & array::operator/=(value_scalar const & rhs)
+array_base & array_base::operator/=(value_scalar const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), context_, dtype_, shape_); }
 
-array & array::operator/=(array const & rhs)
+array_base & array_base::operator/=(array_base const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), context_, dtype_, shape_); }
 
-array & array::operator/=(math_expression const & rhs)
+array_base & array_base::operator/=(math_expression const & rhs)
 { return *this = math_expression(*this, rhs, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_DIV_TYPE), rhs.context(), dtype_, shape_); }
 
 /*--- Indexing operators -----*/
 //---------------------------------------
-math_expression array::operator[](for_idx_t idx) const
+math_expression array_base::operator[](for_idx_t idx) const
 {
-  return math_expression(*this, idx, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ACCESS_INDEX_TYPE), context_, dtype_, shape_);
+  return math_expression(*this, idx, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ACCESS_INDEX_TYPE), context_, dtype_, {1});
 }
 
-scalar array::operator [](int_t idx)
+scalar array_base::operator [](int_t idx)
 {
-  assert(nshape()<=1);
-  return scalar(dtype_, data_, start_[0] + ld_*start_[1] + idx);
+  assert(dim()<=1);
+  return scalar(dtype_, data_, start_ + idx);
 }
 
-const scalar array::operator [](int_t idx) const
+const scalar array_base::operator [](int_t idx) const
 {
-  assert(nshape()<=1);
-  return scalar(dtype_, data_, start_[0] + ld_*start_[1] + idx);
+  assert(dim()<=1);
+  return scalar(dtype_, data_, start_ + idx);
 }
 
-
-view array::operator[](slice const & e1)
+view array_base::operator[](slice const & e1)
 {
-  assert(nshape()<=1);
+  assert(dim()<=1);
   return view(*this, e1);
 }
 
-view array::operator()(slice const & s1, slice const & s2)
-{ return view(*this, s1, s2); }
+view array_base::operator()(int_t i, int_t j)
+{
+  assert(dim()==2 && "Too many indices in array");
+  return view(1, dtype_, data_, start_ + i*stride_[0] + j*stride_[1], 1);
+}
+
+view array_base::operator()(int_t i, slice const & sj)
+{
+  assert(dim()==2 && "Too many indices in array");
+  return view(sj.size(shape_[1]), dtype_, data_, start_ + i*stride_[0] + sj.start*stride_[1], sj.stride*stride_[1]);
+}
+
+
+view array_base::operator()(slice const & si, int_t j)
+{
+  assert(dim()==2 && "Too many indices in array");
+  return view(si.size(shape_[0]), dtype_, data_, start_ + si.start*stride_[0] + j*stride_[1], si.stride);
+}
+
+
+view array_base::operator()(slice const & si, slice const & sj)
+{
+  assert(dim()==2 && "Too many indices in array");
+  return view(*this, si, sj);
+}
+
+//---------------------------------------
+/*--- array ---*/
+
+array::array(math_expression const & proxy) : array_base(execution_handler(proxy)) {}
+
+array::array(array_base const & other): array_base(other.dtype(), other.shape(), other.context())
+{ *this = other; }
+
+array::array(array const &other): array((array_base const &)other)
+{ }
+
 
 //---------------------------------------
 /*--- View ---*/
-view::view(array& data, slice const & s1) : array(data, s1) {}
-view::view(array& data, slice const & s1, slice const & s2) : array(data, s1, s2) {}
+view::view(array & data) : array_base(data){}
+view::view(array_base& data, slice const & s1) : array_base(data, s1) {}
+view::view(array_base& data, slice const & s1, slice const & s2) : array_base(data, s1, s2) {}
+view::view(int_t size1, numeric_type dtype, driver::Buffer data, int_t start, int_t inc) : array_base(size1, dtype, data, start, inc) {}
 
 
 //---------------------------------------
@@ -334,10 +354,10 @@ void copy(driver::Context const & context, driver::Buffer const & data, T value)
 
 }
 
-scalar::scalar(numeric_type dtype, const driver::Buffer &data, int_t offset): array(1, dtype, data, offset, 1)
+scalar::scalar(numeric_type dtype, const driver::Buffer &data, int_t offset): array_base(1, dtype, data, offset, 1)
 { }
 
-scalar::scalar(value_scalar value, driver::Context const & context) : array(1, value.dtype(), context)
+scalar::scalar(value_scalar value, driver::Context const & context) : array_base(1, value.dtype(), context)
 {
   switch(dtype_)
   {
@@ -356,17 +376,17 @@ scalar::scalar(value_scalar value, driver::Context const & context) : array(1, v
 }
 
 
-scalar::scalar(numeric_type dtype, driver::Context const & context) : array(1, dtype, context)
+scalar::scalar(numeric_type dtype, driver::Context const & context) : array_base(1, dtype, context)
 { }
 
-scalar::scalar(math_expression const & proxy) : array(proxy){ }
+scalar::scalar(math_expression const & proxy) : array_base(proxy){ }
 
 void scalar::inject(values_holder & v) const
 {
     int_t dtsize = size_of(dtype_);
   #define HANDLE_CASE(DTYPE, VAL) \
   case DTYPE:\
-    driver::backend::queues::get(context_, 0).read(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v.VAL); break;\
+    driver::backend::queues::get(context_, 0).read(data_, CL_TRUE, start_*dtsize, dtsize, (void*)&v.VAL); break;\
 
     switch(dtype_)
     {
@@ -419,7 +439,7 @@ scalar& scalar::operator=(value_scalar const & s)
 #define HANDLE_CASE(TYPE, CLTYPE) case TYPE:\
                             {\
                               CLTYPE v = s;\
-                              queue.write(data_, CL_TRUE, start_[0]*dtsize, dtsize, (void*)&v);\
+                              queue.write(data_, CL_TRUE, start_*dtsize, dtsize, (void*)&v);\
                               return *this;\
                             }
   switch(dtype_)
@@ -475,44 +495,40 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
 
 /*--- Binary Operators ----*/
 //-----------------------------------
-template<class U, class V>
-size4 elementwise_size(U const & u, V const & v)
+shape_t broadcast(shape_t const & a, shape_t const & b)
 {
-  if(detail::max(u.shape())==1)
-    return v.shape();
-  return u.shape();
-}
-
-template<class U, class V>
-bool check_elementwise(U const & u, V const & v)
-{
-  return true;
-  return detail::max(u.shape())==1 || detail::max(v.shape())==1 || u.shape()==v.shape();
+    std::vector<int_t> aa = a, bb = b, result;
+    size_t as = aa.size(), bs = bb.size();
+    if(as < bs)
+        aa.insert(aa.begin(), bs - as, 1);
+    else
+        bb.insert(bb.begin(), as - bs, 1);
+    for(size_t i = 0 ; i < std::max(as, bs) ; ++i){
+        assert((aa[i] == bb[i] || aa[i]==1 || bb[i]==1) && "Cannot broadcast");
+        result.push_back(std::max(aa[i], bb[i]));
+    }
+    return shape_t(result);
 }
 
 #define DEFINE_ELEMENT_BINARY_OPERATOR(OP, OPNAME, DTYPE) \
-math_expression OPNAME (array const & x, math_expression const & y) \
-{ assert(check_elementwise(x, y));\
-  return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, elementwise_size(x, y)); } \
+math_expression OPNAME (array_base const & x, math_expression const & y) \
+{ return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, broadcast(x.shape(), y.shape())); } \
 \
-math_expression OPNAME (array const & x, array const & y) \
-{ assert(check_elementwise(x, y));\
-  return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, elementwise_size(x, y)); }\
+math_expression OPNAME (array_base const & x, array_base const & y) \
+{ return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, broadcast(x.shape(), y.shape())); }\
 \
-math_expression OPNAME (array const & x, value_scalar const & y) \
+math_expression OPNAME (array_base const & x, value_scalar const & y) \
 { return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); }\
 \
-math_expression OPNAME (array const & x, for_idx_t const & y) \
+math_expression OPNAME (array_base const & x, for_idx_t const & y) \
 { return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); }\
 \
 \
 math_expression OPNAME (math_expression const & x, math_expression const & y) \
-{ assert(check_elementwise(x, y));\
-  return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, elementwise_size(x, y)); } \
+{ return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, broadcast(x.shape(), y.shape())); } \
  \
-math_expression OPNAME (math_expression const & x, array const & y) \
-{ assert(check_elementwise(x, y));\
-  return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, elementwise_size(x, y)); } \
+math_expression OPNAME (math_expression const & x, array_base const & y) \
+{ return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, broadcast(x.shape(), y.shape())); } \
 \
 math_expression OPNAME (math_expression const & x, value_scalar const & y) \
 { return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); } \
@@ -524,7 +540,7 @@ math_expression OPNAME (math_expression const & x, for_idx_t const & y) \
 math_expression OPNAME (value_scalar const & y, math_expression const & x) \
 { return math_expression(y, x, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); } \
 \
-math_expression OPNAME (value_scalar const & y, array const & x) \
+math_expression OPNAME (value_scalar const & y, array_base const & x) \
 { return math_expression(y, x, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); }\
 \
 math_expression OPNAME (value_scalar const & x, for_idx_t const & y) \
@@ -537,7 +553,7 @@ math_expression OPNAME (for_idx_t const & y, math_expression const & x) \
 math_expression OPNAME (for_idx_t const & y, value_scalar const & x) \
 { return math_expression(y, x, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), DTYPE); } \
 \
-math_expression OPNAME (for_idx_t const & y, array const & x) \
+math_expression OPNAME (for_idx_t const & y, array_base const & x) \
 { return math_expression(y, x, op_element(OPERATOR_BINARY_TYPE_FAMILY, OP), x.context(), DTYPE, x.shape()); }\
 \
 math_expression OPNAME (for_idx_t const & y, for_idx_t const & x) \
@@ -566,13 +582,15 @@ DEFINE_ELEMENT_BINARY_OPERATOR(OPERATOR_ELEMENT_NEQ_TYPE, operator !=, INT_TYPE)
 #define DEFINE_OUTER(LTYPE, RTYPE) \
 math_expression outer(LTYPE const & x, RTYPE const & y)\
 {\
-    assert(x.nshape()==1 && y.nshape()==1);\
-    return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_OUTER_PROD_TYPE), x.context(), x.dtype(), size4(detail::max(x.shape()), detail::max(y.shape())) );\
+    assert(x.dim()<=1 && y.dim()<=1);\
+    if(x.dim()<1 || y.dim()<1)\
+      return x*y;\
+    return math_expression(x, y, op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_OUTER_PROD_TYPE), x.context(), x.dtype(), {x.shape().max(), y.shape().max()} );\
 }\
 
-DEFINE_OUTER(array, array)
-DEFINE_OUTER(math_expression, array)
-DEFINE_OUTER(array, math_expression)
+DEFINE_OUTER(array_base, array_base)
+DEFINE_OUTER(math_expression, array_base)
+DEFINE_OUTER(array_base, math_expression)
 DEFINE_OUTER(math_expression, math_expression)
 
 #undef DEFINE_ELEMENT_BINARY_OPERATOR
@@ -581,19 +599,19 @@ DEFINE_OUTER(math_expression, math_expression)
 math_expression rot(LTYPE const & x, RTYPE const & y, CTYPE const & c, STYPE const & s)\
 { return fuse(assign(x, c*x + s*y), assign(y, c*y - s*x)); }
 
-DEFINE_ROT(array, array, scalar, scalar)
-DEFINE_ROT(math_expression, array, scalar, scalar)
-DEFINE_ROT(array, math_expression, scalar, scalar)
+DEFINE_ROT(array_base, array_base, scalar, scalar)
+DEFINE_ROT(math_expression, array_base, scalar, scalar)
+DEFINE_ROT(array_base, math_expression, scalar, scalar)
 DEFINE_ROT(math_expression, math_expression, scalar, scalar)
 
-DEFINE_ROT(array, array, value_scalar, value_scalar)
-DEFINE_ROT(math_expression, array, value_scalar, value_scalar)
-DEFINE_ROT(array, math_expression, value_scalar, value_scalar)
+DEFINE_ROT(array_base, array_base, value_scalar, value_scalar)
+DEFINE_ROT(math_expression, array_base, value_scalar, value_scalar)
+DEFINE_ROT(array_base, math_expression, value_scalar, value_scalar)
 DEFINE_ROT(math_expression, math_expression, value_scalar, value_scalar)
 
-DEFINE_ROT(array, array, math_expression, math_expression)
-DEFINE_ROT(math_expression, array, math_expression, math_expression)
-DEFINE_ROT(array, math_expression, math_expression, math_expression)
+DEFINE_ROT(array_base, array_base, math_expression, math_expression)
+DEFINE_ROT(math_expression, array_base, math_expression, math_expression)
+DEFINE_ROT(array_base, math_expression, math_expression, math_expression)
 DEFINE_ROT(math_expression, math_expression, math_expression, math_expression)
 
 
@@ -603,7 +621,7 @@ DEFINE_ROT(math_expression, math_expression, math_expression, math_expression)
 /*--- Math Operators----*/
 //---------------------------------------
 #define DEFINE_ELEMENT_UNARY_OPERATOR(OP, OPNAME) \
-math_expression OPNAME (array  const & x) \
+math_expression OPNAME (array_base  const & x) \
 { return math_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OP), x.context(), x.dtype(), x.shape()); }\
 \
 math_expression OPNAME (math_expression const & x) \
@@ -651,60 +669,66 @@ inline operation_node_type casted(numeric_type dtype)
   }
 }
 
-math_expression cast(array const & x, numeric_type dtype)
+math_expression cast(array_base const & x, numeric_type dtype)
 { return math_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, casted(dtype)), x.context(), dtype, x.shape()); }
 
 math_expression cast(math_expression const & x, numeric_type dtype)
 { return math_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, casted(dtype)), x.context(), dtype, x.shape()); }
 
 isaac::math_expression eye(int_t M, int_t N, isaac::numeric_type dtype, driver::Context const & ctx)
-{ return math_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VDIAG_TYPE), ctx, dtype, size4(M, N)); }
+{ return math_expression(value_scalar(1), value_scalar(0), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_VDIAG_TYPE), ctx, dtype, {M, N}); }
 
-isaac::array diag(array & x, int offset)
+array diag(array_base & x, int offset)
 {
+  assert(x.dim()==2 && "Input must be 2-d");
   int_t offi = -(offset<0)*offset, offj = (offset>0)*offset;
   int_t size = std::min(x.shape()[0] - offi, x.shape()[1] - offj);
-  int_t start = offi + x.ld()*offj;
-  return array(size, x.dtype(), x.data(), start, x.ld()+1);
+  int_t start = offi + x.stride()[1]*offj;
+  return array(size, x.dtype(), x.data(), start, x.stride()[1]+1);
 }
 
 
 isaac::math_expression zeros(int_t M, int_t N, isaac::numeric_type dtype, driver::Context  const & ctx)
-{ return math_expression(value_scalar(0, dtype), invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), ctx, dtype, size4(M, N)); }
+{ return math_expression(value_scalar(0, dtype), invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_ADD_TYPE), ctx, dtype, {M, N}); }
 
-inline size4 flip(size4 const & shape)
-{ return size4(shape[1], shape[0]);}
+inline shape_t flip(shape_t const & shape)
+{
+  shape_t res = shape;
+  for(size_t i = 0 ; i < shape.size() ; ++i)
+    res[i] = shape[(i + 1)%shape.size()];
+  return res;
+}
 
-inline size4 prod(size4 const & shape1, size4 const & shape2)
-{ return size4(shape1[0]*shape2[0], shape1[1]*shape2[1]);}
+//inline size4 prod(size4 const & shape1, size4 const & shape2)
+//{ return size4(shape1[0]*shape2[0], shape1[1]*shape2[1]);}
 
-math_expression trans(array  const & x) \
+math_expression trans(array_base  const & x) \
 { return math_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_TRANS_TYPE), x.context(), x.dtype(), flip(x.shape())); }\
 \
 math_expression trans(math_expression const & x) \
 { return math_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_TRANS_TYPE), x.context(), x.dtype(), flip(x.shape())); }
 
-math_expression repmat(array const & A, int_t const & rep1, int_t const & rep2)
+math_expression repmat(array_base const & A, int_t const & rep1, int_t const & rep2)
 {
   int_t sub1 = A.shape()[0];
-  int_t sub2 = A.shape()[1];
-  return math_expression(A, make_tuple(A.context(), rep1, rep2, sub1, sub2), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), A.context(), A.dtype(), size4(rep1*sub1, rep2*sub2));
+  int_t sub2 = A.dim()==2?A.shape()[1]:1;
+  return math_expression(A, make_tuple(A.context(), rep1, rep2, sub1, sub2), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), A.context(), A.dtype(), {rep1*sub1, rep2*sub2});
 }
 
 math_expression repmat(math_expression const & A, int_t const & rep1, int_t const & rep2)
 {
   int_t sub1 = A.shape()[0];
-  int_t sub2 = A.shape()[1];
-  return math_expression(A, make_tuple(A.context(), rep1, rep2, sub1, sub2), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), A.context(), A.dtype(), size4(rep1*sub1, rep2*sub2));
+  int_t sub2 = A.dim()==2?A.shape()[1]:1;
+  return math_expression(A, make_tuple(A.context(), rep1, rep2, sub1, sub2), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_REPEAT_TYPE), A.context(), A.dtype(), {rep1*sub1, rep2*sub2});
 }
 
 #define DEFINE_ACCESS_ROW(TYPEA, TYPEB) \
   math_expression row(TYPEA const & x, TYPEB const & i)\
-  { return math_expression(x, i, op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_MATRIX_ROW_TYPE), x.context(), x.dtype(), size4(x.shape()[1], 1)); }
+  { return math_expression(x, i, op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_MATRIX_ROW_TYPE), x.context(), x.dtype(), {x.shape()[1]}); }
 
-DEFINE_ACCESS_ROW(array, value_scalar)
-DEFINE_ACCESS_ROW(array, for_idx_t)
-DEFINE_ACCESS_ROW(array, math_expression)
+DEFINE_ACCESS_ROW(array_base, value_scalar)
+DEFINE_ACCESS_ROW(array_base, for_idx_t)
+DEFINE_ACCESS_ROW(array_base, math_expression)
 
 DEFINE_ACCESS_ROW(math_expression, value_scalar)
 DEFINE_ACCESS_ROW(math_expression, for_idx_t)
@@ -712,11 +736,11 @@ DEFINE_ACCESS_ROW(math_expression, math_expression)
 
 #define DEFINE_ACCESS_COL(TYPEA, TYPEB) \
   math_expression col(TYPEA const & x, TYPEB const & i)\
-  { return math_expression(x, i, op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_MATRIX_COLUMN_TYPE), x.context(), x.dtype(), size4(x.shape()[1], 1)); }
+  { return math_expression(x, i, op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_MATRIX_COLUMN_TYPE), x.context(), x.dtype(), {x.shape()[0]}); }
 
-DEFINE_ACCESS_COL(array, value_scalar)
-DEFINE_ACCESS_COL(array, for_idx_t)
-DEFINE_ACCESS_COL(array, math_expression)
+DEFINE_ACCESS_COL(array_base, value_scalar)
+DEFINE_ACCESS_COL(array_base, for_idx_t)
+DEFINE_ACCESS_COL(array_base, math_expression)
 
 DEFINE_ACCESS_COL(math_expression, value_scalar)
 DEFINE_ACCESS_COL(math_expression, for_idx_t)
@@ -726,52 +750,52 @@ DEFINE_ACCESS_COL(math_expression, math_expression)
 
 ///*--- Reductions ---*/
 ////---------------------------------------
-#define DEFINE_DOT(OP, OPNAME)\
-math_expression OPNAME(array const & x, int_t axis)\
+#define DEFINE_REDUCTION(OP, OPNAME)\
+math_expression OPNAME(array_base const & x, int_t axis)\
 {\
-  if(axis < -1 || axis > x.nshape())\
+  if(axis < -1 || axis > x.dim())\
     throw std::out_of_range("The axis entry is out of bounds");\
   else if(axis==-1)\
-    return math_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
+    return math_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), {1});\
   else if(axis==0)\
-    return math_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[1]));\
+    return math_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), {x.shape()[1]});\
   else\
-    return math_expression(x, invalid_node(), op_element(OPERATOR_ROWS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
+    return math_expression(x, invalid_node(), op_element(OPERATOR_ROWS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), {x.shape()[0]});\
 }\
 \
 math_expression OPNAME(math_expression const & x, int_t axis)\
 {\
-  if(axis < -1 || axis > x.nshape())\
+  if(axis < -1 || axis > x.dim())\
     throw std::out_of_range("The axis entry is out of bounds");\
   if(axis==-1)\
-    return math_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(1));\
+    return math_expression(x, invalid_node(), op_element(OPERATOR_VECTOR_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), {1});\
   else if(axis==0)\
-    return math_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[1]));\
+    return math_expression(x, invalid_node(), op_element(OPERATOR_COLUMNS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), {x.shape()[1]});\
   else\
-    return math_expression(x, invalid_node(), op_element(OPERATOR_ROWS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), size4(x.shape()[0]));\
+    return math_expression(x, invalid_node(), op_element(OPERATOR_ROWS_DOT_TYPE_FAMILY, OP), x.context(), x.dtype(), {x.shape()[0]});\
 }
 
-DEFINE_DOT(OPERATOR_ADD_TYPE, sum)
-DEFINE_DOT(OPERATOR_ELEMENT_ARGMAX_TYPE, argmax)
-DEFINE_DOT(OPERATOR_ELEMENT_MAX_TYPE, max)
-DEFINE_DOT(OPERATOR_ELEMENT_MIN_TYPE, min)
-DEFINE_DOT(OPERATOR_ELEMENT_ARGMIN_TYPE, argmin)
+DEFINE_REDUCTION(OPERATOR_ADD_TYPE, sum)
+DEFINE_REDUCTION(OPERATOR_ELEMENT_ARGMAX_TYPE, argmax)
+DEFINE_REDUCTION(OPERATOR_ELEMENT_MAX_TYPE, max)
+DEFINE_REDUCTION(OPERATOR_ELEMENT_MIN_TYPE, min)
+DEFINE_REDUCTION(OPERATOR_ELEMENT_ARGMIN_TYPE, argmin)
 
-#undef DEFINE_DOT
+#undef DEFINE_REDUCTION
 
 namespace detail
 {
 
-  math_expression matmatprod(array const & A, array const & B)
+  math_expression matmatprod(array_base const & A, array_base const & B)
   {
-    size4 shape(A.shape()[0], B.shape()[1]);
+    shape_t shape{A.shape()[0], B.shape()[1]};
     return math_expression(A, B, op_element(OPERATOR_GEMM_TYPE_FAMILY, OPERATOR_GEMM_NN_TYPE), A.context(), A.dtype(), shape);
   }
 
-  math_expression matmatprod(math_expression const & A, array const & B)
+  math_expression matmatprod(math_expression const & A, array_base const & B)
   {
     operation_node_type type = OPERATOR_GEMM_NN_TYPE;
-    size4 shape(A.shape()[0], B.shape()[1]);
+    shape_t shape{A.shape()[0], B.shape()[1]};
 
     math_expression::node & A_root = const_cast<math_expression::node &>(A.tree()[A.root()]);
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
@@ -785,10 +809,10 @@ namespace detail
     return res;
   }
 
-  math_expression matmatprod(array const & A, math_expression const & B)
+  math_expression matmatprod(array_base const & A, math_expression const & B)
   {
     operation_node_type type = OPERATOR_GEMM_NN_TYPE;
-    size4 shape(A.shape()[0], B.shape()[1]);
+    shape_t shape{A.shape()[0], B.shape()[1]};
 
     math_expression::node & B_root = const_cast<math_expression::node &>(B.tree()[B.root()]);
     bool B_trans = B_root.op.type==OPERATOR_TRANS_TYPE;
@@ -807,7 +831,7 @@ namespace detail
     operation_node_type type = OPERATOR_GEMM_NN_TYPE;
     math_expression::node & A_root = const_cast<math_expression::node &>(A.tree()[A.root()]);
     math_expression::node & B_root = const_cast<math_expression::node &>(B.tree()[B.root()]);
-    size4 shape(A.shape()[0], B.shape()[1]);
+    shape_t shape{A.shape()[0], B.shape()[1]};
 
     bool A_trans = A_root.op.type==OPERATOR_TRANS_TYPE;
     bool B_trans = B_root.op.type==OPERATOR_TRANS_TYPE;
@@ -825,11 +849,11 @@ namespace detail
   }
 
   template<class T>
-  math_expression matvecprod(array const & A, T const & x)
+  math_expression matvecprod(array_base const & A, T const & x)
   {
     int_t M = A.shape()[0];
     int_t N = A.shape()[1];
-    return sum(A*repmat(reshape(x, 1, N), M, 1), 1);
+    return sum(A*repmat(reshape(x, {1, N}), M, 1), 1);
   }
 
   template<class T>
@@ -845,50 +869,75 @@ namespace detail
     }
     if(A_trans)
     {
-      math_expression tmp(A, repmat(x, 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), A.context(), A.dtype(), size4(N, M));
+      math_expression tmp(A, repmat(x, 1, M), op_element(OPERATOR_BINARY_TYPE_FAMILY, OPERATOR_ELEMENT_PROD_TYPE), A.context(), A.dtype(), {N, M});
       //Remove trans
       tmp.tree()[tmp.root()].lhs = A.tree()[A.root()].lhs;
       return sum(tmp, 0);
     }
     else
-      return sum(A*repmat(reshape(x, 1, N), M, 1), 1);
+      return sum(A*repmat(reshape(x, {1, N}), M, 1), 1);
 
   }
 
 }
 
-math_expression reshape(array const & x, int_t shape0, int_t shape1)
-{  return math_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_RESHAPE_TYPE), x.context(), x.dtype(), size4(shape0, shape1)); }
+//Swap
+ISAACAPI void swap(view x, view y)
+{
+  //Seems like some compilers will generate incorrect code without the 1*...
+  execute(fuse(assign(y,1*x), assign(x,1*y)));
+}
 
-math_expression reshape(math_expression const & x, int_t shape0, int_t shape1)
-{  return math_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_RESHAPE_TYPE), x.context(), x.dtype(), size4(shape0, shape1)); }
+//Reshape
+math_expression reshape(array_base const & x, shape_t const & shape)
+{  return math_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_RESHAPE_TYPE), x.context(), x.dtype(), shape); }
 
+math_expression reshape(math_expression const & x, shape_t const & shape)
+{  return math_expression(x, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_RESHAPE_TYPE), x.context(), x.dtype(), shape); }
+
+math_expression ravel(array_base const & x)
+{ return reshape(x, {x.shape().prod()}); }
 
 #define DEFINE_DOT(LTYPE, RTYPE) \
 math_expression dot(LTYPE const & x, RTYPE const & y)\
 {\
-  if(x.nshape()<1 || y.nshape()<1){\
-    return x*y;\
-  }\
-  if(x.nshape()==1 && y.nshape()==1){\
-    if(x.shape()[1]==1 && y.shape()[0]==1)\
-        return outer(x, y);\
-    else if(x.shape()[0]==1 && y.shape()[1]==1)\
-        return sum(x*trans(y));\
+  numeric_type dtype = x.dtype();\
+  driver::Context const & context = x.context();\
+  if(x.dim()==2 && x.shape()[1]==0)\
+    return zeros(x.shape()[0], y.shape()[1], dtype, context);\
+  if(x.shape()[0]==0 || (y.dim()==2 && y.shape()[1]==0))\
+    return math_expression(invalid_node(), invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_INVALID_TYPE), context, dtype, {0});\
+  if(x.dim()==1 && y.dim()==1)\
+    return sum(x*y);\
+  if(x.dim()==2 && x.shape()[0]==1 && y.dim()==1){\
+    if(y.shape()[0]==1)\
+        return reshape(x*y, {x.shape().max()});\
     else\
         return sum(x*y);\
   }\
-  else if(x.nshape()==2 && y.nshape()==1)\
-    return detail::matvecprod(x, y);\
-  else if(x.nshape()==1 && y.nshape()==2)\
-    return trans(detail::matvecprod(trans(y), trans(x)));\
-  else /*if(x.nshape()==2 && y.nshape()==2)*/\
+  if(x.dim()==2 && y.dim()==1){\
+    if(y.shape()[0]==1)\
+        return reshape(x*y, {x.shape().max()});\
+    else\
+        return detail::matvecprod(x, y);\
+  }\
+  if(x.dim()==1 && y.dim()==2){\
+    if(x.shape()[0]==1)\
+        return reshape(x*y, {y.shape().max()});\
+    else\
+        return trans(detail::matvecprod(trans(y), trans(x)));\
+  }\
+  if(x.shape()[0]==1)\
+    return sum(x*trans(y));\
+  if(x.shape()[1]==1)\
+    return outer(x, y);\
+  else /*if(x.dim()==2 && y.dim()==2)*/\
     return detail::matmatprod(x, y);\
 }
 
-DEFINE_DOT(array, array)
-DEFINE_DOT(math_expression, array)
-DEFINE_DOT(array, math_expression)
+DEFINE_DOT(array_base, array_base)
+DEFINE_DOT(math_expression, array_base)
+DEFINE_DOT(array_base, math_expression)
 DEFINE_DOT(math_expression, math_expression)
 
 #undef DEFINE_DOT
@@ -905,7 +954,7 @@ math_expression norm(TYPE const & x, unsigned int order)\
   }\
 }
 
-DEFINE_NORM(array)
+DEFINE_NORM(array_base)
 DEFINE_NORM(math_expression)
 
 #undef DEFINE_NORM
@@ -928,76 +977,78 @@ ISAACAPI math_expression sfor(math_expression const & start, math_expression con
 //---------------------------------------
 
 //void*
-void copy(void const * data, array& x, driver::CommandQueue & queue, bool blocking)
+void copy(void const * data, array_base& x, driver::CommandQueue & queue, bool blocking)
 {
   unsigned int dtypesize = size_of(x.dtype());
-  if(detail::max(x.start())==0 && detail::max(x.stride())==1 && x.shape()[0]==x.ld())
+  if(x.start()==0 && x.shape()[0]*x.stride().prod()==x.shape().prod())
   {
-    queue.write(x.data(), blocking, 0, x.dsize()*dtypesize, data);
+    queue.write(x.data(), blocking, 0, x.shape().prod()*dtypesize, data);
   }
   else
   {
-    array tmp(x.shape()[0], x.shape()[1], x.dtype(), x.context());
-    queue.write(x.data(), blocking, 0, tmp.dsize()*dtypesize, data);
+    array tmp(x.dtype(), x.shape(), x.context());
+    queue.write(tmp.data(), blocking, 0, tmp.shape().prod()*dtypesize, data);
     x = tmp;
   }
 }
 
-void copy(array const & x, void* data, driver::CommandQueue & queue, bool blocking)
+void copy(array_base const & x, void* data, driver::CommandQueue & queue, bool blocking)
 {
   unsigned int dtypesize = size_of(x.dtype());
-  if(detail::max(x.start())==0 && detail::max(x.stride())==1 && x.shape()[0]==x.ld())
+  if(x.start()==0 && x.shape()[0]*x.stride().prod()==x.shape().prod())
   {
-    queue.read(x.data(), blocking, 0, x.dsize()*dtypesize, data);
+    queue.read(x.data(), blocking, 0, x.shape().prod()*dtypesize, data);
   }
   else
   {
-    array tmp(x.shape()[0], x.shape()[1], x.dtype(), x.context());
+    array tmp(x.dtype(), x.shape(), x.context());
     tmp = x;
-    queue.read(tmp.data(), blocking, 0, tmp.dsize()*dtypesize, data);
+    queue.read(tmp.data(), blocking, 0, tmp.shape().prod()*dtypesize, data);
   }
 }
 
-void copy(void const *data, array &x, bool blocking)
-{ copy(data, x, driver::backend::queues::get(x.context(), 0), blocking); }
+void copy(void const *data, array_base &x, bool blocking)
+{
+  copy(data, x, driver::backend::queues::get(x.context(), 0), blocking);
+}
 
-void copy(array const & x, void* data, bool blocking)
-{ copy(x, data, driver::backend::queues::get(x.context(), 0), blocking); }
+void copy(array_base const & x, void* data, bool blocking)
+{
+    copy(x, data, driver::backend::queues::get(x.context(), 0), blocking);
+}
 
 //std::vector<>
 template<class T>
-void copy(std::vector<T> const & cx, array & x, driver::CommandQueue & queue, bool blocking)
+void copy(std::vector<T> const & cx, array_base & x, driver::CommandQueue & queue, bool blocking)
 {
-  if(x.ld()==x.shape()[0])
-    assert((int_t)cx.size()==x.dsize());
-  else
-    assert((int_t)cx.size()==prod(x.shape()));
+  assert((int_t)cx.size()==x.shape().prod());
   copy((void const*)cx.data(), x, queue, blocking);
 }
 
 template<class T>
-void copy(array const & x, std::vector<T> & cx, driver::CommandQueue & queue, bool blocking)
+void copy(array_base const & x, std::vector<T> & cx, driver::CommandQueue & queue, bool blocking)
 {
-  if(x.ld()==x.shape()[0])
-    assert((int_t)cx.size()==x.dsize());
-  else
-    assert((int_t)cx.size()==prod(x.shape()));
+  assert((int_t)cx.size()==x.shape().prod());
   copy(x, (void*)cx.data(), queue, blocking);
 }
 
 template<class T>
-void copy(std::vector<T> const & cx, array & x, bool blocking)
-{ copy(cx, x, driver::backend::queues::get(x.context(), 0), blocking); }
+void copy(std::vector<T> const & cx, array_base & x, bool blocking)
+{
+    copy(cx, x, driver::backend::queues::get(x.context(), 0), blocking);
+}
 
 template<class T>
-void copy(array const & x, std::vector<T> & cx, bool blocking)
-{ copy(x, cx, driver::backend::queues::get(x.context(), 0), blocking); }
+void copy(array_base const & x, std::vector<T> & cx, bool blocking)
+{
+    copy(x, cx, driver::backend::queues::get(x.context(), 0), blocking);
+}
 
 #define INSTANTIATE(T) \
-  template void ISAACAPI  copy<T>(std::vector<T> const &, array &, driver::CommandQueue&, bool);\
-  template void ISAACAPI  copy<T>(array const &, std::vector<T> &, driver::CommandQueue&, bool);\
-  template void ISAACAPI  copy<T>(std::vector<T> const &, array &, bool);\
-  template void ISAACAPI  copy<T>(array const &, std::vector<T> &, bool)
+  template void ISAACAPI  copy<T>(std::vector<T> const &, array_base &, driver::CommandQueue&, bool);\
+  template void ISAACAPI  copy<T>(array_base const &, std::vector<T> &, driver::CommandQueue&, bool);\
+  template void ISAACAPI  copy<T>(std::vector<T> const &, array_base &, bool);\
+  template void ISAACAPI  copy<T>(array_base const &, std::vector<T> &, bool)
 
 INSTANTIATE(char);
 INSTANTIATE(unsigned char);
@@ -1049,19 +1100,15 @@ namespace detail
 
 }
 
-std::ostream& operator<<(std::ostream & os, array const & a)
+std::ostream& operator<<(std::ostream & os, array_base const & a)
 {
   size_t WINDOW = 10;
   numeric_type dtype = a.dtype();
   size_t M = a.shape()[0];
-  size_t N = a.shape()[1];
+  size_t N = (a.dim()==1)?1:a.shape()[1];
 
-  if(M>1 && N==1)
-    std::swap(M, N);
-
-  void* tmp = new char[M*N*size_of(dtype)];
+  void* tmp = new char[a.shape().prod()*size_of(dtype)];
   copy(a, (void*)tmp);
-
   os << "[ " ;
   size_t upper = std::min(WINDOW,M);
 
@@ -1116,6 +1163,11 @@ std::ostream& operator<<(std::ostream & os, array const & a)
   }
   os << " ]";
   return os;
+}
+
+ISAACAPI std::ostream& operator<<(std::ostream & oss, math_expression const & expression)
+{
+    return oss << array(expression);
 }
 
 }

@@ -130,6 +130,17 @@ Program::Program(Context const & context, std::string const & source) : backend_
       h_.cl() = dispatch::clCreateProgramWithSource(context_.h_.cl(), 1, &csrc, &srclen, &err);
       try{
         ocl::check(dispatch::clBuildProgram(h_.cl(), static_cast<cl_uint>(devices.size()), devices.data(), build_opt.c_str(), NULL, NULL));
+        //Save cached program
+        if (cache_path.size())
+        {
+          std::ofstream cached(fname.c_str(),std::ios::binary);
+          std::vector<std::size_t> sizes = ocl::info<CL_PROGRAM_BINARY_SIZES>(h_.cl());
+          cached.write((char*)&sizes[0], sizeof(std::size_t));
+          std::vector<unsigned char*> binaries = ocl::info<CL_PROGRAM_BINARIES>(h_.cl());
+          cached.write((char*)binaries[0], std::streamsize(sizes[0]));
+          for(unsigned char * ptr: binaries)
+              delete[] ptr;
+        }
       }catch(ocl::exception::build_program_failure const &){
             for(std::vector<cl_device_id>::const_iterator it = devices.begin(); it != devices.end(); ++it)
             {
@@ -139,17 +150,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
             }
       }
 
-      //Save cached program
-      if (cache_path.size())
-      {
-        std::ofstream cached(fname.c_str(),std::ios::binary);
-        std::vector<std::size_t> sizes = ocl::info<CL_PROGRAM_BINARY_SIZES>(h_.cl());
-        cached.write((char*)&sizes[0], sizeof(std::size_t));
-        std::vector<unsigned char*> binaries = ocl::info<CL_PROGRAM_BINARIES>(h_.cl());
-        cached.write((char*)binaries[0], std::streamsize(sizes[0]));
-        for(unsigned char * ptr: binaries)
-            delete[] ptr;
-      }
+
       break;
     }
     default:

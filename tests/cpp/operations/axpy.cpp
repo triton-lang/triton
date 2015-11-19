@@ -10,7 +10,7 @@ typedef isaac::int_t int_t;
 
 template<typename T>
 void test_impl(T epsilon, simple_vector_base<T> & cx, simple_vector_base<T>& cy, simple_vector_base<T>& cz,
-                                                 sc::array& x, sc::array& y, sc::array& z, interface_t interf)
+                                                 sc::array_base& x, sc::array_base& y, sc::array_base& z, interface_t interf)
 {
   using namespace std;
 
@@ -50,15 +50,15 @@ void test_impl(T epsilon, simple_vector_base<T> & cx, simple_vector_base<T>& cy,
   {
       cl_command_queue clqueue = queue.handle().cl();
 
-      RUN_TEST("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, CHANDLE(x), x.start()[0], x.stride()[0],
-                                                                                                 CHANDLE(z), z.start()[0], z.stride()[0],
+      RUN_TEST("AXPY", cz[i] = a*cx[i] + cz[i], BLAS<T>::F(clblasSaxpy, clblasDaxpy)(N, a, CHANDLE(x), OFF(x), INC(x),
+                                                                                                 CHANDLE(z), OFF(z), INC(z),
                                                                                                  1, &clqueue, 0, NULL, NULL));
 
-      RUN_TEST("COPY", cz[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, CHANDLE(x), x.start()[0], x.stride()[0],
-                                                                                     CHANDLE(z), z.start()[0], z.stride()[0],
+      RUN_TEST("COPY", cz[i] = cx[i], BLAS<T>::F(clblasScopy, clblasDcopy)(N, CHANDLE(x), OFF(x), INC(x),
+                                                                                     CHANDLE(z), OFF(z), INC(z),
                                                                                      1, &clqueue, 0, NULL, NULL));
 
-      RUN_TEST("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, CHANDLE(z), z.start()[0], z.stride()[0],
+      RUN_TEST("SCAL", cz[i] = a*cz[i], BLAS<T>::F(clblasSscal, clblasDscal)(N, a, CHANDLE(z), OFF(z), INC(z),
                                                                                          1, &clqueue, 0, NULL, NULL));
   }
 
@@ -120,22 +120,16 @@ void test(T epsilon, sc::driver::Context const & ctx)
   int_t N = 10007;
   int_t SUBN = 7;
 
-
   INIT_VECTOR(N, SUBN, 5, 3, cx, x, ctx);
   INIT_VECTOR(N, SUBN, 7, 8, cy, y, ctx);
   INIT_VECTOR(N, SUBN, 3, 2, cz, z, ctx);
 
-
-#define TEST_OPERATIONS(TYPE, INTERF)\
-  test_impl(epsilon, cx_ ## TYPE, cy_ ## TYPE, cz_ ## TYPE,\
-                                    x_ ## TYPE, y_ ## TYPE, z_ ## TYPE, INTERF);\
-
   std::cout << "> standard..." << std::endl;
-  TEST_OPERATIONS(full, clBLAS);
-  TEST_OPERATIONS(full, CPP);
+  test_impl(epsilon, cx, cy, cz, x, y, z, clBLAS);
+  test_impl(epsilon, cx, cy, cz, x, y, z, CPP);
   std::cout << "> slice..." << std::endl;
-  TEST_OPERATIONS(slice, clBLAS);
-  TEST_OPERATIONS(slice, CPP);
+  test_impl(epsilon, cx_s, cy_s, cz_s, x_s, y_s, z_s, clBLAS);
+  test_impl(epsilon, cx_s, cy_s, cz_s, x_s, y_s, z_s, CPP);
 }
 
 int main()

@@ -107,8 +107,10 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
   stream << "unsigned int gpid = " <<GroupIdx0(backend) << ";" << std::endl;
   stream << "unsigned int gsize = " <<GlobalSize0(backend) << ";" << std::endl;
 
-  process(stream, PARENT_NODE_TYPE, {{"array0", "#scalartype #namereg = #pointer[#start];"},
-                                     {"array1", "#pointer += #start;"}},
+  process(stream, PARENT_NODE_TYPE, {{"array1", "#scalartype #namereg = #pointer[#start];"},
+                                     {"arrayn", "#pointer += #start;"},
+                                     {"array1n", "#pointer += #start;"},
+                                     {"arrayn1", "#pointer += #start;"}},
                                     expressions, mapping);
 
   for (unsigned int k = 0; k < N; ++k)
@@ -134,11 +136,13 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
     //Fetch vector entry
     std::set<std::string> already_fetched;
     for (const auto & elem : exprs)
-      (elem)->process_recursive(stream, PARENT_NODE_TYPE, {{"array1",  append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,"#scalartype",i,"#pointer","#1",backend)+";"},
+    {
+      std::string array = append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,"#scalartype",i,"#pointer","#1",backend)+";";
+      (elem)->process_recursive(stream, PARENT_NODE_TYPE, {{"arrayn", array}, {"arrayn1", array}, {"array1n", array},
                                                            {"matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i}];"},
                                                            {"matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column}];"},
                                                            {"matrix_diag", "#scalartype #namereg = #pointer[#diag_offset<0?$OFFSET{(i - #diag_offset)*#stride, i}:$OFFSET{i*#stride, (i + #diag_offset)}];"}}, already_fetched);
-
+    }
     //Update accumulators
     std::vector<std::string> str(simd_width);
     if (simd_width==1)
@@ -152,11 +156,13 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
       for (unsigned int a = 0; a < simd_width; ++a)
       {
         std::map<std::string, std::string> accessors;
-        accessors["array1"] = str[a];
+        accessors["arrayn"] = str[a];
+        accessors["array1n"] = str[a];
+        accessors["arrayn1"] = str[a];
         accessors["matrix_row"] = str[a];
         accessors["matrix_column"] = str[a];
         accessors["matrix_diag"] = str[a];
-        accessors["array0"] = "#namereg";
+        accessors["array1"] = "#namereg";
         std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, accessors);
         if (elem->is_index_dot())
           compute_index_dot(stream, elem->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+"
@@ -251,7 +257,7 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
   stream.inc_tab();
   std::map<std::string, std::string> accessors;
   accessors["scalar_dot"] = "#name_buf[0]";
-  accessors["array0"] = "#pointer[#start]";
+  accessors["array1"] = "#pointer[#start]";
   stream << evaluate(PARENT_NODE_TYPE, accessors, expressions, expressions.root(), mapping) << ";" << std::endl;
   stream.dec_tab();
   stream << "}" << std::endl;

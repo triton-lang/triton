@@ -31,8 +31,8 @@ base::parameters_type::parameters_type(unsigned int _simd_width, int_t _local_si
 bool base::requires_fallback(math_expression const  & expression)
 {
   for(math_expression::node const & node: expression.tree())
-    if(  (node.lhs.subtype==DENSE_ARRAY_TYPE && (std::max(node.lhs.array->stride()[0], node.lhs.array->stride()[1])>1 || std::max(node.lhs.array->start()[0],node.lhs.array->start()[1])>0))
-      || (node.rhs.subtype==DENSE_ARRAY_TYPE && (std::max(node.rhs.array->stride()[0], node.rhs.array->stride()[1])>1 || std::max(node.rhs.array->start()[0],node.rhs.array->start()[1])>0)))
+    if(  (node.lhs.subtype==DENSE_ARRAY_TYPE && (node.lhs.array->stride()[0]>1 || node.lhs.array->start()>0))
+      || (node.rhs.subtype==DENSE_ARRAY_TYPE && (node.rhs.array->stride()[0]>1 || node.rhs.array->start()>0)))
       return true;
   return false;
 }
@@ -46,7 +46,7 @@ int_t base::vector_size(math_expression::node const & node)
   else if (node.op.type==OPERATOR_MATRIX_COLUMN_TYPE)
     return node.lhs.array->shape()[0];
   else
-    return std::max(node.lhs.array->shape()[0], node.lhs.array->shape()[1]);
+    return node.lhs.array->shape().max();
 
 }
 

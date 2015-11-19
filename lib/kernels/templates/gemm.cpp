@@ -516,7 +516,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
         {
             string Ci = to_string((m/p_.simd_width)*(p_.local_size_0*p_.simd_width) + m%p_.simd_width);
             stream << "if(" << Ci << "< M) ";
-            stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "];" << std::endl;
+            stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "] + (beta?beta*" << "C[" << Ci << CSTRIDE1 << "]:0);" << std::endl;
         }
         if((n+1)%p_.simd_width==0){
             stream << "C += ldc*" << p_.local_size_1*p_.simd_width - p_.simd_width + 1 << ";" << std::endl;
@@ -534,14 +534,13 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     {
       stream << KernelPrefix(backend) << " void " << reduce_name << "(" << _size_t << " M, " << _size_t << " N, " << _size_t << " D, "
                                  << Global(backend) << " " << sdtype << "* Z, "  << _size_t << " Zld,"
-                                 << Global(backend) << " " << sdtype << "* C, "  << _size_t << " ldc," << _size_t << " Cstart1," << _size_t << " Cstart2," << _size_t << " Cstride1, "  << _size_t << " Cstride2, "
+                                 << Global(backend) << " " << sdtype << "* C, "  << _size_t << " ldc," << _size_t << " Cstart," << _size_t << " Cstride,"
                                  << sdtype << " beta)"
                                  << std::endl;
       stream << "{" << std::endl;
       stream.inc_tab();
 
-      stream << "C += Cstart1 + Cstart2*ldc;" << std::endl;
-      stream << "ldc *= Cstride2;" << std::endl;
+      stream << "C += Cstart;" << std::endl;
       stream << "for(unsigned int i = " << GlobalIdx0(backend) << " ;  i < M ;  i += " << GlobalSize0(backend) << ")" << std::endl;
       stream << "{" << std::endl;
       stream.inc_tab();
@@ -553,7 +552,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       stream.inc_tab();
       stream << "acc += Z[i + j*Zld + k*Zld*N];" << std::endl;
       stream.dec_tab();
-      stream << "C[i*Cstride1 + j*ldc] = acc + beta*C[i + j*ldc];" << std::endl;
+      stream << "C[i*Cstride + j*ldc] = acc + beta*C[i + j*ldc];" << std::endl;
       stream.dec_tab();
       stream << "}" << std::endl;
       stream.dec_tab();
@@ -570,7 +569,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
   }
 
   void gemm::enqueue_block(driver::CommandQueue & /*queue*/, int_t M, int_t N, int_t K,
-                     array const & A, array const & B, array const & C,
+                     array_base const & A, array_base const & B, array_base const & C,
                      value_scalar const & alpha, value_scalar const & beta,
                      driver::Program const & program, std::string const & suffix, execution_options_type const & options)
   {
@@ -586,7 +585,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     reduce_name += suffix;
     bind_independent binder;
 
-    array const * out = &C;
+    array_base const * out = &C;
     std::unique_ptr<array> tmp;
     if(p_.depth > 1){
       tmp.reset(new array(M, N, p_.depth, C.dtype(), C.context()));
@@ -604,19 +603,19 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     gemm.setSizeArg(current_arg++, N);
     gemm.setSizeArg(current_arg++, K);
     gemm.setArg(current_arg++, out->data());
-    gemm.setSizeArg(current_arg++, out->ld()*out->stride()[1]);
-    gemm.setSizeArg(current_arg++, out->start()[0] + out->start()[1]*out->ld());
+    gemm.setSizeArg(current_arg++, out->stride()[1]);
+    gemm.setSizeArg(current_arg++, out->start());
     gemm.setSizeArg(current_arg++, out->stride()[0]);
 
     helper.set_arguments(alpha.dtype(), alpha.values());
     gemm.setArg(current_arg++, A.data());
-    gemm.setSizeArg(current_arg++, A.ld()*A.stride()[1]);
-    gemm.setSizeArg(current_arg++, (A.start()[0] + A.start()[1]*A.ld()));
+    gemm.setSizeArg(current_arg++, A.stride()[1]);
+    gemm.setSizeArg(current_arg++, A.start());
     gemm.setSizeArg(current_arg++, A.stride()[0]);
 
     gemm.setArg(current_arg++, B.data());
-    gemm.setSizeArg(current_arg++, B.ld()*B.stride()[1]);
-    gemm.setSizeArg(current_arg++, B.start()[0] + B.start()[1]*B.ld());
+    gemm.setSizeArg(current_arg++, B.stride()[1]);
+    gemm.setSizeArg(current_arg++, B.start());
     gemm.setSizeArg(current_arg++, B.stride()[0]);
 
     helper.set_arguments(beta.dtype(), beta.values());
@@ -633,13 +632,11 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       reduce.setSizeArg(current_arg++, N);
       reduce.setSizeArg(current_arg++, p_.depth);
       reduce.setArg(current_arg++, out->data());
-      reduce.setSizeArg(current_arg++, out->ld());
+      reduce.setSizeArg(current_arg++, out->stride()[1]);
       reduce.setArg(current_arg++, C.data());
-      reduce.setSizeArg(current_arg++, C.ld());
-      reduce.setSizeArg(current_arg++, C.start()[0]);
-      reduce.setSizeArg(current_arg++, C.start()[1]);
-      reduce.setSizeArg(current_arg++, C.stride()[0]);
       reduce.setSizeArg(current_arg++, C.stride()[1]);
+      reduce.setSizeArg(current_arg++, C.start());
+      reduce.setSizeArg(current_arg++, C.stride()[0]);
       helper.set_arguments(beta.dtype(), beta.values());
       options.enqueue(program.context(), reduce, global, local);
     }
@@ -691,34 +688,25 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     if(M==0 || N == 0 || K ==0)
       return;
     //Extract
-    array * pA = args.A->array;
-    array * pB = args.B->array;
-    array * pC = args.C->array;
+    array_base * pA = args.A->array;
+    array_base * pB = args.B->array;
+    array_base * pC = args.C->array;
 
     //Check if requires fallback
-    int_t ldstrideA = pA->stride()[0];
-    int_t ldstrideB = pB->stride()[0];
-    int_t ldstrideC = pC->stride()[0];
-
-    numeric_type dtype = args.C->dtype;
+    int_t ldstrideA = pA->stride()[1];
+    int_t ldstrideB = pB->stride()[1];
+    int_t ldstrideC = pC->stride()[1];
 
     //Enqueue
-    value_scalar beta(0, dtype);
-    if(args.beta) beta = value_scalar(args.beta->vscalar, dtype);
-
-    value_scalar alpha(1, dtype);
-    if(args.alpha) alpha = value_scalar(args.alpha->vscalar, dtype);
-
-
     execution_options_type const & options = control.execution_options();
 
     if (ldstrideA> 1 || ldstrideB > 1 || ldstrideC > 1)
     {
-      fallback.enqueue_block(queue, M, N, K, *pA, *pB, *pC, alpha, beta, program, "fallback", options);
+      fallback.enqueue_block(queue, M, N, K, *pA, *pB, *pC, args.alpha, args.beta, program, "fallback", options);
     }
     else
     {
-        enqueue_block(queue,  M, N, K, *pA, *pB, *pC, alpha, beta, program, suffix, options);
+        enqueue_block(queue,  M, N, K, *pA, *pB, *pC, args.alpha, args.beta, program, suffix, options);
     }
   }
 

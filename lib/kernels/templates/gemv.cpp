@@ -79,9 +79,9 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE,
-                        {{"array0", "#scalartype #namereg = #pointer[#start];"},
-                         {"array1", "#pointer += #start;"},
-                         {"array2", "#pointer += #start;"}}, expression, mapping);
+                        {{"array1", "#scalartype #namereg = #pointer[#start];"},
+                         {"arrayn", "#pointer += #start;"},
+                         {"arraynn", "#pointer += #start;"}}, expression, mapping);
 
   unsigned int local_size_0_ld = p_.local_size_0;
   std::string local_size_0_ld_str = to_string(local_size_0_ld);
@@ -116,13 +116,13 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
       if(dot_type_==REDUCE_COLUMNS)
       {
         std::string data_type = append_width("#scalartype",row_simd_width);
-        accessors["array2"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "c*#stride", "#pointer + r*#ld", "1", backend,false)+";";
+        accessors["arraynn"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "c*#stride", "#pointer + r*#ld", "1", backend,false)+";";
         accessors["repeat"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "(c%#sub0)*#stride", "#pointer + (r%#sub1)*#stride ", "1", backend,false)+";";
       }
       else
       {
         std::string data_type = append_width("#scalartype",col_simd_width);
-        accessors["array2"] = data_type + " #namereg = " + vload(col_simd_width, "#scalartype", "0", "#pointer + r*#stride + c*#ld", "1", backend,false) + ";";
+        accessors["arraynn"] = data_type + " #namereg = " + vload(col_simd_width, "#scalartype", "0", "#pointer + r*#stride + c*#ld", "1", backend,false) + ";";
         accessors["repeat"] = "#scalartype #namereg = $VALUE{(r%#sub0)*#stride, (c%#sub1)*#stride};";
       }
       e->process_recursive(stream, PARENT_NODE_TYPE, accessors, already_fetched);
@@ -140,7 +140,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
     for (auto & elem : dots)
       for (unsigned int a = 0; a < row_simd_width; ++a)
       {
-        std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, {{"array2", str[a]}, {"repeat", str[a]}, {"array0", "#namereg"}});
+        std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, {{"arraynn", str[a]}, {"repeat", str[a]}, {"array1", "#namereg"}});
         if (elem->is_index_dot())
           compute_index_dot(stream, elem->process("#name_acc"), "c*"+to_string(row_simd_width) + to_string(a), elem->process("#name_acc_value"), value, elem->root_op());
         else
@@ -189,7 +189,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
         accessors["gemv"] = "#name_buf[lidy*" + local_size_0_ld_str + "]";
         if(col_simd_width > 1)
             accessors["gemv"] = access_vector_type(accessors["gemv"], s);
-        accessors["array1"] = "#pointer[(r +" + to_string(s) + ")*#stride]";
+        accessors["arrayn"] = "#pointer[(r +" + to_string(s) + ")*#stride]";
         stream << evaluate(PARENT_NODE_TYPE, accessors, expression, expression.root(), mapping) << ";" << std::endl;
     }
   }
@@ -242,9 +242,9 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream.inc_tab();
 
   process(stream, PARENT_NODE_TYPE,
-                        {{"array0", "#scalartype #namereg = #pointer[#start];"},
-                         {"array1", "#pointer += #start;"},
-                         {"array2", "#pointer += #start; "}}, expression, mapping);
+                        {{"array1", "#scalartype #namereg = #pointer[#start];"},
+                         {"arrayn", "#pointer += #start;"},
+                         {"arraynn", "#pointer += #start; "}}, expression, mapping);
 
   for (const auto & e : dots)
     stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;
@@ -308,7 +308,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
 
   std::map<std::string, std::string> accessors;
   accessors["gemv"] = "#name_buf[lidy*" + local_size_0_ld_str + "]";
-  accessors["array1"] = "#pointer[r*#stride]";
+  accessors["arrayn"] = "#pointer[r*#stride]";
   stream << evaluate(PARENT_NODE_TYPE, accessors, expression, expression.root(), mapping) << ";" << std::endl;
 
   stream.dec_tab();
@@ -322,6 +322,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream << "}" << std::endl;
   }
 
+//  std::cout << stream.str() << std::endl;
   return stream.str();
 }
 

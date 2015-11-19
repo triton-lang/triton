@@ -20,7 +20,7 @@
 namespace isaac
 {
 
-class array;
+class array_base;
 
 /** @brief Optimization enum for grouping operations into unary or binary operations. Just for optimization of lookups. */
 enum operation_node_type_family
@@ -182,7 +182,7 @@ struct lhs_rhs_element
   {
     std::size_t   node_index;
     values_holder vscalar;
-    isaac::array* array;
+    isaac::array_base* array;
     for_idx_t for_idx;
   };
 };
@@ -192,7 +192,7 @@ struct invalid_node{};
 void fill(lhs_rhs_element &x, for_idx_t index);
 void fill(lhs_rhs_element &x, invalid_node);
 void fill(lhs_rhs_element & x, std::size_t node_index);
-void fill(lhs_rhs_element & x, array const & a);
+void fill(lhs_rhs_element & x, array_base const & a);
 void fill(lhs_rhs_element & x, value_scalar const & v);
 
 class math_expression
@@ -213,16 +213,16 @@ public:
   math_expression(for_idx_t const &lhs, value_scalar const &rhs, const op_element &op, const numeric_type &dtype);
 
   template<class LT, class RT>
-  math_expression(LT const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
+  math_expression(LT const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
   template<class RT>
-  math_expression(math_expression const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
+  math_expression(math_expression const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
   template<class LT>
-  math_expression(LT const & lhs, math_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
-  math_expression(math_expression const & lhs, math_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, size4 const & shape);
+  math_expression(LT const & lhs, math_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
+  math_expression(math_expression const & lhs, math_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
 
-  size4 shape() const;
+  shape_t shape() const;
   math_expression& reshape(int_t size1, int_t size2=1);
-  int_t nshape() const;
+  int_t dim() const;
   container_type & tree();
   container_type const & tree() const;
   std::size_t root() const;
@@ -236,7 +236,7 @@ private:
   std::size_t root_;
   driver::Context const * context_;
   numeric_type dtype_;
-  size4 shape_;
+  shape_t shape_;
 };
 
 
@@ -306,8 +306,8 @@ private:
   compilation_options_type compilation_options_;
 };
 
-math_expression::node const & lhs_most(math_expression::container_type const & array, math_expression::node const & init);
-math_expression::node const & lhs_most(math_expression::container_type const & array, size_t root);
+math_expression::node const & lhs_most(math_expression::container_type const & array_base, math_expression::node const & init);
+math_expression::node const & lhs_most(math_expression::container_type const & array_base, size_t root);
 
 
 }

@@ -1,4 +1,5 @@
-add_subdirectory(core)
 if(ANDROID)
     add_subdirectory(android)
+else()
+    add_subdirectory(cpp)
 endif()

@@ -21,14 +21,14 @@ bind_sequential::bind_sequential()
 {
 }
 
-bool bind_sequential::bind(driver::Buffer const & ph, bool)
+bool bind_sequential::bind(array_base const * a, bool)
 {
-    return memory.insert(std::make_pair(ph, current_arg_)).second;
+    return memory.insert(std::make_pair(a, current_arg_)).second;
 }
 
-unsigned int bind_sequential::get(driver::Buffer const & ph, bool is_assigned)
+unsigned int bind_sequential::get(array_base const * a, bool is_assigned)
 {
-    return bind(ph, is_assigned)?current_arg_++:memory.at(ph);
+    return bind(a, is_assigned)?current_arg_++:memory.at(a);
 }
 
 //Independent
@@ -36,14 +36,14 @@ bind_independent::bind_independent()
 {
 }
 
-bool bind_independent::bind(driver::Buffer const & ph, bool is_assigned)
+bool bind_independent::bind(array_base const * a, bool is_assigned)
 {
-    return is_assigned?true:memory.insert(std::make_pair(ph, current_arg_)).second;
+    return is_assigned?true:memory.insert(std::make_pair(a, current_arg_)).second;
 }
 
-unsigned int bind_independent::get(driver::Buffer const & ph, bool is_assigned)
+unsigned int bind_independent::get(array_base const * a, bool is_assigned)
 {
-    return bind(ph, is_assigned)?current_arg_++:memory.at(ph);
+    return bind(a, is_assigned)?current_arg_++:memory.at(a);
 }
 
 }
