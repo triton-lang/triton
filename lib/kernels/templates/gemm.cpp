@@ -693,9 +693,9 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
     array_base * pC = args.C->array;
 
     //Check if requires fallback
-    int_t ldstrideA = pA->stride()[1];
-    int_t ldstrideB = pB->stride()[1];
-    int_t ldstrideC = pC->stride()[1];
+    int_t ldstrideA = pA->stride()[0];
+    int_t ldstrideB = pB->stride()[0];
+    int_t ldstrideC = pC->stride()[0];
 
     //Enqueue
     execution_options_type const & options = control.execution_options();
