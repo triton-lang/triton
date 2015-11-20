@@ -3,7 +3,8 @@
 
 #include "common.hpp"
 #include "isaac/array.h"
-#include "isaac/wrap/clBLAS.h"
+#include "clBLAS.h"
+#include "cublas.h"
 
 namespace sc = isaac;
 typedef sc::int_t int_t;
@@ -47,21 +48,25 @@ void test_impl(T epsilon,  simple_vector_base<T> & cx, simple_vector_base<T> & c
   if(ctx.backend()==sc::driver::OPENCL && interf==clBLAS)
   {
       cl_command_queue clqueue = queue.handle().cl();
-
-      RUN_TEST("DOT", cs+=cx[i]*cy[i], 0, cs, BLAS<T>::F(clblasSdot, clblasDdot)(N, CHANDLE(ds), 0, CHANDLE(x), OFF(x), INC(x),
-                                                                                     CHANDLE(y), OFF(y), INC(y),
-                                                                                     CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
-      RUN_TEST("ASUM", cs+=std::fabs(cx[i]), 0, cs, BLAS<T>::F(clblasSasum, clblasDasum)(N, CHANDLE(ds), 0, CHANDLE(x), OFF(x), INC(x),
-                                                                                                CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
+      RUN_TEST("DOT", cs+=cx[i]*cy[i], 0, cs, BLAS<T>::F(clblasSdot, clblasDdot)(N, CHANDLE(ds), 0, CHANDLE(x), OFF(x), INC(x), CHANDLE(y), OFF(y), INC(y),  CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
+      RUN_TEST("ASUM", cs+=std::fabs(cx[i]), 0, cs, BLAS<T>::F(clblasSasum, clblasDasum)(N, CHANDLE(ds), 0, CHANDLE(x), OFF(x), INC(x), CHANDLE(scratch), 1, &clqueue, 0, NULL, NULL));
   }
 
+  if(ctx.backend()==sc::driver::CUDA && interf==cuBLAS)
+  {
+      RUN_TEST("DOT", cs+=cx[i]*cy[i], 0, cs, ds = BLAS<T>::F(cublasSdot, cublasDdot)(N, (T*)CUHANDLE(x) + OFF(x), INC(x), (T*)CUHANDLE(y) + OFF(y), INC(y)));
+      RUN_TEST("ASUM", cs+=std::fabs(cx[i]), 0, cs, ds = BLAS<T>::F(cublasSasum, cublasDasum)(N, (T*)CUHANDLE(x) + OFF(x), INC(x)));
+  }
 
-  RUN_TEST("s = x'.y", cs+=cx[i]*cy[i], 0, cs, ds = dot(x,y));
-  RUN_TEST("s = exp(x'.y)", cs += cx[i]*cy[i], 0, std::exp(cs), ds = exp(dot(x,y)));
-  RUN_TEST("s = 1 + x'.y", cs += cx[i]*cy[i], 0, 1 + cs, ds = 1 + dot(x,y));
-  RUN_TEST("s = x'.y + y'.y", cs+= cx[i]*cy[i] + cy[i]*cy[i], 0, cs, ds = dot(x,y) + dot(y,y));
-  RUN_TEST("s = max(x)", cs = std::max(cs, cx[i]), std::numeric_limits<T>::min(), cs, ds = max(x));
-  RUN_TEST("s = min(x)", cs = std::min(cs, cx[i]), std::numeric_limits<T>::max(), cs, ds = min(x));
+  if(interf==CPP)
+  {
+      RUN_TEST("s = x'.y", cs+=cx[i]*cy[i], 0, cs, ds = dot(x,y));
+      RUN_TEST("s = exp(x'.y)", cs += cx[i]*cy[i], 0, std::exp(cs), ds = exp(dot(x,y)));
+      RUN_TEST("s = 1 + x'.y", cs += cx[i]*cy[i], 0, 1 + cs, ds = 1 + dot(x,y));
+      RUN_TEST("s = x'.y + y'.y", cs+= cx[i]*cy[i] + cy[i]*cy[i], 0, cs, ds = dot(x,y) + dot(y,y));
+      RUN_TEST("s = max(x)", cs = std::max(cs, cx[i]), std::numeric_limits<T>::min(), cs, ds = max(x));
+      RUN_TEST("s = min(x)", cs = std::min(cs, cx[i]), std::numeric_limits<T>::max(), cs, ds = min(x));
+  }
 
 #undef RUN_TEST
 
@@ -80,9 +85,11 @@ void test(T epsilon, sc::driver::Context const & ctx)
 
   std::cout << "> standard..." << std::endl;
   test_impl(epsilon, cx, cy, x, y, clBLAS);
+  test_impl(epsilon, cx, cy, x, y, cuBLAS);
   test_impl(epsilon, cx, cy, x, y, CPP);
   std::cout << "> slice..." << std::endl;
   test_impl(epsilon, cx_s, cy_s, x_s, y_s, clBLAS);
+  test_impl(epsilon, cx_s, cy_s, x_s, y_s, cuBLAS);
   test_impl(epsilon, cx_s, cy_s, x_s, y_s, CPP);
 }
 

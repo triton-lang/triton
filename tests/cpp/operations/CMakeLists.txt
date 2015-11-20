@@ -1,5 +1,3 @@
-foreach(PROG axpy dot ger gemv gemm)
-     add_executable(test-${PROG} ${PROG}.cpp)
-     add_test(test-${PROG} test-${PROG})
-     target_link_libraries(test-${PROG} isaac)
+foreach(NAME axpy dot ger gemv gemm)
+    add_isaac_test(${NAME})
 endforeach()

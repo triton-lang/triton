@@ -144,7 +144,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       /* clblas */
   #ifdef BENCH_CLBLAS
       if(x.context().backend()==sc::driver::OPENCL)
-            BENCHMARK_CLBLAS(clblasSaxpy(N, alpha, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue), 0, NULL, &event), 3*N*dtsize/t);
+          BENCHMARK_CLBLAS(clblasSaxpy(N, alpha, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue), 0, NULL, &event), 3*N*dtsize/t);
   #endif
       /* BLAS */
   #ifdef BENCH_CBLAS

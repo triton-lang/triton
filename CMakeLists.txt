@@ -20,6 +20,9 @@ else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -Wall -Wextra -pedantic")
 endif()
 
+#CUDA
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include/external/ ${CMAKE_CURRENT_SOURCE_DIR}/include/external/cuda)
+
 #Binary to convert .cu files to const char *
 if(NOT ANDROID)
     add_executable(bin2cpp ${CMAKE_MODULE_PATH}/helpers/bin2cpp.cpp)
@@ -39,6 +42,9 @@ foreach(FILE ${LIBISAAC_SRC})
     set(LIBISAAC_SRC_STR "${_TMP} ${LIBISAAC_SRC_STR}")
 endforeach()
 
+
+
+#Include directories
 set(INCLUDE_DIRECTORIES_STR)
 get_property(INCLUDE_DIRECTORIES_LST DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES)
 set(INCLUDE_DIRECTORIES_STR)
