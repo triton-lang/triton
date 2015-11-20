@@ -46,7 +46,7 @@ np::dtype to_np_dtype(sc::numeric_type const & T) throw()
   }
 }
 
-bp::tuple get_shape(sc::array const & x)
+bp::tuple get_shape(sc::array_base const & x)
 {
   return bp::make_tuple(x.shape()[0], x.shape()[1]);
 }
@@ -303,14 +303,10 @@ void export_core()
   .def(bp::other<sc::math_expression>() OP bp::self) \
   ADD_SCALAR_HANDLING(OP)
 
-  bp::class_<sc::array,
-          std::shared_ptr<sc::array> >
-  ( "array", bp::no_init)
-      .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")= bp::object())))
-      .def(bp::init<sc::math_expression>())
-      .add_property("dtype", &sc::array::dtype)
-      .add_property("context", bp::make_function(&sc::array::context, bp::return_internal_reference<>()))
-      .add_property("T", &sc::array::T)
+  bp::class_<sc::array_base, boost::noncopyable>("array_base", bp::no_init)
+      .add_property("dtype", &sc::array_base::dtype)
+      .add_property("context", bp::make_function(&sc::array_base::context, bp::return_internal_reference<>()))
+      .add_property("T", &sc::array_base::T)
       .add_property("shape", &detail::get_shape)
       ADD_ARRAY_OPERATOR(+)
       ADD_ARRAY_OPERATOR(-)
@@ -327,23 +323,33 @@ void export_core()
       .def(bp::self_ns::str(bp::self_ns::self))
   ;
 
-  bp::class_<sc::scalar, bp::bases<sc::array> >
+  bp::class_<sc::array,std::shared_ptr<sc::array>, bp::bases<sc::array_base> >
+          ( "array", bp::no_init)
+          .def("__init__", bp::make_constructor(detail::create_array, bp::default_call_policies(), (bp::arg("obj"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")= bp::object())))
+          .def(bp::init<sc::math_expression>())
+  ;
+
+  bp::class_<sc::view, bp::bases<sc::array_base> >
+      ("view", bp::no_init)
+  ;
+
+  bp::class_<sc::scalar, bp::bases<sc::array_base> >
       ("scalar", bp::no_init)
       .def("__init__", bp::make_constructor(detail::construct_scalar, bp::default_call_policies(), (bp::arg(""), bp::arg("context")=bp::object())))
-      ;
+  ;
 
 //Other numpy-like initializers
   bp::def("empty", &detail::create_empty_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=bp::object()));
 
 //Assign
-    bp::def("assign", static_cast<sc::math_expression (*)(sc::array const &, sc::array const &)>(&sc::assign));\
-    bp::def("assign", static_cast<sc::math_expression (*)(sc::array const &, sc::math_expression const &)>(&sc::assign));\
+    bp::def("assign", static_cast<sc::math_expression (*)(sc::array_base const &, sc::array_base const &)>(&sc::assign));\
+    bp::def("assign", static_cast<sc::math_expression (*)(sc::array_base const &, sc::math_expression const &)>(&sc::assign));\
 
 //Binary
 #define MAP_FUNCTION(name) \
-      bp::def(#name, static_cast<sc::math_expression (*)(sc::array const &, sc::array const &)>(&sc::name));\
-      bp::def(#name, static_cast<sc::math_expression (*)(sc::math_expression const &, sc::array const &)>(&sc::name));\
-      bp::def(#name, static_cast<sc::math_expression (*)(sc::array const &, sc::math_expression const &)>(&sc::name));\
+      bp::def(#name, static_cast<sc::math_expression (*)(sc::array_base const &, sc::array_base const &)>(&sc::name));\
+      bp::def(#name, static_cast<sc::math_expression (*)(sc::math_expression const &, sc::array_base const &)>(&sc::name));\
+      bp::def(#name, static_cast<sc::math_expression (*)(sc::array_base const &, sc::math_expression const &)>(&sc::name));\
       bp::def(#name, static_cast<sc::math_expression (*)(sc::math_expression const &, sc::math_expression const &)>(&sc::name));
 
   MAP_FUNCTION(maximum)
@@ -354,7 +360,7 @@ void export_core()
 
 //Unary
 #define MAP_FUNCTION(name) \
-      bp::def(#name, static_cast<sc::math_expression (*)(sc::array const &)>(&sc::name));\
+      bp::def(#name, static_cast<sc::math_expression (*)(sc::array_base const &)>(&sc::name));\
       bp::def(#name, static_cast<sc::math_expression (*)(sc::math_expression const &)>(&sc::name));
 
       bp::def("zeros", &detail::create_zeros_array, (bp::arg("shape"), bp::arg("dtype") = bp::scope().attr("float32"), bp::arg("context")=bp::object()));
@@ -380,7 +386,7 @@ void export_core()
   /*--- Reduction operators----*/
   //---------------------------------------
 #define MAP_FUNCTION(name) \
-      bp::def(#name, static_cast<sc::math_expression (*)(sc::array const &, sc::int_t)>(&sc::name));\
+      bp::def(#name, static_cast<sc::math_expression (*)(sc::array_base const &, sc::int_t)>(&sc::name));\
       bp::def(#name, static_cast<sc::math_expression (*)(sc::math_expression const &, sc::int_t)>(&sc::name));
 
   MAP_FUNCTION(sum)
