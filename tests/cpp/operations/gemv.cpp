@@ -3,13 +3,15 @@
 
 #include "common.hpp"
 #include "isaac/array.h"
-#include "isaac/wrap/clBLAS.h"
+#include "clBLAS.h"
+#include "cublas.h"
+
 
 namespace sc = isaac;
 
 template<typename T>
 void test_impl(T epsilon, simple_vector_base<T> & cy, simple_matrix_base<T> const & cA, simple_vector_base<T> & cx,
-                                        sc::array_base & y, sc::array_base const & A, sc::array_base & x, interface_t interf, const char * prefix)
+                                        sc::array_base & y, sc::array_base const & A, sc::array_base & x, interface_t interf)
 {
   int failure_count = 0;
 
@@ -26,7 +28,7 @@ void test_impl(T epsilon, simple_vector_base<T> & cy, simple_matrix_base<T> cons
 
   T yi = 0, xi = 0;
 #define RUN_TEST(NAME, SIZE1, SIZE2, NEUTRAL, REDUCTION, ASSIGNMENT, GPU_REDUCTION, RES, BUF, CRES)\
-  std::cout << "[" << prefix << "] \t" << NAME "..." << std::flush;\
+  std::cout << NAME "..." << std::flush;\
   for(int i = 0 ; i < SIZE1 ; ++i)\
   {\
     yi = NEUTRAL;\
@@ -53,36 +55,38 @@ void test_impl(T epsilon, simple_vector_base<T> & cy, simple_matrix_base<T> cons
 
 
       RUN_TEST("GEMV(ROW, NoTrans)", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
-                     BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasRowMajor, clblasTrans, N, M, alpha, CHANDLE(A), OFF(A), LD(A),
-                                CHANDLE(x), OFF(x), INC(x), beta, CHANDLE(y), OFF(y), INC(y),
-                                1, &clqueue, 0, NULL, NULL), y, bufy, cy);
+               BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasRowMajor, clblasTrans, N, M, alpha, CHANDLE(A), OFF(A), LD(A),  CHANDLE(x), OFF(x), INC(x), beta, CHANDLE(y), OFF(y), INC(y), 1, &clqueue, 0, NULL, NULL), y, bufy, cy);
 
       RUN_TEST("GEMV(ROW, Trans)", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
-                     BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasRowMajor, clblasNoTrans, N, M, alpha, CHANDLE(A), OFF(A), LD(A),
-                                CHANDLE(y), OFF(y), INC(y), beta, CHANDLE(x), OFF(x), INC(x),
-                                1, &clqueue, 0, NULL, NULL), x, bufx, cx);
+              BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasRowMajor, clblasNoTrans, N, M, alpha, CHANDLE(A), OFF(A), LD(A), CHANDLE(y), OFF(y), INC(y), beta, CHANDLE(x), OFF(x), INC(x), 1, &clqueue, 0, NULL, NULL), x, bufx, cx);
 
       RUN_TEST("GEMV(COL, NoTrans)", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
-                     BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasNoTrans, M, N, alpha, CHANDLE(A), OFF(A), LD(A),
-                                CHANDLE(x), OFF(x), INC(x), beta, CHANDLE(y), OFF(y), INC(y),
-                                1, &clqueue, 0, NULL, NULL), y, bufy, cy);
+              BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasNoTrans, M, N, alpha, CHANDLE(A), OFF(A), LD(A), CHANDLE(x), OFF(x), INC(x), beta, CHANDLE(y), OFF(y), INC(y), 1, &clqueue, 0, NULL, NULL), y, bufy, cy);
 
       RUN_TEST("GEMV(COL, Trans)", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
-                     BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasTrans, M, N, alpha, CHANDLE(A), OFF(A), LD(A),
-                                CHANDLE(y), OFF(y), INC(y), beta, CHANDLE(x), OFF(x), INC(x),
-                                1, &clqueue, 0, NULL, NULL), x, bufx, cx);
+              BLAS<T>::F(clblasSgemv, clblasDgemv)(clblasColumnMajor, clblasTrans, M, N, alpha, CHANDLE(A), OFF(A), LD(A), CHANDLE(y), OFF(y), INC(y), beta, CHANDLE(x), OFF(x), INC(x), 1, &clqueue, 0, NULL, NULL), x, bufx, cx);
   }
-  else
-  {
-      RUN_TEST("x = dot(A.T, y)", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = xi, x = dot(trans(A),y), x, bufx, cx);
-      RUN_TEST("x = sum(A, 0)", N, M, 0, xi+=cA(j,i), cx[i] = xi, x = sum(A,0), x, bufx, cx);
-      RUN_TEST("x = max(A, 0)", N, M, std::numeric_limits<T>::min(), xi=std::max(xi,cA(j,i)), cx[i] = xi, x = max(A,0), x, bufx, cx);
-      RUN_TEST("x = min(A, 0)", N, M, std::numeric_limits<T>::max(), xi=std::min(xi,cA(j,i)), cx[i] = xi, x = min(A,0), x, bufx, cx);
 
-      RUN_TEST("y = dot(A, x)", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x), y, bufy, cy);
-      RUN_TEST("y = sum(A, 1)", M, N, 0, yi+=cA(i,j), cy[i] = yi, y = sum(A,1), y, bufy, cy);
-      RUN_TEST("y = max(A, 1)", M, N, std::numeric_limits<T>::min(), yi=std::max(yi,cA(i,j)), cy[i] = yi, y = max(A,1), y, bufy, cy);
-      RUN_TEST("y = min(A, 1)", M, N, std::numeric_limits<T>::max(), yi=std::min(yi,cA(i,j)), cy[i] = yi, y = min(A,1), y, bufy, cy);
+  if(y.context().backend()==sc::driver::CUDA && interf==cuBLAS)
+  {
+      RUN_TEST("GEMV-N", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = alpha*yi + beta*cy[i],
+              BLAS<T>::F(cublasSgemv, cublasDgemv)('N', M, N, alpha, (T*)CUHANDLE(A) + OFF(A), LD(A), (T*)CUHANDLE(x) + OFF(x), INC(x), beta, (T*)CUHANDLE(y) + OFF(y), INC(y)), y, bufy, cy);
+
+      RUN_TEST("GEMV-T", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = alpha*xi + beta*cx[i],
+              BLAS<T>::F(cublasSgemv, cublasDgemv)('T', M, N, alpha, (T*)CUHANDLE(A) + OFF(A), LD(A), (T*)CUHANDLE(y) + OFF(y), INC(y), beta, (T*)CUHANDLE(x) + OFF(x), INC(x)), x, bufx, cx);
+  }
+
+  if(interf==CPP)
+  {
+//      RUN_TEST("x = dot(A.T, y)", N, M, 0, xi+=cA(j,i)*cy[j], cx[i] = xi, x = dot(trans(A),y), x, bufx, cx);
+//      RUN_TEST("x = sum(A, 0)", N, M, 0, xi+=cA(j,i), cx[i] = xi, x = sum(A,0), x, bufx, cx);
+//      RUN_TEST("x = max(A, 0)", N, M, std::numeric_limits<T>::min(), xi=std::max(xi,cA(j,i)), cx[i] = xi, x = max(A,0), x, bufx, cx);
+//      RUN_TEST("x = min(A, 0)", N, M, std::numeric_limits<T>::max(), xi=std::min(xi,cA(j,i)), cx[i] = xi, x = min(A,0), x, bufx, cx);
+
+//      RUN_TEST("y = dot(A, x)", M, N, 0, yi+=cA(i,j)*cx[j], cy[i] = yi, y = dot(A,x), y, bufy, cy);
+//      RUN_TEST("y = sum(A, 1)", M, N, 0, yi+=cA(i,j), cy[i] = yi, y = sum(A,1), y, bufy, cy);
+//      RUN_TEST("y = max(A, 1)", M, N, std::numeric_limits<T>::min(), yi=std::max(yi,cA(i,j)), cy[i] = yi, y = max(A,1), y, bufy, cy);
+//      RUN_TEST("y = min(A, 1)", M, N, std::numeric_limits<T>::max(), yi=std::min(yi,cA(i,j)), cy[i] = yi, y = min(A,1), y, bufy, cy);
   }
 
   if(failure_count>0)
@@ -102,13 +106,15 @@ void test(T epsilon, sc::driver::Context const & ctx)
 
   {
       INIT_MATRIX(M, SUBM, 9, 1, N, SUBN, 8, 1, cA, A, ctx);
-      test_impl(epsilon, cy, cA, cx, y, A, x, clBLAS, "BLAS, FULL");
-      test_impl(epsilon, cy_s, cA_s, cx_s, y_s, A_s, x_s, clBLAS, "BLAS, SUB");
+      test_impl(epsilon, cy, cA, cx, y, A, x, clBLAS);
+      test_impl(epsilon, cy, cA, cx, y, A, x, cuBLAS);
+      test_impl(epsilon, cy_s, cA_s, cx_s, y_s, A_s, x_s, clBLAS);
+      test_impl(epsilon, cy_s, cA_s, cx_s, y_s, A_s, x_s, cuBLAS);
   }
   {
       INIT_MATRIX(M, SUBM, 9, 5, N, SUBN, 8, 4, cA, A, ctx);
-      test_impl(epsilon, cy, cA, cx, y, A, x, CPP, "C++, FULL");
-      test_impl(epsilon, cy_s, cA_s, cx_s, y_s, A_s, x_s, CPP, "C++, SUB");
+      test_impl(epsilon, cy, cA, cx, y, A, x, CPP);
+      test_impl(epsilon, cy_s, cA_s, cx_s, y_s, A_s, x_s, CPP);
   }
 }
 

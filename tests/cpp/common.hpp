@@ -18,10 +18,12 @@ template<> struct BLAS<double> { template<class FT, class DT> static DT F(FT , D
 enum interface_t
 {
     clBLAS,
+    cuBLAS,
     CPP
 };
 
 #define CHANDLE(X) X.data().handle().cl()
+#define CUHANDLE(X) X.data().handle().cu()
 #define OFF(X) X.start()
 #define INC(X) X.stride()[0]
 #define LD(X) X.stride()[1]

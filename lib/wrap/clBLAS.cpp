@@ -1,6 +1,6 @@
-#include "isaac/wrap/clBLAS.h"
 #include "isaac/array.h"
 #include "isaac/symbolic/execute.h"
+#include "clBLAS.h"
 
 namespace sc = isaac;
 

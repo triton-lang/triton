@@ -9,12 +9,17 @@ namespace isaac
 namespace driver
 {
 
-Buffer::Buffer(cl_mem buffer, bool take_ownership) : backend_(OPENCL), context_(backend::contexts::import(ocl::info<CL_MEM_CONTEXT>(buffer))), size_(ocl::info<CL_MEM_SIZE>(buffer)), h_(backend_, take_ownership)
+Buffer::Buffer(CUdeviceptr h, bool take_ownership) : backend_(CUDA), context_(backend::contexts::get_default()), h_(backend_, take_ownership)
+{
+  h_.cu() = h;
+}
+
+Buffer::Buffer(cl_mem buffer, bool take_ownership) : backend_(OPENCL), context_(backend::contexts::import(ocl::info<CL_MEM_CONTEXT>(buffer))), h_(backend_, take_ownership)
 {
   h_.cl() = buffer;
 }
 
-Buffer::Buffer(Context const & context, size_t size) : backend_(context.backend_), context_(context), size_(size), h_(backend_, true)
+Buffer::Buffer(Context const & context, size_t size) : backend_(context.backend_), context_(context), h_(backend_, true)
 {
   switch(backend_)
   {
@@ -30,9 +35,6 @@ Buffer::Buffer(Context const & context, size_t size) : backend_(context.backend_
       throw;
   }
 }
-
-size_t Buffer::size() const
-{ return size_; }
 
 Context const & Buffer::context() const
 { return context_; }

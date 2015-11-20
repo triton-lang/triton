@@ -1,7 +1,8 @@
 #include <cmath>
 #include "common.hpp"
 #include "isaac/array.h"
-#include "isaac/wrap/clBLAS.h"
+#include "clBLAS.h"
+#include "cublas.h"
 
 namespace sc = isaac;
 
@@ -56,7 +57,7 @@ void test(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & c
   {
       cl_command_queue clqueue = queue.handle().cl();
 
-////      //Row-major
+     //Row-major
       RUN_TEST("GEMM(ROW, N, N)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasRowMajor, clblasNoTrans, clblasNoTrans, N, M, K, alpha, CHANDLE(B), OFF(B), LD(B),
                                                                  CHANDLE(A), OFF(A), LD(A), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
       RUN_TEST("GEMM(ROW, N, T)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasRowMajor, clblasTrans, clblasNoTrans, N, M, K, alpha, CHANDLE(BT), OFF(BT), LD(BT),
@@ -78,10 +79,21 @@ void test(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & c
       RUN_TEST("GEMM(COL, T, T)", BLAS<T>::F(clblasSgemm,clblasDgemm)(clblasColumnMajor, clblasTrans, clblasTrans, M, N, K, alpha, CHANDLE(AT), OFF(AT), LD(AT),
                                                                  CHANDLE(BT), OFF(BT), LD(BT), beta, CHANDLE(C), OFF(C), LD(C), 1, &clqueue, 0, NULL, NULL));
 
-
-
   }
-  else
+
+  if(C.context().backend()==sc::driver::CUDA && interf==cuBLAS)
+  {
+      RUN_TEST("GEMM-NN", BLAS<T>::F(cublasSgemm,cublasDgemm)('N', 'N', M, N, K, alpha, (T*)CUHANDLE(A) + OFF(A), LD(A),
+                                                                 (T*)CUHANDLE(B) + OFF(B), LD(B), beta, (T*)CUHANDLE(C) + OFF(C), LD(C)));
+      RUN_TEST("GEMM-NT", BLAS<T>::F(cublasSgemm,cublasDgemm)('N', 'T', M, N, K, alpha, (T*)CUHANDLE(A) + OFF(A), LD(A),
+                                                                 (T*)CUHANDLE(BT) + OFF(BT), LD(BT), beta, (T*)CUHANDLE(C) + OFF(C), LD(C)));
+      RUN_TEST("GEMM-TN", BLAS<T>::F(cublasSgemm,cublasDgemm)('T', 'N', M, N, K, alpha, (T*)CUHANDLE(AT) + OFF(AT), LD(AT),
+                                                                 (T*)CUHANDLE(B) + OFF(B), LD(B), beta, (T*)CUHANDLE(C) + OFF(C), LD(C)));
+      RUN_TEST("GEMM-TT", BLAS<T>::F(cublasSgemm,cublasDgemm)('T', 'T', M, N, K, alpha, (T*)CUHANDLE(AT) + OFF(AT), LD(AT),
+                                                                 (T*)CUHANDLE(BT) + OFF(BT), LD(BT), beta, (T*)CUHANDLE(C) + OFF(C), LD(C)));
+  }
+
+  if(interf==CPP)
   {
       RUN_TEST("C = A * B", C = dot(A,B))
       RUN_TEST("C = A' * B", C = dot(trans(AT),B))
@@ -108,8 +120,10 @@ void test(T epsilon, sc::driver::Context const & ctx)
         INIT_MATRIX(M, SUBM, 5, 1, N, SUBN, 7, 1, cC, C, ctx);
         INIT_MATRIX(M, SUBM, 8, 1, K, SUBK, 4, 1, cA, A, ctx);
         INIT_MATRIX(K, SUBK, 9, 1, N, SUBN, 6, 1, cB, B, ctx);
-        test(epsilon, cC, cA, cB, C, A, AT, B, BT, clBLAS, "BLAS, FULL");
-        test(epsilon, cC_s, cA_s, cB_s, C_s, A_s, AT_s, B_s, BT_s, clBLAS, "BLAS, SUB");
+        test(epsilon, cC, cA, cB, C, A, AT, B, BT, clBLAS, "clBLAS, FULL");
+        test(epsilon, cC, cA, cB, C, A, AT, B, BT, cuBLAS, "cuBLAS, FULL");
+        test(epsilon, cC_s, cA_s, cB_s, C_s, A_s, AT_s, B_s, BT_s, clBLAS, "clBLAS, SUB");
+        test(epsilon, cC_s, cA_s, cB_s, C_s, A_s, AT_s, B_s, BT_s, cuBLAS, "cuBLAS, SUB");
     }
 
     {
