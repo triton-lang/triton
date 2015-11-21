@@ -75,4 +75,4 @@ if __name__ == "__main__":
     
     for operation in operations:
         tuner = Tuner(logger, device, operation, json, ProgressBar(30, metric_name_of(operation)))
-        tuner.run(level='full')
+        tuner.run(level='intermediate')

@@ -7,6 +7,38 @@ namespace sc = isaac;
 extern "C"
 {
 
+    struct cublasContext
+    {
+
+    };
+
+    cublasStatus_t cublasCreate_v2 (cublasHandle_t *handle)
+    {
+        *handle = new cublasContext();
+        return CUBLAS_STATUS_SUCCESS;
+    }
+
+    cublasStatus_t cublasDestroy_v2 (cublasHandle_t handle)
+    {
+        delete handle;
+        return CUBLAS_STATUS_SUCCESS;
+    }
+
+    cublasStatus cublasInit()
+    {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+
+    cublasStatus cublasShutdown()
+    {
+        isaac::profiles::release();
+        isaac::driver::backend::release();
+        return CUBLAS_STATUS_SUCCESS;
+    }
+
+
+
+
     //*****************
     //BLAS1
     //*****************
@@ -19,6 +51,12 @@ extern "C"
         sc::array dy((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)y,false), 0, incy); \
         sc::execute(sc::assign(dy, alpha*dx + dy));\
     }\
+    cublasStatus_t cublas ## TYPE_CHAR ## axpy_v2 (cublasHandle_t, int n, const TYPE_CU *alpha,\
+                                   const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
+    {\
+        cublas ## TYPE_CHAR ## axpy(n, *alpha, x, incx, y, incy);\
+        return CUBLAS_STATUS_SUCCESS;\
+    }
 
     MAKE_AXPY(S, sc::FLOAT_TYPE, float)
     MAKE_AXPY(D, sc::DOUBLE_TYPE, double)
@@ -31,6 +69,11 @@ extern "C"
         sc::array dy((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)y,false), 0, incy); \
         sc::execute(sc::assign(dy,dx));\
     }\
+    cublasStatus_t cublas ## TYPE_CHAR ## copy_v2 (cublasHandle_t, int n, const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
+    {\
+        cublas ## TYPE_CHAR ## copy(n, x, incx, y, incy);\
+        return CUBLAS_STATUS_SUCCESS;\
+    }
 
     MAKE_COPY(S, sc::FLOAT_TYPE, float)
     MAKE_COPY(D, sc::DOUBLE_TYPE, double)
@@ -42,6 +85,11 @@ extern "C"
         sc::array dx((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)x,false), 0, incx); \
         sc::execute(sc::assign(dx,alpha*dx));\
     }\
+    cublasStatus_t cublas ## TYPE_CHAR ## scal_v2 (cublasHandle_t, int n, const TYPE_CU * alpha, TYPE_CU *x, int incx)\
+    {\
+        cublas ## TYPE_CHAR ## scal(n, *alpha, x, incx);\
+        return CUBLAS_STATUS_SUCCESS;\
+    }
 
     MAKE_SCAL(S, sc::FLOAT_TYPE, float)
     MAKE_SCAL(D, sc::DOUBLE_TYPE, double)
@@ -54,6 +102,11 @@ extern "C"
         sc::array dy((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)y,false), 0, incy); \
         return sc::value_scalar(sc::dot(dx,dy));\
     }\
+    cublasStatus_t cublas ## TYPE_CHAR ## dot_v2 (cublasHandle_t, int n, const TYPE_CU *x, int incx, const TYPE_CU *y, int incy, TYPE_CU* result)\
+    {\
+        *result = cublas ## TYPE_CHAR ## dot(n, x, incx, y, incy);\
+        return CUBLAS_STATUS_SUCCESS;\
+    }
 
     MAKE_DOT(S, sc::FLOAT_TYPE, float)
     MAKE_DOT(D, sc::DOUBLE_TYPE, double)
@@ -65,6 +118,11 @@ extern "C"
         sc::array dx((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)x,false), 0, incx); \
         return sc::value_scalar(sum(abs(dx)));\
     }\
+    cublasStatus_t cublas ## TYPE_CHAR ## asum_v2 (cublasHandle_t, int n, const TYPE_CU *x, int incx, TYPE_CU* result)\
+    {\
+        *result = cublas ## TYPE_CHAR ## asum(n, x, incx);\
+        return CUBLAS_STATUS_SUCCESS;\
+    }
 
     MAKE_ASUM(S, sc::FLOAT_TYPE, float)
     MAKE_ASUM(D, sc::DOUBLE_TYPE, double)
@@ -89,6 +147,14 @@ extern "C"
             sc::execute(sc::assign(dy, alpha*dot(dA.T, dx) + beta*dy));\
         else\
             sc::execute(sc::assign(dy, alpha*dot(dA, dx) + beta*dy));\
+    }\
+    cublasStatus_t cublas ## TYPE_CHAR ## gemv_v2 (cublasHandle_t, cublasOperation_t trans, int m,  int n, const TYPE_CU *alpha,\
+                                   const TYPE_CU *A, int lda, const TYPE_CU *x, int incx, const TYPE_CU *beta, TYPE_CU *y, int incy)\
+    {\
+        if(trans==CUBLAS_OP_C)\
+            return CUBLAS_STATUS_NOT_SUPPORTED;\
+        cublas ## TYPE_CHAR ## gemv((trans==CUBLAS_OP_N)?'N':'T', m, n, *alpha, A, lda, x, incx, *beta, y, incy);\
+        return CUBLAS_STATUS_SUCCESS;\
     }
 
     MAKE_GEMV(S, sc::FLOAT_TYPE, float)
@@ -121,6 +187,15 @@ extern "C"
             sc::execute(sc::assign(dC, alpha*dot(dA, dB.T) + beta*dC));\
         else\
             sc::execute(sc::assign(dC, alpha*dot(dA, dB) + beta*dC));\
+    }\
+    cublasStatus_t cublas ## TYPE_CHAR ## gemm_v2(cublasHandle_t, cublasOperation_t transa, cublasOperation_t transb,\
+                                                    int m, int n, int k, const TYPE_CU *alpha, const TYPE_CU *A,\
+                                                    int lda, const TYPE_CU *B, int ldb,const TYPE_CU *beta, TYPE_CU *C, int ldc)\
+    {\
+        if(transa==CUBLAS_OP_C || transb==CUBLAS_OP_C)\
+            return CUBLAS_STATUS_NOT_SUPPORTED;\
+        cublas ## TYPE_CHAR ## gemm((transa==CUBLAS_OP_N)?'N':'T', (transb==CUBLAS_OP_N)?'N':'T', m, n, k, *alpha, A, lda, B, ldb, *beta, C, ldc);\
+        return CUBLAS_STATUS_SUCCESS;\
     }
 
     MAKE_GEMM(S, sc::FLOAT_TYPE, cl_float)
