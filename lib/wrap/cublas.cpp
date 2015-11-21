@@ -7,6 +7,15 @@ namespace sc = isaac;
 extern "C"
 {
 
+//    sc::driver::Context current_context()
+//    {
+//        CUcontext ctx;
+//        CUdevice dev;
+//        cuCtxGetCurrent(&ctx);
+//        cuCtxGetDevice(&dev);
+//        return sc::driver::Context(ctx, dev, false);
+//    }
+
     struct cublasContext
     {
 

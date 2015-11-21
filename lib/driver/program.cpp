@@ -24,7 +24,6 @@ Program::Program(Context const & context, std::string const & source) : backend_
   {
     case CUDA:
     {
-
       std::string prefix = context_.device_.name() + "cuda";
       std::string sha1 = tools::sha1(prefix + source);
       std::string fname(cache_path + sha1);
@@ -70,8 +69,6 @@ Program::Program(Context const & context, std::string const & source) : backend_
         std::ofstream cached(fname.c_str(),std::ios::binary);
         cached.write((char*)ptx.data(), std::streamsize(ptx_size));
       }
-
-
 
 //    std::ofstream oss(sha1 + ".cu", std::ofstream::out | std::ofstream::trunc);
 //    oss << source << std::endl;

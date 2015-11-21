@@ -113,6 +113,7 @@ public:
     static CUresult cuStreamDestroy_v2(CUstream hStream);
     static CUresult cuEventDestroy_v2(CUevent hEvent);
     static CUresult cuMemAlloc_v2(CUdeviceptr *dptr, size_t bytesize);
+    static CUresult cuPointerGetAttribute(void * data, CUpointer_attribute attribute, CUdeviceptr ptr);
 
     static nvrtcResult nvrtcCompileProgram(nvrtcProgram prog, int numOptions, const char **options);
     static nvrtcResult nvrtcGetProgramLogSize(nvrtcProgram prog, size_t *logSizeRet);
@@ -188,6 +189,7 @@ private:
     static void* cuStreamDestroy_v2_;
     static void* cuEventDestroy_v2_;
     static void* cuMemAlloc_v2_;
+    static void* cuPointerGetAttribute_;
 
     static void* nvrtcCompileProgram_;
     static void* nvrtcGetProgramLogSize_;
