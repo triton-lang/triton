@@ -6,7 +6,7 @@
 #include "isaac/driver/common.h"
 #include "isaac/driver/context.h"
 #include "isaac/driver/handle.h"
-
+#include "isaac/driver/dispatch.h"
 namespace isaac
 {
 
@@ -18,6 +18,14 @@ class ISAACAPI Buffer
 {
   friend class CommandQueue;
   friend class Kernel;
+
+  static CUcontext context(CUdeviceptr h)
+  {
+      CUcontext res;
+      cuda::check(dispatch::cuPointerGetAttribute((void*)&res, CU_POINTER_ATTRIBUTE_CONTEXT, h));
+      return res;
+  }
+
 public:
   Buffer(CUdeviceptr h = 0, bool take_ownership = true);
   Buffer(cl_mem Buffer = 0, bool take_ownership = true);

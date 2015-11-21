@@ -28,8 +28,10 @@ CommandQueue::CommandQueue(Context const & context, Device const & device, cl_co
   switch(backend_)
   {
     case CUDA:
+    {
       cuda::check(dispatch::cuStreamCreate(&h_.cu(), 0));
       break;
+    }
 
     case OPENCL:
     {
@@ -38,7 +40,9 @@ CommandQueue::CommandQueue(Context const & context, Device const & device, cl_co
       ocl::check(err);
       break;
     }
-    default: throw;
+
+    default:
+      throw;
   }
 }
 

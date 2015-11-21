@@ -93,6 +93,15 @@ void backend::contexts::release()
     cache_.clear();
 }
 
+Context const & backend::contexts::import(CUcontext context)
+{
+  for(driver::Context const * x: cache_)
+      if(x->handle().cu()==context)
+          return *x;
+  cache_.emplace_back(new Context(context, false));
+  return *cache_.back();
+}
+
 Context const & backend::contexts::import(cl_context context)
 {
   for(driver::Context const * x: cache_)

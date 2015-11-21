@@ -58,8 +58,11 @@ void Platform::devices(std::vector<Device> & devices) const
     {
       int N;
       cuda::check(dispatch::cuDeviceGetCount(&N));
-      for(int i = 0 ; i < N ; ++i)
-        devices.push_back(Device(i));
+      for(int i = 0 ; i < N ; ++i){
+        CUdevice device;
+        dispatch::cuDeviceGet(&device, i);
+        devices.push_back(Device(device));
+      }
       break;
     }
     case OPENCL:

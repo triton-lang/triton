@@ -48,6 +48,7 @@ RESTORE_MSVC_WARNING_C4251
       static void release();
   public:
       static Context const & get_default();
+      static Context const & import(CUcontext context);
       static Context const & import(cl_context context);
       static void get(std::list<Context const *> &);
   private:

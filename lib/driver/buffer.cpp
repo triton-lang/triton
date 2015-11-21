@@ -9,7 +9,7 @@ namespace isaac
 namespace driver
 {
 
-Buffer::Buffer(CUdeviceptr h, bool take_ownership) : backend_(CUDA), context_(backend::contexts::get_default()), h_(backend_, take_ownership)
+Buffer::Buffer(CUdeviceptr h, bool take_ownership) : backend_(CUDA), context_(backend::contexts::import(Buffer::context(h))), h_(backend_, take_ownership)
 {
   h_.cu() = h;
 }

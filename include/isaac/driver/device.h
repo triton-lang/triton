@@ -47,8 +47,9 @@ private:
   int cuGetInfo() const;
 
 public:
-  Device(int ordinal);
-  Device(cl_device_id const & device, bool take_ownership = true);
+//  Device(int ordinal);
+  explicit Device(CUdevice const & device, bool take_ownership = true);
+  explicit Device(cl_device_id const & device, bool take_ownership = true);
 
   bool operator==(Device const &) const;
   bool operator<(Device const &) const;

@@ -165,6 +165,7 @@ CUDA_DEFINE1(CUresult, cuStreamSynchronize, CUstream)
 CUDA_DEFINE1(CUresult, cuStreamDestroy_v2, CUstream)
 CUDA_DEFINE1(CUresult, cuEventDestroy_v2, CUevent)
 CUDA_DEFINE2(CUresult, cuMemAlloc_v2, CUdeviceptr*, size_t)
+CUDA_DEFINE3(CUresult, cuPointerGetAttribute, void*, CUpointer_attribute, CUdeviceptr)
 
 NVRTC_DEFINE3(nvrtcResult, nvrtcCompileProgram, nvrtcProgram, int, const char **)
 NVRTC_DEFINE2(nvrtcResult, nvrtcGetProgramLogSize, nvrtcProgram, size_t *)
@@ -255,6 +256,7 @@ void* dispatch::cuStreamSynchronize_;
 void* dispatch::cuStreamDestroy_v2_;
 void* dispatch::cuEventDestroy_v2_;
 void* dispatch::cuMemAlloc_v2_;
+void* dispatch::cuPointerGetAttribute_;
 
 void* dispatch::nvrtcCompileProgram_;
 void* dispatch::nvrtcGetProgramLogSize_;
