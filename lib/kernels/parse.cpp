@@ -419,15 +419,9 @@ void math_expression_representation_functor::append(lhs_rhs_element const & lhs_
 {
   if(lhs_rhs.subtype==DENSE_ARRAY_TYPE)
   {
-      char prefix;
-      if(lhs_rhs.array->shape().max()==1)
-        prefix = '0';
-      else if(lhs_rhs.array->dim()==1 || lhs_rhs.array->shape().min()==1)
-        prefix = '1';
-      else
-        prefix = '2';
+      for(int i = 0 ; i < lhs_rhs.array->dim() ; ++i)
+        *ptr_++= lhs_rhs.array->shape()[i]>1?'n':'1';
       numeric_type dtype = lhs_rhs.array->dtype();
-      *ptr_++=prefix;
       *ptr_++=(char)dtype;
 
       append_id(ptr_, binder_.get(lhs_rhs.array, is_assigned));

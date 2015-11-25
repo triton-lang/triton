@@ -309,6 +309,8 @@ void mapped_repeat::postprocess(std::string &res) const
 
   replace_macro(res, "$VALUE", MorphValue(type_));
   accessors["arrayn"] = res;
+  accessors["array1n"] = res;
+  accessors["arrayn1"] = res;
   accessors["arraynn"] = res;
   res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
 }

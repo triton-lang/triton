@@ -112,13 +112,14 @@ namespace isaac
     {
       math_expression::node & node = array[idx];
 
+      auto ng1 = [](shape_t const & shape){ size_t res = 0 ; for(size_t i = 0 ; i < shape.size() ; ++i) res += (shape[i] > 1); return res;};
       //Left
       expression_type type_left = INVALID_EXPRESSION_TYPE;
       if (node.lhs.type_family == COMPOSITE_OPERATOR_FAMILY)
           parse(array, node.lhs.node_index, breakpoints, type_left, false);
       else if(node.lhs.subtype == DENSE_ARRAY_TYPE)
       {
-          if(node.op.type==OPERATOR_MATRIX_ROW_TYPE || node.op.type==OPERATOR_MATRIX_COLUMN_TYPE || node.lhs.array->dim()==1)
+          if(node.op.type==OPERATOR_MATRIX_ROW_TYPE || node.op.type==OPERATOR_MATRIX_COLUMN_TYPE || ng1(node.lhs.array->shape())<=1)
               type_left = AXPY_TYPE;
           else
               type_left = GER_TYPE;
@@ -130,12 +131,11 @@ namespace isaac
           parse(array, node.rhs.node_index, breakpoints, type_right, false);
       else if(node.rhs.subtype == DENSE_ARRAY_TYPE)
       {
-          if(node.op.type==OPERATOR_MATRIX_ROW_TYPE || node.op.type==OPERATOR_MATRIX_COLUMN_TYPE || node.rhs.array->dim()==1)
+          if(node.op.type==OPERATOR_MATRIX_ROW_TYPE || node.op.type==OPERATOR_MATRIX_COLUMN_TYPE || ng1(node.rhs.array->shape())<=1)
               type_right = AXPY_TYPE;
           else
               type_right = GER_TYPE;
       }
-
 
       final_type = merge(array[idx].op, type_left, type_right);
       std::pair<bool, bool> tmp = has_temporary(array[idx].op, type_left, type_right, is_first);
@@ -172,7 +172,8 @@ namespace isaac
 
         //Init
         expression_type current_type;
-        if(expression.dim()==1)
+        auto ng1 = [](shape_t const & shape){ size_t res = 0 ; for(size_t i = 0 ; i < shape.size() ; ++i) res += (shape[i] > 1); return res;};
+        if(ng1(expression.shape())<=1)
           current_type=AXPY_TYPE;
         else
           current_type=GER_TYPE;
@@ -222,6 +223,7 @@ namespace isaac
     }
 
     /*-----Compute final expression-----*/
+//    std::cout << final_type << std::endl;
     profiles[std::make_pair(final_type, dtype)]->execute(execution_handler(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
   }
 

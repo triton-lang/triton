@@ -169,6 +169,27 @@ extern "C"
     MAKE_GEMV(S, sc::FLOAT_TYPE, float)
     MAKE_GEMV(D, sc::DOUBLE_TYPE, double)
 
+
+    #define MAKE_GER(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
+    void cublas ## TYPE_CHAR ## ger (int m, int n, TYPE_CU alpha, const TYPE_CU *x, int incx,\
+                                     const TYPE_CU *y, int incy, TYPE_CU *A, int lda)\
+    {\
+        sc::array dx((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)x,false), 0, incx); \
+        sc::array dy((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)y,false), 0, incy); \
+        sc::array dA((sc::int_t)m, (sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)A, false), 0, (sc::int_t)lda);\
+        sc::execute(sc::assign(dA, alpha*sc::outer(dx, dy) + dA));\
+    }\
+    cublasStatus_t cublas ## TYPE_CHAR ## ger_v2 (cublasHandle_t, int m, int n, const TYPE_CU * alpha, const TYPE_CU *x, int incx,\
+                                                 const TYPE_CU *y, int incy, TYPE_CU *A, int lda)\
+    {\
+        cublas ## TYPE_CHAR ## ger(m, n, *alpha, x, incx, y, incy, A, lda);\
+        return CUBLAS_STATUS_SUCCESS;\
+    }
+
+    MAKE_GER(S, sc::FLOAT_TYPE, float)
+    MAKE_GER(D, sc::DOUBLE_TYPE, double)
+
+
     //*****************
     //BLAS3
     //*****************
@@ -179,6 +200,13 @@ extern "C"
                                    const TYPE_CU *B, int ldb, TYPE_CU beta, TYPE_CU *C,\
                                    int ldc)\
     {\
+        if(k==1 && m>1 && n>1){\
+            sc::array dA((sc::int_t)m, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)A, false), 0, transa=='N'?1:lda);\
+            sc::array dB((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)B, false), 0, transb=='T'?1:ldb);\
+            sc::array dC((sc::int_t)m, (sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)C, false), 0, (sc::int_t)ldc);\
+            sc::execute(sc::assign(dC, alpha*sc::outer(dA, dB) + beta*dC));\
+            return;\
+        }\
         sc::int_t As1 = (sc::int_t)m, As2 = (sc::int_t)k;\
         sc::int_t Bs1 = (sc::int_t)k, Bs2 = (sc::int_t)n;\
         if(transa=='T') std::swap(As1, As2);\
