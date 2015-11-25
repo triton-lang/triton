@@ -20,6 +20,8 @@ class ISAACAPI Context
   friend class CommandQueue;
   friend class Buffer;
 
+  static std::string cache_path();
+
 public:
   explicit Context(CUcontext const & context, CUdevice const & device, bool take_ownership = true);
   explicit Context(cl_context const & context, bool take_ownership = true);

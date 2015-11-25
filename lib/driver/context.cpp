@@ -4,7 +4,9 @@
 #include "isaac/driver/program.h"
 
 #include "helpers/ocl/infos.hpp"
+
 #include "getenv.hpp"
+#include "mkdir.hpp"
 
 namespace isaac
 {
@@ -12,17 +14,37 @@ namespace isaac
 namespace driver
 {
 
-Context::Context(CUcontext const & context, CUdevice const & device, bool take_ownership) : backend_(CUDA), device_(device, false), cache_path_(tools::getenv("ISAAC_CACHE_PATH")), h_(backend_, take_ownership)
+std::string Context::cache_path()
+{
+    //user-specified cache path
+    std::string result = tools::getenv("ISAAC_CACHE_PATH");
+    if(!result.empty())
+        return result;
+
+    //create in home
+    result = tools::getenv("HOME");
+    if(!result.empty())
+    {
+        result = result + "/.isaac/cache/";
+        if(tools::mkpath(result)==0)
+            return result;
+    }
+
+    //couldn't find a directory
+    return "";
+}
+
+Context::Context(CUcontext const & context, CUdevice const & device, bool take_ownership) : backend_(CUDA), device_(device, false), cache_path_(cache_path()), h_(backend_, take_ownership)
 {
     h_.cu() = context;
 }
 
-Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], false), cache_path_(tools::getenv("ISAAC_CACHE_PATH")), h_(backend_, take_ownership)
+Context::Context(cl_context const & context, bool take_ownership) : backend_(OPENCL), device_(ocl::info<CL_CONTEXT_DEVICES>(context)[0], false), cache_path_(cache_path()), h_(backend_, take_ownership)
 {
     h_.cl() = context;
 }
 
-Context::Context(Device const & device) : backend_(device.backend_), device_(device), cache_path_(tools::getenv("ISAAC_CACHE_PATH")), h_(backend_, true)
+Context::Context(Device const & device) : backend_(device.backend_), device_(device), cache_path_(cache_path()), h_(backend_, true)
 {
   switch(backend_)
   {

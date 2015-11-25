@@ -190,6 +190,8 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
         if(col_simd_width > 1)
             accessors["gemv"] = access_vector_type(accessors["gemv"], s);
         accessors["arrayn"] = "#pointer[(r +" + to_string(s) + ")*#stride]";
+        accessors["array1n"] = "#pointer[(r +" + to_string(s) + ")*#stride]";
+        accessors["arrayn1"] = "#pointer[(r +" + to_string(s) + ")*#stride]";
         stream << evaluate(PARENT_NODE_TYPE, accessors, expression, expression.root(), mapping) << ";" << std::endl;
     }
   }
@@ -244,6 +246,8 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   process(stream, PARENT_NODE_TYPE,
                         {{"array1", "#scalartype #namereg = #pointer[#start];"},
                          {"arrayn", "#pointer += #start;"},
+                         {"array1n", "#pointer += #start;"},
+                         {"arrayn1", "#pointer += #start;"},
                          {"arraynn", "#pointer += #start; "}}, expression, mapping);
 
   for (const auto & e : dots)
@@ -309,6 +313,8 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   std::map<std::string, std::string> accessors;
   accessors["gemv"] = "#name_buf[lidy*" + local_size_0_ld_str + "]";
   accessors["arrayn"] = "#pointer[r*#stride]";
+  accessors["array1n"] = "#pointer[r*#stride]";
+  accessors["arrayn1"] = "#pointer[r*#stride]";
   stream << evaluate(PARENT_NODE_TYPE, accessors, expression, expression.root(), mapping) << ";" << std::endl;
 
   stream.dec_tab();

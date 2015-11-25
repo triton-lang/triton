@@ -258,6 +258,7 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
   std::map<std::string, std::string> accessors;
   accessors["scalar_dot"] = "#name_buf[0]";
   accessors["array1"] = "#pointer[#start]";
+  accessors["array11"] = "#pointer[#start]";
   stream << evaluate(PARENT_NODE_TYPE, accessors, expressions, expressions.root(), mapping) << ";" << std::endl;
   stream.dec_tab();
   stream << "}" << std::endl;

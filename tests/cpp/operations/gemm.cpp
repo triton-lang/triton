@@ -17,7 +17,7 @@ void test(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & c
   sc::int_t N = C.shape()[1];
   sc::int_t K = A.shape()[1];
 
-  T alpha = 1;
+  T alpha = 1.43;
   T beta = 0;
 
   sc::driver::CommandQueue queue = sc::driver::backend::queues::get(C.context(),0);
@@ -51,7 +51,7 @@ void test(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & c
     std::cout << " [Failure!]" << std::endl;\
   }\
   else\
-    std::cout << std::endl;
+    std::cout << std::endl;\
 
   if(C.context().backend()==sc::driver::OPENCL && interf==clBLAS)
   {
@@ -95,10 +95,10 @@ void test(T epsilon, simple_matrix_base<T> & cC, simple_matrix_base<T> const & c
 
   if(interf==CPP)
   {
-      RUN_TEST("C = A * B", C = dot(A,B))
-      RUN_TEST("C = A' * B", C = dot(trans(AT),B))
-      RUN_TEST("C = A * B'", C = dot(A,trans(BT)))
-      RUN_TEST("C = A' * B'", C = dot(trans(AT),trans(BT)))
+      RUN_TEST("C = A * B", C = alpha*dot(A,B) + beta*C)
+      RUN_TEST("C = A' * B", C = alpha*dot(AT.T,B) + beta*C)
+      RUN_TEST("C = A * B'", C = alpha*dot(A,BT.T) + beta*C)
+      RUN_TEST("C = A' * B'", C = alpha*dot(AT.T,BT.T) + beta*C)
   }
 
   if(failure_count>0)

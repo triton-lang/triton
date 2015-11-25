@@ -102,7 +102,6 @@ std::string ger::generate_impl(std::string const & suffix, math_expression const
   stream.dec_tab();
   stream << "}" << std::endl;
 
-
   return stream.str();
 }
 

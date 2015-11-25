@@ -72,9 +72,10 @@ public:
         {
             kernel_.setArg(current_arg_++, a->data());
             kernel_.setSizeArg(current_arg_++, a->start());
-            for(int_t i = 0 ; i < a->dim() ; i++)
+            for(int_t i = 0 ; i < a->dim() ; i++){
               if(a->shape()[i] > 1)
                 kernel_.setSizeArg(current_arg_++, a->stride()[i]);
+            }
         }
     }
 

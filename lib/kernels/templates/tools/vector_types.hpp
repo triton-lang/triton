@@ -55,7 +55,7 @@ inline std::string vstore(unsigned int simd_width, std::string const & dtype, st
           std::string stridestr = (stride=="1")?"":("*" + stride);
           std::string res;
           for(unsigned int s = 0 ; s < simd_width ; ++s)
-              res +=  (s>0?";(":"(") + ptr + ")[" + offset + " + " + tools::to_string(s) + stridestr + "] = " + access_vector_type(value, s);
+              res +=  (s>0?";(":"(") + ptr + ")[" + offset + "*" + tools::to_string(simd_width) + " + " + tools::to_string(s) + stridestr + "] = " + access_vector_type(value, s);
           return res;
         }
     }
