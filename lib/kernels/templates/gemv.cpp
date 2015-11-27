@@ -350,7 +350,6 @@ std::vector<int_t> gemv::input_sizes(math_expression const & expression) const
 void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
 {
   math_expression const & expression = control.x();
-  driver::Context const & context = expression.context();
 
   std::vector<int_t> MN = input_sizes(expression);
   std::vector<math_expression::node const *> dots;
@@ -366,10 +365,6 @@ void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program
   }
 
   //Kernel
-  std::vector< driver::Buffer > tmp;
-  std::vector< driver::Buffer > tmpidx;
-  unsigned int dtype_size = size_of(lhs_most(expression.tree(), expression.root()).lhs.dtype);
-
   std::string name[2] = {"prod", "reduce"};
   name[0] += suffix;
   name[1] += suffix;
@@ -388,24 +383,7 @@ void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program
     int_t N = MN[1];
     kernel.setSizeArg(n_arg++, M);
     kernel.setSizeArg(n_arg++, N);
-
-    //Temporary buffers
-    unsigned int i = 0;
-    unsigned int j = 0;
-    for (auto const & r : dots)
-    {
-      if (is_index_dot(r->op))
-      {
-        if (tmpidx.size() <= j)
-          tmpidx.push_back(driver::Buffer(context, p_.num_groups_0*M*4));
-        kernel.setArg(n_arg++, tmpidx[j]);
-        j++;
-      }
-      if (tmp.size() <= i)
-        tmp.push_back(driver::Buffer(context, p_.num_groups_0*M*dtype_size));
-      kernel.setArg(n_arg++, tmp[i]);
-      i++;
-    }
+    kernel.setArg(n_arg++, driver::backend::workspaces::get(queue)); //Temporary buffers
     set_arguments(expression, kernel, n_arg, binding_policy_);
   }
 
@@ -416,24 +394,15 @@ void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program
     control.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }
 
-gemv_n::gemv_n(gemv_parameters  const & parameters,
-                                           binding_policy_t binding_policy):
-  gemv(parameters, REDUCE_ROWS, binding_policy){}
+gemv_n::gemv_n(gemv_parameters  const & parameters,binding_policy_t binding_policy): gemv(parameters, REDUCE_ROWS, binding_policy){}
 
-gemv_n::gemv_n(unsigned int simd, unsigned int ls1, unsigned int ls2,
-                                           unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind):
-  gemv(gemv_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS, bind)
-{}
+gemv_n::gemv_n(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2,
+               fetching_policy_type fetch, binding_policy_t bind): gemv(gemv_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS, bind) {}
 
+gemv_t::gemv_t(gemv::parameters_type  const & parameters, binding_policy_t binding_policy): gemv(parameters, REDUCE_COLUMNS, binding_policy){}
 
-gemv_t::gemv_t(gemv::parameters_type  const & parameters,
-                                           binding_policy_t binding_policy):
-  gemv(parameters, REDUCE_COLUMNS, binding_policy){}
-
-gemv_t::gemv_t(unsigned int simd, unsigned int ls1, unsigned int ls2,
-                                           unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind):
-  gemv(gemv_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS, bind)
-{}
+gemv_t::gemv_t(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2,
+               fetching_policy_type fetch, binding_policy_t bind): gemv(gemv_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS, bind) {}
 
 
 }

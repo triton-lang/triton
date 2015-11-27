@@ -61,7 +61,9 @@ class Tuner:
             if level=='simple':
                 sizes = [(1536, 1536)]
             elif level=='intermediate':
-                sizes = [(1000,256), 
+                sizes = [(896,896),
+                         (1536,1536),
+                         (1000,256), 
                          (4096,256), 
                          (256, 1000), 
                          (256, 4096),
@@ -146,7 +148,6 @@ class Tuner:
             idx = len(X)
             nparams = len(profiles)
             tree, operands = tools.tree_of(operation, x, context)
-            retune = True
             if idx==0:
                 retune = True
                 predicted = None
