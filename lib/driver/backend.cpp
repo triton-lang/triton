@@ -1,4 +1,5 @@
 #include "isaac/driver/backend.h"
+#include "isaac/driver/buffer.h"
 #include "isaac/driver/context.h"
 #include "isaac/driver/command_queue.h"
 #include "isaac/driver/program_cache.h"
@@ -12,6 +13,26 @@ namespace isaac
 
 namespace driver
 {
+
+/*-----------------------------------*/
+//----------  Temporaries -----------*/
+/*-----------------------------------*/
+
+void backend::workspaces::release()
+{
+    for(auto & x: cache_)
+        delete x.second;
+    cache_.clear();
+}
+
+driver::Buffer & backend::workspaces::get(CommandQueue const & key)
+{
+    if(cache_.find(key)==cache_.end())
+        return *cache_.insert(std::make_pair(key, new Buffer(key.context(), SIZE))).first->second;
+    return *cache_.at(key);
+}
+
+std::map<CommandQueue, Buffer * > backend::workspaces::cache_;
 
 /*-----------------------------------*/
 //----------  Programs --------------*/
@@ -178,6 +199,7 @@ void backend::synchronize(Context const & context)
 void backend::release()
 {
     backend::programs::release();
+    backend::workspaces::release();
     backend::queues::release();
     backend::contexts::release();
 }

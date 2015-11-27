@@ -17,6 +17,7 @@ namespace isaac
 namespace driver
 {
 
+class Buffer;
 class CommandQueue;
 class Context;
 class Platform;
@@ -24,9 +25,19 @@ class ProgramCache;
 
 class ISAACAPI backend
 {
-private:
-
 public:
+  class ISAACAPI workspaces
+  {
+  public:
+      static const size_t SIZE = 1000000; //1MB of temporary workspace per queue
+      static void release();
+      static driver::Buffer & get(CommandQueue const & key);
+  private:
+      DISABLE_MSVC_WARNING_C4251
+      static std::map<CommandQueue, Buffer * > cache_;
+      RESTORE_MSVC_WARNING_C4251
+  };
+
   class ISAACAPI programs
   {
       friend class backend;

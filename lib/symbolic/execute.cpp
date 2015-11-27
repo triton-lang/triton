@@ -223,7 +223,6 @@ namespace isaac
     }
 
     /*-----Compute final expression-----*/
-//    std::cout << final_type << std::endl;
     profiles[std::make_pair(final_type, dtype)]->execute(execution_handler(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
   }
 

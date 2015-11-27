@@ -276,10 +276,6 @@ void export_core()
   .def(bp::self OP bp::self)\
   ADD_SCALAR_HANDLING(OP)
 
-  bp::class_<sc::math_expression>
-      ("math_expression_container", bp::init<sc::math_expression const &>())
-  ;
-
   bp::class_<sc::math_expression >("math_expression", bp::no_init)
       ADD_ARRAY_OPERATOR(+)
       ADD_ARRAY_OPERATOR(-)

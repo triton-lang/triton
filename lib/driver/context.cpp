@@ -61,7 +61,6 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
     default:
       throw;
   }
-  std::cout << "Shouldn't happen" << std::endl;
 }
 
 bool Context::operator==(Context const & other) const

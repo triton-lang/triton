@@ -318,31 +318,11 @@ void dot::enqueue(driver::CommandQueue & queue, driver::Program const & program,
   driver::NDRange local[2] = { driver::NDRange(p_.local_size_0), driver::NDRange(p_.local_size_0) };
 
   //Arguments
-  driver::Context const & context = x.context();
-  unsigned int dtype_size = size_of(lhs_most(x.tree(), x.root()).lhs.dtype);
   for (auto & kernel : kernels)
   {
     unsigned int n_arg = 0;
     kernel.setSizeArg(n_arg++, size);
-
-    //Temporary buffers
-    unsigned int i = 0;
-    unsigned int j = 0;
-    for (std::vector<math_expression::node const *>::const_iterator it = dots.begin(); it != dots.end(); ++it)
-    {
-      if (is_index_dot((*it)->op))
-      {
-        if (tmpidx_.size() <= j)
-          tmpidx_.push_back(driver::Buffer(context, p_.num_groups*4));
-        kernel.setArg(n_arg++, tmpidx_[j]);
-        j++;
-      }
-      if (tmp_.size() <= i)
-        tmp_.push_back(driver::Buffer(context, p_.num_groups*dtype_size));
-      kernel.setArg(n_arg++, tmp_[i]);
-      i++;
-    }
-
+    kernel.setArg(n_arg++, driver::backend::workspaces::get(queue));
     set_arguments(x, kernel, n_arg, binding_policy_);
   }
 

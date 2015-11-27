@@ -578,37 +578,42 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
   {
     using tools::align;
 
-      if(M==0 || N==0 || K==0)
-        return;
+    if(M==0 || N==0 || K==0)
+      return;
 
     std::string gemm_name = "gemm";
     std::string reduce_name = "reduce";
 
     gemm_name += suffix;
     reduce_name += suffix;
-    bind_independent binder;
-
-    array_base const * out = &C;
-    std::unique_ptr<array> tmp;
-    if(p_.depth > 1){
-      tmp.reset(new array(M, N, p_.depth, C.dtype(), C.context()));
-      out = tmp.get();
-    }
 
     driver::Kernel gemm(program, gemm_name.c_str());
     driver::NDRange local(p_.local_size_0, p_.local_size_1, 1);
-
     driver::NDRange global(align(align(M,p_.mS)/p_.mS, p_.local_size_0), align(align(N,p_.nS)/p_.nS, p_.local_size_1), p_.depth);
 
     unsigned int current_arg = 0;
+    bind_independent binder;
     set_arguments_functor helper(binder, current_arg, gemm);
+
+    driver::Buffer& workspace = driver::backend::workspaces::get(options.queue(C.context()));
     gemm.setSizeArg(current_arg++, M);
     gemm.setSizeArg(current_arg++, N);
     gemm.setSizeArg(current_arg++, K);
-    gemm.setArg(current_arg++, out->data());
-    gemm.setSizeArg(current_arg++, out->stride()[1]);
-    gemm.setSizeArg(current_arg++, out->start());
-    gemm.setSizeArg(current_arg++, out->stride()[0]);
+    if(p_.depth==1)
+    {
+        gemm.setArg(current_arg++,C.data());
+        gemm.setSizeArg(current_arg++, C.stride()[1]);
+        gemm.setSizeArg(current_arg++, C.start());
+        gemm.setSizeArg(current_arg++, C.stride()[0]);
+    }
+    else
+    {
+        gemm.setArg(current_arg++, workspace);
+        gemm.setSizeArg(current_arg++, M);
+        gemm.setSizeArg(current_arg++, 0);
+        gemm.setSizeArg(current_arg++, 1);
+    }
+
 
     helper.set_arguments(alpha.dtype(), alpha.values());
     gemm.setArg(current_arg++, A.data());
@@ -634,8 +639,8 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
       reduce.setSizeArg(current_arg++, M);
       reduce.setSizeArg(current_arg++, N);
       reduce.setSizeArg(current_arg++, p_.depth);
-      reduce.setArg(current_arg++, out->data());
-      reduce.setSizeArg(current_arg++, out->stride()[1]);
+      reduce.setArg(current_arg++, workspace);
+      reduce.setSizeArg(current_arg++, M);
       reduce.setArg(current_arg++, C.data());
       reduce.setSizeArg(current_arg++, C.stride()[1]);
       reduce.setSizeArg(current_arg++, C.start());

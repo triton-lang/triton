@@ -262,11 +262,16 @@ void bench(sc::numeric_type dtype, std::string operation)
     MNKs.push_back(std::make_tuple("Square2560",'N','T',2560,2560,2560));
 
     //Convolution
-    MNKs.push_back(std::make_tuple("ConvAlexNet1",'N','N',3025,96,363));
-    MNKs.push_back(std::make_tuple("ConvAlexNet2",'N','N',729,128,1200));
-    MNKs.push_back(std::make_tuple("ConvAlexNet3",'N','N',169,384,2304));
-    MNKs.push_back(std::make_tuple("ConvAlexNet4",'N','N',169,192,1728));
-    MNKs.push_back(std::make_tuple("ConvAlexNet5",'N','N',169,128,1728));
+//    MNKs.push_back(std::make_tuple("ConvAlexNet1",'N','N',3025,96,363));
+//    MNKs.push_back(std::make_tuple("ConvAlexNet2",'N','N',729,128,1200));
+//    MNKs.push_back(std::make_tuple("ConvAlexNet3",'N','N',169,384,2304));
+//    MNKs.push_back(std::make_tuple("ConvAlexNet4",'N','N',169,192,1728));
+//    MNKs.push_back(std::make_tuple("ConvAlexNet5",'N','N',169,128,1728));
+    MNKs.push_back(std::make_tuple("ConvAlexNet1",'N','N',3025,64,363));
+    MNKs.push_back(std::make_tuple("ConvAlexNet2",'N','N',729,192,1600));
+    MNKs.push_back(std::make_tuple("ConvAlexNet3",'N','N',169,384,1728));
+    MNKs.push_back(std::make_tuple("ConvAlexNet4",'N','N',169,256,3456));
+    MNKs.push_back(std::make_tuple("ConvAlexNet5",'N','N',169,128,2304));
 //    MNKs.push_back(std::make_tuple("ConvLeNet1,'N','N',576,20,25));
 //    MNKs.push_back(std::make_tuple("ConvLeNet2",'N','N',64,50,500));
 
