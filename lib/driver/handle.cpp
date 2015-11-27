@@ -9,27 +9,29 @@ namespace isaac
 namespace driver
 {
 
+
+
 //CUDA
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUcontext x) { cuda::check(dispatch::cuCtxDestroy(x)); }
+void Handle<CLType, CUType>::_delete(CUcontext x) { cuda::check_destruction(dispatch::cuCtxDestroy(x)); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUdeviceptr x) { cuda::check(dispatch::dispatch::cuMemFree(x)); }
+void Handle<CLType, CUType>::_delete(CUdeviceptr x) { cuda::check_destruction(dispatch::dispatch::cuMemFree(x)); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUstream x) { cuda::check(dispatch::cuStreamDestroy(x)); }
+void Handle<CLType, CUType>::_delete(CUstream x) { cuda::check_destruction(dispatch::cuStreamDestroy(x)); }
 
 template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(CUdevice) { }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUevent x) { cuda::check(dispatch::dispatch::cuEventDestroy(x)); }
+void Handle<CLType, CUType>::_delete(CUevent x) { cuda::check_destruction(dispatch::dispatch::cuEventDestroy(x)); }
 
 template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(CUfunction) { }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUmodule x) { cuda::check(dispatch::dispatch::cuModuleUnload(x)); }
+void Handle<CLType, CUType>::_delete(CUmodule x) { cuda::check_destruction(dispatch::dispatch::cuModuleUnload(x)); }
 
 template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(cu_event_t x) { _delete(x.first); _delete(x.second); }

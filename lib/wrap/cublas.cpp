@@ -30,8 +30,7 @@ extern "C"
     cublasStatus_t cublasDestroy_v2 (cublasHandle_t handle)
     {
         delete handle;
-        cublasShutdown();
-        return CUBLAS_STATUS_SUCCESS;
+        return cublasShutdown();
     }
 
     cublasStatus cublasInit()

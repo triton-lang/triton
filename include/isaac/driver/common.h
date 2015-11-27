@@ -118,6 +118,7 @@ namespace cuda
   }
 
 void check(CUresult);
+void check_destruction(CUresult);
 }
 
 
