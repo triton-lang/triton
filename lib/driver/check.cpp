@@ -97,6 +97,13 @@ void check(CUresult err)
     default                                        : throw unknown();
   }
 }
+
+void check_destruction(CUresult result)
+{
+    if(result!=CUDA_ERROR_DEINITIALIZED)
+        cuda::check(result);
+}
+
 }
 
 namespace ocl
