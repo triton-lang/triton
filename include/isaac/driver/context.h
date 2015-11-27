@@ -19,11 +19,17 @@ class ISAACAPI Context
   friend class Program;
   friend class CommandQueue;
   friend class Buffer;
-
   static std::string cache_path();
 
+  static CUdevice device(CUcontext)
+  {
+      CUdevice res;
+      cuda::check(dispatch::cuCtxGetDevice(&res));
+      return res;
+  }
+
 public:
-  explicit Context(CUcontext const & context, CUdevice const & device, bool take_ownership = true);
+  explicit Context(CUcontext const & context, bool take_ownership = true);
   explicit Context(cl_context const & context, bool take_ownership = true);
   explicit Context(Device const & device);
 

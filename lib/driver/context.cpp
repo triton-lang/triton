@@ -34,7 +34,9 @@ std::string Context::cache_path()
     return "";
 }
 
-Context::Context(CUcontext const & context, CUdevice const & device, bool take_ownership) : backend_(CUDA), device_(device, false), cache_path_(cache_path()), h_(backend_, take_ownership)
+
+
+Context::Context(CUcontext const & context, bool take_ownership) : backend_(CUDA), device_(device(context), false), cache_path_(cache_path()), h_(backend_, take_ownership)
 {
     h_.cu() = context;
 }
@@ -59,6 +61,7 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
     default:
       throw;
   }
+  std::cout << "Shouldn't happen" << std::endl;
 }
 
 bool Context::operator==(Context const & other) const
