@@ -111,7 +111,7 @@ void bench(sc::numeric_type dtype, std::string operation)
   std::cout << "#" << operation << " (" << metric[operation] << ")" << std::endl;
   std::cout << "\"N\"";
   std::cout << " \"ISAAC\"";
-  std::cout << " \"ISAAC (Best impl.)\"";
+//  std::cout << " \"ISAAC (Best impl.)\"";
 #ifdef BENCH_CLBLAS
   std::cout << " \"clBLAS\"";
 #endif
@@ -314,7 +314,7 @@ void bench(sc::numeric_type dtype, std::string operation)
         int_t lda = A.stride()[1], ldb = B.stride()[1], ldc = C.stride()[1];
     #endif
         BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
-        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
+//        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         if(C.context().backend()==sc::driver::OPENCL)
