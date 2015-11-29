@@ -18,8 +18,10 @@ std::string Context::cache_path()
 {
     //user-specified cache path
     std::string result = tools::getenv("ISAAC_CACHE_PATH");
-    if(!result.empty())
-        return result;
+    if(!result.empty()){
+        if(tools::mkpath(result)==0)
+            return result;
+    }
 
     //create in home
     result = tools::getenv("HOME");

@@ -1,7 +1,7 @@
 #include "isaac/array.h"
 #include "isaac/symbolic/execute.h"
 #ifdef BENCH_CLBLAS
-  #include "isaac/wrap/clBLAS.h"
+  #include "clBLAS.h"
 #endif
 #ifdef BENCH_CBLAS
   #include "cblas.h"
