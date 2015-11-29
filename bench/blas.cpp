@@ -262,34 +262,25 @@ void bench(sc::numeric_type dtype, std::string operation)
     MNKs.push_back(std::make_tuple("Square2560",'N','T',2560,2560,2560));
 
     //Convolution
-//    MNKs.push_back(std::make_tuple("ConvAlexNet1",'N','N',3025,96,363));
-//    MNKs.push_back(std::make_tuple("ConvAlexNet2",'N','N',729,128,1200));
-//    MNKs.push_back(std::make_tuple("ConvAlexNet3",'N','N',169,384,2304));
-//    MNKs.push_back(std::make_tuple("ConvAlexNet4",'N','N',169,192,1728));
-//    MNKs.push_back(std::make_tuple("ConvAlexNet5",'N','N',169,128,1728));
     MNKs.push_back(std::make_tuple("ConvAlexNet1",'N','N',3025,64,363));
     MNKs.push_back(std::make_tuple("ConvAlexNet2",'N','N',729,192,1600));
     MNKs.push_back(std::make_tuple("ConvAlexNet3",'N','N',169,384,1728));
     MNKs.push_back(std::make_tuple("ConvAlexNet4",'N','N',169,256,3456));
     MNKs.push_back(std::make_tuple("ConvAlexNet5",'N','N',169,128,2304));
-//    MNKs.push_back(std::make_tuple("ConvLeNet1,'N','N',576,20,25));
-//    MNKs.push_back(std::make_tuple("ConvLeNet2",'N','N',64,50,500));
 
     //Convolution Gradient-1
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-5]",'T','N',1728,128,169));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-4]",'T','N',1728,192,169));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-3]",'T','N',2304,384,169));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-2]",'T','N',1200,128,729));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [AlexNet-1]",'T','N',363,96,3025));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [LeNet-2]",'T','N',500,50,64));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-1 [LeNet-1]",'T','N',25,20,576));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet5-1]",'T','N',2304,256,169));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet4-1]",'T','N',3456,256,169));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet3-1]",'T','N',1728,384,169));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet2-1]",'T','N',1600,192,729));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet1-1]",'T','N',363,64,3025));
 
     //Convolution Gradient-2
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-5]",'N','T',169,1728,128));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-4]",'N','T',169,1728,192));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-3]",'N','T',169,2304,384));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [AlexNet-2]",'N','T',729,1200,128));
-//    MNKs.push_back(std::make_tuple("Convolution Gradient-2 [LeNet-2]",'N','T',64,500,50));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet5-2]",'N','T',169,2304,256));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet4-2]",'N','T',169,3456,256));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet3-2]",'N','T',169,1728,384));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet2-2]",'N','T',729,1600,192));
+    MNKs.push_back(std::make_tuple("BackConvAlexNet1-2]",'N','T',3025,363,64));
 
     //Covariance (e.g., ICA, 10minutes/100Hz)
     MNKs.push_back(std::make_tuple("ICA32",'N','T',32,32,60000));
