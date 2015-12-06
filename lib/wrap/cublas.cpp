@@ -200,7 +200,6 @@ extern "C"
                                    const TYPE_CU *B, int ldb, TYPE_CU beta, TYPE_CU *C,\
                                    int ldc)\
     {\
-        std::cout << transa << " " << transb << " " << m << " " << n << " " << k << std::endl;\
         if(k==1 && m>1 && n>1){\
             sc::array dA((sc::int_t)m, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)A, false), 0, transa=='N'?1:lda);\
             sc::array dB((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)B, false), 0, transb=='T'?1:ldb);\
