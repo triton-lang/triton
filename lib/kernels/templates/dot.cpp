@@ -70,22 +70,30 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
   driver::backend_type backend = device.backend();
   std::string _size_t = size_type(device);
 
-  std::string arguments = _size_t + " N, ";
-  for (unsigned int k = 0; k < N; ++k)
-  {
-    std::string numeric_type = to_string(lhs_most(exprs[k]->math_expression().tree(),  exprs[k]->math_expression().root()).lhs.dtype);
-    if (exprs[k]->is_index_dot())
-    {
-      arguments += exprs[k]->process(Global(backend).get() + " unsigned int* #name_temp, ");
-      arguments += exprs[k]->process(Global(backend).get() + " " + numeric_type + "* #name_temp_value, ");
-    }
-    else
-      arguments += exprs[k]->process(Global(backend).get() + " " + numeric_type + "* #name_temp, ");
-  }
-
   std::string name[2] = {"prod", "reduce"};
   name[0] += suffix;
   name[1] += suffix;
+
+  auto unroll_tmp = [&]()
+  {
+      unsigned int offset = 0;
+      for (unsigned int k = 0; k < N; ++k)
+      {
+        numeric_type dtype = lhs_most(exprs[k]->math_expression().tree(),  exprs[k]->math_expression().root()).lhs.dtype;
+        std::string sdtype = to_string(dtype);
+        if (exprs[k]->is_index_dot())
+        {
+          stream << exprs[k]->process("uint* #name_temp = (uint*)(tmp + " + tools::to_string(offset) + ");");
+          offset += 4*p_.num_groups;
+          stream << exprs[k]->process(sdtype + "* #name_temp_value = (" + sdtype + "*)(tmp + " + tools::to_string(offset) + ");");
+          offset += size_of(dtype)*p_.num_groups;
+        }
+        else{
+          stream << exprs[k]->process(sdtype + "* #name_temp = (" + sdtype + "*)(tmp + " + tools::to_string(offset) + ");");
+          offset += size_of(dtype)*p_.num_groups;
+        }
+      }
+  };
 
   /* ------------------------
    * First Kernel
@@ -98,9 +106,11 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl; break;
   }
 
-  stream << KernelPrefix(backend) << " void " << name[0] << "(" << arguments << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[0] << "(" << _size_t << " N, char* tmp," << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
+
+  unroll_tmp();
 
   stream << "unsigned int lid = " <<LocalIdx0(backend) << ";" << std::endl;
   stream << "unsigned int gid = " <<GlobalIdx0(backend) << ";" << std::endl;
@@ -206,9 +216,11 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
 
 
 
-  stream << KernelPrefix(backend) << " void " << name[1] << "(" << arguments << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[1] << "(" << _size_t << " N, char* tmp, " << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
+
+  unroll_tmp();
 
   stream << "unsigned int lid = " <<LocalIdx0(backend) << ";" << std::endl;
   stream << "unsigned int lsize = " <<LocalSize0(backend) << ";" << std::endl;
