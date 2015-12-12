@@ -82,7 +82,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
   }
 
-  stream << KernelPrefix(backend) << " void " << name[0] << "(" << _size_t << " M, " << _size_t << " N, char* tmp, " << generate_arguments("#scalartype", device, mapping, expression) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[0] << "(" << _size_t << " M, " << _size_t << " N, " << Global(backend) << " char* tmp, " << generate_arguments("#scalartype", device, mapping, expression) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -249,7 +249,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   if(backend==driver::OPENCL)
     stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
 
-  stream << KernelPrefix(backend) << " void " << name[1] << "(" << _size_t << " M, " << _size_t << " N, char* tmp, " << generate_arguments("#scalartype", device, mapping, expression) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[1] << "(" << _size_t << " M, " << _size_t << " N , " << Global(backend) << " char* tmp, " << generate_arguments("#scalartype", device, mapping, expression) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 

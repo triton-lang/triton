@@ -106,7 +106,7 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl; break;
   }
 
-  stream << KernelPrefix(backend) << " void " << name[0] << "(" << _size_t << " N, char* tmp," << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[0] << "(" << _size_t << " N, " << Global(backend) << " char* tmp," << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -216,7 +216,7 @@ std::string dot::generate_impl(std::string const & suffix, math_expression const
 
 
 
-  stream << KernelPrefix(backend) << " void " << name[1] << "(" << _size_t << " N, char* tmp, " << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[1] << "(" << _size_t << " N, " << Global(backend) << " char* tmp, " << generate_arguments("#scalartype", device, mapping, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
