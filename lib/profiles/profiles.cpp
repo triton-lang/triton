@@ -9,11 +9,11 @@
 #include "isaac/driver/program_cache.h"
 #include "isaac/profiles/profiles.h"
 #include "isaac/kernels/parse.h"
-#include "isaac/kernels/templates/axpy.h"
-#include "isaac/kernels/templates/dot.h"
-#include "isaac/kernels/templates/ger.h"
-#include "isaac/kernels/templates/gemv.h"
-#include "isaac/kernels/templates/gemm.h"
+#include "isaac/kernels/templates/elementwise_1d.h"
+#include "isaac/kernels/templates/reduce_1d.h"
+#include "isaac/kernels/templates/elementwise_2d.h"
+#include "isaac/kernels/templates/reduce_2d.h"
+#include "isaac/kernels/templates/matrix_product.h"
 #include "isaac/exception/operation_not_supported.h"
 
 
@@ -134,24 +134,24 @@ profiles::value_type::templates_container const & profiles::value_type::template
 std::shared_ptr<templates::base> profiles::create(std::string const & template_name, std::vector<int> const & x)
 {
   templates::fetching_policy_type fetch[] = {templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_GLOBAL_STRIDED, templates::FETCH_FROM_GLOBAL_CONTIGUOUS};
-  if(template_name=="axpy")
-    return std::shared_ptr<templates::base>(new templates::axpy(x[0], x[1], x[2], fetch[x[3]]));
-  else if(template_name=="dot")
-    return std::shared_ptr<templates::base>(new templates::dot(x[0], x[1], x[2], fetch[x[3]]));
-  else if(template_name=="ger")
-    return std::shared_ptr<templates::base>(new templates::ger(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
-  else if(template_name.find("gemv_n")!=std::string::npos)
-    return std::shared_ptr<templates::base>(new templates::gemv_n(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
-  else if(template_name.find("gemv_t")!=std::string::npos)
-    return std::shared_ptr<templates::base>(new templates::gemv_t(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
-  else if(template_name.find("gemm_nn")!=std::string::npos)
-    return std::shared_ptr<templates::base>(new templates::gemm_nn(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], fetch[x[8]], fetch[x[9]], x[10], x[11]));
-  else if(template_name.find("gemm_tn")!=std::string::npos)
-    return std::shared_ptr<templates::base>(new templates::gemm_tn(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], fetch[x[8]], fetch[x[9]], x[10], x[11]));
-  else if(template_name.find("gemm_nt")!=std::string::npos)
-    return std::shared_ptr<templates::base>(new templates::gemm_nt(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], fetch[x[8]], fetch[x[9]], x[10], x[11]));
-  else if(template_name.find("gemm_tt")!=std::string::npos)
-    return std::shared_ptr<templates::base>(new templates::gemm_tt(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], fetch[x[8]], fetch[x[9]], x[10], x[11]));
+  if(template_name=="elementwise_1d")
+    return std::shared_ptr<templates::base>(new templates::elementwise_1d(x[0], x[1], x[2], fetch[x[3]]));
+  else if(template_name=="reduce_1d")
+    return std::shared_ptr<templates::base>(new templates::reduce_1d(x[0], x[1], x[2], fetch[x[3]]));
+  else if(template_name=="elementwise_2d")
+    return std::shared_ptr<templates::base>(new templates::elementwise_2d(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
+  else if(template_name.find("reduce_2d_n")!=std::string::npos)
+    return std::shared_ptr<templates::base>(new templates::reduce_2d_n(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
+  else if(template_name.find("reduce_2d_t")!=std::string::npos)
+    return std::shared_ptr<templates::base>(new templates::reduce_2d_t(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
+  else if(template_name.find("matrix_product_nn")!=std::string::npos)
+    return std::shared_ptr<templates::base>(new templates::matrix_product_nn(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], fetch[x[8]], fetch[x[9]], x[10], x[11]));
+  else if(template_name.find("matrix_product_tn")!=std::string::npos)
+    return std::shared_ptr<templates::base>(new templates::matrix_product_tn(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], fetch[x[8]], fetch[x[9]], x[10], x[11]));
+  else if(template_name.find("matrix_product_nt")!=std::string::npos)
+    return std::shared_ptr<templates::base>(new templates::matrix_product_nt(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], fetch[x[8]], fetch[x[9]], x[10], x[11]));
+  else if(template_name.find("matrix_product_tt")!=std::string::npos)
+    return std::shared_ptr<templates::base>(new templates::matrix_product_tt(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], fetch[x[8]], fetch[x[9]], x[10], x[11]));
   else
     throw std::invalid_argument("Invalid expression: " + template_name);
 }
@@ -163,7 +163,7 @@ void profiles::import(std::string const & str, driver::CommandQueue const & queu
   rapidjson::Document document;
   document.Parse<0>(str.c_str());
   //Deserialize
-  std::vector<std::string> operations = {"axpy", "dot", "ger", "gemv_n", "gemv_t", "gemm_nn", "gemm_tn", "gemm_nt", "gemm_tt"};
+  std::vector<std::string> operations = {"elementwise_1d", "reduce_1d", "elementwise_2d", "reduce_2d_n", "reduce_2d_t", "matrix_product_nn", "matrix_product_tn", "matrix_product_nt", "matrix_product_tt"};
   std::vector<std::string> dtype = {"float32", "float64"};
   for(auto & operation : operations)
   {
@@ -265,15 +265,15 @@ std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::ba
   numeric_type types[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
   for(auto DTYPE : types)
   {
-    res[std::make_pair(AXPY_TYPE, DTYPE)] = ptr_t (new templates::axpy(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(DOT_TYPE, DTYPE)] = ptr_t(new templates::dot(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GER_TYPE, DTYPE)] = ptr_t(new templates::ger(1,128,1,16,32,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GEMV_N_TYPE, DTYPE)] = ptr_t(new templates::gemv_n(1, 8, 8, 4, 16, templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GEMV_T_TYPE, DTYPE)] = ptr_t(new templates::gemv_t(1, 8, 8, 64, 8, templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GEMM_NN_TYPE, DTYPE)] = ptr_t(new templates::gemm_nn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(GEMM_TN_TYPE, DTYPE)] = ptr_t(new templates::gemm_tn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(GEMM_NT_TYPE, DTYPE)] = ptr_t(new templates::gemm_nt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(GEMM_TT_TYPE, DTYPE)] = ptr_t(new templates::gemm_tt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(AXPY_TYPE, DTYPE)] = ptr_t (new templates::elementwise_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(DOT_TYPE, DTYPE)] = ptr_t(new templates::reduce_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GER_TYPE, DTYPE)] = ptr_t(new templates::elementwise_2d(1,128,1,16,32,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GEMV_N_TYPE, DTYPE)] = ptr_t(new templates::reduce_2d_n(1, 8, 8, 4, 16, templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GEMV_T_TYPE, DTYPE)] = ptr_t(new templates::reduce_2d_t(1, 8, 8, 64, 8, templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GEMM_NN_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_nn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(GEMM_TN_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_tn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(GEMM_NT_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_nt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(GEMM_TT_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_tt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
   }
   return res;
 }

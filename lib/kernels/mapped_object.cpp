@@ -117,23 +117,23 @@ std::string binary_leaf::evaluate_recursive(leaf_t leaf, std::map<std::string, s
 }
 
 
-mapped_gemm::mapped_gemm(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "gemm"), binary_leaf(info) { }
+mapped_matrix_product::mapped_matrix_product(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_product"), binary_leaf(info) { }
 
 //
-mapped_dot::mapped_dot(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key) :
+mapped_reduce::mapped_reduce(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key) :
   mapped_object(scalartype, id, type_key), binary_leaf(info)
 { }
 
-size_t mapped_dot::root_idx() const
+size_t mapped_reduce::root_idx() const
 { return info_.root_idx; }
 
-isaac::math_expression const & mapped_dot::math_expression() const
+isaac::math_expression const & mapped_reduce::math_expression() const
 { return *info_.math_expression; }
 
-math_expression::node mapped_dot::root_node() const
+math_expression::node mapped_reduce::root_node() const
 { return math_expression().tree()[root_idx()]; }
 
-bool mapped_dot::is_index_dot() const
+bool mapped_reduce::is_index_reduction() const
 {
   op_element const & op = root_op();
   return op.type==OPERATOR_ELEMENT_ARGFMAX_TYPE
@@ -142,17 +142,17 @@ bool mapped_dot::is_index_dot() const
       || op.type==OPERATOR_ELEMENT_ARGMIN_TYPE;
 }
 
-op_element mapped_dot::root_op() const
+op_element mapped_reduce::root_op() const
 {
     return info_.math_expression->tree()[info_.root_idx].op;
 }
 
 
 //
-mapped_scalar_dot::mapped_scalar_dot(std::string const & scalartype, unsigned int id, node_info info) : mapped_dot(scalartype, id, info, "scalar_dot"){ }
+mapped_reduce_1d::mapped_reduce_1d(std::string const & scalartype, unsigned int id, node_info info) : mapped_reduce(scalartype, id, info, "scalar_reduce_1d"){ }
 
 //
-mapped_gemv::mapped_gemv(std::string const & scalartype, unsigned int id, node_info info) : mapped_dot(scalartype, id, info, "gemv") { }
+mapped_reduce_2d::mapped_reduce_2d(std::string const & scalartype, unsigned int id, node_info info) : mapped_reduce(scalartype, id, info, "reduce_2d") { }
 
 //
 void mapped_host_scalar::preprocess(std::string & str) const

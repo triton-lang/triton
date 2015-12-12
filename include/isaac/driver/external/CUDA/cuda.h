@@ -200,7 +200,7 @@ extern "C" {
 
 /**
  * CUDA device pointer
- * CUdeviceptr is defined as an unsigned integer type whose size matches the size of a pointer on the target platform.
+ * CUdeviceptr is defined as an unsigned inteelementwise_2d type whose size matches the size of a pointer on the target platform.
  */ 
 #if __CUDA_API_VERSION >= 3020
 
@@ -337,12 +337,12 @@ typedef enum CUoccupancy_flags_enum {
  * Array formats
  */
 typedef enum CUarray_format_enum {
-    CU_AD_FORMAT_UNSIGNED_INT8  = 0x01, /**< Unsigned 8-bit integers */
-    CU_AD_FORMAT_UNSIGNED_INT16 = 0x02, /**< Unsigned 16-bit integers */
-    CU_AD_FORMAT_UNSIGNED_INT32 = 0x03, /**< Unsigned 32-bit integers */
-    CU_AD_FORMAT_SIGNED_INT8    = 0x08, /**< Signed 8-bit integers */
-    CU_AD_FORMAT_SIGNED_INT16   = 0x09, /**< Signed 16-bit integers */
-    CU_AD_FORMAT_SIGNED_INT32   = 0x0a, /**< Signed 32-bit integers */
+    CU_AD_FORMAT_UNSIGNED_INT8  = 0x01, /**< Unsigned 8-bit inteelementwise_2ds */
+    CU_AD_FORMAT_UNSIGNED_INT16 = 0x02, /**< Unsigned 16-bit inteelementwise_2ds */
+    CU_AD_FORMAT_UNSIGNED_INT32 = 0x03, /**< Unsigned 32-bit inteelementwise_2ds */
+    CU_AD_FORMAT_SIGNED_INT8    = 0x08, /**< Signed 8-bit inteelementwise_2ds */
+    CU_AD_FORMAT_SIGNED_INT16   = 0x09, /**< Signed 16-bit inteelementwise_2ds */
+    CU_AD_FORMAT_SIGNED_INT32   = 0x0a, /**< Signed 32-bit inteelementwise_2ds */
     CU_AD_FORMAT_HALF           = 0x10, /**< 16-bit floating point */
     CU_AD_FORMAT_FLOAT          = 0x20  /**< 32-bit floating point */
 } CUarray_format;
@@ -558,8 +558,8 @@ typedef enum CUfunction_attribute_enum {
  */
 typedef enum CUfunc_cache_enum {
     CU_FUNC_CACHE_PREFER_NONE    = 0x00, /**< no preference for shared memory or L1 (default) */
-    CU_FUNC_CACHE_PREFER_SHARED  = 0x01, /**< prefer larger shared memory and smaller L1 cache */
-    CU_FUNC_CACHE_PREFER_L1      = 0x02, /**< prefer larger L1 cache and smaller shared memory */
+    CU_FUNC_CACHE_PREFER_SHARED  = 0x01, /**< prefer larelementwise_2d shared memory and smaller L1 cache */
+    CU_FUNC_CACHE_PREFER_L1      = 0x02, /**< prefer larelementwise_2d L1 cache and smaller shared memory */
     CU_FUNC_CACHE_PREFER_EQUAL   = 0x03  /**< prefer equal sized L1 cache and shared memory */
 } CUfunc_cache;
 
@@ -909,7 +909,7 @@ typedef enum cudaError_enum {
 
     /**
      * \deprecated
-     * This error return is deprecated as of CUDA 5.0. It is no longer an error
+     * This error return is deprecated as of CUDA 5.0. It is no lonelementwise_2d an error
      * to attempt to enable/disable the profiling via ::cuProfilerStart or
      * ::cuProfilerStop without initialization.
      */
@@ -917,14 +917,14 @@ typedef enum cudaError_enum {
 
     /**
      * \deprecated
-     * This error return is deprecated as of CUDA 5.0. It is no longer an error
+     * This error return is deprecated as of CUDA 5.0. It is no lonelementwise_2d an error
      * to call cuProfilerStart() when profiling is already enabled.
      */
     CUDA_ERROR_PROFILER_ALREADY_STARTED       = 7,
 
     /**
      * \deprecated
-     * This error return is deprecated as of CUDA 5.0. It is no longer an error
+     * This error return is deprecated as of CUDA 5.0. It is no lonelementwise_2d an error
      * to call cuProfilerStop() when profiling is already disabled.
      */
     CUDA_ERROR_PROFILER_ALREADY_STOPPED       = 8,
@@ -962,7 +962,7 @@ typedef enum cudaError_enum {
      * This indicated that the context being supplied as a parameter to the
      * API call was already the active context.
      * \deprecated
-     * This error return is deprecated as of CUDA 3.2. It is no longer an
+     * This error return is deprecated as of CUDA 3.2. It is no lonelementwise_2d an
      * error to attempt to push the active context via ::cuCtxPushCurrent().
      */
     CUDA_ERROR_CONTEXT_ALREADY_CURRENT        = 202,
@@ -1163,7 +1163,7 @@ typedef enum cudaError_enum {
     CUDA_ERROR_CONTEXT_IS_DESTROYED           = 709,
 
     /**
-     * A device-side assert triggered during kernel execution. The context
+     * A device-side assert trigelementwise_2ded during kernel execution. The context
      * cannot be used anymore, and must be destroyed. All existing device 
      * memory allocations from this context are invalid and must be 
      * reconstructed if the program is to continue using CUDA.
@@ -1499,24 +1499,24 @@ typedef struct CUDA_TEXTURE_DESC_st {
 typedef enum CUresourceViewFormat_enum
 {
     CU_RES_VIEW_FORMAT_NONE          = 0x00, /**< No resource view format (use underlying resource format) */
-    CU_RES_VIEW_FORMAT_UINT_1X8      = 0x01, /**< 1 channel unsigned 8-bit integers */
-    CU_RES_VIEW_FORMAT_UINT_2X8      = 0x02, /**< 2 channel unsigned 8-bit integers */
-    CU_RES_VIEW_FORMAT_UINT_4X8      = 0x03, /**< 4 channel unsigned 8-bit integers */
-    CU_RES_VIEW_FORMAT_SINT_1X8      = 0x04, /**< 1 channel signed 8-bit integers */
-    CU_RES_VIEW_FORMAT_SINT_2X8      = 0x05, /**< 2 channel signed 8-bit integers */
-    CU_RES_VIEW_FORMAT_SINT_4X8      = 0x06, /**< 4 channel signed 8-bit integers */
-    CU_RES_VIEW_FORMAT_UINT_1X16     = 0x07, /**< 1 channel unsigned 16-bit integers */
-    CU_RES_VIEW_FORMAT_UINT_2X16     = 0x08, /**< 2 channel unsigned 16-bit integers */
-    CU_RES_VIEW_FORMAT_UINT_4X16     = 0x09, /**< 4 channel unsigned 16-bit integers */
-    CU_RES_VIEW_FORMAT_SINT_1X16     = 0x0a, /**< 1 channel signed 16-bit integers */
-    CU_RES_VIEW_FORMAT_SINT_2X16     = 0x0b, /**< 2 channel signed 16-bit integers */
-    CU_RES_VIEW_FORMAT_SINT_4X16     = 0x0c, /**< 4 channel signed 16-bit integers */
-    CU_RES_VIEW_FORMAT_UINT_1X32     = 0x0d, /**< 1 channel unsigned 32-bit integers */
-    CU_RES_VIEW_FORMAT_UINT_2X32     = 0x0e, /**< 2 channel unsigned 32-bit integers */
-    CU_RES_VIEW_FORMAT_UINT_4X32     = 0x0f, /**< 4 channel unsigned 32-bit integers */
-    CU_RES_VIEW_FORMAT_SINT_1X32     = 0x10, /**< 1 channel signed 32-bit integers */
-    CU_RES_VIEW_FORMAT_SINT_2X32     = 0x11, /**< 2 channel signed 32-bit integers */
-    CU_RES_VIEW_FORMAT_SINT_4X32     = 0x12, /**< 4 channel signed 32-bit integers */
+    CU_RES_VIEW_FORMAT_UINT_1X8      = 0x01, /**< 1 channel unsigned 8-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_UINT_2X8      = 0x02, /**< 2 channel unsigned 8-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_UINT_4X8      = 0x03, /**< 4 channel unsigned 8-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_SINT_1X8      = 0x04, /**< 1 channel signed 8-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_SINT_2X8      = 0x05, /**< 2 channel signed 8-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_SINT_4X8      = 0x06, /**< 4 channel signed 8-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_UINT_1X16     = 0x07, /**< 1 channel unsigned 16-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_UINT_2X16     = 0x08, /**< 2 channel unsigned 16-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_UINT_4X16     = 0x09, /**< 4 channel unsigned 16-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_SINT_1X16     = 0x0a, /**< 1 channel signed 16-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_SINT_2X16     = 0x0b, /**< 2 channel signed 16-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_SINT_4X16     = 0x0c, /**< 4 channel signed 16-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_UINT_1X32     = 0x0d, /**< 1 channel unsigned 32-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_UINT_2X32     = 0x0e, /**< 2 channel unsigned 32-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_UINT_4X32     = 0x0f, /**< 4 channel unsigned 32-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_SINT_1X32     = 0x10, /**< 1 channel signed 32-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_SINT_2X32     = 0x11, /**< 2 channel signed 32-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_SINT_4X32     = 0x12, /**< 4 channel signed 32-bit inteelementwise_2ds */
     CU_RES_VIEW_FORMAT_FLOAT_1X16    = 0x13, /**< 1 channel 16-bit floating point */
     CU_RES_VIEW_FORMAT_FLOAT_2X16    = 0x14, /**< 2 channel 16-bit floating point */
     CU_RES_VIEW_FORMAT_FLOAT_4X16    = 0x15, /**< 4 channel 16-bit floating point */
@@ -1606,7 +1606,7 @@ typedef struct CUDA_POINTER_ATTRIBUTE_P2P_TOKENS_st {
 #define CU_TRSA_OVERRIDE_FORMAT 0x01
 
 /**
- * Read the texture as integers rather than promoting the values to floats
+ * Read the texture as inteelementwise_2ds rather than promoting the values to floats
  * in the range [0,1].
  * Flag for ::cuTexRefSetFlags()
  */
@@ -1901,7 +1901,7 @@ CUresult CUDAAPI cuDeviceTotalMem(size_t *bytes, CUdevice dev);
 /**
  * \brief Returns information about the device
  *
- * Returns in \p *pi the integer value of the attribute \p attrib on device
+ * Returns in \p *pi the inteelementwise_2d value of the attribute \p attrib on device
  * \p dev. The supported attributes are:
  * - ::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK: Maximum number of threads per
  *   block;
@@ -2819,7 +2819,7 @@ CUresult CUDAAPI cuCtxSynchronize(void);
  *   violated. This limit can be set smaller than the default or up the maximum
  *   launch depth of 24. When setting this limit, keep in mind that additional
  *   levels of sync depth require the driver to reserve large amounts of device
- *   memory which can no longer be used for user allocations. If these 
+ *   memory which can no lonelementwise_2d be used for user allocations. If these 
  *   reservations of device memory fail, ::cuCtxSetLimit will return 
  *   ::CUDA_ERROR_OUT_OF_MEMORY, and the limit can be reset to a lower value.
  *   This limit is only applicable to devices of compute capability 3.5 and
@@ -2836,7 +2836,7 @@ CUresult CUDAAPI cuCtxSynchronize(void);
  *   the default (2048 launches) are needed for a module using the device
  *   runtime, this limit can be increased. Keep in mind that being able to
  *   sustain additional pending launches will require the driver to reserve
- *   larger amounts of device memory upfront which can no longer be used for
+ *   larelementwise_2d amounts of device memory upfront which can no lonelementwise_2d be used for
  *   allocations. If these reservations fail, ::cuCtxSetLimit will return
  *   ::CUDA_ERROR_OUT_OF_MEMORY, and the limit can be reset to a lower value.
  *   This limit is only applicable to devices of compute capability 3.5 and
@@ -2921,8 +2921,8 @@ CUresult CUDAAPI cuCtxGetLimit(size_t *pvalue, CUlimit limit);
  *
  * The supported cache configurations are:
  * - ::CU_FUNC_CACHE_PREFER_NONE: no preference for shared memory or L1 (default)
- * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larger shared memory and smaller L1 cache
- * - ::CU_FUNC_CACHE_PREFER_L1: prefer larger L1 cache and smaller shared memory
+ * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larelementwise_2d shared memory and smaller L1 cache
+ * - ::CU_FUNC_CACHE_PREFER_L1: prefer larelementwise_2d L1 cache and smaller shared memory
  * - ::CU_FUNC_CACHE_PREFER_EQUAL: prefer equal sized L1 cache and shared memory
  *
  * \param pconfig - Returned cache configuration
@@ -2971,8 +2971,8 @@ CUresult CUDAAPI cuCtxGetCacheConfig(CUfunc_cache *pconfig);
  *
  * The supported cache configurations are:
  * - ::CU_FUNC_CACHE_PREFER_NONE: no preference for shared memory or L1 (default)
- * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larger shared memory and smaller L1 cache
- * - ::CU_FUNC_CACHE_PREFER_L1: prefer larger L1 cache and smaller shared memory
+ * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larelementwise_2d shared memory and smaller L1 cache
+ * - ::CU_FUNC_CACHE_PREFER_L1: prefer larelementwise_2d L1 cache and smaller shared memory
  * - ::CU_FUNC_CACHE_PREFER_EQUAL: prefer equal sized L1 cache and shared memory
  *
  * \param config - Requested cache configuration
@@ -3054,7 +3054,7 @@ CUresult CUDAAPI cuCtxGetSharedMemConfig(CUsharedconfig *pConfig);
  *
  * Changing the shared memory bank size will not increase shared memory usage
  * or affect occupancy of kernels, but may have major effects on performance. 
- * Larger bank sizes will allow for greater potential bandwidth to shared memory,
+ * Larelementwise_2d bank sizes will allow for greater potential bandwidth to shared memory,
  * but will change what kinds of accesses to shared memory will result in bank 
  * conflicts.
  *
@@ -7358,7 +7358,7 @@ CUresult CUDAAPI cuPointerGetAttribute(void *data, CUpointer_attribute attribute
  *      See further documentation in the section titled "API synchronization behavior"
  *      to learn more about cases when synchronous memory operations can
  *      exhibit asynchronous behavior.
- *      \p value will be considered as a pointer to an unsigned integer to which this attribute is to be set.
+ *      \p value will be considered as a pointer to an unsigned inteelementwise_2d to which this attribute is to be set.
  *
  * \param value     - Pointer to memory containing the value to be set
  * \param attribute - Pointer attribute to set
@@ -7534,7 +7534,7 @@ CUresult CUDAAPI cuStreamCreateWithPriority(CUstream *phStream, unsigned int fla
  * See ::cuStreamCreateWithPriority for details about priority clamping.
  *
  * \param hStream    - Handle to the stream to be queried
- * \param priority   - Pointer to a signed integer in which the stream's priority is returned
+ * \param priority   - Pointer to a signed inteelementwise_2d in which the stream's priority is returned
  * \return
  * ::CUDA_SUCCESS,
  * ::CUDA_ERROR_DEINITIALIZED,
@@ -7560,7 +7560,7 @@ CUresult CUDAAPI cuStreamGetPriority(CUstream hStream, int *priority);
  * and return the flags in \p flags.
  *
  * \param hStream    - Handle to the stream to be queried
- * \param flags      - Pointer to an unsigned integer in which the stream's flags are returned
+ * \param flags      - Pointer to an unsigned inteelementwise_2d in which the stream's flags are returned
  *                     The value returned in \p flags is a logical 'OR' of all flags that
  *                     were used while creating this stream. See ::cuStreamCreate for the list
  *                     of valid flags
@@ -8104,7 +8104,7 @@ CUresult CUDAAPI cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUeven
 /**
  * \brief Returns information about a function
  *
- * Returns in \p *pi the integer value of the attribute \p attrib on the kernel
+ * Returns in \p *pi the inteelementwise_2d value of the attribute \p attrib on the kernel
  * given by \p hfunc. The supported attributes are:
  * - ::CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK: The maximum number of threads
  *   per block, beyond which a launch of the function would fail. This number
@@ -8175,8 +8175,8 @@ CUresult CUDAAPI cuFuncGetAttribute(int *pi, CUfunction_attribute attrib, CUfunc
  *
  * The supported cache configurations are:
  * - ::CU_FUNC_CACHE_PREFER_NONE: no preference for shared memory or L1 (default)
- * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larger shared memory and smaller L1 cache
- * - ::CU_FUNC_CACHE_PREFER_L1: prefer larger L1 cache and smaller shared memory
+ * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larelementwise_2d shared memory and smaller L1 cache
+ * - ::CU_FUNC_CACHE_PREFER_L1: prefer larelementwise_2d L1 cache and smaller shared memory
  * - ::CU_FUNC_CACHE_PREFER_EQUAL: prefer equal sized L1 cache and shared memory
  *
  * \param hfunc  - Kernel to configure cache for
@@ -8215,7 +8215,7 @@ CUresult CUDAAPI cuFuncSetCacheConfig(CUfunction hfunc, CUfunc_cache config);
  *
  * Changing the shared memory bank size will not increase shared memory usage
  * or affect occupancy of kernels, but may have major effects on performance. 
- * Larger bank sizes will allow for greater potential bandwidth to shared memory,
+ * Larelementwise_2d bank sizes will allow for greater potential bandwidth to shared memory,
  * but will change what kinds of accesses to shared memory will result in bank 
  * conflicts.
  *
@@ -8491,11 +8491,11 @@ CUresult CUDAAPI cuFuncSetSharedSize(CUfunction hfunc, unsigned int bytes);
 CUresult CUDAAPI cuParamSetSize(CUfunction hfunc, unsigned int numbytes);
 
 /**
- * \brief Adds an integer parameter to the function's argument list
+ * \brief Adds an inteelementwise_2d parameter to the function's argument list
  *
  * \deprecated
  *
- * Sets an integer parameter that will be specified the next time the
+ * Sets an inteelementwise_2d parameter that will be specified the next time the
  * kernel corresponding to \p hfunc will be invoked. \p offset is a byte offset.
  *
  * \param hfunc  - Kernel to add parameter to
@@ -9299,8 +9299,8 @@ CUresult CUDAAPI cuTexRefSetMaxAnisotropy(CUtexref hTexRef, unsigned int maxAnis
  * returned through the texture reference \p hTexRef. The valid flags are:
  *
  * - ::CU_TRSF_READ_AS_INTEGER, which suppresses the default behavior of
- *   having the texture promote integer data to floating point data in the
- *   range [0, 1]. Note that texture with 32-bit integer format
+ *   having the texture promote inteelementwise_2d data to floating point data in the
+ *   range [0, 1]. Note that texture with 32-bit inteelementwise_2d format
  *   would not be promoted, regardless of whether or not this
  *   flag is specified;
  * - ::CU_TRSF_NORMALIZED_COORDINATES, which suppresses the 
@@ -9859,8 +9859,8 @@ CUresult CUDAAPI cuSurfRefGetArray(CUarray *phArray, CUsurfref hSurfRef);
  *   This is ignored if ::CUDA_RESOURCE_DESC::resType is ::CU_RESOURCE_TYPE_LINEAR.
  *
  * - ::CUDA_TEXTURE_DESC::flags can be any combination of the following:
- *   - ::CU_TRSF_READ_AS_INTEGER, which suppresses the default behavior of having the texture promote integer data to floating point data in the
- *     range [0, 1]. Note that texture with 32-bit integer format would not be promoted, regardless of whether or not this flag is specified.
+ *   - ::CU_TRSF_READ_AS_INTEGER, which suppresses the default behavior of having the texture promote inteelementwise_2d data to floating point data in the
+ *     range [0, 1]. Note that texture with 32-bit inteelementwise_2d format would not be promoted, regardless of whether or not this flag is specified.
  *   - ::CU_TRSF_NORMALIZED_COORDINATES, which suppresses the default behavior of having the texture coordinates range from [0, Dim) where Dim is
  *     the width or height of the CUDA array. Instead, the texture coordinates [0, 1.0) reference the entire breadth of the array dimension; Note
  *     that for CUDA mipmapped arrays, this flag has to be set.

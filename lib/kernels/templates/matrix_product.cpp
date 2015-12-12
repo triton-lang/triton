@@ -1,5 +1,5 @@
 #include "isaac/array.h"
-#include "isaac/kernels/templates/gemm.h"
+#include "isaac/kernels/templates/matrix_product.h"
 #include "isaac/kernels/keywords.h"
 #include "isaac/symbolic/preset.h"
 #include "isaac/exception/operation_not_supported.h"
@@ -15,7 +15,7 @@ namespace isaac
 namespace templates
 {
 
-gemm_parameters::gemm_parameters(unsigned int simd_width
+matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
                                  , unsigned int local_size_0, unsigned int KL, unsigned int local_size_1, unsigned int D
                                  , unsigned int ms, unsigned int ks, unsigned int ns
                                  , fetching_policy_type A_fetching_policy, fetching_policy_type B_fetching_policy
@@ -27,7 +27,7 @@ gemm_parameters::gemm_parameters(unsigned int simd_width
 }
 
 
-unsigned int gemm::lmem_usage(math_expression const & expression) const
+unsigned int matrix_product::lmem_usage(math_expression const & expression) const
 {
   numeric_type numeric_t = lhs_most(expression.tree(), expression.root()).lhs.dtype;
   unsigned int N = 0;
@@ -36,7 +36,7 @@ unsigned int gemm::lmem_usage(math_expression const & expression) const
   return N*size_of(numeric_t);
 }
 
-unsigned int gemm::registers_usage(math_expression const & expression) const
+unsigned int matrix_product::registers_usage(math_expression const & expression) const
 {
   numeric_type numeric_t = lhs_most(expression.tree(), expression.root()).lhs.dtype;
 
@@ -44,7 +44,7 @@ unsigned int gemm::registers_usage(math_expression const & expression) const
   return N*size_of(numeric_t);
 }
 
-unsigned int gemm::temporary_workspace(math_expression const & expressions) const
+unsigned int matrix_product::temporary_workspace(math_expression const & expressions) const
 {
   std::vector<int_t> MNK = input_sizes(expressions);
   int_t M = MNK[0]; int_t N = MNK[1];
@@ -53,7 +53,7 @@ unsigned int gemm::temporary_workspace(math_expression const & expressions) cons
   return 0;
 }
 
-int gemm::is_invalid_impl(driver::Device const &, math_expression const &) const
+int matrix_product::is_invalid_impl(driver::Device const &, math_expression const &) const
 {
   //    if(device.vendor()==driver::Device::Vendor::NVIDIA && p_.simd_width > 1)
   //      return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -103,7 +103,7 @@ int gemm::is_invalid_impl(driver::Device const &, math_expression const &) const
   return TEMPLATE_VALID;
 }
 
-std::string gemm::generate_impl(std::string const & suffix, math_expression const & expression, driver::Device const & device, mapping_type const &) const
+std::string matrix_product::generate_impl(std::string const & suffix, math_expression const & expression, driver::Device const & device, mapping_type const &) const
 {
   using std::string;
   using tools::to_string;
@@ -132,10 +132,10 @@ std::string gemm::generate_impl(std::string const & suffix, math_expression cons
   //////////////////
   /// DECLARATIONS
   /// //////////////
-  std::string gemm_name = "gemm";
+  std::string matrix_product_name = "matrix_product";
   std::string reduce_name = "reduce";
 
-  gemm_name += suffix;
+  matrix_product_name += suffix;
   reduce_name += suffix;
 
   switch(backend)
@@ -146,7 +146,7 @@ std::string gemm::generate_impl(std::string const & suffix, math_expression cons
     stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
   }
 
-  stream << KernelPrefix(backend) << " void " << gemm_name << "(" << _size_t << " M, " << _size_t << " N, " << _size_t << " K, "
+  stream << KernelPrefix(backend) << " void " << matrix_product_name << "(" << _size_t << " M, " << _size_t << " N, " << _size_t << " K, "
          << Global(backend) << " " << sdtype << "* C, "  << _size_t << " ldc," << _size_t << " offc," << _size_t << " Cstride1, "
          << sdtype << " alpha,"
          << Global(backend) << " " << sdtype << "* A, "  << _size_t << " lda," << _size_t << " offa," << _size_t << " Astride1,"
@@ -572,7 +572,7 @@ std::string gemm::generate_impl(std::string const & suffix, math_expression cons
 #undef VST0RE
 }
 
-void gemm::enqueue_block(driver::CommandQueue & /*queue*/, int_t M, int_t N, int_t K,
+void matrix_product::enqueue_block(driver::CommandQueue & /*queue*/, int_t M, int_t N, int_t K,
                          array_base const & A, array_base const & B, array_base const & C,
                          value_scalar const & alpha, value_scalar const & beta,
                          driver::Program const & program, std::string const & suffix, execution_options_type const & options)
@@ -582,53 +582,53 @@ void gemm::enqueue_block(driver::CommandQueue & /*queue*/, int_t M, int_t N, int
   if(M==0 || N==0 || K==0)
     return;
 
-  std::string gemm_name = "gemm";
+  std::string matrix_product_name = "matrix_product";
   std::string reduce_name = "reduce";
 
-  gemm_name += suffix;
+  matrix_product_name += suffix;
   reduce_name += suffix;
 
-  driver::Kernel gemm(program, gemm_name.c_str());
+  driver::Kernel matrix_product(program, matrix_product_name.c_str());
   driver::NDRange local(p_.local_size_0, p_.local_size_1, 1);
   driver::NDRange global(align(align(M,p_.mS)/p_.mS, p_.local_size_0), align(align(N,p_.nS)/p_.nS, p_.local_size_1), p_.depth);
 
   unsigned int current_arg = 0;
   bind_independent binder;
-  set_arguments_functor helper(binder, current_arg, gemm);
+  set_arguments_functor helper(binder, current_arg, matrix_product);
 
   driver::Buffer& workspace = driver::backend::workspaces::get(options.queue(C.context()));
-  gemm.setSizeArg(current_arg++, M);
-  gemm.setSizeArg(current_arg++, N);
-  gemm.setSizeArg(current_arg++, K);
+  matrix_product.setSizeArg(current_arg++, M);
+  matrix_product.setSizeArg(current_arg++, N);
+  matrix_product.setSizeArg(current_arg++, K);
   if(p_.depth==1)
   {
-    gemm.setArg(current_arg++,C.data());
-    gemm.setSizeArg(current_arg++, C.stride()[1]);
-    gemm.setSizeArg(current_arg++, C.start());
-    gemm.setSizeArg(current_arg++, C.stride()[0]);
+    matrix_product.setArg(current_arg++,C.data());
+    matrix_product.setSizeArg(current_arg++, C.stride()[1]);
+    matrix_product.setSizeArg(current_arg++, C.start());
+    matrix_product.setSizeArg(current_arg++, C.stride()[0]);
   }
   else
   {
-    gemm.setArg(current_arg++, workspace);
-    gemm.setSizeArg(current_arg++, M);
-    gemm.setSizeArg(current_arg++, 0);
-    gemm.setSizeArg(current_arg++, 1);
+    matrix_product.setArg(current_arg++, workspace);
+    matrix_product.setSizeArg(current_arg++, M);
+    matrix_product.setSizeArg(current_arg++, 0);
+    matrix_product.setSizeArg(current_arg++, 1);
   }
 
 
   helper.set_arguments(alpha.dtype(), alpha.values());
-  gemm.setArg(current_arg++, A.data());
-  gemm.setSizeArg(current_arg++, A.stride()[1]);
-  gemm.setSizeArg(current_arg++, A.start());
-  gemm.setSizeArg(current_arg++, A.stride()[0]);
+  matrix_product.setArg(current_arg++, A.data());
+  matrix_product.setSizeArg(current_arg++, A.stride()[1]);
+  matrix_product.setSizeArg(current_arg++, A.start());
+  matrix_product.setSizeArg(current_arg++, A.stride()[0]);
 
-  gemm.setArg(current_arg++, B.data());
-  gemm.setSizeArg(current_arg++, B.stride()[1]);
-  gemm.setSizeArg(current_arg++, B.start());
-  gemm.setSizeArg(current_arg++, B.stride()[0]);
+  matrix_product.setArg(current_arg++, B.data());
+  matrix_product.setSizeArg(current_arg++, B.stride()[1]);
+  matrix_product.setSizeArg(current_arg++, B.start());
+  matrix_product.setSizeArg(current_arg++, B.stride()[0]);
 
   helper.set_arguments(beta.dtype(), beta.values());
-  options.enqueue(program.context(), gemm, global, local);
+  options.enqueue(program.context(), matrix_product, global, local);
 
   if(p_.depth > 1)
   {
@@ -652,18 +652,18 @@ void gemm::enqueue_block(driver::CommandQueue & /*queue*/, int_t M, int_t N, int
 
 }
 
-std::vector<int_t> gemm::infos(math_expression const & expression, symbolic::preset::gemm::args& arguments) const
+std::vector<int_t> matrix_product::infos(math_expression const & expression, symbolic::preset::matrix_product::args& arguments) const
 {
   math_expression::container_type const & array = expression.tree();
   std::size_t root = expression.root();
-  arguments = symbolic::preset::gemm::check(array, root);
+  arguments = symbolic::preset::matrix_product::check(array, root);
   int_t M = arguments.C->array->shape()[0];
   int_t N = arguments.C->array->shape()[1];
   int_t K = (A_trans_=='T')?arguments.A->array->shape()[0]:arguments.A->array->shape()[1];
   return {M, N, K};
 }
 
-gemm::gemm(gemm_parameters const & parameters, bool check_bounds, char A_trans, char B_trans) : base_impl<gemm, gemm_parameters>(parameters, BIND_INDEPENDENT), A_trans_(A_trans), B_trans_(B_trans), check_bounds_(check_bounds)
+matrix_product::matrix_product(matrix_product_parameters const & parameters, bool check_bounds, char A_trans, char B_trans) : base_impl<matrix_product, matrix_product_parameters>(parameters, BIND_INDEPENDENT), A_trans_(A_trans), B_trans_(B_trans), check_bounds_(check_bounds)
 {
   if(A_trans_=='N' && B_trans_=='N') type_ = GEMM_NN_TYPE;
   else if(A_trans_=='T' && B_trans_=='N') type_ = GEMM_TN_TYPE;
@@ -672,21 +672,21 @@ gemm::gemm(gemm_parameters const & parameters, bool check_bounds, char A_trans, 
   else throw;
 }
 
-std::vector<int_t> gemm::input_sizes(math_expression const & expressions) const
+std::vector<int_t> matrix_product::input_sizes(math_expression const & expressions) const
 {
-  symbolic::preset::gemm::args dummy;
+  symbolic::preset::matrix_product::args dummy;
   return infos((math_expression&)expressions, dummy);
 }
 
-void gemm::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback_base, execution_handler const & control)
+void matrix_product::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback_base, execution_handler const & control)
 {
   using namespace tools;
 
-  gemm & fallback = (gemm&)fallback_base;
+  matrix_product & fallback = (matrix_product&)fallback_base;
   math_expression const & expressions = control.x();
 
 
-  symbolic::preset::gemm::args args;
+  symbolic::preset::matrix_product::args args;
   std::vector<int_t> MNK = infos(expressions, args);
 
   int_t M = MNK[0];
@@ -720,40 +720,40 @@ void gemm::enqueue(driver::CommandQueue & queue, driver::Program const & program
 }
 
 //
-gemm_nn::gemm_nn(unsigned int simd
+matrix_product_nn::matrix_product_nn(unsigned int simd
                  , int_t ls0, int_t KL, int_t ls1, int_t D
                  , int_t ms, int_t ks, int_t ns
                  , fetching_policy_type Afetch , fetching_policy_type Bfetch
                  , int_t lfetch0, int_t lfetch1, bool check_bound) :
-  gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'N')
+  matrix_product(matrix_product_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'N')
 {
 }
 
 //
-gemm_tn::gemm_tn(unsigned int simd
+matrix_product_tn::matrix_product_tn(unsigned int simd
                  , int_t ls0, int_t KL, int_t ls1, int_t D
                  , int_t ms, int_t ks, int_t ns
                  , fetching_policy_type Afetch , fetching_policy_type Bfetch
                  , int_t lfetch0, int_t lfetch1, bool check_bound) :
-  gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'N')
+  matrix_product(matrix_product_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'N')
 { }
 
 //
-gemm_nt::gemm_nt(unsigned int simd
+matrix_product_nt::matrix_product_nt(unsigned int simd
                  , int_t ls0, int_t KL, int_t ls1, int_t D
                  , int_t ms, int_t ks, int_t ns
                  , fetching_policy_type Afetch , fetching_policy_type Bfetch
                  , int_t lfetch0, int_t lfetch1, bool check_bound) :
-  gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'T')
+  matrix_product(matrix_product_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'N', 'T')
 { }
 
 //
-gemm_tt::gemm_tt(unsigned int simd
+matrix_product_tt::matrix_product_tt(unsigned int simd
                  , int_t ls0, int_t KL, int_t ls1, int_t D
                  , int_t ms, int_t ks, int_t ns
                  , fetching_policy_type Afetch , fetching_policy_type Bfetch
                  , int_t lfetch0, int_t lfetch1, bool check_bound) :
-  gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'T')
+  matrix_product(matrix_product_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lfetch0, lfetch1), check_bound, 'T', 'T')
 { }
 
 }

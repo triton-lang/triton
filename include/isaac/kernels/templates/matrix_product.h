@@ -10,9 +10,9 @@ namespace isaac
 namespace templates
 {
 
-struct gemm_parameters : public base::parameters_type
+struct matrix_product_parameters : public base::parameters_type
 {
-  gemm_parameters(unsigned int simd_width
+  matrix_product_parameters(unsigned int simd_width
                             , unsigned int local_size_0, unsigned int KL, unsigned int local_size_1, unsigned int D
                             , unsigned int ms, unsigned int ks, unsigned int ns
                             , fetching_policy_type A_fetching_policy, fetching_policy_type B_fetching_policy
@@ -38,7 +38,7 @@ struct gemm_parameters : public base::parameters_type
   bool unroll_outer;
 };
 
-class gemm : public base_impl<gemm, gemm_parameters>
+class matrix_product : public base_impl<matrix_product, matrix_product_parameters>
 {
 private:
   unsigned int temporary_workspace(math_expression const & expressions) const;
@@ -48,9 +48,9 @@ private:
   std::string generate_impl(std::string const & suffix, math_expression const & expressions, driver::Device const & device, mapping_type const &) const;
   void enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K, array_base const & A, array_base const & B, array_base const & C,
                      value_scalar const &alpha, value_scalar const &beta, driver::Program const & program, std::string const & suffix, execution_options_type const & options);
-  std::vector<int_t> infos(math_expression const & expressions,  isaac::symbolic::preset::gemm::args &arguments) const;
+  std::vector<int_t> infos(math_expression const & expressions,  isaac::symbolic::preset::matrix_product::args &arguments) const;
 public:
-  gemm(gemm::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);
+  matrix_product(matrix_product::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(math_expression const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const &ctr);
 private:
@@ -60,36 +60,36 @@ private:
   bool check_bounds_;
 };
 
-class gemm_nn : public gemm
+class matrix_product_nn : public matrix_product
 {
 public:
-  gemm_nn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  matrix_product_nn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
                       , int_t lfetch0, int_t lfetch1, bool check_bound = false);
 };
 
-class gemm_tn : public gemm
+class matrix_product_tn : public matrix_product
 {
 public:
-  gemm_tn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
-                      , int_t lfetch0, int_t lfetch1, bool check_bound = false);
-};
-
-
-class gemm_nt : public gemm
-{
-public:
-  gemm_nt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  matrix_product_tn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
                       , int_t lfetch0, int_t lfetch1, bool check_bound = false);
 };
 
 
-class gemm_tt : public gemm
+class matrix_product_nt : public matrix_product
 {
 public:
-  gemm_tt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  matrix_product_nt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+                      , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
+                      , int_t lfetch0, int_t lfetch1, bool check_bound = false);
+};
+
+
+class matrix_product_tt : public matrix_product
+{
+public:
+  matrix_product_tt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
                       , int_t lfetch0, int_t lfetch1, bool check_bound = false);
 };

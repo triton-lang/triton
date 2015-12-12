@@ -2,7 +2,7 @@
 #include <iostream>
 #include "isaac/kernels/stream.h"
 #include "isaac/kernels/keywords.h"
-#include "isaac/kernels/templates/gemv.h"
+#include "isaac/kernels/templates/reduce_2d.h"
 
 #include "tools/arguments.hpp"
 #include "tools/loop.hpp"
@@ -16,33 +16,33 @@ namespace isaac
 namespace templates
 {
 
-gemv_parameters::gemv_parameters(unsigned int _simd_width,
+reduce_2d_parameters::reduce_2d_parameters(unsigned int _simd_width,
                               unsigned int _local_size_0, unsigned int _local_size_1,
                               unsigned int _num_groups_0, unsigned int _num_groups_1, fetching_policy_type _fetch_policy): base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1),
 num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetch_policy(_fetch_policy) { }
 
 
-int gemv::is_invalid_impl(driver::Device const &, math_expression const &) const
+int reduce_2d::is_invalid_impl(driver::Device const &, math_expression const &) const
 {
   if (p_.fetch_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-unsigned int gemv::lmem_usage(const math_expression&) const
+unsigned int reduce_2d::lmem_usage(const math_expression&) const
 {
   return (p_.local_size_0+1)*p_.local_size_1;
 }
 
-std::string gemv::generate_impl(std::string const & suffix, math_expression const & expression, driver::Device const & device, mapping_type const & mapping) const
+std::string reduce_2d::generate_impl(std::string const & suffix, math_expression const & expression, driver::Device const & device, mapping_type const & mapping) const
 {
   using tools::to_string;
 
 
-  std::vector<mapped_gemv*> dots;
-  std::vector<size_t> idx = filter_nodes(&is_dot, expression, expression.root(), false);
+  std::vector<mapped_reduce_2d*> reduce_1ds;
+  std::vector<size_t> idx = filter_nodes(&is_reduce_1d, expression, expression.root(), false);
   for (auto & elem : idx)
-    dots.push_back((mapped_gemv*)(mapping.at(mapping_key(elem, PARENT_NODE_TYPE)).get()));
+    reduce_1ds.push_back((mapped_reduce_2d*)(mapping.at(mapping_key(elem, PARENT_NODE_TYPE)).get()));
 
   kernel_generation_stream stream;
   driver::backend_type backend = device.backend();
@@ -55,11 +55,11 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   auto unroll_tmp = [&]()
   {
       unsigned int offset = 0;
-      for (const auto & e : dots)
+      for (const auto & e : reduce_1ds)
       {
         numeric_type dtype = lhs_most(e->math_expression().tree(),  e->math_expression().root()).lhs.dtype;
         std::string sdtype = to_string(dtype);
-        if (e->is_index_dot())
+        if (e->is_index_reduction())
         {
           stream << e->process("uint* #name_temp = (uint*)(tmp + " + tools::to_string(offset) + "*M);");
           offset += 4*p_.num_groups_0;
@@ -73,7 +73,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
       }
   };
 
-  int col_simd_width = (dot_type_ == REDUCE_COLUMNS) ? 1 : p_.simd_width;
+  int col_simd_width = (reduce_1d_type_ == REDUCE_COLUMNS) ? 1 : p_.simd_width;
   switch(backend)
   {
     case driver::CUDA:
@@ -96,7 +96,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   unsigned int local_size_0_ld = p_.local_size_0;
   std::string local_size_0_ld_str = to_string(local_size_0_ld);
 
-  for (const auto & e : dots)
+  for (const auto & e : reduce_1ds)
     stream << e->process(Local(backend).get() + " " + append_width("#scalartype", col_simd_width) + " #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;
 
   stream << "for(" << _size_t << " r = " << GlobalIdx1(backend) << "*" << col_simd_width << "; r < (M +" << p_.local_size_1 - 1 << ")/" << p_.local_size_1 << "*" << p_.local_size_1*col_simd_width << "; r += " << GlobalSize1(backend) << "*" << col_simd_width << ")" << std::endl;
@@ -106,7 +106,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream << "" << _size_t << " lidx = " << LocalIdx0(backend) << ";" << std::endl;
   stream << "" << _size_t << " lidy = " << LocalIdx1(backend) <<";" << std::endl;
 
-  for (const auto & e : dots){
+  for (const auto & e : reduce_1ds){
     std::string data_type = append_width("#scalartype",col_simd_width);
 
     stream << e->process(data_type + " #name_acc = " + InitPrefix(backend, data_type).get()  + "(" + neutral_element((e)->root_op(), backend, "#scalartype") + ");") << std::endl;
@@ -116,14 +116,14 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  element_wise_loop_1D(stream, p_.fetch_policy, (dot_type_==REDUCE_COLUMNS)?p_.simd_width:1, "c", "N", GlobalIdx0(backend).get(), GlobalSize0(backend).get(), device, [&](unsigned int row_simd_width)
+  element_wise_loop_1D(stream, p_.fetch_policy, (reduce_1d_type_==REDUCE_COLUMNS)?p_.simd_width:1, "c", "N", GlobalIdx0(backend).get(), GlobalSize0(backend).get(), device, [&](unsigned int row_simd_width)
   {
 
     std::set<std::string> already_fetched;
-    for (const auto & e : dots)
+    for (const auto & e : reduce_1ds)
     {
       std::map<std::string, std::string> accessors;
-      if(dot_type_==REDUCE_COLUMNS)
+      if(reduce_1d_type_==REDUCE_COLUMNS)
       {
         std::string data_type = append_width("#scalartype",row_simd_width);
         accessors["arraynn"] = data_type + " #namereg = " + vload(row_simd_width, "#scalartype", "c*#stride", "#pointer + r*#ld", "1", backend,false)+";";
@@ -147,20 +147,20 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
         str[a] = access_vector_type("#namereg",a);
 
 
-    for (auto & elem : dots)
+    for (auto & elem : reduce_1ds)
       for (unsigned int a = 0; a < row_simd_width; ++a)
       {
         std::string value = elem->evaluate_recursive(LHS_NODE_TYPE, {{"arraynn", str[a]}, {"repeat", str[a]}, {"array1", "#namereg"}});
-        if (elem->is_index_dot())
-          compute_index_dot(stream, elem->process("#name_acc"), "c*"+to_string(row_simd_width) + to_string(a), elem->process("#name_acc_value"), value, elem->root_op());
+        if (elem->is_index_reduction())
+          compute_index_reduce_1d(stream, elem->process("#name_acc"), "c*"+to_string(row_simd_width) + to_string(a), elem->process("#name_acc_value"), value, elem->root_op());
         else
-          compute_dot(stream, elem->process("#name_acc"), value,elem->root_op());
+          compute_reduce_1d(stream, elem->process("#name_acc"), value,elem->root_op());
       }
   });
   stream.dec_tab();
   stream << "}" << std::endl;
 
-  for (auto & expr : dots)
+  for (auto & expr : reduce_1ds)
     stream << expr->process("#name_buf[lidy*" + local_size_0_ld_str + "+ lidx] = #name_acc;") << std::endl;
 
   stream << "#pragma unroll" << std::endl;
@@ -173,13 +173,13 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  for (auto & e : dots)
-    if (e->is_index_dot())
-      compute_index_dot(stream, e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx + stride]")
+  for (auto & e : reduce_1ds)
+    if (e->is_index_reduction())
+      compute_index_reduce_1d(stream, e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx + stride]")
                                     , e->process("#name_buf_value[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf_value[lidy*" + local_size_0_ld_str + " + lidx + stride]")
                                     , e->root_op());
     else
-      compute_dot(stream,e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx + stride]"), e->root_op());
+      compute_reduce_1d(stream,e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx + stride]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -196,9 +196,9 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
     std::map<std::string, std::string> accessors;
     for(int s = 0 ; s < col_simd_width ; ++s)
     {
-        accessors["gemv"] = "#name_buf[lidy*" + local_size_0_ld_str + "]";
+        accessors["reduce_2d"] = "#name_buf[lidy*" + local_size_0_ld_str + "]";
         if(col_simd_width > 1)
-            accessors["gemv"] = access_vector_type(accessors["gemv"], s);
+            accessors["reduce_2d"] = access_vector_type(accessors["reduce_2d"], s);
         accessors["arrayn"] = "#pointer[(r +" + to_string(s) + ")*#stride]";
         accessors["array1n"] = "#pointer[(r +" + to_string(s) + ")*#stride]";
         accessors["arrayn1"] = "#pointer[(r +" + to_string(s) + ")*#stride]";
@@ -207,11 +207,11 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   }
   else
   {
-    for (mapped_dot const * e : dots)
+    for (mapped_reduce const * e : reduce_1ds)
     {
       if(col_simd_width > 1)
           stream << "if(M - r > " << col_simd_width << "){" << std::endl;
-      if (e->is_index_dot())
+      if (e->is_index_reduction())
           stream << e->process(vstore(col_simd_width,"uint", "#name_buf_value[lidy*" + local_size_0_ld_str + "]", "0", "#name_temp_value + r + M*" + GroupIdx0(backend).get(), "1", backend, false)) << ";" << std::endl;
       stream << e->process(vstore(col_simd_width,"#scalartype", "#name_buf[lidy*" + local_size_0_ld_str + "]", "0", "#name_temp + r + M*" + GroupIdx0(backend).get(), "1", backend, false)) << ";" << std::endl;
       if(col_simd_width > 1)
@@ -220,7 +220,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
           stream << "else{" << std::endl;
           stream.inc_tab();
           for(int s = 0 ; s < col_simd_width ; ++s){
-              if (e->is_index_dot())
+              if (e->is_index_reduction())
                   stream << "if(r + " << s << "< M) " << e->process("#name_temp_value[r + " + to_string(s) + " + M*" + GroupIdx0(backend).get() + "] = " + access_vector_type("#name_buf_value[lidy*" + local_size_0_ld_str + "]", s)) << ";" << std::endl;
               stream << "if(r + " << s << "< M) " << e->process("#name_temp[r + " + to_string(s) + " + M*" + GroupIdx0(backend).get() + "] = " + access_vector_type("#name_buf[lidy*" + local_size_0_ld_str + "]", s)) << ";" << std::endl;
           }
@@ -262,7 +262,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
                          {"arrayn1", "#pointer += #start;"},
                          {"arraynn", "#pointer += #start; "}}, expression, mapping);
 
-  for (const auto & e : dots)
+  for (const auto & e : reduce_1ds)
     stream << e->process(Local(backend).get() + " #scalartype #name_buf[" + to_string(p_.local_size_1*local_size_0_ld) + "];") << std::endl;
 
   stream << "for(" << _size_t << " r = " << GlobalIdx1(backend) << "; r < (M +" << p_.local_size_1 - 1 << ")/" << p_.local_size_1 << "*" << p_.local_size_1 << "; r += " << GlobalSize1(backend) << "){" << std::endl;
@@ -270,7 +270,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream << _size_t << " lidx = " << LocalIdx0(backend) << ";" << std::endl;
   stream << _size_t << " lidy = " << LocalIdx1(backend) <<";" << std::endl;
 
-  for (const auto & e : dots)
+  for (const auto & e : reduce_1ds)
     stream << e->process("#scalartype #name_acc = " + neutral_element((e)->root_op(), backend, "#scalartype") + ";") << std::endl;
 
   stream << "if (r < M)" << std::endl;
@@ -280,8 +280,8 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream << "for(" << _size_t << " c = lidx; c < " << p_.num_groups_0 << "; c += " << LocalSize0(backend) << "){" << std::endl;
   stream.inc_tab();
 
-  for (mapped_dot* e: dots)
-    compute_dot(stream, e->process("#name_acc"), e->process("#name_temp[r + M*c]"), e->root_op());
+  for (mapped_reduce* e: reduce_1ds)
+    compute_reduce_1d(stream, e->process("#name_acc"), e->process("#name_temp[r + M*c]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -290,7 +290,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream.dec_tab();
   stream << "}" << std::endl;
 
-  for (auto & expr : dots)
+  for (auto & expr : reduce_1ds)
     stream << expr->process("#name_buf[lidy*" + local_size_0_ld_str + "+ lidx] = #name_acc;") << std::endl;
 
   stream << "#pragma unroll" << std::endl;
@@ -303,13 +303,13 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  for (auto & e : dots)
-    if (e->is_index_dot())
-      compute_index_dot(stream, e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx + stride]")
+  for (auto & e : reduce_1ds)
+    if (e->is_index_reduction())
+      compute_index_reduce_1d(stream, e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx + stride]")
                                     , e->process("#name_buf_value[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf_value[lidy*" + local_size_0_ld_str + " + lidx + stride]")
                                     , e->root_op());
     else
-      compute_dot(stream,e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx + stride]"), e->root_op());
+      compute_reduce_1d(stream,e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx]"), e->process("#name_buf[lidy*" + local_size_0_ld_str + " + lidx + stride]"), e->root_op());
 
   stream.dec_tab();
   stream << "}" << std::endl;
@@ -323,7 +323,7 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   stream.inc_tab();
 
   std::map<std::string, std::string> accessors;
-  accessors["gemv"] = "#name_buf[lidy*" + local_size_0_ld_str + "]";
+  accessors["reduce_2d"] = "#name_buf[lidy*" + local_size_0_ld_str + "]";
   accessors["arrayn"] = "#pointer[r*#stride]";
   accessors["array1n"] = "#pointer[r*#stride]";
   accessors["arrayn1"] = "#pointer[r*#stride]";
@@ -344,30 +344,30 @@ std::string gemv::generate_impl(std::string const & suffix, math_expression cons
   return stream.str();
 }
 
-gemv::gemv(gemv::parameters_type const & parameters,
-                                         gemv::dot_type rtype,
+reduce_2d::reduce_2d(reduce_2d::parameters_type const & parameters,
+                                         reduce_2d::reduce_1d_type rtype,
                                          binding_policy_t binding_policy) :
-  base_impl<gemv, gemv_parameters>(parameters, binding_policy),
-  dot_type_(rtype){ }
+  base_impl<reduce_2d, reduce_2d_parameters>(parameters, binding_policy),
+  reduce_1d_type_(rtype){ }
 
-std::vector<int_t> gemv::input_sizes(math_expression const & expression) const
+std::vector<int_t> reduce_2d::input_sizes(math_expression const & expression) const
 {
-  std::vector<std::size_t> idx = filter_nodes(&is_dot, expression, expression.root(), false);
+  std::vector<std::size_t> idx = filter_nodes(&is_reduce_1d, expression, expression.root(), false);
   std::pair<int_t, int_t> MN = matrix_size(expression.tree(), lhs_most(expression.tree(), idx[0]));
-  if(dot_type_==REDUCE_COLUMNS)
+  if(reduce_1d_type_==REDUCE_COLUMNS)
     std::swap(MN.first,MN.second);
   return {MN.first, MN.second};
 }
 
-void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
+void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
 {
   math_expression const & expression = control.x();
 
   std::vector<int_t> MN = input_sizes(expression);
-  std::vector<math_expression::node const *> dots;
-  std::vector<size_t> dots_idx = filter_nodes(&is_dot, expression, expression.root(), false);
-  for (size_t idx : dots_idx)
-    dots.push_back(&expression.tree()[idx]);
+  std::vector<math_expression::node const *> reduce_1ds;
+  std::vector<size_t> reduce_1ds_idx = filter_nodes(&is_reduce_1d, expression, expression.root(), false);
+  for (size_t idx : reduce_1ds_idx)
+    reduce_1ds.push_back(&expression.tree()[idx]);
 
   //Fallback
   if(p_.simd_width>1 && requires_fallback(expression))
@@ -406,15 +406,15 @@ void gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program
     control.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }
 
-gemv_n::gemv_n(gemv_parameters  const & parameters,binding_policy_t binding_policy): gemv(parameters, REDUCE_ROWS, binding_policy){}
+reduce_2d_n::reduce_2d_n(reduce_2d_parameters  const & parameters,binding_policy_t binding_policy): reduce_2d(parameters, REDUCE_ROWS, binding_policy){}
 
-gemv_n::gemv_n(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2,
-               fetching_policy_type fetch, binding_policy_t bind): gemv(gemv_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS, bind) {}
+reduce_2d_n::reduce_2d_n(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2,
+               fetching_policy_type fetch, binding_policy_t bind): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS, bind) {}
 
-gemv_t::gemv_t(gemv::parameters_type  const & parameters, binding_policy_t binding_policy): gemv(parameters, REDUCE_COLUMNS, binding_policy){}
+reduce_2d_t::reduce_2d_t(reduce_2d::parameters_type  const & parameters, binding_policy_t binding_policy): reduce_2d(parameters, REDUCE_COLUMNS, binding_policy){}
 
-gemv_t::gemv_t(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2,
-               fetching_policy_type fetch, binding_policy_t bind): gemv(gemv_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS, bind) {}
+reduce_2d_t::reduce_2d_t(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2,
+               fetching_policy_type fetch, binding_policy_t bind): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS, bind) {}
 
 
 }

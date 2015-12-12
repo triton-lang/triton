@@ -13,8 +13,8 @@ namespace detail
 {
 
   bool is_node_leaf(op_element const & op);
-  bool is_scalar_dot(math_expression::node const & node);
-  bool is_vector_dot(math_expression::node const & node);
+  bool is_scalar_reduce_1d(math_expression::node const & node);
+  bool is_vector_reduce_1d(math_expression::node const & node);
   bool is_assignment(op_element const & op);
   bool is_elementwise_operator(op_element const & op);
   bool is_elementwise_function(op_element const & op);

@@ -792,7 +792,7 @@ private:
                 }
         }
 
-        // Force double for big integer
+        // Force double for big inteelementwise_2d
         if (useDouble) {
             while (s.Peek() >= '0' && s.Peek() <= '9') {
                 if (d >= 1.7976931348623157e307) // DBL_MAX / 10.0

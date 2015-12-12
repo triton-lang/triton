@@ -161,7 +161,7 @@ namespace isaac
 
     expression_type final_type;
     //GEMM
-    if(symbolic::preset::gemm::args args = symbolic::preset::gemm::check(tree, rootidx)){
+    if(symbolic::preset::matrix_product::args args = symbolic::preset::matrix_product::check(tree, rootidx)){
         final_type = args.type;
     }
     //Default

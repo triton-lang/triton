@@ -5,11 +5,11 @@
 #include "isaac/array.h"
 #include "isaac/tuple.h"
 #include "isaac/kernels/keywords.h"
-#include "isaac/kernels/templates/axpy.h"
-#include "isaac/kernels/templates/dot.h"
-#include "isaac/kernels/templates/ger.h"
-#include "isaac/kernels/templates/gemv.h"
-#include "isaac/kernels/templates/gemm.h"
+#include "isaac/kernels/templates/elementwise_1d.h"
+#include "isaac/kernels/templates/reduce_1d.h"
+#include "isaac/kernels/templates/elementwise_2d.h"
+#include "isaac/kernels/templates/reduce_2d.h"
+#include "isaac/kernels/templates/matrix_product.h"
 #include "isaac/kernels/templates/base.h"
 #include "isaac/kernels/parse.h"
 #include "isaac/exception/unknown_datatype.h"
@@ -150,11 +150,11 @@ int base_impl<TType, PType>::is_invalid(math_expression const  & expressions, dr
   return is_invalid_impl(device, expressions);
 }
 
-template class base_impl<axpy, axpy_parameters>;
-template class base_impl<dot, dot_parameters>;
-template class base_impl<ger, ger_parameters>;
-template class base_impl<gemv, gemv_parameters>;
-template class base_impl<gemm, gemm_parameters>;
+template class base_impl<elementwise_1d, elementwise_1d_parameters>;
+template class base_impl<reduce_1d, reduce_1d_parameters>;
+template class base_impl<elementwise_2d, elementwise_2d_parameters>;
+template class base_impl<reduce_2d, reduce_2d_parameters>;
+template class base_impl<matrix_product, matrix_product_parameters>;
 
 }
 }

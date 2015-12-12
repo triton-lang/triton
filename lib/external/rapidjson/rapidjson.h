@@ -53,9 +53,9 @@
 
 /*! \def RAPIDJSON_NO_INT64DEFINE
     \ingroup RAPIDJSON_CONFIG
-    \brief Use external 64-bit integer types.
+    \brief Use external 64-bit inteelementwise_2d types.
 
-    RapidJSON requires the 64-bit integer types \c int64_t and  \c uint64_t types
+    RapidJSON requires the 64-bit inteelementwise_2d types \c int64_t and  \c uint64_t types
     to be available at global scope.
 
     If users have their own definition, define RAPIDJSON_NO_INT64DEFINE to
@@ -171,11 +171,11 @@
 ///////////////////////////////////////////////////////////////////////////////
 // RAPIDJSON_UINT64_C2
 
-//! Construct a 64-bit literal by a pair of 32-bit integer.
+//! Construct a 64-bit literal by a pair of 32-bit inteelementwise_2d.
 /*!
     64-bit literal with or without ULL suffix is prone to compiler warnings.
     UINT64_C() is C macro which cause compilation problems.
-    Use this macro to define 64-bit constants by a pair of 32-bit integer.
+    Use this macro to define 64-bit constants by a pair of 32-bit inteelementwise_2d.
 */
 #ifndef RAPIDJSON_UINT64_C2
 #define RAPIDJSON_UINT64_C2(high32, low32) ((static_cast<uint64_t>(high32) << 32) | static_cast<uint64_t>(low32))
