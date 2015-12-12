@@ -1,6 +1,6 @@
 #include <cstring>
 #include <iostream>
-#include "isaac/kernels/templates/ger.h"
+#include "isaac/kernels/templates/elementwise_2d.h"
 #include "isaac/symbolic/io.h"
 #include "isaac/kernels/keywords.h"
 
@@ -13,14 +13,14 @@ namespace isaac
 namespace templates
 {
 
-ger_parameters::ger_parameters(unsigned int _simd_width,
+elementwise_2d_parameters::elementwise_2d_parameters(unsigned int _simd_width,
                           unsigned int _local_size_0, unsigned int _local_size_1,
                           unsigned int _num_groups_0, unsigned int _num_groups_1,
                           fetching_policy_type _fetching_policy) : base::parameters_type(_simd_width, _local_size_0, _local_size_1, 1), num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetching_policy(_fetching_policy){ }
 
 
 
-int ger::is_invalid_impl(driver::Device const &, math_expression const  &) const
+int elementwise_2d::is_invalid_impl(driver::Device const &, math_expression const  &) const
 {
   if (p_.simd_width>1)
     return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -29,7 +29,7 @@ int ger::is_invalid_impl(driver::Device const &, math_expression const  &) const
   return TEMPLATE_VALID;
 }
 
-std::string ger::generate_impl(std::string const & suffix, math_expression const  & expressions, driver::Device const & device, mapping_type const & mappings) const
+std::string elementwise_2d::generate_impl(std::string const & suffix, math_expression const  & expressions, driver::Device const & device, mapping_type const & mappings) const
 {
   kernel_generation_stream stream;
   std::string _size_t = size_type(device);
@@ -45,7 +45,7 @@ std::string ger::generate_impl(std::string const & suffix, math_expression const
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
   }
 
-  stream << KernelPrefix(backend) << " void axpy" << suffix << "(" << _size_t << " M, " << _size_t << " N, " << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void elementwise_1d" << suffix << "(" << _size_t << " M, " << _size_t << " N, " << generate_arguments("#scalartype", device, mappings, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -105,25 +105,25 @@ std::string ger::generate_impl(std::string const & suffix, math_expression const
   return stream.str();
 }
 
-ger::ger(parameters_type const & parameters, binding_policy_t binding_policy) :
-  base_impl<ger, ger_parameters>(parameters, binding_policy){ }
+elementwise_2d::elementwise_2d(parameters_type const & parameters, binding_policy_t binding_policy) :
+  base_impl<elementwise_2d, elementwise_2d_parameters>(parameters, binding_policy){ }
 
-ger::ger(unsigned int simd, unsigned int ls1, unsigned int ls2,
+elementwise_2d::elementwise_2d(unsigned int simd, unsigned int ls1, unsigned int ls2,
                                unsigned int ng1, unsigned int ng2, fetching_policy_type fetch,
                                binding_policy_t bind):
-    base_impl<ger, ger_parameters>(ger_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
+    base_impl<elementwise_2d, elementwise_2d_parameters>(elementwise_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
 {}
 
-std::vector<int_t> ger::input_sizes(math_expression const  & expression) const
+std::vector<int_t> elementwise_2d::input_sizes(math_expression const  & expression) const
 {
   std::pair<int_t, int_t> size = matrix_size(expression.tree(), lhs_most(expression.tree(), expression.root()));
   return {size.first, size.second};
 }
 
-void ger::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, std::string const & suffix, base &, execution_handler const & control)
+void elementwise_2d::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, std::string const & suffix, base &, execution_handler const & control)
 {
   math_expression const  & expressions = control.x();
-  std::string name = "axpy";
+  std::string name = "elementwise_1d";
   name +=suffix;
   driver::Kernel kernel(program, name.c_str());
   driver::NDRange global(p_.local_size_0*p_.num_groups_0, p_.local_size_1*p_.num_groups_1);

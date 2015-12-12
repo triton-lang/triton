@@ -13,7 +13,7 @@ namespace preset
 {
 
 
-class gemm
+class matrix_product
 {
 
 public:

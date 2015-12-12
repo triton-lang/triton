@@ -14,12 +14,12 @@ namespace detail
 
 
 
-  bool is_scalar_dot(math_expression::node const & node)
+  bool is_scalar_reduce_1d(math_expression::node const & node)
   {
     return node.op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY;
   }
 
-  bool is_vector_dot(math_expression::node const & node)
+  bool is_vector_reduce_1d(math_expression::node const & node)
   {
     return node.op.type_family==OPERATOR_ROWS_DOT_TYPE_FAMILY
         || node.op.type_family==OPERATOR_COLUMNS_DOT_TYPE_FAMILY;

@@ -115,7 +115,7 @@ public:
         The user buffer will not be deallocated when this allocator is destructed.
 
         \param buffer User supplied buffer.
-        \param size Size of the buffer in bytes. It must at least larger than sizeof(ChunkHeader).
+        \param size Size of the buffer in bytes. It must at least larelementwise_2d than sizeof(ChunkHeader).
         \param chunkSize The size of memory chunk. The default is kDefaultChunkSize.
         \param baseAllocator The allocator for allocating memory chunks.
     */

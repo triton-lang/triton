@@ -2,7 +2,7 @@
 #include <cstring>
 #include <algorithm>
 
-#include "isaac/kernels/templates/axpy.h"
+#include "isaac/kernels/templates/elementwise_1d.h"
 #include "isaac/kernels/keywords.h"
 #include "isaac/driver/backend.h"
 
@@ -18,7 +18,7 @@ namespace isaac
 namespace templates
 {
 
-axpy_parameters::axpy_parameters(unsigned int _simd_width,
+elementwise_1d_parameters::elementwise_1d_parameters(unsigned int _simd_width,
                        unsigned int _group_size, unsigned int _num_groups,
                        fetching_policy_type _fetching_policy) :
       base::parameters_type(_simd_width, _group_size, 1, 1), num_groups(_num_groups), fetching_policy(_fetching_policy)
@@ -26,14 +26,14 @@ axpy_parameters::axpy_parameters(unsigned int _simd_width,
 }
 
 
-int axpy::is_invalid_impl(driver::Device const &, math_expression const &) const
+int elementwise_1d::is_invalid_impl(driver::Device const &, math_expression const &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-std::string axpy::generate_impl(std::string const & suffix, math_expression const & expressions, driver::Device const & device, mapping_type const & mappings) const
+std::string elementwise_1d::generate_impl(std::string const & suffix, math_expression const & expressions, driver::Device const & device, mapping_type const & mappings) const
 {
   driver::backend_type backend = device.backend();
   std::string _size_t = size_type(device);
@@ -55,7 +55,7 @@ std::string axpy::generate_impl(std::string const & suffix, math_expression cons
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
   }
 
-  stream << KernelPrefix(backend) << " void " << "axpy" << suffix << "(" << _size_t << " N," << generate_arguments(dtype, device, mappings, expressions) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << "elementwise_1d" << suffix << "(" << _size_t << " N," << generate_arguments(dtype, device, mappings, expressions) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -174,23 +174,23 @@ std::string axpy::generate_impl(std::string const & suffix, math_expression cons
   return stream.str();
 }
 
-axpy::axpy(axpy_parameters const & parameters,
+elementwise_1d::elementwise_1d(elementwise_1d_parameters const & parameters,
                                binding_policy_t binding_policy) :
-    base_impl<axpy, axpy_parameters>(parameters, binding_policy)
+    base_impl<elementwise_1d, elementwise_1d_parameters>(parameters, binding_policy)
 {}
 
-axpy::axpy(unsigned int simd, unsigned int ls, unsigned int ng,
+elementwise_1d::elementwise_1d(unsigned int simd, unsigned int ls, unsigned int ng,
                                fetching_policy_type fetch, binding_policy_t bind):
-    base_impl<axpy, axpy_parameters>(axpy_parameters(simd,ls,ng,fetch), bind)
+    base_impl<elementwise_1d, elementwise_1d_parameters>(elementwise_1d_parameters(simd,ls,ng,fetch), bind)
 {}
 
 
-std::vector<int_t> axpy::input_sizes(math_expression const & expressions) const
+std::vector<int_t> elementwise_1d::input_sizes(math_expression const & expressions) const
 {
   return {expressions.shape().max()};
 }
 
-void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
+void elementwise_1d::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
 {
   math_expression const & expressions = control.x();
   //Size
@@ -202,7 +202,7 @@ void axpy::enqueue(driver::CommandQueue & queue, driver::Program const & program
       return;
   }
   //Kernel
-  std::string name = "axpy";
+  std::string name = "elementwise_1d";
   name += suffix;
   driver::Kernel kernel(program, name.c_str());
   //NDRange

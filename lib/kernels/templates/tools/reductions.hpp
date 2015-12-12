@@ -12,7 +12,7 @@ namespace isaac
 namespace templates
 {
 
-inline void compute_dot(kernel_generation_stream & os, std::string acc, std::string cur, op_element const & op)
+inline void compute_reduce_1d(kernel_generation_stream & os, std::string acc, std::string cur, op_element const & op)
 {
   if (detail::is_elementwise_function(op))
     os << acc << "=" << evaluate(op.type) << "(" << acc << "," << cur << ");" << std::endl;
@@ -20,7 +20,7 @@ inline void compute_dot(kernel_generation_stream & os, std::string acc, std::str
     os << acc << "= (" << acc << ")" << evaluate(op.type)  << "(" << cur << ");" << std::endl;
 }
 
-inline void compute_index_dot(kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, op_element const & op)
+inline void compute_index_reduce_1d(kernel_generation_stream & os, std::string acc, std::string cur, std::string const & acc_value, std::string const & cur_value, op_element const & op)
 {
   //        os << acc << " = " << cur_value << ">" << acc_value  << "?" << cur << ":" << acc << ";" << std::endl;
   os << acc << "= select(" << acc << "," << cur << "," << cur_value << ">" << acc_value << ");" << std::endl;
@@ -51,11 +51,11 @@ inline std::string neutral_element(op_element const & op, driver::backend_type b
   case OPERATOR_ELEMENT_MIN_TYPE : return INF;
   case OPERATOR_ELEMENT_ARGMIN_TYPE : return INF;
 
-  default: throw std::runtime_error("Unsupported dot operator : no neutral element known");
+  default: throw std::runtime_error("Unsupported reduce_1d operator : no neutral element known");
   }
 }
 
-inline bool is_dot(math_expression::node const & node)
+inline bool is_reduce_1d(math_expression::node const & node)
 {
   return node.op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY
       || node.op.type_family==OPERATOR_COLUMNS_DOT_TYPE_FAMILY
@@ -63,7 +63,7 @@ inline bool is_dot(math_expression::node const & node)
 }
 
 
-inline bool is_index_dot(op_element const & op)
+inline bool is_index_reduction(op_element const & op)
 {
   return op.type==OPERATOR_ELEMENT_ARGFMAX_TYPE
       || op.type==OPERATOR_ELEMENT_ARGMAX_TYPE

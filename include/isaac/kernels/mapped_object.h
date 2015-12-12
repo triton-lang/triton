@@ -89,46 +89,46 @@ protected:
   *
   * Maps prod(matrix_expression, matrix_expression)
   */
-class mapped_gemm : public mapped_object, public binary_leaf
+class mapped_matrix_product : public mapped_object, public binary_leaf
 {
 public:
-  mapped_gemm(std::string const & scalartype, unsigned int id, node_info info);
+  mapped_matrix_product(std::string const & scalartype, unsigned int id, node_info info);
 };
 
 /** @brief Reduction
 *
-* Base class for mapping a dot
+* Base class for mapping a reduce_1d
 */
-class mapped_dot : public mapped_object, public binary_leaf
+class mapped_reduce : public mapped_object, public binary_leaf
 {
 public:
-  mapped_dot(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key);
+  mapped_reduce(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key);
 
   size_t root_idx() const;
   isaac::math_expression const & math_expression() const;
   math_expression::node root_node() const;
-  bool is_index_dot() const;
+  bool is_index_reduction() const;
   op_element root_op() const;
 };
 
-/** @brief Scalar dot
+/** @brief 1D Reduction
 *
-* Maps a scalar dot (max, min, argmax, inner_prod, etc..)
+* Maps a 1d reduction (max, min, argmax, inner_prod, etc..)
 */
-class mapped_scalar_dot : public mapped_dot
+class mapped_reduce_1d : public mapped_reduce
 {
 public:
-  mapped_scalar_dot(std::string const & scalartype, unsigned int id, node_info info);
+  mapped_reduce_1d(std::string const & scalartype, unsigned int id, node_info info);
 };
 
-/** @brief Vector dot
+/** @brief 2D
 *
-* Maps a row-wise dot (max, min, argmax, matrix-vector product, etc..)
+* Maps a 2D reduction (max, min, argmax, matrix-vector product, etc..)
 */
-class mapped_gemv : public mapped_dot
+class mapped_reduce_2d : public mapped_reduce
 {
 public:
-  mapped_gemv(std::string const & scalartype, unsigned int id, node_info info);
+  mapped_reduce_2d(std::string const & scalartype, unsigned int id, node_info info);
 };
 
 /** @brief Host scalar

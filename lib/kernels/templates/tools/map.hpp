@@ -81,12 +81,12 @@ public:
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_column>(&math_expression, root_idx, &mapping_)));
       else if(root_node.op.type==OPERATOR_ACCESS_INDEX_TYPE)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_array_access>(&math_expression, root_idx, &mapping_)));
-      else if (detail::is_scalar_dot(root_node))
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_scalar_dot>(&math_expression, root_idx, &mapping_)));
-      else if (detail::is_vector_dot(root_node))
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_gemv>(&math_expression, root_idx, &mapping_)));
+      else if (detail::is_scalar_reduce_1d(root_node))
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_reduce_1d>(&math_expression, root_idx, &mapping_)));
+      else if (detail::is_vector_reduce_1d(root_node))
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_reduce_2d>(&math_expression, root_idx, &mapping_)));
       else if (root_node.op.type_family == OPERATOR_GEMM_TYPE_FAMILY)
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_gemm>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_product>(&math_expression, root_idx, &mapping_)));
       else if (root_node.op.type == OPERATOR_REPEAT_TYPE)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_repeat>(&math_expression, root_idx, &mapping_)));
       else if (root_node.op.type == OPERATOR_OUTER_PROD_TYPE)

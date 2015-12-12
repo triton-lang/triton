@@ -128,7 +128,7 @@ public:
     typedef typename BaseType::pointer         Pointer;
     //! Reference to (const) GenericMember
     typedef typename BaseType::reference       Reference;
-    //! Signed integer type (e.g. \c ptrdiff_t)
+    //! Signed inteelementwise_2d type (e.g. \c ptrdiff_t)
     typedef typename BaseType::difference_type DifferenceType;
 
     //! Default constructor (singular value)
@@ -265,7 +265,7 @@ struct GenericStringRef {
 
         \tparam N length of the string, automatically inferred
 
-        \param str Constant character array, lifetime assumed to be longer
+        \param str Constant character array, lifetime assumed to be lonelementwise_2d
             than the use of the string in e.g. a GenericValue
 
         \post \ref s == str
@@ -289,7 +289,7 @@ struct GenericStringRef {
 
         \see StringRef(const CharType*)
 
-        \param str Constant character pointer, lifetime assumed to be longer
+        \param str Constant character pointer, lifetime assumed to be lonelementwise_2d
             than the use of the string in e.g. a GenericValue
 
         \post \ref s == str
@@ -305,7 +305,7 @@ struct GenericStringRef {
         : s(str), length(internal::StrLen(str)){ RAPIDJSON_ASSERT(s != NULL); }
 
     //! Create constant string reference from pointer and length
-    /*! \param str constant string, lifetime assumed to be longer than the use of the string in e.g. a GenericValue
+    /*! \param str constant string, lifetime assumed to be lonelementwise_2d than the use of the string in e.g. a GenericValue
         \param len length of the string, excluding the trailing NULL terminator
 
         \post \ref s == str && \ref length == len
@@ -334,7 +334,7 @@ private:
     value in a JSON GenericValue object, if the string's lifetime is known
     to be valid long enough.
     \tparam CharType Character type of the string
-    \param str Constant string, lifetime assumed to be longer than the use of the string in e.g. a GenericValue
+    \param str Constant string, lifetime assumed to be lonelementwise_2d than the use of the string in e.g. a GenericValue
     \return GenericStringRef string reference object
     \relatesalso GenericStringRef
 
@@ -355,7 +355,7 @@ inline GenericStringRef<CharType> StringRef(const CharType* str) {
     supports string containing null characters.
 
     \tparam CharType character type of the string
-    \param str Constant string, lifetime assumed to be longer than the use of the string in e.g. a GenericValue
+    \param str Constant string, lifetime assumed to be lonelementwise_2d than the use of the string in e.g. a GenericValue
     \param length The length of source string.
     \return GenericStringRef string reference object
     \relatesalso GenericStringRef
@@ -373,7 +373,7 @@ inline GenericStringRef<CharType> StringRef(const CharType* str, size_t length) 
     to be valid long enough.
 
     \tparam CharType character type of the string
-    \param str Constant string, lifetime assumed to be longer than the use of the string in e.g. a GenericValue
+    \param str Constant string, lifetime assumed to be lonelementwise_2d than the use of the string in e.g. a GenericValue
     \return GenericStringRef string reference object
     \relatesalso GenericStringRef
     \note Requires the definition of the preprocessor symbol \ref RAPIDJSON_HAS_STDSTRING.
@@ -696,7 +696,7 @@ public:
 
         case kNumberType:
             if (IsDouble() || rhs.IsDouble())
-                return GetDouble() == rhs.GetDouble(); // May convert one operand from integer to double.
+                return GetDouble() == rhs.GetDouble(); // May convert one operand from inteelementwise_2d to double.
             else
                 return data_.n.u64 == rhs.data_.n.u64;
 
@@ -1482,7 +1482,7 @@ private:
         inline SizeType GetLength() const       { return  (SizeType)(MaxSize -  str[LenPos]); }
     };  // at most as many bytes as "String" above => 12 bytes in 32-bit mode, 16 bytes in 64-bit mode
 
-    // By using proper binary layout, retrieval of different integer types do not need conversions.
+    // By using proper binary layout, retrieval of different inteelementwise_2d types do not need conversions.
     union Number {
 #if RAPIDJSON_ENDIAN == RAPIDJSON_LITTLEENDIAN
         struct I {
