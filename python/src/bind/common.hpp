@@ -72,7 +72,7 @@ namespace tools
 
         if(name=="elementwise_1d") return sc::AXPY_TYPE;
         else if(name=="elementwise_2d") return sc::GER_TYPE;
-        else if(name=="dot") return sc::DOT_TYPE;
+        else if(name=="reduce_1d") return sc::DOT_TYPE;
         else if(name=="reduce_2d_rows") return sc::GEMV_N_TYPE;
         else if(name=="reduce_2d_cols") return sc::GEMV_T_TYPE;
         else if(name=="matrix_product_nn") return sc::GEMM_NN_TYPE;

@@ -10,7 +10,7 @@ from tune.tune import Tuner
 from tune.tools import metric_name_of
 
 #Kivy
-from kivy.logelementwise_2d import Logger
+from kivy.logger import Logger
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
@@ -122,7 +122,7 @@ class IsaacApp(App):
         self.show_tune()
         
         #Logelementwise_2d
-        self.logelementwise_2d = LabelLogger(self.screens['Tune'].ids.out)
+        self.logger = LabelLogger(self.screens['Tune'].ids.out)
     
     if on_android:
         @run_on_ui_thread
@@ -145,8 +145,8 @@ class IsaacApp(App):
             device = next(x for x in self.isaac_handler.devices if x.name==self.config.get('hardware', 'device')) 
             #FIXME: Move profiling logics into tuning
             sc.driver.default.queue_properties = sc.driver.PROFILING_ENABLE 
-            self.logelementwise_2d.info('Using ' + device.name)
-            self.logelementwise_2d.info('')
+            self.logger.info('Using ' + device.name)
+            self.logger.info('')
             
             def run():
                 if on_android:
@@ -156,8 +156,8 @@ class IsaacApp(App):
                               ('blas3', (sc.templates.matrix_product_nn, sc.templates.gemm_tn, sc.templates.gemm_nt, sc.templates.gemm_tt))]
                 for opclass, optype in operations:
                     for op in optype:
-                        progress_bar = LabelProgressBar(10, self.logelementwise_2d.label, metric_name_of(op))
-                        tuner = Tuner(self.logelementwise_2d, device, op, json_path='', progress_bar=progress_bar)
+                        progress_bar = LabelProgressBar(10, self.logger.label, metric_name_of(op))
+                        tuner = Tuner(self.logger, device, op, json_path='', progress_bar=progress_bar)
                         tuner.run(self.config.get('autotuning', opclass).lower())
             
             tid = thread.start_new_thread(run, ())

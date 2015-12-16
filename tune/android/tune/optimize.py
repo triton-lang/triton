@@ -44,8 +44,8 @@ def exhaustive(template, sizes, context):
 
 class GeneticOptimizer:
     
-    def __init__(self, logelementwise_2d, naccept=500, niter=1000, cxpb=.4, mutpb=.4, popsize=10, progress_bar = None):
-        self.logelementwise_2d = logger
+    def __init__(self, logger, naccept=500, niter=1000, cxpb=.4, mutpb=.4, popsize=10, progress_bar = None):
+        self.logger = logger
         self.naccept = naccept
         self.niter = niter
         self.cxpb = cxpb

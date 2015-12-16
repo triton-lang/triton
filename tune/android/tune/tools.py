@@ -46,27 +46,27 @@ def tree_of(template, sizes, context):
         N, = sizes
         x = sc.empty(N, context=context)
         y = sc.empty(N, context=context)
-        return sc.reduce_1d(x, y), (x, y)
+        return sc.dot(x, y), (x, y)
     elif issubclass(template, sc.templates.elementwise_2d):
         M, N = sizes
         A = sc.empty((M,N), context=context)
         B = sc.empty((M,N), context=context)
         return A + B, (A, B)
-    elif issubclass(template, sc.templates.gemv):
+    elif issubclass(template, sc.templates.reduce_2d):
         T = template is sc.templates.reduce_2d_cols
         M, N = sizes[::-1] if T else sizes
         A = sc.empty((M,N), context=context)
         x = sc.empty(N, context=context)
-        return sc.reduce_1d(A.T, x) if T else sc.dot(A, x), (A, x)
+        return sc.dot(A.T, x) if T else sc.dot(A, x), (A, x)
     elif issubclass(template, sc.templates.matrix_product):
-        AT = template is sc.templates.matrix_product_tn or template is sc.templates.gemm_tt
-        BT = template is sc.templates.matrix_product_nt or template is sc.templates.gemm_tt
+        AT = template is sc.templates.matrix_product_tn or template is sc.templates.matrix_product_tt
+        BT = template is sc.templates.matrix_product_nt or template is sc.templates.matrix_product_tt
         M, N, K = sizes
         A = sc.empty((K, M) if AT else (M, K), context=context)
         B = sc.empty((N, K) if BT else (K, N), context=context)
         AA = A.T if AT else A
         BB = B.T if BT else B
-        return sc.reduce_1d(AA, BB), (A, B)
+        return sc.dot(AA, BB), (A, B)
 
 def memory_footprint(template, sizes):
     if issubclass(template, sc.templates.elementwise_1d):
@@ -75,13 +75,13 @@ def memory_footprint(template, sizes):
         return 4*2*sizes[0]*1e-9
     elif issubclass(template, sc.templates.elementwise_2d):
         return 4*sizes[0]*sizes[1]*1e-9
-    elif issubclass(template, sc.templates.gemv):
+    elif issubclass(template, sc.templates.reduce_2d):
         return 4*sizes[0]*sizes[1]*1e-9
     elif issubclass(template, sc.templates.matrix_product):
         return 4*(sizes[0]*sizes[1] + sizes[0]*sizes[2] + sizes[1]*sizes[2])*1e-9
     
 def metric_of(template):
-    memory_bound = [sc.templates.elementwise_1d, sc.templates.reduce_1d, sc.templates.elementwise_2d, sc.templates.gemv]
+    memory_bound = [sc.templates.elementwise_1d, sc.templates.reduce_1d, sc.templates.elementwise_2d, sc.templates.reduce_2d]
     compute_bound = [sc.templates.matrix_product]
     if any([issubclass(template, x) for x in memory_bound]):
         return lambda sizes, t: memory_footprint(template, sizes)/t
@@ -100,7 +100,7 @@ def genetic_infos_of(template):
         return {'categorical': [3], 'nbits':[3,4,4,2]}
     elif issubclass(template, sc.templates.elementwise_2d):
         return {'categorical': [5], 'nbits': [3,3,3,3,4,2]}
-    elif issubclass(template, sc.templates.gemv):
+    elif issubclass(template, sc.templates.reduce_2d):
         return {'categorical': [5], 'nbits': [3,3,3,3,4,2]}
     elif issubclass(template, sc.templates.matrix_product):
         return {'categorical': [8,9], 'nbits': [3,3,3,3,3,2,2,2,2,2,3,3]}
