@@ -406,14 +406,14 @@ void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
     control.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }
 
-reduce_2d_n::reduce_2d_n(reduce_2d_parameters  const & parameters,binding_policy_t binding_policy): reduce_2d(parameters, REDUCE_ROWS, binding_policy){}
+reduce_2d_rows::reduce_2d_rows(reduce_2d_parameters  const & parameters,binding_policy_t binding_policy): reduce_2d(parameters, REDUCE_ROWS, binding_policy){}
 
-reduce_2d_n::reduce_2d_n(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2,
+reduce_2d_rows::reduce_2d_rows(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2,
                fetching_policy_type fetch, binding_policy_t bind): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS, bind) {}
 
-reduce_2d_t::reduce_2d_t(reduce_2d::parameters_type  const & parameters, binding_policy_t binding_policy): reduce_2d(parameters, REDUCE_COLUMNS, binding_policy){}
+reduce_2d_cols::reduce_2d_cols(reduce_2d::parameters_type  const & parameters, binding_policy_t binding_policy): reduce_2d(parameters, REDUCE_COLUMNS, binding_policy){}
 
-reduce_2d_t::reduce_2d_t(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2,
+reduce_2d_cols::reduce_2d_cols(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2,
                fetching_policy_type fetch, binding_policy_t bind): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS, bind) {}
 
 

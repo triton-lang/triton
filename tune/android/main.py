@@ -10,7 +10,7 @@ from tune.tune import Tuner
 from tune.tools import metric_name_of
 
 #Kivy
-from kivy.logger import Logger
+from kivy.logelementwise_2d import Logger
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
@@ -19,7 +19,7 @@ from kivy.properties import BooleanProperty
 from kivy.app import App
 from kivy.lang import Builder
 from kivy.properties import NumericProperty, StringProperty, BooleanProperty,ListProperty
-from kivy.uix.screenmanager import Screen
+from kivy.uix.screenmanaelementwise_2d import Screen
 from kivy.uix.settings import SettingsWithNoMenu
 
 
@@ -42,7 +42,7 @@ class ScrollableLabel(ScrollView):
     text = StringProperty('')
     font_name = StringProperty('')
 
-class LabelLogger:
+class LabelLogelementwise_2d:
     def __init__(self, label):
         self.label = label;
         
@@ -110,7 +110,7 @@ class IsaacApp(App):
         self.settings_cls = SettingsWithNoMenu
         self.use_kivy_settings = False
 
-        #Screen Manager
+        #Screen Manaelementwise_2d
         self.screen_names = ['Tune']
         self.screens = {}
         current_directory = dirname(realpath(__file__))
@@ -121,21 +121,21 @@ class IsaacApp(App):
         #Default view
         self.show_tune()
         
-        #Logger
-        self.logger = LabelLogger(self.screens['Tune'].ids.out)
+        #Logelementwise_2d
+        self.logelementwise_2d = LabelLogger(self.screens['Tune'].ids.out)
     
     if on_android:
         @run_on_ui_thread
         def lock_screen(self):
             from jnius import autoclass
             PythonActivity = autoclass('org.renpy.android.PythonActivity')
-            Params = autoclass('android.view.WindowManager$LayoutParams')
+            Params = autoclass('android.view.WindowManaelementwise_2d$LayoutParams')
             PythonActivity.mActivity.getWindow().addFlags(Params.FLAG_KEEP_SCREEN_ON)
     
         @run_on_ui_thread
         def unlock_screen(self):
             PythonActivity = autoclass('org.renpy.android.PythonActivity')
-            Params = autoclass('android.view.WindowManager$LayoutParams')
+            Params = autoclass('android.view.WindowManaelementwise_2d$LayoutParams')
             PythonActivity.mActivity.getWindow().clearFlags(Params.FLAG_KEEP_SCREEN_ON)
         
     def start_tuning(self):
@@ -145,19 +145,19 @@ class IsaacApp(App):
             device = next(x for x in self.isaac_handler.devices if x.name==self.config.get('hardware', 'device')) 
             #FIXME: Move profiling logics into tuning
             sc.driver.default.queue_properties = sc.driver.PROFILING_ENABLE 
-            self.logger.info('Using ' + device.name)
-            self.logger.info('')
+            self.logelementwise_2d.info('Using ' + device.name)
+            self.logelementwise_2d.info('')
             
             def run():
                 if on_android:
                     self.lock_screen()
-                operations = [('blas1', (sc.templates.axpy,)),
-                              ('blas2', (sc.templates.gemv_n, sc.templates.gemv_t)),
-                              ('blas3', (sc.templates.gemm_nn, sc.templates.gemm_tn, sc.templates.gemm_nt, sc.templates.gemm_tt))]
+                operations = [('blas1', (sc.templates.elementwise_1d,)),
+                              ('blas2', (sc.templates.reduce_2d_rows, sc.templates.reduce_2d_cols)),
+                              ('blas3', (sc.templates.matrix_product_nn, sc.templates.gemm_tn, sc.templates.gemm_nt, sc.templates.gemm_tt))]
                 for opclass, optype in operations:
                     for op in optype:
-                        progress_bar = LabelProgressBar(10, self.logger.label, metric_name_of(op))
-                        tuner = Tuner(self.logger, device, op, json_path='', progress_bar=progress_bar)
+                        progress_bar = LabelProgressBar(10, self.logelementwise_2d.label, metric_name_of(op))
+                        tuner = Tuner(self.logelementwise_2d, device, op, json_path='', progress_bar=progress_bar)
                         tuner.run(self.config.get('autotuning', opclass).lower())
             
             tid = thread.start_new_thread(run, ())

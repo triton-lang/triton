@@ -26,8 +26,8 @@ inline expression_type expression_type_from_string(std::string const & name)
   if(name=="elementwise_1d") return AXPY_TYPE;
   if(name=="reduce_1d") return DOT_TYPE;
   if(name=="elementwise_2d") return GER_TYPE;
-  if(name=="reduce_2d_n") return GEMV_N_TYPE;
-  if(name=="reduce_2d_t") return GEMV_T_TYPE;
+  if(name=="reduce_2d_rows") return GEMV_N_TYPE;
+  if(name=="reduce_2d_cols") return GEMV_T_TYPE;
   if(name=="matrix_product_nn") return GEMM_NN_TYPE;
   if(name=="matrix_product_nt") return GEMM_NT_TYPE;
   if(name=="matrix_product_tn") return GEMM_TN_TYPE;
