@@ -1,7 +1,7 @@
 #include "isaac/kernels/templates/elementwise_1d.h"
 #include "isaac/kernels/templates/elementwise_2d.h"
-#include "isaac/kernels/templates/dot.h"
-#include "isaac/kernels/templates/gemv.h"
+#include "isaac/kernels/templates/reduce_1d.h"
+#include "isaac/kernels/templates/reduce_2d.h"
 #include "isaac/kernels/templates/matrix_product.h"
 
 #include "common.hpp"
@@ -58,15 +58,15 @@ void export_templates()
   //Vector AXPY
   WRAP_SINGLE_TEMPLATE(elementwise_1d, uint, uint, uint, tpt::fetching_policy_type)
   WRAP_SINGLE_TEMPLATE(elementwise_2d, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
-  WRAP_SINGLE_TEMPLATE(dot, uint, uint, uint, tpt::fetching_policy_type)
-  WRAP_BASE(gemv)
-  WRAP_TEMPLATE(reduce_2d_rows, gemv, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
-  WRAP_TEMPLATE(reduce_2d_cols, gemv, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_SINGLE_TEMPLATE(reduce_1d, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_BASE(reduce_2d)
+  WRAP_TEMPLATE(reduce_2d_rows, reduce_2d, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_TEMPLATE(reduce_2d_cols, reduce_2d, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
   WRAP_BASE(matrix_product)
-  WRAP_TEMPLATE(matrix_product_nn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(matrix_product_tn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(matrix_product_nt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(matrix_product_tt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(matrix_product_nn, matrix_product, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(matrix_product_tn, matrix_product, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(matrix_product_nt, matrix_product, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(matrix_product_tt, matrix_product, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
 
 
 }

@@ -26,8 +26,8 @@ def pow2range(a, b):
 
 class Tuner:
 
-    def __init__(self, logelementwise_2d, device, operation, json_path, progress_bar):
-        self.logelementwise_2d = logger
+    def __init__(self, logger, device, operation, json_path, progress_bar):
+        self.logger = logger
         self.device = device
         self.operation = operation
         self.json_path = json_path
@@ -42,10 +42,10 @@ class Tuner:
         operation = self.operation
         context = sc.driver.context(device)
         
-        if self.logelementwise_2d:
-            self.logelementwise_2d.info("----------------")
-            self.logelementwise_2d.info(operation.__name__.replace('_','-').upper())
-            self.logelementwise_2d.info("----------------")
+        if self.logger:
+            self.logger.info("----------------")
+            self.logger.info(operation.__name__.replace('_','-').upper())
+            self.logger.info("----------------")
 
         #BLAS1 training sizes
         if operation in [sc.templates.elementwise_1d, sc.templates.reduce_1d]:
@@ -75,7 +75,7 @@ class Tuner:
                 sizes = product(pow2range(4,17), pow2range(4,17))
         
         #BLAS3 training sizes
-        if operation in [sc.templates.matrix_product_nn, sc.templates.gemm_nt, sc.templates.gemm_tn, sc.templates.gemm_tt]:
+        if operation in [sc.templates.matrix_product_nn, sc.templates.matrix_product_nt, sc.templates.matrix_product_tn, sc.templates.matrix_product_tt]:
             if level=='simple':
                 sizes = [(1536,1536,1536)]
             elif level=='intermediate':
@@ -171,7 +171,7 @@ class Tuner:
                 
             #Retune if necessary
             if retune:
-                optimizer = optimize.GeneticOptimizer(self.logelementwise_2d, naccept=1000, niter=1000, cxpb=.4, mutpb=.4, popsize=20, progress_bar = self.progress_bar)
+                optimizer = optimize.GeneticOptimizer(self.logger, naccept=1000, niter=1000, cxpb=.4, mutpb=.4, popsize=20, progress_bar = self.progress_bar)
                 new = optimizer.run(operation, x, context, prior=predicted)[0]
                 if new not in profiles:
                     profiles.append(new)
