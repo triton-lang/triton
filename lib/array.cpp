@@ -1068,104 +1068,95 @@ INSTANTIATE(float);
 INSTANTIATE(double);
 
 #undef INSTANTIATE
+
 /*--- Stream operators----*/
 //---------------------------------------
 
-namespace detail
-{
-  template<typename ItType>
-  static std::ostream & prettyprint(std::ostream& os, ItType begin, ItType const & end, size_t stride = 1, bool col = false, size_t WINDOW = 10)
-  {
-    if(!col)
-      os << "[ " ;
-    size_t N = (end - begin)/stride;
-    size_t upper = std::min(WINDOW,N);
-    for(size_t j = 0; j < upper ; j++)
-    {
-      os << *begin;
-      if(j<upper - 1)
-        os << ",";
-      begin+=stride;
-    }
-    if(upper < N)
-    {
-      if(N - upper > WINDOW)
-        os << ", ... ";
-      for(size_t j = std::max(N - WINDOW, upper) ; j < N ; j++)
-      {
-        os << "," << *begin;
-        begin+=stride;
-      }
-    }
-    if(!col)
-      os << " ]" ;
-    return os;
-  }
-
-}
-
 std::ostream& operator<<(std::ostream & os, array_base const & a)
 {
-  size_t WINDOW = 10;
+  int_t WINDOW = 3;
+  shape_t shape = a.shape();
   numeric_type dtype = a.dtype();
-  size_t M = a.shape()[0];
-  size_t N = (a.dim()==1)?1:a.shape()[1];
 
-  void* tmp = new char[a.shape().prod()*size_of(dtype)];
+  //Copy to Host RAM
+  void* tmp = new char[shape.prod()*size_of(dtype)];
   copy(a, (void*)tmp);
-  os << "[ " ;
-  size_t upper = std::min(WINDOW,M);
 
-#define HANDLE(ADTYPE, CTYPE) case ADTYPE: detail::prettyprint(os, reinterpret_cast<CTYPE*>(tmp) + i, reinterpret_cast<CTYPE*>(tmp) + M*N + i, M, true, WINDOW); break;
-  for(unsigned int i = 0 ; i < upper ; ++i)
+  //Strides of the CPU buffer
+  std::vector<int_t> strides(shape.size());
+  strides[0] = 1;
+  for(size_t i = 1 ; i < shape.size() ; ++i)
+    strides[i] = strides[i-1]*shape[i-1];
+
+  //Fortran ordering
+  for(size_t i = 1 ; i < shape.size(); ++i){
+    std::swap(shape[i], shape[i-1]);
+    std::swap(strides[i], strides[i-1]);
+  }
+
+  //Where to break lines
+  std::vector<int_t> linebreaks(shape.size());
+  int_t num_displayed = 1;
+  for(size_t i = 0 ; i < shape.size() ; ++i)
   {
-    if(i>0)
-      os << "  ";
+    linebreaks[i] = num_displayed;
+    num_displayed *= std::min(shape[i], 2*WINDOW);
+  }
+
+  os << "[" ;
+  for(int_t i = 0 ; i < num_displayed ; ++i)
+  {
+
+    //Open brackets
+    for(size_t s = 1 ; s < shape.size() ; ++s){
+        if(i % linebreaks[s] == 0)
+            os << "[";
+    }
+
+    //Print element
+    int_t current = i;
+    int_t idx = 0;
+    for(int_t s = shape.size() - 1 ; s >= 0 ; --s){
+      int_t off = current/linebreaks[s];
+      int_t data_off = (shape[s]>2*WINDOW && off+1 > WINDOW)?shape[s] - (2*WINDOW - off):off;
+      idx += data_off*strides[s];
+      current = current - off*linebreaks[s];
+    }
+#define ISAAC_PRINT_ELEMENT(ADTYPE, CTYPE) case ADTYPE: os << reinterpret_cast<CTYPE*>(tmp)[idx]; break;
     switch(dtype)
     {
-//      HANDLE(BOOL_TYPE, cl_bool)
-      HANDLE(CHAR_TYPE, char)
-      HANDLE(UCHAR_TYPE, unsigned char)
-      HANDLE(SHORT_TYPE, short)
-      HANDLE(USHORT_TYPE, unsigned short)
-      HANDLE(INT_TYPE, int)
-      HANDLE(UINT_TYPE, unsigned int)
-      HANDLE(LONG_TYPE, long)
-      HANDLE(ULONG_TYPE, unsigned long)
-//      HANDLE(HALF_TYPE, cl_half)
-      HANDLE(FLOAT_TYPE, float)
-      HANDLE(DOUBLE_TYPE, double)
-      default: throw unknown_datatype(dtype);
-    }
-    if(i < upper-1)
-      os <<  std::endl;
-  }
-  if(upper < M)
-  {
-    if(N - upper > WINDOW)
-      os << std::endl << "  ... ";
-    for(size_t i = std::max(N - WINDOW, upper) ; i < N ; i++)
-    {
-      os << std::endl << "  ";
-      switch(dtype)
-      {
-//        HANDLE(BOOL_TYPE, cl_bool)
-        HANDLE(CHAR_TYPE, char)
-        HANDLE(UCHAR_TYPE, unsigned char)
-        HANDLE(SHORT_TYPE, short)
-        HANDLE(USHORT_TYPE, unsigned short)
-        HANDLE(INT_TYPE, int)
-        HANDLE(UINT_TYPE, unsigned int)
-        HANDLE(LONG_TYPE, long)
-        HANDLE(ULONG_TYPE, unsigned long)
-//        HANDLE(HALF_TYPE, cl_half)
-        HANDLE(FLOAT_TYPE, float)
-        HANDLE(DOUBLE_TYPE, double)
+        ISAAC_PRINT_ELEMENT(CHAR_TYPE, char)
+        ISAAC_PRINT_ELEMENT(UCHAR_TYPE, unsigned char)
+        ISAAC_PRINT_ELEMENT(SHORT_TYPE, short)
+        ISAAC_PRINT_ELEMENT(USHORT_TYPE, unsigned short)
+        ISAAC_PRINT_ELEMENT(INT_TYPE, int)
+        ISAAC_PRINT_ELEMENT(UINT_TYPE, unsigned int)
+        ISAAC_PRINT_ELEMENT(LONG_TYPE, long)
+        ISAAC_PRINT_ELEMENT(ULONG_TYPE, unsigned long)
+        ISAAC_PRINT_ELEMENT(FLOAT_TYPE, float)
+        ISAAC_PRINT_ELEMENT(DOUBLE_TYPE, double)
         default: throw unknown_datatype(dtype);
-      }
+    }
+#undef ISAAC_PRINT_ELEMENT
+
+    //Comma
+    int_t innermost = (i+1) % (shape.size()==1?num_displayed:linebreaks.back());
+    if(shape.front() > 2*WINDOW && innermost == WINDOW)
+        os << ",...";
+    if(innermost > 0)
+        os << ",";
+
+    //Closes brackets + linebreak
+    for(size_t s = 1 ; s < shape.size() ; ++s)
+    {
+        if((i+1) % linebreaks[s] == 0){
+            os << "]" << ((i==num_displayed-1)?"":"\n");
+            if(shape[s] > 2*WINDOW && (i+1) / linebreaks[s] == WINDOW)
+                os << "...," << std::endl;
+        }
     }
   }
-  os << " ]";
+  os << "]";
   return os;
 }
 
