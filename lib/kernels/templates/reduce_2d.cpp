@@ -47,6 +47,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, math_expression
   kernel_generation_stream stream;
   driver::backend_type backend = device.backend();
   std::string _size_t = size_type(device);
+  std::string _global =  Global(backend).get();
 
   std::string name[2] = {"prod", "reduce"};
   name[0] += suffix;
@@ -61,13 +62,13 @@ std::string reduce_2d::generate_impl(std::string const & suffix, math_expression
         std::string sdtype = to_string(dtype);
         if (e->is_index_reduction())
         {
-          stream << e->process("uint* #name_temp = (uint*)(tmp + " + tools::to_string(offset) + "*M);");
+          stream << e->process(_global + " uint* #name_temp = (" + _global + " uint*)(tmp + " + tools::to_string(offset) + "*M);");
           offset += 4*p_.num_groups_0;
-          stream << e->process(sdtype + "* #name_temp_value = (" + sdtype + "*)(tmp + " + tools::to_string(offset) + "*M);");
+          stream << e->process(_global + " " + sdtype + "* #name_temp_value = (" + _global + " " + sdtype + "*)(tmp + " + tools::to_string(offset) + "*M);");
           offset += size_of(dtype)*p_.num_groups_0;
         }
         else{
-          stream << e->process(sdtype + "* #name_temp = (" + sdtype + "*)(tmp + " + tools::to_string(offset) + "*M);");
+          stream << e->process(_global + " " + sdtype + "* #name_temp = (" + _global + " " + sdtype + "*)(tmp + " + tools::to_string(offset) + "*M);");
           offset += size_of(dtype)*p_.num_groups_0;
         }
       }
@@ -82,7 +83,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, math_expression
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
   }
 
-  stream << KernelPrefix(backend) << " void " << name[0] << "(" << _size_t << " M, " << _size_t << " N, " << Global(backend) << " char* tmp, " << generate_arguments("#scalartype", device, mapping, expression) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[0] << "(" << _size_t << " M, " << _size_t << " N, " << _global << " char* tmp, " << generate_arguments("#scalartype", device, mapping, expression) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
@@ -249,7 +250,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, math_expression
   if(backend==driver::OPENCL)
     stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
 
-  stream << KernelPrefix(backend) << " void " << name[1] << "(" << _size_t << " M, " << _size_t << " N , " << Global(backend) << " char* tmp, " << generate_arguments("#scalartype", device, mapping, expression) << ")" << std::endl;
+  stream << KernelPrefix(backend) << " void " << name[1] << "(" << _size_t << " M, " << _size_t << " N , " << _global << " char* tmp, " << generate_arguments("#scalartype", device, mapping, expression) << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
 
