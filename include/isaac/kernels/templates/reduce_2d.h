@@ -41,18 +41,18 @@ private:
   reduce_1d_type reduce_1d_type_;
 };
 
-class reduce_2d_n : public reduce_2d
+class reduce_2d_rows : public reduce_2d
 {
 public:
-  reduce_2d_n(reduce_2d::parameters_type  const &, binding_policy_t binding_policy = BIND_INDEPENDENT);
-  reduce_2d_n(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_INDEPENDENT);
+  reduce_2d_rows(reduce_2d::parameters_type  const &, binding_policy_t binding_policy = BIND_INDEPENDENT);
+  reduce_2d_rows(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_INDEPENDENT);
 };
 
-class reduce_2d_t : public reduce_2d
+class reduce_2d_cols : public reduce_2d
 {
 public:
-  reduce_2d_t(reduce_2d::parameters_type  const &, binding_policy_t binding_policy = BIND_INDEPENDENT);
-  reduce_2d_t(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_INDEPENDENT);
+  reduce_2d_cols(reduce_2d::parameters_type  const &, binding_policy_t binding_policy = BIND_INDEPENDENT);
+  reduce_2d_cols(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, binding_policy_t bind = BIND_INDEPENDENT);
 };
 
 }

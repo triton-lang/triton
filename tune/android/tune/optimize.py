@@ -44,8 +44,8 @@ def exhaustive(template, sizes, context):
 
 class GeneticOptimizer:
     
-    def __init__(self, logger, naccept=500, niter=1000, cxpb=.4, mutpb=.4, popsize=10, progress_bar = None):
-        self.logger = logger
+    def __init__(self, logelementwise_2d, naccept=500, niter=1000, cxpb=.4, mutpb=.4, popsize=10, progress_bar = None):
+        self.logelementwise_2d = logger
         self.naccept = naccept
         self.niter = niter
         self.cxpb = cxpb
@@ -164,15 +164,15 @@ def is_local_optimum(parameters, template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
     genetic_infos = tools.genetic_infos_of(template)
     
-    if issubclass(template, sc.templates.axpy):
+    if issubclass(template, sc.templates.elementwise_1d):
         sweep_over = [0,1,2]
-    elif issubclass(template, sc.templates.dot):
+    elif issubclass(template, sc.templates.reduce_1d):
         sweep_over = [0,1,2]
-    elif issubclass(template, sc.templates.ger):
+    elif issubclass(template, sc.templates.elementwise_2d):
         sweep_over = [0,1,2,3,4]
     elif issubclass(template, sc.templates.gemv):
         sweep_over = [0,1,2,3,4]
-    elif issubclass(template, sc.templates.gemm):
+    elif issubclass(template, sc.templates.matrix_product):
         sweep_over = [1,3,5,7]
     
     #Evaluate the provided parameters guess

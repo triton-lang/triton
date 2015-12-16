@@ -70,15 +70,15 @@ namespace tools
         else
           name = bp::extract<std::string>(odtype.attr("__class__").attr("__name__"))();
 
-        if(name=="axpy") return sc::AXPY_TYPE;
-        else if(name=="ger") return sc::GER_TYPE;
+        if(name=="elementwise_1d") return sc::AXPY_TYPE;
+        else if(name=="elementwise_2d") return sc::GER_TYPE;
         else if(name=="dot") return sc::DOT_TYPE;
-        else if(name=="gemv_n") return sc::GEMV_N_TYPE;
-        else if(name=="gemv_t") return sc::GEMV_T_TYPE;
-        else if(name=="gemm_nn") return sc::GEMM_NN_TYPE;
-        else if(name=="gemm_tn") return sc::GEMM_TN_TYPE;
-        else if(name=="gemm_nt") return sc::GEMM_NT_TYPE;
-        else if(name=="gemm_tt") return sc::GEMM_TT_TYPE;
+        else if(name=="reduce_2d_rows") return sc::GEMV_N_TYPE;
+        else if(name=="reduce_2d_cols") return sc::GEMV_T_TYPE;
+        else if(name=="matrix_product_nn") return sc::GEMM_NN_TYPE;
+        else if(name=="matrix_product_tn") return sc::GEMM_TN_TYPE;
+        else if(name=="matrix_product_nt") return sc::GEMM_NT_TYPE;
+        else if(name=="matrix_product_tt") return sc::GEMM_TT_TYPE;
         else
         {
             PyErr_SetString(PyExc_TypeError, "Template type not understood");

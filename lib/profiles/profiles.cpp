@@ -140,10 +140,10 @@ std::shared_ptr<templates::base> profiles::create(std::string const & template_n
     return std::shared_ptr<templates::base>(new templates::reduce_1d(x[0], x[1], x[2], fetch[x[3]]));
   else if(template_name=="elementwise_2d")
     return std::shared_ptr<templates::base>(new templates::elementwise_2d(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
-  else if(template_name.find("reduce_2d_n")!=std::string::npos)
-    return std::shared_ptr<templates::base>(new templates::reduce_2d_n(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
-  else if(template_name.find("reduce_2d_t")!=std::string::npos)
-    return std::shared_ptr<templates::base>(new templates::reduce_2d_t(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
+  else if(template_name.find("reduce_2d_rows")!=std::string::npos)
+    return std::shared_ptr<templates::base>(new templates::reduce_2d_rows(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
+  else if(template_name.find("reduce_2d_cols")!=std::string::npos)
+    return std::shared_ptr<templates::base>(new templates::reduce_2d_cols(x[0], x[1], x[2], x[3], x[4], fetch[x[5]]));
   else if(template_name.find("matrix_product_nn")!=std::string::npos)
     return std::shared_ptr<templates::base>(new templates::matrix_product_nn(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], fetch[x[8]], fetch[x[9]], x[10], x[11]));
   else if(template_name.find("matrix_product_tn")!=std::string::npos)
@@ -163,7 +163,7 @@ void profiles::import(std::string const & str, driver::CommandQueue const & queu
   rapidjson::Document document;
   document.Parse<0>(str.c_str());
   //Deserialize
-  std::vector<std::string> operations = {"elementwise_1d", "reduce_1d", "elementwise_2d", "reduce_2d_n", "reduce_2d_t", "matrix_product_nn", "matrix_product_tn", "matrix_product_nt", "matrix_product_tt"};
+  std::vector<std::string> operations = {"elementwise_1d", "reduce_1d", "elementwise_2d", "reduce_2d_rows", "reduce_2d_cols", "matrix_product_nn", "matrix_product_tn", "matrix_product_nt", "matrix_product_tt"};
   std::vector<std::string> dtype = {"float32", "float64"};
   for(auto & operation : operations)
   {
@@ -268,8 +268,8 @@ std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::ba
     res[std::make_pair(AXPY_TYPE, DTYPE)] = ptr_t (new templates::elementwise_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
     res[std::make_pair(DOT_TYPE, DTYPE)] = ptr_t(new templates::reduce_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
     res[std::make_pair(GER_TYPE, DTYPE)] = ptr_t(new templates::elementwise_2d(1,128,1,16,32,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GEMV_N_TYPE, DTYPE)] = ptr_t(new templates::reduce_2d_n(1, 8, 8, 4, 16, templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GEMV_T_TYPE, DTYPE)] = ptr_t(new templates::reduce_2d_t(1, 8, 8, 64, 8, templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GEMV_N_TYPE, DTYPE)] = ptr_t(new templates::reduce_2d_rows(1, 8, 8, 4, 16, templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(GEMV_T_TYPE, DTYPE)] = ptr_t(new templates::reduce_2d_cols(1, 8, 8, 64, 8, templates::FETCH_FROM_GLOBAL_STRIDED));
     res[std::make_pair(GEMM_NN_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_nn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
     res[std::make_pair(GEMM_TN_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_tn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
     res[std::make_pair(GEMM_NT_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_nt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));

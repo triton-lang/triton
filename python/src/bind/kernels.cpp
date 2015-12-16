@@ -1,8 +1,8 @@
-#include "isaac/kernels/templates/axpy.h"
-#include "isaac/kernels/templates/ger.h"
+#include "isaac/kernels/templates/elementwise_1d.h"
+#include "isaac/kernels/templates/elementwise_2d.h"
 #include "isaac/kernels/templates/dot.h"
 #include "isaac/kernels/templates/gemv.h"
-#include "isaac/kernels/templates/gemm.h"
+#include "isaac/kernels/templates/matrix_product.h"
 
 #include "common.hpp"
 #include "kernels.h"
@@ -56,17 +56,17 @@ void export_templates()
   #define WRAP_SINGLE_TEMPLATE(name, ...) WRAP_BASE(name) WRAP_TEMPLATE(name, name, __VA_ARGS__)
 
   //Vector AXPY
-  WRAP_SINGLE_TEMPLATE(axpy, uint, uint, uint, tpt::fetching_policy_type)
-  WRAP_SINGLE_TEMPLATE(ger, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_SINGLE_TEMPLATE(elementwise_1d, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_SINGLE_TEMPLATE(elementwise_2d, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
   WRAP_SINGLE_TEMPLATE(dot, uint, uint, uint, tpt::fetching_policy_type)
   WRAP_BASE(gemv)
-  WRAP_TEMPLATE(gemv_n, gemv, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
-  WRAP_TEMPLATE(gemv_t, gemv, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
-  WRAP_BASE(gemm)
-  WRAP_TEMPLATE(gemm_nn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(gemm_tn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(gemm_nt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
-  WRAP_TEMPLATE(gemm_tt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(reduce_2d_rows, gemv, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_TEMPLATE(reduce_2d_cols, gemv, uint, uint, uint, uint, uint, tpt::fetching_policy_type)
+  WRAP_BASE(matrix_product)
+  WRAP_TEMPLATE(matrix_product_nn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(matrix_product_tn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(matrix_product_nt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
+  WRAP_TEMPLATE(matrix_product_tt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetching_policy_type, tpt::fetching_policy_type, uint, uint)
 
 
 }
