@@ -427,7 +427,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
             rhs_str = "rB[" + to_string(kk) + "]["+to_string(nn)+"]";
           else
             rhs_str = access_vector_type("rB[" + to_string(kk) + "]["+to_string(nn/p_.simd_width)+"]", nn%p_.simd_width);
-          stream << res_str << "=" << "mad(" << lhs_str << "," << rhs_str << "," << res_str << ");" << std::endl;
+          stream << res_str << "=" << (backend==driver::CUDA?"fma":"mad") << "(" << lhs_str << "," << rhs_str << "," << res_str << ");" << std::endl;
         }
 
         stream.dec_tab();
