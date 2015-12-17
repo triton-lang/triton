@@ -21,15 +21,11 @@
 namespace sc = isaac;
 typedef sc::int_t int_t;
 
-static long time_event(long sum, sc::driver::Event const & e)
-{
-    return sum + e.elapsed_time();
-}
-
-
 template<class T>
 void bench(sc::numeric_type dtype, std::string operation)
 {
+
+  Timer tmr;
 
 //
 // MACROS FOR BENCHMARKING
@@ -39,16 +35,18 @@ void bench(sc::numeric_type dtype, std::string operation)
 
 #define BENCHMARK_ISAAC(OP, PERF) \
   {\
-  std::vector<double> times;\
+  std::vector<long> times;\
   double total_time = 0;\
-  while(total_time*1e-9 < 1e-2){\
-    std::list<sc::driver::Event> events;\
+  OP;\
+  queue.synchronize();\
+  while(total_time*1e-9 < 1e-1){\
+    tmr.start();\
     OP;\
     queue.synchronize();\
-    times.push_back((double)std::accumulate(events.begin(), events.end(), 0, &time_event));\
+    times.push_back(tmr.get().count());\
     total_time+=times.back();\
   }\
-  double t = mean(times);\
+  double t = min(times);\
   std::cout << " " << (int)(PERF) << std::flush;\
   }
 
@@ -56,30 +54,32 @@ void bench(sc::numeric_type dtype, std::string operation)
   {\
   std::vector<long> times;\
   double total_time = 0;\
-  while(total_time*1e-9 < 1e-2){\
-    cl_event event;\
+  OP;\
+  queue.synchronize();\
+  while(total_time*1e-9 < 1e-1){\
+    tmr.start();\
     OP;\
     queue.synchronize();\
-    times.push_back(sc::driver::Event(event).elapsed_time());\
+    times.push_back(tmr.get().count());\
     total_time+=times.back();\
   }\
-  double t = mean(times);\
+  double t = min(times);\
   std::cout << " " << (int)(PERF) << std::flush;\
   }
 
 #define BENCHMARK_HOST(OP, PERF) \
   {\
-  Timer tmr;\
   long total_time = 0;\
   std::vector<long> times;\
-  while(total_time*1e-9 < 1e-2){\
+  OP;\
+  while(total_time*1e-9 < 1e-1){\
     tmr.start();\
     OP;\
     long time = tmr.get().count();\
     times.push_back(time);\
     total_time += time;\
   }\
-  double t = mean(times);\
+  double t = min(times);\
   std::cout << " " << (int)(PERF) << std::flush;\
   }
 
@@ -91,7 +91,7 @@ void bench(sc::numeric_type dtype, std::string operation)
   cudaEvent_t start, stop;\
   cudaEventCreate(&start);\
   cudaEventCreate(&stop);\
-  while(total_time*1e-3 < 1e-2){\
+  while(total_time*1e-3 < 1e-1){\
     cudaEventRecord(start,0);\
     OP;\
     cudaEventRecord(stop,0);\
@@ -100,7 +100,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     times.push_back(time*1e6);\
     total_time+=time;\
   }\
-  double t = mean(times);\
+  double t = min(times);\
   std::cout << " " << (int)(PERF) << std::flush;\
   }
 
@@ -138,13 +138,12 @@ void bench(sc::numeric_type dtype, std::string operation)
       std::cout << N;
       sc::array x(N, dtype), y(N, dtype);
       /* ISAAC */
-      std::list<sc::driver::Event> events;
-      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y, sc::execution_options_type(0, &events)), 3*N*dtsize/t)
-      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y, sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), 3*N*dtsize/t)
+      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y), 3*N*dtsize/t)
+      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y, sc::execution_options_type(), sc::dispatcher_options_type(true)), 3*N*dtsize/t)
       /* clblas */
   #ifdef BENCH_CLBLAS
       if(x.context().backend()==sc::driver::OPENCL)
-          BENCHMARK_CLBLAS(clblasSaxpy(N, alpha, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue), 0, NULL, &event), 3*N*dtsize/t);
+          BENCHMARK_CLBLAS(clblasSaxpy(N, alpha, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue), 0, NULL, NULL), 3*N*dtsize/t);
   #endif
       /* BLAS */
   #ifdef BENCH_CBLAS
@@ -171,11 +170,11 @@ void bench(sc::numeric_type dtype, std::string operation)
       sc::array scratch(N, dtype);
       sc::scalar s(dtype);
       s = dot(x,y); queue.synchronize();
-      BENCHMARK_ISAAC(s = sc::execution_handler(dot(x,y), sc::execution_options_type(0, &events)), 2*N*dtsize/t)
+      BENCHMARK_ISAAC(s = sc::execution_handler(dot(x,y)), 2*N*dtsize/t)
       /* clblas */
   #ifdef BENCH_CLBLAS
       if(x.context().backend()==sc::driver::OPENCL)
-        BENCHMARK_CLBLAS(clblasSdot(N, CL_HANDLE(s.data()), 0, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, CL_HANDLE(scratch.data()), 1, &CL_HANDLE(queue), 0, NULL, &event), 2*N*dtsize/t)
+        BENCHMARK_CLBLAS(clblasSdot(N, CL_HANDLE(s.data()), 0, CL_HANDLE(x.data()), 0, 1, CL_HANDLE(y.data()), 0, 1, CL_HANDLE(scratch.data()), 1, &CL_HANDLE(queue), 0, NULL, NULL), 2*N*dtsize/t)
   #endif
       /* BLAS */
   #ifdef BENCH_CBLAS
@@ -234,11 +233,11 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.stride()[1];
     #endif
-        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T,x):dot(A,x), sc::execution_options_type(0, &events)),(M*N + M + N)*dtsize/t);
-        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T,x):dot(A,x), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
+        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T,x):dot(A,x)),(M*N + M + N)*dtsize/t);
+        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T,x):dot(A,x), sc::execution_options_type(), sc::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
     #ifdef BENCH_CLBLAS
         if(y.context().backend()==sc::driver::OPENCL)
-            BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, As1, As2, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, &event), (M*N + M + N)*dtsize/t)
+            BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, As1, As2, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, NULL), (M*N + M + N)*dtsize/t)
     #endif
     #ifdef BENCH_CBLAS
         std::vector<float> cA(M*N), cx(N), cy(M);
@@ -313,13 +312,13 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.stride()[1], ldb = B.stride()[1], ldc = C.stride()[1];
     #endif
-        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(false)), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B))), (double)2*M*N*K/t);
 //        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B)), sc::execution_options_type(0, &events), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         if(C.context().backend()==sc::driver::OPENCL)
             BENCHMARK_CLBLAS(clblasSgemm(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, BT?clblasTrans:clblasNoTrans, M, N, K, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(B.data()), 0, ldb,
-                                                0, CL_HANDLE(C.data()), 0, ldc, 1, &CL_HANDLE(queue),0, NULL, &event), (double)2*M*N*K/t)
+                                                0, CL_HANDLE(C.data()), 0, ldc, 1, &CL_HANDLE(queue),0, NULL, NULL), (double)2*M*N*K/t)
     #endif
         /* BLAS */
     #ifdef BENCH_CBLAS

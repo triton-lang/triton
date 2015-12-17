@@ -2,6 +2,7 @@
 #define ISAAC_BENCH_COMMON_HPP_
 
 #include <chrono>
+#include <algorithm>
 
 template<std::size_t> struct int_{};
 
@@ -59,6 +60,12 @@ T median(std::vector<T> x)
       return (x[size / 2 - 1] + x[size / 2]) / 2;
   else
       return x[size / 2];
+}
+
+template<class T>
+T min(std::vector<T> x)
+{
+  return *std::min_element(x.begin(), x.end());
 }
 
 template<class T>
