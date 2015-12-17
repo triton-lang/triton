@@ -31,7 +31,7 @@ def benchmark(template, setting, tree):
     z, events = sc.driver.enqueue(tree)
     tree.context.queues[0].synchronize()
     #Time
-    while total < 1e-2:
+    while total < 1e-1:
         start = time()
         z, events = sc.driver.enqueue(tree)
         tree.context.queues[0].synchronize()
@@ -39,7 +39,7 @@ def benchmark(template, setting, tree):
         times.append(end - start)
         total += times[-1]
         i+=1
-    return median(times)
+    return min(times)
 
 
 def tree_of(template, sizes, context):
