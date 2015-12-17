@@ -39,7 +39,7 @@ def benchmark(template, setting, tree):
         times.append(end - start)
         total += times[-1]
         i+=1
-    return min(times)
+    return median(times)
 
 
 def tree_of(template, sizes, context):
