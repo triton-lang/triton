@@ -327,7 +327,6 @@ void reduce_1d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
   //NDRange
   driver::NDRange global[2] = { driver::NDRange(p_.local_size_0*p_.num_groups), driver::NDRange(p_.local_size_0) };
   driver::NDRange local[2] = { driver::NDRange(p_.local_size_0), driver::NDRange(p_.local_size_0) };
-
   //Arguments
   for (auto & kernel : kernels)
   {
@@ -339,6 +338,7 @@ void reduce_1d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
 
   for (unsigned int k = 0; k < 2; k++)
     control.execution_options().enqueue(program.context(), kernels[k], global[k], local[k]);
+  queue.synchronize();
 }
 
 }

@@ -170,7 +170,7 @@ def is_local_optimum(parameters, template, sizes, context):
         sweep_over = [0,1,2]
     elif issubclass(template, sc.templates.elementwise_2d):
         sweep_over = [0,1,2,3,4]
-    elif issubclass(template, sc.templates.gemv):
+    elif issubclass(template, sc.templates.reduce_2d):
         sweep_over = [0,1,2,3,4]
     elif issubclass(template, sc.templates.matrix_product):
         sweep_over = [1,3,5,7]
