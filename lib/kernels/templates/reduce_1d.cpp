@@ -148,7 +148,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, math_expression
     std::set<std::string> already_fetched;
     for (const auto & elem : exprs)
     {
-      std::string array = append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,"#scalartype",i,"#pointer","#1",backend)+";";
+      std::string array = append_width("#scalartype",simd_width) + " #namereg = " + vload(simd_width,"#scalartype",i,"#pointer","#stride",backend)+";";
       (elem)->process_recursive(stream, PARENT_NODE_TYPE, {{"arrayn", array}, {"arrayn1", array}, {"array1n", array},
                                                            {"matrix_row",  "#scalartype #namereg = #pointer[$OFFSET{#row*#stride, i}];"},
                                                            {"matrix_column", "#scalartype #namereg = #pointer[$OFFSET{i*#stride,#column}];"},
@@ -160,7 +160,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, math_expression
       str[0] = "#namereg";
     else
       for (unsigned int a = 0; a < simd_width; ++a)
-        str[a] = append_simd_suffix("#namereg.s", a);
+        str[a] = access_vector_type("#namereg", a);
 
     for (auto & elem : exprs)
     {

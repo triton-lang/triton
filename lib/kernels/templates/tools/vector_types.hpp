@@ -10,15 +10,6 @@ namespace isaac
 namespace templates
 {
 
-inline std::string append_simd_suffix(std::string const & str, unsigned int i)
-{
-  assert(i < 16);
-  char suffixes[] = {'0','1','2','3','4','5','6','7','8','9',
-                           'a','b','c','d','e','f'};
-  return str + tools::to_string(suffixes[i]);
-}
-
-
 inline std::string access_vector_type(std::string const & v, int i)
 {
     switch(i)
