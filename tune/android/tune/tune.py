@@ -77,7 +77,7 @@ class Tuner:
         #BLAS3 training sizes
         if operation in [sc.templates.matrix_product_nn, sc.templates.matrix_product_nt, sc.templates.matrix_product_tn, sc.templates.matrix_product_tt]:
             if level=='simple':
-                sizes = [(1536,1536,1536)]
+                sizes = [(2560,2560,2560)]
             elif level=='intermediate':
                 sizes = [(896,896,896),
 			 (1536,1536,1536),

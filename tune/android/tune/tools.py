@@ -1,7 +1,7 @@
 import isaac as sc
 from numpy import mean, median
 from math import ceil, exp, log, sqrt
-
+from time import time
 profile_execution_failure = (sc.OperationNotSupported,  sc.OclLaunchOutOfResources, sc.CudaLaunchOutOfResources, sc.MemObjectAllocationFailure, sc.InvalidWorkGroupSize, sc.OutOfHostMemory, sc.InvalidValue)
 
 def sanitize(string, keep_chars = ['_']):
@@ -27,10 +27,16 @@ def benchmark(template, setting, tree):
     times = []
     total = 0
     i = 0
+    #Warm-up
+    z, events = sc.driver.enqueue(tree)
+    tree.context.queues[0].synchronize()
+    #Time
     while total < 1e-2:
+        start = time()
         z, events = sc.driver.enqueue(tree)
         tree.context.queues[0].synchronize()
-        times.append(1e-9*sum([e.elapsed_time for e in events]))
+        end = time()
+        times.append(end - start)
         total += times[-1]
         i+=1
     return median(times)
