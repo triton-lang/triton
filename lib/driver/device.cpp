@@ -67,6 +67,61 @@ Device::Architecture Device::architecture() const
         {
             return Architecture::BROADWELL;
         }
+        case Vendor::NVIDIA:
+        {
+            std::pair<unsigned int, unsigned int> sm = nv_compute_capability();
+            switch(sm.first)
+            {
+                case 5: return Architecture::MAXWELL;
+                case 3: return Architecture::KEPLER;
+                case 2: return Architecture::FERMI;
+                case 1: return Architecture::TESLA;
+            }
+        }
+        case Vendor::AMD:
+        {
+            //No simple way to query TeraScale/GCN version. Enumerate...
+            std::string device_name = name();
+
+        #define MAP_DEVICE(device,arch)if (device_name.find(device,0)!=std::string::npos) return Architecture::arch;
+            //TERASCALE 2
+            MAP_DEVICE("Barts",TERASCALE_2);
+            MAP_DEVICE("Cedar",TERASCALE_2);
+            MAP_DEVICE("Redwood",TERASCALE_2);
+            MAP_DEVICE("Juniper",TERASCALE_2);
+            MAP_DEVICE("Cypress",TERASCALE_2);
+            MAP_DEVICE("Hemlock",TERASCALE_2);
+            MAP_DEVICE("Caicos",TERASCALE_2);
+            MAP_DEVICE("Turks",TERASCALE_2);
+            MAP_DEVICE("WinterPark",TERASCALE_2);
+            MAP_DEVICE("BeaverCreek",TERASCALE_2);
+
+            //TERASCALE 3
+            MAP_DEVICE("Cayman",TERASCALE_3);
+            MAP_DEVICE("Antilles",TERASCALE_3);
+            MAP_DEVICE("Scrapper",TERASCALE_3);
+            MAP_DEVICE("Devastator",TERASCALE_3);
+
+            //GCN 1.0
+            MAP_DEVICE("Cape",GCN_1_0);
+            MAP_DEVICE("Pitcairn",GCN_1_0);
+            MAP_DEVICE("Tahiti",GCN_1_0);
+            MAP_DEVICE("New Zealand",GCN_1_0);
+            MAP_DEVICE("Curacao",GCN_1_0);
+            MAP_DEVICE("Malta",GCN_1_0);
+
+            //GCN 1.1
+            MAP_DEVICE("Bonaire",GCN_1_1);
+            MAP_DEVICE("Hawaii",GCN_1_1);
+            MAP_DEVICE("Vesuvius",GCN_1_1);
+
+            //GCN 1.2
+            MAP_DEVICE("Tonga",GCN_1_2);
+            MAP_DEVICE("Fiji",GCN_1_2);
+
+        #undef MAP_DEVICE
+
+        }
         default:
         {
             return Architecture::UNKNOWN;
