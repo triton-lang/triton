@@ -193,7 +193,7 @@ def is_local_optimum(parameters, template, sizes, context):
             pass
         try:
             time = tools.benchmark(template, x, tree)
-            if time/reference < .97:
+            if time/reference < .9:
                 return False
         except profile_execution_failure:
             pass
