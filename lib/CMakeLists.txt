@@ -24,7 +24,7 @@ target_link_libraries(isaac "dl")
 set(CUDA_HELPERS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/driver/helpers/cuda/)
 file(GLOB_RECURSE CUDA_HELPERS_SRC ${CUDA_HELPERS_PATH}/*.cu)
 CODE_TO_H(SOURCES ${CUDA_HELPERS_SRC} VARNAME kernel_files EXTENSION "hpp"
-          OUTPUT_DIR ${CUDA_HELPERS_PATH} NAMESPACE "isaac helpers cuda" TARGET cuda_headers EOF "0")
+          OUTPUT_DIR ${CUDA_HELPERS_PATH} NAMESPACE "isaac helpers cuda" TARGET headers EOF "0")
 
 #Installation
 install(TARGETS isaac LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
