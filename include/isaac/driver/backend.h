@@ -29,7 +29,7 @@ public:
   class ISAACAPI workspaces
   {
   public:
-      static const size_t SIZE = 1000000; //1MB of temporary workspace per queue
+      static const size_t SIZE = 8000000; //8MB of temporary workspace per queue
       static void release();
       static driver::Buffer & get(CommandQueue const & key);
   private:
