@@ -34,6 +34,15 @@ unsigned int reduce_2d::lmem_usage(const math_expression&) const
   return (p_.local_size_0+1)*p_.local_size_1;
 }
 
+unsigned int reduce_2d::temporary_workspace(math_expression const & expressions) const
+{
+    std::vector<int_t> MN = input_sizes(expressions);
+    int_t M = MN[0];
+    if(p_.num_groups_0 > 1)
+      return M*p_.num_groups_0;
+    return 0;
+}
+
 std::string reduce_2d::generate_impl(std::string const & suffix, math_expression const & expression, driver::Device const & device, mapping_type const & mapping) const
 {
   using tools::to_string;

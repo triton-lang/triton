@@ -31,8 +31,9 @@ protected:
   };
   reduce_2d(reduce_2d::parameters_type const & , reduce_1d_type, binding_policy_t);
 private:
-  virtual int is_invalid_impl(driver::Device const &, math_expression const &) const;
+  int is_invalid_impl(driver::Device const &, math_expression const &) const;
   unsigned int lmem_usage(math_expression const &) const;
+  unsigned int temporary_workspace(math_expression const & expressions) const;
   std::string generate_impl(std::string const & suffix, math_expression const &, driver::Device const & device, mapping_type const &) const;
 public:
   virtual std::vector<int_t> input_sizes(math_expression const & expressions) const;

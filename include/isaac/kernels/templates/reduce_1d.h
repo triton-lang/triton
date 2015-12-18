@@ -22,6 +22,7 @@ class reduce_1d : public base_impl<reduce_1d, reduce_1d_parameters>
 private:
   unsigned int lmem_usage(math_expression const  & expressions) const;
   int is_invalid_impl(driver::Device const &, math_expression const  &) const;
+  unsigned int temporary_workspace(math_expression const & expressions) const;
   inline void reduce_1d_local_memory(kernel_generation_stream & stream, unsigned int size, std::vector<mapped_reduce_1d*> exprs,
                                      std::string const & buf_str, std::string const & buf_value_str, driver::backend_type backend) const;
   std::string generate_impl(std::string const & suffix,  math_expression const  & expressions, driver::Device const & device, mapping_type const & mapping) const;
