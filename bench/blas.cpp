@@ -85,23 +85,19 @@ void bench(sc::numeric_type dtype, std::string operation)
 
 #define BENCHMARK_CUDA(OP, PERF) \
   {\
-  std::vector<long> times;\
-  double total_time = 0;\
-  float time;\
-  cudaEvent_t start, stop;\
-  cudaEventCreate(&start);\
-  cudaEventCreate(&stop);\
-  while(total_time*1e-3 < 1e-1){\
-    cudaEventRecord(start,0);\
+    std::vector<long> times;\
+    double total_time = 0;\
     OP;\
-    cudaEventRecord(stop,0);\
-    cudaEventSynchronize(stop);\
-    cudaEventElapsedTime(&time, start, stop);\
-    times.push_back(time*1e6);\
-    total_time+=time;\
-  }\
-  double t = min(times);\
-  std::cout << " " << (int)(PERF) << std::flush;\
+    cudaDeviceSynchronize();\
+    while(total_time*1e-9 < 1e-1){\
+      tmr.start();\
+      OP;\
+      cudaDeviceSynchronize();\
+      times.push_back(tmr.get().count());\
+      total_time+=times.back();\
+    }\
+    double t = min(times);\
+    std::cout << " " << (int)(PERF) << std::flush;\
   }
 
   unsigned int dtsize = sc::size_of(dtype);
