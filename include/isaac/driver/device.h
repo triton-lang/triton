@@ -37,8 +37,23 @@ public:
 
   enum class Architecture
   {
+      //Intel
       HASWELL,
       BROADWELL,
+
+      //NVidia
+      TESLA,
+      FERMI,
+      KEPLER,
+      MAXWELL,
+
+      //AMD
+      TERASCALE_2,
+      TERASCALE_3,
+      GCN_1_0,
+      GCN_1_1,
+      GCN_1_2,
+
       UNKNOWN
   };
 
