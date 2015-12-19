@@ -21,7 +21,7 @@ inline std::string to_string(node_type const & f)
   }
 }
 
-inline std::string to_string(lhs_rhs_element const & e)
+inline std::string to_string(tree_node const & e)
 {
   if(e.subtype==COMPOSITE_OPERATOR_TYPE)
   {

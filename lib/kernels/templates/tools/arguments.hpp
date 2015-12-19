@@ -79,7 +79,7 @@ public:
         }
     }
 
-    void set_arguments(lhs_rhs_element const & lhs_rhs, bool is_assigned) const
+    void set_arguments(tree_node const & lhs_rhs, bool is_assigned) const
     {
         switch(lhs_rhs.subtype)
         {

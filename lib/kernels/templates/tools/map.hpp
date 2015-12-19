@@ -42,7 +42,7 @@ class map_functor : public traversal_functor
     return std::shared_ptr<mapped_object>(new mapped_array(dtype, id, type));
   }
 
-  std::shared_ptr<mapped_object> create(lhs_rhs_element const & lhs_rhs, bool is_assigned = false) const
+  std::shared_ptr<mapped_object> create(tree_node const & lhs_rhs, bool is_assigned = false) const
   {
     switch(lhs_rhs.subtype)
     {

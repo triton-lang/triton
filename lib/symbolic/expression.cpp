@@ -8,41 +8,41 @@
 namespace isaac
 {
 
-void fill(lhs_rhs_element &x, invalid_node)
+void fill(tree_node &x, invalid_node)
 {
   x.subtype = INVALID_SUBTYPE;
   x.dtype = INVALID_NUMERIC_TYPE;
 }
 
-void fill(lhs_rhs_element & x, std::size_t node_index)
+void fill(tree_node & x, std::size_t node_index)
 {
   x.subtype = COMPOSITE_OPERATOR_TYPE;
   x.dtype = INVALID_NUMERIC_TYPE;
   x.node_index = node_index;
 }
 
-void fill(lhs_rhs_element & x, for_idx_t index)
+void fill(tree_node & x, for_idx_t index)
 {
   x.subtype = FOR_LOOP_INDEX_TYPE;
   x.dtype = INVALID_NUMERIC_TYPE;
   x.for_idx = index;
 }
 
-void fill(lhs_rhs_element & x, array_base const & a)
+void fill(tree_node & x, array_base const & a)
 {
   x.subtype = DENSE_ARRAY_TYPE;
   x.dtype = a.dtype();
   x.array = (array_base*)&a;
 }
 
-void fill(lhs_rhs_element & x, value_scalar const & v)
+void fill(tree_node & x, value_scalar const & v)
 {
   x.dtype = v.dtype();
   x.subtype = VALUE_SCALAR_TYPE;
   x.vscalar = v.values();
 }
 
-lhs_rhs_element::lhs_rhs_element(){}
+tree_node::tree_node(){}
 
 //
 op_element::op_element() {}

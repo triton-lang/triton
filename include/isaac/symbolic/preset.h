@@ -21,10 +21,10 @@ public:
     {
         args(): A(NULL), B(NULL), C(NULL), type(INVALID_EXPRESSION_TYPE){ }
         value_scalar alpha;
-        lhs_rhs_element const * A;
-        lhs_rhs_element const * B;
+        tree_node const * A;
+        tree_node const * B;
         value_scalar beta;
-        lhs_rhs_element const * C;
+        tree_node const * C;
         expression_type type;
 
         operator bool() const

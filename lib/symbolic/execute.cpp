@@ -13,7 +13,7 @@ namespace isaac
 
   namespace detail
   {
-    typedef std::vector<std::pair<expression_type, lhs_rhs_element*> > breakpoints_t;
+    typedef std::vector<std::pair<expression_type, tree_node*> > breakpoints_t;
 
 
     inline bool is_mmprod(expression_type x)
