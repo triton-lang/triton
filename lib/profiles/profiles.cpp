@@ -201,7 +201,7 @@ profiles::map_type& profiles::init(driver::CommandQueue const & queue)
   map_type & result = cache_[queue];
 
   numeric_type dtypes[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
-  expression_type etypes[] = {AXPY_TYPE, DOT_TYPE, GER_TYPE, GEMV_N_TYPE, GEMV_T_TYPE, GEMM_NN_TYPE, GEMM_NT_TYPE, GEMM_TN_TYPE, GEMM_TT_TYPE};
+  expression_type etypes[] = {ELEMENTWISE_1D, REDUCE_1D, ELEMENTWISE_2D, REDUCE_2D_ROWS, REDUCE_2D_COLS, MATRIX_PRODUCT_NN, MATRIX_PRODUCT_NT, MATRIX_PRODUCT_TN, MATRIX_PRODUCT_TT};
 
   for(numeric_type dtype: dtypes)
     for(expression_type etype: etypes)
@@ -265,15 +265,15 @@ std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::ba
   numeric_type types[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
   for(auto DTYPE : types)
   {
-    res[std::make_pair(AXPY_TYPE, DTYPE)] = ptr_t (new templates::elementwise_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(DOT_TYPE, DTYPE)] = ptr_t(new templates::reduce_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GER_TYPE, DTYPE)] = ptr_t(new templates::elementwise_2d(1,128,1,16,32,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GEMV_N_TYPE, DTYPE)] = ptr_t(new templates::reduce_2d_rows(1, 8, 8, 4, 16, templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GEMV_T_TYPE, DTYPE)] = ptr_t(new templates::reduce_2d_cols(1, 8, 8, 64, 8, templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(GEMM_NN_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_nn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(GEMM_TN_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_tn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(GEMM_NT_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_nt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(GEMM_TT_TYPE, DTYPE)] = ptr_t(new templates::matrix_product_tt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(ELEMENTWISE_1D, DTYPE)] = ptr_t (new templates::elementwise_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(REDUCE_1D, DTYPE)] = ptr_t(new templates::reduce_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(ELEMENTWISE_2D, DTYPE)] = ptr_t(new templates::elementwise_2d(1,128,1,16,32,templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(REDUCE_2D_ROWS, DTYPE)] = ptr_t(new templates::reduce_2d_rows(1, 8, 8, 4, 16, templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(REDUCE_2D_COLS, DTYPE)] = ptr_t(new templates::reduce_2d_cols(1, 8, 8, 64, 8, templates::FETCH_FROM_GLOBAL_STRIDED));
+    res[std::make_pair(MATRIX_PRODUCT_NN, DTYPE)] = ptr_t(new templates::matrix_product_nn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(MATRIX_PRODUCT_TN, DTYPE)] = ptr_t(new templates::matrix_product_tn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(MATRIX_PRODUCT_NT, DTYPE)] = ptr_t(new templates::matrix_product_nt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
+    res[std::make_pair(MATRIX_PRODUCT_TT, DTYPE)] = ptr_t(new templates::matrix_product_tt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
   }
   return res;
 }

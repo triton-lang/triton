@@ -664,10 +664,10 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
 
   matrix_product::matrix_product(matrix_product_parameters const & parameters, bool check_bounds, char A_trans, char B_trans) : base_impl<matrix_product, matrix_product_parameters>(parameters, BIND_INDEPENDENT), A_trans_(A_trans), B_trans_(B_trans), check_bounds_(check_bounds)
   {
-    if(A_trans_=='N' && B_trans_=='N') type_ = GEMM_NN_TYPE;
-    else if(A_trans_=='T' && B_trans_=='N') type_ = GEMM_TN_TYPE;
-    else if(A_trans_=='N' && B_trans_=='T') type_ = GEMM_NT_TYPE;
-    else if(A_trans_=='T' && B_trans_=='T') type_ = GEMM_TT_TYPE;
+    if(A_trans_=='N' && B_trans_=='N') type_ = MATRIX_PRODUCT_NN;
+    else if(A_trans_=='T' && B_trans_=='N') type_ = MATRIX_PRODUCT_TN;
+    else if(A_trans_=='N' && B_trans_=='T') type_ = MATRIX_PRODUCT_NT;
+    else if(A_trans_=='T' && B_trans_=='T') type_ = MATRIX_PRODUCT_TT;
     else throw;
   }
 
