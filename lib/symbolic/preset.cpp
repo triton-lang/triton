@@ -48,7 +48,7 @@ void matrix_product::handle_node(math_expression::container_type const & tree, s
 
 matrix_product::args matrix_product::check(math_expression::container_type const & tree, size_t rootidx)
 {
-    lhs_rhs_element const * assigned = &tree[rootidx].lhs;
+    tree_node const * assigned = &tree[rootidx].lhs;
     numeric_type dtype = assigned->dtype;
     matrix_product::args result ;
     if(dtype==INVALID_NUMERIC_TYPE)

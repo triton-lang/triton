@@ -139,7 +139,7 @@ std::vector<size_t> filter_nodes(bool (*pred)(math_expression::node const & node
 }
 
 //
-filter_elements_fun::filter_elements_fun(node_type subtype, std::vector<lhs_rhs_element> & out) :
+filter_elements_fun::filter_elements_fun(node_type subtype, std::vector<tree_node> & out) :
   subtype_(subtype), out_(out)
 { }
 
@@ -153,9 +153,9 @@ void filter_elements_fun::operator()(isaac::math_expression const & math_express
 }
 
 
-std::vector<lhs_rhs_element> filter_elements(node_type subtype, isaac::math_expression const & math_expression)
+std::vector<tree_node> filter_elements(node_type subtype, isaac::math_expression const & math_expression)
 {
-  std::vector<lhs_rhs_element> res;
+  std::vector<tree_node> res;
   traverse(math_expression, math_expression.root(), filter_elements_fun(subtype, res), true);
   return res;
 }
@@ -415,7 +415,7 @@ void math_expression_representation_functor::append_id(char * & ptr, unsigned in
 //  append_id(ptr_, binder_.get(h, is_assigned));
 //}
 
-void math_expression_representation_functor::append(lhs_rhs_element const & lhs_rhs, bool is_assigned) const
+void math_expression_representation_functor::append(tree_node const & lhs_rhs, bool is_assigned) const
 {
   if(lhs_rhs.subtype==DENSE_ARRAY_TYPE)
   {

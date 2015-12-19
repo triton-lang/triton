@@ -84,11 +84,11 @@ private:
 class filter_elements_fun : public traversal_functor
 {
 public:
-  filter_elements_fun(node_type subtype, std::vector<lhs_rhs_element> & out);
+  filter_elements_fun(node_type subtype, std::vector<tree_node> & out);
   void operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t) const;
 private:
   node_type subtype_;
-  std::vector<lhs_rhs_element> & out_;
+  std::vector<tree_node> & out_;
 };
 
 std::vector<size_t> filter_nodes(bool (*pred)(math_expression::node const & node),
@@ -96,7 +96,7 @@ std::vector<size_t> filter_nodes(bool (*pred)(math_expression::node const & node
                                         size_t root,
                                         bool inspect);
 
-std::vector<lhs_rhs_element> filter_elements(node_type subtype,
+std::vector<tree_node> filter_elements(node_type subtype,
                                              isaac::math_expression const & math_expression);
 const char * evaluate(operation_type type);
 
@@ -146,7 +146,7 @@ class math_expression_representation_functor : public traversal_functor{
 private:
   static void append_id(char * & ptr, unsigned int val);
   void append(driver::Buffer const & h, numeric_type dtype, char prefix) const;
-  void append(lhs_rhs_element const & lhs_rhs, bool is_assigned) const;
+  void append(tree_node const & lhs_rhs, bool is_assigned) const;
 public:
   math_expression_representation_functor(symbolic_binder & binder, char *& ptr);
   void append(char*& p, const char * str) const;

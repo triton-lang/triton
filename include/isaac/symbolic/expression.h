@@ -162,11 +162,11 @@ enum node_type
   FOR_LOOP_INDEX_TYPE
 };
 
-struct lhs_rhs_element
+struct tree_node
 {
-  lhs_rhs_element();
-  node_type       subtype;
-  numeric_type  dtype;
+  tree_node();
+  node_type subtype;
+  numeric_type dtype;
   union
   {
     std::size_t   node_index;
@@ -178,20 +178,20 @@ struct lhs_rhs_element
 
 struct invalid_node{};
 
-void fill(lhs_rhs_element &x, for_idx_t index);
-void fill(lhs_rhs_element &x, invalid_node);
-void fill(lhs_rhs_element & x, std::size_t node_index);
-void fill(lhs_rhs_element & x, array_base const & a);
-void fill(lhs_rhs_element & x, value_scalar const & v);
+void fill(tree_node &x, for_idx_t index);
+void fill(tree_node &x, invalid_node);
+void fill(tree_node & x, std::size_t node_index);
+void fill(tree_node & x, array_base const & a);
+void fill(tree_node & x, value_scalar const & v);
 
 class math_expression
 {
 public:
   struct node
   {
-    lhs_rhs_element    lhs;
-    op_element         op;
-    lhs_rhs_element    rhs;
+    tree_node    lhs;
+    op_element   op;
+    tree_node    rhs;
   };
 
   typedef std::vector<node>     container_type;
