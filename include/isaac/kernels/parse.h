@@ -47,9 +47,9 @@ inline void traverse(isaac::math_expression const & math_expression, std::size_t
   //Lhs:
   if (recurse)
   {
-    if (root_node.lhs.type_family==COMPOSITE_OPERATOR_FAMILY)
+    if (root_node.lhs.subtype==COMPOSITE_OPERATOR_TYPE)
       traverse(math_expression, root_node.lhs.node_index, fun, inspect);
-    if (root_node.lhs.type_family != INVALID_TYPE_FAMILY)
+    if (root_node.lhs.subtype != INVALID_SUBTYPE)
       fun(math_expression, root_idx, LHS_NODE_TYPE);
   }
 
@@ -58,11 +58,11 @@ inline void traverse(isaac::math_expression const & math_expression, std::size_t
     fun(math_expression, root_idx, PARENT_NODE_TYPE);
 
   //Rhs:
-  if (recurse && root_node.rhs.type_family!=INVALID_TYPE_FAMILY)
+  if (recurse && root_node.rhs.subtype!=INVALID_SUBTYPE)
   {
-    if (root_node.rhs.type_family==COMPOSITE_OPERATOR_FAMILY)
+    if (root_node.rhs.subtype==COMPOSITE_OPERATOR_TYPE)
       traverse(math_expression, root_node.rhs.node_index, fun, inspect);
-    if (root_node.rhs.type_family != INVALID_TYPE_FAMILY)
+    if (root_node.rhs.subtype != INVALID_SUBTYPE)
       fun(math_expression, root_idx, RHS_NODE_TYPE);
   }
 
@@ -84,10 +84,10 @@ private:
 class filter_elements_fun : public traversal_functor
 {
 public:
-  filter_elements_fun(math_expression_node_subtype subtype, std::vector<lhs_rhs_element> & out);
+  filter_elements_fun(node_type subtype, std::vector<lhs_rhs_element> & out);
   void operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t) const;
 private:
-  math_expression_node_subtype subtype_;
+  node_type subtype_;
   std::vector<lhs_rhs_element> & out_;
 };
 
@@ -96,9 +96,9 @@ std::vector<size_t> filter_nodes(bool (*pred)(math_expression::node const & node
                                         size_t root,
                                         bool inspect);
 
-std::vector<lhs_rhs_element> filter_elements(math_expression_node_subtype subtype,
+std::vector<lhs_rhs_element> filter_elements(node_type subtype,
                                              isaac::math_expression const & math_expression);
-const char * evaluate(operation_node_type type);
+const char * evaluate(operation_type type);
 
 /** @brief functor for generating the expression string from a math_expression */
 class evaluate_expression_traversal: public traversal_functor

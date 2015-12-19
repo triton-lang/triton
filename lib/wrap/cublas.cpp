@@ -194,7 +194,7 @@ extern "C"
     //BLAS3
     //*****************
 
-    #define MAKE_GEMM(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
+    #define MAKE_MATRIX_PRODUCT(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
     void cublas ## TYPE_CHAR ## gemm (char transa, char transb, int m, int n, int k,\
                                    TYPE_CU alpha, const TYPE_CU *A, int lda,\
                                    const TYPE_CU *B, int ldb, TYPE_CU beta, TYPE_CU *C,\
@@ -235,6 +235,6 @@ extern "C"
         return CUBLAS_STATUS_SUCCESS;\
     }
 
-    MAKE_GEMM(S, sc::FLOAT_TYPE, cl_float)
-    MAKE_GEMM(D, sc::DOUBLE_TYPE, cl_double)
+    MAKE_MATRIX_PRODUCT(S, sc::FLOAT_TYPE, cl_float)
+    MAKE_MATRIX_PRODUCT(D, sc::DOUBLE_TYPE, cl_double)
 }

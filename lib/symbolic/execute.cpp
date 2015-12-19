@@ -32,27 +32,27 @@ namespace isaac
         bool result = false;
         switch(op.type_family)
         {
-            case OPERATOR_UNARY_TYPE_FAMILY:
-            case OPERATOR_BINARY_TYPE_FAMILY:
+            case UNARY_TYPE_FAMILY:
+            case BINARY_TYPE_FAMILY:
                 result |= is_mmprod(expression)
                           || (result |= expression==REDUCE_2D_ROWS && other==REDUCE_2D_COLS)
                           || (result |= expression==REDUCE_2D_COLS && other==REDUCE_2D_ROWS);
                 break;
-            case OPERATOR_VECTOR_DOT_TYPE_FAMILY:
+            case VECTOR_DOT_TYPE_FAMILY:
                 result |= is_mvprod(expression)
                           || expression==REDUCE_1D;
                 break;
-            case OPERATOR_ROWS_DOT_TYPE_FAMILY:
+            case ROWS_DOT_TYPE_FAMILY:
                 result |= is_mmprod(expression)
                           || is_mvprod(expression)
                           || expression==REDUCE_1D;
                 break;
-            case OPERATOR_COLUMNS_DOT_TYPE_FAMILY:
+            case COLUMNS_DOT_TYPE_FAMILY:
                 result |= is_mmprod(expression)
                           || is_mvprod(expression)
                           || expression==REDUCE_1D;
                 break;
-            case OPERATOR_GEMM_TYPE_FAMILY:
+            case MATRIX_PRODUCT_TYPE_FAMILY:
                 result |= (is_mmprod(expression) && !is_first)
                           || is_mvprod(expression)
                           || expression==REDUCE_1D;
@@ -74,30 +74,30 @@ namespace isaac
     {
         switch(op.type_family)
         {
-            case OPERATOR_UNARY_TYPE_FAMILY:
+            case UNARY_TYPE_FAMILY:
                 if(is_mmprod(left))
                     return ELEMENTWISE_2D;
                 return left;
-            case OPERATOR_BINARY_TYPE_FAMILY:
+            case BINARY_TYPE_FAMILY:
                 if(left == REDUCE_2D_ROWS || right == REDUCE_2D_ROWS) return REDUCE_2D_ROWS;
                 else if(left == REDUCE_2D_COLS || right == REDUCE_2D_COLS) return REDUCE_2D_COLS;
                 else if(left == REDUCE_1D || right == REDUCE_1D) return REDUCE_1D;
                 else if(left == ELEMENTWISE_2D || right == ELEMENTWISE_2D) return ELEMENTWISE_2D;
-                else if(left == ELEMENTWISE_1D || right == ELEMENTWISE_1D) return op.type==OPERATOR_OUTER_PROD_TYPE?ELEMENTWISE_2D:ELEMENTWISE_1D;
+                else if(left == ELEMENTWISE_1D || right == ELEMENTWISE_1D) return op.type==OUTER_PROD_TYPE?ELEMENTWISE_2D:ELEMENTWISE_1D;
                 else if(is_mmprod(left) || is_mmprod(right)) return ELEMENTWISE_2D;
                 else if(right == INVALID_EXPRESSION_TYPE) return left;
                 else if(left == INVALID_EXPRESSION_TYPE) return right;
                 throw;
-            case OPERATOR_VECTOR_DOT_TYPE_FAMILY:
+            case VECTOR_DOT_TYPE_FAMILY:
                 return REDUCE_1D;
-            case OPERATOR_ROWS_DOT_TYPE_FAMILY:
+            case ROWS_DOT_TYPE_FAMILY:
                 return REDUCE_2D_ROWS;
-            case OPERATOR_COLUMNS_DOT_TYPE_FAMILY:
+            case COLUMNS_DOT_TYPE_FAMILY:
                 return REDUCE_2D_COLS;
-            case OPERATOR_GEMM_TYPE_FAMILY:
-                if(op.type==OPERATOR_GEMM_NN_TYPE) return MATRIX_PRODUCT_NN;
-                else if(op.type==OPERATOR_GEMM_TN_TYPE) return MATRIX_PRODUCT_TN;
-                else if(op.type==OPERATOR_GEMM_NT_TYPE) return MATRIX_PRODUCT_NT;
+            case MATRIX_PRODUCT_TYPE_FAMILY:
+                if(op.type==MATRIX_PRODUCT_NN_TYPE) return MATRIX_PRODUCT_NN;
+                else if(op.type==MATRIX_PRODUCT_TN_TYPE) return MATRIX_PRODUCT_TN;
+                else if(op.type==MATRIX_PRODUCT_NT_TYPE) return MATRIX_PRODUCT_NT;
                 else return MATRIX_PRODUCT_TT;
             default:
                 throw;
@@ -115,11 +115,11 @@ namespace isaac
       auto ng1 = [](shape_t const & shape){ size_t res = 0 ; for(size_t i = 0 ; i < shape.size() ; ++i) res += (shape[i] > 1); return res;};
       //Left
       expression_type type_left = INVALID_EXPRESSION_TYPE;
-      if (node.lhs.type_family == COMPOSITE_OPERATOR_FAMILY)
+      if (node.lhs.subtype == COMPOSITE_OPERATOR_TYPE)
           parse(array, node.lhs.node_index, breakpoints, type_left, false);
       else if(node.lhs.subtype == DENSE_ARRAY_TYPE)
       {
-          if(node.op.type==OPERATOR_MATRIX_ROW_TYPE || node.op.type==OPERATOR_MATRIX_COLUMN_TYPE || ng1(node.lhs.array->shape())<=1)
+          if(node.op.type==MATRIX_ROW_TYPE || node.op.type==MATRIX_COLUMN_TYPE || ng1(node.lhs.array->shape())<=1)
               type_left = ELEMENTWISE_1D;
           else
               type_left = ELEMENTWISE_2D;
@@ -127,11 +127,11 @@ namespace isaac
 
       //Right
       expression_type type_right = INVALID_EXPRESSION_TYPE;
-      if (node.rhs.type_family == COMPOSITE_OPERATOR_FAMILY)
+      if (node.rhs.subtype == COMPOSITE_OPERATOR_TYPE)
           parse(array, node.rhs.node_index, breakpoints, type_right, false);
       else if(node.rhs.subtype == DENSE_ARRAY_TYPE)
       {
-          if(node.op.type==OPERATOR_MATRIX_ROW_TYPE || node.op.type==OPERATOR_MATRIX_COLUMN_TYPE || ng1(node.rhs.array->shape())<=1)
+          if(node.op.type==MATRIX_ROW_TYPE || node.op.type==MATRIX_COLUMN_TYPE || ng1(node.rhs.array->shape())<=1)
               type_right = ELEMENTWISE_1D;
           else
               type_right = ELEMENTWISE_2D;
@@ -160,7 +160,7 @@ namespace isaac
     std::vector<std::shared_ptr<array> > temporaries_;
 
     expression_type final_type;
-    //GEMM
+    //MATRIX_PRODUCT
     if(symbolic::preset::matrix_product::args args = symbolic::preset::matrix_product::check(tree, rootidx)){
         final_type = args.type;
     }
@@ -208,10 +208,10 @@ namespace isaac
           }
           temporaries_.push_back(tmp);
 
-          tree[rootidx].op.type = OPERATOR_ASSIGN_TYPE;
+          tree[rootidx].op.type = ASSIGN_TYPE;
           fill(tree[rootidx].lhs, (array&)*tmp);
           tree[rootidx].rhs = *it->second;
-          tree[rootidx].rhs.type_family = it->second->type_family;
+          tree[rootidx].rhs.subtype = it->second->subtype;
 
           //Execute
           profile->execute(execution_handler(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));

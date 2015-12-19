@@ -25,10 +25,10 @@ inline void compute_index_reduce_1d(kernel_generation_stream & os, std::string a
   //        os << acc << " = " << cur_value << ">" << acc_value  << "?" << cur << ":" << acc << ";" << std::endl;
   os << acc << "= select(" << acc << "," << cur << "," << cur_value << ">" << acc_value << ");" << std::endl;
   os << acc_value << "=";
-  if (op.type==OPERATOR_ELEMENT_ARGFMAX_TYPE) os << "fmax";
-  if (op.type==OPERATOR_ELEMENT_ARGMAX_TYPE) os << "max";
-  if (op.type==OPERATOR_ELEMENT_ARGFMIN_TYPE) os << "fmin";
-  if (op.type==OPERATOR_ELEMENT_ARGMIN_TYPE) os << "min";
+  if (op.type==ELEMENT_ARGFMAX_TYPE) os << "fmax";
+  if (op.type==ELEMENT_ARGMAX_TYPE) os << "max";
+  if (op.type==ELEMENT_ARGFMIN_TYPE) os << "fmin";
+  if (op.type==ELEMENT_ARGMIN_TYPE) os << "min";
   os << "(" << acc_value << "," << cur_value << ");"<< std::endl;
 }
 
@@ -39,17 +39,17 @@ inline std::string neutral_element(op_element const & op, driver::backend_type b
 
   switch (op.type)
   {
-  case OPERATOR_ADD_TYPE : return "0";
-  case OPERATOR_MULT_TYPE : return "1";
-  case OPERATOR_DIV_TYPE : return "1";
-  case OPERATOR_ELEMENT_FMAX_TYPE : return N_INF;
-  case OPERATOR_ELEMENT_ARGFMAX_TYPE : return N_INF;
-  case OPERATOR_ELEMENT_MAX_TYPE : return N_INF;
-  case OPERATOR_ELEMENT_ARGMAX_TYPE : return N_INF;
-  case OPERATOR_ELEMENT_FMIN_TYPE : return INF;
-  case OPERATOR_ELEMENT_ARGFMIN_TYPE : return INF;
-  case OPERATOR_ELEMENT_MIN_TYPE : return INF;
-  case OPERATOR_ELEMENT_ARGMIN_TYPE : return INF;
+  case ADD_TYPE : return "0";
+  case MULT_TYPE : return "1";
+  case DIV_TYPE : return "1";
+  case ELEMENT_FMAX_TYPE : return N_INF;
+  case ELEMENT_ARGFMAX_TYPE : return N_INF;
+  case ELEMENT_MAX_TYPE : return N_INF;
+  case ELEMENT_ARGMAX_TYPE : return N_INF;
+  case ELEMENT_FMIN_TYPE : return INF;
+  case ELEMENT_ARGFMIN_TYPE : return INF;
+  case ELEMENT_MIN_TYPE : return INF;
+  case ELEMENT_ARGMIN_TYPE : return INF;
 
   default: throw std::runtime_error("Unsupported reduce_1d operator : no neutral element known");
   }
@@ -57,18 +57,18 @@ inline std::string neutral_element(op_element const & op, driver::backend_type b
 
 inline bool is_reduce_1d(math_expression::node const & node)
 {
-  return node.op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY
-      || node.op.type_family==OPERATOR_COLUMNS_DOT_TYPE_FAMILY
-      || node.op.type_family==OPERATOR_ROWS_DOT_TYPE_FAMILY;
+  return node.op.type_family==VECTOR_DOT_TYPE_FAMILY
+      || node.op.type_family==COLUMNS_DOT_TYPE_FAMILY
+      || node.op.type_family==ROWS_DOT_TYPE_FAMILY;
 }
 
 
 inline bool is_index_reduction(op_element const & op)
 {
-  return op.type==OPERATOR_ELEMENT_ARGFMAX_TYPE
-      || op.type==OPERATOR_ELEMENT_ARGMAX_TYPE
-      || op.type==OPERATOR_ELEMENT_ARGFMIN_TYPE
-      || op.type==OPERATOR_ELEMENT_ARGMIN_TYPE;
+  return op.type==ELEMENT_ARGFMAX_TYPE
+      || op.type==ELEMENT_ARGMAX_TYPE
+      || op.type==ELEMENT_ARGFMIN_TYPE
+      || op.type==ELEMENT_ARGMIN_TYPE;
 }
 
 

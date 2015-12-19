@@ -248,9 +248,9 @@ public:
 
 class mapped_cast : public mapped_object
 {
-  static std::string operator_to_str(operation_node_type type);
+  static std::string operator_to_str(operation_type type);
 public:
-  mapped_cast(operation_node_type type, unsigned int id);
+  mapped_cast(operation_type type, unsigned int id);
 };
 
 extern mapped_object& get(math_expression::container_type const &, size_t, mapping_type const &, size_t);
