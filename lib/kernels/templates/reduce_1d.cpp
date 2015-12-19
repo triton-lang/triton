@@ -20,20 +20,20 @@ reduce_1d_parameters::reduce_1d_parameters(unsigned int _simd_width,
                      fetching_policy_type _fetching_policy) : base::parameters_type(_simd_width, _group_size, 1, 2), num_groups(_num_groups), fetching_policy(_fetching_policy)
 { }
 
-unsigned int reduce_1d::lmem_usage(math_expression const  & x) const
+unsigned int reduce_1d::lmem_usage(expression_tree const  & x) const
 {
   numeric_type numeric_t= lhs_most(x.tree(), x.root()).lhs.dtype;
   return p_.local_size_0*size_of(numeric_t);
 }
 
-int reduce_1d::is_invalid_impl(driver::Device const &, math_expression const  &) const
+int reduce_1d::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-unsigned int reduce_1d::temporary_workspace(math_expression const &) const
+unsigned int reduce_1d::temporary_workspace(expression_tree const &) const
 {
     if(p_.num_groups > 1)
       return p_.num_groups;
@@ -65,7 +65,7 @@ inline void reduce_1d::reduce_1d_local_memory(kernel_generation_stream & stream,
   stream << "}" << std::endl;
 }
 
-std::string reduce_1d::generate_impl(std::string const & suffix, math_expression const  & expressions, driver::Device const & device, mapping_type const & mapping) const
+std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree const  & expressions, driver::Device const & device, mapping_type const & mapping) const
 {
   kernel_generation_stream stream;
 
@@ -87,7 +87,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, math_expression
       unsigned int offset = 0;
       for (unsigned int k = 0; k < N; ++k)
       {
-        numeric_type dtype = lhs_most(exprs[k]->math_expression().tree(),  exprs[k]->math_expression().root()).lhs.dtype;
+        numeric_type dtype = lhs_most(exprs[k]->expression_tree().tree(),  exprs[k]->expression_tree().root()).lhs.dtype;
         std::string sdtype = to_string(dtype);
         if (exprs[k]->is_index_reduction())
         {
@@ -298,7 +298,7 @@ reduce_1d::reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng,
     base_impl<reduce_1d, reduce_1d_parameters>(reduce_1d_parameters(simd,ls,ng,fetch), bind)
 {}
 
-std::vector<int_t> reduce_1d::input_sizes(math_expression const  & x) const
+std::vector<int_t> reduce_1d::input_sizes(expression_tree const  & x) const
 {
   std::vector<size_t> reduce_1ds_idx = filter_nodes(&is_reduce_1d, x, x.root(), false);
   int_t N = vector_size(lhs_most(x.tree(), reduce_1ds_idx[0]));
@@ -307,7 +307,7 @@ std::vector<int_t> reduce_1d::input_sizes(math_expression const  & x) const
 
 void reduce_1d::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
 {
-  math_expression const  & x = control.x();
+  expression_tree const  & x = control.x();
 
   //Preprocessing
   int_t size = input_sizes(x)[0];
@@ -319,7 +319,7 @@ void reduce_1d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
       return;
   }
 
-  std::vector<math_expression::node const *> reduce_1ds;
+  std::vector<expression_tree::node const *> reduce_1ds;
     std::vector<size_t> reduce_1ds_idx = filter_nodes(&is_reduce_1d, x, x.root(), false);
     for (size_t idx: reduce_1ds_idx)
       reduce_1ds.push_back(&x.tree()[idx]);

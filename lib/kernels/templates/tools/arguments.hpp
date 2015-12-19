@@ -12,7 +12,7 @@ namespace templates
 {
 
 //Generate
-inline std::string generate_arguments(std::string const &, driver::Device const & device, mapping_type const & mappings, math_expression const & expressions)
+inline std::string generate_arguments(std::string const &, driver::Device const & device, mapping_type const & mappings, expression_tree const & expressions)
 {
     std::string kwglobal = Global(device.backend()).get();
     std::string _size_t = size_type(device);
@@ -90,9 +90,9 @@ public:
         }
     }
 
-    void operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t leaf_t) const
+    void operator()(isaac::expression_tree const & expression_tree, size_t root_idx, leaf_t leaf_t) const
     {
-        math_expression::node const & root_node = math_expression.tree()[root_idx];
+        expression_tree::node const & root_node = expression_tree.tree()[root_idx];
         if (leaf_t==LHS_NODE_TYPE && root_node.lhs.subtype != COMPOSITE_OPERATOR_TYPE)
             set_arguments(root_node.lhs, detail::is_assignment(root_node.op));
         else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.subtype != COMPOSITE_OPERATOR_TYPE)
@@ -106,7 +106,7 @@ private:
     driver::Kernel & kernel_;
 };
 
-inline void set_arguments(math_expression const & expression, driver::Kernel & kernel, unsigned int & current_arg, binding_policy_t binding_policy)
+inline void set_arguments(expression_tree const & expression, driver::Kernel & kernel, unsigned int & current_arg, binding_policy_t binding_policy)
 {
     std::unique_ptr<symbolic_binder> binder;
     if (binding_policy==BIND_SEQUENTIAL)

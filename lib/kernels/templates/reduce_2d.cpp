@@ -22,19 +22,19 @@ reduce_2d_parameters::reduce_2d_parameters(unsigned int _simd_width,
 num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetch_policy(_fetch_policy) { }
 
 
-int reduce_2d::is_invalid_impl(driver::Device const &, math_expression const &) const
+int reduce_2d::is_invalid_impl(driver::Device const &, expression_tree const &) const
 {
   if (p_.fetch_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-unsigned int reduce_2d::lmem_usage(const math_expression&) const
+unsigned int reduce_2d::lmem_usage(const expression_tree&) const
 {
   return (p_.local_size_0+1)*p_.local_size_1;
 }
 
-unsigned int reduce_2d::temporary_workspace(math_expression const & expressions) const
+unsigned int reduce_2d::temporary_workspace(expression_tree const & expressions) const
 {
     std::vector<int_t> MN = input_sizes(expressions);
     int_t M = MN[0];
@@ -43,7 +43,7 @@ unsigned int reduce_2d::temporary_workspace(math_expression const & expressions)
     return 0;
 }
 
-std::string reduce_2d::generate_impl(std::string const & suffix, math_expression const & expression, driver::Device const & device, mapping_type const & mapping) const
+std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree const & expression, driver::Device const & device, mapping_type const & mapping) const
 {
   using tools::to_string;
 
@@ -67,7 +67,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, math_expression
       unsigned int offset = 0;
       for (const auto & e : reduce_1ds)
       {
-        numeric_type dtype = lhs_most(e->math_expression().tree(),  e->math_expression().root()).lhs.dtype;
+        numeric_type dtype = lhs_most(e->expression_tree().tree(),  e->expression_tree().root()).lhs.dtype;
         std::string sdtype = to_string(dtype);
         if (e->is_index_reduction())
         {
@@ -360,7 +360,7 @@ reduce_2d::reduce_2d(reduce_2d::parameters_type const & parameters,
   base_impl<reduce_2d, reduce_2d_parameters>(parameters, binding_policy),
   reduce_1d_type_(rtype){ }
 
-std::vector<int_t> reduce_2d::input_sizes(math_expression const & expression) const
+std::vector<int_t> reduce_2d::input_sizes(expression_tree const & expression) const
 {
   std::vector<std::size_t> idx = filter_nodes(&is_reduce_1d, expression, expression.root(), false);
   std::pair<int_t, int_t> MN = matrix_size(expression.tree(), lhs_most(expression.tree(), idx[0]));
@@ -371,10 +371,10 @@ std::vector<int_t> reduce_2d::input_sizes(math_expression const & expression) co
 
 void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
 {
-  math_expression const & expression = control.x();
+  expression_tree const & expression = control.x();
 
   std::vector<int_t> MN = input_sizes(expression);
-  std::vector<math_expression::node const *> reduce_1ds;
+  std::vector<expression_tree::node const *> reduce_1ds;
   std::vector<size_t> reduce_1ds_idx = filter_nodes(&is_reduce_1d, expression, expression.root(), false);
   for (size_t idx : reduce_1ds_idx)
     reduce_1ds.push_back(&expression.tree()[idx]);

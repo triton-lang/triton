@@ -41,17 +41,17 @@ struct matrix_product_parameters : public base::parameters_type
 class matrix_product : public base_impl<matrix_product, matrix_product_parameters>
 {
 private:
-  unsigned int temporary_workspace(math_expression const & expressions) const;
-  unsigned int lmem_usage(math_expression const & expressions) const;
-  unsigned int registers_usage(math_expression const & expressions) const;
-  int is_invalid_impl(driver::Device const &, math_expression const &) const;
-  std::string generate_impl(std::string const & suffix, math_expression const & expressions, driver::Device const & device, mapping_type const &) const;
+  unsigned int temporary_workspace(expression_tree const & expressions) const;
+  unsigned int lmem_usage(expression_tree const & expressions) const;
+  unsigned int registers_usage(expression_tree const & expressions) const;
+  int is_invalid_impl(driver::Device const &, expression_tree const &) const;
+  std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, mapping_type const &) const;
   void enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K, array_base const & A, array_base const & B, array_base const & C,
                      value_scalar const &alpha, value_scalar const &beta, driver::Program const & program, std::string const & suffix, execution_options_type const & options);
-  std::vector<int_t> infos(math_expression const & expressions,  isaac::symbolic::preset::matrix_product::args &arguments) const;
+  std::vector<int_t> infos(expression_tree const & expressions,  isaac::symbolic::preset::matrix_product::args &arguments) const;
 public:
   matrix_product(matrix_product::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);
-  std::vector<int_t> input_sizes(math_expression const & expressions) const;
+  std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const &ctr);
 private:
   const char A_trans_;

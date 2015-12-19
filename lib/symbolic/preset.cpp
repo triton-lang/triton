@@ -9,7 +9,7 @@ namespace symbolic
 namespace preset
 {
 
-void matrix_product::handle_node(math_expression::container_type const & tree, size_t rootidx, args & a)
+void matrix_product::handle_node(expression_tree::container_type const & tree, size_t rootidx, args & a)
 {
     //Matrix-Matrix product node
     if(tree[rootidx].op.type_family==MATRIX_PRODUCT_TYPE_FAMILY)
@@ -46,7 +46,7 @@ void matrix_product::handle_node(math_expression::container_type const & tree, s
     }
 }
 
-matrix_product::args matrix_product::check(math_expression::container_type const & tree, size_t rootidx)
+matrix_product::args matrix_product::check(expression_tree::container_type const & tree, size_t rootidx)
 {
     tree_node const * assigned = &tree[rootidx].lhs;
     numeric_type dtype = assigned->dtype;

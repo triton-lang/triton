@@ -31,12 +31,12 @@ protected:
   };
   reduce_2d(reduce_2d::parameters_type const & , reduce_1d_type, binding_policy_t);
 private:
-  int is_invalid_impl(driver::Device const &, math_expression const &) const;
-  unsigned int lmem_usage(math_expression const &) const;
-  unsigned int temporary_workspace(math_expression const & expressions) const;
-  std::string generate_impl(std::string const & suffix, math_expression const &, driver::Device const & device, mapping_type const &) const;
+  int is_invalid_impl(driver::Device const &, expression_tree const &) const;
+  unsigned int lmem_usage(expression_tree const &) const;
+  unsigned int temporary_workspace(expression_tree const & expressions) const;
+  std::string generate_impl(std::string const & suffix, expression_tree const &, driver::Device const & device, mapping_type const &) const;
 public:
-  virtual std::vector<int_t> input_sizes(math_expression const & expressions) const;
+  virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const &);
 private:
   reduce_1d_type reduce_1d_type_;

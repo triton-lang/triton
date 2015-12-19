@@ -20,7 +20,7 @@ elementwise_2d_parameters::elementwise_2d_parameters(unsigned int _simd_width,
 
 
 
-int elementwise_2d::is_invalid_impl(driver::Device const &, math_expression const  &) const
+int elementwise_2d::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 {
   if (p_.simd_width>1)
     return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -29,7 +29,7 @@ int elementwise_2d::is_invalid_impl(driver::Device const &, math_expression cons
   return TEMPLATE_VALID;
 }
 
-std::string elementwise_2d::generate_impl(std::string const & suffix, math_expression const  & expressions, driver::Device const & device, mapping_type const & mappings) const
+std::string elementwise_2d::generate_impl(std::string const & suffix, expression_tree const  & expressions, driver::Device const & device, mapping_type const & mappings) const
 {
   kernel_generation_stream stream;
   std::string _size_t = size_type(device);
@@ -114,7 +114,7 @@ elementwise_2d::elementwise_2d(unsigned int simd, unsigned int ls1, unsigned int
     base_impl<elementwise_2d, elementwise_2d_parameters>(elementwise_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
 {}
 
-std::vector<int_t> elementwise_2d::input_sizes(math_expression const  & expression) const
+std::vector<int_t> elementwise_2d::input_sizes(expression_tree const  & expression) const
 {
   std::pair<int_t, int_t> size = matrix_size(expression.tree(), lhs_most(expression.tree(), expression.root()));
   return {size.first, size.second};
@@ -122,7 +122,7 @@ std::vector<int_t> elementwise_2d::input_sizes(math_expression const  & expressi
 
 void elementwise_2d::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, std::string const & suffix, base &, execution_handler const & control)
 {
-  math_expression const  & expressions = control.x();
+  expression_tree const  & expressions = control.x();
   std::string name = "elementwise_1d";
   name +=suffix;
   driver::Kernel kernel(program, name.c_str());

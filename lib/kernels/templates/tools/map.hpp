@@ -12,18 +12,18 @@ namespace templates
 class map_functor : public traversal_functor
 {
 
-  numeric_type get_numeric_type(isaac::math_expression const * math_expression, size_t root_idx) const
+  numeric_type get_numeric_type(isaac::expression_tree const * expression_tree, size_t root_idx) const
 {
-  math_expression::node const * root_node = &math_expression->tree()[root_idx];
+  expression_tree::node const * root_node = &expression_tree->tree()[root_idx];
   while (root_node->lhs.dtype==INVALID_NUMERIC_TYPE)
-    root_node = &math_expression->tree()[root_node->lhs.node_index];
+    root_node = &expression_tree->tree()[root_node->lhs.node_index];
   return root_node->lhs.dtype;
 }
 
   template<class T>
-  std::shared_ptr<mapped_object> binary_leaf(isaac::math_expression const * math_expression, size_t root_idx, mapping_type const * mapping) const
+  std::shared_ptr<mapped_object> binary_leaf(isaac::expression_tree const * expression_tree, size_t root_idx, mapping_type const * mapping) const
   {
-    return std::shared_ptr<mapped_object>(new T(to_string(math_expression->dtype()), binder_.get(), mapped_object::node_info(mapping, math_expression, root_idx)));
+    return std::shared_ptr<mapped_object>(new T(to_string(expression_tree->dtype()), binder_.get(), mapped_object::node_info(mapping, expression_tree, root_idx)));
   }
 
   std::shared_ptr<mapped_object> create(numeric_type dtype, values_holder) const
@@ -60,10 +60,10 @@ public:
   {
   }
 
-  void operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t leaf_t) const
+  void operator()(isaac::expression_tree const & expression_tree, size_t root_idx, leaf_t leaf_t) const
   {
     mapping_type::key_type key(root_idx, leaf_t);
-    math_expression::node const & root_node = math_expression.tree()[root_idx];
+    expression_tree::node const & root_node = expression_tree.tree()[root_idx];
 
     if (leaf_t == LHS_NODE_TYPE && root_node.lhs.subtype != COMPOSITE_OPERATOR_TYPE)
       mapping_.insert(mapping_type::value_type(key, create(root_node.lhs, detail::is_assignment(root_node.op))));
@@ -72,25 +72,25 @@ public:
     else if ( leaf_t== PARENT_NODE_TYPE)
     {
       if (root_node.op.type==VDIAG_TYPE)
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_vdiag>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_vdiag>(&expression_tree, root_idx, &mapping_)));
       else if (root_node.op.type==MATRIX_DIAG_TYPE)
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_diag>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_diag>(&expression_tree, root_idx, &mapping_)));
       else if (root_node.op.type==MATRIX_ROW_TYPE)
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_row>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_row>(&expression_tree, root_idx, &mapping_)));
       else if (root_node.op.type==MATRIX_COLUMN_TYPE)
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_column>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_column>(&expression_tree, root_idx, &mapping_)));
       else if(root_node.op.type==ACCESS_INDEX_TYPE)
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_array_access>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_array_access>(&expression_tree, root_idx, &mapping_)));
       else if (detail::is_scalar_reduce_1d(root_node))
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_reduce_1d>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_reduce_1d>(&expression_tree, root_idx, &mapping_)));
       else if (detail::is_vector_reduce_1d(root_node))
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_reduce_2d>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_reduce_2d>(&expression_tree, root_idx, &mapping_)));
       else if (root_node.op.type_family == MATRIX_PRODUCT_TYPE_FAMILY)
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_product>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_product>(&expression_tree, root_idx, &mapping_)));
       else if (root_node.op.type == REPEAT_TYPE)
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_repeat>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_repeat>(&expression_tree, root_idx, &mapping_)));
       else if (root_node.op.type == OUTER_PROD_TYPE)
-        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_outer>(&math_expression, root_idx, &mapping_)));
+        mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_outer>(&expression_tree, root_idx, &mapping_)));
       else if (detail::is_cast(root_node.op))
         mapping_.insert(mapping_type::value_type(key, std::shared_ptr<mapped_object>(new mapped_cast(root_node.op.type, binder_.get()))));
     }

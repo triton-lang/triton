@@ -39,7 +39,7 @@ driver::Program const & profiles::value_type::init(execution_handler const & exp
 
     char* ptr = program_name;
     bind_independent binder;
-    traverse(expression.x(), expression.x().root(), math_expression_representation_functor(binder, ptr),true);
+    traverse(expression.x(), expression.x().root(), expression_tree_representation_functor(binder, ptr),true);
     *ptr='\0';
     pname = std::string(program_name);
 

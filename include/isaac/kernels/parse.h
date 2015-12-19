@@ -13,8 +13,8 @@ namespace detail
 {
 
   bool is_node_leaf(op_element const & op);
-  bool is_scalar_reduce_1d(math_expression::node const & node);
-  bool is_vector_reduce_1d(math_expression::node const & node);
+  bool is_scalar_reduce_1d(expression_tree::node const & node);
+  bool is_vector_reduce_1d(expression_tree::node const & node);
   bool is_assignment(op_element const & op);
   bool is_elementwise_operator(op_element const & op);
   bool is_elementwise_function(op_element const & op);
@@ -24,58 +24,58 @@ namespace detail
 
 class scalar;
 
-/** @brief base functor class for traversing a math_expression */
+/** @brief base functor class for traversing a expression_tree */
 class traversal_functor
 {
 public:
-  void call_before_expansion(math_expression const &, std::size_t) const { }
-  void call_after_expansion(math_expression const &, std::size_t) const { }
+  void call_before_expansion(expression_tree const &, std::size_t) const { }
+  void call_after_expansion(expression_tree const &, std::size_t) const { }
 };
 
 
-/** @brief Recursively execute a functor on a math_expression */
+/** @brief Recursively execute a functor on a expression_tree */
 template<class Fun>
-inline void traverse(isaac::math_expression const & math_expression, std::size_t root_idx, Fun const & fun, bool inspect)
+inline void traverse(isaac::expression_tree const & expression_tree, std::size_t root_idx, Fun const & fun, bool inspect)
 {
-  math_expression::node const & root_node = math_expression.tree()[root_idx];
+  expression_tree::node const & root_node = expression_tree.tree()[root_idx];
   bool recurse = detail::is_node_leaf(root_node.op)?inspect:true;
   bool bypass = detail::bypass(root_node.op);
 
   if(!bypass)
-    fun.call_before_expansion(math_expression, root_idx);
+    fun.call_before_expansion(expression_tree, root_idx);
 
   //Lhs:
   if (recurse)
   {
     if (root_node.lhs.subtype==COMPOSITE_OPERATOR_TYPE)
-      traverse(math_expression, root_node.lhs.node_index, fun, inspect);
+      traverse(expression_tree, root_node.lhs.node_index, fun, inspect);
     if (root_node.lhs.subtype != INVALID_SUBTYPE)
-      fun(math_expression, root_idx, LHS_NODE_TYPE);
+      fun(expression_tree, root_idx, LHS_NODE_TYPE);
   }
 
   //Self:
   if(!bypass)
-    fun(math_expression, root_idx, PARENT_NODE_TYPE);
+    fun(expression_tree, root_idx, PARENT_NODE_TYPE);
 
   //Rhs:
   if (recurse && root_node.rhs.subtype!=INVALID_SUBTYPE)
   {
     if (root_node.rhs.subtype==COMPOSITE_OPERATOR_TYPE)
-      traverse(math_expression, root_node.rhs.node_index, fun, inspect);
+      traverse(expression_tree, root_node.rhs.node_index, fun, inspect);
     if (root_node.rhs.subtype != INVALID_SUBTYPE)
-      fun(math_expression, root_idx, RHS_NODE_TYPE);
+      fun(expression_tree, root_idx, RHS_NODE_TYPE);
   }
 
   if(!bypass)
-    fun.call_after_expansion(math_expression, root_idx);
+    fun.call_after_expansion(expression_tree, root_idx);
 }
 
 class filter_fun : public traversal_functor
 {
 public:
-  typedef bool (*pred_t)(math_expression::node const & node);
+  typedef bool (*pred_t)(expression_tree::node const & node);
   filter_fun(pred_t pred, std::vector<size_t> & out);
-  void operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t) const;
+  void operator()(isaac::expression_tree const & expression_tree, size_t root_idx, leaf_t) const;
 private:
   pred_t pred_;
   std::vector<size_t> & out_;
@@ -85,22 +85,22 @@ class filter_elements_fun : public traversal_functor
 {
 public:
   filter_elements_fun(node_type subtype, std::vector<tree_node> & out);
-  void operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t) const;
+  void operator()(isaac::expression_tree const & expression_tree, size_t root_idx, leaf_t) const;
 private:
   node_type subtype_;
   std::vector<tree_node> & out_;
 };
 
-std::vector<size_t> filter_nodes(bool (*pred)(math_expression::node const & node),
-                                        isaac::math_expression const & math_expression,
+std::vector<size_t> filter_nodes(bool (*pred)(expression_tree::node const & node),
+                                        isaac::expression_tree const & expression_tree,
                                         size_t root,
                                         bool inspect);
 
 std::vector<tree_node> filter_elements(node_type subtype,
-                                             isaac::math_expression const & math_expression);
+                                             isaac::expression_tree const & expression_tree);
 const char * evaluate(operation_type type);
 
-/** @brief functor for generating the expression string from a math_expression */
+/** @brief functor for generating the expression string from a expression_tree */
 class evaluate_expression_traversal: public traversal_functor
 {
 private:
@@ -110,24 +110,24 @@ private:
 
 public:
   evaluate_expression_traversal(std::map<std::string, std::string> const & accessors, std::string & str, mapping_type const & mapping);
-  void call_before_expansion(isaac::math_expression const & math_expression, std::size_t root_idx) const;
-  void call_after_expansion(math_expression const & /*math_expression*/, std::size_t /*root_idx*/) const;
-  void operator()(isaac::math_expression const & math_expression, std::size_t root_idx, leaf_t leaf) const;
+  void call_before_expansion(isaac::expression_tree const & expression_tree, std::size_t root_idx) const;
+  void call_after_expansion(expression_tree const & /*expression_tree*/, std::size_t /*root_idx*/) const;
+  void operator()(isaac::expression_tree const & expression_tree, std::size_t root_idx, leaf_t leaf) const;
 };
 
 std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                            isaac::math_expression const & math_expression, std::size_t root_idx, mapping_type const & mapping);
+                            isaac::expression_tree const & expression_tree, std::size_t root_idx, mapping_type const & mapping);
 
 void evaluate(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                     math_expression const & expressions, mapping_type const & mappings);
+                     expression_tree const & expressions, mapping_type const & mappings);
 
-/** @brief functor for fetching or writing-back the elements in a math_expression */
+/** @brief functor for fetching or writing-back the elements in a expression_tree */
 class process_traversal : public traversal_functor
 {
 public:
   process_traversal(std::map<std::string, std::string> const & accessors, kernel_generation_stream & stream,
                     mapping_type const & mapping, std::set<std::string> & already_processed);
-  void operator()(math_expression const & math_expression, std::size_t root_idx, leaf_t leaf) const;
+  void operator()(expression_tree const & expression_tree, std::size_t root_idx, leaf_t leaf) const;
 private:
   std::map<std::string, std::string> accessors_;
   kernel_generation_stream & stream_;
@@ -136,21 +136,21 @@ private:
 };
 
 void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-             isaac::math_expression const & math_expression, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed);
+             isaac::expression_tree const & expression_tree, size_t root_idx, mapping_type const & mapping, std::set<std::string> & already_processed);
 
 void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors,
-                    math_expression const & expressions, mapping_type const & mappings);
+                    expression_tree const & expressions, mapping_type const & mappings);
 
 
-class math_expression_representation_functor : public traversal_functor{
+class expression_tree_representation_functor : public traversal_functor{
 private:
   static void append_id(char * & ptr, unsigned int val);
   void append(driver::Buffer const & h, numeric_type dtype, char prefix) const;
   void append(tree_node const & lhs_rhs, bool is_assigned) const;
 public:
-  math_expression_representation_functor(symbolic_binder & binder, char *& ptr);
+  expression_tree_representation_functor(symbolic_binder & binder, char *& ptr);
   void append(char*& p, const char * str) const;
-  void operator()(isaac::math_expression const & math_expression, std::size_t root_idx, leaf_t leaf_t) const;
+  void operator()(isaac::expression_tree const & expression_tree, std::size_t root_idx, leaf_t leaf_t) const;
 private:
   symbolic_binder & binder_;
   char *& ptr_;

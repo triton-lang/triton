@@ -27,7 +27,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
 }
 
 
-  unsigned int matrix_product::lmem_usage(math_expression const & expression) const
+  unsigned int matrix_product::lmem_usage(expression_tree const & expression) const
   {
     numeric_type numeric_t = lhs_most(expression.tree(), expression.root()).lhs.dtype;
     unsigned int N = 0;
@@ -36,7 +36,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
     return N*size_of(numeric_t);
   }
 
-  unsigned int matrix_product::registers_usage(math_expression const & expression) const
+  unsigned int matrix_product::registers_usage(expression_tree const & expression) const
   {
     numeric_type numeric_t = lhs_most(expression.tree(), expression.root()).lhs.dtype;
 
@@ -44,7 +44,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
     return N*size_of(numeric_t);
   }
 
-  unsigned int matrix_product::temporary_workspace(math_expression const & expressions) const
+  unsigned int matrix_product::temporary_workspace(expression_tree const & expressions) const
   {
       std::vector<int_t> MNK = input_sizes(expressions);
       int_t M = MNK[0]; int_t N = MNK[1];
@@ -53,7 +53,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
       return 0;
   }
 
-  int matrix_product::is_invalid_impl(driver::Device const &, math_expression const &) const
+  int matrix_product::is_invalid_impl(driver::Device const &, expression_tree const &) const
   {
 //    if(device.vendor()==driver::Device::Vendor::NVIDIA && p_.simd_width > 1)
 //      return TEMPLATE_INVALID_SIMD_WIDTH;
@@ -103,7 +103,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
     return TEMPLATE_VALID;
   }
 
-  std::string matrix_product::generate_impl(std::string const & suffix, math_expression const & expression, driver::Device const & device, mapping_type const &) const
+  std::string matrix_product::generate_impl(std::string const & suffix, expression_tree const & expression, driver::Device const & device, mapping_type const &) const
   {
     using std::string;
     using tools::to_string;
@@ -651,9 +651,9 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
 
   }
 
-  std::vector<int_t> matrix_product::infos(math_expression const & expression, symbolic::preset::matrix_product::args& arguments) const
+  std::vector<int_t> matrix_product::infos(expression_tree const & expression, symbolic::preset::matrix_product::args& arguments) const
   {
-    math_expression::container_type const & array = expression.tree();
+    expression_tree::container_type const & array = expression.tree();
     std::size_t root = expression.root();
     arguments = symbolic::preset::matrix_product::check(array, root);
     int_t M = arguments.C->array->shape()[0];
@@ -671,10 +671,10 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
     else throw;
   }
 
-  std::vector<int_t> matrix_product::input_sizes(math_expression const & expressions) const
+  std::vector<int_t> matrix_product::input_sizes(expression_tree const & expressions) const
   {
     symbolic::preset::matrix_product::args dummy;
-    return infos((math_expression&)expressions, dummy);
+    return infos((expression_tree&)expressions, dummy);
   }
 
   void matrix_product::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback_base, execution_handler const & control)
@@ -682,7 +682,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
     using namespace tools;
 
     matrix_product & fallback = (matrix_product&)fallback_base;
-    math_expression const & expressions = control.x();
+    expression_tree const & expressions = control.x();
 
 
     symbolic::preset::matrix_product::args args;

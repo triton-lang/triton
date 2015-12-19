@@ -18,7 +18,7 @@ extern "C"
         isaac::driver::backend::release();
     }
 
-    void execute(sc::math_expression const & operation, sc::driver::Context const & context,
+    void execute(sc::expression_tree const & operation, sc::driver::Context const & context,
                  cl_uint numCommandQueues, cl_command_queue *commandQueues,
                  cl_uint numEventsInWaitList, const cl_event *eventWaitList,
                  cl_event *events)
