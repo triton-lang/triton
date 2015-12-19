@@ -55,7 +55,7 @@ inline std::string neutral_element(op_element const & op, driver::backend_type b
   }
 }
 
-inline bool is_reduce_1d(math_expression::node const & node)
+inline bool is_reduce_1d(expression_tree::node const & node)
 {
   return node.op.type_family==VECTOR_DOT_TYPE_FAMILY
       || node.op.type_family==COLUMNS_DOT_TYPE_FAMILY

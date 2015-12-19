@@ -30,7 +30,7 @@ inline std::string to_string(tree_node const & e)
   return tools::to_string(e.subtype);
 }
 
-inline std::ostream & operator<<(std::ostream & os, math_expression::node const & s_node)
+inline std::ostream & operator<<(std::ostream & os, expression_tree::node const & s_node)
 {
   os << "LHS: " << to_string(s_node.lhs) << "|" << s_node.lhs.dtype << ", "
      << "OP: "  << s_node.op.type_family << " | " << s_node.op.type << ", "
@@ -42,11 +42,11 @@ inline std::ostream & operator<<(std::ostream & os, math_expression::node const 
 
 namespace detail
 {
-  /** @brief Recursive worker routine for printing a whole math_expression */
-  inline void print_node(std::ostream & os, isaac::math_expression const & s, size_t node_index, size_t indent = 0)
+  /** @brief Recursive worker routine for printing a whole expression_tree */
+  inline void print_node(std::ostream & os, isaac::expression_tree const & s, size_t node_index, size_t indent = 0)
   {
-    math_expression::container_type const & nodes = s.tree();
-    math_expression::node const & current_node = nodes[node_index];
+    expression_tree::container_type const & nodes = s.tree();
+    expression_tree::node const & current_node = nodes[node_index];
 
     for (size_t i=0; i<indent; ++i)
       os << " ";
@@ -61,7 +61,7 @@ namespace detail
   }
 }
 
-std::string to_string(isaac::math_expression const & s)
+std::string to_string(isaac::expression_tree const & s)
 {
   std::ostringstream os;
   detail::print_node(os, s, s.root());

@@ -27,7 +27,7 @@ typedef std::map<mapping_key, std::shared_ptr<mapped_object> > mapping_type;
 
 /** @brief Mapped Object
 *
-* This object populates the symbolic mapping associated with a math_expression. (root_id, LHS|RHS|PARENT) => mapped_object
+* This object populates the symbolic mapping associated with a expression_tree. (root_id, LHS|RHS|PARENT) => mapped_object
 * The tree can then be reconstructed in its symbolic form
 */
 class mapped_object
@@ -49,9 +49,9 @@ protected:
 public:
   struct node_info
   {
-    node_info(mapping_type const * _mapping, math_expression const * _math_expression, size_t _root_idx);
+    node_info(mapping_type const * _mapping, expression_tree const * _expression_tree, size_t _root_idx);
     mapping_type const * mapping;
-    isaac::math_expression const * math_expression;
+    isaac::expression_tree const * expression_tree;
     size_t root_idx;
   };
 
@@ -105,8 +105,8 @@ public:
   mapped_reduce(std::string const & scalartype, unsigned int id, node_info info, std::string const & type_key);
 
   size_t root_idx() const;
-  isaac::math_expression const & math_expression() const;
-  math_expression::node root_node() const;
+  isaac::expression_tree const & expression_tree() const;
+  expression_tree::node root_node() const;
   bool is_index_reduction() const;
   op_element root_op() const;
 };
@@ -253,7 +253,7 @@ public:
   mapped_cast(operation_type type, unsigned int id);
 };
 
-extern mapped_object& get(math_expression::container_type const &, size_t, mapping_type const &, size_t);
+extern mapped_object& get(expression_tree::container_type const &, size_t, mapping_type const &, size_t);
 
 }
 #endif

@@ -51,8 +51,8 @@ void mapped_object::register_attribute(std::string & attribute, std::string cons
   keywords_[key] = attribute;
 }
 
-mapped_object::node_info::node_info(mapping_type const * _mapping, isaac::math_expression const * _math_expression, size_t _root_idx) :
-    mapping(_mapping), math_expression(_math_expression), root_idx(_root_idx) { }
+mapped_object::node_info::node_info(mapping_type const * _mapping, isaac::expression_tree const * _expression_tree, size_t _root_idx) :
+    mapping(_mapping), expression_tree(_expression_tree), root_idx(_root_idx) { }
 
 mapped_object::mapped_object(std::string const & scalartype, std::string const & name, std::string const & type_key) : type_key_(type_key), name_(name)
 {
@@ -92,10 +92,10 @@ std::string mapped_object::evaluate(std::map<std::string, std::string> const & a
   return process(accessors.at(type_key_));
 }
 
-mapped_object& get(math_expression::container_type const & tree, size_t root, mapping_type const & mapping, size_t idx)
+mapped_object& get(expression_tree::container_type const & tree, size_t root, mapping_type const & mapping, size_t idx)
 {
   for(unsigned int i = 0 ; i < idx ; ++i){
-      math_expression::node node = tree[root];
+      expression_tree::node node = tree[root];
       if(node.rhs.subtype==COMPOSITE_OPERATOR_TYPE)
         root = node.rhs.node_index;
       else
@@ -108,12 +108,12 @@ binary_leaf::binary_leaf(mapped_object::node_info info) : info_(info){ }
 
 void binary_leaf::process_recursive(kernel_generation_stream & stream, leaf_t leaf, std::map<std::string, std::string> const & accessors, std::set<std::string> & already_fetched)
 {
-  process(stream, leaf, accessors, *info_.math_expression, info_.root_idx, *info_.mapping, already_fetched);
+  process(stream, leaf, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping, already_fetched);
 }
 
 std::string binary_leaf::evaluate_recursive(leaf_t leaf, std::map<std::string, std::string> const & accessors)
 {
-  return evaluate(leaf, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
+  return evaluate(leaf, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping);
 }
 
 
@@ -127,11 +127,11 @@ mapped_reduce::mapped_reduce(std::string const & scalartype, unsigned int id, no
 size_t mapped_reduce::root_idx() const
 { return info_.root_idx; }
 
-isaac::math_expression const & mapped_reduce::math_expression() const
-{ return *info_.math_expression; }
+isaac::expression_tree const & mapped_reduce::expression_tree() const
+{ return *info_.expression_tree; }
 
-math_expression::node mapped_reduce::root_node() const
-{ return math_expression().tree()[root_idx()]; }
+expression_tree::node mapped_reduce::root_node() const
+{ return expression_tree().tree()[root_idx()]; }
 
 bool mapped_reduce::is_index_reduction() const
 {
@@ -144,7 +144,7 @@ bool mapped_reduce::is_index_reduction() const
 
 op_element mapped_reduce::root_op() const
 {
-    return info_.math_expression->tree()[info_.root_idx].op;
+    return info_.expression_tree->tree()[info_.root_idx].op;
 }
 
 
@@ -214,10 +214,10 @@ mapped_array::mapped_array(std::string const & scalartype, unsigned int id, std:
 void mapped_vdiag::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  tools::find_and_replace(res, "#diag_offset", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
+  tools::find_and_replace(res, "#diag_offset", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping));
   accessors["arrayn"] = res;
   accessors["host_scalar"] = res;
-  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping);
 }
 
 mapped_vdiag::mapped_vdiag(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "vdiag"), binary_leaf(info){}
@@ -226,10 +226,10 @@ mapped_vdiag::mapped_vdiag(std::string const & scalartype, unsigned int id, node
 void mapped_array_access::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  tools::find_and_replace(res, "#index", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
+  tools::find_and_replace(res, "#index", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping));
   accessors["arrayn"] = res;
   accessors["arraynn"] = res;
-  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping);
 }
 
 mapped_array_access::mapped_array_access(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "array_access"), binary_leaf(info)
@@ -239,9 +239,9 @@ mapped_array_access::mapped_array_access(std::string const & scalartype, unsigne
 void mapped_matrix_row::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  tools::find_and_replace(res, "#row", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
+  tools::find_and_replace(res, "#row", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping));
   accessors["arraynn"] = res;
-  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping);
 }
 
 mapped_matrix_row::mapped_matrix_row(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_row"), binary_leaf(info)
@@ -251,9 +251,9 @@ mapped_matrix_row::mapped_matrix_row(std::string const & scalartype, unsigned in
 void mapped_matrix_column::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  tools::find_and_replace(res, "#column", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
+  tools::find_and_replace(res, "#column", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping));
   accessors["arraynn"] = res;
-  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping);
 }
 
 mapped_matrix_column::mapped_matrix_column(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_column"), binary_leaf(info)
@@ -265,7 +265,7 @@ mapped_matrix_column::mapped_matrix_column(std::string const & scalartype, unsig
 //
 char mapped_repeat::get_type(node_info const & info)
 {
-  math_expression::container_type const & tree = info.math_expression->tree();
+  expression_tree::container_type const & tree = info.expression_tree->tree();
   size_t tuple_root = tree[info.root_idx].rhs.node_index;
 
   int sub0 = tuple_get(tree, tuple_root, 2);
@@ -283,7 +283,7 @@ char mapped_repeat::get_type(node_info const & info)
 void mapped_repeat::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  math_expression::container_type const & tree = info_.math_expression->tree();
+  expression_tree::container_type const & tree = info_.expression_tree->tree();
   size_t tuple_root = tree[info_.root_idx].rhs.node_index;
 
   tools::find_and_replace(res, "#rep0", get(tree, tuple_root, *info_.mapping, 0).process("#name"));
@@ -312,7 +312,7 @@ void mapped_repeat::postprocess(std::string &res) const
   accessors["array1n"] = res;
   accessors["arrayn1"] = res;
   accessors["arraynn"] = res;
-  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping);
 }
 
 mapped_repeat::mapped_repeat(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "repeat"), binary_leaf(info), type_(get_type(info))
@@ -324,9 +324,9 @@ mapped_repeat::mapped_repeat(std::string const & scalartype, unsigned int id, no
 void mapped_matrix_diag::postprocess(std::string &res) const
 {
   std::map<std::string, std::string> accessors;
-  tools::find_and_replace(res, "#diag_offset", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping));
+  tools::find_and_replace(res, "#diag_offset", isaac::evaluate(RHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping));
   accessors["arraynn"] = res;
-  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.math_expression, info_.root_idx, *info_.mapping);
+  res = isaac::evaluate(LHS_NODE_TYPE, accessors, *info_.expression_tree, info_.root_idx, *info_.mapping);
 }
 
 mapped_matrix_diag::mapped_matrix_diag(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "matrix_diag"), binary_leaf(info)
@@ -343,7 +343,7 @@ void mapped_outer::postprocess(std::string &res) const
         std::map<std::string, std::string> accessors;
         accessors["arrayn"] = "$VALUE{"+i+"}";
         accessors["array1"] = "#namereg";
-        return isaac::evaluate(leaf_, accessors, *i_.math_expression, i_.root_idx, *i_.mapping);
+        return isaac::evaluate(leaf_, accessors, *i_.expression_tree, i_.root_idx, *i_.mapping);
       }
       std::string operator()(std::string const &, std::string const &) const{return "";}
     private:

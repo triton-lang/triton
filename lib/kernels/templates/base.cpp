@@ -28,16 +28,16 @@ base::parameters_type::parameters_type(unsigned int _simd_width, int_t _local_si
 { }
 
 
-bool base::requires_fallback(math_expression const  & expression)
+bool base::requires_fallback(expression_tree const  & expression)
 {
-  for(math_expression::node const & node: expression.tree())
+  for(expression_tree::node const & node: expression.tree())
     if(  (node.lhs.subtype==DENSE_ARRAY_TYPE && (node.lhs.array->stride()[0]>1 || node.lhs.array->start()>0))
       || (node.rhs.subtype==DENSE_ARRAY_TYPE && (node.rhs.array->stride()[0]>1 || node.rhs.array->start()>0)))
       return true;
   return false;
 }
 
-int_t base::vector_size(math_expression::node const & node)
+int_t base::vector_size(expression_tree::node const & node)
 {
   if (node.op.type==MATRIX_DIAG_TYPE)
     return std::min<int_t>(node.lhs.array->shape()[0], node.lhs.array->shape()[1]);
@@ -50,7 +50,7 @@ int_t base::vector_size(math_expression::node const & node)
 
 }
 
-std::pair<int_t, int_t> base::matrix_size(math_expression::container_type const & tree, math_expression::node const & node)
+std::pair<int_t, int_t> base::matrix_size(expression_tree::container_type const & tree, expression_tree::node const & node)
 {
   if (node.op.type==VDIAG_TYPE)
   {
@@ -72,20 +72,20 @@ std::pair<int_t, int_t> base::matrix_size(math_expression::container_type const 
 base::base(binding_policy_t binding_policy) : binding_policy_(binding_policy)
 {}
 
-unsigned int base::lmem_usage(math_expression const  &) const
+unsigned int base::lmem_usage(expression_tree const  &) const
 { return 0; }
 
-unsigned int base::registers_usage(math_expression const  &) const
+unsigned int base::registers_usage(expression_tree const  &) const
 { return 0; }
 
-unsigned int base::temporary_workspace(math_expression const  &) const
+unsigned int base::temporary_workspace(expression_tree const  &) const
 { return 0; }
 
 base::~base()
 {
 }
 
-std::string base::generate(std::string const & suffix, math_expression const  & expression, driver::Device const & device)
+std::string base::generate(std::string const & suffix, expression_tree const  & expression, driver::Device const & device)
 {
   int err = is_invalid(expression, device);
   if(err != 0)
@@ -104,7 +104,7 @@ std::string base::generate(std::string const & suffix, math_expression const  & 
 }
 
 template<class TType, class PType>
-int base_impl<TType, PType>::is_invalid_impl(driver::Device const &, math_expression const  &) const
+int base_impl<TType, PType>::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 { return TEMPLATE_VALID; }
 
 template<class TType, class PType>
@@ -124,7 +124,7 @@ std::shared_ptr<base> base_impl<TType, PType>::clone() const
 { return std::shared_ptr<base>(new TType(*dynamic_cast<TType const *>(this))); }
 
 template<class TType, class PType>
-int base_impl<TType, PType>::is_invalid(math_expression const  & expressions, driver::Device const & device) const
+int base_impl<TType, PType>::is_invalid(expression_tree const  & expressions, driver::Device const & device) const
 {
   //Query device informations
   size_t lmem_available = device.local_mem_size();

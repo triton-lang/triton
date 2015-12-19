@@ -105,12 +105,12 @@ namespace isaac
     }
 
     /** @brief Parses the breakpoints for a given expression tree */
-    static void parse(math_expression::container_type&array, size_t idx,
+    static void parse(expression_tree::container_type&array, size_t idx,
                breakpoints_t & breakpoints,
                expression_type & final_type,
                bool is_first = true)
     {
-      math_expression::node & node = array[idx];
+      expression_tree::node & node = array[idx];
 
       auto ng1 = [](shape_t const & shape){ size_t res = 0 ; for(size_t i = 0 ; i < shape.size() ; ++i) res += (shape[i] > 1); return res;};
       //Left
@@ -146,14 +146,14 @@ namespace isaac
     }
   }
 
-  /** @brief Executes a math_expression on the given models map*/
+  /** @brief Executes a expression_tree on the given models map*/
   void execute(execution_handler const & c, profiles::map_type & profiles)
   {
-    math_expression expression = c.x();
+    expression_tree expression = c.x();
     driver::Context const & context = expression.context();
     size_t rootidx = expression.root();
-    math_expression::container_type & tree = const_cast<math_expression::container_type &>(expression.tree());
-    math_expression::node root_save = tree[rootidx];
+    expression_tree::container_type & tree = const_cast<expression_tree::container_type &>(expression.tree());
+    expression_tree::node root_save = tree[rootidx];
 
     //Todo: technically the datatype should be per temporary
     numeric_type dtype = expression.dtype();
@@ -186,8 +186,8 @@ namespace isaac
         for(detail::breakpoints_t::iterator it = breakpoints.begin() ; it != breakpoints.end() ; ++it)
         {
           std::shared_ptr<profiles::value_type> const & profile = profiles[std::make_pair(it->first, dtype)];
-          math_expression::node const & node = tree[it->second->node_index];
-          math_expression::node const & lmost = lhs_most(tree, node);
+          expression_tree::node const & node = tree[it->second->node_index];
+          expression_tree::node const & lmost = lhs_most(tree, node);
 
           //Creates temporary
           std::shared_ptr<array> tmp;
@@ -217,7 +217,7 @@ namespace isaac
           profile->execute(execution_handler(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
           tree[rootidx] = root_save;
 
-          //Incorporates the temporary within, the math_expression
+          //Incorporates the temporary within, the expression_tree
           fill(*it->second, (array&)*tmp);
         }
     }

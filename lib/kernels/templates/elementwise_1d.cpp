@@ -26,14 +26,14 @@ elementwise_1d_parameters::elementwise_1d_parameters(unsigned int _simd_width,
 }
 
 
-int elementwise_1d::is_invalid_impl(driver::Device const &, math_expression const &) const
+int elementwise_1d::is_invalid_impl(driver::Device const &, expression_tree const &) const
 {
   if (p_.fetching_policy==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
-std::string elementwise_1d::generate_impl(std::string const & suffix, math_expression const & expressions, driver::Device const & device, mapping_type const & mappings) const
+std::string elementwise_1d::generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, mapping_type const & mappings) const
 {
   driver::backend_type backend = device.backend();
   std::string _size_t = size_type(device);
@@ -43,7 +43,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, math_expre
   std::string dtype = append_width("#scalartype",p_.simd_width);
 
 
-  std::vector<size_t> assigned_scalar = filter_nodes([](math_expression::node const & node) {
+  std::vector<size_t> assigned_scalar = filter_nodes([](expression_tree::node const & node) {
                                                         return  detail::is_assignment(node.op) && node.lhs.subtype==DENSE_ARRAY_TYPE && node.lhs.array->shape().max()==1;
   }, expressions, expressions.root(), true);
 
@@ -74,8 +74,8 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, math_expre
   stream.inc_tab();
 
 
-  math_expression::container_type const & tree = expressions.tree();
-  std::vector<std::size_t> sfors = filter_nodes([](math_expression::node const & node){return node.op.type==SFOR_TYPE;}, expressions, expressions.root(), true);
+  expression_tree::container_type const & tree = expressions.tree();
+  std::vector<std::size_t> sfors = filter_nodes([](expression_tree::node const & node){return node.op.type==SFOR_TYPE;}, expressions, expressions.root(), true);
 
   for(unsigned int i = 0 ; i < sfors.size() ; ++i)
   {
@@ -100,7 +100,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, math_expre
   if(sfors.size())
       root = tree[sfors.back()].lhs.node_index;
 
-  std::vector<std::size_t> assigned = filter_nodes([](math_expression::node const & node){return detail::is_assignment(node.op);}, expressions, root, true);
+  std::vector<std::size_t> assigned = filter_nodes([](expression_tree::node const & node){return detail::is_assignment(node.op);}, expressions, root, true);
   std::set<std::string> processed;
 
   //Declares register to store results
@@ -182,14 +182,14 @@ elementwise_1d::elementwise_1d(unsigned int simd, unsigned int ls, unsigned int 
 {}
 
 
-std::vector<int_t> elementwise_1d::input_sizes(math_expression const & expressions) const
+std::vector<int_t> elementwise_1d::input_sizes(expression_tree const & expressions) const
 {
   return {expressions.shape().max()};
 }
 
 void elementwise_1d::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & control)
 {
-  math_expression const & expressions = control.x();
+  expression_tree const & expressions = control.x();
   //Size
   int_t size = input_sizes(expressions)[0];
   //Fallback

@@ -7,10 +7,10 @@
 namespace isaac
 {
 
-/** @brief Executes a math_expression on the given queue for the given models map*/
+/** @brief Executes a expression_tree on the given queue for the given models map*/
 void execute(execution_handler const & , profiles::map_type &);
 
-/** @brief Executes a math_expression on the default models map*/
+/** @brief Executes a expression_tree on the default models map*/
 void execute(execution_handler const &);
 
 }

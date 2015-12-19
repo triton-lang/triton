@@ -60,20 +60,20 @@ public:
     unsigned int num_kernels;
   };
 protected:
-  static int_t vector_size(math_expression::node const & node);
-  static std::pair<int_t, int_t> matrix_size(math_expression::container_type const & tree, math_expression::node const & node);
-  static bool requires_fallback(math_expression const & expressions);
+  static int_t vector_size(expression_tree::node const & node);
+  static std::pair<int_t, int_t> matrix_size(expression_tree::container_type const & tree, expression_tree::node const & node);
+  static bool requires_fallback(expression_tree const & expressions);
 private:
-  virtual std::string generate_impl(std::string const & suffix, math_expression const & expressions, driver::Device const & device, mapping_type const & mapping) const = 0;
+  virtual std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, mapping_type const & mapping) const = 0;
 public:
   base(binding_policy_t binding_policy);
-  virtual unsigned int temporary_workspace(math_expression const &) const;
-  virtual unsigned int lmem_usage(math_expression const &) const;
-  virtual unsigned int registers_usage(math_expression const &) const;
-  virtual std::vector<int_t> input_sizes(math_expression const & expressions) const = 0;
+  virtual unsigned int temporary_workspace(expression_tree const &) const;
+  virtual unsigned int lmem_usage(expression_tree const &) const;
+  virtual unsigned int registers_usage(expression_tree const &) const;
+  virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const = 0;
   virtual ~base();
-  std::string generate(std::string const & suffix, math_expression const & expressions, driver::Device const & device);
-  virtual int is_invalid(math_expression const & expressions, driver::Device const & device) const = 0;
+  std::string generate(std::string const & suffix, expression_tree const & expressions, driver::Device const & device);
+  virtual int is_invalid(expression_tree const & expressions, driver::Device const & device) const = 0;
   virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, execution_handler const & expressions) = 0;
   virtual std::shared_ptr<base> clone() const = 0;
 private:
@@ -85,7 +85,7 @@ template<class TemplateType, class ParametersType>
 class base_impl : public base
 {
 private:
-  virtual int is_invalid_impl(driver::Device const &, math_expression const &) const;
+  virtual int is_invalid_impl(driver::Device const &, expression_tree const &) const;
 public:
   typedef ParametersType parameters_type;
   base_impl(parameters_type const & parameters, binding_policy_t binding_policy);
@@ -93,7 +93,7 @@ public:
   unsigned int local_size_1() const;
   std::shared_ptr<base> clone() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
-  int is_invalid(math_expression const & expressions, driver::Device const & device) const;
+  int is_invalid(expression_tree const & expressions, driver::Device const & device) const;
 protected:
   parameters_type p_;
   binding_policy_t binding_policy_;

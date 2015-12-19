@@ -142,13 +142,13 @@ struct op_element
 
 struct for_idx_t
 {
-  math_expression operator=(value_scalar const & ) const;
-  math_expression operator=(math_expression const & ) const;
+  expression_tree operator=(value_scalar const & ) const;
+  expression_tree operator=(expression_tree const & ) const;
 
-  math_expression operator+=(value_scalar const & ) const;
-  math_expression operator-=(value_scalar const & ) const;
-  math_expression operator*=(value_scalar const & ) const;
-  math_expression operator/=(value_scalar const & ) const;
+  expression_tree operator+=(value_scalar const & ) const;
+  expression_tree operator-=(value_scalar const & ) const;
+  expression_tree operator*=(value_scalar const & ) const;
+  expression_tree operator/=(value_scalar const & ) const;
 
   int level;
 };
@@ -171,7 +171,7 @@ struct tree_node
   {
     std::size_t   node_index;
     values_holder vscalar;
-    isaac::array_base* array;
+    array_base* array;
     for_idx_t for_idx;
   };
 };
@@ -180,11 +180,11 @@ struct invalid_node{};
 
 void fill(tree_node &x, for_idx_t index);
 void fill(tree_node &x, invalid_node);
-void fill(tree_node & x, std::size_t node_index);
+void fill(tree_node & x, size_t node_index);
 void fill(tree_node & x, array_base const & a);
 void fill(tree_node & x, value_scalar const & v);
 
-class math_expression
+class expression_tree
 {
 public:
   struct node
@@ -197,20 +197,19 @@ public:
   typedef std::vector<node>     container_type;
 
 public:
-  math_expression(value_scalar const &lhs, for_idx_t const &rhs, const op_element &op, const numeric_type &dtype);
-  math_expression(for_idx_t const &lhs, for_idx_t const &rhs, const op_element &op);
-  math_expression(for_idx_t const &lhs, value_scalar const &rhs, const op_element &op, const numeric_type &dtype);
+  expression_tree(value_scalar const &lhs, for_idx_t const &rhs, const op_element &op, const numeric_type &dtype);
+  expression_tree(for_idx_t const &lhs, for_idx_t const &rhs, const op_element &op);
+  expression_tree(for_idx_t const &lhs, value_scalar const &rhs, const op_element &op, const numeric_type &dtype);
 
   template<class LT, class RT>
-  math_expression(LT const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
+  expression_tree(LT const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
   template<class RT>
-  math_expression(math_expression const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
+  expression_tree(expression_tree const & lhs, RT const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
   template<class LT>
-  math_expression(LT const & lhs, math_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
-  math_expression(math_expression const & lhs, math_expression const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
+  expression_tree(LT const & lhs, expression_tree const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
+  expression_tree(expression_tree const & lhs, expression_tree const & rhs, op_element const & op, driver::Context const & context, numeric_type const & dtype, shape_t const & shape);
 
   shape_t shape() const;
-  math_expression& reshape(int_t size1, int_t size2=1);
   int_t dim() const;
   container_type & tree();
   container_type const & tree() const;
@@ -218,8 +217,8 @@ public:
   driver::Context const & context() const;
   numeric_type const & dtype() const;
 
-  math_expression operator-();
-  math_expression operator!();
+  expression_tree operator-();
+  expression_tree operator!();
 private:
   container_type tree_;
   std::size_t root_;
@@ -279,24 +278,24 @@ struct compilation_options_type
 class execution_handler
 {
 public:
-  execution_handler(math_expression const & x, execution_options_type const& execution_options = execution_options_type(),
+  execution_handler(expression_tree const & x, execution_options_type const& execution_options = execution_options_type(),
              dispatcher_options_type const & dispatcher_options = dispatcher_options_type(),
              compilation_options_type const & compilation_options = compilation_options_type())
                 : x_(x), execution_options_(execution_options), dispatcher_options_(dispatcher_options), compilation_options_(compilation_options){}
-  execution_handler(math_expression const & x, execution_handler const & other) : x_(x), execution_options_(other.execution_options_), dispatcher_options_(other.dispatcher_options_), compilation_options_(other.compilation_options_){}
-  math_expression const & x() const { return x_; }
+  execution_handler(expression_tree const & x, execution_handler const & other) : x_(x), execution_options_(other.execution_options_), dispatcher_options_(other.dispatcher_options_), compilation_options_(other.compilation_options_){}
+  expression_tree const & x() const { return x_; }
   execution_options_type const & execution_options() const { return execution_options_; }
   dispatcher_options_type const & dispatcher_options() const { return dispatcher_options_; }
   compilation_options_type const & compilation_options() const { return compilation_options_; }
 private:
-  math_expression x_;
+  expression_tree x_;
   execution_options_type execution_options_;
   dispatcher_options_type dispatcher_options_;
   compilation_options_type compilation_options_;
 };
 
-math_expression::node const & lhs_most(math_expression::container_type const & array_base, math_expression::node const & init);
-math_expression::node const & lhs_most(math_expression::container_type const & array_base, size_t root);
+expression_tree::node const & lhs_most(expression_tree::container_type const & array_base, expression_tree::node const & init);
+expression_tree::node const & lhs_most(expression_tree::container_type const & array_base, size_t root);
 
 
 }

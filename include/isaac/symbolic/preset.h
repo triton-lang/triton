@@ -34,10 +34,10 @@ public:
     };
 
 private:
-    static void handle_node( math_expression::container_type const &tree, size_t rootidx, args & a);
+    static void handle_node( expression_tree::container_type const &tree, size_t rootidx, args & a);
 
 public:
-    static args check(math_expression::container_type const &tree, size_t rootidx);
+    static args check(expression_tree::container_type const &tree, size_t rootidx);
 };
 
 }
