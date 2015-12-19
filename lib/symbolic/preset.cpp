@@ -18,10 +18,10 @@ void matrix_product::handle_node(math_expression::container_type const & tree, s
         if(tree[rootidx].rhs.type_family==ARRAY_TYPE_FAMILY) a.B = &tree[rootidx].rhs;
         switch(tree[rootidx].op.type)
         {
-          case OPERATOR_GEMM_NN_TYPE: a.type = GEMM_NN_TYPE; break;
-          case OPERATOR_GEMM_NT_TYPE: a.type = GEMM_NT_TYPE; break;
-          case OPERATOR_GEMM_TN_TYPE: a.type = GEMM_TN_TYPE; break;
-          case OPERATOR_GEMM_TT_TYPE: a.type = GEMM_TT_TYPE; break;
+          case OPERATOR_GEMM_NN_TYPE: a.type = MATRIX_PRODUCT_NN; break;
+          case OPERATOR_GEMM_NT_TYPE: a.type = MATRIX_PRODUCT_NT; break;
+          case OPERATOR_GEMM_TN_TYPE: a.type = MATRIX_PRODUCT_TN; break;
+          case OPERATOR_GEMM_TT_TYPE: a.type = MATRIX_PRODUCT_TT; break;
           default: break;
         }
     }

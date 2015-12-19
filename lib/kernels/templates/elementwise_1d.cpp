@@ -76,7 +76,6 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, math_expre
 
   math_expression::container_type const & tree = expressions.tree();
   std::vector<std::size_t> sfors = filter_nodes([](math_expression::node const & node){return node.op.type==OPERATOR_SFOR_TYPE;}, expressions, expressions.root(), true);
-//  std::cout << sfors.size() << std::endl;
 
   for(unsigned int i = 0 ; i < sfors.size() ; ++i)
   {
@@ -90,8 +89,6 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, math_expre
     info[2] = evaluate(RHS_NODE_TYPE, {{"placeholder", "#name"}}, expressions, idx, mappings);
     info[0] = info[0].substr(1, info[0].size()-2);
     stream << "for(int " << info[0] << " ; " << info[1] << "; " << info[2] << ")" << std::endl;
-
-//    stream << "int sforidx0 = 0 ;" << std::endl;
   }
 
   if(sfors.size()){
