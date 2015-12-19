@@ -96,7 +96,7 @@ mapped_object& get(math_expression::container_type const & tree, size_t root, ma
 {
   for(unsigned int i = 0 ; i < idx ; ++i){
       math_expression::node node = tree[root];
-      if(node.rhs.type_family==COMPOSITE_OPERATOR_FAMILY)
+      if(node.rhs.subtype==COMPOSITE_OPERATOR_TYPE)
         root = node.rhs.node_index;
       else
         return *(mapping.at(std::make_pair(root, RHS_NODE_TYPE)));
@@ -136,10 +136,10 @@ math_expression::node mapped_reduce::root_node() const
 bool mapped_reduce::is_index_reduction() const
 {
   op_element const & op = root_op();
-  return op.type==OPERATOR_ELEMENT_ARGFMAX_TYPE
-      || op.type==OPERATOR_ELEMENT_ARGMAX_TYPE
-      || op.type==OPERATOR_ELEMENT_ARGFMIN_TYPE
-      || op.type==OPERATOR_ELEMENT_ARGMIN_TYPE;
+  return op.type==ELEMENT_ARGFMAX_TYPE
+      || op.type==ELEMENT_ARGMAX_TYPE
+      || op.type==ELEMENT_ARGFMIN_TYPE
+      || op.type==ELEMENT_ARGMIN_TYPE;
 }
 
 op_element mapped_reduce::root_op() const
@@ -358,27 +358,27 @@ void mapped_outer::postprocess(std::string &res) const
 mapped_outer::mapped_outer(std::string const & scalartype, unsigned int id, node_info info) : mapped_object(scalartype, id, "outer"), binary_leaf(info)
 { }
 
-std::string mapped_cast::operator_to_str(operation_node_type type)
+std::string mapped_cast::operator_to_str(operation_type type)
 {
   switch(type)
   {
-    case OPERATOR_CAST_BOOL_TYPE : return "bool";
-    case OPERATOR_CAST_CHAR_TYPE : return "char";
-    case OPERATOR_CAST_UCHAR_TYPE : return "uchar";
-    case OPERATOR_CAST_SHORT_TYPE : return "short";
-    case OPERATOR_CAST_USHORT_TYPE : return "ushort";
-    case OPERATOR_CAST_INT_TYPE : return "int";
-    case OPERATOR_CAST_UINT_TYPE : return "uint";
-    case OPERATOR_CAST_LONG_TYPE : return "long";
-    case OPERATOR_CAST_ULONG_TYPE : return "ulong";
-    case OPERATOR_CAST_HALF_TYPE : return "half";
-    case OPERATOR_CAST_FLOAT_TYPE : return "float";
-    case OPERATOR_CAST_DOUBLE_TYPE : return "double";
+    case CAST_BOOL_TYPE : return "bool";
+    case CAST_CHAR_TYPE : return "char";
+    case CAST_UCHAR_TYPE : return "uchar";
+    case CAST_SHORT_TYPE : return "short";
+    case CAST_USHORT_TYPE : return "ushort";
+    case CAST_INT_TYPE : return "int";
+    case CAST_UINT_TYPE : return "uint";
+    case CAST_LONG_TYPE : return "long";
+    case CAST_ULONG_TYPE : return "ulong";
+    case CAST_HALF_TYPE : return "half";
+    case CAST_FLOAT_TYPE : return "float";
+    case CAST_DOUBLE_TYPE : return "double";
     default : return "invalid";
   }
 }
 
-mapped_cast::mapped_cast(operation_node_type type, unsigned int id) : mapped_object(operator_to_str(type), id, "cast")
+mapped_cast::mapped_cast(operation_type type, unsigned int id) : mapped_object(operator_to_str(type), id, "cast")
 { }
 
 

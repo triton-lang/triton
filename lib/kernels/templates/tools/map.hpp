@@ -44,11 +44,11 @@ class map_functor : public traversal_functor
 
   std::shared_ptr<mapped_object> create(lhs_rhs_element const & lhs_rhs, bool is_assigned = false) const
   {
-    switch(lhs_rhs.type_family)
+    switch(lhs_rhs.subtype)
     {
-      case VALUE_TYPE_FAMILY: return create(lhs_rhs.dtype, lhs_rhs.vscalar);
-      case ARRAY_TYPE_FAMILY: return create(lhs_rhs.array, is_assigned);
-      case PLACEHOLDER_TYPE_FAMILY: return std::shared_ptr<mapped_object>(new mapped_placeholder(lhs_rhs.for_idx.level));
+      case VALUE_SCALAR_TYPE: return create(lhs_rhs.dtype, lhs_rhs.vscalar);
+      case DENSE_ARRAY_TYPE: return create(lhs_rhs.array, is_assigned);
+      case FOR_LOOP_INDEX_TYPE: return std::shared_ptr<mapped_object>(new mapped_placeholder(lhs_rhs.for_idx.level));
       default: throw "";
     }
   }
@@ -65,31 +65,31 @@ public:
     mapping_type::key_type key(root_idx, leaf_t);
     math_expression::node const & root_node = math_expression.tree()[root_idx];
 
-    if (leaf_t == LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
+    if (leaf_t == LHS_NODE_TYPE && root_node.lhs.subtype != COMPOSITE_OPERATOR_TYPE)
       mapping_.insert(mapping_type::value_type(key, create(root_node.lhs, detail::is_assignment(root_node.op))));
-    else if (leaf_t == RHS_NODE_TYPE && root_node.rhs.type_family != COMPOSITE_OPERATOR_FAMILY)
+    else if (leaf_t == RHS_NODE_TYPE && root_node.rhs.subtype != COMPOSITE_OPERATOR_TYPE)
       mapping_.insert(mapping_type::value_type(key, create(root_node.rhs)));
     else if ( leaf_t== PARENT_NODE_TYPE)
     {
-      if (root_node.op.type==OPERATOR_VDIAG_TYPE)
+      if (root_node.op.type==VDIAG_TYPE)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_vdiag>(&math_expression, root_idx, &mapping_)));
-      else if (root_node.op.type==OPERATOR_MATRIX_DIAG_TYPE)
+      else if (root_node.op.type==MATRIX_DIAG_TYPE)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_diag>(&math_expression, root_idx, &mapping_)));
-      else if (root_node.op.type==OPERATOR_MATRIX_ROW_TYPE)
+      else if (root_node.op.type==MATRIX_ROW_TYPE)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_row>(&math_expression, root_idx, &mapping_)));
-      else if (root_node.op.type==OPERATOR_MATRIX_COLUMN_TYPE)
+      else if (root_node.op.type==MATRIX_COLUMN_TYPE)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_column>(&math_expression, root_idx, &mapping_)));
-      else if(root_node.op.type==OPERATOR_ACCESS_INDEX_TYPE)
+      else if(root_node.op.type==ACCESS_INDEX_TYPE)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_array_access>(&math_expression, root_idx, &mapping_)));
       else if (detail::is_scalar_reduce_1d(root_node))
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_reduce_1d>(&math_expression, root_idx, &mapping_)));
       else if (detail::is_vector_reduce_1d(root_node))
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_reduce_2d>(&math_expression, root_idx, &mapping_)));
-      else if (root_node.op.type_family == OPERATOR_GEMM_TYPE_FAMILY)
+      else if (root_node.op.type_family == MATRIX_PRODUCT_TYPE_FAMILY)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_matrix_product>(&math_expression, root_idx, &mapping_)));
-      else if (root_node.op.type == OPERATOR_REPEAT_TYPE)
+      else if (root_node.op.type == REPEAT_TYPE)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_repeat>(&math_expression, root_idx, &mapping_)));
-      else if (root_node.op.type == OPERATOR_OUTER_PROD_TYPE)
+      else if (root_node.op.type == OUTER_PROD_TYPE)
         mapping_.insert(mapping_type::value_type(key, binary_leaf<mapped_outer>(&math_expression, root_idx, &mapping_)));
       else if (detail::is_cast(root_node.op))
         mapping_.insert(mapping_type::value_type(key, std::shared_ptr<mapped_object>(new mapped_cast(root_node.op.type, binder_.get()))));

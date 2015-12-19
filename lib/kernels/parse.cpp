@@ -16,103 +16,103 @@ namespace detail
 
   bool is_scalar_reduce_1d(math_expression::node const & node)
   {
-    return node.op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY;
+    return node.op.type_family==VECTOR_DOT_TYPE_FAMILY;
   }
 
   bool is_vector_reduce_1d(math_expression::node const & node)
   {
-    return node.op.type_family==OPERATOR_ROWS_DOT_TYPE_FAMILY
-        || node.op.type_family==OPERATOR_COLUMNS_DOT_TYPE_FAMILY;
+    return node.op.type_family==ROWS_DOT_TYPE_FAMILY
+        || node.op.type_family==COLUMNS_DOT_TYPE_FAMILY;
   }
 
   bool is_assignment(op_element const & op)
   {
-      return op.type== OPERATOR_ASSIGN_TYPE
-              || op.type== OPERATOR_INPLACE_ADD_TYPE
-              || op.type== OPERATOR_INPLACE_SUB_TYPE;
+      return op.type== ASSIGN_TYPE
+              || op.type== INPLACE_ADD_TYPE
+              || op.type== INPLACE_SUB_TYPE;
   }
 
   bool is_elementwise_operator(op_element const & op)
   {
     return is_assignment(op)
-        || op.type== OPERATOR_ADD_TYPE
-        || op.type== OPERATOR_SUB_TYPE
-        || op.type== OPERATOR_ELEMENT_PROD_TYPE
-        || op.type== OPERATOR_ELEMENT_DIV_TYPE
-        || op.type== OPERATOR_MULT_TYPE
-        || op.type== OPERATOR_DIV_TYPE
-        || op.type== OPERATOR_ELEMENT_EQ_TYPE
-        || op.type== OPERATOR_ELEMENT_NEQ_TYPE
-        || op.type== OPERATOR_ELEMENT_GREATER_TYPE
-        || op.type== OPERATOR_ELEMENT_LESS_TYPE
-        || op.type== OPERATOR_ELEMENT_GEQ_TYPE
-        || op.type== OPERATOR_ELEMENT_LEQ_TYPE ;
+        || op.type== ADD_TYPE
+        || op.type== SUB_TYPE
+        || op.type== ELEMENT_PROD_TYPE
+        || op.type== ELEMENT_DIV_TYPE
+        || op.type== MULT_TYPE
+        || op.type== DIV_TYPE
+        || op.type== ELEMENT_EQ_TYPE
+        || op.type== ELEMENT_NEQ_TYPE
+        || op.type== ELEMENT_GREATER_TYPE
+        || op.type== ELEMENT_LESS_TYPE
+        || op.type== ELEMENT_GEQ_TYPE
+        || op.type== ELEMENT_LEQ_TYPE ;
   }
 
   bool bypass(op_element const & op)
   {
-        return op.type == OPERATOR_RESHAPE_TYPE
-             ||op.type == OPERATOR_TRANS_TYPE;
+        return op.type == RESHAPE_TYPE
+             ||op.type == TRANS_TYPE;
   }
 
   bool is_cast(op_element const & op)
   {
-        return op.type== OPERATOR_CAST_BOOL_TYPE
-            || op.type== OPERATOR_CAST_CHAR_TYPE
-            || op.type== OPERATOR_CAST_UCHAR_TYPE
-            || op.type== OPERATOR_CAST_SHORT_TYPE
-            || op.type== OPERATOR_CAST_USHORT_TYPE
-            || op.type== OPERATOR_CAST_INT_TYPE
-            || op.type== OPERATOR_CAST_UINT_TYPE
-            || op.type== OPERATOR_CAST_LONG_TYPE
-            || op.type== OPERATOR_CAST_ULONG_TYPE
-            || op.type== OPERATOR_CAST_FLOAT_TYPE
-            || op.type== OPERATOR_CAST_DOUBLE_TYPE
+        return op.type== CAST_BOOL_TYPE
+            || op.type== CAST_CHAR_TYPE
+            || op.type== CAST_UCHAR_TYPE
+            || op.type== CAST_SHORT_TYPE
+            || op.type== CAST_USHORT_TYPE
+            || op.type== CAST_INT_TYPE
+            || op.type== CAST_UINT_TYPE
+            || op.type== CAST_LONG_TYPE
+            || op.type== CAST_ULONG_TYPE
+            || op.type== CAST_FLOAT_TYPE
+            || op.type== CAST_DOUBLE_TYPE
             ;
   }
 
   bool is_node_leaf(op_element const & op)
   {
-    return op.type==OPERATOR_MATRIX_DIAG_TYPE
-        || op.type==OPERATOR_VDIAG_TYPE
-        || op.type==OPERATOR_REPEAT_TYPE
-        || op.type==OPERATOR_MATRIX_ROW_TYPE
-        || op.type==OPERATOR_MATRIX_COLUMN_TYPE
-        || op.type==OPERATOR_ACCESS_INDEX_TYPE
-        || op.type==OPERATOR_OUTER_PROD_TYPE
-        || op.type_family==OPERATOR_VECTOR_DOT_TYPE_FAMILY
-        || op.type_family==OPERATOR_ROWS_DOT_TYPE_FAMILY
-        || op.type_family==OPERATOR_COLUMNS_DOT_TYPE_FAMILY
-        || op.type_family==OPERATOR_GEMM_TYPE_FAMILY
+    return op.type==MATRIX_DIAG_TYPE
+        || op.type==VDIAG_TYPE
+        || op.type==REPEAT_TYPE
+        || op.type==MATRIX_ROW_TYPE
+        || op.type==MATRIX_COLUMN_TYPE
+        || op.type==ACCESS_INDEX_TYPE
+        || op.type==OUTER_PROD_TYPE
+        || op.type_family==VECTOR_DOT_TYPE_FAMILY
+        || op.type_family==ROWS_DOT_TYPE_FAMILY
+        || op.type_family==COLUMNS_DOT_TYPE_FAMILY
+        || op.type_family==MATRIX_PRODUCT_TYPE_FAMILY
         ;
   }
 
   bool is_elementwise_function(op_element const & op)
   {
     return is_cast(op)
-        || op.type== OPERATOR_ABS_TYPE
-        || op.type== OPERATOR_ACOS_TYPE
-        || op.type== OPERATOR_ASIN_TYPE
-        || op.type== OPERATOR_ATAN_TYPE
-        || op.type== OPERATOR_CEIL_TYPE
-        || op.type== OPERATOR_COS_TYPE
-        || op.type== OPERATOR_COSH_TYPE
-        || op.type== OPERATOR_EXP_TYPE
-        || op.type== OPERATOR_FABS_TYPE
-        || op.type== OPERATOR_FLOOR_TYPE
-        || op.type== OPERATOR_LOG_TYPE
-        || op.type== OPERATOR_LOG10_TYPE
-        || op.type== OPERATOR_SIN_TYPE
-        || op.type== OPERATOR_SINH_TYPE
-        || op.type== OPERATOR_SQRT_TYPE
-        || op.type== OPERATOR_TAN_TYPE
-        || op.type== OPERATOR_TANH_TYPE
+        || op.type== ABS_TYPE
+        || op.type== ACOS_TYPE
+        || op.type== ASIN_TYPE
+        || op.type== ATAN_TYPE
+        || op.type== CEIL_TYPE
+        || op.type== COS_TYPE
+        || op.type== COSH_TYPE
+        || op.type== EXP_TYPE
+        || op.type== FABS_TYPE
+        || op.type== FLOOR_TYPE
+        || op.type== LOG_TYPE
+        || op.type== LOG10_TYPE
+        || op.type== SIN_TYPE
+        || op.type== SINH_TYPE
+        || op.type== SQRT_TYPE
+        || op.type== TAN_TYPE
+        || op.type== TANH_TYPE
 
-        || op.type== OPERATOR_ELEMENT_POW_TYPE
-        || op.type== OPERATOR_ELEMENT_FMAX_TYPE
-        || op.type== OPERATOR_ELEMENT_FMIN_TYPE
-        || op.type== OPERATOR_ELEMENT_MAX_TYPE
-        || op.type== OPERATOR_ELEMENT_MIN_TYPE;
+        || op.type== ELEMENT_POW_TYPE
+        || op.type== ELEMENT_FMAX_TYPE
+        || op.type== ELEMENT_FMIN_TYPE
+        || op.type== ELEMENT_MAX_TYPE
+        || op.type== ELEMENT_MIN_TYPE;
 
   }
 
@@ -139,7 +139,7 @@ std::vector<size_t> filter_nodes(bool (*pred)(math_expression::node const & node
 }
 
 //
-filter_elements_fun::filter_elements_fun(math_expression_node_subtype subtype, std::vector<lhs_rhs_element> & out) :
+filter_elements_fun::filter_elements_fun(node_type subtype, std::vector<lhs_rhs_element> & out) :
   subtype_(subtype), out_(out)
 { }
 
@@ -153,84 +153,84 @@ void filter_elements_fun::operator()(isaac::math_expression const & math_express
 }
 
 
-std::vector<lhs_rhs_element> filter_elements(math_expression_node_subtype subtype, isaac::math_expression const & math_expression)
+std::vector<lhs_rhs_element> filter_elements(node_type subtype, isaac::math_expression const & math_expression)
 {
   std::vector<lhs_rhs_element> res;
   traverse(math_expression, math_expression.root(), filter_elements_fun(subtype, res), true);
   return res;
 }
 
-/** @brief generate a string from an operation_node_type */
-const char * evaluate(operation_node_type type)
+/** @brief generate a string from an operation_type */
+const char * evaluate(operation_type type)
 {
   // unary expression
   switch (type)
   {
   //Function
-  case OPERATOR_ABS_TYPE : return "abs";
-  case OPERATOR_ACOS_TYPE : return "acos";
-  case OPERATOR_ASIN_TYPE : return "asin";
-  case OPERATOR_ATAN_TYPE : return "atan";
-  case OPERATOR_CEIL_TYPE : return "ceil";
-  case OPERATOR_COS_TYPE : return "cos";
-  case OPERATOR_COSH_TYPE : return "cosh";
-  case OPERATOR_EXP_TYPE : return "exp";
-  case OPERATOR_FABS_TYPE : return "fabs";
-  case OPERATOR_FLOOR_TYPE : return "floor";
-  case OPERATOR_LOG_TYPE : return "log";
-  case OPERATOR_LOG10_TYPE : return "log10";
-  case OPERATOR_SIN_TYPE : return "sin";
-  case OPERATOR_SINH_TYPE : return "sinh";
-  case OPERATOR_SQRT_TYPE : return "sqrt";
-  case OPERATOR_TAN_TYPE : return "tan";
-  case OPERATOR_TANH_TYPE : return "tanh";
+  case ABS_TYPE : return "abs";
+  case ACOS_TYPE : return "acos";
+  case ASIN_TYPE : return "asin";
+  case ATAN_TYPE : return "atan";
+  case CEIL_TYPE : return "ceil";
+  case COS_TYPE : return "cos";
+  case COSH_TYPE : return "cosh";
+  case EXP_TYPE : return "exp";
+  case FABS_TYPE : return "fabs";
+  case FLOOR_TYPE : return "floor";
+  case LOG_TYPE : return "log";
+  case LOG10_TYPE : return "log10";
+  case SIN_TYPE : return "sin";
+  case SINH_TYPE : return "sinh";
+  case SQRT_TYPE : return "sqrt";
+  case TAN_TYPE : return "tan";
+  case TANH_TYPE : return "tanh";
 
-  case OPERATOR_ELEMENT_ARGFMAX_TYPE : return "argfmax";
-  case OPERATOR_ELEMENT_ARGMAX_TYPE : return "argmax";
-  case OPERATOR_ELEMENT_ARGFMIN_TYPE : return "argfmin";
-  case OPERATOR_ELEMENT_ARGMIN_TYPE : return "argmin";
-  case OPERATOR_ELEMENT_POW_TYPE : return "pow";
+  case ELEMENT_ARGFMAX_TYPE : return "argfmax";
+  case ELEMENT_ARGMAX_TYPE : return "argmax";
+  case ELEMENT_ARGFMIN_TYPE : return "argfmin";
+  case ELEMENT_ARGMIN_TYPE : return "argmin";
+  case ELEMENT_POW_TYPE : return "pow";
 
   //Arithmetic
-  case OPERATOR_MINUS_TYPE : return "-";
-  case OPERATOR_ASSIGN_TYPE : return "=";
-  case OPERATOR_INPLACE_ADD_TYPE : return "+=";
-  case OPERATOR_INPLACE_SUB_TYPE : return "-=";
-  case OPERATOR_ADD_TYPE : return "+";
-  case OPERATOR_SUB_TYPE : return "-";
-  case OPERATOR_MULT_TYPE : return "*";
-  case OPERATOR_ELEMENT_PROD_TYPE : return "*";
-  case OPERATOR_DIV_TYPE : return "/";
-  case OPERATOR_ELEMENT_DIV_TYPE : return "/";
+  case MINUS_TYPE : return "-";
+  case ASSIGN_TYPE : return "=";
+  case INPLACE_ADD_TYPE : return "+=";
+  case INPLACE_SUB_TYPE : return "-=";
+  case ADD_TYPE : return "+";
+  case SUB_TYPE : return "-";
+  case MULT_TYPE : return "*";
+  case ELEMENT_PROD_TYPE : return "*";
+  case DIV_TYPE : return "/";
+  case ELEMENT_DIV_TYPE : return "/";
 
   //Relational
-  case OPERATOR_NEGATE_TYPE: return "!";
-  case OPERATOR_ELEMENT_EQ_TYPE : return "==";
-  case OPERATOR_ELEMENT_NEQ_TYPE : return "!=";
-  case OPERATOR_ELEMENT_GREATER_TYPE : return ">";
-  case OPERATOR_ELEMENT_GEQ_TYPE : return ">=";
-  case OPERATOR_ELEMENT_LESS_TYPE : return "<";
-  case OPERATOR_ELEMENT_LEQ_TYPE : return "<=";
+  case NEGATE_TYPE: return "!";
+  case ELEMENT_EQ_TYPE : return "==";
+  case ELEMENT_NEQ_TYPE : return "!=";
+  case ELEMENT_GREATER_TYPE : return ">";
+  case ELEMENT_GEQ_TYPE : return ">=";
+  case ELEMENT_LESS_TYPE : return "<";
+  case ELEMENT_LEQ_TYPE : return "<=";
 
-  case OPERATOR_ELEMENT_FMAX_TYPE : return "fmax";
-  case OPERATOR_ELEMENT_FMIN_TYPE : return "fmin";
-  case OPERATOR_ELEMENT_MAX_TYPE : return "max";
-  case OPERATOR_ELEMENT_MIN_TYPE : return "min";
+  case ELEMENT_FMAX_TYPE : return "fmax";
+  case ELEMENT_FMIN_TYPE : return "fmin";
+  case ELEMENT_MAX_TYPE : return "max";
+  case ELEMENT_MIN_TYPE : return "min";
 
   //Binary
-  case OPERATOR_GEMM_NN_TYPE : return "prodNN";
-  case OPERATOR_GEMM_TN_TYPE : return "prodTN";
-  case OPERATOR_GEMM_NT_TYPE : return "prodNT";
-  case OPERATOR_GEMM_TT_TYPE : return "prodTT";
-  case OPERATOR_VDIAG_TYPE : return "vdiag";
-  case OPERATOR_MATRIX_DIAG_TYPE : return "mdiag";
-  case OPERATOR_MATRIX_ROW_TYPE : return "row";
-  case OPERATOR_MATRIX_COLUMN_TYPE : return "col";
-  case OPERATOR_PAIR_TYPE: return "pair";
-  case OPERATOR_ACCESS_INDEX_TYPE: return "access";
+  case MATRIX_PRODUCT_NN_TYPE : return "prodNN";
+  case MATRIX_PRODUCT_TN_TYPE : return "prodTN";
+  case MATRIX_PRODUCT_NT_TYPE : return "prodNT";
+  case MATRIX_PRODUCT_TT_TYPE : return "prodTT";
+  case VDIAG_TYPE : return "vdiag";
+  case MATRIX_DIAG_TYPE : return "mdiag";
+  case MATRIX_ROW_TYPE : return "row";
+  case MATRIX_COLUMN_TYPE : return "col";
+  case PAIR_TYPE: return "pair";
+  case ACCESS_INDEX_TYPE: return "access";
 
   //FOR
-  case OPERATOR_SFOR_TYPE: return "sfor";
+  case SFOR_TYPE: return "sfor";
 
   default : throw operation_not_supported_exception("Unsupported operator");
   }
@@ -245,7 +245,7 @@ void evaluate_expression_traversal::call_before_expansion(isaac::math_expression
   math_expression::node const & root_node = math_expression.tree()[root_idx];
   if(detail::is_cast(root_node.op))
     str_ += mapping_.at(std::make_pair(root_idx, PARENT_NODE_TYPE))->evaluate(accessors_);
-  else if (( (root_node.op.type_family==OPERATOR_UNARY_TYPE_FAMILY&&root_node.op.type!=OPERATOR_ADD_TYPE) || detail::is_elementwise_function(root_node.op))
+  else if (( (root_node.op.type_family==UNARY_TYPE_FAMILY&&root_node.op.type!=ADD_TYPE) || detail::is_elementwise_function(root_node.op))
       && !detail::is_node_leaf(root_node.op))
     str_+=evaluate(root_node.op.type);
   if(root_node.op.type!=OPERATOR_FUSE)
@@ -268,7 +268,7 @@ void evaluate_expression_traversal::operator()(isaac::math_expression const & ma
   {
     if (detail::is_node_leaf(root_node.op))
       str_ += mapping_.at(key)->evaluate(accessors_);
-    else if(root_node.op.type_family!=OPERATOR_UNARY_TYPE_FAMILY)
+    else if(root_node.op.type_family!=UNARY_TYPE_FAMILY)
     {
       if (detail::is_elementwise_operator(root_node.op))
         str_ += evaluate(root_node.op.type);
@@ -280,7 +280,7 @@ void evaluate_expression_traversal::operator()(isaac::math_expression const & ma
   {
     if (leaf==LHS_NODE_TYPE)
     {
-      if (root_node.lhs.type_family!=COMPOSITE_OPERATOR_FAMILY)
+      if (root_node.lhs.subtype!=COMPOSITE_OPERATOR_TYPE)
       {
         if (root_node.lhs.subtype==FOR_LOOP_INDEX_TYPE)
           str_ += "sforidx" + tools::to_string(root_node.lhs.for_idx.level);
@@ -291,7 +291,7 @@ void evaluate_expression_traversal::operator()(isaac::math_expression const & ma
 
     if (leaf==RHS_NODE_TYPE)
     {
-      if (root_node.rhs.type_family!=COMPOSITE_OPERATOR_FAMILY)
+      if (root_node.rhs.subtype!=COMPOSITE_OPERATOR_TYPE)
       {
         if (root_node.rhs.subtype==FOR_LOOP_INDEX_TYPE)
           str_ += "sforidx" + tools::to_string(root_node.rhs.for_idx.level);
@@ -312,14 +312,14 @@ std::string evaluate(leaf_t leaf, std::map<std::string, std::string> const & acc
 
   if (leaf==RHS_NODE_TYPE)
   {
-    if (root_node.rhs.type_family==COMPOSITE_OPERATOR_FAMILY)
+    if (root_node.rhs.subtype==COMPOSITE_OPERATOR_TYPE)
       traverse(math_expression, root_node.rhs.node_index, traversal_functor, false);
     else
       traversal_functor(math_expression, root_idx, leaf);
   }
   else if (leaf==LHS_NODE_TYPE)
   {
-    if (root_node.lhs.type_family==COMPOSITE_OPERATOR_FAMILY)
+    if (root_node.lhs.subtype==COMPOSITE_OPERATOR_TYPE)
       traverse(math_expression, root_node.lhs.node_index, traversal_functor, false);
     else
       traversal_functor(math_expression, root_idx, leaf);
@@ -369,14 +369,14 @@ void process(kernel_generation_stream & stream, leaf_t leaf, std::map<std::strin
 
   if (leaf==RHS_NODE_TYPE)
   {
-    if (root_node.rhs.type_family==COMPOSITE_OPERATOR_FAMILY)
+    if (root_node.rhs.subtype==COMPOSITE_OPERATOR_TYPE)
       traverse(math_expression, root_node.rhs.node_index, traversal_functor, true);
     else
       traversal_functor(math_expression, root_idx, leaf);
   }
   else if (leaf==LHS_NODE_TYPE)
   {
-    if (root_node.lhs.type_family==COMPOSITE_OPERATOR_FAMILY)
+    if (root_node.lhs.subtype==COMPOSITE_OPERATOR_TYPE)
       traverse(math_expression, root_node.lhs.node_index, traversal_functor, true);
     else
       traversal_functor(math_expression, root_idx, leaf);
@@ -440,9 +440,9 @@ void math_expression_representation_functor::append(char*& p, const char * str) 
 void math_expression_representation_functor::operator()(isaac::math_expression const & math_expression, std::size_t root_idx, leaf_t leaf_t) const
 {
   math_expression::node const & root_node = math_expression.tree()[root_idx];
-  if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
+  if (leaf_t==LHS_NODE_TYPE && root_node.lhs.subtype != COMPOSITE_OPERATOR_TYPE)
     append(root_node.lhs, detail::is_assignment(root_node.op));
-  else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != COMPOSITE_OPERATOR_FAMILY)
+  else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.subtype != COMPOSITE_OPERATOR_TYPE)
     append(root_node.rhs, false);
   else if (leaf_t==PARENT_NODE_TYPE)
     append_id(ptr_,root_node.op.type);

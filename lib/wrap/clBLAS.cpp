@@ -169,7 +169,7 @@ extern "C"
     //BLAS3
     //*****************
 
-    #define MAKE_GEMM(TYPE_CHAR, TYPE_ISAAC, TYPE_CL) \
+    #define MAKE_MATRIX_PRODUCT(TYPE_CHAR, TYPE_ISAAC, TYPE_CL) \
     clblasStatus clblas ## TYPE_CHAR ## gemm(clblasOrder order, clblasTranspose transA,  clblasTranspose transB,\
                             size_t M, size_t N, size_t K,\
                             TYPE_CL alpha, const cl_mem cmA, size_t offA, size_t lda,\
@@ -208,8 +208,8 @@ extern "C"
         return clblasSuccess;\
     }
 
-    MAKE_GEMM(S, sc::FLOAT_TYPE, cl_float)
-    MAKE_GEMM(D, sc::DOUBLE_TYPE, cl_double)
+    MAKE_MATRIX_PRODUCT(S, sc::FLOAT_TYPE, cl_float)
+    MAKE_MATRIX_PRODUCT(D, sc::DOUBLE_TYPE, cl_double)
 
 #undef DOT
 

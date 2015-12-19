@@ -81,11 +81,11 @@ public:
 
     void set_arguments(lhs_rhs_element const & lhs_rhs, bool is_assigned) const
     {
-        switch(lhs_rhs.type_family)
+        switch(lhs_rhs.subtype)
         {
-        case VALUE_TYPE_FAMILY: return set_arguments(lhs_rhs.dtype, lhs_rhs.vscalar);
-        case ARRAY_TYPE_FAMILY: return set_arguments(lhs_rhs.array, is_assigned);
-        case PLACEHOLDER_TYPE_FAMILY: return;
+        case VALUE_SCALAR_TYPE:   return set_arguments(lhs_rhs.dtype, lhs_rhs.vscalar);
+        case DENSE_ARRAY_TYPE:    return set_arguments(lhs_rhs.array, is_assigned);
+        case FOR_LOOP_INDEX_TYPE: return;
         default: throw std::runtime_error("Unrecognized type family");
         }
     }
@@ -93,9 +93,9 @@ public:
     void operator()(isaac::math_expression const & math_expression, size_t root_idx, leaf_t leaf_t) const
     {
         math_expression::node const & root_node = math_expression.tree()[root_idx];
-        if (leaf_t==LHS_NODE_TYPE && root_node.lhs.type_family != COMPOSITE_OPERATOR_FAMILY)
+        if (leaf_t==LHS_NODE_TYPE && root_node.lhs.subtype != COMPOSITE_OPERATOR_TYPE)
             set_arguments(root_node.lhs, detail::is_assignment(root_node.op));
-        else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.type_family != COMPOSITE_OPERATOR_FAMILY)
+        else if (leaf_t==RHS_NODE_TYPE && root_node.rhs.subtype != COMPOSITE_OPERATOR_TYPE)
             set_arguments(root_node.rhs, false);
     }
 

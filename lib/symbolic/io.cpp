@@ -10,7 +10,7 @@ namespace isaac
 
 #define ISAAC_MAP_TO_STRING(NAME) case NAME: return #NAME
 
-inline std::string to_string(math_expression_node_subtype const & f)
+inline std::string to_string(node_type const & f)
 {
   switch(f)
   {
@@ -23,7 +23,7 @@ inline std::string to_string(math_expression_node_subtype const & f)
 
 inline std::string to_string(lhs_rhs_element const & e)
 {
-  if(e.type_family==COMPOSITE_OPERATOR_FAMILY)
+  if(e.subtype==COMPOSITE_OPERATOR_TYPE)
   {
     return"COMPOSITE [" + tools::to_string(e.node_index) + "]";
   }
@@ -53,10 +53,10 @@ namespace detail
 
     os << "Node " << node_index << ": " << current_node << std::endl;
 
-    if (current_node.lhs.type_family == COMPOSITE_OPERATOR_FAMILY)
+    if (current_node.lhs.subtype == COMPOSITE_OPERATOR_TYPE)
       print_node(os, s, current_node.lhs.node_index, indent+1);
 
-    if (current_node.rhs.type_family == COMPOSITE_OPERATOR_FAMILY)
+    if (current_node.rhs.subtype == COMPOSITE_OPERATOR_TYPE)
       print_node(os, s, current_node.rhs.node_index, indent+1);
   }
 }

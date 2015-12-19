@@ -39,11 +39,11 @@ bool base::requires_fallback(math_expression const  & expression)
 
 int_t base::vector_size(math_expression::node const & node)
 {
-  if (node.op.type==OPERATOR_MATRIX_DIAG_TYPE)
+  if (node.op.type==MATRIX_DIAG_TYPE)
     return std::min<int_t>(node.lhs.array->shape()[0], node.lhs.array->shape()[1]);
-  else if (node.op.type==OPERATOR_MATRIX_ROW_TYPE)
+  else if (node.op.type==MATRIX_ROW_TYPE)
     return node.lhs.array->shape()[1];
-  else if (node.op.type==OPERATOR_MATRIX_COLUMN_TYPE)
+  else if (node.op.type==MATRIX_COLUMN_TYPE)
     return node.lhs.array->shape()[0];
   else
     return node.lhs.array->shape().max();
@@ -52,12 +52,12 @@ int_t base::vector_size(math_expression::node const & node)
 
 std::pair<int_t, int_t> base::matrix_size(math_expression::container_type const & tree, math_expression::node const & node)
 {
-  if (node.op.type==OPERATOR_VDIAG_TYPE)
+  if (node.op.type==VDIAG_TYPE)
   {
     int_t size = node.lhs.array->shape()[0];
     return std::make_pair(size,size);
   }
-  else if(node.op.type==OPERATOR_REPEAT_TYPE)
+  else if(node.op.type==REPEAT_TYPE)
   {
     size_t rep0 = tuple_get(tree, node.rhs.node_index, 0);
     size_t rep1 = tuple_get(tree, node.rhs.node_index, 1);

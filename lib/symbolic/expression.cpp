@@ -10,22 +10,19 @@ namespace isaac
 
 void fill(lhs_rhs_element &x, invalid_node)
 {
-  x.type_family = INVALID_TYPE_FAMILY;
   x.subtype = INVALID_SUBTYPE;
   x.dtype = INVALID_NUMERIC_TYPE;
 }
 
 void fill(lhs_rhs_element & x, std::size_t node_index)
 {
-  x.type_family = COMPOSITE_OPERATOR_FAMILY;
-  x.subtype = INVALID_SUBTYPE;
+  x.subtype = COMPOSITE_OPERATOR_TYPE;
   x.dtype = INVALID_NUMERIC_TYPE;
   x.node_index = node_index;
 }
 
 void fill(lhs_rhs_element & x, for_idx_t index)
 {
-  x.type_family = PLACEHOLDER_TYPE_FAMILY;
   x.subtype = FOR_LOOP_INDEX_TYPE;
   x.dtype = INVALID_NUMERIC_TYPE;
   x.for_idx = index;
@@ -33,7 +30,6 @@ void fill(lhs_rhs_element & x, for_idx_t index)
 
 void fill(lhs_rhs_element & x, array_base const & a)
 {
-  x.type_family = ARRAY_TYPE_FAMILY;
   x.subtype = DENSE_ARRAY_TYPE;
   x.dtype = a.dtype();
   x.array = (array_base*)&a;
@@ -41,7 +37,6 @@ void fill(lhs_rhs_element & x, array_base const & a)
 
 void fill(lhs_rhs_element & x, value_scalar const & v)
 {
-  x.type_family = VALUE_TYPE_FAMILY;
   x.dtype = v.dtype();
   x.subtype = VALUE_SCALAR_TYPE;
   x.vscalar = v.values();
@@ -51,7 +46,7 @@ lhs_rhs_element::lhs_rhs_element(){}
 
 //
 op_element::op_element() {}
-op_element::op_element(operation_node_type_family const & _type_family, operation_node_type const & _type) : type_family(_type_family), type(_type){}
+op_element::op_element(operation_type_family const & _type_family, operation_type const & _type) : type_family(_type_family), type(_type){}
 
 //
 math_expression::math_expression(for_idx_t const &lhs, for_idx_t const &rhs, const op_element &op)
@@ -122,8 +117,8 @@ math_expression::math_expression(math_expression const & lhs, math_expression co
   tree_[root_].op = op;
   fill(tree_[root_].rhs, lsize + rhs.root_);
   for(container_type::iterator it = tree_.begin() + lsize ; it != tree_.end() - 1 ; ++it){
-    if(it->lhs.type_family==COMPOSITE_OPERATOR_FAMILY) it->lhs.node_index+=lsize;
-    if(it->rhs.type_family==COMPOSITE_OPERATOR_FAMILY) it->rhs.node_index+=lsize;
+    if(it->lhs.subtype==COMPOSITE_OPERATOR_TYPE) it->lhs.node_index+=lsize;
+    if(it->rhs.subtype==COMPOSITE_OPERATOR_TYPE) it->rhs.node_index+=lsize;
   }
   root_ = tree_.size() - 1;
 }
@@ -181,17 +176,17 @@ int_t math_expression::dim() const
 //}
 
 math_expression math_expression::operator-()
-{ return math_expression(*this,  invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_SUB_TYPE), *context_, dtype_, shape_); }
+{ return math_expression(*this,  invalid_node(), op_element(UNARY_TYPE_FAMILY, SUB_TYPE), *context_, dtype_, shape_); }
 
 math_expression math_expression::operator!()
-{ return math_expression(*this, invalid_node(), op_element(OPERATOR_UNARY_TYPE_FAMILY, OPERATOR_NEGATE_TYPE), *context_, INT_TYPE, shape_); }
+{ return math_expression(*this, invalid_node(), op_element(UNARY_TYPE_FAMILY, NEGATE_TYPE), *context_, INT_TYPE, shape_); }
 
 //
 
 math_expression::node const & lhs_most(math_expression::container_type const & array, math_expression::node const & init)
 {
   math_expression::node const * current = &init;
-  while (current->lhs.type_family==COMPOSITE_OPERATOR_FAMILY)
+  while (current->lhs.subtype==COMPOSITE_OPERATOR_TYPE)
     current = &array[current->lhs.node_index];
   return *current;
 }
@@ -200,8 +195,8 @@ math_expression::node const & lhs_most(math_expression::container_type const & a
 { return lhs_most(array, array[root]); }
 
 //
-math_expression for_idx_t::operator=(value_scalar const & r) const { return math_expression(*this, r, op_element(OPERATOR_BINARY_TYPE_FAMILY,OPERATOR_ASSIGN_TYPE), r.dtype()); }
-math_expression for_idx_t::operator=(math_expression const & r) const { return math_expression(*this, r, op_element(OPERATOR_BINARY_TYPE_FAMILY,OPERATOR_ASSIGN_TYPE), r.context(), r.dtype(), r.shape()); }
+math_expression for_idx_t::operator=(value_scalar const & r) const { return math_expression(*this, r, op_element(BINARY_TYPE_FAMILY,ASSIGN_TYPE), r.dtype()); }
+math_expression for_idx_t::operator=(math_expression const & r) const { return math_expression(*this, r, op_element(BINARY_TYPE_FAMILY,ASSIGN_TYPE), r.context(), r.dtype(), r.shape()); }
 
 math_expression for_idx_t::operator+=(value_scalar const & r) const { return *this = *this + r; }
 math_expression for_idx_t::operator-=(value_scalar const & r) const { return *this = *this - r; }
