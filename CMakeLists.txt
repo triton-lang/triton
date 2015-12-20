@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 2.8.10)
 
+if(NOT CMAKE_BUILD_TYPE)
+  message(STATUS "Default build type: Release")
+  set(CMAKE_BUILD_TYPE "Release")
+endif()
+
 if(WIN32)
  SET(CMAKE_FIND_LIBRARY_PREFIXES "")
  SET(CMAKE_FIND_LIBRARY_SUFFIXES ".lib" ".dll")
