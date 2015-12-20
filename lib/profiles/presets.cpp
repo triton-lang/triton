@@ -25,6 +25,7 @@
 #include "presets/broadwell.hpp"
 //NVidia
 #include "presets/maxwell.hpp"
+#include "presets/kepler.hpp"
 //AMD
 #include "presets/fiji.hpp"
 #include "presets/hawaii.hpp"
@@ -41,6 +42,7 @@ const profiles::presets_type profiles::presets_ =
     //INTEL
     DATABASE_ENTRY(GPU, INTEL, BROADWELL, presets::broadwell),
     //NVIDIA
+    DATABASE_ENTRY(GPU, NVIDIA, KEPLER, presets::kepler),
     DATABASE_ENTRY(GPU, NVIDIA, MAXWELL, presets::maxwell),
     //AMD
     DATABASE_ENTRY(GPU, AMD, GCN_1_1, presets::hawaii),
