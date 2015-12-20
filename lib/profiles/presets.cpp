@@ -27,6 +27,7 @@
 #include "presets/maxwell.hpp"
 //AMD
 #include "presets/fiji.hpp"
+#include "presets/hawaii.hpp"
 
 namespace isaac
 {
@@ -42,6 +43,7 @@ const profiles::presets_type profiles::presets_ =
     //NVIDIA
     DATABASE_ENTRY(GPU, NVIDIA, MAXWELL, presets::maxwell),
     //AMD
+    DATABASE_ENTRY(GPU, AMD, GCN_1_1, presets::hawaii),
     DATABASE_ENTRY(GPU, AMD, GCN_1_2, presets::fiji)
 };
 
