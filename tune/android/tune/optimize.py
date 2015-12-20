@@ -173,7 +173,7 @@ def is_local_optimum(parameters, template, sizes, context):
     elif issubclass(template, sc.templates.reduce_2d):
         sweep_over = [0,1,2,3,4]
     elif issubclass(template, sc.templates.matrix_product):
-        sweep_over = [1,2,3,4,5,7]
+        sweep_over = [1,2,3,4,5,6,7]
     
     #Evaluate the provided parameters guess
     try:
@@ -193,7 +193,7 @@ def is_local_optimum(parameters, template, sizes, context):
             pass
         try:
             time = tools.benchmark(template, x, tree)
-            if time/reference < .9:
+            if time/reference < .98:
                 return False
         except profile_execution_failure:
             pass
