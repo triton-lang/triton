@@ -20,8 +20,8 @@ else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -Wall -Wextra -pedantic")
 endif()
 
-#CUDA
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include/external/ ${CMAKE_CURRENT_SOURCE_DIR}/include/external/cuda)
+#Includes
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib/tools/ ${CMAKE_CURRENT_SOURCE_DIR}/include/external/ ${CMAKE_CURRENT_SOURCE_DIR}/include/external/cuda)
 
 #Binary to convert .cu files to const char *
 if(NOT ANDROID)
