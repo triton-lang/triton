@@ -323,7 +323,7 @@ static const for_idx_t _i9{9};
 
 //Initializers
 ISAACAPI expression_tree eye(int_t, int_t, isaac::numeric_type, driver::Context const & context = driver::backend::contexts::get_default());
-ISAACAPI expression_tree zeros(int_t M, int_t N, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
+ISAACAPI expression_tree zeros(shape_t const & shape, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
 
 //Swap
 ISAACAPI void swap(view x, view y);

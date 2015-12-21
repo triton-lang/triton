@@ -62,7 +62,7 @@ void test_impl(T epsilon, simple_vector_base<T> & cx, simple_vector_base<T>& cy,
   }
   if(interf == CPP)
   {
-      RUN_TEST("z = 0", cz[i] = 0, z = zeros(N, 1, dtype, context))
+      RUN_TEST("z = 0", cz[i] = 0, z = sc::zeros({N}, dtype, context))
       RUN_TEST("z = x", cz[i] = cx[i], z = x)
       RUN_TEST("z = -x", cz[i] = -cx[i], z = -x)
 
