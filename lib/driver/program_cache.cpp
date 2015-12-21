@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301  USA
  */
+
 #include "isaac/driver/program_cache.h"
 
 namespace isaac
