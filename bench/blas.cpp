@@ -135,7 +135,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       sc::array x(N, dtype), y(N, dtype);
       /* ISAAC */
       BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y), 3*N*dtsize/t)
-      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y, sc::execution_options_type(), sc::dispatcher_options_type(true)), 3*N*dtsize/t)
+//      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y, sc::execution_options_type(), sc::dispatcher_options_type(true)), 3*N*dtsize/t)
       /* clblas */
   #ifdef BENCH_CLBLAS
       if(x.context().backend()==sc::driver::OPENCL)
@@ -190,27 +190,24 @@ void bench(sc::numeric_type dtype, std::string operation)
   {
     std::vector<std::tuple<std::string, char,int_t, int_t> > MNs;
     //Linear System
-    MNs.push_back(std::make_tuple("Square153-N", 'N',153,153));
-    MNs.push_back(std::make_tuple("Square153-T", 'T',153,153));
-    MNs.push_back(std::make_tuple("Square1024-N", 'N',1024,1024));
-    MNs.push_back(std::make_tuple("Square1024-T", 'T',1024,1024));
-    MNs.push_back(std::make_tuple("Square2867-N", 'N',2867,2867));
-    MNs.push_back(std::make_tuple("Square2867-T", 'T',2867,2867));
+    MNs.push_back(std::make_tuple("square153[N]", 'N',153,153));
+    MNs.push_back(std::make_tuple("square153[T]", 'T',153,153));
+    MNs.push_back(std::make_tuple("square1024[T]", 'T',1024,1024));
+    MNs.push_back(std::make_tuple("square2867[N]", 'N',2867,2867));
+    MNs.push_back(std::make_tuple("square2867[T]", 'T',2867,2867));
     //Normalization
-    MNs.push_back(std::make_tuple("Norm64-N", 'N', 64, 60000));
-    MNs.push_back(std::make_tuple("Norm64-T", 'T', 64, 60000));
-    MNs.push_back(std::make_tuple("Norm256-N", 'N', 256, 60000));
-    MNs.push_back(std::make_tuple("Norm256-T", 'T', 256, 60000));
-    MNs.push_back(std::make_tuple("Norm1024-N", 'N', 1024, 60000));
-    MNs.push_back(std::make_tuple("Norm1024-T", 'T', 1024, 60000));
+    MNs.push_back(std::make_tuple("norm64[N]", 'N', 64, 60000));
+    MNs.push_back(std::make_tuple("norm64[T]", 'T', 64, 60000));
+    MNs.push_back(std::make_tuple("norm256[N]", 'N', 256, 60000));
+    MNs.push_back(std::make_tuple("norm256[T]", 'T', 256, 60000));
+    MNs.push_back(std::make_tuple("norm1024[N]", 'N', 1024, 60000));
+    MNs.push_back(std::make_tuple("norm1024[T]", 'T', 1024, 60000));
 
     //Householder
-    MNs.push_back(std::make_tuple("Householder1-N",  'N', 64, 60000));
-    MNs.push_back(std::make_tuple("Householder1-T",  'T', 64, 60000));
-    MNs.push_back(std::make_tuple("Householder10-N", 'N', 54, 60000));
-    MNs.push_back(std::make_tuple("Householder10-T", 'T', 54, 60000));
-    MNs.push_back(std::make_tuple("Householder50-N", 'N', 14, 60000));
-    MNs.push_back(std::make_tuple("Householder50-T", 'T', 14, 60000));
+    MNs.push_back(std::make_tuple("tallskinny-1[N]", 'N', 10, 60000));
+    MNs.push_back(std::make_tuple("tallskinny-1[T]", 'T', 10, 60000));
+    MNs.push_back(std::make_tuple("tallskinny-2[N]", 'N', 30, 60000));
+    MNs.push_back(std::make_tuple("tallskinny-2[T]", 'T', 30, 60000));
 
     /*---------*/
     /*--BLAS2--*/
@@ -230,7 +227,7 @@ void bench(sc::numeric_type dtype, std::string operation)
         int_t lda = A.stride()[1];
     #endif
         BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T,x):dot(A,x)),(M*N + M + N)*dtsize/t);
-        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T,x):dot(A,x), sc::execution_options_type(), sc::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
+//        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T,x):dot(A,x), sc::execution_options_type(), sc::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
     #ifdef BENCH_CLBLAS
         if(y.context().backend()==sc::driver::OPENCL)
             BENCHMARK_CLBLAS(clblasSgemv(clblasColumnMajor, AT?clblasTrans:clblasNoTrans, As1, As2, 1, CL_HANDLE(A.data()), 0, lda, CL_HANDLE(x.data()), 0, 1, 0, CL_HANDLE(y.data()), 0, 1, 1, &CL_HANDLE(queue),0, NULL, NULL), (M*N + M + N)*dtsize/t)
@@ -253,38 +250,38 @@ void bench(sc::numeric_type dtype, std::string operation)
   {
     std::vector<std::tuple<std::string, char, char, int_t, int_t, int_t> > MNKs;
     //Square
-    MNKs.push_back(std::make_tuple("Square896",'N','T',896,896,896));
-    MNKs.push_back(std::make_tuple("Square2560",'N','T',2560,2560,2560));
+    MNKs.push_back(std::make_tuple("square896",'N','T',896,896,896));
+    MNKs.push_back(std::make_tuple("square2560",'N','T',2560,2560,2560));
 
     //Convolution
-    MNKs.push_back(std::make_tuple("ConvAlexNet1",'N','N',3025,64,363));
-    MNKs.push_back(std::make_tuple("ConvAlexNet2",'N','N',729,192,1600));
-    MNKs.push_back(std::make_tuple("ConvAlexNet3",'N','N',169,384,1728));
-    MNKs.push_back(std::make_tuple("ConvAlexNet4",'N','N',169,256,3456));
-    MNKs.push_back(std::make_tuple("ConvAlexNet5",'N','N',169,128,2304));
+    MNKs.push_back(std::make_tuple("conv1",'N','N',3025,64,363));
+    MNKs.push_back(std::make_tuple("conv2",'N','N',729,192,1600));
+    MNKs.push_back(std::make_tuple("conv3",'N','N',169,384,1728));
+    MNKs.push_back(std::make_tuple("conv4",'N','N',169,256,3456));
+    MNKs.push_back(std::make_tuple("conv5",'N','N',169,128,2304));
 
-    //Convolution Gradient-1
-    MNKs.push_back(std::make_tuple("BackConvAlexNet5-1]",'T','N',2304,256,169));
-    MNKs.push_back(std::make_tuple("BackConvAlexNet4-1]",'T','N',3456,256,169));
-    MNKs.push_back(std::make_tuple("BackConvAlexNet3-1]",'T','N',1728,384,169));
-    MNKs.push_back(std::make_tuple("BackConvAlexNet2-1]",'T','N',1600,192,729));
-    MNKs.push_back(std::make_tuple("BackConvAlexNet1-1]",'T','N',363,64,3025));
+//    //Convolution Gradient-1
+//    MNKs.push_back(std::make_tuple("convgrad5-1]",'T','N',2304,256,169));
+//    MNKs.push_back(std::make_tuple("convgrad4-1]",'T','N',3456,256,169));
+//    MNKs.push_back(std::make_tuple("convgrad3-1]",'T','N',1728,384,169));
+//    MNKs.push_back(std::make_tuple("convgrad2-1]",'T','N',1600,192,729));
+//    MNKs.push_back(std::make_tuple("convgrad1-1]",'T','N',363,64,3025));
 
-    //Convolution Gradient-2
-    MNKs.push_back(std::make_tuple("BackConvAlexNet5-2]",'N','T',169,2304,256));
-    MNKs.push_back(std::make_tuple("BackConvAlexNet4-2]",'N','T',169,3456,256));
-    MNKs.push_back(std::make_tuple("BackConvAlexNet3-2]",'N','T',169,1728,384));
-    MNKs.push_back(std::make_tuple("BackConvAlexNet2-2]",'N','T',729,1600,192));
-    MNKs.push_back(std::make_tuple("BackConvAlexNet1-2]",'N','T',3025,363,64));
+//    //Convolution Gradient-2
+//    MNKs.push_back(std::make_tuple("convgrad5-2]",'N','T',169,2304,256));
+//    MNKs.push_back(std::make_tuple("convgrad4-2]",'N','T',169,3456,256));
+//    MNKs.push_back(std::make_tuple("convgrad3-2]",'N','T',169,1728,384));
+//    MNKs.push_back(std::make_tuple("convgrad2-2]",'N','T',729,1600,192));
+//    MNKs.push_back(std::make_tuple("convgrad1-2]",'N','T',3025,363,64));
 
     //Covariance (e.g., ICA, 10minutes/100Hz)
-    MNKs.push_back(std::make_tuple("ICA32",'N','T',32,32,60000));
-    MNKs.push_back(std::make_tuple("ICA256",'N','T',256,256,60000));
+    MNKs.push_back(std::make_tuple("ica32",'N','T',32,32,60000));
+    MNKs.push_back(std::make_tuple("ica256",'N','T',256,256,60000));
 
 //    //Bi-diagonalization
-    MNKs.push_back(std::make_tuple("Householder1",'N','T',4096,4096,32));
-    MNKs.push_back(std::make_tuple("Householder10",'N','T',3456,3456,32));
-    MNKs.push_back(std::make_tuple("Householder50",'N','T',896,896,32));
+    MNKs.push_back(std::make_tuple("32rank1-4096",'N','T',4096,4096,32));
+    MNKs.push_back(std::make_tuple("32rank1-3456",'N','T',3456,3456,32));
+    MNKs.push_back(std::make_tuple("32rank1-896",'N','T',896,896,32));
 
     /*---------*/
     /*--BLAS3--*/
@@ -309,7 +306,7 @@ void bench(sc::numeric_type dtype, std::string operation)
         int_t lda = A.stride()[1], ldb = B.stride()[1], ldc = C.stride()[1];
     #endif
         BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B))), (double)2*M*N*K/t);
-        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B)), sc::execution_options_type(0), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
+//        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B)), sc::execution_options_type(0), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
         if(C.context().backend()==sc::driver::OPENCL)
