@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301  USA
  */
+
 #ifndef ISAAC_TOOLS_MISCELLANEOUS_HPP
 #define ISAAC_TOOLS_MISCELLANEOUS_HPP
 

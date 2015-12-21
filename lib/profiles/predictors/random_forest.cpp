@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301  USA
  */
+
 #include "isaac/profiles/predictors/random_forest.h"
 #include "rapidjson/to_array.hpp"
 

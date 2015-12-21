@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301  USA
  */
+
 #include "isaac/array.h"
 #include "isaac/kernels/templates/matrix_product.h"
 #include "isaac/kernels/keywords.h"

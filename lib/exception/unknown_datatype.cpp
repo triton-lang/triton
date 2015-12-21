@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301  USA
  */
+
 #include "isaac/exception/unknown_datatype.h"
 #include "cpp/to_string.hpp"
 

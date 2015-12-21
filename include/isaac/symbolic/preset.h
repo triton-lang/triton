@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301  USA
  */
+
 #ifndef ISAAC_SYMBOLIC_PRESET_H_
 #define ISAAC_SYMBOLIC_PRESET_H_
 

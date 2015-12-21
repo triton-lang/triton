@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301  USA
  */
+
 #include "isaac/kernels/templates/elementwise_1d.h"
 #include "isaac/kernels/templates/elementwise_2d.h"
 #include "isaac/kernels/templates/reduce_1d.h"
