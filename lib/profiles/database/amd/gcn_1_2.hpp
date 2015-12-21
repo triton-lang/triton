@@ -1,33 +1,15 @@
-/*
- * Copyright (c) 2015, PHILIPPE TILLET. All rights reserved.
- *
- * This file is part of ISAAC.
- *
- * ISAAC is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
- */
 #pragma once
 
 #include <cstddef>
 
 namespace isaac
 {
-namespace presets
+namespace database
+{
+namespace amd
 {
 
-static const char fiji[] = {
+static const char gcn_1_2[] = {
 0x7b,	0x22,	0x72,	0x65,	0x64,	0x75,	0x63,	0x65,	0x5f,	0x32,	
 0x64,	0x5f,	0x63,	0x6f,	0x6c,	0x73,	0x22,	0x3a,	0x20,	0x7b,	
 0x22,	0x66,	0x6c,	0x6f,	0x61,	0x74,	0x33,	0x32,	0x22,	0x3a,	
@@ -5932,7 +5914,8 @@ static const char fiji[] = {
 0x2c,	0x20,	0x30,	0x2c,	0x20,	0x38,	0x2c,	0x20,	0x38,	0x5d,	
 0x5d,	0x7d,	0x7d,	0x7d,	0x0};
 
-static const std::size_t fiji_len = 59025;
+static const std::size_t gcn_1_2_len = 59025;
 
+}
 }
 }

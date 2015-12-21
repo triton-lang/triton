@@ -1,11 +1,3 @@
-if(NOT ANDROID)
-    #Presets
-    set(DATABASE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/profiles/presets/")
-    file(GLOB_RECURSE JSON_FILES "${DATABASE_PATH}/json/*.json")
-    CODE_TO_H(SOURCES ${JSON_FILES} VARNAME json_files EXTENSION "hpp" OUTPUT_DIR "${DATABASE_PATH}"
-            NAMESPACE "isaac presets" TARGET database EOF "1")
-endif()
-
 #Compilation
 if(ANDROID)
     add_library(isaac STATIC ${LIBISAAC_SRC})
@@ -16,7 +8,18 @@ else()
 		set_target_properties(isaac PROPERTIES LINK_FLAGS "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/wrap/clBLAS.def")
 	endif()
 endif()
-add_dependencies(isaac database)
+
+#Database
+if(NOT ANDROID)
+    #Presets
+    foreach(VENDOR amd intel nvidia)
+        set(DATABASE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/profiles/database/${VENDOR}/")
+        file(GLOB_RECURSE JSON_FILES "${DATABASE_PATH}/json/*.json")
+        CODE_TO_H(SOURCES ${JSON_FILES} VARNAME database EXTENSION "hpp" OUTPUT_DIR "${DATABASE_PATH}"
+                NAMESPACE "isaac database ${VENDOR}" TARGET database_${VENDOR} EOF "1")
+        add_dependencies(isaac database_${VENDOR})
+    endforeach()
+endif()
 
 target_link_libraries(isaac "dl")
 
