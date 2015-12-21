@@ -42,6 +42,8 @@ class Buffer;
 class CommandQueue;
 class Context;
 class Platform;
+class Program;
+class Kernel;
 class ProgramCache;
 
 class ISAACAPI backend
@@ -69,7 +71,18 @@ public:
 DISABLE_MSVC_WARNING_C4251
       static std::map<std::tuple<CommandQueue, expression_type, numeric_type>, ProgramCache * > cache_;
 RESTORE_MSVC_WARNING_C4251
+  };
 
+  class ISAACAPI kernels
+  {
+      friend class backend;
+  public:
+      static void release();
+      static Kernel & get(Program const & program, std::string const & name);
+  private:
+DISABLE_MSVC_WARNING_C4251
+      static std::map<std::tuple<Program, std::string>, Kernel * > cache_;
+RESTORE_MSVC_WARNING_C4251
   };
 
   class ISAACAPI contexts

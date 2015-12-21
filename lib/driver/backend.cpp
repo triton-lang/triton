@@ -23,6 +23,7 @@
 #include "isaac/driver/buffer.h"
 #include "isaac/driver/context.h"
 #include "isaac/driver/command_queue.h"
+#include "isaac/driver/kernel.h"
 #include "isaac/driver/program_cache.h"
 
 #include <assert.h>
@@ -75,6 +76,27 @@ ProgramCache & backend::programs::get(CommandQueue const & queue, expression_typ
 }
 
 std::map<std::tuple<CommandQueue, expression_type, numeric_type>, ProgramCache * >  backend::programs::cache_;
+
+/*-----------------------------------*/
+//-----------  Kernels --------------*/
+/*-----------------------------------*/
+
+void backend::kernels::release()
+{
+    for(auto & x: cache_)
+        delete x.second;
+    cache_.clear();
+}
+
+Kernel & backend::kernels::get(Program const & program, std::string const & name)
+{
+    std::tuple<Program, std::string> key(program, name);
+    if(cache_.find(key)==cache_.end())
+        return *cache_.insert(std::make_pair(key, new Kernel(program, name.c_str()))).first->second;
+    return *cache_.at(key);
+}
+
+std::map<std::tuple<Program, std::string>, Kernel * > backend::kernels::cache_;
 
 /*-----------------------------------*/
 //------------  Queues --------------*/
@@ -219,6 +241,7 @@ void backend::synchronize(Context const & context)
 
 void backend::release()
 {
+    backend::kernels::release();
     backend::programs::release();
     backend::workspaces::release();
     backend::queues::release();

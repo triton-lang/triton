@@ -262,9 +262,15 @@ struct execution_options_type
 
   void enqueue(driver::Context const & context, driver::Kernel const & kernel, driver::NDRange global, driver::NDRange local) const
   {
-    driver::Event event = queue(context).enqueue(kernel, global, local, dependencies);
+    driver::CommandQueue & q = queue(context);
     if(events)
+    {
+      driver::Event event(q.backend());
+      q.enqueue(kernel, global, local, dependencies, &event);
       events->push_back(event);
+    }
+    else
+      q.enqueue(kernel, global, local, dependencies, NULL);
   }
 
   driver::CommandQueue & queue(driver::Context const & context) const

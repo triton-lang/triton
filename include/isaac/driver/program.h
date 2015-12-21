@@ -39,16 +39,22 @@ class Device;
 
 class ISAACAPI Program
 {
+public:
+  typedef HANDLE_TYPE(cl_program, CUmodule) handle_type;
+private:
   friend class Kernel;
 public:
   Program(Context const & context, std::string const & source);
   Context const & context() const;
+  //Comparison operators
+  bool operator==(Program const & other) const;
+  bool operator<(Program const & other) const;
 private:
 DISABLE_MSVC_WARNING_C4251
   backend_type backend_;
   Context context_;
   std::string source_;
-  HANDLE_TYPE(cl_program, CUmodule) h_;
+  handle_type h_;
 RESTORE_MSVC_WARNING_C4251
 };
 

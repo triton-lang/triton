@@ -35,15 +35,20 @@ namespace driver
 // Event
 class ISAACAPI Event
 {
+private:
   friend class CommandQueue;
+public:
+  typedef HANDLE_TYPE(cl_event, cu_event_t) handle_type;
+
 public:
   Event(cl_event const & event, bool take_ownership = true);
   Event(backend_type backend);
   long elapsed_time() const;
-  HANDLE_TYPE(cl_event, cu_event_t)& handle();
+  handle_type& handle();
+
 private:
   backend_type backend_;
-  HANDLE_TYPE(cl_event, cu_event_t) h_;
+  handle_type h_;
 };
 
 }

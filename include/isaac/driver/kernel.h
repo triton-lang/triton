@@ -42,6 +42,9 @@ class ISAACAPI Kernel
 {
   friend class CommandQueue;
 public:
+  typedef HANDLE_TYPE(cl_kernel, CUfunction) handle_type;
+
+public:
   Kernel(Program const & program, const char * name);
   void setArg(unsigned int index, std::size_t size, void* ptr);
   void setArg(unsigned int index, Buffer const &);
@@ -53,7 +56,7 @@ private:
   unsigned int address_bits_;
   std::vector<std::shared_ptr<void> >  cu_params_store_;
   std::vector<void*>  cu_params_;
-  HANDLE_TYPE(cl_kernel, CUfunction) h_;
+  handle_type h_;
 };
 
 }
