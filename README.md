@@ -5,12 +5,25 @@ ISAAC uses Machine-Learning techniques to achieve input-specific and architectur
 
 **This is an ALPHA version**: only the C API is supported for now. 
 
-ISAAC is dependency-free, and will load either OpenCL or CUDA 7.0+ _dynamically_ depending on which GPUs are detected at runtime. To install it, simply run:
+### License
+
+ISAAC is distributed under the GNU LGPL v2.1 License.
+
+### Installation
+
+ISAAC is dependency-free, and will load either OpenCL or CUDA 7.0+ _dynamically_ depending on which GPUs are detected at runtime.
+
+Installation requires CMake 2.8.7+ and a C++11 compliant compiler:  
+ 
+
 ```
 git clone https://github.com/ptillet/isaac.git
 mkdir -p isaac/build && cd isaac/build
 cmake ../ && make -j4
 ```
+
+
+### APIs
 
 The C API implements several binary symbols of both clBLAS and cuBLAS. To use ISAAC, simply link your application against libisaac.so instead of libclblas.so or libcublas.so
 
