@@ -166,10 +166,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
         stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
     }
 
-    stream << KernelPrefix(backend) << " void ";
-    if(backend==driver::CUDA)
-        stream << "__launch_bounds__(" << p_.local_size_0*p_.local_size_1 << ") ";
-    stream << " " << matrix_product_name << "(" << _size_t << " M, " << _size_t << " N, " << _size_t << " K, "
+    stream << KernelPrefix(backend) << " void " << matrix_product_name << "(" << _size_t << " M, " << _size_t << " N, " << _size_t << " K, "
                                << Global(backend) << " " << sdtype << "* C, "  << _size_t << " ldc," << _size_t << " offc," << _size_t << " Cstride1, "
                                << sdtype << " alpha,"
                                << Global(backend) << " " << sdtype << "* A, "  << _size_t << " lda," << _size_t << " offa," << _size_t << " Astride1,"
