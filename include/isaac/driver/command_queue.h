@@ -44,24 +44,28 @@ class Buffer;
 class ISAACAPI CommandQueue
 {
 public:
+  typedef HANDLE_TYPE(cl_command_queue, CUstream) handle_type;
+
+public:
   CommandQueue(cl_command_queue const & queue, bool take_ownership = true);
   CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties = 0);
+  backend_type backend() const;
   Context const & context() const;
   Device const & device() const;
   void synchronize();
   void enable_profiling();
   void disable_profiling();
-  Event enqueue(Kernel const & kernel, NDRange global, driver::NDRange local, std::vector<Event> const *);
+  void enqueue(Kernel const & kernel, NDRange global, driver::NDRange local, std::vector<Event> const *, Event *event);
   void write(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
   void read(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr);
   bool operator==(CommandQueue const & other) const;
   bool operator<(CommandQueue const & other) const;
-  HANDLE_TYPE(cl_command_queue, CUstream)& handle();
+  handle_type& handle();
 private:
   backend_type backend_;
   Context context_;
   Device device_;
-  HANDLE_TYPE(cl_command_queue, CUstream) h_;
+  handle_type h_;
 };
 
 

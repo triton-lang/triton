@@ -37,6 +37,10 @@ namespace driver
 // Buffer
 class ISAACAPI Buffer
 {
+public:
+  typedef HANDLE_TYPE(cl_mem, CUdeviceptr) handle_type;
+
+private:
   friend class CommandQueue;
   friend class Kernel;
 
@@ -54,12 +58,12 @@ public:
   Context const & context() const;
   bool operator<(Buffer const &) const;
   bool operator==(Buffer const &) const;
-  HANDLE_TYPE(cl_mem, CUdeviceptr)&  handle();
-  HANDLE_TYPE(cl_mem, CUdeviceptr) const &  handle() const;
+  handle_type&  handle();
+  handle_type const &  handle() const;
 private:
   backend_type backend_;
   Context context_;
-  HANDLE_TYPE(cl_mem, CUdeviceptr) h_;
+  handle_type h_;
 };
 
 }

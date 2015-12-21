@@ -41,6 +41,8 @@ private:
   friend class CommandQueue;
 
 public:
+  typedef HANDLE_TYPE(cl_device_id, CUdevice) handle_type;
+
   enum Type
   {
     GPU = CL_DEVICE_TYPE_GPU,
@@ -114,7 +116,7 @@ public:
 
 private:
   backend_type backend_;
-  HANDLE_TYPE(cl_device_id, CUdevice) h_;
+  handle_type h_;
 };
 
 }

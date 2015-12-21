@@ -67,6 +67,11 @@ CommandQueue::CommandQueue(Context const & context, Device const & device, cl_co
   }
 }
 
+backend_type CommandQueue::backend() const
+{
+  return backend_;
+}
+
 Context const & CommandQueue::context() const
 {
   return context_;
@@ -87,23 +92,25 @@ void CommandQueue::synchronize()
   }
 }
 
-Event CommandQueue::enqueue(Kernel const & kernel, NDRange global, driver::NDRange local, std::vector<Event> const *)
+void CommandQueue::enqueue(Kernel const & kernel, NDRange global, driver::NDRange local, std::vector<Event> const *, Event* event)
 {
-  Event event(backend_);
   switch(backend_)
   {
     case CUDA:
-      cuda::check(dispatch::cuEventRecord(event.h_.cu().first, h_.cu()));
+      if(event)
+        cuda::check(dispatch::cuEventRecord(event->h_.cu().first, h_.cu()));
+
       cuda::check(dispatch::cuLaunchKernel(kernel.h_.cu(), global[0]/local[0], global[1]/local[1], global[2]/local[2],
                     local[0], local[1], local[2], 0, h_.cu(),(void**)&kernel.cu_params_[0], NULL));
-      cuda::check(dispatch::cuEventRecord(event.h_.cu().second, h_.cu()));
+
+      if(event)
+        cuda::check(dispatch::cuEventRecord(event->h_.cu().second, h_.cu()));
       break;
     case OPENCL:
-      ocl::check(dispatch::clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, &event.handle().cl()));
+      ocl::check(dispatch::clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, &event->h_.cl()));
       break;
     default: throw;
   }
-  return event;
 }
 
 void CommandQueue::write(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr)

@@ -40,6 +40,11 @@ class ISAACAPI Context
   friend class Program;
   friend class CommandQueue;
   friend class Buffer;
+
+public:
+  typedef HANDLE_TYPE(cl_context, CUcontext) handle_type;
+
+private:
   static std::string cache_path();
 
   static CUdevice device(CUcontext)
@@ -59,13 +64,13 @@ public:
   bool operator==(Context const &) const;
   bool operator<(Context const &) const;
 
-  HANDLE_TYPE(cl_context, CUcontext) const & handle() const { return h_; }
+  handle_type const & handle() const { return h_; }
 private:
 DISABLE_MSVC_WARNING_C4251
   backend_type backend_;
   Device device_;
   std::string cache_path_;
-  HANDLE_TYPE(cl_context, CUcontext) h_;
+  handle_type h_;
 RESTORE_MSVC_WARNING_C4251
 };
 

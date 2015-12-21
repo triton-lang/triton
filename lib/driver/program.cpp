@@ -177,6 +177,12 @@ Program::Program(Context const & context, std::string const & source) : backend_
   }
 }
 
+bool Program::operator==(Program const & other) const
+{ return h_ == other.h_; }
+
+bool Program::operator<(Program const & other) const
+{ return h_ < other.h_; }
+
 Context const & Program::context() const
 {
     return context_;
