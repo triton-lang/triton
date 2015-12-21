@@ -62,10 +62,13 @@ public:
       BROADWELL,
 
       //NVidia
-      TESLA,
-      FERMI,
-      KEPLER,
-      MAXWELL,
+      SM_2_0,
+      SM_2_1,
+      SM_3_0,
+      SM_3_5,
+      SM_3_7,
+      SM_5_0,
+      SM_5_2,
 
       //AMD
       TERASCALE_2,

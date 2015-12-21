@@ -22,13 +22,16 @@
 #include "isaac/profiles/profiles.h"
 
 //Intel
-#include "presets/broadwell.hpp"
+#include "database/intel/broadwell.hpp"
+
 //NVidia
-#include "presets/maxwell.hpp"
-#include "presets/kepler.hpp"
+#include "database/nvidia/sm_3_0.hpp"
+#include "database/nvidia/sm_3_5.hpp"
+#include "database/nvidia/sm_5_2.hpp"
+
 //AMD
-#include "presets/fiji.hpp"
-#include "presets/hawaii.hpp"
+#include "database/amd/gcn_1_1.hpp"
+#include "database/amd/gcn_1_2.hpp"
 
 namespace isaac
 {
@@ -40,13 +43,19 @@ namespace isaac
 const profiles::presets_type profiles::presets_ =
 {
     //INTEL
-    DATABASE_ENTRY(GPU, INTEL, BROADWELL, presets::broadwell),
+    DATABASE_ENTRY(GPU, INTEL, BROADWELL, database::intel::broadwell),
     //NVIDIA
-    DATABASE_ENTRY(GPU, NVIDIA, KEPLER, presets::kepler),
-    DATABASE_ENTRY(GPU, NVIDIA, MAXWELL, presets::maxwell),
+    DATABASE_ENTRY(GPU, NVIDIA, SM_2_0, database::nvidia::sm_3_0),
+    DATABASE_ENTRY(GPU, NVIDIA, SM_2_1, database::nvidia::sm_3_0),
+    DATABASE_ENTRY(GPU, NVIDIA, SM_3_0, database::nvidia::sm_3_0),
+    DATABASE_ENTRY(GPU, NVIDIA, SM_3_5, database::nvidia::sm_3_5),
+    DATABASE_ENTRY(GPU, NVIDIA, SM_3_7, database::nvidia::sm_3_5),
+    DATABASE_ENTRY(GPU, NVIDIA, SM_5_0, database::nvidia::sm_5_2),
+    DATABASE_ENTRY(GPU, NVIDIA, SM_5_2, database::nvidia::sm_5_2),
     //AMD
-    DATABASE_ENTRY(GPU, AMD, GCN_1_1, presets::hawaii),
-    DATABASE_ENTRY(GPU, AMD, GCN_1_2, presets::fiji)
+    DATABASE_ENTRY(GPU, AMD, GCN_1_0, database::amd::gcn_1_1),
+    DATABASE_ENTRY(GPU, AMD, GCN_1_1, database::amd::gcn_1_1),
+    DATABASE_ENTRY(GPU, AMD, GCN_1_2, database::amd::gcn_1_2)
 };
 
 

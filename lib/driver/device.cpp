@@ -92,10 +92,32 @@ Device::Architecture Device::architecture() const
             std::pair<unsigned int, unsigned int> sm = nv_compute_capability();
             switch(sm.first)
             {
-                case 5: return Architecture::MAXWELL;
-                case 3: return Architecture::KEPLER;
-                case 2: return Architecture::FERMI;
-                case 1: return Architecture::TESLA;
+                case 5:
+                  switch(sm.second)
+                  {
+                    case 0: return Architecture::SM_5_0;
+                    case 2: return Architecture::SM_5_2;
+                    default: return Architecture::UNKNOWN;
+                  }
+
+                case 3:
+                    switch(sm.second)
+                    {
+                      case 0: return Architecture::SM_3_0;
+                      case 5: return Architecture::SM_3_5;
+                      case 7: return Architecture::SM_3_7;
+                      default: return Architecture::UNKNOWN;
+                    }
+
+                case 2:
+                    switch(sm.second)
+                    {
+                      case 0: return Architecture::SM_2_0;
+                      case 1: return Architecture::SM_2_1;
+                      default: return Architecture::UNKNOWN;
+                    }
+
+                default: return Architecture::UNKNOWN;
             }
         }
         case Vendor::AMD:
