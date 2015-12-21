@@ -137,45 +137,42 @@ namespace detail
     throw;
   }
 
+  inline void check_sizes(std::vector<int> s)
+  {
+      if(s.size() < 1 || s.size() > 2)
+      {
+          PyErr_SetString(PyExc_TypeError, "Only 1-D and 2-D arrays are supported!");
+          bp::throw_error_already_set();
+      }
+  }
+
 
   std::shared_ptr<sc::array> create_array(bp::object const & obj, bp::object odtype, bp::object pycontext)
   {
     return ndarray_to_scarray(np::from_object(obj, to_np_dtype(tools::extract_dtype(odtype))), extract_context(pycontext));
   }
 
-  std::shared_ptr<sc::array> create_zeros_array(sc::int_t M, sc::int_t N, bp::object odtype, bp::object pycontext)
+  std::shared_ptr<sc::array> create_zeros_array(bp::object pysizes, bp::object pydtype, bp::object pycontext)
   {
-   return std::shared_ptr<sc::array>(new sc::array(sc::zeros(M, N, tools::extract_dtype(odtype), extract_context(pycontext))));
+      std::vector<int> sizes = tools::to_vector<int>(pysizes);
+      sc::numeric_type dtype = tools::extract_dtype(pydtype);
+      sc::driver::Context const & context = extract_context(pycontext);
+      check_sizes(sizes);
+      if(sizes.size()==1)
+          return std::shared_ptr<sc::array>(new sc::array(sc::zeros({sizes[0]}, dtype, context)));
+      return std::shared_ptr<sc::array> (new sc::array(sc::zeros({sizes[0], sizes[1]}, dtype, context)));
   }
 
-  std::shared_ptr<sc::array> create_empty_array(bp::object sizes, bp::object odtype, bp::object pycontext)
+
+  std::shared_ptr<sc::array> create_empty_array(bp::object pysizes, bp::object pydtype, bp::object pycontext)
   {
-      typedef std::shared_ptr<sc::array> result_type;
-
-      std::size_t len;
-      int size1;
-      int size2;
-      try{
-        len = bp::len(sizes);
-        size1 = bp::extract<int>(sizes[0])();
-        size2 = bp::extract<int>(sizes[1])();
-      }catch(bp::error_already_set const &){
-        PyErr_Clear();
-        len = 1;
-        size1 = bp::extract<int>(sizes)();
-      }
-
-      sc::numeric_type dtype = tools::extract_dtype(odtype);
-      if(len < 1 || len > 2)
-      {
-          PyErr_SetString(PyExc_TypeError, "Only 1-D and 2-D arrays are supported!");
-          bp::throw_error_already_set();
-      }
-
+      std::vector<int> sizes = tools::to_vector<int>(pysizes);
+      sc::numeric_type dtype = tools::extract_dtype(pydtype);
       sc::driver::Context const & context = extract_context(pycontext);
-      if(len==1)
-          return result_type(new sc::array(size1, dtype, context));
-      return result_type(new sc::array(size1, size2, dtype, context));
+      check_sizes(sizes);
+      if(sizes.size()==1)
+          return std::shared_ptr<sc::array>(new sc::array(sizes[0], dtype, context));
+      return std::shared_ptr<sc::array> (new sc::array(sizes[0], sizes[1], dtype, context));
   }
 
   std::string type_name(bp::object const & obj)

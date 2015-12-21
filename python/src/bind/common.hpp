@@ -46,12 +46,12 @@ namespace tools
     }
 
     template<class T>
-    std::vector<T> to_vector(bp::list const & list)
+    std::vector<T> to_vector(bp::object const & iterable)
     {
-      std::size_t len = bp::len(list);
+      std::size_t len = bp::len(iterable);
       std::vector<T> res; res.reserve(len);
       for(std::size_t i = 0 ; i < len ; ++i)
-        res.push_back(boost::python::extract<T>(list[i]));
+        res.push_back(boost::python::extract<T>(iterable[i]));
       return res;
     }
 

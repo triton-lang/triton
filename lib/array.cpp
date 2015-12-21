@@ -708,8 +708,8 @@ array diag(array_base & x, int offset)
 }
 
 
-isaac::expression_tree zeros(int_t M, int_t N, isaac::numeric_type dtype, driver::Context  const & ctx)
-{ return expression_tree(value_scalar(0, dtype), invalid_node(), op_element(UNARY_TYPE_FAMILY, ADD_TYPE), ctx, dtype, {M, N}); }
+isaac::expression_tree zeros(shape_t const & shape, isaac::numeric_type dtype, driver::Context  const & ctx)
+{ return expression_tree(value_scalar(0, dtype), invalid_node(), op_element(UNARY_TYPE_FAMILY, ADD_TYPE), ctx, dtype, shape); }
 
 inline shape_t flip(shape_t const & shape)
 {
@@ -926,7 +926,7 @@ expression_tree dot(LTYPE const & x, RTYPE const & y)\
   if(x.shape().max()==1 || y.shape().max()==1)\
     return x*y;\
   if(x.dim()==2 && x.shape()[1]==0)\
-    return zeros(x.shape()[0], y.shape()[1], dtype, context);\
+    return zeros({x.shape()[0], y.shape()[1]}, dtype, context);\
   if(x.shape()[0]==0 || (y.dim()==2 && y.shape()[1]==0))\
     return expression_tree(invalid_node(), invalid_node(), op_element(UNARY_TYPE_FAMILY, INVALID_TYPE), context, dtype, {0});\
   if(x.dim()==1 && y.dim()==1)\
