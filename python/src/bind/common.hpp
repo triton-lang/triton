@@ -49,6 +49,8 @@ namespace tools
     template<class T>
     std::vector<T> to_vector(bp::object const & iterable)
     {
+      if(bp::extract<T>(iterable).check())
+        return {bp::extract<T>(iterable)};
       std::size_t len = bp::len(iterable);
       std::vector<T> res; res.reserve(len);
       for(std::size_t i = 0 ; i < len ; ++i)
