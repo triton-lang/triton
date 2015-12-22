@@ -107,7 +107,7 @@ void CommandQueue::enqueue(Kernel const & kernel, NDRange global, driver::NDRang
         cuda::check(dispatch::cuEventRecord(event->h_.cu().second, h_.cu()));
       break;
     case OPENCL:
-      ocl::check(dispatch::clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, &event->h_.cl()));
+      ocl::check(dispatch::clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, event?&event->h_.cl():NULL));
       break;
     default: throw;
   }
