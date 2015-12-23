@@ -26,6 +26,7 @@
 #include "database/intel/broadwell.hpp"
 
 //NVidia
+#include "database/nvidia/sm_2_0.hpp"
 #include "database/nvidia/sm_3_0.hpp"
 #include "database/nvidia/sm_3_5.hpp"
 #include "database/nvidia/sm_5_2.hpp"
@@ -46,8 +47,8 @@ const profiles::presets_type profiles::presets_ =
     //INTEL
     DATABASE_ENTRY(GPU, INTEL, BROADWELL, database::intel::broadwell),
     //NVIDIA
-    DATABASE_ENTRY(GPU, NVIDIA, SM_2_0, database::nvidia::sm_3_0),
-    DATABASE_ENTRY(GPU, NVIDIA, SM_2_1, database::nvidia::sm_3_0),
+    DATABASE_ENTRY(GPU, NVIDIA, SM_2_0, database::nvidia::sm_2_0),
+    DATABASE_ENTRY(GPU, NVIDIA, SM_2_1, database::nvidia::sm_2_0),
     DATABASE_ENTRY(GPU, NVIDIA, SM_3_0, database::nvidia::sm_3_0),
     DATABASE_ENTRY(GPU, NVIDIA, SM_3_5, database::nvidia::sm_3_5),
     DATABASE_ENTRY(GPU, NVIDIA, SM_3_7, database::nvidia::sm_3_5),
