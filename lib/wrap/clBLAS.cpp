@@ -208,6 +208,13 @@ extern "C"
             std::swap(M, N);\
             std::swap(transA, transB);\
         }\
+        if(K==1 && M>1 && N>1){\
+            sc::array A((sc::int_t)M, TYPE_ISAAC, sc::driver::Buffer(mA, false), (sc::int_t)offA, transA==clblasNoTrans?1:lda);\
+            sc::array B((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mB, false), (sc::int_t)offB, transB==clblasTrans?1:ldb);\
+            sc::array C((sc::int_t)M, (sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mC, false), (sc::int_t)offC, (sc::int_t)ldc);\
+            execute(sc::assign(C, alpha*sc::outer(A, B) + beta*C), C.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
+            return clblasSuccess;\
+        }\
         sc::int_t As1 = (sc::int_t)M, As2 = (sc::int_t)K;\
         sc::int_t Bs1 = (sc::int_t)K, Bs2 = (sc::int_t)N;\
         if(transA==clblasTrans) std::swap(As1, As2);\
