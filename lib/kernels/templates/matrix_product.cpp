@@ -540,7 +540,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
             if(has_depth)
                 stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "];" << std::endl;
             else
-                stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "] + (beta?(beta*" << "C[" << Ci << CSTRIDE1 << "]):0);" << std::endl;
+                stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "] + ((beta != 0.)?(beta*" << "C[" << Ci << CSTRIDE1 << "]):0);" << std::endl;
         }
         if((n+1)%p_.simd_width==0){
             stream << "C += ldc*" << p_.local_size_1*p_.simd_width - p_.simd_width + 1 << ";" << std::endl;
