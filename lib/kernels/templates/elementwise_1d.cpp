@@ -82,7 +82,9 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
 
   process(stream, PARENT_NODE_TYPE, {{"array1", "#scalartype #namereg = #pointer[#start];"},
                                      {"array11", "#scalartype #namereg = #pointer[#start];"},
-                                      {"arrayn", "#pointer += #start;"}}, expressions, mappings);
+                                      {"arrayn", "#pointer += #start;"},
+                                      {"arrayn1", "#pointer += #start;"},
+                                      {"array1n", "#pointer += #start;"}}, expressions, mappings);
 
   stream << _size_t << " idx = " << GlobalIdx0(backend) << ";" << std::endl;
   stream << _size_t << " gsize = " << GlobalSize0(backend) << ";" << std::endl;
