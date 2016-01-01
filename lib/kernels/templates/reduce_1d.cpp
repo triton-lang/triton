@@ -147,10 +147,10 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   stream << "unsigned int gsize = " <<GlobalSize0(backend) << ";" << std::endl;
 
   process(stream, PARENT_NODE_TYPE, {{"array1", "#scalartype #namereg = #pointer[#start];"},
-                                     {"arrayn", "#pointer += #start;"},
-                                     {"array1n", "#pointer += #start;"},
-                                     {"arrayn1", "#pointer += #start;"}},
-                                    expressions, mapping);
+                                     {"array11", "#scalartype #namereg = #pointer[#start];"},
+                                      {"arrayn", "#pointer += #start;"},
+                                      {"arrayn1", "#pointer += #start;"},
+                                      {"array1n", "#pointer += #start;"}}, expressions, mapping);
 
   for (unsigned int k = 0; k < N; ++k)
   {
