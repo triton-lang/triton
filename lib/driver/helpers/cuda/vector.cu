@@ -295,7 +295,8 @@ ADD_BINARY_FUNCTION(T, pow)
 ADD_BINARY_FUNCTION(T, fminf)
 ADD_BINARY_FUNCTION(T, fmaxf)
 ADD_BINARY_FUNCTION(T, fmodf)
-
+ADD_BINARY_FUNCTION(T, min)
+ADD_BINARY_FUNCTION(T, max)
 
 template<class T>
 inline __host__ __device__ typename enable_if<is_scalar<T>::value || is_vector2<T>::value || is_vector3<T>::value || is_vector4<T>::value, T>::type

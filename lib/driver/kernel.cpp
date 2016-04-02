@@ -21,6 +21,7 @@
 
 #include "isaac/driver/kernel.h"
 #include "isaac/driver/buffer.h"
+#include "isaac/value_scalar.h"
 #include <iostream>
 #include <cstring>
 
@@ -37,15 +38,35 @@ Kernel::Kernel(Program const & program, const char * name) : backend_(program.ba
     case CUDA:
       cu_params_store_.reserve(64);
       cu_params_.reserve(64);
-      cuda::check(dispatch::cuModuleGetFunction(&h_.cu(), program.h_.cu(), name));\
+      check(dispatch::cuModuleGetFunction(&h_.cu(), program.h_.cu(), name));\
       break;
     case OPENCL:
       cl_int err;
       h_.cl() = dispatch::clCreateKernel(program.h_.cl(), name, &err);
-      ocl::check(err);
+      check(err);
       break;
     default:
       throw;
+  }
+}
+
+void Kernel::setArg(unsigned int index, value_scalar const & scal)
+{
+  switch(scal.dtype())
+  {
+    //case BOOL_TYPE: setArg(index, scal.values().bool8); break;
+    case CHAR_TYPE: setArg(index, scal.values().int8); break;
+    case UCHAR_TYPE: setArg(index, scal.values().uint8); break;
+    case SHORT_TYPE: setArg(index, scal.values().int16); break;
+    case USHORT_TYPE: setArg(index, scal.values().uint16); break;
+    case INT_TYPE: setArg(index, scal.values().int32); break;
+    case UINT_TYPE: setArg(index, scal.values().uint32); break;
+    case LONG_TYPE: setArg(index, scal.values().int64); break;
+    case ULONG_TYPE: setArg(index, scal.values().uint64); break;
+    //case HALF_TYPE: setArg(index, scal.values().float16); break;
+    case FLOAT_TYPE: setArg(index, scal.values().float32); break;
+    case DOUBLE_TYPE: setArg(index, scal.values().float64); break;
+    default: throw unknown_datatype(scal.dtype());
   }
 }
 
@@ -64,7 +85,7 @@ void Kernel::setArg(unsigned int index, std::size_t size, void* ptr)
       cu_params_[index] = cu_params_store_[index].get();
       break;
     case OPENCL:
-      ocl::check(dispatch::clSetKernelArg(h_.cl(), index, size, ptr));
+      check(dispatch::clSetKernelArg(h_.cl(), index, size, ptr));
       break;
     default:
       throw;
@@ -80,7 +101,7 @@ void Kernel::setArg(unsigned int index, Buffer const & data)
       setArg(index, sizeof(CUdeviceptr), (void*)&data.h_.cu()); break;
     }
     case OPENCL:
-      ocl::check(dispatch::clSetKernelArg(h_.cl(), index, sizeof(cl_mem), (void*)&data.h_.cl()));
+      check(dispatch::clSetKernelArg(h_.cl(), index, sizeof(cl_mem), (void*)&data.h_.cl()));
       break;
     default: throw;
   }
@@ -102,7 +123,6 @@ void Kernel::setSizeArg(unsigned int index, size_t N)
       setArg(index, 4, &NN);
       break;
     }
-
     default: throw;
   }
 }

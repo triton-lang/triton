@@ -29,9 +29,9 @@
 #include "isaac/driver/device.h"
 #include "isaac/common/expression_type.h"
 #include "isaac/common/numeric_type.h"
-#include "isaac/kernels/templates/base.h"
+#include "isaac/templates/base.h"
 #include "isaac/profiles/predictors/random_forest.h"
-#include "isaac/symbolic/expression.h"
+#include "isaac/symbolic/expression/expression.h"
 
 namespace isaac
 {

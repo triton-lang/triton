@@ -39,6 +39,7 @@ namespace driver
       CUevent second;
   };
 
+
 #define HANDLE_TYPE(CLTYPE, CUTYPE) Handle<CLTYPE, CUTYPE>
 
 template<class CLType, class CUType>
@@ -64,7 +65,9 @@ private:
 
 public:
   Handle(backend_type backend, bool take_ownership = true);
+  backend_type backend() const;
   bool operator==(Handle const & other) const;
+  bool operator!=(Handle const & other) const;
   bool operator<(Handle const & other) const;
   CLType & cl();
   CLType const & cl() const;

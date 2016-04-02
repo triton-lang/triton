@@ -26,8 +26,8 @@
 
 #include "helpers/ocl/infos.hpp"
 
-#include "sys/getenv.hpp"
-#include "sys/mkdir.hpp"
+#include "isaac/tools/sys/getenv.hpp"
+#include "isaac/tools/sys/mkdir.hpp"
 
 namespace isaac
 {
@@ -74,12 +74,12 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
   switch(backend_)
   {
     case CUDA:
-      cuda::check(dispatch::cuCtxCreate(&h_.cu(), CU_CTX_SCHED_AUTO, device.h_.cu()));
+      check(dispatch::cuCtxCreate(&h_.cu(), CU_CTX_SCHED_AUTO, device.h_.cu()));
       break;
     case OPENCL:
       cl_int err;
       h_.cl() = dispatch::clCreateContext(NULL, 1, &device_.h_.cl(), NULL, NULL, &err);
-      ocl::check(err);
+      check(err);
       break;
     default:
       throw;

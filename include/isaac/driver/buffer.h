@@ -47,7 +47,7 @@ private:
   static CUcontext context(CUdeviceptr h)
   {
       CUcontext res;
-      cuda::check(dispatch::cuPointerGetAttribute((void*)&res, CU_POINTER_ATTRIBUTE_CONTEXT, h));
+      check(dispatch::cuPointerGetAttribute((void*)&res, CU_POINTER_ATTRIBUTE_CONTEXT, h));
       return res;
   }
 
@@ -58,6 +58,7 @@ public:
   Context const & context() const;
   bool operator<(Buffer const &) const;
   bool operator==(Buffer const &) const;
+  bool operator!=(Buffer const &) const;
   handle_type&  handle();
   handle_type const &  handle() const;
 private:
@@ -65,6 +66,15 @@ private:
   Context context_;
   handle_type h_;
 };
+
+inline Buffer make_buffer(backend_type backend, cl_mem clh = 0, CUdeviceptr cuh = 0, bool take_ownership = true)
+{
+  if(backend==OPENCL)
+    return Buffer(clh, take_ownership);
+  else
+    return Buffer(cuh, take_ownership);
+}
+
 
 }
 

@@ -26,7 +26,7 @@
 #include <algorithm>
 #include "isaac/array.h"
 #include "isaac/value_scalar.h"
-#include "isaac/exception/unknown_datatype.h"
+#include "isaac/exception/api.h"
 
 namespace isaac
 {
@@ -194,6 +194,24 @@ INSTANTIATE_ALL(pow, std::pow)
 
 #undef INSTANTIATE_ALL
 #undef INSTANTIATE
+
+value_scalar cast(value_scalar const & in, numeric_type dtype)
+{
+  switch(dtype)
+  {
+    case CHAR_TYPE: return (char)(in);
+    case UCHAR_TYPE: return (unsigned char)(in);
+    case SHORT_TYPE: return (short)(in);
+    case USHORT_TYPE: return (unsigned short)(in);
+    case INT_TYPE: return (int)(in);
+    case UINT_TYPE: return (unsigned int)(in);
+    case LONG_TYPE: return (long)(in);
+    case ULONG_TYPE: return (unsigned long)(in);
+    case FLOAT_TYPE: return (float)(in);
+    case DOUBLE_TYPE: return (double)(in);
+    default: throw unknown_datatype(dtype); //unreachable
+  }
+}
 
 std::ostream & operator<<(std::ostream & os, value_scalar const & s)
 {

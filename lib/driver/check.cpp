@@ -20,18 +20,16 @@
  */
 
 #include "isaac/driver/common.h"
+#include "isaac/exception/driver.h"
 
 namespace isaac
 {
 namespace driver
 {
 
-namespace nvrtc
-{
-
 void check(nvrtcResult err)
 {
-  using namespace isaac::driver::nvrtc::exception;
+  using namespace isaac::exception::nvrtc;
 
   switch(err)
   {
@@ -46,15 +44,10 @@ void check(nvrtcResult err)
     default: throw unknown_error();
   }
 }
-}
-
-
-namespace cuda
-{
 
 void check(CUresult err)
 {
-  using namespace isaac::driver::cuda::exception;
+  using namespace isaac::exception::cuda;
   switch(err)
   {
     case CUDA_SUCCESS                              : break;
@@ -122,17 +115,13 @@ void check(CUresult err)
 void check_destruction(CUresult result)
 {
     if(result!=CUDA_ERROR_DEINITIALIZED)
-        cuda::check(result);
+        check(result);
 }
 
-}
-
-namespace ocl
-{
 
 void check(cl_int err)
 {
-    using namespace isaac::driver::ocl::exception;
+    using namespace isaac::exception::ocl;
     switch(err)
     {
         case CL_SUCCESS:                        break;
@@ -188,7 +177,6 @@ void check(cl_int err)
     #endif
         default: throw;
     }
-}
 }
 
 }
