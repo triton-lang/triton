@@ -217,9 +217,9 @@ void backend::platforms(std::vector<Platform> & platforms)
     if(dispatch::clinit())
     {
         cl_uint nplatforms;
-        ocl::check(dispatch::dispatch::clGetPlatformIDs(0, NULL, &nplatforms));
+        check(dispatch::dispatch::clGetPlatformIDs(0, NULL, &nplatforms));
         std::vector<cl_platform_id> clplatforms(nplatforms);
-        ocl::check(dispatch::dispatch::clGetPlatformIDs(nplatforms, clplatforms.data(), NULL));
+        check(dispatch::dispatch::clGetPlatformIDs(nplatforms, clplatforms.data(), NULL));
         for(cl_platform_id p: clplatforms){
             Platform tmp(p);
             if(tmp.name().find("CUDA")!=std::string::npos && has_cuda)

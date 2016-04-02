@@ -102,7 +102,7 @@
     \ref RAPIDJSON_LITTLEENDIAN or \ref RAPIDJSON_BIGENDIAN.
 
     Default detection implemented with reference to
-    \li https://gcc.gnu.org/onlinedocs/gcc-4.6.0/cpp/Common-Predefined-Macros.html
+    \li https://gcc.gnu.org/onlinedocs/gcc-4.6.0/isaac/tools/cpp/Common-Predefined-Macros.html
     \li http://www.boost.org/doc/libs/1_42_0/boost/detail/endian.hpp
 */
 #ifndef RAPIDJSON_ENDIAN

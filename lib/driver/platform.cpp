@@ -24,7 +24,7 @@
 #include "helpers/ocl/infos.hpp"
 
 #include <string>
-#include "cpp/to_string.hpp"
+#include "isaac/tools/cpp/string.hpp"
 
 namespace isaac
 {
@@ -78,7 +78,7 @@ void Platform::devices(std::vector<Device> & devices) const
     case CUDA:
     {
       int N;
-      cuda::check(dispatch::cuDeviceGetCount(&N));
+      check(dispatch::cuDeviceGetCount(&N));
       for(int i = 0 ; i < N ; ++i){
         CUdevice device;
         dispatch::cuDeviceGet(&device, i);
@@ -89,9 +89,9 @@ void Platform::devices(std::vector<Device> & devices) const
     case OPENCL:
     {
       cl_uint ndevices;
-      ocl::check(dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, 0, NULL, &ndevices));
+      check(dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, 0, NULL, &ndevices));
       std::vector<cl_device_id> device_ids(ndevices);
-      ocl::check(dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, ndevices, device_ids.data(), NULL));
+      check(dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, ndevices, device_ids.data(), NULL));
       for(cl_device_id d : device_ids)
         devices.push_back(Device(d));
       break;

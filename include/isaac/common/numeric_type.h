@@ -23,7 +23,7 @@
 #define ISAAC_COMMON_NUMERIC_TYPE_H
 
 #include <stdexcept>
-#include "isaac/exception/unknown_datatype.h"
+#include "isaac/exception/api.h"
 
 namespace isaac
 {

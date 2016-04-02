@@ -3,7 +3,9 @@
 #ifdef BENCH_CLBLAS
   #include "clBLAS.h"
 #endif
-#ifdef BENCH_CBLAS
+#ifdef BENCH_MKL
+  #include "mkl_cblas.h"
+#elif defined(BENCH_CBLAS)
   #include "cblas.h"
 #endif
 #ifdef BENCH_CUBLAS

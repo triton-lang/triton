@@ -25,9 +25,9 @@
 #include <iostream>
 #include "isaac/defines.h"
 #include "isaac/driver/backend.h"
-#include "isaac/symbolic/expression.h"
+#include "isaac/symbolic/expression/expression.h"
 #include "isaac/types.h"
-
+#include "isaac/tools/cpp/tuple.hpp"
 
 namespace isaac
 {
@@ -42,7 +42,6 @@ public:
   //1D Constructors
   explicit array_base(int_t size1, numeric_type dtype = FLOAT_TYPE, driver::Context const & context = driver::backend::contexts::get_default());
   array_base(int_t size1, numeric_type dtype, driver::Buffer data, int_t start, int_t inc);
-
   template<typename DT>
   array_base(std::vector<DT> const & data, driver::Context const & context = driver::backend::contexts::get_default());
   array_base(array_base & v, slice const & s1);
@@ -58,8 +57,10 @@ public:
   array_base(int_t size1, int_t size2, int_t size3, numeric_type dtype = FLOAT_TYPE, driver::Context const & context = driver::backend::contexts::get_default());
 
   //General constructor
-  array_base(numeric_type dtype, shape_t const & shape, driver::Context const & context);
-  array_base(numeric_type dtype, shape_t const & shape, int_t start, shape_t const & stride, driver::Context const & context);
+  template<typename DT>
+  array_base(tuple const & shape, std::vector<DT> const & data, driver::Context const & context = driver::backend::contexts::get_default());
+  array_base(tuple const & shape, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
+  array_base(tuple const & shape, numeric_type dtype, int_t start, tuple const & stride, driver::Context const & context = driver::backend::contexts::get_default());
   explicit array_base(execution_handler const &);
 
   //Make the class virtual
@@ -67,10 +68,10 @@ public:
 
   //Getters
   numeric_type dtype() const;
-  shape_t const & shape() const;
-  int_t dim() const;
+  tuple const & shape() const;
+  size_t dim() const;
   int_t start() const;
-  shape_t const & stride() const;
+  tuple const & stride() const;
   driver::Context const & context() const;
   driver::Buffer const & data() const;
   driver::Buffer & data();
@@ -103,7 +104,7 @@ public:
   array_base& operator/=(expression_tree const &);
 
   //Indexing (1D)
-  expression_tree operator[](for_idx_t idx) const;
+  expression_tree operator[](placeholder idx) const;
   const scalar operator[](int_t) const;
   scalar operator[](int_t);
   view operator[](slice const &);
@@ -113,20 +114,24 @@ public:
   view operator()(slice const &, int_t);
   view operator()(int_t, slice const &);
   view operator()(slice const &, slice const &);
+  const view operator()(int_t, int_t) const;
+  const view operator()(slice const &, int_t) const;
+  const view operator()(int_t, slice const &) const;
+  const view operator()(slice const &, slice const &) const;
 
 
 protected:
   numeric_type dtype_;
 
-  shape_t shape_;
+  tuple shape_;
   int_t start_;
-  shape_t stride_;
+  tuple stride_;
 
   driver::Context context_;
   driver::Buffer data_;
 
 public:
-  expression_tree T;
+  const expression_tree T;
 };
 
 class ISAACAPI array : public array_base
@@ -143,7 +148,7 @@ public:
 class ISAACAPI view : public array_base
 {
 public:
-  view(array & data);
+  view(array_base & data);
   view(array_base& data, slice const & s1);
   view(array_base& data, slice const & s1, slice const & s2);
   view(int_t size1, numeric_type dtype, driver::Buffer data, int_t start, int_t inc);
@@ -201,22 +206,22 @@ template<class T> ISAACAPI void copy(array_base const & gA, std::vector<T> & cA,
 #define ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(OPNAME) \
 ISAACAPI expression_tree OPNAME (array_base const & x, expression_tree const & y);\
 ISAACAPI expression_tree OPNAME (array_base const & x, value_scalar const & y);\
-ISAACAPI expression_tree OPNAME (array_base const & x, for_idx_t const & y);\
+ISAACAPI expression_tree OPNAME (array_base const & x, placeholder const & y);\
 ISAACAPI expression_tree OPNAME (array_base const & x, array_base const & y);\
 \
 ISAACAPI expression_tree OPNAME (expression_tree const & x, expression_tree const & y);\
 ISAACAPI expression_tree OPNAME (expression_tree const & x, value_scalar const & y);\
-ISAACAPI expression_tree OPNAME (expression_tree const & x, for_idx_t const & y);\
+ISAACAPI expression_tree OPNAME (expression_tree const & x, placeholder const & y);\
 ISAACAPI expression_tree OPNAME (expression_tree const & x, array_base const & y);\
 \
 ISAACAPI expression_tree OPNAME (value_scalar const & y, expression_tree const & x);\
-ISAACAPI expression_tree OPNAME (value_scalar const & y, for_idx_t const & x);\
+ISAACAPI expression_tree OPNAME (value_scalar const & y, placeholder const & x);\
 ISAACAPI expression_tree OPNAME (value_scalar const & y, array_base const & x);\
 \
-ISAACAPI expression_tree OPNAME (for_idx_t const & y, expression_tree const & x);\
-ISAACAPI expression_tree OPNAME (for_idx_t const & y, for_idx_t const & x);\
-ISAACAPI expression_tree OPNAME (for_idx_t const & y, value_scalar const & x);\
-ISAACAPI expression_tree OPNAME (for_idx_t const & y, array_base const & x);
+ISAACAPI expression_tree OPNAME (placeholder const & y, expression_tree const & x);\
+ISAACAPI expression_tree OPNAME (placeholder const & y, placeholder const & x);\
+ISAACAPI expression_tree OPNAME (placeholder const & y, value_scalar const & x);\
+ISAACAPI expression_tree OPNAME (placeholder const & y, array_base const & x);
 
 ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(operator +)
 ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(operator -)
@@ -283,81 +288,69 @@ ISAAC_DECLARE_UNARY_OPERATOR(sqrt)
 ISAAC_DECLARE_UNARY_OPERATOR(tan)
 ISAAC_DECLARE_UNARY_OPERATOR(tanh)
 ISAAC_DECLARE_UNARY_OPERATOR(trans)
+#undef ISAAC_DECLARE_UNARY_OPERATOR
 
 ISAACAPI expression_tree cast(array_base const &, numeric_type dtype);
 ISAACAPI expression_tree cast(expression_tree const &, numeric_type dtype);
 
-ISAACAPI expression_tree norm(array_base const &, unsigned int order = 2);
-ISAACAPI expression_tree norm(expression_tree const &, unsigned int order = 2);
-
-#undef ISAAC_DECLARE_UNARY_OPERATOR
-
-ISAACAPI expression_tree repmat(array_base const &, int_t const & rep1, int_t const & rep2);
-
 //Matrix reduction
 
-#define ISAAC_DECLARE_DOT(OPNAME) \
+#define ISAAC_DECLARE_REDUCTION(OPNAME) \
 ISAACAPI expression_tree OPNAME(array_base const & M, int_t axis = -1);\
 ISAACAPI expression_tree OPNAME(expression_tree const & M, int_t axis = -1);
 
-ISAAC_DECLARE_DOT(sum)
-ISAAC_DECLARE_DOT(argmax)
-ISAAC_DECLARE_DOT((max))
-ISAAC_DECLARE_DOT((min))
-ISAAC_DECLARE_DOT(argmin)
+ISAAC_DECLARE_REDUCTION(sum)
+ISAAC_DECLARE_REDUCTION(argmax)
+ISAAC_DECLARE_REDUCTION((max))
+ISAAC_DECLARE_REDUCTION((min))
+ISAAC_DECLARE_REDUCTION(argmin)
+
+//Shortcuts
+
+ISAACAPI expression_tree norm(array_base const &, unsigned int order = 2, int_t axis = -1);
+ISAACAPI expression_tree norm(expression_tree const &, unsigned int order = 2, int_t axis = -1);
+
+ISAACAPI expression_tree mean(array_base const &, int_t axis = -1);
+ISAACAPI expression_tree mean(expression_tree const &, int_t axis = -1);
+
+//ISAACAPI expression_tree var(array_base const &, int_t axis = -1);
+//ISAACAPI expression_tree var(expression_tree const &, int_t axis = -1);
 
 //Fusion
 ISAACAPI expression_tree fuse(expression_tree const & x, expression_tree const & y);
 
 //For
 ISAACAPI expression_tree sfor(expression_tree const & start, expression_tree const & end, expression_tree const & inc, expression_tree const & expression);
-static const for_idx_t _i0{0};
-static const for_idx_t _i1{1};
-static const for_idx_t _i2{2};
-static const for_idx_t _i3{3};
-static const for_idx_t _i4{4};
-static const for_idx_t _i5{5};
-static const for_idx_t _i6{6};
-static const for_idx_t _i7{7};
-static const for_idx_t _i8{8};
-static const for_idx_t _i9{9};
+static const placeholder _i0{0};
+static const placeholder _i1{1};
+static const placeholder _i2{2};
+static const placeholder _i3{3};
+static const placeholder _i4{4};
+static const placeholder _i5{5};
+static const placeholder _i6{6};
+static const placeholder _i7{7};
+static const placeholder _i8{8};
+static const placeholder _i9{9};
 
 //Initializers
 ISAACAPI expression_tree eye(int_t, int_t, isaac::numeric_type, driver::Context const & context = driver::backend::contexts::get_default());
-ISAACAPI expression_tree zeros(shape_t const & shape, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
+ISAACAPI expression_tree zeros(tuple const & shape, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
 
 //Swap
 ISAACAPI void swap(view x, view y);
 
 //Reshape
-ISAACAPI expression_tree reshape(array_base const &, shape_t const &);
+ISAACAPI expression_tree reshape(array_base const &, tuple const &);
+ISAACAPI expression_tree reshape(expression_tree const &, tuple const &);
+
 ISAACAPI expression_tree ravel(array_base const &);
+ISAACAPI expression_tree ravel(expression_tree const & x);
 
-//diag
+//Diag
 array diag(array_base & x, int offset = 0);
-
-//Row
-ISAACAPI expression_tree row(array_base const &, value_scalar const &);
-ISAACAPI expression_tree row(array_base const &, for_idx_t const &);
-ISAACAPI expression_tree row(array_base const &, expression_tree const &);
-
-ISAACAPI expression_tree row(expression_tree const &, value_scalar const &);
-ISAACAPI expression_tree row(expression_tree const &, for_idx_t const &);
-ISAACAPI expression_tree row(expression_tree const &, expression_tree const &);
-
-//col
-ISAACAPI expression_tree col(array_base const &, value_scalar const &);
-ISAACAPI expression_tree col(array_base const &, for_idx_t const &);
-ISAACAPI expression_tree col(array_base const &, expression_tree const &);
-
-ISAACAPI expression_tree col(expression_tree const &, value_scalar const &);
-ISAACAPI expression_tree col(expression_tree const &, for_idx_t const &);
-ISAACAPI expression_tree col(expression_tree const &, expression_tree const &);
-
 
 //
 ISAACAPI std::ostream& operator<<(std::ostream &, array_base const &);
 ISAACAPI std::ostream& operator<<(std::ostream &, expression_tree const &);
-
 }
 #endif

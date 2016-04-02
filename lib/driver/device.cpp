@@ -38,7 +38,7 @@ template<CUdevice_attribute attr>
 int Device::cuGetInfo() const
 {
   int res;
-  cuda::check(dispatch::cuDeviceGetAttribute(&res, attr, h_.cu()));
+  check(dispatch::cuDeviceGetAttribute(&res, attr, h_.cu()));
   return res;
 }
 
@@ -203,7 +203,7 @@ std::string Device::name() const
   {
     case CUDA:
       char tmp[128];
-      cuda::check(dispatch::cuDeviceGetName(tmp, 128, h_.cu()));
+      check(dispatch::cuDeviceGetName(tmp, 128, h_.cu()));
       return std::string(tmp);
     case OPENCL:
       return ocl::info<CL_DEVICE_NAME>(h_.cl());
