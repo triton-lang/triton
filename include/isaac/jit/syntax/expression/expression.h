@@ -76,6 +76,7 @@ union handle_t
   CUdeviceptr cu;
 };
 
+
 struct array_holder
 {
   int_t start;

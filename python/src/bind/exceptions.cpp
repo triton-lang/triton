@@ -22,8 +22,8 @@
 #include <boost/bind.hpp>
 #include <boost/python.hpp>
 
-#include "isaac/exception/operation_not_supported.h"
-#include "isaac/driver/common.h"
+#include "isaac/exception/api.h"
+#include "isaac/exception/driver.h"
 
 #include "common.hpp"
 #include "exceptions.h"
@@ -102,18 +102,20 @@ private:
 
 void export_exceptions()
 {
+    namespace exc = isaac::exception;
 
 #define BIND_EXCEPTION(CPPNAME, PYTHONNAME) \
     wrap::exception<isaac::CPPNAME>(PYTHONNAME, bp::init<std::string>())\
         .def("__str__", &isaac::CPPNAME::what)
 
     BIND_EXCEPTION(operation_not_supported_exception, "OperationNotSupported");
+    BIND_EXCEPTION(semantic_error, "SemanticError");
 
     //OCL
-    wrap::exception<isaac::driver::ocl::exception::base>("OclException", bp::no_init);
+    wrap::exception<exc::ocl::base>("OclException", bp::no_init);
 #define BIND_OCL_EXCEPTION(CPPNAME, PYTHONNAME) \
-            wrap::exception<isaac::driver::ocl::exception::CPPNAME, bp::bases<isaac::driver::ocl::exception::base> >(PYTHONNAME)\
-                .def("__str__", &isaac::driver::ocl::exception::CPPNAME::what)
+            wrap::exception<exc::ocl::CPPNAME, bp::bases<exc::ocl::base> >(PYTHONNAME)\
+                .def("__str__", &exc::ocl::CPPNAME::what)
 
 
     BIND_OCL_EXCEPTION(out_of_resources, "OclLaunchOutOfResources");
@@ -123,10 +125,10 @@ void export_exceptions()
     BIND_OCL_EXCEPTION(invalid_value, "InvalidValue");
 
     //CUDA
-    wrap::exception<isaac::driver::cuda::exception::base>("CudaException", bp::no_init);
+    wrap::exception<exc::cuda::base>("CudaException", bp::no_init);
 #define BIND_CUDA_EXCEPTION(CPPNAME, PYTHONNAME) \
-            wrap::exception<isaac::driver::cuda::exception::CPPNAME, bp::bases<isaac::driver::cuda::exception::base> >(PYTHONNAME)\
-                .def("__str__", &isaac::driver::cuda::exception::CPPNAME::what)
+            wrap::exception<exc::cuda::CPPNAME, bp::bases<exc::cuda::base> >(PYTHONNAME)\
+                .def("__str__", &exc::cuda::CPPNAME::what)
 
 
     BIND_CUDA_EXCEPTION(launch_out_of_resources, "CudaLaunchOutOfResources");

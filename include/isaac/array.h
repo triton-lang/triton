@@ -62,6 +62,7 @@ public:
   array_base(tuple const & shape, std::vector<DT> const & data, driver::Context const & context = driver::backend::contexts::get_default());
   array_base(tuple const & shape, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
   array_base(tuple const & shape, numeric_type dtype, int_t start, tuple const & stride, driver::Context const & context = driver::backend::contexts::get_default());
+  array_base(tuple const & shape, numeric_type dtype, int_t start, tuple const & stride, driver::Buffer const & data);
   explicit array_base(runtime::execution_handler const &);
 
   //Make the class virtual
