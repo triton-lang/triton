@@ -51,6 +51,11 @@ INSTANTIATE(float);\
 INSTANTIATE(double);
 
 //General
+array_base::array_base(tuple const & shape, numeric_type dtype, int_t start, tuple const & stride, driver::Buffer const & data) :
+    dtype_(dtype), shape_(shape), start_(start), stride_(stride), context_(data.context()), data_(data),
+    T(isaac::trans(*this))
+{}
+
 array_base::array_base(tuple const & shape, numeric_type dtype, int_t start, tuple const & stride, driver::Context const & context) :
     dtype_(dtype), shape_(shape), start_(start), stride_(stride), context_(context), data_(context_, dsize()),
     T(isaac::trans(*this))
