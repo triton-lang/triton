@@ -781,7 +781,7 @@ namespace detail
     }
 
     expression_tree res(A, B, op_element(MATRIX_PRODUCT, type), &A.context(), A.dtype(), shape);
-    expression_tree::node res_root = res[res.root()];
+    expression_tree::node & res_root = res[res.root()];
     if(A_trans) res_root.binary_operator.lhs = A_root.binary_operator.lhs;
     return res;
   }
