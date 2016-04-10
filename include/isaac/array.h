@@ -25,7 +25,8 @@
 #include <iostream>
 #include "isaac/defines.h"
 #include "isaac/driver/backend.h"
-#include "isaac/symbolic/expression/expression.h"
+#include "isaac/jit/syntax/expression/expression.h"
+#include "isaac/runtime/handler.h"
 #include "isaac/types.h"
 #include "isaac/tools/cpp/tuple.hpp"
 
@@ -61,7 +62,7 @@ public:
   array_base(tuple const & shape, std::vector<DT> const & data, driver::Context const & context = driver::backend::contexts::get_default());
   array_base(tuple const & shape, numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
   array_base(tuple const & shape, numeric_type dtype, int_t start, tuple const & stride, driver::Context const & context = driver::backend::contexts::get_default());
-  explicit array_base(execution_handler const &);
+  explicit array_base(runtime::execution_handler const &);
 
   //Make the class virtual
   virtual ~array_base() = 0;
@@ -82,7 +83,7 @@ public:
   //Numeric operators
   array_base& operator=(array_base const &);
   array_base& operator=(expression_tree const &);
-  array_base& operator=(execution_handler const &);
+  array_base& operator=(runtime::execution_handler const &);
   template<class T>
   array_base & operator=(std::vector<T> const & rhs);
   array_base & operator=(value_scalar const & rhs);

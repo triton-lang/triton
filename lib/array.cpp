@@ -27,9 +27,7 @@
 
 #include "isaac/array.h"
 #include "isaac/exception/api.h"
-#include "isaac/profiles/profiles.h"
-#include "isaac/symbolic/execute.h"
-#include "isaac/symbolic/expression/io.h"
+#include "isaac/runtime/execute.h"
 
 namespace isaac
 {
@@ -61,7 +59,7 @@ array_base::array_base(tuple const & shape, numeric_type dtype, int_t start, tup
 array_base::array_base(tuple const & shape, numeric_type dtype, driver::Context const & context) : array_base(shape, dtype, 0, {1, shape[0]}, context)
 {}
 
-array_base::array_base(execution_handler const & other) : array_base(other.x().shape(), other.x().dtype(), other.x().context())
+array_base::array_base(runtime::execution_handler const & other) : array_base(other.x().shape(), other.x().dtype(), other.x().context())
 { *this = other; }
 
 template<typename DT>
@@ -162,7 +160,7 @@ array_base & array_base::operator=(array_base const & rhs)
     if(min(shape_)==0) return *this;
     assert(dtype_ == rhs.dtype());
     expression_tree expression(*this, rhs, op_element(BINARY_ARITHMETIC, ASSIGN_TYPE), &context_, dtype_, shape_);
-    symbolic::execute(execution_handler(expression));
+    runtime::execute(expression);
     return *this;
 }
 
@@ -171,23 +169,23 @@ array_base & array_base::operator=(value_scalar const & rhs)
     if(min(shape_)==0) return *this;
     assert(dtype_ == rhs.dtype());
     expression_tree expression(*this, rhs, op_element(BINARY_ARITHMETIC, ASSIGN_TYPE), &context_, dtype_, shape_);
-    symbolic::execute(execution_handler(expression));
+    runtime::execute(expression);
     return *this;
 }
 
 
-array_base& array_base::operator=(execution_handler const & c)
+array_base& array_base::operator=(runtime::execution_handler const & c)
 {
   if(min(shape_)==0) return *this;
   assert(dtype_ == c.x().dtype());
   expression_tree expression(*this, c.x(), op_element(BINARY_ARITHMETIC, ASSIGN_TYPE), &context_, dtype_, shape_);
-  symbolic::execute(execution_handler(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
+  runtime::execute(runtime::execution_handler(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
   return *this;
 }
 
 array_base & array_base::operator=(expression_tree const & rhs)
 {
-  return *this = execution_handler(rhs);
+  return *this = runtime::execution_handler(rhs);
 }
 
 
@@ -321,7 +319,7 @@ const view array_base::operator()(slice const & i, slice const & j) const { retu
 //---------------------------------------
 /*--- array ---*/
 
-array::array(expression_tree const & proxy) : array_base(execution_handler(proxy)) {}
+array::array(expression_tree const & proxy) : array_base(runtime::execution_handler(proxy)) {}
 
 array::array(array_base const & other): array_base(other.shape(), other.dtype(), other.context())
 { *this = other; }
@@ -861,7 +859,7 @@ namespace detail
 ISAACAPI void swap(view x, view y)
 {
   //Seems like some compilers will generate incorrect code without the 1*...
-  symbolic::execute(fuse(assign(y,1*x), assign(x,1*y)));
+  runtime::execute(fuse(assign(y,1*x), assign(x,1*y)));
 }
 
 //Reshape

@@ -1,8 +1,8 @@
 #include <iostream>
 
-#include "isaac/symbolic/scheduler/strategies/heft.h"
+#include "isaac/runtime/scheduler/strategies/heft.h"
 
-namespace sch = isaac::symbolic::scheduler;
+namespace sch = isaac::runtime::scheduler;
 
 
 int main()

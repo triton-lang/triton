@@ -1,5 +1,4 @@
-#include "isaac/symbolic/execute.h"
-#include "isaac/symbolic/expression/io.h"
+#include "isaac/runtime/execute.h"
 #include "isaac/array.h"
 
 namespace sc = isaac;
@@ -15,8 +14,8 @@ int main()
   {\
     std::cout << NAME << "...";\
     sc::expression_tree tree = SCEXPR;\
-    sc::symbolic::detail::breakpoints_t breakpoints;\
-    sc::expression_type type = sc::symbolic::detail::parse(tree, breakpoints);\
+    sc::runtime::detail::breakpoints_t breakpoints;\
+    sc::expression_type type = sc::runtime::detail::parse(tree, breakpoints);\
     if(!(type == RESULT_TYPE && breakpoints.size()==NTMP)){\
       std::cout << " [Failure!]" << std::endl;\
       nfail++;\
