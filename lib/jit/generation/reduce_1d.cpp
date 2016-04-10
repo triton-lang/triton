@@ -120,7 +120,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   switch(backend)
   {
     case driver::CUDA:
-      stream << "#include  \"helper_math.h\"" << std::endl; break;
+      stream << "#include  \"vector.h\"" << std::endl; break;
     case driver::OPENCL:
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl; break;
   }

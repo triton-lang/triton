@@ -157,10 +157,11 @@ matrix_product_parameters::matrix_product_parameters(unsigned int simd_width
 
     switch(backend)
     {
-      case driver::CUDA:
-        stream << "#include  \"helper_math.h\"" << std::endl; break;
       case driver::OPENCL:
-        stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
+        stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl;
+        break;
+      default:
+        break;
     }
 
     stream << "$KERNEL void matrix_product" << suffix << "($SIZE_T M, $SIZE_T N, $SIZE_T K, "

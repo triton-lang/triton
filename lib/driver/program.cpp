@@ -61,7 +61,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
 
       nvrtcProgram prog;
 
-      const char * includes[] = {"helper_math.h"};
+      const char * includes[] = {"vector.h"};
       const char * src[] = {helpers::cuda::vector};
 
       check(dispatch::nvrtcCreateProgram(&prog, source.c_str(), NULL, 1, src, includes));
