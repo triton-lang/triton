@@ -63,7 +63,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
   switch(backend)
   {
     case driver::CUDA:
-      stream << "#include  \"helper_math.h\"" << std::endl; break;
+      stream << "#include  \"vector.h\"" << std::endl; break;
     case driver::OPENCL:
       stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << "," << p_.local_size_1 << ",1)))" << std::endl; break;
   }
