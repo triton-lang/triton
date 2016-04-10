@@ -20,7 +20,7 @@
  */
 
 #include "isaac/array.h"
-#include "isaac/symbolic/execute.h"
+#include "isaac/runtime/execute.h"
 #include "clBLAS.h"
 
 namespace sc = isaac;
@@ -35,7 +35,7 @@ extern "C"
 
     void clblasTeardown()
     {
-        isaac::profiles::release();
+        isaac::runtime::profiles::release();
         isaac::driver::backend::release();
     }
 
@@ -50,8 +50,8 @@ extern "C"
         for(cl_uint i = 0 ; i < numCommandQueues ; ++i)
         {
             std::list<sc::driver::Event> levents;
-            sc::execution_options_type options(sc::driver::CommandQueue(commandQueues[i],false), &levents, &waitlist);
-            sc::symbolic::execute(sc::execution_handler(operation, options), sc::profiles::get(options.queue(context)));
+            sc::runtime::execution_options_type options(sc::driver::CommandQueue(commandQueues[i],false), &levents, &waitlist);
+            sc::runtime::execute(sc::runtime::execution_handler(operation, options), sc::runtime::profiles::get(options.queue(context)));
             if(events)
             {
                 events[i] = levents.front().handle().cl();

@@ -20,7 +20,7 @@
  */
 
 #include "isaac/array.h"
-#include "isaac/symbolic/execute.h"
+#include "isaac/runtime/execute.h"
 #include "cublas.h"
 
 namespace sc = isaac;
@@ -52,7 +52,7 @@ extern "C"
 
     cublasStatus cublasShutdown()
     {
-        isaac::profiles::release();
+        isaac::runtime::profiles::release();
         isaac::driver::backend::release();
         return CUBLAS_STATUS_SUCCESS;
     }
@@ -70,7 +70,7 @@ extern "C"
     {\
         sc::array dx((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)x,false), 0, incx); \
         sc::array dy((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)y,false), 0, incy); \
-        sc::symbolic::execute(sc::assign(dy, alpha*dx + dy));\
+        sc::runtime::execute(sc::assign(dy, alpha*dx + dy));\
     }\
     cublasStatus_t cublas ## TYPE_CHAR ## axpy_v2 (cublasHandle_t, int n, const TYPE_CU *alpha,\
                                    const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
@@ -88,7 +88,7 @@ extern "C"
     {\
         sc::array dx((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)x,false), 0, incx); \
         sc::array dy((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)y,false), 0, incy); \
-        sc::symbolic::execute(sc::assign(dy,dx));\
+        sc::runtime::execute(sc::assign(dy,dx));\
     }\
     cublasStatus_t cublas ## TYPE_CHAR ## copy_v2 (cublasHandle_t, int n, const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
     {\
@@ -104,7 +104,7 @@ extern "C"
     void cublas ## TYPE_CHAR ## scal (int n, TYPE_CU alpha, TYPE_CU *x, int incx)\
     {\
         sc::array dx((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)x,false), 0, incx); \
-        sc::symbolic::execute(sc::assign(dx,alpha*dx));\
+        sc::runtime::execute(sc::assign(dx,alpha*dx));\
     }\
     cublasStatus_t cublas ## TYPE_CHAR ## scal_v2 (cublasHandle_t, int n, const TYPE_CU * alpha, TYPE_CU *x, int incx)\
     {\
@@ -165,9 +165,9 @@ extern "C"
         sc::array dy(sy, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)y, false), 0, incy);\
         \
         if(trans=='T')\
-            sc::symbolic::execute(sc::assign(dy, alpha*dot(dA.T, dx) + beta*dy));\
+            sc::runtime::execute(sc::assign(dy, alpha*dot(dA.T, dx) + beta*dy));\
         else\
-            sc::symbolic::execute(sc::assign(dy, alpha*dot(dA, dx) + beta*dy));\
+            sc::runtime::execute(sc::assign(dy, alpha*dot(dA, dx) + beta*dy));\
     }\
     cublasStatus_t cublas ## TYPE_CHAR ## gemv_v2 (cublasHandle_t, cublasOperation_t trans, int m,  int n, const TYPE_CU *alpha,\
                                    const TYPE_CU *A, int lda, const TYPE_CU *x, int incx, const TYPE_CU *beta, TYPE_CU *y, int incy)\
@@ -189,7 +189,7 @@ extern "C"
         sc::array dx((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)x,false), 0, incx); \
         sc::array dy((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)y,false), 0, incy); \
         sc::array dA((sc::int_t)m, (sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)A, false), 0, (sc::int_t)lda);\
-        sc::symbolic::execute(sc::assign(dA, alpha*sc::outer(dx, dy) + dA));\
+        sc::runtime::execute(sc::assign(dA, alpha*sc::outer(dx, dy) + dA));\
     }\
     cublasStatus_t cublas ## TYPE_CHAR ## ger_v2 (cublasHandle_t, int m, int n, const TYPE_CU * alpha, const TYPE_CU *x, int incx,\
                                                  const TYPE_CU *y, int incy, TYPE_CU *A, int lda)\
@@ -216,7 +216,7 @@ extern "C"
             sc::array dA((sc::int_t)m, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)A, false), 0, transa=='N'?1:lda);\
             sc::array dB((sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)B, false), 0, transb=='T'?1:ldb);\
             sc::array dC((sc::int_t)m, (sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)C, false), 0, (sc::int_t)ldc);\
-            sc::symbolic::execute(sc::assign(dC, alpha*sc::outer(dA, dB) + beta*dC));\
+            sc::runtime::execute(sc::assign(dC, alpha*sc::outer(dA, dB) + beta*dC));\
             return;\
         }\
         sc::int_t As1 = (sc::int_t)m, As2 = (sc::int_t)k;\
@@ -229,13 +229,13 @@ extern "C"
         sc::array dC((sc::int_t)m, (sc::int_t)n, TYPE_ISAAC, sc::driver::Buffer((CUdeviceptr)C, false), 0, (sc::int_t)ldc);\
         /*Operation*/\
         if((transa=='T') && (transb=='T'))\
-            sc::symbolic::execute(sc::assign(dC, alpha*dot(dA.T, dB.T) + beta*dC));\
+            sc::runtime::execute(sc::assign(dC, alpha*dot(dA.T, dB.T) + beta*dC));\
         else if((transa=='T') && (transb=='N'))\
-            sc::symbolic::execute(sc::assign(dC, alpha*dot(dA.T, dB) + beta*dC));\
+            sc::runtime::execute(sc::assign(dC, alpha*dot(dA.T, dB) + beta*dC));\
         else if((transa=='N') && (transb=='T'))\
-            sc::symbolic::execute(sc::assign(dC, alpha*dot(dA, dB.T) + beta*dC));\
+            sc::runtime::execute(sc::assign(dC, alpha*dot(dA, dB.T) + beta*dC));\
         else\
-            sc::symbolic::execute(sc::assign(dC, alpha*dot(dA, dB) + beta*dC));\
+            sc::runtime::execute(sc::assign(dC, alpha*dot(dA, dB) + beta*dC));\
     }\
     cublasStatus_t cublas ## TYPE_CHAR ## gemm_v2(cublasHandle_t, cublasOperation_t transa, cublasOperation_t transb,\
                                                     int m, int n, int k, const TYPE_CU *alpha, const TYPE_CU *A,\

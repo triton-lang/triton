@@ -1,5 +1,5 @@
 #include "isaac/array.h"
-#include "isaac/symbolic/execute.h"
+#include "isaac/runtime/execute.h"
 #ifdef BENCH_CLBLAS
   #include "clBLAS.h"
 #endif
@@ -136,7 +136,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       std::cout << N;
       sc::array x(N, dtype), y(N, dtype);
       /* ISAAC */
-      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y), 3*N*dtsize/t)
+      BENCHMARK_ISAAC(y = x + alpha*y, 3*N*dtsize/t)
 //      BENCHMARK_ISAAC(y = sc::execution_handler(x + alpha*y, sc::execution_options_type(), sc::dispatcher_options_type(true)), 3*N*dtsize/t)
       /* clblas */
   #ifdef BENCH_CLBLAS
@@ -168,7 +168,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       sc::array scratch(N, dtype);
       sc::scalar s(dtype);
       s = dot(x,y); queue.synchronize();
-      BENCHMARK_ISAAC(s = sc::execution_handler(dot(x,y)), 2*N*dtsize/t)
+      BENCHMARK_ISAAC(s = dot(x,y), 2*N*dtsize/t)
       /* clblas */
   #ifdef BENCH_CLBLAS
       if(x.context().backend()==sc::driver::OPENCL)
@@ -228,7 +228,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.stride()[1];
     #endif
-        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T,x):dot(A,x)),(M*N + M + N)*dtsize/t);
+        BENCHMARK_ISAAC(y = AT?dot(A.T,x):dot(A,x),(M*N + M + N)*dtsize/t);
 //        BENCHMARK_ISAAC(y = sc::execution_handler(AT?dot(A.T,x):dot(A,x), sc::execution_options_type(), sc::dispatcher_options_type(true)),(M*N + M + N)*dtsize/t);
     #ifdef BENCH_CLBLAS
         if(y.context().backend()==sc::driver::OPENCL)
@@ -307,7 +307,7 @@ void bench(sc::numeric_type dtype, std::string operation)
     #ifdef HAS_A_BLAS
         int_t lda = A.stride()[1], ldb = B.stride()[1], ldc = C.stride()[1];
     #endif
-        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B))), (double)2*M*N*K/t);
+        BENCHMARK_ISAAC(C = AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B)), (double)2*M*N*K/t);
 //        BENCHMARK_ISAAC(C = sc::execution_handler(AT?(BT?dot(A.T,B.T):dot(A.T,B)):(BT?dot(A,B.T):dot(A,B)), sc::execution_options_type(0), sc::dispatcher_options_type(true)), (double)2*M*N*K/t);
         /* clblas */
     #ifdef BENCH_CLBLAS
