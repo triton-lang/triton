@@ -313,7 +313,7 @@ std::vector<int_t> reduce_2d::input_sizes(expression_tree const & tree) const
   return {shape[0], shape[1]};
 }
 
-void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base &, runtime::execution_handler const & control)
+void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
 {
   expression_tree const & tree = control.x();
   std::vector<int_t> MN = input_sizes(tree);

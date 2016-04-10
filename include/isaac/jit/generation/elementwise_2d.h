@@ -49,7 +49,7 @@ public:
   elementwise_2d(parameters_type const & parameters, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
   elementwise_2d(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
-  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, runtime::execution_handler const &);
+  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 };
 
 }

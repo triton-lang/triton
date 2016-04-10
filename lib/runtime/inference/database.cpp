@@ -22,6 +22,9 @@
 #include "isaac/driver/device.h"
 #include "isaac/runtime/inference/profiles.h"
 
+//Default
+#include "database/unknown/unknown.hpp"
+
 //Intel
 #include "database/intel/broadwell.hpp"
 
@@ -45,6 +48,8 @@ namespace runtime
 
 const profiles::presets_type profiles::presets_ =
 {
+    //DEFAULT
+    DATABASE_ENTRY(UNKNOWN, UNKNOWN, UNKNOWN, database::unknown::unknown),
     //INTEL
     DATABASE_ENTRY(GPU, INTEL, BROADWELL, database::intel::broadwell),
     //NVIDIA

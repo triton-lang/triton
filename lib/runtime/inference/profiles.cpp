@@ -65,21 +65,19 @@ driver::Program const & profiles::value_type::init(runtime::execution_handler co
       return *program;
 
   std::string srcs;
-   for(unsigned int i = 0 ; i < templates_.size() ; ++i){
+   for(unsigned int i = 0 ; i < templates_.size() ; ++i)
      srcs += templates_[i]->generate(tools::to_string(i), expression.x(), context.device());
-   }
-   srcs += fallback_->generate("fallback", expression.x(), context.device());
    return cache_.add(context, pname, srcs);
 }
 
 profiles::value_type::value_type(expression_type etype, numeric_type dtype, predictors::random_forest const & predictor, std::vector< std::shared_ptr<templates::base> > const & templates, driver::CommandQueue const & queue) :
-  templates_(templates), fallback_(fallbacks[std::make_pair(etype, dtype)]), predictor_(new predictors::random_forest(predictor)), queue_(queue), cache_(driver::backend::programs::get(queue,etype,dtype))
+  templates_(templates), predictor_(new predictors::random_forest(predictor)), queue_(queue), cache_(driver::backend::programs::get(queue,etype,dtype))
 {
   cache_.clear();
 }
 
 
-profiles::value_type::value_type(expression_type etype, numeric_type dtype, templates::base const & tp, driver::CommandQueue const & queue) : templates_(1,tp.clone()), fallback_(fallbacks[std::make_pair(etype, dtype)]), queue_(queue), cache_(driver::backend::programs::get(queue,etype,dtype))
+profiles::value_type::value_type(expression_type etype, numeric_type dtype, templates::base const & tp, driver::CommandQueue const & queue) : templates_(1,tp.clone()), queue_(queue), cache_(driver::backend::programs::get(queue,etype,dtype))
 {
   cache_.clear();
 }
@@ -102,7 +100,7 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
       }
       std::list<driver::Event> events;
       try{
-        templates_[i]->enqueue(queue_, program, tools::to_string(i), *fallback_, runtime::execution_handler(expr.x(), runtime::execution_options_type(0, &events)));
+        templates_[i]->enqueue(queue_, program, tools::to_string(i), runtime::execution_handler(expr.x(), runtime::execution_options_type(0, &events)));
         queue_.synchronize();
         timings[i] = 1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event);
       }catch(...){
@@ -115,7 +113,6 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
   }
 
   //Prediction
-
   int label = 0;
   if(expr.dispatcher_options().label>=0)
     label = expr.dispatcher_options().label;
@@ -134,7 +131,7 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
   if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
     throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
 
-  return templates_[label]->enqueue(queue_, program, tools::to_string(label), *fallback_, expr);
+  return templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
 }
 
 profiles::value_type::templates_container const & profiles::value_type::templates() const
@@ -210,30 +207,26 @@ void profiles::import(std::string const & str, driver::CommandQueue const & queu
 
 profiles::map_type& profiles::init(driver::CommandQueue const & queue)
 {
-  map_type & result = cache_[queue];
-
-  numeric_type dtypes[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
-  expression_type etypes[] = {ELEMENTWISE_1D, REDUCE_1D, ELEMENTWISE_2D, REDUCE_2D_ROWS, REDUCE_2D_COLS, MATRIX_PRODUCT_NN, MATRIX_PRODUCT_NT, MATRIX_PRODUCT_TN, MATRIX_PRODUCT_TT};
-
-  for(numeric_type dtype: dtypes)
-    for(expression_type etype: etypes)
-      result[std::make_pair(etype, dtype)] = std::shared_ptr<value_type>(new value_type(etype, dtype, *fallbacks[std::make_pair(etype, dtype)], queue));
-
+  map_type & map = cache_[queue];
   driver::Device const & device = queue.device();
   presets_type::const_iterator it = presets_.find(std::make_tuple(device.type(), device.vendor(), device.architecture()));
+  /*-- Device not found in database --*/
   if(it==presets_.end()){
-        //FIXME: Hadle this case
-//      import(presets_.at(std::make_tuple(device.type(), device.vendor(), driver::Device::Architecture::UNKNOWN)), queue);
+      import(presets_.at(std::make_tuple(driver::Device::Type::UNKNOWN, driver::Device::Vendor::UNKNOWN, driver::Device::Architecture::UNKNOWN)), queue);
   }
-  else
+  /*-- Device found in database --*/
+  else{
       import(it->second, queue);
+  }
+
+  /*-- User-provided profile --*/
   std::string homepath = tools::getenv("HOME");
   if(homepath.size())
   {
     std::string json_path = homepath + "/.isaac/devices/device0.json";
     std::ifstream t(json_path);
     if(!t)
-        return result;
+        return map;
     std::string str;
     t.seekg(0, std::ios::end);
     str.reserve(t.tellg());
@@ -242,7 +235,7 @@ profiles::map_type& profiles::init(driver::CommandQueue const & queue)
     import(str, queue);
   }
 
-  return result;
+  return map;
 }
 
 profiles::map_type& profiles::get(driver::CommandQueue const & queue)
@@ -254,43 +247,12 @@ profiles::map_type& profiles::get(driver::CommandQueue const & queue)
 }
 
 void profiles::set(driver::CommandQueue const & queue, expression_type operation, numeric_type dtype, std::shared_ptr<value_type> const & profile)
-{
-  cache_[queue][std::make_pair(operation,dtype)] = profile;
-}
+{ cache_[queue][std::make_pair(operation,dtype)] = profile; }
 
 void profiles::release()
-{
-    cache_.clear();
-}
-
+{ cache_.clear(); }
 
 std::map<driver::CommandQueue, profiles::map_type> profiles::cache_;
-
-///////////////////
-
-//
-
-std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::base> > init_fallback()
-{
-  typedef std::shared_ptr<templates::base> ptr_t;
-  std::map<std::pair<expression_type, numeric_type>, ptr_t > res;
-  numeric_type types[] = {CHAR_TYPE, UCHAR_TYPE, SHORT_TYPE, USHORT_TYPE, INT_TYPE, UINT_TYPE, LONG_TYPE, ULONG_TYPE, FLOAT_TYPE, DOUBLE_TYPE};
-  for(auto DTYPE : types)
-  {
-    res[std::make_pair(ELEMENTWISE_1D, DTYPE)] = ptr_t (new templates::elementwise_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(REDUCE_1D, DTYPE)] = ptr_t(new templates::reduce_1d(1,64,128,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(ELEMENTWISE_2D, DTYPE)] = ptr_t(new templates::elementwise_2d(1,128,1,16,32,templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(REDUCE_2D_ROWS, DTYPE)] = ptr_t(new templates::reduce_2d_rows(1, 8, 8, 4, 16, templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(REDUCE_2D_COLS, DTYPE)] = ptr_t(new templates::reduce_2d_cols(1, 8, 8, 64, 8, templates::FETCH_FROM_GLOBAL_STRIDED));
-    res[std::make_pair(MATRIX_PRODUCT_NN, DTYPE)] = ptr_t(new templates::matrix_product_nn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(MATRIX_PRODUCT_TN, DTYPE)] = ptr_t(new templates::matrix_product_tn(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(MATRIX_PRODUCT_NT, DTYPE)] = ptr_t(new templates::matrix_product_nt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-    res[std::make_pair(MATRIX_PRODUCT_TT, DTYPE)] = ptr_t(new templates::matrix_product_tt(1, 8, 16, 8, 1, 8, 1, 8, templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_LOCAL, 8, 8, true));
-  }
-  return res;
-}
-
-std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::base> > fallbacks = init_fallback();
 
 }
 }

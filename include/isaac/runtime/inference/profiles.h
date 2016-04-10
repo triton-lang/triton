@@ -59,7 +59,6 @@ public:
 
     private:
       templates_container templates_;
-      template_pointer fallback_;
       std::shared_ptr<predictors::random_forest> predictor_;
       std::map<std::vector<int_t>, int> hardcoded_;
       driver::CommandQueue queue_;
@@ -79,8 +78,6 @@ private:
     static const presets_type presets_;
     static std::map<driver::CommandQueue, map_type> cache_;
 };
-
-extern std::map<std::pair<expression_type, numeric_type>, std::shared_ptr<templates::base> > fallbacks;
 
 }
 }
