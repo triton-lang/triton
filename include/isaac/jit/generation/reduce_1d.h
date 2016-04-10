@@ -52,7 +52,7 @@ public:
   reduce_1d(reduce_1d::parameters_type const & parameters, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
   reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng, fetching_policy_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
-  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, runtime::execution_handler const &);
+  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:
   std::vector< driver::Buffer > tmp_;
   std::vector< driver::Buffer > tmpidx_;

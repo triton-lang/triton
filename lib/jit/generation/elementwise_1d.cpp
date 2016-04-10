@@ -134,7 +134,7 @@ std::vector<int_t> elementwise_1d::input_sizes(expression_tree const & expressio
   return {max(expressions.shape())};
 }
 
-void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & program, std::string const & suffix, base &, runtime::execution_handler const & control)
+void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
 {
   expression_tree const & expressions = control.x();
   //Size

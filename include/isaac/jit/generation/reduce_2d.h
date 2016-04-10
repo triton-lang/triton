@@ -53,7 +53,7 @@ private:
   std::string generate_impl(std::string const & suffix, expression_tree const &, driver::Device const & device, symbolic::symbols_table const &) const;
 public:
   virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const;
-  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, runtime::execution_handler const &);
+  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:
   operation_type_family reduction_type_;
 };

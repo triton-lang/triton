@@ -71,14 +71,13 @@ private:
                      value_scalar const &alpha, value_scalar const &beta, driver::Program const & program, std::string const & suffix, runtime::execution_options_type const & options);
   std::vector<int_t> infos(expression_tree const & expressions,  isaac::symbolic::preset::matrix_product::args &arguments) const;
 public:
-  matrix_product(matrix_product::parameters_type const & parameters, bool check_bound, char A_trans, char B_trans);
+  matrix_product(matrix_product::parameters_type const & parameters, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(expression_tree const & expressions) const;
-  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, base & fallback, runtime::execution_handler const &ctr);
+  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &ctr);
 private:
   const char A_trans_;
   const char B_trans_;
   expression_type type_;
-  bool check_bounds_;
 };
 
 class matrix_product_nn : public matrix_product
@@ -86,7 +85,7 @@ class matrix_product_nn : public matrix_product
 public:
   matrix_product_nn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
-                      , int_t lfetch0, int_t lfetch1, bool check_bound = false);
+                      , int_t lfetch0, int_t lfetch1);
 };
 
 class matrix_product_tn : public matrix_product
@@ -94,7 +93,7 @@ class matrix_product_tn : public matrix_product
 public:
   matrix_product_tn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
-                      , int_t lfetch0, int_t lfetch1, bool check_bound = false);
+                      , int_t lfetch0, int_t lfetch1);
 };
 
 
@@ -103,7 +102,7 @@ class matrix_product_nt : public matrix_product
 public:
   matrix_product_nt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
-                      , int_t lfetch0, int_t lfetch1, bool check_bound = false);
+                      , int_t lfetch0, int_t lfetch1);
 };
 
 
@@ -112,7 +111,7 @@ class matrix_product_tt : public matrix_product
 public:
   matrix_product_tt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
-                      , int_t lfetch0, int_t lfetch1, bool check_bound = false);
+                      , int_t lfetch0, int_t lfetch1);
 };
 
 }

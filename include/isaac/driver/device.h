@@ -45,9 +45,10 @@ public:
 
   enum Type
   {
-    GPU = CL_DEVICE_TYPE_GPU,
-    CPU = CL_DEVICE_TYPE_CPU,
-    ACCELERATOR = CL_DEVICE_TYPE_ACCELERATOR
+      GPU = CL_DEVICE_TYPE_GPU,
+      CPU = CL_DEVICE_TYPE_CPU,
+      ACCELERATOR = CL_DEVICE_TYPE_ACCELERATOR,
+      UNKNOWN
   };
 
   enum class Vendor

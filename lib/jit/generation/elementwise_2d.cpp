@@ -125,7 +125,7 @@ std::vector<int_t> elementwise_2d::input_sizes(expression_tree const  & expressi
   return expression.shape();
 }
 
-void elementwise_2d::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, std::string const & suffix, base &, runtime::execution_handler const & control)
+void elementwise_2d::enqueue(driver::CommandQueue & /*queue*/, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
 {
   expression_tree const  & expressions = control.x();
   std::string name = "elementwise_2d";

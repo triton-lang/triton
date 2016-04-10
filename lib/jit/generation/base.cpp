@@ -43,15 +43,6 @@ namespace templates
 base::parameters_type::parameters_type(unsigned int _simd_width, int_t _local_size_1, int_t _local_size_2, int_t _num_kernels) : simd_width(_simd_width), local_size_0(_local_size_1), local_size_1(_local_size_2), num_kernels(_num_kernels)
 { }
 
-
-bool base::requires_fallback(expression_tree const  & expression)
-{
-  for(expression_tree::node const & node: expression.data())
-    if(node.type==DENSE_ARRAY_TYPE && (node.ld[0]>1 || node.array.start>0))
-      return true;
-  return false;
-}
-
 base::base(fusion_policy_t fusion_policy) : fusion_policy_(fusion_policy)
 {}
 

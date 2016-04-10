@@ -12,7 +12,7 @@ endif()
 #Database
 if(NOT ANDROID)
     #Presets
-    foreach(VENDOR amd intel nvidia)
+    foreach(VENDOR unknown amd intel nvidia)
         set(DATABASE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/runtime/inference/database/${VENDOR}/")
         file(GLOB_RECURSE JSON_FILES "${DATABASE_PATH}/json/*.json")
         CODE_TO_H(SOURCES ${JSON_FILES} VARNAME database EXTENSION "hpp" OUTPUT_DIR "${DATABASE_PATH}"
