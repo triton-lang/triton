@@ -19,11 +19,11 @@
  * MA 02110-1301  USA
  */
 
-#include "isaac/templates/elementwise_1d.h"
-#include "isaac/templates/elementwise_2d.h"
-#include "isaac/templates/reduce_1d.h"
-#include "isaac/templates/reduce_2d.h"
-#include "isaac/templates/matrix_product.h"
+#include "isaac/jit/generation/elementwise_1d.h"
+#include "isaac/jit/generation/elementwise_2d.h"
+#include "isaac/jit/generation/reduce_1d.h"
+#include "isaac/jit/generation/reduce_2d.h"
+#include "isaac/jit/generation/matrix_product.h"
 
 #include "common.hpp"
 #include "kernels.h"

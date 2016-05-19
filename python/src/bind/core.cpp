@@ -19,7 +19,7 @@
  * MA 02110-1301  USA
  */
 
-#include "isaac/profiles/profiles.h"
+#include "isaac/runtime/inference/profiles.h"
 #include "common.hpp"
 #include "core.h"
 
@@ -101,9 +101,9 @@ unsigned int size(datatype<T> const & dt)
 
 namespace detail
 {
-  std::shared_ptr<sc::profiles::value_type> construct_model(bp::object const & tp, bp::object dtype, sc::driver::CommandQueue & queue)
+  std::shared_ptr<rt::profiles::value_type> construct_model(bp::object const & tp, bp::object dtype, sc::driver::CommandQueue & queue)
   {
-      return std::shared_ptr<sc::profiles::value_type>(new sc::profiles::value_type(tools::extract_template_type(tp), tools::extract_dtype(dtype), (isaac::templates::base const &)bp::extract<isaac::templates::base>(tp), queue));
+      return std::shared_ptr<rt::profiles::value_type>(new rt::profiles::value_type(tools::extract_template_type(tp), tools::extract_dtype(dtype), (sc::templates::base const &)bp::extract<sc::templates::base>(tp), queue));
   }
 
   std::shared_ptr<sc::array>
@@ -126,11 +126,11 @@ namespace detail
     return std::shared_ptr<sc::array>(v);
   }
 
-  isaac::driver::Context const & extract_context(bp::object context)
+  sc::driver::Context const & extract_context(bp::object context)
   {
     if(context.is_none())
-        return isaac::driver::backend::contexts::get_default();
-    isaac::driver::Context const * ctx = bp::extract<isaac::driver::Context const *>(context);
+        return sc::driver::backend::contexts::get_default();
+    sc::driver::Context const * ctx = bp::extract<sc::driver::Context const *>(context);
     if(ctx)
         return *ctx;
     PyErr_SetString(PyExc_TypeError, "Context type not understood");
@@ -214,11 +214,11 @@ namespace detail
 
   struct model_map_indexing
   {
-      static sc::profiles::value_type& get_item(sc::profiles::map_type& container, bp::tuple i_)
+      static rt::profiles::value_type& get_item(rt::profiles::map_type& container, bp::tuple i_)
       {
           sc::expression_type expression = tools::extract_template_type(i_[0]);
           sc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          sc::profiles::map_type::iterator i = container.find(std::make_pair(expression, dtype));
+          rt::profiles::map_type::iterator i = container.find(std::make_pair(expression, dtype));
           if (i == container.end())
           {
               PyErr_SetString(PyExc_KeyError, "Invalid key");
@@ -227,11 +227,11 @@ namespace detail
           return *i->second;
       }
 
-      static void set_item(sc::profiles::map_type& container, bp::tuple i_, sc::profiles::value_type const & v)
+      static void set_item(rt::profiles::map_type& container, bp::tuple i_, rt::profiles::value_type const & v)
       {
           sc::expression_type expression = tools::extract_template_type(i_[0]);
           sc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          container[std::make_pair(expression, dtype)].reset(new sc::profiles::value_type(v));
+          container[std::make_pair(expression, dtype)].reset(new rt::profiles::value_type(v));
       }
   };
 }
@@ -243,9 +243,9 @@ namespace detail
 void export_core()
 {
 
-    bp::class_<isaac::profiles::value_type>("profile", bp::no_init)
+    bp::class_<rt::profiles::value_type>("profile", bp::no_init)
                     .def("__init__", bp::make_constructor(detail::construct_model))
-                    .def("execute", &sc::profiles::value_type::execute);
+                    .def("execute", &rt::profiles::value_type::execute);
 
     bp::class_<sc::value_scalar>("value_scalar", bp::no_init)
               .add_property("dtype", &sc::value_scalar::dtype);
@@ -412,7 +412,7 @@ void export_core()
 
   /*--- Profiles----*/
   //---------------------------------------
-  bp::class_<sc::profiles::map_type>("profiles")
+  bp::class_<rt::profiles::map_type>("profiles")
       .def("__getitem__", &detail::model_map_indexing::get_item, bp::return_internal_reference<>())
       .def("__setitem__", &detail::model_map_indexing::set_item, bp::with_custodian_and_ward<1,2>())
       ;

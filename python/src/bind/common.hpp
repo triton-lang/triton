@@ -31,8 +31,10 @@
 #define MAP_ENUM(v, ns) .value(#v, ns::v)
 
 namespace bp = boost::python;
-namespace sc = isaac;
 namespace np = boost::numpy;
+
+namespace sc = isaac;
+namespace rt = sc::runtime;
 
 namespace tools
 {
