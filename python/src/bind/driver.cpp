@@ -23,7 +23,8 @@
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
 
 #include "isaac/driver/device.h"
-#include "isaac/symbolic/execute.h"
+#include "isaac/runtime/execute.h"
+#include "isaac/runtime/handler.h"
 
 #include "common.hpp"
 #include "driver.h"
@@ -88,13 +89,13 @@ namespace detail
       std::list<sc::driver::Event> events;
       std::vector<sc::driver::Event> cdependencies = tools::to_vector<sc::driver::Event>(dependencies);
 
-      sc::execution_options_type execution_options(queue_id, &events, &cdependencies);
-      sc::dispatcher_options_type dispatcher_options(tune, label);
-      sc::compilation_options_type compilation_options(program_name, force_recompile);
+      rt::execution_options_type execution_options(queue_id, &events, &cdependencies);
+      rt::dispatcher_options_type dispatcher_options(tune, label);
+      rt::compilation_options_type compilation_options(program_name, force_recompile);
       sc::expression_tree::node const & root = tree[tree.root()];
       if(sc::is_assignment(root.binary_operator.op.type))
       {
-          sc::symbolic::execute(sc::execution_handler(tree, execution_options, dispatcher_options, compilation_options), isaac::profiles::get(execution_options.queue(tree.context())));
+          rt::execute(rt::execution_handler(tree, execution_options, dispatcher_options, compilation_options), rt::profiles::get(execution_options.queue(tree.context())));
           sc::expression_tree::node const & lhs = tree[root.binary_operator.lhs];
           sc::driver::Buffer const & data = sc::driver::make_buffer(tree.context().backend(), lhs.array.handle.cl, lhs.array.handle.cu, false);
           std::shared_ptr<sc::array> parray(new sc::array(lhs.shape, lhs.dtype, lhs.array.start, lhs.ld, data));
@@ -102,7 +103,7 @@ namespace detail
       }
       else
       {
-          std::shared_ptr<sc::array> parray(new sc::array(sc::execution_handler(tree, execution_options, dispatcher_options, compilation_options)));
+          std::shared_ptr<sc::array> parray(new sc::array(rt::execution_handler(tree, execution_options, dispatcher_options, compilation_options)));
           return bp::make_tuple(parray, tools::to_list(events.begin(), events.end()));
       }
   }
@@ -173,7 +174,7 @@ void export_driver()
 
   bp::class_<sc::driver::CommandQueue>("command_queue", bp::init<sc::driver::Context const &, sc::driver::Device const &>())
       .def("synchronize", &sc::driver::CommandQueue::synchronize)
-      .add_property("profiles", bp::make_function(&sc::profiles::get, bp::return_internal_reference<>()))
+      .add_property("profiles", bp::make_function(&rt::profiles::get, bp::return_internal_reference<>()))
       .add_property("device", bp::make_function(&sc::driver::CommandQueue::device, bp::return_internal_reference<>()))
       ;
 
