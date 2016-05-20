@@ -28,7 +28,7 @@ namespace random
 {
 
 template<typename T>
-array rand(tuple const & shape, driver::Context const & context = driver::backend::contexts::get_default())
+array rand(tuple const & shape, driver::Context const & context)
 {
   std::random_device rd;
   std::mt19937 mt(rd());
