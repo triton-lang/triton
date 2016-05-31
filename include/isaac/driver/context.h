@@ -35,7 +35,7 @@ namespace isaac
 namespace driver
 {
 
-class ISAACAPI Context
+class ISAACAPI Context: public has_handle_comparators<Context>
 {
   friend class Program;
   friend class CommandQueue;
@@ -55,16 +55,15 @@ private:
   }
 
 public:
+  //Constructors
   explicit Context(CUcontext const & context, bool take_ownership = true);
   explicit Context(cl_context const & context, bool take_ownership = true);
   explicit Context(Device const & device);
-
+  //Accessors
   backend_type backend() const;
   Device const & device() const;
-  bool operator==(Context const &) const;
-  bool operator<(Context const &) const;
+  handle_type const & handle() const;
 
-  handle_type const & handle() const { return h_; }
 private:
 DISABLE_MSVC_WARNING_C4251
   backend_type backend_;

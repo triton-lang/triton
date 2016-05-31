@@ -35,7 +35,7 @@ namespace driver
 {
 
 // Buffer
-class ISAACAPI Buffer
+class ISAACAPI Buffer: public has_handle_comparators<Buffer>
 {
 public:
   typedef HANDLE_TYPE(cl_mem, CUdeviceptr) handle_type;
@@ -43,7 +43,7 @@ public:
 private:
   friend class CommandQueue;
   friend class Kernel;
-
+  //Wrapper to get CUDA context from Memory
   static CUcontext context(CUdeviceptr h)
   {
       CUcontext res;
@@ -52,15 +52,14 @@ private:
   }
 
 public:
+  //Constructors
   Buffer(CUdeviceptr h = 0, bool take_ownership = true);
   Buffer(cl_mem Buffer = 0, bool take_ownership = true);
   Buffer(Context const & context, size_t size);
-  Context const & context() const;
-  bool operator<(Buffer const &) const;
-  bool operator==(Buffer const &) const;
-  bool operator!=(Buffer const &) const;
+  //Accessors
   handle_type&  handle();
   handle_type const &  handle() const;
+  Context const & context() const;
 private:
   backend_type backend_;
   Context context_;

@@ -39,14 +39,18 @@ namespace driver
 class Buffer;
 
 // Kernel
-class ISAACAPI Kernel
+class ISAACAPI Kernel: public has_handle_comparators<Kernel>
 {
   friend class CommandQueue;
 public:
   typedef HANDLE_TYPE(cl_kernel, CUfunction) handle_type;
 
 public:
+  //Constructors
   Kernel(Program const & program, const char * name);
+  //Accessors
+  handle_type const & handle() const;
+  //Arguments setters
   void setArg(unsigned int index, value_scalar const & scal);
   void setArg(unsigned int index, std::size_t size, void* ptr);
   void setArg(unsigned int index, Buffer const &);

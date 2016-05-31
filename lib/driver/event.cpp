@@ -63,7 +63,7 @@ long Event::elapsed_time() const
   }
 }
 
-HANDLE_TYPE(cl_event, cu_event_t) & Event::handle()
+Event::handle_type const & Event::handle() const
 { return h_; }
 
 }

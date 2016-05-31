@@ -41,26 +41,31 @@ class NDRange;
 class Buffer;
 
 // Command Queue
-class ISAACAPI CommandQueue
+class ISAACAPI CommandQueue: public has_handle_comparators<CommandQueue>
 {
 public:
   typedef HANDLE_TYPE(cl_command_queue, CUstream) handle_type;
 
 public:
+  //Constructors
   CommandQueue(cl_command_queue const & queue, bool take_ownership = true);
   CommandQueue(Context const & context, Device const & device, cl_command_queue_properties properties = 0);
+  //Accessors
+  handle_type & handle();
+  handle_type const & handle() const;
   backend_type backend() const;
   Context const & context() const;
   Device const & device() const;
+  //Synchronize
   void synchronize();
+  //Profiling
   void enable_profiling();
   void disable_profiling();
+  //Enqueue calls
   void enqueue(Kernel const & kernel, NDRange global, driver::NDRange local, std::vector<Event> const *, Event *event);
   void write(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
   void read(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr);
-  bool operator==(CommandQueue const & other) const;
-  bool operator<(CommandQueue const & other) const;
-  handle_type& handle();
+
 private:
   backend_type backend_;
   Context context_;

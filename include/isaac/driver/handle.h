@@ -33,11 +33,11 @@ namespace isaac
 namespace driver
 {
 
-  struct cu_event_t{
-      operator bool() const { return first && second; }
-      CUevent first;
-      CUevent second;
-  };
+struct cu_event_t{
+    operator bool() const { return first && second; }
+    CUevent first;
+    CUevent second;
+};
 
 
 #define HANDLE_TYPE(CLTYPE, CUTYPE) Handle<CLTYPE, CUTYPE>
@@ -64,11 +64,14 @@ private:
   static void release(cl_program x);
 
 public:
+  //Constructors
   Handle(backend_type backend, bool take_ownership = true);
-  backend_type backend() const;
+  //Comparison
   bool operator==(Handle const & other) const;
   bool operator!=(Handle const & other) const;
   bool operator<(Handle const & other) const;
+  //Accessors
+  backend_type backend() const;
   CLType & cl();
   CLType const & cl() const;
   CUType & cu();
@@ -80,9 +83,20 @@ DISABLE_MSVC_WARNING_C4251
   std::shared_ptr<CLType> cl_;
   std::shared_ptr<CUType> cu_;
 RESTORE_MSVC_WARNING_C4251
+
 private:
   backend_type backend_;
   bool has_ownership_;
+};
+
+//Helper for automatic implementation of comparison operators
+template<class T>
+class has_handle_comparators
+{
+public:
+  friend bool operator==(T const & x, T const & y) { return x.handle() == y.handle(); }
+  friend bool operator!=(T const & x, T const & y) { return x.handle() != y.handle(); }
+  friend bool operator<(T const & x, T const & y) { return x.handle() < y.handle(); }
 };
 
 }

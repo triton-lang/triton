@@ -53,18 +53,6 @@ Device::Device(cl_device_id const & device, bool take_ownership) : backend_(OPEN
 }
 
 
-bool Device::operator==(Device const & other) const
-{
-    return h_==other.h_;
-}
-
-bool Device::operator<(Device const & other) const
-{
-    return h_<other.h_;
-}
-
-
-
 Device::Vendor Device::vendor() const
 {
     std::string vname = vendor_str();

@@ -37,18 +37,20 @@ namespace driver
 class Context;
 class Device;
 
-class ISAACAPI Program
+class ISAACAPI Program: public has_handle_comparators<Program>
 {
 public:
   typedef HANDLE_TYPE(cl_program, CUmodule) handle_type;
 private:
   friend class Kernel;
+
 public:
+  //Constructors
   Program(Context const & context, std::string const & source);
+  //Accessors
+  handle_type const & handle() const;
   Context const & context() const;
-  //Comparison operators
-  bool operator==(Program const & other) const;
-  bool operator<(Program const & other) const;
+
 private:
 DISABLE_MSVC_WARNING_C4251
   backend_type backend_;

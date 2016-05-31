@@ -33,18 +33,22 @@ namespace driver
 {
 
 // Event
-class ISAACAPI Event
+class ISAACAPI Event: public has_handle_comparators<Event>
 {
 private:
   friend class CommandQueue;
+
 public:
   typedef HANDLE_TYPE(cl_event, cu_event_t) handle_type;
 
 public:
+  //Constructors
   Event(cl_event const & event, bool take_ownership = true);
   Event(backend_type backend);
+  //Accessors
+  handle_type const & handle() const;
+  //Profiling
   long elapsed_time() const;
-  handle_type& handle();
 
 private:
   backend_type backend_;
