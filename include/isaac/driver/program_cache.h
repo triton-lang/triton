@@ -35,10 +35,15 @@ namespace driver
 class ISAACAPI ProgramCache
 {
     friend class backend;
+
 public:
+    //Clearing the cache
     void clear();
+    //Adding a program to the cache
     Program & add(Context const & context, std::string const & name, std::string const & src);
+    //Finding a program in the cache
     Program const *find(std::string const & name);
+
 private:
 DISABLE_MSVC_WARNING_C4251
     std::map<std::string, Program> cache_;

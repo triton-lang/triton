@@ -60,15 +60,6 @@ Buffer::Buffer(Context const & context, size_t size) : backend_(context.backend_
 Context const & Buffer::context() const
 { return context_; }
 
-bool Buffer::operator==(Buffer const & other) const
-{ return h_==other.h_; }
-
-bool Buffer::operator<(Buffer const & other) const
-{ return h_<other.h_; }
-
-bool Buffer::operator!=(Buffer const & other) const
-{ return h_!=other.h_; }
-
 HANDLE_TYPE(cl_mem, CUdeviceptr) & Buffer::handle()
 { return h_; }
 

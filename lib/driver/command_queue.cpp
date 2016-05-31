@@ -147,13 +147,10 @@ void CommandQueue::read(Buffer const & buffer, bool blocking, std::size_t offset
   }
 }
 
-bool CommandQueue::operator==(CommandQueue const & other) const
-{ return h_ == other.h_; }
+CommandQueue::handle_type const & CommandQueue::handle() const
+{ return h_; }
 
-bool CommandQueue::operator<(CommandQueue const & other) const
-{ return h_ < other.h_; }
-
-HANDLE_TYPE(cl_command_queue, CUstream) & CommandQueue::handle()
+CommandQueue::handle_type & CommandQueue::handle()
 { return h_; }
 
 }

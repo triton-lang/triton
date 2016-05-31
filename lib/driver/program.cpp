@@ -179,16 +179,11 @@ Program::Program(Context const & context, std::string const & source) : backend_
   }
 }
 
-bool Program::operator==(Program const & other) const
-{ return h_ == other.h_; }
-
-bool Program::operator<(Program const & other) const
-{ return h_ < other.h_; }
+Program::handle_type const & Program::handle() const
+{ return h_; }
 
 Context const & Program::context() const
-{
-    return context_;
-}
+{ return context_; }
 
 
 }

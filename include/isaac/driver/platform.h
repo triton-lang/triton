@@ -38,10 +38,11 @@ class Device;
 
 class ISAACAPI Platform
 {
-private:
 public:
+  //Constructors
   Platform(backend_type);
   Platform(cl_platform_id const &);
+  //Accessors
   std::string name() const;
   std::string version() const;
   void devices(std::vector<Device> &) const;

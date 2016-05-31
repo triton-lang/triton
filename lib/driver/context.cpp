@@ -86,15 +86,8 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
   }
 }
 
-bool Context::operator==(Context const & other) const
-{
-    return h_==other.h_;
-}
-
-bool Context::operator<(Context const & other) const
-{
-    return h_<other.h_;
-}
+Context::handle_type const & Context::handle() const
+{ return h_; }
 
 Device const & Context::device() const
 { return device_; }

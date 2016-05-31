@@ -34,7 +34,7 @@ namespace driver
 {
 
 // Device
-class ISAACAPI Device
+class ISAACAPI Device: public has_handle_comparators<Device>
 {
 private:
   friend class Context;
@@ -43,6 +43,7 @@ private:
 public:
   typedef HANDLE_TYPE(cl_device_id, CUdevice) handle_type;
 
+  //Supported types
   enum Type
   {
       GPU = CL_DEVICE_TYPE_GPU,
@@ -50,7 +51,7 @@ public:
       ACCELERATOR = CL_DEVICE_TYPE_ACCELERATOR,
       UNKNOWN
   };
-
+  //Supported vendors
   enum class Vendor
   {
       AMD,
@@ -58,7 +59,7 @@ public:
       NVIDIA,
       UNKNOWN
   };
-
+  //Supported architectures
   enum class Architecture
   {
       //Intel
@@ -85,22 +86,21 @@ public:
   };
 
 private:
+  //Metaprogramming elper to get cuda info from attribute
   template<CUdevice_attribute attr>
   int cuGetInfo() const;
 
 public:
+  //Constructors
   explicit Device(CUdevice const & device, bool take_ownership = true);
   explicit Device(cl_device_id const & device, bool take_ownership = true);
-
-  bool operator==(Device const &) const;
-  bool operator<(Device const &) const;
-
+  //Accessors
+  handle_type const & handle() const;
   Vendor vendor() const;
   Architecture architecture() const;
-
-  std::string infos() const;
-
   backend_type backend() const;
+  //Informations
+  std::string infos() const;
   size_t clock_rate() const;
   unsigned int address_bits() const;
   driver::Platform platform() const;
