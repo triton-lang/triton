@@ -43,7 +43,7 @@ class ISAACAPI Kernel: public has_handle_comparators<Kernel>
 {
   friend class CommandQueue;
 public:
-  typedef HANDLE_TYPE(cl_kernel, CUfunction) handle_type;
+  typedef Handle<cl_kernel, CUfunction> handle_type;
 
 public:
   //Constructors

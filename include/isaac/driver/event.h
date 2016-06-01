@@ -39,7 +39,7 @@ private:
   friend class CommandQueue;
 
 public:
-  typedef HANDLE_TYPE(cl_event, cu_event_t) handle_type;
+  typedef Handle<cl_event, cu_event_t> handle_type;
 
 public:
   //Constructors

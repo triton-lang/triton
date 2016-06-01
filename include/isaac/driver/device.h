@@ -41,7 +41,7 @@ private:
   friend class CommandQueue;
 
 public:
-  typedef HANDLE_TYPE(cl_device_id, CUdevice) handle_type;
+  typedef Handle<cl_device_id, CUdevice> handle_type;
 
   //Supported types
   enum Type
