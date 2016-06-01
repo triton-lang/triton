@@ -44,7 +44,7 @@ class Buffer;
 class ISAACAPI CommandQueue: public has_handle_comparators<CommandQueue>
 {
 public:
-  typedef HANDLE_TYPE(cl_command_queue, CUstream) handle_type;
+  typedef Handle<cl_command_queue, CUstream> handle_type;
 
 public:
   //Constructors

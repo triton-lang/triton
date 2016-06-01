@@ -42,7 +42,7 @@ class ISAACAPI Context: public has_handle_comparators<Context>
   friend class Buffer;
 
 public:
-  typedef HANDLE_TYPE(cl_context, CUcontext) handle_type;
+  typedef Handle<cl_context, CUcontext> handle_type;
 
 private:
   static std::string cache_path();

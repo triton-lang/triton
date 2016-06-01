@@ -38,7 +38,7 @@ namespace driver
 class ISAACAPI Buffer: public has_handle_comparators<Buffer>
 {
 public:
-  typedef HANDLE_TYPE(cl_mem, CUdeviceptr) handle_type;
+  typedef Handle<cl_mem, CUdeviceptr> handle_type;
 
 private:
   friend class CommandQueue;

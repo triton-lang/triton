@@ -40,7 +40,8 @@ class Device;
 class ISAACAPI Program: public has_handle_comparators<Program>
 {
 public:
-  typedef HANDLE_TYPE(cl_program, CUmodule) handle_type;
+  typedef Handle<cl_program, CUmodule> handle_type;
+
 private:
   friend class Kernel;
 

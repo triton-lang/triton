@@ -60,10 +60,10 @@ Buffer::Buffer(Context const & context, size_t size) : backend_(context.backend_
 Context const & Buffer::context() const
 { return context_; }
 
-HANDLE_TYPE(cl_mem, CUdeviceptr) & Buffer::handle()
+Buffer::handle_type & Buffer::handle()
 { return h_; }
 
-HANDLE_TYPE(cl_mem, CUdeviceptr) const & Buffer::handle() const
+Buffer::handle_type const & Buffer::handle() const
 { return h_; }
 
 }
