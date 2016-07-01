@@ -306,7 +306,7 @@ reduce_2d::reduce_2d(reduce_2d::parameters_type const & parameters,
 
 std::vector<int_t> reduce_2d::input_sizes(expression_tree const & tree) const
 {
-  std::vector<size_t> idx = symbolic::find(tree, [this](expression_tree::node const & x){return x.binary_operator.op.type_family==reduction_type_;});
+  std::vector<size_t> idx = symbolic::find(tree, [this](expression_tree::node const & x){return x.type==COMPOSITE_OPERATOR_TYPE && x.binary_operator.op.type_family==reduction_type_;});
   std::vector<int_t> shape = tree[tree[idx[0]].binary_operator.lhs].shape;
   if(reduction_type_==REDUCE_COLUMNS)
     return {shape[1], shape[0]};
