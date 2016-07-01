@@ -120,8 +120,7 @@ elementwise_2d::elementwise_2d(unsigned int simd, unsigned int ls1, unsigned int
     base_impl<elementwise_2d, elementwise_2d_parameters>(elementwise_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
 {}
 
-std::vector<int_t> elementwise_2d::input_sizes(expression_tree const  & expression) const
-{
+std::vector<int_t> elementwise_2d::input_sizes(expression_tree const  & expression) const{
   return expression.shape();
 }
 
