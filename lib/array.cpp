@@ -841,7 +841,7 @@ namespace detail
   {
     int_t M = A.shape()[0];
     int_t N = A.shape()[1];
-    expression_tree::node A_root = A[A.root()];
+    expression_tree::node & A_root = (expression_tree::node &)A[A.root()];
     bool A_trans = A_root.binary_operator.op.type==TRANS_TYPE;
     while(A_root.type==COMPOSITE_OPERATOR_TYPE){
         A_root = A[A_root.binary_operator.lhs];
@@ -855,7 +855,6 @@ namespace detail
     }
     else
       return sum(A*reshape(x, {1, N}), 1);
-
   }
 
 }
