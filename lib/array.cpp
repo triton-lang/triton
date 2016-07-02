@@ -902,7 +902,7 @@ expression_tree dot(LTYPE const & x, RTYPE const & y)\
     return expression_tree(invalid_node(), invalid_node(), op_element(UNARY_ARITHMETIC, INVALID_TYPE), &context, dtype, {0});\
   /*AXPY*/\
   if(numgt1(xs)==0 || numgt1(ys)==0)\
-    return ravel(x*y);\
+    return x*y;\
   /*Outer product*/\
   if(xs.back()==1 && ys.front()==1)\
     return x*y;\

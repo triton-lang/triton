@@ -45,13 +45,24 @@ void test_impl(std::string const & ST, simple_vector_base<T> & cy, simple_matrix
 template<typename T>
 void test(sc::driver::Context const & ctx, int& nfail, int& npass)
 {
-  int_t M = 173, N = 241;
-  int_t SUBM = 7, SUBN = 11;
-  INIT_VECTOR(M, SUBM, 7, 2, cy, y, ctx);
-  INIT_VECTOR(N, SUBN, 5, 3, cx, x, ctx);
-  INIT_MATRIX(M, SUBM, 9, 1, N, SUBN, 8, 1, cA, A, ctx);
-  test_impl("FULL", cy, cA, cx, y, A, x, nfail, npass);
-  test_impl("SUB", cy_s, cA_s, cx_s, y_s, A_s, x_s, nfail, npass);
+  typedef std::tuple<int, int> pair;
+  auto tp = std::make_tuple<int,int>;
+  std::vector<pair> shapes = { tp(173, 241), tp(173, 1), tp(1, 241) };
+  int M, N;
+  for(pair const & t: shapes){
+    std::tie(M, N) = t;
+    int SUBM = std::min(7,M), SUBN = std::min(11,N), STRIDEN = std::min(2, N);
+    int STARTM = std::min(5,M-1), STARTN = std::min(7, N-1), STRIDEM = std::min(3,M);
+    INIT_VECTOR(M, SUBM, STARTM, STRIDEM, cy, y, ctx);
+    INIT_VECTOR(N, SUBN, STARTN, STRIDEN, cx, x, ctx);
+    INIT_MATRIX(M, SUBM, STARTM, STRIDEM, N, SUBN, STARTN, STRIDEN, cA, A, ctx);
+    std::string suffix = "MN";
+    if(M==1) suffix[0] = '1';
+    if(N==1) suffix[1] = '1';
+    test_impl("FULL-" + suffix, cy, cA, cx, y, A, x, nfail, npass);
+    test_impl("SUB-" + suffix, cy_s, cA_s, cx_s, y_s, A_s, x_s, nfail, npass);
+  }
+
 }
 int main()
 {
