@@ -1,4 +1,6 @@
 #include <cmath>
+#include <tuple>
+#include <sstream>
 #include "api.hpp"
 #include "isaac/array.h"
 #include "clBLAS.h"
@@ -70,14 +72,33 @@ void test_impl(std::string const & ST, simple_matrix_base<T> & cC, simple_matrix
 template<typename T>
 void test(sc::driver::Context const & ctx, int& nfail, int& npass)
 {
-    sc::int_t M = 173, N = 241, K = 293;
-    sc::int_t SUBM = 7, SUBN = 11, SUBK = 29;
+    typedef std::tuple<int, int, int> triplet;
+    auto tp = std::make_tuple<int,int,int>;
+    std::vector<triplet> shapes =
+    {
+      tp(173, 241, 293),
+      tp(1, 241, 293), tp(1, 1, 293), tp(1, 1, 1),
+      tp(173, 1, 293), tp(173, 1, 1),
+      tp(173, 241, 1)
+    };
 
-    INIT_MATRIX(M, SUBM, 5, 1, N, SUBN, 7, 1, cC, C, ctx);
-    INIT_MATRIX(M, SUBM, 8, 1, K, SUBK, 4, 1, cA, A, ctx);
-    INIT_MATRIX(K, SUBK, 9, 1, N, SUBN, 6, 1, cB, B, ctx);
-    test_impl("FULL", cC, cA, cB, C, A, AT, B, BT, nfail, npass);
-    test_impl("SUB", cC_s, cA_s, cB_s, C_s, A_s, AT_s, B_s, BT_s, nfail, npass);
+    int M, N, K;
+    for(triplet const & t: shapes){
+      std::tie(M, N, K) = t;
+      int SUBM = std::min(7,M), SUBN = std::min(11,N), SUBK = std::min(29,K);
+      int STARTM = std::min(5,M-1), STARTN = std::min(7, N-1), STARTK = std::min(4, K-1);
+      INIT_MATRIX(M, SUBM, STARTM, 1, N, SUBN, STARTN, 1, cC, C, ctx);
+      INIT_MATRIX(M, SUBM, STARTM, 1, K, SUBK, STARTK, 1, cA, A, ctx);
+      INIT_MATRIX(K, SUBK, STARTK, 1, N, SUBN, STARTN, 1, cB, B, ctx);
+      std::string suffix = "MNK";
+      if(M==1) suffix[0] = '1';
+      if(N==1) suffix[1] = '1';
+      if(K==1) suffix[2] = '1';
+      test_impl("FULL-"+suffix , cC, cA, cB, C, A, AT, B, BT, nfail, npass);
+      test_impl("SUB-"+suffix, cC_s, cA_s, cB_s, C_s, A_s, AT_s, B_s, BT_s, nfail, npass);
+    }
+
+
 }
 
 int main()
