@@ -35,19 +35,19 @@ namespace isaac
 {
 namespace templates
 {
-reduce_1d_parameters::reduce_1d_parameters(unsigned int _simd_width,
+reduce_1d_parameters::reduce_1d_parameters(unsigned int _vwidth,
                      unsigned int _group_size, unsigned int _num_groups,
-                     fetching_policy_type _fetching_policy) : base::parameters_type(_simd_width, _group_size, 1, 2), num_groups(_num_groups), fetching_policy(_fetching_policy)
+                     fetch_type _fetch) : base::parameters_type(_vwidth, _group_size, 1, 2), num_groups(_num_groups), fetch(_fetch)
 { }
 
 unsigned int reduce_1d::lmem_usage(expression_tree const  & x) const
 {
-  return p_.local_size_0*size_of(x.dtype());
+  return p_.ls0*size_of(x.dtype());
 }
 
 int reduce_1d::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 {
-  if (p_.fetching_policy==FETCH_FROM_LOCAL)
+  if (p_.fetch==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
@@ -122,7 +122,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
     case driver::CUDA:
       stream << "#include  \"vector.h\"" << std::endl; break;
     case driver::OPENCL:
-      stream << " __attribute__((reqd_work_group_size(" << p_.local_size_0 << ",1,1)))" << std::endl; break;
+      stream << " __attribute__((reqd_work_group_size(" << p_.ls0 << ",1,1)))" << std::endl; break;
   }
   stream << "$KERNEL void prod" << suffix << "($SIZE_T N, $GLOBAL char* tmp," << tools::join(kernel_arguments(device, symbols, tree), ", ") << ")" << std::endl;
   stream << "{" << std::endl;
@@ -139,33 +139,33 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   {
     if(is_indexing(rd->op().type))
     {
-      stream << rd->process("$LOCAL #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << rd->process("$LOCAL #scalartype #name_buf_value[" + tools::to_string(p_.ls0) + "];") << std::endl;
       stream << rd->process("#scalartype #name_acc_value = " + neutral_element(rd->op(), backend, "#scalartype") + ";") << std::endl;
-      stream << rd->process("$LOCAL unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << rd->process("$LOCAL unsigned int #name_buf[" + tools::to_string(p_.ls0) + "];") << std::endl;
       stream << rd->process("unsigned int #name_acc = 0;") << std::endl;
     }
     else
     {
-      stream << rd->process("$LOCAL #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << rd->process("$LOCAL #scalartype #name_buf[" + tools::to_string(p_.ls0) + "];") << std::endl;
       stream << rd->process("#scalartype #name_acc = " + neutral_element(rd->op(), backend, "#scalartype") + ";") << std::endl;
     }
   }
-  element_wise_loop_1D(stream, p_.fetching_policy, p_.simd_width, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int simd_width)
+  element_wise_loop_1D(stream, p_.fetch, p_.vwidth, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int vwidth)
   {
-    std::string dtype = append_width("#scalartype",simd_width);
+    std::string dtype = append_width("#scalartype",vwidth);
     //Fetch vector entry
     std::set<std::string> fetched;
      for (symbolic::reduce_1d* rd : reductions)
        for(symbolic::leaf* leaf: symbolic::extract<symbolic::leaf>(tree, symbols, rd->root(), false))
           if(fetched.insert(leaf->process("#name")).second)
-            stream << leaf->process(dtype + " #name = " + append_width("loadv", simd_width) + "(i);") << std::endl;
+            stream << leaf->process(dtype + " #name = " + append_width("loadv", vwidth) + "(i);") << std::endl;
     //Update accumulators
     for (symbolic::reduce_1d* rd : reductions)
-      for (unsigned int s = 0; s < simd_width; ++s)
+      for (unsigned int s = 0; s < vwidth; ++s)
       {
-        std::string value = rd->lhs()->evaluate({{"leaf", access_vector_type("#name", s, simd_width)}});
+        std::string value = rd->lhs()->evaluate({{"leaf", access_vector_type("#name", s, vwidth)}});
         if (is_indexing(rd->op().type))
-          compute_index_reduce_1d(stream, rd->process("#name_acc"),  "i*" + tools::to_string(simd_width) + "+" + tools::to_string(s), rd->process("#name_acc_value"), value,rd->op());
+          compute_index_reduce_1d(stream, rd->process("#name_acc"),  "i*" + tools::to_string(vwidth) + "+" + tools::to_string(s), rd->process("#name_acc_value"), value,rd->op());
         else
           compute_reduce_1d(stream, rd->process("#name_acc"), value,rd->op());
       }
@@ -178,7 +178,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
     stream << rd->process("#name_buf[lid] = #name_acc;") << std::endl;
   }
   //Reduce local memory
-  reduce_1d_local_memory(stream, p_.local_size_0, reductions, "#name_buf", "#name_buf_value", backend);
+  reduce_1d_local_memory(stream, p_.ls0, reductions, "#name_buf", "#name_buf_value", backend);
   //Write to temporary buffers
   stream << "if (lid==0)" << std::endl;
   stream << "{" << std::endl;
@@ -209,14 +209,14 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   {
     if (is_indexing(rd->op().type))
     {
-      stream << rd->process("$LOCAL unsigned int #name_buf[" + tools::to_string(p_.local_size_0) + "];");
+      stream << rd->process("$LOCAL unsigned int #name_buf[" + tools::to_string(p_.ls0) + "];");
       stream << rd->process("unsigned int #name_acc = 0;") << std::endl;
-      stream << rd->process("$LOCAL #scalartype #name_buf_value[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << rd->process("$LOCAL #scalartype #name_buf_value[" + tools::to_string(p_.ls0) + "];") << std::endl;
       stream << rd->process("#scalartype #name_acc_value = " + neutral_element(rd->op(), backend, "#scalartype") + ";");
     }
     else
     {
-      stream << rd->process("$LOCAL #scalartype #name_buf[" + tools::to_string(p_.local_size_0) + "];") << std::endl;
+      stream << rd->process("$LOCAL #scalartype #name_buf[" + tools::to_string(p_.ls0) + "];") << std::endl;
       stream << rd->process("#scalartype #name_acc = " + neutral_element(rd->op(), backend, "#scalartype") + ";");
     }
   }
@@ -238,7 +238,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
     stream << rd->process("#name_buf[lid] = #name_acc;") << std::endl;
   }
   //Local reduction
-  reduce_1d_local_memory(stream, p_.local_size_0, reductions, "#name_buf", "#name_buf_value", backend);
+  reduce_1d_local_memory(stream, p_.ls0, reductions, "#name_buf", "#name_buf_value", backend);
   //Write
   stream << "if (lid==0)" << std::endl;
   stream << "{" << std::endl;
@@ -258,7 +258,7 @@ reduce_1d::reduce_1d(reduce_1d::parameters_type const & parameters,
 { }
 
 reduce_1d::reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng,
-                               fetching_policy_type fetch, fusion_policy_t bind):
+                               fetch_type fetch, fusion_policy_t bind):
     base_impl<reduce_1d, reduce_1d_parameters>(reduce_1d_parameters(simd,ls,ng,fetch), bind)
 {}
 
@@ -284,8 +284,8 @@ void reduce_1d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
   driver::Kernel kernels[2] = { driver::Kernel(program,name[0].c_str()), driver::Kernel(program,name[1].c_str()) };
 
   //NDRange
-  driver::NDRange global[2] = { driver::NDRange(p_.local_size_0*p_.num_groups), driver::NDRange(p_.local_size_0) };
-  driver::NDRange local[2] = { driver::NDRange(p_.local_size_0), driver::NDRange(p_.local_size_0) };
+  driver::NDRange global[2] = { driver::NDRange(p_.ls0*p_.num_groups), driver::NDRange(p_.ls0) };
+  driver::NDRange local[2] = { driver::NDRange(p_.ls0), driver::NDRange(p_.ls0) };
   //Arguments
   for (auto & kernel : kernels)
   {

@@ -33,12 +33,12 @@ namespace templates
 {
 struct reduce_2d_parameters : public base::parameters_type
 {
-  reduce_2d_parameters(unsigned int _simd_width,
-                                unsigned int _local_size_0, unsigned int _local_size_1,
-                                unsigned int _num_groups_0, unsigned int _num_groups_1, fetching_policy_type _fetch_policy);
+  reduce_2d_parameters(unsigned int _vwidth,
+                                unsigned int _ls0, unsigned int _ls1,
+                                unsigned int _num_groups_0, unsigned int _num_groups_1, fetch_type _fetch_policy);
   unsigned int num_groups_0;
   unsigned int num_groups_1;
-  fetching_policy_type fetch_policy;
+  fetch_type fetch_policy;
 };
 
 
@@ -62,14 +62,14 @@ class reduce_2d_rows : public reduce_2d
 {
 public:
   reduce_2d_rows(reduce_2d::parameters_type  const &, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
-  reduce_2d_rows(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
+  reduce_2d_rows(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetch_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
 };
 
 class reduce_2d_cols : public reduce_2d
 {
 public:
   reduce_2d_cols(reduce_2d::parameters_type  const &, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
-  reduce_2d_cols(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetching_policy_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
+  reduce_2d_cols(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetch_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
 };
 
 }

@@ -32,9 +32,9 @@ namespace templates
 class elementwise_1d_parameters : public base::parameters_type
 {
 public:
-  elementwise_1d_parameters(unsigned int _simd_width, unsigned int _group_size, unsigned int _num_groups, fetching_policy_type _fetching_policy);
+  elementwise_1d_parameters(unsigned int _vwidth, unsigned int _group_size, unsigned int _num_groups, fetch_type _fetch);
   unsigned int num_groups;
-  fetching_policy_type fetching_policy;
+  fetch_type fetch;
 };
 
 class elementwise_1d : public base_impl<elementwise_1d, elementwise_1d_parameters>
@@ -44,7 +44,7 @@ private:
   std::string generate_impl(std::string const & suffix, expression_tree const  & expressions, driver::Device const & device, symbolic::symbols_table const & symbols) const;
 public:
   elementwise_1d(elementwise_1d::parameters_type const & parameters, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
-  elementwise_1d(unsigned int _simd_width, unsigned int _group_size, unsigned int _num_groups, fetching_policy_type _fetching_policy, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
+  elementwise_1d(unsigned int _vwidth, unsigned int _group_size, unsigned int _num_groups, fetch_type _fetch, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 };

@@ -33,11 +33,11 @@ namespace templates
 
 struct matrix_product_parameters : public base::parameters_type
 {
-  matrix_product_parameters(unsigned int simd_width
-                            , unsigned int local_size_0, unsigned int KL, unsigned int local_size_1, unsigned int D
+  matrix_product_parameters(unsigned int vwidth
+                            , unsigned int ls0, unsigned int KL, unsigned int ls1, unsigned int D
                             , unsigned int ms, unsigned int ks, unsigned int ns
-                            , fetching_policy_type A_fetching_policy, fetching_policy_type B_fetching_policy
-                            , unsigned int local_fetch_0, unsigned int local_fetch_1);
+                            , fetch_type Afetch, fetch_type Bfetch
+                            , unsigned int lf0, unsigned int lf1);
 
   unsigned int kL;
   unsigned int depth;
@@ -46,11 +46,11 @@ struct matrix_product_parameters : public base::parameters_type
   unsigned int kS;
   unsigned int nS;
 
-  fetching_policy_type A_fetching_policy;
-  fetching_policy_type B_fetching_policy;
+  fetch_type Afetch;
+  fetch_type Bfetch;
 
-  unsigned int local_fetch_0;
-  unsigned int local_fetch_1;
+  unsigned int lf0;
+  unsigned int lf1;
 
   unsigned int mL;
   unsigned int nL;
@@ -84,7 +84,7 @@ class matrix_product_nn : public matrix_product
 {
 public:
   matrix_product_nn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
+                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lfetch0, int_t lfetch1);
 };
 
@@ -92,7 +92,7 @@ class matrix_product_tn : public matrix_product
 {
 public:
   matrix_product_tn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
+                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lfetch0, int_t lfetch1);
 };
 
@@ -101,7 +101,7 @@ class matrix_product_nt : public matrix_product
 {
 public:
   matrix_product_nt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
+                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lfetch0, int_t lfetch1);
 };
 
@@ -110,7 +110,7 @@ class matrix_product_tt : public matrix_product
 {
 public:
   matrix_product_tt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetching_policy_type Afetch , fetching_policy_type Bfetch
+                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lfetch0, int_t lfetch1);
 };
 

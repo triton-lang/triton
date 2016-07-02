@@ -31,11 +31,11 @@ namespace templates
 
 struct reduce_1d_parameters : public base::parameters_type
 {
-  reduce_1d_parameters(unsigned int _simd_width,
+  reduce_1d_parameters(unsigned int _vwidth,
                        unsigned int _group_size, unsigned int _num_groups,
-                       fetching_policy_type _fetching_policy);
+                       fetch_type _fetch);
   unsigned int num_groups;
-  fetching_policy_type fetching_policy;
+  fetch_type fetch;
 };
 
 class reduce_1d : public base_impl<reduce_1d, reduce_1d_parameters>
@@ -50,7 +50,7 @@ private:
 
 public:
   reduce_1d(reduce_1d::parameters_type const & parameters, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
-  reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng, fetching_policy_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
+  reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng, fetch_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:
