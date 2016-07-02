@@ -55,7 +55,7 @@ void test(sc::driver::Context const & ctx, int& nfail, int& npass)
     int STARTM = std::min(5,M-1), STARTN = std::min(7, N-1), STRIDEM = std::min(3,M);
     INIT_VECTOR(M, SUBM, STARTM, STRIDEM, cy, y, ctx);
     INIT_VECTOR(N, SUBN, STARTN, STRIDEN, cx, x, ctx);
-    INIT_MATRIX(M, SUBM, STARTM, STRIDEM, N, SUBN, STARTN, STRIDEN, cA, A, ctx);
+    INIT_MATRIX(M, SUBM, STARTM, 1, N, SUBN, STARTN, 1, cA, A, ctx);
     std::string suffix = "MN";
     if(M==1) suffix[0] = '1';
     if(N==1) suffix[1] = '1';
