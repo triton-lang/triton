@@ -29,7 +29,7 @@ namespace isaac
 namespace templates
 {
 
-inline void fetching_loop_info(fetching_policy_type policy, std::string const & bound, kernel_generation_stream & stream, std::string & init, std::string & upper_bound, std::string & inc, std::string const & domain_id, std::string const & domain_size, driver::Device const &)
+inline void fetching_loop_info(fetch_type policy, std::string const & bound, kernel_generation_stream & stream, std::string & init, std::string & upper_bound, std::string & inc, std::string const & domain_id, std::string const & domain_size, driver::Device const &)
 {
   if (policy==FETCH_FROM_GLOBAL_STRIDED)
   {
@@ -54,10 +54,10 @@ inline void fetching_loop_info(fetching_policy_type policy, std::string const & 
 
 
 template<class Fun>
-inline void element_wise_loop_1D(kernel_generation_stream & stream, fetching_policy_type fetch, unsigned int simd_width,
+inline void element_wise_loop_1D(kernel_generation_stream & stream, fetch_type fetch, unsigned int vwidth,
                                  std::string const & i, std::string const & bound, std::string const & domain_id, std::string const & domain_size, driver::Device const & device, Fun const & generate_body)
 {
-  std::string strwidth = tools::to_string(simd_width);
+  std::string strwidth = tools::to_string(vwidth);
 
   std::string init, upper_bound, inc;
   fetching_loop_info(fetch, bound, stream, init, upper_bound, inc, domain_id, domain_size, device);
@@ -65,11 +65,11 @@ inline void element_wise_loop_1D(kernel_generation_stream & stream, fetching_pol
   stream << "for(unsigned int " << i << " = " << init << "*" << strwidth << "; " << i << " < " << boundround << "; " << i << " += " << inc << "*" << strwidth << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  generate_body(simd_width);
+  generate_body(vwidth);
   stream.dec_tab();
   stream << "}" << std::endl;
 
-  if (simd_width>1)
+  if (vwidth>1)
   {
     stream << "for(unsigned int " << i << " = " << boundround << " + " << domain_id << "; " << i << " < " << bound << "; " << i << " += " + domain_size + ")" << std::endl;
     stream << "{" << std::endl;

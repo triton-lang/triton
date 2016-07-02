@@ -40,7 +40,7 @@ namespace isaac
 namespace templates
 {
 
-base::parameters_type::parameters_type(unsigned int _simd_width, int_t _local_size_1, int_t _local_size_2, int_t _num_kernels) : simd_width(_simd_width), local_size_0(_local_size_1), local_size_1(_local_size_2), num_kernels(_num_kernels)
+base::parameters_type::parameters_type(unsigned int _vwidth, int_t _ls0, int_t _ls1, int_t _num_kernels) : vwidth(_vwidth), ls0(_ls0), ls1(_ls1), num_kernels(_num_kernels)
 { }
 
 base::base(fusion_policy_t fusion_policy) : fusion_policy_(fusion_policy)
@@ -79,12 +79,12 @@ base_impl<TType, PType>::base_impl(parameters_type const & parameters, fusion_po
 { }
 
 template<class TType, class PType>
-unsigned int base_impl<TType, PType>::local_size_0() const
-{ return p_.local_size_0; }
+unsigned int base_impl<TType, PType>::ls0() const
+{ return p_.ls0; }
 
 template<class TType, class PType>
-unsigned int base_impl<TType, PType>::local_size_1() const
-{ return p_.local_size_1; }
+unsigned int base_impl<TType, PType>::ls1() const
+{ return p_.ls1; }
 
 template<class TType, class PType>
 std::shared_ptr<base> base_impl<TType, PType>::clone() const
@@ -102,16 +102,16 @@ int base_impl<TType, PType>::is_invalid(expression_tree const  & expressions, dr
   //Invalid work group size
   size_t max_workgroup_size = device.max_work_group_size();
   std::vector<size_t> max_work_item_sizes = device.max_work_item_sizes();
-  if (p_.local_size_0*p_.local_size_1 > max_workgroup_size)
+  if (p_.ls0*p_.ls1 > max_workgroup_size)
     return TEMPLATE_WORK_GROUP_SIZE_OVERFLOW;
-  if (p_.local_size_0 > max_work_item_sizes[0])
+  if (p_.ls0 > max_work_item_sizes[0])
     return TEMPLATE_LOCAL_SIZE_0_OVERFLOW;
 
-  if (p_.local_size_1 > max_work_item_sizes[1])
+  if (p_.ls1 > max_work_item_sizes[1])
     return TEMPLATE_LOCAL_SIZE_1_OVERFLOW;
 
   //Invalid SIMD Width
-  if (p_.simd_width!=1 && p_.simd_width!=2 && p_.simd_width!=3 && p_.simd_width!=4)
+  if (p_.vwidth!=1 && p_.vwidth!=2 && p_.vwidth!=3 && p_.vwidth!=4)
     return TEMPLATE_INVALID_SIMD_WIDTH;
 
   return is_invalid_impl(device, expressions);

@@ -39,7 +39,7 @@ namespace isaac
 namespace templates
 {
 
-enum fetching_policy_type
+enum fetch_type
 {
   FETCH_FROM_LOCAL,
   FETCH_FROM_GLOBAL_STRIDED,
@@ -75,10 +75,10 @@ class base
 public:
   struct parameters_type
   {
-    parameters_type(unsigned int _simd_width, int_t _local_size_1, int_t _local_size_2, int_t _num_kernels);
-    unsigned int simd_width;
-    unsigned int local_size_0;
-    unsigned int local_size_1;
+    parameters_type(unsigned int _vwidth, int_t _ls0, int_t _ls1, int_t _num_kernels);
+    unsigned int vwidth;
+    unsigned int ls0;
+    unsigned int ls1;
     unsigned int num_kernels;
   };
 private:
@@ -107,8 +107,8 @@ private:
 public:
   typedef ParametersType parameters_type;
   base_impl(parameters_type const & parameters, fusion_policy_t fusion_policy);
-  unsigned int local_size_0() const;
-  unsigned int local_size_1() const;
+  unsigned int ls0() const;
+  unsigned int ls1() const;
   std::shared_ptr<base> clone() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
   int is_invalid(expression_tree const & expressions, driver::Device const & device) const;

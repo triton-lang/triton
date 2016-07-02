@@ -142,7 +142,7 @@ profiles::value_type::templates_container const & profiles::value_type::template
 
 std::shared_ptr<templates::base> profiles::create(std::string const & template_name, std::vector<int> const & x)
 {
-  templates::fetching_policy_type fetch[] = {templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_GLOBAL_STRIDED, templates::FETCH_FROM_GLOBAL_CONTIGUOUS};
+  templates::fetch_type fetch[] = {templates::FETCH_FROM_LOCAL, templates::FETCH_FROM_GLOBAL_STRIDED, templates::FETCH_FROM_GLOBAL_CONTIGUOUS};
   if(template_name=="elementwise_1d")
     return std::shared_ptr<templates::base>(new templates::elementwise_1d(x[0], x[1], x[2], fetch[x[3]]));
   else if(template_name=="reduce_1d")

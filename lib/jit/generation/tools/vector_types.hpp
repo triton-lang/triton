@@ -43,9 +43,9 @@ inline std::string access_vector_type(std::string const & v, int i)
     }
 }
 
-inline std::string access_vector_type(std::string const & v, int i, unsigned int simd_width)
+inline std::string access_vector_type(std::string const & v, int i, unsigned int vwidth)
 {
-    if(simd_width==1)
+    if(vwidth==1)
       return v;
     else
       return access_vector_type(v, i);
@@ -59,40 +59,40 @@ inline std::string append_width(std::string const & str, unsigned int width)
 }
 
 
-inline std::string vstore(unsigned int simd_width, std::string const & dtype, std::string const & value, std::string const & offset, std::string const & ptr, std::string const & stride, driver::backend_type backend, bool aligned = true)
+inline std::string vstore(unsigned int vwidth, std::string const & dtype, std::string const & value, std::string const & offset, std::string const & ptr, std::string const & stride, driver::backend_type backend, bool aligned = true)
 {
-    std::string vdtype = append_width(dtype,simd_width);
-    if (simd_width==1)
+    std::string vdtype = append_width(dtype,vwidth);
+    if (vwidth==1)
       return "(" + ptr + ")[" + offset + "] = " + value;
     else
     {
         if(backend == driver::CUDA && stride == "1" && aligned)
           return "reinterpret_cast<" + vdtype + "*>(" + ptr + ")[" + offset + "] = " + value;
         else if(backend == driver::OPENCL && stride == "1")
-          return append_width("vstore", simd_width) + "(" + value + ", " + offset + ", " + ptr + ")";
+          return append_width("vstore", vwidth) + "(" + value + ", " + offset + ", " + ptr + ")";
         else
         {
           std::string stridestr = (stride=="1")?"":("*" + stride);
           std::string res;
-          for(unsigned int s = 0 ; s < simd_width ; ++s)
-              res +=  (s>0?";(":"(") + ptr + ")[" + offset + "*" + tools::to_string(simd_width) + " + " + tools::to_string(s) + stridestr + "] = " + access_vector_type(value, s);
+          for(unsigned int s = 0 ; s < vwidth ; ++s)
+              res +=  (s>0?";(":"(") + ptr + ")[" + offset + "*" + tools::to_string(vwidth) + " + " + tools::to_string(s) + stridestr + "] = " + access_vector_type(value, s);
           return res;
         }
     }
 }
 
 
-inline std::string vload(unsigned int simd_width, std::string const & dtype, std::string const & offset, std::string const & ptr, std::string const & stride, driver::backend_type backend, bool aligned = true)
+inline std::string vload(unsigned int vwidth, std::string const & dtype, std::string const & offset, std::string const & ptr, std::string const & stride, driver::backend_type backend, bool aligned = true)
 {
-    std::string vdtype = append_width(dtype,simd_width);
-    if (simd_width==1)
+    std::string vdtype = append_width(dtype,vwidth);
+    if (vwidth==1)
       return "(" + ptr + ")[" + offset + "]";
     else
     {
       if(backend == driver::CUDA && stride == "1" && aligned)
           return "reinterpret_cast<" + vdtype + "*>(" + ptr + ")[" + offset + "]";
       else if(backend == driver::OPENCL && stride == "1")
-          return append_width("vload", simd_width) + "(" + offset + ", " + ptr + ")";
+          return append_width("vload", vwidth) + "(" + offset + ", " + ptr + ")";
       else
       {
         std::string stridestr = (stride=="1")?"":("*" + stride);
@@ -101,8 +101,8 @@ inline std::string vload(unsigned int simd_width, std::string const & dtype, std
           res = "make_" + vdtype + "(";
         else
           res = "(" + vdtype + ")(";
-        for(unsigned int s = 0 ; s < simd_width ; ++s)
-            res += ((s>0)?",(":"(") + ptr + ")[" + offset + "*" + tools::to_string(simd_width) + " + " + tools::to_string(s) + stridestr  + "]";
+        for(unsigned int s = 0 ; s < vwidth ; ++s)
+            res += ((s>0)?",(":"(") + ptr + ")[" + offset + "*" + tools::to_string(vwidth) + " + " + tools::to_string(s) + stridestr  + "]";
         res += ")";
         return res;
       }
