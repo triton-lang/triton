@@ -561,7 +561,7 @@ matrix_product_parameters::matrix_product_parameters(unsigned int vwidth
       stream.inc_tab();
       stream << "acc += Z[i + j*Zld + k*Zld*N];" << std::endl;
       stream.dec_tab();
-      stream << "C[i*Cstride + j*ldc] = acc + beta*C[i*Cstride + j*ldc];" << std::endl;
+      stream << "C[i*Cstride + j*ldc] = acc + ((beta != (" << sdtype << ")0)?(beta*C[i*Cstride + j*ldc]):0);" << std::endl;
       stream.dec_tab();
       stream << "}" << std::endl;
       stream.dec_tab();
