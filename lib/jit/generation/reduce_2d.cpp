@@ -127,7 +127,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   std::ostringstream upper;
   upper << "(M +" << p_.ls1 - 1 << ")/" << p_.ls1 << "*" << p_.ls1;
 
-  element_wise_loop_1D(stream, p_.fetch_policy, (reduction_type_==REDUCE_ROWS)?p_.vwidth:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](unsigned int cwidth)
+  element_wise_loop_1D(stream, p_.fetch_policy, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](unsigned int cwidth)
   {
   //Declare Buffers
   for (symbolic::reduce_2d* rd : reductions)
