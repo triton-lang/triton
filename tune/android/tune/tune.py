@@ -152,11 +152,11 @@ class Tuner:
             with open(os.path.join(savepath, 'profiles.csv')) as f:
                 def mmap(x):
                     if x=='FETCH_FROM_LOCAL':
-                        return sc.templates.fetching_policy_type.FETCH_FROM_LOCAL
+                        return sc.templates.fetch_type.FETCH_FROM_LOCAL
                     if x=='FETCH_FROM_GLOBAL_CONTIGUOUS':
-                        return sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS
+                        return sc.templates.fetch_type.FETCH_FROM_GLOBAL_CONTIGUOUS
                     if x=='FETCH_FROM_GLOBAL_STRIDED':
-                        return sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED
+                        return sc.templates.fetch_type.FETCH_FROM_GLOBAL_STRIDED
                     return int(x)
                 profiles = [map(mmap,row) for v in row for row in csv.reader(f, delimiter=',')]
         except:
