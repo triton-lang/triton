@@ -34,10 +34,10 @@ import tools
 from tools import profile_execution_failure
 from time import sleep
 
-fetch_types = [sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
-               sc.templates.fetching_policy_type.FETCH_FROM_GLOBAL_STRIDED,
-               sc.templates.fetching_policy_type.FETCH_FROM_LOCAL,
-               sc.templates.fetching_policy_type.FETCH_FROM_LOCAL]
+fetch_types = [sc.templates.fetch_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
+               sc.templates.fetch_type.FETCH_FROM_GLOBAL_STRIDED,
+               sc.templates.fetch_type.FETCH_FROM_LOCAL,
+               sc.templates.fetch_type.FETCH_FROM_LOCAL]
 
 def exhaustive(template, sizes, context):
     tree, _ = tools.tree_of(template, sizes, context)
