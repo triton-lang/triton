@@ -23,3 +23,17 @@ cmake ../ && make -j4
 Link against libisaac.so instead of libcublas.so or libclblas.so, and you're good to go! 
 
 The C++ and Python API does some kernel fusion, but is not entirely stable. It works well to compose element-wise operations, though.
+
+
+### Benchmark
+
+```
+./bench/bench-blas OP
+```
+where OP is axpy, gemv or gemm
+
+If you have multiple devices
+
+```
+./bench/bench-blas DEVICE_ID OP
+```
