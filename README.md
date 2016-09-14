@@ -37,3 +37,17 @@ If you have multiple devices
 ```
 ./bench/bench-blas DEVICE_ID OP
 ```
+
+### BLAS routines supported
+
+Currently supported functions are:
+
+| BLAS1         | BLAS2         | BLAS3         |
+| --------------| --------------| --------------|
+| xAXPY         | xGEMV         | xGEMM         |
+| xCOPY         | xGER          |               |
+| xSCAL         |               |               |
+| xDOT          |               |               |
+| xASUM         |               |               |
+
+for x = {S, D}
