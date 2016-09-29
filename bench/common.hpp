@@ -3,6 +3,12 @@
 
 #include <chrono>
 #include <algorithm>
+#include "isaac/array.h"
+
+#define RST  "\x1B[0m"
+#define BOLD(x) "\x1B[1m" x RST
+
+namespace sc = isaac;
 
 template<std::size_t> struct int_{};
 
@@ -64,9 +70,11 @@ T median(std::vector<T> x)
 
 template<class T>
 T min(std::vector<T> x)
-{
-  return *std::min_element(x.begin(), x.end());
-}
+{ return *std::min_element(x.begin(), x.end()); }
+
+template<class T>
+T max(std::vector<T> x)
+{ return *std::max_element(x.begin(), x.end()); }
 
 template<class T>
 T mean(std::vector<T> x)
@@ -104,6 +112,22 @@ private:
     high_resolution_clock::time_point _start;
 };
 
+cl_mem& cl(sc::array& x)
+{ return x.data().handle().cl(); }
 
+cl_mem& cl(sc::scalar& x)
+{ return x.data().handle().cl(); }
+
+cl_command_queue& cl(sc::driver::CommandQueue& x)
+{ return x.handle().cl(); }
+
+CUdeviceptr& cu(sc::array& x)
+{ return x.data().handle().cu(); }
+
+CUdeviceptr& cu(sc::scalar& x)
+{ return x.data().handle().cu(); }
+
+CUstream& cu(sc::driver::CommandQueue& x)
+{ return x.handle().cu(); }
 
 #endif
