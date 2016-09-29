@@ -99,34 +99,23 @@ class Tuner:
             if level=='simple':
                 sizes = [(2560,2560,2560)]
             elif level=='intermediate':
-                sizes = [#Square
+               sizes = [#Square
                          (896,896,896),
-			 (1536,1536,1536),
-			 (2176, 2176,2176),
+                         (1536,1536,1536),
+                         (2176, 2176,2176),
                          #Rank-32 updates
                          (896,896,32),
                          (1536,1536,32),
                          (2176,2176,32),
                          #Covariance
-			 (32,32,16000),
-			 (64,64,64000),
-                         (256,256,32000),
-                         #Convolutions
-                         (3025,64,363),
-                         (729,192,1200),
-                         (169,384,1728),
-                         (169,256,3456),
-                         (169,128,2304),
-                         (169,2304,256),
-                         (169,3456,256),
-                         (169,1728,384),
-                         (729,1600,192),
-                         (3025,363,64), 
-                         (2304,256,169),
-                         (3456,256,169),
-                         (1728,384,169),
-                         (1600,192,729),
-                         (363,64,3025)]
+                         (32,32,16000),
+                         (64,64,64000),
+                         (256,256,32000)]
+               #DeepSpeech
+               sizes = []
+               for MK in [1760, 2048, 2560]:
+                   for N in [16, 32, 64, 128, MK]:
+                       sizes += [(MK, N, MK)]
             elif level=='full':
 			    sizes = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 17))
 
@@ -188,15 +177,20 @@ class Tuner:
                     clf = RandomForestRegressor(min(10, idx+1), max_depth=min(10, idx+1)).fit(X, Y)
                     #clf, nrmse = model.train(X, Y, profiles)
                     predperf = clf.predict(x)[0]
-                    best = (-predperf).argsort()[:5]
+                    best = (-predperf).argsort()
                     perf = []
                     for b in best:
                         try:
                             perf += [performance(x, tools.benchmark(operation, profiles[b], tree))]
+                            break
                         except profile_execution_failure:
                             pass
-                    predicted = profiles[best[argmax(perf)]]
-                retune = not optimize.is_local_optimum(predicted, operation, x, context)
+                    if perf:
+                        predicted = profiles[best[argmax(perf)]]
+                        retune = not optimize.is_local_optimum(predicted, operation, x, context)
+                    else:
+                        retune = True
+                        predicted = None
                 
             #Retune if necessary
             if retune:
