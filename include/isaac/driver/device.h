@@ -74,6 +74,7 @@ public:
       SM_3_7,
       SM_5_0,
       SM_5_2,
+      SM_6_1,
 
       //AMD
       TERASCALE_2,

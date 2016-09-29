@@ -81,6 +81,12 @@ Device::Architecture Device::architecture() const
             std::pair<unsigned int, unsigned int> sm = nv_compute_capability();
             switch(sm.first)
             {
+                case 6:
+                  switch(sm.second)
+                  {
+                    case 1: return Architecture::SM_6_1;
+                  }
+
                 case 5:
                   switch(sm.second)
                   {
