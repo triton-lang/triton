@@ -45,10 +45,10 @@ void bench(sc::numeric_type dtype, std::string operation)
   using std::get;
   using std::make_tuple;
 
-  unsigned int dtsize = sc::size_of(dtype);
+  //unsigned int dtsize = sc::size_of(dtype);
   sc::driver::CommandQueue & queue = sc::driver::backend::queues::get(sc::driver::backend::contexts::get_default(),0);
   auto sync = [&](){ queue.synchronize(); };
-
+  auto cusync = [&](){ cudaDeviceSynchronize(); };
   /*---------*/
   /*--BLAS1--*/
   /*---------*/
@@ -73,7 +73,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       times.push_back(bench([&](){cblas_saxpy(N, alpha, cx.data(), 1, cy.data(), 1);}, sync));
 #endif
 #ifdef BENCH_CUBLAS
-      times.push_back(bench([&](){cublasSaxpy(N, alpha, (T*)cu(x), 1, (T*)cu(y), 1);}, sync));
+      times.push_back(bench([&](){cublasSaxpy(N, alpha, (T*)cu(x), 1, (T*)cu(y), 1);}, cusync));
 #endif
     }
   }
@@ -99,7 +99,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       times.push_back(bench([&](){cblas_sdot(N, cx.data(), 1, cy.data(), 1);}, sync));
 #endif
 #ifdef BENCH_CUBLAS
-      times.push_back(bench([&](){cublasSdot(N, (T*)cu(x), 1, (T*)cu(y), 1);}, sync));
+      times.push_back(bench([&](){cublasSdot(N, (T*)cu(x), 1, (T*)cu(y), 1);}, cusync));
 #endif
     }
   }
@@ -155,7 +155,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       times.push_back(bench([&](){cblas_sgemv(CblasColMajor, AT?CblasTrans:CblasNoTrans, As1, As2, 1, cA.data(), lda, cx.data(), 1, 0, cy.data(), 1);}, sync));
 #endif
 #ifdef BENCH_CUBLAS
-      times.push_back(bench([&](){cublasSgemv(AT?'t':'n', As1, As2, 1, (T*)cu(A), lda, (T*)cu(x), 1, 0, (T*)cu(y), 1);}, sync));
+      times.push_back(bench([&](){cublasSgemv(AT?'t':'n', As1, As2, 1, (T*)cu(A), lda, (T*)cu(x), 1, 0, (T*)cu(y), 1);}, cusync));
 #endif
     }
   }
@@ -238,7 +238,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       times.push_back(bench([&](){cblas_sgemm(CblasColMajor, AT?CblasTrans:CblasNoTrans, BT?CblasTrans:CblasNoTrans, M, N, K, 1, cA.data(), lda, cB.data(), ldb, 1, cC.data(), ldc);}, sync));
 #endif
 #ifdef BENCH_CUBLAS
-      times.push_back(bench([&](){cublasSgemm(AT?'t':'n', BT?'t':'n', M, N, K, 1, (T*)cu(A), lda, (T*)cu(B), ldb, 1, (T*)cu(C), ldc);}, sync));
+      times.push_back(bench([&](){cublasSgemm(AT?'t':'n', BT?'t':'n', M, N, K, 1, (T*)cu(A), lda, (T*)cu(B), ldb, 1, (T*)cu(C), ldc);}, cusync));
 #endif
       std::cout << name << "\t" << M << "\t" << N << "\t" << K << "\t" << cAT << "\t" << cBT;
       std::transform(times.begin(), times.end(), std::back_inserter(tflops), [&](double t){ return 2*M*N*K/t*1e-3;});
