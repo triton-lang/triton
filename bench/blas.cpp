@@ -48,7 +48,9 @@ void bench(sc::numeric_type dtype, std::string operation)
   //unsigned int dtsize = sc::size_of(dtype);
   sc::driver::CommandQueue & queue = sc::driver::backend::queues::get(sc::driver::backend::contexts::get_default(),0);
   auto sync = [&](){ queue.synchronize(); };
+#ifdef BENCH_CUBLAS
   auto cusync = [&](){ cudaDeviceSynchronize(); };
+#endif
   /*---------*/
   /*--BLAS1--*/
   /*---------*/
@@ -165,13 +167,13 @@ void bench(sc::numeric_type dtype, std::string operation)
     std::vector<std::tuple<std::string, int_t, int_t, int_t, char, char> > MNKs;
     //DeepBench
     for(size_t MK: std::vector<size_t>{1760, 2048, 2560})
-      for(size_t N: std::vector<size_t>{16, 32, 64, 128, MK})
+      for(size_t N: std::vector<size_t>{16, 32, 64, 128, 7000})
         MNKs.push_back(make_tuple("Deep", MK, N, MK, 'N', 'N'));
     for(size_t MK: std::vector<size_t>{1760, 2048, 2560})
-      for(size_t N: std::vector<size_t>{16, 32, 64, 128, MK})
+      for(size_t N: std::vector<size_t>{16, 32, 64, 128, 7000})
         MNKs.push_back(make_tuple("Deep", MK, N, MK, 'T', 'N'));
-    for(size_t MK: std::vector<size_t>{1760})
-      MNKs.push_back(make_tuple("Deep", MK, 1733, MK, 'N', 'T'));
+    for(size_t MK: std::vector<size_t>{1760, 4096})
+      MNKs.push_back(make_tuple("Deep", MK, 7133, MK, 'N', 'T'));
     //Covariance (e.g., ICA, 10minutes/100Hz)
     MNKs.push_back(make_tuple("Cov",32,32,60000,'N','T'));
     MNKs.push_back(make_tuple("Cov",256,256,60000,'N','T'));
@@ -179,9 +181,6 @@ void bench(sc::numeric_type dtype, std::string operation)
     MNKs.push_back(make_tuple("Lapack",4096,4096,32,'N','T'));
     MNKs.push_back(make_tuple("Lapack",3456,3456,32,'N','T'));
     MNKs.push_back(make_tuple("Lapack",896,896,32,'N','T'));
-    //Square
-    MNKs.push_back(make_tuple("Square",896,896,896,'N','T'));
-    MNKs.push_back(make_tuple("Square",2560,2560,2560,'N','T'));
 
     std::cout << color_stream(ITALIC) << color_stream(BOLD) ;
     std::cout << "BENCH\tM\tN\tK\tAT\tBT\tISAAC";
