@@ -1,7 +1,6 @@
 # ISAAC
 
-This is the developer repository for ISAAC, a new approach to BLAS implementations. 
-ISAAC uses Machine-Learning techniques to achieve input-specific and architecture-aware computations, thereby outperforming cuBLAS and clBLAS on many applications for NVidia, Intel and AMD GPUs.
+This is the developer repository for ISAAC, a library that uses machine learning to find input-aware kernels for element-wise operations, 1D/2D reductions and GEMM. It works with both cuBLAS and clBLAS. It's super easy to compile (no dependency!), to install (just link against libisaac.so instead of clBLAS or cuBLAS!), almost always outperforms (tuned) clBLAS and often outperforms cuBLAS. Try it!
 
 ### License
 
@@ -30,13 +29,17 @@ The C++ and Python API does some kernel fusion, but is not entirely stable. It w
 ```
 ./bench/bench-blas OP
 ```
-where OP is axpy, gemv or gemm
+where OP is axpy, gemv or gemm. It detects clBLAS or cuBLAS and compares it against ISAAC for DeepBench, Covariance, LAPACK (packed rank1 updates) and Square computations
 
-If you have multiple devices
+Here's what you get for  on a Pascal Titan X (TFLOPS):
 
-```
-./bench/bench-blas DEVICE_ID OP
-```
+| BENCH | M    | N    | K    | AT | BT | ISAAC | cuBLAS |
+| ------| -----| -----| -----| ---| ---| ------| -------|
+| Deep  | 1760 | 16   | 1760 | N  | N  | 1.29  | 1.65   |
+
+
+
+
 
 ### BLAS routines supported
 
