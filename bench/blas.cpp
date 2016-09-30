@@ -163,9 +163,6 @@ void bench(sc::numeric_type dtype, std::string operation)
   if(operation.substr(0,4)=="gemm")
   {
     std::vector<std::tuple<std::string, int_t, int_t, int_t, char, char> > MNKs;
-    //Square
-    MNKs.push_back(make_tuple("Square",896,896,896,'N','T'));
-    MNKs.push_back(make_tuple("Square",2560,2560,2560,'N','T'));
     //DeepBench
     for(size_t MK: std::vector<size_t>{1760, 2048, 2560})
       for(size_t N: std::vector<size_t>{16, 32, 64, 128, MK})
@@ -182,6 +179,9 @@ void bench(sc::numeric_type dtype, std::string operation)
     MNKs.push_back(make_tuple("Lapack",4096,4096,32,'N','T'));
     MNKs.push_back(make_tuple("Lapack",3456,3456,32,'N','T'));
     MNKs.push_back(make_tuple("Lapack",896,896,32,'N','T'));
+    //Square
+    MNKs.push_back(make_tuple("Square",896,896,896,'N','T'));
+    MNKs.push_back(make_tuple("Square",2560,2560,2560,'N','T'));
 
     std::cout << color_stream(ITALIC) << color_stream(BOLD) ;
     std::cout << "BENCH\tM\tN\tK\tAT\tBT\tISAAC";
