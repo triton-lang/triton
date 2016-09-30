@@ -119,7 +119,7 @@ matrix_product::args matrix_product::check(expression_tree::data_type const & tr
     }
     if(result.C == NULL)
         result.C = &left;
-    else if(result.C != &left)
+    else if(result.C->array.base != left.array.base)
         result.C = NULL;
     return result;
 }

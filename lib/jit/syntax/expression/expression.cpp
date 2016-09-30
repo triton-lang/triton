@@ -47,6 +47,7 @@ expression_tree::node::node(value_scalar const & x) : type(VALUE_SCALAR_TYPE), d
 expression_tree::node::node(array_base const & x) : type(DENSE_ARRAY_TYPE), dtype(x.dtype()), shape(x.shape())
 {
   array.start = x.start();
+  array.base = (array_base*)&x;
   driver::Buffer::handle_type const & h = x.data().handle();
   switch(h.backend()){
     case driver::OPENCL: array.handle.cl = h.cl(); break;
