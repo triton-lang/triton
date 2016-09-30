@@ -183,7 +183,8 @@ void bench(sc::numeric_type dtype, std::string operation)
     MNKs.push_back(make_tuple("Lapack",3456,3456,32,'N','T'));
     MNKs.push_back(make_tuple("Lapack",896,896,32,'N','T'));
 
-    std::cout << "BENCH\tM\tN\tK\ta_t\tb_t\tISAAC";
+    std::cout << color_stream(ITALIC) << color_stream(BOLD) ;
+    std::cout << "BENCH\tM\tN\tK\tAT\tBT\tISAAC";
 #ifdef BENCH_CLBLAS
     std::cout << "\tclBLAS";
 #endif
@@ -193,7 +194,7 @@ void bench(sc::numeric_type dtype, std::string operation)
 #ifdef BENCH_CUBLAS
     std::cout << "\tcuBLAS";
 #endif
-    std::cout << std::endl;
+    std::cout << color_stream(RESET) << std::endl;
 
     /*---------*/
     /*--BLAS3--*/
@@ -245,7 +246,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       for(auto x: tflops){
         std::cout << "\t";
         if(x==best)
-          std::cout << "\x1B[1m" << x << "\x1B[0m";
+          std::cout << color_stream(FG_LIGHT_BLUE) << x << color_stream(RESET);
         else
           std::cout << x;
       }

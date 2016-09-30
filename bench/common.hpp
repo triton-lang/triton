@@ -5,9 +5,6 @@
 #include <algorithm>
 #include "isaac/array.h"
 
-#define RST  "\x1B[0m"
-#define BOLD(x) "\x1B[1m" x RST
-
 namespace sc = isaac;
 
 template<std::size_t> struct int_{};
@@ -130,4 +127,33 @@ CUdeviceptr& cu(sc::scalar& x)
 CUstream& cu(sc::driver::CommandQueue& x)
 { return x.handle().cu(); }
 
+enum Code {
+  RESET = 0,
+  BOLD = 1,
+  ITALIC = 3,
+  FG_RED = 31,
+  FG_GREEN = 32,
+  FG_YELLOW = 33,
+  FG_BLUE = 34,
+  FG_MAGENTA = 35,
+  FG_CYAN = 36,
+  FG_LIGHT_GRAY = 37,
+  FG_DARK_GRAY = 90,
+  FG_LIGHT_RED = 91,
+  FG_LIGHT_GREEN = 92,
+  FG_LIGHT_YELLOW = 93,
+  FG_LIGHT_BLUE = 94,
+  FG_LIGHT_MAGENTA = 95,
+  FG_LIGHT_CYAN = 96,
+  FG_WHITE = 97
+};
+class color_stream {
+    Code code;
+public:
+    color_stream(Code pCode) : code(pCode) {}
+    friend std::ostream&
+    operator<<(std::ostream& os, const color_stream& mod) {
+        return os << "\033[" << mod.code << "m";
+    }
+};
 #endif
