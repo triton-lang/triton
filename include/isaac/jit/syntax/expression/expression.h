@@ -81,6 +81,7 @@ struct array_holder
 {
   int_t start;
   handle_t handle;
+  array_base* base;
 };
 
 class expression_tree
