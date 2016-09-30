@@ -112,7 +112,6 @@ class Tuner:
                          (64,64,64000),
                          (256,256,32000)]
                #DeepSpeech
-               sizes = []
                for MK in [1760, 2048, 2560]:
                    for N in [16, 32, 64, 128, MK]:
                        sizes += [(MK, N, MK)]
