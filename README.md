@@ -8,9 +8,9 @@ ISAAC is distributed under the GNU LGPL v2.1 License.
 
 ### Installation
 
-ISAAC is dependency-free, and will load either OpenCL or CUDA 7.0+ _dynamically_ depending on which GPUs are detected at runtime.
+ISAAC is dependency-free, and will load either OpenCL and/or CUDA 7.0+ _dynamically_ depending on which GPUs are detected at runtime.
 
-Installation requires CMake 2.8.7+ and a C++11 compliant compiler:  
+You only need CMake 2.8.7+ and a C++11 compliant compiler:  
  
 
 ```
@@ -127,4 +127,13 @@ Currently supported functions are:
 | xDOT          |               |               |
 | xASUM         |               |               |
 
-for x = {S, D}
+### Contributing
+
+Non-tuned GPUs are:
+- Intel Skylake iGPU
+- AMD GCN > 1.2
+- Intel Xeon Phi
+
+I'm planning on adding double precision support very soon.
+
+I'm no longer very active on this project, although I'll fix bugs. I've been working on a more ambitious project lately.
