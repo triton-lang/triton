@@ -31,6 +31,6 @@ CODE_TO_H(SOURCES ${CUDA_HELPERS_SRC} VARNAME kernel_files EXTENSION "hpp"
 
 #Installation
 install(TARGETS isaac LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
-set(INSTALL_INCLUDE_DIR /usr/local/include)
+set(INSTALL_INCLUDE_DIR include)
 install(DIRECTORY isaac "${PROJECT_SOURCE_DIR}/include/isaac"
            DESTINATION "${INSTALL_INCLUDE_DIR}"  FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
