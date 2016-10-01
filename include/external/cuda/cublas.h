@@ -418,7 +418,7 @@ void CUBLASWINAPI cublasZhpr2 (char uplo, int n, cuDoubleComplex alpha,
                                const cuDoubleComplex *x, int incx, const cuDoubleComplex *y,
                                int incy, cuDoubleComplex *AP);
 /* ------------------------BLAS3 Functions ------------------------------- */
-/* MATRIX_PRODUCT */
+/* GEMM */
 void CUBLASWINAPI cublasSgemm (char transa, char transb, int m, int n, int k, 
                                float alpha, const float *A, int lda, 
                                const float *B, int ldb, float beta, float *C, 

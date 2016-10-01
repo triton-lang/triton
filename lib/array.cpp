@@ -769,21 +769,21 @@ namespace detail
   expression_tree matmatprod(array_base const & A, array_base const & B)
   {
     tuple shape{A.shape()[0], B.shape()[1]};
-    return expression_tree(A, B, op_element(MATRIX_PRODUCT, MATRIX_PRODUCT_NN_TYPE), &A.context(), A.dtype(), shape);
+    return expression_tree(A, B, op_element(GEMM, GEMM_NN_TYPE), &A.context(), A.dtype(), shape);
   }
 
   expression_tree matmatprod(expression_tree const & A, array_base const & B)
   {
-    operation_type type = MATRIX_PRODUCT_NN_TYPE;
+    operation_type type = GEMM_NN_TYPE;
     tuple shape{A.shape()[0], B.shape()[1]};
 
     expression_tree::node A_root = A[A.root()];
     bool A_trans = A_root.binary_operator.op.type==TRANS_TYPE;
     if(A_trans){
-      type = MATRIX_PRODUCT_TN_TYPE;
+      type = GEMM_TN_TYPE;
     }
 
-    expression_tree res(A, B, op_element(MATRIX_PRODUCT, type), &A.context(), A.dtype(), shape);
+    expression_tree res(A, B, op_element(GEMM, type), &A.context(), A.dtype(), shape);
     expression_tree::node & res_root = res[res.root()];
     if(A_trans) res_root.binary_operator.lhs = A_root.binary_operator.lhs;
     return res;
@@ -791,16 +791,16 @@ namespace detail
 
   expression_tree matmatprod(array_base const & A, expression_tree const & B)
   {
-    operation_type type = MATRIX_PRODUCT_NN_TYPE;
+    operation_type type = GEMM_NN_TYPE;
     tuple shape{A.shape()[0], B.shape()[1]};
 
     expression_tree::node B_root = B[B.root()];
     bool B_trans = B_root.binary_operator.op.type==TRANS_TYPE;
     if(B_trans){
-      type = MATRIX_PRODUCT_NT_TYPE;
+      type = GEMM_NT_TYPE;
     }
 
-    expression_tree res(A, B, op_element(MATRIX_PRODUCT, type), &A.context(), A.dtype(), shape);
+    expression_tree res(A, B, op_element(GEMM, type), &A.context(), A.dtype(), shape);
     expression_tree::node & res_root = res[res.root()];
     if(B_trans) res_root.binary_operator.rhs = B_root.binary_operator.lhs;
     return res;
@@ -808,7 +808,7 @@ namespace detail
 
   expression_tree matmatprod(expression_tree const & A, expression_tree const & B)
   {
-    operation_type type = MATRIX_PRODUCT_NN_TYPE;
+    operation_type type = GEMM_NN_TYPE;
     expression_tree::node const & A_root = A[A.root()];
     expression_tree::node const & B_root = B[B.root()];
     tuple shape{A.shape()[0], B.shape()[1]};
@@ -816,12 +816,12 @@ namespace detail
     bool A_trans = A_root.binary_operator.op.type==TRANS_TYPE;
     bool B_trans = B_root.binary_operator.op.type==TRANS_TYPE;
 
-    if(A_trans && B_trans)  type = MATRIX_PRODUCT_TT_TYPE;
-    else if(A_trans && !B_trans) type = MATRIX_PRODUCT_TN_TYPE;
-    else if(!A_trans && B_trans) type = MATRIX_PRODUCT_NT_TYPE;
-    else type = MATRIX_PRODUCT_NN_TYPE;
+    if(A_trans && B_trans)  type = GEMM_TT_TYPE;
+    else if(A_trans && !B_trans) type = GEMM_TN_TYPE;
+    else if(!A_trans && B_trans) type = GEMM_NT_TYPE;
+    else type = GEMM_NN_TYPE;
 
-    expression_tree res(A, B, op_element(MATRIX_PRODUCT, type), &A.context(), A.dtype(), shape);
+    expression_tree res(A, B, op_element(GEMM, type), &A.context(), A.dtype(), shape);
     expression_tree::node & res_root = res[res.root()];
     if(A_trans) res_root.binary_operator.lhs = A_root.binary_operator.lhs;
     if(B_trans) res_root.binary_operator.rhs = A.data().size() + B_root.binary_operator.lhs;

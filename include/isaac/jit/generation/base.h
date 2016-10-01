@@ -84,7 +84,7 @@ public:
 private:
   virtual std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const & mapping) const = 0;
 public:
-  base(fusion_policy_t fusion_policy);
+  base();
   virtual unsigned int temporary_workspace(expression_tree const &) const;
   virtual unsigned int lmem_usage(expression_tree const &) const;
   virtual unsigned int registers_usage(expression_tree const &) const;
@@ -94,8 +94,6 @@ public:
   virtual int is_invalid(expression_tree const & expressions, driver::Device const & device) const = 0;
   virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & expressions) = 0;
   virtual std::shared_ptr<base> clone() const = 0;
-private:
-  fusion_policy_t fusion_policy_;
 };
 
 
@@ -106,7 +104,7 @@ private:
   virtual int is_invalid_impl(driver::Device const &, expression_tree const &) const;
 public:
   typedef ParametersType parameters_type;
-  base_impl(parameters_type const & parameters, fusion_policy_t fusion_policy);
+  base_impl(parameters_type const & parameters);
   unsigned int ls0() const;
   unsigned int ls1() const;
   std::shared_ptr<base> clone() const;
@@ -114,7 +112,6 @@ public:
   int is_invalid(expression_tree const & expressions, driver::Device const & device) const;
 protected:
   parameters_type p_;
-  fusion_policy_t fusion_policy_;
 };
 
 }

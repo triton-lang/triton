@@ -32,12 +32,6 @@ namespace isaac
 class array_base;
 
 
-enum fusion_policy_t
-{
-  FUSE_INDEPENDENT,
-  FUSE_SEQUENTIAL
-};
-
 class symbolic_binder
 {
   class cmp

@@ -19,7 +19,7 @@
  * MA 02110-1301  USA
  */
 
-#include "isaac/runtime/inference/profiles.h"
+#include "isaac/runtime/profiles.h"
 #include "common.hpp"
 #include "core.h"
 
@@ -275,10 +275,10 @@ void export_core()
       MAP_ENUM(REDUCE_1D, sc)
       MAP_ENUM(REDUCE_2D_ROWS, sc)
       MAP_ENUM(REDUCE_2D_COLS, sc)
-      MAP_ENUM(MATRIX_PRODUCT_NN, sc)
-      MAP_ENUM(MATRIX_PRODUCT_TN, sc)
-      MAP_ENUM(MATRIX_PRODUCT_NT, sc)
-      MAP_ENUM(MATRIX_PRODUCT_TT, sc);
+      MAP_ENUM(GEMM_NN, sc)
+      MAP_ENUM(GEMM_TN, sc)
+      MAP_ENUM(GEMM_NT, sc)
+      MAP_ENUM(GEMM_TT, sc);
 
 #define ADD_SCALAR_HANDLING(OP)\
   .def(bp::self                                    OP int())\

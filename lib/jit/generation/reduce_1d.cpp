@@ -253,13 +253,11 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   return stream.str();
 }
 
-reduce_1d::reduce_1d(reduce_1d::parameters_type const & parameters,
-                                       fusion_policy_t binding) : base_impl<reduce_1d, reduce_1d_parameters>(parameters, binding)
+reduce_1d::reduce_1d(reduce_1d::parameters_type const & parameters) : base_impl<reduce_1d, reduce_1d_parameters>(parameters)
 { }
 
-reduce_1d::reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng,
-                               fetch_type fetch, fusion_policy_t bind):
-    base_impl<reduce_1d, reduce_1d_parameters>(reduce_1d_parameters(simd,ls,ng,fetch), bind)
+reduce_1d::reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng, fetch_type fetch):
+    base_impl<reduce_1d, reduce_1d_parameters>(reduce_1d_parameters(simd,ls,ng,fetch))
 {}
 
 std::vector<int_t> reduce_1d::input_sizes(expression_tree const  & x) const
@@ -292,7 +290,7 @@ void reduce_1d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
     unsigned int n_arg = 0;
     kernel.setSizeArg(n_arg++, size);
     kernel.setArg(n_arg++, driver::backend::workspaces::get(queue));
-    symbolic::set_arguments(x, kernel, n_arg, fusion_policy_);
+    symbolic::set_arguments(x, kernel, n_arg);
   }
 
   for (unsigned int k = 0; k < 2; k++)

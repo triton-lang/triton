@@ -22,7 +22,7 @@
 #ifndef _ISAAC_SYMBOLIC_EXECUTE_H
 #define _ISAAC_SYMBOLIC_EXECUTE_H
 
-#include "isaac/runtime/inference/profiles.h"
+#include "isaac/runtime/profiles.h"
 #include "isaac/runtime/execute.h"
 
 namespace isaac

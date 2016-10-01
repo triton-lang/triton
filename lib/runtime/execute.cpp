@@ -25,7 +25,7 @@
 #include <stdexcept>
 #include "isaac/types.h"
 #include "isaac/array.h"
-#include "isaac/runtime/inference/profiles.h"
+#include "isaac/runtime/profiles.h"
 #include "isaac/runtime/execute.h"
 #include "isaac/jit/syntax/expression/expression.h"
 #include "isaac/jit/syntax/expression/preset.h"
@@ -78,14 +78,14 @@ namespace runtime
             if(op.type_family==REDUCE_COLUMNS) return REDUCE_2D_COLS;
           }
           //Matrix Product
-          if(op.type_family==MATRIX_PRODUCT)
+          if(op.type_family==GEMM)
           {
             if(tree[lidx].type!=DENSE_ARRAY_TYPE) bp.push_back({lidx, ltype});
             if(tree[ridx].type!=DENSE_ARRAY_TYPE) bp.push_back({ridx, rtype});
-            if(op.type==MATRIX_PRODUCT_NN_TYPE) return MATRIX_PRODUCT_NN;
-            if(op.type==MATRIX_PRODUCT_TN_TYPE) return MATRIX_PRODUCT_TN;
-            if(op.type==MATRIX_PRODUCT_NT_TYPE) return MATRIX_PRODUCT_NT;
-            if(op.type==MATRIX_PRODUCT_TT_TYPE) return MATRIX_PRODUCT_TT;
+            if(op.type==GEMM_NN_TYPE) return GEMM_NN;
+            if(op.type==GEMM_TN_TYPE) return GEMM_TN;
+            if(op.type==GEMM_NT_TYPE) return GEMM_NT;
+            if(op.type==GEMM_TT_TYPE) return GEMM_TT;
           }
           //Arithmetic
           if(op.type_family==UNARY_ARITHMETIC || op.type_family==BINARY_ARITHMETIC)
@@ -96,7 +96,7 @@ namespace runtime
             else
             {
               //Matrix-Products are temporaries when not assigned
-              for(expression_type type: std::vector<expression_type>{MATRIX_PRODUCT_NN,MATRIX_PRODUCT_TN,MATRIX_PRODUCT_NT,MATRIX_PRODUCT_TT})
+              for(expression_type type: std::vector<expression_type>{GEMM_NN,GEMM_TN,GEMM_NT,GEMM_TT})
               {
                 if(ltype==type)
                   bp.push_back({lidx, ltype});
@@ -140,7 +140,7 @@ namespace runtime
     std::vector<std::shared_ptr<array> > temporaries;
     expression_type final_type;
     /*----Matrix Product-----*/
-    if(symbolic::preset::matrix_product::args args = symbolic::preset::matrix_product::check(tree.data(), rootidx)){
+    if(symbolic::preset::gemm::args args = symbolic::preset::gemm::check(tree.data(), rootidx)){
         final_type = args.type;
     }
     /*----Default-----*/

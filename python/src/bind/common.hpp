@@ -100,10 +100,10 @@ namespace tools
         else if(name=="reduce_1d") return sc::REDUCE_1D;
         else if(name=="reduce_2d_rows") return sc::REDUCE_2D_ROWS;
         else if(name=="reduce_2d_cols") return sc::REDUCE_2D_COLS;
-        else if(name=="matrix_product_nn") return sc::MATRIX_PRODUCT_NN;
-        else if(name=="matrix_product_tn") return sc::MATRIX_PRODUCT_TN;
-        else if(name=="matrix_product_nt") return sc::MATRIX_PRODUCT_NT;
-        else if(name=="matrix_product_tt") return sc::MATRIX_PRODUCT_TT;
+        else if(name=="gemm_nn") return sc::GEMM_NN;
+        else if(name=="gemm_tn") return sc::GEMM_TN;
+        else if(name=="gemm_nt") return sc::GEMM_NT;
+        else if(name=="gemm_tt") return sc::GEMM_TT;
         else
         {
             PyErr_SetString(PyExc_TypeError, "Template type not understood");

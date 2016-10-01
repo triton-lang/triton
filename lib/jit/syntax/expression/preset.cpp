@@ -30,7 +30,7 @@ namespace symbolic
 namespace preset
 {
 
-void matrix_product::handle_node(expression_tree::data_type const & tree, size_t root, args & a)
+void gemm::handle_node(expression_tree::data_type const & tree, size_t root, args & a)
 {
     expression_tree::node const & node = tree[root];
     if(node.type != COMPOSITE_OPERATOR_TYPE)
@@ -40,16 +40,16 @@ void matrix_product::handle_node(expression_tree::data_type const & tree, size_t
     expression_tree::node const & right = tree[node.binary_operator.rhs];
 
     //Matrix-Matrix product node
-    if(node.binary_operator.op.type_family==MATRIX_PRODUCT)
+    if(node.binary_operator.op.type_family==GEMM)
     {
         if(left.type==DENSE_ARRAY_TYPE) a.A = &left;
         if(right.type==DENSE_ARRAY_TYPE) a.B = &right;
         switch(node.binary_operator.op.type)
         {
-          case MATRIX_PRODUCT_NN_TYPE: a.type = MATRIX_PRODUCT_NN; break;
-          case MATRIX_PRODUCT_NT_TYPE: a.type = MATRIX_PRODUCT_NT; break;
-          case MATRIX_PRODUCT_TN_TYPE: a.type = MATRIX_PRODUCT_TN; break;
-          case MATRIX_PRODUCT_TT_TYPE: a.type = MATRIX_PRODUCT_TT; break;
+          case GEMM_NN_TYPE: a.type = GEMM_NN; break;
+          case GEMM_NT_TYPE: a.type = GEMM_NT; break;
+          case GEMM_TN_TYPE: a.type = GEMM_TN; break;
+          case GEMM_TT_TYPE: a.type = GEMM_TT; break;
           default: break;
         }
     }
@@ -59,7 +59,7 @@ void matrix_product::handle_node(expression_tree::data_type const & tree, size_t
     {
         //alpha*PROD
         if(left.type==VALUE_SCALAR_TYPE  && right.type==COMPOSITE_OPERATOR_TYPE
-           && right.binary_operator.op.type_family==MATRIX_PRODUCT)
+           && right.binary_operator.op.type_family==GEMM)
         {
             a.alpha = cast(value_scalar(left.scalar, left.dtype), node.dtype);
             handle_node(tree, node.binary_operator.rhs, a);
@@ -74,13 +74,13 @@ void matrix_product::handle_node(expression_tree::data_type const & tree, size_t
     }
 }
 
-matrix_product::args matrix_product::check(expression_tree::data_type const & tree, size_t root)
+gemm::args gemm::check(expression_tree::data_type const & tree, size_t root)
 {
     expression_tree::node const & node = tree[root];
     expression_tree::node const & left = tree[node.binary_operator.lhs];
     expression_tree::node const & right = tree[node.binary_operator.rhs];
     numeric_type dtype = node.dtype;
-    matrix_product::args result ;
+    gemm::args result ;
     if(dtype==INVALID_NUMERIC_TYPE)
       return result;
     result.alpha = value_scalar(1, dtype);

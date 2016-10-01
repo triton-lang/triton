@@ -49,8 +49,8 @@ private:
   std::string generate_impl(std::string const & suffix,  expression_tree const  & expressions, driver::Device const & device, symbolic::symbols_table const & mapping) const;
 
 public:
-  reduce_1d(reduce_1d::parameters_type const & parameters, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
-  reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng, fetch_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
+  reduce_1d(reduce_1d::parameters_type const & parameters);
+  reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng, fetch_type fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:

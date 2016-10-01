@@ -283,9 +283,8 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
 }
 
 reduce_2d::reduce_2d(reduce_2d::parameters_type const & parameters,
-                                         operation_type_family rtype,
-                                         fusion_policy_t fusion_policy) :
-  base_impl<reduce_2d, reduce_2d_parameters>(parameters, fusion_policy),
+                                         operation_type_family rtype) :
+  base_impl<reduce_2d, reduce_2d_parameters>(parameters),
   reduction_type_(rtype){ }
 
 std::vector<int_t> reduce_2d::input_sizes(expression_tree const & tree) const
@@ -322,7 +321,7 @@ void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
     kernel.setSizeArg(n_arg++, M);
     kernel.setSizeArg(n_arg++, N);
     kernel.setArg(n_arg++, driver::backend::workspaces::get(queue)); //Temporary buffers
-    symbolic::set_arguments(tree, kernel, n_arg, fusion_policy_);
+    symbolic::set_arguments(tree, kernel, n_arg);
   }
 
   //NDRange
@@ -332,15 +331,15 @@ void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
     control.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }
 
-reduce_2d_rows::reduce_2d_rows(reduce_2d_parameters  const & parameters,fusion_policy_t fusion_policy): reduce_2d(parameters, REDUCE_ROWS, fusion_policy){}
+reduce_2d_rows::reduce_2d_rows(reduce_2d_parameters  const & parameters): reduce_2d(parameters, REDUCE_ROWS){}
 
 reduce_2d_rows::reduce_2d_rows(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2,
-               fetch_type fetch, fusion_policy_t bind): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS, bind) {}
+               fetch_type fetch): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS) {}
 
-reduce_2d_cols::reduce_2d_cols(reduce_2d::parameters_type  const & parameters, fusion_policy_t fusion_policy): reduce_2d(parameters, REDUCE_COLUMNS, fusion_policy){}
+reduce_2d_cols::reduce_2d_cols(reduce_2d::parameters_type  const & parameters): reduce_2d(parameters, REDUCE_COLUMNS){}
 
 reduce_2d_cols::reduce_2d_cols(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2,
-               fetch_type fetch, fusion_policy_t bind): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS, bind) {}
+               fetch_type fetch): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS) {}
 
 
 }

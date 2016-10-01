@@ -101,10 +101,10 @@ std::string to_string(operation_type type)
     case CAST_DOUBLE_TYPE : return "(double)";
 
     //dot
-    case MATRIX_PRODUCT_NN_TYPE: return "matmatNN";
-    case MATRIX_PRODUCT_NT_TYPE: return "matmatNT";
-    case MATRIX_PRODUCT_TN_TYPE: return "matmatTN";
-    case MATRIX_PRODUCT_TT_TYPE: return "matmatTT";
+    case GEMM_NN_TYPE: return "matmatNN";
+    case GEMM_NT_TYPE: return "matmatNT";
+    case GEMM_TN_TYPE: return "matmatTN";
+    case GEMM_TT_TYPE: return "matmatTT";
 
     //others
     case RESHAPE_TYPE: return "reshape";

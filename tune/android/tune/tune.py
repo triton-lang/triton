@@ -95,7 +95,7 @@ class Tuner:
                 sizes = product(pow2range(4,17), pow2range(4,17))
         
         #BLAS3 training sizes
-        if operation in [sc.templates.matrix_product_nn, sc.templates.matrix_product_nt, sc.templates.matrix_product_tn, sc.templates.matrix_product_tt]:
+        if operation in [sc.templates.gemm_nn, sc.templates.gemm_nt, sc.templates.gemm_tn, sc.templates.gemm_tt]:
             if level=='simple':
                 sizes = [(2560,2560,2560)]
             elif level=='intermediate':

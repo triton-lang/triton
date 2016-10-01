@@ -34,7 +34,7 @@ namespace preset
 {
 
 
-class matrix_product
+class gemm
 {
 
 public:

@@ -25,9 +25,4 @@ else()
     foreach(NAME fusion)
         add_isaac_test("runtime" ${NAME})
     endforeach()
-    #runtime/scheduler
-    foreach(NAME heft)
-        add_isaac_test("runtime/scheduler" ${NAME})
-    endforeach()
-
 endif()
