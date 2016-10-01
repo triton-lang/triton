@@ -35,10 +35,10 @@ def parse_arguments():
     parser.add_argument('--reduce_1d', action='store_true', help='Tune REDUCE [1D]')
     parser.add_argument('--reduce_2d_rows', action='store_true', help='Tune REDUCE [2D/rows]')
     parser.add_argument('--reduce_2d_cols', action='store_true', help='Tune REDUCE [2D/cols]')
-    parser.add_argument('--matrix_product_nn', action='store_true', help='Tune MATRIX PRODUCT [NN]')
-    parser.add_argument('--matrix_product_tn', action='store_true', help='Tune MATRIX PRODUCT [TN]')
-    parser.add_argument('--matrix_product_nt', action='store_true', help='Tune MATRIX PRODUCT [NT]')
-    parser.add_argument('--matrix_product_tt', action='store_true', help='Tune MATRIX PRODUCT [TT]')
+    parser.add_argument('--gemm_nn', action='store_true', help='Tune MATRIX PRODUCT [NN]')
+    parser.add_argument('--gemm_tn', action='store_true', help='Tune MATRIX PRODUCT [TN]')
+    parser.add_argument('--gemm_nt', action='store_true', help='Tune MATRIX PRODUCT [NT]')
+    parser.add_argument('--gemm_tt', action='store_true', help='Tune MATRIX PRODUCT [TT]')
     args = parser.parse_args()
     
     #Device
@@ -51,7 +51,7 @@ def parse_arguments():
         print selected , '-',  sc.driver.device_type_to_string(d.type), '-', d.name, 'on', d.platform.name
     
     #Operations
-    operations = ['elementwise_1d', 'reduce_1d', 'elementwise_2d', 'reduce_2d_rows', 'reduce_2d_cols', 'matrix_product_nn', 'matrix_product_tn', 'matrix_product_nt', 'matrix_product_tt']
+    operations = ['elementwise_1d', 'reduce_1d', 'elementwise_2d', 'reduce_2d_rows', 'reduce_2d_cols', 'gemm_nn', 'gemm_tn', 'gemm_nt', 'gemm_tt']
     operations = [getattr(sc.templates,op) for op in operations  if getattr(args, op)]
         
     return (device, operations, args.json)

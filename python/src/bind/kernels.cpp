@@ -23,7 +23,7 @@
 #include "isaac/jit/generation/elementwise_2d.h"
 #include "isaac/jit/generation/reduce_1d.h"
 #include "isaac/jit/generation/reduce_2d.h"
-#include "isaac/jit/generation/matrix_product.h"
+#include "isaac/jit/generation/gemm.h"
 
 #include "common.hpp"
 #include "kernels.h"
@@ -83,11 +83,11 @@ void export_templates()
   WRAP_BASE(reduce_2d)
   WRAP_TEMPLATE(reduce_2d_rows, reduce_2d, uint, uint, uint, uint, uint, tpt::fetch_type)
   WRAP_TEMPLATE(reduce_2d_cols, reduce_2d, uint, uint, uint, uint, uint, tpt::fetch_type)
-  WRAP_BASE(matrix_product)
-  WRAP_TEMPLATE(matrix_product_nn, matrix_product, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
-  WRAP_TEMPLATE(matrix_product_tn, matrix_product, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
-  WRAP_TEMPLATE(matrix_product_nt, matrix_product, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
-  WRAP_TEMPLATE(matrix_product_tt, matrix_product, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
+  WRAP_BASE(gemm)
+  WRAP_TEMPLATE(gemm_nn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
+  WRAP_TEMPLATE(gemm_tn, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
+  WRAP_TEMPLATE(gemm_nt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
+  WRAP_TEMPLATE(gemm_tt, gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
 
 
 }

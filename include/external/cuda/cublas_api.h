@@ -1508,7 +1508,7 @@ CUBLASAPI cublasStatus_t CUBLASWINAPI cublasZhpr2_v2 (cublasHandle_t handle,
 
 /* ---------------- CUBLAS BLAS3 functions ---------------- */
 
-/* MATRIX_PRODUCT */
+/* GEMM */
 CUBLASAPI cublasStatus_t CUBLASWINAPI cublasSgemm_v2 (cublasHandle_t handle, 
                                                       cublasOperation_t transa,
                                                       cublasOperation_t transb, 
@@ -2042,7 +2042,7 @@ CUBLASAPI cublasStatus_t CUBLASWINAPI cublasZtrmm_v2(cublasHandle_t handle, cubl
                                                      int ldb,
                                                      cuDoubleComplex *C,
                                                      int ldc);
-/* BATCH MATRIX_PRODUCT */
+/* BATCH GEMM */
 CUBLASAPI cublasStatus_t CUBLASWINAPI cublasSgemmBatched (cublasHandle_t handle,
                                                           cublasOperation_t transa,
                                                           cublasOperation_t transb, 

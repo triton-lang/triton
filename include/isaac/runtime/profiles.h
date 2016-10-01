@@ -30,7 +30,7 @@
 #include "isaac/common/expression_type.h"
 #include "isaac/common/numeric_type.h"
 #include "isaac/jit/generation/base.h"
-#include "isaac/runtime/inference/predictors/random_forest.h"
+#include "isaac/runtime/predictors/random_forest.h"
 #include "isaac/jit/syntax/expression/expression.h"
 
 namespace isaac
@@ -45,7 +45,7 @@ public:
     class value_type
     {
       typedef std::shared_ptr<templates::base> template_pointer;
-      typedef std::vector< template_pointer > templates_container;
+      typedef std::vector<template_pointer> templates_container;
 
     private:
       std::string define_extension(std::string const & extensions, std::string const & ext);

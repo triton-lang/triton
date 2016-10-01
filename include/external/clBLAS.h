@@ -44,7 +44,7 @@ extern "C" {
  * SWAP, SCAL, COPY, AXPY, DOT, DOTU, DOTC, ROTG, ROTMG, ROT, ROTM, iAMAX, ASUM and NRM2,
  * BLAS-2 functions GEMV, SYMV, TRMV, TRSV, HEMV, SYR, SYR2, HER, HER2, GER, GERU, GERC,
  * TPMV, SPMV, HPMV, TPSV, SPR, SPR2, HPR, HPR2, GBMV, TBMV, SBMV, HBMV and TBSV
- * and BLAS-3 functions MATRIX_PRODUCT, SYMM, TRMM, TRSM, HEMM, HERK, HER2K, SYRK and SYR2K.
+ * and BLAS-3 functions GEMM, SYMM, TRMM, TRSM, HEMM, HERK, HER2K, SYRK and SYR2K.
  *
  * This library’s primary goal is to assist the end user to enqueue OpenCL
  * kernels to process BLAS functions in an OpenCL-efficient manner, while
@@ -7314,7 +7314,7 @@ clblasZtbsv(
 /*@}*/
 
 /**
- * @defgroup MATRIX_PRODUCT MATRIX_PRODUCT - General matrix-matrix multiplication
+ * @defgroup GEMM GEMM - General matrix-matrix multiplication
  * @ingroup BLAS3
  */
 /*@{*/
@@ -7372,7 +7372,7 @@ clblasZtbsv(
  *        the size of the respective buffer object;
  *   - the same error codes as clblasSgemm() otherwise.
  *
- * @ingroup MATRIX_PRODUCT
+ * @ingroup GEMM
  */
 clblasStatus
 clblasSgemm(
@@ -7453,7 +7453,7 @@ clblasSgemm(
  *        the size of the respective buffer object;
  *   - the same error codes as the clblasSgemm() function otherwise.
  *
- * @ingroup MATRIX_PRODUCT
+ * @ingroup GEMM
  */
 clblasStatus
 clblasDgemm(
@@ -7527,7 +7527,7 @@ clblasDgemm(
  *        the size of the respective buffer object;
  *   - the same error codes as the clblasSgemm() function otherwise.
  *
- * @ingroup MATRIX_PRODUCT
+ * @ingroup GEMM
  */
 clblasStatus
 clblasCgemm(
@@ -7603,7 +7603,7 @@ clblasCgemm(
  *        the size of the respective buffer object;
  *   - the same error codes as the clblasSgemm() function otherwise.
  *
- * @ingroup MATRIX_PRODUCT
+ * @ingroup GEMM
  */
 clblasStatus
 clblasZgemm(

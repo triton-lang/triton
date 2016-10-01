@@ -45,7 +45,7 @@ struct reduce_2d_parameters : public base::parameters_type
 class reduce_2d : public base_impl<reduce_2d, reduce_2d_parameters>
 {
 protected:
-  reduce_2d(reduce_2d::parameters_type const & , operation_type_family, fusion_policy_t);
+  reduce_2d(reduce_2d::parameters_type const & , operation_type_family);
 private:
   int is_invalid_impl(driver::Device const &, expression_tree const &) const;
   unsigned int lmem_usage(expression_tree const &) const;
@@ -61,15 +61,15 @@ private:
 class reduce_2d_rows : public reduce_2d
 {
 public:
-  reduce_2d_rows(reduce_2d::parameters_type  const &, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
-  reduce_2d_rows(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetch_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
+  reduce_2d_rows(reduce_2d::parameters_type  const &);
+  reduce_2d_rows(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetch_type fetch);
 };
 
 class reduce_2d_cols : public reduce_2d
 {
 public:
-  reduce_2d_cols(reduce_2d::parameters_type  const &, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
-  reduce_2d_cols(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetch_type fetch, fusion_policy_t bind = FUSE_INDEPENDENT);
+  reduce_2d_cols(reduce_2d::parameters_type  const &);
+  reduce_2d_cols(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2, fetch_type fetch);
 };
 
 }

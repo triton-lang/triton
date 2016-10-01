@@ -96,17 +96,12 @@ std::string hash(expression_tree const & tree)
 }
 
 //Set arguments
-void set_arguments(expression_tree const & tree, driver::Kernel & kernel, unsigned int & current_arg, fusion_policy_t fusion_policy)
+void set_arguments(expression_tree const & tree, driver::Kernel & kernel, unsigned int & current_arg)
 {
   driver::backend_type backend = tree.context().backend();
 
   //Create binder
-  std::unique_ptr<symbolic_binder> binder;
-  if (fusion_policy==FUSE_SEQUENTIAL)
-      binder.reset(new bind_sequential(backend));
-  else
-      binder.reset(new bind_independent(backend));
-
+  std::unique_ptr<symbolic_binder> binder(new bind_independent(backend));
   //assigned
   std::vector<size_t> assignee = symbolic::find(tree, [&](expression_tree::node const & node){return node.type==COMPOSITE_OPERATOR_TYPE && is_assignment(node.binary_operator.op.type);});
   for(size_t& x: assignee) x = tree[x].binary_operator.lhs;
@@ -168,18 +163,13 @@ std::shared_ptr<object> make_symbolic(Args&&... args)
   return std::shared_ptr<object>(new T(std::forward<Args>(args)...));
 }
 
-symbols_table symbolize(fusion_policy_t fusion_policy, isaac::expression_tree const & tree)
+symbols_table symbolize(isaac::expression_tree const & tree)
 {
   driver::Context const & context = tree.context();
 
   //binder
   symbols_table table;
-  std::unique_ptr<symbolic_binder> binder;
-  if (fusion_policy==FUSE_SEQUENTIAL)
-      binder.reset(new bind_sequential(context.backend()));
-  else
-      binder.reset(new bind_independent(context.backend()));
-
+  std::unique_ptr<symbolic_binder> binder(new bind_independent(context.backend()));
   //assigned
   std::vector<size_t> assignee = symbolic::find(tree, [&](expression_tree::node const & node){return node.type==COMPOSITE_OPERATOR_TYPE && is_assignment(node.binary_operator.op.type);});
   for(size_t& x: assignee) x = tree[x].binary_operator.lhs;

@@ -31,9 +31,9 @@ namespace isaac
 namespace templates
 {
 
-struct matrix_product_parameters : public base::parameters_type
+struct gemm_parameters : public base::parameters_type
 {
-  matrix_product_parameters(unsigned int vwidth
+  gemm_parameters(unsigned int vwidth
                             , unsigned int ls0, unsigned int KL, unsigned int ls1, unsigned int D
                             , unsigned int ms, unsigned int ks, unsigned int ns
                             , fetch_type Afetch, fetch_type Bfetch
@@ -59,7 +59,7 @@ struct matrix_product_parameters : public base::parameters_type
   bool unroll_outer;
 };
 
-class matrix_product : public base_impl<matrix_product, matrix_product_parameters>
+class gemm : public base_impl<gemm, gemm_parameters>
 {
 private:
   unsigned int temporary_workspace(expression_tree const & expressions) const;
@@ -69,9 +69,9 @@ private:
   std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const &) const;
   void enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K, const expression_tree::node &A, const expression_tree::node &B, const expression_tree::node &C,
                      value_scalar const &alpha, value_scalar const &beta, driver::Program const & program, std::string const & suffix, runtime::execution_options_type const & options);
-  std::vector<int_t> infos(expression_tree const & expressions,  isaac::symbolic::preset::matrix_product::args &arguments) const;
+  std::vector<int_t> infos(expression_tree const & expressions,  isaac::symbolic::preset::gemm::args &arguments) const;
 public:
-  matrix_product(matrix_product::parameters_type const & parameters, char A_trans, char B_trans);
+  gemm(gemm::parameters_type const & parameters, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &ctr);
 private:
@@ -80,38 +80,38 @@ private:
   expression_type type_;
 };
 
-class matrix_product_nn : public matrix_product
+class gemm_nn : public gemm
 {
 public:
-  matrix_product_nn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_nn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
-                      , int_t lfetch0, int_t lfetch1);
+                      , int_t lf0, int_t lf1);
 };
 
-class matrix_product_tn : public matrix_product
+class gemm_tn : public gemm
 {
 public:
-  matrix_product_tn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_tn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
-                      , int_t lfetch0, int_t lfetch1);
-};
-
-
-class matrix_product_nt : public matrix_product
-{
-public:
-  matrix_product_nt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
-                      , int_t lfetch0, int_t lfetch1);
+                      , int_t lf0, int_t lf1);
 };
 
 
-class matrix_product_tt : public matrix_product
+class gemm_nt : public gemm
 {
 public:
-  matrix_product_tt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_nt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
-                      , int_t lfetch0, int_t lfetch1);
+                      , int_t lf0, int_t lf1);
+};
+
+
+class gemm_tt : public gemm
+{
+public:
+  gemm_tt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
+                      , int_t lf0, int_t lf1);
 };
 
 }

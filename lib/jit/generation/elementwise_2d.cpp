@@ -111,13 +111,12 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
   return stream.str();
 }
 
-elementwise_2d::elementwise_2d(parameters_type const & parameters, fusion_policy_t fusion_policy) :
-  base_impl<elementwise_2d, elementwise_2d_parameters>(parameters, fusion_policy){ }
+elementwise_2d::elementwise_2d(parameters_type const & parameters) :
+  base_impl<elementwise_2d, elementwise_2d_parameters>(parameters){ }
 
 elementwise_2d::elementwise_2d(unsigned int simd, unsigned int ls1, unsigned int ls2,
-                               unsigned int ng1, unsigned int ng2, fetch_type fetch,
-                               fusion_policy_t bind):
-    base_impl<elementwise_2d, elementwise_2d_parameters>(elementwise_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), bind)
+                               unsigned int ng1, unsigned int ng2, fetch_type fetch):
+    base_impl<elementwise_2d, elementwise_2d_parameters>(elementwise_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch))
 {}
 
 std::vector<int_t> elementwise_2d::input_sizes(expression_tree const  & expression) const{
@@ -136,7 +135,7 @@ void elementwise_2d::enqueue(driver::CommandQueue & /*queue*/, driver::Program c
   std::vector<int_t> MN = input_sizes(expressions);
   kernel.setSizeArg(current_arg++, MN[0]);
   kernel.setSizeArg(current_arg++, MN[1]);
-  symbolic::set_arguments(expressions, kernel, current_arg, fusion_policy_);
+  symbolic::set_arguments(expressions, kernel, current_arg);
 
   control.execution_options().enqueue(program.context(), kernel, global, local);
 }

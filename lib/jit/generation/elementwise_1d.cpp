@@ -118,14 +118,13 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
   return stream.str();
 }
 
-elementwise_1d::elementwise_1d(elementwise_1d_parameters const & parameters,
-                               fusion_policy_t fusion_policy) :
-    base_impl<elementwise_1d, elementwise_1d_parameters>(parameters, fusion_policy)
+elementwise_1d::elementwise_1d(elementwise_1d_parameters const & parameters) :
+    base_impl<elementwise_1d, elementwise_1d_parameters>(parameters)
 {}
 
 elementwise_1d::elementwise_1d(unsigned int simd, unsigned int ls, unsigned int ng,
-                               fetch_type fetch, fusion_policy_t bind):
-    base_impl<elementwise_1d, elementwise_1d_parameters>(elementwise_1d_parameters(simd,ls,ng,fetch), bind)
+                               fetch_type fetch):
+    base_impl<elementwise_1d, elementwise_1d_parameters>(elementwise_1d_parameters(simd,ls,ng,fetch))
 {}
 
 
@@ -149,7 +148,7 @@ void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & pro
   //Arguments
   unsigned int current_arg = 0;
   kernel.setSizeArg(current_arg++, size);
-  symbolic::set_arguments(expressions, kernel, current_arg, fusion_policy_);
+  symbolic::set_arguments(expressions, kernel, current_arg);
   control.execution_options().enqueue(program.context(), kernel, global, local);
 }
 

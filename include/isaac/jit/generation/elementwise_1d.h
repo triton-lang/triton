@@ -43,8 +43,8 @@ private:
   virtual int is_invalid_impl(driver::Device const &, expression_tree const  &) const;
   std::string generate_impl(std::string const & suffix, expression_tree const  & expressions, driver::Device const & device, symbolic::symbols_table const & symbols) const;
 public:
-  elementwise_1d(elementwise_1d::parameters_type const & parameters, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
-  elementwise_1d(unsigned int _vwidth, unsigned int _group_size, unsigned int _num_groups, fetch_type _fetch, fusion_policy_t fusion_policy = FUSE_INDEPENDENT);
+  elementwise_1d(elementwise_1d::parameters_type const & parameters);
+  elementwise_1d(unsigned int _vwidth, unsigned int _group_size, unsigned int _num_groups, fetch_type _fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 };

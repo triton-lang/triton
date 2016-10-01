@@ -153,7 +153,7 @@ class IsaacApp(App):
                     self.lock_screen()
                 operations = [('blas1', (sc.templates.elementwise_1d,)),
                               ('blas2', (sc.templates.reduce_2d_rows, sc.templates.reduce_2d_cols)),
-                              ('blas3', (sc.templates.matrix_product_nn, sc.templates.gemm_tn, sc.templates.gemm_nt, sc.templates.gemm_tt))]
+                              ('blas3', (sc.templates.gemm_nn, sc.templates.gemm_tn, sc.templates.gemm_nt, sc.templates.gemm_tt))]
                 for opclass, optype in operations:
                     for op in optype:
                         progress_bar = LabelProgressBar(10, self.logger.label, metric_name_of(op))

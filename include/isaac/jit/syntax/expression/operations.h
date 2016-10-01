@@ -43,7 +43,7 @@ enum operation_type_family
   REDUCE_COLUMNS,
 
   // BLAS3-type
-  MATRIX_PRODUCT
+  GEMM
 };
 
 /** @brief Enumeration for identifying the possible operations */
@@ -116,10 +116,10 @@ enum operation_type
 
   //Products
   OUTER_PROD_TYPE,
-  MATRIX_PRODUCT_NN_TYPE,
-  MATRIX_PRODUCT_TN_TYPE,
-  MATRIX_PRODUCT_NT_TYPE,
-  MATRIX_PRODUCT_TT_TYPE,
+  GEMM_NN_TYPE,
+  GEMM_TN_TYPE,
+  GEMM_NT_TYPE,
+  GEMM_TT_TYPE,
 
   //Access modifiers
   RESHAPE_TYPE,

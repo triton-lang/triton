@@ -29,7 +29,7 @@
 #include "isaac/jit/generation/reduce_1d.h"
 #include "isaac/jit/generation/elementwise_2d.h"
 #include "isaac/jit/generation/reduce_2d.h"
-#include "isaac/jit/generation/matrix_product.h"
+#include "isaac/jit/generation/gemm.h"
 #include "isaac/jit/generation/base.h"
 #include "isaac/exception/api.h"
 #include "isaac/jit/syntax/engine/process.h"
@@ -43,7 +43,7 @@ namespace templates
 base::parameters_type::parameters_type(unsigned int _vwidth, int_t _ls0, int_t _ls1, int_t _num_kernels) : vwidth(_vwidth), ls0(_ls0), ls1(_ls1), num_kernels(_num_kernels)
 { }
 
-base::base(fusion_policy_t fusion_policy) : fusion_policy_(fusion_policy)
+base::base()
 {}
 
 unsigned int base::lmem_usage(expression_tree const  &) const
@@ -66,7 +66,7 @@ std::string base::generate(std::string const & suffix, expression_tree const  & 
     throw operation_not_supported_exception("The supplied parameters for this template are invalid : err " + tools::to_string(err));
 
   //Create mapping
-  symbolic::symbols_table mapping = symbolic::symbolize(fusion_policy_, expression);
+  symbolic::symbols_table mapping = symbolic::symbolize(expression);
   return generate_impl(suffix, expression, device, mapping);
 }
 
@@ -75,7 +75,7 @@ int base_impl<TType, PType>::is_invalid_impl(driver::Device const &, expression_
 { return TEMPLATE_VALID; }
 
 template<class TType, class PType>
-base_impl<TType, PType>::base_impl(parameters_type const & parameters, fusion_policy_t fusion_policy) : base(fusion_policy), p_(parameters)
+base_impl<TType, PType>::base_impl(parameters_type const & parameters) : base(), p_(parameters)
 { }
 
 template<class TType, class PType>
@@ -121,7 +121,7 @@ template class base_impl<elementwise_1d, elementwise_1d_parameters>;
 template class base_impl<reduce_1d, reduce_1d_parameters>;
 template class base_impl<elementwise_2d, elementwise_2d_parameters>;
 template class base_impl<reduce_2d, reduce_2d_parameters>;
-template class base_impl<matrix_product, matrix_product_parameters>;
+template class base_impl<gemm, gemm_parameters>;
 
 }
 }

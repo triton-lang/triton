@@ -83,9 +83,9 @@ def tree_of(template, sizes, context):
         A = sc.empty((M,N), context=context)
         x = sc.empty(N, context=context)
         return sc.dot(A.T, x) if T else sc.dot(A, x), (A, x)
-    elif issubclass(template, sc.templates.matrix_product):
-        AT = template is sc.templates.matrix_product_tn or template is sc.templates.matrix_product_tt
-        BT = template is sc.templates.matrix_product_nt or template is sc.templates.matrix_product_tt
+    elif issubclass(template, sc.templates.gemm):
+        AT = template is sc.templates.gemm_tn or template is sc.templates.gemm_tt
+        BT = template is sc.templates.gemm_nt or template is sc.templates.gemm_tt
         M, N, K = sizes
         A = sc.empty((K, M) if AT else (M, K), context=context)
         B = sc.empty((N, K) if BT else (K, N), context=context)
@@ -102,19 +102,19 @@ def memory_footprint(template, sizes):
         return 4*sizes[0]*sizes[1]*1e-9
     elif issubclass(template, sc.templates.reduce_2d):
         return 4*sizes[0]*sizes[1]*1e-9
-    elif issubclass(template, sc.templates.matrix_product):
+    elif issubclass(template, sc.templates.gemm):
         return 4*(sizes[0]*sizes[1] + sizes[0]*sizes[2] + sizes[1]*sizes[2])*1e-9
     
 def metric_of(template):
     memory_bound = [sc.templates.elementwise_1d, sc.templates.reduce_1d, sc.templates.elementwise_2d, sc.templates.reduce_2d]
-    compute_bound = [sc.templates.matrix_product]
+    compute_bound = [sc.templates.gemm]
     if any([issubclass(template, x) for x in memory_bound]):
         return lambda sizes, t: memory_footprint(template, sizes)/t
     elif any([issubclass(template, x) for x in compute_bound]):
         return lambda sizes, t: 2*sizes[0]*sizes[1]*sizes[2]*1e-9/t
            
 def metric_name_of(template):
-    if issubclass(template, sc.templates.matrix_product):
+    if issubclass(template, sc.templates.gemm):
         return 'GFLOPS'
     return 'GB/S'
 
@@ -127,7 +127,7 @@ def genetic_infos_of(template):
         return {'categorical': [5], 'nbits': [3,3,3,3,4,2]}
     elif issubclass(template, sc.templates.reduce_2d):
         return {'categorical': [5], 'nbits': [3,3,3,3,4,2]}
-    elif issubclass(template, sc.templates.matrix_product):
+    elif issubclass(template, sc.templates.gemm):
         return {'categorical': [8,9], 'nbits': [3,3,3,3,3,2,2,2,2,2,3,3]}
 
 
