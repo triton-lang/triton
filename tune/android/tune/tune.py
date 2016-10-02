@@ -99,22 +99,22 @@ class Tuner:
             if level=='simple':
                 sizes = [(2560,2560,2560)]
             elif level=='intermediate':
-               sizes = [#Square
-                         (896,896,896),
-                         (1536,1536,1536),
-                         (2176, 2176,2176),
-                         #Rank-32 updates
-                         (896,896,32),
-                         (1536,1536,32),
-                         (2176,2176,32),
-                         #Covariance
-                         (32,32,16000),
-                         (64,64,64000),
-                         (256,256,32000)]
+               sizes = []
+               #Square
+               for N in [896, 1760, 2048, 2560]:
+				   sizes += [(N, N, N)]
+               #LaPack
+               for N in [896, 1760, 2048, 2560]:
+				   for K in [16, 32, 64, 128]:
+					   sizes += [(N, N, K)]
+               #Covariance
+               for N in [16, 32, 64, 128]:
+				   for K in [16000,32000,64000,128000]:
+					   sizes += [(N, N, K)]
                #DeepSpeech
-               for MK in [1760, 2048, 2560]:
-                   for N in [16, 32, 64, 128, MK]:
-                       sizes += [(MK, N, MK)]
+               for M in [1760, 2048, 2560]:
+                   for N in [16, 32, 64, 128, M]:
+                       sizes += [(M, N, M)]
             elif level=='full':
 			    sizes = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 17))
 

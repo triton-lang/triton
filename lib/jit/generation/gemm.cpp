@@ -52,8 +52,12 @@ gemm_parameters::gemm_parameters(unsigned int vwidth
   unsigned int gemm::lmem_usage(expression_tree const & expression) const
   {
     unsigned int N = 0;
-    N += p_.kL * p_.mL;
-    N += p_.nL * p_.kL;
+    size_t llda = (A_trans_=='N')?p_.mL:p_.kL+1;
+    size_t lnda = (A_trans_=='N')?p_.kL:p_.mL;
+    size_t lldb = (B_trans_=='T')?p_.nL:p_.kL+1;
+    size_t lndb = (B_trans_=='T')?p_.kL:p_.nL;
+    N += llda*lnda;
+    N += lldb*lndb;
     return N*size_of(expression.dtype());
   }
 
@@ -180,10 +184,12 @@ gemm_parameters::gemm_parameters(unsigned int vwidth
     stream << std::endl;
 
     stream << "//pointers" << std::endl;
-    size_t llda = (A_trans_=='N')?p_.mL:p_.kL;
-    size_t lldb = (B_trans_=='T')?p_.nL:p_.kL;
-    stream << "$LOCAL " << sdtype << " lA[" << p_.kL*p_.mL << "];" << std::endl;
-    stream << "$LOCAL " << sdtype << " lB[" << p_.kL*p_.nL << "];" << std::endl;
+    size_t llda = (A_trans_=='N')?p_.mL:p_.kL+1;
+    size_t lnda = (A_trans_=='N')?p_.kL:p_.mL;
+    size_t lldb = (B_trans_=='T')?p_.nL:p_.kL+1;
+    size_t lndb = (B_trans_=='T')?p_.kL:p_.nL;
+    stream << "$LOCAL " << sdtype << " lA[" << llda*lnda << "];" << std::endl;
+    stream << "$LOCAL " << sdtype << " lB[" << lldb*lndb << "];" << std::endl;
     unsigned int npA = p_.mL/(A_trans_=='N'?p_.lf0*p_.vwidth:p_.lf1);
     unsigned int npB = p_.nL/(B_trans_=='T'?p_.lf0*p_.vwidth:p_.lf1);
     stream << "$GLOBAL " << sdtype << "* Ai[" << npA << "];" << std::endl;
