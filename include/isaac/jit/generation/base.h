@@ -71,7 +71,7 @@ static const int TEMPLATE_LOCAL_FETCH_1_MUST_BE_ML_MULTIPLE = -18;
 static const int TEMPLATE_TEMPORARY_TOO_LARGE = -19;
 static const int TEMPLATE_BLOCK_SIZE_TOO_LARGE = -20;
 
-class base
+class base: public std::enable_shared_from_this<base>
 {
 private:
   virtual std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const & mapping) const = 0;
@@ -85,6 +85,9 @@ public:
   virtual int is_invalid(expression_tree const & expressions, driver::Device const & device) const = 0;
   virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & expressions) = 0;
   std::string generate(std::string const & suffix, expression_tree const & expressions, driver::Device const & device);
+  std::shared_ptr<base> getptr() {
+      return shared_from_this();
+  }
 };
 
 

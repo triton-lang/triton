@@ -36,8 +36,7 @@ private:
   int is_invalid_impl(driver::Device const &, expression_tree const  &) const;
   std::string generate_impl(std::string const & suffix, expression_tree const  & expressions, driver::Device const & device, symbolic::symbols_table const & mapping) const;
 public:
-  elementwise_2d(parameters_type const & parameters);
-  elementwise_2d(uint32_t simd, uint32_t ls1, uint32_t ls2,  uint32_t ng1, uint32_t ng2, fetch_type fetch);
+  elementwise_2d(uint32_t vwidth, uint32_t ls0, uint32_t ls1,  uint32_t ng0, uint32_t ng1, fetch_type fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:

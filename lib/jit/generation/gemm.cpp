@@ -40,10 +40,10 @@ namespace templates
   uint32_t gemm::lmem_usage(expression_tree const & expression) const
   {
     uint32_t N = 0;
-    size_t llda = (A_trans_=='N')?p_.mL:p_.kL+1;
-    size_t lnda = (A_trans_=='N')?p_.kL:p_.mL;
-    size_t lldb = (B_trans_=='T')?p_.nL:p_.kL+1;
-    size_t lndb = (B_trans_=='T')?p_.kL:p_.nL;
+    size_t llda = (A_trans_=='N')?mL_:kL_+1;
+    size_t lnda = (A_trans_=='N')?kL_:mL_;
+    size_t lldb = (B_trans_=='T')?nL_:kL_+1;
+    size_t lndb = (B_trans_=='T')?kL_:nL_;
     N += llda*lnda;
     N += lldb*lndb;
     return N*size_of(expression.dtype());
@@ -51,7 +51,7 @@ namespace templates
 
   uint32_t gemm::registers_usage(expression_tree const & expression) const
   {
-    uint32_t N = p_.mS * p_.nS + p_.mS * p_.kS + p_.kS * p_.nS;
+    uint32_t N = mS_ * nS_ + mS_ * kS_ + kS_ * nS_;
     return N*size_of(expression.dtype());
   }
 
@@ -59,51 +59,51 @@ namespace templates
   {
       std::vector<int_t> MNK = input_sizes(expressions);
       int_t M = MNK[0]; int_t N = MNK[1];
-      if(p_.depth > 1)
-        return M*N*p_.depth;
+      if(depth_ > 1)
+        return M*N*depth_;
       return 0;
   }
 
   int gemm::is_invalid_impl(driver::Device const &, expression_tree const &) const
   {
-    if(p_.Afetch!=FETCH_FROM_LOCAL || p_.Bfetch!=FETCH_FROM_LOCAL)
+    if(Afetch_!=FETCH_FROM_LOCAL || Bfetch_!=FETCH_FROM_LOCAL)
       return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
 
-    if ((p_.mS % p_.vwidth) > 0 || (p_.nS % p_.vwidth) > 0)
+    if ((mS_ % vwidth_) > 0 || (nS_ % vwidth_) > 0)
       return TEMPLATE_MS_NS_MUST_BE_SIMD_WIDTH_MULTIPLE;
 
-    if(p_.mL > 256 || p_.nL > 256)
+    if(mL_ > 256 || nL_ > 256)
        return TEMPLATE_BLOCK_SIZE_TOO_LARGE;
 
-    if ( p_.kS % p_.kL == 0)
+    if ( kS_ % kL_ == 0)
       return TEMPLATE_KS_MUST_BE_SMALLER_THAN_KL;
 
-    if (p_.Afetch==FETCH_FROM_LOCAL || p_.Bfetch==FETCH_FROM_LOCAL){
-      if ((p_.lf0*p_.lf1) !=(p_.ls0*p_.ls1))
+    if (Afetch_==FETCH_FROM_LOCAL || Bfetch_==FETCH_FROM_LOCAL){
+      if ((lf0_*lf1_) !=(ls0_*ls1_))
         return TEMPLATE_LOCAL_FETCH_PRODUCT_MUST_MATCH_LOCAL_SIZE_PRODUCT;
     }
 
-    if (p_.Afetch==FETCH_FROM_LOCAL)
+    if (Afetch_==FETCH_FROM_LOCAL)
     {
-      uint32_t bound1 = (A_trans_=='N')?p_.kL:p_.mL;
-      uint32_t bound0 = (A_trans_=='N')?p_.mL:p_.kL;
+      uint32_t bound1 = (A_trans_=='N')?kL_:mL_;
+      uint32_t bound0 = (A_trans_=='N')?mL_:kL_;
 
-      if (p_.lf1>0 && (bound1 % p_.lf1)> 0)
+      if (lf1_>0 && (bound1 % lf1_)> 0)
         return A_trans_=='N'?TEMPLATE_LOCAL_FETCH_1_MUST_BE_KL_MULTIPLE:TEMPLATE_LOCAL_FETCH_1_MUST_BE_ML_MULTIPLE;
 
-      if (p_.lf0>0 && (bound0 % (p_.lf0*p_.vwidth)) > 0)
+      if (lf0_>0 && (bound0 % (lf0_*vwidth_)) > 0)
         return A_trans_=='N'?TEMPLATE_LOCAL_FETCH_0_MUST_BE_NL_MULTIPLE:TEMPLATE_LOCAL_FETCH_0_MUST_BE_KL_MULTIPLE;
 
     }
-    if (p_.Bfetch==FETCH_FROM_LOCAL)
+    if (Bfetch_==FETCH_FROM_LOCAL)
     {
-      uint32_t bound1 = (B_trans_=='T')?p_.kL:p_.nL;
-      uint32_t bound0 = (B_trans_=='T')?p_.nL:p_.kL;
+      uint32_t bound1 = (B_trans_=='T')?kL_:nL_;
+      uint32_t bound0 = (B_trans_=='T')?nL_:kL_;
 
-      if (p_.lf1>0 && (bound1 % p_.lf1)> 0)
+      if (lf1_>0 && (bound1 % lf1_)> 0)
         return B_trans_=='T'?TEMPLATE_LOCAL_FETCH_1_MUST_BE_KL_MULTIPLE:TEMPLATE_LOCAL_FETCH_1_MUST_BE_ML_MULTIPLE;
 
-      if (p_.lf0>0 && (bound0 % (p_.lf0*p_.vwidth)) > 0)
+      if (lf0_>0 && (bound0 % (lf0_*vwidth_)) > 0)
         return B_trans_=='T'?TEMPLATE_LOCAL_FETCH_1_MUST_BE_KL_MULTIPLE:TEMPLATE_LOCAL_FETCH_1_MUST_BE_ML_MULTIPLE;
 
     }
@@ -117,10 +117,10 @@ namespace templates
     using tools::to_string;
 
     driver::backend_type backend = device.backend();
-    bool has_depth = p_.depth > 1;
-#define VLOAD(offset, ptr) vload(p_.vwidth, sdtype, offset, ptr, "1", backend, true)
-#define VLOAD_MISALIGNED(offset, ptr) vload(p_.vwidth, sdtype, offset, ptr, "1", backend, false)
-#define VSTORE(value, offset, ptr) vstore(p_.vwidth, sdtype, value, offset, ptr, "1", backend)
+    bool has_depth = depth_ > 1;
+#define VLOAD(offset, ptr) vload(vwidth_, sdtype, offset, ptr, "1", backend, true)
+#define VLOAD_MISALIGNED(offset, ptr) vload(vwidth_, sdtype, offset, ptr, "1", backend, false)
+#define VSTORE(value, offset, ptr) vstore(vwidth_, sdtype, value, offset, ptr, "1", backend)
 
     symbolic::preset::gemm::args args;
     infos(tree, args);
@@ -134,7 +134,7 @@ namespace templates
     kernel_generation_stream stream(backend);
     numeric_type dtype = tree.dtype();
     std::string sdtype = to_string(dtype);
-    std::string vdtype = append_width(sdtype, p_.vwidth);
+    std::string vdtype = append_width(sdtype, vwidth_);
 
     //////////////////
     /// DECLARATIONS
@@ -148,7 +148,7 @@ namespace templates
     switch(backend)
     {
       case driver::OPENCL:
-        stream << " __attribute__((reqd_work_group_size(" << p_.ls0 << "," << p_.ls1 << ",1)))" << std::endl;
+        stream << " __attribute__((reqd_work_group_size(" << ls0_ << "," << ls1_ << ",1)))" << std::endl;
         break;
       default:
         break;
@@ -166,20 +166,20 @@ namespace templates
 
     ///Declare
     stream << "//blocks" << std::endl;
-    stream << sdtype << " rC[" << p_.mS << "][" << p_.nS << "] = {{0}};" << std::endl;
-    stream << vdtype << " rA[" << p_.kS << "][" << p_.mS/p_.vwidth << "];" << std::endl;
-    stream << vdtype << " rB[" << p_.kS << "][" << p_.nS/p_.vwidth << "];" << std::endl;
+    stream << sdtype << " rC[" << mS_ << "][" << nS_ << "] = {{0}};" << std::endl;
+    stream << vdtype << " rA[" << kS_ << "][" << mS_/vwidth_ << "];" << std::endl;
+    stream << vdtype << " rB[" << kS_ << "][" << nS_/vwidth_ << "];" << std::endl;
     stream << std::endl;
 
     stream << "//pointers" << std::endl;
-    size_t llda = (A_trans_=='N')?p_.mL:p_.kL+1;
-    size_t lnda = (A_trans_=='N')?p_.kL:p_.mL;
-    size_t lldb = (B_trans_=='T')?p_.nL:p_.kL+1;
-    size_t lndb = (B_trans_=='T')?p_.kL:p_.nL;
+    size_t llda = (A_trans_=='N')?mL_:kL_+1;
+    size_t lnda = (A_trans_=='N')?kL_:mL_;
+    size_t lldb = (B_trans_=='T')?nL_:kL_+1;
+    size_t lndb = (B_trans_=='T')?kL_:nL_;
     stream << "$LOCAL " << sdtype << " lA[" << llda*lnda << "];" << std::endl;
     stream << "$LOCAL " << sdtype << " lB[" << lldb*lndb << "];" << std::endl;
-    uint32_t npA = p_.mL/(A_trans_=='N'?p_.lf0*p_.vwidth:p_.lf1);
-    uint32_t npB = p_.nL/(B_trans_=='T'?p_.lf0*p_.vwidth:p_.lf1);
+    uint32_t npA = mL_/(A_trans_=='N'?lf0_*vwidth_:lf1_);
+    uint32_t npB = nL_/(B_trans_=='T'?lf0_*vwidth_:lf1_);
     stream << "$GLOBAL " << sdtype << "* Ai[" << npA << "];" << std::endl;
     stream << "$GLOBAL " << sdtype << "* Bi[" << npB << "];" << std::endl;
     stream << std::endl;
@@ -204,20 +204,20 @@ namespace templates
     if(has_depth)
     {
       stream << "gidz = $GROUP_IDX_2;" << std::endl;
-      stream << "div = (K+" << p_.depth-1 << ")/" << p_.depth << ";" << std::endl;
+      stream << "div = (K+" << depth_-1 << ")/" << depth_ << ";" << std::endl;
       stream << "offz = div*gidz;" << std::endl;
       stream << "K = min(K - div*gidz, ($SIZE_T)div);" << std::endl;
     }
 
-    stream << "idt = " << p_.ls0 << "*ids.w + ids.z;" << std::endl;
-    stream << "idT.y = idt/" << p_.lf0 << ";" << std::endl;
-    stream << "idT.x = idt - " << p_.lf0 << "*idT.y;" << std::endl;
+    stream << "idt = " << ls0_ << "*ids.w + ids.z;" << std::endl;
+    stream << "idT.y = idt/" << lf0_ << ";" << std::endl;
+    stream << "idT.x = idt - " << lf0_ << "*idT.y;" << std::endl;
     stream << std::endl;
 
     stream << "//Adjust pointers and bounds per work-item" << std::endl;
-    stream << "ids.x *= " << p_.mL << ";" << std::endl;
-    stream << "ids.y *= " << p_.nL << ";" << std::endl;
-    stream << "idT.x *= " << p_.vwidth << ";" << std::endl;
+    stream << "ids.x *= " << mL_ << ";" << std::endl;
+    stream << "ids.y *= " << nL_ << ";" << std::endl;
+    stream << "idT.x *= " << vwidth_ << ";" << std::endl;
 
     stream << "M -= ids.x;" << std::endl;
     if(A_trans_=='N')
@@ -280,19 +280,19 @@ namespace templates
 
     for(uint32_t i = 0 ; i < npA ; i++ )
         if (A_trans_=='N')
-          stream << "Ai[" << i << "] += " << Select(backend, to_string(i*p_.lf0*p_.vwidth) + " < M", "(int)((idT.x + " + to_string(i*p_.lf0*p_.vwidth) + ")" + ASTRIDE1 + ")", "0") << ";" << std::endl;
+          stream << "Ai[" << i << "] += " << Select(backend, to_string(i*lf0_*vwidth_) + " < M", "(int)((idT.x + " + to_string(i*lf0_*vwidth_) + ")" + ASTRIDE1 + ")", "0") << ";" << std::endl;
         else
-          stream << "Ai[" << i << "] += " << Select(backend, to_string(i*p_.lf1) + " < M", "(int)((idT.y + " + to_string(i*p_.lf1) + ")*lda)", "0") << ";" << std::endl;
+          stream << "Ai[" << i << "] += " << Select(backend, to_string(i*lf1_) + " < M", "(int)((idT.y + " + to_string(i*lf1_) + ")*lda)", "0") << ";" << std::endl;
 
     for(uint32_t i = 0 ; i < npB ; i++ )
         if (B_trans_=='T')
-            stream << "Bi[" << i << "] += " << Select(backend, to_string(i*p_.lf0*p_.vwidth) + " < N", "(int)((idT.x + " + to_string(i*p_.lf0*p_.vwidth) + ")" + BSTRIDE1 + ")", "0") << ";" << std::endl;
+            stream << "Bi[" << i << "] += " << Select(backend, to_string(i*lf0_*vwidth_) + " < N", "(int)((idT.x + " + to_string(i*lf0_*vwidth_) + ")" + BSTRIDE1 + ")", "0") << ";" << std::endl;
         else
-            stream << "Bi[" << i << "] += " << Select(backend, to_string(i*p_.lf1) + " < N", "(int)((idT.y + " + to_string(i*p_.lf1) + ")*ldb)", "0") << ";" << std::endl;
+            stream << "Bi[" << i << "] += " << Select(backend, to_string(i*lf1_) + " < N", "(int)((idT.y + " + to_string(i*lf1_) + ")*ldb)", "0") << ";" << std::endl;
 
     stream << std::endl;
     stream << "//Outer loop" << std::endl;
-    stream << "while(K >=" << p_.kL << ")" << std::endl;
+    stream << "while(K >=" << kL_ << ")" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
 
@@ -306,13 +306,13 @@ namespace templates
         stream << "//Fetch A to local memory" << std::endl;
         if (A_trans_=='N')
         {
-          for(uint32_t k = 0; k < p_.kL; k += p_.lf1)
-            for(uint32_t m = 0; m < p_.mL; m += p_.lf0*p_.vwidth)
+          for(uint32_t k = 0; k < kL_; k += lf1_)
+            for(uint32_t m = 0; m < mL_; m += lf0_*vwidth_)
             {
-              std::string mm = to_string(m/(p_.vwidth*p_.lf0));
+              std::string mm = to_string(m/(vwidth_*lf0_));
               std::string kk = to_string(k);
               if(last_iteration)
-                  for(uint32_t s = 0 ; s < p_.vwidth ; ++s)
+                  for(uint32_t s = 0 ; s < vwidth_ ; ++s)
                       stream << "ldsA[" << k*llda + m + s << "] = (condy" << k << " && " << s << "< M)? Ai[" << mm << "][" << k << "*lda + " << s << "] : 0;" << std::endl;
               else
                 stream << VSTORE(VLOAD_MISALIGNED("0" ,"&Ai[" + mm +"][" + kk + "*lda]"), "0", "ldsA + " + to_string(k*llda+m)) << ";" << std::endl;
@@ -320,13 +320,13 @@ namespace templates
         }
         else
         {
-            for(uint32_t k = 0; k < p_.kL; k += p_.lf0*p_.vwidth)
-            for(uint32_t m = 0; m < p_.mL; m += p_.lf1)
+            for(uint32_t k = 0; k < kL_; k += lf0_*vwidth_)
+            for(uint32_t m = 0; m < mL_; m += lf1_)
               {
-                std::string mm = to_string(m/p_.lf1);
+                std::string mm = to_string(m/lf1_);
                 std::string kk = to_string(k);
                 if(last_iteration)
-                    for(uint32_t s = 0 ; s < p_.vwidth ; ++s)
+                    for(uint32_t s = 0 ; s < vwidth_ ; ++s)
                         stream << "ldsA[" << m*llda + k + s << "] = condx" << k + s << "? Ai[" << mm << "][" << k + s << ASTRIDE1 << "] : 0;" << std::endl;
 
                 else
@@ -337,13 +337,13 @@ namespace templates
         stream << "//Fetch B to local memory" << std::endl;
         if (B_trans_=='T')
         {
-          for(uint32_t k = 0; k < p_.kL; k += p_.lf1)
-            for(uint32_t n = 0; n < p_.nL; n += p_.lf0*p_.vwidth)
+          for(uint32_t k = 0; k < kL_; k += lf1_)
+            for(uint32_t n = 0; n < nL_; n += lf0_*vwidth_)
             {
-              std::string nn = to_string(n/(p_.vwidth*p_.lf0));
+              std::string nn = to_string(n/(vwidth_*lf0_));
               std::string kk = to_string(k);
               if(last_iteration)
-                  for(uint32_t s = 0 ; s < p_.vwidth ; ++s)
+                  for(uint32_t s = 0 ; s < vwidth_ ; ++s)
                       stream << "ldsB[" << k*lldb + n + s << "] = (condy" << k << " && " << s << "< N)? Bi[" <<  nn << "][" << kk << "*ldb +" << s << "] : 0;" << std::endl;
               else
                 stream << VSTORE(VLOAD_MISALIGNED("0" ,"&Bi[" + nn +"][" + kk + "*ldb]"), "0", "ldsB + " + to_string(k*lldb+n)) << ";" << std::endl;
@@ -351,13 +351,13 @@ namespace templates
         }
         else
         {
-          for(uint32_t k = 0; k < p_.kL; k += p_.lf0*p_.vwidth)
-            for(uint32_t n = 0; n < p_.nL; n += p_.lf1)
+          for(uint32_t k = 0; k < kL_; k += lf0_*vwidth_)
+            for(uint32_t n = 0; n < nL_; n += lf1_)
             {
-              std::string nn = to_string(n/p_.lf1);
+              std::string nn = to_string(n/lf1_);
               std::string kk = to_string(k);
               if(last_iteration)
-                  for(uint32_t s = 0 ; s < p_.vwidth ; ++s)
+                  for(uint32_t s = 0 ; s < vwidth_ ; ++s)
                       stream << "ldsB[" << n*lldb + k + s << "] = condx" << k + s << "? Bi[" << nn << "][" << k + s << BSTRIDE1 << "] : 0;" << std::endl;
 
               else
@@ -366,18 +366,18 @@ namespace templates
         }
 
         if(A_trans_=='N')
-            stream << "ldsA = lA + ids.z*" << p_.vwidth << ";" << std::endl;
+            stream << "ldsA = lA + ids.z*" << vwidth_ << ";" << std::endl;
         else
-            stream << "ldsA = lA + ids.z*" << llda*p_.vwidth << ";" << std::endl;
+            stream << "ldsA = lA + ids.z*" << llda*vwidth_ << ";" << std::endl;
 
         if(B_trans_=='T')
-            stream << "ldsB = lB + ids.w*" << p_.vwidth << ";" << std::endl;
+            stream << "ldsB = lB + ids.w*" << vwidth_ << ";" << std::endl;
         else
-            stream << "ldsB = lB + ids.w*" << lldb*p_.vwidth << ";" << std::endl;
+            stream << "ldsB = lB + ids.w*" << lldb*vwidth_ << ";" << std::endl;
 
         stream << "$LOCAL_BARRIER;" << std::endl;
-        std::string bound = last_iteration?"K":tools::to_string(p_.kL);
-        size_t ks = last_iteration?1:p_.kS;
+        std::string bound = last_iteration?"K":tools::to_string(kL_);
+        size_t ks = last_iteration?1:kS_;
         stream << "//Inner loop" << std::endl;
         stream << "for(uint32_t k = 0; k < " << bound << "; k+=" << ks << "){" << std::endl;
         stream.inc_tab();
@@ -385,19 +385,19 @@ namespace templates
         stream << "//Fetch A to registers" << std::endl;
         stream << "#pragma unroll" << std::endl;
         stream << "for(uint32_t kk = 0; kk < " << ks << "; kk++)" << std::endl;
-        stream << "#pragma unroll " << p_.mS/p_.vwidth << std::endl;
-        stream << "for(uint32_t mm = 0; mm < " << p_.mS/p_.vwidth << "; mm++)" << std::endl;
+        stream << "#pragma unroll " << mS_/vwidth_ << std::endl;
+        stream << "for(uint32_t mm = 0; mm < " << mS_/vwidth_ << "; mm++)" << std::endl;
         stream << "{" << std::endl;
         stream.inc_tab();
         if(A_trans_=='N')
-            stream << "rA[kk][mm] = "  << VLOAD("0", "ldsA + k*" + to_string(llda) + " + mm*" + to_string(p_.ls0*p_.vwidth) + "+ kk*" + to_string(llda)) << ";" << std::endl;
+            stream << "rA[kk][mm] = "  << VLOAD("0", "ldsA + k*" + to_string(llda) + " + mm*" + to_string(ls0_*vwidth_) + "+ kk*" + to_string(llda)) << ";" << std::endl;
         else
         {
-            if(p_.vwidth==1)
-                stream << "rA[kk][mm] = ldsA[k + mm*" << p_.ls0*llda <<  "+ kk"  << "];" << std::endl;
+            if(vwidth_==1)
+                stream << "rA[kk][mm] = ldsA[k + mm*" << ls0_*llda <<  "+ kk"  << "];" << std::endl;
             else
-                for(uint32_t s = 0 ; s < p_.vwidth ; ++s)
-                    stream << access_vector_type("rA[kk][mm]", s) << " = ldsA[k + (mm*" << p_.vwidth*p_.ls0 << " + " << s << ")*" << llda <<  "+ kk];" << std::endl;
+                for(uint32_t s = 0 ; s < vwidth_ ; ++s)
+                    stream << access_vector_type("rA[kk][mm]", s) << " = ldsA[k + (mm*" << vwidth_*ls0_ << " + " << s << ")*" << llda <<  "+ kk];" << std::endl;
         }
 
         stream.dec_tab();
@@ -406,19 +406,19 @@ namespace templates
         stream << "//Fetch B to registers" << std::endl;
         stream << "#pragma unroll " << ks << std::endl;
         stream << "for(uint32_t kk = 0; kk < " << ks << "; kk++)" << std::endl;
-        stream << "#pragma unroll " << p_.nS/p_.vwidth << std::endl;
-        stream << "for(uint32_t nn = 0; nn < " << p_.nS/p_.vwidth << "; nn++)" << std::endl;
+        stream << "#pragma unroll " << nS_/vwidth_ << std::endl;
+        stream << "for(uint32_t nn = 0; nn < " << nS_/vwidth_ << "; nn++)" << std::endl;
         stream << "{" << std::endl;
         stream.inc_tab();
         if(B_trans_=='T')
-            stream << "rB[kk][nn] = " << VLOAD("0", "ldsB + k*" + to_string(lldb) + " + nn*" + to_string(p_.ls1*p_.vwidth)  + "+ kk*" + to_string(lldb)) << ";" << std::endl;
+            stream << "rB[kk][nn] = " << VLOAD("0", "ldsB + k*" + to_string(lldb) + " + nn*" + to_string(ls1_*vwidth_)  + "+ kk*" + to_string(lldb)) << ";" << std::endl;
         else
         {
-            if(p_.vwidth==1)
-                stream << "rB[kk][nn] = ldsB[k"  << " + nn*" << p_.ls1*lldb <<  "+ kk"  << "];" << std::endl;
+            if(vwidth_==1)
+                stream << "rB[kk][nn] = ldsB[k"  << " + nn*" << ls1_*lldb <<  "+ kk"  << "];" << std::endl;
             else
-                for(uint32_t s = 0 ; s < p_.vwidth ; ++s)
-                    stream << access_vector_type("rB[kk][nn]", s) << " = ldsB[k"  << " + (nn*" << p_.vwidth*p_.ls1 << " + " << s << ")*" << lldb <<  "+ kk];" << std::endl;
+                for(uint32_t s = 0 ; s < vwidth_ ; ++s)
+                    stream << access_vector_type("rB[kk][nn]", s) << " = ldsB[k"  << " + (nn*" << vwidth_*ls1_ << " + " << s << ")*" << lldb <<  "+ kk];" << std::endl;
         }
         stream.dec_tab();
         stream << "}" << std::endl;
@@ -427,41 +427,41 @@ namespace templates
         stream << "#pragma unroll" << std::endl;
         stream << "for(uint32_t kk = 0 ; kk < " << ks << "; ++kk){" << std::endl;
         stream.inc_tab();
-        for(uint32_t nn=0; nn < p_.nS; ++nn)
-        for(uint32_t mm=0; mm < p_.mS; ++mm){
+        for(uint32_t nn=0; nn < nS_; ++nn)
+        for(uint32_t mm=0; mm < mS_; ++mm){
           string res_str, lhs_str, rhs_str;
           res_str = "rC[" + to_string(mm) + "][" + to_string(nn) + "]";
-          if (p_.vwidth==1)
+          if (vwidth_==1)
             lhs_str = "rA[kk][" + to_string(mm) + "]";
           else
-            lhs_str = access_vector_type("rA[kk][" + to_string(mm/p_.vwidth) + "]", mm%p_.vwidth);
-          if (p_.vwidth==1)
+            lhs_str = access_vector_type("rA[kk][" + to_string(mm/vwidth_) + "]", mm%vwidth_);
+          if (vwidth_==1)
             rhs_str = "rB[kk]["+to_string(nn)+"]";
           else
-            rhs_str = access_vector_type("rB[kk]["+to_string(nn/p_.vwidth)+"]", nn%p_.vwidth);
+            rhs_str = access_vector_type("rB[kk]["+to_string(nn/vwidth_)+"]", nn%vwidth_);
           stream << res_str << "= $MAD(" << lhs_str << "," << rhs_str << "," << res_str << ");" << std::endl;
         }
         stream.dec_tab();
         stream << "}" << std::endl;
         stream.dec_tab();
         stream << "}" << std::endl;
-        stream << "K -= " << p_.kL << ";" << std::endl;
+        stream << "K -= " << kL_ << ";" << std::endl;
 
         //Increment A pointers to global memory
         if (A_trans_=='N')
           for(uint32_t i = 0 ; i < npA ; ++i)
-              stream << "Ai[" << i << "] += "  << p_.kL << "*lda;" << std::endl;
+              stream << "Ai[" << i << "] += "  << kL_ << "*lda;" << std::endl;
         else
           for(uint32_t i = 0 ; i < npA ; ++i)
-              stream << "Ai[" << i << "] += "  << p_.kL << ASTRIDE1 << ";" << std::endl;
+              stream << "Ai[" << i << "] += "  << kL_ << ASTRIDE1 << ";" << std::endl;
 
         //Increment B pointers to global memory
         if (B_trans_=='T')
           for(uint32_t i = 0 ; i < npB ; ++i)
-              stream << "Bi[" << i << "] += " << p_.kL << "*ldb;" << std::endl;
+              stream << "Bi[" << i << "] += " << kL_ << "*ldb;" << std::endl;
         else
           for(uint32_t i = 0 ; i < npB ; ++i)
-              stream << "Bi[" << i << "] += " << p_.kL << BSTRIDE1 << ";" << std::endl;
+              stream << "Bi[" << i << "] += " << kL_ << BSTRIDE1 << ";" << std::endl;
     };
     fetch_to_lds(false);
     stream.dec_tab();
@@ -471,15 +471,15 @@ namespace templates
     if(A_trans_=='N' || B_trans_=='T')
     {
         stream << "int Ky = K - idT.y;" << std::endl;
-        for(uint32_t k = 0; k < p_.kL; k += p_.lf1)
+        for(uint32_t k = 0; k < kL_; k += lf1_)
             stream << "int condy" << k << " = " << k << " < Ky;" << std::endl;
     }
 
     if(A_trans_=='T' || B_trans_=='N')
     {
         stream << "int Kx = K - idT.x;" << std::endl;
-        for(uint32_t k = 0 ; k < p_.kL ; k += p_.lf0*p_.vwidth)
-            for(uint32_t s = 0 ; s < p_.vwidth ; ++s)
+        for(uint32_t k = 0 ; k < kL_ ; k += lf0_*vwidth_)
+            for(uint32_t s = 0 ; s < vwidth_ ; ++s)
                 stream << "int condx" << k + s << " = " << k + s << " < Kx;" << std::endl;
     }
     fetch_to_lds(true);
@@ -498,35 +498,35 @@ namespace templates
     stream << "N += ids.y;" << std::endl;
 
     stream << "C += ids.x" << CSTRIDE1 << ";" << std::endl;
-    stream << "C += ids.z*" << p_.vwidth << CSTRIDE1 << ";" << std::endl;
+    stream << "C += ids.z*" << vwidth_ << CSTRIDE1 << ";" << std::endl;
     stream << "C += ids.y*ldc;" << std::endl;
-    stream << "C += ids.w*" << p_.vwidth << "*ldc;" << std::endl;
+    stream << "C += ids.w*" << vwidth_ << "*ldc;" << std::endl;
     if(has_depth)
         stream << "C += gidz*ldc*N;" << std::endl;
 
     stream << "M -= ids.x;" << std::endl;
-    stream << "M -= ids.z*" << p_.vwidth << ";" << std::endl;
+    stream << "M -= ids.z*" << vwidth_ << ";" << std::endl;
 
     stream << "N -= ids.y;" << std::endl;
-    stream << "N -= ids.w*" << p_.vwidth <<  ";" << std::endl;
+    stream << "N -= ids.w*" << vwidth_ <<  ";" << std::endl;
 
-    for(uint32_t n=0; n < p_.nS; ++n)
+    for(uint32_t n=0; n < nS_; ++n)
     {
-        string Cj = to_string((n/p_.vwidth)*(p_.ls1*p_.vwidth) + n%p_.vwidth);
+        string Cj = to_string((n/vwidth_)*(ls1_*vwidth_) + n%vwidth_);
         stream << "if(" << Cj << " >= N) return;" << std::endl;
-        for(uint32_t m=0; m < p_.mS; ++m)
+        for(uint32_t m=0; m < mS_; ++m)
             stream << "rC[" << m << "][" << n << "] *= alpha;" << std::endl;
-        for(uint32_t m=0; m < p_.mS; ++m)
+        for(uint32_t m=0; m < mS_; ++m)
         {
-            string Ci = to_string((m/p_.vwidth)*(p_.ls0*p_.vwidth) + m%p_.vwidth);
+            string Ci = to_string((m/vwidth_)*(ls0_*vwidth_) + m%vwidth_);
             stream << "if(" << Ci << "< M) ";
             if(has_depth)
                 stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "];" << std::endl;
             else
                 stream << "C[" << Ci << CSTRIDE1 << "] = rC[" << m << "][" << n << "] + ((beta != (" << sdtype << ")0)?(beta*" << "C[" << Ci << CSTRIDE1 << "]):0);" << std::endl;
         }
-        if((n+1)%p_.vwidth==0){
-            stream << "C += ldc*" << p_.ls1*p_.vwidth - p_.vwidth + 1 << ";" << std::endl;
+        if((n+1)%vwidth_==0){
+            stream << "C += ldc*" << ls1_*vwidth_ - vwidth_ + 1 << ";" << std::endl;
         }
         else{
             stream << "C += ldc;" << std::endl;
@@ -594,8 +594,8 @@ namespace templates
     reduce_name += suffix;
 
     driver::Kernel gemm(program, gemm_name.c_str());
-    driver::NDRange local(p_.ls0, p_.ls1, 1);
-    driver::NDRange global(align(align(M,p_.mS)/p_.mS, p_.ls0), align(align(N,p_.nS)/p_.nS, p_.ls1), p_.depth);
+    driver::NDRange local(ls0_, ls1_, 1);
+    driver::NDRange global(align(align(M,mS_)/mS_, ls0_), align(align(N,nS_)/nS_, ls1_), depth_);
 
     uint32_t current_arg = 0;
 
@@ -603,7 +603,7 @@ namespace templates
     gemm.setSizeArg(current_arg++, M);
     gemm.setSizeArg(current_arg++, N);
     gemm.setSizeArg(current_arg++, K);
-    if(p_.depth==1)
+    if(depth_==1)
     {
         if(backend==driver::OPENCL)
           gemm.setArg(current_arg++, C.array.handle.cl);
@@ -642,15 +642,15 @@ namespace templates
     gemm.setArg(current_arg++, beta);
     options.enqueue(program.context(), gemm, global, local);
 
-    if(p_.depth > 1)
+    if(depth_ > 1)
     {
       uint32_t current_arg = 0;
       driver::Kernel reduce(program, reduce_name.c_str());
-      driver::NDRange local(p_.ls0, p_.ls1);
-      driver::NDRange global(align(M, p_.ls0), align(N, p_.ls1));
+      driver::NDRange local(ls0_, ls1_);
+      driver::NDRange global(align(M, ls0_), align(N, ls1_));
       reduce.setSizeArg(current_arg++, M);
       reduce.setSizeArg(current_arg++, N);
-      reduce.setSizeArg(current_arg++, p_.depth);
+      reduce.setSizeArg(current_arg++, depth_);
       reduce.setArg(current_arg++, workspace);
       reduce.setSizeArg(current_arg++, M);
       if(backend==driver::OPENCL)
@@ -682,7 +682,7 @@ namespace templates
              ,int_t ms, int_t ks, int_t ns
              ,fetch_type Afetch , fetch_type Bfetch
              ,int_t lf0, int_t lf1, char A_trans, char B_trans) :
-    base_impl(vwidth, ls0, ls1), kL_(kL), depth_(D), mS_(ms), kS_(ks), nS_(ns),
+    base_impl(vwidth, ls0, ls1), mL_(ms*ls0), kL_(kL), nL_(ns*ls1), depth_(D), mS_(ms), kS_(ks), nS_(ns),
     Afetch_(Afetch), Bfetch_(Bfetch), lf0_(lf0), lf1_(lf1), A_trans_(A_trans), B_trans_(B_trans)
   {
     if(A_trans_=='N' && B_trans_=='N') type_ = GEMM_NN;

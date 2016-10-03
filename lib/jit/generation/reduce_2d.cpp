@@ -41,22 +41,22 @@ namespace templates
 
 int reduce_2d::is_invalid_impl(driver::Device const &, expression_tree const &) const
 {
-  if (p_.fetch==FETCH_FROM_LOCAL)
+  if (fetch_==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
 uint32_t reduce_2d::lmem_usage(const expression_tree&) const
 {
-  return (p_.ls0+1)*p_.ls1;
+  return (ls0_+1)*ls1_;
 }
 
 uint32_t reduce_2d::temporary_workspace(expression_tree const & expressions) const
 {
     std::vector<int_t> MN = input_sizes(expressions);
     int_t M = MN[0];
-    if(p_.ng0 > 1)
-      return M*p_.ng0;
+    if(ng0_ > 1)
+      return M*ng0_;
     return 0;
 }
 
@@ -74,7 +74,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   name[0] += suffix;
   name[1] += suffix;
 
-  uint32_t ldls = p_.ls0;
+  uint32_t ldls = ls0_;
   std::string ls0ldstr = to_string(ldls);
 
   auto unroll_tmp = [&]()
@@ -87,13 +87,13 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
         if (is_indexing(rd->op().type))
         {
           stream << rd->process("$GLOBAL uint* #name_temp = ($GLOBAL uint*)(tmp + " + tools::to_string(offset) + "*M);");
-          offset += 4*p_.ng0;
+          offset += 4*ng0_;
           stream << rd->process("$GLOBAL " + sdtype + "* #name_temp_value = ($GLOBAL " + sdtype + "*)(tmp + " + tools::to_string(offset) + "*M);");
-          offset += size_of(dtype)*p_.ng0;
+          offset += size_of(dtype)*ng0_;
         }
         else{
           stream << rd->process("$GLOBAL " + sdtype + "* #name_temp = ($GLOBAL " + sdtype + "*)(tmp + " + tools::to_string(offset) + "*M);");
-          offset += size_of(dtype)*p_.ng0;
+          offset += size_of(dtype)*ng0_;
         }
       }
   };
@@ -107,7 +107,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
       stream << "#include  \"vector.h\"" << std::endl;
       break;
     case driver::OPENCL:
-      stream << " __attribute__((reqd_work_group_size(" << p_.ls0 << "," << p_.ls1 << ",1)))" << std::endl;
+      stream << " __attribute__((reqd_work_group_size(" << ls0_ << "," << ls1_ << ",1)))" << std::endl;
       break;
   }
   stream << "$KERNEL void " << name[0] << "($SIZE_T M, $SIZE_T N, $GLOBAL char* tmp, " << tools::join(kernel_arguments(device, symbols, tree), ", ") << ")" << std::endl;
@@ -119,13 +119,13 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream << "$SIZE_T lidy = $LOCAL_IDX_1;" << std::endl;
   //Loop r
   std::ostringstream upper;
-  upper << "(M +" << p_.ls1 - 1 << ")/" << p_.ls1 << "*" << p_.ls1;
+  upper << "(M +" << ls1_ - 1 << ")/" << ls1_ << "*" << ls1_;
 
-  element_wise_loop_1D(stream, p_.fetch, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](uint32_t cwidth)
+  element_wise_loop_1D(stream, fetch_, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](uint32_t cwidth)
   {
   //Declare Buffers
   for (symbolic::reduce_2d* rd : reductions)
-    stream << rd->process("$LOCAL " + append_width("#scalartype", cwidth) + " #name_buf[" + to_string(p_.ls1*ldls) + "];") << std::endl;
+    stream << rd->process("$LOCAL " + append_width("#scalartype", cwidth) + " #name_buf[" + to_string(ls1_*ldls) + "];") << std::endl;
 
   //Accumulators
   for (symbolic::reduce_2d* rd : reductions){
@@ -136,7 +136,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  element_wise_loop_1D(stream, p_.fetch, (reduction_type_==REDUCE_COLUMNS)?p_.vwidth:1, "c", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t rwidth)
+  element_wise_loop_1D(stream, fetch_, (reduction_type_==REDUCE_COLUMNS)?vwidth_:1, "c", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t rwidth)
   {
     std::string rdtype = append_width("#scalartype", rwidth);
     std::string cdtype = append_width("#scalartype", cwidth);
@@ -167,7 +167,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
     stream << rd->process("#name_buf[lidy*" + ls0ldstr + "+ lidx] = #name_acc;") << std::endl;
   //Reduce local memory
   stream << "#pragma unroll" << std::endl;
-  stream << "for($SIZE_T stride = " << p_.ls0/2 << "; stride >0; stride /=2)" << std::endl;
+  stream << "for($SIZE_T stride = " << ls0_/2 << "; stride >0; stride /=2)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
   stream << "$LOCAL_BARRIER;" << std::endl;
@@ -189,7 +189,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream <<  "if (r < M && lidx == 0)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  if(p_.ng0==1)
+  if(ng0_==1)
     for(size_t idx: assignments)
       for(size_t s = 0 ; s < cwidth ; ++s)
           stream << symbols.at(idx)->evaluate({{"leaf", "at(r+" + to_string(s) + ")"},
@@ -211,17 +211,17 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   /* ------------------------
    * Kernel 2
    * -----------------------*/
-  if(p_.ng0>1)
+  if(ng0_>1)
   {
   if(backend==driver::OPENCL)
-    stream << " __attribute__((reqd_work_group_size(" << p_.ls0 << "," << p_.ls1 << ",1)))" << std::endl;
+    stream << " __attribute__((reqd_work_group_size(" << ls0_ << "," << ls1_ << ",1)))" << std::endl;
   stream << "$KERNEL void " << name[1] << "($SIZE_T M, $SIZE_T N , $GLOBAL char* tmp, " << tools::join(kernel_arguments(device, symbols, tree), ", ") << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
   unroll_tmp();
   for (symbolic::reduce_2d* rd : reductions)
-    stream << rd->process("$LOCAL #scalartype #name_buf[" + to_string(p_.ls1*ldls) + "];") << std::endl;
-  stream << "for($SIZE_T r = $GLOBAL_IDX_1; r < (M +" << p_.ls1 - 1 << ")/" << p_.ls1 << "*" << p_.ls1 << "; r += " << GlobalSize1(backend) << "){" << std::endl;
+    stream << rd->process("$LOCAL #scalartype #name_buf[" + to_string(ls1_*ldls) + "];") << std::endl;
+  stream << "for($SIZE_T r = $GLOBAL_IDX_1; r < (M +" << ls1_ - 1 << ")/" << ls1_ << "*" << ls1_ << "; r += " << GlobalSize1(backend) << "){" << std::endl;
   stream.inc_tab();
   stream << "$SIZE_T lidx = $LOCAL_IDX_0;" << std::endl;
   stream << "$SIZE_T lidy = $LOCAL_IDX_1;" << std::endl;
@@ -230,7 +230,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  stream << "for($SIZE_T c = lidx; c < " << p_.ng0 << "; c += $LOCAL_SIZE_0){" << std::endl;
+  stream << "for($SIZE_T c = lidx; c < " << ng0_ << "; c += $LOCAL_SIZE_0){" << std::endl;
   stream.inc_tab();
   for (symbolic::reduce_2d* rd: reductions)
     compute_reduce_1d(stream, rd->process("#name_acc"), rd->process("#name_temp[r + M*c]"), rd->op());
@@ -241,7 +241,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   for (symbolic::reduce_2d* rd : reductions)
     stream << rd->process("#name_buf[lidy*" + ls0ldstr + "+ lidx] = #name_acc;") << std::endl;
   stream << "#pragma unroll" << std::endl;
-  stream << "for($SIZE_T stride = " << p_.ls0/2 << "; stride >0; stride /=2)" << std::endl;
+  stream << "for($SIZE_T stride = " << ls0_/2 << "; stride >0; stride /=2)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
   stream << "$LOCAL_BARRIER;" << std::endl;
@@ -300,7 +300,7 @@ void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
   name[0] += suffix;
   name[1] += suffix;
 
-  uint32_t nk = (p_.ng0==1)?1:2;
+  uint32_t nk = (ng0_==1)?1:2;
 
   std::vector<driver::Kernel> kernels;
   for(uint32_t k = 0 ; k < nk ; ++k)
@@ -319,8 +319,8 @@ void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
   }
 
   //NDRange
-  driver::NDRange global[2] = { driver::NDRange(p_.ls0*p_.ng0, p_.ls1*p_.ng1), driver::NDRange(p_.ls0, p_.ls1*p_.ng1) };
-  driver::NDRange local[2] = { driver::NDRange(p_.ls0, p_.ls1), driver::NDRange(p_.ls0, p_.ls1) };
+  driver::NDRange global[2] = { driver::NDRange(ls0_*ng0_, ls1_*ng1_), driver::NDRange(ls0_, ls1_*ng1_) };
+  driver::NDRange local[2] = { driver::NDRange(ls0_, ls1_), driver::NDRange(ls0_, ls1_) };
   for(uint32_t i = 0 ; i < nk ; ++i)
     control.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }

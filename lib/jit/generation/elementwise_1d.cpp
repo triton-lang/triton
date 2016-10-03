@@ -38,7 +38,7 @@ namespace templates
 
 int elementwise_1d::is_invalid_impl(driver::Device const &, expression_tree const &) const
 {
-  if (p_.fetch==FETCH_FROM_LOCAL)
+  if (fetch_==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
@@ -57,7 +57,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
     case driver::CUDA:
       stream << "#include  \"vector.h\"" << std::endl; break;
     case driver::OPENCL:
-      stream << " __attribute__((reqd_work_group_size(" << p_.ls0 << "," << p_.ls1 << ",1)))" << std::endl; break;
+      stream << " __attribute__((reqd_work_group_size(" << ls0_ << "," << ls1_ << ",1)))" << std::endl; break;
   }
 
   stream << "$KERNEL void elementwise_1d" << suffix << "($SIZE_T N, " << tools::join(kernel_arguments(device, symbols, tree), ", ") << ")";
@@ -75,7 +75,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
     stream.inc_tab();
   }
 
-  element_wise_loop_1D(stream, p_.fetch, p_.vwidth, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t vwidth)
+  element_wise_loop_1D(stream, fetch_, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t vwidth)
   {
     std::string dtype = append_width("#scalartype",vwidth);
 
@@ -111,7 +111,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
 }
 
 elementwise_1d::elementwise_1d(uint32_t vwidth, uint32_t ls, uint32_t ng, fetch_type fetch):
-    base_impl(vwidth,ls), ng_(ng), fetch_(fetch)
+    base_impl(vwidth,ls,1), ng_(ng), fetch_(fetch)
 {}
 
 
@@ -130,8 +130,8 @@ void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & pro
   name += suffix;
   driver::Kernel kernel(program, name.c_str());
   //NDRange
-  driver::NDRange global(p_.ls0*p_.ng);
-  driver::NDRange local(p_.ls0);
+  driver::NDRange global(ls0_*ng_);
+  driver::NDRange local(ls0_);
   //Arguments
   uint32_t current_arg = 0;
   kernel.setSizeArg(current_arg++, size);

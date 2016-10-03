@@ -73,12 +73,11 @@ base_impl::base_impl(uint32_t vwidth, int_t ls0, int_t ls1): vwidth_(vwidth), ls
 { }
 
 uint32_t base_impl::ls0() const
-{ return p_.ls0; }
+{ return ls0_; }
 
 uint32_t base_impl::ls1() const
-{ return p_.ls1; }
+{ return ls1_; }
 
-template<class TType, class PType>
 int base_impl::is_invalid(expression_tree const  & expressions, driver::Device const & device) const
 {
   //Query device informations
@@ -90,16 +89,16 @@ int base_impl::is_invalid(expression_tree const  & expressions, driver::Device c
   //Invalid work group size
   size_t max_workgroup_size = device.max_work_group_size();
   std::vector<size_t> max_work_item_sizes = device.max_work_item_sizes();
-  if (p_.ls0*p_.ls1 > max_workgroup_size)
+  if (ls0_*ls1_ > max_workgroup_size)
     return TEMPLATE_WORK_GROUP_SIZE_OVERFLOW;
-  if (p_.ls0 > max_work_item_sizes[0])
+  if (ls0_ > max_work_item_sizes[0])
     return TEMPLATE_LOCAL_SIZE_0_OVERFLOW;
 
-  if (p_.ls1 > max_work_item_sizes[1])
+  if (ls1_ > max_work_item_sizes[1])
     return TEMPLATE_LOCAL_SIZE_1_OVERFLOW;
 
   //Invalid SIMD Width
-  if (p_.vwidth!=1 && p_.vwidth!=2 && p_.vwidth!=3 && p_.vwidth!=4)
+  if (vwidth_!=1 && vwidth_!=2 && vwidth_!=3 && vwidth_!=4)
     return TEMPLATE_INVALID_SIMD_WIDTH;
 
   return is_invalid_impl(device, expressions);
