@@ -96,7 +96,7 @@ std::string hash(expression_tree const & tree)
 }
 
 //Set arguments
-void set_arguments(expression_tree const & tree, driver::Kernel & kernel, unsigned int & current_arg)
+void set_arguments(expression_tree const & tree, driver::Kernel & kernel, uint32_t& current_arg)
 {
   driver::backend_type backend = tree.context().backend();
 

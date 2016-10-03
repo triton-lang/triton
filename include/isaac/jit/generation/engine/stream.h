@@ -33,12 +33,12 @@ class kernel_generation_stream : public std::ostream
   class kgenstream : public std::stringbuf
   {
   public:
-    kgenstream(std::ostringstream& oss,unsigned int const & tab_count) ;
+    kgenstream(std::ostringstream& oss,uint32_t const & tab_count) ;
     int sync();
     ~kgenstream();
   private:
     std::ostream& oss_;
-    unsigned int const & tab_count_;
+    uint32_t const & tab_count_;
   };
 
   void process(std::string& str);
@@ -51,7 +51,7 @@ public:
   void inc_tab();
   void dec_tab();
 private:
-  unsigned int tab_count_;
+  uint32_t tab_count_;
   driver::backend_type backend_;
   std::ostringstream oss;
 };

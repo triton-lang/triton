@@ -90,7 +90,7 @@ std::vector<size_t> rhs_of(expression_tree const & tree, std::vector<size_t> con
 std::string hash(expression_tree const & tree);
 
 //Set arguments
-void set_arguments(expression_tree const & tree, driver::Kernel & kernel, unsigned int & current_arg);
+void set_arguments(expression_tree const & tree, driver::Kernel & kernel, uint32_t& current_arg);
 
 //Symbolize
 symbols_table symbolize(isaac::expression_tree const & expression);

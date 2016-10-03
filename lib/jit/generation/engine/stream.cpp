@@ -25,14 +25,14 @@
 namespace isaac
 {
 
-kernel_generation_stream::kgenstream::kgenstream(std::ostringstream& oss,unsigned int const & tab_count) :
+kernel_generation_stream::kgenstream::kgenstream(std::ostringstream& oss,uint32_t const & tab_count) :
   oss_(oss), tab_count_(tab_count)
 { }
 
 
 int kernel_generation_stream::kgenstream::sync()
 {
-  for (unsigned int i=0; i<tab_count_;++i)
+  for (uint32_t i=0; i<tab_count_;++i)
     oss_ << "  ";
   std::string next = str();
   oss_ << next;
@@ -69,9 +69,9 @@ ADD_KEYWORD("GROUP_IDX_0", "get_group_id(0)", "blockIdx.x")
 ADD_KEYWORD("GROUP_IDX_1", "get_group_id(1)", "blockIdx.y")
 ADD_KEYWORD("GROUP_IDX_2", "get_group_id(2)", "blockIdx.z")
 
-ADD_KEYWORD("GROUP_SIZE_0", "get_num_groups(0)", "GridDim.x")
-ADD_KEYWORD("GROUP_SIZE_1", "get_num_groups(1)", "GridDim.y")
-ADD_KEYWORD("GROUP_SIZE_2", "get_num_groups(2)", "GridDim.z")
+ADD_KEYWORD("GROUP_SIZE_0", "get_ng(0)", "GridDim.x")
+ADD_KEYWORD("GROUP_SIZE_1", "get_ng(1)", "GridDim.y")
+ADD_KEYWORD("GROUP_SIZE_2", "get_ng(2)", "GridDim.z")
 
 ADD_KEYWORD("LOCAL_BARRIER", "barrier(CLK_LOCAL_MEM_FENCE)", "__syncthreads()")
 ADD_KEYWORD("LOCAL_PTR", "__local", "")

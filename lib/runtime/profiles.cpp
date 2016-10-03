@@ -77,7 +77,7 @@ profiles::value_type::value_type(expression_type etype, numeric_type dtype, pred
 }
 
 
-profiles::value_type::value_type(expression_type etype, numeric_type dtype, templates::base const & tp, driver::CommandQueue const & queue) : templates_(1,tp.clone()), queue_(queue), cache_(driver::backend::programs::get(queue,etype,dtype))
+profiles::value_type::value_type(expression_type etype, numeric_type dtype, std::shared_ptr<templates::base> const & tp, driver::CommandQueue const & queue) : templates_(1,tp), queue_(queue), cache_(driver::backend::programs::get(queue,etype,dtype))
 {
   cache_.clear();
 }
@@ -197,7 +197,7 @@ void profiles::import(std::string const & str, driver::CommandQueue const & queu
             result[{etype, dtype}] = std::make_shared<value_type>(etype, dtype, predictor, templates, queue);
           }
           else
-            result[{etype, dtype}] = std::make_shared<value_type>(etype, dtype, *templates[0], queue);
+            result[{etype, dtype}] = std::make_shared<value_type>(etype, dtype, templates[0], queue);
         }
       }
     }

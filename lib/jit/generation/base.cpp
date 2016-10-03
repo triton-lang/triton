@@ -40,24 +40,23 @@ namespace isaac
 namespace templates
 {
 
-base::parameters_type::parameters_type(unsigned int _vwidth, int_t _ls0, int_t _ls1, int_t _num_kernels) : vwidth(_vwidth), ls0(_ls0), ls1(_ls1), num_kernels(_num_kernels)
+base::parameters_type::parameters_type(uint32_t _vwidth, int_t _ls0, int_t _ls1, int_t _nkernels) : vwidth(_vwidth), ls0(_ls0), ls1(_ls1), nkernels(_nkernels)
 { }
 
 base::base()
 {}
 
-unsigned int base::lmem_usage(expression_tree const  &) const
+uint32_t base::lmem_usage(expression_tree const  &) const
 { return 0; }
 
-unsigned int base::registers_usage(expression_tree const  &) const
+uint32_t base::registers_usage(expression_tree const  &) const
 { return 0; }
 
-unsigned int base::temporary_workspace(expression_tree const  &) const
+uint32_t base::temporary_workspace(expression_tree const  &) const
 { return 0; }
 
 base::~base()
-{
-}
+{ }
 
 std::string base::generate(std::string const & suffix, expression_tree const  & expression, driver::Device const & device)
 {
@@ -79,16 +78,12 @@ base_impl<TType, PType>::base_impl(parameters_type const & parameters) : base(),
 { }
 
 template<class TType, class PType>
-unsigned int base_impl<TType, PType>::ls0() const
+uint32_t base_impl<TType, PType>::ls0() const
 { return p_.ls0; }
 
 template<class TType, class PType>
-unsigned int base_impl<TType, PType>::ls1() const
+uint32_t base_impl<TType, PType>::ls1() const
 { return p_.ls1; }
-
-template<class TType, class PType>
-std::shared_ptr<base> base_impl<TType, PType>::clone() const
-{ return std::shared_ptr<base>(new TType(*dynamic_cast<TType const *>(this))); }
 
 template<class TType, class PType>
 int base_impl<TType, PType>::is_invalid(expression_tree const  & expressions, driver::Device const & device) const

@@ -33,10 +33,10 @@ namespace isaac
 namespace templates
 {
 
-elementwise_2d_parameters::elementwise_2d_parameters(unsigned int _vwidth,
-                          unsigned int _ls0, unsigned int _ls1,
-                          unsigned int _num_groups_0, unsigned int _num_groups_1,
-                          fetch_type _fetch) : base::parameters_type(_vwidth, _ls0, _ls1, 1), num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetch(_fetch){ }
+elementwise_2d_parameters::elementwise_2d_parameters(uint32_t _vwidth,
+                          uint32_t _ls0, uint32_t _ls1,
+                          uint32_t _ng0, uint32_t _ng1,
+                          fetch_type _fetch) : base::parameters_type(_vwidth, _ls0, _ls1, 1), ng0(_ng0), ng1(_ng1), fetch(_fetch){ }
 
 
 
@@ -114,8 +114,8 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
 elementwise_2d::elementwise_2d(parameters_type const & parameters) :
   base_impl<elementwise_2d, elementwise_2d_parameters>(parameters){ }
 
-elementwise_2d::elementwise_2d(unsigned int simd, unsigned int ls1, unsigned int ls2,
-                               unsigned int ng1, unsigned int ng2, fetch_type fetch):
+elementwise_2d::elementwise_2d(uint32_t simd, uint32_t ls1, uint32_t ls2,
+                               uint32_t ng1, uint32_t ng2, fetch_type fetch):
     base_impl<elementwise_2d, elementwise_2d_parameters>(elementwise_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch))
 {}
 
@@ -129,9 +129,9 @@ void elementwise_2d::enqueue(driver::CommandQueue & /*queue*/, driver::Program c
   std::string name = "elementwise_2d";
   name +=suffix;
   driver::Kernel kernel(program, name.c_str());
-  driver::NDRange global(p_.ls0*p_.num_groups_0, p_.ls1*p_.num_groups_1);
+  driver::NDRange global(p_.ls0*p_.ng0, p_.ls1*p_.ng1);
   driver::NDRange local(p_.ls0, p_.ls1);
-  unsigned int current_arg = 0;
+  uint32_t current_arg = 0;
   std::vector<int_t> MN = input_sizes(expressions);
   kernel.setSizeArg(current_arg++, MN[0]);
   kernel.setSizeArg(current_arg++, MN[1]);

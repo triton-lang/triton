@@ -31,26 +31,26 @@ namespace templates
 
 struct reduce_1d_parameters : public base::parameters_type
 {
-  reduce_1d_parameters(unsigned int _vwidth,
-                       unsigned int _group_size, unsigned int _num_groups,
+  reduce_1d_parameters(uint32_t _vwidth,
+                       uint32_t _group_size, uint32_t _ng,
                        fetch_type _fetch);
-  unsigned int num_groups;
+  uint32_t ng;
   fetch_type fetch;
 };
 
 class reduce_1d : public base_impl<reduce_1d, reduce_1d_parameters>
 {
 private:
-  unsigned int lmem_usage(expression_tree const  & expressions) const;
+  uint32_t lmem_usage(expression_tree const  & expressions) const;
   int is_invalid_impl(driver::Device const &, expression_tree const  &) const;
-  unsigned int temporary_workspace(expression_tree const & expressions) const;
-  inline void reduce_1d_local_memory(kernel_generation_stream & stream, unsigned int size, std::vector<symbolic::reduce_1d*> exprs,
+  uint32_t temporary_workspace(expression_tree const & expressions) const;
+  inline void reduce_1d_local_memory(kernel_generation_stream & stream, uint32_t size, std::vector<symbolic::reduce_1d*> exprs,
                                      std::string const & buf_str, std::string const & buf_value_str, driver::backend_type backend) const;
   std::string generate_impl(std::string const & suffix,  expression_tree const  & expressions, driver::Device const & device, symbolic::symbols_table const & mapping) const;
 
 public:
   reduce_1d(reduce_1d::parameters_type const & parameters);
-  reduce_1d(unsigned int simd, unsigned int ls, unsigned int ng, fetch_type fetch);
+  reduce_1d(uint32_t simd, uint32_t ls, uint32_t ng, fetch_type fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:
