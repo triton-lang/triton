@@ -50,9 +50,11 @@ public:
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &ctr);
 private:
   //Parameters
-  unsigned int kL_;
-  unsigned int depth_;
 
+  unsigned int mL_;
+  unsigned int kL_;
+  unsigned int nL_;
+  unsigned int depth_;
   unsigned int mS_;
   unsigned int kS_;
   unsigned int nS_;
@@ -62,9 +64,6 @@ private:
 
   unsigned int lf0_;
   unsigned int lf1_;
-
-  unsigned int mL_;
-  unsigned int nL_;
 
   bool prefetch_;
   bool unroll_outer_;
