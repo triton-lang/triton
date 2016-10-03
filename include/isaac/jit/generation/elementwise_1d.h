@@ -29,7 +29,7 @@ namespace isaac
 namespace templates
 {
 
-class elementwise_1d : public base_impl
+class elementwise_1d : public parameterized_base
 {
 private:
   virtual int is_invalid_impl(driver::Device const &, expression_tree const  &) const;

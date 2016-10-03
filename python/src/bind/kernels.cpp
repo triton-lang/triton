@@ -68,17 +68,17 @@ void export_templates()
     #undef __PROP
   }
 
-  bp::class_<tpt::base_impl, bp::bases<tpt::base>, boost::noncopyable>("base_impl", bp::no_init)
-                                        .add_property("ls0", &tpt::base_impl::ls0)
-                                        .add_property("ls1", &tpt::base_impl::ls1);
+  bp::class_<tpt::parameterized_base, bp::bases<tpt::base>, boost::noncopyable>("parameterized_base", bp::no_init)
+                                        .add_property("ls0", &tpt::parameterized_base::ls0)
+                                        .add_property("ls1", &tpt::parameterized_base::ls1);
 
-#define WRAP_BASE(name) bp::class_<tpt::name, bp::bases<tpt::base_impl>, boost::noncopyable>(#name, bp::no_init);
+#define WRAP_BASE(name) bp::class_<tpt::name, bp::bases<tpt::parameterized_base>, boost::noncopyable>(#name, bp::no_init);
 
   #define WRAP_TEMPLATE(name, basename, ...) bp::class_<tpt::name, std::shared_ptr<tpt::name>, bp::bases<basename>>(#name, bp::init<__VA_ARGS__>())\
                                       ;
-  WRAP_TEMPLATE(elementwise_1d, tpt::base_impl, uint, uint, uint, tpt::fetch_type)
-  WRAP_TEMPLATE(elementwise_2d, tpt::base_impl, uint, uint, uint, uint, uint, tpt::fetch_type)
-  WRAP_TEMPLATE(reduce_1d, tpt::base_impl, uint, uint, uint, tpt::fetch_type)
+  WRAP_TEMPLATE(elementwise_1d, tpt::parameterized_base, uint, uint, uint, tpt::fetch_type)
+  WRAP_TEMPLATE(elementwise_2d, tpt::parameterized_base, uint, uint, uint, uint, uint, tpt::fetch_type)
+  WRAP_TEMPLATE(reduce_1d, tpt::parameterized_base, uint, uint, uint, tpt::fetch_type)
   WRAP_BASE(reduce_2d)
   WRAP_TEMPLATE(reduce_2d_rows, tpt::reduce_2d, uint, uint, uint, uint, uint, tpt::fetch_type)
   WRAP_TEMPLATE(reduce_2d_cols, tpt::reduce_2d, uint, uint, uint, uint, uint, tpt::fetch_type)

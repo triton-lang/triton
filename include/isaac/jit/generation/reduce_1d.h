@@ -29,7 +29,7 @@ namespace isaac
 namespace templates
 {
 
-class reduce_1d : public base_impl
+class reduce_1d : public parameterized_base
 {
 private:
   unsigned int lmem_usage(expression_tree const  & expressions) const;

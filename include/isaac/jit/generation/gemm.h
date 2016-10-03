@@ -31,7 +31,7 @@ namespace isaac
 namespace templates
 {
 
-class gemm : public base_impl
+class gemm : public parameterized_base
 {
 private:
   unsigned int temporary_workspace(expression_tree const & expressions) const;

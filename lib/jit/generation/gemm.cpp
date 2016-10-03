@@ -683,7 +683,7 @@ namespace templates
              ,int_t ms, int_t ks, int_t ns
              ,fetch_type Afetch , fetch_type Bfetch
              ,int_t lf0, int_t lf1, char A_trans, char B_trans) :
-    base_impl(vwidth, ls0, ls1), mL_(ms*ls0), kL_(kL), nL_(ns*ls1), depth_(D), mS_(ms), kS_(ks), nS_(ns),
+    parameterized_base(vwidth, ls0, ls1), mL_(ms*ls0), kL_(kL), nL_(ns*ls1), depth_(D), mS_(ms), kS_(ks), nS_(ns),
     Afetch_(Afetch), Bfetch_(Bfetch), lf0_(lf0), lf1_(lf1), A_trans_(A_trans), B_trans_(B_trans)
   {
     if(A_trans_=='N' && B_trans_=='N') type_ = GEMM_NN;
