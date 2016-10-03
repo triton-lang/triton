@@ -29,16 +29,7 @@ namespace isaac
 namespace templates
 {
 
-struct reduce_1d_parameters : public base::parameters_type
-{
-  reduce_1d_parameters(uint32_t _vwidth,
-                       uint32_t _group_size, uint32_t _ng,
-                       fetch_type _fetch);
-  uint32_t ng;
-  fetch_type fetch;
-};
-
-class reduce_1d : public base_impl<reduce_1d, reduce_1d_parameters>
+class reduce_1d : public base_impl
 {
 private:
   uint32_t lmem_usage(expression_tree const  & expressions) const;
@@ -49,11 +40,12 @@ private:
   std::string generate_impl(std::string const & suffix,  expression_tree const  & expressions, driver::Device const & device, symbolic::symbols_table const & mapping) const;
 
 public:
-  reduce_1d(reduce_1d::parameters_type const & parameters);
-  reduce_1d(uint32_t simd, uint32_t ls, uint32_t ng, fetch_type fetch);
+  reduce_1d(uint32_t vwidth, uint32_t ls, uint32_t ng, fetch_type fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:
+  uint32_t ng_;
+  fetch_type fetch_;
   std::vector< driver::Buffer > tmp_;
   std::vector< driver::Buffer > tmpidx_;
 };

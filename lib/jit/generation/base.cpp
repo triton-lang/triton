@@ -40,9 +40,6 @@ namespace isaac
 namespace templates
 {
 
-base::parameters_type::parameters_type(uint32_t _vwidth, int_t _ls0, int_t _ls1, int_t _nkernels) : vwidth(_vwidth), ls0(_ls0), ls1(_ls1), nkernels(_nkernels)
-{ }
-
 base::base()
 {}
 
@@ -69,24 +66,20 @@ std::string base::generate(std::string const & suffix, expression_tree const  & 
   return generate_impl(suffix, expression, device, mapping);
 }
 
-template<class TType, class PType>
-int base_impl<TType, PType>::is_invalid_impl(driver::Device const &, expression_tree const  &) const
+int base_impl::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 { return TEMPLATE_VALID; }
 
-template<class TType, class PType>
-base_impl<TType, PType>::base_impl(parameters_type const & parameters) : base(), p_(parameters)
+base_impl::base_impl(uint32_t vwidth, int_t ls0, int_t ls1): vwidth_(vwidth), ls0_(ls0), ls1_(ls1)
 { }
 
-template<class TType, class PType>
-uint32_t base_impl<TType, PType>::ls0() const
+uint32_t base_impl::ls0() const
 { return p_.ls0; }
 
-template<class TType, class PType>
-uint32_t base_impl<TType, PType>::ls1() const
+uint32_t base_impl::ls1() const
 { return p_.ls1; }
 
 template<class TType, class PType>
-int base_impl<TType, PType>::is_invalid(expression_tree const  & expressions, driver::Device const & device) const
+int base_impl::is_invalid(expression_tree const  & expressions, driver::Device const & device) const
 {
   //Query device informations
   size_t lmem_available = device.local_mem_size();
@@ -111,12 +104,6 @@ int base_impl<TType, PType>::is_invalid(expression_tree const  & expressions, dr
 
   return is_invalid_impl(device, expressions);
 }
-
-template class base_impl<elementwise_1d, elementwise_1d_parameters>;
-template class base_impl<reduce_1d, reduce_1d_parameters>;
-template class base_impl<elementwise_2d, elementwise_2d_parameters>;
-template class base_impl<reduce_2d, reduce_2d_parameters>;
-template class base_impl<gemm, gemm_parameters>;
 
 }
 }

@@ -39,15 +39,9 @@ namespace isaac
 namespace templates
 {
 
-reduce_2d_parameters::reduce_2d_parameters(uint32_t _vwidth,
-                              uint32_t _ls0, uint32_t _ls1,
-                              uint32_t _ng0, uint32_t _ng1, fetch_type _fetch_policy): base::parameters_type(_vwidth, _ls0, _ls1, 1),
-ng0(_ng0), ng1(_ng1), fetch_policy(_fetch_policy) { }
-
-
 int reduce_2d::is_invalid_impl(driver::Device const &, expression_tree const &) const
 {
-  if (p_.fetch_policy==FETCH_FROM_LOCAL)
+  if (p_.fetch==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
@@ -127,7 +121,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   std::ostringstream upper;
   upper << "(M +" << p_.ls1 - 1 << ")/" << p_.ls1 << "*" << p_.ls1;
 
-  element_wise_loop_1D(stream, p_.fetch_policy, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](uint32_t cwidth)
+  element_wise_loop_1D(stream, p_.fetch, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](uint32_t cwidth)
   {
   //Declare Buffers
   for (symbolic::reduce_2d* rd : reductions)
@@ -142,7 +136,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  element_wise_loop_1D(stream, p_.fetch_policy, (reduction_type_==REDUCE_COLUMNS)?p_.vwidth:1, "c", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t rwidth)
+  element_wise_loop_1D(stream, p_.fetch, (reduction_type_==REDUCE_COLUMNS)?p_.vwidth:1, "c", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t rwidth)
   {
     std::string rdtype = append_width("#scalartype", rwidth);
     std::string cdtype = append_width("#scalartype", cwidth);
@@ -282,9 +276,9 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   return stream.str();
 }
 
-reduce_2d::reduce_2d(reduce_2d::parameters_type const & parameters,
-                                         operation_type_family rtype) :
-  base_impl<reduce_2d, reduce_2d_parameters>(parameters),
+reduce_2d::reduce_2d(uint32_t vwidth, uint32_t ls0, uint32_t ls1, uint32_t ng0, uint32_t ng1, fetch_type fetch,
+                    operation_type_family rtype) :
+  base_impl(vwidth, ls0, ls1), ng0_(ng0), ng1_(ng1), fetch_(fetch),
   reduction_type_(rtype){ }
 
 std::vector<int_t> reduce_2d::input_sizes(expression_tree const & tree) const
@@ -331,15 +325,11 @@ void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
     control.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }
 
-reduce_2d_rows::reduce_2d_rows(reduce_2d_parameters  const & parameters): reduce_2d(parameters, REDUCE_ROWS){}
+reduce_2d_rows::reduce_2d_rows(uint32_t vwidth, uint32_t ls0, uint32_t ls1,  uint32_t ng0, uint32_t ng1,
+               fetch_type fetch): reduce_2d(vwidth, ls0, ls1, ng0, ng1, fetch, REDUCE_ROWS) {}
 
-reduce_2d_rows::reduce_2d_rows(uint32_t simd, uint32_t ls1, uint32_t ls2,  uint32_t ng1, uint32_t ng2,
-               fetch_type fetch): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS) {}
-
-reduce_2d_cols::reduce_2d_cols(reduce_2d::parameters_type  const & parameters): reduce_2d(parameters, REDUCE_COLUMNS){}
-
-reduce_2d_cols::reduce_2d_cols(uint32_t simd, uint32_t ls1, uint32_t ls2, uint32_t ng1, uint32_t ng2,
-               fetch_type fetch): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS) {}
+reduce_2d_cols::reduce_2d_cols(uint32_t vwidth, uint32_t ls0, uint32_t ls1, uint32_t ng0, uint32_t ng1,
+               fetch_type fetch): reduce_2d(vwidth, ls0, ls1, ng0, ng1, fetch, REDUCE_COLUMNS) {}
 
 
 }

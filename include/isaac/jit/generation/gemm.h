@@ -31,35 +31,7 @@ namespace isaac
 namespace templates
 {
 
-struct gemm_parameters : public base::parameters_type
-{
-  gemm_parameters(uint32_t vwidth
-                  ,uint32_t ls0, uint32_t KL, uint32_t ls1, uint32_t D
-                  ,uint32_t ms, uint32_t ks, uint32_t ns
-                  ,fetch_type Afetch, fetch_type Bfetch
-                  ,uint32_t lf0, uint32_t lf1);
-
-  uint32_t kL;
-  uint32_t depth;
-
-  uint32_t mS;
-  uint32_t kS;
-  uint32_t nS;
-
-  fetch_type Afetch;
-  fetch_type Bfetch;
-
-  uint32_t lf0;
-  uint32_t lf1;
-
-  uint32_t mL;
-  uint32_t nL;
-
-  bool prefetch;
-  bool unroll_outer;
-};
-
-class gemm : public base_impl<gemm, gemm_parameters>
+class gemm : public base_impl
 {
 private:
   uint32_t temporary_workspace(expression_tree const & expressions) const;
@@ -71,10 +43,32 @@ private:
                      value_scalar const &alpha, value_scalar const &beta, driver::Program const & program, std::string const & suffix, runtime::execution_options_type const & options);
   std::vector<int_t> infos(expression_tree const & expressions,  isaac::symbolic::preset::gemm::args &arguments) const;
 public:
-  gemm(gemm::parameters_type const & parameters, char A_trans, char B_trans);
+  gemm(uint32_t simd, int_t ls0, int_t KL, int_t ls1, int_t D
+       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
+       , int_t lf0, int_t lf1, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &ctr);
 private:
+  //Parameters
+  uint32_t kL_;
+  uint32_t depth_;
+
+  uint32_t mS_;
+  uint32_t kS_;
+  uint32_t nS_;
+
+  fetch_type Afetch_;
+  fetch_type Bfetch_;
+
+  uint32_t lf0_;
+  uint32_t lf1_;
+
+  uint32_t mL_;
+  uint32_t nL_;
+
+  bool prefetch_;
+  bool unroll_outer_;
+  //
   const char A_trans_;
   const char B_trans_;
   expression_type type_;
@@ -83,7 +77,7 @@ private:
 class gemm_nn : public gemm
 {
 public:
-  gemm_nn(uint32_t simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_nn(uint32_t vwidth, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lf0, int_t lf1);
 };
@@ -91,7 +85,7 @@ public:
 class gemm_tn : public gemm
 {
 public:
-  gemm_tn(uint32_t simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_tn(uint32_t vwidth, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lf0, int_t lf1);
 };
@@ -100,7 +94,7 @@ public:
 class gemm_nt : public gemm
 {
 public:
-  gemm_nt(uint32_t simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_nt(uint32_t vwidth, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lf0, int_t lf1);
 };
@@ -109,7 +103,7 @@ public:
 class gemm_tt : public gemm
 {
 public:
-  gemm_tt(uint32_t simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_tt(uint32_t vwidth, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lf0, int_t lf1);
 };
