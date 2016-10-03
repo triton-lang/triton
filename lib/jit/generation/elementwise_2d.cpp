@@ -33,13 +33,6 @@ namespace isaac
 namespace templates
 {
 
-elementwise_2d_parameters::elementwise_2d_parameters(uint32_t _vwidth,
-                          uint32_t _ls0, uint32_t _ls1,
-                          uint32_t _ng0, uint32_t _ng1,
-                          fetch_type _fetch) : base::parameters_type(_vwidth, _ls0, _ls1, 1), ng0(_ng0), ng1(_ng1), fetch(_fetch){ }
-
-
-
 int elementwise_2d::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 {
   if (p_.vwidth>1)
@@ -111,12 +104,9 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
   return stream.str();
 }
 
-elementwise_2d::elementwise_2d(parameters_type const & parameters) :
-  base_impl<elementwise_2d, elementwise_2d_parameters>(parameters){ }
-
-elementwise_2d::elementwise_2d(uint32_t simd, uint32_t ls1, uint32_t ls2,
-                               uint32_t ng1, uint32_t ng2, fetch_type fetch):
-    base_impl<elementwise_2d, elementwise_2d_parameters>(elementwise_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch))
+elementwise_2d::elementwise_2d(uint32_t vwidth, uint32_t ls0, uint32_t ls1,
+                               uint32_t ng0, uint32_t ng1, fetch_type fetch):
+    base_impl(vwidth, ls0, ls1), ng0_(ng0), ng1_(ng1), fetch_(fetch)
 {}
 
 std::vector<int_t> elementwise_2d::input_sizes(expression_tree const  & expression) const{

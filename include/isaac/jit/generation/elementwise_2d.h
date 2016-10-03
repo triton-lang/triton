@@ -30,17 +30,7 @@ namespace isaac
 namespace templates
 {
 
-class elementwise_2d_parameters : public base::parameters_type
-{
-public:
-  elementwise_2d_parameters(uint32_t _vwidth, uint32_t _ls0, uint32_t _ls1, uint32_t _ng0, uint32_t _ng1, fetch_type _fetch);
-
-  uint32_t ng0;
-  uint32_t ng1;
-  fetch_type fetch;
-};
-
-class elementwise_2d : public base_impl<elementwise_2d, elementwise_2d_parameters>
+class elementwise_2d : public base_impl
 {
 private:
   int is_invalid_impl(driver::Device const &, expression_tree const  &) const;
@@ -50,6 +40,10 @@ public:
   elementwise_2d(uint32_t simd, uint32_t ls1, uint32_t ls2,  uint32_t ng1, uint32_t ng2, fetch_type fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
+private:
+  uint32_t ng0_;
+  uint32_t ng1_;
+  fetch_type fetch_;
 };
 
 }

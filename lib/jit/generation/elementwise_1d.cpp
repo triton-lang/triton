@@ -36,14 +36,6 @@ namespace isaac
 namespace templates
 {
 
-elementwise_1d_parameters::elementwise_1d_parameters(uint32_t _vwidth,
-                       uint32_t _group_size, uint32_t _ng,
-                       fetch_type _fetch) :
-      base::parameters_type(_vwidth, _group_size, 1, 1), ng(_ng), fetch(_fetch)
-{
-}
-
-
 int elementwise_1d::is_invalid_impl(driver::Device const &, expression_tree const &) const
 {
   if (p_.fetch==FETCH_FROM_LOCAL)
@@ -118,13 +110,8 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
   return stream.str();
 }
 
-elementwise_1d::elementwise_1d(elementwise_1d_parameters const & parameters) :
-    base_impl<elementwise_1d, elementwise_1d_parameters>(parameters)
-{}
-
-elementwise_1d::elementwise_1d(uint32_t simd, uint32_t ls, uint32_t ng,
-                               fetch_type fetch):
-    base_impl<elementwise_1d, elementwise_1d_parameters>(elementwise_1d_parameters(simd,ls,ng,fetch))
+elementwise_1d::elementwise_1d(uint32_t vwidth, uint32_t ls, uint32_t ng, fetch_type fetch):
+    base_impl(vwidth,ls), ng_(ng), fetch_(fetch)
 {}
 
 

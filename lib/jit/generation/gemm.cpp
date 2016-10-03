@@ -37,18 +37,6 @@ namespace isaac
 namespace templates
 {
 
-gemm_parameters::gemm_parameters(uint32_t vwidth
-                          ,uint32_t ls0, uint32_t KL, uint32_t ls1, uint32_t D
-                          ,uint32_t ms, uint32_t ks, uint32_t ns
-                          ,fetch_type Afetch, fetch_type Bfetch
-                          ,uint32_t lf0, uint32_t lf1): base::parameters_type(vwidth, ls0, ls1, 1),
-  kL(KL), depth(D), mS(ms), kS(ks), nS(ns), Afetch(Afetch), Bfetch(Bfetch),
-  lf0(lf0), lf1(lf1),
-  mL(ms*ls0), nL(ns*ls1)
-{
-}
-
-
   uint32_t gemm::lmem_usage(expression_tree const & expression) const
   {
     uint32_t N = 0;
@@ -689,7 +677,13 @@ gemm_parameters::gemm_parameters(uint32_t vwidth
     return {M, N, K};
   }
 
-  gemm::gemm(gemm_parameters const & parameters, char A_trans, char B_trans) : base_impl<gemm, gemm_parameters>(parameters), A_trans_(A_trans), B_trans_(B_trans)
+  gemm::gemm(uint32_t vwidth
+             ,int_t ls0, int_t kL, int_t ls1, int_t D
+             ,int_t ms, int_t ks, int_t ns
+             ,fetch_type Afetch , fetch_type Bfetch
+             ,int_t lf0, int_t lf1, char A_trans, char B_trans) :
+    base_impl(vwidth, ls0, ls1), kL_(kL), depth_(D), mS_(ms), kS_(ks), nS_(ns),
+    Afetch_(Afetch), Bfetch_(Bfetch), lf0_(lf0), lf1_(lf1), A_trans_(A_trans), B_trans_(B_trans)
   {
     if(A_trans_=='N' && B_trans_=='N') type_ = GEMM_NN;
     else if(A_trans_=='T' && B_trans_=='N') type_ = GEMM_TN;
@@ -721,40 +715,40 @@ gemm_parameters::gemm_parameters(uint32_t vwidth
   }
 
   //
-  gemm_nn::gemm_nn(uint32_t simd
+  gemm_nn::gemm_nn(uint32_t vwidth
                            , int_t ls0, int_t KL, int_t ls1, int_t D
                            , int_t ms, int_t ks, int_t ns
                            , fetch_type Afetch , fetch_type Bfetch
                            , int_t lf0, int_t lf1) :
-    gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1), 'N', 'N')
+    gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1, 'N', 'N')
   {
   }
 
   //
-  gemm_tn::gemm_tn(uint32_t simd
+  gemm_tn::gemm_tn(uint32_t vwidth
                            , int_t ls0, int_t KL, int_t ls1, int_t D
                            , int_t ms, int_t ks, int_t ns
                            , fetch_type Afetch , fetch_type Bfetch
                            , int_t lf0, int_t lf1) :
-    gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1), 'T', 'N')
+    gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1, 'T', 'N')
   { }
 
   //
-  gemm_nt::gemm_nt(uint32_t simd
+  gemm_nt::gemm_nt(uint32_t vwidth
                            , int_t ls0, int_t KL, int_t ls1, int_t D
                            , int_t ms, int_t ks, int_t ns
                            , fetch_type Afetch , fetch_type Bfetch
                            , int_t lf0, int_t lf1) :
-    gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1), 'N', 'T')
+    gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1, 'N', 'T')
   { }
 
   //
-  gemm_tt::gemm_tt(uint32_t simd
+  gemm_tt::gemm_tt(uint32_t vwidth
                            , int_t ls0, int_t KL, int_t ls1, int_t D
                            , int_t ms, int_t ks, int_t ns
                            , fetch_type Afetch , fetch_type Bfetch
                            , int_t lf0, int_t lf1) :
-    gemm(gemm_parameters(simd, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1), 'T', 'T')
+    gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1, 'T', 'T')
   { }
 
 }

@@ -31,21 +31,11 @@ namespace isaac
 {
 namespace templates
 {
-struct reduce_2d_parameters : public base::parameters_type
-{
-  reduce_2d_parameters(uint32_t _vwidth,
-                                uint32_t _ls0, uint32_t _ls1,
-                                uint32_t _ng0, uint32_t _ng1, fetch_type _fetch_policy);
-  uint32_t ng0;
-  uint32_t ng1;
-  fetch_type fetch_policy;
-};
-
 
 class reduce_2d : public base_impl<reduce_2d, reduce_2d_parameters>
 {
 protected:
-  reduce_2d(reduce_2d::parameters_type const & , operation_type_family);
+  reduce_2d(uint32_t vwidth, uint32_t ls0, uint32_t ls1, uint32_t ng0, uint32_t ng1, fetch_type fetch, operation_type_family);
 private:
   int is_invalid_impl(driver::Device const &, expression_tree const &) const;
   uint32_t lmem_usage(expression_tree const &) const;
@@ -55,21 +45,22 @@ public:
   virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:
+  uint32_t ng0_;
+  uint32_t ng1_;
+  fetch_type fetch_;
   operation_type_family reduction_type_;
 };
 
 class reduce_2d_rows : public reduce_2d
 {
 public:
-  reduce_2d_rows(reduce_2d::parameters_type  const &);
-  reduce_2d_rows(uint32_t simd, uint32_t ls1, uint32_t ls2, uint32_t ng1, uint32_t ng2, fetch_type fetch);
+  reduce_2d_rows(uint32_t vwidth, uint32_t ls0, uint32_t ls1, uint32_t ng0, uint32_t ng1, fetch_type fetch);
 };
 
 class reduce_2d_cols : public reduce_2d
 {
 public:
-  reduce_2d_cols(reduce_2d::parameters_type  const &);
-  reduce_2d_cols(uint32_t simd, uint32_t ls1, uint32_t ls2, uint32_t ng1, uint32_t ng2, fetch_type fetch);
+  reduce_2d_cols(uint32_t vwidth, uint32_t ls0, uint32_t ls1, uint32_t ng0, uint32_t ng1, fetch_type fetch);
 };
 
 }

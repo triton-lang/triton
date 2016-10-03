@@ -35,10 +35,6 @@ namespace isaac
 {
 namespace templates
 {
-reduce_1d_parameters::reduce_1d_parameters(uint32_t _vwidth,
-                     uint32_t _group_size, uint32_t _ng,
-                     fetch_type _fetch) : base::parameters_type(_vwidth, _group_size, 1, 2), ng(_ng), fetch(_fetch)
-{ }
 
 uint32_t reduce_1d::lmem_usage(expression_tree const  & x) const
 {
@@ -253,11 +249,8 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   return stream.str();
 }
 
-reduce_1d::reduce_1d(reduce_1d::parameters_type const & parameters) : base_impl<reduce_1d, reduce_1d_parameters>(parameters)
-{ }
-
-reduce_1d::reduce_1d(uint32_t simd, uint32_t ls, uint32_t ng, fetch_type fetch):
-    base_impl<reduce_1d, reduce_1d_parameters>(reduce_1d_parameters(simd,ls,ng,fetch))
+reduce_1d::reduce_1d(uint32_t vwidth, uint32_t ls, uint32_t ng, fetch_type fetch):
+    base_impl(vwidth,ls), ng_(ng), fetch_(fetch)
 {}
 
 std::vector<int_t> reduce_1d::input_sizes(expression_tree const  & x) const

@@ -73,15 +73,6 @@ static const int TEMPLATE_BLOCK_SIZE_TOO_LARGE = -20;
 
 class base
 {
-public:
-  struct parameters_type
-  {
-    parameters_type(uint32_t _vwidth, int_t _ls0, int_t _ls1, int_t _nkernels);
-    uint32_t vwidth;
-    uint32_t ls0;
-    uint32_t ls1;
-    uint32_t nkernels;
-  };
 private:
   virtual std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const & mapping) const = 0;
 public:
@@ -97,20 +88,20 @@ public:
 };
 
 
-template<class TemplateType, class ParametersType>
 class base_impl : public base
 {
 private:
   virtual int is_invalid_impl(driver::Device const &, expression_tree const &) const;
 public:
-  typedef ParametersType parameters_type;
-  base_impl(parameters_type const & parameters);
+  base_impl(uint32_t _vwidth, int_t _ls0, int_t _ls1);
   uint32_t ls0() const;
   uint32_t ls1() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
   int is_invalid(expression_tree const & expressions, driver::Device const & device) const;
 protected:
-  parameters_type p_;
+  uint32_t vwidth_;
+  uint32_t ls0_;
+  uint32_t ls1_;
 };
 
 }
