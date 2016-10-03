@@ -66,19 +66,19 @@ std::string base::generate(std::string const & suffix, expression_tree const  & 
   return generate_impl(suffix, expression, device, mapping);
 }
 
-int base_impl::is_invalid_impl(driver::Device const &, expression_tree const  &) const
+int parameterized_base::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 { return TEMPLATE_VALID; }
 
-base_impl::base_impl(unsigned int vwidth, int_t ls0, int_t ls1): vwidth_(vwidth), ls0_(ls0), ls1_(ls1)
+parameterized_base::parameterized_base(unsigned int vwidth, int_t ls0, int_t ls1): vwidth_(vwidth), ls0_(ls0), ls1_(ls1)
 { }
 
-unsigned int base_impl::ls0() const
+unsigned int parameterized_base::ls0() const
 { return ls0_; }
 
-unsigned int base_impl::ls1() const
+unsigned int parameterized_base::ls1() const
 { return ls1_; }
 
-int base_impl::is_invalid(expression_tree const  & expressions, driver::Device const & device) const
+int parameterized_base::is_invalid(expression_tree const  & expressions, driver::Device const & device) const
 {
   //Query device informations
   size_t lmem_available = device.local_mem_size();

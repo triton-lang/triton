@@ -278,7 +278,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
 
 reduce_2d::reduce_2d(unsigned int vwidth, unsigned int ls0, unsigned int ls1, unsigned int ng0, unsigned int ng1, fetch_type fetch,
                     operation_type_family rtype) :
-  base_impl(vwidth, ls0, ls1), ng0_(ng0), ng1_(ng1), fetch_(fetch),
+  parameterized_base(vwidth, ls0, ls1), ng0_(ng0), ng1_(ng1), fetch_(fetch),
   reduction_type_(rtype){ }
 
 std::vector<int_t> reduce_2d::input_sizes(expression_tree const & tree) const

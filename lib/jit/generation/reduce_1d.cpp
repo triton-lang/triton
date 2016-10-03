@@ -250,7 +250,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
 }
 
 reduce_1d::reduce_1d(unsigned int vwidth, unsigned int ls, unsigned int ng, fetch_type fetch):
-    base_impl(vwidth,ls,1), ng_(ng), fetch_(fetch)
+    parameterized_base(vwidth,ls,1), ng_(ng), fetch_(fetch)
 {}
 
 std::vector<int_t> reduce_1d::input_sizes(expression_tree const  & x) const

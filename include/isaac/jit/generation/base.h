@@ -91,12 +91,12 @@ public:
 };
 
 
-class base_impl : public base
+class parameterized_base : public base
 {
 private:
   virtual int is_invalid_impl(driver::Device const &, expression_tree const &) const;
 public:
-  base_impl(unsigned int _vwidth, int_t _ls0, int_t _ls1);
+  parameterized_base(unsigned int _vwidth, int_t _ls0, int_t _ls1);
   unsigned int ls0() const;
   unsigned int ls1() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */

@@ -111,7 +111,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
 }
 
 elementwise_1d::elementwise_1d(unsigned int vwidth, unsigned int ls, unsigned int ng, fetch_type fetch):
-    base_impl(vwidth,ls,1), ng_(ng), fetch_(fetch)
+    parameterized_base(vwidth,ls,1), ng_(ng), fetch_(fetch)
 {}
 
 
