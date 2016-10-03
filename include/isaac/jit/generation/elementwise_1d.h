@@ -32,8 +32,8 @@ namespace templates
 class elementwise_1d_parameters : public base::parameters_type
 {
 public:
-  elementwise_1d_parameters(unsigned int _vwidth, unsigned int _group_size, unsigned int _num_groups, fetch_type _fetch);
-  unsigned int num_groups;
+  elementwise_1d_parameters(uint32_t _vwidth, uint32_t _group_size, uint32_t _ng, fetch_type _fetch);
+  uint32_t ng;
   fetch_type fetch;
 };
 
@@ -44,7 +44,7 @@ private:
   std::string generate_impl(std::string const & suffix, expression_tree const  & expressions, driver::Device const & device, symbolic::symbols_table const & symbols) const;
 public:
   elementwise_1d(elementwise_1d::parameters_type const & parameters);
-  elementwise_1d(unsigned int _vwidth, unsigned int _group_size, unsigned int _num_groups, fetch_type _fetch);
+  elementwise_1d(uint32_t _vwidth, uint32_t _group_size, uint32_t _ng, fetch_type _fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 };

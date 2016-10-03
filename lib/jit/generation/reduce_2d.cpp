@@ -39,10 +39,10 @@ namespace isaac
 namespace templates
 {
 
-reduce_2d_parameters::reduce_2d_parameters(unsigned int _vwidth,
-                              unsigned int _ls0, unsigned int _ls1,
-                              unsigned int _num_groups_0, unsigned int _num_groups_1, fetch_type _fetch_policy): base::parameters_type(_vwidth, _ls0, _ls1, 1),
-num_groups_0(_num_groups_0), num_groups_1(_num_groups_1), fetch_policy(_fetch_policy) { }
+reduce_2d_parameters::reduce_2d_parameters(uint32_t _vwidth,
+                              uint32_t _ls0, uint32_t _ls1,
+                              uint32_t _ng0, uint32_t _ng1, fetch_type _fetch_policy): base::parameters_type(_vwidth, _ls0, _ls1, 1),
+ng0(_ng0), ng1(_ng1), fetch_policy(_fetch_policy) { }
 
 
 int reduce_2d::is_invalid_impl(driver::Device const &, expression_tree const &) const
@@ -52,17 +52,17 @@ int reduce_2d::is_invalid_impl(driver::Device const &, expression_tree const &) 
   return TEMPLATE_VALID;
 }
 
-unsigned int reduce_2d::lmem_usage(const expression_tree&) const
+uint32_t reduce_2d::lmem_usage(const expression_tree&) const
 {
   return (p_.ls0+1)*p_.ls1;
 }
 
-unsigned int reduce_2d::temporary_workspace(expression_tree const & expressions) const
+uint32_t reduce_2d::temporary_workspace(expression_tree const & expressions) const
 {
     std::vector<int_t> MN = input_sizes(expressions);
     int_t M = MN[0];
-    if(p_.num_groups_0 > 1)
-      return M*p_.num_groups_0;
+    if(p_.ng0 > 1)
+      return M*p_.ng0;
     return 0;
 }
 
@@ -80,12 +80,12 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   name[0] += suffix;
   name[1] += suffix;
 
-  unsigned int ldls = p_.ls0;
+  uint32_t ldls = p_.ls0;
   std::string ls0ldstr = to_string(ldls);
 
   auto unroll_tmp = [&]()
   {
-      unsigned int offset = 0;
+      uint32_t offset = 0;
       for (symbolic::reduce_2d* rd : reductions)
       {
         numeric_type dtype = tree.dtype();
@@ -93,13 +93,13 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
         if (is_indexing(rd->op().type))
         {
           stream << rd->process("$GLOBAL uint* #name_temp = ($GLOBAL uint*)(tmp + " + tools::to_string(offset) + "*M);");
-          offset += 4*p_.num_groups_0;
+          offset += 4*p_.ng0;
           stream << rd->process("$GLOBAL " + sdtype + "* #name_temp_value = ($GLOBAL " + sdtype + "*)(tmp + " + tools::to_string(offset) + "*M);");
-          offset += size_of(dtype)*p_.num_groups_0;
+          offset += size_of(dtype)*p_.ng0;
         }
         else{
           stream << rd->process("$GLOBAL " + sdtype + "* #name_temp = ($GLOBAL " + sdtype + "*)(tmp + " + tools::to_string(offset) + "*M);");
-          offset += size_of(dtype)*p_.num_groups_0;
+          offset += size_of(dtype)*p_.ng0;
         }
       }
   };
@@ -127,7 +127,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   std::ostringstream upper;
   upper << "(M +" << p_.ls1 - 1 << ")/" << p_.ls1 << "*" << p_.ls1;
 
-  element_wise_loop_1D(stream, p_.fetch_policy, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](unsigned int cwidth)
+  element_wise_loop_1D(stream, p_.fetch_policy, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](uint32_t cwidth)
   {
   //Declare Buffers
   for (symbolic::reduce_2d* rd : reductions)
@@ -142,7 +142,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  element_wise_loop_1D(stream, p_.fetch_policy, (reduction_type_==REDUCE_COLUMNS)?p_.vwidth:1, "c", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int rwidth)
+  element_wise_loop_1D(stream, p_.fetch_policy, (reduction_type_==REDUCE_COLUMNS)?p_.vwidth:1, "c", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t rwidth)
   {
     std::string rdtype = append_width("#scalartype", rwidth);
     std::string cdtype = append_width("#scalartype", cwidth);
@@ -158,7 +158,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
         }
     //Compute
     for (symbolic::reduce_2d* rd : reductions)
-      for (unsigned int s = 0; s < rwidth; ++s){
+      for (uint32_t s = 0; s < rwidth; ++s){
         std::string value = rd->lhs()->evaluate({{"leaf", access_vector_type("#name", s, rwidth)}});
         if (is_indexing(rd->op().type))
           compute_index_reduce_1d(stream, rd->process("#name_acc"), "c*"+to_string(rwidth) + to_string(s), rd->process("#name_acc_value"), value, rd->op());
@@ -195,7 +195,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream <<  "if (r < M && lidx == 0)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  if(p_.num_groups_0==1)
+  if(p_.ng0==1)
     for(size_t idx: assignments)
       for(size_t s = 0 ; s < cwidth ; ++s)
           stream << symbols.at(idx)->evaluate({{"leaf", "at(r+" + to_string(s) + ")"},
@@ -217,7 +217,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   /* ------------------------
    * Kernel 2
    * -----------------------*/
-  if(p_.num_groups_0>1)
+  if(p_.ng0>1)
   {
   if(backend==driver::OPENCL)
     stream << " __attribute__((reqd_work_group_size(" << p_.ls0 << "," << p_.ls1 << ",1)))" << std::endl;
@@ -236,7 +236,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  stream << "for($SIZE_T c = lidx; c < " << p_.num_groups_0 << "; c += $LOCAL_SIZE_0){" << std::endl;
+  stream << "for($SIZE_T c = lidx; c < " << p_.ng0 << "; c += $LOCAL_SIZE_0){" << std::endl;
   stream.inc_tab();
   for (symbolic::reduce_2d* rd: reductions)
     compute_reduce_1d(stream, rd->process("#name_acc"), rd->process("#name_temp[r + M*c]"), rd->op());
@@ -306,16 +306,16 @@ void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
   name[0] += suffix;
   name[1] += suffix;
 
-  unsigned int nk = (p_.num_groups_0==1)?1:2;
+  uint32_t nk = (p_.ng0==1)?1:2;
 
   std::vector<driver::Kernel> kernels;
-  for(unsigned int k = 0 ; k < nk ; ++k)
+  for(uint32_t k = 0 ; k < nk ; ++k)
     kernels.push_back(driver::Kernel(program, name[k].c_str()));
 
-  for(unsigned int k = 0 ; k < nk ; ++k)
+  for(uint32_t k = 0 ; k < nk ; ++k)
   {
     driver::Kernel & kernel = kernels[k];
-    unsigned int n_arg = 0;
+    uint32_t n_arg = 0;
     int_t M = MN[0];
     int_t N = MN[1];
     kernel.setSizeArg(n_arg++, M);
@@ -325,20 +325,20 @@ void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
   }
 
   //NDRange
-  driver::NDRange global[2] = { driver::NDRange(p_.ls0*p_.num_groups_0, p_.ls1*p_.num_groups_1), driver::NDRange(p_.ls0, p_.ls1*p_.num_groups_1) };
+  driver::NDRange global[2] = { driver::NDRange(p_.ls0*p_.ng0, p_.ls1*p_.ng1), driver::NDRange(p_.ls0, p_.ls1*p_.ng1) };
   driver::NDRange local[2] = { driver::NDRange(p_.ls0, p_.ls1), driver::NDRange(p_.ls0, p_.ls1) };
-  for(unsigned int i = 0 ; i < nk ; ++i)
+  for(uint32_t i = 0 ; i < nk ; ++i)
     control.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }
 
 reduce_2d_rows::reduce_2d_rows(reduce_2d_parameters  const & parameters): reduce_2d(parameters, REDUCE_ROWS){}
 
-reduce_2d_rows::reduce_2d_rows(unsigned int simd, unsigned int ls1, unsigned int ls2,  unsigned int ng1, unsigned int ng2,
+reduce_2d_rows::reduce_2d_rows(uint32_t simd, uint32_t ls1, uint32_t ls2,  uint32_t ng1, uint32_t ng2,
                fetch_type fetch): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_ROWS) {}
 
 reduce_2d_cols::reduce_2d_cols(reduce_2d::parameters_type  const & parameters): reduce_2d(parameters, REDUCE_COLUMNS){}
 
-reduce_2d_cols::reduce_2d_cols(unsigned int simd, unsigned int ls1, unsigned int ls2, unsigned int ng1, unsigned int ng2,
+reduce_2d_cols::reduce_2d_cols(uint32_t simd, uint32_t ls1, uint32_t ls2, uint32_t ng1, uint32_t ng2,
                fetch_type fetch): reduce_2d(reduce_2d_parameters(simd, ls1, ls2, ng1, ng2, fetch), REDUCE_COLUMNS) {}
 
 

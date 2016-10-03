@@ -33,27 +33,27 @@ namespace templates
 
 struct gemm_parameters : public base::parameters_type
 {
-  gemm_parameters(unsigned int vwidth
-                            , unsigned int ls0, unsigned int KL, unsigned int ls1, unsigned int D
-                            , unsigned int ms, unsigned int ks, unsigned int ns
-                            , fetch_type Afetch, fetch_type Bfetch
-                            , unsigned int lf0, unsigned int lf1);
+  gemm_parameters(uint32_t vwidth
+                  ,uint32_t ls0, uint32_t KL, uint32_t ls1, uint32_t D
+                  ,uint32_t ms, uint32_t ks, uint32_t ns
+                  ,fetch_type Afetch, fetch_type Bfetch
+                  ,uint32_t lf0, uint32_t lf1);
 
-  unsigned int kL;
-  unsigned int depth;
+  uint32_t kL;
+  uint32_t depth;
 
-  unsigned int mS;
-  unsigned int kS;
-  unsigned int nS;
+  uint32_t mS;
+  uint32_t kS;
+  uint32_t nS;
 
   fetch_type Afetch;
   fetch_type Bfetch;
 
-  unsigned int lf0;
-  unsigned int lf1;
+  uint32_t lf0;
+  uint32_t lf1;
 
-  unsigned int mL;
-  unsigned int nL;
+  uint32_t mL;
+  uint32_t nL;
 
   bool prefetch;
   bool unroll_outer;
@@ -62,9 +62,9 @@ struct gemm_parameters : public base::parameters_type
 class gemm : public base_impl<gemm, gemm_parameters>
 {
 private:
-  unsigned int temporary_workspace(expression_tree const & expressions) const;
-  unsigned int lmem_usage(expression_tree const & expressions) const;
-  unsigned int registers_usage(expression_tree const & expressions) const;
+  uint32_t temporary_workspace(expression_tree const & expressions) const;
+  uint32_t lmem_usage(expression_tree const & expressions) const;
+  uint32_t registers_usage(expression_tree const & expressions) const;
   int is_invalid_impl(driver::Device const &, expression_tree const &) const;
   std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const &) const;
   void enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K, const expression_tree::node &A, const expression_tree::node &B, const expression_tree::node &C,
@@ -83,7 +83,7 @@ private:
 class gemm_nn : public gemm
 {
 public:
-  gemm_nn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_nn(uint32_t simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lf0, int_t lf1);
 };
@@ -91,7 +91,7 @@ public:
 class gemm_tn : public gemm
 {
 public:
-  gemm_tn(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_tn(uint32_t simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lf0, int_t lf1);
 };
@@ -100,7 +100,7 @@ public:
 class gemm_nt : public gemm
 {
 public:
-  gemm_nt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_nt(uint32_t simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lf0, int_t lf1);
 };
@@ -109,7 +109,7 @@ public:
 class gemm_tt : public gemm
 {
 public:
-  gemm_tt(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
+  gemm_tt(uint32_t simd, int_t ls0, int_t KL, int_t ls1, int_t D
                       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
                       , int_t lf0, int_t lf1);
 };

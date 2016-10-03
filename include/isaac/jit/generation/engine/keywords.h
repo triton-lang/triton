@@ -80,9 +80,9 @@ ADD_KEYWORD(GroupIdx0, "get_group_id(0)", "blockIdx.x")
 ADD_KEYWORD(GroupIdx1, "get_group_id(1)", "blockIdx.y")
 ADD_KEYWORD(GroupIdx2, "get_group_id(2)", "blockIdx.z")
 
-ADD_KEYWORD(GroupSize0, "get_num_groups(0)", "GridDim.x")
-ADD_KEYWORD(GroupSize1, "get_num_groups(1)", "GridDim.y")
-ADD_KEYWORD(GroupSize2, "get_num_groups(2)", "GridDim.z")
+ADD_KEYWORD(GroupSize0, "get_ng(0)", "GridDim.x")
+ADD_KEYWORD(GroupSize1, "get_ng(1)", "GridDim.y")
+ADD_KEYWORD(GroupSize2, "get_ng(2)", "GridDim.z")
 
 ADD_KEYWORD(LocalBarrier, "barrier(CLK_LOCAL_MEM_FENCE)", "__syncthreads()")
 struct CastPrefix: public keyword{ CastPrefix(driver::backend_type backend, std::string const & datatype): keyword(backend, "convert_" + datatype, "make_" + datatype){} };

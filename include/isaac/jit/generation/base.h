@@ -26,6 +26,7 @@
 #include <list>
 #include <set>
 #include <cmath>
+#include <stdint.h>
 
 #include "isaac/types.h"
 #include "isaac/jit/generation/engine/stream.h"
@@ -75,25 +76,24 @@ class base
 public:
   struct parameters_type
   {
-    parameters_type(unsigned int _vwidth, int_t _ls0, int_t _ls1, int_t _num_kernels);
-    unsigned int vwidth;
-    unsigned int ls0;
-    unsigned int ls1;
-    unsigned int num_kernels;
+    parameters_type(uint32_t _vwidth, int_t _ls0, int_t _ls1, int_t _nkernels);
+    uint32_t vwidth;
+    uint32_t ls0;
+    uint32_t ls1;
+    uint32_t nkernels;
   };
 private:
   virtual std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const & mapping) const = 0;
 public:
   base();
-  virtual unsigned int temporary_workspace(expression_tree const &) const;
-  virtual unsigned int lmem_usage(expression_tree const &) const;
-  virtual unsigned int registers_usage(expression_tree const &) const;
-  virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const = 0;
   virtual ~base();
-  std::string generate(std::string const & suffix, expression_tree const & expressions, driver::Device const & device);
+  virtual uint32_t temporary_workspace(expression_tree const &) const;
+  virtual uint32_t lmem_usage(expression_tree const &) const;
+  virtual uint32_t registers_usage(expression_tree const &) const;
+  virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const = 0;
   virtual int is_invalid(expression_tree const & expressions, driver::Device const & device) const = 0;
   virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & expressions) = 0;
-  virtual std::shared_ptr<base> clone() const = 0;
+  std::string generate(std::string const & suffix, expression_tree const & expressions, driver::Device const & device);
 };
 
 
@@ -105,9 +105,8 @@ private:
 public:
   typedef ParametersType parameters_type;
   base_impl(parameters_type const & parameters);
-  unsigned int ls0() const;
-  unsigned int ls1() const;
-  std::shared_ptr<base> clone() const;
+  uint32_t ls0() const;
+  uint32_t ls1() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
   int is_invalid(expression_tree const & expressions, driver::Device const & device) const;
 protected:

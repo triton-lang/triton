@@ -36,10 +36,10 @@ namespace isaac
 namespace templates
 {
 
-elementwise_1d_parameters::elementwise_1d_parameters(unsigned int _vwidth,
-                       unsigned int _group_size, unsigned int _num_groups,
+elementwise_1d_parameters::elementwise_1d_parameters(uint32_t _vwidth,
+                       uint32_t _group_size, uint32_t _ng,
                        fetch_type _fetch) :
-      base::parameters_type(_vwidth, _group_size, 1, 1), num_groups(_num_groups), fetch(_fetch)
+      base::parameters_type(_vwidth, _group_size, 1, 1), ng(_ng), fetch(_fetch)
 {
 }
 
@@ -83,7 +83,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
     stream.inc_tab();
   }
 
-  element_wise_loop_1D(stream, p_.fetch, p_.vwidth, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int vwidth)
+  element_wise_loop_1D(stream, p_.fetch, p_.vwidth, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t vwidth)
   {
     std::string dtype = append_width("#scalartype",vwidth);
 
@@ -97,12 +97,12 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
 
     //Compute
     for(size_t idx: assignments)
-      for(unsigned int s = 0 ; s < vwidth ; ++s)
+      for(uint32_t s = 0 ; s < vwidth ; ++s)
          stream << symbols.at(idx)->evaluate({{"leaf", access_vector_type("#name", s, vwidth)}}) << ";" << std::endl;
 
     //Writes back
     for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assignments_lhs, false))
-      for(unsigned int s = 0 ; s < vwidth ; ++s)
+      for(uint32_t s = 0 ; s < vwidth ; ++s)
           stream << sym->process("at(i+" + tools::to_string(s)+") = " + access_vector_type("#name", s, vwidth) + ";") << std::endl;
   });
   //Close user-provided for-loops
@@ -122,7 +122,7 @@ elementwise_1d::elementwise_1d(elementwise_1d_parameters const & parameters) :
     base_impl<elementwise_1d, elementwise_1d_parameters>(parameters)
 {}
 
-elementwise_1d::elementwise_1d(unsigned int simd, unsigned int ls, unsigned int ng,
+elementwise_1d::elementwise_1d(uint32_t simd, uint32_t ls, uint32_t ng,
                                fetch_type fetch):
     base_impl<elementwise_1d, elementwise_1d_parameters>(elementwise_1d_parameters(simd,ls,ng,fetch))
 {}
@@ -143,10 +143,10 @@ void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & pro
   name += suffix;
   driver::Kernel kernel(program, name.c_str());
   //NDRange
-  driver::NDRange global(p_.ls0*p_.num_groups);
+  driver::NDRange global(p_.ls0*p_.ng);
   driver::NDRange local(p_.ls0);
   //Arguments
-  unsigned int current_arg = 0;
+  uint32_t current_arg = 0;
   kernel.setSizeArg(current_arg++, size);
   symbolic::set_arguments(expressions, kernel, current_arg);
   control.execution_options().enqueue(program.context(), kernel, global, local);
