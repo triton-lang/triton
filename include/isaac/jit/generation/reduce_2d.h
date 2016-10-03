@@ -32,7 +32,7 @@ namespace isaac
 namespace templates
 {
 
-class reduce_2d : public base_impl<reduce_2d, reduce_2d_parameters>
+class reduce_2d : public base_impl
 {
 protected:
   reduce_2d(uint32_t vwidth, uint32_t ls0, uint32_t ls1, uint32_t ng0, uint32_t ng1, fetch_type fetch, operation_type_family);

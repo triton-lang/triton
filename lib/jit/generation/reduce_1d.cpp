@@ -38,20 +38,20 @@ namespace templates
 
 uint32_t reduce_1d::lmem_usage(expression_tree const  & x) const
 {
-  return p_.ls0*size_of(x.dtype());
+  return ls0_*size_of(x.dtype());
 }
 
 int reduce_1d::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 {
-  if (p_.fetch==FETCH_FROM_LOCAL)
+  if (fetch_==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
 uint32_t reduce_1d::temporary_workspace(expression_tree const &) const
 {
-    if(p_.ng > 1)
-      return p_.ng;
+    if(ng_ > 1)
+      return ng_;
     return 0;
 }
 
@@ -99,13 +99,13 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
         if (is_indexing(rd->op().type))
         {
           stream << rd->process("$GLOBAL uint* #name_temp = ($GLOBAL uint *)(tmp + " + tools::to_string(offset) + ");");
-          offset += 4*p_.ng;
+          offset += 4*ng_;
           stream << rd->process("$GLOBAL " + sdtype + "* #name_temp_value = ($GLOBAL " + sdtype + "*)(tmp + " + tools::to_string(offset) + ");");
-          offset += size_of(dtype)*p_.ng;
+          offset += size_of(dtype)*ng_;
         }
         else{
           stream << rd->process("$GLOBAL " + sdtype + "* #name_temp = ($GLOBAL " + sdtype + "*)(tmp + " + tools::to_string(offset) + ");");
-          offset += size_of(dtype)*p_.ng;
+          offset += size_of(dtype)*ng_;
         }
       }
   };
@@ -118,7 +118,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
     case driver::CUDA:
       stream << "#include  \"vector.h\"" << std::endl; break;
     case driver::OPENCL:
-      stream << " __attribute__((reqd_work_group_size(" << p_.ls0 << ",1,1)))" << std::endl; break;
+      stream << " __attribute__((reqd_work_group_size(" << ls0_ << ",1,1)))" << std::endl; break;
   }
   stream << "$KERNEL void prod" << suffix << "($SIZE_T N, $GLOBAL char* tmp," << tools::join(kernel_arguments(device, symbols, tree), ", ") << ")" << std::endl;
   stream << "{" << std::endl;
@@ -135,18 +135,18 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   {
     if(is_indexing(rd->op().type))
     {
-      stream << rd->process("$LOCAL #scalartype #name_buf_value[" + tools::to_string(p_.ls0) + "];") << std::endl;
+      stream << rd->process("$LOCAL #scalartype #name_buf_value[" + tools::to_string(ls0_) + "];") << std::endl;
       stream << rd->process("#scalartype #name_acc_value = " + neutral_element(rd->op(), backend, "#scalartype") + ";") << std::endl;
-      stream << rd->process("$LOCAL uint32_t #name_buf[" + tools::to_string(p_.ls0) + "];") << std::endl;
+      stream << rd->process("$LOCAL uint32_t #name_buf[" + tools::to_string(ls0_) + "];") << std::endl;
       stream << rd->process("uint32_t #name_acc = 0;") << std::endl;
     }
     else
     {
-      stream << rd->process("$LOCAL #scalartype #name_buf[" + tools::to_string(p_.ls0) + "];") << std::endl;
+      stream << rd->process("$LOCAL #scalartype #name_buf[" + tools::to_string(ls0_) + "];") << std::endl;
       stream << rd->process("#scalartype #name_acc = " + neutral_element(rd->op(), backend, "#scalartype") + ";") << std::endl;
     }
   }
-  element_wise_loop_1D(stream, p_.fetch, p_.vwidth, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t vwidth)
+  element_wise_loop_1D(stream, fetch_, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t vwidth)
   {
     std::string dtype = append_width("#scalartype",vwidth);
     //Fetch vector entry
@@ -174,7 +174,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
     stream << rd->process("#name_buf[lid] = #name_acc;") << std::endl;
   }
   //Reduce local memory
-  reduce_1d_local_memory(stream, p_.ls0, reductions, "#name_buf", "#name_buf_value", backend);
+  reduce_1d_local_memory(stream, ls0_, reductions, "#name_buf", "#name_buf_value", backend);
   //Write to temporary buffers
   stream << "if (lid==0)" << std::endl;
   stream << "{" << std::endl;
@@ -205,19 +205,19 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   {
     if (is_indexing(rd->op().type))
     {
-      stream << rd->process("$LOCAL uint32_t #name_buf[" + tools::to_string(p_.ls0) + "];");
+      stream << rd->process("$LOCAL uint32_t #name_buf[" + tools::to_string(ls0_) + "];");
       stream << rd->process("uint32_t #name_acc = 0;") << std::endl;
-      stream << rd->process("$LOCAL #scalartype #name_buf_value[" + tools::to_string(p_.ls0) + "];") << std::endl;
+      stream << rd->process("$LOCAL #scalartype #name_buf_value[" + tools::to_string(ls0_) + "];") << std::endl;
       stream << rd->process("#scalartype #name_acc_value = " + neutral_element(rd->op(), backend, "#scalartype") + ";");
     }
     else
     {
-      stream << rd->process("$LOCAL #scalartype #name_buf[" + tools::to_string(p_.ls0) + "];") << std::endl;
+      stream << rd->process("$LOCAL #scalartype #name_buf[" + tools::to_string(ls0_) + "];") << std::endl;
       stream << rd->process("#scalartype #name_acc = " + neutral_element(rd->op(), backend, "#scalartype") + ";");
     }
   }
   //Private reduction
-  stream << "for(uint32_t i = lid; i < " << p_.ng << "; i += lsize)" << std::endl;
+  stream << "for(uint32_t i = lid; i < " << ng_ << "; i += lsize)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
   for (symbolic::reduce_1d* rd: reductions)
@@ -234,7 +234,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
     stream << rd->process("#name_buf[lid] = #name_acc;") << std::endl;
   }
   //Local reduction
-  reduce_1d_local_memory(stream, p_.ls0, reductions, "#name_buf", "#name_buf_value", backend);
+  reduce_1d_local_memory(stream, ls0_, reductions, "#name_buf", "#name_buf_value", backend);
   //Write
   stream << "if (lid==0)" << std::endl;
   stream << "{" << std::endl;
@@ -250,7 +250,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
 }
 
 reduce_1d::reduce_1d(uint32_t vwidth, uint32_t ls, uint32_t ng, fetch_type fetch):
-    base_impl(vwidth,ls), ng_(ng), fetch_(fetch)
+    base_impl(vwidth,ls,1), ng_(ng), fetch_(fetch)
 {}
 
 std::vector<int_t> reduce_1d::input_sizes(expression_tree const  & x) const
@@ -275,8 +275,8 @@ void reduce_1d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
   driver::Kernel kernels[2] = { driver::Kernel(program,name[0].c_str()), driver::Kernel(program,name[1].c_str()) };
 
   //NDRange
-  driver::NDRange global[2] = { driver::NDRange(p_.ls0*p_.ng), driver::NDRange(p_.ls0) };
-  driver::NDRange local[2] = { driver::NDRange(p_.ls0), driver::NDRange(p_.ls0) };
+  driver::NDRange global[2] = { driver::NDRange(ls0_*ng_), driver::NDRange(ls0_) };
+  driver::NDRange local[2] = { driver::NDRange(ls0_), driver::NDRange(ls0_) };
   //Arguments
   for (auto & kernel : kernels)
   {

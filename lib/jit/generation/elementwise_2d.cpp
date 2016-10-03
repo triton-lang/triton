@@ -35,9 +35,9 @@ namespace templates
 
 int elementwise_2d::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 {
-  if (p_.vwidth>1)
+  if (vwidth_>1)
     return TEMPLATE_INVALID_SIMD_WIDTH;
-  if(p_.fetch==FETCH_FROM_LOCAL)
+  if(fetch_==FETCH_FROM_LOCAL)
     return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
@@ -60,7 +60,7 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
     case driver::CUDA:
       stream << "#include  \"vector.h\"" << std::endl; break;
     case driver::OPENCL:
-      stream << " __attribute__((reqd_work_group_size(" << p_.ls0 << "," << p_.ls1 << ",1)))" << std::endl; break;
+      stream << " __attribute__((reqd_work_group_size(" << ls0_ << "," << ls1_ << ",1)))" << std::endl; break;
   }
 
   stream << "$KERNEL void elementwise_2d" << suffix << "($SIZE_T M, $SIZE_T N, " << tools::join(kernel_arguments(device, symbols, tree), ", ") << ")" << std::endl;
@@ -68,11 +68,11 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
   stream.inc_tab();
 
 
-  fetching_loop_info(p_.fetch, "M", stream, init0, upper_bound0, inc0,  "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device);
+  fetching_loop_info(fetch_, "M", stream, init0, upper_bound0, inc0,  "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device);
   stream << "for($SIZE_T i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  fetching_loop_info(p_.fetch, "N", stream, init1, upper_bound1, inc1, "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device);
+  fetching_loop_info(fetch_, "N", stream, init1, upper_bound1, inc1, "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device);
   stream << "for($SIZE_T j = " << init1 << "; j < " << upper_bound1 << "; j += " << inc1 << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
@@ -119,8 +119,8 @@ void elementwise_2d::enqueue(driver::CommandQueue & /*queue*/, driver::Program c
   std::string name = "elementwise_2d";
   name +=suffix;
   driver::Kernel kernel(program, name.c_str());
-  driver::NDRange global(p_.ls0*p_.ng0, p_.ls1*p_.ng1);
-  driver::NDRange local(p_.ls0, p_.ls1);
+  driver::NDRange global(ls0_*ng0_, ls1_*ng1_);
+  driver::NDRange local(ls0_, ls1_);
   uint32_t current_arg = 0;
   std::vector<int_t> MN = input_sizes(expressions);
   kernel.setSizeArg(current_arg++, MN[0]);

@@ -23,6 +23,8 @@
 #include "common.hpp"
 #include "core.h"
 
+namespace tpt = sc::templates;
+
 namespace detail
 {
 
@@ -103,7 +105,8 @@ namespace detail
 {
   std::shared_ptr<rt::profiles::value_type> construct_model(bp::object const & tp, bp::object dtype, sc::driver::CommandQueue & queue)
   {
-      return std::shared_ptr<rt::profiles::value_type>(new rt::profiles::value_type(tools::extract_template_type(tp), tools::extract_dtype(dtype), (sc::templates::base const &)bp::extract<sc::templates::base>(tp), queue));
+      tpt::base* raw =  bp::extract<tpt::base*>(tp);
+      return std::make_shared<rt::profiles::value_type>(tools::extract_template_type(tp), tools::extract_dtype(dtype), raw->getptr(), queue);
   }
 
   std::shared_ptr<sc::array>
