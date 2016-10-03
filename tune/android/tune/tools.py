@@ -82,7 +82,8 @@ def tree_of(template, sizes, context):
         M, N = sizes[::-1] if T else sizes
         A = sc.empty((M,N), context=context)
         x = sc.empty(N, context=context)
-        return sc.dot(A.T, x) if T else sc.dot(A, x), (A, x)
+        y = sc.empty(M, context=context)
+        return sc.assign(x, sc.dot(A.T, y)) if T else sc.assign(y, sc.dot(A, x)), (A, x, y)
     elif issubclass(template, sc.templates.gemm):
         AT = template is sc.templates.gemm_tn or template is sc.templates.gemm_tt
         BT = template is sc.templates.gemm_nt or template is sc.templates.gemm_tt

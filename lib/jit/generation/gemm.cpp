@@ -40,9 +40,9 @@ namespace templates
   unsigned int gemm::lmem_usage(expression_tree const & expression) const
   {
     unsigned int N = 0;
-    size_t llda = (A_trans_=='N')?mL_:kL_+1;
+    size_t llda = (A_trans_=='N')?mL_:kL_+vwidth_;
     size_t lnda = (A_trans_=='N')?kL_:mL_;
-    size_t lldb = (B_trans_=='T')?nL_:kL_+1;
+    size_t lldb = (B_trans_=='T')?nL_:kL_+vwidth_;
     size_t lndb = (B_trans_=='T')?kL_:nL_;
     N += llda*lnda;
     N += lldb*lndb;
@@ -173,9 +173,9 @@ namespace templates
     stream << std::endl;
 
     stream << "//pointers" << std::endl;
-    size_t llda = (A_trans_=='N')?mL_:kL_+1;
+    size_t llda = (A_trans_=='N')?mL_:kL_+vwidth_;
     size_t lnda = (A_trans_=='N')?kL_:mL_;
-    size_t lldb = (B_trans_=='T')?nL_:kL_+1;
+    size_t lldb = (B_trans_=='T')?nL_:kL_+vwidth_;
     size_t lndb = (B_trans_=='T')?kL_:nL_;
     stream << "$LOCAL " << sdtype << " lA[" << llda*lnda << "];" << std::endl;
     stream << "$LOCAL " << sdtype << " lB[" << lldb*lndb << "];" << std::endl;

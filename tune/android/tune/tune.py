@@ -81,16 +81,15 @@ class Tuner:
             if level=='simple':
                 sizes = [(1536, 1536)]
             elif level=='intermediate':
-                sizes = [(896,896),
-                         (1536,1536),
-                         (256, 256),
-                         (1024,256), 
-                         (4096,256),
-                         (16384,256), 
-                         (256,1024), 
-                         (256,4096),
-                         (256,16384),
-                         (3025,96)]
+				sizes = []
+				#Square
+				for N in [896, 1760, 2048, 2560]:
+				   sizes += [(N, N)]
+				#Tall and Skinny
+				for M in [16, 32, 64, 128]:
+					for N in [1024, 4096, 16384, 65536, 262144]:
+						sizes += [(M, N)]
+						sizes += [(N, M)]
             else:
                 sizes = product(pow2range(4,17), pow2range(4,17))
         
