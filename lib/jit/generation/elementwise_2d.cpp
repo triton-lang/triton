@@ -104,8 +104,8 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
   return stream.str();
 }
 
-elementwise_2d::elementwise_2d(uint32_t vwidth, uint32_t ls0, uint32_t ls1,
-                               uint32_t ng0, uint32_t ng1, fetch_type fetch):
+elementwise_2d::elementwise_2d(unsigned int vwidth, unsigned int ls0, unsigned int ls1,
+                               unsigned int ng0, unsigned int ng1, fetch_type fetch):
     base_impl(vwidth, ls0, ls1), ng0_(ng0), ng1_(ng1), fetch_(fetch)
 {}
 
@@ -121,7 +121,7 @@ void elementwise_2d::enqueue(driver::CommandQueue & /*queue*/, driver::Program c
   driver::Kernel kernel(program, name.c_str());
   driver::NDRange global(ls0_*ng0_, ls1_*ng1_);
   driver::NDRange local(ls0_, ls1_);
-  uint32_t current_arg = 0;
+  unsigned int current_arg = 0;
   std::vector<int_t> MN = input_sizes(expressions);
   kernel.setSizeArg(current_arg++, MN[0]);
   kernel.setSizeArg(current_arg++, MN[1]);

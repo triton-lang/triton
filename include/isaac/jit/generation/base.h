@@ -78,9 +78,9 @@ private:
 public:
   base();
   virtual ~base();
-  virtual uint32_t temporary_workspace(expression_tree const &) const;
-  virtual uint32_t lmem_usage(expression_tree const &) const;
-  virtual uint32_t registers_usage(expression_tree const &) const;
+  virtual unsigned int temporary_workspace(expression_tree const &) const;
+  virtual unsigned int lmem_usage(expression_tree const &) const;
+  virtual unsigned int registers_usage(expression_tree const &) const;
   virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const = 0;
   virtual int is_invalid(expression_tree const & expressions, driver::Device const & device) const = 0;
   virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & expressions) = 0;
@@ -96,15 +96,15 @@ class base_impl : public base
 private:
   virtual int is_invalid_impl(driver::Device const &, expression_tree const &) const;
 public:
-  base_impl(uint32_t _vwidth, int_t _ls0, int_t _ls1);
-  uint32_t ls0() const;
-  uint32_t ls1() const;
+  base_impl(unsigned int _vwidth, int_t _ls0, int_t _ls1);
+  unsigned int ls0() const;
+  unsigned int ls1() const;
   /** @brief returns whether or not the profile has undefined behavior on particular device */
   int is_invalid(expression_tree const & expressions, driver::Device const & device) const;
 protected:
-  uint32_t vwidth_;
-  uint32_t ls0_;
-  uint32_t ls1_;
+  unsigned int vwidth_;
+  unsigned int ls0_;
+  unsigned int ls1_;
 };
 
 }

@@ -35,18 +35,18 @@ namespace templates
 class reduce_2d : public base_impl
 {
 protected:
-  reduce_2d(uint32_t vwidth, uint32_t ls0, uint32_t ls1, uint32_t ng0, uint32_t ng1, fetch_type fetch, operation_type_family);
+  reduce_2d(unsigned int vwidth, unsigned int ls0, unsigned int ls1, unsigned int ng0, unsigned int ng1, fetch_type fetch, operation_type_family);
 private:
   int is_invalid_impl(driver::Device const &, expression_tree const &) const;
-  uint32_t lmem_usage(expression_tree const &) const;
-  uint32_t temporary_workspace(expression_tree const & expressions) const;
+  unsigned int lmem_usage(expression_tree const &) const;
+  unsigned int temporary_workspace(expression_tree const & expressions) const;
   std::string generate_impl(std::string const & suffix, expression_tree const &, driver::Device const & device, symbolic::symbols_table const &) const;
 public:
   virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:
-  uint32_t ng0_;
-  uint32_t ng1_;
+  unsigned int ng0_;
+  unsigned int ng1_;
   fetch_type fetch_;
   operation_type_family reduction_type_;
 };
@@ -54,13 +54,13 @@ private:
 class reduce_2d_rows : public reduce_2d
 {
 public:
-  reduce_2d_rows(uint32_t vwidth, uint32_t ls0, uint32_t ls1, uint32_t ng0, uint32_t ng1, fetch_type fetch);
+  reduce_2d_rows(unsigned int vwidth, unsigned int ls0, unsigned int ls1, unsigned int ng0, unsigned int ng1, fetch_type fetch);
 };
 
 class reduce_2d_cols : public reduce_2d
 {
 public:
-  reduce_2d_cols(uint32_t vwidth, uint32_t ls0, uint32_t ls1, uint32_t ng0, uint32_t ng1, fetch_type fetch);
+  reduce_2d_cols(unsigned int vwidth, unsigned int ls0, unsigned int ls1, unsigned int ng0, unsigned int ng1, fetch_type fetch);
 };
 
 }

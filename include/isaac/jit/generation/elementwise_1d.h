@@ -35,11 +35,11 @@ private:
   virtual int is_invalid_impl(driver::Device const &, expression_tree const  &) const;
   std::string generate_impl(std::string const & suffix, expression_tree const  & expressions, driver::Device const & device, symbolic::symbols_table const & symbols) const;
 public:
-  elementwise_1d(uint32_t vwidth, uint32_t ls, uint32_t ng, fetch_type fetch);
+  elementwise_1d(unsigned int vwidth, unsigned int ls, unsigned int ng, fetch_type fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
 private:
-  uint32_t ng_;
+  unsigned int ng_;
   fetch_type fetch_;
 };
 
