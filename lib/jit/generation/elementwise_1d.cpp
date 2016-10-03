@@ -75,7 +75,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
     stream.inc_tab();
   }
 
-  element_wise_loop_1D(stream, fetch_, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](uint32_t vwidth)
+  element_wise_loop_1D(stream, fetch_, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int vwidth)
   {
     std::string dtype = append_width("#scalartype",vwidth);
 
@@ -89,12 +89,12 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
 
     //Compute
     for(size_t idx: assignments)
-      for(uint32_t s = 0 ; s < vwidth ; ++s)
+      for(unsigned int s = 0 ; s < vwidth ; ++s)
          stream << symbols.at(idx)->evaluate({{"leaf", access_vector_type("#name", s, vwidth)}}) << ";" << std::endl;
 
     //Writes back
     for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assignments_lhs, false))
-      for(uint32_t s = 0 ; s < vwidth ; ++s)
+      for(unsigned int s = 0 ; s < vwidth ; ++s)
           stream << sym->process("at(i+" + tools::to_string(s)+") = " + access_vector_type("#name", s, vwidth) + ";") << std::endl;
   });
   //Close user-provided for-loops
@@ -110,7 +110,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
   return stream.str();
 }
 
-elementwise_1d::elementwise_1d(uint32_t vwidth, uint32_t ls, uint32_t ng, fetch_type fetch):
+elementwise_1d::elementwise_1d(unsigned int vwidth, unsigned int ls, unsigned int ng, fetch_type fetch):
     base_impl(vwidth,ls,1), ng_(ng), fetch_(fetch)
 {}
 
@@ -133,7 +133,7 @@ void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & pro
   driver::NDRange global(ls0_*ng_);
   driver::NDRange local(ls0_);
   //Arguments
-  uint32_t current_arg = 0;
+  unsigned int current_arg = 0;
   kernel.setSizeArg(current_arg++, size);
   symbolic::set_arguments(expressions, kernel, current_arg);
   control.execution_options().enqueue(program.context(), kernel, global, local);

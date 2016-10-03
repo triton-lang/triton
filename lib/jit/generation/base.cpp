@@ -43,13 +43,13 @@ namespace templates
 base::base()
 {}
 
-uint32_t base::lmem_usage(expression_tree const  &) const
+unsigned int base::lmem_usage(expression_tree const  &) const
 { return 0; }
 
-uint32_t base::registers_usage(expression_tree const  &) const
+unsigned int base::registers_usage(expression_tree const  &) const
 { return 0; }
 
-uint32_t base::temporary_workspace(expression_tree const  &) const
+unsigned int base::temporary_workspace(expression_tree const  &) const
 { return 0; }
 
 base::~base()
@@ -69,13 +69,13 @@ std::string base::generate(std::string const & suffix, expression_tree const  & 
 int base_impl::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 { return TEMPLATE_VALID; }
 
-base_impl::base_impl(uint32_t vwidth, int_t ls0, int_t ls1): vwidth_(vwidth), ls0_(ls0), ls1_(ls1)
+base_impl::base_impl(unsigned int vwidth, int_t ls0, int_t ls1): vwidth_(vwidth), ls0_(ls0), ls1_(ls1)
 { }
 
-uint32_t base_impl::ls0() const
+unsigned int base_impl::ls0() const
 { return ls0_; }
 
-uint32_t base_impl::ls1() const
+unsigned int base_impl::ls1() const
 { return ls1_; }
 
 int base_impl::is_invalid(expression_tree const  & expressions, driver::Device const & device) const

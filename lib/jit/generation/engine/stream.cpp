@@ -25,14 +25,14 @@
 namespace isaac
 {
 
-kernel_generation_stream::kgenstream::kgenstream(std::ostringstream& oss,uint32_t const & tab_count) :
+kernel_generation_stream::kgenstream::kgenstream(std::ostringstream& oss,unsigned int const & tab_count) :
   oss_(oss), tab_count_(tab_count)
 { }
 
 
 int kernel_generation_stream::kgenstream::sync()
 {
-  for (uint32_t i=0; i<tab_count_;++i)
+  for (unsigned int i=0; i<tab_count_;++i)
     oss_ << "  ";
   std::string next = str();
   oss_ << next;
