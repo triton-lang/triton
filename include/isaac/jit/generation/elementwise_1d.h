@@ -38,6 +38,7 @@ public:
   elementwise_1d(unsigned int vwidth, unsigned int ls, unsigned int ng, fetch_type fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
+  expression_type type() const;
 private:
   unsigned int ng_;
   fetch_type fetch_;

@@ -69,73 +69,52 @@ class Tuner:
 
         #BLAS1 training sizes
         if operation in [sc.templates.elementwise_1d, sc.templates.reduce_1d]:
-            if level=='simple':
-                sizes = [(10000000,)]
-            elif level=='intermediate':
-                sizes = [(x,) for x in tools.expspace(1e3, 1e8, 10)]
-            else:
-                sizes = [(x,) for x in tools.expspace(1e3, 1e8, 100)] 
+            sizes = [(x,) for x in tools.expspace(1e3, 1e8, 20)]
         
         #BLAS2 training sizes
         if operation in [sc.templates.elementwise_2d, sc.templates.reduce_2d_rows, sc.templates.reduce_2d_cols]:
-            if level=='simple':
-                sizes = [(1536, 1536)]
-            elif level=='intermediate':
-				sizes = []
-				#Square
-				for N in [896, 1760, 2048, 2560]:
-				   sizes += [(N, N)]
-				#Tall and Skinny
-				for M in [16, 32, 64, 128]:
-					for N in [1024, 4096, 16384, 65536, 262144]:
-						sizes += [(M, N)]
-						sizes += [(N, M)]
-            else:
-                sizes = product(pow2range(4,17), pow2range(4,17))
+            sizes = []
+            #Square
+            for N in [896, 1760, 2048, 2560]:
+                sizes += [(N, N)]
+            #Tall and Skinny
+            for M in [16, 32, 64, 128]:
+                for N in [1024, 4096, 16384, 65536, 262144]:
+                    sizes += [(M, N)]
+                    sizes += [(N, M)]
         
         #BLAS3 training sizes
         if operation in [sc.templates.gemm_nn, sc.templates.gemm_nt, sc.templates.gemm_tn, sc.templates.gemm_tt]:
-            if level=='simple':
-                sizes = [(2560,2560,2560)]
-            elif level=='intermediate':
-               sizes = []
-               #Square
-               for N in [896, 1760, 2048, 2560]:
-				   sizes += [(N, N, N)]
-               #LaPack
-               for N in [896, 1760, 2048, 2560]:
-				   for K in [16, 32, 64, 128]:
-					   sizes += [(N, N, K)]
-               #Covariance
-               for N in [16, 32, 64, 128]:
-				   for K in [16000,32000,64000,128000]:
-					   sizes += [(N, N, K)]
-               #DeepSpeech
-               for M in [1760, 2048, 2560]:
-                   for N in [16, 32, 64, 128, M]:
-                       sizes += [(M, N, M)]
-            elif level=='full':
-			    sizes = product(pow2range(5, 12), pow2range(5, 12), pow2range(5, 17))
+            sizes = []
+            #Square
+            for N in [896, 1760, 2048, 2560]:
+                sizes += [(N, N, N)]
+            #LaPack
+            for N in [896, 1760, 2048, 2560]:
+			   for K in [16, 32, 64, 128]:
+				   sizes += [(N, N, K)]
+            #Covariance
+            for N in [16, 32, 64, 128]:
+			   for K in [16000,32000,64000,128000]:
+				   sizes += [(N, N, K)]
+            #DeepSpeech
+            for M in [1760, 2048, 2560]:
+                for N in [16, 32, 64, 128, M]:
+                    sizes += [(M, N, M)]
 
-        #Remove duplicates and or too small/big tuples
-        sizes = [x for x in sizes if 1e-4 <= tools.memory_footprint(operation, x) <= 2e-1]
-        
         #Training data
         performance = tools.metric_of(operation)
         profiles, X, Y = [], [], []
         
-        #Restore previous run
+        #Restore progress
         savepath = os.path.join('save', operation.__name__)
         if not os.path.exists(savepath):
             os.makedirs(savepath)
-        
         try:
             with open(os.path.join(savepath, 'X.csv')) as f:
                 X = [tuple(map(int, row)) for row in csv.reader(f, delimiter=',')]
-                
             with open(os.path.join(savepath, 'Y.csv')) as f:
                 Y = [map(float, row) for row in csv.reader(f, delimiter=',')]
-            
             with open(os.path.join(savepath, 'profiles.csv')) as f:
                 def mmap(x):
                     if x=='FETCH_FROM_LOCAL':
@@ -149,94 +128,69 @@ class Tuner:
         except:
             pass
         
-        ##### Exploration #####
+        #Tuning
         for idx, x in enumerate(sizes):
+            #Create new line on log
             if idx>0:
-                self.progress_bar.set_finished()
-
+             self.progress_bar.set_finished()
             self.progress_bar.set_prefix(', '.join(map(str, x)))
-            #Skip if saved
+            #Skip if already saved
             if x in X:
                 row = Y[X.index(x)]
                 self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
                 continue
-            
-            #Check if the current best prediction is not a local optimum
-            idx = len(X)
-            nparams = len(profiles)
             tree, operands = tools.tree_of(operation, x, context)
-            if idx==0:
-                retune = True
-                predicted = None
-            else:
-                if nparams==1:
-                    predicted = profiles[0]
-                else:
-                    clf = RandomForestRegressor(min(10, idx+1), max_depth=min(10, idx+1)).fit(X, Y)
-                    #clf, nrmse = model.train(X, Y, profiles)
-                    predperf = clf.predict(x)[0]
-                    best = (-predperf).argsort()
-                    perf = []
-                    for b in best:
-                        try:
-                            perf += [performance(x, tools.benchmark(operation, profiles[b], tree))]
-                            break
-                        except profile_execution_failure:
-                            pass
-                    if perf:
-                        predicted = profiles[best[argmax(perf)]]
-                        retune = not optimize.is_local_optimum(predicted, operation, x, context)
-                    else:
-                        retune = True
-                        predicted = None
-                
+            #Check if GA needs to run (i.e., current best prediction is not a local optimum)
+            tune = True
+            best = None
+            if idx > 0:
+                dim = min(10, idx+1)
+                model = RandomForestRegressor(dim, dim).fit(X, Y)
+                predictions = model.predict(x)[0]
+                for idx in (-predictions).argsort():
+                    ts = tools.benchmark(operation, operation(*profiles[idx]), tree)
+                    if np.isfinite(ts):
+                        break
+                if np.isfinite(ts):
+                    best = profiles[idx]
+                    tune = not optimize.is_local_optimum(predicted, operation, x, context)
             #Retune if necessary
-            if retune:
+            if tune:
                 optimizer = optimize.GeneticOptimizer(self.logger, naccept=1000, niter=1000, cxpb=.4, mutpb=.4, popsize=20, progress_bar = self.progress_bar)
-                new = optimizer.run(operation, x, context, prior=predicted)[0]
-                if new not in profiles:
-                    profiles.append(new)
-                    if idx > 0:
-                        for xx,yy in zip(X, Y):
-                            _tree, _operands = tools.tree_of(operation, xx, context)
-                            try:
-                                time = tools.benchmark(operation, new, _tree)
-                                perf = performance(xx, time)
-                            except profile_execution_failure:
-                                perf = 0
-                            yy.append(0 if isinf(perf) else perf)
-                            
-                
-            ##### Training #####
-            y = []
-            fastest = max(predperf) if nparams > 1 else None
-            for ip, p in enumerate(profiles):
-                try:
-                    perf = 0 if fastest and ip < nparams and predperf[ip]/fastest < .1 else performance(x,tools.benchmark(operation, p, tree))
-                except profile_execution_failure:
-                    perf = 0
-                y.append(0 if isinf(perf) else perf)
+                best = optimizer.run(operation, x, context, prior=best)[0]
+                if best not in profiles:
+                    profiles.append(best)
+                    for xx,yy in zip(X, Y):
+                        tree, _operands = tools.tree_of(operation, xx, context)
+                        time = tools.benchmark(operation, best, _tree)
+                        yy.append(performance(xx, time))
+            #Update dataset
             X.append(x)
+            y = [performance(x,tools.benchmark(operation, prf, tree)) for prf in profiles]
             Y.append(y)
-            
             #Save data
             for (fname, data) in zip(['X.csv', 'Y.csv', 'profiles.csv'], [X, Y, profiles]):
                 with open(os.path.join(savepath, fname), 'wb') as f:
                     csv.writer(f).writerows(data)
-            
             #print performance info in case no tuning was done
-            if not retune:
+            if not tune:
                 row = Y[X.index(x)]
                 self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
         self.progress_bar.set_finished()
         
-        #Remove unused profiles
+        #Adding external profiles
+        #~ for prf in tools.external_profiles(operation):
+            #~ x = [1024, 1024, 1024]
+            #~ tree, operands = tools.tree_of(operation, x, context)
+            #~ print performance(x,tools.benchmark(operation, prf, tree))
+            
+        #Pruning of useless profiles
         if len(Y[0]) > 1:
             unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
             profiles = [p for ip,p in enumerate(profiles) if ip not in unused]
             Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1).tolist()          
         
-        ##### Exportation #####
+        #Exporting to JSON
         json_path = tools.sanitize(device.name) + '.json' if not self.json_path else self.json_path
         if os.path.isfile(json_path):
             json_data = json.load(open(json_path, 'r'))

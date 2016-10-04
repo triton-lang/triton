@@ -55,6 +55,9 @@ unsigned int reduce_1d::temporary_workspace(expression_tree const &) const
     return 0;
 }
 
+expression_type reduce_1d::type() const
+{ return REDUCE_1D; }
+
 inline void reduce_1d::reduce_1d_local_memory(kernel_generation_stream & stream, unsigned int size, std::vector<symbolic::reduce_1d*> exprs,
                                    std::string const & buf_str, std::string const & buf_value_str, driver::backend_type) const
 {

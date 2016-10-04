@@ -40,15 +40,18 @@ def linspace(a, b, n=100):
 def expspace(a,b,N,r=128):
     return [int(ceil(exp(x)/r)*r) for x in linspace(log(a), log(b), N)]
                   
-def benchmark(template, setting, tree):
+def benchmark(operation, template, tree):
     queue = tree.context.queues[0]
-    queue.profiles[template, sc.float32] = sc.profile(template(*setting), sc.float32, queue)
+    queue.profiles[template, sc.float32] = sc.profile(template, sc.float32, queue)
     times = []
     total = 0
     i = 0
     #Warm-up
-    z, events = sc.driver.enqueue(tree)
-    tree.context.queues[0].synchronize()
+    try:
+        z, events = sc.driver.enqueue(tree)
+        tree.context.queues[0].synchronize()
+    except profile_execution_failure:
+        return float("inf")
     #Time
     while total < 1e-1:
         start = time()
@@ -119,6 +122,16 @@ def metric_name_of(template):
         return 'GFLOPS'
     return 'GB/S'
 
+def external_profiles(template):
+    if template is sc.templates.gemm_nn:
+        return [sc.templates.cublas_gemm('N', 'N')]
+    elif template is sc.templates.gemm_tn:
+        return [sc.templates.cublas_gemm('T', 'N')]
+    elif template is sc.templates.gemm_nt:
+        return [sc.templates.cublas_gemm('N', 'T')]
+    elif template is sc.templates.gemm_tt:
+        return [sc.templates.cublas_gemm('T', 'T')]
+        
 def genetic_infos_of(template):
     if issubclass(template, sc.templates.elementwise_1d):
         return {'categorical': [3], 'nbits': [3,4,4,2] }

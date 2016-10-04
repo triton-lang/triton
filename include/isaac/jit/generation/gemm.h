@@ -39,6 +39,7 @@ public:
   int is_invalid(expression_tree const  &, driver::Device const &) const;
   std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const &, std::string const &, runtime::execution_handler const & h);
+  expression_type type() const;
 private:
   const char A_trans_;
   const char B_trans_;
@@ -62,6 +63,7 @@ public:
        , int_t lf0, int_t lf1, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & h);
+  expression_type type() const;
 
 private:
   //Parameters

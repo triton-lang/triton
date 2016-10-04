@@ -106,7 +106,7 @@ namespace detail
   std::shared_ptr<rt::profiles::value_type> construct_model(bp::object const & tp, bp::object dtype, sc::driver::CommandQueue & queue)
   {
       tpt::base* raw =  bp::extract<tpt::base*>(tp);
-      return std::make_shared<rt::profiles::value_type>(tools::extract_template_type(tp), tools::extract_dtype(dtype), raw->getptr(), queue);
+      return std::make_shared<rt::profiles::value_type>(tools::extract_dtype(dtype), raw->getptr(), queue);
   }
 
   std::shared_ptr<sc::array>
@@ -219,9 +219,9 @@ namespace detail
   {
       static rt::profiles::value_type& get_item(rt::profiles::map_type& container, bp::tuple i_)
       {
-          sc::expression_type expression = tools::extract_template_type(i_[0]);
+          tpt::base* tpt =  bp::extract<tpt::base*>(i_[0]);
           sc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          rt::profiles::map_type::iterator i = container.find(std::make_pair(expression, dtype));
+          rt::profiles::map_type::iterator i = container.find(std::make_pair(tpt->type(), dtype));
           if (i == container.end())
           {
               PyErr_SetString(PyExc_KeyError, "Invalid key");
@@ -232,9 +232,9 @@ namespace detail
 
       static void set_item(rt::profiles::map_type& container, bp::tuple i_, rt::profiles::value_type const & v)
       {
-          sc::expression_type expression = tools::extract_template_type(i_[0]);
+          tpt::base* tpt =  bp::extract<tpt::base*>(i_[0]);
           sc::numeric_type dtype = tools::extract_dtype(i_[1]);
-          container[std::make_pair(expression, dtype)].reset(new rt::profiles::value_type(v));
+          container[std::make_pair(tpt->type(), dtype)].reset(new rt::profiles::value_type(v));
       }
   };
 }

@@ -42,6 +42,9 @@ int elementwise_2d::is_invalid_impl(driver::Device const &, expression_tree cons
   return TEMPLATE_VALID;
 }
 
+expression_type elementwise_2d::type() const
+{ return ELEMENTWISE_2D; }
+
 std::string elementwise_2d::generate_impl(std::string const & suffix, expression_tree const  & tree, driver::Device const & device, symbolic::symbols_table const & symbols) const
 {
   std::string init0, upper_bound0, inc0, init1, upper_bound1, inc1;

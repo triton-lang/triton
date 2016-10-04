@@ -44,6 +44,7 @@ private:
 public:
   virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
+  expression_type type() const;
 private:
   unsigned int ng0_;
   unsigned int ng1_;

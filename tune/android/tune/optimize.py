@@ -39,28 +39,6 @@ fetch_types = [sc.templates.fetch_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
                sc.templates.fetch_type.FETCH_FROM_LOCAL,
                sc.templates.fetch_type.FETCH_FROM_LOCAL]
 
-def exhaustive(template, sizes, context):
-    tree, _ = tools.tree_of(template, sizes, context)
-    metric = tools.metric_of(template)
-    nbits = tools.genetic_infos_of(template)['nbits']
-    categorical = tools.genetic_infos_of(template)['categorical']
-    ranges = [range(2**x) for x in nbits]
-    ranges = list(product(*ranges))
-    timings = {}
-    best = None
-    for idx, r in enumerate(ranges):
-        parameters = tuple([fetch_types[x] if i in categorical else 2**x for i,x in enumerate(r)])
-        try:
-            time = tools.benchmark(template, parameters, tree)
-            if not best or time < best[1]:
-                best = parameters, time
-        except profile_execution_failure:
-            pass
-        if best:
-            stdout.write('%.2f %% | Best %.2f [ for %s ]\r'%(float(idx*100)/len(ranges),metric(sizes, best[1]), best[0]))
-    return best[0]
-        
-
 class GeneticOptimizer:
     
     def __init__(self, logger, naccept=500, niter=1000, cxpb=.4, mutpb=.4, popsize=10, progress_bar = None):
@@ -105,7 +83,10 @@ class GeneticOptimizer:
         def evaluate(genome):
             idx = tuple(genome)
             if idx not in cache:
-                cache[idx] = tools.benchmark(template, decode(genome), tree)
+                time = tools.benchmark(template, template(*decode(genome)), tree)
+                if time == float('inf'):
+                    return time, 
+                cache[idx] = time
             self.progress_bar.update(max(len(cache), it), self.niter, decode(min(cache, key=cache.get)), metric(sizes, min(cache.values())))
             return cache[idx],
             
@@ -132,11 +113,9 @@ class GeneticOptimizer:
         genome = encode(prior if prior else list(initializer.next()))
         while len(population) < self.popsize:
             individual = creator.Individual(genome)
-            try:
-                individual.fitness.values = toolbox.evaluate(genome)
+            individual.fitness.values = toolbox.evaluate(genome)
+            if max(individual.fitness.values) != float('inf'):
                 population += [individual]
-            except profile_execution_failure:
-                pass
             genome = encode(list(initializer.next()))
         hof.update(population)
         
@@ -146,26 +125,25 @@ class GeneticOptimizer:
             #Generate offspring
             offspring = []
             while len(offspring) < self.popsize:
-                try:
-                    op_choice = random.random()
-                    #Cross-over
-                    if op_choice < self.cxpb: 
-                        ind1, ind2 = map(toolbox.clone, random.sample(population, 2))
-                        ind1, ind2 = toolbox.mate(ind1, ind2)
-                        ind = ind1
-                        toolbox.evaluate(ind)
+                op_choice = random.random()
+                #Cross-over
+                if op_choice < self.cxpb: 
+                    ind1, ind2 = map(toolbox.clone, random.sample(population, 2))
+                    ind1, ind2 = toolbox.mate(ind1, ind2)
+                    ind = ind1
+                    toolbox.evaluate(ind)
+                    if max(ind.fitness.values) != float('inf'):
                         offspring += [ind]
-                    #Mutation
-                    elif op_choice < self.cxpb + self.mutpb: 
-                        ind = toolbox.clone(random.choice(population))
-                        ind, = toolbox.mutate(ind, 1.0/offsets[-1])
-                        toolbox.evaluate(ind)
+                #Mutation
+                elif op_choice < self.cxpb + self.mutpb: 
+                    ind = toolbox.clone(random.choice(population))
+                    ind, = toolbox.mutate(ind, 1.0/offsets[-1])
+                    toolbox.evaluate(ind)
+                    if max(ind.fitness.values) != float('inf'):
                         offspring += [ind]
-                    #Reproduction
-                    else: 
-                        offspring += [random.choice(population)]
-                except profile_execution_failure:
-                    pass
+                #Reproduction
+                else: 
+                    offspring += [random.choice(population)]
 
             #Update fitnesses
             fitnesses = toolbox.map(toolbox.evaluate, offspring)
@@ -195,11 +173,10 @@ def is_local_optimum(parameters, template, sizes, context):
         sweep_over = [0,1,2,3,4]
     
     #Evaluate the provided parameters guess
-    try:
-        reference = tools.benchmark(template, parameters, tree)
-    except profile_execution_failure:
+    reference = tools.benchmark(template, template(*parameters), tree)
+    if isinf(reference):
         return False
-        
+
     #Latency bound -- ignore
     if reference < 1e-5:
         return True
@@ -210,12 +187,9 @@ def is_local_optimum(parameters, template, sizes, context):
     for x in product(*domain):
         if x==parameters:
             pass
-        try:
-            time = tools.benchmark(template, x, tree)
-            if time/reference < .98:
-                return False
-        except profile_execution_failure:
-            pass
+        time = tools.benchmark(template, template(*x), tree)
+        if time/reference < .98:
+            return False
     return True
     
     
