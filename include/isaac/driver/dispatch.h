@@ -64,7 +64,7 @@ private:
         return (*fptr)(args...);
     }
 
-    static void cublasCreate(cublasHandle_t* h);
+    static cublasStatus_t cublasCreate_v2(cublasHandle_t* h);
 
 public:
     static bool clinit();
@@ -146,10 +146,10 @@ public:
     static nvrtcResult nvrtcCreateProgram(nvrtcProgram *prog, const char *src, const char *name, int numHeaders, const char **headers, const char **includeNames);
     static nvrtcResult nvrtcGetProgramLog(nvrtcProgram prog, char *log);
 
-    static void cublasGetStream(cudaStream_t *streamId);
-    static void cublasSetStream(cudaStream_t streamId);
-    static void cublasSgemm (cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc);
-    static void cublasDgemm (cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc);
+    static cublasStatus_t cublasGetStream(cudaStream_t *streamId);
+    static cublasStatus_t cublasSetStream(cudaStream_t streamId);
+    static cublasStatus_t cublasSgemm (cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc);
+    static cublasStatus_t cublasDgemm (cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc);
 
 private:
     static void* opencl_;
@@ -230,7 +230,7 @@ private:
     static void* nvrtcCreateProgram_;
     static void* nvrtcGetProgramLog_;
 
-    static void* cublasCreate_;
+    static void* cublasCreate_v2_;
     static void* cublasGetStream_;
     static void* cublasSetStream_;
     static void* cublasSgemm_;

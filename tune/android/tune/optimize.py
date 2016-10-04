@@ -83,7 +83,7 @@ class GeneticOptimizer:
         def evaluate(genome):
             idx = tuple(genome)
             if idx not in cache:
-                time = tools.benchmark(template, template(*decode(genome)), tree)
+                time = tools.benchmark(template(*decode(genome)), tree)
                 if time == float('inf'):
                     return time, 
                 cache[idx] = time
@@ -173,7 +173,7 @@ def is_local_optimum(parameters, template, sizes, context):
         sweep_over = [0,1,2,3,4]
     
     #Evaluate the provided parameters guess
-    reference = tools.benchmark(template, template(*parameters), tree)
+    reference = tools.benchmark(template(*parameters), tree)
     if isinf(reference):
         return False
 
@@ -187,7 +187,7 @@ def is_local_optimum(parameters, template, sizes, context):
     for x in product(*domain):
         if x==parameters:
             pass
-        time = tools.benchmark(template, template(*x), tree)
+        time = tools.benchmark(template(*x), tree)
         if time/reference < .98:
             return False
     return True

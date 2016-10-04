@@ -129,7 +129,7 @@ bool dispatch::cublasinit()
   if(cublas_==nullptr){
     cublas_ = dlopen("libcublas.so", RTLD_LAZY);
     if(cublas_!=nullptr)
-      cublasCreate(&cublas_handle_);
+      dispatch::cublasCreate_v2(&cublas_handle_);
   }
   return cublas_ != nullptr;
 }
@@ -212,19 +212,19 @@ NVRTC_DEFINE2(nvrtcResult, nvrtcGetPTXSize, nvrtcProgram, size_t *)
 NVRTC_DEFINE6(nvrtcResult, nvrtcCreateProgram, nvrtcProgram *, const char *, const char *, int, const char **, const char **)
 NVRTC_DEFINE2(nvrtcResult, nvrtcGetProgramLog, nvrtcProgram, char *)
 
-CUBLAS_DEFINE1(void, cublasCreate, cublasHandle_t*)
+CUBLAS_DEFINE1(cublasStatus_t, cublasCreate_v2, cublasHandle_t*)
 
-void dispatch::cublasGetStream(cudaStream_t *a)
-{ f_impl<dispatch::cublasinit>(cublas_, cublasGetStream_v2, cublasGetStream_, "cublasGetStream_v2", cublas_handle_, a); }
+cublasStatus_t dispatch::cublasGetStream(cudaStream_t *a)
+{ return f_impl<dispatch::cublasinit>(cublas_, cublasGetStream_v2, cublasGetStream_, "cublasGetStream_v2", cublas_handle_, a); }
 
-void dispatch::cublasSetStream(cudaStream_t a)
-{ f_impl<dispatch::cublasinit>(cublas_, cublasSetStream_v2, cublasSetStream_, "cublasSetStream_v2", cublas_handle_, a); }
+cublasStatus_t dispatch::cublasSetStream(cudaStream_t a)
+{ return f_impl<dispatch::cublasinit>(cublas_, cublasSetStream_v2, cublasSetStream_, "cublasSetStream_v2", cublas_handle_, a); }
 
-void dispatch::cublasSgemm(cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc)
-{ f_impl<dispatch::cublasinit>(cublas_, cublasSgemm_v2, cublasSgemm_, "cublasSgemm_v2", cublas_handle_, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
+cublasStatus_t dispatch::cublasSgemm(cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc)
+{ return f_impl<dispatch::cublasinit>(cublas_, cublasSgemm_v2, cublasSgemm_, "cublasSgemm_v2", cublas_handle_, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
 
-void dispatch::cublasDgemm(cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc)
-{ f_impl<dispatch::cublasinit>(cublas_, cublasDgemm_v2, cublasDgemm_, "cublasDgemm_v2", cublas_handle_, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
+cublasStatus_t dispatch::cublasDgemm(cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc)
+{ return f_impl<dispatch::cublasinit>(cublas_, cublasDgemm_v2, cublasDgemm_, "cublasDgemm_v2", cublas_handle_, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
 
 void dispatch::release()
 {
@@ -324,7 +324,7 @@ void* dispatch::nvrtcGetPTXSize_;
 void* dispatch::nvrtcCreateProgram_;
 void* dispatch::nvrtcGetProgramLog_;
 
-void* dispatch::cublasCreate_;
+void* dispatch::cublasCreate_v2_;
 void* dispatch::cublasGetStream_;
 void* dispatch::cublasSetStream_;
 void* dispatch::cublasSgemm_;
