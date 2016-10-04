@@ -50,7 +50,7 @@ CommandQueue::CommandQueue(Context const & context, Device const & device, cl_co
   {
     case CUDA:
     {
-      check(dispatch::cuStreamCreate(&h_.cu(), 0));
+      dispatch::cuStreamCreate(&h_.cu(), 0);
       break;
     }
 
@@ -86,8 +86,8 @@ void CommandQueue::synchronize()
 {
   switch(backend_)
   {
-    case CUDA: check(dispatch::cuStreamSynchronize(h_.cu())); break;
-    case OPENCL: check(dispatch::clFinish(h_.cl())); break;
+    case CUDA: dispatch::cuStreamSynchronize(h_.cu()); break;
+    case OPENCL: dispatch::clFinish(h_.cl()); break;
     default: throw;
   }
 }
@@ -98,16 +98,16 @@ void CommandQueue::enqueue(Kernel const & kernel, NDRange global, driver::NDRang
   {
     case CUDA:
       if(event)
-        check(dispatch::cuEventRecord(event->h_.cu().first, h_.cu()));
+        dispatch::cuEventRecord(event->h_.cu().first, h_.cu());
 
-      check(dispatch::cuLaunchKernel(kernel.h_.cu(), global[0]/local[0], global[1]/local[1], global[2]/local[2],
-                    local[0], local[1], local[2], 0, h_.cu(),(void**)&kernel.cu_params_[0], NULL));
+      dispatch::cuLaunchKernel(kernel.h_.cu(), global[0]/local[0], global[1]/local[1], global[2]/local[2],
+                    local[0], local[1], local[2], 0, h_.cu(),(void**)&kernel.cu_params_[0], NULL);
 
       if(event)
-        check(dispatch::cuEventRecord(event->h_.cu().second, h_.cu()));
+        dispatch::cuEventRecord(event->h_.cu().second, h_.cu());
       break;
     case OPENCL:
-      check(dispatch::clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, event?&event->h_.cl():NULL));
+      dispatch::clEnqueueNDRangeKernel(h_.cl(), kernel.h_.cl(), global.dimension(), NULL, (const size_t *)global, (const size_t *) local, 0, NULL, event?&event->h_.cl():NULL);
       break;
     default: throw;
   }
@@ -119,12 +119,12 @@ void CommandQueue::write(Buffer const & buffer, bool blocking, std::size_t offse
   {
     case CUDA:
       if(blocking)
-        check(dispatch::cuMemcpyHtoD(buffer.h_.cu() + offset, ptr, size));
+        dispatch::cuMemcpyHtoD(buffer.h_.cu() + offset, ptr, size);
       else
-        check(dispatch::cuMemcpyHtoDAsync(buffer.h_.cu() + offset, ptr, size, h_.cu()));
+        dispatch::cuMemcpyHtoDAsync(buffer.h_.cu() + offset, ptr, size, h_.cu());
       break;
     case OPENCL:
-      check(dispatch::clEnqueueWriteBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
+      dispatch::clEnqueueWriteBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL);
       break;
     default: throw;
   }
@@ -136,12 +136,12 @@ void CommandQueue::read(Buffer const & buffer, bool blocking, std::size_t offset
   {
     case CUDA:
       if(blocking)
-        check(dispatch::cuMemcpyDtoH(ptr, buffer.h_.cu() + offset, size));
+        dispatch::cuMemcpyDtoH(ptr, buffer.h_.cu() + offset, size);
       else
-        check(dispatch::cuMemcpyDtoHAsync(ptr, buffer.h_.cu() + offset, size, h_.cu()));
+        dispatch::cuMemcpyDtoHAsync(ptr, buffer.h_.cu() + offset, size, h_.cu());
       break;
     case OPENCL:
-      check(dispatch::clEnqueueReadBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
+      dispatch::clEnqueueReadBuffer(h_.cl(), buffer.h_.cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL);
       break;
     default: throw;
   }

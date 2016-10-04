@@ -32,7 +32,8 @@
 #include "isaac/driver/external/CUDA/cuda.h"
 #include "isaac/driver/external/CUDA/nvrtc.h"
 #include "isaac/driver/external/CUDA/cublas.h"
-
+//Exceptions
+#include "isaac/driver/common.h"
 #include <iostream>
 
 namespace isaac
@@ -40,6 +41,14 @@ namespace isaac
 namespace driver
 {
 
+class Context;
+
+template<class T> void check(T){}
+void check(nvrtcResult err);
+void check(CUresult err);
+void check(cublasStatus_t err);
+void check(cl_int err);
+void check_destruction(CUresult);
 
 class dispatch
 {
@@ -61,10 +70,10 @@ private:
             cache = dlsym(lib_h, name);
         FunPtrT fptr;
         *reinterpret_cast<void **>(&fptr) = cache;
-        return (*fptr)(args...);
+        typename return_type<FunPtrT>::type res = (*fptr)(args...);
+        check(res);
+        return res;
     }
-
-    static cublasStatus_t cublasCreate_v2(cublasHandle_t* h);
 
 public:
     static bool clinit();
@@ -146,17 +155,19 @@ public:
     static nvrtcResult nvrtcCreateProgram(nvrtcProgram *prog, const char *src, const char *name, int numHeaders, const char **headers, const char **includeNames);
     static nvrtcResult nvrtcGetProgramLog(nvrtcProgram prog, char *log);
 
-    static cublasStatus_t cublasGetStream(cudaStream_t *streamId);
-    static cublasStatus_t cublasSetStream(cudaStream_t streamId);
-    static cublasStatus_t cublasSgemm (cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc);
-    static cublasStatus_t cublasDgemm (cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc);
+    static cublasHandle_t cublasHandle(Context const & ctx);
+    static cublasStatus_t cublasCreate_v2(cublasHandle_t* h);
+    static cublasStatus_t cublasGetStream(cublasHandle_t h, cudaStream_t *streamId);
+    static cublasStatus_t cublasSetStream(cublasHandle_t h, cudaStream_t streamId);
+    static cublasStatus_t cublasSgemm (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc);
+    static cublasStatus_t cublasDgemm (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc);
 
 private:
     static void* opencl_;
     static void* cuda_;
     static void* nvrtc_;
     static void* cublas_;
-    static cublasHandle_t cublas_handle_;
+
 
     //OpenCL
     static void* clBuildProgram_;

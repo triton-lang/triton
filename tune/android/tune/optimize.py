@@ -174,7 +174,7 @@ def is_local_optimum(parameters, template, sizes, context):
     
     #Evaluate the provided parameters guess
     reference = tools.benchmark(template(*parameters), tree)
-    if isinf(reference):
+    if reference==float('inf'):
         return False
 
     #Latency bound -- ignore

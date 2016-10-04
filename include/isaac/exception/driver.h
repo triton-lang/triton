@@ -39,7 +39,7 @@ namespace nvrtc
 
 #define ISAAC_CREATE_NVRTC_EXCEPTION(name, msg) class ISAACAPI name: public std::exception { public: const char * what() const throw(){ return "NVRTC: Error- " msg; } }
 
-  ISAAC_CREATE_NVRTC_EXCEPTION(out_of_memory              ,"out of memory exception");
+  ISAAC_CREATE_NVRTC_EXCEPTION(out_of_memory              ,"out of memory");
   ISAAC_CREATE_NVRTC_EXCEPTION(program_creation_failure   ,"program creation failure");
   ISAAC_CREATE_NVRTC_EXCEPTION(invalid_input              ,"invalid input");
   ISAAC_CREATE_NVRTC_EXCEPTION(invalid_program            ,"invalid program");
@@ -49,8 +49,6 @@ namespace nvrtc
   ISAAC_CREATE_NVRTC_EXCEPTION(unknown_error              ,"unknown error");
 
   #undef ISAAC_CREATE_NVRTC_EXCEPTION
-
-void check(nvrtcResult err);
 }
 
 
@@ -120,11 +118,26 @@ namespace cuda
     ISAAC_CREATE_CUDA_EXCEPTION(unknown                         ,"unknown");
 
     #undef ISAAC_CREATE_CUDA_EXCEPTION
-
-void check(CUresult);
-void check_destruction(CUresult);
 }
 
+namespace cublas
+{
+
+#define ISAAC_CREATE_CUBLAS_EXCEPTION(name, msg) class ISAACAPI name: public std::exception { public: const char * what() const throw(){ return "CUBLAS: Error- " msg; } }
+
+  ISAAC_CREATE_CUBLAS_EXCEPTION(not_initialized              ,"not initialized");
+  ISAAC_CREATE_CUBLAS_EXCEPTION(alloc_failed                 ,"alloc failed");
+  ISAAC_CREATE_CUBLAS_EXCEPTION(invalid_value                ,"invalid value");
+  ISAAC_CREATE_CUBLAS_EXCEPTION(arch_mismatch                ,"arch mismatch");
+  ISAAC_CREATE_CUBLAS_EXCEPTION(mapping_error                ,"mapping error");
+  ISAAC_CREATE_CUBLAS_EXCEPTION(execution_failed             ,"execution failed");
+  ISAAC_CREATE_CUBLAS_EXCEPTION(internal_error               ,"internal error");
+  ISAAC_CREATE_CUBLAS_EXCEPTION(not_supported                ,"not supported");
+  ISAAC_CREATE_CUBLAS_EXCEPTION(license_error                ,"license error");
+  ISAAC_CREATE_CUBLAS_EXCEPTION(unknown                      ,"unknown");
+
+  #undef ISAAC_CREATE_CUBLAS_EXCEPTION
+}
 
 namespace ocl
 {
@@ -183,9 +196,6 @@ namespace ocl
 #ifdef CL_INVALID_PROPERTY
    ISAAC_CREATE_CL_EXCEPTION(invalid_property,                  "invalid property");
 #endif
-
-ISAACAPI void check(cl_int err);
-
 }
 
 

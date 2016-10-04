@@ -20,6 +20,7 @@
  */
 
 #include "isaac/driver/dispatch.h"
+#include "isaac/driver/context.h"
 
 namespace isaac
 {
@@ -126,11 +127,8 @@ bool dispatch::nvrtcinit()
 
 bool dispatch::cublasinit()
 {
-  if(cublas_==nullptr){
+  if(cublas_==nullptr)
     cublas_ = dlopen("libcublas.so", RTLD_LAZY);
-    if(cublas_!=nullptr)
-      dispatch::cublasCreate_v2(&cublas_handle_);
-  }
   return cublas_ != nullptr;
 }
 
@@ -212,19 +210,28 @@ NVRTC_DEFINE2(nvrtcResult, nvrtcGetPTXSize, nvrtcProgram, size_t *)
 NVRTC_DEFINE6(nvrtcResult, nvrtcCreateProgram, nvrtcProgram *, const char *, const char *, int, const char **, const char **)
 NVRTC_DEFINE2(nvrtcResult, nvrtcGetProgramLog, nvrtcProgram, char *)
 
+cublasHandle_t dispatch::cublasHandle(Context const & ctx)
+{
+  static std::map<Context, cublasHandle_t> handles;
+  auto pr = handles.insert({ctx, cublasHandle_t()});
+  if(pr.second)
+    cublasCreate_v2(&pr.first->second);
+  return pr.first->second;
+}
+
 CUBLAS_DEFINE1(cublasStatus_t, cublasCreate_v2, cublasHandle_t*)
 
-cublasStatus_t dispatch::cublasGetStream(cudaStream_t *a)
-{ return f_impl<dispatch::cublasinit>(cublas_, cublasGetStream_v2, cublasGetStream_, "cublasGetStream_v2", cublas_handle_, a); }
+cublasStatus_t dispatch::cublasGetStream(cublasHandle_t h, cudaStream_t *a)
+{ return f_impl<dispatch::cublasinit>(cublas_, cublasGetStream_v2, cublasGetStream_, "cublasGetStream_v2", h, a); }
 
-cublasStatus_t dispatch::cublasSetStream(cudaStream_t a)
-{ return f_impl<dispatch::cublasinit>(cublas_, cublasSetStream_v2, cublasSetStream_, "cublasSetStream_v2", cublas_handle_, a); }
+cublasStatus_t dispatch::cublasSetStream(cublasHandle_t h, cudaStream_t a)
+{ return f_impl<dispatch::cublasinit>(cublas_, cublasSetStream_v2, cublasSetStream_, "cublasSetStream_v2", h, a); }
 
-cublasStatus_t dispatch::cublasSgemm(cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc)
-{ return f_impl<dispatch::cublasinit>(cublas_, cublasSgemm_v2, cublasSgemm_, "cublasSgemm_v2", cublas_handle_, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
+cublasStatus_t dispatch::cublasSgemm(cublasHandle_t h, cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc)
+{ return f_impl<dispatch::cublasinit>(cublas_, cublasSgemm_v2, cublasSgemm_, "cublasSgemm_v2", h, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
 
-cublasStatus_t dispatch::cublasDgemm(cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc)
-{ return f_impl<dispatch::cublasinit>(cublas_, cublasDgemm_v2, cublasDgemm_, "cublasDgemm_v2", cublas_handle_, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
+cublasStatus_t dispatch::cublasDgemm(cublasHandle_t h, cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc)
+{ return f_impl<dispatch::cublasinit>(cublas_, cublasDgemm_v2, cublasDgemm_, "cublasDgemm_v2", h, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
 
 void dispatch::release()
 {
@@ -250,7 +257,6 @@ void * dispatch::opencl_;
 void * dispatch::cuda_;
 void * dispatch::nvrtc_;
 void * dispatch::cublas_;
-cublasHandle_t dispatch::cublas_handle_;
 
 //OpenCL
 void* dispatch::clBuildProgram_;

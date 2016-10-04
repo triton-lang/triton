@@ -33,8 +33,8 @@ Event::Event(backend_type backend) : backend_(backend), h_(backend_, true)
   switch(backend_)
   {
     case CUDA:
-      check(dispatch::dispatch::cuEventCreate(&h_.cu().first, CU_EVENT_DEFAULT));
-      check(dispatch::dispatch::cuEventCreate(&h_.cu().second, CU_EVENT_DEFAULT));
+      dispatch::cuEventCreate(&h_.cu().first, CU_EVENT_DEFAULT);
+      dispatch::cuEventCreate(&h_.cu().second, CU_EVENT_DEFAULT);
       break;
     case OPENCL:
       break;
@@ -54,7 +54,7 @@ long Event::elapsed_time() const
   {
     case CUDA:
       float time;
-      check(dispatch::cuEventElapsedTime(&time, h_.cu().first, h_.cu().second));
+      dispatch::cuEventElapsedTime(&time, h_.cu().first, h_.cu().second);
       return 1e6*time;
     case OPENCL:
       return static_cast<long>(ocl::info<CL_PROFILING_COMMAND_END>(h_.cl()) - ocl::info<CL_PROFILING_COMMAND_START>(h_.cl()));

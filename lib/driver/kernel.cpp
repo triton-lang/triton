@@ -38,7 +38,7 @@ Kernel::Kernel(Program const & program, const char * name) : backend_(program.ba
     case CUDA:
       cu_params_store_.reserve(64);
       cu_params_.reserve(64);
-      check(dispatch::cuModuleGetFunction(&h_.cu(), program.h_.cu(), name));\
+      dispatch::cuModuleGetFunction(&h_.cu(), program.h_.cu(), name);\
       break;
     case OPENCL:
       cl_int err;
@@ -85,7 +85,7 @@ void Kernel::setArg(unsigned int index, std::size_t size, void* ptr)
       cu_params_[index] = cu_params_store_[index].get();
       break;
     case OPENCL:
-      check(dispatch::clSetKernelArg(h_.cl(), index, size, ptr));
+      dispatch::clSetKernelArg(h_.cl(), index, size, ptr);
       break;
     default:
       throw;
@@ -101,7 +101,7 @@ void Kernel::setArg(unsigned int index, Buffer const & data)
       setArg(index, sizeof(CUdeviceptr), (void*)&data.h_.cu()); break;
     }
     case OPENCL:
-      check(dispatch::clSetKernelArg(h_.cl(), index, sizeof(cl_mem), (void*)&data.h_.cl()));
+      dispatch::clSetKernelArg(h_.cl(), index, sizeof(cl_mem), (void*)&data.h_.cl());
       break;
     default: throw;
   }

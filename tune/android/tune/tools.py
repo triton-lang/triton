@@ -39,8 +39,9 @@ def linspace(a, b, n=100):
     
 def expspace(a,b,N,r=128):
     return [int(ceil(exp(x)/r)*r) for x in linspace(log(a), log(b), N)]
-                  
-def benchmark(template, tree):
+
+
+def benchmark(template, tree, operation=sc.templates.gemm_nn):
     queue = tree.context.queues[0]
     queue.profiles[template, sc.float32] = sc.profile(template, sc.float32, queue)
     times = []
@@ -49,14 +50,14 @@ def benchmark(template, tree):
     #Warm-up
     try:
         z, events = sc.driver.enqueue(tree)
-        tree.context.queues[0].synchronize()
+        queue.synchronize()
     except profile_execution_failure:
         return float("inf")
     #Time
-    while total < 1e-1:
+    while total < 1e-2:
         start = time()
         z, events = sc.driver.enqueue(tree)
-        tree.context.queues[0].synchronize()
+        queue.synchronize()
         end = time()
         times.append(end - start)
         total += times[-1]
@@ -91,11 +92,12 @@ def tree_of(template, sizes, context):
         AT = template is sc.templates.gemm_tn or template is sc.templates.gemm_tt
         BT = template is sc.templates.gemm_nt or template is sc.templates.gemm_tt
         M, N, K = sizes
+        C = sc.empty((M,N), context=context)
         A = sc.empty((K, M) if AT else (M, K), context=context)
         B = sc.empty((N, K) if BT else (K, N), context=context)
         AA = A.T if AT else A
         BB = B.T if BT else B
-        return sc.dot(AA, BB), (A, B)
+        return sc.assign(C, sc.dot(AA, BB)), (A, B, C)
 
 def memory_footprint(template, sizes):
     if issubclass(template, sc.templates.elementwise_1d):
@@ -123,14 +125,16 @@ def metric_name_of(template):
     return 'GB/S'
 
 def external_profiles(template):
+    res = []
     if template is sc.templates.gemm_nn:
-        return [sc.templates.cublas_gemm('N', 'N')]
+        res += [sc.templates.cublas_gemm('N','N')]
     elif template is sc.templates.gemm_tn:
-        return [sc.templates.cublas_gemm('T', 'N')]
+        res += [sc.templates.cublas_gemm('T','N')]
     elif template is sc.templates.gemm_nt:
-        return [sc.templates.cublas_gemm('N', 'T')]
+        res += [sc.templates.cublas_gemm('N','T')]
     elif template is sc.templates.gemm_tt:
-        return [sc.templates.cublas_gemm('T', 'T')]
+        res += [sc.templates.cublas_gemm('T','T')]
+    return res
         
 def genetic_infos_of(template):
     if issubclass(template, sc.templates.elementwise_1d):
@@ -144,4 +148,8 @@ def genetic_infos_of(template):
     elif issubclass(template, sc.templates.gemm):
         return {'categorical': [8,9], 'nbits': [3,3,3,3,3,2,2,2,2,2,3,3]}
 
-
+def convert(profile):
+	if isinstance(profile, str):
+		return profile
+	else:
+		return map(int, profile)

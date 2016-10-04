@@ -38,13 +38,6 @@ enum backend_type
   CUDA
 };
 
-void check(nvrtcResult err);
-
-void check(CUresult);
-void check_destruction(CUresult);
-
-void check(cl_int err);
-
 }
 }
 

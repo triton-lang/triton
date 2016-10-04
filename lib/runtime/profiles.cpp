@@ -139,6 +139,16 @@ profiles::value_type::templates_container const & profiles::value_type::template
     return templates_;
 }
 
+std::shared_ptr<templates::base> profiles::create(std::string const & op, std::string const & str)
+{
+    if(str=="cublas_gemm"){
+        if(op=="gemm_nn") return std::shared_ptr<templates::base>(new templates::cublas_gemm('N', 'N'));
+        if(op=="gemm_nt") return std::shared_ptr<templates::base>(new templates::cublas_gemm('N', 'T'));
+        if(op=="gemm_tn") return std::shared_ptr<templates::base>(new templates::cublas_gemm('T', 'N'));
+        if(op=="gemm_tt") return std::shared_ptr<templates::base>(new templates::cublas_gemm('T', 'T'));
+    }
+    throw;
+}
 
 std::shared_ptr<templates::base> profiles::create(std::string const & template_name, std::vector<int> const & x)
 {
@@ -189,8 +199,12 @@ void profiles::import(std::string const & str, driver::CommandQueue const & queu
           // Get profiles
           std::vector<std::shared_ptr<templates::base> > templates;
           rapidjson::Value const & profiles = document[opcstr][dtcstr]["profiles"];
-          for (rapidjson::SizeType id = 0 ; id < profiles.Size() ; ++id)
-            templates.push_back(create(operation, rapidjson::to_int_array<int>(profiles[id])));
+          for (rapidjson::SizeType i = 0 ; i < profiles.Size() ; ++i){
+            if(profiles[i].IsString())
+                 templates.push_back(create(operation, profiles[i].GetString()));
+            else
+                templates.push_back(create(operation, rapidjson::to_int_array<int>(profiles[i])));
+          }
           if(templates.size()>1){
             // Get predictor
             predictors::random_forest predictor(document[opcstr][dtcstr]["predictor"]);

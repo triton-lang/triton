@@ -74,7 +74,7 @@ Context::Context(Device const & device) : backend_(device.backend_), device_(dev
   switch(backend_)
   {
     case CUDA:
-      check(dispatch::cuCtxCreate(&h_.cu(), CU_CTX_SCHED_AUTO, device.h_.cu()));
+      dispatch::cuCtxCreate(&h_.cu(), CU_CTX_SCHED_AUTO, device.h_.cu());
       break;
     case OPENCL:
       cl_int err;
