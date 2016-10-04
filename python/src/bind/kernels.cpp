@@ -72,6 +72,8 @@ void export_templates()
                                         .add_property("ls0", &tpt::parameterized_base::ls0)
                                         .add_property("ls1", &tpt::parameterized_base::ls1);
 
+  bp::class_<tpt::external_base, bp::bases<tpt::base>, boost::noncopyable>("external_base", bp::no_init);
+
 #define WRAP_BASE(name) bp::class_<tpt::name, bp::bases<tpt::parameterized_base>, boost::noncopyable>(#name, bp::no_init);
 
   #define WRAP_TEMPLATE(name, basename, ...) bp::class_<tpt::name, std::shared_ptr<tpt::name>, bp::bases<basename>>(#name, bp::init<__VA_ARGS__>())\
@@ -87,4 +89,7 @@ void export_templates()
   WRAP_TEMPLATE(gemm_tn, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
   WRAP_TEMPLATE(gemm_nt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
   WRAP_TEMPLATE(gemm_tt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
+  WRAP_TEMPLATE(cublas_gemm, tpt::external_base, char, char)
+
+
 }

@@ -31,7 +31,6 @@ namespace isaac
 namespace templates
 {
 
-
 class cublas_gemm : public external_base
 {
   bool init();

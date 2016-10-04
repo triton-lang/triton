@@ -71,7 +71,7 @@ std::string base::generate(std::string const & suffix, expression_tree const  & 
 external_base::external_base()
 { }
 
-std::string external_base::generate_impl(std::string const &, expression_tree const &, driver::Device const &, symbolic::symbols_table const &)
+std::string external_base::generate_impl(std::string const &, expression_tree const &, driver::Device const &, symbolic::symbols_table const &) const
 { return ""; }
 
 unsigned int external_base::temporary_workspace(expression_tree const &) const
