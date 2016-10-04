@@ -43,6 +43,9 @@ int elementwise_1d::is_invalid_impl(driver::Device const &, expression_tree cons
   return TEMPLATE_VALID;
 }
 
+expression_type elementwise_1d::type() const
+{ return ELEMENTWISE_1D; }
+
 std::string elementwise_1d::generate_impl(std::string const & suffix, expression_tree const & tree, driver::Device const & device, symbolic::symbols_table const & symbols) const
 {
   driver::backend_type backend = device.backend();

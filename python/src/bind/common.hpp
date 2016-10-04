@@ -86,31 +86,5 @@ namespace tools
             throw;
         }
     }
-
-    inline sc::expression_type extract_template_type(bp::object const & odtype)
-    {
-        std::string name = bp::extract<std::string>(odtype.attr("__class__").attr("__name__"))();
-        if(name=="class")
-          name = bp::extract<std::string>(odtype.attr("__name__"))();
-        else
-          name = bp::extract<std::string>(odtype.attr("__class__").attr("__name__"))();
-
-        if(name=="elementwise_1d") return sc::ELEMENTWISE_1D;
-        else if(name=="elementwise_2d") return sc::ELEMENTWISE_2D;
-        else if(name=="reduce_1d") return sc::REDUCE_1D;
-        else if(name=="reduce_2d_rows") return sc::REDUCE_2D_ROWS;
-        else if(name=="reduce_2d_cols") return sc::REDUCE_2D_COLS;
-        else if(name=="gemm_nn") return sc::GEMM_NN;
-        else if(name=="gemm_tn") return sc::GEMM_TN;
-        else if(name=="gemm_nt") return sc::GEMM_NT;
-        else if(name=="gemm_tt") return sc::GEMM_TT;
-        else
-        {
-            PyErr_SetString(PyExc_TypeError, "Template type not understood");
-            bp::throw_error_already_set();
-            throw;
-        }
-    }
-
 }
 #endif

@@ -290,6 +290,14 @@ std::vector<int_t> reduce_2d::input_sizes(expression_tree const & tree) const
   return {shape[0], shape[1]};
 }
 
+expression_type reduce_2d::type() const
+{
+  if(reduction_type_==REDUCE_ROWS)
+    return REDUCE_2D_ROWS;
+  else
+    return REDUCE_2D_COLS;
+}
+
 void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
 {
   expression_tree const & tree = control.x();

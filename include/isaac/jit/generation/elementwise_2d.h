@@ -39,6 +39,7 @@ public:
   elementwise_2d(unsigned int vwidth, unsigned int ls0, unsigned int ls1,  unsigned int ng0, unsigned int ng1, fetch_type fetch);
   std::vector<int_t> input_sizes(expression_tree const  & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &);
+  expression_type type() const;
 private:
   unsigned int ng0_;
   unsigned int ng1_;

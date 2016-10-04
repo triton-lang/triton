@@ -53,7 +53,7 @@ public:
 
     public:
       value_type(expression_type, numeric_type, predictors::random_forest const &, std::vector< std::shared_ptr<templates::base> > const &, driver::CommandQueue const &);
-      value_type(expression_type, numeric_type, std::shared_ptr<templates::base> const &, driver::CommandQueue const &);
+      value_type(numeric_type, std::shared_ptr<templates::base> const &, driver::CommandQueue const &);
       void execute(runtime::execution_handler const &);
       templates_container const & templates() const;
 

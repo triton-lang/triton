@@ -84,6 +84,7 @@ public:
   virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const = 0;
   virtual int is_invalid(expression_tree const & expressions, driver::Device const & device) const = 0;
   virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & expressions) = 0;
+  virtual expression_type type() const = 0;
   std::string generate(std::string const & suffix, expression_tree const & expressions, driver::Device const & device);
   std::shared_ptr<base> getptr();
 };
