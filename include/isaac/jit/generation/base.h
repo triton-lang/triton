@@ -91,7 +91,7 @@ public:
 class external_base: public base
 {
 private:
-  virtual std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const & mapping);
+  virtual std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const & mapping) const;
 public:
   external_base();
   virtual unsigned int temporary_workspace(expression_tree const &) const;
