@@ -77,11 +77,14 @@ class Tuner:
             #Square
             for N in [896, 1760, 2048, 2560]:
                 sizes += [(N, N)]
-            #Tall and Skinny
+            #Short/Fat
             for M in [16, 32, 64, 128]:
                 for N in [1024, 4096, 16384, 65536, 262144]:
                     sizes += [(M, N)]
-                    sizes += [(N, M)]
+            #Tall/Skinny
+            for N in [16, 32, 64, 128]:
+                for M in [1024, 4096, 16384, 65536, 262144]:
+                    sizes += [(M, N)]
         
         #BLAS3 training sizes
         if operation in [sc.templates.gemm_nn, sc.templates.gemm_nt, sc.templates.gemm_tn, sc.templates.gemm_tt]:
@@ -113,8 +116,6 @@ class Tuner:
         try:
             with open(os.path.join(savepath, 'X.csv')) as f:
                 X = [tuple(map(int, row)) for row in csv.reader(f, delimiter=',')]
-            with open(os.path.join(savepath, 'Y.csv')) as f:
-                Y = [map(float, row) for row in csv.reader(f, delimiter=',')]
             with open(os.path.join(savepath, 'profiles.csv')) as f:
                 def mmap(x):
                     if x=='FETCH_FROM_LOCAL':
@@ -125,6 +126,8 @@ class Tuner:
                         return sc.templates.fetch_type.FETCH_FROM_GLOBAL_STRIDED
                     return int(x)
                 profiles = [map(mmap,row) for v in row for row in csv.reader(f, delimiter=',')]
+            with open(os.path.join(savepath, 'Y.csv')) as f:
+                Y = [map(float, row) for row in csv.reader(f, delimiter=',')]
         except:
             pass
         
@@ -140,36 +143,37 @@ class Tuner:
                 self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
                 continue
             tree, operands = tools.tree_of(operation, x, context)
-            #Check if GA needs to run (i.e., current best prediction is not a local optimum)
-            tune = True
+            #Best predicted profile for x
             best = None
             if idx > 0:
-                dim = min(10, idx+1)
-                clf = RandomForestRegressor(dim, dim).fit(X, Y)
-                predictions = clf.predict(x)[0]
-                for idx in (-predictions).argsort():
-                    ts = tools.benchmark(operation(*profiles[idx]), tree)
-                    if np.isfinite(ts):
-                        break
-                if np.isfinite(ts):
-                    best = profiles[idx]
-                    tune = not optimize.is_local_optimum(predicted, operation, x, context)
+				if len(profiles) > 1:
+					clf = RandomForestRegressor(20, max_depth=5).fit(X, Y)
+					predictions = clf.predict(x)[0]
+					for idx in (-predictions).argsort():
+						best = profiles[idx]
+						ts = tools.benchmark(operation(*best), tree)
+						if ts != float('inf'):
+							break
+				else:
+					best = profiles[0]
+            
             #Retune if necessary
+            tune =  not (best and optimize.is_local_optimum(best, operation, x, context))
             if tune:
                 optimizer = optimize.GeneticOptimizer(self.logger, naccept=1000, niter=1000, cxpb=.4, mutpb=.4, popsize=20, progress_bar = self.progress_bar)
                 best = optimizer.run(operation, x, context, prior=best)[0]
                 if best not in profiles:
                     profiles.append(best)
                     for xx,yy in zip(X, Y):
-                        tree, _operands = tools.tree_of(operation, xx, context)
-                        time = tools.benchmark(operation(*best), _tree)
+                        tree, _ = tools.tree_of(operation, xx, context)
+                        time = tools.benchmark(operation(*best), tree)
                         yy.append(performance(xx, time))
             #Update dataset
             X.append(x)
             y = [performance(x,tools.benchmark(operation(*prf), tree)) for prf in profiles]
             Y.append(y)
             #Save data
-            for (fname, data) in zip(['X.csv', 'Y.csv', 'profiles.csv'], [X, Y, profiles]):
+            for (fname, data) in zip(['X.csv',  'Y.csv', 'profiles.csv'], [X, Y, profiles]):
                 with open(os.path.join(savepath, fname), 'wb') as f:
                     csv.writer(f).writerows(data)
             #print performance info in case no tuning was done
@@ -182,10 +186,11 @@ class Tuner:
         for prof in tools.external_profiles(operation):
 			for x, y in zip(X, Y):
 				tree, operands = tools.tree_of(operation, x, context)
-				perf = performance(x,tools.benchmark(prof, tree))
+				perf = performance(x,tools.benchmark(prof, tree, operation))
 				if perf > 0:
 					profiles.append(prof.__class__.__name__)
 					y.append(perf)
+            
             
         #Pruning of useless profiles
         if len(Y[0]) > 1:
@@ -212,5 +217,5 @@ class Tuner:
                                 'threshold': e.tree_.threshold.astype('float64').tolist(),
                                 'feature': e.tree_.feature.astype('float64').tolist(),
                                 'value': e.tree_.value[:,:,0].astype('float64').tolist()} for e in clf.estimators_]
-        D['profiles'] = [map(int, x) for x in profiles]
+        D['profiles'] = [tools.convert(x) for x in profiles]
         json.dump(json_data, open(json_path,'w'))

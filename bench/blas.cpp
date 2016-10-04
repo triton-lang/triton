@@ -29,7 +29,7 @@ double bench(OP const & op, SYNC const & sync)
   double total_time = 0;
   op();
   sync();
-  while(total_time*1e-9 < 1e-1){
+  while(total_time*1e-9 < 2e-1){
     tmr.start();
     op();
     sync();
@@ -239,12 +239,13 @@ void bench(sc::numeric_type dtype, std::string operation)
 #ifdef BENCH_CUBLAS
       times.push_back(bench([&](){cublasSgemm(AT?'t':'n', BT?'t':'n', M, N, K, 1, (T*)cu(A), lda, (T*)cu(B), ldb, 1, (T*)cu(C), ldc);}, cusync));
 #endif
-      std::cout << name << "\t" << M << "\t" << N << "\t" << K << "\t" << cAT << "\t" << cBT;
       std::transform(times.begin(), times.end(), std::back_inserter(tflops), [&](double t){ return 2*M*N*K/t*1e-3;});
-      double best = max(tflops);
-      for(auto x: tflops){
+      auto fastest = tflops;
+      std::sort(fastest.begin(), fastest.end(), std::greater<double>());
+      std::cout << name << "\t" << M << "\t" << N << "\t" << K << "\t" << cAT << "\t" << cBT;
+     for(auto x: tflops){
         std::cout << "\t";
-        if(x==best)
+        if(x == fastest[0] && x/fastest[1] >= 1.02)
           std::cout << color_stream(FG_LIGHT_BLUE) << x << color_stream(RESET);
         else
           std::cout << x;

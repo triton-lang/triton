@@ -55,7 +55,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
       //Load cached program
       if(cache_path.size() && std::ifstream(fname, std::ios::binary))
       {
-        check(dispatch::cuModuleLoad(&h_.cu(), fname.c_str()));
+        dispatch::cuModuleLoad(&h_.cu(), fname.c_str());
         break;
       }
 
@@ -64,28 +64,28 @@ Program::Program(Context const & context, std::string const & source) : backend_
       const char * includes[] = {"vector.h"};
       const char * src[] = {helpers::cuda::vector};
 
-      check(dispatch::nvrtcCreateProgram(&prog, source.c_str(), NULL, 1, src, includes));
+      dispatch::nvrtcCreateProgram(&prog, source.c_str(), NULL, 1, src, includes);
       try{
         std::pair<unsigned int, unsigned int> capability = context_.device().nv_compute_capability();
         std::string capability_opt = "--gpu-architecture=compute_";
         capability_opt += tools::to_string(capability.first) + tools::to_string(capability.second);
         const char * options[] = {capability_opt.c_str(), "--restrict"};
-        check(dispatch::nvrtcCompileProgram(prog, 2, options));
+        dispatch::nvrtcCompileProgram(prog, 2, options);
       }catch(exception::nvrtc::compilation const &)
       {
         size_t logsize;
-        check(dispatch::nvrtcGetProgramLogSize(prog, &logsize));
+        dispatch::nvrtcGetProgramLogSize(prog, &logsize);
         std::string log(logsize, 0);
-        check(dispatch::nvrtcGetProgramLog(prog, (char*)log.data()));
+        dispatch::nvrtcGetProgramLog(prog, (char*)log.data());
         std::cout << "Compilation failed:" << std::endl;
         std::cout << log << std::endl;
       }
 
       size_t ptx_size;
-      check(dispatch::nvrtcGetPTXSize(prog, &ptx_size));
+      dispatch::nvrtcGetPTXSize(prog, &ptx_size);
       std::vector<char> ptx(ptx_size);
-      check(dispatch::nvrtcGetPTX(prog, ptx.data()));
-      check(dispatch::cuModuleLoadDataEx(&h_.cu(), ptx.data(), 0, NULL, NULL));
+      dispatch::nvrtcGetPTX(prog, ptx.data());
+      dispatch::cuModuleLoadDataEx(&h_.cu(), ptx.data(), 0, NULL, NULL);
 
       //Save cached program
       if (cache_path.size())
@@ -112,7 +112,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
 
 //    str.assign((std::istreambuf_iterator<char>(ifs)),
 //                std::istreambuf_iterator<char>());
-//    check(dispatch::cuModuleLoadDataEx(&h_.cu(), str.c_str(), 0, NULL, NULL));
+//    dispatch::cuModuleLoadDataEx(&h_.cu(), str.c_str(), 0, NULL, NULL);
 
       break;
     }
@@ -141,7 +141,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
           char* cbuffer = buffer.data();
           h_.cl() = dispatch::clCreateProgramWithBinary(context_.h_.cl(), static_cast<cl_uint>(devices.size()), devices.data(), &len, (const unsigned char **)&cbuffer, NULL, &err);
           check(err);
-          check(dispatch::clBuildProgram(h_.cl(), static_cast<cl_uint>(devices.size()), devices.data(), build_opt.c_str(), NULL, NULL));
+          dispatch::clBuildProgram(h_.cl(), static_cast<cl_uint>(devices.size()), devices.data(), build_opt.c_str(), NULL, NULL);
           return;
         }
       }
@@ -150,7 +150,7 @@ Program::Program(Context const & context, std::string const & source) : backend_
       const char * csrc = source.c_str();
       h_.cl() = dispatch::clCreateProgramWithSource(context_.h_.cl(), 1, &csrc, &srclen, &err);
       try{
-        check(dispatch::clBuildProgram(h_.cl(), static_cast<cl_uint>(devices.size()), devices.data(), build_opt.c_str(), NULL, NULL));
+        dispatch::clBuildProgram(h_.cl(), static_cast<cl_uint>(devices.size()), devices.data(), build_opt.c_str(), NULL, NULL);
         //Save cached program
         if (cache_path.size())
         {

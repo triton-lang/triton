@@ -37,7 +37,7 @@ template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(CUcontext x) { check_destruction(dispatch::cuCtxDestroy(x)); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUdeviceptr x) { check_destruction(dispatch::dispatch::cuMemFree(x)); }
+void Handle<CLType, CUType>::_delete(CUdeviceptr x) { check_destruction(dispatch::cuMemFree(x)); }
 
 template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(CUstream x) { check_destruction(dispatch::cuStreamDestroy(x)); }
@@ -46,38 +46,38 @@ template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(CUdevice) { }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUevent x) { check_destruction(dispatch::dispatch::cuEventDestroy(x)); }
+void Handle<CLType, CUType>::_delete(CUevent x) { check_destruction(dispatch::cuEventDestroy(x)); }
 
 template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(CUfunction) { }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUmodule x) { check_destruction(dispatch::dispatch::cuModuleUnload(x)); }
+void Handle<CLType, CUType>::_delete(CUmodule x) { check_destruction(dispatch::cuModuleUnload(x)); }
 
 template<class CLType, class CUType>
 void Handle<CLType, CUType>::_delete(cu_event_t x) { _delete(x.first); _delete(x.second); }
 
 //OpenCL
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_context x) { check(dispatch::clReleaseContext(x)); }
+void Handle<CLType, CUType>::release(cl_context x) { dispatch::clReleaseContext(x); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_mem x) { check(dispatch::clReleaseMemObject(x)); }
+void Handle<CLType, CUType>::release(cl_mem x) { dispatch::clReleaseMemObject(x); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_command_queue x) { check(dispatch::clReleaseCommandQueue(x)); }
+void Handle<CLType, CUType>::release(cl_command_queue x) { dispatch::clReleaseCommandQueue(x); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_device_id x) { check(dispatch::clReleaseDevice(x)); }
+void Handle<CLType, CUType>::release(cl_device_id x) { dispatch::clReleaseDevice(x); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_event x) { check(dispatch::clReleaseEvent(x)); }
+void Handle<CLType, CUType>::release(cl_event x) { dispatch::clReleaseEvent(x); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_kernel x) { check(dispatch::clReleaseKernel(x)); }
+void Handle<CLType, CUType>::release(cl_kernel x) { dispatch::clReleaseKernel(x); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_program x) { check(dispatch::clReleaseProgram(x)); }
+void Handle<CLType, CUType>::release(cl_program x) { dispatch::clReleaseProgram(x); }
 
 template<class CLType, class CUType>
 Handle<CLType, CUType>::Handle(backend_type backend, bool take_ownership): backend_(backend), has_ownership_(take_ownership)

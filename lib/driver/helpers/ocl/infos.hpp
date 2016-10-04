@@ -45,8 +45,7 @@ struct info<cl_mem>
 
   static void get(cl_mem handle, cl_mem_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret)
   {
-      cl_int err = dispatch::clGetMemObjectInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetMemObjectInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
   }
 };
 
@@ -57,8 +56,7 @@ struct info<cl_device_id>
 
   static void get(cl_device_id handle, cl_device_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret)
   {
-      cl_int err = dispatch::clGetDeviceInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetDeviceInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
   }
 };
 
@@ -68,13 +66,11 @@ struct info<cl_kernel>
   typedef cl_kernel_info type;
 
   static void get(cl_kernel handle, cl_kernel_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret){
-      cl_int err = dispatch::clGetKernelInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetKernelInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
   }
 
   static void get(cl_kernel handle, cl_device_id dev_id, cl_kernel_work_group_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret){
-      cl_int err = dispatch::clGetKernelWorkGroupInfo(handle, dev_id, param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetKernelWorkGroupInfo(handle, dev_id, param_name,param_value_size,param_value,param_value_size_ret);
   }
 };
 
@@ -84,8 +80,7 @@ struct info<cl_context>
   typedef cl_context_info type;
 
   static void get(cl_context handle, cl_context_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret){
-      cl_int err = dispatch::clGetContextInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetContextInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
   }
 };
 
@@ -95,13 +90,11 @@ struct info<cl_program>
   typedef cl_program_info type;
 
   static void get(cl_program handle, cl_program_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret){
-      cl_int err = dispatch::clGetProgramInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetProgramInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
   }
 
   static void get(cl_program handle, cl_device_id device, cl_program_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret){
-      cl_int err = dispatch::clGetProgramBuildInfo(handle,device,param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetProgramBuildInfo(handle,device,param_name,param_value_size,param_value,param_value_size_ret);
   }
 };
 
@@ -111,8 +104,7 @@ struct info<cl_event>
 {
   typedef cl_profiling_info type;
   static void get(cl_event handle, cl_profiling_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret){
-      cl_int err = dispatch::clGetEventProfilingInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetEventProfilingInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
   }
 };
 
@@ -121,8 +113,7 @@ struct info<cl_command_queue>
 {
   typedef cl_command_queue_info type;
   static void get(cl_command_queue handle, cl_profiling_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret){
-      cl_int err = dispatch::clGetCommandQueueInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetCommandQueueInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
   }
 };
 
@@ -131,8 +122,7 @@ struct info<cl_platform_id>
 {
   typedef cl_command_queue_info type;
   static void get(cl_platform_id handle, cl_profiling_info param_name,size_t param_value_size,void *param_value,size_t *param_value_size_ret){
-      cl_int err = dispatch::clGetPlatformInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
-      check(err);
+      dispatch::clGetPlatformInfo(handle,param_name,param_value_size,param_value,param_value_size_ret);
   }
 };
 

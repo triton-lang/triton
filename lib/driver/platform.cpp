@@ -78,7 +78,7 @@ void Platform::devices(std::vector<Device> & devices) const
     case CUDA:
     {
       int N;
-      check(dispatch::cuDeviceGetCount(&N));
+      dispatch::cuDeviceGetCount(&N);
       for(int i = 0 ; i < N ; ++i){
         CUdevice device;
         dispatch::cuDeviceGet(&device, i);
@@ -89,9 +89,9 @@ void Platform::devices(std::vector<Device> & devices) const
     case OPENCL:
     {
       cl_uint ndevices;
-      check(dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, 0, NULL, &ndevices));
+      dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, 0, NULL, &ndevices);
       std::vector<cl_device_id> device_ids(ndevices);
-      check(dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, ndevices, device_ids.data(), NULL));
+      dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, ndevices, device_ids.data(), NULL);
       for(cl_device_id d : device_ids)
         devices.push_back(Device(d));
       break;

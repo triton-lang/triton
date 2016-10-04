@@ -50,7 +50,7 @@ private:
   static CUdevice device(CUcontext)
   {
       CUdevice res;
-      check(dispatch::cuCtxGetDevice(&res));
+      dispatch::cuCtxGetDevice(&res);
       return res;
   }
 

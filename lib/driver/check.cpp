@@ -112,10 +112,29 @@ void check(CUresult err)
   }
 }
 
+void check(cublasStatus_t err)
+{
+  using namespace isaac::exception::cublas;
+  switch(err)
+  {
+    case CUBLAS_STATUS_SUCCESS         : break;
+    case CUBLAS_STATUS_NOT_INITIALIZED : throw not_initialized();
+    case CUBLAS_STATUS_ALLOC_FAILED    : throw alloc_failed();
+    case CUBLAS_STATUS_INVALID_VALUE   : throw invalid_value();
+    case CUBLAS_STATUS_ARCH_MISMATCH   : throw arch_mismatch();
+    case CUBLAS_STATUS_MAPPING_ERROR   : throw mapping_error();
+    case CUBLAS_STATUS_EXECUTION_FAILED: throw execution_failed();
+    case CUBLAS_STATUS_INTERNAL_ERROR  : throw internal_error();
+    case CUBLAS_STATUS_NOT_SUPPORTED   : throw not_supported();
+    case CUBLAS_STATUS_LICENSE_ERROR   : throw license_error();
+    default                            : throw unknown();
+  }
+}
+
 void check_destruction(CUresult result)
 {
-    if(result!=CUDA_ERROR_DEINITIALIZED)
-        check(result);
+  if(result!=CUDA_ERROR_DEINITIALIZED)
+    check(result);
 }
 
 
@@ -178,6 +197,7 @@ void check(cl_int err)
         default: throw;
     }
 }
+
 
 }
 }

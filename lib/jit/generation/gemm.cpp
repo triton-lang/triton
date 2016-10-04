@@ -50,7 +50,7 @@ std::vector<int_t> infos(expression_tree const & tree, symbolic::preset::gemm::a
 }
 
 /* ------------------ CUBLAS ------------------ */
-cublas_gemm::cublas_gemm(char A_trans, char B_trans): A_trans_(A_trans), B_trans_(B_trans), init_(driver::dispatch::cublasinit())
+cublas_gemm::cublas_gemm(char A_trans, char B_trans): A_trans_(A_trans), B_trans_(B_trans), init_(true)
 { }
 
 int cublas_gemm::is_invalid(expression_tree const  &, driver::Device const & device) const
@@ -85,28 +85,29 @@ void cublas_gemm::enqueue(driver::CommandQueue & queue, driver::Program const &,
   CUdeviceptr cuB = args.B->array.handle.cu;
   CUdeviceptr cuC = args.C->array.handle.cu;
   runtime::execution_options_type const & opt = control.execution_options();
-  auto cuT = [](char xt) { return xt=='N'?CUBLAS_OP_N:CUBLAS_OP_T; };
+  auto cuT = [](char xt) { return (xt=='N')?CUBLAS_OP_N:CUBLAS_OP_T; };
+  int offA = args.A->array.start, offB = args.B->array.start, offC = args.C->array.start;
+  cublasHandle_t h = drv::dispatch::cublasHandle(queue.context());
   //Set new stream
   cudaStream_t bkp;
   drv::Event event(drv::CUDA);
-  drv::dispatch::cublasGetStream(&bkp);
-  drv::dispatch::cublasSetStream((cudaStream_t)queue.handle().cu());
+  drv::dispatch::cublasGetStream(h,&bkp);
+  drv::dispatch::cublasSetStream(h,(cudaStream_t)queue.handle().cu());
   values_holder alpha = args.alpha.values();
   values_holder beta = args.beta.values();
   if(opt.events)
     drv::check(drv::dispatch::cuEventRecord(event.handle().cu().first, queue.handle().cu()));
   if(args.C->dtype==FLOAT_TYPE)
-    drv::dispatch::cublasSgemm(cuT(A_trans_), cuT(B_trans_), M, N, K, &alpha.float32, (float*)cuA, args.A->ld[1], (float*)cuB, args.B->ld[1], &beta.float32, (float*)cuC, args.C->ld[1]);
+    drv::dispatch::cublasSgemm(h,cuT(A_trans_), cuT(B_trans_), M, N, K, &alpha.float32, (float*)cuA + offA , args.A->ld[1], (float*)cuB + offB, args.B->ld[1], &beta.float32, (float*)cuC + offC, args.C->ld[1]);
   else
-    drv::dispatch::cublasDgemm(cuT(A_trans_), cuT(B_trans_), M, N, K, &alpha.float64, (double*)cuA, args.A->ld[1], (double*)cuB, args.B->ld[1], &beta.float64, (double*)cuC, args.C->ld[1]);
+    drv::dispatch::cublasDgemm(h,cuT(A_trans_), cuT(B_trans_), M, N, K, &alpha.float64, (double*)cuA + offA, args.A->ld[1], (double*)cuB + offB, args.B->ld[1], &beta.float64, (double*)cuC + offC, args.C->ld[1]);
   if(opt.events){
     drv::check(drv::dispatch::cuEventRecord(event.handle().cu().second, queue.handle().cu()));
     opt.events->push_back(event);
   }
   //Revert old stream
-  drv::dispatch::cublasSetStream(bkp);
+  drv::dispatch::cublasSetStream(h,bkp);
 }
-
 
 
 /* -------------------------------------------- */
