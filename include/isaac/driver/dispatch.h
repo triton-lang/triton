@@ -31,6 +31,7 @@
 //CUDA Backend
 #include "isaac/driver/external/CUDA/cuda.h"
 #include "isaac/driver/external/CUDA/nvrtc.h"
+#include "isaac/driver/external/CUDA/cublas.h"
 
 #include <iostream>
 
@@ -48,9 +49,7 @@ private:
 
     template <class R, class... A>
     struct return_type<R (*)(A...)>
-    {
-      typedef R type;
-    };
+    { typedef R type; };
 
     typedef bool (*f_init_t)();
 
@@ -65,10 +64,13 @@ private:
         return (*fptr)(args...);
     }
 
+    static void cublasCreate(cublasHandle_t* h);
+
 public:
     static bool clinit();
-    static bool cuinit();
+    static bool cublasinit();
     static bool nvrtcinit();
+    static bool cuinit();
 
     static void release();
 
@@ -144,10 +146,17 @@ public:
     static nvrtcResult nvrtcCreateProgram(nvrtcProgram *prog, const char *src, const char *name, int numHeaders, const char **headers, const char **includeNames);
     static nvrtcResult nvrtcGetProgramLog(nvrtcProgram prog, char *log);
 
+    static void cublasGetStream(cudaStream_t *streamId);
+    static void cublasSetStream(cudaStream_t streamId);
+    static void cublasSgemm (cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc);
+    static void cublasDgemm (cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc);
+
 private:
     static void* opencl_;
     static void* cuda_;
     static void* nvrtc_;
+    static void* cublas_;
+    static cublasHandle_t cublas_handle_;
 
     //OpenCL
     static void* clBuildProgram_;
@@ -220,6 +229,12 @@ private:
     static void* nvrtcGetPTXSize_;
     static void* nvrtcCreateProgram_;
     static void* nvrtcGetProgramLog_;
+
+    static void* cublasCreate_;
+    static void* cublasGetStream_;
+    static void* cublasSetStream_;
+    static void* cublasSgemm_;
+    static void* cublasDgemm_;
 };
 
 }

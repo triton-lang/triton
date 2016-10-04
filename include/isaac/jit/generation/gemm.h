@@ -31,6 +31,21 @@ namespace isaac
 namespace templates
 {
 
+
+class cublas_gemm : public external_base
+{
+  bool init();
+public:
+  cublas_gemm(char A_trans, char B_trans);
+  int is_invalid(expression_tree const  &, driver::Device const &) const;
+  std::vector<int_t> input_sizes(expression_tree const & expressions) const;
+  void enqueue(driver::CommandQueue & queue, driver::Program const &, std::string const &, runtime::execution_handler const & h);
+private:
+  const char A_trans_;
+  const char B_trans_;
+  bool init_;
+};
+
 class gemm : public parameterized_base
 {
 private:
@@ -41,16 +56,16 @@ private:
   std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const &) const;
   void enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K, const expression_tree::node &A, const expression_tree::node &B, const expression_tree::node &C,
                      value_scalar const &alpha, value_scalar const &beta, driver::Program const & program, std::string const & suffix, runtime::execution_options_type const & options);
-  std::vector<int_t> infos(expression_tree const & expressions,  isaac::symbolic::preset::gemm::args &arguments) const;
+
 public:
   gemm(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
        , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
        , int_t lf0, int_t lf1, char A_trans, char B_trans);
   std::vector<int_t> input_sizes(expression_tree const & expressions) const;
-  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const &ctr);
+  void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & h);
+
 private:
   //Parameters
-
   unsigned int mL_;
   unsigned int kL_;
   unsigned int nL_;
