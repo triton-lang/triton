@@ -40,7 +40,7 @@ def linspace(a, b, n=100):
 def expspace(a,b,N,r=128):
     return [int(ceil(exp(x)/r)*r) for x in linspace(log(a), log(b), N)]
                   
-def benchmark(operation, template, tree):
+def benchmark(template, tree):
     queue = tree.context.queues[0]
     queue.profiles[template, sc.float32] = sc.profile(template, sc.float32, queue)
     times = []

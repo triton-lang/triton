@@ -145,10 +145,10 @@ class Tuner:
             best = None
             if idx > 0:
                 dim = min(10, idx+1)
-                model = RandomForestRegressor(dim, dim).fit(X, Y)
-                predictions = model.predict(x)[0]
+                clf = RandomForestRegressor(dim, dim).fit(X, Y)
+                predictions = clf.predict(x)[0]
                 for idx in (-predictions).argsort():
-                    ts = tools.benchmark(operation, operation(*profiles[idx]), tree)
+                    ts = tools.benchmark(operation(*profiles[idx]), tree)
                     if np.isfinite(ts):
                         break
                 if np.isfinite(ts):
@@ -162,11 +162,11 @@ class Tuner:
                     profiles.append(best)
                     for xx,yy in zip(X, Y):
                         tree, _operands = tools.tree_of(operation, xx, context)
-                        time = tools.benchmark(operation, best, _tree)
+                        time = tools.benchmark(operation(*best), _tree)
                         yy.append(performance(xx, time))
             #Update dataset
             X.append(x)
-            y = [performance(x,tools.benchmark(operation, prf, tree)) for prf in profiles]
+            y = [performance(x,tools.benchmark(operation(*prf), tree)) for prf in profiles]
             Y.append(y)
             #Save data
             for (fname, data) in zip(['X.csv', 'Y.csv', 'profiles.csv'], [X, Y, profiles]):
@@ -179,10 +179,13 @@ class Tuner:
         self.progress_bar.set_finished()
         
         #Adding external profiles
-        #~ for prf in tools.external_profiles(operation):
-            #~ x = [1024, 1024, 1024]
-            #~ tree, operands = tools.tree_of(operation, x, context)
-            #~ print performance(x,tools.benchmark(operation, prf, tree))
+        for prof in tools.external_profiles(operation):
+			for x, y in zip(X, Y):
+				tree, operands = tools.tree_of(operation, x, context)
+				perf = performance(x,tools.benchmark(prof, tree))
+				if perf > 0:
+					profiles.append(prof.__class__.__name__)
+					y.append(perf)
             
         #Pruning of useless profiles
         if len(Y[0]) > 1:
