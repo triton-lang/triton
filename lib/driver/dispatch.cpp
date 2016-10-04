@@ -60,6 +60,10 @@ namespace driver
 #define DEFINE11(init, hlib, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11) ret dispatch::fname(t1 a, t2 b, t3 c, t4 d, t5 e, t6 f, t7 g, t8 h, t9 i, t10 j, t11 k)\
  {return f_impl<dispatch::init>(hlib, fname, fname ## _, #fname, a, b, c, d, e, f, g, h, i, j, k); }
 
+#define DEFINE13(init, hlib, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13) ret dispatch::fname(t1 a, t2 b, t3 c, t4 d, t5 e, t6 f, t7 g, t8 h, t9 i, t10 j, t11 k, t12 l, t13 m)\
+ {return f_impl<dispatch::init>(hlib, fname, fname ## _, #fname, a, b, c, d, e, f, g, h, i, j, k, l, m); }
+
+
 //Specialized helpers for OpenCL
 #define OCL_DEFINE1(ret, fname, t1) DEFINE1(clinit, opencl_, ret, fname, t1)
 #define OCL_DEFINE2(ret, fname, t1, t2) DEFINE2(clinit, opencl_, ret, fname, t1, t2)
@@ -96,26 +100,38 @@ namespace driver
 #define NVRTC_DEFINE10(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10) DEFINE10(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10)
 #define NVRTC_DEFINE11(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11) DEFINE11(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11)
 
+#define CUBLAS_DEFINE1(ret, fname, t1) DEFINE1(cublasinit, cublas_, ret, fname, t1)
+#define CUBLAS_DEFINE13(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13) DEFINE13(cublasinit, cublas_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13)
 
 bool dispatch::clinit()
 {
-    if(opencl_==nullptr)
-        opencl_ = dlopen("libOpenCL.so", RTLD_LAZY);
-    return opencl_ != nullptr;
+  if(opencl_==nullptr)
+    opencl_ = dlopen("libOpenCL.so", RTLD_LAZY);
+  return opencl_ != nullptr;
 }
 
 bool dispatch::cuinit()
 {
-    if(cuda_==nullptr)
-        cuda_ = dlopen("libcuda.so", RTLD_LAZY);
-    return cuda_ != nullptr;
+  if(cuda_==nullptr)
+    cuda_ = dlopen("libcuda.so", RTLD_LAZY);
+  return cuda_ != nullptr;
 }
 
 bool dispatch::nvrtcinit()
 {
-    if(nvrtc_==nullptr)
-        nvrtc_ = dlopen("libnvrtc.so", RTLD_LAZY);
-    return nvrtc_ != nullptr;
+  if(nvrtc_==nullptr)
+    nvrtc_ = dlopen("libnvrtc.so", RTLD_LAZY);
+  return nvrtc_ != nullptr;
+}
+
+bool dispatch::cublasinit()
+{
+  if(cublas_==nullptr){
+    cublas_ = dlopen("libcublas.so", RTLD_LAZY);
+    if(cublas_!=nullptr)
+      cublasCreate(&cublas_handle_);
+  }
+  return cublas_ != nullptr;
 }
 
 
@@ -196,25 +212,45 @@ NVRTC_DEFINE2(nvrtcResult, nvrtcGetPTXSize, nvrtcProgram, size_t *)
 NVRTC_DEFINE6(nvrtcResult, nvrtcCreateProgram, nvrtcProgram *, const char *, const char *, int, const char **, const char **)
 NVRTC_DEFINE2(nvrtcResult, nvrtcGetProgramLog, nvrtcProgram, char *)
 
+CUBLAS_DEFINE1(void, cublasCreate, cublasHandle_t*)
+
+void dispatch::cublasGetStream(cudaStream_t *a)
+{ f_impl<dispatch::cublasinit>(cublas_, cublasGetStream_v2, cublasGetStream_, "cublasGetStream_v2", cublas_handle_, a); }
+
+void dispatch::cublasSetStream(cudaStream_t a)
+{ f_impl<dispatch::cublasinit>(cublas_, cublasSetStream_v2, cublasSetStream_, "cublasSetStream_v2", cublas_handle_, a); }
+
+void dispatch::cublasSgemm(cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc)
+{ f_impl<dispatch::cublasinit>(cublas_, cublasSgemm_v2, cublasSgemm_, "cublasSgemm_v2", cublas_handle_, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
+
+void dispatch::cublasDgemm(cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc)
+{ f_impl<dispatch::cublasinit>(cublas_, cublasDgemm_v2, cublasDgemm_, "cublasDgemm_v2", cublas_handle_, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
+
 void dispatch::release()
 {
-    if(opencl_){
-        dlclose(opencl_);
-        opencl_ = nullptr;
-    }
-    if(cuda_){
-        dlclose(cuda_);
-        cuda_ = nullptr;
-    }
-    if(nvrtc_){
-        dlclose(nvrtc_);
-        nvrtc_ = nullptr;
-    }
+  if(opencl_){
+    dlclose(opencl_);
+    opencl_ = nullptr;
+  }
+  if(cuda_){
+    dlclose(cuda_);
+    cuda_ = nullptr;
+  }
+  if(nvrtc_){
+    dlclose(nvrtc_);
+    nvrtc_ = nullptr;
+  }
+  if(cublas_){
+    dlclose(cublas_);
+    cublas_ = nullptr;
+  }
 }
 
 void * dispatch::opencl_;
 void * dispatch::cuda_;
 void * dispatch::nvrtc_;
+void * dispatch::cublas_;
+cublasHandle_t dispatch::cublas_handle_;
 
 //OpenCL
 void* dispatch::clBuildProgram_;
@@ -287,6 +323,12 @@ void* dispatch::nvrtcGetPTX_;
 void* dispatch::nvrtcGetPTXSize_;
 void* dispatch::nvrtcCreateProgram_;
 void* dispatch::nvrtcGetProgramLog_;
+
+void* dispatch::cublasCreate_;
+void* dispatch::cublasGetStream_;
+void* dispatch::cublasSetStream_;
+void* dispatch::cublasSgemm_;
+void* dispatch::cublasDgemm_;
 
 }
 }

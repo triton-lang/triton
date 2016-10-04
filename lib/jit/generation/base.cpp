@@ -66,6 +66,24 @@ std::string base::generate(std::string const & suffix, expression_tree const  & 
   return generate_impl(suffix, expression, device, mapping);
 }
 
+
+/* External base */
+external_base::external_base()
+{ }
+
+std::string external_base::generate_impl(std::string const &, expression_tree const &, driver::Device const &, symbolic::symbols_table const &)
+{ return ""; }
+
+unsigned int external_base::temporary_workspace(expression_tree const &) const
+{ return 0; }
+
+unsigned int external_base::lmem_usage(expression_tree const &) const
+{ return 0; }
+
+unsigned int external_base::registers_usage(expression_tree const &) const
+{ return 0; }
+
+/* Parameterized base */
 int parameterized_base::is_invalid_impl(driver::Device const &, expression_tree const  &) const
 { return TEMPLATE_VALID; }
 
@@ -103,6 +121,9 @@ int parameterized_base::is_invalid(expression_tree const  & expressions, driver:
 
   return is_invalid_impl(device, expressions);
 }
+
+std::shared_ptr<base> base::getptr()
+{ return shared_from_this(); }
 
 }
 }

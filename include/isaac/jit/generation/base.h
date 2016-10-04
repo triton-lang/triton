@@ -85,11 +85,20 @@ public:
   virtual int is_invalid(expression_tree const & expressions, driver::Device const & device) const = 0;
   virtual void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & expressions) = 0;
   std::string generate(std::string const & suffix, expression_tree const & expressions, driver::Device const & device);
-  std::shared_ptr<base> getptr() {
-      return shared_from_this();
-  }
+  std::shared_ptr<base> getptr();
 };
 
+class external_base: public base
+{
+private:
+  virtual std::string generate_impl(std::string const & suffix, expression_tree const & expressions, driver::Device const & device, symbolic::symbols_table const & mapping);
+public:
+  external_base();
+  virtual unsigned int temporary_workspace(expression_tree const &) const;
+  virtual unsigned int lmem_usage(expression_tree const &) const;
+  virtual unsigned int registers_usage(expression_tree const &) const;
+  virtual std::vector<int_t> input_sizes(expression_tree const & expressions) const = 0;
+};
 
 class parameterized_base : public base
 {
