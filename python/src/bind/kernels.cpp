@@ -48,14 +48,6 @@ void export_templates()
   bp::scope().attr("templates") = templates_module;
   bp::scope template_scope = templates_module;
 
-
-  bp::enum_<tpt::fetch_type>
-      ("fetch_type")
-     .value("FETCH_FROM_LOCAL", tpt::FETCH_FROM_LOCAL)
-     .value("FETCH_FROM_GLOBAL_STRIDED", tpt::FETCH_FROM_GLOBAL_STRIDED)
-     .value("FETCH_FROM_GLOBAL_CONTIGUOUS", tpt::FETCH_FROM_GLOBAL_CONTIGUOUS);
-
-
   //Base
   {
     #define __PROP(name) .def_readonly(#name, &tpt::base::name)
@@ -78,17 +70,17 @@ void export_templates()
 
   #define WRAP_TEMPLATE(name, basename, ...) bp::class_<tpt::name, std::shared_ptr<tpt::name>, bp::bases<basename>>(#name, bp::init<__VA_ARGS__>())\
                                       ;
-  WRAP_TEMPLATE(elementwise_1d, tpt::parameterized_base, uint, uint, uint, tpt::fetch_type)
-  WRAP_TEMPLATE(elementwise_2d, tpt::parameterized_base, uint, uint, uint, uint, uint, tpt::fetch_type)
-  WRAP_TEMPLATE(reduce_1d, tpt::parameterized_base, uint, uint, uint, tpt::fetch_type)
+  WRAP_TEMPLATE(elementwise_1d, tpt::parameterized_base, uint, uint, uint)
+  WRAP_TEMPLATE(elementwise_2d, tpt::parameterized_base, uint, uint, uint, uint, uint)
+  WRAP_TEMPLATE(reduce_1d, tpt::parameterized_base, uint, uint, uint)
   WRAP_BASE(reduce_2d)
-  WRAP_TEMPLATE(reduce_2d_rows, tpt::reduce_2d, uint, uint, uint, uint, uint, tpt::fetch_type)
-  WRAP_TEMPLATE(reduce_2d_cols, tpt::reduce_2d, uint, uint, uint, uint, uint, tpt::fetch_type)
+  WRAP_TEMPLATE(reduce_2d_rows, tpt::reduce_2d, uint, uint, uint, uint, uint)
+  WRAP_TEMPLATE(reduce_2d_cols, tpt::reduce_2d, uint, uint, uint, uint, uint)
   WRAP_BASE(gemm)
-  WRAP_TEMPLATE(gemm_nn, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
-  WRAP_TEMPLATE(gemm_tn, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
-  WRAP_TEMPLATE(gemm_nt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
-  WRAP_TEMPLATE(gemm_tt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, tpt::fetch_type, tpt::fetch_type, uint, uint)
+  WRAP_TEMPLATE(gemm_nn, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
+  WRAP_TEMPLATE(gemm_tn, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
+  WRAP_TEMPLATE(gemm_nt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
+  WRAP_TEMPLATE(gemm_tt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
   WRAP_TEMPLATE(cublas_gemm, tpt::external_base, char, char)
 
 

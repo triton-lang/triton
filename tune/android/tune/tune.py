@@ -117,20 +117,9 @@ class Tuner:
             with open(os.path.join(savepath, 'X.csv')) as f:
                 X = [tuple(map(int, row)) for row in csv.reader(f, delimiter=',')]
             with open(os.path.join(savepath, 'profiles.csv')) as f:
-                def mmap(x):
-                    if x=='FETCH_FROM_LOCAL':
-                        return sc.templates.fetch_type.FETCH_FROM_LOCAL
-                    if x=='FETCH_FROM_GLOBAL_CONTIGUOUS':
-                        return sc.templates.fetch_type.FETCH_FROM_GLOBAL_CONTIGUOUS
-                    if x=='FETCH_FROM_GLOBAL_STRIDED':
-                        return sc.templates.fetch_type.FETCH_FROM_GLOBAL_STRIDED
-                    return int(x)
-                profiles = [map(mmap,row) for v in row for row in csv.reader(f, delimiter=',')]
+                profiles = [map(int,row) for v in row for row in csv.reader(f, delimiter=',')]
             with open(os.path.join(savepath, 'Y.csv')) as f:
                 Y = [map(float, row) for row in csv.reader(f, delimiter=',')]
-            #for x in X:
-            #    tree, _ = tools.tree_of(operation, x, context)
-            #    Y.append([performance(x, tools.benchmark(operation(*best), tree)) for best in profiles])
         except:
             pass
         
@@ -173,6 +162,7 @@ class Tuner:
                         yy.append(performance(xx, time))
             #Update dataset
             X.append(x)
+            tree, operands = tools.tree_of(operation, x, context)
             y = [performance(x,tools.benchmark(operation(*prf), tree)) for prf in profiles]
             Y.append(y)
             #Save data

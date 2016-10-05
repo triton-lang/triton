@@ -40,13 +40,6 @@ namespace isaac
 namespace templates
 {
 
-enum fetch_type
-{
-  FETCH_FROM_LOCAL,
-  FETCH_FROM_GLOBAL_STRIDED,
-  FETCH_FROM_GLOBAL_CONTIGUOUS
-};
-
 //Error codes
 static const int TEMPLATE_VALID = 0;
 static const int TEMPLATE_LOCAL_MEMORY_OVERFLOW = -1;
@@ -105,6 +98,7 @@ class parameterized_base : public base
 {
 private:
   virtual int is_invalid_impl(driver::Device const &, expression_tree const &) const;
+
 public:
   parameterized_base(unsigned int _vwidth, int_t _ls0, int_t _ls1);
   unsigned int ls0() const;

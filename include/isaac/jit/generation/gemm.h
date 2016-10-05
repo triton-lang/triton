@@ -59,8 +59,8 @@ private:
 
 public:
   gemm(unsigned int simd, int_t ls0, int_t KL, int_t ls1, int_t D
-       , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
-       , int_t lf0, int_t lf1, char A_trans, char B_trans);
+       , int_t ms, int_t ks, int_t ns, int_t lf0, int_t lf1
+       , char A_trans, char B_trans);
   std::vector<int_t> input_sizes(expression_tree const & expressions) const;
   void enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & h);
   expression_type type() const;
@@ -74,9 +74,6 @@ private:
   unsigned int mS_;
   unsigned int kS_;
   unsigned int nS_;
-
-  fetch_type Afetch_;
-  fetch_type Bfetch_;
 
   unsigned int lf0_;
   unsigned int lf1_;
@@ -93,16 +90,14 @@ class gemm_nn : public gemm
 {
 public:
   gemm_nn(unsigned int vwidth, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
-                      , int_t lf0, int_t lf1);
+                      , int_t ms, int_t ks, int_t ns, int_t lf0, int_t lf1);
 };
 
 class gemm_tn : public gemm
 {
 public:
   gemm_tn(unsigned int vwidth, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
-                      , int_t lf0, int_t lf1);
+                      , int_t ms, int_t ks, int_t ns, int_t lf0, int_t lf1);
 };
 
 
@@ -110,8 +105,7 @@ class gemm_nt : public gemm
 {
 public:
   gemm_nt(unsigned int vwidth, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
-                      , int_t lf0, int_t lf1);
+                      , int_t ms, int_t ks, int_t ns, int_t lf0, int_t lf1);
 };
 
 
@@ -119,8 +113,7 @@ class gemm_tt : public gemm
 {
 public:
   gemm_tt(unsigned int vwidth, int_t ls0, int_t KL, int_t ls1, int_t D
-                      , int_t ms, int_t ks, int_t ns, fetch_type Afetch , fetch_type Bfetch
-                      , int_t lf0, int_t lf1);
+                      , int_t ms, int_t ks, int_t ns, int_t lf0, int_t lf1);
 };
 
 }

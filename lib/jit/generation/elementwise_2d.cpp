@@ -37,8 +37,6 @@ int elementwise_2d::is_invalid_impl(driver::Device const &, expression_tree cons
 {
   if (vwidth_>1)
     return TEMPLATE_INVALID_SIMD_WIDTH;
-  if(fetch_==FETCH_FROM_LOCAL)
-    return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
   return TEMPLATE_VALID;
 }
 
@@ -69,8 +67,8 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
   stream << "{" << std::endl;
   stream.inc_tab();
 
-  element_wise_loop_1D(stream, fetch_, 1, "i", "M", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int){
-    element_wise_loop_1D(stream, fetch_, 1, "j", "N", "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](unsigned int){
+  element_wise_loop_1D(stream, 1, "i", "M", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", [&](unsigned int){
+    element_wise_loop_1D(stream, 1, "j", "N", "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", [&](unsigned int){
       //Declares register to store results
       for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assigned_left, false))
         stream << sym->process("#scalartype #name;") << std::endl;
@@ -96,8 +94,8 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
 }
 
 elementwise_2d::elementwise_2d(unsigned int vwidth, unsigned int ls0, unsigned int ls1,
-                               unsigned int ng0, unsigned int ng1, fetch_type fetch):
-    parameterized_base(vwidth, ls0, ls1), ng0_(ng0), ng1_(ng1), fetch_(fetch)
+                               unsigned int ng0, unsigned int ng1):
+    parameterized_base(vwidth, ls0, ls1), ng0_(ng0), ng1_(ng1)
 {}
 
 std::vector<int_t> elementwise_2d::input_sizes(expression_tree const  & expression) const{

@@ -20,7 +20,7 @@
 import isaac as sc
 from numpy import mean, median
 from math import ceil, exp, log, sqrt
-from time import time
+import time
 profile_execution_failure = (sc.OperationNotSupported,  sc.OclLaunchOutOfResources, sc.CudaLaunchOutOfResources, sc.MemObjectAllocationFailure, sc.InvalidWorkGroupSize, sc.OutOfHostMemory, sc.InvalidValue)
 
 def sanitize(string, keep_chars = ['_']):
@@ -55,10 +55,10 @@ def benchmark(template, tree, operation=sc.templates.gemm_nn):
         return float("inf")
     #Time
     while total < 1e-2:
-        start = time()
+        start = time.clock()
         z, events = sc.driver.enqueue(tree)
         queue.synchronize()
-        end = time()
+        end = time.clock()
         times.append(end - start)
         total += times[-1]
         i+=1
@@ -138,15 +138,15 @@ def external_profiles(template):
         
 def genetic_infos_of(template):
     if issubclass(template, sc.templates.elementwise_1d):
-        return {'categorical': [3], 'nbits': [3,4,4,2] }
+        return {'categorical': [], 'nbits': [3,4,4] }
     elif issubclass(template, sc.templates.reduce_1d):
-        return {'categorical': [3], 'nbits':[3,4,4,2]}
+        return {'categorical': [], 'nbits':[3,4,4]}
     elif issubclass(template, sc.templates.elementwise_2d):
-        return {'categorical': [5], 'nbits': [3,3,3,3,4,2]}
+        return {'categorical': [], 'nbits': [3,3,3,3,4]}
     elif issubclass(template, sc.templates.reduce_2d):
-        return {'categorical': [5], 'nbits': [3,3,3,3,4,2]}
+        return {'categorical': [], 'nbits': [3,3,3,3,4]}
     elif issubclass(template, sc.templates.gemm):
-        return {'categorical': [8,9], 'nbits': [3,3,3,3,3,2,2,2,2,2,3,3]}
+        return {'categorical': [], 'nbits': [3,3,3,3,3,2,2,2,3,3]}
 
 def convert(profile):
 	if isinstance(profile, str):

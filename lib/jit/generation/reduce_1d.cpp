@@ -41,13 +41,6 @@ unsigned int reduce_1d::lmem_usage(expression_tree const  & x) const
   return ls0_*size_of(x.dtype());
 }
 
-int reduce_1d::is_invalid_impl(driver::Device const &, expression_tree const  &) const
-{
-  if (fetch_==FETCH_FROM_LOCAL)
-    return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
-  return TEMPLATE_VALID;
-}
-
 unsigned int reduce_1d::temporary_workspace(expression_tree const &) const
 {
     if(ng_ > 1)
@@ -149,7 +142,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
       stream << rd->process("#scalartype #name_acc = " + neutral_element(rd->op(), backend, "#scalartype") + ";") << std::endl;
     }
   }
-  element_wise_loop_1D(stream, fetch_, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int vwidth)
+  element_wise_loop_1D(stream, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", [&](unsigned int vwidth)
   {
     std::string dtype = append_width("#scalartype",vwidth);
     //Fetch vector entry
@@ -252,8 +245,8 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   return stream.str();
 }
 
-reduce_1d::reduce_1d(unsigned int vwidth, unsigned int ls, unsigned int ng, fetch_type fetch):
-    parameterized_base(vwidth,ls,1), ng_(ng), fetch_(fetch)
+reduce_1d::reduce_1d(unsigned int vwidth, unsigned int ls, unsigned int ng):
+    parameterized_base(vwidth,ls,1), ng_(ng)
 {}
 
 std::vector<int_t> reduce_1d::input_sizes(expression_tree const  & x) const

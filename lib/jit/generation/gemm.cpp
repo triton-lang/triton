@@ -153,9 +153,6 @@ unsigned int gemm::temporary_workspace(expression_tree const & expressions) cons
 
 int gemm::is_invalid_impl(driver::Device const &, expression_tree const &) const
 {
-  if(Afetch_!=FETCH_FROM_LOCAL || Bfetch_!=FETCH_FROM_LOCAL)
-    return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
-
   if ((mS_ % vwidth_) > 0 || (nS_ % vwidth_) > 0)
     return TEMPLATE_MS_NS_MUST_BE_SIMD_WIDTH_MULTIPLE;
 
@@ -165,12 +162,9 @@ int gemm::is_invalid_impl(driver::Device const &, expression_tree const &) const
   if ( kS_ % kL_ == 0)
     return TEMPLATE_KS_MUST_BE_SMALLER_THAN_KL;
 
-  if (Afetch_==FETCH_FROM_LOCAL || Bfetch_==FETCH_FROM_LOCAL){
-    if ((lf0_*lf1_) !=(ls0_*ls1_))
-      return TEMPLATE_LOCAL_FETCH_PRODUCT_MUST_MATCH_LOCAL_SIZE_PRODUCT;
-  }
+  if ((lf0_*lf1_) !=(ls0_*ls1_))
+    return TEMPLATE_LOCAL_FETCH_PRODUCT_MUST_MATCH_LOCAL_SIZE_PRODUCT;
 
-  if (Afetch_==FETCH_FROM_LOCAL)
   {
     unsigned int bound1 = (A_trans_=='N')?kL_:mL_;
     unsigned int bound0 = (A_trans_=='N')?mL_:kL_;
@@ -182,7 +176,7 @@ int gemm::is_invalid_impl(driver::Device const &, expression_tree const &) const
       return A_trans_=='N'?TEMPLATE_LOCAL_FETCH_0_MUST_BE_NL_MULTIPLE:TEMPLATE_LOCAL_FETCH_0_MUST_BE_KL_MULTIPLE;
 
   }
-  if (Bfetch_==FETCH_FROM_LOCAL)
+
   {
     unsigned int bound1 = (B_trans_=='T')?kL_:nL_;
     unsigned int bound0 = (B_trans_=='T')?nL_:kL_;
@@ -757,10 +751,9 @@ void gemm::enqueue_block(driver::CommandQueue & queue, int_t M, int_t N, int_t K
 gemm::gemm(unsigned int vwidth
            ,int_t ls0, int_t kL, int_t ls1, int_t D
            ,int_t ms, int_t ks, int_t ns
-           ,fetch_type Afetch , fetch_type Bfetch
            ,int_t lf0, int_t lf1, char A_trans, char B_trans) :
-  parameterized_base(vwidth, ls0, ls1), mL_(ms*ls0), kL_(kL), nL_(ns*ls1), depth_(D), mS_(ms), kS_(ks), nS_(ns),
-  Afetch_(Afetch), Bfetch_(Bfetch), lf0_(lf0), lf1_(lf1), A_trans_(A_trans), B_trans_(B_trans)
+  parameterized_base(vwidth, ls0, ls1), mL_(ms*ls0), kL_(kL), nL_(ns*ls1), depth_(D), mS_(ms), kS_(ks)
+                                     , nS_(ns), lf0_(lf0), lf1_(lf1), A_trans_(A_trans), B_trans_(B_trans)
 {
   if(A_trans_=='N' && B_trans_=='N') type_ = GEMM_NN;
   else if(A_trans_=='T' && B_trans_=='N') type_ = GEMM_TN;
@@ -795,9 +788,8 @@ void gemm::enqueue(driver::CommandQueue & queue, driver::Program const & program
 gemm_nn::gemm_nn(unsigned int vwidth
                  , int_t ls0, int_t KL, int_t ls1, int_t D
                  , int_t ms, int_t ks, int_t ns
-                 , fetch_type Afetch , fetch_type Bfetch
                  , int_t lf0, int_t lf1) :
-  gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1, 'N', 'N')
+  gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, lf0, lf1, 'N', 'N')
 {
 }
 
@@ -805,27 +797,24 @@ gemm_nn::gemm_nn(unsigned int vwidth
 gemm_tn::gemm_tn(unsigned int vwidth
                  , int_t ls0, int_t KL, int_t ls1, int_t D
                  , int_t ms, int_t ks, int_t ns
-                 , fetch_type Afetch , fetch_type Bfetch
                  , int_t lf0, int_t lf1) :
-  gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1, 'T', 'N')
+  gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, lf0, lf1, 'T', 'N')
 { }
 
 //
 gemm_nt::gemm_nt(unsigned int vwidth
                  , int_t ls0, int_t KL, int_t ls1, int_t D
                  , int_t ms, int_t ks, int_t ns
-                 , fetch_type Afetch , fetch_type Bfetch
                  , int_t lf0, int_t lf1) :
-  gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1, 'N', 'T')
+  gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, lf0, lf1, 'N', 'T')
 { }
 
 //
 gemm_tt::gemm_tt(unsigned int vwidth
                  , int_t ls0, int_t KL, int_t ls1, int_t D
                  , int_t ms, int_t ks, int_t ns
-                 , fetch_type Afetch , fetch_type Bfetch
                  , int_t lf0, int_t lf1) :
-  gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, Afetch, Bfetch, lf0, lf1, 'T', 'T')
+  gemm(vwidth, ls0, KL, ls1, D, ms, ks, ns, lf0, lf1, 'T', 'T')
 { }
 
 }

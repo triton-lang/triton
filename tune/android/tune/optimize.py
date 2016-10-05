@@ -34,11 +34,6 @@ import tools
 from tools import profile_execution_failure
 from time import sleep
 
-fetch_types = [sc.templates.fetch_type.FETCH_FROM_GLOBAL_CONTIGUOUS,
-               sc.templates.fetch_type.FETCH_FROM_GLOBAL_STRIDED,
-               sc.templates.fetch_type.FETCH_FROM_LOCAL,
-               sc.templates.fetch_type.FETCH_FROM_LOCAL]
-
 class GeneticOptimizer:
     
     def __init__(self, logger, naccept=500, niter=1000, cxpb=.4, mutpb=.4, popsize=10, progress_bar = None):
@@ -77,7 +72,7 @@ class GeneticOptimizer:
             result = []
             for off1,off2 in zip(offsets[:-1],offsets[1:]):
                 result += [gray2int(genome[off1:off2])]
-            result = [fetch_types[x] if i in genetic_infos['categorical'] else 2**x for i,x in enumerate(result)]
+            result = [2**x for i,x in enumerate(result)]
             return result
 
         def evaluate(genome):

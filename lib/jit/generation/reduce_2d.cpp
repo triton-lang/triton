@@ -39,13 +39,6 @@ namespace isaac
 namespace templates
 {
 
-int reduce_2d::is_invalid_impl(driver::Device const &, expression_tree const &) const
-{
-  if (fetch_==FETCH_FROM_LOCAL)
-    return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
-  return TEMPLATE_VALID;
-}
-
 unsigned int reduce_2d::lmem_usage(const expression_tree&) const
 {
   return (ls0_+1)*ls1_;
@@ -121,7 +114,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   std::ostringstream upper;
   upper << "(M +" << ls1_ - 1 << ")/" << ls1_ << "*" << ls1_;
 
-  element_wise_loop_1D(stream, fetch_, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](unsigned int cwidth)
+  element_wise_loop_1D(stream, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", [&](unsigned int cwidth)
   {
   //Declare Buffers
   for (symbolic::reduce_2d* rd : reductions)
@@ -136,7 +129,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream << "if (r < M)" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
-  element_wise_loop_1D(stream, fetch_, (reduction_type_==REDUCE_COLUMNS)?vwidth_:1, "c", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int rwidth)
+  element_wise_loop_1D(stream, (reduction_type_==REDUCE_COLUMNS)?vwidth_:1, "c", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", [&](unsigned int rwidth)
   {
     std::string rdtype = append_width("#scalartype", rwidth);
     std::string cdtype = append_width("#scalartype", cwidth);
@@ -276,9 +269,9 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   return stream.str();
 }
 
-reduce_2d::reduce_2d(unsigned int vwidth, unsigned int ls0, unsigned int ls1, unsigned int ng0, unsigned int ng1, fetch_type fetch,
+reduce_2d::reduce_2d(unsigned int vwidth, unsigned int ls0, unsigned int ls1, unsigned int ng0, unsigned int ng1,
                     operation_type_family rtype) :
-  parameterized_base(vwidth, ls0, ls1), ng0_(ng0), ng1_(ng1), fetch_(fetch),
+  parameterized_base(vwidth, ls0, ls1), ng0_(ng0), ng1_(ng1),
   reduction_type_(rtype){ }
 
 std::vector<int_t> reduce_2d::input_sizes(expression_tree const & tree) const
@@ -333,11 +326,9 @@ void reduce_2d::enqueue(driver::CommandQueue & queue, driver::Program const & pr
     control.execution_options().enqueue(program.context(), kernels[i], global[i], local[i]);
 }
 
-reduce_2d_rows::reduce_2d_rows(unsigned int vwidth, unsigned int ls0, unsigned int ls1,  unsigned int ng0, unsigned int ng1,
-               fetch_type fetch): reduce_2d(vwidth, ls0, ls1, ng0, ng1, fetch, REDUCE_ROWS) {}
+reduce_2d_rows::reduce_2d_rows(unsigned int vwidth, unsigned int ls0, unsigned int ls1,  unsigned int ng0, unsigned int ng1): reduce_2d(vwidth, ls0, ls1, ng0, ng1, REDUCE_ROWS) {}
 
-reduce_2d_cols::reduce_2d_cols(unsigned int vwidth, unsigned int ls0, unsigned int ls1, unsigned int ng0, unsigned int ng1,
-               fetch_type fetch): reduce_2d(vwidth, ls0, ls1, ng0, ng1, fetch, REDUCE_COLUMNS) {}
+reduce_2d_cols::reduce_2d_cols(unsigned int vwidth, unsigned int ls0, unsigned int ls1, unsigned int ng0, unsigned int ng1): reduce_2d(vwidth, ls0, ls1, ng0, ng1, REDUCE_COLUMNS) {}
 
 
 }

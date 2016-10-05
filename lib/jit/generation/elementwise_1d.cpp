@@ -36,13 +36,6 @@ namespace isaac
 namespace templates
 {
 
-int elementwise_1d::is_invalid_impl(driver::Device const &, expression_tree const &) const
-{
-  if (fetch_==FETCH_FROM_LOCAL)
-    return TEMPLATE_INVALID_FETCHING_POLICY_TYPE;
-  return TEMPLATE_VALID;
-}
-
 expression_type elementwise_1d::type() const
 { return ELEMENTWISE_1D; }
 
@@ -78,7 +71,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
     stream.inc_tab();
   }
 
-  element_wise_loop_1D(stream, fetch_, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int vwidth)
+  element_wise_loop_1D(stream, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", [&](unsigned int vwidth)
   {
     std::string dtype = append_width("#scalartype",vwidth);
 
@@ -113,8 +106,8 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
   return stream.str();
 }
 
-elementwise_1d::elementwise_1d(unsigned int vwidth, unsigned int ls, unsigned int ng, fetch_type fetch):
-    parameterized_base(vwidth,ls,1), ng_(ng), fetch_(fetch)
+elementwise_1d::elementwise_1d(unsigned int vwidth, unsigned int ls, unsigned int ng):
+    parameterized_base(vwidth,ls,1), ng_(ng)
 {}
 
 
