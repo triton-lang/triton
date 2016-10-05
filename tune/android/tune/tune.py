@@ -128,6 +128,9 @@ class Tuner:
                 profiles = [map(mmap,row) for v in row for row in csv.reader(f, delimiter=',')]
             with open(os.path.join(savepath, 'Y.csv')) as f:
                 Y = [map(float, row) for row in csv.reader(f, delimiter=',')]
+            #for x in X:
+            #    tree, _ = tools.tree_of(operation, x, context)
+            #    Y.append([performance(x, tools.benchmark(operation(*best), tree)) for best in profiles])
         except:
             pass
         
@@ -181,7 +184,6 @@ class Tuner:
                 row = Y[X.index(x)]
                 self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
         self.progress_bar.set_finished()
-        
         #Adding external profiles
         for prof in tools.external_profiles(operation):
 			for x, y in zip(X, Y):
