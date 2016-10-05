@@ -30,9 +30,9 @@ enum interface_t
 
 cl_mem cl(sc::array_base const & x) { return x.data().handle().cl(); }
 CUdeviceptr cu(sc::array_base const & x) { return x.data().handle().cu(); }
-CUdeviceptr off(sc::array_base const & x) { return x.start(); }
-CUdeviceptr inc(sc::array_base const & x) { return x.stride()[0]; }
-CUdeviceptr ld(sc::array_base const & x) { return x.stride()[1]; }
+int off(sc::array_base const & x) { return x.start(); }
+int inc(sc::array_base const & x) { return x.stride()[0]; }
+int ld(sc::array_base const & x) { return x.stride()[1]; }
 
 template<class Iterator>
 std::string join(Iterator begin, Iterator end, std::string delimiter){
