@@ -29,40 +29,15 @@ namespace isaac
 namespace templates
 {
 
-inline void fetching_loop_info(fetch_type policy, std::string const & bound, kernel_generation_stream & stream, std::string & init, std::string & upper_bound, std::string & inc, std::string const & domain_id, std::string const & domain_size, driver::Device const &, std::string const & vwidth)
-{
-  if (policy==FETCH_FROM_GLOBAL_STRIDED)
-  {
-    init = domain_id + "*" + vwidth;
-    upper_bound = bound;
-    inc = domain_size + "*" + vwidth;
-  }
-  else if (policy==FETCH_FROM_GLOBAL_CONTIGUOUS)
-  {
-    std::string chunk_size = "chunk_size";
-    std::string chunk_start = "chunk_start";
-    std::string chunk_end = "chunk_end";
-
-    stream << "$SIZE_T " << chunk_size << " = " << vwidth << "*(" << bound << "+" << domain_size << "-1)/(" << vwidth << ");" << std::endl;
-    stream << "$SIZE_T " << chunk_start << " =" << domain_id << "*" << chunk_size << ";" << std::endl;
-    stream << "$SIZE_T " << chunk_end << " = min(" << chunk_start << "+" << chunk_size << ", " << bound << ");" << std::endl;
-    init = chunk_start;
-    upper_bound = chunk_end;
-    inc = vwidth;
-  }
-}
-
-
 template<class Fun>
-inline void element_wise_loop_1D(kernel_generation_stream & stream, fetch_type fetch, unsigned int vwidth,
-                                 std::string const & i, std::string const & bound, std::string const & domain_id, std::string const & domain_size, driver::Device const & device, Fun const & generate_body)
+inline void element_wise_loop_1D(kernel_generation_stream & stream, unsigned int vwidth,
+                                 std::string const & i, std::string const & bound, std::string const & domain_id, std::string const & domain_size, Fun const & generate_body)
 {
-  std::string strwidth = tools::to_string(vwidth);
-
-  std::string init, upper_bound, inc;
-  fetching_loop_info(fetch, bound, stream, init, upper_bound, inc, domain_id, domain_size, device, strwidth);
-  std::string boundround = upper_bound + "/" + strwidth + "*" + strwidth;
-  stream << "for(unsigned int " << i << " = " << init << "; " << i << " < " << boundround << "; " << i << " += " << inc << ")" << std::endl;
+  std::string svwidth = tools::to_string(vwidth);
+  std::string init = domain_id + "*" + svwidth;
+  std::string lbound = bound + "/" + svwidth + "*" + svwidth;
+  std::string inc = domain_size + "*" + svwidth;
+  stream << "for(unsigned int " << i << " = " << init << "; " << i << " < " << lbound << "; " << i << " += " << inc << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
   generate_body(vwidth);
@@ -71,7 +46,7 @@ inline void element_wise_loop_1D(kernel_generation_stream & stream, fetch_type f
 
   if (vwidth>1)
   {
-    stream << "for(unsigned int " << i << " = " << boundround << " + " << domain_id << "; " << i << " < " << bound << "; " << i << " += " + domain_size + ")" << std::endl;
+    stream << "for(unsigned int " << i << " = " << lbound << " + " << domain_id << "; " << i << " < " << bound << "; " << i << " += " + domain_size + ")" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
     generate_body(1);
