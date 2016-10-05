@@ -294,7 +294,7 @@ std::string gemm::generate_impl(std::string const & suffix, expression_tree cons
     stream << "gidz = $GROUP_IDX_2;" << std::endl;
     stream << "div = (K+" << depth_-1 << ")/" << depth_ << ";" << std::endl;
     stream << "offz = div*gidz;" << std::endl;
-    stream << "K = min(K - div*gidz, ($SIZE_T)div);" << std::endl;
+    stream << "K = max(0, min(K - div*gidz, ($SIZE_T)div));" << std::endl;
   }
 
   stream << "idt = " << ls0_ << "*ids.w + ids.z;" << std::endl;
