@@ -174,13 +174,14 @@ class Tuner:
                 row = Y[X.index(x)]
                 self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
         self.progress_bar.set_finished()
+        
         #Adding external profiles
         for prof in tools.external_profiles(operation):
+			profiles.append(prof.__class__.__name__)
 			for x, y in zip(X, Y):
 				tree, operands = tools.tree_of(operation, x, context)
 				perf = performance(x,tools.benchmark(prof, tree, operation))
 				if perf > 0:
-					profiles.append(prof.__class__.__name__)
 					y.append(perf)
             
             
