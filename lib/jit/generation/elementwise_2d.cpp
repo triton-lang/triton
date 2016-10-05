@@ -47,7 +47,6 @@ expression_type elementwise_2d::type() const
 
 std::string elementwise_2d::generate_impl(std::string const & suffix, expression_tree const  & tree, driver::Device const & device, symbolic::symbols_table const & symbols) const
 {
-  std::string init0, upper_bound0, inc0, init1, upper_bound1, inc1;
   driver::backend_type backend = device.backend();
   kernel_generation_stream stream(backend);
 
@@ -70,35 +69,24 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
   stream << "{" << std::endl;
   stream.inc_tab();
 
+  element_wise_loop_1D(stream, fetch_, 1, "i", "M", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device, [&](unsigned int){
+    element_wise_loop_1D(stream, fetch_, 1, "j", "N", "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device, [&](unsigned int){
+      //Declares register to store results
+      for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assigned_left, false))
+        stream << sym->process("#scalartype #name;") << std::endl;
 
-  fetching_loop_info(fetch_, "M", stream, init0, upper_bound0, inc0,  "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", device);
-  stream << "for($SIZE_T i = " << init0 << "; i < " << upper_bound0 << "; i += " << inc0 << ")" << std::endl;
-  stream << "{" << std::endl;
-  stream.inc_tab();
-  fetching_loop_info(fetch_, "N", stream, init1, upper_bound1, inc1, "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", device);
-  stream << "for($SIZE_T j = " << init1 << "; j < " << upper_bound1 << "; j += " << inc1 << ")" << std::endl;
-  stream << "{" << std::endl;
-  stream.inc_tab();
+      //Load to registers
+      for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assigned_right, false))
+        stream << sym->process("#scalartype #name = at(i, j);") << std::endl;
 
-  //Declares register to store results
-  for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assigned_left, false))
-    stream << sym->process("#scalartype #name;") << std::endl;
+      for(std::size_t idx: assigned)
+        stream << symbols.at(idx)->evaluate({{"leaf", "#name"}}) << ";" << std::endl;
 
-  //Load to registers
-  for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assigned_right, false))
-    stream << sym->process("#scalartype #name = at(i, j);") << std::endl;
-
-  for(std::size_t idx: assigned)
-    stream << symbols.at(idx)->evaluate({{"leaf", "#name"}}) << ";" << std::endl;
-
-  //Writes back
-  for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assigned_left, false))
-    stream << sym->process("at(i, j) = #name;") << std::endl;
-
-  stream.dec_tab();
-  stream << "}" << std::endl;
-  stream.dec_tab();
-  stream << "}" << std::endl;
+      //Writes back
+      for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assigned_left, false))
+        stream << sym->process("at(i, j) = #name;") << std::endl;
+    });
+  });
 
 
   stream.dec_tab();
