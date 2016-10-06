@@ -127,10 +127,10 @@ class Tuner:
             with open(os.path.join(savepath, 'Y.csv')) as f:
                 Y = [map(float, row) for row in csv.reader(f, delimiter=',')]
             #Recompute Y
-            Y = []
-            for x in X:
-                tree, _ = tools.tree_of(operation, x, context)
-                Y.append([performance(x, tools.benchmark(operation(*best), tree)) for best in profiles])
+            #Y = []
+            #for x in X:
+            #    tree, _ = tools.tree_of(operation, x, context)
+            #    Y.append([performance(x, tools.benchmark(operation(*best), tree)) for best in profiles])
         except:
             pass
         
