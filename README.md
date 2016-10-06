@@ -121,19 +121,17 @@ Currently supported functions are:
 
 | BLAS1         | BLAS2         | BLAS3         |
 | --------------| --------------| --------------|
-| xAXPY         | xGEMV         | xGEMM         |
-| xCOPY         | xGER          |               |
-| xSCAL         |               |               |
-| xDOT          |               |               |
-| xASUM         |               |               |
+| sAXPY         | sGEMV         | sGEMM         |
+| sCOPY         | sGER          |               |
+| sSCAL         |               |               |
+| sDOT          |               |               |
+| sASUM         |               |               |
 
 ### Contributing
 
-Non-tuned GPUs are:
-- Intel Skylake iGPU
-- AMD GCN > 1.2
-- Intel Xeon Phi
-
-I'm planning on adding double precision support very soon.
+You can contribute to further tuning isaac if you have one of the following architecture:
+- NVidia: SM 2.x ; SM 3.5 ; SM 5.0 ; SM 6.0 
+- Intel: Skylake iGPU
+I'm planning on adding double precision support soon.
 
 I'm no longer very active on this project, although I'll fix bugs. I've been working on a more ambitious project lately.
