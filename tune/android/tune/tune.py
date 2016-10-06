@@ -97,7 +97,7 @@ class Tuner:
 			   for K in [16, 32, 64, 128]:
 				   sizes += [(N, N, K)]
             #Covariance
-            for N in [16, 32, 64, 128]:
+            for N in [16, 32, 64, 128, 256]:
 			   for K in [16000,32000,64000,128000]:
 				   sizes += [(N, N, K)]
             #DeepSpeech
@@ -127,10 +127,10 @@ class Tuner:
             with open(os.path.join(savepath, 'Y.csv')) as f:
                 Y = [map(float, row) for row in csv.reader(f, delimiter=',')]
             #Recompute Y
-            #Y = []
-            #for x in X:
-            #    tree, _ = tools.tree_of(operation, x, context)
-            #    Y.append([performance(x, tools.benchmark(operation(*best), tree)) for best in profiles])
+            Y = []
+            for x in X:
+                tree, _ = tools.tree_of(operation, x, context)
+                Y.append([performance(x, tools.benchmark(operation(*best), tree)) for best in profiles])
         except:
             pass
         
