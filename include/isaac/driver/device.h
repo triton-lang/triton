@@ -74,14 +74,16 @@ public:
       SM_3_7,
       SM_5_0,
       SM_5_2,
+      SM_6_0,
       SM_6_1,
 
       //AMD
       TERASCALE_2,
       TERASCALE_3,
-      GCN_1_0,
-      GCN_1_1,
-      GCN_1_2,
+      GCN_1,
+      GCN_2,
+      GCN_3,
+      GCN_4,
 
       UNKNOWN
   };

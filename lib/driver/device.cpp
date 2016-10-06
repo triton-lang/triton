@@ -84,6 +84,7 @@ Device::Architecture Device::architecture() const
                 case 6:
                   switch(sm.second)
                   {
+                    case 0: return Architecture::SM_6_0;
                     case 1: return Architecture::SM_6_1;
                   }
 
@@ -139,23 +140,25 @@ Device::Architecture Device::architecture() const
             MAP_DEVICE("Scrapper",TERASCALE_3);
             MAP_DEVICE("Devastator",TERASCALE_3);
 
-            //GCN 1.0
-            MAP_DEVICE("Cape",GCN_1_0);
-            MAP_DEVICE("Pitcairn",GCN_1_0);
-            MAP_DEVICE("Tahiti",GCN_1_0);
-            MAP_DEVICE("New Zealand",GCN_1_0);
-            MAP_DEVICE("Curacao",GCN_1_0);
-            MAP_DEVICE("Malta",GCN_1_0);
+            //GCN 1
+            MAP_DEVICE("Cape",GCN_1);
+            MAP_DEVICE("Pitcairn",GCN_1);
+            MAP_DEVICE("Tahiti",GCN_1);
+            MAP_DEVICE("New Zealand",GCN_1);
+            MAP_DEVICE("Curacao",GCN_1);
+            MAP_DEVICE("Malta",GCN_1);
 
-            //GCN 1.1
-            MAP_DEVICE("Bonaire",GCN_1_1);
-            MAP_DEVICE("Hawaii",GCN_1_1);
-            MAP_DEVICE("Vesuvius",GCN_1_1);
+            //GCN 2
+            MAP_DEVICE("Bonaire",GCN_2);
+            MAP_DEVICE("Hawaii",GCN_2);
+            MAP_DEVICE("Vesuvius",GCN_2);
 
-            //GCN 1.2
-            MAP_DEVICE("Tonga",GCN_1_2);
-            MAP_DEVICE("Fiji",GCN_1_2);
+            //GCN 3
+            MAP_DEVICE("Tonga",GCN_3);
+            MAP_DEVICE("Fiji",GCN_3);
 
+            //GCN 4
+            MAP_DEVICE("Polaris",GCN_4);
         #undef MAP_DEVICE
 
         }
