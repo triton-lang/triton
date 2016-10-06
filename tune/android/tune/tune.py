@@ -101,9 +101,15 @@ class Tuner:
 			   for K in [16000,32000,64000,128000]:
 				   sizes += [(N, N, K)]
             #DeepSpeech
-            for M in [1760, 2048, 2560]:
-                for N in [16, 32, 64, 128, M]:
+            for M in [1760, 2048, 2560, 4096]:
+                for N in [16, 32, 64, 128, 7000]:
                     sizes += [(M, N, M)]
+            for K in [1760, 2048, 2560, 4096]:
+				for M, N in [(5124,9124),(35,8457)]:
+					sizes += [(M, N, K)]
+            for M, K in [(7680,2560),(3072,1024)]:
+                for N in [16, 32, 64, 128]:
+					sizes += [(M, N, K)]
 
         #Training data
         performance = tools.metric_of(operation)
@@ -120,9 +126,19 @@ class Tuner:
                 profiles = [map(int,row) for v in row for row in csv.reader(f, delimiter=',')]
             with open(os.path.join(savepath, 'Y.csv')) as f:
                 Y = [map(float, row) for row in csv.reader(f, delimiter=',')]
+            #Recompute Y
+            #Y = []
+            #for x in X:
+            #    tree, _ = tools.tree_of(operation, x, context)
+            #    Y.append([performance(x, tools.benchmark(operation(*best), tree)) for best in profiles])
         except:
             pass
         
+      	#Save data
+        def save():
+            for (fname, data) in zip(['X.csv',  'Y.csv', 'profiles.csv'], [X, Y, profiles]):
+                with open(os.path.join(savepath, fname), 'wb') as f:
+                    csv.writer(f).writerows(data)
         #Tuning
         for idx, x in enumerate(sizes):
             #Create new line on log
@@ -134,21 +150,10 @@ class Tuner:
                 row = Y[X.index(x)]
                 self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
                 continue
+            #Best existing profile for x
             tree, operands = tools.tree_of(operation, x, context)
-            #Best predicted profile for x
-            best = None
-            if idx > 0:
-				if len(profiles) > 1:
-					clf = RandomForestRegressor(20, max_depth=5).fit(X, Y)
-					predictions = clf.predict(x)[0]
-					for idx in (-predictions).argsort():
-						best = profiles[idx]
-						ts = tools.benchmark(operation(*best), tree)
-						if ts != float('inf'):
-							break
-				else:
-					best = profiles[0]
-            
+            y = [performance(x, tools.benchmark(operation(*p), tree)) for p in profiles]
+            best = profiles[np.argmax(y)] if y else None            
             #Retune if necessary
             tune =  not (best and optimize.is_local_optimum(best, operation, x, context))
             if tune:
@@ -166,15 +171,13 @@ class Tuner:
             y = [performance(x,tools.benchmark(operation(*prf), tree)) for prf in profiles]
             Y.append(y)
             #Save data
-            for (fname, data) in zip(['X.csv',  'Y.csv', 'profiles.csv'], [X, Y, profiles]):
-                with open(os.path.join(savepath, fname), 'wb') as f:
-                    csv.writer(f).writerows(data)
+            save()
             #print performance info in case no tuning was done
             if not tune:
                 row = Y[X.index(x)]
                 self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
         self.progress_bar.set_finished()
-        
+        save()     
         #Adding external profiles
         for prof in tools.external_profiles(operation):
 			profiles.append(prof.__class__.__name__)
@@ -183,14 +186,11 @@ class Tuner:
 				perf = performance(x,tools.benchmark(prof, tree, operation))
 				if perf > 0:
 					y.append(perf)
-            
-            
         #Pruning of useless profiles
         if len(Y[0]) > 1:
             unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
             profiles = [p for ip,p in enumerate(profiles) if ip not in unused]
             Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1).tolist()          
-        
         #Exporting to JSON
         json_path = tools.sanitize(device.name) + '.json' if not self.json_path else self.json_path
         if os.path.isfile(json_path):

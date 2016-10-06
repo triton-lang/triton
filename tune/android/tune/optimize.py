@@ -166,16 +166,14 @@ def is_local_optimum(parameters, template, sizes, context):
         sweep_over = [0,1,2,3,4]
     elif issubclass(template, sc.templates.gemm):
         sweep_over = [0,1,2,3,4]
-    
     #Evaluate the provided parameters guess
     reference = tools.benchmark(template(*parameters), tree)
     if reference==float('inf'):
         return False
-
     #Latency bound -- ignore
     if reference < 1e-5:
         return True
-        
+    #Determine if local minimum
     timings = {}
     domain = [[v  for v in [x/2, x, x*2] if 1 <= v <= 2**2**genetic_infos['nbits'][i]] \
               if i in sweep_over else [x] for i, x in enumerate(parameters)]
