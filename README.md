@@ -1,6 +1,6 @@
 # ISAAC
 
-This is the developer repository for ISAAC, a library that uses machine learning to find input-aware kernels for element-wise operations, 1D/2D reductions and GEMM. It works with both cuBLAS and clBLAS. It's super easy to compile (no dependency!), to install (just link against libisaac.so instead of clBLAS or cuBLAS!), almost always outperforms (tuned) clBLAS and often outperforms cuBLAS. Try it!
+This is the developer repository for ISAAC, a library that uses machine learning to find input-aware kernels for element-wise operations, 1D/2D reductions and GEMM. It works with both cuBLAS and clBLAS. It's super easy to compile (no dependency!), to install (just link against libisaac.so instead of clBLAS or cuBLAS!), almost always outperforms (tuned) clBLAS and often outperforms cuBLAS. And when it predict that it doesn't, it fallbacks on vendor libraries automatically. Try it!
 
 ### License
 
@@ -114,6 +114,8 @@ For AMD Fury:
 | Lapack | 4096 | 4096  | 32   | N  | T  | **1.43**  | 1.23      |
 | -      | 3456 | 3456  | 32   | N  | T  | **1.81**  | 1.27      |
 | -      | 896  | 896   | 32   | N  | T  | 0.35      | 0.36      |
+
+Same trend on Intel Broadwell iGPU
 
 ### BLAS routines supported
 
