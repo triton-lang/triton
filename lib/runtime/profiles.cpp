@@ -84,54 +84,44 @@ profiles::value_type::value_type(numeric_type dtype, std::shared_ptr<templates::
 
 void profiles::value_type::execute(runtime::execution_handler const & expr)
 {
+  static const int MAX_TEMPORARY_WORKSPACE = 1e6;
   driver::Program const & program = init(expr);
   std::vector<int_t> x = templates_[0]->input_sizes(expr.x());
-  static const int MAX_TEMPORARY_WORKSPACE = 1e6;
 
-  //Specific tuning if requested
-  if(expr.dispatcher_options().tune && hardcoded_.find(x)==hardcoded_.end())
-  {
-    std::vector<double> timings(templates_.size());
-    for(unsigned int i = 0 ; i < templates_.size() ; ++i)
-    {
-      if(templates_[i]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE){
-          timings[i] = INFINITY;
-          continue;
-      }
-      std::list<driver::Event> events;
-      try{
-        templates_[i]->enqueue(queue_, program, tools::to_string(i), runtime::execution_handler(expr.x(), runtime::execution_options_type(0, &events)));
-        queue_.synchronize();
-        timings[i] = 1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event);
-      }catch(...){
-        timings[i] = INFINITY;
-      }
+  //Cached
+  auto it = labels_.find(x);
+  if(it!=labels_.end()){
+    templates_[it->second]->enqueue(queue_, program, tools::to_string(it->second), expr);
+    return;
+  }
+
+  //Not cached
+  std::vector<double> times;
+  std::vector<float> perf = predictor_->predict(x);
+  std::vector<size_t> idx(perf.size());
+  std::iota(idx.begin(), idx.end(), 0);
+  std::sort(idx.begin(), idx.end(), [&perf](size_t i1, size_t i2) {return perf[i1] > perf[i2];});
+  bool valid_found = false;
+  for(size_t k = 0 ; k < std::min<size_t>(idx.size(), idx.size()) || !valid_found ; k++){
+    size_t i = idx[k];
+    if(templates_[i]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE){
+      times.push_back(INFINITY);
+      continue;
     }
-    //Fill the override
-    std::vector<int_t> x = templates_[0]->input_sizes(expr.x());
-    hardcoded_[x] = std::distance(timings.begin(),std::min_element(timings.begin(), timings.end()));
+    std::list<driver::Event> events;
+    try{
+      templates_[i]->enqueue(queue_, program, tools::to_string(i), runtime::execution_handler(expr.x(), runtime::execution_options_type(0, &events)));
+      queue_.synchronize();
+      times.push_back(1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event));
+      valid_found = true;
+    }catch(...){
+      times.push_back(INFINITY);
+    }
   }
-
-  //Prediction
-  int label = 0;
-  if(expr.dispatcher_options().label>=0)
-    label = expr.dispatcher_options().label;
-  else  if(hardcoded_.find(x)!=hardcoded_.end())
-    label = hardcoded_.at(x);
-  else if(predictor_.get())
-  {
-    std::vector<float> predictions = predictor_->predict(x);
-    do{
-        label = std::distance(predictions.begin(),std::max_element(predictions.begin(), predictions.end()));
-        predictions[label] = 0;
-    }while(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE);
-  }
-
-  //Execution
-  if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
-    throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
-
-  return templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
+  //Fill the override
+  size_t label = idx[std::distance(times.begin(),std::min_element(times.begin(), times.end()))];
+  labels_.insert({x, label});
+  templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
 }
 
 profiles::value_type::templates_container const & profiles::value_type::templates() const
