@@ -105,20 +105,24 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
       continue;
     }
     try{
-      tmr.start();
-      templates_[i]->enqueue(queue_, program, tools::to_string(i), runtime::execution_handler(expr.x()));
-      queue_.synchronize();
-      times.push_back(1e-9*tmr.get().count());
+      double total_time = 0;
+      std::vector<double> ctimes;
+      while(total_time < 1e-2){
+        tmr.start();
+        templates_[i]->enqueue(queue_, program, tools::to_string(i), runtime::execution_handler(expr.x()));
+        queue_.synchronize();
+        ctimes.push_back(1e-9*tmr.get().count());
+        total_time += ctimes.back();
+      }
+      times.push_back( *std::min_element(ctimes.begin(), ctimes.end()));
       valid_found = true;
     }catch(...){
       times.push_back(INFINITY);
     }
   }
-  //Fill the override
-  size_t label = idx[std::distance(times.begin(),std::min_element(times.begin(), times.end()))];
-  labels_.insert({x, label});
-//  std::cout << label << std::endl;
-  templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
+  size_t i = idx[std::distance(times.begin(),std::min_element(times.begin(), times.end()))];
+  labels_.insert({x, i});
+  templates_[i]->enqueue(queue_, program, tools::to_string(i), expr);
 }
 
 profiles::value_type::templates_container const & profiles::value_type::templates() const
