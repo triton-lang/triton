@@ -184,13 +184,14 @@ class Tuner:
 			for x, y in zip(X, Y):
 				tree, operands = tools.tree_of(operation, x, context)
 				perf = performance(x,tools.benchmark(prof, tree, operation))
-				if perf > 0:
-					y.append(perf)
+				y.append(perf)
         #Pruning of useless profiles
+        X = np.array(X)
+        Y = np.array(Y)
         if len(Y[0]) > 1:
-            unused = np.where(np.bincount(np.argmax(Y, 1))==0)[0]
-            profiles = [p for ip,p in enumerate(profiles) if ip not in unused]
-            Y = np.delete(Y, np.where(np.bincount(np.argmax(Y, 1))==0), axis=1).tolist()          
+            idx = np.where(np.bincount(np.argmax(Y, 1), minlength=len(profiles))==0)[0]
+            profiles = [p for ip,p in enumerate(profiles) if ip not in idx]
+            Y = np.delete(Y, idx, axis=1) 
         #Exporting to JSON
         json_path = tools.sanitize(device.name) + '.json' if not self.json_path else self.json_path
         if os.path.isfile(json_path):
