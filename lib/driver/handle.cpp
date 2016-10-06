@@ -68,7 +68,7 @@ template<class CLType, class CUType>
 void Handle<CLType, CUType>::release(cl_command_queue x) { dispatch::clReleaseCommandQueue(x); }
 
 template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_device_id x) { dispatch::clReleaseDevice(x); }
+void Handle<CLType, CUType>::release(cl_device_id /*x*/) { /*dispatch::clReleaseDevice(x);*/ }
 
 template<class CLType, class CUType>
 void Handle<CLType, CUType>::release(cl_event x) { dispatch::clReleaseEvent(x); }
