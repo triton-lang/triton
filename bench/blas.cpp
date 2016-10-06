@@ -245,7 +245,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       std::cout << name << "\t" << M << "\t" << N << "\t" << K << "\t" << cAT << "\t" << cBT;
      for(auto x: tflops){
         std::cout << "\t";
-        if(x == fastest[0] && x/fastest[1] >= 1.02)
+        if(x == fastest[0] && x/fastest[1] >= 1.05)
           std::cout << color_stream(FG_LIGHT_BLUE) << x << color_stream(RESET);
         else
           std::cout << x;
