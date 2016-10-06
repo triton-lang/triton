@@ -131,21 +131,22 @@ namespace runtime
   void execute(execution_handler const & c, profiles::map_type & profiles)
   {
     typedef isaac::array array;
-    expression_tree tree = c.x();
     /*----Optimize----*/
 //    detail::optimize(tree);
     /*----Process-----*/
-    driver::Context const & context = tree.context();
-    size_t rootidx = tree.root();
+    expression_tree const & reftree = c.x();
+    driver::Context const & context = reftree.context();
+    size_t rootidx = reftree.root();
     std::vector<std::shared_ptr<array> > temporaries;
     expression_type final_type;
     /*----Matrix Product-----*/
-    if(symbolic::preset::gemm::args args = symbolic::preset::gemm::check(tree.data(), rootidx)){
+    if(symbolic::preset::gemm::args args = symbolic::preset::gemm::check(reftree.data(), rootidx)){
         final_type = args.type;
     }
     /*----Default-----*/
     else
     {
+        expression_tree tree = reftree;
         expression_tree::node & root = tree[rootidx];
         expression_tree::node & lhs = tree[root.binary_operator.lhs], &rhs = tree[root.binary_operator.rhs];
         expression_tree::node root_save = root, lhs_save = lhs, rhs_save = rhs;
@@ -183,7 +184,7 @@ namespace runtime
     }
 
     /*-----Compute final expression-----*/
-    profiles[std::make_pair(final_type, tree[rootidx].dtype)]->execute(execution_handler(tree, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
+    profiles[std::make_pair(final_type, reftree[rootidx].dtype)]->execute(execution_handler(reftree, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
   }
 
   void execute(execution_handler const & c)
