@@ -46,7 +46,6 @@ def benchmark(template, tree, operation=sc.templates.gemm_nn):
     queue.profiles[template, sc.float32] = sc.profile(template, sc.float32, queue)
     times = []
     total = 0
-    i = 0
     #Warm-up
     try:
         z, events = sc.driver.enqueue(tree)
@@ -55,13 +54,12 @@ def benchmark(template, tree, operation=sc.templates.gemm_nn):
         return float("inf")
     #Time
     while total < 1e-2:
-        start = time.clock()
+        start = time.time()
         z, events = sc.driver.enqueue(tree)
         queue.synchronize()
-        end = time.clock()
+        end = time.time()
         times.append(end - start)
         total += times[-1]
-        i+=1
     return median(times)
 
 
