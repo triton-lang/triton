@@ -90,20 +90,13 @@ class Timer
 
 public:
     explicit Timer(bool run = false)
-    {
-        if (run)
-            start();
-    }
+    { if (run) start(); }
 
     void start()
-    {
-        _start = high_resolution_clock::now();
-    }
+    { _start = high_resolution_clock::now(); }
 
     nanoseconds get() const
-    {
-        return std::chrono::duration_cast<nanoseconds>(high_resolution_clock::now() - _start);
-    }
+    { return std::chrono::duration_cast<nanoseconds>(high_resolution_clock::now() - _start); }
 
 private:
     high_resolution_clock::time_point _start;
