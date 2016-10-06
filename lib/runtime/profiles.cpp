@@ -38,16 +38,11 @@
 #include "isaac/jit/syntax/engine/process.h"
 #include "isaac/tools/sys/getenv.hpp"
 #include "isaac/tools/cpp/string.hpp"
-
+#include "isaac/tools/cpp/timer.hpp"
 namespace isaac
 {
 namespace runtime
 {
-
-static long time_event(long sum, driver::Event const & e)
-{
-    return sum + e.elapsed_time();
-}
 
 driver::Program const & profiles::value_type::init(runtime::execution_handler const & expression)
 {
@@ -96,23 +91,24 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
   }
 
   //Not cached
+  tools::Timer tmr;
   std::vector<double> times;
   std::vector<float> perf = predictor_->predict(x);
   std::vector<size_t> idx(perf.size());
   std::iota(idx.begin(), idx.end(), 0);
   std::sort(idx.begin(), idx.end(), [&perf](size_t i1, size_t i2) {return perf[i1] > perf[i2];});
   bool valid_found = false;
-  for(size_t k = 0 ; k < std::min<size_t>(idx.size(), idx.size()) || !valid_found ; k++){
+  for(size_t k = 0 ; k < std::min<size_t>(5, idx.size()) || !valid_found ; k++){
     size_t i = idx[k];
     if(templates_[i]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE){
       times.push_back(INFINITY);
       continue;
     }
-    std::list<driver::Event> events;
     try{
-      templates_[i]->enqueue(queue_, program, tools::to_string(i), runtime::execution_handler(expr.x(), runtime::execution_options_type(0, &events)));
+      tmr.start();
+      templates_[i]->enqueue(queue_, program, tools::to_string(i), runtime::execution_handler(expr.x()));
       queue_.synchronize();
-      times.push_back(1e-9*std::accumulate(events.begin(), events.end(), 0, &time_event));
+      times.push_back(1e-9*tmr.get().count());
       valid_found = true;
     }catch(...){
       times.push_back(INFINITY);
@@ -121,6 +117,7 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
   //Fill the override
   size_t label = idx[std::distance(times.begin(),std::min_element(times.begin(), times.end()))];
   labels_.insert({x, label});
+//  std::cout << label << std::endl;
   templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
 }
 
