@@ -60,7 +60,7 @@ public:
     private:
       templates_container templates_;
       std::shared_ptr<predictors::random_forest> predictor_;
-      std::map<std::vector<int_t>, int> hardcoded_;
+      std::map<std::vector<int_t>, int> labels_;
       driver::CommandQueue queue_;
       driver::ProgramCache & cache_;
     };
