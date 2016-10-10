@@ -124,6 +124,7 @@ void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & pro
   //Kernel
   std::string name = "elementwise_1d";
   name += suffix;
+//  std::cout << name << std::endl;
   driver::Kernel kernel(program, name.c_str());
   //NDRange
   driver::NDRange global(ls0_*ng_);
