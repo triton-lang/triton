@@ -85,15 +85,13 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
   std::vector<int_t> x = templates_[0]->input_sizes(tree);
 
   //Cached
+  size_t label = 0;
   auto it = labels_.find(x);
   if(it!=labels_.end()){
-    templates_[it->second]->enqueue(queue_, program, tools::to_string(it->second), expr);
-    return;
+    label = it->second;
   }
-
   //Not cached
-  size_t label = 0;
-  if(predictor_){
+  else if(predictor_){
     expression_tree::node const & root = tree[tree.root()];
     expression_tree::node const & left = tree[root.binary_operator.lhs];
     array_base* out = left.array.base;
@@ -138,6 +136,9 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
       *out = *bkp;
   }
   labels_.insert({x, label});
+  //Executes
+  if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
+    throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
   templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
 }
 
