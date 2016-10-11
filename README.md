@@ -135,6 +135,16 @@ You can contribute to further tuning isaac if you have one of the following arch
 - NVidia: SM 2.x ; SM 3.5 ; SM 5.0 ; SM 6.0 
 - Intel: Skylake iGPU
 
-I'm planning on adding double precision support soon.
+If you have one of the following architectures you can contribute by running:
 
-I'm no longer very active on this project, although I'll fix bugs. I've been working on a more ambitious project lately.
+```
+git clone https://github.com/ptillet/isaac.git
+cd isaac/python ;
+python setup.py build;
+cd ../tune
+PYTHONPATH=../python/build/lib.linux-x86_64-2.7/ python main.py --elementwise_1d --elementwise_2d --reduce_1d --reduce_2d_rows --reduce_2d_cols --gemm_nn --gemm_nt --gemm_tn --gemm_tt
+```
+
+This will output a .json file that you can submit for integration.
+
+Bug reports are more than welcome!
