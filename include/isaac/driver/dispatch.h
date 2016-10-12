@@ -157,10 +157,10 @@ public:
 
     static cublasHandle_t cublasHandle(Context const & ctx);
     static cublasStatus_t cublasCreate_v2(cublasHandle_t* h);
-    static cublasStatus_t cublasGetStream(cublasHandle_t h, cudaStream_t *streamId);
-    static cublasStatus_t cublasSetStream(cublasHandle_t h, cudaStream_t streamId);
-    static cublasStatus_t cublasSgemm (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc);
-    static cublasStatus_t cublasDgemm (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc);
+    static cublasStatus_t cublasGetStream_v2(cublasHandle_t h, cudaStream_t *streamId);
+    static cublasStatus_t cublasSetStream_v2(cublasHandle_t h, cudaStream_t streamId);
+    static cublasStatus_t cublasSgemm_v2 (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc);
+    static cublasStatus_t cublasDgemm_v2 (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc);
 
 private:
     static void* opencl_;
@@ -242,10 +242,10 @@ private:
     static void* nvrtcGetProgramLog_;
 
     static void* cublasCreate_v2_;
-    static void* cublasGetStream_;
-    static void* cublasSetStream_;
-    static void* cublasSgemm_;
-    static void* cublasDgemm_;
+    static void* cublasGetStream_v2_;
+    static void* cublasSetStream_v2_;
+    static void* cublasSgemm_v2_;
+    static void* cublasDgemm_v2_;
 };
 
 }

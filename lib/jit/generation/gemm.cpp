@@ -91,22 +91,22 @@ void cublas_gemm::enqueue(driver::CommandQueue & queue, driver::Program const &,
   //Set new stream
   cudaStream_t bkp;
   drv::Event event(drv::CUDA);
-  drv::dispatch::cublasGetStream(h,&bkp);
-  drv::dispatch::cublasSetStream(h,(cudaStream_t)queue.handle().cu());
+  drv::dispatch::cublasGetStream_v2(h,&bkp);
+  drv::dispatch::cublasSetStream_v2(h,(cudaStream_t)queue.handle().cu());
   values_holder alpha = args.alpha.values();
   values_holder beta = args.beta.values();
   if(opt.events)
     drv::check(drv::dispatch::cuEventRecord(event.handle().cu().first, queue.handle().cu()));
   if(args.C->dtype==FLOAT_TYPE)
-    drv::dispatch::cublasSgemm(h,cuT(A_trans_), cuT(B_trans_), M, N, K, &alpha.float32, (float*)cuA + offA , args.A->ld[1], (float*)cuB + offB, args.B->ld[1], &beta.float32, (float*)cuC + offC, args.C->ld[1]);
+    drv::dispatch::cublasSgemm_v2(h,cuT(A_trans_), cuT(B_trans_), M, N, K, &alpha.float32, (float*)cuA + offA , args.A->ld[1], (float*)cuB + offB, args.B->ld[1], &beta.float32, (float*)cuC + offC, args.C->ld[1]);
   else
-    drv::dispatch::cublasDgemm(h,cuT(A_trans_), cuT(B_trans_), M, N, K, &alpha.float64, (double*)cuA + offA, args.A->ld[1], (double*)cuB + offB, args.B->ld[1], &beta.float64, (double*)cuC + offC, args.C->ld[1]);
+    drv::dispatch::cublasDgemm_v2(h,cuT(A_trans_), cuT(B_trans_), M, N, K, &alpha.float64, (double*)cuA + offA, args.A->ld[1], (double*)cuB + offB, args.B->ld[1], &beta.float64, (double*)cuC + offC, args.C->ld[1]);
   if(opt.events){
     drv::check(drv::dispatch::cuEventRecord(event.handle().cu().second, queue.handle().cu()));
     opt.events->push_back(event);
   }
   //Revert old stream
-  drv::dispatch::cublasSetStream(h,bkp);
+  drv::dispatch::cublasSetStream_v2(h,bkp);
 }
 
 
