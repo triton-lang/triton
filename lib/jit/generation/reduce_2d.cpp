@@ -51,87 +51,6 @@ intelblas_gemv::intelblas_gemv()
 
 }
 
-int intelblas_gemv::is_invalid(expression_tree const  &, driver::Device const & device) const
-{ return 0; }
-
-expression_type intelblas_gemv::type() const
-{
-  /*
-  if(A_trans_=='N' && B_trans_=='N')
-    return GEMM_NN;
-  else if(A_trans_=='T' && B_trans_=='N')
-    return GEMM_TN;
-  else if(A_trans_=='N' && B_trans_=='T')
-    return GEMM_NT;
-  else
-    return GEMM_TT;
-  */
-}
-
-std::vector<int_t> intelblas_gemv::input_sizes(expression_tree const & tree) const
-{
-  std::vector<size_t> idx = symbolic::find(tree, [this](expression_tree::node const & x){return x.type==COMPOSITE_OPERATOR_TYPE && x.binary_operator.op.type_family==(REDUCE_ROWS || REDUCE_COLUMNS);});
-  std::vector<int_t> shape = tree[tree[idx[0]].binary_operator.lhs].shape;
-  if(tree[idx[0]].binary_operator.op.type_family==REDUCE_COLUMNS)
-    return {shape[1], shape[0]};
-  return {shape[0], shape[1]};
-}
-
-void intelblas_gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
-{
-
-  namespace drv = driver;
-  //Get GEMV info
-  symbolic::preset::gemv::args args;
-  infos(control.x(), args);
-  std::vector<int_t> MN = input_sizes(control.x());
-  int_t M = MN[0], N = MN[1];
-
-  //Kernel
-  std::string name[2] = {"matvec_mul", "trans_matvec_mul"};
-
-
-  std::vector<driver::Kernel> kernels;
-  if(args.type == REDUCE_2D_COLS)
-    kernels.push_back(driver::Kernel(program, name[0].c_str()));
-  else
-    kernels.push_back(driver::Kernel(program, name[1].c_str()));
-
-    driver::Kernel & kernel = kernels[0];
-    unsigned int n_arg = 0;
-    int_t rows = M;
-    int_t cols = N;
-    if (args.type == REDUCE_2D_ROWS) {
-      rows = N;
-      cols = M;
-    }
-
-    kernel.setSizeArg(n_arg++, rows);
-    kernel.setSizeArg(n_arg++, cols);
-    kernel.setArg(n_arg++, args.A->array.handle.cl);
-    kernel.setSizeArg(n_arg++, args.A->array.start);
-    kernel.setSizeArg(n_arg++, args.A->ld[1]);
-    kernel.setArg(n_arg++, args.X->array.handle.cl);
-    kernel.setSizeArg(n_arg++, args.X->array.start);
-    kernel.setSizeArg(n_arg++, args.X->ld[0]);
-    kernel.setArg(n_arg++, args.alpha);
-    kernel.setArg(n_arg++, args.beta);
-    kernel.setArg(n_arg++, args.Y->array.handle.cl);
-    kernel.setSizeArg(n_arg++, args.Y->array.start);
-    kernel.setSizeArg(n_arg++, args.Y->ld[0]);
-
-
-  //NDRange
-  driver::NDRange local[2] = { driver::NDRange(128), driver::NDRange(1) };
-  driver::NDRange global[2] = { driver::NDRange((rows + 3) / 4 * 128), driver::NDRange(cols) };
-
-
-  if(args.type == REDUCE_2D_COLS)
-    control.execution_options().enqueue(program.context(), kernels[0], global[0], local[0]);
-  else
-    control.execution_options().enqueue(program.context(), kernels[0], global[1], local[1]);
-}
-
 std::string intelblas_gemv::generate_impl(std::string const & suffix, expression_tree const & tree, driver::Device const & device, symbolic::symbols_table const & symbols) const
 {
   using tools::to_string;
@@ -322,10 +241,68 @@ std::string intelblas_gemv::generate_impl(std::string const & suffix, expression
   stream << "    dot_prod += A[row_id] * v[row * incv];" << std::endl;
   stream << "    row_id += lda;" << std::endl;
   stream << "  }" << std::endl;
-  stream << "  result[col_gid * incr] = alpha * dot_prod + beta * result[col_gid * incr];" << std::endl;
+  stream << "  result[col_gid * incr] = beta * result[col_gid * incr];" << std::endl;
+  stream << "  result[col_gid * incr] += alpha * dot_prod;" << std::endl;
   stream << "}" << std::endl;
   // std::cout << stream.str() << std::endl;
   return stream.str();
+}
+
+void intelblas_gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
+{
+    namespace drv = driver;
+    //Get GEMV info
+    symbolic::preset::gemv::args args;
+    infos(control.x(), args);
+    std::vector<int_t> MN = args.A->shape;
+    int_t M = MN[0], N = MN[1];
+    if(args.type == REDUCE_2D_COLS)
+    {
+      M = MN[1], N = MN[0];
+    }
+
+    //Kernel
+    std::string name[2] = {"matvec_mul", "trans_matvec_mul"};
+
+
+    std::vector<driver::Kernel> kernels;
+    if(args.type == REDUCE_2D_COLS)
+    kernels.push_back(driver::Kernel(program, name[0].c_str()));
+    else
+    kernels.push_back(driver::Kernel(program, name[1].c_str()));
+
+    driver::Kernel & kernel = kernels[0];
+    unsigned int n_arg = 0;
+    int_t rows = M;
+    int_t cols = N;
+    if (args.type == REDUCE_2D_ROWS) {
+      rows = N;
+      cols = M;
+    }
+
+    kernel.setSizeArg(n_arg++, rows);
+    kernel.setSizeArg(n_arg++, cols);
+    kernel.setArg(n_arg++, args.A->array.handle.cl);
+    kernel.setSizeArg(n_arg++, args.A->array.start);
+    kernel.setSizeArg(n_arg++, args.A->ld[1]);
+    kernel.setArg(n_arg++, args.X->array.handle.cl);
+    kernel.setSizeArg(n_arg++, args.X->array.start);
+    kernel.setSizeArg(n_arg++, args.X->ld[0]);
+    kernel.setArg(n_arg++, args.alpha);
+    kernel.setArg(n_arg++, args.beta);
+    kernel.setArg(n_arg++, args.Y->array.handle.cl);
+    kernel.setSizeArg(n_arg++, args.Y->array.start);
+    kernel.setSizeArg(n_arg++, args.Y->ld[0]);
+
+    //NDRange
+    driver::NDRange local[2] = { driver::NDRange(128), driver::NDRange(1) };
+    driver::NDRange global[2] = { driver::NDRange((rows + 3) / 4 * 128), driver::NDRange(cols) };
+
+
+    if(args.type == REDUCE_2D_COLS)
+    control.execution_options().enqueue(program.context(), kernels[0], global[0], local[0]);
+    else
+    control.execution_options().enqueue(program.context(), kernels[0], global[1], local[1]);
 }
 
 unsigned int reduce_2d::lmem_usage(const expression_tree&) const

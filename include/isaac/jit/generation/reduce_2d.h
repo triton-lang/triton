@@ -39,10 +39,10 @@ private:
   std::string generate_impl(std::string const & suffix, expression_tree const &, driver::Device const & device, symbolic::symbols_table const &) const;
 public:
   intelblas_gemv();
-  int is_invalid(expression_tree const  &, driver::Device const &) const;
-   std::vector<int_t> input_sizes(expression_tree const & expressions) const;
+   int is_invalid(expression_tree const  &, driver::Device const &) const { return 0;}
+  virtual std::vector<int_t> input_sizes(expression_tree const & ) const { return std::vector<int_t>();}
   void enqueue(driver::CommandQueue & queue, driver::Program const &, std::string const &, runtime::execution_handler const & h);
-  expression_type type() const;
+  expression_type type() const { return expression_type();}
 };
 
 class reduce_2d : public parameterized_base
