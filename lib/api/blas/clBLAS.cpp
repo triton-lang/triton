@@ -183,8 +183,38 @@ extern "C"
         return clblasSuccess;\
     }
 
-    MAKE_GEMV(S, sc::FLOAT_TYPE, cl_float)
+    //MAKE_GEMV(S, sc::FLOAT_TYPE, cl_float)
     MAKE_GEMV(D, sc::DOUBLE_TYPE, cl_double)
+
+    clblasStatus clblasSgemv(clblasOrder order, clblasTranspose transA,
+                             size_t M, size_t N,
+                             cl_float alpha, const cl_mem mA, size_t offA, size_t lda,
+                             const cl_mem mx, size_t offx, int incx,
+                             cl_float beta, cl_mem my, size_t offy, int incy,
+                             cl_uint numCommandQueues, cl_command_queue *commandQueues,
+                             cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)
+    {
+#if 1
+        if(order==clblasRowMajor){
+            std::swap(M, N);
+            transA = (transA==clblasTrans)?clblasNoTrans:clblasTrans;
+        }
+        sc::array A((sc::int_t)M, (sc::int_t)N, sc::FLOAT_TYPE, sc::driver::Buffer(mA, false), (sc::int_t)offA, (sc::int_t)lda);
+
+        sc::int_t sx = (sc::int_t)N, sy = (sc::int_t)M;
+        if(transA) std::swap(sx, sy);
+        sc::array x(sx, sc::FLOAT_TYPE, sc::driver::Buffer(mx, false), (sc::int_t)offx, incx);
+        sc::array y(sy, sc::FLOAT_TYPE, sc::driver::Buffer(my, false), (sc::int_t)offy, incy);
+
+        sc::driver::Context const & context = A.context();
+        if(transA==clblasTrans)
+            execute(sc::assign(y, alpha*dot(A.T, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        else
+            execute(sc::assign(y, alpha*dot(A, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+#endif
+
+        return clblasSuccess;
+    }
 
     //*****************
     //BLAS3

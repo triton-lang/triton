@@ -141,7 +141,13 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
   }
   if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
     throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
-  templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
+#if 0
+  if (templates_.size() == 19)
+    templates_[18]->enqueue(queue_, program, tools::to_string(18), expr);
+  else
+#endif
+    templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
+
 }
 
 profiles::value_type::templates_container const & profiles::value_type::templates() const
@@ -156,6 +162,10 @@ std::shared_ptr<templates::base> profiles::create(std::string const & op, std::s
         if(op=="gemm_nt") return std::shared_ptr<templates::base>(new templates::cublas_gemm('N', 'T'));
         if(op=="gemm_tn") return std::shared_ptr<templates::base>(new templates::cublas_gemm('T', 'N'));
         if(op=="gemm_tt") return std::shared_ptr<templates::base>(new templates::cublas_gemm('T', 'T'));
+    }
+    if(str=="intelblas_gemv"){
+        if(op=="reduce_2d_rows") return std::shared_ptr<templates::base>(new templates::intelblas_gemv());
+        if(op=="reduce_2d_cols") return std::shared_ptr<templates::base>(new templates::intelblas_gemv());
     }
     throw;
 }
@@ -214,6 +224,12 @@ void profiles::import(std::string const & str, driver::CommandQueue const & queu
             else
                 templates.push_back(create(operation, rapidjson::to_int_array<int>(profiles[i])));
           }
+          /*
+          if (opcstr == "reduce_2d_rows" || opcstr == "reduce_2d_cols")
+          {
+            templates.push_back(create(operation, "intelblas_gemv");
+          }
+          */
           if(templates.size()>1){
             // Get predictor
             predictors::random_forest predictor(document[opcstr][dtcstr]["predictor"]);
