@@ -86,7 +86,10 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
   std::vector<int_t> x = templates_[0]->input_sizes(tree);
   //Cached
   size_t label = 0;
+<<<<<<< 02c5b3887017367fdbeee5851b53bc529eb27aac
 
+=======
+>>>>>>> Added clFlush to fix issue over VPG ocl driver
   auto it = labels_.find(x);
   if(it!=labels_.end())
     label = it->second;
@@ -142,11 +145,9 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
 
   if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
     throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
-#ifdef ENALBE_INTELBLAS_GEMV
   if (templates_.size() == 19)
     templates_[18]->enqueue(queue_, program, tools::to_string(18), expr);
   else
-#endif
     templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
 
 }

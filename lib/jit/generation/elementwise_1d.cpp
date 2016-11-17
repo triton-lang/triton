@@ -102,7 +102,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
   stream.dec_tab();
   stream << "}" << std::endl;
 
-//  std::cout << stream.str() << std::endl;
+  // std::cout << stream.str() << std::endl;
   return stream.str();
 }
 
@@ -118,6 +118,7 @@ std::vector<int_t> elementwise_1d::input_sizes(expression_tree const & expressio
 
 void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
 {
+  // std::cout << "suffix = " << suffix << std::endl;
   expression_tree const & expressions = control.x();
   //Size
   int_t size = input_sizes(expressions)[0];
@@ -134,6 +135,7 @@ void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & pro
   kernel.setSizeArg(current_arg++, size);
   symbolic::set_arguments(expressions, kernel, current_arg);
   control.execution_options().enqueue(program.context(), kernel, global, local);
+  clFlush(control.execution_options().queue(expressions.context()).handle().cl());
 }
 
 

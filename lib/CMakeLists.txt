@@ -8,6 +8,7 @@ else()
 		set_target_properties(isaac PROPERTIES LINK_FLAGS "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/wrap/clBLAS.def")
 	endif()
 endif()
+target_link_libraries(isaac ${OPENCL_LIBRARIES})
 
 #Database
 if(NOT ANDROID)
