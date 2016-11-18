@@ -28,6 +28,7 @@
 #include "tools/loop.hpp"
 #include "tools/vector_types.hpp"
 #include "tools/arguments.hpp"
+#include "isaac/driver/dispatch.h"
 
 #include <string>
 
@@ -135,7 +136,8 @@ void elementwise_1d::enqueue(driver::CommandQueue &, driver::Program const & pro
   kernel.setSizeArg(current_arg++, size);
   symbolic::set_arguments(expressions, kernel, current_arg);
   control.execution_options().enqueue(program.context(), kernel, global, local);
-  clFlush(control.execution_options().queue(expressions.context()).handle().cl());
+  driver::dispatch::clFinish(control.execution_options().queue(expressions.context()).handle().cl());
+  // clFlush(control.execution_options().queue(expressions.context()).handle().cl());
 }
 
 

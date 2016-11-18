@@ -134,6 +134,10 @@ def external_profiles(template):
         res += [sc.templates.cublas_gemm('N','T')]
     elif template is sc.templates.gemm_tt:
         res += [sc.templates.cublas_gemm('T','T')]
+    elif template is sc.templates.reduce_2d_cols:
+        res += [sc.templates.intelblas_gemv()]
+    elif template is sc.templates.reduce_2d_rows:
+        res += [sc.templates.intelblas_gemv()]
     return res
         
 def genetic_infos_of(template):
