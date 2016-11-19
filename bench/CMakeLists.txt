@@ -16,7 +16,7 @@ find_package(CLBLAS QUIET)
 if(CLBLAS_FOUND)
     set(BLAS_DEF ${BLAS_DEF} "-DHAS_A_BLAS -DBENCH_CLBLAS")
     include_directories(${CLBLAS_INCLUDE_DIR})
-    set(BLAS_LIBS ${BLAS_LIBS}  ${CLBLAS_LIBRARIES} )
+    set(BLAS_LIBS ${BLAS_LIBS}  ${CLBLAS_LIBRARIES} OpenCL)
 endif()
 
 ##CBLAS
