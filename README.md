@@ -54,7 +54,7 @@ Currently supported functions are:
 ### Contributing
 
 You can contribute to further tuning isaac if you have one of the following architecture:
-- NVidia: SM 2.x ; SM 3.5 ; SM 5.0 ; SM 6.0 
+- NVidia: SM 2.x ; SM 3.5 ; SM 5.0
 - Intel: Skylake iGPU
 
 If you have one of the following architectures you can contribute by running:
