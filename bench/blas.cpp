@@ -16,6 +16,7 @@
 #include <cmath>
 #include <numeric>
 #include <regex>
+#include <string>
 #include "common.hpp"
 
 typedef sc::int_t int_t;
@@ -75,6 +76,43 @@ double bench(OP const & op, SYNC const & sync)
   return min(times);
 }
 
+void print_results_header(std::vector<std::string> sections, bool on_cl, bool on_cu){
+    std::cout << color_stream(ITALIC) << color_stream(BOLD) ;
+    std::copy(sections.begin(), sections.end(), std::ostream_iterator<std::string>(std::cout, "\t"));
+    std::cout << "ISAAC";
+#ifdef BENCH_CLBLAS
+    if(on_cl)
+    std::cout << "\tclBLAS";
+#endif
+#ifdef BENCH_CBLAS
+    std::cout << "\tBLAS";
+#endif
+#ifdef BENCH_CUBLAS
+    if(on_cu)
+    std::cout << "\tcuBLAS";
+#endif
+    std::cout << color_stream(RESET) << std::endl;
+}
+
+void print_results(std::vector<double> const & times, std::vector<std::string> const & prefix, std::function<double(double)> fn){
+    std::copy(prefix.begin(), prefix.end(), std::ostream_iterator<std::string>(std::cout, "\t"));
+    std::vector<double> perf;
+    std::transform(times.begin(), times.end(), std::back_inserter(perf), fn);
+    auto fastest = perf;
+    std::sort(fastest.begin(), fastest.end(), std::greater<double>());
+    for(auto x: perf){
+      if(x/fastest[1] >= 1.05)
+        std::cout << color_stream(FG_LIGHT_BLUE) << x << color_stream(RESET);
+      else
+        std::cout << x;
+      std::cout << "\t";
+    }
+    std::cout << std::endl;
+}
+
+template<class T>
+std::string str(T const & x){ return std::to_string(x); }
+
 template<class T>
 void bench(sc::numeric_type dtype, std::string operation)
 {
@@ -90,7 +128,7 @@ void bench(sc::numeric_type dtype, std::string operation)
 
   bool on_cl = queue.backend()==sc::driver::OPENCL;
   bool on_cu = queue.backend()==sc::driver::CUDA;
-
+  size_t dtsize = sc::size_of(dtype);
   /*---------*/
   /*--BLAS1--*/
   /*---------*/
@@ -98,8 +136,10 @@ void bench(sc::numeric_type dtype, std::string operation)
   if(operation=="axpy")
   {
     float alpha = 1;
-    for(int_t N: create_log_range((int)1e3, (int)1e8, 50, 64))
+    print_results_header({"N"}, on_cl, on_cu);
+    for(int_t MB: std::vector<int_t>{1, 10, 100, 1000})
     {
+      int_t N = MB*1e6/dtsize/3;
       std::vector<double> times;
       sc::array x(N, dtype), y(N, dtype);
       //Bench
@@ -118,13 +158,16 @@ void bench(sc::numeric_type dtype, std::string operation)
       if(on_cu)
         times.push_back(bench([&](){cublasAxpy(T(), N, alpha, (T*)cu(x), 1, (T*)cu(y), 1);}, cusync));
 #endif
+      print_results(times, {str(MB)}, [&](double t){return MB*1e6/t;});
     }
   }
 
   if(operation=="dot")
   {
-    for(int_t N: create_log_range((int)1e3, (int)1e8, 50, 64))
+    print_results_header({"MB"}, on_cl, on_cu);
+    for(int_t MB: std::vector<int_t>{1, 10, 100, 1000})
     {
+      int_t N = MB*1e6/dtsize/2;
       std::vector<double> times;
       sc::array x(N, dtype), y(N, dtype);
       sc::array scratch(N, dtype);
@@ -145,41 +188,46 @@ void bench(sc::numeric_type dtype, std::string operation)
       if(on_cu)
         times.push_back(bench([&](){cublasDot(T(), N, (T*)cu(x), 1, (T*)cu(y), 1);}, cusync));
 #endif
+      print_results(times, {str(MB)}, [&](double t){return MB*1e6/t;});
     }
   }
 
   if(operation.substr(0, 4)=="gemv")
   {
-    std::vector<std::tuple<std::string, char,int_t, int_t> > MNs;
+    std::vector<std::tuple<std::string, std::string,int_t, int_t> > MNs;
     //Linear System
-    MNs.push_back(make_tuple("square153[N]", 'N',153,153));
-    MNs.push_back(make_tuple("square153[T]", 'T',153,153));
-    MNs.push_back(make_tuple("square1024[T]", 'T',1024,1024));
-    MNs.push_back(make_tuple("square2867[N]", 'N',2867,2867));
-    MNs.push_back(make_tuple("square2867[T]", 'T',2867,2867));
+    MNs.push_back(make_tuple("Square", "N",153,153));
+    MNs.push_back(make_tuple("Square", "N",1024, 1024));
+    MNs.push_back(make_tuple("Square", "N",2867,2867));
+    MNs.push_back(make_tuple("Square", "T",153,153));
+    MNs.push_back(make_tuple("Square", "T",1024,1024));
+    MNs.push_back(make_tuple("Square", "T",2867,2867));
     //Normalization
-    MNs.push_back(make_tuple("norm64[N]", 'N', 64, 60000));
-    MNs.push_back(make_tuple("norm64[T]", 'T', 64, 60000));
-    MNs.push_back(make_tuple("norm256[N]", 'N', 256, 60000));
-    MNs.push_back(make_tuple("norm256[T]", 'T', 256, 60000));
-    MNs.push_back(make_tuple("norm1024[N]", 'N', 1024, 60000));
-    MNs.push_back(make_tuple("norm1024[T]", 'T', 1024, 60000));
+    MNs.push_back(make_tuple("Short", "N", 64, 60000));
+    MNs.push_back(make_tuple("Short", "N", 256, 60000));
+    MNs.push_back(make_tuple("Short", "N", 1024, 60000));
+    MNs.push_back(make_tuple("Short", "T", 64, 60000));
+    MNs.push_back(make_tuple("Short", "T", 256, 60000));
+    MNs.push_back(make_tuple("Short", "T", 1024, 60000));
     //Householder
-    MNs.push_back(make_tuple("tallskinny-1[N]", 'N', 10, 60000));
-    MNs.push_back(make_tuple("tallskinny-1[T]", 'T', 10, 60000));
-    MNs.push_back(make_tuple("tallskinny-2[N]", 'N', 30, 60000));
-    MNs.push_back(make_tuple("tallskinny-2[T]", 'T', 30, 60000));
+    MNs.push_back(make_tuple("Tall", "N", 10, 60000));
+    MNs.push_back(make_tuple("Tall", "N", 30, 60000));
+    MNs.push_back(make_tuple("Tall", "T", 10, 60000));
+    MNs.push_back(make_tuple("Tall", "T", 30, 60000));
 
     /*---------*/
     /*--BLAS2--*/
     /*---------*/
-    for(std::tuple<std::string, char, int_t, int_t> MN: MNs)
+    print_results_header({"BENCH", "M", "N", "AT"}, on_cl, on_cu);
+    for(auto MN: MNs)
     {
       std::vector<double> times;
-      bool AT = get<1>(MN) == 'T';
+      std::string name = get<0>(MN);
+      std::string cAT = get<1>(MN);
       int_t M = get<2>(MN);
       int_t N = get<3>(MN);
       int_t As1 = M, As2 = N;
+      bool AT = (cAT == "T");
       if(AT) std::swap(As1, As2);
       sc::array A(As1, As2, dtype), y(M, dtype), x(N, dtype);
 #ifdef HAS_A_BLAS
@@ -202,44 +250,31 @@ void bench(sc::numeric_type dtype, std::string operation)
       if(on_cu)
         times.push_back(bench([&](){cublasGemv(T(), AT?'t':'n', As1, As2, 1, (T*)cu(A), lda, (T*)cu(x), 1, 0, (T*)cu(y), 1);}, cusync));
 #endif
+      print_results(times, {name, str(M), str(N), cAT}, [&](double t){ return (M*N + M + N)*dtsize/t;});
     }
   }
 
   if(operation.substr(0,4)=="gemm")
   {
-    std::vector<std::tuple<std::string, int_t, int_t, int_t, char, char> > MNKs;
+    std::vector<std::tuple<std::string, int_t, int_t, int_t, std::string, std::string> > MNKs;
     //DeepBench
     for(size_t MK: std::vector<size_t>{1760, 2048, 2560})
       for(size_t N: std::vector<size_t>{16, 32, 64, 128, 7000})
-        MNKs.push_back(make_tuple("Deep", MK, N, MK, 'N', 'N'));
+        MNKs.push_back(make_tuple("Deep", MK, N, MK, "N", "N"));
     for(size_t MK: std::vector<size_t>{1760, 2048, 2560})
       for(size_t N: std::vector<size_t>{16, 32, 64, 128, 7000})
-        MNKs.push_back(make_tuple("Deep", MK, N, MK, 'T', 'N'));
+        MNKs.push_back(make_tuple("Deep", MK, N, MK, "T", "N"));
     for(size_t MK: std::vector<size_t>{1760, 4096})
-      MNKs.push_back(make_tuple("Deep", MK, 7133, MK, 'N', 'T'));
+      MNKs.push_back(make_tuple("Deep", MK, 7133, MK, "N", "T"));
     //Covariance (e.g., ICA, 10minutes/100Hz)
-    MNKs.push_back(make_tuple("Cov",32,32,60000,'N','T'));
-    MNKs.push_back(make_tuple("Cov",256,256,60000,'N','T'));
+    MNKs.push_back(make_tuple("Cov",32,32,60000,"N","T"));
+    MNKs.push_back(make_tuple("Cov",256,256,60000,"N","T"));
     //Bi-diagonalization
-    MNKs.push_back(make_tuple("Lapack",4096,4096,32,'N','T'));
-    MNKs.push_back(make_tuple("Lapack",3456,3456,32,'N','T'));
-    MNKs.push_back(make_tuple("Lapack",896,896,32,'N','T'));
+    MNKs.push_back(make_tuple("Lapack",4096,4096,32,"N","T"));
+    MNKs.push_back(make_tuple("Lapack",3456,3456,32,"N","T"));
+    MNKs.push_back(make_tuple("Lapack",896,896,32,"N","T"));
 
-    std::cout << color_stream(ITALIC) << color_stream(BOLD) ;
-    std::cout << "BENCH\tM\tN\tK\tAT\tBT\tISAAC";
-#ifdef BENCH_CLBLAS
-    if(on_cl)
-    std::cout << "\tclBLAS";
-#endif
-#ifdef BENCH_CBLAS
-    std::cout << "\tBLAS";
-#endif
-#ifdef BENCH_CUBLAS
-    if(on_cu)
-    std::cout << "\tcuBLAS";
-#endif
-    std::cout << color_stream(RESET) << std::endl;
-
+    print_results_header({"BENCH", "M", "N", "K", "AT", "BT"}, on_cl, on_cu);
     /*---------*/
     /*--BLAS3--*/
     /*---------*/
@@ -251,10 +286,10 @@ void bench(sc::numeric_type dtype, std::string operation)
       int_t M = get<1>(MNK);
       int_t N = get<2>(MNK);
       int_t K = get<3>(MNK);
-      char cAT = get<4>(MNK);
-      char cBT = get<5>(MNK);
-      bool AT = cAT=='T';
-      bool BT = cBT=='T';
+      std::string cAT = get<4>(MNK);
+      std::string cBT = get<5>(MNK);
+      bool AT = cAT=="T";
+      bool BT = cBT=="T";
       int_t As1 = M, As2 = K;
       if(AT) std::swap(As1, As2);
       int_t Bs1 = K, Bs2 = N;
@@ -285,18 +320,7 @@ void bench(sc::numeric_type dtype, std::string operation)
       if(on_cu)
         times.push_back(bench([&](){cublasGemm(T(), AT?'t':'n', BT?'t':'n', M, N, K, 1, (T*)cu(A), lda, (T*)cu(B), ldb, 1, (T*)cu(C), ldc);}, cusync));
 #endif
-      std::transform(times.begin(), times.end(), std::back_inserter(tflops), [&](double t){ return 2*M*N*K/t*1e-3;});
-      auto fastest = tflops;
-      std::sort(fastest.begin(), fastest.end(), std::greater<double>());
-      std::cout << name << "\t" << M << "\t" << N << "\t" << K << "\t" << cAT << "\t" << cBT;
-     for(auto x: tflops){
-        std::cout << "\t";
-        if(x/fastest[1] >= 1.05)
-          std::cout << color_stream(FG_LIGHT_BLUE) << x << color_stream(RESET);
-        else
-          std::cout << x;
-      }
-      std::cout << std::endl;
+      print_results(times, {name, str(M), str(N), str(K), cAT, cBT}, [&](double t){ return 2*M*N*K/t*1e-3;});
     }
   }
 
