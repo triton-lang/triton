@@ -27,11 +27,15 @@ The C++ and Python API does some kernel fusion, but is not entirely stable. It w
 ### Benchmark
 
 ```
-./bench/bench-blas OP
+Usage : blas-bench [--op {axpy, dot, gemv, gemm}] [--dtype {float32, float64}] [--device DEVICE_IDX] [--help]
+--op: operation to benchmark (default = gemm)
+--dtype: data-type to benchmark (default = float32)
+--device: index of isaac device in [0, ..., ndevices - 1] (default = 0)
+--help: display this message
 ```
-where OP is axpy, gemv or gemm. It detects clBLAS or cuBLAS and compares it against ISAAC for DeepBench, Covariance and LAPACK (packed rank1 updates).
+It detects clBLAS or cuBLAS and compares it against ISAAC for e.g., DeepBench, Covariance, LAPACK (packed rank1 updates), etc.
 
-Below is the TFLOPS you get for a Pascal Titan X (cuBLAS 8.0). Numbers in bold represent speed-ups greater than 5%.
+Below is the TFLOPS you get for GEMM on a Pascal Titan X (cuBLAS 8.0). Numbers in bold represent speed-ups greater than 5%.
 ![alt tag](https://github.com/ptillet/isaac/raw/master/documentation/bench/bench-cuBLAS.png)
 
 For AMD Fury (clBLAS-2.10-Fiji):
