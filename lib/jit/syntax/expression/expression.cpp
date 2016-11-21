@@ -38,9 +38,6 @@ expression_tree::node::node(){}
 expression_tree::node::node(invalid_node) : type(INVALID_SUBTYPE), dtype(INVALID_NUMERIC_TYPE)
 {}
 
-expression_tree::node::node(placeholder x) : type(PLACEHOLDER_TYPE), dtype(INVALID_NUMERIC_TYPE), shape{1}, ph(x)
-{}
-
 expression_tree::node::node(value_scalar const & x) : type(VALUE_SCALAR_TYPE), dtype(x.dtype()), shape{1}, scalar(x.values())
 {}
 
@@ -116,7 +113,7 @@ std::size_t expression_tree::root() const
 driver::Context const & expression_tree::context() const
 { return *context_; }
 
-numeric_type expression_tree::dtype() const
+numeric_type const & expression_tree::dtype() const
 { return tree_[root_].dtype; }
 
 tuple expression_tree::shape() const
@@ -136,15 +133,6 @@ expression_tree::node const & expression_tree::operator[](size_t idx) const
 
 expression_tree::node & expression_tree::operator[](size_t idx)
 { return tree_[idx]; }
-
-//
-expression_tree placeholder::operator=(value_scalar const & r) const { return expression_tree(*this, r, op_element(BINARY_ARITHMETIC,ASSIGN_TYPE), NULL, r.dtype(), {1}); }
-expression_tree placeholder::operator=(expression_tree const & r) const { return expression_tree(*this, r, op_element(BINARY_ARITHMETIC,ASSIGN_TYPE), &r.context(), r.dtype(), r.shape()); }
-
-expression_tree placeholder::operator+=(value_scalar const & r) const { return *this = *this + r; }
-expression_tree placeholder::operator-=(value_scalar const & r) const { return *this = *this - r; }
-expression_tree placeholder::operator*=(value_scalar const & r) const { return *this = *this * r; }
-expression_tree placeholder::operator/=(value_scalar const & r) const { return *this = *this / r; }
 
 //io
 #define ISAAC_MAP_TO_STRING(NAME) case NAME: return #NAME

@@ -304,7 +304,7 @@ void bench(sc::numeric_type dtype, std::string operation)
 
 void handle_misusage(){
   std::cerr << "Usage : blas-bench [--dtype {float32, float64}] [--device DEVICE_IDX] [--help]" << std::endl;
-//  std::cerr << "--op: operation to benchmark" << std::endl;
+  std::cerr << "--op: operation to benchmark" << std::endl;
   std::cerr << "--dtype: data-type to benchmark" << std::endl;
   std::cerr << "--device: index of isaac device in [0, ..., ndevices - 1]" << std::endl;
   std::cerr << "--help: display this message" << std::endl;
@@ -341,7 +341,7 @@ int main(int argc, char* argv[])
   if(std::find(args.begin(), args.end(), "--help") != args.end())
     handle_misusage();
 
-  std::string operation = "gemm";
+  std::string operation = getopt(args, "--op", {"axpy", "dot", "gemv", "gemm"}, "gemm");
   std::string dtype = getopt(args, "--dtype", {"float32", "float64"}, "float32");
   int device;
   try{
