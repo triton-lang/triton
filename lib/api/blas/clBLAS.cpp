@@ -278,8 +278,8 @@ extern "C"
         }\
         sc::int_t As1 = (sc::int_t)M, As2 = (sc::int_t)K;\
         sc::int_t Bs1 = (sc::int_t)K, Bs2 = (sc::int_t)N;\
-        if(transA==clblasTrans) std::swap(As1, As2);\
-        if(transB==clblasTrans) std::swap(Bs1, Bs2);\
+        if(transA==clblasTrans || transA==clblasConjTrans) std::swap(As1, As2);\
+        if(transB==clblasTrans || transB==clblasConjTrans) std::swap(Bs1, Bs2);\
         /*Struct*/\
         sc::array A(As1, As2, TYPE_ISAAC, sc::driver::Buffer(mA, false), (sc::int_t)offA, (sc::int_t)lda);\
         sc::array B(Bs1, Bs2, TYPE_ISAAC, sc::driver::Buffer(mB, false), (sc::int_t)offB, (sc::int_t)ldb);\
