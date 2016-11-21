@@ -309,6 +309,7 @@ void export_core()
       ADD_ARRAY_OPERATOR(==)
       ADD_ARRAY_OPERATOR(!=)
       .add_property("context", bp::make_function(&sc::expression_tree::context, bp::return_internal_reference<>()))
+      .add_property("dtype", &sc::expression_tree::dtype)
       .def(bp::self_ns::abs(bp::self))
 //      .def(bp::self_ns::pow(bp::self))
   ;

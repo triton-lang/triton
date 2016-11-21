@@ -30,6 +30,8 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--device", default=0, type=int, help='Device to tune for')
     parser.add_argument("-j", "--json", default='', type=str)
+    parser.add_argument('--float32', action='store_true', help='Tune 32-bits FLOAT')
+    parser.add_argument('--float64', action='store_true', help='Tune 64-bits FLOAT')
     parser.add_argument('--elementwise_1d', action='store_true', help='Tune ELEMENTWISE [1D]')
     parser.add_argument('--elementwise_2d', action='store_true', help='Tune ELEMENTWISE [2D]')
     parser.add_argument('--reduce_1d', action='store_true', help='Tune REDUCE [1D]')
@@ -53,8 +55,13 @@ def parse_arguments():
     #Operations
     operations = ['elementwise_1d', 'reduce_1d', 'elementwise_2d', 'reduce_2d_rows', 'reduce_2d_cols', 'gemm_nn', 'gemm_tn', 'gemm_nt', 'gemm_tt']
     operations = [getattr(sc.templates,op) for op in operations  if getattr(args, op)]
-        
-    return (device, operations, args.json)
+    
+    #Dtypes
+    dtypes = []
+    if args.float32: dtypes+=[sc.float32]
+    if args.float64: dtypes+=[sc.float64]
+    
+    return (device, operations, dtypes, args.json)
         
 
 class ProgressBar:
@@ -91,8 +98,9 @@ if __name__ == "__main__":
     logger.setLevel(logging.INFO)
 
     sc.driver.default.queue_properties = sc.driver.PROFILING_ENABLE
-    device, operations, json = parse_arguments()
+    device, operations, dtypes, json = parse_arguments()
     
     for operation in operations:
-        tuner = Tuner(logger, device, operation, json, ProgressBar(30, metric_name_of(operation)))
-        tuner.run(level='intermediate')
+        for dtype in dtypes:
+            tuner = Tuner(logger, device, operation, dtype, json, ProgressBar(30, metric_name_of(operation)))
+            tuner.run(level='intermediate')
