@@ -26,7 +26,7 @@
 #include "tools/arguments.hpp"
 #include "tools/loop.hpp"
 #include "tools/vector_types.hpp"
-
+#include "isaac/driver/dispatch.h"
 
 namespace isaac
 {
@@ -117,6 +117,7 @@ void elementwise_2d::enqueue(driver::CommandQueue & /*queue*/, driver::Program c
   symbolic::set_arguments(expressions, kernel, current_arg);
 
   control.execution_options().enqueue(program.context(), kernel, global, local);
+  driver::dispatch::clFinish(control.execution_options().queue(expressions.context()).handle().cl());
 }
 
 }

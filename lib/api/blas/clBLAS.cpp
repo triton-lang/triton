@@ -217,19 +217,19 @@ extern "C"
         }\
         sc::int_t As1 = (sc::int_t)M, As2 = (sc::int_t)K;\
         sc::int_t Bs1 = (sc::int_t)K, Bs2 = (sc::int_t)N;\
-        if(transA==clblasTrans) std::swap(As1, As2);\
-        if(transB==clblasTrans) std::swap(Bs1, Bs2);\
+        if(transA==clblasTrans || transA==clblasConjTrans) std::swap(As1, As2);\
+        if(transB==clblasTrans || transB==clblasConjTrans) std::swap(Bs1, Bs2);\
         /*Struct*/\
         sc::array A(As1, As2, TYPE_ISAAC, sc::driver::Buffer(mA, false), (sc::int_t)offA, (sc::int_t)lda);\
         sc::array B(Bs1, Bs2, TYPE_ISAAC, sc::driver::Buffer(mB, false), (sc::int_t)offB, (sc::int_t)ldb);\
         sc::array C((sc::int_t)M, (sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mC, false), (sc::int_t)offC, (sc::int_t)ldc);\
         sc::driver::Context const & context = C.context();\
         /*Operation*/\
-        if((transA==clblasTrans) && (transB==clblasTrans))\
+        if((transA==clblasTrans || transA==clblasConjTrans) && (transB==clblasTrans || transB==clblasConjTrans))\
             execute(sc::assign(C, alpha*dot(A.T, B.T) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
-        else if((transA==clblasTrans) && (transB==clblasNoTrans))\
+        else if((transA==clblasTrans || transA==clblasConjTrans) && (transB==clblasNoTrans))\
             execute(sc::assign(C, alpha*dot(A.T, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
-        else if((transA==clblasNoTrans) && (transB==clblasTrans))\
+        else if((transA==clblasNoTrans) && (transB==clblasTrans || transB==clblasConjTrans))\
             execute(sc::assign(C, alpha*dot(A, B.T) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else\
             execute(sc::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
