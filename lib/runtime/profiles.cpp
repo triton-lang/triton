@@ -121,6 +121,12 @@ std::shared_ptr<templates::base> profiles::create(std::string const & op, std::s
         if(op=="gemm_tn") return std::shared_ptr<templates::base>(new templates::cublas_gemm('T', 'N'));
         if(op=="gemm_tt") return std::shared_ptr<templates::base>(new templates::cublas_gemm('T', 'T'));
     }
+    if(str=="intelblas_gemm"){
+        if(op=="gemm_nn") return std::shared_ptr<templates::base>(new templates::intelblas_gemm('N', 'N'));
+        if(op=="gemm_nt") return std::shared_ptr<templates::base>(new templates::intelblas_gemm('N', 'T'));
+        if(op=="gemm_tn") return std::shared_ptr<templates::base>(new templates::intelblas_gemm('T', 'N'));
+        if(op=="gemm_tt") return std::shared_ptr<templates::base>(new templates::intelblas_gemm('T', 'T'));
+    }
     throw;
 }
 
