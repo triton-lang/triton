@@ -116,7 +116,7 @@ std::size_t expression_tree::root() const
 driver::Context const & expression_tree::context() const
 { return *context_; }
 
-numeric_type const & expression_tree::dtype() const
+numeric_type expression_tree::dtype() const
 { return tree_[root_].dtype; }
 
 tuple expression_tree::shape() const

@@ -23,6 +23,8 @@ from math import ceil, exp, log, sqrt
 import time
 profile_execution_failure = (sc.OperationNotSupported,  sc.OclLaunchOutOfResources, sc.CudaLaunchOutOfResources, sc.MemObjectAllocationFailure, sc.InvalidWorkGroupSize, sc.OutOfHostMemory, sc.InvalidValue)
 
+dtype=sc.float32
+
 def sanitize(string, keep_chars = ['_']):
     string = string.replace(' ', '_').replace('-', '_').lower()
     string = "".join(c for c in string if c.isalnum() or c in keep_chars).rstrip()
@@ -43,7 +45,7 @@ def expspace(a,b,N,r=128):
 
 def benchmark(template, tree, operation=sc.templates.gemm_nn):
     queue = tree.context.queues[0]
-    queue.profiles[template, sc.float32] = sc.profile(template, sc.float32, queue)
+    queue.profiles[template, dtype] = sc.profile(template, dtype, queue)
     times = []
     total = 0
     #Warm-up
@@ -66,33 +68,33 @@ def benchmark(template, tree, operation=sc.templates.gemm_nn):
 def tree_of(template, sizes, context):
     if issubclass(template, sc.templates.elementwise_1d):
         N, = sizes
-        x = sc.empty(N, dtype=sc.float32, context=context)
-        y = sc.empty(N, dtype=sc.float32, context=context)
+        x = sc.empty(N, dtype=dtype, context=context)
+        y = sc.empty(N, dtype=dtype, context=context)
         return sc.assign(y, x + y), (x, y)
     elif issubclass(template, sc.templates.reduce_1d):
         N, = sizes
-        x = sc.empty(N, context=context)
-        y = sc.empty(N, context=context)
+        x = sc.empty(N, dtype=dtype, context=context)
+        y = sc.empty(N, dtype=dtype, context=context)
         return sc.dot(x, y), (x, y)
     elif issubclass(template, sc.templates.elementwise_2d):
         M, N = sizes
-        A = sc.empty((M,N), context=context)
-        B = sc.empty((M,N), context=context)
+        A = sc.empty((M,N), dtype=dtype, context=context)
+        B = sc.empty((M,N), dtype=dtype, context=context)
         return A + B, (A, B)
     elif issubclass(template, sc.templates.reduce_2d):
         T = template is sc.templates.reduce_2d_cols
         M, N = sizes[::-1] if T else sizes
-        A = sc.empty((M,N), context=context)
-        x = sc.empty(N, context=context)
-        y = sc.empty(M, context=context)
+        A = sc.empty((M,N), dtype=dtype, context=context)
+        x = sc.empty(N, dtype=dtype, context=context)
+        y = sc.empty(M, dtype=dtype, context=context)
         return sc.assign(x, sc.dot(A.T, y)) if T else sc.assign(y, sc.dot(A, x)), (A, x, y)
     elif issubclass(template, sc.templates.gemm):
         AT = template is sc.templates.gemm_tn or template is sc.templates.gemm_tt
         BT = template is sc.templates.gemm_nt or template is sc.templates.gemm_tt
         M, N, K = sizes
-        C = sc.empty((M,N), context=context)
-        A = sc.empty((K, M) if AT else (M, K), context=context)
-        B = sc.empty((N, K) if BT else (K, N), context=context)
+        C = sc.empty((M,N), dtype=dtype, context=context)
+        A = sc.empty((K, M) if AT else (M, K), dtype=dtype, context=context)
+        B = sc.empty((N, K) if BT else (K, N), dtype=dtype, context=context)
         AA = A.T if AT else A
         BB = B.T if BT else B
         return sc.assign(C, sc.dot(AA, BB)), (A, B, C)

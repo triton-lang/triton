@@ -48,7 +48,7 @@ namespace runtime
 const profiles::presets_type profiles::presets_ =
 {
     //DEFAULT
-    DATABASE_ENTRY(UNKNOWN, UNKNOWN, UNKNOWN, database::unknown::unknown),
+    DATABASE_ENTRY(UNKNOWN, UNKNOWN, UNKNOWN, database::nvidia::sm_6_1),
     //INTEL
     DATABASE_ENTRY(GPU, INTEL, BROADWELL, database::intel::broadwell),
     //NVIDIA

@@ -134,7 +134,7 @@ public:
   data_type const & data() const;
   std::size_t root() const;
   driver::Context const & context() const;
-  numeric_type const & dtype() const;
+  numeric_type dtype() const;
 
   node const & operator[](size_t) const;
   node & operator[](size_t);

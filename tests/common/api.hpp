@@ -261,7 +261,7 @@ bool diff(isaac::array const & x, VecType const & y, typename VecType::value_typ
                                                     {START1, START1 + STRIDE1*SUBM, STRIDE1}));\
 
 template<typename test_fun_t>
-int run_test(test_fun_t const & testf, test_fun_t const & /*testd*/)
+int run_test(test_fun_t const & testf, test_fun_t const & testd)
 {
     int nfail = 0;
     int npass = 0;
@@ -275,8 +275,8 @@ int run_test(test_fun_t const & testf, test_fun_t const & /*testd*/)
       std::cout << "Device: " << device.name() << " on " << device.platform().name() << " " << device.platform().version() << std::endl;
       std::cout << "---" << std::endl;
       testf(*context, nfail, npass);
-//      if(device.fp64_support())
-//          testd(*context, nfail, npass);
+      if(device.fp64_support())
+        testd(*context, nfail, npass);
       std::cout << "---" << std::endl;
     }
     if(nfail>0)

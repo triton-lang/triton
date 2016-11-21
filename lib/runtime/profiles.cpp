@@ -87,11 +87,11 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
   //Cached
   size_t label = 0;
   auto it = labels_.find(x);
-  if(it!=labels_.end()){
+  if(it!=labels_.end())
     label = it->second;
-  }
   //Not cached
-  else if(predictor_){
+  else if(predictor_)
+  {
     expression_tree::node const & root = tree[tree.root()];
     expression_tree::node const & left = tree[root.binary_operator.lhs];
     array_base* out = left.array.base;
@@ -100,12 +100,14 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
     };
     bool modify_output = std::find_if(tree.data().begin(), tree.data().end(), read_out) != tree.data().end();
     std::unique_ptr<array> bkp;
-    if(modify_output)
-      bkp.reset(new array(*out));
+    if(modify_output){
+      bkp.reset(new array(out->shape(), out->dtype(), queue_.context()));
+      *bkp = execution_handler(-(-*out), execution_options_type(queue_));
+    }
     tools::Timer tmr;
     std::vector<double> times;
     std::vector<float> perf = predictor_->predict(x);
-    std::vector<size_t> idx(templates_.size());
+    std::vector<size_t> idx(perf.size());
     std::iota(idx.begin(), idx.end(), 0);
     std::sort(idx.begin(), idx.end(), [&perf](size_t i1, size_t i2) {return perf[i1] > perf[i2];});
     bool valid_found = false;
@@ -133,10 +135,9 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
     }
     label = idx[std::distance(times.begin(),std::min_element(times.begin(), times.end()))];
     if(modify_output)
-      *out = *bkp;
+      *out = execution_handler(-(-*bkp), execution_options_type(queue_));
+    labels_.insert({x, label});
   }
-  labels_.insert({x, label});
-  //Executes
   if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
     throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
   templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
