@@ -49,11 +49,13 @@ Currently supported functions are:
 
 | BLAS1         | BLAS2         | BLAS3         |
 | --------------| --------------| --------------|
-| sAXPY         | sGEMV         | sGEMM         |
-| sCOPY         | sGER          |               |
-| sSCAL         |               |               |
-| sDOT          |               |               |
-| sASUM         |               |               |
+| xAXPY         | xGEMV         | xGEMM         |
+| xCOPY         | xGER          |               |
+| xSCAL         |               |               |
+| xDOT          |               |               |
+| xASUM         |               |               |
+
+For x in {S, D}
 
 ### Contributing
 
