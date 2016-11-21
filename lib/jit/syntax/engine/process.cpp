@@ -185,8 +185,6 @@ symbols_table symbolize(isaac::expression_tree const & tree)
       bool is_assigned = std::find(assignee.begin(), assignee.end(), root)!=assignee.end();
       table.insert({root, make_symbolic<buffer>(context, dtype, binder->get(node.array.handle, is_assigned), node.shape, node.ld)});
     }
-    else if(node.type==PLACEHOLDER_TYPE)
-      table.insert({root, make_symbolic<placeholder>(context, node.ph.level)});
     else if(node.type==COMPOSITE_OPERATOR_TYPE)
     {
       unsigned int id = binder->get();

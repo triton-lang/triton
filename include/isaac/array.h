@@ -106,7 +106,6 @@ public:
   array_base& operator/=(expression_tree const &);
 
   //Indexing (1D)
-  expression_tree operator[](placeholder idx) const;
   const scalar operator[](int_t) const;
   scalar operator[](int_t);
   view operator[](slice const &);
@@ -208,22 +207,14 @@ template<class T> ISAACAPI void copy(array_base const & gA, std::vector<T> & cA,
 #define ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(OPNAME) \
 ISAACAPI expression_tree OPNAME (array_base const & x, expression_tree const & y);\
 ISAACAPI expression_tree OPNAME (array_base const & x, value_scalar const & y);\
-ISAACAPI expression_tree OPNAME (array_base const & x, placeholder const & y);\
 ISAACAPI expression_tree OPNAME (array_base const & x, array_base const & y);\
 \
 ISAACAPI expression_tree OPNAME (expression_tree const & x, expression_tree const & y);\
 ISAACAPI expression_tree OPNAME (expression_tree const & x, value_scalar const & y);\
-ISAACAPI expression_tree OPNAME (expression_tree const & x, placeholder const & y);\
 ISAACAPI expression_tree OPNAME (expression_tree const & x, array_base const & y);\
 \
 ISAACAPI expression_tree OPNAME (value_scalar const & y, expression_tree const & x);\
-ISAACAPI expression_tree OPNAME (value_scalar const & y, placeholder const & x);\
 ISAACAPI expression_tree OPNAME (value_scalar const & y, array_base const & x);\
-\
-ISAACAPI expression_tree OPNAME (placeholder const & y, expression_tree const & x);\
-ISAACAPI expression_tree OPNAME (placeholder const & y, placeholder const & x);\
-ISAACAPI expression_tree OPNAME (placeholder const & y, value_scalar const & x);\
-ISAACAPI expression_tree OPNAME (placeholder const & y, array_base const & x);
 
 ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(operator +)
 ISAAC_DECLARE_ELEMENT_BINARY_OPERATOR(operator -)
@@ -320,19 +311,6 @@ ISAACAPI expression_tree mean(expression_tree const &, int_t axis = -1);
 
 //Fusion
 ISAACAPI expression_tree fuse(expression_tree const & x, expression_tree const & y);
-
-//For
-ISAACAPI expression_tree sfor(expression_tree const & start, expression_tree const & end, expression_tree const & inc, expression_tree const & expression);
-static const placeholder _i0{0};
-static const placeholder _i1{1};
-static const placeholder _i2{2};
-static const placeholder _i3{3};
-static const placeholder _i4{4};
-static const placeholder _i5{5};
-static const placeholder _i6{6};
-static const placeholder _i7{7};
-static const placeholder _i8{8};
-static const placeholder _i9{9};
 
 //Initializers
 ISAACAPI expression_tree eye(int_t, int_t, isaac::numeric_type, driver::Context const & context = driver::backend::contexts::get_default());

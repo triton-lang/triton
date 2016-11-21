@@ -164,8 +164,7 @@ array_base & array_base::operator=(array_base const & rhs)
 {
     if(min(shape_)==0) return *this;
     assert(dtype_ == rhs.dtype());
-    expression_tree expression(*this, rhs, op_element(BINARY_ARITHMETIC, ASSIGN_TYPE), &context_, dtype_, shape_);
-    runtime::execute(expression);
+    runtime::execute(assign(*this, rhs));
     return *this;
 }
 
@@ -173,8 +172,7 @@ array_base & array_base::operator=(value_scalar const & rhs)
 {
     if(min(shape_)==0) return *this;
     assert(dtype_ == rhs.dtype());
-    expression_tree expression(*this, rhs, op_element(BINARY_ARITHMETIC, ASSIGN_TYPE), &context_, dtype_, shape_);
-    runtime::execute(expression);
+    runtime::execute(assign(*this, rhs));
     return *this;
 }
 
@@ -183,8 +181,7 @@ array_base& array_base::operator=(runtime::execution_handler const & c)
 {
   if(min(shape_)==0) return *this;
   assert(dtype_ == c.x().dtype());
-  expression_tree expression(*this, c.x(), op_element(BINARY_ARITHMETIC, ASSIGN_TYPE), &context_, dtype_, shape_);
-  runtime::execute(runtime::execution_handler(expression, c.execution_options(), c.dispatcher_options(), c.compilation_options()));
+  runtime::execute(runtime::execution_handler(assign(*this, c.x()), c.execution_options(), c.dispatcher_options(), c.compilation_options()));
   return *this;
 }
 
@@ -267,11 +264,6 @@ array_base & array_base::operator/=(expression_tree const & rhs)
 
 /*--- Indexing operators -----*/
 //---------------------------------------
-expression_tree array_base::operator[](placeholder idx) const
-{
-  return expression_tree(*this, idx, op_element(BINARY_ARITHMETIC, ACCESS_INDEX_TYPE), &context_, dtype_, {1});
-}
-
 scalar array_base::operator [](int_t idx)
 {
   assert(dim()<=1);
@@ -534,10 +526,6 @@ expression_tree OPNAME (array_base const & x, array_base const & y) \
 expression_tree OPNAME (array_base const & x, value_scalar const & y) \
 { return expression_tree(x, y, op_element(BINARY_ARITHMETIC, OP), &x.context(), DTYPE, x.shape()); }\
 \
-expression_tree OPNAME (array_base const & x, placeholder const & y) \
-{ return expression_tree(x, y, op_element(BINARY_ARITHMETIC, OP), &x.context(), DTYPE, x.shape()); }\
-\
-\
 expression_tree OPNAME (expression_tree const & x, expression_tree const & y) \
 { return broadcast(x, y, op_element(BINARY_ARITHMETIC, OP), DTYPE); } \
  \
@@ -547,9 +535,6 @@ expression_tree OPNAME (expression_tree const & x, array_base const & y) \
 expression_tree OPNAME (expression_tree const & x, value_scalar const & y) \
 { return expression_tree(x, y, op_element(BINARY_ARITHMETIC, OP), &x.context(), DTYPE, x.shape()); } \
 \
-expression_tree OPNAME (expression_tree const & x, placeholder const & y) \
-{ return expression_tree(x, y, op_element(BINARY_ARITHMETIC, OP), &x.context(), DTYPE, x.shape()); } \
-\
 \
 expression_tree OPNAME (value_scalar const & y, expression_tree const & x) \
 { return expression_tree(y, x, op_element(BINARY_ARITHMETIC, OP), &x.context(), DTYPE, x.shape()); } \
@@ -557,22 +542,6 @@ expression_tree OPNAME (value_scalar const & y, expression_tree const & x) \
 expression_tree OPNAME (value_scalar const & y, array_base const & x) \
 { return expression_tree(y, x, op_element(BINARY_ARITHMETIC, OP), &x.context(), DTYPE, x.shape()); }\
 \
-expression_tree OPNAME (value_scalar const & x, placeholder const & y) \
-{ return expression_tree(x, y, op_element(BINARY_ARITHMETIC, OP), NULL, DTYPE, {1}); }\
-\
-\
-expression_tree OPNAME (placeholder const & y, expression_tree const & x) \
-{ return expression_tree(y, x, op_element(BINARY_ARITHMETIC, OP), &x.context(), DTYPE, x.shape()); } \
-\
-expression_tree OPNAME (placeholder const & y, value_scalar const & x) \
-{ return expression_tree(y, x, op_element(BINARY_ARITHMETIC, OP), NULL, DTYPE, {1}); } \
-\
-expression_tree OPNAME (placeholder const & y, array_base const & x) \
-{ return expression_tree(y, x, op_element(BINARY_ARITHMETIC, OP), &x.context(), DTYPE, x.shape()); }\
-\
-expression_tree OPNAME (placeholder const & y, placeholder const & x) \
-{ return expression_tree(y, x, op_element(BINARY_ARITHMETIC, OP), NULL, INVALID_NUMERIC_TYPE, {1}); }
-
 
 DEFINE_ELEMENT_BINARY_OPERATOR(ADD_TYPE, operator +, x.dtype())
 DEFINE_ELEMENT_BINARY_OPERATOR(SUB_TYPE, operator -, x.dtype())
@@ -583,7 +552,7 @@ DEFINE_ELEMENT_BINARY_OPERATOR(ELEMENT_MAX_TYPE, maximum, x.dtype())
 DEFINE_ELEMENT_BINARY_OPERATOR(ELEMENT_MIN_TYPE, minimum, x.dtype())
 DEFINE_ELEMENT_BINARY_OPERATOR(ELEMENT_POW_TYPE, pow, x.dtype())
 
-DEFINE_ELEMENT_BINARY_OPERATOR(ASSIGN_TYPE, assign, x.dtype())
+DEFINE_ELEMENT_BINARY_OPERATOR(ASSIGN_TYPE, assign, y.dtype())
 
 
 DEFINE_ELEMENT_BINARY_OPERATOR(ELEMENT_GREATER_TYPE, operator >, INT_TYPE)
@@ -841,7 +810,7 @@ namespace detail
   {
     int_t M = A.shape()[0];
     int_t N = A.shape()[1];
-    expression_tree::node & A_root = (expression_tree::node &)A[A.root()];
+    expression_tree::node A_root = (expression_tree::node &)A[A.root()];
     bool A_trans = A_root.binary_operator.op.type==TRANS_TYPE;
     while(A_root.type==COMPOSITE_OPERATOR_TYPE){
         A_root = A[A_root.binary_operator.lhs];

@@ -46,19 +46,6 @@ namespace isaac
 
 class array_base;
 
-struct placeholder
-{
-  expression_tree operator=(value_scalar const & ) const;
-  expression_tree operator=(expression_tree const & ) const;
-
-  expression_tree operator+=(value_scalar const & ) const;
-  expression_tree operator-=(value_scalar const & ) const;
-  expression_tree operator*=(value_scalar const & ) const;
-  expression_tree operator/=(value_scalar const & ) const;
-
-  int level;
-};
-
 struct invalid_node{};
 
 enum node_type
@@ -67,7 +54,6 @@ enum node_type
   COMPOSITE_OPERATOR_TYPE,
   VALUE_SCALAR_TYPE,
   DENSE_ARRAY_TYPE,
-  PLACEHOLDER_TYPE
 };
 
 union handle_t
@@ -92,7 +78,6 @@ public:
     //Constructors
     node();
     node(invalid_node);
-    node(placeholder x);
     node(value_scalar const & x);
     node(array_base const & x);
     node(int_t lhs, op_element op, int_t rhs, numeric_type dtype, tuple const & shape);
@@ -116,8 +101,6 @@ public:
       values_holder scalar;
       //Array
       array_holder array;
-      //Placeholder
-      placeholder ph;
     };
   };
 
@@ -134,7 +117,7 @@ public:
   data_type const & data() const;
   std::size_t root() const;
   driver::Context const & context() const;
-  numeric_type dtype() const;
+  numeric_type const & dtype() const;
 
   node const & operator[](size_t) const;
   node & operator[](size_t);
