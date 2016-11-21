@@ -327,10 +327,10 @@ void bench(sc::numeric_type dtype, std::string operation)
 }
 
 void handle_misusage(){
-  std::cerr << "Usage : blas-bench [--dtype {float32, float64}] [--device DEVICE_IDX] [--help]" << std::endl;
-  std::cerr << "--op: operation to benchmark" << std::endl;
-  std::cerr << "--dtype: data-type to benchmark" << std::endl;
-  std::cerr << "--device: index of isaac device in [0, ..., ndevices - 1]" << std::endl;
+  std::cerr << "Usage : blas-bench [--op {axpy, dot, gemv, gemm}] [--dtype {float32, float64}] [--device DEVICE_IDX] [--help]" << std::endl;
+  std::cerr << "--op: operation to benchmark (default = gemm)" << std::endl;
+  std::cerr << "--dtype: data-type to benchmark (default = float32)" << std::endl;
+  std::cerr << "--device: index of isaac device in [0, ..., ndevices - 1] (default = 0)" << std::endl;
   std::cerr << "--help: display this message" << std::endl;
   exit(EXIT_FAILURE);
 }
