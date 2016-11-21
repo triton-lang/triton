@@ -68,7 +68,7 @@ git clone https://github.com/ptillet/isaac.git
 cd isaac/python ;
 python setup.py build;
 cd ../tune
-PYTHONPATH=../python/build/lib.linux-x86_64-2.7/ python main.py --elementwise_1d --elementwise_2d --reduce_1d --reduce_2d_rows --reduce_2d_cols --gemm_nn --gemm_nt --gemm_tn --gemm_tt
+PYTHONPATH=../python/build/lib.linux-x86_64-2.7/ python main.py --float32 [--float64] --elementwise_1d --elementwise_2d --reduce_1d --reduce_2d_rows --reduce_2d_cols --gemm_nn --gemm_nt --gemm_tn --gemm_tt
 ```
 
 This will output a .json file that you can submit for integration.
