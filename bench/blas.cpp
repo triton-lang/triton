@@ -318,7 +318,7 @@ void bench(sc::numeric_type dtype, std::string operation)
 #endif
 #ifdef BENCH_CUBLAS
       if(on_cu)
-        times.push_back(bench([&](){cublasGemm(T(), AT?'t':'n', BT?'t':'n', M, N, K, 1, (T*)cu(A), lda, (T*)cu(B), ldb, 1, (T*)cu(C), ldc);}, cusync));
+        times.push_back(bench([&](){cublasGemm(T(), AT?'t':'n', BT?'t':'n', M, N, K, 1, (T*)cu(A), lda, (T*)cu(B), ldb, 0, (T*)cu(C), ldc);}, cusync));
 #endif
       print_results(times, {name, str(M), str(N), str(K), cAT, cBT}, [&](double t){ return 2*M*N*K/t*1e-3;});
     }
