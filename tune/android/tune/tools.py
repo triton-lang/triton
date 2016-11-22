@@ -52,7 +52,7 @@ def benchmark(template, tree, operation=sc.templates.gemm_nn):
     try:
         z, events = sc.driver.enqueue(tree)
         queue.synchronize()
-    except profile_execution_failure:
+    except:
         return float("inf")
     #Time
     while total < 1e-2:
