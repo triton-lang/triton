@@ -266,6 +266,6 @@ void cublas ## TYPE_CHAR ## gemm (char transa, char transb, int m, int n, int k,
   int ldc)\
 { cublas ## TYPE_CHAR ## gemm_v2(dft_handle, cvt_trans(transa), cvt_trans(transb), m, n, k, &alpha, A, lda, B, ldb, &beta, C, ldc); }\
 
-MAKE_GEMM(S, sc::FLOAT_TYPE, cl_float)
-MAKE_GEMM(D, sc::DOUBLE_TYPE, cl_double)
+MAKE_GEMM(S, sc::FLOAT_TYPE, float)
+MAKE_GEMM(D, sc::DOUBLE_TYPE, double)
 }
