@@ -64,7 +64,7 @@ void Kernel::setArg(unsigned int index, value_scalar const & scal)
     case UINT_TYPE: setArg(index, scal.values().uint32); break;
     case LONG_TYPE: setArg(index, scal.values().int64); break;
     case ULONG_TYPE: setArg(index, scal.values().uint64); break;
-    //case HALF_TYPE: setArg(index, scal.values().float16); break;
+    case HALF_TYPE: setArg(index, scal.values().float16); break;
     case FLOAT_TYPE: setArg(index, scal.values().float32); break;
     case DOUBLE_TYPE: setArg(index, scal.values().float64); break;
     default: throw unknown_datatype(scal.dtype());

@@ -43,6 +43,7 @@ array rand(tuple const & shape, driver::Context const & context)
 }
 
 #define INSTANTIATE(T) template array rand<T>(tuple const &, driver::Context const & context);
+INSTANTIATE(half)
 INSTANTIATE(float)
 INSTANTIATE(double)
 #undef INSTANTIATE
