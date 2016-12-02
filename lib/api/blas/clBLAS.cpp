@@ -82,8 +82,22 @@ extern "C"
         return clblasSuccess; \
     }
 
+//    MAKE_AXPY(H, sc::HALF_TYPE, cl_half)
     MAKE_AXPY(S, sc::FLOAT_TYPE, cl_float)
     MAKE_AXPY(D, sc::DOUBLE_TYPE, cl_double)
+
+   clblasStatus clblasHaxpy(size_t N, cl_float alpha,
+                            const cl_mem mx,  size_t offx, int incx,
+                            cl_mem my, size_t offy, int incy,
+                            cl_uint numCommandQueues, cl_command_queue *commandQueues,
+                            cl_uint numEventsInWaitList, const cl_event *eventWaitList,
+                            cl_event *events)
+    {
+        sc::array x((sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(mx,false), (sc::int_t)offx, incx);
+        sc::array y((sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(my,false), (sc::int_t)offy, incy);
+        execute(sc::assign(y, alpha*x + y), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        return clblasSuccess;
+    }
 
     //SCAL
     #define MAKE_SCAL(TYPE_CHAR, TYPE_ISAAC, TYPE_CL) \
@@ -98,8 +112,19 @@ extern "C"
         return clblasSuccess;\
     }
 
+//    MAKE_SCAL(H, sc::HALF_TYPE, cl_half)
     MAKE_SCAL(S, sc::FLOAT_TYPE, cl_float)
     MAKE_SCAL(D, sc::DOUBLE_TYPE, cl_double)
+
+    clblasStatus clblasHscal(size_t N, cl_float  alpha,
+                             cl_mem mx, size_t offx, int incx,
+                             cl_uint numCommandQueues, cl_command_queue *commandQueues,
+                             cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)
+    {
+        sc::array x((sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(mx,false), (sc::int_t)offx, incx);
+        execute(sc::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        return clblasSuccess;
+    }
 
     //COPY
     #define MAKE_COPY(TYPE_CHAR, TYPE_ISAAC, TYPE_CL)\
@@ -115,6 +140,7 @@ extern "C"
         return clblasSuccess;\
     }
 
+    MAKE_COPY(H, sc::HALF_TYPE,  cl_half)
     MAKE_COPY(S, sc::FLOAT_TYPE, cl_float)
     MAKE_COPY(D, sc::DOUBLE_TYPE, cl_double)
 
@@ -134,6 +160,7 @@ extern "C"
         return clblasSuccess; \
     }
 
+    MAKE_DOT(H, sc::HALF_TYPE, cl_half)
     MAKE_DOT(S, sc::FLOAT_TYPE, cl_float)
     MAKE_DOT(D, sc::DOUBLE_TYPE, cl_double)
 
@@ -155,6 +182,7 @@ extern "C"
         return clblasSuccess;\
     }
 
+    MAKE_ASUM(H, sc::HALF_TYPE, cl_half)
     MAKE_ASUM(S, sc::FLOAT_TYPE, cl_float)
     MAKE_ASUM(D, sc::DOUBLE_TYPE, cl_double)
 
