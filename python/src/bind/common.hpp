@@ -78,6 +78,7 @@ namespace tools
         else if(name=="uint32") return sc::UINT_TYPE;
         else if(name=="int64") return sc::LONG_TYPE;
         else if(name=="uint64") return sc::ULONG_TYPE;
+        else if(name=="float16") return sc::HALF_TYPE;
         else if(name=="float32") return sc::FLOAT_TYPE;
         else if(name=="float64") return sc::DOUBLE_TYPE;
         else
