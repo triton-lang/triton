@@ -75,7 +75,7 @@ std::ostream & operator<<(std::ostream & os, half h)
   vh.float16 = h;\
   return value_scalar(vh, HALF_TYPE);
 
-#define INSTANTIATE(TYPE)\
+#define INSTANTIATEHALFOP(TYPE)\
   value_scalar operator+(TYPE, half h)\
   {\
     INSTANTIATEVS\
@@ -110,18 +110,18 @@ std::ostream & operator<<(std::ostream & os, half h)
     INSTANTIATEVS\
   }
 
-INSTANTIATE(char)
-INSTANTIATE(unsigned char)
-INSTANTIATE(short)
-INSTANTIATE(unsigned short)
-INSTANTIATE(int)
-INSTANTIATE(unsigned int)
-INSTANTIATE(long)
-INSTANTIATE(unsigned long)
-INSTANTIATE(long long)
-INSTANTIATE(unsigned long long)
-INSTANTIATE(float)
-INSTANTIATE(double)
+INSTANTIATEHALFOP(char)
+INSTANTIATEHALFOP(unsigned char)
+INSTANTIATEHALFOP(short)
+INSTANTIATEHALFOP(unsigned short)
+INSTANTIATEHALFOP(int)
+INSTANTIATEHALFOP(unsigned int)
+INSTANTIATEHALFOP(long)
+INSTANTIATEHALFOP(unsigned long)
+INSTANTIATEHALFOP(long long)
+INSTANTIATEHALFOP(unsigned long long)
+INSTANTIATEHALFOP(float)
+INSTANTIATEHALFOP(double)
 
 }
 

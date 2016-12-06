@@ -54,7 +54,7 @@ public:
 
 std::ostream & operator<<(std::ostream & os,half h);
 
-#define INSTANTIATE(TYPE)\
+#define DECLAREHALFOP(TYPE)\
   value_scalar operator+(TYPE, half);\
   value_scalar operator-(TYPE, half);\
   value_scalar operator*(TYPE, half);\
@@ -64,18 +64,18 @@ std::ostream & operator<<(std::ostream & os,half h);
   value_scalar operator*(half, TYPE);\
   value_scalar operator/(half, TYPE);
 
-INSTANTIATE(char)
-INSTANTIATE(unsigned char)
-INSTANTIATE(short)
-INSTANTIATE(unsigned short)
-INSTANTIATE(int)
-INSTANTIATE(unsigned int)
-INSTANTIATE(long)
-INSTANTIATE(unsigned long)
-INSTANTIATE(long long)
-INSTANTIATE(unsigned long long)
-INSTANTIATE(float)
-INSTANTIATE(double)
+DECLAREHALFOP(char)
+DECLAREHALFOP(unsigned char)
+DECLAREHALFOP(short)
+DECLAREHALFOP(unsigned short)
+DECLAREHALFOP(int)
+DECLAREHALFOP(unsigned int)
+DECLAREHALFOP(long)
+DECLAREHALFOP(unsigned long)
+DECLAREHALFOP(long long)
+DECLAREHALFOP(unsigned long long)
+DECLAREHALFOP(float)
+DECLAREHALFOP(double)
 
 }
 #endif
