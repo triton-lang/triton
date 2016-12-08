@@ -3092,6 +3092,74 @@ clblasDzasum(
 
 /**
  * @brief Matrix-vector product with a general rectangular matrix and
+ *        half elements. Extended version.
+ *
+ * Matrix-vector products:
+ *   - \f$ y \leftarrow \alpha A x + \beta y \f$
+ *   - \f$ y \leftarrow \alpha A^T x + \beta y \f$
+ *
+ * @param[in] order     Row/column order.
+ * @param[in] transA    How matrix \b A is to be transposed.
+ * @param[in] M         Number of rows in matrix \b A.
+ * @param[in] N         Number of columns in matrix \b A.
+ * @param[in] alpha     The factor of matrix \b A.
+ * @param[in] A         Buffer object storing matrix \b A.
+ * @param[in] offA      Offset of the first element of the matrix \b A in
+ *                      the buffer object. Counted in elements.
+ * @param[in] lda       Leading dimension of matrix \b A. It cannot be less
+ *                      than \b N when the \b order parameter is set to
+ *                      \b clblasRowMajor,\n or less than \b M when the
+ *                      parameter is set to \b clblasColumnMajor.
+ * @param[in] x         Buffer object storing vector \b x.
+ * @param[in] offx      Offset of first element of vector \b x in buffer object.
+ *                      Counted in elements.
+ * @param[in] incx      Increment for the elements of \b x. It cannot be zero.
+ * @param[in] beta      The factor of the vector \b y.
+ * @param[out] y        Buffer object storing the vector \b y.
+ * @param[in] offy      Offset of first element of vector \b y in buffer object.
+ *                      Counted in elements.
+ * @param[in] incy      Increment for the elements of \b y. It cannot be zero.
+ * @param[in] numCommandQueues    Number of OpenCL command queues in which the
+ *                                task is to be performed.
+ * @param[in] commandQueues       OpenCL command queues.
+ * @param[in] numEventsInWaitList Number of events in the event wait list.
+ * @param[in] eventWaitList       Event wait list.
+ * @param[in] events     Event objects per each command queue that identify
+ *                       a particular kernel execution instance.
+ *
+ * @return
+ *   - \b clblasSuccess on success;
+ *   - \b clblasInvalidValue if \b offA exceeds the size of \b A buffer
+ *     object;
+ *   - the same error codes as the clblasSgemv() function otherwise.
+ *
+ * @ingroup GEMV
+ */
+clblasStatus
+clblasHgemv(
+    clblasOrder order,
+    clblasTranspose transA,
+    size_t M,
+    size_t N,
+    cl_float alpha,
+    const cl_mem A,
+    size_t offA,
+    size_t lda,
+    const cl_mem x,
+    size_t offx,
+    int incx,
+    cl_float beta,
+    cl_mem y,
+    size_t offy,
+    int incy,
+    cl_uint numCommandQueues,
+    cl_command_queue *commandQueues,
+    cl_uint numEventsInWaitList,
+    const cl_event *eventWaitList,
+    cl_event *events);
+
+/**
+ * @brief Matrix-vector product with a general rectangular matrix and
  *        float elements. Extended version.
  *
  * Matrix-vector products:
@@ -7617,6 +7685,86 @@ clblasZtbsv(
  * @ingroup BLAS3
  */
 /*@{*/
+
+/**
+ * @brief Matrix-matrix product of general rectangular matrices with half
+ *        elements. Extended version.
+ *
+ * Matrix-matrix products:
+ *   - \f$ C \leftarrow \alpha A B + \beta C \f$
+ *   - \f$ C \leftarrow \alpha A^T B + \beta C \f$
+ *   - \f$ C \leftarrow \alpha A B^T + \beta C \f$
+ *   - \f$ C \leftarrow \alpha A^T B^T + \beta C \f$
+ *
+ * @param[in] order     Row/column order.
+ * @param[in] transA    How matrix \b A is to be transposed.
+ * @param[in] transB    How matrix \b B is to be transposed.
+ * @param[in] M         Number of rows in matrix \b A.
+ * @param[in] N         Number of columns in matrix \b B.
+ * @param[in] K         Number of columns in matrix \b A and rows in matrix \b B.
+ * @param[in] alpha     The factor of matrix \b A.
+ * @param[in] A         Buffer object storing matrix \b A.
+ * @param[in] offA      Offset of the first element of the matrix \b A in the
+ *                      buffer object. Counted in elements.
+ * @param[in] lda       Leading dimension of matrix \b A. It cannot be less
+ *                      than \b K when the \b order parameter is set to
+ *                      \b clblasRowMajor,\n or less than \b M when the
+ *                      parameter is set to \b clblasColumnMajor.
+ * @param[in] B         Buffer object storing matrix \b B.
+ * @param[in] offB      Offset of the first element of the matrix \b B in the
+ *                      buffer object. Counted in elements.
+ * @param[in] ldb       Leading dimension of matrix \b B. It cannot be less
+ *                      than \b N when the \b order parameter is set to
+ *                      \b clblasRowMajor,\n or less than \b K
+ *                      when it is set to \b clblasColumnMajor.
+ * @param[in] beta      The factor of matrix \b C.
+ * @param[out] C        Buffer object storing matrix \b C.
+ * @param[in]  offC     Offset of the first element of the matrix \b C in the
+ *                      buffer object. Counted in elements.
+ * @param[in] ldc       Leading dimension of matrix \b C. It cannot be less
+ *                      than \b N when the \b order parameter is set to
+ *                      \b clblasRowMajor,\n or less than \b M when
+ *                      it is set to \b clblasColumnMajorOrder.
+ * @param[in] numCommandQueues    Number of OpenCL command queues in which the
+ *                                task is to be performed.
+ * @param[in] commandQueues       OpenCL command queues.
+ * @param[in] numEventsInWaitList Number of events in the event wait list.
+ * @param[in] eventWaitList       Event wait list.
+ * @param[in] events     Event objects per each command queue that identify
+ *                       a particular kernel execution instance.
+ *
+ * @return
+ *   - \b clblasSuccess on success;
+ *   - \b clblasInvalidValue if either \b offA, \b offB or \b offC exceeds
+ *        the size of the respective buffer object;
+ *   - the same error codes as clblasSgemm() otherwise.
+ *
+ * @ingroup GEMM
+ */
+clblasStatus
+clblasHgemm(
+    clblasOrder order,
+    clblasTranspose transA,
+    clblasTranspose transB,
+    size_t M,
+    size_t N,
+    size_t K,
+    cl_float alpha,
+    const cl_mem A,
+    size_t offA,
+    size_t lda,
+    const cl_mem B,
+    size_t offB,
+    size_t ldb,
+    cl_float beta,
+    cl_mem C,
+    size_t offC,
+    size_t ldc,
+    cl_uint numCommandQueues,
+    cl_command_queue *commandQueues,
+    cl_uint numEventsInWaitList,
+    const cl_event *eventWaitList,
+    cl_event *events);
 
 /**
  * @brief Matrix-matrix product of general rectangular matrices with float

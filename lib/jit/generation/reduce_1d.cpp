@@ -246,7 +246,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   stream << "}" << std::endl;
   stream.dec_tab();
   stream << "}" << std::endl;
-  //  std::cout << stream.str() << std::endl;
+//  std::cout<<"reduce 1d: "<<stream.str()<<std::endl;
 
   return stream.str();
 }
