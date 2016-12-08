@@ -100,6 +100,8 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
       stream << "#include  \"vector.h\"" << std::endl;
       break;
     case driver::OPENCL:
+      if(tree.dtype()==HALF_TYPE)
+        stream << "#pragma OPENCL EXTENSION cl_khr_fp16: enable" << std::endl;
       stream << " __attribute__((reqd_work_group_size(" << ls0_ << "," << ls1_ << ",1)))" << std::endl;
       break;
   }
