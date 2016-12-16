@@ -82,8 +82,12 @@ class ProgressBar:
         percent = float(i) / total
         hashes = '#' * int(round(percent * self.length))
         spaces = ' ' * (self.length - len(hashes))
+        xformat = ''
         #Format of structures to print
-        xformat = ','.join(map(str,map(int, x)))
+        if isinstance(x, str):
+            xformat = x
+        else:
+            xformat = ','.join(map(str,map(int, x)))
         yformat = int(y)
         percentformat = int(round(percent * 100))
         sys.stdout.write(("\r{0}: [{1}] {2: >3}% [{3} {4}] ({5})").format(self.prefix.ljust(17), hashes + spaces, percentformat, yformat, self.metric_name, xformat))
