@@ -34,3 +34,7 @@ install(TARGETS isaac LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
 set(INSTALL_INCLUDE_DIR /usr/local/include)
 install(DIRECTORY isaac "${PROJECT_SOURCE_DIR}/include/isaac"
            DESTINATION "${INSTALL_INCLUDE_DIR}"  FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
+install(DIRECTORY "${PROJECT_SOURCE_DIR}/include/external/"
+           DESTINATION "${INSTALL_INCLUDE_DIR}"
+           FILES_MATCHING PATTERN "clBLAS*.h"
+           PATTERN "cuda" EXCLUDE)
