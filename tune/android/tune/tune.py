@@ -183,26 +183,35 @@ class Tuner:
         print '\n' 'Adding external profiles:' '\n'
         for prof in tools.external_profiles(operation):
             profiles.append(prof.__class__.__name__)
-            for idx, (x, y) in enumerate(zip(X, Y)):
-                internal_prof = profiles[argmax(y)]
-                internal_perf = max(y)
-                # temp add to fix segment fault
-                if idx == 0:
-                    optimizer = optimize.GeneticOptimizer(self.logger, naccept=1, niter=1, cxpb=.4, mutpb=.4,
+
+        for idx, (x, y) in enumerate(zip(X, Y)):
+            internal_prof = profiles[argmax(y)]
+            internal_perf = max(y)
+            # temp add to fix segment fault
+            if idx == 0:
+                optimizer = optimize.GeneticOptimizer(self.logger, naccept=1, niter=1, cxpb=.4, mutpb=.4,
                                                           popsize=1, progress_bar=self.progress_bar)
-                    best = profiles[np.argmax(y)] if y else None
-                    best = optimizer.run(operation, x, context, prior=best)[0]
+                best = profiles[np.argmax(y)] if y else None
+                optimizer.run(operation, x, context, prior=best)[0]
+
+            best_perf = 0
+            best_prof = ''
+            for prof in tools.external_profiles(operation):
                 tree, operands = tools.tree_of(operation, x, context)
-                #y = [performance(x, tools.benchmark(operation(*p), tree)) for p in profiles]
                 perf = performance(x,tools.benchmark(prof, tree, operation))
                 y.append(perf)
-                if idx > 0:
-                    self.progress_bar.set_finished()
-                self.progress_bar.set_prefix(', '.join(map(str, x)))
-                if perf > internal_perf:
-                    self.progress_bar.update(1, 1, prof.__class__.__name__, perf)
-                else:
-                    self.progress_bar.update(1, 1, internal_prof, internal_perf)
+                if perf >= best_perf:
+                    best_perf = perf
+                    best_prof = prof.__class__.__name__
+
+            if idx > 0:
+                self.progress_bar.set_finished()
+            self.progress_bar.set_prefix(', '.join(map(str, x)))
+            if best_perf > internal_perf:
+                self.progress_bar.update(1, 1, best_prof, best_perf)
+            else:
+                self.progress_bar.update(1, 1, internal_prof, internal_perf)
+
         self.progress_bar.set_finished()
         # save()
         #Pruning of useless profiles
