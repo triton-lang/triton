@@ -21,7 +21,7 @@ if(NOT ANDROID)
     endforeach()
 endif()
 
-target_link_libraries(isaac "dl")
+target_link_libraries(isaac "dl" OpenCL pthread)
 
 #Cuda JIT headers to file
 set(CUDA_HELPERS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/driver/helpers/cuda/)

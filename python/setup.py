@@ -58,7 +58,7 @@ def main():
     for_android = '-mandroid' in cvars['PY_CFLAGS']
 
     #Dynamic load for backend switching
-    libraries = ['dl']
+    libraries = ['dl', 'OpenCL']
     library_dirs = []
 
     #Include directories
