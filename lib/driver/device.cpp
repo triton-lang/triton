@@ -303,6 +303,9 @@ std::string Device::infos() const
   return oss.str();
 }
 
+Device::handle_type const & Device::handle() const
+{ return h_; }
+
 // Properties
 #define WRAP_ATTRIBUTE(ret, fname, CUNAME, CLNAME) \
   ret Device::fname() const\
