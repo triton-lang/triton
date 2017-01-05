@@ -38,7 +38,7 @@ inline void element_wise_loop_1D(kernel_generation_stream & stream, unsigned int
   std::string init = domain_id + "*" + svwidth;
   std::string lbound = bound + "/" + svwidth + "*" + svwidth;
   std::string inc = domain_size + "*" + svwidth;
-  stream << "for(unsigned int " << i << " = " << init << "; " << i << " < " << lbound << "; " << i << " += " << inc << ")" << std::endl;
+  stream << "for(int " << i << " = " << init << "; " << i << " < " << lbound << "; " << i << " += " << inc << ")" << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
   generate_body(vwidth);
@@ -47,7 +47,7 @@ inline void element_wise_loop_1D(kernel_generation_stream & stream, unsigned int
 
   if (vwidth>1)
   {
-    stream << "for(unsigned int " << i << " = " << lbound << " + " << domain_id << "; " << i << " < " << bound << "; " << i << " += " + domain_size + ")" << std::endl;
+    stream << "for(int " << i << " = " << lbound << " + " << domain_id << "; " << i << " < " << bound << "; " << i << " += " + domain_size + ")" << std::endl;
     stream << "{" << std::endl;
     stream.inc_tab();
     generate_body(1);

@@ -68,6 +68,7 @@ std::string elementwise_2d::generate_impl(std::string const & suffix, expression
   stream << "{" << std::endl;
   stream.inc_tab();
 
+  stream << tools::join(negative_inc_process(device, symbols, tree), "  ") << std::endl;
   element_wise_loop_1D(stream, 1, "i", "M", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", [&](unsigned int){
     element_wise_loop_1D(stream, 1, "j", "N", "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", [&](unsigned int){
       //Declares register to store results

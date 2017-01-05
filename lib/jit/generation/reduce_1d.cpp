@@ -143,6 +143,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
       stream << rd->process("#scalartype #name_acc = " + neutral_element(rd->op(), backend, "#scalartype") + ";") << std::endl;
     }
   }
+  stream << tools::join(negative_inc_process(device, symbols, tree), "  ") << std::endl;
   element_wise_loop_1D(stream, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", [&](unsigned int vwidth)
   {
     std::string dtype = append_width("#scalartype",vwidth);
@@ -195,6 +196,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   stream << "{" << std::endl;
   stream.inc_tab();
   unroll_tmp();
+  stream << tools::join(negative_inc_process(device, symbols, tree), "  ") << std::endl;
   //Declarations
   stream << "unsigned int lid = $LOCAL_IDX_0;" << std::endl;
   stream << "unsigned int lsize = $LOCAL_SIZE_0;" << std::endl;
@@ -210,7 +212,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
     else
     {
       stream << rd->process("$LOCAL #scalartype #name_buf[" + tools::to_string(ls0_) + "];") << std::endl;
-      stream << rd->process("#scalartype #name_acc = " + neutral_element(rd->op(), backend, "#scalartype") + ";");
+      stream << rd->process("#scalartype #name_acc = " + neutral_element(rd->op(), backend, "#scalartype") + ";");      
     }
   }
   //Private reduction
