@@ -253,7 +253,10 @@ buffer::buffer(driver::Context const & context, std::string const & scalartype, 
     macros_.insert(make_broadcast(shape));
 
   add_base("buffer");
-  add_load(strides[0]==1 && shape[0]>1);
+//  add_load(strides[0]==1 && shape[0]>1);
+// stride==1 would result in "vloadn"'s use in kernel,if a kernel is generated with stride==1,
+// it can't run samples whose stride<0,so vloadn can't be used in kernels.
+  add_load(false);
 }
 
 //
