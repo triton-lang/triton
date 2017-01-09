@@ -79,7 +79,7 @@ profiles::value_type::value_type(numeric_type dtype, std::shared_ptr<templates::
 
 void profiles::value_type::execute(runtime::execution_handler const & expr)
 {
-  static const size_t N_TOP = 5;
+  static const size_t N_TOP = 20;
   static const int MAX_TEMPORARY_WORKSPACE = 1e6;
   expression_tree const & tree = expr.x();
   driver::Program const & program = init(expr);
@@ -112,7 +112,7 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
     std::iota(idx.begin(), idx.end(), 0);
     std::sort(idx.begin(), idx.end(), [&perf](size_t i1, size_t i2) {return perf[i1] > perf[i2];});
     bool valid_found = false;
-    for(size_t k = 0 ; k < std::min<size_t>(N_TOP, idx.size()) || !valid_found ; k++){
+    for(size_t k = 0 ; k < idx.size() || !valid_found ; k++){
       size_t i = idx[k];
       if(templates_[i]->temporary_workspace(tree) > MAX_TEMPORARY_WORKSPACE){
         times.push_back(INFINITY);
