@@ -80,13 +80,13 @@ class Tuner:
             for N in [896, 1760, 2048, 2560]:
                 sizes += [(N, N)]
             #Short/Fat
-            for M in [16, 32, 64, 128]:
-                for N in [1024, 4096, 16384, 65536, 262144]:
+            for M in [16, 32, 64, 128, 512, 1024]:
+                for N in [1024, 4096, 16384, 65536]:
                     sizes += [(M, N)]
             #Tall/Skinny
-            for N in [16, 32, 64, 128]:
-                for M in [1024, 4096, 16384, 65536, 262144]:
-                    sizes += [(M, N)]
+            #for N in [16, 32, 64, 128, 512, 1024, 2048]:
+            #    for M in [1024, 4096, 16384, 65536, 262144]:
+            #        sizes += [(M, N)]
         
         #BLAS3 training sizes
         if operation in [sc.templates.gemm_nn, sc.templates.gemm_nt, sc.templates.gemm_tn, sc.templates.gemm_tt]:
