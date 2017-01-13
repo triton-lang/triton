@@ -22,7 +22,7 @@
 #include <cstring>
 #include <iostream>
 
-
+#include "isaac/jit/syntax/expression/preset.h"
 #include "isaac/jit/syntax/engine/process.h"
 #include "isaac/jit/generation/engine/keywords.h"
 #include "isaac/jit/generation/engine/stream.h"
@@ -38,6 +38,272 @@ namespace isaac
 {
 namespace templates
 {
+void infos(expression_tree const & tree, symbolic::preset::gemv::args& arguments)
+{
+  expression_tree::data_type const & array = tree.data();
+  std::size_t root = tree.root();
+  arguments = symbolic::preset::gemv::check(array, root);
+}
+
+/* ------------------ INTELBLAS ------------------ */
+intelblas_gemv::intelblas_gemv()
+{
+
+}
+
+std::string intelblas_gemv::generate_impl(std::string const & suffix, expression_tree const & tree, driver::Device const & device, symbolic::symbols_table const & symbols) const
+{
+  using tools::to_string;
+
+
+  std::vector<symbolic::reduce_2d*> reductions = symbolic::extract<symbolic::reduce_2d>(tree, symbols);
+  std::vector<std::size_t> assignments = symbolic::assignments(tree);
+  driver::backend_type backend = device.backend();
+  kernel_generation_stream stream(backend);
+
+  std::string name[2] = {"prod", "reduce"};
+  name[0] += suffix;
+  name[1] += suffix;
+
+  stream << "void matvec_mul_trail_rows(unsigned int M," << std::endl;
+  stream << "                           unsigned int N," << std::endl;
+  stream << "                           int row_gid," << std::endl;
+  stream << "                           int lid," << std::endl;
+  stream << "                           const __global float* src0_read," << std::endl;
+  stream << "                           int lda," << std::endl;
+  stream << "                           const __global float* src1_read," << std::endl;
+  stream << "                           int incv," << std::endl;
+  stream << "                           __local float4* work," << std::endl;
+  stream << "                           float alpha," << std::endl;
+  stream << "                           float beta," << std::endl;
+  stream << "                           __global float* result," << std::endl;
+  stream << "                           int incr)" << std::endl;
+  stream << "{" << std::endl;
+  stream << "  __local float* work_each = (__local float*)work;" << std::endl;
+  stream << "" << std::endl;
+  stream << "  int rows = M - row_gid * 4;" << std::endl;
+  stream << "" << std::endl;
+  stream << "  float4 dot[3] = {(float4)(0.f), (float4)(0.f), (float4)(0.f)};" << std::endl;
+  stream << "" << std::endl;
+  stream << "  int i = lid;" << std::endl;
+  stream << "  while( i < N / 4) {" << std::endl;
+  stream << "    // const float4 b0 = vload4(i, src1_read);" << std::endl;
+  stream << "    const float4 b0 = {src1_read[i*4*incv], src1_read[(i*4+1)*incv], src1_read[(i*4+2)*incv], src1_read[(i*4+3)*incv]};" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "    for(int j = 0; j < rows; ++j) {" << std::endl;
+  stream << "      dot[j] += b0 * vload4(i, src0_read + j * lda);" << std::endl;
+  stream << "    }" << std::endl;
+  stream << "" << std::endl;
+  stream << "    i += get_local_size(0);" << std::endl;
+  stream << "  }" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "  for(int j = 0; j < rows; ++j) {" << std::endl;
+  stream << "    work_each[lid * 4 + j] = dot[j].x + dot[j].y + dot[j].z + dot[j].w;" << std::endl;
+  stream << "  }" << std::endl;
+  stream << "" << std::endl;
+  stream << "  if(i == N / 4) {" << std::endl;
+  stream << "    short trail_item = N % 4;" << std::endl;
+  stream << "" << std::endl;
+  stream << "    if(trail_item != 0) {" << std::endl;
+  stream << "      const __global float *src0_trail = src0_read + i * 4;" << std::endl;
+  stream << "      const __global float *src1_trail = src1_read + i * 4 * incv;" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "      for(short i = 0; i < trail_item; ++i) {" << std::endl;
+  stream << "        const float bt = src1_trail[i*incv];" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "        for(int j = 0; j < rows; ++j) {" << std::endl;
+  stream << "          work_each[lid * 4 + j] += bt * src0_trail[i + j * lda];" << std::endl;
+  stream << "        }" << std::endl;
+  stream << "      }" << std::endl;
+  stream << "    }" << std::endl;
+  stream << "  }" << std::endl;
+  stream << "" << std::endl;
+  stream << "  for(int stride = get_local_size(0) >> 1; stride > 0 ; stride >>= 1) {" << std::endl;
+  stream << "    barrier(CLK_LOCAL_MEM_FENCE);" << std::endl;
+  stream << "    if(lid < stride)" << std::endl;
+  stream << "      work[lid] += work[lid+stride];" << std::endl;
+  stream << "  }" << std::endl;
+  stream << "" << std::endl;
+  stream << "  if(lid == 0) {" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "    for(int j = 0; j < rows; ++j) {" << std::endl;
+  stream << "      result[(row_gid * 4  + j) * incr] = alpha * work_each[j] + beta * result[(row_gid * 4 + j) * incr];" << std::endl;
+  stream << "    }" << std::endl;
+  stream << "  }" << std::endl;
+  stream << "" << std::endl;
+  stream << "}" << std::endl;
+  stream << "" << std::endl;
+  stream << "__kernel void matvec_mul(" << std::endl;
+  stream << "          unsigned int M," << std::endl;
+  stream << "          unsigned int N," << std::endl;
+  stream << "          __global const float * A," << std::endl;
+  stream << "          int offA," << std::endl;
+  stream << "          int lda," << std::endl;
+  stream << "          __global const float * v," << std::endl;
+  stream << "          int offv," << std::endl;
+  stream << "          int incv," << std::endl;
+  stream << "          float alpha," << std::endl;
+  stream << "          float beta," << std::endl;
+  stream << "          __global float * result," << std::endl;
+  stream << "          int offr," << std::endl;
+  stream << "          int incr)" << std::endl;
+  stream << "{" << std::endl;
+  stream << "  int row_gid = get_group_id(0);" << std::endl;
+  stream << "  int lid = get_local_id(0);" << std::endl;
+  stream << "  const __global float *src0_read = A + row_gid * 4 * lda + offA;" << std::endl;
+  stream << "  const __global float *src1_read = v + offv;" << std::endl;
+  stream << "  result = result + offr;" << std::endl;
+  stream << "" << std::endl;
+  stream << "  src1_read += incv > 0 ? 0 : (1 - N) * incv;" << std::endl;
+  stream << "  result += incr > 0 ? 0 : (1 - M) * incr;" << std::endl;
+  stream << "  __local float4 work[128];" << std::endl;
+  stream << "  __local float* work_each = (__local float*)work;" << std::endl;
+  stream << "" << std::endl;
+  stream << "  if(row_gid == M / 4)" << std::endl;
+  stream << "    matvec_mul_trail_rows(M, N, row_gid, lid, src0_read, lda, src1_read, incv, work, alpha, beta, result, incr);" << std::endl;
+  stream << "  else" << std::endl;
+  stream << "  {" << std::endl;
+  stream << "    float4 dot[4] = {(float4)(0.f), (float4)(0.f), (float4)(0.f), (float4)(0.f)};" << std::endl;
+  stream << "    int i = lid;" << std::endl;
+  stream << "    while( i < N / 4) {" << std::endl;
+  stream << "      // const float4 b0 = vload4(i, src1_read);" << std::endl;
+  stream << "      const float4 b0 = {src1_read[i*4*incv], src1_read[(i*4+1)*incv], src1_read[(i*4+2)*incv], src1_read[(i*4+3)*incv]};" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "      for(int j = 0; j < 4; ++j) {" << std::endl;
+  stream << "        dot[j] += b0 * vload4(i, src0_read + j * lda);" << std::endl;
+  stream << "      }" << std::endl;
+  stream << "      i += get_local_size(0);" << std::endl;
+  stream << "    }" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "    for(int j = 0; j < 4; ++j) {" << std::endl;
+  stream << "      work_each[lid * 4 + j] = dot[j].x + dot[j].y + dot[j].z + dot[j].w;" << std::endl;
+  stream << "    }" << std::endl;
+  stream << "" << std::endl;
+  stream << "    if(i == N / 4) {" << std::endl;
+  stream << "      short trail_item = N % 4;" << std::endl;
+  stream << "      if(trail_item != 0) {" << std::endl;
+  stream << "        const __global float *src0_trail = src0_read + i * 4;" << std::endl;
+  stream << "        const __global float *src1_trail = src1_read + i * 4 * incv;" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "        for(short i = 0; i < trail_item; ++i) {" << std::endl;
+  stream << "          const float bt = src1_trail[i * incv];" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "          for(int j = 0; j < 4; ++j) {" << std::endl;
+  stream << "            work_each[lid * 4 + j] += bt * src0_trail[i + j * lda];" << std::endl;
+  stream << "          }" << std::endl;
+  stream << "        }" << std::endl;
+  stream << "      }" << std::endl;
+  stream << "    }" << std::endl;
+  stream << "" << std::endl;
+  stream << "    for(int stride = get_local_size(0) >> 1; stride > 0 ; stride >>= 1) {" << std::endl;
+  stream << "      barrier(CLK_LOCAL_MEM_FENCE);" << std::endl;
+  stream << "      if(lid < stride)" << std::endl;
+  stream << "        work[lid] += work[lid+stride];" << std::endl;
+  stream << "    }" << std::endl;
+  stream << "" << std::endl;
+  stream << "    if(lid == 0) {" << std::endl;
+  stream << "      // vstore4(alpha * work[0] + beta * vload4(row_gid, result), row_gid, result);" << std::endl;
+  stream << "      result[row_gid*4*incr] = alpha * work[0].s0 + beta * result[row_gid*4*incr];" << std::endl;
+  stream << "      result[(row_gid*4+1)*incr] = alpha * work[0].s1 + beta * result[(row_gid*4+1)*incr];" << std::endl;
+  stream << "      result[(row_gid*4+2)*incr] = alpha * work[0].s2 + beta * result[(row_gid*4+2)*incr];" << std::endl;
+  stream << "      result[(row_gid*4+3)*incr] = alpha * work[0].s3 + beta * result[(row_gid*4+3)*incr];" << std::endl;
+  stream << "    }" << std::endl;
+  stream << "  }" << std::endl;
+  stream << "}" << std::endl;
+  stream << "" << std::endl;
+  stream << "__kernel void trans_matvec_mul(" << std::endl;
+  stream << "          unsigned int M," << std::endl;
+  stream << "          unsigned int N," << std::endl;
+  stream << "          __global const float * A," << std::endl;
+  stream << "          int offA," << std::endl;
+  stream << "          int lda," << std::endl;
+  stream << "          __global const float * v," << std::endl;
+  stream << "          int offv," << std::endl;
+  stream << "          int incv," << std::endl;
+  stream << "          float alpha," << std::endl;
+  stream << "          float beta," << std::endl;
+  stream << "          __global float * result," << std::endl;
+  stream << "          int offr, " << std::endl;
+  stream << "          int incr)" << std::endl;
+  stream << "{" << std::endl;
+  stream << "  int col_gid = get_global_id(0);" << std::endl;
+  stream << "  A += offA + col_gid;" << std::endl;
+  stream << "  v += offv;" << std::endl;
+  stream << "  result += offr;" << std::endl;
+  stream << "" << std::endl;
+  stream << "  v += incv > 0 ? 0 : (1 - M) * incv;" << std::endl;
+  stream << "  result += incr > 0 ? 0 : (1 - N) * incr;" << std::endl;
+  stream << "" << std::endl;
+  stream << "  float dot_prod = 0;" << std::endl;
+  stream << "  int row_id = 0;" << std::endl;
+  stream << "#pragma unroll" << std::endl;
+  stream << "  for(int row = 0; row < M; ++row) {" << std::endl;
+  stream << "    dot_prod += A[row_id] * v[row * incv];" << std::endl;
+  stream << "    row_id += lda;" << std::endl;
+  stream << "  }" << std::endl;
+  stream << "  result[col_gid * incr] = beta * result[col_gid * incr];" << std::endl;
+  stream << "  result[col_gid * incr] += alpha * dot_prod;" << std::endl;
+  stream << "}" << std::endl;
+  // std::cout << stream.str() << std::endl;
+  return stream.str();
+}
+
+void intelblas_gemv::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
+{
+    namespace drv = driver;
+    //Get GEMV info
+    symbolic::preset::gemv::args args;
+    infos(control.x(), args);
+    std::vector<int_t> MN = args.A->shape;
+    int_t M = MN[0], N = MN[1];
+    if(args.type == REDUCE_2D_COLS)
+    {
+      M = MN[1], N = MN[0];
+    }
+
+    //Kernel
+    std::string name[2] = {"matvec_mul", "trans_matvec_mul"};
+
+
+    std::vector<driver::Kernel> kernels;
+    if(args.type == REDUCE_2D_COLS)
+    kernels.push_back(driver::Kernel(program, name[0].c_str()));
+    else
+    kernels.push_back(driver::Kernel(program, name[1].c_str()));
+
+    driver::Kernel & kernel = kernels[0];
+    unsigned int n_arg = 0;
+    int_t rows = M;
+    int_t cols = N;
+    if (args.type == REDUCE_2D_ROWS) {
+      rows = N;
+      cols = M;
+    }
+
+    kernel.setSizeArg(n_arg++, rows);
+    kernel.setSizeArg(n_arg++, cols);
+    kernel.setArg(n_arg++, args.A->array.handle.cl);
+    kernel.setSizeArg(n_arg++, args.A->array.start);
+    kernel.setSizeArg(n_arg++, args.A->ld[1]);
+    kernel.setArg(n_arg++, args.X->array.handle.cl);
+    kernel.setSizeArg(n_arg++, args.X->array.start);
+    kernel.setSizeArg(n_arg++, args.X->ld[0]);
+    kernel.setArg(n_arg++, args.alpha);
+    kernel.setArg(n_arg++, args.beta);
+    kernel.setArg(n_arg++, args.Y->array.handle.cl);
+    kernel.setSizeArg(n_arg++, args.Y->array.start);
+    kernel.setSizeArg(n_arg++, args.Y->ld[0]);
+
+    //NDRange
+    driver::NDRange local[2] = { driver::NDRange(128), driver::NDRange(1) };
+    driver::NDRange global[2] = { driver::NDRange((rows + 3) / 4 * 128), driver::NDRange(cols) };
+
+
+    if(args.type == REDUCE_2D_COLS)
+    control.execution_options().enqueue(program.context(), kernels[0], global[0], local[0]);
+    else
+    control.execution_options().enqueue(program.context(), kernels[0], global[1], local[1]);
+}
 
 unsigned int reduce_2d::lmem_usage(const expression_tree&) const
 {
@@ -264,8 +530,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream.dec_tab();
   stream << "}" << std::endl;
   }
-
-//  std::cout << stream.str() << std::endl;
+  // std::cout << stream.str() << std::endl;
   return stream.str();
 }
 

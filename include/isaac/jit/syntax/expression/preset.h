@@ -60,6 +60,32 @@ public:
     static args check(expression_tree::data_type const &tree, size_t rootidx);
 };
 
+class gemv
+{
+
+public:
+    struct args
+    {
+        args(): A(NULL), X(NULL), Y(NULL), type(INVALID_EXPRESSION_TYPE){ }
+        value_scalar alpha;
+        expression_tree::node const * A;
+        expression_tree::node const * X;
+        value_scalar beta;
+        expression_tree::node const * Y;
+        expression_type type;
+
+        operator bool() const
+        {
+            return type!=INVALID_EXPRESSION_TYPE && A!=NULL && X!=NULL && Y!=NULL;
+        }
+    };
+private:
+    static void handle_node( expression_tree::data_type const &tree, size_t rootidx, args & a);
+
+public:
+    static args check(expression_tree::data_type const &tree, size_t rootidx);
+};
+
 }
 
 }

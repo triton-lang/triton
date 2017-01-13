@@ -76,7 +76,7 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/build/timestamp"
 
 add_custom_target(package-python DEPENDS "${CMAKE_BINARY_DIR}/build/timestamp")
 
-
+#find_package( OpenCL ${OPENCL_VERSION} )
 #Isaac
 include(CTest)
 

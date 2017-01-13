@@ -84,7 +84,6 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
   expression_tree const & tree = expr.x();
   driver::Program const & program = init(expr);
   std::vector<int_t> x = templates_[0]->input_sizes(tree);
-
   //Cached
   size_t label = 0;
   auto it = labels_.find(x);
@@ -139,9 +138,13 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
       *out = execution_handler(-(-*bkp), execution_options_type(queue_));
     labels_.insert({x, label});
   }
+
   if(templates_[label]->temporary_workspace(expr.x()) > MAX_TEMPORARY_WORKSPACE)
     throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
-  templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
+
+    templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
+  //templates_[templates_.size() - 1]->enqueue(queue_, program, tools::to_string(templates_.size() - 1), expr);
+
 }
 
 profiles::value_type::templates_container const & profiles::value_type::templates() const
@@ -156,6 +159,22 @@ std::shared_ptr<templates::base> profiles::create(std::string const & op, std::s
         if(op=="gemm_nt") return std::shared_ptr<templates::base>(new templates::cublas_gemm('N', 'T'));
         if(op=="gemm_tn") return std::shared_ptr<templates::base>(new templates::cublas_gemm('T', 'N'));
         if(op=="gemm_tt") return std::shared_ptr<templates::base>(new templates::cublas_gemm('T', 'T'));
+    }
+    if(str=="intelblas_gemm"){
+        if(op=="gemm_nn") return std::shared_ptr<templates::base>(new templates::intelblas_gemm('N', 'N'));
+        if(op=="gemm_nt") return std::shared_ptr<templates::base>(new templates::intelblas_gemm('N', 'T'));
+        if(op=="gemm_tn") return std::shared_ptr<templates::base>(new templates::intelblas_gemm('T', 'N'));
+        if(op=="gemm_tt") return std::shared_ptr<templates::base>(new templates::intelblas_gemm('T', 'T'));
+    }
+    if(str=="intelblas_gemm_image"){
+        if(op=="gemm_nn") return std::shared_ptr<templates::base>(new templates::intelblas_gemm_image('N', 'N'));
+        if(op=="gemm_nt") return std::shared_ptr<templates::base>(new templates::intelblas_gemm_image('N', 'T'));
+        if(op=="gemm_tn") return std::shared_ptr<templates::base>(new templates::intelblas_gemm_image('T', 'N'));
+        if(op=="gemm_tt") return std::shared_ptr<templates::base>(new templates::intelblas_gemm_image('T', 'T'));
+    }
+    if(str=="intelblas_gemv"){
+        if(op=="reduce_2d_rows") return std::shared_ptr<templates::base>(new templates::intelblas_gemv());
+        if(op=="reduce_2d_cols") return std::shared_ptr<templates::base>(new templates::intelblas_gemv());
     }
     throw;
 }

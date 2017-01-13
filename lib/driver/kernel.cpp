@@ -127,6 +127,9 @@ void Kernel::setSizeArg(unsigned int index, size_t N)
   }
 }
 
+Kernel::handle_type const & Kernel::handle() const
+{ return h_; }
+
 }
 
 }

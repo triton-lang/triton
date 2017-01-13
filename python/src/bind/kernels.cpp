@@ -76,12 +76,14 @@ void export_templates()
   WRAP_BASE(reduce_2d)
   WRAP_TEMPLATE(reduce_2d_rows, tpt::reduce_2d, uint, uint, uint, uint, uint)
   WRAP_TEMPLATE(reduce_2d_cols, tpt::reduce_2d, uint, uint, uint, uint, uint)
+  WRAP_TEMPLATE(intelblas_gemv, tpt::external_base)
   WRAP_BASE(gemm)
   WRAP_TEMPLATE(gemm_nn, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
   WRAP_TEMPLATE(gemm_tn, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
   WRAP_TEMPLATE(gemm_nt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
   WRAP_TEMPLATE(gemm_tt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
   WRAP_TEMPLATE(cublas_gemm, tpt::external_base, char, char)
-
+  WRAP_TEMPLATE(intelblas_gemm, tpt::external_base, char, char)
+  WRAP_TEMPLATE(intelblas_gemm_image, tpt::external_base, char, char)
 
 }
