@@ -89,9 +89,9 @@ void Platform::devices(std::vector<Device> & devices) const
     case OPENCL:
     {
       cl_uint ndevices;
-      dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, 0, NULL, &ndevices);
+      dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_GPU, 0, NULL, &ndevices);
       std::vector<cl_device_id> device_ids(ndevices);
-      dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_ALL, ndevices, device_ids.data(), NULL);
+      dispatch::dispatch::clGetDeviceIDs(cl_platform_, CL_DEVICE_TYPE_GPU, ndevices, device_ids.data(), NULL);
       for(cl_device_id d : device_ids)
         devices.push_back(Device(d));
       break;

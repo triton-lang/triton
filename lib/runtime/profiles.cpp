@@ -53,15 +53,15 @@ driver::Program const & profiles::value_type::init(runtime::execution_handler co
     pname = symbolic::hash(expression.x());
   else
     pname = opt.program_name;
-
   driver::Program const * program = cache_.find(pname);
 
   if(program)
       return *program;
 
   std::string srcs;
-   for(unsigned int i = 0 ; i < templates_.size() ; ++i)
+   for(unsigned int i = 0 ; i < templates_.size() ; ++i){
      srcs += templates_[i]->generate(tools::to_string(i), expression.x(), context.device());
+   }
    return cache_.add(context, pname, srcs);
 }
 
@@ -97,11 +97,13 @@ void profiles::value_type::execute(runtime::execution_handler const & expr)
     std::iota(idx.begin(), idx.end(), 0);
     std::sort(idx.begin(), idx.end(), [&perf](size_t i1, size_t i2) {return perf[i1] > perf[i2];});
     size_t i = 0;
-    while(templates_[i]->temporary_workspace(tree) > MAX_TEMPORARY_WORKSPACE)
+    while(templates_[idx[i]]->temporary_workspace(tree) > MAX_TEMPORARY_WORKSPACE)
       i++;
     label = idx[i];
     labels_.insert({x, label});
   }
+  if(templates_[label]->temporary_workspace(tree) > MAX_TEMPORARY_WORKSPACE)
+    throw operation_not_supported_exception("Running this operation would require an overly large temporary.");
   templates_[label]->enqueue(queue_, program, tools::to_string(label), expr);
 }
 
@@ -129,17 +131,17 @@ std::shared_ptr<templates::base> profiles::create(std::string const & template_n
     return std::shared_ptr<templates::base>(new templates::reduce_1d(x[0], x[1], x[2]));
   else if(template_name=="elementwise_2d")
     return std::shared_ptr<templates::base>(new templates::elementwise_2d(x[0], x[1], x[2], x[3], x[4]));
-  else if(template_name.find("reduce_2d_rows")!=std::string::npos)
+  else if(template_name=="reduce_2d_rows")
     return std::shared_ptr<templates::base>(new templates::reduce_2d_rows(x[0], x[1], x[2], x[3], x[4]));
-  else if(template_name.find("reduce_2d_cols")!=std::string::npos)
+  else if(template_name=="reduce_2d_cols")
     return std::shared_ptr<templates::base>(new templates::reduce_2d_cols(x[0], x[1], x[2], x[3], x[4]));
-  else if(template_name.find("gemm_nn")!=std::string::npos)
+  else if(template_name=="gemm_nn")
     return std::shared_ptr<templates::base>(new templates::gemm_nn(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9]));
-  else if(template_name.find("gemm_tn")!=std::string::npos)
+  else if(template_name=="gemm_tn")
     return std::shared_ptr<templates::base>(new templates::gemm_tn(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9]));
-  else if(template_name.find("gemm_nt")!=std::string::npos)
+  else if(template_name=="gemm_nt")
     return std::shared_ptr<templates::base>(new templates::gemm_nt(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9]));
-  else if(template_name.find("gemm_tt")!=std::string::npos)
+  else if(template_name=="gemm_tt")
     return std::shared_ptr<templates::base>(new templates::gemm_tt(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9]));
   else
     throw std::invalid_argument("Invalid expression: " + template_name);
@@ -192,28 +194,12 @@ profiles::map_type& profiles::init(driver::CommandQueue const & queue)
 {
   map_type & map = cache_[queue];
   driver::Device const & device = queue.device();
-  //Default
-  import(presets_.at(std::make_tuple(driver::Device::Type::UNKNOWN, driver::Device::Vendor::UNKNOWN, driver::Device::Architecture::UNKNOWN)), queue);
+//  Default
+//  import(presets_.at(std::make_tuple(driver::Device::Type::UNKNOWN, driver::Device::Vendor::UNKNOWN, driver::Device::Architecture::UNKNOWN)), queue);
   //Database profile
   presets_type::const_iterator it = presets_.find(std::make_tuple(device.type(), device.vendor(), device.architecture()));
   if(it!=presets_.end())
-      import(it->second, queue);
-  //User-provided profile
-  std::string homepath = tools::getenv("HOME");
-  if(homepath.size())
-  {
-    std::string json_path = homepath + "/.isaac/devices/device0.json";
-    std::ifstream ifs(json_path);
-    if(!ifs)
-        return map;
-    std::string str;
-    ifs.seekg(0, std::ios::end);
-    str.reserve(ifs.tellg());
-    ifs.seekg(0, std::ios::beg);
-    str.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-    import(str, queue);
-  }
-
+    import(it->second, queue);
   return map;
 }
 
