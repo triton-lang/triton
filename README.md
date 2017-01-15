@@ -70,9 +70,9 @@ git clone https://github.com/ptillet/isaac.git
 cd isaac/python ;
 python setup.py build;
 cd ../tune
-PYTHONPATH=../python/build/lib.linux-x86_64-2.7/ python main.py --float32 --elementwise_1d --elementwise_2d --reduce_1d --reduce_2d_rows --reduce_2d_cols --gemm_nn --gemm_nt --gemm_tn --gemm_tt
+PYTHONPATH=../python/build/lib.linux-x86_64-2.7/ python main.py --float64 --float32 --elementwise_1d --elementwise_2d --reduce_1d --reduce_2d_rows --reduce_2d_cols --gemm_nn --gemm_nt --gemm_tn --gemm_tt
 ```
 
-This will output a .json file that you can submit for integration. Add --float64 if your GPU has double-precision capabilities.
+This will output a .json file that you can submit for integration.
 
 Bug reports are more than welcome!
