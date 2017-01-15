@@ -107,6 +107,7 @@ int parameterized_base::is_invalid(expression_tree const  & expressions, driver:
   //Invalid work group size
   size_t max_workgroup_size = device.max_work_group_size();
   std::vector<size_t> max_work_item_sizes = device.max_work_item_sizes();
+
   if (ls0_*ls1_ > max_workgroup_size)
     return TEMPLATE_WORK_GROUP_SIZE_OVERFLOW;
   if (ls0_ > max_work_item_sizes[0])
