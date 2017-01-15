@@ -71,22 +71,22 @@ class Tuner:
 
         #BLAS1 training sizes
         if operation in [sc.templates.elementwise_1d, sc.templates.reduce_1d]:
-            sizes = [(x,) for x in tools.expspace(1e3, 1e8, 20)]
+            sizes = [(10**x,) for x in range(3,8)]
         
         #BLAS2 training sizes
         if operation in [sc.templates.elementwise_2d, sc.templates.reduce_2d_rows, sc.templates.reduce_2d_cols]:
             sizes = []
             #Square
-            for N in [896, 1760, 2048, 2560]:
+            for N in [896, 1280, 1760, 2560]:
                 sizes += [(N, N)]
             #Short/Fat
             for M in [16, 32, 64, 128, 512, 1024]:
                 for N in [1024, 4096, 16384, 65536]:
                     sizes += [(M, N)]
             #Tall/Skinny
-            #for N in [16, 32, 64, 128, 512, 1024, 2048]:
-            #    for M in [1024, 4096, 16384, 65536, 262144]:
-            #        sizes += [(M, N)]
+            for N in [16, 32, 64, 128, 512, 1024]:
+                for M in [1024, 4096, 16384, 65536]:
+                    sizes += [(M, N)]
         
         #BLAS3 training sizes
         if operation in [sc.templates.gemm_nn, sc.templates.gemm_nt, sc.templates.gemm_tn, sc.templates.gemm_tt]:
