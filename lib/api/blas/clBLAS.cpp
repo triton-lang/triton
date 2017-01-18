@@ -54,7 +54,7 @@ extern "C"
             sc::runtime::execute(sc::runtime::execution_handler(operation, options), sc::runtime::profiles::get(options.queue(context)));
             if(events)
             {
-                events[i] = levents.front().handle().cl();
+                events[i] = levents.back().handle().cl();
                 sc::driver::dispatch::clRetainEvent(events[i]);
             }
             sc::driver::dispatch::clFlush(commandQueues[i]);
