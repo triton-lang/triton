@@ -4,7 +4,7 @@ This is the developer repository for ISAAC, a library that uses machine learning
 
 ### License
 
-ISAAC is distributed under the GNU LGPL v2.1 License.
+ISAAC is distributed under the MIT License.
 
 ### Installation
 
