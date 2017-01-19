@@ -111,10 +111,910 @@ void cublas_gemm::enqueue(driver::CommandQueue & queue, driver::Program const &,
   drv::dispatch::cublasSetStream_v2(h,bkp);
 }
 
+/* -------------------------------------------- */
+  
+/* ------------------ INTELBLAS_image ------------------ */
+intelblas_gemm_image::intelblas_gemm_image(char A_trans, char B_trans): A_trans_(A_trans), B_trans_(B_trans), init_(true)
+{ }
+
+int intelblas_gemm_image::is_invalid(expression_tree const  &, driver::Device const & device) const
+{ return (init_ && device.backend()==driver::OPENCL)?0:-1; }
+
+std::vector<int_t> intelblas_gemm_image::input_sizes(expression_tree const & expressions) const
+{
+  symbolic::preset::gemm::args dummy;
+  return infos((expression_tree&)expressions, dummy, A_trans_);
+}
+
+expression_type intelblas_gemm_image::type() const
+{
+  if(A_trans_=='N' && B_trans_=='N')
+    return GEMM_NN;
+  else if(A_trans_=='T' && B_trans_=='N')
+    return GEMM_TN;
+  else if(A_trans_=='N' && B_trans_=='T')
+    return GEMM_NT;
+  else
+    return GEMM_TT;
+}
+
+std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expression_tree const & tree, driver::Device const & device, symbolic::symbols_table const & symbols) const
+{
+  (void)tree;
+  (void)suffix;
+  (void)symbols;
+  using std::string;
+  using tools::to_string;
+
+  driver::backend_type backend = device.backend();
+  kernel_generation_stream stream(backend);
+
+  stream << "#define TILE_M 32 " << std::endl;
+  stream << "#define TILE_K 8 " << std::endl;
+  stream << "#define TILE_N 8 " << std::endl;
+  stream << "#ifdef USE_IMAGE_C " << std::endl;
+  stream << "#define BLOCKC_READ8( _C, _coordC ) as_float8( intel_sub_group_block_read8( _C, _coordC ) ) " << std::endl;
+  stream << "#define BLOCKC_WRITE8( _C, _coordC, _val ) intel_sub_group_block_write8( _C, _coordC, as_uint8( _val ) ) " << std::endl;
+  stream << "#define MATC_PARAMETER __read_only image2d_t C, __write_only image2d_t dst " << std::endl;
+  stream << "#define GEMM_OUTPUT(ALPHA1, BETA_NOT0) GEMM_OUTPUT_EXT(ALPHA1, BETA_NOT0, C, dst, sizeof(uint)) " << std::endl;
+  stream << "#else " << std::endl;
+  stream << "#define BLOCKC_READ8( _C, _coordC ) \\ " << std::endl;
+  stream << "          (float8) ( (_coordC.x + get_local_id(0) < N && _coordC.y < M) ? _C[ _coordC.y * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
+  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 1 < M) ? _C[ ( _coordC.y + 1 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
+  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 2 < M) ? _C[ ( _coordC.y + 2 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
+  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 3 < M) ? _C[ ( _coordC.y + 3 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
+  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 4 < M) ? _C[ ( _coordC.y + 4 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
+  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 5 < M) ? _C[ ( _coordC.y + 5 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
+  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 6 < M) ? _C[ ( _coordC.y + 6 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
+  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 7 < M) ? _C[ ( _coordC.y + 7 ) * ldc + _coordC.x + get_local_id(0) ] : 0) " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define BLOCKC_WRITE8( _C, _coordC, _val) do {\\ " << std::endl;
+  stream << "                     if (_coordC.x + get_local_id(0) < N) { \\ " << std::endl;
+  stream << "                       if (_coordC.y < M) \\ " << std::endl;
+  stream << "                         _C[ _coordC.y * ldc + _coordC.x + get_local_id(0) ] = _val.s0; \\ " << std::endl;
+  stream << "                       if (_coordC.y + 1 < M) \\ " << std::endl;
+  stream << "                         _C[ ( _coordC.y + 1 )* ldc + _coordC.x + get_local_id(0) ] = _val.s1; \\ " << std::endl;
+  stream << "                       if (_coordC.y + 2 < M) \\ " << std::endl;
+  stream << "                         _C[ ( _coordC.y + 2 )* ldc + _coordC.x + get_local_id(0) ] = _val.s2; \\ " << std::endl;
+  stream << "                       if (_coordC.y + 3 < M) \\ " << std::endl;
+  stream << "                         _C[ ( _coordC.y + 3 )* ldc + _coordC.x + get_local_id(0) ] = _val.s3; \\ " << std::endl;
+  stream << "                       if (_coordC.y + 4 < M) \\ " << std::endl;
+  stream << "                         _C[ ( _coordC.y + 4 )* ldc + _coordC.x + get_local_id(0) ] = _val.s4; \\ " << std::endl;
+  stream << "                       if (_coordC.y + 5 < M) \\ " << std::endl;
+  stream << "                         _C[ ( _coordC.y + 5 )* ldc + _coordC.x + get_local_id(0) ] = _val.s5; \\ " << std::endl;
+  stream << "                       if (_coordC.y + 6 < M) \\ " << std::endl;
+  stream << "                         _C[ ( _coordC.y + 6 )* ldc + _coordC.x + get_local_id(0) ] = _val.s6; \\ " << std::endl;
+  stream << "                       if (_coordC.y + 7 < M) \\ " << std::endl;
+  stream << "                         _C[ ( _coordC.y + 7 )* ldc + _coordC.x + get_local_id(0) ] = _val.s7; \\ " << std::endl;
+  stream << "                     }} while(0) " << std::endl;
+  stream << "#define MATC_PARAMETER __global float * C, const int offC, const int M, const int N, const int ldc " << std::endl;
+  stream << "#define GEMM_OUTPUT(ALPHA1, BETA_NOT0) GEMM_OUTPUT_EXT(ALPHA1, BETA_NOT0, (C + offC), (C + offC), 1) " << std::endl;
+  stream << "#endif " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define GEMM_OUTPUT_EXT(ALPHA1, BETA_NOT0, _C, _dst, _C_step) \\ " << std::endl;
+  stream << "    int2    coordDst = (int2)( ( group_x * TILE_N ) * _C_step, ( group_y * TILE_M ) ); \\ " << std::endl;
+  stream << "    int2    coordC = coordDst; \\ " << std::endl;
+  stream << "    float8 blockC00; \\ " << std::endl;
+  stream << "    float8 blockC01; \\ " << std::endl;
+  stream << "    float8 blockC02; \\ " << std::endl;
+  stream << "    float8 blockC03; \\ " << std::endl;
+  stream << "    if (BETA_NOT0) { \\ " << std::endl;
+  stream << "        blockC00 = (index == 0) ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\ " << std::endl;
+  stream << "        blockC01 = (index == 0) ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\ " << std::endl;
+  stream << "        blockC02 = (index == 0) ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\ " << std::endl;
+  stream << "        blockC03 = (index == 0) ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC ); \\ " << std::endl;
+  stream << "        if (!ALPHA1) { \\ " << std::endl;
+  stream << "            blockC00 = mad(blockAxB00, (float8)alpha, blockC00); \\ " << std::endl;
+  stream << "            blockC01 = mad(blockAxB01, (float8)alpha, blockC01); \\ " << std::endl;
+  stream << "            blockC02 = mad(blockAxB02, (float8)alpha, blockC02); \\ " << std::endl;
+  stream << "            blockC03 = mad(blockAxB03, (float8)alpha, blockC03); \\ " << std::endl;
+  stream << "        } else { \\ " << std::endl;
+  stream << "            blockC00 += blockAxB00; \\ " << std::endl;
+  stream << "            blockC01 += blockAxB01; \\ " << std::endl;
+  stream << "            blockC02 += blockAxB02; \\ " << std::endl;
+  stream << "            blockC03 += blockAxB03; \\ " << std::endl;
+  stream << "        } \\ " << std::endl;
+  stream << "    } else { \\ " << std::endl;
+  stream << "        blockC00 = (index == 0) ? 0 : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\ " << std::endl;
+  stream << "        blockC01 = (index == 0) ? 0 : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\ " << std::endl;
+  stream << "        blockC02 = (index == 0) ? 0 : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\ " << std::endl;
+  stream << "        blockC03 = (index == 0) ? 0 : BLOCKC_READ8( _C, coordC ); \\ " << std::endl;
+  stream << "        if (!ALPHA1) { \\ " << std::endl;
+  stream << "          blockC00 = mad(blockAxB00, alpha, blockC00); \\ " << std::endl;
+  stream << "          blockC01 = mad(blockAxB01, alpha, blockC01); \\ " << std::endl;
+  stream << "          blockC02 = mad(blockAxB02, alpha, blockC02); \\ " << std::endl;
+  stream << "          blockC03 = mad(blockAxB03, alpha, blockC03); \\ " << std::endl;
+  stream << "        } else { \\ " << std::endl;
+  stream << "          blockC00 += blockAxB00; \\ " << std::endl;
+  stream << "          blockC01 += blockAxB01; \\ " << std::endl;
+  stream << "          blockC02 += blockAxB02; \\ " << std::endl;
+  stream << "          blockC03 += blockAxB03; \\ " << std::endl;
+  stream << "        } \\ " << std::endl;
+  stream << "    } \\ " << std::endl;
+  stream << "    BLOCKC_WRITE8( _dst, coordDst, blockC00 );    coordDst.y += 8; \\ " << std::endl;
+  stream << "    BLOCKC_WRITE8( _dst, coordDst, blockC01 );    coordDst.y += 8; \\ " << std::endl;
+  stream << "    BLOCKC_WRITE8( _dst, coordDst, blockC02 );    coordDst.y += 8; \\ " << std::endl;
+  stream << "    BLOCKC_WRITE8( _dst, coordDst, blockC03 ); " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define TRANSPOSE_BLOCK_8( _block, _col )   \\ " << std::endl;
+  stream << "        (float8)( intel_sub_group_shuffle( _block.s0, _col ),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s1, _col ),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s2, _col ),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s3, _col ),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s4, _col ),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s5, _col ),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s6, _col ),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s7, _col ) ); " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\ " << std::endl;
+  stream << "        {   \\ " << std::endl;
+  stream << "            const float8    acol0 = TRANSPOSE_BLOCK_8( _blockA, 0 );    \\ " << std::endl;
+  stream << "            const float8    acol1 = TRANSPOSE_BLOCK_8( _blockA, 1 );    \\ " << std::endl;
+  stream << "            const float8    acol2 = TRANSPOSE_BLOCK_8( _blockA, 2 );    \\ " << std::endl;
+  stream << "            const float8    acol3 = TRANSPOSE_BLOCK_8( _blockA, 3 );    \\ " << std::endl;
+  stream << "            const float8    acol4 = TRANSPOSE_BLOCK_8( _blockA, 4 );    \\ " << std::endl;
+  stream << "            const float8    acol5 = TRANSPOSE_BLOCK_8( _blockA, 5 );    \\ " << std::endl;
+  stream << "            const float8    acol6 = TRANSPOSE_BLOCK_8( _blockA, 6 );    \\ " << std::endl;
+  stream << "            const float8    acol7 = TRANSPOSE_BLOCK_8( _blockA, 7 );    \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s0), acol0, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s1), acol1, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s2), acol2, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s3), acol3, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s4), acol4, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s5), acol5, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s6), acol6, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s7), acol7, _result );      \\ " << std::endl;
+  stream << "        } " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define GEMM_NN(ALPHA1, BETA_NOT0) \\ " << std::endl;
+  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\ " << std::endl;
+  stream << "__kernel void intelblas_gemm_image_32_1_NN_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\ " << std::endl;
+  stream << "    __read_only image2d_t A, \\ " << std::endl;
+  stream << "    __read_only image2d_t B, \\ " << std::endl;
+  stream << "    MATC_PARAMETER, \\ " << std::endl;
+  stream << "    float alpha, \\ " << std::endl;
+  stream << "    float beta, \\ " << std::endl;
+  stream << "    int width0, \\ " << std::endl;
+  stream << "    int index) \\ " << std::endl;
+  stream << "{ \\ " << std::endl;
+  stream << "    const int group_x = get_group_id(0); \\ " << std::endl;
+  stream << "    const int group_y = get_group_id(1); \\ " << std::endl;
+  stream << "    float8 blockAxB00 = 0.0f; \\ " << std::endl;
+  stream << "    float8 blockAxB01 = 0.0f; \\ " << std::endl;
+  stream << "    float8 blockAxB02 = 0.0f; \\ " << std::endl;
+  stream << "    float8 blockAxB03 = 0.0f; \\ " << std::endl;
+  stream << "    int2    coordA = (int2)( 0, group_y * TILE_M ); \\ " << std::endl;
+  stream << "    int2    coordB = (int2)( ( group_x * TILE_N ) * sizeof(uint), 0 ); \\ " << std::endl;
+  stream << "    do \\ " << std::endl;
+  stream << "    {  \\ " << std::endl;
+  stream << "        int2    coordBTemp = coordB; \\ " << std::endl;
+  stream << "        float8  blockB00 = as_float8( intel_sub_group_block_read8( B, coordBTemp ) );    coordB.y += TILE_K; \\ " << std::endl;
+  stream << "        int2    coordATemp = coordA; \\ " << std::endl;
+  stream << "        float8  blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
+  stream << "        float8  blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
+  stream << "        float8  blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
+  stream << "        float8  blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.x += TILE_K * sizeof(uint); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00 ); \\ " << std::endl;
+  stream << "    } \\ " << std::endl;
+  stream << "    while( coordB.y < width0 ); \\ " << std::endl;
+  stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0); \\ " << std::endl;
+  stream << "} " << std::endl;
+  stream << " " << std::endl;
+  stream << "GEMM_NN(1, 0)  " << std::endl;
+  stream << "GEMM_NN(1, 1)  " << std::endl;
+  stream << "GEMM_NN(0, 0)  " << std::endl;
+  stream << "GEMM_NN(0, 1)  " << std::endl;
+  stream << " " << std::endl;
+  stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
+  stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define TRANSPOSE_BLOCK_8(_vec) \\ " << std::endl;
+  stream << "        (float8)( intel_sub_group_shuffle(_vec, 0), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 1), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 2), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 3), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 4), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 5), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 6), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 7) ) " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\ " << std::endl;
+  stream << "        {   \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s0), TRANSPOSE_BLOCK_8(_blockA.s0), _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s1), TRANSPOSE_BLOCK_8(_blockA.s1), _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s2), TRANSPOSE_BLOCK_8(_blockA.s2), _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s3), TRANSPOSE_BLOCK_8(_blockA.s3), _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s4), TRANSPOSE_BLOCK_8(_blockA.s4), _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s5), TRANSPOSE_BLOCK_8(_blockA.s5), _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s6), TRANSPOSE_BLOCK_8(_blockA.s6), _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)(_blockB.s7), TRANSPOSE_BLOCK_8(_blockA.s7), _result );      \\ " << std::endl;
+  stream << "        } " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define GEMM_TN(ALPHA1, BETA_NOT0) \\ " << std::endl;
+  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\ " << std::endl;
+  stream << "__kernel void intelblas_gemm_image_32_1_TN_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\ " << std::endl;
+  stream << "    __read_only image2d_t A, \\ " << std::endl;
+  stream << "    __read_only image2d_t B, \\ " << std::endl;
+  stream << "    MATC_PARAMETER, \\ " << std::endl;
+  stream << "    float alpha, \\ " << std::endl;
+  stream << "    float beta, \\ " << std::endl;
+  stream << "    int width0, \\ " << std::endl;
+  stream << "    int index) \\ " << std::endl;
+  stream << "{ \\ " << std::endl;
+  stream << "    const int group_x = get_group_id(0);\\ " << std::endl;
+  stream << "    const int group_y = get_group_id(1);\\ " << std::endl;
+  stream << "    float8 blockAxB00 = 0.0f;\\ " << std::endl;
+  stream << "    float8 blockAxB01 = 0.0f;\\ " << std::endl;
+  stream << "    float8 blockAxB02 = 0.0f;\\ " << std::endl;
+  stream << "    float8 blockAxB03 = 0.0f;\\ " << std::endl;
+  stream << "    int2    coordA = (int2)( group_y * TILE_M * sizeof(uint), 0 );\\ " << std::endl;
+  stream << "    int2    coordB = (int2)( ( group_x * TILE_N ) * sizeof(uint), 0 );\\ " << std::endl;
+  stream << "    do\\ " << std::endl;
+  stream << "    {\\ " << std::endl;
+  stream << "        int2    coordBTemp = coordB;\\ " << std::endl;
+  stream << "        float8 blockB00 = as_float8( intel_sub_group_block_read8( B, coordBTemp ) );    coordB.y += TILE_K;\\ " << std::endl;
+  stream << "        int2    coordATemp = coordA;\\ " << std::endl;
+  stream << "        float8 blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint);\\ " << std::endl;
+  stream << "        float8 blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint);\\ " << std::endl;
+  stream << "        float8 blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint);\\ " << std::endl;
+  stream << "        float8 blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.y += TILE_K;\\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00 ); \\ " << std::endl;
+  stream << "    } \\ " << std::endl;
+  stream << "    while( coordB.y < width0 ); \\ " << std::endl;
+  stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0); \\ " << std::endl;
+  stream << "} " << std::endl;
+  stream << " " << std::endl;
+  stream << "GEMM_TN(1, 0) " << std::endl;
+  stream << "GEMM_TN(1, 1)  " << std::endl;
+  stream << "GEMM_TN(0, 0)  " << std::endl;
+  stream << "GEMM_TN(0, 1)  " << std::endl;
+  stream << " " << std::endl;
+  stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
+  stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define TRANSPOSE_BLOCK_8( _block, _col )   \\ " << std::endl;
+  stream << "        (float8)( intel_sub_group_shuffle( _block.s0, _col),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s1, _col),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s2, _col),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s3, _col),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s4, _col),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s5, _col),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s6, _col),   \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle( _block.s7, _col) ) " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\ " << std::endl;
+  stream << "        {   \\ " << std::endl;
+  stream << "            const float8    acol0 = TRANSPOSE_BLOCK_8( _blockA, 0 );    \\ " << std::endl;
+  stream << "            const float8    acol1 = TRANSPOSE_BLOCK_8( _blockA, 1 );    \\ " << std::endl;
+  stream << "            const float8    acol2 = TRANSPOSE_BLOCK_8( _blockA, 2 );    \\ " << std::endl;
+  stream << "            const float8    acol3 = TRANSPOSE_BLOCK_8( _blockA, 3 );    \\ " << std::endl;
+  stream << "            const float8    acol4 = TRANSPOSE_BLOCK_8( _blockA, 4 );    \\ " << std::endl;
+  stream << "            const float8    acol5 = TRANSPOSE_BLOCK_8( _blockA, 5 );    \\ " << std::endl;
+  stream << "            const float8    acol6 = TRANSPOSE_BLOCK_8( _blockA, 6 );    \\ " << std::endl;
+  stream << "            const float8    acol7 = TRANSPOSE_BLOCK_8( _blockA, 7 );    \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s0, acol0, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s1, acol1, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s2, acol2, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s3, acol3, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s4, acol4, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s5, acol5, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s6, acol6, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s7, acol7, _result );      \\ " << std::endl;
+  stream << "        } " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define GEMM_NT(ALPHA1, BETA_NOT0, VECSCALAR, VECSIZE) \\ " << std::endl;
+  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\ " << std::endl;
+  stream << "__kernel void intelblas_gemm_image_32_1_NT_ ##VECSCALAR ##_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\ " << std::endl;
+  stream << "    __read_only image2d_t A, \\ " << std::endl;
+  stream << "    MATB_PARAMETER, \\ " << std::endl;
+  stream << "    MATC_PARAMETER, \\ " << std::endl;
+  stream << "    float alpha, \\ " << std::endl;
+  stream << "    float beta, \\ " << std::endl;
+  stream << "    int padded_k, \\ " << std::endl;
+  stream << "    int k, \\ " << std::endl;
+  stream << "    int index) \\ " << std::endl;
+  stream << "{ \\ " << std::endl;
+  stream << "    const int group_x = get_group_id(0); \\ " << std::endl;
+  stream << "    const int group_y = get_group_id(1); \\ " << std::endl;
+  stream << "    float8 blockAxB00 = 0.0f; \\ " << std::endl;
+  stream << "    float8 blockAxB01 = 0.0f; \\ " << std::endl;
+  stream << "    float8 blockAxB02 = 0.0f; \\ " << std::endl;
+  stream << "    float8 blockAxB03 = 0.0f; \\ " << std::endl;
+  stream << "    int2    coordA = (int2)( 0, group_y * TILE_M ); \\ " << std::endl;
+  stream << "    int2    coordB = (int2)( 0, ( group_x * TILE_N )); \\ " << std::endl;
+  stream << "    const sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST; \\ " << std::endl;
+  stream << "    do \\ " << std::endl;
+  stream << "    { \\ " << std::endl;
+  stream << "        float8 blockB00;             \\ " << std::endl;
+  stream << "        BLOCKB_READ8(blockB00, B, coordB); \\ " << std::endl;
+  stream << "        int2    coordATemp = coordA; \\ " << std::endl;
+  stream << "        float8 blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
+  stream << "        float8 blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
+  stream << "        float8 blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
+  stream << "        float8 blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.x += TILE_K * sizeof(uint); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00 ); \\ " << std::endl;
+  stream << "    } \\ " << std::endl;
+  stream << "    while( coordB.x < padded_k / VECSIZE ); \\ " << std::endl;
+  stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0); \\ " << std::endl;
+  stream << "} " << std::endl;
+  stream << " " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
+  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
+  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
+  stream << "        _blockb.s0123 = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s4567 = read_imagef(_B, _coordBTemp); _coordB.x += 2; " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
+  stream << " " << std::endl;
+  stream << "GEMM_NT(1, 0, VEC4, 4) " << std::endl;
+  stream << "GEMM_NT(1, 1, VEC4, 4)  " << std::endl;
+  stream << "GEMM_NT(0, 0, VEC4, 4) " << std::endl;
+  stream << "GEMM_NT(0, 1, VEC4, 4) " << std::endl;
+  stream << "#undef BLOCKB_READ8 " << std::endl;
+  stream << "#undef MATB_PARAMETER " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
+  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
+  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
+  stream << "        _blockb = *(__global float8*)&_B[_coordBTemp.y * ldb + _coordBTemp.x + offB];\\ " << std::endl;
+  stream << "        _coordB.x += TILE_K; " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MATB_PARAMETER __global float *B, int offB, int ldb " << std::endl;
+  stream << " " << std::endl;
+  stream << "GEMM_NT(1, 0, BUFFER, 1)  " << std::endl;
+  stream << "GEMM_NT(1, 1, BUFFER, 1)  " << std::endl;
+  stream << "GEMM_NT(0, 0, BUFFER, 1)  " << std::endl;
+  stream << "GEMM_NT(0, 1, BUFFER, 1)  " << std::endl;
+  stream << "#undef BLOCKB_READ8 " << std::endl;
+  stream << "#undef MATB_PARAMETER " << std::endl;
+  stream << " " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
+  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
+  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
+  stream << "        float4 temp; \\ " << std::endl;
+  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s0 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s1 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s2 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s3 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s4 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s5 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s6 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s7 = temp.s0; \\ " << std::endl;
+  stream << "        _coordB.x += 8; " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
+  stream << " " << std::endl;
+  stream << "GEMM_NT(1, 0, SCALAR, 1) " << std::endl;
+  stream << "GEMM_NT(1, 1, SCALAR, 1) " << std::endl;
+  stream << "GEMM_NT(0, 0, SCALAR, 1) " << std::endl;
+  stream << "GEMM_NT(0, 1, SCALAR, 1) " << std::endl;
+  stream << "#undef BLOCKB_READ8 " << std::endl;
+  stream << "#undef MATB_PARAMETER " << std::endl;
+  stream << " " << std::endl;
+  stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
+  stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define TRANSPOSE_BLOCK_8(_vec) \\ " << std::endl;
+  stream << "        (float8)( intel_sub_group_shuffle(_vec, 0), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 1), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 2), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 3), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 4), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 5), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 6), \\ " << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, 7) ); " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\ " << std::endl;
+  stream << "        {   \\ " << std::endl;
+  stream << "            const float8    acol0 = TRANSPOSE_BLOCK_8( _blockA.s0 );    \\ " << std::endl;
+  stream << "            const float8    acol1 = TRANSPOSE_BLOCK_8( _blockA.s1 );    \\ " << std::endl;
+  stream << "            const float8    acol2 = TRANSPOSE_BLOCK_8( _blockA.s2 );    \\ " << std::endl;
+  stream << "            const float8    acol3 = TRANSPOSE_BLOCK_8( _blockA.s3 );    \\ " << std::endl;
+  stream << "            const float8    acol4 = TRANSPOSE_BLOCK_8( _blockA.s4 );    \\ " << std::endl;
+  stream << "            const float8    acol5 = TRANSPOSE_BLOCK_8( _blockA.s5 );    \\ " << std::endl;
+  stream << "            const float8    acol6 = TRANSPOSE_BLOCK_8( _blockA.s6 );    \\ " << std::endl;
+  stream << "            const float8    acol7 = TRANSPOSE_BLOCK_8( _blockA.s7 );    \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s0, acol0, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s1, acol1, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s2, acol2, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s3, acol3, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s4, acol4, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s5, acol5, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s6, acol6, _result );      \\ " << std::endl;
+  stream << "            _result = mad( (float8)_blockB.s7, acol7, _result );      \\ " << std::endl;
+  stream << "        } " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define GEMM_TT(ALPHA1, BETA_NOT0, VECSCALAR, VECSIZE) \\ " << std::endl;
+  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\ " << std::endl;
+  stream << "__kernel void intelblas_gemm_image_32_1_TT_ ##VECSCALAR ##_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\ " << std::endl;
+  stream << "    __read_only image2d_t A, \\ " << std::endl;
+  stream << "    MATB_PARAMETER, \\ " << std::endl;
+  stream << "    MATC_PARAMETER, \\ " << std::endl;
+  stream << "    float alpha, \\ " << std::endl;
+  stream << "    float beta, \\ " << std::endl;
+  stream << "    int padded_k, \\ " << std::endl;
+  stream << "    int k, \\ " << std::endl;
+  stream << "    int index) \\ " << std::endl;
+  stream << "{ \\ " << std::endl;
+  stream << "    const int group_x = get_group_id(0); \\ " << std::endl;
+  stream << "    const int group_y = get_group_id(1); \\ " << std::endl;
+  stream << "    float8 blockAxB00 = 0.0f; \\ " << std::endl;
+  stream << "    float8 blockAxB01 = 0.0f; \\ " << std::endl;
+  stream << "    float8 blockAxB02 = 0.0f; \\ " << std::endl;
+  stream << "    float8 blockAxB03 = 0.0f; \\ " << std::endl;
+  stream << "    int2    coordA = (int2)( group_y * TILE_M * sizeof(uint), 0 ); \\ " << std::endl;
+  stream << "    int2    coordB = (int2)( 0, ( group_x * TILE_N )); \\ " << std::endl;
+  stream << "    const sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST; \\ " << std::endl;
+  stream << "    do \\ " << std::endl;
+  stream << "    { \\ " << std::endl;
+  stream << "        float8 blockB00;             \\ " << std::endl;
+  stream << "        BLOCKB_READ8(blockB00, B, coordB); \\ " << std::endl;
+  stream << "        int2    coordATemp = coordA; \\ " << std::endl;
+  stream << "        float8 blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint); \\ " << std::endl;
+  stream << "        float8 blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint); \\ " << std::endl;
+  stream << "        float8 blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint); \\ " << std::endl;
+  stream << "        float8 blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.y += TILE_K; \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00 , blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01 , blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02 , blockB00 ); \\ " << std::endl;
+  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03 , blockB00 ); \\ " << std::endl;
+  stream << "    } \\ " << std::endl;
+  stream << "    while( coordB.x < padded_k / VECSIZE ); \\ " << std::endl;
+  stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0);\\ " << std::endl;
+  stream << "} " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
+  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
+  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
+  stream << "        blockB00.s0123 = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        blockB00.s4567 = read_imagef(B, _coordBTemp); _coordB.x += 2; " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
+  stream << " " << std::endl;
+  stream << "GEMM_TT(1, 0, VEC4, 4) " << std::endl;
+  stream << "GEMM_TT(1, 1, VEC4, 4) " << std::endl;
+  stream << "GEMM_TT(0, 0, VEC4, 4) " << std::endl;
+  stream << "GEMM_TT(0, 1, VEC4, 4) " << std::endl;
+  stream << "#undef BLOCKB_READ8 " << std::endl;
+  stream << "#undef MATB_PARAMETER " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
+  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
+  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
+  stream << "        _blockb = *(__global float8*)&_B[_coordBTemp.y * ldb + _coordBTemp.x + offB];\\ " << std::endl;
+  stream << "        _coordB.x += TILE_K; " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MATB_PARAMETER __global float *B, int offB, int ldb " << std::endl;
+  stream << " " << std::endl;
+  stream << "GEMM_TT(1, 0, BUFFER, 1) " << std::endl;
+  stream << "GEMM_TT(1, 1, BUFFER, 1) " << std::endl;
+  stream << "GEMM_TT(0, 0, BUFFER, 1) " << std::endl;
+  stream << "GEMM_TT(0, 1, BUFFER, 1) " << std::endl;
+  stream << "#undef BLOCKB_READ8 " << std::endl;
+  stream << "#undef MATB_PARAMETER " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
+  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
+  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
+  stream << "        float4 temp; \\ " << std::endl;
+  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s0 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s1 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s2 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s3 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s4 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s5 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s6 = temp.s0; \\ " << std::endl;
+  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
+  stream << "        _blockb.s7 = temp.s0; \\ " << std::endl;
+  stream << "        _coordB.x += 8; " << std::endl;
+  stream << " " << std::endl;
+  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
+  stream << " " << std::endl;
+  stream << "GEMM_TT(1, 0, SCALAR, 1) " << std::endl;
+  stream << "GEMM_TT(1, 1, SCALAR, 1) " << std::endl;
+  stream << "GEMM_TT(0, 0, SCALAR, 1) " << std::endl;
+  stream << "GEMM_TT(0, 1, SCALAR, 1) " << std::endl;
+  stream << "#undef BLOCKB_READ8 " << std::endl;
+  stream << "#undef MATB_PARAMETER " << std::endl;
+  stream << " " << std::endl;
+  stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
+  stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
+  stream << " " << std::endl;
+  stream << "#undef TILE_M " << std::endl;
+  stream << "#undef TILE_K " << std::endl;
+  stream << "#undef TILE_N " << std::endl;
+
+  stream << "__kernel void gemm_buffer_copy_image_float( " << std::endl;
+  stream << "    __global float* A, " << std::endl;
+  stream << "    __write_only image2d_t ImA, " << std::endl;
+  stream << "    int offA, " << std::endl;
+  stream << "    int width, " << std::endl;
+  stream << "    int height, " << std::endl;
+  stream << "    int ldA) " << std::endl;
+  stream << "{ " << std::endl;
+  stream << "    const int gidx = get_global_id(0); " << std::endl;
+  stream << "    const int gidy = get_global_id(1); " << std::endl;
+  stream << "    int2 coord_dst = (int2)(gidx, gidy); " << std::endl;
+  stream << "    __global float* A_off = A + offA; " << std::endl;
+  stream << "    float srcA = A_off[gidy * ldA + gidx]; " << std::endl;
+  stream << "    write_imagef(ImA, coord_dst, (float4)srcA); " << std::endl;
+  stream << "} " << std::endl;
+  stream << " " << std::endl;
+
+  stream << "__kernel void gemm_buffer_copy_image_ui( " << std::endl;
+  stream << "    __global float* A, " << std::endl;
+  stream << "    __write_only image2d_t ImA, " << std::endl;
+  stream << "    int offA, " << std::endl;
+  stream << "    int width, " << std::endl;
+  stream << "    int height, " << std::endl;
+  stream << "    int ldA) " << std::endl;
+  stream << "{ " << std::endl;
+  stream << "    const int gidx = get_global_id(0); " << std::endl;
+  stream << "    const int gidy = get_global_id(1); " << std::endl;
+  stream << "    int2 coord_dst = (int2)(gidx, gidy); " << std::endl;
+  stream << "    if (gidx >= width || gidy >= height) { " << std::endl;
+  stream << "      write_imageui(ImA, coord_dst, (uint4)0); " << std::endl;
+  stream << "      return; " << std::endl;
+  stream << "    } " << std::endl;
+  stream << "    __global float* A_off = A + offA; " << std::endl;
+  stream << "    uint4 srcA = convert_uint4(as_uchar4(A_off[gidy * ldA + gidx])); " << std::endl;
+  stream << "    write_imageui(ImA, coord_dst, srcA); " << std::endl;
+  stream << "} " << std::endl;
+  stream << " " << std::endl;
+
+  return stream.str();
+}
+
+void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program const & program, runtime::execution_handler const & control, cl_mem *image, cl_mem buffer, int offset,
+                                   bool is_matrix_a, bool transpose, bool padding, int padded_height, int padded_width, int height, int width, int ld) {
+  namespace drv = driver;
+  (void) control;
+  if (!is_matrix_a && transpose) {
+    if(ld == width) {
+      size_t origin[] = {0, 0, 0};
+      size_t region[] = {(size_t)width, (size_t)height, 1};
+      if(drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
+                                 buffer, *image, sizeof(float) * offset,
+                                 origin, region, 0,
+                                 NULL, NULL))
+        exit(0);
+      return;
+    }
+
+    std::string kernel_name("gemm_buffer_copy_image_float");
+    std::vector<driver::Kernel> kernels;
+    kernels.push_back(driver::Kernel(program, kernel_name.c_str()));
+
+    driver::Kernel & kernel = kernels[0];
+
+    unsigned int n_arg = 0;
+
+    kernel.setArg(n_arg++, buffer);
+    kernel.setArg(n_arg++, *image);
+    kernel.setSizeArg(n_arg++, offset);
+    kernel.setSizeArg(n_arg++, width);
+    kernel.setSizeArg(n_arg++, height);
+    kernel.setSizeArg(n_arg++, ld);
+
+    size_t global_copy[2];
+    global_copy[0] = width;
+    global_copy[1] = height;
+    if(drv::dispatch::clEnqueueNDRangeKernel(queue.handle().cl(), kernel.handle().cl(), 2, NULL, global_copy, NULL, 0, NULL, NULL) != CL_SUCCESS)
+      exit(0);
+    return;
+  }
+
+  if (!padding && ld == width) {
+    size_t origin[] = {0, 0, 0};
+    size_t region[] = {(size_t)width, (size_t)height, 1};
+    if(drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
+                               buffer, *image, sizeof(float) * offset,
+                               origin, region, 0, NULL, NULL))
+      exit(0);
+    return;
+  }
+
+  std::string kernel_name("gemm_buffer_copy_image_ui");
+  std::vector<driver::Kernel> kernels;
+  kernels.push_back(driver::Kernel(program, kernel_name.c_str()));
+
+  driver::Kernel & kernel = kernels[0];
+
+  unsigned int n_arg = 0;
+
+  kernel.setArg(n_arg++, buffer);
+  kernel.setArg(n_arg++, *image);
+  kernel.setSizeArg(n_arg++, offset);
+  kernel.setSizeArg(n_arg++, width);
+  kernel.setSizeArg(n_arg++, height);
+  kernel.setSizeArg(n_arg++, ld);
+
+  size_t global_copy[2];
+  global_copy[0] = padding ? padded_width : width;
+  global_copy[1] = padding ? padded_height : height;
+
+  if(drv::dispatch::clEnqueueNDRangeKernel(queue.handle().cl(), kernel.handle().cl(), 2, NULL, global_copy, NULL, 0, NULL, NULL) != CL_SUCCESS)
+    exit(0);
+}
+
+void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
+{
+  (void) suffix;
+  namespace drv = driver;
+  //Get GEMM info
+  symbolic::preset::gemm::args args;
+  std::vector<int_t> MNK = infos(control.x(), args, A_trans_);
+  int_t M = MNK[0], N = MNK[1], K = MNK[2];
+
+  int offA = args.A->array.start, offB = args.B->array.start, offC = args.C->array.start;
+  int ldA = args.A->ld[1];
+  int ldB = args.B->ld[1];
+  int ldC = args.C->ld[1];
+  //Default order in isaac is column major.
+  //This kernel is implemented in row major.
+  //Need to swap matrix A and B each time.
+  std::swap(args.A, args.B);
+  std::swap(offA, offB);
+  std::swap(ldA, ldB);
+  std::swap(M, N);
+
+  bool transA, transB;
+
+  if(args.type == GEMM_NN) {
+    transA = false;
+    transB = false;
+  } else if(args.type == GEMM_NT) {
+    transA = true;
+    transB = false;
+  } else if(args.type == GEMM_TN) {
+    transA = false;
+    transB = true;
+  } else {
+    transA = true;
+    transB = true;
+  }
+
+  int widthA = (transA == false) ? K : M;
+  int heightA = (transA == false) ? M : K;
+  int widthB = (transB == false) ? N : K;
+  int heightB = (transB == false) ? K : N;
+
+  int A_start_x = 0, A_start_y = 0, B_start_x = 0, B_start_y = 0, C_start_x = 0, C_start_y = 0;
+  int blocksize = 1024;
+  int blockA_width = blocksize;
+  int blockA_height = blocksize;
+  int blockB_width = blocksize;
+  int blockB_height = blocksize;
+  int blockC_width = blocksize;
+  int blockC_height = blocksize;
+  
+  cl_int err;
+  cl_mem ImA, ImB;
+  cl_image_desc desc;
+  cl_image_format format;
+  memset(&desc, 0, sizeof(desc));
+
+  desc.image_type = CL_MEM_OBJECT_IMAGE2D;  
+  format.image_channel_data_type = CL_UNSIGNED_INT8;
+  format.image_channel_order = CL_RGBA;
+  desc.image_width = blocksize;
+  desc.image_height = blocksize;
+  
+  ImA = drv::dispatch::clCreateImage(program.context().handle().cl(), CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
+  if(err != CL_SUCCESS)
+    exit(0);
+  // if B is not transposed, use image object of B.
+  // if B is transposed and ldB == widthB, use buffer object of B.
+  // if B is transposed and ldB > widthB, use image object of B since kernel may access uninitialized 
+  // element of B when using buffer object of B and it will cause incorrect results.
+  if(transB == false) {
+    ImB = drv::dispatch::clCreateImage(program.context().handle().cl(), CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
+    if(err != CL_SUCCESS)
+      exit(0);
+  } else if(ldB > widthB) {
+    format.image_channel_data_type = CL_FLOAT;
+    format.image_channel_order = CL_R;
+    ImB = drv::dispatch::clCreateImage(program.context().handle().cl(), CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
+    if(err != CL_SUCCESS)
+      exit(0);
+  }
+  std::string kernel_name("intelblas_gemm_image_32_1_");
+
+  if(transA == false)
+    kernel_name += "N";
+  else
+    kernel_name += "T";
+
+  if(transB == false)
+    kernel_name += "N_";
+  else {
+    kernel_name += "T_";
+    if(ldB > widthB)
+      kernel_name += "SCALAR_";
+    else
+      kernel_name += "BUFFER_";
+  }
+
+  if(args.alpha.values().float32 == 1.0f)
+    kernel_name += "1_";
+  else
+    kernel_name += "0_";
+
+  if(args.beta.values().float32 == 0.0f)
+    kernel_name += "0";
+  else
+    kernel_name += "1";
+  kernel_name += "_float";
+
+  driver::Kernel kernel(program, kernel_name.c_str());
+
+  while(C_start_y < M) { 
+    blockC_width = std::min((int)N - C_start_x, blocksize);
+    blockC_height = std::min((int)M - C_start_y, blocksize);
+
+    int index = 0;
+    for(int k = 0; k < K; k += blocksize) {
+      blockA_width = std::min(widthA - A_start_x, blocksize);
+      blockA_height = std::min(heightA - A_start_y, blocksize);
+      blockB_width = std::min(widthB - B_start_x, blocksize);
+      blockB_height = std::min(heightB - B_start_y, blocksize);
+      int block_K = std::min((int)K - k, blocksize);
+
+      int padded_k = block_K + ((block_K & 7) ? (8 - (block_K & 7)) : 0);
+      int imageA_w = (transA == false) ? padded_k : blockA_width;
+      int imageA_h = (transA == false) ? blockA_height : padded_k;
+      int imageB_w = (transB == false) ? blockB_width : padded_k;
+      int imageB_h = (transB == false) ? padded_k : blockB_height;
+
+      int offsetA = offA + A_start_y * ldA + A_start_x;
+      int offsetB = offB + B_start_y * ldB + B_start_x;
+      int offsetC = offC + C_start_y * ldC + C_start_x;
+
+      if(transB == false) {
+        bool padding_A = false;
+        bool padding_B = false;
+
+        if (M * K < N * K)
+          padding_B = true;
+        else
+          padding_A = true;
+        gpu_gemm_copy_buffer_to_image(queue, program, control, &ImA, args.A->array.handle.cl, offsetA, true, transA != false, padding_A, imageA_h, imageA_w, blockA_height, blockA_width, ldA);
+        gpu_gemm_copy_buffer_to_image(queue, program, control, &ImB, args.B->array.handle.cl, offsetB, false, false, padding_B, imageB_h, imageB_w, blockB_height, blockB_width, ldB);
+      } else {
+        gpu_gemm_copy_buffer_to_image(queue, program, control, &ImA, args.A->array.handle.cl, offsetA, true, transA != false, true, imageA_h, imageA_w, blockA_height, blockA_width, ldA);
+        if(ldB > widthB)
+          gpu_gemm_copy_buffer_to_image(queue, program, control, &ImB, args.B->array.handle.cl, offsetB, false, true, false, imageB_h, imageB_w, blockB_height, blockB_width, ldB);
+      }
+
+      unsigned int n_arg = 0;
+
+      kernel.setArg(n_arg++, ImA);
+      if(transB == false || ldB > widthB)
+        kernel.setArg(n_arg++, ImB);
+      else {
+        kernel.setArg(n_arg++, args.B->array.handle.cl);
+        kernel.setSizeArg(n_arg++, offsetB);
+        kernel.setSizeArg(n_arg++, ldB);
+      }
+      int sub_M = (transA == false) ? blockA_height : blockA_width;
+      int sub_N = (transB == false) ? blockB_width : blockB_height;
+      kernel.setArg(n_arg++, args.C->array.handle.cl);
+      kernel.setSizeArg(n_arg++, offsetC);
+      kernel.setSizeArg(n_arg++, sub_M);
+      kernel.setSizeArg(n_arg++, sub_N);
+      kernel.setSizeArg(n_arg++, ldC);
+      kernel.setArg(n_arg++, args.alpha);
+      kernel.setArg(n_arg++, args.beta);
+      kernel.setSizeArg(n_arg++, padded_k);
+      if(transB != false)
+        kernel.setSizeArg(n_arg++, block_K);
+      kernel.setSizeArg(n_arg++, index);
+
+      driver::NDRange local(8, 1);
+      driver::NDRange global((size_t)( blockC_width + 7 ) & ~7, (size_t)(blockC_height + 31) / 32);
+
+      control.execution_options().enqueue(program.context(), kernel, global, local);
+
+      if(transA == false)
+        A_start_x += blockA_width;
+      else
+        A_start_y += blockA_height;
+
+      if(transB == false)
+        B_start_y += blockB_height;
+      else
+        B_start_x += blockB_width;
+
+      index = 1;
+    }
+    C_start_x += blockC_width;
+    if(transA == false)
+      A_start_x = 0;
+    else
+      A_start_y = 0;
+    if(transB == false) {
+      B_start_x += blockB_width;
+      B_start_y = 0;
+    } else {
+      B_start_y += blockB_height;
+      B_start_x = 0;
+    }
+    if(C_start_x >= N) {
+      C_start_x = 0;
+      B_start_x = 0;
+      B_start_y = 0;
+      C_start_y += blockC_height;
+      if(transA == false)
+        A_start_y += blockA_height;
+      else
+        A_start_x += blockA_width;
+    }
+  }
+
+  if (ImA)
+    drv::dispatch::clReleaseMemObject(ImA);
+  if (ImB)
+    drv::dispatch::clReleaseMemObject(ImB);
+}
 
 /* -------------------------------------------- */
-std::string buffer_kernel(std::string const & suffix, driver::Device const & device, expression_tree const & tree)
+
+/* ------------------ INTELBLAS_buffer ------------------ */
+intelblas_gemm::intelblas_gemm(char A_trans, char B_trans): A_trans_(A_trans), B_trans_(B_trans), init_(true)
+{ }
+
+int intelblas_gemm::is_invalid(expression_tree const  &, driver::Device const & device) const
+{ return (init_ && device.backend()==driver::OPENCL)?0:-1; }
+
+std::vector<int_t> intelblas_gemm::input_sizes(expression_tree const & expressions) const
 {
+  symbolic::preset::gemm::args dummy;
+  return infos((expression_tree&)expressions, dummy, A_trans_);
+}
+
+expression_type intelblas_gemm::type() const
+{
+  if(A_trans_=='N' && B_trans_=='N')
+    return GEMM_NN;
+  else if(A_trans_=='T' && B_trans_=='N')
+    return GEMM_TN;
+  else if(A_trans_=='N' && B_trans_=='T')
+    return GEMM_NT;
+  else
+    return GEMM_TT;
+}
+
+std::string intelblas_gemm::generate_impl(std::string const & suffix, expression_tree const & tree, driver::Device const & device, symbolic::symbols_table const & symbols) const
+{
+  (void) suffix;
+  (void) symbols;
+
   using std::string;
   using tools::to_string;
 
@@ -1182,13 +2082,14 @@ std::string buffer_kernel(std::string const & suffix, driver::Device const & dev
   return stream.str();
 }
 
-void buffer_enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control, char A_trans)
+void intelblas_gemm::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
 {
-  (void) queue;
   namespace drv = driver;
+  (void) queue;
+  (void) suffix;
   //Get GEMM info
   symbolic::preset::gemm::args args;
-  std::vector<int_t> MNK = infos(control.x(), args, A_trans);
+  std::vector<int_t> MNK = infos(control.x(), args, A_trans_);
   int_t M = MNK[0], N = MNK[1], K = MNK[2];
 
   int offA = args.A->array.start, offB = args.B->array.start, offC = args.C->array.start;
@@ -1261,903 +2162,6 @@ void buffer_enqueue(driver::CommandQueue & queue, driver::Program const & progra
       control.execution_options().enqueue(program.context(), kernel, global, local);
     }
   }
-}
-
-/* ------------------ INTELBLAS_image ------------------ */
-intelblas_gemm_image::intelblas_gemm_image(char A_trans, char B_trans): A_trans_(A_trans), B_trans_(B_trans), init_(true)
-{ }
-
-int intelblas_gemm_image::is_invalid(expression_tree const  &, driver::Device const & device) const
-{ return (init_ && device.backend()==driver::OPENCL)?0:-1; }
-
-std::vector<int_t> intelblas_gemm_image::input_sizes(expression_tree const & expressions) const
-{
-  symbolic::preset::gemm::args dummy;
-  return infos((expression_tree&)expressions, dummy, A_trans_);
-}
-
-expression_type intelblas_gemm_image::type() const
-{
-  if(A_trans_=='N' && B_trans_=='N')
-    return GEMM_NN;
-  else if(A_trans_=='T' && B_trans_=='N')
-    return GEMM_TN;
-  else if(A_trans_=='N' && B_trans_=='T')
-    return GEMM_NT;
-  else
-    return GEMM_TT;
-}
-
-std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expression_tree const & tree, driver::Device const & device, symbolic::symbols_table const & symbols) const
-{
-  (void)suffix;
-  (void)symbols;
-  using std::string;
-  using tools::to_string;
-
-  driver::backend_type backend = device.backend();
-  kernel_generation_stream stream(backend);
-
-  stream << "#define TILE_M 32 " << std::endl;
-  stream << "#define TILE_K 8 " << std::endl;
-  stream << "#define TILE_N 8 " << std::endl;
-  stream << "#ifdef USE_IMAGE_C " << std::endl;
-  stream << "#define BLOCKC_READ8( _C, _coordC ) as_float8( intel_sub_group_block_read8( _C, _coordC ) ) " << std::endl;
-  stream << "#define BLOCKC_WRITE8( _C, _coordC, _val ) intel_sub_group_block_write8( _C, _coordC, as_uint8( _val ) ) " << std::endl;
-  stream << "#define MATC_PARAMETER __read_only image2d_t C, __write_only image2d_t dst " << std::endl;
-  stream << "#define GEMM_OUTPUT(ALPHA1, BETA_NOT0) GEMM_OUTPUT_EXT(ALPHA1, BETA_NOT0, C, dst, sizeof(uint)) " << std::endl;
-  stream << "#else " << std::endl;
-  stream << "#define BLOCKC_READ8( _C, _coordC ) \\ " << std::endl;
-  stream << "          (float8) ( (_coordC.x + get_local_id(0) < N && _coordC.y < M) ? _C[ _coordC.y * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
-  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 1 < M) ? _C[ ( _coordC.y + 1 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
-  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 2 < M) ? _C[ ( _coordC.y + 2 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
-  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 3 < M) ? _C[ ( _coordC.y + 3 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
-  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 4 < M) ? _C[ ( _coordC.y + 4 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
-  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 5 < M) ? _C[ ( _coordC.y + 5 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
-  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 6 < M) ? _C[ ( _coordC.y + 6 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\ " << std::endl;
-  stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 7 < M) ? _C[ ( _coordC.y + 7 ) * ldc + _coordC.x + get_local_id(0) ] : 0) " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define BLOCKC_WRITE8( _C, _coordC, _val) do {\\ " << std::endl;
-  stream << "                     if (_coordC.x + get_local_id(0) < N) { \\ " << std::endl;
-  stream << "                       if (_coordC.y < M) \\ " << std::endl;
-  stream << "                         _C[ _coordC.y * ldc + _coordC.x + get_local_id(0) ] = _val.s0; \\ " << std::endl;
-  stream << "                       if (_coordC.y + 1 < M) \\ " << std::endl;
-  stream << "                         _C[ ( _coordC.y + 1 )* ldc + _coordC.x + get_local_id(0) ] = _val.s1; \\ " << std::endl;
-  stream << "                       if (_coordC.y + 2 < M) \\ " << std::endl;
-  stream << "                         _C[ ( _coordC.y + 2 )* ldc + _coordC.x + get_local_id(0) ] = _val.s2; \\ " << std::endl;
-  stream << "                       if (_coordC.y + 3 < M) \\ " << std::endl;
-  stream << "                         _C[ ( _coordC.y + 3 )* ldc + _coordC.x + get_local_id(0) ] = _val.s3; \\ " << std::endl;
-  stream << "                       if (_coordC.y + 4 < M) \\ " << std::endl;
-  stream << "                         _C[ ( _coordC.y + 4 )* ldc + _coordC.x + get_local_id(0) ] = _val.s4; \\ " << std::endl;
-  stream << "                       if (_coordC.y + 5 < M) \\ " << std::endl;
-  stream << "                         _C[ ( _coordC.y + 5 )* ldc + _coordC.x + get_local_id(0) ] = _val.s5; \\ " << std::endl;
-  stream << "                       if (_coordC.y + 6 < M) \\ " << std::endl;
-  stream << "                         _C[ ( _coordC.y + 6 )* ldc + _coordC.x + get_local_id(0) ] = _val.s6; \\ " << std::endl;
-  stream << "                       if (_coordC.y + 7 < M) \\ " << std::endl;
-  stream << "                         _C[ ( _coordC.y + 7 )* ldc + _coordC.x + get_local_id(0) ] = _val.s7; \\ " << std::endl;
-  stream << "                     }} while(0) " << std::endl;
-  stream << "#define MATC_PARAMETER __global float * C, const int offC, const int M, const int N, const int ldc " << std::endl;
-  stream << "#define GEMM_OUTPUT(ALPHA1, BETA_NOT0) GEMM_OUTPUT_EXT(ALPHA1, BETA_NOT0, (C + offC), (C + offC), 1) " << std::endl;
-  stream << "#endif " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define GEMM_OUTPUT_EXT(ALPHA1, BETA_NOT0, _C, _dst, _C_step) \\ " << std::endl;
-  stream << "    int2    coordDst = (int2)( ( group_x * TILE_N ) * _C_step, ( group_y * TILE_M ) ); \\ " << std::endl;
-  stream << "    int2    coordC = coordDst; \\ " << std::endl;
-  stream << "    float8 blockC00; \\ " << std::endl;
-  stream << "    float8 blockC01; \\ " << std::endl;
-  stream << "    float8 blockC02; \\ " << std::endl;
-  stream << "    float8 blockC03; \\ " << std::endl;
-  stream << "    if (BETA_NOT0) { \\ " << std::endl;
-  stream << "        blockC00 = BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\ " << std::endl;
-  stream << "        blockC01 = BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\ " << std::endl;
-  stream << "        blockC02 = BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\ " << std::endl;
-  stream << "        blockC03 = BLOCKC_READ8( _C, coordC ); \\ " << std::endl;
-  stream << "        if (!ALPHA1) { \\ " << std::endl;
-  stream << "            blockC00 *= beta; \\ " << std::endl;
-  stream << "            blockC01 *= beta; \\ " << std::endl;
-  stream << "            blockC02 *= beta; \\ " << std::endl;
-  stream << "            blockC03 *= beta; \\ " << std::endl;
-  stream << "            blockC00 = mad(blockAxB00, (float8)alpha, blockC00); \\ " << std::endl;
-  stream << "            blockC01 = mad(blockAxB01, (float8)alpha, blockC01); \\ " << std::endl;
-  stream << "            blockC02 = mad(blockAxB02, (float8)alpha, blockC02); \\ " << std::endl;
-  stream << "            blockC03 = mad(blockAxB03, (float8)alpha, blockC03); \\ " << std::endl;
-  stream << "        } else { \\ " << std::endl;
-  stream << "            blockC00 = mad(blockC00, (float8)beta, blockAxB00); \\ " << std::endl;
-  stream << "            blockC01 = mad(blockC01, (float8)beta, blockAxB01); \\ " << std::endl;
-  stream << "            blockC02 = mad(blockC02, (float8)beta, blockAxB02); \\ " << std::endl;
-  stream << "            blockC03 = mad(blockC03, (float8)beta, blockAxB03); \\ " << std::endl;
-  stream << "        } \\ " << std::endl;
-  stream << "    } else { \\ " << std::endl;
-  stream << "        if (!ALPHA1) { \\ " << std::endl;
-  stream << "          blockC00 = blockAxB00 * alpha; \\ " << std::endl;
-  stream << "          blockC01 = blockAxB01 * alpha; \\ " << std::endl;
-  stream << "          blockC02 = blockAxB02 * alpha; \\ " << std::endl;
-  stream << "          blockC03 = blockAxB03 * alpha; \\ " << std::endl;
-  stream << "        } else { \\ " << std::endl;
-  stream << "          blockC00 = blockAxB00; \\ " << std::endl;
-  stream << "          blockC01 = blockAxB01; \\ " << std::endl;
-  stream << "          blockC02 = blockAxB02; \\ " << std::endl;
-  stream << "          blockC03 = blockAxB03; \\ " << std::endl;
-  stream << "        } \\ " << std::endl;
-  stream << "    } \\ " << std::endl;
-  stream << "    BLOCKC_WRITE8( _dst, coordDst, blockC00 );    coordDst.y += 8; \\ " << std::endl;
-  stream << "    BLOCKC_WRITE8( _dst, coordDst, blockC01 );    coordDst.y += 8; \\ " << std::endl;
-  stream << "    BLOCKC_WRITE8( _dst, coordDst, blockC02 );    coordDst.y += 8; \\ " << std::endl;
-  stream << "    BLOCKC_WRITE8( _dst, coordDst, blockC03 ); " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define TRANSPOSE_BLOCK_8( _block, _col )   \\ " << std::endl;
-  stream << "        (float8)( intel_sub_group_shuffle( _block.s0, _col ),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s1, _col ),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s2, _col ),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s3, _col ),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s4, _col ),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s5, _col ),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s6, _col ),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s7, _col ) ); " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\ " << std::endl;
-  stream << "        {   \\ " << std::endl;
-  stream << "            const float8    acol0 = TRANSPOSE_BLOCK_8( _blockA, 0 );    \\ " << std::endl;
-  stream << "            const float8    acol1 = TRANSPOSE_BLOCK_8( _blockA, 1 );    \\ " << std::endl;
-  stream << "            const float8    acol2 = TRANSPOSE_BLOCK_8( _blockA, 2 );    \\ " << std::endl;
-  stream << "            const float8    acol3 = TRANSPOSE_BLOCK_8( _blockA, 3 );    \\ " << std::endl;
-  stream << "            const float8    acol4 = TRANSPOSE_BLOCK_8( _blockA, 4 );    \\ " << std::endl;
-  stream << "            const float8    acol5 = TRANSPOSE_BLOCK_8( _blockA, 5 );    \\ " << std::endl;
-  stream << "            const float8    acol6 = TRANSPOSE_BLOCK_8( _blockA, 6 );    \\ " << std::endl;
-  stream << "            const float8    acol7 = TRANSPOSE_BLOCK_8( _blockA, 7 );    \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s0), acol0, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s1), acol1, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s2), acol2, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s3), acol3, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s4), acol4, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s5), acol5, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s6), acol6, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s7), acol7, _result );      \\ " << std::endl;
-  stream << "        } " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define GEMM_NN(ALPHA1, BETA_NOT0) \\ " << std::endl;
-  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\ " << std::endl;
-  stream << "__kernel void intelblas_gemm_image_32_1_NN_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\ " << std::endl;
-  stream << "    __read_only image2d_t A, \\ " << std::endl;
-  stream << "    __read_only image2d_t B, \\ " << std::endl;
-  stream << "    MATC_PARAMETER, \\ " << std::endl;
-  stream << "    float alpha, \\ " << std::endl;
-  stream << "    float beta, \\ " << std::endl;
-  stream << "    int width0) \\ " << std::endl;
-  stream << "{ \\ " << std::endl;
-  stream << "    const int group_x = get_group_id(0); \\ " << std::endl;
-  stream << "    const int group_y = get_group_id(1); \\ " << std::endl;
-  stream << "    float8 blockAxB00 = 0.0f; \\ " << std::endl;
-  stream << "    float8 blockAxB01 = 0.0f; \\ " << std::endl;
-  stream << "    float8 blockAxB02 = 0.0f; \\ " << std::endl;
-  stream << "    float8 blockAxB03 = 0.0f; \\ " << std::endl;
-  stream << "    int2    coordA = (int2)( 0, group_y * TILE_M ); \\ " << std::endl;
-  stream << "    int2    coordB = (int2)( ( group_x * TILE_N ) * sizeof(uint), 0 ); \\ " << std::endl;
-  stream << "    do \\ " << std::endl;
-  stream << "    {  \\ " << std::endl;
-  stream << "        int2    coordBTemp = coordB; \\ " << std::endl;
-  stream << "        float8  blockB00 = as_float8( intel_sub_group_block_read8( B, coordBTemp ) );    coordB.y += TILE_K; \\ " << std::endl;
-  stream << "        int2    coordATemp = coordA; \\ " << std::endl;
-  stream << "        float8  blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
-  stream << "        float8  blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
-  stream << "        float8  blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
-  stream << "        float8  blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.x += TILE_K * sizeof(uint); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00 ); \\ " << std::endl;
-  stream << "    } \\ " << std::endl;
-  stream << "    while( coordB.y < width0 ); \\ " << std::endl;
-  stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0); \\ " << std::endl;
-  stream << "} " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_NN(1, 0)  " << std::endl;
-  stream << "GEMM_NN(1, 1)  " << std::endl;
-  stream << "GEMM_NN(0, 0)  " << std::endl;
-  stream << "GEMM_NN(0, 1)  " << std::endl;
-  stream << " " << std::endl;
-  stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
-  stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define TRANSPOSE_BLOCK_8(_vec) \\ " << std::endl;
-  stream << "        (float8)( intel_sub_group_shuffle(_vec, 0), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 1), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 2), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 3), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 4), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 5), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 6), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 7) ) " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\ " << std::endl;
-  stream << "        {   \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s0), TRANSPOSE_BLOCK_8(_blockA.s0), _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s1), TRANSPOSE_BLOCK_8(_blockA.s1), _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s2), TRANSPOSE_BLOCK_8(_blockA.s2), _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s3), TRANSPOSE_BLOCK_8(_blockA.s3), _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s4), TRANSPOSE_BLOCK_8(_blockA.s4), _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s5), TRANSPOSE_BLOCK_8(_blockA.s5), _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s6), TRANSPOSE_BLOCK_8(_blockA.s6), _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s7), TRANSPOSE_BLOCK_8(_blockA.s7), _result );      \\ " << std::endl;
-  stream << "        } " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define GEMM_TN(ALPHA1, BETA_NOT0) \\ " << std::endl;
-  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\ " << std::endl;
-  stream << "__kernel void intelblas_gemm_image_32_1_TN_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\ " << std::endl;
-  stream << "    __read_only image2d_t A, \\ " << std::endl;
-  stream << "    __read_only image2d_t B, \\ " << std::endl;
-  stream << "    MATC_PARAMETER, \\ " << std::endl;
-  stream << "    float alpha, \\ " << std::endl;
-  stream << "    float beta, \\ " << std::endl;
-  stream << "    int width0) \\ " << std::endl;
-  stream << "{ \\ " << std::endl;
-  stream << "    const int group_x = get_group_id(0);\\ " << std::endl;
-  stream << "    const int group_y = get_group_id(1);\\ " << std::endl;
-  stream << "    float8 blockAxB00 = 0.0f;\\ " << std::endl;
-  stream << "    float8 blockAxB01 = 0.0f;\\ " << std::endl;
-  stream << "    float8 blockAxB02 = 0.0f;\\ " << std::endl;
-  stream << "    float8 blockAxB03 = 0.0f;\\ " << std::endl;
-  stream << "    int2    coordA = (int2)( group_y * TILE_M * sizeof(uint), 0 );\\ " << std::endl;
-  stream << "    int2    coordB = (int2)( ( group_x * TILE_N ) * sizeof(uint), 0 );\\ " << std::endl;
-  stream << "    do\\ " << std::endl;
-  stream << "    {\\ " << std::endl;
-  stream << "        int2    coordBTemp = coordB;\\ " << std::endl;
-  stream << "        float8 blockB00 = as_float8( intel_sub_group_block_read8( B, coordBTemp ) );    coordB.y += TILE_K;\\ " << std::endl;
-  stream << "        int2    coordATemp = coordA;\\ " << std::endl;
-  stream << "        float8 blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint);\\ " << std::endl;
-  stream << "        float8 blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint);\\ " << std::endl;
-  stream << "        float8 blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint);\\ " << std::endl;
-  stream << "        float8 blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.y += TILE_K;\\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00 ); \\ " << std::endl;
-  stream << "    } \\ " << std::endl;
-  stream << "    while( coordB.y < width0 ); \\ " << std::endl;
-  stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0); \\ " << std::endl;
-  stream << "} " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_TN(1, 0) " << std::endl;
-  stream << "GEMM_TN(1, 1)  " << std::endl;
-  stream << "GEMM_TN(0, 0)  " << std::endl;
-  stream << "GEMM_TN(0, 1)  " << std::endl;
-  stream << " " << std::endl;
-  stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
-  stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define TRANSPOSE_BLOCK_8( _block, _col )   \\ " << std::endl;
-  stream << "        (float8)( intel_sub_group_shuffle( _block.s0, _col),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s1, _col),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s2, _col),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s3, _col),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s4, _col),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s5, _col),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s6, _col),   \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle( _block.s7, _col) ) " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\ " << std::endl;
-  stream << "        {   \\ " << std::endl;
-  stream << "            const float8    acol0 = TRANSPOSE_BLOCK_8( _blockA, 0 );    \\ " << std::endl;
-  stream << "            const float8    acol1 = TRANSPOSE_BLOCK_8( _blockA, 1 );    \\ " << std::endl;
-  stream << "            const float8    acol2 = TRANSPOSE_BLOCK_8( _blockA, 2 );    \\ " << std::endl;
-  stream << "            const float8    acol3 = TRANSPOSE_BLOCK_8( _blockA, 3 );    \\ " << std::endl;
-  stream << "            const float8    acol4 = TRANSPOSE_BLOCK_8( _blockA, 4 );    \\ " << std::endl;
-  stream << "            const float8    acol5 = TRANSPOSE_BLOCK_8( _blockA, 5 );    \\ " << std::endl;
-  stream << "            const float8    acol6 = TRANSPOSE_BLOCK_8( _blockA, 6 );    \\ " << std::endl;
-  stream << "            const float8    acol7 = TRANSPOSE_BLOCK_8( _blockA, 7 );    \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s0, acol0, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s1, acol1, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s2, acol2, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s3, acol3, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s4, acol4, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s5, acol5, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s6, acol6, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s7, acol7, _result );      \\ " << std::endl;
-  stream << "        } " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define GEMM_NT(ALPHA1, BETA_NOT0, VECSCALAR, VECSIZE) \\ " << std::endl;
-  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\ " << std::endl;
-  stream << "__kernel void intelblas_gemm_image_32_1_NT_ ##VECSCALAR ##_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\ " << std::endl;
-  stream << "    __read_only image2d_t A, \\ " << std::endl;
-  stream << "    MATB_PARAMETER, \\ " << std::endl;
-  stream << "    MATC_PARAMETER, \\ " << std::endl;
-  stream << "    float alpha, \\ " << std::endl;
-  stream << "    float beta, \\ " << std::endl;
-  stream << "    int padded_k, \\ " << std::endl;
-  stream << "    int k) \\ " << std::endl;
-  stream << "{ \\ " << std::endl;
-  stream << "    const int group_x = get_group_id(0); \\ " << std::endl;
-  stream << "    const int group_y = get_group_id(1); \\ " << std::endl;
-  stream << "    float8 blockAxB00 = 0.0f; \\ " << std::endl;
-  stream << "    float8 blockAxB01 = 0.0f; \\ " << std::endl;
-  stream << "    float8 blockAxB02 = 0.0f; \\ " << std::endl;
-  stream << "    float8 blockAxB03 = 0.0f; \\ " << std::endl;
-  stream << "    int2    coordA = (int2)( 0, group_y * TILE_M ); \\ " << std::endl;
-  stream << "    int2    coordB = (int2)( 0, ( group_x * TILE_N )); \\ " << std::endl;
-  stream << "    const sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST; \\ " << std::endl;
-  stream << "    do \\ " << std::endl;
-  stream << "    { \\ " << std::endl;
-  stream << "        float8 blockB00;             \\ " << std::endl;
-  stream << "        BLOCKB_READ8(blockB00, B, coordB); \\ " << std::endl;
-  stream << "        int2    coordATemp = coordA; \\ " << std::endl;
-  stream << "        float8 blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
-  stream << "        float8 blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
-  stream << "        float8 blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\ " << std::endl;
-  stream << "        float8 blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.x += TILE_K * sizeof(uint); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00 ); \\ " << std::endl;
-  stream << "    } \\ " << std::endl;
-  stream << "    while( coordB.x < padded_k / VECSIZE ); \\ " << std::endl;
-  stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0); \\ " << std::endl;
-  stream << "} " << std::endl;
-  stream << " " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
-  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
-  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
-  stream << "        _blockb.s0123 = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s4567 = read_imagef(_B, _coordBTemp); _coordB.x += 2; " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_NT(1, 0, VEC4, 4) " << std::endl;
-  stream << "GEMM_NT(1, 1, VEC4, 4)  " << std::endl;
-  stream << "GEMM_NT(0, 0, VEC4, 4) " << std::endl;
-  stream << "GEMM_NT(0, 1, VEC4, 4) " << std::endl;
-  stream << "#undef BLOCKB_READ8 " << std::endl;
-  stream << "#undef MATB_PARAMETER " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
-  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
-  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
-  stream << "        _blockb = *(__global float8*)&_B[_coordBTemp.y * ldb + _coordBTemp.x + offB];\\ " << std::endl;
-  stream << "        _coordB.x += TILE_K; " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __global float *B, int offB, int ldb " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_NT(1, 0, BUFFER, 1)  " << std::endl;
-  stream << "GEMM_NT(1, 1, BUFFER, 1)  " << std::endl;
-  stream << "GEMM_NT(0, 0, BUFFER, 1)  " << std::endl;
-  stream << "GEMM_NT(0, 1, BUFFER, 1)  " << std::endl;
-  stream << "#undef BLOCKB_READ8 " << std::endl;
-  stream << "#undef MATB_PARAMETER " << std::endl;
-  stream << " " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
-  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
-  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
-  stream << "        float4 temp; \\ " << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s0 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s1 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s2 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s3 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s4 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s5 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s6 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s7 = temp.s0; \\ " << std::endl;
-  stream << "        _coordB.x += 8; " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_NT(1, 0, SCALAR, 1) " << std::endl;
-  stream << "GEMM_NT(1, 1, SCALAR, 1) " << std::endl;
-  stream << "GEMM_NT(0, 0, SCALAR, 1) " << std::endl;
-  stream << "GEMM_NT(0, 1, SCALAR, 1) " << std::endl;
-  stream << "#undef BLOCKB_READ8 " << std::endl;
-  stream << "#undef MATB_PARAMETER " << std::endl;
-  stream << " " << std::endl;
-  stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
-  stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define TRANSPOSE_BLOCK_8(_vec) \\ " << std::endl;
-  stream << "        (float8)( intel_sub_group_shuffle(_vec, 0), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 1), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 2), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 3), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 4), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 5), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 6), \\ " << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 7) ); " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\ " << std::endl;
-  stream << "        {   \\ " << std::endl;
-  stream << "            const float8    acol0 = TRANSPOSE_BLOCK_8( _blockA.s0 );    \\ " << std::endl;
-  stream << "            const float8    acol1 = TRANSPOSE_BLOCK_8( _blockA.s1 );    \\ " << std::endl;
-  stream << "            const float8    acol2 = TRANSPOSE_BLOCK_8( _blockA.s2 );    \\ " << std::endl;
-  stream << "            const float8    acol3 = TRANSPOSE_BLOCK_8( _blockA.s3 );    \\ " << std::endl;
-  stream << "            const float8    acol4 = TRANSPOSE_BLOCK_8( _blockA.s4 );    \\ " << std::endl;
-  stream << "            const float8    acol5 = TRANSPOSE_BLOCK_8( _blockA.s5 );    \\ " << std::endl;
-  stream << "            const float8    acol6 = TRANSPOSE_BLOCK_8( _blockA.s6 );    \\ " << std::endl;
-  stream << "            const float8    acol7 = TRANSPOSE_BLOCK_8( _blockA.s7 );    \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s0, acol0, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s1, acol1, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s2, acol2, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s3, acol3, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s4, acol4, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s5, acol5, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s6, acol6, _result );      \\ " << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s7, acol7, _result );      \\ " << std::endl;
-  stream << "        } " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define GEMM_TT(ALPHA1, BETA_NOT0, VECSCALAR, VECSIZE) \\ " << std::endl;
-  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\ " << std::endl;
-  stream << "__kernel void intelblas_gemm_image_32_1_TT_ ##VECSCALAR ##_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\ " << std::endl;
-  stream << "    __read_only image2d_t A, \\ " << std::endl;
-  stream << "    MATB_PARAMETER, \\ " << std::endl;
-  stream << "    MATC_PARAMETER, \\ " << std::endl;
-  stream << "    float alpha, \\ " << std::endl;
-  stream << "    float beta, \\ " << std::endl;
-  stream << "    int padded_k, \\ " << std::endl;
-  stream << "    int k) \\ " << std::endl;
-  stream << "{ \\ " << std::endl;
-  stream << "    const int group_x = get_group_id(0); \\ " << std::endl;
-  stream << "    const int group_y = get_group_id(1); \\ " << std::endl;
-  stream << "    float8 blockAxB00 = 0.0f; \\ " << std::endl;
-  stream << "    float8 blockAxB01 = 0.0f; \\ " << std::endl;
-  stream << "    float8 blockAxB02 = 0.0f; \\ " << std::endl;
-  stream << "    float8 blockAxB03 = 0.0f; \\ " << std::endl;
-  stream << "    int2    coordA = (int2)( group_y * TILE_M * sizeof(uint), 0 ); \\ " << std::endl;
-  stream << "    int2    coordB = (int2)( 0, ( group_x * TILE_N )); \\ " << std::endl;
-  stream << "    const sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST; \\ " << std::endl;
-  stream << "    do \\ " << std::endl;
-  stream << "    { \\ " << std::endl;
-  stream << "        float8 blockB00;             \\ " << std::endl;
-  stream << "        BLOCKB_READ8(blockB00, B, coordB); \\ " << std::endl;
-  stream << "        int2    coordATemp = coordA; \\ " << std::endl;
-  stream << "        float8 blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint); \\ " << std::endl;
-  stream << "        float8 blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint); \\ " << std::endl;
-  stream << "        float8 blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint); \\ " << std::endl;
-  stream << "        float8 blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.y += TILE_K; \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00 , blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01 , blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02 , blockB00 ); \\ " << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03 , blockB00 ); \\ " << std::endl;
-  stream << "    } \\ " << std::endl;
-  stream << "    while( coordB.x < padded_k / VECSIZE ); \\ " << std::endl;
-  stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0);\\ " << std::endl;
-  stream << "} " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
-  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
-  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
-  stream << "        blockB00.s0123 = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        blockB00.s4567 = read_imagef(B, _coordBTemp); _coordB.x += 2; " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_TT(1, 0, VEC4, 4) " << std::endl;
-  stream << "GEMM_TT(1, 1, VEC4, 4) " << std::endl;
-  stream << "GEMM_TT(0, 0, VEC4, 4) " << std::endl;
-  stream << "GEMM_TT(0, 1, VEC4, 4) " << std::endl;
-  stream << "#undef BLOCKB_READ8 " << std::endl;
-  stream << "#undef MATB_PARAMETER " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
-  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
-  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
-  stream << "        _blockb = *(__global float8*)&_B[_coordBTemp.y * ldb + _coordBTemp.x + offB];\\ " << std::endl;
-  stream << "        _coordB.x += TILE_K; " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __global float *B, int offB, int ldb " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_TT(1, 0, BUFFER, 1) " << std::endl;
-  stream << "GEMM_TT(1, 1, BUFFER, 1) " << std::endl;
-  stream << "GEMM_TT(0, 0, BUFFER, 1) " << std::endl;
-  stream << "GEMM_TT(0, 1, BUFFER, 1) " << std::endl;
-  stream << "#undef BLOCKB_READ8 " << std::endl;
-  stream << "#undef MATB_PARAMETER " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\ " << std::endl;
-  stream << "        int2 _coordBTemp = _coordB; \\ " << std::endl;
-  stream << "        _coordBTemp.y += get_local_id(0); \\ " << std::endl;
-  stream << "        float4 temp; \\ " << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s0 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s1 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s2 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s3 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s4 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s5 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s6 = temp.s0; \\ " << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\ " << std::endl;
-  stream << "        _blockb.s7 = temp.s0; \\ " << std::endl;
-  stream << "        _coordB.x += 8; " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_TT(1, 0, SCALAR, 1) " << std::endl;
-  stream << "GEMM_TT(1, 1, SCALAR, 1) " << std::endl;
-  stream << "GEMM_TT(0, 0, SCALAR, 1) " << std::endl;
-  stream << "GEMM_TT(0, 1, SCALAR, 1) " << std::endl;
-  stream << "#undef BLOCKB_READ8 " << std::endl;
-  stream << "#undef MATB_PARAMETER " << std::endl;
-  stream << " " << std::endl;
-  stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
-  stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
-  stream << " " << std::endl;
-  stream << "#undef TILE_M " << std::endl;
-  stream << "#undef TILE_K " << std::endl;
-  stream << "#undef TILE_N " << std::endl;
-
-  stream << "__kernel void gemm_buffer_copy_image_float( " << std::endl;
-  stream << "    __global float* A, " << std::endl;
-  stream << "    __write_only image2d_t ImA, " << std::endl;
-  stream << "    int offA, " << std::endl;
-  stream << "    int width, " << std::endl;
-  stream << "    int height, " << std::endl;
-  stream << "    int ldA) " << std::endl;
-  stream << "{ " << std::endl;
-  stream << "    const int gidx = get_global_id(0); " << std::endl;
-  stream << "    const int gidy = get_global_id(1); " << std::endl;
-  stream << "    int2 coord_dst = (int2)(gidx, gidy); " << std::endl;
-  stream << "    __global float* A_off = A + offA; " << std::endl;
-  stream << "    float srcA = A_off[gidy * ldA + gidx]; " << std::endl;
-  stream << "    write_imagef(ImA, coord_dst, (float4)srcA); " << std::endl;
-  stream << "} " << std::endl;
-  stream << " " << std::endl;
-
-  stream << "__kernel void gemm_buffer_copy_image_ui( " << std::endl;
-  stream << "    __global float* A, " << std::endl;
-  stream << "    __write_only image2d_t ImA, " << std::endl;
-  stream << "    int offA, " << std::endl;
-  stream << "    int width, " << std::endl;
-  stream << "    int height, " << std::endl;
-  stream << "    int ldA) " << std::endl;
-  stream << "{ " << std::endl;
-  stream << "    const int gidx = get_global_id(0); " << std::endl;
-  stream << "    const int gidy = get_global_id(1); " << std::endl;
-  stream << "    int2 coord_dst = (int2)(gidx, gidy); " << std::endl;
-  stream << "    if (gidx >= width || gidy >= height) { " << std::endl;
-  stream << "      write_imageui(ImA, coord_dst, (uint4)0); " << std::endl;
-  stream << "      return; " << std::endl;
-  stream << "    } " << std::endl;
-  stream << "    __global float* A_off = A + offA; " << std::endl;
-  stream << "    uint4 srcA = convert_uint4(as_uchar4(A_off[gidy * ldA + gidx])); " << std::endl;
-  stream << "    write_imageui(ImA, coord_dst, srcA); " << std::endl;
-  stream << "} " << std::endl;
-  stream << " " << std::endl;
-
-  return (stream.str() + buffer_kernel("for_image", device, tree));
-}
-
-void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program const & program, runtime::execution_handler const & control, cl_mem *image, cl_mem buffer, int offset,
-                                   bool is_matrix_a, bool transpose, bool padding, int padded_height, int padded_width, int height, int width, int ld) {
-  namespace drv = driver;
-  (void) control;
-  cl_image_desc desc;
-  cl_image_format format;
-
-  memset(&desc, 0, sizeof(desc));
-  if (!is_matrix_a && transpose) {
-    cl_int err;
-    format.image_channel_data_type = CL_FLOAT;
-    desc.image_type = CL_MEM_OBJECT_IMAGE2D;
-    desc.image_width = width;
-    format.image_channel_order = CL_R;
-    desc.image_height = height;
-    *image = drv::dispatch::clCreateImage(program.context().handle().cl(), CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
-    if(err != CL_SUCCESS)
-      exit(0);
-
-    if(ld == width) {
-      if(width % 4 == 0) {
-        desc.image_width = width / 4;
-        format.image_channel_order = CL_RGBA;
-      }
-      size_t origin[] = {0, 0, 0};
-      size_t region[] = {(size_t)desc.image_width, (size_t)desc.image_height, 1};
-      if(drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
-                                 buffer, *image, sizeof(float) * offset,
-                                 origin, region, 0,
-                                 NULL, NULL))
-        exit(0);
-      return;
-    }
-
-    std::string kernel_name("gemm_buffer_copy_image_float");
-    std::vector<drv::Kernel> kernels;
-    kernels.push_back(drv::Kernel(program, kernel_name.c_str()));
-
-    drv::Kernel & kernel = kernels[0];
-
-    unsigned int n_arg = 0;
-
-    kernel.setArg(n_arg++, buffer);
-    kernel.setArg(n_arg++, *image);
-    kernel.setSizeArg(n_arg++, offset);
-    kernel.setSizeArg(n_arg++, width);
-    kernel.setSizeArg(n_arg++, height);
-    kernel.setSizeArg(n_arg++, ld);
-
-    size_t global_copy[2];
-    global_copy[0] = width;
-    global_copy[1] = height;
-    if(drv::dispatch::clEnqueueNDRangeKernel(queue.handle().cl(), kernel.handle().cl(), 2, NULL, global_copy, NULL, 0, NULL, NULL) != CL_SUCCESS)
-      exit(0);
-    return;
-  }
-  
-  desc.image_type = CL_MEM_OBJECT_IMAGE2D;
-  format.image_channel_data_type = CL_UNSIGNED_INT8;
-  format.image_channel_order = CL_RGBA;
-  if (!padding) {
-    desc.image_width = width;
-    desc.image_height = height;
-  } else {
-    desc.image_width = padded_width;
-    desc.image_height = padded_height;
-  }
-  cl_int err;
-  *image = drv::dispatch::clCreateImage(program.context().handle().cl(), desc.buffer ? CL_MEM_READ_ONLY : CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
-  if(err != CL_SUCCESS)
-    exit(0);
-
-  if (!padding && desc.buffer != NULL)
-    return;
-  if (!padding && desc.buffer == NULL && ld == width) {
-    size_t origin[] = {0, 0, 0};
-    size_t region[] = {(size_t)width, (size_t)height, 1};
-    if(drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
-                               buffer, *image, sizeof(float) * offset,
-                               origin, region, 0, NULL, NULL))
-      exit(0);
-    return;
-  }
-
-  std::string kernel_name("gemm_buffer_copy_image_ui");
-  std::vector<drv::Kernel> kernels;
-  kernels.push_back(drv::Kernel(program, kernel_name.c_str()));
-
-  drv::Kernel & kernel = kernels[0];
-
-  unsigned int n_arg = 0;
-
-  kernel.setArg(n_arg++, buffer);
-  kernel.setArg(n_arg++, *image);
-  kernel.setSizeArg(n_arg++, offset);
-  kernel.setSizeArg(n_arg++, width);
-  kernel.setSizeArg(n_arg++, height);
-  kernel.setSizeArg(n_arg++, ld);
-
-  size_t global_copy[2];
-  global_copy[0] = padding ? padded_width : width;
-  global_copy[1] = padding ? padded_height : height;
-
-  if(drv::dispatch::clEnqueueNDRangeKernel(queue.handle().cl(), kernel.handle().cl(), 2, NULL, global_copy, NULL, 0, NULL, NULL) != CL_SUCCESS)
-    exit(0);
-}
-
-struct gemm_callback_arg {
-  std::vector<cl_event> evs;
-  std::vector<cl_mem> imgs;
-};
-
-static void CL_CALLBACK gemm_callback (cl_event event,
-                                cl_int event_command_exec_status,
-                                void *user_data) {
-  namespace drv = driver;
-  (void) event;
-  (void) event_command_exec_status;
-  struct gemm_callback_arg *arg = (struct gemm_callback_arg *) user_data;
-  for(int i = 0; i < (int)arg->evs.size(); i++) {
-    drv::dispatch::clReleaseEvent(arg->evs[i]);
-  }
-
-  for(int i = 0; i < (int)arg->imgs.size(); i++) {
-    drv::dispatch::clReleaseMemObject(arg->imgs[i]);
-  }
-  delete arg;
-}
-
-void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
-{
-  namespace drv = driver;
-  (void) suffix;
-  //Get GEMM info
-  symbolic::preset::gemm::args args;
-  std::vector<int_t> MNK = infos(control.x(), args, A_trans_);
-  int_t M = MNK[0], N = MNK[1], K = MNK[2];
-
-  size_t max_image_size_width, max_image_size_height;
-  drv::dispatch::clGetDeviceInfo(queue.device().handle().cl(), CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(size_t), (void *)(&max_image_size_width), NULL);
-  drv::dispatch::clGetDeviceInfo(queue.device().handle().cl(), CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof(size_t), (void *)(&max_image_size_height), NULL);
-
-  size_t max_image_size = std::min(max_image_size_width, max_image_size_height);
-
-  if((size_t)M > max_image_size || (size_t)N > max_image_size || (size_t)K > max_image_size) {
-    buffer_enqueue(queue, program, "for_image", control, A_trans_);
-    return;
-  }
-
-  int offA = args.A->array.start, offB = args.B->array.start, offC = args.C->array.start;
-  int ldA = args.A->ld[1];
-  int ldB = args.B->ld[1];
-  int ldC = args.C->ld[1];
-  //Default order in isaac is column major.
-  //This kernel is implemented in row major.
-  //Need to swap matrix A and B each time.
-  std::swap(args.A, args.B);
-  std::swap(offA, offB);
-  std::swap(ldA, ldB);
-  std::swap(M, N);
-
-  bool transA, transB;
-
-  if(args.type == GEMM_NN) {
-    transA = false;
-    transB = false;
-  } else if(args.type == GEMM_NT) {
-    transA = true;
-    transB = false;
-  } else if(args.type == GEMM_TN) {
-    transA = false;
-    transB = true;
-  } else {
-    transA = true;
-    transB = true;
-  }
-
-  int widthA = (transA == false) ? K : M;
-  int heightA = (transA == false) ? M : K;
-  int widthB = (transB == false) ? N : K;
-  int heightB = (transB == false) ? K : N;
-  // To fix the edge problem casued by the sub group block read.
-  // we have to pad the image if it's not multiple of tile.
-  // just padding one line is enough as the sub group block read
-  // will clamp to edge according to the spec.
-  int padded_k = K + ((K & 7) ? 1 : 0);
-  int imageA_w = (transA == false) ? padded_k : M;
-  int imageA_h = (transA == false) ? M : padded_k;
-  int imageB_w = (transB == false) ? N : padded_k;
-  int imageB_h = (transB == false) ? padded_k : N;
-
-  cl_mem ImA = NULL;
-  cl_mem ImB = NULL;
-
-  if(transB == false) {
-    bool padding_A = false;
-    bool padding_B = false;
-
-    if (M * K < N * K)
-      padding_B = true;
-    else
-      padding_A = true;
-
-    gpu_gemm_copy_buffer_to_image(queue, program, control, &ImA, args.A->array.handle.cl, offA, true, transA != false, padding_A, imageA_h, imageA_w, heightA, widthA, ldA);
-    gpu_gemm_copy_buffer_to_image(queue, program, control, &ImB, args.B->array.handle.cl, offB, false, false, padding_B, imageB_h, imageB_w, heightB, widthB, ldB);
-  } else {
-    gpu_gemm_copy_buffer_to_image(queue, program, control, &ImA, args.A->array.handle.cl, offA, true, transA != false, true, imageA_h, imageA_w, heightA, widthA, ldA);
-    if(ldB > widthB)
-      gpu_gemm_copy_buffer_to_image(queue, program, control, &ImB, args.B->array.handle.cl, offB, false, true, false, imageB_h, imageB_w, heightB, widthB, ldB);
-  }
-  
-  std::string kernel_name("intelblas_gemm_image_32_1_");
-
-  if(transA == false)
-    kernel_name += "N";
-  else
-    kernel_name += "T";
-
-  if(transB == false)
-    kernel_name += "N_";
-  else {
-    kernel_name += "T_";
-    if(ldB > widthB)
-      kernel_name += "SCALAR_";
-    else
-      kernel_name += "BUFFER_";
-  }
-
-  if(args.alpha.values().float32 == 1.0f)
-    kernel_name += "1_";
-  else
-    kernel_name += "0_";
-
-  if(args.beta.values().float32 == 0.0f)
-    kernel_name += "0";
-  else
-    kernel_name += "1";
-  kernel_name += "_float";
-
-  std::vector<driver::Kernel> kernels;
-  kernels.push_back(driver::Kernel(program, kernel_name.c_str()));
-  driver::Kernel & kernel = kernels[0];
-  unsigned int n_arg = 0;
-
-  kernel.setArg(n_arg++, ImA);
-  if(transB == false || ldB > widthB)
-    kernel.setArg(n_arg++, ImB);
-  else {
-    kernel.setArg(n_arg++, args.B->array.handle.cl);
-    kernel.setSizeArg(n_arg++, offB);
-    kernel.setSizeArg(n_arg++, ldB);
-  }
-  kernel.setArg(n_arg++, args.C->array.handle.cl);
-  kernel.setSizeArg(n_arg++, offC);
-  kernel.setSizeArg(n_arg++, M);
-  kernel.setSizeArg(n_arg++, N);
-  kernel.setSizeArg(n_arg++, ldC);
-  kernel.setArg(n_arg++, args.alpha);
-  kernel.setArg(n_arg++, args.beta);
-  kernel.setSizeArg(n_arg++, padded_k);
-  if(transB != false)
-    kernel.setSizeArg(n_arg++, K);
-
-  drv::NDRange local(8, 1);
-  drv::NDRange global((size_t)( N + 7 ) & ~7, (size_t)(M + 31) / 32);
-
-  control.execution_options().enqueue(program.context(), kernel, global, local);
-  // Dummy kernel to be used to release temporary images.
-  size_t origin[] = {0, 0, 0};
-  size_t region[] = {1, 1, 1};
-  cl_event event;
-  drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
-                                 args.A->array.handle.cl, ImA, 0,
-                                 origin, region, 0,
-                                 NULL, &event);
-  struct gemm_callback_arg * arg = new gemm_callback_arg;
-  arg->evs.push_back(event);
-  if (ImA)
-    arg->imgs.push_back(ImA);
-  if (ImB)
-    arg->imgs.push_back(ImB);
-  drv::dispatch::clSetEventCallback(event, CL_COMPLETE, &gemm_callback, (void*)arg);
-}
-
-/* -------------------------------------------- */
-
-/* ------------------ INTELBLAS_buffer ------------------ */
-intelblas_gemm::intelblas_gemm(char A_trans, char B_trans): A_trans_(A_trans), B_trans_(B_trans), init_(true)
-{ }
-
-int intelblas_gemm::is_invalid(expression_tree const  &, driver::Device const & device) const
-{ return (init_ && device.backend()==driver::OPENCL)?0:-1; }
-
-std::vector<int_t> intelblas_gemm::input_sizes(expression_tree const & expressions) const
-{
-  symbolic::preset::gemm::args dummy;
-  return infos((expression_tree&)expressions, dummy, A_trans_);
-}
-
-expression_type intelblas_gemm::type() const
-{
-  if(A_trans_=='N' && B_trans_=='N')
-    return GEMM_NN;
-  else if(A_trans_=='T' && B_trans_=='N')
-    return GEMM_TN;
-  else if(A_trans_=='N' && B_trans_=='T')
-    return GEMM_NT;
-  else
-    return GEMM_TT;
-}
-
-std::string intelblas_gemm::generate_impl(std::string const & suffix, expression_tree const & tree, driver::Device const & device, symbolic::symbols_table const & symbols) const
-{
-  (void) suffix;
-  (void) symbols;
-  return buffer_kernel("for_buffer", device, tree);
-}
-
-void intelblas_gemm::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
-{
-  (void) suffix;
-  buffer_enqueue(queue, program, "for_buffer", control, A_trans_);
 }
 
 /* -------------------------------------------- */
