@@ -116,8 +116,11 @@ public:
     static cl_int clGetKernelWorkGroupInfo(cl_kernel, cl_device_id, cl_kernel_work_group_info, size_t, void *, size_t *);
     static cl_kernel clCreateKernel(cl_program, const char *, cl_int *);
     static cl_mem clCreateBuffer(cl_context, cl_mem_flags, size_t, void *, cl_int *);
+    static cl_mem clCreateImage(cl_context, cl_mem_flags, const cl_image_format *, const cl_image_desc *, void *, cl_int *);
     static cl_program clCreateProgramWithSource(cl_context, cl_uint, const char **, const size_t *, cl_int *);
     static cl_int clReleaseKernel(cl_kernel);
+    static cl_int clEnqueueCopyBufferToImage(cl_command_queue, cl_mem, cl_mem, size_t, const size_t *, const size_t *, cl_uint, const cl_event *, cl_event *);
+    static cl_int clSetEventCallback(cl_event, cl_int, void (CL_CALLBACK * /* pfn_notify */)(cl_event, cl_int, void *), void *);
 
     //CUDA
     static CUresult cuCtxDestroy_v2(CUcontext ctx);
@@ -202,8 +205,11 @@ private:
     static void* clGetKernelWorkGroupInfo_;
     static void* clCreateKernel_;
     static void* clCreateBuffer_;
+    static void* clCreateImage_;
     static void* clCreateProgramWithSource_;
     static void* clReleaseKernel_;
+    static void* clEnqueueCopyBufferToImage_;
+    static void* clSetEventCallback_;
 
     //CUDA
     static void* cuCtxDestroy_v2_;
