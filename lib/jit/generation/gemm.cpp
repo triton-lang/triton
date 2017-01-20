@@ -1838,6 +1838,7 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
 
 void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program const & program, runtime::execution_handler const & control, cl_mem *image, cl_mem buffer, int offset,
                                    bool is_matrix_a, bool transpose, bool padding, int padded_height, int padded_width, int height, int width, int ld) {
+  namespace drv = driver;
   (void) control;
   cl_image_desc desc;
   cl_image_format format;
@@ -1850,7 +1851,7 @@ void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program
     desc.image_width = width;
     format.image_channel_order = CL_R;
     desc.image_height = height;
-    *image = clCreateImage(program.context().handle().cl(), CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
+    *image = drv::dispatch::clCreateImage(program.context().handle().cl(), CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
     if(err != CL_SUCCESS)
       exit(0);
 
@@ -1861,7 +1862,7 @@ void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program
       }
       size_t origin[] = {0, 0, 0};
       size_t region[] = {(size_t)desc.image_width, (size_t)desc.image_height, 1};
-      if(clEnqueueCopyBufferToImage(queue.handle().cl(),
+      if(drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
                                  buffer, *image, sizeof(float) * offset,
                                  origin, region, 0,
                                  NULL, NULL))
@@ -1870,10 +1871,10 @@ void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program
     }
 
     std::string kernel_name("gemm_buffer_copy_image_float");
-    std::vector<driver::Kernel> kernels;
-    kernels.push_back(driver::Kernel(program, kernel_name.c_str()));
+    std::vector<drv::Kernel> kernels;
+    kernels.push_back(drv::Kernel(program, kernel_name.c_str()));
 
-    driver::Kernel & kernel = kernels[0];
+    drv::Kernel & kernel = kernels[0];
 
     unsigned int n_arg = 0;
 
@@ -1887,7 +1888,7 @@ void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program
     size_t global_copy[2];
     global_copy[0] = width;
     global_copy[1] = height;
-    if(clEnqueueNDRangeKernel(queue.handle().cl(), kernel.handle().cl(), 2, NULL, global_copy, NULL, 0, NULL, NULL) != CL_SUCCESS)
+    if(drv::dispatch::clEnqueueNDRangeKernel(queue.handle().cl(), kernel.handle().cl(), 2, NULL, global_copy, NULL, 0, NULL, NULL) != CL_SUCCESS)
       exit(0);
     return;
   }
@@ -1903,7 +1904,7 @@ void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program
     desc.image_height = padded_height;
   }
   cl_int err;
-  *image = clCreateImage(program.context().handle().cl(), desc.buffer ? CL_MEM_READ_ONLY : CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
+  *image = drv::dispatch::clCreateImage(program.context().handle().cl(), desc.buffer ? CL_MEM_READ_ONLY : CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
   if(err != CL_SUCCESS)
     exit(0);
 
@@ -1912,7 +1913,7 @@ void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program
   if (!padding && desc.buffer == NULL && ld == width) {
     size_t origin[] = {0, 0, 0};
     size_t region[] = {(size_t)width, (size_t)height, 1};
-    if(clEnqueueCopyBufferToImage(queue.handle().cl(),
+    if(drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
                                buffer, *image, sizeof(float) * offset,
                                origin, region, 0, NULL, NULL))
       exit(0);
@@ -1920,10 +1921,10 @@ void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program
   }
 
   std::string kernel_name("gemm_buffer_copy_image_ui");
-  std::vector<driver::Kernel> kernels;
-  kernels.push_back(driver::Kernel(program, kernel_name.c_str()));
+  std::vector<drv::Kernel> kernels;
+  kernels.push_back(drv::Kernel(program, kernel_name.c_str()));
 
-  driver::Kernel & kernel = kernels[0];
+  drv::Kernel & kernel = kernels[0];
 
   unsigned int n_arg = 0;
 
@@ -1938,23 +1939,44 @@ void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program
   global_copy[0] = padding ? padded_width : width;
   global_copy[1] = padding ? padded_height : height;
 
-  if(clEnqueueNDRangeKernel(queue.handle().cl(), kernel.handle().cl(), 2, NULL, global_copy, NULL, 0, NULL, NULL) != CL_SUCCESS)
+  if(drv::dispatch::clEnqueueNDRangeKernel(queue.handle().cl(), kernel.handle().cl(), 2, NULL, global_copy, NULL, 0, NULL, NULL) != CL_SUCCESS)
     exit(0);
 }
 
+struct gemm_callback_arg {
+  std::vector<cl_event> evs;
+  std::vector<cl_mem> imgs;
+};
+
+static void CL_CALLBACK gemm_callback (cl_event event,
+                                cl_int event_command_exec_status,
+                                void *user_data) {
+  namespace drv = driver;
+  (void) event;
+  (void) event_command_exec_status;
+  struct gemm_callback_arg *arg = (struct gemm_callback_arg *) user_data;
+  for(int i = 0; i < (int)arg->evs.size(); i++) {
+    drv::dispatch::clReleaseEvent(arg->evs[i]);
+  }
+
+  for(int i = 0; i < (int)arg->imgs.size(); i++) {
+    drv::dispatch::clReleaseMemObject(arg->imgs[i]);
+  }
+  delete arg;
+}
 
 void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program const & program, std::string const & suffix, runtime::execution_handler const & control)
 {
-  (void) suffix;
   namespace drv = driver;
+  (void) suffix;
   //Get GEMM info
   symbolic::preset::gemm::args args;
   std::vector<int_t> MNK = infos(control.x(), args, A_trans_);
   int_t M = MNK[0], N = MNK[1], K = MNK[2];
 
   size_t max_image_size_width, max_image_size_height;
-  clGetDeviceInfo(queue.device().handle().cl(), CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(size_t), (void *)(&max_image_size_width), NULL);
-  clGetDeviceInfo(queue.device().handle().cl(), CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof(size_t), (void *)(&max_image_size_height), NULL);
+  drv::dispatch::clGetDeviceInfo(queue.device().handle().cl(), CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(size_t), (void *)(&max_image_size_width), NULL);
+  drv::dispatch::clGetDeviceInfo(queue.device().handle().cl(), CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof(size_t), (void *)(&max_image_size_height), NULL);
 
   size_t max_image_size = std::min(max_image_size_width, max_image_size_height);
 
@@ -2077,10 +2099,25 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
   if(transB != false)
     kernel.setSizeArg(n_arg++, K);
 
-  driver::NDRange local(8, 1);
-  driver::NDRange global((size_t)( N + 7 ) & ~7, (size_t)(M + 31) / 32);
+  drv::NDRange local(8, 1);
+  drv::NDRange global((size_t)( N + 7 ) & ~7, (size_t)(M + 31) / 32);
 
   control.execution_options().enqueue(program.context(), kernel, global, local);
+  // Dummy kernel to be used to release temporary images.
+  size_t origin[] = {0, 0, 0};
+  size_t region[] = {1, 1, 1};
+  cl_event event;
+  drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
+                                 args.A->array.handle.cl, ImA, 0,
+                                 origin, region, 0,
+                                 NULL, &event);
+  struct gemm_callback_arg * arg = new gemm_callback_arg;
+  arg->evs.push_back(event);
+  if (ImA)
+    arg->imgs.push_back(ImA);
+  if (ImB)
+    arg->imgs.push_back(ImB);
+  drv::dispatch::clSetEventCallback(event, CL_COMPLETE, &gemm_callback, (void*)arg);
 }
 
 /* -------------------------------------------- */
