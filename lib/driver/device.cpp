@@ -27,6 +27,7 @@
 
 #include "isaac/driver/device.h"
 #include "helpers/ocl/infos.hpp"
+#include "isaac/tools/sys/cpuid.hpp"
 
 namespace isaac
 {
@@ -56,118 +57,107 @@ Device::Device(cl_device_id const & device, bool take_ownership) : backend_(OPEN
 
 Device::Vendor Device::vendor() const
 {
-    std::string vname = vendor_str();
-    std::transform(vname.begin(), vname.end(), vname.begin(), ::tolower);
-    if(vname.find("nvidia")!=std::string::npos)
-        return Vendor::NVIDIA;
-    else if(vname.find("intel")!=std::string::npos)
-        return Vendor::INTEL;
-    else if(vname.find("amd")!=std::string::npos || vname.find("advanced micro devices")!=std::string::npos)
-        return Vendor::AMD;
-    else
-        return Vendor::UNKNOWN;
+  std::string vname = vendor_str();
+  std::transform(vname.begin(), vname.end(), vname.begin(), ::tolower);
+  if(vname.find("nvidia")!=std::string::npos)
+    return Vendor::NVIDIA;
+  else if(vname.find("intel")!=std::string::npos)
+    return Vendor::INTEL;
+  else if(vname.find("amd")!=std::string::npos || vname.find("advanced micro devices")!=std::string::npos)
+    return Vendor::AMD;
+  else
+    return Vendor::UNKNOWN;
 }
 
 
 Device::Architecture Device::architecture() const
 {
-    switch(vendor())
+  Device::Vendor vdor = vendor();
+  switch(vendor())
+  {
+    //Intel
+    if(vdor==Vendor::INTEL)
     {
-        case Vendor::INTEL:
-        {
-            return Architecture::BROADWELL;
-        }
-        case Vendor::NVIDIA:
-        {
-            std::pair<unsigned int, unsigned int> sm = nv_compute_capability();
-            switch(sm.first)
-            {
-                case 6:
-                  switch(sm.second)
-                  {
-                    case 0: return Architecture::SM_6_0;
-                    case 1: return Architecture::SM_6_1;
-                  }
-
-                case 5:
-                  switch(sm.second)
-                  {
-                    case 0: return Architecture::SM_5_0;
-                    case 2: return Architecture::SM_5_2;
-                    default: return Architecture::UNKNOWN;
-                  }
-
-                case 3:
-                    switch(sm.second)
-                    {
-                      case 0: return Architecture::SM_3_0;
-                      case 5: return Architecture::SM_3_5;
-                      case 7: return Architecture::SM_3_7;
-                      default: return Architecture::UNKNOWN;
-                    }
-
-                case 2:
-                    switch(sm.second)
-                    {
-                      case 0: return Architecture::SM_2_0;
-                      case 1: return Architecture::SM_2_1;
-                      default: return Architecture::UNKNOWN;
-                    }
-
-                default: return Architecture::UNKNOWN;
-            }
-        }
-        case Vendor::AMD:
-        {
-            //No simple way to query TeraScale/GCN version. Enumerate...
-            std::string device_name = name();
-
-        #define MAP_DEVICE(device,arch)if (device_name.find(device,0)!=std::string::npos) return Architecture::arch;
-            //TERASCALE 2
-            MAP_DEVICE("Barts",TERASCALE_2);
-            MAP_DEVICE("Cedar",TERASCALE_2);
-            MAP_DEVICE("Redwood",TERASCALE_2);
-            MAP_DEVICE("Juniper",TERASCALE_2);
-            MAP_DEVICE("Cypress",TERASCALE_2);
-            MAP_DEVICE("Hemlock",TERASCALE_2);
-            MAP_DEVICE("Caicos",TERASCALE_2);
-            MAP_DEVICE("Turks",TERASCALE_2);
-            MAP_DEVICE("WinterPark",TERASCALE_2);
-            MAP_DEVICE("BeaverCreek",TERASCALE_2);
-
-            //TERASCALE 3
-            MAP_DEVICE("Cayman",TERASCALE_3);
-            MAP_DEVICE("Antilles",TERASCALE_3);
-            MAP_DEVICE("Scrapper",TERASCALE_3);
-            MAP_DEVICE("Devastator",TERASCALE_3);
-
-            //GCN 1
-            MAP_DEVICE("Cape",GCN_1);
-            MAP_DEVICE("Pitcairn",GCN_1);
-            MAP_DEVICE("Tahiti",GCN_1);
-            MAP_DEVICE("New Zealand",GCN_1);
-            MAP_DEVICE("Curacao",GCN_1);
-            MAP_DEVICE("Malta",GCN_1);
-
-            //GCN 2
-            MAP_DEVICE("Bonaire",GCN_2);
-            MAP_DEVICE("Hawaii",GCN_2);
-            MAP_DEVICE("Vesuvius",GCN_2);
-
-            //GCN 3
-            MAP_DEVICE("Tonga",GCN_3);
-            MAP_DEVICE("Fiji",GCN_3);
-
-            //GCN 4
-            MAP_DEVICE("Polaris",GCN_4);
-        #undef MAP_DEVICE
-
-        }
-        default:
-        {
-            return Architecture::UNKNOWN;
-        }
+      std::string brand = tools::cpu_brand();
+      size_t idx = brand.find('-');
+      if(idx!=std::string::npos){
+        if(brand[idx+1]=='4')
+          return Architecture::HASWELL;
+        if(brand[idx+1]=='5')
+          return Architecture::BROADWELL;
+        if(brand[idx+1]=='6')
+          return Architecture::SKYLAKE;
+        if(brand[idx+1]=='7')
+          return Architecture::KABYLAKE;
+      }
+      return Architecture::UNKNOWN;
     }
+    //NVidia
+    case Vendor::NVIDIA:
+    {
+      std::pair<unsigned int, unsigned int> sm = nv_compute_capability();
+      if(sm.first==2 && sm.second==0) return Architecture::SM_2_0;
+      if(sm.first==2 && sm.second==1) return Architecture::SM_2_1;
+      if(sm.first==3 && sm.second==0) return Architecture::SM_3_0;
+      if(sm.first==3 && sm.second==5) return Architecture::SM_3_5;
+      if(sm.first==3 && sm.second==7) return Architecture::SM_3_7;
+      if(sm.first==5 && sm.second==0) return Architecture::SM_5_0;
+      if(sm.first==5 && sm.second==2) return Architecture::SM_5_2;
+      if(sm.first==6 && sm.second==0) return Architecture::SM_6_0;
+      if(sm.first==6 && sm.second==1) return Architecture::SM_6_1;
+      return Architecture::UNKNOWN;
+    }
+    //AMD
+    case Vendor::AMD:
+    {
+      //No simple way to query TeraScale/GCN version. Enumerate...
+      std::string device_name = name();
+
+    #define MAP_DEVICE(device,arch)if (device_name.find(device,0)!=std::string::npos) return Architecture::arch;
+      //TERASCALE 2
+      MAP_DEVICE("Barts",TERASCALE_2);
+      MAP_DEVICE("Cedar",TERASCALE_2);
+      MAP_DEVICE("Redwood",TERASCALE_2);
+      MAP_DEVICE("Juniper",TERASCALE_2);
+      MAP_DEVICE("Cypress",TERASCALE_2);
+      MAP_DEVICE("Hemlock",TERASCALE_2);
+      MAP_DEVICE("Caicos",TERASCALE_2);
+      MAP_DEVICE("Turks",TERASCALE_2);
+      MAP_DEVICE("WinterPark",TERASCALE_2);
+      MAP_DEVICE("BeaverCreek",TERASCALE_2);
+
+      //TERASCALE 3
+      MAP_DEVICE("Cayman",TERASCALE_3);
+      MAP_DEVICE("Antilles",TERASCALE_3);
+      MAP_DEVICE("Scrapper",TERASCALE_3);
+      MAP_DEVICE("Devastator",TERASCALE_3);
+
+      //GCN 1
+      MAP_DEVICE("Cape",GCN_1);
+      MAP_DEVICE("Pitcairn",GCN_1);
+      MAP_DEVICE("Tahiti",GCN_1);
+      MAP_DEVICE("New Zealand",GCN_1);
+      MAP_DEVICE("Curacao",GCN_1);
+      MAP_DEVICE("Malta",GCN_1);
+
+      //GCN 2
+      MAP_DEVICE("Bonaire",GCN_2);
+      MAP_DEVICE("Hawaii",GCN_2);
+      MAP_DEVICE("Vesuvius",GCN_2);
+
+      //GCN 3
+      MAP_DEVICE("Tonga",GCN_3);
+      MAP_DEVICE("Fiji",GCN_3);
+
+      //GCN 4
+      MAP_DEVICE("Polaris",GCN_4);
+    #undef MAP_DEVICE
+    }
+    default:
+    {
+      return Architecture::UNKNOWN;
+    }
+  }
 }
 
 backend_type Device::backend() const
