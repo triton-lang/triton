@@ -72,11 +72,10 @@ Device::Vendor Device::vendor() const
 
 Device::Architecture Device::architecture() const
 {
-  Device::Vendor vdor = vendor();
   switch(vendor())
   {
     //Intel
-    if(vdor==Vendor::INTEL)
+    case Vendor::INTEL:
     {
       std::string brand = tools::cpu_brand();
       size_t idx = brand.find('-');
