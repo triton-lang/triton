@@ -24,6 +24,7 @@
 #define ISAAC_SYMBOLIC_PRESET_H_
 
 #include "isaac/jit/syntax/expression/expression.h"
+#include "isaac/common/numeric_type.h"
 
 namespace isaac
 {
