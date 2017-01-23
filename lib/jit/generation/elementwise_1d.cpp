@@ -30,6 +30,7 @@
 #include "tools/vector_types.hpp"
 #include "tools/arguments.hpp"
 
+
 #include <string>
 
 namespace isaac
@@ -71,7 +72,7 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
     stream << "{" << std::endl;
     stream.inc_tab();
   }
-
+  stream << tools::join(negative_inc_process(device, symbols, tree), "  ") << std::endl;
   element_wise_loop_1D(stream, vwidth_, "i", "N", "$GLOBAL_IDX_0", "$GLOBAL_SIZE_0", [&](unsigned int vwidth)
   {
     std::string dtype = append_width("#scalartype",vwidth);
@@ -83,27 +84,25 @@ std::string elementwise_1d::generate_impl(std::string const & suffix, expression
     //Load to registers
     for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assignments_rhs, false))
       stream << sym->process(dtype + " #name = " + append_width("loadv", vwidth) + "(i);") << std::endl;
-
     //Compute
     for(size_t idx: assignments)
       for(unsigned int s = 0 ; s < vwidth ; ++s)
-         stream << symbols.at(idx)->evaluate({{"leaf", access_vector_type("#name", s, vwidth)}}) << ";" << std::endl;
+        stream << symbols.at(idx)->evaluate({{"leaf", access_vector_type("#name", s, vwidth)}}) << ";" << std::endl;
 
     //Writes back
     for(symbolic::leaf* sym: symbolic::extract<symbolic::leaf>(tree, symbols, assignments_lhs, false))
       for(unsigned int s = 0 ; s < vwidth ; ++s)
-          stream << sym->process("at(i+" + tools::to_string(s)+") = " + access_vector_type("#name", s, vwidth) + ";") << std::endl;
+        stream << sym->process("at(i+" + tools::to_string(s)+") = " + access_vector_type("#name", s, vwidth) + ";") << std::endl;
   });
   //Close user-provided for-loops
   if(sfors.size()){
     stream.dec_tab();
     stream << "}" << std::endl;
   }
-
   stream.dec_tab();
   stream << "}" << std::endl;
 
-//  std::cout << stream.str() << std::endl;
+  // std::cout << stream.str() << std::endl;
   return stream.str();
 }
 

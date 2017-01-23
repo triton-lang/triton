@@ -92,6 +92,7 @@ extern "C"
                              cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
+        if(incx < 0) return clblasSuccess;\
         sc::array x((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mx,false), (sc::int_t)offx, incx);\
         execute(sc::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         return clblasSuccess;\
@@ -143,6 +144,11 @@ extern "C"
                              cl_mem /*scratchBuff*/, cl_uint numCommandQueues, cl_command_queue *commandQueues,\
                              cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)\
     {\
+        if(incx <= 0) {\
+          sc::array sum((sc::int_t)offAsum + 1, TYPE_ISAAC, sc::driver::Buffer(asum, false), (sc::int_t)offAsum, 1);\
+          sum[0] = 0;\
+          return clblasSuccess;\
+        }\
         sc::array x((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mx, false), (sc::int_t)offx, incx);\
         sc::scalar s(TYPE_ISAAC, sc::driver::Buffer(asum, false), (sc::int_t)offAsum);\
         execute(sc::assign(s, sum(abs(x))), s.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
@@ -167,7 +173,7 @@ extern "C"
     {\
         if(order==clblasRowMajor){\
             std::swap(M, N);\
-            transA = (transA==clblasTrans)?clblasNoTrans:clblasTrans;\
+            transA = (transA==clblasTrans  || transA==clblasConjTrans)?clblasNoTrans:clblasTrans;\
         }\
         sc::array A((sc::int_t)M, (sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mA, false), (sc::int_t)offA, (sc::int_t)lda);\
         \
@@ -177,7 +183,7 @@ extern "C"
         sc::array y(sy, TYPE_ISAAC, sc::driver::Buffer(my, false), (sc::int_t)offy, incy);\
         \
         sc::driver::Context const & context = A.context();\
-        if(transA==clblasTrans)\
+        if(transA==clblasTrans || transA==clblasConjTrans)\
             execute(sc::assign(y, alpha*dot(A.T, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else\
             execute(sc::assign(y, alpha*dot(A, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
@@ -226,11 +232,11 @@ extern "C"
         sc::array C((sc::int_t)M, (sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mC, false), (sc::int_t)offC, (sc::int_t)ldc);\
         sc::driver::Context const & context = C.context();\
         /*Operation*/\
-        if((transA==clblasTrans) && (transB==clblasTrans))\
+        if((transA==clblasTrans || transA==clblasConjTrans) && (transB==clblasTrans || transB==clblasConjTrans))\
             execute(sc::assign(C, alpha*dot(A.T, B.T) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
-        else if((transA==clblasTrans) && (transB==clblasNoTrans))\
+        else if((transA==clblasTrans || transA==clblasConjTrans) && (transB==clblasNoTrans))\
             execute(sc::assign(C, alpha*dot(A.T, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
-        else if((transA==clblasNoTrans) && (transB==clblasTrans))\
+        else if((transA==clblasNoTrans) && (transB==clblasTrans || transB==clblasConjTrans))\
             execute(sc::assign(C, alpha*dot(A, B.T) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
         else\
             execute(sc::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);\
