@@ -114,6 +114,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   std::ostringstream upper;
   upper << "(M +" << ls1_ - 1 << ")/" << ls1_ << "*" << ls1_;
 
+  stream << tools::join(reduce_2d_negative_inc_process(device, symbols, tree), "  ") << std::endl;
   element_wise_loop_1D(stream, (reduction_type_==REDUCE_ROWS)?1:1, "r", upper.str(), "$GLOBAL_IDX_1", "$GLOBAL_SIZE_1", [&](unsigned int cwidth)
   {
   //Declare Buffers
@@ -212,6 +213,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream << "{" << std::endl;
   stream.inc_tab();
   unroll_tmp();
+  stream << tools::join(reduce_2d_negative_inc_process(device, symbols, tree), "  ") << std::endl;
   for (symbolic::reduce_2d* rd : reductions)
     stream << rd->process("$LOCAL #scalartype #name_buf[" + to_string(ls1_*ldls) + "];") << std::endl;
   stream << "for($SIZE_T r = $GLOBAL_IDX_1; r < (M +" << ls1_ - 1 << ")/" << ls1_ << "*" << ls1_ << "; r += " << GlobalSize1(backend) << "){" << std::endl;
@@ -265,7 +267,7 @@ std::string reduce_2d::generate_impl(std::string const & suffix, expression_tree
   stream << "}" << std::endl;
   }
 
-//  std::cout << stream.str() << std::endl;
+ // std::cout << stream.str() << std::endl;
   return stream.str();
 }
 

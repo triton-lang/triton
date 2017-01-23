@@ -44,7 +44,11 @@ inline std::vector<std::string> kernel_arguments(driver::Device const &, symboli
         result.push_back(sym->process("#scalartype #name_value"));
       if(symbolic::buffer* sym = dynamic_cast<symbolic::buffer*>(obj))
       {
-        result.push_back("$GLOBAL " + sym->process("#scalartype* #pointer"));
+        std::string pointer_name = sym->process("#scalartype* #pointer");
+        if(sym->hasattr("inc0") && !sym->hasattr("inc1"))
+          result.push_back("$GLOBAL " + pointer_name+"_bk");
+        else
+          result.push_back("$GLOBAL " + pointer_name);
         if(sym->hasattr("off")) result.push_back("$SIZE_T " + sym->process("#off"));
         if(sym->hasattr("inc0")) result.push_back("$SIZE_T " + sym->process("#inc0"));
         if(sym->hasattr("inc1")) result.push_back("$SIZE_T " + sym->process("#inc1"));
@@ -58,6 +62,60 @@ inline std::vector<std::string> kernel_arguments(driver::Device const &, symboli
     return result;
 }
 
+
+inline std::vector<std::string> negative_inc_process(driver::Device const &, symbolic::symbols_table const & symbols, expression_tree const & expressions)
+{
+    std::vector<std::string> result;
+    for(symbolic::object* obj: symbolic::extract<symbolic::object>(expressions, symbols))
+    {
+      if(symbolic::buffer* sym = dynamic_cast<symbolic::buffer*>(obj))
+        if( sym->hasattr("inc0")  && ! sym->hasattr("inc1"))
+        {
+          std::string pointer = sym->process("#scalartype* #pointer");
+          {
+            int pointer_pos = pointer.find_first_of(" ");
+            std::string pointer_name = pointer.substr(pointer_pos+1, pointer.length());
+            std::string inc0 = sym->process("#inc0");
+            std::string type = pointer.substr(0,pointer_pos);
+            std::string pointer_dec = "__global " + type + " " + pointer_name;
+            std::string pointer_def = pointer_dec + " = " + pointer_name + "_bk;";
+            std::string judge = "  if(" + inc0 + " < 0)";
+            std::string re = pointer_def + "\n"+judge + "\n" +  "    " + pointer_name + " += (1-N) * " + inc0+";\n";
+            result.push_back(re);
+          }
+        }
+    }
+    return result;
+}
+
+inline std::vector<std::string> reduce_2d_negative_inc_process(driver::Device const &, symbolic::symbols_table const & symbols, expression_tree const & expressions)
+{
+    std::vector<std::string> result;
+    for(symbolic::object* obj: symbolic::extract<symbolic::object>(expressions, symbols))
+    {
+      if(symbolic::buffer* sym = dynamic_cast<symbolic::buffer*>(obj))
+        if( sym->hasattr("inc0")  && ! sym->hasattr("inc1"))
+        {
+          std::string pointer = sym->process("#scalartype* #pointer");
+          {
+            int pointer_pos = pointer.find_first_of(" ");
+            std::string pointer_name = pointer.substr(pointer_pos+1, pointer.length());
+            std::string inc0 = sym->process("#inc0");
+            std::string type = pointer.substr(0,pointer_pos);
+            std::string pointer_dec = "__global " + type + " " + pointer_name;
+            std::string pointer_def = pointer_dec + " = " + pointer_name + "_bk;";
+            std::string judge = "  if(" + inc0 + " < 0)";
+            std::string re;
+            if(pointer.find("obj3") == std::string::npos )
+              re = pointer_def + "\n"+judge + "\n" +  "    " + pointer_name + " += (1-M) * " + inc0+";\n";
+            else
+              re = pointer_def + "\n"+judge + "\n" +  "    " + pointer_name + " += (1-N) * " + inc0+";\n";
+            result.push_back(re);
+          }
+        }
+    }
+    return result;
+}
 
 }
 }
