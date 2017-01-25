@@ -223,7 +223,7 @@ std::string array::make_broadcast(const tuple &shape)
 }
 
 //
-buffer::buffer(driver::Context const & context, std::string const & scalartype, unsigned int id, const tuple &shape, tuple const & strides) : array(context, scalartype, id), dim_(numgt1(shape))
+buffer::buffer(driver::Context const & context, std::string const & scalartype, unsigned int id, const tuple &shape, tuple const & /*strides*/) : array(context, scalartype, id), dim_(numgt1(shape))
 {
   //Attributes
   attributes_["off"] = process("#name_off");
