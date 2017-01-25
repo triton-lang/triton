@@ -76,7 +76,15 @@ double bench(OP const & op, SYNC const & sync)
   return min(times);
 }
 
-void print_results_header(std::vector<std::string> sections, bool on_cl, bool on_cu){
+void print_results_header(std::vector<std::string> sections, bool
+                          #ifdef BENCH_CLBLAS
+                          on_cl
+                          #endif
+                          , bool
+                          #ifdef BENCH_CUBLAS
+                          on_cu
+                          #endif
+                          ){
     std::cout << color_stream(ITALIC) << color_stream(BOLD) ;
     std::copy(sections.begin(), sections.end(), std::ostream_iterator<std::string>(std::cout, "\t"));
     std::cout << "ISAAC";
