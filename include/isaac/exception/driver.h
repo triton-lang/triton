@@ -35,6 +35,14 @@ namespace isaac
 namespace exception
 {
 
+  class ISAACAPI unknown_architecture: public std::exception{
+    public:
+      unknown_architecture(std::string const & msg): msg_("Unrecognized architecture: " + msg){}
+      const char * what() const throw(){ return msg_.c_str(); }
+    private:
+      std::string msg_;
+  };
+
 namespace nvrtc
 {
 
