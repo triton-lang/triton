@@ -25,10 +25,14 @@
 
 #include <stdexcept>
 #include "isaac/exception/api.h"
-#include "simple_half.h"
 namespace isaac
 {
 
+class half{
+/* It is a incompleted class for compiling using*/
+public:
+  half() {};
+};
 enum numeric_type
 {
   INVALID_NUMERIC_TYPE = 0,

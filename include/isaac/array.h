@@ -184,7 +184,6 @@ public:
   INSTANTIATE(unsigned long)
   INSTANTIATE(long long)
   INSTANTIATE(unsigned long long)
-  INSTANTIATE(half)
   INSTANTIATE(float)
   INSTANTIATE(double)
 #undef INSTANTIATE
