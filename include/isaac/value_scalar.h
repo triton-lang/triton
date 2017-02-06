@@ -34,7 +34,7 @@ namespace isaac
 class scalar;
 class expression_tree;
 
-struct ISAACAPI values_holder
+union ISAACAPI values_holder
 {
   int8_t int8;
   uint8_t uint8;
@@ -44,7 +44,6 @@ struct ISAACAPI values_holder
   uint32_t uint32;
   int64_t int64;
   uint64_t uint64;
-  half   float16;
   float float32;
   double float64;
 };
@@ -89,7 +88,6 @@ public:
   INSTANTIATE(unsigned long)
   INSTANTIATE(long long)
   INSTANTIATE(unsigned long long)
-  INSTANTIATE(half)
   INSTANTIATE(float)
   INSTANTIATE(double)
 #undef INSTANTIATE
@@ -106,7 +104,6 @@ ISAACAPI value_scalar int32(int32_t v);
 ISAACAPI value_scalar uint32(uint32_t v);
 ISAACAPI value_scalar int64(int64_t v);
 ISAACAPI value_scalar uint64(uint64_t v);
-ISAACAPI value_scalar float16(half v);
 ISAACAPI value_scalar float32(float v);
 ISAACAPI value_scalar float64(double v);
 
@@ -124,7 +121,6 @@ ISAACAPI RET OPNAME (value_scalar const &, long  );\
 ISAACAPI RET OPNAME (value_scalar const &, unsigned long );\
 ISAACAPI RET OPNAME (value_scalar const &, long long);\
 ISAACAPI RET OPNAME (value_scalar const &, unsigned long long);\
-ISAACAPI RET OPNAME (value_scalar const &, half );\
 ISAACAPI RET OPNAME (value_scalar const &, float );\
 ISAACAPI RET OPNAME (value_scalar const &, double);\
 ISAACAPI RET OPNAME (char   , value_scalar const &);\
@@ -137,7 +133,6 @@ ISAACAPI RET OPNAME (long   , value_scalar const &);\
 ISAACAPI RET OPNAME (unsigned long  , value_scalar const &);\
 ISAACAPI RET OPNAME (long long, value_scalar const &);\
 ISAACAPI RET OPNAME (unsigned long long, value_scalar const &);\
-ISAACAPI RET OPNAME (half  , value_scalar const &);\
 ISAACAPI RET OPNAME (float  , value_scalar const &);\
 ISAACAPI RET OPNAME (double , value_scalar const &);\
 ISAACAPI RET OPNAME (value_scalar const &, value_scalar const &);
