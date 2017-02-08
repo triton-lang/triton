@@ -64,6 +64,7 @@ public:
   ISAAC_INSTANTIATE(unsigned long)
   ISAAC_INSTANTIATE(long long)
   ISAAC_INSTANTIATE(unsigned long long)
+  ISAAC_INSTANTIATE(half)
   ISAAC_INSTANTIATE(float)
   ISAAC_INSTANTIATE(double)
 #undef ISAAC_INSTANTIATE
