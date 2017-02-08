@@ -815,7 +815,7 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
   int blockC_height = blocksize;
   
   cl_int err;
-  cl_mem ImA, ImB;
+  cl_mem ImA = NULL, ImB = NULL;
   cl_image_desc desc;
   cl_image_format format;
   memset(&desc, 0, sizeof(desc));

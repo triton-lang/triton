@@ -180,42 +180,15 @@ class Tuner:
             if not tune:
                 row = Y[X.index(x)]
                 self.progress_bar.update(1, 1, profiles[argmax(row)], max(row))
-        save()
-        #Adding external profiles
-        print '\n' 'Adding external profiles:' '\n'
-        for prof in tools.external_profiles(operation):
-            profiles.append(prof.__class__.__name__)
-
-        for idx, (x, y) in enumerate(zip(X, Y)):
-            internal_prof = profiles[argmax(y)]
-            internal_perf = max(y)
-            # temp add to fix segment fault
-            if idx == 0:
-                optimizer = optimize.GeneticOptimizer(self.logger, naccept=1, niter=1, cxpb=.4, mutpb=.4,
-                                                          popsize=1, progress_bar=self.progress_bar)
-                best = profiles[np.argmax(y)] if y else None
-                optimizer.run(operation, x, context, prior=best)[0]
-
-            best_perf = 0
-            best_prof = ''
-            for prof in tools.external_profiles(operation):
-                tree, operands = tools.tree_of(operation, x, context)
-                perf = performance(x,tools.benchmark(prof, tree, operation))
-                y.append(perf)
-                if perf >= best_perf:
-                    best_perf = perf
-                    best_prof = prof.__class__.__name__
-
-            if idx > 0:
-                self.progress_bar.set_finished()
-            self.progress_bar.set_prefix(', '.join(map(str, x)))
-            if best_perf > internal_perf:
-                self.progress_bar.update(1, 1, best_prof, best_perf)
-            else:
-                self.progress_bar.update(1, 1, internal_prof, internal_perf)
-
         self.progress_bar.set_finished()
-        # save()
+        save()     
+        #Adding external profiles
+        for prof in tools.external_profiles(operation):
+			profiles.append(prof.__class__.__name__)
+			for x, y in zip(X, Y):
+				tree, operands = tools.tree_of(operation, x, context)
+				perf = performance(x,tools.benchmark(prof, tree, operation))
+				y.append(perf)
         #Pruning of useless profiles
         X = np.array(X)
         Y = np.array(Y)
