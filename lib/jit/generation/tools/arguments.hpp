@@ -77,7 +77,7 @@ inline std::vector<std::string> negative_inc_process(driver::Device const &, sym
             std::string pointer_name = pointer.substr(pointer_pos+1, pointer.length());
             std::string inc0 = sym->process("#inc0");
             std::string type = pointer.substr(0,pointer_pos);
-            std::string pointer_dec = "__global " + type + " " + pointer_name;
+            std::string pointer_dec = "$GLOBAL " + type + " " + pointer_name;
             std::string pointer_def = pointer_dec + " = " + pointer_name + "_bk;";
             std::string judge = "  if(" + inc0 + " < 0)";
             std::string re = pointer_def + "\n"+judge + "\n" +  "    " + pointer_name + " += (1-N) * " + inc0+";\n";
@@ -102,7 +102,7 @@ inline std::vector<std::string> reduce_2d_negative_inc_process(driver::Device co
             std::string pointer_name = pointer.substr(pointer_pos+1, pointer.length());
             std::string inc0 = sym->process("#inc0");
             std::string type = pointer.substr(0,pointer_pos);
-            std::string pointer_dec = "__global " + type + " " + pointer_name;
+            std::string pointer_dec = "$GLOBAL " + type + " " + pointer_name;
             std::string pointer_def = pointer_dec + " = " + pointer_name + "_bk;";
             std::string judge = "  if(" + inc0 + " < 0)";
             std::string re;
