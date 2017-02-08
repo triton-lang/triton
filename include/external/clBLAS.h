@@ -426,6 +426,60 @@ clblasZswap(
 /*@{*/
 
 /**
+ * @brief Scales a half vector by a half constant
+ *
+ *   - \f$ X \leftarrow \alpha X \f$
+ *
+ * @param[in] N         Number of elements in vector \b X.
+ * @param[in] alpha     The constant factor for vector \b X.
+ * @param[out] X        Buffer object storing vector \b X.
+ * @param[in] offx      Offset of first element of vector \b X in buffer object.
+ *                      Counted in elements.
+ * @param[in] incx      Increment for the elements of \b X. Must not be zero.
+ * @param[in] numCommandQueues    Number of OpenCL command queues in which the
+ *                                task is to be performed.
+ * @param[in] commandQueues       OpenCL command queues.
+ * @param[in] numEventsInWaitList Number of events in the event wait list.
+ * @param[in] eventWaitList       Event wait list.
+ * @param[in] events     Event objects per each command queue that identify
+ *                       a particular kernel execution instance.
+ *
+ * @return
+ *   - \b clblasSuccess on success;
+ *   - \b clblasNotInitialized if clblasSetup() was not called;
+ *   - \b clblasInvalidValue if invalid parameters are passed:
+ *     - \b N is zero, or
+ *     - \b incx zero, or
+ *     - the vector sizes along with the increments lead to
+ *       accessing outside of any of the buffers;
+ *   - \b clblasInvalidMemObject if either \b X, or \b Y object is
+ *     Invalid, or an image object rather than the buffer one;
+ *   - \b clblasOutOfHostMemory if the library can't allocate memory for
+ *     internal structures;
+ *   - \b clblasInvalidCommandQueue if the passed command queue is invalid;
+ *   - \b clblasInvalidContext if a context a passed command queue belongs
+ *     to was released;
+ *   - \b clblasInvalidOperation if kernel compilation relating to a previous
+ *     call has not completed for any of the target devices;
+ *   - \b clblasCompilerNotAvailable if a compiler is not available;
+ *   - \b clblasBuildProgramFailure if there is a failure to build a program
+ *     executable.
+ *
+ * @ingroup SCAL
+ */
+clblasStatus
+clblasHscal(
+    size_t N,
+    cl_float alpha,
+    cl_mem X,
+    size_t offx,
+    int incx,
+    cl_uint numCommandQueues,
+    cl_command_queue *commandQueues,
+    cl_uint numEventsInWaitList,
+    const cl_event *eventWaitList,
+    cl_event *events);
+/**
  * @brief Scales a float vector by a float constant
  *
  *   - \f$ X \leftarrow \alpha X \f$
@@ -717,6 +771,65 @@ clblasZdscal(
 /*@{*/
 
 /**
+ * @brief Copies half elements from vector X to vector Y
+ *
+ *   - \f$ Y \leftarrow X \f$
+ *
+ * @param[in] N         Number of elements in vector \b X.
+ * @param[in] X         Buffer object storing vector \b X.
+ * @param[in] offx      Offset of first element of vector \b X in buffer object.
+ *                      Counted in elements.
+ * @param[in] incx      Increment for the elements of \b X. Must not be zero.
+ * @param[out] Y        Buffer object storing the vector \b Y.
+ * @param[in] offy      Offset of first element of vector \b Y in buffer object.
+ *                      Counted in elements.
+ * @param[in] incy      Increment for the elements of \b Y. Must not be zero.
+ * @param[in] numCommandQueues    Number of OpenCL command queues in which the
+ *                                task is to be performed.
+ * @param[in] commandQueues       OpenCL command queues.
+ * @param[in] numEventsInWaitList Number of events in the event wait list.
+ * @param[in] eventWaitList       Event wait list.
+ * @param[in] events     Event objects per each command queue that identify
+ *                       a particular kernel execution instance.
+ *
+ * @return
+ *   - \b clblasSuccess on success;
+ *   - \b clblasNotInitialized if clblasSetup() was not called;
+ *   - \b clblasInvalidValue if invalid parameters are passed:
+ *     - \b N is zero, or
+ *     - either \b incx or \b incy is zero, or
+ *     - the vector sizes along with the increments lead to
+ *       accessing outside of any of the buffers;
+ *   - \b clblasInvalidMemObject if either \b X, or \b Y object is
+ *     Invalid, or an image object rather than the buffer one;
+ *   - \b clblasOutOfHostMemory if the library can't allocate memory for
+ *     internal structures;
+ *   - \b clblasInvalidCommandQueue if the passed command queue is invalid;
+ *   - \b clblasInvalidContext if a context a passed command queue belongs
+ *     to was released;
+ *   - \b clblasInvalidOperation if kernel compilation relating to a previous
+ *     call has not completed for any of the target devices;
+ *   - \b clblasCompilerNotAvailable if a compiler is not available;
+ *   - \b clblasBuildProgramFailure if there is a failure to build a program
+ *     executable.
+ *
+ * @ingroup COPY
+ */
+clblasStatus
+clblasHcopy(
+    size_t N,
+    const cl_mem X,
+    size_t offx,
+    int incx,
+    cl_mem Y,
+    size_t offy,
+    int incy,
+    cl_uint numCommandQueues,
+    cl_command_queue *commandQueues,
+    cl_uint numEventsInWaitList,
+    const cl_event *eventWaitList,
+    cl_event *events);
+/**
  * @brief Copies float elements from vector X to vector Y
  *
  *   - \f$ Y \leftarrow X \f$
@@ -921,6 +1034,67 @@ clblasZcopy(
 /*@{*/
 
 /**
+ * @brief Scale vector X of half elements and add to Y
+ *
+ *   - \f$ Y \leftarrow \alpha X + Y \f$
+ *
+ * @param[in] N         Number of elements in vector \b X.
+ * @param[in] alpha     The constant factor for vector \b X.
+ * @param[in] X         Buffer object storing vector \b X.
+ * @param[in] offx      Offset of first element of vector \b X in buffer object.
+ *                      Counted in elements.
+ * @param[in] incx      Increment for the elements of \b X. Must not be zero.
+ * @param[out] Y        Buffer object storing the vector \b Y.
+ * @param[in] offy      Offset of first element of vector \b Y in buffer object.
+ *                      Counted in elements.
+ * @param[in] incy      Increment for the elements of \b Y. Must not be zero.
+ * @param[in] numCommandQueues    Number of OpenCL command queues in which the
+ *                                task is to be performed.
+ * @param[in] commandQueues       OpenCL command queues.
+ * @param[in] numEventsInWaitList Number of events in the event wait list.
+ * @param[in] eventWaitList       Event wait list.
+ * @param[in] events     Event objects per each command queue that identify
+ *                       a particular kernel execution instance.
+ *
+ * @return
+ *   - \b clblasSuccess on success;
+ *   - \b clblasNotInitialized if clblasSetup() was not called;
+ *   - \b clblasInvalidValue if invalid parameters are passed:
+ *     - \b N is zero, or
+ *     - either \b incx or \b incy is zero, or
+ *     - the vector sizes along with the increments lead to
+ *       accessing outside of any of the buffers;
+ *   - \b clblasInvalidMemObject if either \b X, or \b Y object is
+ *     Invalid, or an image object rather than the buffer one;
+ *   - \b clblasOutOfHostMemory if the library can't allocate memory for
+ *     internal structures;
+ *   - \b clblasInvalidCommandQueue if the passed command queue is invalid;
+ *   - \b clblasInvalidContext if a context a passed command queue belongs
+ *     to was released;
+ *   - \b clblasInvalidOperation if kernel compilation relating to a previous
+ *     call has not completed for any of the target devices;
+ *   - \b clblasCompilerNotAvailable if a compiler is not available;
+ *   - \b clblasBuildProgramFailure if there is a failure to build a program
+ *     executable.
+ *
+ * @ingroup AXPY
+ */
+clblasStatus
+clblasHaxpy(
+    size_t N,
+    cl_float alpha,
+    const cl_mem X,
+    size_t offx,
+    int incx,
+    cl_mem Y,
+    size_t offy,
+    int incy,
+    cl_uint numCommandQueues,
+    cl_command_queue *commandQueues,
+    cl_uint numEventsInWaitList,
+    const cl_event *eventWaitList,
+    cl_event *events);
+/**
  * @brief Scale vector X of float elements and add to Y
  *
  *   - \f$ Y \leftarrow \alpha X + Y \f$
@@ -981,6 +1155,7 @@ clblasSaxpy(
     cl_uint numEventsInWaitList,
     const cl_event *eventWaitList,
     cl_event *events);
+
 
 /**
  * @example example_saxpy.c
@@ -1132,6 +1307,71 @@ clblasZaxpy(
  * @ingroup BLAS1
  */
 /*@{*/
+
+/**
+ * @brief dot product of two vectors containing half elements
+ *
+ * @param[in] N             Number of elements in vector \b X.
+ * @param[out] dotProduct   Buffer object that will contain the dot-product value
+ * @param[in] offDP         Offset to dot-product in \b dotProduct buffer object.
+ *                          Counted in elements.
+ * @param[in] X             Buffer object storing vector \b X.
+ * @param[in] offx          Offset of first element of vector \b X in buffer object.
+ *                          Counted in elements.
+ * @param[in] incx          Increment for the elements of \b X. Must not be zero.
+ * @param[in] Y             Buffer object storing the vector \b Y.
+ * @param[in] offy          Offset of first element of vector \b Y in buffer object.
+ *                          Counted in elements.
+ * @param[in] incy          Increment for the elements of \b Y. Must not be zero.
+ * @param[in] scratchBuff	Temporary cl_mem scratch buffer object of minimum size N
+ * @param[in] numCommandQueues    Number of OpenCL command queues in which the
+ *                                task is to be performed.
+ * @param[in] commandQueues       OpenCL command queues.
+ * @param[in] numEventsInWaitList Number of events in the event wait list.
+ * @param[in] eventWaitList       Event wait list.
+ * @param[in] events     Event objects per each command queue that identify
+ *                       a particular kernel execution instance.
+ *
+ * @return
+ *   - \b clblasSuccess on success;
+ *   - \b clblasNotInitialized if clblasSetup() was not called;
+ *   - \b clblasInvalidValue if invalid parameters are passed:
+ *     - \b N is zero, or
+ *     - either \b incx or \b incy is zero, or
+ *     - the vector sizes along with the increments lead to
+ *       accessing outside of any of the buffers;
+ *   - \b clblasInvalidMemObject if either \b X, \b Y or \b dotProduct object is
+ *     Invalid, or an image object rather than the buffer one;
+ *   - \b clblasOutOfHostMemory if the library can't allocate memory for
+ *     internal structures;
+ *   - \b clblasInvalidCommandQueue if the passed command queue is invalid;
+ *   - \b clblasInvalidContext if a context a passed command queue belongs
+ *     to was released;
+ *   - \b clblasInvalidOperation if kernel compilation relating to a previous
+ *     call has not completed for any of the target devices;
+ *   - \b clblasCompilerNotAvailable if a compiler is not available;
+ *   - \b clblasBuildProgramFailure if there is a failure to build a program
+ *     executable.
+ *
+ * @ingroup DOT
+ */
+clblasStatus
+clblasHdot(
+    size_t N,
+    cl_mem dotProduct,
+    size_t offDP,
+    const cl_mem X,
+    size_t offx,
+    int incx,
+    const cl_mem Y,
+    size_t offy,
+    int incy,
+    cl_mem scratchBuff,
+    cl_uint numCommandQueues,
+    cl_command_queue *commandQueues,
+    cl_uint numEventsInWaitList,
+    const cl_event *eventWaitList,
+    cl_event *events);
 
 /**
  * @brief dot product of two vectors containing float elements
@@ -2578,6 +2818,65 @@ clblasiZamax(
 /*@{*/
 
 /**
+ * @brief absolute sum of values of a vector containing half elements
+ *
+ * @param[in] N             Number of elements in vector \b X.
+ * @param[out] asum         Buffer object that will contain the absoule sum value
+ * @param[in] offAsum       Offset to absolute sum in \b asum buffer object.
+ *                          Counted in elements.
+ * @param[in] X             Buffer object storing vector \b X.
+ * @param[in] offx          Offset of first element of vector \b X in buffer object.
+ *                          Counted in elements.
+ * @param[in] incx          Increment for the elements of \b X. Must not be zero.
+ * @param[in] scratchBuff   Temporary cl_mem scratch buffer object of minimum size N
+ * @param[in] numCommandQueues    Number of OpenCL command queues in which the
+ *                                task is to be performed.
+ * @param[in] commandQueues       OpenCL command queues.
+ * @param[in] numEventsInWaitList Number of events in the event wait list.
+ * @param[in] eventWaitList       Event wait list.
+ * @param[in] events     Event objects per each command queue that identify
+ *                       a particular kernel execution instance.
+ *
+ * @return
+ *   - \b clblasSuccess on success;
+ *   - \b clblasNotInitialized if clblasSetup() was not called;
+ *   - \b clblasInvalidValue if invalid parameters are passed:
+ *     - \b N is zero, or
+ *     - either \b incx is zero, or
+ *     - the vector sizes along with the increments lead to
+ *       accessing outside of any of the buffers;
+ *   - \b clblasInvalidMemObject if any of \b X or \b asum or \b scratchBuff object is
+ *     Invalid, or an image object rather than the buffer one;
+ *   - \b clblasOutOfHostMemory if the library can't allocate memory for
+ *     internal structures;
+ *   - \b clblasInvalidCommandQueue if the passed command queue is invalid;
+ *   - \b clblasInvalidContext if a context a passed command queue belongs
+ *     to was released;
+ *   - \b clblasInvalidOperation if kernel compilation relating to a previous
+ *     call has not completed for any of the target devices;
+ *   - \b clblasCompilerNotAvailable if a compiler is not available;
+ *   - \b clblasBuildProgramFailure if there is a failure to build a program
+ *     executable.
+ *
+ * @ingroup ASUM
+ */
+
+clblasStatus
+clblasHasum(
+    size_t N,
+    cl_mem asum,
+    size_t offAsum,
+    const cl_mem X,
+    size_t offx,
+    int incx,
+    cl_mem scratchBuff,
+    cl_uint numCommandQueues,
+    cl_command_queue *commandQueues,
+    cl_uint numEventsInWaitList,
+    const cl_event *eventWaitList,
+    cl_event *events);
+
+/**
  * @brief absolute sum of values of a vector containing float elements
  *
  * @param[in] N             Number of elements in vector \b X.
@@ -2790,6 +3089,74 @@ clblasDzasum(
  * @ingroup BLAS2
  */
 /*@{*/
+
+/**
+ * @brief Matrix-vector product with a general rectangular matrix and
+ *        half elements. Extended version.
+ *
+ * Matrix-vector products:
+ *   - \f$ y \leftarrow \alpha A x + \beta y \f$
+ *   - \f$ y \leftarrow \alpha A^T x + \beta y \f$
+ *
+ * @param[in] order     Row/column order.
+ * @param[in] transA    How matrix \b A is to be transposed.
+ * @param[in] M         Number of rows in matrix \b A.
+ * @param[in] N         Number of columns in matrix \b A.
+ * @param[in] alpha     The factor of matrix \b A.
+ * @param[in] A         Buffer object storing matrix \b A.
+ * @param[in] offA      Offset of the first element of the matrix \b A in
+ *                      the buffer object. Counted in elements.
+ * @param[in] lda       Leading dimension of matrix \b A. It cannot be less
+ *                      than \b N when the \b order parameter is set to
+ *                      \b clblasRowMajor,\n or less than \b M when the
+ *                      parameter is set to \b clblasColumnMajor.
+ * @param[in] x         Buffer object storing vector \b x.
+ * @param[in] offx      Offset of first element of vector \b x in buffer object.
+ *                      Counted in elements.
+ * @param[in] incx      Increment for the elements of \b x. It cannot be zero.
+ * @param[in] beta      The factor of the vector \b y.
+ * @param[out] y        Buffer object storing the vector \b y.
+ * @param[in] offy      Offset of first element of vector \b y in buffer object.
+ *                      Counted in elements.
+ * @param[in] incy      Increment for the elements of \b y. It cannot be zero.
+ * @param[in] numCommandQueues    Number of OpenCL command queues in which the
+ *                                task is to be performed.
+ * @param[in] commandQueues       OpenCL command queues.
+ * @param[in] numEventsInWaitList Number of events in the event wait list.
+ * @param[in] eventWaitList       Event wait list.
+ * @param[in] events     Event objects per each command queue that identify
+ *                       a particular kernel execution instance.
+ *
+ * @return
+ *   - \b clblasSuccess on success;
+ *   - \b clblasInvalidValue if \b offA exceeds the size of \b A buffer
+ *     object;
+ *   - the same error codes as the clblasSgemv() function otherwise.
+ *
+ * @ingroup GEMV
+ */
+clblasStatus
+clblasHgemv(
+    clblasOrder order,
+    clblasTranspose transA,
+    size_t M,
+    size_t N,
+    cl_float alpha,
+    const cl_mem A,
+    size_t offA,
+    size_t lda,
+    const cl_mem x,
+    size_t offx,
+    int incx,
+    cl_float beta,
+    cl_mem y,
+    size_t offy,
+    int incy,
+    cl_uint numCommandQueues,
+    cl_command_queue *commandQueues,
+    cl_uint numEventsInWaitList,
+    const cl_event *eventWaitList,
+    cl_event *events);
 
 /**
  * @brief Matrix-vector product with a general rectangular matrix and
@@ -7318,6 +7685,86 @@ clblasZtbsv(
  * @ingroup BLAS3
  */
 /*@{*/
+
+/**
+ * @brief Matrix-matrix product of general rectangular matrices with half
+ *        elements. Extended version.
+ *
+ * Matrix-matrix products:
+ *   - \f$ C \leftarrow \alpha A B + \beta C \f$
+ *   - \f$ C \leftarrow \alpha A^T B + \beta C \f$
+ *   - \f$ C \leftarrow \alpha A B^T + \beta C \f$
+ *   - \f$ C \leftarrow \alpha A^T B^T + \beta C \f$
+ *
+ * @param[in] order     Row/column order.
+ * @param[in] transA    How matrix \b A is to be transposed.
+ * @param[in] transB    How matrix \b B is to be transposed.
+ * @param[in] M         Number of rows in matrix \b A.
+ * @param[in] N         Number of columns in matrix \b B.
+ * @param[in] K         Number of columns in matrix \b A and rows in matrix \b B.
+ * @param[in] alpha     The factor of matrix \b A.
+ * @param[in] A         Buffer object storing matrix \b A.
+ * @param[in] offA      Offset of the first element of the matrix \b A in the
+ *                      buffer object. Counted in elements.
+ * @param[in] lda       Leading dimension of matrix \b A. It cannot be less
+ *                      than \b K when the \b order parameter is set to
+ *                      \b clblasRowMajor,\n or less than \b M when the
+ *                      parameter is set to \b clblasColumnMajor.
+ * @param[in] B         Buffer object storing matrix \b B.
+ * @param[in] offB      Offset of the first element of the matrix \b B in the
+ *                      buffer object. Counted in elements.
+ * @param[in] ldb       Leading dimension of matrix \b B. It cannot be less
+ *                      than \b N when the \b order parameter is set to
+ *                      \b clblasRowMajor,\n or less than \b K
+ *                      when it is set to \b clblasColumnMajor.
+ * @param[in] beta      The factor of matrix \b C.
+ * @param[out] C        Buffer object storing matrix \b C.
+ * @param[in]  offC     Offset of the first element of the matrix \b C in the
+ *                      buffer object. Counted in elements.
+ * @param[in] ldc       Leading dimension of matrix \b C. It cannot be less
+ *                      than \b N when the \b order parameter is set to
+ *                      \b clblasRowMajor,\n or less than \b M when
+ *                      it is set to \b clblasColumnMajorOrder.
+ * @param[in] numCommandQueues    Number of OpenCL command queues in which the
+ *                                task is to be performed.
+ * @param[in] commandQueues       OpenCL command queues.
+ * @param[in] numEventsInWaitList Number of events in the event wait list.
+ * @param[in] eventWaitList       Event wait list.
+ * @param[in] events     Event objects per each command queue that identify
+ *                       a particular kernel execution instance.
+ *
+ * @return
+ *   - \b clblasSuccess on success;
+ *   - \b clblasInvalidValue if either \b offA, \b offB or \b offC exceeds
+ *        the size of the respective buffer object;
+ *   - the same error codes as clblasSgemm() otherwise.
+ *
+ * @ingroup GEMM
+ */
+clblasStatus
+clblasHgemm(
+    clblasOrder order,
+    clblasTranspose transA,
+    clblasTranspose transB,
+    size_t M,
+    size_t N,
+    size_t K,
+    cl_float alpha,
+    const cl_mem A,
+    size_t offA,
+    size_t lda,
+    const cl_mem B,
+    size_t offB,
+    size_t ldb,
+    cl_float beta,
+    cl_mem C,
+    size_t offC,
+    size_t ldc,
+    cl_uint numCommandQueues,
+    cl_command_queue *commandQueues,
+    cl_uint numEventsInWaitList,
+    const cl_event *eventWaitList,
+    cl_event *events);
 
 /**
  * @brief Matrix-matrix product of general rectangular matrices with float

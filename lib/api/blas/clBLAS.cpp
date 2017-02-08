@@ -82,8 +82,22 @@ extern "C"
         return clblasSuccess; \
     }
 
+//    MAKE_AXPY(H, sc::HALF_TYPE, cl_half)
     MAKE_AXPY(S, sc::FLOAT_TYPE, cl_float)
     MAKE_AXPY(D, sc::DOUBLE_TYPE, cl_double)
+
+   clblasStatus clblasHaxpy(size_t N, cl_float alpha,
+                            const cl_mem mx,  size_t offx, int incx,
+                            cl_mem my, size_t offy, int incy,
+                            cl_uint numCommandQueues, cl_command_queue *commandQueues,
+                            cl_uint numEventsInWaitList, const cl_event *eventWaitList,
+                            cl_event *events)
+    {
+        sc::array x((sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(mx,false), (sc::int_t)offx, incx);
+        sc::array y((sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(my,false), (sc::int_t)offy, incy);
+        execute(sc::assign(y, alpha*x + y), y.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        return clblasSuccess;
+    }
 
     //SCAL
     #define MAKE_SCAL(TYPE_CHAR, TYPE_ISAAC, TYPE_CL) \
@@ -98,8 +112,19 @@ extern "C"
         return clblasSuccess;\
     }
 
+//    MAKE_SCAL(H, sc::HALF_TYPE, cl_half)
     MAKE_SCAL(S, sc::FLOAT_TYPE, cl_float)
     MAKE_SCAL(D, sc::DOUBLE_TYPE, cl_double)
+
+    clblasStatus clblasHscal(size_t N, cl_float  alpha,
+                             cl_mem mx, size_t offx, int incx,
+                             cl_uint numCommandQueues, cl_command_queue *commandQueues,
+                             cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)
+    {
+        sc::array x((sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(mx,false), (sc::int_t)offx, incx);
+        execute(sc::assign(x, alpha*x), x.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        return clblasSuccess;
+    }
 
     //COPY
     #define MAKE_COPY(TYPE_CHAR, TYPE_ISAAC, TYPE_CL)\
@@ -115,6 +140,7 @@ extern "C"
         return clblasSuccess;\
     }
 
+    MAKE_COPY(H, sc::HALF_TYPE,  cl_half)
     MAKE_COPY(S, sc::FLOAT_TYPE, cl_float)
     MAKE_COPY(D, sc::DOUBLE_TYPE, cl_double)
 
@@ -134,6 +160,7 @@ extern "C"
         return clblasSuccess; \
     }
 
+    MAKE_DOT(H, sc::HALF_TYPE, cl_half)
     MAKE_DOT(S, sc::FLOAT_TYPE, cl_float)
     MAKE_DOT(D, sc::DOUBLE_TYPE, cl_double)
 
@@ -155,9 +182,9 @@ extern "C"
         return clblasSuccess;\
     }
 
+    MAKE_ASUM(H, sc::HALF_TYPE, cl_half)
     MAKE_ASUM(S, sc::FLOAT_TYPE, cl_float)
     MAKE_ASUM(D, sc::DOUBLE_TYPE, cl_double)
-
 
     //*****************
     //BLAS2
@@ -192,6 +219,33 @@ extern "C"
 
     MAKE_GEMV(S, sc::FLOAT_TYPE, cl_float)
     MAKE_GEMV(D, sc::DOUBLE_TYPE, cl_double)
+
+    clblasStatus clblasHgemv(clblasOrder order, clblasTranspose transA,
+                             size_t M, size_t N,
+                             cl_float alpha, const cl_mem mA, size_t offA, size_t lda,
+                             const cl_mem mx, size_t offx, int incx,
+                             cl_float beta, cl_mem my, size_t offy, int incy,
+                             cl_uint numCommandQueues, cl_command_queue *commandQueues,
+                             cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)
+    {
+        if(order==clblasRowMajor){
+            std::swap(M, N);
+            transA = (transA==clblasTrans||transA==clblasConjTrans)?clblasNoTrans:clblasTrans;
+        }
+        sc::array A((sc::int_t)M, (sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(mA, false), (sc::int_t)offA, (sc::int_t)lda);
+
+        sc::int_t sx = (sc::int_t)N, sy = (sc::int_t)M;
+        if(transA) std::swap(sx, sy);
+        sc::array x(sx, sc::HALF_TYPE, sc::driver::Buffer(mx, false), (sc::int_t)offx, incx);
+        sc::array y(sy, sc::HALF_TYPE, sc::driver::Buffer(my, false), (sc::int_t)offy, incy);
+        \
+        sc::driver::Context const & context = A.context();
+        if(transA==clblasTrans||transA==clblasConjTrans)
+            execute(sc::assign(y, alpha*dot(A.T, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        else\
+            execute(sc::assign(y, alpha*dot(A, x) + beta*y), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        return clblasSuccess;
+    }
 
     //*****************
     //BLAS3
@@ -245,6 +299,52 @@ extern "C"
 
     MAKE_GEMM(S, sc::FLOAT_TYPE, cl_float)
     MAKE_GEMM(D, sc::DOUBLE_TYPE, cl_double)
+
+    clblasStatus clblasHgemm(clblasOrder order, clblasTranspose transA,  clblasTranspose transB,
+                            size_t M, size_t N, size_t K,
+                            cl_float alpha, const cl_mem cmA, size_t offA, size_t lda,
+                            const cl_mem cmB, size_t offB, size_t ldb, cl_float beta,
+                            cl_mem mC, size_t offC, size_t ldc,
+                            cl_uint numCommandQueues, cl_command_queue *commandQueues,
+                            cl_uint numEventsInWaitList, const cl_event *eventWaitList, cl_event *events)
+    {
+        cl_mem mA = cmA;
+        cl_mem mB = cmB;
+        if(order==clblasRowMajor){
+            std::swap(mA, mB);
+            std::swap(offA, offB);
+            std::swap(lda, ldb);
+            std::swap(M, N);
+            std::swap(transA, transB);
+        }
+        if(K==1 && M>1 && N>1){
+            sc::array A((sc::int_t)M, sc::HALF_TYPE, sc::driver::Buffer(mA, false), (sc::int_t)offA, transA==clblasNoTrans?1:lda);
+            sc::array B((sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(mB, false), (sc::int_t)offB, transB==clblasTrans?1:ldb);
+            sc::array C((sc::int_t)M, (sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(mC, false), (sc::int_t)offC, (sc::int_t)ldc);
+            execute(sc::assign(C, alpha*sc::outer(A, B) + beta*C), C.context(), numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+            return clblasSuccess;
+        }
+        sc::int_t As1 = (sc::int_t)M, As2 = (sc::int_t)K;
+        sc::int_t Bs1 = (sc::int_t)K, Bs2 = (sc::int_t)N;
+        if(transA==clblasTrans || transA==clblasConjTrans) std::swap(As1, As2);
+        if(transB==clblasTrans || transB==clblasConjTrans) std::swap(Bs1, Bs2);
+        /*Struct*/
+        sc::array A(As1, As2, sc::HALF_TYPE, sc::driver::Buffer(mA, false), (sc::int_t)offA, (sc::int_t)lda);
+        sc::array B(Bs1, Bs2, sc::HALF_TYPE, sc::driver::Buffer(mB, false), (sc::int_t)offB, (sc::int_t)ldb);
+        sc::array C((sc::int_t)M, (sc::int_t)N, sc::HALF_TYPE, sc::driver::Buffer(mC, false), (sc::int_t)offC, (sc::int_t)ldc);
+        sc::driver::Context const & context = C.context();
+        /*Operation*/
+        if((transA==clblasTrans || transA==clblasConjTrans) && (transB==clblasTrans || transB==clblasConjTrans))
+            execute(sc::assign(C, alpha*dot(A.T, B.T) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        else if((transA==clblasTrans || transA==clblasConjTrans) && (transB==clblasNoTrans))
+            execute(sc::assign(C, alpha*dot(A.T, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        else if((transA==clblasNoTrans) && (transB==clblasTrans || transB==clblasConjTrans))
+            execute(sc::assign(C, alpha*dot(A, B.T) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        else
+            execute(sc::assign(C, alpha*dot(A, B) + beta*C), context, numCommandQueues, commandQueues, numEventsInWaitList, eventWaitList, events);
+        return clblasSuccess;
+    }
+
 
 #undef DOT
 
