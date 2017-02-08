@@ -54,7 +54,7 @@ void gemm::handle_node(expression_tree::data_type const & tree, size_t root, arg
           default: break;
         }
     }
-
+    numeric_type abtype = (node.dtype == HALF_TYPE) ? FLOAT_TYPE : node.dtype;
     //Scalar multiplication node
     if(node.binary_operator.op.type==MULT_TYPE)
     {
@@ -62,14 +62,14 @@ void gemm::handle_node(expression_tree::data_type const & tree, size_t root, arg
         if(left.type==VALUE_SCALAR_TYPE  && right.type==COMPOSITE_OPERATOR_TYPE
            && right.binary_operator.op.type_family==GEMM)
         {
-            a.alpha = cast(value_scalar(left.scalar, left.dtype), node.dtype);
+            a.alpha = cast(value_scalar(left.scalar, left.dtype), abtype);
             handle_node(tree, node.binary_operator.rhs, a);
         }
 
         //beta*C
         if(left.type==VALUE_SCALAR_TYPE  && right.type==DENSE_ARRAY_TYPE)
         {
-            a.beta = cast(value_scalar(left.scalar, left.dtype), node.dtype);
+            a.beta = cast(value_scalar(left.scalar, left.dtype), abtype);
             a.C = &right;
         }
     }
@@ -81,11 +81,12 @@ gemm::args gemm::check(expression_tree::data_type const & tree, size_t root)
     expression_tree::node const & left = tree[node.binary_operator.lhs];
     expression_tree::node const & right = tree[node.binary_operator.rhs];
     numeric_type dtype = node.dtype;
+    numeric_type abtype = (dtype == HALF_TYPE) ? FLOAT_TYPE : dtype;
     gemm::args result ;
     if(dtype==INVALID_NUMERIC_TYPE)
       return result;
-    result.alpha = value_scalar(1, dtype);
-    result.beta = value_scalar(0, dtype);
+    result.alpha = value_scalar(1, abtype);
+    result.beta = value_scalar(0, abtype);
     if(right.type==COMPOSITE_OPERATOR_TYPE)
     {
         bool is_add = right.binary_operator.op.type==ADD_TYPE;
@@ -101,8 +102,8 @@ gemm::args gemm::check(expression_tree::data_type const & tree, size_t root)
             else if(rleft.type==DENSE_ARRAY_TYPE)
             {
                 result.C = &rleft;
-                result.beta = value_scalar(1, dtype);
-                result.alpha = value_scalar(is_add?1:-1,  dtype);
+                result.beta = value_scalar(1, abtype);
+                result.alpha = value_scalar(is_add?1:-1, abtype);
             }
 
             if(rright.type==COMPOSITE_OPERATOR_TYPE)
@@ -110,8 +111,8 @@ gemm::args gemm::check(expression_tree::data_type const & tree, size_t root)
             else if(rright.type==DENSE_ARRAY_TYPE)
             {
                 result.C = &rright;
-                result.alpha = value_scalar(1, dtype);
-                result.beta = value_scalar(is_add?1:-1, dtype);
+                result.alpha = value_scalar(1, abtype);
+                result.beta = value_scalar(is_add?1:-1, abtype);
             }
         }
         else{

@@ -218,6 +218,7 @@ std::string gemm::generate_impl(std::string const & suffix, expression_tree cons
   numeric_type dtype = tree.dtype();
   std::string sdtype = to_string(dtype);
   std::string vdtype = append_width(sdtype, vwidth_);
+  std::string abdtype = (sdtype == "half")? "float" : sdtype;
 
   //////////////////
   /// DECLARATIONS
@@ -231,18 +232,19 @@ std::string gemm::generate_impl(std::string const & suffix, expression_tree cons
   switch(backend)
   {
   case driver::OPENCL:
+    if(tree.dtype()==HALF_TYPE)
+      stream << "#pragma OPENCL EXTENSION cl_khr_fp16: enable" << std::endl;
     stream << " __attribute__((reqd_work_group_size(" << ls0_ << "," << ls1_ << ",1)))" << std::endl;
     break;
   default:
     break;
   }
-
   stream << "$KERNEL void gemm" << suffix << "($SIZE_T M, $SIZE_T N, $SIZE_T K, "
          << "$GLOBAL " << sdtype << "* C, $SIZE_T ldc, $SIZE_T offc, $SIZE_T Cstride1, "
-         << sdtype << " alpha,"
+         << abdtype << " alpha,"
          << "$GLOBAL " << sdtype << "* A, $SIZE_T lda, $SIZE_T offa, $SIZE_T Astride1,"
          << "$GLOBAL " << sdtype << "* B, $SIZE_T ldb, $SIZE_T offb, $SIZE_T Bstride1,"
-         << sdtype << " beta)"
+         << abdtype << " beta)"
          << std::endl;
   stream << "{" << std::endl;
   stream.inc_tab();
@@ -625,8 +627,9 @@ std::string gemm::generate_impl(std::string const & suffix, expression_tree cons
     stream << "$KERNEL void reduce" << suffix << "($SIZE_T M, $SIZE_T N, $SIZE_T D, "
            << "$GLOBAL " << sdtype << "* Z, $SIZE_T Zld,"
            << "$GLOBAL " << sdtype << "* C, $SIZE_T ldc, $SIZE_T Cstart, $SIZE_T Cstride,"
-           << sdtype << " beta)"
+           << abdtype << " beta)"
            << std::endl;
+
     stream << "{" << std::endl;
     stream.inc_tab();
 

@@ -32,6 +32,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--device", default=0, type=int, help='Device to tune for')
     parser.add_argument("-j", "--json", default='', type=str)
+    parser.add_argument('--float16', action='store_true', help='Tune 16-bits FLOAT')
     parser.add_argument('--float32', action='store_true', help='Tune 32-bits FLOAT')
     parser.add_argument('--float64', action='store_true', help='Tune 64-bits FLOAT')
     parser.add_argument('--elementwise_1d', action='store_true', help='Tune ELEMENTWISE [1D]')
@@ -60,6 +61,7 @@ def parse_arguments():
     
     #Dtypes
     dtypes = []
+    if args.float16: dtypes+=[sc.float16]
     if args.float32: dtypes+=[sc.float32]
     if args.float64: dtypes+=[sc.float64]
     

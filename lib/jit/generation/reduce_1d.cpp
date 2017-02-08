@@ -115,6 +115,8 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
     case driver::CUDA:
       stream << "#include  \"vector.h\"" << std::endl; break;
     case driver::OPENCL:
+      if(tree.dtype()==HALF_TYPE)
+        stream << "#pragma OPENCL EXTENSION cl_khr_fp16: enable" << std::endl;
       stream << " __attribute__((reqd_work_group_size(" << ls0_ << ",1,1)))" << std::endl; break;
   }
   stream << "$KERNEL void prod" << suffix << "($SIZE_T N, $GLOBAL char* tmp," << tools::join(kernel_arguments(device, symbols, tree), ", ") << ")" << std::endl;
@@ -244,6 +246,7 @@ std::string reduce_1d::generate_impl(std::string const & suffix, expression_tree
   stream << "}" << std::endl;
   stream.dec_tab();
   stream << "}" << std::endl;
+//  std::cout<<"reduce 1d: "<<stream.str()<<std::endl;
 
   return stream.str();
 }

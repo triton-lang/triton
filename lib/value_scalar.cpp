@@ -46,7 +46,6 @@ void value_scalar::init(T const & s)
     case UINT_TYPE: values_.uint32 = (uint32_t)s; break;
     case LONG_TYPE: values_.int64 = (int64_t)s; break;
     case ULONG_TYPE: values_.uint64 = (uint64_t)s; break;
-//    case HALF_TYPE: values_.float16 = s; break;
     case FLOAT_TYPE: values_.float32 = (float)s; break;
     case DOUBLE_TYPE: values_.float64 = (double)s; break;
     default: throw unknown_datatype(dtype_);
@@ -170,19 +169,19 @@ value_scalar NAME(LDEC, RDEC)\
   INSTANTIATE(NAME, long long y,   value_scalar const & x, EXPR)\
   INSTANTIATE(NAME, unsigned long long y,  value_scalar const & x, EXPR)\
   INSTANTIATE(NAME, float y,  value_scalar const & x, EXPR)\
-  INSTANTIATE(NAME, double y, value_scalar const & x, EXPR)
+  INSTANTIATE(NAME, double y, value_scalar const & x, EXPR)\
 
 INSTANTIATE_ALL(operator+, +)
 INSTANTIATE_ALL(operator-, -)
 INSTANTIATE_ALL(operator*, *)
 INSTANTIATE_ALL(operator/, /)
 
-//INSTANTIATE_ALL(operator>,  > )
-//INSTANTIATE_ALL(operator>=, >=)
-//INSTANTIATE_ALL(operator<,  < )
-//INSTANTIATE_ALL(operator<=, <=)
-//INSTANTIATE_ALL(operator==, ==)
-//INSTANTIATE_ALL(operator!=, !=)
+// INSTANTIATE_ALL(operator>,  > )
+// INSTANTIATE_ALL(operator>=, >=)
+// INSTANTIATE_ALL(operator<,  < )
+// INSTANTIATE_ALL(operator<=, <=)
+// INSTANTIATE_ALL(operator==, ==)
+// INSTANTIATE_ALL(operator!=, !=)
 
 #undef VALUE
 #define VALUE(type, OP, x, y) OP((type)x,(type)y)
@@ -228,7 +227,7 @@ std::ostream & operator<<(std::ostream & os, value_scalar const & s)
     case ULONG_TYPE: return os << static_cast<unsigned long>(s);
     case FLOAT_TYPE: return os << static_cast<float>(s);
     case DOUBLE_TYPE: return os << static_cast<double>(s);
-    default: throw unknown_datatype(s.dtype());;
+    default: throw unknown_datatype(s.dtype());
   }
 }
 

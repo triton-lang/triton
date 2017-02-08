@@ -48,6 +48,7 @@ INSTANTIATE(long);\
 INSTANTIATE(unsigned long);\
 INSTANTIATE(long long);\
 INSTANTIATE(unsigned long long);\
+INSTANTIATE(half);\
 INSTANTIATE(float);\
 INSTANTIATE(double);
 
@@ -212,6 +213,7 @@ INSTANTIATE(long);
 INSTANTIATE(unsigned long);
 INSTANTIATE(long long);
 INSTANTIATE(unsigned long long);
+INSTANTIATE(half);
 INSTANTIATE(float);
 INSTANTIATE(double);
 #undef INSTANTIATE
@@ -418,6 +420,7 @@ TYPE scalar::cast() const
     HANDLE_CASE(ULONG_TYPE, uint64);
     HANDLE_CASE(FLOAT_TYPE, float32);
     HANDLE_CASE(DOUBLE_TYPE, float64);
+
     default: throw unknown_datatype(dtype_);
   }
 #undef HANDLE_CASE
@@ -479,7 +482,6 @@ std::ostream & operator<<(std::ostream & os, scalar const & s)
     case UINT_TYPE: return os << static_cast<unsigned int>(s);
     case LONG_TYPE: return os << static_cast<long>(s);
     case ULONG_TYPE: return os << static_cast<unsigned long>(s);
-//    case HALF_TYPE: return os << static_cast<half>(s);
     case FLOAT_TYPE: return os << static_cast<float>(s);
     case DOUBLE_TYPE: return os << static_cast<double>(s);
     default: throw unknown_datatype(s.dtype());
@@ -574,7 +576,7 @@ expression_tree OPNAME (array_base  const & x) \
 expression_tree OPNAME (expression_tree const & x) \
 { return expression_tree(x, invalid_node(), op_element(UNARY_ARITHMETIC, OP), &x.context(), x.dtype(), x.shape()); }
 
-DEFINE_ELEMENT_UNARY_OPERATOR((x.dtype()==FLOAT_TYPE || x.dtype()==DOUBLE_TYPE)?FABS_TYPE:ABS_TYPE,  abs)
+DEFINE_ELEMENT_UNARY_OPERATOR((x.dtype()==FLOAT_TYPE || x.dtype()==DOUBLE_TYPE || x.dtype()==HALF_TYPE)?FABS_TYPE:ABS_TYPE,  abs)
 DEFINE_ELEMENT_UNARY_OPERATOR(ACOS_TYPE, acos)
 DEFINE_ELEMENT_UNARY_OPERATOR(ASIN_TYPE, asin)
 DEFINE_ELEMENT_UNARY_OPERATOR(ATAN_TYPE, atan)
@@ -647,7 +649,7 @@ inline operation_type casted(numeric_type dtype)
     case UINT_TYPE: return CAST_UINT_TYPE;
     case LONG_TYPE: return CAST_LONG_TYPE;
     case ULONG_TYPE: return CAST_ULONG_TYPE;
-//    case FLOAT_TYPE: return CAST_HALF_TYPE;
+    case HALF_TYPE: return CAST_HALF_TYPE;
     case FLOAT_TYPE: return CAST_FLOAT_TYPE;
     case DOUBLE_TYPE: return CAST_DOUBLE_TYPE;
     default: throw unknown_datatype(dtype);
@@ -1025,6 +1027,7 @@ INSTANTIATE(long);
 INSTANTIATE(unsigned long);
 INSTANTIATE(long long);
 INSTANTIATE(unsigned long long);
+INSTANTIATE(half);
 INSTANTIATE(float);
 INSTANTIATE(double);
 

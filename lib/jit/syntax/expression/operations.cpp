@@ -98,6 +98,7 @@ std::string to_string(operation_type type)
     case CAST_UINT_TYPE : return "(uint)";
     case CAST_LONG_TYPE : return "(long)";
     case CAST_ULONG_TYPE : return "(ulong)";
+    case CAST_HALF_TYPE: return "(half)";
     case CAST_FLOAT_TYPE : return "(float)";
     case CAST_DOUBLE_TYPE : return "(double)";
 
@@ -150,6 +151,7 @@ bool is_cast(operation_type op)
       || op == CAST_UINT_TYPE
       || op == CAST_LONG_TYPE
       || op == CAST_ULONG_TYPE
+      || op == CAST_HALF_TYPE
       || op == CAST_FLOAT_TYPE
       || op == CAST_DOUBLE_TYPE
       ;
