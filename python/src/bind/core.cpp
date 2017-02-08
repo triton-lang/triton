@@ -40,7 +40,7 @@ sc::numeric_type to_sc_dtype(np::dtype const & T)
   else if(T==np::detail::get_int_dtype<32, true>()) return sc::UINT_TYPE;
   else if(T==np::detail::get_int_dtype<64, false>()) return sc::LONG_TYPE;
   else if(T==np::detail::get_int_dtype<64, true>()) return sc::ULONG_TYPE;
-//  else if(T==np::detail::get_float_dtype<16>()) return sc::HALF_TYPE;
+  else if(T==np::detail::get_float_dtype<16>()) return sc::HALF_TYPE;
   else if(T==np::detail::get_float_dtype<32>()) return sc::FLOAT_TYPE;
   else if(T==np::detail::get_float_dtype<64>()) return sc::DOUBLE_TYPE;
   else{
@@ -60,7 +60,7 @@ np::dtype to_np_dtype(sc::numeric_type const & T) throw()
   else if(T==sc::UINT_TYPE) return np::detail::get_int_dtype<32, true>();
   else if(T==sc::LONG_TYPE) return np::detail::get_int_dtype<64, false>();
   else if(T==sc::ULONG_TYPE) return np::detail::get_int_dtype<64, true>();
-//  else if(T==sc::HALF_TYPE) return np::detail::get_float_dtype<16>();
+  else if(T==sc::HALF_TYPE) return np::detail::get_float_dtype<16>();
   else if(T==sc::FLOAT_TYPE) return np::detail::get_float_dtype<32>();
   else if(T==sc::DOUBLE_TYPE) return np::detail::get_float_dtype<64>();
   else{
@@ -96,6 +96,7 @@ unsigned int size(datatype<T> const & dt)
   INSTANTIATE(uint32, cl_uint)
   INSTANTIATE(int64, cl_long)
   INSTANTIATE(uint64, cl_ulong)
+  INSTANTIATE(float16, cl_half)
   INSTANTIATE(float32, cl_float)
   INSTANTIATE(float64, cl_double)
 #undef INSTANTIATE
@@ -207,6 +208,7 @@ namespace detail
     else if(name=="uint32") return result_type(new sc::scalar(sc::UINT_TYPE, context));
     else if(name=="int64") return result_type(new sc::scalar(sc::LONG_TYPE, context));
     else if(name=="uint64") return result_type(new sc::scalar(sc::ULONG_TYPE, context));
+    else if(name=="float16") return result_type(new sc::scalar(sc::HALF_TYPE, context));
     else if(name=="float32") return result_type(new sc::scalar(sc::FLOAT_TYPE, context));
     else if(name=="float64") return result_type(new sc::scalar(sc::DOUBLE_TYPE, context));
     else{
@@ -269,6 +271,7 @@ void export_core()
     INSTANTIATE(uint32, cl_uint)
     INSTANTIATE(int64, cl_long)
     INSTANTIATE(uint64, cl_ulong)
+    INSTANTIATE(float16, cl_half)
     INSTANTIATE(float32, cl_float)
     INSTANTIATE(float64, cl_double)
     #undef INSTANTIATE
