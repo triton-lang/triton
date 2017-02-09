@@ -36,7 +36,7 @@ endif()
 
 string(REPLACE ";" " " BLAS_DEF_STR "${BLAS_DEF}")
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests/common)
 foreach(PROG blas)
    add_executable(bench-${PROG}  ${PROG}.cpp)
    set_target_properties(bench-${PROG} PROPERTIES COMPILE_FLAGS "${BLAS_DEF_STR}")
