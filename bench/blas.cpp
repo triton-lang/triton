@@ -399,8 +399,8 @@ int main(int argc, char* argv[])
   std::cout << "------------------" << std::endl;
 
   std::cout << std::fixed << std::setprecision(2);
-  if(dtype=="float16")
-    bench<half_float::half>(sc::HALF_TYPE, operation);
+  //if(dtype=="float16")
+  //  bench<half_float::half>(sc::HALF_TYPE, operation);
   if(dtype=="float32")
     bench<float>(sc::FLOAT_TYPE, operation);
   if(dtype=="float64")
