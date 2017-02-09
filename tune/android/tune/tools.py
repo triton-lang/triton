@@ -102,16 +102,17 @@ def tree_of(template, sizes, context):
         return sc.assign(C, sc.dot(AA, BB)), (A, B, C)
 
 def memory_footprint(template, sizes):
+    dtsize = dtype(0).size
     if issubclass(template, sc.templates.elementwise_1d):
-        return 4*3*sizes[0]*1e-9
+        return dtsize*3*sizes[0]*1e-9
     elif issubclass(template, sc.templates.reduce_1d):
-        return 4*2*sizes[0]*1e-9
+        return dtsize*2*sizes[0]*1e-9
     elif issubclass(template, sc.templates.elementwise_2d):
-        return 4*sizes[0]*sizes[1]*1e-9
+        return dtsize*sizes[0]*sizes[1]*1e-9
     elif issubclass(template, sc.templates.reduce_2d):
-        return 4*sizes[0]*sizes[1]*1e-9
+        return dtsize*sizes[0]*sizes[1]*1e-9
     elif issubclass(template, sc.templates.gemm):
-        return 4*(sizes[0]*sizes[1] + sizes[0]*sizes[2] + sizes[1]*sizes[2])*1e-9
+        return dtsize*(sizes[0]*sizes[1] + sizes[0]*sizes[2] + sizes[1]*sizes[2])*1e-9
     
 def metric_of(template):
     memory_bound = [sc.templates.elementwise_1d, sc.templates.reduce_1d, sc.templates.elementwise_2d, sc.templates.reduce_2d]
