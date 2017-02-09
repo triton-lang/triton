@@ -18,6 +18,7 @@
 #include <regex>
 #include <string>
 #include "common.hpp"
+#include "half.hpp"
 
 typedef sc::int_t int_t;
 
@@ -374,7 +375,7 @@ int main(int argc, char* argv[])
     handle_misusage();
 
   std::string operation = getopt(args, "--op", {"axpy", "dot", "gemv", "gemm"}, "gemm");
-  std::string dtype = getopt(args, "--dtype", {"float32", "float64"}, "float32");
+  std::string dtype = getopt(args, "--dtype", {"float16", "float32", "float64"}, "float32");
   int device;
   try{
     device = std::stoi(getopt(args, "--device", {}, "0"));
@@ -398,9 +399,11 @@ int main(int argc, char* argv[])
   std::cout << "------------------" << std::endl;
 
   std::cout << std::fixed << std::setprecision(2);
+  if(dtype=="float16")
+    bench<half_float::half>(sc::HALF_TYPE, operation);
   if(dtype=="float32")
     bench<float>(sc::FLOAT_TYPE, operation);
-  else
+  if(dtype=="float64")
     bench<double>(sc::DOUBLE_TYPE, operation);
 
 #ifdef BENCH_CLBLAS
