@@ -47,6 +47,39 @@ private:
   bool init_;
 };
 
+class intelblas_gemm : public external_base
+{
+  bool init();
+public:
+  intelblas_gemm(char A_trans, char B_trans);
+  int is_invalid(expression_tree const  &, driver::Device const &) const;
+  std::vector<int_t> input_sizes(expression_tree const & expressions) const;
+  void enqueue(driver::CommandQueue & queue, driver::Program const &, std::string const &, runtime::execution_handler const & h);
+  expression_type type() const;
+private:
+  std::string generate_impl(std::string const & suffix, expression_tree const &, driver::Device const & device, symbolic::symbols_table const &) const;
+  const char A_trans_;
+  const char B_trans_;
+  bool init_;
+};
+
+class intelblas_gemm_image : public external_base
+{
+  bool init();
+public:
+  intelblas_gemm_image(char A_trans, char B_trans);
+  int is_invalid(expression_tree const  &, driver::Device const &) const;
+  std::vector<int_t> input_sizes(expression_tree const & expressions) const;
+  void enqueue(driver::CommandQueue & queue, driver::Program const &, std::string const &, runtime::execution_handler const & h);
+  expression_type type() const;
+private:
+  std::string generate_impl(std::string const & suffix, expression_tree const &, driver::Device const & device, symbolic::symbols_table const &) const;
+  const char A_trans_;
+  const char B_trans_;
+  bool init_;
+};
+
+
 class gemm : public parameterized_base
 {
 private:

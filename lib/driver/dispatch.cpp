@@ -142,6 +142,9 @@ cl_int dispatch::clBuildProgram(cl_program a, cl_uint b, const cl_device_id * c,
 cl_context dispatch::clCreateContext(const cl_context_properties * a, cl_uint b, const cl_device_id * c, void (*d)(const char *, const void *, size_t, void *), void * e, cl_int * f)
 { return f_impl<dispatch::clinit>(opencl_, dispatch::clCreateContext, dispatch::clCreateContext_, "clCreateContext", a, b, c, d, e, f); }
 
+cl_int dispatch::clSetEventCallback(cl_event event, cl_int a, void(CL_CALLBACK *pfn_notify)(cl_event, cl_int, void *), void * arg)
+{ return f_impl<dispatch::clinit>(opencl_, dispatch::clSetEventCallback, dispatch::clSetEventCallback_, "clSetEventCallback", event, a, pfn_notify, arg); }
+
 OCL_DEFINE9(cl_int, clEnqueueNDRangeKernel, cl_command_queue, cl_kernel, cl_uint, const size_t*, const size_t*, const size_t*,  cl_uint, const cl_event*, cl_event*)
 OCL_DEFINE4(cl_int, clSetKernelArg, cl_kernel, cl_uint, size_t, const void *)
 OCL_DEFINE1(cl_int, clReleaseMemObject, cl_mem)
@@ -171,8 +174,10 @@ OCL_DEFINE5(cl_int, clGetKernelInfo, cl_kernel, cl_kernel_info, size_t, void *, 
 OCL_DEFINE6(cl_int, clGetKernelWorkGroupInfo, cl_kernel, cl_device_id, cl_kernel_work_group_info, size_t, void *, size_t *)
 OCL_DEFINE3(cl_kernel, clCreateKernel, cl_program, const char *, cl_int *)
 OCL_DEFINE5(cl_mem, clCreateBuffer, cl_context, cl_mem_flags, size_t, void *, cl_int *)
+OCL_DEFINE6(cl_mem, clCreateImage, cl_context, cl_mem_flags, const cl_image_format *, const cl_image_desc *, void *, cl_int *) 
 OCL_DEFINE5(cl_program, clCreateProgramWithSource, cl_context, cl_uint, const char **, const size_t *, cl_int *)
 OCL_DEFINE1(cl_int, clReleaseKernel, cl_kernel)
+OCL_DEFINE9(cl_int, clEnqueueCopyBufferToImage, cl_command_queue, cl_mem, cl_mem, size_t, const size_t *, const size_t *, cl_uint, const cl_event *, cl_event *)
 
 //CUDA
 CUDA_DEFINE1(CUresult, cuCtxDestroy_v2, CUcontext)
@@ -291,8 +296,11 @@ void* dispatch::clGetKernelInfo_;
 void* dispatch::clGetKernelWorkGroupInfo_;
 void* dispatch::clCreateKernel_;
 void* dispatch::clCreateBuffer_;
+void* dispatch::clCreateImage_;
 void* dispatch::clCreateProgramWithSource_;
 void* dispatch::clReleaseKernel_;
+void* dispatch::clEnqueueCopyBufferToImage_;
+void* dispatch::clSetEventCallback_;
 
 //CUDA
 void* dispatch::cuCtxDestroy_v2_;

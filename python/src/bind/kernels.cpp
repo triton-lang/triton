@@ -83,6 +83,7 @@ void export_templates()
   WRAP_TEMPLATE(gemm_nt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
   WRAP_TEMPLATE(gemm_tt, tpt::gemm, uint, uint, uint, uint, uint, uint, uint, uint, uint, uint)
   WRAP_TEMPLATE(cublas_gemm, tpt::external_base, char, char)
-
+  WRAP_TEMPLATE(intelblas_gemm, tpt::external_base, char, char)
+  WRAP_TEMPLATE(intelblas_gemm_image, tpt::external_base, char, char)
 
 }

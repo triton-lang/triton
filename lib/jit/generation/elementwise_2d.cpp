@@ -28,7 +28,6 @@
 #include "tools/loop.hpp"
 #include "tools/vector_types.hpp"
 
-
 namespace isaac
 {
 namespace templates
