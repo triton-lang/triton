@@ -79,7 +79,6 @@ private:
   bool init_;
 };
 
-
 class gemm : public parameterized_base
 {
 private:
