@@ -1,6 +1,6 @@
 # ISAAC
 
-This is the developer repository for ISAAC, a library that uses machine learning to find input-aware kernels for element-wise operations, 1D/2D reductions and GEMM. It works with both cuBLAS and clBLAS. It's super easy to compile (no dependency!), to install (just link against libisaac.so instead of clBLAS or cuBLAS!), almost always outperforms (tuned) clBLAS and often outperforms cuBLAS. And when it predict that it doesn't, it fallbacks on vendor libraries automatically. Try it!
+This is the developer repository for ISAAC, a library that uses machine learning to find input-aware kernels for element-wise operations, 1D/2D reductions and GEMM. It works with both cuBLAS and clBLAS, and fallbacks on those when appropriate (typically large square matrices).
 
 ### License
 
@@ -61,7 +61,6 @@ For x in {S, D}
 
 You can contribute to further tuning isaac if you have one of the following architecture:
 - NVidia: SM 2.x ; SM 3.5 ; SM 5.0
-- Intel: Skylake iGPU
 
 If you have one of the following architectures you can contribute by running:
 
