@@ -1028,6 +1028,9 @@ std::string intelblas_gemm::generate_impl(std::string const & suffix, expression
   std::string sdtype8 = sdtype + "8";
   std::string sdtype16 = sdtype + "16";
 
+  if(dtype==HALF_TYPE)
+    stream << "#pragma OPENCL EXTENSION cl_khr_fp16: enable" << std::endl;
+
   stream << "#define VEC_SIZE        4 " << std::endl;
   stream << "#define LWG_HEIGHT      4 " << std::endl;
   stream << "#define TILE_M          8 " << std::endl;
