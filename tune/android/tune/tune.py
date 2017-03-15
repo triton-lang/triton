@@ -184,11 +184,13 @@ class Tuner:
         save()     
         #Adding external profiles
         for prof in tools.external_profiles(operation):
-			profiles.append(prof.__class__.__name__)
-			for x, y in zip(X, Y):
-				tree, operands = tools.tree_of(operation, x, context)
-				perf = performance(x,tools.benchmark(prof, tree, operation))
-				y.append(perf)
+            profiles.append(prof.__class__.__name__)
+            for x, y in zip(X, Y):
+                tree, operands = tools.tree_of(operation, x, context)
+                perf = performance(x,tools.benchmark(prof, tree, operation))
+                if max(y) <  perf:
+                    print x, '\t', prof.__class__.__name__, '\toutperform: \t', int(perf), tools.metric_name_of(operation)
+                y.append(perf)
         #Pruning of useless profiles
         X = np.array(X)
         Y = np.array(Y)
