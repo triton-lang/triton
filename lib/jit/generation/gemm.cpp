@@ -149,17 +149,32 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   driver::backend_type backend = device.backend();
   kernel_generation_stream stream(backend);
 
+  numeric_type dtype = tree.dtype();
+  std::string sdtype = to_string(dtype);
+  std::string sdtype2 = sdtype + "2";
+  std::string sdtype4 = sdtype + "4";
+  std::string sdtype8 = sdtype + "8";
+  std::string sdtype16 = sdtype + "16";
+
+  if(dtype == HALF_TYPE) {
+    stream << "#pragma OPENCL EXTENSION cl_khr_fp16: enable" << std::endl;
+    stream << "#define SUBGROUP_BLOCK_READ8( __image, __coord ) intel_sub_group_block_read_us8( __image, __coord )" << std::endl;
+    stream << "#define READ_IMAGE(__image, __coord) read_imageh(__image, __coord)" << std::endl;
+    stream << "#define SIZE_OF_ELEMENT sizeof(ushort)" << std::endl;
+    stream << "#define SIMD_SIZE_GEMM 16" << std::endl;
+    stream << "#define TILE_N 16" << std::endl;
+  } else {
+    stream << "#define SUBGROUP_BLOCK_READ8( __image, __coord ) intel_sub_group_block_read8( __image, __coord )" << std::endl;
+    stream << "#define READ_IMAGE(__image, __coord) read_imagef(__image, __coord)" << std::endl;
+    stream << "#define SIZE_OF_ELEMENT sizeof(uint)" << std::endl;
+    stream << "#define SIMD_SIZE_GEMM 8" << std::endl;
+    stream << "#define TILE_N 8" << std::endl;
+  }
+
   stream << "#define TILE_M 32 " << std::endl;
   stream << "#define TILE_K 8 " << std::endl;
-  stream << "#define TILE_N 8 " << std::endl;
-  stream << "#ifdef USE_IMAGE_C " << std::endl;
-  stream << "#define BLOCKC_READ8( _C, _coordC ) as_float8( intel_sub_group_block_read8( _C, _coordC ) ) " << std::endl;
-  stream << "#define BLOCKC_WRITE8( _C, _coordC, _val ) intel_sub_group_block_write8( _C, _coordC, as_uint8( _val ) ) " << std::endl;
-  stream << "#define MATC_PARAMETER __read_only image2d_t C, __write_only image2d_t dst " << std::endl;
-  stream << "#define GEMM_OUTPUT(ALPHA1, BETA_NOT0) GEMM_OUTPUT_EXT(ALPHA1, BETA_NOT0, C, dst, sizeof(uint)) " << std::endl;
-  stream << "#else " << std::endl;
   stream << "#define BLOCKC_READ8( _C, _coordC ) \\" << std::endl;
-  stream << "          (float8) ( (_coordC.x + get_local_id(0) < N && _coordC.y < M) ? _C[ _coordC.y * ldc + _coordC.x + get_local_id(0) ] : 0, \\" << std::endl;
+  stream << "          (" << sdtype8 << ") ( (_coordC.x + get_local_id(0) < N && _coordC.y < M) ? _C[ _coordC.y * ldc + _coordC.x + get_local_id(0) ] : 0, \\" << std::endl;
   stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 1 < M) ? _C[ ( _coordC.y + 1 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\" << std::endl;
   stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 2 < M) ? _C[ ( _coordC.y + 2 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\" << std::endl;
   stream << "                     (_coordC.x + get_local_id(0) < N && _coordC.y + 3 < M) ? _C[ ( _coordC.y + 3 ) * ldc + _coordC.x + get_local_id(0) ] : 0, \\" << std::endl;
@@ -187,27 +202,26 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "                       if (_coordC.y + 7 < M) \\" << std::endl;
   stream << "                         _C[ ( _coordC.y + 7 )* ldc + _coordC.x + get_local_id(0) ] = _val.s7; \\" << std::endl;
   stream << "                     }} while(0) " << std::endl;
-  stream << "#define MATC_PARAMETER __global float * C, const int offC, const int M, const int N, const int ldc " << std::endl;
+  stream << "#define MATC_PARAMETER __global " << sdtype << " * C, const int offC, const int M, const int N, const int ldc " << std::endl;
   stream << "#define GEMM_OUTPUT(ALPHA1, BETA_NOT0) GEMM_OUTPUT_EXT(ALPHA1, BETA_NOT0, (C + offC), (C + offC), 1) " << std::endl;
-  stream << "#endif " << std::endl;
   stream << " " << std::endl;
   stream << "#define GEMM_OUTPUT_EXT(ALPHA1, BETA_NOT0, _C, _dst, _C_step) \\" << std::endl;
   stream << "    int2    coordDst = (int2)( ( group_x * TILE_N ) * _C_step, ( group_y * TILE_M ) ); \\" << std::endl;
   stream << "    int2    coordC = coordDst; \\" << std::endl;
-  stream << "    float8 blockC00; \\" << std::endl;
-  stream << "    float8 blockC01; \\" << std::endl;
-  stream << "    float8 blockC02; \\" << std::endl;
-  stream << "    float8 blockC03; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockC00; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockC01; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockC02; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockC03; \\" << std::endl;
   stream << "    if (BETA_NOT0) { \\" << std::endl;
-  stream << "        blockC00 = (index == 0) ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
-  stream << "        blockC01 = (index == 0) ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
-  stream << "        blockC02 = (index == 0) ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
-  stream << "        blockC03 = (index == 0) ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC ); \\" << std::endl;
+  stream << "        blockC00 = isFirstColBlock ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
+  stream << "        blockC01 = isFirstColBlock ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
+  stream << "        blockC02 = isFirstColBlock ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
+  stream << "        blockC03 = isFirstColBlock ? BLOCKC_READ8( _C, coordC ) * beta : BLOCKC_READ8( _C, coordC ); \\" << std::endl;
   stream << "        if (!ALPHA1) { \\" << std::endl;
-  stream << "            blockC00 = mad(blockAxB00, (float8)alpha, blockC00); \\" << std::endl;
-  stream << "            blockC01 = mad(blockAxB01, (float8)alpha, blockC01); \\" << std::endl;
-  stream << "            blockC02 = mad(blockAxB02, (float8)alpha, blockC02); \\" << std::endl;
-  stream << "            blockC03 = mad(blockAxB03, (float8)alpha, blockC03); \\" << std::endl;
+  stream << "            blockC00 = mad(blockAxB00, alpha, blockC00); \\" << std::endl;
+  stream << "            blockC01 = mad(blockAxB01, alpha, blockC01); \\" << std::endl;
+  stream << "            blockC02 = mad(blockAxB02, alpha, blockC02); \\" << std::endl;
+  stream << "            blockC03 = mad(blockAxB03, alpha, blockC03); \\" << std::endl;
   stream << "        } else { \\" << std::endl;
   stream << "            blockC00 += blockAxB00; \\" << std::endl;
   stream << "            blockC01 += blockAxB01; \\" << std::endl;
@@ -215,10 +229,10 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "            blockC03 += blockAxB03; \\" << std::endl;
   stream << "        } \\" << std::endl;
   stream << "    } else { \\" << std::endl;
-  stream << "        blockC00 = (index == 0) ? 0 : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
-  stream << "        blockC01 = (index == 0) ? 0 : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
-  stream << "        blockC02 = (index == 0) ? 0 : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
-  stream << "        blockC03 = (index == 0) ? 0 : BLOCKC_READ8( _C, coordC ); \\" << std::endl;
+  stream << "        blockC00 = isFirstColBlock ? 0 : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
+  stream << "        blockC01 = isFirstColBlock ? 0 : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
+  stream << "        blockC02 = isFirstColBlock ? 0 : BLOCKC_READ8( _C, coordC );    coordC.y += 8; \\" << std::endl;
+  stream << "        blockC03 = isFirstColBlock ? 0 : BLOCKC_READ8( _C, coordC ); \\" << std::endl;
   stream << "        if (!ALPHA1) { \\" << std::endl;
   stream << "          blockC00 = mad(blockAxB00, alpha, blockC00); \\" << std::endl;
   stream << "          blockC01 = mad(blockAxB01, alpha, blockC01); \\" << std::endl;
@@ -237,7 +251,7 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "    BLOCKC_WRITE8( _dst, coordDst, blockC03 ); " << std::endl;
   stream << " " << std::endl;
   stream << "#define TRANSPOSE_BLOCK_8( _block, _col )   \\" << std::endl;
-  stream << "        (float8)( intel_sub_group_shuffle( _block.s0, _col ),   \\" << std::endl;
+  stream << "        (" << sdtype8 << ")( intel_sub_group_shuffle( _block.s0, _col ),   \\" << std::endl;
   stream << "                  intel_sub_group_shuffle( _block.s1, _col ),   \\" << std::endl;
   stream << "                  intel_sub_group_shuffle( _block.s2, _col ),   \\" << std::endl;
   stream << "                  intel_sub_group_shuffle( _block.s3, _col ),   \\" << std::endl;
@@ -246,58 +260,110 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "                  intel_sub_group_shuffle( _block.s6, _col ),   \\" << std::endl;
   stream << "                  intel_sub_group_shuffle( _block.s7, _col ) ); " << std::endl;
   stream << " " << std::endl;
-  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\" << std::endl;
-  stream << "        {   \\" << std::endl;
-  stream << "            const float8    acol0 = TRANSPOSE_BLOCK_8( _blockA, 0 );    \\" << std::endl;
-  stream << "            const float8    acol1 = TRANSPOSE_BLOCK_8( _blockA, 1 );    \\" << std::endl;
-  stream << "            const float8    acol2 = TRANSPOSE_BLOCK_8( _blockA, 2 );    \\" << std::endl;
-  stream << "            const float8    acol3 = TRANSPOSE_BLOCK_8( _blockA, 3 );    \\" << std::endl;
-  stream << "            const float8    acol4 = TRANSPOSE_BLOCK_8( _blockA, 4 );    \\" << std::endl;
-  stream << "            const float8    acol5 = TRANSPOSE_BLOCK_8( _blockA, 5 );    \\" << std::endl;
-  stream << "            const float8    acol6 = TRANSPOSE_BLOCK_8( _blockA, 6 );    \\" << std::endl;
-  stream << "            const float8    acol7 = TRANSPOSE_BLOCK_8( _blockA, 7 );    \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s0), acol0, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s1), acol1, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s2), acol2, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s3), acol3, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s4), acol4, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s5), acol5, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s6), acol6, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s7), acol7, _result );      \\" << std::endl;
-  stream << "        } " << std::endl;
+  if(dtype ==HALF_TYPE) {
+    stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB00, _blockB01 )    \\" << std::endl;
+    stream << "        {   \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol0 = TRANSPOSE_BLOCK_8( _blockA, 0 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol1 = TRANSPOSE_BLOCK_8( _blockA, 1 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol2 = TRANSPOSE_BLOCK_8( _blockA, 2 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol3 = TRANSPOSE_BLOCK_8( _blockA, 3 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol4 = TRANSPOSE_BLOCK_8( _blockA, 4 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol5 = TRANSPOSE_BLOCK_8( _blockA, 5 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol6 = TRANSPOSE_BLOCK_8( _blockA, 6 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol7 = TRANSPOSE_BLOCK_8( _blockA, 7 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol8 = TRANSPOSE_BLOCK_8( _blockA, 8 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol9 = TRANSPOSE_BLOCK_8( _blockA, 9 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acola = TRANSPOSE_BLOCK_8( _blockA, 10 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acolb = TRANSPOSE_BLOCK_8( _blockA, 11 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acolc = TRANSPOSE_BLOCK_8( _blockA, 12 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acold = TRANSPOSE_BLOCK_8( _blockA, 13 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acole = TRANSPOSE_BLOCK_8( _blockA, 14 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acolf = TRANSPOSE_BLOCK_8( _blockA, 15 );    \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB00.s0), acol0, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB00.s1), acol1, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB00.s2), acol2, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB00.s3), acol3, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB00.s4), acol4, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB00.s5), acol5, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB00.s6), acol6, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB00.s7), acol7, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB01.s0), acol8, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB01.s1), acol9, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB01.s2), acola, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB01.s3), acolb, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB01.s4), acolc, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB01.s5), acold, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB01.s6), acole, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB01.s7), acolf, _result );      \\" << std::endl;
+    stream << "        } " << std::endl;
+  } else {
+    stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\" << std::endl;
+    stream << "        {   \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol0 = TRANSPOSE_BLOCK_8( _blockA, 0 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol1 = TRANSPOSE_BLOCK_8( _blockA, 1 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol2 = TRANSPOSE_BLOCK_8( _blockA, 2 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol3 = TRANSPOSE_BLOCK_8( _blockA, 3 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol4 = TRANSPOSE_BLOCK_8( _blockA, 4 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol5 = TRANSPOSE_BLOCK_8( _blockA, 5 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol6 = TRANSPOSE_BLOCK_8( _blockA, 6 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol7 = TRANSPOSE_BLOCK_8( _blockA, 7 );    \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s0), acol0, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s1), acol1, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s2), acol2, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s3), acol3, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s4), acol4, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s5), acol5, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s6), acol6, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s7), acol7, _result );      \\" << std::endl;
+    stream << "        } " << std::endl;
+  }
   stream << " " << std::endl;
   stream << "#define GEMM_NN(ALPHA1, BETA_NOT0) \\" << std::endl;
-  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\" << std::endl;
-  stream << "__kernel void intelblas_gemm_image_32_1_NN_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\" << std::endl;
+  stream << "__attribute__((reqd_work_group_size(SIMD_SIZE_GEMM, 1, 1))) \\" << std::endl;
+  stream << "__kernel void intelblas_gemm_image_32_1_NN_ ##ALPHA1 ##_ ##BETA_NOT0 ##_" << sdtype << "( \\" << std::endl;
   stream << "    __read_only image2d_t A, \\" << std::endl;
   stream << "    __read_only image2d_t B, \\" << std::endl;
   stream << "    MATC_PARAMETER, \\" << std::endl;
-  stream << "    float alpha, \\" << std::endl;
-  stream << "    float beta, \\" << std::endl;
+  stream << "    float alpha_in, \\" << std::endl;
+  stream << "    float beta_in, \\" << std::endl;
   stream << "    int width0, \\" << std::endl;
-  stream << "    int index) \\" << std::endl;
+  stream << "    int isFirstColBlock) \\" << std::endl;
   stream << "{ \\" << std::endl;
+  stream << "    const " << sdtype << " alpha = (" << sdtype << ")alpha_in; \\" << std::endl;
+  stream << "    const " << sdtype << " beta = (" << sdtype << ")beta_in; \\" << std::endl;
   stream << "    const int group_x = get_group_id(0); \\" << std::endl;
   stream << "    const int group_y = get_group_id(1); \\" << std::endl;
-  stream << "    float8 blockAxB00 = 0.0f; \\" << std::endl;
-  stream << "    float8 blockAxB01 = 0.0f; \\" << std::endl;
-  stream << "    float8 blockAxB02 = 0.0f; \\" << std::endl;
-  stream << "    float8 blockAxB03 = 0.0f; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB00 = 0; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB01 = 0; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB02 = 0; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB03 = 0; \\" << std::endl;
   stream << "    int2    coordA = (int2)( 0, group_y * TILE_M ); \\" << std::endl;
-  stream << "    int2    coordB = (int2)( ( group_x * TILE_N ) * sizeof(uint), 0 ); \\" << std::endl;
+  stream << "    int2    coordB = (int2)( ( group_x * TILE_N ) * SIZE_OF_ELEMENT, 0 ); \\" << std::endl;
   stream << "    do \\" << std::endl;
   stream << "    {  \\" << std::endl;
   stream << "        int2    coordBTemp = coordB; \\" << std::endl;
-  stream << "        float8  blockB00 = as_float8( intel_sub_group_block_read8( B, coordBTemp ) );    coordB.y += TILE_K; \\" << std::endl;
+  stream << "        " << sdtype8 << "  blockB00 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( B, coordBTemp ) );    coordB.y += TILE_K; \\" << std::endl;
+  if(dtype == HALF_TYPE)
+    stream << "        " << sdtype8 << "  blockB01 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( B, coordBTemp ) );    coordB.y += TILE_K; \\" << std::endl;
   stream << "        int2    coordATemp = coordA; \\" << std::endl;
-  stream << "        float8  blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
-  stream << "        float8  blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
-  stream << "        float8  blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
-  stream << "        float8  blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.x += TILE_K * sizeof(uint); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00 ); \\" << std::endl;
+  stream << "        " << sdtype8 << "  blockA00 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
+  stream << "        " << sdtype8 << "  blockA01 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
+  stream << "        " << sdtype8 << "  blockA02 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
+  if(dtype == HALF_TYPE)
+    stream << "        " << sdtype8 << "  blockA03 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordA.x += TILE_K * SIZE_OF_ELEMENT * 2; \\" << std::endl;
+  else
+    stream << "        " << sdtype8 << "  blockA03 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordA.x += TILE_K * SIZE_OF_ELEMENT; \\" << std::endl;
+  if(dtype == HALF_TYPE) {
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00, blockB01 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00, blockB01 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00, blockB01 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00, blockB01 ); \\" << std::endl;
+  } else {
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00 ); \\" << std::endl;
+  }
   stream << "    } \\" << std::endl;
   stream << "    while( coordB.y < width0 ); \\" << std::endl;
   stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0); \\" << std::endl;
@@ -311,60 +377,71 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
   stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
   stream << " " << std::endl;
-  stream << "#define TRANSPOSE_BLOCK_8(_vec) \\" << std::endl;
-  stream << "        (float8)( intel_sub_group_shuffle(_vec, 0), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 1), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 2), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 3), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 4), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 5), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 6), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 7) ) " << std::endl;
+  stream << "#define TRANSPOSE_BLOCK_8(_vec, _col) \\" << std::endl;
+  stream << "        (" << sdtype8 << ")( intel_sub_group_shuffle(_vec, _col + 0), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 1), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 2), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 3), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 4), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 5), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 6), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 7) ) " << std::endl;
   stream << " " << std::endl;
-  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\" << std::endl;
+  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB, _col )    \\" << std::endl;
   stream << "        {   \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s0), TRANSPOSE_BLOCK_8(_blockA.s0), _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s1), TRANSPOSE_BLOCK_8(_blockA.s1), _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s2), TRANSPOSE_BLOCK_8(_blockA.s2), _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s3), TRANSPOSE_BLOCK_8(_blockA.s3), _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s4), TRANSPOSE_BLOCK_8(_blockA.s4), _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s5), TRANSPOSE_BLOCK_8(_blockA.s5), _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s6), TRANSPOSE_BLOCK_8(_blockA.s6), _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)(_blockB.s7), TRANSPOSE_BLOCK_8(_blockA.s7), _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s0), TRANSPOSE_BLOCK_8(_blockA.s0, _col), _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s1), TRANSPOSE_BLOCK_8(_blockA.s1, _col), _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s2), TRANSPOSE_BLOCK_8(_blockA.s2, _col), _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s3), TRANSPOSE_BLOCK_8(_blockA.s3, _col), _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s4), TRANSPOSE_BLOCK_8(_blockA.s4, _col), _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s5), TRANSPOSE_BLOCK_8(_blockA.s5, _col), _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s6), TRANSPOSE_BLOCK_8(_blockA.s6, _col), _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")(_blockB.s7), TRANSPOSE_BLOCK_8(_blockA.s7, _col), _result );      \\" << std::endl;
   stream << "        } " << std::endl;
   stream << " " << std::endl;
   stream << "#define GEMM_TN(ALPHA1, BETA_NOT0) \\" << std::endl;
-  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\" << std::endl;
-  stream << "__kernel void intelblas_gemm_image_32_1_TN_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\" << std::endl;
+  stream << "__attribute__((reqd_work_group_size(SIMD_SIZE_GEMM, 1, 1))) \\" << std::endl;
+  stream << "__kernel void intelblas_gemm_image_32_1_TN_ ##ALPHA1 ##_ ##BETA_NOT0 ##_" << sdtype << "( \\" << std::endl;
   stream << "    __read_only image2d_t A, \\" << std::endl;
   stream << "    __read_only image2d_t B, \\" << std::endl;
   stream << "    MATC_PARAMETER, \\" << std::endl;
-  stream << "    float alpha, \\" << std::endl;
-  stream << "    float beta, \\" << std::endl;
+  stream << "    float alpha_in, \\" << std::endl;
+  stream << "    float beta_in, \\" << std::endl;
   stream << "    int width0, \\" << std::endl;
-  stream << "    int index) \\" << std::endl;
+  stream << "    int isFirstColBlock) \\" << std::endl;
   stream << "{ \\" << std::endl;
+  stream << "    const " << sdtype << " alpha = (" << sdtype << ")alpha_in; \\" << std::endl;
+  stream << "    const " << sdtype << " beta = (" << sdtype << ")beta_in; \\" << std::endl;
   stream << "    const int group_x = get_group_id(0);\\" << std::endl;
   stream << "    const int group_y = get_group_id(1);\\" << std::endl;
-  stream << "    float8 blockAxB00 = 0.0f;\\" << std::endl;
-  stream << "    float8 blockAxB01 = 0.0f;\\" << std::endl;
-  stream << "    float8 blockAxB02 = 0.0f;\\" << std::endl;
-  stream << "    float8 blockAxB03 = 0.0f;\\" << std::endl;
-  stream << "    int2    coordA = (int2)( group_y * TILE_M * sizeof(uint), 0 );\\" << std::endl;
-  stream << "    int2    coordB = (int2)( ( group_x * TILE_N ) * sizeof(uint), 0 );\\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB00 = 0;\\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB01 = 0;\\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB02 = 0;\\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB03 = 0;\\" << std::endl;
+  stream << "    int2    coordA = (int2)( group_y * TILE_M * SIZE_OF_ELEMENT, 0 );\\" << std::endl;
+  stream << "    int2    coordB = (int2)( ( group_x * TILE_N ) * SIZE_OF_ELEMENT, 0 );\\" << std::endl;
   stream << "    do\\" << std::endl;
   stream << "    {\\" << std::endl;
   stream << "        int2    coordBTemp = coordB;\\" << std::endl;
-  stream << "        float8 blockB00 = as_float8( intel_sub_group_block_read8( B, coordBTemp ) );    coordB.y += TILE_K;\\" << std::endl;
+  stream << "        " << sdtype8 << " blockB00 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( B, coordBTemp ) );    coordB.y += 8;\\" << std::endl;
   stream << "        int2    coordATemp = coordA;\\" << std::endl;
-  stream << "        float8 blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint);\\" << std::endl;
-  stream << "        float8 blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint);\\" << std::endl;
-  stream << "        float8 blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint);\\" << std::endl;
-  stream << "        float8 blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.y += TILE_K;\\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00 ); \\" << std::endl;
+  if(dtype == HALF_TYPE) {
+    stream << "        " << sdtype8 << " blockA00 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.x += 16 * SIZE_OF_ELEMENT;\\" << std::endl;
+    stream << "        " << sdtype8 << " blockA01 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordA.y += TILE_K;\\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00, 0); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA00, blockB00, 8); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA01, blockB00, 0); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA01, blockB00, 8); \\" << std::endl;
+  } else {
+    stream << "        " << sdtype8 << " blockA00 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.x += 8 * SIZE_OF_ELEMENT;\\" << std::endl;
+    stream << "        " << sdtype8 << " blockA01 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.x += 8 * SIZE_OF_ELEMENT;\\" << std::endl;
+    stream << "        " << sdtype8 << " blockA02 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.x += 8 * SIZE_OF_ELEMENT;\\" << std::endl;
+    stream << "        " << sdtype8 << " blockA03 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordA.y += TILE_K;\\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00, 0 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00, 0 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00, 0 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03, blockB00, 0 ); \\" << std::endl;
+  }
   stream << "    } \\" << std::endl;
   stream << "    while( coordB.y < width0 ); \\" << std::endl;
   stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0); \\" << std::endl;
@@ -379,7 +456,7 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
   stream << " " << std::endl;
   stream << "#define TRANSPOSE_BLOCK_8( _block, _col )   \\" << std::endl;
-  stream << "        (float8)( intel_sub_group_shuffle( _block.s0, _col),   \\" << std::endl;
+  stream << "        (" << sdtype8 << ")( intel_sub_group_shuffle( _block.s0, _col),   \\" << std::endl;
   stream << "                  intel_sub_group_shuffle( _block.s1, _col),   \\" << std::endl;
   stream << "                  intel_sub_group_shuffle( _block.s2, _col),   \\" << std::endl;
   stream << "                  intel_sub_group_shuffle( _block.s3, _col),   \\" << std::endl;
@@ -390,54 +467,82 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << " " << std::endl;
   stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\" << std::endl;
   stream << "        {   \\" << std::endl;
-  stream << "            const float8    acol0 = TRANSPOSE_BLOCK_8( _blockA, 0 );    \\" << std::endl;
-  stream << "            const float8    acol1 = TRANSPOSE_BLOCK_8( _blockA, 1 );    \\" << std::endl;
-  stream << "            const float8    acol2 = TRANSPOSE_BLOCK_8( _blockA, 2 );    \\" << std::endl;
-  stream << "            const float8    acol3 = TRANSPOSE_BLOCK_8( _blockA, 3 );    \\" << std::endl;
-  stream << "            const float8    acol4 = TRANSPOSE_BLOCK_8( _blockA, 4 );    \\" << std::endl;
-  stream << "            const float8    acol5 = TRANSPOSE_BLOCK_8( _blockA, 5 );    \\" << std::endl;
-  stream << "            const float8    acol6 = TRANSPOSE_BLOCK_8( _blockA, 6 );    \\" << std::endl;
-  stream << "            const float8    acol7 = TRANSPOSE_BLOCK_8( _blockA, 7 );    \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s0, acol0, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s1, acol1, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s2, acol2, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s3, acol3, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s4, acol4, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s5, acol5, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s6, acol6, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s7, acol7, _result );      \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol0 = TRANSPOSE_BLOCK_8( _blockA, 0 );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol1 = TRANSPOSE_BLOCK_8( _blockA, 1 );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol2 = TRANSPOSE_BLOCK_8( _blockA, 2 );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol3 = TRANSPOSE_BLOCK_8( _blockA, 3 );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol4 = TRANSPOSE_BLOCK_8( _blockA, 4 );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol5 = TRANSPOSE_BLOCK_8( _blockA, 5 );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol6 = TRANSPOSE_BLOCK_8( _blockA, 6 );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol7 = TRANSPOSE_BLOCK_8( _blockA, 7 );    \\" << std::endl;
+  if(dtype == HALF_TYPE) {
+    stream << "            const " << sdtype8 << "    acol8 = TRANSPOSE_BLOCK_8( _blockA, 8 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acol9 = TRANSPOSE_BLOCK_8( _blockA, 9 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acola = TRANSPOSE_BLOCK_8( _blockA, 10 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acolb = TRANSPOSE_BLOCK_8( _blockA, 11 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acolc = TRANSPOSE_BLOCK_8( _blockA, 12 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acold = TRANSPOSE_BLOCK_8( _blockA, 13 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acole = TRANSPOSE_BLOCK_8( _blockA, 14 );    \\" << std::endl;
+    stream << "            const " << sdtype8 << "    acolf = TRANSPOSE_BLOCK_8( _blockA, 15 );    \\" << std::endl;
+  }
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s0, acol0, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s1, acol1, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s2, acol2, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s3, acol3, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s4, acol4, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s5, acol5, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s6, acol6, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s7, acol7, _result );      \\" << std::endl;
+  if(dtype == HALF_TYPE) {
+    stream << "            _result = mad( (" << sdtype8 << ")_blockB.s8, acol8, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")_blockB.s9, acol9, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")_blockB.sa, acola, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")_blockB.sb, acolb, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")_blockB.sc, acolc, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")_blockB.sd, acold, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")_blockB.se, acole, _result );      \\" << std::endl;
+    stream << "            _result = mad( (" << sdtype8 << ")_blockB.sf, acolf, _result );      \\" << std::endl;
+  }
   stream << "        } " << std::endl;
   stream << " " << std::endl;
   stream << "#define GEMM_NT(ALPHA1, BETA_NOT0, VECSCALAR, VECSIZE) \\" << std::endl;
-  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\" << std::endl;
-  stream << "__kernel void intelblas_gemm_image_32_1_NT_ ##VECSCALAR ##_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\" << std::endl;
+  stream << "__attribute__((reqd_work_group_size(SIMD_SIZE_GEMM, 1, 1))) \\" << std::endl;
+  stream << "__kernel void intelblas_gemm_image_32_1_NT_ ##VECSCALAR ##_ ##ALPHA1 ##_ ##BETA_NOT0 ##_" << sdtype << "( \\" << std::endl;
   stream << "    __read_only image2d_t A, \\" << std::endl;
   stream << "    MATB_PARAMETER, \\" << std::endl;
   stream << "    MATC_PARAMETER, \\" << std::endl;
-  stream << "    float alpha, \\" << std::endl;
-  stream << "    float beta, \\" << std::endl;
+  stream << "    float alpha_in, \\" << std::endl;
+  stream << "    float beta_in, \\" << std::endl;
   stream << "    int padded_k, \\" << std::endl;
   stream << "    int k, \\" << std::endl;
-  stream << "    int index) \\" << std::endl;
+  stream << "    int isFirstColBlock) \\" << std::endl;
   stream << "{ \\" << std::endl;
+  stream << "    const " << sdtype << " alpha = (" << sdtype << ")alpha_in; \\" << std::endl;
+  stream << "    const " << sdtype << " beta = (" << sdtype << ")beta_in; \\" << std::endl;
   stream << "    const int group_x = get_group_id(0); \\" << std::endl;
   stream << "    const int group_y = get_group_id(1); \\" << std::endl;
-  stream << "    float8 blockAxB00 = 0.0f; \\" << std::endl;
-  stream << "    float8 blockAxB01 = 0.0f; \\" << std::endl;
-  stream << "    float8 blockAxB02 = 0.0f; \\" << std::endl;
-  stream << "    float8 blockAxB03 = 0.0f; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB00 = 0; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB01 = 0; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB02 = 0; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB03 = 0; \\" << std::endl;
   stream << "    int2    coordA = (int2)( 0, group_y * TILE_M ); \\" << std::endl;
   stream << "    int2    coordB = (int2)( 0, ( group_x * TILE_N )); \\" << std::endl;
   stream << "    const sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST; \\" << std::endl;
   stream << "    do \\" << std::endl;
   stream << "    { \\" << std::endl;
-  stream << "        float8 blockB00;             \\" << std::endl;
+  if(dtype == HALF_TYPE)
+    stream << "        " << sdtype16 << " blockB00;             \\" << std::endl;
+  else
+    stream << "        " << sdtype8 << " blockB00;             \\" << std::endl;
   stream << "        BLOCKB_READ8(blockB00, B, coordB); \\" << std::endl;
   stream << "        int2    coordATemp = coordA; \\" << std::endl;
-  stream << "        float8 blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
-  stream << "        float8 blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
-  stream << "        float8 blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
-  stream << "        float8 blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.x += TILE_K * sizeof(uint); \\" << std::endl;
+  stream << "        " << sdtype8 << " blockA00 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
+  stream << "        " << sdtype8 << " blockA01 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
+  stream << "        " << sdtype8 << " blockA02 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.y += 8; \\" << std::endl;
+  if(dtype == HALF_TYPE)
+    stream << "        " << sdtype8 << " blockA03 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordA.x += TILE_K * SIZE_OF_ELEMENT * 2; \\" << std::endl;
+  else
+    stream << "        " << sdtype8 << " blockA03 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordA.x += TILE_K * SIZE_OF_ELEMENT; \\" << std::endl;
   stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00 ); \\" << std::endl;
   stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01, blockB00 ); \\" << std::endl;
   stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02, blockB00 ); \\" << std::endl;
@@ -447,29 +552,19 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0); \\" << std::endl;
   stream << "} " << std::endl;
   stream << " " << std::endl;
-  stream << " " << std::endl;
   stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\" << std::endl;
   stream << "        int2 _coordBTemp = _coordB; \\" << std::endl;
   stream << "        _coordBTemp.y += get_local_id(0); \\" << std::endl;
-  stream << "        _blockb.s0123 = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
-  stream << "        _blockb.s4567 = read_imagef(_B, _coordBTemp); _coordB.x += 2; " << std::endl;
+  stream << "        const __global float *B_read = (__global float *)(_B + (_coordBTemp.y * ldb) + _coordBTemp.x + offB); \\" << std::endl;
+  if(dtype == HALF_TYPE) {
+    stream << "        _blockb = as_" << sdtype16 << "(as_ushort16(vload8(0, B_read))); \\" << std::endl;
+    stream << "        _coordB.x += TILE_K * 2; " << std::endl;
+  } else {
+    stream << "        _blockb = vload8(0, B_read); \\" << std::endl;
+    stream << "        _coordB.x += TILE_K; " << std::endl;
+  }
   stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_NT(1, 0, VEC4, 4) " << std::endl;
-  stream << "GEMM_NT(1, 1, VEC4, 4)  " << std::endl;
-  stream << "GEMM_NT(0, 0, VEC4, 4) " << std::endl;
-  stream << "GEMM_NT(0, 1, VEC4, 4) " << std::endl;
-  stream << "#undef BLOCKB_READ8 " << std::endl;
-  stream << "#undef MATB_PARAMETER " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\" << std::endl;
-  stream << "        int2 _coordBTemp = _coordB; \\" << std::endl;
-  stream << "        _coordBTemp.y += get_local_id(0); \\" << std::endl;
-  stream << "        _blockb = *(__global float8*)&_B[_coordBTemp.y * ldb + _coordBTemp.x + offB];\\" << std::endl;
-  stream << "        _coordB.x += TILE_K; " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __global float *B, int offB, int ldb " << std::endl;
+  stream << "#define MATB_PARAMETER __global " << sdtype << " *B, int offB, int ldb " << std::endl;
   stream << " " << std::endl;
   stream << "GEMM_NT(1, 0, BUFFER, 1)  " << std::endl;
   stream << "GEMM_NT(1, 1, BUFFER, 1)  " << std::endl;
@@ -482,24 +577,43 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\" << std::endl;
   stream << "        int2 _coordBTemp = _coordB; \\" << std::endl;
   stream << "        _coordBTemp.y += get_local_id(0); \\" << std::endl;
-  stream << "        float4 temp; \\" << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        " << sdtype4 << " temp; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s0 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s1 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s2 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s3 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s4 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s5 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s6 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s7 = temp.s0; \\" << std::endl;
-  stream << "        _coordB.x += 8; " << std::endl;
+  stream << "        _coordB.x += 8; \\" << std::endl;
+  if(dtype == HALF_TYPE) {
+    stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+    stream << "        _blockb.s8 = temp.s0; \\" << std::endl;
+    stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+    stream << "        _blockb.s9 = temp.s0; \\" << std::endl;
+    stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+    stream << "        _blockb.sa = temp.s0; \\" << std::endl;
+    stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+    stream << "        _blockb.sb = temp.s0; \\" << std::endl;
+    stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+    stream << "        _blockb.sc = temp.s0; \\" << std::endl;
+    stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+    stream << "        _blockb.sd = temp.s0; \\" << std::endl;
+    stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+    stream << "        _blockb.se = temp.s0; \\" << std::endl;
+    stream << "        temp = READ_IMAGE(_B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+    stream << "        _blockb.sf = temp.s0; \\" << std::endl;
+    stream << "        _coordB.x += 8; " << std::endl;
+  }
   stream << " " << std::endl;
   stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
   stream << " " << std::endl;
@@ -513,70 +627,81 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "#undef MULTIPLY_BLOCKS_8x8 " << std::endl;
   stream << "#undef TRANSPOSE_BLOCK_8 " << std::endl;
   stream << " " << std::endl;
-  stream << "#define TRANSPOSE_BLOCK_8(_vec) \\" << std::endl;
-  stream << "        (float8)( intel_sub_group_shuffle(_vec, 0), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 1), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 2), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 3), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 4), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 5), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 6), \\" << std::endl;
-  stream << "                  intel_sub_group_shuffle(_vec, 7) ); " << std::endl;
+  stream << "#define TRANSPOSE_BLOCK_8(_vec, _col) \\" << std::endl;
+  stream << "        (" << sdtype8 << ")( intel_sub_group_shuffle(_vec, _col + 0), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 1), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 2), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 3), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 4), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 5), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 6), \\" << std::endl;
+  stream << "                  intel_sub_group_shuffle(_vec, _col + 7) ); " << std::endl;
   stream << " " << std::endl;
-  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB )    \\" << std::endl;
+  stream << "#define MULTIPLY_BLOCKS_8x8( _result, _blockA, _blockB, _col )    \\" << std::endl;
   stream << "        {   \\" << std::endl;
-  stream << "            const float8    acol0 = TRANSPOSE_BLOCK_8( _blockA.s0 );    \\" << std::endl;
-  stream << "            const float8    acol1 = TRANSPOSE_BLOCK_8( _blockA.s1 );    \\" << std::endl;
-  stream << "            const float8    acol2 = TRANSPOSE_BLOCK_8( _blockA.s2 );    \\" << std::endl;
-  stream << "            const float8    acol3 = TRANSPOSE_BLOCK_8( _blockA.s3 );    \\" << std::endl;
-  stream << "            const float8    acol4 = TRANSPOSE_BLOCK_8( _blockA.s4 );    \\" << std::endl;
-  stream << "            const float8    acol5 = TRANSPOSE_BLOCK_8( _blockA.s5 );    \\" << std::endl;
-  stream << "            const float8    acol6 = TRANSPOSE_BLOCK_8( _blockA.s6 );    \\" << std::endl;
-  stream << "            const float8    acol7 = TRANSPOSE_BLOCK_8( _blockA.s7 );    \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s0, acol0, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s1, acol1, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s2, acol2, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s3, acol3, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s4, acol4, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s5, acol5, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s6, acol6, _result );      \\" << std::endl;
-  stream << "            _result = mad( (float8)_blockB.s7, acol7, _result );      \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol0 = TRANSPOSE_BLOCK_8( _blockA.s0, _col );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol1 = TRANSPOSE_BLOCK_8( _blockA.s1, _col );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol2 = TRANSPOSE_BLOCK_8( _blockA.s2, _col );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol3 = TRANSPOSE_BLOCK_8( _blockA.s3, _col );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol4 = TRANSPOSE_BLOCK_8( _blockA.s4, _col );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol5 = TRANSPOSE_BLOCK_8( _blockA.s5, _col );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol6 = TRANSPOSE_BLOCK_8( _blockA.s6, _col );    \\" << std::endl;
+  stream << "            const " << sdtype8 << "    acol7 = TRANSPOSE_BLOCK_8( _blockA.s7, _col );    \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s0, acol0, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s1, acol1, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s2, acol2, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s3, acol3, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s4, acol4, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s5, acol5, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s6, acol6, _result );      \\" << std::endl;
+  stream << "            _result = mad( (" << sdtype8 << ")_blockB.s7, acol7, _result );      \\" << std::endl;
   stream << "        } " << std::endl;
   stream << " " << std::endl;
   stream << "#define GEMM_TT(ALPHA1, BETA_NOT0, VECSCALAR, VECSIZE) \\" << std::endl;
-  stream << "__attribute__((reqd_work_group_size(8, 1, 1))) \\" << std::endl;
-  stream << "__kernel void intelblas_gemm_image_32_1_TT_ ##VECSCALAR ##_ ##ALPHA1 ##_ ##BETA_NOT0 ##_float( \\" << std::endl;
+  stream << "__attribute__((reqd_work_group_size(SIMD_SIZE_GEMM, 1, 1))) \\" << std::endl;
+  stream << "__kernel void intelblas_gemm_image_32_1_TT_ ##VECSCALAR ##_ ##ALPHA1 ##_ ##BETA_NOT0 ##_" << sdtype << "( \\" << std::endl;
   stream << "    __read_only image2d_t A, \\" << std::endl;
   stream << "    MATB_PARAMETER, \\" << std::endl;
   stream << "    MATC_PARAMETER, \\" << std::endl;
-  stream << "    float alpha, \\" << std::endl;
-  stream << "    float beta, \\" << std::endl;
+  stream << "    float alpha_in, \\" << std::endl;
+  stream << "    float beta_in, \\" << std::endl;
   stream << "    int padded_k, \\" << std::endl;
   stream << "    int k, \\" << std::endl;
-  stream << "    int index) \\" << std::endl;
+  stream << "    int isFirstColBlock) \\" << std::endl;
   stream << "{ \\" << std::endl;
+  stream << "    const " << sdtype << " alpha = (" << sdtype << ")alpha_in; \\" << std::endl;
+  stream << "    const " << sdtype << " beta = (" << sdtype << ")beta_in; \\" << std::endl;
   stream << "    const int group_x = get_group_id(0); \\" << std::endl;
   stream << "    const int group_y = get_group_id(1); \\" << std::endl;
-  stream << "    float8 blockAxB00 = 0.0f; \\" << std::endl;
-  stream << "    float8 blockAxB01 = 0.0f; \\" << std::endl;
-  stream << "    float8 blockAxB02 = 0.0f; \\" << std::endl;
-  stream << "    float8 blockAxB03 = 0.0f; \\" << std::endl;
-  stream << "    int2    coordA = (int2)( group_y * TILE_M * sizeof(uint), 0 ); \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB00 = 0; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB01 = 0; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB02 = 0; \\" << std::endl;
+  stream << "    " << sdtype8 << " blockAxB03 = 0; \\" << std::endl;
+  stream << "    int2    coordA = (int2)( group_y * TILE_M * SIZE_OF_ELEMENT, 0 ); \\" << std::endl;
   stream << "    int2    coordB = (int2)( 0, ( group_x * TILE_N )); \\" << std::endl;
   stream << "    const sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST; \\" << std::endl;
   stream << "    do \\" << std::endl;
   stream << "    { \\" << std::endl;
-  stream << "        float8 blockB00;             \\" << std::endl;
+  stream << "        " << sdtype8 << " blockB00;             \\" << std::endl;
   stream << "        BLOCKB_READ8(blockB00, B, coordB); \\" << std::endl;
   stream << "        int2    coordATemp = coordA; \\" << std::endl;
-  stream << "        float8 blockA00 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint); \\" << std::endl;
-  stream << "        float8 blockA01 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint); \\" << std::endl;
-  stream << "        float8 blockA02 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordATemp.x += 8 * sizeof(uint); \\" << std::endl;
-  stream << "        float8 blockA03 = as_float8( intel_sub_group_block_read8( A, coordATemp ) );    coordA.y += TILE_K; \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00 , blockB00 ); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01 , blockB00 ); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02 , blockB00 ); \\" << std::endl;
-  stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03 , blockB00 ); \\" << std::endl;
+  if(dtype == HALF_TYPE) {
+    stream << "        " << sdtype8 << " blockA00 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.x += 16 * SIZE_OF_ELEMENT;\\" << std::endl;
+    stream << "        " << sdtype8 << " blockA01 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordA.y += TILE_K;\\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00, blockB00, 0); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA00, blockB00, 8); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA01, blockB00, 0); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA01, blockB00, 8); \\" << std::endl;
+  } else {
+    stream << "        " << sdtype8 << " blockA00 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.x += 8 * SIZE_OF_ELEMENT; \\" << std::endl;
+    stream << "        " << sdtype8 << " blockA01 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.x += 8 * SIZE_OF_ELEMENT; \\" << std::endl;
+    stream << "        " << sdtype8 << " blockA02 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordATemp.x += 8 * SIZE_OF_ELEMENT; \\" << std::endl;
+    stream << "        " << sdtype8 << " blockA03 = as_" << sdtype8 << "( SUBGROUP_BLOCK_READ8( A, coordATemp ) );    coordA.y += TILE_K; \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB00, blockA00 , blockB00, 0 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB01, blockA01 , blockB00, 0 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB02, blockA02 , blockB00, 0 ); \\" << std::endl;
+    stream << "        MULTIPLY_BLOCKS_8x8( blockAxB03, blockA03 , blockB00, 0 ); \\" << std::endl;
+  }
   stream << "    } \\" << std::endl;
   stream << "    while( coordB.x < padded_k / VECSIZE ); \\" << std::endl;
   stream << "    GEMM_OUTPUT(ALPHA1, BETA_NOT0);\\" << std::endl;
@@ -585,25 +710,14 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\" << std::endl;
   stream << "        int2 _coordBTemp = _coordB; \\" << std::endl;
   stream << "        _coordBTemp.y += get_local_id(0); \\" << std::endl;
-  stream << "        blockB00.s0123 = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
-  stream << "        blockB00.s4567 = read_imagef(B, _coordBTemp); _coordB.x += 2; " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __read_only image2d_t B " << std::endl;
-  stream << " " << std::endl;
-  stream << "GEMM_TT(1, 0, VEC4, 4) " << std::endl;
-  stream << "GEMM_TT(1, 1, VEC4, 4) " << std::endl;
-  stream << "GEMM_TT(0, 0, VEC4, 4) " << std::endl;
-  stream << "GEMM_TT(0, 1, VEC4, 4) " << std::endl;
-  stream << "#undef BLOCKB_READ8 " << std::endl;
-  stream << "#undef MATB_PARAMETER " << std::endl;
-  stream << " " << std::endl;
-  stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\" << std::endl;
-  stream << "        int2 _coordBTemp = _coordB; \\" << std::endl;
-  stream << "        _coordBTemp.y += get_local_id(0); \\" << std::endl;
-  stream << "        _blockb = *(__global float8*)&_B[_coordBTemp.y * ldb + _coordBTemp.x + offB];\\" << std::endl;
+  stream << "        const __global float *B_read = (__global float *)(_B + (_coordBTemp.y * ldb) + _coordBTemp.x + offB); \\" << std::endl;
+  if(dtype == HALF_TYPE)
+    stream << "        _blockb = as_" << sdtype8 << "(as_ushort8(vload4(0, B_read))); \\" << std::endl;
+  else
+    stream << "        _blockb = vload8(0, B_read); \\" << std::endl;
   stream << "        _coordB.x += TILE_K; " << std::endl;
   stream << " " << std::endl;
-  stream << "#define MATB_PARAMETER __global float *B, int offB, int ldb " << std::endl;
+  stream << "#define MATB_PARAMETER __global " << sdtype << " *B, int offB, int ldb " << std::endl;
   stream << " " << std::endl;
   stream << "GEMM_TT(1, 0, BUFFER, 1) " << std::endl;
   stream << "GEMM_TT(1, 1, BUFFER, 1) " << std::endl;
@@ -615,22 +729,22 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "#define BLOCKB_READ8(_blockb, _B, _coordB) \\" << std::endl;
   stream << "        int2 _coordBTemp = _coordB; \\" << std::endl;
   stream << "        _coordBTemp.y += get_local_id(0); \\" << std::endl;
-  stream << "        float4 temp; \\" << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        " << sdtype4 << " temp; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s0 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s1 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s2 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s3 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s4 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s5 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s6 = temp.s0; \\" << std::endl;
-  stream << "        temp = read_imagef(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
+  stream << "        temp = READ_IMAGE(B, _coordBTemp); _coordBTemp.x += 1; \\" << std::endl;
   stream << "        _blockb.s7 = temp.s0; \\" << std::endl;
   stream << "        _coordB.x += 8; " << std::endl;
   stream << " " << std::endl;
@@ -650,8 +764,8 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "#undef TILE_K " << std::endl;
   stream << "#undef TILE_N " << std::endl;
 
-  stream << "__kernel void gemm_buffer_copy_image_float( " << std::endl;
-  stream << "    __global float* A, " << std::endl;
+  stream << "__kernel void gemm_buffer_copy_image_transpose( " << std::endl;
+  stream << "    __global " << sdtype << "* A, " << std::endl;
   stream << "    __write_only image2d_t ImA, " << std::endl;
   stream << "    int offA, " << std::endl;
   stream << "    int width, " << std::endl;
@@ -661,14 +775,17 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "    const int gidx = get_global_id(0); " << std::endl;
   stream << "    const int gidy = get_global_id(1); " << std::endl;
   stream << "    int2 coord_dst = (int2)(gidx, gidy); " << std::endl;
-  stream << "    __global float* A_off = A + offA; " << std::endl;
-  stream << "    float srcA = A_off[gidy * ldA + gidx]; " << std::endl;
-  stream << "    write_imagef(ImA, coord_dst, (float4)srcA); " << std::endl;
+  stream << "    __global " << sdtype << "* A_off = A + offA; " << std::endl;
+  stream << "    " << sdtype << " srcA = A_off[gidy * ldA + gidx]; " << std::endl;
+  if(dtype == HALF_TYPE)
+    stream << "    write_imageh(ImA, coord_dst, (" << sdtype4 << ")srcA); " << std::endl;
+  else
+    stream << "    write_imagef(ImA, coord_dst, (" << sdtype4 << ")srcA); " << std::endl;
   stream << "} " << std::endl;
   stream << " " << std::endl;
 
-  stream << "__kernel void gemm_buffer_copy_image_ui( " << std::endl;
-  stream << "    __global float* A, " << std::endl;
+  stream << "__kernel void gemm_buffer_copy_image_no_transpose( " << std::endl;
+  stream << "    __global " << sdtype << "* A, " << std::endl;
   stream << "    __write_only image2d_t ImA, " << std::endl;
   stream << "    int offA, " << std::endl;
   stream << "    int width, " << std::endl;
@@ -678,13 +795,22 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
   stream << "    const int gidx = get_global_id(0); " << std::endl;
   stream << "    const int gidy = get_global_id(1); " << std::endl;
   stream << "    int2 coord_dst = (int2)(gidx, gidy); " << std::endl;
-  stream << "    if (gidx >= width || gidy >= height) { " << std::endl;
-  stream << "      write_imageui(ImA, coord_dst, (uint4)0); " << std::endl;
-  stream << "      return; " << std::endl;
-  stream << "    } " << std::endl;
-  stream << "    __global float* A_off = A + offA; " << std::endl;
-  stream << "    uint4 srcA = convert_uint4(as_uchar4(A_off[gidy * ldA + gidx])); " << std::endl;
-  stream << "    write_imageui(ImA, coord_dst, srcA); " << std::endl;
+  if(dtype == HALF_TYPE) {
+    stream << "    if (gidx >= width || gidy >= height) { " << std::endl;
+    stream << "      write_imageh(ImA, coord_dst, 0); " << std::endl;
+    stream << "      return; " << std::endl;
+    stream << "    } " << std::endl;
+    stream << "    __global " << sdtype << "* A_off = A + offA; " << std::endl;
+    stream << "    write_imageh(ImA, coord_dst, A_off[gidy * ldA + gidx]); " << std::endl;
+  } else {
+    stream << "    if (gidx >= width || gidy >= height) { " << std::endl;
+    stream << "      write_imageui(ImA, coord_dst, (uint4)0); " << std::endl;
+    stream << "      return; " << std::endl;
+    stream << "    } " << std::endl;
+    stream << "    __global float* A_off = A + offA; " << std::endl;
+    stream << "    uint4 srcA = convert_uint4(as_uchar4(A_off[gidy * ldA + gidx])); " << std::endl;
+    stream << "    write_imageui(ImA, coord_dst, srcA); " << std::endl;
+  }
   stream << "} " << std::endl;
   stream << " " << std::endl;
 
@@ -693,25 +819,25 @@ std::string intelblas_gemm_image::generate_impl(std::string const & suffix, expr
 
 void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program const & program, runtime::execution_handler const & control, cl_mem *image, cl_mem buffer, int offset,
                                    bool is_matrix_a, bool transpose, bool padding, int padded_height, int padded_width, int height, int width, int ld) {
+ 
+  expression_tree const & tree = control.x();
   namespace drv = driver;
-  (void) control;
+  
+  int src_offset = (tree.dtype() == HALF_TYPE) ? (sizeof(unsigned short) * offset) : (sizeof(float) * offset);
   if (!is_matrix_a && transpose) {
     if(ld == width) {
       size_t origin[] = {0, 0, 0};
       size_t region[] = {(size_t)width, (size_t)height, 1};
       if(drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
-                                 buffer, *image, sizeof(float) * offset,
+                                 buffer, *image, src_offset,
                                  origin, region, 0,
                                  NULL, NULL))
         exit(0);
       return;
     }
 
-    std::string kernel_name("gemm_buffer_copy_image_float");
-    std::vector<driver::Kernel> kernels;
-    kernels.push_back(driver::Kernel(program, kernel_name.c_str()));
-
-    driver::Kernel & kernel = kernels[0];
+    std::string kernel_name("gemm_buffer_copy_image_transpose");
+    drv::Kernel kernel(program, kernel_name.c_str());
 
     unsigned int n_arg = 0;
 
@@ -734,17 +860,14 @@ void gpu_gemm_copy_buffer_to_image(driver::CommandQueue & queue, driver::Program
     size_t origin[] = {0, 0, 0};
     size_t region[] = {(size_t)width, (size_t)height, 1};
     if(drv::dispatch::clEnqueueCopyBufferToImage(queue.handle().cl(),
-                               buffer, *image, sizeof(float) * offset,
+                               buffer, *image, src_offset,
                                origin, region, 0, NULL, NULL))
       exit(0);
     return;
   }
 
-  std::string kernel_name("gemm_buffer_copy_image_ui");
-  std::vector<driver::Kernel> kernels;
-  kernels.push_back(driver::Kernel(program, kernel_name.c_str()));
-
-  driver::Kernel & kernel = kernels[0];
+  std::string kernel_name("gemm_buffer_copy_image_no_transpose");
+  drv::Kernel kernel(program, kernel_name.c_str());
 
   unsigned int n_arg = 0;
 
@@ -767,6 +890,7 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
 {
   (void) suffix;
   namespace drv = driver;
+  expression_tree const & tree = control.x();
   //Get GEMM info
   symbolic::preset::gemm::args args;
   std::vector<int_t> MNK = infos(control.x(), args, A_trans_);
@@ -814,6 +938,8 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
   int blockC_width = blocksize;
   int blockC_height = blocksize;
   
+  int use_buffer_indicator = (tree.dtype() == HALF_TYPE) ? 16 : 8;
+
   cl_int err;
   cl_mem ImA = NULL, ImB = NULL;
   cl_image_desc desc;
@@ -821,8 +947,13 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
   memset(&desc, 0, sizeof(desc));
 
   desc.image_type = CL_MEM_OBJECT_IMAGE2D;  
-  format.image_channel_data_type = CL_UNSIGNED_INT8;
-  format.image_channel_order = CL_RGBA;
+  if(tree.dtype() == HALF_TYPE) {
+    format.image_channel_data_type = CL_HALF_FLOAT;
+    format.image_channel_order = CL_R;
+  } else {
+    format.image_channel_data_type = CL_UNSIGNED_INT8;
+    format.image_channel_order = CL_RGBA;
+  }
   desc.image_width = blocksize;
   desc.image_height = blocksize;
   
@@ -837,8 +968,11 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
     ImB = drv::dispatch::clCreateImage(program.context().handle().cl(), CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
     if(err != CL_SUCCESS)
       exit(0);
-  } else if(ldB > widthB) {
-    format.image_channel_data_type = CL_FLOAT;
+  } else if(ldB > widthB || (K % use_buffer_indicator != 0)) {
+    if(tree.dtype() == HALF_TYPE)
+      format.image_channel_data_type = CL_HALF_FLOAT;
+    else 
+      format.image_channel_data_type = CL_FLOAT;
     format.image_channel_order = CL_R;
     ImB = drv::dispatch::clCreateImage(program.context().handle().cl(), CL_MEM_READ_WRITE, &format, &desc, NULL, &err);
     if(err != CL_SUCCESS)
@@ -855,7 +989,7 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
     kernel_name += "N_";
   else {
     kernel_name += "T_";
-    if(ldB > widthB)
+    if(ldB > widthB || (K % use_buffer_indicator != 0))
       kernel_name += "SCALAR_";
     else
       kernel_name += "BUFFER_";
@@ -870,7 +1004,11 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
     kernel_name += "0";
   else
     kernel_name += "1";
-  kernel_name += "_float";
+  if(tree.dtype() == HALF_TYPE) {
+    kernel_name += "_half";
+  } else {
+    kernel_name += "_float";
+  }
 
   driver::Kernel kernel(program, kernel_name.c_str());
 
@@ -878,23 +1016,23 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
     blockC_width = std::min((int)N - C_start_x, blocksize);
     blockC_height = std::min((int)M - C_start_y, blocksize);
 
-    int index = 0;
+    int isFirstColBlock = 1;
     for(int k = 0; k < K; k += blocksize) {
       blockA_width = std::min(widthA - A_start_x, blocksize);
       blockA_height = std::min(heightA - A_start_y, blocksize);
       blockB_width = std::min(widthB - B_start_x, blocksize);
       blockB_height = std::min(heightB - B_start_y, blocksize);
-      int block_K = std::min((int)K - k, blocksize);
+      int block_Ksize = std::min((int)K - k, blocksize);
 
-      int padded_k = block_K + ((block_K & 7) ? (8 - (block_K & 7)) : 0);
+      int padded_k = block_Ksize + ((block_Ksize & 7) ? (8 - (block_Ksize & 7)) : 0);
       int imageA_w = (transA == false) ? padded_k : blockA_width;
       int imageA_h = (transA == false) ? blockA_height : padded_k;
       int imageB_w = (transB == false) ? blockB_width : padded_k;
       int imageB_h = (transB == false) ? padded_k : blockB_height;
 
-      int offsetA = offA + A_start_y * ldA + A_start_x;
-      int offsetB = offB + B_start_y * ldB + B_start_x;
-      int offsetC = offC + C_start_y * ldC + C_start_x;
+      int blockA_offset = offA + A_start_y * ldA + A_start_x;
+      int blockB_offset = offB + B_start_y * ldB + B_start_x;
+      int blockC_offset = offC + C_start_y * ldC + C_start_x;
 
       if(transB == false) {
         bool padding_A = false;
@@ -904,40 +1042,43 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
           padding_B = true;
         else
           padding_A = true;
-        gpu_gemm_copy_buffer_to_image(queue, program, control, &ImA, args.A->array.handle.cl, offsetA, true, transA != false, padding_A, imageA_h, imageA_w, blockA_height, blockA_width, ldA);
-        gpu_gemm_copy_buffer_to_image(queue, program, control, &ImB, args.B->array.handle.cl, offsetB, false, false, padding_B, imageB_h, imageB_w, blockB_height, blockB_width, ldB);
+        gpu_gemm_copy_buffer_to_image(queue, program, control, &ImA, args.A->array.handle.cl, blockA_offset, true, transA != false, padding_A, imageA_h, imageA_w, blockA_height, blockA_width, ldA);
+        gpu_gemm_copy_buffer_to_image(queue, program, control, &ImB, args.B->array.handle.cl, blockB_offset, false, false, padding_B, imageB_h, imageB_w, blockB_height, blockB_width, ldB);
       } else {
-        gpu_gemm_copy_buffer_to_image(queue, program, control, &ImA, args.A->array.handle.cl, offsetA, true, transA != false, true, imageA_h, imageA_w, blockA_height, blockA_width, ldA);
-        if(ldB > widthB)
-          gpu_gemm_copy_buffer_to_image(queue, program, control, &ImB, args.B->array.handle.cl, offsetB, false, true, false, imageB_h, imageB_w, blockB_height, blockB_width, ldB);
+        gpu_gemm_copy_buffer_to_image(queue, program, control, &ImA, args.A->array.handle.cl, blockA_offset, true, transA != false, true, imageA_h, imageA_w, blockA_height, blockA_width, ldA);
+        if(ldB > widthB || (K % use_buffer_indicator != 0))
+          gpu_gemm_copy_buffer_to_image(queue, program, control, &ImB, args.B->array.handle.cl, blockB_offset, false, true, false, imageB_h, imageB_w, blockB_height, blockB_width, ldB);
       }
 
       unsigned int n_arg = 0;
 
       kernel.setArg(n_arg++, ImA);
-      if(transB == false || ldB > widthB)
+      if(transB == false || ldB > widthB || (K % use_buffer_indicator != 0))
         kernel.setArg(n_arg++, ImB);
       else {
         kernel.setArg(n_arg++, args.B->array.handle.cl);
-        kernel.setSizeArg(n_arg++, offsetB);
+        kernel.setSizeArg(n_arg++, blockB_offset);
         kernel.setSizeArg(n_arg++, ldB);
       }
-      int sub_M = (transA == false) ? blockA_height : blockA_width;
-      int sub_N = (transB == false) ? blockB_width : blockB_height;
       kernel.setArg(n_arg++, args.C->array.handle.cl);
-      kernel.setSizeArg(n_arg++, offsetC);
-      kernel.setSizeArg(n_arg++, sub_M);
-      kernel.setSizeArg(n_arg++, sub_N);
+      kernel.setSizeArg(n_arg++, blockC_offset);
+      kernel.setSizeArg(n_arg++, blockC_height);
+      kernel.setSizeArg(n_arg++, blockC_width);
       kernel.setSizeArg(n_arg++, ldC);
       kernel.setArg(n_arg++, args.alpha);
       kernel.setArg(n_arg++, args.beta);
       kernel.setSizeArg(n_arg++, padded_k);
       if(transB != false)
-        kernel.setSizeArg(n_arg++, block_K);
-      kernel.setSizeArg(n_arg++, index);
+        kernel.setSizeArg(n_arg++, block_Ksize);
+      kernel.setSizeArg(n_arg++, isFirstColBlock);
 
-      driver::NDRange local(8, 1);
-      driver::NDRange global((size_t)( blockC_width + 7 ) & ~7, (size_t)(blockC_height + 31) / 32);
+      size_t local_x = (tree.dtype() == HALF_TYPE) ? 16 : 8;
+      size_t local_y = 1;
+      size_t global_x = (tree.dtype() == HALF_TYPE) ? ((size_t)( blockC_width + 15 ) & ~15) : ((size_t)( blockC_width + 7 ) & ~7);
+      size_t global_y = (size_t)(blockC_height + 31) / 32;
+
+      driver::NDRange local(local_x, local_y);
+      driver::NDRange global(global_x, global_y);
 
       control.execution_options().enqueue(program.context(), kernel, global, local);
 
@@ -951,8 +1092,9 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
       else
         B_start_x += blockB_width;
 
-      index = 1;
+      isFirstColBlock = 0;
     }
+
     C_start_x += blockC_width;
     if(transA == false)
       A_start_x = 0;
@@ -976,10 +1118,10 @@ void intelblas_gemm_image::enqueue(driver::CommandQueue & queue, driver::Program
         A_start_x += blockA_width;
     }
   }
-
-  if (ImA)
+  
+  if(ImA)
     drv::dispatch::clReleaseMemObject(ImA);
-  if (ImB)
+  if(ImB)
     drv::dispatch::clReleaseMemObject(ImB);
 }
 
@@ -1027,6 +1169,9 @@ std::string intelblas_gemm::generate_impl(std::string const & suffix, expression
   std::string sdtype4 = sdtype + "4";
   std::string sdtype8 = sdtype + "8";
   std::string sdtype16 = sdtype + "16";
+
+  if(dtype==HALF_TYPE)
+    stream << "#pragma OPENCL EXTENSION cl_khr_fp16: enable" << std::endl;
 
   stream << "#define VEC_SIZE        4 " << std::endl;
   stream << "#define LWG_HEIGHT      4 " << std::endl;
