@@ -20,15 +20,13 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+#include <map>
 #include <algorithm>
 #include <sstream>
 #include <cstring>
 #include <memory>
 
 #include "isaac/driver/device.h"
-#include "isaac/exception/driver.h"
-#include "helpers/ocl/infos.hpp"
-#include "isaac/tools/sys/cpuid.hpp"
 
 namespace isaac
 {
@@ -36,292 +34,147 @@ namespace isaac
 namespace driver
 {
 
+/* Architecture [NVidia] */
+Device::Architecture Device::nv_arch(std::pair<unsigned int, unsigned int> sm) const{
+  switch(sm.first)
+  {
+  case 6:
+    switch(sm.second)
+    {
+    case 0: return Architecture::SM_6_0;
+    case 1: return Architecture::SM_6_1;
+    }
+
+  case 5:
+    switch(sm.second)
+    {
+    case 0: return Architecture::SM_5_0;
+    case 2: return Architecture::SM_5_2;
+    default: return Architecture::UNKNOWN;
+    }
+
+  case 3:
+    switch(sm.second)
+    {
+    case 0: return Architecture::SM_3_0;
+    case 5: return Architecture::SM_3_5;
+    case 7: return Architecture::SM_3_7;
+    default: return Architecture::UNKNOWN;
+    }
+
+  case 2:
+    switch(sm.second)
+    {
+    case 0: return Architecture::SM_2_0;
+    case 1: return Architecture::SM_2_1;
+    default: return Architecture::UNKNOWN;
+    }
+
+  default: return Architecture::UNKNOWN;
+  }
+}
 
 template<CUdevice_attribute attr>
-int Device::cuGetInfo() const
-{
+int Device::cuGetInfo() const{
   int res;
-  dispatch::cuDeviceGetAttribute(&res, attr, h_.cu());
+  dispatch::cuDeviceGetAttribute(&res, attr, *cu_);
   return res;
 }
 
-Device::Device(CUdevice const & device, bool take_ownership): backend_(CUDA), h_(backend_, take_ownership)
-{
-  h_.cu() = device;
+nvmlDevice_t Device::nvml_device() const{
+  std::map<std::string, nvmlDevice_t> map;
+  std::string key = pci_bus_id();
+  if(map.find(key)==map.end()){
+    nvmlDevice_t device;
+    dispatch::nvmlDeviceGetHandleByPciBusId_v2(key.c_str(), &device);
+    return map.insert(std::make_pair(key, device)).first->second;
+  }
+  return map.at(key);
 }
 
-Device::Device(cl_device_id const & device, bool take_ownership) : backend_(OPENCL), h_(backend_, take_ownership)
-{
-    h_.cl() = device;
-}
-
-
-Device::Vendor Device::vendor() const
-{
-    std::string vname = vendor_str();
-    std::transform(vname.begin(), vname.end(), vname.begin(), ::tolower);
-    if(vname.find("nvidia")!=std::string::npos)
-        return Vendor::NVIDIA;
-    else if(vname.find("intel")!=std::string::npos)
-        return Vendor::INTEL;
-    else if(vname.find("amd")!=std::string::npos || vname.find("advanced micro devices")!=std::string::npos)
-        return Vendor::AMD;
-    else
-        return Vendor::UNKNOWN;
-}
-
-
+/* Architecture */
 Device::Architecture Device::architecture() const
-{
-  Vendor vdr = vendor();
-  //Intel
-  if(vdr==Vendor::INTEL){
-    std::string brand = tools::cpu_brand();
-    if(brand.find("Xeon")!=std::string::npos){
-      if(brand.find("v3")!=std::string::npos)
-        return Architecture::HASWELL;
-      if(brand.find("v4")!=std::string::npos)
-        return Architecture::BROADWELL;
-      if(brand.find("v5")!=std::string::npos)
-        return Architecture::SKYLAKE;
-      if(brand.find("v6")!=std::string::npos)
-        return Architecture::KABYLAKE;
-    }
-    size_t idx = brand.find('-');
-    if(idx!=std::string::npos){
-      if(brand[idx+1]=='4')
-        return Architecture::HASWELL;
-      if(brand[idx+1]=='5')
-        return Architecture::BROADWELL;
-      if(brand[idx+1]=='6')
-        return Architecture::SKYLAKE;
-      if(brand[idx+1]=='7')
-        return Architecture::KABYLAKE;
-    }
-  }
-  //NVidia
-  if(vdr==Vendor::NVIDIA){
-    std::pair<unsigned int, unsigned int> sm = nv_compute_capability();
-    if(sm.first==2 && sm.second==0) return Architecture::SM_2_0;
-    if(sm.first==2 && sm.second==1) return Architecture::SM_2_1;
+{  return nv_arch(compute_capability()); }
 
-    if(sm.first==3 && sm.second==0) return Architecture::SM_3_0;
-    if(sm.first==3 && sm.second==5) return Architecture::SM_3_5;
-    if(sm.first==3 && sm.second==7) return Architecture::SM_3_7;
-
-    if(sm.first==5 && sm.second==0) return Architecture::SM_5_0;
-    if(sm.first==5 && sm.second==2) return Architecture::SM_5_2;
-
-    if(sm.first==6 && sm.second==0) return Architecture::SM_6_0;
-    if(sm.first==6 && sm.second==1) return Architecture::SM_6_1;
- }
- //AMD
- if(vdr==Vendor::AMD){
-     //No simple way to query TeraScale/GCN version. Enumerate...
-     std::string device_name = name();
-
- #define MAP_DEVICE(device,arch)if (device_name.find(device,0)!=std::string::npos) return Architecture::arch;
-     //TERASCALE 2
-     MAP_DEVICE("Barts",TERASCALE_2);
-     MAP_DEVICE("Cedar",TERASCALE_2);
-     MAP_DEVICE("Redwood",TERASCALE_2);
-     MAP_DEVICE("Juniper",TERASCALE_2);
-     MAP_DEVICE("Cypress",TERASCALE_2);
-     MAP_DEVICE("Hemlock",TERASCALE_2);
-     MAP_DEVICE("Caicos",TERASCALE_2);
-     MAP_DEVICE("Turks",TERASCALE_2);
-     MAP_DEVICE("WinterPark",TERASCALE_2);
-     MAP_DEVICE("BeaverCreek",TERASCALE_2);
-
-     //TERASCALE 3
-     MAP_DEVICE("Cayman",TERASCALE_3);
-     MAP_DEVICE("Antilles",TERASCALE_3);
-     MAP_DEVICE("Scrapper",TERASCALE_3);
-     MAP_DEVICE("Devastator",TERASCALE_3);
-
-     //GCN 1
-     MAP_DEVICE("Cape",GCN_1);
-     MAP_DEVICE("Pitcairn",GCN_1);
-     MAP_DEVICE("Tahiti",GCN_1);
-     MAP_DEVICE("New Zealand",GCN_1);
-     MAP_DEVICE("Curacao",GCN_1);
-     MAP_DEVICE("Malta",GCN_1);
-
-     //GCN 2
-     MAP_DEVICE("Bonaire",GCN_2);
-     MAP_DEVICE("Hawaii",GCN_2);
-     MAP_DEVICE("Vesuvius",GCN_2);
-     MAP_DEVICE("gfx701",GCN_3);
-
-     //GCN 3
-     MAP_DEVICE("Tonga",GCN_3);
-     MAP_DEVICE("Fiji",GCN_3);
-     MAP_DEVICE("gfx801",GCN_3);
-     MAP_DEVICE("gfx802",GCN_3);
-     MAP_DEVICE("gfx803",GCN_3);
-
-     //GCN 4
-     MAP_DEVICE("Polaris",GCN_4);
- #undef MAP_DEVICE
- }
- throw exception::unknown_architecture(name());
-}
-
-backend_type Device::backend() const
-{ return backend_; }
-
-unsigned int Device::address_bits() const
-{
-  switch(backend_)
-  {
-    case CUDA: return sizeof(size_t)*8;
-    case OPENCL: return ocl::info<CL_DEVICE_ADDRESS_BITS>(h_.cl());
-    default: throw;
-  }
-
-  return backend_;
-}
+/* Attributes */
+size_t Device::address_bits() const
+{ return sizeof(size_t)*8; }
 
 driver::Platform Device::platform() const
-{
-  switch(backend_)
-  {
-    case CUDA: return Platform(CUDA);
-    case OPENCL: return Platform(ocl::info<CL_DEVICE_PLATFORM>(h_.cl()));
-    default: throw;
-  }
+{ return Platform(); }
+
+std::string Device::name() const{
+    char tmp[128];
+    dispatch::cuDeviceGetName(tmp, 128, *cu_);
+    return std::string(tmp);
 }
 
-std::string Device::name() const
-{
-  switch(backend_)
-  {
-    case CUDA:
-      char tmp[128];
-      dispatch::cuDeviceGetName(tmp, 128, h_.cu());
-      return std::string(tmp);
-    case OPENCL:
-      return ocl::info<CL_DEVICE_NAME>(h_.cl());
-    default: throw;
-  }
+std::string Device::pci_bus_id() const{
+  char tmp[128];
+  dispatch::cuDeviceGetPCIBusId(tmp, 128, *cu_);
+  return std::string(tmp);
 }
 
-std::string Device::vendor_str() const
-{
-  switch(backend_)
-  {
-    case CUDA:
-      return "NVidia";
-    case OPENCL:
-      return ocl::info<CL_DEVICE_VENDOR>(h_.cl());
-    default: throw;
-  }
+std::pair<size_t, size_t> Device::compute_capability() const{
+  size_t _major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>();
+  size_t _minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>();
+  return std::make_pair(_major, _minor);
+}
+
+size_t Device::max_threads_per_block() const
+{ return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK>(); }
+
+size_t Device::max_shared_memory() const
+{ return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK>(); }
+
+size_t Device::warp_size() const
+{ return cuGetInfo<CU_DEVICE_ATTRIBUTE_WARP_SIZE>(); }
+
+
+std::vector<size_t> Device::max_block_dim() const{
+  std::vector<size_t> result(3);
+  result[0] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X>();
+  result[1] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y>();
+  result[2] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z>();
+  return result;
+}
+
+size_t Device::current_sm_clock() const{
+  unsigned int result;
+  dispatch::nvmlDeviceGetClockInfo(nvml_device(), NVML_CLOCK_SM, &result);
+  return result;
+}
+
+size_t Device::max_sm_clock() const{
+  unsigned int result;
+  dispatch::nvmlDeviceGetMaxClockInfo(nvml_device(), NVML_CLOCK_SM, &result);
+  return result;
 }
 
 
-std::vector<size_t> Device::max_work_item_sizes() const
-{
-  switch(backend_)
-  {
-    case CUDA:
-    {
-      std::vector<size_t> result(3);
-      result[0] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X>();
-      result[1] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y>();
-      result[2] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z>();
-      return result;
-    }
-    case OPENCL:
-      return ocl::info<CL_DEVICE_MAX_WORK_ITEM_SIZES>(h_.cl());
-    default:
-      throw;
-  }
+size_t Device::current_mem_clock() const{
+  unsigned int result;
+  dispatch::nvmlDeviceGetClockInfo(nvml_device(), NVML_CLOCK_MEM, &result);
+  return result;
 }
 
-Device::Type Device::type() const
-{
-  switch(backend_)
-  {
-    case CUDA: return Type::GPU;
-    case OPENCL: return static_cast<Type>(ocl::info<CL_DEVICE_TYPE>(h_.cl()));
-    default: throw;
-  }
+size_t Device::max_mem_clock() const{
+  unsigned int result;
+  dispatch::nvmlDeviceGetMaxClockInfo(nvml_device(), NVML_CLOCK_MEM, &result);
+  return result;
 }
 
-std::string Device::extensions() const
-{
-  switch(backend_)
-  {
-    case CUDA:
-      return "";
-    case OPENCL:
-      return ocl::info<CL_DEVICE_EXTENSIONS>(h_.cl());
-    default: throw;
-  }
-}
-
-std::pair<unsigned int, unsigned int> Device::nv_compute_capability() const
-{
-  switch(backend_)
-  {
-      case OPENCL:
-          return std::pair<unsigned int, unsigned int>(ocl::info<CL_DEVICE_COMPUTE_CAPABILITY_MAJOR_NV>(h_.cl()), ocl::info<CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV>(h_.cl()));
-      case CUDA:
-          return std::pair<unsigned int, unsigned int>(cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(), cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>());
-      default:
-          throw;
-  }
-}
-
-bool Device::fp64_support() const
-{
-  switch(backend_)
-  {
-    case OPENCL:
-      return extensions().find("cl_khr_fp64")!=std::string::npos;
-    case CUDA:
-      return true;
-    default:
-      throw;
-  }
-}
-
-std::string Device::infos() const
-{
+/* Infos */
+std::string Device::infos() const{
   std::ostringstream oss;
-  std::vector<size_t> max_wi_sizes = max_work_item_sizes();
-
+  std::vector<size_t> max_wi_sizes = max_block_dim();
   oss << "Platform: " << platform().name() << std::endl;
-  oss << "Vendor: " << vendor_str() << std::endl;
   oss << "Name: " << name() << std::endl;
-  oss << "Maximum total work-group size: " << max_work_group_size() << std::endl;
+  oss << "Maximum total work-group size: " << max_threads_per_block() << std::endl;
   oss << "Maximum individual work-group sizes: " << max_wi_sizes[0] << ", " << max_wi_sizes[1] << ", " << max_wi_sizes[2] << std::endl;
-  oss << "Local memory size: " << local_mem_size() << std::endl;
-
+  oss << "Local memory size: " << max_shared_memory() << std::endl;
   return oss.str();
 }
-
-Device::handle_type const & Device::handle() const
-{ return h_; }
-
-// Properties
-#define WRAP_ATTRIBUTE(ret, fname, CUNAME, CLNAME) \
-  ret Device::fname() const\
-  {\
-    switch(backend_)\
-    {\
-      case CUDA: return cuGetInfo<CUNAME>();\
-      case OPENCL: return static_cast<ret>(ocl::info<CLNAME>(h_.cl()));\
-      default: throw;\
-    }\
-  }\
-
-
-WRAP_ATTRIBUTE(size_t, max_work_group_size, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK, CL_DEVICE_MAX_WORK_GROUP_SIZE)
-WRAP_ATTRIBUTE(size_t, local_mem_size, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, CL_DEVICE_LOCAL_MEM_SIZE)
-WRAP_ATTRIBUTE(size_t, warp_wavefront_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, CL_DEVICE_WAVEFRONT_WIDTH_AMD)
-WRAP_ATTRIBUTE(size_t, clock_rate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, CL_DEVICE_MAX_CLOCK_FREQUENCY)
-
 
 
 }

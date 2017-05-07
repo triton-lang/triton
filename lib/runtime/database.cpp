@@ -1,81 +1,55 @@
 /* Copyright 2015-2017 Philippe Tillet
-*
-* Permission is hereby granted, free of charge, to any person obtaining
-* a copy of this software and associated documentation files
-* (the "Software"), to deal in the Software without restriction,
-* including without limitation the rights to use, copy, modify, merge,
-* publish, distribute, sublicense, and/or sell copies of the Software,
-* and to permit persons to whom the Software is furnished to do so,
+* 
+* Permission is hereby granted, free of charge, to any person obtaining 
+* a copy of this software and associated documentation files 
+* (the "Software"), to deal in the Software without restriction, 
+* including without limitation the rights to use, copy, modify, merge, 
+* publish, distribute, sublicense, and/or sell copies of the Software, 
+* and to permit persons to whom the Software is furnished to do so, 
 * subject to the following conditions:
-*
-* The above copyright notice and this permission notice shall be
+* 
+* The above copyright notice and this permission notice shall be 
 * included in all copies or substantial portions of the Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+* 
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, 
+* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF 
 * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
+* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include "isaac/driver/device.h"
-#include "isaac/runtime/profiles.h"
 
-//Default
-#include "database/unknown/unknown.hpp"
+#include "isaac/runtime/predict.h"
+#include "database/sm_5_2/conv.hpp"
+#include "database/sm_5_2/gemm.hpp"
 
-//Intel
-#include "database/intel/broadwell.hpp"
-#include "database/intel/skylake.hpp"
+#include "database/sm_6_0/conv.hpp"
+#include "database/sm_6_0/gemm.hpp"
 
-//NVidia
-#include "database/nvidia/sm_3_0.hpp"
-#include "database/nvidia/sm_5_2.hpp"
-#include "database/nvidia/sm_6_0.hpp"
-#include "database/nvidia/sm_6_1.hpp"
+#include "database/sm_6_1/conv.hpp"
+#include "database/sm_6_1/gemm.hpp"
 
-//AMD
-#include "database/amd/gcn_3.hpp"
+namespace isaac{
+namespace runtime{
 
-namespace isaac
+typedef driver::Device::Architecture Architecture;
+
+const std::map<std::pair<driver::Device::Architecture, OperationType>, std::shared_ptr<Profile> > database =
 {
-namespace runtime
-{
+  {{Architecture::SM_5_0, CONV}, std::make_shared<ConvProfile>((u_char*)sm_5_2::conv)},
+  {{Architecture::SM_5_0, GEMM}, std::make_shared<GEMMProfile>((u_char*)sm_5_2::gemm)},
 
-#define DATABASE_ENTRY(TYPE, VENDOR, ARCHITECTURE, STRING) \
-            {std::make_tuple(driver::Device::Type::TYPE, driver::Device::Vendor::VENDOR, driver::Device::Architecture::ARCHITECTURE), STRING}
+  {{Architecture::SM_5_2, CONV}, std::make_shared<ConvProfile>((u_char*)sm_5_2::conv)},
+  {{Architecture::SM_5_2, GEMM}, std::make_shared<GEMMProfile>((u_char*)sm_5_2::gemm)},
 
-const profiles::presets_type profiles::presets_ =
-{
-    //DEFAULT
-    DATABASE_ENTRY(UNKNOWN, UNKNOWN, UNKNOWN, database::intel::broadwell),
+  {{Architecture::SM_6_0, CONV}, std::make_shared<ConvProfile>((u_char*)sm_6_0::conv)},
+  {{Architecture::SM_6_0, GEMM}, std::make_shared<GEMMProfile>((u_char*)sm_6_0::gemm)},
 
-    //INTEL
-    DATABASE_ENTRY(GPU, INTEL, HASWELL, database::intel::broadwell),
-    DATABASE_ENTRY(GPU, INTEL, BROADWELL, database::intel::broadwell),
-    DATABASE_ENTRY(GPU, INTEL, SKYLAKE, database::intel::skylake),
-    DATABASE_ENTRY(GPU, INTEL, KABYLAKE, database::intel::skylake),
-
-    //NVIDIA
-    DATABASE_ENTRY(GPU, NVIDIA, SM_2_0, database::nvidia::sm_3_0),
-    DATABASE_ENTRY(GPU, NVIDIA, SM_2_1, database::nvidia::sm_3_0),
-    DATABASE_ENTRY(GPU, NVIDIA, SM_3_0, database::nvidia::sm_3_0),
-    DATABASE_ENTRY(GPU, NVIDIA, SM_3_5, database::nvidia::sm_3_0),
-    DATABASE_ENTRY(GPU, NVIDIA, SM_3_7, database::nvidia::sm_3_0),
-    DATABASE_ENTRY(GPU, NVIDIA, SM_5_0, database::nvidia::sm_5_2),
-    DATABASE_ENTRY(GPU, NVIDIA, SM_5_2, database::nvidia::sm_5_2),
-    DATABASE_ENTRY(GPU, NVIDIA, SM_6_0, database::nvidia::sm_6_0),
-    DATABASE_ENTRY(GPU, NVIDIA, SM_6_1, database::nvidia::sm_6_1),
-    //AMD
-    DATABASE_ENTRY(GPU, AMD, GCN_1, database::amd::gcn_3),
-    DATABASE_ENTRY(GPU, AMD, GCN_2, database::amd::gcn_3),
-    DATABASE_ENTRY(GPU, AMD, GCN_3, database::amd::gcn_3),
-    DATABASE_ENTRY(GPU, AMD, GCN_4, database::amd::gcn_3)
+  {{Architecture::SM_6_1, CONV}, std::make_shared<ConvProfile>((u_char*)sm_6_1::conv)},
+  {{Architecture::SM_6_1, GEMM}, std::make_shared<GEMMProfile>((u_char*)sm_6_1::gemm)}
 };
-
-#undef DATABASE_ENTRY
 
 }
 }

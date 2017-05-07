@@ -1,1 +1,1 @@
-from _isaac import *
+from ._isaac import *

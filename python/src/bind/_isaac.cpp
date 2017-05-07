@@ -20,28 +20,18 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include "core.h"
-#include "driver.h"
-#include "exceptions.h"
-#include "kernels.h"
+#include <pybind11/pybind11.h>
 
-#include <boost/python.hpp>
-#include <boost/numpy.hpp>
+namespace py = pybind11;
 
-namespace bp = boost::python;
-namespace np = boost::numpy;
+void export_driver(py::module&&);
+void export_templates(py::module&&);
+void export_common(py::module&);
 
-BOOST_PYTHON_MODULE(_isaac)
-{
-  Py_Initialize();
-  np::initialize();
-
-  // specify that this module is actually a package
-  bp::object package = bp::scope();
-  package.attr("__path__") = "_isaac";
-
-  export_driver();
-  export_exceptions();
-  export_templates();
-  export_core();
+PYBIND11_PLUGIN(_isaac){
+  py::module isaac("_isaac", "C++ bindings of isaac");
+  export_common(isaac);
+  export_driver(isaac.def_submodule("driver", "Driver for accessing CUDA/OpenCL"));
+  export_templates(isaac.def_submodule("templates", "API for accessing/launching kernel templates"));
+  return isaac.ptr();
 }
