@@ -21,10 +21,10 @@ cmake ../ && make -j8
 
 ### Benchmarks
 Below is the TFLOPS you get for sGEMM on a Pascal Titan X vs cuBLAS 8.0.
-![alt tag](https://github.com/ptillet/isaac/raw/master/documentation/bench/GEMM.png)
+![alt tag](https://github.com/ptillet/isaac/raw/v2.0/documentation/bench/GEMM.png)
 
 Below is the TFLOPS you get for FCONV on a Pascal Titan X vs cuDNN v6.
-![alt tag](https://github.com/ptillet/isaac/raw/master/documentation/bench/CONV.png)
+![alt tag](https://github.com/ptillet/isaac/raw/v2.0/documentation/bench/CONV.png)
 
 There's still room for improvement.
 
