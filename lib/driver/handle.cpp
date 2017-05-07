@@ -22,7 +22,6 @@
 
 #include <cassert>
 #include <memory>
-
 #include "isaac/driver/handle.h"
 
 namespace isaac
@@ -31,140 +30,57 @@ namespace isaac
 namespace driver
 {
 
-
-
 //CUDA
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUcontext x) { check_destruction(dispatch::cuCtxDestroy(x)); }
+inline void _delete(CUcontext x) { check_destruction(dispatch::cuCtxDestroy(x)); }
+inline void _delete(CUdeviceptr x) { check_destruction(dispatch::cuMemFree(x)); }
+inline void _delete(CUstream x) { check_destruction(dispatch::cuStreamDestroy(x)); }
+inline void _delete(CUdevice) { }
+inline void _delete(CUevent x) { check_destruction(dispatch::cuEventDestroy(x)); }
+inline void _delete(CUfunction) { }
+inline void _delete(CUmodule x) { check_destruction(dispatch::cuModuleUnload(x)); }
+inline void _delete(cu_event_t x) { _delete(x.first); _delete(x.second); }
+inline void _delete(cu_platform){}
 
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUdeviceptr x) { check_destruction(dispatch::cuMemFree(x)); }
+//Constructor
+template<class CUType>
+Handle<CUType>::Handle(CUType cu, bool take_ownership): cu_(new CUType(cu)), has_ownership_(take_ownership)
+{ }
 
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUstream x) { check_destruction(dispatch::cuStreamDestroy(x)); }
+template<class CUType>
+Handle<CUType>::Handle(bool take_ownership): has_ownership_(take_ownership)
+{ cu_.reset(new CUType()); }
 
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUdevice) { }
+//Accessors
+template<class CUType>
+bool Handle<CUType>::operator==(Handle const & other) const
+{ return *cu_==*other.cu_; }
 
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUevent x) { check_destruction(dispatch::cuEventDestroy(x)); }
-
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUfunction) { }
-
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(CUmodule x) { check_destruction(dispatch::cuModuleUnload(x)); }
-
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::_delete(cu_event_t x) { _delete(x.first); _delete(x.second); }
-
-//OpenCL
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_context x) { dispatch::clReleaseContext(x); }
-
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_mem x) { dispatch::clReleaseMemObject(x); }
-
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_command_queue x) { dispatch::clReleaseCommandQueue(x); }
-
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_device_id /*x*/) { /*dispatch::clReleaseDevice(x);*/ }
-
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_event x) { dispatch::clReleaseEvent(x); }
-
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_kernel x) { dispatch::clReleaseKernel(x); }
-
-template<class CLType, class CUType>
-void Handle<CLType, CUType>::release(cl_program x) { dispatch::clReleaseProgram(x); }
-
-template<class CLType, class CUType>
-Handle<CLType, CUType>::Handle(backend_type backend, bool take_ownership): backend_(backend), has_ownership_(take_ownership)
-{
-  switch(backend_)
-  {
-    case CUDA: cu_.reset(new CUType());
-    case OPENCL: cl_.reset(new CLType());
-  }
-}
-
-template<class CLType, class CUType>
-backend_type Handle<CLType, CUType>::backend() const
-{ return backend_; }
-
-template<class CLType, class CUType>
-bool Handle<CLType, CUType>::operator==(Handle const & other) const
-{
-  if(backend_==CUDA && other.backend_==CUDA)
-    return cu()==other.cu();
-  if(backend_==OPENCL && other.backend_==OPENCL)
-    return cl()==other.cl();
-  return false;
-}
-
-template<class CLType, class CUType>
-bool Handle<CLType, CUType>::operator!=(Handle const & other) const
+template<class CUType>
+bool Handle<CUType>::operator!=(Handle const & other) const
 { return !((*this)==other); }
 
-template<class CLType, class CUType>
-bool Handle<CLType, CUType>::operator<(Handle const & other) const
-{
-  if(backend_==CUDA && other.backend_==CUDA)
-    return (*cu_)<(*other.cu_);
-  if(backend_==OPENCL && other.backend_==OPENCL)
-    return (*cl_)<(*other.cl_);
-  if(backend_==CUDA && other.backend_==OPENCL)
-    return true;
-  return false;
-}
+template<class CUType>
+bool Handle<CUType>::operator<(Handle const & other) const
+{ return (*cu_)<(*other.cu_); }
 
-template<class CLType, class CUType>
-Handle<CLType, CUType>::~Handle()
-{
-  if(backend_==CUDA && has_ownership_ && cu_ && cu_.unique() && *cu_){
+template<class CUType>
+Handle<CUType>::~Handle(){
+  if(has_ownership_ && cu_ && cu_.unique() && *cu_)
     _delete(*cu_);
-  }
-  if(backend_==OPENCL && has_ownership_ && cl_ && cl_.unique() && *cl_)
-     release(*cl_);
 }
 
-template<class CLType, class CUType>
-CLType &  Handle<CLType, CUType>::cl()
-{
-    assert(backend_==OPENCL);
-    return *cl_;
-}
+template<class CUType>
+Handle<CUType>::operator CUType() const
+{ return *cu_; }
 
-template<class CLType, class CUType>
-CLType const &  Handle<CLType, CUType>::cl() const
-{
-    assert(backend_==OPENCL);
-    return *cl_;
-}
-
-template<class CLType, class CUType>
-CUType &  Handle<CLType, CUType>::cu()
-{
-    assert(backend_==CUDA);
-    return *cu_;
-}
-
-template<class CLType, class CUType>
-CUType const &  Handle<CLType, CUType>::cu() const
-{
-    assert(backend_==CUDA);
-    return *cu_;
-}
-
-template class Handle<cl_mem, CUdeviceptr>;
-template class Handle<cl_command_queue, CUstream>;
-template class Handle<cl_context, CUcontext>;
-template class Handle<cl_device_id, CUdevice>;
-template class Handle<cl_event, cu_event_t>;
-template class Handle<cl_kernel, CUfunction>;
-template class Handle<cl_program, CUmodule>;
+template class Handle<CUdeviceptr>;
+template class Handle<CUstream>;
+template class Handle<CUcontext>;
+template class Handle<CUdevice>;
+template class Handle<cu_event_t>;
+template class Handle<CUfunction>;
+template class Handle<CUmodule>;
+template class Handle<cu_platform>;
 
 }
 }

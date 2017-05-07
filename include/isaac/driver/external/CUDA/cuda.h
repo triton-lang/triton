@@ -18,7 +18,6 @@
  *
  * NOTWITHSTANDING ANY TERMS OR CONDITIONS TO THE CONTRARY IN THE
  * LICENSE AGREEMENT, NVIDIA MAKES NO REPRESENTATION ABOUT THE
-
  * SUITABILITY OF THESE LICENSED DELIVERABLES FOR ANY PURPOSE.  IT IS
  * PROVIDED "AS IS" WITHOUT EXPRESS OR IMPLIED WARRANTY OF ANY KIND.
  * NVIDIA DISCLAIMS ALL WARRANTIES WITH REGARD TO THESE LICENSED
@@ -52,6 +51,14 @@
 #define __cuda_cuda_h__
 
 #include <stdlib.h>
+#ifdef _MSC_VER
+typedef unsigned __int32 cuuint32_t;
+typedef unsigned __int64 cuuint64_t;
+#else
+#include <stdint.h>
+typedef uint32_t cuuint32_t;
+typedef uint64_t cuuint64_t;
+#endif
 
 /**
  * CUDA API versioning support
@@ -63,7 +70,7 @@
         #error "Unsupported value of CUDA_FORCE_API_VERSION"
     #endif
 #else
-    #define __CUDA_API_VERSION 7000
+    #define __CUDA_API_VERSION 8000
 #endif /* CUDA_FORCE_API_VERSION */
 
 #if defined(__CUDA_API_VERSION_INTERNAL) || defined(CUDA_API_PER_THREAD_DEFAULT_STREAM)
@@ -151,6 +158,7 @@
     #define cuMemcpyPeerAsync                   __CUDA_API_PTSZ(cuMemcpyPeerAsync)
     #define cuMemcpy3DPeer                      __CUDA_API_PTDS(cuMemcpy3DPeer)
     #define cuMemcpy3DPeerAsync                 __CUDA_API_PTSZ(cuMemcpy3DPeerAsync)
+    #define cuMemPrefetchAsync                  __CUDA_API_PTSZ(cuMemPrefetchAsync)
 
     #define cuMemsetD8Async                     __CUDA_API_PTSZ(cuMemsetD8Async)
     #define cuMemsetD16Async                    __CUDA_API_PTSZ(cuMemsetD16Async)
@@ -170,6 +178,10 @@
     #define cuLaunchKernel                      __CUDA_API_PTSZ(cuLaunchKernel)
     #define cuGraphicsMapResources              __CUDA_API_PTSZ(cuGraphicsMapResources)
     #define cuGraphicsUnmapResources            __CUDA_API_PTSZ(cuGraphicsUnmapResources)
+
+    #define cuStreamWriteValue32                __CUDA_API_PTSZ(cuStreamWriteValue32)
+    #define cuStreamWaitValue32                 __CUDA_API_PTSZ(cuStreamWaitValue32)
+    #define cuStreamBatchMemOp                  __CUDA_API_PTSZ(cuStreamBatchMemOp)
 #endif
 
 /**
@@ -193,7 +205,7 @@
 /**
  * CUDA API version number
  */
-#define CUDA_VERSION 7000
+#define CUDA_VERSION 8000
 
 #ifdef __cplusplus
 extern "C" {
@@ -201,7 +213,7 @@ extern "C" {
 
 /**
  * CUDA device pointer
- * CUdeviceptr is defined as an unsigned inteelementwise_2d type whose size matches the size of a pointer on the target platform.
+ * CUdeviceptr is defined as an unsigned integer type whose size matches the size of a pointer on the target platform.
  */ 
 #if __CUDA_API_VERSION >= 3020
 
@@ -326,6 +338,80 @@ typedef enum CUevent_flags_enum {
     CU_EVENT_INTERPROCESS   = 0x4  /**< Event is suitable for interprocess use. CU_EVENT_DISABLE_TIMING must be set */
 } CUevent_flags;
 
+#if __CUDA_API_VERSION >= 8000
+/**
+ * Flags for ::cuStreamWaitValue32
+ */
+typedef enum CUstreamWaitValue_flags_enum {
+    CU_STREAM_WAIT_VALUE_GEQ   = 0x0,   /**< Wait until (int32_t)(*addr - value) >= 0. Note this is a
+                                             cyclic comparison which ignores wraparound. (Default behavior.) */
+    CU_STREAM_WAIT_VALUE_EQ    = 0x1,   /**< Wait until *addr == value. */
+    CU_STREAM_WAIT_VALUE_AND   = 0x2,   /**< Wait until (*addr & value) != 0. */
+    CU_STREAM_WAIT_VALUE_FLUSH = 1<<30  /**< Follow the wait operation with a flush of outstanding remote writes. This
+                                             means that, if a remote write operation is guaranteed to have reached the
+                                             device before the wait can be satisfied, that write is guaranteed to be
+                                             visible to downstream device work. The device is permitted to reorder
+                                             remote writes internally. For example, this flag would be required if
+                                             two remote writes arrive in a defined order, the wait is satisfied by the
+                                             second write, and downstream work needs to observe the first write. */
+} CUstreamWaitValue_flags;
+
+/**
+ * Flags for ::cuStreamWriteValue32
+ */
+typedef enum CUstreamWriteValue_flags_enum {
+    CU_STREAM_WRITE_VALUE_DEFAULT           = 0x0, /**< Default behavior */
+    CU_STREAM_WRITE_VALUE_NO_MEMORY_BARRIER = 0x1  /**< Permits the write to be reordered with writes which were issued
+                                                        before it, as a performance optimization. Normally,
+                                                        ::cuStreamWriteValue32 will provide a memory fence before the
+                                                        write, which has similar semantics to
+                                                        __threadfence_system() but is scoped to the stream
+                                                        rather than a CUDA thread. */
+} CUstreamWriteValue_flags;
+
+/**
+ * Operations for ::cuStreamBatchMemOp
+ */
+typedef enum CUstreamBatchMemOpType_enum {
+    CU_STREAM_MEM_OP_WAIT_VALUE_32  = 1,     /**< Represents a ::cuStreamWaitValue32 operation */
+    CU_STREAM_MEM_OP_WRITE_VALUE_32 = 2,     /**< Represents a ::cuStreamWriteValue32 operation */
+    CU_STREAM_MEM_OP_FLUSH_REMOTE_WRITES = 3 /**< This has the same effect as ::CU_STREAM_WAIT_VALUE_FLUSH, but as a
+                                                  standalone operation. */
+} CUstreamBatchMemOpType;
+
+/**
+ * Per-operation parameters for ::cuStreamBatchMemOp
+ */
+typedef union CUstreamBatchMemOpParams_union {
+    CUstreamBatchMemOpType operation;
+    struct CUstreamMemOpWaitValueParams_st {
+        CUstreamBatchMemOpType operation;
+        CUdeviceptr address;
+        union {
+            cuuint32_t value;
+            cuuint64_t pad;
+        };
+        unsigned int flags;
+        CUdeviceptr alias; /**< For driver internal use. Initial value is unimportant. */
+    } waitValue;
+    struct CUstreamMemOpWriteValueParams_st {
+        CUstreamBatchMemOpType operation;
+        CUdeviceptr address;
+        union {
+            cuuint32_t value;
+            cuuint64_t pad;
+        };
+        unsigned int flags;
+        CUdeviceptr alias; /**< For driver internal use. Initial value is unimportant. */
+    } writeValue;
+    struct CUstreamMemOpFlushRemoteWritesParams_st {
+        CUstreamBatchMemOpType operation;
+        unsigned int flags;
+    } flushRemoteWrites;
+    cuuint64_t pad[6];
+} CUstreamBatchMemOpParams;
+#endif /* __CUDA_API_VERSION >= 8000 */
+
 /**
  * Occupancy calculator flag
  */
@@ -338,12 +424,12 @@ typedef enum CUoccupancy_flags_enum {
  * Array formats
  */
 typedef enum CUarray_format_enum {
-    CU_AD_FORMAT_UNSIGNED_INT8  = 0x01, /**< Unsigned 8-bit inteelementwise_2ds */
-    CU_AD_FORMAT_UNSIGNED_INT16 = 0x02, /**< Unsigned 16-bit inteelementwise_2ds */
-    CU_AD_FORMAT_UNSIGNED_INT32 = 0x03, /**< Unsigned 32-bit inteelementwise_2ds */
-    CU_AD_FORMAT_SIGNED_INT8    = 0x08, /**< Signed 8-bit inteelementwise_2ds */
-    CU_AD_FORMAT_SIGNED_INT16   = 0x09, /**< Signed 16-bit inteelementwise_2ds */
-    CU_AD_FORMAT_SIGNED_INT32   = 0x0a, /**< Signed 32-bit inteelementwise_2ds */
+    CU_AD_FORMAT_UNSIGNED_INT8  = 0x01, /**< Unsigned 8-bit integers */
+    CU_AD_FORMAT_UNSIGNED_INT16 = 0x02, /**< Unsigned 16-bit integers */
+    CU_AD_FORMAT_UNSIGNED_INT32 = 0x03, /**< Unsigned 32-bit integers */
+    CU_AD_FORMAT_SIGNED_INT8    = 0x08, /**< Signed 8-bit integers */
+    CU_AD_FORMAT_SIGNED_INT16   = 0x09, /**< Signed 16-bit integers */
+    CU_AD_FORMAT_SIGNED_INT32   = 0x0a, /**< Signed 32-bit integers */
     CU_AD_FORMAT_HALF           = 0x10, /**< 16-bit floating point */
     CU_AD_FORMAT_FLOAT          = 0x20  /**< 32-bit floating point */
 } CUarray_format;
@@ -460,6 +546,12 @@ typedef enum CUdevice_attribute_enum {
     CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY = 83,                    /**< Device can allocate managed memory on this system */
     CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD = 84,                    /**< Device is on a multi-GPU board */ 
     CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID = 85,           /**< Unique id for a group of devices on the same multi-GPU board */
+    CU_DEVICE_ATTRIBUTE_HOST_NATIVE_ATOMIC_SUPPORTED = 86,       /**< Link between the device and the host supports native atomic operations (this is a placeholder attribute, and is not supported on any current hardware)*/
+    CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO = 87,  /**< Ratio of single precision performance (in floating-point operations per second) to double precision performance */
+    CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS = 88,            /**< Device supports coherently accessing pageable memory without calling cudaHostRegister on it */
+    CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS = 89,         /**< Device can coherently access managed memory concurrently with the CPU */
+    CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED = 90,      /**< Device supports compute preemption. */
+    CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM = 91, /**< Device can access host registered memory at the same virtual address as the CPU */
     CU_DEVICE_ATTRIBUTE_MAX
 } CUdevice_attribute;
 
@@ -559,8 +651,8 @@ typedef enum CUfunction_attribute_enum {
  */
 typedef enum CUfunc_cache_enum {
     CU_FUNC_CACHE_PREFER_NONE    = 0x00, /**< no preference for shared memory or L1 (default) */
-    CU_FUNC_CACHE_PREFER_SHARED  = 0x01, /**< prefer larelementwise_2d shared memory and smaller L1 cache */
-    CU_FUNC_CACHE_PREFER_L1      = 0x02, /**< prefer larelementwise_2d L1 cache and smaller shared memory */
+    CU_FUNC_CACHE_PREFER_SHARED  = 0x01, /**< prefer larger shared memory and smaller L1 cache */
+    CU_FUNC_CACHE_PREFER_L1      = 0x02, /**< prefer larger L1 cache and smaller shared memory */
     CU_FUNC_CACHE_PREFER_EQUAL   = 0x03  /**< prefer equal sized L1 cache and shared memory */
 } CUfunc_cache;
 
@@ -588,10 +680,28 @@ typedef enum CUmemorytype_enum {
  */
 typedef enum CUcomputemode_enum {
     CU_COMPUTEMODE_DEFAULT           = 0, /**< Default compute mode (Multiple contexts allowed per device) */
-    CU_COMPUTEMODE_EXCLUSIVE         = 1, /**< Compute-exclusive-thread mode (Only one context used by a single thread can be present on this device at a time) */
     CU_COMPUTEMODE_PROHIBITED        = 2, /**< Compute-prohibited mode (No contexts can be created on this device at this time) */
     CU_COMPUTEMODE_EXCLUSIVE_PROCESS = 3  /**< Compute-exclusive-process mode (Only one context used by a single process can be present on this device at a time) */
 } CUcomputemode;
+
+/**
+ * Memory advise values
+ */
+typedef enum CUmem_advise_enum {
+    CU_MEM_ADVISE_SET_READ_MOSTLY          = 1, /**< Data will mostly be read and only occassionally be written to */
+    CU_MEM_ADVISE_UNSET_READ_MOSTLY        = 2, /**< Undo the effect of ::CU_MEM_ADVISE_SET_READ_MOSTLY */
+    CU_MEM_ADVISE_SET_PREFERRED_LOCATION   = 3, /**< Set the preferred location for the data as the specified device */
+    CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION = 4, /**< Clear the preferred location for the data */
+    CU_MEM_ADVISE_SET_ACCESSED_BY          = 5, /**< Data will be accessed by the specified device, so prevent page faults as much as possible */
+    CU_MEM_ADVISE_UNSET_ACCESSED_BY        = 6  /**< Let the Unified Memory subsystem decide on the page faulting policy for the specified device */
+} CUmem_advise;
+
+typedef enum CUmem_range_attribute_enum {
+    CU_MEM_RANGE_ATTRIBUTE_READ_MOSTLY            = 1, /**< Whether the range will mostly be read and only occassionally be written to */
+    CU_MEM_RANGE_ATTRIBUTE_PREFERRED_LOCATION     = 2, /**< The preferred location of the range */
+    CU_MEM_RANGE_ATTRIBUTE_ACCESSED_BY            = 3, /**< Memory range has ::CU_MEM_ADVISE_SET_ACCESSED_BY set for specified device */
+    CU_MEM_RANGE_ATTRIBUTE_LAST_PREFETCH_LOCATION = 4  /**< The last location to which the range was prefetched */
+} CUmem_range_attribute;
 
 /**
  * Online compiler and linker options
@@ -727,6 +837,12 @@ typedef enum CUjit_option_enum
      */
     CU_JIT_CACHE_MODE,
 
+    /**
+     * The below jit options are used for internal purposes only, in this version of CUDA
+     */
+    CU_JIT_NEW_SM3X_OPT,
+    CU_JIT_FAST_COMPILE,
+
     CU_JIT_NUM_OPTIONS
 
 } CUjit_option;
@@ -747,7 +863,11 @@ typedef enum CUjit_target_enum
     CU_TARGET_COMPUTE_35 = 35,       /**< Compute device class 3.5 */
     CU_TARGET_COMPUTE_37 = 37,       /**< Compute device class 3.7 */
     CU_TARGET_COMPUTE_50 = 50,       /**< Compute device class 5.0 */
-    CU_TARGET_COMPUTE_52 = 52        /**< Compute device class 5.2 */
+    CU_TARGET_COMPUTE_52 = 52,       /**< Compute device class 5.2 */
+    CU_TARGET_COMPUTE_53 = 53,       /**< Compute device class 5.3 */
+    CU_TARGET_COMPUTE_60 = 60,       /**< Compute device class 6.0. This must be removed for CUDA 7.0 toolkit. See bug 1518217. */
+    CU_TARGET_COMPUTE_61 = 61,       /**< Compute device class 6.1. This must be removed for CUDA 7.0 toolkit.*/
+    CU_TARGET_COMPUTE_62 = 62        /**< Compute device class 6.2. This must be removed for CUDA 7.0 toolkit.*/
 } CUjit_target;
 
 /**
@@ -910,7 +1030,7 @@ typedef enum cudaError_enum {
 
     /**
      * \deprecated
-     * This error return is deprecated as of CUDA 5.0. It is no lonelementwise_2d an error
+     * This error return is deprecated as of CUDA 5.0. It is no longer an error
      * to attempt to enable/disable the profiling via ::cuProfilerStart or
      * ::cuProfilerStop without initialization.
      */
@@ -918,14 +1038,14 @@ typedef enum cudaError_enum {
 
     /**
      * \deprecated
-     * This error return is deprecated as of CUDA 5.0. It is no lonelementwise_2d an error
+     * This error return is deprecated as of CUDA 5.0. It is no longer an error
      * to call cuProfilerStart() when profiling is already enabled.
      */
     CUDA_ERROR_PROFILER_ALREADY_STARTED       = 7,
 
     /**
      * \deprecated
-     * This error return is deprecated as of CUDA 5.0. It is no lonelementwise_2d an error
+     * This error return is deprecated as of CUDA 5.0. It is no longer an error
      * to call cuProfilerStop() when profiling is already disabled.
      */
     CUDA_ERROR_PROFILER_ALREADY_STOPPED       = 8,
@@ -963,7 +1083,7 @@ typedef enum cudaError_enum {
      * This indicated that the context being supplied as a parameter to the
      * API call was already the active context.
      * \deprecated
-     * This error return is deprecated as of CUDA 3.2. It is no lonelementwise_2d an
+     * This error return is deprecated as of CUDA 3.2. It is no longer an
      * error to attempt to push the active context via ::cuCtxPushCurrent().
      */
     CUDA_ERROR_CONTEXT_ALREADY_CURRENT        = 202,
@@ -1053,6 +1173,12 @@ typedef enum cudaError_enum {
      * This indicates an error with OpenGL or DirectX context.
      */
     CUDA_ERROR_INVALID_GRAPHICS_CONTEXT       = 219,
+
+    /**
+    * This indicates that an uncorrectable NVLink error was detected during the
+    * execution.
+    */
+    CUDA_ERROR_NVLINK_UNCORRECTABLE           = 220,
 
     /**
      * This indicates that the device kernel source is invalid.
@@ -1164,7 +1290,7 @@ typedef enum cudaError_enum {
     CUDA_ERROR_CONTEXT_IS_DESTROYED           = 709,
 
     /**
-     * A device-side assert trigelementwise_2ded during kernel execution. The context
+     * A device-side assert triggered during kernel execution. The context
      * cannot be used anymore, and must be destroyed. All existing device 
      * memory allocations from this context are invalid and must be 
      * reconstructed if the program is to continue using CUDA.
@@ -1263,6 +1389,15 @@ typedef enum cudaError_enum {
     CUDA_ERROR_UNKNOWN                        = 999
 } CUresult;
 
+/**
+ * P2P Attributes
+ */
+typedef enum CUdevice_P2PAttribute_enum {
+    CU_DEVICE_P2P_ATTRIBUTE_PERFORMANCE_RANK        = 0x01, /**< A relative value indicating the performance of the link between two devices */
+    CU_DEVICE_P2P_ATTRIBUTE_ACCESS_SUPPORTED        = 0x02, /**< P2P Access is enable */
+    CU_DEVICE_P2P_ATTRIBUTE_NATIVE_ATOMIC_SUPPORTED = 0x03  /**< Atomic operation over the link supported */
+} CUdevice_P2PAttribute;
+
 #ifdef _WIN32
 #define CUDA_CB __stdcall
 #else
@@ -1318,6 +1453,20 @@ typedef size_t (CUDA_CB *CUoccupancyB2DSize)(int blockSize);
  * Flag for ::cuMemHostRegister()
  */
 #define CU_MEMHOSTREGISTER_DEVICEMAP    0x02
+
+/**
+ * If set, the passed memory pointer is treated as pointing to some
+ * memory-mapped I/O space, e.g. belonging to a third-party PCIe device.
+ * On Windows the flag is a no-op.
+ * On Linux that memory is marked as non cache-coherent for the GPU and
+ * is expected to be physically contiguous. It may return
+ * CUDA_ERROR_NOT_PERMITTED if run as an unprivileged user,
+ * CUDA_ERROR_NOT_SUPPORTED on older Linux kernel versions.
+ * On all other platforms, it is not supported and CUDA_ERROR_NOT_SUPPORTED
+ * is returned.
+ * Flag for ::cuMemHostRegister()
+ */
+#define CU_MEMHOSTREGISTER_IOMEMORY     0x04
 
 #if __CUDA_API_VERSION >= 3020
 
@@ -1490,8 +1639,9 @@ typedef struct CUDA_TEXTURE_DESC_st {
     CUfilter_mode mipmapFilterMode; /**< Mipmap filter mode */
     float mipmapLevelBias;          /**< Mipmap level bias */
     float minMipmapLevelClamp;      /**< Mipmap minimum level clamp */
-    float maxMipmapLevelClamp;      /**< Mipmap maximum level clamp */
-    int reserved[16];
+    float maxMipmapLevelClamp;      /**< Mipmap maximum level clamp */ 
+    float borderColor[4];           /**< Border Color */
+    int reserved[12];
 } CUDA_TEXTURE_DESC;
 
 /**
@@ -1500,24 +1650,24 @@ typedef struct CUDA_TEXTURE_DESC_st {
 typedef enum CUresourceViewFormat_enum
 {
     CU_RES_VIEW_FORMAT_NONE          = 0x00, /**< No resource view format (use underlying resource format) */
-    CU_RES_VIEW_FORMAT_UINT_1X8      = 0x01, /**< 1 channel unsigned 8-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_UINT_2X8      = 0x02, /**< 2 channel unsigned 8-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_UINT_4X8      = 0x03, /**< 4 channel unsigned 8-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_SINT_1X8      = 0x04, /**< 1 channel signed 8-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_SINT_2X8      = 0x05, /**< 2 channel signed 8-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_SINT_4X8      = 0x06, /**< 4 channel signed 8-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_UINT_1X16     = 0x07, /**< 1 channel unsigned 16-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_UINT_2X16     = 0x08, /**< 2 channel unsigned 16-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_UINT_4X16     = 0x09, /**< 4 channel unsigned 16-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_SINT_1X16     = 0x0a, /**< 1 channel signed 16-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_SINT_2X16     = 0x0b, /**< 2 channel signed 16-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_SINT_4X16     = 0x0c, /**< 4 channel signed 16-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_UINT_1X32     = 0x0d, /**< 1 channel unsigned 32-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_UINT_2X32     = 0x0e, /**< 2 channel unsigned 32-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_UINT_4X32     = 0x0f, /**< 4 channel unsigned 32-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_SINT_1X32     = 0x10, /**< 1 channel signed 32-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_SINT_2X32     = 0x11, /**< 2 channel signed 32-bit inteelementwise_2ds */
-    CU_RES_VIEW_FORMAT_SINT_4X32     = 0x12, /**< 4 channel signed 32-bit inteelementwise_2ds */
+    CU_RES_VIEW_FORMAT_UINT_1X8      = 0x01, /**< 1 channel unsigned 8-bit integers */
+    CU_RES_VIEW_FORMAT_UINT_2X8      = 0x02, /**< 2 channel unsigned 8-bit integers */
+    CU_RES_VIEW_FORMAT_UINT_4X8      = 0x03, /**< 4 channel unsigned 8-bit integers */
+    CU_RES_VIEW_FORMAT_SINT_1X8      = 0x04, /**< 1 channel signed 8-bit integers */
+    CU_RES_VIEW_FORMAT_SINT_2X8      = 0x05, /**< 2 channel signed 8-bit integers */
+    CU_RES_VIEW_FORMAT_SINT_4X8      = 0x06, /**< 4 channel signed 8-bit integers */
+    CU_RES_VIEW_FORMAT_UINT_1X16     = 0x07, /**< 1 channel unsigned 16-bit integers */
+    CU_RES_VIEW_FORMAT_UINT_2X16     = 0x08, /**< 2 channel unsigned 16-bit integers */
+    CU_RES_VIEW_FORMAT_UINT_4X16     = 0x09, /**< 4 channel unsigned 16-bit integers */
+    CU_RES_VIEW_FORMAT_SINT_1X16     = 0x0a, /**< 1 channel signed 16-bit integers */
+    CU_RES_VIEW_FORMAT_SINT_2X16     = 0x0b, /**< 2 channel signed 16-bit integers */
+    CU_RES_VIEW_FORMAT_SINT_4X16     = 0x0c, /**< 4 channel signed 16-bit integers */
+    CU_RES_VIEW_FORMAT_UINT_1X32     = 0x0d, /**< 1 channel unsigned 32-bit integers */
+    CU_RES_VIEW_FORMAT_UINT_2X32     = 0x0e, /**< 2 channel unsigned 32-bit integers */
+    CU_RES_VIEW_FORMAT_UINT_4X32     = 0x0f, /**< 4 channel unsigned 32-bit integers */
+    CU_RES_VIEW_FORMAT_SINT_1X32     = 0x10, /**< 1 channel signed 32-bit integers */
+    CU_RES_VIEW_FORMAT_SINT_2X32     = 0x11, /**< 2 channel signed 32-bit integers */
+    CU_RES_VIEW_FORMAT_SINT_4X32     = 0x12, /**< 4 channel signed 32-bit integers */
     CU_RES_VIEW_FORMAT_FLOAT_1X16    = 0x13, /**< 1 channel 16-bit floating point */
     CU_RES_VIEW_FORMAT_FLOAT_2X16    = 0x14, /**< 2 channel 16-bit floating point */
     CU_RES_VIEW_FORMAT_FLOAT_4X16    = 0x15, /**< 4 channel 16-bit floating point */
@@ -1607,7 +1757,7 @@ typedef struct CUDA_POINTER_ATTRIBUTE_P2P_TOKENS_st {
 #define CU_TRSA_OVERRIDE_FORMAT 0x01
 
 /**
- * Read the texture as inteelementwise_2ds rather than promoting the values to floats
+ * Read the texture as integers rather than promoting the values to floats
  * in the range [0,1].
  * Flag for ::cuTexRefSetFlags()
  */
@@ -1657,6 +1807,16 @@ typedef struct CUDA_POINTER_ATTRIBUTE_P2P_TOKENS_st {
  * texture reference.
  */
 #define CU_PARAM_TR_DEFAULT -1
+
+/**
+ * Device that represents the CPU
+ */
+#define CU_DEVICE_CPU               ((CUdevice)-1)
+
+/**
+ * Device that represents an invalid device
+ */
+#define CU_DEVICE_INVALID           ((CUdevice)-2)
 
 /** @} */ /* END CUDA_TYPES */
 
@@ -1902,7 +2062,7 @@ CUresult CUDAAPI cuDeviceTotalMem(size_t *bytes, CUdevice dev);
 /**
  * \brief Returns information about the device
  *
- * Returns in \p *pi the inteelementwise_2d value of the attribute \p attrib on device
+ * Returns in \p *pi the integer value of the attribute \p attrib on device
  * \p dev. The supported attributes are:
  * - ::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK: Maximum number of threads per
  *   block;
@@ -2021,8 +2181,6 @@ CUresult CUDAAPI cuDeviceTotalMem(size_t *bytes, CUdevice dev);
  *   in. Available modes are as follows:
  *   - ::CU_COMPUTEMODE_DEFAULT: Default mode - Device is not restricted and
  *     can have multiple CUDA contexts present at a single time.
- *   - ::CU_COMPUTEMODE_EXCLUSIVE: Compute-exclusive mode - Device can have
- *     only one CUDA context present on it at a time.
  *   - ::CU_COMPUTEMODE_PROHIBITED: Compute-prohibited mode - Device is
  *     prohibited from creating new CUDA contexts.
  *   - ::CU_COMPUTEMODE_EXCLUSIVE_PROCESS:  Compute-exclusive-process mode - Device
@@ -2062,6 +2220,17 @@ CUresult CUDAAPI cuDeviceTotalMem(size_t *bytes, CUdevice dev);
  * - ::CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD: 1 if device is on a multi-GPU board, 0 if not.
  * - ::CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID: Unique identifier for a group of devices
  *   associated with the same board. Devices on the same multi-GPU board will share the same identifier.
+ * - ::CU_DEVICE_ATTRIBUTE_HOST_NATIVE_ATOMIC_SUPPORTED: 1 if Link between the device and the host
+ *   supports native atomic operations.
+ * - ::CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO: Ratio of single precision performance
+ *   (in floating-point operations per second) to double precision performance.
+ * - ::CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS: Device suppports coherently accessing
+ *   pageable memory without calling cudaHostRegister on it.
+ * - ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS: Device can coherently access managed memory
+ *   concurrently with the CPU.
+ * - ::CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED: Device supports Compute Preemption.
+ * - ::CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM: Device can access host registered
+ *   memory at the same virtual address as the CPU.
  *
  * \param pi     - Returned device attribute value
  * \param attrib - Device attribute to query
@@ -2222,12 +2391,10 @@ CUresult CUDAAPI cuDeviceComputeCapability(int *major, int *minor, CUdevice dev)
  * Unlike ::cuCtxCreate() the newly created context is not pushed onto the stack.
  *
  * Context creation will fail with ::CUDA_ERROR_UNKNOWN if the compute mode of
- * the device is ::CU_COMPUTEMODE_PROHIBITED. Similarly, context creation will
- * also fail with ::CUDA_ERROR_UNKNOWN if the compute mode for the device is
- * set to ::CU_COMPUTEMODE_EXCLUSIVE and there is already an active, non-primary,
- * context on the device. The function ::cuDeviceGetAttribute() can be used with
- * ::CU_DEVICE_ATTRIBUTE_COMPUTE_MODE to determine the compute mode of the
- * device. The <i>nvidia-smi</i> tool can be used to set the compute mode for
+ * the device is ::CU_COMPUTEMODE_PROHIBITED.  The function ::cuDeviceGetAttribute() 
+ * can be used with ::CU_DEVICE_ATTRIBUTE_COMPUTE_MODE to determine the compute mode 
+ * of the device. 
+ * The <i>nvidia-smi</i> tool can be used to set the compute mode for
  * devices. Documentation for <i>nvidia-smi</i> can be obtained by passing a
  * -h option to it.
  *
@@ -2493,13 +2660,11 @@ CUresult CUDAAPI cuDevicePrimaryCtxReset(CUdevice dev);
  * memory usage at the cost of potentially increased memory usage.
  *
  * Context creation will fail with ::CUDA_ERROR_UNKNOWN if the compute mode of
- * the device is ::CU_COMPUTEMODE_PROHIBITED. Similarly, context creation will
- * also fail with ::CUDA_ERROR_UNKNOWN if the compute mode for the device is
- * set to ::CU_COMPUTEMODE_EXCLUSIVE and there is already an active context on
- * the device. The function ::cuDeviceGetAttribute() can be used with
- * ::CU_DEVICE_ATTRIBUTE_COMPUTE_MODE to determine the compute mode of the
- * device. The <i>nvidia-smi</i> tool can be used to set the compute mode for
- * devices. Documentation for <i>nvidia-smi</i> can be obtained by passing a
+ * the device is ::CU_COMPUTEMODE_PROHIBITED. The function ::cuDeviceGetAttribute() 
+ * can be used with ::CU_DEVICE_ATTRIBUTE_COMPUTE_MODE to determine the 
+ * compute mode of the device. The <i>nvidia-smi</i> tool can be used to set 
+ * the compute mode for * devices. 
+ * Documentation for <i>nvidia-smi</i> can be obtained by passing a
  * -h option to it.
  *
  * \param pctx  - Returned context handle of the new context
@@ -2820,7 +2985,7 @@ CUresult CUDAAPI cuCtxSynchronize(void);
  *   violated. This limit can be set smaller than the default or up the maximum
  *   launch depth of 24. When setting this limit, keep in mind that additional
  *   levels of sync depth require the driver to reserve large amounts of device
- *   memory which can no lonelementwise_2d be used for user allocations. If these 
+ *   memory which can no longer be used for user allocations. If these 
  *   reservations of device memory fail, ::cuCtxSetLimit will return 
  *   ::CUDA_ERROR_OUT_OF_MEMORY, and the limit can be reset to a lower value.
  *   This limit is only applicable to devices of compute capability 3.5 and
@@ -2837,7 +3002,7 @@ CUresult CUDAAPI cuCtxSynchronize(void);
  *   the default (2048 launches) are needed for a module using the device
  *   runtime, this limit can be increased. Keep in mind that being able to
  *   sustain additional pending launches will require the driver to reserve
- *   larelementwise_2d amounts of device memory upfront which can no lonelementwise_2d be used for
+ *   larger amounts of device memory upfront which can no longer be used for
  *   allocations. If these reservations fail, ::cuCtxSetLimit will return
  *   ::CUDA_ERROR_OUT_OF_MEMORY, and the limit can be reset to a lower value.
  *   This limit is only applicable to devices of compute capability 3.5 and
@@ -2922,8 +3087,8 @@ CUresult CUDAAPI cuCtxGetLimit(size_t *pvalue, CUlimit limit);
  *
  * The supported cache configurations are:
  * - ::CU_FUNC_CACHE_PREFER_NONE: no preference for shared memory or L1 (default)
- * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larelementwise_2d shared memory and smaller L1 cache
- * - ::CU_FUNC_CACHE_PREFER_L1: prefer larelementwise_2d L1 cache and smaller shared memory
+ * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larger shared memory and smaller L1 cache
+ * - ::CU_FUNC_CACHE_PREFER_L1: prefer larger L1 cache and smaller shared memory
  * - ::CU_FUNC_CACHE_PREFER_EQUAL: prefer equal sized L1 cache and shared memory
  *
  * \param pconfig - Returned cache configuration
@@ -2972,8 +3137,8 @@ CUresult CUDAAPI cuCtxGetCacheConfig(CUfunc_cache *pconfig);
  *
  * The supported cache configurations are:
  * - ::CU_FUNC_CACHE_PREFER_NONE: no preference for shared memory or L1 (default)
- * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larelementwise_2d shared memory and smaller L1 cache
- * - ::CU_FUNC_CACHE_PREFER_L1: prefer larelementwise_2d L1 cache and smaller shared memory
+ * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larger shared memory and smaller L1 cache
+ * - ::CU_FUNC_CACHE_PREFER_L1: prefer larger L1 cache and smaller shared memory
  * - ::CU_FUNC_CACHE_PREFER_EQUAL: prefer equal sized L1 cache and shared memory
  *
  * \param config - Requested cache configuration
@@ -3055,7 +3220,7 @@ CUresult CUDAAPI cuCtxGetSharedMemConfig(CUsharedconfig *pConfig);
  *
  * Changing the shared memory bank size will not increase shared memory usage
  * or affect occupancy of kernels, but may have major effects on performance. 
- * Larelementwise_2d bank sizes will allow for greater potential bandwidth to shared memory,
+ * Larger bank sizes will allow for greater potential bandwidth to shared memory,
  * but will change what kinds of accesses to shared memory will result in bank 
  * conflicts.
  *
@@ -4122,6 +4287,21 @@ CUresult CUDAAPI cuMemHostAlloc(void **pp, size_t bytesize, unsigned int Flags);
  * flag was not specified at the time the memory was allocated, or if the
  * function is called on a GPU that does not support mapped pinned memory.
  *
+ * For devices that have a non-zero value for the device attribute
+ * ::CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM, the memory
+ * can also be accessed from the device using the host pointer \p p.
+ * The device pointer returned by ::cuMemHostGetDevicePointer() may or may not
+ * match the original host pointer \p p and depends on the devices visible to the
+ * application. If all devices visible to the application have a non-zero value for the
+ * device attribute, the device pointer returned by ::cuMemHostGetDevicePointer()
+ * will match the original pointer \p p. If any device visible to the application
+ * has a zero value for the device attribute, the device pointer returned by
+ * ::cuMemHostGetDevicePointer() will not match the original host pointer \p p,
+ * but it will be suitable for use on all devices provided Unified Virtual Addressing
+ * is enabled. In such systems, it is valid to access the memory using either pointer
+ * on devices that have a non-zero value for the device attribute. Note however that
+ * such devices should access the memory using only of the two pointers and not both.
+ *
  * \p Flags provides for future releases. For now, it must be set to 0.
  *
  * \param pdptr - Returned device pointer
@@ -4193,9 +4373,9 @@ CUresult CUDAAPI cuMemHostGetFlags(unsigned int *pFlags, void *p);
  * \p flags must be one of ::CU_MEM_ATTACH_GLOBAL or ::CU_MEM_ATTACH_HOST. If
  * ::CU_MEM_ATTACH_GLOBAL is specified, then this memory is accessible from
  * any stream on any device. If ::CU_MEM_ATTACH_HOST is specified, then the
- * allocation is created with initial visibility restricted to host access only;
- * an explicit call to ::cuStreamAttachMemAsync will be required to enable access
- * on the device.
+ * allocation should not be accessed from devices that have a zero value for the
+ * device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS; an explicit call to
+ * ::cuStreamAttachMemAsync will be required to enable access on such devices.
  *
  * If the association is later changed via ::cuStreamAttachMemAsync to
  * a single stream, the default association as specifed during ::cuMemAllocManaged
@@ -4206,17 +4386,45 @@ CUresult CUDAAPI cuMemHostGetFlags(unsigned int *pFlags, void *p);
  *
  * Memory allocated with ::cuMemAllocManaged should be released with ::cuMemFree.
  *
- * On a multi-GPU system with peer-to-peer support, where multiple GPUs support
- * managed memory, the physical storage is created on the GPU which is active
- * at the time ::cuMemAllocManaged is called. All other GPUs will reference the
- * data at reduced bandwidth via peer mappings over the PCIe bus. The Unified
- * Memory management system does not migrate memory between GPUs.
+ * Device memory oversubscription is possible for GPUs that have a non-zero value for the
+ * device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS. Managed memory on
+ * such GPUs may be evicted from device memory to host memory at any time by the Unified
+ * Memory driver in order to make room for other allocations.
  *
- * On a multi-GPU system where multiple GPUs support managed memory, but not
- * all pairs of such GPUs have peer-to-peer support between them, the physical
- * storage is created in 'zero-copy' or system memory. All GPUs will reference
- * the data at reduced bandwidth over the PCIe bus. In these circumstances,
- * use of the environment variable, CUDA_VISIBLE_DEVICES, is recommended to
+ * In a multi-GPU system where all GPUs have a non-zero value for the device attribute
+ * ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS, managed memory may not be populated when this
+ * API returns and instead may be populated on access. In such systems, managed memory can
+ * migrate to any processor's memory at any time. The Unified Memory driver will employ heuristics to
+ * maintain data locality and prevent excessive page faults to the extent possible. The application
+ * can also guide the driver about memory usage patterns via ::cuMemAdvise. The application
+ * can also explicitly migrate memory to a desired processor's memory via
+ * ::cuMemPrefetchAsync.
+ *
+ * In a multi-GPU system where all of the GPUs have a zero value for the device attribute
+ * ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS and all the GPUs have peer-to-peer support
+ * with each other, the physical storage for managed memory is created on the GPU which is active
+ * at the time ::cuMemAllocManaged is called. All other GPUs will reference the data at reduced
+ * bandwidth via peer mappings over the PCIe bus. The Unified Memory driver does not migrate
+ * memory among such GPUs.
+ *
+ * In a multi-GPU system where not all GPUs have peer-to-peer support with each other and
+ * where the value of the device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS
+ * is zero for at least one of those GPUs, the location chosen for physical storage of managed
+ * memory is system-dependent.
+ * - On Linux, the location chosen will be device memory as long as the current set of active
+ * contexts are on devices that either have peer-to-peer support with each other or have a
+ * non-zero value for the device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS.
+ * If there is an active context on a GPU that does not have a non-zero value for that device
+ * attribute and it does not have peer-to-peer support with the other devices that have active
+ * contexts on them, then the location for physical storage will be 'zero-copy' or host memory.
+ * Note that this means that managed memory that is located in device memory is migrated to
+ * host memory if a new context is created on a GPU that doesn't have a non-zero value for
+ * the device attribute and does not support peer-to-peer with at least one of the other devices
+ * that has an active context. This in turn implies that context creation may fail if there is
+ * insufficient host memory to migrate all managed allocations.
+ * - On Windows, the physical storage is always created in 'zero-copy' or host memory.
+ * All GPUs will reference the data at reduced bandwidth over the PCIe bus. In these
+ * circumstances, use of the environment variable CUDA_VISIBLE_DEVICES is recommended to
  * restrict CUDA to only use those GPUs that have peer-to-peer support.
  * Alternatively, users can also set CUDA_MANAGED_FORCE_DEVICE_ALLOC to a
  * non-zero value to force the driver to always use device memory for physical storage.
@@ -4542,6 +4750,9 @@ CUresult CUDAAPI cuIpcCloseMemHandle(CUdeviceptr dptr);
  *   ::cuMemHostGetDevicePointer(). This feature is available only on GPUs
  *   with compute capability greater than or equal to 1.1.
  *
+ * - ::CU_MEMHOSTREGISTER_IOMEMORY: The pointer is treated as pointing to some
+ *   I/O memory space, e.g. the PCI Express resource of a 3rd party device.
+ *
  * All of these flags are orthogonal to one another: a developer may page-lock
  * memory that is portable or mapped with no restrictions.
  *
@@ -4552,6 +4763,21 @@ CUresult CUDAAPI cuIpcCloseMemHandle(CUdeviceptr dptr);
  * devices that do not support mapped pinned memory. The failure is deferred
  * to ::cuMemHostGetDevicePointer() because the memory may be mapped into
  * other CUDA contexts via the ::CU_MEMHOSTREGISTER_PORTABLE flag.
+ *
+ * For devices that have a non-zero value for the device attribute
+ * ::CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM, the memory
+ * can also be accessed from the device using the host pointer \p p.
+ * The device pointer returned by ::cuMemHostGetDevicePointer() may or may not
+ * match the original host pointer \p ptr and depends on the devices visible to the
+ * application. If all devices visible to the application have a non-zero value for the
+ * device attribute, the device pointer returned by ::cuMemHostGetDevicePointer()
+ * will match the original pointer \p ptr. If any device visible to the application
+ * has a zero value for the device attribute, the device pointer returned by
+ * ::cuMemHostGetDevicePointer() will not match the original host pointer \p ptr,
+ * but it will be suitable for use on all devices provided Unified Virtual Addressing
+ * is enabled. In such systems, it is valid to access the memory using either pointer
+ * on devices that have a non-zero value for the device attribute. Note however that
+ * such devices should access the memory using only of the two pointers and not both.
  *
  * The memory page-locked by this function must be unregistered with 
  * ::cuMemHostUnregister().
@@ -4567,7 +4793,9 @@ CUresult CUDAAPI cuIpcCloseMemHandle(CUdeviceptr dptr);
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE,
  * ::CUDA_ERROR_OUT_OF_MEMORY,
- * ::CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED
+ * ::CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED,
+ * ::CUDA_ERROR_NOT_PERMITTED,
+ * ::CUDA_ERROR_NOT_SUPPORTED
  * \notefnerr
  *
  * \sa ::cuMemHostUnregister, ::cuMemHostGetFlags, ::cuMemHostGetDevicePointer
@@ -7343,6 +7571,257 @@ CUresult CUDAAPI cuMipmappedArrayDestroy(CUmipmappedArray hMipmappedArray);
 CUresult CUDAAPI cuPointerGetAttribute(void *data, CUpointer_attribute attribute, CUdeviceptr ptr);
 #endif /* __CUDA_API_VERSION >= 4000 */
 
+#if __CUDA_API_VERSION >= 8000
+/**
+ * \brief Prefetches memory to the specified destination device
+ *
+ * Prefetches memory to the specified destination device.  \p devPtr is the 
+ * base device pointer of the memory to be prefetched and \p dstDevice is the 
+ * destination device. \p count specifies the number of bytes to copy. \p hStream
+ * is the stream in which the operation is enqueued. The memory range must refer
+ * to managed memory allocated via ::cuMemAllocManaged or declared via __managed__ variables.
+ *
+ * Passing in CU_DEVICE_CPU for \p dstDevice will prefetch the data to host memory. If
+ * \p dstDevice is a GPU, then the device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS
+ * must be non-zero. Additionally, \p hStream must be associated with a device that has a
+ * non-zero value for the device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS.
+ *
+ * The start address and end address of the memory range will be rounded down and rounded up
+ * respectively to be aligned to CPU page size before the prefetch operation is enqueued
+ * in the stream.
+ *
+ * If no physical memory has been allocated for this region, then this memory region
+ * will be populated and mapped on the destination device. If there's insufficient
+ * memory to prefetch the desired region, the Unified Memory driver may evict pages from other
+ * ::cuMemAllocManaged allocations to host memory in order to make room. Device memory
+ * allocated using ::cuMemAlloc or ::cuArrayCreate will not be evicted.
+ *
+ * By default, any mappings to the previous location of the migrated pages are removed and
+ * mappings for the new location are only setup on \p dstDevice. The exact behavior however
+ * also depends on the settings applied to this memory range via ::cuMemAdvise as described
+ * below:
+ *
+ * If ::CU_MEM_ADVISE_SET_READ_MOSTLY was set on any subset of this memory range,
+ * then that subset will create a read-only copy of the pages on \p dstDevice.
+ *
+ * If ::CU_MEM_ADVISE_SET_PREFERRED_LOCATION was called on any subset of this memory
+ * range, then the pages will be migrated to \p dstDevice even if \p dstDevice is not the
+ * preferred location of any pages in the memory range.
+ *
+ * If ::CU_MEM_ADVISE_SET_ACCESSED_BY was called on any subset of this memory range,
+ * then mappings to those pages from all the appropriate processors are updated to
+ * refer to the new location if establishing such a mapping is possible. Otherwise,
+ * those mappings are cleared.
+ *
+ * Note that this API is not required for functionality and only serves to improve performance
+ * by allowing the application to migrate data to a suitable location before it is accessed.
+ * Memory accesses to this range are always coherent and are allowed even when the data is
+ * actively being migrated.
+ *
+ * Note that this function is asynchronous with respect to the host and all work
+ * on other devices.
+ *
+ * \param devPtr    - Pointer to be prefetched
+ * \param count     - Size in bytes
+ * \param dstDevice - Destination device to prefetch to
+ * \param hStream    - Stream to enqueue prefetch operation
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE
+ * \notefnerr
+ * \note_async
+ * \note_null_stream
+ *
+ * \sa ::cuMemcpy, ::cuMemcpyPeer, ::cuMemcpyAsync,
+ * ::cuMemcpy3DPeerAsync, ::cuMemAdvise
+ */
+CUresult CUDAAPI cuMemPrefetchAsync(CUdeviceptr devPtr, size_t count, CUdevice dstDevice, CUstream hStream);
+
+/**
+ * \brief Advise about the usage of a given memory range
+ *
+ * Advise the Unified Memory subsystem about the usage pattern for the memory range
+ * starting at \p devPtr with a size of \p count bytes. The start address and end address of the memory
+ * range will be rounded down and rounded up respectively to be aligned to CPU page size before the
+ * advice is applied. The memory range must refer to managed memory allocated via ::cuMemAllocManaged
+ * or declared via __managed__ variables.
+ *
+ * The \p advice parameter can take the following values:
+ * - ::CU_MEM_ADVISE_SET_READ_MOSTLY: This implies that the data is mostly going to be read
+ * from and only occasionally written to. Any read accesses from any processor to this region will create a
+ * read-only copy of at least the accessed pages in that processor's memory. Additionally, if ::cuMemPrefetchAsync
+ * is called on this region, it will create a read-only copy of the data on the destination processor.
+ * If any processor writes to this region, all copies of the corresponding page will be invalidated
+ * except for the one where the write occurred. The \p device argument is ignored for this advice.
+ * Note that for a page to be read-duplicated, the accessing processor must either be the CPU or a GPU
+ * that has a non-zero value for the device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS.
+ * Also, if a context is created on a device that does not have the device attribute
+ * ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS set, then read-duplication will not occur until
+ * all such contexts are destroyed.
+ * - ::CU_MEM_ADVISE_UNSET_READ_MOSTLY:  Undoes the effect of ::CU_MEM_ADVISE_SET_READ_MOSTLY and also prevents the
+ * Unified Memory driver from attempting heuristic read-duplication on the memory range. Any read-duplicated
+ * copies of the data will be collapsed into a single copy. The location for the collapsed
+ * copy will be the preferred location if the page has a preferred location and one of the read-duplicated
+ * copies was resident at that location. Otherwise, the location chosen is arbitrary.
+ * - ::CU_MEM_ADVISE_SET_PREFERRED_LOCATION: This advice sets the preferred location for the
+ * data to be the memory belonging to \p device. Passing in CU_DEVICE_CPU for \p device sets the
+ * preferred location as host memory. If \p device is a GPU, then it must have a non-zero value for the
+ * device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS. Setting the preferred location
+ * does not cause data to migrate to that location immediately. Instead, it guides the migration policy
+ * when a fault occurs on that memory region. If the data is already in its preferred location and the
+ * faulting processor can establish a mapping without requiring the data to be migrated, then
+ * data migration will be avoided. On the other hand, if the data is not in its preferred location
+ * or if a direct mapping cannot be established, then it will be migrated to the processor accessing
+ * it. It is important to note that setting the preferred location does not prevent data prefetching
+ * done using ::cuMemPrefetchAsync.
+ * Having a preferred location can override the page thrash detection and resolution logic in the Unified
+ * Memory driver. Normally, if a page is detected to be constantly thrashing between for example host and device
+ * memory, the page may eventually be pinned to host memory by the Unified Memory driver. But
+ * if the preferred location is set as device memory, then the page will continue to thrash indefinitely.
+ * If ::CU_MEM_ADVISE_SET_READ_MOSTLY is also set on this memory region or any subset of it, then the
+ * policies associated with that advice will override the policies of this advice.
+ * - ::CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION: Undoes the effect of ::CU_MEM_ADVISE_SET_PREFERRED_LOCATION
+ * and changes the preferred location to none.
+ * - ::CU_MEM_ADVISE_SET_ACCESSED_BY: This advice implies that the data will be accessed by \p device.
+ * Passing in ::CU_DEVICE_CPU for \p device will set the advice for the CPU. If \p device is a GPU, then
+ * the device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS must be non-zero.
+ * This advice does not cause data migration and has no impact on the location of the data per se. Instead,
+ * it causes the data to always be mapped in the specified processor's page tables, as long as the
+ * location of the data permits a mapping to be established. If the data gets migrated for any reason,
+ * the mappings are updated accordingly.
+ * This advice is recommended in scenarios where data locality is not important, but avoiding faults is.
+ * Consider for example a system containing multiple GPUs with peer-to-peer access enabled, where the
+ * data located on one GPU is occasionally accessed by peer GPUs. In such scenarios, migrating data
+ * over to the other GPUs is not as important because the accesses are infrequent and the overhead of
+ * migration may be too high. But preventing faults can still help improve performance, and so having
+ * a mapping set up in advance is useful. Note that on CPU access of this data, the data may be migrated
+ * to host memory because the CPU typically cannot access device memory directly. Any GPU that had the
+ * ::CU_MEM_ADVISE_SET_ACCESSED_BY flag set for this data will now have its mapping updated to point to the
+ * page in host memory.
+ * If ::CU_MEM_ADVISE_SET_READ_MOSTLY is also set on this memory region or any subset of it, then the
+ * policies associated with that advice will override the policies of this advice. Additionally, if the
+ * preferred location of this memory region or any subset of it is also \p device, then the policies
+ * associated with ::CU_MEM_ADVISE_SET_PREFERRED_LOCATION will override the policies of this advice.
+ * - ::CU_MEM_ADVISE_UNSET_ACCESSED_BY: Undoes the effect of ::CU_MEM_ADVISE_SET_ACCESSED_BY. Any mappings to
+ * the data from \p device may be removed at any time causing accesses to result in non-fatal page faults.
+ *
+ * \param devPtr - Pointer to memory to set the advice for
+ * \param count  - Size in bytes of the memory range
+ * \param advice - Advice to be applied for the specified memory range
+ * \param device - Device to apply the advice for
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE
+ * \notefnerr
+ * \note_async
+ * \note_null_stream
+ *
+ * \sa ::cuMemcpy, ::cuMemcpyPeer, ::cuMemcpyAsync,
+ * ::cuMemcpy3DPeerAsync, ::cuMemPrefetchAsync
+ */
+CUresult CUDAAPI cuMemAdvise(CUdeviceptr devPtr, size_t count, CUmem_advise advice, CUdevice device);
+
+/**
+ * \brief Query an attribute of a given memory range
+ * 
+ * Query an attribute about the memory range starting at \p devPtr with a size of \p count bytes. The
+ * memory range must refer to managed memory allocated via ::cuMemAllocManaged or declared via
+ * __managed__ variables.
+ *
+ * The \p attribute parameter can take the following values:
+ * - ::CU_MEM_RANGE_ATTRIBUTE_READ_MOSTLY: If this attribute is specified, \p data will be interpreted
+ * as a 32-bit integer, and \p dataSize must be 4. The result returned will be 1 if all pages in the given
+ * memory range have read-duplication enabled, or 0 otherwise.
+ * - ::CU_MEM_RANGE_ATTRIBUTE_PREFERRED_LOCATION: If this attribute is specified, \p data will be
+ * interpreted as a 32-bit integer, and \p dataSize must be 4. The result returned will be a GPU device
+ * id if all pages in the memory range have that GPU as their preferred location, or it will be CU_DEVICE_CPU
+ * if all pages in the memory range have the CPU as their preferred location, or it will be CU_DEVICE_INVALID
+ * if either all the pages don't have the same preferred location or some of the pages don't have a
+ * preferred location at all. Note that the actual location of the pages in the memory range at the time of
+ * the query may be different from the preferred location. 
+ * - ::CU_MEM_RANGE_ATTRIBUTE_ACCESSED_BY: If this attribute is specified, \p data will be interpreted
+ * as an array of 32-bit integers, and \p dataSize must be a non-zero multiple of 4. The result returned
+ * will be a list of device ids that had ::CU_MEM_ADVISE_SET_ACCESSED_BY set for that entire memory range.
+ * If any device does not have that advice set for the entire memory range, that device will not be included.
+ * If \p data is larger than the number of devices that have that advice set for that memory range,
+ * CU_DEVICE_INVALID will be returned in all the extra space provided. For ex., if \p dataSize is 12
+ * (i.e. \p data has 3 elements) and only device 0 has the advice set, then the result returned will be
+ * { 0, CU_DEVICE_INVALID, CU_DEVICE_INVALID }. If \p data is smaller than the number of devices that have
+ * that advice set, then only as many devices will be returned as can fit in the array. There is no
+ * guarantee on which specific devices will be returned, however.
+ * - ::CU_MEM_RANGE_ATTRIBUTE_LAST_PREFETCH_LOCATION: If this attribute is specified, \p data will be
+ * interpreted as a 32-bit integer, and \p dataSize must be 4. The result returned will be the last location
+ * to which all pages in the memory range were prefetched explicitly via ::cuMemPrefetchAsync. This will either be
+ * a GPU id or CU_DEVICE_CPU depending on whether the last location for prefetch was a GPU or the CPU
+ * respectively. If any page in the memory range was never explicitly prefetched or if all pages were not
+ * prefetched to the same location, CU_DEVICE_INVALID will be returned. Note that this simply returns the
+ * last location that the applicaton requested to prefetch the memory range to. It gives no indication as to
+ * whether the prefetch operation to that location has completed or even begun.
+ *
+ * \param data      - A pointers to a memory location where the result
+ *                    of each attribute query will be written to.
+ * \param dataSize  - Array containing the size of data
+ * \param attribute - The attribute to query
+ * \param devPtr    - Start of the range to query
+ * \param count     - Size of the range to query
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE
+ * \notefnerr
+ * \note_async
+ * \note_null_stream
+ *
+ * \sa ::cuMemRangeGetAttributes, ::cuMemPrefetchAsync,
+ * ::cuMemAdvise
+ */
+CUresult CUDAAPI cuMemRangeGetAttribute(void *data, size_t dataSize, CUmem_range_attribute attribute, CUdeviceptr devPtr, size_t count);
+
+/**
+ * \brief Query attributes of a given memory range.
+ *
+ * Query attributes of the memory range starting at \p devPtr with a size of \p count bytes. The
+ * memory range must refer to managed memory allocated via ::cuMemAllocManaged or declared via
+ * __managed__ variables. The \p attributes array will be interpreted to have \p numAttributes
+ * entries. The \p dataSizes array will also be interpreted to have \p numAttributes entries.
+ * The results of the query will be stored in \p data.
+ *
+ * The list of supported attributes are given below. Please refer to ::cuMemRangeGetAttribute for
+ * attribute descriptions and restrictions.
+ *
+ * - ::CU_MEM_RANGE_ATTRIBUTE_READ_MOSTLY
+ * - ::CU_MEM_RANGE_ATTRIBUTE_PREFERRED_LOCATION
+ * - ::CU_MEM_RANGE_ATTRIBUTE_ACCESSED_BY
+ * - ::CU_MEM_RANGE_ATTRIBUTE_LAST_PREFETCH_LOCATION
+ *
+ * \param data          - A two-dimensional array containing pointers to memory
+ *                        locations where the result of each attribute query will be written to.
+ * \param dataSizes     - Array containing the sizes of each result
+ * \param attributes    - An array of attributes to query
+ *                        (numAttributes and the number of attributes in this array should match)
+ * \param numAttributes - Number of attributes to query
+ * \param devPtr        - Start of the range to query
+ * \param count         - Size of the range to query
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE
+ * \notefnerr
+ *
+ * \sa ::cuMemRangeGetAttribute, ::cuMemAdvise
+ * ::cuMemPrefetchAsync
+ */
+CUresult CUDAAPI cuMemRangeGetAttributes(void **data, size_t *dataSizes, CUmem_range_attribute *attributes, size_t numAttributes, CUdeviceptr devPtr, size_t count);
+#endif /* __CUDA_API_VERSION >= 8000 */
+
 #if __CUDA_API_VERSION >= 6000
 /**
  * \brief Set attributes on a previously allocated memory region
@@ -7359,7 +7838,7 @@ CUresult CUDAAPI cuPointerGetAttribute(void *data, CUpointer_attribute attribute
  *      See further documentation in the section titled "API synchronization behavior"
  *      to learn more about cases when synchronous memory operations can
  *      exhibit asynchronous behavior.
- *      \p value will be considered as a pointer to an unsigned inteelementwise_2d to which this attribute is to be set.
+ *      \p value will be considered as a pointer to an unsigned integer to which this attribute is to be set.
  *
  * \param value     - Pointer to memory containing the value to be set
  * \param attribute - Pointer attribute to set
@@ -7535,7 +8014,7 @@ CUresult CUDAAPI cuStreamCreateWithPriority(CUstream *phStream, unsigned int fla
  * See ::cuStreamCreateWithPriority for details about priority clamping.
  *
  * \param hStream    - Handle to the stream to be queried
- * \param priority   - Pointer to a signed inteelementwise_2d in which the stream's priority is returned
+ * \param priority   - Pointer to a signed integer in which the stream's priority is returned
  * \return
  * ::CUDA_SUCCESS,
  * ::CUDA_ERROR_DEINITIALIZED,
@@ -7561,7 +8040,7 @@ CUresult CUDAAPI cuStreamGetPriority(CUstream hStream, int *priority);
  * and return the flags in \p flags.
  *
  * \param hStream    - Handle to the stream to be queried
- * \param flags      - Pointer to an unsigned inteelementwise_2d in which the stream's flags are returned
+ * \param flags      - Pointer to an unsigned integer in which the stream's flags are returned
  *                     The value returned in \p flags is a logical 'OR' of all flags that
  *                     were used while creating this stream. See ::cuStreamCreate for the list
  *                     of valid flags
@@ -7716,11 +8195,14 @@ CUresult CUDAAPI cuStreamAddCallback(CUstream hStream, CUstreamCallback callback
  * If the ::CU_MEM_ATTACH_GLOBAL flag is specified, the memory can be accessed
  * by any stream on any device.
  * If the ::CU_MEM_ATTACH_HOST flag is specified, the program makes a guarantee
- * that it won't access the memory on the device from any stream.
- * If the ::CU_MEM_ATTACH_SINGLE flag is specified, the program makes a guarantee
- * that it will only access the memory on the device from \p hStream. It is illegal
- * to attach singly to the NULL stream, because the NULL stream is a virtual global
- * stream and not a specific stream. An error will be returned in this case.
+ * that it won't access the memory on the device from any stream on a device that
+ * has a zero value for the device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS.
+ * If the ::CU_MEM_ATTACH_SINGLE flag is specified and \p hStream is associated with
+ * a device that has a zero value for the device attribute ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS,
+ * the program makes a guarantee that it will only access the memory on the device
+ * from \p hStream. It is illegal to attach singly to the NULL stream, because the
+ * NULL stream is a virtual global stream and not a specific stream. An error will
+ * be returned in this case.
  *
  * When memory is associated with a single stream, the Unified Memory system will
  * allow CPU access to this memory region so long as all operations in \p hStream
@@ -8088,6 +8570,107 @@ CUresult CUDAAPI cuEventDestroy(CUevent hEvent);
  */
 CUresult CUDAAPI cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd);
 
+#if __CUDA_API_VERSION >= 8000
+/**
+ * \brief Wait on a memory location
+ *
+ * Enqueues a synchronization of the stream on the given memory location. Work
+ * ordered after the operation will block until the given condition on the
+ * memory is satisfied. By default, the condition is to wait for
+ * (int32_t)(*addr - value) >= 0, a cyclic greater-or-equal.
+ * Other condition types can be specified via \p flags.
+ *
+ * If the memory was registered via ::cuMemHostRegister(), the device pointer
+ * should be obtained with ::cuMemHostGetDevicePointer(). This function cannot
+ * be used with managed memory (::cuMemAllocManaged).
+ *
+ * On Windows, the device must be using TCC, or the operation is not supported.
+ * See ::cuDeviceGetAttributes().
+ *
+ * \param stream The stream to synchronize on the memory location.
+ * \param addr The memory location to wait on.
+ * \param value The value to compare with the memory location.
+ * \param flags See ::CUstreamWaitValue_flags.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_NOT_SUPPORTED
+ * \notefnerr
+ *
+ * \sa ::cuStreamWriteValue32,
+ * ::cuStreamBatchMemOp,
+ * ::cuMemHostRegister,
+ * ::cuStreamWaitEvent
+ */
+CUresult CUDAAPI cuStreamWaitValue32(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
+
+/**
+ * \brief Write a value to memory
+ *
+ * Write a value to memory. Unless the ::CU_STREAM_WRITE_VALUE_NO_MEMORY_BARRIER
+ * flag is passed, the write is preceded by a system-wide memory fence,
+ * equivalent to a __threadfence_system() but scoped to the stream
+ * rather than a CUDA thread.
+ *
+ * If the memory was registered via ::cuMemHostRegister(), the device pointer
+ * should be obtained with ::cuMemHostGetDevicePointer(). This function cannot
+ * be used with managed memory (::cuMemAllocManaged).
+ *
+ * On Windows, the device must be using TCC, or the operation is not supported.
+ * See ::cuDeviceGetAttribute().
+ *
+ * \param stream The stream to do the write in.
+ * \param addr The device address to write to.
+ * \param value The value to write.
+ * \param flags See ::CUstreamWriteValue_flags.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_NOT_SUPPORTED
+ * \notefnerr
+ *
+ * \sa ::cuStreamWaitValue32,
+ * ::cuStreamBatchMemOp,
+ * ::cuMemHostRegister,
+ * ::cuEventRecord
+ */
+CUresult CUDAAPI cuStreamWriteValue32(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
+
+/**
+ * \brief Batch operations to synchronize the stream via memory operations
+ *
+ * This is a batch version of ::cuStreamWaitValue32() and ::cuStreamWriteValue32().
+ * Batching operations may avoid some performance overhead in both the API call
+ * and the device execution versus adding them to the stream in separate API
+ * calls. The operations are enqueued in the order they appear in the array.
+ *
+ * See ::CUstreamBatchMemOpType for the full set of supported operations, and
+ * ::cuStreamWaitValue32() and ::cuStreamWriteValue32() for details of specific
+ * operations.
+ *
+ * On Windows, the device must be using TCC, or this call is not supported. See
+ * ::cuDeviceGetAttribute().
+ *
+ * \param stream The stream to enqueue the operations in.
+ * \param count The number of operations in the array. Must be less than 256.
+ * \param paramArray The types and parameters of the individual operations.
+ * \param flags Reserved for future expansion; must be 0.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_NOT_SUPPORTED
+ * \notefnerr
+ *
+ * \sa ::cuStreamWaitValue32,
+ * ::cuStreamWriteValue32,
+ * ::cuMemHostRegister
+ */
+CUresult CUDAAPI cuStreamBatchMemOp(CUstream stream, unsigned int count, CUstreamBatchMemOpParams *paramArray, unsigned int flags);
+#endif /* __CUDA_API_VERSION >= 8000 */
+
 /** @} */ /* END CUDA_EVENT */
 
 /**
@@ -8105,7 +8688,7 @@ CUresult CUDAAPI cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUeven
 /**
  * \brief Returns information about a function
  *
- * Returns in \p *pi the inteelementwise_2d value of the attribute \p attrib on the kernel
+ * Returns in \p *pi the integer value of the attribute \p attrib on the kernel
  * given by \p hfunc. The supported attributes are:
  * - ::CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK: The maximum number of threads
  *   per block, beyond which a launch of the function would fail. This number
@@ -8176,8 +8759,8 @@ CUresult CUDAAPI cuFuncGetAttribute(int *pi, CUfunction_attribute attrib, CUfunc
  *
  * The supported cache configurations are:
  * - ::CU_FUNC_CACHE_PREFER_NONE: no preference for shared memory or L1 (default)
- * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larelementwise_2d shared memory and smaller L1 cache
- * - ::CU_FUNC_CACHE_PREFER_L1: prefer larelementwise_2d L1 cache and smaller shared memory
+ * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larger shared memory and smaller L1 cache
+ * - ::CU_FUNC_CACHE_PREFER_L1: prefer larger L1 cache and smaller shared memory
  * - ::CU_FUNC_CACHE_PREFER_EQUAL: prefer equal sized L1 cache and shared memory
  *
  * \param hfunc  - Kernel to configure cache for
@@ -8216,7 +8799,7 @@ CUresult CUDAAPI cuFuncSetCacheConfig(CUfunction hfunc, CUfunc_cache config);
  *
  * Changing the shared memory bank size will not increase shared memory usage
  * or affect occupancy of kernels, but may have major effects on performance. 
- * Larelementwise_2d bank sizes will allow for greater potential bandwidth to shared memory,
+ * Larger bank sizes will allow for greater potential bandwidth to shared memory,
  * but will change what kinds of accesses to shared memory will result in bank 
  * conflicts.
  *
@@ -8492,11 +9075,11 @@ CUresult CUDAAPI cuFuncSetSharedSize(CUfunction hfunc, unsigned int bytes);
 CUresult CUDAAPI cuParamSetSize(CUfunction hfunc, unsigned int numbytes);
 
 /**
- * \brief Adds an inteelementwise_2d parameter to the function's argument list
+ * \brief Adds an integer parameter to the function's argument list
  *
  * \deprecated
  *
- * Sets an inteelementwise_2d parameter that will be specified the next time the
+ * Sets an integer parameter that will be specified the next time the
  * kernel corresponding to \p hfunc will be invoked. \p offset is a byte offset.
  *
  * \param hfunc  - Kernel to add parameter to
@@ -9294,14 +9877,44 @@ CUresult CUDAAPI cuTexRefSetMipmapLevelClamp(CUtexref hTexRef, float minMipmapLe
 CUresult CUDAAPI cuTexRefSetMaxAnisotropy(CUtexref hTexRef, unsigned int maxAniso);
 
 /**
+ * \brief Sets the border color for a texture reference
+ *
+ * Specifies the value of the RGBA color via the \p pBorderColor to the texture reference
+ * \p hTexRef. The color value supports only float type and holds color components in
+ * the following sequence:
+ * pBorderColor[0] holds 'R' component
+ * pBorderColor[1] holds 'G' component
+ * pBorderColor[2] holds 'B' component
+ * pBorderColor[3] holds 'A' component
+ *
+ * Note that the color values can be set only when the Address mode is set to
+ * CU_TR_ADDRESS_MODE_BORDER using ::cuTexRefSetAddressMode.
+ * Applications using integer border color values have to "reinterpret_cast" their values to float.
+ *
+ * \param hTexRef       - Texture reference
+ * \param pBorderColor  - RGBA color
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE
+ *
+ * \sa ::cuTexRefSetAddressMode,
+ * ::cuTexRefGetAddressMode, ::cuTexRefGetBorderColor
+ */
+CUresult CUDAAPI cuTexRefSetBorderColor(CUtexref hTexRef, float *pBorderColor);
+
+/**
  * \brief Sets the flags for a texture reference
  *
  * Specifies optional flags via \p Flags to specify the behavior of data
  * returned through the texture reference \p hTexRef. The valid flags are:
  *
  * - ::CU_TRSF_READ_AS_INTEGER, which suppresses the default behavior of
- *   having the texture promote inteelementwise_2d data to floating point data in the
- *   range [0, 1]. Note that texture with 32-bit inteelementwise_2d format
+ *   having the texture promote integer data to floating point data in the
+ *   range [0, 1]. Note that texture with 32-bit integer format
  *   would not be promoted, regardless of whether or not this
  *   flag is specified;
  * - ::CU_TRSF_NORMALIZED_COORDINATES, which suppresses the 
@@ -9577,6 +10190,33 @@ CUresult CUDAAPI cuTexRefGetMipmapLevelClamp(float *pminMipmapLevelClamp, float 
  * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 CUresult CUDAAPI cuTexRefGetMaxAnisotropy(int *pmaxAniso, CUtexref hTexRef);
+
+/**
+ * \brief Gets the border color used by a texture reference
+ *
+ * Returns in \p pBorderColor, values of the RGBA color used by
+ * the texture reference \p hTexRef.
+ * The color value is of type float and holds color components in
+ * the following sequence:
+ * pBorderColor[0] holds 'R' component
+ * pBorderColor[1] holds 'G' component
+ * pBorderColor[2] holds 'B' component
+ * pBorderColor[3] holds 'A' component
+ *
+ * \param hTexRef  - Texture reference
+ * \param pBorderColor   - Returned Type and Value of RGBA color
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE
+ *
+ * \sa ::cuTexRefSetAddressMode,
+ * ::cuTexRefSetAddressMode, ::cuTexRefSetBorderColor
+ */
+CUresult CUDAAPI cuTexRefGetBorderColor(float *pBorderColor, CUtexref hTexRef); 
 
 /**
  * \brief Gets the flags used by a texture reference
@@ -9860,8 +10500,8 @@ CUresult CUDAAPI cuSurfRefGetArray(CUarray *phArray, CUsurfref hSurfRef);
  *   This is ignored if ::CUDA_RESOURCE_DESC::resType is ::CU_RESOURCE_TYPE_LINEAR.
  *
  * - ::CUDA_TEXTURE_DESC::flags can be any combination of the following:
- *   - ::CU_TRSF_READ_AS_INTEGER, which suppresses the default behavior of having the texture promote inteelementwise_2d data to floating point data in the
- *     range [0, 1]. Note that texture with 32-bit inteelementwise_2d format would not be promoted, regardless of whether or not this flag is specified.
+ *   - ::CU_TRSF_READ_AS_INTEGER, which suppresses the default behavior of having the texture promote integer data to floating point data in the
+ *     range [0, 1]. Note that texture with 32-bit integer format would not be promoted, regardless of whether or not this flag is specified.
  *   - ::CU_TRSF_NORMALIZED_COORDINATES, which suppresses the default behavior of having the texture coordinates range from [0, Dim) where Dim is
  *     the width or height of the CUDA array. Instead, the texture coordinates [0, 1.0) reference the entire breadth of the array dimension; Note
  *     that for CUDA mipmapped arrays, this flag has to be set.
@@ -10138,6 +10778,43 @@ CUresult CUDAAPI cuSurfObjectGetResourceDesc(CUDA_RESOURCE_DESC *pResDesc, CUsur
  */
 CUresult CUDAAPI cuDeviceCanAccessPeer(int *canAccessPeer, CUdevice dev, CUdevice peerDev);
 
+
+/**
+ * \brief Queries attributes of the link between two devices.
+ *
+ * Returns in \p *value the value of the requested attribute \p attrib of the
+ * link between \p srcDevice and \p dstDevice. The supported attributes are:
+ * - ::CU_DEVICE_P2P_ATTRIBUTE_PERFORMANCE_RANK: A relative value indicating the
+ *   performance of the link between two devices.
+ * - ::CU_DEVICE_P2P_ATTRIBUTE_ACCESS_SUPPORTED P2P: 1 if P2P Access is enable.
+ * - ::CU_DEVICE_P2P_ATTRIBUTE_NATIVE_ATOMIC_SUPPORTED: 1 if Atomic operations over
+ *   the link are supported.
+ *
+ * Returns ::CUDA_ERROR_INVALID_DEVICE if \p srcDevice or \p dstDevice are not valid
+ * or if they represent the same device.
+ *
+ * Returns ::CUDA_ERROR_INVALID_VALUE if \p attrib is not valid or if \p value is
+ * a null pointer.
+ *
+ * \param value         - Returned value of the requested attribute
+ * \param attrib        - The requested attribute of the link between \p srcDevice and \p dstDevice.
+ * \param srcDevice     - The source device of the target link.
+ * \param dstDevice     - The destination device of the target link.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_DEVICE,
+ * ::CUDA_ERROR_INVALID_VALUE
+ * \notefnerr
+ *
+ * \sa ::cuCtxEnablePeerAccess,
+ * ::cuCtxDisablePeerAccess,
+ * ::cuCtxCanAccessPeer
+ */
+CUresult CUDAAPI cuDeviceGetP2PAttribute(int* value, CUdevice_P2PAttribute attrib, CUdevice srcDevice, CUdevice dstDevice);
+
 /**
  * \brief Enables direct access to memory allocations in a peer context.
  *
@@ -10150,6 +10827,8 @@ CUresult CUDAAPI cuDeviceCanAccessPeer(int *canAccessPeer, CUdevice dev, CUdevic
  * Note that access granted by this call is unidirectional and that in order to access
  * memory from the current context in \p peerContext, a separate symmetric call 
  * to ::cuCtxEnablePeerAccess() is required.
+ *
+ * There is a system-wide maximum of eight peer connections per device.
  *
  * Returns ::CUDA_ERROR_PEER_ACCESS_UNSUPPORTED if ::cuDeviceCanAccessPeer() indicates
  * that the ::CUdevice of the current context cannot directly access memory
@@ -10559,6 +11238,10 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     #undef cuLaunchKernel
     #undef cuGraphicsMapResources
     #undef cuGraphicsUnmapResources
+    #undef cuMemPrefetchAsync
+    #undef cuStreamWriteValue32
+    #undef cuStreamWaitValue32
+    #undef cuStreamBatchMemOp
 #endif /* __CUDA_API_VERSION_INTERNAL */
 
 #if defined(__CUDA_API_VERSION_INTERNAL) || (__CUDA_API_VERSION >= 4000 && __CUDA_API_VERSION < 6050)
@@ -10785,6 +11468,10 @@ CUresult CUDAAPI cuEventDestroy(CUevent hEvent);
     CUresult CUDAAPI cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, unsigned int sharedMemBytes, CUstream hStream, void **kernelParams, void **extra);
     CUresult CUDAAPI cuGraphicsMapResources(unsigned int count, CUgraphicsResource *resources, CUstream hStream);
     CUresult CUDAAPI cuGraphicsUnmapResources(unsigned int count, CUgraphicsResource *resources, CUstream hStream);
+    CUresult CUDAAPI cuMemPrefetchAsync(CUdeviceptr devPtr, size_t count, CUdevice dstDevice, CUstream hStream);
+    CUresult CUDAAPI cuStreamWriteValue32(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamWaitValue32(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamBatchMemOp(CUstream stream, unsigned int count, CUstreamBatchMemOpParams *paramArray, unsigned int flags);
 #endif
 
 #ifdef __cplusplus
