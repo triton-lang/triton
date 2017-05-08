@@ -13,7 +13,7 @@ ISAAC only requires an NVIDIA GPU with compute-capability > 5.0 and the correspo
 The CUDA SDK is *not* required.
 
 ```
-git clone https://github.com/ptillet/isaac.git
+git clone -b v2.0 https://github.com/ptillet/isaac.git
 mkdir -p isaac/build && cd isaac/build
 cmake ../ && make -j8
 ./examples/bench
