@@ -64,13 +64,13 @@ if __name__ == "__main__":
         model = regression.train(prefix, OpType, X, Y)
         kernels = regression.prune(prefix, OpType, device, model)
         export(database, device, kernels, model, opname)
-        speedups = []
-        for shape in OpType.bench_shapes():
-            cufn = op.cudaGemm if OpType == op.GEMMWrapper else op.cudaConv
-            cuperf = cufn(sc.driver.default_context(), sc.driver.default_stream(), *shape)
-            y, _ = regression.maximize(OpType, device, model, shape, kernels)
-            speedups += [y/cuperf]
-            print(shape, y, cuperf)
-        print(gmean(speedups))
+        #~ speedups = []
+        #~ for shape in OpType.bench_shapes():
+            #~ cufn = op.cudaGemm if OpType == op.GEMMWrapper else op.cudaConv
+            #~ cuperf = cufn(sc.driver.default_context(), sc.driver.default_stream(), *shape)
+            #~ y, _ = regression.maximize(OpType, device, model, shape, kernels)
+            #~ speedups += [y/cuperf]
+            #~ print(shape, y, cuperf)
+        #~ print(gmean(speedups))
         
         
