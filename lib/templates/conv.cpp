@@ -71,7 +71,8 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
     for(size_t i = 0; i < x.size(); ++i)
       x[i] = params[m*x.size() + i];
     DType dtype = (DType)(x[0]);
-    param_t  N = x[1], K = x[2], P = x[3], Q = x[4], C = x[5], R = x[6], S = x[7],
+    //param_t  N = x[1], K = x[2], P = x[3], Q = x[4];
+    param_t C = x[5], R = x[6], S = x[7],
           vec = x[8], bp = x[9], bq = x[10], bn = x[11], bk = x[12], bf_n = x[13],
           ps = x[14], qs = x[15], ns = x[16], ks = x[17], crs_l = x[18],
           crs_s = x[19], cs = x[20], bc = x[21], gridc = x[22];
