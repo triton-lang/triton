@@ -66,7 +66,7 @@ std::ostringstream iss;
 void Conv::check_valid(driver::Device const & device, size_t M, param_t* params, uint8_t* valid){
   std::array<int, 23> x{0};
   for(size_t m = 0; m < M; ++ m){
-//    std::cout << "lol" << std::endl;
+
     //Parameters
     for(size_t i = 0; i < x.size(); ++i)
       x[i] = params[m*x.size() + i];
@@ -76,8 +76,8 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
           ps = x[14], qs = x[15], ns = x[16], ks = x[17], crs_l = x[18],
           crs_s = x[19], cs = x[20], bc = x[21], gridc = x[22];
 
-    std::cout << N << " " << K << " " << P << " " << Q << " " << C << " " << R<< " " << S << " "
-              << vec << " " << bp << " " << bq << " " << bn << " " << bk << " " << bf_n << " " << ps << " " << qs << " " << ns << " " << ks << " " << crs_l << " " << crs_s << " " << cs << " " << bc << " " << gridc << std::endl;
+    //std::cout << N << " " << K << " " << P << " " << Q << " " << C << " " << R<< " " << S << " "
+    //          << vec << " " << bp << " " << bq << " " << bn << " " << bk << " " << bf_n << " " << ps << " " << qs << " " << ns << " " << ks << " " << crs_l << " " << crs_s << " " << cs << " " << bc << " " << gridc << std::endl;
 
 
     //Features
@@ -854,11 +854,6 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& queue, scalar const &
   int32_t pl = bp_*ps_, ql = bq_*qs_, nl = bn_*ns_, kl = bk_*ks_;
   size_t gridP = ceil(P_, pl), gridQ = ceil(Q_, ql), gridN = ceil(N_, nl), gridK = ceil(K_, kl);
   DType alpha_dtype = (dtype_==DOUBLE_TYPE)?DOUBLE_TYPE:FLOAT_TYPE;
-
-//  std::cout << C_ << " " << H_ << " " << W_ << " " << N_ << " " << R_ << " " << S_
-//            << " " << K_ << " " << P_ << " " << Q_ << " " << stride_h_ << " " << stride_w_ << " " << pad_h_ << " " << pad_w_ << std::endl;
-//  std::cout << vec_ << " " << bp_ << " " <<bq_ << " " <<bn_ << " " <<bk_ << " " << bf_n_ << " " <<ps_ << " " <<qs_ << " " <<ns_ << " " <<ks_ << " " <<crs_l_ << " " <<crs_s_ << " " <<cs_ << " " <<bc_ << " " <<gridc_ << std::endl;
-
 
   kernel.setArg(0, size_of(alpha_dtype), alpha.data());
   kernel.setArg(1, size_of(alpha_dtype), beta.data());
