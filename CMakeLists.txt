@@ -3,7 +3,7 @@ project(isaac)
 include(CTest)
 
 #QtCreator: add visibility of headers
-file( GLOB_RECURSE MAKE_HEADERS_VISIBLE_SRC *.cpp *.hpp *.h)
+file( GLOB_RECURSE MAKE_HEADERS_VISIBLE_SRC *.cpp *.hpp *.h *.py)
 add_custom_target( MAKE_HEADERS_VISIBLE SOURCES ${MAKE_HEADERS_VISIBLE_SRC} )
 
 #Default build type
