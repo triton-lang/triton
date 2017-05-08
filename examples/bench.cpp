@@ -18,6 +18,32 @@ double geometric_mean(std::vector<double> const&data){
   return std::exp(logsum/data.size());
 }
 
+void handle_misusage(){
+  std::cerr << "Usage : blas-bench [--dtype {float16, float32, float64}]" << std::endl;
+  std::cerr << "--dtype: data-type to benchmark (default = float32)" << std::endl;
+  std::cerr << "--help: display this message" << std::endl;
+  exit(EXIT_FAILURE);
+}
+
+std::string getopt(std::vector<std::string> const & args,
+            std::string const & key,
+            std::vector<std::string> const & set = {},
+            std::string dft = "")
+{
+  auto it = std::find(args.begin(), args.end(), key);
+  if(it==args.end()){
+    if(dft.empty())
+      handle_misusage();
+    return dft;
+  }
+  auto next = it + 1;
+  if(next==args.end() || next->compare(0, 2, "--")==0)
+    handle_misusage();
+  if(set.size() && std::find(set.begin(), set.end(), *next)==set.end())
+    handle_misusage();
+  return *next;
+}
+
 void print_results_header(std::vector<std::string> sections){
     std::cout << color_stream(ITALIC) << color_stream(BOLD) ;
     std::copy(sections.begin(), sections.end(), std::ostream_iterator<std::string>(std::cout, "\t"));
@@ -42,14 +68,22 @@ void print_results(std::vector<double> const & times, std::vector<std::string> c
 }
 
 
-int main(){
+int main(int argc, char* argv[])
+{
+  std::vector<std::string> args(argv, argv + argc);
   std::cout << std::fixed << std::setprecision(2);
-  auto ctx = drv::backend::contexts::get_default();
-  drv::Stream stream(ctx);
-  sc::DType dtype = sc::FLOAT_TYPE;
-  int32_t dtsize = sc::size_of(dtype);
-  drv::Device const & device = drv::backend::contexts::get_default().device();
 
+  //Get dtype
+  static std::map<std::string, sc::DType> sc_dtype = {{"float16", sc::HALF_TYPE}, {"float32", sc::FLOAT_TYPE}, {"float64", sc::DOUBLE_TYPE}};
+  sc::DType dtype = sc_dtype[getopt(args, "--dtype", {"float16", "float32", "float64"}, "float32")];
+  int32_t dtsize = sc::size_of(dtype);
+
+  //Get device
+  auto ctx = drv::backend::contexts::get_default();
+  drv::Device const & device = drv::backend::contexts::get_default().device();
+  drv::Stream stream(ctx);
+
+  //Benchmark convolution
   {
     typedef std::tuple<param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t> conv_tuple;
     std::vector<conv_tuple> shapes;
@@ -117,7 +151,7 @@ int main(){
     std::cout << std::endl;
   }
 
-  //GEMM
+  //Benchmark GEMM
   {
     typedef std::tuple<sc::IsaacOperation_t, sc::IsaacOperation_t, param_t, param_t, param_t> gemm_tuple;
     std::vector<gemm_tuple> shapes;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8.7)
-project(isaac-research)
+project(isaac)
 include(CTest)
 
 #QtCreator: add visibility of headers
