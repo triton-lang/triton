@@ -33,11 +33,9 @@ namespace driver
 {
 
 // Device
-class Device: public Handle<CUdevice>
+class Device: public HandleInterface<Device, CUdevice>
 {
 public:
-  typedef Handle<CUdevice> base_type;
-
   //Supported architectures
   enum class Architecture
   {
@@ -64,9 +62,10 @@ private:
   inline nvmlDevice_t nvml_device() const;
 
 public:
-  using base_type::base_type;
+  Device(CUdevice cu = CUdevice(), bool take_ownership = true): cu_(cu, take_ownership){}
   //Accessors
   Architecture architecture() const;
+  Handle<CUdevice> const & cu() const;
   //Informations
   std::string infos() const;
   size_t address_bits() const;
@@ -86,6 +85,8 @@ public:
   size_t max_sm_clock() const;
   size_t max_mem_clock() const;
 
+private:
+  Handle<CUdevice> cu_;
 };
 
 }

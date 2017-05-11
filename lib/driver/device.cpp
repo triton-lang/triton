@@ -176,6 +176,8 @@ std::string Device::infos() const{
   return oss.str();
 }
 
+Handle<CUdevice> const & Device::cu() const
+{ return cu_; }
 
 }
 

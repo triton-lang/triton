@@ -34,14 +34,14 @@ namespace driver
 {
 
 
-Buffer::Buffer(Context const & /*context*/, size_t size) : base_type(true), size_(size){
-  dispatch::cuMemAlloc(&*cu_, size);
-}
+Buffer::Buffer(Context const & /*context*/, size_t size) : size_(size)
+{ dispatch::cuMemAlloc(&*cu_, size); }
 
-void Buffer::set_zero(Stream const & queue){
-  dispatch::cuMemsetD8Async(*cu_, 0, size_, queue);
-}
+void Buffer::set_zero(Stream const & queue)
+{ dispatch::cuMemsetD8Async(*cu_, 0, size_, queue); }
 
+Handle<CUdeviceptr> const & Buffer::cu() const
+{ return cu_; }
 
 }
 

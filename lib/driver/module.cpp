@@ -47,7 +47,7 @@ CUjit_target_enum cutarget(Device::Architecture arch){
   }
 }
 
-Module::Module(Context const & context, std::string const & source, bool is_ir) : base_type(true), context_(context), source_(source){
+Module::Module(Context const & context, std::string const & source, bool is_ir) : context_(context), source_(source){
   //PTX passed directly
   if(is_ir){
     CUjit_option opt[] = {CU_JIT_TARGET, CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
@@ -93,6 +93,8 @@ Module::Module(Context const & context, std::string const & source, bool is_ir) 
 Context const & Module::context() const
 { return context_; }
 
+Handle<CUmodule> const & Module::cu() const
+{ return cu_; }
 
 }
 

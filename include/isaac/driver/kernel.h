@@ -37,21 +37,22 @@ namespace driver
 class Buffer;
 
 // Kernel
-class Kernel: public Handle<CUfunction>
+class Kernel: public HandleInterface<Kernel, CUfunction>
 {
-public:
-  typedef Handle<CUfunction> base_type;
-
 public:
   //Constructors
   Kernel(Module const & program, const char * name);
+  //Accessors
+  Handle<CUfunction> const & cu() const;
   //Arguments setters
   void setArg(unsigned int index, std::size_t size, void* ptr);
   void setArg(unsigned int index, Buffer const &);
   template<class T> void setArg(unsigned int index, T value) { setArg(index, sizeof(T), (void*)&value); }
   //Arguments getters
   void* const* cu_params() const;
+
 private:
+  Handle<CUfunction> cu_;
   Module program_;
   unsigned int address_bits_;
   std::vector<std::shared_ptr<void> >  cu_params_store_;

@@ -36,15 +36,15 @@ namespace driver
 
 class Device;
 
-class Platform: public Handle<cu_platform>
+class Platform
 {
-  typedef Handle<cu_platform> base_type;
 public:
-  using base_type::base_type;
   //Accessors
   std::string name() const;
   std::string version() const;
   std::vector<Device> devices() const;
+private:
+  Handle<cu_platform> cu_;
 };
 
 }
