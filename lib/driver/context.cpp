@@ -59,10 +59,10 @@ CUdevice Context::device(CUcontext){
   return res;
 }
 
-Context::Context(CUcontext const & context, bool take_ownership) : base_type(context, take_ownership), device_(device(context), false), cache_path_(get_cache_path())
-{}
+Context::Context(CUcontext context, bool take_ownership): cu_(context, take_ownership), device_(device(context), false), cache_path_(get_cache_path())
+{ }
 
-Context::Context(Device const & device) : base_type(true), device_(device), cache_path_(get_cache_path())
+Context::Context(Device const & device): device_(device), cache_path_(get_cache_path())
 { dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, (CUdevice)device); }
 
 Device const & Context::device() const
@@ -71,6 +71,8 @@ Device const & Context::device() const
 std::string const & Context::cache_path() const
 { return cache_path_; }
 
+Handle<CUcontext> const & Context::cu() const
+{ return cu_; }
 
 }
 }

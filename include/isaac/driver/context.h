@@ -28,27 +28,26 @@
 
 namespace isaac
 {
-
 namespace driver
 {
 
-class Context: public Handle<CUcontext>
+class Context: public HandleInterface<Context, CUcontext>
 {
-  typedef Handle<CUcontext> base_type;
-
 private:
   static std::string get_cache_path();
   static CUdevice device(CUcontext);
 
 public:
   //Constructors
-  explicit Context(CUcontext const & context, bool take_ownership = true);
+  explicit Context(CUcontext context = CUcontext(), bool take_ownership = true);
   explicit Context(Device const & device);
   //Accessors
   Device const & device() const;
   std::string const & cache_path() const;
+  Handle<CUcontext> const & cu() const;
 
 private:
+  Handle<CUcontext> cu_;
   Device device_;
   std::string cache_path_;
 };

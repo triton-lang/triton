@@ -40,15 +40,14 @@ class Range;
 class Buffer;
 
 // Command Queue
-class Stream: public  Handle<CUstream>
+class Stream: public HandleInterface<Stream, CUstream>
 {
-  typedef Handle<CUstream> base_type;
-
 public:
   //Constructors
-  using base_type::base_type;
+  Stream(CUstream stream, bool take_ownership = true);
   Stream(Context const & context);
   //Accessors
+  Handle<CUstream> const & cu() const;
   Context const & context() const;
   //Synchronize
   void synchronize();
@@ -59,6 +58,7 @@ public:
 
 private:
   Context context_;
+  Handle<CUstream> cu_;
 };
 
 

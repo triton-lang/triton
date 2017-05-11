@@ -36,15 +36,15 @@ namespace driver
 class Context;
 class Device;
 
-class Module: public Handle<CUmodule>
+class Module: public HandleInterface<Module, CUmodule>
 {
-  typedef Handle<CUmodule> base_type;
-
 public:
   Module(Context const & context, std::string const & source, bool is_ir = true);
   Context const & context() const;
+  Handle<CUmodule> const & cu() const;
 
 private:
+  Handle<CUmodule> cu_;
   Context context_;
   std::string source_;
 };

@@ -43,35 +43,15 @@ inline void _delete(cu_platform){}
 
 //Constructor
 template<class CUType>
-Handle<CUType>::Handle(CUType cu, bool take_ownership): cu_(new CUType(cu)), has_ownership_(take_ownership)
+Handle<CUType>::Handle(CUType cu, bool take_ownership): h_(new CUType(cu)), has_ownership_(take_ownership)
 { }
 
-template<class CUType>
-Handle<CUType>::Handle(bool take_ownership): has_ownership_(take_ownership)
-{ cu_.reset(new CUType()); }
-
-//Accessors
-template<class CUType>
-bool Handle<CUType>::operator==(Handle const & other) const
-{ return *cu_==*other.cu_; }
-
-template<class CUType>
-bool Handle<CUType>::operator!=(Handle const & other) const
-{ return !((*this)==other); }
-
-template<class CUType>
-bool Handle<CUType>::operator<(Handle const & other) const
-{ return (*cu_)<(*other.cu_); }
 
 template<class CUType>
 Handle<CUType>::~Handle(){
-  if(has_ownership_ && cu_ && cu_.unique() && *cu_)
-    _delete(*cu_);
+  if(has_ownership_ && h_ && h_.unique() && *h_)
+    _delete(*h_);
 }
-
-template<class CUType>
-Handle<CUType>::operator CUType() const
-{ return *cu_; }
 
 template class Handle<CUdeviceptr>;
 template class Handle<CUstream>;

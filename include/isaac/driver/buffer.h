@@ -33,16 +33,15 @@ namespace driver
 class Stream;
 
 // Buffer
-class Buffer: public Handle<CUdeviceptr>
+class Buffer: public HandleInterface<Buffer, CUdeviceptr>
 {
-  typedef Handle<CUdeviceptr> base_type;
-
 public:
-  using base_type::base_type;
   Buffer(Context const & context, size_t size);
   void set_zero(Stream const & queue);
+  Handle<CUdeviceptr> const & cu() const;
 
 private:
+  Handle<CUdeviceptr> cu_;
   size_t size_;
 };
 

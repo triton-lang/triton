@@ -38,11 +38,11 @@ namespace isaac
 namespace driver
 {
 
-Stream::Stream(Context const & context): base_type(true), context_(context){
-//    dispatch::cuCtxPushCurrent_v2(context);
-    dispatch::cuStreamCreate(&*cu_, 0);
-//    dispatch::cuCtxPopCurrent_v2(NULL);
-}
+Stream::Stream(CUstream stream, bool take_ownership): cu_(stream, take_ownership)
+{}
+
+Stream::Stream(Context const & context): context_(context), cu_(CUstream(), true)
+{ dispatch::cuStreamCreate(&*cu_, 0); }
 
 void Stream::synchronize()
 { dispatch::cuStreamSynchronize(*cu_); }
@@ -71,6 +71,9 @@ void Stream::read(Buffer const & buffer, bool blocking, std::size_t offset, std:
   else
     dispatch::cuMemcpyDtoHAsync(ptr, buffer + offset, size, *cu_);
 }
+
+Handle<CUstream> const & Stream::cu() const
+{ return cu_; }
 
 }
 

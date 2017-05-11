@@ -42,50 +42,37 @@ struct cu_event_t{
 };
 
 struct cu_platform{
-  cu_platform() : status_(dispatch::cuInit(0)) {}
+  cu_platform() : status_(dispatch::cuInit(0)) { }
   operator bool() const { return status_; }
 private:
   CUresult status_;
 };
 
-template<typename T> struct remove_class { };
-template<typename C, typename R, typename... A>
-struct remove_class<R(C::*)(A...)> { using type = R(A...); };
-template<typename C, typename R, typename... A>
-struct remove_class<R(C::*)(A...) const> { using type = R(A...); };
-template<typename C, typename R, typename... A>
-struct remove_class<R(C::*)(A...) volatile> { using type = R(A...); };
-template<typename C, typename R, typename... A>
-struct remove_class<R(C::*)(A...) const volatile> { using type = R(A...); };
-
-template<typename T>
-struct get_signature_impl { using type = typename remove_class<
-    decltype(&std::remove_reference<T>::type::operator())>::type; };
-template<typename R, typename... A>
-struct get_signature_impl<R(A...)> { using type = R(A...); };
-template<typename R, typename... A>
-struct get_signature_impl<R(&)(A...)> { using type = R(A...); };
-template<typename R, typename... A>
-struct get_signature_impl<R(*)(A...)> { using type = R(A...); };
-template<typename T> using get_signature = typename get_signature_impl<T>::type;
+template<class T, class CUType>
+class HandleInterface{
+public:
+    //Accessors
+    operator CUType() const { return *(((T*)this)->cu().h_); }
+    //Comparison
+    bool operator==(HandleInterface const & y) { return (CUType)(*this) == (CUType)(y); }
+    bool operator!=(HandleInterface const & y) { return (CUType)(*this) != (CUType)(y); }
+    bool operator<(HandleInterface const & y) { return (CUType)(*this) < (CUType)(y); }
+};
 
 template<class CUType>
-class Handle
-{
+class Handle{
+public:
+  template<class, class> friend class HandleInterface;
 public:
   //Constructors
-  Handle(CUType cu, bool take_ownership = true);
-  Handle(bool take_ownership = true);
+  Handle(CUType cu = CUType(), bool take_ownership = true);
   ~Handle();
-  //Comparison
-  bool operator==(Handle const & other) const;
-  bool operator!=(Handle const & other) const;
-  bool operator<(Handle const & other) const;
-  //Accessors
-  operator CUType() const;
+  CUType& operator*() { return *h_; }
+  CUType const & operator*() const { return *h_; }
+  CUType* operator->() const { return h_.get(); }
 
 protected:
-  std::shared_ptr<CUType> cu_;
+  std::shared_ptr<CUType> h_;
   bool has_ownership_;
 };
 
