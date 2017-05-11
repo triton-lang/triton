@@ -40,19 +40,20 @@ template<typename... Args> void cublasGemm_impl(double, Args... args){ driver::d
 
 
 template<class cuType>
-inline void cublasGemm_dispatch(Context const & ctx, Stream& queue, char AT, char BT, int32_t M, int32_t N, int32_t K, void* alpha, Buffer const & A, int32_t lda, Buffer const & B, int32_t ldb, void* beta, Buffer& C, int32_t ldc){
+inline void cublasGemm_dispatch(Stream& stream, char AT, char BT, int32_t M, int32_t N, int32_t K, void* alpha, Buffer const & A, int32_t lda, Buffer const & B, int32_t ldb, void* beta, Buffer& C, int32_t ldc){
   auto cu_trans = [](char xt) { return (xt=='N')?CUBLAS_OP_N:CUBLAS_OP_T; };
-  cublasHandle_t handle = dispatch::cublasHandle(ctx);
-  dispatch::cublasSetStream_v2(handle, (CUstream)queue);
+  cublasHandle_t handle = dispatch::cublasHandle(stream.context());
+  dispatch::cublasSetStream_v2(handle, (CUstream)stream);
   CUdeviceptr cuA = A, cuB = B, cuC = C;
   cublasGemm_impl(cuType(), handle, cu_trans(AT), cu_trans(BT), M, N, K, (cuType*)alpha, (const cuType*)cuA, lda, (const cuType*)cuB, ldb, (cuType*)beta, (cuType*)cuC, ldc);
 }
 
-inline void cublasGemm(DType dtype, Context const & ctx,  Stream& queue, char AT, char BT, int32_t M, int32_t N, int32_t K, scalar alpha, Buffer const & A, int32_t lda, Buffer const & B, int32_t ldb, scalar beta, Buffer& C, int32_t ldc){
+inline void cublasGemm(DType dtype, Stream& stream, char AT, char BT, int32_t M, int32_t N, int32_t K, scalar alpha, Buffer const & A, int32_t lda, Buffer const & B, int32_t ldb, scalar beta, Buffer& C, int32_t ldc){
+  ContextSwitcher ctx_switch(stream.context());
   switch(dtype){
-    case HALF_TYPE: return cublasGemm_dispatch<half>(ctx, queue, AT, BT, M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
-    case FLOAT_TYPE: return cublasGemm_dispatch<float>(ctx, queue, AT, BT, M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
-    case DOUBLE_TYPE: return cublasGemm_dispatch<double>(ctx, queue, AT, BT, M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
+    case HALF_TYPE: return cublasGemm_dispatch<half>(stream, AT, BT, M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
+    case FLOAT_TYPE: return cublasGemm_dispatch<float>(stream, AT, BT, M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
+    case DOUBLE_TYPE: return cublasGemm_dispatch<double>(stream, AT, BT, M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
     default: throw;
   }
 }
@@ -66,12 +67,19 @@ inline cudnnDataType_t cudnnDtype(DType dtype){
   throw;
 }
 
-inline void cudnnConv(DType dtype, Context const & ctx, Stream& queue, int32_t H, int32_t W, int32_t N, int32_t K, int32_t P, int32_t Q, int32_t C, int32_t R, int32_t S,
+inline void cudnnConv(DType dtype, Stream& stream, int32_t H, int32_t W, int32_t N, int32_t K, int32_t P, int32_t Q, int32_t C, int32_t R, int32_t S,
                       int32_t pad_h, int32_t pad_w, int32_t stride_h, int32_t stride_w, scalar alpha, Buffer const & I, Buffer const & F, scalar beta, Buffer const & O){
+  driver::Context const & ctx = stream.context();
+
+//  ContextSwitcher switch_ctx(ctx);
+//  CUcontext cuctx;
+  dispatch::cuCtxSetCurrent(ctx);
+//  std::cout << cuctx << " " << CUcontext(ctx) << std::endl;
+
   cudnnHandle_t handle = dispatch::cudnnHandle(ctx);
   cudnnDataType_t cutype = cudnnDtype(dtype);
 
-  dispatch::cudnnSetStream(handle, (CUstream)queue);
+  dispatch::cudnnSetStream(handle, (CUstream)stream);
   cudnnTensorDescriptor_t tO, tI;
   cudnnFilterDescriptor_t tF;
   cudnnConvolutionDescriptor_t conv;

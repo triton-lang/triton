@@ -176,6 +176,7 @@ CUDA_DEFINE2(CUresult, cuMemAlloc_v2, CUdeviceptr*, size_t)
 CUDA_DEFINE3(CUresult, cuPointerGetAttribute, void*, CUpointer_attribute, CUdeviceptr)
 CUDA_DEFINE1(CUresult, cuCtxGetDevice, CUdevice*)
 CUDA_DEFINE1(CUresult, cuCtxGetCurrent, CUcontext*)
+CUDA_DEFINE1(CUresult, cuCtxSetCurrent, CUcontext)
 CUDA_DEFINE4(CUresult, cuMemsetD8Async, CUdeviceptr, unsigned char, size_t, CUstream)
 CUDA_DEFINE1(CUresult, cuCtxPushCurrent_v2, CUcontext)
 CUDA_DEFINE1(CUresult, cuCtxPopCurrent_v2, CUcontext*)
@@ -260,6 +261,7 @@ void* dispatch::cudnn_;
 
 //CUDA
 void* dispatch::cuCtxGetCurrent_;
+void* dispatch::cuCtxSetCurrent_;
 void* dispatch::cuCtxDestroy_v2_;
 void* dispatch::cuEventCreate_;
 void* dispatch::cuDeviceGet_;

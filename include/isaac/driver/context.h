@@ -52,6 +52,14 @@ private:
   std::string cache_path_;
 };
 
+class ContextSwitcher{
+public:
+    ContextSwitcher(Context const & ctx);
+    ~ContextSwitcher();
+private:
+    Context const & ctx_;
+};
+
 }
 }
 

@@ -42,15 +42,22 @@ Stream::Stream(CUstream stream, bool take_ownership): cu_(stream, take_ownership
 {}
 
 Stream::Stream(Context const & context): context_(context), cu_(CUstream(), true)
-{ dispatch::cuStreamCreate(&*cu_, 0); }
+{
+  ContextSwitcher ctx_switch(context_);
+  dispatch::cuStreamCreate(&*cu_, 0);
+}
 
 void Stream::synchronize()
-{ dispatch::cuStreamSynchronize(*cu_); }
+{
+  ContextSwitcher ctx_switch(context_);
+  dispatch::cuStreamSynchronize(*cu_);
+}
 
 Context const & Stream::context() const
 { return context_; }
 
 void Stream::enqueue(Kernel const & kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event){
+  ContextSwitcher ctx_switch(context_);
   if(event)
     dispatch::cuEventRecord(((cu_event_t)*event).first, *cu_);
   dispatch::cuLaunchKernel(kernel, grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_,(void**)kernel.cu_params(), NULL);

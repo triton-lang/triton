@@ -21,6 +21,7 @@
 */
 
 #include <iostream>
+#include <cassert>
 
 #include "isaac/driver/context.h"
 #include "isaac/driver/module.h"
@@ -63,7 +64,10 @@ Context::Context(CUcontext context, bool take_ownership): cu_(context, take_owne
 { }
 
 Context::Context(Device const & device): device_(device), cache_path_(get_cache_path())
-{ dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, (CUdevice)device); }
+{
+  dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, (CUdevice)device);
+  dispatch::cuCtxPopCurrent_v2(NULL);
+}
 
 Device const & Context::device() const
 { return device_; }
@@ -73,6 +77,19 @@ std::string const & Context::cache_path() const
 
 Handle<CUcontext> const & Context::cu() const
 { return cu_; }
+
+/* Context Switcher */
+ContextSwitcher::ContextSwitcher(Context const & ctx): ctx_(ctx)
+{ dispatch::cuCtxPushCurrent_v2(ctx_); }
+
+ContextSwitcher::~ContextSwitcher()
+{
+  CUcontext tmp;
+  dispatch::cuCtxPopCurrent_v2(&tmp);
+  assert(tmp==(CUcontext)ctx_ && "Switching back to invalid context!");
+}
+
+
 
 }
 }

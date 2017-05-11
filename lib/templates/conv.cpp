@@ -525,7 +525,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << std::endl;
   iss << "  // Thread ID" << std::endl;
   iss << "  mov.u32 %idpqn, %tid.x;" << std::endl;
-  iss << format("  mov.u32 %idk, %tid.y;") << std::endl;  
+  iss << format("  mov.u32 %idk, %tid.y;") << std::endl;
   iss << "  mov.u32 %idc, %tid.z;" << std::endl;
   iss << format("  mad.lo.u32 %idkpqn, %idk, {}, %idpqn;", bpqn) << std::endl;
   iss << format("  div.u32 %idpq, %idpqn, {};", bn_) << std::endl;
@@ -841,6 +841,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     inc_k += step_k;
   }
   iss << "}" << std::endl;
+//  std::cout << iss.str() << std::endl;
   return iss.str();
 }
 

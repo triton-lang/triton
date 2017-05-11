@@ -52,25 +52,25 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
   for(size_t i = 0; i < iA.size(); ++i) iA[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < iB.size(); ++i) iB[i] = (float)rand()/RAND_MAX;
 
-  drv::Stream queue(ctx);
-  queue.write(C, true, 0, M*N*dtsize, iC.data());
-  queue.write(A, true, 0, M*K*dtsize, iA.data());
-  queue.write(B, true, 0, K*N*dtsize, iB.data());
+  drv::Stream stream(ctx);
+  stream.write(C, true, 0, M*N*dtsize, iC.data());
+  stream.write(A, true, 0, M*K*dtsize, iA.data());
+  stream.write(B, true, 0, K*N*dtsize, iB.data());
 
   //Ground result (cuBLAS)
   char cuAT = (AT==sc::ISAAC_OP_T)?'T':'N';
   char cuBT = (BT==sc::ISAAC_OP_T)?'T':'N';
-  sc::driver::cublasGemm(dtype, ctx, queue, cuAT, cuBT, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc);
+  sc::driver::cublasGemm(dtype, stream, cuAT, cuBT, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc);
   std::vector<DTYPE> rC(M*N);
-  queue.read(C, true, 0, M*N*dtsize, (void*)rC.data());
-  queue.write(C, true, 0, M*N*dtsize, iC.data());
+  stream.read(C, true, 0, M*N*dtsize, (void*)rC.data());
+  stream.write(C, true, 0, M*N*dtsize, iC.data());
 
   //ISAAC result
   std::vector<DTYPE> hC(M*N);
 
   //Test selected profile
-  sc::GEMM(ctx.device(), queue, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, alpha, A, B, beta, C);
-  queue.read(C, true, 0, M*N*dtsize, (void*)hC.data());
+  sc::GEMM(ctx.device(), stream, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, alpha, A, B, beta, C);
+  stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
   if(!is_correct(hC, rC, max_rounding_error(DTYPE(K))))
     exit(EXIT_FAILURE);
 
@@ -93,11 +93,11 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
     drv::Kernel kernel(program, "gemm");
 
     //Launch
-    gemm.enqueue(kernel, queue, alpha, A, B, beta, C);
-    queue.synchronize();
+    gemm.enqueue(kernel, stream, alpha, A, B, beta, C);
+    stream.synchronize();
 
     //Test
-    queue.read(C, true, 0, M*N*dtsize, (void*)hC.data());
+    stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
     size_t depth = x[11]*x[12]*x[13];
     double eps = max_rounding_error(DTYPE(K/depth))*depth;
     if(!is_correct(hC, rC, eps))

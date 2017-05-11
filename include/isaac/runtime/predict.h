@@ -105,14 +105,14 @@ private:
 class ConvProfile: public Profile{
 public:
   ConvProfile(u_char* data);
-  templates::Conv predict(driver::Device const & device, DType dtype, param_t C, param_t H, param_t W, param_t N, param_t K, param_t P, param_t Q, param_t R, param_t S,
+  templates::Conv predict(driver::Stream& stream, driver::Device const & device, DType dtype, param_t C, param_t H, param_t W, param_t N, param_t K, param_t P, param_t Q, param_t R, param_t S,
                         param_t pad_h, param_t pad_w, param_t stride_h, param_t stride_w);
 };
 
 class GEMMProfile: public Profile{
 public:
   GEMMProfile(u_char* data);
-  templates::GEMM predict(driver::Device const & device, DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
+  templates::GEMM predict(driver::Stream& stream, driver::Device const & device, DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
                           param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc);
 };
 

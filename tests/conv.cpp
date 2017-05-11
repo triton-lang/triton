@@ -88,7 +88,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t H,
   stream.write(O, true, 0, iO.size()*dtsize, iO.data());
   stream.write(I, true, 0, iI.size()*dtsize, iI_cudnn.data());
   stream.write(F, true, 0, iF.size()*dtsize, iF_cudnn.data());
-  sc::driver::cudnnConv(dtype, ctx, stream, H, W, N, K, P, Q, C, R, S, pad_h, pad_w, stride_h, stride_w, alpha, I, F, beta, O);
+  sc::driver::cudnnConv(dtype, stream, H, W, N, K, P, Q, C, R, S, pad_h, pad_w, stride_h, stride_w, alpha, I, F, beta, O);
   std::vector<DTYPE> rO_cudnn(iO.size());
   std::vector<DTYPE> rO(iO.size());
   stream.read(O, true, 0, rO_cudnn.size()*dtsize, (void*)rO_cudnn.data());

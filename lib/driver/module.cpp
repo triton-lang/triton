@@ -48,16 +48,19 @@ CUjit_target_enum cutarget(Device::Architecture arch){
 }
 
 Module::Module(Context const & context, std::string const & source, bool is_ir) : context_(context), source_(source){
+   ContextSwitcher ctx_switch(context_);
+
   //PTX passed directly
   if(is_ir){
-    CUjit_option opt[] = {CU_JIT_TARGET, CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
+    CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
     unsigned int errbufsize = 8096;
     std::string errbuf(errbufsize, 0);
-    CUjit_target_enum target = cutarget(context_.device().architecture());
-    void* optval[] = {reinterpret_cast<void*>(target), reinterpret_cast<void*>(errbufsize), (void*)errbuf.data()};
+    //CUjit_target_enum target = cutarget(context.device().architecture());
+    void* optval[] = {(void*)(uintptr_t)errbufsize, (void*)errbuf.data()};
     try{
-      dispatch::cuModuleLoadDataEx(&*cu_, source.data(), 3, opt, optval);
+      dispatch::cuModuleLoadDataEx(&*cu_, source.data(), 2, opt, optval);
     }catch(exception::cuda::base const &){
+      std::cerr << "Compilation Failed! Log: " << std::endl;
       std::cerr << errbuf << std::endl;
       throw;
     }
