@@ -70,11 +70,7 @@ inline cudnnDataType_t cudnnDtype(DType dtype){
 inline void cudnnConv(DType dtype, Stream& stream, int32_t H, int32_t W, int32_t N, int32_t K, int32_t P, int32_t Q, int32_t C, int32_t R, int32_t S,
                       int32_t pad_h, int32_t pad_w, int32_t stride_h, int32_t stride_w, scalar alpha, Buffer const & I, Buffer const & F, scalar beta, Buffer const & O){
   driver::Context const & ctx = stream.context();
-
-//  ContextSwitcher switch_ctx(ctx);
-//  CUcontext cuctx;
-  dispatch::cuCtxSetCurrent(ctx);
-//  std::cout << cuctx << " " << CUcontext(ctx) << std::endl;
+  ContextSwitcher switch_ctx(ctx);
 
   cudnnHandle_t handle = dispatch::cudnnHandle(ctx);
   cudnnDataType_t cutype = cudnnDtype(dtype);
@@ -97,7 +93,6 @@ inline void cudnnConv(DType dtype, Stream& stream, int32_t H, int32_t W, int32_t
   int stride[] = {stride_h, stride_w};
   int upscale[] = {1, 1};
   dispatch::cudnnSetConvolutionNdDescriptor(conv, 2, pad, stride, upscale, CUDNN_CROSS_CORRELATION, cutype);
-//  dispatch::cudnnSetConvolution2dDescriptor(conv, pad_h, pad_w, stride_h, stride_w, 1, 1, CUDNN_CROSS_CORRELATION);
 
 //  dispatch::cudnnGetConvolutionForwardAlgorithm(handle, tI, tF, conv, tO, CUDNN_CONVOLUTION_FWD_SPECIFY_WORKSPACE_LIMIT, 1024*1024, &algo);
   algo = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
