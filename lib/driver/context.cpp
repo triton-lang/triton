@@ -80,7 +80,9 @@ Handle<CUcontext> const & Context::cu() const
 
 /* Context Switcher */
 ContextSwitcher::ContextSwitcher(Context const & ctx): ctx_(ctx)
-{ dispatch::cuCtxPushCurrent_v2(ctx_); }
+{
+  dispatch::cuCtxPushCurrent_v2(ctx_);
+}
 
 ContextSwitcher::~ContextSwitcher()
 {
