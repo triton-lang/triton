@@ -27,11 +27,11 @@
 #include <dlfcn.h>
 
 //CUDA Backend
-#include "isaac/driver/external/CUDA/cuda.h"
-#include "isaac/driver/external/CUDA/nvrtc.h"
-#include "isaac/driver/external/CUDA/cublas.h"
-#include "isaac/driver/external/CUDA/cudnn.h"
-#include "isaac/driver/external/CUDA/nvml.h"
+#include "isaac/external/CUDA/cuda.h"
+#include "isaac/external/CUDA/nvrtc.h"
+#include "isaac/external/CUDA/cublas.h"
+#include "isaac/external/CUDA/cudnn.h"
+#include "isaac/external/CUDA/nvml.h"
 
 //Exceptions
 #include <iostream>
@@ -86,6 +86,8 @@ public:
 
   //CUDA
   static CUresult cuCtxGetCurrent(CUcontext *pctx);
+  static CUresult cuCtxSetCurrent(CUcontext ctx);
+
   static CUresult cuCtxDestroy_v2(CUcontext ctx);
   static CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags);
   static CUresult cuDeviceGet(CUdevice *device, int ordinal);
@@ -164,6 +166,7 @@ private:
 
   //CUDA
   static void* cuCtxGetCurrent_;
+  static void* cuCtxSetCurrent_;
   static void* cuCtxDestroy_v2_;
   static void* cuEventCreate_;
   static void* cuDeviceGet_;

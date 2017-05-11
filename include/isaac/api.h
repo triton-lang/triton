@@ -45,7 +45,7 @@ void GEMM(driver::Device const & device, driver::Stream & stream,
   static std::function<value_type()> compile = [&](){
     //Fetch profile
     runtime::GEMMProfile* profile = (runtime::GEMMProfile*)runtime::database.at({device.architecture(), runtime::GEMM}).get();
-    templates::GEMM generator = profile->predict(device, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc);
+    templates::GEMM generator = profile->predict(stream, device, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc);
     //Execute
     std::string src = generator.dump(device, "gemm");
     driver::Module module(stream.context(), src);
@@ -69,14 +69,13 @@ void CONV(driver::Device const & device, driver::Stream & stream,
   static std::function<value_type()> compile = [&](){
     //Fetch profile
     runtime::ConvProfile* profile = (runtime::ConvProfile*)runtime::database.at({device.architecture(), runtime::CONV}).get();
-    templates::Conv generator = profile->predict(device, dtype, C, H, W, N, K, P, Q, R, S, pad_h, pad_w, stride_h, stride_w);
+    templates::Conv generator = profile->predict(stream, device, dtype, C, H, W, N, K, P, Q, R, S, pad_h, pad_w, stride_h, stride_w);
     //Execute
-    std::string src = generator.dump(device, "fconv");
+    std::string src = generator.dump(device, "conv");
     driver::Module module(stream.context(), src);
-    return value_type(std::make_shared<templates::Conv>(generator), std::make_shared<driver::Kernel>(module, "fconv"));
+    return value_type(std::make_shared<templates::Conv>(generator), std::make_shared<driver::Kernel>(module, "conv"));
   };
   static cpp::CachedMap<key_type, value_type> cache(compile);
-
   //Retrieve profile/kernel and execute
   value_type const & value = cache.get(key_type(stream, dtype, N, K, P, Q, C, R, S, pad_h, pad_w, stride_h, stride_w));
   value.first->enqueue(*value.second, stream, alpha, I, F, beta, O);

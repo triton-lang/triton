@@ -24,6 +24,7 @@
 #define ISAAC_DRIVER_BUFFER_H
 
 #include "isaac/driver/handle.h"
+#include "isaac/driver/context.h"
 
 namespace isaac
 {
@@ -41,6 +42,7 @@ public:
   Handle<CUdeviceptr> const & cu() const;
 
 private:
+  Context context_;
   Handle<CUdeviceptr> cu_;
   size_t size_;
 };

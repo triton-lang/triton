@@ -141,8 +141,8 @@ int main(int argc, char* argv[])
       drv::Buffer F(ctx, K*C*R*S*dtsize);
 
       std::vector<double> times;
-      times.push_back(bench([&](){ sc::CONV(device, stream, dtype, N, K, P, Q, C, R, S, H, W, pad_h, pad_w, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize(); }, device));
-      times.push_back(bench([&](){ sc::driver::cudnnConv(dtype, ctx, stream, H, W, N, K, P, Q, C, R, S, pad_h, pad_w, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
+//      times.push_back(bench([&](){ sc::CONV(device, stream, dtype, N, K, P, Q, C, R, S, H, W, pad_h, pad_w, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize(); }, device));
+      times.push_back(bench([&](){ sc::driver::cudnnConv(dtype, stream, H, W, N, K, P, Q, C, R, S, pad_h, pad_w, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
       speedup.push_back(times[1]/times[0]);
       print_results(times, {str(N), str(K), str(P), str(Q), str(C), str(R), str(S)}, [&](double tsec){ return sc::templates::Conv::tflops(P,Q,K,N,C,R,S,tsec);});
     }
@@ -205,7 +205,7 @@ int main(int argc, char* argv[])
 
       std::vector<double> times;
       times.push_back(bench([&](){ sc::GEMM(device, stream, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C); }, [&](){ stream.synchronize(); }, device));
-      times.push_back(bench([&](){ sc::driver::cublasGemm(dtype, ctx, stream, cuAT, cuBT, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc); }, [&](){ stream.synchronize();  }, device));
+      times.push_back(bench([&](){ sc::driver::cublasGemm(dtype, stream, cuAT, cuBT, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc); }, [&](){ stream.synchronize();  }, device));
       speedup.push_back(times[1]/times[0]);
       print_results(times, {str(AT), str(BT), str(M), str(N), str(K)}, [&](double tsec){ return sc::templates::GEMM::tflops(M, N, K, tsec);});
     }
