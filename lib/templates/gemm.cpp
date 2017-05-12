@@ -513,6 +513,8 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << "  sub.s32 %N, %N, %bid1;" << std::endl;
   iss << format("  sub.s32 %M, %M, %{};", A_outer_contig?"afid0":"afid1") << std::endl;
   iss << format("  sub.s32 %N, %N, %{};", B_outer_contig?"bfid0":"bfid1") << std::endl;
+  iss << format("  max.s32 %M, %M, 0;") << std::endl;
+  iss << format("  max.s32 %N, %N, 0;") << std::endl;
 
   iss << std::endl;
   iss << "  /* LDG Lanes */" << std::endl;
