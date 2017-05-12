@@ -208,7 +208,8 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
           iss << format("  // p{0}{1} = p{0} + B{0}fid0 + {2}*ld{0};", x, rj, rj*bf1) << std::endl;
           iss << format("  mov.u64 %p{0}{1}, %p{0};", x, rj) << std::endl;
           iss << format("  cvt.u64.u32 %btoff, %B{0}fid0;", x) << std::endl;
-          iss << format("  min.u32 %off{}1, {}, %{};", x, rj*bf1, (no_trans?'K':bound)) << std::endl;
+          iss << format("  min.s32 %off{}1, {}, %{};", x, rj*bf1, (no_trans?'K':bound)) << std::endl;
+          iss << format("  max.s32 %off{0}1, 0, %off{0}1;", x) << std::endl;
           iss << format("  mad.wide.u32 %btoff, %off{0}1, %ld{0}, %btoff;", x) << std::endl;
           iss << format("  add.u64 %p{0}{1}, %btoff, %p{0}{1};", x, rj, 1) << std::endl;
       }
@@ -513,8 +514,6 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << "  sub.s32 %N, %N, %bid1;" << std::endl;
   iss << format("  sub.s32 %M, %M, %{};", A_outer_contig?"afid0":"afid1") << std::endl;
   iss << format("  sub.s32 %N, %N, %{};", B_outer_contig?"bfid0":"bfid1") << std::endl;
-  iss << format("  max.s32 %M, %M, 0;") << std::endl;
-  iss << format("  max.s32 %N, %N, 0;") << std::endl;
 
   iss << std::endl;
   iss << "  /* LDG Lanes */" << std::endl;
