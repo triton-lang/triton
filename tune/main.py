@@ -1,3 +1,4 @@
+from __future__ import print_function
 import argparse
 #External modules
 import isaac as sc
@@ -33,10 +34,10 @@ def parse_arguments():
     
     #Operations
     ops, wraps = ['conv','gemm'], [op.ConvWrapper, op.GEMMWrapper]
-    operations = [wrap for op, wrap in zip(ops, wraps) if getattr(args, op)]
+    ops = [wrap for operation, wrap in zip(ops, wraps) if getattr(args, operation)]
 
     
-    return (args.database, device, operations, args.nsamples)
+    return (args.database, device, ops, args.nsamples)
 
 def gmean(a, axis=0, dtype=None):
     if not isinstance(a, np.ndarray):  # if not an ndarray object attempt to convert it

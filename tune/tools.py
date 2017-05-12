@@ -22,10 +22,10 @@ class ProgressBar:
         sys.stdout.flush()
 
 def load(path, Ns):
-    try:
+    if os.path.exists(path):
         data = np.load(path)
         return [data[x] for x, _ in Ns]
-    except OSError:
+    else:
         return [np.empty((0, n)) for _, n in Ns]
 
 def mkdir(path):
