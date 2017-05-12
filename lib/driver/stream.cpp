@@ -66,6 +66,7 @@ void Stream::enqueue(Kernel const & kernel, std::array<size_t, 3> grid, std::arr
 }
 
 void Stream::write(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr){
+  ContextSwitcher ctx_switch(context_);
   if(blocking)
     dispatch::cuMemcpyHtoD(buffer + offset, ptr, size);
   else
@@ -73,6 +74,7 @@ void Stream::write(Buffer const & buffer, bool blocking, std::size_t offset, std
 }
 
 void Stream::read(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr){
+  ContextSwitcher ctx_switch(context_);
   if(blocking)
     dispatch::cuMemcpyDtoH(ptr, buffer + offset, size);
   else
