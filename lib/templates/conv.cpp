@@ -594,11 +594,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   ptr_lds('f', "idk", addr_f);
   iss << format("  mad.lo.cc.u32  %readf, %idc, {}, %readf;", cd_sharedf) << std::endl;
 
-  iss << format("  mad.lo.u32 %boundN, %bn, {}, %N;", -nl) << std::endl;
-  iss << format("  mad.lo.u32 %boundN, %fidn, {}, %boundN;", -vec_) << std::endl;
+  iss << format("  mad.lo.s32 %boundN, %bn, -{}, %N;", nl) << std::endl;
+  iss << format("  mad.lo.s32 %boundN, %fidn, -{}, %boundN;", vec_) << std::endl;
 
-  iss << format("  mad.lo.u32 %boundK, %bk, {}, %K;", -kl) << std::endl;
-  iss << format("  mad.lo.u32 %boundK, %fidpqn_k, {}, %boundK;", -vec_) << std::endl;
+  iss << format("  mad.lo.s32 %boundK, %bk, -{}, %K;", kl) << std::endl;
+  iss << format("  mad.lo.s32 %boundK, %fidpqn_k, -{}, %boundK;", vec_) << std::endl;
 
 
 
