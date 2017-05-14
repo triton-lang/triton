@@ -162,13 +162,13 @@ int main(int argc, char* argv[])
       shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_T, N, N, N));
 
     // DeepBench [Forward]
-    for(param_t M: std::vector<param_t>{1760})
-      for(param_t N: std::vector<param_t>{8, 16, 32, 64, 128})
+    for(param_t M: std::vector<param_t>{2560})
+      for(param_t N: std::vector<param_t>{16, 32, 64, 128})
         shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_N, M, N, M));
 
     // DeepBench [Backward]
-    for(param_t M: std::vector<param_t>{1760})
-      for(param_t N: std::vector<param_t>{8, 16, 32, 64, 128})
+    for(param_t M: std::vector<param_t>{2560})
+      for(param_t N: std::vector<param_t>{16, 32, 64, 128})
         shapes.push_back(std::make_tuple(sc::ISAAC_OP_T, sc::ISAAC_OP_N, M, N, M));
 
     // PCA/ICA
