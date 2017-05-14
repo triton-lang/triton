@@ -70,16 +70,16 @@ std::string GEMM::id() const{
   return iss.str();
 }
 
-void GEMM::check_valid(driver::Device const & device, size_t M, uint32_t* params, uint8_t* valid){
+void GEMM::check_valid(driver::Device const & device, size_t nkernels, uint32_t* params, uint8_t* valid){
   std::array<int, 20> x{0};
-  for(size_t m = 0; m < M; ++ m){
+  for(size_t m = 0; m < nkernels; ++ m){
     //Parameters
     for(size_t i = 0; i < x.size(); ++i)
       x[i] = params[m*x.size() + i];
     DType dtype = (DType)(x[0]);
     IsaacOperation_t AT = (IsaacOperation_t)x[1];
     IsaacOperation_t BT = (IsaacOperation_t)x[2];
-    param_t K = x[5], vec = x[6], bm = x[7], kl = x[8], bn = x[9],
+    param_t M = x[3], N = x[4], K = x[5], vec = x[6], bm = x[7], kl = x[8], bn = x[9],
            ms = x[10], ks = x[11], ns = x[12], a_bf0 = x[13], a_bf1 = x[14], b_bf0 = x[15], b_bf1 = x[16],
            rs = x[17], br = x[18], gridr = x[19];
     //Features
@@ -107,6 +107,9 @@ void GEMM::check_valid(driver::Device const & device, size_t M, uint32_t* params
     param_t nrb = (B_outer_contig?nl:(kl*rl)) / b_bf0;
     param_t n_instructions =  nra*npa*2 + nrb*npb*2 + ms*ns*kl*rs/dtvec + kl*rs*ms*ns/(vec*dtvec);
 
+    bool overshoot_A = ml > K*M;
+    bool overshoot_B = nl > K*N;
+
     //Test
     bool is_valid =   a_bf0*a_bf1 == nthreads
                     &&  b_bf0*b_bf1 == nthreads
@@ -119,9 +122,12 @@ void GEMM::check_valid(driver::Device const & device, size_t M, uint32_t* params
                     &&  ns % (dtvec*vec) == 0
                     &&  kl % ks == 0
                     &&  size_shmem <= device.max_shared_memory()
-//                    &&  nl<=N+vec
-//                    &&  kl<=K+vec
-//                    &&  ml<=M+vec
+
+                    && !overshoot_A
+                    && !overshoot_B
+//                    &&  nl<=N
+//                    &&  kl<=K
+//                    &&  ml<=M
                     &&  n_instructions <= 1024 //Doesn't allow more than 1024 instructions in the inner loop
                     &&  bm <= device.max_block_dim()[0]
                     &&  bn <= device.max_block_dim()[1]
@@ -189,30 +195,34 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   /* Global Loads */
   auto ptr_ldg = [&](char x, size_t /*bf0*/, size_t bf1, size_t npx, char axis, char bound, bool no_trans){
       if(no_trans)
-        iss << format("  // p{0} += off{0} + Bbid{1} + (fid1 + offk)*ld{0};", x, axis) << std::endl;
+        iss << format("  // p{0} += off{0} + B{0}fid0 + Bbid{1} + (fid1 + offk)*ld{0};", x, axis) << std::endl;
       else
-        iss << format("  // p{0} += off{0} + offk + bid{1}*ld{0} + fid1*ld{0};", x, axis) << std::endl;
+        iss << format("  // p{0} += off{0} + B{0}fid0 + offk + bid{1}*ld{0} + fid1*ld{0};", x, axis) << std::endl;
+
+      //Offset along contiguous dimension
       iss << format("  mad.wide.u32 %p{0}, %off{0}, 1, %p{0};", x) << std::endl;
-      if(no_trans){
+      iss << format("  mad.wide.u32 %p{0}, %B{0}fid0, 1, %p{0};", x) << std::endl;
+      if(no_trans)
         iss << format("  mad.wide.u32 %p{0}, %Bbid{1}, 1, %p{0};", x, axis) << std::endl;
-        if(gridr_>1)
-          iss << format("  mad.wide.u32 %p{0}, %ld{0}, %offk, %p{0};", x) << std::endl;
-      }
-      else{
-        iss << format("  mad.wide.u32 %p{0}, %bid{1}, %ld{0}, %p{0};", x, axis) << std::endl;
-        if(gridr_>1)
-          iss << format("  mad.wide.u32 %p{0}, {1}, %offk, %p{0};", x, dtsize) << std::endl;
-      }
-      iss << format("  mad.wide.u32 %p{0}, %{0}fid1, %ld{0}, %p{0};", x) << std::endl;
+      else if(gridr_>1)
+        iss << format("  mad.wide.u32 %p{0}, %offk, {1}, %p{0};", x, dtsize) << std::endl;
+
+      //Offset along non-contiguous dimension
+      iss << format("  mov.s32 %off{0}1, %{0}fid1;", x) << std::endl;
+      if(no_trans && gridr_>1)
+        iss << format("  mad.wide.u32 %p{0}, %offk, %ld{0}, %p{0};", x) << std::endl;
+      else if(!no_trans)
+        iss << format("  add.s32 %off{0}1, %off{0}1, %bid{1};", x, axis) << std::endl;
+
+
       for(size_t rj = 0 ; rj < npx ; ++rj){
-          iss << format("  // p{0}{1} = p{0} + B{0}fid0 + {2}*ld{0};", x, rj, rj*bf1) << std::endl;
-          iss << format("  mov.u64 %p{0}{1}, %p{0};", x, rj) << std::endl;
-          iss << format("  cvt.u64.u32 %btoff, %B{0}fid0;", x) << std::endl;
-          iss << format("  min.s32 %off{}1, {}, %{};", x, rj*bf1, (no_trans?'K':bound)) << std::endl;
-          iss << format("  max.s32 %off{0}1, 0, %off{0}1;", x) << std::endl;
-          iss << format("  mad.wide.u32 %btoff, %off{0}1, %ld{0}, %btoff;", x) << std::endl;
-          iss << format("  add.u64 %p{0}{1}, %btoff, %p{0}{1};", x, rj, 1) << std::endl;
+          iss << format("  // p{0}{1} = p{0} + (off{0}1 + {2})*ld{0};", x, rj, rj*bf1) << std::endl;
+          iss << format("  setp.lt.s32 %pred{0}{1}, {2}, %{3};", x, rj, rj*bf1, (no_trans?'K':bound)) << std::endl;
+          iss << format("  @%pred{0}{1} add.s32 %off{0}1_{1}, %off{0}1, {2};", x, rj, rj*bf1) << std::endl;
+          iss << format("  @!%pred{0}{1} mov.s32 %off{0}1_{1}, 0;", x, rj, rj*bf1) << std::endl;
+          iss << format("  mad.wide.u32 %p{0}{1}, %off{0}1_{1}, %ld{0}, %p{0};", x, rj) << std::endl;
       }
+
       if(no_trans)
         iss << format("  mul.wide.u32 %stepinc{0}, {1}, %ld{0};", x, kl_*rl) << std::endl;
       else
@@ -405,6 +415,15 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << format("  .reg .u64 %btoff;") << std::endl;
   iss << format("  .reg .u32 %offc0, %offc1;") << std::endl;
   iss << format("  .reg .u32 %offa1, %offb1;") << std::endl;
+  for(size_t rj = 0 ; rj < npa ; ++rj){
+      iss << format("  .reg .pred %preda{};", rj) << std::endl;
+      iss << format("  .reg .u32 %offa1_{};", rj) << std::endl;
+  }
+  for(size_t rj = 0 ; rj < npb ; ++rj){
+      iss << format("  .reg .pred %predb{};", rj) << std::endl;
+      iss << format("  .reg .u32 %offb1_{};", rj) << std::endl;
+  }
+
   iss << format("  .reg .u32 %div, %rem, %idr, %bidr, %offk;") << std::endl;
   iss << ".reg .pred %predr;" << std::endl;
 
@@ -521,7 +540,6 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   ptr_ldg('a', a_bf0_, a_bf1_, npa, '0', 'M', A_outer_contig);
   iss << "  // Lane B" << std::endl;
   ptr_ldg('b', b_bf0_, b_bf1_, npb, '1', 'N', B_outer_contig);
-
   iss << format("  add.s32 %M, %M, %{};", A_outer_contig?"afid0":"afid1") << std::endl;
   iss << format("  add.s32 %N, %N, %{};", B_outer_contig?"bfid0":"bfid1") << std::endl;
 

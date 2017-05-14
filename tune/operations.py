@@ -1,3 +1,4 @@
+from __future__ import division
 import isaac as sc
 import numpy as np
 import itertools
@@ -211,7 +212,7 @@ class GEMMWrapper:
                     
     @staticmethod
     def exhaust_param_ranges():
-        L3 = [2, 4]
+        L3 = [1, 2, 4]
         L4 = [1, 2, 4, 8, 16]
         L5 = [1, 2, 4, 8]
         return [L3, L4, L4, L4, L5, [1], L5, L4, L4, L4, L4, [1], [1], L5]
