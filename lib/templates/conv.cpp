@@ -312,16 +312,13 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  // write{0} = shared + {1} + fid{2}*{3} + fid{4}*{5}", x, off, fid0, Bvec, fid1, cdx) << std::endl;
     iss << format("  add.u32 %write{0}, %shared, {1};", x, off) << std::endl;
     iss << format("  mad.lo.cc.u32  %write{0}, %{1}, {2}, %write{0};", x, fid0, Bvec) << std::endl;
-    iss << format("  madc.hi.u32 %write{0}, %{1}, {2}, %write{0};", x, fid0, Bvec) << std::endl;
     iss << format("  mad.lo.cc.u32  %write{0}, %{1}, {2}, %write{0};", x, fid1, cdx) << std::endl;
-    iss << format("  madc.hi.u32 %write{0}, %{1}, {2}, %write{0};", x, fid1, cdx) << std::endl;
   };
 
   auto ptr_lds = [&](char x, std::string const & id0, int off){
     iss << format("  // read{0} = shared + {1} + {2}*{3}", x, off, id0, Bvec*dtvec) << std::endl;
     iss << format("  add.u32 %read{0}, %shared, {1};", x, off) << std::endl;
     iss << format("  mad.lo.cc.u32  %read{0}, %{1}, {2}, %read{0};", x, id0, Bvec*dtvec) << std::endl;
-    iss << format("  madc.hi.u32 %read{0}, %{1}, {2}, %read{0};", x, id0, Bvec*dtvec) << std::endl;
   };
 
   auto lds = [&](char x, size_t nx, size_t crs, size_t cdx, size_t bs){
@@ -581,15 +578,12 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  // STS Lanes") << std::endl;
   ptr_sts('i', cd_sharedi, addr_i, "fidn", "fidcrs");
   iss << format("  mad.lo.cc.u32  %writei, %fidpq, {}, %writei;", nl*dtsize) << std::endl;
-  iss << format("  madc.hi.u32 %writei, %fidpq, {}, %writei;", nl*dtsize) << std::endl;
   ptr_sts('f', cd_sharedf, addr_f, "fidpqn_k", "fidcrs");
 
   iss << format("  // LDS lanes") << std::endl;
   ptr_lds('i', "idn", addr_i);
   iss << format("  mad.lo.cc.u32  %readi, %idq, {}, %readi;", nl*dtsize) << std::endl;
-  iss << format("  madc.hi.u32 %readi, %idq, {}, %readi;", nl*dtsize) << std::endl;
   iss << format("  mad.lo.cc.u32  %readi, %idp, {}, %readi;", nl*ql*dtsize) << std::endl;
-  iss << format("  madc.hi.u32 %readi, %idp, {}, %readi;", nl*ql*dtsize) << std::endl;
   iss << format("  mad.lo.cc.u32  %readi, %idc, {}, %readi;", cd_sharedi) << std::endl;
   ptr_lds('f', "idk", addr_f);
   iss << format("  mad.lo.cc.u32  %readf, %idc, {}, %readf;", cd_sharedf) << std::endl;
@@ -706,10 +700,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  .reg .{0} %rrc{1}_0, %rrc{1}_1;", ab_dtype, kpqn) << std::endl;
 
     iss << format("  mad.lo.cc.u32 %writec, %idc, {}, %shared;", kl*pqnl*dtsize) << std::endl;
-//    iss << format("  madc.hi.u32 %writec, %idc, {}, %writec;", kl*pqnl*dtsize) << std::endl;
 
     iss << format("  mad.lo.cc.u32 %writec, %idkpqn, {}, %writec;", ks_*pqns*dtsize) << std::endl;
-//    iss << format("  madc.hi.u32 %writec, %idkpqn, {}, %writec;", ks_*pqns*dtsize) << std::endl;
 
     iss << "  bar.sync 0;" << std::endl;
     for(size_t k = 0; k < ks_; k ++)
@@ -723,10 +715,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  div.u32 %rid_kpqn, %id, {};", bc_) << std::endl;
     iss << format("  rem.u32 %rid_c, %id, {};", bc_) << std::endl;
     iss << format("  mad.lo.cc.u32 %readc, %rid_c, {}, %shared;", kl*pqnl*dtsize) << std::endl;
-    iss << format("  madc.hi.u32 %readc, %rid_c, {}, %readc;", kl*pqnl*dtsize) << std::endl;
 
     iss << format("  mad.lo.cc.u32 %readc, %rid_kpqn, {}, %readc;", dtsize) << std::endl;
-//    iss << format("  madc.hi.u32 %readc, %rid_kpqn, {}, %readc;", dtsize) << std::endl;
 
     for(size_t c = bc_/2; c > 0; c /=2){
       iss << format("  setp.lt.u32 %predc, %rid_c, {};", c) << std::endl;
@@ -740,7 +730,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
 
     iss << format("  mad.lo.cc.u32 %readc, %idkpqn, {}, %shared;", ks_*pqns*dtsize) << std::endl;
-//    iss << format("  madc.hi.u32 %readc, %idkpqn, {}, %readc;", ks_*pqns*dtsize) << std::endl;
 
     for(size_t k = 0; k < ks_; k ++)
     for(size_t pqn = 0; pqn < pqns; pqn += vec_*dtvec)
@@ -779,25 +768,19 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  mad.lo.cc.u32 %boundK, %idk, -{}, %boundK;", vec_*dtvec) << std::endl;
 
   iss << format("  mad.lo.cc.u32 %offOk, %bk, {}, 0;", kl) << std::endl;
-  iss << format("  madc.hi.u32 %offOk, %bk, {}, %offOk;", kl) << std::endl;
 
   iss << format("  mad.lo.cc.u32  %offOk, %idk, {}, %offOk;", vec_*dtvec) << std::endl;
-  iss << format("  madc.hi.u32  %offOk, %idk, {}, %offOk;", vec_*dtvec) << std::endl;
 
   iss << format("  mad.lo.cc.u32 %offOp, %bp, {}, %idp;", pl) << std::endl;
-  iss << format("  madc.hi.u32 %offOp, %bp, {}, %offOp;", pl) << std::endl;
 
   iss << format("  mad.lo.cc.u32 %offOq, %bq, {}, %idq;", ql) << std::endl;
-  iss << format("  madc.hi.u32 %offOq, %bq, {}, %offOq;", ql) << std::endl;
 
   iss << "  sub.s32 %boundP, %P, %offOp;" << std::endl;
   iss << "  sub.s32 %boundQ, %Q, %offOq;" << std::endl;
 
   iss << format("  mad.lo.cc.u32 %offOn, %bn, {}, 0;", nl) << std::endl;
-  iss << format("  madc.hi.u32 %offOn, %bn, {}, %offOn;", nl) << std::endl;
 
   iss << format("  mad.lo.cc.u32  %offOn, %idn, {}, %offOn;", vec_*dtvec) << std::endl;
-  iss << format("  madc.hi.u32  %offOn, %idn, {}, %offOn;", vec_*dtvec) << std::endl;
 
   iss << format("  shl.b32 %N, %N, {};", log2(dtsize)) << std::endl;
   iss << format("  shl.b32 %QN, %QN, {};", log2(dtsize)) << std::endl;
