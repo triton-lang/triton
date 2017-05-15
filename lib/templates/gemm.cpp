@@ -281,7 +281,6 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
     iss << format("  add.u32 %write{0}, %write{0}, {1};", x, off) << std::endl;
     iss << format("  add.u32 %write{0}, %write{0}, %B{0}fid{1};", x, id0) << std::endl;
     iss << format("  mad.lo.cc.u32  %write{0}, %{0}fid{1}, {2}, %write{0};", x, id1, cdx) << std::endl;
-    iss << format("  madc.hi.u32 %write{0}, %{0}fid{1}, {2}, %write{0};", x, id1, cdx) << std::endl;
   };
 
   auto ptr_lds = [&](char x, char axis, size_t off, size_t cd_shared){
@@ -289,9 +288,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
     iss << format("  mov.u32 %read{}, %shared;", x) << std::endl;
     iss << format("  add.u32 %read{0}, %read{0}, {1};", x, off) << std::endl;
     iss << format("  mad.lo.cc.u32  %read{0}, %id{1}, {2}, %read{0};", x, axis, Bvec*dtvec) << std::endl;
-    iss << format("  madc.hi.u32 %read{0}, %id{1}, {2}, %read{0};", x, axis, Bvec*dtvec) << std::endl;
     iss << format("  mad.lo.cc.u32  %read{0}, %idr, {1}, %read{0};", x, cd_shared) << std::endl;
-    iss << format("  madc.hi.u32  %read{0}, %idr, {1}, %read{0};", x, cd_shared) << std::endl;
 
   };
 
@@ -503,10 +500,8 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << std::endl;
   iss << "  /* Fetch ID */" << std::endl;
   iss << format("  mad.lo.cc.u32 %idmn, %id1, {}, %id0;", bm_) << std::endl;
-  iss << format("  madc.hi.u32 %idmn, %id1, {}, %idmn;", bm_) << std::endl;
 
   iss << format("  mad.lo.cc.u32 %id, %idmn, {}, %idr;", br_) << std::endl;
-  iss << format("  madc.hi.u32 %id, %idmn, {}, %id;", br_) << std::endl;
 
 
   iss << format("  div.u32 %afid1, %id, {};", a_bf0_) << std::endl;
@@ -634,9 +629,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
       iss << format("  .reg .{0} %rrk{1}_0, %rrk{1}_1;", ab_dtype, mn) << std::endl;
 
     iss << format("  mad.lo.cc.u32 %writek, %idr, {}, %shared;", ml*nl*dtsize) << std::endl;
-    iss << format("  madc.hi.u32 %writek, %idr, {}, %writek;", ml*nl*dtsize) << std::endl;
     iss << format("  mad.lo.cc.u32 %writek, %idmn, {}, %writek;", ms_*ns_*dtsize) << std::endl;
-    iss << format("  madc.hi.u32 %writek, %idmn, {}, %writek;", ms_*ns_*dtsize) << std::endl;
 
     iss << "  bar.sync 0;" << std::endl;
     for(size_t n = 0; n < ns_; n ++)
@@ -651,9 +644,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
     iss << format("  div.u32 %rid_mn, %id, {};", br_) << std::endl;
     iss << format("  rem.u32 %rid_k, %id, {};", br_) << std::endl;
     iss << format("  mad.lo.cc.u32 %readk, %rid_k, {}, %shared;", ml*nl*dtsize) << std::endl;
-    iss << format("  madc.hi.u32 %readk, %rid_k, {}, %readk;", ml*nl*dtsize) << std::endl;
     iss << format("  mad.lo.cc.u32 %readk, %rid_mn, {}, %readk;", dtsize) << std::endl;
-    iss << format("  madc.hi.u32 %readk, %rid_mn, {}, %readk;", dtsize) << std::endl;
     for(size_t c = br_/2; c > 0; c /=2){
       iss << format("  setp.lt.u32 %predr, %rid_k, {};", c) << std::endl;
       for(size_t mn = 0; mn < ml*nl; mn += bmn){
@@ -667,7 +658,6 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
 
 
     iss << format("  mad.lo.cc.u32 %readk, %idmn, {}, %shared;", ms_*ns_*dtsize) << std::endl;
-    iss << format("  madc.hi.u32 %readk, %idmn, {}, %readk;", ms_*ns_*dtsize) << std::endl;
     for(size_t n = 0; n < ns_; n ++)
     for(size_t m = 0; m < ms_; m += vec_*dtvec)
     for(size_t s = 0; s < vec_; s++){
@@ -700,7 +690,6 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << format("  mad.lo.u32 %offc0, %id0, {}, %Bbid0;", dtvec*Bvec) << std::endl;
   iss << format("  mad.lo.u32 %offc1, %id1, {}, %bid1;", dtvec*vec_) << std::endl;
   iss << format("  mad.lo.cc.u32 %toff, %offc1, %ldc, %offc0;") << std::endl;
-  iss << format("  madc.hi.u32 %toff, %offc1, %ldc, %toff;") << std::endl;
   iss << format("  cvt.u64.u32 %btoff, %toff;") << std::endl;
   iss << format("  add.u64 %pc, %btoff, %pc;") << std::endl;
   iss << "  // Write back" << std::endl;
