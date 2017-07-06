@@ -23,6 +23,7 @@
 #ifndef ISAAC_RANDOM_RAND_H_
 #define ISAAC_RANDOM_RAND_H_
 
+#include <random>
 #include <vector>
 #include "isaac/array.h"
 
