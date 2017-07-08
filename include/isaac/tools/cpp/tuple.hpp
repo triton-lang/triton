@@ -27,6 +27,7 @@
 #include <iostream>
 #include <sstream>
 #include <iterator>
+#include <numeric>
 #include "isaac/defines.h"
 #include "isaac/types.h"
 
