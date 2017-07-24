@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <vector>
 #include <cstddef>
+#include <cstdlib>
 #include "isaac/defines.h"
 
 namespace isaac
