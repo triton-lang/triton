@@ -169,9 +169,10 @@ public:
   explicit scalar(value_scalar value, driver::Context const & context = driver::backend::contexts::get_default());
   explicit scalar(numeric_type dtype, driver::Context const & context = driver::backend::contexts::get_default());
   scalar(expression_tree const & proxy);
+
+  using array_base::operator =;
   scalar& operator=(value_scalar const &);
 //  scalar& operator=(scalar const & s);
-  using array_base::operator =;
 
 #define INSTANTIATE(type) operator type() const;
   INSTANTIATE(char)

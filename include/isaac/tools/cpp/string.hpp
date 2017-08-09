@@ -27,6 +27,11 @@
 #include <sstream>
 #include <vector>
 #include <iostream>
+
+#ifdef _MSC_VER
+  #include <algorithm>
+#endif
+
 namespace isaac
 {
 namespace tools

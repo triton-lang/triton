@@ -54,8 +54,8 @@ private:
 
 public:
   //Constructors
-  Buffer(CUdeviceptr h = 0, bool take_ownership = true);
-  Buffer(cl_mem Buffer = 0, bool take_ownership = true);
+  Buffer(CUdeviceptr h, bool take_ownership = true);
+  Buffer(cl_mem Buffer, bool take_ownership = true);
   Buffer(Context const & context, size_t size);
   //Accessors
   handle_type&  handle();

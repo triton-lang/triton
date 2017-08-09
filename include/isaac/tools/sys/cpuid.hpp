@@ -22,16 +22,30 @@
 
 #include <string>
 
+#ifdef _MSC_VER
+#include <intrin.h>
+#include <limits.h>
+#endif
+
 namespace isaac
 {
 namespace tools
 {
-
-inline void cpuid(int code, int *a, int *b, int *c, int *d) {
-  __asm__ __volatile__("cpuid":"=a"(*a),"=b"(*b),
-                        "=c"(*c),"=d"(*d):"a"(code));
-}
-
+#ifdef _MSC_VER
+	inline void cpuid(int code, int *a, int *b, int *c, int *d) {
+		int regs[4];
+		__cpuid((int *)regs, (int)code);
+		*a = regs[0];
+		*b = regs[1];
+		*c = regs[2];
+		*d = regs[3];
+	}
+#else
+	inline void cpuid(int code, int *a, int *b, int *c, int *d) {
+		__asm__ __volatile__("cpuid":"=a"(*a),"=b"(*b),
+	                         "=c"(*c),"=d"(*d):"a"(code));
+	}
+#endif
 inline std::string cpu_brand(){
   char name[48];
   int* ptr = (int*)name;

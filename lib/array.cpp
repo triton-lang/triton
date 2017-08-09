@@ -506,7 +506,7 @@ expression_tree broadcast(LHS_TYPE const & x, RHS_TYPE const & y, op_element con
 {
   tuple const & xs = x.shape();
   tuple const & ys = y.shape();
-  int_t diff = xs.size() - ys.size();
+  int_t diff = (int_t) xs.size() - (int_t) ys.size();
   if(diff==0)
     return expression_tree(x, y, op, &x.context(), dtype, max(xs, ys));
   else if(diff < 0){

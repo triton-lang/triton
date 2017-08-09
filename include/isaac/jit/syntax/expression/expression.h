@@ -135,12 +135,13 @@ private:
 template<class T> typename std::enable_if<!std::is_arithmetic<T>::value, T const &>::type wrap_generic(T const & x){ return x;}
 template<class T> typename std::enable_if<std::is_arithmetic<T>::value, value_scalar>::type wrap_generic(T x) { return value_scalar(x); }
 
+//Visual Studio doesn't support use call convention and template together, therefore, the ISAACUNWINAPI is defined to fix this problem.
 template<typename T>
-ISAACAPI typename std::conditional<std::is_arithmetic<T>::value, value_scalar, T const &>::type make_tuple(driver::Context const &, T const & x)
+ISAACNOTWINAPI typename std::conditional<std::is_arithmetic<T>::value, value_scalar, T const &>::type make_tuple(driver::Context const &, T const & x)
 { return wrap_generic(x); }
 
 template<typename T, typename... Args>
-ISAACAPI expression_tree make_tuple(driver::Context const & context, T const & x, Args... args)
+ISAACNOTWINAPI expression_tree make_tuple(driver::Context const & context, T const & x, Args... args)
 { return expression_tree(wrap_generic(x), make_tuple(context, args...), op_element(BINARY_ARITHMETIC, PAIR_TYPE), &context, numeric_type_of(x), {1}); }
 
 //io

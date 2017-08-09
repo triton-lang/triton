@@ -37,25 +37,25 @@ struct cublasContext
 
 static cublasHandle_t dft_handle = cublasHandle_t();
 
-cublasStatus cublasInit()
+cublasStatus CUBLASWINAPI cublasInit()
 {
   return CUBLAS_STATUS_SUCCESS;
 }
 
-cublasStatus cublasShutdown()
+cublasStatus CUBLASWINAPI cublasShutdown()
 {
   isaac::runtime::profiles::release();
   isaac::driver::backend::release();
   return CUBLAS_STATUS_SUCCESS;
 }
 
-cublasStatus_t cublasCreate_v2 (cublasHandle_t *handle)
+cublasStatus_t CUBLASWINAPI cublasCreate_v2(cublasHandle_t *handle)
 {
   *handle = new cublasContext();
   return CUBLAS_STATUS_SUCCESS;
 }
 
-cublasStatus_t cublasDestroy_v2 (cublasHandle_t handle)
+cublasStatus_t CUBLASWINAPI cublasDestroy_v2(cublasHandle_t handle)
 {
   delete handle;
   return cublasShutdown();
@@ -81,7 +81,7 @@ inline cublasOperation_t cvt_trans(char c)
 
 //AXPY
 #define MAKE_AXPY(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
-  cublasStatus_t cublas ## TYPE_CHAR ## axpy_v2 (cublasHandle_t handle, int n, const TYPE_CU *alpha,\
+  cublasStatus_t CUBLASWINAPI cublas ## TYPE_CHAR ## axpy_v2 (cublasHandle_t handle, int n, const TYPE_CU *alpha,\
   const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
 {\
   sc::array dx(n, TYPE_ISAAC, Buffer((CUdeviceptr)x,false), 0, incx); \
@@ -89,7 +89,7 @@ inline cublasOperation_t cvt_trans(char c)
   return execute(handle, assign(dy, *alpha*dx + dy));\
 }\
   \
-  void cublas ## TYPE_CHAR ## axpy (int n, TYPE_CU alpha, const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
+  void CUBLASWINAPI cublas ## TYPE_CHAR ## axpy (int n, TYPE_CU alpha, const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
 { cublas ## TYPE_CHAR ## axpy_v2(dft_handle, n, &alpha, x, incx, y, incy); }
 
 MAKE_AXPY(S, sc::FLOAT_TYPE, float)
@@ -97,14 +97,14 @@ MAKE_AXPY(D, sc::DOUBLE_TYPE, double)
 
 //COPY
 #define MAKE_COPY(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
-  cublasStatus_t cublas ## TYPE_CHAR ## copy_v2 (cublasHandle_t handle, int n, const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
+  cublasStatus_t CUBLASWINAPI cublas ## TYPE_CHAR ## copy_v2 (cublasHandle_t handle, int n, const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
 {\
   sc::array dx(n, TYPE_ISAAC, Buffer((CUdeviceptr)x,false), 0, incx); \
   sc::array dy(n, TYPE_ISAAC, Buffer((CUdeviceptr)y,false), 0, incy); \
   return execute(handle, assign(dy,dx));\
 }\
 \
-void cublas ## TYPE_CHAR ## copy (int n, const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
+void CUBLASWINAPI cublas ## TYPE_CHAR ## copy (int n, const TYPE_CU *x, int incx, TYPE_CU *y, int incy)\
 { cublas ## TYPE_CHAR ## copy_v2(dft_handle, n, x, incx, y, incy); }
 
 MAKE_COPY(S, sc::FLOAT_TYPE, float)
@@ -112,13 +112,13 @@ MAKE_COPY(D, sc::DOUBLE_TYPE, double)
 
 //SCAL
 #define MAKE_SCAL(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
-  cublasStatus_t cublas ## TYPE_CHAR ## scal_v2 (cublasHandle_t handle, int n, const TYPE_CU * alpha, TYPE_CU *x, int incx)\
+  cublasStatus_t CUBLASWINAPI cublas ## TYPE_CHAR ## scal_v2 (cublasHandle_t handle, int n, const TYPE_CU * alpha, TYPE_CU *x, int incx)\
 {\
   sc::array dx(n, TYPE_ISAAC, Buffer((CUdeviceptr)x,false), 0, incx); \
   return execute(handle, assign(dx,*alpha*dx));\
 }\
 \
-void cublas ## TYPE_CHAR ## scal (int n, TYPE_CU alpha, TYPE_CU *x, int incx)\
+void CUBLASWINAPI cublas ## TYPE_CHAR ## scal (int n, TYPE_CU alpha, TYPE_CU *x, int incx)\
 {   cublas ## TYPE_CHAR ## scal_v2(dft_handle, n, &alpha, x, incx); }\
 
 MAKE_SCAL(S, sc::FLOAT_TYPE, float)
@@ -126,7 +126,7 @@ MAKE_SCAL(D, sc::DOUBLE_TYPE, double)
 
 //DOT
 #define MAKE_DOT(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
-  cublasStatus_t cublas ## TYPE_CHAR ## dot_v2 (cublasHandle_t handle, int n, const TYPE_CU *x, int incx, const TYPE_CU *y, int incy, TYPE_CU* result)\
+  cublasStatus_t CUBLASWINAPI cublas ## TYPE_CHAR ## dot_v2 (cublasHandle_t handle, int n, const TYPE_CU *x, int incx, const TYPE_CU *y, int incy, TYPE_CU* result)\
 {\
   sc::array dx(n, TYPE_ISAAC, Buffer((CUdeviceptr)x,false), 0, incx); \
   sc::array dy(n, TYPE_ISAAC, Buffer((CUdeviceptr)y,false), 0, incy); \
@@ -136,7 +136,7 @@ MAKE_SCAL(D, sc::DOUBLE_TYPE, double)
   return status;\
 }\
 \
-TYPE_CU cublas ## TYPE_CHAR ## dot (int n, const TYPE_CU *x, int incx, const TYPE_CU *y, int incy)\
+TYPE_CU CUBLASWINAPI cublas ## TYPE_CHAR ## dot (int n, const TYPE_CU *x, int incx, const TYPE_CU *y, int incy)\
 {\
   TYPE_CU result;\
   cublas ## TYPE_CHAR ## dot_v2(dft_handle, n, x, incx, y, incy, &result);\
@@ -148,7 +148,7 @@ MAKE_DOT(D, sc::DOUBLE_TYPE, double)
 
 //ASUM
 #define MAKE_ASUM(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
-cublasStatus_t cublas ## TYPE_CHAR ## asum_v2 (cublasHandle_t handle, int n, const TYPE_CU *x, int incx, TYPE_CU* result)\
+cublasStatus_t CUBLASWINAPI cublas ## TYPE_CHAR ## asum_v2 (cublasHandle_t handle, int n, const TYPE_CU *x, int incx, TYPE_CU* result)\
 {\
   sc::array dx(n, TYPE_ISAAC, Buffer((CUdeviceptr)x,false), 0, incx); \
   sc::scalar scr(TYPE_ISAAC);\
@@ -157,7 +157,7 @@ cublasStatus_t cublas ## TYPE_CHAR ## asum_v2 (cublasHandle_t handle, int n, con
   return status;\
 }\
 \
-TYPE_CU cublas ## TYPE_CHAR ## asum (int n, const TYPE_CU *x, int incx)\
+TYPE_CU CUBLASWINAPI cublas ## TYPE_CHAR ## asum (int n, const TYPE_CU *x, int incx)\
 {\
   TYPE_CU result;\
   cublas ## TYPE_CHAR ## asum_v2(dft_handle, n, x, incx, &result);\
@@ -172,7 +172,7 @@ MAKE_ASUM(D, sc::DOUBLE_TYPE, double)
 //*****************
 
 #define MAKE_GEMV(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
-  cublasStatus_t cublas ## TYPE_CHAR ## gemv_v2 (cublasHandle_t handle, cublasOperation_t trans, int m,  int n, const TYPE_CU *alpha,\
+  cublasStatus_t CUBLASWINAPI cublas ## TYPE_CHAR ## gemv_v2 (cublasHandle_t handle, cublasOperation_t trans, int m,  int n, const TYPE_CU *alpha,\
   const TYPE_CU *A, int lda, const TYPE_CU *x, int incx, const TYPE_CU *beta, TYPE_CU *y, int incy)\
 {\
   if(trans==CUBLAS_OP_C)\
@@ -192,7 +192,7 @@ MAKE_ASUM(D, sc::DOUBLE_TYPE, double)
     return execute(handle, assign(dy, *alpha*dot(dA, dx) + *beta*dy));\
 }\
 \
-void cublas ## TYPE_CHAR ## gemv (char trans, int m, int n, TYPE_CU alpha,\
+void CUBLASWINAPI cublas ## TYPE_CHAR ## gemv (char trans, int m, int n, TYPE_CU alpha,\
 const TYPE_CU *A, int lda, const TYPE_CU *x, int incx,\
 TYPE_CU beta, TYPE_CU *y, int incy)\
 { cublas ## TYPE_CHAR ## gemv_v2(dft_handle, cvt_trans(trans), m, n, &alpha, A, lda, x, incx, &beta, y, incy); }
@@ -202,7 +202,7 @@ MAKE_GEMV(D, sc::DOUBLE_TYPE, double)
 
 
 #define MAKE_GER(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
-  cublasStatus_t cublas ## TYPE_CHAR ## ger_v2 (cublasHandle_t handle, int m, int n, const TYPE_CU * alpha, const TYPE_CU *x, int incx,\
+  cublasStatus_t CUBLASWINAPI cublas ## TYPE_CHAR ## ger_v2 (cublasHandle_t handle, int m, int n, const TYPE_CU * alpha, const TYPE_CU *x, int incx,\
   const TYPE_CU *y, int incy, TYPE_CU *A, int lda)\
 {\
   sc::array dx(n, TYPE_ISAAC, Buffer((CUdeviceptr)x,false), 0, incx); \
@@ -211,7 +211,7 @@ MAKE_GEMV(D, sc::DOUBLE_TYPE, double)
   return execute(handle, assign(dA, *alpha*outer(dx, dy) + dA));\
 }\
 \
-  void cublas ## TYPE_CHAR ## ger (int m, int n, TYPE_CU alpha, const TYPE_CU *x, int incx,\
+  void CUBLASWINAPI cublas ## TYPE_CHAR ## ger (int m, int n, TYPE_CU alpha, const TYPE_CU *x, int incx,\
   const TYPE_CU *y, int incy, TYPE_CU *A, int lda)\
 { cublas ## TYPE_CHAR ## ger_v2(dft_handle, m, n, &alpha, x, incx, y, incy, A, lda); }\
 
@@ -224,7 +224,7 @@ MAKE_GER(D, sc::DOUBLE_TYPE, double)
 //*****************
 
 #define MAKE_GEMM(TYPE_CHAR, TYPE_ISAAC, TYPE_CU) \
-cublasStatus_t cublas ## TYPE_CHAR ## gemm_v2(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb,\
+cublasStatus_t CUBLASWINAPI cublas ## TYPE_CHAR ## gemm_v2(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb,\
   int m, int n, int k, const TYPE_CU *alpha, const TYPE_CU *A,\
   int lda, const TYPE_CU *B, int ldb,const TYPE_CU *beta, TYPE_CU *C, int ldc)\
 {\
@@ -261,7 +261,7 @@ cublasStatus_t cublas ## TYPE_CHAR ## gemm_v2(cublasHandle_t handle, cublasOpera
     return execute(handle, assign(dC, a*dot(dA, dB) + b*dC));\
 }\
 \
-void cublas ## TYPE_CHAR ## gemm (char transa, char transb, int m, int n, int k,\
+void CUBLASWINAPI cublas ## TYPE_CHAR ## gemm (char transa, char transb, int m, int n, int k,\
   TYPE_CU alpha, const TYPE_CU *A, int lda,\
   const TYPE_CU *B, int ldb, TYPE_CU beta, TYPE_CU *C,\
   int ldc)\

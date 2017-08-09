@@ -36,7 +36,7 @@ namespace isaac
 
 class tuple
 {
-    friend std::ostream& operator<<(std::ostream & oss, tuple const &);
+    friend ISAACWINAPI std::ostream& operator<<(std::ostream & oss, tuple const &);
 public:
     tuple() {}
     tuple(std::vector<int_t> const & list): data_(list){}

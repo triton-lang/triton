@@ -58,6 +58,7 @@
 #define CUBLAS_H_
 
 #include <cuda_runtime.h>
+#include "isaac/defines.h"
 
 #ifndef CUBLASWINAPI
 #ifdef _WIN32
@@ -105,9 +106,9 @@ float CUBLASWINAPI cublasScnrm2 (int n, const cuComplex *x, int incx);
 double CUBLASWINAPI cublasDznrm2 (int n, const cuDoubleComplex *x, int incx);
 /*------------------------------------------------------------------------*/
 /* DOT */
-float CUBLASWINAPI cublasSdot (int n, const float *x, int incx, const float *y, 
+ISAACWINAPI float CUBLASWINAPI cublasSdot (int n, const float *x, int incx, const float *y,
                                int incy);
-double CUBLASWINAPI cublasDdot (int n, const double *x, int incx, const double *y, 
+ISAACWINAPI double CUBLASWINAPI cublasDdot (int n, const double *x, int incx, const double *y,
                                int incy);
 cuComplex CUBLASWINAPI cublasCdotu (int n, const cuComplex *x, int incx, const cuComplex *y, 
                                int incy);
@@ -119,8 +120,8 @@ cuDoubleComplex CUBLASWINAPI cublasZdotc (int n, const cuDoubleComplex *x, int i
                                int incy);
 /*------------------------------------------------------------------------*/
 /* SCAL */
-void CUBLASWINAPI cublasSscal (int n, float alpha, float *x, int incx);
-void CUBLASWINAPI cublasDscal (int n, double alpha, double *x, int incx);
+ISAACWINAPI void CUBLASWINAPI cublasSscal (int n, float alpha, float *x, int incx);
+ISAACWINAPI void CUBLASWINAPI cublasDscal (int n, double alpha, double *x, int incx);
 void CUBLASWINAPI cublasCscal (int n, cuComplex alpha, cuComplex *x, int incx);
 void CUBLASWINAPI cublasZscal (int n, cuDoubleComplex alpha, cuDoubleComplex *x, int incx);
 
@@ -128,9 +129,9 @@ void CUBLASWINAPI cublasCsscal (int n, float alpha, cuComplex *x, int incx);
 void CUBLASWINAPI cublasZdscal (int n, double alpha, cuDoubleComplex *x, int incx);
 /*------------------------------------------------------------------------*/
 /* AXPY */
-void CUBLASWINAPI cublasSaxpy (int n, float alpha, const float *x, int incx, 
+ISAACWINAPI void CUBLASWINAPI cublasSaxpy (int n, float alpha, const float *x, int incx,
                                float *y, int incy);
-void CUBLASWINAPI cublasDaxpy (int n, double alpha, const double *x, 
+ISAACWINAPI void CUBLASWINAPI cublasDaxpy (int n, double alpha, const double *x,
                                int incx, double *y, int incy);
 void CUBLASWINAPI cublasCaxpy (int n, cuComplex alpha, const cuComplex *x, 
                                int incx, cuComplex *y, int incy);
@@ -138,9 +139,9 @@ void CUBLASWINAPI cublasZaxpy (int n, cuDoubleComplex alpha, const cuDoubleCompl
                                int incx, cuDoubleComplex *y, int incy);
 /*------------------------------------------------------------------------*/
 /* COPY */
-void CUBLASWINAPI cublasScopy (int n, const float *x, int incx, float *y, 
+ISAACWINAPI void CUBLASWINAPI cublasScopy (int n, const float *x, int incx, float *y,
                                int incy);
-void CUBLASWINAPI cublasDcopy (int n, const double *x, int incx, double *y, 
+ISAACWINAPI void CUBLASWINAPI cublasDcopy (int n, const double *x, int incx, double *y,
                                int incy);
 void CUBLASWINAPI cublasCcopy (int n, const cuComplex *x, int incx, cuComplex *y,
                                int incy);
@@ -167,8 +168,8 @@ int CUBLASWINAPI cublasIcamin (int n, const cuComplex *x, int incx);
 int CUBLASWINAPI cublasIzamin (int n, const cuDoubleComplex *x, int incx);
 /*------------------------------------------------------------------------*/
 /* ASUM */
-float CUBLASWINAPI cublasSasum (int n, const float *x, int incx);
-double CUBLASWINAPI cublasDasum (int n, const double *x, int incx);
+ISAACWINAPI float CUBLASWINAPI cublasSasum (int n, const float *x, int incx);
+ISAACWINAPI double CUBLASWINAPI cublasDasum (int n, const double *x, int incx);
 float CUBLASWINAPI cublasScasum (int n, const cuComplex *x, int incx);
 double CUBLASWINAPI cublasDzasum (int n, const cuDoubleComplex *x, int incx);
 /*------------------------------------------------------------------------*/
@@ -209,10 +210,10 @@ void CUBLASWINAPI cublasDrotmg (double *sd1, double *sd2, double *sx1,
                            
 /* --------------- CUBLAS BLAS2 functions  ---------------- */
 /* GEMV */
-void CUBLASWINAPI cublasSgemv (char trans, int m, int n, float alpha,
+ISAACWINAPI void CUBLASWINAPI cublasSgemv (char trans, int m, int n, float alpha,
                                const float *A, int lda, const float *x, int incx,
                                float beta, float *y, int incy);
-void CUBLASWINAPI cublasDgemv (char trans, int m, int n, double alpha,
+ISAACWINAPI void CUBLASWINAPI cublasDgemv (char trans, int m, int n, double alpha,
                                const double *A, int lda, const double *x, int incx,
                                double beta, double *y, int incy);
 void CUBLASWINAPI cublasCgemv (char trans, int m, int n, cuComplex alpha,
@@ -419,11 +420,11 @@ void CUBLASWINAPI cublasZhpr2 (char uplo, int n, cuDoubleComplex alpha,
                                int incy, cuDoubleComplex *AP);
 /* ------------------------BLAS3 Functions ------------------------------- */
 /* GEMM */
-void CUBLASWINAPI cublasSgemm (char transa, char transb, int m, int n, int k, 
+ISAACWINAPI void CUBLASWINAPI cublasSgemm (char transa, char transb, int m, int n, int k,
                                float alpha, const float *A, int lda, 
                                const float *B, int ldb, float beta, float *C, 
                                int ldc);
-void CUBLASWINAPI cublasDgemm (char transa, char transb, int m, int n, int k,
+ISAACWINAPI void CUBLASWINAPI cublasDgemm (char transa, char transb, int m, int n, int k,
                                double alpha, const double *A, int lda, 
                                const double *B, int ldb, double beta, double *C, 
                                int ldc);              

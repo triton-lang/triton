@@ -20,13 +20,15 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_D
 #Compiler flags
 add_definitions(${BACKEND_DEFINES})
 if(WIN32)
-	add_definitions("-DNOMINMAX")
+    add_definitions("-DNOMINMAX")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -Wall -Wextra -pedantic")
 endif()
 
 #Includes
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib/tools/ ${CMAKE_CURRENT_SOURCE_DIR}/include/external/ ${CMAKE_CURRENT_SOURCE_DIR}/include/external/cuda)
+FIND_PACKAGE(DLFCN REQUIRED)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib/tools/ ${CMAKE_CURRENT_SOURCE_DIR}/include/external/ ${CMAKE_CURRENT_SOURCE_DIR}/include/external/cuda ${DLFCN_INCLUDE_DIR})
 
 #Binary to convert .cu files to const char *
 if(NOT ANDROID)

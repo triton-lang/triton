@@ -37,6 +37,10 @@
 #include "isaac/driver/common.h"
 #include <iostream>
 
+#if _MSC_VER
+#include <Windows.h>
+#endif
+
 namespace isaac
 {
 namespace driver
@@ -61,6 +65,15 @@ private:
     struct return_type<R (*)(A...)>
     { typedef R type; };
 
+#ifdef _MSC_VER
+    template <typename F>
+    struct convert_type;
+
+    template <typename R, typename... Args>
+    struct convert_type<R (*)(Args... args)>
+    { typedef R (__stdcall *fun_ptr)(Args...); };
+#endif
+
     typedef bool (*f_init_t)();
 
     template<f_init_t initializer, typename FunPtrT, typename... Args>
@@ -69,9 +82,14 @@ private:
         initializer();
         if(cache == nullptr)
             cache = dlsym(lib_h, name);
+#ifdef _MSC_VER
+        typename convert_type<FunPtrT>::fun_ptr fptr;
+#else
         FunPtrT fptr;
+#endif
         *reinterpret_cast<void **>(&fptr) = cache;
         typename return_type<FunPtrT>::type res = (*fptr)(args...);
+
         check(res);
         return res;
     }

@@ -33,6 +33,24 @@
     #define ISAACAPI   __attribute__((visibility("default")))
 #endif
 
+//In Windows, the dllexport and dllimport attributes have to be declared manually,
+//although this is unnecessary in Linux. therefore the ISAACWINAPI is declared
+//here to process this situation separately in Windows and Linux.
+#if defined(_WIN32) || defined(_MSC_VER)
+    #define ISAACWINAPI ISAACAPI
+#else
+    #define ISAACWINAPI
+#endif
+
+//In Windows, the dllexport and dllimport attributes cannot be used with
+//template together, therefore the ISAACNOTWINAPI is declared here to process
+//this situation separately in Windows and Linux.
+#if defined(_WIN32) || defined(_MSC_VER)
+#define ISAACNOTWINAPI
+#else
+#define ISAACNOTWINAPI ISAACAPI
+#endif
+
 #if defined(_WIN32) || defined(_MSC_VER)
 	#define DISABLE_MSVC_WARNING_C4251 __pragma(warning(disable: 4251))
 	#define RESTORE_MSVC_WARNING_C4251 __pragma(warning(default: 4251))

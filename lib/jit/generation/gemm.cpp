@@ -29,7 +29,11 @@
 #include "isaac/exception/api.h"
 #include "tools/arguments.hpp"
 #include "tools/vector_types.hpp"
+#ifdef _MSC_VER
+#include <time.h>
+#else
 #include <sys/time.h>
+#endif
 
 #include <string>
 #include <cstring>

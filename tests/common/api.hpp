@@ -121,7 +121,13 @@ public:
       int_t jj = start2_ + j*stride2_;
       return data_[ii + jj*ld_];
     }
+#ifdef _MSC_VER
+//In Windows, as class simple_matrix's copy constructor needs these parameters,
+//protected is used here to replace the private.
+protected:
+#else
 private:
+#endif
     int_t M_;
     int_t start1_;
     int_t stride1_;
@@ -142,6 +148,10 @@ class simple_matrix : public simple_matrix_base<T>
 public:
     simple_matrix(int_t M, int_t N) :  simple_matrix_base<T>(0, M, 1, 0, N, 1, M, data_), data_(M*N){}
     simple_matrix(int_t M, int_t N, std::vector<T> data) : simple_matrix_base<T>(0, M, 1, 0, N, 1, M, data_), data_(data){}
+#ifdef _MSC_VER
+//In Windows, the copy constructor has to be defined manually.
+    simple_matrix(simple_matrix& c) : simple_matrix_base<T>(0, c.M_, 1, 0, c.N_, 1, c.M_, data_) { data_ = c.data(); }
+#endif
 private:
     std::vector<T> data_;
 };

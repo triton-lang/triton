@@ -108,7 +108,11 @@ namespace driver
 bool dispatch::clinit()
 {
   if(opencl_==nullptr)
+#ifdef _MSC_VER
+    opencl_ = dlopen("OpenCL.dll", RTLD_LAZY);
+#else
     opencl_ = dlopen("libOpenCL.so", RTLD_LAZY);
+#endif
   return opencl_ != nullptr;
 }
 

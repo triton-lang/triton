@@ -173,7 +173,7 @@ extern "C"
     {\
         if(incx <= 0) {\
           sc::array sum((sc::int_t)offAsum + 1, TYPE_ISAAC, sc::driver::Buffer(asum, false), (sc::int_t)offAsum, 1);\
-          sum[0] = 0;\
+          sum[0] = (sc::value_scalar) 0;\
           return clblasSuccess;\
         }\
         sc::array x((sc::int_t)N, TYPE_ISAAC, sc::driver::Buffer(mx, false), (sc::int_t)offx, incx);\

@@ -23,6 +23,8 @@ Link against libisaac.so instead of libcublas.so or libclblas.so, and you're goo
 
 The C++ and Python API does some kernel fusion, but is not entirely stable. It works well to compose element-wise operations, though.
 
+### Installation on Windows
+The windows version depends on dlfcn project, please download it at **[dlfcn windows version](https://github.com/dlfcn-win32/dlfcn-win32)** and save it at the same directory as isaac project, build ***dlfcn*** before build isaac.
 
 ### Benchmark
 
