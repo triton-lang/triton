@@ -862,7 +862,7 @@ expression_tree dot(LTYPE const & x, RTYPE const & y)\
     throw semantic_error("matrices are not aligned");\
   std::vector<int_t> shapedata(std::max<size_t>(1,xs.size()-1 + ys.size()-1));\
   for(size_t i = 0 ; i < shapedata.size() ; ++i){\
-    if(i < xs.size() - 1) shapedata[i] = xs[i];\
+    if(i <= xs.size() - 1) shapedata[i] = xs[i];\
     else shapedata[i] = ys[i - xs.size() + 2];\
   }\
   tuple rshape(shapedata);\
