@@ -21,6 +21,7 @@
 */
 
 #include <vector>
+#include <random>
 #include "isaac/random/rand.h"
 
 namespace isaac
