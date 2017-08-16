@@ -47,6 +47,7 @@ public:
   std::string name() const;
   std::string version() const;
   void devices(std::vector<Device> &) const;
+  bool platforms_check(cl_platform_id platform_id);
   cl_platform_id cl_id() const;
 private:
   backend_type backend_;

@@ -102,6 +102,16 @@ void Platform::devices(std::vector<Device> & devices) const
   }
 }
 
+bool Platform::platforms_check(cl_platform_id platform_id) {
+  if (backend_ == OPENCL) {
+    cl_uint ndevices;
+    dispatch::dispatch::clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_GPU, 0, NULL, &ndevices);
+    return ndevices > 0;
+  } else {
+    return true;
+  }
+}
+
 }
 
 }

@@ -225,7 +225,8 @@ void backend::platforms(std::vector<Platform> & platforms)
             Platform tmp(p);
             if(tmp.name().find("CUDA")!=std::string::npos && has_cuda)
                 continue;
-            platforms.push_back(tmp);
+            if(tmp.platforms_check(p))
+                platforms.push_back(tmp);
         }
     }
 

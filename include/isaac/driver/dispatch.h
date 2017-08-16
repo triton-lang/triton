@@ -36,6 +36,7 @@
 //Exceptions
 #include "isaac/driver/common.h"
 #include <iostream>
+#include "string.h"
 
 #if _MSC_VER
 #include <Windows.h>
@@ -90,7 +91,9 @@ private:
         *reinterpret_cast<void **>(&fptr) = cache;
         typename return_type<FunPtrT>::type res = (*fptr)(args...);
 
-        check(res);
+        if (strncmp(name, "clGetDeviceIDs", 15)) {
+            check(res);
+        }
         return res;
     }
 
