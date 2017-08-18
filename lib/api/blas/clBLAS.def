@@ -22,22 +22,28 @@ EXPORTS
 
 	clblasSgemv
 	clblasDgemv
-	
+	clblasHgemv
+
 	clblasSgemm
 	clblasDgemm
-	
+	clblasHgemm
+
 	clblasSscal
 	clblasDscal
-	
+	clblasHscal
+
 	clblasScopy
 	clblasDcopy
-	
+	clblasHcopy
+
 	clblasSaxpy
 	clblasDaxpy
-	
+	clblasHaxpy
+
 	clblasSdot
 	clblasDdot
+	clblasHdot
 
-    clblasSasum
-    clblasDasum
- 
+        clblasSasum
+        clblasDasum
+        clblasHasum

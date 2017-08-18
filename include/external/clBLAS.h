@@ -29,7 +29,7 @@
  * the AMD GPU hardware.
  */
 
-#include "isaac/driver/external/CL/cl.h"
+#include "CL/cl.h"
 #include "clBLAS-complex.h"
 
 #ifdef __cplusplus
