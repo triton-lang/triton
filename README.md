@@ -6,7 +6,7 @@ This is the developer repository for ISAAC, a library that uses machine learning
 
 ISAAC is distributed under the MIT License.
 
-### Installation
+### Installation on Linux
 
 ISAAC is dependency-free, and will load either OpenCL and/or CUDA 7.0+ _dynamically_ depending on which GPUs are detected at runtime.
 
@@ -25,6 +25,21 @@ The C++ and Python API does some kernel fusion, but is not entirely stable. It w
 
 ### Installation on Windows
 The windows version depends on dlfcn project, please download it at **[dlfcn windows version](https://github.com/dlfcn-win32/dlfcn-win32)** and save it at the same directory as isaac project, build ***dlfcn*** before build isaac.
+The following instructions are for Visual C 2015 and to build it for x64 target.
+
+
+```
+git clone https://github.com/dlfcn-win32/dlfcn-win32
+cd dlfcn-win32
+cmake -G "Visual Studio 14 2015 Win64" .
+cmake --build . --config Release
+git clone https://github.com/ptillet/isaac.git
+mkdir -p isaac/build
+cd build
+cmake -G "Visual Studio 14 2015 Win64" ..
+cmake --build . --config Release
+
+```
 
 ### Benchmark
 
