@@ -120,7 +120,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t H,
       continue;
     }
     //Compile
-    drv::Module program(ctx, src, true);
+    drv::Module program(ctx, src);
     drv::Kernel kernel(program, "fprop");
     //Launch
     try{

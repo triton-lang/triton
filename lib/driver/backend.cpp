@@ -147,15 +147,21 @@ std::list<Context const *> backend::contexts::cache_;
 //------------  General -------------*/
 /*-----------------------------------*/
 
+std::vector<Device> backend::devices(){
+  std::vector<Platform> platforms = backend::platforms();
+  std::vector<Device> result;
+  for(Platform const & platform: platforms){
+    auto devices = platform.devices();
+    result.insert(result.end(), devices.begin(), devices.end());
+  }
+  return result;
+}
+
 std::vector<Platform> backend::platforms(){
   std::vector<Platform> platforms;
   //if CUDA is here
-  if(dispatch::cuinit()){
-    if(dispatch::nvrtcinit())
-      platforms.push_back(Platform());
-    else
-      throw std::runtime_error("ISAAC: Unable to find NVRTC. Make sure you are using CUDA >= 7.0");
-  }
+  if(dispatch::cuinit())
+    platforms.push_back(Platform());
   if(platforms.empty())
     throw std::runtime_error("ISAAC: No backend available. Make sure CUDA is available in your library path");
   return platforms;

@@ -1,4 +1,4 @@
-foreach(PROG bench)
+foreach(PROG isaac-tools)
      add_executable(${PROG} ${PROG}.cpp)
      set_target_properties(${PROG} PROPERTIES OUTPUT_NAME ${PROG})
      include_directories(/usr/local/cuda/include/)

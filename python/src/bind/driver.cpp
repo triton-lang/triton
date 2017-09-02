@@ -75,7 +75,7 @@ void export_driver(py::module&& m)
       .def_property_readonly("device", (drv::Device const & (drv::Context::*)() const)&drv::Context::device);
 
   py::class_<drv::Module>(m, "Module")
-      .def(py::init<drv::Context, std::string, bool>())
+      .def(py::init<drv::Context, std::string>())
       .def_property_readonly("context", &drv::Module::context);
 
   py::class_<drv::Kernel>(m, "Kernel")

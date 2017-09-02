@@ -20,6 +20,9 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+#ifndef ISAAC_TOOLS_MATRIX_HPP_
+#define ISAAC_TOOLS_MATRIX_HPP_
+
 #include <cstddef>
 
 inline void read_inc(void* dst, u_char*& data, size_t nbytes){
@@ -86,3 +89,4 @@ matrix<T> pad_left(matrix<T> const & in, uint32_t npad){
   return result;
 }
 
+#endif

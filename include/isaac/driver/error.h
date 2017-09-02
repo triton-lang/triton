@@ -124,8 +124,9 @@ namespace isaac
 
   namespace cublas
   {
+  class base: public std::exception{};
 
-#define ISAAC_CREATE_CUBLAS_EXCEPTION(name, msg) class name: public std::exception { public: const char * what() const throw(){ return "CUBLAS: Error- " msg; } }
+#define ISAAC_CREATE_CUBLAS_EXCEPTION(name, msg) class name: public base { public: const char * what() const throw(){ return "CUBLAS: Error- " msg; } }
 
   ISAAC_CREATE_CUBLAS_EXCEPTION(not_initialized              ,"not initialized");
   ISAAC_CREATE_CUBLAS_EXCEPTION(alloc_failed                 ,"alloc failed");
@@ -155,6 +156,9 @@ namespace isaac
   ISAAC_CREATE_CUDNN_EXCEPTION(execution_failed             ,"execution failed");
   ISAAC_CREATE_CUDNN_EXCEPTION(not_supported                ,"not supported");
   ISAAC_CREATE_CUDNN_EXCEPTION(license_error                ,"license error");
+  ISAAC_CREATE_CUDNN_EXCEPTION(runtime_prerequisite_missing ,"prerequisite missing");
+  ISAAC_CREATE_CUDNN_EXCEPTION(runtime_in_progress          ,"runtime in progress");
+  ISAAC_CREATE_CUDNN_EXCEPTION(runtime_fp_overflow          ,"runtime fp overflow");
   }
 
   namespace ocl

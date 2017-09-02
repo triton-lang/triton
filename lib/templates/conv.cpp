@@ -49,6 +49,9 @@ Conv::Conv(DType dtype, param_t C, param_t H, param_t W, param_t N, param_t K, p
   vec_(vec), bp_(bp), bq_(bq), bn_(bn), bk_(bk), bf_n_(bf_n), ps_(ps), qs_(qs), ns_(ns), ks_(ks), crs_l_(crs_l), crs_s_(crs_s), cs_(cs), bc_(bc), gridc_(gridc)
 {}
 
+std::vector<param_t> Conv::tuning_params() const
+{ return {bp_, bq_, bn_, bk_, bf_n_, ps_, qs_, ns_, ks_, crs_l_, crs_s_, cs_, bc_, gridc_}; }
+
 double Conv::tflops(param_t P, param_t Q, param_t K, param_t N, param_t C, param_t R, param_t S, double time)
 { return (double)2*P*Q*K*N*C*R*S/(time*1e3); }
 
@@ -71,7 +74,7 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
     for(size_t i = 0; i < x.size(); ++i)
       x[i] = params[m*x.size() + i];
     DType dtype = (DType)(x[0]);
-    //param_t  N = x[1], K = x[2], P = x[3], Q = x[4];
+    param_t  N = x[1], K = x[2], P = x[3], Q = x[4];
     param_t C = x[5], R = x[6], S = x[7],
           vec = x[8], bp = x[9], bq = x[10], bn = x[11], bk = x[12], bf_n = x[13],
           ps = x[14], qs = x[15], ns = x[16], ks = x[17], crs_l = x[18],
@@ -111,7 +114,8 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
     param_t bf_pqn = bf_k;
     param_t bf_pq = bf_pqn / bf_n;
 
-    param_t n_instructions =  pl*ql/bf_pq*nl/bf_n + kl/bf_k + pqns*ks*crs_l/dtvec + pqns*ks*crs_l/(vec*dtvec);
+    auto n_instructions = [&]() { return pl*ql/bf_pq*nl/bf_n + kl/bf_k + pqns*ks*crs_l/dtvec + pqns*ks*crs_l/(vec*dtvec); };
+
     //Test
     bool is_valid = (bf_n*bf_pq*bf_crs == nthreads)
                   && (bf_k*bf_crs == nthreads)
@@ -128,16 +132,15 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
                   && (bk <= device.max_block_dim()[1])
                   && (bc <= device.max_block_dim()[2])
                   && (nthreads <= device.max_threads_per_block())
-                  && (n_instructions <= 1024)
+                  && (n_instructions() <= 1024)
 
-//                  && (pl<=P)
-//                  && (ql<=Q)
-//                  && (nl<=N+vec)
-//                  && (kl<=K+vec)
+                  && (pl<=P)
+                  && (ql<=Q)
+                  && (nl<=N)
+                  && (kl<=K)
                   && (cl*gridc<=C)
                   && (vec*dtsize <= 16)
-                  && (device.compute_capability().first>=6 || dtype != HALF_TYPE)
-                  && (gridc==1 || dtype==FLOAT_TYPE);  //Global reduction on fp16x2 and fp64 not always possible
+                  && (gridc==1 || dtype!=HALF_TYPE);  //Global reduction on fp16x2 and fp64 not always possible
     valid[m] = is_valid;
   }
 }
@@ -242,7 +245,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   };
 
 
-  auto ldg = [&](bool last_iter){
+  auto ldg = [&](bool safe){
       std::vector<std::string> predn(vec_, "%predcrs");
       std::vector<std::string> predk(vec_, "%predcrs");
       iss << format("  cvt.rn.f32.s32 %CRSf, %CRS;") << std::endl;
@@ -264,11 +267,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  add.u32 %offF, %offFrs, %offF;") << std::endl;
       iss << format("  mad.wide.u32 %pf0, %offF, {}, %pf;", dtsize) << std::endl;
       for(size_t k = 0; k < kl; k+=vec_*bf_k){
-        for(size_t s = 0; s < (last_iter?vec_:0); ++s){
+        for(size_t s = 0; s < (safe?vec_:0); ++s){
           iss << format("  setp.lt.and.s32 %pred{}, {}, %boundK, %predcrs;", s, k+s) << std::endl;
           predk[s] = format("%pred{}", s);
         }
-        for(size_t s = 0; s < (last_iter?vec_:0); ++s)
+        for(size_t s = 0; s < (safe?vec_:0); ++s)
          if(dtype_==HALF_TYPE)
             iss << format("  @!{0} and.b16 %rrf{2}{3}, 0, %rrf{2}{3};", predk[s], ab_dtype, k, vs[s]) << std::endl;
           else
@@ -291,7 +294,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
           int pqn = pq*nl + n;
           for(size_t s = 0; s < vec_ ; ++s)
             predn[s] = format("%predi{}", pq);
-          for(size_t s = 0; s < (last_iter?vec_:0) ; ++s){
+          for(size_t s = 0; s < (safe?vec_:0) ; ++s){
             iss << format("  setp.lt.and.s32 %pred{}, {}, %boundN, %predi{};", s, n+s, pq) << std::endl;
             predn[s] = format("%pred{}", s);
           }
@@ -414,38 +417,36 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << "  bar.sync 0;" << std::endl;
   };
 
-  auto cc = device.compute_capability();
-  iss << ".version 5.0" << std::endl;
-  iss << ".target sm_" << cc.first << cc.second << std::endl;
-  iss << ".address_size 64" << std::endl;
   iss << ".entry " << name << "(.param ." << alpha_dtype << " _alpha, .param ." << alpha_dtype << " _beta," << std::endl
-      << "            .param .u64 _pi, .param .u64 _pf, .param .u64 _po," << std::endl
-      << "            .param .s32 _C, .param .s32 _H, .param .s32 _W, .param .s32 _N, " << std::endl
-      << "            .param .s32 _R, .param .s32 _S, .param .s32 _K," << std::endl
-      << "            .param .s32 _P, .param .s32 _Q," << std::endl
-      << "            .param .s32 _stride_h, .param .s32 _stride_w, .param .s32 _pad_h, .param .s32 _pad_w, " << std::endl
-      << "            .param .s32 _HWN, .param .s32 _KRS, .param .s32 _PQN, .param .s32 _PQ, .param .s32 _QN, " << std::endl
-      << "            .param .s32 _gridN, .param .s32 _gridQ)" << std::endl;
+      << "            .param .b64 _pi, .param .b64 _pf, .param .b64 _po," << std::endl
+      << "            .param .b32 _C, .param .b32 _H, .param .b32 _W, .param .b32 _N, " << std::endl
+      << "            .param .b32 _R, .param .b32 _S, .param .b32 _K," << std::endl
+      << "            .param .b32 _P, .param .b32 _Q," << std::endl
+      << "            .param .b32 _stride_h, .param .b32 _stride_w, .param .b32 _pad_h, .param .b32 _pad_w, " << std::endl
+      << "            .param .b32 _HWN, .param .b32 _KRS, .param .b32 _PQN, .param .b32 _PQ, .param .b32 _QN, " << std::endl
+      << "            .param .b32 _gridN, .param .b32 _gridQ," << std::endl
+      << "            .param .b32 _bound)" << std::endl;
   iss << "{" << std::endl;
-  iss << "  .reg.s32 %H, %pad_h, %stride_h, %W, %pad_w, %stride_w, %N, %K, %boundP, %boundQ, %boundN, %boundK;" << std::endl;
-  iss << "  .reg.s32 %base_p, %base_q, %pp, %qq, %h, %w;" << std::endl;
-  iss << "  .reg.u32 %c, %pqrs, %incpq, %incp, %incq, %rs, %r, %s, %rlo, %rhi, %slo, %shi, %offlut, %writelut, %readlut, %lut_size, %lut_max, %n_valid;" << std::endl;
+  iss << "  .reg .b32 %H, %pad_h, %stride_h, %W, %pad_w, %stride_w, %N, %K, %boundP, %boundQ, %boundN, %boundK;" << std::endl;
+  iss << "  .reg .b32 %base_p, %base_q, %pp, %qq, %h, %w;" << std::endl;
+  iss << "  .reg .b32 %c, %pqrs, %incpq, %incp, %incq, %rs, %r, %s, %rlo, %rhi, %slo, %shi, %offlut, %writelut, %readlut, %lut_size, %lut_max, %n_valid;" << std::endl;
   for(size_t p = 0; p < pl; p += bp_)
     for(size_t q = 0; q < ql; q += bq_){
-      iss << format("  .reg.u32 %lut_max{}_{};", p, q) << std::endl;
+      iss << format("  .reg .b32 %lut_max{}_{};", p, q) << std::endl;
       iss << format("  .reg.pred %predlut{}_{};", p, q) << std::endl;
     }
   iss << "  .reg.pred %rs0, %pq0, %in_bounds, %predkpq, %predp, %predq, %predcrs, %predk, %predloop;" << std::endl;
   iss << format("  .reg.pred %pred<{}>;", vec_*dtvec) << std::endl;
-  iss << "  .reg.u32 %id, %idkpqn, %idc, %bc, %gidc, %div, %rem, %offc, %idpqn, %idpq, %idp, %idq, %idn, %idk, %fidpq, %fidp, %fidq, %fidn, %fidpqn_k, %fidcrs;" << std::endl;
-  iss << format("  .reg .u32 %writei, %writef, %readi, %readf;") << std::endl;
-  iss << "  .reg.u32 %bid0, %bk;" << std::endl;
-  iss << "  .reg.s32 %bn, %bp, %bq, %bpq, %bpqn, %p, %q, %PQ, %Q, %P;" << std::endl;
-  iss << format("  .reg .u64 %pi, %pf, %pf0;") << std::endl;
-  iss << format("  .reg .u32 %offI, %offIbase, %offIn, %offIc, %offIhw, %offF, %offFk, %offFrs, %offFc, %offOk, %offOp, %offOq, %offOn;") << std::endl;
-  iss << format("  .reg .s32 %C, %CRS, %HWN, %KRS, %CRSi, %gridN, %gridQ;") << std::endl;
-  iss << format("  .reg .u64 %po;") << std::endl;
-  iss << format("  .reg .s32 %PQN, %QN;") << std::endl;
+  iss << "  .reg .b32 %id, %idkpqn, %idc, %bc, %gidc, %div, %rem, %offc, %idpqn, %idpq, %idp, %idq, %idn, %idk, %fidpq, %fidp, %fidq, %fidn, %fidpqn_k, %fidcrs;" << std::endl;
+  iss << format("  .reg .b32 %writei, %writef, %readi, %readf;") << std::endl;
+  iss << "  .reg .b32 %bid0, %bk;" << std::endl;
+  iss << "  .reg .b32 %bn, %bp, %bq, %bpq, %bpqn, %p, %q, %PQ, %Q, %P;" << std::endl;
+  iss << format("  .reg .b64 %pi, %pf, %pf0;") << std::endl;
+  iss << format("  .reg .b32 %offI, %offIbase, %offIn, %offIc, %offIhw, %offF, %offFk, %offFrs, %offFc, %offOk, %offOp, %offOq, %offOn;") << std::endl;
+  iss << format("  .reg .b32 %C, %CRS, %HWN, %KRS, %CRSi, %gridN, %gridQ;") << std::endl;
+  iss << format("  .reg .b64 %po;") << std::endl;
+  iss << format("  .reg .b32 %PQN, %QN;") << std::endl;
+  iss << format("  .reg .b32 %bound;") << std::endl;
   iss << format("  .reg .f32 %rcpRS, %CRSf;") << std::endl;
   iss << format("  .reg .{} %alpha, %beta;", io_dtype) << std::endl;
   if(dtype_==HALF_TYPE){
@@ -455,15 +456,16 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  .reg .b16 %beta16;") << std::endl;
   }
 
+  iss << format("  .reg .pred %predf0;") << std::endl;
   for(size_t n = 0; n < nl; n+=vec_*bf_n_)
     iss << format("  .reg {}.{} %rri{};", vv, ab_dtype, n) << std::endl;
   for(size_t k = 0; k < kl; k+=vec_*bf_k)
     iss << format("  .reg {}.{} %rrf{};", vv, ab_dtype, k) << std::endl;
   for(size_t pq = 0; pq < pl*ql; pq+=bf_pq){
-      iss << format("  .reg .u32 %offIhw{};", pq) << std::endl;
-      iss << format("  .reg .u32 %offI{};", pq) << std::endl;
+      iss << format("  .reg .b32 %offIhw{};", pq) << std::endl;
+      iss << format("  .reg .b32 %offI{};", pq) << std::endl;
       iss << format("  .reg .pred %predi{};", pq) << std::endl;
-      iss << format("  .reg .u64 %pi{};", pq) << std::endl;
+      iss << format("  .reg .b64 %pi{};", pq) << std::endl;
     }
   if(dtype_==HALF_TYPE){
     iss << format("  .reg .b16 %rfh0, %rfh1;") << std::endl;
@@ -510,12 +512,13 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  ld.param.s32 %K, [_K];" << std::endl;
   iss << "  ld.param.s32 %gridN, [_gridN];" << std::endl;
   iss << "  ld.param.s32 %gridQ, [_gridQ];" << std::endl;
+  iss << "  ld.param.s32 %bound, [_bound];" << std::endl;
 
 
   iss << "  // Shared memory" << std::endl;
   iss << format("  .shared .align 16 .b8 _shared[{}];", size_shmem) << std::endl;
-  iss << format("  .reg .u64 %shared64;") << std::endl;
-  iss << format("  .reg .u32 %shared;") << std::endl;
+  iss << format("  .reg .b64 %shared64;") << std::endl;
+  iss << format("  .reg .b32 %shared;") << std::endl;
   iss << format("  mov.u64 %shared64, _shared;") << std::endl;
   iss << format("  cvt.u32.u64 %shared, %shared64;") << std::endl;
 
@@ -599,10 +602,14 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  // offIn = bn*{} + fidn*{}", nl, vec_) << std::endl;
   iss << format("  mul.lo.u32 %offIn, %bn, {};", nl) << std::endl;
   iss << format("  mad.lo.u32 %offIn, %fidn, {}, %offIn;", vec_) << std::endl;
+  iss << format("  setp.lt.u32 %predi0, %offIn, %N;") << std::endl;
+  iss << format("  @!%predi0 mov.u32 %offIn, 0;") << std::endl;
 
   iss << format("  // offFk = bk*{} + fidpqn_k*{}", kl, vec_) << std::endl;
   iss << format("  mul.lo.u32 %offFk, %bk, {};", kl) << std::endl;
   iss << format("  mad.lo.u32 %offFk, %fidpqn_k, {}, %offFk;", vec_) << std::endl;
+  iss << format("  setp.lt.u32 %predf0, %offFk, %K;") << std::endl;
+  iss << format("  @!%predf0 mov.u32 %offFk, 0;") << std::endl;
 
 
   iss << format("  // Strides and helpers") << std::endl;
@@ -616,11 +623,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "bar.sync 0;" << std::endl;
   iss << std::endl;
   iss << " //First load" << std::endl;
-  iss << format("  setp.gt.s32 %predloop, %CRSi, {};", crs_l_*cl-1) << std::endl;
+  iss << format("  setp.gt.s32 %predloop, %CRSi, %bound;") << std::endl;
   iss << format("  @!%predloop bra LAST_ITER;") << std::endl;
 
   iss << format("  setp.lt.s32 %predcrs, %fidcrs, %CRSi;") << std::endl;
-  ldg(true);
+  ldg(false);
   iss << std::endl;
   iss << " //Main loop" << std::endl;
   iss << "LOOP:" << std::endl;
@@ -651,37 +658,15 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
   iss << format("  sub.s32 %CRS, %CRS, {};", crs_l_*cl) << std::endl;
   iss << format("  sub.s32 %CRSi, %CRSi, {};", crs_l_*cl) << std::endl;
-  iss << format("  setp.lt.s32 %predcrs, %fidcrs, %CRSi;") << std::endl;
-  iss << format("  setp.gt.s32 %predloop, %CRSi, {};", crs_l_*cl-1) << std::endl;
+  iss << format("  setp.gt.s32 %predcrs, %CRSi, %bound;") << std::endl;
+  iss << format("  setp.gt.s32 %predloop, %CRSi, %bound;") << std::endl;
   ldg(false);
   iss << format("  @%predloop bra LOOP;") << std::endl;
-
   iss << "LAST_ITER:" << std::endl;
-  iss << format("  setp.eq.s32 %predloop, %CRSi, 0;") << std::endl;
-  iss << format("  @%predloop bra ENDLOOP;") << std::endl;
-  iss << std::endl;
-  iss << "  mov.u32 %CRS, %fidcrs;" << std::endl;
   iss << format("  setp.lt.s32 %predcrs, %fidcrs, %CRSi;") << std::endl;
   ldg(true);
-  iss << "  bar.sync 0;" << std::endl;
-  iss << "LAST_FMA:" << std::endl;
-  for(size_t nc = 0; nc < cs_; ++nc)
-  for(size_t p = 0; p < ps_; p++)
-  for(size_t q = 0; q < qs_; q++)
-  for(size_t n = 0; n < ns_; n+=vec_*dtvec){
-    int pq = p*qs_ + q;
-    int pqn = pq*ns_ + n;
-    int off = (n*bn_ + q*bq_*nl + p*bp_*nl*ql)*dtsize + nc*bc_*cd_sharedi;
-    iss << format("  ld.shared{}.{} %ri{}_{}_{}, [%readi + {}];", vv, io_dtype, nc, pqn, 0, off) << std::endl;
-  }
-  lds('f', ks_/vec_, 0, cd_sharedf, bk_);
-  fma(0);
-  iss << format("  add.u32 %readi, %readi, {};", cl*cd_sharedi) << std::endl;
-  iss << format("  add.u32 %readf, %readf, {};", cl*cd_sharedf) << std::endl;
-  iss << format("  sub.s32 %CRSi, %CRSi, {};", cl) << std::endl;
   iss << format("  setp.gt.s32 %predloop, %CRSi, 0;") << std::endl;
-  iss << format("  @%predloop bra LAST_FMA;") << std::endl;
-
+  iss << format("  @%predloop bra LOOP;") << std::endl;
   iss << "ENDLOOP:" << std::endl;
 
   //Reduce in registers
@@ -694,7 +679,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   if(bc_>1)
   {
     size_t bkpqn = nthreads/bc_;
-    iss << ".reg .u32 %readc, %writec, %rid_kpqn, %rid_c;" << std::endl;
+    iss << ".reg .b32 %readc, %writec, %rid_kpqn, %rid_c;" << std::endl;
     iss << ".reg .pred %predc;" << std::endl;
     for(size_t kpqn = 0; kpqn < pqnl*kl; kpqn += bkpqn)
       iss << format("  .reg .{0} %rrc{1}_0, %rrc{1}_1;", ab_dtype, kpqn) << std::endl;
@@ -831,10 +816,13 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& queue, scalar const &
   int32_t PQ = P_*Q_;
   int32_t QN = Q_*N_;
 
+
   int32_t pl = bp_*ps_, ql = bq_*qs_, nl = bn_*ns_, kl = bk_*ks_;
+  int32_t cl = bc_*cs_;
   size_t gridP = ceil(P_, pl), gridQ = ceil(Q_, ql), gridN = ceil(N_, nl), gridK = ceil(K_, kl);
   DType alpha_dtype = (dtype_==DOUBLE_TYPE)?DOUBLE_TYPE:FLOAT_TYPE;
-
+  int32_t ibound =  std::max<int32_t>(crs_l_*cl - 1, C_*R_*S_ + (crs_l_*cl - 1) - (PQN*(C_*R_*S_ - 1) - (pl*ql*nl - 1)) / PQN);
+  int32_t fbound =  std::max<int32_t>(crs_l_*cl - 1, C_*R_*S_ + (crs_l_*cl - 1) - (K_*(C_*R_*S_ - 1) - (kl - 1)) / K_);
   kernel.setArg(0, size_of(alpha_dtype), alpha.data());
   kernel.setArg(1, size_of(alpha_dtype), beta.data());
   kernel.setArg(2, I);
@@ -860,6 +848,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& queue, scalar const &
   kernel.setArg(22, QN);
   kernel.setArg(23, gridN);
   kernel.setArg(24, gridQ);
+  kernel.setArg(25, std::max<int32_t>(ibound, fbound));
 
   if(gridc_>1)
     O.set_zero(queue);

@@ -38,8 +38,10 @@ class Device;
 
 class Module: public HandleInterface<Module, CUmodule>
 {
+  static std::string header(Device const & device);
+
 public:
-  Module(Context const & context, std::string const & source, bool is_ir = true);
+  Module(Context const & context, std::string const & source);
   Context const & context() const;
   Handle<CUmodule> const & cu() const;
 

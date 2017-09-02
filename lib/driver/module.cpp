@@ -27,6 +27,8 @@
 #include "isaac/driver/context.h"
 #include "isaac/driver/error.h"
 
+#include "isaac/tools/sys/getenv.hpp"
+
 namespace isaac
 {
 namespace driver
@@ -47,50 +49,54 @@ CUjit_target_enum cutarget(Device::Architecture arch){
   }
 }
 
-Module::Module(Context const & context, std::string const & source, bool is_ir) : context_(context), source_(source){
-   ContextSwitcher ctx_switch(context_);
+inline std::pair<int, int> ptx(std::pair<int, int> sm){
+  if(sm.first == 7) return {6, 0};
+  if(sm.first == 6) return {5, 0};
+  if(sm.first == 5) return {4, 3};
+  throw;
+}
 
-  //PTX passed directly
-  if(is_ir){
+std::string Module::header(Device const & device){
+  auto cc = device.compute_capability();
+  auto vptx = ptx(cc);
+  std::string header;
+  header += ".version " + std::to_string(vptx.first) + "." + std::to_string(vptx.second) + "\n";
+  header += ".target sm_" + std::to_string(cc.first) + std::to_string(cc.second) + "\n";
+  header += ".address_size 64\n";
+  return header;
+}
+
+Module::Module(Context const & context, std::string const & source) : context_(context), source_(header(context.device()) + source){
+  ContextSwitcher ctx_switch(context_);
+
+  //Path to custom PTX compiler
+  std::string compiler = tools::getenv("ISAAC_PTXAS");
+  if(compiler.size()){
+    auto cc = context.device().compute_capability();
+    std::string out = context.cache_path() + "tmp.o";
+    std::string opt = " --gpu-name sm_" + std::to_string(cc.first) + std::to_string(cc.second)
+                    + "  -o " + out
+                    + "  -ias \"" + source_ + "\"";
+    std::string cmd = compiler + opt;
+    if(std::system(cmd.c_str()) != 0)
+      throw;
+    dispatch::cuModuleLoad(&*cu_, out.c_str());
+  }
+  //JIT Compilation
+  else{
     CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
     unsigned int errbufsize = 8096;
     std::string errbuf(errbufsize, 0);
     //CUjit_target_enum target = cutarget(context.device().architecture());
     void* optval[] = {(void*)(uintptr_t)errbufsize, (void*)errbuf.data()};
     try{
-      dispatch::cuModuleLoadDataEx(&*cu_, source.data(), 2, opt, optval);
+      dispatch::cuModuleLoadDataEx(&*cu_, source_.data(), 2, opt, optval);
     }catch(exception::cuda::base const &){
       std::cerr << "Compilation Failed! Log: " << std::endl;
       std::cerr << errbuf << std::endl;
       throw;
     }
-    return;
   }
-  //Creates program
-  nvrtcProgram prog;
-  const char ** includes = NULL;
-  const char ** src = NULL;
-  dispatch::nvrtcCreateProgram(&prog, source.c_str(), NULL, 0, src, includes);
-  try{
-    std::pair<size_t, size_t> capability = context_.device().compute_capability();
-    std::string capability_opt = "--gpu-architecture=compute_";
-    capability_opt += std::to_string(capability.first) + std::to_string(capability.second);
-    const char * options[] = {capability_opt.c_str(), "--restrict"};
-    dispatch::nvrtcCompileProgram(prog, 2, options);
-  }catch(exception::nvrtc::compilation const &){
-    size_t logsize;
-    dispatch::nvrtcGetProgramLogSize(prog, &logsize);
-    std::string log(logsize, 0);
-    dispatch::nvrtcGetProgramLog(prog, (char*)log.data());
-    std::cerr << "Compilation failed:" << std::endl;
-    std::cerr << log << std::endl;
-  }
-  size_t ptx_size;
-  dispatch::nvrtcGetPTXSize(prog, &ptx_size);
-  std::vector<char> ptx(ptx_size);
-  dispatch::nvrtcGetPTX(prog, ptx.data());
-  //Create binary
-  dispatch::cuModuleLoadDataEx(&*cu_, ptx.data(), 0, NULL, NULL);
 }
 
 Context const & Module::context() const

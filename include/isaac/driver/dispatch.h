@@ -35,6 +35,7 @@
 
 //Exceptions
 #include <iostream>
+#include <stdexcept>
 
 namespace isaac
 {
@@ -48,7 +49,6 @@ void check(nvrtcResult err);
 void check(CUresult err);
 void check(cublasStatus_t err);
 void check(cudnnStatus_t err);
-void check_destruction(CUresult);
 
 class dispatch
 {
@@ -66,8 +66,11 @@ private:
   static typename return_type<FunPtrT>::type f_impl(void*& lib_h, FunPtrT, void*& cache, const char * name, Args... args)
   {
     initializer();
-    if(cache == nullptr)
+    if(cache == nullptr){
       cache = dlsym(lib_h, name);
+			if(cache == 0)
+				throw std::runtime_error("dlsym unable to load function");
+		}
     FunPtrT fptr;
     *reinterpret_cast<void **>(&fptr) = cache;
     typename return_type<FunPtrT>::type res = (*fptr)(args...);
@@ -140,7 +143,7 @@ public:
   static cublasStatus_t cublasSgemm_v2 (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc);
   static cublasStatus_t cublasDgemm_v2 (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc);
   static cublasStatus_t cublasHgemm (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, half* alpha, const half *A, int lda, const half *B, int ldb, half* beta, half *C, int ldc);
-
+  static cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const void *alpha, const void *A, cudaDataType Atype, int lda, const void *B, cudaDataType Btype, int ldb, const void *beta, void *C, cudaDataType Ctype, int ldc, cudaDataType computeType, cublasGemmAlgo_t algo);
 
   static cudnnHandle_t cudnnHandle(Context const & ctx);
   static cudnnStatus_t cudnnCreateConvolutionDescriptor(cudnnConvolutionDescriptor_t* convDesc);
@@ -219,6 +222,7 @@ private:
   static void* cublasHgemm_;
   static void* cublasSgemm_v2_;
   static void* cublasDgemm_v2_;
+  static void* cublasGemmEx_;
 
   static void* cudnnCreateConvolutionDescriptor_;
   static void* cudnnCreateTensorDescriptor_;

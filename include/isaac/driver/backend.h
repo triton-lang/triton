@@ -35,6 +35,7 @@ namespace driver
 
 class Buffer;
 class Stream;
+class Device;
 class Context;
 class Platform;
 class Module;
@@ -102,6 +103,7 @@ struct backend
   static void init();
   static void release();
 
+  static std::vector<Device> devices();
   static std::vector<Platform> platforms();
   static void synchronize(Context const &);
 

@@ -27,23 +27,6 @@ namespace isaac
 namespace driver
 {
 
-void check(nvrtcResult err){
-  using namespace exception::nvrtc;
-
-  switch(err)
-  {
-  case NVRTC_SUCCESS:                         break;
-  case NVRTC_ERROR_OUT_OF_MEMORY:             throw out_of_memory();
-  case NVRTC_ERROR_PROGRAM_CREATION_FAILURE:  throw program_creation_failure();
-  case NVRTC_ERROR_INVALID_INPUT:             throw invalid_input();
-  case NVRTC_ERROR_INVALID_PROGRAM:           throw invalid_program();
-  case NVRTC_ERROR_INVALID_OPTION:            throw invalid_option();
-  case NVRTC_ERROR_COMPILATION:               throw compilation();
-  case NVRTC_ERROR_BUILTIN_OPERATION_FAILURE: throw builtin_operation_failure();
-  default: throw unknown_error();
-  }
-}
-
 void check(CUresult err)
 {
   using namespace exception::cuda;
@@ -111,6 +94,23 @@ void check(CUresult err)
   }
 }
 
+void check(nvrtcResult err){
+  using namespace exception::nvrtc;
+
+  switch(err)
+  {
+  case NVRTC_SUCCESS:                         break;
+  case NVRTC_ERROR_OUT_OF_MEMORY:             throw out_of_memory();
+  case NVRTC_ERROR_PROGRAM_CREATION_FAILURE:  throw program_creation_failure();
+  case NVRTC_ERROR_INVALID_INPUT:             throw invalid_input();
+  case NVRTC_ERROR_INVALID_PROGRAM:           throw invalid_program();
+  case NVRTC_ERROR_INVALID_OPTION:            throw invalid_option();
+  case NVRTC_ERROR_COMPILATION:               throw compilation();
+  case NVRTC_ERROR_BUILTIN_OPERATION_FAILURE: throw builtin_operation_failure();
+  default: throw unknown_error();
+  }
+}
+
 void check(cublasStatus_t err){
   using namespace exception::cublas;
   switch(err)
@@ -129,11 +129,6 @@ void check(cublasStatus_t err){
   }
 }
 
-void check_destruction(CUresult result){
-  if(result!=CUDA_ERROR_DEINITIALIZED)
-    check(result);
-}
-
 void check(cudnnStatus_t err){
   using namespace exception::cudnn;
   switch(err)
@@ -149,6 +144,9 @@ void check(cudnnStatus_t err){
   case CUDNN_STATUS_EXECUTION_FAILED:   throw execution_failed();
   case CUDNN_STATUS_NOT_SUPPORTED:      throw not_supported();
   case CUDNN_STATUS_LICENSE_ERROR:      throw license_error();
+  case CUDNN_STATUS_RUNTIME_PREREQUISITE_MISSING: throw runtime_prerequisite_missing();
+  case CUDNN_STATUS_RUNTIME_IN_PROGRESS: throw runtime_in_progress();
+  case CUDNN_STATUS_RUNTIME_FP_OVERFLOW: throw runtime_fp_overflow();
   }
 }
 
