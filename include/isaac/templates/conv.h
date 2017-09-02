@@ -38,6 +38,7 @@ public:
   // Execution
   std::string id() const;
   std::string dump(driver::Device const & device, std::string const & name);
+  std::vector<param_t> tuning_params() const;
   void enqueue(driver::Kernel& kernel, driver::Stream& queue, scalar const & alpha, driver::Buffer const & I, driver::Buffer const & F, scalar const & beta, driver::Buffer& O);
   // Validity
   static void check_valid(driver::Device const & device, size_t M, param_t* params, uint8_t* valid);

@@ -177,6 +177,10 @@ struct __device_builtin__ cudaTextureDesc
      */
     int                         sRGB;
     /**
+     * Texture Border Color
+     */
+    float                       borderColor[4];
+    /**
      * Indicates whether texture reads are normalized or not
      */
     int                         normalizedCoords;

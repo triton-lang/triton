@@ -56,46 +56,63 @@
 *                                                                              *
 *******************************************************************************/
 
-#if defined(__CUDABE__)
+#if !defined(__CUDACC_RTC__)
 
 #if (__CUDA_ARCH__ >= 350) && !defined(__CUDADEVRT_INTERNAL__)
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
 struct cudaFuncAttributes;
 
-__device__ __attribute__((nv_weak)) cudaError_t cudaMalloc(void **p, size_t s) 
+#if defined(_WIN32)
+#define __NV_WEAK__ __declspec(nv_weak)
+#else
+#define __NV_WEAK__ __attribute__((nv_weak))
+#endif
+
+__device__ __NV_WEAK__ cudaError_t CUDARTAPI cudaMalloc(void **p, size_t s) 
 { 
   return cudaErrorUnknown;
 }
 
-__device__ __attribute__((nv_weak)) cudaError_t cudaFuncGetAttributes(struct cudaFuncAttributes *p, const void *c) 
+__device__ __NV_WEAK__ cudaError_t CUDARTAPI cudaFuncGetAttributes(struct cudaFuncAttributes *p, const void *c) 
 { 
   return cudaErrorUnknown;
 }
 
-__device__ __attribute__((nv_weak)) cudaError_t cudaDeviceGetAttribute(int *value, enum cudaDeviceAttr attr, int device)
+__device__ __NV_WEAK__ cudaError_t CUDARTAPI cudaDeviceGetAttribute(int *value, enum cudaDeviceAttr attr, int device)
 {
   return cudaErrorUnknown;
 }
 
-__device__ __attribute__((nv_weak)) cudaError_t cudaGetDevice(int *device)
+__device__ __NV_WEAK__ cudaError_t CUDARTAPI cudaGetDevice(int *device)
 {
   return cudaErrorUnknown;
 }
 
-__device__ __attribute__((nv_weak)) cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessor(int *numBlocks, const void *func, int blockSize, size_t dynamicSmemSize)
+__device__ __NV_WEAK__ cudaError_t CUDARTAPI cudaOccupancyMaxActiveBlocksPerMultiprocessor(int *numBlocks, const void *func, int blockSize, size_t dynamicSmemSize)
 {
   return cudaErrorUnknown;
 }
 
-__device__ __attribute__((nv_weak)) cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(int *numBlocks, const void *func, int blockSize, size_t dynamicSmemSize, unsigned int flags)
+__device__ __NV_WEAK__ cudaError_t CUDARTAPI cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(int *numBlocks, const void *func, int blockSize, size_t dynamicSmemSize, unsigned int flags)
 {
   return cudaErrorUnknown;
 }
+
+#undef __NV_WEAK__
+
+#if defined(__cplusplus)
+}
+#endif
 
 #endif /* (__CUDA_ARCH__ >= 350) && !defined(__CUDADEVRT_INTERNAL__) */
 
-#else /* defined(__CUDABE__) */
+#endif /* !defined(__CUDACC_RTC__) */
 
-#if defined(__cplusplus) && defined(__CUDACC__)         // Visible to nvcc front-end only
+#if defined(__cplusplus) && defined(__CUDACC__)         /* Visible to nvcc front-end only */
 #if !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 350)   // Visible to SM>=3.5 and "__host__ __device__" only
 
 #include "driver_types.h"
@@ -213,6 +230,10 @@ extern __device__ __cudart_builtin__ cudaError_t CUDARTAPI cudaLaunchDeviceV2_pt
 extern __device__ __cudart_builtin__ cudaError_t CUDARTAPI cudaOccupancyMaxActiveBlocksPerMultiprocessor(int *numBlocks, const void *func, int blockSize, size_t dynamicSmemSize);
 extern __device__ __cudart_builtin__ cudaError_t CUDARTAPI cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(int *numBlocks, const void *func, int blockSize, size_t dynamicSmemSize, unsigned int flags);
 
+extern __device__ __cudart_builtin__ unsigned long long CUDARTAPI cudaCGGetIntrinsicHandle(enum cudaCGScope scope);
+extern __device__ __cudart_builtin__ cudaError_t CUDARTAPI cudaCGSynchronize(unsigned long long handle, unsigned int flags);
+extern __device__ __cudart_builtin__ cudaError_t CUDARTAPI cudaCGGetSize(unsigned int *numThreads, unsigned int *numGrids, unsigned long long handle);
+extern __device__ __cudart_builtin__ cudaError_t CUDARTAPI cudaCGGetRank(unsigned int *threadRank, unsigned int *gridRank, unsigned long long handle);
 }
 
 template <typename T> static __inline__ __device__ __cudart_builtin__ cudaError_t cudaMalloc(T **devPtr, size_t size);
@@ -220,9 +241,8 @@ template <typename T> static __inline__ __device__ __cudart_builtin__ cudaError_
 template <typename T> static __inline__ __device__ __cudart_builtin__ cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessor(int *numBlocks, T func, int blockSize, size_t dynamicSmemSize);
 template <typename T> static __inline__ __device__ __cudart_builtin__ cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(int *numBlocks, T func, int blockSize, size_t dynamicSmemSize, unsigned int flags);
 
-#endif // !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 350)
-#endif // defined(__cplusplus) && defined(__CUDACC__)
 
-#endif /* defined(__CUDABE__) */
+#endif // !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 350)
+#endif /* defined(__cplusplus) && defined(__CUDACC__) */
 
 #endif /* !__CUDA_DEVICE_RUNTIME_API_H__ */

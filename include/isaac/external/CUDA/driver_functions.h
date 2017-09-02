@@ -120,7 +120,7 @@ static __inline__ __host__ struct cudaPos make_cudaPos(size_t x, size_t y, size_
  * Returns a ::cudaExtent based on the specified input parameters \p w,
  * \p h, and \p d.
  *
- * \param w - Width in bytes
+ * \param w - Width in elements when referring to array memory, in bytes when referring to linear memory
  * \param h - Height in elements
  * \param d - Depth in elements
  *

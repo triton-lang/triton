@@ -37,8 +37,7 @@ class Device: public HandleInterface<Device, CUdevice>
 {
 public:
   //Supported architectures
-  enum class Architecture
-  {
+  enum class Architecture{
     //NVidia
     SM_2_0,
     SM_2_1,
@@ -49,7 +48,7 @@ public:
     SM_5_2,
     SM_6_0,
     SM_6_1,
-
+		SM_7_0,
     UNKNOWN
   };
 
@@ -74,6 +73,8 @@ public:
   size_t max_threads_per_block() const;
   size_t max_shared_memory() const;
   size_t warp_size() const;
+  //Compute Capability
+  void interpret_as(std::pair<size_t, size_t> cc);
   std::pair<size_t, size_t> compute_capability() const;
   //Identifier
   std::string name() const;
@@ -87,6 +88,7 @@ public:
 
 private:
   Handle<CUdevice> cu_;
+  std::shared_ptr<std::pair<size_t, size_t>> interpreted_as_;
 };
 
 }

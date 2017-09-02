@@ -39,7 +39,7 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
   if(BT==sc::ISAAC_OP_T) std::swap(BS0, BS1);
   int32_t ldc = M, lda = AS0, ldb = BS0;
   int32_t offc = 0, offa = 0, offb = 0;
-  sc::scalar alpha(1., dtype), beta(0., dtype);
+  sc::scalar alpha(1., dtype), beta(3.2, dtype);
 
   //Initialize Buffers
   drv::Buffer C(ctx, M*N*dtsize);
@@ -68,16 +68,17 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
   //ISAAC result
   std::vector<DTYPE> hC(M*N);
 
-  //Test selected profile
+//  //Test selected profile
   sc::GEMM(ctx.device(), stream, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, alpha, A, B, beta, C);
   stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
   if(!is_correct(hC, rC, max_rounding_error(DTYPE(K))))
     exit(EXIT_FAILURE);
+  stream.write(C, true, 0, M*N*dtsize, iC.data());
 
   std::vector<int> rv = {1, 2, 4};
   std::vector<int> rl = {1, 8};
   std::vector<int> rs = {1, 4};
-  std::vector<int> rgrid = {1, 8};
+  std::vector<int> rgrid = {1};
   std::vector<int> r1 = {1};
   for(auto x: sc::cpp::cartesian({rv, rl, rl, rl, rs, r1, rs, rl, rl, rl, rl, rs, rl, rgrid})){
     isaac::templates::GEMM gemm(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
@@ -89,7 +90,7 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
     }catch(isaac::templates::invalid_parameters){
       continue;
     }
-    drv::Module program(ctx, src, true);
+    drv::Module program(ctx, src);
     drv::Kernel kernel(program, "gemm");
 
     //Launch
@@ -98,6 +99,7 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
 
     //Test
     stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
+    stream.write(C, true, 0, M*N*dtsize, iC.data());
     size_t depth = x[11]*x[12]*x[13];
     double eps = max_rounding_error(DTYPE(K/depth))*depth;
     if(!is_correct(hC, rC, eps))
@@ -125,17 +127,17 @@ int do_test(sc::driver::Context const & ctx, size_t M, size_t N, size_t K){
 
 int main(){
   auto ctx = drv::backend::contexts::get_default();
-  if(ctx.device().compute_capability().first>=6)
-  {
-    std::cout << "===============" << std::endl;
-    std::cout << "HALF:" << std::endl;
-    std::cout << "===============" << std::endl;
-    do_test<half_float::half>(ctx, 67, 83, 673);
-    do_test<half_float::half>(ctx, 1,83,673);
-    do_test<half_float::half>(ctx, 67,1,673);
-    do_test<half_float::half>(ctx, 67,83,1);
-    do_test<half_float::half>(ctx, 64,83,673);
-  }
+//  if(ctx.device().compute_capability().first>=6)
+//  {
+//    std::cout << "===============" << std::endl;
+//    std::cout << "HALF:" << std::endl;
+//    std::cout << "===============" << std::endl;
+//    do_test<half_float::half>(ctx, 67, 83, 673);
+//    do_test<half_float::half>(ctx, 1,83,673);
+//    do_test<half_float::half>(ctx, 67,1,673);
+//    do_test<half_float::half>(ctx, 67, 83, 1);
+//    do_test<half_float::half>(ctx, 64, 96, 640);
+//  }
   std::cout << "===============" << std::endl;
   std::cout << "FLOAT:" << std::endl;
   std::cout << "===============" << std::endl;
@@ -143,7 +145,7 @@ int main(){
   do_test<float>(ctx, 1, 83, 673);
   do_test<float>(ctx, 67, 1, 673);
   do_test<float>(ctx, 67, 83, 1);
-  do_test<float>(ctx, 64, 80, 640);
+  do_test<float>(ctx, 64, 96, 640);
   std::cout << "===============" << std::endl;
   std::cout << "DOUBLE:" << std::endl;
   std::cout << "===============" << std::endl;
@@ -151,6 +153,6 @@ int main(){
   do_test<double>(ctx, 1, 83, 673);
   do_test<double>(ctx, 67, 1, 673);
   do_test<double>(ctx, 67, 83, 1);
-  do_test<double>(ctx, 64, 80, 640);
+  do_test<double>(ctx, 64, 96, 640);
 
 }

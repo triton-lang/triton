@@ -31,6 +31,8 @@
 #include "database/sm_6_1/conv.hpp"
 #include "database/sm_6_1/gemm.hpp"
 
+#include "database/sm_7_0/gemm.hpp"
+
 namespace isaac{
 namespace runtime{
 
@@ -48,7 +50,11 @@ const std::map<std::pair<driver::Device::Architecture, OperationType>, std::shar
   {{Architecture::SM_6_0, GEMM}, std::make_shared<GEMMProfile>((u_char*)sm_6_0::gemm)},
 
   {{Architecture::SM_6_1, CONV}, std::make_shared<ConvProfile>((u_char*)sm_6_1::conv)},
-  {{Architecture::SM_6_1, GEMM}, std::make_shared<GEMMProfile>((u_char*)sm_6_1::gemm)}
+  {{Architecture::SM_6_1, GEMM}, std::make_shared<GEMMProfile>((u_char*)sm_6_1::gemm)},
+
+  {{Architecture::SM_7_0, CONV}, std::make_shared<ConvProfile>((u_char*)sm_6_1::conv)},
+  {{Architecture::SM_7_0, GEMM}, std::make_shared<GEMMProfile>((u_char*)sm_7_0::gemm)}
+
 };
 
 }

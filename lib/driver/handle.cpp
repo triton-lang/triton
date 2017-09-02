@@ -31,13 +31,13 @@ namespace driver
 {
 
 //CUDA
-inline void _delete(CUcontext x) { check_destruction(dispatch::cuCtxDestroy(x)); }
-inline void _delete(CUdeviceptr x) { check_destruction(dispatch::cuMemFree(x)); }
-inline void _delete(CUstream x) { check_destruction(dispatch::cuStreamDestroy(x)); }
+inline void _delete(CUcontext x) { dispatch::cuCtxDestroy(x); }
+inline void _delete(CUdeviceptr x) { dispatch::cuMemFree(x); }
+inline void _delete(CUstream x) { dispatch::cuStreamDestroy(x); }
 inline void _delete(CUdevice) { }
-inline void _delete(CUevent x) { check_destruction(dispatch::cuEventDestroy(x)); }
+inline void _delete(CUevent x) { dispatch::cuEventDestroy(x); }
 inline void _delete(CUfunction) { }
-inline void _delete(CUmodule x) { check_destruction(dispatch::cuModuleUnload(x)); }
+inline void _delete(CUmodule x) { dispatch::cuModuleUnload(x); }
 inline void _delete(cu_event_t x) { _delete(x.first); _delete(x.second); }
 inline void _delete(cu_platform){}
 

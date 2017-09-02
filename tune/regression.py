@@ -3,8 +3,12 @@ import keras as kr
 import tensorflow as tf
 import isaac as sc
 import struct
-
+from keras import backend as K
 from tools import ProgressBar, load
+from keras.layers import Activation, Dense
+
+def logit(x):
+    return K.log(x/(1-x))
 
 def train(prefix, OpType, X, y, nepochs = 100):
     progress = ProgressBar('Training')
@@ -19,18 +23,21 @@ def train(prefix, OpType, X, y, nepochs = 100):
         kr.backend.set_session(sess)
         #Features transformation
         X = np.log2(X)
+        #X = np.tile(X, [1, X.shape[1]])*np.repeat(X, X.shape[1], 1)
+        #print(X.shape)
+        #X = (X - np.mean(X, 0))/np.max(X, 0)
         #Model
         model = kr.models.Sequential()
 
-        for L in [128, 64, 32, 16, 8]:
+        for i,L in enumerate([64, 32, 16, 8]):
             model.add(kr.layers.Dense(L, input_dim=X.shape[1]))
             model.add(kr.layers.Activation('relu'))
         model.add(kr.layers.Dense(1))
         model.add(kr.layers.Activation('relu'))
-        model.compile(loss='mean_squared_error', optimizer='rmsprop')
+        model.compile(loss='mean_squared_error', optimizer='adam')
         #Train
-        history = model.fit(X, y, validation_split=0.1, batch_size=64, epochs=nepochs, 
-                            verbose=0, callbacks = [kr.callbacks.LambdaCallback(on_epoch_end = lambda i, _: progress.update(i, nepochs))])
+        history = model.fit(X, y, validation_split=0.1, batch_size=16, epochs=nepochs,
+                            verbose=1, callbacks = [kr.callbacks.LambdaCallback(on_epoch_end = lambda i, _: progress.update(i, nepochs))])
         model.save(model_path)
         model = kr.models.load_model(model_path)
         return model
@@ -41,7 +48,7 @@ def maximize(OpType, device, model, shapes, V):
     X = np.zeros((V.shape[0], OpType.nparams), dtype=np.uint32)
     X[:, :OpType.nshape_params] = shapes
     X[:, OpType.nshape_params:] = V
-    X = X[OpType.check_valid(device, X), :]
+    X = OpType.get_valid(device, X)
     #Model predictions
     predictions = model.predict(np.log2(X), batch_size=8192, verbose=0)
     pred_perfs = np.sort(predictions, axis=0)[::-1]
@@ -54,7 +61,7 @@ def maximize(OpType, device, model, shapes, V):
         params = X[pred_idx,:][0].astype(int)
         #print(params)
         try:
-            y = OpType(params).benchmark(ctx, stream)   
+            y = OpType(params).benchmark(ctx, stream)
         except RuntimeError:
             continue
         #Update
@@ -82,6 +89,7 @@ def prune(prefix, OpType, device, model):
     progress.update(i, nsamples)
     for x in S:
         perf, y = maximize(OpType, device, model, x, V)
+        print(x, perf)
         X = np.vstack((X, x))
         Y = np.vstack((Y, y))
         progress.update(i, nsamples)

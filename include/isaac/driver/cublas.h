@@ -28,34 +28,70 @@
 #include "isaac/driver/buffer.h"
 #include "isaac/driver/stream.h"
 #include "isaac/driver/backend.h"
+#include "isaac/driver/error.h"
+#include "isaac/tools/bench.hpp"
+#include "isaac/tools/collections.hpp"
 
 namespace isaac
 {
 namespace driver
 {
 
-template<typename... Args> void cublasGemm_impl(half, Args... args){ driver::dispatch::cublasHgemm(args...); }
-template<typename... Args> void cublasGemm_impl(float, Args... args){ driver::dispatch::cublasSgemm_v2(args...); }
-template<typename... Args> void cublasGemm_impl(double, Args... args){ driver::dispatch::cublasDgemm_v2(args...); }
+enum cublasStrategy_t{
+    CUBLAS_PREFER_FASTEST,
+    CUBLAS_HEURISTICS
+};
 
 
-template<class cuType>
-inline void cublasGemm_dispatch(Stream& stream, char AT, char BT, int32_t M, int32_t N, int32_t K, void* alpha, Buffer const & A, int32_t lda, Buffer const & B, int32_t ldb, void* beta, Buffer& C, int32_t ldc){
-  auto cu_trans = [](char xt) { return (xt=='N')?CUBLAS_OP_N:CUBLAS_OP_T; };
-  cublasHandle_t handle = dispatch::cublasHandle(stream.context());
-  dispatch::cublasSetStream_v2(handle, (CUstream)stream);
-  CUdeviceptr cuA = A, cuB = B, cuC = C;
-  cublasGemm_impl(cuType(), handle, cu_trans(AT), cu_trans(BT), M, N, K, (cuType*)alpha, (const cuType*)cuA, lda, (const cuType*)cuB, ldb, (cuType*)beta, (cuType*)cuC, ldc);
+static const std::vector<cublasGemmAlgo_t> cublasAlgorithms = {
+  CUBLAS_GEMM_DFALT, CUBLAS_GEMM_ALGO0, CUBLAS_GEMM_ALGO1, CUBLAS_GEMM_ALGO2, CUBLAS_GEMM_ALGO3,
+  CUBLAS_GEMM_ALGO4, CUBLAS_GEMM_ALGO5, CUBLAS_GEMM_ALGO6, CUBLAS_GEMM_ALGO7
+};
+
+static const std::map<DType, cudaDataType> cudtype = {{HALF_TYPE, CUDA_R_16F}, {FLOAT_TYPE, CUDA_R_32F}, {DOUBLE_TYPE,CUDA_R_64F}};
+static const std::map<char, cublasOperation_t> cuop = {{'N', CUBLAS_OP_N}, {'T', CUBLAS_OP_T}};
+
+cublasGemmAlgo_t cublasGemmFastest(Stream& stream, cublasHandle_t handle, cudaDataType cudt, cublasOperation_t AT, cublasOperation_t BT, int32_t M, int32_t N, int32_t K,
+                         void* alpha, CUdeviceptr A, int32_t lda, CUdeviceptr B, int32_t ldb,
+                         void* beta, CUdeviceptr C, int32_t ldc){
+
+  typedef std::tuple<cudaDataType_t, cublasOperation_t, cublasOperation_t, int32_t, int32_t, int32_t> key_t;
+  // Benchmark fastest algorithm in cublasGemmEx
+  auto benchmark_fastest = [&](key_t const &){
+    std::vector<double> times;
+    for(cublasGemmAlgo_t a: cublasAlgorithms){
+      try{
+        times.push_back(bench([&](){ dispatch::cublasGemmEx(handle, AT, BT, M, N, K, alpha, (const void*)A, cudt, lda, (const void*)B, cudt, ldb, beta, (void*)C, cudt, ldc, cudt, a); },
+        [&](){ stream.synchronize(); },
+        stream.context().device()));
+      }catch(driver::exception::cublas::base const &){
+        times.push_back(INFINITY);
+      }
+    }
+    size_t argmin = std::min_element(times.begin(), times.end()) - times.begin();
+    return cublasAlgorithms[argmin];
+  };
+  // Cache result
+  static cpp::CachedMap<key_t, cublasGemmAlgo_t> cache(benchmark_fastest);
+  return cache.get(std::make_tuple(cudt, AT, BT, M, N, K));
 }
 
-inline void cublasGemm(DType dtype, Stream& stream, char AT, char BT, int32_t M, int32_t N, int32_t K, scalar alpha, Buffer const & A, int32_t lda, Buffer const & B, int32_t ldb, scalar beta, Buffer& C, int32_t ldc){
+/* Wrapper for cublasGemmEx */
+inline void cublasGemmEx(cublasHandle_t handle, cudaDataType cudt, cublasOperation_t AT, cublasOperation_t BT, int32_t M, int32_t N, int32_t K,
+                         void* alpha, CUdeviceptr A, int32_t lda, CUdeviceptr B, int32_t ldb,
+                         void* beta, CUdeviceptr C, int32_t ldc, cublasGemmAlgo_t algo)
+{ dispatch::cublasGemmEx(handle, AT, BT, M, N, K, alpha, (const void*)A, cudt, lda, (const void*)B, cudt, ldb, beta, (void*)C, cudt, ldc, cudt, algo); }
+
+
+/* Simplified API for default GEMM */
+inline void cublasGemm(DType dtype, Stream& stream, char cAT, char cBT, int32_t M, int32_t N, int32_t K, scalar alpha, Buffer const & A, int32_t lda, Buffer const & B, int32_t ldb, scalar beta, Buffer& C, int32_t ldc, cublasGemmAlgo_t* fastest = NULL, cublasGemmAlgo_t algo = CUBLAS_GEMM_DFALT){
   ContextSwitcher ctx_switch(stream.context());
-  switch(dtype){
-    case HALF_TYPE: return cublasGemm_dispatch<half>(stream, AT, BT, M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
-    case FLOAT_TYPE: return cublasGemm_dispatch<float>(stream, AT, BT, M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
-    case DOUBLE_TYPE: return cublasGemm_dispatch<double>(stream, AT, BT, M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
-    default: throw;
-  }
+  cublasHandle_t handle = dispatch::cublasHandle(stream.context());
+  dispatch::cublasSetStream_v2(handle, (CUstream)stream);
+  if(fastest)
+    *fastest = cublasGemmFastest(stream, handle, cudtype.at(dtype), cuop.at(cAT), cuop.at(cBT), M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc);
+  else
+    cublasGemmEx(handle, cudtype.at(dtype), cuop.at(cAT), cuop.at(cBT), M, N, K, alpha.data(), A, lda, B, ldb, beta.data(), C, ldc, algo);
 }
 
 inline cudnnDataType_t cudnnDtype(DType dtype){
@@ -98,7 +134,8 @@ inline void cudnnConv(DType dtype, Stream& stream, int32_t H, int32_t W, int32_t
   algo = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
   size_t workspace_size;
   dispatch::cudnnGetConvolutionForwardWorkspaceSize(handle, tI, tF, conv, tO, algo, &workspace_size);
-  Buffer work(ctx, std::max((size_t)1,workspace_size));
+//  Buffer work(ctx, std::max((size_t)1,workspace_size));
+  static Buffer work(ctx, 1024*1024*16);
   CUdeviceptr twork = work;
   CUdeviceptr pI = I, pF = F, pO = O;
   dispatch::cudnnConvolutionForward(handle, alpha.data(), tI, (void*)pI, tF, (void*)pF, conv, algo, (void*)twork, workspace_size, beta.data(), tO, (void*)pO);

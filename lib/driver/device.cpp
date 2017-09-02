@@ -38,6 +38,12 @@ namespace driver
 Device::Architecture Device::nv_arch(std::pair<unsigned int, unsigned int> sm) const{
   switch(sm.first)
   {
+   case 7:
+     switch(sm.second)
+     {
+     case 0: return Architecture::SM_7_0;
+     }
+
   case 6:
     switch(sm.second)
     {
@@ -115,7 +121,13 @@ std::string Device::pci_bus_id() const{
   return std::string(tmp);
 }
 
+void Device::interpret_as(std::pair<size_t, size_t> cc){
+  interpreted_as_ = std::make_shared<std::pair<size_t, size_t>>(cc);
+}
+
 std::pair<size_t, size_t> Device::compute_capability() const{
+  if(interpreted_as_)
+    return *interpreted_as_;
   size_t _major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>();
   size_t _minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>();
   return std::make_pair(_major, _minor);

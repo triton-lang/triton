@@ -69,6 +69,9 @@ namespace driver
 #define DEFINE13(init, hlib, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13) ret dispatch::fname(t1 a, t2 b, t3 c, t4 d, t5 e, t6 f, t7 g, t8 h, t9 i, t10 j, t11 k, t12 l, t13 m)\
 {return f_impl<dispatch::init>(hlib, fname, fname ## _, #fname, a, b, c, d, e, f, g, h, i, j, k, l, m); }
 
+#define DEFINE19(init, hlib, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19) ret dispatch::fname(t1 a, t2 b, t3 c, t4 d, t5 e, t6 f, t7 g, t8 h, t9 i, t10 j, t11 k, t12 l, t13 m, t14 n, t15 o, t16 p, t17 q, t18 r, t19 s)\
+{return f_impl<dispatch::init>(hlib, fname, fname ## _, #fname, a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s); }
+
 //Specialized helpers for CUDA
 #define CUDA_DEFINE1(ret, fname, t1) DEFINE1(cuinit, cuda_, ret, fname, t1)
 #define CUDA_DEFINE2(ret, fname, t1, t2) DEFINE2(cuinit, cuda_, ret, fname, t1, t2)
@@ -101,6 +104,7 @@ namespace driver
 
 #define CUBLAS_DEFINE1(ret, fname, t1) DEFINE1(cublasinit, cublas_, ret, fname, t1)
 #define CUBLAS_DEFINE13(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13) DEFINE13(cublasinit, cublas_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13)
+#define CUBLAS_DEFINE19(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19) DEFINE19(cublasinit, cublas_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19)
 
 #define CUDNN_DEFINE1(ret, fname, t1) DEFINE1(cudnninit, cudnn_, ret, fname, t1)
 #define CUDNN_DEFINE2(ret, fname, t1, t2) DEFINE2(cudnninit, cudnn_, ret, fname, t1, t2)
@@ -112,6 +116,11 @@ namespace driver
 bool dispatch::cuinit(){
   if(cuda_==nullptr)
     cuda_ = dlopen("libcuda.so", RTLD_LAZY);
+  CUresult (*fptr)(unsigned int);
+	cuInit_ = dlsym(cuda_, "cuInit");
+	*reinterpret_cast<void **>(&fptr) = cuInit_;
+	CUresult res = (*fptr)(0);
+	check(res);
   return cuda_ != nullptr;
 }
 
@@ -219,6 +228,7 @@ cublasStatus_t dispatch::cublasDgemm_v2(cublasHandle_t h, cublasOperation_t at, 
 { return f_impl<dispatch::cublasinit>(cublas_, cublasDgemm_v2, cublasDgemm_v2_, "cublasDgemm_v2", h, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
 cublasStatus_t dispatch::cublasHgemm(cublasHandle_t h, cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, half* alpha, const half *A, int lda, const half *B, int ldb, half* beta, half *C, int ldc)
 { return f_impl<dispatch::cublasinit>(cublas_, cublasHgemm, cublasHgemm_, "cublasHgemm", h, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
+CUBLAS_DEFINE19(cublasStatus_t, cublasGemmEx, cublasHandle_t, cublasOperation_t, cublasOperation_t, int, int, int, const void*, const void*, cudaDataType, int, const void*, cudaDataType, int, const void*, void*, cudaDataType, int, cudaDataType, cublasGemmAlgo_t)
 
 //cuDNN
 CUDNN_DEFINE1(cudnnStatus_t, cudnnCreateConvolutionDescriptor, cudnnConvolutionDescriptor_t*)
@@ -314,6 +324,7 @@ void* dispatch::cublasSetStream_v2_;
 void* dispatch::cublasHgemm_;
 void* dispatch::cublasSgemm_v2_;
 void* dispatch::cublasDgemm_v2_;
+void* dispatch::cublasGemmEx_;
 
 void* dispatch::cudnnCreateConvolutionDescriptor_;
 void* dispatch::cudnnCreateTensorDescriptor_;

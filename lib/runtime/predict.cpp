@@ -26,6 +26,7 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <sstream>
 #include "isaac/runtime/predict.h"
 #include "isaac/templates/conv.h"
 #include "isaac/tools/bench.hpp"
@@ -87,9 +88,8 @@ void Network::predict(matrix<float> const & X, matrix<float> & Y){
   uint32_t N = X.shapes()[0], M = X.shapes()[1];
   size_t nlayers = layers_.size();
   std::vector<uint32_t> n_outs(nlayers+1, M);
-  for(size_t i = 0; i < nlayers; ++i){
+  for(size_t i = 0; i < nlayers; ++i)
     n_outs[i+1] = layers_[i]->n_outs(n_outs[i]);
-  }
   //Pre-allocate a big buffer to stay in cache memory
   size_t nhid_max = *std::max_element(n_outs.begin(), n_outs.end());
   std::vector<float> scratch(2*N*nhid_max);
@@ -98,7 +98,8 @@ void Network::predict(matrix<float> const & X, matrix<float> & Y){
   for(size_t i = 0; i < nlayers; ++i){
     bool is_dense = dynamic_cast<Dense*>(layers_[i].get());
     off[i+1] = off[i];
-    if(is_dense) off[i+1] = (off[i] + scratch.size()/2) % scratch.size();
+    if(is_dense)
+      off[i+1] = (off[i] + scratch.size()/2) % scratch.size();
     matrix<float> I({N, n_outs[i]}, (i==0)?n_outs[i]:nhid_max, (i==0)?X.data():(scratch.data() + off[i]));
     matrix<float> O({N, n_outs[i+1]}, (i==nlayers-1)?n_outs[i+1]:nhid_max, (i==nlayers-1)?Y.data():(scratch.data() + off[i+1]));
     layers_[i]->forward(I, O);
@@ -112,7 +113,7 @@ Profile::Profile(u_char* data, size_t nshapes): kernels_(pad_left(matrix<param_t
 matrix<param_t> const & Profile::kernels() const
 { return kernels_; }
 
-std::vector<param_t> Profile::predict(driver::Device const & device, std::vector<param_t> const & shapes, validator_t const & validator, benchmark_t const & benchmark, uint32_t nkeep)
+std::vector<param_t> Profile::predict(driver::Device const & device, std::vector<param_t> const & shapes, validator_t const & validator)
 {
   // Get valid profiles
   uint32_t nkernels = kernels_.shapes()[0];
@@ -123,6 +124,9 @@ std::vector<param_t> Profile::predict(driver::Device const & device, std::vector
   std::vector<uint8_t> valid(nkernels);
   validator(device, nkernels, kernels_.data(), valid.data());
   uint32_t nvalid = std::accumulate(valid.begin(), valid.end(), 0);
+
+  if(nvalid == 0)
+    throw std::runtime_error("Something went wrong. No valid profiles found.");
 
   // Get valid indices
   std::vector<size_t> map;
@@ -145,53 +149,22 @@ std::vector<param_t> Profile::predict(driver::Device const & device, std::vector
   std::iota(idx.begin(), idx.end(), 0);
   std::sort(idx.begin(), idx.end(), [&Y](size_t i1, size_t i2) {return Y(i1,0) > Y(i2, 0);});
 
-  // Return best
-  matrix<param_t> best({nkeep, nparams});
-  for(size_t i = 0; i < std::min(nvalid, nkeep); ++i)
-    for(size_t j = 0; j < nparams; ++j)
-      best(i, j) = kernels_(map[idx[i]], shapes.size() + j);
-
   //Re-Benchmark
-  size_t argmin = 0;
   std::vector<param_t> x(nparams);
-  if(nkeep > 1){
-    std::vector<double> time;
-    for(size_t i = 0; i < std::min(nvalid, nkeep); ++i){
-      for(size_t j = 0; j < nparams; ++j)
-        x[j] = best(i,j);
-      time.push_back(benchmark(x));
-    }
-    argmin = std::min_element(time.begin(), time.end()) - time.begin();
-  }
   for(size_t j = 0; j < nparams; ++j)
-    x[j] = best(argmin,j);
-
+    x[j] = kernels_(map[idx[0]], shapes.size() + j);
   return x;
 }
 
 
 ConvProfile::ConvProfile(u_char* data): Profile(data, 8){}
 
-templates::Conv ConvProfile::predict(driver::Stream& stream, driver::Device const & device, DType dtype, param_t C, param_t H, param_t W, param_t N, param_t K, param_t P, param_t Q, param_t R, param_t S,
+templates::Conv ConvProfile::predict(driver::Stream& stream, DType dtype, param_t C, param_t H, param_t W, param_t N, param_t K, param_t P, param_t Q, param_t R, param_t S,
                       param_t pad_h, param_t pad_w, param_t stride_h, param_t stride_w)
 {
+  driver::Device const & device = stream.context().device();
   std::vector<param_t> shapes{dtype, N, K, P, Q, C, R, S};
-
-  driver::Buffer O(stream.context(), N*K*P*Q*size_of(dtype));
-  driver::Buffer I(stream.context(), C*H*W*N*size_of(dtype));
-  driver::Buffer F(stream.context(), C*K*R*S*size_of(dtype));
-  scalar alpha(1., dtype);
-  scalar beta(0., dtype);
-  std::function<double(std::vector<param_t> const&)> benchmark = [&](std::vector<param_t> const& x){
-    templates::Conv generator(dtype, C, H, W, N, K, P, Q, R, S, pad_h, pad_w, stride_h, stride_w,
-                              x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14]);
-    std::string src = generator.dump(device, "conv");
-    driver::Module module(stream.context(), src);
-    driver::Kernel kernel(module, "conv");
-    return bench([&](){ generator.enqueue(kernel, stream, alpha, I, F, beta, O); }, [&](){ stream.synchronize(); }, device);
-  };
-
-  std::vector<param_t> x = Profile::predict(device, shapes, templates::Conv::check_valid, benchmark);
+  std::vector<param_t> x = Profile::predict(device, shapes, templates::Conv::check_valid);
   return templates::Conv(dtype, C, H, W, N, K, P, Q, R, S, pad_h, pad_w, stride_h, stride_w,
                          x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14]);
 }
@@ -199,27 +172,12 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, driver::Device cons
 
 GEMMProfile::GEMMProfile(u_char* data): Profile(data, 6){}
 
-templates::GEMM GEMMProfile::predict(driver::Stream& stream, driver::Device const & device, DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
+templates::GEMM GEMMProfile::predict(driver::Stream& stream, DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
                                      param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc)
 {
+  driver::Device const & device = stream.context().device();
   std::vector<param_t> shapes{dtype, AT, BT, M, N, K};
-
-  driver::Buffer C(stream.context(), M*N*size_of(dtype));
-  driver::Buffer A(stream.context(), M*K*size_of(dtype));
-  driver::Buffer B(stream.context(), K*N*size_of(dtype));
-  scalar alpha(1., dtype);
-  scalar beta(0., dtype);
-  std::function<double(std::vector<param_t> const&)> benchmark = [&](std::vector<param_t> const& x)
-  {
-    templates::GEMM generator(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
-                             x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
-    std::string src = generator.dump(device, "gemm");
-    driver::Module module(stream.context(), src);
-    driver::Kernel kernel(module, "gemm");
-    return bench([&](){ generator.enqueue(kernel, stream, alpha, A, B, beta, C); }, [&](){ stream.synchronize(); }, device);
-  };
-
-  std::vector<param_t> x = Profile::predict(device, shapes, templates::GEMM::check_valid, benchmark);
+  std::vector<param_t> x = Profile::predict(device, shapes, templates::GEMM::check_valid);
   return templates::GEMM(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
                          x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
 }

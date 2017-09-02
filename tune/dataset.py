@@ -22,22 +22,16 @@ def benchmarks(prefix, OpType, device, nsamples):
     stream = sc.driver.Stream(ctx)
 
     bufX, bufY = np.empty((step, X.shape[1])), np.empty((step, Y.shape[1]))
-    param_ranges = OpType.param_ranges()
     
-    #Probabilities
-    alpha = step/len(param_ranges)
-    counts = [alpha*np.ones(len(x)) for x in param_ranges]
-    probabilities = [x/np.sum(x) for x in counts]
-    probabilities = update_probabilities(X, counts, param_ranges)
-
     #Generate data
     nvalid = X.shape[0]
     progress.update(min(nsamples,nvalid), nsamples)
     while nvalid < nsamples:
-        P = OpType.generate_valid(device, probabilities)
+        P = OpType.generate_valid(device)
         for params in P:
+            print(params)
+            sys.stdout.flush()
             op = OpType(params)
-            if op.skip(): continue
             try:
                 y = op.benchmark(ctx, stream)            
             except RuntimeError:
@@ -47,8 +41,6 @@ def benchmarks(prefix, OpType, device, nsamples):
             bufY[nvalid % step, :] = y
             #Save
             nvalid += 1
-            if nvalid == step:
-                probabilities =  update_probabilities(bufX, counts, param_ranges)
             if nvalid % step == 0:
                 X = np.vstack((X, bufX))
                 Y = np.vstack((Y, bufY))

@@ -44,18 +44,18 @@ namespace cpp
 template<class K, class V>
 class CachedMap{
 public:
-  CachedMap(std::function<V()> value_maker) : value_maker_(value_maker)
+  CachedMap(std::function<V(K const &)> value_maker) : value_maker_(value_maker)
   { }
 
   V const & get(K const & key){
     auto it = cache_.find(key);
     if(it==cache_.end())
-      return cache_.insert(std::make_pair(key, value_maker_())).first->second;
+      return cache_.insert(std::make_pair(key, value_maker_(key))).first->second;
     return it->second;
   }
 private:
   std::map<K, V> cache_;
-  std::function<V()> value_maker_;
+  std::function<V(K const &)> value_maker_;
 };
 
 /* ---- Cartesian ---- */

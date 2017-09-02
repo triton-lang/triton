@@ -1,4 +1,5 @@
 #include <tuple>
+#include "opts.hpp"
 #include "isaac/driver/backend.h"
 #include "isaac/driver/cublas.h"
 #include "isaac/driver/context.h"
@@ -18,32 +19,6 @@ double geometric_mean(std::vector<double> const&data){
   return std::exp(logsum/data.size());
 }
 
-void handle_misusage(){
-  std::cerr << "Usage : blas-bench [--dtype {float16, float32, float64}]" << std::endl;
-  std::cerr << "--dtype: data-type to benchmark (default = float32)" << std::endl;
-  std::cerr << "--help: display this message" << std::endl;
-  exit(EXIT_FAILURE);
-}
-
-std::string getopt(std::vector<std::string> const & args,
-            std::string const & key,
-            std::vector<std::string> const & set = {},
-            std::string dft = "")
-{
-  auto it = std::find(args.begin(), args.end(), key);
-  if(it==args.end()){
-    if(dft.empty())
-      handle_misusage();
-    return dft;
-  }
-  auto next = it + 1;
-  if(next==args.end() || next->compare(0, 2, "--")==0)
-    handle_misusage();
-  if(set.size() && std::find(set.begin(), set.end(), *next)==set.end())
-    handle_misusage();
-  return *next;
-}
-
 void print_results_header(std::vector<std::string> sections){
     std::cout << color_stream(ITALIC) << color_stream(BOLD) ;
     std::copy(sections.begin(), sections.end(), std::ostream_iterator<std::string>(std::cout, "\t"));
@@ -51,14 +26,14 @@ void print_results_header(std::vector<std::string> sections){
     std::cout << color_stream(RESET) << std::endl;
 }
 
-void print_results(std::vector<double> const & times, std::vector<std::string> const & prefix, std::function<double(double)> fn){
+void print_results(std::vector<double> const & times, std::vector<std::string> const & prefix, std::function<bool(double, double)> cmp, std::function<double(double)> fn){
     std::copy(prefix.begin(), prefix.end(), std::ostream_iterator<std::string>(std::cout, "\t"));
     std::vector<double> perf;
     std::transform(times.begin(), times.end(), std::back_inserter(perf), fn);
     auto fastest = perf;
-    std::sort(fastest.begin(), fastest.end(), std::greater<double>());
+    std::sort(fastest.begin(), fastest.end(), cmp);
     for(auto x: perf){
-      if(x/fastest[1] >= 1.05)
+      if(std::max(x,fastest[1])/std::min(x, fastest[1]) >= 1.05)
         std::cout << color_stream(FG_LIGHT_BLUE) << x << color_stream(RESET);
       else
         std::cout << x;
@@ -67,23 +42,65 @@ void print_results(std::vector<double> const & times, std::vector<std::string> c
     std::cout << std::endl;
 }
 
+struct Metric{
+  virtual std::function<bool(double, double)> cmp() const = 0;
+  virtual double conv(param_t P, param_t Q, param_t K, param_t N, param_t C, param_t R, param_t S, double tsec) const = 0;
+  virtual double gemm(param_t M, param_t N, param_t K, double tsec) const = 0;
+};
+
+class FLOPS: public Metric{
+public:
+  FLOPS(double scale): scale_(scale){}
+  std::function<bool(double, double)> cmp() const { return std::greater<double>(); }
+  double conv(param_t P, param_t Q, param_t K, param_t N, param_t C, param_t R, param_t S, double tsec) const
+  { return  sc::templates::Conv::tflops(P,Q,K,N,C,R,S,tsec) * 1e12 / scale_; }
+  double gemm(param_t M, param_t N, param_t K, double tsec) const
+  { return  sc::templates::GEMM::tflops(M, N, K, tsec) * 1e12 / scale_; }
+private:
+  double scale_;
+};
+
+class Time: public Metric{
+public:
+  Time(double scale): scale_(scale){}
+  std::function<bool(double, double)> cmp() const { return std::less<double>(); }
+  double conv(param_t, param_t, param_t, param_t, param_t, param_t, param_t, double tsec) const { return tsec*1e-9/scale_; }
+  double gemm(param_t, param_t, param_t, double tsec) const { return tsec*1e-9/scale_; }
+private:
+  double scale_;
+};
+
 
 int main(int argc, char* argv[])
 {
-  std::vector<std::string> args(argv, argv + argc);
   std::cout << std::fixed << std::setprecision(2);
 
+  opts::Application program("bench", "benchmarking suite for ISAAC");
+  program.add<sc::DType>("dtype", "data-type", "float32", {{"float16", sc::HALF_TYPE}, {"float32", sc::FLOAT_TYPE}, {"float64", sc::DOUBLE_TYPE}});
+  program.add("conv", "benchmark CONV", true);
+  program.add("gemm", "benchmark GEMM", true);
+  program.add<std::shared_ptr<Metric>>("metric", "performance metric for the results", "tflops", {{"tflops", std::make_shared<FLOPS>(1e12)}, {"ms", std::make_shared<Time>(1e-3)}});
+  program.add<size_t>("device", "device to run benchmarks on", 0);
+  program.parse(argc, argv);
+
   //Get dtype
-  static std::map<std::string, sc::DType> sc_dtype = {{"float16", sc::HALF_TYPE}, {"float32", sc::FLOAT_TYPE}, {"float64", sc::DOUBLE_TYPE}};
-  sc::DType dtype = sc_dtype[getopt(args, "--dtype", {"float16", "float32", "float64"}, "float32")];
-  int32_t dtsize = sc::size_of(dtype);
+  sc::DType dtype = program.get<sc::DType>("dtype");
+  size_t dtsize = sc::size_of(dtype);
 
   //Get device
-  auto ctx = drv::backend::contexts::get_default();
-  drv::Device const & device = drv::backend::contexts::get_default().device();
+  drv::Device device = drv::backend::devices()[program.get<size_t>("device")];
+  drv::Context ctx(device);
   drv::Stream stream(ctx);
 
+  //Get operations to benchmark
+  bool bench_conv = program.get<bool>("conv");
+  bool bench_gemm = program.get<bool>("gemm");
+
+  //Get metric
+  auto metric = program.get<std::shared_ptr<Metric>>("metric");
+
   //Benchmark convolution
+  if(bench_conv)
   {
     typedef std::tuple<param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t> conv_tuple;
     std::vector<conv_tuple> shapes;
@@ -130,8 +147,8 @@ int main(int argc, char* argv[])
     std::vector<double> speedup;
     for(auto shape: shapes){
       std::tie(W, H, C, N, K, R, S, pad_h, pad_w, stride_h, stride_w) = shape;
-      P = (H - R + 1 + 2*pad_h)/stride_h;
-      Q = (W - S + 1 + 2*pad_w)/stride_w;
+      P = (H - R + 1 + 2*pad_h + stride_h - 1)/stride_h;
+      Q = (W - S + 1 + 2*pad_w + stride_w - 1)/stride_w;
 
       sc::scalar alpha(1., dtype);
       sc::scalar beta(0., dtype);
@@ -145,7 +162,7 @@ int main(int argc, char* argv[])
       if(sc::driver::dispatch::cudnninit())
         times.push_back(bench([&](){ sc::driver::cudnnConv(dtype, stream, H, W, N, K, P, Q, C, R, S, pad_h, pad_w, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
       speedup.push_back(times[1]/times[0]);
-      print_results(times, {str(N), str(K), str(P), str(Q), str(C), str(R), str(S)}, [&](double tsec){ return sc::templates::Conv::tflops(P,Q,K,N,C,R,S,tsec);});
+      print_results(times, {str(N), str(K), str(P), str(Q), str(C), str(R), str(S)}, metric->cmp(), [&](double tsec){ return metric->conv(P, Q, K, N, C, R, S, tsec);});
     }
     std::cout << "======================================================================" << std::endl;
     std::cout << "Speedup: " << geometric_mean(speedup) << std::endl;
@@ -153,6 +170,7 @@ int main(int argc, char* argv[])
   }
 
   //Benchmark GEMM
+  if(bench_gemm)
   {
     typedef std::tuple<sc::IsaacOperation_t, sc::IsaacOperation_t, param_t, param_t, param_t> gemm_tuple;
     std::vector<gemm_tuple> shapes;
@@ -161,15 +179,21 @@ int main(int argc, char* argv[])
     for(param_t N: std::vector<param_t>{512, 1024, 2048})
       shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_T, N, N, N));
 
-    // DeepBench [Forward]
-    for(param_t M: std::vector<param_t>{2560})
-      for(param_t N: std::vector<param_t>{16, 32, 64, 128})
-        shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_N, M, N, M));
+    // DeepBench
+    for(sc::IsaacOperation_t AT: std::vector<sc::IsaacOperation_t>{sc::ISAAC_OP_N, sc::ISAAC_OP_T})
+      for(param_t M: std::vector<param_t>{2560})
+        for(param_t N: std::vector<param_t>{16, 32, 64, 128})
+          shapes.push_back(std::make_tuple(AT, sc::ISAAC_OP_N, M, N, M));
 
-    // DeepBench [Backward]
-    for(param_t M: std::vector<param_t>{2560})
-      for(param_t N: std::vector<param_t>{16, 32, 64, 128})
-        shapes.push_back(std::make_tuple(sc::ISAAC_OP_T, sc::ISAAC_OP_N, M, N, M));
+    // OpenNMT
+    //shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_N, 2000, 128, 500));
+    //shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_N, 2000, 640, 500));
+    //shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_N, 2000, 2048, 500));
+    //shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_N, 2000, 640, 1000));
+    //shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_N, 500, 640, 1000));
+    //shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_N, 500, 640, 500));
+    //shapes.push_back(std::make_tuple(sc::ISAAC_OP_N, sc::ISAAC_OP_N, 50000, 640, 500));
+
 
     // PCA/ICA
     for(param_t N: std::vector<param_t>{16, 64, 256})
@@ -207,9 +231,9 @@ int main(int argc, char* argv[])
       std::vector<double> times;
       times.push_back(bench([&](){ sc::GEMM(device, stream, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C); }, [&](){ stream.synchronize(); }, device));
       if(sc::driver::dispatch::cublasinit())
-        times.push_back(bench([&](){ sc::driver::cublasGemm(dtype, stream, cuAT, cuBT, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc); }, [&](){ stream.synchronize();  }, device));
+        times.push_back(bench([&](){ sc::driver::cublasGemm(dtype, stream, cuAT, cuBT, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc, sc::driver::CUBLAS_PREFER_FASTEST); }, [&](){ stream.synchronize();  }, device));
       speedup.push_back(times[1]/times[0]);
-      print_results(times, {str(AT), str(BT), str(M), str(N), str(K)}, [&](double tsec){ return sc::templates::GEMM::tflops(M, N, K, tsec);});
+      print_results(times, {str(AT), str(BT), str(M), str(N), str(K)}, metric->cmp(), [&](double tsec){ return metric->gemm(M, N, K, tsec);});
     }
     std::cout << "======================================================================" << std::endl;
     std::cout << "Speedup: " << geometric_mean(speedup) << std::endl;

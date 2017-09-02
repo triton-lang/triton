@@ -52,10 +52,10 @@
 
 #if !defined(__CUDACC_RTC__)
 #if defined(__GNUC__)
-#if defined(__clang__) || (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6))
+#if defined(__clang__) || (!defined(__PGIC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)))
 #pragma GCC diagnostic push
 #endif
-#if defined(__clang__) || (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 2))
+#if defined(__clang__) || (!defined(__PGIC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 2)))
 #pragma GCC diagnostic ignored "-Wunused-function"
 #endif
 #elif defined(_MSC_VER)
@@ -65,7 +65,9 @@
 #endif
 
 #ifdef __QNX__
+#if (__GNUC__ == 4 && __GNUC_MINOR__ >= 7)
 typedef unsigned size_t;
+#endif
 #endif
 /*******************************************************************************
 *                                                                              *
@@ -82,6 +84,7 @@ typedef unsigned size_t;
 *******************************************************************************/
 
 #include "builtin_types.h"
+#include "library_types.h"
 #if !defined(__CUDACC_RTC__)
 #define EXCLUDE_FROM_RTC
 #include "channel_descriptor.h"
@@ -96,7 +99,6 @@ typedef unsigned size_t;
 
 #if defined(__CUDACC_RTC__)
 #include "nvrtc_device_runtime.h"
-#include "ci_include.h"
 #include "device_functions.h"
 
 extern __host__ __device__  unsigned cudaConfigureCall(dim3 gridDim, 
@@ -107,6 +109,7 @@ extern __host__ __device__  unsigned cudaConfigureCall(dim3 gridDim,
 #include "cuda_surface_types.h"
 #include "cuda_texture_types.h"
 #include "device_launch_parameters.h"
+
 #else /* !__CUDACC_RTC__ */
 #define EXCLUDE_FROM_RTC
 #include "common_functions.h"
@@ -114,6 +117,13 @@ extern __host__ __device__  unsigned cudaConfigureCall(dim3 gridDim,
 #include "cuda_texture_types.h"
 #include "device_functions.h"
 #include "device_launch_parameters.h"
+
+#if defined(__CUDACC_EXTENDED_LAMBDA__)
+#include <functional>
+#include <utility>
+struct  __device_builtin__ __nv_lambda_preheader_injection { };
+#endif /* defined(__CUDACC_EXTENDED_LAMBDA__) */
+
 #undef EXCLUDE_FROM_RTC
 #endif /* __CUDACC_RTC__ */
 
@@ -162,7 +172,10 @@ extern __host__ __device__  unsigned cudaConfigureCall(dim3 gridDim,
  * ::cudaErrorLaunchFailure,
  * ::cudaErrorLaunchTimeout,
  * ::cudaErrorLaunchOutOfResources,
- * ::cudaErrorSharedObjectInitFailed
+ * ::cudaErrorSharedObjectInitFailed,
+ * ::cudaErrorInvalidPtx,
+ * ::cudaErrorNoKernelImageForDevice,
+ * ::cudaErrorJitCompilerNotFound
  * \notefnerr
  * \note_async
  * \note_null_stream
@@ -180,6 +193,66 @@ static __inline__ __host__ cudaError_t cudaLaunchKernel(
 )
 {
     return ::cudaLaunchKernel((const void *)func, gridDim, blockDim, args, sharedMem, stream);
+}
+
+/**
+ *\brief Launches a device function
+ *
+ * The function invokes kernel \p func on \p gridDim (\p gridDim.x × \p gridDim.y
+ * × \p gridDim.z) grid of blocks. Each block contains \p blockDim (\p blockDim.x ×
+ * \p blockDim.y × \p blockDim.z) threads.
+ *
+ * The device on which this kernel is invoked must have a non-zero value for
+ * the device attribute ::cudaDevAttrCooperativeLaunch.
+ *
+ * The total number of blocks launched cannot exceed the maximum number of blocks per
+ * multiprocessor as returned by ::cudaOccupancyMaxActiveBlocksPerMultiprocessor (or
+ * ::cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags) times the number of multiprocessors
+ * as specified by the device attribute ::cudaDevAttrMultiProcessorCount.
+ *
+ * The kernel cannot make use of CUDA dynamic parallelism.
+ *
+ * If the kernel has N parameters the \p args should point to array of N pointers.
+ * Each pointer, from <tt>args[0]</tt> to <tt>args[N - 1]</tt>, point to the region
+ * of memory from which the actual parameter will be copied.
+ *
+ * \p sharedMem sets the amount of dynamic shared memory that will be available to
+ * each thread block.
+ *
+ * \p stream specifies a stream the invocation is associated to.
+ *
+ * \param func        - Device function symbol
+ * \param gridDim     - Grid dimentions
+ * \param blockDim    - Block dimentions
+ * \param args        - Arguments
+ * \param sharedMem   - Shared memory (defaults to 0)
+ * \param stream      - Stream identifier (defaults to NULL)
+ *
+ * \return
+ * ::cudaSuccess,
+ * ::cudaErrorInvalidDeviceFunction,
+ * ::cudaErrorInvalidConfiguration,
+ * ::cudaErrorLaunchFailure,
+ * ::cudaErrorLaunchTimeout,
+ * ::cudaErrorLaunchOutOfResources,
+ * ::cudaErrorSharedObjectInitFailed
+ * \notefnerr
+ * \note_async
+ * \note_null_stream
+ *
+ * \ref ::cudaLaunchCooperativeKernel(const void *func, dim3 gridDim, dim3 blockDim, void **args, size_t sharedMem, cudaStream_t stream) "cudaLaunchCooperativeKernel (C API)"
+ */
+template<class T>
+static __inline__ __host__ cudaError_t cudaLaunchCooperativeKernel(
+  const T *func,
+  dim3 gridDim,
+  dim3 blockDim,
+  void **args,
+  size_t sharedMem = 0,
+  cudaStream_t stream = 0
+)
+{
+    return ::cudaLaunchCooperativeKernel((const void *)func, gridDim, blockDim, args, sharedMem, stream);
 }
 
 /**
@@ -356,9 +429,9 @@ static __inline__ __host__ cudaError_t cudaHostGetDevicePointer(
  * default value for \p flags is ::cudaMemAttachGlobal.
  * If ::cudaMemAttachGlobal is specified, then this memory is accessible from
  * any stream on any device. If ::cudaMemAttachHost is specified, then the
- * allocation is created with initial visibility restricted to host access only;
- * an explicit call to ::cudaStreamAttachMemAsync will be required to enable access
- * on the device.
+ * allocation should not be accessed from devices that have a zero value for the
+ * device attribute ::cudaDevAttrConcurrentManagedAccess; an explicit call to
+ * ::cudaStreamAttachMemAsync will be required to enable access on such devices.
  *
  * If the association is later changed via ::cudaStreamAttachMemAsync to
  * a single stream, the default association, as specifed during ::cudaMallocManaged,
@@ -369,17 +442,45 @@ static __inline__ __host__ cudaError_t cudaHostGetDevicePointer(
  *
  * Memory allocated with ::cudaMallocManaged should be released with ::cudaFree.
  *
- * On a multi-GPU system with peer-to-peer support, where multiple GPUs support
- * managed memory, the physical storage is created on the GPU which is active
- * at the time ::cudaMallocManaged is called. All other GPUs will reference the
- * data at reduced bandwidth via peer mappings over the PCIe bus. The Unified
- * Memory management system does not migrate memory between GPUs.
+ * Device memory oversubscription is possible for GPUs that have a non-zero value for the
+ * device attribute ::cudaDevAttrConcurrentManagedAccess. Managed memory on
+ * such GPUs may be evicted from device memory to host memory at any time by the Unified
+ * Memory driver in order to make room for other allocations.
  *
- * On a multi-GPU system where multiple GPUs support managed memory, but not
- * all pairs of such GPUs have peer-to-peer support between them, the physical
- * storage is created in 'zero-copy' or system memory. All GPUs will reference
- * the data at reduced bandwidth over the PCIe bus. In these circumstances,
- * use of the environment variable, CUDA_VISIBLE_DEVICES, is recommended to
+ * In a multi-GPU system where all GPUs have a non-zero value for the device attribute
+ * ::cudaDevAttrConcurrentManagedAccess, managed memory may not be populated when this
+ * API returns and instead may be populated on access. In such systems, managed memory can
+ * migrate to any processor's memory at any time. The Unified Memory driver will employ heuristics to
+ * maintain data locality and prevent excessive page faults to the extent possible. The application
+ * can also guide the driver about memory usage patterns via ::cudaMemAdvise. The application
+ * can also explicitly migrate memory to a desired processor's memory via
+ * ::cudaMemPrefetchAsync.
+ *
+ * In a multi-GPU system where all of the GPUs have a zero value for the device attribute
+ * ::cudaDevAttrConcurrentManagedAccess and all the GPUs have peer-to-peer support
+ * with each other, the physical storage for managed memory is created on the GPU which is active
+ * at the time ::cudaMallocManaged is called. All other GPUs will reference the data at reduced
+ * bandwidth via peer mappings over the PCIe bus. The Unified Memory driver does not migrate
+ * memory among such GPUs.
+ *
+ * In a multi-GPU system where not all GPUs have peer-to-peer support with each other and
+ * where the value of the device attribute ::cudaDevAttrConcurrentManagedAccess
+ * is zero for at least one of those GPUs, the location chosen for physical storage of managed
+ * memory is system-dependent.
+ * - On Linux, the location chosen will be device memory as long as the current set of active
+ * contexts are on devices that either have peer-to-peer support with each other or have a
+ * non-zero value for the device attribute ::cudaDevAttrConcurrentManagedAccess.
+ * If there is an active context on a GPU that does not have a non-zero value for that device
+ * attribute and it does not have peer-to-peer support with the other devices that have active
+ * contexts on them, then the location for physical storage will be 'zero-copy' or host memory.
+ * Note that this means that managed memory that is located in device memory is migrated to
+ * host memory if a new context is created on a GPU that doesn't have a non-zero value for
+ * the device attribute and does not support peer-to-peer with at least one of the other devices
+ * that has an active context. This in turn implies that context creation may fail if there is
+ * insufficient host memory to migrate all managed allocations.
+ * - On Windows, the physical storage is always created in 'zero-copy' or host memory.
+ * All GPUs will reference the data at reduced bandwidth over the PCIe bus. In these
+ * circumstances, use of the environment variable CUDA_VISIBLE_DEVICES is recommended to
  * restrict CUDA to only use those GPUs that have peer-to-peer support.
  * Alternatively, users can also set CUDA_MANAGED_FORCE_DEVICE_ALLOC to a non-zero
  * value to force the driver to always use device memory for physical storage.
@@ -391,6 +492,7 @@ static __inline__ __host__ cudaError_t cudaHostGetDevicePointer(
  * that process, even if ::cudaDeviceReset has been called on those devices. These
  * environment variables are described in the CUDA programming guide under the
  * "CUDA environment variables" section.
+ * - On ARM, managed memory is not available on discrete gpu with Drive PX-2.
  *
  * \param devPtr - Pointer to allocated device memory
  * \param size   - Requested allocation size in bytes
@@ -440,11 +542,14 @@ static __inline__ __host__ cudaError_t cudaMallocManaged(
  * If the ::cudaMemAttachGlobal flag is specified, the memory can be accessed
  * by any stream on any device.
  * If the ::cudaMemAttachHost flag is specified, the program makes a guarantee
- * that it won't access the memory on the device from any stream.
- * If the ::cudaMemAttachSingle flag is specified, the program makes a guarantee
- * that it will only access the memory on the device from \p stream. It is illegal
- * to attach singly to the NULL stream, because the NULL stream is a virtual global
- * stream and not a specific stream. An error will be returned in this case.
+ * that it won't access the memory on the device from any stream on a device that
+ * has a zero value for the device attribute ::cudaDevAttrConcurrentManagedAccess.
+ * If the ::cudaMemAttachSingle flag is specified and \p stream is associated with
+ * a device that has a zero value for the device attribute ::cudaDevAttrConcurrentManagedAccess,
+ * the program makes a guarantee that it will only access the memory on the device
+ * from \p stream. It is illegal to attach singly to the NULL stream, because the
+ * NULL stream is a virtual global stream and not a specific stream. An error will
+ * be returned in this case.
  *
  * When memory is associated with a single stream, the Unified Memory system will
  * allow CPU access to this memory region so long as all operations in \p stream
@@ -545,8 +650,8 @@ static __inline__ __host__ cudaError_t cudaMallocPitch(
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
  * ::cudaErrorInvalidSymbol,
- * ::cudaErrorInvalidDevicePointer,
- * ::cudaErrorInvalidMemcpyDirection
+ * ::cudaErrorInvalidMemcpyDirection,
+ * ::cudaErrorNoKernelImageForDevice
  * \notefnerr
  * \note_sync
  * \note_string_api_deprecation
@@ -597,8 +702,8 @@ static __inline__ __host__ cudaError_t cudaMemcpyToSymbol(
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
  * ::cudaErrorInvalidSymbol,
- * ::cudaErrorInvalidDevicePointer,
- * ::cudaErrorInvalidMemcpyDirection
+ * ::cudaErrorInvalidMemcpyDirection,
+ * ::cudaErrorNoKernelImageForDevice
  * \notefnerr
  * \note_async
  * \note_string_api_deprecation
@@ -643,8 +748,8 @@ static __inline__ __host__ cudaError_t cudaMemcpyToSymbolAsync(
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
  * ::cudaErrorInvalidSymbol,
- * ::cudaErrorInvalidDevicePointer,
- * ::cudaErrorInvalidMemcpyDirection
+ * ::cudaErrorInvalidMemcpyDirection,
+ * ::cudaErrorNoKernelImageForDevice
  * \notefnerr
  * \note_sync
  * \note_string_api_deprecation
@@ -695,8 +800,8 @@ static __inline__ __host__ cudaError_t cudaMemcpyFromSymbol(
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
  * ::cudaErrorInvalidSymbol,
- * ::cudaErrorInvalidDevicePointer,
- * ::cudaErrorInvalidMemcpyDirection
+ * ::cudaErrorInvalidMemcpyDirection,
+ * ::cudaErrorNoKernelImageForDevice
  * \notefnerr
  * \note_async
  * \note_string_api_deprecation
@@ -736,7 +841,8 @@ static __inline__ __host__ cudaError_t cudaMemcpyFromSymbolAsync(
  *
  * \return
  * ::cudaSuccess,
- * ::cudaErrorInvalidSymbol
+ * ::cudaErrorInvalidSymbol,
+ * ::cudaErrorNoKernelImageForDevice
  * \notefnerr
  *
  * \sa \ref ::cudaGetSymbolAddress(void**, const void*) "cudaGetSymbolAddress (C API)",
@@ -765,7 +871,8 @@ static __inline__ __host__ cudaError_t cudaGetSymbolAddress(
  *
  * \return
  * ::cudaSuccess,
- * ::cudaErrorInvalidSymbol
+ * ::cudaErrorInvalidSymbol,
+ * ::cudaErrorNoKernelImageForDevice
  * \notefnerr
  *
  * \sa \ref ::cudaGetSymbolAddress(void**, const T&) "cudaGetSymbolAddress (C++ API)",
@@ -799,7 +906,6 @@ static __inline__ __host__ cudaError_t cudaGetSymbolSize(
  * \return
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
- * ::cudaErrorInvalidDevicePointer,
  * ::cudaErrorInvalidTexture
  * \notefnerr
  *
@@ -844,7 +950,6 @@ static __inline__ __host__ cudaError_t cudaBindTexture(
  * \return
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
- * ::cudaErrorInvalidDevicePointer,
  * ::cudaErrorInvalidTexture
  * \notefnerr
  *
@@ -900,7 +1005,6 @@ static __inline__ __host__ cudaError_t cudaBindTexture(
  * \return
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
- * ::cudaErrorInvalidDevicePointer,
  * ::cudaErrorInvalidTexture
  * \notefnerr
  *
@@ -958,7 +1062,6 @@ static __inline__ __host__ cudaError_t cudaBindTexture2D(
  * \return
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
- * ::cudaErrorInvalidDevicePointer,
  * ::cudaErrorInvalidTexture
  * \notefnerr
  *
@@ -1000,7 +1103,6 @@ static __inline__ __host__ cudaError_t cudaBindTexture2D(
  * \return
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
- * ::cudaErrorInvalidDevicePointer,
  * ::cudaErrorInvalidTexture
  * \notefnerr
  *
@@ -1038,7 +1140,6 @@ static __inline__ __host__ cudaError_t cudaBindTextureToArray(
  * \return
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
- * ::cudaErrorInvalidDevicePointer,
  * ::cudaErrorInvalidTexture
  * \notefnerr
  *
@@ -1079,7 +1180,6 @@ static __inline__ __host__ cudaError_t cudaBindTextureToArray(
  * \return
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
- * ::cudaErrorInvalidDevicePointer,
  * ::cudaErrorInvalidTexture
  * \notefnerr
  *
@@ -1117,7 +1217,6 @@ static __inline__ __host__ cudaError_t cudaBindTextureToMipmappedArray(
  * \return
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
- * ::cudaErrorInvalidDevicePointer,
  * ::cudaErrorInvalidTexture
  * \notefnerr
  *
@@ -1377,6 +1476,51 @@ public:
   }
 };
 
+/**
+ * \brief Returns grid and block size that achieves maximum potential occupancy for a device function
+ *
+ * Returns in \p *minGridSize and \p *blocksize a suggested grid /
+ * block size pair that achieves the best potential occupancy
+ * (i.e. the maximum number of active warps with the smallest number
+ * of blocks).
+ *
+ * The \p flags parameter controls how special cases are handled. Valid flags include:
+ *
+ * - ::cudaOccupancyDefault: keeps the default behavior as
+ *   ::cudaOccupancyMaxPotentialBlockSizeVariableSMemWithFlags
+ *
+ * - ::cudaOccupancyDisableCachingOverride: This flag suppresses the default behavior
+ *   on platform where global caching affects occupancy. On such platforms, if caching
+ *   is enabled, but per-block SM resource usage would result in zero occupancy, the
+ *   occupancy calculator will calculate the occupancy as if caching is disabled.
+ *   Setting this flag makes the occupancy calculator to return 0 in such cases.
+ *   More information can be found about this feature in the "Unified L1/Texture Cache"
+ *   section of the Maxwell tuning guide.
+ *
+ * \param minGridSize - Returned minimum grid size needed to achieve the best potential occupancy
+ * \param blockSize   - Returned block size
+ * \param func        - Device function symbol
+ * \param blockSizeToDynamicSMemSize - A unary function / functor that takes block size, and returns the size, in bytes, of dynamic shared memory needed for a block
+ * \param blockSizeLimit  - The maximum block size \p func is designed to work with. 0 means no limit.
+ * \param flags       - Requested behavior for the occupancy calculator
+ *
+ * \return
+ * ::cudaSuccess,
+ * ::cudaErrorCudartUnloading,
+ * ::cudaErrorInitializationError,
+ * ::cudaErrorInvalidDevice,
+ * ::cudaErrorInvalidDeviceFunction,
+ * ::cudaErrorInvalidValue,
+ * ::cudaErrorUnknown,
+ * \notefnerr
+ *
+ * \sa ::cudaOccupancyMaxPotentialBlockSizeVariableSMem
+ * \sa ::cudaOccupancyMaxActiveBlocksPerMultiprocessor
+ * \sa ::cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags
+ * \sa ::cudaOccupancyMaxPotentialBlockSize
+ * \sa ::cudaOccupancyMaxPotentialBlockSizeWithFlags
+ */
+
 template<typename UnaryFunction, class T>
 static __inline__ __host__ CUDART_DEVICE cudaError_t cudaOccupancyMaxPotentialBlockSizeVariableSMemWithFlags(
     int           *minGridSize,
@@ -1412,7 +1556,7 @@ static __inline__ __host__ CUDART_DEVICE cudaError_t cudaOccupancyMaxPotentialBl
     int blockSizeLimitAligned;
     int occupancyInBlocks;
     int occupancyInThreads;
-    int dynamicSMemSize;
+    size_t dynamicSMemSize;
 
     ///////////////////////////
     // Check user input
@@ -1689,63 +1833,18 @@ static __inline__ __host__ CUDART_DEVICE cudaError_t cudaOccupancyMaxPotentialBl
 }
 
 /**
- * \brief Returns grid and block size that achieves maximum potential occupancy for a device function
- *
- * Returns in \p *minGridSize and \p *blocksize a suggested grid /
- * block size pair that achieves the best potential occupancy
- * (i.e. the maximum number of active warps with the smallest number
- * of blocks).
- *
- * The \p flags parameter controls how special cases are handled. Valid flags include:
- *
- * - ::cudaOccupancyDefault: keeps the default behavior as
- *   ::cudaOccupancyMaxPotentialBlockSizeVariableSMemWithFlags
- *
- * - ::cudaOccupancyDisableCachingOverride: This flag suppresses the default behavior
- *   on platform where global caching affects occupancy. On such platforms, if caching
- *   is enabled, but per-block SM resource usage would result in zero occupancy, the
- *   occupancy calculator will calculate the occupancy as if caching is disabled.
- *   Setting this flag makes the occupancy calculator to return 0 in such cases.
- *   More information can be found about this feature in the "Unified L1/Texture Cache"
- *   section of the Maxwell tuning guide.
- *
- * \param minGridSize - Returned minimum grid size needed to achieve the best potential occupancy
- * \param blockSize   - Returned block size
- * \param func        - Device function symbol
- * \param blockSizeToDynamicSMemSize - A unary function / functor that takes block size, and returns the size, in bytes, of dynamic shared memory needed for a block
- * \param blockSizeLimit  - The maximum block size \p func is designed to work with. 0 means no limit.
- * \param flags       - Requested behavior for the occupancy calculator
- *
- * \return
- * ::cudaSuccess,
- * ::cudaErrorCudartUnloading,
- * ::cudaErrorInitializationError,
- * ::cudaErrorInvalidDevice,
- * ::cudaErrorInvalidDeviceFunction,
- * ::cudaErrorInvalidValue,
- * ::cudaErrorUnknown,
- * \notefnerr
- *
- * \sa ::cudaOccupancyMaxPotentialBlockSizeVariableSMem
- * \sa ::cudaOccupancyMaxActiveBlocksPerMultiprocessor
- * \sa ::cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags
- * \sa ::cudaOccupancyMaxPotentialBlockSize
- * \sa ::cudaOccupancyMaxPotentialBlockSizeWithFlags
- */
-
-/**
  * \brief \hl Launches a device function
  *
  * \deprecated This function is deprecated as of CUDA 7.0
  *
- * Launches the function \p entry on the device. The parameter \p entry must
- * be a function that executes on the device. The parameter specified by \p entry
+ * Launches the function \p func on the device. The parameter \p func must
+ * be a function that executes on the device. The parameter specified by \p func
  * must be declared as a \p __global__ function.
  * \ref ::cudaLaunch(T*) "cudaLaunch()" must be preceded by a call to
  * ::cudaConfigureCall() since it pops the data that was pushed by
  * ::cudaConfigureCall() from the execution stack.
  *
- * \param entry - Device function pointer
+ * \param func - Device function pointer
  * to execute
  *
  * \return
@@ -1756,7 +1855,10 @@ static __inline__ __host__ CUDART_DEVICE cudaError_t cudaOccupancyMaxPotentialBl
  * ::cudaErrorLaunchTimeout,
  * ::cudaErrorLaunchOutOfResources,
  * ::cudaErrorSharedObjectSymbolNotFound,
- * ::cudaErrorSharedObjectInitFailed
+ * ::cudaErrorSharedObjectInitFailed,
+ * ::cudaErrorInvalidPtx,
+ * ::cudaErrorNoKernelImageForDevice,
+ * ::cudaErrorJitCompilerNotFound
  * \notefnerr
  *
  * \ref ::cudaLaunchKernel(const T *func, dim3 gridDim, dim3 blockDim, void **args, size_t sharedMem, cudaStream_t stream) "cudaLaunchKernel (C++ API)",
@@ -1813,6 +1915,49 @@ static __inline__ __host__ cudaError_t cudaFuncGetAttributes(
 )
 {
   return ::cudaFuncGetAttributes(attr, (const void*)entry);
+}
+
+/**
+ * \brief \hl Set attributes for a given function
+ *
+ * This function sets the attributes of a function specified via \p entry.
+ * The parameter \p entry must be a pointer to a function that executes
+ * on the device. The parameter specified by \p entry must be declared as a \p __global__
+ * function. The enumeration defined by \p attr is set to the value defined by \p value
+ * If the specified function does not exist, then ::cudaErrorInvalidDeviceFunction is returned.
+ * If the specified attribute cannot be written, or if the value is incorrect, 
+ * then ::cudaErrorInvalidValue is returned.
+ *
+ * Valid values for \p attr are:
+ * ::cuFuncAttrMaxDynamicSharedMem - Maximum size of dynamic shared memory per block
+ * ::cuFuncAttrPreferredShmemCarveout - Preferred shared memory-L1 cache split ratio in percent of shared memory.
+ *
+ * \param entry - Function to get attributes of
+ * \param attr  - Attribute to set
+ * \param value - Value to set
+ *
+ * \return
+ * ::cudaSuccess,
+ * ::cudaErrorInitializationError,
+ * ::cudaErrorInvalidDeviceFunction,
+ * ::cudaErrorInvalidValue
+ * \notefnerr
+ *
+ * \ref ::cudaLaunchKernel(const T *func, dim3 gridDim, dim3 blockDim, void **args, size_t sharedMem, cudaStream_t stream) "cudaLaunchKernel (C++ API)",
+ * \ref ::cudaFuncSetCacheConfig(T*, enum cudaFuncCache) "cudaFuncSetCacheConfig (C++ API)",
+ * \ref ::cudaFuncGetAttributes(struct cudaFuncAttributes*, const void*) "cudaFuncGetAttributes (C API)",
+ * ::cudaSetDoubleForDevice,
+ * ::cudaSetDoubleForHost,
+ * \ref ::cudaSetupArgument(T, size_t) "cudaSetupArgument (C++ API)"
+ */
+template<class T>
+static __inline__ __host__ cudaError_t cudaFuncSetAttribute(
+  T                         *entry,
+  enum cudaFuncAttribute    attr,
+  int                       value
+)
+{
+  return ::cudaFuncSetAttribute((const void*)entry, attr, value);
 }
 
 /**
@@ -1884,7 +2029,7 @@ static __inline__ __host__ cudaError_t cudaBindSurfaceToArray(
 
 #if !defined(__CUDACC_RTC__)
 #if defined(__GNUC__)
-#if defined(__clang__) || (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6))
+#if defined(__clang__) || (!defined(__PGIC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)))
 #pragma GCC diagnostic pop
 #endif
 #elif defined(_MSC_VER)

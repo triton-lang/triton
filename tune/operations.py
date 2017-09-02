@@ -5,17 +5,17 @@ import itertools
 from time import time
 
 def cartesian_coord(arrays):
-    grid = np.meshgrid(*arrays)        
+    grid = np.meshgrid(*arrays)
     coord_list = [entry.ravel() for entry in grid]
     points = np.vstack(coord_list).T
     return points
-    
+
 def cartesian_iterator(arrays):
     N = len(arrays)
     split = [np.array_split(ary, min(len(ary), 2) if i < 4 else 1) for i, ary in enumerate(arrays)]
     for x in itertools.product(*split):
         yield cartesian_coord(x)
-    
+
 def benchmark(fn, device, nsec):
     total, hist = 0, []
     fn()
@@ -27,14 +27,14 @@ def benchmark(fn, device, nsec):
         hist.append(norm*(end - start))
         total += hist[-1]
     return min(hist)
-        
+
 class ConvWrapper:
-    
+
     name = 'conv'
     nparams = 23
     nshape_params = 8
-    
-    
+
+
     @staticmethod
     def bench_shapes(device):
         DTs = [4]
@@ -103,44 +103,55 @@ class ConvWrapper:
         return result
 
     @staticmethod
-    def exhaust_param_ranges():
-        rv, rl, rs = [2, 4], [1,2,4,8], [1,2,4,8]
-        return [rv, [1,2,4,8], [1,2,4,8], rl, rl, rl, [1,2,4,8], [1,2,4,8], rs, rs, rl, [1], [1,2,4], [1,2,4], rs]
-    
+    def nflops(X):
+        N, K, P, Q, C, R, S = X[:,1], X[:,2], X[:,3], X[:,4], X[:,5], X[:,6], X[:,7]
+        return 2.*N*K*P*Q*C*R*S
+
     @staticmethod
-    def check_valid(device, X):
-        return sc.templates.Conv.check_valid(device, X)
-        
-    @staticmethod
-    def generate_valid(device, probabilities):
-        X = np.array([np.random.choice(x, size=10000, p=prob) for x, prob in zip(ConvWrapper.param_ranges(), probabilities)], dtype=np.uint32).T.copy()
+    def get_valid(device, X):
         idx = sc.templates.Conv.check_valid(device, X)
+        X = X[idx, :]
+        flops = ConvWrapper.nflops(X)
+        idx = np.logical_and(flops > 1e7, flops < 1e12)
         return X[idx, :]
-        
+
+    @staticmethod
+    def generate_valid(device):
+        param_ranges = ConvWrapper.input_ranges(device) + ConvWrapper.tuning_ranges()
+        X = np.array([np.random.choice(x, size=10000) for x in param_ranges], dtype=np.uint32).T.copy()
+        return ConvWrapper.get_valid(device, X)
+
     @staticmethod
     def all_valid(device):
-        nparams, param_ranges = ConvWrapper.nparams, ConvWrapper.exhaust_param_ranges()
+        nparams = ConvWrapper.nparams
         X = np.empty((0, nparams - 8))
         N, K, P, Q, C, R, S = 128, 128, 128, 128, 128, 5, 5
         for dtype in [2, 4, 8]:
-            for T in cartesian_iterator(param_ranges):
+            for T in cartesian_iterator(ConvWrapper.tuning_ranges()):
                 Y = np.zeros((T.shape[0], nparams), dtype=np.uint32)
                 Y[:, :ConvWrapper.nshape_params] = [dtype, N, K, P, Q, C, R, S]
                 Y[:, ConvWrapper.nshape_params:] = T
-                X  = np.vstack((X, Y[ConvWrapper.check_valid(device, Y), 8:]))
+                X  = np.vstack((X, ConvWrapper.get_valid(device, Y)[:, 8:]))
         return X
-        
+
     @staticmethod
-    def param_ranges():
-        LDT = [2, 4, 8]
+    def tuning_ranges():
+        L3 = [2, 4]
+        L4 = [1, 2, 4, 8, 16]
+        L5 = [1, 2, 4, 8]
+        return [L3,L5,L5,L4,L4,L4,L5,L5,L5,L5,L4,[1],[1],L5,L5]
+
+    @staticmethod
+    def input_ranges(device):
+        FP16 = [2] if device.compute_capability[1] == 0 else []
+        FP64 = [8] if device.compute_capability[1] == 0 else []
+        LDT = FP16 + [4] + FP64
         LRS = [3, 5, 7]
         L0 = [16, 32, 64, 256, 512]
         L1 = [1, 2, 4, 8, 16, 32, 64, 128]
         L2 = [1, 2, 4, 8, 16, 32, 64, 128]
-        L3 = [1, 2, 4]
-        L4 = [1, 2, 4, 8, 16]
-        L5 = [1, 2, 4, 8]
-        return [LDT,L1,L1,L2,L2,L0,LRS,LRS] + [L3,L5,L5,L4,L4,L4,L5,L5,L5,L5,L4,[1],L5,L5,L5]
+        return [LDT,L1,L1,L2,L2,L0,LRS,LRS]
+
 
     def __init__(s,  params):
         for x, name in zip(params, ['dtype', 'N','K','P','Q','C','R','S','vec','bp','bq','bn','bk','bf_n','ps','qs','ns','ks','crs_l','crs_s','cs','bc','gridc']):
@@ -149,10 +160,10 @@ class ConvWrapper:
         s.pad_h, s.pad_w, s.stride_h, s.stride_w = 0, 0, 1, 1
         s.H = s.P*s.stride_h + s.R - 1 - 2*s.pad_h
         s.W = s.Q*s.stride_w + s.S - 1 - 2*s.pad_w
-        
+
     def skip(s):
         return s.K*s.P*s.Q*s.N > 1e7 or s.C*s.H*s.W*s.N > 1e7 or s.C*s.R*s.S*s.K > 1e7
-    
+
     def benchmark(s, ctx, stream):
         O = sc.driver.Buffer(ctx, s.K*s.P*s.Q*s.N*sc.size_of(s.dtype))
         I = sc.driver.Buffer(ctx, s.C*s.H*s.W*s.N*sc.size_of(s.dtype))
@@ -162,14 +173,14 @@ class ConvWrapper:
                                       s.pad_h, s.pad_w, s.stride_h, s.stride_w,
                                       s.vec, s.bp, s.bq, s.bn, s.bk, s.bf_n, s.ps, s.qs, s.ns, s.ks, s.crs_l, s.crs_s, s.cs, s.bc, s.gridc)
         src = generator.dump(ctx.device, "conv_fprop")
-        module = sc.driver.Module(ctx, src, True)
+        module = sc.driver.Module(ctx, src)
         kernel = sc.driver.Kernel(module, "conv_fprop")
         time = benchmark(lambda: (generator.enqueue(kernel, stream, alpha, I, F, beta, O), stream.synchronize()), ctx.device, 1e-2)
         tflops = 2*s.P*s.Q*s.K*s.N*s.C*s.R*s.S/time*1e-12
         return tflops
 
 class GEMMWrapper:
-    
+
     name = 'gemm'
     nparams = 20
     nshape_params = 6
@@ -179,81 +190,105 @@ class GEMMWrapper:
     @staticmethod
     def bench_shapes(device):
         sizes = []
-        DTs = [4]
-        if device.compute_capability == (6,0):
-            DTs += [2, 8]
-            
-        for DTYPE in DTs:
+        FP16 = [2] if device.compute_capability[1] == 0 else []
+        FP64 = [8] if device.compute_capability[1] == 0 else []
+
+        #LinPACK
+        for DTYPE in FP16 + [4] + FP64:
             for AT, BT in [(1, 2)]:
-                for N in [512, 1024, 2048]:
+                for N in [256, 512, 1024, 2048, 4096]:
                     sizes += [(DTYPE, AT, BT, N, N, N)]
-        #DeepBench
-        for DTYPE in DTs:
+
+        #Deep Learning
+        for DTYPE in FP16 + [4]:
+            #Deep Bench
             for AT, BT in [(1,1), (2,1)]:
-                for M in [512, 1760, 2560]:
-                    for N in [1, 2, 4, 8, 16, 32, 64, 128]:
+                for M in [1760, 2560]:
+                    for N in [16, 32, 64, 128]:
                         sizes += [(DTYPE, AT, BT, M, N, M)]
-                
+            #OpenNMT
+            sizes += [(DTYPE, 1, 1, 2000, 128, 500),
+                      (DTYPE, 1, 1, 2000, 640, 500),
+                      (DTYPE, 1, 1, 2000, 2048, 500),
+                      (DTYPE, 1, 1, 2000, 640, 1000),
+                      (DTYPE, 1, 1, 500, 640, 1000),
+                      (DTYPE, 1, 1, 500, 640, 500),
+                      (DTYPE, 1, 1, 50000, 640, 500)]
+
         #Covariance
-        for DTYPE in DTs:
+        for DTYPE in [4] + FP64:
             for AT, BT in [(1, 2)]:
-                for N in [1, 2, 4, 8, 16, 64, 256]:
+                for N in [1, 2, 4, 8, 16, 64, 128, 256]:
                     for K in [32000, 64000, 128000]:
                         sizes += [(DTYPE, AT, BT, N, N, K)]
-                    
+
         #LaPack
-        for DTYPE in DTs:
+        for DTYPE in [4] + FP64:
             for AT, BT in [(1, 2)]:
                 for N in [512, 1024, 2048, 4096]:
-                    for K in [1, 2, 4, 8, 16, 32, 64]:
+                    for K in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]:
                         sizes += [(DTYPE, AT, BT, N, N, K)]
-                    
+
+        #Remove small problems
+        sizes = [(DTYPE, AT, BT, M, N, K) for DTYPE, AT, BT, M, N, K in sizes if 2*M*N*K > 1e7]
+        #Remove large problems
+        sizes = [(DTYPE, AT, BT, M, N, K) for DTYPE, AT, BT, M, N, K in sizes if 2*M*N*K < 1e12]
+
         return sizes
-                    
+
     @staticmethod
-    def exhaust_param_ranges():
+    def tuning_ranges():
         L3 = [1, 2, 4]
-        L4 = [1, 2, 4, 8, 16]
+        L4 = [4, 8, 16, 32]
         L5 = [1, 2, 4, 8]
-        return [L3, L4, L4, L4, L5, [1], L5, L4, L4, L4, L4, [1], [1], L5]
-      
+        LR = [1, 2, 4, 8, 16, 32, 64]
+        return [L3, L4, L4, L4, L5, [1], L5, L4, L4, L4, L4, [1], L5, LR]
+
     @staticmethod
-    def param_ranges():
-        LDT = [2, 4, 8]
+    def input_ranges(device):
+        FP16 = [2] if device.compute_capability[1] == 0 else []
+        FP64 = [8] if device.compute_capability[1] == 0 else []
+        LDT = FP16 + [4] + FP64
         LT = [1, 2]
-        LK = [16, 32, 64, 256, 4096, 8192, 16382]
+        LK = [16, 32, 64, 256, 4096, 8192, 16382, 65536]
         LMN = [4, 8, 16, 32, 128, 512, 1024, 2048, 4096]
-        L2 = [8, 16, 32, 64]
-        L3 = [1, 2, 4]
-        L4 = [1, 2, 4, 8, 16]
-        L5 = [1, 2, 4, 8]
-        return [LDT, LT, LT, LMN, LMN, LK, L3, L4, L4, L4, L5, [1], L5, L4, L4, L4, L4, L5, L4, L4]
+        return [LDT, LT, LT, LMN, LMN, LK]
 
     @staticmethod
     def all_valid(device):
-        nparams, param_ranges = GEMMWrapper.nparams, GEMMWrapper.exhaust_param_ranges()
+        nparams = GEMMWrapper.nparams
+        nshape_params = GEMMWrapper.nshape_params
         X = np.empty((0, nparams - 6))
         M, N, K = 1024, 1024, 1024
         for dtype in [2, 4, 8]:
             for AT in [1, 2]:
                 for BT in [1, 2]:
-                    for T in cartesian_iterator(param_ranges):
+                    for T in cartesian_iterator(GEMMWrapper.tuning_ranges()):
                         Y = np.zeros((T.shape[0], nparams), dtype=np.uint32)
-                        Y[:, :GEMMWrapper.nshape_params] = [dtype, AT, BT, M, N, K]
-                        Y[:, GEMMWrapper.nshape_params:] = T
-                        X  = np.vstack((X, Y[GEMMWrapper.check_valid(device, Y), 6:]))
+                        Y[:, :nshape_params] = [dtype, AT, BT, M, N, K]
+                        Y[:, nshape_params:] = T
+                        X  = np.vstack((X, GEMMWrapper.get_valid(device, Y)[:, 6:]))
         return X
-    
+
     @staticmethod
-    def check_valid(device, X):
-        return sc.templates.GEMM.check_valid(device, X)
-        
+    def nflops(X):
+        M, N, K = X[:, 3], X[:, 4], X[:, 5]
+        return 2.*M*N*K
+
     @staticmethod
-    def generate_valid(device, probabilities):
-        X = np.array([np.random.choice(x, size=10000, p=prob) for x, prob in zip(GEMMWrapper.param_ranges(), probabilities)]).astype(np.uint32).T.copy()
+    def get_valid(device, X):
         idx = sc.templates.GEMM.check_valid(device, X)
+        X = X[idx, :]
+        flops = GEMMWrapper.nflops(X)
+        idx = np.logical_and(flops > 1e7, flops < 1e12)
         return X[idx, :]
-        
+
+    @staticmethod
+    def generate_valid(device):
+        ranges = GEMMWrapper.input_ranges(device) + GEMMWrapper.tuning_ranges()
+        X = np.array([np.random.choice(x, size=10000) for x in ranges]).astype(np.uint32).T.copy()
+        return GEMMWrapper.get_valid(device, X)
+
     def __init__(s, *params):
         for x, name in zip(params[0], ['dtype', 'AT','BT','M','N','K','vec','bm','kl','bn','ms','ks','ns','a_bf0','a_bf1','b_bf0','b_bf1','rs','br','gridr']):
             setattr(s, name, x)
@@ -261,26 +296,22 @@ class GEMMWrapper:
         s.AT = sc.templates.op(s.AT)
         s.BT = sc.templates.op(s.BT)
         s.params = params
-    
-    def skip(s):
-        return s.M*s.N > 1e7 or s.M*s.K > 1e7 or s.K*s.N > 1e7
-    
+
     def benchmark(s, ctx, stream):
-        
         C = sc.driver.Buffer(ctx, s.M*s.N*sc.size_of(s.dtype))
         A = sc.driver.Buffer(ctx, s.M*s.K*sc.size_of(s.dtype))
         B = sc.driver.Buffer(ctx, s.K*s.N*sc.size_of(s.dtype))
-        
+
         alpha, beta = sc.Scalar(1., s.dtype), sc.Scalar(0., s.dtype)
         ldc = s.M
         lda = s.M if s.AT==sc.templates.OP_N else s.K
-        ldb = s.K if s.BT==sc.templates.OP_N else s.N        
-  
+        ldb = s.K if s.BT==sc.templates.OP_N else s.N
+
         generator = sc.templates.GEMM(s.dtype, s.AT, s.BT, s.M, s.N, s.K, 0, lda, 0, ldb, 0, ldc,
                                       s.vec, s.bm, s.kl, s.bn, s.ms, s.ks, s.ns, s.a_bf0, s.a_bf1, s.b_bf0, s.b_bf1, s.rs, s.br, s.gridr)
         src = generator.dump(ctx.device, "gemm")
         #start = time()
-        module = sc.driver.Module(ctx, src, True)
+        module = sc.driver.Module(ctx, src)
         kernel = sc.driver.Kernel(module, "gemm")
         #end = time()
         #print('Compile:', end - start, s.params)
@@ -300,7 +331,7 @@ def cudaConv(ctx, stream, dtype, N, K, P, Q, C, R, S):
     time = benchmark(lambda: (sc.driver.cudnnConv(dtype, ctx, stream, H, W, N, K, P, Q, C, R, S, pad_h, pad_w, stride_h, stride_w, alpha, I, F, beta, O), stream.synchronize()), ctx.device, 1e-2)
     tflops = 2*P*Q*K*N*C*R*S/time*1e-12
     return tflops
-    
+
 def cudaGemm(ctx, stream, dtype, AT, BT, M, N, K):
     ldc = M
     lda = M if AT==1 else K
