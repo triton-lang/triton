@@ -34,7 +34,7 @@ def benchmarks(prefix, OpType, device, nsamples):
             op = OpType(params)
             try:
                 y = op.benchmark(ctx, stream)            
-            except RuntimeError:
+            except:
                 continue
             #Update
             bufX[nvalid % step, :] = params

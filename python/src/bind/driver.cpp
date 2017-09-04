@@ -24,6 +24,7 @@
 #include <pybind11/stl.h>
 #include "isaac/driver/backend.h"
 #include "isaac/driver/buffer.h"
+#include "isaac/driver/error.h"
 #include "isaac/driver/cublas.h"
 #include "isaac/driver/stream.h"
 #include "isaac/driver/context.h"
@@ -87,5 +88,9 @@ void export_driver(py::module&& m)
   py::class_<drv::Stream>(m, "Stream")
       .def(py::init<drv::Context>())
       .def("synchronize", &drv::Stream::synchronize);
+      
+      
+  py::register_exception<drv::exception::cuda::misaligned_address>(m, "MisalignedAddress");
+
 
 }

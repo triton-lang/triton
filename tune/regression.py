@@ -50,7 +50,8 @@ def maximize(OpType, device, model, shapes, V):
     X[:, OpType.nshape_params:] = V
     X = OpType.get_valid(device, X)
     #Model predictions
-    predictions = model.predict(np.log2(X), batch_size=8192, verbose=0)
+    with tf.device('/cpu:0'):
+        predictions = model.predict(np.log2(X), batch_size=8192, verbose=0)
     pred_perfs = np.sort(predictions, axis=0)[::-1]
     pred_idxs = np.argsort(predictions, axis=0)[::-1]
     #Evaluate best predicted models

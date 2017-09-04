@@ -40,11 +40,14 @@ Buffer::Buffer(Context const & context, size_t size) : context_(context), size_(
   dispatch::cuMemAlloc(&*cu_, size);
 }
 
-void Buffer::set_zero(Stream const & queue)
+void Buffer::set_zero(Stream const & queue, size_t size)
 {
   ContextSwitcher ctx_switch(context_);
-  dispatch::cuMemsetD8Async(*cu_, 0, size_, queue);
+  dispatch::cuMemsetD8Async(*cu_, 0, size, queue);
 }
+
+void Buffer::set_zero(Stream const & queue)
+{ set_zero(queue, size_); }
 
 Handle<CUdeviceptr> const & Buffer::cu() const
 { return cu_; }
