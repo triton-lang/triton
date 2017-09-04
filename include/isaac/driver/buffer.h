@@ -38,6 +38,7 @@ class Buffer: public HandleInterface<Buffer, CUdeviceptr>
 {
 public:
   Buffer(Context const & context, size_t size);
+  void set_zero(Stream const & queue, size_t size);
   void set_zero(Stream const & queue);
   Handle<CUdeviceptr> const & cu() const;
 

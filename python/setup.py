@@ -29,8 +29,8 @@ def recursive_glob(rootdir='.', suffix=''):
 def main():
     
     #Source
-    include = [os.path.join('src', 'include')]
-    src =  recursive_glob(os.path.join('src','lib'), 'cpp')
+    include = [os.path.join(os.pardir, 'include')]
+    src =  recursive_glob(os.path.join(os.pardir,'lib'), 'cpp')
     
     #Bindings
     include += [os.path.join('src', 'bind')]

@@ -100,9 +100,9 @@ void GEMM::check_valid(driver::Device const & device, size_t nkernels, uint32_t*
     DType dtype = (DType)(x[0]);
     IsaacOperation_t AT = (IsaacOperation_t)x[1];
     IsaacOperation_t BT = (IsaacOperation_t)x[2];
-    param_t vec = x[6], bm = x[7], kl = x[8], bn = x[9],
+    param_t M = x[3], N = x[4], vec = x[6], bm = x[7], kl = x[8], bn = x[9],
            ms = x[10], ks = x[11], ns = x[12], a_bf0 = x[13], a_bf1 = x[14], b_bf0 = x[15], b_bf1 = x[16],
-           rs = x[17], br = x[18];
+           rs = x[17], br = x[18], gridr = x[19];
     //Features
     param_t dtsize = size_of(dtype);
     param_t dtvec = (dtype==HALF_TYPE)?2:1;
@@ -111,6 +111,7 @@ void GEMM::check_valid(driver::Device const & device, size_t nkernels, uint32_t*
     param_t rl = rs*br;
     param_t ml = bm*ms;
     param_t nl = bn*ns;
+    param_t gridM = ceil(M, ml), gridN = ceil(N, nl);
     param_t nthreads = bm*bn*br;
     param_t cd_shareda = dtsize*(ml+(A_outer_contig?0:(vec*dtvec)));
     param_t cd_sharedb = dtsize*(nl+(B_outer_contig?0:(vec*dtvec)));
@@ -140,7 +141,7 @@ void GEMM::check_valid(driver::Device const & device, size_t nkernels, uint32_t*
                     &&  ns % (dtvec*vec) == 0
                     &&  kl % ks == 0
                     &&  size_shmem <= device.max_shared_memory()
-
+                    &&  (gridr == 1 || gridM*gridN < 64*64)
                     &&  n_instructions <= 1024 //Doesn't allow more than 1024 instructions in the inner loop
                     &&  bm <= device.max_block_dim()[0]
                     &&  bn <= device.max_block_dim()[1]
@@ -208,7 +209,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   if(vec_==1)
     vs[0] = "";
   //Load-Store alignments
-  io_conf Cio(ldc_, vec_, dtvec, dtsize, kg_>1?false:true);
+  io_conf Cio(ldc_, vec_, dtvec, dtsize, false);
   io_conf Aio(lda_, vec_, dtvec, dtsize, false);
   io_conf Bio(ldb_, vec_, dtvec, dtsize, false);
 
@@ -889,10 +890,10 @@ void GEMM::enqueue(driver::Kernel &gemm, driver::Stream &queue, const scalar& al
   gemm.setArg(14, bound);
   gemm.setArg(15, locks);
 
-//  std::cout << gridM << " " << gridN << " " << kg_ << std::endl;
+//  std::cout << gridM << " " << gridN << " " << std::endl;
   //Launch
   if(kg_ > 1)
-    locks.set_zero(queue);
+    locks.set_zero(queue, gridM*gridN*4);
   queue.enqueue(gemm, {gridM, gridN, kg_}, {bm_, bn_, bk_});
 }
 
