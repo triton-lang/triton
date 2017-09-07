@@ -1,6 +1,6 @@
 # ISAAC
 
-This is the development repository for ISAAC, an input-aware auto-tuning framework and code-generator for HPC/DL.
+This is the development repository for ISAAC, an input-aware auto-tuning framework and code-generator for HPC/DL. This version is only compatible with NVIDIA hardware (it generates PTX source code). For OpenCL/CUDA compatibility, visit the Intel fork (https://github.com/intel/isaac) or the v1.0 branch (deprecated) or the
 
 ### License
 
