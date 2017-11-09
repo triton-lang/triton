@@ -89,8 +89,10 @@ void export_driver(py::module&& m)
       .def(py::init<drv::Context>())
       .def("synchronize", &drv::Stream::synchronize);
       
-      
-  py::register_exception<drv::exception::cuda::misaligned_address>(m, "MisalignedAddress");
 
+  py::register_exception<drv::exception::cuda::base>(m, "CudaException");
+  py::register_exception<drv::exception::cuda::launch_out_of_resources>(m, "CudaLaunchOutOfResources");
+  py::register_exception<drv::exception::cuda::misaligned_address>(m, "CudaMisalignedAddress");
+  py::register_exception<drv::exception::cuda::illegal_address>(m, "CudaIllegalAddress");
 
 }

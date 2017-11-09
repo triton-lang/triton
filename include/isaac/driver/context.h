@@ -39,7 +39,7 @@ private:
 
 public:
   //Constructors
-  explicit Context(CUcontext context = CUcontext(), bool take_ownership = true);
+  explicit Context(CUcontext context, bool take_ownership = true);
   explicit Context(Device const & device);
   //Accessors
   Device const & device() const;

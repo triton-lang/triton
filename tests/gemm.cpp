@@ -69,16 +69,16 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
   std::vector<DTYPE> hC(M*N);
 
 //  //Test selected profile
-  sc::GEMM(ctx.device(), stream, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, alpha, A, B, beta, C);
-  stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
-  if(!is_correct(hC, rC, max_rounding_error(DTYPE(K))))
-    exit(EXIT_FAILURE);
-  stream.write(C, true, 0, M*N*dtsize, iC.data());
+//  sc::GEMM(ctx.device(), stream, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, alpha, A, B, beta, C);
+//  stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
+//  if(!is_correct(hC, rC, max_rounding_error(DTYPE(K))))
+//    exit(EXIT_FAILURE);
+//  stream.write(C, true, 0, M*N*dtsize, iC.data());
 
   std::vector<int> rv = {1, 2, 4};
   std::vector<int> rl = {1, 8};
   std::vector<int> rs = {1, 4};
-  std::vector<int> rgrid = {1};
+  std::vector<int> rgrid = {1, 8};
   std::vector<int> r1 = {1};
   for(auto x: sc::cpp::cartesian({rv, rl, rl, rl, rs, r1, rs, rl, rl, rl, rl, rs, rl, rgrid})){
     isaac::templates::GEMM gemm(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,

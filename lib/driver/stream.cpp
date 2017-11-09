@@ -38,7 +38,13 @@ namespace isaac
 namespace driver
 {
 
-Stream::Stream(CUstream stream, bool take_ownership): cu_(stream, take_ownership)
+inline CUcontext cucontext(){
+  CUcontext result;
+  dispatch::cuCtxGetCurrent(&result);
+  return result;
+}
+
+Stream::Stream(CUstream stream, bool take_ownership): context_(cucontext(), take_ownership), cu_(stream, take_ownership)
 {}
 
 Stream::Stream(Context const & context): context_(context), cu_(CUstream(), true)

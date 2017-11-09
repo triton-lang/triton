@@ -26,6 +26,7 @@
 #include <map>
 #include "isaac/driver/handle.h"
 #include "isaac/driver/context.h"
+#include "isaac/driver/buffer.h"
 
 namespace isaac
 {
@@ -44,6 +45,7 @@ public:
   Module(Context const & context, std::string const & source);
   Context const & context() const;
   Handle<CUmodule> const & cu() const;
+  Buffer symbol(const char * name) const;
 
 private:
   Handle<CUmodule> cu_;

@@ -56,12 +56,12 @@
 
 #define CUDNN_MAJOR      7
 #define CUDNN_MINOR      0
-#define CUDNN_PATCHLEVEL 1
+#define CUDNN_PATCHLEVEL 2
 
 #define CUDNN_VERSION    (CUDNN_MAJOR * 1000 + CUDNN_MINOR * 100 + CUDNN_PATCHLEVEL)
 
 #include "driver_types.h"
-#include "cuda_runtime.h"
+#include <cuda_runtime.h>
 
 #ifndef CUDNNWINAPI
 #ifdef _WIN32

@@ -44,7 +44,7 @@ class Stream: public HandleInterface<Stream, CUstream>
 {
 public:
   //Constructors
-  Stream(CUstream stream, bool take_ownership = true);
+  Stream(CUstream stream, bool take_ownership);
   Stream(Context const & context);
   //Accessors
   Handle<CUstream> const & cu() const;

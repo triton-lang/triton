@@ -15,11 +15,11 @@
 NAMESPACE_BEGIN(pybind11)
 NAMESPACE_BEGIN(detail)
 
-template <typename Return, typename... Args /*,*/ PYBIND11_NOEXCEPT_TPL_ARG>
-struct type_caster<std::function<Return(Args...) PYBIND11_NOEXCEPT_SPECIFIER>> {
-    using type = std::function<Return(Args...) PYBIND11_NOEXCEPT_SPECIFIER>;
+template <typename Return, typename... Args>
+struct type_caster<std::function<Return(Args...)>> {
+    using type = std::function<Return(Args...)>;
     using retval_type = conditional_t<std::is_same<Return, void>::value, void_type, Return>;
-    using function_type = Return (*) (Args...) PYBIND11_NOEXCEPT_SPECIFIER;
+    using function_type = Return (*) (Args...);
 
 public:
     bool load(handle src_, bool) {
@@ -52,7 +52,7 @@ public:
         auto src = reinterpret_borrow<object>(src_);
         value = [src](Args... args) -> Return {
             gil_scoped_acquire acq;
-            object retval(src(std::move(args)...));
+            object retval(src(std::forward<Args>(args)...));
             /* Visual studio 2015 parser issue: need parentheses around this expression */
             return (retval.template cast<Return>());
         };

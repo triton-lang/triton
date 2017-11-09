@@ -630,7 +630,8 @@ extern __host__ cudaError_t CUDARTAPI cudaDeviceGetPCIBusId(char *pciBusId, int 
  * with ::cudaEventDestroy will result in undefined behavior.
  *
  * IPC functionality is restricted to devices with support for unified 
- * addressing on Linux operating systems.
+ * addressing on Linux operating systems. IPC functionality is not supported
+ * on Tegra platforms.
  *
  * \param handle - Pointer to a user allocated cudaIpcEventHandle
  *                    in which to return the opaque event handle
@@ -641,7 +642,8 @@ extern __host__ cudaError_t CUDARTAPI cudaDeviceGetPCIBusId(char *pciBusId, int 
  * ::cudaSuccess,
  * ::cudaErrorInvalidResourceHandle,
  * ::cudaErrorMemoryAllocation,
- * ::cudaErrorMapBufferObjectFailed
+ * ::cudaErrorMapBufferObjectFailed,
+ * ::cudaErrorNotSupported
  *
  * \sa
  * ::cudaEventCreate,
@@ -669,7 +671,8 @@ extern __host__ cudaError_t CUDARTAPI cudaIpcGetEventHandle(cudaIpcEventHandle_t
  * been freed with ::cudaEventDestroy will result in undefined behavior.
  *
  * IPC functionality is restricted to devices with support for unified 
- * addressing on Linux operating systems.
+ * addressing on Linux operating systems. IPC functionality is not supported
+ * on Tegra platforms.
  *
  * \param event - Returns the imported event
  * \param handle  - Interprocess handle to open
@@ -677,7 +680,8 @@ extern __host__ cudaError_t CUDARTAPI cudaIpcGetEventHandle(cudaIpcEventHandle_t
  * \returns
  * ::cudaSuccess,
  * ::cudaErrorMapBufferObjectFailed,
- * ::cudaErrorInvalidResourceHandle
+ * ::cudaErrorInvalidResourceHandle,
+ * ::cudaErrorNotSupported
  *
   * \sa
  * ::cudaEventCreate,
@@ -709,7 +713,8 @@ extern __host__ cudaError_t CUDARTAPI cudaIpcOpenEventHandle(cudaEvent_t *event,
  * new memory. 
  *
  * IPC functionality is restricted to devices with support for unified 
- * addressing on Linux operating systems.
+ * addressing on Linux operating systems. IPC functionality is not supported
+ * on Tegra platforms.
  *
  * \param handle - Pointer to user allocated ::cudaIpcMemHandle to return
  *                    the handle in.
@@ -720,6 +725,7 @@ extern __host__ cudaError_t CUDARTAPI cudaIpcOpenEventHandle(cudaEvent_t *event,
  * ::cudaErrorInvalidResourceHandle,
  * ::cudaErrorMemoryAllocation,
  * ::cudaErrorMapBufferObjectFailed,
+ * ::cudaErrorNotSupported
  *
  * \sa
  * ::cudaMalloc,
@@ -755,7 +761,8 @@ extern __host__ cudaError_t CUDARTAPI cudaIpcGetMemHandle(cudaIpcMemHandle_t *ha
  * behavior.
  * 
  * IPC functionality is restricted to devices with support for unified 
- * addressing on Linux operating systems.
+ * addressing on Linux operating systems. IPC functionality is not supported
+ * on Tegra platforms.
  *
  * \param devPtr - Returned device pointer
  * \param handle - ::cudaIpcMemHandle to open
@@ -765,7 +772,8 @@ extern __host__ cudaError_t CUDARTAPI cudaIpcGetMemHandle(cudaIpcMemHandle_t *ha
  * ::cudaSuccess,
  * ::cudaErrorMapBufferObjectFailed,
  * ::cudaErrorInvalidResourceHandle,
- * ::cudaErrorTooManyPeers
+ * ::cudaErrorTooManyPeers,
+ * ::cudaErrorNotSupported
  *
  * \note No guarantees are made about the address returned in \p *devPtr.  
  * In particular, multiple processes may not receive the same address for the same \p handle.
@@ -794,7 +802,8 @@ extern __host__ cudaError_t CUDARTAPI cudaIpcOpenMemHandle(void **devPtr, cudaIp
  * last mapping using them.
  *
  * IPC functionality is restricted to devices with support for unified 
- * addressing on Linux operating systems.
+ * addressing on Linux operating systems. IPC functionality is not supported
+ * on Tegra platforms.
  *
  * \param devPtr - Device pointer returned by ::cudaIpcOpenMemHandle
  * 
@@ -802,6 +811,7 @@ extern __host__ cudaError_t CUDARTAPI cudaIpcOpenMemHandle(void **devPtr, cudaIp
  * ::cudaSuccess,
  * ::cudaErrorMapBufferObjectFailed,
  * ::cudaErrorInvalidResourceHandle,
+ * ::cudaErrorNotSupported
  *
  * \sa
  * ::cudaMalloc,
@@ -2709,9 +2719,21 @@ extern __host__ cudaError_t CUDARTAPI cudaLaunchCooperativeKernel(const void *fu
  * - ::cudaLaunchParams::stream is the handle to the stream to perform the launch in. This cannot
  *   be the NULL stream or ::cudaStreamLegacy or ::cudaStreamPerThread.
  *
+ * By default, the kernel won't begin execution on any GPU until all prior work in all the specified
+ * streams has completed. This behavior can be overridden by specifying the flag
+ * ::cudaCooperativeLaunchMultiDeviceNoPreSync. When this flag is specified, each kernel
+ * will only wait for prior work in the stream corresponding to that GPU to complete before it begins
+ * execution.
+ *
+ * Similarly, by default, any subsequent work pushed in any of the specified streams will not begin
+ * execution until the kernels on all GPUs have completed. This behavior can be overridden by specifying
+ * the flag ::cudaCooperativeLaunchMultiDeviceNoPostSync. When this flag is specified,
+ * any subsequent work pushed in any of the specified streams will only wait for the kernel launched
+ * on the GPU corresponding to that stream to complete before it begins execution.
+ *
  * \param launchParamsList - List of launch parameters, one per device
  * \param numDevices       - Size of the \p launchParamsList array
- * \param flags            - Must be zero
+ * \param flags            - Flags to control launch behavior
  *
  * \return
  * ::cudaSuccess,
@@ -2875,19 +2897,19 @@ extern __host__ __cudart_builtin__ cudaError_t CUDARTAPI cudaFuncGetAttributes(s
 /**
  * \brief Set attributes for a given function
  *
- * This function sets the attributes of a function specified via \p entry.
- * The parameter \p entry must be a pointer to a function that executes
- * on the device. The parameter specified by \p entry must be declared as a \p __global__
- * function. The enumeration defined by \p attr is set to the value defined by \p value
+ * This function sets the attributes of a function specified via \p func.
+ * The parameter \p func must be a pointer to a function that executes
+ * on the device. The parameter specified by \p func must be declared as a \p __global__
+ * function. The enumeration defined by \p attr is set to the value defined by \p value.
  * If the specified function does not exist, then ::cudaErrorInvalidDeviceFunction is returned.
  * If the specified attribute cannot be written, or if the value is incorrect, 
  * then ::cudaErrorInvalidValue is returned.
  *
  * Valid values for \p attr are:
- * ::cuFuncAttrMaxDynamicSharedMem - Maximum size of dynamic shared memory per block
- * ::cudaFuncAttributePreferredSharedMemoryCarveout - Preferred shared memory-L1 cache split ratio
+ * - ::cudaFuncAttributeMaxDynamicSharedMemorySize - Maximum size of dynamic shared memory per block
+ * - ::cudaFuncAttributePreferredSharedMemoryCarveout - Preferred shared memory-L1 cache split ratio in percent of maximum shared memory
  *
- * \param entry - Function to get attributes of
+ * \param func  - Function to get attributes of
  * \param attr  - Attribute to set
  * \param value - Value to set
  *
@@ -2975,7 +2997,7 @@ extern __host__ cudaError_t CUDARTAPI cudaSetDoubleForHost(double *d);
  * \ref ::cudaOccupancyMaxPotentialBlockSize(int*, int*, T, size_t, int) "cudaOccupancyMaxPotentialBlockSize (C++ API)",
  * \ref ::cudaOccupancyMaxPotentialBlockSizeWithFlags(int*, int*, T, size_t, int, unsigned int) "cudaOccupancyMaxPotentialBlockSize (C++ API)",
  * \ref ::cudaOccupancyMaxPotentialBlockSizeVariableSMem(int*, int*, T, UnaryFunction, int) "cudaOccupancyMaxPotentialBlockSizeVariableSMem (C++ API)",
- * \ref ::cudaOccupancyMaxPotentialBlockSizeVariableSMemWithFlags(int*, int*, T, UnaryFunction, int, unsigned int) "cudaOccupancyMaxPotentialBlockSizeVariableSMem (C++ API)",
+ * \ref ::cudaOccupancyMaxPotentialBlockSizeVariableSMemWithFlags(int*, int*, T, UnaryFunction, int, unsigned int) "cudaOccupancyMaxPotentialBlockSizeVariableSMem (C++ API)"
  *
  * @{
  */
@@ -3608,6 +3630,8 @@ extern __host__ cudaError_t CUDARTAPI cudaHostAlloc(void **pHost, size_t size, u
  * best used sparingly to register staging areas for data exchange between
  * host and device.
  *
+ * ::cudaHostRegister is not supported on non I/O coherent devices.
+ *
  * The \p flags parameter enables different options to be specified that
  * affect the allocation, as follows.
  *
@@ -3664,7 +3688,8 @@ extern __host__ cudaError_t CUDARTAPI cudaHostAlloc(void **pHost, size_t size, u
  * ::cudaSuccess,
  * ::cudaErrorInvalidValue,
  * ::cudaErrorMemoryAllocation,
- * ::cudaErrorHostMemoryAlreadyRegistered
+ * ::cudaErrorHostMemoryAlreadyRegistered,
+ * ::cudaErrorNotSupported
  * \notefnerr
  *
  * \sa ::cudaHostUnregister, ::cudaHostGetFlags, ::cudaHostGetDevicePointer,
@@ -4154,6 +4179,11 @@ cudaMemcpy3DParms myParms = {0};
  * ::cudaMemcpyDefault is recommended, in which case the type of transfer is
  * inferred from the pointer values. However, ::cudaMemcpyDefault is only
  * allowed on systems that support unified virtual addressing.
+ * For ::cudaMemcpyHostToHost or ::cudaMemcpyHostToDevice or ::cudaMemcpyDeviceToHost
+ * passed as kind and cudaArray type passed as source or destination, if the kind
+ * implies cudaArray type to be present on the host, ::cudaMemcpy3D() will
+ * disregard that implication and silently correct the kind based on the fact that
+ * cudaArray type can only be present on the device.
  *
  * If the source and destination are both arrays, ::cudaMemcpy3D() will return
  * an error if they do not have the same element size.
@@ -4283,6 +4313,11 @@ cudaMemcpy3DParms myParms = {0};
  * ::cudaMemcpyDefault is recommended, in which case the type of transfer is
  * inferred from the pointer values. However, ::cudaMemcpyDefault is only
  * allowed on systems that support unified virtual addressing.
+ * For ::cudaMemcpyHostToHost or ::cudaMemcpyHostToDevice or ::cudaMemcpyDeviceToHost
+ * passed as kind and cudaArray type passed as source or destination, if the kind
+ * implies cudaArray type to be present on the host, ::cudaMemcpy3DAsync() will
+ * disregard that implication and silently correct the kind based on the fact that
+ * cudaArray type can only be present on the device.
  *
  * If the source and destination are both arrays, ::cudaMemcpy3DAsync() will
  * return an error if they do not have the same element size.

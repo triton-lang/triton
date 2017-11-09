@@ -48,7 +48,6 @@ inline size_t next_pow2(size_t N){
 
 inline std::string arith_str(DType dtype){
   switch (dtype) {
-  case HALF_TYPE: return "f16x2";
   case FLOAT_TYPE: return "f32";
   case DOUBLE_TYPE: return "f64";
   default: throw;
@@ -57,7 +56,6 @@ inline std::string arith_str(DType dtype){
 
 inline std::string io_str(DType dtype){
   switch (dtype) {
-  case HALF_TYPE: return "b32";
   case FLOAT_TYPE: return "b32";
   case DOUBLE_TYPE: return "b64";
   default: throw;
@@ -80,7 +78,6 @@ public:
   Generator(){}
   virtual std::string dump(driver::Device const & device, std::string const & name) = 0;
   virtual std::vector<param_t> tuning_params() const = 0;
-  virtual std::string id() const = 0;
 };
 
 }

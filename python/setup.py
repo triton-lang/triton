@@ -1,25 +1,9 @@
 import os, sys
-from distutils.ccompiler import show_compilers,new_compiler
-from distutils.command.build_ext import build_ext
-from distutils.command.build_py import build_py
-from distutils.core import setup, Extension
-from distutils.sysconfig import get_python_inc
-from distutils import sysconfig
-from imp import find_module
-from glob import glob
 from os.path import dirname
+from distutils.core import setup, Extension
+from glob import glob
+from build import build_clib_subclass, build_ext_subclass
 
-platform_cflags = {}
-platform_ldflags = {}
-platform_libs = {}
-
-class build_ext_subclass(build_ext):
-    def build_extensions(self):
-        try:
-            self.compiler.compiler_so.remove("-Wstrict-prototypes")
-        except (AttributeError, ValueError):
-            pass
-        build_ext.build_extensions(self)
 
 def recursive_glob(rootdir='.', suffix=''):
     return [os.path.join(looproot, filename)
@@ -27,28 +11,39 @@ def recursive_glob(rootdir='.', suffix=''):
             for filename in filenames if filename.endswith(suffix)]
 
 def main():
-    
-    #Source
-    include = [os.path.join(os.pardir, 'include')]
-    src =  recursive_glob(os.path.join(os.pardir,'lib'), 'cpp')
-    
-    #Bindings
-    include += [os.path.join('src', 'bind')]
-    src += recursive_glob(os.path.join('src','bind'), 'cpp')
 
-	#Libraries
-    libraries = []
-	
-    #Extensions
-    lib = Extension('_isaac',
-                    sources=src,
-                    libraries=libraries,
+    path = os.path.join(os.pardir, 'include')
+    include = [path, os.path.join(path, 'isaac', 'external', 'CUDA')]
+    src =  recursive_glob(os.path.join(os.pardir,'lib'), 'cpp')
+    flags = ['-std=c++11', '-fPIC', '-D_GLIBCXX_USE_CXX11_ABI=0']
+    core = ('core', {'sources': src, 'include_dirs': include, 'cflags': flags})
+
+    # Extensions
+    extensions = []
+
+    # Isaac
+    extensions += [Extension('_isaac',
+                    sources=recursive_glob(os.path.join('src','bind'), 'cpp'),
+                    libraries=[],
                     library_dirs=[],
-                    extra_compile_args=['-std=c++11'],
-                    extra_link_args=['-Wl,-soname=_isaac.so'],
-                    include_dirs=include)
-    
-    #Setup
+                    extra_compile_args=flags,
+                    extra_link_args=[],
+                    include_dirs=include + [os.path.join('src', 'bind')])]
+
+    # Tensorflow
+    try:
+      import tensorflow as tf
+      tf_include = tf.sysconfig.get_include()
+      extensions += [Extension('_tensorflow',
+                               sources=[os.path.join('src', 'extensions', 'tensorflow.cpp')],
+                               libraries = ['tensorflow_framework'],
+                               extra_compile_args= flags,
+                               include_dirs = include + [tf_include, os.path.join(tf_include, 'external', 'nsync', 'public')],
+                               library_dirs = [tf.sysconfig.get_lib()])]
+    except ImportError:
+      pass
+
+    # Setup
     setup(
           name='isaac',
           version='1.0',
@@ -56,9 +51,10 @@ def main():
           author='Philippe Tillet',
           author_email='ptillet@g.harvard.edu',
           packages=['isaac'],
+          libraries=[core],
           ext_package='isaac',
-          ext_modules=[lib],
-          cmdclass={'build_py': build_py, 'build_ext': build_ext_subclass},
+          ext_modules=extensions,
+          cmdclass={'build_clib': build_clib_subclass, 'build_ext': build_ext_subclass},
           classifiers=['Environment :: Console',
                        'Development Status :: 4 - Beta',
                        'Intended Audience :: Developers',

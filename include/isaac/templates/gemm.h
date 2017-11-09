@@ -47,12 +47,17 @@ namespace templates{
 
 class GEMM: public Generator{
 public:
+  static const std::string id;
+  static const size_t Nshapes;
+  static const size_t Ntune;
+  static const size_t Nparams;
+
+public:
   GEMM(DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K, param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc,
        param_t vec, param_t bm, param_t u, param_t bn, param_t ms, param_t us, param_t ns, param_t ba0, param_t ba1, param_t bb0, param_t bb1,
        param_t ks, param_t bk, param_t kg);
   std::string dump(driver::Device const & device, std::string const & name);
   std::vector<param_t> tuning_params() const;
-  std::string id() const;
   void enqueue(driver::Kernel& kernel, driver::Stream& queue, scalar const & alpha, driver::Buffer const & A, driver::Buffer const & B, scalar const & beta, driver::Buffer& C);
   static void check_valid(driver::Device const & device, size_t M, param_t* params, uint8_t* valid);
   static double tflops(param_t M, param_t N, param_t K, double time);
@@ -74,19 +79,19 @@ private:
   param_t ldc_;
   //parameters
   param_t vec_;
-  param_t bm_;
-  param_t bn_;
-  param_t ms_;
-  param_t ns_;
+  param_t bc0_;
+  param_t bc1_;
+  param_t cs0_;
+  param_t cs1_;
   param_t u_;
   param_t us_;
   param_t ba0_;
   param_t ba1_;
   param_t bb0_;
   param_t bb1_;
-  param_t ks_;
-  param_t bk_;
-  param_t kg_;
+  param_t zs_;
+  param_t bz_;
+  param_t gridz_;
   param_t stn_;
 };
 

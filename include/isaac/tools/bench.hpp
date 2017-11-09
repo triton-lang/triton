@@ -62,7 +62,7 @@ double bench(OP const & op, SYNC const & sync, isaac::driver::Device const & dev
   double total_time = 0;
   op();
   sync();
-  while(total_time*1e-9 < 1e-2){
+  while(total_time*1e-9 < 1e-1){
     float norm = (float)device.current_sm_clock()/device.max_sm_clock();
     tmr.start();
     op();

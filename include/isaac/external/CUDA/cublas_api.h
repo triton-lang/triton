@@ -72,7 +72,7 @@
 #include "driver_types.h"
 #include "cuComplex.h"   /* import complex data type */
 
-#include "cuda_fp16.h"
+#include <cuda_fp16.h>
 
 #include "library_types.h"
 
@@ -132,6 +132,7 @@ typedef enum {
 /*For different GEMM algorithm */
 typedef enum {
     CUBLAS_GEMM_DFALT               = -1,
+    CUBLAS_GEMM_DEFAULT             = -1,
     CUBLAS_GEMM_ALGO0               =  0,
     CUBLAS_GEMM_ALGO1               =  1,
     CUBLAS_GEMM_ALGO2               =  2,
@@ -150,10 +151,13 @@ typedef enum {
     CUBLAS_GEMM_ALGO15              =  15,        
     CUBLAS_GEMM_ALGO16              =  16,        
     CUBLAS_GEMM_ALGO17              =  17,        
+    CUBLAS_GEMM_DEFAULT_TENSOR_OP   =  99,        
     CUBLAS_GEMM_DFALT_TENSOR_OP     =  99,        
     CUBLAS_GEMM_ALGO0_TENSOR_OP     =  100,        
     CUBLAS_GEMM_ALGO1_TENSOR_OP     =  101,        
-    CUBLAS_GEMM_ALGO2_TENSOR_OP     =  102        
+    CUBLAS_GEMM_ALGO2_TENSOR_OP     =  102,        
+    CUBLAS_GEMM_ALGO3_TENSOR_OP     =  103,        
+    CUBLAS_GEMM_ALGO4_TENSOR_OP     =  104        
 } cublasGemmAlgo_t;
 
 /*Enum for default math mode/tensor operation*/
@@ -2284,6 +2288,23 @@ CUBLASAPI cublasStatus_t CUBLASWINAPI cublasZtrmm_v2(cublasHandle_t handle, cubl
                                                      cuDoubleComplex *C,
                                                      int ldc);
 /* BATCH GEMM */
+#if defined(__cplusplus)
+CUBLASAPI cublasStatus_t CUBLASWINAPI cublasHgemmBatched (cublasHandle_t handle,
+                                                          cublasOperation_t transa,
+                                                          cublasOperation_t transb, 
+                                                          int m,
+                                                          int n,
+                                                          int k,
+                                                          const __half *alpha,  /* host or device pointer */  
+                                                          const __half *Aarray[], 
+                                                          int lda,
+                                                          const __half *Barray[],
+                                                          int ldb, 
+                                                          const __half *beta,   /* host or device pointer */  
+                                                          __half *Carray[],
+                                                          int ldc,
+                                                          int batchCount);
+#endif
 CUBLASAPI cublasStatus_t CUBLASWINAPI cublasSgemmBatched (cublasHandle_t handle,
                                                           cublasOperation_t transa,
                                                           cublasOperation_t transb, 

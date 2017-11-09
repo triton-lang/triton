@@ -109,6 +109,7 @@ namespace driver
 #define CUDNN_DEFINE1(ret, fname, t1) DEFINE1(cudnninit, cudnn_, ret, fname, t1)
 #define CUDNN_DEFINE2(ret, fname, t1, t2) DEFINE2(cudnninit, cudnn_, ret, fname, t1, t2)
 #define CUDNN_DEFINE3(ret, fname, t1, t2, t3) DEFINE3(cudnninit, cudnn_, ret, fname, t1, t2, t3)
+#define CUDNN_DEFINE5(ret, fname, t1, t2, t3, t4, t5) DEFINE5(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5)
 #define CUDNN_DEFINE7(ret, fname, t1, t2, t3, t4, t5, t6, t7) DEFINE7(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7)
 #define CUDNN_DEFINE8(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8) DEFINE8(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8)
 #define CUDNN_DEFINE13(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13) DEFINE13(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13)
@@ -165,6 +166,7 @@ CUDA_DEFINE4(CUresult, cuMemcpyDtoHAsync_v2, void *, CUdeviceptr, size_t, CUstre
 CUDA_DEFINE1(CUresult, cuDriverGetVersion, int *)
 CUDA_DEFINE3(CUresult, cuDeviceGetName, char *, int, CUdevice)
 CUDA_DEFINE3(CUresult, cuDeviceGetPCIBusId, char *, int, CUdevice)
+CUDA_DEFINE4(CUresult, cuModuleGetGlobal_v2, CUdeviceptr*, size_t*, CUmodule, const char*)
 
 CUDA_DEFINE4(CUresult, cuMemcpyHtoDAsync_v2, CUdeviceptr, const void *, size_t, CUstream)
 CUDA_DEFINE2(CUresult, cuModuleLoad, CUmodule *, const char *)
@@ -237,6 +239,13 @@ CUDNN_DEFINE1(cudnnStatus_t, cudnnCreateFilterDescriptor, cudnnFilterDescriptor_
 CUDNN_DEFINE1(cudnnStatus_t, cudnnCreate, cudnnHandle_t*)
 CUDNN_DEFINE7(cudnnStatus_t, cudnnSetTensor4dDescriptor, cudnnTensorDescriptor_t, cudnnTensorFormat_t, cudnnDataType_t, int, int, int, int)
 CUDNN_DEFINE7(cudnnStatus_t, cudnnSetFilter4dDescriptor, cudnnFilterDescriptor_t, cudnnDataType_t, cudnnTensorFormat_t, int, int, int, int)
+CUDNN_DEFINE5(cudnnStatus_t, cudnnSetTensorNdDescriptorEx, cudnnTensorDescriptor_t, cudnnTensorFormat_t, cudnnDataType_t, int, const int*)
+CUDNN_DEFINE5(cudnnStatus_t, cudnnSetFilterNdDescriptor, cudnnFilterDescriptor_t, cudnnDataType_t, cudnnTensorFormat_t, int, const int*)
+CUDNN_DEFINE1(cudnnStatus_t, cudnnCreatePoolingDescriptor, cudnnPoolingDescriptor_t*)
+CUDNN_DEFINE7(cudnnStatus_t, cudnnSetPoolingNdDescriptor, cudnnPoolingDescriptor_t, const cudnnPoolingMode_t, const cudnnNanPropagation_t, int, const int*, const int*, const int*)
+CUDNN_DEFINE8(cudnnStatus_t, cudnnPoolingForward, cudnnHandle_t, const cudnnPoolingDescriptor_t, const void*, const cudnnTensorDescriptor_t, const void*, const void*, const cudnnTensorDescriptor_t, void*)
+
+
 CUDNN_DEFINE8(cudnnStatus_t, cudnnSetConvolution2dDescriptor, cudnnConvolutionDescriptor_t, int, int, int, int, int, int, cudnnConvolutionMode_t)
 CUDNN_DEFINE7(cudnnStatus_t, cudnnSetConvolutionNdDescriptor, cudnnConvolutionDescriptor_t, int, const int*, const int*, const int*, cudnnConvolutionMode_t, cudnnDataType_t)
 CUDNN_DEFINE8(cudnnStatus_t, cudnnGetConvolutionForwardAlgorithm, cudnnHandle_t, const cudnnTensorDescriptor_t, const cudnnFilterDescriptor_t, const cudnnConvolutionDescriptor_t, const cudnnTensorDescriptor_t, cudnnConvolutionFwdPreference_t, size_t, cudnnConvolutionFwdAlgo_t *)
@@ -283,6 +292,7 @@ void* dispatch::cuMemcpyDtoHAsync_v2_;
 void* dispatch::cuDriverGetVersion_;
 void* dispatch::cuDeviceGetName_;
 void* dispatch::cuDeviceGetPCIBusId_;
+void* dispatch::cuModuleGetGlobal_v2_;
 
 void* dispatch::cuMemcpyHtoDAsync_v2_;
 void* dispatch::cuModuleLoad_;
@@ -327,16 +337,21 @@ void* dispatch::cublasDgemm_v2_;
 void* dispatch::cublasGemmEx_;
 
 void* dispatch::cudnnCreateConvolutionDescriptor_;
+void* dispatch::cudnnCreatePoolingDescriptor_;
 void* dispatch::cudnnCreateTensorDescriptor_;
 void* dispatch::cudnnCreateFilterDescriptor_;
 void* dispatch::cudnnCreate_;
 void* dispatch::cudnnSetTensor4dDescriptor_;
 void* dispatch::cudnnSetFilter4dDescriptor_;
+void* dispatch::cudnnSetTensorNdDescriptorEx_;
+void* dispatch::cudnnSetFilterNdDescriptor_;
+void* dispatch::cudnnSetPoolingNdDescriptor_;
 void* dispatch::cudnnSetConvolution2dDescriptor_;
 void* dispatch::cudnnSetConvolutionNdDescriptor_;
 void* dispatch::cudnnGetConvolutionForwardAlgorithm_;
 void* dispatch::cudnnGetConvolutionForwardWorkspaceSize_;
 void* dispatch::cudnnConvolutionForward_;
+void* dispatch::cudnnPoolingForward_;
 void* dispatch::cudnnSetStream_;
 
 }

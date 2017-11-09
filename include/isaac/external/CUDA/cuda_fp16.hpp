@@ -116,6 +116,7 @@ typedef struct __CUDA_ALIGN__(4) {
 #if defined(__GNUC__)
 #if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
 #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
 #pragma GCC diagnostic ignored "-Weffc++"
 #endif /* __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) */
 #endif /* defined(__GNUC__) */
@@ -644,7 +645,7 @@ __CUDA_FP16_DECL__ __half __float2half(const float f)
     asm("{  cvt.rn.f16.f32 %0, %1;}\n" : "=h"(__HALF_TO_US(val)) : "f"(f));
     return val;
 }
-__CUDA_FP16_DECL__ __half __float2half_rn_internal(const float f)
+__CUDA_FP16_DECL__ __half __float2half_rn(const float f)
 {
     __half val;
     asm("{  cvt.rn.f16.f32 %0, %1;}\n" : "=h"(__HALF_TO_US(val)) : "f"(f));
@@ -668,7 +669,7 @@ __CUDA_FP16_DECL__ __half __float2half_ru(const float f)
     asm("{  cvt.rp.f16.f32 %0, %1;}\n" : "=h"(__HALF_TO_US(val)) : "f"(f));
     return val;
 }
-__CUDA_FP16_DECL__ float __half2float_internal(const __half h)
+__CUDA_FP16_DECL__ float __half2float(const __half h)
 {
     float val;
     asm("{  cvt.f32.f16 %0, %1;}\n" : "=f"(val) : "h"(__HALF_TO_CUS(h)));
@@ -823,6 +824,14 @@ __CUDA_FP16_DECL__ __half __ushort_as_half(const unsigned short int i)
        :"=r"(__HALF2_TO_UI(r)): "r"(__HALF2_TO_CUI(var)), "r"(delta), "r"(c)); \
    return r; \
 } while(0);
+
+#define __SHUFFLE_SYNC_HALF2_MACRO(name) do {\
+   __half2 r; \
+   asm("{"#name" %0,%1,%2,%3,%4;\n}" \
+       :"=r"(__HALF2_TO_UI(r)): "r"(__HALF2_TO_CUI(var)), "r"(delta), "r"(c), "r"(mask)); \
+   return r; \
+} while(0);
+
 __CUDA_FP16_DECL__ __half2 __shfl(__half2 var, int delta, int width)
 {
     int warpSize;
@@ -851,7 +860,39 @@ __CUDA_FP16_DECL__ __half2 __shfl_xor(__half2 var, int delta, int width)
     int c = ((warpSize - width) << 8) | 0x1f;
     __SHUFFLE_HALF2_MACRO(shfl.bfly.b32);
 }
+
+__CUDA_FP16_DECL__ __half2 __shfl_sync(unsigned mask, __half2 var, int delta, int width)
+{
+    int warpSize;
+    asm("{mov.u32 %0, WARP_SZ;\n}" : "=r"(warpSize));
+    int c = ((warpSize - width) << 8) | 0x1f;
+    __SHUFFLE_SYNC_HALF2_MACRO(shfl.sync.idx.b32);
+}
+__CUDA_FP16_DECL__ __half2 __shfl_up_sync(unsigned mask, __half2 var, unsigned int delta, int width)
+{
+    int warpSize;
+    asm("{mov.u32 %0, WARP_SZ;\n}" : "=r"(warpSize));
+    int c = (warpSize - width) << 8;
+    __SHUFFLE_SYNC_HALF2_MACRO(shfl.sync.up.b32);
+}
+__CUDA_FP16_DECL__ __half2 __shfl_down_sync(unsigned mask, __half2 var, unsigned int delta, int width)
+{
+    int warpSize;
+    asm("{mov.u32 %0, WARP_SZ;\n}" : "=r"(warpSize));
+    int c = ((warpSize - width) << 8) | 0x1f;
+    __SHUFFLE_SYNC_HALF2_MACRO(shfl.sync.down.b32);
+}
+__CUDA_FP16_DECL__ __half2 __shfl_xor_sync(unsigned mask, __half2 var, int delta, int width)
+{
+    int warpSize;
+    asm("{mov.u32 %0, WARP_SZ;\n}" : "=r"(warpSize));
+    int c = ((warpSize - width) << 8) | 0x1f;
+    __SHUFFLE_SYNC_HALF2_MACRO(shfl.sync.bfly.b32);
+}
+
 #undef __SHUFFLE_HALF2_MACRO
+#undef __SHUFFLE_SYNC_HALF2_MACRO
+
 __CUDA_FP16_DECL__ __half __shfl(__half var, int delta, int width)
 {
     __half2 temp1 = __halves2half2(var, var);
@@ -876,6 +917,32 @@ __CUDA_FP16_DECL__ __half __shfl_xor(__half var, int delta, int width)
     __half2 temp2 = __shfl_xor(temp1, delta, width);
     return __low2half(temp2);
 }
+
+__CUDA_FP16_DECL__ __half __shfl_sync(unsigned mask, __half var, int delta, int width)
+{
+    __half2 temp1 = __halves2half2(var, var);
+    __half2 temp2 = __shfl_sync(mask, temp1, delta, width);
+    return __low2half(temp2);
+}
+__CUDA_FP16_DECL__ __half __shfl_up_sync(unsigned mask, __half var, unsigned int delta, int width)
+{
+    __half2 temp1 = __halves2half2(var, var);
+    __half2 temp2 = __shfl_up_sync(mask, temp1, delta, width);
+    return __low2half(temp2);
+}
+__CUDA_FP16_DECL__ __half __shfl_down_sync(unsigned mask, __half var, unsigned int delta, int width)
+{
+    __half2 temp1 = __halves2half2(var, var);
+    __half2 temp2 = __shfl_down_sync(mask, temp1, delta, width);
+    return __low2half(temp2);
+}
+__CUDA_FP16_DECL__ __half __shfl_xor_sync(unsigned mask, __half var, int delta, int width)
+{
+    __half2 temp1 = __halves2half2(var, var);
+    __half2 temp2 = __shfl_xor_sync(mask, temp1, delta, width);
+    return __low2half(temp2);
+}
+
 #endif /*__CUDA_ARCH__ >= 300 || !defined(__CUDA_ARCH__)*/
 /******************************************************************************
 *               __half and __half2 __ldg,__ldcg,__ldca,__ldcs                *

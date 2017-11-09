@@ -48,7 +48,7 @@ static const std::vector<cublasGemmAlgo_t> cublasAlgorithms = {
   CUBLAS_GEMM_ALGO4, CUBLAS_GEMM_ALGO5, CUBLAS_GEMM_ALGO6, CUBLAS_GEMM_ALGO7
 };
 
-static const std::map<DType, cudaDataType> cudtype = {{HALF_TYPE, CUDA_R_16F}, {FLOAT_TYPE, CUDA_R_32F}, {DOUBLE_TYPE,CUDA_R_64F}};
+static const std::map<DType, cudaDataType> cudtype = {{FLOAT_TYPE, CUDA_R_32F}, {DOUBLE_TYPE,CUDA_R_64F}};
 static const std::map<char, cublasOperation_t> cuop = {{'N', CUBLAS_OP_N}, {'T', CUBLAS_OP_T}};
 
 cublasGemmAlgo_t cublasGemmFastest(Stream& stream, cublasHandle_t handle, cudaDataType cudt, cublasOperation_t AT, cublasOperation_t BT, int32_t M, int32_t N, int32_t K,
@@ -96,17 +96,31 @@ inline void cublasGemm(DType dtype, Stream& stream, char cAT, char cBT, int32_t 
 
 inline cudnnDataType_t cudnnDtype(DType dtype){
   switch(dtype){
-    case HALF_TYPE: return CUDNN_DATA_HALF;
     case FLOAT_TYPE: return CUDNN_DATA_FLOAT;
     case DOUBLE_TYPE: return CUDNN_DATA_DOUBLE;
   }
   throw;
 }
 
-inline void cudnnConv(DType dtype, Stream& stream, int32_t H, int32_t W, int32_t N, int32_t K, int32_t P, int32_t Q, int32_t C, int32_t R, int32_t S,
-                      int32_t pad_h, int32_t pad_w, int32_t stride_h, int32_t stride_w, scalar alpha, Buffer const & I, Buffer const & F, scalar beta, Buffer const & O){
+inline void cudnnConv(DType dtype, Stream& stream, int32_t D, int32_t H, int32_t W, int32_t N, int32_t K, int32_t M, int32_t P, int32_t Q, int32_t C, int32_t T, int32_t R, int32_t S,
+                      int32_t pad_d, int32_t pad_h, int32_t pad_w, int32_t stride_d, int32_t stride_h, int32_t stride_w, scalar alpha, Buffer const & I, Buffer const & F, scalar beta, Buffer const & O){
   driver::Context const & ctx = stream.context();
   ContextSwitcher switch_ctx(ctx);
+
+  std::vector<int> pad = {pad_d, pad_h, pad_w};
+  std::vector<int> stride = {stride_d, stride_h, stride_w};
+  std::vector<int> upscale = {1, 1, 1};
+  std::vector<int> Oshapes = {N, K, M, P, Q};
+  std::vector<int> Fshapes = {K, C, T, R, S};
+  std::vector<int> Ishapes = {N, C, D, H, W};
+  if(M == 1 && T == 1 && D == 1){
+    pad.erase(pad.begin());
+    stride.erase(stride.begin());
+    upscale.erase(upscale.begin());
+    Oshapes.erase(Oshapes.begin() + 2);
+    Ishapes.erase(Ishapes.begin() + 2);
+    Fshapes.erase(Fshapes.begin() + 2);
+  }
 
   cudnnHandle_t handle = dispatch::cudnnHandle(ctx);
   cudnnDataType_t cutype = cudnnDtype(dtype);
@@ -120,28 +134,62 @@ inline void cudnnConv(DType dtype, Stream& stream, int32_t H, int32_t W, int32_t
   dispatch::cudnnCreateTensorDescriptor(&tI);
   dispatch::cudnnCreateFilterDescriptor(&tF);
 
-  dispatch::cudnnSetTensor4dDescriptor(tO, CUDNN_TENSOR_NCHW, cutype, N, K, P, Q);
-  dispatch::cudnnSetFilter4dDescriptor(tF, cutype, CUDNN_TENSOR_NCHW, K, C, R, S);
-  dispatch::cudnnSetTensor4dDescriptor(tI, CUDNN_TENSOR_NCHW, cutype, N, C, H, W);
+  dispatch::cudnnSetTensorNdDescriptorEx(tO, CUDNN_TENSOR_NCHW, cutype, Oshapes.size(), Oshapes.data());
+  dispatch::cudnnSetFilterNdDescriptor(tF, cutype, CUDNN_TENSOR_NCHW, Fshapes.size(), Fshapes.data());
+  dispatch::cudnnSetTensorNdDescriptorEx(tI, CUDNN_TENSOR_NCHW, cutype, Ishapes.size(), Ishapes.data());
 
   dispatch::cudnnCreateConvolutionDescriptor(&conv);
-  int pad[] = {pad_h, pad_w};
-  int stride[] = {stride_h, stride_w};
-  int upscale[] = {1, 1};
-  dispatch::cudnnSetConvolutionNdDescriptor(conv, 2, pad, stride, upscale, CUDNN_CROSS_CORRELATION, cutype);
+  dispatch::cudnnSetConvolutionNdDescriptor(conv, pad.size(), pad.data(), stride.data(), upscale.data(), CUDNN_CROSS_CORRELATION, cutype);
 
-//  dispatch::cudnnGetConvolutionForwardAlgorithm(handle, tI, tF, conv, tO, CUDNN_CONVOLUTION_FWD_SPECIFY_WORKSPACE_LIMIT, 1024*1024, &algo);
+  dispatch::cudnnGetConvolutionForwardAlgorithm(handle, tI, tF, conv, tO, CUDNN_CONVOLUTION_FWD_SPECIFY_WORKSPACE_LIMIT, 1024*1024*64, &algo);
   algo = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
   size_t workspace_size;
   dispatch::cudnnGetConvolutionForwardWorkspaceSize(handle, tI, tF, conv, tO, algo, &workspace_size);
-//  Buffer work(ctx, std::max((size_t)1,workspace_size));
-  static Buffer work(ctx, 1024*1024*16);
+  static Buffer work(ctx, 1024*1024*64);
   CUdeviceptr twork = work;
   CUdeviceptr pI = I, pF = F, pO = O;
   dispatch::cudnnConvolutionForward(handle, alpha.data(), tI, (void*)pI, tF, (void*)pF, conv, algo, (void*)twork, workspace_size, beta.data(), tO, (void*)pO);
 }
 
 
+inline void cudnnPool(DType dtype, Stream& stream, int32_t D, int32_t H, int32_t W, int32_t N, int32_t K, int32_t M, int32_t P, int32_t Q, int32_t T, int32_t R, int32_t S,
+                      int32_t pad_d, int32_t pad_h, int32_t pad_w, int32_t stride_d, int32_t stride_h, int32_t stride_w, scalar alpha, Buffer const & I, scalar beta, Buffer const & O){
+  driver::Context const & ctx = stream.context();
+  ContextSwitcher switch_ctx(ctx);
+
+  std::vector<int> pad = {pad_d, pad_h, pad_w};
+  std::vector<int> stride = {stride_d, stride_h, stride_w};
+  std::vector<int> upscale = {1, 1, 1};
+  std::vector<int> Oshapes = {N, K, M, P, Q};
+  std::vector<int> Ishapes = {N, K, D, H, W};
+  std::vector<int> window = {T, R, S};
+  if(M == 1 && T == 1 && D == 1){
+    window.erase(window.begin());
+    pad.erase(pad.begin());
+    stride.erase(stride.begin());
+    upscale.erase(upscale.begin());
+    Oshapes.erase(Oshapes.begin() + 2);
+    Ishapes.erase(Ishapes.begin() + 2);
+  }
+
+  cudnnHandle_t handle = dispatch::cudnnHandle(ctx);
+  cudnnDataType_t cutype = cudnnDtype(dtype);
+
+  dispatch::cudnnSetStream(handle, (CUstream)stream);
+  cudnnTensorDescriptor_t tO, tI;
+  cudnnPoolingDescriptor_t desc;
+  dispatch::cudnnCreateTensorDescriptor(&tO);
+  dispatch::cudnnCreateTensorDescriptor(&tI);
+
+  dispatch::cudnnSetTensorNdDescriptorEx(tO, CUDNN_TENSOR_NCHW, cutype, Oshapes.size(), Oshapes.data());
+  dispatch::cudnnSetTensorNdDescriptorEx(tI, CUDNN_TENSOR_NCHW, cutype, Ishapes.size(), Ishapes.data());
+
+  dispatch::cudnnCreatePoolingDescriptor(&desc);
+  dispatch::cudnnSetPoolingNdDescriptor(desc, CUDNN_POOLING_MAX, CUDNN_NOT_PROPAGATE_NAN, window.size(), window.data(), pad.data(), stride.data());
+
+  CUdeviceptr pI = I, pO = O;
+  dispatch::cudnnPoolingForward(handle, desc, alpha.data(), tI, (void*)pI, beta.data(), tO, (void*)pO);
+}
 
 
 

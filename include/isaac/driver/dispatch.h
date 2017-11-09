@@ -102,6 +102,7 @@ public:
   static CUresult cuDriverGetVersion(int *driverVersion);
   static CUresult cuDeviceGetName(char *name, int len, CUdevice dev);
   static CUresult cuDeviceGetPCIBusId(char *id, int len, CUdevice dev);
+  static CUresult cuModuleGetGlobal_v2(CUdeviceptr *dptr, size_t* bytes, CUmodule hmod, const char *name);
 
   static CUresult cuMemcpyHtoDAsync_v2(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount, CUstream hStream);
   static CUresult cuModuleLoad(CUmodule *module, const char *fname);
@@ -146,18 +147,25 @@ public:
   static cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const void *alpha, const void *A, cudaDataType Atype, int lda, const void *B, cudaDataType Btype, int ldb, const void *beta, void *C, cudaDataType Ctype, int ldc, cudaDataType computeType, cublasGemmAlgo_t algo);
 
   static cudnnHandle_t cudnnHandle(Context const & ctx);
+  static cudnnStatus_t cudnnCreatePoolingDescriptor(cudnnPoolingDescriptor_t *poolingDesc);
   static cudnnStatus_t cudnnCreateConvolutionDescriptor(cudnnConvolutionDescriptor_t* convDesc);
   static cudnnStatus_t cudnnCreateTensorDescriptor(cudnnTensorDescriptor_t *tensorDesc);
   static cudnnStatus_t cudnnCreateFilterDescriptor(cudnnFilterDescriptor_t *filterDesc);
   static cudnnStatus_t cudnnCreate(cudnnHandle_t *handle);
   static cudnnStatus_t cudnnSetTensor4dDescriptor(cudnnTensorDescriptor_t tensorDesc, cudnnTensorFormat_t format, cudnnDataType_t dataType, int n, int c, int h, int w);
   static cudnnStatus_t cudnnSetFilter4dDescriptor(cudnnFilterDescriptor_t filterDesc, cudnnDataType_t dataType, cudnnTensorFormat_t format, int k, int c, int h, int w);
+  static cudnnStatus_t cudnnSetTensorNdDescriptorEx(cudnnTensorDescriptor_t tensorDesc, cudnnTensorFormat_t format, cudnnDataType_t dataType, int nbDims, const int dimA[]);
+  static cudnnStatus_t cudnnSetFilterNdDescriptor(cudnnFilterDescriptor_t filterDesc, cudnnDataType_t dataType, cudnnTensorFormat_t format, int nbDims, const int filterDimA[]);
+
   static cudnnStatus_t cudnnSetConvolution2dDescriptor(cudnnConvolutionDescriptor_t convDesc, int pad_h, int pad_w, int u, int v, int upscalex, int upscaley, cudnnConvolutionMode_t mode);
   static cudnnStatus_t cudnnSetConvolutionNdDescriptor(cudnnConvolutionDescriptor_t convDesc, int arrayLength, const int padA[], const int filterStrideA[], const int upscaleA[], cudnnConvolutionMode_t mode, cudnnDataType_t dataType);
+  static cudnnStatus_t cudnnSetPoolingNdDescriptor(cudnnPoolingDescriptor_t poolingDesc, const cudnnPoolingMode_t mode, const cudnnNanPropagation_t maxpoolingNanOpt, int nbDims, const int windowDimA[], const int paddingA[], const int strideA[]);
 
   static cudnnStatus_t cudnnGetConvolutionForwardAlgorithm(cudnnHandle_t handle, const cudnnTensorDescriptor_t xDesc, const cudnnFilterDescriptor_t wDesc, const cudnnConvolutionDescriptor_t convDesc, const cudnnTensorDescriptor_t yDesc, cudnnConvolutionFwdPreference_t preference, size_t memoryLimitInBytes, cudnnConvolutionFwdAlgo_t *algo);
   static cudnnStatus_t cudnnGetConvolutionForwardWorkspaceSize(cudnnHandle_t handle, const cudnnTensorDescriptor_t xDesc, const cudnnFilterDescriptor_t wDesc, const cudnnConvolutionDescriptor_t convDesc, const cudnnTensorDescriptor_t yDesc, cudnnConvolutionFwdAlgo_t algo, size_t *sizeInBytes);
   static cudnnStatus_t cudnnConvolutionForward(cudnnHandle_t handle, const void *alpha, const cudnnTensorDescriptor_t xDesc, const void *x, const cudnnFilterDescriptor_t wDesc, const void *w, const cudnnConvolutionDescriptor_t convDesc, cudnnConvolutionFwdAlgo_t algo, void *workSpace, size_t workSpaceSizeInBytes, const void *beta, const cudnnTensorDescriptor_t yDesc, void *y);
+  static cudnnStatus_t cudnnPoolingForward(cudnnHandle_t handle, const cudnnPoolingDescriptor_t poolingDesc, const void *alpha, const cudnnTensorDescriptor_t xDesc, const void *x, const void *beta, const cudnnTensorDescriptor_t yDesc, void *y);
+
   static cudnnStatus_t cudnnSetStream(cudnnHandle_t handle, cudaStream_t streamId);
 
 private:
@@ -181,6 +189,7 @@ private:
   static void* cuDriverGetVersion_;
   static void* cuDeviceGetName_;
   static void* cuDeviceGetPCIBusId_;
+  static void* cuModuleGetGlobal_v2_;
 
   static void* cuMemcpyHtoDAsync_v2_;
   static void* cuModuleLoad_;
@@ -225,16 +234,21 @@ private:
   static void* cublasGemmEx_;
 
   static void* cudnnCreateConvolutionDescriptor_;
+  static void* cudnnCreatePoolingDescriptor_;
   static void* cudnnCreateTensorDescriptor_;
   static void* cudnnCreateFilterDescriptor_;
   static void* cudnnCreate_;
   static void* cudnnSetTensor4dDescriptor_;
   static void* cudnnSetFilter4dDescriptor_;
+  static void* cudnnSetTensorNdDescriptorEx_;
+  static void* cudnnSetFilterNdDescriptor_;
   static void* cudnnSetConvolution2dDescriptor_;
   static void* cudnnSetConvolutionNdDescriptor_;
+  static void* cudnnSetPoolingNdDescriptor_;
   static void* cudnnGetConvolutionForwardAlgorithm_;
   static void* cudnnGetConvolutionForwardWorkspaceSize_;
   static void* cudnnConvolutionForward_;
+  static void* cudnnPoolingForward_;
   static void* cudnnSetStream_;
 
 };

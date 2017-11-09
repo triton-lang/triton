@@ -32,6 +32,7 @@
 #include "isaac/tools/matrix.hpp"
 #include "isaac/driver/device.h"
 #include "isaac/templates/common.hpp"
+#include "isaac/templates/pool.h"
 #include "isaac/templates/conv.h"
 #include "isaac/templates/gemm.h"
 #include <map>
@@ -61,6 +62,12 @@ public:
   void forward(matrix<float> const & X, matrix<float> & Y);
 };
 
+class Linear: public Activation{
+public:
+  static const int BINARY_CODE = 1;
+  void forward(matrix<float> const & X, matrix<float> & Y);
+};
+
 // Dense
 class Dense: public Layer{
 public:
@@ -86,7 +93,8 @@ private:
 
 enum OperationType{
   GEMM,
-  CONV
+  CONV,
+  POOL
 };
 
 //Profile
@@ -97,7 +105,7 @@ protected:
 
 public:
   Profile(u_char* data, size_t nshapes);
-  std::vector<param_t> predict(driver::Device const & device, std::vector<param_t> const & shapes, validator_t const & validator);
+  std::vector<param_t> predict(driver::Device const & device, std::vector<param_t> const & shapes, validator_t const & validator, benchmark_t const & benchmark, size_t num_re_evaluate);
   matrix<param_t> const & kernels() const;
 
 private:
@@ -109,15 +117,22 @@ private:
 class ConvProfile: public Profile{
 public:
   ConvProfile(u_char* data);
-  templates::Conv predict(driver::Stream& stream, DType dtype, param_t C, param_t H, param_t W, param_t N, param_t K, param_t P, param_t Q, param_t R, param_t S,
-                        param_t pad_h, param_t pad_w, param_t stride_h, param_t stride_w);
+  templates::Conv predict(driver::Stream& stream, DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+                          param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, size_t num_re_evaluate = 10);
+};
+
+class PoolProfile: public Profile{
+public:
+  PoolProfile(u_char* data);
+  templates::Pool predict(driver::Stream& stream, DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+                        param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, size_t num_re_evaluate = 1);
 };
 
 class GEMMProfile: public Profile{
 public:
   GEMMProfile(u_char* data);
   templates::GEMM predict(driver::Stream& stream, DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
-                          param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc);
+                          param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc, size_t num_re_evaluate = 10);
 };
 
 //Database

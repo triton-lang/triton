@@ -143,6 +143,20 @@
 #define cudaCpuDeviceId                     ((int)-1) /**< Device id that represents the CPU */
 #define cudaInvalidDeviceId                 ((int)-2) /**< Device id that represents an invalid device */
 
+/**
+ * If set, each kernel launched as part of ::cudaLaunchCooperativeKernelMultiDevice only
+ * waits for prior work in the stream corresponding to that GPU to complete before the
+ * kernel begins execution.
+ */
+#define cudaCooperativeLaunchMultiDeviceNoPreSync  0x01
+
+/**
+ * If set, any subsequent work pushed in a stream that participated in a call to
+ * ::cudaLaunchCooperativeKernelMultiDevice will only wait for the kernel launched on
+ * the GPU corresponding to that stream to complete before it begins execution.
+ */
+#define cudaCooperativeLaunchMultiDeviceNoPostSync 0x02
+
 #endif /* !__CUDA_INTERNAL_COMPILATION__ */
 
 /*******************************************************************************
@@ -1143,7 +1157,7 @@ struct __device_builtin__ cudaFuncAttributes
 
    /**
     * On devices where the L1 cache and shared memory use the same hardware resources, 
-    * this sets the shared memory carveout preference, in percent of the total resources. 
+    * this sets the shared memory carveout preference, in percent of the maximum shared memory. 
     * This is only a hint, and the driver can choose a different ratio if required to execute the function.
     */
    int preferredShmemCarveout;

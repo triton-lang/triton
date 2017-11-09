@@ -85,9 +85,11 @@ public:
         using ss_t = duration<int, std::ratio<1>>;
         using us_t = duration<int, std::micro>;
 
-        return PyDelta_FromDSU(duration_cast<dd_t>(d).count(),
-                               duration_cast<ss_t>(d % days(1)).count(),
-                               duration_cast<us_t>(d % seconds(1)).count());
+        auto dd = duration_cast<dd_t>(d);
+        auto subd = d - dd;
+        auto ss = duration_cast<ss_t>(subd);
+        auto us = duration_cast<us_t>(subd - ss);
+        return PyDelta_FromDSU(dd.count(), ss.count(), us.count());
     }
 
     PYBIND11_TYPE_CASTER(type, _("datetime.timedelta"));

@@ -33,12 +33,15 @@ namespace isaac
 namespace driver
 {
 
-
-Buffer::Buffer(Context const & context, size_t size) : context_(context), size_(size)
+Buffer::Buffer(Context const & context, size_t size) : context_(context)
 {
   ContextSwitcher ctx_switch(context_);
   dispatch::cuMemAlloc(&*cu_, size);
 }
+
+Buffer::Buffer(Context const & context, CUdeviceptr cu, bool take_ownership):
+  context_(context), cu_(cu, take_ownership)
+{ }
 
 void Buffer::set_zero(Stream const & queue, size_t size)
 {
@@ -46,10 +49,10 @@ void Buffer::set_zero(Stream const & queue, size_t size)
   dispatch::cuMemsetD8Async(*cu_, 0, size, queue);
 }
 
-void Buffer::set_zero(Stream const & queue)
-{ set_zero(queue, size_); }
-
 Handle<CUdeviceptr> const & Buffer::cu() const
+{ return cu_; }
+
+Handle<CUdeviceptr> & Buffer::cu()
 { return cu_; }
 
 }
