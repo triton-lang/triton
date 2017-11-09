@@ -20,6 +20,7 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+#include <unistd.h>
 #include <fstream>
 #include <vector>
 #include <memory>
@@ -45,6 +46,7 @@ Layer* Layer::read(u_char*& current){
   if(type==Activation::BINARY_CODE){
     read_inc((void*)&type, current, 4);
     if(type==ReLU::BINARY_CODE) return new ReLU();
+    if(type==Linear::BINARY_CODE) return new Linear();
     throw;
   }
   else if(type==Dense::BINARY_CODE)
@@ -61,6 +63,13 @@ void ReLU::forward(matrix<float> const & X, matrix<float> & Y){
   for(size_t i = 0; i < X.shapes()[0]; ++i)
     for(size_t j = 0; j < X.shapes()[1]; ++j)
       Y(i, j) = std::max<float>(X(i,j), 0);
+}
+
+// Linear
+void Linear::forward(matrix<float> const & X, matrix<float> & Y){
+  for(size_t i = 0; i < X.shapes()[0]; ++i)
+    for(size_t j = 0; j < X.shapes()[1]; ++j)
+      Y(i, j) = X(i,j);
 }
 
 // Dense
@@ -113,7 +122,7 @@ Profile::Profile(u_char* data, size_t nshapes): kernels_(pad_left(matrix<param_t
 matrix<param_t> const & Profile::kernels() const
 { return kernels_; }
 
-std::vector<param_t> Profile::predict(driver::Device const & device, std::vector<param_t> const & shapes, validator_t const & validator)
+std::vector<param_t> Profile::predict(driver::Device const & device, std::vector<param_t> const & shapes, validator_t const & validator, benchmark_t const & benchmark, size_t num_re_evaluate)
 {
   // Get valid profiles
   uint32_t nkernels = kernels_.shapes()[0];
@@ -123,61 +132,128 @@ std::vector<param_t> Profile::predict(driver::Device const & device, std::vector
       kernels_(i, j) = shapes[j];
   std::vector<uint8_t> valid(nkernels);
   validator(device, nkernels, kernels_.data(), valid.data());
-  uint32_t nvalid = std::accumulate(valid.begin(), valid.end(), 0);
+  uint32_t num_valid = std::accumulate(valid.begin(), valid.end(), 0);
 
-  if(nvalid == 0)
+  if(num_valid == 0)
     throw std::runtime_error("Something went wrong. No valid profiles found.");
 
   // Get valid indices
   std::vector<size_t> map;
-  map.reserve(nvalid);
+  map.reserve(num_valid);
   for(size_t i = 0; i < nkernels; ++i)
     if(valid[i]) map.push_back(i);
 
   // Predictor input
-  matrix<float> X({nvalid, nparams});
-  for(size_t i = 0; i < nvalid; ++i)
+  matrix<float> X({num_valid, nparams});
+  for(size_t i = 0; i < num_valid; ++i)
     for(size_t j = 0; j < nparams; ++j)
         X(i, j) = std::log2(kernels_(map[i], j));
 
   // Do prediction
-  matrix<float> Y({nvalid, 1});
+  matrix<float> Y({num_valid, 1});
   predictor_.predict(X, Y);
 
   // Sort prediction
-  std::vector<size_t> idx(nvalid);
+  std::vector<size_t> idx(num_valid);
   std::iota(idx.begin(), idx.end(), 0);
   std::sort(idx.begin(), idx.end(), [&Y](size_t i1, size_t i2) {return Y(i1,0) > Y(i2, 0);});
-
-  //Re-Benchmark
   std::vector<param_t> x(nparams);
+
+  //Re-evaluate
+  size_t best = 0;
+  if(benchmark && num_re_evaluate > 1)
+  {
+    std::vector<double> time;
+    for(size_t i = 0; i < std::min<size_t>(num_valid, num_re_evaluate); ++i){
+      for(size_t j = 0; j < nparams; ++j)
+        x[j] = kernels_(map[idx[i]], shapes.size() + j);
+      time.push_back(benchmark(x));
+    }
+    best = std::min_element(time.begin(), time.end()) - time.begin();
+  }
+
+  // Output
   for(size_t j = 0; j < nparams; ++j)
-    x[j] = kernels_(map[idx[0]], shapes.size() + j);
+    x[j] = kernels_(map[idx[best]], shapes.size() + j);
   return x;
 }
 
 
-ConvProfile::ConvProfile(u_char* data): Profile(data, 8){}
+// Convolution
+ConvProfile::ConvProfile(u_char* data): Profile(data, templates::Conv::Nshapes){}
 
-templates::Conv ConvProfile::predict(driver::Stream& stream, DType dtype, param_t C, param_t H, param_t W, param_t N, param_t K, param_t P, param_t Q, param_t R, param_t S,
-                      param_t pad_h, param_t pad_w, param_t stride_h, param_t stride_w)
+templates::Conv ConvProfile::predict(driver::Stream& stream, DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+                      param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, size_t num_re_evaluate)
 {
   driver::Device const & device = stream.context().device();
-  std::vector<param_t> shapes{dtype, N, K, P, Q, C, R, S};
-  std::vector<param_t> x = Profile::predict(device, shapes, templates::Conv::check_valid);
-  return templates::Conv(dtype, C, H, W, N, K, P, Q, R, S, pad_h, pad_w, stride_h, stride_w,
-                         x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14]);
+  benchmark_t benchmark;
+  std::unique_ptr<driver::Buffer> O, I, F;
+  std::unique_ptr<scalar> alpha, beta;
+  if(num_re_evaluate > 1)
+  {
+    O.reset(new driver::Buffer(stream.context(), K*M*P*Q*N*size_of(dtype)));
+    I.reset(new driver::Buffer(stream.context(), C*D*H*W*N*size_of(dtype)));
+    F.reset(new driver::Buffer(stream.context(), C*K*T*R*S*size_of(dtype)));
+    alpha.reset(new scalar(1., dtype));
+    beta.reset(new scalar(0., dtype));
+    benchmark = [&](std::vector<param_t> const& x){
+      templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
+                                x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
+      std::string src = generator.dump(device, "kernel");
+      driver::Module module(stream.context(), src);
+      driver::Kernel kernel(module, "kernel");
+      return bench([&](){ generator.enqueue(kernel, stream, *alpha, *I, *F, *beta, *O); }, [&](){ stream.synchronize(); }, device);
+    };
+  }
+  std::vector<param_t> shapes{dtype, N*M*P*Q, K, C, T*R*S};
+  std::vector<param_t> x = Profile::predict(device, shapes, templates::Conv::check_valid, benchmark, num_re_evaluate);
+  return templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
+                         x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
 }
 
+// Pooling
+PoolProfile::PoolProfile(u_char* data): Profile(data, templates::Pool::Nshapes){}
 
-GEMMProfile::GEMMProfile(u_char* data): Profile(data, 6){}
+templates::Pool PoolProfile::predict(driver::Stream& stream, DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+                      param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, size_t num_re_evaluate)
+{
+    driver::Device const & device = stream.context().device();
+    benchmark_t benchmark;
+    std::vector<param_t> shapes{dtype, N*M*P*Q*C, T*R*S};
+    std::vector<param_t> x = Profile::predict(device, shapes, templates::Pool::check_valid, benchmark, num_re_evaluate);
+    return templates::Pool(dtype, C, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
+                           x[0], x[1], x[2], x[3]);
+}
+
+// GEMM
+GEMMProfile::GEMMProfile(u_char* data): Profile(data, templates::GEMM::Nshapes){}
 
 templates::GEMM GEMMProfile::predict(driver::Stream& stream, DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
-                                     param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc)
+                                     param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc, size_t num_re_evaluate)
 {
   driver::Device const & device = stream.context().device();
+  benchmark_t benchmark;
+  std::unique_ptr<driver::Buffer> C, A, B;
+  std::unique_ptr<scalar> alpha, beta;
+  if(num_re_evaluate > 1)
+  {
+    C.reset(new driver::Buffer(stream.context(), M*N*size_of(dtype)));
+    A.reset(new driver::Buffer(stream.context(), M*K*size_of(dtype)));
+    B.reset(new driver::Buffer(stream.context(), K*N*size_of(dtype)));
+    alpha.reset(new scalar(1., dtype));
+    beta.reset(new scalar(0., dtype));
+    benchmark = [&](std::vector<param_t> const& x){
+      templates::GEMM generator(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
+                                x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
+      std::string src = generator.dump(device, "kernel");
+      driver::Module module(stream.context(), src);
+      driver::Kernel kernel(module, "kernel");
+      return bench([&](){ generator.enqueue(kernel, stream, *alpha, *A, *B, *beta, *C); }, [&](){ stream.synchronize(); }, device);
+    };
+  }
+
   std::vector<param_t> shapes{dtype, AT, BT, M, N, K};
-  std::vector<param_t> x = Profile::predict(device, shapes, templates::GEMM::check_valid);
+  std::vector<param_t> x = Profile::predict(device, shapes, templates::GEMM::check_valid, benchmark, num_re_evaluate);
   return templates::GEMM(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
                          x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
 }

@@ -1,9 +1,11 @@
 import sys
 import os
 import numpy as np
+import itertools
+from time import time
 
 class ProgressBar:
-    
+
     def __init__(self, prefix, length = 25):
         self.length = length
         self.prefix = prefix
@@ -31,3 +33,29 @@ def load(path, Ns):
 def mkdir(path):
     if not os.path.exists(path):
         os.makedirs(path)
+    return path
+
+def cartesian_coord(arrays):
+    grid = np.meshgrid(*arrays)
+    coord_list = [entry.ravel() for entry in grid]
+    points = np.vstack(coord_list).T
+    return points
+
+def cartesian_iterator(arrays):
+    N = len(arrays)
+    split = [np.array_split(ary, min(len(ary), 2) if i < 4 else 1) for i, ary in enumerate(arrays)]
+    for x in itertools.product(*split):
+        yield cartesian_coord(x)
+
+def benchmark(fn, device, nsec):
+    total, hist = 0, []
+    fn()
+    while total < nsec:
+        #norm = device.current_sm_clock/device.max_sm_clock #* device.current_mem_clock/device.max_mem_clock
+        norm = 1
+        start = time()
+        fn()
+        end = time()
+        hist.append(norm*(end - start))
+        total += hist[-1]
+    return min(hist)

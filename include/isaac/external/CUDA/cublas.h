@@ -57,7 +57,7 @@
 #if !defined(CUBLAS_H_)
 #define CUBLAS_H_
 
-#include "cuda_runtime.h"
+#include <cuda_runtime.h>
 
 #ifndef CUBLASWINAPI
 #ifdef _WIN32

@@ -70,7 +70,7 @@ void vector_if_copy_constructible(enable_if_t<
     std::is_copy_constructible<Vector>::value &&
     std::is_copy_constructible<typename Vector::value_type>::value, Class_> &cl) {
 
-    cl.def(pybind11::init<const Vector &>(), "Copy constructor");
+    cl.def(init<const Vector &>(), "Copy constructor");
 }
 
 template<typename Vector, typename Class_>
@@ -93,7 +93,7 @@ void vector_if_equal_operator(enable_if_t<is_comparable<Vector>::value, Class_> 
             if (p != v.end())
                 v.erase(p);
             else
-                throw pybind11::value_error();
+                throw value_error();
         },
         arg("x"),
         "Remove the first item from the list whose value is x. "
@@ -155,7 +155,7 @@ void vector_modifiers(enable_if_t<std::is_copy_constructible<typename Vector::va
     cl.def("pop",
         [](Vector &v) {
             if (v.empty())
-                throw pybind11::index_error();
+                throw index_error();
             T t = v.back();
             v.pop_back();
             return t;
@@ -166,7 +166,7 @@ void vector_modifiers(enable_if_t<std::is_copy_constructible<typename Vector::va
     cl.def("pop",
         [](Vector &v, SizeType i) {
             if (i >= v.size())
-                throw pybind11::index_error();
+                throw index_error();
             T t = v[i];
             v.erase(v.begin() + (DiffType) i);
             return t;
@@ -178,7 +178,7 @@ void vector_modifiers(enable_if_t<std::is_copy_constructible<typename Vector::va
     cl.def("__setitem__",
         [](Vector &v, SizeType i, const T &t) {
             if (i >= v.size())
-                throw pybind11::index_error();
+                throw index_error();
             v[i] = t;
         }
     );
@@ -189,7 +189,7 @@ void vector_modifiers(enable_if_t<std::is_copy_constructible<typename Vector::va
             size_t start, stop, step, slicelength;
 
             if (!slice.compute(v.size(), &start, &stop, &step, &slicelength))
-                throw pybind11::error_already_set();
+                throw error_already_set();
 
             Vector *seq = new Vector();
             seq->reserve((size_t) slicelength);
@@ -208,7 +208,7 @@ void vector_modifiers(enable_if_t<std::is_copy_constructible<typename Vector::va
         [](Vector &v, slice slice,  const Vector &value) {
             size_t start, stop, step, slicelength;
             if (!slice.compute(v.size(), &start, &stop, &step, &slicelength))
-                throw pybind11::error_already_set();
+                throw error_already_set();
 
             if (slicelength != value.size())
                 throw std::runtime_error("Left and right hand size of slice assignment have different sizes!");
@@ -224,7 +224,7 @@ void vector_modifiers(enable_if_t<std::is_copy_constructible<typename Vector::va
     cl.def("__delitem__",
         [](Vector &v, SizeType i) {
             if (i >= v.size())
-                throw pybind11::index_error();
+                throw index_error();
             v.erase(v.begin() + DiffType(i));
         },
         "Delete the list elements at index ``i``"
@@ -235,7 +235,7 @@ void vector_modifiers(enable_if_t<std::is_copy_constructible<typename Vector::va
             size_t start, stop, step, slicelength;
 
             if (!slice.compute(v.size(), &start, &stop, &step, &slicelength))
-                throw pybind11::error_already_set();
+                throw error_already_set();
 
             if (step == 1 && false) {
                 v.erase(v.begin() + (DiffType) start, v.begin() + DiffType(start + slicelength));
@@ -266,7 +266,7 @@ void vector_accessor(enable_if_t<!vector_needs_copy<Vector>::value, Class_> &cl)
     cl.def("__getitem__",
         [](Vector &v, SizeType i) -> T & {
             if (i >= v.size())
-                throw pybind11::index_error();
+                throw index_error();
             return v[i];
         },
         return_value_policy::reference_internal // ref + keepalive
@@ -274,7 +274,7 @@ void vector_accessor(enable_if_t<!vector_needs_copy<Vector>::value, Class_> &cl)
 
     cl.def("__iter__",
            [](Vector &v) {
-               return pybind11::make_iterator<
+               return make_iterator<
                    return_value_policy::reference_internal, ItType, ItType, T&>(
                    v.begin(), v.end());
            },
@@ -291,14 +291,14 @@ void vector_accessor(enable_if_t<vector_needs_copy<Vector>::value, Class_> &cl) 
     cl.def("__getitem__",
         [](const Vector &v, SizeType i) -> T {
             if (i >= v.size())
-                throw pybind11::index_error();
+                throw index_error();
             return v[i];
         }
     );
 
     cl.def("__iter__",
            [](Vector &v) {
-               return pybind11::make_iterator<
+               return make_iterator<
                    return_value_policy::copy, ItType, ItType, T>(
                    v.begin(), v.end());
            },
@@ -326,18 +326,64 @@ template <typename Vector, typename Class_> auto vector_if_insertion_operator(Cl
     );
 }
 
+// Provide the buffer interface for vectors if we have data() and we have a format for it
+// GCC seems to have "void std::vector<bool>::data()" - doing SFINAE on the existence of data() is insufficient, we need to check it returns an appropriate pointer
+template <typename Vector, typename = void>
+struct vector_has_data_and_format : std::false_type {};
+template <typename Vector>
+struct vector_has_data_and_format<Vector, enable_if_t<std::is_same<decltype(format_descriptor<typename Vector::value_type>::format(), std::declval<Vector>().data()), typename Vector::value_type*>::value>> : std::true_type {};
+
+// Add the buffer interface to a vector
+template <typename Vector, typename Class_, typename... Args>
+enable_if_t<detail::any_of<std::is_same<Args, buffer_protocol>...>::value>
+vector_buffer(Class_& cl) {
+    using T = typename Vector::value_type;
+
+    static_assert(vector_has_data_and_format<Vector>::value, "There is not an appropriate format descriptor for this vector");
+
+    // numpy.h declares this for arbitrary types, but it may raise an exception and crash hard at runtime if PYBIND11_NUMPY_DTYPE hasn't been called, so check here
+    format_descriptor<T>::format();
+
+    cl.def_buffer([](Vector& v) -> buffer_info {
+        return buffer_info(v.data(), sizeof(T), format_descriptor<T>::format(), 1, {v.size()}, {sizeof(T)});
+    });
+
+    cl.def("__init__", [](Vector& vec, buffer buf) {
+        auto info = buf.request();
+        if (info.ndim != 1 || info.strides[0] <= 0 || info.strides[0] % sizeof(T))
+            throw type_error("Only valid 1D buffers can be copied to a vector");
+        if (!detail::compare_buffer_info<T>::compare(info) || sizeof(T) != info.itemsize)
+            throw type_error("Format mismatch (Python: " + info.format + " C++: " + format_descriptor<T>::format() + ")");
+        new (&vec) Vector();
+        vec.reserve(info.shape[0]);
+        T *p = static_cast<T*>(info.ptr);
+        auto step = info.strides[0] / sizeof(T);
+        T *end = p + info.shape[0] * step;
+        for (; p < end; p += step)
+            vec.push_back(*p);
+    });
+
+    return;
+}
+
+template <typename Vector, typename Class_, typename... Args>
+enable_if_t<!detail::any_of<std::is_same<Args, buffer_protocol>...>::value> vector_buffer(Class_&) {}
+
 NAMESPACE_END(detail)
 
 //
 // std::vector
 //
 template <typename Vector, typename holder_type = std::unique_ptr<Vector>, typename... Args>
-pybind11::class_<Vector, holder_type> bind_vector(pybind11::module &m, std::string const &name, Args&&... args) {
-    using Class_ = pybind11::class_<Vector, holder_type>;
+class_<Vector, holder_type> bind_vector(module &m, std::string const &name, Args&&... args) {
+    using Class_ = class_<Vector, holder_type>;
 
     Class_ cl(m, name.c_str(), std::forward<Args>(args)...);
 
-    cl.def(pybind11::init<>());
+    // Declare the buffer interface if a buffer_protocol() is passed in
+    detail::vector_buffer<Vector, Class_, Args...>(cl);
+
+    cl.def(init<>());
 
     // Register copy constructor (if possible)
     detail::vector_if_copy_constructible<Vector, Class_>(cl);
@@ -368,7 +414,7 @@ pybind11::class_<Vector, holder_type> bind_vector(pybind11::module &m, std::stri
 
 #if 0
     // C++ style functions deprecated, leaving it here as an example
-    cl.def(pybind11::init<size_type>());
+    cl.def(init<size_type>());
 
     cl.def("resize",
          (void (Vector::*) (size_type count)) & Vector::resize,
@@ -377,7 +423,7 @@ pybind11::class_<Vector, holder_type> bind_vector(pybind11::module &m, std::stri
     cl.def("erase",
         [](Vector &v, SizeType i) {
         if (i >= v.size())
-            throw pybind11::index_error();
+            throw index_error();
         v.erase(v.begin() + i);
     }, "erases element at index ``i``");
 
@@ -396,12 +442,12 @@ pybind11::class_<Vector, holder_type> bind_vector(pybind11::module &m, std::stri
 
     cl.def("front", [](Vector &v) {
         if (v.size()) return v.front();
-        else throw pybind11::index_error();
+        else throw index_error();
     }, "access the first element");
 
     cl.def("back", [](Vector &v) {
         if (v.size()) return v.back();
-        else throw pybind11::index_error();
+        else throw index_error();
     }, "access the last element ");
 
 #endif
@@ -484,14 +530,14 @@ template <typename Map, typename Class_> auto map_if_insertion_operator(Class_ &
 NAMESPACE_END(detail)
 
 template <typename Map, typename holder_type = std::unique_ptr<Map>, typename... Args>
-pybind11::class_<Map, holder_type> bind_map(module &m, const std::string &name, Args&&... args) {
+class_<Map, holder_type> bind_map(module &m, const std::string &name, Args&&... args) {
     using KeyType = typename Map::key_type;
     using MappedType = typename Map::mapped_type;
-    using Class_ = pybind11::class_<Map, holder_type>;
+    using Class_ = class_<Map, holder_type>;
 
     Class_ cl(m, name.c_str(), std::forward<Args>(args)...);
 
-    cl.def(pybind11::init<>());
+    cl.def(init<>());
 
     // Register stream insertion operator (if possible)
     detail::map_if_insertion_operator<Map, Class_>(cl, name);
@@ -502,20 +548,20 @@ pybind11::class_<Map, holder_type> bind_map(module &m, const std::string &name, 
     );
 
     cl.def("__iter__",
-           [](Map &m) { return pybind11::make_key_iterator(m.begin(), m.end()); },
-           pybind11::keep_alive<0, 1>() /* Essential: keep list alive while iterator exists */
+           [](Map &m) { return make_key_iterator(m.begin(), m.end()); },
+           keep_alive<0, 1>() /* Essential: keep list alive while iterator exists */
     );
 
     cl.def("items",
-           [](Map &m) { return pybind11::make_iterator(m.begin(), m.end()); },
-           pybind11::keep_alive<0, 1>() /* Essential: keep list alive while iterator exists */
+           [](Map &m) { return make_iterator(m.begin(), m.end()); },
+           keep_alive<0, 1>() /* Essential: keep list alive while iterator exists */
     );
 
     cl.def("__getitem__",
         [](Map &m, const KeyType &k) -> MappedType & {
             auto it = m.find(k);
             if (it == m.end())
-              throw pybind11::key_error();
+              throw key_error();
            return it->second;
         },
         return_value_policy::reference_internal // ref + keepalive
@@ -528,7 +574,7 @@ pybind11::class_<Map, holder_type> bind_map(module &m, const std::string &name, 
            [](Map &m, const KeyType &k) {
                auto it = m.find(k);
                if (it == m.end())
-                   throw pybind11::key_error();
+                   throw key_error();
                return m.erase(it);
            }
     );

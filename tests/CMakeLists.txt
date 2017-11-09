@@ -8,6 +8,6 @@ endfunction()
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/common)
 
 #tests
-foreach(NAME gemm conv)
+foreach(NAME gemm conv pool)
     add_isaac_test(${NAME})
 endforeach()

@@ -38,14 +38,14 @@ class Buffer: public HandleInterface<Buffer, CUdeviceptr>
 {
 public:
   Buffer(Context const & context, size_t size);
+  Buffer(Context const & context, CUdeviceptr cu, bool take_ownership);
   void set_zero(Stream const & queue, size_t size);
-  void set_zero(Stream const & queue);
   Handle<CUdeviceptr> const & cu() const;
+  Handle<CUdeviceptr> & cu();
 
 private:
   Context context_;
   Handle<CUdeviceptr> cu_;
-  size_t size_;
 };
 
 }

@@ -101,6 +101,7 @@
 #define __VECTOR_FUNCTIONS_DECL__ static __inline__ __host__ __device__
 #endif /* __CUDACC_RTC__ */
 
+#define __CUDA_FP16_TYPES_EXIST__
 /* Forward-declaration of structures defined in "cuda_fp16.hpp" */
 struct __half;
 struct __half2;
@@ -109,9 +110,6 @@ struct __half2;
 __VECTOR_FUNCTIONS_DECL__ float2 make_float2(float x, float y);
 
 #undef __VECTOR_FUNCTIONS_DECL__
-
-#define __float2half_rn(x) __float2half_rn_internal(x)
-#define __half2float(x) __half2float_internal(x)
 
 /**
 * \ingroup CUDA_MATH__HALF_MISC
@@ -132,7 +130,7 @@ __CUDA_FP16_DECL__ __half __float2half(const float a);
 *
 * \return Returns \p half result with converted value.
 */
-__CUDA_FP16_DECL__ __half __float2half_rn_internal(const float a);
+__CUDA_FP16_DECL__ __half __float2half_rn(const float a);
 /**
 * \ingroup CUDA_MATH__HALF_MISC
 * \brief Converts float number to half precision in round-towards-zero mode
@@ -171,7 +169,7 @@ __CUDA_FP16_DECL__ __half __float2half_ru(const float a);
 *
 * \return Returns float result with converted value.
 */
-__CUDA_FP16_DECL__ float __half2float_internal(const __half a);
+__CUDA_FP16_DECL__ float __half2float(const __half a);
 
 /**
 * \ingroup CUDA_MATH__HALF_MISC
@@ -989,14 +987,40 @@ __CUDA_FP16_DECL__ __half __ushort_as_half(const unsigned short int i);
 #define warpSize    32
 #define __local_warpSize
 #endif
-__CUDA_FP16_DECL__ __half2 __shfl(__half2 var, int delta, int width = warpSize);
-__CUDA_FP16_DECL__ __half2 __shfl_up(__half2 var, unsigned int delta, int width = warpSize);
-__CUDA_FP16_DECL__ __half2 __shfl_down(__half2 var, unsigned int delta, int width = warpSize);
-__CUDA_FP16_DECL__ __half2 __shfl_xor(__half2 var, int delta, int width = warpSize);
-__CUDA_FP16_DECL__ __half __shfl(__half var, int delta, int width = warpSize);
-__CUDA_FP16_DECL__ __half __shfl_up(__half var, unsigned int delta, int width = warpSize);
-__CUDA_FP16_DECL__ __half __shfl_down(__half var, unsigned int delta, int width = warpSize);
-__CUDA_FP16_DECL__ __half __shfl_xor(__half var, int delta, int width = warpSize);
+
+#if defined(_WIN32)
+# define __DEPRECATED__(msg) __declspec(deprecated(msg))
+#elif (defined(__GNUC__) && (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 5 && !defined(__clang__))))
+# define __DEPRECATED__(msg) __attribute__((deprecated))
+#else
+# define __DEPRECATED__(msg) __attribute__((deprecated(msg)))
+#endif
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+#define __WSB_DEPRECATION_MESSAGE(x) #x"() is not valid on compute_70 and above, and should be replaced with "#x"_sync()." \
+    "To continue using "#x"(), specify virtual architecture compute_60 when targeting sm_70 and above, for example, using the pair of compiler options: -arch=compute_60 -code=sm_70."
+#else
+#define __WSB_DEPRECATION_MESSAGE(x) #x"() is deprecated in favor of "#x"_sync() and may be removed in a future release (Use -Wno-deprecated-declarations to suppress this warning)."
+#endif
+
+__CUDA_FP16_DECL__ __DEPRECATED__(__WSB_DEPRECATION_MESSAGE(__shfl)) __half2 __shfl(__half2 var, int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __DEPRECATED__(__WSB_DEPRECATION_MESSAGE(__shfl_up)) __half2 __shfl_up(__half2 var, unsigned int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __DEPRECATED__(__WSB_DEPRECATION_MESSAGE(__shfl_down))__half2 __shfl_down(__half2 var, unsigned int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __DEPRECATED__(__WSB_DEPRECATION_MESSAGE(__shfl_xor)) __half2 __shfl_xor(__half2 var, int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __DEPRECATED__(__WSB_DEPRECATION_MESSAGE(__shfl)) __half __shfl(__half var, int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __DEPRECATED__(__WSB_DEPRECATION_MESSAGE(__shfl_up)) __half __shfl_up(__half var, unsigned int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __DEPRECATED__(__WSB_DEPRECATION_MESSAGE(__shfl_down)) __half __shfl_down(__half var, unsigned int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __DEPRECATED__(__WSB_DEPRECATION_MESSAGE(__shfl_xor)) __half __shfl_xor(__half var, int delta, int width = warpSize);
+
+__CUDA_FP16_DECL__ __half2 __shfl_sync(unsigned mask, __half2 var, int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __half2 __shfl_up_sync(unsigned mask, __half2 var, unsigned int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __half2 __shfl_down_sync(unsigned mask, __half2 var, unsigned int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __half2 __shfl_xor_sync(unsigned mask, __half2 var, int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __half __shfl_sync(unsigned mask, __half var, int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __half __shfl_up_sync(unsigned mask, __half var, unsigned int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __half __shfl_down_sync(unsigned mask, __half var, unsigned int delta, int width = warpSize);
+__CUDA_FP16_DECL__ __half __shfl_xor_sync(unsigned mask, __half var, int delta, int width = warpSize);
+
 #if defined(__local_warpSize)
 #undef warpSize
 #undef __local_warpSize

@@ -54,9 +54,11 @@ std::string Context::get_cache_path(){
   return "";
 }
 
-CUdevice Context::device(CUcontext){
+CUdevice Context::device(CUcontext context){
+  dispatch::cuCtxPushCurrent_v2(context);
   CUdevice res;
   dispatch::cuCtxGetDevice(&res);
+  dispatch::cuCtxPopCurrent_v2(NULL);
   return res;
 }
 

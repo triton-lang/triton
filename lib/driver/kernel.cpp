@@ -57,6 +57,9 @@ void* const* Kernel::cu_params() const
 Handle<CUfunction> const & Kernel::cu() const
 { return cu_; }
 
+Module const & Kernel::module() const
+{ return program_; }
+
 
 }
 

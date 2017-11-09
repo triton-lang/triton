@@ -29,14 +29,12 @@ namespace isaac{
 
 
 enum DType{
-  HALF_TYPE = 2,
   FLOAT_TYPE = 4,
   DOUBLE_TYPE = 8
 };
 
 inline size_t size_of(DType dtype){
   switch (dtype) {
-  case HALF_TYPE: return 2;
   case FLOAT_TYPE: return 4;
   case DOUBLE_TYPE: return 8;
   default: throw;
@@ -44,7 +42,6 @@ inline size_t size_of(DType dtype){
 }
 
 template<class T> struct to_DType;
-template<> struct to_DType<half_float::half>{ static const DType value = HALF_TYPE; };
 template<> struct to_DType<float>{ static const DType value = FLOAT_TYPE; };
 template<> struct to_DType<double>{ static const DType value = DOUBLE_TYPE; };
 
@@ -53,7 +50,6 @@ private:
   template<class T>
   void init(T const & x){
     switch(dtype_){
-      case HALF_TYPE: {half_float::half tmp(x); value_.float16 = *reinterpret_cast<short*>(&tmp); break; }
       case FLOAT_TYPE: value_.float32 = (float)x; break;
       case DOUBLE_TYPE: value_.float64 = (double)x; break;
       default: throw;
@@ -68,7 +64,6 @@ public:
 
   void* data() const{
     switch(dtype_){
-      case HALF_TYPE: return (void*)&value_.float16;
       case FLOAT_TYPE: return (void*)&value_.float32;
       case DOUBLE_TYPE: return (void*)&value_.float64;
       default: throw;
@@ -82,7 +77,6 @@ public:
 private:
   DType dtype_;
   union{
-    short float16;
     float float32;
     double float64;
   }value_;

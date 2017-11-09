@@ -203,23 +203,6 @@ typedef struct nvmlProcessInfo_st
 } nvmlProcessInfo_t;
 
 /**
- * XIDs error attributes for a given device
- */
-typedef struct nvmlXidEntry_st
-{
-    unsigned int xidTimeStamp;     //! Timestamp of the Xid Error occurrence
-    unsigned int xidNumber;        //! Number of Xid currently present on device's Inforom
-}nvmlXidEntry_t;
-
-typedef struct nvmlXidData_st
-{
-    unsigned int xidFirstEntryCount;  //! Number of entries that are populated in xidFirstEntry.
-    nvmlXidEntry_t xidFirstEntry[10]; //! Array of entries of the first Xids encountered since the Inforom was last flashed.
-    unsigned int xidLastEntryCount;   //! Number of entries that are populated in xidLastEntry.
-    nvmlXidEntry_t xidLastEntry[10];  //! Array of entries of the most recent Xid errors that have occurred.
-}nvmlXidData_t;
-
-/**
  * Enum to represent type of bridge chip
  */
 typedef enum nvmlBridgeChipType_enum
@@ -507,7 +490,9 @@ typedef enum nvmlTemperatureThresholds_enum
 {
     NVML_TEMPERATURE_THRESHOLD_SHUTDOWN = 0,    // Temperature at which the GPU will shut down
                                                 // for HW protection
-    NVML_TEMPERATURE_THRESHOLD_SLOWDOWN = 1,    // Temperature at which the GPU will begin slowdown
+    NVML_TEMPERATURE_THRESHOLD_SLOWDOWN = 1,    // Temperature at which the GPU will begin HW slowdown
+    NVML_TEMPERATURE_THRESHOLD_MEM_MAX  = 2,    // Memory Temperature at which the GPU will begin SW slowdown
+    NVML_TEMPERATURE_THRESHOLD_GPU_MAX  = 3,    // GPU Temperature at which the GPU can be throttled below base clock
     // Keep this last
     NVML_TEMPERATURE_THRESHOLD_COUNT
 } nvmlTemperatureThresholds_t;
@@ -1166,6 +1151,15 @@ typedef struct nvmlEventData_st
  */
 #define nvmlClocksThrottleReasonSyncBoost                 0x0000000000000010LL
 
+/** SW Thermal Slowdown
+ *
+ * This is an indicator of one or more of the following:
+ *  - Current GPU temperature above the GPU Max Operating Temperature
+ *  - Current memory temperature above the Memory Max Operating Temperature
+ *
+ */
+#define nvmlClocksThrottleReasonSwThermalSlowdown         0x0000000000000020LL
+
 /** Bit mask representing no clocks throttling
  *
  * Clocks are as high as possible.
@@ -1181,6 +1175,7 @@ typedef struct nvmlEventData_st
       | nvmlClocksThrottleReasonSwPowerCap                        \
       | nvmlClocksThrottleReasonHwSlowdown                        \
       | nvmlClocksThrottleReasonSyncBoost                         \
+      | nvmlClocksThrottleReasonSwThermalSlowdown                 \
 )
 /** @} */
 
@@ -2170,21 +2165,6 @@ nvmlReturn_t DECLDIR nvmlSystemGetTopologyGpuSet(unsigned int cpuNumber, unsigne
 nvmlReturn_t DECLDIR nvmlDeviceGetP2PStatus(nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex,nvmlGpuP2PStatus_t *p2pStatus);
 
 /**
- * Retrieves the XID Error List reported by RM on a per GPU basis
- * 
- * @param device                               The device being queried
- * @param xidData                              The list of the actual XID Error numbers and timestamps
- *   
- *
- * @return 
- *         - \ref NVML_SUCCESS                 if the xidCount or xidErrorList have been populated
- *         - \ref NVML_ERROR_INVALID_ARGUMENT  if the device is invalid
- *         - \ref NVML_ERROR_UNKNOWN              on any unexpected error
- */ 
-nvmlReturn_t DECLDIR nvmlDeviceGetXidErrors(nvmlDevice_t device, nvmlXidData_t *xidData);
-
-
-/**
  * Retrieves the globally unique immutable UUID associated with this device, as a 5 part hexadecimal string,
  * that augments the immutable, board serial identifier.
  *
@@ -2425,6 +2405,10 @@ nvmlReturn_t DECLDIR nvmlDeviceGetPersistenceMode(nvmlDevice_t device, nvmlEnabl
  *
  * See \ref nvmlPciInfo_t for details on the available PCI info.
  *
+ * NOTE: If you are linking against a driver earlier than r384.40, then nvmlDeviceGetPciInfo_v2 must be used. This
+ *       API does not populate pci->busId. pci->busIdLegacy will be populated for both nvmlDeviceGetPciInfo and 
+ *       nvmlDeviceGetPciInfo_v2.
+ *
  * @param device                               The identifier of the target device
  * @param pci                                  Reference in which to return the PCI info
  * 
@@ -2436,6 +2420,7 @@ nvmlReturn_t DECLDIR nvmlDeviceGetPersistenceMode(nvmlDevice_t device, nvmlEnabl
  *         - \ref NVML_ERROR_UNKNOWN           on any unexpected error
  */
 nvmlReturn_t DECLDIR nvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t *pci);
+nvmlReturn_t DECLDIR nvmlDeviceGetPciInfo_v2(nvmlDevice_t device, nvmlPciInfo_t *pci);
 
 /**
  * Retrieves the maximum PCIe link generation possible with this device and system

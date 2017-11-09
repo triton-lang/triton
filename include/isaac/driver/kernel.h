@@ -44,6 +44,7 @@ public:
   Kernel(Module const & program, const char * name);
   //Accessors
   Handle<CUfunction> const & cu() const;
+  Module const & module() const;
   //Arguments setters
   void setArg(unsigned int index, std::size_t size, void* ptr);
   void setArg(unsigned int index, Buffer const &);

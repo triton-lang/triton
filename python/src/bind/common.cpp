@@ -30,7 +30,6 @@ namespace sc = isaac;
 void export_common(py::module& m)
 {
   py::enum_<sc::DType>(m, "dtype")
-      .value("float16", sc::DType::HALF_TYPE)
       .value("float32", sc::DType::FLOAT_TYPE)
       .value("float64", sc::DType::DOUBLE_TYPE)
       .export_values();

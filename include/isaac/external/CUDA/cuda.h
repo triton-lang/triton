@@ -1783,6 +1783,20 @@ typedef struct CUDA_LAUNCH_PARAMS_st {
 #endif /* __CUDA_API_VERSION >= 9000 */
 
 /**
+ * If set, each kernel launched as part of ::cuLaunchCooperativeKernelMultiDevice only
+ * waits for prior work in the stream corresponding to that GPU to complete before the
+ * kernel begins execution.
+ */
+#define CUDA_COOPERATIVE_LAUNCH_MULTI_DEVICE_NO_PRE_LAUNCH_SYNC   0x01
+
+/**
+ * If set, any subsequent work pushed in a stream that participated in a call to
+ * ::cuLaunchCooperativeKernelMultiDevice will only wait for the kernel launched on
+ * the GPU corresponding to that stream to complete before it begins execution.
+ */
+#define CUDA_COOPERATIVE_LAUNCH_MULTI_DEVICE_NO_POST_LAUNCH_SYNC  0x02
+
+/**
  * If set, the CUDA array is a collection of layers, where each layer is either a 1D
  * or a 2D array and the Depth member of CUDA_ARRAY3D_DESCRIPTOR specifies the number 
  * of layers, not the depth of a 3D array.
@@ -9505,6 +9519,18 @@ CUresult CUDAAPI cuLaunchCooperativeKernel(CUfunction f,
  *   kernel parameter will be copied. The number of kernel parameters and their offsets and sizes
  *   do not need to be specified as that information is retrieved directly from the kernel's image.
  *
+ * By default, the kernel won't begin execution on any GPU until all prior work in all the specified
+ * streams has completed. This behavior can be overridden by specifying the flag
+ * ::CUDA_COOPERATIVE_LAUNCH_MULTI_DEVICE_NO_PRE_LAUNCH_SYNC. When this flag is specified, each kernel
+ * will only wait for prior work in the stream corresponding to that GPU to complete before it begins
+ * execution.
+ *
+ * Similarly, by default, any subsequent work pushed in any of the specified streams will not begin
+ * execution until the kernels on all GPUs have completed. This behavior can be overridden by specifying
+ * the flag ::CUDA_COOPERATIVE_LAUNCH_MULTI_DEVICE_NO_POST_LAUNCH_SYNC. When this flag is specified,
+ * any subsequent work pushed in any of the specified streams will only wait for the kernel launched
+ * on the GPU corresponding to that stream to complete before it begins execution.
+ *
  * Calling ::cuLaunchCooperativeKernelMultiDevice() sets persistent function state that is
  * the same as function state set through ::cuLaunchKernel API when called individually for each
  * element in \p launchParamsList.
@@ -9521,7 +9547,7 @@ CUresult CUDAAPI cuLaunchCooperativeKernel(CUfunction f,
  *
  * \param launchParamsList - List of launch parameters, one per device
  * \param numDevices       - Size of the \p launchParamsList array
- * \param flags            - Must be zero
+ * \param flags            - Flags to control launch behavior
  *
  * \return
  * ::CUDA_SUCCESS,

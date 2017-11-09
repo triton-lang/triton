@@ -105,7 +105,14 @@ Context const & Module::context() const
 Handle<CUmodule> const & Module::cu() const
 { return cu_; }
 
+Buffer Module::symbol(const char *name) const{
+  CUdeviceptr handle;
+  size_t size;
+  dispatch::cuModuleGetGlobal_v2(&handle, &size, *cu_, name);
+  return Buffer(context_, handle, false);
 }
 
+
+}
 }
 

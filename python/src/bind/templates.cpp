@@ -26,6 +26,7 @@
 #include <cstdint>
 #include "isaac/templates/common.hpp"
 #include "isaac/templates/error.hpp"
+#include "isaac/templates/pool.h"
 #include "isaac/templates/conv.h"
 #include "isaac/templates/gemm.h"
 #include "isaac/driver/buffer.h"
@@ -59,17 +60,38 @@ void export_templates(py::module&& m){
   py::class_<tpt::GEMM>(m, "GEMM")
       .def(py::init<sc::DType,sc::IsaacOperation_t,sc::IsaacOperation_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
                     param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t>())
-      .def_static("check_valid", check_valid<tpt::GEMM>)
       .def("dump", &tpt::GEMM::dump)
-      .def("enqueue", &tpt::GEMM::enqueue);
+      .def("enqueue", &tpt::GEMM::enqueue)
+      .def_static("check_valid", check_valid<tpt::GEMM>)
+      .def_readonly_static("id", &tpt::GEMM::id)
+      .def_readonly_static("Nshapes", &tpt::GEMM::Nshapes)
+      .def_readonly_static("Ntune", &tpt::GEMM::Ntune)
+      .def_readonly_static("Nparams", &tpt::GEMM::Nparams);
+
+
 
   py::class_<tpt::Conv>(m, "Conv")
       .def(py::init<sc::DType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
-                    param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t>())
-      .def_static("check_valid", check_valid<tpt::Conv>)
+                    param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t, param_t, param_t, param_t, param_t, param_t>())
       .def("dump", &tpt::Conv::dump)
-      .def("enqueue", &tpt::Conv::enqueue);
+      .def("enqueue", &tpt::Conv::enqueue)
+      .def_static("check_valid", check_valid<tpt::Conv>)
+      .def_readonly_static("id", &tpt::Conv::id)
+      .def_readonly_static("Nshapes", &tpt::Conv::Nshapes)
+      .def_readonly_static("Ntune", &tpt::Conv::Ntune)
+      .def_readonly_static("Nparams", &tpt::Conv::Nparams);
 
+
+  py::class_<tpt::Pool>(m, "Pool")
+      .def(py::init<sc::DType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
+                    param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t>())
+      .def("dump", &tpt::Pool::dump)
+      .def("enqueue", &tpt::Pool::enqueue)
+      .def_static("check_valid", check_valid<tpt::Pool>)
+      .def_readonly_static("id", &tpt::Pool::id)
+      .def_readonly_static("Nshapes", &tpt::Pool::Nshapes)
+      .def_readonly_static("Ntune", &tpt::Pool::Ntune)
+      .def_readonly_static("Nparams", &tpt::Pool::Nparams);
 
   py::register_exception<tpt::invalid_parameters>(m, "InvalidParameters");
 

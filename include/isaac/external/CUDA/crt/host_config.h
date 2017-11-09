@@ -128,7 +128,7 @@
 
 #if defined(_WIN32)
 
-#if _MSC_VER < 1600 || _MSC_VER > 1910
+#if _MSC_VER < 1600 || _MSC_VER > 1911
 
 #error -- unsupported Microsoft Visual Studio version! Only the versions 2012, 2013, 2015 and 2017 are supported!
 

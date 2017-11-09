@@ -1,323 +1,228 @@
 from __future__ import division
 import isaac as sc
 import numpy as np
-import itertools
 from time import time
+from tools import benchmark
+from isaac._isaac.templates import Conv, GEMM, Pool
+import multiprocessing
 
-def cartesian_coord(arrays):
-    grid = np.meshgrid(*arrays)
-    coord_list = [entry.ravel() for entry in grid]
-    points = np.vstack(coord_list).T
-    return points
+lock = multiprocessing.Lock()
 
-def cartesian_iterator(arrays):
-    N = len(arrays)
-    split = [np.array_split(ary, min(len(ary), 2) if i < 4 else 1) for i, ary in enumerate(arrays)]
-    for x in itertools.product(*split):
-        yield cartesian_coord(x)
-
-def benchmark(fn, device, nsec):
-    total, hist = 0, []
-    fn()
-    while total < nsec:
-        norm = device.current_sm_clock/device.max_sm_clock #* device.current_mem_clock/device.max_mem_clock
-        start = time()
-        fn()
-        end = time()
-        hist.append(norm*(end - start))
-        total += hist[-1]
-    return min(hist)
-
-class ConvWrapper:
-
-    name = 'conv'
-    nparams = 23
-    nshape_params = 8
-
-
-    @staticmethod
-    def bench_shapes(device):
-        DTs = [4]
-        if device.compute_capability == (6,0):
-            DTs += [2]
-        result = []
-        #DeepBench
-        for DT in DTs:
-            result +=  [[DT, 4, 32, 79, 341, 1, 5, 20],
-                        [DT, 8, 32, 79, 341, 1, 5, 20],
-                        [DT, 16, 32, 79, 341, 1, 5, 20],
-                        [DT, 32, 32, 79, 341, 1, 5, 20],
-
-                        [DT, 4, 32, 38, 166, 32, 5, 10],
-                        [DT, 8, 32, 38, 166, 32, 5, 10],
-                        [DT, 16, 32, 38, 166, 32, 5, 10],
-                        [DT, 32, 32, 38, 166, 32, 5, 10],
-
-                        [DT, 16, 16, 48, 480, 1, 3, 3],
-                        [DT, 16, 32, 24, 240, 16, 3, 3],
-                        [DT, 16, 64, 12, 120, 32, 3, 3],
-                        [DT, 16, 128, 6, 60, 64, 3, 3],
-
-                        [DT, 8, 64, 54, 54, 3, 3, 3],
-                        [DT, 8, 64, 54, 54, 64, 3, 3],
-                        [DT, 8, 128, 27, 27, 128, 3, 3],
-                        [DT, 8, 256, 14, 14, 128, 3, 3],
-                        [DT, 8, 512, 7, 7, 256, 3, 3],
-
-                        [DT, 8, 64, 224, 224, 3, 3, 3],
-                        [DT, 8, 128, 112, 112, 64, 3, 3],
-                        [DT, 8, 256, 56, 56, 128, 3, 3],
-                        [DT, 8, 512, 28, 28, 256, 3, 3],
-                        [DT, 8, 512, 14, 14, 512, 3, 3],
-                        [DT, 8, 512, 7, 7, 512, 3, 3],
-
-                        [DT, 16, 64, 224, 224, 3, 3, 3],
-                        [DT, 16, 128, 112, 112, 64, 3, 3],
-                        [DT, 16, 256, 56, 56, 128, 3, 3],
-                        [DT, 16, 512, 28, 28, 256, 3, 3],
-                        [DT, 16, 512, 14, 14, 512, 3, 3],
-                        [DT, 16, 512, 7, 7, 512, 3, 3],
-
-                        [DT, 16, 64, 112, 112, 3, 7, 7],
-                        [DT, 16, 32, 28, 28, 192, 5, 5],
-                        [DT, 16, 64, 28, 28, 192, 1, 1],
-                        [DT, 16, 48, 14, 14, 512, 5, 5],
-                        [DT, 16, 192, 14, 14, 512, 1, 1],
-                        [DT, 16, 256, 7, 7, 832, 1, 1],
-                        [DT, 16, 128, 7, 7, 832, 5, 5],
-
-                        [DT, 32, 64, 224, 224, 3, 3, 3],
-                        [DT, 32, 128, 112, 112, 64, 3, 3],
-                        [DT, 32, 256, 56, 56, 128, 3, 3],
-                        [DT, 32, 512, 28, 28, 256, 3, 3],
-                        [DT, 32, 512, 14, 14, 512, 3, 3],
-                        [DT, 32, 512, 7, 7, 512, 3, 3],
-
-                        [DT, 32, 64, 112, 112, 3, 7, 7],
-                        [DT, 32, 32, 28, 28, 192, 5, 5],
-                        [DT, 32, 64, 28, 28, 192, 1, 1],
-                        [DT, 32, 48, 14, 14, 512, 5, 5],
-                        [DT, 32, 192, 14, 14, 512, 1, 1],
-                        [DT, 32, 256, 7, 7, 832, 1, 1],
-                        [DT, 32, 128, 7, 7, 832, 5, 5]]
-        return result
-
-    @staticmethod
-    def nflops(X):
-        N, K, P, Q, C, R, S = X[:,1], X[:,2], X[:,3], X[:,4], X[:,5], X[:,6], X[:,7]
-        return 2.*N*K*P*Q*C*R*S
-
-    @staticmethod
-    def get_valid(device, X):
-        idx = sc.templates.Conv.check_valid(device, X)
-        X = X[idx, :]
-        flops = ConvWrapper.nflops(X)
-        idx = np.logical_and(flops > 1e7, flops < 1e12)
-        return X[idx, :]
-
-    @staticmethod
-    def generate_valid(device):
-        param_ranges = ConvWrapper.input_ranges(device) + ConvWrapper.tuning_ranges()
-        X = np.array([np.random.choice(x, size=10000) for x in param_ranges], dtype=np.uint32).T.copy()
-        return ConvWrapper.get_valid(device, X)
-
-    @staticmethod
-    def all_valid(device):
-        nparams = ConvWrapper.nparams
-        X = np.empty((0, nparams - 8))
-        N, K, P, Q, C, R, S = 128, 128, 128, 128, 128, 5, 5
-        for dtype in [2, 4, 8]:
-            for T in cartesian_iterator(ConvWrapper.tuning_ranges()):
-                Y = np.zeros((T.shape[0], nparams), dtype=np.uint32)
-                Y[:, :ConvWrapper.nshape_params] = [dtype, N, K, P, Q, C, R, S]
-                Y[:, ConvWrapper.nshape_params:] = T
-                X  = np.vstack((X, ConvWrapper.get_valid(device, Y)[:, 8:]))
-        return X
-
-    @staticmethod
-    def tuning_ranges():
-        L3 = [2, 4]
-        L4 = [1, 2, 4, 8, 16]
-        L5 = [1, 2, 4, 8]
-        return [L3,L5,L5,L4,L4,L4,L5,L5,L5,L5,L4,[1],[1],L5,L5]
-
-    @staticmethod
-    def input_ranges(device):
-        FP16 = [2] if device.compute_capability[1] == 0 else []
-        FP64 = [8] if device.compute_capability[1] == 0 else []
-        LDT = FP16 + [4] + FP64
-        LRS = [3, 5, 7]
-        L0 = [16, 32, 64, 256, 512]
-        L1 = [1, 2, 4, 8, 16, 32, 64, 128]
-        L2 = [1, 2, 4, 8, 16, 32, 64, 128]
-        return [LDT,L1,L1,L2,L2,L0,LRS,LRS]
-
-
-    def __init__(s,  params):
-        for x, name in zip(params, ['dtype', 'N','K','P','Q','C','R','S','vec','bp','bq','bn','bk','bf_n','ps','qs','ns','ks','crs_l','crs_s','cs','bc','gridc']):
-            setattr(s, name, int(x))
-        s.dtype = sc.dtype(s.dtype)
-        s.pad_h, s.pad_w, s.stride_h, s.stride_w = 0, 0, 1, 1
-        s.H = s.P*s.stride_h + s.R - 1 - 2*s.pad_h
-        s.W = s.Q*s.stride_w + s.S - 1 - 2*s.pad_w
-
-    def skip(s):
-        return s.K*s.P*s.Q*s.N > 1e7 or s.C*s.H*s.W*s.N > 1e7 or s.C*s.R*s.S*s.K > 1e7
-
-    def benchmark(s, ctx, stream):
-        O = sc.driver.Buffer(ctx, s.K*s.P*s.Q*s.N*sc.size_of(s.dtype))
-        I = sc.driver.Buffer(ctx, s.C*s.H*s.W*s.N*sc.size_of(s.dtype))
-        F = sc.driver.Buffer(ctx, s.C*s.R*s.S*s.K*sc.size_of(s.dtype))
-        alpha, beta = sc.Scalar(1., s.dtype), sc.Scalar(0., s.dtype)
-        generator = sc.templates.Conv(s.dtype, s.C, s.H, s.W, s.N, s.K, s.P, s.Q,s.R, s.S,
-                                      s.pad_h, s.pad_w, s.stride_h, s.stride_w,
-                                      s.vec, s.bp, s.bq, s.bn, s.bk, s.bf_n, s.ps, s.qs, s.ns, s.ks, s.crs_l, s.crs_s, s.cs, s.bc, s.gridc)
-        src = generator.dump(ctx.device, "conv_fprop")
-        module = sc.driver.Module(ctx, src)
-        kernel = sc.driver.Kernel(module, "conv_fprop")
-        time = benchmark(lambda: (generator.enqueue(kernel, stream, alpha, I, F, beta, O), stream.synchronize()), ctx.device, 1e-2)
-        tflops = 2*s.P*s.Q*s.K*s.N*s.C*s.R*s.S/time*1e-12
-        return tflops
-
-class GEMMWrapper:
-
-    name = 'gemm'
-    nparams = 20
-    nshape_params = 6
-    ntune_params = 14
-
-    #M, N, K
-    @staticmethod
-    def bench_shapes(device):
-        sizes = []
-        FP16 = [2] if device.compute_capability[1] == 0 else []
-        FP64 = [8] if device.compute_capability[1] == 0 else []
-
-        #LinPACK
-        for DTYPE in FP16 + [4] + FP64:
-            for AT, BT in [(1, 2)]:
-                for N in [256, 512, 1024, 2048, 4096]:
-                    sizes += [(DTYPE, AT, BT, N, N, N)]
-
-        #Deep Learning
-        for DTYPE in FP16 + [4]:
-            #Deep Bench
-            for AT, BT in [(1,1), (2,1)]:
-                for M in [1760, 2560]:
-                    for N in [16, 32, 64, 128]:
-                        sizes += [(DTYPE, AT, BT, M, N, M)]
-            #OpenNMT
-            sizes += [(DTYPE, 1, 1, 2000, 128, 500),
-                      (DTYPE, 1, 1, 2000, 640, 500),
-                      (DTYPE, 1, 1, 2000, 2048, 500),
-                      (DTYPE, 1, 1, 2000, 640, 1000),
-                      (DTYPE, 1, 1, 500, 640, 1000),
-                      (DTYPE, 1, 1, 500, 640, 500),
-                      (DTYPE, 1, 1, 50000, 640, 500)]
-
-        #Covariance
-        for DTYPE in [4] + FP64:
-            for AT, BT in [(1, 2)]:
-                for N in [1, 2, 4, 8, 16, 64, 128, 256]:
-                    for K in [32000, 64000, 128000]:
-                        sizes += [(DTYPE, AT, BT, N, N, K)]
-
-        #LaPack
-        for DTYPE in [4] + FP64:
-            for AT, BT in [(1, 2)]:
-                for N in [512, 1024, 2048, 4096]:
-                    for K in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]:
-                        sizes += [(DTYPE, AT, BT, N, N, K)]
-
-        #Remove small problems
-        sizes = [(DTYPE, AT, BT, M, N, K) for DTYPE, AT, BT, M, N, K in sizes if 2*M*N*K > 1e7]
-        #Remove large problems
-        sizes = [(DTYPE, AT, BT, M, N, K) for DTYPE, AT, BT, M, N, K in sizes if 2*M*N*K < 1e12]
-
-        return sizes
-
-    @staticmethod
-    def tuning_ranges():
-        L3 = [1, 2, 4]
-        L4 = [4, 8, 16, 32]
-        L5 = [1, 2, 4, 8]
-        LR = [1, 2, 4, 8, 16, 32, 64]
+def tuning_ranges(OpType):
+    L3 = [1, 2, 4]
+    L4 = [2, 4, 8, 16]
+    L5 = [1, 2, 4, 8]
+    LR = [1, 2, 4, 8, 16, 32]
+    if OpType==Conv:
+        return [L3, L4, L4, L5, L5, L4, [1], L5, LR]
+    if OpType==GEMM:
         return [L3, L4, L4, L4, L5, [1], L5, L4, L4, L4, L4, [1], L5, LR]
+    if OpType==Pool:
+        return [L3, [32, 64, 128, 256], L5, L5]
 
-    @staticmethod
-    def input_ranges(device):
-        FP16 = [2] if device.compute_capability[1] == 0 else []
-        FP64 = [8] if device.compute_capability[1] == 0 else []
-        LDT = FP16 + [4] + FP64
+def input_ranges(OpType, device):
+    FP64 = [8] if device.compute_capability[1] == 0 else []
+    LDT = [4] + FP64
+    if OpType==Conv:
+        LNpix = [4, 8, 16, 32, 128, 512, 1024, 2048, 4096, 8192]
+        LC = [8, 16, 32, 64, 128, 256, 512, 1024]
+        LNfilt = [9, 25, 49, 81, 200]
+        return [LDT,LNpix,LC,LC,LNfilt]
+    if OpType==GEMM:
         LT = [1, 2]
         LK = [16, 32, 64, 256, 4096, 8192, 16382, 65536]
-        LMN = [4, 8, 16, 32, 128, 512, 1024, 2048, 4096]
+        LMN = [4, 8, 16, 32, 128, 512, 1024, 2048, 4096, 8192]
         return [LDT, LT, LT, LMN, LMN, LK]
+    if OpType==Pool:
+        LNpix = [2**x for x in np.arange(10,25,.5)]
+        LNfilt = [9, 25, 49, 81, 200]
+        return [LDT, LNpix, LNfilt]
 
-    @staticmethod
-    def all_valid(device):
-        nparams = GEMMWrapper.nparams
-        nshape_params = GEMMWrapper.nshape_params
-        X = np.empty((0, nparams - 6))
-        M, N, K = 1024, 1024, 1024
-        for dtype in [2, 4, 8]:
-            for AT in [1, 2]:
-                for BT in [1, 2]:
-                    for T in cartesian_iterator(GEMMWrapper.tuning_ranges()):
-                        Y = np.zeros((T.shape[0], nparams), dtype=np.uint32)
-                        Y[:, :nshape_params] = [dtype, AT, BT, M, N, K]
-                        Y[:, nshape_params:] = T
-                        X  = np.vstack((X, GEMMWrapper.get_valid(device, Y)[:, 6:]))
-        return X
+def valid_shapes(OpType):
+    if OpType==Conv:
+        return [(dtype, 1024, 1024, 512, 9) for dtype in [4]]
+    if OpType==GEMM:
+        return [(dtype, AT, BT, 1024, 1024, 1024) for dtype in [4] for AT in [1,2] for BT in [1,2]]
+    if OpType==Pool:
+        return [(dtype, 1024, 9) for dtype in [4]]
 
-    @staticmethod
-    def nflops(X):
+def num_ops(OpType, X):
+    if OpType==Conv:
+        Npix, K, C, Nfilt = X[:,1], X[:,2], X[:,3], X[:,4]
+        return 2.*Npix*K*C*Nfilt
+    if OpType==GEMM:
         M, N, K = X[:, 3], X[:, 4], X[:, 5]
         return 2.*M*N*K
+    if OpType==Pool:
+        Npix, Nfilt = X[:,1], X[:,2]
+        return Npix*Nfilt
 
-    @staticmethod
-    def get_valid(device, X):
-        idx = sc.templates.GEMM.check_valid(device, X)
-        X = X[idx, :]
-        flops = GEMMWrapper.nflops(X)
-        idx = np.logical_and(flops > 1e7, flops < 1e12)
-        return X[idx, :]
+def keep_valid(OpType, device, X):
+    idx = OpType.check_valid(device, X.astype(np.uint32))
+    return X[idx, :]
 
-    @staticmethod
-    def generate_valid(device):
-        ranges = GEMMWrapper.input_ranges(device) + GEMMWrapper.tuning_ranges()
-        X = np.array([np.random.choice(x, size=10000) for x in ranges]).astype(np.uint32).T.copy()
-        return GEMMWrapper.get_valid(device, X)
+def pool_shapes(device):
+    DTs = [4]
+    result = []
+    for DTYPE in DTs:
+        for Nfilt in [9, 27, 125]:
+            for Npix in [2**x for x in np.arange(14,25,1)]:
+                result += [[DTYPE, Npix, Nfilt]]
+    return result
 
-    def __init__(s, *params):
-        for x, name in zip(params[0], ['dtype', 'AT','BT','M','N','K','vec','bm','kl','bn','ms','ks','ns','a_bf0','a_bf1','b_bf0','b_bf1','rs','br','gridr']):
-            setattr(s, name, x)
-        s.dtype = sc.dtype(s.dtype)
-        s.AT = sc.templates.op(s.AT)
-        s.BT = sc.templates.op(s.BT)
-        s.params = params
+def conv_shapes(device):
+    DTs = [4]
+    result = []
+    #Deep Learning
+    for DTYPE in DTs:
+         for Npix in [512, 2048, 8192, 65536, 131072]:
+            for K in [16, 32, 64, 128, 512]:
+                for C in [1, 16, 32, 64, 128, 512]:
+                    result += [[DTYPE, Npix, K, C, 25]]
+    result = np.array(result)
+    flops = num_ops(Conv, result)
+    idx = np.logical_and(flops > 1e7, flops < 1e12)
+    return result[idx,:]
 
-    def benchmark(s, ctx, stream):
-        C = sc.driver.Buffer(ctx, s.M*s.N*sc.size_of(s.dtype))
-        A = sc.driver.Buffer(ctx, s.M*s.K*sc.size_of(s.dtype))
-        B = sc.driver.Buffer(ctx, s.K*s.N*sc.size_of(s.dtype))
+def gemm_shapes(device):
+    sizes = []
+    FP64 = [8] if device.compute_capability[1] == 0 else []
 
-        alpha, beta = sc.Scalar(1., s.dtype), sc.Scalar(0., s.dtype)
-        ldc = s.M
-        lda = s.M if s.AT==sc.templates.OP_N else s.K
-        ldb = s.K if s.BT==sc.templates.OP_N else s.N
+    #LinPACK
+    for DTYPE in [4] + FP64:
+        for AT, BT in [(1, 2)]:
+            for N in [256, 512, 1024, 2048, 4096]:
+                sizes += [(DTYPE, AT, BT, N, N, N)]
 
-        generator = sc.templates.GEMM(s.dtype, s.AT, s.BT, s.M, s.N, s.K, 0, lda, 0, ldb, 0, ldc,
-                                      s.vec, s.bm, s.kl, s.bn, s.ms, s.ks, s.ns, s.a_bf0, s.a_bf1, s.b_bf0, s.b_bf1, s.rs, s.br, s.gridr)
-        src = generator.dump(ctx.device, "gemm")
-        #start = time()
-        module = sc.driver.Module(ctx, src)
-        kernel = sc.driver.Kernel(module, "gemm")
-        #end = time()
-        #print('Compile:', end - start, s.params)
+    #Deep Learning
+    for DTYPE in [4]:
+        #Deep Bench
+        for AT, BT in [(1,1), (2,1)]:
+            for M in [1760, 2560]:
+                for N in [16, 32, 64, 128]:
+                    sizes += [(DTYPE, AT, BT, M, N, M)]
+        #OpenNMT
+        sizes += [(DTYPE, 1, 1, 2000, 128, 500),
+                  (DTYPE, 1, 1, 2000, 640, 500),
+                  (DTYPE, 1, 1, 2000, 2048, 500),
+                  (DTYPE, 1, 1, 2000, 640, 1000),
+                  (DTYPE, 1, 1, 500, 640, 1000),
+                  (DTYPE, 1, 1, 500, 640, 500),
+                  (DTYPE, 1, 1, 50000, 640, 500)]
+
+    #Covariance
+    for DTYPE in [4] + FP64:
+        for AT, BT in [(1, 2)]:
+            for N in [1, 2, 4, 8, 16, 64, 128, 256]:
+                for K in [32000, 64000, 128000]:
+                    sizes += [(DTYPE, AT, BT, N, N, K)]
+
+    #LaPack
+    for DTYPE in [4] + FP64:
+        for AT, BT in [(1, 2)]:
+            for N in [512, 1024, 2048, 4096]:
+                for K in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]:
+                    sizes += [(DTYPE, AT, BT, N, N, K)]
+
+    #Remove small problems
+    sizes = [(DTYPE, AT, BT, M, N, K) for DTYPE, AT, BT, M, N, K in sizes if 2*M*N*K > 1e7]
+    #Remove large problems
+    sizes = [(DTYPE, AT, BT, M, N, K) for DTYPE, AT, BT, M, N, K in sizes if 2*M*N*K < 1e12]
+
+    return sizes
+
+def bench_shapes(OpType, device):
+    if OpType==Conv:
+        return conv_shapes(device)
+    if OpType==GEMM:
+        return gemm_shapes(device)
+    if OpType==Pool:
+        return pool_shapes(device)
+
+
+def isaacConv(ctx, stream, shapes, layouts):
+    # Shapes
+    dtype, Npix, K, C, Nfilt = shapes
+    N, M, P, Q = 1, 1, 1, Npix
+    T, R, S = 1, 1, Nfilt
+    dtype = sc.dtype(dtype)
+    pad_d, pad_h, pad_w, stride_d, stride_h, stride_w = 0, 0, 0, 1, 1, 1
+    D = M*stride_d + T - 1 - 2*pad_d - stride_d + 1
+    H = P*stride_h + R - 1 - 2*pad_h - stride_h + 1
+    W = Q*stride_w + S - 1 - 2*pad_w - stride_w + 1
+    # Kernel
+    generator = sc.templates.Conv(sc.dtype(dtype), C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, *layouts)
+    src = generator.dump(ctx.device, "conv_fprop")
+    module = sc.driver.Module(ctx, src)
+    kernel = sc.driver.Kernel(module, "conv_fprop")
+    with lock:
+        # Buffers
+        O = sc.driver.Buffer(ctx, K*M*P*Q*N*sc.size_of(dtype))
+        I = sc.driver.Buffer(ctx, C*D*H*W*N*sc.size_of(dtype))
+        F = sc.driver.Buffer(ctx, C*T*R*S*K*sc.size_of(dtype))
+        alpha, beta = sc.Scalar(1., dtype), sc.Scalar(0., dtype)
+        # Result
+        time = benchmark(lambda: (generator.enqueue(kernel, stream, alpha, I, F, beta, O), stream.synchronize()), ctx.device, 1e-2)
+    tflops = 2*M*P*Q*N*K*C*T*R*S/time*1e-12
+    return tflops
+
+def isaacPool(ctx, stream, shapes, layouts):
+    # Shapes
+    dtype, Npix, Nfilt = shapes
+    N, K, M, P, Q = 1, 1, 1, 1, Npix
+    T, R, S = 1, 1, Nfilt
+    dtype = sc.dtype(dtype)
+    pad_d, pad_h, pad_w, stride_d, stride_h, stride_w = 0, 0, 0, 1, 1, 1
+    D = M*stride_d + T - 1 - 2*pad_d - stride_d + 1
+    H = P*stride_h + R - 1 - 2*pad_h - stride_h + 1
+    W = Q*stride_w + S - 1 - 2*pad_w - stride_w + 1
+    # Kernel
+    generator = sc.templates.Pool(sc.dtype(dtype), K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, *layouts)
+    src = generator.dump(ctx.device, "pool_fprop")
+    module = sc.driver.Module(ctx, src)
+    kernel = sc.driver.Kernel(module, "pool_fprop")
+    with lock:
+        # BuffeNfilt
+        O = sc.driver.Buffer(ctx, K*M*P*Q*N*sc.size_of(dtype))
+        I = sc.driver.Buffer(ctx, K*D*H*W*N*sc.size_of(dtype))
+        # Result
+        time = benchmark(lambda: (generator.enqueue(kernel, stream, I, O), stream.synchronize()), ctx.device, 1e-2)
+    tflops = M*P*Q*N*K*T*R*S/time*1e-12
+    return tflops
+
+def isaacGemm(ctx, stream, shapes, layouts):
+    # Shapes
+    offa, offb, offc = 0, 0, 0
+    dtype, AT, BT, M, N, K = shapes
+    dtype = sc.dtype(dtype)
+    AT, BT = sc.templates.op(AT), sc.templates.op(BT)
+    ldc = M
+    lda = M if AT==sc.templates.OP_N else K
+    ldb = K if BT==sc.templates.OP_N else N
+    # Kernel
+    generator = sc.templates.GEMM(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, *layouts)
+    src = generator.dump(ctx.device, "gemm")
+    module = sc.driver.Module(ctx, src)
+    kernel = sc.driver.Kernel(module, "gemm")
+    with lock:
+        # BuffeNfilt
+        C = sc.driver.Buffer(ctx, M*N*sc.size_of(dtype))
+        A = sc.driver.Buffer(ctx, M*K*sc.size_of(dtype))
+        B = sc.driver.Buffer(ctx, K*N*sc.size_of(dtype))
+        alpha, beta = sc.Scalar(1., dtype), sc.Scalar(0., dtype)
+        # Result
         ts = benchmark(lambda: (generator.enqueue(kernel, stream, alpha, A, B, beta, C), stream.synchronize()), ctx.device, 1e-2)
-        tflops = 2*s.M*s.N*s.K/ts*1e-12
-        return tflops
+    tflops = 2*M*N*K/ts*1e-12
+    return tflops
+
+def evaluate(OpType, ctx, stream, params):
+    shapes, layouts = params[:OpType.Nshapes], params[OpType.Nshapes:]
+    if OpType==Conv:
+        return isaacConv(ctx, stream, shapes, layouts)
+    if OpType==GEMM:
+        return isaacGemm(ctx, stream, shapes, layouts)
+    if OpType==Pool:
+        return isaacPool(ctx, stream, shapes, layouts)
 
 def cudaConv(ctx, stream, dtype, N, K, P, Q, C, R, S):
     pad_h, pad_w, stride_h, stride_w = 0, 0, 1, 1

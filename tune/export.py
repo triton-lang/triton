@@ -20,7 +20,7 @@ static const uint8_t {op}[] = {{
 '''
 
 
-Activations = {'relu': 0}
+Activations = {'relu': 0, 'linear': 1}
 def encode(L, data):
     if isinstance(L, kr.layers.Activation):
         data.extend(struct.pack('<2I', 0, Activations[L.activation.__name__]))
@@ -38,7 +38,8 @@ def cpp_file(arch, op, data):
     return src
 
 
-def export(database_path, device, kernels, model, op):
+def export(database_path, kernels, model, op, init_cuda):
+    device, ctx, stream = init_cuda()
     data = bytearray()
     #Kernels
     data.extend(struct.pack('<{}I'.format(kernels.ndim), *kernels.shape))

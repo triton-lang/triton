@@ -1923,14 +1923,14 @@ static __inline__ __host__ cudaError_t cudaFuncGetAttributes(
  * This function sets the attributes of a function specified via \p entry.
  * The parameter \p entry must be a pointer to a function that executes
  * on the device. The parameter specified by \p entry must be declared as a \p __global__
- * function. The enumeration defined by \p attr is set to the value defined by \p value
+ * function. The enumeration defined by \p attr is set to the value defined by \p value.
  * If the specified function does not exist, then ::cudaErrorInvalidDeviceFunction is returned.
  * If the specified attribute cannot be written, or if the value is incorrect, 
  * then ::cudaErrorInvalidValue is returned.
  *
  * Valid values for \p attr are:
- * ::cuFuncAttrMaxDynamicSharedMem - Maximum size of dynamic shared memory per block
- * ::cuFuncAttrPreferredShmemCarveout - Preferred shared memory-L1 cache split ratio in percent of shared memory.
+ * - ::cudaFuncAttributeMaxDynamicSharedMemorySize - Maximum size of dynamic shared memory per block
+ * - ::cudaFuncAttributePreferredSharedMemoryCarveout - Preferred shared memory-L1 cache split ratio in percent of maximum shared memory.
  *
  * \param entry - Function to get attributes of
  * \param attr  - Attribute to set
