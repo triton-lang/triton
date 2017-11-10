@@ -59,7 +59,7 @@ private:
 };
 
 /* ---- Cartesian ---- */
-std::vector<std::vector<int>> cartesian(const std::vector<std::vector<int>>& v) {
+inline std::vector<std::vector<int>> cartesian(const std::vector<std::vector<int>>& v) {
   std::vector<std::vector<int>> res = {{}};
   for (const auto& u : v){
     std::vector<std::vector<int>> current;
