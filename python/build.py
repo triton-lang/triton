@@ -48,7 +48,6 @@ class build_clib_subclass(build_clib):
         except OSError:
             pass
         self.compiler.compiler_so.remove('-Wstrict-prototypes')
-        
         for (lib_name, build_info) in libraries:
             sources = build_info.get('sources')
             if sources is None or not isinstance(sources, (list, tuple)):
