@@ -39,7 +39,7 @@ namespace isaac{
 
 void GEMM(driver::Device const & device, driver::Stream & stream,
           DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
-          size_t offa, size_t lda, size_t offb, size_t ldb, size_t offc, size_t ldc,
+          param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc,
           scalar const & alpha, driver::Buffer const & A, driver::Buffer const & B, scalar const & beta, driver::Buffer& C,
           templates::GEMM* generator = NULL);
 
