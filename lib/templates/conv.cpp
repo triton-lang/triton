@@ -155,6 +155,7 @@ void Conv::output_shapes(param_t D, param_t H, param_t W, param_t T, param_t R, 
     Q = (W - S + 1 + 2*pad_w + stride_w - 1)/stride_w;
 }
 
+
 std::vector<param_t> Conv::tuning_params() const
 { return {bc0_, bc1_, cs0_, cs1_, u_, us_, zs_, bz_, gridz_}; }
 
@@ -297,49 +298,9 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
         iss << format("  mad.lo.s32 %offId{0}, %mM, %offIn{0}, %offInd{0};", i + s) << std::endl;
       }
 
-      iss << format("  sub .s32 %Dmpad, %M, %pad_d;") << std::endl;
-      iss << format("  sub .s32 %Hmpad, %P, %pad_h;") << std::endl;
-      iss << format("  sub .s32 %Wmpad, %Q, %pad_w;") << std::endl;
-      iss << format("  sub .s32 %Dmpad, %Dmpad, 1;") << std::endl;
-      iss << format("  sub .s32 %Hmpad, %Hmpad, 1;") << std::endl;
-      iss << format("  sub .s32 %Wmpad, %Wmpad, 1;") << std::endl;
-
       for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
       for(size_t s = 0; s < vec_; s++)
         iss << format("   setp.lt.u32 %predi{}, %offIndhw{}, %Npix;", i + s, i + s) << std::endl;
-
-      for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
-      for(size_t s = 0; s < vec_; s++){
-          iss << format("  sub.s32 %dlo{0}, %pad_d, %offId{0};", i + s) << std::endl;
-          iss << format("  sub.s32 %hlo{0}, %pad_h, %offIh{0};", i + s) << std::endl;
-          iss << format("  sub.s32 %wlo{0}, %pad_w, %offIw{0};", i + s) << std::endl;
-          iss << format("  sub.s32 %dhi{0}, %offId{0}, %Dmpad;", i + s) << std::endl;
-          iss << format("  sub.s32 %hhi{0}, %offIh{0}, %Hmpad;", i + s) << std::endl;
-          iss << format("  sub.s32 %whi{0}, %offIw{0}, %Wmpad;", i + s) << std::endl;
-
-          iss << format("  max.s32 %dlo{0}, %dlo{0}, 0;", i + s) << std::endl;
-          iss << format("  max.s32 %hlo{0}, %hlo{0}, 0;", i + s) << std::endl;
-          iss << format("  max.s32 %wlo{0}, %wlo{0}, 0;", i + s) << std::endl;
-
-          iss << format("  max.s32 %dhi{0}, %dhi{0}, 0;", i + s) << std::endl;
-          iss << format("  max.s32 %hhi{0}, %hhi{0}, 0;", i + s) << std::endl;
-          iss << format("  max.s32 %whi{0}, %whi{0}, 0;", i + s) << std::endl;
-
-          iss << format("  sub.s32 %maskd{0}, %pad_d, %dlo{0};", i + s) << std::endl;
-          iss << format("  add.s32 %maskd{0}, %maskd{0}, %dhi{0};", i + s) << std::endl;
-
-          iss << format("  sub.s32 %maskh{0}, %pad_h, %hlo{0};", i + s) << std::endl;
-          iss << format("  add.s32 %maskh{0}, %maskh{0}, %hhi{0};", i + s) << std::endl;
-
-          iss << format("  sub.s32 %maskw{0}, %pad_w, %wlo{0};", i + s) << std::endl;
-          iss << format("  add.s32 %maskw{0}, %maskw{0}, %whi{0};", i + s) << std::endl;
-
-          iss << format("  @!%predi{0} mov.s32 %pmask{0}, %masks;", i + s) << std::endl;
-          iss << format("  @%predi{0} add.s32 %pmask{0}, {1}, %masks;", i + s, 4*nlut) << std::endl;
-          iss << format("  @%predi{0} mad.lo.s32 %pmask{0}, %maskd{0}, {1}, %pmask{0};", i + s, 4*nlut*(2*pad_w_ + 1)*(2*pad_h_ + 1)) << std::endl;
-          iss << format("  @%predi{0} mad.lo.s32 %pmask{0}, %maskh{0}, {1}, %pmask{0};", i + s, 4*nlut*(2*pad_w_ + 1)) << std::endl;
-          iss << format("  @%predi{0} mad.lo.s32 %pmask{0}, %maskw{0}, {1}, %pmask{0};", i + s, 4*nlut) << std::endl;
-      }
 
       for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
       for(size_t s = 0; s < vec_; s++){
@@ -350,6 +311,43 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
           iss << format("  sub.s32 %offIh{0}, %offIh{0}, %pad_h;", i + s) << std::endl;
           iss << format("  sub.s32 %offIw{0}, %offIw{0}, %pad_w;", i + s) << std::endl;
       }
+
+      iss << format("  sub .s32 %Dmpad, {}, %D;", T_) << std::endl;
+      iss << format("  sub .s32 %Hmpad, {}, %H;", R_) << std::endl;
+      iss << format("  sub .s32 %Wmpad, {}, %W;", S_) << std::endl;
+      for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
+      for(size_t s = 0; s < vec_; s++){
+          iss << format("  min.s32 %dlo{0}, %offId{0}, 0;", i + s) << std::endl;
+          iss << format("  min.s32 %hlo{0}, %offIh{0}, 0;", i + s) << std::endl;
+          iss << format("  min.s32 %wlo{0}, %offIw{0}, 0;", i + s) << std::endl;
+
+          iss << format("  add.s32 %dhi{0}, %offId{0}, %Dmpad;", i + s) << std::endl;
+          iss << format("  add.s32 %hhi{0}, %offIh{0}, %Hmpad;", i + s) << std::endl;
+          iss << format("  add.s32 %whi{0}, %offIw{0}, %Wmpad;", i + s) << std::endl;
+          iss << format("  max.s32 %dhi{0}, %dhi{0}, 0;", i + s) << std::endl;
+          iss << format("  max.s32 %hhi{0}, %hhi{0}, 0;", i + s) << std::endl;
+          iss << format("  max.s32 %whi{0}, %whi{0}, 0;", i + s) << std::endl;
+
+
+          iss << format("  add.s32 %maskd{0}, %pad_d, %dlo{0};", i + s) << std::endl;
+          iss << format("  add.s32 %maskd{0}, %maskd{0}, %dhi{0};", i + s) << std::endl;
+
+          iss << format("  add.s32 %maskh{0}, %pad_h, %hlo{0};", i + s) << std::endl;
+          iss << format("  add.s32 %maskh{0}, %maskh{0}, %hhi{0};", i + s) << std::endl;
+
+          iss << format("  add.s32 %maskw{0}, %pad_w, %wlo{0};", i + s) << std::endl;
+          iss << format("  add.s32 %maskw{0}, %maskw{0}, %whi{0};", i + s) << std::endl;
+
+
+
+          iss << format("  @!%predi{0} mov.s32 %pmask{0}, %masks;", i + s) << std::endl;
+          iss << format("  @%predi{0} add.s32 %pmask{0}, {1}, %masks;", i + s, 4*nlut) << std::endl;
+          iss << format("  @%predi{0} mad.lo.s32 %pmask{0}, %maskd{0}, {1}, %pmask{0};", i + s, 4*nlut*(2*pad_w_ + 1)*(2*pad_h_ + 1)) << std::endl;
+          iss << format("  @%predi{0} mad.lo.s32 %pmask{0}, %maskh{0}, {1}, %pmask{0};", i + s, 4*nlut*(2*pad_w_ + 1)) << std::endl;
+          iss << format("  @%predi{0} mad.lo.s32 %pmask{0}, %maskw{0}, {1}, %pmask{0};", i + s, 4*nlut) << std::endl;
+      }
+
+
 
       iss << format("  // I pointers") << std::endl;
       iss << format("  div.s32 %c, %idctrs, {};", Nfilt) << std::endl;
