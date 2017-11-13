@@ -73,20 +73,15 @@ The parameters respectively mean:
 ### Benchmarks
 ISAAC often provides 
 Tesla P100 - SGEMM:
-![alt text][sgemm-gv100]
+![sgemm-gv100](https://github.com/ptillet/isaac/blob/master/documentation/bench/gv100/sgemm.png?raw=true)
 
 Tesla P100 - DGEMM:
-![alt text][dgemm-gv100]
+![sgemm-gv100](https://github.com/ptillet/isaac/blob/master/documentation/bench/gv100/dgemm.png?raw=true)
 
 Tesla P100 - SCONV (IMPLICIT_PRECOMP_GEMM -- especially useful for 1x1 and 3D, as cuDNN doesn't use Winograd and FFT)
-![alt text][sconv-gv100]
+![sgemm-gv100](https://github.com/ptillet/isaac/blob/master/documentation/bench/gv100/sconv.png?raw=true)
 
 ### Coverage
 
 I would consider GEMM and CONV as both being production-ready. Kernel selection is done for each new shape and the best kernel is cached in RAM. I wouldn't advise this library for applications that use 1000s of different shapes exactly once (e.g., Blocked SVD).
-
-
-![alt text][sgemm-gv100]:
-![alt text][dgemm-gv100]:
-![alt text][sconv-gv100]:
 
