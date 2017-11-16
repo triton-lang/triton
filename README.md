@@ -78,7 +78,7 @@ Tesla P100 - SGEMM:
 Tesla P100 - DGEMM:
 ![sgemm-gv100](https://github.com/ptillet/isaac/blob/master/documentation/bench/gv100/dgemm.png?raw=true)
 
-Tesla P100 - SCONV (IMPLICIT_PRECOMP_GEMM -- especially useful for 1x1 and 3D, as cuDNN doesn't use Winograd and FFT)
+Tesla P100 - SCONV (vs cuDNN's IMPLICIT_PRECOMP_GEMM)
 ![sgemm-gv100](https://github.com/ptillet/isaac/blob/master/documentation/bench/gv100/sconv.png?raw=true)
 
 ### Coverage
