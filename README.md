@@ -15,9 +15,11 @@ cd isaac;
 mkdir build; 
 cd build;
 cmake ../ ; make -j8;
+./examples/isaac-tools --gemm --bench --suite deepbench --dtype float32
+./examples/isaac-tools --conv --bench --suite deepbench --dtype float32
 ```
 ### Python interface
-ISAAC is usable in Python as a Tensorflow op. It can be installed as follows in an environment where Tensorflow is present:
+The Tensorflow wrapper can be installed as follows in an environment where Tensorflow is present.
 ```
 cd python;
 python setup.py build; 
@@ -33,16 +35,13 @@ What the script does is pretty straightforward:
 import isaac as sc
 isaac = tf.load_op_library(sc.tensorflow)
 ```
-Will expose isaac.conv2d and isaac.conv3d that you can use just like you'd use tf.nn.conv2d and tf.nn.conv3d.
+Will expose `isaac.conv2d` and `isaac.conv3d`. You can use them like you'd use tf.nn.conv2d and tf.nn.conv3d.
 
 If you don't want to use Tensorflow, it is possible to use the python bindings directly. See the "tune/" folder for an example.
  
 ### Binary interface
 Basic benchmarks for GEMM and CONV for DeepBench can be obtained using the isaac-tools binary interface:
-```
-./examples/isaac-tools --gemm --bench --suite deepbench --dtype float32
-./examples/isaac-tools --conv --bench --suite deepbench --dtype float32
-```
+
 
 Note that only float32 and float64 are supported at the moment.
 
