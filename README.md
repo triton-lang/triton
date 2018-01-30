@@ -80,7 +80,5 @@ Tesla P100 - DGEMM:
 Tesla P100 - SCONV (vs cuDNN's IMPLICIT_PRECOMP_GEMM)
 ![sgemm-gv100](https://github.com/ptillet/isaac/blob/master/documentation/bench/gv100/sconv.png?raw=true)
 
-### Coverage
-
-I would consider GEMM and CONV as both being production-ready. Kernel selection is done for each new shape and the best kernel is cached in RAM. I wouldn't advise this library for applications that use 1000s of different shapes exactly once (e.g., Blocked SVD).
-
+### Acknowledgments
+This work was partially funded by the National Science Foundation (IIS 1409097)
