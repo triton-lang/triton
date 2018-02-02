@@ -87,3 +87,4 @@ I would consider GEMM and CONV as both being production-ready. Kernel selection 
 ## Acknowledgments
 
 This work was partially supported by the National Science Foundation (IIS 1409097) and by IARPA (contract D16PC00002).
+
