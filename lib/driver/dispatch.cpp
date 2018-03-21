@@ -110,9 +110,11 @@ namespace driver
 #define CUDNN_DEFINE2(ret, fname, t1, t2) DEFINE2(cudnninit, cudnn_, ret, fname, t1, t2)
 #define CUDNN_DEFINE3(ret, fname, t1, t2, t3) DEFINE3(cudnninit, cudnn_, ret, fname, t1, t2, t3)
 #define CUDNN_DEFINE5(ret, fname, t1, t2, t3, t4, t5) DEFINE5(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5)
+#define CUDNN_DEFINE6(ret, fname, t1, t2, t3, t4, t5, t6) DEFINE6(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6)
 #define CUDNN_DEFINE7(ret, fname, t1, t2, t3, t4, t5, t6, t7) DEFINE7(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7)
 #define CUDNN_DEFINE8(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8) DEFINE8(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8)
 #define CUDNN_DEFINE13(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13) DEFINE13(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13)
+
 
 bool dispatch::cuinit(){
   if(cuda_==nullptr)
@@ -252,6 +254,8 @@ CUDNN_DEFINE8(cudnnStatus_t, cudnnGetConvolutionForwardAlgorithm, cudnnHandle_t,
 CUDNN_DEFINE7(cudnnStatus_t, cudnnGetConvolutionForwardWorkspaceSize, cudnnHandle_t, const cudnnTensorDescriptor_t, const cudnnFilterDescriptor_t, const cudnnConvolutionDescriptor_t, const cudnnTensorDescriptor_t, cudnnConvolutionFwdAlgo_t, size_t*)
 CUDNN_DEFINE13(cudnnStatus_t, cudnnConvolutionForward, cudnnHandle_t, const void *, const cudnnTensorDescriptor_t, const void *, const cudnnFilterDescriptor_t, const void *, const cudnnConvolutionDescriptor_t, cudnnConvolutionFwdAlgo_t, void *, size_t, const void *, const cudnnTensorDescriptor_t, void *)
 CUDNN_DEFINE2(cudnnStatus_t, cudnnSetStream, cudnnHandle_t, cudaStream_t)
+CUDNN_DEFINE7(cudnnStatus_t, cudnnTransformTensor, cudnnHandle_t, const void*, const cudnnTensorDescriptor_t, const void*, const void*, const cudnnTensorDescriptor_t, void*)
+
 
 void dispatch::release(){
   if(cuda_){
@@ -353,6 +357,7 @@ void* dispatch::cudnnGetConvolutionForwardWorkspaceSize_;
 void* dispatch::cudnnConvolutionForward_;
 void* dispatch::cudnnPoolingForward_;
 void* dispatch::cudnnSetStream_;
+void* dispatch::cudnnTransformTensor_;
 
 }
 }

@@ -21,14 +21,15 @@ def tuning_ranges(OpType):
         return [L3, [32, 64, 128, 256], L5, L5]
 
 def input_ranges(OpType, device):
-    FP64 = [8] if device.compute_capability[1] == 0 else []
-    LDT = [4] + FP64
+    LDT = [4]
     if OpType==Conv:
         LNpix = [4, 8, 16, 32, 128, 512, 1024, 2048, 4096, 8192]
         LC = [8, 16, 32, 64, 128, 256, 512, 1024]
         LNfilt = [9, 25, 49, 81, 200]
         return [LDT,LNpix,LC,LC,LNfilt]
     if OpType==GEMM:
+        FP64 = [8] if device.compute_capability[1] == 0 else []
+        LDT = LDT + FP64
         LT = [1, 2]
         LK = [16, 32, 64, 256, 4096, 8192, 16382, 65536]
         LMN = [4, 8, 16, 32, 128, 512, 1024, 2048, 4096, 8192]
@@ -145,13 +146,15 @@ def isaacConv(ctx, stream, shapes, layouts):
     dtype, Npix, K, C, Nfilt = shapes
     N, M, P, Q = 1, 1, 1, Npix
     T, R, S = 1, 1, Nfilt
-    dtype = sc.dtype(dtype)
-    pad_d, pad_h, pad_w, stride_d, stride_h, stride_w = 0, 0, 0, 1, 1, 1
+    dtype = sc.float64 if dtype==8 else sc.float32
+    pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w = 0, 0, 0, 1, 1, 1, 1, 1, 1
     D = M*stride_d + T - 1 - 2*pad_d - stride_d + 1
     H = P*stride_h + R - 1 - 2*pad_h - stride_h + 1
     W = Q*stride_w + S - 1 - 2*pad_w - stride_w + 1
     # Kernel
-    generator = sc.templates.Conv(sc.dtype(dtype), C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, *layouts)
+    generator = sc.templates.Conv(dtype, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, sc.templates.LINEAR, 1, sc.templates.NO_RESIDUAL, 0, 1, 1, 1, 1, 1, 1, *layouts)
+
+
     src = generator.dump(ctx.device, "conv_fprop")
     module = sc.driver.Module(ctx, src)
     kernel = sc.driver.Kernel(module, "conv_fprop")
@@ -162,7 +165,7 @@ def isaacConv(ctx, stream, shapes, layouts):
         F = sc.driver.Buffer(ctx, C*T*R*S*K*sc.size_of(dtype))
         alpha, beta = sc.Scalar(1., dtype), sc.Scalar(0., dtype)
         # Result
-        time = benchmark(lambda: (generator.enqueue(kernel, stream, alpha, I, F, beta, O), stream.synchronize()), ctx.device, 1e-2)
+        time = benchmark(lambda: (generator.enqueue(kernel, stream, I, F, O, None, 1., 1., 1., [1.], 1., None), stream.synchronize()), ctx.device, 1e-2)
     tflops = 2*M*P*Q*N*K*C*T*R*S/time*1e-12
     return tflops
 
@@ -171,13 +174,13 @@ def isaacPool(ctx, stream, shapes, layouts):
     dtype, Npix, Nfilt = shapes
     N, K, M, P, Q = 1, 1, 1, 1, Npix
     T, R, S = 1, 1, Nfilt
-    dtype = sc.dtype(dtype)
+    dtype = sc.float64 if dtype==8 else sc.float32
     pad_d, pad_h, pad_w, stride_d, stride_h, stride_w = 0, 0, 0, 1, 1, 1
     D = M*stride_d + T - 1 - 2*pad_d - stride_d + 1
     H = P*stride_h + R - 1 - 2*pad_h - stride_h + 1
     W = Q*stride_w + S - 1 - 2*pad_w - stride_w + 1
     # Kernel
-    generator = sc.templates.Pool(sc.dtype(dtype), K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, *layouts)
+    generator = sc.templates.Pool(dtype, dtype, sc.templates.MAX_POOL, K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, *layouts)
     src = generator.dump(ctx.device, "pool_fprop")
     module = sc.driver.Module(ctx, src)
     kernel = sc.driver.Kernel(module, "pool_fprop")
@@ -186,7 +189,7 @@ def isaacPool(ctx, stream, shapes, layouts):
         O = sc.driver.Buffer(ctx, K*M*P*Q*N*sc.size_of(dtype))
         I = sc.driver.Buffer(ctx, K*D*H*W*N*sc.size_of(dtype))
         # Result
-        time = benchmark(lambda: (generator.enqueue(kernel, stream, I, O), stream.synchronize()), ctx.device, 1e-2)
+        time = benchmark(lambda: (generator.enqueue(kernel, stream, I, O, 1., 1.), stream.synchronize()), ctx.device, 1e-2)
     tflops = M*P*Q*N*K*T*R*S/time*1e-12
     return tflops
 
@@ -194,13 +197,13 @@ def isaacGemm(ctx, stream, shapes, layouts):
     # Shapes
     offa, offb, offc = 0, 0, 0
     dtype, AT, BT, M, N, K = shapes
-    dtype = sc.dtype(dtype)
+    dtype = sc.float64 if dtype==8 else sc.float32
     AT, BT = sc.templates.op(AT), sc.templates.op(BT)
     ldc = M
     lda = M if AT==sc.templates.OP_N else K
     ldb = K if BT==sc.templates.OP_N else N
     # Kernel
-    generator = sc.templates.GEMM(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, *layouts)
+    generator = sc.templates.GEMM(dtype, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, *layouts)
     src = generator.dump(ctx.device, "gemm")
     module = sc.driver.Module(ctx, src)
     kernel = sc.driver.Kernel(module, "gemm")
@@ -211,7 +214,7 @@ def isaacGemm(ctx, stream, shapes, layouts):
         B = sc.driver.Buffer(ctx, K*N*sc.size_of(dtype))
         alpha, beta = sc.Scalar(1., dtype), sc.Scalar(0., dtype)
         # Result
-        ts = benchmark(lambda: (generator.enqueue(kernel, stream, alpha, A, B, beta, C), stream.synchronize()), ctx.device, 1e-2)
+        ts = benchmark(lambda: (generator.enqueue(kernel, stream, alpha, A, B, beta, C, 1., 1., 1., None), stream.synchronize()), ctx.device, 1e-2)
     tflops = 2*M*N*K/ts*1e-12
     return tflops
 

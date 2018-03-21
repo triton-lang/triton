@@ -50,7 +50,7 @@ typedef std::tuple<sc::DType, sc::IsaacOperation_t, sc::IsaacOperation_t, sc::pa
 typedef std::tuple<sc::DType, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t> conv_params_t;
 typedef std::tuple<sc::DType, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t> pool_params_t;
 
-struct TestBench{
+struct SC17{
   // GEMM
   static std::vector<gemm_params_t> gemm(sc::DType dtype){
     std::vector<gemm_params_t> shapes;
@@ -76,64 +76,63 @@ struct TestBench{
   // CONV
   static std::vector<conv_params_t> conv(sc::DType dtype){
     // Vector of (dtype, D, W, H, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w)
-
     std::vector<conv_params_t> shapes;
-    // DeepSpeech
-    for(size_t N: std::vector<size_t>{8})
-      shapes.push_back(std::make_tuple(dtype, 1, 700, 161, 1, N, 32, 1, 5, 20, 0, 0, 0, 1, 1, 1));
-    for(size_t N: std::vector<size_t>{8})
-      shapes.push_back(std::make_tuple(dtype, 1, 341, 79, 32, N, 32, 1, 5, 10, 0, 0, 0, 1, 1, 1));
+//    // DeepSpeech
+//    for(size_t N: std::vector<size_t>{8})
+//      shapes.push_back(std::make_tuple(dtype, 1, 700, 161, 1, N, 32, 1, 5, 20, 0, 0, 0, 1, 1, 1));
+//    for(size_t N: std::vector<size_t>{8})
+//      shapes.push_back(std::make_tuple(dtype, 1, 341, 79, 32, N, 32, 1, 5, 10, 0, 0, 0, 1, 1, 1));
 
-    // OCR
-    shapes.push_back(std::make_tuple(dtype, 1, 480, 48, 1, 16, 16, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 240, 24, 16, 16, 32, 1, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 120, 12, 32, 16, 64, 1, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 60, 6, 64, 16, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    // OCR
+//    shapes.push_back(std::make_tuple(dtype, 1, 480, 48, 1, 16, 16, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 240, 24, 16, 16, 32, 1, 3, 3, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 120, 12, 32, 16, 64, 1, 3, 3, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 60, 6, 64, 16, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
 
-    // Face Recognition
-    shapes.push_back(std::make_tuple(dtype, 1, 108, 108, 3, 8, 64, 1, 3, 3, 0, 1, 1, 1, 2, 2));
-    shapes.push_back(std::make_tuple(dtype, 1, 54, 54, 64, 8, 64, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 27, 27, 128, 8, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 128, 8, 256, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 256, 8, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    // Face Recognition
+//    shapes.push_back(std::make_tuple(dtype, 1, 108, 108, 3, 8, 64, 1, 3, 3, 0, 1, 1, 1, 2, 2));
+//    shapes.push_back(std::make_tuple(dtype, 1, 54, 54, 64, 8, 64, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 27, 27, 128, 8, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 128, 8, 256, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 256, 8, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
 
-    // Vision
-    for(size_t N: std::vector<size_t>{8}){
-      shapes.push_back(std::make_tuple(dtype, 1, 224, 224, 3, N, 64, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 112, 112, 64, N, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 128, N, 256, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 256, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    }
-    shapes.push_back(std::make_tuple(dtype, 1, 224, 224, 3, 16, 64, 1, 7, 7, 0, 3, 3, 1, 2, 2));
-    shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 192, 16, 32, 1, 5, 5, 0, 2, 2, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 192, 16, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, 16, 48, 1, 5, 5, 0, 2, 2, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, 16, 192, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 832, 16, 256, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 832, 16, 128, 1, 5, 5, 0, 2, 2, 1, 1, 1));
+//    // Vision
+//    for(size_t N: std::vector<size_t>{8}){
+//      shapes.push_back(std::make_tuple(dtype, 1, 224, 224, 3, N, 64, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 112, 112, 64, N, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 128, N, 256, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 256, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    }
+//    shapes.push_back(std::make_tuple(dtype, 1, 224, 224, 3, 16, 64, 1, 7, 7, 0, 3, 3, 1, 2, 2));
+//    shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 192, 16, 32, 1, 5, 5, 0, 2, 2, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 192, 16, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, 16, 48, 1, 5, 5, 0, 2, 2, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, 16, 192, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 832, 16, 256, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 832, 16, 128, 1, 5, 5, 0, 2, 2, 1, 1, 1));
 
-    // Speaker ID
-    shapes.push_back(std::make_tuple(dtype, 1, 350, 80, 64, 16, 128, 1, 5, 5, 0, 1, 1, 1, 2, 2));
-    shapes.push_back(std::make_tuple(dtype, 1, 175, 40, 128, 16, 256, 1, 5, 5, 0, 1, 1, 1, 2, 2));
+//    // Speaker ID
+//    shapes.push_back(std::make_tuple(dtype, 1, 350, 80, 64, 16, 128, 1, 5, 5, 0, 1, 1, 1, 2, 2));
+//    shapes.push_back(std::make_tuple(dtype, 1, 175, 40, 128, 16, 256, 1, 5, 5, 0, 1, 1, 1, 2, 2));
 
-    // ResNET
-    for(size_t N: std::vector<size_t>{8}){
-      shapes.push_back(std::make_tuple(dtype, 1, 112, 112, 64, N, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 64, N, 256, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 256, N, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 256, N, 128, 1, 1, 1, 0, 0, 0, 1, 2, 2));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 128, N, 512, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 128, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 256, 1, 1, 1, 0, 0, 0, 1, 2, 2));
-      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 256, N, 1024, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 1024, 1, 1, 1, 0, 0, 0, 1, 2, 2));
-      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 1024, N, 2048, 1, 1, 1, 0, 0, 0, 1, 2, 2));
-      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 2048, 1, 1, 1, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 1024, N, 2048, 1, 1, 1, 0, 1, 1, 1, 2, 2));
-    }
+//    // ResNET
+//    for(size_t N: std::vector<size_t>{8}){
+//      shapes.push_back(std::make_tuple(dtype, 1, 112, 112, 64, N, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 64, N, 256, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 256, N, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 256, N, 128, 1, 1, 1, 0, 0, 0, 1, 2, 2));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 128, N, 512, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 128, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 256, 1, 1, 1, 0, 0, 0, 1, 2, 2));
+//      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 256, N, 1024, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 1024, 1, 1, 1, 0, 0, 0, 1, 2, 2));
+//      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 1024, N, 2048, 1, 1, 1, 0, 0, 0, 1, 2, 2));
+//      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 2048, 1, 1, 1, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 1024, N, 2048, 1, 1, 1, 0, 1, 1, 1, 2, 2));
+//    }
 
     // 3D-Unet
     shapes.push_back(std::make_tuple(dtype, 31, 204, 204,   4, 1,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
@@ -153,8 +152,7 @@ struct TestBench{
     shapes.push_back(std::make_tuple(dtype, 7 , 120, 120,  72, 1, 48,  1, 1, 1, 0, 0, 0, 1, 1, 1));
     shapes.push_back(std::make_tuple(dtype, 5 , 120, 120,  48, 1, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
     shapes.push_back(std::make_tuple(dtype, 3 , 118, 118,  24, 1, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1 , 116, 116,  3 , 1, 24,  1, 1, 1, 0, 0, 0, 1, 1, 1));
-
+    shapes.push_back(std::make_tuple(dtype, 1 , 116, 116,  4 , 1, 24,  1, 1, 1, 0, 0, 0, 1, 1, 1));
     return shapes;
   }
 
@@ -163,24 +161,24 @@ struct TestBench{
     std::vector<pool_params_t> shapes;
 
     // 3D-Unet
-    shapes.push_back(std::make_tuple(dtype, 31, 204, 204, 4,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 29, 202, 202, 4,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 27, 100, 100, 4,  72, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 25,  98,  98, 4,  72, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 23,  48,  48, 4, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 21,  46,  46, 4, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 19,  22,  22, 4, 648, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 17,  20,  20, 4, 648, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 15,  36,  36, 4, 432, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 13,  36,  36, 4, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 11,  34,  34, 4, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 11,  64,  64, 4, 144, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 11,  64,  64, 4, 72,  3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 9 ,  62,  62, 4, 72,  3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 7 , 120, 120, 4, 48,  1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 5 , 120, 120, 4, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 3 , 118, 118, 4, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1 , 116, 116, 4, 24,  1, 1, 1, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 31, 204, 204, 1,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 29, 202, 202, 1,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 27, 100, 100, 1,  72, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 25,  98,  98, 1,  72, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 23,  48,  48, 1, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 21,  46,  46, 1, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 19,  22,  22, 1, 648, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 17,  20,  20, 1, 648, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 15,  36,  36, 1, 432, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 13,  36,  36, 1, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 11,  34,  34, 1, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 11,  64,  64, 1, 144, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 11,  64,  64, 1, 72,  3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 9 ,  62,  62, 1, 72,  3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 7 , 120, 120, 1, 48,  1, 1, 1, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 5 , 120, 120, 1, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 3 , 118, 118, 1, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 1 , 116, 116, 1, 24,  1, 1, 1, 0, 0, 0, 1, 1, 1));
 
     return shapes;
   }
@@ -262,7 +260,7 @@ void benchmark_gemm(Metric const & metric, sc::driver::Context& ctx, sc::driver:
   sc::driver::Buffer B(ctx, K*N*dtsize);
 
   std::vector<double> times;
-  times.push_back(bench([&](){ sc::GEMM(device, stream, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C, (sc::templates::GEMM*)generator); }, [&](){ stream.synchronize(); }, device));
+  times.push_back(bench([&](){ sc::GEMM(device, stream, dtype, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C, 1., 1., 1., NULL, (sc::templates::GEMM*)generator); }, [&](){ stream.synchronize(); }, device));
   if(sc::driver::dispatch::cublasinit()){
     cublasGemmAlgo_t fastest;
     sc::driver::cublasGemm(dtype, stream, cuAT, cuBT, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc, &fastest);
@@ -273,24 +271,32 @@ void benchmark_gemm(Metric const & metric, sc::driver::Context& ctx, sc::driver:
 }
 
 void benchmark_conv(Metric const & metric, sc::driver::Context& ctx, sc::driver::Device& device, sc::driver::Stream& stream,
-                    sc::DType dtype, size_t D, size_t H, size_t W, size_t C, size_t N, size_t K, size_t T, size_t R, size_t S, size_t pad_d, size_t pad_h, size_t pad_w, size_t stride_d, size_t stride_h, size_t stride_w,
+                    sc::DType in_dtype, sc::DType out_dtype, size_t D, size_t H, size_t W, size_t C, size_t N, size_t K, size_t T, size_t R, size_t S,
+                    size_t pad_d, size_t pad_h, size_t pad_w,
+                    size_t stride_d, size_t stride_h, size_t stride_w,
+                    size_t upsample_d, size_t upsample_h, size_t upsample_w,
                     sc::templates::Generator* generator){
 
+  param_t Zk = 0, crop_z_m0 = 0, crop_z_m1 = 0, crop_z_p0 = 0, crop_z_p1 = 0, crop_z_q0 = 0, crop_z_q1 = 0;
   param_t M, P, Q;
-  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
+  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
+  sc::ActivationType activation = sc::Linear;
 
-  size_t dtsize = sc::size_of(dtype);
-  sc::scalar alpha(1., dtype);
-  sc::scalar beta(0., dtype);
+  size_t vect_c = (in_dtype==sc::INT8X4_TYPE)?4:1;
+  size_t vect_k = (out_dtype==sc::INT8X4_TYPE)?4:1;
 
-  sc::driver::Buffer O(ctx, N*K*M*P*Q*dtsize);
-  sc::driver::Buffer I(ctx, C*D*H*W*N*dtsize);
-  sc::driver::Buffer F(ctx, K*C*T*R*S*dtsize);
+  sc::DType ab_dtype = (out_dtype==sc::INT8X4_TYPE)?sc::FLOAT_TYPE:out_dtype;
+  sc::scalar alpha(1., ab_dtype);
+  sc::scalar beta(0., ab_dtype);
+
+  sc::driver::Buffer O(ctx, N*K/vect_k*M*P*Q*sc::size_of(out_dtype));
+  sc::driver::Buffer I(ctx, C/vect_c*D*H*W*N*sc::size_of(in_dtype));
+  sc::driver::Buffer F(ctx, K*C/vect_c*T*R*S*sc::size_of(in_dtype));
 
   std::vector<double> times;
-  times.push_back(bench([&](){ sc::CONV(device, stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O, (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
-  if(sc::driver::dispatch::cudnninit())
-    times.push_back(bench([&](){ sc::driver::cudnnConv(dtype, stream, D, H, W, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
+  times.push_back(bench([&](){ sc::CONV(device, stream, in_dtype, out_dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, I, F, &O, 1, NULL, activation, 0., 1., 1., {1.}, 1., sc::NoResidual, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, NULL, (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
+//  if(sc::driver::dispatch::cudnninit())
+//    times.push_back(bench([&](){ sc::driver::cudnnConv(out_dtype, stream, D, H, W, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
   print_results(times, {str(N), str(K), str(M), str(P), str(Q), str(C), str(T), str(R), str(S)}, metric.cmp(), [&](double tsec){ return metric.conv(M, P, Q, K, N, C, T, R, S, tsec);});
 }
 
@@ -299,7 +305,7 @@ void benchmark_pool(Metric const & metric, sc::driver::Context& ctx, sc::driver:
                     sc::templates::Generator* generator){
 
   param_t M, P, Q;
-  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
+  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, 1, 1, 1, M, P, Q);
 
   size_t dtsize = sc::size_of(dtype);
   sc::scalar alpha(1., dtype);
@@ -309,7 +315,7 @@ void benchmark_pool(Metric const & metric, sc::driver::Context& ctx, sc::driver:
   sc::driver::Buffer I(ctx, K*D*H*W*N*dtsize);
 
   std::vector<double> times;
-  times.push_back(bench([&](){ sc::POOL(device, stream, dtype, K, M, P, Q, N, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, O, (sc::templates::Pool*)generator); }, [&](){ stream.synchronize(); }, device));
+  times.push_back(bench([&](){ sc::POOL(device, stream, dtype, dtype, sc::MaxPool, K, M, P, Q, N, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, O, 1., 1., (sc::templates::Pool*)generator); }, [&](){ stream.synchronize(); }, device));
   if(sc::driver::dispatch::cudnninit())
     times.push_back(bench([&](){ sc::driver::cudnnPool(dtype, stream, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, beta, O); }, [&](){ stream.synchronize();  }, device));
   print_results(times, {str(N), str(K), str(M), str(P), str(Q),  str(T), str(R), str(S)}, metric.cmp(), [&](double tsec){ return metric.pool(M, P, Q, K, N, T, R, S, tsec);});
@@ -354,21 +360,26 @@ void loop_nest(std::vector<std::vector<T>> const & iterates, std::function<void(
 }
 
 
-void search_conv(int32_t W, int32_t H, int32_t C, int32_t N, int32_t K, int32_t R, int32_t S, int32_t pad_h, int32_t pad_w, int32_t stride_h, int32_t stride_w, sc::DType dtype){
+void search_conv(int32_t D, int32_t H, int32_t W,
+                 int32_t C, int32_t N, int32_t K,
+                 int32_t T, int32_t R, int32_t S,
+                 int32_t pad_d, int32_t pad_h, int32_t pad_w,
+                 int32_t stride_d, int32_t stride_h, int32_t stride_w,
+                 int32_t upsample_d, int32_t upsample_h, int32_t upsample_w,
+                 sc::ActivationType activation, sc::DType in_dtype, sc::DType out_dtype)
+{
   auto ctx = drv::backend::contexts::get_default();
-  size_t dtsize = sc::size_of(dtype);
 
-  size_t D = 1, T = 1, stride_d = 1, pad_d = 0;
   size_t P = (H - R + 1 + 2*pad_h + stride_h - 1)/stride_h;
   size_t Q = (W - S + 1 + 2*pad_w + stride_w - 1)/stride_w;
   size_t M = (D - T + 1 + 2*pad_d + stride_d - 1)/stride_d;
 
+  size_t Zk = 0, crop_z_m0 = 0, crop_z_m1 = 0, crop_z_p0 = 0, crop_z_p1 = 0, crop_z_q0 = 0, crop_z_q1 = 0;
   //Setup
-  drv::Buffer O(ctx, K*P*Q*M*N*dtsize);
-  drv::Buffer I(ctx, C*H*W*D*N*dtsize);
-  drv::Buffer F(ctx, C*R*S*T*K*dtsize);
+  drv::Buffer O(ctx, K*P*Q*M*N*sc::size_of(out_dtype));
+  drv::Buffer I(ctx, C*H*W*D*N*sc::size_of(in_dtype));
+  drv::Buffer F(ctx, C*R*S*T*K*sc::size_of(in_dtype));
   drv::Stream stream(ctx);
-  sc::scalar alpha(1., dtype),  beta(1., dtype);
 
   //Exhaustive search
   std::vector<sc::param_t> r1 = {1};
@@ -378,13 +389,20 @@ void search_conv(int32_t W, int32_t H, int32_t C, int32_t N, int32_t K, int32_t 
   std::vector<sc::param_t> rs = {4, 8, 16};
   double best;
   loop_nest<sc::param_t>({rv, rl, rl, rs, rs, rl, rl, r1, rr, rr}, [&](std::vector<sc::param_t> const & x){
-    sc::templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
+    sc::templates::Conv generator(in_dtype, out_dtype,
+                                  C, D, H, W, N, K, M, P, Q, T, R, S,
+                                  pad_d, pad_h, pad_w,
+                                  stride_d, stride_h, stride_w,
+                                  upsample_d, upsample_h, upsample_w,
+                                  activation, 1,
+                                  sc::NoResidual, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
+                                  x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
     try{
       std::string src = generator.dump(ctx.device(), "conv");
       drv::Module program(ctx, src);
       drv::Kernel kernel(program, "conv");
-      double tsec = bench([&](){ generator.enqueue(kernel, stream, alpha, I, F, beta, O); }, [&](){ stream.synchronize(); }, ctx.device());
+      double tsec = bench([&](){ generator.enqueue(kernel, stream, I, F, &O); }, [&](){ stream.synchronize(); }, ctx.device());
       double tflops = sc::templates::Conv::tflops(P,Q,M,K,N,C,R,S,T,tsec);
       best = std::max(tflops, best);
       std::cout << "//";
@@ -423,7 +441,7 @@ void search_gemm(int32_t M, int32_t N, int32_t K, sc::IsaacOperation_t AT, sc::I
   double best = 0;
 
   loop_nest<sc::param_t>({rv, rl, rl, rl, rs, r1, rs, rl, rl, rl, rl, r1, rr, rr}, [&](std::vector<sc::param_t> const & x){
-    isaac::templates::GEMM generator(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
+    isaac::templates::GEMM generator(dtype, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
     // Compile
     try{
       std::string src = generator.dump(ctx.device(), "gemm");
@@ -463,7 +481,7 @@ int main(int argc, char* argv[]){
   // Options
   opts::Options* options = program.options();
   options->add<size_t>("device", "Device to run on", 0);
-  options->add<sc::DType>("dtype", "Data-type to use for computations", "float32", {{"float32", sc::FLOAT_TYPE}, {"float64", sc::DOUBLE_TYPE}});
+  options->add<sc::DType>("dtype", "Data-type to use for computations", "float32", {{"int8x4", sc::INT8X4_TYPE}, {"float32", sc::FLOAT_TYPE}, {"float64", sc::DOUBLE_TYPE}});
   options->add<std::string>("name", "Name to give to the generated kernel", "kernel");
   options->add_group("search", "Exhaustively search for best tuning parameters");
   opts::Options* dump = options->add_group("dump", "Dump source-code generated by ISAAC");
@@ -526,11 +544,11 @@ int main(int argc, char* argv[]){
     }
     if(gemm->has("kernel")){
       auto x = gemm->get<std::vector<size_t>>("kernel");
-      generator.reset(new sc::templates::GEMM(dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]));
+      generator.reset(new sc::templates::GEMM(dtype, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]));
     }
     else{
       sc::runtime::GEMMProfile* profile = (sc::runtime::GEMMProfile*)sc::runtime::database.at({device.architecture(), sc::runtime::GEMM}).get();
-      generator.reset(new sc::templates::GEMM(profile->predict(stream, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc)));
+      generator.reset(new sc::templates::GEMM(profile->predict(stream, dtype, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc)));
     }
     if(options->has("dump"))
       dump_source(device, *generator, dump, name);
@@ -544,7 +562,7 @@ int main(int argc, char* argv[]){
 
       //SC17 paper shapes
       if(bench->get<std::string>("suite")=="deepbench")
-        shapes = TestBench::gemm(dtype);
+        shapes = SC17::gemm(dtype);
 
       //Print results
       for(auto x: shapes){
@@ -556,20 +574,24 @@ int main(int argc, char* argv[]){
 
   // CONV
   if(options->has("conv")){
+    sc::DType in_dtype = dtype;
+    sc::DType out_dtype = dtype;
     auto x = conv->get<std::vector<size_t>>("shape");
     param_t D = x[0], H = x[1], W = x[2], C = x[3], N = x[4], K = x[5], T = x[6], R = x[7], S = x[8], pad_d = x[9], pad_h = x[10], pad_w = x[11], stride_d = x[12], stride_h = x[13], stride_w = x[14];
     param_t M, P, Q;
-    sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
-
+    param_t upsample_d = 1, upsample_h = 1, upsample_w = 1;
+    param_t Zk = 0, crop_z_m0 = 0, crop_z_m1 = 0, crop_z_p0 = 0, crop_z_p1 = 0, crop_z_q0 = 0, crop_z_q1 = 0;
+    sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
+    sc::ActivationType activation = sc::Linear;
     if(options->has("search"))
-      search_conv(W, H, C, N, K, R, S, pad_h, pad_w, stride_h, stride_w, dtype);
+      search_conv(D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, in_dtype, out_dtype);
     if(conv->has("kernel")){
       auto x = conv->get<std::vector<size_t>>("kernel");
-      generator.reset(new sc::templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
+      generator.reset(new sc::templates::Conv(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, 1, sc::NoResidual, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
     }
     else{
       sc::runtime::ConvProfile* profile = (sc::runtime::ConvProfile*)sc::runtime::database.at({device.architecture(), sc::runtime::CONV}).get();
-      generator.reset(new sc::templates::Conv(profile->predict(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w)));
+      generator.reset(new sc::templates::Conv(profile->predict(stream, in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, 1, sc::NoResidual, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1)));
     }
     if(options->has("dump"))
       dump_source(device, *generator, dump, name);
@@ -582,11 +604,11 @@ int main(int argc, char* argv[]){
         shapes = {std::make_tuple(dtype, D, W, H, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w)};
       //SuperComputing17 shapes
       if(bench->get<std::string>("suite")=="deepbench")
-        shapes = TestBench::conv(dtype);
+        shapes = SC17::conv(dtype);
       //Print results
       for(auto x: shapes){
         std::tie(dtype, D, W, H, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w) = x;
-        benchmark_conv(*metric, context, device, stream, dtype, D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, conv->has("kernel")?generator.get():NULL);
+        benchmark_conv(*metric, context, device, stream, in_dtype, out_dtype, D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, conv->has("kernel")?generator.get():NULL);
       }
     }
   }
@@ -596,14 +618,14 @@ int main(int argc, char* argv[]){
     auto x = pool->get<std::vector<size_t>>("shape");
     param_t D = x[0], W = x[1], H = x[2], N = x[3], K = x[4], T = x[5], R = x[6], S = x[7], pad_d = x[8], pad_h = x[9], pad_w = x[10], stride_d = x[11], stride_h = x[12], stride_w = x[13];
     param_t M, P, Q;
-    sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
+    sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, 1, 1, 1, M, P, Q);
 
     if(pool->has("kernel")){
       auto x = pool->get<std::vector<size_t>>("kernel");
-      generator.reset(new sc::templates::Pool(dtype, K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, x[0], x[1], x[2], x[3]));
+      generator.reset(new sc::templates::Pool(dtype, dtype, sc::MaxPool, K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, x[0], x[1], x[2], x[3]));
     }
     else{
-      generator.reset(new sc::templates::Pool(dtype, K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w));
+      generator.reset(new sc::templates::Pool(dtype, dtype, sc::MaxPool, K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w));
     }
     if(options->has("dump"))
       dump_source(device, *generator, dump, name);
@@ -616,7 +638,7 @@ int main(int argc, char* argv[]){
         shapes = {std::make_tuple(dtype, D, W, H, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w)};
       //SuperComputing17 shapes
       if(bench->get<std::string>("suite")=="deepbench")
-        shapes = TestBench::pool(dtype);
+        shapes = SC17::pool(dtype);
       //Print results
       for(auto x: shapes){
         std::tie(dtype, D, W, H, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w) = x;

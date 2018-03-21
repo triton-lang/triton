@@ -47,7 +47,10 @@ class build_clib_subclass(build_clib):
             os.mkdir(self.build_temp)
         except OSError:
             pass
-        self.compiler.compiler_so.remove('-Wstrict-prototypes')
+        try:
+            self.compiler.compiler_so.remove("-Wstrict-prototypes")
+        except (AttributeError, ValueError):
+            pass
         for (lib_name, build_info) in libraries:
             sources = build_info.get('sources')
             if sources is None or not isinstance(sources, (list, tuple)):
@@ -123,10 +126,10 @@ class build_clib_subclass(build_clib):
                     output_dir=self.build_clib,
                     debug=self.debug
                     )
-            
+
 # Build EXTENSION
 from distutils.command.build_ext import build_ext
-                    
+
 class build_ext_subclass(build_ext):
     """
     Removes -Wstrict-prototypes from build_ext because compiling C++

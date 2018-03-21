@@ -72,7 +72,7 @@
 #include "driver_types.h"
 #include "cuComplex.h"   /* import complex data type */
 
-#include <cuda_fp16.h>
+#include "cuda_fp16.h"
 
 #include "library_types.h"
 

@@ -67,12 +67,18 @@ struct io_conf{
   size_t num_words;
 };
 
-GEMM::GEMM(DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K, param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc,
+GEMM::GEMM(DType in_dtype, DType out_dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K, param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc,
      param_t vec, param_t bc0, param_t u, param_t bc1, param_t cs0, param_t, param_t cs1, param_t ba0, param_t ba1, param_t bb0, param_t bb1, param_t zs, param_t bz, param_t gridz):
-  dtype_(dtype), AT_(AT), BT_(BT), M_(M), N_(N), K_(K), offa_(offa), lda_(lda), offb_(offb), ldb_(ldb), offc_(offc), ldc_(ldc),
+  in_dtype_(in_dtype), out_dtype_(out_dtype), AT_(AT), BT_(BT), M_(M), N_(N), K_(K), offa_(offa), lda_(lda), offb_(offb), ldb_(ldb), offc_(offc), ldc_(ldc),
   vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), ba0_(ba0), ba1_(ba1), bb0_(bb0), bb1_(bb1),
   zs_(zs), bz_(bz), gridz_(gridz), stn_(8)
-{}
+{
+  // Handle packed layouts
+  size_t vect_k = (in_dtype_==INT8X4_TYPE)?4:1;
+  if(K_ % vect_k != 0)
+    throw std::runtime_error("K must be a multiple of 4");
+  K_ /= vect_k;
+}
 
 std::vector<param_t> GEMM::tuning_params() const
 { return {vec_, bc0_, bc1_, cs0_, cs1_, u_, ba0_, ba1_, bb0_, bb1_, zs_, bz_, gridz_}; }
@@ -117,6 +123,7 @@ void GEMM::check_valid(driver::Device const & device, size_t nkernels, uint32_t*
     param_t nra = (A_outer_contig?ml:(kl*rl)) / a_bf0;
     param_t nrb = (B_outer_contig?nl:(kl*rl)) / b_bf0;
     param_t n_instructions =  nra*npa*2 + nrb*npb*2 + ms*ns*kl*rs + kl*rs*ms*ns/(vec);
+
     //Test
     bool is_valid =   a_bf0*a_bf1 == nthreads
                     &&  b_bf0*b_bf1 == nthreads
@@ -136,6 +143,9 @@ void GEMM::check_valid(driver::Device const & device, size_t nkernels, uint32_t*
                     &&  bn <= device.max_block_dim()[1]
                     &&  br <= device.max_block_dim()[2]
 
+                    && (dtype!=INT8X4_TYPE || gridr==1)
+                    && (dtype!=INT8X4_TYPE || ns % 4 == 0)
+
                     &&  vec*dtsize <= 16;
     valid[m] = is_valid;
   }
@@ -143,14 +153,19 @@ void GEMM::check_valid(driver::Device const & device, size_t nkernels, uint32_t*
 
 /* Code generation */
 std::string GEMM::dump(drv::Device const & device, std::string const & name){
-//  static const param_t warp_size = 32;
   bool A_outer_contig = AT_==ISAAC_OP_N;
   bool B_outer_contig = BT_==ISAAC_OP_T;
-  size_t dtsize = size_of(dtype_);
-  std::string dtype = arith_str(dtype_);
-  std::string io_dtype = io_str(dtype_);
-  std::string ab_dtype = dtype;
-  std::string sub_dtype = dtype;
+
+  // Input data-type
+  size_t in_dtsize = size_of(in_dtype_);
+  std::string in_word_type = format("b{}", 8*in_dtsize);
+  std::string in_compute_type = arith_str(in_dtype_);
+
+  // Output data-type
+
+
+  std::string ab_dtype = (in_dtype_ == INT8X4_TYPE)?"f32":in_compute_type;
+  std::string sub_dtype = in_compute_type;
 
 
   size_t rl = zs_*bz_;
@@ -169,40 +184,37 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   std::string As1 = A_outer_contig?"K":"M";
   std::string Bs0 = B_outer_contig?"N":"K";
   std::string Bs1 = B_outer_contig?"K":"N";
-  //Number of warps
-//  size_t nwarp0 = ceil(bm_, warp_size);
-//  size_t nwarp1 = ceil(bm_*bn_, nw0*warp_size);
-//  size_t nwarp2 = ceil(bm_*bn_*br_, nw0*nw1*warp_size);
+
 
   //Number of threads
   size_t nthreads = bc0_*bc1_*bz_;
   //Shared memory sizes/offsets
-  size_t cd_shareda = dtsize*(cl0+(A_outer_contig?0:(vec_)));
-  size_t cd_sharedb = dtsize*(cl1+(B_outer_contig?0:(vec_)));
+  size_t cd_shareda = in_dtsize*(cl0+(A_outer_contig?0:(vec_)));
+  size_t cd_sharedb = in_dtsize*(cl1+(B_outer_contig?0:(vec_)));
   size_t ncd_shareda = block;
   size_t ncd_sharedb = block;
   size_t size_shareda = cd_shareda*ncd_shareda;
   size_t size_sharedb = cd_sharedb*ncd_sharedb;
   size_t off_sharedb =  size_shareda;
-  size_t size_redc = dtsize*cl0*cl1*(bz_==1?0:bz_);
+  size_t size_redc = in_dtsize*cl0*cl1*(bz_==1?0:bz_);
   size_t size_tiles = 2*(size_shareda + size_sharedb);
-  size_t size_unswizzle = dtsize*cl0*bc1_;
+  size_t size_unswizzle = in_dtsize*cl0*bc1_;
   param_t size_shmem = std::max(size_redc, std::max(size_tiles, size_unswizzle));
   size_t double_buffer_off = size_tiles/2;
   //Byte stride
-  size_t Bvec = vec_*dtsize;
-  size_t dtbits = log2(dtsize);
+  size_t Bvec = vec_*in_dtsize;
+  size_t dtbits = log2(in_dtsize);
   //Vector suffix
   const char* vs[] = {".x", ".y", ".z", ".w"};
   if(vec_==1)
     vs[0] = "";
   //Load-Store alignments
-  io_conf Cio(ldc_, vec_, dtsize, false);
-  io_conf Aio(lda_, vec_, dtsize, false);
-  io_conf Bio(ldb_, vec_, dtsize, false);
+  io_conf Cio(ldc_, vec_, in_dtsize, false);
+  io_conf Aio(lda_, vec_, in_dtsize, false);
+  io_conf Bio(ldb_, vec_, in_dtsize, false);
 
   uint8_t is_valid;
-  param_t params[] = {dtype_, AT_, BT_, M_, N_, K_, vec_, bc0_, u_, bc1_, cs0_, us_, cs1_, ba0_, ba1_, bb0_, bb1_, zs_, bz_, gridz_};
+  param_t params[] = {out_dtype_, AT_, BT_, M_, N_, K_, vec_, bc0_, u_, bc1_, cs0_, us_, cs1_, ba0_, ba1_, bb0_, bb1_, zs_, bz_, gridz_};
   check_valid(device, 1, params, &is_valid);
   if(!is_valid)
     throw invalid_parameters();
@@ -218,14 +230,14 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
       //General offset
       iss << format("  mad.wide.u32 %p{0}, %off{0}, 1, %p{0};", x) << std::endl;
       if(gridz_>1)
-        iss << format("  mad.wide.u32 %p{0}, %offk, {1}, %p{0};", x, no_trans?format("%ld{}", x):format("{}",dtsize)) << std::endl;
+        iss << format("  mad.wide.u32 %p{0}, %offk, {1}, %p{0};", x, no_trans?format("%ld{}", x):format("{}",in_dtsize)) << std::endl;
 
       //Offset along contiguous dimension
       iss << format("  mov.u32 %off{0}0, %{0}fid0;", x) << std::endl;
       if(no_trans)
         iss << format("  add.u32 %off{0}0, %bid{1}, %off{0}0;", x, axis) << std::endl;
       iss << format("  setp.lt.s32 %pred{0}0, %off{0}0, %{1};", x, (no_trans?bound:'K')) << std::endl;
-      iss << format("  @%pred{0}0 mad.wide.u32 %p{0}, %off{0}0, {1}, %p{0};", x, dtsize) << std::endl;
+      iss << format("  @%pred{0}0 mad.wide.u32 %p{0}, %off{0}0, {1}, %p{0};", x, in_dtsize) << std::endl;
 
       //Offset along non-contiguous dimension
       iss << format("  mov.s32 %off{0}1, %{0}fid1;", x) << std::endl;
@@ -244,7 +256,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
       if(no_trans)
         iss << format("  mul.wide.u32 %stepinc{0}, {1}, %ld{0};", x, block) << std::endl;
       else
-        iss << format("  cvt.u64.u32 %stepinc{0}, {1};", x, block*dtsize) << std::endl;
+        iss << format("  cvt.u64.u32 %stepinc{0}, {1};", x, block*in_dtsize) << std::endl;
   };
 
   auto ldg = [&](char x, io_conf const & conf, size_t bf0, size_t bf1, size_t nrx, size_t npx, size_t sharedcd, std::string const & Xs0, std::string const & Xs1, bool outer_contig, bool check_bounds){
@@ -263,7 +275,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
         for(size_t s = 0; s < (check_bounds?conf.num_packed*vec_:0); s+=conf.inc){
           iss << format("  @!%{0} mov.b{1} %rr{2}{3}_{4}{5}, 0x0;", preds[s], conf.word_size, x, ri + vec_*(s/conf.num_packed/vec_), rj, vs[s/conf.num_packed % vec_]) << std::endl;
         }for(size_t s = 0; s < conf.num_packed*vec_; s+=conf.inc){
-          iss << format("  @%{0} ld.global.nc{1} %rr{2}{3}_{4}{5}, [%p{2}{4} + {6}];", preds[s], conf.suffix, x, ri + vec_*(s/conf.num_packed/vec_), rj, (conf.num_words>1)?"":vs[s/conf.num_packed % vec_], (i+s)*dtsize) << std::endl;
+          iss << format("  @%{0} ld.global.nc{1} %rr{2}{3}_{4}{5}, [%p{2}{4} + {6}];", preds[s], conf.suffix, x, ri + vec_*(s/conf.num_packed/vec_), rj, (conf.num_words>1)?"":vs[s/conf.num_packed % vec_], (i+s)*in_dtsize) << std::endl;
         }
       }
     }
@@ -272,16 +284,16 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
     for(rj = 0, j = 0 ; rj < npx ; j += bf1, rj++){
       for(ri = 0, i = 0 ; ri < nrx ; i += bf0*conf.num_packed*vec_, ri+=conf.num_packed*vec_)
         if(outer_contig)
-          iss << format("  st.shared{0}.b{1} [%write{2} + {3}], %rr{2}{4}_{5};", vv, conf.word_size, x, i*dtsize + j*sharedcd, ri, rj) << std::endl;
+          iss << format("  st.shared{0}.b{1} [%write{2} + {3}], %rr{2}{4}_{5};", vv, conf.word_size, x, i*in_dtsize + j*sharedcd, ri, rj) << std::endl;
         else
           for(size_t s = 0 ; s < vec_ ; ++s){
             if(conf.num_packed > 1){
               iss << format("  mov.b32 {{%rbh0, %rbh1}}, %rr{}{}_{}{};", x, ri, rj, vs[s]) << std::endl;
               for(size_t ss = 0; ss < conf.num_packed; ++ss)
-                iss << format("  st.shared.{0} [%write{1} + {2}], %rbh{3};", ab_dtype, x, j*dtsize + (i + s*conf.num_packed + ss)*sharedcd, ss) << std::endl;
+                iss << format("  st.shared.{0} [%write{1} + {2}], %rbh{3};", ab_dtype, x, j*in_dtsize + (i + s*conf.num_packed + ss)*sharedcd, ss) << std::endl;
             }
             else
-              iss << format("  st.shared.{0} [%write{1} + {2}], %rr{1}{3}_{4}{5};", ab_dtype, x, j*dtsize + (i+s)*sharedcd, ri, rj, vs[s]) << std::endl;
+              iss << format("  st.shared.{0} [%write{1} + {2}], %rr{1}{3}_{4}{5};", ab_dtype, x, j*in_dtsize + (i+s)*sharedcd, ri, rj, vs[s]) << std::endl;
           }
     }
 
@@ -293,7 +305,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
     iss << format("  // write{0} = shared + {1} + Bfid{2} + fid{3}*{4}", x, off, id0, id1, cdx) << std::endl;
     iss << format("  mov.u32 %write{}, %shared;", x) << std::endl;
     iss << format("  add.u32 %write{0}, %write{0}, {1};", x, off) << std::endl;
-    iss << format("  mad.lo.u32 %write{0}, %{0}fid{1}, {2},  %write{0};", x, id0, dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %write{0}, %{0}fid{1}, {2},  %write{0};", x, id0, in_dtsize) << std::endl;
     iss << format("  mad.lo.u32 %write{0}, %{0}fid{1}, {2}, %write{0};", x, id1, cdx) << std::endl;
   };
 
@@ -309,29 +321,30 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   auto lds = [&](char x, size_t nx, size_t k, size_t cdx, size_t bs){
     for(size_t r = 0; r < zs_; ++r)
     for(size_t rx = 0; rx < nx; rx+=vec_){
-      iss << format("  ld.shared{0}.{1} %r{2}{3}_{4}_{5}, [%read{2} + {6}];", vv, io_dtype, x, r, rx, k%us_, rx*bs*dtsize + (r*bz_ + k*rl)*cdx) << std::endl;
+      iss << format("  ld.shared{0}.{1} %r{2}{3}_{4}_{5}, [%read{2} + {6}];", vv, in_word_type, x, r, rx, k%us_, rx*bs*in_dtsize + (r*bz_ + k*rl)*cdx) << std::endl;
     }
   };
 
   auto fma = [&](size_t kk){
-
     for(size_t r = 0 ; r < zs_ ; ++r)
     for(size_t m = 0; m < cs0_; m+=vec_)
-      for(size_t n = 0; n < cs1_; n+=vec_){
-          for(size_t nn = 0 ; nn < vec_ ; ++nn)
-            for(size_t mm = 0 ; mm < vec_ ; ++mm){
-              std::string rc = format("%rc{}_{}_{}{}", r, m, n + nn, vs[mm]);
-              std::string ra = format("%ra{}_{}_{}{}", r, m, kk, vs[mm]);
-              std::string rb = format("%rb{}_{}_{}{}", r, n, kk, vs[nn]);
-              iss << format("  fma.rn.{0} {1}, {2}, {3}, {1};", dtype, rc, ra, rb) << std::endl;
-            }
-      }
+    for(size_t n = 0; n < cs1_; n+=vec_)
+    for(size_t nn = 0 ; nn < vec_ ; ++nn)
+    for(size_t mm = 0 ; mm < vec_ ; ++mm){
+      std::string rc = format("%rc{}_{}_{}{}", r, m, n + nn, vs[mm]);
+      std::string ra = format("%ra{}_{}_{}{}", r, m, kk, vs[mm]);
+      std::string rb = format("%rb{}_{}_{}{}", r, n, kk, vs[nn]);
+      if(in_dtype_==INT8X4_TYPE)
+        iss << format("  dp4a.{0}.{0} {1}, {2}, {3}, {1};", in_compute_type, rc, ra, rb) << std::endl;
+      else
+        iss << format("  fma.rn.{0} {1}, {2}, {3}, {1};", in_compute_type, rc, ra, rb) << std::endl;
+    }
   };
 
   auto declare_register_tile = [&](char x, size_t M, size_t N, size_t dtinc){
     for(size_t r = 0 ; r < zs_ ; ++r)
       for(size_t m = 0 ; m < M ; m+=dtinc*vec_){
-        iss << format("  .reg {}.{}", vv, io_dtype);
+        iss << format("  .reg {}.{}", vv, in_word_type);
         for(size_t n = 0 ; n < N ; n++)
           iss << format("{} %r{}{}_{}_{}", n>0?",":"", x, r, m, n);
         iss << ";" << std::endl;
@@ -339,51 +352,48 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   };
 
   iss << std::endl;
-  iss << format(".func store_col(.reg .b64 %pc, .reg .b32 %Cs0, .reg .b32 %offc0, .reg .b32 %readc, .reg .b32 %writec, .reg .{0} %beta, .reg .b32 %offc1, .reg .b32 %Cs1, .reg .b32 %idz, .reg .b32 %bidz, .param .{0} _rc[{1}])", io_dtype, cs0_) << std::endl;
+  iss << format(".func store_col(.reg .b64 %pc, .reg .b32 %Cs0, .reg .b32 %offc0, .reg .b32 %readc, .reg .b32 %writec, .reg .{0} %beta, .reg .b32 %bidz", in_word_type, cs0_);
+  for(size_t m = 0; m < cs0_; m+=vec_)
+    iss << format(", .reg {}.{} %rc{}", vv, in_word_type, m);
+  iss << ")" << std::endl;
+
   iss << "{" << std::endl;
   iss << "  .reg .b16 %rbh0, %rbh1;" << std::endl;
-  iss << format("  .reg .pred %predc<{}>, %predn, %predbeta0, %predz, %predbidze0;", cs0_) << std::endl;
+  iss << format("  .reg .pred %predc<{}>, %predbeta0, %predbidze0;", cs0_) << std::endl;
   iss << format("  .reg .b32 %offc0_<{}>;", cs0_) << std::endl;
-  iss << format("  .reg .{0} %ccol<{1}>, %dcol<{1}>;", io_dtype, cs0_) << std::endl;
-  for(size_t m = 0; m < cs0_; m+=vec_)
-    iss << format("  .reg {}.{} %rc{};", vv, io_dtype, m) << std::endl;
-  for(size_t m = 0; m < cs0_; m+=vec_)
-    iss << format("  ld.param{}.{} %rc{}, [_rc + {}];", vv, io_dtype, m, m*dtsize) << std::endl;
-
+  iss << format("  .reg .{0} %ccol<{1}>, %dcol<{1}>;", in_word_type, cs0_) << std::endl;
 
   for(size_t m = 0; m < cs0_; m++)
     iss << format("  add.u32 %offc0_{}, %offc0, {};", m, m*bc0_) << std::endl;
 
   if(gridz_ > 1){
     iss << format("  setp.eq.u32 %predbidze0, %bidz, 0;") << std::endl;
-    iss << format("  setp.eq.or.{} %predbeta0, %beta, 0, %predbidze0;", io_dtype) << std::endl;
+    iss << format("  setp.eq.or.{} %predbeta0, %beta, 0, %predbidze0;", in_word_type) << std::endl;
   }
   else
-    iss << format("  setp.eq.{} %predbeta0, %beta, 0;", io_dtype) << std::endl;
+    iss << format("  setp.eq.{} %predbeta0, %beta, 0;", in_word_type) << std::endl;
 
-  iss << format("  setp.eq.s32 %predz, %idz, 0;") << std::endl;
-  iss << format("  setp.lt.and.s32 %predn, %offc1, %Cs1, %predz;") << std::endl;
   for(size_t m = 0; m < cs0_; m++)
-    iss << format("  setp.lt.and.s32 %predc{0}, %offc0_{0}, %Cs0, %predn;", m) << std::endl;
+    iss << format("  setp.lt.s32 %predc{0}, %offc0_{0}, %Cs0;", m) << std::endl;
 
   iss << "  bar.sync 0;" << std::endl;
   for(size_t m = 0 ; m < cs0_; m+=vec_)
-    iss << format("  @%predn st.shared{}.{} [%writec + {}], %rc{};", vv, io_dtype, m*bc0_*dtsize, m) << std::endl;
+    iss << format("  st.shared{}.{} [%writec + {}], %rc{};", vv, in_word_type, m*bc0_*in_dtsize, m) << std::endl;
   iss << "  bar.sync 0;" << std::endl;
   for(size_t m = 0 ; m < cs0_; m++)
-    iss << format("  @%predn ld.shared.{} %ccol{}, [%readc + {}];", ab_dtype, m, m*bc0_*dtsize) << std::endl;
+    iss << format("  ld.shared.{} %ccol{}, [%readc + {}];", ab_dtype, m, m*bc0_*in_dtsize) << std::endl;
 
   iss << "  @%predbeta0 bra.uni BETA_DONE;" << std::endl;
   iss << "HANDLE_BETA:" << std::endl;
   for(size_t m = 0 ; m < cs0_; m++)
-    iss << format("  @%predc{} ld.global.{} %dcol{}, [%pc + {}];", m, ab_dtype, m,  m*bc0_*dtsize) << std::endl;
+    iss << format("  @%predc{} ld.global.{} %dcol{}, [%pc + {}];", m, ab_dtype, m,  m*bc0_*in_dtsize) << std::endl;
 
   for(size_t m = 0 ; m < cs0_ ; m++)
-    iss << format("  fma.rn.{0} %ccol{1}, %dcol{1}, %beta, %ccol{1};", dtype, m) << std::endl;
+    iss << format("  fma.rn.{0} %ccol{1}, %dcol{1}, %beta, %ccol{1};", ab_dtype, m) << std::endl;
 
   iss << "BETA_DONE:" << std::endl;
   for(size_t m = 0 ; m < cs0_; m++)
-    iss << format("  @%predc{} st.global.{} [%pc + {}], %ccol{};", m, ab_dtype, m*bc0_*dtsize, m) << std::endl;
+    iss << format("  @%predc{} st.global.{} [%pc + {}], %ccol{};", m, ab_dtype, m*bc0_*in_dtsize, m) << std::endl;
   iss << "}" << std::endl;
 
   iss << "// Launch with CTA sizes = (" << bc0_ << ", " << bc1_ << ", " << bz_ << ")" << std::endl;
@@ -393,7 +403,9 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << "    .param ." << ab_dtype << " _alpha, .param .b64 _pa, .param .b32 _lda, .param .b32 _offa," << std::endl;
   iss << "    .param .b64 _pb, .param .b32 _ldb, .param .b32 _offb," << std::endl;
   iss << "    .param ." << ab_dtype << " _beta," << std::endl;
-  iss << "    .param .b32 _bound, .param .b64 _plock)" << std::endl;
+  iss << "    .param .b32 _bound, .param .b64 _plock," << std::endl;
+  iss << "    .param .b32 _ab_scale, .param .b32 _c_scale, " << std::endl;
+  iss << "    .param .b64 _bias)" << std::endl;
   iss << "{" << std::endl;
   iss << std::endl;
   iss << "  .reg .b32 %bound;" << std::endl;
@@ -408,6 +420,11 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << "  // For B tile" << std::endl;
   declare_register_tile('b', cs1_, us_, 1);
 
+  iss << "  // Bias" << std::endl;
+  iss << format("  .reg .b64 %bias, %pbias<{}>;", cs0_) << std::endl;
+  iss << format("  .reg .{} %rbias<{}>;", in_word_type, cs0_) << std::endl;
+  iss << format("  .reg .pred %has_bias, %predgz, %predz;") << std::endl;
+
   iss << "  // Parameters" << std::endl;
   iss << format("  .reg .b32 %M, %N, %K;") << std::endl;
   for(size_t s = 0 ; s < vec_ ; ++s){
@@ -417,8 +434,10 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
       iss << format("  .reg .b32 %Km{};", s);
   }
 
-  iss << format("  .reg .{} %alpha;", io_dtype) << std::endl;
-  iss << format("  .reg .{} %beta;", io_dtype) << std::endl;
+  iss << format("  .reg .{} %alpha;", in_word_type) << std::endl;
+  iss << format("  .reg .{} %beta;", in_word_type) << std::endl;
+  iss << format("  .reg .b32 %ab_scale, %c_scale;", in_word_type) << std::endl;
+
   for(char x: std::vector<char>{'c', 'a', 'b'}){
     iss << format("  .reg .b64 %p{0};", x) << std::endl;
     iss << format("  .reg .b32 %ld{0}, %off{0};", x) << std::endl;
@@ -433,7 +452,9 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << format("  .reg .b64 %pa<{0}>;", npa) << std::endl;
   iss << format("  .reg .b64 %pb<{0}>;", npb) << std::endl;
   iss << format("  .reg .pred %pred<{0}>;", vec_) << std::endl;
+  iss << format("  .reg .pred %predn<{0}>;", cs1_) << std::endl;
   iss << format("  .reg .pred %predk;") << std::endl;
+  iss << format("  .reg .pred %predbias<{0}>;", cs0_) << std::endl;
   iss << format("  .reg .b64 %stepinca, %stepincb;") << std::endl;
   iss << "  // Lanes in shared memory" << std::endl;
   iss << format("  .reg .b32 %writea, %writeb, %writec;") << std::endl;
@@ -442,11 +463,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << format("  .reg .b64 %btoff;") << std::endl;
   iss << format("  .reg .b64 %plock;") << std::endl;
 
-  iss << format("  .reg .b32 %offc0, %offc1;") << std::endl;
-  for(size_t ri = 0; ri < cs0_; ri++)
-    iss << format("  .reg.b32 %offc0_{};", ri) << std::endl;
-  for(size_t rj = 0; rj < cs1_; rj+=vec_)
-    iss << format("  .reg.b32 %offc1_{};", rj) << std::endl;
+  iss << format("  .reg .b32 %offc0, %offc1, %offc0_<{}>, %offc1_<{}>;", cs0_, cs1_) << std::endl;
 
   iss << format("  .reg .b32 %offa0, %offa1;") << std::endl;
   for(size_t ri = 0 ; ri < nra; ++ri)
@@ -495,7 +512,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   for(size_t m = 0 ; m < cs0_ ; m+=vec_)
   for(size_t n = 0; n < cs1_ ; ++n)
   for(size_t mm = 0; mm < vec_ ; ++mm)
-     iss << format("  mov.{} %rc{}_{}_{}{}, 0.;", dtype, r, m, n, vs[mm]) << std::endl;
+     iss << format("  mov.{} %rc{}_{}_{}{}, 0x0;", in_word_type, r, m, n, vs[mm]) << std::endl;
 
 
 
@@ -667,61 +684,77 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   for(size_t m = 0 ; m < cs0_ ; m+=vec_)
   for(size_t n = 0; n < cs1_ ; n++)
   for(size_t s = 0; s < vec_; ++s)
-    iss << format("  add.{0} %rc0_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %rc0_{2}_{3}{4};", dtype, r, m, n, vs[s]) << std::endl;
+    iss << format("  add.{0} %rc0_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %rc0_{2}_{3}{4};", in_compute_type, r, m, n, vs[s]) << std::endl;
 
   if(bz_>1)
   {
     size_t bmn = nthreads/bz_;
     iss << ".reg .u32 %readk, %writek, %rid_mn, %rid_k;" << std::endl;
     for(size_t mn = 0; mn < cl0*cl1; mn += bmn)
-      iss << format("  .reg .{0} %rrk{1}_0, %rrk{1}_1;", ab_dtype, mn) << std::endl;
+      iss << format("  .reg .{0} %rrk{1}_0, %rrk{1}_1;", sub_dtype, mn) << std::endl;
 
-    iss << format("  mad.lo.u32 %writek, %idz, {}, %shared;", cl0*cl1*dtsize) << std::endl;
-    iss << format("  mad.lo.u32 %writek, %idmn, {}, %writek;", cs0_*cs1_*dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %idz, {}, %shared;", cl0*cl1*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %idmn, {}, %writek;", cs0_*cs1_*in_dtsize) << std::endl;
 
     iss << "  bar.sync 0;" << std::endl;
     for(size_t n = 0; n < cs1_; n ++)
     for(size_t m = 0; m < cs0_; m += vec_)
     for(size_t s = 0; s < vec_; s++){
       size_t mn = m + n*cs0_;
-      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", io_dtype, (mn + s)*dtsize, m, n, vs[s]) << std::endl;
+      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", in_word_type, (mn + s)*in_dtsize, m, n, vs[s]) << std::endl;
     }
     iss << "  bar.sync 0;" << std::endl;
 
     iss << std::endl;
     iss << format("  div.u32 %rid_mn, %id, {};", bz_) << std::endl;
     iss << format("  rem.u32 %rid_k, %id, {};", bz_) << std::endl;
-    iss << format("  mad.lo.u32 %readk, %rid_k, {}, %shared;", cl0*cl1*dtsize) << std::endl;
-    iss << format("  mad.lo.u32 %readk, %rid_mn, {}, %readk;", dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %rid_k, {}, %shared;", cl0*cl1*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %rid_mn, {}, %readk;", in_dtsize) << std::endl;
     for(size_t c = bz_/2; c > 0; c /=2){
       iss << format("  setp.lt.u32 %predr, %rid_k, {};", c) << std::endl;
       for(size_t mn = 0; mn < cl0*cl1; mn += bmn){
-        iss << format("  @%predr ld.shared.{} %rrk{}_0, [%readk + {}];", ab_dtype, mn, (mn)*dtsize) << std::endl;
-        iss << format("  @%predr ld.shared.{} %rrk{}_1, [%readk + {}];", ab_dtype, mn, (mn + c*cl0*cl1)*dtsize) << std::endl;
+        iss << format("  @%predr ld.shared.{} %rrk{}_0, [%readk + {}];", sub_dtype, mn, (mn)*in_dtsize) << std::endl;
+        iss << format("  @%predr ld.shared.{} %rrk{}_1, [%readk + {}];", sub_dtype, mn, (mn + c*cl0*cl1)*in_dtsize) << std::endl;
         iss << format("  @%predr add.{0} %rrk{1}_0, %rrk{1}_0, %rrk{1}_1;", sub_dtype, mn) << std::endl;
-        iss << format("  @%predr st.shared.{} [%readk + {}], %rrk{}_0;", ab_dtype, mn*dtsize, mn) << std::endl;
+        iss << format("  @%predr st.shared.{} [%readk + {}], %rrk{}_0;", sub_dtype, mn*in_dtsize, mn) << std::endl;
       }
       iss << "  bar.sync 0;" << std::endl;
     }
 
-
-    iss << format("  mad.lo.u32 %readk, %idmn, {}, %shared;", cs0_*cs1_*dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %idmn, {}, %shared;", cs0_*cs1_*in_dtsize) << std::endl;
     for(size_t n = 0; n < cs1_; n ++)
     for(size_t m = 0; m < cs0_; m += vec_)
     for(size_t s = 0; s < vec_; s++){
-      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%readk + {}];", io_dtype, m, n, vs[s], ((m+s) + n*cs0_)*dtsize) << std::endl;
+      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%readk + {}];", in_word_type, m, n, vs[s], ((m+s) + n*cs0_)*in_dtsize) << std::endl;
     }
   }
 
-  iss << "SCALE:" << std::endl;
-  iss << format("  ld.param.{} %alpha, [_alpha];", io_dtype) << std::endl;
-  iss << format("  ld.param.{} %beta, [_beta];", io_dtype) << std::endl;
+  iss << format("  ld.param.{} %alpha, [_alpha];", in_word_type) << std::endl;
+  iss << format("  ld.param.{} %beta, [_beta];", in_word_type) << std::endl;
+  iss << format("  ld.param.b32 %ab_scale, [_ab_scale];", in_word_type) << std::endl;
+  iss << format("  ld.param.b32 %c_scale, [_c_scale];", in_word_type) << std::endl;
 
+
+  if(in_dtype_ == INT8X4_TYPE){
+    iss << std::endl;
+    iss << "  /* ---------------------------- */" << std::endl;
+    iss << "  /* ------ Convert to FP32 ----- */" << std::endl;
+    iss << "  /* ---------------------------- */" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s){
+      iss << format("  cvt.rn.f32.s32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %ab_scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+    }
+  }
+
+
+  iss << "SCALE:" << std::endl;
   for(size_t r = 0; r < zs_; ++r)
   for(size_t m = 0 ; m < cs0_ ; m+=vec_)
   for(size_t n = 0; n < cs1_ ; n++)
   for(size_t s = 0; s < vec_; ++s)
-    iss << format("  mul.{0} %rc{1}_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %alpha;", dtype, r, m, n, vs[s]) << std::endl;
+    iss << format("  mul.{0} %rc{1}_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %alpha;", ab_dtype, r, m, n, vs[s]) << std::endl;
 
   iss << std::endl;
   iss << "STORE_C:" << std::endl;
@@ -730,35 +763,63 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << format("  .reg .pred %spin;") << std::endl;
   iss << format("  .reg .u32 %lock;") << std::endl;
   iss << format("  .reg .u64 %pc<{}>;", cs1_) << std::endl;
+  iss << format("  mad.lo.u32 %offc0, %id0, {}, %bid0;", vec_) << std::endl;
+  for(size_t m = 0; m < cs0_; m++)
+    iss << format("  add.u32 %offc0_{}, %offc0, {};", m, m/vec_*vec_*bc0_ + m % vec_) << std::endl;
 
-  iss << "  // Coalescing lanes" << std::endl;
-  iss << format("  mad.lo.u32 %writec, %id0, {}, %shared;", vec_*dtsize) << std::endl;
-  iss << format("  mad.lo.u32 %writec, %id1, {}, %writec;", cl0*dtsize) << std::endl;
+  iss << std::endl;
+  iss << "  /* ---------------------------- */" << std::endl;
+  iss << "  /* ------ Handle Bias -------- */" << std::endl;
+  iss << "  /* ---------------------------- */" << std::endl;
+  iss << format("  setp.eq.s32 %predgz, %idz, 0;") << std::endl;
+  iss << format("  setp.eq.and.s32 %predgz, %bidz, 0, %predgz;") << std::endl;
+  iss << format("  ld.param.u64 %bias, [_bias];") << std::endl;
+  iss << format("  setp.ne.b64 %has_bias, %bias, 0;") << std::endl;
+  iss << format("  @!%has_bias bra.uni BIAS_DONE;") << std::endl;
+  iss << "DO_BIAS:" << std::endl;
+  for(size_t i = 0; i < cs0_ ; i++)
+    iss << format("  mad.wide.u32 %pbias{0}, %offc0_{0}, {1}, %bias;", i, in_dtsize) << std::endl;
+  for(size_t i = 0; i < cs0_ ; i++)
+    iss << format("  setp.lt.and.s32 %predbias{0}, %offc0_{0}, %M, %predgz;", i) << std::endl;
+  for(size_t i = 0; i < cs0_ ; i++){
+    iss << format("  @%predbias{0} ld.global.{1} %rbias{0}, [%pbias{0}];", i, in_word_type) << std::endl;
+    iss << format("  @!%predbias{0} mov.{1} %rbias{0}, 0;", i, in_word_type) << std::endl;
+  }
+  for(size_t j = 0; j < cs1_ ; j++)
+  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+  for(size_t s = 0; s < vec_; ++s)
+    iss << format("  add.{0} %rc0_{1}_{2}{3}, %rc0_{1}_{2}{3}, %rbias{4};", ab_dtype, i, j, vs[s], i + s) << std::endl;
+  iss << "BIAS_DONE:" << std::endl;
 
-  iss << format("  mad.lo.u32 %readc, %id0, {}, %shared;", dtsize) << std::endl;
-  iss << format("  mad.lo.u32 %readc, %id1, {}, %readc;", cl0*dtsize) << std::endl;
 
+  iss << std::endl;
+  iss << "  /* ---------------------------- */" << std::endl;
+  iss << "  /* -------- C Pointers -------- */" << std::endl;
+  iss << "  /* ---------------------------- */" << std::endl;
   iss << format("  mad.lo.u32 %offc0, %id0, {}, %bid0;", 1) << std::endl;
   iss << format("  mad.lo.u32 %offc1, %id1, {}, %bid1;", vec_) << std::endl;
+  for(size_t n = 0; n < cs1_; n++)
+    iss << format("  add.u32 %offc1_{}, %offc1, {};", n, n/vec_*vec_*bc1_ + n % vec_) << std::endl;
+
   iss << format("  shl.b32 %ldc, %ldc, {};", dtbits) << std::endl;
-  iss << format("  mad.wide.u32 %pc, %offc, {}, %pc;", dtsize) << std::endl;
-  iss << format("  mad.wide.u32 %pc, %offc0, {}, %pc;", dtsize) << std::endl;
-  iss << format("  mad.wide.u32 %pc, %offc1, %ldc, %pc;", dtsize) << std::endl;
-
-  for(size_t n = 0; n < cs1_; n += vec_)
-    iss << format("  mad.wide.u32 %pc{}, {}, %ldc, %pc;", n, n*bc1_) << std::endl;
+  iss << format("  mad.wide.u32 %pc, %offc, {}, %pc;", in_dtsize) << std::endl;
+  iss << format("  mad.wide.u32 %pc, %offc0, {}, %pc;", in_dtsize) << std::endl;
   for(size_t n = 0; n < cs1_; n ++)
-    iss << format("  mad.wide.u32 %pc{}, {}, %ldc, %pc{};", n, n % (vec_), n / (vec_) * vec_) << std::endl;
+    iss << format("  mad.wide.u32 %pc{0}, %offc1_{0}, %ldc, %pc;", n) << std::endl;
 
-  for(size_t s = 0 ; s < vec_ ; ++s)
-    iss << format("  sub.s32 %Nm{0}, %N, {0};", s) << std::endl;
-  for(size_t m = 0; m < cs0_; m++)
-    iss << format("  add.u32 %offc0_{}, %offc0, {};", m, m*bc0_) << std::endl;
-  for(size_t n = 0; n < cs1_; n+=vec_)
-    iss << format("  add.u32 %offc1_{}, %offc1, {};", n, n*bc1_) << std::endl;
+  iss << "  // Coalescing lanes" << std::endl;
+  iss << format("  mad.lo.u32 %writec, %id0, {}, %shared;", vec_*in_dtsize) << std::endl;
+  iss << format("  mad.lo.u32 %writec, %id1, {}, %writec;", cl0*in_dtsize) << std::endl;
+
+  iss << format("  mad.lo.u32 %readc, %id0, {}, %shared;", in_dtsize) << std::endl;
+  iss << format("  mad.lo.u32 %readc, %id1, {}, %readc;", cl0*in_dtsize) << std::endl;
 
 
   if(gridz_ > 1){
+      iss << std::endl;
+      iss << "  /* ---------------------------- */" << std::endl;
+      iss << "  /* ---------- Spin ----------- */" << std::endl;
+      iss << "  /* ---------------------------- */" << std::endl;
       iss << "  mad.wide.u32 %plock, %bid, 4, %plock;" << std::endl;
       iss << "  mov.u32 %lock, 0;" << std::endl;
       iss << "SPIN: " << std::endl;
@@ -767,18 +828,28 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
       iss << "  @%spin bra.uni SPIN;" << std::endl;
 
       iss << format("  setp.eq.u32 %predbidze0, %bidz, 0;") << std::endl;
-      iss << format("  @!%predbidze0 mov.{} %beta, 1.;", dtype) << std::endl;
+      iss << format("  @!%predbidze0 mov.{} %beta, 1.;", ab_dtype) << std::endl;
   }
 
-
-  iss << format("  .param .{} _rc[{}];", io_dtype, cs0_) << std::endl;
+  iss << std::endl;
+  iss << "  /* ---------------------------- */" << std::endl;
+  iss << "  /* ---------- Write back ------ */" << std::endl;
+  iss << "  /* ---------------------------- */" << std::endl;
+  iss << format("  setp.eq.s32 %predz, %idz, 0;") << std::endl;
   for(size_t n = 0; n < cs1_; ++n){
+    iss << format("  setp.lt.and.s32 %predn{0}, %offc1_{0}, %N, %predz;", n) << std::endl;
+    iss << format("  @%predn{0} call.uni store_col, (%pc{0}, %M, %offc0, %readc, %writec, %beta, %bidz", n);
     for(size_t m = 0; m < cs0_; m+=vec_)
-      iss << format("  st.param{}.{} [_rc + {}], %rc0_{}_{};", vv, io_dtype, m*dtsize, m, n) << std::endl;
-    iss << format("  call.uni store_col, (%pc{}, %M, %offc0, %readc, %writec, %beta,  %offc1_{}, %Nm{}, %idz, %bidz, _rc);", n, n/(vec_)*vec_, n%(vec_)) << std::endl;
+      iss << format(", %rc0_{}_{}", m, n);
+    iss << ");" << std::endl;
   }
+
 
   if(gridz_>1){
+    iss << std::endl;
+    iss << "  /* ---------------------------- */" << std::endl;
+    iss << "  /* ------- Update Lock -------- */" << std::endl;
+    iss << "  /* ---------------------------- */" << std::endl;
     iss << "  setp.eq.u32 %predr, %id, 0;" << std::endl;
     iss << "  add.u32 %bidz, %bidz, 1;" << std::endl;
     iss << "  bar.sync 0;" << std::endl;
@@ -787,11 +858,10 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   }
   iss << "}" << std::endl;
 
-
   return iss.str();
 }
 
-void GEMM::enqueue(driver::Kernel &gemm, driver::Stream &queue, const scalar& alpha, const driver::Buffer &A, const driver::Buffer &B, const scalar& beta, driver::Buffer &C)
+void GEMM::enqueue(driver::Kernel &kernel, driver::Stream &queue, const scalar& alpha, const driver::Buffer &A, const driver::Buffer &B, const scalar& beta, driver::Buffer &C, float a_scale, float b_scale, float c_scale, driver::Buffer const *bias)
 {
   //Grid-Block
   int32_t ml = bc0_*cs0_, nl = bc1_*cs1_, rl = bz_*zs_;
@@ -807,29 +877,39 @@ void GEMM::enqueue(driver::Kernel &gemm, driver::Stream &queue, const scalar& al
     locks_pool.insert(std::make_pair(queue, driver::Buffer(queue.context(), 64*64*4)));
   driver::Buffer& locks = locks_pool.at(queue);
 
-  //Arguments
-  gemm.setArg(0, M_);
-  gemm.setArg(1, N_);
-  gemm.setArg(2, K_);
-  gemm.setArg(3, C);
-  gemm.setArg(4, ldc_);
-  gemm.setArg(5, offc_);
-  gemm.setArg(6, size_of(dtype_), alpha.data());
-  gemm.setArg(7, A);
-  gemm.setArg(8, lda_);
-  gemm.setArg(9, offa_);
-  gemm.setArg(10, B);
-  gemm.setArg(11, ldb_);
-  gemm.setArg(12, offb_);
-  gemm.setArg(13, size_of(dtype_), beta.data());
-  gemm.setArg(14, bound);
-  gemm.setArg(15, locks);
+  // Enqueue
+  size_t idx = 0;
+  kernel.setArg(idx++, M_);
+  kernel.setArg(idx++, N_);
+  kernel.setArg(idx++, K_);
+  // C
+  kernel.setArg(idx++, C);
+  kernel.setArg(idx++, ldc_);
+  kernel.setArg(idx++, offc_);
+  kernel.setArg(idx++, size_of(in_dtype_), alpha.data());
+  // A
+  kernel.setArg(idx++, A);
+  kernel.setArg(idx++, lda_);
+  kernel.setArg(idx++, offa_);
+  // B
+  kernel.setArg(idx++, B);
+  kernel.setArg(idx++, ldb_);
+  kernel.setArg(idx++, offb_);
+  kernel.setArg(idx++, size_of(in_dtype_), beta.data());
+  kernel.setArg(idx++, bound);
+  // Locks
+  kernel.setArg(idx++, locks);
+  // Scales
+  kernel.setArg(idx++, (float)1/(a_scale*b_scale));
+  kernel.setArg(idx++, c_scale);
+  // Bias
+  kernel.setArg(idx++, bias?*bias:(uint64_t)0);
 
 //  std::cout << gridM << " " << gridN << " " << std::endl;
   //Launch
   if(gridz_ > 1)
     locks.set_zero(queue, gridM*gridN*4);
-  queue.enqueue(gemm, {gridM, gridN, gridz_}, {bc0_, bc1_, bz_});
+  queue.enqueue(kernel, {gridM, gridN, gridz_}, {bc0_, bc1_, bz_});
 }
 
 }

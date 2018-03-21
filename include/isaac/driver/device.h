@@ -48,7 +48,7 @@ public:
     SM_5_2,
     SM_6_0,
     SM_6_1,
-		SM_7_0,
+    SM_7_0,
     UNKNOWN
   };
 

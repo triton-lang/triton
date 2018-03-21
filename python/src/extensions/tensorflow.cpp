@@ -18,6 +18,13 @@ using namespace tensorflow;
 using GPUDevice = Eigen::GpuDevice;
 namespace drv = isaac::driver;
 
+isaac::DType sc_dtype(DataType dtype){
+  switch(dtype){
+    case DT_FLOAT: return isaac::FLOAT_TYPE;
+    default: throw std::runtime_error("DataType not supported");
+  }
+}
+
 REGISTER_OP("Conv2d")
     .Attr("T: {float}")
     .Input("input: T")
@@ -52,11 +59,13 @@ class ConvOp : public OpKernel {
   void Compute(OpKernelContext* context){
     GPUDevice device =  context->eigen_device<GPUDevice>();
     drv::Stream stream(device.stream(), false);
-    isaac::DType dtype = isaac::FLOAT_TYPE;
 
     /* Get inputs */
     const Tensor& inputs = context->input(0);
     const Tensor& filter = context->input(1);
+
+    /* Get dtype */
+    isaac::DType dtype = sc_dtype(inputs.dtype());
 
     /* Extract shapes */
     // Input
@@ -102,12 +111,11 @@ class ConvOp : public OpKernel {
       return;
 
     /* Compute convolution */
-    isaac::scalar alpha(1., dtype), beta(0., dtype);
     isaac::driver::Buffer I(stream.context(), (CUdeviceptr)inputs.flat<float>().data(), false);
     isaac::driver::Buffer F(stream.context(), (CUdeviceptr)filter.flat<float>().data(), false);
     isaac::driver::Buffer O(stream.context(), (CUdeviceptr)output->flat<float>().data(), false);
     isaac::CONV(stream.context().device(), stream, dtype,
-                N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O);
+                N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, F, O);
   }
 
 private:
