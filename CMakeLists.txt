@@ -8,6 +8,10 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
 
+#QtCreator: add visibility of headers
+file( GLOB_RECURSE ALL_SRC *.cpp *.hpp *.h *.py)
+add_custom_target( ALL SOURCES ${ALL_SRC} )
+
 #Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include/isaac/external/CUDA)

@@ -56,9 +56,26 @@ void export_templates(py::module&& m){
       .value("OP_T", sc::IsaacOperation_t::ISAAC_OP_T)
       .export_values();
 
+  py::enum_<sc::ActivationType>(m, "activation")
+      .value("LINEAR", sc::ActivationType::Linear)
+      .value("RELU", sc::ActivationType::ReLU)
+      .value("ELU", sc::ActivationType::ELU)
+      .value("SIGMOID", sc::ActivationType::Sigmoid)
+      .export_values();
+
+  py::enum_<sc::ResidualType>(m, "residual")
+      .value("NO_RESIDUAL", sc::ResidualType::NoResidual)
+      .value("ADD_RESIDUAL", sc::ResidualType::AddResidual)
+      .value("CAT_RESIDUAL", sc::ResidualType::CatResidual)
+      .export_values();
+
+  py::enum_<sc::PoolType>(m, "pool")
+      .value("MAX_POOL", sc::PoolType::MaxPool)
+      .value("AVG_POOL", sc::PoolType::AvgPool)
+      .export_values();
 
   py::class_<tpt::GEMM>(m, "GEMM")
-      .def(py::init<sc::DType,sc::IsaacOperation_t,sc::IsaacOperation_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
+      .def(py::init<sc::DType,sc::DType,sc::IsaacOperation_t,sc::IsaacOperation_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
                     param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t>())
       .def("dump", &tpt::GEMM::dump)
       .def("enqueue", &tpt::GEMM::enqueue)
@@ -71,8 +88,16 @@ void export_templates(py::module&& m){
 
 
   py::class_<tpt::Conv>(m, "Conv")
-      .def(py::init<sc::DType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
-                    param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t, param_t, param_t, param_t, param_t, param_t>())
+      .def(py::init<
+                 sc::DType, sc::DType,
+                  param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, //shapes
+                  param_t, param_t, param_t, //pad
+                  param_t, param_t, param_t, //stride
+                  param_t, param_t, param_t, //upsample
+                  sc::ActivationType, param_t, //number of outputs
+                  sc::ResidualType, param_t, param_t, param_t, param_t, param_t, param_t, param_t, // Residual
+                  param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t // Tuning
+                 >())
       .def("dump", &tpt::Conv::dump)
       .def("enqueue", &tpt::Conv::enqueue)
       .def_static("check_valid", check_valid<tpt::Conv>)
@@ -83,7 +108,7 @@ void export_templates(py::module&& m){
 
 
   py::class_<tpt::Pool>(m, "Pool")
-      .def(py::init<sc::DType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
+      .def(py::init<sc::DType, sc::DType, sc::PoolType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
                     param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t>())
       .def("dump", &tpt::Pool::dump)
       .def("enqueue", &tpt::Pool::enqueue)
