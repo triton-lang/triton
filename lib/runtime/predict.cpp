@@ -28,6 +28,7 @@
 #include <cstring>
 #include <algorithm>
 #include <sstream>
+#include <numeric>
 #include "isaac/runtime/predict.h"
 #include "isaac/templates/conv.h"
 #include "isaac/tools/bench.hpp"

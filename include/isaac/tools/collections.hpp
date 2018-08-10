@@ -27,6 +27,7 @@
 #include <sstream>
 #include <iterator>
 #include <algorithm>
+#include <numeric>
 #include <memory>
 #include <map>
 #include <set>
