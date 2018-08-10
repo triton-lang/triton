@@ -25,6 +25,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 #include "isaac/scalar.h"
 
 namespace isaac{
