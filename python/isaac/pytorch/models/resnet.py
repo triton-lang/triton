@@ -78,7 +78,7 @@ class ResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
+        x.data = x.view(x.size(0), -1).data
         x = self.fc(x)
         return x
 

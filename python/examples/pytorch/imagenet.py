@@ -38,15 +38,16 @@ def main():
     print('Quantizing... ', end='', flush=True)
     #resnet_ref = torchvision.models.__dict__[args.arch](pretrained=True).cuda()
     #resnet_ref.eval()
-    resnet_ref = isaac.pytorch.models.resnet(args.arch)
-    resnet_sc = isaac.pytorch.models.resnet(args.arch)
+    resnet_ref = isaac.pytorch.models.resnet(args.arch).cuda()
+    resnet_sc = isaac.pytorch.models.resnet(args.arch).cuda()
     isaac.pytorch.quantize(resnet_sc, val_loader, args.calibration_batches)
     print('')
 
     # Benchmark
     print('Performance: ', end='', flush=True)
     input, target = next(iter(val_loader))
-    input = torch.autograd.Variable(input, volatile=True).cuda()
+    with torch.no_grad():
+        input = torch.autograd.Variable(input).cuda()
     y_ref = resnet_ref(input)
     y_sc = resnet_sc(input)
     t_sc = [x for x in timeit.repeat(lambda: (resnet_sc(input), torch.cuda.synchronize()), repeat=10, number=1)]
@@ -54,8 +55,8 @@ def main():
     print('{:.2f} Image/s (Isaac) vs. {:.2f} Image/s (PyTorch)'.format(input.size()[0]/min(t_sc), input.size()[0]/min(t_ref)))
 
     # Accuracy
-    #criterion = nn.CrossEntropyLoss().cuda()
-    #validate(val_loader, resnet_sc, criterion)
+    criterion = nn.CrossEntropyLoss().cuda()
+    validate(val_loader, resnet_sc, criterion)
 
 
 def validate(val_loader, model, criterion, progress_frequency = 10):
@@ -69,8 +70,9 @@ def validate(val_loader, model, criterion, progress_frequency = 10):
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
         target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input, volatile=True).cuda()
-        target_var = torch.autograd.Variable(target, volatile=True).cuda()
+        with torch.no_grad():
+            input_var = torch.autograd.Variable(input).cuda()
+            target_var = torch.autograd.Variable(target).cuda()
 
         # compute output
         output = model(input_var)
@@ -78,9 +80,9 @@ def validate(val_loader, model, criterion, progress_frequency = 10):
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
-        top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
+        losses.update(float(loss.data), float(input.size(0)))
+        top1.update(float(prec1), float(input.size(0)))
+        top5.update(float(prec5), float(input.size(0)))
 
         # measure elapsed time
         batch_time.update(time.time() - end)

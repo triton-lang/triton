@@ -40,7 +40,7 @@ void GEMM(driver::Device const &, driver::Stream & stream,
 {
   typedef std::tuple<driver::Stream, DType, DType, IsaacOperation_t, IsaacOperation_t, std::vector<param_t>> key_type;
   // Build the generator if necessary
-  static cpp::CachedMap<key_type, std::shared_ptr<templates::GEMM>> inference([&](key_type const & key){
+  static cpp::CachedMap<key_type, std::shared_ptr<templates::GEMM>> inference([optimization_level](key_type const & key){
     driver::Stream & stream = (driver::Stream&)std::get<0>(key);
     DType in_dtype = std::get<1>(key);
     DType out_dtype = std::get<2>(key);
@@ -52,7 +52,7 @@ void GEMM(driver::Device const &, driver::Stream & stream,
   });
 
   // Build the kernel
-  static cpp::CachedMap<std::pair<driver::Stream, templates::GEMM*>, std::shared_ptr<driver::Kernel>> kernels([&](std::pair<driver::Stream, templates::GEMM*> key){
+  static cpp::CachedMap<std::pair<driver::Stream, templates::GEMM*>, std::shared_ptr<driver::Kernel>> kernels([](std::pair<driver::Stream, templates::GEMM*> key){
     driver::Context const & context = key.first.context();
     driver::Module module(context, key.second->dump(context.device(), "gemm"));
     return std::make_shared<driver::Kernel>(module, "gemm");
@@ -78,9 +78,10 @@ void CONV(driver::Device const &, driver::Stream & stream,
           ResidualType residual, param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, driver::Buffer const *Z,
           templates::Conv* generator, size_t optimization_level)
 {
+
   typedef std::tuple<driver::Stream, DType, DType, std::vector<param_t>> key_type;
   // Build the generator if necessary
-  static cpp::CachedMap<key_type, std::shared_ptr<templates::Conv>> inference([&](key_type const & key){
+  static cpp::CachedMap<key_type, std::shared_ptr<templates::Conv>> inference([optimization_level](key_type const & key){
     driver::Stream & stream = (driver::Stream&)std::get<0>(key);
     DType in_dtype = std::get<1>(key);
     DType out_dtype = std::get<2>(key);
@@ -91,7 +92,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
   });
 
   // Build the kernel
-  static cpp::CachedMap<std::pair<driver::Stream, templates::Conv*>, std::shared_ptr<driver::Kernel>> kernels([&](std::pair<driver::Stream, templates::Conv*> const & key){
+  static cpp::CachedMap<std::pair<driver::Stream, templates::Conv*>, std::shared_ptr<driver::Kernel>> kernels([](std::pair<driver::Stream, templates::Conv*> const & key){
     driver::Context const & context = key.first.context();
     driver::Module module(context, key.second->dump(context.device(), "conv"));
     return std::make_shared<driver::Kernel>(module, "conv");
@@ -114,7 +115,7 @@ void POOL(driver::Device const &, driver::Stream & stream,
 {
   typedef std::tuple<driver::Stream, DType, DType, std::vector<param_t>> key_type;
   // Build the generator if necessary
-  static cpp::CachedMap<key_type, std::shared_ptr<templates::Pool>> inference([&](key_type const & key){
+  static cpp::CachedMap<key_type, std::shared_ptr<templates::Pool>> inference([optimization_level](key_type const & key){
     driver::Stream & stream = (driver::Stream&)std::get<0>(key);
     runtime::PoolProfile* profile = (runtime::PoolProfile*)runtime::database.at({stream.context().device().architecture(), runtime::POOL}).get();
     DType in_dtype = std::get<1>(key);
@@ -124,7 +125,7 @@ void POOL(driver::Device const &, driver::Stream & stream,
     return std::make_shared<templates::Pool>(result);
   });
   // Build the kernel
-  static cpp::CachedMap<std::pair<driver::Stream, templates::Pool*>, std::shared_ptr<driver::Kernel>> kernels([&](std::pair<driver::Stream, templates::Pool*> const & key){
+  static cpp::CachedMap<std::pair<driver::Stream, templates::Pool*>, std::shared_ptr<driver::Kernel>> kernels([](std::pair<driver::Stream, templates::Pool*> const & key){
     driver::Context const & context = key.first.context();
     driver::Module module(context, key.second->dump(context.device(), "pool"));
     return std::make_shared<driver::Kernel>(module, "pool");

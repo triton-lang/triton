@@ -39,10 +39,10 @@ class ConvNdFunction(Function):
         self.optimization_level = optimization_level
 
     def forward(self, input, weight, bias, z):
-        z = z if z.size() else self.ffi.NULL
+        z = z if z.nelement() else self.ffi.NULL
         bias = bias if bias.size() else self.ffi.NULL
         output = input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor)
-        T = torch.utils.ffi._torch_to_cffi.get(type(output))
+        T = torch.utils.ffi._torch_to_cffi.get(output.type())
         outputs = self.ffi.new(T + '*[]', [self.ffi.cast(T + '*', x._cdata) for x in [output]])
         output_scales = self.ffi.new('float[]', [self.scale[2]])
         self.function(input, weight, outputs, 1,
@@ -74,12 +74,11 @@ class PoolNdFunction(Function):
 
     def forward(self, input):
         output = input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor)
-
         self.function(input, output,
                       self.type,
                       self.kernel_size[0], self.kernel_size[1], self.kernel_size[2],
                       self.pad[0], self.pad[1], self.pad[2],
-                      self.scale[0], self.scale[1],
+                      float(self.scale[0]), float(self.scale[1]),
                       self.strides[0], self.strides[1], self.strides[2],
                       self.optimization_level)
         return output
@@ -133,7 +132,7 @@ class Quantizer:
 
         # Truncation indices
         abs_data = torch.abs(data)
-        a, b = torch.min(abs_data), torch.max(abs_data)
+        a, b = float(torch.min(abs_data)), float(torch.max(abs_data))
         epsilon = (b - a)*1e-2
         for i in range(16):
             c = (a + b) / 2
@@ -275,8 +274,9 @@ def quantize(model, loader, num_iter, idx = 0):
     for i in range(quantizer.stages):
         iterator = iter(loader)
         for j in range(num_iter):
-            input = torch.autograd.Variable(next(iterator)[idx], volatile=True).cuda()
-            model.forward(input)
+            with torch.no_grad():
+                input = torch.autograd.Variable(next(iterator)[idx]).cuda()
+                model.forward(input)
         if i < quantizer.stages - 1:
             do_on_quantizable(lambda x: x.increment_stage())
 
@@ -292,7 +292,7 @@ def from_chwn_idx(dim):
 
 def transpose_pack(x, scale):
     dim = len(x.size())
-    x.data = PackNd(x.data.permute(*from_chwn_idx(dim)).clone(), scale, 0.0)
+    x.data = PackNd(x.data.permute(*from_chwn_idx(dim)).clone(), float(scale), 0.0)
     x.data = x.data.permute(*to_chwn_idx(dim)).clone()
 
 class ConvNd(nn.modules.conv._ConvNd, Quantizable):
@@ -319,7 +319,7 @@ class ConvNd(nn.modules.conv._ConvNd, Quantizable):
         bias = self.bias if self.bias is not None else torch.autograd.Variable()
         # Computation
         y = ConvNdFunction(self.activation, self.alpha, self.scale, pad=self.padding, strides=self.stride, upsample=self.upsample, crop=crop, quantized_in=self.quantized_in, quantized_out = self.quantized_out, residual = self.residual)\
-                          (x, self.weight, bias, torch.autograd.Variable() if z is None else z)
+                          (x, self.weight, bias, torch.autograd.Variable().cuda() if z is None else z)
         # Quantize if requested
         Quantizable.update(self, x, y, z)
         return y
@@ -475,8 +475,8 @@ def convert(model, reference, filter = lambda x: True):
         var = extract(reference_dict['{}.running_var'.format(y)]).cuda()
         alpha = gamma / torch.sqrt(var + eps)
         # Adjust conv weights/bias
-        conv_bias = result_dict['{}.bias'.format(x)]
-        conv_weight = result_dict['{}.weight'.format(x)]
+        conv_bias = result_dict['{}.bias'.format(x)].cuda()
+        conv_weight = result_dict['{}.weight'.format(x)].cuda()
         conv_bias = conv_bias*alpha + (beta - mean*alpha)
         for i in range(len(alpha)):
             if(len(conv_weight.size())==4):
