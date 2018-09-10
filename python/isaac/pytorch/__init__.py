@@ -78,7 +78,7 @@ class PoolNdFunction(Function):
                       self.type,
                       self.kernel_size[0], self.kernel_size[1], self.kernel_size[2],
                       self.pad[0], self.pad[1], self.pad[2],
-                      float(self.scale[0]), float(self.scale[1]),
+                      self.scale[0], self.scale[1],
                       self.strides[0], self.strides[1], self.strides[2],
                       self.optimization_level)
         return output
@@ -292,7 +292,7 @@ def from_chwn_idx(dim):
 
 def transpose_pack(x, scale):
     dim = len(x.size())
-    x.data = PackNd(x.data.permute(*from_chwn_idx(dim)).clone(), float(scale), 0.0)
+    x.data = PackNd(x.data.permute(*from_chwn_idx(dim)).clone(), scale, 0.0)
     x.data = x.data.permute(*to_chwn_idx(dim)).clone()
 
 class ConvNd(nn.modules.conv._ConvNd, Quantizable):
@@ -319,7 +319,7 @@ class ConvNd(nn.modules.conv._ConvNd, Quantizable):
         bias = self.bias if self.bias is not None else torch.autograd.Variable()
         # Computation
         y = ConvNdFunction(self.activation, self.alpha, self.scale, pad=self.padding, strides=self.stride, upsample=self.upsample, crop=crop, quantized_in=self.quantized_in, quantized_out = self.quantized_out, residual = self.residual)\
-                          (x, self.weight, bias, torch.autograd.Variable().cuda() if z is None else z)
+                          (x, self.weight, bias, torch.autograd.Variable() if z is None else z)
         # Quantize if requested
         Quantizable.update(self, x, y, z)
         return y

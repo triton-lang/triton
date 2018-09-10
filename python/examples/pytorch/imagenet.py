@@ -52,7 +52,7 @@ def main():
     y_sc = resnet_sc(input)
     t_sc = [x for x in timeit.repeat(lambda: (resnet_sc(input), torch.cuda.synchronize()), repeat=10, number=1)]
     t_ref = [x for x in timeit.repeat(lambda: (resnet_ref(input), torch.cuda.synchronize()), repeat=10, number=1)]
-    print('{:.2f} Image/s (Isaac) vs. {:.2f} Image/s (PyTorch)'.format(input.size()[0]/min(t_sc), input.size()[0]/min(t_ref)))
+    print('{:.2f} Image/s (INT8) vs. {:.2f} Image/s (FP32)'.format(input.size()[0]/min(t_sc), input.size()[0]/min(t_ref)))
 
     # Accuracy
     criterion = nn.CrossEntropyLoss().cuda()
