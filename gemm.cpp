@@ -138,14 +138,12 @@ int main(){
     if(!AT && BT) mma_id = llvm::Intrinsic::tlvm_mma_nt;
     if(AT && !BT) mma_id = llvm::Intrinsic::tlvm_mma_tn;
     if(AT && BT) mma_id = llvm::Intrinsic::tlvm_mma_tt;
-    llvm::Function* broadcast_int32 = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_broadcast_1d, {int32_tile_t, int32_slice_t});
-    llvm::Function* broadcast_int1 = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_broadcast_1d, {int1_tile_t, int1_slice_t});
     llvm::Function* outer_add = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_outer_add, {int32_tile_t, int32_slice_t, int32_slice_t});
     llvm::Function* outer_and = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_outer_and, {int1_tile_t, int1_slice_t, int1_slice_t});
     llvm::Function* mma = llvm::Intrinsic::getDeclaration(module.get(), mma_id, {tile_t});
     llvm::Function* reshape = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_reshape_2d, {tile_t});
-    llvm::Function* splat_2d = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_splat_2d, {mask_tile_t, tile_t, bool_t});
-    llvm::Function* splat_1d = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_splat_1d, {int32_slice_t, int32_slice_t, int32_t});
+    llvm::Function* splat_2d = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_splat_2d, {mask_tile_t, bool_t});
+    llvm::Function* splat_1d = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_splat_1d, {int32_slice_t, int32_t});
     llvm::Function* masked_load = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_masked_load, {tile_t, tile_ptr_t, mask_tile_t});
     llvm::Function* masked_store = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::tlvm_masked_store, {tile_t, tile_ptr_t, mask_tile_t});
 
@@ -215,8 +213,8 @@ int main(){
       std::swap(incb0, incb1);
     }
 
-    llvm::CallInst* tlda = builder.CreateCall(splat_1d, {sa1, AS0}, "lda");
-    llvm::CallInst* tldb = builder.CreateCall(splat_1d, {sb1, BS1}, "ldb");
+    llvm::CallInst* tlda = builder.CreateCall(splat_1d, {ba1, AS0}, "lda");
+    llvm::CallInst* tldb = builder.CreateCall(splat_1d, {bb1, BS1}, "ldb");
     llvm::CallInst* offa = builder.CreateCall(outer_add, {sa0, builder.CreateMul(sa1, tlda)}, "offa");
     llvm::CallInst* offb = builder.CreateCall(outer_add, {sb0, builder.CreateMul(sb1, tldb)}, "offb");
     llvm::CallInst* startpa = builder.CreateCall(gtp, {arguments[0], offa}, "startpa");
@@ -225,10 +223,10 @@ int main(){
     llvm::LoadInst* startfb = builder.CreateLoad(startpb, "startfb");
     llvm::Value* starta = builder.CreateCall(reshape, {startfa, ba0, ba1}, "starta");
     llvm::Value* startb = builder.CreateCall(reshape, {startfb, bb0, bb1}, "startb");
-    llvm::Value* tinca0 = builder.CreateCall(splat_1d, {sa0, builder.CreateMul(inca0, AS0)});
-    llvm::Value* tinca1 = builder.CreateCall(splat_1d, {sa1, builder.CreateMul(inca1, AS1)});
-    llvm::Value* tincb0 = builder.CreateCall(splat_1d, {sb0, builder.CreateMul(incb0, BS0)});
-    llvm::Value* tincb1 = builder.CreateCall(splat_1d, {sb1, builder.CreateMul(incb1, BS1)});
+    llvm::Value* tinca0 = builder.CreateCall(splat_1d, {ba0, builder.CreateMul(inca0, AS0)}, "tinca0");
+    llvm::Value* tinca1 = builder.CreateCall(splat_1d, {ba1, builder.CreateMul(inca1, AS1)});
+    llvm::Value* tincb0 = builder.CreateCall(splat_1d, {bb0, builder.CreateMul(incb0, BS0)});
+    llvm::Value* tincb1 = builder.CreateCall(splat_1d, {bb1, builder.CreateMul(incb1, BS1)});
     llvm::Value* inca = builder.CreateCall(outer_add, {tinca0, tinca1}, "inca");
     llvm::Value* incb = builder.CreateCall(outer_add, {tincb0, tincb1}, "incb");
     // Enter loop
@@ -258,8 +256,8 @@ int main(){
     // End condition
     llvm::Value* no_bounds_check = builder.CreateICmpSGT(nextk, bound);
     // Masks
-    llvm::Value* maska = builder.CreateCall(splat_2d, {startfa, no_bounds_check}, "maska");
-    llvm::Value* maskb = builder.CreateCall(splat_2d, {startfb, no_bounds_check}, "maskb");
+    llvm::Value* maska = builder.CreateCall(splat_2d, {ba0, ba1, no_bounds_check}, "maska");
+    llvm::Value* maskb = builder.CreateCall(splat_2d, {bb0, bb1, no_bounds_check}, "maskb");
     // Pre-fetch
     llvm::Value* nextfa = builder.CreateCall(masked_load, {nextpa, maska}, "nextfa");
     llvm::Value* nextfb = builder.CreateCall(masked_load, {nextpb, maskb}, "nextfb");
@@ -277,10 +275,10 @@ int main(){
     builder.CreateCondBr(exit, EpilogueBB, LastIterBB);
     // Last Iteration
     builder.SetInsertPoint(LastIterBB);
-    llvm::Value* in_bounds_a0 = builder.CreateICmpSLT(aasm, builder.CreateCall(splat_1d, {aasm, M}));
-    llvm::Value* in_bounds_a1 = builder.CreateICmpSLT(ask, builder.CreateCall(splat_1d, {ask, bk}));
-    llvm::Value* in_bounds_b0 = builder.CreateICmpSLT(bbsn, builder.CreateCall(splat_1d, {bbsn, N}));
-    llvm::Value* in_bounds_b1 = builder.CreateICmpSLT(bsk, builder.CreateCall(splat_1d, {bsk, bk}));
+    llvm::Value* in_bounds_a0 = builder.CreateICmpSLT(aasm, builder.CreateCall(splat_1d, {ba0, M}));
+    llvm::Value* in_bounds_a1 = builder.CreateICmpSLT(ask, builder.CreateCall(splat_1d, {ba1, bk}));
+    llvm::Value* in_bounds_b0 = builder.CreateICmpSLT(bbsn, builder.CreateCall(splat_1d, {bb0, N}));
+    llvm::Value* in_bounds_b1 = builder.CreateICmpSLT(bsk, builder.CreateCall(splat_1d, {bb1, bk}));
     llvm::Value* lastmaska = builder.CreateCall(outer_and, {in_bounds_a0, in_bounds_a1}, "lastmaska");
     llvm::Value* lastmaskb = builder.CreateCall(outer_and, {in_bounds_b0, in_bounds_b1}, "lastmaskb");
     llvm::Value* lastfa = builder.CreateCall(masked_load, {nextpa, lastmaska}, "lastfa");
@@ -299,11 +297,11 @@ int main(){
     builder.SetInsertPoint(EpilogueBB);
     llvm::CallInst* sm = builder.CreateCall(read_slice_x, {bm}, "sm");
     llvm::CallInst* sn = builder.CreateCall(read_slice_y, {bn}, "sn");
-    llvm::CallInst* ldc = builder.CreateCall(splat_1d, {sn, M}, "lda");
+    llvm::CallInst* ldc = builder.CreateCall(splat_1d, {bn, M}, "lda");
     llvm::CallInst* offc = builder.CreateCall(outer_add, {sm, builder.CreateMul(sn, ldc)}, "offc");
     llvm::CallInst* pc = builder.CreateCall(gtp, {arguments[2], offc}, "pc");
-    llvm::Value* in_bounds_c0 = builder.CreateICmpSLT(sm, builder.CreateCall(splat_1d, {sm, M}));
-    llvm::Value* in_bounds_c1 = builder.CreateICmpSLT(sn, builder.CreateCall(splat_1d, {sn, N}));
+    llvm::Value* in_bounds_c0 = builder.CreateICmpSLT(sm, builder.CreateCall(splat_1d, {bm, M}));
+    llvm::Value* in_bounds_c1 = builder.CreateICmpSLT(sn, builder.CreateCall(splat_1d, {bn, N}));
     llvm::Value* maskc =  builder.CreateCall(outer_and, {in_bounds_c0, in_bounds_c1}, "maskc");
     builder.CreateCall(masked_store, {nextc, pc, maskc});
     builder.CreateRet(NULL);
