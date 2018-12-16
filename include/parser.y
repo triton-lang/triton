@@ -4,7 +4,7 @@ class node;
 }
 using namespace ast;
 #define YYSTYPE node*
-#include "../ast.h"
+#include "../include/ast.h"
 using namespace ast;
 
 extern char* yytext;
@@ -12,6 +12,32 @@ void yyerror(const char *s);
 int yylex(void);
 
 translation_unit *ast_root;
+
+/* wrap token in AST node */
+struct token: public node{
+  token(ASSIGN_OP_T value): assign_op(value){ }
+  token(BIN_OP_T value): bin_op(value){ }
+  token(UNARY_OP_T value): unary_op(value){ }
+  token(TYPE_T value): type(value){ }
+
+  union {
+    ASSIGN_OP_T assign_op;
+    BIN_OP_T bin_op;
+    UNARY_OP_T unary_op;
+    TYPE_T type;
+  };
+};
+
+/* shortcut to append in list */
+template<class T>
+node* append_ptr_list(node *result, node *in){
+  return static_cast<list<T*>*>(result)->append((T*)in);
+}
+
+/* shortcut to access token value */
+ASSIGN_OP_T get_assign_op(node *op) { return ((token*)op)->assign_op; }
+UNARY_OP_T get_unary_op(node *op) { return ((token*)op)->unary_op; }
+TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
 
 %}
  
@@ -69,8 +95,8 @@ constant_list
 	;
 
 type_name
-  : type_specifier { $$ = new type($1, nullptr); }
-  | type_specifier abstract_declarator { $$ = new type($1, $2); }
+  : type_specifier { $$ = new type(get_type_spec($1), nullptr); }
+  | type_specifier abstract_declarator { $$ = new type(get_type_spec($1), $2); }
 	;
 
 /* -------------------------- */
@@ -92,7 +118,7 @@ unary_expression
 	: primary_expression { $$ = $1; }
   | INC_OP unary_expression { $$ = new unary_operator(INC, $2); }
   | DEC_OP unary_expression { $$ = new unary_operator(DEC, $2); }
-  | unary_operator cast_expression { $$ = new unary_operator($1, $2); }
+  | unary_operator cast_expression { $$ = new unary_operator(get_unary_op($1), $2); }
 	;
 
 unary_operator
@@ -193,7 +219,7 @@ assignment_operator
 
 assignment_expression
 	: conditional_expression { $$ = $1; }
-  | unary_expression assignment_operator assignment_expression { $$ = new assignment_expression($1, $2, $3); }
+  | unary_expression assignment_operator assignment_expression { $$ = new assignment_expression($1, get_assign_op($2), $3); }
 	;
 
 /* Expression */
@@ -269,9 +295,9 @@ parameter_list
 	;
 
 parameter_declaration
-  : declaration_specifiers declarator { $$ = new parameter($1, $2); }
-  | declaration_specifiers abstract_declarator { $$ = new parameter($1, $2); }
-  | declaration_specifiers { $$ = new parameter($1, nullptr); }
+  : declaration_specifiers declarator { $$ = new parameter(get_type_spec($1), $2); }
+  | declaration_specifiers abstract_declarator { $$ = new parameter(get_type_spec($1), $2); }
+  | declaration_specifiers { $$ = new parameter(get_type_spec($1), nullptr); }
 	;
 
 

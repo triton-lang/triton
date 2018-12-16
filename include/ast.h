@@ -43,20 +43,6 @@ enum TYPE_T{
 // AST
 class node { };
 
-struct token: public node{
-  token(ASSIGN_OP_T value): assign_op(value){ }
-  token(BIN_OP_T value): bin_op(value){ }
-  token(UNARY_OP_T value): unary_op(value){ }
-  token(TYPE_T value): type(value){ }
-
-  union {
-    ASSIGN_OP_T assign_op;
-    BIN_OP_T bin_op;
-    UNARY_OP_T unary_op;
-    TYPE_T type;
-  };
-};
-
 template<class T>
 class list: public node {
 public:
@@ -67,15 +53,8 @@ private:
   std::list<T> values_;
 };
 
-template<class T>
-node* append_ptr_list(node *result, node *in){
-  return static_cast<list<T*>*>(result)->append((T*)in);
-}
-
 class binary_operator: public node{
 public:
-  binary_operator(node *op, node *lhs, node *rhs)
-    : op_(((token*)op)->bin_op), lhs_(lhs), rhs_(rhs) { }
   binary_operator(BIN_OP_T op, node *lhs, node *rhs)
     : op_(op), lhs_(lhs), rhs_(rhs) { }
 
@@ -112,8 +91,6 @@ public:
 
 class unary_operator: public node{
 public:
-  unary_operator(node *op, node *arg)
-    : op_(((token*)op)->unary_op), arg_(arg) { }
   unary_operator(UNARY_OP_T op, node *arg)
     : op_(op), arg_(arg) { }
 
@@ -144,8 +121,8 @@ public:
 
 class assignment_expression: public node{
 public:
-  assignment_expression(node *lvalue, node *op, node *rvalue)
-    : lvalue_(lvalue), op_(((token*)op)->assign_op), rvalue_(rvalue) { }
+  assignment_expression(node *lvalue, ASSIGN_OP_T op, node *rvalue)
+    : lvalue_(lvalue), op_(op), rvalue_(rvalue) { }
 
 public:
   ASSIGN_OP_T op_;
@@ -236,8 +213,8 @@ public:
 
 class parameter: public declarator {
 public:
-  parameter(node *spec, node *decl)
-    : spec_(((token*)spec)->type), decl_(decl) { }
+  parameter(TYPE_T spec, node *decl)
+    : spec_(spec), decl_(decl) { }
 
 public:
   const TYPE_T spec_;
@@ -276,8 +253,8 @@ public:
 
 class type: public node{
 public:
-  type(node *spec, node * decl)
-    : spec_(((token*)spec)->type), decl_(decl) { }
+  type(TYPE_T spec, node * decl)
+    : spec_(spec), decl_(decl) { }
 
 public:
   const TYPE_T spec_;
