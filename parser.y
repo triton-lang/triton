@@ -33,10 +33,17 @@ translation_unit *ast_root;
 /* -------------------------- */
 
 type_specifier
-	: VOID
-	| UINT8 | UINT16 | UINT32 | UINT64
-	| INT8 | INT16 | INT32 | INT64
-	| FP32 | FP64
+  : VOID { $$ = new token(VOID_T); }
+  | UINT8 { $$ = new token(UINT8_T); }
+  | UINT16 { $$ = new token(UINT16_T); }
+  | UINT32 { $$ = new token(UINT32_T); }
+  | UINT64 { $$ = new token(UINT64_T); }
+  | INT8 { $$ = new token(INT8_T); }
+  | INT16 { $$ = new token(INT16_T); }
+  | INT32 { $$ = new token(INT32_T); }
+  | INT64 { $$ = new token(INT64_T); }
+  | FP32 { $$ = new token(FLOAT32_T); }
+  | FP64 { $$ = new token(FLOAT64_T); }
 	;
 
 pointer
@@ -62,8 +69,8 @@ constant_list
 	;
 
 type_name
-	: type_specifier { $$ = new type((yytokentype)(size_t)$1, nullptr); }
-	| type_specifier abstract_declarator { $$ = new type((yytokentype)(size_t)$1, $2); }
+  : type_specifier { $$ = new type($1, nullptr); }
+  | type_specifier abstract_declarator { $$ = new type($1, $2); }
 	;
 
 /* -------------------------- */
@@ -83,108 +90,113 @@ primary_expression
 
 unary_expression
 	: primary_expression { $$ = $1; }
-	| INC_OP unary_expression { $$ = new unary_operator(INC_OP, $2); }
-	| DEC_OP unary_expression { $$ = new unary_operator(DEC_OP, $2); }
-	| unary_operator cast_expression { $$ = new unary_operator((yytokentype)(size_t)$1, $2); }
+  | INC_OP unary_expression { $$ = new unary_operator(INC, $2); }
+  | DEC_OP unary_expression { $$ = new unary_operator(DEC, $2); }
+  | unary_operator cast_expression { $$ = new unary_operator($1, $2); }
 	;
 
 unary_operator
-	: '&'
-	| '*'
-	| '+'
-	| '-'
-	| '~'
-	| '!'
+  : '&' { $$ = new token(ADDR); }
+  | '*' { $$ = new token(DEREF); }
+  | '+' { $$ = new token(PLUS); }
+  | '-' { $$ = new token(MINUS); }
+  | '~' { $$ = new token(COMPL); }
+  | '!' { $$ = new token(NOT); }
 	;
 
 cast_expression
 	: unary_expression { $$ = $1; }
-	| '(' type_name ')' cast_expression { $$ = new cast_operator((yytokentype)(size_t)$1, $2); }
+  | '(' type_name ')' cast_expression { $$ = new cast_operator($1, $2); }
 	;
 
 multiplicative_expression
 	: cast_expression { $$ = $1; }
-	| multiplicative_expression '*' cast_expression { $$ = new binary_operator('*', $1, $3); }
-	| multiplicative_expression '/' cast_expression { $$ = new binary_operator('/', $1, $3); }
-	| multiplicative_expression '%' cast_expression { $$ = new binary_operator('%', $1, $3); }
+  | multiplicative_expression '*' cast_expression { $$ = new binary_operator(MUL, $1, $3); }
+  | multiplicative_expression '/' cast_expression { $$ = new binary_operator(DIV, $1, $3); }
+  | multiplicative_expression '%' cast_expression { $$ = new binary_operator(MOD, $1, $3); }
 	;
 
 additive_expression
 	: multiplicative_expression { $$ = $1; }
-	| additive_expression '+' multiplicative_expression { $$ = new binary_operator('+', $1, $3); }
-	| additive_expression '-' multiplicative_expression { $$ = new binary_operator('-', $1, $3); }
+  | additive_expression '+' multiplicative_expression { $$ = new binary_operator(ADD, $1, $3); }
+  | additive_expression '-' multiplicative_expression { $$ = new binary_operator(SUB, $1, $3); }
 	;
 
 shift_expression
 	: additive_expression { $$ = $1; }
-	| shift_expression LEFT_OP additive_expression { $$ = new binary_operator(LEFT_OP, $1, $3); }
-	| shift_expression RIGHT_OP additive_expression { $$ = new binary_operator(RIGHT_OP, $1, $3); }
+  | shift_expression LEFT_OP additive_expression { $$ = new binary_operator(LEFT_SHIFT, $1, $3); }
+  | shift_expression RIGHT_OP additive_expression { $$ = new binary_operator(RIGHT_SHIFT, $1, $3); }
 	;
 
+/* Comparison */
 relational_expression
 	: shift_expression { $$ = $1; }
-	| relational_expression '<' shift_expression { $$ = new binary_operator('<', $1, $3); }
-	| relational_expression '>' shift_expression { $$ = new binary_operator('>', $1, $3); }
-	| relational_expression LE_OP shift_expression { $$ = new binary_operator(LE_OP, $1, $3); }
-	| relational_expression GE_OP shift_expression { $$ = new binary_operator(GE_OP, $1, $3); }
+  | relational_expression '<' shift_expression { $$ = new binary_operator(LT, $1, $3); }
+  | relational_expression '>' shift_expression { $$ = new binary_operator(GT, $1, $3); }
+  | relational_expression LE_OP shift_expression { $$ = new binary_operator(LE, $1, $3); }
+  | relational_expression GE_OP shift_expression { $$ = new binary_operator(GE, $1, $3); }
 	;
 
 equality_expression
 	: relational_expression { $$ = $1; }
-	| equality_expression EQ_OP relational_expression { $$ = new binary_operator(EQ_OP, $1, $3); }
-	| equality_expression NE_OP relational_expression { $$ = new binary_operator(NE_OP, $1, $3); }
+  | equality_expression EQ_OP relational_expression { $$ = new binary_operator(EQ, $1, $3); }
+  | equality_expression NE_OP relational_expression { $$ = new binary_operator(NE, $1, $3); }
 	;
 
+/* Binary */
 and_expression
 	: equality_expression { $$ = $1; }
-	| and_expression '&' equality_expression { $$ = new binary_operator('&', $1, $3); }
+  | and_expression '&' equality_expression { $$ = new binary_operator(AND, $1, $3); }
 	;
 
 exclusive_or_expression
 	: and_expression { $$ = $1; }
-	| exclusive_or_expression '^' and_expression { $$ = new binary_operator('^', $1, $3); }
+  | exclusive_or_expression '^' and_expression { $$ = new binary_operator(XOR, $1, $3); }
 	;
 
 inclusive_or_expression
 	: exclusive_or_expression { $$ = $1; }
-	| inclusive_or_expression '|' exclusive_or_expression { $$ = new binary_operator('|', $1, $3); }
+  | inclusive_or_expression '|' exclusive_or_expression { $$ = new binary_operator(OR, $1, $3); }
 	;
 
+/* Logical */
 logical_and_expression
 	: inclusive_or_expression { $$ = $1; }
-	| logical_and_expression AND_OP inclusive_or_expression { $$ = new binary_operator(AND_OP, $1, $3); }
+  | logical_and_expression AND_OP inclusive_or_expression { $$ = new binary_operator(LAND, $1, $3); }
 	;
 
 logical_or_expression
 	: logical_and_expression { $$ = $1; }
-	| logical_or_expression OR_OP logical_and_expression { $$ = new binary_operator(OR_OP, $1, $3); }
+  | logical_or_expression OR_OP logical_and_expression { $$ = new binary_operator(LOR, $1, $3); }
 	;
 
+/* Conditional */
 conditional_expression
 	: logical_or_expression { $$ = $1; }
 	| logical_or_expression '?' conditional_expression ':' conditional_expression { $$ = new conditional_expression($1, $2, $3); }
 	;
 
+/* Assignment */
 assignment_operator
-	: '='
-	| MUL_ASSIGN
-	| DIV_ASSIGN
-	| MOD_ASSIGN
-	| ADD_ASSIGN
-	| SUB_ASSIGN
-	| LEFT_ASSIGN
-	| RIGHT_ASSIGN
-	| AND_ASSIGN
-	| XOR_ASSIGN
-	| OR_ASSIGN
+  : '=' { $$ = new token(ASSIGN); }
+  | MUL_ASSIGN { $$ = new token(INPLACE_MUL); }
+  | DIV_ASSIGN { $$ = new token(INPLACE_DIV); }
+  | MOD_ASSIGN { $$ = new token(INPLACE_MOD); }
+  | ADD_ASSIGN { $$ = new token(INPLACE_ADD); }
+  | SUB_ASSIGN { $$ = new token(INPLACE_SUB); }
+  | LEFT_ASSIGN { $$ = new token(INPLACE_LSHIFT); }
+  | RIGHT_ASSIGN { $$ = new token(INPLACE_RSHIFT); }
+  | AND_ASSIGN { $$ = new token(INPLACE_AND); }
+  | XOR_ASSIGN { $$ = new token(INPLACE_XOR); }
+  | OR_ASSIGN { $$ = new token(INPLACE_OR); }
 	;
-
 
 assignment_expression
 	: conditional_expression { $$ = $1; }
-	| unary_expression assignment_operator assignment_expression { $$ = new assignment_expression($1, (yytokentype)(size_t)$2, $3); }
+  | unary_expression assignment_operator assignment_expression { $$ = new assignment_expression($1, $2, $3); }
 	;
 
+/* Expression */
 expression
 	: assignment_expression { $$ = $1; }
 	;
@@ -201,13 +213,20 @@ statement
 	;
 
 compound_statement
-	: '{' '}' { $$ = new compound_statement(); }
-	| '{' statement_list '}' { $$ = $1; }
+  : '{' '}' { $$ = new compound_statement(nullptr, nullptr); }
+  | '{' statement_list '}' { $$ = new compound_statement(nullptr, $1); }
+  | '{' declaration_list '}' { $$ = new compound_statement($1, nullptr); }
+  | '{' declaration_list statement_list '}' { $$ = new compound_statement($1, $2);}
 	;
 
+
+declaration_list
+  : declaration { $$ = new list<declaration*>((declaration*)$1); }
+  | declaration_list declaration { $$ = append_ptr_list<declaration>($1, $2); }
+
 statement_list
-	: statement { $$ = new compound_statement($1); }
-	| statement_list statement { $$ = append_ptr_list<compound_statement>($1, $2); }
+  : statement { $$ = new list<statement*>((statement*)$1); }
+  | statement_list statement { $$ = append_ptr_list<statement>($1, $2); }
 	;
 	
 expression_statement
@@ -232,11 +251,11 @@ iteration_statement
 
 
 direct_declarator
-	: identifier { $$ = $1; }
-	| direct_declarator '[' constant_list ']' { $$ = new tile_declarator($2); }
-	| direct_declarator '(' parameter_list ')' { $$ = new function_declarator($2); }
-	| direct_declarator '(' identifier_list ')' { $$ = new function_declarator($2); }
-	| direct_declarator '(' ')' { $$ = new function_declarator(nullptr); }
+  : identifier { $$ = $1; }
+  | direct_declarator '[' constant_list ']' { $$ = new tile_declarator($2); }
+  | direct_declarator '(' parameter_list ')' { $$ = new function_declarator($2); }
+  | direct_declarator '(' identifier_list ')' { $$ = new function_declarator($2); }
+  | direct_declarator '(' ')' { $$ = new function_declarator(nullptr); }
 	;
 	
 identifier_list
@@ -250,9 +269,9 @@ parameter_list
 	;
 
 parameter_declaration
-	: declaration_specifiers declarator { $$ = new parameter((yytokentype)(size_t)$1, $2); }
-	| declaration_specifiers abstract_declarator { $$ = new parameter((yytokentype)(size_t)$1, $2); }
-	| declaration_specifiers { $$ = new parameter((yytokentype)(size_t)$1, nullptr); }
+  : declaration_specifiers declarator { $$ = new parameter($1, $2); }
+  | declaration_specifiers abstract_declarator { $$ = new parameter($1, $2); }
+  | declaration_specifiers { $$ = new parameter($1, nullptr); }
 	;
 
 
@@ -295,11 +314,12 @@ translation_unit
 	;
 	
 external_declaration
-	: function_definition { $$ = $1; }
-	| declaration { $$ = $1; }
-	;
+  : function_definition { $$ = $1; }
+  | declaration { $$ = $1; }
+  ;
 	
 function_definition
-	: declarator compound_statement { $$ = new function_definition($1, $2); }
+  : declaration_specifiers declarator compound_statement
+  | declarator compound_statement { $$ = new function_definition($1, $2); }
 	;
 

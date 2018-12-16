@@ -3,11 +3,59 @@
 #include <list>
 #include <string>
 
-typedef yytokentype token_type;
-
 namespace ast{
 
+// Enumerations
+enum ASSIGN_OP_T{
+  ASSIGN,
+  INPLACE_MUL, INPLACE_DIV, INPLACE_MOD,
+  INPLACE_ADD, INPLACE_SUB,
+  INPLACE_LSHIFT, INPLACE_RSHIFT,
+  INPLACE_AND, INPLACE_XOR,
+  INPLACE_OR
+};
+
+enum BIN_OP_T{
+  MUL, DIV, MOD,
+  ADD, SUB,
+  LEFT_SHIFT, RIGHT_SHIFT,
+  LT, GT,
+  LE, GE,
+  EQ, NE,
+  AND, XOR, OR,
+  LAND, LOR
+};
+
+enum UNARY_OP_T{
+  INC, DEC,
+  PLUS, MINUS,
+  ADDR, DEREF,
+  COMPL, NOT
+};
+
+enum TYPE_T{
+  VOID_T,
+  UINT8_T, UINT16_T, UINT32_T, UINT64_T,
+  INT8_T, INT16_T, INT32_T, INT64_T,
+  FLOAT32_T, FLOAT64_T
+};
+
+// AST
 class node { };
+
+struct token: public node{
+  token(ASSIGN_OP_T value): assign_op(value){ }
+  token(BIN_OP_T value): bin_op(value){ }
+  token(UNARY_OP_T value): unary_op(value){ }
+  token(TYPE_T value): type(value){ }
+
+  union {
+    ASSIGN_OP_T assign_op;
+    BIN_OP_T bin_op;
+    UNARY_OP_T unary_op;
+    TYPE_T type;
+  };
+};
 
 template<class T>
 class list: public node {
@@ -26,55 +74,13 @@ node* append_ptr_list(node *result, node *in){
 
 class binary_operator: public node{
 public:
-  enum OP_T{
-    MUL, DIV, REM,
-    ADD, SUB,
-    LEFT_SHIFT, RIGHT_SHIFT,
-    LT, GT,
-    LE, GE,
-    EQ, NE,
-    AND, XOR, OR,
-    LAND, LOR
-  };
-
-  static OP_T get_op(token_type token){
-    switch(token){
-    case LEFT_OP: return LEFT_SHIFT;
-    case RIGHT_OP: return RIGHT_SHIFT;
-    case LE_OP: return LE;
-    case GE_OP: return GE;
-    case EQ_OP: return EQ;
-    case NE_OP: return NE;
-    case AND_OP: return LAND;
-    case OR_OP: return LOR;
-    default: assert(false && "unreachable"); throw;
-    }
-  }
-
-  static OP_T get_op(char token){
-    switch(token){
-    case '*': return MUL;
-    case '/': return DIV;
-    case '%': return REM;
-    case '+': return ADD;
-    case '-': return SUB;
-    case '<': return LT;
-    case '>': return GT;
-    case '&': return AND;
-    case '^': return XOR;
-    case '|': return OR;
-    default: assert(false && "unreachable"); throw;
-    }
-  }
-
-public:
-  binary_operator(token_type op, node *lhs, node *rhs)
-    : op_(get_op(op)), lhs_(lhs), rhs_(rhs) { }
-  binary_operator(char op, node *lhs, node *rhs)
-    : op_(get_op(op)), lhs_(lhs), rhs_(rhs){ }
+  binary_operator(node *op, node *lhs, node *rhs)
+    : op_(((token*)op)->bin_op), lhs_(lhs), rhs_(rhs) { }
+  binary_operator(BIN_OP_T op, node *lhs, node *rhs)
+    : op_(op), lhs_(lhs), rhs_(rhs) { }
 
 private:
-  const OP_T op_;
+  const BIN_OP_T op_;
   const node *lhs_;
   const node *rhs_;
 };
@@ -106,19 +112,22 @@ public:
 
 class unary_operator: public node{
 public:
-  unary_operator(token_type token, node *arg): token_(token), arg_(arg) { }
+  unary_operator(node *op, node *arg)
+    : op_(((token*)op)->unary_op), arg_(arg) { }
+  unary_operator(UNARY_OP_T op, node *arg)
+    : op_(op), arg_(arg) { }
 
 private:
-  const token_type token_;
+  const UNARY_OP_T op_;
   const node *arg_;
 };
 
 class cast_operator: public node{
 public:
-  cast_operator(token_type type, node *arg): type_(type), arg_(arg) { }
+  cast_operator(node *type, node *arg): type_(type), arg_(arg) { }
 
 public:
-  const token_type type_;
+  const node *type_;
   const node *arg_;
 };
 
@@ -134,29 +143,45 @@ public:
 };
 
 class assignment_expression: public node{
-  typedef binary_operator::OP_T op_t;
+public:
+  assignment_expression(node *lvalue, node *op, node *rvalue)
+    : lvalue_(lvalue), op_(((token*)op)->assign_op), rvalue_(rvalue) { }
 
 public:
-  assignment_expression(node *lvalue, token_type op, node *rvalue)
-    : lvalue_(lvalue), op_(binary_operator::get_op(op)), rvalue_(rvalue) { }
-
-public:
-  op_t op_;
+  ASSIGN_OP_T op_;
   const node *lvalue_;
   const node *rvalue_;
 };
 
-class compound_statement: public node{
-public:
-  compound_statement() : statements_() {}
-  compound_statement(node *stmt): statements_{stmt} {}
-  compound_statement* append(node *stmt) { statements_.push_back(stmt); return this; }
+class statement: public node{
 
-private:
-  std::list<node*> statements_;
 };
 
-class selection_statement: public node{
+class declaration: public node{
+public:
+  declaration(node *spec, node *init)
+    : spec_(spec), init_(init) { }
+
+public:
+  const node *spec_;
+  const node *init_;
+};
+
+
+class compound_statement: public statement{
+  typedef list<declaration*>* declarations_t;
+  typedef list<statement*>* statements_t;
+
+public:
+  compound_statement(node* decls, node* statements)
+    : decls_((declarations_t)decls), statements_((statements_t)statements) {}
+
+private:
+  declarations_t decls_;
+  statements_t statements_;
+};
+
+class selection_statement: public statement{
 public:
   selection_statement(node *cond, node *if_value, node *else_value = nullptr)
     : cond_(cond), if_value_(if_value), else_value_(else_value) { }
@@ -167,7 +192,7 @@ public:
   const node *else_value_;
 };
 
-class iteration_statement: public node{
+class iteration_statement: public statement{
 public:
   iteration_statement(node *init, node *stop, node *exec, node *statements)
     : init_(init), stop_(stop), exec_(exec), statements_(statements) { }
@@ -179,7 +204,7 @@ private:
   const node *statements_;
 };
 
-class no_op: public node { };
+class no_op: public statement { };
 
 // Types
 class declarator: public node{
@@ -211,11 +236,11 @@ public:
 
 class parameter: public declarator {
 public:
-  parameter(token_type type, node *decl)
-    : type_(type), decl_(decl) { }
+  parameter(node *spec, node *decl)
+    : spec_(((token*)spec)->type), decl_(decl) { }
 
 public:
-  const token_type type_;
+  const TYPE_T spec_;
   const node *decl_;
 };
 
@@ -248,23 +273,14 @@ public:
   const node *initializer_;
 };
 
-class declaration: public node{
-public:
-  declaration(node *spec, node *init)
-    : spec_(spec), init_(init) { }
-
-public:
-  const node *spec_;
-  const node *init_;
-};
 
 class type: public node{
 public:
-  type(token_type spec, node * decl)
-    : spec_(spec), decl_(decl) { }
+  type(node *spec, node * decl)
+    : spec_(((token*)spec)->type), decl_(decl) { }
 
 public:
-  const token_type spec_;
+  const TYPE_T spec_;
   const node *decl_;
 };
 
