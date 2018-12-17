@@ -84,7 +84,7 @@ abstract_declarator
 	;
 
 direct_abstract_declarator
-	: '[' constant_list ']' { $$ = new tile_declarator($1); }
+    : '[' constant_list ']' { $$ = new tile_declarator(nullptr, $1); }
 
 constant : 
 	CONSTANT { $$ = new constant(atoi(yytext)); }
@@ -279,16 +279,11 @@ iteration_statement
 
 direct_declarator
   : identifier { $$ = $1; }
-  | direct_declarator '[' constant_list ']' { $$ = new tile_declarator($2); }
-  | direct_declarator '(' parameter_list ')' { $$ = new function_declarator($2); }
-  | direct_declarator '(' identifier_list ')' { $$ = new function_declarator($2); }
-  | direct_declarator '(' ')' { $$ = new function_declarator(nullptr); }
+  | identifier '[' constant_list ']' { $$ = new tile_declarator($1, $2); }
+  | identifier '(' parameter_list ')' { $$ = new function_declarator($1, $2); }
+  | identifier '(' ')' { $$ = new function_declarator($1, nullptr); }
 	;
-	
-identifier_list
-	: identifier { $$ = new list<identifier*>((identifier*)$1); }
-	| identifier_list ',' identifier { $$ = append_ptr_list<identifier>($1, $2); }
-	;
+
 
 parameter_list
 	: parameter_declaration { $$ = new list<parameter*>((parameter*)$1); }
@@ -298,7 +293,6 @@ parameter_list
 parameter_declaration
   : declaration_specifiers declarator { $$ = new parameter(get_type_spec($1), $2); }
   | declaration_specifiers abstract_declarator { $$ = new parameter(get_type_spec($1), $2); }
-  | declaration_specifiers { $$ = new parameter(get_type_spec($1), nullptr); }
 	;
 
 
@@ -346,7 +340,6 @@ external_declaration
   ;
 	
 function_definition
-  : declaration_specifiers declarator compound_statement
-  | declarator compound_statement { $$ = new function_definition($1, $2); }
+  : type_specifier declarator compound_statement { $$ = new function_definition(get_type_spec($1), $2, $3); }
 	;
 

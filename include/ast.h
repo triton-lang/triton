@@ -6,6 +6,12 @@
 #include <list>
 #include <string>
 
+namespace llvm{
+
+class LLVMType;
+
+}
+
 namespace tdl{
 
 class module;
@@ -197,7 +203,8 @@ class no_op: public statement { };
 
 // Types
 class declarator: public node{
-
+public:
+  virtual llvm::LLVMType llvm_type(TYPE_T spec) const = 0;
 };
 
 class pointer_declarator: public declarator{
@@ -210,35 +217,33 @@ public:
     return this;
   }
 
+  llvm::LLVMType llvm_type(TYPE_T spec) const;
+
 private:
   unsigned order_;
 };
 
 class tile_declarator: public declarator{
 public:
-  tile_declarator(node *shapes)
-    : shapes_((list<constant*>*)(shapes)) { }
+  tile_declarator(node *decl, node *shapes)
+    : decl_(decl), shapes_((list<constant*>*)(shapes)) { }
+
+  llvm::LLVMType llvm_type(TYPE_T spec) const;
 
 public:
+  const node* decl_;
   const list<constant*>* shapes_;
-};
-
-class parameter: public declarator {
-public:
-  parameter(TYPE_T spec, node *decl)
-    : spec_(spec), decl_(decl) { }
-
-public:
-  const TYPE_T spec_;
-  const node *decl_;
 };
 
 class function_declarator: public declarator{
 public:
-  function_declarator(node *args)
-    : args_((list<node*>*)args) { }
+  function_declarator(node *decl, node *args)
+    : decl_(decl), args_((list<node*>*)args) { }
+
+  llvm::LLVMType llvm_type(TYPE_T spec) const;
 
 public:
+  const node* decl_;
   const list<node*>* args_;
 };
 
@@ -246,6 +251,8 @@ class compound_declarator: public declarator{
 public:
   compound_declarator(node *ptr, node *tile)
     : ptr_(ptr), tile_(tile) { }
+
+  llvm::LLVMType llvm_type(TYPE_T spec) const;
 
 public:
   const node *ptr_;
@@ -257,11 +264,24 @@ public:
   init_declarator(node *decl, node *initializer)
   : decl_(decl), initializer_(initializer){ }
 
+  llvm::LLVMType llvm_type(TYPE_T spec) const;
+
 public:
   const node *decl_;
   const node *initializer_;
 };
 
+class parameter: public node {
+public:
+  parameter(TYPE_T spec, node *decl)
+    : spec_(spec), decl_(decl) { }
+
+  llvm::LLVMType* llvm_type() const;
+
+public:
+  const TYPE_T spec_;
+  const node *decl_;
+};
 
 class type: public node{
 public:
@@ -276,10 +296,11 @@ public:
 /* Function definition */
 class function_definition: public node{
 public:
-  function_definition(node *header, node *body)
-    : header_((function_declarator *)header), body_((compound_statement*)body) { }
+  function_definition(TYPE_T spec, node *header, node *body)
+    : spec_(spec), header_((function_declarator *)header), body_((compound_statement*)body) { }
 
 public:
+  const TYPE_T spec_;
   const function_declarator *header_;
   const compound_statement *body_;
 };
