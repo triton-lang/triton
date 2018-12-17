@@ -113,8 +113,6 @@ void count()
 			column += 8 - (column % 8);
 		else
 			column++;
-
-	ECHO;
 }
 
 void yyerror (const char *s)  /* Called by yyparse on error */

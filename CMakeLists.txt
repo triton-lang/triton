@@ -18,7 +18,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Gather headers for cmake-based IDEs
-file( GLOB_RECURSE ALL_SRC *.cpp *.hpp *.h *.py)
+file( GLOB_RECURSE ALL_SRC *.cpp *.hpp *.h *.py *.y *.l)
 add_custom_target( ALL SOURCES ${ALL_SRC} )
 
 # Compiler flags

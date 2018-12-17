@@ -1,11 +1,12 @@
 %{
+namespace tdl{
 namespace ast{
 class node;
 }
-using namespace ast;
+}
+using namespace tdl::ast;
 #define YYSTYPE node*
 #include "../include/ast.h"
-using namespace ast;
 
 extern char* yytext;
 void yyerror(const char *s);
@@ -111,7 +112,7 @@ primary_expression
 	: identifier  { $$ = $1; }
 	| constant { $$ = $1; }
 	| STRING_LITERAL { $$ = new string_literal(yytext); }
-	| '(' unary_expression ')' { $$ = $1; }
+  | '(' expression ')' { $$ = $1; }
 	;
 
 unary_expression

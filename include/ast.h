@@ -1,7 +1,14 @@
+#ifndef TDL_INCLUDE_AST_H
+#define TDL_INCLUDE_AST_H
+
 #include "parser.hpp"
 #include <cassert>
 #include <list>
 #include <string>
+
+namespace tdl{
+
+class module;
 
 namespace ast{
 
@@ -41,13 +48,18 @@ enum TYPE_T{
 };
 
 // AST
-class node { };
+class node {
+public:
+  virtual void codegen(module*) { }
+};
 
 template<class T>
 class list: public node {
 public:
   list(const T& x): values_{x} {}
   node* append(const T& x) { values_.push_back(x); return this;}
+  void codegen(module* mod) { for(T x: values_){ x->codegen(mod); } }
+  const std::list<T> &values() const { return values_; }
 
 private:
   std::list<T> values_;
@@ -224,10 +236,10 @@ public:
 class function_declarator: public declarator{
 public:
   function_declarator(node *args)
-    : args_((list<node*>)args) { }
+    : args_((list<node*>*)args) { }
 
 public:
-  const list<node*> args_;
+  const list<node*>* args_;
 };
 
 class compound_declarator: public declarator{
@@ -261,28 +273,36 @@ public:
   const node *decl_;
 };
 
-class translation_unit: public node{
-public:
-  translation_unit(node *item)
-    : decls_(item) { }
-
-  translation_unit *add(node *item) {
-    decls_.append(item);
-    return this;
-  }
-
-private:
-  list<node*> decls_;
-};
-
+/* Function definition */
 class function_definition: public node{
 public:
   function_definition(node *header, node *body)
-    : header_((declarator *)header), body_((compound_statement*)body) { }
+    : header_((function_declarator *)header), body_((compound_statement*)body) { }
 
 public:
-  const declarator *header_;
+  const function_declarator *header_;
   const compound_statement *body_;
 };
 
+/* Translation Unit */
+class translation_unit: public node{
+public:
+  translation_unit(node *item)
+    : decls_((list<node*>*)item) { }
+
+  translation_unit *add(node *item) {
+    decls_->append(item);
+    return this;
+  }
+
+  void codegen(module* mod);
+
+private:
+  list<node*>* decls_;
+};
+
 }
+
+}
+
+#endif
