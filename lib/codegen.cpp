@@ -31,7 +31,7 @@ llvm::IRBuilder<>& module::builder() {
 namespace ast{
 
 /* Translation unit */
-void translation_unit::codegen(module *mod){
+void translation_unit::codegen(module *mod) const{
   decls_->codegen(mod);
 }
 
@@ -78,8 +78,8 @@ Type* tile::type_impl(module*, Type *type) const{
 }
 
 // Initializer
-Type* initializer::type_impl(module *, Type *type) const{
-  return type;
+Type* initializer::type_impl(module *mod, Type *type) const{
+  return decl_->type(mod, type);
 }
 
 // Pointer
@@ -97,14 +97,31 @@ Type* function::type_impl(module*mod, Type *type) const{
 }
 
 /* Function definition */
-void function_definition::codegen(module *mod){
-  llvm::FunctionType *prototype = (llvm::FunctionType *)header_->type(mod, spec_->type(mod));
+void function_definition::codegen(module *mod) const{
+  FunctionType *prototype = (FunctionType *)header_->type(mod, spec_->type(mod));
   const std::string &name = header_->id()->name();
-  llvm::Function *fn = llvm::Function::Create(prototype, llvm::Function::ExternalLinkage, name, mod->handle());
-  llvm::BasicBlock::Create(mod->handle()->getContext(), "entry", fn);
-  mod->builder().SetInsertPoint();
+  Function *fn = Function::Create(prototype, Function::ExternalLinkage, name, mod->handle());
+  BasicBlock *entry = BasicBlock::Create(mod->handle()->getContext(), "entry", fn);
+  mod->builder().SetInsertPoint(entry);
+  body_->codegen(mod);
+}
+
+/* Statements */
+void compound_statement::codegen(module* mod) const{
+  decls_->codegen(mod);
+  statements_->codegen(mod);
+}
+
+/* Declaration */
+void declaration::codegen(module* mod) const{
 
 }
+
+/* Initializat */
+void initializer::codegen(module *) const{
+
+}
+
 
 }
 

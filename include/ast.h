@@ -58,7 +58,7 @@ enum TYPE_T{
 // AST
 class node {
 public:
-  virtual void codegen(module*) { }
+  virtual void codegen(module*) const { }
 };
 
 template<class T>
@@ -71,7 +71,7 @@ public:
     return this;
   }
 
-  void codegen(module* mod)
+  void codegen(module* mod) const
   { for(T x: values_){ x->codegen(mod); } }
 
   const std::list<T> &values() const
@@ -155,14 +155,17 @@ class statement: public node{
 
 };
 
+class initializer;
 class declaration: public node{
 public:
   declaration(node *spec, node *init)
-    : spec_(spec), init_(init) { }
+    : spec_(spec), init_((list<initializer*>*)init) { }
+
+  void codegen(module* mod) const;
 
 public:
   const node *spec_;
-  const node *init_;
+  const list<initializer*> *init_;
 };
 
 
@@ -173,6 +176,8 @@ class compound_statement: public statement{
 public:
   compound_statement(node* decls, node* statements)
     : decls_((declarations_t)decls), statements_((statements_t)statements) {}
+
+  virtual void codegen(module* mod) const;
 
 private:
   declarations_t decls_;
@@ -307,12 +312,15 @@ private:
   llvm::Type* type_impl(module* mod, llvm::Type *type) const;
 
 public:
-  initializer(node *id, node *initializer)
-  : declarator(id), initializer_(initializer){ }
+  initializer(node *decl, node *init)
+  : declarator((node*)((declarator*)decl)->id()),
+    decl_((declarator*)decl), init_(init){ }
 
+  void codegen(module *) const;
 
 public:
-  const node *initializer_;
+  const declarator *decl_;
+  const node *init_;
 };
 
 
@@ -332,7 +340,7 @@ public:
   function_definition(node *spec, node *header, node *body)
     : spec_((declaration_specifier*)spec), header_((function *)header), body_((compound_statement*)body) { }
 
-  void codegen(module* mod);
+  void codegen(module* mod) const;
 
 public:
   const declaration_specifier *spec_;
@@ -351,7 +359,7 @@ public:
     return this;
   }
 
-  void codegen(module* mod);
+  void codegen(module* mod) const;
 
 private:
   list<node*>* decls_;
