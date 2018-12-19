@@ -74,17 +74,17 @@ type_specifier
 	;
 
 pointer
-	: '*' { $$ = new pointer_declarator(1); }
-	| '*' pointer { $$ = ((pointer_declarator*)$1)->inc(); }
+  : '*' { $$ = new pointer(nullptr); }
+  | '*' pointer { $$ = new pointer($1); }
 	
 abstract_declarator
 	: pointer { $$ = $1; }
+  | pointer direct_abstract_declarator { $$ = ((declarator*)$2)->set_ptr($1); }
 	| direct_abstract_declarator { $$ = $1; }
-	| pointer direct_abstract_declarator { $$ = new compound_declarator($1, $2); }
 	;
 
 direct_abstract_declarator
-    : '[' constant_list ']' { $$ = new tile_declarator(nullptr, $1); }
+    : '[' constant_list ']' { $$ = new tile(nullptr, $1); }
 
 constant : 
 	CONSTANT { $$ = new constant(atoi(yytext)); }
@@ -241,9 +241,9 @@ statement
 
 compound_statement
   : '{' '}' { $$ = new compound_statement(nullptr, nullptr); }
-  | '{' statement_list '}' { $$ = new compound_statement(nullptr, $1); }
-  | '{' declaration_list '}' { $$ = new compound_statement($1, nullptr); }
-  | '{' declaration_list statement_list '}' { $$ = new compound_statement($1, $2);}
+  | '{' statement_list '}' { $$ = new compound_statement(nullptr, $2); }
+  | '{' declaration_list '}' { $$ = new compound_statement($2, nullptr); }
+  | '{' declaration_list statement_list '}' { $$ = new compound_statement($2, $3);}
 	;
 
 
@@ -262,13 +262,13 @@ expression_statement
 	;
 
 selection_statement
-	: IF '(' expression ')' statement { $$ = new selection_statement($1, $2); }
-	| IF '(' expression ')' statement ELSE statement { $$ = new selection_statement($1, $2, $3); }
+  : IF '(' expression ')' statement { $$ = new selection_statement($1, $3); }
+  | IF '(' expression ')' statement ELSE statement { $$ = new selection_statement($1, $3, $5); }
 	;
 
 iteration_statement
-	: FOR '(' expression_statement expression_statement ')' statement { $$ = new iteration_statement($1, $2, NULL, $3); }
-	| FOR '(' expression_statement expression_statement expression ')' statement { $$ = new iteration_statement($1, $2, $3, $3); }
+  : FOR '(' expression_statement expression_statement ')' statement { $$ = new iteration_statement($1, $3, NULL, $4); }
+  | FOR '(' expression_statement expression_statement expression ')' statement { $$ = new iteration_statement($1, $3, $4, $5); }
 	;
 
 
@@ -279,30 +279,30 @@ iteration_statement
 
 direct_declarator
   : identifier { $$ = $1; }
-  | identifier '[' constant_list ']' { $$ = new tile_declarator($1, $2); }
-  | identifier '(' parameter_list ')' { $$ = new function_declarator($1, $2); }
-  | identifier '(' ')' { $$ = new function_declarator($1, nullptr); }
-	;
+  | identifier '[' constant_list ']' { $$ = new tile($1, $3); }
+  | identifier '(' parameter_list ')' { $$ = new function($1, $3); }
+  | identifier '(' ')' { $$ = new function($1, nullptr); }
+  ;
 
 
 parameter_list
 	: parameter_declaration { $$ = new list<parameter*>((parameter*)$1); }
-	| parameter_list ',' parameter_declaration { $$ = append_ptr_list<parameter>($1, $2); }
+  | parameter_list ',' parameter_declaration { $$ = append_ptr_list<parameter>($1, $3); }
 	;
 
 parameter_declaration
-  : declaration_specifiers declarator { $$ = new parameter(get_type_spec($1), $2); }
-  | declaration_specifiers abstract_declarator { $$ = new parameter(get_type_spec($1), $2); }
+  : declaration_specifiers declarator { $$ = new parameter($1, $2); }
+  | declaration_specifiers abstract_declarator { $$ = new parameter($1, $2); }
 	;
 
 
 declaration_specifiers
-	: type_specifier { $$ = $1; }
+  : type_specifier { $$ = new declaration_specifier(get_type_spec($1)); }
 	;
 
 init_declarator_list
-	: init_declarator { $$ = new list<init_declarator*>((init_declarator*)$1); }
-	| init_declarator_list ',' init_declarator { $$ = append_ptr_list<init_declarator>($1, $2); }
+  : init_declarator { $$ = new list<initializer*>((initializer*)$1); }
+  | init_declarator_list ',' init_declarator { $$ = append_ptr_list<initializer>($1, $3); }
 	;
 
 declaration
@@ -311,18 +311,18 @@ declaration
 	;
 	
 declarator
-	: pointer direct_declarator { $$ = new compound_declarator($1, $2); }
+  : pointer direct_declarator { $$ = ((declarator*)$2)->set_ptr($1); }
 	| direct_declarator { $$ = $1; }
 	;
 
 initializer
 	: assignment_expression { $$ = $1; }
-	| '{' constant '}' { $$ = $1; }
+  | '{' constant '}' { $$ = $2; }
 	;
 	
 init_declarator
-	: declarator { $$ = new init_declarator($1, nullptr); }
-	| declarator '=' initializer { $$ = new init_declarator($1, $2); }
+  : declarator { $$ = new initializer($1, nullptr); }
+  | declarator '=' initializer { $$ = new initializer($1, $3); }
 	;
 
 /* -------------------------- */
@@ -330,7 +330,7 @@ init_declarator
 /* -------------------------- */
 
 translation_unit
-	: external_declaration { $$ = new translation_unit($1); }
+  : external_declaration { ast_root = new translation_unit($1); $$ = ast_root; }
 	| translation_unit external_declaration { $$ = ((translation_unit*)($1))->add($2); }
 	;
 	
@@ -340,6 +340,6 @@ external_declaration
   ;
 	
 function_definition
-  : type_specifier declarator compound_statement { $$ = new function_definition(get_type_spec($1), $2, $3); }
+  : declaration_specifiers declarator compound_statement { $$ = new function_definition($1, $2, $3); }
 	;
 

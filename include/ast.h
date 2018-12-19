@@ -8,7 +8,9 @@
 
 namespace llvm{
 
-class LLVMType;
+class Function;
+class Value;
+class Type;
 
 }
 
@@ -63,9 +65,17 @@ template<class T>
 class list: public node {
 public:
   list(const T& x): values_{x} {}
-  node* append(const T& x) { values_.push_back(x); return this;}
-  void codegen(module* mod) { for(T x: values_){ x->codegen(mod); } }
-  const std::list<T> &values() const { return values_; }
+
+  node* append(const T& x){
+    values_.push_back(x);
+    return this;
+  }
+
+  void codegen(module* mod)
+  { for(T x: values_){ x->codegen(mod); } }
+
+  const std::list<T> &values() const
+  { return values_; }
 
 private:
   std::list<T> values_;
@@ -91,13 +101,6 @@ private:
   const int value_;
 };
 
-class identifier: public node{
-public:
-  identifier(char *&name): name_(name) { }
-
-private:
-  std::string name_;
-};
 
 class string_literal: public node{
 public:
@@ -202,106 +205,138 @@ private:
 class no_op: public statement { };
 
 // Types
-class declarator: public node{
+
+class declaration_specifier: public node{
 public:
-  virtual llvm::LLVMType llvm_type(TYPE_T spec) const = 0;
+  declaration_specifier(TYPE_T spec)
+    : spec_(spec) { }
+
+  llvm::Type* type(module *mod) const;
+
+private:
+  const TYPE_T spec_;
 };
 
-class pointer_declarator: public declarator{
+class declarator;
+class parameter: public node {
 public:
-  pointer_declarator(unsigned order)
-    : order_(order) { }
+  parameter(node *spec, node *decl)
+    : spec_((declaration_specifier*)spec),
+      decl_((declarator*)decl) { }
 
-  pointer_declarator *inc(){
-    order_ += 1;
+  llvm::Type* type(module *mod) const;
+
+public:
+  const declaration_specifier *spec_;
+  const declarator *decl_;
+};
+
+/* Declarators */
+class pointer;
+class identifier;
+
+class declarator: public node{
+  virtual llvm::Type* type_impl(module*mod, llvm::Type *type) const = 0;
+
+public:
+  declarator(node *lhs)
+    : lhs_((declarator*)lhs), ptr_(nullptr){ }
+
+  llvm::Type* type(module*mod, llvm::Type *type) const;
+
+  const identifier* id() const {
+    return (const identifier*)lhs_;
+  }
+
+  declarator *set_ptr(node *ptr){
+    ptr_ = (pointer*)ptr;
     return this;
   }
 
-  llvm::LLVMType llvm_type(TYPE_T spec) const;
-
-private:
-  unsigned order_;
+protected:
+  declarator *lhs_;
+  pointer *ptr_;
 };
 
-class tile_declarator: public declarator{
-public:
-  tile_declarator(node *decl, node *shapes)
-    : decl_(decl), shapes_((list<constant*>*)(shapes)) { }
-
-  llvm::LLVMType llvm_type(TYPE_T spec) const;
+class identifier: public declarator{
+  llvm::Type* type_impl(module*mod, llvm::Type *type) const;
 
 public:
-  const node* decl_;
+  identifier(char *&name): declarator(nullptr), name_(name) { }
+  const std::string &name() const;
+
+private:
+  std::string name_;
+};
+
+class pointer: public declarator{
+private:
+  llvm::Type* type_impl(module *mod, llvm::Type *type) const;
+
+public:
+  pointer(node *id): declarator(id) { }
+};
+
+class tile: public declarator{
+private:
+  llvm::Type* type_impl(module *mod, llvm::Type *type) const;
+
+public:
+  tile(node *id, node *shapes)
+    : declarator(id), shapes_((list<constant*>*)(shapes)) { }
+
+public:
   const list<constant*>* shapes_;
 };
 
-class function_declarator: public declarator{
-public:
-  function_declarator(node *decl, node *args)
-    : decl_(decl), args_((list<node*>*)args) { }
-
-  llvm::LLVMType llvm_type(TYPE_T spec) const;
+class function: public declarator{
+private:
+  llvm::Type* type_impl(module *mod, llvm::Type *type) const;
 
 public:
-  const node* decl_;
-  const list<node*>* args_;
+  function(node *id, node *args)
+    : declarator(id), args_((list<parameter*>*)args) { }
+
+public:
+  const list<parameter*>* args_;
 };
 
-class compound_declarator: public declarator{
-public:
-  compound_declarator(node *ptr, node *tile)
-    : ptr_(ptr), tile_(tile) { }
 
-  llvm::LLVMType llvm_type(TYPE_T spec) const;
+class initializer : public declarator{
+private:
+  llvm::Type* type_impl(module* mod, llvm::Type *type) const;
 
 public:
-  const node *ptr_;
-  const node *tile_;
-};
+  initializer(node *id, node *initializer)
+  : declarator(id), initializer_(initializer){ }
 
-class init_declarator : public declarator{
-public:
-  init_declarator(node *decl, node *initializer)
-  : decl_(decl), initializer_(initializer){ }
-
-  llvm::LLVMType llvm_type(TYPE_T spec) const;
 
 public:
-  const node *decl_;
   const node *initializer_;
 };
 
-class parameter: public node {
-public:
-  parameter(TYPE_T spec, node *decl)
-    : spec_(spec), decl_(decl) { }
-
-  llvm::LLVMType* llvm_type() const;
-
-public:
-  const TYPE_T spec_;
-  const node *decl_;
-};
 
 class type: public node{
 public:
   type(TYPE_T spec, node * decl)
-    : spec_(spec), decl_(decl) { }
+    : spec_(spec), decl_((declarator*)decl) { }
 
 public:
   const TYPE_T spec_;
-  const node *decl_;
+  const declarator *decl_;
 };
 
 /* Function definition */
 class function_definition: public node{
 public:
-  function_definition(TYPE_T spec, node *header, node *body)
-    : spec_(spec), header_((function_declarator *)header), body_((compound_statement*)body) { }
+  function_definition(node *spec, node *header, node *body)
+    : spec_((declaration_specifier*)spec), header_((function *)header), body_((compound_statement*)body) { }
+
+  void codegen(module* mod);
 
 public:
-  const TYPE_T spec_;
-  const function_declarator *header_;
+  const declaration_specifier *spec_;
+  const function *header_;
   const compound_statement *body_;
 };
 

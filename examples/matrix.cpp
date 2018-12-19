@@ -1,6 +1,7 @@
 #include <cstring>
 #include <cstdio>
 #include "ast.h"
+#include "codegen.h"
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();
@@ -11,7 +12,7 @@ extern translation_unit *ast_root;
 
 const char src[] =
 "\
-void test(int32 id){\
+void test(fp32 *A, fp32 *B, fp32 *C){\
   fp32 c[16, 16] = {0};\
   int32 i = 0;\
   i += 1;\
@@ -23,5 +24,8 @@ int main() {
    yyparse();
    yy_delete_buffer(buffer);
    translation_unit *program = ast_root;
+   tdl::context context;
+   tdl::module module("matrix", &context);
+   program->codegen(&module);
    return 0;
 }
