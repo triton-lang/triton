@@ -2,8 +2,9 @@
 #define TDL_INCLUDE_AST_H
 
 #include "parser.hpp"
+#include "llvm/IR/IRBuilder.h"
 #include <cassert>
-#include <list>
+#include <vector>
 #include <string>
 
 namespace llvm{
@@ -58,7 +59,7 @@ enum TYPE_T{
 // AST
 class node {
 public:
-  virtual void codegen(module*) const { }
+  virtual llvm::Value* codegen(module*) const { return nullptr; }
 };
 
 template<class T>
@@ -71,100 +72,146 @@ public:
     return this;
   }
 
-  void codegen(module* mod) const
-  { for(T x: values_){ x->codegen(mod); } }
+  llvm::Value* codegen(module* mod) const{
+    for(T x: values_){
+      x->codegen(mod);
+    }
+    return nullptr;
+  }
 
-  const std::list<T> &values() const
+  const std::vector<T> &values() const
   { return values_; }
 
 private:
-  std::list<T> values_;
+  std::vector<T> values_;
 };
 
-class binary_operator: public node{
+class expression: public node{
+public:
+  virtual llvm::Value* codegen(module *) const = 0;
+};
+
+class binary_operator: public expression{
+private:
+  llvm::Value* llvm_op(llvm::IRBuilder<> &bld, llvm::Value *lhs, llvm::Value *rhs, const std::string &name) const;
+
 public:
   binary_operator(BIN_OP_T op, node *lhs, node *rhs)
-    : op_(op), lhs_(lhs), rhs_(rhs) { }
+    : op_(op), lhs_((expression*)lhs), rhs_((expression*)rhs) { }
+  llvm::Value* codegen(module *) const;
 
 private:
   const BIN_OP_T op_;
-  const node *lhs_;
-  const node *rhs_;
+  const expression *lhs_;
+  const expression *rhs_;
 };
 
 
-class constant: public node{
+class constant: public expression{
 public:
   constant(int value): value_(value) { }
+  llvm::Value* codegen(module *mod) const;
 
 private:
   const int value_;
 };
 
 
-class string_literal: public node{
+class string_literal: public expression{
 public:
   string_literal(char *&value): value_(value) { }
+  llvm::Value* codegen(module *mod) const;
 
 public:
   std::string value_;
 };
 
-class unary_operator: public node{
+class unary_operator: public expression{
+private:
+  llvm::Value *llvm_op(llvm::IRBuilder<> &builder, llvm::Value *arg, const std::string &name) const;
+
 public:
   unary_operator(UNARY_OP_T op, node *arg)
-    : op_(op), arg_(arg) { }
+    : op_(op),
+      arg_((expression*)arg) { }
+
+  llvm::Value* codegen(module *mod) const;
 
 private:
   const UNARY_OP_T op_;
-  const node *arg_;
+  const expression *arg_;
 };
 
-class cast_operator: public node{
-public:
-  cast_operator(node *type, node *arg): type_(type), arg_(arg) { }
+class type_name;
+class cast_operator: public expression{
+private:
+  llvm::Value *llvm_op(llvm::IRBuilder<> &builder, llvm::Type *T, llvm::Value *arg, const std::string &name) const;
 
 public:
-  const node *type_;
-  const node *arg_;
+  cast_operator(node *T, node *arg):
+    T_((type_name*)T),
+    arg_((expression*)arg) { }
+
+  llvm::Value* codegen(module *mod) const;
+
+public:
+  const type_name *T_;
+  const expression *arg_;
 };
 
-class conditional_expression: public node{
+class conditional_expression: public expression{
+private:
+  llvm::Value *llvm_op(llvm::IRBuilder<> &builder,
+                       llvm::Value *cond, llvm::Value *true_value, llvm::Value *false_value,
+                       const std::string &name) const;
+
 public:
   conditional_expression(node *cond, node *true_value, node *false_value)
-    : cond_(cond), true_value_(true_value), false_value_(false_value) { }
+    : cond_((expression*)cond),
+      true_value_((expression*)true_value),
+      false_value_((expression*)false_value) { }
+
+  llvm::Value* codegen(module *mod) const;
 
 public:
-  const node *cond_;
-  const node *true_value_;
-  const node *false_value_;
+  const expression *cond_;
+  const expression *true_value_;
+  const expression *false_value_;
 };
 
-class assignment_expression: public node{
+class assignment_expression: public expression{
+private:
+  llvm::Value *llvm_op(llvm::IRBuilder<> &builder,
+                       llvm::Value *lvalue, llvm::Value *rvalue,
+                       const std::string &name) const;
+
 public:
   assignment_expression(node *lvalue, ASSIGN_OP_T op, node *rvalue)
-    : lvalue_(lvalue), op_(op), rvalue_(rvalue) { }
+    : lvalue_((expression*)lvalue), op_(op), rvalue_((expression*)rvalue) { }
+
+  llvm::Value* codegen(module *mod) const;
 
 public:
   ASSIGN_OP_T op_;
-  const node *lvalue_;
-  const node *rvalue_;
+  const expression *lvalue_;
+  const expression *rvalue_;
 };
 
 class statement: public node{
-
 };
 
 class initializer;
+class declaration_specifier;
+
 class declaration: public node{
 public:
   declaration(node *spec, node *init)
-    : spec_(spec), init_((list<initializer*>*)init) { }
+    : spec_((declaration_specifier*)spec), init_((list<initializer*>*)init) { }
 
-  void codegen(module* mod) const;
+  llvm::Value* codegen(module* mod) const;
 
 public:
-  const node *spec_;
+  const declaration_specifier *spec_;
   const list<initializer*> *init_;
 };
 
@@ -177,7 +224,7 @@ public:
   compound_statement(node* decls, node* statements)
     : decls_((declarations_t)decls), statements_((statements_t)statements) {}
 
-  virtual void codegen(module* mod) const;
+  llvm::Value* codegen(module* mod) const;
 
 private:
   declarations_t decls_;
@@ -230,6 +277,7 @@ public:
       decl_((declarator*)decl) { }
 
   llvm::Type* type(module *mod) const;
+  std::string name() const;
 
 public:
   const declaration_specifier *spec_;
@@ -267,7 +315,7 @@ class identifier: public declarator{
   llvm::Type* type_impl(module*mod, llvm::Type *type) const;
 
 public:
-  identifier(char *&name): declarator(nullptr), name_(name) { }
+  identifier(char *&name): declarator(this), name_(name) { }
   const std::string &name() const;
 
 private:
@@ -302,6 +350,8 @@ public:
   function(node *id, node *args)
     : declarator(id), args_((list<parameter*>*)args) { }
 
+  void bind_parameters(module *mod, llvm::Function *fn) const;
+
 public:
   const list<parameter*>* args_;
 };
@@ -314,23 +364,27 @@ private:
 public:
   initializer(node *decl, node *init)
   : declarator((node*)((declarator*)decl)->id()),
-    decl_((declarator*)decl), init_(init){ }
+    decl_((declarator*)decl), init_((expression*)init){ }
 
-  void codegen(module *) const;
+  void specifier(const declaration_specifier *spec);
+  llvm::Value* codegen(module *) const;
 
 public:
+  const declaration_specifier *spec_;
   const declarator *decl_;
-  const node *init_;
+  const expression *init_;
 };
 
 
-class type: public node{
+class type_name: public node{
 public:
-  type(TYPE_T spec, node * decl)
-    : spec_(spec), decl_((declarator*)decl) { }
+  type_name(node *spec, node * decl)
+    : spec_((declaration_specifier*)spec), decl_((declarator*)decl) { }
+
+  llvm::Type *type(module *mod) const;
 
 public:
-  const TYPE_T spec_;
+  const declaration_specifier *spec_;
   const declarator *decl_;
 };
 
@@ -340,7 +394,7 @@ public:
   function_definition(node *spec, node *header, node *body)
     : spec_((declaration_specifier*)spec), header_((function *)header), body_((compound_statement*)body) { }
 
-  void codegen(module* mod) const;
+  llvm::Value* codegen(module* mod) const;
 
 public:
   const declaration_specifier *spec_;
@@ -359,7 +413,7 @@ public:
     return this;
   }
 
-  void codegen(module* mod) const;
+  llvm::Value* codegen(module* mod) const;
 
 private:
   list<node*>* decls_;

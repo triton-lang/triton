@@ -13,9 +13,7 @@ extern translation_unit *ast_root;
 const char src[] =
 "\
 void test(fp32 *A, fp32 *B, fp32 *C){\
-  fp32 c[16, 16] = {0};\
   int32 i = 0;\
-  i += 1;\
 }\
 ";
 

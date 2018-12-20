@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include "ast.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/IRBuilder.h"
@@ -19,10 +20,13 @@ public:
   module(const std::string &name, context *ctx);
   llvm::Module* handle();
   llvm::IRBuilder<>& builder();
+  void value(ast::node* node, llvm::Value* value);
+  llvm::Value *value(ast::node* node);
 
 private:
   llvm::Module handle_;
   llvm::IRBuilder<> builder_;
+  std::unordered_map<ast::node*, llvm::Value*> values_;
 };
 
 

@@ -96,8 +96,8 @@ constant_list
 	;
 
 type_name
-  : type_specifier { $$ = new type(get_type_spec($1), nullptr); }
-  | type_specifier abstract_declarator { $$ = new type(get_type_spec($1), $2); }
+  : declaration_specifiers { $$ = new type_name($1, nullptr); }
+  | declaration_specifiers abstract_declarator { $$ = new type_name($1, $2); }
 	;
 
 /* -------------------------- */
@@ -228,6 +228,13 @@ expression
 	: assignment_expression { $$ = $1; }
 	;
 
+/* Initialization */
+initialization_expression
+  : assignment_expression { $$ = $1; }
+  | '{' constant '}' { $$ = $2; }
+  ;
+
+
 /* -------------------------- */
 /*         Statements         */
 /* -------------------------- */
@@ -315,14 +322,10 @@ declarator
 	| direct_declarator { $$ = $1; }
 	;
 
-initializer
-	: assignment_expression { $$ = $1; }
-  | '{' constant '}' { $$ = $2; }
-	;
-	
+
 init_declarator
   : declarator { $$ = new initializer($1, nullptr); }
-  | declarator '=' initializer { $$ = new initializer($1, $3); }
+  | declarator '=' initialization_expression { $$ = new initializer($1, $3); }
 	;
 
 /* -------------------------- */
