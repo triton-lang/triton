@@ -289,7 +289,7 @@ public:
       decl_((declarator*)decl) { }
 
   llvm::Type* type(module *mod) const;
-  std::string name() const;
+  const identifier* id() const;
 
 public:
   const declaration_specifier *spec_;

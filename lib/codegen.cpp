@@ -3,6 +3,7 @@
 #include "codegen.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/CFG.h"
 
 using namespace llvm;
 
@@ -28,12 +29,43 @@ llvm::IRBuilder<>& module::builder() {
   return builder_;
 }
 
-void module::value(const ast::node* node, llvm::Value* value){
-  values_[node] = value;
+void module::set_value(const ast::node *node, BasicBlock *block, Value *value){
+  values_[val_key_t{node, block}] = value;
 }
 
-llvm::Value *module::value(const ast::node* node){
-  return values_[node];
+void module::set_value(const ast::node* node, llvm::Value* value){
+  return set_value(node, builder_.GetInsertBlock(), value);
+}
+
+llvm::Value *module::get_value_recursive(const ast::node* node, BasicBlock *block) {
+  llvm::Value *result;
+  if(sealed_blocks_.find(block) == sealed_blocks_.end()){
+    result = builder_.CreatePHI(nullptr, 1);
+    incomplete_phis_[val_key_t(node, block)] = (PHINode*)result;
+  }
+  else if(pred_size(block) <= 1){
+    result = get_value(node, *pred_begin(block));
+  }
+  else{
+    result = builder_.CreatePHI(nullptr, 1);
+    set_value(node, block, result);
+    for(BasicBlock *pred: predecessors(block)){
+      llvm::Value *value = get_value(node, pred);
+      static_cast<PHINode*>(result)->addIncoming(value, pred);
+    }
+  }
+  set_value(node, block, result);
+}
+
+llvm::Value *module::get_value(const ast::node* node, BasicBlock *block) {
+  val_key_t key(node, block);
+  if(values_.find(key) != values_.end())
+    return values_.at(key);
+  return get_value_recursive(node, block);
+}
+
+llvm::Value *module::get_value(const ast::node *node) {
+  return get_value(node, builder_.GetInsertBlock());
 }
 
 
@@ -65,10 +97,8 @@ Type* parameter::type(module *mod) const {
   return decl_->type(mod, spec_->type(mod));
 }
 
-std::string parameter::name() const {
-  if(auto id = decl_->id())
-    return id->name();
-  return "";
+const identifier *parameter::id() const {
+  return decl_->id();
 }
 
 /* Declarators */
@@ -109,8 +139,11 @@ void function::bind_parameters(module *mod, Function *fn) const{
   assert(args.size() == args_->values().size());
   for(size_t i = 0; i < args.size(); i++){
     parameter *param_i = args_->values().at(i);
-    args[i]->setName(param_i->name());
-    mod->value(param_i, args[i]);
+    const identifier *id_i = param_i->id();
+    if(id_i){
+      args[i]->setName(id_i->name());
+      mod->set_value(id_i, nullptr, args[i]);
+    }
   }
 }
 
@@ -451,7 +484,7 @@ llvm::Value* constant::codegen(module *mod) const{
 
 /* Named */
 llvm::Value* named_expression::codegen(module *mod) const{
-  return mod->value(id_);
+  return mod->get_value(id_);
 }
 
 
