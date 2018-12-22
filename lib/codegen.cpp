@@ -28,11 +28,11 @@ llvm::IRBuilder<>& module::builder() {
   return builder_;
 }
 
-void module::value(ast::node* node, llvm::Value* value){
+void module::value(const ast::node* node, llvm::Value* value){
   values_[node] = value;
 }
 
-llvm::Value *module::value(ast::node* node){
+llvm::Value *module::value(const ast::node* node){
   return values_[node];
 }
 
@@ -86,7 +86,6 @@ Type* identifier::type_impl(module *, Type *type) const{
 const std::string &identifier::name() const{
   return name_;
 }
-
 
 // Tile
 Type* tile::type_impl(module*, Type *type) const{
@@ -166,16 +165,90 @@ Value* initializer::codegen(module * mod) const{
 /*------------------*/
 /*    Expression    */
 /*------------------*/
+llvm::Value *llvm_cast(llvm::IRBuilder<> &builder, Value *src, Type *dst_ty){
+  Type *src_ty = src->getType();
+  bool src_signed = false;
+  bool dst_signed = false;
+  if(src_ty == dst_ty)
+    return src;
+  else if(src_ty->isIntegerTy() && src_signed && dst_ty->isFloatingPointTy())
+    return builder.CreateSIToFP(src, dst_ty);
+
+  else if(src_ty->isIntegerTy() && !src_signed && dst_ty->isFloatingPointTy())
+    return builder.CreateUIToFP(src, dst_ty);
+
+  else if(src_ty->isFloatingPointTy() && dst_ty->isIntegerTy() && dst_signed)
+    return builder.CreateFPToSI(src, dst_ty);
+
+  else if(src_ty->isFloatingPointTy() && dst_ty->isIntegerTy() && !dst_signed)
+    return builder.CreateFPToUI(src, dst_ty);
+
+  else if(src_ty->isFloatingPointTy() && dst_ty->isFloatingPointTy() &&
+          src_ty->getFPMantissaWidth() < dst_ty->getFPMantissaWidth())
+    return builder.CreateFPExt(src, dst_ty);
+
+  else if(src_ty->isFloatingPointTy() && dst_ty->isFloatingPointTy() &&
+          src_ty->getFPMantissaWidth() > dst_ty->getFPMantissaWidth())
+    return builder.CreateFPTrunc(src, dst_ty);
+
+  else if(src_ty->isIntegerTy() && dst_ty->isIntegerTy() &&
+          src_ty->getIntegerBitWidth())
+    return builder.CreateIntCast(src, dst_ty, dst_signed);
+
+  else{
+    assert(false && "unreachable");
+    throw;
+  }
+}
+
+inline void implicit_cast(llvm::IRBuilder<> &builder, Value *&lhs, Value *&rhs,
+                          bool &is_float, bool &is_ptr, bool &is_int, bool &is_signed){
+  // Input types
+  Type *left_ty = lhs->getType();
+  Type *right_ty = rhs->getType();
+  // One operand is pointer
+  if(left_ty->isPointerTy()){
+    is_ptr = true;
+  }
+  // One operand is double
+  else if(left_ty->isDoubleTy() || right_ty->isDoubleTy()){
+    Value *&to_convert = left_ty->isDoubleTy()?rhs:lhs;
+    to_convert = llvm_cast(builder, to_convert, builder.getDoubleTy());
+    is_float = true;
+  }
+  // One operand is float
+  else if(left_ty->isFloatTy() || right_ty->isFloatTy()){
+    Value *&to_convert = left_ty->isFloatTy()?rhs:lhs;
+    to_convert = llvm_cast(builder, to_convert, builder.getFloatTy());
+    is_float = true;
+  }
+  // Both operands are integers
+  else if(left_ty->isIntegerTy() && right_ty->isIntegerTy()){
+    is_int = true;
+    is_signed = false;
+    if(left_ty->getIntegerBitWidth() != right_ty->getIntegerBitWidth()){
+      Value *&to_convert = (left_ty->getIntegerBitWidth() > right_ty->getIntegerBitWidth())?rhs:lhs;
+      Type *dst_ty = (to_convert==lhs)?right_ty:left_ty;
+      to_convert = llvm_cast(builder, to_convert, dst_ty);
+    }
+  }
+  // Not reachable
+  else{
+    assert(false);
+    throw;
+  }
+}
+
+//inline void implicit_broadcast(llvm::IRBuilder<> &builder, Value *&lhs, Value *&rhs){
+//  return;
+//}
 
 /* Binary operator */
 Value *binary_operator::llvm_op(llvm::IRBuilder<> &builder, Value *lhs, Value *rhs, const std::string &name) const
 {
-  Type *ltype = lhs->getType();
-  Type *rtype = rhs->getType();
-  bool is_float = ltype->isFloatingPointTy() || rtype->isFloatingPointTy();
-  bool is_ptr = ltype->isPointerTy() || rtype->isPointerTy();
-  bool is_int = ltype->isIntegerTy() || rtype->isIntegerTy();
-  bool is_signed = false;
+  bool is_float, is_ptr, is_int, is_signed;
+  implicit_cast(builder, lhs, rhs, is_float, is_ptr, is_int, is_signed);
+//  implicit_broadcast(builder, lhs, rhs);
   // Mul
   if(op_==MUL && is_float)
     return builder.CreateFMul(lhs, rhs, name);
@@ -357,6 +430,7 @@ Value *assignment_expression::llvm_op(llvm::IRBuilder<> &builder, Value *lvalue,
 Value *assignment_expression::codegen(module *mod) const{
   Value *lvalue = lvalue_->codegen(mod);
   Value *rvalue = rvalue_->codegen(mod);
+  BasicBlock *block = mod->builder().GetInsertBlock();
   return llvm_op(mod->builder(), lvalue, rvalue, "");
 }
 
@@ -374,6 +448,12 @@ llvm::Value* string_literal::codegen(module *mod) const{
 llvm::Value* constant::codegen(module *mod) const{
   return mod->builder().getInt32(value_);
 }
+
+/* Named */
+llvm::Value* named_expression::codegen(module *mod) const{
+  return mod->value(id_);
+}
+
 
 }
 

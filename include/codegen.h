@@ -20,13 +20,13 @@ public:
   module(const std::string &name, context *ctx);
   llvm::Module* handle();
   llvm::IRBuilder<>& builder();
-  void value(ast::node* node, llvm::Value* value);
-  llvm::Value *value(ast::node* node);
+  void value(const ast::node* node, llvm::Value* value);
+  llvm::Value *value(const ast::node *node);
 
 private:
   llvm::Module handle_;
   llvm::IRBuilder<> builder_;
-  std::unordered_map<ast::node*, llvm::Value*> values_;
+  std::unordered_map<const ast::node*, llvm::Value*> values_;
 };
 
 

@@ -56,6 +56,9 @@ enum TYPE_T{
   FLOAT32_T, FLOAT64_T
 };
 
+class pointer;
+class identifier;
+
 // AST
 class node {
 public:
@@ -89,6 +92,15 @@ private:
 class expression: public node{
 public:
   virtual llvm::Value* codegen(module *) const = 0;
+};
+
+class named_expression: public expression {
+public:
+  named_expression(node *id): id_((const identifier*)id){}
+  llvm::Value* codegen(module* mod) const;
+
+private:
+  const identifier *id_;
 };
 
 class binary_operator: public expression{
@@ -285,9 +297,6 @@ public:
 };
 
 /* Declarators */
-class pointer;
-class identifier;
-
 class declarator: public node{
   virtual llvm::Type* type_impl(module*mod, llvm::Type *type) const = 0;
 
@@ -311,7 +320,7 @@ protected:
   pointer *ptr_;
 };
 
-class identifier: public declarator{
+class identifier: public declarator {
   llvm::Type* type_impl(module*mod, llvm::Type *type) const;
 
 public:

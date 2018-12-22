@@ -109,7 +109,7 @@ identifier
 	;
 	
 primary_expression
-	: identifier  { $$ = $1; }
+  : identifier  { $$ = new named_expression($1); }
 	| constant { $$ = $1; }
 	| STRING_LITERAL { $$ = new string_literal(yytext); }
   | '(' expression ')' { $$ = $1; }
