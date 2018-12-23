@@ -37,22 +37,37 @@ void module::set_value(const ast::node* node, llvm::Value* value){
   return set_value(node, builder_.GetInsertBlock(), value);
 }
 
+PHINode* module::make_phi(Type *type, unsigned num_values, BasicBlock *block){
+  llvm::BasicBlock::iterator save = builder_.GetInsertPoint();
+  builder_.SetInsertPoint(&*block->getFirstInsertionPt());
+  PHINode *res = builder_.CreatePHI(type, num_values);
+  builder_.SetInsertPoint(&*save);
+  return res;
+}
+
+Value *module::add_phi_operands(const ast::node *node, PHINode *&phi){
+  BasicBlock *block = phi->getParent();
+  for(BasicBlock *pred: predecessors(block)){
+    llvm::Value *value = get_value(node, pred);
+    if(phi->getType()==nullptr){
+      phi = make_phi(value->getType(), pred_size(block), block);
+    }
+    phi->addIncoming(value, pred);
+  }
+}
+
 llvm::Value *module::get_value_recursive(const ast::node* node, BasicBlock *block) {
   llvm::Value *result;
   if(sealed_blocks_.find(block) == sealed_blocks_.end()){
-    result = builder_.CreatePHI(nullptr, 1);
-    incomplete_phis_[val_key_t(node, block)] = (PHINode*)result;
+    incomplete_phis_[block][node] = make_phi(nullptr, 1, block);
   }
   else if(pred_size(block) <= 1){
     result = get_value(node, *pred_begin(block));
   }
   else{
-    result = builder_.CreatePHI(nullptr, 1);
+    result = make_phi(nullptr, 1, block);
     set_value(node, block, result);
-    for(BasicBlock *pred: predecessors(block)){
-      llvm::Value *value = get_value(node, pred);
-      static_cast<PHINode*>(result)->addIncoming(value, pred);
-    }
+    add_phi_operands(node, (PHINode*&)result);
   }
   set_value(node, block, result);
 }
@@ -68,6 +83,11 @@ llvm::Value *module::get_value(const ast::node *node) {
   return get_value(node, builder_.GetInsertBlock());
 }
 
+llvm::Value *module::seal_block(BasicBlock *block){
+  for(auto &x: incomplete_phis_[block])
+    add_phi_operands(x.first, x.second);
+  sealed_blocks_.insert(block);
+}
 
 namespace ast{
 
@@ -170,7 +190,8 @@ Value* function_definition::codegen(module *mod) const{
 /* Statements */
 Value* compound_statement::codegen(module* mod) const{
   decls_->codegen(mod);
-//  statements_->codegen(mod);
+  if(statements_)
+    statements_->codegen(mod);
   return nullptr;
 }
 
@@ -456,15 +477,10 @@ Value *conditional_expression::codegen(module *mod) const{
 }
 
 /* Assignment expression */
-Value *assignment_expression::llvm_op(llvm::IRBuilder<> &builder, Value *lvalue, Value *rvalue, const std::string &name) const{
-  return nullptr;
-}
-
 Value *assignment_expression::codegen(module *mod) const{
-  Value *lvalue = lvalue_->codegen(mod);
   Value *rvalue = rvalue_->codegen(mod);
-  BasicBlock *block = mod->builder().GetInsertBlock();
-  return llvm_op(mod->builder(), lvalue, rvalue, "");
+  mod->set_value(lvalue_, rvalue);
+  return rvalue;
 }
 
 /* Type name */

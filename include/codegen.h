@@ -18,6 +18,8 @@ private:
 
 class module {
   typedef std::pair<const ast::node*, llvm::BasicBlock*> val_key_t;
+  llvm::PHINode *make_phi(llvm::Type *type, unsigned num_values, llvm::BasicBlock *block);
+  llvm::Value *add_phi_operands(const ast::node *node, llvm::PHINode *&phi);
   llvm::Value *get_value_recursive(const ast::node* node, llvm::BasicBlock *block);
 
 public:
@@ -30,13 +32,15 @@ public:
   // Getters
   llvm::Value *get_value(const ast::node *node, llvm::BasicBlock* block);
   llvm::Value *get_value(const ast::node *node);
+  // Seal block -- no more predecessors will be added
+  llvm::Value *seal_block(llvm::BasicBlock *block);
 
 private:
   llvm::Module handle_;
   llvm::IRBuilder<> builder_;
   std::map<val_key_t, llvm::Value*> values_;
   std::set<llvm::BasicBlock*> sealed_blocks_;
-  std::map<val_key_t, llvm::PHINode*> incomplete_phis_;
+  std::map<llvm::BasicBlock*, std::map<const ast::node*, llvm::PHINode*>> incomplete_phis_;
 };
 
 

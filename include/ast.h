@@ -192,25 +192,18 @@ public:
 };
 
 class assignment_expression: public expression{
-private:
-  llvm::Value *llvm_op(llvm::IRBuilder<> &builder,
-                       llvm::Value *lvalue, llvm::Value *rvalue,
-                       const std::string &name) const;
-
 public:
   assignment_expression(node *lvalue, ASSIGN_OP_T op, node *rvalue)
-    : lvalue_((expression*)lvalue), op_(op), rvalue_((expression*)rvalue) { }
+    : lvalue_((identifier*)lvalue), op_(op), rvalue_((expression*)rvalue) { }
 
   llvm::Value* codegen(module *mod) const;
 
 public:
   ASSIGN_OP_T op_;
-  const expression *lvalue_;
+  const identifier *lvalue_;
   const expression *rvalue_;
 };
 
-class statement: public node{
-};
 
 class initializer;
 class declaration_specifier;
@@ -227,6 +220,8 @@ public:
   const list<initializer*> *init_;
 };
 
+class statement: public node{
+};
 
 class compound_statement: public statement{
   typedef list<declaration*>* declarations_t;
