@@ -269,13 +269,12 @@ expression_statement
 	;
 
 selection_statement
-  : IF '(' expression ')' statement { $$ = new selection_statement($1, $3); }
-  | IF '(' expression ')' statement ELSE statement { $$ = new selection_statement($1, $3, $5); }
+  : IF '(' expression ')' statement { $$ = new selection_statement($3, $5); }
+  | IF '(' expression ')' statement ELSE statement { $$ = new selection_statement($3, $5, $7); }
 	;
 
 iteration_statement
-  : FOR '(' expression_statement expression_statement ')' statement { $$ = new iteration_statement($1, $3, NULL, $4); }
-  | FOR '(' expression_statement expression_statement expression ')' statement { $$ = new iteration_statement($1, $3, $4, $5); }
+  : FOR '(' expression_statement expression_statement expression ')' statement { $$ = new iteration_statement($3, $4, $5, $7); }
 	;
 
 

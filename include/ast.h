@@ -94,13 +94,19 @@ public:
   virtual llvm::Value* codegen(module *) const = 0;
 };
 
-class named_expression: public expression {
+class unary_expression: public node{
 public:
-  named_expression(node *id): id_((const identifier*)id){}
-  llvm::Value* codegen(module* mod) const;
+  unary_expression(node *id): id_((const identifier*)id) {}
+  const identifier *id() const;
 
 private:
   const identifier *id_;
+};
+
+class named_expression: public unary_expression {
+public:
+  named_expression(node *id): unary_expression(id){ }
+  llvm::Value* codegen(module* mod) const;
 };
 
 class binary_operator: public expression{
@@ -194,13 +200,13 @@ public:
 class assignment_expression: public expression{
 public:
   assignment_expression(node *lvalue, ASSIGN_OP_T op, node *rvalue)
-    : lvalue_((identifier*)lvalue), op_(op), rvalue_((expression*)rvalue) { }
+    : lvalue_((unary_expression*)lvalue), op_(op), rvalue_((expression*)rvalue) { }
 
   llvm::Value* codegen(module *mod) const;
 
 public:
   ASSIGN_OP_T op_;
-  const identifier *lvalue_;
+  const unary_expression *lvalue_;
   const expression *rvalue_;
 };
 
@@ -241,18 +247,23 @@ private:
 class selection_statement: public statement{
 public:
   selection_statement(node *cond, node *if_value, node *else_value = nullptr)
-    : cond_(cond), if_value_(if_value), else_value_(else_value) { }
+    : cond_(cond), then_value_(if_value), else_value_(else_value) { }
+
+  llvm::Value* codegen(module *mod) const;
 
 public:
   const node *cond_;
-  const node *if_value_;
+  const node *then_value_;
   const node *else_value_;
 };
 
 class iteration_statement: public statement{
 public:
   iteration_statement(node *init, node *stop, node *exec, node *statements)
-    : init_(init), stop_(stop), exec_(exec), statements_(statements) { }
+    : init_(init), stop_(stop), exec_(exec), statements_(statements)
+  { }
+
+  llvm::Value* codegen(module *mod) const;
 
 private:
   const node *init_;
@@ -368,7 +379,7 @@ private:
 public:
   initializer(node *decl, node *init)
   : declarator((node*)((declarator*)decl)->id()),
-    decl_((declarator*)decl), init_((expression*)init){ }
+    decl_((declarator*)decl), expr_((expression*)init){ }
 
   void specifier(const declaration_specifier *spec);
   llvm::Value* codegen(module *) const;
@@ -376,7 +387,7 @@ public:
 public:
   const declaration_specifier *spec_;
   const declarator *decl_;
-  const expression *init_;
+  const expression *expr_;
 };
 
 
