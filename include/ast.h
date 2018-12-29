@@ -89,9 +89,43 @@ private:
   std::vector<T> values_;
 };
 
+enum range_enum_t{
+  ALL,
+  NEWAXIS
+};
+
+class range: public node{
+public:
+  range(range_enum_t type)
+    : type_(type){}
+
+  range_enum_t type() const{
+    return type_;
+  }
+
+public:
+  const range_enum_t type_;
+};
+
 class expression: public node{
 public:
   virtual llvm::Value* codegen(module *) const = 0;
+};
+
+class postfix_expression: public expression{
+
+};
+
+class indexing_expression: public postfix_expression{
+public:
+  indexing_expression(node *id, node *ranges)
+    : id_((const identifier*)id), ranges_((const list<range*>*)ranges) {}
+
+  llvm::Value* codegen(module *) const;
+
+private:
+  const identifier* id_;
+  const list<range*>* ranges_;
 };
 
 class unary_expression: public node{

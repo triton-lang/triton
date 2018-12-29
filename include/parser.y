@@ -49,7 +49,7 @@ TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
 %token XOR_ASSIGN OR_ASSIGN TYPE_NAME
 %token VOID UINT8 UINT16 UINT32 UINT64 INT8 INT16 INT32 INT64 FP32 FP64
 %token IF ELSE FOR
-%token DEF
+%token NEWAXIS
 
 %start translation_unit
 %%
@@ -115,8 +115,21 @@ primary_expression
   | '(' expression ')' { $$ = $1; }
 	;
 
+range
+  : ':' { $$ = new range(tdl::ast::ALL); }
+  | NEWAXIS { $$ = new range(tdl::ast::NEWAXIS); }
+
+range_list
+  : range { $$ = new list<range*>((range*)$1); }
+  | range_list ',' range { $$ = append_ptr_list<range>($1, $2); }
+
+postfix_expression
+  : primary_expression { $$ = $1;}
+  | identifier '[' range_list ']' { $$ = new indexing_expression($1, $2);}
+  ;
+
 unary_expression
-	: primary_expression { $$ = $1; }
+  : postfix_expression { $$ = $1; }
   | INC_OP unary_expression { $$ = new unary_operator(INC, $2); }
   | DEC_OP unary_expression { $$ = new unary_operator(DEC, $2); }
   | unary_operator cast_expression { $$ = new unary_operator(get_unary_op($1), $2); }

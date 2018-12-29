@@ -16,7 +16,7 @@ int comment();
 %}
 
 %%
-"def"			{ count(); return(DEF); }
+"newaxis"			{ count(); return(NEWAXIS); }
 "if"			{ count(); return(IF); }
 "else"			{ count(); return(ELSE); }
 "for"			{ count(); return(FOR); }

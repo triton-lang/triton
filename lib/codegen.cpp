@@ -482,6 +482,11 @@ Value* binary_operator::codegen(module *mod) const{
   return result;
 }
 
+/* Postfix expression */
+Value* indexing_expression::codegen(module *mod) const{
+  return nullptr;
+}
+
 /* Unary operator */
 Value *unary_operator::llvm_op(llvm::IRBuilder<> &builder, Value *arg, const std::string &name) const{
   Type *atype = arg->getType();
