@@ -17,14 +17,11 @@ const char src[] =
 "\
 void test(fp32 *A, fp32 *B, fp32 *C, int32 i){\
   int32 j = 1;\
+  int32 test[16, 16] = 0;\
+  int32 test2[16, 16];\
+  int32 test3[16, 16];\
   int32 k;\
-  i = i + j;\
-  for(k = 0; k < 10; k = k+1){\
-    int32 u = 1;\
-    u = u + i;\
-    if(k == 0)\
-      u = u + 2;\
-  }\
+  test = test2 + test3;\
 }\
 ";
 

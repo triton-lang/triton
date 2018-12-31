@@ -145,7 +145,7 @@ public:
 
 class binary_operator: public expression{
 private:
-  llvm::Value* llvm_op(llvm::IRBuilder<> &bld, llvm::Value *lhs, llvm::Value *rhs, const std::string &name) const;
+  llvm::Value* llvm_op(module *mod, llvm::IRBuilder<> &bld, llvm::Value *lhs, llvm::Value *rhs, const std::string &name) const;
 
 public:
   binary_operator(BIN_OP_T op, node *lhs, node *rhs)
@@ -163,6 +163,7 @@ class constant: public expression{
 public:
   constant(int value): value_(value) { }
   llvm::Value* codegen(module *mod) const;
+  int value() const;
 
 private:
   const int value_;

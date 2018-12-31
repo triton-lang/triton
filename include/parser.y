@@ -92,7 +92,7 @@ constant :
 	
 constant_list
 	: constant  { $$ = new list<constant*>((constant*)$1); }
-	| constant_list ',' constant { $$ = append_ptr_list<constant>($1, $2); }
+  | constant_list ',' constant { $$ = append_ptr_list<constant>($1, $3); }
 	;
 
 type_name
