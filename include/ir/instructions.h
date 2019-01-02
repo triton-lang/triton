@@ -15,9 +15,11 @@ class basic_block;
 //===----------------------------------------------------------------------===//
 
 class instruction: public user{
-public:
+protected:
   // constructors
-  instruction(type *ty, unsigned num_used, instruction *next = nullptr);
+  instruction(type *ty, unsigned num_ops, instruction *next = nullptr);
+
+public:
 
   // parent
   const basic_block *get_parent() const { return parent_;}
@@ -80,22 +82,35 @@ public:
 class cmp_inst: public instruction{
 public:
   typedef llvm::CmpInst::Predicate pred_t;
+  using pcmp = llvm::CmpInst;
+
+private:
+  type* make_cmp_result_type(type *ty);
 
 protected:
-  cmp_inst(pred_t pred, value *lhs, value *rhs, type *ty,
-           const std::string &name = "", instruction *next = nullptr);
+  cmp_inst(pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next);
+
+  static bool is_fp_predicate(pred_t pred);
+  static bool is_int_predicate(pred_t pred);
+
+public:
+
 
 private:
   pred_t pred_;
 };
 
 class icmp_inst: public cmp_inst{
+  using cmp_inst::cmp_inst;
+
 public:
   static icmp_inst* create(pred_t pred, value *lhs, value *rhs,
                     const std::string &name = "", instruction *next = nullptr);
 };
 
 class fcmp_inst: public cmp_inst{
+  using cmp_inst::cmp_inst;
+
 public:
   static fcmp_inst* create(pred_t pred, value *lhs, value *rhs,
                     const std::string &name = "", instruction *next = nullptr);

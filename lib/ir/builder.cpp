@@ -14,8 +14,8 @@ builder::builder(context &ctx):
 //                               insertion helpers
 //===----------------------------------------------------------------------===//
 
-void builder::set_insert_point(instruction *instr){
-  block_ = instr->get_parent();
+void builder::set_insert_point(basic_block::iterator instr){
+  block_ = (*instr)->get_parent();
   insert_point_ = instr;
 }
 

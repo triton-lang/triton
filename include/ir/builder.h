@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include "instructions.h"
+#include "basic_block.h"
 
 namespace tdl{
 namespace ir{
@@ -18,14 +19,16 @@ class phi_node;
 
 /* Builder */
 class builder{
+  typedef basic_block::iterator iterator;
+
 public:
   // Constructor
   builder(context &ctx);
   // Setters
-  void set_insert_point(instruction* instr);
+  void set_insert_point(iterator instr);
   void set_insert_point(basic_block* block);
   basic_block* get_insert_block() { return block_; }
-  instruction* get_insert_point() { return insert_point_;}
+  iterator get_insert_point() { return insert_point_;}
   // Constants
   value *get_int32(unsigned val);
   // Types
@@ -33,7 +36,11 @@ public:
   type *get_double_ty();
   // Insert
   template<typename InstTy>
-  InstTy* insert(InstTy *instr, const std::string &name = "");
+  InstTy* insert(InstTy *inst, const std::string &name = ""){
+    if(block_)
+      block_->get_inst_list().insert(insert_point_, inst);
+    inst->set_name(name);
+  }
   // Branch instructions
   value* create_br(basic_block *dest);
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
@@ -105,7 +112,7 @@ public:
 private:
   context &ctx_;
   basic_block *block_;
-  instruction *insert_point_;
+  iterator insert_point_;
 };
 
 }

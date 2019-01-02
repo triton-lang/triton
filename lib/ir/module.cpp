@@ -27,11 +27,11 @@ void module::set_value(const std::string& name, ir::value *value){
 }
 
 ir::phi_node* module::make_phi(ir::type *ty, unsigned num_values, ir::basic_block *block){
-  ir::instruction* instr = block->get_first_non_phi_or_dbg();
-  if(instr)
-    builder_.set_insert_point(instr);
+  basic_block::iterator insert = block->get_first_non_phi();
+  if(insert == block->end())
+    builder_.set_insert_point(insert);
   ir::phi_node *res = builder_.create_phi(ty, num_values);
-  if(instr)
+  if(insert == block->end())
     builder_.set_insert_point(block);
   return res;
 }
