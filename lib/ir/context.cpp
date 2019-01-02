@@ -3,8 +3,5 @@
 namespace tdl{
 namespace ir{
 
-/* Context */
-context::context() { }
-
 }
 }

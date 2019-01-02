@@ -18,11 +18,11 @@ class context;
 class module {
   typedef std::pair<std::string, basic_block*> val_key_t;
   phi_node *make_phi(type *ty, unsigned num_values, basic_block *block);
-  void add_phi_operands(const std::string& name, phi_node *&phi);
+  value *add_phi_operands(const std::string& name, phi_node *&phi);
   value *get_value_recursive(const std::string& name, basic_block *block);
 
 public:
-  module(const std::string &name, context *ctx);
+  module(const std::string &name, context &ctx);
   context& get_context();
   builder& get_builder();
   // Setters
@@ -35,6 +35,8 @@ public:
   void seal_block(basic_block *block);
 
 private:
+  std::string name_;
+  context &context_;
   builder builder_;
   std::map<val_key_t, value*> values_;
   std::set<basic_block*> sealed_blocks_;

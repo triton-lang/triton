@@ -342,7 +342,7 @@ ir::value *binary_operator::llvm_op(ir::module *mod, ir::builder &builder, ir::v
   if(op_==SUB && is_ptr)
     return builder.create_gep(lhs, {builder.create_neg(rhs)});
   if(op_==LEFT_SHIFT)
-    return builder.create_lshr(lhs, rhs, name);
+    return builder.create_shl(lhs, rhs, name);
   if(op_==RIGHT_SHIFT)
     return builder.create_ashr(lhs, rhs, name);
   if(op_ == LT && is_float)
