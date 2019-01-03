@@ -41,9 +41,10 @@ public:
       block_->get_inst_list().insert(insert_point_, inst);
     inst->set_name(name);
   }
-  // Branch instructions
+  // terminator instructions
   value* create_br(basic_block *dest);
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
+  value* create_ret_void();
   // Cast instructions
   value *create_cast(cast_inst::op_t op, value *v, type *dst_ty, const std::string &name = "");
   value* create_si_to_fp(value *src, type *dst_ty, const std::string &name = "");
@@ -106,8 +107,6 @@ public:
   value *create_splat(value *arg, const std::vector<unsigned> &shapes, const std::string &name = "");
   value *create_reshape(value *arg, const std::vector<unsigned> &shapes, const std::string &name = "");
   value *create_broadcast(value *arg, const std::vector<unsigned> &shapes, const std::string &name = "");
-  // Terminators
-  value *create_ret_void();
 
 private:
   context &ctx_;

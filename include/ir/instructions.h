@@ -227,7 +227,7 @@ private:
   static type *get_indexed_type(type *ty, const std::vector<value*> &idx);
 
 public:
-  static getelementptr_inst* create(value *ptr, const std::vector<value*> &idx,
+  static getelementptr_inst* create(type *pointee_ty, value *ptr, const std::vector<value*> &idx,
                                     const std::string &name = "", instruction *next = nullptr);
 
 private:
@@ -239,20 +239,41 @@ private:
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
 
-class retile_inst: public instruction{
+// retile
 
+class retile_inst: public instruction {
+protected:
+  retile_inst(value *arg, const std::vector<unsigned> &shapes, const std::string &name, instruction *next);
 };
 
-class reshape_inst: public instruction{
+// reshape
 
+class reshape_inst: public retile_inst {
+  using retile_inst::retile_inst;
+
+public:
+  static instruction* create(value *arg, const std::vector<unsigned> &shapes,
+                      const std::string &name = "", instruction *next = nullptr);
 };
 
-class splat_inst: public instruction{
+// splat
 
+class splat_inst: public retile_inst {
+  using retile_inst::retile_inst;
+
+public:
+  static instruction* create(value *arg, const std::vector<unsigned> &shapes,
+                      const std::string &name = "", instruction *next = nullptr);
 };
 
-class broadcast_inst: public instruction{
+// broadcast
 
+class broadcast_inst: public retile_inst {
+  using retile_inst::retile_inst;
+
+public:
+  static instruction* create(value *arg, const std::vector<unsigned> &shapes,
+                      const std::string &name = "", instruction *next = nullptr);
 };
 
 

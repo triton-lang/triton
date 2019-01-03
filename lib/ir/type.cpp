@@ -152,5 +152,20 @@ tile_type* tile_type::get_same_shapes(type *ty, type *ref){
 }
 
 
+//===----------------------------------------------------------------------===//
+//                               function_type class
+//===----------------------------------------------------------------------===//
+
+function_type::function_type(type *ret_ty, const std::vector<type*> &param_tys):
+   type(ret_ty->get_context(), FunctionTyID) {
+  contained_tys_.push_back(ret_ty);
+  for(type *ty: param_tys)
+    contained_tys_.push_back(ty);
+}
+
+function_type* function_type::get(type *ret_ty, const std::vector<type *> &param_tys) {
+  return new function_type(ret_ty, param_tys);
+}
+
 }
 }

@@ -25,7 +25,7 @@ void builder::set_insert_point(basic_block *block){
 }
 
 //===----------------------------------------------------------------------===//
-//                               branch instructions
+//                               terminator instructions
 //===----------------------------------------------------------------------===//
 
 value* builder::create_br(basic_block *dest){
@@ -34,6 +34,10 @@ value* builder::create_br(basic_block *dest){
 
 value* builder::create_cond_br(value *cond, basic_block *if_dest, basic_block *else_dest){
   return insert(branch_inst::create(cond, if_dest, else_dest));
+}
+
+value *builder::create_ret_void() {
+  return insert(return_inst::create(ctx_));
 }
 
 //===----------------------------------------------------------------------===//
@@ -133,7 +137,7 @@ DEFINE_UNARY_INT(not)
 //===----------------------------------------------------------------------===//
 
 value* builder::create_gep(value *ptr, const std::vector<value*>& idx_list, const std::string &name){
-  return insert(getelementptr_inst::create(ptr, idx_list), name);
+  return insert(getelementptr_inst::create(nullptr, ptr, idx_list), name);
 }
 
 //===----------------------------------------------------------------------===//
@@ -199,24 +203,17 @@ DEFINE_FCMP_INSTR(ONE, llvm::FCmpInst::FCMP_ONE)
 //                               tile instructions
 //===----------------------------------------------------------------------===//
 
-//value *create_splat(value *arg, const std::vector<unsigned> &shapes, const std::string &name) {
-//}
+value *builder::create_reshape(value *arg, const std::vector<unsigned> &shapes, const std::string &name) {
+  return insert(reshape_inst::create(arg, shapes, name));
+}
 
-//value *create_reshape(value *arg, const std::vector<unsigned> &shapes, const std::string &name) {
+value *builder::create_splat(value *arg, const std::vector<unsigned> &shapes, const std::string &name) {
+  return insert(splat_inst::create(arg, shapes, name));
+}
 
-//}
-
-//value *create_broadcast(value *arg, const std::vector<unsigned> &shapes, const std::string &name) {
-
-//}
-
-//===----------------------------------------------------------------------===//
-//                               terminator instructions
-//===----------------------------------------------------------------------===//
-
-//value *create_red_void() {
-
-//}
+value *builder::create_broadcast(value *arg, const std::vector<unsigned> &shapes, const std::string &name) {
+  return insert(broadcast_inst::create(arg, shapes, name));
+}
 
 
 

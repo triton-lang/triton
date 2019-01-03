@@ -280,6 +280,43 @@ type *getelementptr_inst::get_indexed_type(type *ty, const std::vector<value *> 
   return result;
 }
 
+getelementptr_inst *getelementptr_inst::create(type *pointee_ty, value *ptr, const std::vector<value *> &idx, const std::string &name, instruction *next) {
+  return new getelementptr_inst(pointee_ty, ptr, idx, name, next);
+}
+
+
+
+//===----------------------------------------------------------------------===//
+//                               retile_inst classes
+//===----------------------------------------------------------------------===//
+
+retile_inst::retile_inst(value *arg, const std::vector<unsigned> &shapes,
+                         const std::string &name, instruction *next)
+   : instruction(tile_type::get(arg->get_type()->get_scalar_ty(), shapes), 1, name, next) {
+  set_operand(0, arg);
+}
+
+// reshape
+
+instruction* reshape_inst::create(value *arg, const std::vector<unsigned> &shapes,
+                                  const std::string &name, instruction *next) {
+  return new reshape_inst(arg, shapes, name, next);
+}
+
+
+// splat
+
+instruction* splat_inst::create(value *arg, const std::vector<unsigned> &shapes,
+                                  const std::string &name, instruction *next) {
+  return new splat_inst(arg, shapes, name, next);
+}
+
+// broadcast
+
+instruction* broadcast_inst::create(value *arg, const std::vector<unsigned> &shapes,
+                                  const std::string &name, instruction *next) {
+  return new broadcast_inst(arg, shapes, name, next);
+}
 
 }
 }

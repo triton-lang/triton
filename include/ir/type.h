@@ -155,12 +155,11 @@ private:
 };
 
 class function_type: public type {
+private:
+  function_type(type *ret_ty, const std::vector<type *> &param_tys);
+
 public:
   static function_type* get(type *ret_ty, const std::vector<type*>& param_tys);
-
-private:
-  type *return_type_;
-  std::vector<type *> param_types_;
 };
 
 
