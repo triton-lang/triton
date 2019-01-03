@@ -1,0 +1,156 @@
+#include <cassert>
+#include "ir/type.h"
+#include "ir/context.h"
+#include "ir/context_impl.h"
+#include "ir/value.h"
+
+namespace tdl{
+namespace ir{
+
+//===----------------------------------------------------------------------===//
+//                              type class
+//===----------------------------------------------------------------------===//
+
+// attributes
+type *type::get_scalar_ty() const {
+  if(is_tile_ty())
+    return get_tile_element_ty();
+  return const_cast<type*>(this);
+}
+
+unsigned type::get_integer_bitwidth() const
+{ return ((integer_type*)(this))->get_bitwidth(); }
+
+unsigned type::get_fp_mantissa_width() const {
+  id_t id = get_scalar_ty()->id_;
+  assert(is_floating_point_ty() && "Not a floating point type!");
+  if (id == HalfTyID) return 11;
+  if (id == FloatTyID) return 24;
+  if (id == DoubleTyID) return 53;
+  throw std::runtime_error("unreachable");
+}
+
+type* type::get_tile_element_ty() const {
+  assert(is_tile_ty());
+  return contained_tys_[0];
+}
+
+unsigned type::get_pointer_address_space() const {
+  assert(is_pointer_ty());
+  return ((pointer_type*)this)->get_address_space();
+}
+
+const std::vector<unsigned> &type::get_tile_shapes() const {
+  assert(is_tile_ty());
+  return ((tile_type*)this)->get_shapes();
+}
+
+
+// composite predicates
+bool type::is_int_or_tileint_ty()
+{ return get_scalar_ty()->is_integer_ty(); }
+
+bool type::is_integer_ty(unsigned width) const
+{ return is_integer_ty() && get_integer_bitwidth()== width; }
+
+
+bool type::is_floating_point_ty() const
+{ return is_half_ty() || is_float_ty() || is_double_ty(); }
+
+bool type::is_sized() const {
+  // primitive types are sized
+  if(is_integer_ty() || is_floating_point_ty() ||
+     is_pointer_ty()){
+    return true;
+  }
+  // tile types are sizes
+  if(is_tile_ty())
+    return get_scalar_ty()->is_sized();
+  return false;
+}
+
+// primitive types
+type *type::get_void_ty(context &ctx) { return &ctx.p_impl->void_ty; }
+type *type::get_label_ty(context &ctx) { return &ctx.p_impl->label_ty; }
+// half
+type *type::get_half_ty(context &ctx) { return &ctx.p_impl->half_ty; }
+type *type::get_float_ty(context &ctx) { return &ctx.p_impl->float_ty; }
+type *type::get_double_ty(context &ctx) { return &ctx.p_impl->double_ty; }
+// integer types
+integer_type *type::get_int1_ty(context &ctx) { return &ctx.p_impl->int1_ty; }
+integer_type *type::get_int8_ty(context &ctx) { return &ctx.p_impl->int8_ty; }
+integer_type *type::get_int16_ty(context &ctx) { return &ctx.p_impl->int16_ty; }
+integer_type *type::get_int32_ty(context &ctx) { return &ctx.p_impl->int32_ty; }
+integer_type *type::get_int64_ty(context &ctx) { return &ctx.p_impl->int64_ty; }
+integer_type *type::get_int128_ty(context &ctx) { return &ctx.p_impl->int128_ty; }
+
+
+
+pointer_type::pointer_type(type *ty, unsigned address_space)
+    : type(ty->get_context(), PointerTyID), address_space_(address_space){
+  contained_tys_.push_back(ty);
+}
+
+bool pointer_type::is_valid_elt_ty(type *ty){
+  return !ty->is_void_ty() && !ty->is_label_ty() &&
+         !ty->is_metadata_ty() && !ty->is_token_ty();
+}
+
+pointer_type* pointer_type::get(type *elt_ty, unsigned address_space){
+  assert(elt_ty && "Can't get a pointer to <null> type!");
+  assert(is_valid_elt_ty(elt_ty) && "Invalid type for pointer element!");
+  // look-up
+  context_impl *impl = elt_ty->get_context().p_impl.get();
+  pointer_type *&entry = impl->ptr_tys[std::make_pair(elt_ty, address_space)];
+  if(!entry)
+    entry = new pointer_type(elt_ty, address_space);
+  return entry;
+}
+
+//===----------------------------------------------------------------------===//
+//                               composite_type class
+//===----------------------------------------------------------------------===//
+
+type* composite_type::get_type_at_index(value *) const{
+  assert(is_tile_ty());
+  return get_scalar_ty();
+}
+
+bool composite_type::index_valid(value *idx) const{
+  assert(is_tile_ty());
+  return idx->get_type()->is_int_or_tileint_ty();
+}
+
+//===----------------------------------------------------------------------===//
+//                               tile_type class
+//===----------------------------------------------------------------------===//
+
+tile_type::tile_type(type *ty, const std::vector<unsigned> &shapes)
+    : composite_type(ty->get_context(), TileTyID), shapes_(shapes) {
+  contained_tys_.push_back(ty);
+}
+
+bool tile_type::is_valid_elt_ty(type *ty) {
+  return ty->is_pointer_ty() || ty->is_floating_point_ty() || ty->is_integer_ty();
+}
+
+tile_type* tile_type::get(type *elt_ty, const std::vector<unsigned> &shapes) {
+  assert(elt_ty && "Can't get a tile of <null> type!");
+  assert(shapes.size() && "Can't create a tile with empty shapes!");
+  assert(is_valid_elt_ty(elt_ty) && "Invalid type for pointer element!");
+  // look-up
+  context_impl *impl = elt_ty->get_context().p_impl.get();
+  tile_type *&entry = impl->tile_tys[std::make_pair(elt_ty, shapes)];
+  if(!entry)
+    entry = new tile_type(elt_ty, shapes);
+  return entry;
+}
+
+tile_type* tile_type::get_same_shapes(type *ty, type *ref){
+  assert(ref->is_tile_ty());
+  return get(ty, ref->get_tile_shapes());
+}
+
+
+}
+}

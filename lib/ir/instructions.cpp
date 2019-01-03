@@ -25,6 +25,9 @@ instruction::instruction(type *ty, unsigned num_ops, const std::string &name, in
 //                               phi_node classes
 //===----------------------------------------------------------------------===//
 
+phi_node::phi_node(type *ty, unsigned num_reserved, std::string const &name, instruction *next)
+  : instruction(ty, num_reserved, name, next){ }
+
 // Set incoming value
 void phi_node::set_incoming_value(unsigned i, value *v){
   assert(v && "PHI node got a null value!");
@@ -51,8 +54,8 @@ void phi_node::add_incoming(value *v, basic_block *block){
 }
 
 // Factory methods
-phi_node* phi_node::create(type *ty, unsigned num_reserved){
-  return new phi_node(ty, num_reserved);
+phi_node* phi_node::create(type *ty, unsigned num_reserved, const std::string &name, instruction *next){
+  return new phi_node(ty, num_reserved, name, next);
 }
 
 
@@ -103,7 +106,7 @@ cmp_inst::cmp_inst(type *ty, cmp_inst::pred_t pred, value *lhs, value *rhs, cons
 }
 
 type* cmp_inst::make_cmp_result_type(type *ty){
-  type* int1_ty = ty->get_context().get_int1_ty();
+  type* int1_ty = type::get_int1_ty(ty->get_context());
   if (tile_type* tile_ty = dynamic_cast<tile_type*>(ty))
     return tile_type::get_same_shapes(int1_ty, tile_ty);
   return int1_ty;
@@ -173,8 +176,8 @@ cast_inst *cast_inst::create(op_t op, value *arg, type *ty, const std::string &n
 cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, const std::string &name, instruction *next){
   type *arg_ty = arg->get_type();
   assert(arg_ty->is_int_or_tileint_ty() && ty->is_int_or_tileint_ty() && "Invalid integer cast!");
-  unsigned arg_bits = arg_ty->get_scalar_bitsize();
-  unsigned dst_bits = ty->get_scalar_bitsize();
+  unsigned arg_bits = arg_ty->get_integer_bitwidth();
+  unsigned dst_bits = ty->get_integer_bitwidth();
   op_t op = (arg_bits == dst_bits ? ic::BitCast :
             (arg_bits > dst_bits  ? ic::Trunc :
             (is_signed            ? ic::SExt : ic::ZExt)));
@@ -189,7 +192,7 @@ cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, 
 // return_inst
 
 return_inst::return_inst(context &ctx, value *ret_val, instruction *next)
-    : terminator_inst(ctx.get_void_ty(), !!ret_val, "", next){
+    : terminator_inst(type::get_void_ty(ctx), !!ret_val, "", next){
   if(ret_val)
     set_operand(0, ret_val);
 }
@@ -202,12 +205,12 @@ return_inst *return_inst::create(context &ctx, value *ret_val, instruction *next
 // conditional/unconditional branch
 
 branch_inst::branch_inst(basic_block *dst, instruction *next)
-    : terminator_inst(dst->get_context().get_void_ty(), 1, "", next){
+    : terminator_inst(type::get_void_ty(dst->get_context()), 1, "", next){
   set_operand(0, dst);
 }
 
 branch_inst::branch_inst(basic_block *if_dst, basic_block *else_dst, value *cond, instruction *next)
-    : terminator_inst(if_dst->get_context().get_void_ty(), 3, "", next){
+    : terminator_inst(type::get_void_ty(if_dst->get_context()), 3, "", next){
   assert(cond->get_type()->is_integer_ty(1) && "May only branch on boolean predicates!");
   set_operand(0, if_dst);
   set_operand(1, else_dst);

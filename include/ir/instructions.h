@@ -36,7 +36,7 @@ private:
 
 class phi_node: public instruction{
 private:
-  phi_node(type *ty, unsigned num_reserved);
+  phi_node(type *ty, unsigned num_reserved, const std::string &name, instruction *next);
 
 public:
   void set_incoming_value(unsigned i, value *v);
@@ -45,7 +45,7 @@ public:
   void add_incoming(value *v, basic_block *block);
 
   // Factory methods
-  static phi_node* create(type *ty, unsigned num_reserved);
+  static phi_node* create(type *ty, unsigned num_reserved, const std::string &name = "", instruction *next = nullptr);
 
 private:
   unsigned num_reserved_;
@@ -234,6 +234,27 @@ private:
   type *source_elt_ty;
   type *res_elt_ty;
 };
+
+//===----------------------------------------------------------------------===//
+//                               retile_inst classes
+//===----------------------------------------------------------------------===//
+
+class retile_inst: public instruction{
+
+};
+
+class reshape_inst: public instruction{
+
+};
+
+class splat_inst: public instruction{
+
+};
+
+class broadcast_inst: public instruction{
+
+};
+
 
 
 }

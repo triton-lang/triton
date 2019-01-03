@@ -1,18 +1,22 @@
 #ifndef TDL_INCLUDE_IR_CONTEXT_H
 #define TDL_INCLUDE_IR_CONTEXT_H
 
+#include <memory>
+#include "ir/type.h"
+
 namespace tdl{
 namespace ir{
 
 class type;
+class context_impl;
 
 /* Context */
 class context {
 public:
-  type *get_void_ty();
-  type *get_int1_ty();
+  context();
 
-private:
+public:
+  std::shared_ptr<context_impl> p_impl;
 };
 
 }

@@ -25,10 +25,10 @@ ir::type* declaration_specifier::type(ir::module *mod) const {
   ir::context &ctx = mod->get_context();
   switch (spec_) {
   case VOID_T:      return ir::type::get_void_ty(ctx);
-  case INT8_T:      return ir::integer_type::get(ctx, 8);
-  case INT16_T:     return ir::integer_type::get(ctx, 16);
-  case INT32_T:     return ir::integer_type::get(ctx, 32);
-  case INT64_T:     return ir::integer_type::get(ctx, 64);
+  case INT8_T:      return ir::type::get_int8_ty(ctx);
+  case INT16_T:     return ir::type::get_int16_ty(ctx);
+  case INT32_T:     return ir::type::get_int32_ty(ctx);
+  case INT64_T:     return ir::type::get_int64_ty(ctx);
   case FLOAT32_T:   return ir::type::get_float_ty(ctx);
   case FLOAT64_T:   return ir::type::get_double_ty(ctx);
   default: throw std::runtime_error("unreachable");
@@ -227,7 +227,7 @@ ir::value *llvm_cast(ir::builder &builder, ir::value *src, ir::type *dst_ty){
     return builder.create_fp_trunc(src, dst_ty);
 
   else if(src_ty->is_integer_ty() && dst_ty->is_integer_ty() &&
-          src_ty->get_integer_bit_width())
+          src_ty->get_integer_bitwidth())
     return builder.create_int_cast(src, dst_ty, dst_signed);
 
   else
@@ -259,8 +259,8 @@ inline void implicit_cast(ir::builder &builder, ir::value *&lhs, ir::value *&rhs
   else if(left_ty->is_integer_ty() && right_ty->is_integer_ty()){
     is_int = true;
     is_signed = false;
-    if(left_ty->get_integer_bit_width() != right_ty->get_integer_bit_width()){
-      ir::value *&to_convert = (left_ty->get_integer_bit_width() > right_ty->get_integer_bit_width())?rhs:lhs;
+    if(left_ty->get_integer_bitwidth() != right_ty->get_integer_bitwidth()){
+      ir::value *&to_convert = (left_ty->get_integer_bitwidth() > right_ty->get_integer_bitwidth())?rhs:lhs;
       ir::type *dst_ty = (to_convert==lhs)?right_ty:left_ty;
       to_convert = llvm_cast(builder, to_convert, dst_ty);
     }

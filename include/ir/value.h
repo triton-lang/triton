@@ -23,7 +23,7 @@ public:
   void add_use(use *arg);
   // name
   void set_name(const std::string &name);
-  type* get_type() { return ty_; }
+  type* get_type() const { return ty_; }
 
 private:
   type *ty_;
