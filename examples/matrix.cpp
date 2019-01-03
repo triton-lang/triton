@@ -1,6 +1,8 @@
 #include <cstring>
 #include <cstdio>
 #include "ast.h"
+#include "ir/context.h"
+#include "ir/module.h"
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();
@@ -25,10 +27,10 @@ int main() {
    YY_BUFFER_STATE buffer = yy_scan_string(src);
    yyparse();
    yy_delete_buffer(buffer);
-//   translation_unit *program = ast_root;
-//   tdl::context context;
-//   tdl::module module("matrix", &context);
-//   program->codegen(&module);
+   translation_unit *program = ast_root;
+   tdl::ir::context context;
+   tdl::ir::module module("matrix", context);
+   program->codegen(&module);
 //   llvm::PrintModulePass print(llvm::outs());
 //   llvm::AnalysisManager<llvm::Module> analysis;
 //   print.run(*module.handle(), analysis);
