@@ -76,8 +76,7 @@ ir::type* pointer::type_impl(ir::module*, ir::type *type) const{
 
 // Function
 void function::bind_parameters(ir::module *mod, ir::function *fn) const{
-  std::vector<ir::value*> args;
-  std::transform(fn->arg_begin(), fn->arg_end(), std::back_inserter(args), [&](ir::argument& x){ return &x;});
+  std::vector<ir::value*> args(fn->arg_begin(), fn->arg_end());
   assert(args.size() == args_->values().size());
   for(size_t i = 0; i < args.size(); i++){
     parameter *param_i = args_->values().at(i);
@@ -100,7 +99,7 @@ ir::type* function::type_impl(ir::module* mod, ir::type *type) const{
 ir::value* function_definition::codegen(ir::module *mod) const{
   ir::function_type *prototype = (ir::function_type*)header_->type(mod, spec_->type(mod));
   const std::string &name = header_->id()->name();
-  ir::function *fn = ir::function::create(prototype, name, mod);
+  ir::function *fn = ir::function::create(prototype, ir::function::internal, name, mod);
   header_->bind_parameters(mod, fn);
   ir::basic_block *entry = ir::basic_block::create(mod->get_context(), "entry", fn);
   mod->seal_block(entry);

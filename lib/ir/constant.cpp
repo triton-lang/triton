@@ -88,6 +88,20 @@ undef_value *undef_value::get(type *ty) {
   return result;
 }
 
+/* global value */
+global_value::global_value(type *ty, unsigned num_ops,
+                           linkage_types_t linkage,
+                           const std::string &name, unsigned addr_space)
+    : constant(pointer_type::get(ty, addr_space), num_ops, name),
+      linkage_(linkage) { }
+
+
+/* global object */
+global_object::global_object(type *ty, unsigned num_ops,
+                            linkage_types_t linkage,
+                            const std::string &name, unsigned addr_space)
+  : global_value(ty, num_ops, linkage, name, addr_space) { }
+
 
 }
 }

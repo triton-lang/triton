@@ -1,7 +1,9 @@
 #include <string>
 #include "ir/basic_block.h"
 #include "ir/builder.h"
+#include "ir/constant.h"
 #include "ir/instructions.h"
+#include "ir/type.h"
 #include "llvm/IR/Instruction.h"
 
 namespace tdl{
@@ -11,7 +13,7 @@ builder::builder(context &ctx):
   ctx_(ctx){}
 
 //===----------------------------------------------------------------------===//
-//                               insertion helpers
+//                               utilities
 //===----------------------------------------------------------------------===//
 
 void builder::set_insert_point(basic_block::iterator instr){
@@ -23,6 +25,16 @@ void builder::set_insert_point(basic_block *block){
   block_ = block;
   insert_point_ = block->end();
 }
+
+
+//===----------------------------------------------------------------------===//
+//                               convenience functions
+//===----------------------------------------------------------------------===//
+
+value *builder::get_int32(unsigned val) {
+  return constant_int::get(type::get_int32_ty(ctx_), val);
+}
+
 
 //===----------------------------------------------------------------------===//
 //                               terminator instructions
@@ -98,6 +110,16 @@ DEFINE_UNARY_FLOAT(fneg)
 //===----------------------------------------------------------------------===//
 //                               binary int instructions
 //===----------------------------------------------------------------------===//
+
+
+value* builder::create_insert_nuwnswb_binop(binary_operator::op_t op, value *lhs,
+                                            value *rhs, const std::string &name,
+                                            bool has_nuw, bool has_nsw) {
+  binary_operator* result = insert(binary_operator::create(op, lhs, rhs), name);
+  if (has_nuw) result->set_has_no_unsigned_wrap();
+  if (has_nsw) result->set_has_no_signed_wrap();
+  return result;
+}
 
 #define DEFINE_NOWRAP_BINARY(SUFFIX, OPCODE)\
   value* builder::create_ ## SUFFIX(value *lhs, value *rhs, const std::string &name, bool has_nuw, bool has_nsw){\
@@ -192,12 +214,12 @@ DEFINE_FCMP_INSTR(ONE, llvm::FCmpInst::FCMP_ONE)
 
 
 //===----------------------------------------------------------------------===//
-//                               load instructions
+//                               load/store instructions
 //===----------------------------------------------------------------------===//
 
-//value *builder::create_load(value *arg, const std::string &name){
-
-//}
+value *builder::create_load(value *arg, const std::string &name){
+  return load_inst::create(arg, name);
+}
 
 //===----------------------------------------------------------------------===//
 //                               tile instructions

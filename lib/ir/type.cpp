@@ -40,6 +40,12 @@ unsigned type::get_pointer_address_space() const {
   return ((pointer_type*)this)->get_address_space();
 }
 
+type * type::get_pointer_element_ty() const {
+  assert(is_pointer_ty());
+  return ((pointer_type*)this)->get_element_ty();
+}
+
+
 const std::vector<unsigned> &type::get_tile_shapes() const {
   assert(is_tile_ty());
   return ((tile_type*)this)->get_shapes();

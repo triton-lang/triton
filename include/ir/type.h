@@ -49,6 +49,7 @@ public:
   const std::vector<unsigned> &get_tile_shapes() const;
   type *get_tile_element_ty() const;
   unsigned get_pointer_address_space() const;
+  type *get_pointer_element_ty() const;
 
   // primitive predicates
   bool is_void_ty() const     { return id_ == VoidTyID; }
@@ -159,6 +160,10 @@ private:
   function_type(type *ret_ty, const std::vector<type *> &param_tys);
 
 public:
+  // accessors
+  unsigned get_num_params()         const { return contained_tys_.size() - 1; }
+  type*    get_param_ty(unsigned i) const { return contained_tys_.at(1 + i); }
+  // factory methods
   static function_type* get(type *ret_ty, const std::vector<type*>& param_tys);
 };
 

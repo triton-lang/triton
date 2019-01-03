@@ -285,6 +285,15 @@ getelementptr_inst *getelementptr_inst::create(type *pointee_ty, value *ptr, con
 }
 
 
+//===----------------------------------------------------------------------===//
+//                               load_inst/store_inst classes
+//===----------------------------------------------------------------------===//
+load_inst::load_inst(value *ptr, const std::string &name, instruction *next)
+  : unary_inst(ptr->get_type()->get_pointer_element_ty(), ptr, name, next) { }
+
+load_inst* load_inst::create(value *ptr, const std::string &name, instruction *next) {
+  return new load_inst(ptr, name, next);
+}
 
 //===----------------------------------------------------------------------===//
 //                               retile_inst classes
@@ -292,9 +301,7 @@ getelementptr_inst *getelementptr_inst::create(type *pointee_ty, value *ptr, con
 
 retile_inst::retile_inst(value *arg, const std::vector<unsigned> &shapes,
                          const std::string &name, instruction *next)
-   : instruction(tile_type::get(arg->get_type()->get_scalar_ty(), shapes), 1, name, next) {
-  set_operand(0, arg);
-}
+   : unary_inst(tile_type::get(arg->get_type()->get_scalar_ty(), shapes), arg, name, next) { }
 
 // reshape
 

@@ -52,6 +52,30 @@ private:
   double value_;
 };
 
+/* global value */
+class global_value: public constant {
+public:
+  enum linkage_types_t {
+    internal
+  };
+
+public:
+  global_value(type *ty, unsigned num_ops,
+               linkage_types_t linkage, const std::string &name,
+               unsigned addr_space);
+
+private:
+  linkage_types_t linkage_;
+};
+
+/* global object */
+class global_object: public global_value {
+public:
+  global_object(type *ty, unsigned num_ops,
+               linkage_types_t linkage, const std::string &name,
+               unsigned addr_space = 0);
+};
+
 
 }
 }

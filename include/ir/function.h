@@ -3,35 +3,52 @@
 
 #include <string>
 #include "value.h"
+#include "constant.h"
 
 namespace tdl{
 namespace ir{
 
+class function;
 class function_type;
 class module;
 
 /* Argument */
 class argument: public value{
+  argument(type *ty, const std::string &name, function *parent, unsigned arg_no);
 
+public:
+  static argument* create(type *ty, const std::string &name,
+                          function *parent = nullptr, unsigned arg_no = 0);
+
+private:
+  function *parent_;
+  unsigned arg_no_;
 };
 
 /* Function */
-class function: public value{
-  using arg_iterator = argument *;
-  using const_arg_iterator = const argument *;
+class function: public global_object{
+  typedef std::vector<argument*> args_t;
+  typedef args_t::iterator       arg_iterator;
+  typedef args_t::const_iterator const_arg_iterator;
+private:
+  function(function_type *ty, linkage_types_t linkage,
+           const std::string &name = "", module *parent = nullptr);
 
 public:
-  arg_iterator arg_begin();
-  arg_iterator arg_end();
-  const_arg_iterator arg_begin() const;
-  const_arg_iterator arg_end() const;
+  arg_iterator arg_begin() { return args_.begin(); }
+  arg_iterator arg_end() { return args_.end(); }
+  const_arg_iterator arg_begin() const { return args_.begin(); }
+  const_arg_iterator arg_end() const { return args_.end(); }
+  // Accessors
+  function_type* get_function_ty() const;
   // Factory methods
-  static function *create(function_type *type, const std::string &name, module *mod);
+  static function *create(function_type *ty, linkage_types_t linkage,
+                          const std::string &name, module *mod);
 
 private:
-  function_type *type_;
-  std::string name_;
-  module *mod_;
+  module *parent_;
+  args_t args_;
+  bool init_;
 };
 
 }

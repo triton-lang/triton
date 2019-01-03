@@ -68,6 +68,10 @@ public:
   // Get operand
   op_t get_op() const { return op_; }
 
+  // Wraps
+  void set_has_no_unsigned_wrap(bool b = true) { has_no_unsigned_wrap_ = b; }
+  void set_has_no_signed_wrap(bool b = true)   { has_no_signed_wrap_ = b; }
+
   // Factory methods
   static binary_operator *create(op_t op, value *lhs, value *rhs,
                                  const std::string &name = "", instruction *next = nullptr);
@@ -77,6 +81,8 @@ public:
 
 public:
   op_t op_;
+  bool has_no_unsigned_wrap_;
+  bool has_no_signed_wrap_;
 };
 
 
@@ -236,12 +242,25 @@ private:
 };
 
 //===----------------------------------------------------------------------===//
+//                          load_inst/store_inst classes
+//===----------------------------------------------------------------------===//
+
+class load_inst: public unary_inst{
+  load_inst(value *ptr, const std::string &name, instruction *next);
+
+public:
+  static load_inst* create(value *ptr, const std::string &name = "",
+                           instruction *next = nullptr);
+
+};
+
+//===----------------------------------------------------------------------===//
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
 
 // retile
 
-class retile_inst: public instruction {
+class retile_inst: public unary_inst {
 protected:
   retile_inst(value *arg, const std::vector<unsigned> &shapes, const std::string &name, instruction *next);
 };
