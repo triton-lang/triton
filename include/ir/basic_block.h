@@ -22,6 +22,9 @@ public:
   typedef inst_list_t::reverse_iterator          reverse_iterator;
   typedef inst_list_t::const_reverse_iterator    const_reverse_iterator;
 
+private:
+  // constructors
+  basic_block(context &ctx, const std::string &name, function *parent);
 
 public:
   // accessors

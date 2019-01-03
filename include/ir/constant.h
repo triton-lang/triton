@@ -10,32 +10,46 @@ class type;
 class context;
 
 /* Constant */
-class constant: public value{
+class constant: public user{
+protected:
+  using user::user;
+
 public:
   static constant* get_all_ones_value(type *ty);
+  static constant* get_null_value(type *ty);
 };
 
 /* Undef value */
 class undef_value: public constant{
+private:
+  undef_value(type *ty);
+
 public:
   static undef_value* get(type* ty);
 };
 
-/* Data array */
-class constant_data_array: public constant{
-public:
-  static constant_data_array* get_string(context &ctx, const std::string &str);
-};
-
 /* Constant int */
 class constant_int: public constant{
+  constant_int(type *ty, uint64_t value);
 
+public:
+  static constant *get(type *ty, uint64_t value);
+
+private:
+  uint64_t value_;
 };
 
 /* constant fp */
 class constant_fp: public constant{
+  constant_fp(context &ctx, double value);
+
 public:
+  static constant* get_negative_zero(type *ty);
   static constant* get_zero_value_for_negation(type *ty);
+  static constant *get(context &ctx, double v);
+
+private:
+  double value_;
 };
 
 

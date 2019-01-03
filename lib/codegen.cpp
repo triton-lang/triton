@@ -477,8 +477,9 @@ ir::type *type_name::type(ir::module *mod) const{
 }
 
 /* String literal */
-ir::value* string_literal::codegen(ir::module *mod) const{
-  return ir::constant_data_array::get_string(mod->get_context(), value_);
+ir::value* string_literal::codegen(ir::module *) const{
+  throw std::runtime_error("not supported");
+//  return ir::constant_data_array::get_string(mod->get_context(), value_);
 }
 
 /* Constant */

@@ -9,6 +9,9 @@ namespace tdl{
 namespace ir{
 
 class context;
+class constant_int;
+class constant_fp;
+class undef_value;
 
 /* Context impl */
 class context_impl {
@@ -24,6 +27,12 @@ public:
   // Pointer types
   std::map<std::pair<type*, unsigned>, pointer_type*> ptr_tys;
   std::map<std::pair<type*,std::vector<unsigned>>, tile_type*> tile_tys;
+  // Int constants
+  std::map<uint64_t, constant_int*> int_constants_;
+  // Float constants
+  std::map<double, constant_fp*> fp_constants_;
+  // undef values
+  std::map<type*, undef_value*> uv_constants_;
 };
 
 }

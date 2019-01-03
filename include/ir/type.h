@@ -19,14 +19,17 @@ public:
     HalfTyID,        ///<  1: 16-bit floating point type
     FloatTyID,       ///<  2: 32-bit floating point type
     DoubleTyID,      ///<  3: 64-bit floating point type
-    LabelTyID,       ///<  4: Labels
-    MetadataTyID,    ///<  5: Metadata
-    TokenTyID,       ///<  6: Token
+    X86_FP80TyID,    ///<  4: 80-bit floating point type (X87)
+    FP128TyID,       ///<  5: 128-bit floating point type (112-bit mantissa)
+    PPC_FP128TyID,   ///<  6: 128-bit floating point type (two 64-bits, PowerPC)
+    LabelTyID,       ///<  7: Labels
+    MetadataTyID,    ///<  8: Metadata
+    TokenTyID,       ///<  9: Token
     // derived types
-    IntegerTyID,     ///< 7: Arbitrary bit width integers
-    FunctionTyID,    ///< 8: Functions
-    PointerTyID,     ///< 9: Pointers
-    TileTyID,        ///< 10: Tile
+    IntegerTyID,     ///< 10: Arbitrary bit width integers
+    FunctionTyID,    ///< 11: Functions
+    PointerTyID,     ///< 12: Pointers
+    TileTyID,        ///< 13: Tile
   };
 
 public:
@@ -38,7 +41,7 @@ public:
 
   // accessors
   context &get_context() const { return ctx_; }
-
+  id_t get_type_id() const     { return id_;  }
   // type attributes
   unsigned get_fp_mantissa_width() const;
   unsigned get_integer_bitwidth() const;

@@ -19,6 +19,7 @@ class value {
 public:
   // constructor
   value(type *ty, const std::string &name = "");
+  virtual ~value(){ }
   // uses
   void add_use(use *arg);
   // name
