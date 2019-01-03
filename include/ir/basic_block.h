@@ -24,8 +24,9 @@ public:
 
 
 public:
-  // parent
+  // accessors
   function* get_parent() { return parent_; }
+  context& get_context() { return ctx_; }
 
   // get iterator to first instruction that is not a phi
   iterator get_first_non_phi();
@@ -51,10 +52,8 @@ public:
   inline const instruction       &back() const { return *inst_list_.back();  }
   inline       instruction       &back()       { return *inst_list_.back();  }
 
-  // get predecessors
-  const std::vector<basic_block*>& get_predecessors() const;
-
-  // add predecessor
+  // predecessors
+  const std::vector<basic_block*>& get_predecessors() const { return preds_; }
   void add_predecessor(basic_block* pred);
 
   // factory functions

@@ -4,8 +4,15 @@
 namespace tdl{
 namespace ir{
 
+class type;
+
 /* Context */
 class context {
+public:
+  type *get_void_ty();
+  type *get_int1_ty();
+
+private:
 };
 
 }

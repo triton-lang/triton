@@ -55,6 +55,9 @@ private:
 //===----------------------------------------------------------------------===//
 
 class user: public value{
+protected:
+  void resize_ops(unsigned n) { ops_.resize(n); }
+
 public:
   // Constructor
   user(type *ty, unsigned num_ops, const std::string &name = "")
