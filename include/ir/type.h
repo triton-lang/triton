@@ -2,6 +2,7 @@
 #define TDL_INCLUDE_IR_TYPE_H
 
 #include <vector>
+#include <iostream>
 
 namespace tdl{
 namespace ir{
@@ -34,7 +35,7 @@ public:
 
 public:
   //constructors
-  type(context &ctx, id_t id) : ctx_(ctx), id_(id) {}
+  type(context &ctx, id_t id) : ctx_(ctx), id_(id) { }
 
   //destructor
   virtual ~type(){}

@@ -310,7 +310,7 @@ inline void implicit_broadcast(ir::module *mod, ir::builder &builder, ir::value 
 ir::value *binary_operator::llvm_op(ir::module *mod, ir::builder &builder, ir::value *lhs, ir::value *rhs, const std::string &name) const
 {
   bool is_float = false, is_ptr = false, is_int = false, is_signed = false;
-//  implicit_cast(builder, lhs, rhs, is_float, is_ptr, is_int, is_signed);
+  implicit_cast(builder, lhs, rhs, is_float, is_ptr, is_int, is_signed);
 //  implicit_broadcast(mod, builder, lhs, rhs);
   if(op_==MUL && is_float)
     return builder.create_fmul(lhs, rhs, name);

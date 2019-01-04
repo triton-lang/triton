@@ -1,6 +1,7 @@
 #ifndef TDL_INCLUDE_IR_BUILDER_H
 #define TDL_INCLUDE_IR_BUILDER_H
 
+#include <iostream>
 #include <vector>
 #include <string>
 #include "instructions.h"
@@ -37,9 +38,12 @@ public:
   // Insert
   template<typename InstTy>
   InstTy* insert(InstTy *inst, const std::string &name = ""){
-    if(block_)
-      block_->get_inst_list().insert(insert_point_, inst);
+    assert(block_);
+    block_->get_inst_list().insert(insert_point_, inst);
+    inst->set_parent(block_);
     inst->set_name(name);
+    insert_point_ = block_->end();
+    return inst;
   }
   // terminator instructions
   value* create_br(basic_block *dest);

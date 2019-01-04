@@ -24,6 +24,7 @@ public:
   void add_use(use *arg);
   // name
   void set_name(const std::string &name);
+  const std::string &get_name() const { return name_; }
   type* get_type() const { return ty_; }
 
 private:

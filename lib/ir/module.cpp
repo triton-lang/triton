@@ -1,5 +1,6 @@
 #include "ir/basic_block.h"
 #include "ir/module.h"
+#include "ir/type.h"
 
 namespace tdl{
 namespace ir{
@@ -28,10 +29,10 @@ void module::set_value(const std::string& name, ir::value *value){
 
 ir::phi_node* module::make_phi(ir::type *ty, unsigned num_values, ir::basic_block *block){
   basic_block::iterator insert = block->get_first_non_phi();
-  if(insert == block->end())
+  if(*insert)
     builder_.set_insert_point(insert);
   ir::phi_node *res = builder_.create_phi(ty, num_values);
-  if(insert == block->end())
+  if(*insert)
     builder_.set_insert_point(block);
   return res;
 }

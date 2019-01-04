@@ -39,8 +39,6 @@ public:
   arg_iterator arg_end() { return args_.end(); }
   const_arg_iterator arg_begin() const { return args_.begin(); }
   const_arg_iterator arg_end() const { return args_.end(); }
-  // Accessors
-  function_type* get_function_ty() const;
   // Factory methods
   static function *create(function_type *ty, linkage_types_t linkage,
                           const std::string &name, module *mod);
@@ -49,6 +47,7 @@ private:
   module *parent_;
   args_t args_;
   bool init_;
+  function_type *fn_ty_;
 };
 
 }

@@ -26,7 +26,7 @@ instruction::instruction(type *ty, unsigned num_ops, const std::string &name, in
 //===----------------------------------------------------------------------===//
 
 phi_node::phi_node(type *ty, unsigned num_reserved, std::string const &name, instruction *next)
-  : instruction(ty, num_reserved, name, next){ }
+  : instruction(ty, num_reserved, name, next), blocks_(num_reserved){ }
 
 // Set incoming value
 void phi_node::set_incoming_value(unsigned i, value *v){
@@ -151,6 +151,11 @@ unary_inst::unary_inst(type *ty, value *v, const std::string &name, instruction 
 //===----------------------------------------------------------------------===//
 //                               cast_inst classes
 //===----------------------------------------------------------------------===//
+
+// TODO
+bool cast_inst::is_valid(op_t op, value *arg, type *ty) {
+  return true;
+}
 
 cast_inst *cast_inst::create(op_t op, value *arg, type *ty, const std::string &name, instruction *next){
   assert(is_valid(op, arg, ty) && "Invalid cast!");

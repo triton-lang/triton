@@ -23,8 +23,9 @@ protected:
 public:
 
   // parent
-  const basic_block *get_parent() const { return parent_;}
-  basic_block *get_parent()             { return parent_; }
+  void set_parent(basic_block *block)   { parent_ = block; }
+  const basic_block *get_parent() const { return parent_;  }
+  basic_block *get_parent()             { return parent_;  }
 
 private:
   basic_block *parent_;
@@ -148,7 +149,7 @@ public:
   typedef llvm::CastInst::CastOps op_t;
 
 private:
-  bool is_valid(op_t op, value *arg, type *ty);
+  static bool is_valid(op_t op, value *arg, type *ty);
 
 public:
   // Factory methods
