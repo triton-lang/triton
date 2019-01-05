@@ -1,8 +1,9 @@
 #include <cstring>
 #include <cstdio>
-#include "ast.h"
+#include "ast/ast.h"
 #include "ir/context.h"
 #include "ir/module.h"
+#include "codegen/lowering.h"
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();

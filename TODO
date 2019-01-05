@@ -1,0 +1,4 @@
+[Intermediate Representation]
+  - proper naming scheme
+  - symbols table
+  - name conflicts on globals?

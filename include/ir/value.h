@@ -57,6 +57,11 @@ private:
 //===----------------------------------------------------------------------===//
 
 class user: public value{
+public:
+  typedef std::vector<use>      ops_t;
+  typedef ops_t::iterator       op_iterator;
+  typedef ops_t::const_iterator const_op_iterator;
+
 protected:
   void resize_ops(unsigned n) { ops_.resize(n); }
 
@@ -66,9 +71,11 @@ public:
       : value(ty, name), ops_(num_ops){ }
 
   // Operands
-  void set_operand(unsigned i, value *x);
-  value *get_operand(unsigned i);
-  unsigned get_num_operands();
+  op_iterator op_begin() { return ops_.begin(); }
+  op_iterator op_end()   { return ops_.end(); }
+  void     set_operand(unsigned i, value *x);
+  value   *get_operand(unsigned i);
+  unsigned get_num_operands() const ;
 
 private:
   std::vector<use> ops_;

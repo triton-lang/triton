@@ -56,7 +56,7 @@ private:
 class global_value: public constant {
 public:
   enum linkage_types_t {
-    internal
+    external
   };
 
 public:

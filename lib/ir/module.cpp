@@ -1,6 +1,8 @@
 #include "ir/basic_block.h"
 #include "ir/module.h"
 #include "ir/type.h"
+#include "ir/constant.h"
+#include "ir/function.h"
 
 namespace tdl{
 namespace ir{
@@ -85,6 +87,15 @@ void module::seal_block(ir::basic_block *block){
     add_phi_operands(x.first, x.second);
   sealed_blocks_.insert(block);
 }
+
+/* functions */
+function *module::get_or_insert_function(const std::string &name, function_type *ty) {
+  function *&fn = (function*&)symbols_[name];
+  if(fn == nullptr)
+    return fn = function::create(ty, global_value::external, name, this);
+  return fn;
+}
+
 
 }
 }

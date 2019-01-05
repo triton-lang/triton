@@ -98,7 +98,6 @@ binary_operator *binary_operator::create_not(value *arg, const std::string &name
 //===----------------------------------------------------------------------===//
 
 // cmp_inst
-
 cmp_inst::cmp_inst(type *ty, cmp_inst::pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next)
     : instruction(ty, 2, name, next), pred_(pred) {
   set_operand(0, lhs);
@@ -113,8 +112,6 @@ type* cmp_inst::make_cmp_result_type(type *ty){
 }
 
 
-
-
 bool cmp_inst::is_fp_predicate(pred_t pred) {
   return pred >= pcmp::FIRST_FCMP_PREDICATE && pred <= pcmp::LAST_FCMP_PREDICATE;
 }
@@ -124,7 +121,6 @@ bool cmp_inst::is_int_predicate(pred_t pred) {
 }
 
 // icmp_inst
-
 icmp_inst* icmp_inst::create(pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next){
   assert(is_int_predicate(pred));
   type *res_ty = make_cmp_result_type(lhs->get_type());
@@ -132,7 +128,6 @@ icmp_inst* icmp_inst::create(pred_t pred, value *lhs, value *rhs, const std::str
 }
 
 // fcmp_inst
-
 fcmp_inst* fcmp_inst::create(pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next){
   assert(is_fp_predicate(pred));
   type *res_ty = make_cmp_result_type(lhs->get_type());
@@ -195,7 +190,6 @@ cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, 
 
 
 // return_inst
-
 return_inst::return_inst(context &ctx, value *ret_val, instruction *next)
     : terminator_inst(type::get_void_ty(ctx), !!ret_val, "", next){
   if(ret_val)
@@ -207,31 +201,31 @@ return_inst *return_inst::create(context &ctx, value *ret_val, instruction *next
 }
 
 
-// conditional/unconditional branch
+// branch_inst
+branch_inst* branch_inst::create(basic_block *dst, instruction *next) {
+  assert(dst && "Branch destination may not be null!");
+  return new uncond_branch_inst(dst, next);
+}
 
-branch_inst::branch_inst(basic_block *dst, instruction *next)
-    : terminator_inst(type::get_void_ty(dst->get_context()), 1, "", next){
+branch_inst* branch_inst::create(value *cond, basic_block *if_dst, basic_block *else_dst, instruction *next) {
+  assert(cond->get_type()->is_integer_ty(1) && "May only branch on boolean predicates!");
+  return new cond_branch_inst(if_dst, else_dst, cond, next);
+}
+
+// uncond_branch_inst
+uncond_branch_inst::uncond_branch_inst(basic_block *dst, instruction *next)
+    : branch_inst(type::get_void_ty(dst->get_context()), 1, "", next){
   set_operand(0, dst);
 }
 
-branch_inst::branch_inst(basic_block *if_dst, basic_block *else_dst, value *cond, instruction *next)
-    : terminator_inst(type::get_void_ty(if_dst->get_context()), 3, "", next){
+// cond_branch_inst
+cond_branch_inst::cond_branch_inst(basic_block *if_dst, basic_block *else_dst, value *cond, instruction *next)
+    : branch_inst(type::get_void_ty(if_dst->get_context()), 3, "", next){
   assert(cond->get_type()->is_integer_ty(1) && "May only branch on boolean predicates!");
   set_operand(0, if_dst);
   set_operand(1, else_dst);
   set_operand(2, cond);
 }
-
-branch_inst* branch_inst::create(basic_block *dst, instruction *next) {
-  assert(dst && "Branch destination may not be null!");
-  return new branch_inst(dst, next);
-}
-
-branch_inst* branch_inst::create(value *cond, basic_block *if_dst, basic_block *else_dst, instruction *next) {
-  assert(cond->get_type()->is_integer_ty(1) && "May only branch on boolean predicates!");
-  return new branch_inst(if_dst, else_dst, cond, next);
-}
-
 
 //===----------------------------------------------------------------------===//
 //                               getelementptr_inst classes

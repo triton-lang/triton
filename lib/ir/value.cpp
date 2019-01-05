@@ -50,7 +50,7 @@ value* user::get_operand(unsigned i){
   return ops_[i];
 }
 
-unsigned user::get_num_operands(){
+unsigned user::get_num_operands() const{
   return ops_.size();
 }
 

@@ -69,6 +69,13 @@ public:
   // Get operand
   op_t get_op() const { return op_; }
 
+  // Bool
+  bool is_terminator()  const;
+  bool is_binary_op()   const;
+  bool is_int_div_rem() const;
+  bool is_shift()       const;
+  bool is_cast()        const;
+
   // Wraps
   void set_has_no_unsigned_wrap(bool b = true) { has_no_unsigned_wrap_ = b; }
   void set_has_no_signed_wrap(bool b = true)   { has_no_signed_wrap_ = b; }
@@ -98,14 +105,12 @@ public:
 
 protected:
   cmp_inst(type *ty, pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next);
-
-  static type* make_cmp_result_type(type *ty);
-
   static bool is_fp_predicate(pred_t pred);
   static bool is_int_predicate(pred_t pred);
+  static type* make_cmp_result_type(type *ty);
 
 public:
-
+  pred_t get_pred() const { return pred_; }
 
 private:
   pred_t pred_;
@@ -152,7 +157,10 @@ private:
   static bool is_valid(op_t op, value *arg, type *ty);
 
 public:
-  // Factory methods
+  // accessors
+  op_t get_op() const { return op_; }
+
+  // factory methods
   static cast_inst *create(op_t op, value *arg, type *ty,
                            const std::string &name = "", instruction *next = nullptr);
   static cast_inst *create_integer_cast(value *arg, type *ty, bool is_signed,
@@ -191,7 +199,6 @@ class terminator_inst: public instruction{
 };
 
 // return instruction
-
 class return_inst: public terminator_inst{
   return_inst(context &ctx, value *ret_val, instruction *next);
 
@@ -206,26 +213,43 @@ public:
   static return_inst* create(context &ctx, value *ret_val = nullptr, instruction *next = nullptr);
 };
 
-// conditional/unconditional branch instruction
-
+// base branch instruction
 class branch_inst: public terminator_inst{
-  branch_inst(basic_block *dst, instruction *next);
-  branch_inst(basic_block *if_dst, basic_block *else_dst, value *cond, instruction *next);
+protected:
+  using terminator_inst::terminator_inst;
 
 public:
-
-  // factory methods
   static branch_inst* create(basic_block *dest,
                              instruction *next = nullptr);
   static branch_inst* create(value *cond, basic_block *if_dest, basic_block *else_dest,
                              instruction *next = nullptr);
 };
 
+// conditional branch
+class cond_branch_inst: public branch_inst {
+  cond_branch_inst(basic_block *if_dst, basic_block *else_dst, value *cond, instruction *next);
+  friend class branch_inst;
+
+public:
+  basic_block *get_true_dest()  { return (basic_block*)get_operand(0); }
+  basic_block *get_false_dest() { return (basic_block*)get_operand(1); }
+  value *get_cond()             { return get_operand(2); }
+};
+
+// unconditional branch
+class uncond_branch_inst: public branch_inst {
+  friend class branch_inst;
+  uncond_branch_inst(basic_block *dst, instruction *next);
+
+public:
+  basic_block *get_dest()  { return (basic_block*)get_operand(0); }
+};
 //===----------------------------------------------------------------------===//
 //                               getelementptr_inst classes
 //===----------------------------------------------------------------------===//
 
 class getelementptr_inst: public instruction{
+private:
   getelementptr_inst(type *pointee_ty, value *ptr, const std::vector<value*> &idx, const std::string &name, instruction *next);
 
 private:
@@ -234,6 +258,12 @@ private:
   static type *get_indexed_type(type *ty, const std::vector<value*> &idx);
 
 public:
+  // accessors
+  type *get_source_elt_ty() { return source_elt_ty; }
+  op_iterator idx_begin()       { return op_begin() + 1; }
+  op_iterator idx_end()         { return op_end(); }
+
+  // factory methods
   static getelementptr_inst* create(type *pointee_ty, value *ptr, const std::vector<value*> &idx,
                                     const std::string &name = "", instruction *next = nullptr);
 
@@ -250,6 +280,9 @@ class load_inst: public unary_inst{
   load_inst(value *ptr, const std::string &name, instruction *next);
 
 public:
+  // accessors
+  value *get_pointer_operand() { return get_operand(0); }
+  // factory method
   static load_inst* create(value *ptr, const std::string &name = "",
                            instruction *next = nullptr);
 

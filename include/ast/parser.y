@@ -6,7 +6,7 @@ class node;
 }
 using namespace tdl::ast;
 #define YYSTYPE node*
-#include "../include/ast.h"
+#include "../include/ast/ast.h"
 
 extern char* yytext;
 void yyerror(const char *s);

@@ -5,8 +5,8 @@ include(CTest)
 # FLEX/YACC
 find_package(BISON)
 find_package(FLEX)
-BISON_TARGET(Parser ${CMAKE_CURRENT_SOURCE_DIR}/include/parser.y ${CMAKE_CURRENT_BINARY_DIR}/parser.cpp)
-FLEX_TARGET(Lexer ${CMAKE_CURRENT_SOURCE_DIR}/include/scanner.l ${CMAKE_CURRENT_BINARY_DIR}/scanner.cpp)
+BISON_TARGET(Parser ${CMAKE_CURRENT_SOURCE_DIR}/include/ast/parser.y ${CMAKE_CURRENT_BINARY_DIR}/parser.cpp)
+FLEX_TARGET(Lexer ${CMAKE_CURRENT_SOURCE_DIR}/include/ast/scanner.l ${CMAKE_CURRENT_BINARY_DIR}/scanner.cpp)
 get_filename_component(BISON_Parser_INCLUDE_DIRECTORIES ${BISON_Parser_OUTPUT_HEADER} DIRECTORY)
 include_directories(${BISON_Parser_INCLUDE_DIRECTORIES})
 

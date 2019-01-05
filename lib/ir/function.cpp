@@ -1,5 +1,6 @@
 #include "ir/function.h"
 #include "ir/type.h"
+#include "ir/module.h"
 
 namespace tdl{
 namespace ir{
@@ -29,11 +30,19 @@ function::function(function_type *ty, linkage_types_t linkage,
     type *param_ty = fn_ty_->get_param_ty(i);
     args_[i] = argument::create(param_ty, "", this, i);
   }
+  if(parent)
+    parent->push_function(this);
+}
+
+/* basic block */
+void function::insert_block(basic_block *block, basic_block *next) {
+  auto it = std::find(blocks_.begin(), blocks_.end(), next);
+  blocks_.insert(it, block);
 }
 
 
 function *function::create(function_type *ty, linkage_types_t linkage,
-                           const std::string &name, module *mod){
+                           const std::string &name, module *mod) {
   return new function(ty, linkage, name, mod);
 }
 

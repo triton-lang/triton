@@ -11,6 +11,7 @@ namespace ir{
 class function;
 class function_type;
 class module;
+class basic_block;
 
 /* Argument */
 class argument: public value{
@@ -25,29 +26,41 @@ private:
   unsigned arg_no_;
 };
 
+/* Attribute */
+class attribute {
+
+};
+
 /* Function */
 class function: public global_object{
   typedef std::vector<argument*> args_t;
   typedef args_t::iterator       arg_iterator;
   typedef args_t::const_iterator const_arg_iterator;
+
+  typedef std::vector<basic_block*> blocks_t;
+  typedef blocks_t::iterator        block_iterator;
+  typedef blocks_t::const_iterator  const_block_iterator;
+
 private:
   function(function_type *ty, linkage_types_t linkage,
            const std::string &name = "", module *parent = nullptr);
 
 public:
-  arg_iterator arg_begin() { return args_.begin(); }
-  arg_iterator arg_end() { return args_.end(); }
-  const_arg_iterator arg_begin() const { return args_.begin(); }
-  const_arg_iterator arg_end() const { return args_.end(); }
+  // arguments
+  const args_t &args() { return args_; }
   // Factory methods
   static function *create(function_type *ty, linkage_types_t linkage,
                           const std::string &name, module *mod);
+  // blocks
+  const blocks_t &blocks() { return blocks_; }
+  void insert_block(basic_block* block, basic_block *next = nullptr);
 
 private:
   module *parent_;
-  args_t args_;
   bool init_;
   function_type *fn_ty_;
+  args_t args_;
+  blocks_t blocks_;
 };
 
 }

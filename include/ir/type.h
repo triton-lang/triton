@@ -13,6 +13,11 @@ class integer_type;
 
 /* Type */
 class type {
+protected:
+  typedef std::vector<type*>                  contained_tys_vec_t;
+  typedef contained_tys_vec_t::iterator       ty_iterator;
+  typedef contained_tys_vec_t::const_iterator const_ty_iterator;
+
 public:
   enum id_t {
     // primitive types
@@ -91,7 +96,7 @@ private:
   id_t id_;
 
 protected:
-  std::vector<type*> contained_tys_;
+  contained_tys_vec_t contained_tys_;
 };
 
 class integer_type: public type {
@@ -162,8 +167,13 @@ private:
 
 public:
   // accessors
-  unsigned get_num_params()         const { return contained_tys_.size() - 1; }
-  type*    get_param_ty(unsigned i) const { return contained_tys_.at(1 + i); }
+  unsigned get_num_params()         const { return contained_tys_.size() - 1;  }
+  const_ty_iterator params_begin() const { return contained_tys_.begin() + 1; }
+  const_ty_iterator params_end()   const { return contained_tys_.end(); }
+  ty_iterator       params_begin()       { return contained_tys_.begin() + 1; }
+  ty_iterator       params_end()         { return contained_tys_.end(); }
+  type*    get_param_ty(unsigned i) const { return contained_tys_.at(1 + i);   }
+  type*    get_return_ty()          const { return contained_tys_.at(0);       }
   // factory methods
   static function_type* get(type *ret_ty, const std::vector<type*>& param_tys);
 };
