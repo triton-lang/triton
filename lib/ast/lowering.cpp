@@ -105,6 +105,7 @@ ir::value* function_definition::codegen(ir::module *mod) const{
   mod->seal_block(entry);
   mod->get_builder().set_insert_point(entry);
   body_->codegen(mod);
+  std::cout << mod->get_builder().get_insert_block()->get_name() << std::endl;
   mod->get_builder().create_ret_void();
   return nullptr;
 }
@@ -128,17 +129,18 @@ ir::value* iteration_statement::codegen(ir::module *mod) const{
   ir::context &ctx = mod->get_context();
   ir::function *fn = builder.get_insert_block()->get_parent();
   ir::basic_block *loop_bb = ir::basic_block::create(ctx, "loop", fn);
-  ir::basic_block *next_bb = ir::basic_block::create(ctx, "postloop", fn);
   init_->codegen(mod);
   builder.create_br(loop_bb);
   builder.set_insert_point(loop_bb);
   statements_->codegen(mod);
   exec_->codegen(mod);
   ir::value *cond = stop_->codegen(mod);
+  ir::basic_block *next_bb = ir::basic_block::create(ctx, "postloop", fn);
   builder.create_cond_br(cond, loop_bb, next_bb);
-  builder.set_insert_point(next_bb);
   mod->seal_block(loop_bb);
+  mod->seal_block(builder.get_insert_block());
   mod->seal_block(next_bb);
+  builder.set_insert_point(next_bb);
   return nullptr;
 }
 
@@ -161,11 +163,13 @@ ir::value* selection_statement::codegen(ir::module* mod) const{
   then_value_->codegen(mod);
   if(else_value_)
     builder.create_br(endif_bb);
+  mod->seal_block(then_bb);
   // Else
   if(else_value_){
     builder.set_insert_point(else_bb);
     else_value_->codegen(mod);
     builder.create_br(endif_bb);
+    mod->seal_block(else_bb);
   }
   // Endif
   builder.set_insert_point(endif_bb);
