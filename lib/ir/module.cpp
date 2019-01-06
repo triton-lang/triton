@@ -39,13 +39,34 @@ ir::phi_node* module::make_phi(ir::type *ty, unsigned num_values, ir::basic_bloc
   return res;
 }
 
+ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi){
+  ir::value *same = nullptr;
+  for(ir::value *op: phi->ops()){
+    // unique value or self-reference
+    if(op == same || op == phi)
+      continue;
+    // the phi-node merges at least two values; non-trivial
+    if(same)
+      return phi;
+    same = op;
+  }
+  assert(same && "the phi-node is unreachable or in the start block");
+  std::vector<ir::use> uses = phi->get_uses();
+  phi->replace_all_uses_with(same);
+  for(ir::use &u: uses)
+  if(auto *uphi = dynamic_cast<ir::phi_node*>(u.get()))
+  if(uphi != phi)
+    try_remove_trivial_phis(uphi);
+  return same;
+}
+
 ir::value *module::add_phi_operands(const std::string& name, ir::phi_node *&phi){
   ir::basic_block *block = phi->get_parent();
   for(ir::basic_block *pred: block->get_predecessors()){
     ir::value *value = get_value(name, pred);
     phi->add_incoming(value, pred);
   }
-  return phi;
+  return try_remove_trivial_phis(phi);
 }
 
 ir::value *module::get_value_recursive(const std::string& name, ir::basic_block *block) {

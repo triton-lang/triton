@@ -26,7 +26,9 @@ instruction::instruction(type *ty, unsigned num_ops, const std::string &name, in
 //===----------------------------------------------------------------------===//
 
 phi_node::phi_node(type *ty, unsigned num_reserved, std::string const &name, instruction *next)
-  : instruction(ty, num_reserved, name, next), blocks_(num_reserved){ }
+    : instruction(ty, 0, name, next) {
+  blocks_.reserve(num_reserved);
+}
 
 // Set incoming value
 void phi_node::set_incoming_value(unsigned i, value *v){
@@ -44,11 +46,8 @@ void phi_node::set_incoming_block(unsigned i, basic_block *block){
 
 // Add incoming
 void phi_node::add_incoming(value *v, basic_block *block){
-  if(get_num_operands()==num_reserved_){
-    num_reserved_++;
-    resize_ops(num_reserved_);
-    blocks_.resize(num_reserved_);
-  }
+  resize_ops(get_num_operands() + 1);
+  blocks_.resize(get_num_operands() + 1);
   set_incoming_value(get_num_operands() - 1, v);
   set_incoming_block(get_num_operands() - 1, block);
 }

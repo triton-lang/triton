@@ -187,7 +187,9 @@ void lowering(ir::module &src, Module &dst){
       for(unsigned i = 0; i < phi->get_num_incoming(); i++){
         ir::value *inc_val = phi->get_incoming_value(i);
         ir::basic_block *inc_block = phi->get_incoming_block(i);
-        dst_phi->addIncoming(vmap[inc_val], bmap[inc_block]);
+        Value *llvm_inc_val = llvm_value(inc_val, dst_ctx, vmap, bmap);
+        BasicBlock *llvm_block = bmap[inc_block];
+        dst_phi->addIncoming(llvm_inc_val, llvm_block);
       }
     }
   }

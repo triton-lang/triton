@@ -30,6 +30,7 @@ public:
 
 private:
   phi_node *make_phi(type *ty, unsigned num_values, basic_block *block);
+  value *try_remove_trivial_phis(ir::phi_node *&phi);
   value *add_phi_operands(const std::string& name, phi_node *&phi);
   value *get_value_recursive(const std::string& name, basic_block *block);
   void push_function(function *fn) { functions_.push_back(fn); }

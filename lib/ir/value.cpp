@@ -14,9 +14,17 @@ value::value(type *ty, const std::string &name): ty_(ty){
   set_name(name);
 }
 
+void value::add_use(use arg) {
+  uses_.push_back(arg);
+}
+
 // TODO: automatic naming scheme + update symbol table
 void value::set_name(const std::string &name){
   name_ = name;
+}
+
+void value::replace_all_uses_with(value *target){
+  throw std::runtime_error("not implemented");
 }
 
 
@@ -25,6 +33,7 @@ void value::set_name(const std::string &name){
 //===----------------------------------------------------------------------===//
 void use::set(value *val){
   val_ = val;
+  val_->add_use(*this);
 }
 
 value *use::operator=(value *rhs){
@@ -40,18 +49,24 @@ const use &use::operator=(const use &rhs){
 //===----------------------------------------------------------------------===//
 //                               user class
 //===----------------------------------------------------------------------===//
-void user::set_operand(unsigned i, value *x){
+void user::set_operand(unsigned i, value *x) {
   assert(i < ops_.size() && "set_operand() out of range!");
   ops_[i] = x;
 }
 
-value* user::get_operand(unsigned i){
+value* user::get_operand(unsigned i) {
   assert(i < ops_.size() && "get_operand() out of range!");
   return ops_[i];
 }
 
-unsigned user::get_num_operands() const{
+unsigned user::get_num_operands() const {
   return ops_.size();
+}
+
+void user::replace_all_uses_with(value *target) {
+  for(use &u: uses_){
+    u.set(target);
+  }
 }
 
 }

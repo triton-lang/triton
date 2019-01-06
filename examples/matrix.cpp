@@ -23,7 +23,7 @@ void test(fp32 *A, fp32 *B, fp32 *C, int32 i){\
   int32 j = 1;\
   int32 k;\
   i = i + j;\
-  for(k = 0; k < 10; k = k+1){\
+  for(k = 0; k < 10; k = k+5){\
     int32 u = 1;\
     u = u + i;\
     if(k == 0)\

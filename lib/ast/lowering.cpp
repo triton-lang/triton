@@ -105,7 +105,6 @@ ir::value* function_definition::codegen(ir::module *mod) const{
   mod->seal_block(entry);
   mod->get_builder().set_insert_point(entry);
   body_->codegen(mod);
-  std::cout << mod->get_builder().get_insert_block()->get_name() << std::endl;
   mod->get_builder().create_ret_void();
   return nullptr;
 }

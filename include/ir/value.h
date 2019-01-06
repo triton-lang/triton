@@ -10,6 +10,7 @@ namespace ir{
 
 class type;
 class use;
+class user;
 
 //===----------------------------------------------------------------------===//
 //                               value class
@@ -21,7 +22,9 @@ public:
   value(type *ty, const std::string &name = "");
   virtual ~value(){ }
   // uses
-  void add_use(use *arg);
+  void add_use(use arg);
+  const std::vector<use> &get_uses() { return uses_; }
+  virtual void replace_all_uses_with(value *target);
   // name
   void set_name(const std::string &name);
   const std::string &get_name() const { return name_; }
@@ -30,6 +33,9 @@ public:
 private:
   type *ty_;
   std::string name_;
+
+protected:
+  std::vector<use> uses_;
 };
 
 //===----------------------------------------------------------------------===//
@@ -77,6 +83,9 @@ public:
   void     set_operand(unsigned i, value *x);
   value   *get_operand(unsigned i);
   unsigned get_num_operands() const ;
+
+  // Utils
+  void replace_all_uses_with(value *target);
 
 private:
   std::vector<use> ops_;
