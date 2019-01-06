@@ -33,6 +33,7 @@ class constant_int: public constant{
   constant_int(type *ty, uint64_t value);
 
 public:
+  uint64_t get_value() const { return value_; }
   static constant *get(type *ty, uint64_t value);
 
 private:
@@ -44,6 +45,7 @@ class constant_fp: public constant{
   constant_fp(context &ctx, double value);
 
 public:
+  double get_value() { return value_; }
   static constant* get_negative_zero(type *ty);
   static constant* get_zero_value_for_negation(type *ty);
   static constant *get(context &ctx, double v);

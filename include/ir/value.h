@@ -71,6 +71,7 @@ public:
       : value(ty, name), ops_(num_ops){ }
 
   // Operands
+  const std::vector<use>& ops() { return ops_; }
   op_iterator op_begin() { return ops_.begin(); }
   op_iterator op_end()   { return ops_.end(); }
   void     set_operand(unsigned i, value *x);

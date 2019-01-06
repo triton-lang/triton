@@ -4,6 +4,9 @@
 #include "ir/context.h"
 #include "ir/module.h"
 #include "codegen/lowering.h"
+#include "llvm/IR/IRPrintingPasses.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/LLVMContext.h"
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();
@@ -35,6 +38,9 @@ int main() {
    tdl::ir::context context;
    tdl::ir::module module("matrix", context);
    program->codegen(&module);
+   llvm::LLVMContext llvm_context;
+   llvm::Module llvm_module("test", llvm_context);
+   tdl::codegen::lowering(module, llvm_module);
 //   llvm::PrintModulePass print(llvm::outs());
 //   llvm::AnalysisManager<llvm::Module> analysis;
 //   print.run(*module.handle(), analysis);
