@@ -264,6 +264,17 @@ public:
 class statement: public node{
 };
 
+class expression_statement: public statement{
+public:
+  expression_statement(node *expr)
+    : expr_((expression*)expr){ }
+
+  ir::value* codegen(ir::module * mod) const;
+
+private:
+  expression *expr_;
+};
+
 class compound_statement: public statement{
   typedef list<declaration*>* declarations_t;
   typedef list<statement*>* statements_t;

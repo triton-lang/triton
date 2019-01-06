@@ -191,7 +191,7 @@ cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, 
 
 // return_inst
 return_inst::return_inst(context &ctx, value *ret_val, instruction *next)
-    : terminator_inst(type::get_void_ty(ctx), !!ret_val, "", next){
+    : terminator_inst(type::get_void_ty(ctx), ret_val!=nullptr, "", next){
   if(ret_val)
     set_operand(0, ret_val);
 }

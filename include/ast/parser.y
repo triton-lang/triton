@@ -278,7 +278,7 @@ statement_list
 	
 expression_statement
 	: ';' { $$ = new no_op(); }
-	| expression ';' { $$ = $1; }
+  | expression ';' { $$ = new expression_statement($1); }
 	;
 
 selection_statement

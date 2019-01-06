@@ -91,8 +91,8 @@ Instruction *llvm_inst(ir::instruction *inst, LLVMContext & ctx,
     return PHINode::Create(ty, num_ops, ii->get_name());
   }
   if(auto* ii = dynamic_cast<ir::return_inst*>(inst)){
-    Value *ret_val = value(ii->get_return_value());
-    return ReturnInst::Create(ctx, ret_val);
+    ir::value *ret_val = ii->get_return_value();
+    return ReturnInst::Create(ctx, ret_val?value(ret_val):nullptr);
   }
   if(auto* ii = dynamic_cast<ir::binary_operator*>(inst)){
     Value *lhs = value(ii->get_operand(0));
@@ -139,9 +139,9 @@ Value* llvm_value(ir::value *v, LLVMContext &ctx,
     return vmap.at(v);
   // create operands
   if(auto *uu = dynamic_cast<ir::user*>(v))
-  for(ir::use u: uu->ops())
+  for(ir::use u: uu->ops()){
     vmap[u.get()] = llvm_value(u, ctx, vmap, bmap);
-  // constant
+  }
   if(auto *cc = dynamic_cast<ir::constant*>(v))
     return llvm_constant(cc, ctx);
   // instruction
@@ -159,12 +159,12 @@ void lowering(ir::module &src, Module &dst){
   // iterate over functions
   for(ir::function *fn: src.get_function_list()) {
     // create LLVM function
-    Type *fn_ty = llvm_type(fn->get_type(), dst_ctx);
-    Function *dst_fn = (Function*)dst.getOrInsertFunction(fn->get_name(), fn_ty);
+    FunctionType *fn_ty = (FunctionType*)llvm_type(fn->get_fn_type(), dst_ctx);
+    Function *dst_fn = Function::Create(fn_ty, Function::ExternalLinkage, "kernel", &dst);
+//    std::cout << ((FunctionType*)fn_ty)->getNumParams() << std::endl;
     // map parameters
-    for(unsigned i = 0; i < fn->args().size(); i++) {
+    for(unsigned i = 0; i < fn->args().size(); i++)
       vmap[fn->args()[i]] = &*(dst_fn->arg_begin() + i);
-    }
     // create blocks
     for(ir::basic_block *block: fn->blocks()) {
       BasicBlock *dst_block = BasicBlock::Create(dst_ctx, block->get_name(), dst_fn);
@@ -176,6 +176,7 @@ void lowering(ir::module &src, Module &dst){
       for(ir::instruction *inst: block->get_inst_list()) {
         Instruction *dst_inst = llvm_inst(inst, dst_ctx, vmap, bmap);
         vmap[inst] = dst_inst;
+        dst_builder.Insert(dst_inst);
       }
     }
     // add phi operands

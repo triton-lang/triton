@@ -46,9 +46,10 @@ private:
            const std::string &name = "", module *parent = nullptr);
 
 public:
-  // arguments
+  // accessors
   const args_t &args() { return args_; }
-  // Factory methods
+  function_type* get_fn_type() { return fn_ty_; }
+  // factory methods
   static function *create(function_type *ty, linkage_types_t linkage,
                           const std::string &name, module *mod);
   // blocks

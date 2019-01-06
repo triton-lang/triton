@@ -7,6 +7,8 @@
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/Support/raw_ostream.h"
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();
@@ -25,7 +27,7 @@ void test(fp32 *A, fp32 *B, fp32 *C, int32 i){\
     int32 u = 1;\
     u = u + i;\
     if(k == 0)\
-     u = u + 2;\
+     j = u + 2;\
   }\
 }\
 ";
@@ -41,8 +43,8 @@ int main() {
    llvm::LLVMContext llvm_context;
    llvm::Module llvm_module("test", llvm_context);
    tdl::codegen::lowering(module, llvm_module);
-//   llvm::PrintModulePass print(llvm::outs());
-//   llvm::AnalysisManager<llvm::Module> analysis;
-//   print.run(*module.handle(), analysis);
+   llvm::PrintModulePass print(llvm::outs());
+   llvm::AnalysisManager<llvm::Module> analysis;
+   print.run(llvm_module, analysis);
    return 0;
 }

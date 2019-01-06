@@ -117,6 +117,11 @@ ir::value* compound_statement::codegen(ir::module* mod) const{
   return nullptr;
 }
 
+/* expression statement */
+ir::value* expression_statement::codegen(ir::module *mod) const{
+  return expr_->codegen(mod);
+}
+
 /* Iteration statement */
 ir::value* iteration_statement::codegen(ir::module *mod) const{
   ir::builder &builder = mod->get_builder();
