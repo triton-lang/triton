@@ -21,6 +21,11 @@ instruction::instruction(type *ty, unsigned num_ops, const std::string &name, in
   }
 }
 
+void instruction::erase_from_parent() {
+  parent_->erase(this);
+}
+
+
 //===----------------------------------------------------------------------===//
 //                               phi_node classes
 //===----------------------------------------------------------------------===//

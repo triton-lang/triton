@@ -1,4 +1,5 @@
 #include "ir/value.h"
+#include "ir/instructions.h"
 #include <iostream>
 #include <cassert>
 
@@ -15,8 +16,12 @@ value::value(type *ty, const std::string &name): ty_(ty){
   set_name(name);
 }
 
-void value::add_use(use arg) {
-  uses_.push_back(arg);
+void value::add_use(user *arg) {
+  users_.insert(arg);
+}
+
+unsigned value::erase_use(user *arg){
+  return users_.erase(arg);
 }
 
 // TODO: automatic naming scheme + update symbol table
@@ -30,29 +35,12 @@ void value::replace_all_uses_with(value *target){
 
 
 //===----------------------------------------------------------------------===//
-//                               use class
-//===----------------------------------------------------------------------===//
-void use::set(value *val){
-  val_ = val;
-  val_->add_use(*this);
-}
-
-value *use::operator=(value *rhs){
-  set(rhs);
-  return rhs;
-}
-
-const use &use::operator=(const use &rhs){
-  set(rhs.val_);
-  return rhs;
-}
-
-//===----------------------------------------------------------------------===//
 //                               user class
 //===----------------------------------------------------------------------===//
 void user::set_operand(unsigned i, value *x) {
   assert(i < ops_.size() && "set_operand() out of range!");
   ops_[i] = x;
+  x->add_use(this);
 }
 
 value* user::get_operand(unsigned i) {
@@ -65,17 +53,17 @@ unsigned user::get_num_operands() const {
 }
 
 void user::replace_all_uses_with(value *target) {
-  for(use &u: uses_)
-  if(auto *usr = dynamic_cast<user*>(u.get())){
-    std::cout << "replacing " << this << " by " << target << " in " << usr << std::endl;
-    usr->replace_uses_of_with(this, target);
+  for(auto it = users_.begin(); it != users_.end();){
+    (*it)->replace_uses_of_with(this, target);
+    target->add_use(*it);
+    erase_use(*it++);
   }
 }
 
 void user::replace_uses_of_with(value *before, value *after) {
-  for(use &u: ops_)
-    if(u.get() == before)
-      u.set(after);
+  for(size_t i = 0; i < ops_.size(); i++)
+    if(ops_[i] == before)
+      ops_[i] = after;
 }
 
 }

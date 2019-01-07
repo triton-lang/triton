@@ -36,6 +36,7 @@ public:
 
   // get instruction list
   inst_list_t           &get_inst_list()       { return inst_list_; }
+  void  erase(instruction *i)                  {  inst_list_.remove(i); }
 
   // instruction iterator functions
   inline iterator                begin()       { return inst_list_.begin(); }

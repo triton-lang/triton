@@ -40,23 +40,22 @@ ir::phi_node* module::make_phi(ir::type *ty, unsigned num_values, ir::basic_bloc
 }
 
 ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi){
-  ir::value *same = nullptr;
-  for(ir::value *op: phi->ops()){
-    // unique value or self-reference
-    if(op == same || op == phi)
-      continue;
-    // the phi-node merges at least two values; non-trivial
-    if(same)
-      return phi;
-    same = op;
-  }
-  assert(same && "the phi-node is unreachable or in the start block");
-  std::vector<ir::use> uses = phi->get_uses();
+  // find non-self references
+  std::vector<ir::value*> non_self_ref;
+  std::copy_if(phi->ops().begin(), phi->ops().end(), std::back_inserter(non_self_ref),
+               [phi](ir::value* op){ return  op != phi; });
+  // non-trivial
+  if(non_self_ref.size() > 1)
+    return phi;
+  // unique value or self-reference
+  ir::value *same = non_self_ref[0];
+  std::set<ir::user*> users = phi->get_users();
   phi->replace_all_uses_with(same);
-  for(ir::use &u: uses)
-  if(auto *uphi = dynamic_cast<ir::phi_node*>(u.get()))
-  if(uphi != phi)
-    try_remove_trivial_phis(uphi);
+  phi->erase_from_parent();
+  for(ir::user* u: users)
+  if(auto *uphi = dynamic_cast<ir::phi_node*>(u))
+    if(uphi != phi)
+      try_remove_trivial_phis(uphi);
   return same;
 }
 

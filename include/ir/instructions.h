@@ -21,11 +21,11 @@ protected:
   instruction(type *ty, unsigned num_ops, const std::string &name = "", instruction *next = nullptr);
 
 public:
-
   // parent
   void set_parent(basic_block *block)   { parent_ = block; }
   const basic_block *get_parent() const { return parent_;  }
   basic_block *get_parent()             { return parent_;  }
+  void erase_from_parent();
 
 private:
   basic_block *parent_;

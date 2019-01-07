@@ -139,8 +139,8 @@ Value* llvm_value(ir::value *v, LLVMContext &ctx,
     return vmap.at(v);
   // create operands
   if(auto *uu = dynamic_cast<ir::user*>(v))
-  for(ir::use u: uu->ops()){
-    vmap[u.get()] = llvm_value(u, ctx, vmap, bmap);
+  for(ir::value* u: uu->ops()){
+    vmap[u] = llvm_value(u, ctx, vmap, bmap);
   }
   if(auto *cc = dynamic_cast<ir::constant*>(v))
     return llvm_constant(cc, ctx);

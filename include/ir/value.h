@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <set>
 
 namespace tdl{
 namespace ir{
@@ -22,8 +23,9 @@ public:
   value(type *ty, const std::string &name = "");
   virtual ~value(){ }
   // uses
-  void add_use(use arg);
-  const std::vector<use> &get_uses() { return uses_; }
+  void add_use(user* arg);
+  unsigned erase_use(user* arg);
+  const std::set<user*> &get_users() { return users_; }
   virtual void replace_all_uses_with(value *target);
   // name
   void set_name(const std::string &name);
@@ -35,27 +37,7 @@ private:
   std::string name_;
 
 protected:
-  std::vector<use> uses_;
-};
-
-//===----------------------------------------------------------------------===//
-//                               use class
-//===----------------------------------------------------------------------===//
-
-class use {
-public:
-  // Implicit conversions to/from value
-  friend class value;
-  operator value *() const { return val_; }
-  value *get() const { return val_; }
-  value *operator->() { return val_; }
-  const value *operator->() const { return val_; }
-  inline void set(value *val);
-  inline value *operator=(value *rhs);
-  inline const use &operator=(const use &rhs);
-
-private:
-  value *val_;
+  std::set<user*> users_;
 };
 
 //===----------------------------------------------------------------------===//
@@ -64,7 +46,7 @@ private:
 
 class user: public value{
 public:
-  typedef std::vector<use>      ops_t;
+  typedef std::vector<value*>      ops_t;
   typedef ops_t::iterator       op_iterator;
   typedef ops_t::const_iterator const_op_iterator;
 
@@ -77,7 +59,7 @@ public:
       : value(ty, name), ops_(num_ops){ }
 
   // Operands
-  const std::vector<use>& ops() { return ops_; }
+  const ops_t& ops() { return ops_; }
   op_iterator op_begin() { return ops_.begin(); }
   op_iterator op_end()   { return ops_.end(); }
   void     set_operand(unsigned i, value *x);
@@ -89,7 +71,7 @@ public:
   void replace_uses_of_with(value *before, value *after);
 
 private:
-  std::vector<use> ops_;
+  ops_t ops_;
 };
 
 }
