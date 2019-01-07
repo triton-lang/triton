@@ -168,7 +168,7 @@ DEFINE_UNARY_INT(not)
 //===----------------------------------------------------------------------===//
 
 value* builder::create_gep(value *ptr, const std::vector<value*>& idx_list, const std::string &name){
-  return insert(getelementptr_inst::create(nullptr, ptr, idx_list), name);
+  return insert(getelementptr_inst::create(ptr, idx_list), name);
 }
 
 //===----------------------------------------------------------------------===//

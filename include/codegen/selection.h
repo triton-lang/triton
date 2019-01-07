@@ -1,5 +1,5 @@
-#ifndef TDL_INCLUDE_IR_CODEGEN_LOWERING_H
-#define TDL_INCLUDE_IR_CODEGEN_LOWERING_H
+#ifndef TDL_INCLUDE_CODEGEN_SELECTION_H
+#define TDL_INCLUDE_CODEGEN_SELECTION_H
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
@@ -139,9 +139,8 @@ Value* llvm_value(ir::value *v, LLVMContext &ctx,
     return vmap.at(v);
   // create operands
   if(auto *uu = dynamic_cast<ir::user*>(v))
-  for(ir::value* u: uu->ops()){
-    vmap[u] = llvm_value(u, ctx, vmap, bmap);
-  }
+    for(ir::value* u: uu->ops())
+      vmap[u] = llvm_value(u, ctx, vmap, bmap);
   if(auto *cc = dynamic_cast<ir::constant*>(v))
     return llvm_constant(cc, ctx);
   // instruction

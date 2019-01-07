@@ -266,7 +266,7 @@ public:
   op_iterator idx_end()         { return op_end(); }
 
   // factory methods
-  static getelementptr_inst* create(type *pointee_ty, value *ptr, const std::vector<value*> &idx,
+  static getelementptr_inst* create(value *ptr, const std::vector<value*> &idx,
                                     const std::string &name = "", instruction *next = nullptr);
 
 private:

@@ -236,7 +236,7 @@ cond_branch_inst::cond_branch_inst(basic_block *if_dst, basic_block *else_dst, v
 //===----------------------------------------------------------------------===//
 
 getelementptr_inst::getelementptr_inst(type *pointee_ty, value *ptr, const std::vector<value *> &idx, const std::string &name, instruction *next)
-    : instruction(get_return_type(pointee_ty, ptr, idx), idx.size(), name, next),
+    : instruction(get_return_type(pointee_ty, ptr, idx), 1 + idx.size(), name, next),
       source_elt_ty(pointee_ty),
       res_elt_ty(get_indexed_type(pointee_ty, idx)){
   type *expected_ty = ((pointer_type*)(get_type()->get_scalar_ty()))->get_element_ty();
@@ -283,7 +283,8 @@ type *getelementptr_inst::get_indexed_type(type *ty, const std::vector<value *> 
   return result;
 }
 
-getelementptr_inst *getelementptr_inst::create(type *pointee_ty, value *ptr, const std::vector<value *> &idx, const std::string &name, instruction *next) {
+getelementptr_inst *getelementptr_inst::create(value *ptr, const std::vector<value *> &idx, const std::string &name, instruction *next) {
+  type *pointee_ty = ((pointer_type*)(ptr->get_type()->get_scalar_ty()))->get_element_ty();
   return new getelementptr_inst(pointee_ty, ptr, idx, name, next);
 }
 

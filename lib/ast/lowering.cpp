@@ -111,7 +111,8 @@ ir::value* function_definition::codegen(ir::module *mod) const{
 
 /* Statements */
 ir::value* compound_statement::codegen(ir::module* mod) const{
-  decls_->codegen(mod);
+  if(decls_)
+    decls_->codegen(mod);
   if(statements_)
     statements_->codegen(mod);
   return nullptr;
