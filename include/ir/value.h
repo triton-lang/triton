@@ -86,6 +86,7 @@ public:
 
   // Utils
   void replace_all_uses_with(value *target);
+  void replace_uses_of_with(value *before, value *after);
 
 private:
   std::vector<use> ops_;

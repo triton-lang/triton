@@ -1,4 +1,5 @@
 #include "ir/value.h"
+#include <iostream>
 #include <cassert>
 
 namespace tdl{
@@ -64,9 +65,17 @@ unsigned user::get_num_operands() const {
 }
 
 void user::replace_all_uses_with(value *target) {
-  for(use &u: uses_){
-    u.set(target);
+  for(use &u: uses_)
+  if(auto *usr = dynamic_cast<user*>(u.get())){
+    std::cout << "replacing " << this << " by " << target << " in " << usr << std::endl;
+    usr->replace_uses_of_with(this, target);
   }
+}
+
+void user::replace_uses_of_with(value *before, value *after) {
+  for(use &u: ops_)
+    if(u.get() == before)
+      u.set(after);
 }
 
 }
