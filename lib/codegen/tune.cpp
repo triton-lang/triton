@@ -5,6 +5,7 @@
 #include "ir/function.h"
 #include <cstdlib>
 
+
 namespace tdl{
 namespace codegen{
 
@@ -83,80 +84,73 @@ void tune::run(ir::module &mod) {
   }
 }
 
-bool tune::check_constraints(std::map<ir::value *, std::string> &errors) {
+bool tune::check_constraints(ir::module &mod, std::map<ir::value *, std::vector<std::string>> &errors) {
+for(ir::function *fn: mod.get_function_list()){
+  /* grids */
+  auto get_tile_gt1_dim = [&](ir::value *v){
+    unsigned result = 0;
+    for(unsigned shape: v->get_type()->get_tile_shapes()) {
+      result += (shape > 1)?shape:0;
+    }
+    return result;
+  };
+  using std::to_string;
+  std::map<unsigned*, ir::instruction*> references;
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction *i: block->get_inst_list()){
+    if(!i->get_type()->is_tile_ty())
+      continue;
+    for(auto &param: params_.at(i)){
+      if(*param.second == 1)
+        continue;
+      ir::instruction *&r = references[param.second];
+      if(!r && get_tile_gt1_dim(i) > get_tile_gt1_dim(r))
+        r = i;
+    }
+  }
+  // extract unique instructions in order
+  std::vector<ir::instruction*> grids;
+  for(auto &ref: references)
+    if(std::find(grids.begin(), grids.end(), ref.second) == grids.end())
+      grids.push_back(ref.second);
 
-  return true;
+  // number of warps
+  int num_warps = 1;
+  for(size_t k = 0; k < grids.front()->get_type()->get_tile_shapes().size(); k++)
+    num_warps *= *params_[grids.front()]["p2.d" + to_string(k)];
+  // check constraints
+  for(ir::instruction *i: grids){
+    ir::type *ty = i->get_type();
+    const auto &shapes = ty->get_tile_shapes();
+    // for each dimension, the product of layout components
+    // must device the shape
+    for(size_t k = 0; k < shapes.size(); k++) {
+      std::string strk = to_string(k);
+      unsigned *s0 = params_[i]["p0.d" + strk];
+      unsigned *s1 = params_[i]["p1.d" + strk];
+      unsigned *s2 = params_[i]["p2.d" + strk];
+      unsigned multiple = (*s0)*(*s1)*(*s2);
+      if(shapes[k] % multiple != 0)
+        errors[i].push_back("for dim " + strk + ": shape (" + to_string(shapes[k]) + ")"
+                            " is not a multiple of layout (" + to_string(multiple)  + ")");
+    }
+    // the number of thread per warp must be 32
+    int num_threads = 1;
+    for(size_t k = 0; k < shapes.size(); k++)
+      num_threads *= *params_[i]["p1.d" + to_string(k)];
+    if(num_threads != 32)
+      errors[i].push_back("number of threads per warp (" + to_string(num_threads) + ") must be 32");
+    // The number of warps required by the layout is the same
+    // for all tiles in the function
+    int required_num_warps = 1;
+    for(size_t k = 0; k < shapes.size(); k++)
+      required_num_warps *= *params_[i]["p2.d" + to_string(k)];
+    if(required_num_warps != num_warps)
+      errors[i].push_back("number of warps (" + to_string(required_num_warps) + ") must be " + to_string(num_warps));
+  }
+  return errors.empty();
 }
-
-//bool TLVMAddTunerConstraints::runOnFunction(Function &F) {
-//  LLVMContext &Ctx = F.getContext();
-
-//  DenseMap<MDNode*, Instruction*> Refs;
-//  for(Function::iterator::value_type &BB: F)
-//  for(Instruction &I : BB)
-//  if(isTLVMValue(&I)){
-//    SmallVector<std::pair<unsigned, MDNode*>, 4> MDs;
-//    I.getAllMetadata(MDs);
-//    for(auto &X: MDs){
-//      if(MDRead(X.second)==1)
-//        continue;
-//      Instruction *&Ref = Refs[X.second];
-//      if(!Ref || getNumGT1Dim(I) > getNumGT1Dim(*Ref))
-//        Ref = &I;
-//    }
-//  }
-//  SmallVector<Instruction*, 4> Grids;
-//  for(auto &R: Refs)
-//  if(std::find(Grids.begin(), Grids.end(), R.second) == Grids.end())
-//    Grids.push_back(R.second);
-
-
-//  Instruction *FirstTile = Grids.front();
-//  for(Instruction *I: Grids){
-//    Type *Ty = I->getType();
-//    size_t NumDim = Ty->getTileNumDimensions();
-
-//    // For each dimension, the product of layout components
-//    // must divide shape
-//    for(size_t K = 0; K < NumDim; K++){
-//      unsigned Shape = MDRead(I->getMetadata("nvvm.param.shape.d" + itostr(K)));
-//      unsigned S0 = MDRead(I->getMetadata("nvvm.param.layout.p0.d" + itostr(K)));
-//      unsigned S1 = MDRead(I->getMetadata("nvvm.param.layout.p1.d" + itostr(K)));
-//      unsigned S2 = MDRead(I->getMetadata("nvvm.param.layout.p2.d" + itostr(K)));
-//      bool Constraint = Shape % (S0*S1*S2)== 0;
-//      Constant *Cst = Constraint?ConstantInt::getTrue(Ctx):ConstantInt::getFalse(Ctx);
-//      I->setMetadata("nvvm.constraint.shape.d" + itostr(K), MDNode::get(Ctx, ConstantAsMetadata::get(Cst)));
-//    };
-//    // The number of threads per warp is 32
-//    {
-//      int NumThreads = 1;
-//      for(size_t K = 0; K < NumDim; K++){
-//        unsigned PC = MDRead(I->getMetadata("nvvm.param.layout.p1.d" + itostr(K)));
-//        NumThreads *= PC;
-//      }
-//      bool Constraint = NumThreads==32;
-//      Constant *Cst = Constraint?ConstantInt::getTrue(Ctx):ConstantInt::getFalse(Ctx);
-//      I->setMetadata("nvvm.constraint.threads", MDNode::get(Ctx, ConstantAsMetadata::get(Cst)));
-//    }
-//    // The number of warps required by the layout is the same
-//    // for all tiles in the function
-//    {
-//      int NumWarps = 1;
-//      int RefNumWarps = 1;
-//      for(size_t K = 0; K < NumDim; K++){
-//        unsigned PC = MDRead(I->getMetadata("nvvm.param.layout.p2.d" + itostr(K)));
-//        unsigned PR = MDRead(FirstTile->getMetadata("nvvm.param.layout.p2.d" + itostr(K)));
-//        NumWarps *= PC;
-//        RefNumWarps *= PR;
-//      }
-//      bool Constraint = NumWarps==RefNumWarps;
-//      Constant *Cst = Constraint?ConstantInt::getTrue(Ctx):ConstantInt::getFalse(Ctx);
-//      I->setMetadata("nvvm.constraint.warps", MDNode::get(Ctx, ConstantAsMetadata::get(Cst)));
-//    };
-//  }
-//  return true;
-//}
-
+}
 
 }
 }
