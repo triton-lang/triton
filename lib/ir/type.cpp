@@ -18,8 +18,25 @@ type *type::get_scalar_ty() const {
   return const_cast<type*>(this);
 }
 
+unsigned type::get_primitive_size_in_bits() const {
+  switch (id_) {
+    case HalfTyID: return 16;
+    case FloatTyID: return 32;
+    case DoubleTyID: return 64;
+    case X86_FP80TyID: return 80;
+    case FP128TyID: return 128;
+    case PPC_FP128TyID: return 128;
+    case IntegerTyID: return ((integer_type*)(this))->get_bitwidth();
+    case TileTyID:  return ((tile_type*)(this))->get_bitwidth();
+    default: return 0;
+  }
+}
+
 unsigned type::get_integer_bitwidth() const
 { return ((integer_type*)(this))->get_bitwidth(); }
+
+unsigned type::get_tile_bitwidth() const
+{ return ((tile_type*)(this))->get_bitwidth(); }
 
 unsigned type::get_fp_mantissa_width() const {
   id_t id = get_scalar_ty()->id_;
@@ -138,6 +155,17 @@ tile_type::tile_type(type *ty, const std::vector<unsigned> &shapes)
 
 bool tile_type::is_valid_elt_ty(type *ty) {
   return ty->is_pointer_ty() || ty->is_floating_point_ty() || ty->is_integer_ty();
+}
+
+unsigned tile_type::get_num_elements() const {
+  unsigned res = 1;
+  for(unsigned shape: shapes_)
+    shape *= res;
+  return res;
+}
+
+unsigned tile_type::get_bitwidth() const {
+  return get_num_elements() * get_tile_element_ty()->get_primitive_size_in_bits();
 }
 
 tile_type* tile_type::get(type *elt_ty, const std::vector<unsigned> &shapes) {

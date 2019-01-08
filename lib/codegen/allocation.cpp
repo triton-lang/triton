@@ -1,7 +1,6 @@
 #include "codegen/allocation.h"
 #include "codegen/liveness.h"
 #include "codegen/layout.h"
-#include "codegen/loop_info.h"
 #include "ir/basic_block.h"
 #include "ir/type.h"
 #include "ir/value.h"
@@ -11,27 +10,15 @@
 namespace tdl{
 namespace codegen{
 
-unsigned allocation::get_num_bytes(ir::value *x) const {
-  ir::type *ty = x->get_type();
-  unsigned num_elements = ty->get_tile_num_elements();
-  if(has_double_buffer(x))
-    num_elements *= 2;
-  return num_elements * ty->get_scalar_ty()->get_size_in_bits();
-}
-
 
 void allocation::run(ir::function &fn){
   using std::max;
   using std::min;
   typedef std::multimap<unsigned, segment> triples_map_type;
 
-  // Fill double buffering info
-  for(ir::basic_block *block: fn.blocks())
-  for(ir::instruction *v: block->get_inst_list())
-    // If requires shared memory
-    if(layout_->get_num_shared_views(v) &&
-       loop_info_->get_loop_for(block))
-      double_buffer_.insert(v);
+  auto get_num_bytes = [&](ir::value *x){
+    return x->get_type()->get_tile_bitwidth();
+  };
 
   std::vector<ir::value *> I;
   for(auto x: liveness_->intervals())

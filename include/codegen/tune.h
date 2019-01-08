@@ -1,56 +1,45 @@
-//#ifndef TDL_INCLUDE_IR_CODEGEN_TUNE_H
-//#define TDL_INCLUDE_IR_CODEGEN_TUNE_H
+#ifndef TDL_INCLUDE_IR_CODEGEN_TUNE_H
+#define TDL_INCLUDE_IR_CODEGEN_TUNE_H
 
-//namespace tdl{
-//namespace codegen{
+#include <map>
+#include <set>
+#include <vector>
 
-//// Layout binding pass
-//class TLVMAddTunerParams: public FunctionPass {
-//private:
-//  enum CType{
-//    Layout = 0, Shape = 1
-//  };
-//  // Params pool
-//  SmallVector<MDNode*, 8> LParamsPool;
-//  // Constraints
-//  typedef std::pair<Value*, unsigned> CNodeType;
-//  typedef DenseMap<CNodeType, DenseSet<CNodeType>> CGraphType;
-//  // Layout constraints
-//  CGraphType LCGraph;
-//  DenseSet<CNodeType> LCNodes;
-//  // Shape constraints
-//  CGraphType SCGraph;
-//  DenseSet<CNodeType> SCNodes;
-//  // Relational
-//  std::map<std::pair<Value*, std::string>, std::function<unsigned* ()>> ExtraParams;
-//  DenseSet<unsigned> Constants;
+namespace tdl{
 
-//  void addConstraint(CNodeType X, CNodeType Y, CType CT);
-//  void initCPhi(Instruction *I);
-//  void initCGraph(Instruction *V);
-//  void connectedComponents(CNodeType X, ArrayRef<MDNode *> Vals, CType CT, DenseSet<CNodeType> &Nodes, CGraphType &Graph);
+namespace ir{
+  class value;
+  class module;
+  class instruction;
+}
 
-//public:
-//  static char ID;
-//  TLVMAddTunerParams(): FunctionPass(ID){ }
+namespace codegen{
 
-//  void getAnalysisUsage(AnalysisUsage & AU) const override;
-//  bool runOnFunction(Function &F) override;
+class tune {
+  typedef std::pair<ir::value*, unsigned> node_t;
+  typedef std::map <node_t, std::set<node_t>> graph_t;
 
-//private:
-//  std::map<std::pair<Instruction*, std::string>, Constant*> KnownParams;
-//};
+private:
+  void add_constraint(node_t x, node_t y);
+  void init_c_phi(ir::instruction *i);
+  void init_c_graph(ir::instruction *v);
+  void connected_components(node_t x, const std::vector<unsigned*> vals, std::set<node_t> &nodes, graph_t &graph);
 
-//class TLVMAddTunerConstraints: public FunctionPass {
-//public:
-//  static char ID;
-//  TLVMAddTunerConstraints(): FunctionPass(ID){ }
 
-//  void getAnalysisUsage(AnalysisUsage & AU) const override;
-//  bool runOnFunction(Function &F) override;
-//};
+public:
+  unsigned *get_param(ir::value *value);
+  bool check_constraints(std::map<ir::value*, std::string>& errors);
+  void run(ir::module &mod);
 
-//}
-//}
+private:
+  std::map<ir::value*, std::map<std::string, unsigned*>> params_;
+  std::vector<unsigned*> pool_;
+  graph_t dependencies_;
+  std::set<node_t> nodes_;
+};
 
-//#endif
+
+}
+}
+
+#endif

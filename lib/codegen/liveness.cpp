@@ -11,7 +11,6 @@ namespace codegen{
 
 // Entry point
 void liveness::run(ir::function *fn) {
-
   // Assigns index to each instruction
   slot_index index = 0;
   for(ir::basic_block *block: fn->blocks())
@@ -19,7 +18,6 @@ void liveness::run(ir::function *fn) {
     index += 1;
     indices_.insert({instr, index});
   }
-
   // Liveness analysis
   // Creates live intervals
   for(auto i: indices_){
