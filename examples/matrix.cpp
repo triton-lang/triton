@@ -35,7 +35,8 @@ int main() {
    program->codegen(&module);
    llvm::LLVMContext llvm_context;
    llvm::Module llvm_module("test", llvm_context);
-   tdl::codegen::lowering(module, llvm_module);
+   tdl::codegen::selection selection;
+   selection.run(module, llvm_module);
    llvm::PrintModulePass print(llvm::outs());
    llvm::AnalysisManager<llvm::Module> analysis;
    print.run(llvm_module, analysis);

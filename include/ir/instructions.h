@@ -332,6 +332,11 @@ public:
 };
 
 
+// matmul
+
+class matmul_inst: public instruction {
+
+};
 
 }
 }

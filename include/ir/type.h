@@ -51,8 +51,10 @@ public:
   // type attributes
   unsigned get_fp_mantissa_width() const;
   unsigned get_integer_bitwidth() const;
+  unsigned get_size_in_bits() const;
   type *get_scalar_ty() const;
   const std::vector<unsigned> &get_tile_shapes() const;
+  unsigned get_tile_num_elements() const;
   type *get_tile_element_ty() const;
   unsigned get_pointer_address_space() const;
   type *get_pointer_element_ty() const;
@@ -135,6 +137,7 @@ private:
 public:
   // accessors
   const std::vector<unsigned>& get_shapes() const { return shapes_; }
+  unsigned get_num_elements();
 
   // factory methods
   static tile_type* get(type *ty, const std::vector<unsigned> &shapes);

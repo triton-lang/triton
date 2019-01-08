@@ -1,8 +1,44 @@
 #ifndef TDL_INCLUDE_IR_CODEGEN_STORAGE_ALLOC_H
 #define TDL_INCLUDE_IR_CODEGEN_STORAGE_ALLOC_H
 
+#include <map>
+#include <set>
+
 namespace tdl{
+
+namespace ir{
+  class value;
+  class function;
+}
+
 namespace codegen{
+
+class layout;
+class target_tuner;
+class liveness;
+class loop_info;
+
+class allocation {
+public:
+  // accessors
+  unsigned get_num_bytes(ir::value *x) const;
+  unsigned get_offset(ir::value *x)    const { return offsets_.at(x); }
+  unsigned get_allocated_size()        const { return allocated_size_; }
+  bool has_double_buffer(ir::value *x) const { return double_buffer_.find(x) != double_buffer_.end(); }
+
+  // run
+  void run(ir::function &fn);
+
+private:
+  std::map<ir::value*, unsigned> offsets_;
+  std::set<ir::value*> double_buffer_;
+  std::map<ir::value*, unsigned> num_bytes_;
+  size_t allocated_size_;
+  // dependences
+  liveness *liveness_;
+  layout *layout_;
+  loop_info *loop_info_;
+};
 
 }
 }
