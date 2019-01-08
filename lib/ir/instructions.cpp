@@ -248,7 +248,7 @@ getelementptr_inst::getelementptr_inst(type *pointee_ty, value *ptr, const std::
 
 type *getelementptr_inst::get_return_type(type *elt_ty, value *ptr, const std::vector<value *> &idx_list) {
   // result pointer type
-  type *ptr_ty = pointer_type::get(get_indexed_type(elt_ty, idx_list), ptr->get_type()->get_pointer_address_space());
+  type *ptr_ty = pointer_type::get(get_indexed_type(elt_ty, idx_list), ptr->get_type()->get_scalar_ty()->get_pointer_address_space());
   // Tile GEP
   if(ptr->get_type()->is_tile_ty())
     return tile_type::get_same_shapes(ptr_ty, ptr->get_type());

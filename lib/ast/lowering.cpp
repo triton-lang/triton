@@ -56,7 +56,11 @@ void node::implicit_cast(ir::builder &builder, ir::value *&lhs, ir::value *&rhs,
   ir::type *left_ty = lhs->get_type()->get_scalar_ty();
   ir::type *right_ty = rhs->get_type()->get_scalar_ty();
   // One operand is pointer
-  if(left_ty->is_pointer_ty()){
+  if(left_ty->is_pointer_ty() || right_ty->is_pointer_ty()){
+    if(left_ty->is_pointer_ty() && right_ty->is_pointer_ty())
+      throw std::runtime_error("invalid operands");
+    if(right_ty->is_pointer_ty())
+      std::swap(lhs, rhs);
     is_ptr = true;
   }
   // One operand is double

@@ -22,7 +22,7 @@ const char src[] =
 "\
 void test(fp32 *A, fp32 *B, fp32 *C, int32 i){\
   int32 tile[16, 16] = 0;\
-  int32 test[16, 16] = tile + i;\
+  fp32 *test[16, 16] = tile + A;\
   i = 1;\
   A = A + i;\
 }\
