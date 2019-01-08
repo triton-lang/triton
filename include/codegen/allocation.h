@@ -25,7 +25,7 @@ public:
   unsigned get_allocated_size()        const { return allocated_size_; }
 
   // run
-  void run(ir::function &fn);
+  void run();
 
 private:
   std::map<ir::value*, unsigned> offsets_;

@@ -7,7 +7,7 @@
 namespace tdl {
 
 namespace ir {
-  class function;
+  class module;
   class instruction;
   class value;
 }
@@ -32,7 +32,7 @@ public:
   shared_view_info get_shared_view(ir::value *v, unsigned idx);
 
   // run
-  bool run(ir::function &fn);
+  void run(ir::module &mod);
 
 private:
   std::map<ir::value*, shared_view_val_t> shared_views_;

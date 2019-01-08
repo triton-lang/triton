@@ -61,6 +61,11 @@ class identifier;
 
 // AST
 class node {
+protected:
+  static ir::value* explicit_cast(ir::builder &builder, ir::value *src, ir::type *dst_ty);
+  static void implicit_broadcast(ir::module *mod, ir::value *&lhs, ir::value *&rhs);
+  static void implicit_cast(ir::builder &builder, ir::value *&lhs, ir::value *&rhs,
+                            bool &is_float, bool &is_ptr, bool &is_int, bool &is_signed);
 public:
   virtual ir::value* codegen(ir::module *) const { return nullptr; }
 };

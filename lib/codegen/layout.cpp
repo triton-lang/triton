@@ -1,5 +1,6 @@
 #include "codegen/layout.h"
 #include "ir/function.h"
+#include "ir/module.h"
 #include "ir/basic_block.h"
 #include "ir/instructions.h"
 
@@ -36,19 +37,19 @@ void layout::add_shared_views(ir::value *v){
 }
 
 // Entry point
-bool layout::run(ir::function &fn) {
+void layout::run(ir::module &mod) {
+for(ir::function *fn: mod.get_function_list()){
   // Non-phis
-  for(ir::basic_block *block: fn.blocks())
+  for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *instr: block->get_inst_list()) {
     add_shared_views(instr);
   }
   // Phi nodes
-  for(ir::basic_block *block: fn.blocks())
+  for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *instr: block->get_inst_list()) {
     add_phi_nodes(instr);
   }
-  // Done
-  return false;
+}
 }
 
 }

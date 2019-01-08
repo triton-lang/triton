@@ -4,6 +4,7 @@
 #include "ir/context.h"
 #include "ir/module.h"
 #include "codegen/selection.h"
+#include "codegen/tune.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
@@ -20,6 +21,8 @@ extern translation_unit *ast_root;
 const char src[] =
 "\
 void test(fp32 *A, fp32 *B, fp32 *C, int32 i){\
+  int32 tile[16, 16] = 0;\
+  int32 test[16, 16] = tile + i;\
   i = 1;\
   A = A + i;\
 }\
@@ -35,10 +38,14 @@ int main() {
    program->codegen(&module);
    llvm::LLVMContext llvm_context;
    llvm::Module llvm_module("test", llvm_context);
+   // lowering passes
    tdl::codegen::selection selection;
-   selection.run(module, llvm_module);
-   llvm::PrintModulePass print(llvm::outs());
-   llvm::AnalysisManager<llvm::Module> analysis;
-   print.run(llvm_module, analysis);
+   tdl::codegen::tune tune;
+   tune.run(module);
+//   selection.run(module, llvm_module);
+//   // print LLVM program
+//   llvm::PrintModulePass print(llvm::outs());
+//   llvm::AnalysisManager<llvm::Module> analysis;
+//   print.run(llvm_module, analysis);
    return 0;
 }

@@ -11,7 +11,7 @@ namespace tdl{
 namespace codegen{
 
 
-void allocation::run(ir::function &fn){
+void allocation::run(){
   using std::max;
   using std::min;
   typedef std::multimap<unsigned, segment> triples_map_type;

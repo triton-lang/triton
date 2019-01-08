@@ -108,6 +108,7 @@ for(ir::function *fn: mod.get_function_list()){
         r = i;
     }
   }
+
   // extract unique instructions in order
   std::vector<ir::instruction*> grids;
   for(auto &ref: references)
@@ -118,6 +119,7 @@ for(ir::function *fn: mod.get_function_list()){
   int num_warps = 1;
   for(size_t k = 0; k < grids.front()->get_type()->get_tile_shapes().size(); k++)
     num_warps *= *params_[grids.front()]["p2.d" + to_string(k)];
+
   // check constraints
   for(ir::instruction *i: grids){
     ir::type *ty = i->get_type();

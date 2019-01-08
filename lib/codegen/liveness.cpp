@@ -2,6 +2,7 @@
 #include "codegen/layout.h"
 #include "ir/basic_block.h"
 #include "ir/function.h"
+#include "ir/module.h"
 #include "ir/instructions.h"
 #include "ir/value.h"
 
@@ -10,7 +11,8 @@ namespace codegen{
 
 
 // Entry point
-void liveness::run(ir::function *fn) {
+void liveness::run(ir::module &mod) {
+for(ir::function *fn: mod.get_function_list()){
   // Assigns index to each instruction
   slot_index index = 0;
   for(ir::basic_block *block: fn->blocks())
@@ -34,6 +36,7 @@ void liveness::run(ir::function *fn) {
     }
     intervals_[v] = segment{start, end};
   }
+}
 }
 
 }

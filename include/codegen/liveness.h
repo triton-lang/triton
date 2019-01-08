@@ -8,6 +8,7 @@ namespace tdl{
 namespace ir{
   class value;
   class function;
+  class module;
 }
 
 namespace codegen{
@@ -47,7 +48,7 @@ public:
   segment get_interval(ir::value* v) const { return intervals_.at(v); }
 
   // run
-  void run(ir::function *fn);
+  void run(ir::module &mod);
 
 private:
   has_storage_map_t has_dedicated_storage_;
