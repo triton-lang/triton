@@ -95,22 +95,22 @@ private:
   std::vector<T> values_;
 };
 
-enum range_enum_t{
+enum slice_enum_t{
   ALL,
   NEWAXIS
 };
 
-class range: public node{
+class slice: public node{
 public:
-  range(range_enum_t type)
+  slice(slice_enum_t type)
     : type_(type){}
 
-  range_enum_t type() const{
+  slice_enum_t type() const{
     return type_;
   }
 
 public:
-  const range_enum_t type_;
+  const slice_enum_t type_;
 };
 
 class expression: public node{
@@ -139,14 +139,14 @@ private:
 
 class indexing_expression: public postfix_expression{
 public:
-  indexing_expression(node *id, node *ranges)
-    : id_((const identifier*)id), ranges_((const list<range*>*)ranges) {}
+  indexing_expression(node *id, node *slices)
+    : id_((const identifier*)id), slices_((const list<slice*>*)slices) {}
 
   ir::value* codegen(ir::module *) const;
 
 private:
   const identifier* id_;
-  const list<range*>* ranges_;
+  const list<slice*>* slices_;
 };
 
 class unary_expression: public expression{

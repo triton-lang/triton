@@ -21,8 +21,12 @@ extern translation_unit *ast_root;
 const char src[] =
 "\
 void test(fp32 *A, fp32 *B, fp32 *C, int32 M, int32 N, int32 K){\
+  int32 rx[16] = get_global_range[16](0);\
+  int32 ry[16] = get_global_range[16](1);\
+  int32 rk[8]  = 0 ... 8;\
   fp32 acc[16, 16] = 0;\
-  fp32 *pa[16, 8] = A;\
+  fp32 *pa[16, 8] = A + rx[:,newaxis] + rk[newaxis,:]*M;\
+  fp32 *pb[16, 8] = B + ry[:,newaxis] + rk[newaxis,:]*K;\
 }\
 ";
 

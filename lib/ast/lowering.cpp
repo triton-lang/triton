@@ -107,14 +107,16 @@ void node::implicit_broadcast(ir::module *mod, ir::value *&lhs, ir::value *&rhs)
   // Both are arrays
   std::vector<unsigned> lhs_shapes = lhs->get_type()->get_tile_shapes();
   std::vector<unsigned> rhs_shapes = rhs->get_type()->get_tile_shapes();
+  if(lhs_shapes == rhs_shapes)
+    return;
   int lhs_dim = lhs_shapes.size();
   int rhs_dim = rhs_shapes.size();
   std::vector<unsigned> &shortest = (lhs_dim < rhs_dim)?lhs_shapes:rhs_shapes;
   std::vector<unsigned> &longest  = (lhs_dim < rhs_dim)?rhs_shapes:lhs_shapes;
   size_t ndim = longest.size();
   int off = longest.size() - shortest.size();
-  for(int i = longest.size(); i>= 0; i--){
-    if(shortest[off + i] != longest[i])
+  for(int i = longest.size() - 1; i>= 0; i--){
+    if(shortest[off + i] != longest[i] && shortest[off + i] != 1 && longest[i] != 1)
       throw std::runtime_error("cannot broadcast");
   }
   // Pad
@@ -425,12 +427,12 @@ ir::value* get_global_range::codegen(ir::module *mod) const {
 /* Postfix expression */
 ir::value* indexing_expression::codegen(ir::module *mod) const{
   ir::value *in = mod->get_value(id_->name());
-  const std::vector<range*> &ranges = ranges_->values();
+  const std::vector<slice*> &slices = slices_->values();
   std::vector<unsigned> in_shapes = in->get_type()->get_tile_shapes();
-  std::vector<unsigned> out_shapes(ranges.size());
+  std::vector<unsigned> out_shapes(slices.size());
   size_t current = 0;
   for(size_t i = 0; i < out_shapes.size(); i++)
-    out_shapes[i] = (ranges[i]->type()==NEWAXIS)?1:in_shapes[current++];
+    out_shapes[i] = (slices[i]->type()==NEWAXIS)?1:in_shapes[current++];
   return mod->get_builder().create_reshape(in, out_shapes);
 }
 

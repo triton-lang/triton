@@ -89,7 +89,6 @@ direct_abstract_declarator
 
 constant : 
     CONSTANT { $$ = new constant(atoi(yytext)); }
-  | constant ELLIPSIS constant { $$ = new constant_range($1, $2); }
 	;
 	
 constant_list
@@ -116,28 +115,29 @@ builtin
 primary_expression
   : identifier         { $$ = new named_expression($1); }
   | constant           { $$ = $1; }
+  | constant ELLIPSIS constant { $$ = new constant_range($1, $3); }
   | builtin            { $$ = $1; }
   | STRING_LITERAL     { $$ = new string_literal(yytext); }
   | '(' expression ')' { $$ = $1; }
 	;
 
-range
-  : ':' { $$ = new range(tdl::ast::ALL); }
-  | NEWAXIS { $$ = new range(tdl::ast::NEWAXIS); }
+slice
+  : ':' { $$ = new slice(tdl::ast::ALL); }
+  | NEWAXIS { $$ = new slice(tdl::ast::NEWAXIS); }
 
-range_list
-  : range { $$ = new list<range*>((range*)$1); }
-  | range_list ',' range { $$ = append_ptr_list<range>($1, $2); }
+slice_list
+  : slice { $$ = new list<slice*>((slice*)$1); }
+  | slice_list ',' slice { $$ = append_ptr_list<slice>($1, $3); }
 
 postfix_expression
   : primary_expression { $$ = $1;}
-  | identifier '[' range_list ']' { $$ = new indexing_expression($1, $2);}
+  | identifier '[' slice_list ']' { $$ = new indexing_expression($1, $3);}
   ;
 
 unary_expression
-  : postfix_expression { $$ = $1; }
-  | INC_OP unary_expression { $$ = new unary_operator(INC, $2); }
-  | DEC_OP unary_expression { $$ = new unary_operator(DEC, $2); }
+  : postfix_expression             { $$ = $1; }
+  | INC_OP unary_expression        { $$ = new unary_operator(INC, $2); }
+  | DEC_OP unary_expression        { $$ = new unary_operator(DEC, $2); }
   | unary_operator cast_expression { $$ = new unary_operator(get_unary_op($1), $2); }
 	;
 
