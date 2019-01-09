@@ -333,9 +333,26 @@ public:
 
 
 // matmul
-
 class matmul_inst: public instruction {
 
+};
+
+// built-in
+class builtin_inst: public instruction{
+protected:
+  using instruction::instruction;
+};
+
+class get_global_range_inst: public builtin_inst {
+  get_global_range_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
+
+public:
+  static instruction* create(context &ctx, unsigned axis, unsigned size,
+                             const std::string &name = "",
+                             instruction *next = nullptr);
+
+private:
+  unsigned axis_;
 };
 
 }

@@ -62,6 +62,17 @@ void tune::connected_components(node_t x, const std::vector<unsigned *> vals, st
   }
 }
 
+void tune::get_params(ir::module &mod, std::vector<unsigned *> &result) {
+  result.clear();
+  std::set<unsigned*> seen;
+  for(ir::function *fn: mod.get_function_list())
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction *i : block->get_inst_list())
+  for(auto &x: params_[i])
+    if(seen.insert(x.second).second)
+      result.push_back(x.second);
+}
+
 void tune::run(ir::module &mod) {
   for(ir::function *fn: mod.get_function_list()){
     // Build constraints graph

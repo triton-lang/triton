@@ -246,7 +246,13 @@ value *builder::create_broadcast(value *arg, const std::vector<unsigned> &shapes
   return insert(broadcast_inst::create(arg, shapes, name));
 }
 
+//===----------------------------------------------------------------------===//
+//                               built-in instructions
+//===----------------------------------------------------------------------===//
 
+value *builder::create_get_global_range(unsigned axis, unsigned size, const std::string &name) {
+  return insert(get_global_range_inst::create(ctx_, axis, size, name));
+}
 
 }
 }

@@ -1,3 +1,4 @@
+#include <cassert>
 #include "ir/constant.h"
 #include "ir/type.h"
 #include "ir/context.h"
@@ -50,6 +51,21 @@ constant_int::constant_int(type *ty, uint64_t value)
 constant *constant_int::get(type *ty, uint64_t value) {
   return new constant_int(ty, value);
 }
+
+// constant_range
+// FIXME use something like APInt
+
+constant_range::constant_range(type *ty, uint64_t first, uint64_t last)
+  : constant(ty, 0), first_(first), last_(last){ }
+
+constant *constant_range::get(constant *first, constant *last) {
+  assert(first->get_type()->is_integer_ty());
+  assert(first->get_type() == last->get_type());
+  uint64_t vfirst = ((constant_int*)first)->get_value();
+  uint64_t vlast = ((constant_int*)first)->get_value();
+  return new constant_range(first->get_type(), vfirst, vlast);
+}
+
 
 // constant_fp
 // FIXME use something like APFloat

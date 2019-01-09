@@ -40,6 +40,18 @@ private:
   uint64_t value_;
 };
 
+/* constant range */
+class constant_range: public constant{
+  constant_range(type *ty, uint64_t first, uint64_t last);
+
+public:
+  static constant *get(constant *first, constant *last);
+
+private:
+  uint64_t first_;
+  uint64_t last_;
+};
+
 /* constant fp */
 class constant_fp: public constant{
   constant_fp(context &ctx, double value);

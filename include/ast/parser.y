@@ -49,7 +49,8 @@ TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
 %token XOR_ASSIGN OR_ASSIGN TYPE_NAME
 %token VOID UINT8 UINT16 UINT32 UINT64 INT8 INT16 INT32 INT64 FP32 FP64
 %token IF ELSE FOR
-%token NEWAXIS
+%token NEWAXIS ELLIPSIS
+%token GET_GLOBAL_RANGE
 
 %start translation_unit
 %%
@@ -87,7 +88,8 @@ direct_abstract_declarator
     : '[' constant_list ']' { $$ = new tile(nullptr, $1); }
 
 constant : 
-	CONSTANT { $$ = new constant(atoi(yytext)); }
+    CONSTANT { $$ = new constant(atoi(yytext)); }
+  | constant ELLIPSIS constant { $$ = new constant_range($1, $2); }
 	;
 	
 constant_list
@@ -107,11 +109,15 @@ type_name
 identifier
 	: IDENTIFIER { $$ = new identifier(yytext); }
 	;
-	
+
+builtin
+  : GET_GLOBAL_RANGE '[' constant ']' '(' constant ')' { $$ = new get_global_range($3, $6); }
+
 primary_expression
-  : identifier  { $$ = new named_expression($1); }
-	| constant { $$ = $1; }
-	| STRING_LITERAL { $$ = new string_literal(yytext); }
+  : identifier         { $$ = new named_expression($1); }
+  | constant           { $$ = $1; }
+  | builtin            { $$ = $1; }
+  | STRING_LITERAL     { $$ = new string_literal(yytext); }
   | '(' expression ')' { $$ = $1; }
 	;
 

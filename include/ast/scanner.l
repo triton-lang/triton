@@ -31,6 +31,8 @@ int comment();
 "int64"			{ count(); return(INT64); }
 "fp32"			{ count(); return(FP32); }
 "fp64"			{ count(); return(FP64); }
+"..."       { count(); return(ELLIPSIS); }
+"get_global_range" { count(); return GET_GLOBAL_RANGE; }
 
 {L}({L}|{D})*		{ count(); return(check_type()); }
 

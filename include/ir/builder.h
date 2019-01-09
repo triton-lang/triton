@@ -111,6 +111,8 @@ public:
   value *create_splat(value *arg, const std::vector<unsigned> &shapes, const std::string &name = "");
   value *create_reshape(value *arg, const std::vector<unsigned> &shapes, const std::string &name = "");
   value *create_broadcast(value *arg, const std::vector<unsigned> &shapes, const std::string &name = "");
+  // Built-in instruction
+  value *create_get_global_range(unsigned axis, unsigned size, const std::string &name = "");
 
 private:
   context &ctx_;

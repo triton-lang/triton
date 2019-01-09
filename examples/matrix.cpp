@@ -20,11 +20,9 @@ extern translation_unit *ast_root;
 
 const char src[] =
 "\
-void test(fp32 *A, fp32 *B, fp32 *C, int32 i){\
-  int32 tile[16, 16] = 0;\
-  fp32 *test[16, 16] = tile + A;\
-  i = 1;\
-  A = A + i;\
+void test(fp32 *A, fp32 *B, fp32 *C, int32 M, int32 N, int32 K){\
+  fp32 acc[16, 16] = 0;\
+  fp32 *pa[16, 8] = A;\
 }\
 ";
 
@@ -42,6 +40,9 @@ int main() {
    tdl::codegen::selection selection;
    tdl::codegen::tune tune;
    tune.run(module);
+   std::vector<unsigned*> params;
+   tune.get_params(module, params);
+   std::cout << params.size() << std::endl;
 //   selection.run(module, llvm_module);
 //   // print LLVM program
 //   llvm::PrintModulePass print(llvm::outs());

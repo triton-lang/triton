@@ -58,6 +58,7 @@ enum TYPE_T{
 
 class pointer;
 class identifier;
+class constant;
 
 // AST
 class node {
@@ -121,6 +122,21 @@ class postfix_expression: public expression{
 
 };
 
+class builtin_expression: public node{
+
+};
+
+
+class get_global_range: public builtin_expression{
+public:
+  get_global_range(node *size, node *axis): size_((constant*)size), axis_((constant*)axis) { }
+  ir::value* codegen(ir::module *) const;
+
+private:
+  const constant* size_;
+  const constant* axis_;
+};
+
 class indexing_expression: public postfix_expression{
 public:
   indexing_expression(node *id, node *ranges)
@@ -133,7 +149,7 @@ private:
   const list<range*>* ranges_;
 };
 
-class unary_expression: public node{
+class unary_expression: public expression{
 public:
   unary_expression(node *id): id_((const identifier*)id) {}
   const identifier *id() const;
@@ -174,6 +190,17 @@ private:
   const int value_;
 };
 
+class constant_range: public expression {
+public:
+  constant_range(node *first, node *last)
+    : first_((constant*)first), last_((constant*)last) { }
+
+  ir::value* codegen(ir::module *mod) const;
+
+private:
+  constant *first_;
+  constant *last_;
+};
 
 class string_literal: public expression{
 public:

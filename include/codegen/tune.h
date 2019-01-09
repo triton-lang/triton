@@ -27,6 +27,7 @@ private:
 
 
 public:
+  void get_params(ir::module& mod, std::vector<unsigned*> &result);
   unsigned *get_param(ir::value *value);
   bool check_constraints(ir::module &fn, std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);

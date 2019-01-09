@@ -415,6 +415,13 @@ ir::value* binary_operator::codegen(ir::module *mod) const{
   return result;
 }
 
+/* Builtin expression */
+ir::value* get_global_range::codegen(ir::module *mod) const {
+  ir::builder &builder = mod->get_builder();
+  return builder.create_get_global_range(axis_->value(), size_->value());
+}
+
+
 /* Postfix expression */
 ir::value* indexing_expression::codegen(ir::module *mod) const{
   ir::value *in = mod->get_value(id_->name());
@@ -509,6 +516,11 @@ int constant::value() const{
   return value_;
 }
 
+/* Constant range */
+ir::value* constant_range::codegen(ir::module *mod) const{
+  return ir::constant_range::get((ir::constant*)first_->codegen(mod),
+                                 (ir::constant*)last_->codegen(mod));
+}
 
 /* Unary expression */
 const identifier* unary_expression::id() const{

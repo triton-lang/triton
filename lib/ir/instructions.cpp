@@ -246,15 +246,17 @@ getelementptr_inst::getelementptr_inst(type *pointee_ty, value *ptr, const std::
     set_operand(1 + i, idx[i]);
 }
 
-type *getelementptr_inst::get_return_type(type *elt_ty, value *ptr, const std::vector<value *> &idx_list) {
+type *getelementptr_inst::get_return_type(type *elt_ty, value *x, const std::vector<value *> &idx_list) {
   // result pointer type
-  type *ptr_ty = pointer_type::get(get_indexed_type(elt_ty, idx_list), ptr->get_type()->get_scalar_ty()->get_pointer_address_space());
+  type *ty = x->get_type();
+  unsigned addr_space = ty->get_scalar_ty()->get_pointer_address_space();
+  type *ptr_ty = pointer_type::get(get_indexed_type(elt_ty, idx_list), addr_space);
   // Tile GEP
-  if(ptr->get_type()->is_tile_ty())
-    return tile_type::get_same_shapes(ptr_ty, ptr->get_type());
+  if(ty->is_tile_ty())
+    return tile_type::get_same_shapes(ptr_ty, ty);
   for(value *idx : idx_list)
   if (idx->get_type()->is_tile_ty())
-    return tile_type::get_same_shapes(ptr_ty, idx->get_type());
+    return tile_type::get_same_shapes(ptr_ty, ty);
   // Scalar GEP
   return ptr_ty;
 }
@@ -327,6 +329,28 @@ instruction* splat_inst::create(value *arg, const std::vector<unsigned> &shapes,
 instruction* broadcast_inst::create(value *arg, const std::vector<unsigned> &shapes,
                                   const std::string &name, instruction *next) {
   return new broadcast_inst(arg, shapes, name, next);
+}
+
+
+//===----------------------------------------------------------------------===//
+//                               matmul_inst classes
+//===----------------------------------------------------------------------===//
+
+
+//===----------------------------------------------------------------------===//
+//                               builtin instructions
+//===----------------------------------------------------------------------===//
+get_global_range_inst::get_global_range_inst(type *ty, unsigned axis,
+                                             const std::string &name, instruction *next)
+  : builtin_inst(ty, 0, name, next), axis_(axis) {
+
+}
+
+instruction* get_global_range_inst::create(context &ctx, unsigned axis, unsigned size,
+                                           const std::string &name, instruction *next) {
+  type *int_ty = type::get_int32_ty(ctx);
+  type *tile_ty = tile_type::get(int_ty, {size});
+  return new get_global_range_inst(tile_ty, axis, name, next);
 }
 
 }
