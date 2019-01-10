@@ -279,7 +279,11 @@ private:
 //===----------------------------------------------------------------------===//
 
 class load_inst: public unary_inst{
+private:
   load_inst(value *ptr, const std::string &name, instruction *next);
+
+private:
+  static type *get_pointee_type(type *ty);
 
 public:
   // accessors

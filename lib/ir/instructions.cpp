@@ -294,8 +294,17 @@ getelementptr_inst *getelementptr_inst::create(value *ptr, const std::vector<val
 //===----------------------------------------------------------------------===//
 //                               load_inst/store_inst classes
 //===----------------------------------------------------------------------===//
+type *load_inst::get_pointee_type(type *ty) {
+  type *scalar_ty = ty->get_scalar_ty();
+  type *pointee_ty = scalar_ty->get_pointer_element_ty();
+  if(ty->is_tile_ty())
+    return tile_type::get_same_shapes(pointee_ty, ty);
+  return pointee_ty;
+}
+
 load_inst::load_inst(value *ptr, const std::string &name, instruction *next)
-  : unary_inst(ptr->get_type()->get_pointer_element_ty(), ptr, name, next) { }
+  : unary_inst(get_pointee_type(ptr->get_type()), ptr, name, next) {
+}
 
 load_inst* load_inst::create(value *ptr, const std::string &name, instruction *next) {
   return new load_inst(ptr, name, next);

@@ -19,33 +19,46 @@ void tune::add_constraint(node_t x, node_t y) {
 void tune::init_c_phi(ir::instruction *v) {
   // Phi Nodes: all the incoming value share the result layout
   if(auto *phi = dynamic_cast<ir::phi_node*>(v))
-    for(ir::value *inc: phi->ops())
+    for(ir::value *op: phi->ops())
       for(unsigned k = 0; k < phi->get_type()->get_tile_shapes().size(); k++)
-        if(dependencies_.find({inc, k}) != dependencies_.end()
-           || dependencies_.find({phi, k}) != dependencies_.end())
-          add_constraint({phi, k}, {inc, k});
+        if(dependencies_.find({op, k}) != dependencies_.end()
+           || dependencies_.find({phi, k}) != dependencies_.end()){
+          add_constraint({phi, k}, {op, k});
+        }
 }
 
 void tune::init_c_graph(ir::instruction *v) {
-  unsigned num_dim = v->get_type()->get_tile_shapes().size();
+  const auto& shapes = v->get_type()->get_tile_shapes();
   if(dynamic_cast<ir::reshape_inst*>(v)){
-
+    ir::value *op = v->get_operand(0);
+    unsigned current = 0;
+    for(unsigned i = 0; i < shapes.size(); i ++)
+      if(shapes[i] > 1)
+        add_constraint({v, i}, {op, current++});
   }
   else if(dynamic_cast<ir::splat_inst*>(v)){
 
   }
   else if(dynamic_cast<ir::broadcast_inst*>(v)){
+    ir::value *op = v->get_operand(0);
+    ir::type *op_ty = op->get_type();
+    const auto& op_shapes = op_ty->get_tile_shapes();
+    for(unsigned i = 0; i < shapes.size(); i ++){
+      if(op_shapes[i] == shapes[i] && v != op)
+        add_constraint({v, i}, {op, i});
+    }
 
   }
-  else if(auto *ii = dynamic_cast<ir::matmul_inst*>(v)){
-    ir::value *D = ii->get_operand(2);
+  else if(dynamic_cast<ir::matmul_inst*>(v)){
+    ir::value *D = v->get_operand(2);
     add_constraint({v, 0}, {D, 0});
     add_constraint({v, 1}, {D, 1});
   }
-  else if(dynamic_cast<ir::user*>(v))
-    for(unsigned i = 0; i < num_dim; i ++)
+  else if(dynamic_cast<ir::user*>(v)){
+    for(unsigned i = 0; i < shapes.size(); i ++)
       for(ir::value* op: v->ops())
         add_constraint({v, i}, {op, i});
+  }
 }
 
 void tune::connected_components(node_t x, const std::vector<unsigned *> vals, std::set<node_t> &nodes, graph_t &graph) {
@@ -56,6 +69,11 @@ void tune::connected_components(node_t x, const std::vector<unsigned *> vals, st
       params_[instr].insert({"p0" + suffix, vals[0]});
       params_[instr].insert({"p1" + suffix, vals[1]});
       params_[instr].insert({"p2" + suffix, vals[2]});
+    }
+    if(auto *cst = dynamic_cast<ir::constant_int*>(x.first)){
+      *vals[0] = cst->get_value();
+      *vals[1] = cst->get_value();
+      *vals[2] = cst->get_value();
     }
     for(const node_t &y: graph[x])
       connected_components(y, vals, nodes, graph);
@@ -69,8 +87,10 @@ void tune::get_params(ir::module &mod, std::vector<unsigned *> &result) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i : block->get_inst_list())
   for(auto &x: params_[i])
-    if(seen.insert(x.second).second)
+    if(seen.insert(x.second).second && *x.second == 0){
+      std::cout << typeid(*i).name() << " " << i << std::endl;
       result.push_back(x.second);
+    }
 }
 
 void tune::run(ir::module &mod) {
@@ -78,8 +98,9 @@ void tune::run(ir::module &mod) {
     // Build constraints graph
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *i : block->get_inst_list())
-    if(i->get_type()->is_tile_ty())
+    if(i->get_type()->is_tile_ty()){
       init_c_graph(i);
+    }
     // Build phi constraints
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *i : block->get_inst_list())

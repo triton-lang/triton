@@ -123,13 +123,16 @@ void node::implicit_broadcast(ir::module *mod, ir::value *&lhs, ir::value *&rhs)
   for(size_t i = 0; i < off; i++)
     shortest.insert(shortest.begin(), 1);
   ir::value *&target = (lhs_dim < rhs_dim)?lhs:rhs;
-  target = builder.create_reshape(target, shortest);
+  if(off > 0)
+    target = builder.create_reshape(target, shortest);
   // Broadcast
   std::vector<unsigned> shapes(ndim);
   for(size_t i = 0; i < ndim; i++)
     shapes[i] = std::max(shortest[i], longest[i]);
-  lhs = builder.create_broadcast(lhs, shapes);
-  rhs = builder.create_broadcast(rhs, shapes);
+  if(shapes != lhs_shapes)
+    lhs = builder.create_broadcast(lhs, shapes);
+  if(shapes != rhs_shapes)
+    rhs = builder.create_broadcast(rhs, shapes);
 }
 
 /* Translation unit */
