@@ -33,7 +33,9 @@ void tune::init_c_graph(ir::instruction *v) {
     ir::value *op = v->get_operand(0);
     unsigned current = 0;
     for(unsigned i = 0; i < shapes.size(); i ++)
-      if(shapes[i] > 1)
+      if(shapes[i] == 1)
+        static_params_.insert({{v, i}, 1});
+      else
         add_constraint({v, i}, {op, current++});
   }
   else if(dynamic_cast<ir::splat_inst*>(v)){
@@ -70,10 +72,10 @@ void tune::connected_components(node_t x, const std::vector<unsigned *> vals, st
       params_[instr].insert({"p1" + suffix, vals[1]});
       params_[instr].insert({"p2" + suffix, vals[2]});
     }
-    if(auto *cst = dynamic_cast<ir::constant_int*>(x.first)){
-      *vals[0] = cst->get_value();
-      *vals[1] = cst->get_value();
-      *vals[2] = cst->get_value();
+    if(static_params_.find(x) != static_params_.end()){
+      *vals[0] = static_params_.at(x);
+      *vals[1] = static_params_.at(x);
+      *vals[2] = static_params_.at(x);
     }
     for(const node_t &y: graph[x])
       connected_components(y, vals, nodes, graph);
@@ -88,7 +90,6 @@ void tune::get_params(ir::module &mod, std::vector<unsigned *> &result) {
   for(ir::instruction *i : block->get_inst_list())
   for(auto &x: params_[i])
     if(seen.insert(x.second).second && *x.second == 0){
-      std::cout << typeid(*i).name() << " " << i << std::endl;
       result.push_back(x.second);
     }
 }

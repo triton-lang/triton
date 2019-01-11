@@ -291,7 +291,18 @@ public:
   // factory method
   static load_inst* create(value *ptr, const std::string &name = "",
                            instruction *next = nullptr);
+};
 
+class store_inst: public instruction{
+private:
+  store_inst(value *ptr, value *v, const std::string &name, instruction *next);
+
+public:
+  value *get_pointer_operand() { return get_operand(0); }
+  value *get_value_operand() { return get_operand(1); }
+  // factory method
+  static store_inst* create(value* ptr, value *v, const std::string &name = "",
+                            instruction *next = nullptr);
 };
 
 //===----------------------------------------------------------------------===//
@@ -336,11 +347,6 @@ public:
 };
 
 
-// matmul
-class matmul_inst: public instruction {
-
-};
-
 // built-in
 class builtin_inst: public instruction{
 protected:
@@ -357,6 +363,15 @@ public:
 
 private:
   unsigned axis_;
+};
+
+class matmul_inst: public builtin_inst {
+  matmul_inst(value *A, value *B, value *C, const std::string &name, instruction *next);
+
+public:
+  static instruction* create(value *A, value *B, value *C,
+                             const std::string &name = "",
+                             instruction *next = nullptr);
 };
 
 }

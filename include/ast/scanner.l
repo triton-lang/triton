@@ -33,6 +33,7 @@ int comment();
 "fp64"			{ count(); return(FP64); }
 "..."       { count(); return(ELLIPSIS); }
 "get_global_range" { count(); return GET_GLOBAL_RANGE; }
+"dot"              { count(); return DOT;}
 
 {L}({L}|{D})*		{ count(); return(check_type()); }
 

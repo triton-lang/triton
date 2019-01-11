@@ -61,9 +61,11 @@ constant_range::constant_range(type *ty, uint64_t first, uint64_t last)
 constant *constant_range::get(constant *first, constant *last) {
   assert(first->get_type()->is_integer_ty());
   assert(first->get_type() == last->get_type());
-  uint64_t vfirst = ((constant_int*)first)->get_value();
-  uint64_t vlast = ((constant_int*)first)->get_value();
-  return new constant_range(first->get_type(), vfirst, vlast);
+  unsigned vfirst = ((constant_int*)first)->get_value();
+  unsigned vlast = ((constant_int*)last)->get_value();
+  assert(vlast > vfirst);
+  type *ty = tile_type::get(first->get_type(), {vlast - vfirst});
+  return new constant_range(ty, vfirst, vlast);
 }
 
 

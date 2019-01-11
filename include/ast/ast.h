@@ -137,6 +137,19 @@ private:
   const constant* axis_;
 };
 
+class matmul_expression: public builtin_expression{
+public:
+  matmul_expression(node* A, node *B, node *C):
+    A_((expression*)A), B_((expression*)B), C_((expression*)C) { }
+  ir::value* codegen(ir::module *) const;
+
+private:
+  const expression *A_;
+  const expression *B_;
+  const expression *C_;
+};
+
+
 class indexing_expression: public postfix_expression{
 public:
   indexing_expression(node *id, node *slices)
@@ -149,19 +162,15 @@ private:
   const list<slice*>* slices_;
 };
 
-class unary_expression: public expression{
+
+class named_expression: public expression {
 public:
-  unary_expression(node *id): id_((const identifier*)id) {}
-  const identifier *id() const;
+  named_expression(node *id): id_((const identifier*)id) { }
+  const identifier *id() const { return id_; }
+  ir::value* codegen(ir::module * mod) const;
 
 private:
   const identifier *id_;
-};
-
-class named_expression: public unary_expression {
-public:
-  named_expression(node *id): unary_expression(id){ }
-  ir::value* codegen(ir::module * mod) const;
 };
 
 class binary_operator: public expression{
@@ -220,6 +229,7 @@ public:
     : op_(op),
       arg_((expression*)arg) { }
 
+  UNARY_OP_T get_op() const { return op_; }
   ir::value* codegen(ir::module *mod) const;
 
 private:
@@ -267,13 +277,13 @@ public:
 class assignment_expression: public expression{
 public:
   assignment_expression(node *lvalue, ASSIGN_OP_T op, node *rvalue)
-    : lvalue_((unary_expression*)lvalue), op_(op), rvalue_((expression*)rvalue) { }
+    : lvalue_((named_expression*)lvalue), op_(op), rvalue_((expression*)rvalue) { }
 
   ir::value* codegen(ir::module *mod) const;
 
 public:
   ASSIGN_OP_T op_;
-  const unary_expression *lvalue_;
+  const expression *lvalue_;
   const expression *rvalue_;
 };
 

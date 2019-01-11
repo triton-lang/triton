@@ -37,6 +37,7 @@ private:
   std::vector<unsigned*> pool_;
   graph_t dependencies_;
   std::set<node_t> nodes_;
+  std::map<node_t, unsigned> static_params_;
 };
 
 

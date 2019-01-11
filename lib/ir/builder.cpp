@@ -227,7 +227,11 @@ DEFINE_FCMP_INSTR(ONE, llvm::FCmpInst::FCMP_ONE)
 //===----------------------------------------------------------------------===//
 
 value *builder::create_load(value *arg, const std::string &name){
-  return load_inst::create(arg, name);
+  return insert(load_inst::create(arg, name));
+}
+
+value *builder::create_store(value *ptr, value *val, const std::string &name){
+  return insert(store_inst::create(ptr, val, name));
 }
 
 //===----------------------------------------------------------------------===//
@@ -252,6 +256,10 @@ value *builder::create_broadcast(value *arg, const std::vector<unsigned> &shapes
 
 value *builder::create_get_global_range(unsigned axis, unsigned size, const std::string &name) {
   return insert(get_global_range_inst::create(ctx_, axis, size, name));
+}
+
+value *builder::create_matmul(value *A, value *B, value *C, const std::string &name) {
+  return insert(matmul_inst::create(A, B, C, name));
 }
 
 }

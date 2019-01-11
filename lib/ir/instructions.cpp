@@ -310,6 +310,17 @@ load_inst* load_inst::create(value *ptr, const std::string &name, instruction *n
   return new load_inst(ptr, name, next);
 }
 
+// store
+store_inst::store_inst(value *ptr, value *v, const std::string &name, instruction *next)
+    : instruction(type::get_void_ty(ptr->get_type()->get_context()), 2, name, next) {
+  set_operand(0, ptr);
+  set_operand(1, v);
+}
+
+store_inst* store_inst::create(value *ptr, value *v, const std::string &name, instruction *next) {
+  return new store_inst(ptr, v, name, next);
+}
+
 //===----------------------------------------------------------------------===//
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
@@ -345,6 +356,18 @@ instruction* broadcast_inst::create(value *arg, const std::vector<unsigned> &sha
 //                               matmul_inst classes
 //===----------------------------------------------------------------------===//
 
+matmul_inst::matmul_inst(value *A, value *B, value *C,
+                         const std::string &name, instruction *next)
+    : builtin_inst(C->get_type(), 3, name, next) {
+  set_operand(0, A);
+  set_operand(0, B);
+  set_operand(0, C);
+}
+
+instruction *matmul_inst::create(value *A, value *B, value *C,
+                                 const std::string &name, instruction *next) {
+  return new matmul_inst(A, B, C, name, next);
+}
 
 //===----------------------------------------------------------------------===//
 //                               builtin instructions

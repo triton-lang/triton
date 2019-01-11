@@ -50,7 +50,7 @@ TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
 %token VOID UINT8 UINT16 UINT32 UINT64 INT8 INT16 INT32 INT64 FP32 FP64
 %token IF ELSE FOR
 %token NEWAXIS ELLIPSIS
-%token GET_GLOBAL_RANGE
+%token GET_GLOBAL_RANGE DOT
 
 %start translation_unit
 %%
@@ -111,6 +111,7 @@ identifier
 
 builtin
   : GET_GLOBAL_RANGE '[' constant ']' '(' constant ')' { $$ = new get_global_range($3, $6); }
+  |  DOT '(' expression ',' expression ',' expression ')' { $$ = new matmul_expression($3, $5, $7); }
 
 primary_expression
   : identifier         { $$ = new named_expression($1); }

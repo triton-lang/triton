@@ -318,9 +318,9 @@ ir::value* initializer::codegen(ir::module * mod) const{
   std::string name = decl_->id()->name();
   ir::value *value = ir::undef_value::get(ty);
   if(expr_){
-    ir::value* target = expr_->codegen(mod);
-    explicit_cast(mod->get_builder(), target, ty->get_scalar_ty());
-    implicit_broadcast(mod, value, target);
+    value = expr_->codegen(mod);
+    explicit_cast(mod->get_builder(), value, ty->get_scalar_ty());
+    implicit_broadcast(mod, value, value);
   }
   value->set_name(name);
   mod->set_value(name, value);
@@ -421,10 +421,21 @@ ir::value* binary_operator::codegen(ir::module *mod) const{
 }
 
 /* Builtin expression */
+
+// get_global_range
 ir::value* get_global_range::codegen(ir::module *mod) const {
   ir::builder &builder = mod->get_builder();
   return builder.create_get_global_range(axis_->value(), size_->value());
 }
+
+
+ir::value* matmul_expression::codegen(ir::module *mod) const {
+  ir::value *A = A_->codegen(mod);
+  ir::value *B = B_->codegen(mod);
+  ir::value *C = C_->codegen(mod);
+  return mod->get_builder().create_matmul(A, B, C);
+}
+
 
 
 /* Postfix expression */
@@ -497,7 +508,13 @@ ir::value *conditional_expression::codegen(ir::module *mod) const{
 /* Assignment expression */
 ir::value *assignment_expression::codegen(ir::module *mod) const{
   ir::value *rvalue = rvalue_->codegen(mod);
-  mod->set_value(lvalue_->id()->name(), rvalue);
+  if(auto *x = dynamic_cast<const named_expression*>(lvalue_))
+    mod->set_value(x->id()->name(), rvalue);
+  else if(auto* x = dynamic_cast<const unary_operator*>(lvalue_)){
+    assert(x->get_op()==DEREF);
+    ir::value *ptr = x->codegen(mod);
+    mod->get_builder().create_store(ptr, rvalue);
+  }
   return rvalue;
 }
 
@@ -525,11 +542,6 @@ int constant::value() const{
 ir::value* constant_range::codegen(ir::module *mod) const{
   return ir::constant_range::get((ir::constant*)first_->codegen(mod),
                                  (ir::constant*)last_->codegen(mod));
-}
-
-/* Unary expression */
-const identifier* unary_expression::id() const{
-  return id_;
 }
 
 /* Named */
