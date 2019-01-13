@@ -63,7 +63,7 @@ Constant *selection::llvm_constant(ir::constant *cst, LLVMContext &ctx) {
 }
 
 
-/* convert ir::instruction to Instruction */
+/* convert ir::instruction to llvm::Instruction */
 Instruction *selection::llvm_inst(ir::instruction *inst, LLVMContext & ctx) {
   auto value = [&](ir::value *x) { return llvm_value(x, ctx); };
   auto block = [&](ir::basic_block *x) { return bmap_.at(x); };
@@ -125,7 +125,9 @@ Instruction *selection::llvm_inst(ir::instruction *inst, LLVMContext & ctx) {
   throw std::runtime_error("unknown conversion from ir::type to Type");
 }
 
+/* convert ir::value to llvm::Value */
 Value* selection::llvm_value(ir::value *v, LLVMContext &ctx) {
+  assert(!v->get_type()->is_tile_ty());
   if(vmap_.find(v) != vmap_.end())
     return vmap_.at(v);
   // create operands
@@ -140,6 +142,11 @@ Value* selection::llvm_value(ir::value *v, LLVMContext &ctx) {
   // unknown value
   throw std::runtime_error("unknown conversion from ir::value to Value");
 }
+
+/* lower tile to a set of llvm::Value's */
+//void selection::lower_tile(ir::value *v) {
+
+//}
 
 void selection::run(ir::module &src, Module &dst){
   vmap_.clear();

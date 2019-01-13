@@ -20,6 +20,14 @@ namespace llvm{
 namespace tdl{
 namespace codegen{
 
+class allocation;
+
+struct distributed_axis {
+
+};
+
+
+
 class selection{
   typedef std::map<ir::value *, llvm::Value *> vmap_t;
   typedef std::map<ir::basic_block *, llvm::BasicBlock *> bmap_t;
@@ -31,11 +39,13 @@ private:
   llvm::Constant*    llvm_constant(ir::constant *cst, llvm::LLVMContext &ctx);
 
 public:
+  selection(allocation *alloc): alloc_(alloc){ }
   void run(ir::module &src, llvm::Module &dst);
 
 private:
   vmap_t vmap_;
   bmap_t bmap_;
+  allocation *alloc_;
 
 };
 

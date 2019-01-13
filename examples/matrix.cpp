@@ -5,6 +5,9 @@
 #include "ir/module.h"
 #include "codegen/selection.h"
 #include "codegen/tune.h"
+#include "codegen/shared_copy.h"
+#include "codegen/allocation.h"
+#include "codegen/liveness.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
@@ -53,9 +56,14 @@ int main() {
    llvm::LLVMContext llvm_context;
    llvm::Module llvm_module("test", llvm_context);
    // lowering passes
-   tdl::codegen::selection selection;
+   tdl::codegen::place_shared_copy shared;
    tdl::codegen::tune tune;
+   tdl::codegen::liveness liveness;
+   tdl::codegen::allocation allocation(&liveness);
    tune.run(module);
+   shared.run(module);
+   liveness.run(module);
+   allocation.run();
    std::vector<unsigned*> params;
    tune.get_params(module, params);
    std::cout << params.size() << std::endl;

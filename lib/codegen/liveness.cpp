@@ -1,5 +1,4 @@
 #include "codegen/liveness.h"
-#include "codegen/layout.h"
 #include "ir/basic_block.h"
 #include "ir/function.h"
 #include "ir/module.h"
@@ -24,9 +23,7 @@ for(ir::function *fn: mod.get_function_list()){
   // Creates live intervals
   for(auto i: indices_){
     ir::value *v = i.first;
-    if(!layouts_->get_num_shared_views(v))
-      continue;
-    if(!layouts_->get_shared_view(v, 0).has_dedicated_storage)
+    if(!dynamic_cast<ir::copy_to_shared_inst*>(v))
       continue;
     unsigned start = i.second;
     unsigned end = start;

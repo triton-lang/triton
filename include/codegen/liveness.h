@@ -13,8 +13,6 @@ namespace ir{
 
 namespace codegen{
 
-class layout;
-
 typedef unsigned slot_index;
 
 struct segment {
@@ -54,7 +52,6 @@ private:
   has_storage_map_t has_dedicated_storage_;
   indices_map_t indices_;
   intervals_map_t intervals_;
-  layout* layouts_;
 };
 
 }

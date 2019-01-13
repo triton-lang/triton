@@ -3,6 +3,7 @@
 #include "ir/builder.h"
 #include "ir/constant.h"
 #include "ir/instructions.h"
+#include "ir/intrinsics.h"
 #include "ir/type.h"
 #include "llvm/IR/Instruction.h"
 
@@ -16,10 +17,17 @@ builder::builder(context &ctx):
 //                               utilities
 //===----------------------------------------------------------------------===//
 
-void builder::set_insert_point(basic_block::iterator instr){
-  block_ = (*instr)->get_parent();
-  insert_point_ = instr;
+void builder::set_insert_point(basic_block::iterator it){
+  block_ = (*it)->get_parent();
+  insert_point_ = it;
 }
+
+void builder::set_insert_point(instruction* i){
+  block_ = i->get_parent();
+  auto it = std::find(block_->begin(), block_->end(), i);
+  set_insert_point(it);
+}
+
 
 void builder::set_insert_point(basic_block *block){
   block_ = block;
@@ -260,6 +268,15 @@ value *builder::create_get_global_range(unsigned axis, unsigned size, const std:
 
 value *builder::create_matmul(value *A, value *B, value *C, const std::string &name) {
   return insert(matmul_inst::create(A, B, C, name));
+}
+
+//===----------------------------------------------------------------------===//
+//                               intrinsic instructions
+//===----------------------------------------------------------------------===//
+
+
+value *builder::create_copy_to_shared(value *arg, const std::string &name) {
+  return insert(copy_to_shared_inst::create(arg, name));
 }
 
 }

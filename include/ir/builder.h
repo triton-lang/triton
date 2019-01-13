@@ -27,6 +27,7 @@ public:
   builder(context &ctx);
   // Setters
   void set_insert_point(iterator instr);
+  void set_insert_point(instruction* i);
   void set_insert_point(basic_block* block);
   basic_block* get_insert_block() { return block_; }
   iterator get_insert_point() { return insert_point_;}
@@ -42,7 +43,6 @@ public:
     block_->get_inst_list().insert(insert_point_, inst);
     inst->set_parent(block_);
     inst->set_name(name);
-    insert_point_ = block_->end();
     return inst;
   }
   // terminator instructions
@@ -116,7 +116,8 @@ public:
   // Built-in instruction
   value *create_get_global_range(unsigned axis, unsigned size, const std::string &name = "");
   value *create_matmul(value *A, value *B, value *C, const std::string &name = "");
-
+  // Intrinsics
+  value *create_copy_to_shared(value *arg, const std::string &name = "");
 private:
   context &ctx_;
   basic_block *block_;

@@ -347,7 +347,10 @@ public:
 };
 
 
-// built-in
+//===----------------------------------------------------------------------===//
+//                               builtin_inst classes
+//===----------------------------------------------------------------------===//
+
 class builtin_inst: public instruction{
 protected:
   using instruction::instruction;
@@ -373,6 +376,21 @@ public:
                              const std::string &name = "",
                              instruction *next = nullptr);
 };
+
+
+//===----------------------------------------------------------------------===//
+//                               intrinsics classes
+//===----------------------------------------------------------------------===//
+
+
+class copy_to_shared_inst: public unary_inst{
+  using unary_inst::unary_inst;
+
+public:
+  static copy_to_shared_inst* create(value *arg, const std::string &name = "",
+                                     instruction *next = nullptr);
+};
+
 
 }
 }

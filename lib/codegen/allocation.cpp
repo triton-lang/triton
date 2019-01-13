@@ -10,7 +10,6 @@
 namespace tdl{
 namespace codegen{
 
-
 void allocation::run(){
   using std::max;
   using std::min;
@@ -108,8 +107,9 @@ void allocation::run(){
 
   // Save maximum size of induced memory space
   allocated_size_ = 0;
-  for(auto &x: offsets_)
+  for(auto &x: offsets_){
     allocated_size_ = std::max<size_t>(allocated_size_, x.second + get_num_bytes(x.first));
+  }
 }
 
 }

@@ -20,6 +20,9 @@ class loop_info;
 
 class allocation {
 public:
+  allocation(liveness *live)
+    : liveness_(live){ }
+
   // accessors
   unsigned get_offset(ir::value *x)    const { return offsets_.at(x); }
   unsigned get_allocated_size()        const { return allocated_size_; }
@@ -33,8 +36,6 @@ private:
   size_t allocated_size_;
   // dependences
   liveness *liveness_;
-  layout *layout_;
-  loop_info *loop_info_;
 };
 
 }

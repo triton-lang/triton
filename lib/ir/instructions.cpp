@@ -360,8 +360,8 @@ matmul_inst::matmul_inst(value *A, value *B, value *C,
                          const std::string &name, instruction *next)
     : builtin_inst(C->get_type(), 3, name, next) {
   set_operand(0, A);
-  set_operand(0, B);
-  set_operand(0, C);
+  set_operand(1, B);
+  set_operand(2, C);
 }
 
 instruction *matmul_inst::create(value *A, value *B, value *C,
@@ -383,6 +383,14 @@ instruction* get_global_range_inst::create(context &ctx, unsigned axis, unsigned
   type *int_ty = type::get_int32_ty(ctx);
   type *tile_ty = tile_type::get(int_ty, {size});
   return new get_global_range_inst(tile_ty, axis, name, next);
+}
+
+//===----------------------------------------------------------------------===//
+//                               intrinsic instructions
+//===----------------------------------------------------------------------===//
+copy_to_shared_inst* copy_to_shared_inst::create(value *arg, const std::string &name,
+                                                 instruction *next) {
+  return new copy_to_shared_inst(arg->get_type(), arg, name, next);
 }
 
 }

@@ -160,7 +160,7 @@ bool tile_type::is_valid_elt_ty(type *ty) {
 unsigned tile_type::get_num_elements() const {
   unsigned res = 1;
   for(unsigned shape: shapes_)
-    shape *= res;
+    res *= shape;
   return res;
 }
 
