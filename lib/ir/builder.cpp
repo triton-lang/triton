@@ -3,7 +3,6 @@
 #include "ir/builder.h"
 #include "ir/constant.h"
 #include "ir/instructions.h"
-#include "ir/intrinsics.h"
 #include "ir/type.h"
 #include "llvm/IR/Instruction.h"
 
