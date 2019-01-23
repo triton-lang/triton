@@ -1,4 +1,5 @@
 #include "codegen/selection.h"
+#include "codegen/tune.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include "ir/context.h"
@@ -143,10 +144,148 @@ Value* selection::llvm_value(ir::value *v, LLVMContext &ctx) {
   throw std::runtime_error("unknown conversion from ir::value to Value");
 }
 
-/* lower tile to a set of llvm::Value's */
-//void selection::lower_tile(ir::value *v) {
+// Grid construction
+std::vector<Value*> delinearize(Value *trailing, std::vector<unsigned> &shapes, IRBuilder<> &builder){
+  size_t dim = shapes.size();
+  std::vector<Value*> result(dim);
+  for(unsigned k = 0; k < dim - 1; k++){
+    Constant *dim_k = builder.getInt32(shapes[k]);
+    Value *rem = builder.CreateURem(trailing, dim_k);
+    trailing = builder.CreateUDiv(trailing, dim_k);
+    result[k] = rem;
+  }
+  result[dim - 1] = trailing;
+  return result;
+}
 
-//}
+void selection::init_axes(ir::instruction *instr, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
+  const auto& shapes = instr->get_type()->get_tile_shapes();
+  size_t dim = shapes.size();
+  std::vector<unsigned> contiguous(dim);
+  std::vector<unsigned> warp_size(dim);
+  std::vector<unsigned> n_warps(dim);
+  for(unsigned i = 0; i < shapes.size(); i++){
+    std::string str_i = std::to_string(i);
+    contiguous[i] = *params_->get_param(instr, "p0.d" + str_i);
+    warp_size[i] = *params_->get_param(instr, "p1.d" + str_i);
+    n_warps[i] = *params_->get_param(instr, "p2.d" + str_i);
+  }
+  std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, warp_size, builder);
+  std::vector<Value*> warp_id = delinearize(u_warp_id, n_warps, builder);
+  // Create axes
+  std::vector<distributed_axis> axes(dim);
+  for(unsigned k = 0; k < dim; k++) {
+    Value *warp_size_k = builder.getInt32(warp_size[k]);
+    Value *contiguous_k = builder.getInt32(contiguous[k]);
+    Value *thread_id   = builder.CreateAdd(thread_id_in_warp[k], builder.CreateMul(warp_id[k], warp_size_k));
+    thread_id = builder.CreateMul(thread_id, contiguous_k);
+    unsigned per_block = contiguous[k] * warp_size[k] * n_warps[k];
+    unsigned per_thread = contiguous[k] * shapes[k] / per_block;
+    std::vector<Value*> idx_list(per_thread);
+    for(unsigned n = 0 ; n < per_thread; n++){
+      unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
+      idx_list[n] = builder.CreateAdd(thread_id, builder.getInt32(offset));
+    }
+    axes[k] = {idx_list};
+  }
+  // Store axes
+  axes_[instr] = axes;
+}
+
+void selection::create_grids(std::vector<ir::instruction*> &grids,
+                             std::map<unsigned*, ir::instruction*> &references,
+                             ir::function *fn) {
+  // get number of dimensions greater than 1
+  auto get_tile_gt1_dim = [&](ir::value *v){
+    unsigned result = 0;
+    for(unsigned shape: v->get_type()->get_tile_shapes()) {
+      result += (shape > 1)?shape:0;
+    }
+    return result;
+  };
+  // bind references
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction *i: block->get_inst_list()){
+    if(!i->get_type()->is_tile_ty())
+      continue;
+    const auto& shapes = i->get_type()->get_tile_shapes();
+    bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(i);
+    if(is_shared)
+      continue;
+    for(size_t d = 0; d < shapes.size(); d++){
+      if(shapes[d] == 1)
+        continue;
+      unsigned *x = params_->get_param(i, "p0.d" + std::to_string(d));
+      ir::instruction *&r = references[x];
+      if(!r || get_tile_gt1_dim(i) > get_tile_gt1_dim(r))
+        r = i;
+    }
+  }
+  // create grid
+  for(auto &ref: references)
+    if(std::find(grids.begin(), grids.end(), ref.second) == grids.end())
+      grids.push_back(ref.second);
+}
+
+void selection::init_grids(ir::function *fn, IRBuilder<> &builder){
+  // fetch linear ID
+  Module *mod = builder.GetInsertBlock()->getParent()->getParent();
+  Function *get_thread_id = Intrinsic::getDeclaration(mod, Intrinsic::nvvm_read_ptx_sreg_tid_x);
+  Value *warp_size = builder.getInt32(32);
+  Value *u_thread_id = builder.CreateCall(get_thread_id, {});
+  Value *u_thread_warp_id = builder.CreateURem(u_thread_id, warp_size);
+  Value *u_warp_id = builder.CreateUDiv(u_thread_id, warp_size);
+  // create grid
+  std::vector<ir::instruction*> grids;
+  std::map<unsigned*, ir::instruction*> references;
+  create_grids(grids, references, fn);
+  for(ir::instruction* i: grids)
+    init_axes(i, builder, u_thread_warp_id, u_warp_id);
+  // create tile
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction *i: block->get_inst_list()){
+    if(!i->get_type()->is_tile_ty())
+      continue;
+    bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(i);
+    const auto& shapes = i->get_type()->get_tile_shapes();
+    // create shared tile
+    if(is_shared){
+      tmap_.insert({i, new shared_tile(shapes)});
+    }
+    // create distributed tile
+    else {
+      const auto &shapes = i->get_type()->get_tile_shapes();
+      std::vector<distributed_axis> axes(shapes.size());
+      for(size_t d = 0; d < shapes.size(); d++){
+        if(shapes[d] > 1){
+          unsigned *x = params_->get_param(i, "p0.d" + std::to_string(d));
+          axes[d] = axes_.at(references.at(x))[d];
+        }
+        else
+          axes[d].values = {builder.getInt32(0)};
+      }
+      tmap_.insert({i, new distributed_tile(shapes, axes)});
+    }
+  }
+}
+
+void selection::lower_tile_instruction(ir::instruction *src, llvm::IRBuilder<> &builder) {
+
+}
+
+void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
+  LLVMContext &ctx = builder.getContext();
+  std::cout << typeid(*src).name() << " " << src->get_type()->get_type_id() << std::endl;
+  if(src->get_type()->is_tile_ty()) {
+    std::cout << "tile instruction" << std::endl;
+    lower_tile_instruction(src, builder);
+  }
+  else {
+    Instruction *i = llvm_inst(src, ctx);
+    vmap_[src] = i;
+    builder.Insert(i);
+  }
+}
 
 void selection::run(ir::module &src, Module &dst){
   vmap_.clear();
@@ -166,14 +305,14 @@ void selection::run(ir::module &src, Module &dst){
       BasicBlock *dst_block = BasicBlock::Create(dst_ctx, block->get_name(), dst_fn);
       bmap_[block] = dst_block;
     }
+    // create grids
+    dst_builder.SetInsertPoint(bmap_[fn->blocks()[0]]);
+    init_grids(fn, dst_builder);
     // iterate through block
     for(ir::basic_block *block: fn->blocks()) {
       dst_builder.SetInsertPoint(bmap_[block]);
-      for(ir::instruction *inst: block->get_inst_list()) {
-        Instruction *dst_inst = llvm_inst(inst, dst_ctx);
-        vmap_[inst] = dst_inst;
-        dst_builder.Insert(dst_inst);
-      }
+      for(ir::instruction *i: block->get_inst_list())
+        lower_instruction(i, dst_builder);
     }
     // add phi operands
     for(ir::basic_block *block: fn->blocks())

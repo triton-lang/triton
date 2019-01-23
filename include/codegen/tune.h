@@ -11,6 +11,7 @@ namespace ir{
   class value;
   class module;
   class instruction;
+  class function;
 }
 
 namespace codegen{
@@ -24,11 +25,13 @@ private:
   void init_c_phi(ir::instruction *i);
   void init_c_graph(ir::instruction *v);
   void connected_components(node_t x, const std::vector<unsigned*> vals, std::set<node_t> &nodes, graph_t &graph);
+  void create_grids(std::vector<ir::instruction*> &grids, std::map<unsigned*, ir::instruction*> &references, ir::function *fn);
 
 
 public:
-  void get_params(ir::module& mod, std::vector<unsigned*> &result);
-  unsigned *get_param(ir::value *value);
+  std::vector<unsigned *> get_params(ir::module& mod);
+  std::map<std::string, unsigned *> get_params(ir::instruction* i);
+  unsigned *get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   bool check_constraints(ir::module &fn, std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);
 

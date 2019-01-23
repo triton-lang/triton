@@ -85,18 +85,24 @@ ir::value *module::get_value_recursive(const std::string& name, ir::basic_block 
     ir::value *pred = get_value(name, preds.front());
     result = make_phi(pred->get_type(), 1, block);
     set_value(name, block, result);
-    add_phi_operands(name, (ir::phi_node*&)result);
+    result = add_phi_operands(name, (ir::phi_node*&)result);
   }
   set_value(name, block, result);
   return result;
 }
 
 ir::value *module::get_value(const std::string& name, ir::basic_block *block) {
+  ir::basic_block* save_block = builder_.get_insert_block();
+  ir::basic_block::iterator save_pt = builder_.get_insert_point();
   val_key_t key(name, block);
   if(values_.find(key) != values_.end()){
     return values_.at(key);
   }
-  return get_value_recursive(name, block);
+  ir::value *result = get_value_recursive(name, block);
+  builder_.set_insert_point(save_block);
+  if(save_pt != save_block->end())
+    builder_.set_insert_point(save_pt);
+  return result;
 }
 
 ir::value *module::get_value(const std::string& name) {

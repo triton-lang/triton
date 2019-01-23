@@ -23,6 +23,7 @@ void tune::init_c_phi(ir::instruction *v) {
       for(unsigned k = 0; k < phi->get_type()->get_tile_shapes().size(); k++)
         if(dependencies_.find({op, k}) != dependencies_.end()
            || dependencies_.find({phi, k}) != dependencies_.end()){
+          std::cout << typeid(*op).name() << std::endl;
           add_constraint({phi, k}, {op, k});
         }
 }
@@ -32,11 +33,12 @@ void tune::init_c_graph(ir::instruction *v) {
   if(dynamic_cast<ir::reshape_inst*>(v)){
     ir::value *op = v->get_operand(0);
     unsigned current = 0;
-    for(unsigned i = 0; i < shapes.size(); i ++)
+    for(unsigned i = 0; i < shapes.size(); i ++){
       if(shapes[i] == 1)
         static_params_.insert({{v, i}, 1});
       else
         add_constraint({v, i}, {op, current++});
+    }
   }
   else if(dynamic_cast<ir::splat_inst*>(v)){
 
@@ -58,8 +60,9 @@ void tune::init_c_graph(ir::instruction *v) {
   }
   else if(dynamic_cast<ir::user*>(v)){
     for(unsigned i = 0; i < shapes.size(); i ++)
-      for(ir::value* op: v->ops())
+      for(ir::value* op: v->ops()){
         add_constraint({v, i}, {op, i});
+      }
   }
 }
 
@@ -82,8 +85,8 @@ void tune::connected_components(node_t x, const std::vector<unsigned *> vals, st
   }
 }
 
-void tune::get_params(ir::module &mod, std::vector<unsigned *> &result) {
-  result.clear();
+std::vector<unsigned*> tune::get_params(ir::module &mod) {
+  std::vector<unsigned *> result;
   std::set<unsigned*> seen;
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
@@ -92,6 +95,11 @@ void tune::get_params(ir::module &mod, std::vector<unsigned *> &result) {
     if(seen.insert(x.second).second && *x.second == 0){
       result.push_back(x.second);
     }
+  return result;
+}
+
+std::map<std::string, unsigned*> tune::get_params(ir::instruction* i) {
+  return params_.at(i);
 }
 
 void tune::run(ir::module &mod) {
@@ -117,9 +125,10 @@ void tune::run(ir::module &mod) {
   }
 }
 
-bool tune::check_constraints(ir::module &mod, std::map<ir::value *, std::vector<std::string>> &errors) {
-for(ir::function *fn: mod.get_function_list()){
-  /* grids */
+void tune::create_grids(std::vector<ir::instruction*> &grids,
+                     std::map<unsigned*, ir::instruction*> &references,
+                     ir::function *fn) {
+  // get number of dimensions greater than 1
   auto get_tile_gt1_dim = [&](ir::value *v){
     unsigned result = 0;
     for(unsigned shape: v->get_type()->get_tile_shapes()) {
@@ -127,8 +136,7 @@ for(ir::function *fn: mod.get_function_list()){
     }
     return result;
   };
-  using std::to_string;
-  std::map<unsigned*, ir::instruction*> references;
+  // bind references
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list()){
     if(!i->get_type()->is_tile_ty())
@@ -137,16 +145,25 @@ for(ir::function *fn: mod.get_function_list()){
       if(*param.second == 1)
         continue;
       ir::instruction *&r = references[param.second];
-      if(!r && get_tile_gt1_dim(i) > get_tile_gt1_dim(r))
+      if(!r || get_tile_gt1_dim(i) > get_tile_gt1_dim(r))
         r = i;
     }
   }
-
-  // extract unique instructions in order
-  std::vector<ir::instruction*> grids;
+  // create grid
   for(auto &ref: references)
     if(std::find(grids.begin(), grids.end(), ref.second) == grids.end())
       grids.push_back(ref.second);
+}
+
+
+bool tune::check_constraints(ir::module &mod, std::map<ir::value *, std::vector<std::string>> &errors) {
+for(ir::function *fn: mod.get_function_list()){
+  using std::to_string;
+
+  // initialize grids
+  std::map<unsigned*, ir::instruction*> references;
+  std::vector<ir::instruction*> grids;
+  create_grids(grids, references, fn);
 
   // number of warps
   int num_warps = 1;

@@ -16,7 +16,6 @@ builder::builder(context &ctx):
 //===----------------------------------------------------------------------===//
 //                               utilities
 //===----------------------------------------------------------------------===//
-
 void builder::set_insert_point(basic_block::iterator it){
   block_ = (*it)->get_parent();
   insert_point_ = it;
