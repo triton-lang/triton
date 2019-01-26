@@ -26,6 +26,8 @@ public:
   const basic_block *get_parent() const { return parent_;  }
   basic_block *get_parent()             { return parent_;  }
   void erase_from_parent();
+  // helpers
+  bool has_tile_result_or_op();
 
 private:
   basic_block *parent_;

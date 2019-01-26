@@ -114,9 +114,15 @@ public:
   const slice_enum_t type_;
 };
 
+class named_expression;
+
 class expression: public node{
 public:
   virtual ir::value* codegen(ir::module *) const = 0;
+  named_expression *lvalue() const { return lvalue_; }
+
+protected:
+  named_expression *lvalue_;
 };
 
 class postfix_expression: public expression{
@@ -163,10 +169,9 @@ private:
   const list<slice*>* slices_;
 };
 
-
 class named_expression: public expression {
 public:
-  named_expression(node *id): id_((const identifier*)id) { }
+  named_expression(node *id): id_((const identifier*)id) { lvalue_ = this; }
   const identifier *id() const { return id_; }
   ir::value* codegen(ir::module * mod) const;
 
@@ -227,8 +232,11 @@ private:
 
 public:
   unary_operator(UNARY_OP_T op, node *arg)
-    : op_(op),
-      arg_((expression*)arg) { }
+      : op_(op),
+        arg_((expression*)arg) {
+    if(op == DEREF)
+      this->lvalue_ = arg_->lvalue();
+  }
 
   UNARY_OP_T get_op() const { return op_; }
   ir::value* codegen(ir::module *mod) const;

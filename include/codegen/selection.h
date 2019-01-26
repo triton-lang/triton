@@ -32,9 +32,10 @@ protected:
   typedef std::vector<unsigned> shapes_t;
 
 public:
-  tile(const shapes_t &shapes): shapes_(shapes){ }
+  tile(llvm::Type *ty, const shapes_t &shapes): shapes_(shapes){ }
 
 private:
+  llvm::Type *ty_;
   shapes_t shapes_;
 };
 
@@ -46,13 +47,20 @@ public:
 
 class distributed_tile: public tile{
   typedef std::vector<distributed_axis> axes_t;
+  typedef std::vector<llvm::Value*> indices_t;
+  typedef std::map<indices_t, unsigned> indices_map_t;
+  typedef std::vector<llvm::Value*> values_t;
+
+private:
+  void init_indices();
 
 public:
-  distributed_tile(const shapes_t& shapes, const axes_t &axes)
-    : tile(shapes), axes_(axes) {}
+  distributed_tile(llvm::Type *ty, const shapes_t& shapes, const axes_t &axes);
 
 private:
   axes_t axes_;
+  indices_map_t indices_;
+  values_t values_;
 };
 
 

@@ -29,7 +29,13 @@ void tune::init_c_phi(ir::instruction *v) {
 }
 
 void tune::init_c_graph(ir::instruction *v) {
-  const auto& shapes = v->get_type()->get_tile_shapes();
+  // Reference shape
+  std::vector<unsigned> shapes;
+  if(auto *store = dynamic_cast<ir::store_inst*>(v))
+    shapes = store->get_pointer_operand()->get_type()->get_tile_shapes();
+  else
+    shapes = v->get_type()->get_tile_shapes();
+  // Reshape
   if(dynamic_cast<ir::reshape_inst*>(v)){
     ir::value *op = v->get_operand(0);
     unsigned current = 0;
@@ -40,9 +46,11 @@ void tune::init_c_graph(ir::instruction *v) {
         add_constraint({v, i}, {op, current++});
     }
   }
+  // Splat
   else if(dynamic_cast<ir::splat_inst*>(v)){
 
   }
+  // Broadcast
   else if(dynamic_cast<ir::broadcast_inst*>(v)){
     ir::value *op = v->get_operand(0);
     ir::type *op_ty = op->get_type();
@@ -51,13 +59,14 @@ void tune::init_c_graph(ir::instruction *v) {
       if(op_shapes[i] == shapes[i] && v != op)
         add_constraint({v, i}, {op, i});
     }
-
   }
+  // Matrix multiplication
   else if(dynamic_cast<ir::matmul_inst*>(v)){
     ir::value *D = v->get_operand(2);
     add_constraint({v, 0}, {D, 0});
     add_constraint({v, 1}, {D, 1});
   }
+  // Element-wise
   else if(dynamic_cast<ir::user*>(v)){
     for(unsigned i = 0; i < shapes.size(); i ++)
       for(ir::value* op: v->ops()){
@@ -102,18 +111,19 @@ std::map<std::string, unsigned*> tune::get_params(ir::instruction* i) {
   return params_.at(i);
 }
 
+
 void tune::run(ir::module &mod) {
   for(ir::function *fn: mod.get_function_list()){
     // Build constraints graph
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *i : block->get_inst_list())
-    if(i->get_type()->is_tile_ty()){
+    if(i->has_tile_result_or_op()){
       init_c_graph(i);
     }
     // Build phi constraints
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *i : block->get_inst_list())
-    if(i->get_type()->is_tile_ty())
+    if(i->has_tile_result_or_op())
       init_c_phi(i);
     // Layout parameters
     while(!nodes_.empty()){

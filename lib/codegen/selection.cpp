@@ -13,6 +13,33 @@ namespace codegen{
 
 using namespace llvm;
 
+/* Distributed Tile */
+void distributed_tile::init_indices() {
+  std::vector<size_t> id(axes_.size(), 0);
+  size_t k = 0;
+  while(true) {
+    indices_t current;
+    for(size_t d = 0; d < id.size(); d++)
+      current.push_back(axes_[d].values[id[d]]);
+    indices_[current] = indices_.size();
+    id[0]++;
+    while(id[k] == axes_[k].values.size()){
+      if(k == id.size() - 1)
+        return;
+      id[k++] = 0;
+      id[k]++;
+    }
+    k = 0;
+  }
+}
+
+distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const axes_t &axes)
+    : tile(ty, shapes), axes_(axes) {
+  init_indices();
+  for(size_t i = 0; i < indices_.size(); i++)
+    values_.push_back(UndefValue::get(ty_));
+}
+
 
 /* convert ir::type to Type */
 Type *selection::llvm_type(ir::type *ty, LLVMContext &ctx) {
@@ -186,7 +213,7 @@ void selection::init_axes(ir::instruction *instr, IRBuilder<> &builder, Value *u
       unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
       idx_list[n] = builder.CreateAdd(thread_id, builder.getInt32(offset));
     }
-    axes[k] = {idx_list};
+    axes[k] = distributed_axis{idx_list};
   }
   // Store axes
   axes_[instr] = axes;
@@ -230,6 +257,7 @@ void selection::create_grids(std::vector<ir::instruction*> &grids,
 void selection::init_grids(ir::function *fn, IRBuilder<> &builder){
   // fetch linear ID
   Module *mod = builder.GetInsertBlock()->getParent()->getParent();
+  LLVMContext &ctx = builder.getContext();
   Function *get_thread_id = Intrinsic::getDeclaration(mod, Intrinsic::nvvm_read_ptx_sreg_tid_x);
   Value *warp_size = builder.getInt32(32);
   Value *u_thread_id = builder.CreateCall(get_thread_id, {});
@@ -248,9 +276,10 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder){
       continue;
     bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(i);
     const auto& shapes = i->get_type()->get_tile_shapes();
+    Type* ty = llvm_type(i->get_type(), ctx);
     // create shared tile
     if(is_shared){
-      tmap_.insert({i, new shared_tile(shapes)});
+      tmap_.insert({i, new shared_tile(ty, shapes)});
     }
     // create distributed tile
     else {
@@ -264,20 +293,18 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder){
         else
           axes[d].values = {builder.getInt32(0)};
       }
-      tmap_.insert({i, new distributed_tile(shapes, axes)});
+      tmap_.insert({i, new distributed_tile(ty, shapes, axes)});
     }
   }
 }
 
 void selection::lower_tile_instruction(ir::instruction *src, llvm::IRBuilder<> &builder) {
-
+  std::cout << typeid(*src).name() << std::endl;
 }
 
 void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
   LLVMContext &ctx = builder.getContext();
-  std::cout << typeid(*src).name() << " " << src->get_type()->get_type_id() << std::endl;
-  if(src->get_type()->is_tile_ty()) {
-    std::cout << "tile instruction" << std::endl;
+  if(src->has_tile_result_or_op()) {
     lower_tile_instruction(src, builder);
   }
   else {

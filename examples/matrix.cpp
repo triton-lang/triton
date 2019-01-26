@@ -32,10 +32,7 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K){\
   int32 k;\
   fp32* pa[32, 8] = a + rx[:, newaxis] + rka[newaxis, :]*M;\
   fp32* pb[32, 8] = b + ry[:, newaxis] + rkb[newaxis, :]*K;\
-  fp32* pc[32, 32];\
-  for(k = 0; k < K; k = k + 8){\
-  }\
-  pc = c + rx[:, newaxis] + ry[newaxis, :];\
+  fp32* pc[32, 32] = c + rx[:, newaxis] + ry[newaxis, :]*M;\
   *pc = C;\
 }\
 ";
@@ -59,15 +56,13 @@ int main() {
    tune.run(module);
    std::vector<unsigned> params = {
      // asm
-     2, 16, 1,
+     2, 8, 1,
      // bsn
-     2, 16, 1,
+     4, 4, 1,
      // pa
-     1, 2, 4,
+     2, 4, 1,
      // pb
-     1, 2, 4,
-     // c
-     2, 16, 1, 1, 2, 4
+     1, 8, 1,
    };
    std::map<tdl::ir::value*, std::vector<std::string>> errors;
    unsigned i = 0;
@@ -75,11 +70,11 @@ int main() {
    for(unsigned *x: tune.get_params(module))
      *x = params[i++];
    tune.check_constraints(module, errors);
-//   std::cout << "errors: " << errors.size() << std::endl;
-//   for(auto &x: errors){
-//   for(auto &e: x.second)
-//     std::cout << e << std::endl;
-//   }
+   std::cout << "errors: " << errors.size() << std::endl;
+   for(auto &x: errors){
+   for(auto &e: x.second)
+     std::cout << e << std::endl;
+   }
    shared.run(module);
    liveness.run(module);
    allocation.run();

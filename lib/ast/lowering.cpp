@@ -523,7 +523,8 @@ ir::value *assignment_expression::codegen(ir::module *mod) const{
     mod->set_value(x->id()->name(), rvalue);
   else if(auto* x = dynamic_cast<const unary_operator*>(lvalue_)){
     assert(x->get_op()==DEREF);
-    ir::value *ptr = x->codegen(mod);
+    assert(x->lvalue());
+    ir::value *ptr = x->lvalue()->codegen(mod);
     mod->get_builder().create_store(ptr, rvalue);
   }
   return rvalue;
