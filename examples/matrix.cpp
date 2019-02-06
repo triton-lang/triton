@@ -82,9 +82,9 @@ int main() {
 //   std::vector<unsigned*> params = tune.get_params(module);
 //   std::cout << params.size() << std::endl;
 //   selection.run(module, llvm_module);
-//   // print LLVM program
-//   llvm::PrintModulePass print(llvm::outs());
-//   llvm::AnalysisManager<llvm::Module> analysis;
-//   print.run(llvm_module, analysis);
+   // print LLVM program
+   llvm::PrintModulePass print(llvm::outs());
+   llvm::AnalysisManager<llvm::Module> analysis;
+   print.run(llvm_module, analysis);
    return 0;
 }
