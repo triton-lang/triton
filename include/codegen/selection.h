@@ -22,6 +22,7 @@ namespace codegen{
 
 class allocation;
 class tune;
+typedef std::vector<llvm::Value*> indices_t;
 
 struct distributed_axis {
   std::vector<llvm::Value*> values;
@@ -33,6 +34,8 @@ protected:
 
 public:
   tile(llvm::Type *ty, const shapes_t &shapes): shapes_(shapes){ }
+  virtual void set_value(indices_t idx, llvm::Value *v) = 0;
+  virtual llvm::Value* get_value(indices_t idx) = 0;
 
 private:
   llvm::Type *ty_;
@@ -42,12 +45,12 @@ private:
 class shared_tile: public tile {
 public:
   using tile::tile;
-
+  void set_value(indices_t idx, llvm::Value *v) { }
+  llvm::Value* get_value(indices_t idx) { return nullptr; }
 };
 
 class distributed_tile: public tile{
   typedef std::vector<distributed_axis> axes_t;
-  typedef std::vector<llvm::Value*> indices_t;
   typedef std::map<indices_t, unsigned> indices_map_t;
   typedef std::vector<llvm::Value*> values_t;
 
@@ -56,6 +59,9 @@ private:
 
 public:
   distributed_tile(llvm::Type *ty, const shapes_t& shapes, const axes_t &axes);
+  void set_value(indices_t idx, llvm::Value *v);
+  llvm::Value* get_value(indices_t idx);
+  void for_each(std::function<void(indices_t)> fn);
 
 private:
   axes_t axes_;
@@ -73,14 +79,15 @@ private:
   // LLVM conversions
   llvm::Type*        llvm_type(ir::type *ty, llvm::LLVMContext &ctx);
   llvm::Value*       llvm_value(ir::value *v,llvm:: LLVMContext &ctx);
-  llvm::Instruction* llvm_inst(ir::instruction *inst, llvm::LLVMContext &ctx);
+  llvm::Instruction* llvm_inst(ir::instruction *inst, std::function<llvm::Value*(ir::value*)> value, llvm::LLVMContext &ctx);
   llvm::Constant*    llvm_constant(ir::constant *cst, llvm::LLVMContext &ctx);
 
   // grid construction
-  void create_grids(std::vector<ir::instruction*> &grids,
-                    std::map<unsigned*, ir::instruction*> &references,
+  void create_grids(std::vector<ir::value *> &grids,
+                    std::map<unsigned *, ir::value *> &references,
                     ir::function *fn);
-  void init_axes(ir::instruction *i, llvm::IRBuilder<> &builder, llvm::Value *u_thread_id, llvm::Value *u_warp_id);
+  void create_tile(ir::value *v, llvm::IRBuilder<> &builder, const std::map<unsigned *, ir::value *> &references, std::set<ir::value *> &seen);
+  void init_axes(ir::value *i, llvm::IRBuilder<> &builder, llvm::Value *u_thread_id, llvm::Value *u_warp_id);
   void init_grids(ir::function *fn, llvm::IRBuilder<> &builder);
 
   // lowering
@@ -97,7 +104,7 @@ private:
   tmap_t tmap_;
   allocation *alloc_;
   tune *params_;
-  std::map<ir::instruction*, std::vector<distributed_axis>> axes_;
+  std::map<ir::value*, std::vector<distributed_axis>> axes_;
 };
 
 }

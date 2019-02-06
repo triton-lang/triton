@@ -369,6 +369,7 @@ public:
   static instruction* create(context &ctx, unsigned axis, unsigned size,
                              const std::string &name = "",
                              instruction *next = nullptr);
+  unsigned get_axis() const { return axis_; }
 
 private:
   unsigned axis_;
@@ -387,7 +388,6 @@ public:
 //===----------------------------------------------------------------------===//
 //                               intrinsics classes
 //===----------------------------------------------------------------------===//
-
 
 class copy_to_shared_inst: public unary_inst{
   using unary_inst::unary_inst;

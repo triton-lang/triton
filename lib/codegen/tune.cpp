@@ -23,7 +23,6 @@ void tune::init_c_phi(ir::instruction *v) {
       for(unsigned k = 0; k < phi->get_type()->get_tile_shapes().size(); k++)
         if(dependencies_.find({op, k}) != dependencies_.end()
            || dependencies_.find({phi, k}) != dependencies_.end()){
-          std::cout << typeid(*op).name() << std::endl;
           add_constraint({phi, k}, {op, k});
         }
 }
@@ -79,11 +78,9 @@ void tune::connected_components(node_t x, const std::vector<unsigned *> vals, st
   if(nodes.find(x) != nodes.end()){
     nodes.erase(x);
     std::string suffix = ".d" + std::to_string(x.second);
-    if(auto *instr = dynamic_cast<ir::instruction*>(x.first)){
-      params_[instr].insert({"p0" + suffix, vals[0]});
-      params_[instr].insert({"p1" + suffix, vals[1]});
-      params_[instr].insert({"p2" + suffix, vals[2]});
-    }
+    params_[x.first].insert({"p0" + suffix, vals[0]});
+    params_[x.first].insert({"p1" + suffix, vals[1]});
+    params_[x.first].insert({"p2" + suffix, vals[2]});
     if(static_params_.find(x) != static_params_.end()){
       *vals[0] = static_params_.at(x);
       *vals[1] = static_params_.at(x);

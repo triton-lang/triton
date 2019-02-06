@@ -37,7 +37,20 @@ distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const axes_
     : tile(ty, shapes), axes_(axes) {
   init_indices();
   for(size_t i = 0; i < indices_.size(); i++)
-    values_.push_back(UndefValue::get(ty_));
+    values_.push_back(UndefValue::get(ty));
+}
+
+void distributed_tile::set_value(indices_t idx, Value *v) {
+  values_[indices_[idx]] = v;
+}
+
+Value* distributed_tile::get_value(indices_t idx) {
+  return values_[indices_[idx]];
+}
+
+void distributed_tile::for_each(std::function<void (indices_t)> fn) {
+  for(auto &idx: indices_)
+    fn(idx.first);
 }
 
 
@@ -92,8 +105,7 @@ Constant *selection::llvm_constant(ir::constant *cst, LLVMContext &ctx) {
 
 
 /* convert ir::instruction to llvm::Instruction */
-Instruction *selection::llvm_inst(ir::instruction *inst, LLVMContext & ctx) {
-  auto value = [&](ir::value *x) { return llvm_value(x, ctx); };
+Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir::value*)> value, LLVMContext & ctx) {
   auto block = [&](ir::basic_block *x) { return bmap_.at(x); };
   auto type = [&](ir::type *x) { return llvm_type(x, ctx); };
   if(auto* ii = dynamic_cast<ir::cond_branch_inst*>(inst)){
@@ -107,7 +119,7 @@ Instruction *selection::llvm_inst(ir::instruction *inst, LLVMContext & ctx) {
     return BranchInst::Create(dest);
   }
   if(auto* ii = dynamic_cast<ir::phi_node*>(inst)){
-    Type *ty = type(ii->get_type());
+    Type *ty = type(ii->get_type()->get_scalar_ty());
     unsigned num_ops = ii->get_num_operands();
     return PHINode::Create(ty, num_ops, ii->get_name());
   }
@@ -134,14 +146,14 @@ Instruction *selection::llvm_inst(ir::instruction *inst, LLVMContext & ctx) {
   }
   if(auto* ii = dynamic_cast<ir::cast_inst*>(inst)){
     Value *arg = value(ii->get_operand(0));
-    Type *dst_ty = type(ii->get_type());
+    Type *dst_ty = type(ii->get_type()->get_scalar_ty());
     return CastInst::Create(ii->get_op(), arg, dst_ty, ii->get_name());
   }
   if(auto* ii = dynamic_cast<ir::getelementptr_inst*>(inst)){
     std::vector<Value*> idx_vals;
     std::transform(ii->idx_begin(), ii->idx_end(), std::back_inserter(idx_vals),
                    [&value](ir::value* x){ return value(x);});
-    Type *source_ty = type(ii->get_source_elt_ty());
+    Type *source_ty = type(ii->get_source_elt_ty()->get_scalar_ty());
     Value *arg = value(ii->get_operand(0));
     return GetElementPtrInst::Create(source_ty, arg, idx_vals, ii->get_name());
   }
@@ -165,8 +177,10 @@ Value* selection::llvm_value(ir::value *v, LLVMContext &ctx) {
   if(auto *cc = dynamic_cast<ir::constant*>(v))
     return llvm_constant(cc, ctx);
   // instruction
-  if(auto *ii = dynamic_cast<ir::instruction*>(v))
-    return llvm_inst(ii, ctx);
+  if(auto *ii = dynamic_cast<ir::instruction*>(v)){
+    auto value = [&](ir::value *x) { return llvm_value(x, ctx); };
+    return llvm_inst(ii, value, ctx);
+  }
   // unknown value
   throw std::runtime_error("unknown conversion from ir::value to Value");
 }
@@ -185,17 +199,17 @@ std::vector<Value*> delinearize(Value *trailing, std::vector<unsigned> &shapes, 
   return result;
 }
 
-void selection::init_axes(ir::instruction *instr, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
-  const auto& shapes = instr->get_type()->get_tile_shapes();
+void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
+  const auto& shapes = v->get_type()->get_tile_shapes();
   size_t dim = shapes.size();
   std::vector<unsigned> contiguous(dim);
   std::vector<unsigned> warp_size(dim);
   std::vector<unsigned> n_warps(dim);
   for(unsigned i = 0; i < shapes.size(); i++){
     std::string str_i = std::to_string(i);
-    contiguous[i] = *params_->get_param(instr, "p0.d" + str_i);
-    warp_size[i] = *params_->get_param(instr, "p1.d" + str_i);
-    n_warps[i] = *params_->get_param(instr, "p2.d" + str_i);
+    contiguous[i] = *params_->get_param(v, "p0.d" + str_i);
+    warp_size[i] = *params_->get_param(v, "p1.d" + str_i);
+    n_warps[i] = *params_->get_param(v, "p2.d" + str_i);
   }
   std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, warp_size, builder);
   std::vector<Value*> warp_id = delinearize(u_warp_id, n_warps, builder);
@@ -216,11 +230,11 @@ void selection::init_axes(ir::instruction *instr, IRBuilder<> &builder, Value *u
     axes[k] = distributed_axis{idx_list};
   }
   // Store axes
-  axes_[instr] = axes;
+  axes_[v] = axes;
 }
 
-void selection::create_grids(std::vector<ir::instruction*> &grids,
-                             std::map<unsigned*, ir::instruction*> &references,
+void selection::create_grids(std::vector<ir::value*> &grids,
+                             std::map<unsigned*, ir::value*> &references,
                              ir::function *fn) {
   // get number of dimensions greater than 1
   auto get_tile_gt1_dim = [&](ir::value *v){
@@ -231,75 +245,171 @@ void selection::create_grids(std::vector<ir::instruction*> &grids,
     return result;
   };
   // bind references
-  for(ir::basic_block *block: fn->blocks())
-  for(ir::instruction *i: block->get_inst_list()){
-    if(!i->get_type()->is_tile_ty())
-      continue;
-    const auto& shapes = i->get_type()->get_tile_shapes();
-    bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(i);
+  std::set<ir::value*> seen;
+  std::function<void(ir::value*)> bind_references = [&](ir::value *v)
+  {
+    // skip
+    if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
+      return;
+    // recurse
+    if(auto *user = dynamic_cast<ir::user*>(v))
+      for(ir::value *op: user->ops())
+        bind_references(op);
+    // bind
+    const auto& shapes = v->get_type()->get_tile_shapes();
+    bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(v);
     if(is_shared)
-      continue;
+      return;
     for(size_t d = 0; d < shapes.size(); d++){
       if(shapes[d] == 1)
         continue;
-      unsigned *x = params_->get_param(i, "p0.d" + std::to_string(d));
-      ir::instruction *&r = references[x];
-      if(!r || get_tile_gt1_dim(i) > get_tile_gt1_dim(r))
-        r = i;
+      unsigned *x = params_->get_param(v, "p0.d" + std::to_string(d));
+      ir::value *&r = references[x];
+      if(!r || get_tile_gt1_dim(v) > get_tile_gt1_dim(r))
+        r = v;
     }
-  }
+  };
+
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction *i: block->get_inst_list())
+    bind_references(i);
+
   // create grid
   for(auto &ref: references)
     if(std::find(grids.begin(), grids.end(), ref.second) == grids.end())
       grids.push_back(ref.second);
 }
 
+void selection::create_tile(ir::value *v, IRBuilder<> &builder,
+                            const std::map<unsigned*, ir::value*>& references,
+                            std::set<ir::value*> &seen) {
+  if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
+    return;
+  if(auto *user = dynamic_cast<ir::user*>(v))
+    for(ir::value *op: user->ops())
+      create_tile(op, builder, references, seen);
+  LLVMContext &ctx = builder.getContext();
+  bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(v);
+  const auto& shapes = v->get_type()->get_tile_shapes();
+  Type* ty = llvm_type(v->get_type()->get_scalar_ty(), ctx);
+  // create shared tile
+  if(is_shared){
+    tmap_.insert({v, new shared_tile(ty, shapes)});
+  }
+  // create distributed tile
+  else {
+    const auto &shapes = v->get_type()->get_tile_shapes();
+    std::vector<distributed_axis> axes(shapes.size());
+    for(size_t d = 0; d < shapes.size(); d++){
+      if(shapes[d] > 1){
+        unsigned *x = params_->get_param(v, "p0.d" + std::to_string(d));
+        axes[d] = axes_.at(references.at(x))[d];
+      }
+      else
+        axes[d].values = {builder.getInt32(0)};
+    }
+    tmap_.insert({v, new distributed_tile(ty, shapes, axes)});
+  }
+}
+
 void selection::init_grids(ir::function *fn, IRBuilder<> &builder){
   // fetch linear ID
   Module *mod = builder.GetInsertBlock()->getParent()->getParent();
-  LLVMContext &ctx = builder.getContext();
   Function *get_thread_id = Intrinsic::getDeclaration(mod, Intrinsic::nvvm_read_ptx_sreg_tid_x);
   Value *warp_size = builder.getInt32(32);
   Value *u_thread_id = builder.CreateCall(get_thread_id, {});
   Value *u_thread_warp_id = builder.CreateURem(u_thread_id, warp_size);
   Value *u_warp_id = builder.CreateUDiv(u_thread_id, warp_size);
   // create grid
-  std::vector<ir::instruction*> grids;
-  std::map<unsigned*, ir::instruction*> references;
+  std::vector<ir::value*> grids;
+  std::map<unsigned*, ir::value*> references;
   create_grids(grids, references, fn);
-  for(ir::instruction* i: grids)
+  for(ir::value* i: grids)
     init_axes(i, builder, u_thread_warp_id, u_warp_id);
   // create tile
+  std::set<ir::value*> seen;
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list()){
     if(!i->get_type()->is_tile_ty())
       continue;
-    bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(i);
-    const auto& shapes = i->get_type()->get_tile_shapes();
-    Type* ty = llvm_type(i->get_type(), ctx);
-    // create shared tile
-    if(is_shared){
-      tmap_.insert({i, new shared_tile(ty, shapes)});
-    }
-    // create distributed tile
-    else {
-      const auto &shapes = i->get_type()->get_tile_shapes();
-      std::vector<distributed_axis> axes(shapes.size());
-      for(size_t d = 0; d < shapes.size(); d++){
-        if(shapes[d] > 1){
-          unsigned *x = params_->get_param(i, "p0.d" + std::to_string(d));
-          axes[d] = axes_.at(references.at(x))[d];
-        }
-        else
-          axes[d].values = {builder.getInt32(0)};
-      }
-      tmap_.insert({i, new distributed_tile(ty, shapes, axes)});
-    }
+    create_tile(i, builder, references, seen);
   }
 }
 
-void selection::lower_tile_instruction(ir::instruction *src, llvm::IRBuilder<> &builder) {
-  std::cout << typeid(*src).name() << std::endl;
+
+void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &builder) {
+  Module *module = builder.GetInsertBlock()->getModule();
+  LLVMContext &ctx = builder.getContext();
+  tile *ti = tmap_[ins];
+  distributed_tile* result = (distributed_tile*)ti;
+  if(!ins->get_type()->is_tile_ty())
+    return;
+  const auto& shapes = ins->get_type()->get_tile_shapes();
+  // global_range
+  if(auto *x = dynamic_cast<ir::get_global_range_inst*>(ins)) {
+    static std::array<Intrinsic::ID, 3> ctaid = {
+      Intrinsic::nvvm_read_ptx_sreg_ctaid_x,
+      Intrinsic::nvvm_read_ptx_sreg_ctaid_y,
+      Intrinsic::nvvm_read_ptx_sreg_ctaid_z
+    };
+    Function *get_group_id = Intrinsic::getDeclaration(module, ctaid[x->get_axis()]);
+    Value *group_id = builder.CreateCall(get_group_id, {});
+    Value *offset = builder.CreateMul(builder.getInt32(shapes[0]), group_id);
+    result->for_each([&](indices_t idx){
+      BinaryOperator *bin = static_cast<BinaryOperator*>(idx[0]);
+      result->set_value(idx, builder.CreateAdd(bin->getOperand(1),
+                                              builder.CreateAdd(bin->getOperand(0), offset)));
+    });
+  }
+  // reshape
+  else if(dynamic_cast<ir::reshape_inst*>(ins)) {
+    ir::value* in = ins->get_operand(0);
+    distributed_tile *in_tile = (distributed_tile*)tmap_.at(in);
+    result->for_each([&](indices_t out_idx){
+      indices_t in_idx;
+      for(size_t k = 0; k < shapes.size(); k++){
+        if(shapes[k] > 1)
+          in_idx.push_back(out_idx[k]);
+      }
+      result->set_value(out_idx, in_tile->get_value(in_idx));
+    });
+  }
+  // splat
+  else if(dynamic_cast<ir::splat_inst*>(ins)) {
+    result->for_each([&](indices_t idx) {
+      result->set_value(idx, llvm_value(ins->get_operand(0), ctx));
+    });
+  }
+  // broadcast
+  else if(dynamic_cast<ir::broadcast_inst*>(ins)) {
+    ir::value* in = ins->get_operand(0);
+    const auto& in_shapes = in->get_type()->get_tile_shapes();
+    distributed_tile *in_tile = (distributed_tile*)tmap_.at(in);
+    result->for_each([&](indices_t out_idx){
+      indices_t in_idx = out_idx;
+      for(size_t k = 0; k < in_idx.size(); k++){
+        if(in_shapes[k] == 1)
+          in_idx[k] = builder.getInt32(0);
+        result->set_value(out_idx, in_tile->get_value(in_idx));
+      }
+    });
+  }
+  // copy to shared
+  else if(dynamic_cast<ir::copy_to_shared_inst*>(ins)) {
+
+  }
+  // element-wise
+  else {
+    result->for_each([&](indices_t idx){
+      auto value = [&](ir::value *x) {
+        if(x->get_type()->is_tile_ty())
+          return tmap_.at(x)->get_value(idx);
+        else
+          return llvm_value(x, ctx);
+      };
+      result->set_value(idx, llvm_inst(ins, value, ctx));
+    });
+  }
 }
 
 void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
@@ -308,7 +418,7 @@ void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
     lower_tile_instruction(src, builder);
   }
   else {
-    Instruction *i = llvm_inst(src, ctx);
+    Instruction *i = (Instruction*)llvm_value(src, ctx);
     vmap_[src] = i;
     builder.Insert(i);
   }
