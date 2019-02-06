@@ -78,8 +78,8 @@ class selection{
 private:
   // LLVM conversions
   llvm::Type*        llvm_type(ir::type *ty, llvm::LLVMContext &ctx);
-  llvm::Value*       llvm_value(ir::value *v, llvm:: LLVMContext &ctx, llvm::IRBuilder<> &builder);
-  llvm::Instruction* llvm_inst(ir::instruction *inst, std::function<llvm::Value*(ir::value*)> value, llvm::LLVMContext &ctx, llvm::IRBuilder<> &builder);
+  llvm::Value*       llvm_value(ir::value *v, llvm::IRBuilder<> &builder);
+  llvm::Instruction* llvm_inst(ir::instruction *inst, std::function<llvm::Value*(ir::value*)> value, llvm::IRBuilder<> &builder);
   llvm::Constant*    llvm_constant(ir::constant *cst, llvm::LLVMContext &ctx);
 
   // grid construction
