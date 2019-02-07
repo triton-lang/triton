@@ -72,7 +72,6 @@ private:
 
 class selection{
   typedef std::map<ir::value *, llvm::Value *> vmap_t;
-  typedef std::map<ir::basic_block *, llvm::BasicBlock *> bmap_t;
   typedef std::map<ir::value *, tile *> tmap_t;
 
 private:
@@ -100,7 +99,6 @@ public:
 
 private:
   vmap_t vmap_;
-  bmap_t bmap_;
   tmap_t tmap_;
   allocation *alloc_;
   tune *params_;

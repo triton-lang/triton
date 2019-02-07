@@ -33,6 +33,9 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K){\
   fp32* pa[32, 8] = a + rx[:, newaxis] + rka[newaxis, :]*M;\
   fp32* pb[32, 8] = b + ry[:, newaxis] + rkb[newaxis, :]*K;\
   fp32* pc[32, 32] = c + rx[:, newaxis] + ry[newaxis, :]*M;\
+  for(k = K; k >= 0; k = k - 8){\
+    C = C + 1;\
+  }\
   *pc = C;\
 }\
 ";
