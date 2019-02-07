@@ -37,16 +37,23 @@ public:
   virtual void set_value(indices_t idx, llvm::Value *v) = 0;
   virtual llvm::Value* get_value(indices_t idx) = 0;
 
-private:
+protected:
   llvm::Type *ty_;
   shapes_t shapes_;
 };
 
 class shared_tile: public tile {
+private:
+  llvm::Value* shared_offset(indices_t idx);
+
 public:
-  using tile::tile;
-  void set_value(indices_t idx, llvm::Value *v) { }
-  llvm::Value* get_value(indices_t idx) { return nullptr; }
+  shared_tile(llvm::Type* ty, const shapes_t &shapes, llvm::Value* ptr, llvm::IRBuilder<> &builder);
+  void set_value(indices_t, llvm::Value *);
+  llvm::Value* get_value(indices_t idx);
+
+private:
+  llvm::Value *ptr_;
+  llvm::IRBuilder<> &builder_;
 };
 
 class distributed_tile: public tile{
@@ -85,9 +92,9 @@ private:
   void create_grids(std::vector<ir::value *> &grids,
                     std::map<unsigned *, ir::value *> &references,
                     ir::function *fn);
-  void create_tile(ir::value *v, llvm::IRBuilder<> &builder, const std::map<unsigned *, ir::value *> &references, std::set<ir::value *> &seen);
+  void create_tile(ir::value *v, llvm::IRBuilder<> &builder, const std::map<unsigned *, ir::value *> &references, std::set<ir::value *> &seen, llvm::Value *sh_mem_ptr);
   void init_axes(ir::value *i, llvm::IRBuilder<> &builder, llvm::Value *u_thread_id, llvm::Value *u_warp_id);
-  void init_grids(ir::function *fn, llvm::IRBuilder<> &builder);
+  void init_grids(ir::function *fn, llvm::IRBuilder<> &builder, llvm::Value *sh_mem_ptr);
 
   // lowering
   void lower_instruction(ir::instruction *src, llvm::IRBuilder<> &builder);

@@ -1,5 +1,6 @@
 #include "codegen/selection.h"
 #include "codegen/tune.h"
+#include "codegen/allocation.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include "ir/context.h"
@@ -53,6 +54,28 @@ void distributed_tile::for_each(std::function<void (indices_t)> fn) {
     fn(idx.first);
 }
 
+/* Shared Tile */
+Value* shared_tile::shared_offset(indices_t idx) {
+  Value *result = builder_.getInt32(0);
+  result = builder_.CreateAdd(result, idx[0]);
+  for(size_t i = 1; i < idx.size(); i++)
+    result = builder_.CreateAdd(result, builder_.CreateMul(idx[i], builder_.getInt32(shapes_[i-1])));
+  return result;
+}
+
+shared_tile::shared_tile(Type *ty, const shapes_t &shapes, Value *ptr, llvm::IRBuilder<> &builder): tile(ty, shapes), ptr_(ptr), builder_(builder) {
+
+}
+
+void shared_tile::set_value(indices_t idx, Value *value) {
+  Value *ptr = builder_.CreateGEP(ptr_, shared_offset(idx));
+  builder_.CreateStore(value, ptr);
+}
+
+Value* shared_tile::get_value(indices_t idx) {
+  Value *ptr = builder_.CreateGEP(ptr_, shared_offset(idx));
+  return builder_.CreateLoad(ptr);
+}
 
 /* convert ir::type to Type */
 Type *selection::llvm_type(ir::type *ty, LLVMContext &ctx) {
@@ -281,19 +304,21 @@ void selection::create_grids(std::vector<ir::value*> &grids,
 
 void selection::create_tile(ir::value *v, IRBuilder<> &builder,
                             const std::map<unsigned*, ir::value*>& references,
-                            std::set<ir::value*> &seen) {
+                            std::set<ir::value*> &seen, Value *sh_mem_ptr) {
   if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
     return;
   if(auto *user = dynamic_cast<ir::user*>(v))
     for(ir::value *op: user->ops())
-      create_tile(op, builder, references, seen);
+      create_tile(op, builder, references, seen, sh_mem_ptr);
   LLVMContext &ctx = builder.getContext();
-  bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(v);
   const auto& shapes = v->get_type()->get_tile_shapes();
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), ctx);
   // create shared tile
+  bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(v);
   if(is_shared){
-    tmap_.insert({v, new shared_tile(ty, shapes)});
+    size_t offset = alloc_->get_offset(v);
+    Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
+    tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
   }
   // create distributed tile
   else {
@@ -318,7 +343,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   }
 }
 
-void selection::init_grids(ir::function *fn, IRBuilder<> &builder){
+void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem_ptr){
   // fetch linear ID
   Module *mod = builder.GetInsertBlock()->getParent()->getParent();
   Function *get_thread_id = Intrinsic::getDeclaration(mod, Intrinsic::nvvm_read_ptx_sreg_tid_x);
@@ -338,7 +363,7 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder){
   for(ir::instruction *i: block->get_inst_list()){
     if(!i->get_type()->is_tile_ty())
       continue;
-    create_tile(i, builder, references, seen);
+    create_tile(i, builder, references, seen, sh_mem_ptr);
   }
 }
 
@@ -411,7 +436,10 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     }
     // copy to shared
     else if(dynamic_cast<ir::copy_to_shared_inst*>(ins)) {
-
+      distributed_tile* in = (distributed_tile*)tmap_.at(ins->get_operand(0));
+      in->for_each([&](indices_t idx){
+        ti->set_value(idx, in->get_value(idx));
+      });
     }
     // element-wise
     else {
@@ -444,6 +472,7 @@ void selection::run(ir::module &src, Module &dst){
   vmap_.clear();
   LLVMContext &dst_ctx = dst.getContext();
   IRBuilder<> dst_builder(dst_ctx);
+
   // iterate over functions
   for(ir::function *fn: src.get_function_list()) {
     // create LLVM function
@@ -457,9 +486,17 @@ void selection::run(ir::module &src, Module &dst){
       BasicBlock *dst_block = BasicBlock::Create(dst_ctx, block->get_name(), dst_fn);
       vmap_[block] = dst_block;
     }
-    // create grids
     dst_builder.SetInsertPoint((BasicBlock*)vmap_[fn->blocks()[0]]);
-    init_grids(fn, dst_builder);
+    // allocate shared memory
+    Type *int_8_ty = Type::getInt8Ty(dst_ctx);
+    ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_->get_allocated_size());
+    Type *ptr_ty = PointerType::get(int_8_ty, 3);
+    GlobalVariable *sh_mem_array =
+      new GlobalVariable(*dst_fn->getParent(), array_ty, false, GlobalVariable::InternalLinkage,
+                         nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
+    Value *sh_mem_ptr = dst_builder.CreateBitCast(sh_mem_array, ptr_ty);
+    // create grids
+    init_grids(fn, dst_builder, sh_mem_ptr);
     // iterate through block
     for(ir::basic_block *block: fn->blocks()) {
       dst_builder.SetInsertPoint((BasicBlock*)vmap_[block]);
