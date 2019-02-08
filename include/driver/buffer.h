@@ -1,0 +1,54 @@
+/* Copyright 2015-2017 Philippe Tillet
+*
+* Permission is hereby granted, free of charge, to any person obtaining
+* a copy of this software and associated documentation files
+* (the "Software"), to deal in the Software without restriction,
+* including without limitation the rights to use, copy, modify, merge,
+* publish, distribute, sublicense, and/or sell copies of the Software,
+* and to permit persons to whom the Software is furnished to do so,
+* subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be
+* included in all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
+
+#ifndef TDL_INCLUDE_DRIVER_BUFFER_H
+#define TDL_INCLUDE_DRIVER_BUFFER_H
+
+#include "driver/handle.h"
+#include "driver/context.h"
+
+namespace tdl
+{
+namespace driver
+{
+
+class Stream;
+
+// Buffer
+class Buffer: public HandleInterface<Buffer, CUdeviceptr>
+{
+public:
+  Buffer(Context const & context, size_t size);
+  Buffer(Context const & context, CUdeviceptr cu, bool take_ownership);
+  void set_zero(Stream const & queue, size_t size);
+  Handle<CUdeviceptr> const & cu() const;
+  Handle<CUdeviceptr> & cu();
+
+private:
+  Context context_;
+  Handle<CUdeviceptr> cu_;
+};
+
+}
+}
+
+#endif
