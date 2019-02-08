@@ -17,10 +17,12 @@ void place_shared_copy::run(ir::module &mod) {
       builder.set_insert_point(i);
       ir::value *x = i->get_operand(0);
       ir::value *y = i->get_operand(1);
-      ir::value *rx = builder.create_copy_to_shared(x);
-      ir::value *ry = builder.create_copy_to_shared(y);
+      ir::instruction *rx = (ir::instruction*)builder.create_copy_to_shared(x);
+      ir::instruction *ry = (ir::instruction*)builder.create_copy_to_shared(y);
       x->replace_all_uses_with(rx);
       y->replace_all_uses_with(ry);
+      rx->set_operand(0, x);
+      ry->set_operand(0, y);
     }
 }
 

@@ -441,6 +441,24 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         ti->set_value(idx, in->get_value(idx));
       });
     }
+    // matrix multiplication
+    else if(dynamic_cast<ir::matmul_inst*>(ins)) {
+      ir::value *A = ins->get_operand(0);
+      ir::value *B = ins->get_operand(1);
+      ir::value *C = ins->get_operand(2);
+      result->for_each([&](indices_t idx){
+        Value *res = tmap_.at(C)->get_value(idx);
+        unsigned NK = A->get_type()->get_tile_shapes()[1];
+        for(unsigned K = 0; K < NK; ++K){
+          indices_t a_idx = {idx[0], builder.getInt32(K)};
+          indices_t b_idx = {idx[1], builder.getInt32(K)};
+          Value *a = tmap_.at(A)->get_value(a_idx);
+          Value *b = tmap_.at(B)->get_value(b_idx);
+          res = builder.CreateAdd(res, builder.CreateMul(a, b));
+        }
+        result->set_value(idx, res);
+      });
+    }
     // element-wise
     else {
       result->for_each([&](indices_t idx){

@@ -13,6 +13,12 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/LegacyPassManager.h"
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();
@@ -36,13 +42,23 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K){\
   for(k = K; k >= 0; k = k - 8){\
     fp32 a[32, 8] = *pa;\
     fp32 b[32, 8] = *pb;\
-    C = C + 1;\
+    C = dot(a,b,C);\
     pa = pa + 8*M;\
     pb = pb + 8*K;\
   }\
   *pc = C;\
 }\
 ";
+
+static std::string computeDataLayout(bool is64Bit, bool UseShortPointers) {
+  std::string Ret = "e";
+  if (!is64Bit)
+    Ret += "-p:32:32";
+  else if (UseShortPointers)
+    Ret += "-p3:32:32-p4:32:32-p5:32:32";
+  Ret += "-i64:64-i128:128-v16:16-v32:32-n16:32:64";
+  return Ret;
+}
 
 int main() {
    YY_BUFFER_STATE buffer = yy_scan_string(src);
@@ -86,12 +102,37 @@ int main() {
    liveness.run(module);
    allocation.run();
    selection.run(module, llvm_module);
-//   std::vector<unsigned*> params = tune.get_params(module);
-//   std::cout << params.size() << std::endl;
-//   selection.run(module, llvm_module);
-   // print LLVM program
-   llvm::PrintModulePass print(llvm::outs());
-   llvm::AnalysisManager<llvm::Module> analysis;
-   print.run(llvm_module, analysis);
+
+//   // print LLVM program
+//   llvm::PrintModulePass print(llvm::outs());
+//   llvm::AnalysisManager<llvm::Module> analysis;
+//   print.run(llvm_module, analysis);
+
+   // create target machine
+   {
+   llvm::InitializeAllTargetInfos();
+   llvm::InitializeAllTargets();
+   llvm::InitializeAllTargetMCs();
+   llvm::InitializeAllAsmParsers();
+   llvm::InitializeAllAsmPrinters();
+
+   llvm_module.setTargetTriple("nvptx64-nvidia-cuda");
+   std::string error;
+   auto target = llvm::TargetRegistry::lookupTarget(llvm_module.getTargetTriple(), error);
+   llvm::TargetMachine *machine = target->createTargetMachine(llvm_module.getTargetTriple(), "sm_52", "",
+                                                              llvm::TargetOptions(), llvm::Reloc::Model(),
+                                                              llvm::None, llvm::CodeGenOpt::Aggressive);
+   llvm_module.setDataLayout(computeDataLayout(true, true));
+
+   // emit machine code
+   llvm::legacy::PassManager pass;
+   llvm::SmallVector<char, 0> buffer;
+   llvm::raw_svector_ostream stream(buffer);
+   machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_AssemblyFile);
+   pass.run(llvm_module);
+   std::string src(buffer.begin(), buffer.end());
+   std::cout << src << std::endl;
+   }
+
    return 0;
 }
