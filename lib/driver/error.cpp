@@ -94,23 +94,6 @@ void check(CUresult err)
   }
 }
 
-void check(nvrtcResult err){
-  using namespace exception::nvrtc;
-
-  switch(err)
-  {
-  case NVRTC_SUCCESS:                         break;
-  case NVRTC_ERROR_OUT_OF_MEMORY:             throw out_of_memory();
-  case NVRTC_ERROR_PROGRAM_CREATION_FAILURE:  throw program_creation_failure();
-  case NVRTC_ERROR_INVALID_INPUT:             throw invalid_input();
-  case NVRTC_ERROR_INVALID_PROGRAM:           throw invalid_program();
-  case NVRTC_ERROR_INVALID_OPTION:            throw invalid_option();
-  case NVRTC_ERROR_COMPILATION:               throw compilation();
-  case NVRTC_ERROR_BUILTIN_OPERATION_FAILURE: throw builtin_operation_failure();
-  default: throw unknown_error();
-  }
-}
-
 void check(cublasStatus_t err){
   using namespace exception::cublas;
   switch(err)

@@ -37,9 +37,6 @@ std::string Platform::version() const{
   return std::to_string(version);
 }
 
-std::string Platform::name() const
-{ return (std::string)"CUDA"; }
-
 std::vector<Device> Platform::devices() const{
   std::vector<Device> devices;
   int N;

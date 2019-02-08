@@ -40,7 +40,7 @@ class Platform
 {
 public:
   //Accessors
-  std::string name() const;
+  std::string name() const { return "CUDA"; }
   std::string version() const;
   std::vector<Device> devices() const;
 private:

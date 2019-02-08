@@ -85,18 +85,6 @@ namespace driver
 #define CUDA_DEFINE10(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10) DEFINE10(cuinit, cuda_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10)
 #define CUDA_DEFINE11(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11) DEFINE11(cuinit, cuda_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11)
 
-#define NVRTC_DEFINE1(ret, fname, t1) DEFINE1(nvrtcinit, nvrtc_, ret, fname, t1)
-#define NVRTC_DEFINE2(ret, fname, t1, t2) DEFINE2(nvrtcinit, nvrtc_, ret, fname, t1, t2)
-#define NVRTC_DEFINE3(ret, fname, t1, t2, t3) DEFINE3(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3)
-#define NVRTC_DEFINE4(ret, fname, t1, t2, t3, t4) DEFINE4(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4)
-#define NVRTC_DEFINE5(ret, fname, t1, t2, t3, t4, t5) DEFINE5(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4, t5)
-#define NVRTC_DEFINE6(ret, fname, t1, t2, t3, t4, t5, t6) DEFINE6(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4, t5, t6)
-#define NVRTC_DEFINE7(ret, fname, t1, t2, t3, t4, t5, t6, t7) DEFINE7(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4, t5, t6, t7)
-#define NVRTC_DEFINE8(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8) DEFINE8(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8)
-#define NVRTC_DEFINE9(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9) DEFINE9(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9)
-#define NVRTC_DEFINE10(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10) DEFINE10(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10)
-#define NVRTC_DEFINE11(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11) DEFINE11(nvrtcinit, nvrtc_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11)
-
 #define NVML_DEFINE0(ret, fname) DEFINE0(nvmlinit, nvml_, ret, fname)
 #define NVML_DEFINE1(ret, fname, t1) DEFINE1(nvmlinit, nvml_, ret, fname, t1)
 #define NVML_DEFINE2(ret, fname, t1, t2) DEFINE2(nvmlinit, nvml_, ret, fname, t1, t2)
@@ -125,12 +113,6 @@ bool dispatch::cuinit(){
 	CUresult res = (*fptr)(0);
 	check(res);
   return cuda_ != nullptr;
-}
-
-bool dispatch::nvrtcinit(){
-  if(nvrtc_==nullptr)
-    nvrtc_ = dlopen("libnvrtc.so", RTLD_LAZY);
-  return nvrtc_ != nullptr;
 }
 
 bool dispatch::nvmlinit(){
@@ -193,13 +175,6 @@ CUDA_DEFINE1(CUresult, cuCtxSetCurrent, CUcontext)
 CUDA_DEFINE4(CUresult, cuMemsetD8Async, CUdeviceptr, unsigned char, size_t, CUstream)
 CUDA_DEFINE1(CUresult, cuCtxPushCurrent_v2, CUcontext)
 CUDA_DEFINE1(CUresult, cuCtxPopCurrent_v2, CUcontext*)
-
-NVRTC_DEFINE3(nvrtcResult, nvrtcCompileProgram, nvrtcProgram, int, const char **)
-NVRTC_DEFINE2(nvrtcResult, nvrtcGetProgramLogSize, nvrtcProgram, size_t *)
-NVRTC_DEFINE2(nvrtcResult, nvrtcGetPTX, nvrtcProgram, char *)
-NVRTC_DEFINE2(nvrtcResult, nvrtcGetPTXSize, nvrtcProgram, size_t *)
-NVRTC_DEFINE6(nvrtcResult, nvrtcCreateProgram, nvrtcProgram *, const char *, const char *, int, const char **, const char **)
-NVRTC_DEFINE2(nvrtcResult, nvrtcGetProgramLog, nvrtcProgram, char *)
 
 NVML_DEFINE2(nvmlReturn_t, nvmlDeviceGetHandleByPciBusId_v2, const char *, nvmlDevice_t*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
