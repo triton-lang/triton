@@ -40,7 +40,7 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K){\
   fp32* pa[32, 8] = a + rx[:, newaxis] + rka[newaxis, :]*M;\
   fp32* pb[32, 8] = b + ry[:, newaxis] + rkb[newaxis, :]*K;\
   fp32* pc[32, 32] = c + rx[:, newaxis] + ry[newaxis, :]*M;\
-  for(k = K; k >= 0; k = k - 8){\
+  for(k = K; k > 0; k = k - 8){\
     fp32 a[32, 8] = *pa;\
     fp32 b[32, 8] = *pb;\
     C = C + 1;\
@@ -228,5 +228,8 @@ int main() {
   // Write back
   checkCudaErrors(cuMemcpyDtoH(c.data(), d_c, sizeof(numeric_t) * c.size()));
 
+  for(size_t i = 0; i < M*N; i++)
+    if(c[i] == 32)
+      std::cout << i << " " << "success" << std::endl;
   return 0;
 }
