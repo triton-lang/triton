@@ -78,7 +78,7 @@ void node::implicit_cast(ir::builder &builder, ir::value *&lhs, ir::value *&rhs,
   // Both operands are integers
   else if(left_ty->is_integer_ty() && right_ty->is_integer_ty()){
     is_int = true;
-    is_signed = false;
+    is_signed = true; // always signed for now
     if(left_ty->get_integer_bitwidth() != right_ty->get_integer_bitwidth()){
       ir::value *&to_convert = (left_ty->get_integer_bitwidth() > right_ty->get_integer_bitwidth())?rhs:lhs;
       ir::type *dst_ty = (to_convert==lhs)?right_ty:left_ty;

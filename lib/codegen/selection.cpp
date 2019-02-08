@@ -495,7 +495,15 @@ void selection::run(ir::module &src, Module &dst){
   for(ir::function *fn: src.get_function_list()) {
     // create LLVM function
     FunctionType *fn_ty = (FunctionType*)llvm_type(fn->get_fn_type(), dst_ctx);
-    Function *dst_fn = Function::Create(fn_ty, Function::ExternalLinkage, "kernel", &dst);
+    Function *dst_fn = Function::Create(fn_ty, Function::ExternalLinkage, fn->get_name(), &dst);
+    // Set metadata
+    llvm::Metadata *md_args[] = {
+      llvm::ValueAsMetadata::get(dst_fn),
+      llvm::MDString::get(dst_ctx, "kernel"),
+      llvm::ValueAsMetadata::get(dst_builder.getInt32(1))
+    };
+    dst.getOrInsertNamedMetadata("nvvm.annotations")->addOperand(llvm::MDNode::get(dst_ctx, md_args));
+
     // map parameters
     for(unsigned i = 0; i < fn->args().size(); i++)
       vmap_[fn->args()[i]] = &*(dst_fn->arg_begin() + i);
@@ -506,13 +514,16 @@ void selection::run(ir::module &src, Module &dst){
     }
     dst_builder.SetInsertPoint((BasicBlock*)vmap_[fn->blocks()[0]]);
     // allocate shared memory
-    Type *int_8_ty = Type::getInt8Ty(dst_ctx);
-    ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_->get_allocated_size());
-    Type *ptr_ty = PointerType::get(int_8_ty, 3);
-    GlobalVariable *sh_mem_array =
-      new GlobalVariable(*dst_fn->getParent(), array_ty, false, GlobalVariable::InternalLinkage,
-                         nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
-    Value *sh_mem_ptr = dst_builder.CreateBitCast(sh_mem_array, ptr_ty);
+    Value *sh_mem_ptr = nullptr;
+    if(unsigned alloc_size = alloc_->get_allocated_size()){
+      Type *int_8_ty = Type::getInt8Ty(dst_ctx);
+      ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
+      Type *ptr_ty = PointerType::get(int_8_ty, 3);
+      GlobalVariable *sh_mem_array =
+        new GlobalVariable(*dst_fn->getParent(), array_ty, false, GlobalVariable::InternalLinkage,
+                           nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
+      sh_mem_ptr = dst_builder.CreateBitCast(sh_mem_array, ptr_ty);
+    }
     // create grids
     init_grids(fn, dst_builder, sh_mem_ptr);
     // iterate through block
