@@ -34,7 +34,6 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS} -std=c++11")
 # TDL
 file(GLOB_RECURSE LIBTDL_SRC lib/*.cpp)
 add_library(tdl SHARED ${LIBTDL_SRC} ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
-message(STATUS ${llvm_libs})
 target_link_libraries(tdl ${llvm_libs})
 
 # Examples

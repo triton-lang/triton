@@ -109,7 +109,7 @@ private:
   tmap_t tmap_;
   allocation *alloc_;
   tune *params_;
-  std::map<ir::value*, std::vector<distributed_axis>> axes_;
+  std::map<unsigned*, distributed_axis> axes_;
 };
 
 }

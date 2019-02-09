@@ -63,7 +63,8 @@ Value* shared_tile::shared_offset(indices_t idx) {
   return result;
 }
 
-shared_tile::shared_tile(Type *ty, const shapes_t &shapes, Value *ptr, llvm::IRBuilder<> &builder): tile(ty, shapes), ptr_(ptr), builder_(builder) {
+shared_tile::shared_tile(Type *ty, const shapes_t &shapes, Value *ptr, llvm::IRBuilder<> &builder):
+  tile(ty, shapes), ptr_(ptr), builder_(builder) {
 
 }
 
@@ -236,8 +237,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
   std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, warp_size, builder);
   std::vector<Value*> warp_id = delinearize(u_warp_id, n_warps, builder);
   // Create axes
-  std::vector<distributed_axis> axes(dim);
   for(unsigned k = 0; k < dim; k++) {
+    std::string str_k = std::to_string(k);
     Value *warp_size_k = builder.getInt32(warp_size[k]);
     Value *contiguous_k = builder.getInt32(contiguous[k]);
     Value *thread_id   = builder.CreateAdd(thread_id_in_warp[k], builder.CreateMul(warp_id[k], warp_size_k));
@@ -247,12 +248,10 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     std::vector<Value*> idx_list(per_thread);
     for(unsigned n = 0 ; n < per_thread; n++){
       unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
-      idx_list[n] = builder.CreateAdd(thread_id, builder.getInt32(offset));
+      idx_list[n] = builder.CreateAdd(thread_id, builder.getInt32(offset), "idx_" + str_k + "_" + std::to_string(n));
     }
-    axes[k] = distributed_axis{idx_list};
+    axes_[params_->get_param(v, "p0.d" + str_k)] = distributed_axis{idx_list};
   }
-  // Store axes
-  axes_[v] = axes;
 }
 
 void selection::create_grids(std::vector<ir::value*> &grids,
@@ -327,7 +326,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     for(size_t d = 0; d < shapes.size(); d++){
       if(shapes[d] > 1){
         unsigned *x = params_->get_param(v, "p0.d" + std::to_string(d));
-        axes[d] = axes_.at(references.at(x))[d];
+        axes[d] = axes_.at(x);
       }
       else
         axes[d].values = {builder.getInt32(0)};
@@ -337,6 +336,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     // constant range
     if(dynamic_cast<ir::constant*>(v))
       T->for_each([&](indices_t idx){
+        assert(idx.size() == 1);
         T->set_value(idx, idx[0]);
       });
 
@@ -397,8 +397,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       Value *offset = builder.CreateMul(builder.getInt32(shapes[0]), group_id);
       result->for_each([&](indices_t idx){
         BinaryOperator *bin = static_cast<BinaryOperator*>(idx[0]);
-        result->set_value(idx, builder.CreateAdd(bin->getOperand(1),
-                                                builder.CreateAdd(bin->getOperand(0), offset)));
+        result->set_value(idx, builder.CreateAdd(bin, offset));
       });
     }
     // reshape
@@ -430,8 +429,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         for(size_t k = 0; k < in_idx.size(); k++){
           if(in_shapes[k] == 1)
             in_idx[k] = builder.getInt32(0);
-          result->set_value(out_idx, in_tile->get_value(in_idx));
         }
+        result->set_value(out_idx, in_tile->get_value(in_idx));
       });
     }
     // copy to shared
