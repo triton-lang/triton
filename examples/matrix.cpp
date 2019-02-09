@@ -33,8 +33,20 @@ const char src[] =
 void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K){\
   int32 rx[16] = get_global_range[16](0);\
   int32 ry[16] = get_global_range[16](1);\
-  fp32 C[16, 16] = 1;\
+  int32 rka[8] = 0 ... 8;\
+  int32 rkb[8] = 0 ... 8;\
+  fp32 C[16, 16] = 0;\
+  int32 k;\
+  fp32* pa[16, 8] = a + rx[:, newaxis] + rka[newaxis, :]*M;\
+  fp32* pb[16, 8] = b + ry[:, newaxis] + rkb[newaxis, :]*K;\
   fp32* pc[16, 16] = c + rx[:, newaxis] + ry[newaxis, :]*M;\
+  for(k = K; k > 0; k = k - 8){\
+    fp32 a[16, 8] = *pa;\
+    fp32 b[16, 8] = *pb;\
+    C = C + 1;\
+    pa = pa + 8*M;\
+    pb = pb + 8*K;\
+  }\
   *pc = C;\
 }\
 ";
@@ -139,10 +151,14 @@ int main() {
   // tuning parameters
   tune.run(module);
   std::vector<unsigned> params = {
-    // c0
+    // asm
     2, 8, 1,
-    // c1
+    // bsn
     4, 4, 1,
+    // pa
+    2, 4, 1,
+    // pb
+    1, 8, 1,
   };
   std::map<tdl::ir::value*, std::vector<std::string>> errors;
   unsigned i = 0;
@@ -206,14 +222,14 @@ int main() {
   cuFuncGetAttribute(&num_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, cu_kernel);
   unsigned TM = 16;
   unsigned TN = 16;
-  unsigned nthreads = 32;
+  unsigned nthreads = params[1]*params[2]*params[7]*params[8];
   checkCudaErrors(cuLaunchKernel(cu_kernel, M/TM, N/TN, 1, nthreads, 1, 1, 0, cu_stream, args, NULL));
   checkCudaErrors(cuStreamSynchronize(cu_stream));
   // Write back
   checkCudaErrors(cuMemcpyDtoH(c.data(), d_c, sizeof(numeric_t) * c.size()));
 
-  for(size_t i = 0; i < M*N; i++)
-    if(c[i] != 1)
-      std::cout << i << " " << "failure" << std::endl;
-  return 0;
+  std::cout << c[0] << " " << c[1] << " " << c[2] << " " << c[3] << std::endl;
+//  for(size_t i = 0; i < M*N; i++)
+//    if(c[i] != 32)
+//      std::cout << i << " " << "success" << std::endl;
 }
