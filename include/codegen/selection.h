@@ -25,6 +25,7 @@ class tune;
 typedef std::vector<llvm::Value*> indices_t;
 
 struct distributed_axis {
+  size_t contiguous;
   std::vector<llvm::Value*> values;
 };
 
@@ -33,7 +34,7 @@ protected:
   typedef std::vector<unsigned> shapes_t;
 
 public:
-  tile(llvm::Type *ty, const shapes_t &shapes): shapes_(shapes){ }
+  tile(llvm::Type *ty, const shapes_t &shapes): ty_(ty), shapes_(shapes){ }
   virtual void set_value(indices_t idx, llvm::Value *v) = 0;
   virtual llvm::Value* get_value(indices_t idx) = 0;
 
@@ -69,7 +70,9 @@ private:
   void init_indices();
 
 public:
-  distributed_tile(llvm::Type *ty, const shapes_t& shapes, const axes_t &axes);
+  distributed_tile(llvm::Type *ty, const shapes_t& shapes, const axes_t &axes, llvm::IRBuilder<> &builder);
+  void set_vectorized_iteration() { vectorized_ = true; }
+  void unset_vectorized_iteration() { vectorized_ = false; }
   void set_value(indices_t idx, llvm::Value *v);
   llvm::Value* get_value(indices_t idx);
   void for_each(std::function<void(indices_t)> fn);
@@ -78,6 +81,9 @@ private:
   axes_t axes_;
   indices_map_t indices_;
   values_t values_;
+  size_t vector_size_;
+  llvm::IRBuilder<> &builder_;
+  bool vectorized_;
 };
 
 
@@ -86,6 +92,9 @@ class selection{
   typedef std::map<ir::value *, tile *> tmap_t;
 
 private:
+  // utils
+  llvm::Type *make_vector_ty(llvm::Type *ty, size_t vector_size);
+
   // LLVM conversions
   llvm::Type*        llvm_type(ir::type *ty, llvm::LLVMContext &ctx);
   llvm::Value*       llvm_value(ir::value *v, llvm::IRBuilder<> &builder);

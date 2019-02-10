@@ -213,7 +213,7 @@ int main() {
   CUstream cu_stream;
   int major, minor;
   compile_machine_code(cu_device, cu_context, cu_module, cu_kernel, cu_stream, major, minor, src, "test");
-//  std::cout << src << std::endl;
+  std::cout << src << std::endl;
 
   // execute machine code
   // Allocate buffers
