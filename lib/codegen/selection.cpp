@@ -7,7 +7,7 @@
 #include "ir/module.h"
 #include "ir/function.h"
 #include "ir/type.h"
-
+#include "llvm/Transforms/Scalar/EarlyCSE.h"
 
 namespace tdl{
 namespace codegen{
@@ -55,6 +55,51 @@ void distributed_tile::for_each(std::function<void (indices_t)> fn) {
 }
 
 /* Shared Tile */
+void shared_tile::extract_constant(Value *arg, Value *&non_cst, Value *&cst) {
+  BinaryOperator *bin_op = dyn_cast<BinaryOperator>(arg);
+  Constant *_0 = ConstantInt::get(Type::getInt32Ty(arg->getContext()), 0);
+  if(dyn_cast<Constant>(arg)){
+    cst = arg;
+    non_cst = _0;
+    return;
+  }
+  if(!bin_op || bin_op->getOpcode() != llvm::BinaryOperator::Add){
+    non_cst = arg;
+    cst = _0;
+    return;
+  }
+  Constant *cst_lhs = dyn_cast<Constant>(bin_op->getOperand(0));
+  Constant *cst_rhs = dyn_cast<Constant>(bin_op->getOperand(1));
+  if(cst_lhs && cst_rhs){
+    cst = arg;
+    non_cst = _0;
+  }
+  else if(cst_lhs){
+    cst = cst_lhs;
+    non_cst = bin_op->getOperand(1);
+  }
+  else if(cst_rhs){
+    cst = cst_rhs;
+    non_cst = bin_op->getOperand(0);
+  }
+  else{
+    non_cst = arg;
+    cst = _0;
+  }
+}
+
+void shared_tile::extract_constant(const indices_t &arg_idx, indices_t &non_cst_idx, indices_t &cst_idx) {
+  non_cst_idx.clear();
+  cst_idx.clear();
+  for(Value *idx: arg_idx){
+    Value *non_cst, *cst;
+    extract_constant(idx, non_cst, cst);
+    non_cst_idx.push_back(non_cst);
+    cst_idx.push_back(cst);
+  }
+}
+
+
 Value* shared_tile::shared_offset(indices_t idx) {
   Value *result = builder_.getInt32(0);
   result = builder_.CreateAdd(result, idx[0]);
@@ -65,7 +110,6 @@ Value* shared_tile::shared_offset(indices_t idx) {
 
 shared_tile::shared_tile(Type *ty, const shapes_t &shapes, Value *ptr, llvm::IRBuilder<> &builder):
   tile(ty, shapes), ptr_(ptr), builder_(builder) {
-
 }
 
 void shared_tile::set_value(indices_t idx, Value *value) {
@@ -74,7 +118,12 @@ void shared_tile::set_value(indices_t idx, Value *value) {
 }
 
 Value* shared_tile::get_value(indices_t idx) {
-  Value *ptr = builder_.CreateGEP(ptr_, shared_offset(idx));
+  indices_t non_cst_idx, cst_idx;
+  extract_constant(idx, non_cst_idx, cst_idx);
+  Value *&base_ptr = ptr_cache_[non_cst_idx];
+  if(base_ptr == nullptr)
+    base_ptr = builder_.CreateGEP(ptr_, shared_offset(non_cst_idx));
+  Value *ptr = builder_.CreateGEP(base_ptr, shared_offset(cst_idx));
   return builder_.CreateLoad(ptr);
 }
 

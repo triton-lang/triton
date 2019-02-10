@@ -20,6 +20,7 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Transforms/Scalar/EarlyCSE.h"
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();
@@ -194,6 +195,7 @@ int main() {
   liveness.run(module);
   allocation.run();
   selection.run(module, llvm_module);
+
   // llvm source
   llvm::PrintModulePass print(llvm::outs());
   llvm::AnalysisManager<llvm::Module> analysis;

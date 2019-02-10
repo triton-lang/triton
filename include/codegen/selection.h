@@ -44,6 +44,9 @@ protected:
 
 class shared_tile: public tile {
 private:
+  void extract_constant(llvm::Value *arg, llvm::Value *&non_cst, llvm::Value *&cst);
+  void extract_constant(const indices_t &arg_idx, indices_t &non_cst_idx, indices_t &cst_idx);
+
   llvm::Value* shared_offset(indices_t idx);
 
 public:
@@ -54,6 +57,7 @@ public:
 private:
   llvm::Value *ptr_;
   llvm::IRBuilder<> &builder_;
+  std::map<indices_t, llvm::Value*> ptr_cache_;
 };
 
 class distributed_tile: public tile{
