@@ -397,6 +397,12 @@ public:
                                      instruction *next = nullptr);
 };
 
+class vectorize_inst: public unary_inst{
+  using unary_inst::unary_inst;
+
+public:
+  static vectorize_inst* create(value *arg, const std::string &name = "", instruction *next = nullptr);
+};
 
 }
 }

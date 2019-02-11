@@ -277,5 +277,9 @@ value *builder::create_copy_to_shared(value *arg, const std::string &name) {
   return insert(copy_to_shared_inst::create(arg, name));
 }
 
+value *builder::create_vectorize(value *arg, const std::string &name) {
+  return insert(vectorize_inst::create(arg, name));
+}
+
 }
 }

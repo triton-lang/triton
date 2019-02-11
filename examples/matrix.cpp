@@ -9,6 +9,7 @@
 #include "codegen/shared_copy.h"
 #include "codegen/allocation.h"
 #include "codegen/liveness.h"
+#include "codegen/vectorize.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
@@ -160,6 +161,7 @@ int main() {
   tdl::codegen::tune tune;
   tdl::codegen::liveness liveness;
   tdl::codegen::allocation allocation(&liveness);
+  tdl::codegen::vectorize vectorize(&tune);
   tdl::codegen::selection selection(&allocation, &tune);
 
   // tuning parameters
@@ -194,6 +196,7 @@ int main() {
   shared.run(module);
   liveness.run(module);
   allocation.run();
+  vectorize.run(module);
   selection.run(module, llvm_module);
 
   // llvm source

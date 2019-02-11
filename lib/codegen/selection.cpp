@@ -34,79 +34,36 @@ void distributed_tile::init_indices() {
   }
 }
 
-
-distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const axes_t &axes)
-    : tile(ty, shapes), axes_(axes) {
-  init_indices();
-  for(size_t i = 0; i < indices_.size(); i++)
-    values_.push_back(UndefValue::get(ty_));
-}
-
-/* Serialized distributed tile */
-void serialized_distributed_tile::set_value(indices_t idx, Value *v) {
-  values_[indices_[idx]] = v;
-}
-
-void serialized_distributed_tile::get_value(indices_t idx) {
-  return values_[indices_[idx]];
-}
-
-void serialized_distributed_tile::for_each(std::function<void (indices_t)> fn) {
-  for(auto &idx: indices_)
-    fn(idx.first);
-}
-
-/* Vectorized distributed tile */
-llvm::Type *vectorized_distributed_tile::make_vector_ty(llvm::Type *ty, size_t vector_size) {
+llvm::Type *distributed_tile::make_vector_ty(llvm::Type *ty, size_t vector_size) {
   if(vector_size == 1)
     return ty;
   return VectorType::get(ty, vector_size);
 }
 
-vectorized_distributed_tile::vectorized_distributed_tile(Type *ty, const shapes_t &shapes, const axes_t &axes, llvm::IRBuilder<> &builder)
-    : distributed_tile(make_vector_ty(ty, axes[0].contiguous), shapes), axes_(axes), builder_(builder) {
-  vector_size_ = 1;
-  if(ty_->isVectorTy())
-    vector_size_ = ty_->getVectorNumElements();
+distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const axes_t &axes, llvm::IRBuilder<> &builder, bool vectorize)
+    : tile(make_vector_ty(ty, vectorize?axes[0].contiguous:1), shapes), axes_(axes), builder_(builder) {
+  vector_size_ = vectorize?ty_->getVectorNumElements():1;
+  init_indices();
+  for(size_t i = 0; i < indices_.size(); i++)
+    values_.push_back(UndefValue::get(ty_));
 }
 
-
 void distributed_tile::set_value(indices_t idx, Value *v) {
-  unsigned value_idx = indices_[idx];
-  Value *&result = values_[value_idx/vector_size_*vector_size_];
-  if(v->getType() == result->getType()) {
-    assert(value_idx % vector_size_ == 0);
-    result = v;
-  }
-  // insert scalar in vector
-  else {
-    std::cout << v->getType()->getScalarType()->getTypeID() << " " << result->getType()->getScalarType()->getTypeID() << std::endl;
-    assert(vector_size_==1 || result->getType()->isVectorTy());
-    assert(v->getType()->getScalarType() == result->getType()->getScalarType());
-    result = builder_.CreateInsertElement(result, v, value_idx % vector_size_);
-  }
+  values_[indices_[idx]] = v;
 }
 
 Value* distributed_tile::get_value(indices_t idx) {
-  unsigned value_idx = indices_[idx];
-  Value *&result = values_[value_idx/vector_size_*vector_size_];
-  if(vectorize_ || vector_size_ == 1) {
-    assert(value_idx % vector_size_ == 0);
-    return result;
-  }
-  // extract scalar from vector
-  else {
-    assert(result->getType()->isVectorTy());
-    return builder_.CreateExtractElement(result, value_idx % vector_size_);
-  }
-  return result;
+  return values_[indices_[idx]];
+}
+
+unsigned distributed_tile::get_linear_index(indices_t idx) {
+  return indices_[idx];
 }
 
 void distributed_tile::for_each(std::function<void (indices_t)> fn) {
-  for(auto &idx: indices_) {
-    if(!vectorize_ || (idx.second % vector_size_ == 0))
+  for(auto &idx: indices_)
+    if(idx.second % vector_size_ == 0)
       fn(idx.first);
-  }
 }
 
 /* Shared Tile */
@@ -444,7 +401,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
         axes[d].values = {builder.getInt32(0)};
       }
     }
-    bool vectorize = dynamic_cast<ir::load_inst*>(v);
+    bool vectorize = dynamic_cast<ir::vectorize_inst*>(v);
     distributed_tile *T = new distributed_tile(ty, shapes, axes, builder, vectorize);
     tmap_.insert({v, T});
     // constant range
@@ -546,6 +503,26 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
             in_idx[k] = builder.getInt32(0);
         }
         result->set_value(out_idx, in_tile->get_value(in_idx));
+      });
+    }
+    // vectorize
+    else if(dynamic_cast<ir::vectorize_inst*>(ins)) {
+      distributed_tile* in = (distributed_tile*)tmap_.at(ins->get_operand(0));
+      unsigned vector_size = result->axis(0).contiguous;
+      std::map<unsigned, Value*> packets;
+      in->for_each([&](indices_t idx){
+        unsigned linear = in->get_linear_index(idx);
+        unsigned id = linear / vector_size;
+        if(linear % vector_size == 0)
+          packets[id] = result->get_value(idx);
+        packets[id] = builder.CreateInsertElement(packets[id], in->get_value(idx), linear % vector_size);
+        std::cout << linear << std::endl;
+      });
+      result->for_each([&](indices_t idx){
+        unsigned linear = in->get_linear_index(idx);
+        unsigned id = linear / vector_size;
+        if(linear % vector_size == 0)
+          result->set_value(idx, packets[id]);
       });
     }
     // copy to shared

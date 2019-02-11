@@ -32,6 +32,7 @@ public:
   std::vector<unsigned *> get_params(ir::module& mod);
   std::map<std::string, unsigned *> get_params(ir::instruction* i);
   unsigned *get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
+  void copy(ir::value *dst, ir::value *src) { params_[dst] = params_[src]; }
   bool check_constraints(ir::module &fn, std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);
 

@@ -399,5 +399,9 @@ copy_to_shared_inst* copy_to_shared_inst::create(value *arg, const std::string &
   return new copy_to_shared_inst(arg->get_type(), arg, name, next);
 }
 
+vectorize_inst* vectorize_inst::create(value *arg, const std::string &name, instruction *next) {
+  return new vectorize_inst(arg->get_type(), arg, name, next);
+}
+
 }
 }
