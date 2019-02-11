@@ -61,6 +61,9 @@ ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi){
 }
 
 ir::value *module::add_phi_operands(const std::string& name, ir::phi_node *&phi){
+  // already initialized
+  if(phi->get_num_operands())
+    return phi;
   ir::basic_block *block = phi->get_parent();
   for(ir::basic_block *pred: block->get_predecessors()){
     ir::value *value = get_value(name, pred);

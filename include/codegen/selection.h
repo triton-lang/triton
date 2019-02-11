@@ -54,6 +54,7 @@ public:
   shared_tile(llvm::Type* ty, const shapes_t &shapes, llvm::Value* ptr, llvm::IRBuilder<> &builder);
   void set_value(indices_t, llvm::Value *);
   llvm::Value* get_value(indices_t idx);
+  llvm::Value* get_pointer() { return ptr_; }
 
 private:
   llvm::Value *ptr_;
@@ -102,6 +103,7 @@ private:
   llvm::Constant*    llvm_constant(ir::constant *cst, llvm::LLVMContext &ctx);
 
   // grid construction
+  bool is_shared(ir::value *v);
   void create_grids(std::vector<ir::value *> &grids,
                     std::map<unsigned *, ir::value *> &references,
                     ir::function *fn);

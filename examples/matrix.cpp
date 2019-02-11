@@ -1,6 +1,7 @@
 #include <cstring>
 #include <cstdio>
 #include "cuda.h"
+#include "llvm/IR/Verifier.h"
 #include "ast/ast.h"
 #include "ir/context.h"
 #include "ir/module.h"
@@ -22,6 +23,7 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
+#include "llvm/Analysis/LoopPass.h"
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();
@@ -44,12 +46,14 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K){\
   fp32* pa[16, 8] = a + rxa[:, newaxis] + rka[newaxis, :]*M;\
   fp32* pb[16, 8] = b + ryb[:, newaxis] + rkb[newaxis, :]*K;\
   fp32* pc[16, 16] = c + rxc[:, newaxis] + ryc[newaxis, :]*M;\
+  fp32 a[16, 8] = *pa;\
+  fp32 b[16, 8] = *pb;\
   for(k = K; k > 0; k = k - 8){\
-    fp32 a[16, 8] = *pa;\
-    fp32 b[16, 8] = *pb;\
     C = dot(a, b, C);\
     pa = pa + 8*M;\
     pb = pb + 8*K;\
+    a = *pa;\
+    b = *pb;\
   }\
   *pc = C;\
 }\
@@ -200,11 +204,11 @@ int main() {
   selection.run(module, llvm_module);
 
   // llvm source
-  llvm::PrintModulePass print(llvm::outs());
-  llvm::AnalysisManager<llvm::Module> analysis;
-  print.run(llvm_module, analysis);
+  llvm::legacy::PassManager manager;
+  manager.add(llvm::createPrintModulePass(llvm::outs()));
+//  manager.add(llvm::createVerifierPass(true));
+  manager.run(llvm_module);
 
-  // generate machine code
   std::string src = generate_machine_code(llvm_module, "nvptx64-nvidia-cuda", compute_data_layout(true, true));
 //  std::cout << src << std::endl;
 

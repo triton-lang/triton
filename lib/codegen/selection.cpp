@@ -8,6 +8,7 @@
 #include "ir/function.h"
 #include "ir/type.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
+#include "llvm/Analysis/LoopInfo.h"
 
 namespace tdl{
 namespace codegen{
@@ -61,6 +62,7 @@ unsigned distributed_tile::get_linear_index(indices_t idx) {
 }
 
 void distributed_tile::for_each(std::function<void (indices_t)> fn) {
+  std::cout << "vector size: " << vector_size_ << std::endl;
   for(auto &idx: indices_)
     if(idx.second % vector_size_ == 0)
       fn(idx.first);
@@ -345,8 +347,7 @@ void selection::create_grids(std::vector<ir::value*> &grids,
         bind_references(op);
     // bind
     const auto& shapes = v->get_type()->get_tile_shapes();
-    bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(v);
-    if(is_shared)
+    if(is_shared(v))
       return;
     for(size_t d = 0; d < shapes.size(); d++){
       if(shapes[d] == 1)
@@ -368,6 +369,18 @@ void selection::create_grids(std::vector<ir::value*> &grids,
       grids.push_back(ref.second);
 }
 
+bool selection::is_shared(ir::value *v) {
+  if(auto *phi = dynamic_cast<ir::phi_node*>(v)){
+    bool result = true;
+    for(ir::value *op: phi->ops())
+      result = result && is_shared(op);
+    return result;
+  }
+  else
+    return (bool)dynamic_cast<ir::copy_to_shared_inst*>(v);
+
+}
+
 void selection::create_tile(ir::value *v, IRBuilder<> &builder,
                             const std::map<unsigned*, ir::value*>& references,
                             std::set<ir::value*> &seen, Value *sh_mem_ptr) {
@@ -380,12 +393,33 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   const auto& shapes = v->get_type()->get_tile_shapes();
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), ctx);
   // create shared tile
-  bool is_shared = dynamic_cast<ir::copy_to_shared_inst*>(v);
-  if(is_shared){
-    size_t offset = alloc_->get_offset(v);
-    Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
-    ptr = builder.CreateBitCast(ptr, ty->getPointerTo(ptr->getType()->getPointerAddressSpace()));
-    tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
+  if(is_shared(v)){
+    // shared copy
+    PointerType *ptr_ty = ty->getPointerTo(sh_mem_ptr->getType()->getPointerAddressSpace());
+    if(dynamic_cast<ir::copy_to_shared_inst*>(v)) {
+      size_t offset = alloc_->get_offset(v);
+      Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
+      ptr = builder.CreateBitCast(ptr, ptr_ty);
+      tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
+    }
+    // phi-node (double-buffering)
+    else if(auto *phi = dynamic_cast<ir::phi_node*>(v)) {
+      BasicBlock *parent = (BasicBlock*)vmap_[phi->get_parent()];
+      builder.SetInsertPoint(&*parent->getFirstInsertionPt());
+      PHINode *ptr = builder.CreatePHI(ptr_ty, 2);
+      for(ir::value *op: phi->ops()){
+        ir::instruction *inc_val = dynamic_cast<ir::instruction*>(op);
+        BasicBlock *inc_block = (BasicBlock*)vmap_[inc_val->get_parent()];
+        size_t offset = alloc_->get_offset(inc_val);
+        builder.SetInsertPoint(inc_block);
+        Value *inc_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(0));
+        inc_ptr = builder.CreateBitCast(inc_ptr, ptr_ty);
+        ptr->addIncoming(inc_ptr, inc_block);
+      }
+      tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
+    }
+    else
+      throw std::runtime_error("unknown shared memory tile");
   }
   // create distributed tile
   else {
@@ -532,6 +566,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         ti->set_value(idx, in->get_value(idx));
       });
     }
+    else if(is_shared(ins))
+      return;
     // matrix multiplication
     else if(dynamic_cast<ir::matmul_inst*>(ins)) {
       ir::value *A = ins->get_operand(0);
@@ -607,14 +643,10 @@ void selection::run(ir::module &src, Module &dst){
     dst_builder.SetInsertPoint((BasicBlock*)vmap_[fn->blocks()[0]]);
     // allocate shared memory
     Value *sh_mem_ptr = nullptr;
-    if(unsigned alloc_size = alloc_->get_allocated_size()){
+    if(alloc_->get_allocated_size()){
       Type *int_8_ty = Type::getInt8Ty(dst_ctx);
-      ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
       Type *ptr_ty = PointerType::get(int_8_ty, 3);
-      GlobalVariable *sh_mem_array =
-        new GlobalVariable(*dst_fn->getParent(), array_ty, false, GlobalVariable::InternalLinkage,
-                           nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
-      sh_mem_ptr = dst_builder.CreateBitCast(sh_mem_array, ptr_ty);
+      sh_mem_ptr = Constant::getNullValue(ptr_ty);
     }
     // create grids
     init_grids(fn, dst_builder, sh_mem_ptr);
@@ -628,6 +660,19 @@ void selection::run(ir::module &src, Module &dst){
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *inst: block->get_inst_list())
     if(auto *phi = dynamic_cast<ir::phi_node*>(inst)){
+      if(is_shared(phi)){
+//        PHINode *ptr = (PHINode*)(((shared_tile*)tmap_.at(phi))->get_pointer());
+//        for(ir::value *op: phi->ops()){
+//          ir::instruction *inc_val = dynamic_cast<ir::instruction*>(op);
+//          BasicBlock *inc_block = (BasicBlock*)vmap_[inc_val->get_parent()];
+//          size_t offset = alloc_->get_offset(inc_val);
+//          dst_builder.SetInsertPoint(inc_block);
+//          Value *inc_ptr = dst_builder.CreateGEP(sh_mem_ptr, dst_builder.getInt32(offset));
+//          inc_ptr = dst_builder.CreateBitCast(inc_ptr, ptr->getType());
+//          ptr->addIncoming(inc_ptr, inc_block);
+//        }
+        continue;
+      }
       for(unsigned n = 0; n < phi->get_num_incoming(); n++){
         ir::value *inc_val = phi->get_incoming_value(n);
         ir::basic_block *inc_block = phi->get_incoming_block(n);
