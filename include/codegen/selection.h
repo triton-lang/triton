@@ -70,22 +70,39 @@ private:
   void init_indices();
 
 public:
-  distributed_tile(llvm::Type *ty, const shapes_t& shapes, const axes_t &axes, llvm::IRBuilder<> &builder);
-  void set_vectorized_iteration() { vectorized_ = true; }
-  void unset_vectorized_iteration() { vectorized_ = false; }
-  void set_value(indices_t idx, llvm::Value *v);
+  distributed_tile(llvm::Type *ty, const shapes_t& shapes, const axes_t &axes);
+  virtual void for_each(std::function<void(indices_t)> fn) = 0;
+
+protected:
+  axes_t axes_;
+  indices_map_t indices_;
+  values_t values_;
+};
+
+class serialized_distributed_tile: public distributed_tile {
+public:
+  using distributed_tile::distributed_tile;
+
+public:
+  void set_value(indices_t, llvm::Value *);
+  llvm::Value* get_value(indices_t idx);
+  void for_each(std::function<void(indices_t)> fn);
+};
+
+class vectorized_distributed_tile: public distributed_tile {
+private:
+  llvm::Type *make_vector_ty(llvm::Type *ty, size_t vector_size);
+
+public:
+  vectorized_distributed_tile(llvm::Type *ty, const shapes_t& shapes, const axes_t &axes, llvm::IRBuilder<> &builder);
+  void set_value(indices_t, llvm::Value *);
   llvm::Value* get_value(indices_t idx);
   void for_each(std::function<void(indices_t)> fn);
 
 private:
-  axes_t axes_;
-  indices_map_t indices_;
-  values_t values_;
-  size_t vector_size_;
   llvm::IRBuilder<> &builder_;
-  bool vectorized_;
+  size_t vector_size_;
 };
-
 
 class selection{
   typedef std::map<ir::value *, llvm::Value *> vmap_t;
