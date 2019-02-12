@@ -1,6 +1,7 @@
 #include "codegen/allocation.h"
 #include "codegen/liveness.h"
 #include "codegen/layout.h"
+#include "codegen/buffer_info.h"
 #include "ir/basic_block.h"
 #include "ir/type.h"
 #include "ir/value.h"
@@ -16,7 +17,10 @@ void allocation::run(){
   typedef std::multimap<unsigned, segment> triples_map_type;
 
   auto get_num_bytes = [&](ir::value *x){
-    return x->get_type()->get_tile_bitwidth();
+    unsigned result = x->get_type()->get_tile_bitwidth();
+    if(buffer_info_->is_double(x))
+      result *= 2;
+    return result;
   };
 
   std::vector<ir::value *> I;

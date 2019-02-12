@@ -7,6 +7,7 @@
 #include "ir/module.h"
 #include "ir/function.h"
 #include "ir/type.h"
+#include "codegen/buffer_info.h"
 
 
 namespace llvm{
@@ -22,6 +23,8 @@ namespace codegen{
 
 class allocation;
 class tune;
+class buffer_info_pass;
+
 typedef std::vector<llvm::Value*> indices_t;
 
 struct distributed_axis {
@@ -103,7 +106,6 @@ private:
   llvm::Constant*    llvm_constant(ir::constant *cst, llvm::LLVMContext &ctx);
 
   // grid construction
-  bool is_shared(ir::value *v);
   void create_grids(std::vector<ir::value *> &grids,
                     std::map<unsigned *, ir::value *> &references,
                     ir::function *fn);
@@ -116,7 +118,7 @@ private:
   void lower_tile_instruction(ir::instruction *src, llvm::IRBuilder<> &builder);
 
 public:
-  selection(allocation *alloc, tune *params): alloc_(alloc), params_(params){ }
+  selection(allocation *alloc, tune *params, buffer_info_pass *buffer_info): alloc_(alloc), params_(params), buffer_info_(buffer_info){ }
   void run(ir::module &src, llvm::Module &dst);
 
 private:
@@ -124,6 +126,7 @@ private:
   tmap_t tmap_;
   allocation *alloc_;
   tune *params_;
+  buffer_info_pass *buffer_info_;
   std::map<unsigned*, distributed_axis> axes_;
 };
 

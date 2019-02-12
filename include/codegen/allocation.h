@@ -16,12 +16,12 @@ namespace codegen{
 class layout;
 class target_tuner;
 class liveness;
-class loop_info;
+class buffer_info_pass;
 
 class allocation {
 public:
-  allocation(liveness *live)
-    : liveness_(live){ }
+  allocation(liveness *live, buffer_info_pass *buffer_info)
+    : liveness_(live), buffer_info_(buffer_info){ }
 
   // accessors
   unsigned get_offset(ir::value *x)    const { return offsets_.at(x); }
@@ -36,6 +36,7 @@ private:
   size_t allocated_size_;
   // dependences
   liveness *liveness_;
+  buffer_info_pass *buffer_info_;
 };
 
 }

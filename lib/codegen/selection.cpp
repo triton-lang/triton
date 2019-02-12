@@ -62,7 +62,6 @@ unsigned distributed_tile::get_linear_index(indices_t idx) {
 }
 
 void distributed_tile::for_each(std::function<void (indices_t)> fn) {
-  std::cout << "vector size: " << vector_size_ << std::endl;
   for(auto &idx: indices_)
     if(idx.second % vector_size_ == 0)
       fn(idx.first);
@@ -347,7 +346,7 @@ void selection::create_grids(std::vector<ir::value*> &grids,
         bind_references(op);
     // bind
     const auto& shapes = v->get_type()->get_tile_shapes();
-    if(is_shared(v))
+    if(buffer_info_->is_shared(v))
       return;
     for(size_t d = 0; d < shapes.size(); d++){
       if(shapes[d] == 1)
@@ -369,18 +368,6 @@ void selection::create_grids(std::vector<ir::value*> &grids,
       grids.push_back(ref.second);
 }
 
-bool selection::is_shared(ir::value *v) {
-  if(auto *phi = dynamic_cast<ir::phi_node*>(v)){
-    bool result = true;
-    for(ir::value *op: phi->ops())
-      result = result && is_shared(op);
-    return result;
-  }
-  else
-    return (bool)dynamic_cast<ir::copy_to_shared_inst*>(v);
-
-}
-
 void selection::create_tile(ir::value *v, IRBuilder<> &builder,
                             const std::map<unsigned*, ir::value*>& references,
                             std::set<ir::value*> &seen, Value *sh_mem_ptr) {
@@ -393,7 +380,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   const auto& shapes = v->get_type()->get_tile_shapes();
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), ctx);
   // create shared tile
-  if(is_shared(v)){
+  if(buffer_info_->is_shared(v)){
     // shared copy
     PointerType *ptr_ty = ty->getPointerTo(sh_mem_ptr->getType()->getPointerAddressSpace());
     if(dynamic_cast<ir::copy_to_shared_inst*>(v)) {
@@ -405,17 +392,8 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     // phi-node (double-buffering)
     else if(auto *phi = dynamic_cast<ir::phi_node*>(v)) {
       BasicBlock *parent = (BasicBlock*)vmap_[phi->get_parent()];
-      builder.SetInsertPoint(&*parent->getFirstInsertionPt());
+      builder.SetInsertPoint(parent);
       PHINode *ptr = builder.CreatePHI(ptr_ty, 2);
-      for(ir::value *op: phi->ops()){
-        ir::instruction *inc_val = dynamic_cast<ir::instruction*>(op);
-        BasicBlock *inc_block = (BasicBlock*)vmap_[inc_val->get_parent()];
-        size_t offset = alloc_->get_offset(inc_val);
-        builder.SetInsertPoint(inc_block);
-        Value *inc_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(0));
-        inc_ptr = builder.CreateBitCast(inc_ptr, ptr_ty);
-        ptr->addIncoming(inc_ptr, inc_block);
-      }
       tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
     }
     else
@@ -550,7 +528,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         if(linear % vector_size == 0)
           packets[id] = result->get_value(idx);
         packets[id] = builder.CreateInsertElement(packets[id], in->get_value(idx), linear % vector_size);
-        std::cout << linear << std::endl;
       });
       result->for_each([&](indices_t idx){
         unsigned linear = in->get_linear_index(idx);
@@ -566,7 +543,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         ti->set_value(idx, in->get_value(idx));
       });
     }
-    else if(is_shared(ins))
+    else if(buffer_info_->is_shared(ins))
       return;
     // matrix multiplication
     else if(dynamic_cast<ir::matmul_inst*>(ins)) {
@@ -643,10 +620,14 @@ void selection::run(ir::module &src, Module &dst){
     dst_builder.SetInsertPoint((BasicBlock*)vmap_[fn->blocks()[0]]);
     // allocate shared memory
     Value *sh_mem_ptr = nullptr;
-    if(alloc_->get_allocated_size()){
+    if(unsigned alloc_size = alloc_->get_allocated_size()){
       Type *int_8_ty = Type::getInt8Ty(dst_ctx);
+      ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
       Type *ptr_ty = PointerType::get(int_8_ty, 3);
-      sh_mem_ptr = Constant::getNullValue(ptr_ty);
+      GlobalVariable *sh_mem_array =
+        new GlobalVariable(*dst_fn->getParent(), array_ty, false, GlobalVariable::ExternalLinkage,
+                           nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
+      sh_mem_ptr = dst_builder.CreateBitCast(sh_mem_array, ptr_ty);
     }
     // create grids
     init_grids(fn, dst_builder, sh_mem_ptr);
@@ -660,17 +641,38 @@ void selection::run(ir::module &src, Module &dst){
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *inst: block->get_inst_list())
     if(auto *phi = dynamic_cast<ir::phi_node*>(inst)){
-      if(is_shared(phi)){
-//        PHINode *ptr = (PHINode*)(((shared_tile*)tmap_.at(phi))->get_pointer());
-//        for(ir::value *op: phi->ops()){
-//          ir::instruction *inc_val = dynamic_cast<ir::instruction*>(op);
-//          BasicBlock *inc_block = (BasicBlock*)vmap_[inc_val->get_parent()];
-//          size_t offset = alloc_->get_offset(inc_val);
-//          dst_builder.SetInsertPoint(inc_block);
-//          Value *inc_ptr = dst_builder.CreateGEP(sh_mem_ptr, dst_builder.getInt32(offset));
-//          inc_ptr = dst_builder.CreateBitCast(inc_ptr, ptr->getType());
-//          ptr->addIncoming(inc_ptr, inc_block);
-//        }
+      if(buffer_info_->is_shared(phi)) {
+        BasicBlock *parent = (BasicBlock*)vmap_[phi->get_parent()];
+        unsigned id_pre = 0, id_loop = 1;
+        if(phi->get_incoming_block(0) == phi->get_parent())
+          std::swap(id_pre, id_loop);
+        ir::value *pre_value = phi->get_incoming_value(id_pre);
+        ir::value *loop_value = phi->get_incoming_value(id_loop);
+        BasicBlock *pre_block = (BasicBlock*)vmap_[phi->get_incoming_block(id_pre)];
+        BasicBlock *loop_block = (BasicBlock*)vmap_[phi->get_incoming_block(id_loop)];
+        int pre_offset = alloc_->get_offset(pre_value);
+        int loop_offset = alloc_->get_offset(loop_value);
+        dst_builder.SetInsertPoint(&*parent->getFirstInsertionPt());
+        PHINode *ptr = (PHINode*)(((shared_tile*)tmap_.at(phi))->get_pointer());
+        // offset
+        PHINode *offset = dst_builder.CreatePHI(dst_builder.getInt32Ty(), 2);
+        dst_builder.SetInsertPoint(parent->getFirstNonPHI());
+        Value *next_offset = dst_builder.CreateNeg(offset);
+        offset->addIncoming(dst_builder.getInt32((loop_offset - pre_offset)/4), pre_block);
+        offset->addIncoming(next_offset, loop_block);
+        // next pointer
+        Value *pre_ptr = dst_builder.CreateGEP(sh_mem_ptr, dst_builder.getInt32(pre_offset));
+        pre_ptr = dst_builder.CreateBitCast(pre_ptr, ptr->getType());
+        Value *next_ptr = dst_builder.CreateGEP(ptr, offset);
+        ptr->addIncoming(pre_ptr, pre_block);
+        ptr->addIncoming(next_ptr, loop_block);
+        // barrier
+        Function *barrier = Intrinsic::getDeclaration(dst_fn->getParent(), Intrinsic::nvvm_barrier0);
+        dst_builder.SetInsertPoint(pre_block->getTerminator());
+        dst_builder.CreateCall(barrier, {});
+        dst_builder.SetInsertPoint(loop_block->getTerminator());
+        dst_builder.CreateCall(barrier, {});
+
         continue;
       }
       for(unsigned n = 0; n < phi->get_num_incoming(); n++){

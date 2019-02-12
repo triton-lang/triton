@@ -11,6 +11,7 @@
 #include "codegen/allocation.h"
 #include "codegen/liveness.h"
 #include "codegen/vectorize.h"
+#include "codegen/buffer_info.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
@@ -162,11 +163,12 @@ int main() {
 
   // create passes
   tdl::codegen::place_shared_copy shared;
+  tdl::codegen::buffer_info_pass buffer_info;
   tdl::codegen::tune tune;
-  tdl::codegen::liveness liveness;
-  tdl::codegen::allocation allocation(&liveness);
+  tdl::codegen::liveness liveness(&buffer_info);
+  tdl::codegen::allocation allocation(&liveness, &buffer_info);
   tdl::codegen::vectorize vectorize(&tune);
-  tdl::codegen::selection selection(&allocation, &tune);
+  tdl::codegen::selection selection(&allocation, &tune, &buffer_info);
 
   // tuning parameters
   tune.run(module);
@@ -186,7 +188,6 @@ int main() {
   };
   std::map<tdl::ir::value*, std::vector<std::string>> errors;
   unsigned i = 0;
-  std::cout << tune.get_params(module).size() << std::endl;
   for(unsigned *x: tune.get_params(module))
     *x = params[i++];
   tune.check_constraints(module, errors);
@@ -198,6 +199,7 @@ int main() {
 
   // run passes
   shared.run(module);
+  buffer_info.run(module);
   liveness.run(module);
   allocation.run();
   vectorize.run(module);
@@ -206,7 +208,7 @@ int main() {
   // llvm source
   llvm::legacy::PassManager manager;
   manager.add(llvm::createPrintModulePass(llvm::outs()));
-//  manager.add(llvm::createVerifierPass(true));
+  manager.add(llvm::createVerifierPass(true));
   manager.run(llvm_module);
 
   std::string src = generate_machine_code(llvm_module, "nvptx64-nvidia-cuda", compute_data_layout(true, true));
@@ -220,7 +222,7 @@ int main() {
   CUstream cu_stream;
   int major, minor;
   compile_machine_code(cu_device, cu_context, cu_module, cu_kernel, cu_stream, major, minor, src, "test");
-  std::cout << src << std::endl;
+//  std::cout << src << std::endl;
 
   // execute machine code
   // Allocate buffers

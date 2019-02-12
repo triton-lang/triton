@@ -1,4 +1,5 @@
 #include "codegen/liveness.h"
+#include "codegen/buffer_info.h"
 #include "ir/basic_block.h"
 #include "ir/function.h"
 #include "ir/module.h"
@@ -23,7 +24,7 @@ for(ir::function *fn: mod.get_function_list()){
   // Creates live intervals
   for(auto i: indices_){
     ir::value *v = i.first;
-    if(!dynamic_cast<ir::copy_to_shared_inst*>(v))
+    if(!info_->is_shared(v) || info_->get_reference(v))
       continue;
     unsigned start = i.second;
     unsigned end = start;

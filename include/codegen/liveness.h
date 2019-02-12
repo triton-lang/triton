@@ -15,6 +15,8 @@ namespace codegen{
 
 typedef unsigned slot_index;
 
+class buffer_info_pass;
+
 struct segment {
   slot_index start;
   slot_index end;
@@ -35,11 +37,13 @@ private:
   typedef std::map<ir::value*, bool>       has_storage_map_t;
 
 public:
-  /// Intervals iterators...
+  // Intervals iterators
   using iterator = intervals_map_t::iterator;
   using const_iterator = intervals_map_t::const_iterator;
 
 public:
+  // constructor
+  liveness(buffer_info_pass *info): info_(info){ }
 
   // accessors
   const intervals_map_t& intervals() const { return intervals_; }
@@ -49,6 +53,7 @@ public:
   void run(ir::module &mod);
 
 private:
+  buffer_info_pass *info_;
   has_storage_map_t has_dedicated_storage_;
   indices_map_t indices_;
   intervals_map_t intervals_;
