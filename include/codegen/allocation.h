@@ -23,6 +23,9 @@ public:
   allocation(liveness *live, buffer_info_pass *buffer_info)
     : liveness_(live), buffer_info_(buffer_info){ }
 
+  // utilities
+  unsigned get_num_bytes(ir::value *x);
+
   // accessors
   unsigned get_offset(ir::value *x)    const { return offsets_.at(x); }
   unsigned get_allocated_size()        const { return allocated_size_; }

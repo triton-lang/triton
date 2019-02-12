@@ -212,7 +212,7 @@ int main() {
   manager.run(llvm_module);
 
   std::string src = generate_machine_code(llvm_module, "nvptx64-nvidia-cuda", compute_data_layout(true, true));
-//  std::cout << src << std::endl;
+  std::cout << src << std::endl;
 
   // compile machine code
   CUdevice   cu_device;
@@ -222,7 +222,7 @@ int main() {
   CUstream cu_stream;
   int major, minor;
   compile_machine_code(cu_device, cu_context, cu_module, cu_kernel, cu_stream, major, minor, src, "test");
-//  std::cout << src << std::endl;
+  std::cout << src << std::endl;
 
   // execute machine code
   // Allocate buffers

@@ -11,17 +11,17 @@
 namespace tdl{
 namespace codegen{
 
+unsigned allocation::get_num_bytes(ir::value *x) {
+  unsigned result = x->get_type()->get_tile_bitwidth();
+  if(buffer_info_->is_double(x))
+    result *= 2;
+  return result;
+}
+
 void allocation::run(){
   using std::max;
   using std::min;
   typedef std::multimap<unsigned, segment> triples_map_type;
-
-  auto get_num_bytes = [&](ir::value *x){
-    unsigned result = x->get_type()->get_tile_bitwidth();
-    if(buffer_info_->is_double(x))
-      result *= 2;
-    return result;
-  };
 
   std::vector<ir::value *> I;
   for(auto x: liveness_->intervals())
