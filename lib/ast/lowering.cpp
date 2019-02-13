@@ -151,6 +151,7 @@ ir::type* declaration_specifier::type(ir::module *mod) const {
   ir::context &ctx = mod->get_context();
   switch (spec_) {
   case VOID_T:      return ir::type::get_void_ty(ctx);
+  case INT1_T:      return ir::type::get_int1_ty(ctx);
   case INT8_T:      return ir::type::get_int8_ty(ctx);
   case INT16_T:     return ir::type::get_int16_ty(ctx);
   case INT32_T:     return ir::type::get_int32_ty(ctx);

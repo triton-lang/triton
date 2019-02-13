@@ -16,15 +16,18 @@ int comment();
 %}
 
 %%
-"newaxis"			{ count(); return(NEWAXIS); }
-"if"			{ count(); return(IF); }
+"@"         { count(); return(AT); }
+"newaxis"		{ count(); return(NEWAXIS); }
+"if"			  { count(); return(IF); }
 "else"			{ count(); return(ELSE); }
-"for"			{ count(); return(FOR); }
+"for"			  { count(); return(FOR); }
 "void"			{ count(); return(VOID); }
+"uint1"     { count(); return(UINT1); }
 "uint8"			{ count(); return(UINT8); }
 "uint16"		{ count(); return(UINT16); }
 "uint32"		{ count(); return(UINT32); }
 "uint64"		{ count(); return(UINT64); }
+"int1"      { count(); return(INT1); }
 "int8"			{ count(); return(INT8); }
 "int16"			{ count(); return(INT16); }
 "int32"			{ count(); return(INT32); }

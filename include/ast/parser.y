@@ -47,9 +47,9 @@ TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
 %token AND_OP OR_OP MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN ADD_ASSIGN
 %token SUB_ASSIGN LEFT_ASSIGN RIGHT_ASSIGN AND_ASSIGN
 %token XOR_ASSIGN OR_ASSIGN TYPE_NAME
-%token VOID UINT8 UINT16 UINT32 UINT64 INT8 INT16 INT32 INT64 FP32 FP64
+%token VOID UINT1 UINT8 UINT16 UINT32 UINT64 INT1 INT8 INT16 INT32 INT64 FP32 FP64
 %token IF ELSE FOR
-%token NEWAXIS ELLIPSIS
+%token NEWAXIS ELLIPSIS AT
 %token GET_GLOBAL_RANGE DOT
 
 %start translation_unit
@@ -62,10 +62,12 @@ TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
 
 type_specifier
   : VOID { $$ = new token(VOID_T); }
+  | UINT1 { $$ = new token(UINT1_T); }
   | UINT8 { $$ = new token(UINT8_T); }
   | UINT16 { $$ = new token(UINT16_T); }
   | UINT32 { $$ = new token(UINT32_T); }
   | UINT64 { $$ = new token(UINT64_T); }
+  | INT1 { $$ = new token(INT1_T);}
   | INT8 { $$ = new token(INT8_T); }
   | INT16 { $$ = new token(INT16_T); }
   | INT32 { $$ = new token(INT32_T); }
@@ -282,11 +284,12 @@ statement_list
   : statement { $$ = new list<statement*>((statement*)$1); }
   | statement_list statement { $$ = append_ptr_list<statement>($1, $2); }
 	;
-	
+
 expression_statement
 	: ';' { $$ = new no_op(); }
   | expression ';' { $$ = new expression_statement($1); }
-	;
+  | AT primary_expression expression ';' { $$ = new expression_statement($3, $2); }
+  ;
 
 selection_statement
   : IF '(' expression ')' statement { $$ = new selection_statement($3, $5); }

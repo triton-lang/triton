@@ -50,6 +50,9 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K){\
   fp32* pc[16, 16] = c + rxc[:, newaxis] + ryc[newaxis, :]*M;\
   fp32 a[16, 8] = *pa;\
   fp32 b[16, 8] = *pb;\
+  int1 checkc0[16] = (rxc < M);\
+  int1 checkc1[16] = (ryc < N);\
+  int1 checkc[16, 16] = checkc0[:, newaxis] && checkc1[newaxis, :];\
   for(k = K; k > 0; k = k - 8){\
     C = dot(a, b, C);\
     pa = pa + 8*M;\
@@ -57,7 +60,7 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K){\
     a = *pa;\
     b = *pb;\
   }\
-  *pc = C;\
+  @checkc *pc = C;\
 }\
 ";
 
@@ -215,7 +218,7 @@ int main() {
   manager.run(llvm_module);
 
   std::string src = generate_machine_code(llvm_module, "nvptx64-nvidia-cuda", compute_data_layout(true, true));
-//  std::cout << src << std::endl;
+  std::cout << src << std::endl;
 
   // compile machine code
   CUdevice   cu_device;
@@ -229,7 +232,7 @@ int main() {
   // execute machine code
   // Allocate buffers
   typedef float numeric_t;
-  size_t M = 32, N = 32, K = 32;
+  size_t M = 128, N = 128, K = 128;
   std::vector<numeric_t> c(M*N);
   std::vector<numeric_t> rc(M*N);
   std::vector<numeric_t> a(M*K);

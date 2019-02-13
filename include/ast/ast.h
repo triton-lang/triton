@@ -51,8 +51,8 @@ enum UNARY_OP_T{
 
 enum TYPE_T{
   VOID_T,
-  UINT8_T, UINT16_T, UINT32_T, UINT64_T,
-  INT8_T, INT16_T, INT32_T, INT64_T,
+  UINT1_T, UINT8_T, UINT16_T, UINT32_T, UINT64_T,
+  INT1_T, INT8_T, INT16_T, INT32_T, INT64_T,
   FLOAT32_T, FLOAT64_T
 };
 
@@ -313,17 +313,21 @@ public:
 };
 
 class statement: public node{
+
+private:
+  expression *pred_;
 };
 
 class expression_statement: public statement{
 public:
-  expression_statement(node *expr)
-    : expr_((expression*)expr){ }
+  expression_statement(node *expr, node *pred = nullptr)
+    : expr_((expression*)expr), pred_((expression*)pred){ }
 
   ir::value* codegen(ir::module * mod) const;
 
 private:
   expression *expr_;
+  expression *pred_;
 };
 
 class compound_statement: public statement{
