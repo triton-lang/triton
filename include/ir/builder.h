@@ -119,6 +119,8 @@ public:
   // Intrinsics
   value *create_copy_to_shared(value *arg, const std::string &name = "");
   value *create_vectorize(value *arg, const std::string &name = "");
+  value *create_barrier(const std::string &name = "");
+
 private:
   context &ctx_;
   basic_block *block_;

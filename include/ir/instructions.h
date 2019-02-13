@@ -397,6 +397,15 @@ public:
                                      instruction *next = nullptr);
 };
 
+class barrier_inst: public instruction{
+private:
+  barrier_inst(context &ctx, const std::string &name, instruction *next);
+
+public:
+  static barrier_inst* create(context &ctx, const std::string &name = "",
+                                            instruction *next = nullptr);
+};
+
 class vectorize_inst: public unary_inst{
   using unary_inst::unary_inst;
 

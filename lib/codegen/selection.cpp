@@ -211,6 +211,11 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     BasicBlock *dest = block(ii->get_dest());
     return builder.Insert(BranchInst::Create(dest));
   }
+  if(dynamic_cast<ir::barrier_inst*>(inst)){
+    Module *module = builder.GetInsertBlock()->getModule();
+    Function *barrier = Intrinsic::getDeclaration(module, Intrinsic::nvvm_barrier0);
+    return builder.CreateCall(barrier, {});
+  }
   if(auto* ii = dynamic_cast<ir::phi_node*>(inst)){
     Type *ty = type(ii->get_type()->get_scalar_ty());
     unsigned num_ops = ii->get_num_operands();

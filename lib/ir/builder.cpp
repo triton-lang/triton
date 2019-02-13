@@ -281,5 +281,9 @@ value *builder::create_vectorize(value *arg, const std::string &name) {
   return insert(vectorize_inst::create(arg, name));
 }
 
+value *builder::create_barrier(const std::string &name) {
+  return insert(barrier_inst::create(ctx_, name));
+}
+
 }
 }

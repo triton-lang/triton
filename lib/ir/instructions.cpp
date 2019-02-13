@@ -403,5 +403,13 @@ vectorize_inst* vectorize_inst::create(value *arg, const std::string &name, inst
   return new vectorize_inst(arg->get_type(), arg, name, next);
 }
 
+barrier_inst::barrier_inst(context &ctx, const std::string &name,
+                                                       instruction *next)
+  : instruction(type::get_void_ty(ctx), 0, name, next){ }
+
+barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instruction *next) {
+  return new barrier_inst(ctx, name, next);
+}
+
 }
 }

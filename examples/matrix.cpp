@@ -12,6 +12,7 @@
 #include "codegen/liveness.h"
 #include "codegen/vectorize.h"
 #include "codegen/buffer_info.h"
+#include "codegen/barriers.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
@@ -167,6 +168,7 @@ int main() {
   tdl::codegen::tune tune;
   tdl::codegen::liveness liveness(&buffer_info);
   tdl::codegen::allocation allocation(&liveness, &buffer_info);
+  tdl::codegen::barriers barriers(&allocation, &buffer_info);
   tdl::codegen::vectorize vectorize(&tune);
   tdl::codegen::selection selection(&allocation, &tune, &buffer_info);
 
@@ -202,17 +204,18 @@ int main() {
   buffer_info.run(module);
   liveness.run(module);
   allocation.run();
+  barriers.run(module);
   vectorize.run(module);
   selection.run(module, llvm_module);
 
   // llvm source
   llvm::legacy::PassManager manager;
-  manager.add(llvm::createPrintModulePass(llvm::outs()));
+//  manager.add(llvm::createPrintModulePass(llvm::outs()));
   manager.add(llvm::createVerifierPass(true));
   manager.run(llvm_module);
 
   std::string src = generate_machine_code(llvm_module, "nvptx64-nvidia-cuda", compute_data_layout(true, true));
-  std::cout << src << std::endl;
+//  std::cout << src << std::endl;
 
   // compile machine code
   CUdevice   cu_device;
@@ -222,7 +225,6 @@ int main() {
   CUstream cu_stream;
   int major, minor;
   compile_machine_code(cu_device, cu_context, cu_module, cu_kernel, cu_stream, major, minor, src, "test");
-  std::cout << src << std::endl;
 
   // execute machine code
   // Allocate buffers

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "codegen/shared_copy.h"
 #include "ir/module.h"
 #include "ir/function.h"
@@ -8,10 +9,10 @@ namespace tdl {
 
 namespace codegen{
 
-void place_shared_copy::add(ir::value *x, ir::builder &builder) {
+void place_shared_copy::add_copies(ir::value *x, ir::builder &builder) {
   if(auto *phi = dynamic_cast<ir::phi_node*>(x)) {
     for(auto *op: phi->ops())
-      add(op, builder);
+      add_copies(op, builder);
   }
   else {
     if(auto *i = dynamic_cast<ir::instruction*>(x)){
@@ -31,8 +32,8 @@ void place_shared_copy::run(ir::module &mod) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list())
     if(dynamic_cast<ir::matmul_inst*>(i)){
-      add(i->get_operand(0), builder);
-      add(i->get_operand(1), builder);
+      add_copies(i->get_operand(0), builder);
+      add_copies(i->get_operand(1), builder);
     }
 }
 
