@@ -26,12 +26,16 @@ public:
   const basic_block *get_parent() const { return parent_;  }
   basic_block *get_parent()             { return parent_;  }
   void erase_from_parent();
+  // mask
+  value* set_mask(value *mask)          { mask_ = mask; }
+  value* get_mask()                     { return mask_; }
   // helpers
   bool has_tile_result_or_op();
 
 private:
   basic_block *parent_;
   value *pred_;
+  value *mask_;
 };
 
 //===----------------------------------------------------------------------===//

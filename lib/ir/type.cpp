@@ -33,7 +33,7 @@ unsigned type::get_primitive_size_in_bits() const {
 }
 
 unsigned type::get_integer_bitwidth() const
-{ return ((integer_type*)(this))->get_bitwidth(); }
+{ assert(id_ == IntegerTyID); return ((integer_type*)(this))->get_bitwidth(); }
 
 unsigned type::get_tile_bitwidth() const
 { return ((tile_type*)(this))->get_bitwidth(); }

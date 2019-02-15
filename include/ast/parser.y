@@ -121,7 +121,7 @@ primary_expression
   | constant ELLIPSIS constant { $$ = new constant_range($1, $3); }
   | builtin            { $$ = $1; }
   | STRING_LITERAL     { $$ = new string_literal(yytext); }
-  | '(' expression ')' { $$ = $1; }
+  | '(' expression ')' { $$ = $2; }
 	;
 
 slice
@@ -155,7 +155,7 @@ unary_operator
 
 cast_expression
 	: unary_expression { $$ = $1; }
-  | '(' type_name ')' cast_expression { $$ = new cast_operator($1, $2); }
+  | '(' type_name ')' cast_expression { $$ = new cast_operator($2, $4); }
 	;
 
 multiplicative_expression

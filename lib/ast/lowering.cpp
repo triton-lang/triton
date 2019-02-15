@@ -16,33 +16,34 @@ namespace ast{
 
 /* node */
 ir::value *node::explicit_cast(ir::builder &builder, ir::value *src, ir::type *dst_ty){
-  ir::type *src_ty = src->get_type()->get_scalar_ty();
+  ir::type *src_scalar_ty = src->get_type()->get_scalar_ty();
+  ir::type *dst_scalar_ty = dst_ty->get_scalar_ty();
   bool src_signed = false;
   bool dst_signed = false;
-  if(src_ty == dst_ty)
+  if(src_scalar_ty == dst_scalar_ty)
     return src;
-  else if(src_ty->is_integer_ty() && src_signed && dst_ty->is_floating_point_ty())
+  else if(src_scalar_ty->is_integer_ty() && src_signed && dst_scalar_ty->is_floating_point_ty())
     return builder.create_si_to_fp(src, dst_ty);
 
-  else if(src_ty->is_integer_ty() && !src_signed && dst_ty->is_floating_point_ty())
+  else if(src_scalar_ty->is_integer_ty() && !src_signed && dst_scalar_ty->is_floating_point_ty())
     return builder.create_ui_to_fp(src, dst_ty);
 
-  else if(src_ty->is_floating_point_ty() && dst_ty->is_integer_ty() && dst_signed)
+  else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_integer_ty() && dst_signed)
     return builder.create_fp_to_si(src, dst_ty);
 
-  else if(src_ty->is_floating_point_ty() && dst_ty->is_integer_ty() && !dst_signed)
+  else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_integer_ty() && !dst_signed)
     return builder.create_fp_to_ui(src, dst_ty);
 
-  else if(src_ty->is_floating_point_ty() && dst_ty->is_floating_point_ty() &&
-          src_ty->get_fp_mantissa_width() < dst_ty->get_fp_mantissa_width())
+  else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_floating_point_ty() &&
+          src_scalar_ty->get_fp_mantissa_width() < dst_scalar_ty->get_fp_mantissa_width())
     return builder.create_fp_ext(src, dst_ty);
 
-  else if(src_ty->is_floating_point_ty() && dst_ty->is_floating_point_ty() &&
-          src_ty->get_fp_mantissa_width() > dst_ty->get_fp_mantissa_width())
+  else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_floating_point_ty() &&
+          src_scalar_ty->get_fp_mantissa_width() > dst_scalar_ty->get_fp_mantissa_width())
     return builder.create_fp_trunc(src, dst_ty);
 
-  else if(src_ty->is_integer_ty() && dst_ty->is_integer_ty() &&
-          src_ty->get_integer_bitwidth())
+  else if(src_scalar_ty->is_integer_ty() && dst_scalar_ty->is_integer_ty() &&
+          src_scalar_ty->get_integer_bitwidth())
     return builder.create_int_cast(src, dst_ty, dst_signed);
 
   else
@@ -247,7 +248,14 @@ ir::value* compound_statement::codegen(ir::module* mod) const{
 
 /* expression statement */
 ir::value* expression_statement::codegen(ir::module *mod) const{
-  return expr_->codegen(mod);
+  ir::value *expr = expr_->codegen(mod);
+  if(mask_) {
+    ir::instruction *itn = dynamic_cast<ir::instruction*>(expr);
+    assert(itn);
+    ir::value *mask = mask_->codegen(mod);
+    itn->set_mask(mask);
+  }
+  return expr;
 }
 
 /* Iteration statement */
@@ -325,7 +333,7 @@ ir::value* initializer::codegen(ir::module * mod) const{
   ir::value *value = ir::undef_value::get(ty);
   if(expr_){
     value = expr_->codegen(mod);
-    value = explicit_cast(mod->get_builder(), value, ty->get_scalar_ty());
+    value = explicit_cast(mod->get_builder(), value, ty);
     implicit_broadcast(mod, value, ty);
   }
   value->set_name(name);
@@ -526,7 +534,7 @@ ir::value *assignment_expression::codegen(ir::module *mod) const{
     assert(x->get_op()==DEREF);
     assert(x->lvalue());
     ir::value *ptr = x->lvalue()->codegen(mod);
-    mod->get_builder().create_store(ptr, rvalue);
+    rvalue = mod->get_builder().create_store(ptr, rvalue);
   }
   return rvalue;
 }

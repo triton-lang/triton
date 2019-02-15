@@ -186,8 +186,8 @@ cast_inst *cast_inst::create(op_t op, value *arg, type *ty, const std::string &n
 cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, const std::string &name, instruction *next){
   type *arg_ty = arg->get_type();
   assert(arg_ty->is_int_or_tileint_ty() && ty->is_int_or_tileint_ty() && "Invalid integer cast!");
-  unsigned arg_bits = arg_ty->get_integer_bitwidth();
-  unsigned dst_bits = ty->get_integer_bitwidth();
+  unsigned arg_bits = arg_ty->get_scalar_ty()->get_integer_bitwidth();
+  unsigned dst_bits = ty->get_scalar_ty()->get_integer_bitwidth();
   op_t op = (arg_bits == dst_bits ? ic::BitCast :
             (arg_bits > dst_bits  ? ic::Trunc :
             (is_signed            ? ic::SExt : ic::ZExt)));

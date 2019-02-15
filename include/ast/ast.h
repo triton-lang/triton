@@ -185,7 +185,8 @@ private:
 
 public:
   binary_operator(BIN_OP_T op, node *lhs, node *rhs)
-    : op_(op), lhs_((expression*)lhs), rhs_((expression*)rhs) { }
+    : op_(op), lhs_((expression*)lhs), rhs_((expression*)rhs) {
+  }
   ir::value* codegen(ir::module *) const;
 
 private:
@@ -320,14 +321,14 @@ private:
 
 class expression_statement: public statement{
 public:
-  expression_statement(node *expr, node *pred = nullptr)
-    : expr_((expression*)expr), pred_((expression*)pred){ }
+  expression_statement(node *expr, node *mask = nullptr)
+    : expr_((expression*)expr), mask_((expression*)mask){ }
 
   ir::value* codegen(ir::module * mod) const;
 
 private:
   expression *expr_;
-  expression *pred_;
+  expression *mask_;
 };
 
 class compound_statement: public statement{

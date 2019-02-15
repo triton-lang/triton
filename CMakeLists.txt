@@ -15,7 +15,7 @@ find_package(LLVM REQUIRED CONFIG)
 message(STATUS ${LLVM_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(llvm_libs support core irreader MC NVPTXCodeGen all)
+#llvm_map_components_to_libnames(llvm_libs all)
 
 #Default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -34,7 +34,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS} -std=c++11")
 # TDL
 file(GLOB_RECURSE LIBTDL_SRC lib/*.cpp)
 add_library(tdl SHARED ${LIBTDL_SRC} ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
-target_link_libraries(tdl ${llvm_libs})
+target_link_libraries(tdl LLVM)
 
 # Examples
 add_subdirectory(examples)

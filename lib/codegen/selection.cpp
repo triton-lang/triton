@@ -1,6 +1,7 @@
 #include "codegen/selection.h"
 #include "codegen/tune.h"
 #include "codegen/allocation.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include "ir/context.h"
@@ -9,6 +10,8 @@
 #include "ir/type.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/IR/BasicBlock.h"
 
 namespace tdl{
 namespace codegen{
@@ -121,8 +124,8 @@ Value* shared_tile::shared_offset(indices_t idx) {
   return result;
 }
 
-shared_tile::shared_tile(Type *ty, const shapes_t &shapes, Value *ptr, llvm::IRBuilder<> &builder):
-  tile(ty, shapes), ptr_(ptr), builder_(builder) {
+shared_tile::shared_tile(Type *ty, const shapes_t &shapes, Value *ptr, llvm::IRBuilder<> &builder, Value *offset):
+  tile(ty, shapes), ptr_(ptr), builder_(builder), offset_(offset) {
 }
 
 void shared_tile::set_value(indices_t idx, Value *value) {
@@ -404,25 +407,17 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
         std::swap(id_pre, id_loop);
       ir::value *pre_value = phi->get_incoming_value(id_pre);
       ir::value *loop_value = phi->get_incoming_value(id_loop);
-      BasicBlock *pre_block = (BasicBlock*)vmap_[phi->get_incoming_block(id_pre)];
-      BasicBlock *loop_block = (BasicBlock*)vmap_[phi->get_incoming_block(id_loop)];
       if(parent->empty())
         builder.SetInsertPoint(parent);
       else
         builder.SetInsertPoint(&*parent->getFirstInsertionPt());
       PHINode *ptr = builder.CreatePHI(ptr_ty, 2);
-      // offset
       PHINode *offset = builder.CreatePHI(builder.getInt32Ty(), 2);
-      Value *next_offset = builder.CreateNeg(offset);
-      offset->addIncoming(builder.getInt32(alloc_->get_num_bytes(phi) / 2 / 4), pre_block);
-      offset->addIncoming(next_offset, loop_block);
       // next pointer
       Value *pre_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(alloc_->get_offset(phi)));
       pre_ptr = builder.CreateBitCast(pre_ptr, ptr->getType());
       Value *next_ptr = builder.CreateGEP(ptr, offset);
-      ptr->addIncoming(pre_ptr, pre_block);
-      ptr->addIncoming(next_ptr, loop_block);
-      tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
+      tmap_.insert({phi, new shared_tile(ty, shapes, ptr, builder, offset)});
       tmap_.insert({pre_value, new shared_tile(ty, shapes, pre_ptr, builder)});
       tmap_.insert({loop_value, new shared_tile(ty, shapes, next_ptr, builder)});
     }
@@ -483,14 +478,43 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
 
 
 void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &builder) {
-  Module *module = builder.GetInsertBlock()->getModule();
+  BasicBlock *block = builder.GetInsertBlock();
+  Module *module = block->getModule();
+  Function *function = block->getParent();
+  ir::value *mask = ins->get_mask();
   LLVMContext &ctx = builder.getContext();
+  // helper to handle masks
+  auto insert_masked = [&](indices_t idx, std::function<Value*()> insert_value) {
+    BasicBlock *block = builder.GetInsertBlock();
+    Value *result;
+    if(mask){
+      Value *llvm_mask = tmap_.at(mask)->get_value(idx);
+      BasicBlock *then_bb = BasicBlock::Create(ctx, "", function);
+      BasicBlock *done_bb = BasicBlock::Create(ctx, "", function);
+      builder.CreateCondBr(llvm_mask, then_bb, done_bb);
+      builder.SetInsertPoint(then_bb);
+      result = insert_value();
+      builder.CreateBr(done_bb);
+      builder.SetInsertPoint(done_bb);
+      if(!ins->get_type()->is_void_ty()){
+        Type *ty = result->getType();
+        PHINode *phi = builder.CreatePHI(ty, 2);
+        phi->addIncoming(llvm::UndefValue::get(ty), block);
+        phi->addIncoming(result, then_bb);
+        return (Value*)phi;
+      }
+    }
+    else
+      result = insert_value();
+    return result;
+  };
+
   // store
   if(auto *x = dynamic_cast<ir::store_inst*>(ins)) {
     distributed_tile* ptr = (distributed_tile*)tmap_.at(x->get_pointer_operand());
     tile *value = tmap_.at(x->get_value_operand());
     ptr->for_each([&](indices_t idx){
-      builder.CreateStore(value->get_value(idx), ptr->get_value(idx));
+      insert_masked(idx, [&]{ return builder.CreateStore(value->get_value(idx), ptr->get_value(idx)); });
     });
   }
   else {
@@ -511,7 +535,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       Value *offset = builder.CreateMul(builder.getInt32(shapes[0]), group_id);
       result->for_each([&](indices_t idx){
         BinaryOperator *bin = static_cast<BinaryOperator*>(idx[0]);
-        result->set_value(idx, builder.CreateAdd(bin, offset));
+        result->set_value(idx, insert_masked(idx, [&]{ return builder.CreateAdd(bin, offset); }));
       });
     }
     // reshape
@@ -530,7 +554,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     // splat
     else if(dynamic_cast<ir::splat_inst*>(ins)) {
       result->for_each([&](indices_t idx) {
-        result->set_value(idx, llvm_value(ins->get_operand(0), builder));
+        result->set_value(idx, insert_masked(idx, [&]{ return llvm_value(ins->get_operand(0), builder); }));
       });
     }
     // broadcast
@@ -603,7 +627,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           else
             return llvm_value(x, builder);
         };
-        result->set_value(idx, llvm_inst(ins, value, builder));
+        result->set_value(idx, insert_masked(idx, [&]() { return llvm_inst(ins, value, builder); }));
       });
     }
   }
@@ -625,6 +649,7 @@ void selection::run(ir::module &src, Module &dst){
   vmap_.clear();
   LLVMContext &dst_ctx = dst.getContext();
   IRBuilder<> dst_builder(dst_ctx);
+  std::map<ir::value*, llvm::BasicBlock*> block_of;
 
   // iterate over functions
   for(ir::function *fn: src.get_function_list()) {
@@ -661,6 +686,7 @@ void selection::run(ir::module &src, Module &dst){
     }
     // create grids
     init_grids(fn, dst_builder, sh_mem_ptr);
+    std::map<ir::basic_block*, BasicBlock*> last_block;
     // iterate through block
     for(ir::basic_block *block: fn->blocks()) {
       BasicBlock *parent = (BasicBlock*)vmap_[block];
@@ -671,6 +697,7 @@ void selection::run(ir::module &src, Module &dst){
         lower_instruction(i, dst_builder);
         if(dynamic_cast<ir::phi_node*>(i))
           dst_builder.SetInsertPoint(parent);
+        last_block[block] = dst_builder.GetInsertBlock();
       }
     }
     // add phi operands
@@ -678,12 +705,31 @@ void selection::run(ir::module &src, Module &dst){
     for(ir::instruction *inst: block->get_inst_list())
     if(auto *phi = dynamic_cast<ir::phi_node*>(inst)){
       if(buffer_info_->is_shared(phi)) {
+        PHINode *ptr = (PHINode*)((shared_tile*)tmap_.at(phi))->get_pointer();
+        PHINode *offset = (PHINode*)((shared_tile*)tmap_.at(phi))->get_offset();
+        for(unsigned n = 0; n < phi->get_num_incoming(); n++){
+          ir::value *inc_val = phi->get_incoming_value(n);
+          ir::basic_block *inc_block = phi->get_incoming_block(n);
+          BasicBlock *llvm_inc_block = last_block.at(inc_block);
+          shared_tile *inc_shared = (shared_tile*)tmap_.at(inc_val);
+          GetElementPtrInst *inc_ptr = dyn_cast<GetElementPtrInst>(inc_shared->get_pointer());
+          if(inc_ptr && ptr == inc_ptr->getPointerOperand()){
+            dst_builder.SetInsertPoint(llvm_inc_block->getTerminator());
+            Value *next_offset = dst_builder.CreateNeg(offset);
+            offset->addIncoming(next_offset, llvm_inc_block);
+          }
+          else {
+            offset->addIncoming(dst_builder.getInt32(alloc_->get_num_bytes(phi)/(2*4)), llvm_inc_block);
+          }
+          ptr->addIncoming(inc_shared->get_pointer(), llvm_inc_block);
+        }
         continue;
       }
       for(unsigned n = 0; n < phi->get_num_incoming(); n++){
         ir::value *inc_val = phi->get_incoming_value(n);
         ir::basic_block *inc_block = phi->get_incoming_block(n);
-        BasicBlock *llvm_inc_block = (BasicBlock*)vmap_[inc_block];
+        std::cout << typeid(*inc_val).name() << " " << inc_val << " " << inc_block << std::endl;
+        BasicBlock *llvm_inc_block = last_block.at(inc_block);
         if(phi->get_type()->is_tile_ty()) {
           distributed_tile *phi_tile = (distributed_tile*)tmap_.at(phi);
           distributed_tile *inc_tile = (distributed_tile*)tmap_.at(inc_val);

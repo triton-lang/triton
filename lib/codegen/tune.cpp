@@ -67,10 +67,17 @@ void tune::init_c_graph(ir::instruction *v) {
   }
   // Element-wise
   else if(dynamic_cast<ir::user*>(v)){
+    std::cout << typeid(*v).name() << std::endl;
     for(unsigned i = 0; i < shapes.size(); i ++)
-      for(ir::value* op: v->ops()){
+      for(ir::value* op: v->ops())
         add_constraint({v, i}, {op, i});
-      }
+  }
+
+  /* Add mask constraints */
+  if(ir::value *mask = v->get_mask()){
+    std::cout << typeid(*mask).name() << " " << typeid(*v->ops()[0]).name() << std::endl;
+    for(unsigned i = 0; i < shapes.size(); i++)
+      add_constraint({v->ops()[0], i}, {mask, i});
   }
 }
 
@@ -99,6 +106,7 @@ std::vector<unsigned*> tune::get_params(ir::module &mod) {
   for(ir::instruction *i : block->get_inst_list())
   for(auto &x: params_[i])
     if(seen.insert(x.second).second && *x.second == 0){
+      std::cout << typeid(*i).name() << std::endl;
       result.push_back(x.second);
     }
   return result;

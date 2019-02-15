@@ -54,13 +54,15 @@ private:
   llvm::Value* shared_offset(indices_t idx);
 
 public:
-  shared_tile(llvm::Type* ty, const shapes_t &shapes, llvm::Value* ptr, llvm::IRBuilder<> &builder);
+  shared_tile(llvm::Type* ty, const shapes_t &shapes, llvm::Value* ptr, llvm::IRBuilder<> &builder, llvm::Value* offset = nullptr);
   void set_value(indices_t, llvm::Value *);
   llvm::Value* get_value(indices_t idx);
   llvm::Value* get_pointer() { return ptr_; }
+  llvm::Value* get_offset() { return offset_; }
 
 private:
   llvm::Value *ptr_;
+  llvm::Value *offset_;
   llvm::IRBuilder<> &builder_;
   std::map<indices_t, llvm::Value*> ptr_cache_;
 };
