@@ -481,14 +481,16 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
   BasicBlock *block = builder.GetInsertBlock();
   Module *module = block->getModule();
   Function *function = block->getParent();
-  ir::value *mask = ins->get_mask();
+  ir::instruction::mask_info_t mask = ins->get_mask();
   LLVMContext &ctx = builder.getContext();
   // helper to handle masks
   auto insert_masked = [&](indices_t idx, std::function<Value*()> insert_value) {
     BasicBlock *block = builder.GetInsertBlock();
     Value *result;
-    if(mask){
-      Value *llvm_mask = tmap_.at(mask)->get_value(idx);
+    if(mask.pred){
+//      if(mask.else_value)
+//      std::cout << mask.else_value << std::endl;
+      Value *llvm_mask = tmap_.at(mask.pred)->get_value(idx);
       BasicBlock *then_bb = BasicBlock::Create(ctx, "", function);
       BasicBlock *done_bb = BasicBlock::Create(ctx, "", function);
       builder.CreateCondBr(llvm_mask, then_bb, done_bb);
@@ -499,7 +501,10 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       if(!ins->get_type()->is_void_ty()){
         Type *ty = result->getType();
         PHINode *phi = builder.CreatePHI(ty, 2);
-        phi->addIncoming(llvm::UndefValue::get(ty), block);
+//        if(mask.else_value)
+//          phi->addIncoming(tmap_.at(mask.else_value)->get_value(idx), block);
+//        else
+          phi->addIncoming(llvm::UndefValue::get(ty), block);
         phi->addIncoming(result, then_bb);
         return (Value*)phi;
       }
@@ -728,7 +733,6 @@ void selection::run(ir::module &src, Module &dst){
       for(unsigned n = 0; n < phi->get_num_incoming(); n++){
         ir::value *inc_val = phi->get_incoming_value(n);
         ir::basic_block *inc_block = phi->get_incoming_block(n);
-        std::cout << typeid(*inc_val).name() << " " << inc_val << " " << inc_block << std::endl;
         BasicBlock *llvm_inc_block = last_block.at(inc_block);
         if(phi->get_type()->is_tile_ty()) {
           distributed_tile *phi_tile = (distributed_tile*)tmap_.at(phi);

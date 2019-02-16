@@ -16,26 +16,32 @@ class context;
 //===----------------------------------------------------------------------===//
 
 class instruction: public user{
+public:
+  struct mask_info_t {
+    value *pred;
+    value *else_value;
+  };
+
 protected:
   // constructors
   instruction(type *ty, unsigned num_ops, const std::string &name = "", instruction *next = nullptr);
 
 public:
   // parent
-  void set_parent(basic_block *block)   { parent_ = block; }
-  const basic_block *get_parent() const { return parent_;  }
-  basic_block *get_parent()             { return parent_;  }
+  void set_parent(basic_block *block)                         { parent_ = block; }
+  const basic_block *get_parent() const                       { return parent_;  }
+  basic_block *get_parent()                                   { return parent_;  }
   void erase_from_parent();
   // mask
-  value* set_mask(value *mask)          { mask_ = mask; }
-  value* get_mask()                     { return mask_; }
+  value* set_mask(value *pred, value *else_value = nullptr)   { mask_ = {pred, else_value}; }
+  const mask_info_t get_mask() const                          { return mask_; }
   // helpers
   bool has_tile_result_or_op();
 
 private:
   basic_block *parent_;
   value *pred_;
-  value *mask_;
+  mask_info_t mask_;
 };
 
 //===----------------------------------------------------------------------===//

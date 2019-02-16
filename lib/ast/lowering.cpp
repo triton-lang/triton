@@ -527,16 +527,16 @@ ir::value *conditional_expression::codegen(ir::module *mod) const{
 
 /* Assignment expression */
 ir::value *assignment_expression::codegen(ir::module *mod) const{
-  ir::value *rvalue = rvalue_->codegen(mod);
+  ir::value *rhs = rhs_->codegen(mod);
   if(auto *x = dynamic_cast<const named_expression*>(lvalue_))
-    mod->set_value(x->id()->name(), rvalue);
+    mod->set_value(x->id()->name(), rhs);
   else if(auto* x = dynamic_cast<const unary_operator*>(lvalue_)){
     assert(x->get_op()==DEREF);
     assert(x->lvalue());
     ir::value *ptr = x->lvalue()->codegen(mod);
-    rvalue = mod->get_builder().create_store(ptr, rvalue);
+    rhs = mod->get_builder().create_store(ptr, rhs);
   }
-  return rvalue;
+  return rhs;
 }
 
 /* Type name */

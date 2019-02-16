@@ -67,17 +67,15 @@ void tune::init_c_graph(ir::instruction *v) {
   }
   // Element-wise
   else if(dynamic_cast<ir::user*>(v)){
-    std::cout << typeid(*v).name() << std::endl;
     for(unsigned i = 0; i < shapes.size(); i ++)
       for(ir::value* op: v->ops())
         add_constraint({v, i}, {op, i});
   }
 
   /* Add mask constraints */
-  if(ir::value *mask = v->get_mask()){
-    std::cout << typeid(*mask).name() << " " << typeid(*v->ops()[0]).name() << std::endl;
+  if(ir::value *pred = v->get_mask().pred){
     for(unsigned i = 0; i < shapes.size(); i++)
-      add_constraint({v->ops()[0], i}, {mask, i});
+      add_constraint({v->ops()[0], i}, {pred, i});
   }
 }
 

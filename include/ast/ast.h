@@ -287,14 +287,17 @@ public:
 class assignment_expression: public expression{
 public:
   assignment_expression(node *lvalue, ASSIGN_OP_T op, node *rvalue)
-    : lvalue_((named_expression*)lvalue), op_(op), rvalue_((expression*)rvalue) { }
+    : lhs_((named_expression*)lvalue), op_(op), rhs_((expression*)rvalue) { }
+
+  const expression *lhs() const { return lhs_; }
+  const expression *rhs() const { return rhs_; }
 
   ir::value* codegen(ir::module *mod) const;
 
 public:
   ASSIGN_OP_T op_;
-  const expression *lvalue_;
-  const expression *rvalue_;
+  const expression *lhs_;
+  const expression *rhs_;
 };
 
 

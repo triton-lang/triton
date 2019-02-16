@@ -54,8 +54,8 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
   int1 checkc1[16] = ryc < N;\
   int1 checkc[16, 16] = checkc0[:, newaxis] && checkc1[newaxis, :];\
   for(k = K; k > 0; k = k - 8){\
-    int1 sanitya[16, 8] = (k >= bound);\
-    int1 sanityb[16, 8] = (k >= bound);\
+    int1 sanitya[16, 8] = (k > 16);\
+    int1 sanityb[16, 8] = (k > 16);\
     C = dot(a, b, C);\
     pa = pa + 8*M;\
     pb = pb + 8*K;\
@@ -236,7 +236,7 @@ int main() {
   // execute machine code
   // Allocate buffers
   typedef float numeric_t;
-  size_t M = 128, N = 128, K = 128;
+  size_t M = 32, N = 32, K = 32;
   size_t bound = 8;
   std::vector<numeric_t> c(M*N);
   std::vector<numeric_t> rc(M*N);
