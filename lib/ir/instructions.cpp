@@ -73,6 +73,30 @@ phi_node* phi_node::create(type *ty, unsigned num_reserved, const std::string &n
 //                               binary_operator classes
 //===----------------------------------------------------------------------===//
 
+std::string binary_operator::repr_impl() const {
+  switch(op_) {
+  case llop::Add  : return "add";
+  case llop::FAdd : return "fadd";
+  case llop::Sub  : return "sub";
+  case llop::FSub : return "fsub";
+  case llop::Mul  : return "mul";
+  case llop::FMul : return "fmul";
+  case llop::UDiv : return "udiv";
+  case llop::SDiv : return "sdiv";
+  case llop::FDiv : return "fdiv";
+  case llop::URem : return "urem";
+  case llop::SRem : return "srem";
+  case llop::FRem : return "frem";
+  case llop::Shl  : return "shl";
+  case llop::LShr : return "lshr";
+  case llop::AShr : return "ashr";
+  case llop::And  : return "and";
+  case llop::Or   : return "or";
+  case llop::Xor  : return "xor";
+  default: throw std::runtime_error("unknown binary operator");
+  }
+}
+
 binary_operator::binary_operator(op_t op, value *lhs, value *rhs, type *ty, const std::string &name, instruction *next)
     : instruction(ty, 2, name, next), op_(op){
   set_operand(0, lhs);
@@ -108,6 +132,38 @@ binary_operator *binary_operator::create_not(value *arg, const std::string &name
 //===----------------------------------------------------------------------===//
 
 // cmp_inst
+std::string cmp_inst::repr_impl() const {
+  switch (pred_) {
+    case llop::FCMP_FALSE :  return "false";
+    case llop::FCMP_OEQ   :  return "fcmp_oeq";
+    case llop::FCMP_OGT   :  return "fcmp_ogt";
+    case llop::FCMP_OGE   :  return "fcmp_oge";
+    case llop::FCMP_OLT   :  return "fcmp_olt";
+    case llop::FCMP_OLE   :  return "fcmp_ole";
+    case llop::FCMP_ONE   :  return "fcmp_one";
+    case llop::FCMP_ORD   :  return "fcmp_ord";
+    case llop::FCMP_UNO   :  return "fcmp_uno";
+    case llop::FCMP_UEQ   :  return "fcmp_ueq";
+    case llop::FCMP_UGT   :  return "fcmp_ugt";
+    case llop::FCMP_UGE   :  return "fcmp_uge";
+    case llop::FCMP_ULT   :  return "fcmp_ult";
+    case llop::FCMP_ULE   :  return "fcmp_ule";
+    case llop::FCMP_UNE   :  return "fcmp_une";
+    case llop::FCMP_TRUE  :  return "true";
+    case llop::ICMP_EQ    :  return "icmp_eq";
+    case llop::ICMP_NE    :  return "icmp_ne";
+    case llop::ICMP_UGT   :  return "icmp_ugt";
+    case llop::ICMP_UGE   :  return "icmp_uge";
+    case llop::ICMP_ULT   :  return "icmp_ult";
+    case llop::ICMP_ULE   :  return "icmp_ule";
+    case llop::ICMP_SGT   :  return "icmp_sgt";
+    case llop::ICMP_SGE   :  return "icmp_sge";
+    case llop::ICMP_SLT   :  return "icmp_slt";
+    case llop::ICMP_SLE   :  return "icmp_sle";
+    default: throw std::runtime_error("unreachable");
+  }
+}
+
 cmp_inst::cmp_inst(type *ty, cmp_inst::pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next)
     : instruction(ty, 2, name, next), pred_(pred) {
   set_operand(0, lhs);
@@ -123,11 +179,11 @@ type* cmp_inst::make_cmp_result_type(type *ty){
 
 
 bool cmp_inst::is_fp_predicate(pred_t pred) {
-  return pred >= pcmp::FIRST_FCMP_PREDICATE && pred <= pcmp::LAST_FCMP_PREDICATE;
+  return pred >= llop::FIRST_FCMP_PREDICATE && pred <= llop::LAST_FCMP_PREDICATE;
 }
 
 bool cmp_inst::is_int_predicate(pred_t pred) {
-  return pred >= pcmp::FIRST_ICMP_PREDICATE && pred <= pcmp::LAST_ICMP_PREDICATE;
+  return pred >= llop::FIRST_ICMP_PREDICATE && pred <= llop::LAST_ICMP_PREDICATE;
 }
 
 // icmp_inst
@@ -157,6 +213,24 @@ unary_inst::unary_inst(type *ty, value *v, const std::string &name, instruction 
 //                               cast_inst classes
 //===----------------------------------------------------------------------===//
 
+std::string cast_inst::repr_impl() const {
+  switch (op_){
+  case ic::Trunc:         return "trunc";
+  case ic::ZExt:          return "zext";
+  case ic::SExt:          return "sext";
+  case ic::FPTrunc:       return "fp_trunc";
+  case ic::FPExt:         return "fp_ext";
+  case ic::UIToFP:        return "ui_to_fp";
+  case ic::SIToFP:        return "si_to_fp";
+  case ic::FPToUI:        return "fp_to_ui";
+  case ic::FPToSI:        return "fp_to_si";
+  case ic::PtrToInt:      return "ptr_to_int";
+  case ic::IntToPtr:      return "int_to_ptr";
+  case ic::BitCast:       return "bitcast";
+  case ic::AddrSpaceCast: return "addr_space_cast";
+  default: throw std::runtime_error("unreachable");
+  }
+}
 // TODO
 bool cast_inst::is_valid(op_t op, value *arg, type *ty) {
   return true;
@@ -330,6 +404,18 @@ store_inst* store_inst::create(value *ptr, value *v, const std::string &name, in
 //===----------------------------------------------------------------------===//
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
+
+std::string retile_inst::shape_suffix(ir::type* ty){
+  std::string res = "[";
+  const auto& shapes = ty->get_tile_shapes();
+  for(unsigned i = 0; i < shapes.size(); i++){
+    res += std::to_string(ty->get_tile_shapes()[i]);
+    if(i < shapes.size() - 1)
+      res += ", ";
+  }
+  res += "]";
+  return res;
+}
 
 retile_inst::retile_inst(value *arg, const std::vector<unsigned> &shapes,
                          const std::string &name, instruction *next)

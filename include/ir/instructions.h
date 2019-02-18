@@ -22,6 +22,8 @@ public:
     value *else_value;
   };
 
+  virtual std::string repr_impl() const = 0;
+
 protected:
   // constructors
   instruction(type *ty, unsigned num_ops, const std::string &name = "", instruction *next = nullptr);
@@ -37,6 +39,8 @@ public:
   const mask_info_t get_mask() const                          { return mask_; }
   // helpers
   bool has_tile_result_or_op();
+  // repr
+  std::string repr() const                                    { return repr_impl(); }
 
 private:
   basic_block *parent_;
@@ -51,6 +55,7 @@ private:
 class phi_node: public instruction{
 private:
   phi_node(type *ty, unsigned num_reserved, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "phi"; }
 
 public:
   void set_incoming_value(unsigned i, value *v);
@@ -59,6 +64,9 @@ public:
   basic_block *get_incoming_block(unsigned i) { return blocks_[i]; }
   unsigned get_num_incoming() { return get_num_operands(); }
   void add_incoming(value *v, basic_block *block);
+
+  // Type
+  void set_type(type *ty) { ty_ = ty; }
 
   // Factory methods
   static phi_node* create(type *ty, unsigned num_reserved, const std::string &name = "", instruction *next = nullptr);
@@ -75,6 +83,10 @@ private:
 class binary_operator: public instruction{
 public:
   typedef llvm::BinaryOperator::BinaryOps op_t;
+  using llop = llvm::BinaryOperator::BinaryOps;
+
+private:
+  std::string repr_impl() const;
 
 protected:
   // Constructors
@@ -116,7 +128,10 @@ public:
 class cmp_inst: public instruction{
 public:
   typedef llvm::CmpInst::Predicate pred_t;
-  using pcmp = llvm::CmpInst;
+  using llop = llvm::CmpInst;
+
+private:
+  std::string repr_impl() const;
 
 protected:
   cmp_inst(type *ty, pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next);
@@ -163,6 +178,9 @@ protected:
 
 class cast_inst: public unary_inst{
   using ic = llvm::Instruction::CastOps;
+
+private:
+  std::string repr_impl() const;
 
 public:
   typedef llvm::CastInst::CastOps op_t;
@@ -219,6 +237,8 @@ class terminator_inst: public instruction{
 
 // return instruction
 class return_inst: public terminator_inst{
+private:
+  std::string repr_impl() const { return "ret"; }
   return_inst(context &ctx, value *ret_val, instruction *next);
 
 public:
@@ -234,6 +254,9 @@ public:
 
 // base branch instruction
 class branch_inst: public terminator_inst{
+private:
+  std::string repr_impl() const { return "br"; }
+
 protected:
   using terminator_inst::terminator_inst;
 
@@ -246,8 +269,9 @@ public:
 
 // conditional branch
 class cond_branch_inst: public branch_inst {
-  cond_branch_inst(basic_block *if_dst, basic_block *else_dst, value *cond, instruction *next);
+private:
   friend class branch_inst;
+  cond_branch_inst(basic_block *if_dst, basic_block *else_dst, value *cond, instruction *next);
 
 public:
   basic_block *get_true_dest()  { return (basic_block*)get_operand(0); }
@@ -257,6 +281,7 @@ public:
 
 // unconditional branch
 class uncond_branch_inst: public branch_inst {
+private:
   friend class branch_inst;
   uncond_branch_inst(basic_block *dst, instruction *next);
 
@@ -269,6 +294,7 @@ public:
 
 class getelementptr_inst: public instruction{
 private:
+  std::string repr_impl() const { return "getelementptr"; }
   getelementptr_inst(type *pointee_ty, value *ptr, const std::vector<value*> &idx, const std::string &name, instruction *next);
 
 private:
@@ -297,6 +323,7 @@ private:
 
 class load_inst: public unary_inst{
 private:
+  std::string repr_impl() const { return "load"; }
   load_inst(value *ptr, const std::string &name, instruction *next);
 
 private:
@@ -312,6 +339,7 @@ public:
 
 class store_inst: public instruction{
 private:
+  std::string repr_impl() const { return "store"; }
   store_inst(value *ptr, value *v, const std::string &name, instruction *next);
 
 public:
@@ -330,36 +358,43 @@ public:
 
 class retile_inst: public unary_inst {
 protected:
-  retile_inst(value *arg, const std::vector<unsigned> &shapes, const std::string &name, instruction *next);
+  retile_inst(value *arg, const std::vector<unsigned> &shape_suffix, const std::string &name, instruction *next);
+  static std::string shape_suffix(ir::type* ty);
 };
 
 // reshape
 
 class reshape_inst: public retile_inst {
+private:
   using retile_inst::retile_inst;
+  std::string repr_impl() const { return "reshape" + shape_suffix(get_type()); }
 
 public:
-  static instruction* create(value *arg, const std::vector<unsigned> &shapes,
+  static instruction* create(value *arg, const std::vector<unsigned> &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
 };
 
 // splat
 
 class splat_inst: public retile_inst {
+private:
   using retile_inst::retile_inst;
+  std::string repr_impl() const { return "splat" + shape_suffix(get_type()); }
 
 public:
-  static instruction* create(value *arg, const std::vector<unsigned> &shapes,
+  static instruction* create(value *arg, const std::vector<unsigned> &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
 };
 
 // broadcast
 
 class broadcast_inst: public retile_inst {
+private:
   using retile_inst::retile_inst;
+  std::string repr_impl() const { return "broadcast" + shape_suffix(get_type()); }
 
 public:
-  static instruction* create(value *arg, const std::vector<unsigned> &shapes,
+  static instruction* create(value *arg, const std::vector<unsigned> &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
 };
 
@@ -374,7 +409,9 @@ protected:
 };
 
 class get_global_range_inst: public builtin_inst {
+private:
   get_global_range_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "get_global_range(" + std::to_string(axis_) + ")"; }
 
 public:
   static instruction* create(context &ctx, unsigned axis, unsigned size,
@@ -387,7 +424,9 @@ private:
 };
 
 class matmul_inst: public builtin_inst {
+private:
   matmul_inst(value *A, value *B, value *C, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "dot"; }
 
 public:
   static instruction* create(value *A, value *B, value *C,
@@ -401,7 +440,9 @@ public:
 //===----------------------------------------------------------------------===//
 
 class copy_to_shared_inst: public unary_inst{
+private:
   using unary_inst::unary_inst;
+  std::string repr_impl() const { return "copy_to_shared"; }
 
 public:
   static copy_to_shared_inst* create(value *arg, const std::string &name = "",
@@ -411,6 +452,7 @@ public:
 class barrier_inst: public instruction{
 private:
   barrier_inst(context &ctx, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "barrier"; }
 
 public:
   static barrier_inst* create(context &ctx, const std::string &name = "",
@@ -418,7 +460,9 @@ public:
 };
 
 class vectorize_inst: public unary_inst{
+private:
   using unary_inst::unary_inst;
+  std::string repr_impl() const { return "vectorize"; }
 
 public:
   static vectorize_inst* create(value *arg, const std::string &name = "", instruction *next = nullptr);

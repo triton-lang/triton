@@ -5,6 +5,7 @@
 #include "ast/ast.h"
 #include "ir/context.h"
 #include "ir/module.h"
+#include "ir/print.h"
 #include "codegen/selection.h"
 #include "codegen/tune.h"
 #include "codegen/shared_copy.h"
@@ -54,13 +55,15 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
   int1 checkc1[16] = ryc < N;\
   int1 checkc[16, 16] = checkc0[:, newaxis] && checkc1[newaxis, :];\
   for(k = K; k > 0; k = k - 8){\
-    int1 sanitya[16, 8] = (k > 16);\
-    int1 sanityb[16, 8] = (k > 16);\
+    int1 checka[16, 8] = (k > 8);\
+    int1 checkb[16, 8] = (k > 8);\
     C = dot(a, b, C);\
     pa = pa + 8*M;\
     pb = pb + 8*K;\
-    @sanitya a = *pa;\
-    @sanityb b = *pb;\
+    @checka a = *pa;\
+    @checkb b = *pb;\
+    if(k <= 8){\
+    }\
   }\
   @checkc *pc = C;\
 }\
@@ -166,6 +169,8 @@ int main() {
   program->codegen(&module);
   llvm::LLVMContext llvm_context;
   llvm::Module llvm_module("test", llvm_context);
+
+  tdl::ir::print(module, std::cout);
 
   // create passes
   tdl::codegen::place_shared_copy shared;

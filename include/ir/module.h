@@ -42,9 +42,13 @@ public:
   // Setters
   void set_value(const std::string& name, basic_block* block, value *x);
   void set_value(const std::string& name, value* x);
+  void set_type(const std::string& name, basic_block* block, type* x);
+  void set_type(const std::string& name, type* x);
   // Getters
   value *get_value(const std::string& name, basic_block* block);
   value *get_value(const std::string& name);
+  type *get_type(const std::string& name, basic_block* block);
+  type *get_type(const std::string& name);
   // Seal block -- no more predecessors will be added
   void seal_block(basic_block *block);
   // Functions
@@ -58,6 +62,7 @@ private:
   context &context_;
   builder builder_;
   std::map<val_key_t, value*> values_;
+  std::map<val_key_t, type*> types_;
   std::set<basic_block*> sealed_blocks_;
   std::map<basic_block*, std::map<std::string, phi_node*>> incomplete_phis_;
   functions_list_t functions_;

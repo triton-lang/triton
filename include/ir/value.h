@@ -33,10 +33,10 @@ public:
   type* get_type() const { return ty_; }
 
 private:
-  type *ty_;
   std::string name_;
 
 protected:
+  type *ty_;
   std::set<user*> users_;
 };
 

@@ -212,6 +212,7 @@ void function::bind_parameters(ir::module *mod, ir::function *fn) const{
     if(id_i){
       args[i]->set_name(id_i->name());
       mod->set_value(id_i->name(), nullptr, args[i]);
+      mod->set_type(id_i->name(), nullptr, args[i]->get_type());
     }
   }
 }
@@ -262,7 +263,8 @@ ir::value* expression_statement::codegen(ir::module *mod) const{
 ir::value* iteration_statement::codegen(ir::module *mod) const{
   ir::builder &builder = mod->get_builder();
   ir::context &ctx = mod->get_context();
-  ir::function *fn = builder.get_insert_block()->get_parent();
+  ir::basic_block *current_bb = builder.get_insert_block();
+  ir::function *fn = current_bb->get_parent();
   ir::basic_block *loop_bb = ir::basic_block::create(ctx, "loop", fn);
   init_->codegen(mod);
   builder.create_br(loop_bb);
@@ -270,8 +272,10 @@ ir::value* iteration_statement::codegen(ir::module *mod) const{
   statements_->codegen(mod);
   exec_->codegen(mod);
   ir::value *cond = stop_->codegen(mod);
+  ir::basic_block *stop_bb = builder.get_insert_block();
   ir::basic_block *next_bb = ir::basic_block::create(ctx, "postloop", fn);
   builder.create_cond_br(cond, loop_bb, next_bb);
+  mod->seal_block(stop_bb);
   mod->seal_block(loop_bb);
   mod->seal_block(builder.get_insert_block());
   mod->seal_block(next_bb);
@@ -296,8 +300,7 @@ ir::value* selection_statement::codegen(ir::module* mod) const{
   // Then
   builder.set_insert_point(then_bb);
   then_value_->codegen(mod);
-  if(else_value_)
-    builder.create_br(endif_bb);
+  builder.create_br(endif_bb);
   mod->seal_block(then_bb);
   // Else
   if(else_value_){
@@ -338,6 +341,7 @@ ir::value* initializer::codegen(ir::module * mod) const{
   }
   value->set_name(name);
   mod->set_value(name, value);
+  mod->set_type(name, ty);
   return value;
 }
 
@@ -527,16 +531,16 @@ ir::value *conditional_expression::codegen(ir::module *mod) const{
 
 /* Assignment expression */
 ir::value *assignment_expression::codegen(ir::module *mod) const{
-  ir::value *rhs = rhs_->codegen(mod);
+  ir::value *rvalue = rvalue_->codegen(mod);
   if(auto *x = dynamic_cast<const named_expression*>(lvalue_))
-    mod->set_value(x->id()->name(), rhs);
+    mod->set_value(x->id()->name(), rvalue);
   else if(auto* x = dynamic_cast<const unary_operator*>(lvalue_)){
     assert(x->get_op()==DEREF);
     assert(x->lvalue());
     ir::value *ptr = x->lvalue()->codegen(mod);
-    rhs = mod->get_builder().create_store(ptr, rhs);
+    rvalue = mod->get_builder().create_store(ptr, rvalue);
   }
-  return rhs;
+  return rvalue;
 }
 
 /* Type name */
