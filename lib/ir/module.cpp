@@ -48,7 +48,7 @@ ir::phi_node* module::make_phi(ir::type *ty, unsigned num_values, ir::basic_bloc
   return res;
 }
 
-ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi){
+ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi, ir::value** pre_user){
   // find non-self references
   std::set<ir::value*> non_self_ref;
   std::copy_if(phi->ops().begin(), phi->ops().end(), std::inserter(non_self_ref, non_self_ref.begin()),
@@ -61,12 +61,12 @@ ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi){
   std::set<ir::user*> users = phi->get_users();
   phi->replace_all_uses_with(same);
   phi->erase_from_parent();
+  if(pre_user)
+    *pre_user = same;
   for(ir::user* u: users)
   if(auto *uphi = dynamic_cast<ir::phi_node*>(u))
     if(uphi != phi)
-      try_remove_trivial_phis(uphi);
-  if(auto *new_phi = dynamic_cast<ir::phi_node*>(same))
-    return try_remove_trivial_phis(new_phi);
+      try_remove_trivial_phis(uphi, &same);
   return same;
 }
 
@@ -80,10 +80,11 @@ ir::value *module::add_phi_operands(const std::string& name, ir::phi_node *&phi)
     ir::value *value = get_value(name, pred);
     phi->add_incoming(value, pred);
   }
-  return try_remove_trivial_phis(phi);
+  return try_remove_trivial_phis(phi, nullptr);
 }
 
 ir::value *module::get_value_recursive(const std::string& name, ir::basic_block *block) {
+  std::cout << "getting value " << name << std::endl;
   ir::value *result;
   auto &preds = block->get_predecessors();
   if(block)
@@ -141,6 +142,7 @@ void module::seal_block(ir::basic_block *block){
   for(auto &x: incomplete_phis_[block])
     add_phi_operands(x.first, x.second);
   sealed_blocks_.insert(block);
+  incomplete_phis_[block].clear();
 }
 
 /* functions */

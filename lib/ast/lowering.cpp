@@ -292,6 +292,10 @@ ir::value* selection_statement::codegen(ir::module* mod) const{
   ir::basic_block *then_bb = ir::basic_block::create(ctx, "then", fn);
   ir::basic_block *else_bb = else_value_?ir::basic_block::create(ctx, "else", fn):nullptr;
   ir::basic_block *endif_bb = ir::basic_block::create(ctx, "endif", fn);
+  mod->seal_block(then_bb);
+  if(else_value_)
+    mod->seal_block(else_bb);
+
   // Branch
   if(else_value_)
     builder.create_cond_br(cond, then_bb, else_bb);
@@ -301,13 +305,11 @@ ir::value* selection_statement::codegen(ir::module* mod) const{
   builder.set_insert_point(then_bb);
   then_value_->codegen(mod);
   builder.create_br(endif_bb);
-  mod->seal_block(then_bb);
   // Else
   if(else_value_){
     builder.set_insert_point(else_bb);
     else_value_->codegen(mod);
     builder.create_br(endif_bb);
-    mod->seal_block(else_bb);
   }
   // Endif
   builder.set_insert_point(endif_bb);

@@ -15,6 +15,8 @@ namespace ir {
 
 namespace codegen{
 
+class buffer_info_pass;
+
 class place_shared_copy {
 private:
   typedef std::pair<unsigned, unsigned> interval_t;
@@ -22,10 +24,14 @@ private:
 
 private:
   bool intersect(const interval_vec_t &I, interval_t i);
-  void add_copies(ir::value *x, ir::builder &builder);
+  void add_copy(ir::value *x, ir::builder &builder);
 
 public:
+  place_shared_copy(buffer_info_pass *info): info_(info) { }
   void run(ir::module &mod);
+
+private:
+  buffer_info_pass *info_;
 };
 
 

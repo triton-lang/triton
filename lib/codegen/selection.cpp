@@ -299,6 +299,7 @@ std::vector<Value*> delinearize(Value *trailing, std::vector<unsigned> &shapes, 
 }
 
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
+  std::cout << "name: " << v->get_name() << std::endl;
   const auto& shapes = v->get_type()->get_tile_shapes();
   size_t dim = shapes.size();
   std::vector<unsigned> contiguous(dim);
@@ -354,7 +355,7 @@ void selection::create_grids(std::vector<ir::value*> &grids,
         bind_references(op);
     // bind
     const auto& shapes = v->get_type()->get_tile_shapes();
-    if(buffer_info_->is_shared(v))
+    if(dynamic_cast<ir::copy_to_shared_inst*>(v) || buffer_info_->is_double(v))
       return;
     for(size_t d = 0; d < shapes.size(); d++){
       if(shapes[d] == 1)
@@ -388,7 +389,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   const auto& shapes = v->get_type()->get_tile_shapes();
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), ctx);
   // create shared tile
-  if(buffer_info_->is_shared(v)){
+  if(dynamic_cast<ir::copy_to_shared_inst*>(v) || (buffer_info_->is_double(v))){
     // shared copy
     PointerType *ptr_ty = ty->getPointerTo(sh_mem_ptr->getType()->getPointerAddressSpace());
     if(dynamic_cast<ir::copy_to_shared_inst*>(v)) {
@@ -478,6 +479,7 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
 
 
 void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &builder) {
+  std::cout << "lowering " << ins->get_name() << std::endl;
   BasicBlock *block = builder.GetInsertBlock();
   Module *module = block->getModule();
   Function *function = block->getParent();
@@ -602,7 +604,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         ti->set_value(idx, in->get_value(idx));
       });
     }
-    else if(buffer_info_->is_shared(ins))
+    else if(dynamic_cast<ir::copy_to_shared_inst*>(ins) || (buffer_info_->is_double(ins)))
       return;
     // matrix multiplication
     else if(dynamic_cast<ir::matmul_inst*>(ins)) {
@@ -694,13 +696,15 @@ void selection::run(ir::module &src, Module &dst){
     std::map<ir::basic_block*, BasicBlock*> last_block;
     // iterate through block
     for(ir::basic_block *block: fn->blocks()) {
+      std::cout << "block: " << block->get_name() << std::endl;
       BasicBlock *parent = (BasicBlock*)vmap_[block];
       dst_builder.SetInsertPoint(parent);
       for(ir::instruction *i: block->get_inst_list()){
-        if(dynamic_cast<ir::phi_node*>(i))
+        if(dynamic_cast<ir::phi_node*>(i) && !parent->empty()){
           dst_builder.SetInsertPoint(&*parent->getFirstInsertionPt());
+        }
         lower_instruction(i, dst_builder);
-        if(dynamic_cast<ir::phi_node*>(i))
+        if(dynamic_cast<ir::phi_node*>(i) && !parent->empty())
           dst_builder.SetInsertPoint(parent);
         last_block[block] = dst_builder.GetInsertBlock();
       }
@@ -709,7 +713,7 @@ void selection::run(ir::module &src, Module &dst){
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *inst: block->get_inst_list())
     if(auto *phi = dynamic_cast<ir::phi_node*>(inst)){
-      if(buffer_info_->is_shared(phi)) {
+      if(buffer_info_->is_double(phi)) {
         PHINode *ptr = (PHINode*)((shared_tile*)tmap_.at(phi))->get_pointer();
         PHINode *offset = (PHINode*)((shared_tile*)tmap_.at(phi))->get_offset();
         for(unsigned n = 0; n < phi->get_num_incoming(); n++){
@@ -728,25 +732,28 @@ void selection::run(ir::module &src, Module &dst){
           }
           ptr->addIncoming(inc_shared->get_pointer(), llvm_inc_block);
         }
-        continue;
       }
-      for(unsigned n = 0; n < phi->get_num_incoming(); n++){
-        ir::value *inc_val = phi->get_incoming_value(n);
-        ir::basic_block *inc_block = phi->get_incoming_block(n);
-        BasicBlock *llvm_inc_block = last_block.at(inc_block);
-        if(phi->get_type()->is_tile_ty()) {
-          distributed_tile *phi_tile = (distributed_tile*)tmap_.at(phi);
-          distributed_tile *inc_tile = (distributed_tile*)tmap_.at(inc_val);
-          phi_tile->for_each([&](indices_t idx){
-            PHINode *llvm_phi = (PHINode*)phi_tile->get_value(idx);
-            Value *llvm_inc_val = inc_tile->get_value(idx);
+      else {
+        std::cout << "phi: " << phi->get_name() << std::endl;
+        for(unsigned n = 0; n < phi->get_num_incoming(); n++){
+          ir::value *inc_val = phi->get_incoming_value(n);
+          ir::basic_block *inc_block = phi->get_incoming_block(n);
+          BasicBlock *llvm_inc_block = last_block.at(inc_block);
+          std::cout << "incoming block: " << inc_block->get_name() << " " << llvm_inc_block->getName().str() << std::endl;
+          if(phi->get_type()->is_tile_ty()) {
+            distributed_tile *phi_tile = (distributed_tile*)tmap_.at(phi);
+            distributed_tile *inc_tile = (distributed_tile*)tmap_.at(inc_val);
+            phi_tile->for_each([&](indices_t idx){
+              PHINode *llvm_phi = (PHINode*)phi_tile->get_value(idx);
+              Value *llvm_inc_val = inc_tile->get_value(idx);
+              llvm_phi->addIncoming(llvm_inc_val, llvm_inc_block);
+            });
+          }
+          else {
+            PHINode *llvm_phi = (PHINode*)vmap_.at(phi);
+            Value *llvm_inc_val = vmap_.at(inc_val);
             llvm_phi->addIncoming(llvm_inc_val, llvm_inc_block);
-          });
-        }
-        else {
-          PHINode *llvm_phi = (PHINode*)vmap_.at(phi);
-          Value *llvm_inc_val = vmap_.at(inc_val);
-          llvm_phi->addIncoming(llvm_inc_val, llvm_inc_block);
+          }
         }
       }
     }

@@ -12,25 +12,37 @@ namespace codegen{
 
 // run pass on module
 void buffer_info_pass::run(ir::module &mod) {
+  // Find which buffers are shared
+  for(ir::function *fn: mod.get_function_list())
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction *i: block->get_inst_list())
+    if(dynamic_cast<ir::matmul_inst*>(i)){
+      shared_.insert(i->get_operand(0));
+      shared_.insert(i->get_operand(1));
+    }
+
+  // Handles phi nodes
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list()) {
     if(!i->get_type()->is_tile_ty())
       continue;
     // handle phi
-    if(auto *phi = dynamic_cast<ir::phi_node*>(i)){
+    if(auto *phi = dynamic_cast<ir::phi_node*>(i))
+    if(is_shared(phi)){
       // determine if the value is in shared memory
-      bool is_shared = true;
       bool is_double = false;
       for(unsigned n = 0; n < phi->get_num_incoming(); n++){
-        ir::value *inc_val = phi->get_incoming_value(n);
-        ir::value *inc_block = phi->get_incoming_block(n);
-        is_shared = is_shared &&  dynamic_cast<ir::copy_to_shared_inst*>(inc_val);
-        is_double = is_double || inc_block == phi->get_parent();
+        ir::basic_block *inc_block = phi->get_incoming_block(n);
+        ir::value *terminator = inc_block->get_inst_list().back();
+        if(auto *br = dynamic_cast<ir::cond_branch_inst*>(terminator))
+          is_double = is_double || br->get_true_dest() == phi->get_parent()
+                                || br->get_false_dest() == phi->get_parent();
+        else if(auto *br = dynamic_cast<ir::uncond_branch_inst*>(terminator))
+          is_double = is_double || br->get_dest() == phi->get_parent();
+        else
+          throw std::runtime_error("unreachable");
       }
-      // add to shared
-      if(is_shared)
-        shared_.insert(phi);
       // add to double-buffered
       if(is_double)
         double_.insert(phi);
@@ -41,10 +53,10 @@ void buffer_info_pass::run(ir::module &mod) {
         refs_[inc_val] = phi;
       }
     }
-    // handle shared copy
-    if(auto *copy = dynamic_cast<ir::copy_to_shared_inst*>(i))
-      shared_.insert(copy);
   }
+
+  for(auto &ref: refs_)
+    shared_.insert(ref.first);
 }
 
 // query double-buffered status

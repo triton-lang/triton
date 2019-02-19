@@ -63,6 +63,7 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
     @checka a = *pa;\
     @checkb b = *pb;\
     if(k <= 8){\
+      @checka a = *pa;\
     }\
   }\
   @checkc *pc = C;\
@@ -170,11 +171,10 @@ int main() {
   llvm::LLVMContext llvm_context;
   llvm::Module llvm_module("test", llvm_context);
 
-  tdl::ir::print(module, std::cout);
 
   // create passes
-  tdl::codegen::place_shared_copy shared;
   tdl::codegen::buffer_info_pass buffer_info;
+  tdl::codegen::place_shared_copy shared(&buffer_info);
   tdl::codegen::tune tune;
   tdl::codegen::liveness liveness(&buffer_info);
   tdl::codegen::allocation allocation(&liveness, &buffer_info);
@@ -211,10 +211,14 @@ int main() {
   if(errors.size())
     exit(EXIT_FAILURE);
 
+  // print
+
   // run passes
-  shared.run(module);
+  tdl::ir::print(module, std::cout);
   buffer_info.run(module);
+  shared.run(module);
   liveness.run(module);
+  tdl::ir::print(module, std::cout);
   allocation.run();
   barriers.run(module);
   vectorize.run(module);

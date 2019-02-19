@@ -102,10 +102,14 @@ void allocation::run(){
     for(ir::value *y: interferences[x])
       Adj = std::max(Adj, starts[y] + get_num_bytes(y));
     offsets_[x] = starts[x] + colors[x] * Adj;
-    if(auto *phi = dynamic_cast<ir::phi_node*>(x))
-    for(ir::value *px: phi->ops()){
-      if(offsets_.find(px) == offsets_.end())
-        offsets_[px] = offsets_[x];
+    if(buffer_info_->is_double(x)){
+      ir::phi_node *phi = (ir::phi_node*)x;
+      for(unsigned i = 0; i < phi->get_num_incoming(); i++){
+        ir::value *inc_val = phi->get_incoming_value(i);
+        assert(offsets_.find(inc_val) == offsets_.end());
+        offsets_[inc_val] = offsets_[phi];
+        std::cout << x->get_name() << " " <<  inc_val->get_name() << " " << inc_val << std::endl;
+      }
     }
   }
 

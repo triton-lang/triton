@@ -26,7 +26,7 @@ bool barriers::intersect(const interval_vec_t &X, const interval_vec_t &Y) {
 }
 
 void barriers::add_reference(ir::value *v, interval_vec_t &res){
-  if(buffer_info_->is_shared(v)){
+  if(dynamic_cast<ir::copy_to_shared_inst*>(v)){
     unsigned offset = alloc_->get_offset(v);
     unsigned num_bytes = alloc_->get_num_bytes(v);
     res.push_back(interval_t(offset, offset + num_bytes));
@@ -51,7 +51,7 @@ void barriers::insert_barrier(ir::instruction *instr, ir::builder &builder) {
       builder.create_barrier();
     }
   }
-  else{
+  else {
     builder.set_insert_point(instr);
     builder.create_barrier();
   }
