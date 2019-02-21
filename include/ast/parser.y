@@ -48,7 +48,7 @@ TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
 %token SUB_ASSIGN LEFT_ASSIGN RIGHT_ASSIGN AND_ASSIGN
 %token XOR_ASSIGN OR_ASSIGN TYPE_NAME
 %token VOID UINT1 UINT8 UINT16 UINT32 UINT64 INT1 INT8 INT16 INT32 INT64 FP32 FP64
-%token IF ELSE FOR
+%token IF ELSE FOR CONTINUE
 %token NEWAXIS ELLIPSIS AT
 %token GET_GLOBAL_RANGE DOT
 
@@ -266,6 +266,7 @@ statement
 	| expression_statement { $$ = $1; }
 	| selection_statement { $$ = $1; }
 	| iteration_statement { $$ = $1; }
+  | jump_statement { $$ = $1; }
 	;
 
 compound_statement
@@ -300,6 +301,9 @@ iteration_statement
   : FOR '(' expression_statement expression_statement expression ')' statement { $$ = new iteration_statement($3, $4, $5, $7); }
 	;
 
+jump_statement
+  : CONTINUE ';'          { $$ = new continue_statement(); }
+;
 
 /* -------------------------- */
 /*         Declarator         */

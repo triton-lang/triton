@@ -4,9 +4,17 @@
 #include <map>
 #include <set>
 #include <string>
+#include <functional>
 #include "builder.h"
 
 namespace tdl{
+
+namespace ast{
+
+class iteration_statement;
+
+}
+
 namespace ir{
 
 class basic_block;
@@ -27,10 +35,14 @@ class module {
 public:
   typedef std::map<std::string, global_value*> symbols_map_t;
   typedef std::vector<function*> functions_list_t;
+  struct current_iteration_info_t{
+    ast::iteration_statement *statement;
+    basic_block *block;
+  };
 
 private:
   phi_node *make_phi(type *ty, unsigned num_values, basic_block *block);
-  value *try_remove_trivial_phis(ir::phi_node *&phi, ir::value** pre_user);
+  value *try_remove_trivial_phis(ir::phi_node *&phi, value **pre_user);
   value *add_phi_operands(const std::string& name, phi_node *&phi);
   value *get_value_recursive(const std::string& name, basic_block *block);
   void push_function(function *fn) { functions_.push_back(fn); }
@@ -44,11 +56,13 @@ public:
   void set_value(const std::string& name, value* x);
   void set_type(const std::string& name, basic_block* block, type* x);
   void set_type(const std::string& name, type* x);
+  void set_continue_fn(std::function<ir::value*()> fn);
   // Getters
   value *get_value(const std::string& name, basic_block* block);
   value *get_value(const std::string& name);
   type *get_type(const std::string& name, basic_block* block);
   type *get_type(const std::string& name);
+  std::function<ir::value*()> get_continue_fn();
   // Seal block -- no more predecessors will be added
   void seal_block(basic_block *block);
   // Functions
@@ -67,6 +81,8 @@ private:
   std::map<basic_block*, std::map<std::string, phi_node*>> incomplete_phis_;
   functions_list_t functions_;
   symbols_map_t symbols_;
+  std::function<ir::value*()> continue_fn_;
+  std::map<value*, value**> current_phi_;
 };
 
 }

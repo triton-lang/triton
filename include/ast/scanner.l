@@ -37,6 +37,7 @@ int comment();
 "..."       { count(); return(ELLIPSIS); }
 "get_global_range" { count(); return GET_GLOBAL_RANGE; }
 "dot"              { count(); return DOT;}
+"continue" { count(); return(CONTINUE); }
 
 {L}({L}|{D})*		{ count(); return(check_type()); }
 

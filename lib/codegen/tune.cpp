@@ -104,7 +104,6 @@ std::vector<unsigned*> tune::get_params(ir::module &mod) {
   for(ir::instruction *i : block->get_inst_list())
   for(auto &x: params_[i])
     if(seen.insert(x.second).second && *x.second == 0){
-      std::cout << typeid(*i).name() << std::endl;
       result.push_back(x.second);
     }
   return result;

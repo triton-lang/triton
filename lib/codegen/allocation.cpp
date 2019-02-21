@@ -106,9 +106,7 @@ void allocation::run(){
       ir::phi_node *phi = (ir::phi_node*)x;
       for(unsigned i = 0; i < phi->get_num_incoming(); i++){
         ir::value *inc_val = phi->get_incoming_value(i);
-        assert(offsets_.find(inc_val) == offsets_.end());
         offsets_[inc_val] = offsets_[phi];
-        std::cout << x->get_name() << " " <<  inc_val->get_name() << " " << inc_val << std::endl;
       }
     }
   }

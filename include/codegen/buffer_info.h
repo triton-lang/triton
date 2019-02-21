@@ -9,6 +9,7 @@ namespace tdl {
 namespace ir {
   class module;
   class value;
+  class phi_node;
 }
 
 namespace codegen{
@@ -19,7 +20,9 @@ public:
   // queries
   bool is_double(ir::value *x);
   bool is_shared(ir::value *x);
+  bool is_loop_latch(ir::phi_node *phi, ir::value *terminator);
   ir::value *get_reference(ir::value *x);
+
 
 private:
   std::set<ir::value*> shared_;

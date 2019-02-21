@@ -141,6 +141,11 @@ void node::implicit_broadcast(ir::module *mod, ir::value *&lhs, ir::value *&rhs)
     rhs = builder.create_broadcast(rhs, shapes);
 }
 
+/* Helper */
+inline bool is_terminator(ir::value* x) {
+  return x && dynamic_cast<ir::terminator_inst*>(x);
+}
+
 /* Translation unit */
 ir::value* translation_unit::codegen(ir::module *mod) const{
   decls_->codegen(mod);
@@ -242,8 +247,13 @@ ir::value* function_definition::codegen(ir::module *mod) const{
 ir::value* compound_statement::codegen(ir::module* mod) const{
   if(decls_)
     decls_->codegen(mod);
-  if(statements_)
-    statements_->codegen(mod);
+  if(statements_){
+    for(statement *stmt: statements_->values()){
+      ir::value *current = stmt->codegen(mod);
+      if(is_terminator(current))
+        return current;
+    }
+  }
   return nullptr;
 }
 
@@ -266,15 +276,18 @@ ir::value* iteration_statement::codegen(ir::module *mod) const{
   ir::basic_block *current_bb = builder.get_insert_block();
   ir::function *fn = current_bb->get_parent();
   ir::basic_block *loop_bb = ir::basic_block::create(ctx, "loop", fn);
+  ir::basic_block *next_bb = ir::basic_block::create(ctx, "postloop", fn);
+  mod->set_continue_fn([&](){
+    exec_->codegen(mod);
+    ir::value *cond = stop_->codegen(mod);
+    return builder.create_cond_br(cond, loop_bb, next_bb);
+  });
   init_->codegen(mod);
   builder.create_br(loop_bb);
   builder.set_insert_point(loop_bb);
-  statements_->codegen(mod);
-  exec_->codegen(mod);
-  ir::value *cond = stop_->codegen(mod);
+  if(!is_terminator(statements_->codegen(mod)))
+    mod->get_continue_fn()();
   ir::basic_block *stop_bb = builder.get_insert_block();
-  ir::basic_block *next_bb = ir::basic_block::create(ctx, "postloop", fn);
-  builder.create_cond_br(cond, loop_bb, next_bb);
   mod->seal_block(stop_bb);
   mod->seal_block(loop_bb);
   mod->seal_block(builder.get_insert_block());
@@ -303,16 +316,22 @@ ir::value* selection_statement::codegen(ir::module* mod) const{
     builder.create_cond_br(cond, then_bb, endif_bb);
   // Then
   builder.set_insert_point(then_bb);
-  then_value_->codegen(mod);
-  builder.create_br(endif_bb);
+  if(!is_terminator(then_value_->codegen(mod)))
+    builder.create_br(endif_bb);
   // Else
   if(else_value_){
     builder.set_insert_point(else_bb);
-    else_value_->codegen(mod);
-    builder.create_br(endif_bb);
+    if(!is_terminator(else_value_->codegen(mod)))
+      builder.create_br(endif_bb);
   }
   // Endif
   builder.set_insert_point(endif_bb);
+  return nullptr;
+}
+
+/* Continue statement */
+ir::value* continue_statement::codegen(ir::module *mod) const{
+  return mod->get_continue_fn()();
 }
 
 /* Declaration */

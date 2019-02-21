@@ -62,8 +62,8 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
     pb = pb + 8*K;\
     @checka a = *pa;\
     @checkb b = *pb;\
-    if(k <= 8){\
-      @checka a = *pa;\
+    if(k > 8){\
+      continue;\
     }\
   }\
   @checkc *pc = C;\
@@ -218,7 +218,6 @@ int main() {
   buffer_info.run(module);
   shared.run(module);
   liveness.run(module);
-  tdl::ir::print(module, std::cout);
   allocation.run();
   barriers.run(module);
   vectorize.run(module);

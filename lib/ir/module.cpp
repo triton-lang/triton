@@ -37,6 +37,14 @@ void module::set_type(const std::string& name, ir::type *type){
   return set_type(name, builder_.get_insert_block(), type);
 }
 
+void module::set_continue_fn(std::function<ir::value*()> fn) {
+  continue_fn_ = fn;
+}
+
+std::function<ir::value*()> module::get_continue_fn() {
+  return continue_fn_;
+}
+
 ir::phi_node* module::make_phi(ir::type *ty, unsigned num_values, ir::basic_block *block){
   basic_block::iterator insert = block->get_first_non_phi();
   if(insert != block->end()){
@@ -61,8 +69,6 @@ ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi, ir::value** pre_u
   std::set<ir::user*> users = phi->get_users();
   phi->replace_all_uses_with(same);
   phi->erase_from_parent();
-  if(pre_user)
-    *pre_user = same;
   for(ir::user* u: users)
   if(auto *uphi = dynamic_cast<ir::phi_node*>(u))
     if(uphi != phi)
@@ -80,11 +86,10 @@ ir::value *module::add_phi_operands(const std::string& name, ir::phi_node *&phi)
     ir::value *value = get_value(name, pred);
     phi->add_incoming(value, pred);
   }
-  return try_remove_trivial_phis(phi, nullptr);
+  return phi;
 }
 
 ir::value *module::get_value_recursive(const std::string& name, ir::basic_block *block) {
-  std::cout << "getting value " << name << std::endl;
   ir::value *result;
   auto &preds = block->get_predecessors();
   if(block)
@@ -101,6 +106,8 @@ ir::value *module::get_value_recursive(const std::string& name, ir::basic_block 
     set_value(name, block, result);
     result = add_phi_operands(name, (ir::phi_node*&)result);
   }
+  if(auto *phi = dynamic_cast<ir::phi_node*>(result))
+    result = try_remove_trivial_phis(phi, nullptr);
   set_value(name, block, result);
   return result;
 }
@@ -138,9 +145,12 @@ ir::type *module::get_type(const std::string &name) {
   return types_.at({name, builder_.get_insert_block()});
 }
 
+
 void module::seal_block(ir::basic_block *block){
-  for(auto &x: incomplete_phis_[block])
+  for(auto &x: incomplete_phis_[block]){
     add_phi_operands(x.first, x.second);
+    try_remove_trivial_phis(x.second, nullptr);
+  }
   sealed_blocks_.insert(block);
   incomplete_phis_[block].clear();
 }

@@ -374,6 +374,18 @@ private:
   const node *statements_;
 };
 
+// Jump
+
+class jump_statement: public statement{
+public:
+  using statement::statement;
+};
+
+class continue_statement: public jump_statement{
+public:
+  ir::value* codegen(ir::module *mod) const;
+};
+
 class no_op: public statement { };
 
 // Types

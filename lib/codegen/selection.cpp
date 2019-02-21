@@ -299,7 +299,6 @@ std::vector<Value*> delinearize(Value *trailing, std::vector<unsigned> &shapes, 
 }
 
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
-  std::cout << "name: " << v->get_name() << std::endl;
   const auto& shapes = v->get_type()->get_tile_shapes();
   size_t dim = shapes.size();
   std::vector<unsigned> contiguous(dim);
@@ -406,8 +405,6 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
       unsigned id_pre = 0, id_loop = 1;
       if(phi->get_incoming_block(0) == phi->get_parent())
         std::swap(id_pre, id_loop);
-      ir::value *pre_value = phi->get_incoming_value(id_pre);
-      ir::value *loop_value = phi->get_incoming_value(id_loop);
       if(parent->empty())
         builder.SetInsertPoint(parent);
       else
@@ -419,8 +416,13 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
       pre_ptr = builder.CreateBitCast(pre_ptr, ptr->getType());
       Value *next_ptr = builder.CreateGEP(ptr, offset);
       tmap_.insert({phi, new shared_tile(ty, shapes, ptr, builder, offset)});
-      tmap_.insert({pre_value, new shared_tile(ty, shapes, pre_ptr, builder)});
-      tmap_.insert({loop_value, new shared_tile(ty, shapes, next_ptr, builder)});
+      for(unsigned i = 0; i < phi->get_num_incoming(); i++) {
+        ir::basic_block* inc_block = phi->get_incoming_block(i);
+        ir::value* inc_value = phi->get_incoming_value(i);
+        ir::value* terminator = inc_block->get_inst_list().back();
+        bool is_loop_latch = buffer_info_->is_loop_latch(phi, terminator);
+        tmap_.insert({inc_value, new shared_tile(ty, shapes, is_loop_latch?next_ptr:pre_ptr, builder)});
+      }
     }
     else
       throw std::runtime_error("unknown shared memory tile");
@@ -479,7 +481,6 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
 
 
 void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &builder) {
-  std::cout << "lowering " << ins->get_name() << std::endl;
   BasicBlock *block = builder.GetInsertBlock();
   Module *module = block->getModule();
   Function *function = block->getParent();
@@ -696,7 +697,6 @@ void selection::run(ir::module &src, Module &dst){
     std::map<ir::basic_block*, BasicBlock*> last_block;
     // iterate through block
     for(ir::basic_block *block: fn->blocks()) {
-      std::cout << "block: " << block->get_name() << std::endl;
       BasicBlock *parent = (BasicBlock*)vmap_[block];
       dst_builder.SetInsertPoint(parent);
       for(ir::instruction *i: block->get_inst_list()){
@@ -734,12 +734,10 @@ void selection::run(ir::module &src, Module &dst){
         }
       }
       else {
-        std::cout << "phi: " << phi->get_name() << std::endl;
         for(unsigned n = 0; n < phi->get_num_incoming(); n++){
           ir::value *inc_val = phi->get_incoming_value(n);
           ir::basic_block *inc_block = phi->get_incoming_block(n);
           BasicBlock *llvm_inc_block = last_block.at(inc_block);
-          std::cout << "incoming block: " << inc_block->get_name() << " " << llvm_inc_block->getName().str() << std::endl;
           if(phi->get_type()->is_tile_ty()) {
             distributed_tile *phi_tile = (distributed_tile*)tmap_.at(phi);
             distributed_tile *inc_tile = (distributed_tile*)tmap_.at(inc_val);

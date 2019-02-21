@@ -13,7 +13,6 @@ namespace codegen{
 void place_shared_copy::add_copy(ir::value *x, ir::builder &builder) {
   if(auto *i = dynamic_cast<ir::instruction*>(x)){
     ir::basic_block* block = i->get_parent();
-    std::cout << "adding copy: " << x->get_name() << " " << block->get_name() << std::endl;
     auto it = std::find(block->begin(), block->end(), i);
     builder.set_insert_point(++it);
   }

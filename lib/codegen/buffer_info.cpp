@@ -11,6 +11,16 @@ namespace codegen{
 
 
 // run pass on module
+bool buffer_info_pass::is_loop_latch(ir::phi_node *phi, ir::value *terminator){
+  if(auto *br = dynamic_cast<ir::cond_branch_inst*>(terminator))
+    return br->get_true_dest() == phi->get_parent()
+           || br->get_false_dest() == phi->get_parent();
+  else if(auto *br = dynamic_cast<ir::uncond_branch_inst*>(terminator))
+    return br->get_dest() == phi->get_parent();
+  else
+    throw std::runtime_error("unreachable");
+}
+
 void buffer_info_pass::run(ir::module &mod) {
   // Find which buffers are shared
   for(ir::function *fn: mod.get_function_list())
@@ -35,13 +45,7 @@ void buffer_info_pass::run(ir::module &mod) {
       for(unsigned n = 0; n < phi->get_num_incoming(); n++){
         ir::basic_block *inc_block = phi->get_incoming_block(n);
         ir::value *terminator = inc_block->get_inst_list().back();
-        if(auto *br = dynamic_cast<ir::cond_branch_inst*>(terminator))
-          is_double = is_double || br->get_true_dest() == phi->get_parent()
-                                || br->get_false_dest() == phi->get_parent();
-        else if(auto *br = dynamic_cast<ir::uncond_branch_inst*>(terminator))
-          is_double = is_double || br->get_dest() == phi->get_parent();
-        else
-          throw std::runtime_error("unreachable");
+        is_double = is_double || is_loop_latch(phi, terminator);
       }
       // add to double-buffered
       if(is_double)
@@ -49,7 +53,6 @@ void buffer_info_pass::run(ir::module &mod) {
       // set references of input
       for(unsigned n = 0; n < phi->get_num_incoming(); n++){
         ir::value *inc_val = phi->get_incoming_value(n);
-        assert(refs_[inc_val] == nullptr);
         refs_[inc_val] = phi;
       }
     }
