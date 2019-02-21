@@ -57,14 +57,25 @@ void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
   for(k = K; k > 0; k = k - 8){\
     int1 checka[16, 8] = (k > 8);\
     int1 checkb[16, 8] = (k > 8);\
+    int1 checka0[16];\
+    int1 checka1[8];\
+    int1 checkb0[16];\
+    int1 checkb1[8];\
     C = dot(a, b, C);\
     pa = pa + 8*M;\
     pb = pb + 8*K;\
     @checka a = *pa;\
     @checkb b = *pb;\
-    if(k > 8){\
+    if(k > 8)\
       continue;\
-    }\
+    checka0 = rxa < M;\
+    checka1 = rka < k;\
+    checkb0 = ryb < N;\
+    checkb1 = rkb < k;\
+    checka = checka0[:, newaxis] && checka1[newaxis, :];\
+    checkb = checkb0[:, newaxis] && checkb1[newaxis, :];\
+    @checka a = *pa;\
+    @checkb b = *pb;\
   }\
   @checkc *pc = C;\
 }\
@@ -211,7 +222,6 @@ int main() {
   if(errors.size())
     exit(EXIT_FAILURE);
 
-  // print
 
   // run passes
   tdl::ir::print(module, std::cout);

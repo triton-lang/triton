@@ -35,8 +35,8 @@ public:
   basic_block *get_parent()                                   { return parent_;  }
   void erase_from_parent();
   // mask
-  value* set_mask(value *pred, value *else_value = nullptr)   { mask_ = {pred, else_value}; }
-  const mask_info_t get_mask() const                          { return mask_; }
+  void set_mask_pred(value *pred)                             { resize_hidden(1); set_operand(get_num_operands(), pred); }
+  value* get_mask_pred() const                                { if(get_num_hidden() == 0) return nullptr; return get_operand(get_num_operands()); }
   // helpers
   bool has_tile_result_or_op();
   // repr
@@ -45,7 +45,7 @@ public:
 private:
   basic_block *parent_;
   value *pred_;
-  mask_info_t mask_;
+  value *mask_pred_;
 };
 
 //===----------------------------------------------------------------------===//

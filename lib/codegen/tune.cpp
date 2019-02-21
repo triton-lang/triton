@@ -73,7 +73,7 @@ void tune::init_c_graph(ir::instruction *v) {
   }
 
   /* Add mask constraints */
-  if(ir::value *pred = v->get_mask().pred){
+  if(ir::value *pred = v->get_mask_pred()){
     for(unsigned i = 0; i < shapes.size(); i++)
       add_constraint({v->ops()[0], i}, {pred, i});
   }

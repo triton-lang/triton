@@ -264,7 +264,7 @@ ir::value* expression_statement::codegen(ir::module *mod) const{
     ir::instruction *itn = dynamic_cast<ir::instruction*>(expr);
     assert(itn);
     ir::value *mask = mask_->codegen(mod);
-    itn->set_mask(mask);
+    itn->set_mask_pred(mask);
   }
   return expr;
 }

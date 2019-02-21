@@ -43,13 +43,17 @@ void user::set_operand(unsigned i, value *x) {
   x->add_use(this);
 }
 
-value* user::get_operand(unsigned i) {
+value* user::get_operand(unsigned i) const {
   assert(i < ops_.size() && "get_operand() out of range!");
   return ops_[i];
 }
 
 unsigned user::get_num_operands() const {
-  return ops_.size();
+  return num_ops_;
+}
+
+unsigned user::get_num_hidden() const {
+  return num_hidden_;
 }
 
 void user::replace_all_uses_with(value *target) {

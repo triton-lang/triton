@@ -51,20 +51,23 @@ public:
   typedef ops_t::const_iterator const_op_iterator;
 
 protected:
-  void resize_ops(unsigned n) { ops_.resize(n); }
+  void resize_ops(unsigned num_ops) { ops_.resize(num_ops + num_hidden_); num_ops_ = num_ops; }
+  void resize_hidden(unsigned num_hidden) { ops_.resize(num_ops_ + num_hidden); num_hidden_ = num_hidden; }
 
 public:
   // Constructor
   user(type *ty, unsigned num_ops, const std::string &name = "")
-      : value(ty, name), ops_(num_ops){ }
+      : value(ty, name), ops_(num_ops), num_ops_(num_ops), num_hidden_(0){
+  }
 
   // Operands
   const ops_t& ops() { return ops_; }
   op_iterator op_begin() { return ops_.begin(); }
   op_iterator op_end()   { return ops_.end(); }
   void     set_operand(unsigned i, value *x);
-  value   *get_operand(unsigned i);
+  value   *get_operand(unsigned i) const;
   unsigned get_num_operands() const ;
+  unsigned get_num_hidden() const;
 
   // Utils
   void replace_all_uses_with(value *target);
@@ -72,6 +75,8 @@ public:
 
 private:
   ops_t ops_;
+  unsigned num_ops_;
+  unsigned num_hidden_;
 };
 
 }

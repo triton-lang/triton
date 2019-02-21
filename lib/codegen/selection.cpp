@@ -484,16 +484,16 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
   BasicBlock *block = builder.GetInsertBlock();
   Module *module = block->getModule();
   Function *function = block->getParent();
-  ir::instruction::mask_info_t mask = ins->get_mask();
+  ir::value* mask_pred = ins->get_mask_pred();
   LLVMContext &ctx = builder.getContext();
   // helper to handle masks
   auto insert_masked = [&](indices_t idx, std::function<Value*()> insert_value) {
     BasicBlock *block = builder.GetInsertBlock();
     Value *result;
-    if(mask.pred){
+    if(mask_pred){
 //      if(mask.else_value)
 //      std::cout << mask.else_value << std::endl;
-      Value *llvm_mask = tmap_.at(mask.pred)->get_value(idx);
+      Value *llvm_mask = tmap_.at(mask_pred)->get_value(idx);
       BasicBlock *then_bb = BasicBlock::Create(ctx, "", function);
       BasicBlock *done_bb = BasicBlock::Create(ctx, "", function);
       builder.CreateCondBr(llvm_mask, then_bb, done_bb);
