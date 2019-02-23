@@ -2,6 +2,7 @@
 #define TDL_INCLUDE_IR_CONSTANT_H
 
 #include "value.h"
+#include <cassert>
 
 namespace tdl{
 namespace ir{
@@ -28,28 +29,43 @@ public:
   static undef_value* get(type* ty);
 };
 
+
 /* Constant int */
 class constant_int: public constant{
+protected:
   constant_int(type *ty, uint64_t value);
 
 public:
   uint64_t get_value() const { return value_; }
-  static constant *get(type *ty, uint64_t value);
+  static constant_int *get(type *ty, uint64_t value);
+
+protected:
+  uint64_t value_;
+};
+
+/* Metaparameter int */
+class metaparameter: public constant_int{
+  metaparameter(type *ty, unsigned lo, unsigned hi);
+
+public:
+  static metaparameter *create(context &ctx, type *ty, unsigned lo, unsigned hi);
+  void set_value(uint64_t value) { value_ = value; }
 
 private:
-  uint64_t value_;
+  unsigned lo_;
+  unsigned hi_;
 };
 
 /* constant range */
 class constant_range: public constant{
-  constant_range(type *ty, uint64_t first, uint64_t last);
+  constant_range(type *ty, constant_int* first, constant_int* last);
 
 public:
-  static constant *get(constant *first, constant *last);
+  static constant *get(constant_int *first, constant_int *last);
 
 private:
-  uint64_t first_;
-  uint64_t last_;
+  constant_int* first_;
+  constant_int* last_;
 };
 
 /* constant fp */

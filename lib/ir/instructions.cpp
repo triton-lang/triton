@@ -409,7 +409,7 @@ std::string retile_inst::shape_suffix(ir::type* ty){
   std::string res = "[";
   const auto& shapes = ty->get_tile_shapes();
   for(unsigned i = 0; i < shapes.size(); i++){
-    res += std::to_string(ty->get_tile_shapes()[i]);
+    res += std::to_string(ty->get_tile_shapes()[i]->get_value());
     if(i < shapes.size() - 1)
       res += ", ";
   }
@@ -417,13 +417,13 @@ std::string retile_inst::shape_suffix(ir::type* ty){
   return res;
 }
 
-retile_inst::retile_inst(value *arg, const std::vector<unsigned> &shapes,
+retile_inst::retile_inst(value *arg, const type::tile_shapes_t &shapes,
                          const std::string &name, instruction *next)
    : unary_inst(tile_type::get(arg->get_type()->get_scalar_ty(), shapes), arg, name, next) { }
 
 // reshape
 
-instruction* reshape_inst::create(value *arg, const std::vector<unsigned> &shapes,
+instruction* reshape_inst::create(value *arg, const type::tile_shapes_t &shapes,
                                   const std::string &name, instruction *next) {
   return new reshape_inst(arg, shapes, name, next);
 }
@@ -431,14 +431,14 @@ instruction* reshape_inst::create(value *arg, const std::vector<unsigned> &shape
 
 // splat
 
-instruction* splat_inst::create(value *arg, const std::vector<unsigned> &shapes,
+instruction* splat_inst::create(value *arg, const type::tile_shapes_t &shapes,
                                   const std::string &name, instruction *next) {
   return new splat_inst(arg, shapes, name, next);
 }
 
 // broadcast
 
-instruction* broadcast_inst::create(value *arg, const std::vector<unsigned> &shapes,
+instruction* broadcast_inst::create(value *arg, const type::tile_shapes_t &shapes,
                                   const std::string &name, instruction *next) {
   return new broadcast_inst(arg, shapes, name, next);
 }
@@ -470,7 +470,7 @@ get_global_range_inst::get_global_range_inst(type *ty, unsigned axis,
 
 }
 
-instruction* get_global_range_inst::create(context &ctx, unsigned axis, unsigned size,
+instruction* get_global_range_inst::create(context &ctx, unsigned axis, type::tile_shapes_t::value_type size,
                                            const std::string &name, instruction *next) {
   type *int_ty = type::get_int32_ty(ctx);
   type *tile_ty = tile_type::get(int_ty, {size});

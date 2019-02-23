@@ -48,24 +48,27 @@ constant *constant::get_all_ones_value(type *ty) {
 constant_int::constant_int(type *ty, uint64_t value)
   : constant(ty, 0), value_(value){ }
 
-constant *constant_int::get(type *ty, uint64_t value) {
-  return new constant_int(ty, value);
+constant_int *constant_int::get(type *ty, uint64_t value) {
+  context_impl *impl = ty->get_context().p_impl.get();
+  constant_int *& cst = impl->int_constants_[std::make_pair(ty, value)];
+  if(cst == nullptr)
+    cst = new constant_int(ty, value);
+  return cst;
 }
 
 // constant_range
 // FIXME use something like APInt
 
-constant_range::constant_range(type *ty, uint64_t first, uint64_t last)
+constant_range::constant_range(type *ty, constant_int *first, constant_int *last)
   : constant(ty, 0), first_(first), last_(last){ }
 
-constant *constant_range::get(constant *first, constant *last) {
+constant *constant_range::get(constant_int *first, constant_int *last) {
   assert(first->get_type()->is_integer_ty());
   assert(first->get_type() == last->get_type());
   unsigned vfirst = ((constant_int*)first)->get_value();
-  unsigned vlast = ((constant_int*)last)->get_value();
-  assert(vlast > vfirst);
-  type *ty = tile_type::get(first->get_type(), {vlast - vfirst});
-  return new constant_range(ty, vfirst, vlast);
+  assert(vfirst == 0);
+  type *ty = tile_type::get(first->get_type(), {last});
+  return new constant_range(ty, first, last);
 }
 
 
@@ -91,6 +94,17 @@ constant *constant_fp::get(context &ctx, double v){
   constant_fp *&result = impl->fp_constants_[v];
   if(!result)
     result = new constant_fp(ctx, v);
+  return result;
+}
+
+// metaparameter
+metaparameter::metaparameter(type *ty, unsigned lo, unsigned hi)
+  : constant_int(ty, 0), lo_(lo), hi_(hi){ }
+
+metaparameter* metaparameter::create(context &ctx, type *ty, unsigned lo, unsigned hi) {
+  context_impl *impl = ctx.p_impl.get();
+  metaparameter *result = new metaparameter(ty, lo, hi);
+  impl->mp_constants_.push_back(result);
   return result;
 }
 

@@ -32,7 +32,7 @@ private:
   void add_reference(ir::value *v, interval_vec_t &res);
   void get_read_intervals(ir::instruction *i, interval_vec_t &res);
   void get_written_intervals(ir::instruction *i, interval_vec_t &res);
-  void add(ir::basic_block *block, interval_vec_t &not_synced, std::set<ir::instruction *> &insert_pts);
+  void add(ir::basic_block *block, interval_vec_t &not_synced, ir::builder &builder);
 
 public:
   barriers(allocation *alloc, buffer_info_pass *buffer_info): alloc_(alloc), buffer_info_(buffer_info) {}

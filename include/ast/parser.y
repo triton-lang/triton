@@ -20,12 +20,14 @@ struct token: public node{
   token(BIN_OP_T value): bin_op(value){ }
   token(UNARY_OP_T value): unary_op(value){ }
   token(TYPE_T value): type(value){ }
+  token(STORAGE_SPEC_T value): storage_spec(value){ }
 
   union {
     ASSIGN_OP_T assign_op;
     BIN_OP_T bin_op;
     UNARY_OP_T unary_op;
     TYPE_T type;
+    STORAGE_SPEC_T storage_spec;
   };
 };
 
@@ -39,10 +41,12 @@ node* append_ptr_list(node *result, node *in){
 ASSIGN_OP_T get_assign_op(node *op) { return ((token*)op)->assign_op; }
 UNARY_OP_T get_unary_op(node *op) { return ((token*)op)->unary_op; }
 TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
+STORAGE_SPEC_T get_storage_spec(node *op) { return ((token*)op)->storage_spec;}
 
 %}
  
 %token IDENTIFIER CONSTANT STRING_LITERAL
+%token TUNABLE KERNEL READONLY WRITEONLY
 %token PTR_OP INC_OP DEC_OP LEFT_OP RIGHT_OP LE_OP GE_OP EQ_OP NE_OP
 %token AND_OP OR_OP MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN ADD_ASSIGN
 %token SUB_ASSIGN LEFT_ASSIGN RIGHT_ASSIGN AND_ASSIGN
@@ -87,17 +91,12 @@ abstract_declarator
 	;
 
 direct_abstract_declarator
-    : '[' constant_list ']' { $$ = new tile(nullptr, $1); }
+    : '[' primary_expression_list ']' { $$ = new tile(nullptr, $1); }
 
 constant : 
     CONSTANT { $$ = new constant(atoi(yytext)); }
 	;
 	
-constant_list
-	: constant  { $$ = new list<constant*>((constant*)$1); }
-  | constant_list ',' constant { $$ = append_ptr_list<constant>($1, $3); }
-	;
-
 type_name
   : declaration_specifiers { $$ = new type_name($1, nullptr); }
   | declaration_specifiers abstract_declarator { $$ = new type_name($1, $2); }
@@ -112,7 +111,7 @@ identifier
 	;
 
 builtin
-  : GET_GLOBAL_RANGE '[' constant ']' '(' constant ')' { $$ = new get_global_range($3, $6); }
+  : GET_GLOBAL_RANGE '[' primary_expression ']' '(' constant ')' { $$ = new get_global_range($3, $6); }
   |  DOT '(' expression ',' expression ',' expression ')' { $$ = new matmul_expression($3, $5, $7); }
 
 primary_expression
@@ -123,6 +122,11 @@ primary_expression
   | STRING_LITERAL     { $$ = new string_literal(yytext); }
   | '(' expression ')' { $$ = $2; }
 	;
+
+primary_expression_list
+  : primary_expression { $$ = new list<expression*>((expression*)$1); }
+  | primary_expression_list ',' primary_expression { $$ = append_ptr_list<expression>($1, $3); }
+  ;
 
 slice
   : ':' { $$ = new slice(tdl::ast::ALL); }
@@ -312,7 +316,7 @@ jump_statement
 
 direct_declarator
   : identifier { $$ = $1; }
-  | identifier '[' constant_list ']' { $$ = new tile($1, $3); }
+  | identifier '[' primary_expression_list ']' { $$ = new tile($1, $3); }
   | identifier '(' parameter_list ')' { $$ = new function($1, $3); }
   | identifier '(' ')' { $$ = new function($1, nullptr); }
   ;
@@ -330,7 +334,8 @@ parameter_declaration
 
 
 declaration_specifiers
-  : type_specifier { $$ = new declaration_specifier(get_type_spec($1)); }
+  : type_specifier { $$ = new typed_declaration_specifier(get_type_spec($1)); }
+  | storage_class_specifier declaration_specifiers { $$ = new storage_declaration_specifier(get_storage_spec($1), $2); }
 	;
 
 init_declarator_list
@@ -353,6 +358,13 @@ init_declarator
   : declarator { $$ = new initializer($1, nullptr); }
   | declarator '=' initialization_expression { $$ = new initializer($1, $3); }
 	;
+
+storage_class_specifier
+  : TUNABLE   { $$ = new token(TUNABLE_T); }
+  | KERNEL    { $$ = new token(KERNEL_T); }
+  | READONLY  { $$ = new token(READONLY_T); }
+  | WRITEONLY { $$ = new token(WRITEONLY_T); }
+;
 
 /* -------------------------- */
 /*      Translation Unit 	  */

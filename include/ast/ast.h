@@ -5,7 +5,7 @@
 #include <cassert>
 #include <vector>
 #include <string>
-
+#include <iostream>
 
 
 namespace tdl{
@@ -56,6 +56,12 @@ enum TYPE_T{
   FLOAT32_T, FLOAT64_T
 };
 
+enum STORAGE_SPEC_T{
+  TUNABLE_T,
+  KERNEL_T,
+  READONLY_T, WRITEONLY_T,
+};
+
 class pointer;
 class identifier;
 class constant;
@@ -75,7 +81,7 @@ public:
 template<class T>
 class list: public node {
 public:
-  list(const T& x): values_{x} {}
+  list(const T& x): values_(1, x) {}
 
   node* append(const T& x){
     values_.push_back(x);
@@ -389,16 +395,30 @@ public:
 class no_op: public statement { };
 
 // Types
-
 class declaration_specifier: public node{
 public:
-  declaration_specifier(TYPE_T spec)
-    : spec_(spec) { }
+  using node::node;
+  virtual ir::type* type(ir::module *mod) const = 0;
+};
 
+class typed_declaration_specifier: public declaration_specifier {
+public:
+  typed_declaration_specifier(TYPE_T ty): ty_(ty){ }
   ir::type* type(ir::module *mod) const;
 
 private:
-  const TYPE_T spec_;
+  const TYPE_T ty_;
+};
+
+class storage_declaration_specifier: public declaration_specifier {
+public:
+  storage_declaration_specifier(STORAGE_SPEC_T storage_spec, node *decl_spec)
+    : storage_spec_(storage_spec), decl_spec_((declaration_specifier*)decl_spec) {}
+  ir::type* type(ir::module *mod) const;
+
+private:
+  const STORAGE_SPEC_T storage_spec_;
+  const declaration_specifier* decl_spec_;
 };
 
 class declarator;
@@ -495,7 +515,7 @@ public:
   : declarator((node*)((declarator*)decl)->id()),
     decl_((declarator*)decl), expr_((expression*)init){ }
 
-  void specifier(const declaration_specifier *spec);
+  void set_specifier(const declaration_specifier *spec);
   ir::value* codegen(ir::module *) const;
 
 public:
@@ -535,17 +555,17 @@ public:
 class translation_unit: public node{
 public:
   translation_unit(node *item)
-    : decls_((list<node*>*)item) { }
+    : decls_(item) { }
 
   translation_unit *add(node *item) {
-    decls_->append(item);
+    decls_.append(item);
     return this;
   }
 
   ir::value* codegen(ir::module * mod) const;
 
 private:
-  list<node*>* decls_;
+  list<node*> decls_;
 };
 
 }

@@ -3,6 +3,7 @@
 
 #include <vector>
 #include "value.h"
+#include "ir/type.h"
 #include "llvm/IR/Instructions.h"
 
 namespace tdl{
@@ -358,7 +359,7 @@ public:
 
 class retile_inst: public unary_inst {
 protected:
-  retile_inst(value *arg, const std::vector<unsigned> &shape_suffix, const std::string &name, instruction *next);
+  retile_inst(value *arg, const type::tile_shapes_t &shapes, const std::string &name, instruction *next);
   static std::string shape_suffix(ir::type* ty);
 };
 
@@ -370,7 +371,7 @@ private:
   std::string repr_impl() const { return "reshape" + shape_suffix(get_type()); }
 
 public:
-  static instruction* create(value *arg, const std::vector<unsigned> &shape_suffix,
+  static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
 };
 
@@ -382,7 +383,7 @@ private:
   std::string repr_impl() const { return "splat" + shape_suffix(get_type()); }
 
 public:
-  static instruction* create(value *arg, const std::vector<unsigned> &shape_suffix,
+  static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
 };
 
@@ -394,7 +395,7 @@ private:
   std::string repr_impl() const { return "broadcast" + shape_suffix(get_type()); }
 
 public:
-  static instruction* create(value *arg, const std::vector<unsigned> &shape_suffix,
+  static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
 };
 
@@ -414,7 +415,7 @@ private:
   std::string repr_impl() const { return "get_global_range(" + std::to_string(axis_) + ")"; }
 
 public:
-  static instruction* create(context &ctx, unsigned axis, unsigned size,
+  static instruction* create(context &ctx, unsigned axis, type::tile_shapes_t::value_type size,
                              const std::string &name = "",
                              instruction *next = nullptr);
   unsigned get_axis() const { return axis_; }

@@ -244,15 +244,15 @@ value *builder::create_store(value *ptr, value *val, const std::string &name){
 //                               tile instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_reshape(value *arg, const std::vector<unsigned> &shapes, const std::string &name) {
+value *builder::create_reshape(value *arg, const type::tile_shapes_t &shapes, const std::string &name) {
   return insert(reshape_inst::create(arg, shapes, name));
 }
 
-value *builder::create_splat(value *arg, const std::vector<unsigned> &shapes, const std::string &name) {
+value *builder::create_splat(value *arg, const type::tile_shapes_t &shapes, const std::string &name) {
   return insert(splat_inst::create(arg, shapes, name));
 }
 
-value *builder::create_broadcast(value *arg, const std::vector<unsigned> &shapes, const std::string &name) {
+value *builder::create_broadcast(value *arg, const type::tile_shapes_t &shapes, const std::string &name) {
   return insert(broadcast_inst::create(arg, shapes, name));
 }
 
@@ -260,7 +260,7 @@ value *builder::create_broadcast(value *arg, const std::vector<unsigned> &shapes
 //                               built-in instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_get_global_range(unsigned axis, unsigned size, const std::string &name) {
+value *builder::create_get_global_range(unsigned axis, type::tile_shapes_t::value_type size, const std::string &name) {
   return insert(get_global_range_inst::create(ctx_, axis, size, name));
 }
 

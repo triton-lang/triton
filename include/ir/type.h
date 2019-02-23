@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <iostream>
+#include <set>
 
 namespace tdl{
 namespace ir{
@@ -10,9 +11,13 @@ namespace ir{
 class context;
 class value;
 class integer_type;
+class constant_int;
 
 /* Type */
 class type {
+public:
+  typedef std::vector<constant_int*>	         tile_shapes_t;
+
 protected:
   typedef std::vector<type*>                  contained_tys_vec_t;
   typedef contained_tys_vec_t::iterator       ty_iterator;
@@ -54,7 +59,7 @@ public:
   unsigned get_tile_bitwidth() const;
   unsigned get_primitive_size_in_bits() const;
   type *get_scalar_ty() const;
-  const std::vector<unsigned> &get_tile_shapes() const;
+  const tile_shapes_t& get_tile_shapes() const;
   unsigned get_tile_num_elements() const;
   type *get_tile_element_ty() const;
   unsigned get_pointer_address_space() const;
@@ -94,9 +99,25 @@ public:
   static integer_type *get_int64_ty(context &ctx);
   static integer_type *get_int128_ty(context &ctx);
 
+  // Attributes
+  type* set_tunable()   { is_tunable_ = true;     return this; }
+  type* set_readonly()  { is_readonly_ = true;    return this; }
+  type* set_writeonly() { is_writeonly_ = true;   return this; }
+  type* set_kernel()    { is_kernel_ = true;      return this; }
+
+  bool get_tunable()    { return is_tunable_; }
+  bool get_readonly()   { return is_readonly_; }
+  bool get_writeonly()  { return is_writeonly_; }
+  bool get_kernel()     { return is_kernel_; }
+
 private:
   context &ctx_;
   id_t id_;
+  // attributes
+  bool is_tunable_;
+  bool is_readonly_;
+  bool is_writeonly_;
+  bool is_kernel_;
 
 protected:
   contained_tys_vec_t contained_tys_;
@@ -132,21 +153,24 @@ public:
 
 class tile_type: public composite_type {
 private:
-  tile_type(type *ty, const std::vector<unsigned> &shapes);
+  tile_type(type *ty, const tile_shapes_t &shapes);
   static bool is_valid_elt_ty(type *ty);
 
 public:
   // accessors
-  const std::vector<unsigned>& get_shapes() const { return shapes_; }
+  const tile_shapes_t& get_shapes() const { return shapes_; }
   unsigned get_num_elements() const;
   unsigned get_bitwidth() const;
 
   // factory methods
-  static tile_type* get(type *ty, const std::vector<unsigned> &shapes);
+  static tile_type* get(type *ty, const tile_shapes_t &shapes);
   static tile_type* get_same_shapes(type *ty, type *ref);
 
+  // shortcut to get a 1 element in the shape
+  static tile_shapes_t::value_type make_one(context &ctx);
+
 private:
-  std::vector<unsigned> shapes_;
+  tile_shapes_t shapes_;
 };
 
 class pointer_type: public type {

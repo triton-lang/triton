@@ -2,3 +2,4 @@
   - proper naming scheme
   - symbols table
   - name conflicts on globals?
+  - separate header for typedef (e.g., type::tile_shapes_t) to reduce compilation time

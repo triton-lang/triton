@@ -3,6 +3,7 @@
 #include "ir/context.h"
 #include "ir/context_impl.h"
 #include "ir/value.h"
+#include "ir/constant.h"
 
 namespace tdl{
 namespace ir{
@@ -63,7 +64,7 @@ type * type::get_pointer_element_ty() const {
 }
 
 
-const std::vector<unsigned> &type::get_tile_shapes() const {
+const type::tile_shapes_t &type::get_tile_shapes() const {
   assert(is_tile_ty());
   return ((tile_type*)this)->get_shapes();
 }
@@ -148,7 +149,7 @@ bool composite_type::index_valid(value *idx) const{
 //                               tile_type class
 //===----------------------------------------------------------------------===//
 
-tile_type::tile_type(type *ty, const std::vector<unsigned> &shapes)
+tile_type::tile_type(type *ty, const tile_shapes_t &shapes)
     : composite_type(ty->get_context(), TileTyID), shapes_(shapes) {
   contained_tys_.push_back(ty);
 }
@@ -159,8 +160,8 @@ bool tile_type::is_valid_elt_ty(type *ty) {
 
 unsigned tile_type::get_num_elements() const {
   unsigned res = 1;
-  for(unsigned shape: shapes_)
-    res *= shape;
+  for(auto shape: shapes_)
+    res *= shape->get_value();
   return res;
 }
 
@@ -168,7 +169,7 @@ unsigned tile_type::get_bitwidth() const {
   return get_num_elements() * get_tile_element_ty()->get_primitive_size_in_bits();
 }
 
-tile_type* tile_type::get(type *elt_ty, const std::vector<unsigned> &shapes) {
+tile_type* tile_type::get(type *elt_ty, const tile_shapes_t &shapes) {
   assert(elt_ty && "Can't get a tile of <null> type!");
   assert(shapes.size() && "Can't create a tile with empty shapes!");
   assert(is_valid_elt_ty(elt_ty) && "Invalid type for pointer element!");
@@ -183,6 +184,10 @@ tile_type* tile_type::get(type *elt_ty, const std::vector<unsigned> &shapes) {
 tile_type* tile_type::get_same_shapes(type *ty, type *ref){
   assert(ref->is_tile_ty());
   return get(ty, ref->get_tile_shapes());
+}
+
+type::tile_shapes_t::value_type tile_type::make_one(ir::context& ctx){
+  return constant_int::get(type::get_int32_ty(ctx), 1);
 }
 
 

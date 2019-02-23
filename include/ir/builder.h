@@ -6,6 +6,7 @@
 #include <string>
 #include "instructions.h"
 #include "basic_block.h"
+#include "type.h"
 
 namespace tdl{
 namespace ir{
@@ -110,11 +111,11 @@ public:
   value *create_load(value *arg, const std::string &name = "");
   value *create_store(value *ptr, value *val, const std::string &name = "");
   // Tile instruction
-  value *create_splat(value *arg, const std::vector<unsigned> &shapes, const std::string &name = "");
-  value *create_reshape(value *arg, const std::vector<unsigned> &shapes, const std::string &name = "");
-  value *create_broadcast(value *arg, const std::vector<unsigned> &shapes, const std::string &name = "");
+  value *create_splat(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");
+  value *create_reshape(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");
+  value *create_broadcast(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");
   // Built-in instruction
-  value *create_get_global_range(unsigned axis, unsigned size, const std::string &name = "");
+  value *create_get_global_range(unsigned axis, type::tile_shapes_t::value_type size, const std::string &name = "");
   value *create_matmul(value *A, value *B, value *C, const std::string &name = "");
   // Intrinsics
   value *create_copy_to_shared(value *arg, const std::string &name = "");

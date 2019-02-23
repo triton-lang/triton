@@ -100,6 +100,7 @@ void node::implicit_broadcast(ir::module *mod, ir::value *&lhs, ir::value *&rhs)
   ir::builder &builder = mod->get_builder();
   ir::type *lhs_ty = lhs->get_type();
   ir::type *rhs_ty = rhs->get_type();
+  ir::type::tile_shapes_t::value_type one = ir::tile_type::make_one(mod->get_context());
   // Both are scalar
   if(!lhs_ty->is_tile_ty() && !rhs_ty->is_tile_ty())
     return;
@@ -111,30 +112,30 @@ void node::implicit_broadcast(ir::module *mod, ir::value *&lhs, ir::value *&rhs)
     return;
   }
   // Both are arrays
-  std::vector<unsigned> lhs_shapes = lhs->get_type()->get_tile_shapes();
-  std::vector<unsigned> rhs_shapes = rhs->get_type()->get_tile_shapes();
+  auto lhs_shapes = lhs->get_type()->get_tile_shapes();
+  auto rhs_shapes = rhs->get_type()->get_tile_shapes();
   if(lhs_shapes == rhs_shapes)
     return;
   int lhs_dim = lhs_shapes.size();
   int rhs_dim = rhs_shapes.size();
-  std::vector<unsigned> &shortest = (lhs_dim < rhs_dim)?lhs_shapes:rhs_shapes;
-  std::vector<unsigned> &longest  = (lhs_dim < rhs_dim)?rhs_shapes:lhs_shapes;
+  auto &shortest = (lhs_dim < rhs_dim)?lhs_shapes:rhs_shapes;
+  auto &longest  = (lhs_dim < rhs_dim)?rhs_shapes:lhs_shapes;
   size_t ndim = longest.size();
   int off = longest.size() - shortest.size();
   for(int i = longest.size() - 1; i>= 0; i--){
-    if(shortest[off + i] != longest[i] && shortest[off + i] != 1 && longest[i] != 1)
+    if(shortest[off + i] != longest[i] && shortest[off + i] != one && longest[i] != one)
       throw std::runtime_error("cannot broadcast");
   }
   // Pad
   for(size_t i = 0; i < off; i++)
-    shortest.insert(shortest.begin(), 1);
+    shortest.insert(shortest.begin(), one);
   ir::value *&target = (lhs_dim < rhs_dim)?lhs:rhs;
   if(off > 0)
     target = builder.create_reshape(target, shortest);
   // Broadcast
-  std::vector<unsigned> shapes(ndim);
+  ir::type::tile_shapes_t shapes(ndim);
   for(size_t i = 0; i < ndim; i++)
-    shapes[i] = std::max(shortest[i], longest[i]);
+    shapes[i] = shortest[i]==one?longest[i]:shortest[i];
   if(shapes != lhs_shapes)
     lhs = builder.create_broadcast(lhs, shapes);
   if(shapes != rhs_shapes)
@@ -148,14 +149,15 @@ inline bool is_terminator(ir::value* x) {
 
 /* Translation unit */
 ir::value* translation_unit::codegen(ir::module *mod) const{
-  decls_->codegen(mod);
+  mod->push_scope(nullptr);
+  decls_.codegen(mod);
   return nullptr;
 }
 
 /* Declaration specifier */
-ir::type* declaration_specifier::type(ir::module *mod) const {
+ir::type* typed_declaration_specifier::type(ir::module *mod) const {
   ir::context &ctx = mod->get_context();
-  switch (spec_) {
+  switch (ty_) {
   case VOID_T:      return ir::type::get_void_ty(ctx);
   case INT1_T:      return ir::type::get_int1_ty(ctx);
   case INT8_T:      return ir::type::get_int8_ty(ctx);
@@ -164,7 +166,18 @@ ir::type* declaration_specifier::type(ir::module *mod) const {
   case INT64_T:     return ir::type::get_int64_ty(ctx);
   case FLOAT32_T:   return ir::type::get_float_ty(ctx);
   case FLOAT64_T:   return ir::type::get_double_ty(ctx);
-  default: throw std::runtime_error("unreachable");
+  default:          throw std::runtime_error("unreachable");
+  }
+}
+
+ir::type* storage_declaration_specifier::type(ir::module *mod) const {
+  ir::type* result = decl_spec_->type(mod);
+  switch(storage_spec_){
+  case TUNABLE_T:   return result->set_tunable();
+  case KERNEL_T:    return result->set_kernel();
+  case READONLY_T:  return result->set_readonly();
+  case WRITEONLY_T: return result->set_writeonly();
+  default:          throw std::runtime_error("unreachable");
   }
 }
 
@@ -194,10 +207,10 @@ const std::string &identifier::name() const{
 }
 
 // Tile
-ir::type* tile::type_impl(ir::module*, ir::type *type) const{
-  std::vector<unsigned> shapes;
+ir::type* tile::type_impl(ir::module *mod, ir::type *type) const{
+  ir::type::tile_shapes_t shapes;
   for(constant *cst: shapes_->values())
-    shapes.push_back(cst->value());
+    shapes.push_back((ir::constant_int*)cst->codegen(mod));
   return ir::tile_type::get(type, shapes);
 }
 
@@ -245,6 +258,7 @@ ir::value* function_definition::codegen(ir::module *mod) const{
 
 /* Statements */
 ir::value* compound_statement::codegen(ir::module* mod) const{
+  mod->push_scope(this);
   if(decls_)
     decls_->codegen(mod);
   if(statements_){
@@ -254,6 +268,7 @@ ir::value* compound_statement::codegen(ir::module* mod) const{
         return current;
     }
   }
+  mod->pop_scope();
   return nullptr;
 }
 
@@ -337,7 +352,7 @@ ir::value* continue_statement::codegen(ir::module *mod) const{
 /* Declaration */
 ir::value* declaration::codegen(ir::module* mod) const{
   for(initializer *init: init_->values())
-    init->specifier(spec_);
+    init->set_specifier(spec_);
   init_->codegen(mod);
   return nullptr;
 }
@@ -347,7 +362,7 @@ ir::type* initializer::type_impl(ir::module *mod, ir::type *type) const{
   return decl_->type(mod, type);
 }
 
-void initializer::specifier(const declaration_specifier *spec) {
+void initializer::set_specifier(const declaration_specifier *spec) {
   spec_ = spec;
 }
 
@@ -355,6 +370,11 @@ ir::value* initializer::codegen(ir::module * mod) const{
   ir::type *ty = decl_->type(mod, spec_->type(mod));
   std::string name = decl_->id()->name();
   ir::value *value = ir::undef_value::get(ty);
+  if(ty->get_tunable()){
+    assert(expr_ == nullptr);
+    //TODO
+    value = ir::metaparameter::create(mod->get_context(), ty, 4, 8);
+  }
   if(expr_){
     value = expr_->codegen(mod);
     value = explicit_cast(mod->get_builder(), value, ty);
@@ -464,7 +484,7 @@ ir::value* binary_operator::codegen(ir::module *mod) const{
 // get_global_range
 ir::value* get_global_range::codegen(ir::module *mod) const {
   ir::builder &builder = mod->get_builder();
-  return builder.create_get_global_range(axis_->value(), size_->value());
+  return builder.create_get_global_range(axis_->value(), (ir::constant_int*)size_->codegen(mod));
 }
 
 
@@ -487,11 +507,13 @@ ir::value* matmul_expression::codegen(ir::module *mod) const {
 ir::value* indexing_expression::codegen(ir::module *mod) const{
   ir::value *in = mod->get_value(id_->name());
   const std::vector<slice*> &slices = slices_->values();
-  std::vector<unsigned> in_shapes = in->get_type()->get_tile_shapes();
-  std::vector<unsigned> out_shapes(slices.size());
+  auto in_shapes = in->get_type()->get_tile_shapes();
+  ir::type::tile_shapes_t::value_type one = ir::tile_type::make_one(mod->get_context());
+  ir::type::tile_shapes_t out_shapes(slices.size());
+  // create shapes
   size_t current = 0;
   for(size_t i = 0; i < out_shapes.size(); i++)
-    out_shapes[i] = (slices[i]->type()==NEWAXIS)?1:in_shapes[current++];
+    out_shapes[i] = (slices[i]->type()==NEWAXIS)?one:in_shapes[current++];
   return mod->get_builder().create_reshape(in, out_shapes);
 }
 
@@ -586,8 +608,8 @@ int constant::value() const{
 
 /* Constant range */
 ir::value* constant_range::codegen(ir::module *mod) const{
-  return ir::constant_range::get((ir::constant*)first_->codegen(mod),
-                                 (ir::constant*)last_->codegen(mod));
+  return ir::constant_range::get((ir::constant_int*)first_->codegen(mod),
+                                 (ir::constant_int*)last_->codegen(mod));
 }
 
 /* Named */

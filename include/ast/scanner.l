@@ -16,6 +16,10 @@ int comment();
 %}
 
 %%
+"tunable"     { count(); return(TUNABLE); }
+"kernel"      { count(); return(KERNEL); }
+"readonly"    { count(); return(READONLY); }
+"writeonly"   { count(); return(WRITEONLY); }
 "@"         { count(); return(AT); }
 "newaxis"		{ count(); return(NEWAXIS); }
 "if"			  { count(); return(IF); }

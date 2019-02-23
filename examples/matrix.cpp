@@ -6,6 +6,7 @@
 #include "ir/context.h"
 #include "ir/module.h"
 #include "ir/print.h"
+#include "ir/context_impl.h"
 #include "codegen/selection.h"
 #include "codegen/tune.h"
 #include "codegen/shared_copy.h"
@@ -182,6 +183,9 @@ int main() {
   llvm::LLVMContext llvm_context;
   llvm::Module llvm_module("test", llvm_context);
 
+//  context.p_impl->mp_constants_[0]->set_value(16);
+//  context.p_impl->mp_constants_[1]->set_value(16);
+//  context.p_impl->mp_constants_[2]->set_value(8);
 
   // create passes
   tdl::codegen::buffer_info_pass buffer_info;

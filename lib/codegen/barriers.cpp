@@ -45,10 +45,15 @@ void barriers::get_written_intervals(ir::instruction *i, interval_vec_t &res){
 
 void barriers::insert_barrier(ir::instruction *instr, ir::builder &builder) {
   if(auto *phi = dynamic_cast<ir::phi_node*>(instr)) {
+    std::set<ir::value*> incoming;
     for(unsigned n = 0; n < phi->get_num_incoming(); n++){
-      ir::basic_block *block = phi->get_incoming_block(n);
-      builder.set_insert_point(block->get_inst_list().back());
-      builder.create_barrier();
+      ir::instruction *inc_val = dynamic_cast<ir::instruction*>(phi->get_incoming_value(n));
+      assert(inc_val);
+      if(incoming.insert(inc_val).second){
+        ir::basic_block *block = inc_val->get_parent();
+        builder.set_insert_point(block->get_inst_list().back());
+        builder.create_barrier();
+      }
     }
   }
   else {
@@ -57,15 +62,15 @@ void barriers::insert_barrier(ir::instruction *instr, ir::builder &builder) {
   }
 }
 
-void barriers::add(ir::basic_block *block, interval_vec_t &not_synced, std::set<ir::instruction*> &insert_pts) {
-  for(ir::instruction *i: block->get_inst_list()){
+void barriers::add(ir::basic_block *block, interval_vec_t &not_synced, ir::builder &builder) {
+  ir::basic_block::inst_list_t instructions = block->get_inst_list();
+  for(ir::instruction *i: instructions){
     interval_vec_t read, written;
     get_read_intervals(i, read);
     get_written_intervals(i, written);
-    if(intersect(not_synced, read)
-        || intersect(not_synced, written)) {
+    if(intersect(not_synced, read)) {
       not_synced.clear();
-      insert_pts.insert(i);
+      insert_barrier(i, builder);
     }
     std::copy(written.begin(), written.end(), std::back_inserter(not_synced));
   }
@@ -76,12 +81,8 @@ void barriers::run(ir::module &mod) {
   for(ir::function *fn: mod.get_function_list()){
     // find barrier location
     interval_vec_t not_synced;
-    std::set<ir::instruction*> insert_pts;
     for(ir::basic_block *block: fn->blocks())
-      add(block, not_synced, insert_pts);
-    // insert barrier
-    for(ir::instruction *i: insert_pts)
-      insert_barrier(i, builder);
+      add(block, not_synced, builder);
   }
 }
 

@@ -3,6 +3,7 @@
 
 #include <map>
 #include <set>
+#include <stack>
 #include <string>
 #include <functional>
 #include "builder.h"
@@ -12,6 +13,7 @@ namespace tdl{
 namespace ast{
 
 class iteration_statement;
+class compound_statement;
 
 }
 
@@ -69,6 +71,10 @@ public:
   const functions_list_t &get_function_list() const { return functions_; }
   functions_list_t &get_function_list()             { return functions_; }
   function *get_or_insert_function(const std::string &name, function_type *ty);
+  // Scope
+  void push_scope(const ast::compound_statement* scope)   { scopes_.push(scope); }
+  void pop_scope()                                        { scopes_.pop(); }
+  const ast::compound_statement* get_scope()              { return scopes_.top(); }
 
 
 private:
@@ -83,6 +89,7 @@ private:
   symbols_map_t symbols_;
   std::function<ir::value*()> continue_fn_;
   std::map<value*, value**> current_phi_;
+  std::stack<const ast::compound_statement*> scopes_;
 };
 
 }

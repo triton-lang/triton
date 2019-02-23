@@ -3,6 +3,8 @@
 #include "ir/type.h"
 #include "ir/module.h"
 #include "ir/function.h"
+#include "ir/context_impl.h"
+
 #include <cstdlib>
 
 
@@ -29,7 +31,8 @@ void tune::init_c_phi(ir::instruction *v) {
 
 void tune::init_c_graph(ir::instruction *v) {
   // Reference shape
-  std::vector<unsigned> shapes;
+  ir::type::tile_shapes_t::value_type one = ir::tile_type::make_one(v->get_parent()->get_context());
+  ir::type::tile_shapes_t shapes;
   if(auto *store = dynamic_cast<ir::store_inst*>(v))
     shapes = store->get_pointer_operand()->get_type()->get_tile_shapes();
   else
@@ -39,7 +42,7 @@ void tune::init_c_graph(ir::instruction *v) {
     ir::value *op = v->get_operand(0);
     unsigned current = 0;
     for(unsigned i = 0; i < shapes.size(); i ++){
-      if(shapes[i] == 1)
+      if(shapes[i] == one)
         static_params_.insert({{v, i}, 1});
       else
         add_constraint({v, i}, {op, current++});
@@ -99,6 +102,7 @@ void tune::connected_components(node_t x, const std::vector<unsigned *> vals, st
 std::vector<unsigned*> tune::get_params(ir::module &mod) {
   std::vector<unsigned *> result;
   std::set<unsigned*> seen;
+
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i : block->get_inst_list())
@@ -143,8 +147,9 @@ void tune::create_grids(std::vector<ir::instruction*> &grids,
   // get number of dimensions greater than 1
   auto get_tile_gt1_dim = [&](ir::value *v){
     unsigned result = 0;
-    for(unsigned shape: v->get_type()->get_tile_shapes()) {
-      result += (shape > 1)?shape:0;
+    auto one = ir::tile_type::make_one(fn->get_fn_type()->get_context());
+    for(ir::constant_int *shape: v->get_type()->get_tile_shapes()) {
+      result += (shape != one);
     }
     return result;
   };
@@ -194,8 +199,8 @@ for(ir::function *fn: mod.get_function_list()){
       unsigned *s1 = params_[i]["p1.d" + strk];
       unsigned *s2 = params_[i]["p2.d" + strk];
       unsigned multiple = (*s0)*(*s1)*(*s2);
-      if(shapes[k] % multiple != 0)
-        errors[i].push_back("for dim " + strk + ": shape (" + to_string(shapes[k]) + ")"
+      if(shapes[k]->get_value() % multiple != 0)
+        errors[i].push_back("for dim " + strk + ": shape (" + to_string(shapes[k]->get_value()) + ")"
                             " is not a multiple of layout (" + to_string(multiple)  + ")");
     }
     // the number of thread per warp must be 32

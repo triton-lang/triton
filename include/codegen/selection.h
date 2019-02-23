@@ -100,6 +100,7 @@ class selection{
 private:
   // utils
   llvm::Type *make_vector_ty(llvm::Type *ty, size_t vector_size);
+  std::vector<unsigned> extract_shapes(ir::value *v);
 
   // LLVM conversions
   llvm::Type*        llvm_type(ir::type *ty, llvm::LLVMContext &ctx);
