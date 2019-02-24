@@ -4,7 +4,7 @@
 #include "value.h"
 #include <cassert>
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class type;

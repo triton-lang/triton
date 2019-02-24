@@ -10,7 +10,7 @@
 #include <iostream>
 
 
-namespace tdl{
+namespace triton{
 
 namespace ast{
 

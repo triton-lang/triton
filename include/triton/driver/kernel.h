@@ -28,7 +28,7 @@
 
 #include <memory>
 
-namespace tdl
+namespace triton
 {
 
 namespace driver

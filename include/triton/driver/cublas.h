@@ -32,7 +32,7 @@
 #include "triton/tools/bench.hpp"
 #include "triton/tools/collections.hpp"
 
-namespace tdl
+namespace triton
 {
 namespace driver
 {

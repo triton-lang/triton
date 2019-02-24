@@ -6,7 +6,7 @@
 #include <memory>
 #include <set>
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class type;

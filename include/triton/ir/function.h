@@ -5,7 +5,7 @@
 #include "value.h"
 #include "constant.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class function;

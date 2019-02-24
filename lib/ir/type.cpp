@@ -5,7 +5,7 @@
 #include "triton/ir/value.h"
 #include "triton/ir/constant.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 //===----------------------------------------------------------------------===//

@@ -5,7 +5,7 @@
 #include <iostream>
 #include <set>
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class context;

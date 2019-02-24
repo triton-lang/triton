@@ -18,7 +18,7 @@ namespace llvm{
   class LLVMContext;
 }
 
-namespace tdl{
+namespace triton{
 namespace codegen{
 
 class allocation;

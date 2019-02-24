@@ -5,7 +5,7 @@
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
 
-namespace tdl {
+namespace triton {
 
 namespace codegen{
 

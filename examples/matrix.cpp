@@ -33,7 +33,7 @@ typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();
 extern YY_BUFFER_STATE yy_scan_string(const char * str);
 extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
-using tdl::ast::translation_unit;
+using triton::ast::translation_unit;
 extern translation_unit *ast_root;
 
 const char src[] =
@@ -199,8 +199,8 @@ int main() {
   translation_unit *program = ast_root;
 
   // create Triton-IR from AST
-  tdl::ir::context context;
-  tdl::ir::module module("matrix", context);
+  triton::ir::context context;
+  triton::ir::module module("matrix", context);
   program->codegen(&module);
   llvm::LLVMContext llvm_context;
   llvm::Module llvm_module("matmul", llvm_context);
@@ -208,14 +208,14 @@ int main() {
 
 
   // create passes
-  tdl::codegen::buffer_info_pass buffer_info;
-  tdl::codegen::place_shared_copy shared(&buffer_info);
-  tdl::codegen::tune tune;
-  tdl::codegen::liveness liveness(&buffer_info);
-  tdl::codegen::allocation allocation(&liveness, &buffer_info);
-  tdl::codegen::barriers barriers(&allocation, &buffer_info);
-  tdl::codegen::vectorize vectorize(&tune);
-  tdl::codegen::selection selection(&allocation, &tune, &buffer_info);
+  triton::codegen::buffer_info_pass buffer_info;
+  triton::codegen::place_shared_copy shared(&buffer_info);
+  triton::codegen::tune tune;
+  triton::codegen::liveness liveness(&buffer_info);
+  triton::codegen::allocation allocation(&liveness, &buffer_info);
+  triton::codegen::barriers barriers(&allocation, &buffer_info);
+  triton::codegen::vectorize vectorize(&tune);
+  triton::codegen::selection selection(&allocation, &tune, &buffer_info);
 
   // tuning parameters
   tune.run(module);
@@ -243,7 +243,7 @@ int main() {
   for(unsigned *x: tune.get_params(module))
     *x = params[3 + i++];
   // constraints
-  std::map<tdl::ir::value*, std::vector<std::string>> errors;
+  std::map<triton::ir::value*, std::vector<std::string>> errors;
   tune.check_constraints(module, errors);
   std::cout << "errors: " << errors.size() << std::endl;
   for(auto &x: errors){
@@ -255,7 +255,7 @@ int main() {
 
 
   // run passes
-  tdl::ir::print(module, std::cout);
+  triton::ir::print(module, std::cout);
   buffer_info.run(module);
   shared.run(module);
   liveness.run(module);

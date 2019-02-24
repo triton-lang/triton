@@ -29,7 +29,7 @@
 #include "triton/tools/sys/getenv.hpp"
 #include "triton/tools/sys/mkdir.hpp"
 
-namespace tdl
+namespace triton
 {
 
 namespace driver

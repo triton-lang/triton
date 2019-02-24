@@ -1,7 +1,7 @@
 #ifndef TDL_INCLUDE_CODEGEN_VECTORIZE_H
 #define TDL_INCLUDE_CODEGEN_VECTORIZE_H
 
-namespace tdl {
+namespace triton {
 
 namespace ir {
   class module;

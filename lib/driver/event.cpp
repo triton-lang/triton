@@ -22,7 +22,7 @@
 
 #include "triton/driver/event.h"
 
-namespace tdl
+namespace triton
 {
 namespace driver
 {

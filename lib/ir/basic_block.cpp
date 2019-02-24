@@ -3,7 +3,7 @@
 #include "triton/ir/type.h"
 #include "triton/ir/function.h"
 
-namespace tdl {
+namespace triton {
 namespace ir {
 
 class phi_node;

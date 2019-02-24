@@ -8,7 +8,7 @@
 #include "basic_block.h"
 #include "type.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class basic_block;

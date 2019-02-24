@@ -5,7 +5,7 @@
 #include <set>
 #include <vector>
 
-namespace tdl{
+namespace triton{
 
 namespace ir{
   class value;

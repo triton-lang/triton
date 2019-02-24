@@ -6,7 +6,7 @@
 #include "triton/ir/instructions.h"
 #include "triton/ir/print.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 std::string get_name(ir::value *v, unsigned i) {

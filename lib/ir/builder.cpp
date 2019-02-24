@@ -6,7 +6,7 @@
 #include "triton/ir/type.h"
 #include "llvm/IR/Instruction.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 builder::builder(context &ctx):

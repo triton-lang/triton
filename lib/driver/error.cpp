@@ -22,7 +22,7 @@
 
 #include "triton/driver/error.h"
 
-namespace tdl
+namespace triton
 {
 namespace driver
 {

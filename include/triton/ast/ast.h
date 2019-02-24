@@ -8,7 +8,7 @@
 #include <iostream>
 
 
-namespace tdl{
+namespace triton{
 
 
 namespace ir{

@@ -24,7 +24,7 @@
 #include "triton/driver/dispatch.h"
 #include "triton/driver/context.h"
 
-namespace tdl
+namespace triton
 {
 namespace driver
 {

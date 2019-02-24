@@ -25,7 +25,7 @@
 #include <string>
 #include <cstdlib>
 
-namespace tdl
+namespace triton
 {
 
 namespace tools

@@ -26,7 +26,7 @@
 #include "triton/driver/kernel.h"
 #include "triton/driver/buffer.h"
 
-namespace tdl
+namespace triton
 {
 
 namespace driver

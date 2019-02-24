@@ -37,7 +37,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace tdl
+namespace triton
 {
 namespace driver
 {

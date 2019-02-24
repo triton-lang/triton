@@ -4,7 +4,7 @@
 
 #include "builder.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class module;

@@ -1,10 +1,10 @@
 %{
-namespace tdl{
+namespace triton{
 namespace ast{
 class node;
 }
 }
-using namespace tdl::ast;
+using namespace triton::ast;
 #define YYSTYPE node*
 #include "../include/triton/ast/ast.h"
 
@@ -129,8 +129,8 @@ primary_expression_list
   ;
 
 slice
-  : ':' { $$ = new slice(tdl::ast::ALL); }
-  | NEWAXIS { $$ = new slice(tdl::ast::NEWAXIS); }
+  : ':' { $$ = new slice(triton::ast::ALL); }
+  | NEWAXIS { $$ = new slice(triton::ast::NEWAXIS); }
 
 slice_list
   : slice { $$ = new list<slice*>((slice*)$1); }

@@ -28,7 +28,7 @@
 
 #include "triton/driver/device.h"
 
-namespace tdl
+namespace triton
 {
 
 namespace driver

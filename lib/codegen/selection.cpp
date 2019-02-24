@@ -13,7 +13,7 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/IR/BasicBlock.h"
 
-namespace tdl{
+namespace triton{
 namespace codegen{
 
 using namespace llvm;

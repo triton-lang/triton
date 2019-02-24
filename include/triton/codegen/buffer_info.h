@@ -4,7 +4,7 @@
 #include <set>
 #include <map>
 
-namespace tdl {
+namespace triton {
 
 namespace ir {
   class module;

@@ -5,7 +5,7 @@
 #include <list>
 #include "value.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class context;

@@ -6,7 +6,7 @@
 #include "triton/ir/type.h"
 #include "llvm/IR/Instructions.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class basic_block;

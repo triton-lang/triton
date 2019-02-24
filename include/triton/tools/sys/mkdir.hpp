@@ -31,7 +31,7 @@
   #include <direct.h>
 #endif
 
-namespace tdl
+namespace triton
 {
 
 namespace tools

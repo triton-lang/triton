@@ -3,7 +3,7 @@
 
 #include <map>
 
-namespace tdl{
+namespace triton{
 
 namespace ir{
   class value;

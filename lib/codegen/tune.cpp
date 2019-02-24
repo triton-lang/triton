@@ -8,7 +8,7 @@
 #include <cstdlib>
 
 
-namespace tdl{
+namespace triton{
 namespace codegen{
 
 void tune::add_constraint(node_t x, node_t y) {

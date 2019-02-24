@@ -4,7 +4,7 @@
 #include <memory>
 #include "triton/ir/type.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class type;

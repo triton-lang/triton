@@ -29,7 +29,7 @@
 #include <type_traits>
 #include "triton/driver/dispatch.h"
 
-namespace tdl
+namespace triton
 {
 
 namespace driver

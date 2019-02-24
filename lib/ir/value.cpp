@@ -3,7 +3,7 @@
 #include <iostream>
 #include <cassert>
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 class type;

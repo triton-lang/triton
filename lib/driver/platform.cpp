@@ -26,7 +26,7 @@
 
 #include <string>
 
-namespace tdl
+namespace triton
 {
 namespace driver
 {

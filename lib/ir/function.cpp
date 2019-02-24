@@ -2,7 +2,7 @@
 #include "triton/ir/type.h"
 #include "triton/ir/module.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 

@@ -8,7 +8,7 @@
 #include <functional>
 #include "builder.h"
 
-namespace tdl{
+namespace triton{
 
 namespace ast{
 

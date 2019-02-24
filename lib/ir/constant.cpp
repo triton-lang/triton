@@ -4,7 +4,7 @@
 #include "triton/ir/context.h"
 #include "triton/ir/context_impl.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 

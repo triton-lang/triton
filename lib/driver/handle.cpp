@@ -24,7 +24,7 @@
 #include <memory>
 #include "triton/driver/handle.h"
 
-namespace tdl
+namespace triton
 {
 
 namespace driver

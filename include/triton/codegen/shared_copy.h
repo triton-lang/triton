@@ -4,7 +4,7 @@
 #include <tuple>
 #include <vector>
 
-namespace tdl {
+namespace triton {
 
 namespace ir {
   class module;

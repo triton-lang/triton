@@ -8,7 +8,7 @@
 #include "triton/ir/function.h"
 #include "triton/ir/instructions.h"
 
-namespace tdl{
+namespace triton{
 namespace codegen{
 
 unsigned allocation::get_num_bytes(ir::value *x) {

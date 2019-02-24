@@ -4,7 +4,7 @@
 #include "triton/ir/constant.h"
 #include "triton/ir/type.h"
 
-namespace tdl{
+namespace triton{
 namespace ir{
 
 //===----------------------------------------------------------------------===//
