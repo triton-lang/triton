@@ -24,10 +24,10 @@
 #define TDL_INCLUDE_DRIVER_STREAM_H
 
 #include <map>
-#include "driver/context.h"
-#include "driver/device.h"
-#include "driver/handle.h"
-#include "driver/buffer.h"
+#include "triton/driver/context.h"
+#include "triton/driver/device.h"
+#include "triton/driver/handle.h"
+#include "triton/driver/buffer.h"
 
 namespace tdl
 {

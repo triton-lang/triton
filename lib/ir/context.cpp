@@ -1,6 +1,6 @@
-#include "ir/context_impl.h"
-#include "ir/context.h"
-#include "ir/type.h"
+#include "triton/ir/context_impl.h"
+#include "triton/ir/context.h"
+#include "triton/ir/type.h"
 
 namespace tdl{
 namespace ir{

@@ -20,13 +20,13 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#ifndef TDL_INCLUDE_DRIVER_PLATFORM_H
-#define TDL_INCLUDE_DRIVER_PLATFORM_H
+#ifndef TDL_INCLUDE_DRIVER_MODULE_H
+#define TDL_INCLUDE_DRIVER_MODULE_H
 
-#include <vector>
-#include <string>
-
-#include "driver/handle.h"
+#include <map>
+#include "triton/driver/handle.h"
+#include "triton/driver/context.h"
+#include "triton/driver/buffer.h"
 
 namespace tdl
 {
@@ -34,18 +34,25 @@ namespace tdl
 namespace driver
 {
 
+class Context;
 class Device;
 
-class Platform
+class Module: public HandleInterface<Module, CUmodule>
 {
+  static std::string header(Device const & device);
+
 public:
-  //Accessors
-  std::string name() const { return "CUDA"; }
-  std::string version() const;
-  std::vector<Device> devices() const;
+  Module(Context const & context, std::string const & source);
+  Context const & context() const;
+  Handle<CUmodule> const & cu() const;
+  Buffer symbol(const char * name) const;
+
 private:
-  Handle<cu_platform> cu_;
+  Handle<CUmodule> cu_;
+  Context context_;
+  std::string source_;
 };
+
 
 }
 

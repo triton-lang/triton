@@ -6,7 +6,7 @@ class node;
 }
 using namespace tdl::ast;
 #define YYSTYPE node*
-#include "../include/ast/ast.h"
+#include "../include/triton/ast/ast.h"
 
 extern char* yytext;
 void yyerror(const char *s);
@@ -117,7 +117,7 @@ builtin
 primary_expression
   : identifier         { $$ = new named_expression($1); }
   | constant           { $$ = $1; }
-  | constant ELLIPSIS constant { $$ = new constant_range($1, $3); }
+  | primary_expression ELLIPSIS primary_expression { $$ = new constant_range($1, $3); }
   | builtin            { $$ = $1; }
   | STRING_LITERAL     { $$ = new string_literal(yytext); }
   | '(' expression ')' { $$ = $2; }

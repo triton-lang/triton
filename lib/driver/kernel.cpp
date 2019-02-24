@@ -23,8 +23,8 @@
 #include <iostream>
 #include <cstring>
 
-#include "driver/kernel.h"
-#include "driver/buffer.h"
+#include "triton/driver/kernel.h"
+#include "triton/driver/buffer.h"
 
 namespace tdl
 {

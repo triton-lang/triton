@@ -1,9 +1,9 @@
 #include <string>
-#include "ir/basic_block.h"
-#include "ir/builder.h"
-#include "ir/constant.h"
-#include "ir/instructions.h"
-#include "ir/type.h"
+#include "triton/ir/basic_block.h"
+#include "triton/ir/builder.h"
+#include "triton/ir/constant.h"
+#include "triton/ir/instructions.h"
+#include "triton/ir/type.h"
 #include "llvm/IR/Instruction.h"
 
 namespace tdl{

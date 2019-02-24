@@ -1,6 +1,6 @@
-#include "ir/function.h"
-#include "ir/type.h"
-#include "ir/module.h"
+#include "triton/ir/function.h"
+#include "triton/ir/type.h"
+#include "triton/ir/module.h"
 
 namespace tdl{
 namespace ir{

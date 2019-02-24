@@ -20,32 +20,44 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#ifndef TDL_INCLUDE_DRIVER_BUFFER_H
-#define TDL_INCLUDE_DRIVER_BUFFER_H
+#ifndef TDL_INCLUDE_DRIVER_CONTEXT_H
+#define TDL_INCLUDE_DRIVER_CONTEXT_H
 
-#include "driver/handle.h"
-#include "driver/context.h"
+#include "triton/driver/device.h"
+#include "triton/driver/handle.h"
 
 namespace tdl
 {
 namespace driver
 {
 
-class Stream;
-
-// Buffer
-class Buffer: public HandleInterface<Buffer, CUdeviceptr>
+class Context: public HandleInterface<Context, CUcontext>
 {
+private:
+  static std::string get_cache_path();
+  static CUdevice device(CUcontext);
+
 public:
-  Buffer(Context const & context, size_t size);
-  Buffer(Context const & context, CUdeviceptr cu, bool take_ownership);
-  void set_zero(Stream const & queue, size_t size);
-  Handle<CUdeviceptr> const & cu() const;
-  Handle<CUdeviceptr> & cu();
+  //Constructors
+  explicit Context(CUcontext context, bool take_ownership = true);
+  explicit Context(Device const & device);
+  //Accessors
+  Device const & device() const;
+  std::string const & cache_path() const;
+  Handle<CUcontext> const & cu() const;
 
 private:
-  Context context_;
-  Handle<CUdeviceptr> cu_;
+  Handle<CUcontext> cu_;
+  Device device_;
+  std::string cache_path_;
+};
+
+class ContextSwitcher{
+public:
+    ContextSwitcher(Context const & ctx);
+    ~ContextSwitcher();
+private:
+    Context const & ctx_;
 };
 
 }

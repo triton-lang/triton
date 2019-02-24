@@ -21,8 +21,8 @@
 */
 
 
-#include "driver/platform.h"
-#include "driver/device.h"
+#include "triton/driver/platform.h"
+#include "triton/driver/device.h"
 
 #include <string>
 

@@ -1,5 +1,5 @@
-#include "ir/value.h"
-#include "ir/instructions.h"
+#include "triton/ir/value.h"
+#include "triton/ir/instructions.h"
 #include <iostream>
 #include <cassert>
 

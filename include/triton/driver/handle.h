@@ -27,7 +27,7 @@
 #include <iostream>
 #include <functional>
 #include <type_traits>
-#include "driver/dispatch.h"
+#include "triton/driver/dispatch.h"
 
 namespace tdl
 {

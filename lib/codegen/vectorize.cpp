@@ -1,9 +1,9 @@
-#include "codegen/vectorize.h"
-#include "codegen/tune.h"
-#include "ir/module.h"
-#include "ir/function.h"
-#include "ir/basic_block.h"
-#include "ir/instructions.h"
+#include "triton/codegen/vectorize.h"
+#include "triton/codegen/tune.h"
+#include "triton/ir/module.h"
+#include "triton/ir/function.h"
+#include "triton/ir/basic_block.h"
+#include "triton/ir/instructions.h"
 
 namespace tdl {
 

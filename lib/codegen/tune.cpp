@@ -1,9 +1,9 @@
-#include "codegen/tune.h"
-#include "ir/instructions.h"
-#include "ir/type.h"
-#include "ir/module.h"
-#include "ir/function.h"
-#include "ir/context_impl.h"
+#include "triton/codegen/tune.h"
+#include "triton/ir/instructions.h"
+#include "triton/ir/type.h"
+#include "triton/ir/module.h"
+#include "triton/ir/function.h"
+#include "triton/ir/context_impl.h"
 
 #include <cstdlib>
 

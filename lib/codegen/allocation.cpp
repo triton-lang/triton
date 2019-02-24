@@ -1,12 +1,12 @@
-#include "codegen/allocation.h"
-#include "codegen/liveness.h"
-#include "codegen/layout.h"
-#include "codegen/buffer_info.h"
-#include "ir/basic_block.h"
-#include "ir/type.h"
-#include "ir/value.h"
-#include "ir/function.h"
-#include "ir/instructions.h"
+#include "triton/codegen/allocation.h"
+#include "triton/codegen/liveness.h"
+#include "triton/codegen/layout.h"
+#include "triton/codegen/buffer_info.h"
+#include "triton/ir/basic_block.h"
+#include "triton/ir/type.h"
+#include "triton/ir/value.h"
+#include "triton/ir/function.h"
+#include "triton/ir/instructions.h"
 
 namespace tdl{
 namespace codegen{

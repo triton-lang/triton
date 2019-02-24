@@ -3,7 +3,7 @@
 
 #include <memory>
 #include <map>
-#include "ir/type.h"
+#include "triton/ir/type.h"
 
 namespace tdl{
 namespace ir{

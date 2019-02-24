@@ -1,9 +1,9 @@
-#include "codegen/buffer_info.h"
-#include "ir/module.h"
-#include "ir/function.h"
-#include "ir/basic_block.h"
-#include "ir/instructions.h"
-#include "ir/type.h"
+#include "triton/codegen/buffer_info.h"
+#include "triton/ir/module.h"
+#include "triton/ir/function.h"
+#include "triton/ir/basic_block.h"
+#include "triton/ir/instructions.h"
+#include "triton/ir/type.h"
 
 namespace tdl {
 

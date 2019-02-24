@@ -20,13 +20,13 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#ifndef TDL_INCLUDE_DRIVER_MODULE_H
-#define TDL_INCLUDE_DRIVER_MODULE_H
+#ifndef TDL_INCLUDE_DRIVER_KERNEL_H
+#define TDL_INCLUDE_DRIVER_KERNEL_H
 
-#include <map>
-#include "driver/handle.h"
-#include "driver/context.h"
-#include "driver/buffer.h"
+#include "triton/driver/module.h"
+#include "triton/driver/handle.h"
+
+#include <memory>
 
 namespace tdl
 {
@@ -34,28 +34,35 @@ namespace tdl
 namespace driver
 {
 
-class Context;
-class Device;
+class Buffer;
 
-class Module: public HandleInterface<Module, CUmodule>
+// Kernel
+class Kernel: public HandleInterface<Kernel, CUfunction>
 {
-  static std::string header(Device const & device);
-
 public:
-  Module(Context const & context, std::string const & source);
-  Context const & context() const;
-  Handle<CUmodule> const & cu() const;
-  Buffer symbol(const char * name) const;
+  //Constructors
+  Kernel(Module const & program, const char * name);
+  //Accessors
+  Handle<CUfunction> const & cu() const;
+  Module const & module() const;
+  //Arguments setters
+  void setArg(unsigned int index, std::size_t size, void* ptr);
+  void setArg(unsigned int index, Buffer const &);
+  template<class T> void setArg(unsigned int index, T value) { setArg(index, sizeof(T), (void*)&value); }
+  //Arguments getters
+  void* const* cu_params() const;
 
 private:
-  Handle<CUmodule> cu_;
-  Context context_;
-  std::string source_;
+  Handle<CUfunction> cu_;
+  Module program_;
+  unsigned int address_bits_;
+  std::vector<std::shared_ptr<void> >  cu_params_store_;
+  std::vector<void*>  cu_params_;
 };
-
 
 }
 
 }
 
 #endif
+

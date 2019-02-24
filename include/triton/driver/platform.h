@@ -20,47 +20,35 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#ifndef TDL_INCLUDE_DRIVER_CONTEXT_H
-#define TDL_INCLUDE_DRIVER_CONTEXT_H
+#ifndef TDL_INCLUDE_DRIVER_PLATFORM_H
+#define TDL_INCLUDE_DRIVER_PLATFORM_H
 
-#include "driver/device.h"
-#include "driver/handle.h"
+#include <vector>
+#include <string>
+
+#include "triton/driver/handle.h"
 
 namespace tdl
 {
+
 namespace driver
 {
 
-class Context: public HandleInterface<Context, CUcontext>
+class Device;
+
+class Platform
 {
-private:
-  static std::string get_cache_path();
-  static CUdevice device(CUcontext);
-
 public:
-  //Constructors
-  explicit Context(CUcontext context, bool take_ownership = true);
-  explicit Context(Device const & device);
   //Accessors
-  Device const & device() const;
-  std::string const & cache_path() const;
-  Handle<CUcontext> const & cu() const;
-
+  std::string name() const { return "CUDA"; }
+  std::string version() const;
+  std::vector<Device> devices() const;
 private:
-  Handle<CUcontext> cu_;
-  Device device_;
-  std::string cache_path_;
-};
-
-class ContextSwitcher{
-public:
-    ContextSwitcher(Context const & ctx);
-    ~ContextSwitcher();
-private:
-    Context const & ctx_;
+  Handle<cu_platform> cu_;
 };
 
 }
+
 }
 
 #endif

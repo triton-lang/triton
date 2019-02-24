@@ -1,8 +1,8 @@
-#include "codegen/layout.h"
-#include "ir/function.h"
-#include "ir/module.h"
-#include "ir/basic_block.h"
-#include "ir/instructions.h"
+#include "triton/codegen/layout.h"
+#include "triton/ir/function.h"
+#include "triton/ir/module.h"
+#include "triton/ir/basic_block.h"
+#include "triton/ir/instructions.h"
 
 namespace tdl{
 namespace codegen{

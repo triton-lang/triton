@@ -20,13 +20,10 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#ifndef TDL_INCLUDE_DRIVER_KERNEL_H
-#define TDL_INCLUDE_DRIVER_KERNEL_H
+#ifndef TDL_INCLUDE_DRIVER_EVENT_H
+#define TDL_INCLUDE_DRIVER_EVENT_H
 
-#include "driver/module.h"
-#include "driver/handle.h"
-
-#include <memory>
+#include "triton/driver/handle.h"
 
 namespace tdl
 {
@@ -34,30 +31,15 @@ namespace tdl
 namespace driver
 {
 
-class Buffer;
-
-// Kernel
-class Kernel: public HandleInterface<Kernel, CUfunction>
+// Event
+class Event: public HandleInterface<Event, cu_event_t>
 {
 public:
-  //Constructors
-  Kernel(Module const & program, const char * name);
-  //Accessors
-  Handle<CUfunction> const & cu() const;
-  Module const & module() const;
-  //Arguments setters
-  void setArg(unsigned int index, std::size_t size, void* ptr);
-  void setArg(unsigned int index, Buffer const &);
-  template<class T> void setArg(unsigned int index, T value) { setArg(index, sizeof(T), (void*)&value); }
-  //Arguments getters
-  void* const* cu_params() const;
+  float elapsed_time() const;
+  Handle<cu_event_t> const & cu() const;
 
 private:
-  Handle<CUfunction> cu_;
-  Module program_;
-  unsigned int address_bits_;
-  std::vector<std::shared_ptr<void> >  cu_params_store_;
-  std::vector<void*>  cu_params_;
+  Handle<cu_event_t> cu_;
 };
 
 }
@@ -65,4 +47,3 @@ private:
 }
 
 #endif
-

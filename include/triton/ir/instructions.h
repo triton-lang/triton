@@ -3,7 +3,7 @@
 
 #include <vector>
 #include "value.h"
-#include "ir/type.h"
+#include "triton/ir/type.h"
 #include "llvm/IR/Instructions.h"
 
 namespace tdl{

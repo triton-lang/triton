@@ -22,7 +22,7 @@
 
 #include <cassert>
 #include <memory>
-#include "driver/handle.h"
+#include "triton/driver/handle.h"
 
 namespace tdl
 {

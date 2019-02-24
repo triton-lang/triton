@@ -2,7 +2,7 @@
 #define TDL_INCLUDE_IR_CONTEXT_H
 
 #include <memory>
-#include "ir/type.h"
+#include "triton/ir/type.h"
 
 namespace tdl{
 namespace ir{

@@ -3,11 +3,11 @@
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
-#include "ir/context.h"
-#include "ir/module.h"
-#include "ir/function.h"
-#include "ir/type.h"
-#include "codegen/buffer_info.h"
+#include "triton/ir/context.h"
+#include "triton/ir/module.h"
+#include "triton/ir/function.h"
+#include "triton/ir/type.h"
+#include "triton/codegen/buffer_info.h"
 
 
 namespace llvm{

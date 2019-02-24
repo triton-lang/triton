@@ -21,10 +21,10 @@
 */
 
 #include <iostream>
-#include "driver/stream.h"
-#include "driver/buffer.h"
-#include "driver/context.h"
-#include "driver/dispatch.h"
+#include "triton/driver/stream.h"
+#include "triton/driver/buffer.h"
+#include "triton/driver/context.h"
+#include "triton/driver/dispatch.h"
 
 
 namespace tdl

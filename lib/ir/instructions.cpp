@@ -1,8 +1,8 @@
-#include "ir/context.h"
-#include "ir/basic_block.h"
-#include "ir/instructions.h"
-#include "ir/constant.h"
-#include "ir/type.h"
+#include "triton/ir/context.h"
+#include "triton/ir/basic_block.h"
+#include "triton/ir/instructions.h"
+#include "triton/ir/constant.h"
+#include "triton/ir/type.h"
 
 namespace tdl{
 namespace ir{

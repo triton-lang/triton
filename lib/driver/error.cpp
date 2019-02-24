@@ -20,7 +20,7 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include "driver/error.h"
+#include "triton/driver/error.h"
 
 namespace tdl
 {

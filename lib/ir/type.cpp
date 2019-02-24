@@ -1,9 +1,9 @@
 #include <cassert>
-#include "ir/type.h"
-#include "ir/context.h"
-#include "ir/context_impl.h"
-#include "ir/value.h"
-#include "ir/constant.h"
+#include "triton/ir/type.h"
+#include "triton/ir/context.h"
+#include "triton/ir/context_impl.h"
+#include "triton/ir/value.h"
+#include "triton/ir/constant.h"
 
 namespace tdl{
 namespace ir{

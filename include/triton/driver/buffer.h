@@ -20,30 +20,35 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#ifndef TDL_INCLUDE_DRIVER_EVENT_H
-#define TDL_INCLUDE_DRIVER_EVENT_H
+#ifndef TDL_INCLUDE_DRIVER_BUFFER_H
+#define TDL_INCLUDE_DRIVER_BUFFER_H
 
-#include "driver/handle.h"
+#include "triton/driver/handle.h"
+#include "triton/driver/context.h"
 
 namespace tdl
 {
-
 namespace driver
 {
 
-// Event
-class Event: public HandleInterface<Event, cu_event_t>
+class Stream;
+
+// Buffer
+class Buffer: public HandleInterface<Buffer, CUdeviceptr>
 {
 public:
-  float elapsed_time() const;
-  Handle<cu_event_t> const & cu() const;
+  Buffer(Context const & context, size_t size);
+  Buffer(Context const & context, CUdeviceptr cu, bool take_ownership);
+  void set_zero(Stream const & queue, size_t size);
+  Handle<CUdeviceptr> const & cu() const;
+  Handle<CUdeviceptr> & cu();
 
 private:
-  Handle<cu_event_t> cu_;
+  Context context_;
+  Handle<CUdeviceptr> cu_;
 };
 
 }
-
 }
 
 #endif

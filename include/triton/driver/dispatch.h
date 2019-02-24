@@ -27,11 +27,11 @@
 #include <dlfcn.h>
 
 //CUDA Backend
-#include "external/CUDA/cuda.h"
-#include "external/CUDA/nvrtc.h"
-#include "external/CUDA/cublas_v2.h"
-#include "external/CUDA/cudnn.h"
-#include "external/CUDA/nvml.h"
+#include "triton/external/CUDA/cuda.h"
+#include "triton/external/CUDA/nvrtc.h"
+#include "triton/external/CUDA/cublas_v2.h"
+#include "triton/external/CUDA/cudnn.h"
+#include "triton/external/CUDA/nvml.h"
 
 //Exceptions
 #include <iostream>

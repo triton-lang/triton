@@ -24,13 +24,13 @@
 #define TDL_INCLUDE_DRIVER_CUBLAS_H
 
 #include "isaac/templates/common.hpp"
-#include "driver/dispatch.h"
-#include "driver/buffer.h"
-#include "driver/stream.h"
-#include "driver/backend.h"
-#include "driver/error.h"
-#include "tools/bench.hpp"
-#include "tools/collections.hpp"
+#include "triton/driver/dispatch.h"
+#include "triton/driver/buffer.h"
+#include "triton/driver/stream.h"
+#include "triton/driver/backend.h"
+#include "triton/driver/error.h"
+#include "triton/tools/bench.hpp"
+#include "triton/tools/collections.hpp"
 
 namespace tdl
 {

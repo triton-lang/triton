@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 2.8)
-project(TDL)
+project(triton)
 include(CTest)
 
 # FLEX/YACC
 find_package(BISON)
 find_package(FLEX)
-BISON_TARGET(Parser ${CMAKE_CURRENT_SOURCE_DIR}/include/ast/parser.y ${CMAKE_CURRENT_BINARY_DIR}/parser.cpp)
-FLEX_TARGET(Lexer ${CMAKE_CURRENT_SOURCE_DIR}/include/ast/scanner.l ${CMAKE_CURRENT_BINARY_DIR}/scanner.cpp)
+BISON_TARGET(Parser ${CMAKE_CURRENT_SOURCE_DIR}/include/triton/ast/parser.y ${CMAKE_CURRENT_BINARY_DIR}/parser.cpp)
+FLEX_TARGET(Lexer ${CMAKE_CURRENT_SOURCE_DIR}/include/triton/ast/scanner.l ${CMAKE_CURRENT_BINARY_DIR}/scanner.cpp)
 get_filename_component(BISON_Parser_INCLUDE_DIRECTORIES ${BISON_Parser_OUTPUT_HEADER} DIRECTORY)
 include_directories(${BISON_Parser_INCLUDE_DIRECTORIES})
 
@@ -31,10 +31,10 @@ add_custom_target( ALL SOURCES ${ALL_SRC} )
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS} -std=c++11")
 
-# TDL
-file(GLOB_RECURSE LIBTDL_SRC lib/*.cpp)
-add_library(tdl SHARED ${LIBTDL_SRC} ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
-target_link_libraries(tdl LLVM)
+# Triton
+file(GLOB_RECURSE LIBTRITON_SRC lib/*.cpp)
+add_library(triton SHARED ${LIBTRITON_SRC} ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
+target_link_libraries(triton LLVM)
 
 # Examples
 add_subdirectory(examples)

@@ -23,11 +23,11 @@
 #include <iostream>
 #include <cassert>
 
-#include "driver/context.h"
-#include "driver/module.h"
+#include "triton/driver/context.h"
+#include "triton/driver/module.h"
 
-#include "tools/sys/getenv.hpp"
-#include "tools/sys/mkdir.hpp"
+#include "triton/tools/sys/getenv.hpp"
+#include "triton/tools/sys/mkdir.hpp"
 
 namespace tdl
 {

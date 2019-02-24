@@ -20,12 +20,12 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include "driver/dispatch.h"
-#include "driver/backend.h"
-#include "driver/buffer.h"
-#include "driver/context.h"
-#include "driver/stream.h"
-#include "driver/kernel.h"
+#include "triton/driver/dispatch.h"
+#include "triton/driver/backend.h"
+#include "triton/driver/buffer.h"
+#include "triton/driver/context.h"
+#include "triton/driver/stream.h"
+#include "triton/driver/kernel.h"
 
 #include <assert.h>
 #include <stdexcept>

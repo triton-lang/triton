@@ -26,7 +26,7 @@
 #include <cstring>
 #include <memory>
 
-#include "driver/device.h"
+#include "triton/driver/device.h"
 
 namespace tdl
 {

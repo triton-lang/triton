@@ -21,8 +21,8 @@
 */
 
 #include <map>
-#include "driver/dispatch.h"
-#include "driver/context.h"
+#include "triton/driver/dispatch.h"
+#include "triton/driver/context.h"
 
 namespace tdl
 {

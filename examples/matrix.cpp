@@ -2,19 +2,19 @@
 #include <cstdio>
 #include "cuda.h"
 #include "llvm/IR/Verifier.h"
-#include "ast/ast.h"
-#include "ir/context.h"
-#include "ir/module.h"
-#include "ir/print.h"
-#include "ir/context_impl.h"
-#include "codegen/selection.h"
-#include "codegen/tune.h"
-#include "codegen/shared_copy.h"
-#include "codegen/allocation.h"
-#include "codegen/liveness.h"
-#include "codegen/vectorize.h"
-#include "codegen/buffer_info.h"
-#include "codegen/barriers.h"
+#include "triton/ast/ast.h"
+#include "triton/ir/context.h"
+#include "triton/ir/module.h"
+#include "triton/ir/print.h"
+#include "triton/ir/context_impl.h"
+#include "triton/codegen/selection.h"
+#include "triton/codegen/tune.h"
+#include "triton/codegen/shared_copy.h"
+#include "triton/codegen/allocation.h"
+#include "triton/codegen/liveness.h"
+#include "triton/codegen/vectorize.h"
+#include "triton/codegen/buffer_info.h"
+#include "triton/codegen/barriers.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
@@ -40,33 +40,35 @@ const char src[] =
 "\
 const tunable int32 TM;\
 const tunable int32 TN;\
-void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
+const tunable int32 TK;\
+\
+void matmul(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
   int32 rxa[TM] = get_global_range[TM](0);\
   int32 ryb[TN] = get_global_range[TN](1);\
-  int32 rka[8] = 0 ... 8;\
-  int32 rkb[8] = 0 ... 8;\
+  int32 rka[TK] = 0 ... TK;\
+  int32 rkb[TK] = 0 ... TK;\
   int32 rxc[TM] = get_global_range[TM](0);\
   int32 ryc[TN] = get_global_range[TN](1);\
   fp32 C[TM, TN] = 0;\
   int32 k;\
-  fp32* pa[TM, 8] = a + rxa[:, newaxis] + rka[newaxis, :]*M;\
-  fp32* pb[TN, 8] = b + ryb[:, newaxis] + rkb[newaxis, :]*K;\
+  fp32* pa[TM, TK] = a + rxa[:, newaxis] + rka[newaxis, :]*M;\
+  fp32* pb[TN, TK] = b + ryb[:, newaxis] + rkb[newaxis, :]*K;\
   fp32* pc[TM, TN] = c + rxc[:, newaxis] + ryc[newaxis, :]*M;\
-  fp32 a[TM, 8] = *pa;\
-  fp32 b[TN, 8] = *pb;\
+  fp32 a[TM, TK] = *pa;\
+  fp32 b[TN, TK] = *pb;\
   int1 checkc0[TM] = rxc < M;\
   int1 checkc1[TN] = ryc < N;\
   int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];\
-  for(k = K; k > 0; k = k - 8){\
-    int1 checka[TM, 8] = (k > 8);\
-    int1 checkb[TN, 8] = (k > 8);\
+  for(k = K; k > 0; k = k - TK){\
+    int1 checka[TM, TK] = (k > 8);\
+    int1 checkb[TN, TK] = (k > 8);\
     int1 checka0[TM];\
-    int1 checka1[8];\
+    int1 checka1[TK];\
     int1 checkb0[TN];\
-    int1 checkb1[8];\
+    int1 checkb1[TK];\
     C = dot(a, b, C);\
-    pa = pa + 8*M;\
-    pb = pb + 8*K;\
+    pa = pa + TK*M;\
+    pb = pb + TK*K;\
     @checka a = *pa;\
     @checkb b = *pb;\
     if(k > 8)\
@@ -171,6 +173,24 @@ void simple_gemm(std::vector<T> &c, const std::vector<T> &a, const std::vector<T
   }
 }
 
+void loop_nest(std::vector<size_t> const & ranges, std::function<void(std::vector<size_t> const &)> const & f){
+  size_t D = ranges.size();
+  std::vector<size_t> values(D, 0);
+  // Start with innermost loop
+  size_t i = D - 1;
+  while(true){
+    //Execute function
+    f(values);
+    //Increment counters
+    while(values[i]++ == ranges[i] - 1){
+      if(i == 0)
+        return;
+      values[i--] = 0;
+    }
+    i = D - 1;
+  }
+}
+
 int main() {
   // create AST from Triton-C source
   YY_BUFFER_STATE buffer = yy_scan_string(src);
@@ -183,11 +203,9 @@ int main() {
   tdl::ir::module module("matrix", context);
   program->codegen(&module);
   llvm::LLVMContext llvm_context;
-  llvm::Module llvm_module("test", llvm_context);
+  llvm::Module llvm_module("matmul", llvm_context);
 
-  context.p_impl->mp_constants_[0]->set_value(16);
-  context.p_impl->mp_constants_[1]->set_value(16);
-//  context.p_impl->mp_constants_[2]->set_value(8);
+
 
   // create passes
   tdl::codegen::buffer_info_pass buffer_info;
@@ -202,6 +220,8 @@ int main() {
   // tuning parameters
   tune.run(module);
   std::vector<unsigned> params = {
+    // shapes
+    16, 16, 8,
     // a0
     2, 8, 1,
     // b0
@@ -215,10 +235,15 @@ int main() {
     // b1
     1, 8, 1
   };
-  std::map<tdl::ir::value*, std::vector<std::string>> errors;
+  // meta-parameters
   unsigned i = 0;
+  context.p_impl->mp_constants_[0]->set_value(params[0]);
+  context.p_impl->mp_constants_[1]->set_value(params[1]);
+  context.p_impl->mp_constants_[2]->set_value(params[2]);
   for(unsigned *x: tune.get_params(module))
-    *x = params[i++];
+    *x = params[3 + i++];
+  // constraints
+  std::map<tdl::ir::value*, std::vector<std::string>> errors;
   tune.check_constraints(module, errors);
   std::cout << "errors: " << errors.size() << std::endl;
   for(auto &x: errors){
@@ -255,7 +280,7 @@ int main() {
   CUfunction cu_kernel;
   CUstream cu_stream;
   int major, minor;
-  compile_machine_code(cu_device, cu_context, cu_module, cu_kernel, cu_stream, major, minor, src, "test");
+  compile_machine_code(cu_device, cu_context, cu_module, cu_kernel, cu_stream, major, minor, src, "matmul");
 
   // execute machine code
   // Allocate buffers
@@ -284,8 +309,8 @@ int main() {
   void *args[] = { &d_a, &d_b, &d_c, &M, &N, &K, &bound};
   int num_regs;
   cuFuncGetAttribute(&num_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, cu_kernel);
-  unsigned TM = 16;
-  unsigned TN = 16;
+  unsigned TM = context.p_impl->mp_constants_[0]->get_value();
+  unsigned TN = context.p_impl->mp_constants_[1]->get_value();
   unsigned nthreads = 32;
   checkCudaErrors(cuLaunchKernel(cu_kernel, (M + TM - 1)/TM, (N + TN - 1)/TN, 1, nthreads, 1, 1, 0, cu_stream, args, NULL));
   checkCudaErrors(cuStreamSynchronize(cu_stream));

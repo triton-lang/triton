@@ -24,13 +24,13 @@
 #include <cassert>
 #include <array>
 
-#include "driver/backend.h"
-#include "driver/stream.h"
-#include "driver/context.h"
-#include "driver/device.h"
-#include "driver/event.h"
-#include "driver/kernel.h"
-#include "driver/buffer.h"
+#include "triton/driver/backend.h"
+#include "triton/driver/stream.h"
+#include "triton/driver/context.h"
+#include "triton/driver/device.h"
+#include "triton/driver/event.h"
+#include "triton/driver/kernel.h"
+#include "triton/driver/buffer.h"
 
 namespace tdl
 {

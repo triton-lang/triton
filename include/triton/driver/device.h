@@ -23,8 +23,8 @@
 #ifndef TDL_INCLUDE_DRIVER_DEVICE_H
 #define TDL_INCLUDE_DRIVER_DEVICE_H
 
-#include "driver/platform.h"
-#include "driver/handle.h"
+#include "triton/driver/platform.h"
+#include "triton/driver/handle.h"
 
 namespace tdl
 {

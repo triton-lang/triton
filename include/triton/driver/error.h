@@ -24,7 +24,7 @@
 #define TDL_INCLUDE_DRIVER_ERROR_H
 
 #include <exception>
-#include "driver/dispatch.h"
+#include "triton/driver/dispatch.h"
 
 
 namespace tdl

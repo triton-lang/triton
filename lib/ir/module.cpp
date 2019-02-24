@@ -1,8 +1,8 @@
-#include "ir/basic_block.h"
-#include "ir/module.h"
-#include "ir/type.h"
-#include "ir/constant.h"
-#include "ir/function.h"
+#include "triton/ir/basic_block.h"
+#include "triton/ir/module.h"
+#include "triton/ir/type.h"
+#include "triton/ir/constant.h"
+#include "triton/ir/function.h"
 
 namespace tdl{
 namespace ir{
