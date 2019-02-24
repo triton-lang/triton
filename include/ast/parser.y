@@ -46,7 +46,7 @@ STORAGE_SPEC_T get_storage_spec(node *op) { return ((token*)op)->storage_spec;}
 %}
  
 %token IDENTIFIER CONSTANT STRING_LITERAL
-%token TUNABLE KERNEL READONLY WRITEONLY
+%token TUNABLE KERNEL READONLY WRITEONLY CONST
 %token PTR_OP INC_OP DEC_OP LEFT_OP RIGHT_OP LE_OP GE_OP EQ_OP NE_OP
 %token AND_OP OR_OP MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN ADD_ASSIGN
 %token SUB_ASSIGN LEFT_ASSIGN RIGHT_ASSIGN AND_ASSIGN
@@ -360,7 +360,8 @@ init_declarator
 	;
 
 storage_class_specifier
-  : TUNABLE   { $$ = new token(TUNABLE_T); }
+  : CONST     { $$ = new token(CONST_T); }
+  | TUNABLE   { $$ = new token(TUNABLE_T); }
   | KERNEL    { $$ = new token(KERNEL_T); }
   | READONLY  { $$ = new token(READONLY_T); }
   | WRITEONLY { $$ = new token(WRITEONLY_T); }

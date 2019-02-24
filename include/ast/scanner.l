@@ -16,6 +16,7 @@ int comment();
 %}
 
 %%
+"const"       { count(); return(CONST); }
 "tunable"     { count(); return(TUNABLE); }
 "kernel"      { count(); return(KERNEL); }
 "readonly"    { count(); return(READONLY); }

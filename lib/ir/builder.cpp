@@ -10,7 +10,7 @@ namespace tdl{
 namespace ir{
 
 builder::builder(context &ctx):
-  ctx_(ctx){}
+  ctx_(ctx), block_(nullptr), insert_point_(nullptr) {}
 
 //===----------------------------------------------------------------------===//
 //                               utilities

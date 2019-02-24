@@ -170,20 +170,29 @@ ir::type* typed_declaration_specifier::type(ir::module *mod) const {
   }
 }
 
-ir::type* storage_declaration_specifier::type(ir::module *mod) const {
-  ir::type* result = decl_spec_->type(mod);
-  switch(storage_spec_){
-  case TUNABLE_T:   return result->set_tunable();
-  case KERNEL_T:    return result->set_kernel();
-  case READONLY_T:  return result->set_readonly();
-  case WRITEONLY_T: return result->set_writeonly();
-  default:          throw std::runtime_error("unreachable");
-  }
+std::vector<STORAGE_SPEC_T> typed_declaration_specifier::storage() const {
+  return {};
 }
+
+
+ir::type* storage_declaration_specifier::type(ir::module *mod) const {
+  return decl_spec_->type(mod);
+}
+
+std::vector<STORAGE_SPEC_T> storage_declaration_specifier::storage() const {
+  auto result = decl_spec_->storage();
+  result.push_back(storage_spec_);
+  return result;
+}
+
 
 /* Parameter */
 ir::type* parameter::type(ir::module *mod) const {
   return decl_->type(mod, spec_->type(mod));
+}
+
+std::vector<STORAGE_SPEC_T> parameter::storage() const {
+  return spec_->storage();
 }
 
 const identifier *parameter::id() const {
@@ -209,8 +218,11 @@ const std::string &identifier::name() const{
 // Tile
 ir::type* tile::type_impl(ir::module *mod, ir::type *type) const{
   ir::type::tile_shapes_t shapes;
-  for(constant *cst: shapes_->values())
-    shapes.push_back((ir::constant_int*)cst->codegen(mod));
+  for(expression *expr: shapes_->values()){
+    ir::constant_int *shape = dynamic_cast<ir::constant_int*>(expr->codegen(mod));
+    assert(shape);
+    shapes.push_back(shape);
+  }
   return ir::tile_type::get(type, shapes);
 }
 
@@ -368,11 +380,12 @@ void initializer::set_specifier(const declaration_specifier *spec) {
 
 ir::value* initializer::codegen(ir::module * mod) const{
   ir::type *ty = decl_->type(mod, spec_->type(mod));
+  std::vector<STORAGE_SPEC_T> storage = spec_->storage();
   std::string name = decl_->id()->name();
   ir::value *value = ir::undef_value::get(ty);
-  if(ty->get_tunable()){
+  if(std::find(storage.begin(), storage.end(), TUNABLE_T) != storage.end()){
     assert(expr_ == nullptr);
-    //TODO
+    //TODO: implement ranges
     value = ir::metaparameter::create(mod->get_context(), ty, 4, 8);
   }
   if(expr_){
@@ -383,6 +396,8 @@ ir::value* initializer::codegen(ir::module * mod) const{
   value->set_name(name);
   mod->set_value(name, value);
   mod->set_type(name, ty);
+  if(std::find(storage.begin(), storage.end(), CONST_T) != storage.end())
+    mod->set_const(name);
   return value;
 }
 

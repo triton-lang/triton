@@ -57,6 +57,7 @@ enum TYPE_T{
 };
 
 enum STORAGE_SPEC_T{
+  CONST_T,
   TUNABLE_T,
   KERNEL_T,
   READONLY_T, WRITEONLY_T,
@@ -399,12 +400,14 @@ class declaration_specifier: public node{
 public:
   using node::node;
   virtual ir::type* type(ir::module *mod) const = 0;
+  virtual std::vector<STORAGE_SPEC_T> storage() const = 0;
 };
 
 class typed_declaration_specifier: public declaration_specifier {
 public:
   typed_declaration_specifier(TYPE_T ty): ty_(ty){ }
   ir::type* type(ir::module *mod) const;
+  std::vector<STORAGE_SPEC_T> storage() const;
 
 private:
   const TYPE_T ty_;
@@ -415,6 +418,7 @@ public:
   storage_declaration_specifier(STORAGE_SPEC_T storage_spec, node *decl_spec)
     : storage_spec_(storage_spec), decl_spec_((declaration_specifier*)decl_spec) {}
   ir::type* type(ir::module *mod) const;
+  std::vector<STORAGE_SPEC_T> storage() const;
 
 private:
   const STORAGE_SPEC_T storage_spec_;
@@ -429,6 +433,7 @@ public:
       decl_((declarator*)decl) { }
 
   ir::type* type(ir::module *mod) const;
+  std::vector<STORAGE_SPEC_T> storage() const;
   const identifier* id() const;
 
 public:
@@ -485,10 +490,10 @@ private:
 
 public:
   tile(node *id, node *shapes)
-    : declarator(id), shapes_((list<constant*>*)(shapes)) { }
+    : declarator(id), shapes_((list<expression*>*)(shapes)) { }
 
 public:
-  const list<constant*>* shapes_;
+  const list<expression*>* shapes_;
 };
 
 class function: public declarator{

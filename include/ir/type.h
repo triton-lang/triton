@@ -99,25 +99,10 @@ public:
   static integer_type *get_int64_ty(context &ctx);
   static integer_type *get_int128_ty(context &ctx);
 
-  // Attributes
-  type* set_tunable()   { is_tunable_ = true;     return this; }
-  type* set_readonly()  { is_readonly_ = true;    return this; }
-  type* set_writeonly() { is_writeonly_ = true;   return this; }
-  type* set_kernel()    { is_kernel_ = true;      return this; }
-
-  bool get_tunable()    { return is_tunable_; }
-  bool get_readonly()   { return is_readonly_; }
-  bool get_writeonly()  { return is_writeonly_; }
-  bool get_kernel()     { return is_kernel_; }
 
 private:
   context &ctx_;
   id_t id_;
-  // attributes
-  bool is_tunable_;
-  bool is_readonly_;
-  bool is_writeonly_;
-  bool is_kernel_;
 
 protected:
   contained_tys_vec_t contained_tys_;

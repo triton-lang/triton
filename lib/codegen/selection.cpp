@@ -44,7 +44,6 @@ llvm::Type *distributed_tile::make_vector_ty(llvm::Type *ty, size_t vector_size)
   return VectorType::get(ty, vector_size);
 }
 
-
 distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const axes_t &axes, llvm::IRBuilder<> &builder, bool vectorize)
     : tile(make_vector_ty(ty, vectorize?axes[0].contiguous:1), shapes), axes_(axes), builder_(builder) {
   vector_size_ = vectorize?ty_->getVectorNumElements():1;
@@ -149,16 +148,6 @@ Value* shared_tile::get_value(indices_t idx) {
   Value *ptr = builder_.CreateGEP(base_ptr, shared_offset(cst_idx));
   return builder_.CreateLoad(ptr);
 }
-
-/* Utils */
-std::vector<unsigned> selection::extract_shapes(ir::value *v) {
-  const auto& shapes = v->get_type()->get_tile_shapes();
-  std::vector<unsigned> result(shapes.size());
-  for(ir::constant_int* cst: shapes)
-    result.push_back(cst->get_value());
-  return result;
-}
-
 
 /* convert ir::type to Type */
 Type *selection::llvm_type(ir::type *ty, LLVMContext &ctx) {
@@ -310,12 +299,11 @@ std::vector<Value*> delinearize(Value *trailing, std::vector<unsigned> &shapes, 
 }
 
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
-  const auto& shapes = extract_shapes(v);
+  const auto& shapes = v->get_type()->get_tile_shapes();
   size_t dim = shapes.size();
   std::vector<unsigned> contiguous(dim);
   std::vector<unsigned> warp_size(dim);
   std::vector<unsigned> n_warps(dim);
-  std::cout << v->get_name() << " " << typeid(*v).name() << std::endl;
   for(unsigned i = 0; i < shapes.size(); i++){
     std::string str_i = std::to_string(i);
     contiguous[i] = *params_->get_param(v, "p0.d" + str_i);
@@ -332,7 +320,7 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     Value *thread_id   = builder.CreateAdd(thread_id_in_warp[k], builder.CreateMul(warp_id[k], warp_size_k));
     thread_id = builder.CreateMul(thread_id, contiguous_k);
     unsigned per_block = contiguous[k] * warp_size[k] * n_warps[k];
-    unsigned per_thread = contiguous[k] * shapes[k] / per_block;
+    unsigned per_thread = contiguous[k] * shapes[k]->get_value() / per_block;
     std::vector<Value*> idx_list(per_thread);
     for(unsigned n = 0 ; n < per_thread; n++){
       unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
@@ -348,8 +336,8 @@ void selection::create_grids(std::vector<ir::value*> &grids,
   // get number of dimensions greater than 1
   auto get_tile_gt1_dim = [&](ir::value *v){
     unsigned result = 0;
-    for(unsigned shape: extract_shapes(v)) {
-      result += (shape > 1)?shape:0;
+    for(ir::constant_int* shape: v->get_type()->get_tile_shapes()) {
+      result += (shape->get_value() > 1)?shape->get_value():0;
     }
     return result;
   };
@@ -365,11 +353,11 @@ void selection::create_grids(std::vector<ir::value*> &grids,
       for(ir::value *op: user->ops())
         bind_references(op);
     // bind
-    const auto& shapes = extract_shapes(v);
+    const auto& shapes = v->get_type()->get_tile_shapes();
     if(dynamic_cast<ir::copy_to_shared_inst*>(v) || buffer_info_->is_double(v))
       return;
     for(size_t d = 0; d < shapes.size(); d++){
-      if(shapes[d] == 1)
+      if(shapes[d]->get_value() == 1)
         continue;
       unsigned *x = params_->get_param(v, "p0.d" + std::to_string(d));
       ir::value *&r = references[x];
@@ -397,7 +385,10 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     for(ir::value *op: user->ops())
       create_tile(op, builder, references, seen, sh_mem_ptr);
   LLVMContext &ctx = builder.getContext();
-  const auto& shapes = extract_shapes(v);
+  const auto& shapes = v->get_type()->get_tile_shapes();
+  std::vector<unsigned> shapes2;
+  for(ir::constant_int* shape: shapes)
+    shapes2.push_back(shape->get_value());
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), ctx);
   // create shared tile
   if(dynamic_cast<ir::copy_to_shared_inst*>(v) || (buffer_info_->is_double(v))){
@@ -408,7 +399,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
         size_t offset = alloc_->get_offset(v);
         Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
         ptr = builder.CreateBitCast(ptr, ptr_ty);
-        tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
+        tmap_.insert({v, new shared_tile(ty, shapes2, ptr, builder)});
       }
     }
     // phi-node (double-buffering)
@@ -427,13 +418,13 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
       Value *pre_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(alloc_->get_offset(phi)));
       pre_ptr = builder.CreateBitCast(pre_ptr, ptr->getType());
       Value *next_ptr = builder.CreateGEP(ptr, offset);
-      tmap_.insert({phi, new shared_tile(ty, shapes, ptr, builder, offset)});
+      tmap_.insert({phi, new shared_tile(ty, shapes2, ptr, builder, offset)});
       for(unsigned i = 0; i < phi->get_num_incoming(); i++) {
         ir::basic_block* inc_block = phi->get_incoming_block(i);
         ir::value* inc_value = phi->get_incoming_value(i);
         ir::value* terminator = inc_block->get_inst_list().back();
         bool is_loop_latch = buffer_info_->is_loop_latch(phi, terminator);
-        tmap_.insert({inc_value, new shared_tile(ty, shapes, is_loop_latch?next_ptr:pre_ptr, builder)});
+        tmap_.insert({inc_value, new shared_tile(ty, shapes2, is_loop_latch?next_ptr:pre_ptr, builder)});
       }
     }
     else
@@ -441,10 +432,10 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   }
   // create distributed tile
   else {
-    const auto &shapes = extract_shapes(v);
+    const auto &shapes = v->get_type()->get_tile_shapes();
     std::vector<distributed_axis> axes(shapes.size());
     for(size_t d = 0; d < shapes.size(); d++){
-      if(shapes[d] > 1){
+      if(shapes[d]->get_value() > 1){
         unsigned *x = params_->get_param(v, "p0.d" + std::to_string(d));
         axes[d] = axes_.at(x);
       }
@@ -454,7 +445,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
       }
     }
     bool vectorize = dynamic_cast<ir::vectorize_inst*>(v);
-    distributed_tile *T = new distributed_tile(ty, shapes, axes, builder, vectorize);
+    distributed_tile *T = new distributed_tile(ty, shapes2, axes, builder, vectorize);
     tmap_.insert({v, T});
     // constant range
     if(dynamic_cast<ir::constant*>(v)){
@@ -542,7 +533,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     distributed_tile* result = (distributed_tile*)ti;
     if(!ins->get_type()->is_tile_ty())
       return;
-    const auto& shapes = extract_shapes(ins);
+    const auto& shapes = ins->get_type()->get_tile_shapes();
     // global_range
     if(auto *x = dynamic_cast<ir::get_global_range_inst*>(ins)) {
       static std::array<Intrinsic::ID, 3> ctaid = {
@@ -552,7 +543,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       };
       Function *get_group_id = Intrinsic::getDeclaration(module, ctaid[x->get_axis()]);
       Value *group_id = builder.CreateCall(get_group_id, {});
-      Value *offset = builder.CreateMul(builder.getInt32(shapes[0]), group_id);
+      Value *offset = builder.CreateMul(builder.getInt32(shapes[0]->get_value()), group_id);
       result->for_each([&](indices_t idx){
         BinaryOperator *bin = static_cast<BinaryOperator*>(idx[0]);
         result->set_value(idx, insert_masked(idx, [&]{ return builder.CreateAdd(bin, offset); }));
@@ -565,7 +556,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       result->for_each([&](indices_t out_idx){
         indices_t in_idx;
         for(size_t k = 0; k < shapes.size(); k++){
-          if(shapes[k] > 1)
+          if(shapes[k]->get_value() > 1)
             in_idx.push_back(out_idx[k]);
         }
         result->set_value(out_idx, in_tile->get_value(in_idx));
@@ -580,12 +571,12 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     // broadcast
     else if(dynamic_cast<ir::broadcast_inst*>(ins)) {
       ir::value* in = ins->get_operand(0);
-      const auto& in_shapes = extract_shapes(in);
+      const auto& in_shapes = in->get_type()->get_tile_shapes();
       distributed_tile *in_tile = (distributed_tile*)tmap_.at(in);
       result->for_each([&](indices_t out_idx){
         indices_t in_idx = out_idx;
         for(size_t k = 0; k < in_idx.size(); k++){
-          if(in_shapes[k] == 1)
+          if(in_shapes[k]->get_value() == 1)
             in_idx[k] = builder.getInt32(0);
         }
         result->set_value(out_idx, in_tile->get_value(in_idx));
@@ -627,7 +618,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {llvm_type(C->get_type()->get_scalar_ty(), ctx)});
       result->for_each([&](indices_t idx){
         Value *res = tmap_.at(C)->get_value(idx);
-        unsigned NK = extract_shapes(A)[1];
+        unsigned NK = A->get_type()->get_tile_shapes()[1]->get_value();
         for(unsigned K = 0; K < NK; ++K){
           indices_t a_idx = {idx[0], builder.getInt32(K)};
           indices_t b_idx = {idx[1], builder.getInt32(K)};

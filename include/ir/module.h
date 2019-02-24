@@ -58,6 +58,7 @@ public:
   void set_value(const std::string& name, value* x);
   void set_type(const std::string& name, basic_block* block, type* x);
   void set_type(const std::string& name, type* x);
+  void set_const(const std::string& name);
   void set_continue_fn(std::function<ir::value*()> fn);
   // Getters
   value *get_value(const std::string& name, basic_block* block);
@@ -83,6 +84,7 @@ private:
   builder builder_;
   std::map<val_key_t, value*> values_;
   std::map<val_key_t, type*> types_;
+  std::set<std::string> const_;
   std::set<basic_block*> sealed_blocks_;
   std::map<basic_block*, std::map<std::string, phi_node*>> incomplete_phis_;
   functions_list_t functions_;

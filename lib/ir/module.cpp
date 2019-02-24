@@ -37,6 +37,10 @@ void module::set_type(const std::string& name, ir::type *type){
   return set_type(name, builder_.get_insert_block(), type);
 }
 
+void module::set_const(const std::string& name){
+  const_.insert(name);
+}
+
 void module::set_continue_fn(std::function<ir::value*()> fn) {
   continue_fn_ = fn;
 }
@@ -91,10 +95,12 @@ ir::value *module::add_phi_operands(const std::string& name, ir::phi_node *&phi)
 
 ir::value *module::get_value_recursive(const std::string& name, ir::basic_block *block) {
   ir::value *result;
+  bool is_const = const_.find(name) != const_.end();
   auto &preds = block->get_predecessors();
+  ir::type *ty = get_type(name, block);
   if(block)
-  if(sealed_blocks_.find(block) == sealed_blocks_.end()){
-    incomplete_phis_[block][name] = make_phi(get_type(name, block), 1, block);
+  if(!is_const && sealed_blocks_.find(block) == sealed_blocks_.end()){
+    incomplete_phis_[block][name] = make_phi(ty, 1, block);
     result = (ir::value*)incomplete_phis_[block][name];
   }
   else if(preds.size() <= 1){
@@ -102,7 +108,7 @@ ir::value *module::get_value_recursive(const std::string& name, ir::basic_block 
     result = get_value(name, has_pred?preds.front():nullptr);
   }
   else{
-    result = make_phi(get_type(name, block), 1, block);
+    result = make_phi(ty, 1, block);
     set_value(name, block, result);
     result = add_phi_operands(name, (ir::phi_node*&)result);
   }

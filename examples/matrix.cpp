@@ -38,29 +38,31 @@ extern translation_unit *ast_root;
 
 const char src[] =
 "\
+const tunable int32 TM;\
+const tunable int32 TN;\
 void test(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
-  int32 rxa[16] = get_global_range[16](0);\
-  int32 ryb[16] = get_global_range[16](1);\
+  int32 rxa[TM] = get_global_range[TM](0);\
+  int32 ryb[TN] = get_global_range[TN](1);\
   int32 rka[8] = 0 ... 8;\
   int32 rkb[8] = 0 ... 8;\
-  int32 rxc[16] = get_global_range[16](0);\
-  int32 ryc[16] = get_global_range[16](1);\
-  fp32 C[16, 16] = 0;\
+  int32 rxc[TM] = get_global_range[TM](0);\
+  int32 ryc[TN] = get_global_range[TN](1);\
+  fp32 C[TM, TN] = 0;\
   int32 k;\
-  fp32* pa[16, 8] = a + rxa[:, newaxis] + rka[newaxis, :]*M;\
-  fp32* pb[16, 8] = b + ryb[:, newaxis] + rkb[newaxis, :]*K;\
-  fp32* pc[16, 16] = c + rxc[:, newaxis] + ryc[newaxis, :]*M;\
-  fp32 a[16, 8] = *pa;\
-  fp32 b[16, 8] = *pb;\
-  int1 checkc0[16] = rxc < M;\
-  int1 checkc1[16] = ryc < N;\
-  int1 checkc[16, 16] = checkc0[:, newaxis] && checkc1[newaxis, :];\
+  fp32* pa[TM, 8] = a + rxa[:, newaxis] + rka[newaxis, :]*M;\
+  fp32* pb[TN, 8] = b + ryb[:, newaxis] + rkb[newaxis, :]*K;\
+  fp32* pc[TM, TN] = c + rxc[:, newaxis] + ryc[newaxis, :]*M;\
+  fp32 a[TM, 8] = *pa;\
+  fp32 b[TN, 8] = *pb;\
+  int1 checkc0[TM] = rxc < M;\
+  int1 checkc1[TN] = ryc < N;\
+  int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];\
   for(k = K; k > 0; k = k - 8){\
-    int1 checka[16, 8] = (k > 8);\
-    int1 checkb[16, 8] = (k > 8);\
-    int1 checka0[16];\
+    int1 checka[TM, 8] = (k > 8);\
+    int1 checkb[TN, 8] = (k > 8);\
+    int1 checka0[TM];\
     int1 checka1[8];\
-    int1 checkb0[16];\
+    int1 checkb0[TN];\
     int1 checkb1[8];\
     C = dot(a, b, C);\
     pa = pa + 8*M;\
@@ -183,8 +185,8 @@ int main() {
   llvm::LLVMContext llvm_context;
   llvm::Module llvm_module("test", llvm_context);
 
-//  context.p_impl->mp_constants_[0]->set_value(16);
-//  context.p_impl->mp_constants_[1]->set_value(16);
+  context.p_impl->mp_constants_[0]->set_value(16);
+  context.p_impl->mp_constants_[1]->set_value(16);
 //  context.p_impl->mp_constants_[2]->set_value(8);
 
   // create passes
