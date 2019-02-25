@@ -16,7 +16,7 @@ bool buffer_info_pass::is_loop_latch(ir::phi_node *phi, ir::value *terminator){
     return br->get_true_dest() == phi->get_parent()
            || br->get_false_dest() == phi->get_parent();
   else if(auto *br = dynamic_cast<ir::uncond_branch_inst*>(terminator))
-    return br->get_dest() == phi->get_parent();
+    return false;
   else
     throw std::runtime_error("unreachable");
 }

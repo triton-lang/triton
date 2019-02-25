@@ -376,6 +376,13 @@ void selection::create_grids(std::vector<ir::value*> &grids,
       grids.push_back(ref.second);
 }
 
+bool static inline has_phi_user(ir::value *v) {
+  for(ir::user *usr: v->get_users()){
+    if(dynamic_cast<ir::phi_node*>(usr))
+      return true;
+  }
+  return false;
+}
 void selection::create_tile(ir::value *v, IRBuilder<> &builder,
                             const std::map<unsigned*, ir::value*>& references,
                             std::set<ir::value*> &seen, Value *sh_mem_ptr) {
@@ -394,8 +401,9 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   if(dynamic_cast<ir::copy_to_shared_inst*>(v) || (buffer_info_->is_double(v))){
     // shared copy
     PointerType *ptr_ty = ty->getPointerTo(sh_mem_ptr->getType()->getPointerAddressSpace());
+    // TODO - buffer info not up-to-date with references
     if(dynamic_cast<ir::copy_to_shared_inst*>(v)) {
-      if(buffer_info_->get_reference(v) == nullptr){
+      if(!has_phi_user(v)){
         size_t offset = alloc_->get_offset(v);
         Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
         ptr = builder.CreateBitCast(ptr, ptr_ty);
@@ -417,7 +425,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
       // next pointer
       Value *pre_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(alloc_->get_offset(phi)));
       pre_ptr = builder.CreateBitCast(pre_ptr, ptr->getType());
-      Value *next_ptr = builder.CreateGEP(ptr, offset);
+      Value *next_ptr = builder.CreateGEP(ptr, offset, "next_ptr");
       tmap_.insert({phi, new shared_tile(ty, shapes2, ptr, builder, offset)});
       for(unsigned i = 0; i < phi->get_num_incoming(); i++) {
         ir::basic_block* inc_block = phi->get_incoming_block(i);
@@ -720,12 +728,13 @@ void selection::run(ir::module &src, Module &dst){
         PHINode *ptr = (PHINode*)((shared_tile*)tmap_.at(phi))->get_pointer();
         PHINode *offset = (PHINode*)((shared_tile*)tmap_.at(phi))->get_offset();
         for(unsigned n = 0; n < phi->get_num_incoming(); n++){
-          ir::value *inc_val = phi->get_incoming_value(n);
-          ir::basic_block *inc_block = phi->get_incoming_block(n);
+          ir::basic_block* inc_block = phi->get_incoming_block(n);
+          ir::value* inc_val = phi->get_incoming_value(n);
+          ir::value* terminator = inc_block->get_inst_list().back();
           BasicBlock *llvm_inc_block = last_block.at(inc_block);
           shared_tile *inc_shared = (shared_tile*)tmap_.at(inc_val);
-          GetElementPtrInst *inc_ptr = dyn_cast<GetElementPtrInst>(inc_shared->get_pointer());
-          if(inc_ptr && ptr == inc_ptr->getPointerOperand()){
+          bool is_loop_latch = buffer_info_->is_loop_latch(phi, terminator);
+          if(is_loop_latch){
             dst_builder.SetInsertPoint(llvm_inc_block->getTerminator());
             Value *next_offset = dst_builder.CreateNeg(offset);
             offset->addIncoming(next_offset, llvm_inc_block);

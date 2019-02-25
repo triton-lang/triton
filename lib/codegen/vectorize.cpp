@@ -15,8 +15,10 @@ void vectorize::run(ir::module &mod) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list())
     if(dynamic_cast<ir::copy_to_shared_inst*>(i)){
-      builder.set_insert_point(i);
       ir::value *x = i->get_operand(0);
+      if(*params_->get_param(x, "p0.d0") == 1)
+        continue;
+      builder.set_insert_point(i);
       ir::instruction *rx = (ir::instruction*)builder.create_vectorize(x);
       x->replace_all_uses_with(rx);
       rx->set_operand(0, x);

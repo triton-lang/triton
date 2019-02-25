@@ -60,27 +60,11 @@ void matmul(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
   int1 checkc1[TN] = ryc < N;\
   int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];\
   for(k = K; k > 0; k = k - TK){\
-    int1 checka[TM, TK] = (k > 8);\
-    int1 checkb[TN, TK] = (k > 8);\
-    int1 checka0[TM];\
-    int1 checka1[TK];\
-    int1 checkb0[TN];\
-    int1 checkb1[TK];\
     C = dot(a, b, C);\
     pa = pa + TK*M;\
     pb = pb + TK*K;\
-    @checka a = *pa;\
-    @checkb b = *pb;\
-    if(k > 8)\
-      continue;\
-    checka0 = rxa < M;\
-    checka1 = rka < k;\
-    checkb0 = ryb < N;\
-    checkb1 = rkb < k;\
-    checka = checka0[:, newaxis] && checka1[newaxis, :];\
-    checkb = checkb0[:, newaxis] && checkb1[newaxis, :];\
-    @checka a = *pa;\
-    @checkb b = *pb;\
+    a = *pa;\
+    b = *pb;\
   }\
   @checkc *pc = C;\
 }\
@@ -219,21 +203,22 @@ int main() {
 
   // tuning parameters
   tune.run(module);
+
   std::vector<unsigned> params = {
     // shapes
-    16, 16, 8,
+    8, 8, 8,
     // a0
-    2, 8, 1,
+    1, 8, 1,
     // b0
-    4, 4, 1,
+    1, 8, 1,
     // c0
-    2, 8, 1,
+    1, 8, 1,
     // c1
-    4, 4, 1,
+    1, 4, 2,
     // a1
-    2, 4, 1,
+    1, 4, 2,
     // b1
-    1, 8, 1
+    1, 4, 2
   };
   // meta-parameters
   unsigned i = 0;
@@ -255,23 +240,22 @@ int main() {
 
 
   // run passes
-  triton::ir::print(module, std::cout);
   buffer_info.run(module);
   shared.run(module);
   liveness.run(module);
   allocation.run();
   barriers.run(module);
+//  triton::ir::print(module, std::cout);
   vectorize.run(module);
   selection.run(module, llvm_module);
 
   // llvm source
   llvm::legacy::PassManager manager;
-  manager.add(llvm::createPrintModulePass(llvm::outs()));
+//  manager.add(llvm::createPrintModulePass(llvm::outs()));
   manager.add(llvm::createVerifierPass(true));
   manager.run(llvm_module);
 
   std::string src = generate_machine_code(llvm_module, "nvptx64-nvidia-cuda", compute_data_layout(true, true));
-  std::cout << src << std::endl;
 
   // compile machine code
   CUdevice   cu_device;
@@ -285,16 +269,17 @@ int main() {
   // execute machine code
   // Allocate buffers
   typedef float numeric_t;
-  size_t M = 32, N = 32, K = 32;
+  size_t M = 128, N = 128, K = 128;
   size_t bound = 8;
   std::vector<numeric_t> c(M*N);
   std::vector<numeric_t> rc(M*N);
   std::vector<numeric_t> a(M*K);
   std::vector<numeric_t> b(K*N);
+  srand(0);
   for(size_t i = 0; i < a.size(); i++)
-    a[i] = (float)rand() / RAND_MAX;
+    a[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < b.size(); i++)
-    b[i] = (float)rand() / RAND_MAX;
+    b[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < c.size(); i++)
     c[i] = 0;
   CUdeviceptr d_a, d_b, d_c;
@@ -311,7 +296,7 @@ int main() {
   cuFuncGetAttribute(&num_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, cu_kernel);
   unsigned TM = context.p_impl->mp_constants_[0]->get_value();
   unsigned TN = context.p_impl->mp_constants_[1]->get_value();
-  unsigned nthreads = 32;
+  unsigned nthreads = params[10]*params[13]*params[11]*params[14];
   checkCudaErrors(cuLaunchKernel(cu_kernel, (M + TM - 1)/TM, (N + TN - 1)/TN, 1, nthreads, 1, 1, 0, cu_stream, args, NULL));
   checkCudaErrors(cuStreamSynchronize(cu_stream));
   // Write back

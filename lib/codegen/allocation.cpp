@@ -12,7 +12,7 @@ namespace triton{
 namespace codegen{
 
 unsigned allocation::get_num_bytes(ir::value *x) {
-  unsigned result = x->get_type()->get_tile_bitwidth();
+  unsigned result = x->get_type()->get_tile_bitwidth() / 8;
   if(buffer_info_->is_double(x))
     result *= 2;
   return result;
