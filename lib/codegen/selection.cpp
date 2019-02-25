@@ -27,6 +27,8 @@ void distributed_tile::init_indices() {
     for(size_t d = 0; d < id.size(); d++)
       current.push_back(axes_[d].values[id[d]]);
     indices_[current] = indices_.size();
+    values_[current] = UndefValue::get(ty_);
+    ordered_indices_.push_back(current);
     id[0]++;
     while(id[k] == axes_[k].values.size()){
       if(k == id.size() - 1)
@@ -48,16 +50,14 @@ distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const axes_
     : tile(make_vector_ty(ty, vectorize?axes[0].contiguous:1), shapes), axes_(axes), builder_(builder) {
   vector_size_ = vectorize?ty_->getVectorNumElements():1;
   init_indices();
-  for(size_t i = 0; i < indices_.size(); i++)
-    values_.push_back(UndefValue::get(ty_));
 }
 
 void distributed_tile::set_value(indices_t idx, Value *v) {
-  values_[indices_[idx]] = v;
+  values_[idx] = v;
 }
 
 Value* distributed_tile::get_value(indices_t idx) {
-  return values_[indices_[idx]];
+  return values_[idx];
 }
 
 unsigned distributed_tile::get_linear_index(indices_t idx) {
@@ -65,9 +65,9 @@ unsigned distributed_tile::get_linear_index(indices_t idx) {
 }
 
 void distributed_tile::for_each(std::function<void (indices_t)> fn) {
-  for(auto &idx: indices_)
-    if(idx.second % vector_size_ == 0)
-      fn(idx.first);
+  for(unsigned i = 0; i < ordered_indices_.size(); i++)
+    if(i % vector_size_ == 0)
+      fn(ordered_indices_[i]);
 }
 
 /* Shared Tile */
@@ -600,7 +600,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         unsigned id = linear / vector_size;
         if(linear % vector_size == 0)
           packets[id] = result->get_value(idx);
-        packets[id] = builder.CreateInsertElement(packets[id], in->get_value(idx), linear % vector_size);
+        packets[id] = builder.CreateInsertElement(packets.at(id), in->get_value(idx), linear % vector_size);
       });
       result->for_each([&](indices_t idx){
         unsigned linear = in->get_linear_index(idx);

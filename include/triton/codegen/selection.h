@@ -69,8 +69,9 @@ private:
 
 class distributed_tile: public tile{
   typedef std::vector<distributed_axis> axes_t;
+  typedef std::vector<indices_t> ordered_indices_vec_t;
   typedef std::map<indices_t, unsigned> indices_map_t;
-  typedef std::vector<llvm::Value*> values_t;
+  typedef std::map<indices_t, llvm::Value*> values_map_t;
 
 private:
   void init_indices();
@@ -87,7 +88,8 @@ public:
 private:
   axes_t axes_;
   indices_map_t indices_;
-  values_t values_;
+  values_map_t values_;
+  ordered_indices_vec_t ordered_indices_;
   size_t vector_size_;
   llvm::IRBuilder<> &builder_;
 };
