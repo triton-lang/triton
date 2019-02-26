@@ -19,6 +19,7 @@ int comment();
 "const"       { count(); return(CONST); }
 "tunable"     { count(); return(TUNABLE); }
 "kernel"      { count(); return(KERNEL); }
+"restrict"    { count(); return(RESTRICT); }
 "readonly"    { count(); return(READONLY); }
 "writeonly"   { count(); return(WRITEONLY); }
 "@"         { count(); return(AT); }

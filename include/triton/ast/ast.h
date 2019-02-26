@@ -60,7 +60,9 @@ enum STORAGE_SPEC_T{
   CONST_T,
   TUNABLE_T,
   KERNEL_T,
-  READONLY_T, WRITEONLY_T,
+  RESTRICT_T,
+  READONLY_T,
+  WRITEONLY_T
 };
 
 class pointer;
@@ -505,6 +507,8 @@ public:
     : declarator(id), args_((list<parameter*>*)args) { }
 
   void bind_parameters(ir::module *mod, ir::function *fn) const;
+  unsigned get_num_args() const { return args_->values().size(); }
+  parameter* get_arg(unsigned i) const { return args_->values().at(i); }
 
 public:
   const list<parameter*>* args_;

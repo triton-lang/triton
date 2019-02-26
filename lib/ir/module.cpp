@@ -60,7 +60,7 @@ ir::phi_node* module::make_phi(ir::type *ty, unsigned num_values, ir::basic_bloc
   return res;
 }
 
-ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi, ir::value** pre_user){
+ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi){
   // find non-self references
   std::set<ir::value*> non_self_ref;
   std::copy_if(phi->ops().begin(), phi->ops().end(), std::inserter(non_self_ref, non_self_ref.begin()),
@@ -76,7 +76,7 @@ ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi, ir::value** pre_u
   for(ir::user* u: users)
   if(auto *uphi = dynamic_cast<ir::phi_node*>(u))
     if(uphi != phi)
-      try_remove_trivial_phis(uphi, &same);
+      try_remove_trivial_phis(uphi);
   return same;
 }
 
@@ -113,7 +113,7 @@ ir::value *module::get_value_recursive(const std::string& name, ir::basic_block 
     result = add_phi_operands(name, (ir::phi_node*&)result);
   }
   if(auto *phi = dynamic_cast<ir::phi_node*>(result))
-    result = try_remove_trivial_phis(phi, nullptr);
+    result = try_remove_trivial_phis(phi);
   set_value(name, block, result);
   return result;
 }
@@ -155,7 +155,7 @@ ir::type *module::get_type(const std::string &name) {
 void module::seal_block(ir::basic_block *block){
   for(auto &x: incomplete_phis_[block]){
     add_phi_operands(x.first, x.second);
-    try_remove_trivial_phis(x.second, nullptr);
+    set_value(x.first, try_remove_trivial_phis(x.second));
   }
   sealed_blocks_.insert(block);
   incomplete_phis_[block].clear();

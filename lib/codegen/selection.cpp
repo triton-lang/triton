@@ -12,6 +12,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Attributes.h"
 
 namespace triton{
 namespace codegen{
@@ -125,7 +126,7 @@ Value* shared_tile::shared_offset(indices_t idx) {
 }
 
 shared_tile::shared_tile(Type *ty, const shapes_t &shapes, Value *ptr, llvm::IRBuilder<> &builder, Value *offset):
-  tile(ty, shapes), ptr_(ptr), builder_(builder), offset_(offset) {
+  tile(ty, shapes), ptr_(ptr), builder_(builder), offset_(offset), vector_size_(1){
 }
 
 void shared_tile::set_value(indices_t idx, Value *value) {
@@ -135,18 +136,33 @@ void shared_tile::set_value(indices_t idx, Value *value) {
   builder_.CreateStore(value, ptr);
 }
 
+void shared_tile::set_vector_size(unsigned vector_size) {
+  vector_size_ = vector_size;
+}
+
 Value* shared_tile::get_value(indices_t idx) {
   indices_t non_cst_idx, cst_idx;
   extract_constant(idx, non_cst_idx, cst_idx);
   Value *&base_ptr = ptr_cache_[non_cst_idx];
   if(base_ptr == nullptr){
     base_ptr = builder_.CreateGEP(ptr_, shared_offset(non_cst_idx));
-//    Type *vec_ty = VectorType::get(base_ptr->getType()->getPointerElementType(), vec_);
-//    Type *vec_ptr_ty = PointerType::get(vec_ty, base_ptr->getType()->getPointerElementType());
-//    base_ptr = builder_.CreateBitCast(base_ptr, vec_ptr_ty);
+    if(vector_size_ > 1){
+      Type *vec_ty = VectorType::get(base_ptr->getType()->getPointerElementType(), vector_size_);
+      Type *vec_ptr_ty = PointerType::get(vec_ty, base_ptr->getType()->getPointerAddressSpace());
+      base_ptr = builder_.CreateBitCast(base_ptr, vec_ptr_ty);
+    }
   }
-  Value *ptr = builder_.CreateGEP(base_ptr, shared_offset(cst_idx));
-  return builder_.CreateLoad(ptr);
+  Value *offset = shared_offset(cst_idx);
+  Value *div = offset;
+  if(vector_size_ > 1)
+    div = builder_.CreateUDiv(offset, builder_.getInt32(vector_size_));
+  Value *ptr = builder_.CreateGEP(base_ptr, div);
+  Value *result = builder_.CreateLoad(ptr);
+  if(vector_size_ > 1) {
+    Value *rem = builder_.CreateURem(offset, builder_.getInt32(vector_size_));
+    result = builder_.CreateExtractElement(result, rem);
+  }
+  return result;
 }
 
 /* convert ir::type to Type */
@@ -623,15 +639,20 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       ir::value *A = ins->get_operand(0);
       ir::value *B = ins->get_operand(1);
       ir::value *C = ins->get_operand(2);
+      shared_tile *TA = (shared_tile*)tmap_.at(A);
+      shared_tile *TB = (shared_tile*)tmap_.at(B);
+      distributed_tile *TC = (distributed_tile*)tmap_.at(C);
+      TA->set_vector_size(TC->axis(0).contiguous);
+      TB->set_vector_size(TC->axis(1).contiguous);
       Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {llvm_type(C->get_type()->get_scalar_ty(), ctx)});
       result->for_each([&](indices_t idx){
-        Value *res = tmap_.at(C)->get_value(idx);
+        Value *res = TC->get_value(idx);
         unsigned NK = A->get_type()->get_tile_shapes()[1]->get_value();
         for(unsigned K = 0; K < NK; ++K){
           indices_t a_idx = {idx[0], builder.getInt32(K)};
           indices_t b_idx = {idx[1], builder.getInt32(K)};
-          Value *a = tmap_.at(A)->get_value(a_idx);
-          Value *b = tmap_.at(B)->get_value(b_idx);
+          Value *a = TA->get_value(a_idx);
+          Value *b = TB->get_value(b_idx);
           res = builder.CreateCall(f_mul_add, {a, b, res});
         }
         result->set_value(idx, res);
@@ -660,7 +681,17 @@ void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
   }
   else {
     Instruction *i = (Instruction*)llvm_value(src, builder);
+    std::cout << "instruction: " << src->get_name() << " " << src->has_tile_result_or_op() << std::endl;
     vmap_[src] = i;
+  }
+}
+
+inline llvm::Attribute::AttrKind llvm_attr(ir::attribute_t attr) {
+  switch(attr){
+    case ir::noalias: return llvm::Attribute::NoAlias;
+    case ir::readonly: return llvm::Attribute::ReadOnly;
+    case ir::writeonly: return llvm::Attribute::WriteOnly;
+    default: throw std::runtime_error("cannot convert ir::attribute_t to llvm::Attribute");
   }
 }
 
@@ -675,7 +706,13 @@ void selection::run(ir::module &src, Module &dst){
     // create LLVM function
     FunctionType *fn_ty = (FunctionType*)llvm_type(fn->get_fn_type(), dst_ctx);
     Function *dst_fn = Function::Create(fn_ty, Function::ExternalLinkage, fn->get_name(), &dst);
-    // Set metadata
+    // set attributes
+    for(auto attr_pair: fn->attrs()){
+      unsigned id = attr_pair.first;
+      for(ir::attribute_t attr: attr_pair.second)
+        dst_fn->addAttribute(id, llvm_attr(attr));
+    }
+    // set metadata
     llvm::Metadata *md_args[] = {
       llvm::ValueAsMetadata::get(dst_fn),
       llvm::MDString::get(dst_ctx, "kernel"),
@@ -760,6 +797,7 @@ void selection::run(ir::module &src, Module &dst){
             });
           }
           else {
+            std::cout << phi->get_name() << " " << inc_val->get_name() << std::endl;
             PHINode *llvm_phi = (PHINode*)vmap_.at(phi);
             Value *llvm_inc_val = vmap_.at(inc_val);
             llvm_phi->addIncoming(llvm_inc_val, llvm_inc_block);

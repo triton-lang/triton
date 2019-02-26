@@ -42,7 +42,7 @@ const tunable int32 TM;\
 const tunable int32 TN;\
 const tunable int32 TK;\
 \
-void matmul(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
+void matmul(restrict readonly fp32 *a, restrict readonly fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
   int32 rxa[TM] = get_global_range[TM](0);\
   int32 ryb[TN] = get_global_range[TN](1);\
   int32 rka[TK] = 0 ... TK;\
@@ -56,16 +56,19 @@ void matmul(fp32 *a, fp32 *b, fp32 *c, int32 M, int32 N, int32 K, int32 bound){\
   fp32* pc[TM, TN] = c + rxc[:, newaxis] + ryc[newaxis, :]*M;\
   fp32 a[TM, TK] = *pa;\
   fp32 b[TN, TK] = *pb;\
-  int1 checkc0[TM] = rxc < M;\
-  int1 checkc1[TN] = ryc < N;\
-  int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];\
-  for(k = K; k > 0; k = k - TK){\
-    C = dot(a, b, C);\
-    pa = pa + TK*M;\
-    pb = pb + TK*K;\
-    a = *pa;\
-    b = *pb;\
-  }\
+  int1 checkc0[TM];\
+  int1 checkc1[TN];\
+  int1 checkc[TM, TN];\
+   for(k = K; k > 0; k = k - TK){\
+     C = dot(a, b, C);\
+     pa = pa + TK*M;\
+     pb = pb + TK*K;\
+     a = *pa;\
+     b = *pb;\
+   }\
+  checkc0 = rxc < M;\
+  checkc1 = ryc < N;\
+  checkc = checkc0[:, newaxis] && checkc1[newaxis, :];\
   @checkc *pc = C;\
 }\
 ";
@@ -203,23 +206,23 @@ int main() {
 
   // tuning parameters
   tune.run(module);
-
   std::vector<unsigned> params = {
     // shapes
-    8, 8, 8,
+    16, 16, 8,
     // a0
-    1, 8, 1,
+    2, 8, 1,
     // b0
-    1, 8, 1,
+    4, 4, 1,
     // c0
-    1, 8, 1,
+    2, 8, 1,
     // c1
-    1, 4, 2,
+    4, 4, 1,
     // a1
-    1, 4, 2,
+    2, 4, 1,
     // b1
-    1, 4, 2
+    1, 8, 1
   };
+
   // meta-parameters
   unsigned i = 0;
   context.p_impl->mp_constants_[0]->set_value(params[0]);
@@ -240,12 +243,13 @@ int main() {
 
 
   // run passes
+  triton::ir::print(module, std::cout);
+  exit(EXIT_FAILURE);
   buffer_info.run(module);
   shared.run(module);
   liveness.run(module);
   allocation.run();
   barriers.run(module);
-//  triton::ir::print(module, std::cout);
   vectorize.run(module);
   selection.run(module, llvm_module);
 
@@ -256,6 +260,7 @@ int main() {
   manager.run(llvm_module);
 
   std::string src = generate_machine_code(llvm_module, "nvptx64-nvidia-cuda", compute_data_layout(true, true));
+  std::cout << src << std::endl;
 
   // compile machine code
   CUdevice   cu_device;
@@ -277,9 +282,9 @@ int main() {
   std::vector<numeric_t> b(K*N);
   srand(0);
   for(size_t i = 0; i < a.size(); i++)
-    a[i] = (float)rand()/RAND_MAX;
+    a[i] = 1;
   for(size_t i = 0; i < b.size(); i++)
-    b[i] = (float)rand()/RAND_MAX;
+    b[i] = 1;
   for(size_t i = 0; i < c.size(); i++)
     c[i] = 0;
   CUdeviceptr d_a, d_b, d_c;

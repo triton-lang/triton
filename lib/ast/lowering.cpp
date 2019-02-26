@@ -255,10 +255,25 @@ ir::type* function::type_impl(ir::module* mod, ir::type *type) const{
 }
 
 /* Function definition */
+ir::attribute_t get_ir_attr(STORAGE_SPEC_T spec){
+  switch(spec){
+    case RESTRICT_T: return ir::noalias;
+    case READONLY_T: return ir::readonly;
+    case WRITEONLY_T: return ir::writeonly;
+    default: throw std::runtime_error("cannot convert storage specifier to IR function attribute");
+  }
+}
+
 ir::value* function_definition::codegen(ir::module *mod) const{
   ir::function_type *prototype = (ir::function_type*)header_->type(mod, spec_->type(mod));
   const std::string &name = header_->id()->name();
   ir::function *fn = mod->get_or_insert_function(name, prototype);
+  for(unsigned i = 0; i < header_->get_num_args(); i++){
+    parameter *param = header_->get_arg(i);
+    std::vector<STORAGE_SPEC_T> storage = param->storage();
+    for(STORAGE_SPEC_T spec: storage)
+      fn->add_attr(1 + i, get_ir_attr(spec));
+  }
   header_->bind_parameters(mod, fn);
   ir::basic_block *entry = ir::basic_block::create(mod->get_context(), "entry", fn);
   mod->seal_block(entry);
