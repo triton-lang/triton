@@ -289,6 +289,23 @@ private:
 public:
   basic_block *get_dest()  { return (basic_block*)get_operand(0); }
 };
+
+// ternary
+class ternary_inst: public instruction {
+private:
+  std::string repr_impl() const { return "ternary"; }
+  ternary_inst(value *cond, value *true_value, value *false_value,
+               const std::string &name, instruction *next);
+
+public:
+  value *get_cond() { return get_operand(0); }
+  value *get_true_value() { return get_operand(1); }
+  value *get_false_value() { return get_operand(2); }
+  static ternary_inst* create(value *cond, value *true_value, value *false_value,
+                              const std::string &name = "", instruction *next = nullptr);
+
+};
+
 //===----------------------------------------------------------------------===//
 //                               getelementptr_inst classes
 //===----------------------------------------------------------------------===//

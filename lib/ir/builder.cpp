@@ -67,6 +67,16 @@ value *builder::create_ret_void() {
   return insert(return_inst::create(ctx_));
 }
 
+
+//===----------------------------------------------------------------------===//
+//                       tile-level control-flow instructions
+//===----------------------------------------------------------------------===//
+
+value *builder::create_ternary(value *cond, value *true_value, value *false_value, const std::string &name){
+  return insert(ternary_inst::create(cond, true_value, false_value, name));
+}
+
+
 //===----------------------------------------------------------------------===//
 //                               cast instructions
 //===----------------------------------------------------------------------===//

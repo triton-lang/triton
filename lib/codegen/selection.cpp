@@ -681,7 +681,6 @@ void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
   }
   else {
     Instruction *i = (Instruction*)llvm_value(src, builder);
-    std::cout << "instruction: " << src->get_name() << " " << src->has_tile_result_or_op() << std::endl;
     vmap_[src] = i;
   }
 }
@@ -797,7 +796,6 @@ void selection::run(ir::module &src, Module &dst){
             });
           }
           else {
-            std::cout << phi->get_name() << " " << inc_val->get_name() << std::endl;
             PHINode *llvm_phi = (PHINode*)vmap_.at(phi);
             Value *llvm_inc_val = vmap_.at(inc_val);
             llvm_phi->addIncoming(llvm_inc_val, llvm_inc_block);

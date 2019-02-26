@@ -155,7 +155,8 @@ ir::type *module::get_type(const std::string &name) {
 void module::seal_block(ir::basic_block *block){
   for(auto &x: incomplete_phis_[block]){
     add_phi_operands(x.first, x.second);
-    set_value(x.first, try_remove_trivial_phis(x.second));
+    if(get_value(x.first) == x.second)
+      set_value(x.first, try_remove_trivial_phis(x.second));
   }
   sealed_blocks_.insert(block);
   incomplete_phis_[block].clear();

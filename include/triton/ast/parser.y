@@ -226,7 +226,7 @@ logical_or_expression
 /* Conditional */
 conditional_expression
 	: logical_or_expression { $$ = $1; }
-	| logical_or_expression '?' conditional_expression ':' conditional_expression { $$ = new conditional_expression($1, $2, $3); }
+  | logical_or_expression '?' conditional_expression ':' conditional_expression { $$ = new conditional_expression($1, $3, $5); }
 	;
 
 /* Assignment */

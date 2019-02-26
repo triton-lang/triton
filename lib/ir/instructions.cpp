@@ -311,6 +311,21 @@ cond_branch_inst::cond_branch_inst(basic_block *if_dst, basic_block *else_dst, v
   set_operand(2, cond);
 }
 
+// ternary_inst
+ternary_inst::ternary_inst(value *cond, value *true_value, value *false_value, const std::string &name, instruction *next)
+  : instruction(true_value->get_type(), 3) {
+  assert(true_value->get_type() == false_value->get_type());
+  set_operand(0, cond);
+  set_operand(1, true_value);
+  set_operand(2, false_value);
+}
+
+ternary_inst *ternary_inst::create(value *cond, value *true_value, value *false_value,
+                                   const std::string &name, instruction *next) {
+  return new ternary_inst(cond, true_value, false_value, name, next);
+}
+
+
 //===----------------------------------------------------------------------===//
 //                               getelementptr_inst classes
 //===----------------------------------------------------------------------===//
