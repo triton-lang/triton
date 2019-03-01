@@ -302,21 +302,25 @@ ir::value* compound_statement::codegen(ir::module* mod) const{
 /* expression statement */
 ir::value* expression_statement::codegen(ir::module *mod) const{
   ir::builder &builder = mod->get_builder();
-  ir::value *expr = expr_->codegen(mod);
   if(mask_) {
     ir::value *pred = mask_->codegen(mod);
     ir::mask_inst *mask = (ir::mask_inst*)builder.create_mask(pred);
     ir::value *true_value = expr_->codegen(mod);
+    assignment_expression *assignment = dynamic_cast<assignment_expression*>(expr_);
+    assert(assignment);
+
     ir::type *ty = true_value->get_type();
     if(auto *itn = dynamic_cast<ir::instruction*>(true_value))
       itn->set_mask_pred(mask->get_result(0));
-    if(expr->get_type()->is_void_ty())
-      return expr;
+    if(ty->is_void_ty())
+      return true_value;
     ir::merge_inst *merge = (ir::merge_inst*)builder.create_merge(mask->get_result(0), true_value,
                                                                   mask->get_result(1), ir::undef_value::get(ty));
+    std::string name = ((named_expression*)assignment->lvalue())->id()->name();
+    mod->set_value(name, merge);
     return merge;
   }
-  return expr;
+  return expr_->codegen(mod);
 }
 
 /* Iteration statement */

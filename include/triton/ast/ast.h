@@ -299,6 +299,8 @@ public:
     : lvalue_((named_expression*)lvalue), op_(op), rvalue_((expression*)rvalue) { }
 
   ir::value* codegen(ir::module *mod) const;
+  const expression *lvalue() const { return lvalue_; }
+  const expression *rvalue() const { return rvalue_; }
 
 public:
   ASSIGN_OP_T op_;

@@ -209,7 +209,6 @@ int main() {
   llvm::Module llvm_module("matmul", llvm_context);
 
 
-  triton::ir::print(module, std::cout);
 
   // create passes
   triton::codegen::buffer_info_pass buffer_info;
@@ -264,12 +263,14 @@ int main() {
 
 
   // run passes
+  triton::ir::print(module, std::cout);
   buffer_info.run(module);
   shared.run(module);
   liveness.run(module);
   allocation.run();
   barriers.run(module);
   vectorize.run(module);
+  triton::ir::print(module, std::cout);
   selection.run(module, llvm_module);
 
   // llvm source

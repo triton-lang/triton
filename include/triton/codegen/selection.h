@@ -100,6 +100,7 @@ private:
 class selection{
   typedef std::map<ir::value *, llvm::Value *> vmap_t;
   typedef std::map<ir::value *, tile *> tmap_t;
+  typedef std::map<std::pair<tile*, indices_t>, llvm::BasicBlock*> pmap_t;
 
 private:
   // utils
@@ -131,6 +132,8 @@ public:
 private:
   vmap_t vmap_;
   tmap_t tmap_;
+  pmap_t pmap_;
+  pmap_t last_block_;
   allocation *alloc_;
   tune *params_;
   buffer_info_pass *buffer_info_;

@@ -346,6 +346,10 @@ public:
   static merge_inst* create(ir::value *mask_true, ir::value *value_true,
                             ir::value *mask_false, ir::value *value_false,
                             const std::string &name = "", instruction *next = nullptr);
+  ir::value *get_mask_true() { return get_operand(0); }
+  ir::value *get_value_true() { return get_operand(1); }
+  ir::value *get_mask_false() { return get_operand(2); }
+  ir::value *get_value_false() { return get_operand(3); }
 
 };
 
