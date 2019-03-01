@@ -37,13 +37,19 @@ void print(module &mod, std::ostream& os) {
         os << "  ";
         if(ir::value *pred = inst->get_mask_pred())
           os << "@" << get_name(pred, cnt++) << " ";
-        if(!inst->get_type()->is_void_ty())
-          os << get_name(inst, cnt++) << " = ";
+        unsigned num_results = inst->get_num_results();
+        for(unsigned i = 0; i < num_results; i++){
+          os << get_name(inst->get_result(i), cnt++);
+          if(i < num_results - 1)
+            os << ", ";
+          else
+            os << " = ";
+        }
         os << inst->repr();
         ir::instruction::ops_t ops = inst->ops();
         size_t num_ops = inst->get_num_operands();
         if(num_ops > 0)
-          os << " ";
+          os << " ";;
         for(unsigned i = 0; i < num_ops; i++)
           os << get_name(ops[i], cnt++) << (i < num_ops - 1?", ":"");
         os << ";" << std::endl;

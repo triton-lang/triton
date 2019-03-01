@@ -16,6 +16,7 @@ class context;
 //                               instruction classes
 //===----------------------------------------------------------------------===//
 
+class result_reference;
 class instruction: public user{
 public:
   struct mask_info_t {
@@ -27,7 +28,7 @@ public:
 
 protected:
   // constructors
-  instruction(type *ty, unsigned num_ops, const std::string &name = "", instruction *next = nullptr);
+  instruction(type *ty, unsigned num_ops, unsigned num_results = 1, const std::string &name = "", instruction *next = nullptr);
 
 public:
   // parent
@@ -38,15 +39,33 @@ public:
   // mask
   void set_mask_pred(value *pred)                             { resize_hidden(1); set_operand(get_num_operands(), pred); }
   value* get_mask_pred() const                                { if(get_num_hidden() == 0) return nullptr; return get_operand(get_num_operands()); }
+  void set_mask_else(value *x)                                { resize_hidden(2); set_operand(get_num_operands() + 1, x); }
+  value* get_mask_else() const                                { if(get_num_hidden() < 2) return nullptr; return get_operand(get_num_operands() + 1);  }
   // helpers
   bool has_tile_result_or_op();
   // repr
   std::string repr() const                                    { return repr_impl(); }
+  // results
+  unsigned get_num_results() const                            { return results_.size(); }
+  value* get_result(unsigned i)                               { return results_.at(i); }
 
 private:
   basic_block *parent_;
   value *pred_;
   value *mask_pred_;
+  std::vector<value*> results_;
+};
+
+// result reference
+class result_reference: public value {
+public:
+  result_reference(instruction *ref, unsigned arg_id, const std::string &name = "");
+  instruction *get_ref();
+  unsigned     get_arg_id();
+
+private:
+  instruction *ref_;
+  unsigned arg_id_;
 };
 
 //===----------------------------------------------------------------------===//
@@ -303,6 +322,30 @@ public:
   value *get_false_value() { return get_operand(2); }
   static ternary_inst* create(value *cond, value *true_value, value *false_value,
                               const std::string &name = "", instruction *next = nullptr);
+};
+
+// mask
+class mask_inst: public instruction {
+private:
+  std::string repr_impl() const { return "mask"; }
+  mask_inst(ir::value *pred, const std::string &name, instruction *next);
+
+public:
+  static mask_inst* create(ir::value *pred, const std::string &name = "", instruction *next = nullptr);
+};
+
+// merge
+class merge_inst: public instruction {
+private:
+  std::string repr_impl() const { return "merge"; }
+  merge_inst(ir::value *mask_true, ir::value *value_true,
+             ir::value *mask_false, ir::value *value_false,
+             const std::string &name, instruction *next);
+
+public:
+  static merge_inst* create(ir::value *mask_true, ir::value *value_true,
+                            ir::value *mask_false, ir::value *value_false,
+                            const std::string &name = "", instruction *next = nullptr);
 
 };
 

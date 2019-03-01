@@ -11,7 +11,7 @@ namespace ir{
 //                               instruction classes
 //===----------------------------------------------------------------------===//
 
-instruction::instruction(type *ty, unsigned num_ops, const std::string &name, instruction *next)
+instruction::instruction(type *ty, unsigned num_ops, unsigned num_results, const std::string &name, instruction *next)
     : user(ty, num_ops, name) {
   if(next){
     basic_block *block = next->get_parent();
@@ -19,6 +19,11 @@ instruction::instruction(type *ty, unsigned num_ops, const std::string &name, in
     auto it = std::find(block->begin(), block->end(), next);
     block->get_inst_list().insert(it, next);
   }
+  if(num_results == 1)
+    results_.push_back(this);
+  else
+    for(unsigned i = 0; i < num_results; i++)
+      results_.push_back(new result_reference(this, i));
 }
 
 void instruction::erase_from_parent() {
@@ -32,12 +37,17 @@ bool instruction::has_tile_result_or_op() {
   return result;
 }
 
+
+// result reference
+result_reference::result_reference(instruction *ref, unsigned arg_id, const std::string &name)
+  : value(ref->get_type(), name), arg_id_(arg_id){ }
+
 //===----------------------------------------------------------------------===//
 //                               phi_node classes
 //===----------------------------------------------------------------------===//
 
 phi_node::phi_node(type *ty, unsigned num_reserved, std::string const &name, instruction *next)
-    : instruction(ty, 0, name, next) {
+    : instruction(ty, 0, 1, name, next) {
   blocks_.reserve(num_reserved);
 }
 
@@ -98,7 +108,7 @@ std::string binary_operator::repr_impl() const {
 }
 
 binary_operator::binary_operator(op_t op, value *lhs, value *rhs, type *ty, const std::string &name, instruction *next)
-    : instruction(ty, 2, name, next), op_(op){
+    : instruction(ty, 2, 1, name, next), op_(op){
   set_operand(0, lhs);
   set_operand(1, rhs);
 }
@@ -165,7 +175,7 @@ std::string cmp_inst::repr_impl() const {
 }
 
 cmp_inst::cmp_inst(type *ty, cmp_inst::pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next)
-    : instruction(ty, 2, name, next), pred_(pred) {
+    : instruction(ty, 2, 1, name, next), pred_(pred) {
   set_operand(0, lhs);
   set_operand(1, rhs);
 }
@@ -205,7 +215,7 @@ fcmp_inst* fcmp_inst::create(pred_t pred, value *lhs, value *rhs, const std::str
 //===----------------------------------------------------------------------===//
 
 unary_inst::unary_inst(type *ty, value *v, const std::string &name, instruction *next)
-    : instruction(ty, 1, name, next) {
+    : instruction(ty, 1, 1, name, next) {
   set_operand(0, v);
 }
 
@@ -275,7 +285,7 @@ cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, 
 
 // return_inst
 return_inst::return_inst(context &ctx, value *ret_val, instruction *next)
-    : terminator_inst(type::get_void_ty(ctx), ret_val!=nullptr, "", next){
+    : terminator_inst(type::get_void_ty(ctx), ret_val!=nullptr, 0, "", next){
   if(ret_val)
     set_operand(0, ret_val);
 }
@@ -298,32 +308,46 @@ branch_inst* branch_inst::create(value *cond, basic_block *if_dst, basic_block *
 
 // uncond_branch_inst
 uncond_branch_inst::uncond_branch_inst(basic_block *dst, instruction *next)
-    : branch_inst(type::get_void_ty(dst->get_context()), 1, "", next){
+    : branch_inst(type::get_void_ty(dst->get_context()), 1, 0, "", next){
   set_operand(0, dst);
 }
 
 // cond_branch_inst
 cond_branch_inst::cond_branch_inst(basic_block *if_dst, basic_block *else_dst, value *cond, instruction *next)
-    : branch_inst(type::get_void_ty(if_dst->get_context()), 3, "", next){
+    : branch_inst(type::get_void_ty(if_dst->get_context()), 3, 0, "", next){
   assert(cond->get_type()->is_integer_ty(1) && "May only branch on boolean predicates!");
   set_operand(0, if_dst);
   set_operand(1, else_dst);
   set_operand(2, cond);
 }
 
-// ternary_inst
-ternary_inst::ternary_inst(value *cond, value *true_value, value *false_value, const std::string &name, instruction *next)
-  : instruction(true_value->get_type(), 3) {
-  assert(true_value->get_type() == false_value->get_type());
-  set_operand(0, cond);
-  set_operand(1, true_value);
-  set_operand(2, false_value);
+// mask_inst
+mask_inst::mask_inst(value *pred, const std::string &name, instruction *next)
+  : instruction(pred->get_type(), 1, 2, name, next) {
+  set_operand(0, pred);
 }
 
-ternary_inst *ternary_inst::create(value *cond, value *true_value, value *false_value,
-                                   const std::string &name, instruction *next) {
-  return new ternary_inst(cond, true_value, false_value, name, next);
+mask_inst* mask_inst::create(value *pred, const std::string &name, instruction *next) {
+  return new mask_inst(pred, name, next);
 }
+
+// merge_inst
+merge_inst::merge_inst(value *mask_true, value *value_true,
+                       value *mask_false, value *value_false,
+                       const std::string &name, instruction *next)
+    : instruction(value_true->get_type(), 4, 1, name, next) {
+  set_operand(0, mask_true);
+  set_operand(1, value_true);
+  set_operand(2, mask_false);
+  set_operand(3, value_false);
+}
+
+merge_inst* merge_inst::create(value *mask_true, value *value_true,
+                               value *mask_false, value *value_false,
+                               const std::string &name, instruction *next) {
+  return new merge_inst(mask_true, value_true, mask_false, value_false, name, next);
+}
+
 
 
 //===----------------------------------------------------------------------===//
@@ -331,7 +355,7 @@ ternary_inst *ternary_inst::create(value *cond, value *true_value, value *false_
 //===----------------------------------------------------------------------===//
 
 getelementptr_inst::getelementptr_inst(type *pointee_ty, value *ptr, const std::vector<value *> &idx, const std::string &name, instruction *next)
-    : instruction(get_return_type(pointee_ty, ptr, idx), 1 + idx.size(), name, next),
+    : instruction(get_return_type(pointee_ty, ptr, idx), 1 + idx.size(), 1, name, next),
       source_elt_ty(pointee_ty),
       res_elt_ty(get_indexed_type(pointee_ty, idx)){
   type *expected_ty = ((pointer_type*)(get_type()->get_scalar_ty()))->get_element_ty();
@@ -407,7 +431,7 @@ load_inst* load_inst::create(value *ptr, const std::string &name, instruction *n
 
 // store
 store_inst::store_inst(value *ptr, value *v, const std::string &name, instruction *next)
-    : instruction(type::get_void_ty(ptr->get_type()->get_context()), 2, name, next) {
+    : instruction(type::get_void_ty(ptr->get_type()->get_context()), 2, 1, name, next) {
   set_operand(0, ptr);
   set_operand(1, v);
 }
@@ -465,7 +489,7 @@ instruction* broadcast_inst::create(value *arg, const type::tile_shapes_t &shape
 
 matmul_inst::matmul_inst(value *A, value *B, value *C,
                          const std::string &name, instruction *next)
-    : builtin_inst(C->get_type(), 3, name, next) {
+    : builtin_inst(C->get_type(), 3, 0, name, next) {
   set_operand(0, A);
   set_operand(1, B);
   set_operand(2, C);
@@ -481,7 +505,7 @@ instruction *matmul_inst::create(value *A, value *B, value *C,
 //===----------------------------------------------------------------------===//
 get_global_range_inst::get_global_range_inst(type *ty, unsigned axis,
                                              const std::string &name, instruction *next)
-  : builtin_inst(ty, 0, name, next), axis_(axis) {
+  : builtin_inst(ty, 0, 1, name, next), axis_(axis) {
 
 }
 
@@ -506,7 +530,7 @@ vectorize_inst* vectorize_inst::create(value *arg, const std::string &name, inst
 
 barrier_inst::barrier_inst(context &ctx, const std::string &name,
                                                        instruction *next)
-  : instruction(type::get_void_ty(ctx), 0, name, next){ }
+  : instruction(type::get_void_ty(ctx), 0, 1, name, next){ }
 
 barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instruction *next) {
   return new barrier_inst(ctx, name, next);

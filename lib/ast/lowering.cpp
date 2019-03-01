@@ -301,12 +301,20 @@ ir::value* compound_statement::codegen(ir::module* mod) const{
 
 /* expression statement */
 ir::value* expression_statement::codegen(ir::module *mod) const{
+  ir::builder &builder = mod->get_builder();
   ir::value *expr = expr_->codegen(mod);
   if(mask_) {
-    ir::instruction *itn = dynamic_cast<ir::instruction*>(expr);
-    assert(itn);
-    ir::value *mask = mask_->codegen(mod);
-    itn->set_mask_pred(mask);
+    ir::value *pred = mask_->codegen(mod);
+    ir::mask_inst *mask = (ir::mask_inst*)builder.create_mask(pred);
+    ir::value *true_value = expr_->codegen(mod);
+    ir::type *ty = true_value->get_type();
+    if(auto *itn = dynamic_cast<ir::instruction*>(true_value))
+      itn->set_mask_pred(mask->get_result(0));
+    if(expr->get_type()->is_void_ty())
+      return expr;
+    ir::merge_inst *merge = (ir::merge_inst*)builder.create_merge(mask->get_result(0), true_value,
+                                                                  mask->get_result(1), ir::undef_value::get(ty));
+    return merge;
   }
   return expr;
 }
@@ -596,10 +604,18 @@ ir::value *conditional_expression::llvm_op(ir::builder &builder, ir::value *cond
 }
 
 ir::value *conditional_expression::codegen(ir::module *mod) const{
+  ir::builder &builder = mod->get_builder();
   ir::value *cond = cond_->codegen(mod);
-  ir::value *true_value = true_value_->codegen(mod);
   ir::value *false_value = false_value_->codegen(mod);
-  return llvm_op(mod->get_builder(), cond, true_value, false_value, "");
+  ir::value *true_value = true_value_->codegen(mod);
+  bool is_float, is_ptr, is_int, is_signed;
+  implicit_cast(builder, true_value, false_value, is_float, is_ptr, is_int, is_signed);
+  implicit_broadcast(mod, true_value, false_value);
+  ir::instruction *itn = dynamic_cast<ir::instruction*>(true_value);
+  assert(itn);
+  itn->set_mask_pred(cond);
+  itn->set_mask_else(false_value);
+  return itn;
 }
 
 /* Assignment expression */

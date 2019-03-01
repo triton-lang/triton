@@ -209,6 +209,7 @@ int main() {
   llvm::Module llvm_module("matmul", llvm_context);
 
 
+  triton::ir::print(module, std::cout);
 
   // create passes
   triton::codegen::buffer_info_pass buffer_info;
@@ -219,6 +220,7 @@ int main() {
   triton::codegen::barriers barriers(&allocation, &buffer_info);
   triton::codegen::vectorize vectorize(&tune);
   triton::codegen::selection selection(&allocation, &tune, &buffer_info);
+
 
   // tuning parameters
   tune.run(module);
@@ -246,6 +248,9 @@ int main() {
   context.p_impl->mp_constants_[2]->set_value(params[2]);
   for(unsigned *x: tune.get_params(module))
     *x = params[3 + i++];
+
+
+
   // constraints
   std::map<triton::ir::value*, std::vector<std::string>> errors;
   tune.check_constraints(module, errors);
@@ -265,12 +270,11 @@ int main() {
   allocation.run();
   barriers.run(module);
   vectorize.run(module);
-  triton::ir::print(module, std::cout);
   selection.run(module, llvm_module);
 
   // llvm source
   llvm::legacy::PassManager manager;
-//  manager.add(llvm::createPrintModulePass(llvm::outs()));
+  manager.add(llvm::createPrintModulePass(llvm::outs()));
   manager.add(llvm::createVerifierPass(true));
   manager.run(llvm_module);
 

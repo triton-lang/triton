@@ -70,15 +70,10 @@ void tune::init_c_graph(ir::instruction *v) {
   }
   // Element-wise
   else if(dynamic_cast<ir::user*>(v)){
-    for(unsigned i = 0; i < shapes.size(); i ++)
-      for(ir::value* op: v->ops())
-        add_constraint({v, i}, {op, i});
-  }
-
-  /* Add mask constraints */
-  if(ir::value *pred = v->get_mask_pred()){
-    for(unsigned i = 0; i < shapes.size(); i++)
-      add_constraint({v->ops()[0], i}, {pred, i});
+    for(unsigned k = 0; k < v->get_num_results(); k++)
+      for(unsigned i = 0; i < shapes.size(); i ++)
+        for(ir::value* op: v->ops())
+          add_constraint({v->get_result(k), i}, {op, i});
   }
 }
 
