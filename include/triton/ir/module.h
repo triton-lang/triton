@@ -30,6 +30,10 @@ class constant;
 class global_value;
 
 /* Module */
+struct scope {
+  std::map<std::string, ir::type*> types;
+};
+
 class module {
   typedef std::pair<std::string, basic_block*> val_key_t;
   friend class function;
@@ -56,15 +60,11 @@ public:
   // Setters
   void set_value(const std::string& name, basic_block* block, value *x);
   void set_value(const std::string& name, value* x);
-  void set_type(const std::string& name, basic_block* block, type* x);
-  void set_type(const std::string& name, type* x);
   void set_const(const std::string& name);
   void set_continue_fn(std::function<ir::value*()> fn);
   // Getters
   value *get_value(const std::string& name, basic_block* block);
   value *get_value(const std::string& name);
-  type *get_type(const std::string& name, basic_block* block);
-  type *get_type(const std::string& name);
   std::function<ir::value*()> get_continue_fn();
   // Seal block -- no more predecessors will be added
   void seal_block(basic_block *block);
@@ -73,9 +73,9 @@ public:
   functions_list_t &get_function_list()             { return functions_; }
   function *get_or_insert_function(const std::string &name, function_type *ty);
   // Scope
-  void push_scope(const ast::compound_statement* scope)   { scopes_.push(scope); }
+  void add_new_scope()                                    { if(scopes_.empty()) scopes_.push(scope()); else scopes_.push(scope(get_scope())); }
   void pop_scope()                                        { scopes_.pop(); }
-  const ast::compound_statement* get_scope()              { return scopes_.top(); }
+  scope& get_scope()                                      { return scopes_.top(); }
 
 
 private:
@@ -91,7 +91,7 @@ private:
   symbols_map_t symbols_;
   std::function<ir::value*()> continue_fn_;
   std::map<value*, value**> current_phi_;
-  std::stack<const ast::compound_statement*> scopes_;
+  std::stack<scope> scopes_;
 };
 
 }

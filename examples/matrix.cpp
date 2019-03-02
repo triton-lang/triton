@@ -47,21 +47,21 @@ void matmul(restrict readonly fp32 *a, restrict readonly fp32 *b, fp32 *c, int32
   int32 ryb[TN] = get_global_range[TN](1);\
   int32 rka[TK] = 0 ... TK;\
   int32 rkb[TK] = 0 ... TK;\
-  int32 rxc[TM] = get_global_range[TM](0);\
-  int32 ryc[TN] = get_global_range[TN](1);\
+  int32 rxc[TM];\
+  int32 ryc[TN];\
   fp32 C[TM, TN] = 0;\
   int32 k;\
-  fp32* pa[TM, TK] = a + rxa[:, newaxis] + rka[newaxis, :]*M;\
-  fp32* pb[TN, TK] = b + ryb[:, newaxis] + rkb[newaxis, :]*K;\
-  fp32* pc[TM, TN] = c + rxc[:, newaxis] + ryc[newaxis, :]*M;\
+  fp32* pa[TM, TK] = a + rka[newaxis, :]*M + rxa[:, newaxis];\
+  fp32* pb[TN, TK] = b + rkb[newaxis, :]*K + ryb[:, newaxis];\
+  fp32* pc[TM, TN];\
   fp32 a[TM, TK] = *pa;\
   fp32 b[TN, TK] = *pb;\
   int1 checkc0[TM];\
   int1 checkc1[TN];\
   int1 checkc[TM, TN];\
    for(k = K; k > 0; k = k - TK){\
-     int1 checka[TM, TK] = (k > bound);\
-     int1 checkb[TN, TK] = (k > bound);\
+     int1 checka[TM, TK];\
+     int1 checkb[TN, TK];\
      int1 checka0[TM];\
      int1 checka1[TK];\
      int1 checkb0[TN];\
@@ -69,6 +69,8 @@ void matmul(restrict readonly fp32 *a, restrict readonly fp32 *b, fp32 *c, int32
      C = dot(a, b, C);\
      pa = pa + TK*M;\
      pb = pb + TK*K;\
+     checka = k > bound;\
+     checkb = k > bound;\
      @checka a = *pa;\
      @checkb b = *pb;\
      if(k > bound)\
@@ -82,6 +84,9 @@ void matmul(restrict readonly fp32 *a, restrict readonly fp32 *b, fp32 *c, int32
      a = checka ? *pa : 0;\
      b = checkb ? *pb : 0;\
    }\
+  rxc = get_global_range[TM](0);\
+  ryc = get_global_range[TN](1);\
+  pc = c + ryc[newaxis, :]*M + rxc[:, newaxis];\
   checkc0 = rxc < M;\
   checkc1 = ryc < N;\
   checkc = checkc0[:, newaxis] && checkc1[newaxis, :];\
@@ -231,15 +236,14 @@ int main() {
     2, 8, 1,
     // b0
     4, 4, 1,
-    // c0
-    2, 8, 1,
-    // c1
-    4, 4, 1,
+    // c
+    2, 4, 8, 4, 1, 1,
     // a1
     2, 4, 1,
     // b1
     1, 8, 1
   };
+
 
   // meta-parameters
   unsigned i = 0;
@@ -257,21 +261,20 @@ int main() {
   std::cout << "errors: " << errors.size() << std::endl;
   for(auto &x: errors){
   for(auto &e: x.second)
-    std::cout << e << std::endl;
+    std::cout << x.first->get_name() << " " << e << std::endl;
   }
   if(errors.size())
     exit(EXIT_FAILURE);
 
 
+
   // run passes
-  triton::ir::print(module, std::cout);
   buffer_info.run(module);
   shared.run(module);
   liveness.run(module);
   allocation.run();
   barriers.run(module);
   vectorize.run(module);
-  triton::ir::print(module, std::cout);
   selection.run(module, llvm_module);
 
   // llvm source

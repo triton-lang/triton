@@ -29,14 +29,6 @@ void module::set_value(const std::string& name, ir::value *value){
   return set_value(name, builder_.get_insert_block(), value);
 }
 
-void module::set_type(const std::string& name, ir::basic_block *block, ir::type *type){
-  types_[val_key_t{name, block}] = type;
-}
-
-void module::set_type(const std::string& name, ir::type *type){
-  return set_type(name, builder_.get_insert_block(), type);
-}
-
 void module::set_const(const std::string& name){
   const_.insert(name);
 }
@@ -97,7 +89,7 @@ ir::value *module::get_value_recursive(const std::string& name, ir::basic_block 
   ir::value *result;
   bool is_const = const_.find(name) != const_.end();
   auto &preds = block->get_predecessors();
-  ir::type *ty = get_type(name, block);
+  ir::type *ty = get_scope().types.at(name);
   if(block)
   if(!is_const && sealed_blocks_.find(block) == sealed_blocks_.end()){
     incomplete_phis_[block][name] = make_phi(ty, 1, block);
@@ -134,21 +126,6 @@ ir::value *module::get_value(const std::string& name, ir::basic_block *block) {
 
 ir::value *module::get_value(const std::string& name) {
   return get_value(name, builder_.get_insert_block());
-}
-
-ir::type *module::get_type(const std::string &name, basic_block *block) {
-  val_key_t key(name, block);
-  if(types_.find(key) != types_.end())
-    return types_.at(key);
-  assert(block);
-  const auto& predecessors = block->get_predecessors();
-  if(predecessors.empty())
-    return get_type(name, nullptr);
-  return get_type(name, predecessors[0]);
-}
-
-ir::type *module::get_type(const std::string &name) {
-  return types_.at({name, builder_.get_insert_block()});
 }
 
 

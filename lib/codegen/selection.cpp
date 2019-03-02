@@ -214,6 +214,38 @@ Constant *selection::llvm_constant(ir::constant *cst, LLVMContext &ctx) {
   throw std::runtime_error("unknown conversion from ir::constant to Constant");
 }
 
+inline Value *Reassociate(Value *V, IRBuilder<> &Builder){
+  BinaryOperator *BinOp = dyn_cast<BinaryOperator>(V);
+  if(BinOp)
+  if(BinOp->getOpcode()==BinaryOperator::BinaryOps::Add){
+    Value *LHS = Reassociate(BinOp->getOperand(0), Builder);
+    Value *RHS = Reassociate(BinOp->getOperand(1), Builder);
+    if(BinaryOperator *BinLHS = dyn_cast<BinaryOperator>(LHS))
+    if(BinLHS->getOpcode()==BinaryOperator::BinaryOps::Add){
+      Value *LLHS = BinLHS->getOperand(0);
+      Value *RLHS = BinLHS->getOperand(1);
+      // (cst + x) + y -> cst + (x + y)
+      if(isa<Constant>(LLHS))
+        return Builder.CreateAdd(LLHS, Builder.CreateAdd(RLHS, RHS));
+      // (x + cst) + y -> cst + (x + y)
+      if(isa<Constant>(RLHS))
+        return Builder.CreateAdd(RLHS, Builder.CreateAdd(LLHS, RHS));
+    }
+    if(BinaryOperator *BinRHS = dyn_cast<BinaryOperator>(RHS))
+    if(BinRHS->getOpcode()==BinaryOperator::BinaryOps::Add){
+      Value *LRHS = BinRHS->getOperand(0);
+      Value *RRHS = BinRHS->getOperand(1);
+      // x + (cst + y) -> cst + (x + y)
+      if(isa<Constant>(LRHS))
+        return Builder.CreateAdd(LRHS, Builder.CreateAdd(RRHS, LHS));
+      // x + (cst + y) -> cst + (x + y)
+      if(isa<Constant>(LRHS))
+        return Builder.CreateAdd(RRHS, Builder.CreateAdd(LRHS, LHS));
+    }
+    return BinOp;
+  }
+  return V;
+}
 
 /* convert ir::instruction to llvm::Instruction */
 Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir::value*)> value, IRBuilder<> &builder) {
@@ -271,8 +303,9 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     std::transform(ii->idx_begin(), ii->idx_end(), std::back_inserter(idx_vals),
                    [&value](ir::value* x){ return value(x);});
     Type *source_ty = type(ii->get_source_elt_ty()->get_scalar_ty());
+    idx_vals[0] = Reassociate(idx_vals[0], builder);
     Value *arg = value(ii->get_operand(0));
-    return builder.Insert(GetElementPtrInst::Create(source_ty, arg, idx_vals));
+    return builder.Insert(GetElementPtrInst::CreateInBounds(source_ty, arg, idx_vals));
   }
   if(ir::load_inst* ii = dynamic_cast<ir::load_inst*>(inst)){
     Value *ptr = value(ii->get_pointer_operand());

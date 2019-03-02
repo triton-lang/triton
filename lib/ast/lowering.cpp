@@ -149,7 +149,7 @@ inline bool is_terminator(ir::value* x) {
 
 /* Translation unit */
 ir::value* translation_unit::codegen(ir::module *mod) const{
-  mod->push_scope(nullptr);
+  mod->add_new_scope();
   decls_.codegen(mod);
   return nullptr;
 }
@@ -242,7 +242,7 @@ void function::bind_parameters(ir::module *mod, ir::function *fn) const{
     if(id_i){
       args[i]->set_name(id_i->name());
       mod->set_value(id_i->name(), nullptr, args[i]);
-      mod->set_type(id_i->name(), nullptr, args[i]->get_type());
+      mod->get_scope().types[id_i->name()] = args[i]->get_type();
     }
   }
 }
@@ -285,7 +285,7 @@ ir::value* function_definition::codegen(ir::module *mod) const{
 
 /* Statements */
 ir::value* compound_statement::codegen(ir::module* mod) const{
-  mod->push_scope(this);
+  mod->add_new_scope();
   if(decls_)
     decls_->codegen(mod);
   if(statements_){
@@ -422,7 +422,7 @@ ir::value* initializer::codegen(ir::module * mod) const{
   }
   value->set_name(name);
   mod->set_value(name, value);
-  mod->set_type(name, ty);
+  mod->get_scope().types[name] = ty;
   if(std::find(storage.begin(), storage.end(), CONST_T) != storage.end())
     mod->set_const(name);
   return value;
@@ -649,8 +649,12 @@ ir::value *conditional_expression::codegen(ir::module *mod) const{
 /* Assignment expression */
 ir::value *assignment_expression::codegen(ir::module *mod) const{
   ir::value *rvalue = rvalue_->codegen(mod);
-  if(auto *x = dynamic_cast<const named_expression*>(lvalue_))
+  if(auto *x = dynamic_cast<const named_expression*>(lvalue_)){
+    ir::type *ty = mod->get_scope().types.at(x->id()->name());
+    rvalue = explicit_cast(mod->get_builder(), rvalue, ty);
+    implicit_broadcast(mod, rvalue, ty);
     mod->set_value(x->id()->name(), rvalue);
+  }
   else if(auto* x = dynamic_cast<const unary_operator*>(lvalue_)){
     assert(x->get_op()==DEREF);
     assert(x->lvalue());
