@@ -79,8 +79,8 @@ void matmul(restrict readonly fp32 *a, restrict readonly fp32 *b, fp32 *c, int32
      checkb1 = rkb < k;\
      checka = checka0[:, newaxis] && checka1[newaxis, :];\
      checkb = checkb0[:, newaxis] && checkb1[newaxis, :];\
-     @checka a = *pa;\
-     @checkb b = *pb;\
+     a = checka ? *pa : 0;\
+     b = checkb ? *pb : 0;\
    }\
   checkc0 = rxc < M;\
   checkc1 = ryc < N;\
@@ -220,6 +220,7 @@ int main() {
   triton::codegen::vectorize vectorize(&tune);
   triton::codegen::selection selection(&allocation, &tune, &buffer_info);
 
+  triton::ir::print(module, std::cout);
 
   // tuning parameters
   tune.run(module);
@@ -280,7 +281,7 @@ int main() {
   manager.run(llvm_module);
 
   std::string src = generate_machine_code(llvm_module, "nvptx64-nvidia-cuda", compute_data_layout(true, true));
-//  std::cout << src << std::endl;
+  std::cout << src << std::endl;
 
   // compile machine code
   CUdevice   cu_device;

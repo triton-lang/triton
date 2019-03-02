@@ -603,23 +603,47 @@ ir::value* cast_operator::codegen(ir::module *mod) const{
 }
 
 /* Conditional expression */
-ir::value *conditional_expression::llvm_op(ir::builder &builder, ir::value *cond, ir::value *true_value, ir::value *false_value, const std::string &name) const{
-  return nullptr;
-}
-
 ir::value *conditional_expression::codegen(ir::module *mod) const{
   ir::builder &builder = mod->get_builder();
-  ir::value *cond = cond_->codegen(mod);
-  ir::value *false_value = false_value_->codegen(mod);
+  ir::value *pred = cond_->codegen(mod);
+  ir::instruction *mask = (ir::instruction*)builder.create_mask(pred);
+  ir::value *true_mask = mask->get_result(0);
+  ir::value *false_mask = mask->get_result(1);
   ir::value *true_value = true_value_->codegen(mod);
+  ir::value *false_value = false_value_->codegen(mod);
+  if(auto *itn = dynamic_cast<ir::instruction*>(true_value))
+    itn->set_mask_pred(true_mask);
+  if(auto *itn = dynamic_cast<ir::instruction*>(false_value))
+    itn->set_mask_pred(false_mask);
   bool is_float, is_ptr, is_int, is_signed;
+  ir::value *uncasted_true_value = true_value;
+  ir::value *uncasted_false_value = false_value;
   implicit_cast(builder, true_value, false_value, is_float, is_ptr, is_int, is_signed);
   implicit_broadcast(mod, true_value, false_value);
-  ir::instruction *itn = dynamic_cast<ir::instruction*>(true_value);
-  assert(itn);
-  itn->set_mask_pred(cond);
-  itn->set_mask_else(false_value);
-  return itn;
+  {
+    ir::value *current = true_value;
+    while(current != uncasted_true_value) {
+      if(auto *itn = dynamic_cast<ir::instruction*>(current)){
+        itn->set_mask_pred(true_mask);
+        current = itn->get_operand(0);
+      }
+      else
+        break;
+    }
+  }
+  {
+    ir::value *current = false_value;
+    while(current != uncasted_false_value) {
+      if(auto *itn = dynamic_cast<ir::instruction*>(current)){
+        itn->set_mask_pred(false_mask);
+      current = itn->get_operand(0);
+      }
+      else
+        break;
+    }
+  }
+  ir::value *result = builder.create_merge(true_mask, true_value, false_mask, false_value);
+  return result;
 }
 
 /* Assignment expression */

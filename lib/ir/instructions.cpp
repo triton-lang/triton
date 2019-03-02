@@ -32,8 +32,8 @@ void instruction::erase_from_parent() {
 
 bool instruction::has_tile_result_or_op() {
   bool result = get_type()->is_tile_ty();
-  for(ir::value *v: ops())
-    result |= v->get_type()->is_tile_ty();
+  for(unsigned i = 0; i < get_num_operands(); i++)
+    result |= get_operand(i)->get_type()->is_tile_ty();
   return result;
 }
 

@@ -589,10 +589,10 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         BasicBlock *block_false =  pmap_.at({mask_tile_false, idx});
         Value *value_false = value_tile_false->get_value(idx);
         BasicBlock *block_done = last_block_.at({mask_tile_true, idx});
-        if(block_done->empty())
-          builder.SetInsertPoint(block_done);
-        else
+        if(block_done->getTerminator())
           builder.SetInsertPoint(block_done->getTerminator());
+        else
+          builder.SetInsertPoint(block_done);
         PHINode *phi = builder.CreatePHI(value_true->getType(), 2);
         phi->addIncoming(value_true, block_true);
         phi->addIncoming(value_false,block_false);
@@ -615,6 +615,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     // splat
     else if(dynamic_cast<ir::splat_inst*>(ins)) {
       result->for_each([&](indices_t idx) {
+        set_mask_insert_pt(idx);
         result->set_value(idx, llvm_value(ins->get_operand(0), builder));
       });
     }
@@ -703,7 +704,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
 }
 
 void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
-  if(src->has_tile_result_or_op()) {
+  if(src->has_tile_result_or_op() || (src->get_mask_pred() && src->get_mask_pred()->get_type()->is_tile_ty())) {
     lower_tile_instruction(src, builder);
   }
   else {
