@@ -135,5 +135,12 @@ global_object::global_object(type *ty, unsigned num_ops,
   : global_value(ty, num_ops, linkage, name, addr_space) { }
 
 
+/* alloc const */
+alloc_const::alloc_const(type *ty, constant_int *size, const std::string &name)
+  : global_object(ty, 1, global_value::external, name, 4) {
+  set_operand(0, size);
+}
+
+
 }
 }

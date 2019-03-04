@@ -106,6 +106,12 @@ public:
                unsigned addr_space = 0);
 };
 
+/* global variable */
+class alloc_const: public global_object {
+public:
+  alloc_const(type *ty, constant_int *size,
+              const std::string &name = "");
+};
 
 }
 }

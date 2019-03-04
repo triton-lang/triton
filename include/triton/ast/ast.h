@@ -62,6 +62,7 @@ enum STORAGE_SPEC_T{
   KERNEL_T,
   RESTRICT_T,
   READONLY_T,
+  CONSTANT_SPACE_T,
   WRITEONLY_T
 };
 
@@ -142,6 +143,16 @@ class builtin_expression: public node{
 
 };
 
+class typed_declaration_specifier;
+class alloc_const: public builtin_expression{
+public:
+  alloc_const(node *spec, node *size): spec_((typed_declaration_specifier*)spec), size_((constant*)size) { }
+  ir::value* codegen(ir::module *mod) const;
+
+private:
+  const typed_declaration_specifier* spec_;
+  const constant* size_;
+};
 
 class get_global_range: public builtin_expression{
 public:
@@ -447,13 +458,18 @@ public:
 
 /* Declarators */
 class declarator: public node{
-  virtual ir::type* type_impl(ir::module *mod, ir::type *type) const = 0;
+protected:
+  typedef std::vector<STORAGE_SPEC_T> storage_spec_vec_t;
+  typedef const storage_spec_vec_t& storage_spec_vec_const_ref_t;
+
+public:
+  virtual ir::type* type_impl(ir::module *mod, ir::type *type, storage_spec_vec_const_ref_t storage) const = 0;
 
 public:
   declarator(node *lhs)
     : lhs_((declarator*)lhs), ptr_(nullptr){ }
 
-  ir::type* type(ir::module *mod, ir::type *type) const;
+  ir::type* type(ir::module *mod, ir::type *type, storage_spec_vec_const_ref_t storage) const;
 
   const identifier* id() const {
     return (const identifier*)lhs_;
@@ -464,13 +480,18 @@ public:
     return this;
   }
 
+  void set_addr_space(unsigned addr_space){
+    addr_space_ = addr_space;
+  }
+
 protected:
   declarator *lhs_;
   pointer *ptr_;
+  unsigned addr_space_;
 };
 
 class identifier: public declarator {
-  ir::type* type_impl(ir::module *mod, ir::type *type) const;
+  ir::type* type_impl(ir::module *mod, ir::type *type, storage_spec_vec_const_ref_t storage) const;
 
 public:
   identifier(char *&name): declarator(this), name_(name) { }
@@ -482,7 +503,7 @@ private:
 
 class pointer: public declarator{
 private:
-  ir::type* type_impl(ir::module *mod, ir::type *type) const;
+  ir::type* type_impl(ir::module *mod, ir::type *type, storage_spec_vec_const_ref_t storage) const;
 
 public:
   pointer(node *id): declarator(id) { }
@@ -490,7 +511,7 @@ public:
 
 class tile: public declarator{
 private:
-  ir::type* type_impl(ir::module *mod, ir::type *type) const;
+  ir::type* type_impl(ir::module *mod, ir::type *type, storage_spec_vec_const_ref_t storage) const;
 
 public:
   tile(node *id, node *shapes)
@@ -502,7 +523,7 @@ public:
 
 class function: public declarator{
 private:
-  ir::type* type_impl(ir::module *mod, ir::type *type) const;
+  ir::type* type_impl(ir::module *mod, ir::type *type, storage_spec_vec_const_ref_t storage) const;
 
 public:
   function(node *id, node *args)
@@ -519,7 +540,7 @@ public:
 
 class initializer : public declarator{
 private:
-  ir::type* type_impl(ir::module * mod, ir::type *type) const;
+  ir::type* type_impl(ir::module * mod, ir::type *type, storage_spec_vec_const_ref_t storage) const;
 
 public:
   initializer(node *decl, node *init)
@@ -531,7 +552,7 @@ public:
 
 public:
   const declaration_specifier *spec_;
-  const declarator *decl_;
+  declarator *decl_;
   const expression *expr_;
 };
 

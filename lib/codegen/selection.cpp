@@ -315,6 +315,16 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
   throw std::runtime_error("unknown conversion from ir::instruction to Instruction");
 }
 
+/* convert ir::alloc_const to llvm::GlobalVariable */
+Value* selection::llvm_alloc_const(ir::alloc_const *v, Module *module, IRBuilder<> &builder) {
+  unsigned size = ((ir::constant_int*)v->get_operand(0))->get_value();
+  Type *element_ty = llvm_type(v->get_type()->get_pointer_element_ty(), module->getContext());
+  Type *array_ty = llvm::ArrayType::get(element_ty, size);
+  Value *array = new llvm::GlobalVariable(*module, array_ty, false, llvm::GlobalVariable::ExternalLinkage,
+                                            nullptr, v->get_name(), nullptr, llvm::GlobalVariable::NotThreadLocal, 4);
+  return builder.CreateBitCast(array, element_ty->getPointerTo(4));
+}
+
 /* convert ir::value to llvm::Value */
 Value* selection::llvm_value(ir::value *v, IRBuilder<> &builder) {
   assert(!v->get_type()->is_tile_ty());
@@ -324,6 +334,20 @@ Value* selection::llvm_value(ir::value *v, IRBuilder<> &builder) {
   // create operands
   if(auto *cc = dynamic_cast<ir::constant*>(v))
     return llvm_constant(cc, ctx);
+  // alloc const
+  if(auto *cc = dynamic_cast<ir::alloc_const*>(v)){
+    BasicBlock *block = builder.GetInsertBlock();
+    Module *module = block->getModule();
+    unsigned size = ((ir::constant_int*)cc->get_operand(0))->get_value();
+    Type *element_ty = llvm_type(cc->get_type()->get_pointer_element_ty(), ctx);
+    Type *array_ty = llvm::ArrayType::get(element_ty, size);
+    if(vmap_.find(v) == vmap_.end()){
+      Value *array = new llvm::GlobalVariable(*module, array_ty, false, llvm::GlobalVariable::ExternalLinkage,
+                                              nullptr, cc->get_name(), nullptr, llvm::GlobalVariable::NotThreadLocal, 4);
+      vmap_[v] = builder.CreateBitCast(array, array->getType()->getArrayElementType()->getPointerTo(4));
+    }
+    return vmap_.at(v);
+  }
   // instruction
   if(auto *ii = dynamic_cast<ir::instruction*>(v)){
     auto value = [&](ir::value *x) { return llvm_value(x, builder); };
@@ -755,10 +779,21 @@ inline llvm::Attribute::AttrKind llvm_attr(ir::attribute_t attr) {
   }
 }
 
+ArrayType* selection::llvm_linearized_tile_type(ir::type *ty, LLVMContext &ctx) {
+  unsigned size = 1;
+  for(ir::constant_int* shape: ty->get_tile_shapes())
+    size *= shape->get_value();
+  return ArrayType::get(llvm_type(ty->get_scalar_ty(), ctx), size);
+}
+
 void selection::run(ir::module &src, Module &dst){
   vmap_.clear();
   LLVMContext &dst_ctx = dst.getContext();
   IRBuilder<> dst_builder(dst_ctx);
+
+  for(ir::alloc_const *x: src.allocs()) {
+    vmap_[x] = llvm_alloc_const(x, &dst, dst_builder);
+  }
 
   // iterate over functions
   for(ir::function *fn: src.get_function_list()) {
@@ -795,7 +830,7 @@ void selection::run(ir::module &src, Module &dst){
       ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
       Type *ptr_ty = PointerType::get(int_8_ty, 3);
       GlobalVariable *sh_mem_array =
-        new GlobalVariable(*dst_fn->getParent(), array_ty, false, GlobalVariable::ExternalLinkage,
+        new GlobalVariable(dst, array_ty, false, GlobalVariable::ExternalLinkage,
                            nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
       sh_mem_ptr = dst_builder.CreateBitCast(sh_mem_array, ptr_ty);
     }

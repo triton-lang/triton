@@ -28,6 +28,7 @@ class attribute;
 class function_type;
 class constant;
 class global_value;
+class alloc_const;
 
 /* Module */
 struct scope {
@@ -76,7 +77,9 @@ public:
   void add_new_scope()                                    { if(scopes_.empty()) scopes_.push(scope()); else scopes_.push(scope(get_scope())); }
   void pop_scope()                                        { scopes_.pop(); }
   scope& get_scope()                                      { return scopes_.top(); }
-
+  // Const allocation
+  void add_alloc(ir::alloc_const* x)                      { allocs_.push_back(x); }
+  const std::vector<ir::alloc_const*>& allocs()           { return allocs_; }
 
 private:
   std::string name_;
@@ -92,6 +95,7 @@ private:
   std::function<ir::value*()> continue_fn_;
   std::map<value*, value**> current_phi_;
   std::stack<scope> scopes_;
+  std::vector<ir::alloc_const*> allocs_;
 };
 
 }

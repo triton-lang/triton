@@ -188,7 +188,7 @@ std::vector<STORAGE_SPEC_T> storage_declaration_specifier::storage() const {
 
 /* Parameter */
 ir::type* parameter::type(ir::module *mod) const {
-  return decl_->type(mod, spec_->type(mod));
+  return decl_->type(mod, spec_->type(mod), {});
 }
 
 std::vector<STORAGE_SPEC_T> parameter::storage() const {
@@ -200,14 +200,14 @@ const identifier *parameter::id() const {
 }
 
 /* Declarators */
-ir::type* declarator::type(ir::module *mod, ir::type *type) const{
+ir::type* declarator::type(ir::module *mod, ir::type *type, storage_spec_vec_const_ref_t storage) const{
   if(ptr_)
-    return type_impl(mod, ptr_->type(mod, type));
-  return type_impl(mod, type);
+    return type_impl(mod, ptr_->type(mod, type, storage), storage);
+  return type_impl(mod, type, storage);
 }
 
 // Identifier
-ir::type* identifier::type_impl(ir::module *, ir::type *type) const{
+ir::type* identifier::type_impl(ir::module *, ir::type *type, storage_spec_vec_const_ref_t) const{
   return type;
 }
 
@@ -216,7 +216,7 @@ const std::string &identifier::name() const{
 }
 
 // Tile
-ir::type* tile::type_impl(ir::module *mod, ir::type *type) const{
+ir::type* tile::type_impl(ir::module *mod, ir::type *type, storage_spec_vec_const_ref_t) const{
   ir::type::tile_shapes_t shapes;
   for(expression *expr: shapes_->values()){
     ir::constant_int *shape = dynamic_cast<ir::constant_int*>(expr->codegen(mod));
@@ -228,8 +228,9 @@ ir::type* tile::type_impl(ir::module *mod, ir::type *type) const{
 
 
 // Pointer
-ir::type* pointer::type_impl(ir::module*, ir::type *type) const{
-  return ir::pointer_type::get(type, 1);
+ir::type* pointer::type_impl(ir::module*, ir::type *type, storage_spec_vec_const_ref_t storage) const{
+  bool is_ptr_to_const = std::find(storage.begin(), storage.end(), CONSTANT_SPACE_T) != storage.end();
+  return ir::pointer_type::get(type, is_ptr_to_const?4:1);
 }
 
 // Function
@@ -247,7 +248,7 @@ void function::bind_parameters(ir::module *mod, ir::function *fn) const{
   }
 }
 
-ir::type* function::type_impl(ir::module* mod, ir::type *type) const{
+ir::type* function::type_impl(ir::module* mod, ir::type *type, storage_spec_vec_const_ref_t) const{
   std::vector<ir::type*> types;
   for(parameter* param: args_->values())
     types.push_back(param->type(mod));
@@ -265,7 +266,7 @@ ir::attribute_t get_ir_attr(STORAGE_SPEC_T spec){
 }
 
 ir::value* function_definition::codegen(ir::module *mod) const{
-  ir::function_type *prototype = (ir::function_type*)header_->type(mod, spec_->type(mod));
+  ir::function_type *prototype = (ir::function_type*)header_->type(mod, spec_->type(mod), spec_->storage());
   const std::string &name = header_->id()->name();
   ir::function *fn = mod->get_or_insert_function(name, prototype);
   for(unsigned i = 0; i < header_->get_num_args(); i++){
@@ -397,8 +398,8 @@ ir::value* declaration::codegen(ir::module* mod) const{
 }
 
 /* Initializer */
-ir::type* initializer::type_impl(ir::module *mod, ir::type *type) const{
-  return decl_->type(mod, type);
+ir::type* initializer::type_impl(ir::module *mod, ir::type *type, storage_spec_vec_const_ref_t storage) const{
+  return decl_->type(mod, type, storage);
 }
 
 void initializer::set_specifier(const declaration_specifier *spec) {
@@ -406,8 +407,8 @@ void initializer::set_specifier(const declaration_specifier *spec) {
 }
 
 ir::value* initializer::codegen(ir::module * mod) const{
-  ir::type *ty = decl_->type(mod, spec_->type(mod));
   std::vector<STORAGE_SPEC_T> storage = spec_->storage();
+  ir::type *ty = decl_->type(mod, spec_->type(mod), storage);
   std::string name = decl_->id()->name();
   ir::value *value = ir::undef_value::get(ty);
   if(std::find(storage.begin(), storage.end(), TUNABLE_T) != storage.end()){
@@ -423,6 +424,8 @@ ir::value* initializer::codegen(ir::module * mod) const{
   value->set_name(name);
   mod->set_value(name, value);
   mod->get_scope().types[name] = ty;
+  if(auto *x = dynamic_cast<ir::alloc_const*>(value))
+    mod->add_alloc(x);
   if(std::find(storage.begin(), storage.end(), CONST_T) != storage.end())
     mod->set_const(name);
   return value;
@@ -523,13 +526,21 @@ ir::value* binary_operator::codegen(ir::module *mod) const{
 
 /* Builtin expression */
 
+// alloc constant
+ir::value* alloc_const::codegen(ir::module *mod) const {
+  ir::type *ty = spec_->type(mod);
+  ir::constant_int *size = (ir::constant_int*)size_->codegen(mod);
+  ir::alloc_const *res = new ir::alloc_const(ty, size);
+  return res;
+}
+
 // get_global_range
 ir::value* get_global_range::codegen(ir::module *mod) const {
   ir::builder &builder = mod->get_builder();
   return builder.create_get_global_range(axis_->value(), (ir::constant_int*)size_->codegen(mod));
 }
 
-
+// matmul
 ir::value* matmul_expression::codegen(ir::module *mod) const {
   ir::value *A = A_->codegen(mod);
   ir::value *B = B_->codegen(mod);
@@ -666,7 +677,7 @@ ir::value *assignment_expression::codegen(ir::module *mod) const{
 
 /* Type name */
 ir::type *type_name::type(ir::module *mod) const{
-  return decl_->type(mod, spec_->type(mod));
+  return decl_->type(mod, spec_->type(mod), {});
 }
 
 /* String literal */
@@ -693,6 +704,9 @@ ir::value* constant_range::codegen(ir::module *mod) const{
 /* Named */
 ir::value* named_expression::codegen(ir::module *mod) const{
   const std::string &name = id()->name();
+  const auto& declarations = mod->get_scope().types;
+  if(declarations.find(name) == declarations.end())
+    throw std::runtime_error("variable " + name + " not declared");
   return mod->get_value(name);
 }
 

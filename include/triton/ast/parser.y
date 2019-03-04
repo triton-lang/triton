@@ -8,6 +8,7 @@ using namespace triton::ast;
 #define YYSTYPE node*
 #include "../include/triton/ast/ast.h"
 
+#define YYERROR_VERBOSE 1
 extern char* yytext;
 void yyerror(const char *s);
 int yylex(void);
@@ -42,11 +43,10 @@ ASSIGN_OP_T get_assign_op(node *op) { return ((token*)op)->assign_op; }
 UNARY_OP_T get_unary_op(node *op) { return ((token*)op)->unary_op; }
 TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
 STORAGE_SPEC_T get_storage_spec(node *op) { return ((token*)op)->storage_spec;}
-
 %}
  
 %token IDENTIFIER CONSTANT STRING_LITERAL
-%token TUNABLE KERNEL RESTRICT READONLY WRITEONLY CONST
+%token TUNABLE KERNEL RESTRICT READONLY WRITEONLY CONST CONSTANT_SPACE
 %token PTR_OP INC_OP DEC_OP LEFT_OP RIGHT_OP LE_OP GE_OP EQ_OP NE_OP
 %token AND_OP OR_OP MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN ADD_ASSIGN
 %token SUB_ASSIGN LEFT_ASSIGN RIGHT_ASSIGN AND_ASSIGN
@@ -54,7 +54,7 @@ STORAGE_SPEC_T get_storage_spec(node *op) { return ((token*)op)->storage_spec;}
 %token VOID UINT1 UINT8 UINT16 UINT32 UINT64 INT1 INT8 INT16 INT32 INT64 FP32 FP64
 %token IF ELSE FOR CONTINUE
 %token NEWAXIS ELLIPSIS AT
-%token GET_GLOBAL_RANGE DOT
+%token GET_GLOBAL_RANGE DOT ALLOC_CONST
 
 %start translation_unit
 %%
@@ -112,7 +112,8 @@ identifier
 
 builtin
   : GET_GLOBAL_RANGE '[' primary_expression ']' '(' constant ')' { $$ = new get_global_range($3, $6); }
-  |  DOT '(' expression ',' expression ',' expression ')' { $$ = new matmul_expression($3, $5, $7); }
+  | DOT '(' expression ',' expression ',' expression ')' { $$ = new matmul_expression($3, $5, $7); }
+  | ALLOC_CONST type_specifier '[' constant ']' { $$ = new alloc_const(new typed_declaration_specifier(get_type_spec($2)), $4); }
 
 primary_expression
   : identifier         { $$ = new named_expression($1); }
@@ -366,6 +367,7 @@ storage_class_specifier
   | RESTRICT  { $$ = new token(RESTRICT_T); }
   | READONLY  { $$ = new token(READONLY_T); }
   | WRITEONLY { $$ = new token(WRITEONLY_T); }
+  | CONSTANT_SPACE  { $$ = new token(CONSTANT_SPACE_T); }
 ;
 
 /* -------------------------- */

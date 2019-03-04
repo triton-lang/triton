@@ -112,6 +112,8 @@ private:
   llvm::Value*       llvm_value(ir::value *v, llvm::IRBuilder<> &builder);
   llvm::Instruction* llvm_inst(ir::instruction *inst, std::function<llvm::Value*(ir::value*)> value, llvm::IRBuilder<> &builder);
   llvm::Constant*    llvm_constant(ir::constant *cst, llvm::LLVMContext &ctx);
+  llvm::Value*       llvm_alloc_const(ir::alloc_const *v, llvm::Module *module, llvm::IRBuilder<> &builder);
+  llvm::ArrayType*   llvm_linearized_tile_type(ir::type *ty, llvm::LLVMContext &ctx);
 
   // grid construction
   void create_grids(std::vector<ir::value *> &grids,

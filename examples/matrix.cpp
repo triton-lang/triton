@@ -38,6 +38,9 @@ extern translation_unit *ast_root;
 
 const char src[] =
 "\
+__constant__ int32* delta = alloc_const int32[16];\
+__constant__ int32* masks = alloc_const int32[16];\
+\
 const tunable int32 TM;\
 const tunable int32 TN;\
 const tunable int32 TK;\

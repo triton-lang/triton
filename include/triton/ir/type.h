@@ -165,9 +165,8 @@ private:
 
 public:
   // accessors
-  unsigned get_address_space() const { return address_space_; }
-  type *get_element_ty()       const { return contained_tys_[0]; }
-
+  unsigned get_address_space()               const { return address_space_; }
+  type *get_element_ty()                     const { return contained_tys_[0]; }
   // factory methods
   static pointer_type* get(type *ty, unsigned address_space);
 
