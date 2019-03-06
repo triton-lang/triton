@@ -599,6 +599,12 @@ private:
   list<node*> decls_;
 };
 
+void update_location(const char *t);
+void print_error(const char *error);
+char return_impl(char t, const char * yytext);
+yytokentype return_impl(yytokentype t, const char * yytext);
+void return_void(const char * yytext);
+
 }
 
 }

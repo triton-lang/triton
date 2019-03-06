@@ -1,3 +1,5 @@
+%define parse.error verbose
+
 %{
 namespace triton{
 namespace ast{
@@ -8,7 +10,6 @@ using namespace triton::ast;
 #define YYSTYPE node*
 #include "../include/triton/ast/ast.h"
 
-#define YYERROR_VERBOSE 1
 extern char* yytext;
 void yyerror(const char *s);
 int yylex(void);
@@ -44,7 +45,7 @@ UNARY_OP_T get_unary_op(node *op) { return ((token*)op)->unary_op; }
 TYPE_T get_type_spec(node *op) { return ((token*)op)->type; }
 STORAGE_SPEC_T get_storage_spec(node *op) { return ((token*)op)->storage_spec;}
 %}
- 
+
 %token IDENTIFIER CONSTANT STRING_LITERAL
 %token TUNABLE KERNEL RESTRICT READONLY WRITEONLY CONST CONSTANT_SPACE
 %token PTR_OP INC_OP DEC_OP LEFT_OP RIGHT_OP LE_OP GE_OP EQ_OP NE_OP
@@ -385,3 +386,7 @@ function_definition
   : declaration_specifiers declarator compound_statement { $$ = new function_definition($1, $2, $3); }
 	;
 
+%%
+void yyerror (const char *s){
+  print_error(s);
+}

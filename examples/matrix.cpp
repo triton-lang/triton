@@ -36,52 +36,52 @@ extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
 using triton::ast::translation_unit;
 extern translation_unit *ast_root;
 
-const char src[] =
-"\
-const tunable int32 TM;\
-const tunable int32 TN;\
-const tunable int32 TK;\
-\
-void matmul(restrict read_only fp32 *a, restrict read_only fp32 *b, fp32 *c,\
-           int32 M, int32 N, int32 K, int32 bound){\
-  int32 rxa[TM] = get_global_range[TM](0);\
-  int32 ryb[TN] = get_global_range[TN](1);\
-  int32 rka[TK] = 0 ... TK;\
-  int32 rkb[TK] = 0 ... TK;\
-  fp32 C[TM, TN] = 0;\
-  fp32* pa[TM, TK] = a + rka[newaxis, :]*M + rxa[:, newaxis];\
-  fp32* pb[TN, TK] = b + rkb[newaxis, :]*K + ryb[:, newaxis];\
-  fp32 a[TM, TK] = *pa;\
-  fp32 b[TN, TK] = *pb;\
-  for(int32 k = K; k > 0;){\
-    C = dot(a, b, C);\
-    pa = pa + TK*M;\
-    pb = pb + TK*K;\
-    k = k - TK;\
-    int1 checka[TM, TK] = k > bound;\
-    int1 checkb[TN, TK] = k > bound;\
-    @checka a = *pa;\
-    @checkb b = *pb;\
-    if(k > bound)\
-      continue;\
-    int1 checka0[TM] = rxa < M;\
-    int1 checka1[TK] = rka < k;\
-    int1 checkb0[TN] = ryb < N;\
-    int1 checkb1[TK] = rkb < k;\
-    checka = checka0[:, newaxis] && checka1[newaxis, :];\
-    checkb = checkb0[:, newaxis] && checkb1[newaxis, :];\
-    a = checka ? *pa : 0;\
-    b = checkb ? *pb : 0;\
-  }\
-  int32 rxc[TM] = get_global_range[TM](0);\
-  int32 ryc[TN] = get_global_range[TN](1);\
-  fp32* pc[TM, TN] = c + ryc[newaxis, :]*M + rxc[:, newaxis];\
-  int1 checkc0[TM] = rxc < M;\
-  int1 checkc1[TN] = ryc < N;\
-  int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];\
-  @checkc *pc = C;\
-}\
-";
+const char* src =
+R"(
+const tunable int32 TM;
+const tunable int32 TN;
+const tunable int32 TK;
+
+void matmul(restrict read_only fp32 *a, restrict read_only fp32 *b, fp32 *c,
+           int32 M, int32 N, int32 K, int32 bound){
+  int32 rxa[TM] = get_global_range[TM](0)
+  int32 ryb[TN] = get_global_range[TN](1);
+  int32 rka[TK] = 0 ... TK;
+  int32 rkb[TK] = 0 ... TK;
+  fp32 C[TM, TN] = 0;
+  fp32* pa[TM, TK] = a + rka[newaxis, :]*M + rxa[:, newaxis];
+  fp32* pb[TN, TK] = b + rkb[newaxis, :]*K + ryb[:, newaxis];
+  fp32 a[TM, TK] = *pa;
+  fp32 b[TN, TK] = *pb;
+  for(int32 k = K; k > 0;){
+    C = dot(a, b, C);
+    pa = pa + TK*M;
+    pb = pb + TK*K;
+    k = k - TK;
+    int1 checka[TM, TK] = k > bound;
+    int1 checkb[TN, TK] = k > bound;
+    @checka a = *pa;
+    @checkb b = *pb;
+    if(k > bound)
+      continue;
+    int1 checka0[TM] = rxa < M;
+    int1 checka1[TK] = rka < k;
+    int1 checkb0[TN] = ryb < N;
+    int1 checkb1[TK] = rkb < k;
+    checka = checka0[:, newaxis] && checka1[newaxis, :];
+    checkb = checkb0[:, newaxis] && checkb1[newaxis, :];
+    a = checka ? *pa : 0;
+    b = checkb ? *pb : 0;
+  }
+  int32 rxc[TM] = get_global_range[TM](0);
+  int32 ryc[TN] = get_global_range[TN](1);
+  fp32* pc[TM, TN] = c + ryc[newaxis, :]*M + rxc[:, newaxis];
+  int1 checkc0[TM] = rxc < M;
+  int1 checkc1[TN] = ryc < N;
+  int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
+  @checkc *pc = C;
+}
+)";
 
 static std::string compute_data_layout(bool is64Bit, bool UseShortPointers) {
   std::string Ret = "e";
