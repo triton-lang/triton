@@ -275,21 +275,16 @@ statement
 	;
 
 compound_statement
-  : '{' '}' { $$ = new compound_statement(nullptr, nullptr); }
-  | '{' statement_list '}' { $$ = new compound_statement(nullptr, $2); }
-  | '{' declaration_list '}' { $$ = new compound_statement($2, nullptr); }
-  | '{' declaration_list statement_list '}' { $$ = new compound_statement($2, $3);}
-	;
+    : '{' '}' { $$ = new compound_statement(nullptr); }
+    | '{' block_item_list '}' { $$ = new compound_statement($2); }
 
+block_item_list
+  : block_item { $$ = new list<block_item*>((block_item*)$1); }
+  | block_item_list block_item { $$ = append_ptr_list<block_item>($1, $2); }
 
-declaration_list
-  : declaration { $$ = new list<declaration*>((declaration*)$1); }
-  | declaration_list declaration { $$ = append_ptr_list<declaration>($1, $2); }
-
-statement_list
-  : statement { $$ = new list<statement*>((statement*)$1); }
-  | statement_list statement { $$ = append_ptr_list<statement>($1, $2); }
-	;
+block_item
+  : declaration { $$ = $1; }
+  | statement { $$ = $1; }
 
 expression_statement
 	: ';' { $$ = new no_op(); }
@@ -304,6 +299,8 @@ selection_statement
 
 iteration_statement
   : FOR '(' expression_statement expression_statement expression ')' statement { $$ = new iteration_statement($3, $4, $5, $7); }
+  | FOR '(' declaration expression_statement ')' statement { $$ = new iteration_statement($3, $4, nullptr, $6); }
+  | FOR '(' declaration expression_statement expression ')' statement { $$ = new iteration_statement($3, $4, $5, $7); }
 	;
 
 jump_statement

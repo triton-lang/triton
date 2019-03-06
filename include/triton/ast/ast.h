@@ -323,7 +323,10 @@ public:
 class initializer;
 class declaration_specifier;
 
-class declaration: public node{
+class block_item: public node{
+};
+
+class declaration: public block_item{
 public:
   declaration(node *spec, node *init)
     : spec_((declaration_specifier*)spec), init_((list<initializer*>*)init) { }
@@ -335,10 +338,7 @@ public:
   const list<initializer*> *init_;
 };
 
-class statement: public node{
-
-private:
-  expression *pred_;
+class statement: public block_item{
 };
 
 class expression_statement: public statement{
@@ -353,19 +353,19 @@ private:
   expression *mask_;
 };
 
+
 class compound_statement: public statement{
   typedef list<declaration*>* declarations_t;
   typedef list<statement*>* statements_t;
 
 public:
-  compound_statement(node* decls, node* statements)
-    : decls_((declarations_t)decls), statements_((statements_t)statements) {}
+  compound_statement(node* items)
+    : items_((list<block_item*>*)items){}
 
   ir::value* codegen(ir::module * mod) const;
 
 private:
-  declarations_t decls_;
-  statements_t statements_;
+  list<block_item*>* items_;
 };
 
 class selection_statement: public statement{
@@ -413,7 +413,6 @@ class no_op: public statement { };
 // Types
 class declaration_specifier: public node{
 public:
-  using node::node;
   virtual ir::type* type(ir::module *mod) const = 0;
   virtual std::vector<STORAGE_SPEC_T> storage() const = 0;
 };

@@ -287,15 +287,8 @@ ir::value* function_definition::codegen(ir::module *mod) const{
 /* Statements */
 ir::value* compound_statement::codegen(ir::module* mod) const{
   mod->add_new_scope();
-  if(decls_)
-    decls_->codegen(mod);
-  if(statements_){
-    for(statement *stmt: statements_->values()){
-      ir::value *current = stmt->codegen(mod);
-      if(is_terminator(current))
-        return current;
-    }
-  }
+  if(items_)
+    items_->codegen(mod);
   mod->pop_scope();
   return nullptr;
 }
@@ -333,7 +326,8 @@ ir::value* iteration_statement::codegen(ir::module *mod) const{
   ir::basic_block *loop_bb = ir::basic_block::create(ctx, "loop", fn);
   ir::basic_block *next_bb = ir::basic_block::create(ctx, "postloop", fn);
   mod->set_continue_fn([&](){
-    exec_->codegen(mod);
+    if(exec_)
+      exec_->codegen(mod);
     ir::value *cond = stop_->codegen(mod);
     return builder.create_cond_br(cond, loop_bb, next_bb);
   });

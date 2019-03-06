@@ -16,8 +16,8 @@ IS			(u|U|l|L)*
 "tunable"          { return(TUNABLE); }
 "kernel"           { return(KERNEL); }
 "restrict"         { return(RESTRICT); }
-"readonly"         { return(READONLY); }
-"writeonly"        { return(WRITEONLY); }
+"read_only"         { return(READONLY); }
+"write_only"        { return(WRITEONLY); }
 "@"                { return(AT); }
 "newaxis"		       { return(NEWAXIS); }
 "if"			         { return(IF); }
