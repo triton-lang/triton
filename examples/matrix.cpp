@@ -76,14 +76,13 @@ int main() {
     // b1
     1, 8, 1
   };
-  unsigned TM = params[6];
-  unsigned TN = params[10];
-  unsigned nthreads = params[1]*params[2]*params[15]*params[16];
+
 
   auto context = triton::driver::backend::contexts::get_default();
   triton::jit jit(context);
   jit.add_module(src, params);
   triton::driver::kernel kernel = jit.get_function("matmul");
+  triton::jit::launch_information info = jit.get_launch_info("matmul");
 
   size_t M = 128, N = 128, K = 128;
   size_t bound = 8;
@@ -112,6 +111,9 @@ int main() {
   kernel.setArg(4, N);
   kernel.setArg(5, K);
   kernel.setArg(6, bound);
+  unsigned TM = info.global_range_size[0];
+  unsigned TN = info.global_range_size[1];
+  unsigned nthreads = info.num_threads;
   stream.enqueue(kernel, {(M + TM - 1)/TM, (N + TN - 1)/TN, 1}, {nthreads, 1, 1});
   stream.synchronize();
   stream.read(dc, true, 0, hc);

@@ -85,6 +85,11 @@ std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, const st
   vectorize.run(module);
   selection.run(module, *result);
 
+  // launch information
+  auto &launch_info_map = launch_info_map_[result->getName()];
+  for(unsigned i = 0; i < tune.get_num_global_range(); i++)
+    launch_info_map.global_range_size.push_back(tune.get_global_range_size(i));
+  launch_info_map.num_threads = tune.get_num_threads();
   return std::unique_ptr<llvm::Module>(result);
 }
 
@@ -145,5 +150,8 @@ driver::kernel jit::get_function(const std::string &name) {
   return driver::kernel(modules_.front(), name.c_str());
 }
 
+jit::launch_information jit::get_launch_info(const std::string &name) {
+  return launch_info_map_.at(name);
+}
 
 }

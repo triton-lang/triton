@@ -30,14 +30,16 @@ private:
 
 
 public:
+  tune();
   std::vector<ir::metaparameter *> get_params(ir::module& mod);
   std::map<std::string, ir::metaparameter *> get_params(ir::instruction* i);
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   void copy(ir::value *dst, ir::value *src) { params_[dst] = params_[src]; }
   bool check_constraints(ir::module &fn, std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);
-  ir::metaparameter* get_num_threads();
-  ir::metaparameter* get_global_range_size(unsigned axis);
+  unsigned get_num_global_range();
+  unsigned get_global_range_size(unsigned axis);
+  unsigned get_num_threads();
 
 private:
   std::vector<unsigned*> pool_;
@@ -45,8 +47,9 @@ private:
   std::set<node_t> nodes_;
   std::map<node_t, unsigned> static_params_;
   std::map<ir::value*, std::map<std::string, ir::metaparameter*>> params_;
-  ir::metaparameter *num_threads_;
-  std::vector<ir::metaparameter*> global_range_sizes_;
+  std::vector<ir::metaparameter*> num_threads_mp_vec_;
+  std::map<unsigned, ir::metaparameter*> global_range_sizes_;
+  unsigned num_global_ranges_;
 };
 
 

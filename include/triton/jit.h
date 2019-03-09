@@ -20,6 +20,12 @@ class context;
 }
 
 class jit {
+public:
+  struct launch_information{
+    std::vector<unsigned> global_range_size;
+    unsigned num_threads;
+  };
+
 private:
   void init_llvm();
   std::string compute_data_layout(bool is64Bit = true, bool UseShortPointers = true);
@@ -31,12 +37,14 @@ public:
   void add_module(ir::module &module, const std::vector<unsigned>& params = {});
   void add_module(const std::string &src, const std::vector<unsigned>& params = {});
   driver::kernel get_function(const std::string &name);
+  launch_information get_launch_info(const std::string &name);
 
 private:
   std::vector<driver::module> modules_;
   driver::context driver_context_;
   llvm::LLVMContext llvm_context_;
   ir::context triton_context_;
+  std::map<std::string, launch_information> launch_info_map_;
 };
 
 
