@@ -32,14 +32,14 @@ namespace driver
 {
 
 // Event
-class Event: public HandleInterface<Event, cu_event_t>
+class Event: public handle_interface<Event, cu_event_t>
 {
 public:
   float elapsed_time() const;
-  Handle<cu_event_t> const & cu() const;
+  handle<cu_event_t> const & cu() const;
 
 private:
-  Handle<cu_event_t> cu_;
+  handle<cu_event_t> cu_;
 };
 
 }

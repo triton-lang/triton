@@ -34,7 +34,7 @@ namespace triton
 namespace driver
 {
 
-Module::Module(Context const & context, std::string const & source) : context_(context), source_(source){
+module::module(driver::context const & context, std::string const & source) : context_(context), source_(source){
   ContextSwitcher ctx_switch(context_);
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
@@ -50,17 +50,17 @@ Module::Module(Context const & context, std::string const & source) : context_(c
   }
 }
 
-Context const & Module::context() const
+driver::context const & module::context() const
 { return context_; }
 
-Handle<CUmodule> const & Module::cu() const
+handle<CUmodule> const & module::cu() const
 { return cu_; }
 
-Buffer Module::symbol(const char *name) const{
+buffer module::symbol(const char *name) const{
   CUdeviceptr handle;
   size_t size;
   dispatch::cuModuleGetGlobal_v2(&handle, &size, *cu_, name);
-  return Buffer(context_, handle, false);
+  return buffer(context_, handle, false);
 }
 
 

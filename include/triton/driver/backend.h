@@ -33,13 +33,13 @@ namespace triton
 namespace driver
 {
 
-class Buffer;
-class Stream;
-class Device;
-class Context;
-class Platform;
-class Module;
-class Kernel;
+class buffer;
+class stream;
+class device;
+class context;
+class platform;
+class module;
+class kernel;
 
 struct backend
 {
@@ -49,9 +49,9 @@ struct backend
     friend class backend;
   public:
     static void release();
-    static Module& get(Stream const & stream, std::string const & name, std::string const &src);
+    static module& get(driver::stream const & stream, std::string const & name, std::string const &src);
   private:
-    static std::map<std::tuple<Stream, std::string>, Module * > cache_;
+    static std::map<std::tuple<stream, std::string>, module * > cache_;
   };
 
   class kernels
@@ -59,53 +59,53 @@ struct backend
     friend class backend;
   public:
     static void release();
-    static Kernel & get(Module const & program, std::string const & name);
+    static kernel & get(driver::module const & program, std::string const & name);
   private:
-    static std::map<std::tuple<Module, std::string>, Kernel * > cache_;
+    static std::map<std::tuple<module, std::string>, kernel * > cache_;
   };
 
   class contexts
   {
     friend class backend;
   private:
-    static void init(std::vector<Platform> const &);
+    static void init(std::vector<platform> const &);
     static void release();
   public:
-    static Context const & get_default();
+    static driver::context const & get_default();
     template<class T>
-    static Context const & import(T context)
+    static driver::context const & import(T ctx)
     {
-      for(driver::Context const * x: cache_)
-        if((T)*x==context)
+      for(driver::context const * x: cache_)
+        if((T)*x==ctx)
           return *x;
-      cache_.emplace_back(new Context(context, false));
+      cache_.emplace_back(new driver::context(ctx, false));
       return *cache_.back();
     }
-    static void get(std::list<Context const *> &);
+    static void get(std::list<context const *> &);
   private:
-    static std::list<Context const *> cache_;
+    static std::list<context const *> cache_;
   };
 
   class streams
   {
     friend class backend;
   private:
-    static void init(std::list<Context const *> const &);
+    static void init(std::list<context const *> const &);
     static void release();
   public:
-    static void get(Context const &, std::vector<Stream *> &streams);
-    static Stream & get(Context const &, unsigned int id = 0);
-    static Stream & get_default();
+    static void get(driver::context const &, std::vector<stream *> &streams);
+    static stream & get(driver::context const &, unsigned int id = 0);
+    static stream & get_default();
   private:
-    static std::map< Context, std::vector<Stream*> > cache_;
+    static std::map< context, std::vector<stream*> > cache_;
   };
 
   static void init();
   static void release();
 
-  static std::vector<Device> devices();
-  static std::vector<Platform> platforms();
-  static void synchronize(Context const &);
+  static std::vector<device> devices();
+  static std::vector<platform> platforms();
+  static void synchronize(driver::context const &);
 
   static unsigned int default_device;
 };

@@ -180,16 +180,16 @@ NVML_DEFINE2(nvmlReturn_t, nvmlDeviceGetHandleByPciBusId_v2, const char *, nvmlD
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetMaxClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
 
-cublasHandle_t dispatch::cublasHandle(Context const & ctx){
-  static std::map<Context, cublasHandle_t> handles;
+cublasHandle_t dispatch::cublasHandle(driver::context const & ctx){
+  static std::map<context, cublasHandle_t> handles;
   auto pr = handles.insert({ctx, cublasHandle_t()});
   if(pr.second)
     cublasCreate_v2(&pr.first->second);
   return pr.first->second;
 }
 
-cudnnHandle_t dispatch::cudnnHandle(Context const & ctx){
-  static std::map<Context, cudnnHandle_t> handles;
+cudnnHandle_t dispatch::cudnnHandle(driver::context const & ctx){
+  static std::map<context, cudnnHandle_t> handles;
   auto pr = handles.insert({ctx, cudnnHandle_t()});
   if(pr.second)
     cudnnCreate(&pr.first->second);

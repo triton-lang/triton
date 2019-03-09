@@ -34,27 +34,27 @@ namespace triton
 namespace driver
 {
 
-class Buffer;
+class buffer;
 
 // Kernel
-class Kernel: public HandleInterface<Kernel, CUfunction>
+class kernel: public handle_interface<kernel, CUfunction>
 {
 public:
   //Constructors
-  Kernel(Module const & program, const char * name);
+  kernel(driver::module const & program, const char * name);
   //Accessors
-  Handle<CUfunction> const & cu() const;
-  Module const & module() const;
+  handle<CUfunction> const & cu() const;
+  driver::module const & module() const;
   //Arguments setters
   void setArg(unsigned int index, std::size_t size, void* ptr);
-  void setArg(unsigned int index, Buffer const &);
+  void setArg(unsigned int index, buffer const &);
   template<class T> void setArg(unsigned int index, T value) { setArg(index, sizeof(T), (void*)&value); }
   //Arguments getters
   void* const* cu_params() const;
 
 private:
-  Handle<CUfunction> cu_;
-  Module program_;
+  handle<CUfunction> cu_;
+  driver::module program_;
   unsigned int address_bits_;
   std::vector<std::shared_ptr<void> >  cu_params_store_;
   std::vector<void*>  cu_params_;

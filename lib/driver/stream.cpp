@@ -44,25 +44,25 @@ inline CUcontext cucontext(){
   return result;
 }
 
-Stream::Stream(CUstream stream, bool take_ownership): context_(cucontext(), take_ownership), cu_(stream, take_ownership)
+stream::stream(CUstream stream, bool take_ownership): context_(cucontext(), take_ownership), cu_(stream, take_ownership)
 {}
 
-Stream::Stream(Context const & context): context_(context), cu_(CUstream(), true)
+stream::stream(driver::context const & context): context_(context), cu_(CUstream(), true)
 {
   ContextSwitcher ctx_switch(context_);
   dispatch::cuStreamCreate(&*cu_, 0);
 }
 
-void Stream::synchronize()
+void stream::synchronize()
 {
   ContextSwitcher ctx_switch(context_);
   dispatch::cuStreamSynchronize(*cu_);
 }
 
-Context const & Stream::context() const
+driver::context const & stream::context() const
 { return context_; }
 
-void Stream::enqueue(Kernel const & kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event){
+void stream::enqueue(kernel const & kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event){
   ContextSwitcher ctx_switch(context_);
   if(event)
     dispatch::cuEventRecord(((cu_event_t)*event).first, *cu_);
@@ -71,7 +71,7 @@ void Stream::enqueue(Kernel const & kernel, std::array<size_t, 3> grid, std::arr
     dispatch::cuEventRecord(((cu_event_t)*event).second, *cu_);
 }
 
-void Stream::write(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr){
+void stream::write(buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr){
   ContextSwitcher ctx_switch(context_);
   if(blocking)
     dispatch::cuMemcpyHtoD(buffer + offset, ptr, size);
@@ -79,7 +79,7 @@ void Stream::write(Buffer const & buffer, bool blocking, std::size_t offset, std
     dispatch::cuMemcpyHtoDAsync(buffer + offset, ptr, size, *cu_);
 }
 
-void Stream::read(Buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr){
+void stream::read(buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr){
   ContextSwitcher ctx_switch(context_);
   if(blocking)
     dispatch::cuMemcpyDtoH(ptr, buffer + offset, size);
@@ -87,7 +87,7 @@ void Stream::read(Buffer const & buffer, bool blocking, std::size_t offset, std:
     dispatch::cuMemcpyDtoHAsync(ptr, buffer + offset, size, *cu_);
 }
 
-Handle<CUstream> const & Stream::cu() const
+handle<CUstream> const & stream::cu() const
 { return cu_; }
 
 }

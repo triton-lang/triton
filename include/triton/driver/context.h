@@ -31,7 +31,7 @@ namespace triton
 namespace driver
 {
 
-class Context: public HandleInterface<Context, CUcontext>
+class context: public handle_interface<context, CUcontext>
 {
 private:
   static std::string get_cache_path();
@@ -39,25 +39,25 @@ private:
 
 public:
   //Constructors
-  explicit Context(CUcontext context, bool take_ownership = true);
-  explicit Context(Device const & device);
+  explicit context(CUcontext context, bool take_ownership = true);
+  explicit context(driver::device const & dvc);
   //Accessors
-  Device const & device() const;
+  driver::device const & device() const;
   std::string const & cache_path() const;
-  Handle<CUcontext> const & cu() const;
+  handle<CUcontext> const & cu() const;
 
 private:
-  Handle<CUcontext> cu_;
-  Device device_;
+  handle<CUcontext> cu_;
+  driver::device dvc_;
   std::string cache_path_;
 };
 
 class ContextSwitcher{
 public:
-    ContextSwitcher(Context const & ctx);
+    ContextSwitcher(driver::context const & ctx);
     ~ContextSwitcher();
 private:
-    Context const & ctx_;
+    driver::context const & ctx_;
 };
 
 }

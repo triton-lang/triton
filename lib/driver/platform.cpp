@@ -31,20 +31,20 @@ namespace triton
 namespace driver
 {
 
-std::string Platform::version() const{
+std::string platform::version() const{
   int version;
   dispatch::cuDriverGetVersion(&version);
   return std::to_string(version);
 }
 
-std::vector<Device> Platform::devices() const{
-  std::vector<Device> devices;
+std::vector<device> platform::devices() const{
+  std::vector<device> devices;
   int N;
   dispatch::cuDeviceGetCount(&N);
   for(int i = 0 ; i < N ; ++i){
-    CUdevice device;
-    dispatch::cuDeviceGet(&device, i);
-    devices.push_back(Device(device));
+    CUdevice dvc;
+    dispatch::cuDeviceGet(&dvc, i);
+    devices.push_back(driver::device(dvc));
   }
   return devices;
 }

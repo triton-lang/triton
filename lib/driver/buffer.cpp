@@ -33,26 +33,26 @@ namespace triton
 namespace driver
 {
 
-Buffer::Buffer(Context const & context, size_t size) : context_(context)
+buffer::buffer(driver::context const & context, size_t size) : context_(context)
 {
   ContextSwitcher ctx_switch(context_);
   dispatch::cuMemAlloc(&*cu_, size);
 }
 
-Buffer::Buffer(Context const & context, CUdeviceptr cu, bool take_ownership):
+buffer::buffer(driver::context const & context, CUdeviceptr cu, bool take_ownership):
   context_(context), cu_(cu, take_ownership)
 { }
 
-void Buffer::set_zero(Stream const & queue, size_t size)
+void buffer::set_zero(stream const & queue, size_t size)
 {
   ContextSwitcher ctx_switch(context_);
   dispatch::cuMemsetD8Async(*cu_, 0, size, queue);
 }
 
-Handle<CUdeviceptr> const & Buffer::cu() const
+handle<CUdeviceptr> const & buffer::cu() const
 { return cu_; }
 
-Handle<CUdeviceptr> & Buffer::cu()
+handle<CUdeviceptr> & buffer::cu()
 { return cu_; }
 
 }

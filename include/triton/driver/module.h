@@ -34,22 +34,22 @@ namespace triton
 namespace driver
 {
 
-class Context;
-class Device;
+class context;
+class device;
 
-class Module: public HandleInterface<Module, CUmodule>
+class module: public handle_interface<module, CUmodule>
 {
-  static std::string header(Device const & device);
+  static std::string header(device const & device);
 
 public:
-  Module(Context const & context, std::string const & source);
-  Context const & context() const;
-  Handle<CUmodule> const & cu() const;
-  Buffer symbol(const char * name) const;
+  module(driver::context const & context, std::string const & source);
+  driver::context const & context() const;
+  handle<CUmodule> const & cu() const;
+  buffer symbol(const char * name) const;
 
 private:
-  Handle<CUmodule> cu_;
-  Context context_;
+  handle<CUmodule> cu_;
+  driver::context context_;
   std::string source_;
 };
 

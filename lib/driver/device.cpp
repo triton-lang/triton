@@ -35,7 +35,7 @@ namespace driver
 {
 
 /* Architecture [NVidia] */
-Device::Architecture Device::nv_arch(std::pair<unsigned int, unsigned int> sm) const{
+device::Architecture device::nv_arch(std::pair<unsigned int, unsigned int> sm) const{
   switch(sm.first)
   {
    case 7:
@@ -81,13 +81,13 @@ Device::Architecture Device::nv_arch(std::pair<unsigned int, unsigned int> sm) c
 }
 
 template<CUdevice_attribute attr>
-int Device::cuGetInfo() const{
+int device::cuGetInfo() const{
   int res;
   dispatch::cuDeviceGetAttribute(&res, attr, *cu_);
   return res;
 }
 
-nvmlDevice_t Device::nvml_device() const{
+nvmlDevice_t device::nvml_device() const{
   std::map<std::string, nvmlDevice_t> map;
   std::string key = pci_bus_id();
   if(map.find(key)==map.end()){
@@ -99,33 +99,33 @@ nvmlDevice_t Device::nvml_device() const{
 }
 
 /* Architecture */
-Device::Architecture Device::architecture() const
+device::Architecture device::architecture() const
 {  return nv_arch(compute_capability()); }
 
 /* Attributes */
-size_t Device::address_bits() const
+size_t device::address_bits() const
 { return sizeof(size_t)*8; }
 
-driver::Platform Device::platform() const
-{ return Platform(); }
+driver::platform device::platform() const
+{ return platform(); }
 
-std::string Device::name() const{
+std::string device::name() const{
     char tmp[128];
     dispatch::cuDeviceGetName(tmp, 128, *cu_);
     return std::string(tmp);
 }
 
-std::string Device::pci_bus_id() const{
+std::string device::pci_bus_id() const{
   char tmp[128];
   dispatch::cuDeviceGetPCIBusId(tmp, 128, *cu_);
   return std::string(tmp);
 }
 
-void Device::interpret_as(std::pair<size_t, size_t> cc){
+void device::interpret_as(std::pair<size_t, size_t> cc){
   interpreted_as_ = std::make_shared<std::pair<size_t, size_t>>(cc);
 }
 
-std::pair<size_t, size_t> Device::compute_capability() const{
+std::pair<size_t, size_t> device::compute_capability() const{
   if(interpreted_as_)
     return *interpreted_as_;
   size_t _major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>();
@@ -133,17 +133,17 @@ std::pair<size_t, size_t> Device::compute_capability() const{
   return std::make_pair(_major, _minor);
 }
 
-size_t Device::max_threads_per_block() const
+size_t device::max_threads_per_block() const
 { return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK>(); }
 
-size_t Device::max_shared_memory() const
+size_t device::max_shared_memory() const
 { return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK>(); }
 
-size_t Device::warp_size() const
+size_t device::warp_size() const
 { return cuGetInfo<CU_DEVICE_ATTRIBUTE_WARP_SIZE>(); }
 
 
-std::vector<size_t> Device::max_block_dim() const{
+std::vector<size_t> device::max_block_dim() const{
   std::vector<size_t> result(3);
   result[0] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X>();
   result[1] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y>();
@@ -151,33 +151,33 @@ std::vector<size_t> Device::max_block_dim() const{
   return result;
 }
 
-size_t Device::current_sm_clock() const{
+size_t device::current_sm_clock() const{
   unsigned int result;
   dispatch::nvmlDeviceGetClockInfo(nvml_device(), NVML_CLOCK_SM, &result);
   return result;
 }
 
-size_t Device::max_sm_clock() const{
+size_t device::max_sm_clock() const{
   unsigned int result;
   dispatch::nvmlDeviceGetMaxClockInfo(nvml_device(), NVML_CLOCK_SM, &result);
   return result;
 }
 
 
-size_t Device::current_mem_clock() const{
+size_t device::current_mem_clock() const{
   unsigned int result;
   dispatch::nvmlDeviceGetClockInfo(nvml_device(), NVML_CLOCK_MEM, &result);
   return result;
 }
 
-size_t Device::max_mem_clock() const{
+size_t device::max_mem_clock() const{
   unsigned int result;
   dispatch::nvmlDeviceGetMaxClockInfo(nvml_device(), NVML_CLOCK_MEM, &result);
   return result;
 }
 
 /* Infos */
-std::string Device::infos() const{
+std::string device::infos() const{
   std::ostringstream oss;
   std::vector<size_t> max_wi_sizes = max_block_dim();
   oss << "Platform: " << platform().name() << std::endl;
@@ -188,7 +188,7 @@ std::string Device::infos() const{
   return oss.str();
 }
 
-Handle<CUdevice> const & Device::cu() const
+handle<CUdevice> const & device::cu() const
 { return cu_; }
 
 }

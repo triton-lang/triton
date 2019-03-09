@@ -42,7 +42,7 @@ namespace triton
 namespace driver
 {
 
-class Context;
+class context;
 
 template<class T> void check(T){}
 void check(nvrtcResult err);
@@ -137,7 +137,7 @@ public:
   static nvrtcResult nvrtcCreateProgram(nvrtcProgram *prog, const char *src, const char *name, int numHeaders, const char **headers, const char **includeNames);
   static nvrtcResult nvrtcGetProgramLog(nvrtcProgram prog, char *log);
 
-  static cublasHandle_t cublasHandle(Context const & ctx);
+  static cublasHandle_t cublasHandle(driver::context const & ctx);
   static cublasStatus_t cublasCreate_v2(cublasHandle_t* h);
   static cublasStatus_t cublasGetStream_v2(cublasHandle_t h, cudaStream_t *streamId);
   static cublasStatus_t cublasSetStream_v2(cublasHandle_t h, cudaStream_t streamId);
@@ -146,7 +146,7 @@ public:
   static cublasStatus_t cublasHgemm (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, half* alpha, const half *A, int lda, const half *B, int ldb, half* beta, half *C, int ldc);
   static cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const void *alpha, const void *A, cudaDataType Atype, int lda, const void *B, cudaDataType Btype, int ldb, const void *beta, void *C, cudaDataType Ctype, int ldc, cudaDataType computeType, cublasGemmAlgo_t algo);
 
-  static cudnnHandle_t cudnnHandle(Context const & ctx);
+  static cudnnHandle_t cudnnHandle(driver::context const & ctx);
   static cudnnStatus_t cudnnCreatePoolingDescriptor(cudnnPoolingDescriptor_t *poolingDesc);
   static cudnnStatus_t cudnnCreateConvolutionDescriptor(cudnnConvolutionDescriptor_t* convDesc);
   static cudnnStatus_t cudnnCreateTensorDescriptor(cudnnTensorDescriptor_t *tensorDesc);

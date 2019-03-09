@@ -33,7 +33,7 @@ float Event::elapsed_time() const{
   return time;
 }
 
-Handle<cu_event_t> const & Event::cu() const
+handle<cu_event_t> const & Event::cu() const
 { return cu_; }
 
 }

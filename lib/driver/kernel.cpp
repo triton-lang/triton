@@ -32,13 +32,13 @@ namespace triton
 namespace driver
 {
 
-Kernel::Kernel(Module const & program, const char * name) : program_(program), address_bits_(program.context().device().address_bits()){
+kernel::kernel(driver::module const & program, const char * name) : program_(program), address_bits_(program.context().device().address_bits()){
   cu_params_store_.reserve(64);
   cu_params_.reserve(64);
   dispatch::cuModuleGetFunction(&*cu_, program, name);
 }
 
-void Kernel::setArg(unsigned int index, std::size_t size, void* ptr){
+void kernel::setArg(unsigned int index, std::size_t size, void* ptr){
   if(index + 1> cu_params_store_.size()){
     cu_params_store_.resize(index+1);
     cu_params_.resize(index+1);
@@ -48,16 +48,16 @@ void Kernel::setArg(unsigned int index, std::size_t size, void* ptr){
   cu_params_[index] = cu_params_store_[index].get();
 }
 
-void Kernel::setArg(unsigned int index, Buffer const & data)
+void kernel::setArg(unsigned int index, buffer const & data)
 { return setArg(index, (CUdeviceptr)data);}
 
-void* const* Kernel::cu_params() const
+void* const* kernel::cu_params() const
 { return cu_params_.data(); }
 
-Handle<CUfunction> const & Kernel::cu() const
+handle<CUfunction> const & kernel::cu() const
 { return cu_; }
 
-Module const & Kernel::module() const
+driver::module const & kernel::module() const
 { return program_; }
 
 

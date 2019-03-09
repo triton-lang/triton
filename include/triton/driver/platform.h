@@ -34,17 +34,17 @@ namespace triton
 namespace driver
 {
 
-class Device;
+class device;
 
-class Platform
+class platform
 {
 public:
   //Accessors
   std::string name() const { return "CUDA"; }
   std::string version() const;
-  std::vector<Device> devices() const;
+  std::vector<device> devices() const;
 private:
-  Handle<cu_platform> cu_;
+  handle<cu_platform> cu_;
 };
 
 }

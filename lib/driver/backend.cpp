@@ -47,14 +47,14 @@ void backend::modules::release(){
   cache_.clear();
 }
 
-Module& backend::modules::get(Stream const & stream, std::string const & name, std::string const & src){
-  std::tuple<Stream, std::string> key(stream, name);
+module& backend::modules::get(driver::stream const & stream, std::string const & name, std::string const & src){
+  std::tuple<driver::stream, std::string> key(stream, name);
   if(cache_.find(key)==cache_.end())
-    return *cache_.insert(std::make_pair(key, new Module(stream.context(), src))).first->second;
+    return *cache_.insert(std::make_pair(key, new module(stream.context(), src))).first->second;
   return *cache_.at(key);
 }
 
-std::map<std::tuple<Stream, std::string>, Module * >  backend::modules::cache_;
+std::map<std::tuple<stream, std::string>, module * >  backend::modules::cache_;
 
 /*-----------------------------------*/
 //-----------  Kernels --------------*/
@@ -66,23 +66,23 @@ void backend::kernels::release(){
   cache_.clear();
 }
 
-Kernel & backend::kernels::get(Module const & program, std::string const & name){
-  std::tuple<Module, std::string> key(program, name);
+kernel & backend::kernels::get(driver::module const & program, std::string const & name){
+  std::tuple<module, std::string> key(program, name);
   if(cache_.find(key)==cache_.end())
-    return *cache_.insert(std::make_pair(key, new Kernel(program, name.c_str()))).first->second;
+    return *cache_.insert(std::make_pair(key, new kernel(program, name.c_str()))).first->second;
   return *cache_.at(key);
 }
 
-std::map<std::tuple<Module, std::string>, Kernel * > backend::kernels::cache_;
+std::map<std::tuple<module, std::string>, kernel * > backend::kernels::cache_;
 
 /*-----------------------------------*/
 //------------  Queues --------------*/
 /*-----------------------------------*/
 
-void backend::streams::init(std::list<const Context *> const & contexts){
-  for(Context const * ctx : contexts)
+void backend::streams::init(std::list<const context *> const & contexts){
+  for(context const * ctx : contexts)
     if(cache_.find(*ctx)==cache_.end())
-      cache_.insert(std::make_pair(*ctx, std::vector<Stream*>{new Stream(*ctx)}));
+      cache_.insert(std::make_pair(*ctx, std::vector<stream*>{new stream(*ctx)}));
 }
 
 void backend::streams::release(){
@@ -92,32 +92,32 @@ void backend::streams::release(){
   cache_.clear();
 }
 
-Stream & backend::streams::get_default()
+stream & backend::streams::get_default()
 { return get(contexts::get_default(), 0); }
 
-Stream & backend::streams::get(Context const & context, unsigned int id){
-  init(std::list<Context const *>(1,&context));
+stream & backend::streams::get(driver::context const & context, unsigned int id){
+  init(std::list<driver::context const *>(1,&context));
   for(auto & x : cache_)
     if(x.first==context)
       return *x.second[id];
   throw;
 }
 
-void backend::streams::get(Context const & context, std::vector<Stream*> & queues){
-  init(std::list<Context const *>(1,&context));
+void backend::streams::get(driver::context const & context, std::vector<stream*> & queues){
+  init(std::list<driver::context const *>(1,&context));
   queues = cache_.at(context);
 }
 
-std::map<Context, std::vector<Stream*> > backend::streams::cache_;
+std::map<context, std::vector<stream*> > backend::streams::cache_;
 
 /*-----------------------------------*/
 //------------  Contexts ------------*/
 /*-----------------------------------*/
 
-void backend::contexts::init(std::vector<Platform> const & platforms){
-  for(Platform const & platform: platforms){
-    for(Device const & device: platform.devices())
-      cache_.push_back(new Context(device));
+void backend::contexts::init(std::vector<platform> const & platforms){
+  for(platform const & platform: platforms){
+    for(device const & device: platform.devices())
+      cache_.push_back(new context(device));
   }
 }
 
@@ -127,19 +127,19 @@ void backend::contexts::release(){
   cache_.clear();
 }
 
-Context const & backend::contexts::get_default(){
+driver::context const & backend::contexts::get_default(){
   backend::init();
-  std::list<Context const *>::const_iterator it = cache_.begin();
+  std::list<context const *>::const_iterator it = cache_.begin();
   std::advance(it, default_device);
   return **it;
 }
 
-void backend::contexts::get(std::list<Context const *> & contexts){
+void backend::contexts::get(std::list<context const *> & contexts){
   backend::init();
   contexts = cache_;
 }
 
-std::list<Context const *> backend::contexts::cache_;
+std::list<context const *> backend::contexts::cache_;
 
 
 
@@ -147,28 +147,28 @@ std::list<Context const *> backend::contexts::cache_;
 //------------  General -------------*/
 /*-----------------------------------*/
 
-std::vector<Device> backend::devices(){
-  std::vector<Platform> platforms = backend::platforms();
-  std::vector<Device> result;
-  for(Platform const & platform: platforms){
+std::vector<device> backend::devices(){
+  std::vector<platform> platforms = backend::platforms();
+  std::vector<device> result;
+  for(platform const & platform: platforms){
     auto devices = platform.devices();
     result.insert(result.end(), devices.begin(), devices.end());
   }
   return result;
 }
 
-std::vector<Platform> backend::platforms(){
-  std::vector<Platform> platforms;
+std::vector<platform> backend::platforms(){
+  std::vector<platform> platforms;
   //if CUDA is here
   if(dispatch::cuinit())
-    platforms.push_back(Platform());
+    platforms.push_back(platform());
   if(platforms.empty())
     throw std::runtime_error("ISAAC: No backend available. Make sure CUDA is available in your library path");
   return platforms;
 }
 
-void backend::synchronize(Context const & context){
-  for(Stream * queue: streams::cache_.at(context))
+void backend::synchronize(driver::context const & context){
+  for(stream * queue: streams::cache_.at(context))
     queue->synchronize();
 }
 
@@ -184,7 +184,7 @@ void backend::release(){
 void backend::init(){
   if(!contexts::cache_.empty())
     return;
-  std::vector<Platform> platforms = backend::platforms();
+  std::vector<platform> platforms = backend::platforms();
   contexts::init(platforms);
   streams::init(contexts::cache_);
 }

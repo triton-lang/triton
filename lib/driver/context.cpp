@@ -35,7 +35,7 @@ namespace triton
 namespace driver
 {
 
-std::string Context::get_cache_path(){
+std::string context::get_cache_path(){
   //user-specified cache path
   std::string result = tools::getenv("ISAAC_CACHE_PATH");
   if(!result.empty()){
@@ -54,7 +54,7 @@ std::string Context::get_cache_path(){
   return "";
 }
 
-CUdevice Context::device(CUcontext context){
+CUdevice context::device(CUcontext context){
   dispatch::cuCtxPushCurrent_v2(context);
   CUdevice res;
   dispatch::cuCtxGetDevice(&res);
@@ -62,26 +62,26 @@ CUdevice Context::device(CUcontext context){
   return res;
 }
 
-Context::Context(CUcontext context, bool take_ownership): cu_(context, take_ownership), device_(device(context), false), cache_path_(get_cache_path())
+context::context(CUcontext context, bool take_ownership): cu_(context, take_ownership), dvc_(device(context), false), cache_path_(get_cache_path())
 { }
 
-Context::Context(Device const & device): device_(device), cache_path_(get_cache_path())
+context::context(driver::device const & device): dvc_(device), cache_path_(get_cache_path())
 {
   dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, (CUdevice)device);
   dispatch::cuCtxPopCurrent_v2(NULL);
 }
 
-Device const & Context::device() const
-{ return device_; }
+device const & context::device() const
+{ return dvc_; }
 
-std::string const & Context::cache_path() const
+std::string const & context::cache_path() const
 { return cache_path_; }
 
-Handle<CUcontext> const & Context::cu() const
+handle<CUcontext> const & context::cu() const
 { return cu_; }
 
 /* Context Switcher */
-ContextSwitcher::ContextSwitcher(Context const & ctx): ctx_(ctx)
+ContextSwitcher::ContextSwitcher(driver::context const & ctx): ctx_(ctx)
 {
   dispatch::cuCtxPushCurrent_v2(ctx_);
 }

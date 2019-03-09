@@ -49,24 +49,24 @@ private:
 };
 
 template<class T, class CUType>
-class HandleInterface{
+class handle_interface{
 public:
     //Accessors
     operator CUType() const { return *(((T*)this)->cu().h_); }
     //Comparison
-    bool operator==(HandleInterface const & y) { return (CUType)(*this) == (CUType)(y); }
-    bool operator!=(HandleInterface const & y) { return (CUType)(*this) != (CUType)(y); }
-    bool operator<(HandleInterface const & y) { return (CUType)(*this) < (CUType)(y); }
+    bool operator==(handle_interface const & y) { return (CUType)(*this) == (CUType)(y); }
+    bool operator!=(handle_interface const & y) { return (CUType)(*this) != (CUType)(y); }
+    bool operator<(handle_interface const & y) { return (CUType)(*this) < (CUType)(y); }
 };
 
 template<class CUType>
-class Handle{
+class handle{
 public:
-  template<class, class> friend class HandleInterface;
+  template<class, class> friend class handle_interface;
 public:
   //Constructors
-  Handle(CUType cu = CUType(), bool take_ownership = true);
-  ~Handle();
+  handle(CUType cu = CUType(), bool take_ownership = true);
+  ~handle();
   CUType& operator*() { return *h_; }
   CUType const & operator*() const { return *h_; }
   CUType* operator->() const { return h_.get(); }

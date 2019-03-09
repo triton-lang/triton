@@ -31,21 +31,21 @@ namespace triton
 namespace driver
 {
 
-class Stream;
+class stream;
 
 // Buffer
-class Buffer: public HandleInterface<Buffer, CUdeviceptr>
+class buffer: public handle_interface<buffer, CUdeviceptr>
 {
 public:
-  Buffer(Context const & context, size_t size);
-  Buffer(Context const & context, CUdeviceptr cu, bool take_ownership);
-  void set_zero(Stream const & queue, size_t size);
-  Handle<CUdeviceptr> const & cu() const;
-  Handle<CUdeviceptr> & cu();
+  buffer(driver::context const & context, size_t size);
+  buffer(driver::context const & context, CUdeviceptr cu, bool take_ownership);
+  void set_zero(stream const & queue, size_t size);
+  handle<CUdeviceptr> const & cu() const;
+  handle<CUdeviceptr> & cu();
 
 private:
-  Context context_;
-  Handle<CUdeviceptr> cu_;
+  context context_;
+  handle<CUdeviceptr> cu_;
 };
 
 }

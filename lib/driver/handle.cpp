@@ -43,24 +43,24 @@ inline void _delete(cu_platform){}
 
 //Constructor
 template<class CUType>
-Handle<CUType>::Handle(CUType cu, bool take_ownership): h_(new CUType(cu)), has_ownership_(take_ownership)
+handle<CUType>::handle(CUType cu, bool take_ownership): h_(new CUType(cu)), has_ownership_(take_ownership)
 { }
 
 
 template<class CUType>
-Handle<CUType>::~Handle(){
+handle<CUType>::~handle(){
   if(has_ownership_ && h_ && h_.unique() && *h_)
     _delete(*h_);
 }
 
-template class Handle<CUdeviceptr>;
-template class Handle<CUstream>;
-template class Handle<CUcontext>;
-template class Handle<CUdevice>;
-template class Handle<cu_event_t>;
-template class Handle<CUfunction>;
-template class Handle<CUmodule>;
-template class Handle<cu_platform>;
+template class handle<CUdeviceptr>;
+template class handle<CUstream>;
+template class handle<CUcontext>;
+template class handle<CUdevice>;
+template class handle<cu_event_t>;
+template class handle<CUfunction>;
+template class handle<CUmodule>;
+template class handle<cu_platform>;
 
 }
 }
