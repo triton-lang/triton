@@ -62,12 +62,9 @@ std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, const st
   // tuning parameters
   tune.run(module);
   unsigned i = 0;
-  triton_context_.p_impl->mp_constants_[0]->set_value(params[0]);
-  triton_context_.p_impl->mp_constants_[1]->set_value(params[1]);
-  triton_context_.p_impl->mp_constants_[2]->set_value(params[2]);
-  for(ir::metaparameter *x: tune.get_params(module)){
-    x->set_value(params[3 + i++]);
-  }
+  for(ir::metaparameter *x: tune.get_params(module))
+    x->set_value(params[i++]);
+
   // constraints
   std::map<ir::value*, std::vector<std::string>> errors;
   tune.check_constraints(module, errors);

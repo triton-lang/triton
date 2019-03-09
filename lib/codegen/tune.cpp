@@ -85,6 +85,12 @@ void tune::connected_components(node_t x, const std::vector<ir::metaparameter *>
     params_[x.first].insert({"p0" + suffix, mps[0]});
     params_[x.first].insert({"p1" + suffix, mps[1]});
     params_[x.first].insert({"p2" + suffix, mps[2]});
+    ir::type *ty = x.first->get_type();
+    if(ty->is_tile_ty()){
+      ir::type::tile_shapes_t::value_type shape = ty->get_tile_shapes().at(x.second);
+      if(auto mp = dynamic_cast<ir::metaparameter*>(shape))
+        params_[x.first].insert({"shape" + suffix, mp});
+    }
     if(static_params_.find(x) != static_params_.end()){
       mps[0]->set_value(static_params_.at(x));
       mps[1]->set_value(static_params_.at(x));

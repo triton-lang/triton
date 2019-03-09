@@ -65,22 +65,20 @@ void simple_gemm(std::vector<T> &c, const std::vector<T> &a, const std::vector<T
 
 int main() {
   std::vector<unsigned> params = {
-    // shapes
-    16, 16, 8,
     // a0
-    2, 8, 1,
+    2, 8, 1, 16,
     // b0
-    4, 4, 1,
+    4, 4, 1, 16,
     // c
     2, 4, 8, 4, 1, 1,
     // a1
-    2, 4, 1,
+    2, 4, 1, 8,
     // b1
     1, 8, 1
   };
-  unsigned TM = params[0];
-  unsigned TN = params[1];
-  unsigned nthreads = params[10]*params[13]*params[11]*params[14];
+  unsigned TM = params[6];
+  unsigned TN = params[10];
+  unsigned nthreads = params[1]*params[2]*params[15]*params[16];
 
   auto context = triton::driver::backend::contexts::get_default();
   triton::jit jit(context);
