@@ -49,11 +49,13 @@ class metaparameter: public constant_int{
 
 public:
   static metaparameter *create(context &ctx, type *ty, unsigned lo, unsigned hi);
-  void set_value(uint64_t value) { value_ = value; }
+  void set_value(uint64_t value) { has_value_ = true; value_ = value; }
+  bool has_value() { return has_value_; }
 
 private:
   unsigned lo_;
   unsigned hi_;
+  bool has_value_;
 };
 
 /* constant range */

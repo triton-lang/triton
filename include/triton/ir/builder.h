@@ -35,6 +35,11 @@ public:
   // Constants
   value *get_int32(unsigned val);
   // Types
+  type *get_int1_ty();
+  type *get_int8_ty();
+  type *get_int16_ty();
+  type *get_int32_ty();
+  type *get_int64_ty();
   type *get_float_ty();
   type *get_double_ty();
   // Insert

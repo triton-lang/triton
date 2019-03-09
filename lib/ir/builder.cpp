@@ -41,6 +41,21 @@ value *builder::get_int32(unsigned val) {
   return constant_int::get(type::get_int32_ty(ctx_), val);
 }
 
+type *builder::get_int1_ty()
+{ return type::get_int1_ty(ctx_); }
+
+type *builder::get_int8_ty()
+{ return type::get_int8_ty(ctx_); }
+
+type *builder::get_int16_ty()
+{ return type::get_int16_ty(ctx_); }
+
+type *builder::get_int32_ty()
+{ return type::get_int32_ty(ctx_); }
+
+type *builder::get_int64_ty()
+{ return type::get_int64_ty(ctx_); }
+
 type *builder::get_float_ty()
 { return type::get_float_ty(ctx_); }
 

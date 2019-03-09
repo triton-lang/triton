@@ -99,7 +99,7 @@ constant *constant_fp::get(context &ctx, double v){
 
 // metaparameter
 metaparameter::metaparameter(type *ty, unsigned lo, unsigned hi)
-  : constant_int(ty, 0), lo_(lo), hi_(hi){ }
+  : constant_int(ty, 0), lo_(lo), hi_(hi), has_value_(false){ }
 
 metaparameter* metaparameter::create(context &ctx, type *ty, unsigned lo, unsigned hi) {
   context_impl *impl = ctx.p_impl.get();

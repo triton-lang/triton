@@ -117,9 +117,9 @@ private:
 
   // grid construction
   void create_grids(std::vector<ir::value *> &grids,
-                    std::map<unsigned *, ir::value *> &references,
+                    std::map<ir::metaparameter *, ir::value *> &references,
                     ir::function *fn);
-  void create_tile(ir::value *v, llvm::IRBuilder<> &builder, const std::map<unsigned *, ir::value *> &references, std::set<ir::value *> &seen, llvm::Value *sh_mem_ptr);
+  void create_tile(ir::value *v, llvm::IRBuilder<> &builder, const std::map<ir::metaparameter *, ir::value *> &references, std::set<ir::value *> &seen, llvm::Value *sh_mem_ptr);
   void init_axes(ir::value *i, llvm::IRBuilder<> &builder, llvm::Value *u_thread_id, llvm::Value *u_warp_id);
   void init_grids(ir::function *fn, llvm::IRBuilder<> &builder, llvm::Value *sh_mem_ptr);
 
@@ -139,7 +139,7 @@ private:
   allocation *alloc_;
   tune *params_;
   buffer_info_pass *buffer_info_;
-  std::map<unsigned*, distributed_axis> axes_;
+  std::map<ir::metaparameter*, distributed_axis> axes_;
 };
 
 }

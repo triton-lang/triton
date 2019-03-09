@@ -4,6 +4,7 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/context_impl.h"
+#include "triton/ir/constant.h"
 
 #include <cstdlib>
 
@@ -77,43 +78,44 @@ void tune::init_c_graph(ir::instruction *v) {
   }
 }
 
-void tune::connected_components(node_t x, const std::vector<unsigned *> vals, std::set<node_t> &nodes, graph_t &graph) {
+void tune::connected_components(node_t x, const std::vector<ir::metaparameter *> mps, std::set<node_t> &nodes, graph_t &graph) {
   if(nodes.find(x) != nodes.end()){
     nodes.erase(x);
     std::string suffix = ".d" + std::to_string(x.second);
-    params_[x.first].insert({"p0" + suffix, vals[0]});
-    params_[x.first].insert({"p1" + suffix, vals[1]});
-    params_[x.first].insert({"p2" + suffix, vals[2]});
+    params_[x.first].insert({"p0" + suffix, mps[0]});
+    params_[x.first].insert({"p1" + suffix, mps[1]});
+    params_[x.first].insert({"p2" + suffix, mps[2]});
     if(static_params_.find(x) != static_params_.end()){
-      *vals[0] = static_params_.at(x);
-      *vals[1] = static_params_.at(x);
-      *vals[2] = static_params_.at(x);
+      mps[0]->set_value(static_params_.at(x));
+      mps[1]->set_value(static_params_.at(x));
+      mps[2]->set_value(static_params_.at(x));
     }
     for(const node_t &y: graph[x])
-      connected_components(y, vals, nodes, graph);
+      connected_components(y, mps, nodes, graph);
   }
 }
 
-std::vector<unsigned*> tune::get_params(ir::module &mod) {
-  std::vector<unsigned *> result;
-  std::set<unsigned*> seen;
+std::vector<ir::metaparameter *> tune::get_params(ir::module &mod) {
+  std::vector<ir::metaparameter*> result;
+  std::set<ir::metaparameter*> seen;
 
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i : block->get_inst_list())
   for(auto &x: params_[i])
-    if(seen.insert(x.second).second && *x.second == 0){
+    if(seen.insert(x.second).second && !x.second->has_value()){
       result.push_back(x.second);
     }
   return result;
 }
 
-std::map<std::string, unsigned*> tune::get_params(ir::instruction* i) {
+std::map<std::string, ir::metaparameter *> tune::get_params(ir::instruction* i) {
   return params_.at(i);
 }
 
 
 void tune::run(ir::module &mod) {
+  ir::context &ctx = mod.get_context();
   for(ir::function *fn: mod.get_function_list()){
     // Build constraints graph
     for(ir::basic_block *block: fn->blocks())
@@ -128,16 +130,17 @@ void tune::run(ir::module &mod) {
       init_c_phi(i);
     // Layout parameters
     while(!nodes_.empty()){
-      unsigned *v0 = new unsigned(0);
-      unsigned *v1 = new unsigned(0);
-      unsigned *v2 = new unsigned(0);
-      connected_components(*nodes_.begin(), {v0, v1, v2}, nodes_, dependencies_);
+      ir::type *ty = mod.get_builder().get_int32_ty();
+      ir::metaparameter *mp0 = ir::metaparameter::create(ctx, ty, 1, 4);
+      ir::metaparameter *mp1 = ir::metaparameter::create(ctx, ty, 4, 32);
+      ir::metaparameter *mp2 = ir::metaparameter::create(ctx, ty, 4, 32);
+      connected_components(*nodes_.begin(), {mp0, mp1, mp2}, nodes_, dependencies_);
     }
   }
 }
 
 void tune::create_grids(std::vector<ir::instruction*> &grids,
-                     std::map<unsigned*, ir::instruction*> &references,
+                     std::map<ir::metaparameter*, ir::instruction*> &references,
                      ir::function *fn) {
   // get number of dimensions greater than 1
   auto get_tile_gt1_dim = [&](ir::value *v){
@@ -154,7 +157,7 @@ void tune::create_grids(std::vector<ir::instruction*> &grids,
     if(!i->get_type()->is_tile_ty())
       continue;
     for(auto &param: params_.at(i)){
-      if(*param.second == 1)
+      if(param.second->get_value() == 1)
         continue;
       ir::instruction *&r = references[param.second];
       if(!r || get_tile_gt1_dim(i) > get_tile_gt1_dim(r))
@@ -173,14 +176,14 @@ for(ir::function *fn: mod.get_function_list()){
   using std::to_string;
 
   // initialize grids
-  std::map<unsigned*, ir::instruction*> references;
+  std::map<ir::metaparameter*, ir::instruction*> references;
   std::vector<ir::instruction*> grids;
   create_grids(grids, references, fn);
 
   // number of warps
   int num_warps = 1;
   for(size_t k = 0; k < grids.front()->get_type()->get_tile_shapes().size(); k++)
-    num_warps *= *params_[grids.front()]["p2.d" + to_string(k)];
+    num_warps *= params_[grids.front()]["p2.d" + to_string(k)]->get_value();
 
   // check constraints
   for(ir::instruction *i: grids){
@@ -190,10 +193,10 @@ for(ir::function *fn: mod.get_function_list()){
     // must device the shape
     for(size_t k = 0; k < shapes.size(); k++) {
       std::string strk = to_string(k);
-      unsigned *s0 = params_[i]["p0.d" + strk];
-      unsigned *s1 = params_[i]["p1.d" + strk];
-      unsigned *s2 = params_[i]["p2.d" + strk];
-      unsigned multiple = (*s0)*(*s1)*(*s2);
+      ir::metaparameter *mp0 = params_[i]["p0.d" + strk];
+      ir::metaparameter *mp1 = params_[i]["p1.d" + strk];
+      ir::metaparameter *mp2 = params_[i]["p2.d" + strk];
+      unsigned multiple = mp0->get_value()*mp1->get_value()*mp2->get_value();
       if(shapes[k]->get_value() % multiple != 0)
         errors[i].push_back("for dim " + strk + ": shape (" + to_string(shapes[k]->get_value()) + ")"
                             " is not a multiple of layout (" + to_string(multiple)  + ")");
@@ -201,14 +204,14 @@ for(ir::function *fn: mod.get_function_list()){
     // the number of thread per warp must be 32
     int num_threads = 1;
     for(size_t k = 0; k < shapes.size(); k++)
-      num_threads *= *params_[i]["p1.d" + to_string(k)];
+      num_threads *= params_[i]["p1.d" + to_string(k)]->get_value();
     if(num_threads != 32)
       errors[i].push_back("number of threads per warp (" + to_string(num_threads) + ") must be 32");
     // The number of warps required by the layout is the same
     // for all tiles in the function
     int required_num_warps = 1;
     for(size_t k = 0; k < shapes.size(); k++)
-      required_num_warps *= *params_[i]["p2.d" + to_string(k)];
+      required_num_warps *= params_[i]["p2.d" + to_string(k)]->get_value();
     if(required_num_warps != num_warps)
       errors[i].push_back("number of warps (" + to_string(required_num_warps) + ") must be " + to_string(num_warps));
   }
