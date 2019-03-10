@@ -145,9 +145,9 @@ void tune::run(ir::module &mod) {
     // Layout parameters
     while(!nodes_.empty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      ir::metaparameter *mp0 = ir::metaparameter::create(ctx, ty, 1, 4);
-      ir::metaparameter *mp1 = ir::metaparameter::create(ctx, ty, 4, 32);
-      ir::metaparameter *mp2 = ir::metaparameter::create(ctx, ty, 4, 32);
+      ir::metaparameter *mp0 = ir::metaparameter::create(ctx, ty, 2, 2);
+      ir::metaparameter *mp1 = ir::metaparameter::create(ctx, ty, 4, 8);
+      ir::metaparameter *mp2 = ir::metaparameter::create(ctx, ty, 1, 4);
       connected_components(*nodes_.begin(), {mp0, mp1, mp2}, nodes_, dependencies_);
     }
   }

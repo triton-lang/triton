@@ -123,6 +123,7 @@ int main() {
   };
   triton::jit jit(context);
   jit.add_module(src, params);
+  jit.autotune(src, benchmark);
   triton::driver::kernel kernel = jit.get_function("matmul");
   triton::jit::launch_information info = jit.get_launch_info("matmul");
   benchmark(kernel, info);
