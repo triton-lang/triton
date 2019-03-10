@@ -34,36 +34,54 @@ extern translation_unit *ast_root;
 
 namespace triton {
 
-void jit::init_llvm() {
-  static bool init = false;
-  if(!init){
-    llvm::InitializeAllTargetInfos();
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmParsers();
-    llvm::InitializeAllAsmPrinters();
-    init = true;
+void loop_nest(std::vector<size_t> const & ranges, std::function<void(std::vector<size_t> const &)> const & f){
+  size_t D = ranges.size();
+  std::vector<size_t> values(D, 0);
+  // Start with innermost loop
+  size_t i = D - 1;
+  while(true){
+    //Execute function
+    f(values);
+    //Increment counters
+    while(values[i]++ == ranges[i] - 1){
+      if(i == 0)
+        return;
+      values[i--] = 0;
+    }
+    i = D - 1;
   }
 }
 
-std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, const std::vector<unsigned>& params) {
+template<class T>
+void loop_nest(std::vector<std::vector<T>> const & iterates, std::function<void(std::vector<T>)> const & f){
+  //Ranges to iterate over
+  std::vector<size_t> ranges;
+  for(auto const & x: iterates)
+    ranges.push_back(x.size());
+  //Proxy function
+  auto proxy = [&](std::vector<size_t> const & idx){
+    std::vector<T> x(iterates.size());
+    for(size_t i = 0; i < x.size(); ++i)
+    x[i] = iterates[i][idx[i]];
+  f(x);
+  };
+  //Iterate
+  loop_nest(ranges, proxy);
+}
+
+
+
+std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, codegen::tune & tune) {
   llvm::Module* result = new llvm::Module("matmul", llvm_context_);
 
   // create passes
   codegen::buffer_info_pass buffer_info;
   codegen::place_shared_copy shared(&buffer_info);
-  codegen::tune tune;
   codegen::liveness liveness(&buffer_info);
   codegen::allocation allocation(&liveness, &buffer_info);
   codegen::barriers barriers(&allocation, &buffer_info);
   codegen::vectorize vectorize(&tune);
   codegen::selection selection(&allocation, &tune, &buffer_info);
-
-  // tuning parameters
-  tune.run(module);
-  unsigned i = 0;
-  for(ir::metaparameter *x: tune.get_params(module))
-    x->set_value(params[i++]);
 
   // constraints
   std::map<ir::value*, std::vector<std::string>> errors;
@@ -109,36 +127,49 @@ std::unique_ptr<ir::module> jit::make_triton_module(const std::string &src) {
 jit::jit(driver::context context): driver_context_(context) {
 }
 
-std::string jit::compute_data_layout(bool is_64bit, bool use_short_pointers) {
-  std::string ret = "e";
-  if (!is_64bit)
-    ret += "-p:32:32";
-  else if (use_short_pointers)
-    ret += "-p3:32:32-p4:32:32-p5:32:32";
-  ret += "-i64:64-i128:128-v16:16-v32:32-n16:32:64";
-  return ret;
+
+void jit::autotune(ir::module &tt_module, benchmark_t benchmark) {
+  // find metaparameters
+  codegen::tune tune;
+  tune.run(tt_module);
+  auto mps = tune.get_params(tt_module);
+  // create parameter ranges
+  std::vector<std::vector<unsigned>> ranges;
+  for(ir::metaparameter *mp: mps){
+    std::vector<unsigned> current;
+    for(unsigned x = mp->get_lo(); x <= mp->get_hi(); x*=2)
+      current.push_back(x);
+    ranges.push_back(current);
+  }
+  // iterate over parameters
+  loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
+    std::map<ir::value*, std::vector<std::string>> errors;
+    unsigned i = 0;
+    for(ir::metaparameter *mp: mps)
+      mp->set_value(params[i++]);
+    tune.check_constraints(tt_module, errors);
+    if(errors.size())
+      return;
+    std::cout << "valid" << std::endl;
+  });
+}
+
+void jit::autotune(const std::string &src, benchmark_t benchmark) {
+  auto ptt_module = make_triton_module(src);
+  autotune(*ptt_module, benchmark);
 }
 
 void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params) {
-  init_llvm();
-  auto ll_module = make_llvm_module(tt_module, params);
-  ll_module->setTargetTriple("nvptx64-nvidia-cuda");
-  std::string error;
-  auto target = llvm::TargetRegistry::lookupTarget(ll_module->getTargetTriple(), error);
-  llvm::TargetMachine *machine = target->createTargetMachine(ll_module->getTargetTriple(), "sm_52", "",
-                                                             llvm::TargetOptions(), llvm::Reloc::Model(),
-                                                             llvm::None, llvm::CodeGenOpt::Aggressive);
-  ll_module->setDataLayout(compute_data_layout());
-
-  // emit machine code
-  llvm::legacy::PassManager pass;
-  llvm::SmallVector<char, 0> buffer;
-  llvm::raw_svector_ostream stream(buffer);
-  machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_AssemblyFile);
-  pass.run(*ll_module);
-  std::string src(buffer.begin(), buffer.end());
-
-  modules_.push_back(driver::module(driver_context_, src));
+  // set parameters
+  codegen::tune tune;
+  tune.run(tt_module);
+  unsigned i = 0;
+  for(ir::metaparameter* mp: tune.get_params(tt_module))
+    mp->set_value(params[i++]);
+  // compiler to llvm
+  auto ll_module = make_llvm_module(tt_module, tune);
+  // send llvm module to driver
+  modules_.push_back(driver::module(driver_context_, &*ll_module));
 }
 
 void jit::add_module(const std::string &src, const std::vector<unsigned> &params) {

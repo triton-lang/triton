@@ -26,13 +26,71 @@
 #include "triton/driver/module.h"
 #include "triton/driver/context.h"
 #include "triton/driver/error.h"
-
 #include "triton/tools/sys/getenv.hpp"
+#include "llvm/IR/IRPrintingPasses.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Transforms/Scalar/EarlyCSE.h"
+#include "llvm/Analysis/LoopPass.h"
 
 namespace triton
 {
 namespace driver
 {
+
+std::string module::compile_llvm_module(llvm::Module* module) {
+  init_llvm();
+
+  // create machine
+  module->setTargetTriple("nvptx64-nvidia-cuda");
+  std::string error;
+  auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
+  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), "sm_52", "",
+                                                             llvm::TargetOptions(), llvm::Reloc::Model(),
+                                                             llvm::None, llvm::CodeGenOpt::Aggressive);
+
+  // set data layout
+  std::string layout = "e";
+  bool is_64bit = true;
+  bool use_short_pointers = true;
+  if (!is_64bit)
+    layout += "-p:32:32";
+  else if (use_short_pointers)
+    layout += "-p3:32:32-p4:32:32-p5:32:32";
+  layout += "-i64:64-i128:128-v16:16-v32:32-n16:32:64";
+  module->setDataLayout(layout);
+
+  // emit machine code
+  llvm::legacy::PassManager pass;
+  llvm::SmallVector<char, 0> buffer;
+  llvm::raw_svector_ostream stream(buffer);
+  machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_AssemblyFile);
+  pass.run(*module);
+
+  return std::string(buffer.begin(), buffer.end());
+}
+
+void module::init_llvm() {
+  static bool init = false;
+  if(!init){
+    llvm::InitializeAllTargetInfos();
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmParsers();
+    llvm::InitializeAllAsmPrinters();
+    init = true;
+  }
+}
+
+module::module(driver::context const & context, llvm::Module* ll_module): module(context, compile_llvm_module(ll_module)){ }
 
 module::module(driver::context const & context, std::string const & source) : context_(context), source_(source){
   ContextSwitcher ctx_switch(context_);

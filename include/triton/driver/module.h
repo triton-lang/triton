@@ -28,6 +28,11 @@
 #include "triton/driver/context.h"
 #include "triton/driver/buffer.h"
 
+namespace llvm
+{
+  class Module;
+}
+
 namespace triton
 {
 
@@ -40,9 +45,12 @@ class device;
 class module: public handle_interface<module, CUmodule>
 {
   static std::string header(device const & device);
+  std::string compile_llvm_module(llvm::Module* module);
+  void init_llvm();
 
 public:
-  module(driver::context const & context, std::string const & source);
+  module(driver::context const & context, llvm::Module *module);
+  module(driver::context const & context, const std::string& source);
   driver::context const & context() const;
   handle<CUmodule> const & cu() const;
   buffer symbol(const char * name) const;

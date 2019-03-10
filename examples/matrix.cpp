@@ -64,25 +64,10 @@ void simple_gemm(std::vector<T> &c, const std::vector<T> &a, const std::vector<T
 }
 
 int main() {
-  // initialize JIT on default device
+  // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
-  triton::jit jit(context);
 
-  // add module
-  std::vector<unsigned> params = {
-    // a0
-    2, 8, 1, 16,
-    // b0
-    4, 4, 1, 16,
-    // c
-    2, 4, 8, 4, 1, 1,
-    // a1
-    2, 4, 1, 8,
-    // b1
-    1, 8, 1
-  };
-  jit.add_module(src, params);
-
+  // matrix multiplication parameters
   size_t M = 128, N = 128, K = 128;
   size_t bound = 8;
   std::vector<float> hc(M*N);
@@ -103,20 +88,44 @@ int main() {
   stream.write(da, true, 0, ha);
   stream.write(db, true, 0, hb);
   stream.write(dc, true, 0, hc);
-  triton::driver::kernel kernel = jit.get_function("matmul");
-  kernel.setArg(0, da);
-  kernel.setArg(1, db);
-  kernel.setArg(2, dc);
-  kernel.setArg(3, M);
-  kernel.setArg(4, N);
-  kernel.setArg(5, K);
-  kernel.setArg(6, bound);
-  triton::jit::launch_information info = jit.get_launch_info("matmul");
-  unsigned TM = info.global_range_size[0];
-  unsigned TN = info.global_range_size[1];
-  unsigned nthreads = info.num_threads;
-  stream.enqueue(kernel, {(M + TM - 1)/TM, (N + TN - 1)/TN, 1}, {nthreads, 1, 1});
   stream.synchronize();
+
+  // benchmark a given matrix multiplication kernel
+  auto benchmark = [&](triton::driver::kernel kernel,
+                       triton::jit::launch_information info) {
+    kernel.setArg(0, da);
+    kernel.setArg(1, db);
+    kernel.setArg(2, dc);
+    kernel.setArg(3, M);
+    kernel.setArg(4, N);
+    kernel.setArg(5, K);
+    kernel.setArg(6, bound);
+    unsigned TM = info.global_range_size[0];
+    unsigned TN = info.global_range_size[1];
+    unsigned nthreads = info.num_threads;
+    stream.enqueue(kernel, {(M + TM - 1)/TM, (N + TN - 1)/TN, 1}, {nthreads, 1, 1});
+    stream.synchronize();
+    return float(0);
+  };
+
+  // just-in-time compile source-code
+  std::vector<unsigned> params = {
+    // a0
+    2, 8, 1, 16,
+    // b0
+    4, 4, 1, 16,
+    // c
+    2, 4, 8, 4, 1, 1,
+    // a1
+    2, 4, 1, 8,
+    // b1
+    1, 8, 1
+  };
+  triton::jit jit(context);
+  jit.add_module(src, params);
+  triton::driver::kernel kernel = jit.get_function("matmul");
+  triton::jit::launch_information info = jit.get_launch_info("matmul");
+  benchmark(kernel, info);
   stream.read(dc, true, 0, hc);
   simple_gemm(rc, ha, hb, M, N, K);
   for(size_t i = 0; i < M*N; i++)

@@ -51,6 +51,8 @@ public:
   static metaparameter *create(context &ctx, type *ty, unsigned lo, unsigned hi);
   void set_value(uint64_t value) { has_value_ = true; value_ = value; }
   bool has_value() { return has_value_; }
+  unsigned get_lo() { return lo_; }
+  unsigned get_hi() { return hi_; }
 
 private:
   unsigned lo_;
