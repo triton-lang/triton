@@ -108,18 +108,32 @@ int main() {
     return float(0);
   };
 
+
+//  std::vector<unsigned> params = {
+//    // a0
+//    2, 8, 1, 16,
+//    // b0
+//    4, 4, 1, 16,
+//    // c
+//    2, 4, 8, 4, 1, 1,
+//    // a1
+//    2, 4, 1, 8,
+//    // b1
+//    1, 8, 1
+//  };
+
   // just-in-time compile source-code
   std::vector<unsigned> params = {
     // a0
-    2, 8, 1, 16,
+    8, 2, 16,
     // b0
-    4, 4, 1, 16,
+    4, 4, 16,
     // c
-    2, 4, 8, 4, 1, 1,
+    8, 4, 2, 4,
     // a1
-    2, 4, 1, 8,
+    4, 2, 8,
     // b1
-    1, 8, 1
+    8, 1
   };
   triton::jit jit(context);
   jit.add_module(src, params);

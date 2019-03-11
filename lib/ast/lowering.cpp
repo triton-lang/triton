@@ -412,7 +412,7 @@ ir::value* initializer::codegen(ir::module * mod) const{
   if(std::find(storage.begin(), storage.end(), TUNABLE_T) != storage.end()){
     assert(expr_ == nullptr);
     //TODO: implement ranges
-    value = ir::metaparameter::create(mod->get_context(), ty, 8, 64);
+    value = ir::metaparameter::create(mod->get_context(), ty, 8, 128);
   }
   if(expr_){
     value = expr_->codegen(mod);

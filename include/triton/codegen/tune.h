@@ -47,9 +47,9 @@ private:
   std::set<node_t> nodes_;
   std::map<node_t, unsigned> static_params_;
   std::map<ir::value*, std::map<std::string, ir::metaparameter*>> params_;
-  std::vector<ir::metaparameter*> num_threads_mp_vec_;
   std::map<unsigned, ir::metaparameter*> global_range_sizes_;
   unsigned num_global_ranges_;
+  unsigned num_threads_;
 };
 
 

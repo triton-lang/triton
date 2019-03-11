@@ -86,7 +86,6 @@ std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, codegen:
   // constraints
   std::map<ir::value*, std::vector<std::string>> errors;
   tune.check_constraints(module, errors);
-  std::cout << "errors: " << errors.size() << std::endl;
   for(auto &x: errors){
   for(auto &e: x.second)
     std::cout << x.first->get_name() << " " << e << std::endl;
@@ -150,7 +149,13 @@ void jit::autotune(ir::module &tt_module, benchmark_t benchmark) {
     tune.check_constraints(tt_module, errors);
     if(errors.size())
       return;
-    std::cout << "valid" << std::endl;
+    ir::module copy(tt_module);
+    auto ll_module = make_llvm_module(copy, tune);
+    driver::module module(driver_context_, &*ll_module);
+    driver::kernel kernel(module, "matmul");
+    launch_information info = launch_info_map_.at("matmul");
+    benchmark(kernel, info);
+    std::cout << "benchmarked" << std::endl;
   });
 }
 

@@ -16,7 +16,7 @@ void vectorize::run(ir::module &mod) {
   for(ir::instruction *i: block->get_inst_list())
     if(dynamic_cast<ir::copy_to_shared_inst*>(i)){
       ir::value *x = i->get_operand(0);
-      if(params_->get_param(x, "p0.d0")->get_value() == 1)
+      if(params_->get_param(x, "nts.d0")->get_value() == 1)
         continue;
       builder.set_insert_point(i);
       ir::instruction *rx = (ir::instruction*)builder.create_vectorize(x);
