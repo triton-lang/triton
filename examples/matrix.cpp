@@ -86,7 +86,7 @@ int main() {
   auto context = triton::driver::backend::contexts::get_default();
 
   // matrix multiplication parameters
-  size_t M = 128, N = 128, K = 128;
+  size_t M = 512, N = 512, K = 512;
   size_t bound = 8;
   std::vector<float> hc(M*N);
   std::vector<float> rc(M*N);

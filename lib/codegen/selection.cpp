@@ -371,18 +371,37 @@ std::vector<Value*> delinearize(Value *trailing, std::vector<unsigned> &shapes, 
   return result;
 }
 
+inline int32_t ceil(int32_t num, int32_t div){
+  return (num + div - 1)/div;
+}
+
+inline void to_warps(const std::vector<unsigned> &bs, std::vector<unsigned> &nw, std::vector<unsigned> &ws){
+  static const size_t warp_size = 32;
+  size_t nthreads = 1, nwarps = 1;
+  nw.resize(bs.size());
+  ws.resize(bs.size());
+  for(size_t i = 0; i < bs.size(); ++i){
+    nthreads *= bs[i];
+    nw[i] = ceil(nthreads, nwarps*warp_size);
+    nwarps *= nw[i];
+  }
+  for(size_t i = 0; i < bs.size(); ++i)
+    ws[i] = bs[i] / nw[i];
+}
+
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
   const auto& shapes = v->get_type()->get_tile_shapes();
   size_t dim = shapes.size();
   std::vector<unsigned> contiguous(dim);
+  std::vector<unsigned> block_size(dim);
   std::vector<unsigned> warp_size(dim);
   std::vector<unsigned> n_warps(dim);
   for(unsigned i = 0; i < shapes.size(); i++){
     std::string str_i = std::to_string(i);
     contiguous[i] = params_->get_param(v, "nts.d" + str_i)->get_value();
-    warp_size[i] = params_->get_param(v, "mts.d" + str_i)->get_value();
-    n_warps[i] = shapes[i]->get_value() / (contiguous[i] * warp_size[i]);
+    block_size[i] = params_->get_param(v, "mts.d" + str_i)->get_value();
   }
+  to_warps(block_size, n_warps, warp_size);
   std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, warp_size, builder);
   std::vector<Value*> warp_id = delinearize(u_warp_id, n_warps, builder);
   // Create axes

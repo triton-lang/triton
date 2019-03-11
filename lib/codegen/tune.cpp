@@ -144,8 +144,8 @@ void tune::run(ir::module &mod) {
     // Layout parameters
     while(!nodes_.empty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 2, 4);
-      ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 8);
+      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 2, 2);
+      ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
       connected_components(*nodes_.begin(), {nts, mts}, nodes_, dependencies_);
     }
   }
@@ -157,21 +157,12 @@ void tune::init(ir::module &mod) {
     std::map<ir::metaparameter*, ir::instruction*> references;
     create_grids(grids_, references, fn);
   }
-  // number of warps
-  auto get_num_warps = [&](ir::instruction *i, unsigned axis) {
-    std::string strk = std::to_string(axis);
-    unsigned mts = params_[i]["mts.d" + strk]->get_value();
-    unsigned nts = params_[i]["nts.d" + strk]->get_value();
-    unsigned shape = i->get_type()->get_tile_shapes()[axis]->get_value();
-    return shape / (mts * nts);
-  };
   // number of threads
   num_threads_ = 1;
   ir::instruction *first = grids_.front();
   for(unsigned k = 0; k < first->get_type()->get_tile_shapes().size(); k++){
     std::string suffix = ".d" + std::to_string(k);
     num_threads_ *= params_.at(first).at("mts" + suffix)->get_value();
-    num_threads_ *= get_num_warps(first, k);
   }
 }
 
@@ -243,15 +234,10 @@ bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &er
     int num_threads = 1;
     for(size_t k = 0; k < shapes.size(); k++)
       num_threads *= params_[i]["mts.d" + to_string(k)]->get_value();
-    if(num_threads != 32)
-      errors[i].push_back("number of threads per warp (" + to_string(num_threads) + ") must be 32");
-    // The number of warps required by the layout is the same
-    // for all tiles in the function
-    int required_num_warps = 1;
-    for(size_t k = 0; k < shapes.size(); k++)
-      required_num_warps *= get_num_warps(i, k);
-    if(required_num_warps != num_warps)
-      errors[i].push_back("number of warps (" + to_string(required_num_warps) + ") must be " + to_string(num_warps));
+    if(num_threads % 32 != 0)
+      errors[i].push_back("number of threads per block (" + to_string(num_threads) + ") must be multiple of 32");
+    if(num_threads != num_threads_)
+      errors[i].push_back("Number of threads must be the same for all tiles (" + to_string(num_threads_) + ")");
   }
   return errors.empty();
 }

@@ -142,7 +142,6 @@ void jit::autotune(const std::string &src, benchmark_t benchmark) {
     launch_information info = launch_info_map_.at("matmul");
     for(unsigned p: params)
       std::cout << p << " " << std::flush;
-    std::cout << std::endl;
     benchmark(kernel, info);
   });
 }
