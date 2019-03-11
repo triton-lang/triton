@@ -63,6 +63,24 @@ void simple_gemm(std::vector<T> &c, const std::vector<T> &a, const std::vector<T
   }
 }
 
+class timer{
+    typedef std::chrono::high_resolution_clock high_resolution_clock;
+    typedef std::chrono::nanoseconds nanoseconds;
+
+public:
+    explicit timer(bool run = false)
+    { if (run) start(); }
+
+    void start()
+    { _start = high_resolution_clock::now(); }
+
+    nanoseconds get() const
+    { return std::chrono::duration_cast<nanoseconds>(high_resolution_clock::now() - _start); }
+
+private:
+    high_resolution_clock::time_point _start;
+};
+
 int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
@@ -90,6 +108,7 @@ int main() {
   stream.write(dc, true, 0, hc);
   stream.synchronize();
 
+
   // benchmark a given matrix multiplication kernel
   auto benchmark = [&](triton::driver::kernel kernel,
                        triton::jit::launch_information info) {
@@ -103,24 +122,16 @@ int main() {
     unsigned TM = info.global_range_size[0];
     unsigned TN = info.global_range_size[1];
     unsigned nthreads = info.num_threads;
+    timer t;
+    t.start();
     stream.enqueue(kernel, {(M + TM - 1)/TM, (N + TN - 1)/TN, 1}, {nthreads, 1, 1});
     stream.synchronize();
-    return float(0);
+    double ts = t.get().count()*1e-9;
+    double tflops = 2*M*N*K / ts * 1e-12;
+    std::cout << tflops << std::endl;
+    return ts;
   };
 
-
-//  std::vector<unsigned> params = {
-//    // a0
-//    2, 8, 1, 16,
-//    // b0
-//    4, 4, 1, 16,
-//    // c
-//    2, 4, 8, 4, 1, 1,
-//    // a1
-//    2, 4, 1, 8,
-//    // b1
-//    1, 8, 1
-//  };
 
   // just-in-time compile source-code
   std::vector<unsigned> params = {
@@ -136,8 +147,8 @@ int main() {
     8, 1
   };
   triton::jit jit(context);
-  jit.add_module(src, params);
   jit.autotune(src, benchmark);
+  jit.add_module(src, params);
   triton::driver::kernel kernel = jit.get_function("matmul");
   triton::jit::launch_information info = jit.get_launch_info("matmul");
   benchmark(kernel, info);

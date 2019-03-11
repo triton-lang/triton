@@ -1,16 +1,9 @@
-#include "triton/jit.h"
+﻿#include "triton/jit.h"
 #include <string>
 #include "triton/ast/ast.h"
 #include "triton/ir/context.h"
 #include "triton/ir/context_impl.h"
-#include "triton/codegen/selection.h"
-#include "triton/codegen/tune.h"
-#include "triton/codegen/shared_copy.h"
-#include "triton/codegen/allocation.h"
-#include "triton/codegen/liveness.h"
-#include "triton/codegen/vectorize.h"
-#include "triton/codegen/buffer_info.h"
-#include "triton/codegen/barriers.h"
+#include "triton/driver/device.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
@@ -71,42 +64,15 @@ void loop_nest(std::vector<std::vector<T>> const & iterates, std::function<void(
 
 
 
-std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, codegen::tune & tune) {
+
+std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, passes_wrapper &passes) {
   llvm::Module* result = new llvm::Module("matmul", llvm_context_);
-
-  // create passes
-  codegen::buffer_info_pass buffer_info;
-  codegen::place_shared_copy shared(&buffer_info);
-  codegen::liveness liveness(&buffer_info);
-  codegen::allocation allocation(&liveness, &buffer_info);
-  codegen::barriers barriers(&allocation, &buffer_info);
-  codegen::vectorize vectorize(&tune);
-  codegen::selection selection(&allocation, &tune, &buffer_info);
-
-  // constraints
-  std::map<ir::value*, std::vector<std::string>> errors;
-  tune.check_constraints(module, errors);
-  for(auto &x: errors){
-  for(auto &e: x.second)
-    std::cout << x.first->get_name() << " " << e << std::endl;
-  }
-  if(errors.size())
-    exit(EXIT_FAILURE);
-
-  // generate ptx
-  buffer_info.run(module);
-  shared.run(module);
-  liveness.run(module);
-  allocation.run();
-  barriers.run(module);
-  vectorize.run(module);
-  selection.run(module, *result);
-
+  passes.selection.run(module, *result);
   // launch information
   auto &launch_info_map = launch_info_map_[result->getName()];
-  for(unsigned i = 0; i < tune.get_num_global_range(); i++)
-    launch_info_map.global_range_size.push_back(tune.get_global_range_size(i));
-  launch_info_map.num_threads = tune.get_num_threads();
+  for(unsigned i = 0; i < passes.tune.get_num_global_range(); i++)
+    launch_info_map.global_range_size.push_back(passes.tune.get_global_range_size(i));
+  launch_info_map.num_threads = passes.tune.get_num_threads();
   return std::unique_ptr<llvm::Module>(result);
 }
 
@@ -127,11 +93,14 @@ jit::jit(driver::context context): driver_context_(context) {
 }
 
 
-void jit::autotune(ir::module &tt_module, benchmark_t benchmark) {
+void jit::autotune(const std::string &src, benchmark_t benchmark) {
   // find metaparameters
-  codegen::tune tune;
-  tune.run(tt_module);
-  auto mps = tune.get_params(tt_module);
+  auto ptt_module = make_triton_module(src);
+  ir::module &tt_module = *ptt_module;
+  // set parameters
+  passes_wrapper passes;
+  passes.tune.run(tt_module);
+  auto mps = passes.tune.get_params(tt_module);
   // create parameter ranges
   std::vector<std::vector<unsigned>> ranges;
   for(ir::metaparameter *mp: mps){
@@ -141,39 +110,62 @@ void jit::autotune(ir::module &tt_module, benchmark_t benchmark) {
     ranges.push_back(current);
   }
   // iterate over parameters
+  unsigned i;
   loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
     std::map<ir::value*, std::vector<std::string>> errors;
-    unsigned i = 0;
+    i = 0;
     for(ir::metaparameter *mp: mps)
       mp->set_value(params[i++]);
-    tune.check_constraints(tt_module, errors);
-    if(errors.size())
+    passes.tune.init(tt_module);
+    if(!passes.tune.check_constraints(errors))
       return;
-    ir::module copy(tt_module);
-    auto ll_module = make_llvm_module(copy, tune);
+    // Deep copy of the module and tuner
+    auto ptt_module = make_triton_module(src);
+    ir::module &tt_module = *ptt_module;
+    passes_wrapper passes;
+    passes.tune.run(tt_module);
+    i = 0;
+    for(ir::metaparameter* mp: passes.tune.get_params(tt_module)){
+      mp->set_value(params[i++]);
+    }
+    passes.tune.init(tt_module);
+    passes.init(tt_module);
+    const driver::device &device = driver_context_.device();
+    if(passes.allocation.get_allocated_size() > device.max_shared_memory())
+      return;
+    if(passes.tune.get_num_threads() > device.max_threads_per_block())
+      return;
+    // Compile
+    auto ll_module = make_llvm_module(tt_module, passes);
     driver::module module(driver_context_, &*ll_module);
     driver::kernel kernel(module, "matmul");
     launch_information info = launch_info_map_.at("matmul");
+    for(unsigned p: params)
+      std::cout << p << " " << std::flush;
+    std::cout << std::endl;
     benchmark(kernel, info);
-    std::cout << "benchmarked" << std::endl;
   });
-}
-
-void jit::autotune(const std::string &src, benchmark_t benchmark) {
-  auto ptt_module = make_triton_module(src);
-  autotune(*ptt_module, benchmark);
 }
 
 void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params) {
   // set parameters
-  codegen::tune tune;
-  tune.run(tt_module);
+  passes_wrapper passes;
+  passes.tune.run(tt_module);
   unsigned i = 0;
-  for(ir::metaparameter* mp: tune.get_params(tt_module))
+  for(ir::metaparameter* mp: passes.tune.get_params(tt_module))
     mp->set_value(params[i++]);
-  // compiler to llvm
-  auto ll_module = make_llvm_module(tt_module, tune);
-  // send llvm module to driver
+  passes.tune.init(tt_module);
+  passes.init(tt_module);
+  // check constraints
+  std::map<ir::value*, std::vector<std::string>> errors;
+  passes.tune.check_constraints(errors);
+  if(errors.size())
+    throw std::runtime_error("invalid parameters");
+  if(passes.allocation.get_allocated_size() > driver_context_.device().max_shared_memory())
+    throw std::runtime_error("invalid parameters");
+  // triton module -> llvm module
+  auto ll_module = make_llvm_module(tt_module, passes);
+  // llvm module -> machine code
   modules_.push_back(driver::module(driver_context_, &*ll_module));
 }
 

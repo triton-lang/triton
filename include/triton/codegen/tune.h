@@ -17,6 +17,8 @@ namespace ir{
 
 namespace codegen{
 
+class place_shared_copy;
+
 class tune {
   typedef std::pair<ir::value*, unsigned> node_t;
   typedef std::map <node_t, std::set<node_t>> graph_t;
@@ -35,8 +37,9 @@ public:
   std::map<std::string, ir::metaparameter *> get_params(ir::instruction* i);
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   void copy(ir::value *dst, ir::value *src) { params_[dst] = params_[src]; }
-  bool check_constraints(ir::module &fn, std::map<ir::value *, std::vector<std::string>> &errors);
+  bool check_constraints(std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);
+  void init(ir::module &mod);
   unsigned get_num_global_range();
   unsigned get_global_range_size(unsigned axis);
   unsigned get_num_threads();
@@ -50,6 +53,7 @@ private:
   std::map<unsigned, ir::metaparameter*> global_range_sizes_;
   unsigned num_global_ranges_;
   unsigned num_threads_;
+  std::vector<ir::instruction*> grids_;
 };
 
 

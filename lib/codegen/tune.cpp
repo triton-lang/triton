@@ -1,4 +1,5 @@
 #include "triton/codegen/tune.h"
+#include "triton/codegen/shared_copy.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
 #include "triton/ir/module.h"
@@ -143,10 +144,34 @@ void tune::run(ir::module &mod) {
     // Layout parameters
     while(!nodes_.empty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 2, 2);
+      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 2, 4);
       ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 8);
       connected_components(*nodes_.begin(), {nts, mts}, nodes_, dependencies_);
     }
+  }
+}
+
+void tune::init(ir::module &mod) {
+  for(ir::function *fn: mod.get_function_list()){
+    // initialize grids
+    std::map<ir::metaparameter*, ir::instruction*> references;
+    create_grids(grids_, references, fn);
+  }
+  // number of warps
+  auto get_num_warps = [&](ir::instruction *i, unsigned axis) {
+    std::string strk = std::to_string(axis);
+    unsigned mts = params_[i]["mts.d" + strk]->get_value();
+    unsigned nts = params_[i]["nts.d" + strk]->get_value();
+    unsigned shape = i->get_type()->get_tile_shapes()[axis]->get_value();
+    return shape / (mts * nts);
+  };
+  // number of threads
+  num_threads_ = 1;
+  ir::instruction *first = grids_.front();
+  for(unsigned k = 0; k < first->get_type()->get_tile_shapes().size(); k++){
+    std::string suffix = ".d" + std::to_string(k);
+    num_threads_ *= params_.at(first).at("mts" + suffix)->get_value();
+    num_threads_ *= get_num_warps(first, k);
   }
 }
 
@@ -182,14 +207,8 @@ void tune::create_grids(std::vector<ir::instruction*> &grids,
 }
 
 
-bool tune::check_constraints(ir::module &mod, std::map<ir::value *, std::vector<std::string>> &errors) {
-for(ir::function *fn: mod.get_function_list()){
+bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &errors) {
   using std::to_string;
-
-  // initialize grids
-  std::map<ir::metaparameter*, ir::instruction*> references;
-  std::vector<ir::instruction*> grids;
-  create_grids(grids, references, fn);
 
   auto get_num_warps = [&](ir::instruction *i, unsigned axis) {
     std::string strk = to_string(axis);
@@ -199,21 +218,14 @@ for(ir::function *fn: mod.get_function_list()){
     return shape / (mts * nts);
   };
 
-  num_threads_ = 1;
-  ir::instruction *first = grids.front();
-  for(unsigned k = 0; k < first->get_type()->get_tile_shapes().size(); k++){
-    std::string suffix = ".d" + std::to_string(k);
-    num_threads_ *= params_.at(first).at("mts" + suffix)->get_value();
-    num_threads_ *= get_num_warps(first, k);
-  }
-
   // number of warps
+  ir::instruction *first = grids_.front();
   int num_warps = 1;
   for(size_t k = 0; k < first->get_type()->get_tile_shapes().size(); k++)
     num_warps *= get_num_warps(first, k);
 
   // check constraints
-  for(ir::instruction *i: grids){
+  for(ir::instruction *i: grids_){
     ir::type *ty = i->get_type();
     const auto &shapes = ty->get_tile_shapes();
     // for each dimension, the product of layout components
@@ -242,7 +254,6 @@ for(ir::function *fn: mod.get_function_list()){
       errors[i].push_back("number of warps (" + to_string(required_num_warps) + ") must be " + to_string(num_warps));
   }
   return errors.empty();
-}
 }
 
 unsigned tune::get_num_global_range() {
