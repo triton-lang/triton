@@ -39,7 +39,7 @@ public:
     std::vector<unsigned> global_range_size;
     unsigned num_threads;
   };
-  typedef std::function<unsigned(driver::kernel, launch_information)> benchmark_t;
+  typedef std::function<double(driver::kernel, launch_information)> benchmark_t;
 
   struct passes_wrapper {
     passes_wrapper(): shared(&buffer_info), liveness(&buffer_info),
@@ -80,6 +80,7 @@ public:
   void add_module(const std::string &src, const std::vector<unsigned>& params = {});
   driver::kernel get_function(const std::string &name);
   launch_information get_launch_info(const std::string &name);
+  unsigned get_int(const std::string &name);
 
 private:
   std::vector<driver::module> modules_;
@@ -87,6 +88,7 @@ private:
   llvm::LLVMContext llvm_context_;
   ir::context triton_context_;
   std::map<std::string, launch_information> launch_info_map_;
+  std::map<std::string, unsigned> global_ints_;
 };
 
 

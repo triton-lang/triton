@@ -111,6 +111,7 @@ void jit::autotune(const std::string &src, benchmark_t benchmark) {
   }
   // iterate over parameters
   unsigned i;
+  double best = 0;
   loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
     std::map<ir::value*, std::vector<std::string>> errors;
     i = 0;
@@ -142,7 +143,12 @@ void jit::autotune(const std::string &src, benchmark_t benchmark) {
     launch_information info = launch_info_map_.at("matmul");
     for(unsigned p: params)
       std::cout << p << " " << std::flush;
-    benchmark(kernel, info);
+    // add globals
+    for(auto x: tt_module.globals())
+      global_ints_[x.first] = ((ir::metaparameter*)x.second)->get_value();
+    double perf = benchmark(kernel, info);
+    best = std::max(perf, best);
+    std::cout << perf << " [ " << best << " ] " << std::endl;
   });
 }
 
@@ -166,6 +172,9 @@ void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params)
   auto ll_module = make_llvm_module(tt_module, passes);
   // llvm module -> machine code
   modules_.push_back(driver::module(driver_context_, &*ll_module));
+  // add globals
+  for(auto x: tt_module.globals())
+    global_ints_[x.first] = ((ir::metaparameter*)x.second)->get_value();
 }
 
 void jit::add_module(const std::string &src, const std::vector<unsigned> &params) {
@@ -179,6 +188,10 @@ driver::kernel jit::get_function(const std::string &name) {
 
 jit::launch_information jit::get_launch_info(const std::string &name) {
   return launch_info_map_.at(name);
+}
+
+unsigned jit::get_int(const std::string &name){
+  return global_ints_.at(name);
 }
 
 }

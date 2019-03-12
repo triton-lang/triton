@@ -144,7 +144,7 @@ void tune::run(ir::module &mod) {
     // Layout parameters
     while(!nodes_.empty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 2, 2);
+      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 1, 2);
       ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
       connected_components(*nodes_.begin(), {nts, mts}, nodes_, dependencies_);
     }
