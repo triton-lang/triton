@@ -39,25 +39,30 @@ namespace triton
 namespace driver
 {
 
-class context;
-class device;
+class cu_context;
+class cu_device;
 
-class module: public handle_interface<module, CUmodule>
-{
-  static std::string header(device const & device);
+class module: public polymorphic_resource<CUmodule, cl_program> {
+public:
+  module(driver::context* ctx, CUmodule mod, bool has_ownership);
+  module(driver::context* ctx, cl_program mod, bool has_ownership);
+  driver::context* context() const;
+
+protected:
+  driver::context* ctx_;
+};
+
+class cu_module: public module {
+  static std::string header(driver::cu_device const & device);
   std::string compile_llvm_module(llvm::Module* module);
   void init_llvm();
 
 public:
-  module(driver::context const & context, llvm::Module *module);
-  module(driver::context const & context, const std::string& source);
-  driver::context const & context() const;
-  handle<CUmodule> const & cu() const;
-  buffer symbol(const char * name) const;
+  cu_module(driver::context* context, llvm::Module *module);
+  cu_module(driver::context* context, const std::string& source);
+  cu_buffer symbol(const char * name) const;
 
 private:
-  handle<CUmodule> cu_;
-  driver::context context_;
   std::string source_;
 };
 

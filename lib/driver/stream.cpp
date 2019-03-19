@@ -38,57 +38,84 @@ namespace triton
 namespace driver
 {
 
-inline CUcontext cucontext(){
+/* ------------------------ */
+//         Base             //
+/* ------------------------ */
+
+stream::stream(driver::context *ctx, CUstream cu, bool has_ownership)
+  : polymorphic_resource(cu, has_ownership), ctx_(ctx) {
+
+}
+
+stream::stream(driver::context *ctx, cl_command_queue cl, bool has_ownership)
+  : polymorphic_resource(cl, has_ownership), ctx_(ctx) {
+
+}
+
+driver::context* stream::context() const {
+  return ctx_;
+}
+
+
+/* ------------------------ */
+//         OpenCL           //
+/* ------------------------ */
+
+
+void cl_stream::synchronize() {
+  dispatch::clFinish(*cl_);
+}
+
+
+/* ------------------------ */
+//         CUDA             //
+/* ------------------------ */
+
+inline CUcontext get_context() {
   CUcontext result;
   dispatch::cuCtxGetCurrent(&result);
   return result;
 }
 
-stream::stream(CUstream stream, bool take_ownership): context_(cucontext(), take_ownership), cu_(stream, take_ownership)
-{}
+cu_stream::cu_stream(CUstream str, bool take_ownership):
+  stream(backend::contexts::import(get_context()), str, take_ownership) {
+}
 
-stream::stream(driver::context const & context): context_(context), cu_(CUstream(), true)
-{
-  ContextSwitcher ctx_switch(context_);
+cu_stream::cu_stream(driver::context *context): stream((driver::cu_context*)context, CUstream(), true) {
+  cu_context::context_switcher ctx_switch(*ctx_);
   dispatch::cuStreamCreate(&*cu_, 0);
 }
 
-void stream::synchronize()
-{
-  ContextSwitcher ctx_switch(context_);
+void cu_stream::synchronize() {
+  cu_context::context_switcher ctx_switch(*ctx_);
   dispatch::cuStreamSynchronize(*cu_);
 }
 
-driver::context const & stream::context() const
-{ return context_; }
-
-void stream::enqueue(kernel const & kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event){
-  ContextSwitcher ctx_switch(context_);
+void cu_stream::enqueue(driver::cu_kernel const & kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event) {
+  cu_context::context_switcher ctx_switch(*ctx_);
   if(event)
-    dispatch::cuEventRecord(((cu_event_t)*event).first, *cu_);
-  dispatch::cuLaunchKernel(kernel, grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_,(void**)kernel.cu_params(), NULL);
+    dispatch::cuEventRecord(event->cu()->first, *cu_);
+  dispatch::cuLaunchKernel(*kernel.cu(), grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_,(void**)kernel.cu_params(), NULL);
   if(event)
-    dispatch::cuEventRecord(((cu_event_t)*event).second, *cu_);
+    dispatch::cuEventRecord(event->cu()->second, *cu_);
 }
 
-void stream::write(buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr){
-  ContextSwitcher ctx_switch(context_);
+void cu_stream::write(driver::cu_buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
+  cu_context::context_switcher ctx_switch(*ctx_);
   if(blocking)
-    dispatch::cuMemcpyHtoD(buffer + offset, ptr, size);
+    dispatch::cuMemcpyHtoD(*buffer.cu() + offset, ptr, size);
   else
-    dispatch::cuMemcpyHtoDAsync(buffer + offset, ptr, size, *cu_);
+    dispatch::cuMemcpyHtoDAsync(*buffer.cu() + offset, ptr, size, *cu_);
 }
 
-void stream::read(buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr){
-  ContextSwitcher ctx_switch(context_);
+void cu_stream::read(driver::cu_buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
+  cu_context::context_switcher ctx_switch(*ctx_);
   if(blocking)
-    dispatch::cuMemcpyDtoH(ptr, buffer + offset, size);
+    dispatch::cuMemcpyDtoH(ptr, *buffer.cu() + offset, size);
   else
-    dispatch::cuMemcpyDtoHAsync(ptr, buffer + offset, size, *cu_);
+    dispatch::cuMemcpyDtoHAsync(ptr, *buffer.cu() + offset, size, *cu_);
 }
 
-handle<CUstream> const & stream::cu() const
-{ return cu_; }
 
 }
 

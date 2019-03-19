@@ -39,12 +39,37 @@ class device;
 class platform
 {
 public:
-  //Accessors
-  std::string name() const { return "CUDA"; }
-  std::string version() const;
-  std::vector<device> devices() const;
+  // Constructor
+  platform(const std::string& name): name_(name){ }
+  // Accessors
+  std::string name() const { return name_; }
+  // Virtual methods
+  virtual std::string version() const = 0;
+  virtual void devices(std::vector<driver::device *> &devices) const = 0;
 private:
-  handle<cu_platform> cu_;
+  std::string name_;
+};
+
+class cu_platform: public platform
+{
+public:
+  cu_platform(): platform("CUDA") { }
+  std::string version() const;
+  void devices(std::vector<driver::device*> &devices) const;
+
+private:
+  handle<CUPlatform> cu_;
+};
+
+class cl_platform: public platform
+{
+public:
+  cl_platform(cl_platform_id cl): platform("OpenCL"), cl_(cl) { }
+  std::string version() const;
+  void devices(std::vector<driver::device*> &devices) const;
+
+private:
+  handle<cl_platform_id> cl_;
 };
 
 }

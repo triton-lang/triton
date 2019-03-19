@@ -33,27 +33,45 @@ namespace triton
 namespace driver
 {
 
-buffer::buffer(driver::context const & context, size_t size) : context_(context)
-{
-  ContextSwitcher ctx_switch(context_);
+
+//
+
+buffer::buffer(driver::context* ctx, CUdeviceptr cu, bool take_ownership)
+  : polymorphic_resource(cu, take_ownership), context_(ctx) { }
+
+buffer::buffer(driver::context* ctx, cl_mem cl, bool take_ownership)
+  : polymorphic_resource(cl, take_ownership), context_(ctx) { }
+
+driver::context* buffer::context() {
+  return context_;
+}
+
+//
+
+ocl_buffer::ocl_buffer(driver::context* context, size_t size)
+  : buffer(context, cl_mem(), true){
+  cl_int err;
+  dispatch::clCreateBuffer(*context->cl(), CL_MEM_READ_WRITE, size, NULL, &err);
+}
+
+
+//
+
+cu_buffer::cu_buffer(driver::context* context, size_t size)
+  : buffer(context, CUdeviceptr(), true) {
+  cu_context::context_switcher ctx_switch(*context_);
   dispatch::cuMemAlloc(&*cu_, size);
 }
 
-buffer::buffer(driver::context const & context, CUdeviceptr cu, bool take_ownership):
-  context_(context), cu_(cu, take_ownership)
-{ }
-
-void buffer::set_zero(stream const & queue, size_t size)
-{
-  ContextSwitcher ctx_switch(context_);
-  dispatch::cuMemsetD8Async(*cu_, 0, size, queue);
+cu_buffer::cu_buffer(driver::context* context, CUdeviceptr cu, bool take_ownership)
+  : buffer(context, cu, take_ownership){
 }
 
-handle<CUdeviceptr> const & buffer::cu() const
-{ return cu_; }
-
-handle<CUdeviceptr> & buffer::cu()
-{ return cu_; }
+void cu_buffer::set_zero(cu_stream const & queue, size_t size)
+{
+  cu_context::context_switcher ctx_switch(*context_);
+  dispatch::cuMemsetD8Async(*cu_, 0, size, *queue.cu());
+}
 
 }
 

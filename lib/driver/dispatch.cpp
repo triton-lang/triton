@@ -72,6 +72,17 @@ namespace driver
 #define DEFINE19(init, hlib, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19) ret dispatch::fname(t1 a, t2 b, t3 c, t4 d, t5 e, t6 f, t7 g, t8 h, t9 i, t10 j, t11 k, t12 l, t13 m, t14 n, t15 o, t16 p, t17 q, t18 r, t19 s)\
 {return f_impl<dispatch::init>(hlib, fname, fname ## _, #fname, a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s); }
 
+//Specialized helpers for OpenCL
+#define OCL_DEFINE1(ret, fname, t1) DEFINE1(clinit, opencl_, ret, fname, t1)
+#define OCL_DEFINE2(ret, fname, t1, t2) DEFINE2(clinit, opencl_, ret, fname, t1, t2)
+#define OCL_DEFINE3(ret, fname, t1, t2, t3) DEFINE3(clinit, opencl_, ret, fname, t1, t2, t3)
+#define OCL_DEFINE4(ret, fname, t1, t2, t3, t4) DEFINE4(clinit, opencl_, ret, fname, t1, t2, t3, t4)
+#define OCL_DEFINE5(ret, fname, t1, t2, t3, t4, t5) DEFINE5(clinit, opencl_, ret, fname, t1, t2, t3, t4, t5)
+#define OCL_DEFINE6(ret, fname, t1, t2, t3, t4, t5, t6) DEFINE6(clinit, opencl_, ret, fname, t1, t2, t3, t4, t5, t6)
+#define OCL_DEFINE7(ret, fname, t1, t2, t3, t4, t5, t6, t7) DEFINE7(clinit, opencl_, ret, fname, t1, t2, t3, t4, t5, t6, t7)
+#define OCL_DEFINE8(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8) DEFINE8(clinit, opencl_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8)
+#define OCL_DEFINE9(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9) DEFINE9(clinit, opencl_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9)
+
 //Specialized helpers for CUDA
 #define CUDA_DEFINE1(ret, fname, t1) DEFINE1(cuinit, cuda_, ret, fname, t1)
 #define CUDA_DEFINE2(ret, fname, t1, t2) DEFINE2(cuinit, cuda_, ret, fname, t1, t2)
@@ -104,15 +115,24 @@ namespace driver
 #define CUDNN_DEFINE13(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13) DEFINE13(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13)
 
 
+bool dispatch::clinit()
+{
+    if(opencl_==nullptr)
+        opencl_ = dlopen("libOpenCL.so", RTLD_LAZY);
+    return opencl_ != nullptr;
+}
+
 bool dispatch::cuinit(){
   if(cuda_==nullptr)
     cuda_ = dlopen("libcuda.so", RTLD_LAZY);
+  if(cuda_ == nullptr)
+    return false;
   CUresult (*fptr)(unsigned int);
-	cuInit_ = dlsym(cuda_, "cuInit");
-	*reinterpret_cast<void **>(&fptr) = cuInit_;
-	CUresult res = (*fptr)(0);
-	check(res);
-  return cuda_ != nullptr;
+  cuInit_ = dlsym(cuda_, "cuInit");
+  *reinterpret_cast<void **>(&fptr) = cuInit_;
+  CUresult res = (*fptr)(0);
+  check(res);
+  return true;
 }
 
 bool dispatch::nvmlinit(){
@@ -180,17 +200,17 @@ NVML_DEFINE2(nvmlReturn_t, nvmlDeviceGetHandleByPciBusId_v2, const char *, nvmlD
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetMaxClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
 
-cublasHandle_t dispatch::cublasHandle(driver::context const & ctx){
-  static std::map<context, cublasHandle_t> handles;
-  auto pr = handles.insert({ctx, cublasHandle_t()});
+cublasHandle_t dispatch::cublasHandle(const cu_context &ctx){
+  static std::map<CUcontext, cublasHandle_t> handles;
+  auto pr = handles.insert({*ctx.cu(), cublasHandle_t()});
   if(pr.second)
     cublasCreate_v2(&pr.first->second);
   return pr.first->second;
 }
 
-cudnnHandle_t dispatch::cudnnHandle(driver::context const & ctx){
-  static std::map<context, cudnnHandle_t> handles;
-  auto pr = handles.insert({ctx, cudnnHandle_t()});
+cudnnHandle_t dispatch::cudnnHandle(driver::cu_context const & ctx){
+  static std::map<CUcontext, cudnnHandle_t> handles;
+  auto pr = handles.insert({*ctx.cu(), cudnnHandle_t()});
   if(pr.second)
     cudnnCreate(&pr.first->second);
   return pr.first->second;
@@ -231,15 +251,50 @@ CUDNN_DEFINE13(cudnnStatus_t, cudnnConvolutionForward, cudnnHandle_t, const void
 CUDNN_DEFINE2(cudnnStatus_t, cudnnSetStream, cudnnHandle_t, cudaStream_t)
 CUDNN_DEFINE7(cudnnStatus_t, cudnnTransformTensor, cudnnHandle_t, const void*, const cudnnTensorDescriptor_t, const void*, const void*, const cudnnTensorDescriptor_t, void*)
 
+// OpenCL
+cl_int dispatch::clBuildProgram(cl_program a, cl_uint b, const cl_device_id * c, const char * d, void (*e)(cl_program, void *), void * f)
+{ return f_impl<dispatch::clinit>(opencl_, clBuildProgram, clBuildProgram_, "clBuildProgram", a, b, c, d, e, f); }
 
+cl_context dispatch::clCreateContext(const cl_context_properties * a, cl_uint b, const cl_device_id * c, void (*d)(const char *, const void *, size_t, void *), void * e, cl_int * f)
+{ return f_impl<dispatch::clinit>(opencl_, dispatch::clCreateContext, dispatch::clCreateContext_, "clCreateContext", a, b, c, d, e, f); }
+
+OCL_DEFINE9(cl_int, clEnqueueNDRangeKernel, cl_command_queue, cl_kernel, cl_uint, const size_t*, const size_t*, const size_t*,  cl_uint, const cl_event*, cl_event*)
+OCL_DEFINE4(cl_int, clSetKernelArg, cl_kernel, cl_uint, size_t, const void *)
+OCL_DEFINE1(cl_int, clReleaseMemObject, cl_mem)
+OCL_DEFINE1(cl_int, clFinish, cl_command_queue)
+OCL_DEFINE5(cl_int, clGetMemObjectInfo, cl_mem, cl_mem_info, size_t, void *, size_t *)
+OCL_DEFINE5(cl_int, clGetCommandQueueInfo, cl_command_queue, cl_command_queue_info, size_t, void *, size_t *)
+OCL_DEFINE1(cl_int, clReleaseContext, cl_context)
+OCL_DEFINE1(cl_int, clReleaseEvent, cl_event)
+OCL_DEFINE9(cl_int, clEnqueueWriteBuffer, cl_command_queue, cl_mem, cl_bool, size_t, size_t, const void *, cl_uint, const cl_event *, cl_event *)
+OCL_DEFINE9(cl_int, clEnqueueReadBuffer, cl_command_queue, cl_mem, cl_bool, size_t, size_t, void *, cl_uint, const cl_event *, cl_event *)
+OCL_DEFINE6(cl_int, clGetProgramBuildInfo, cl_program, cl_device_id, cl_program_build_info, size_t, void *, size_t *)
+OCL_DEFINE1(cl_int, clReleaseDevice, cl_device_id)
+OCL_DEFINE5(cl_int, clGetDeviceIDs, cl_platform_id, cl_device_type, cl_uint, cl_device_id *, cl_uint *)
+OCL_DEFINE5(cl_int, clGetContextInfo, cl_context, cl_context_info, size_t, void *, size_t *)
+OCL_DEFINE5(cl_int, clGetDeviceInfo, cl_device_id, cl_device_info, size_t, void *, size_t *)
+OCL_DEFINE1(cl_int, clReleaseCommandQueue, cl_command_queue)
+OCL_DEFINE3(cl_int, clGetPlatformIDs, cl_uint, cl_platform_id *, cl_uint *)
+OCL_DEFINE5(cl_int, clGetPlatformInfo, cl_platform_id, cl_platform_info, size_t, void *, size_t *)
+OCL_DEFINE5(cl_int, clGetEventProfilingInfo, cl_event, cl_profiling_info, size_t, void *, size_t *)
+OCL_DEFINE7(cl_program, clCreateProgramWithBinary, cl_context, cl_uint, const cl_device_id *, const size_t *, const unsigned char **, cl_int *, cl_int *)
+OCL_DEFINE4(cl_command_queue, clCreateCommandQueue, cl_context, cl_device_id, cl_command_queue_properties, cl_int *)
+OCL_DEFINE1(cl_int, clRetainEvent, cl_event)
+OCL_DEFINE1(cl_int, clReleaseProgram, cl_program)
+OCL_DEFINE1(cl_int, clFlush, cl_command_queue)
+OCL_DEFINE5(cl_int, clGetProgramInfo, cl_program, cl_program_info, size_t, void *, size_t *)
+OCL_DEFINE5(cl_int, clGetKernelInfo, cl_kernel, cl_kernel_info, size_t, void *, size_t *)
+OCL_DEFINE6(cl_int, clGetKernelWorkGroupInfo, cl_kernel, cl_device_id, cl_kernel_work_group_info, size_t, void *, size_t *)
+OCL_DEFINE3(cl_kernel, clCreateKernel, cl_program, const char *, cl_int *)
+OCL_DEFINE5(cl_mem, clCreateBuffer, cl_context, cl_mem_flags, size_t, void *, cl_int *)
+OCL_DEFINE5(cl_program, clCreateProgramWithSource, cl_context, cl_uint, const char **, const size_t *, cl_int *)
+OCL_DEFINE1(cl_int, clReleaseKernel, cl_kernel)
+
+// Release
 void dispatch::release(){
   if(cuda_){
     dlclose(cuda_);
     cuda_ = nullptr;
-  }
-  if(nvrtc_){
-    dlclose(nvrtc_);
-    nvrtc_ = nullptr;
   }
   if(cublas_){
     dlclose(cublas_);
@@ -251,11 +306,46 @@ void dispatch::release(){
   }
 }
 
+void * dispatch::opencl_;
 void* dispatch::cuda_;
-void* dispatch::nvrtc_;
 void* dispatch::nvml_;
 void* dispatch::cublas_;
 void* dispatch::cudnn_;
+
+//OpenCL
+void* dispatch::clBuildProgram_;
+void* dispatch::clEnqueueNDRangeKernel_;
+void* dispatch::clSetKernelArg_;
+void* dispatch::clReleaseMemObject_;
+void* dispatch::clFinish_;
+void* dispatch::clGetMemObjectInfo_;
+void* dispatch::clGetCommandQueueInfo_;
+void* dispatch::clReleaseContext_;
+void* dispatch::clReleaseEvent_;
+void* dispatch::clEnqueueWriteBuffer_;
+void* dispatch::clEnqueueReadBuffer_;
+void* dispatch::clGetProgramBuildInfo_;
+void* dispatch::clReleaseDevice_;
+void* dispatch::clCreateContext_;
+void* dispatch::clGetDeviceIDs_;
+void* dispatch::clGetContextInfo_;
+void* dispatch::clGetDeviceInfo_;
+void* dispatch::clReleaseCommandQueue_;
+void* dispatch::clGetPlatformIDs_;
+void* dispatch::clGetPlatformInfo_;
+void* dispatch::clGetEventProfilingInfo_;
+void* dispatch::clCreateProgramWithBinary_;
+void* dispatch::clCreateCommandQueue_;
+void* dispatch::clRetainEvent_;
+void* dispatch::clReleaseProgram_;
+void* dispatch::clFlush_;
+void* dispatch::clGetProgramInfo_;
+void* dispatch::clGetKernelInfo_;
+void* dispatch::clGetKernelWorkGroupInfo_;
+void* dispatch::clCreateKernel_;
+void* dispatch::clCreateBuffer_;
+void* dispatch::clCreateProgramWithSource_;
+void* dispatch::clReleaseKernel_;
 
 //CUDA
 void* dispatch::cuCtxGetCurrent_;
@@ -294,13 +384,6 @@ void* dispatch::cuCtxGetDevice_;
 void* dispatch::cuMemsetD8Async_;
 void* dispatch::cuCtxPushCurrent_v2_;
 void* dispatch::cuCtxPopCurrent_v2_;
-
-void* dispatch::nvrtcCompileProgram_;
-void* dispatch::nvrtcGetProgramLogSize_;
-void* dispatch::nvrtcGetPTX_;
-void* dispatch::nvrtcGetPTXSize_;
-void* dispatch::nvrtcCreateProgram_;
-void* dispatch::nvrtcGetProgramLog_;
 
 void* dispatch::nvmlInit_v2_;
 void* dispatch::nvmlDeviceGetHandleByPciBusId_v2_;

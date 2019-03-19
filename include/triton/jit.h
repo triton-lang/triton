@@ -39,7 +39,7 @@ public:
     std::vector<unsigned> global_range_size;
     unsigned num_threads;
   };
-  typedef std::function<double(driver::kernel, launch_information)> benchmark_t;
+  typedef std::function<double(driver::cu_kernel, launch_information)> benchmark_t;
 
   struct passes_wrapper {
     passes_wrapper(): shared(&buffer_info), liveness(&buffer_info),
@@ -74,17 +74,17 @@ private:
   std::unique_ptr<ir::module> make_triton_module(const std::string &src);
 
 public:
-  jit(driver::context context);
+  jit(driver::context* context);
   void autotune(const std::string &src, benchmark_t benchmark);
   void add_module(ir::module &module, const std::vector<unsigned>& params = {});
   void add_module(const std::string &src, const std::vector<unsigned>& params = {});
-  driver::kernel get_function(const std::string &name);
+  driver::cu_kernel get_function(const std::string &name);
   launch_information get_launch_info(const std::string &name);
   unsigned get_int(const std::string &name);
 
 private:
-  std::vector<driver::module> modules_;
-  driver::context driver_context_;
+  std::vector<driver::cu_module> modules_;
+  driver::context* driver_context_;
   llvm::LLVMContext llvm_context_;
   ir::context triton_context_;
   std::map<std::string, launch_information> launch_info_map_;

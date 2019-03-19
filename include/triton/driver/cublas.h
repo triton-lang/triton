@@ -84,7 +84,7 @@ inline void cublasGemmEx(cublasHandle_t handle, cudaDataType cudt, cublasOperati
 
 
 /* Simplified API for default GEMM */
-inline void cublasGemm(DType dtype, stream& stream, char cAT, char cBT, int32_t M, int32_t N, int32_t K, scalar alpha, buffer const & A, int32_t lda, buffer const & B, int32_t ldb, scalar beta, buffer& C, int32_t ldc, cublasGemmAlgo_t* fastest = NULL, cublasGemmAlgo_t algo = CUBLAS_GEMM_DFALT){
+inline void cublasGemm(DType dtype, stream& stream, char cAT, char cBT, int32_t M, int32_t N, int32_t K, scalar alpha, cu_buffer const & A, int32_t lda, cu_buffer const & B, int32_t ldb, scalar beta, cu_buffer& C, int32_t ldc, cublasGemmAlgo_t* fastest = NULL, cublasGemmAlgo_t algo = CUBLAS_GEMM_DFALT){
   ContextSwitcher ctx_switch(stream.context());
   cublasHandle_t handle = dispatch::cublasHandle(stream.context());
   dispatch::cublasSetStream_v2(handle, (CUstream)stream);
@@ -112,7 +112,7 @@ inline cudnnTensorFormat_t format(cudnnDataType_t cutype){
 }
 
 inline void cudnnConv(DType dtype, stream& stream, int32_t D, int32_t H, int32_t W, int32_t N, int32_t K, int32_t M, int32_t P, int32_t Q, int32_t C, int32_t T, int32_t R, int32_t S,
-                      int32_t pad_d, int32_t pad_h, int32_t pad_w, int32_t stride_d, int32_t stride_h, int32_t stride_w, scalar alpha, buffer const & I, buffer const & F, scalar beta, buffer const & O){
+                      int32_t pad_d, int32_t pad_h, int32_t pad_w, int32_t stride_d, int32_t stride_h, int32_t stride_w, scalar alpha, cu_buffer const & I, cu_buffer const & F, scalar beta, cu_buffer const & O){
   driver::driver::context const & ctx = stream.context();
   ContextSwitcher switch_ctx(ctx);
 
@@ -154,7 +154,7 @@ inline void cudnnConv(DType dtype, stream& stream, int32_t D, int32_t H, int32_t
 
   size_t workspace_size;
   dispatch::cudnnGetConvolutionForwardWorkspaceSize(handle, tI, tF, conv, tO, algo, &workspace_size);
-  static buffer work(ctx, 1024*1024*64);
+  static cu_buffer work(ctx, 1024*1024*64);
   CUdeviceptr twork = work;
   CUdeviceptr pI = I, pF = F, pO = O;
   dispatch::cudnnConvolutionForward(handle, alpha.data(), tI, (void*)pI, tF, (void*)pF, conv, algo, (void*)twork, workspace_size, beta.data(), tO, (void*)pO);
@@ -162,7 +162,7 @@ inline void cudnnConv(DType dtype, stream& stream, int32_t D, int32_t H, int32_t
 
 
 inline void cudnnPool(DType dtype, stream& stream, int32_t D, int32_t H, int32_t W, int32_t N, int32_t K, int32_t M, int32_t P, int32_t Q, int32_t T, int32_t R, int32_t S,
-                      int32_t pad_d, int32_t pad_h, int32_t pad_w, int32_t stride_d, int32_t stride_h, int32_t stride_w, scalar alpha, buffer const & I, scalar beta, buffer const & O){
+                      int32_t pad_d, int32_t pad_h, int32_t pad_w, int32_t stride_d, int32_t stride_h, int32_t stride_w, scalar alpha, cu_buffer const & I, scalar beta, cu_buffer const & O){
   driver::driver::context const & ctx = stream.context();
   ContextSwitcher switch_ctx(ctx);
 
@@ -200,11 +200,11 @@ inline void cudnnPool(DType dtype, stream& stream, int32_t D, int32_t H, int32_t
   dispatch::cudnnPoolingForward(handle, desc, alpha.data(), tI, (void*)pI, beta.data(), tO, (void*)pO);
 }
 
-inline void cudnnTransformTensor(driver::stream & stream,
+inline void cudnnTransformTensor(driver::cu_stream & stream,
                DType in_dtype, DType out_dtype,
                cudnnTensorFormat_t in_layout, cudnnTensorFormat_t out_layout,
                int32_t N, int32_t C, int32_t D, int32_t H, int32_t W,
-               scalar alpha, driver::buffer const & I, scalar beta, driver::buffer& O)
+               scalar alpha, driver::cu_buffer const & I, scalar beta, driver::cu_buffer& O)
 {
   cudnnHandle_t handle = dispatch::cudnnHandle(stream.context());
   dispatch::cudnnSetStream(handle, (CUstream)stream);

@@ -31,21 +31,33 @@ namespace triton
 namespace driver
 {
 
-class stream;
+class cu_stream;
 
-// Buffer
-class buffer: public handle_interface<buffer, CUdeviceptr>
+// Base
+class buffer : public polymorphic_resource<CUdeviceptr, cl_mem> {
+public:
+  buffer(driver::context* ctx, CUdeviceptr cl, bool take_ownership);
+  buffer(driver::context* ctx, cl_mem cl, bool take_ownership);
+  driver::context* context();
+
+protected:
+  driver::context* context_;
+};
+
+// OpenCL
+class ocl_buffer: public buffer
 {
 public:
-  buffer(driver::context const & context, size_t size);
-  buffer(driver::context const & context, CUdeviceptr cu, bool take_ownership);
-  void set_zero(stream const & queue, size_t size);
-  handle<CUdeviceptr> const & cu() const;
-  handle<CUdeviceptr> & cu();
+  ocl_buffer(driver::context* context, size_t size);
+};
 
-private:
-  context context_;
-  handle<CUdeviceptr> cu_;
+// CUDA
+class cu_buffer: public buffer
+{
+public:
+  cu_buffer(driver::context* context, size_t size);
+  cu_buffer(driver::context* context, CUdeviceptr cu, bool take_ownership);
+  void set_zero(cu_stream const & queue, size_t size);
 };
 
 }

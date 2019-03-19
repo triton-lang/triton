@@ -26,6 +26,7 @@
 #include <map>
 #include <list>
 #include <vector>
+#include "triton/driver/context.h"
 
 
 namespace triton
@@ -44,68 +45,104 @@ class kernel;
 struct backend
 {
 
+  // platforms
+  class platforms
+  {
+    friend class backend;
+  private:
+    static void init();
+
+  public:
+    static void get(std::vector<driver::platform*> &results);
+
+  private:
+    static std::vector<driver::platform*> cache_;
+  };
+
+  // devices
+  class devices
+  {
+    friend class backend;
+
+  private:
+    static void init(const std::vector<platform *> &platforms);
+
+  public:
+    static void get(std::vector<driver::device*>& devs);
+
+  private:
+    static std::vector<driver::device*> cache_;
+  };
+
+  // modules
   class modules
   {
     friend class backend;
+
   public:
     static void release();
-    static module& get(driver::stream const & stream, std::string const & name, std::string const &src);
+    static driver::module* get(driver::stream* stream, std::string const & name, std::string const &src);
+
   private:
-    static std::map<std::tuple<stream, std::string>, module * > cache_;
+    static std::map<std::tuple<driver::stream*, std::string>, driver::module*> cache_;
   };
 
+  // kernels
   class kernels
   {
     friend class backend;
   public:
     static void release();
-    static kernel & get(driver::module const & program, std::string const & name);
+    static driver::kernel* get(driver::module* mod, const std::string & name);
   private:
-    static std::map<std::tuple<module, std::string>, kernel * > cache_;
+    static std::map<std::tuple<module*, std::string>, driver::kernel*> cache_;
   };
 
+  // contexts
   class contexts
   {
     friend class backend;
   private:
-    static void init(std::vector<platform> const &);
+    static void init(const std::vector<device *> &);
     static void release();
   public:
-    static driver::context const & get_default();
-    template<class T>
-    static driver::context const & import(T ctx)
+    static driver::context* get_default();
+
+    static driver::context* import(CUcontext ctx)
     {
-      for(driver::context const * x: cache_)
-        if((T)*x==ctx)
-          return *x;
-      cache_.emplace_back(new driver::context(ctx, false));
-      return *cache_.back();
+      for(driver::context* x: cache_){
+        driver::cu_context* cu_x = (driver::cu_context*)x;
+        if(*cu_x->cu()==ctx)
+          return x;
+      }
+      cache_.emplace_back(new driver::cu_context(ctx, false));
+      return cache_.back();
     }
-    static void get(std::list<context const *> &);
+
+    static void get(std::list<driver::context*> &);
+
   private:
-    static std::list<context const *> cache_;
+    static std::list<driver::context*> cache_;
   };
 
+  // streams
   class streams
   {
     friend class backend;
   private:
-    static void init(std::list<context const *> const &);
+    static void init(std::list<context*> const &);
     static void release();
   public:
-    static void get(driver::context const &, std::vector<stream *> &streams);
-    static stream & get(driver::context const &, unsigned int id = 0);
-    static stream & get_default();
+    static void get(driver::context*, std::vector<driver::stream *> &streams);
+    static driver::stream* get(driver::context*, unsigned int id = 0);
+    static driver::stream* get_default();
   private:
-    static std::map< context, std::vector<stream*> > cache_;
+    static std::map<driver::context*, std::vector<driver::stream*> > cache_;
   };
 
   static void init();
   static void release();
-
-  static std::vector<device> devices();
-  static std::vector<platform> platforms();
-  static void synchronize(driver::context const &);
+  static void synchronize(triton::driver::context *);
 
   static unsigned int default_device;
 };

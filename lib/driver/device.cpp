@@ -34,34 +34,34 @@ namespace triton
 namespace driver
 {
 
-/* Architecture [NVidia] */
-device::Architecture device::nv_arch(std::pair<unsigned int, unsigned int> sm) const{
-  switch(sm.first)
-  {
+
+/* ------------------------ */
+//         CUDA             //
+/* ------------------------ */
+
+// Architecture
+cu_device::Architecture cu_device::nv_arch(std::pair<unsigned int, unsigned int> sm) const {
+  switch(sm.first) {
    case 7:
-     switch(sm.second)
-     {
+     switch(sm.second){
      case 0: return Architecture::SM_7_0;
      }
 
   case 6:
-    switch(sm.second)
-    {
+    switch(sm.second){
     case 0: return Architecture::SM_6_0;
     case 1: return Architecture::SM_6_1;
     }
 
   case 5:
-    switch(sm.second)
-    {
+    switch(sm.second){
     case 0: return Architecture::SM_5_0;
     case 2: return Architecture::SM_5_2;
     default: return Architecture::UNKNOWN;
     }
 
   case 3:
-    switch(sm.second)
-    {
+    switch(sm.second){
     case 0: return Architecture::SM_3_0;
     case 5: return Architecture::SM_3_5;
     case 7: return Architecture::SM_3_7;
@@ -69,8 +69,7 @@ device::Architecture device::nv_arch(std::pair<unsigned int, unsigned int> sm) c
     }
 
   case 2:
-    switch(sm.second)
-    {
+    switch(sm.second){
     case 0: return Architecture::SM_2_0;
     case 1: return Architecture::SM_2_1;
     default: return Architecture::UNKNOWN;
@@ -80,14 +79,16 @@ device::Architecture device::nv_arch(std::pair<unsigned int, unsigned int> sm) c
   }
 }
 
+// information query
 template<CUdevice_attribute attr>
-int device::cuGetInfo() const{
+int cu_device::cuGetInfo() const{
   int res;
   dispatch::cuDeviceGetAttribute(&res, attr, *cu_);
   return res;
 }
 
-nvmlDevice_t device::nvml_device() const{
+// convert to nvml
+nvmlDevice_t cu_device::nvml_device() const{
   std::map<std::string, nvmlDevice_t> map;
   std::string key = pci_bus_id();
   if(map.find(key)==map.end()){
@@ -98,34 +99,37 @@ nvmlDevice_t device::nvml_device() const{
   return map.at(key);
 }
 
-/* Architecture */
-device::Architecture device::architecture() const
-{  return nv_arch(compute_capability()); }
+// architecture
+cu_device::Architecture cu_device::architecture() const{
+  return nv_arch(compute_capability());
+}
 
-/* Attributes */
-size_t device::address_bits() const
-{ return sizeof(size_t)*8; }
+// number of address bits
+size_t cu_device::address_bits() const{
+  return sizeof(size_t)*8;
+}
 
-driver::platform device::platform() const
-{ return platform(); }
-
-std::string device::name() const{
+// name
+std::string cu_device::name() const {
     char tmp[128];
     dispatch::cuDeviceGetName(tmp, 128, *cu_);
     return std::string(tmp);
 }
 
-std::string device::pci_bus_id() const{
+// PCI bus ID
+std::string cu_device::pci_bus_id() const{
   char tmp[128];
   dispatch::cuDeviceGetPCIBusId(tmp, 128, *cu_);
   return std::string(tmp);
 }
 
-void device::interpret_as(std::pair<size_t, size_t> cc){
+// force the device to be interpreted as a particular cc
+void cu_device::interpret_as(std::pair<size_t, size_t> cc){
   interpreted_as_ = std::make_shared<std::pair<size_t, size_t>>(cc);
 }
 
-std::pair<size_t, size_t> device::compute_capability() const{
+// compute capability
+std::pair<size_t, size_t> cu_device::compute_capability() const {
   if(interpreted_as_)
     return *interpreted_as_;
   size_t _major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>();
@@ -133,17 +137,24 @@ std::pair<size_t, size_t> device::compute_capability() const{
   return std::make_pair(_major, _minor);
 }
 
-size_t device::max_threads_per_block() const
-{ return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK>(); }
+// maximum number of threads per block
+size_t cu_device::max_threads_per_block() const {
+  return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK>();
+}
 
-size_t device::max_shared_memory() const
-{ return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK>(); }
+// maximum amount of shared memory per block
+size_t cu_device::max_shared_memory() const {
+  return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK>();
+}
 
-size_t device::warp_size() const
-{ return cuGetInfo<CU_DEVICE_ATTRIBUTE_WARP_SIZE>(); }
+// warp size
+size_t cu_device::warp_size() const {
+  return cuGetInfo<CU_DEVICE_ATTRIBUTE_WARP_SIZE>();
+}
 
 
-std::vector<size_t> device::max_block_dim() const{
+// maximum block dimensions
+std::vector<size_t> cu_device::max_block_dim() const {
   std::vector<size_t> result(3);
   result[0] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X>();
   result[1] = cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y>();
@@ -151,45 +162,45 @@ std::vector<size_t> device::max_block_dim() const{
   return result;
 }
 
-size_t device::current_sm_clock() const{
+// current SM clock
+size_t cu_device::current_sm_clock() const{
   unsigned int result;
   dispatch::nvmlDeviceGetClockInfo(nvml_device(), NVML_CLOCK_SM, &result);
   return result;
 }
 
-size_t device::max_sm_clock() const{
+// max SM clock
+size_t cu_device::max_sm_clock() const{
   unsigned int result;
   dispatch::nvmlDeviceGetMaxClockInfo(nvml_device(), NVML_CLOCK_SM, &result);
   return result;
 }
 
-
-size_t device::current_mem_clock() const{
+// current memory clock
+size_t cu_device::current_mem_clock() const{
   unsigned int result;
   dispatch::nvmlDeviceGetClockInfo(nvml_device(), NVML_CLOCK_MEM, &result);
   return result;
 }
 
-size_t device::max_mem_clock() const{
+// max memory clock
+size_t cu_device::max_mem_clock() const{
   unsigned int result;
   dispatch::nvmlDeviceGetMaxClockInfo(nvml_device(), NVML_CLOCK_MEM, &result);
   return result;
 }
 
-/* Infos */
-std::string device::infos() const{
+// print infos
+std::string cu_device::infos() const{
   std::ostringstream oss;
   std::vector<size_t> max_wi_sizes = max_block_dim();
-  oss << "Platform: " << platform().name() << std::endl;
+  oss << "Platform: CUDA" << std::endl;
   oss << "Name: " << name() << std::endl;
   oss << "Maximum total work-group size: " << max_threads_per_block() << std::endl;
   oss << "Maximum individual work-group sizes: " << max_wi_sizes[0] << ", " << max_wi_sizes[1] << ", " << max_wi_sizes[2] << std::endl;
   oss << "Local memory size: " << max_shared_memory() << std::endl;
   return oss.str();
 }
-
-handle<CUdevice> const & device::cu() const
-{ return cu_; }
 
 }
 

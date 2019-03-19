@@ -32,9 +32,20 @@ namespace triton
 namespace driver
 {
 
-// Device
-class device: public handle_interface<device, CUdevice>
-{
+// Base device
+class device: public polymorphic_resource<CUdevice, cl_device_id>{
+public:
+  using polymorphic_resource::polymorphic_resource;
+};
+
+// OpenCL device
+class ocl_device: public device {
+public:
+  ocl_device(cl_device_id cl, bool take_ownership = true): device(cl, take_ownership) { }
+};
+
+// CUDA device
+class cu_device: public device {
 public:
   //Supported architectures
   enum class Architecture{
@@ -61,14 +72,12 @@ private:
   inline nvmlDevice_t nvml_device() const;
 
 public:
-  device(CUdevice cu = CUdevice(), bool take_ownership = true): cu_(cu, take_ownership){}
+  cu_device(CUdevice cu = CUdevice(), bool take_ownership = true): device(cu, take_ownership){}
   //Accessors
   Architecture architecture() const;
-  handle<CUdevice> const & cu() const;
   //Informations
   std::string infos() const;
   size_t address_bits() const;
-  driver::platform platform() const;
   std::vector<size_t> max_block_dim() const;
   size_t max_threads_per_block() const;
   size_t max_shared_memory() const;
@@ -87,7 +96,6 @@ public:
   size_t max_mem_clock() const;
 
 private:
-  handle<CUdevice> cu_;
   std::shared_ptr<std::pair<size_t, size_t>> interpreted_as_;
 };
 

@@ -38,6 +38,58 @@ namespace driver
 {
 
 /*-----------------------------------*/
+//-----------  Platforms ------------*/
+/*-----------------------------------*/
+
+void backend::platforms::init() {
+  if(!cache_.empty())
+    return;
+  //if CUDA is here
+  if(dispatch::cuinit()){
+    cache_.push_back(new cu_platform());
+  }
+  //if OpenCL is here
+  if(dispatch::clinit()){
+    cl_uint num_platforms;
+    dispatch::clGetPlatformIDs(0, nullptr, &num_platforms);
+    std::vector<cl_platform_id> ids(num_platforms);
+    dispatch::clGetPlatformIDs(num_platforms, ids.data(), nullptr);
+    for(cl_platform_id id: ids)
+      cache_.push_back(new cl_platform(id));
+  }
+  if(cache_.empty())
+    throw std::runtime_error("ISAAC: No backend available. Make sure CUDA is available in your library path");
+}
+
+void backend::platforms::get(std::vector<platform *> &results) {
+  std::copy(cache_.begin(), cache_.end(), std::back_inserter(results));
+}
+
+std::vector<driver::platform*> backend::platforms::cache_;
+
+
+/*-----------------------------------*/
+//-----------  Devices --------------*/
+/*-----------------------------------*/
+
+void backend::devices::init(std::vector<platform*> const & platforms) {
+  if(!cache_.empty())
+    return;
+  for(driver::platform* pf: platforms)
+    pf->devices(cache_);
+  if(cache_.empty())
+    throw std::runtime_error("ISAAC: No device available. Make sure that your platform is configured properly");
+}
+
+void backend::devices::get(std::vector<device*> &devs) {
+  std::copy(cache_.begin(), cache_.end(), std::back_inserter(devs));
+}
+
+std::vector<driver::device*> backend::devices::cache_;
+
+
+
+/*-----------------------------------*/
 //---------- Modules ----------------*/
 /*-----------------------------------*/
 
@@ -47,14 +99,14 @@ void backend::modules::release(){
   cache_.clear();
 }
 
-module& backend::modules::get(driver::stream const & stream, std::string const & name, std::string const & src){
-  std::tuple<driver::stream, std::string> key(stream, name);
+driver::module* backend::modules::get(driver::stream* stream, std::string const & name, std::string const & src){
+  std::tuple<driver::stream*, std::string> key(stream, name);
   if(cache_.find(key)==cache_.end())
-    return *cache_.insert(std::make_pair(key, new module(stream.context(), src))).first->second;
-  return *cache_.at(key);
+    return &*cache_.insert(std::make_pair(key, new driver::cu_module(((driver::cu_stream*)stream)->context(), src))).first->second;
+  return &*cache_.at(key);
 }
 
-std::map<std::tuple<stream, std::string>, module * >  backend::modules::cache_;
+std::map<std::tuple<driver::stream*, std::string>, driver::module*>  backend::modules::cache_;
 
 /*-----------------------------------*/
 //-----------  Kernels --------------*/
@@ -66,23 +118,23 @@ void backend::kernels::release(){
   cache_.clear();
 }
 
-kernel & backend::kernels::get(driver::module const & program, std::string const & name){
-  std::tuple<module, std::string> key(program, name);
+driver::kernel* backend::kernels::get(driver::module *mod, std::string const & name){
+  std::tuple<driver::module*, std::string> key(mod, name);
   if(cache_.find(key)==cache_.end())
-    return *cache_.insert(std::make_pair(key, new kernel(program, name.c_str()))).first->second;
-  return *cache_.at(key);
+    return &*cache_.insert(std::make_pair(key, new driver::cu_kernel((driver::cu_module*)mod, name.c_str()))).first->second;
+  return cache_.at(key);
 }
 
-std::map<std::tuple<module, std::string>, kernel * > backend::kernels::cache_;
+std::map<std::tuple<driver::module*, std::string>, driver::kernel*> backend::kernels::cache_;
 
 /*-----------------------------------*/
 //------------  Queues --------------*/
 /*-----------------------------------*/
 
-void backend::streams::init(std::list<const context *> const & contexts){
-  for(context const * ctx : contexts)
-    if(cache_.find(*ctx)==cache_.end())
-      cache_.insert(std::make_pair(*ctx, std::vector<stream*>{new stream(*ctx)}));
+void backend::streams::init(std::list<driver::context*> const & contexts){
+  for(driver::context* ctx : contexts)
+    if(cache_.find(ctx)==cache_.end())
+      cache_.insert(std::make_pair(ctx, std::vector<driver::stream*>{new driver::cu_stream(ctx)}));
 }
 
 void backend::streams::release(){
@@ -92,33 +144,31 @@ void backend::streams::release(){
   cache_.clear();
 }
 
-stream & backend::streams::get_default()
+driver::stream* backend::streams::get_default()
 { return get(contexts::get_default(), 0); }
 
-stream & backend::streams::get(driver::context const & context, unsigned int id){
-  init(std::list<driver::context const *>(1,&context));
+driver::stream* backend::streams::get(driver::context* context, unsigned int id){
+  init(std::list<driver::context*>(1,context));
   for(auto & x : cache_)
     if(x.first==context)
-      return *x.second[id];
+      return x.second[id];
   throw;
 }
 
-void backend::streams::get(driver::context const & context, std::vector<stream*> & queues){
-  init(std::list<driver::context const *>(1,&context));
+void backend::streams::get(driver::context* context, std::vector<driver::stream*> & queues){
+  init(std::list<driver::context*>(1,context));
   queues = cache_.at(context);
 }
 
-std::map<context, std::vector<stream*> > backend::streams::cache_;
+std::map<driver::context*, std::vector<driver::stream*>> backend::streams::cache_;
 
 /*-----------------------------------*/
 //------------  Contexts ------------*/
 /*-----------------------------------*/
 
-void backend::contexts::init(std::vector<platform> const & platforms){
-  for(platform const & platform: platforms){
-    for(device const & device: platform.devices())
-      cache_.push_back(new context(device));
-  }
+void backend::contexts::init(std::vector<driver::device*> const & devices){
+  for(driver::device* dvc: devices)
+    cache_.push_back(new cu_context(dvc));
 }
 
 void backend::contexts::release(){
@@ -127,19 +177,19 @@ void backend::contexts::release(){
   cache_.clear();
 }
 
-driver::context const & backend::contexts::get_default(){
+driver::context* backend::contexts::get_default(){
   backend::init();
-  std::list<context const *>::const_iterator it = cache_.begin();
+  auto it = cache_.begin();
   std::advance(it, default_device);
-  return **it;
+  return *it;
 }
 
-void backend::contexts::get(std::list<context const *> & contexts){
+void backend::contexts::get(std::list<driver::context*> & contexts){
   backend::init();
   contexts = cache_;
 }
 
-std::list<context const *> backend::contexts::cache_;
+std::list<driver::context*> backend::contexts::cache_;
 
 
 
@@ -147,28 +197,8 @@ std::list<context const *> backend::contexts::cache_;
 //------------  General -------------*/
 /*-----------------------------------*/
 
-std::vector<device> backend::devices(){
-  std::vector<platform> platforms = backend::platforms();
-  std::vector<device> result;
-  for(platform const & platform: platforms){
-    auto devices = platform.devices();
-    result.insert(result.end(), devices.begin(), devices.end());
-  }
-  return result;
-}
-
-std::vector<platform> backend::platforms(){
-  std::vector<platform> platforms;
-  //if CUDA is here
-  if(dispatch::cuinit())
-    platforms.push_back(platform());
-  if(platforms.empty())
-    throw std::runtime_error("ISAAC: No backend available. Make sure CUDA is available in your library path");
-  return platforms;
-}
-
-void backend::synchronize(driver::context const & context){
-  for(stream * queue: streams::cache_.at(context))
+void backend::synchronize(driver::context* context){
+  for(driver::stream * queue: streams::cache_.at(context))
     queue->synchronize();
 }
 
@@ -184,8 +214,13 @@ void backend::release(){
 void backend::init(){
   if(!contexts::cache_.empty())
     return;
-  std::vector<platform> platforms = backend::platforms();
-  contexts::init(platforms);
+  // initialize platforms
+  backend::platforms::init();
+  // initialize devices
+  backend::devices::init(platforms::cache_);
+  // initialize contexts
+  backend::contexts::init(devices::cache_);
+  // initialize streams
   streams::init(contexts::cache_);
 }
 

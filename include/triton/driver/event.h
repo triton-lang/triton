@@ -32,7 +32,7 @@ namespace driver
 {
 
 // Event
-class Event: public handle_interface<Event, cu_event_t>
+class Event
 {
 public:
   float elapsed_time() const;

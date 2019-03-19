@@ -31,22 +31,46 @@ namespace triton
 namespace driver
 {
 
-std::string platform::version() const{
+
+/* ------------------------ */
+//         CUDA             //
+/* ------------------------ */
+
+std::string cu_platform::version() const{
   int version;
   dispatch::cuDriverGetVersion(&version);
   return std::to_string(version);
 }
 
-std::vector<device> platform::devices() const{
-  std::vector<device> devices;
+void cu_platform::devices(std::vector<device *> &devices) const{
   int N;
   dispatch::cuDeviceGetCount(&N);
   for(int i = 0 ; i < N ; ++i){
     CUdevice dvc;
     dispatch::cuDeviceGet(&dvc, i);
-    devices.push_back(driver::device(dvc));
+    devices.push_back(new driver::cu_device(dvc));
   }
-  return devices;
+}
+
+/* ------------------------ */
+//        OpenCL            //
+/* ------------------------ */
+
+std::string cl_platform::version() const {
+  size_t size;
+  dispatch::clGetPlatformInfo(*cl_, CL_PLATFORM_VERSION, 0, nullptr, &size);
+  std::string result(size, 0);
+  dispatch::clGetPlatformInfo(*cl_, CL_PLATFORM_VERSION, size, (void*)&*result.begin(), nullptr);
+  return result;
+}
+
+void cl_platform::devices(std::vector<device*> &devices) const{
+  cl_uint num_devices;
+  dispatch::clGetDeviceIDs(*cl_, CL_DEVICE_TYPE_GPU, 0, nullptr, &num_devices);
+  std::vector<cl_device_id> ids(num_devices);
+  dispatch::clGetDeviceIDs(*cl_, CL_DEVICE_TYPE_GPU, num_devices, ids.data(), nullptr);
+  for(cl_device_id id: ids)
+    devices.push_back(new driver::ocl_device(id));
 }
 
 }

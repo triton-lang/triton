@@ -32,13 +32,39 @@ namespace triton
 namespace driver
 {
 
-kernel::kernel(driver::module const & program, const char * name) : program_(program), address_bits_(program.context().device().address_bits()){
-  cu_params_store_.reserve(64);
-  cu_params_.reserve(64);
-  dispatch::cuModuleGetFunction(&*cu_, program, name);
+
+/* ------------------------ */
+//         Base             //
+/* ------------------------ */
+
+kernel::kernel(driver::module *program, CUfunction fn, bool has_ownership):
+  polymorphic_resource(fn, has_ownership), program_(program){
 }
 
-void kernel::setArg(unsigned int index, std::size_t size, void* ptr){
+kernel::kernel(driver::module *program, cl_kernel fn, bool has_ownership):
+  polymorphic_resource(fn, has_ownership), program_(program){
+}
+
+driver::module* kernel::module() {
+  return program_;
+}
+
+/* ------------------------ */
+//         OpenCL           //
+/* ------------------------ */
+
+
+/* ------------------------ */
+//         CUDA             //
+/* ------------------------ */
+
+cu_kernel::cu_kernel(driver::module *program, const char * name) : kernel(program, CUfunction(), true) {
+  cu_params_store_.reserve(64);
+  cu_params_.reserve(64);
+  dispatch::cuModuleGetFunction(&*cu_, *program->cu(), name);
+}
+
+void cu_kernel::setArg(unsigned int index, std::size_t size, void* ptr){
   if(index + 1> cu_params_store_.size()){
     cu_params_store_.resize(index+1);
     cu_params_.resize(index+1);
@@ -48,17 +74,11 @@ void kernel::setArg(unsigned int index, std::size_t size, void* ptr){
   cu_params_[index] = cu_params_store_[index].get();
 }
 
-void kernel::setArg(unsigned int index, buffer const & data)
-{ return setArg(index, (CUdeviceptr)data);}
+void cu_kernel::setArg(unsigned int index, cu_buffer const & data)
+{ return setArg(index, data.cu());}
 
-void* const* kernel::cu_params() const
+void* const* cu_kernel::cu_params() const
 { return cu_params_.data(); }
-
-handle<CUfunction> const & kernel::cu() const
-{ return cu_; }
-
-driver::module const & kernel::module() const
-{ return program_; }
 
 
 }

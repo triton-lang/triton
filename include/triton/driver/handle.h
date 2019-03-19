@@ -41,8 +41,8 @@ struct cu_event_t{
   CUevent second;
 };
 
-struct cu_platform{
-  cu_platform() : status_(dispatch::cuInit(0)) { }
+struct CUPlatform{
+  CUPlatform() : status_(dispatch::cuInit(0)) { }
   operator bool() const { return status_; }
 private:
   CUresult status_;
@@ -74,6 +74,22 @@ public:
 protected:
   std::shared_ptr<CUType> h_;
   bool has_ownership_;
+};
+
+template<class CUType, class CLType>
+class polymorphic_resource {
+public:
+  polymorphic_resource(CUType cu, bool take_ownership): cu_(cu, take_ownership){}
+  polymorphic_resource(CLType cl, bool take_ownership): cl_(cl, take_ownership){}
+
+  handle<CUType> cu() { return cu_; }
+  handle<CLType> cl() { return cl_; }
+  const handle<CUType>& cu() const { return cu_; }
+  const handle<CLType>& cl() const { return cl_; }
+
+protected:
+  handle<CLType> cl_;
+  handle<CUType> cu_;
 };
 
 }

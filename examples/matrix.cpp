@@ -87,7 +87,7 @@ T min(std::vector<T> x)
 
 
 template<class OP, class SYNC>
-double bench(OP const & op, SYNC const & sync, triton::driver::device const & device)
+double bench(OP const & op, SYNC const & sync, triton::driver::cu_device const & device)
 {
   timer tmr;
   std::vector<size_t> times;
@@ -108,6 +108,7 @@ double bench(OP const & op, SYNC const & sync, triton::driver::device const & de
 int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
+  exit(EXIT_SUCCESS);
   triton::jit jit(context);
 
   // matrix multiplication parameters
@@ -123,10 +124,10 @@ int main() {
     hb[i] = 1;
   for(size_t i = 0; i < hc.size(); i++)
     hc[i] = 0;
-  triton::driver::buffer dc(context, hc.size()*4);
-  triton::driver::buffer da(context, ha.size()*4);
-  triton::driver::buffer db(context, hb.size()*4);
-  triton::driver::stream stream(context);
+  triton::driver::cu_buffer dc(context, hc.size()*4);
+  triton::driver::cu_buffer da(context, ha.size()*4);
+  triton::driver::cu_buffer db(context, hb.size()*4);
+  triton::driver::cu_stream stream(context);
   stream.write(da, true, 0, ha);
   stream.write(db, true, 0, hb);
   stream.write(dc, true, 0, hc);
@@ -134,7 +135,7 @@ int main() {
 
 
   // benchmark a given matrix multiplication kernel
-  auto benchmark = [&](triton::driver::kernel kernel,
+  auto benchmark = [&](triton::driver::cu_kernel kernel,
                        triton::jit::launch_information info) {
     // launch info
     unsigned TM = info.global_range_size[0];
@@ -165,7 +166,7 @@ int main() {
     // benchmark
     double ts = bench([&](){stream.enqueue(kernel, grid, {nthreads, 1, 1});},
                       [&](){ stream.synchronize(); },
-                      context.device());
+                      context->device());
     ts = ts * 1e-9;
     double tflops = 2*M*N*K / ts * 1e-12;
     return tflops;
@@ -183,7 +184,7 @@ int main() {
 
 //  jit.autotune(src, benchmark);
   jit.add_module(src, params);
-  triton::driver::kernel kernel = jit.get_function("matmul");
+  triton::driver::cu_kernel kernel = jit.get_function("matmul");
   triton::jit::launch_information info = jit.get_launch_info("matmul");
   std::cout << benchmark(kernel, info) << std::endl;
   stream.read(dc, true, 0, hc);

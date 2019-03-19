@@ -35,43 +35,55 @@ namespace triton
 namespace driver
 {
 
-class kernel;
+class cu_kernel;
 class Event;
 class Range;
-class buffer;
+class cu_buffer;
 
-// Command Queue
-class stream: public handle_interface<stream, CUstream>
-{
+// Base
+class stream: public polymorphic_resource<CUstream, cl_command_queue> {
+public:
+  stream(driver::context *ctx, CUstream, bool has_ownership);
+  stream(driver::context *ctx, cl_command_queue, bool has_ownership);
+  driver::context* context() const;
+  virtual void synchronize() = 0;
+
+protected:
+  driver::context *ctx_;
+};
+
+// OpenCL
+class cl_stream: public stream {
+public:
+  // Constructors
+  cl_stream(driver::context *ctx);
+
+  // Synchronize
+  void synchronize();
+};
+
+// CUDA
+class cu_stream: public stream {
 public:
   //Constructors
-  stream(CUstream stream, bool take_ownership);
-  stream(driver::context const & context);
-
-  //Accessors
-  handle<CUstream> const & cu() const;
-  driver::context const & context() const;
+  cu_stream(CUstream str, bool take_ownership);
+  cu_stream(driver::context* context);
 
   //Synchronize
   void synchronize();
 
   //Enqueue
-  void enqueue(kernel const & kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const * = NULL, Event *event = NULL);
+  void enqueue(cu_kernel const & cu_kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const * = NULL, Event *event = NULL);
 
   // Write
-  void write(driver::buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
-
-  template<class T> void write(driver::buffer const & buffer, bool blocking, std::size_t offset, std::vector<T> const & x)
+  void write(driver::cu_buffer const & cu_buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
+  template<class T> void write(driver::cu_buffer const & buffer, bool blocking, std::size_t offset, std::vector<T> const & x)
   { write(buffer, blocking, offset, x.size()*sizeof(T), x.data()); }
 
   // Read
-  void read(driver::buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr);
-
-  template<class T> void read(driver::buffer const & buffer, bool blocking, std::size_t offset, std::vector<T>& x)
+  void read(driver::cu_buffer const & cu_buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr);
+  template<class T> void read(driver::cu_buffer const & buffer, bool blocking, std::size_t offset, std::vector<T>& x)
   { read(buffer, blocking, offset, x.size()*sizeof(T), x.data()); }
-private:
-  driver::context context_;
-  handle<CUstream> cu_;
 };
 
 

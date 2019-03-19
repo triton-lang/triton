@@ -34,28 +34,38 @@ namespace triton
 namespace driver
 {
 
-class buffer;
+class cu_buffer;
 
-// Kernel
-class kernel: public handle_interface<kernel, CUfunction>
-{
+// Base
+class kernel: public polymorphic_resource<CUfunction, cl_kernel> {
+public:
+  kernel(driver::module* program, CUfunction fn, bool has_ownership);
+  kernel(driver::module* program, cl_kernel fn, bool has_ownership);
+  driver::module* module();
+
+private:
+  driver::module* program_;
+};
+
+// OpenCL
+class ocl_kernel: public kernel {
+};
+
+// CUDA
+class cu_kernel: public kernel {
 public:
   //Constructors
-  kernel(driver::module const & program, const char * name);
-  //Accessors
-  handle<CUfunction> const & cu() const;
-  driver::module const & module() const;
+  cu_kernel(driver::module* program, const char * name);
   //Arguments setters
   void setArg(unsigned int index, std::size_t size, void* ptr);
-  void setArg(unsigned int index, buffer const &);
+  void setArg(unsigned int index, cu_buffer const &);
   template<class T> void setArg(unsigned int index, T value) { setArg(index, sizeof(T), (void*)&value); }
   //Arguments getters
   void* const* cu_params() const;
 
 private:
   handle<CUfunction> cu_;
-  driver::module program_;
-  unsigned int address_bits_;
+  driver::cu_module* program_;
   std::vector<std::shared_ptr<void> >  cu_params_store_;
   std::vector<void*>  cu_params_;
 };

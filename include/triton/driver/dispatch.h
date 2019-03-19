@@ -28,10 +28,11 @@
 
 //CUDA Backend
 #include "triton/external/CUDA/cuda.h"
-#include "triton/external/CUDA/nvrtc.h"
 #include "triton/external/CUDA/cublas_v2.h"
 #include "triton/external/CUDA/cudnn.h"
 #include "triton/external/CUDA/nvml.h"
+#include "triton/external/CL/cl.h"
+#include "triton/external/CL/cl_ext.h"
 
 //Exceptions
 #include <iostream>
@@ -42,10 +43,9 @@ namespace triton
 namespace driver
 {
 
-class context;
+class cu_context;
 
 template<class T> void check(T){}
-void check(nvrtcResult err);
 void check(CUresult err);
 void check(cublasStatus_t err);
 void check(cudnnStatus_t err);
@@ -79,13 +79,47 @@ private:
   }
 
 public:
-  static bool nvrtcinit();
+  static bool clinit();
   static bool nvmlinit();
   static bool cuinit();
   static bool cublasinit();
   static bool cudnninit();
-
   static void release();
+
+  //OpenCL
+  static cl_int clBuildProgram(cl_program, cl_uint, const cl_device_id *, const char *, void (*)(cl_program, void *), void *);
+  static cl_int clEnqueueNDRangeKernel(cl_command_queue, cl_kernel, cl_uint, const size_t *, const size_t *, const size_t *, cl_uint, const cl_event *, cl_event *);
+  static cl_int clSetKernelArg(cl_kernel, cl_uint, size_t, const void *);
+  static cl_int clReleaseMemObject(cl_mem);
+  static cl_int clFinish(cl_command_queue);
+  static cl_int clGetMemObjectInfo(cl_mem, cl_mem_info, size_t, void *, size_t *);
+  static cl_int clGetCommandQueueInfo(cl_command_queue, cl_command_queue_info, size_t, void *, size_t *);
+  static cl_int clReleaseContext(cl_context);
+  static cl_int clReleaseEvent(cl_event);
+  static cl_int clEnqueueWriteBuffer(cl_command_queue, cl_mem, cl_bool, size_t, size_t, const void *, cl_uint, const cl_event *, cl_event *);
+  static cl_int clEnqueueReadBuffer(cl_command_queue, cl_mem, cl_bool, size_t, size_t, void *, cl_uint, const cl_event *, cl_event *);
+  static cl_int clGetProgramBuildInfo(cl_program, cl_device_id, cl_program_build_info, size_t, void *, size_t *);
+  static cl_int clReleaseDevice(cl_device_id);
+  static cl_context clCreateContext(const cl_context_properties *, cl_uint, const cl_device_id *, void (*)(const char *, const void *, size_t, void *), void *, cl_int *);
+  static cl_int clGetDeviceIDs(cl_platform_id, cl_device_type, cl_uint, cl_device_id *, cl_uint *);
+  static cl_int clGetContextInfo(cl_context, cl_context_info, size_t, void *, size_t *);
+  static cl_int clGetDeviceInfo(cl_device_id, cl_device_info, size_t, void *, size_t *);
+  static cl_int clReleaseCommandQueue(cl_command_queue);
+  static cl_int clGetPlatformIDs(cl_uint, cl_platform_id *, cl_uint *);
+  static cl_int clGetPlatformInfo(cl_platform_id, cl_platform_info, size_t, void *, size_t *);
+  static cl_int clGetEventProfilingInfo(cl_event, cl_profiling_info, size_t, void *, size_t *);
+  static cl_program clCreateProgramWithBinary(cl_context, cl_uint, const cl_device_id *, const size_t *, const unsigned char **, cl_int *, cl_int *);
+  static cl_command_queue clCreateCommandQueue(cl_context, cl_device_id, cl_command_queue_properties, cl_int *);
+  static cl_int clRetainEvent(cl_event);
+  static cl_int clReleaseProgram(cl_program);
+  static cl_int clFlush(cl_command_queue);
+  static cl_int clGetProgramInfo(cl_program, cl_program_info, size_t, void *, size_t *);
+  static cl_int clGetKernelInfo(cl_kernel, cl_kernel_info, size_t, void *, size_t *);
+  static cl_int clGetKernelWorkGroupInfo(cl_kernel, cl_device_id, cl_kernel_work_group_info, size_t, void *, size_t *);
+  static cl_kernel clCreateKernel(cl_program, const char *, cl_int *);
+  static cl_mem clCreateBuffer(cl_context, cl_mem_flags, size_t, void *, cl_int *);
+  static cl_program clCreateProgramWithSource(cl_context, cl_uint, const char **, const size_t *, cl_int *);
+  static cl_int clReleaseKernel(cl_kernel);
 
   //CUDA
   static CUresult cuCtxGetCurrent(CUcontext *pctx);
@@ -130,14 +164,7 @@ public:
   static nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, nvmlClockType_t type, unsigned int *clock);
   static nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, nvmlClockType_t type, unsigned int *clock);
 
-  static nvrtcResult nvrtcCompileProgram(nvrtcProgram prog, int numOptions, const char **options);
-  static nvrtcResult nvrtcGetProgramLogSize(nvrtcProgram prog, size_t *logSizeRet);
-  static nvrtcResult nvrtcGetPTX(nvrtcProgram prog, char *ptx);
-  static nvrtcResult nvrtcGetPTXSize(nvrtcProgram prog, size_t *ptxSizeRet);
-  static nvrtcResult nvrtcCreateProgram(nvrtcProgram *prog, const char *src, const char *name, int numHeaders, const char **headers, const char **includeNames);
-  static nvrtcResult nvrtcGetProgramLog(nvrtcProgram prog, char *log);
-
-  static cublasHandle_t cublasHandle(driver::context const & ctx);
+  static cublasHandle_t cublasHandle(driver::cu_context const & ctx);
   static cublasStatus_t cublasCreate_v2(cublasHandle_t* h);
   static cublasStatus_t cublasGetStream_v2(cublasHandle_t h, cudaStream_t *streamId);
   static cublasStatus_t cublasSetStream_v2(cublasHandle_t h, cudaStream_t streamId);
@@ -146,7 +173,7 @@ public:
   static cublasStatus_t cublasHgemm (cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, half* alpha, const half *A, int lda, const half *B, int ldb, half* beta, half *C, int ldc);
   static cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const void *alpha, const void *A, cudaDataType Atype, int lda, const void *B, cudaDataType Btype, int ldb, const void *beta, void *C, cudaDataType Ctype, int ldc, cudaDataType computeType, cublasGemmAlgo_t algo);
 
-  static cudnnHandle_t cudnnHandle(driver::context const & ctx);
+  static cudnnHandle_t cudnnHandle(driver::cu_context const & ctx);
   static cudnnStatus_t cudnnCreatePoolingDescriptor(cudnnPoolingDescriptor_t *poolingDesc);
   static cudnnStatus_t cudnnCreateConvolutionDescriptor(cudnnConvolutionDescriptor_t* convDesc);
   static cudnnStatus_t cudnnCreateTensorDescriptor(cudnnTensorDescriptor_t *tensorDesc);
@@ -167,13 +194,50 @@ public:
   static cudnnStatus_t cudnnTransformTensor(cudnnHandle_t handle, const void *alpha, const cudnnTensorDescriptor_t xDesc, const void *x, const void *beta, const cudnnTensorDescriptor_t yDesc, void *y);
 
 private:
+
+  // Libraries
+  static void* opencl_;
   static void* cuda_;
-  static void* nvrtc_;
   static void* nvml_;
   static void* cublas_;
   static void* cudnn_;
 
-  //CUDA
+  // OpenCL functions
+  static void* clBuildProgram_;
+  static void* clEnqueueNDRangeKernel_;
+  static void* clSetKernelArg_;
+  static void* clReleaseMemObject_;
+  static void* clFinish_;
+  static void* clGetMemObjectInfo_;
+  static void* clGetCommandQueueInfo_;
+  static void* clReleaseContext_;
+  static void* clReleaseEvent_;
+  static void* clEnqueueWriteBuffer_;
+  static void* clEnqueueReadBuffer_;
+  static void* clGetProgramBuildInfo_;
+  static void* clReleaseDevice_;
+  static void* clCreateContext_;
+  static void* clGetDeviceIDs_;
+  static void* clGetContextInfo_;
+  static void* clGetDeviceInfo_;
+  static void* clReleaseCommandQueue_;
+  static void* clGetPlatformIDs_;
+  static void* clGetPlatformInfo_;
+  static void* clGetEventProfilingInfo_;
+  static void* clCreateProgramWithBinary_;
+  static void* clCreateCommandQueue_;
+  static void* clRetainEvent_;
+  static void* clReleaseProgram_;
+  static void* clFlush_;
+  static void* clGetProgramInfo_;
+  static void* clGetKernelInfo_;
+  static void* clGetKernelWorkGroupInfo_;
+  static void* clCreateKernel_;
+  static void* clCreateBuffer_;
+  static void* clCreateProgramWithSource_;
+  static void* clReleaseKernel_;
+
+  // CUDA functions
   static void* cuCtxGetCurrent_;
   static void* cuCtxSetCurrent_;
   static void* cuCtxDestroy_v2_;
@@ -188,7 +252,6 @@ private:
   static void* cuDeviceGetName_;
   static void* cuDeviceGetPCIBusId_;
   static void* cuModuleGetGlobal_v2_;
-
   static void* cuMemcpyHtoDAsync_v2_;
   static void* cuModuleLoad_;
   static void* cuLaunchKernel_;
@@ -210,19 +273,12 @@ private:
   static void* cuMemsetD8Async_;
   static void* cuCtxPushCurrent_v2_;
   static void* cuCtxPopCurrent_v2_;
-
+  // NVML
   static void* nvmlInit_v2_;
   static void* nvmlDeviceGetHandleByPciBusId_v2_;
   static void* nvmlDeviceGetClockInfo_;
   static void* nvmlDeviceGetMaxClockInfo_;
-
-  static void* nvrtcCompileProgram_;
-  static void* nvrtcGetProgramLogSize_;
-  static void* nvrtcGetPTX_;
-  static void* nvrtcGetPTXSize_;
-  static void* nvrtcCreateProgram_;
-  static void* nvrtcGetProgramLog_;
-
+  // cuBLAS
   static void* cublasCreate_v2_;
   static void* cublasGetStream_v2_;
   static void* cublasSetStream_v2_;
@@ -230,7 +286,7 @@ private:
   static void* cublasSgemm_v2_;
   static void* cublasDgemm_v2_;
   static void* cublasGemmEx_;
-
+  // cuDNN
   static void* cudnnCreateConvolutionDescriptor_;
   static void* cudnnCreatePoolingDescriptor_;
   static void* cudnnCreateTensorDescriptor_;

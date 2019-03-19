@@ -31,34 +31,49 @@ namespace triton
 namespace driver
 {
 
-class context: public handle_interface<context, CUcontext>
-{
-private:
+class context: public polymorphic_resource<CUcontext, cl_context>{
+protected:
   static std::string get_cache_path();
-  static CUdevice device(CUcontext);
 
 public:
-  //Constructors
-  explicit context(CUcontext context, bool take_ownership = true);
-  explicit context(driver::device const & dvc);
-  //Accessors
-  driver::device const & device() const;
+  context(driver::device *dev, CUcontext cu, bool take_ownership);
+  context(driver::device *dev, cl_context cl, bool take_ownership);
+  driver::device* device() const;
   std::string const & cache_path() const;
-  handle<CUcontext> const & cu() const;
 
-private:
-  handle<CUcontext> cu_;
-  driver::device dvc_;
+protected:
+  driver::device* dev_;
   std::string cache_path_;
 };
 
-class ContextSwitcher{
+// CUDA
+class cu_context: public context {
 public:
-    ContextSwitcher(driver::context const & ctx);
-    ~ContextSwitcher();
+  class context_switcher{
+  public:
+      context_switcher(driver::context const & ctx);
+      ~context_switcher();
+  private:
+      driver::cu_context const & ctx_;
+  };
+
 private:
-    driver::context const & ctx_;
+  static CUdevice get_device_of(CUcontext);
+
+public:
+  //Constructors
+  cu_context(CUcontext cu, bool take_ownership = true);
+  cu_context(driver::device* dev);
 };
+
+// OpenCL
+class ocl_context: public context {
+public:
+  ocl_context(driver::device* dev);
+};
+
+
+
 
 }
 }

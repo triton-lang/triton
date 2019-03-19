@@ -35,9 +35,28 @@ namespace triton
 namespace driver
 {
 
+/* ------------------------ */
+//         BASE             //
+/* ------------------------ */
+
+context::context(driver::device *dev, CUcontext cu, bool take_ownership):
+  polymorphic_resource(cu, take_ownership),
+  dev_(dev), cache_path_(get_cache_path()) {
+}
+
+context::context(driver::device *dev, cl_context cl, bool take_ownership):
+  polymorphic_resource(cl, take_ownership),
+  dev_(dev), cache_path_(get_cache_path()){
+
+}
+
+driver::device* context::device() const {
+  return dev_;
+}
+
 std::string context::get_cache_path(){
   //user-specified cache path
-  std::string result = tools::getenv("ISAAC_CACHE_PATH");
+  std::string result = tools::getenv("TRITON_CACHE_PATH");
   if(!result.empty()){
     if(tools::mkpath(result)==0)
       return result;
@@ -46,7 +65,7 @@ std::string context::get_cache_path(){
   result = tools::getenv("HOME");
   if(!result.empty())
   {
-    result = result + "/.isaac/cache/";
+    result = result + "/.triton/cache/";
     if(tools::mkpath(result)==0)
       return result;
   }
@@ -54,7 +73,28 @@ std::string context::get_cache_path(){
   return "";
 }
 
-CUdevice context::device(CUcontext context){
+std::string const & context::cache_path() const{
+  return cache_path_;
+}
+
+
+/* ------------------------ */
+//         CUDA             //
+/* ------------------------ */
+
+// RAII context switcher
+cu_context::context_switcher::context_switcher(const context &ctx): ctx_((const cu_context&)ctx) {
+  dispatch::cuCtxPushCurrent_v2(*ctx_.cu());
+}
+
+cu_context::context_switcher::~context_switcher() {
+  CUcontext tmp;
+  dispatch::cuCtxPopCurrent_v2(&tmp);
+  assert(tmp==(CUcontext)ctx_ && "Switching back to invalid context!");
+}
+
+// import CUdevice
+CUdevice cu_context::get_device_of(CUcontext context){
   dispatch::cuCtxPushCurrent_v2(context);
   CUdevice res;
   dispatch::cuCtxGetDevice(&res);
@@ -62,35 +102,24 @@ CUdevice context::device(CUcontext context){
   return res;
 }
 
-context::context(CUcontext context, bool take_ownership): cu_(context, take_ownership), dvc_(device(context), false), cache_path_(get_cache_path())
-{ }
+// wrapper for cuda context
+cu_context::cu_context(CUcontext context, bool take_ownership): driver::context(new driver::cu_device(get_device_of(context), false),
+                                                                                context, take_ownership) {
+}
 
-context::context(driver::device const & device): dvc_(device), cache_path_(get_cache_path())
-{
-  dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, (CUdevice)device);
+cu_context::cu_context(driver::device* device): context(device, CUcontext(), true){
+  dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, *((driver::cu_device*)dev_)->cu());
   dispatch::cuCtxPopCurrent_v2(NULL);
 }
 
-device const & context::device() const
-{ return dvc_; }
 
-std::string const & context::cache_path() const
-{ return cache_path_; }
+/* ------------------------ */
+//         OpenCL           //
+/* ------------------------ */
 
-handle<CUcontext> const & context::cu() const
-{ return cu_; }
-
-/* Context Switcher */
-ContextSwitcher::ContextSwitcher(driver::context const & ctx): ctx_(ctx)
-{
-  dispatch::cuCtxPushCurrent_v2(ctx_);
-}
-
-ContextSwitcher::~ContextSwitcher()
-{
-  CUcontext tmp;
-  dispatch::cuCtxPopCurrent_v2(&tmp);
-  assert(tmp==(CUcontext)ctx_ && "Switching back to invalid context!");
+ocl_context::ocl_context(driver::device* dev): context(dev, cl_context(), true) {
+  cl_int err;
+  *cl_ = dispatch::clCreateContext(nullptr, 1, &*dev->cl(), nullptr, nullptr, &err);
 }
 
 
