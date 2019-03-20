@@ -52,6 +52,15 @@ stream::stream(driver::context *ctx, cl_command_queue cl, bool has_ownership)
 
 }
 
+driver::stream* stream::create(driver::context* ctx) {
+  if(dynamic_cast<driver::cu_context*>(ctx))
+    return new cu_stream(ctx);
+  if(dynamic_cast<driver::ocl_context*>(ctx))
+    return new cl_stream(ctx);
+  throw std::runtime_error("unknown context");
+}
+
+
 driver::context* stream::context() const {
   return ctx_;
 }
@@ -61,6 +70,10 @@ driver::context* stream::context() const {
 //         OpenCL           //
 /* ------------------------ */
 
+cl_stream::cl_stream(driver::context *ctx): stream(ctx, cl_command_queue(), true) {
+  cl_int err;
+  *cl_ = dispatch::clCreateCommandQueue(*ctx->cl(), *ctx->device()->cl(), 0, &err);
+}
 
 void cl_stream::synchronize() {
   dispatch::clFinish(*cl_);
@@ -91,11 +104,12 @@ void cu_stream::synchronize() {
   dispatch::cuStreamSynchronize(*cu_);
 }
 
-void cu_stream::enqueue(driver::cu_kernel const & kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event) {
+void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event) {
+  driver::cu_kernel* cu_kernel = (driver::cu_kernel*)kernel;
   cu_context::context_switcher ctx_switch(*ctx_);
   if(event)
     dispatch::cuEventRecord(event->cu()->first, *cu_);
-  dispatch::cuLaunchKernel(*kernel.cu(), grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_,(void**)kernel.cu_params(), NULL);
+  dispatch::cuLaunchKernel(*kernel->cu(), grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_,(void**)cu_kernel->cu_params(), NULL);
   if(event)
     dispatch::cuEventRecord(event->cu()->second, *cu_);
 }

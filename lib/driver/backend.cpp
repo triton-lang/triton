@@ -99,10 +99,11 @@ void backend::modules::release(){
   cache_.clear();
 }
 
-driver::module* backend::modules::get(driver::stream* stream, std::string const & name, std::string const & src){
+driver::module* backend::modules::get(driver::stream* stream, std::string const & name, llvm::Module* src){
   std::tuple<driver::stream*, std::string> key(stream, name);
-  if(cache_.find(key)==cache_.end())
-    return &*cache_.insert(std::make_pair(key, new driver::cu_module(((driver::cu_stream*)stream)->context(), src))).first->second;
+  if(cache_.find(key)==cache_.end()){
+    return &*cache_.insert({key, driver::module::create(stream->context(), src)}).first->second;
+  }
   return &*cache_.at(key);
 }
 
@@ -120,8 +121,9 @@ void backend::kernels::release(){
 
 driver::kernel* backend::kernels::get(driver::module *mod, std::string const & name){
   std::tuple<driver::module*, std::string> key(mod, name);
-  if(cache_.find(key)==cache_.end())
-    return &*cache_.insert(std::make_pair(key, new driver::cu_kernel((driver::cu_module*)mod, name.c_str()))).first->second;
+  if(cache_.find(key)==cache_.end()){
+    return &*cache_.insert({key, driver::kernel::create(mod, name.c_str())}).first->second;
+  }
   return cache_.at(key);
 }
 
@@ -134,7 +136,7 @@ std::map<std::tuple<driver::module*, std::string>, driver::kernel*> backend::ker
 void backend::streams::init(std::list<driver::context*> const & contexts){
   for(driver::context* ctx : contexts)
     if(cache_.find(ctx)==cache_.end())
-      cache_.insert(std::make_pair(ctx, std::vector<driver::stream*>{new driver::cu_stream(ctx)}));
+      cache_.insert(std::make_pair(ctx, std::vector<driver::stream*>{driver::stream::create(ctx)}));
 }
 
 void backend::streams::release(){
@@ -168,7 +170,7 @@ std::map<driver::context*, std::vector<driver::stream*>> backend::streams::cache
 
 void backend::contexts::init(std::vector<driver::device*> const & devices){
   for(driver::device* dvc: devices)
-    cache_.push_back(new cu_context(dvc));
+    cache_.push_back(driver::context::create(dvc));
 }
 
 void backend::contexts::release(){

@@ -50,6 +50,15 @@ context::context(driver::device *dev, cl_context cl, bool take_ownership):
 
 }
 
+context* context::create(driver::device *dev){
+  if(dynamic_cast<driver::cu_device*>(dev))
+    return new cu_context(dev);
+  if(dynamic_cast<driver::ocl_device*>(dev))
+    return new ocl_context(dev);
+  throw std::runtime_error("unknown context");
+}
+
+
 driver::device* context::device() const {
   return dev_;
 }

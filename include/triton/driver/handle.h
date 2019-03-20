@@ -81,6 +81,7 @@ class polymorphic_resource {
 public:
   polymorphic_resource(CUType cu, bool take_ownership): cu_(cu, take_ownership){}
   polymorphic_resource(CLType cl, bool take_ownership): cl_(cl, take_ownership){}
+  virtual ~polymorphic_resource() { }
 
   handle<CUType> cu() { return cu_; }
   handle<CLType> cl() { return cl_; }

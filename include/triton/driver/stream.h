@@ -35,7 +35,7 @@ namespace triton
 namespace driver
 {
 
-class cu_kernel;
+class kernel;
 class Event;
 class Range;
 class cu_buffer;
@@ -45,6 +45,9 @@ class stream: public polymorphic_resource<CUstream, cl_command_queue> {
 public:
   stream(driver::context *ctx, CUstream, bool has_ownership);
   stream(driver::context *ctx, cl_command_queue, bool has_ownership);
+  // factory
+  static driver::stream* create(driver::context* ctx);
+  // accessors
   driver::context* context() const;
   virtual void synchronize() = 0;
 
@@ -73,7 +76,7 @@ public:
   void synchronize();
 
   //Enqueue
-  void enqueue(cu_kernel const & cu_kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const * = NULL, Event *event = NULL);
+  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const * = NULL, Event *event = NULL);
 
   // Write
   void write(driver::cu_buffer const & cu_buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr);

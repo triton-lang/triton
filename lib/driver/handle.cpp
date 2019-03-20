@@ -33,6 +33,12 @@ namespace driver
 //OpenCL
 inline void _delete(cl_platform_id) { }
 inline void _delete(cl_device_id x) { dispatch::clReleaseDevice(x); }
+inline void _delete(cl_context x) { dispatch::clReleaseContext(x); }
+inline void _delete(cl_program x) { dispatch::clReleaseProgram(x); }
+inline void _delete(cl_kernel x) { dispatch::clReleaseKernel(x); }
+inline void _delete(cl_command_queue x) { dispatch::clReleaseCommandQueue(x); }
+inline void _delete(cl_mem x) { dispatch::clReleaseMemObject(x); }
+
 //CUDA
 inline void _delete(CUcontext x) { dispatch::cuCtxDestroy(x); }
 inline void _delete(CUdeviceptr x) { dispatch::cuMemFree(x); }
@@ -67,6 +73,11 @@ template class handle<CUPlatform>;
 
 template class handle<cl_platform_id>;
 template class handle<cl_device_id>;
+template class handle<cl_context>;
+template class handle<cl_program>;
+template class handle<cl_command_queue>;
+template class handle<cl_mem>;
+template class handle<cl_kernel>;
 
 }
 }

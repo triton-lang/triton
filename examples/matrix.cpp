@@ -135,7 +135,7 @@ int main() {
 
 
   // benchmark a given matrix multiplication kernel
-  auto benchmark = [&](triton::driver::cu_kernel kernel,
+  auto benchmark = [&](triton::driver::kernel* kernel,
                        triton::jit::launch_information info) {
     // launch info
     unsigned TM = info.global_range_size[0];
@@ -153,20 +153,20 @@ int main() {
     unsigned last_safe_b =  (BT==true)?(N*K - 1 - lastj)/N - lastk : N*K - 1 - lastj*K - lastk;
     int32_t bound = std::max<unsigned>(1, std::max(K - last_safe_a, K - last_safe_b));
     // set argument
-    kernel.setArg(0, da);
-    kernel.setArg(1, db);
-    kernel.setArg(2, dc);
-    kernel.setArg(3, M);
-    kernel.setArg(4, N);
-    kernel.setArg(5, K);
-    kernel.setArg(6, bound);
+    kernel->setArg(0, da);
+    kernel->setArg(1, db);
+    kernel->setArg(2, dc);
+    kernel->setArg(3, M);
+    kernel->setArg(4, N);
+    kernel->setArg(5, K);
+    kernel->setArg(6, bound);
     // dry run
     stream.enqueue(kernel, grid, {nthreads, 1, 1});
     stream.synchronize();
     // benchmark
     double ts = bench([&](){stream.enqueue(kernel, grid, {nthreads, 1, 1});},
                       [&](){ stream.synchronize(); },
-                      context->device());
+                      (triton::driver::cu_device&)*context->device());
     ts = ts * 1e-9;
     double tflops = 2*M*N*K / ts * 1e-12;
     return tflops;
@@ -186,7 +186,7 @@ int main() {
   jit.add_module(src, params);
   triton::driver::cu_kernel kernel = jit.get_function("matmul");
   triton::jit::launch_information info = jit.get_launch_info("matmul");
-  std::cout << benchmark(kernel, info) << std::endl;
+  std::cout << benchmark(&kernel, info) << std::endl;
   stream.read(dc, true, 0, hc);
   simple_gemm(rc, ha, hb, M, N, K);
   for(size_t i = 0; i < M*N; i++)

@@ -31,6 +31,8 @@
 namespace llvm
 {
   class Module;
+  template<class T>
+  class SmallVectorImpl;
 }
 
 namespace triton
@@ -42,20 +44,34 @@ namespace driver
 class cu_context;
 class cu_device;
 
+// Base
 class module: public polymorphic_resource<CUmodule, cl_program> {
+protected:
+  void init_llvm();
+
 public:
   module(driver::context* ctx, CUmodule mod, bool has_ownership);
   module(driver::context* ctx, cl_program mod, bool has_ownership);
+  static module* create(driver::context* ctx, llvm::Module *src);
   driver::context* context() const;
+  void compile_llvm_module(llvm::Module* module, const std::string& triple,
+                                  const std::string &proc, std::string layout,
+                                  llvm::SmallVectorImpl<char> &buffer);
 
 protected:
   driver::context* ctx_;
 };
 
+// OpenCL
+class ocl_module: public module{
+
+public:
+  ocl_module(driver::context* context, llvm::Module *module);
+};
+
+// CUDA
 class cu_module: public module {
-  static std::string header(driver::cu_device const & device);
   std::string compile_llvm_module(llvm::Module* module);
-  void init_llvm();
 
 public:
   cu_module(driver::context* context, llvm::Module *module);

@@ -32,6 +32,8 @@ namespace triton
 namespace driver
 {
 
+class context;
+
 // Base device
 class device: public polymorphic_resource<CUdevice, cl_device_id>{
 public:

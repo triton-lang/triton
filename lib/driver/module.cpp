@@ -50,6 +50,18 @@ namespace driver
 //         Base             //
 /* ------------------------ */
 
+void module::init_llvm() {
+  static bool init = false;
+  if(!init){
+    llvm::InitializeAllTargetInfos();
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmParsers();
+    llvm::InitializeAllAsmPrinters();
+    init = true;
+  }
+}
+
 module::module(driver::context* ctx, CUmodule mod, bool has_ownership)
   : polymorphic_resource(mod, has_ownership), ctx_(ctx) {
 }
@@ -62,10 +74,49 @@ driver::context* module::context() const {
   return ctx_;
 }
 
+module* module::create(driver::context* ctx, llvm::Module *src) {
+  if(dynamic_cast<driver::cu_context*>(ctx))
+    return new cu_module(ctx, src);
+  if(dynamic_cast<driver::ocl_device*>(ctx))
+    return new ocl_module(ctx, src);
+  throw std::runtime_error("unknown context");
+}
+
+void module::compile_llvm_module(llvm::Module* module, const std::string& triple,
+                                        const std::string &proc, std::string layout,
+                                        llvm::SmallVectorImpl<char> &buffer) {
+  init_llvm();
+  // create machine
+  module->setTargetTriple(triple);
+  std::string error;
+  auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
+  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, "",
+                                                             llvm::TargetOptions(), llvm::Reloc::Model(),
+                                                             llvm::None, llvm::CodeGenOpt::Aggressive);
+
+
+  // set data layout
+  if(layout.empty())
+    layout = module->getDataLayoutStr();
+  module->setDataLayout(layout);
+
+  // emit machine code
+  llvm::legacy::PassManager pass;
+  llvm::raw_svector_ostream stream(buffer);
+  machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_AssemblyFile);
+  pass.run(*module);
+}
 
 /* ------------------------ */
 //         OpenCL           //
 /* ------------------------ */
+
+ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(context, cl_program(), true) {
+  init_llvm();
+  llvm::SmallVector<char, 0> buffer;
+  module::compile_llvm_module(src, "amdgcn-amd-amdpal", "gfx902", "", buffer);
+  throw std::runtime_error("need to implement opencl module creation");
+}
 
 
 /* ------------------------ */
@@ -73,15 +124,6 @@ driver::context* module::context() const {
 /* ------------------------ */
 
 std::string cu_module::compile_llvm_module(llvm::Module* module) {
-  init_llvm();
-  // create machine
-  module->setTargetTriple("nvptx64-nvidia-cuda");
-  std::string error;
-  auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
-  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), "sm_52", "",
-                                                             llvm::TargetOptions(), llvm::Reloc::Model(),
-                                                             llvm::None, llvm::CodeGenOpt::Aggressive);
-
   // set data layout
   std::string layout = "e";
   bool is_64bit = true;
@@ -91,28 +133,13 @@ std::string cu_module::compile_llvm_module(llvm::Module* module) {
   else if (use_short_pointers)
     layout += "-p3:32:32-p4:32:32-p5:32:32";
   layout += "-i64:64-i128:128-v16:16-v32:32-n16:32:64";
-  module->setDataLayout(layout);
-  // emit machine code
-  llvm::legacy::PassManager pass;
+  // create
   llvm::SmallVector<char, 0> buffer;
-  llvm::raw_svector_ostream stream(buffer);
-  machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_AssemblyFile);
-  pass.run(*module);
-  // done
+  module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_52", layout, buffer);
   return std::string(buffer.begin(), buffer.end());
 }
 
-void cu_module::init_llvm() {
-  static bool init = false;
-  if(!init){
-    llvm::InitializeAllTargetInfos();
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmParsers();
-    llvm::InitializeAllAsmPrinters();
-    init = true;
-  }
-}
+
 
 cu_module::cu_module(driver::context * context, llvm::Module* ll_module): cu_module(context, compile_llvm_module(ll_module)) { }
 

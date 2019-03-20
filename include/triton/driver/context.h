@@ -40,6 +40,8 @@ public:
   context(driver::device *dev, cl_context cl, bool take_ownership);
   driver::device* device() const;
   std::string const & cache_path() const;
+  // factory methods
+  static context* create(driver::device *dev);
 
 protected:
   driver::device* dev_;

@@ -27,6 +27,7 @@
 #include <memory>
 
 #include "triton/driver/device.h"
+#include "triton/driver/context.h"
 
 namespace triton
 {
@@ -36,10 +37,15 @@ namespace driver
 
 
 /* ------------------------ */
+//         OpenCL           //
+/* ------------------------ */
+
+
+/* ------------------------ */
 //         CUDA             //
 /* ------------------------ */
 
-// Architecture
+// architecture
 cu_device::Architecture cu_device::nv_arch(std::pair<unsigned int, unsigned int> sm) const {
   switch(sm.first) {
    case 7:
