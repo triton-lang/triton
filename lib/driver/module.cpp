@@ -77,7 +77,7 @@ driver::context* module::context() const {
 module* module::create(driver::context* ctx, llvm::Module *src) {
   if(dynamic_cast<driver::cu_context*>(ctx))
     return new cu_module(ctx, src);
-  if(dynamic_cast<driver::ocl_device*>(ctx))
+  if(dynamic_cast<driver::ocl_context*>(ctx))
     return new ocl_module(ctx, src);
   throw std::runtime_error("unknown context");
 }
@@ -100,11 +100,13 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
     layout = module->getDataLayoutStr();
   module->setDataLayout(layout);
 
+  std::cout << "compiling" << std::endl;
   // emit machine code
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
   machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_AssemblyFile);
   pass.run(*module);
+  std::cout << "compiled" << std::endl;
 }
 
 /* ------------------------ */
@@ -115,7 +117,6 @@ ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(con
   init_llvm();
   llvm::SmallVector<char, 0> buffer;
   module::compile_llvm_module(src, "amdgcn-amd-amdpal", "gfx902", "", buffer);
-  throw std::runtime_error("need to implement opencl module creation");
 }
 
 

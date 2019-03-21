@@ -38,6 +38,7 @@ class buffer : public polymorphic_resource<CUdeviceptr, cl_mem> {
 public:
   buffer(driver::context* ctx, CUdeviceptr cl, bool take_ownership);
   buffer(driver::context* ctx, cl_mem cl, bool take_ownership);
+  static buffer* create(driver::context* ctx, size_t size);
   driver::context* context();
 
 protected:

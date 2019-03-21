@@ -39,14 +39,14 @@ public:
     std::vector<unsigned> global_range_size;
     unsigned num_threads;
   };
-  typedef std::function<double(driver::cu_kernel, launch_information)> benchmark_t;
+  typedef std::function<double(driver::kernel*, launch_information)> benchmark_t;
 
   struct passes_wrapper {
     passes_wrapper(): shared(&buffer_info), liveness(&buffer_info),
-              allocation(&liveness, &buffer_info),
-              barriers(&allocation, &buffer_info),
-              vectorize(&tune),
-              selection(&allocation, &tune, &buffer_info){ }
+                      allocation(&liveness, &buffer_info),
+                      barriers(&allocation, &buffer_info),
+                      vectorize(&tune),
+                      selection(&allocation, &tune, &buffer_info){ }
 
     void init(ir::module &module) {
       // generate ptx
@@ -78,12 +78,12 @@ public:
   void autotune(const std::string &src, benchmark_t benchmark);
   void add_module(ir::module &module, const std::vector<unsigned>& params = {});
   void add_module(const std::string &src, const std::vector<unsigned>& params = {});
-  driver::cu_kernel get_function(const std::string &name);
+  driver::kernel* get_function(const std::string &name);
   launch_information get_launch_info(const std::string &name);
   unsigned get_int(const std::string &name);
 
 private:
-  std::vector<driver::cu_module> modules_;
+  std::vector<driver::module*> modules_;
   driver::context* driver_context_;
   llvm::LLVMContext llvm_context_;
   ir::context triton_context_;

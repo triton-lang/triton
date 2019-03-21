@@ -131,15 +131,15 @@ void jit::autotune(const std::string &src, benchmark_t benchmark) {
     }
     passes.tune.init(tt_module);
     passes.init(tt_module);
-    driver::cu_device* device = (driver::cu_device*)driver_context_->device();
-    if(passes.allocation.get_allocated_size() > device->max_shared_memory())
-      return;
-    if(passes.tune.get_num_threads() > device->max_threads_per_block())
-      return;
+//    driver::device* device = driver_context_->device();
+//    if(passes.allocation.get_allocated_size() > device->max_shared_memory())
+//      return;
+//    if(passes.tune.get_num_threads() > device->max_threads_per_block())
+//      return;
     // Compile
     auto ll_module = make_llvm_module(tt_module, passes);
-    driver::cu_module module(driver_context_, &*ll_module);
-    driver::cu_kernel kernel(&module, "matmul");
+    driver::module* module = driver::module::create(driver_context_, &*ll_module);
+    driver::kernel* kernel = driver::kernel::create(module, "matmul");
     launch_information info = launch_info_map_.at("matmul");
     for(unsigned p: params)
       std::cout << p << " " << std::flush;
@@ -166,13 +166,13 @@ void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params)
   passes.tune.check_constraints(errors);
   if(errors.size())
     throw std::runtime_error("invalid parameters");
-  driver::cu_device* device = (driver::cu_device*)driver_context_->device();
-  if(passes.allocation.get_allocated_size() > device->max_shared_memory())
-    throw std::runtime_error("invalid parameters");
+//  driver::device* device = driver_context_->device();
+//  if(passes.allocation.get_allocated_size() > device->max_shared_memory())
+//    throw std::runtime_error("invalid parameters");
   // triton module -> llvm module
   auto ll_module = make_llvm_module(tt_module, passes);
   // llvm module -> machine code
-  modules_.push_back(driver::cu_module(driver_context_, &*ll_module));
+  modules_.push_back(driver::module::create(driver_context_, &*ll_module));
   // add globals
   for(auto x: tt_module.globals())
     global_ints_[x.first] = ((ir::metaparameter*)x.second)->get_value();
@@ -183,8 +183,8 @@ void jit::add_module(const std::string &src, const std::vector<unsigned> &params
   add_module(*ptt_module, params);
 }
 
-driver::cu_kernel jit::get_function(const std::string &name) {
-  return driver::cu_kernel(&modules_.front(), name.c_str());
+driver::kernel *jit::get_function(const std::string &name) {
+  return driver::kernel::create(modules_.front(), name.c_str());
 }
 
 jit::launch_information jit::get_launch_info(const std::string &name) {

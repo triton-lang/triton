@@ -79,6 +79,17 @@ void cl_stream::synchronize() {
   dispatch::clFinish(*cl_);
 }
 
+void cl_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event) {
+  cl_int err = dispatch::clEnqueueNDRangeKernel(*cl_, *kernel->cl(), grid.size(), NULL, (const size_t*)grid.data(), (const size_t*)block.data(), 0, NULL, NULL);
+}
+
+void cl_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
+  cl_int err = dispatch::clEnqueueWriteBuffer(*cl_, *buffer->cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL);
+}
+
+void cl_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
+  cl_int err = dispatch::clEnqueueReadBuffer(*cl_, *buffer->cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL);
+}
 
 /* ------------------------ */
 //         CUDA             //
@@ -114,20 +125,20 @@ void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std:
     dispatch::cuEventRecord(event->cu()->second, *cu_);
 }
 
-void cu_stream::write(driver::cu_buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
+void cu_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
   cu_context::context_switcher ctx_switch(*ctx_);
   if(blocking)
-    dispatch::cuMemcpyHtoD(*buffer.cu() + offset, ptr, size);
+    dispatch::cuMemcpyHtoD(*buffer->cu() + offset, ptr, size);
   else
-    dispatch::cuMemcpyHtoDAsync(*buffer.cu() + offset, ptr, size, *cu_);
+    dispatch::cuMemcpyHtoDAsync(*buffer->cu() + offset, ptr, size, *cu_);
 }
 
-void cu_stream::read(driver::cu_buffer const & buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
+void cu_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
   cu_context::context_switcher ctx_switch(*ctx_);
   if(blocking)
-    dispatch::cuMemcpyDtoH(ptr, *buffer.cu() + offset, size);
+    dispatch::cuMemcpyDtoH(ptr, *buffer->cu() + offset, size);
   else
-    dispatch::cuMemcpyDtoHAsync(ptr, *buffer.cu() + offset, size, *cu_);
+    dispatch::cuMemcpyDtoHAsync(ptr, *buffer->cu() + offset, size, *cu_);
 }
 
 

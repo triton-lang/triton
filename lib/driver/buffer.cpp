@@ -46,6 +46,14 @@ driver::context* buffer::context() {
   return context_;
 }
 
+buffer* buffer::create(driver::context* ctx, size_t size) {
+  if(dynamic_cast<driver::cu_context*>(ctx))
+    return new cu_buffer(ctx, size);
+  if(dynamic_cast<driver::ocl_context*>(ctx))
+    return new ocl_buffer(ctx, size);
+  throw std::runtime_error("unknown context");
+}
+
 //
 
 ocl_buffer::ocl_buffer(driver::context* context, size_t size)

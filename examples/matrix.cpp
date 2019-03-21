@@ -87,7 +87,7 @@ T min(std::vector<T> x)
 
 
 template<class OP, class SYNC>
-double bench(OP const & op, SYNC const & sync, triton::driver::cu_device const & device)
+double bench(OP const & op, SYNC const & sync)
 {
   timer tmr;
   std::vector<size_t> times;
@@ -95,7 +95,7 @@ double bench(OP const & op, SYNC const & sync, triton::driver::cu_device const &
   op();
   sync();
   while(total_time*1e-9 < 1e-3){
-    float norm = (float)device.current_sm_clock()/device.max_sm_clock();
+    float norm = 1;
     tmr.start();
     op();
     sync();
@@ -108,7 +108,6 @@ double bench(OP const & op, SYNC const & sync, triton::driver::cu_device const &
 int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
-  exit(EXIT_SUCCESS);
   triton::jit jit(context);
 
   // matrix multiplication parameters
@@ -124,14 +123,14 @@ int main() {
     hb[i] = 1;
   for(size_t i = 0; i < hc.size(); i++)
     hc[i] = 0;
-  triton::driver::cu_buffer dc(context, hc.size()*4);
-  triton::driver::cu_buffer da(context, ha.size()*4);
-  triton::driver::cu_buffer db(context, hb.size()*4);
-  triton::driver::cu_stream stream(context);
-  stream.write(da, true, 0, ha);
-  stream.write(db, true, 0, hb);
-  stream.write(dc, true, 0, hc);
-  stream.synchronize();
+  triton::driver::buffer* dc = triton::driver::buffer::create(context, hc.size()*4);
+  triton::driver::buffer* da = triton::driver::buffer::create(context, ha.size()*4);
+  triton::driver::buffer* db = triton::driver::buffer::create(context, hb.size()*4);
+  triton::driver::stream* stream = triton::driver::stream::create(context);
+  stream->write(da, true, 0, ha);
+  stream->write(db, true, 0, hb);
+  stream->write(dc, true, 0, hc);
+  stream->synchronize();
 
 
   // benchmark a given matrix multiplication kernel
@@ -161,12 +160,11 @@ int main() {
     kernel->setArg(5, K);
     kernel->setArg(6, bound);
     // dry run
-    stream.enqueue(kernel, grid, {nthreads, 1, 1});
-    stream.synchronize();
+    stream->enqueue(kernel, grid, {nthreads, 1, 1});
+    stream->synchronize();
     // benchmark
-    double ts = bench([&](){stream.enqueue(kernel, grid, {nthreads, 1, 1});},
-                      [&](){ stream.synchronize(); },
-                      (triton::driver::cu_device&)*context->device());
+    double ts = bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
+                      [&](){ stream->synchronize(); });
     ts = ts * 1e-9;
     double tflops = 2*M*N*K / ts * 1e-12;
     return tflops;
@@ -184,10 +182,10 @@ int main() {
 
 //  jit.autotune(src, benchmark);
   jit.add_module(src, params);
-  triton::driver::cu_kernel kernel = jit.get_function("matmul");
+  triton::driver::kernel* kernel = jit.get_function("matmul");
   triton::jit::launch_information info = jit.get_launch_info("matmul");
-  std::cout << benchmark(&kernel, info) << std::endl;
-  stream.read(dc, true, 0, hc);
+  std::cout << benchmark(kernel, info) << std::endl;
+  stream->read(dc, true, 0, hc);
   simple_gemm(rc, ha, hb, M, N, K);
   for(size_t i = 0; i < M*N; i++)
     if(std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){

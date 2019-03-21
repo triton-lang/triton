@@ -49,7 +49,16 @@ public:
   static driver::stream* create(driver::context* ctx);
   // accessors
   driver::context* context() const;
+  // methods
   virtual void synchronize() = 0;
+  virtual void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const * = NULL, Event *event = NULL) = 0;
+  virtual void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr) = 0;
+  virtual void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr) = 0;
+  // template helpers
+  template<class T> void write(driver::buffer* buf, bool blocking, std::size_t offset, std::vector<T> const & x)
+  { write(buf, blocking, offset, x.size()*sizeof(T), x.data()); }
+  template<class T> void read(driver::buffer* buf, bool blocking, std::size_t offset, std::vector<T>& x)
+  { read(buf, blocking, offset, x.size()*sizeof(T), x.data()); }
 
 protected:
   driver::context *ctx_;
@@ -61,32 +70,25 @@ public:
   // Constructors
   cl_stream(driver::context *ctx);
 
-  // Synchronize
+  // Overridden
   void synchronize();
+  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event *event);
+  void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
+  void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr);
 };
 
 // CUDA
 class cu_stream: public stream {
 public:
-  //Constructors
+  // Constructors
   cu_stream(CUstream str, bool take_ownership);
   cu_stream(driver::context* context);
 
-  //Synchronize
+  // Overridden
   void synchronize();
-
-  //Enqueue
-  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const * = NULL, Event *event = NULL);
-
-  // Write
-  void write(driver::cu_buffer const & cu_buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
-  template<class T> void write(driver::cu_buffer const & buffer, bool blocking, std::size_t offset, std::vector<T> const & x)
-  { write(buffer, blocking, offset, x.size()*sizeof(T), x.data()); }
-
-  // Read
-  void read(driver::cu_buffer const & cu_buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr);
-  template<class T> void read(driver::cu_buffer const & buffer, bool blocking, std::size_t offset, std::vector<T>& x)
-  { read(buffer, blocking, offset, x.size()*sizeof(T), x.data()); }
+  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event *event);
+  void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
+  void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr);
 };
 
 
