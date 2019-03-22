@@ -51,11 +51,11 @@ context::context(driver::device *dev, cl_context cl, bool take_ownership):
 }
 
 context* context::create(driver::device *dev){
-  if(dynamic_cast<driver::cu_device*>(dev))
-    return new cu_context(dev);
-  if(dynamic_cast<driver::ocl_device*>(dev))
-    return new ocl_context(dev);
-  throw std::runtime_error("unknown context");
+  switch(dev->backend()){
+  case CUDA: return new cu_context(dev);
+  case OpenCL: return new ocl_context(dev);
+  default: throw std::runtime_error("unknown backend");
+  }
 }
 
 
@@ -99,7 +99,7 @@ cu_context::context_switcher::context_switcher(const context &ctx): ctx_((const 
 cu_context::context_switcher::~context_switcher() {
   CUcontext tmp;
   dispatch::cuCtxPopCurrent_v2(&tmp);
-  assert(tmp==(CUcontext)ctx_ && "Switching back to invalid context!");
+  assert(tmp==*ctx_.cu() && "Switching back to invalid context!");
 }
 
 // import CUdevice
@@ -129,6 +129,7 @@ cu_context::cu_context(driver::device* device): context(device, CUcontext(), tru
 ocl_context::ocl_context(driver::device* dev): context(dev, cl_context(), true) {
   cl_int err;
   *cl_ = dispatch::clCreateContext(nullptr, 1, &*dev->cl(), nullptr, nullptr, &err);
+  check(err);
 }
 
 

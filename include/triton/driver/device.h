@@ -40,6 +40,11 @@ public:
   using polymorphic_resource::polymorphic_resource;
 };
 
+// CPU device
+class cpu_device: public device {
+
+};
+
 // OpenCL device
 class ocl_device: public device {
 public:

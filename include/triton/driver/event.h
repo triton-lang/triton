@@ -31,8 +31,8 @@ namespace triton
 namespace driver
 {
 
-// Event
-class Event
+// event
+class event
 {
 public:
   float elapsed_time() const;

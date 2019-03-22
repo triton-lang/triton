@@ -49,6 +49,7 @@ template<class T> void check(T){}
 void check(CUresult err);
 void check(cublasStatus_t err);
 void check(cudnnStatus_t err);
+void check(cl_int err);
 
 class dispatch
 {
@@ -117,6 +118,7 @@ public:
   static cl_int clGetKernelInfo(cl_kernel, cl_kernel_info, size_t, void *, size_t *);
   static cl_int clGetKernelWorkGroupInfo(cl_kernel, cl_device_id, cl_kernel_work_group_info, size_t, void *, size_t *);
   static cl_kernel clCreateKernel(cl_program, const char *, cl_int *);
+  static cl_int clCreateKernelsInProgram(cl_program, cl_uint, cl_kernel*, cl_uint*);
   static cl_mem clCreateBuffer(cl_context, cl_mem_flags, size_t, void *, cl_int *);
   static cl_program clCreateProgramWithSource(cl_context, cl_uint, const char **, const size_t *, cl_int *);
   static cl_int clReleaseKernel(cl_kernel);
@@ -233,6 +235,7 @@ private:
   static void* clGetKernelInfo_;
   static void* clGetKernelWorkGroupInfo_;
   static void* clCreateKernel_;
+  static void* clCreateKernelsInProgram_;
   static void* clCreateBuffer_;
   static void* clCreateProgramWithSource_;
   static void* clReleaseKernel_;

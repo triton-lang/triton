@@ -286,6 +286,7 @@ OCL_DEFINE5(cl_int, clGetProgramInfo, cl_program, cl_program_info, size_t, void 
 OCL_DEFINE5(cl_int, clGetKernelInfo, cl_kernel, cl_kernel_info, size_t, void *, size_t *)
 OCL_DEFINE6(cl_int, clGetKernelWorkGroupInfo, cl_kernel, cl_device_id, cl_kernel_work_group_info, size_t, void *, size_t *)
 OCL_DEFINE3(cl_kernel, clCreateKernel, cl_program, const char *, cl_int *)
+OCL_DEFINE4(cl_int, clCreateKernelsInProgram, cl_program, cl_uint, cl_kernel*, cl_uint*)
 OCL_DEFINE5(cl_mem, clCreateBuffer, cl_context, cl_mem_flags, size_t, void *, cl_int *)
 OCL_DEFINE5(cl_program, clCreateProgramWithSource, cl_context, cl_uint, const char **, const size_t *, cl_int *)
 OCL_DEFINE1(cl_int, clReleaseKernel, cl_kernel)
@@ -343,6 +344,7 @@ void* dispatch::clGetProgramInfo_;
 void* dispatch::clGetKernelInfo_;
 void* dispatch::clGetKernelWorkGroupInfo_;
 void* dispatch::clCreateKernel_;
+void* dispatch::clCreateKernelsInProgram_;
 void* dispatch::clCreateBuffer_;
 void* dispatch::clCreateProgramWithSource_;
 void* dispatch::clReleaseKernel_;

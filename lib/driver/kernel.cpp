@@ -46,11 +46,11 @@ kernel::kernel(driver::module *program, cl_kernel fn, bool has_ownership):
 }
 
 kernel* kernel::create(driver::module* program, const char* name) {
-  if(dynamic_cast<driver::cu_module*>(program))
-    return new cu_kernel(program, name);
-  if(dynamic_cast<driver::ocl_module*>(program))
-    return new ocl_kernel(program, name);
-  throw std::runtime_error("unknown program");
+    switch(program->backend()){
+    case CUDA: return new cu_kernel(program, name);
+    case OpenCL: return new ocl_kernel(program, name);
+    default: throw std::runtime_error("unknown backend");
+    }
 }
 
 driver::module* kernel::module() {
@@ -62,16 +62,21 @@ driver::module* kernel::module() {
 /* ------------------------ */
 
 ocl_kernel::ocl_kernel(driver::module* program, const char* name): kernel(program, cl_kernel(), true) {
+//  cl_uint res;
+//  check(dispatch::clCreateKernelsInProgram(*program->cl(), 0, NULL, &res));
+//  std::cout << res << std::endl;
   cl_int err;
-  *cl_ = dispatch::clCreateKernel(*program->cl(), name, &err);
+  std::cout << *program->cl() << std::endl;
+  *cl_ = dispatch::clCreateKernel(*program->cl(), "matmul", &err);
+  check(err);
 }
 
 void ocl_kernel::setArg(unsigned int index, std::size_t size, void* ptr) {
-  dispatch::clSetKernelArg(*cl_, index, size, ptr);
+  check(dispatch::clSetKernelArg(*cl_, index, size, ptr));
 }
 
 void ocl_kernel::setArg(unsigned int index, driver::buffer* buffer) {
-  dispatch::clSetKernelArg(*cl_, index, sizeof(cl_mem), (void*)&*buffer->cl());
+  check(dispatch::clSetKernelArg(*cl_, index, sizeof(cl_mem), (void*)&*buffer->cl()));
 }
 
 

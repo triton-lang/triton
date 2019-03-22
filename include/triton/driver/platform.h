@@ -50,6 +50,7 @@ private:
   std::string name_;
 };
 
+// CUDA
 class cu_platform: public platform
 {
 public:
@@ -61,6 +62,7 @@ private:
   handle<CUPlatform> cu_;
 };
 
+// OpenCL
 class cl_platform: public platform
 {
 public:
@@ -70,6 +72,15 @@ public:
 
 private:
   handle<cl_platform_id> cl_;
+};
+
+// CPU
+class cpu_platform: public platform
+{
+public:
+  cpu_platform(): platform("CPU") { }
+  std::string version() const;
+  void devices(std::vector<driver::device*> &devices) const;
 };
 
 }

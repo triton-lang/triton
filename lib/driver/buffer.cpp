@@ -47,11 +47,11 @@ driver::context* buffer::context() {
 }
 
 buffer* buffer::create(driver::context* ctx, size_t size) {
-  if(dynamic_cast<driver::cu_context*>(ctx))
-    return new cu_buffer(ctx, size);
-  if(dynamic_cast<driver::ocl_context*>(ctx))
-    return new ocl_buffer(ctx, size);
-  throw std::runtime_error("unknown context");
+  switch(ctx->backend()){
+  case CUDA: return new cu_buffer(ctx, size);
+  case OpenCL: return new ocl_buffer(ctx, size);
+  default: throw std::runtime_error("unknown backend");
+  }
 }
 
 //
@@ -59,7 +59,8 @@ buffer* buffer::create(driver::context* ctx, size_t size) {
 ocl_buffer::ocl_buffer(driver::context* context, size_t size)
   : buffer(context, cl_mem(), true){
   cl_int err;
-  dispatch::clCreateBuffer(*context->cl(), CL_MEM_READ_WRITE, size, NULL, &err);
+  *cl_ = dispatch::clCreateBuffer(*context->cl(), CL_MEM_READ_WRITE, size, NULL, &err);
+  check(err);
 }
 
 

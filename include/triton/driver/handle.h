@@ -35,6 +35,12 @@ namespace triton
 namespace driver
 {
 
+enum backend_t {
+  CUDA,
+  OpenCL
+};
+
+// helpers for CUDA
 struct cu_event_t{
   operator bool() const { return first && second; }
   CUevent first;
@@ -79,18 +85,20 @@ protected:
 template<class CUType, class CLType>
 class polymorphic_resource {
 public:
-  polymorphic_resource(CUType cu, bool take_ownership): cu_(cu, take_ownership){}
-  polymorphic_resource(CLType cl, bool take_ownership): cl_(cl, take_ownership){}
+  polymorphic_resource(CUType cu, bool take_ownership): cu_(cu, take_ownership), backend_(CUDA){}
+  polymorphic_resource(CLType cl, bool take_ownership): cl_(cl, take_ownership), backend_(OpenCL){}
   virtual ~polymorphic_resource() { }
 
   handle<CUType> cu() { return cu_; }
   handle<CLType> cl() { return cl_; }
   const handle<CUType>& cu() const { return cu_; }
   const handle<CLType>& cl() const { return cl_; }
+  backend_t backend() { return backend_; }
 
 protected:
   handle<CLType> cl_;
   handle<CUType> cu_;
+  backend_t backend_;
 };
 
 }

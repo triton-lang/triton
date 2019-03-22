@@ -53,6 +53,11 @@ private:
   driver::module* program_;
 };
 
+// CPU
+class cpu_kernel: public kernel {
+
+};
+
 // OpenCL
 class ocl_kernel: public kernel {
 public:

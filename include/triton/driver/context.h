@@ -48,6 +48,11 @@ protected:
   std::string cache_path_;
 };
 
+// CPU
+class cpu_context: public context {
+
+};
+
 // CUDA
 class cu_context: public context {
 public:

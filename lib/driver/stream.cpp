@@ -44,22 +44,19 @@ namespace driver
 
 stream::stream(driver::context *ctx, CUstream cu, bool has_ownership)
   : polymorphic_resource(cu, has_ownership), ctx_(ctx) {
-
 }
 
 stream::stream(driver::context *ctx, cl_command_queue cl, bool has_ownership)
   : polymorphic_resource(cl, has_ownership), ctx_(ctx) {
-
 }
 
 driver::stream* stream::create(driver::context* ctx) {
-  if(dynamic_cast<driver::cu_context*>(ctx))
-    return new cu_stream(ctx);
-  if(dynamic_cast<driver::ocl_context*>(ctx))
-    return new cl_stream(ctx);
-  throw std::runtime_error("unknown context");
+  switch(ctx->backend()){
+    case CUDA: return new cu_stream(ctx);
+    case OpenCL: return new cl_stream(ctx);
+    default: throw std::runtime_error("unknown backend");
+  }
 }
-
 
 driver::context* stream::context() const {
   return ctx_;
@@ -73,22 +70,23 @@ driver::context* stream::context() const {
 cl_stream::cl_stream(driver::context *ctx): stream(ctx, cl_command_queue(), true) {
   cl_int err;
   *cl_ = dispatch::clCreateCommandQueue(*ctx->cl(), *ctx->device()->cl(), 0, &err);
+  check(err);
 }
 
 void cl_stream::synchronize() {
-  dispatch::clFinish(*cl_);
+  check(dispatch::clFinish(*cl_));
 }
 
-void cl_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event) {
-  cl_int err = dispatch::clEnqueueNDRangeKernel(*cl_, *kernel->cl(), grid.size(), NULL, (const size_t*)grid.data(), (const size_t*)block.data(), 0, NULL, NULL);
+void cl_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event) {
+  check(dispatch::clEnqueueNDRangeKernel(*cl_, *kernel->cl(), grid.size(), NULL, (const size_t*)grid.data(), (const size_t*)block.data(), 0, NULL, NULL));
 }
 
 void cl_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
-  cl_int err = dispatch::clEnqueueWriteBuffer(*cl_, *buffer->cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL);
+  check(dispatch::clEnqueueWriteBuffer(*cl_, *buffer->cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
 }
 
 void cl_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
-  cl_int err = dispatch::clEnqueueReadBuffer(*cl_, *buffer->cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL);
+  check(dispatch::clEnqueueReadBuffer(*cl_, *buffer->cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
 }
 
 /* ------------------------ */
@@ -115,7 +113,7 @@ void cu_stream::synchronize() {
   dispatch::cuStreamSynchronize(*cu_);
 }
 
-void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<Event> const *, Event* event) {
+void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event) {
   driver::cu_kernel* cu_kernel = (driver::cu_kernel*)kernel;
   cu_context::context_switcher ctx_switch(*ctx_);
   if(event)

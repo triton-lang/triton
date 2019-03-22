@@ -56,10 +56,15 @@ public:
   driver::context* context() const;
   void compile_llvm_module(llvm::Module* module, const std::string& triple,
                                   const std::string &proc, std::string layout,
-                                  llvm::SmallVectorImpl<char> &buffer);
+                           llvm::SmallVectorImpl<char> &buffer, std::vector<std::string> files = {});
 
 protected:
   driver::context* ctx_;
+};
+
+// CPU
+class cpu_module: public module{
+
 };
 
 // OpenCL

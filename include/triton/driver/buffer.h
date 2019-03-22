@@ -45,6 +45,12 @@ protected:
   driver::context* context_;
 };
 
+// CPU
+class cpu_buffer: public buffer
+{
+
+};
+
 // OpenCL
 class ocl_buffer: public buffer
 {

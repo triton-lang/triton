@@ -28,9 +28,15 @@
 #include "triton/driver/error.h"
 #include "triton/tools/sys/getenv.hpp"
 #include "llvm/IR/IRPrintingPasses.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/Linker/Linker.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
@@ -75,38 +81,60 @@ driver::context* module::context() const {
 }
 
 module* module::create(driver::context* ctx, llvm::Module *src) {
-  if(dynamic_cast<driver::cu_context*>(ctx))
-    return new cu_module(ctx, src);
-  if(dynamic_cast<driver::ocl_context*>(ctx))
-    return new ocl_module(ctx, src);
-  throw std::runtime_error("unknown context");
+  switch(ctx->backend()){
+    case CUDA: return new cu_module(ctx, src);
+    case OpenCL: return new ocl_module(ctx, src);
+    default: throw std::runtime_error("unknown backend");
+  }
 }
 
 void module::compile_llvm_module(llvm::Module* module, const std::string& triple,
                                         const std::string &proc, std::string layout,
-                                        llvm::SmallVectorImpl<char> &buffer) {
+                                        llvm::SmallVectorImpl<char> &buffer,
+                                        std::vector<std::string> files) {
   init_llvm();
   // create machine
   module->setTargetTriple(triple);
   std::string error;
   auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
-  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, "",
-                                                             llvm::TargetOptions(), llvm::Reloc::Model(),
-                                                             llvm::None, llvm::CodeGenOpt::Aggressive);
-
+  llvm::TargetOptions opt;
+  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+  opt.UnsafeFPMath = false;
+  opt.NoInfsFPMath = false;
+  opt.NoNaNsFPMath = true;
+  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, "", opt,
+                                                             llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
 
   // set data layout
   if(layout.empty())
-    layout = module->getDataLayoutStr();
-  module->setDataLayout(layout);
+    module->setDataLayout(machine->createDataLayout());
+  else
+    module->setDataLayout(layout);
 
-  std::cout << "compiling" << std::endl;
+  // link
+  for (std::string& file: files) {
+    std::string path = "/opt/rocm/lib/" + file;
+    llvm::SMDiagnostic err;
+    std::unique_ptr<llvm::Module> mlib = llvm::parseIRFile(path, err, module->getContext());
+    if (mlib.get() == nullptr) {
+      std::string msg = err.getMessage();
+      std::cerr << "Fail to load bitcode file " << path << "\n"
+                 << "line " << err.getLineNo() << ":" << msg;
+    }
+    mlib->setTargetTriple(module->getTargetTriple());
+    mlib->setDataLayout(module->getDataLayout());
+    for (llvm::Function &f : mlib->functions()) {
+      f.addFnAttr(llvm::Attribute::AlwaysInline);
+    }
+    llvm::Linker::linkModules(*module, std::move(mlib));
+  }
+
   // emit machine code
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
-  machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_AssemblyFile);
+  machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_ObjectFile);
   pass.run(*module);
-  std::cout << "compiled" << std::endl;
+//  std::cout << std::string(buffer.begin(), buffer.end()) << std::endl;
 }
 
 /* ------------------------ */
@@ -114,9 +142,56 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
 /* ------------------------ */
 
 ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(context, cl_program(), true) {
+//  const char* x = "__kernel void matmul(){ }";
+//  cl_int err;
+//  *cl_ = dispatch::clCreateProgramWithSource(*context->cl(), 1, &x, NULL, &err);
+//  check(err);
+//  return;
+
   init_llvm();
   llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(src, "amdgcn-amd-amdpal", "gfx902", "", buffer);
+  std::vector<std::string> files = {
+      "oclc_daz_opt_on.amdgcn.bc",
+      "ocml.amdgcn.bc",
+      "hc.amdgcn.bc",
+      "ockl.amdgcn.bc",
+      "oclc_correctly_rounded_sqrt_off.amdgcn.bc",
+      "oclc_correctly_rounded_sqrt_on.amdgcn.bc",
+      "oclc_daz_opt_off.amdgcn.bc",
+      "oclc_finite_only_off.amdgcn.bc",
+      "oclc_finite_only_on.amdgcn.bc",
+      "oclc_isa_version_803.amdgcn.bc",
+      "oclc_isa_version_900.amdgcn.bc",
+      "oclc_unsafe_math_off.amdgcn.bc",
+      "oclc_unsafe_math_on.amdgcn.bc",
+      "oclc_isa_version_700.amdgcn.bc",
+      "opencl.amdgcn.bc"
+  };
+  module::compile_llvm_module(src, "amdgcn-amd-amdpal", "gfx902", "", buffer, files);
+
+
+
+//  llvm::BitcodeWriter writer(buffer);
+//  writer.writeModule(*src);
+//  llvm::legacy::PassManager pass;
+//  llvm::raw_svector_ostream stream(buffer);
+//  pass.add(llvm::createPrintModulePass(stream));
+//  pass.run(*src);
+  size_t sizes[] = {buffer.size()};
+  const unsigned char* data[] = {(unsigned char*)buffer.data()};
+  cl_int status;
+  cl_int err;
+  *cl_ = dispatch::clCreateProgramWithBinary(*context->cl(), 1, &*context->device()->cl(), sizes, data, &status, &err);
+  check(err);
+  check(status);
+  try{
+  dispatch::clBuildProgram(*cl_, 1, &*context->device()->cl(), NULL, NULL, NULL);
+  }
+  catch(...){
+  char log[2048];
+  dispatch::clGetProgramBuildInfo(*cl_, *context->device()->cl(), CL_PROGRAM_BUILD_LOG, 1024, log, NULL);
+  std::cout << log << std::endl;
+  }
 }
 
 
