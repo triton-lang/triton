@@ -41,10 +41,11 @@ class Range;
 class cu_buffer;
 
 // Base
-class stream: public polymorphic_resource<CUstream, cl_command_queue> {
+class stream: public polymorphic_resource<CUstream, cl_command_queue, host_stream_t> {
 public:
   stream(driver::context *ctx, CUstream, bool has_ownership);
   stream(driver::context *ctx, cl_command_queue, bool has_ownership);
+  stream(driver::context *ctx, host_stream_t, bool has_ownership);
   // factory
   static driver::stream* create(driver::context* ctx);
   // accessors
@@ -64,9 +65,17 @@ protected:
   driver::context *ctx_;
 };
 
-// CPU
-class cpu_stream: public stream {
+// Host
+class host_stream: public stream {
+public:
+  // Constructors
+  host_stream(driver::context *ctx);
 
+  // Overridden
+  void synchronize();
+  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event *event);
+  void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
+  void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr);
 };
 
 // OpenCL

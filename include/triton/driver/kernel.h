@@ -28,6 +28,11 @@
 
 #include <memory>
 
+namespace llvm
+{
+class GenericValue;
+}
+
 namespace triton
 {
 
@@ -37,10 +42,11 @@ namespace driver
 class cu_buffer;
 
 // Base
-class kernel: public polymorphic_resource<CUfunction, cl_kernel> {
+class kernel: public polymorphic_resource<CUfunction, cl_kernel, host_function_t> {
 public:
   kernel(driver::module* program, CUfunction fn, bool has_ownership);
   kernel(driver::module* program, cl_kernel fn, bool has_ownership);
+  kernel(driver::module* program, host_function_t fn, bool has_ownership);
   // Getters
   driver::module* module();
   // Factory methods
@@ -53,9 +59,19 @@ private:
   driver::module* program_;
 };
 
-// CPU
-class cpu_kernel: public kernel {
-
+// Host
+class host_kernel: public kernel {
+public:
+  //Constructors
+  host_kernel(driver::module* program, const char* name);
+  // Arguments setters
+  void setArg(unsigned int index, std::size_t size, void* ptr);
+  void setArg(unsigned int index, driver::buffer* buffer);
+  // Params
+  const std::vector<llvm::GenericValue>& params();
+private:
+  std::vector<std::shared_ptr<void> >  params_store_;
+  std::vector<llvm::GenericValue>  params_;
 };
 
 // OpenCL
@@ -81,8 +97,6 @@ public:
   void* const* cu_params() const;
 
 private:
-  handle<CUfunction> cu_;
-  driver::cu_module* program_;
   std::vector<std::shared_ptr<void> >  cu_params_store_;
   std::vector<void*>  cu_params_;
 };

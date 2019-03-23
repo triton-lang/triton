@@ -34,10 +34,11 @@ namespace driver
 class cu_stream;
 
 // Base
-class buffer : public polymorphic_resource<CUdeviceptr, cl_mem> {
+class buffer : public polymorphic_resource<CUdeviceptr, cl_mem, host_buffer_t> {
 public:
   buffer(driver::context* ctx, CUdeviceptr cl, bool take_ownership);
   buffer(driver::context* ctx, cl_mem cl, bool take_ownership);
+  buffer(driver::context* ctx, host_buffer_t hst, bool take_ownership);
   static buffer* create(driver::context* ctx, size_t size);
   driver::context* context();
 
@@ -46,9 +47,10 @@ protected:
 };
 
 // CPU
-class cpu_buffer: public buffer
+class host_buffer: public buffer
 {
-
+public:
+  host_buffer(driver::context* context, size_t size);
 };
 
 // OpenCL

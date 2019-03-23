@@ -42,6 +42,10 @@ buffer::buffer(driver::context* ctx, CUdeviceptr cu, bool take_ownership)
 buffer::buffer(driver::context* ctx, cl_mem cl, bool take_ownership)
   : polymorphic_resource(cl, take_ownership), context_(ctx) { }
 
+buffer::buffer(driver::context* ctx, host_buffer_t hst, bool take_ownership)
+  : polymorphic_resource(hst, take_ownership), context_(ctx) { }
+
+
 driver::context* buffer::context() {
   return context_;
 }
@@ -50,8 +54,16 @@ buffer* buffer::create(driver::context* ctx, size_t size) {
   switch(ctx->backend()){
   case CUDA: return new cu_buffer(ctx, size);
   case OpenCL: return new ocl_buffer(ctx, size);
+  case Host: return new host_buffer(ctx, size);
   default: throw std::runtime_error("unknown backend");
   }
+}
+
+//
+
+host_buffer::host_buffer(driver::context *context, size_t size)
+  :  buffer(context, host_buffer_t(), true){
+  hst_->data = new char[size];
 }
 
 //

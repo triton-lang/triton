@@ -22,7 +22,7 @@
 
 #include <iostream>
 #include <fstream>
-
+#include <memory>
 #include "triton/driver/module.h"
 #include "triton/driver/context.h"
 #include "triton/driver/error.h"
@@ -40,12 +40,17 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Analysis/LoopPass.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/OrcMCJITReplacement.h"
+#include <llvm/ExecutionEngine/SectionMemoryManager.h>
+#include "llvm/Transforms/Utils/Cloning.h"
 
 namespace triton
 {
@@ -76,6 +81,10 @@ module::module(driver::context* ctx, cl_program mod, bool has_ownership)
   : polymorphic_resource(mod, has_ownership), ctx_(ctx) {
 }
 
+module::module(driver::context* ctx, host_module_t mod, bool has_ownership)
+  : polymorphic_resource(mod, has_ownership), ctx_(ctx) {
+}
+
 driver::context* module::context() const {
   return ctx_;
 }
@@ -84,6 +93,7 @@ module* module::create(driver::context* ctx, llvm::Module *src) {
   switch(ctx->backend()){
     case CUDA: return new cu_module(ctx, src);
     case OpenCL: return new ocl_module(ctx, src);
+    case Host: return new host_module(ctx, src);
     default: throw std::runtime_error("unknown backend");
   }
 }
@@ -91,7 +101,7 @@ module* module::create(driver::context* ctx, llvm::Module *src) {
 void module::compile_llvm_module(llvm::Module* module, const std::string& triple,
                                         const std::string &proc, std::string layout,
                                         llvm::SmallVectorImpl<char> &buffer,
-                                        std::vector<std::string> files) {
+                                        std::vector<std::string> paths) {
   init_llvm();
   // create machine
   module->setTargetTriple(triple);
@@ -112,8 +122,7 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
     module->setDataLayout(layout);
 
   // link
-  for (std::string& file: files) {
-    std::string path = "/opt/rocm/lib/" + file;
+  for (std::string& path: paths) {
     llvm::SMDiagnostic err;
     std::unique_ptr<llvm::Module> mlib = llvm::parseIRFile(path, err, module->getContext());
     if (mlib.get() == nullptr) {
@@ -137,46 +146,44 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
 //  std::cout << std::string(buffer.begin(), buffer.end()) << std::endl;
 }
 
+
+/* ------------------------ */
+//        Host              //
+/* ------------------------ */
+
+host_module::host_module(driver::context * context, llvm::Module* src): module(context, host_module_t(), true) {
+  init_llvm();
+  // host info
+//  std::string triple = llvm::sys::getDefaultTargetTriple();
+//  std::string cpu = llvm::sys::getHostCPUName();
+//  llvm::SmallVector<char, 0> buffer;
+//  module::compile_llvm_module(src, triple, cpu, "", buffer);
+
+  // create execution engine
+//  llvm::legacy::PassManager pass;
+//  pass.add(llvm::createPrintModulePass(llvm::outs()));
+//  pass.add(llvm::createVerifierPass());
+//  pass.run(*src);
+  auto cloned = llvm::CloneModule(*src);
+  for(llvm::Function& fn: cloned->functions())
+    hst_->functions[fn.getName()] = &fn;
+  llvm::EngineBuilder builder(std::move(cloned));
+  builder.setErrorStr(&hst_->error);
+  builder.setMCJITMemoryManager(llvm::make_unique<llvm::SectionMemoryManager>());
+  builder.setOptLevel(llvm::CodeGenOpt::Aggressive);
+  builder.setEngineKind(llvm::EngineKind::JIT);
+  builder.setUseOrcMCJITReplacement(true);
+  hst_->engine = builder.create();
+}
+
 /* ------------------------ */
 //         OpenCL           //
 /* ------------------------ */
 
 ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(context, cl_program(), true) {
-//  const char* x = "__kernel void matmul(){ }";
-//  cl_int err;
-//  *cl_ = dispatch::clCreateProgramWithSource(*context->cl(), 1, &x, NULL, &err);
-//  check(err);
-//  return;
-
   init_llvm();
   llvm::SmallVector<char, 0> buffer;
-  std::vector<std::string> files = {
-      "oclc_daz_opt_on.amdgcn.bc",
-      "ocml.amdgcn.bc",
-      "hc.amdgcn.bc",
-      "ockl.amdgcn.bc",
-      "oclc_correctly_rounded_sqrt_off.amdgcn.bc",
-      "oclc_correctly_rounded_sqrt_on.amdgcn.bc",
-      "oclc_daz_opt_off.amdgcn.bc",
-      "oclc_finite_only_off.amdgcn.bc",
-      "oclc_finite_only_on.amdgcn.bc",
-      "oclc_isa_version_803.amdgcn.bc",
-      "oclc_isa_version_900.amdgcn.bc",
-      "oclc_unsafe_math_off.amdgcn.bc",
-      "oclc_unsafe_math_on.amdgcn.bc",
-      "oclc_isa_version_700.amdgcn.bc",
-      "opencl.amdgcn.bc"
-  };
-  module::compile_llvm_module(src, "amdgcn-amd-amdpal", "gfx902", "", buffer, files);
-
-
-
-//  llvm::BitcodeWriter writer(buffer);
-//  writer.writeModule(*src);
-//  llvm::legacy::PassManager pass;
-//  llvm::raw_svector_ostream stream(buffer);
-//  pass.add(llvm::createPrintModulePass(stream));
-//  pass.run(*src);
+  module::compile_llvm_module(src, "amdgcn-amd-amdpal", "gfx902", "", buffer);
   size_t sizes[] = {buffer.size()};
   const unsigned char* data[] = {(unsigned char*)buffer.data()};
   cl_int status;

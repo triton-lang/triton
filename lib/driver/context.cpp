@@ -47,13 +47,18 @@ context::context(driver::device *dev, CUcontext cu, bool take_ownership):
 context::context(driver::device *dev, cl_context cl, bool take_ownership):
   polymorphic_resource(cl, take_ownership),
   dev_(dev), cache_path_(get_cache_path()){
+}
 
+context::context(driver::device *dev, host_context_t hst, bool take_ownership):
+  polymorphic_resource(hst, take_ownership),
+  dev_(dev), cache_path_(get_cache_path()){
 }
 
 context* context::create(driver::device *dev){
   switch(dev->backend()){
   case CUDA: return new cu_context(dev);
   case OpenCL: return new ocl_context(dev);
+  case Host: return new host_context(dev);
   default: throw std::runtime_error("unknown backend");
   }
 }
@@ -86,6 +91,13 @@ std::string const & context::cache_path() const{
   return cache_path_;
 }
 
+/* ------------------------ */
+//         Host             //
+/* ------------------------ */
+
+host_context::host_context(driver::device* dev): context(dev, host_context_t(), true){
+
+}
 
 /* ------------------------ */
 //         CUDA             //

@@ -57,6 +57,11 @@ void backend::platforms::init() {
     for(cl_platform_id id: ids)
       cache_.push_back(new cl_platform(id));
   }
+  //if host is here
+  bool host_visible = true;
+  if(host_visible){
+    cache_.push_back(new host_platform());
+  }
   if(cache_.empty())
     throw std::runtime_error("ISAAC: No backend available. Make sure CUDA is available in your library path");
 }

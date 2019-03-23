@@ -30,6 +30,15 @@ namespace triton
 namespace driver
 {
 
+//Host
+inline void _delete(host_platform_t) { }
+inline void _delete(host_device_t)   { }
+inline void _delete(host_context_t)  { }
+inline void _delete(host_module_t)   { }
+inline void _delete(host_stream_t)   { }
+inline void _delete(host_buffer_t x)   { if(x.data) delete[] x.data; }
+inline void _delete(host_function_t) { }
+
 //OpenCL
 inline void _delete(cl_platform_id) { }
 inline void _delete(cl_device_id x) { dispatch::clReleaseDevice(x); }
@@ -58,7 +67,7 @@ handle<CUType>::handle(CUType cu, bool take_ownership): h_(new CUType(cu)), has_
 
 template<class CUType>
 handle<CUType>::~handle(){
-  if(has_ownership_ && h_ && h_.unique() && *h_)
+  if(has_ownership_ && h_ && h_.unique())
     _delete(*h_);
 }
 
@@ -78,6 +87,15 @@ template class handle<cl_program>;
 template class handle<cl_command_queue>;
 template class handle<cl_mem>;
 template class handle<cl_kernel>;
+
+template class handle<host_platform_t>;
+template class handle<host_device_t>;
+template class handle<host_context_t>;
+template class handle<host_module_t>;
+template class handle<host_stream_t>;
+template class handle<host_buffer_t>;
+template class handle<host_function_t>;
+
 
 }
 }

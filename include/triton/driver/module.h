@@ -45,13 +45,14 @@ class cu_context;
 class cu_device;
 
 // Base
-class module: public polymorphic_resource<CUmodule, cl_program> {
+class module: public polymorphic_resource<CUmodule, cl_program, host_module_t> {
 protected:
   void init_llvm();
 
 public:
   module(driver::context* ctx, CUmodule mod, bool has_ownership);
   module(driver::context* ctx, cl_program mod, bool has_ownership);
+  module(driver::context* ctx, host_module_t mod, bool has_ownership);
   static module* create(driver::context* ctx, llvm::Module *src);
   driver::context* context() const;
   void compile_llvm_module(llvm::Module* module, const std::string& triple,
@@ -63,8 +64,9 @@ protected:
 };
 
 // CPU
-class cpu_module: public module{
-
+class host_module: public module{
+public:
+  host_module(driver::context* context, llvm::Module *module);
 };
 
 // OpenCL

@@ -17,8 +17,6 @@ namespace ir{
 
 namespace codegen{
 
-class place_shared_copy;
-
 class tune {
   typedef std::pair<ir::value*, unsigned> node_t;
   typedef std::map <node_t, std::set<node_t>> graph_t;

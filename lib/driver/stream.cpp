@@ -31,6 +31,8 @@
 #include "triton/driver/event.h"
 #include "triton/driver/kernel.h"
 #include "triton/driver/buffer.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/GenericValue.h"
 
 namespace triton
 {
@@ -50,16 +52,47 @@ stream::stream(driver::context *ctx, cl_command_queue cl, bool has_ownership)
   : polymorphic_resource(cl, has_ownership), ctx_(ctx) {
 }
 
+stream::stream(driver::context *ctx, host_stream_t cl, bool has_ownership)
+  : polymorphic_resource(cl, has_ownership), ctx_(ctx) {
+}
+
 driver::stream* stream::create(driver::context* ctx) {
   switch(ctx->backend()){
     case CUDA: return new cu_stream(ctx);
     case OpenCL: return new cl_stream(ctx);
+    case Host: return new host_stream(ctx);
     default: throw std::runtime_error("unknown backend");
   }
 }
 
 driver::context* stream::context() const {
   return ctx_;
+}
+
+/* ------------------------ */
+//          Host            //
+/* ------------------------ */
+
+host_stream::host_stream(driver::context *ctx): stream(ctx, host_stream_t(), true) {
+
+}
+
+void host_stream::synchronize() {
+
+}
+
+void host_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event) {
+  driver::host_kernel* hst_kernel = (host_kernel*)kernel;
+  llvm::ExecutionEngine* engine = kernel->module()->hst()->engine;
+  engine->runFunction(kernel->hst()->fn, llvm::ArrayRef<llvm::GenericValue>(hst_kernel->params()));
+}
+
+void host_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
+
+}
+
+void host_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
+
 }
 
 

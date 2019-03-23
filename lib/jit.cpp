@@ -1,6 +1,7 @@
 ﻿#include "triton/jit.h"
 #include <string>
 #include "triton/ast/ast.h"
+#include "triton/codegen/target.h"
 #include "triton/ir/context.h"
 #include "triton/ir/context_impl.h"
 #include "triton/driver/device.h"
@@ -89,7 +90,7 @@ std::unique_ptr<ir::module> jit::make_triton_module(const std::string &src) {
 }
 
 
-jit::jit(driver::context *context): driver_context_(context) {
+jit::jit(driver::context *context): driver_context_(context), target_(new triton::codegen::cpu_target()) {
 }
 
 
@@ -98,7 +99,7 @@ void jit::autotune(const std::string &src, benchmark_t benchmark) {
   auto ptt_module = make_triton_module(src);
   ir::module &tt_module = *ptt_module;
   // set parameters
-  passes_wrapper passes;
+  passes_wrapper passes(target_.get());
   passes.tune.run(tt_module);
   auto mps = passes.tune.get_params(tt_module);
   // create parameter ranges
@@ -123,7 +124,7 @@ void jit::autotune(const std::string &src, benchmark_t benchmark) {
     // Deep copy of the module and tuner
     auto ptt_module = make_triton_module(src);
     ir::module &tt_module = *ptt_module;
-    passes_wrapper passes;
+    passes_wrapper passes(target_.get());
     passes.tune.run(tt_module);
     i = 0;
     for(ir::metaparameter* mp: passes.tune.get_params(tt_module)){
@@ -154,7 +155,7 @@ void jit::autotune(const std::string &src, benchmark_t benchmark) {
 
 void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params) {
   // set parameters
-  passes_wrapper passes;
+  passes_wrapper passes(target_.get());
   passes.tune.run(tt_module);
   unsigned i = 0;
   for(ir::metaparameter* mp: passes.tune.get_params(tt_module))

@@ -74,9 +74,16 @@ void cl_platform::devices(std::vector<device*> &devices) const{
 }
 
 /* ------------------------ */
-//        Vulkan            //
+//        Host              //
 /* ------------------------ */
 
+std::string host_platform::version() const {
+  return "1.0";
+}
+
+void host_platform::devices(std::vector<driver::device*> &devices) const {
+  devices.push_back(new driver::host_device());
+}
 
 
 }

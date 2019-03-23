@@ -15,6 +15,7 @@
 #include "triton/codegen/vectorize.h"
 #include "triton/codegen/buffer_info.h"
 #include "triton/codegen/barriers.h"
+#include "triton/codegen/target.h"
 #include <functional>
 
 namespace llvm {
@@ -42,11 +43,12 @@ public:
   typedef std::function<double(driver::kernel*, launch_information)> benchmark_t;
 
   struct passes_wrapper {
-    passes_wrapper(): shared(&buffer_info), liveness(&buffer_info),
+    passes_wrapper(codegen::target* target)
+                    : shared(&buffer_info), liveness(&buffer_info),
                       allocation(&liveness, &buffer_info),
                       barriers(&allocation, &buffer_info),
                       vectorize(&tune),
-                      selection(&allocation, &tune, &buffer_info){ }
+                      selection(&allocation, &tune, &buffer_info, target) { }
 
     void init(ir::module &module) {
       // generate ptx
@@ -89,6 +91,7 @@ private:
   ir::context triton_context_;
   std::map<std::string, launch_information> launch_info_map_;
   std::map<std::string, unsigned> global_ints_;
+  std::unique_ptr<triton::codegen::target> target_;
 };
 
 

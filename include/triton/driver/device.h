@@ -35,14 +35,15 @@ namespace driver
 class context;
 
 // Base device
-class device: public polymorphic_resource<CUdevice, cl_device_id>{
+class device: public polymorphic_resource<CUdevice, cl_device_id, host_device_t>{
 public:
   using polymorphic_resource::polymorphic_resource;
 };
 
-// CPU device
-class cpu_device: public device {
-
+// Host device
+class host_device: public device {
+public:
+  host_device(): device(host_device_t(), true){ }
 };
 
 // OpenCL device

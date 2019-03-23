@@ -24,6 +24,7 @@ namespace codegen{
 class allocation;
 class tune;
 class buffer_info_pass;
+class target;
 
 typedef std::vector<llvm::Value*> indices_t;
 
@@ -128,7 +129,9 @@ private:
   void lower_tile_instruction(ir::instruction *src, llvm::IRBuilder<> &builder);
 
 public:
-  selection(allocation *alloc, tune *params, buffer_info_pass *buffer_info): alloc_(alloc), params_(params), buffer_info_(buffer_info){ }
+  selection(allocation *alloc, tune *params, buffer_info_pass *buffer_info, target *tgt)
+    : alloc_(alloc), params_(params), buffer_info_(buffer_info), tgt_(tgt){ }
+
   void run(ir::module &src, llvm::Module &dst);
 
 private:
@@ -138,6 +141,7 @@ private:
   pmap_t last_block_;
   allocation *alloc_;
   tune *params_;
+  target *tgt_;
   buffer_info_pass *buffer_info_;
   std::map<ir::metaparameter*, distributed_axis> axes_;
 };
