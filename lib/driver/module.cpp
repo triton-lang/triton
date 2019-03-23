@@ -23,6 +23,8 @@
 #include <iostream>
 #include <fstream>
 #include <memory>
+#include <fstream>
+#include "llvm/IR/IRBuilder.h"
 #include "triton/driver/module.h"
 #include "triton/driver/context.h"
 #include "triton/driver/error.h"
@@ -108,11 +110,11 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
   std::string error;
   auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
   llvm::TargetOptions opt;
-  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
-  opt.UnsafeFPMath = false;
-  opt.NoInfsFPMath = false;
-  opt.NoNaNsFPMath = true;
-  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, "", opt,
+//  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+//  opt.UnsafeFPMath = false;
+//  opt.NoInfsFPMath = false;
+//  opt.NoNaNsFPMath = true;
+  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, "code-object-v3", opt,
                                                              llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
 
   // set data layout
@@ -139,11 +141,12 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
   }
 
   // emit machine code
+  for (llvm::Function &f : module->functions())
+    f.addFnAttr(llvm::Attribute::AlwaysInline);
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
   machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_ObjectFile);
   pass.run(*module);
-//  std::cout << std::string(buffer.begin(), buffer.end()) << std::endl;
 }
 
 
@@ -182,15 +185,42 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 
 ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(context, cl_program(), true) {
   init_llvm();
+//  std::vector<std::string> files = {
+//    "opencl.amdgcn.bc",
+//    "ocml.amdgcn.bc",
+//    "ockl.amdgcn.bc",
+//    "oclc_correctly_rounded_sqrt_off.amdgcn.bc",
+//    "oclc_daz_opt_on.amdgcn.bc",
+//    "oclc_finite_only_off.amdgcn.bc",
+//    "oclc_isa_version_902.amdgcn.bc",
+//    "oclc_unsafe_math_off.amdgcn.bc"
+//  };
+//  for(auto&x : files)
+//    x = "/opt/rocm/lib/" + x;
+
+  llvm::LLVMContext ctx;
+//  llvm::IRBuilder<> builder(ctx);
+//  auto dummy = new llvm::Module("matmul", ctx);
+//  llvm::Function *fn = llvm::Function::Create(llvm::FunctionType::get(builder.getVoidTy(), {}, false), llvm::Function::ExternalLinkage, "matmul", dummy);
+//  llvm::BasicBlock *entry = llvm::BasicBlock::Create(ctx, "entry", fn);
+//  builder.SetInsertPoint(entry);
+//  builder.CreateRetVoid();
   llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(src, "amdgcn-amd-amdpal", "gfx902", "", buffer);
+  llvm::SMDiagnostic error;
+  auto dummy = llvm::parseIRFile("test.bc", error, ctx);
+  module::compile_llvm_module(dummy.get(), "amdgcn-amd-amdhsa-amdgizcl", "gfx902", "", buffer);
+
+
+//  std::ifstream fin("test.o", std::ios::in | std::ios::binary );
+//  std::vector<char> buffer(9296);
+//  fin.read(buffer.data(), buffer.size());
   size_t sizes[] = {buffer.size()};
   const unsigned char* data[] = {(unsigned char*)buffer.data()};
   cl_int status;
   cl_int err;
   *cl_ = dispatch::clCreateProgramWithBinary(*context->cl(), 1, &*context->device()->cl(), sizes, data, &status, &err);
-  check(err);
   check(status);
+  check(err);
   try{
   dispatch::clBuildProgram(*cl_, 1, &*context->device()->cl(), NULL, NULL, NULL);
   }
@@ -198,6 +228,8 @@ ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(con
   char log[2048];
   dispatch::clGetProgramBuildInfo(*cl_, *context->device()->cl(), CL_PROGRAM_BUILD_LOG, 1024, log, NULL);
   std::cout << log << std::endl;
+  std::cout << "T_T" << std::endl;
+  throw;
   }
 }
 
