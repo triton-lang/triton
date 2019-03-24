@@ -111,7 +111,7 @@ int main() {
   triton::jit jit(context);
 
   // matrix multiplication parameters
-  size_t M = 512, N = 512, K = 512;
+  int32_t M = 128, N = 128, K = 128;
   std::vector<float> hc(M*N);
   std::vector<float> rc(M*N);
   std::vector<float> ha(M*K);
@@ -163,8 +163,9 @@ int main() {
     stream->enqueue(kernel, grid, {nthreads, 1, 1});
     stream->synchronize();
     // benchmark
-    double ts = bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
-                      [&](){ stream->synchronize(); });
+//    double ts = bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
+//                      [&](){ stream->synchronize(); });
+    double ts = 1;
     ts = ts * 1e-9;
     double tflops = 2*M*N*K / ts * 1e-12;
     return tflops;

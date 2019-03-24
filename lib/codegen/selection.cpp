@@ -748,6 +748,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           indices_t b_idx = {idx[1], builder.getInt32(K)};
           Value *a = TA->get_value(a_idx);
           Value *b = TB->get_value(b_idx);
+//          a = ConstantFP::get(builder.getFloatTy(), 1);
+//          b = ConstantFP::get(builder.getFloatTy(), 1);
           res = builder.CreateCall(f_mul_add, {a, b, res});
         }
         result->set_value(idx, res);

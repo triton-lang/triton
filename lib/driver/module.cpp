@@ -1,22 +1,22 @@
 /* Copyright 2015-2017 Philippe Tillet
-* 
-* Permission is hereby granted, free of charge, to any person obtaining 
-* a copy of this software and associated documentation files 
-* (the "Software"), to deal in the Software without restriction, 
-* including without limitation the rights to use, copy, modify, merge, 
-* publish, distribute, sublicense, and/or sell copies of the Software, 
-* and to permit persons to whom the Software is furnished to do so, 
+*
+* Permission is hereby granted, free of charge, to any person obtaining
+* a copy of this software and associated documentation files
+* (the "Software"), to deal in the Software without restriction,
+* including without limitation the rights to use, copy, modify, merge,
+* publish, distribute, sublicense, and/or sell copies of the Software,
+* and to permit persons to whom the Software is furnished to do so,
 * subject to the following conditions:
-* 
-* The above copyright notice and this permission notice shall be 
+*
+* The above copyright notice and this permission notice shall be
 * included in all copies or substantial portions of the Software.
-* 
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, 
-* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF 
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
 * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
-* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
@@ -185,37 +185,17 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 
 ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(context, cl_program(), true) {
   init_llvm();
-//  std::vector<std::string> files = {
-//    "opencl.amdgcn.bc",
-//    "ocml.amdgcn.bc",
-//    "ockl.amdgcn.bc",
-//    "oclc_correctly_rounded_sqrt_off.amdgcn.bc",
-//    "oclc_daz_opt_on.amdgcn.bc",
-//    "oclc_finite_only_off.amdgcn.bc",
-//    "oclc_isa_version_902.amdgcn.bc",
-//    "oclc_unsafe_math_off.amdgcn.bc"
-//  };
-//  for(auto&x : files)
-//    x = "/opt/rocm/lib/" + x;
-
-  llvm::LLVMContext ctx;
-//  llvm::IRBuilder<> builder(ctx);
-//  auto dummy = new llvm::Module("matmul", ctx);
-//  llvm::Function *fn = llvm::Function::Create(llvm::FunctionType::get(builder.getVoidTy(), {}, false), llvm::Function::ExternalLinkage, "matmul", dummy);
-//  llvm::BasicBlock *entry = llvm::BasicBlock::Create(ctx, "entry", fn);
-//  builder.SetInsertPoint(entry);
-//  builder.CreateRetVoid();
   llvm::SmallVector<char, 0> buffer;
-  llvm::SMDiagnostic error;
-  auto dummy = llvm::parseIRFile("test.bc", error, ctx);
-  module::compile_llvm_module(dummy.get(), "amdgcn-amd-amdhsa-amdgizcl", "gfx902", "", buffer);
+  module::compile_llvm_module(src, "amdgcn-amd-amdhsa-amdgizcl", "gfx902", "", buffer);
 
+  std::ofstream output("tmp.o", std::ios::binary);
+  std::copy(buffer.begin(), buffer.end(), std::ostreambuf_iterator<char>(output));
+  system("ld.lld tmp.o -shared -o test.o");
 
-//  std::ifstream fin("test.o", std::ios::in | std::ios::binary );
-//  std::vector<char> buffer(9296);
-//  fin.read(buffer.data(), buffer.size());
-  size_t sizes[] = {buffer.size()};
-  const unsigned char* data[] = {(unsigned char*)buffer.data()};
+  std::ifstream input("test.o", std::ios::in | std::ios::binary );
+  std::vector<unsigned char> in_buffer(std::istreambuf_iterator<char>(input), {});
+  size_t sizes[] = {in_buffer.size()};
+  const unsigned char* data[] = {(unsigned char*)in_buffer.data()};
   cl_int status;
   cl_int err;
   *cl_ = dispatch::clCreateProgramWithBinary(*context->cl(), 1, &*context->device()->cl(), sizes, data, &status, &err);
