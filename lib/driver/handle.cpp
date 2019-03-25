@@ -60,13 +60,16 @@ inline void _delete(cu_event_t x) { _delete(x.first); _delete(x.second); }
 inline void _delete(CUPlatform){}
 
 //Constructor
-template<class CUType>
-handle<CUType>::handle(CUType cu, bool take_ownership): h_(new CUType(cu)), has_ownership_(take_ownership)
+template<class T>
+handle<T>::handle(T cu, bool take_ownership): h_(new T(cu)), has_ownership_(take_ownership)
 { }
 
+template<class T>
+handle<T>::handle(): has_ownership_(false){ }
 
-template<class CUType>
-handle<CUType>::~handle(){
+
+template<class T>
+handle<T>::~handle(){
   if(has_ownership_ && h_ && h_.unique())
     _delete(*h_);
 }

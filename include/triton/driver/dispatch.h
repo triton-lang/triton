@@ -87,7 +87,7 @@ public:
   static bool cudnninit();
   static void release();
 
-  //OpenCL
+  // OpenCL
   static cl_int clBuildProgram(cl_program, cl_uint, const cl_device_id *, const char *, void (*)(cl_program, void *), void *);
   static cl_int clEnqueueNDRangeKernel(cl_command_queue, cl_kernel, cl_uint, const size_t *, const size_t *, const size_t *, cl_uint, const cl_event *, cl_event *);
   static cl_int clSetKernelArg(cl_kernel, cl_uint, size_t, const void *);

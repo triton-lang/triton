@@ -94,10 +94,15 @@ abstract_declarator
 direct_abstract_declarator
     : '[' primary_expression_list ']' { $$ = new tile(nullptr, $1); }
 
-constant : 
+constant:
     CONSTANT { $$ = new constant(atoi(yytext)); }
 	;
-	
+
+constant_list:
+      constant { $$ = new list<constant*>((constant*)$1); }
+    | constant_list ',' constant { $$ = append_ptr_list<constant>($1, $3); }
+    ;
+
 type_name
   : declaration_specifiers { $$ = new type_name($1, nullptr); }
   | declaration_specifiers abstract_declarator { $$ = new type_name($1, $2); }
@@ -259,7 +264,7 @@ expression
 /* Initialization */
 initialization_expression
   : assignment_expression { $$ = $1; }
-  | '{' constant '}' { $$ = $2; }
+  | '{' constant_list '}' { $$ = $2; }
   ;
 
 

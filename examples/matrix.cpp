@@ -6,9 +6,9 @@
 
 const char* src =
 R"(
-const tunable int32 TM;
-const tunable int32 TN;
-const tunable int32 TK;
+const tunable int32 TM = {16, 32, 64};
+const tunable int32 TN = {16, 32, 64};
+const tunable int32 TK = {8, 16};
 
 void matmul(restrict read_only fp32 *a, restrict read_only fp32 *b, fp32 *c,
            int32 M, int32 N, int32 K, int32 bound){
@@ -26,20 +26,8 @@ void matmul(restrict read_only fp32 *a, restrict read_only fp32 *b, fp32 *c,
     pa = pa + TK*M;
     pb = pb + TK*K;
     k = k - TK;
-    int1 checka[TM, TK] = k > bound;
-    int1 checkb[TN, TK] = k > bound;
-    @checka a = *pa;
-    @checkb b = *pb;
-    if(k > bound)
-      continue;
-    int1 checka0[TM] = rxa < M;
-    int1 checka1[TK] = rka < k;
-    int1 checkb0[TN] = ryb < N;
-    int1 checkb1[TK] = rkb < k;
-    checka = checka0[:, newaxis] && checka1[newaxis, :];
-    checkb = checkb0[:, newaxis] && checkb1[newaxis, :];
-    a = checka ? *pa : 0;
-    b = checkb ? *pb : 0;
+    a = *pa;
+    b = *pb;
   }
   int32 rxc[TM] = get_global_range[TM](0);
   int32 ryc[TN] = get_global_range[TN](1);
@@ -87,22 +75,17 @@ T min(std::vector<T> x)
 
 
 template<class OP, class SYNC>
-double bench(OP const & op, SYNC const & sync)
+double bench(OP const & op, SYNC const & sync, unsigned repeat = 20)
 {
   timer tmr;
-  std::vector<size_t> times;
-  double total_time = 0;
   op();
   sync();
-  while(total_time*1e-9 < 1e-3){
-    float norm = 1;
-    tmr.start();
+  tmr.start();
+  for(unsigned i = 0; i < repeat; i++)
     op();
-    sync();
-    times.push_back(norm*tmr.get().count());
-    total_time+=times.back();
-  }
-  return min(times);
+  sync();
+  double time = tmr.get().count();
+  return time / repeat;
 }
 
 int main() {
@@ -111,16 +94,16 @@ int main() {
   triton::jit jit(context);
 
   // matrix multiplication parameters
-  int32_t M = 128, N = 128, K = 128;
+  int32_t M = 512, N = 512, K = 512;
   std::vector<float> hc(M*N);
   std::vector<float> rc(M*N);
   std::vector<float> ha(M*K);
   std::vector<float> hb(K*N);
   srand(0);
   for(size_t i = 0; i < ha.size(); i++)
-    ha[i] = 1;
+    ha[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < hb.size(); i++)
-    hb[i] = 1;
+    hb[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < hc.size(); i++)
     hc[i] = 0;
   triton::driver::buffer* dc = triton::driver::buffer::create(context, hc.size()*4);
@@ -163,11 +146,10 @@ int main() {
     stream->enqueue(kernel, grid, {nthreads, 1, 1});
     stream->synchronize();
     // benchmark
-//    double ts = bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
-//                      [&](){ stream->synchronize(); });
-    double ts = 1;
+    double ts = bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
+                      [&](){ stream->synchronize(); });
     ts = ts * 1e-9;
-    double tflops = 2*M*N*K / ts * 1e-12;
+    double tflops = 2.*M*N*K / ts * 1e-12;
     return tflops;
   };
 
@@ -177,11 +159,12 @@ int main() {
     16, 2, 64,
     32, 2, 64,
     16, 8, 2, 2,
-    8, 1, 8,
-    4, 1
+    8, 8,
+    4,
   };
+//  params = {8, 2, 64, 16, 2, 64, 4, 16, 2, 2, 8, 8, 4};
 
-//  jit.autotune(src, benchmark);
+  jit.autotune(src, benchmark);
   jit.add_module(src, params);
   triton::driver::kernel* kernel = jit.get_function("matmul");
   triton::jit::launch_information info = jit.get_launch_info("matmul");

@@ -25,7 +25,7 @@
 #include <sstream>
 #include <cstring>
 #include <memory>
-
+#include "triton/driver/helpers/CL/infos.hpp"
 #include "triton/driver/device.h"
 #include "triton/driver/context.h"
 
@@ -40,6 +40,14 @@ namespace driver
 //         OpenCL           //
 /* ------------------------ */
 
+// maximum amount of shared memory per block
+size_t ocl_device::max_shared_memory() const {
+  return ocl::info<CL_DEVICE_LOCAL_MEM_SIZE>(*cl_);
+}
+
+size_t ocl_device::max_threads_per_block() const {
+  return ocl::info<CL_DEVICE_MAX_WORK_ITEM_SIZES>(*cl_).at(0);
+}
 
 /* ------------------------ */
 //         CUDA             //

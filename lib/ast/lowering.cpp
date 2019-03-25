@@ -410,12 +410,16 @@ ir::value* initializer::codegen(ir::module * mod) const{
   std::string name = decl_->id()->name();
   ir::value *value = ir::undef_value::get(ty);
   if(std::find(storage.begin(), storage.end(), TUNABLE_T) != storage.end()){
-    assert(expr_ == nullptr);
-    //TODO: implement ranges
-    value = ir::metaparameter::create(mod->get_context(), ty, 8, (name=="TK")?8:64);
+    auto csts = dynamic_cast<list<constant*>*>((node*)expr_);
+    if(csts == nullptr)
+      throw std::runtime_error("must specify constant list for metaparameters");
+    std::vector<unsigned> values;
+    for(constant* cst: csts->values())
+      values.push_back(cst->value());
+    value = ir::metaparameter::create(mod->get_context(), ty, values);
     mod->register_global(name, value);
   }
-  if(expr_){
+  else if(expr_){
     value = expr_->codegen(mod);
     value = explicit_cast(mod->get_builder(), value, ty);
     implicit_broadcast(mod, value, ty);

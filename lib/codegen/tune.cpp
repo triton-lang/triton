@@ -144,11 +144,23 @@ void tune::run(ir::module &mod) {
     // Layout parameters
     while(!nodes_.empty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 1, 2);
+      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 2, 4);
       ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
       connected_components(*nodes_.begin(), {nts, mts}, nodes_, dependencies_);
     }
   }
+
+  // Simplify metaparameters
+  std::set<ir::metaparameter*> fixed_io_nts;
+  for(ir::function *fn: mod.get_function_list())
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction *i : block->get_inst_list())
+  if(dynamic_cast<ir::load_inst*>(i) || dynamic_cast<ir::store_inst*>(i))
+  if(i->get_type()->is_tile_ty())
+    for(unsigned d = 1; d < i->get_type()->get_tile_shapes().size(); d++)
+      fixed_io_nts.insert(params_.at(i).at("nts.d" + std::to_string(d)));
+  for(ir::metaparameter* mp: fixed_io_nts)
+    mp->set_value(1);
 }
 
 void tune::init(ir::module &mod) {
@@ -234,7 +246,7 @@ bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &er
     int num_threads = 1;
     for(size_t k = 0; k < shapes.size(); k++)
       num_threads *= params_[i]["mts.d" + to_string(k)]->get_value();
-    if(num_threads % 32 != 0)
+    if(num_threads % 64 != 0)
       errors[i].push_back("number of threads per block (" + to_string(num_threads) + ") must be multiple of 32");
     if(num_threads != num_threads_)
       errors[i].push_back("Number of threads must be the same for all tiles (" + to_string(num_threads_) + ")");

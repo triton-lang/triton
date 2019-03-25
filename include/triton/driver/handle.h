@@ -105,20 +105,21 @@ public:
     bool operator<(handle_interface const & y) { return (CUType)(*this) < (CUType)(y); }
 };
 
-template<class CUType>
+template<class T>
 class handle{
 public:
   template<class, class> friend class handle_interface;
 public:
   //Constructors
-  handle(CUType cu = CUType(), bool take_ownership = true);
+  handle(T h, bool take_ownership = true);
+  handle();
   ~handle();
-  CUType& operator*() { return *h_; }
-  CUType const & operator*() const { return *h_; }
-  CUType* operator->() const { return h_.get(); }
+  T& operator*() { return *h_; }
+  T const & operator*() const { return *h_; }
+  T* operator->() const { return h_.get(); }
 
 protected:
-  std::shared_ptr<CUType> h_;
+  std::shared_ptr<T> h_;
   bool has_ownership_;
 };
 

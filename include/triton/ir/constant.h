@@ -44,19 +44,19 @@ protected:
 };
 
 /* Metaparameter int */
-class metaparameter: public constant_int{
-  metaparameter(type *ty, unsigned lo, unsigned hi);
+class metaparameter: public constant_int {
+private:
+  metaparameter(type *ty, const std::vector<unsigned>& space);
 
 public:
   static metaparameter *create(context &ctx, type *ty, unsigned lo, unsigned hi);
+  static metaparameter *create(context &ctx, type *ty, const std::vector<unsigned>& space);
   void set_value(uint64_t value) { has_value_ = true; value_ = value; }
   bool has_value() { return has_value_; }
-  unsigned get_lo() { return lo_; }
-  unsigned get_hi() { return hi_; }
+  const std::vector<unsigned>& get_space() { return space_; }
 
 private:
-  unsigned lo_;
-  unsigned hi_;
+  std::vector<unsigned> space_;
   bool has_value_;
 };
 

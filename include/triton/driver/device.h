@@ -38,18 +38,24 @@ class context;
 class device: public polymorphic_resource<CUdevice, cl_device_id, host_device_t>{
 public:
   using polymorphic_resource::polymorphic_resource;
+  virtual size_t max_threads_per_block() const = 0;
+  virtual size_t max_shared_memory() const = 0;
 };
 
 // Host device
 class host_device: public device {
 public:
   host_device(): device(host_device_t(), true){ }
+  size_t max_threads_per_block() const { return 1; }
+  size_t max_shared_memory() const { return 0; }
 };
 
 // OpenCL device
 class ocl_device: public device {
 public:
   ocl_device(cl_device_id cl, bool take_ownership = true): device(cl, take_ownership) { }
+  size_t max_threads_per_block() const;
+  size_t max_shared_memory() const;
 };
 
 // CUDA device
@@ -87,8 +93,6 @@ public:
   std::string infos() const;
   size_t address_bits() const;
   std::vector<size_t> max_block_dim() const;
-  size_t max_threads_per_block() const;
-  size_t max_shared_memory() const;
   size_t warp_size() const;
   //Compute Capability
   void interpret_as(std::pair<size_t, size_t> cc);
@@ -99,7 +103,8 @@ public:
   //Clocks
   size_t current_sm_clock() const;
   size_t current_mem_clock() const;
-
+  size_t max_threads_per_block() const;
+  size_t max_shared_memory() const;
   size_t max_sm_clock() const;
   size_t max_mem_clock() const;
 

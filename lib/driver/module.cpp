@@ -53,6 +53,10 @@
 #include "llvm/ExecutionEngine/OrcMCJITReplacement.h"
 #include <llvm/ExecutionEngine/SectionMemoryManager.h>
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "lld/Common/Driver.h"
+#include "lld/Common/Args.h"
+#include "lld/Common/ErrorHandler.h"
+#include "lld/Common/LLVM.h"
 
 namespace triton
 {
@@ -110,36 +114,17 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
   std::string error;
   auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
   llvm::TargetOptions opt;
-//  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
-//  opt.UnsafeFPMath = false;
-//  opt.NoInfsFPMath = false;
-//  opt.NoNaNsFPMath = true;
+  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+  opt.UnsafeFPMath = false;
+  opt.NoInfsFPMath = false;
+  opt.NoNaNsFPMath = true;
   llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, "code-object-v3", opt,
                                                              llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
-
   // set data layout
   if(layout.empty())
     module->setDataLayout(machine->createDataLayout());
   else
     module->setDataLayout(layout);
-
-  // link
-  for (std::string& path: paths) {
-    llvm::SMDiagnostic err;
-    std::unique_ptr<llvm::Module> mlib = llvm::parseIRFile(path, err, module->getContext());
-    if (mlib.get() == nullptr) {
-      std::string msg = err.getMessage();
-      std::cerr << "Fail to load bitcode file " << path << "\n"
-                 << "line " << err.getLineNo() << ":" << msg;
-    }
-    mlib->setTargetTriple(module->getTargetTriple());
-    mlib->setDataLayout(module->getDataLayout());
-    for (llvm::Function &f : mlib->functions()) {
-      f.addFnAttr(llvm::Attribute::AlwaysInline);
-    }
-    llvm::Linker::linkModules(*module, std::move(mlib));
-  }
-
   // emit machine code
   for (llvm::Function &f : module->functions())
     f.addFnAttr(llvm::Attribute::AlwaysInline);
@@ -187,12 +172,10 @@ ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(con
   init_llvm();
   llvm::SmallVector<char, 0> buffer;
   module::compile_llvm_module(src, "amdgcn-amd-amdhsa-amdgizcl", "gfx902", "", buffer);
-
-  std::ofstream output("tmp.o", std::ios::binary);
+  std::ofstream output("/tmp/tmp.o", std::ios::binary);
   std::copy(buffer.begin(), buffer.end(), std::ostreambuf_iterator<char>(output));
-  system("ld.lld tmp.o -shared -o test.o");
-
-  std::ifstream input("test.o", std::ios::in | std::ios::binary );
+  system("ld.lld-8 /tmp/tmp.o -shared -o /tmp/tmp.o");
+  std::ifstream input("/tmp/tmp.o", std::ios::in | std::ios::binary );
   std::vector<unsigned char> in_buffer(std::istreambuf_iterator<char>(input), {});
   size_t sizes[] = {in_buffer.size()};
   const unsigned char* data[] = {(unsigned char*)in_buffer.data()};
@@ -208,7 +191,6 @@ ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(con
   char log[2048];
   dispatch::clGetProgramBuildInfo(*cl_, *context->device()->cl(), CL_PROGRAM_BUILD_LOG, 1024, log, NULL);
   std::cout << log << std::endl;
-  std::cout << "T_T" << std::endl;
   throw;
   }
 }
