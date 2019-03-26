@@ -21,11 +21,10 @@ void matmul(restrict read_only fp32 *a, restrict read_only fp32 *b, fp32 *c,
   fp32* pb[TN, TK] = b + rkb[newaxis, :]*K + ryb[:, newaxis];
   fp32 a[TM, TK] = *pa;
   fp32 b[TN, TK] = *pb;
-  for(int32 k = K; k > 0;){
+  for(int32 k = K; k > 0; k = k - TK){
     C = dot(a, b, C);
     pa = pa + TK*M;
     pb = pb + TK*K;
-    k = k - TK;
     a = *pa;
     b = *pb;
   }
@@ -164,7 +163,7 @@ int main() {
   };
 //  params = {8, 2, 64, 16, 2, 64, 4, 16, 2, 2, 8, 8, 4};
 
-  jit.autotune(src, benchmark);
+//  jit.autotune(src, benchmark);
   jit.add_module(src, params);
   triton::driver::kernel* kernel = jit.get_function("matmul");
   triton::jit::launch_information info = jit.get_launch_info("matmul");

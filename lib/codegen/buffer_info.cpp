@@ -21,6 +21,16 @@ bool buffer_info_pass::is_loop_latch(ir::phi_node *phi, ir::value *terminator){
     throw std::runtime_error("unreachable");
 }
 
+void buffer_info_pass::replace(ir::value* before, ir::value *after) {
+  shared_.erase(before);
+  shared_.insert(after);
+  if(refs_.find(before) != refs_.end()){
+    ir::value* v = refs_.at(before);
+    refs_.erase(before);
+    refs_.insert({after, v});
+  }
+}
+
 void buffer_info_pass::run(ir::module &mod) {
   // Find which buffers are shared
   for(ir::function *fn: mod.get_function_list())

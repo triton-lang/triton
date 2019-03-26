@@ -109,6 +109,10 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
                                         llvm::SmallVectorImpl<char> &buffer,
                                         std::vector<std::string> paths) {
   init_llvm();
+//    llvm::legacy::PassManager passes;
+//    passes.add(llvm::createPrintModulePass(llvm::outs()));
+//    passes.add(llvm::createVerifierPass());
+//    passes.run(*module);
   // create machine
   module->setTargetTriple(triple);
   std::string error;

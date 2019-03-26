@@ -5,6 +5,7 @@
 #include <memory>
 #include "llvm/IR/LLVMContext.h"
 #include "triton/ir/context.h"
+#include "triton/ir/print.h"
 #include "triton/driver/module.h"
 #include "triton/driver/kernel.h"
 #include "triton/codegen/selection.h"
@@ -54,10 +55,12 @@ public:
       // generate ptx
       buffer_info.run(module);
       shared.run(module);
+      triton::ir::print(module, std::cout);
       liveness.run(module);
       allocation.run();
       barriers.run(module);
       vectorize.run(module);
+      triton::ir::print(module, std::cout);
     }
 
     codegen::tune tune;

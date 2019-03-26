@@ -28,6 +28,12 @@ void place_shared_copy::run(ir::module &mod) {
   for(ir::instruction *i: block->get_inst_list())
   if(info_->is_shared(i) && !info_->is_double(i))
     add_copy(i, builder);
+
+  for(ir::function *fn: mod.get_function_list())
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction *i: block->get_inst_list())
+    if(auto* cts = dynamic_cast<ir::copy_to_shared_inst*>(i))
+      info_->replace(cts->get_operand(0), cts);
 }
 
 }

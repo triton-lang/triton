@@ -6,6 +6,7 @@
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
+#include "triton/ir/cfg.h"
 
 namespace triton {
 
@@ -62,27 +63,76 @@ void barriers::insert_barrier(ir::instruction *instr, ir::builder &builder) {
   }
 }
 
-void barriers::add(ir::basic_block *block, interval_vec_t &not_synced, ir::builder &builder) {
+barriers::interval_vec_t barriers::join(const std::vector<interval_vec_t>& intervals) {
+  barriers::interval_vec_t result;
+  for(auto x: intervals)
+    for(interval_t i: x)
+      result.push_back(i);
+  return result;
+}
+
+std::pair<barriers::interval_vec_t,
+          barriers::interval_vec_t> barriers::transfer(ir::basic_block *block,
+                                            const interval_vec_t &written_to,
+                                            const interval_vec_t &read_from,
+                                            std::set<ir::instruction*>& insert_loc) {
   ir::basic_block::inst_list_t instructions = block->get_inst_list();
+  interval_vec_t new_written_to = written_to;
+  interval_vec_t new_read_from = read_from;
   for(ir::instruction *i: instructions){
     interval_vec_t read, written;
     get_read_intervals(i, read);
     get_written_intervals(i, written);
-    if(intersect(not_synced, read)) {
-      not_synced.clear();
-      insert_barrier(i, builder);
+    bool read_while_written = intersect(new_written_to, read);
+    bool written_while_read = intersect(new_read_from, written);
+    // double buffering: write and phi-node read won't intersect
+    if(dynamic_cast<ir::copy_to_shared_inst*>(i) &&
+       buffer_info_->is_double(buffer_info_->get_reference(i)))
+      written_while_read = false;
+    if(read_while_written || written_while_read) {
+      insert_loc.insert(i);
+      new_written_to.clear();
+      new_read_from.clear();
     }
-    std::copy(written.begin(), written.end(), std::back_inserter(not_synced));
+    std::copy(written.begin(), written.end(), std::back_inserter(new_written_to));
+    std::copy(read.begin(), read.end(), std::back_inserter(new_read_from));
   }
+  return std::make_pair(new_written_to, new_read_from);
 }
 
 void barriers::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
   for(ir::function *fn: mod.get_function_list()){
-    // find barrier location
-    interval_vec_t not_synced;
-    for(ir::basic_block *block: fn->blocks())
-      add(block, not_synced, builder);
+    std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
+    std::map<ir::basic_block*, interval_vec_t> written_to;
+    std::map<ir::basic_block*, interval_vec_t> read_from;
+    std::set<ir::instruction*> insert_locs;
+    size_t n_inserted_im1 = 0;
+    bool done = false;
+    do{
+      // find barrier location
+      for(ir::basic_block *block: rpo){
+        // written to
+        std::vector<interval_vec_t> pred_written_to;
+        for(ir::basic_block* pred: block->get_predecessors())
+          pred_written_to.push_back(written_to[pred]);
+        // read from
+        std::vector<interval_vec_t> pred_read_from;
+        for(ir::basic_block* pred: block->get_predecessors())
+          pred_read_from.push_back(read_from[pred]);
+        // apply transfer function
+        auto result = transfer(block, join(pred_written_to), join(pred_read_from), insert_locs);
+        written_to[block] = result.first;
+        read_from[block] = result.second;
+      }
+      size_t n_inserted_i = insert_locs.size();
+      done = (n_inserted_im1 == n_inserted_i);
+      n_inserted_im1 = n_inserted_i;
+    }while(!done);
+    for(ir::instruction* i: insert_locs){
+      std::cout << i->get_name() << std::endl;
+      insert_barrier(i, builder);
+    }
   }
 }
 

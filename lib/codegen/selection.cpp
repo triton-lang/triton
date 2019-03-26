@@ -748,8 +748,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           indices_t b_idx = {idx[1], builder.getInt32(K)};
           Value *a = TA->get_value(a_idx);
           Value *b = TB->get_value(b_idx);
-//          a = ConstantFP::get(builder.getFloatTy(), 1);
-//          b = ConstantFP::get(builder.getFloatTy(), 1);
           res = builder.CreateCall(f_mul_add, {a, b, res});
         }
         result->set_value(idx, res);
@@ -846,6 +844,7 @@ void selection::run(ir::module &src, Module &dst) {
     // create grids
     init_grids(fn, dst_builder, sh_mem_ptr);
 
+
     // iterate through block
     std::map<ir::basic_block*, BasicBlock*> last_block;
     for(ir::basic_block *block: fn->blocks()) {
@@ -854,10 +853,10 @@ void selection::run(ir::module &src, Module &dst) {
       for(ir::instruction *i: block->get_inst_list()){
         BasicBlock *current = dst_builder.GetInsertBlock();
         bool phi_inserted = (dynamic_cast<ir::phi_node*>(i) || dynamic_cast<ir::merge_inst*>(i)) && !current->empty();
-        if(phi_inserted)
-          dst_builder.SetInsertPoint(&*current->getFirstInsertionPt());
+        if(phi_inserted && current->getFirstNonPHI())
+          dst_builder.SetInsertPoint(&*current->getFirstNonPHI());
         lower_instruction(i, dst_builder);
-        if(phi_inserted)
+        if(phi_inserted && current->getFirstNonPHI())
           dst_builder.SetInsertPoint(current);
         last_block[block] = dst_builder.GetInsertBlock();
       }

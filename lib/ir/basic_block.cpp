@@ -21,6 +21,8 @@ basic_block* basic_block::create(context &ctx, const std::string &name, function
 
 void basic_block::add_predecessor(basic_block *pred) {
   preds_.push_back(pred);
+  if(pred)
+    pred->succs_.push_back(this);
 }
 
 

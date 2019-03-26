@@ -58,6 +58,7 @@ public:
 
   // predecessors
   const std::vector<basic_block*>& get_predecessors() const { return preds_; }
+  const std::vector<basic_block*>& get_successors() const { return succs_; }
   void add_predecessor(basic_block* pred);
 
   // factory functions
@@ -68,6 +69,7 @@ private:
   std::string name_;
   function *parent_;
   std::vector<basic_block*> preds_;
+  std::vector<basic_block*> succs_;
   inst_list_t inst_list_;
 };
 
