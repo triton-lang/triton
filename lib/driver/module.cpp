@@ -179,10 +179,10 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 
 
   // create execution engine
-  llvm::legacy::PassManager pass;
-  pass.add(llvm::createPrintModulePass(llvm::outs()));
-  pass.add(llvm::createVerifierPass());
-  pass.run(*src);
+//  llvm::legacy::PassManager pass;
+//  pass.add(llvm::createPrintModulePass(llvm::outs()));
+//  pass.add(llvm::createVerifierPass());
+//  pass.run(*src);
   auto cloned = llvm::CloneModule(*src);
   for(llvm::Function& fn: cloned->functions())
     hst_->functions[fn.getName()] = &fn;

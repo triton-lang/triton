@@ -49,14 +49,17 @@ public:
                       allocation(&liveness, &buffer_info),
                       barriers(&allocation, &buffer_info),
                       vectorize(&tune),
-                      selection(&allocation, &tune, &buffer_info, target) { }
+                      selection(&allocation, &tune, &buffer_info, target),
+                      target_(target) { }
 
     void init(ir::module &module) {
-//      buffer_info.run(module);
-//      shared.run(module);
-//      liveness.run(module);
-//      allocation.run();
-//      barriers.run(module);
+      if(target_->is_gpu()){
+        buffer_info.run(module);
+        shared.run(module);
+        liveness.run(module);
+        allocation.run();
+        barriers.run(module);
+      }
       vectorize.run(module);
 //      triton::ir::print(module, std::cout);
     }
@@ -69,6 +72,7 @@ public:
     codegen::barriers barriers;
     codegen::vectorize vectorize;
     codegen::selection selection;
+    codegen::target* target_;
   };
 
 private:

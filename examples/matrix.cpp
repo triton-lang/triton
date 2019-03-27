@@ -157,7 +157,7 @@ int main() {
     1, 8,
     1,
   };
-//  params = {8, 2, 64, 16, 2, 64, 4, 16, 2, 2, 8, 8, 4};
+  params = {8, 2, 64, 16, 2, 64, 4, 16, 2, 2, 8, 8, 4};
 
 //  jit.autotune(src, benchmark);
   jit.add_module(src, params);

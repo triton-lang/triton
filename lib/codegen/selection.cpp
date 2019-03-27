@@ -810,14 +810,17 @@ void selection::run(ir::module &src, Module &dst) {
   for(ir::function *fn: src.get_function_list()) {
     // create LLVM function
     FunctionType *fn_ty = (FunctionType*)llvm_type(fn->get_fn_type(), dst_ctx);
-    Type *dst_fn_ret_ty = fn_ty->getReturnType();
-    std::vector<Type*> dst_fn_args_ty;
-    for(unsigned i = 0; i < fn_ty->getNumParams(); i++)
-      dst_fn_args_ty.push_back(fn_ty->getParamType(i));
-    dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
-    dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
-    dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
-    FunctionType *dst_fn_ty = FunctionType::get(dst_fn_ret_ty, dst_fn_args_ty, false);
+    FunctionType *dst_fn_ty = fn_ty;
+    if(!tgt_->is_gpu()){
+      Type *dst_fn_ret_ty = fn_ty->getReturnType();
+      std::vector<Type*> dst_fn_args_ty;
+      for(unsigned i = 0; i < fn_ty->getNumParams(); i++)
+        dst_fn_args_ty.push_back(fn_ty->getParamType(i));
+      dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
+      dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
+      dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
+      dst_fn_ty = FunctionType::get(dst_fn_ret_ty, dst_fn_args_ty, false);
+    }
     // grid indices
     fn->get_fn_type()->get_return_ty();
     Function *dst_fn = Function::Create(dst_fn_ty, Function::ExternalLinkage, fn->get_name(), &dst);
@@ -845,15 +848,16 @@ void selection::run(ir::module &src, Module &dst) {
 
     // allocate shared memory
     Value *sh_mem_ptr = nullptr;
-//    if(unsigned alloc_size = alloc_->get_allocated_size()){
-//      Type *int_8_ty = Type::getInt8Ty(dst_ctx);
-//      ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
-//      Type *ptr_ty = PointerType::get(int_8_ty, 3);
-//      GlobalVariable *sh_mem_array =
-//        new GlobalVariable(dst, array_ty, false, GlobalVariable::ExternalLinkage,
-//                           nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
-//      sh_mem_ptr = dst_builder.CreateBitCast(sh_mem_array, ptr_ty);
-//    }
+    if(tgt_->is_gpu())
+    if(unsigned alloc_size = alloc_->get_allocated_size()){
+      Type *int_8_ty = Type::getInt8Ty(dst_ctx);
+      ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
+      Type *ptr_ty = PointerType::get(int_8_ty, 3);
+      GlobalVariable *sh_mem_array =
+        new GlobalVariable(dst, array_ty, false, GlobalVariable::ExternalLinkage,
+                           nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
+      sh_mem_ptr = dst_builder.CreateBitCast(sh_mem_array, ptr_ty);
+    }
 
     // create grids
     init_grids(fn, dst_builder, sh_mem_ptr);

@@ -92,7 +92,7 @@ std::unique_ptr<ir::module> jit::make_triton_module(const std::string &src) {
 }
 
 
-jit::jit(driver::context *context): driver_context_(context), target_(new triton::codegen::cpu_target()) {
+jit::jit(driver::context *context): driver_context_(context), target_(new triton::codegen::amd_cl_target()) {
 }
 
 
