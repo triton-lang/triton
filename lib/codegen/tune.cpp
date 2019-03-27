@@ -246,7 +246,7 @@ bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &er
     int num_threads = 1;
     for(size_t k = 0; k < shapes.size(); k++)
       num_threads *= params_[i]["mts.d" + to_string(k)]->get_value();
-    if(num_threads % 64 != 0)
+    if(num_threads % 1 != 0)
       errors[i].push_back("number of threads per block (" + to_string(num_threads) + ") must be multiple of 32");
     if(num_threads != num_threads_)
       errors[i].push_back("Number of threads must be the same for all tiles (" + to_string(num_threads_) + ")");

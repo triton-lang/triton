@@ -19,22 +19,18 @@ void matmul(restrict read_only fp32 *a, restrict read_only fp32 *b, fp32 *c,
   fp32 C[TM, TN] = 0;
   fp32* pa[TM, TK] = a + rka[newaxis, :]*M + rxa[:, newaxis];
   fp32* pb[TN, TK] = b + rkb[newaxis, :]*K + ryb[:, newaxis];
-  fp32 a[TM, TK] = *pa;
-  fp32 b[TN, TK] = *pb;
-  for(int32 k = K; k > 0; k = k - TK){
+  for(int32 k = K; k > 0;){
+    fp32 a[TM, TK] = *pa;
+    fp32 b[TN, TK] = *pb;
     C = dot(a, b, C);
     pa = pa + TK*M;
     pb = pb + TK*K;
-    a = *pa;
-    b = *pb;
+    k = k - TK;
   }
   int32 rxc[TM] = get_global_range[TM](0);
   int32 ryc[TN] = get_global_range[TN](1);
   fp32* pc[TM, TN] = c + ryc[newaxis, :]*M + rxc[:, newaxis];
-  int1 checkc0[TM] = rxc < M;
-  int1 checkc1[TN] = ryc < N;
-  int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
-  @checkc *pc = C;
+  *pc = C;
 }
 )";
 
@@ -93,7 +89,7 @@ int main() {
   triton::jit jit(context);
 
   // matrix multiplication parameters
-  int32_t M = 512, N = 512, K = 512;
+  int32_t M = 256, N = 256, K = 256;
   std::vector<float> hc(M*N);
   std::vector<float> rc(M*N);
   std::vector<float> ha(M*K);
@@ -155,11 +151,11 @@ int main() {
 
   // just-in-time compile source-code
   std::vector<unsigned> params = {
-    16, 2, 64,
-    32, 2, 64,
-    16, 8, 2, 2,
-    8, 8,
-    4,
+    1, 4, 8,
+    1, 4, 8,
+    1, 1, 4, 4,
+    1, 8,
+    1,
   };
 //  params = {8, 2, 64, 16, 2, 64, 4, 16, 2, 2, 8, 8, 4};
 

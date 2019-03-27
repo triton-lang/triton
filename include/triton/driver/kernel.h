@@ -68,10 +68,10 @@ public:
   void setArg(unsigned int index, std::size_t size, void* ptr);
   void setArg(unsigned int index, driver::buffer* buffer);
   // Params
-  const std::vector<llvm::GenericValue>& params();
+  const std::vector<void*>& params();
 private:
   std::vector<std::shared_ptr<void> >  params_store_;
-  std::vector<llvm::GenericValue>  params_;
+  std::vector<void*>  params_;
 };
 
 // OpenCL

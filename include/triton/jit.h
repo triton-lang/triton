@@ -52,15 +52,13 @@ public:
                       selection(&allocation, &tune, &buffer_info, target) { }
 
     void init(ir::module &module) {
-      // generate ptx
-      buffer_info.run(module);
-      shared.run(module);
-      triton::ir::print(module, std::cout);
-      liveness.run(module);
-      allocation.run();
-      barriers.run(module);
+//      buffer_info.run(module);
+//      shared.run(module);
+//      liveness.run(module);
+//      allocation.run();
+//      barriers.run(module);
       vectorize.run(module);
-      triton::ir::print(module, std::cout);
+//      triton::ir::print(module, std::cout);
     }
 
     codegen::tune tune;

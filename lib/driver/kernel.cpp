@@ -77,14 +77,14 @@ void host_kernel::setArg(unsigned int index, std::size_t size, void* ptr){
   }
   params_store_[index].reset(malloc(size), free);
   memcpy(params_store_[index].get(), ptr, size);
-  params_[index] = llvm::GenericValue(params_store_[index].get());
+  params_[index] = params_store_[index].get();
 }
 
 void host_kernel::setArg(unsigned int index, driver::buffer* buffer){
   kernel::setArg(index, (void*)buffer->hst()->data);
 }
 
-const std::vector<llvm::GenericValue>& host_kernel::params(){
+const std::vector<void *> &host_kernel::params(){
   return params_;
 }
 

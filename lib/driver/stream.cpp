@@ -84,15 +84,19 @@ void host_stream::synchronize() {
 void host_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event) {
   driver::host_kernel* hst_kernel = (host_kernel*)kernel;
   llvm::ExecutionEngine* engine = kernel->module()->hst()->engine;
-  engine->runFunction(kernel->hst()->fn, llvm::ArrayRef<llvm::GenericValue>(hst_kernel->params()));
+  void (*fn)(char**, int32_t, int32_t, int32_t) = (void(*)(char**, int32_t, int32_t, int32_t))engine->getFunctionAddress("main");
+  for(size_t i = 0; i < grid[0]; i++)
+    for(size_t j = 0; j < grid[1]; j++)
+      for(size_t k = 0; k < grid[2]; k++)
+        fn((char**)hst_kernel->params().data(), int32_t(i), int32_t(j), int32_t(k));
 }
 
 void host_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
-
+  std::memcpy((void*)buffer->hst()->data, ptr, size);
 }
 
 void host_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
-
+  std::memcpy(ptr, (const void*)buffer->hst()->data, size);
 }
 
 

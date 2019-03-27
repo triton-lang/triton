@@ -130,7 +130,6 @@ void barriers::run(ir::module &mod) {
       n_inserted_im1 = n_inserted_i;
     }while(!done);
     for(ir::instruction* i: insert_locs){
-      std::cout << i->get_name() << std::endl;
       insert_barrier(i, builder);
     }
   }

@@ -116,9 +116,6 @@ void allocation::run(){
   for(auto &x: offsets_){
     allocated_size_ = std::max<size_t>(allocated_size_, x.second + get_num_bytes(x.first));
   }
-  std::cout << "Allocated: " << allocated_size_ << std::endl;
-  for(auto &x: offsets_)
-    std::cout << x.first->get_name() << " " << x.second << std::endl;
 }
 
 }

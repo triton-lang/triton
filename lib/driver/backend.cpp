@@ -48,20 +48,20 @@ void backend::platforms::init() {
   if(dispatch::cuinit()){
     cache_.push_back(new cu_platform());
   }
-  //if OpenCL is here
-  if(dispatch::clinit()){
-    cl_uint num_platforms;
-    dispatch::clGetPlatformIDs(0, nullptr, &num_platforms);
-    std::vector<cl_platform_id> ids(num_platforms);
-    dispatch::clGetPlatformIDs(num_platforms, ids.data(), nullptr);
-    for(cl_platform_id id: ids)
-      cache_.push_back(new cl_platform(id));
-  }
-//  //if host is here
-//  bool host_visible = true;
-//  if(host_visible){
-//    cache_.push_back(new host_platform());
+//  //if OpenCL is here
+//  if(dispatch::clinit()){
+//    cl_uint num_platforms;
+//    dispatch::clGetPlatformIDs(0, nullptr, &num_platforms);
+//    std::vector<cl_platform_id> ids(num_platforms);
+//    dispatch::clGetPlatformIDs(num_platforms, ids.data(), nullptr);
+//    for(cl_platform_id id: ids)
+//      cache_.push_back(new cl_platform(id));
 //  }
+  //if host is here
+  bool host_visible = true;
+  if(host_visible){
+    cache_.push_back(new host_platform());
+  }
   if(cache_.empty())
     throw std::runtime_error("ISAAC: No backend available. Make sure CUDA is available in your library path");
 }

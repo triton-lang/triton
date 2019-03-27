@@ -92,7 +92,7 @@ std::unique_ptr<ir::module> jit::make_triton_module(const std::string &src) {
 }
 
 
-jit::jit(driver::context *context): driver_context_(context), target_(new triton::codegen::amd_cl_target()) {
+jit::jit(driver::context *context): driver_context_(context), target_(new triton::codegen::cpu_target()) {
 }
 
 
@@ -164,11 +164,16 @@ void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params)
   // check constraints
   std::map<ir::value*, std::vector<std::string>> errors;
   passes.tune.check_constraints(errors);
+  for(auto x: errors){
+    std::cout << x.first << std::endl;
+    for(auto str: x.second)
+      std::cout << str << std::endl;
+  }
   if(errors.size())
     throw std::runtime_error("invalid parameters");
-  driver::device* device = driver_context_->device();
-  if(passes.allocation.get_allocated_size() > device->max_shared_memory())
-    throw std::runtime_error("invalid parameters");
+//  driver::device* device = driver_context_->device();
+//  if(passes.allocation.get_allocated_size() > device->max_shared_memory())
+//    throw std::runtime_error("invalid parameters");
   // triton module -> llvm module
   auto ll_module = make_llvm_module(tt_module, passes);
   // llvm module -> machine code

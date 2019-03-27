@@ -46,7 +46,6 @@ void liveness::run(ir::module &mod) {
       }
       intervals_[v] = segment{start, end};
     }
-    std::cout << "Number of intervals: " << intervals_.size() << std::endl;
   }
 }
 

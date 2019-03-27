@@ -151,11 +151,38 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 //  llvm::SmallVector<char, 0> buffer;
 //  module::compile_llvm_module(src, triple, cpu, "", buffer);
 
+  // create kernel wrapper
+  llvm::LLVMContext &ctx = src->getContext();
+  llvm::Type *void_ty = llvm::Type::getVoidTy(ctx);
+  llvm::Type *args_ty = llvm::Type::getInt8PtrTy(ctx)->getPointerTo();
+  llvm::Type *int32_ty = llvm::Type::getInt32Ty(ctx);
+  llvm::FunctionType *main_ty = llvm::FunctionType::get(void_ty, {args_ty, int32_ty, int32_ty, int32_ty}, false);
+  llvm::Function* main = llvm::Function::Create(main_ty, llvm::Function::ExternalLinkage, "main", src);
+  llvm::Function* fn = src->getFunction("matmul");
+  llvm::FunctionType *fn_ty = fn->getFunctionType();
+  std::vector<llvm::Value*> fn_args(fn_ty->getNumParams());
+  std::vector<llvm::Value*> ptrs(fn_args.size() - 3);
+  llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx, "entry", main);
+  llvm::IRBuilder<> ir_builder(ctx);
+  ir_builder.SetInsertPoint(entry);
+  for(unsigned i = 0; i < ptrs.size(); i++)
+    ptrs[i] = ir_builder.CreateGEP(main->arg_begin(), ir_builder.getInt32(i));
+  for(unsigned i = 0; i < ptrs.size(); i++){
+    llvm::Value* addr = ir_builder.CreateBitCast(ir_builder.CreateLoad(ptrs[i]), fn_ty->getParamType(i)->getPointerTo());
+    fn_args[i] = ir_builder.CreateLoad(addr);
+  }
+  fn_args[fn_args.size() - 3] = main->arg_begin() + 1;
+  fn_args[fn_args.size() - 2] = main->arg_begin() + 2;
+  fn_args[fn_args.size() - 1] = main->arg_begin() + 3;
+  ir_builder.CreateCall(fn, fn_args);
+  ir_builder.CreateRetVoid();
+
+
   // create execution engine
-//  llvm::legacy::PassManager pass;
-//  pass.add(llvm::createPrintModulePass(llvm::outs()));
-//  pass.add(llvm::createVerifierPass());
-//  pass.run(*src);
+  llvm::legacy::PassManager pass;
+  pass.add(llvm::createPrintModulePass(llvm::outs()));
+  pass.add(llvm::createVerifierPass());
+  pass.run(*src);
   auto cloned = llvm::CloneModule(*src);
   for(llvm::Function& fn: cloned->functions())
     hst_->functions[fn.getName()] = &fn;
