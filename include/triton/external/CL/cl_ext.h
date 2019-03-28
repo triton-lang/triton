@@ -42,7 +42,7 @@ extern "C" {
         #include <OpenCL/cl.h>
     #include <AvailabilityMacros.h>
 #else
-        #include <CL/cl.h>
+        #include "cl.h"
 #endif
 
 /* cl_khr_fp64 extension - no extension #define since it has no functions  */

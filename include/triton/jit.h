@@ -61,7 +61,7 @@ public:
         barriers.run(module);
       }
       vectorize.run(module);
-//      triton::ir::print(module, std::cout);
+      triton::ir::print(module, std::cout);
     }
 
     codegen::tune tune;

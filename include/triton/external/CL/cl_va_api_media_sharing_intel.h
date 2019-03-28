@@ -53,8 +53,8 @@ Notes:
 #ifndef __OPENCL_CL_VA_API_MEDIA_SHARING_INTEL_H
 #define __OPENCL_CL_VA_API_MEDIA_SHARING_INTEL_H
 
-#include <CL/cl.h>
-#include <CL/cl_platform.h>
+#include "cl.h"
+#include "cl_platform.h"
 #include <va/va.h>
 
 #ifdef __cplusplus

@@ -31,8 +31,8 @@
 #ifndef __OPENCL_CL_DX9_MEDIA_SHARING_H
 #define __OPENCL_CL_DX9_MEDIA_SHARING_H
 
-#include <CL/cl.h>
-#include <CL/cl_platform.h>
+#include "cl.h"
+#include "cl_platform.h"
 
 #ifdef __cplusplus
 extern "C" {

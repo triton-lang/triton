@@ -41,7 +41,7 @@ extern "C" {
 #ifdef __APPLE__
     #include <OpenCL/cl_gl.h>
 #else
-    #include <CL/cl_gl.h>
+    #include "cl_gl.h"
 #endif
 
 /*

@@ -29,6 +29,11 @@
 namespace triton
 {
 
+namespace codegen
+{
+class target;
+}
+
 namespace driver
 {
 
@@ -40,6 +45,7 @@ public:
   using polymorphic_resource::polymorphic_resource;
   virtual size_t max_threads_per_block() const = 0;
   virtual size_t max_shared_memory() const = 0;
+  virtual std::unique_ptr<codegen::target> make_target() const = 0;
 };
 
 // Host device
@@ -48,6 +54,7 @@ public:
   host_device(): device(host_device_t(), true){ }
   size_t max_threads_per_block() const { return 1; }
   size_t max_shared_memory() const { return 0; }
+  std::unique_ptr<codegen::target> make_target() const;
 };
 
 // OpenCL device
@@ -56,6 +63,7 @@ public:
   ocl_device(cl_device_id cl, bool take_ownership = true): device(cl, take_ownership) { }
   size_t max_threads_per_block() const;
   size_t max_shared_memory() const;
+  std::unique_ptr<codegen::target> make_target() const;
 };
 
 // CUDA device
@@ -87,26 +95,28 @@ private:
 
 public:
   cu_device(CUdevice cu = CUdevice(), bool take_ownership = true): device(cu, take_ownership){}
-  //Accessors
+  // Accessors
   Architecture architecture() const;
-  //Informations
+  // Informations
   std::string infos() const;
   size_t address_bits() const;
   std::vector<size_t> max_block_dim() const;
   size_t warp_size() const;
-  //Compute Capability
+  // Compute Capability
   void interpret_as(std::pair<size_t, size_t> cc);
   std::pair<size_t, size_t> compute_capability() const;
-  //Identifier
+  // Identifier
   std::string name() const;
   std::string pci_bus_id() const;
-  //Clocks
+  // Clocks
   size_t current_sm_clock() const;
   size_t current_mem_clock() const;
   size_t max_threads_per_block() const;
   size_t max_shared_memory() const;
   size_t max_sm_clock() const;
   size_t max_mem_clock() const;
+  // Target
+  std::unique_ptr<codegen::target> make_target() const;
 
 private:
   std::shared_ptr<std::pair<size_t, size_t>> interpreted_as_;

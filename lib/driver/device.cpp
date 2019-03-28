@@ -28,12 +28,21 @@
 #include "triton/driver/helpers/CL/infos.hpp"
 #include "triton/driver/device.h"
 #include "triton/driver/context.h"
+#include "triton/codegen/target.h"
 
 namespace triton
 {
 
 namespace driver
 {
+
+/* ------------------------ */
+//          Host            //
+/* ------------------------ */
+
+std::unique_ptr<codegen::target> host_device::make_target() const {
+  return std::unique_ptr<codegen::cpu_target>(new codegen::cpu_target());
+}
 
 
 /* ------------------------ */
@@ -47,6 +56,10 @@ size_t ocl_device::max_shared_memory() const {
 
 size_t ocl_device::max_threads_per_block() const {
   return ocl::info<CL_DEVICE_MAX_WORK_ITEM_SIZES>(*cl_).at(0);
+}
+
+std::unique_ptr<codegen::target> ocl_device::make_target() const {
+  return std::unique_ptr<codegen::amd_cl_target>(new codegen::amd_cl_target());
 }
 
 /* ------------------------ */
@@ -215,6 +228,12 @@ std::string cu_device::infos() const{
   oss << "Local memory size: " << max_shared_memory() << std::endl;
   return oss.str();
 }
+
+// target
+std::unique_ptr<codegen::target> cu_device::make_target() const {
+  return std::unique_ptr<codegen::nvidia_cu_target>(new codegen::nvidia_cu_target());
+}
+
 
 }
 

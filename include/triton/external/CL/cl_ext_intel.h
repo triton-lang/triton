@@ -56,8 +56,8 @@ Notes:
     #include <OpenCL/cl.h>
     #include <OpenCL/cl_platform.h>
 #else
-    #include <CL/cl.h>
-    #include <CL/cl_platform.h>
+    #include "cl.h"
+    #include "cl_platform.h"
 #endif
 
 #ifdef __cplusplus

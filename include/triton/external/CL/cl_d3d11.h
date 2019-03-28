@@ -32,8 +32,8 @@
 #define __OPENCL_CL_D3D11_H
 
 #include <d3d11.h>
-#include <CL/cl.h>
-#include <CL/cl_platform.h>
+#include "cl.h"
+#include "cl_platform.h"
 
 #ifdef __cplusplus
 extern "C" {

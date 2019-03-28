@@ -49,6 +49,11 @@ class module: public polymorphic_resource<CUmodule, cl_program, host_module_t> {
 protected:
   void init_llvm();
 
+  enum file_type_t{
+    Object,
+    Assembly
+  };
+
 public:
   module(driver::context* ctx, CUmodule mod, bool has_ownership);
   module(driver::context* ctx, cl_program mod, bool has_ownership);
@@ -57,7 +62,9 @@ public:
   driver::context* context() const;
   void compile_llvm_module(llvm::Module* module, const std::string& triple,
                                   const std::string &proc, std::string layout,
-                           llvm::SmallVectorImpl<char> &buffer, std::vector<std::string> files = {});
+                           llvm::SmallVectorImpl<char> &buffer,
+                           const std::string &features,
+                           file_type_t file_type);
 
 protected:
   driver::context* ctx_;

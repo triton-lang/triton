@@ -53,10 +53,6 @@
 #include "llvm/ExecutionEngine/OrcMCJITReplacement.h"
 #include <llvm/ExecutionEngine/SectionMemoryManager.h>
 #include "llvm/Transforms/Utils/Cloning.h"
-#include "lld/Common/Driver.h"
-#include "lld/Common/Args.h"
-#include "lld/Common/ErrorHandler.h"
-#include "lld/Common/LLVM.h"
 
 namespace triton
 {
@@ -107,12 +103,9 @@ module* module::create(driver::context* ctx, llvm::Module *src) {
 void module::compile_llvm_module(llvm::Module* module, const std::string& triple,
                                         const std::string &proc, std::string layout,
                                         llvm::SmallVectorImpl<char> &buffer,
-                                        std::vector<std::string> paths) {
+                                        const std::string& features,
+                                        file_type_t ft) {
   init_llvm();
-//    llvm::legacy::PassManager passes;
-//    passes.add(llvm::createPrintModulePass(llvm::outs()));
-//    passes.add(llvm::createVerifierPass());
-//    passes.run(*module);
   // create machine
   module->setTargetTriple(triple);
   std::string error;
@@ -122,7 +115,7 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
   opt.UnsafeFPMath = false;
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
-  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, "code-object-v3", opt,
+  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
                                                              llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
   // set data layout
   if(layout.empty())
@@ -134,7 +127,14 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
     f.addFnAttr(llvm::Attribute::AlwaysInline);
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
-  machine->addPassesToEmitFile(pass, stream, nullptr, llvm::TargetMachine::CGFT_ObjectFile);
+  // convert triton file type to llvm file type
+  auto ll_file_type = [&](module::file_type_t type){
+    if(type == Object)
+      return llvm::TargetMachine::CGFT_ObjectFile;
+    return llvm::TargetMachine::CGFT_AssemblyFile;
+  };
+  // emit
+  machine->addPassesToEmitFile(pass, stream, nullptr, ll_file_type(ft));
   pass.run(*module);
 }
 
@@ -149,7 +149,7 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 //  std::string triple = llvm::sys::getDefaultTargetTriple();
 //  std::string cpu = llvm::sys::getHostCPUName();
 //  llvm::SmallVector<char, 0> buffer;
-//  module::compile_llvm_module(src, triple, cpu, "", buffer);
+//  module::compile_llvm_module(src, triple, cpu, "", buffer, "", Assembly);
 
   // create kernel wrapper
   llvm::LLVMContext &ctx = src->getContext();
@@ -202,7 +202,7 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(context, cl_program(), true) {
   init_llvm();
   llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(src, "amdgcn-amd-amdhsa-amdgizcl", "gfx902", "", buffer);
+  module::compile_llvm_module(src, "amdgcn-amd-amdhsa-amdgizcl", "gfx902", "", buffer, "code-object-v3", Object);
   std::ofstream output("/tmp/tmp.o", std::ios::binary);
   std::copy(buffer.begin(), buffer.end(), std::ostreambuf_iterator<char>(output));
   system("ld.lld-8 /tmp/tmp.o -shared -o /tmp/tmp.o");
@@ -243,7 +243,7 @@ std::string cu_module::compile_llvm_module(llvm::Module* module) {
   layout += "-i64:64-i128:128-v16:16-v32:32-n16:32:64";
   // create
   llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_52", layout, buffer);
+  module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_52", layout, buffer, "", Assembly);
   return std::string(buffer.begin(), buffer.end());
 }
 
