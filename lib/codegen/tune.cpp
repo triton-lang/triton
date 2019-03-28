@@ -6,6 +6,7 @@
 #include "triton/ir/function.h"
 #include "triton/ir/context_impl.h"
 #include "triton/ir/constant.h"
+#include "triton/driver/device.h"
 
 #include <cstdlib>
 
@@ -242,12 +243,11 @@ bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &er
         errors[i].push_back("for dim " + strk + ": shape (" + to_string(shapes[k]->get_value()) + ")"
                             " is not a multiple of layout (" + to_string(multiple)  + ")");
     }
-    // the number of thread per warp must be 32
     int num_threads = 1;
     for(size_t k = 0; k < shapes.size(); k++)
       num_threads *= params_[i]["mts.d" + to_string(k)]->get_value();
     if(num_threads % 64 != 0)
-      errors[i].push_back("number of threads per block (" + to_string(num_threads) + ") must be multiple of 32");
+      errors[i].push_back("number of threads per block (" + to_string(num_threads) + ") must be multiple of warp size");
     if(num_threads != num_threads_)
       errors[i].push_back("Number of threads must be the same for all tiles (" + to_string(num_threads_) + ")");
   }
