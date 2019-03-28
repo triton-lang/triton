@@ -87,18 +87,27 @@ T min(std::vector<T> x)
 
 
 template<class OP, class SYNC>
-double bench(OP const & op, SYNC const & sync, unsigned repeat = 20)
+double bench(OP const & op, SYNC const & sync, triton::driver::device const & device)
 {
   timer tmr;
+  std::vector<size_t> times;
+  double total_time = 0;
   op();
   sync();
-  tmr.start();
-  for(unsigned i = 0; i < repeat; i++)
+  while(total_time*1e-9 < 1e-3){
+    float norm = 1;
+    // normalize clock if possible to get roughly constant result
+    if(auto cu_device = dynamic_cast<const triton::driver::cu_device*>(&device))
+      norm = (float)cu_device->current_sm_clock()/cu_device->max_sm_clock();
+    tmr.start();
     op();
-  sync();
-  double time = tmr.get().count();
-  return time / repeat;
+    sync();
+    times.push_back(norm*tmr.get().count());
+    total_time+=times.back();
+  }
+  return min(times);
 }
+
 
 int main() {
   // initialize default compute device
@@ -159,7 +168,7 @@ int main() {
     stream->synchronize();
     // benchmark
     double ts = bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
-                      [&](){ stream->synchronize(); });
+                      [&](){ stream->synchronize(); }, *context->device());
     ts = ts * 1e-9;
     double tflops = 2.*M*N*K / ts * 1e-12;
     return tflops;
@@ -175,7 +184,7 @@ int main() {
     4
   };
 
-//  jit.autotune(src, benchmark);
+  jit.autotune(src, benchmark);
   jit.add_module(src, params);
   triton::driver::kernel* kernel = jit.get_function("matmul");
   triton::jit::launch_information info = jit.get_launch_info("matmul");

@@ -199,6 +199,7 @@ CUDA_DEFINE1(CUresult, cuCtxPopCurrent_v2, CUcontext*)
 NVML_DEFINE2(nvmlReturn_t, nvmlDeviceGetHandleByPciBusId_v2, const char *, nvmlDevice_t*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetMaxClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
+NVML_DEFINE3(nvmlReturn_t, nvmlDeviceSetApplicationsClocks, nvmlDevice_t, unsigned int, unsigned int)
 
 cublasHandle_t dispatch::cublasHandle(const cu_context &ctx){
   static std::map<CUcontext, cublasHandle_t> handles;
@@ -391,6 +392,7 @@ void* dispatch::nvmlInit_v2_;
 void* dispatch::nvmlDeviceGetHandleByPciBusId_v2_;
 void* dispatch::nvmlDeviceGetClockInfo_;
 void* dispatch::nvmlDeviceGetMaxClockInfo_;
+void* dispatch::nvmlDeviceSetApplicationsClocks_;
 
 void* dispatch::cublasCreate_v2_;
 void* dispatch::cublasGetStream_v2_;

@@ -234,7 +234,7 @@ ir::type* tile::type_impl(ir::module *mod, ir::type *type, storage_spec_vec_cons
 // Pointer
 ir::type* pointer::type_impl(ir::module*, ir::type *type, storage_spec_vec_const_ref_t storage) const{
   bool is_ptr_to_const = std::find(storage.begin(), storage.end(), CONSTANT_SPACE_T) != storage.end();
-  return ir::pointer_type::get(type, is_ptr_to_const?4:0);
+  return ir::pointer_type::get(type, is_ptr_to_const?4:1);
 }
 
 // Function

@@ -165,6 +165,7 @@ public:
   static nvmlReturn_t nvmlDeviceGetHandleByPciBusId_v2( const char* pciBusId, nvmlDevice_t* device);
   static nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, nvmlClockType_t type, unsigned int *clock);
   static nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, nvmlClockType_t type, unsigned int *clock);
+  static nvmlReturn_t nvmlDeviceSetApplicationsClocks(nvmlDevice_t device, unsigned int mem_clock, unsigned int sm_clock);
 
   static cublasHandle_t cublasHandle(driver::cu_context const & ctx);
   static cublasStatus_t cublasCreate_v2(cublasHandle_t* h);
@@ -281,6 +282,7 @@ private:
   static void* nvmlDeviceGetHandleByPciBusId_v2_;
   static void* nvmlDeviceGetClockInfo_;
   static void* nvmlDeviceGetMaxClockInfo_;
+  static void* nvmlDeviceSetApplicationsClocks_;
   // cuBLAS
   static void* cublasCreate_v2_;
   static void* cublasGetStream_v2_;

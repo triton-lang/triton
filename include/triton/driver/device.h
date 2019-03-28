@@ -115,6 +115,7 @@ public:
   size_t max_shared_memory() const;
   size_t max_sm_clock() const;
   size_t max_mem_clock() const;
+  void set_max_clock();
   // Target
   std::unique_ptr<codegen::target> make_target() const;
 

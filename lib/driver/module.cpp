@@ -106,6 +106,7 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
                                         const std::string& features,
                                         file_type_t ft) {
   init_llvm();
+
   // create machine
   module->setTargetTriple(triple);
   std::string error;
@@ -179,10 +180,6 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 
 
   // create execution engine
-//  llvm::legacy::PassManager pass;
-//  pass.add(llvm::createPrintModulePass(llvm::outs()));
-//  pass.add(llvm::createVerifierPass());
-//  pass.run(*src);
   auto cloned = llvm::CloneModule(*src);
   for(llvm::Function& fn: cloned->functions())
     hst_->functions[fn.getName()] = &fn;
