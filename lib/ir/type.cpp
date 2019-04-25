@@ -172,7 +172,7 @@ unsigned tile_type::get_bitwidth() const {
 tile_type* tile_type::get(type *elt_ty, const tile_shapes_t &shapes) {
   assert(elt_ty && "Can't get a tile of <null> type!");
   assert(shapes.size() && "Can't create a tile with empty shapes!");
-  assert(is_valid_elt_ty(elt_ty) && "Invalid type for pointer element!");
+  assert(is_valid_elt_ty(elt_ty) && "Invalid type for tile element!");
   // look-up
   context_impl *impl = elt_ty->get_context().p_impl.get();
   tile_type *&entry = impl->tile_tys[std::make_pair(elt_ty, shapes)];

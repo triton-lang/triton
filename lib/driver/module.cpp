@@ -106,7 +106,11 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
                                         const std::string& features,
                                         file_type_t ft) {
   init_llvm();
-
+  // debug
+//  llvm::legacy::PassManager pm;
+//  pm.add(llvm::createPrintModulePass(llvm::outs()));
+//  pm.add(llvm::createVerifierPass());
+//  pm.run(*module);
   // create machine
   module->setTargetTriple(triple);
   std::string error;
@@ -249,6 +253,7 @@ std::string cu_module::compile_llvm_module(llvm::Module* module) {
 cu_module::cu_module(driver::context * context, llvm::Module* ll_module): cu_module(context, compile_llvm_module(ll_module)) { }
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
+//  std::cout << source << std::endl;
   cu_context::context_switcher ctx_switch(*context);
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
@@ -264,11 +269,11 @@ cu_module::cu_module(driver::context * context, std::string const & source) : mo
   }
 }
 
-cu_buffer cu_module::symbol(const char *name) const{
+cu_buffer* cu_module::symbol(const char *name) const{
   CUdeviceptr handle;
   size_t size;
   dispatch::cuModuleGetGlobal_v2(&handle, &size, *cu_, name);
-  return cu_buffer(ctx_, handle, false);
+  return new cu_buffer(ctx_, handle, false);
 }
 
 

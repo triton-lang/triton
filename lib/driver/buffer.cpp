@@ -64,9 +64,6 @@ buffer* buffer::create(driver::context* ctx, size_t size) {
 host_buffer::host_buffer(driver::context *context, size_t size)
   :  buffer(context, host_buffer_t(), true){
   hst_->data = new char[size];
-  std::cout << size << std::endl;
-  std::cout << "allocating " << (float*)hst_->data << std::endl;
-  std::cout << *((float*)(hst_->data) + 512*500) << std::endl;
 }
 
 //

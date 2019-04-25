@@ -285,6 +285,10 @@ value *builder::create_broadcast(value *arg, const type::tile_shapes_t &shapes, 
   return insert(broadcast_inst::create(arg, shapes, name));
 }
 
+value *builder::create_downcast(value *arg, const std::string &name) {
+  return insert(downcast_inst::create(arg, name));
+}
+
 //===----------------------------------------------------------------------===//
 //                               built-in instructions
 //===----------------------------------------------------------------------===//
@@ -293,8 +297,24 @@ value *builder::create_get_global_range(unsigned axis, type::tile_shapes_t::valu
   return insert(get_global_range_inst::create(ctx_, axis, size, name));
 }
 
-value *builder::create_matmul(value *A, value *B, value *C, const std::string &name) {
-  return insert(matmul_inst::create(A, B, C, name));
+value *builder::create_get_range_id(unsigned axis, const std::string &name) {
+  return insert(get_range_id_inst::create(ctx_, axis, name));
+}
+
+value *builder::create_atomic_cas(value *ptr, value *cmp, value *val, const std::string &name){
+  return insert(atomic_cas_inst::create(ptr, cmp, val, name));
+}
+
+value *builder::create_dot(value *A, value *B, value *C, const std::string &name) {
+  return insert(dot_inst::create_nn(A, B, C, name));
+}
+
+value *builder::create_trans(value *A, const std::string &name) {
+  return insert(trans_inst::create(A, name));
+}
+
+value *builder::create_select(value *pred, value *if_value, value *else_value, const std::string &name){
+  return insert(select_inst::create(pred, if_value, else_value, name));
 }
 
 //===----------------------------------------------------------------------===//

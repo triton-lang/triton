@@ -66,6 +66,7 @@ public:
   // Getters
   value *get_value(const std::string& name, basic_block* block);
   value *get_value(const std::string& name);
+  const std::string& get_name();
   std::function<ir::value*()> get_continue_fn();
   // Seal block -- no more predecessors will be added
   void seal_block(basic_block *block);

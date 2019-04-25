@@ -1,5 +1,4 @@
 #include "triton/codegen/tune.h"
-#include "triton/codegen/shared_copy.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
 #include "triton/ir/module.h"
@@ -40,6 +39,8 @@ void tune::init_c_graph(ir::instruction *v) {
   ir::type::tile_shapes_t shapes;
   if(auto *store = dynamic_cast<ir::store_inst*>(v))
     shapes = store->get_pointer_operand()->get_type()->get_tile_shapes();
+  else if(auto *downcast = dynamic_cast<ir::downcast_inst*>(v))
+    return;
   else
     shapes = v->get_type()->get_tile_shapes();
   // Reshape
@@ -57,6 +58,14 @@ void tune::init_c_graph(ir::instruction *v) {
   else if(dynamic_cast<ir::splat_inst*>(v)){
 
   }
+  // Trans
+  else if(dynamic_cast<ir::trans_inst*>(v)){
+    ir::value *op = v->get_operand(0);
+    size_t n_shapes = shapes.size();
+    for(unsigned i = 0; i < n_shapes; i++){
+      add_constraint({v, (i + 1) % n_shapes}, {op, i});
+    }
+  }
   // Broadcast
   else if(dynamic_cast<ir::broadcast_inst*>(v)){
     ir::value *op = v->get_operand(0);
@@ -68,7 +77,7 @@ void tune::init_c_graph(ir::instruction *v) {
     }
   }
   // Matrix multiplication
-  else if(dynamic_cast<ir::matmul_inst*>(v)){
+  else if(dynamic_cast<ir::dot_inst*>(v)){
     ir::value *D = v->get_operand(2);
     add_constraint({v, 0}, {D, 0});
     add_constraint({v, 1}, {D, 1});
@@ -119,6 +128,13 @@ std::vector<ir::metaparameter *> tune::get_params(ir::module &mod) {
     if(seen.insert(x.second).second && !x.second->has_value()){
       result.push_back(x.second);
     }
+
+  for(auto x: mod.globals()){
+    if(auto mp = dynamic_cast<ir::metaparameter*>(x.second))
+      if(seen.insert(mp).second && !mp->has_value())
+        result.push_back(mp);
+  }
+
   return result;
 }
 
@@ -145,23 +161,22 @@ void tune::run(ir::module &mod) {
     // Layout parameters
     while(!nodes_.empty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 2, 4);
+      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 1, 1);
+      nts->set_value(1);
       ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
       connected_components(*nodes_.begin(), {nts, mts}, nodes_, dependencies_);
     }
   }
 
   // Simplify metaparameters
-  std::set<ir::metaparameter*> fixed_io_nts;
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i : block->get_inst_list())
-  if(dynamic_cast<ir::load_inst*>(i) || dynamic_cast<ir::store_inst*>(i))
-  if(i->get_type()->is_tile_ty())
-    for(unsigned d = 1; d < i->get_type()->get_tile_shapes().size(); d++)
-      fixed_io_nts.insert(params_.at(i).at("nts.d" + std::to_string(d)));
-  for(ir::metaparameter* mp: fixed_io_nts)
-    mp->set_value(1);
+  if(dynamic_cast<ir::load_inst*>(i) && i->get_type()->is_tile_ty()){
+    ir::type *ty = mod.get_builder().get_int32_ty();
+    std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty, 2, 2));
+    *params_.at(i).at("nts.d0") = *tmp;
+  }
 }
 
 void tune::init(ir::module &mod) {

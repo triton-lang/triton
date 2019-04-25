@@ -54,6 +54,7 @@ public:
   void set_value(uint64_t value) { has_value_ = true; value_ = value; }
   bool has_value() { return has_value_; }
   const std::vector<unsigned>& get_space() { return space_; }
+  void set_space(const std::vector<unsigned> &space) { space_ = space; }
 
 private:
   std::vector<unsigned> space_;

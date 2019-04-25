@@ -128,6 +128,9 @@ ir::value *module::get_value(const std::string& name) {
   return get_value(name, builder_.get_insert_block());
 }
 
+const std::string& module::get_name() {
+  return name_;
+}
 
 void module::seal_block(ir::basic_block *block){
   for(auto &x: incomplete_phis_[block]){

@@ -464,6 +464,17 @@ public:
 };
 
 
+// downcast
+
+class downcast_inst: public unary_inst {
+private:
+  using unary_inst::unary_inst;
+  std::string repr_impl() const { return "downcast"; }
+
+public:
+  static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
+};
+
 //===----------------------------------------------------------------------===//
 //                               builtin_inst classes
 //===----------------------------------------------------------------------===//
@@ -488,17 +499,76 @@ private:
   unsigned axis_;
 };
 
-class matmul_inst: public builtin_inst {
+class get_range_id_inst: public builtin_inst {
 private:
-  matmul_inst(value *A, value *B, value *C, const std::string &name, instruction *next);
-  std::string repr_impl() const { return "dot"; }
+  get_range_id_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "get_range_id(" + std::to_string(axis_) + ")"; }
 
 public:
-  static instruction* create(value *A, value *B, value *C,
-                             const std::string &name = "",
-                             instruction *next = nullptr);
+  static instruction* create(context &ctx, unsigned axis, const std::string &name = "", instruction *next = nullptr);
+  unsigned get_axis() const { return axis_; }
+
+private:
+  unsigned axis_;
 };
 
+class atomic_cas_inst: public builtin_inst {
+private:
+  atomic_cas_inst(value *ptr, value *cmp, value *val, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "atomic_cas"; }
+
+public:
+  static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
+};
+
+class dot_inst: public builtin_inst {
+public:
+  enum TransT { NoTrans, Trans };
+
+private:
+  dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, const std::string &name, instruction *next);
+  std::string repr_impl() const { return std::string("dot.") + ((AT_==NoTrans)?"n":"t") + ((BT_==NoTrans)?"n":"t"); }
+
+public:
+  static instruction* create_nn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_nt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_tn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_tt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
+  bool is_a_trans() { return AT_ == Trans; }
+  bool is_b_trans() { return BT_ == Trans; }
+
+private:
+  TransT AT_;
+  TransT BT_;
+};
+
+//class outer_inst: public builtin_inst {
+//private:
+//  outer_inst(value *A, value *B, value *C, const std::string &name, instruction *next);
+//public:
+//  static instruction* create(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
+//};
+
+class trans_inst: public builtin_inst {
+public:
+  ir::type* get_res_ty(ir::type* in);
+
+private:
+  trans_inst(value *arg, const std::string& name, instruction* next);
+  std::string repr_impl() const { return "trans"; }
+
+public:
+  static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
+};
+
+class select_inst: public builtin_inst {
+private:
+  select_inst(value *pred, value *if_value, value *else_value, const std::string& name, instruction* next);
+  std::string repr_impl() const { return "select"; }
+
+public:
+  static instruction* create(value *pred, value *if_value, value *else_value, const std::string &name = "", instruction *next = nullptr);
+};
 
 //===----------------------------------------------------------------------===//
 //                               intrinsics classes

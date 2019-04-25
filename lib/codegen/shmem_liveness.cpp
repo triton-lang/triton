@@ -1,5 +1,5 @@
-#include "triton/codegen/liveness.h"
-#include "triton/codegen/buffer_info.h"
+#include "triton/codegen/shmem_liveness.h"
+#include "triton/codegen/shmem_info.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
@@ -11,19 +11,7 @@ namespace codegen{
 
 
 // Entry point
-inline bool is_shared(ir::value* v) {
-  if(auto x = dynamic_cast<ir::copy_to_shared_inst*>(v))
-    return true;
-  if(auto x = dynamic_cast<ir::phi_node*>(v)){
-    bool res = true;
-    for(unsigned inc = 0; inc < x->get_num_incoming(); inc++)
-      res = res && is_shared(x->get_incoming_value(inc));
-    return res;
-  }
-  return false;
-}
-
-void liveness::run(ir::module &mod) {
+void shmem_liveness::run(ir::module &mod) {
   for(ir::function *fn: mod.get_function_list()){
     // Assigns index to each instruction
     slot_index index = 0;

@@ -7,7 +7,7 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/type.h"
-#include "triton/codegen/buffer_info.h"
+#include "triton/codegen/shmem_info.h"
 
 
 namespace llvm{
@@ -21,9 +21,9 @@ namespace llvm{
 namespace triton{
 namespace codegen{
 
-class allocation;
+class shmem_allocation;
 class tune;
-class buffer_info_pass;
+class shmem_info;
 class target;
 
 typedef std::vector<llvm::Value*> indices_t;
@@ -129,7 +129,7 @@ private:
   void lower_tile_instruction(ir::instruction *src, llvm::IRBuilder<> &builder);
 
 public:
-  selection(allocation *alloc, tune *params, buffer_info_pass *buffer_info, target *tgt)
+  selection(shmem_allocation *alloc, tune *params, shmem_info *buffer_info, target *tgt)
     : alloc_(alloc), params_(params), buffer_info_(buffer_info), tgt_(tgt){ }
 
   void run(ir::module &src, llvm::Module &dst);
@@ -139,11 +139,12 @@ private:
   tmap_t tmap_;
   pmap_t pmap_;
   pmap_t last_block_;
-  allocation *alloc_;
+  shmem_allocation *alloc_;
   tune *params_;
   target *tgt_;
-  buffer_info_pass *buffer_info_;
+  shmem_info *buffer_info_;
   std::map<ir::metaparameter*, distributed_axis> axes_;
+  llvm::Value *sh_mem_ptr_;
 };
 
 }

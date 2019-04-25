@@ -4,6 +4,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/IRBuilder.h"
+#include <iostream>
 
 using namespace llvm;
 
@@ -26,6 +27,12 @@ Instruction* amd_cl_target::add_barrier(Module *module, IRBuilder<>& builder) {
 }
 
 Value* amd_cl_target::get_global_offset(Module *module, IRBuilder<>& builder, unsigned stride, unsigned ax) {
+  Value* group_id = get_block_id(module, builder, ax);
+  Value* result = builder.CreateMul(builder.getInt32(stride), group_id);
+  return result;
+}
+
+Value* amd_cl_target::get_block_id(Module *module, IRBuilder<>& builder, unsigned ax) {
   static std::array<Intrinsic::ID, 3> ids = {
     Intrinsic::amdgcn_workgroup_id_x,
     Intrinsic::amdgcn_workgroup_id_y,
@@ -33,8 +40,7 @@ Value* amd_cl_target::get_global_offset(Module *module, IRBuilder<>& builder, un
   };
   Value* get_group_id = Intrinsic::getDeclaration(module, ids[ax]);
   Value* group_id = builder.CreateCall(get_group_id, {});
-  Value* result = builder.CreateMul(builder.getInt32(stride), group_id);
-  return result;
+  return group_id;
 }
 
 Value* amd_cl_target::get_local_id(Module *module, IRBuilder<>& builder, unsigned ax) {
@@ -65,6 +71,12 @@ Instruction* nvidia_cu_target::add_barrier(Module *module, IRBuilder<>& builder)
 }
 
 Value* nvidia_cu_target::get_global_offset(Module *module, IRBuilder<>& builder, unsigned stride, unsigned ax) {
+  Value* group_id = get_block_id(module, builder, ax);
+  Value* result = builder.CreateMul(builder.getInt32(stride), group_id);
+  return result;
+}
+
+Value* nvidia_cu_target::get_block_id(Module *module, IRBuilder<>& builder, unsigned ax) {
   static std::array<Intrinsic::ID, 3> ids = {
     Intrinsic::nvvm_read_ptx_sreg_ctaid_x,
     Intrinsic::nvvm_read_ptx_sreg_ctaid_y,
@@ -72,8 +84,7 @@ Value* nvidia_cu_target::get_global_offset(Module *module, IRBuilder<>& builder,
   };
   Value* get_group_id = Intrinsic::getDeclaration(module, ids[ax]);
   Value* group_id = builder.CreateCall(get_group_id, {});
-  Value* result = builder.CreateMul(builder.getInt32(stride), group_id);
-  return result;
+  return group_id;
 }
 
 Value* nvidia_cu_target::get_local_id(Module *module, IRBuilder<>& builder, unsigned ax) {
@@ -97,7 +108,7 @@ Instruction* cpu_target::add_barrier(Module *module, IRBuilder<>& builder) {
   return (Instruction*)builder.CreateAdd(builder.getInt32(0), builder.getInt32(0));
 }
 
-Value* cpu_target::get_global_offset(Module *module, IRBuilder<>& builder, unsigned stride, unsigned ax) {
+Value* cpu_target::get_block_id(Module *module, llvm::IRBuilder<> &builder, unsigned ax) {
   const Function *fn = builder.GetInsertBlock()->getParent();
   size_t num_params = fn->getFunctionType()->getNumParams();
   static std::array<const Argument*, 3> ids = {
@@ -105,14 +116,17 @@ Value* cpu_target::get_global_offset(Module *module, IRBuilder<>& builder, unsig
     fn->arg_begin() + num_params - 2,
     fn->arg_begin() + num_params - 1
   };
-  Value* result = builder.CreateMul(builder.getInt32(stride), (Argument*)ids[ax]);
+  return (Argument*)ids[ax];
+}
+
+Value* cpu_target::get_global_offset(Module *module, IRBuilder<>& builder, unsigned stride, unsigned ax) {
+  Value* result = builder.CreateMul(builder.getInt32(stride), get_block_id(module, builder, ax));
   return result;
 }
 
 Value* cpu_target::get_local_id(Module *module, IRBuilder<>& builder, unsigned ax) {
   return builder.getInt32(0);
 }
-
 
 }
 }

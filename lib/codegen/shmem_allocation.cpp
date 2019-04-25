@@ -1,7 +1,6 @@
-#include "triton/codegen/allocation.h"
-#include "triton/codegen/liveness.h"
-#include "triton/codegen/layout.h"
-#include "triton/codegen/buffer_info.h"
+#include "triton/codegen/shmem_allocation.h"
+#include "triton/codegen/shmem_liveness.h"
+#include "triton/codegen/shmem_info.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/type.h"
 #include "triton/ir/value.h"
@@ -11,14 +10,14 @@
 namespace triton{
 namespace codegen{
 
-unsigned allocation::get_num_bytes(ir::value *x) {
-  unsigned result = x->get_type()->get_tile_bitwidth() / 8;
+unsigned shmem_allocation::get_num_bytes(ir::value *x) {
+  unsigned result = x->get_type()->get_primitive_size_in_bits() / 8;
   if(buffer_info_->is_double(x))
     result *= 2;
   return result;
 }
 
-void allocation::run(){
+void shmem_allocation::run(){
   using std::max;
   using std::min;
   typedef std::multimap<unsigned, segment> triples_map_type;

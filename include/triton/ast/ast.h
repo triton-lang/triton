@@ -74,8 +74,8 @@ class constant;
 class node {
 protected:
   static ir::value* explicit_cast(ir::builder &builder, ir::value *src, ir::type *dst_ty);
+  static void implicit_broadcast(ir::module *mod, ir::type *dst_ty, ir::value *&src);
   static void implicit_broadcast(ir::module *mod, ir::value *&lhs, ir::value *&rhs);
-  static void implicit_broadcast(ir::module *mod, ir::value *&arg, ir::type *ty);
   static void implicit_cast(ir::builder &builder, ir::value *&lhs, ir::value *&rhs,
                             bool &is_float, bool &is_ptr, bool &is_int, bool &is_signed);
 public:
@@ -164,6 +164,27 @@ private:
   const constant* axis_;
 };
 
+class get_range_id: public builtin_expression{
+public:
+  get_range_id(node *axis): axis_((constant*)axis) { }
+  ir::value* codegen(ir::module *) const;
+
+private:
+  const constant* axis_;
+};
+
+class atomic_cas: public builtin_expression{
+public:
+  atomic_cas(node *ptr, node *cmp, node *val): ptr_(ptr), cmp_(cmp), val_(val) { }
+  ir::value* codegen(ir::module *) const;
+
+private:
+  const node *ptr_;
+  const node *cmp_;
+  const node *val_;
+};
+
+
 class matmul_expression: public builtin_expression{
 public:
   matmul_expression(node* A, node *B, node *C):
@@ -174,6 +195,49 @@ private:
   const expression *A_;
   const expression *B_;
   const expression *C_;
+};
+
+class max_expression: public builtin_expression{
+public:
+  max_expression(node* x, node* y)
+    : x_((expression*)x), y_((expression*)y){ }
+  ir::value* codegen(ir::module *) const;
+
+private:
+  const expression *x_;
+  const expression *y_;
+};
+
+class min_expression: public builtin_expression{
+public:
+  min_expression(node* x, node* y)
+    : x_((expression*)x), y_((expression*)y){ }
+  ir::value* codegen(ir::module *mod) const;
+
+private:
+  const expression *x_;
+  const expression *y_;
+};
+
+class select_expression: public builtin_expression{
+public:
+  select_expression(node* pred, node* if_value, node* else_value)
+    : pred_((expression*)pred), if_value_((expression*)if_value), else_value_((expression*)else_value) { }
+  ir::value* codegen(ir::module *mod) const;
+
+private:
+  const expression *pred_;
+  const expression *if_value_;
+  const expression *else_value_;
+};
+
+class trans_expression: public builtin_expression{
+public:
+  trans_expression(node *arg): arg_(arg) {}
+  ir::value* codegen(ir::module *mod) const;
+
+private:
+  node* arg_;
 };
 
 
@@ -188,6 +252,8 @@ private:
   const identifier* id_;
   const list<slice*>* slices_;
 };
+
+
 
 class named_expression: public expression {
 public:

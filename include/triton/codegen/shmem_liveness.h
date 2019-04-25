@@ -15,7 +15,7 @@ namespace codegen{
 
 typedef unsigned slot_index;
 
-class buffer_info_pass;
+class shmem_info;
 
 struct segment {
   slot_index start;
@@ -30,7 +30,7 @@ struct segment {
   }
 };
 
-class liveness {
+class shmem_liveness {
 private:
   typedef std::map<ir::value*, slot_index> indices_map_t;
   typedef std::map<ir::value*, segment>    intervals_map_t;
@@ -43,7 +43,7 @@ public:
 
 public:
   // constructor
-  liveness(buffer_info_pass *info): info_(info){ }
+  shmem_liveness(shmem_info *info): info_(info){ }
 
   // accessors
   const intervals_map_t& intervals() const { return intervals_; }
@@ -53,7 +53,7 @@ public:
   void run(ir::module &mod);
 
 private:
-  buffer_info_pass *info_;
+  shmem_info *info_;
   has_storage_map_t has_dedicated_storage_;
   indices_map_t indices_;
   intervals_map_t intervals_;

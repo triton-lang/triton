@@ -90,7 +90,7 @@ class cu_module: public module {
 public:
   cu_module(driver::context* context, llvm::Module *module);
   cu_module(driver::context* context, const std::string& source);
-  cu_buffer symbol(const char * name) const;
+  cu_buffer* symbol(const char * name) const;
 
 private:
   std::string source_;

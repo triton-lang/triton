@@ -28,6 +28,8 @@ instruction::instruction(type *ty, unsigned num_ops, unsigned num_results, const
 
 void instruction::erase_from_parent() {
   parent_->erase(this);
+  for(ir::value* op: ops())
+    op->erase_use(this);
 }
 
 bool instruction::has_tile_result_or_op() {
@@ -482,27 +484,82 @@ instruction* broadcast_inst::create(value *arg, const type::tile_shapes_t &shape
   return new broadcast_inst(arg, shapes, name, next);
 }
 
+// downcast
+
+instruction* downcast_inst::create(value *arg, const std::string &name, instruction *next) {
+  return new downcast_inst(arg->get_type()->get_scalar_ty(), arg, name, next);
+}
 
 //===----------------------------------------------------------------------===//
 //                               matmul_inst classes
 //===----------------------------------------------------------------------===//
 
-matmul_inst::matmul_inst(value *A, value *B, value *C,
+dot_inst::dot_inst(value *A, value *B, value *C, TransT AT, TransT BT,
                          const std::string &name, instruction *next)
-    : builtin_inst(C->get_type(), 3, 0, name, next) {
+    : builtin_inst(C->get_type(), 3, 1, name, next), AT_(AT), BT_(BT) {
   set_operand(0, A);
   set_operand(1, B);
   set_operand(2, C);
 }
 
-instruction *matmul_inst::create(value *A, value *B, value *C,
+instruction *dot_inst::create_nn(value *A, value *B, value *C,
                                  const std::string &name, instruction *next) {
-  return new matmul_inst(A, B, C, name, next);
+  return new dot_inst(A, B, C, NoTrans, NoTrans, name, next);
+}
+
+instruction *dot_inst::create_nt(value *A, value *B, value *C,
+                                 const std::string &name, instruction *next) {
+  return new dot_inst(A, B, C, NoTrans, Trans, name, next);
+}
+
+instruction *dot_inst::create_tn(value *A, value *B, value *C,
+                                 const std::string &name, instruction *next) {
+  return new dot_inst(A, B, C, Trans, NoTrans, name, next);
+}
+
+instruction *dot_inst::create_tt(value *A, value *B, value *C,
+                                 const std::string &name, instruction *next) {
+  return new dot_inst(A, B, C, Trans, Trans, name, next);
 }
 
 //===----------------------------------------------------------------------===//
+//                               trans instructions
+//===----------------------------------------------------------------------===//
+
+ir::type* trans_inst::get_res_ty(ir::type* ty) {
+  auto shapes = ty->get_tile_shapes();
+  std::rotate(shapes.begin(), shapes.begin() + 1, shapes.end());
+  return tile_type::get(ty->get_scalar_ty(), shapes);
+}
+
+trans_inst::trans_inst(value *arg, const std::string &name, instruction *next)
+  : builtin_inst(get_res_ty(arg->get_type()), 1, 1, name, next) {
+  set_operand(0, arg);
+}
+
+instruction* trans_inst::create(value *arg, const std::string &name, instruction *next) {
+  return new trans_inst(arg, name, next);
+}
+
+//===----------------------------------------------------------------------===//
+//                               select instructions
+//===----------------------------------------------------------------------===//
+
+select_inst::select_inst(value *pred, value *if_value, value *else_value, const std::string &name, instruction *next)
+  : builtin_inst(if_value->get_type(), 3, 1, name, next){
+  set_operand(0, pred);
+  set_operand(1, if_value);
+  set_operand(2, else_value);
+}
+
+instruction* select_inst::create(value *pred, value *if_value, value *else_value, const std::string &name, instruction *next) {
+  return new select_inst(pred, if_value, else_value, name, next);
+}
+//===----------------------------------------------------------------------===//
 //                               builtin instructions
 //===----------------------------------------------------------------------===//
+
+// get_global_range
 get_global_range_inst::get_global_range_inst(type *ty, unsigned axis,
                                              const std::string &name, instruction *next)
   : builtin_inst(ty, 0, 1, name, next), axis_(axis) {
@@ -516,6 +573,28 @@ instruction* get_global_range_inst::create(context &ctx, unsigned axis, type::ti
   return new get_global_range_inst(tile_ty, axis, name, next);
 }
 
+// get_range_id
+get_range_id_inst::get_range_id_inst(type *ty, unsigned axis, const std::string &name, instruction *next)
+  : builtin_inst(ty, 0, 1, name, next), axis_(axis){
+
+}
+
+instruction* get_range_id_inst::create(context &ctx, unsigned axis, const std::string &name, instruction *next) {
+  return new get_range_id_inst(type::get_int32_ty(ctx), axis, name, next);
+}
+
+// atomic cas
+
+atomic_cas_inst::atomic_cas_inst(value *ptr, value *cmp, value *val, const std::string &name, instruction *next)
+  : builtin_inst(ptr->get_type()->get_pointer_element_ty(), 3, 1, name, next) {
+  set_operand(0, ptr);
+  set_operand(1, cmp);
+  set_operand(2, val);
+}
+
+instruction* atomic_cas_inst::create(value *ptr, value *cmp, value *val, const std::string &name, instruction *next) {
+  return new atomic_cas_inst(ptr, cmp, val, name, next);
+}
 //===----------------------------------------------------------------------===//
 //                               intrinsic instructions
 //===----------------------------------------------------------------------===//
@@ -530,7 +609,7 @@ vectorize_inst* vectorize_inst::create(value *arg, const std::string &name, inst
 
 barrier_inst::barrier_inst(context &ctx, const std::string &name,
                                                        instruction *next)
-  : instruction(type::get_void_ty(ctx), 0, 1, name, next){ }
+  : instruction(type::get_void_ty(ctx), 0, 0, name, next){ }
 
 barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instruction *next) {
   return new barrier_inst(ctx, name, next);

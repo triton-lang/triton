@@ -41,7 +41,13 @@ using triton::ast::return_void;
 "fp64"			            { return return_impl(FP64, yytext); }
 "..."                   { return return_impl(ELLIPSIS, yytext); }
 "get_global_range"      { return return_impl(GET_GLOBAL_RANGE, yytext); }
+"get_range_id"          { return return_impl(GET_RANGE_ID, yytext); }
+"__atomic_cas"          { return return_impl(ATOMIC_CAS, yytext); }
 "dot"                   { return return_impl(DOT, yytext); }
+"max"                   { return return_impl(MAX, yytext); }
+"min"                   { return return_impl(MIN, yytext); }
+"select"                   { return return_impl(SELECT, yytext); }
+"trans"                 { return return_impl(TRANS, yytext); }
 "continue"              { return return_impl(CONTINUE, yytext); }
 "alloc_const"           { return return_impl(ALLOC_CONST, yytext); }
 {L}({L}|{D})*           { return return_impl(IDENTIFIER, yytext); }
@@ -52,8 +58,6 @@ using triton::ast::return_void;
 L?'(\\.|[^\\'])+'      	{ return return_impl(CONSTANT, yytext); }
 
 {D}+{E}{FS}?		        { return return_impl(CONSTANT, yytext); }
-{D}*"."{D}+({E})?{FS}?	{ return return_impl(CONSTANT, yytext); }
-{D}+"."{D}*({E})?{FS}?	{ return return_impl(CONSTANT, yytext); }
 
 L?\"(\\.|[^\\"])*\"	    { return return_impl(STRING_LITERAL, yytext); }
 

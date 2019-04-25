@@ -10,13 +10,15 @@
 #include "triton/driver/kernel.h"
 #include "triton/codegen/selection.h"
 #include "triton/codegen/tune.h"
-#include "triton/codegen/shared_copy.h"
-#include "triton/codegen/allocation.h"
-#include "triton/codegen/liveness.h"
-#include "triton/codegen/vectorize.h"
-#include "triton/codegen/buffer_info.h"
-#include "triton/codegen/barriers.h"
+#include "triton/codegen/optimize_dot.h"
+#include "triton/codegen/optimize_cse.h"
+#include "triton/codegen/optimize_trans.h"
+#include "triton/codegen/shmem_allocation.h"
+#include "triton/codegen/shmem_liveness.h"
+#include "triton/codegen/shmem_info.h"
+#include "triton/codegen/shmem_barriers.h"
 #include "triton/codegen/target.h"
+#include "triton/codegen/vectorize.h"
 #include <functional>
 
 namespace llvm {
@@ -45,48 +47,59 @@ public:
 
   struct passes_wrapper {
     passes_wrapper(codegen::target* target)
-                    : shared(&buffer_info), liveness(&buffer_info),
-                      allocation(&liveness, &buffer_info),
-                      barriers(&allocation, &buffer_info),
+                    : shmem_liveness(&shmem_info),
+                      shmem_allocation(&shmem_liveness, &shmem_info),
+                      shmem_barriers(&shmem_allocation, &shmem_info),
                       vectorize(&tune),
-                      selection(&allocation, &tune, &buffer_info, target),
+                      selection(&shmem_allocation, &tune, &shmem_info, target),
+                      optimize_dot(&tune),
+                      optimize_cse(),
+                      optimize_trans(),
                       target_(target) { }
 
-    void init(ir::module &module) {
+    void target_independent(ir::module &module) {
+        optimize_dot.run(module);
+        optimize_trans.run(module);
+//        ir::print(module, std::cout);
+    }
+
+    void target_dependent(ir::module &module) {
       if(target_->is_gpu()){
-        buffer_info.run(module);
-        shared.run(module);
-        liveness.run(module);
-        allocation.run();
-        barriers.run(module);
+        shmem_info.run(module);
+        shmem_liveness.run(module);
+        shmem_allocation.run();
+        shmem_barriers.run(module);
       }
       vectorize.run(module);
     }
 
     codegen::tune tune;
-    codegen::buffer_info_pass buffer_info;
-    codegen::place_shared_copy shared;
-    codegen::liveness liveness;
-    codegen::allocation allocation;
-    codegen::barriers barriers;
+    codegen::shmem_info shmem_info;
+    codegen::shmem_liveness shmem_liveness;
+    codegen::shmem_allocation shmem_allocation;
+    codegen::shmem_barriers shmem_barriers;
     codegen::vectorize vectorize;
     codegen::selection selection;
+    codegen::optimize_dot optimize_dot;
+    codegen::optimize_cse optimize_cse;
+    codegen::optimize_trans optimize_trans;
     codegen::target* target_;
   };
 
 private:
   std::string compute_data_layout(bool is_64bit = true, bool use_short_pointers = true);
   std::unique_ptr<llvm::Module> make_llvm_module(triton::ir::module &module, passes_wrapper &passes);
-  std::unique_ptr<ir::module> make_triton_module(const std::string &src);
+  std::unique_ptr<ir::module> make_triton_module(const std::string &name, const std::string &src);
 
 public:
   jit(driver::context* context);
-  void autotune(const std::string &src, benchmark_t benchmark);
+  void autotune(const std::string &name, const std::string &src, benchmark_t benchmark);
   void add_module(ir::module &module, const std::vector<unsigned>& params = {});
-  void add_module(const std::string &src, const std::vector<unsigned>& params = {});
+  void add_module(const std::string &name, const std::string &src, const std::vector<unsigned>& params = {});
   driver::kernel* get_function(const std::string &name);
   launch_information get_launch_info(const std::string &name);
   unsigned get_int(const std::string &name);
+  driver::buffer *get_buffer(const std::string &name);
 
 private:
   std::vector<driver::module*> modules_;

@@ -1,7 +1,7 @@
 #include <algorithm>
-#include "triton/codegen/barriers.h"
-#include "triton/codegen/allocation.h"
-#include "triton/codegen/buffer_info.h"
+#include "triton/codegen/shmem_barriers.h"
+#include "triton/codegen/shmem_allocation.h"
+#include "triton/codegen/shmem_info.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -12,7 +12,7 @@ namespace triton {
 
 namespace codegen{
 
-bool barriers::intersect(const interval_vec_t &X, interval_t x) {
+bool shmem_barriers::intersect(const interval_vec_t &X, interval_t x) {
   return std::any_of(X.begin(), X.end(), [&](const interval_t &y){
     bool left_intersect = y.first <= x.first && x.first < y.second;
     bool right_intersect = y.first <= x.second && x.second < y.second;
@@ -20,31 +20,31 @@ bool barriers::intersect(const interval_vec_t &X, interval_t x) {
   });
 }
 
-bool barriers::intersect(const interval_vec_t &X, const interval_vec_t &Y) {
+bool shmem_barriers::intersect(const interval_vec_t &X, const interval_vec_t &Y) {
   return std::any_of(Y.begin(), Y.end(), [&](const interval_t &y){
     return intersect(X, y);
   });
 }
 
-void barriers::add_reference(ir::value *v, interval_vec_t &res){
-  if(dynamic_cast<ir::copy_to_shared_inst*>(v)){
+void shmem_barriers::add_reference(ir::value *v, interval_vec_t &res){
+  if(buffer_info_->is_shared(v) && !dynamic_cast<ir::phi_node*>(v)){
     unsigned offset = alloc_->get_offset(v);
     unsigned num_bytes = alloc_->get_num_bytes(v);
     res.push_back(interval_t(offset, offset + num_bytes));
   }
 }
 
-void barriers::get_read_intervals(ir::instruction *i, interval_vec_t &res){
+void shmem_barriers::get_read_intervals(ir::instruction *i, interval_vec_t &res){
   for(ir::value *op: i->ops())
     add_reference(op, res);
 }
 
-void barriers::get_written_intervals(ir::instruction *i, interval_vec_t &res){
+void shmem_barriers::get_written_intervals(ir::instruction *i, interval_vec_t &res){
   if(!dynamic_cast<ir::phi_node*>(i))
     add_reference(i, res);
 }
 
-void barriers::insert_barrier(ir::instruction *instr, ir::builder &builder) {
+void shmem_barriers::insert_barrier(ir::instruction *instr, ir::builder &builder) {
   if(auto *phi = dynamic_cast<ir::phi_node*>(instr)) {
     std::set<ir::value*> incoming;
     for(unsigned n = 0; n < phi->get_num_incoming(); n++){
@@ -63,16 +63,16 @@ void barriers::insert_barrier(ir::instruction *instr, ir::builder &builder) {
   }
 }
 
-barriers::interval_vec_t barriers::join(const std::vector<interval_vec_t>& intervals) {
-  barriers::interval_vec_t result;
+shmem_barriers::interval_vec_t shmem_barriers::join(const std::vector<interval_vec_t>& intervals) {
+  shmem_barriers::interval_vec_t result;
   for(auto x: intervals)
     for(interval_t i: x)
       result.push_back(i);
   return result;
 }
 
-std::pair<barriers::interval_vec_t,
-          barriers::interval_vec_t> barriers::transfer(ir::basic_block *block,
+std::pair<shmem_barriers::interval_vec_t,
+          shmem_barriers::interval_vec_t> shmem_barriers::transfer(ir::basic_block *block,
                                             const interval_vec_t &written_to,
                                             const interval_vec_t &read_from,
                                             std::set<ir::instruction*>& insert_loc) {
@@ -83,13 +83,13 @@ std::pair<barriers::interval_vec_t,
     interval_vec_t read, written;
     get_read_intervals(i, read);
     get_written_intervals(i, written);
-    bool read_while_written = intersect(new_written_to, read);
-    bool written_while_read = intersect(new_read_from, written);
+    bool read_after_write = intersect(new_written_to, read);
+    bool write_after_read = intersect(new_read_from, written);
     // double buffering: write and phi-node read won't intersect
-    if(dynamic_cast<ir::copy_to_shared_inst*>(i) &&
+    if(buffer_info_->is_shared(i) &&
        buffer_info_->is_double(buffer_info_->get_reference(i)))
-      written_while_read = false;
-    if(read_while_written || written_while_read) {
+      write_after_read = false;
+    if(read_after_write || write_after_read) {
       insert_loc.insert(i);
       new_written_to.clear();
       new_read_from.clear();
@@ -100,7 +100,7 @@ std::pair<barriers::interval_vec_t,
   return std::make_pair(new_written_to, new_read_from);
 }
 
-void barriers::run(ir::module &mod) {
+void shmem_barriers::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
   for(ir::function *fn: mod.get_function_list()){
     std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);

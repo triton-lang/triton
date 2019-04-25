@@ -24,6 +24,7 @@ public:
   virtual llvm::Instruction* add_barrier(llvm::Module *module, llvm::IRBuilder<>& builder) = 0;
   virtual llvm::Value* get_global_offset(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned stride, unsigned ax) = 0;
   virtual llvm::Value* get_local_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax) = 0;
+  virtual llvm::Value* get_block_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax) = 0;
   bool is_gpu() const;
 
 private:
@@ -37,6 +38,7 @@ public:
   llvm::Instruction* add_barrier(llvm::Module *module, llvm::IRBuilder<>& builder);
   llvm::Value* get_global_offset(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned stride, unsigned ax);
   llvm::Value* get_local_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
+  llvm::Value* get_block_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
 };
 
 class nvidia_cu_target: public target {
@@ -46,6 +48,7 @@ public:
   llvm::Instruction* add_barrier(llvm::Module *module, llvm::IRBuilder<>& builder);
   llvm::Value* get_global_offset(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned stride, unsigned ax);
   llvm::Value* get_local_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
+  llvm::Value* get_block_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
 };
 
 class cpu_target: public target {
@@ -55,6 +58,7 @@ public:
   llvm::Instruction* add_barrier(llvm::Module *module, llvm::IRBuilder<>& builder);
   llvm::Value* get_global_offset(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned stride, unsigned ax);
   llvm::Value* get_local_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
+  llvm::Value* get_block_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
 };
 
 }

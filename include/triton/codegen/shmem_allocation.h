@@ -16,12 +16,12 @@ namespace codegen{
 
 class layout;
 class target_tuner;
-class liveness;
-class buffer_info_pass;
+class shmem_liveness;
+class shmem_info;
 
-class allocation {
+class shmem_allocation {
 public:
-  allocation(liveness *live, buffer_info_pass *buffer_info)
+  shmem_allocation(shmem_liveness *live, shmem_info *buffer_info)
     : liveness_(live), buffer_info_(buffer_info){ }
 
   // utilities
@@ -39,8 +39,8 @@ private:
   std::map<ir::value*, unsigned> num_bytes_;
   size_t allocated_size_;
   // dependences
-  liveness *liveness_;
-  buffer_info_pass *buffer_info_;
+  shmem_liveness *liveness_;
+  shmem_info *buffer_info_;
 };
 
 }
