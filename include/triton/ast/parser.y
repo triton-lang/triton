@@ -53,9 +53,9 @@ STORAGE_SPEC_T get_storage_spec(node *op) { return ((token*)op)->storage_spec;}
 %token SUB_ASSIGN LEFT_ASSIGN RIGHT_ASSIGN AND_ASSIGN
 %token XOR_ASSIGN OR_ASSIGN TYPE_NAME
 %token VOID UINT1 UINT8 UINT16 UINT32 UINT64 INT1 INT8 INT16 INT32 INT64 FP32 FP64
-%token IF ELSE FOR CONTINUE
+%token IF ELSE FOR CONTINUE WHILE
 %token NEWAXIS ELLIPSIS AT
-%token GET_GLOBAL_RANGE GET_RANGE_ID DOT TRANS MAX MIN SELECT ATOMIC_CAS ALLOC_CONST
+%token GET_GLOBAL_RANGE GET_RANGE_ID DOT TRANS MAX MIN SELECT ATOMIC_CAS ATOMIC_EXCHG ALLOC_CONST
 
 %start translation_unit
 %%
@@ -314,7 +314,7 @@ iteration_statement
   : FOR '(' expression_statement expression_statement expression ')' statement { $$ = new iteration_statement($3, $4, $5, $7); }
   | FOR '(' declaration expression_statement ')' statement { $$ = new iteration_statement($3, $4, nullptr, $6); }
   | FOR '(' declaration expression_statement expression ')' statement { $$ = new iteration_statement($3, $4, $5, $7); }
-	;
+  | WHILE '(' expression ')' statement { $$ = new while_statement($3, $5); };
 
 jump_statement
   : CONTINUE ';'          { $$ = new continue_statement(); }

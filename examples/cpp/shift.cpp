@@ -195,7 +195,7 @@ int main() {
     8, 8,
     4
   };
-//  jit.autotune("shift", src, benchmark);
+  jit.autotune("shift", src, benchmark);
   jit.add_module("shift", src, params);
   triton::driver::kernel* kernel = jit.get_function("shift");
   triton::jit::launch_information info = jit.get_launch_info("shift");

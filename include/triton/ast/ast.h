@@ -462,6 +462,19 @@ private:
   const node *statements_;
 };
 
+class while_statement: public statement{
+public:
+  while_statement(node *cond, node *statements)
+    : cond_(cond), statements_(statements)
+  { }
+
+  ir::value* codegen(ir::module *) const;
+
+private:
+  const node *cond_;
+  const node *statements_;
+};
+
 // Jump
 
 class jump_statement: public statement{

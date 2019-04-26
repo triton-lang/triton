@@ -337,6 +337,7 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     BasicBlock *tid_0_done_bb = BasicBlock::Create(ctx, "tid_0_done", current->getParent());
     Value *ptr = builder.CreateGEP(sh_mem_ptr_, builder.getInt32(alloc_->get_offset(ii)));
     ptr = builder.CreateBitCast(ptr, PointerType::get(builder.getInt32Ty(), ptr->getType()->getPointerAddressSpace()));
+    tgt_->add_barrier(module, builder);
     builder.CreateCondBr(pred, tid_0_bb, tid_0_done_bb);
     builder.SetInsertPoint(tid_0_bb);
     Value *cas_ptr = value(ii->get_operand(0));

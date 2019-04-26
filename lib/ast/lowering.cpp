@@ -371,6 +371,31 @@ ir::value* iteration_statement::codegen(ir::module *mod) const{
   return nullptr;
 }
 
+/* While statement */
+ir::value* while_statement::codegen(ir::module* mod) const{
+  ir::builder &builder = mod->get_builder();
+  ir::context &ctx = mod->get_context();
+  ir::basic_block *current_bb = builder.get_insert_block();
+  ir::function *fn = current_bb->get_parent();
+  ir::basic_block *loop_bb = ir::basic_block::create(ctx, "loop", fn);
+  ir::basic_block *next_bb = ir::basic_block::create(ctx, "postloop", fn);
+  mod->set_continue_fn([&](){
+    ir::value *cond = cond_->codegen(mod);
+    return builder.create_cond_br(cond, loop_bb, next_bb);
+  });
+  ir::value *cond = cond_->codegen(mod);
+  builder.create_cond_br(cond, loop_bb, next_bb);
+  builder.set_insert_point(loop_bb);
+  if(!is_terminator(statements_->codegen(mod)))
+    mod->get_continue_fn()();
+  ir::basic_block *stop_bb = builder.get_insert_block();
+  mod->seal_block(stop_bb);
+  mod->seal_block(loop_bb);
+  mod->seal_block(builder.get_insert_block());
+  mod->seal_block(next_bb);
+  builder.set_insert_point(next_bb);
+}
+
 /* Selection statement */
 ir::value* selection_statement::codegen(ir::module* mod) const{
   ir::builder &builder = mod->get_builder();
