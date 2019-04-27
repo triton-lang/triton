@@ -320,23 +320,33 @@ ir::value* compound_statement::codegen(ir::module* mod) const{
 /* expression statement */
 ir::value* expression_statement::codegen(ir::module *mod) const{
   ir::builder &builder = mod->get_builder();
-  if(mask_) {
-    ir::value *pred = mask_->codegen(mod);
-    ir::mask_inst *mask = (ir::mask_inst*)builder.create_mask(pred);
-    ir::value *true_value = expr_->codegen(mod);
+  ir::basic_block *block = builder.get_insert_block();
+  if(pred_) {
+    // check that it is an assignment
     assignment_expression *assignment = dynamic_cast<assignment_expression*>(expr_);
     assert(assignment);
-
-    ir::type *ty = true_value->get_type();
-    if(auto *itn = dynamic_cast<ir::instruction*>(true_value))
-      itn->set_mask_pred(mask->get_result(0));
+    // generate mask
+    ir::value *pred = pred_->codegen(mod);
+    ir::mask_inst *mask = (ir::mask_inst*)builder.create_mask(pred);
+    // generate expression
+    unsigned szbegin = block->get_inst_list().size();
+    ir::value *expr = expr_->codegen(mod);
+    ir::basic_block::iterator begin = block->begin();
+    std::advance(begin, szbegin);
+    // set mask
+    ir::type *ty = expr->get_type();
+    for(auto it = begin; it != builder.get_insert_point(); it++)
+      (*it)->set_mask_pred(mask->get_result(0));
+//    if(auto *itn = dynamic_cast<ir::instruction*>(expr))
+//      itn->set_mask_pred(mask->get_result(0));
     if(ty->is_void_ty())
-      return true_value;
-    ir::merge_inst *merge = (ir::merge_inst*)builder.create_merge(mask->get_result(0), true_value,
+      return expr;
+    // merge with psi
+    ir::psi_inst *psi = (ir::psi_inst*)builder.create_merge(mask->get_result(0), expr,
                                                                   mask->get_result(1), ir::undef_value::get(ty));
     std::string name = ((named_expression*)assignment->lvalue())->id()->name();
-    mod->set_value(name, merge);
-    return merge;
+    mod->set_value(name, psi);
+    return psi;
   }
   return expr_->codegen(mod);
 }

@@ -92,7 +92,7 @@ value *builder::create_mask(value *pred, const std::string &name){
 }
 
 value *builder::create_merge(value *mask_true, value *value_true, value *mask_false, value *value_false, const std::string &name) {
-  return insert(merge_inst::create(mask_true, value_true, mask_false, value_false, name));
+  return insert(psi_inst::create(mask_true, value_true, mask_false, value_false, name));
 }
 
 

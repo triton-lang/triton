@@ -410,13 +410,13 @@ class statement: public block_item{
 class expression_statement: public statement{
 public:
   expression_statement(node *expr, node *mask = nullptr)
-    : expr_((expression*)expr), mask_((expression*)mask){ }
+    : expr_((expression*)expr), pred_((expression*)mask){ }
 
   ir::value* codegen(ir::module * mod) const;
 
 private:
   expression *expr_;
-  expression *mask_;
+  expression *pred_;
 };
 
 

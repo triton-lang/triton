@@ -690,7 +690,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       });
     }
     // merge
-    else if(auto *merge = dynamic_cast<ir::merge_inst*>(ins)) {
+    else if(auto *merge = dynamic_cast<ir::psi_inst*>(ins)) {
       distributed_tile* mask_tile_true = (distributed_tile*)tmap_.at(merge->get_mask_true());
       distributed_tile *value_tile_true = (distributed_tile*)tmap_.at(merge->get_value_true());
       distributed_tile* mask_tile_false = (distributed_tile*)tmap_.at(merge->get_mask_false());
@@ -951,7 +951,7 @@ void selection::run(ir::module &src, Module &dst) {
       dst_builder.SetInsertPoint(parent);
       for(ir::instruction *i: block->get_inst_list()){
         BasicBlock *current = dst_builder.GetInsertBlock();
-        bool phi_inserted = (dynamic_cast<ir::phi_node*>(i) || dynamic_cast<ir::merge_inst*>(i)) && !current->empty();
+        bool phi_inserted = (dynamic_cast<ir::phi_node*>(i) || dynamic_cast<ir::psi_inst*>(i)) && !current->empty();
         if(phi_inserted && current->getFirstNonPHI())
           dst_builder.SetInsertPoint(&*current->getFirstNonPHI());
         lower_instruction(i, dst_builder);

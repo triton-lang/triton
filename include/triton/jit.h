@@ -70,6 +70,7 @@ public:
         shmem_barriers.run(module);
       }
       vectorize.run(module);
+      ir::print(module, std::cout);
     }
 
     codegen::tune tune;

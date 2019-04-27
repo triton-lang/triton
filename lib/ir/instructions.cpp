@@ -334,7 +334,7 @@ mask_inst* mask_inst::create(value *pred, const std::string &name, instruction *
 }
 
 // merge_inst
-merge_inst::merge_inst(value *mask_true, value *value_true,
+psi_inst::psi_inst(value *mask_true, value *value_true,
                        value *mask_false, value *value_false,
                        const std::string &name, instruction *next)
     : instruction(value_true->get_type(), 4, 1, name, next) {
@@ -344,10 +344,10 @@ merge_inst::merge_inst(value *mask_true, value *value_true,
   set_operand(3, value_false);
 }
 
-merge_inst* merge_inst::create(value *mask_true, value *value_true,
+psi_inst* psi_inst::create(value *mask_true, value *value_true,
                                value *mask_false, value *value_false,
                                const std::string &name, instruction *next) {
-  return new merge_inst(mask_true, value_true, mask_false, value_false, name, next);
+  return new psi_inst(mask_true, value_true, mask_false, value_false, name, next);
 }
 
 

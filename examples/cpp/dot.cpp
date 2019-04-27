@@ -69,7 +69,7 @@ void matmul(restrict read_only fp32 *A, restrict read_only fp32 *B, fp32 *C,
     *pcount = countp1;
   }
   else {
-    *pc = c + (checkc ? *pc : 0);
+    @checkc *pc = c + *pc;
     *pcount = countp1;
   }
   __atomic_cas(plock, 1, 0);

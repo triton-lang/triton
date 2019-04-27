@@ -335,15 +335,15 @@ public:
 };
 
 // merge
-class merge_inst: public instruction {
+class psi_inst: public instruction {
 private:
   std::string repr_impl() const { return "merge"; }
-  merge_inst(ir::value *mask_true, ir::value *value_true,
+  psi_inst(ir::value *mask_true, ir::value *value_true,
              ir::value *mask_false, ir::value *value_false,
              const std::string &name, instruction *next);
 
 public:
-  static merge_inst* create(ir::value *mask_true, ir::value *value_true,
+  static psi_inst* create(ir::value *mask_true, ir::value *value_true,
                             ir::value *mask_false, ir::value *value_false,
                             const std::string &name = "", instruction *next = nullptr);
   ir::value *get_mask_true() { return get_operand(0); }
