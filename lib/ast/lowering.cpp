@@ -351,7 +351,7 @@ ir::value* expression_statement::codegen(ir::module *mod) const{
   return expr_->codegen(mod);
 }
 
-/* Iteration statement */
+/* For statement */
 ir::value* iteration_statement::codegen(ir::module *mod) const{
   ir::builder &builder = mod->get_builder();
   ir::context &ctx = mod->get_context();
@@ -362,11 +362,11 @@ ir::value* iteration_statement::codegen(ir::module *mod) const{
   mod->set_continue_fn([&](){
     if(exec_)
       exec_->codegen(mod);
-    ir::value *cond = stop_->codegen(mod);
+    ir::value *cond = explicit_cast(builder, stop_->codegen(mod), ir::type::get_int1_ty(ctx));
     return builder.create_cond_br(cond, loop_bb, next_bb);
   });
   init_->codegen(mod);
-  ir::value *cond = stop_->codegen(mod);
+  ir::value *cond = explicit_cast(builder, stop_->codegen(mod), ir::type::get_int1_ty(ctx));
   builder.create_cond_br(cond, loop_bb, next_bb);
 //  builder.create_br(loop_bb);
   builder.set_insert_point(loop_bb);
@@ -390,10 +390,10 @@ ir::value* while_statement::codegen(ir::module* mod) const{
   ir::basic_block *loop_bb = ir::basic_block::create(ctx, "loop", fn);
   ir::basic_block *next_bb = ir::basic_block::create(ctx, "postloop", fn);
   mod->set_continue_fn([&](){
-    ir::value *cond = cond_->codegen(mod);
+    ir::value *cond = explicit_cast(builder, cond_->codegen(mod), ir::type::get_int1_ty(ctx));
     return builder.create_cond_br(cond, loop_bb, next_bb);
   });
-  ir::value *cond = cond_->codegen(mod);
+  ir::value *cond = explicit_cast(builder, cond_->codegen(mod), ir::type::get_int1_ty(ctx));
   builder.create_cond_br(cond, loop_bb, next_bb);
   builder.set_insert_point(loop_bb);
   if(!is_terminator(statements_->codegen(mod)))
