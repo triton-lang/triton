@@ -103,6 +103,7 @@ int main() {
   stream->write(da, true, 0, ha);
   stream->write(db, true, 0, hb);
   stream->write(dc, true, 0, hc);
+  stream->write(dlocks, true, 0, hlocks);
   stream->synchronize();
 
 
@@ -115,8 +116,6 @@ int main() {
     unsigned nthreads = info.num_threads;
     unsigned GZ = jit.get_int("GZ");
     std::array<size_t, 3> grid = {(M + TM - 1)/TM, (N + TN - 1)/TN, GZ};
-    // init locks
-    stream->write(dlocks, true, 0, hlocks);
     // set argument
     kernel->setArg(0, da);
     kernel->setArg(1, db);
