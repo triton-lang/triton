@@ -10,6 +10,10 @@ FLEX_TARGET(Lexer ${CMAKE_CURRENT_SOURCE_DIR}/include/triton/ast/scanner.l ${CMA
 get_filename_component(BISON_Parser_INCLUDE_DIRECTORIES ${BISON_Parser_OUTPUT_HEADER} DIRECTORY)
 include_directories(${BISON_Parser_INCLUDE_DIRECTORIES})
 
+#execute_process(COMMAND python -c "import tensorflow as tf; print(tf.__cxx11_abi_flag__ if \"__cxx11_abi_flag__\" in tf.__dict__ else 0)"
+#                OUTPUT_VARIABLE TF_ABI OUTPUT_STRIP_TRAILING_WHITESPACE)
+#add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
+
 # LLVM
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS ${LLVM_INCLUDE_DIRS})
@@ -24,7 +28,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Gather headers for cmake-based IDEs
-file( GLOB_RECURSE ALL_SRC *.cpp *.hpp *.h *.py *.y *.l)
+file( GLOB_RECURSE ALL_SRC *.cpp *.hpp *.h *.py *.y *.l CMakeLists*)
 add_custom_target( ALL SOURCES ${ALL_SRC} )
 
 # Compiler flags

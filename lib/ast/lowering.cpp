@@ -404,6 +404,7 @@ ir::value* while_statement::codegen(ir::module* mod) const{
   mod->seal_block(builder.get_insert_block());
   mod->seal_block(next_bb);
   builder.set_insert_point(next_bb);
+  return nullptr;
 }
 
 /* Selection statement */

@@ -20,6 +20,7 @@ namespace codegen{
 class target {
 public:
   target(bool is_gpu): is_gpu_(is_gpu){}
+  virtual ~target() {}
   virtual void set_kernel(llvm::IRBuilder<>& builder, llvm::LLVMContext &ctx, llvm::Module *module, llvm::Function* fn) = 0;
   virtual llvm::Instruction* add_barrier(llvm::Module *module, llvm::IRBuilder<>& builder) = 0;
   virtual llvm::Value* get_global_offset(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned stride, unsigned ax) = 0;

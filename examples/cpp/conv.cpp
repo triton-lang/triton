@@ -5,7 +5,7 @@
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
 
-std::string src =
+const char* src =
 R"(
 const tunable int32 TM = {16, 32, 64};
 const tunable int32 TN = {16, 32, 64};

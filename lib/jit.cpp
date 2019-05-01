@@ -79,9 +79,9 @@ std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, passes_w
   return std::unique_ptr<llvm::Module>(result);
 }
 
-std::unique_ptr<ir::module> jit::make_triton_module(const std::string &name, const std::string &src) {
+std::unique_ptr<ir::module> jit::make_triton_module(const char *name, const char *src) {
   // create AST from Triton-C source
-  YY_BUFFER_STATE buffer = yy_scan_string(src.c_str());
+  YY_BUFFER_STATE buffer = yy_scan_string(src);
   yyparse();
   yy_delete_buffer(buffer);
   translation_unit *program = ast_root;
@@ -97,7 +97,7 @@ jit::jit(driver::context *context): driver_context_(context),
 }
 
 
-void jit::autotune(const std::string &name, const std::string &src, benchmark_t benchmark) {
+void jit::autotune(const char *name, const char *src, benchmark_t benchmark) {
   // find metaparameters
   auto ptt_module = make_triton_module(name, src);
   ir::module &tt_module = *ptt_module;
@@ -143,8 +143,8 @@ void jit::autotune(const std::string &name, const std::string &src, benchmark_t 
     // Compile
     auto ll_module = make_llvm_module(tt_module, passes);
     std::unique_ptr<driver::module> module(driver::module::create(driver_context_, &*ll_module));
-    std::unique_ptr<driver::kernel> kernel(driver::kernel::create(module.get(), name.c_str()));
-    launch_information info = launch_info_map_.at(name.c_str());
+    std::unique_ptr<driver::kernel> kernel(driver::kernel::create(module.get(), name));
+    launch_information info = launch_info_map_.at(name);
     for(unsigned p: params)
       std::cout << p << " " << std::flush;
     // add globals
@@ -191,26 +191,26 @@ void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params)
     global_ints_[x.first] = ((ir::metaparameter*)x.second)->get_value();
 }
 
-void jit::add_module(const std::string &name, const std::string &src, const std::vector<unsigned> &params) {
+void jit::add_module(const char *name, const char *src, const std::vector<unsigned> &params) {
   auto ptt_module = make_triton_module(name, src);
   add_module(*ptt_module, params);
 }
 
-driver::kernel *jit::get_function(const std::string &name) {
-  return driver::kernel::create(modules_.front(), name.c_str());
+driver::kernel *jit::get_function(const char *name) {
+  return driver::kernel::create(modules_.front(), name);
 }
 
-jit::launch_information jit::get_launch_info(const std::string &name) {
+jit::launch_information jit::get_launch_info(const char *name) {
   return launch_info_map_.at(name);
 }
 
-unsigned jit::get_int(const std::string &name){
+unsigned jit::get_int(const char *name){
   return global_ints_.at(name);
 }
 
-driver::buffer *jit::get_buffer(const std::string &name){
+driver::buffer *jit::get_buffer(const char *name){
   driver::cu_module *mod = (driver::cu_module*)modules_.front();
-  return mod->symbol(name.c_str());
+  return mod->symbol(name);
 }
 
 }
