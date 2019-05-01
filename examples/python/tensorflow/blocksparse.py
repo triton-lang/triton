@@ -3,7 +3,7 @@ import tensorflow as tf
 import numpy as np
 
 data_files_path = tf.resource_loader.get_data_files_path()
-library_dir = '/home/philippe/development/triton/build/examples/python/tensorflow'
+library_dir = '/home/philippe/Development/triton/build/examples/python/tensorflow'
 module = tf.load_op_library(os.path.join(library_dir, 'libtf_blocksparse.so'))
 
 M, N, K = 512, 512, 512

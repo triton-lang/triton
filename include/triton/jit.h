@@ -70,7 +70,6 @@ public:
         shmem_barriers.run(module);
       }
       vectorize.run(module);
-//      ir::print(module, std::cout);
     }
 
     codegen::tune tune;
@@ -93,6 +92,7 @@ private:
 
 public:
   jit(driver::context* context);
+  ~jit();
   void autotune(const char* name, const char* src, benchmark_t benchmark);
   void add_module(ir::module &module, const std::vector<unsigned>& params = {});
   void add_module(const char* name, const char* src, const std::vector<unsigned>& params = {});

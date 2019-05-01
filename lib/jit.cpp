@@ -71,11 +71,12 @@ std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, passes_w
   llvm::Module* result = new llvm::Module(module.get_name(), llvm_context_);
   passes.selection.run(module, *result);
   // launch information
-  auto &launch_info_map = launch_info_map_[result->getName()];
-  launch_info_map.global_range_size.clear();
+  launch_information info;
+  info.global_range_size.clear();
   for(unsigned i = 0; i < passes.tune.get_num_global_range(); i++)
-    launch_info_map.global_range_size.push_back(passes.tune.get_global_range_size(i));
-  launch_info_map.num_threads = passes.tune.get_num_threads();
+    info.global_range_size.push_back(passes.tune.get_global_range_size(i));
+  info.num_threads = passes.tune.get_num_threads();
+  launch_info_map_.insert({result->getName(), info});
   return std::unique_ptr<llvm::Module>(result);
 }
 
@@ -93,9 +94,9 @@ std::unique_ptr<ir::module> jit::make_triton_module(const char *name, const char
 
 
 jit::jit(driver::context *context): driver_context_(context),
-                                    target_(context->device()->make_target()) {
-}
+                                    target_(context->device()->make_target()) { }
 
+jit::~jit(){ }
 
 void jit::autotune(const char *name, const char *src, benchmark_t benchmark) {
   // find metaparameters
