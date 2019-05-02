@@ -158,6 +158,12 @@ bool dispatch::cudnninit(){
   return cudnn_ != nullptr;
 }
 
+bool dispatch::spvllvminit(){
+  if(spvllvm_==nullptr)
+    spvllvm_ = dlopen("libLLVMSPIRVLib.so", RTLD_LAZY);
+  return spvllvm_ != nullptr;
+}
+
 //CUDA
 CUDA_DEFINE1(CUresult, cuCtxDestroy_v2, CUcontext)
 CUDA_DEFINE2(CUresult, cuEventCreate, CUevent *, unsigned int)
@@ -292,6 +298,15 @@ OCL_DEFINE5(cl_mem, clCreateBuffer, cl_context, cl_mem_flags, size_t, void *, cl
 OCL_DEFINE5(cl_program, clCreateProgramWithSource, cl_context, cl_uint, const char **, const size_t *, cl_int *)
 OCL_DEFINE1(cl_int, clReleaseKernel, cl_kernel)
 
+// LLVM to SPIR-V
+int dispatch::initializeLLVMToSPIRVPass(llvm::PassRegistry &registry){
+  return f_impl<dispatch::spvllvminit>(spvllvm_, initializeLLVMToSPIRVPass, initializeLLVMToSPIRVPass_, "initializeLLVMToSPIRVPass", std::ref(registry));
+}
+
+bool dispatch::writeSpirv(llvm::Module *M, std::ostream &OS, std::string &ErrMsg){
+  return f_impl<dispatch::spvllvminit>(spvllvm_, writeSpirv, writeSpirv_, "writeSpirv", M, std::ref(OS), std::ref(ErrMsg));
+}
+
 // Release
 void dispatch::release(){
   if(cuda_){
@@ -313,6 +328,7 @@ void* dispatch::cuda_;
 void* dispatch::nvml_;
 void* dispatch::cublas_;
 void* dispatch::cudnn_;
+void* dispatch::spvllvm_;
 
 //OpenCL
 void* dispatch::clBuildProgram_;
@@ -420,6 +436,10 @@ void* dispatch::cudnnConvolutionForward_;
 void* dispatch::cudnnPoolingForward_;
 void* dispatch::cudnnSetStream_;
 void* dispatch::cudnnTransformTensor_;
+
+// SPIR-V
+void* dispatch::initializeLLVMToSPIRVPass_;
+void* dispatch::writeSpirv_;
 
 }
 }

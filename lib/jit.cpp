@@ -71,12 +71,11 @@ std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, passes_w
   llvm::Module* result = new llvm::Module(module.get_name(), llvm_context_);
   passes.selection.run(module, *result);
   // launch information
-  launch_information info;
+  launch_information& info = launch_info_map_[result->getName()];
   info.global_range_size.clear();
   for(unsigned i = 0; i < passes.tune.get_num_global_range(); i++)
     info.global_range_size.push_back(passes.tune.get_global_range_size(i));
   info.num_threads = passes.tune.get_num_threads();
-  launch_info_map_.insert({result->getName(), info});
   return std::unique_ptr<llvm::Module>(result);
 }
 
