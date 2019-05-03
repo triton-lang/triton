@@ -1,0 +1,6 @@
+find_package(Torch)
+if(${Torch_FOUND})
+    add_library(torch_triton SHARED conv.cpp)
+    target_compile_features(torch_triton PRIVATE cxx_range_for)
+    target_link_libraries(torch_triton "${TORCH_LIBRARIES}")
+endif()
