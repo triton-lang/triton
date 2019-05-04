@@ -632,11 +632,13 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
   LLVMContext &ctx = builder.getContext();
   Function *fn = block->getParent();
   ir::value *mask = ins->get_mask_pred();
+  BasicBlock *last_block = nullptr;
   auto set_mask_insert_pt = [&](indices_t idx){
     if(mask){
       distributed_tile *mask_tile = (distributed_tile*)tmap_.at(ins->get_mask_pred());
       BasicBlock *block = pmap_.at({mask_tile, idx});
       builder.SetInsertPoint(block->getTerminator());
+      last_block = last_block_.at({mask_tile, idx});
     }
   };
   // store
@@ -646,7 +648,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     ptr->for_each([&](indices_t idx){
       set_mask_insert_pt(idx);
       StoreInst *store = new StoreInst(value->get_value(idx), ptr->get_value(idx));
-//      store->setAlignment(16);
       builder.Insert(store);
     });
   }
@@ -847,8 +848,11 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       });
     }
   }
-  if(mask)
+  if(mask){
     builder.SetInsertPoint(block);
+    if(last_block)
+      builder.SetInsertPoint(last_block);
+  }
 }
 
 void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
