@@ -1,11 +1,9 @@
-import math
-import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch.autograd import Variable
-from torch.utils.cpp_extension import load
-from torch.distributions import categorical
-from itertools import product
 
-conv_triton = load( 'conv_triton', ['conv.cpp', 'conv.cu'], extra_cflags=['-O3'])
+torch.ops.load_library("/home/philippe/Development/triton/build/examples/python/pytorch/libtorch_triton.so")
+
+d = torch.empty(64, 64, 64, 64).uniform_(0, 1).cuda()
+w = torch.empty(64, 3, 3, 64).uniform_(0, 1).cuda()
+a = torch.ops.triton.conv_forward(d, w)
+print(a)

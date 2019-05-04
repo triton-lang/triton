@@ -17,5 +17,4 @@ if(TensorFlow_FOUND)
     set(TensorFlow_ABI ${TF_ABI})
 endif()
 
-# hide locals from GUI
 mark_as_advanced(TF_INC TF_LIB TF_ABI)

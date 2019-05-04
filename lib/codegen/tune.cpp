@@ -171,11 +171,19 @@ void tune::run(ir::module &mod) {
   // Simplify metaparameters
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
-  for(ir::instruction *i : block->get_inst_list())
-  if(dynamic_cast<ir::load_inst*>(i) && i->get_type()->is_tile_ty()){
-    ir::type *ty = mod.get_builder().get_int32_ty();
-    std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty, 2, 2));
-    *params_.at(i).at("nts.d0") = *tmp;
+  for(ir::instruction *i : block->get_inst_list()){
+    if(dynamic_cast<ir::load_inst*>(i) && i->get_type()->is_tile_ty()){
+      ir::type *ty = mod.get_builder().get_int32_ty();
+      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty, 2, 2));
+      *params_.at(i).at("nts.d0") = *tmp;
+    }
+    if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
+      ir::type *ty = mod.get_builder().get_int32_ty();
+      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 2, 2));
+      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 2, 2));
+      *params_.at(i).at("nts.d0") = *tmp1;
+      *params_.at(i).at("nts.d1") = *tmp2;
+    }
   }
 }
 

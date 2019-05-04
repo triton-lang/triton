@@ -217,7 +217,7 @@ int main() {
     16, 2, 64,
     32, 2, 64,
     16, 8, 2, 2,
-    8, 8,
+    8, 1, 8,
     4
   };
 //  jit.autotune("conv", src, benchmark);
