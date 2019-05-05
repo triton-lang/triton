@@ -10,8 +10,24 @@
 namespace triton{
 namespace codegen{
 
+bool shmem_allocation::is_ld_padded(ir::value *x) {
+  if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
+    bool result = false;
+    for(unsigned i = 0; i < phi->get_num_incoming(); i++)
+      result = result | is_ld_padded(phi->get_incoming_value(i));
+    return result;
+  }
+  if(dynamic_cast<ir::trans_inst*>(x))
+    return true;
+  return false;
+}
+
 unsigned shmem_allocation::get_num_bytes(ir::value *x) {
   unsigned result = x->get_type()->get_primitive_size_in_bits() / 8;
+  if(is_ld_padded(x)){
+    unsigned ld = x->get_type()->get_tile_shapes()[0]->get_value();
+    result += 4 * result / ld;
+  }
   if(buffer_info_->is_double(x))
     result *= 2;
   return result;
@@ -23,8 +39,9 @@ void shmem_allocation::run(){
   typedef std::multimap<unsigned, segment> triples_map_type;
 
   std::vector<ir::value *> I;
-  for(auto x: liveness_->intervals())
+  for(auto x: liveness_->intervals()){
     I.push_back(x.first);
+  }
   std::vector<ir::value *> J = I;
 
   triples_map_type H;

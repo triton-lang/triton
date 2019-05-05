@@ -88,6 +88,85 @@ void conv(read_only restrict fp32 *a,
     @checkc *pc = C;
 })";
 
+void build_conv_lut(int TK,
+                    int stride_d, int stride_h, int stride_w, int stride_c,
+                    int pad_d, int pad_h, int pad_w,
+                    int T, int R, int S,
+                    std::vector<int>& res, std::vector<int>& masks) {
+  /* convolution parameters */
+  int F = T * R * S;
+  int Nlut = (TK + F - 1) / F * F;
+  int upsample_w = 1;
+  int upsample_h = 1;
+  int upsample_d = 1;
+  /* unpack index wrt filters */
+  auto unpack = [&](int32_t trs){
+    int32_t tr = trs / S;
+    int32_t s = trs - tr*S;
+    int32_t t = tr / R;
+    int32_t r = tr - t*R;
+    return std::make_tuple(t, r, s);
+  };
+  /* increments */
+  for(size_t i = 0; i < Nlut; ++i)
+    res[i] = (((i + TK) % Nlut) - i);
+  /* deltas */
+  size_t Ds0 = Nlut;
+  size_t Ds1 = upsample_w;
+  size_t Ds2 = upsample_h;
+  size_t Ds3 = upsample_d;
+  for(size_t pd = 0; pd < Ds3; ++pd)
+  for(size_t ph = 0; ph < Ds2; ++ph)
+  for(size_t pw = 0; pw < Ds1; ++pw){
+    int32_t* deltas_ptr = &res[Nlut + pw*Ds0 + ph*Ds0*Ds1 + pd*Ds0*Ds1*Ds2];
+    // cumulative increments
+    for(size_t i = 0; i < Ds0; ++i){
+      int32_t ctrs = i;
+      int32_t c = ctrs / F;
+      int32_t t, r, s;
+      std::tie(t, r, s) = unpack(ctrs % F);
+      // next indices
+      int32_t nextctrs = ctrs + TK;
+      int32_t nextc = nextctrs / F;
+      int32_t nextt, nextr, nexts;
+      std::tie(nextt, nextr, nexts) = unpack(nextctrs % F);
+      // diffs
+      int32_t cdiff = nextc - c;
+      int32_t tdiff = (nextt + pd)/upsample_d - (t + pd)/upsample_d;
+      int32_t rdiff = (nextr + ph)/upsample_h - (r + ph)/upsample_h;
+      int32_t sdiff = (nexts + pw)/upsample_w - (s + pw)/upsample_w;
+      // delta pointers
+      deltas_ptr[i] = cdiff*stride_c + sdiff*stride_w + rdiff*stride_h + tdiff*stride_d;
+    }
+  }
+
+  /* Masks */
+  size_t Ms0 = Nlut;
+  size_t Ms1 = 2*pad_w + 1;
+  size_t Ms2 = 2*pad_h + 1;
+  size_t Ms3 = 2*pad_d + 1;
+
+  for(size_t pd = 0; pd < Ms3; ++pd)
+  for(size_t ph = 0; ph < Ms2; ++ph)
+  for(size_t pw = 0; pw < Ms1; ++pw){
+    int32_t* masks_ptr = &masks[Nlut + pw*Ms0 + ph*Ms0*Ms1 + pd*Ms0*Ms1*Ms2];
+    for(size_t i = 0; i < Ms0; ++i){
+       int32_t t, r, s;
+       int32_t mask = 0x0;
+       for(size_t j = 0; j < TK; ++j){
+         std::tie(t, r, s) = unpack((i + j) % F);
+         bool in_bounds_d = (t + pd) >= pad_d && (t + pd) < (T + pad_d);
+         bool in_bounds_h = (r + ph) >= pad_h && (r + ph) < (R + pad_h);
+         bool in_bounds_w = (s + pw) >= pad_w && (s + pw) < (S + pad_w);
+         mask |= (in_bounds_d && in_bounds_h && in_bounds_w) << j;
+       }
+       masks_ptr[i] = mask;
+    }
+  }
+  for(size_t i = 0; i < Nlut; ++i)
+    masks[i] = 0x0;
+}
+
 torch::Tensor conv_forward(
     const torch::Tensor data,
     const torch::Tensor weight) {
@@ -95,37 +174,118 @@ torch::Tensor conv_forward(
   CHECK_INPUT(data);
   CHECK_INPUT(weight);
   // Unpack data shapes
-  const auto B  = data.size(0);
-  const auto Ci = data.size(1);
-  const auto H  = data.size(2);
-  const auto W  = data.size(3);
+  const int32_t B  = data.size(0);
+  const int32_t Ci = data.size(1);
+  const int32_t H  = data.size(2);
+  const int32_t W  = data.size(3);
   // Unpack weight shapes
-  const auto Cf = weight.size(0);
-  const auto R  = weight.size(1);
-  const auto S  = weight.size(2);
-  const auto K  = weight.size(3);
+  const int32_t Cf = weight.size(0);
+  const int32_t T  = 1;
+  const int32_t R  = weight.size(1);
+  const int32_t S  = weight.size(2);
+  const int32_t NF  = weight.size(3);
+  // Conv parameters
+  int32_t upsample_d = 1, upsample_h = 1, upsample_w = 1;
+  int32_t pad_d = 0, pad_h = 0, pad_w = 0;
+  int32_t stride_h = 1, stride_w = 1;
+  // Output shapes
+  int32_t P = (H*upsample_h - R + 1 + 2*pad_h + stride_h - 1)/stride_h;
+  int32_t Q = (W*upsample_w - S + 1 + 2*pad_w + stride_w - 1)/stride_w;
   // Allocate output
   AT_CHECK(Ci == Cf, "Number of channels in data and weights must match");
-  torch::Tensor output = torch::empty({B, K, H, W}, torch::kFloat);
+  torch::Tensor output = torch::empty({B, NF, P, Q}, torch::kFloat).cuda();
   // Wrap CUDA handles
-  triton::driver::cu_stream sstream(at::cuda::getCurrentCUDAStream(), false);
+  c10::DeviceIndex device = output.storage().device().index();
+  triton::driver::cu_stream sstream((CUstream)at::cuda::getCurrentCUDAStream(device).stream(), false);
   triton::driver::stream* stream = &sstream;
   triton::driver::context* ctx = stream->context();
   triton::driver::cu_buffer d(ctx, (CUdeviceptr)data.storage().data(), false);
   triton::driver::cu_buffer w(ctx, (CUdeviceptr)weight.storage().data(), false);
+  triton::driver::cu_buffer a(ctx, (CUdeviceptr)output.storage().data(), false);
   // Create JIT
   triton::jit jit(ctx);
   std::vector<unsigned> params = {
     16, 2, 64,
     32, 2, 64,
     16, 8, 2, 2,
-    8, 8,
+    8, 1, 8,
     4
   };
   jit.add_module("conv", src, params);
   triton::driver::kernel* kernel = jit.get_function("conv");
   triton::jit::launch_information info = jit.get_launch_info("conv");
-
+  // launch info
+  unsigned TM = info.global_range_size[0];
+  unsigned TN = info.global_range_size[1];
+  unsigned TK = jit.get_int("TK");
+  // initialize constant memory
+  int FS = T*R*S;
+  int nlut = (TK + FS - 1) / FS * FS;
+  std::vector<int> h_delta(nlut + upsample_d*upsample_h*upsample_w*nlut);
+  std::vector<int> h_masks(nlut + (2*pad_h+1)*(2*pad_w+1)*(2*pad_d+1)*nlut);
+  // memory stride for images
+  int32_t stride_i_w = 1;
+  int32_t stride_i_h = W*stride_i_w;
+  int32_t stride_i_d = H*stride_i_h;
+  int32_t stride_i_c = 1*stride_i_d;
+  int32_t stride_i_n = Ci*stride_i_c;
+  // memory stride for activations
+  int32_t stride_o_q = 1;
+  int32_t stride_o_p = Q*stride_o_q;
+  int32_t stride_o_m = P*stride_o_p;
+  int32_t stride_o_k = 1*stride_o_m;
+  int32_t stride_o_n = NF*stride_o_k;
+  build_conv_lut(TK, stride_i_d, stride_i_h, stride_i_w, stride_i_c, pad_d, pad_h, pad_w, T, R, S, h_delta, h_masks);
+  // equivalent matmul dimensions
+  int32_t M = B*P*Q;
+  int32_t N = NF;
+  int32_t K = Ci*R*S;
+  triton::driver::buffer* delta = jit.get_buffer("delta");
+  triton::driver::buffer* masks = jit.get_buffer("masks");
+  stream->write(delta, false, 0, h_delta.size()*4, h_delta.data());
+  stream->write(masks, false, 0, h_masks.size()*4, h_masks.data());
+  // launch info
+  unsigned nthreads = info.num_threads;
+  std::array<size_t, 3> grid = {(M + TM - 1)/TM, (N + TN - 1)/TN, 1};
+  // fast bounds-checking
+  unsigned lasti = (grid[0]*TM - 1)*TM + TM - 1;
+  unsigned lastj = (grid[1]*TN - 1)*TN + TN - 1;
+  unsigned lastk = TK - 1;
+  bool AT = false;
+  bool BT = true;
+  unsigned last_safe_a = (AT==false)?(M*K - 1 - lasti)/M - lastk : M*K - 1 - lasti*K - lastk;
+  unsigned last_safe_b =  (BT==true)?(N*K - 1 - lastj)/N - lastk : N*K - 1 - lastj*K - lastk;
+  int32_t bound = std::max<unsigned>(1, std::max(K - last_safe_a, K - last_safe_b));
+  // set arguments
+  kernel->setArg(0, *d.cu());
+  kernel->setArg(1, *w.cu());
+  kernel->setArg(2, *a.cu());
+  kernel->setArg(3, M);
+  kernel->setArg(4, N);
+  kernel->setArg(5, K);
+  kernel->setArg(6, B);
+  kernel->setArg(7, H);
+  kernel->setArg(8, W);
+  kernel->setArg(9, B);
+  kernel->setArg(10, NF);
+  kernel->setArg(11, P);
+  kernel->setArg(12, Q);
+  kernel->setArg(13, Ci);
+  kernel->setArg(14, R);
+  kernel->setArg(15, S);
+  kernel->setArg(16, stride_i_n);
+  kernel->setArg(17, stride_i_c);
+  kernel->setArg(18, stride_i_h);
+  kernel->setArg(19, stride_i_w);
+  kernel->setArg(20, stride_o_n);
+  kernel->setArg(21, stride_o_k);
+  kernel->setArg(22, stride_o_p);
+  kernel->setArg(23, stride_o_q);
+  kernel->setArg(24, pad_h);
+  kernel->setArg(25, pad_w);
+  kernel->setArg(26, bound);
+//  // dry run
+  stream->enqueue(kernel, grid, {nthreads, 1, 1});
   return output;
 }
 

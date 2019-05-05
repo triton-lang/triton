@@ -14,6 +14,17 @@ void simple_gemm(std::vector<T> &c, const std::vector<T> &a, const std::vector<T
   }
 }
 
+template<class T>
+void simple_gemm(bool AT, bool BT, std::vector<T> &c, const std::vector<T> &a, const std::vector<T> &b, size_t M, size_t N, size_t K) {
+  if(AT && BT)
+    simple_gemm<T, true, true>(c, a, b, M, N, K);
+  else if(AT && !BT)
+    simple_gemm<T, true, false>(c, a, b, M, N, K);
+  else if(!AT && BT)
+    simple_gemm<T, false, true>(c, a, b, M, N, K);
+  else
+    simple_gemm<T, false, false>(c, a, b, M, N, K);
+}
 
 class timer{
     typedef std::chrono::high_resolution_clock high_resolution_clock;

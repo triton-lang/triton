@@ -525,10 +525,12 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     for(ir::value *op: user->ops())
       create_tile(op, builder, references, seen, sh_mem_ptr);
   LLVMContext &ctx = builder.getContext();
-  const auto& shapes = v->get_type()->get_tile_shapes();
-  std::vector<unsigned> shapes2;
-  for(ir::constant_int* shape: shapes)
-    shapes2.push_back(shape->get_value());
+  const auto& cshapes = v->get_type()->get_tile_shapes();
+  std::vector<unsigned> shapes;
+  for(ir::constant_int* shape: cshapes)
+    shapes.push_back(shape->get_value());
+  if(alloc_->is_ld_padded(v))
+    shapes[0] += 4;
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), ctx);
   // create shared tile
   if(buffer_info_->is_shared(v)){
@@ -550,13 +552,13 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
       Value *pre_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(alloc_->get_offset(phi)));
       pre_ptr = builder.CreateBitCast(pre_ptr, ptr->getType());
       Value *next_ptr = builder.CreateGEP(ptr, offset, "next_ptr");
-      tmap_.insert({phi, new shared_tile(ty, shapes2, ptr, builder, offset)});
+      tmap_.insert({phi, new shared_tile(ty, shapes, ptr, builder, offset)});
       for(unsigned i = 0; i < phi->get_num_incoming(); i++) {
         ir::basic_block* inc_block = phi->get_incoming_block(i);
         ir::value* inc_value = phi->get_incoming_value(i);
         ir::instruction* terminator = inc_block->get_inst_list().back();
         bool is_loop_latch = buffer_info_->is_loop_latch(phi, terminator);
-        tmap_.insert({inc_value, new shared_tile(ty, shapes2, is_loop_latch?next_ptr:pre_ptr, builder)});
+        tmap_.insert({inc_value, new shared_tile(ty, shapes, is_loop_latch?next_ptr:pre_ptr, builder)});
       }
     }
     else {
@@ -564,16 +566,16 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
         size_t offset = alloc_->get_offset(v);
         Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
         ptr = builder.CreateBitCast(ptr, ptr_ty);
-        tmap_.insert({v, new shared_tile(ty, shapes2, ptr, builder)});
+        tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
       }
     }
   }
   // create distributed tile
   else {
-    const auto &shapes = v->get_type()->get_tile_shapes();
-    std::vector<distributed_axis> axes(shapes.size());
-    for(size_t d = 0; d < shapes.size(); d++){
-      if(shapes[d]->get_value() > 1){
+    const auto &cshapes = v->get_type()->get_tile_shapes();
+    std::vector<distributed_axis> axes(cshapes.size());
+    for(size_t d = 0; d < cshapes.size(); d++){
+      if(cshapes[d]->get_value() > 1){
         ir::metaparameter *x = params_->get_param(v, "nts.d" + std::to_string(d));
         axes[d] = axes_.at(x);
       }
@@ -583,7 +585,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
       }
     }
     bool vectorize = dynamic_cast<ir::vectorize_inst*>(v);
-    distributed_tile *T = new distributed_tile(ty, shapes2, axes, builder, vectorize);
+    distributed_tile *T = new distributed_tile(ty, shapes, axes, builder, vectorize);
     tmap_.insert({v, T});
     // constant range
     if(dynamic_cast<ir::constant*>(v) && !dynamic_cast<ir::undef_value*>(v)){

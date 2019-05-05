@@ -26,6 +26,7 @@ public:
 
   // utilities
   unsigned get_num_bytes(ir::value *x);
+  bool is_ld_padded(ir::value* x);
 
   // accessors
   unsigned get_offset(ir::value *x)    const { return offsets_.at(x); }
