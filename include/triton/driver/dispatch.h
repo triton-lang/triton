@@ -204,6 +204,7 @@ public:
   static int initializeLLVMToSPIRVPass(llvm::PassRegistry &);
   static bool writeSpirv(llvm::Module *M, std::ostream &OS, std::string &ErrMsg);
 
+
 private:
 
   // Libraries
