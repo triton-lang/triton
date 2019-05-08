@@ -16,24 +16,19 @@ int main() {
   int32_t D = 1, H = 24, W = 240;
   int32_t NC = 32, T = 1, R = 3, S = 3;
   int32_t pad_d = 0, pad_h = 1, pad_w = 1;
-  int32_t stride_d = 1, stride_h = 1, stride_w = 1;
-  int32_t upsample_d = 1, upsample_h = 1, upsample_w = 1;
-  int32_t RD = (D*upsample_d - T + 1 + 2*pad_d + stride_d - 1)/stride_d;
-  int32_t RH = (H*upsample_h - R + 1 + 2*pad_h + stride_h - 1)/stride_h;
-  int32_t RW = (W*upsample_w - S + 1 + 2*pad_w + stride_w - 1)/stride_w;
   triton::dnn::conv configuration(B, NC, H, W, R, S, NF, 1, 1, pad_h, pad_w, ty);
   // convolution configuration
-  std::vector<float> hc(B*RH*RW*NF);
-  std::vector<float> rc(B*RH*RW*NF);
-  std::vector<float> ha(B*NC*H*W);
-  std::vector<float> hb(NC*R*S*NF);
+  std::vector<float> hc(configuration.c_size());
+  std::vector<float> rc(configuration.c_size());
+  std::vector<float> ha(configuration.a_size());
+  std::vector<float> hb(configuration.b_size());
   srand(0);
   for(size_t i = 0; i < ha.size(); i++)
     ha[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < hb.size(); i++)
     hb[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < hc.size(); i++)
-    hc[i] = (float)rand()/RAND_MAX;
+    hc[i] = 0;
   rc = hc;
   triton::driver::buffer* dc = triton::driver::buffer::create(context, hc.size()*4);
   triton::driver::buffer* da = triton::driver::buffer::create(context, ha.size()*4);
@@ -74,6 +69,7 @@ int main() {
   std::cout << "Performance: " << benchmark(kernel, info) << " TFLOPS " << std::endl;
   stream->read(dc, true, 0, hc);
   configuration.cpu_ref(rc.data(), ha.data(), hb.data());
+//  std::cout << c[0] << std::endl;
   for(size_t i = 0; i < hc.size(); i++)
     if(std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
       std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
