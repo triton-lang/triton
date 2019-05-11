@@ -812,7 +812,9 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
               std::swap(b_idx[0], b_idx[1]);
             Value *a = TA->get_value(a_idx);
             Value *b = TB->get_value(b_idx);
+//            res = builder.CreateCall(f_mul_add, {ConstantFP::get(a->getType(), 1), ConstantFP::get(b->getType(), 1), res});
             res = builder.CreateCall(f_mul_add, {a, b, res});
+
           }
           result->set_value(idx, res);
         });

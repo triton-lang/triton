@@ -10,13 +10,13 @@ int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   triton::jit jit(context);
-  triton::dnn::conv::type ty = triton::dnn::conv::BPROP;
+  triton::dnn::conv::type ty = triton::dnn::conv::WGRAD;
   // initialization
   int32_t B = 4, NF = 32;
   int32_t D = 1, H = 24, W = 240;
   int32_t NC = 32, T = 1, R = 3, S = 3;
   int32_t pad_d = 0, pad_h = 1, pad_w = 1;
-  triton::dnn::conv configuration(B, NC, H, W, R, S, NF, 1, 1, pad_h, pad_w, ty);
+  triton::dnn::conv configuration(B, NC, D, H, W, T, R, S, NF, 1, 1, 1, pad_d, pad_h, pad_w, ty);
   // convolution configuration
   std::vector<float> hc(configuration.c_size());
   std::vector<float> rc(configuration.c_size());
@@ -40,8 +40,10 @@ int main() {
   stream->synchronize();
   // look-up table
   std::vector<int> h_delta, h_masks;
-  configuration.build_deltas(h_delta);
-  configuration.build_masks(h_masks);
+  if(ty != triton::dnn::conv::WGRAD){
+    configuration.build_deltas(h_delta);
+    configuration.build_masks(h_masks);
+  }
   // benchmark a given convolution kernel
   auto benchmark = [&](triton::driver::kernel* kernel,
                        triton::jit::launch_information info) {
@@ -49,10 +51,12 @@ int main() {
     unsigned TN = info.global_range_size[1];
     unsigned nthreads = info.num_threads;
     std::array<size_t, 3> grid = configuration.get_grid(TM, TN);
-    triton::driver::buffer* delta = jit.get_buffer("delta");
-    triton::driver::buffer* masks = jit.get_buffer("masks");
-    stream->write(delta, false, 0, h_delta.size()*4, h_delta.data());
-    stream->write(masks, false, 0, h_masks.size()*4, h_masks.data());
+    if(ty != triton::dnn::conv::WGRAD){
+      triton::driver::buffer* delta = jit.get_buffer("delta");
+      triton::driver::buffer* masks = jit.get_buffer("masks");
+      stream->write(delta, false, 0, h_delta.size()*4, h_delta.data());
+      stream->write(masks, false, 0, h_masks.size()*4, h_masks.data());
+    }
     stream->synchronize();
     configuration.set_arg(kernel, da, db, dc);
     stream->enqueue(kernel, grid, {nthreads, 1, 1});
@@ -69,11 +73,11 @@ int main() {
   std::cout << "Performance: " << benchmark(kernel, info) << " TFLOPS " << std::endl;
   stream->read(dc, true, 0, hc);
   configuration.cpu_ref(rc.data(), ha.data(), hb.data());
-//  std::cout << c[0] << std::endl;
-  for(size_t i = 0; i < hc.size(); i++)
+  for(size_t i = 0; i < hc.size(); i++){
     if(std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
       std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
       exit(EXIT_FAILURE);
-    }
+    }      
+  }
   std::cout << "Pass!" << std::endl;
 }
