@@ -20,12 +20,12 @@ public:
   conv(int B, int NC,
        int D, int H, int W,
        int T, int R, int S, int NF,
-       int upsample_d, int upsample_h, int upsample_w,
+       int stride_d, int stride_h, int stride_w,
        int pad_d, int pad_h, int pad_w,
        type ty = FPROP)
     : NB_(B), NC_(NC), AD_(D), AH_(H), AW_(W), BD_(T), BH_(R), BW_(S), NF_(NF),
-      upsample_d_(upsample_d), upsample_h_(upsample_h), upsample_w_(upsample_w),
-      stride_d_(1), stride_h_(1), stride_w_(1),
+      stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
+      upsample_d_(1), upsample_h_(1), upsample_w_(1),
       pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
       ty_(ty)
   {
@@ -93,6 +93,10 @@ public:
                            1, std::multiplies<int>());
   }
 
+  std::vector<int32_t> c_shapes() {
+    return shapes_c_;
+  }
+
   void build_deltas(std::vector<int>& deltas){
     if(ty_ == WGRAD)
       throw std::runtime_error("no look-up table necessary for wgrad");
@@ -120,6 +124,7 @@ public:
         int32_t c = ctrs / Fs_;
         int32_t t, r, s;
         std::tie(t, r, s) = unpack(ctrs % Fs_);
+
         // next indices
         int32_t nextctrs = ctrs + TK_;
         int32_t nextc = nextctrs / Fs_;
@@ -223,6 +228,43 @@ public:
 
 
   std::string xprop() {
+
+    std::string declare_pb;
+    if(ty_ == FPROP){
+      declare_pb = R"(
+        fp32* pb[TN, TK] = b + rkb[newaxis, :]*ldb_s + rb0[:, newaxis];
+      )";
+    }
+    else{
+      declare_pb = R"(
+      fp32* pb_base[TN, TK] = b + rb0[:, newaxis]*ldb_c;
+      int32 rbk[TK] = rkb / (BH*BW);
+      int32 rbrs[TK] = rkb % (BH*BW);
+      int32 rbs[TK] = BW - 1 - rbrs % BW;
+      int32 rbr[TK] = BH - 1 - rbrs / BW;
+      int32 rb1[TK] = rbk*ldb_k + rbr*ldb_r + rbs*ldb_s;
+      fp32* pb[TN, TK] = pb_base + rb1[newaxis, :];
+      )";
+    }
+    std::string increment_pb;
+    if(ty_ == FPROP){
+      increment_pb = R"(
+         pb = pb + TK*ldb_s;
+      )";
+    }
+    else{
+      increment_pb = R"(
+      rbrs = rbrs + TK;
+      rkb = rkb + TK;
+      rbk  = rkb / (BH*BW);
+      rbrs = rkb % (BH*BW);
+      rbs = BW - 1 - rbrs % BW;
+      rbr = BH - 1 - rbrs / BW;
+      rb1 = rbk*ldb_k + rbr*ldb_r + rbs*ldb_s;
+      pb = pb_base + rb1[newaxis, :];
+      )";
+    }
+
     std::string res =
         R"(
         const tunable int32 TM = {16, 32, 64};
@@ -246,7 +288,7 @@ public:
             int32 rxa[TM] = get_global_range[TM](0);
             int32 rb0[TN] = get_global_range[TN](1);
             int32 rka[TK] = 0 ... TK;
-            int32 rb1[TK] = 0 ... TK;
+            int32 rkb[TK] = 0 ... TK;
             fp32 C[TM, TN] = 0;
             int32 rabh[TM] = rxa / CW;
             int32 raw[TM] = rxa % CW - pad_w;
@@ -258,8 +300,8 @@ public:
             int32 rac[TK] = racr / BH;
             int32 rar[TK] = racr % BH;
             int32 ra1[TK] = rac*lda_c + rar*lda_h + ras*lda_w;
-            fp32* pa[TM, TK] = a + ra1[newaxis, :] + ra0[:, newaxis];
-            fp32* pb[TN, TK] = b + rb1[newaxis, :]*ldb_s + rb0[:, newaxis];
+            fp32* pa[TM, TK] = a + ra1[newaxis, :] + ra0[:, newaxis];)"
+            + declare_pb + R"(
             __constant__ int32* pincd[TK] = delta + rka;
             __constant__ int32* pd[TK] = delta + BH*BW + rka;
             int32 d[TK] = *pd;
@@ -276,8 +318,8 @@ public:
             fp32 b[TN, TK] = *pb;
             for(int32 k = K; k > 0; k = k - TK){
               C = dot(a, trans(b), C);
-              pb = pb + TK*ldb_s;
-              pa = pa + d[newaxis, :];
+              pa = pa + d[newaxis, :];)"
+              + increment_pb + R"(
               b = *pb;
               pd = pd + incd;
               pincd = pincd + incd;
@@ -288,6 +330,7 @@ public:
               incm = *pincm;
               checka0 = *pm;
               checka = (checka0[:, newaxis] & checka1[newaxis, :]) > 0;
+              checka = checka && (k > TK);
               a = checka ? *pa : 0;
             }
             int32 rxc[TM] = get_global_range[TM](0);
@@ -379,7 +422,7 @@ public:
   {
     IN_DTYPE acc;
     for(int32_t n = 0; n < shapes_c_[0]; ++n)
-    for(int32_t k = 0; k < shapes_c_[1] ; ++k)
+    for(int32_t cf = 0; cf < shapes_c_[1] ; ++cf)
     for(int32_t cd = 0 ; cd < shapes_c_[2]; ++cd)
     for(int32_t ch = 0 ; ch < shapes_c_[3]; ++ch)
     for(int32_t cw = 0; cw < shapes_c_[4]; ++cw)
@@ -388,7 +431,7 @@ public:
       int32_t d = cd*stride_d_ - pad_d_;
       int32_t h = ch*stride_h_ - pad_h_;
       int32_t w = cw*stride_w_ - pad_w_;
-      for(int32_t c = 0; c < shapes_b_[0]; ++c)
+      for(int32_t ac = 0; ac < shapes_a_[1]; ++ac)
       for(int32_t bd = 0; bd < shapes_b_[1]; ++bd)
       for(int32_t bh = 0; bh < shapes_b_[2]; ++bh)
       for(int32_t bw = 0; bw < shapes_b_[3]; ++bw){
@@ -400,11 +443,19 @@ public:
                           aw >= 0 && aw < shapes_a_[4]);
         IN_DTYPE a = 0;
         if(in_bounds)
-          a = A[n*ld_a_[0] + c*ld_a_[1] + ad*ld_a_[2] + ah*ld_a_[3] + aw*ld_a_[4]];
-        IN_DTYPE b = B[c*ld_b_[0] + bd*ld_b_[1] + bh*ld_b_[2] + bw*ld_b_[3] + k*ld_b_[4]];
+          a = A[n*ld_a_[0] + ac*ld_a_[1] + ad*ld_a_[2] + ah*ld_a_[3] + aw*ld_a_[4]];
+        IN_DTYPE b;
+        if(ty_==FPROP)
+          b = B[ac*ld_b_[0] + bd*ld_b_[1] + bh*ld_b_[2] + bw*ld_b_[3] + cf*ld_b_[4]];
+        else{
+          int32_t bdd = bd;
+          int32_t bhh = bh;
+          int32_t bww = bw;
+          b = B[cf*ld_b_[0] + bdd*ld_b_[1] + bhh*ld_b_[2] + bww*ld_b_[3] + ac*ld_b_[4]];
+        }
         acc = std::fma(a, b, acc);
       }
-      C[n*ld_c_[0] + k*ld_c_[1] + cd*ld_c_[2] + ch*ld_c_[3] + cw*ld_c_[4]] = acc;
+      C[n*ld_c_[0] + cf*ld_c_[1] + cd*ld_c_[2] + ch*ld_c_[3] + cw*ld_c_[4]] = acc;
     }
   }
 
