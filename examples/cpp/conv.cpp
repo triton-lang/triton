@@ -10,7 +10,7 @@ int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   triton::jit jit(context);
-  triton::dnn::conv::type ty = triton::dnn::conv::BPROP;
+  triton::dnn::conv::type ty = triton::dnn::conv::WGRAD;
   // initialization
   int32_t B = 4, NF = 32;
   int32_t D = 1, H = 24, W = 240;
@@ -66,7 +66,7 @@ int main() {
     return configuration.get_nflops() / ts * 1e-3;
   };
   std::string src = configuration.src();
-  jit.autotune("conv", src.c_str(), benchmark);
+//  jit.autotune("conv", src.c_str(), benchmark);
   jit.add_module("conv", src.c_str(), configuration.default_params());
   triton::driver::kernel* kernel = jit.get_function("conv");
   triton::jit::launch_information info = jit.get_launch_info("conv");
