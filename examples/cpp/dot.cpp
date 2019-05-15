@@ -68,7 +68,7 @@ int main() {
   stream->read(dc, true, 0, hc);
   simple_gemm<float>(AT, BT, rc, ha, hb, M, N, K);
   for(size_t i = 0; i < M*N; i++)
-    if(std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
+    if(!std::isnan(hc[i]) && std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
       std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
       exit(EXIT_FAILURE);
     }
