@@ -12,9 +12,9 @@ int main() {
   triton::jit jit(context);
   triton::dnn::conv::type ty = triton::dnn::conv::WGRAD;
   // initialization
-  int32_t B = 4, NF = 32;
-  int32_t D = 1, H = 24, W = 240;
-  int32_t NC = 32, T = 1, R = 3, S = 3;
+  int32_t B = 32, NF = 128;
+  int32_t D = 1, H = 56, W = 56;
+  int32_t NC = 128, T = 1, R = 3, S = 3;
   int32_t pad_d = 0, pad_h = 1, pad_w = 1;
   triton::dnn::conv configuration(B, NC, D, H, W, T, R, S, NF, 1, 1, 1, pad_d, pad_h, pad_w, ty);
   // convolution configuration
