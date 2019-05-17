@@ -45,18 +45,8 @@ torch::Tensor conv_common(
   // launch info
   unsigned TM = info.global_range_size[0];
   unsigned TN = info.global_range_size[1];
-  // initialize constant memory
-  if(ty != triton::dnn::conv::WGRAD){
-    std::vector<int> h_delta;
-    std::vector<int> h_masks;
-    configuration.build_deltas(h_delta);
-    configuration.build_masks(h_masks);
-    triton::driver::buffer* delta = jit.get_buffer("delta");
-    triton::driver::buffer* masks = jit.get_buffer("masks");
-    stream->write(delta, false, 0, h_delta.size()*4, h_delta.data());
-    stream->write(masks, false, 0, h_masks.size()*4, h_masks.data());
-  }
   // launch info
+  configuration.init(stream, jit);
   unsigned nthreads = info.num_threads;
   std::array<size_t, 3> grid = configuration.get_grid(TM, TN);
   configuration.set_arg(kernel, &a, &b, &c);
