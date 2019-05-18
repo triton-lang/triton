@@ -1,7 +1,7 @@
 #include <cstring>
 #include <cstdio>
 #include "common.hpp"
-#include "triton/jit.h"
+#include "triton/runtime/jit.h"
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
 #include "triton/dnn/conv.h"
@@ -10,11 +10,11 @@ int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   triton::jit jit(context);
-  triton::dnn::conv::type ty = triton::dnn::conv::WGRAD;
+  triton::dnn::conv::type ty = triton::dnn::conv::FPROP;
   // initialization
-  int32_t B = 32, NF = 128;
+  int32_t B = 4, NF = 32;
   int32_t D = 1, H = 56, W = 56;
-  int32_t NC = 128, T = 1, R = 3, S = 3;
+  int32_t NC = 32, T = 1, R = 3, S = 3;
   int32_t pad_d = 0, pad_h = 1, pad_w = 1;
   triton::dnn::conv configuration(B, NC, D, H, W, T, R, S, NF, 1, 1, 1, pad_d, pad_h, pad_w, ty);
   // convolution configuration
@@ -45,7 +45,7 @@ int main() {
     unsigned TN = info.global_range_size[1];
     unsigned nthreads = info.num_threads;
     std::array<size_t, 3> grid = configuration.get_grid(TM, TN);
-    configuration.init(stream, jit);
+    configuration.init(stream, (triton::driver::cu_module*)kernel->module());
     stream->synchronize();
     configuration.set_arg(kernel, da, db, dc);
     stream->enqueue(kernel, grid, {nthreads, 1, 1});
@@ -55,7 +55,7 @@ int main() {
     return configuration.get_nflops() / ts * 1e-3;
   };
   std::string src = configuration.src();
-  jit.autotune("conv", src.c_str(), benchmark);
+//  jit.autotune("conv", src.c_str(), benchmark);
   jit.add_module("conv", src.c_str(), configuration.default_params());
   triton::driver::kernel* kernel = jit.get_function("conv");
   triton::jit::launch_information info = jit.get_launch_info("conv");

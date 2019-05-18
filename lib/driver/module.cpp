@@ -100,10 +100,10 @@ module* module::create(driver::context* ctx, llvm::Module *src) {
 }
 
 void module::compile_llvm_module(llvm::Module* module, const std::string& triple,
-                                        const std::string &proc, std::string layout,
-                                        llvm::SmallVectorImpl<char> &buffer,
-                                        const std::string& features,
-                                        file_type_t ft) {
+                                 const std::string &proc, std::string layout,
+                                 llvm::SmallVectorImpl<char> &buffer,
+                                 const std::string& features,
+                                 file_type_t ft) {
   init_llvm();
   // debug
 //  llvm::legacy::PassManager pm;

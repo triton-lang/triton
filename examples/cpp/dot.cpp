@@ -1,7 +1,7 @@
 #include <cstring>
 #include <cstdio>
 #include "common.hpp"
-#include "triton/jit.h"
+#include "triton/runtime/jit.h"
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
 #include "triton/dnn/gemm.h"
