@@ -10,12 +10,12 @@ int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   triton::jit jit(context);
-  triton::dnn::conv::type ty = triton::dnn::conv::FPROP;
+  triton::dnn::conv::type ty = triton::dnn::conv::BPROP;
   // initialization
   int32_t B = 4, NF = 32;
   int32_t D = 1, H = 56, W = 56;
   int32_t NC = 32, T = 1, R = 3, S = 3;
-  int32_t pad_d = 0, pad_h = 1, pad_w = 1;
+  int32_t pad_d = 0, pad_h = 0, pad_w = 0;
   triton::dnn::conv configuration(B, NC, D, H, W, T, R, S, NF, 1, 1, 1, pad_d, pad_h, pad_w, ty);
   // convolution configuration
   std::vector<float> hc(configuration.c_size());
