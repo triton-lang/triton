@@ -8,16 +8,18 @@ conv::conv(int B, int NC,
      int T, int R, int S, int NF,
      int stride_d, int stride_h, int stride_w,
      int pad_d, int pad_h, int pad_w,
-     type ty)
+     int upsample_d, int upsample_h, int upsample_w,
+     type ty, bool bias)
   : NB_(B), NC_(NC), AD_(D), AH_(H), AW_(W), BD_(T), BH_(R), BW_(S), NF_(NF),
     stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
-    upsample_d_(1), upsample_h_(1), upsample_w_(1),
     pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
-    ty_(ty)
+    upsample_d_(upsample_d), upsample_h_(upsample_h), upsample_w_(upsample_w),
+    ty_(ty), bias_(bias)
 {
   CD_ = (AD_*upsample_d_ - BD_ + 1 + 2*pad_d_ + stride_d_ - 1)/stride_d_;
   CH_ = (AH_*upsample_h_ - BH_ + 1 + 2*pad_h_ + stride_h_ - 1)/stride_h_;
   CW_ = (AW_*upsample_w_ - BW_ + 1 + 2*pad_w_ + stride_w_ - 1)/stride_w_;
+
   // shapes
   shapes_a_ = {NB_, NC_, AD_, AH_, AW_};
   shapes_b_ = {NC_, BD_, BH_, BW_, NF_};
@@ -232,65 +234,70 @@ void conv::init(driver::stream *stream, triton::driver::cu_module* module) {
 }
 
 void conv::set_arg(driver::kernel *kernel,
-                    driver::buffer *a, driver::buffer *b, driver::buffer *c)
+                    driver::buffer *a, driver::buffer *b, driver::buffer *c, driver::buffer *bias)
 {
   kernel->setArg(0, a);
   kernel->setArg(1, b);
   kernel->setArg(2, c);
-  kernel->setArg(3, M_);
-  kernel->setArg(4, N_);
-  kernel->setArg(5, K_);
-  kernel->setArg(6, AH_);
-  kernel->setArg(7, AW_);
-  kernel->setArg(8, BH_);
-  kernel->setArg(9, BW_);
-  kernel->setArg(10, CH_);
-  kernel->setArg(11, CW_);
+  kernel->setArg(3, bias);
+  kernel->setArg(4, M_);
+  kernel->setArg(5, N_);
+  kernel->setArg(6, K_);
+  kernel->setArg(7, AH_);
+  kernel->setArg(8, AW_);
+  kernel->setArg(9, BH_);
+  kernel->setArg(10, BW_);
+  kernel->setArg(11, CH_);
+  kernel->setArg(12, CW_);
   // A arguments
   if(ty_ == WGRAD){
-    kernel->setArg(12, ld_a_[1]);
-    kernel->setArg(13, ld_a_[0]);
+    kernel->setArg(13, ld_a_[1]);
+    kernel->setArg(14, ld_a_[0]);
   }
   else{
-    kernel->setArg(12, ld_a_[0]);
-    kernel->setArg(13, ld_a_[1]);
+    kernel->setArg(13, ld_a_[0]);
+    kernel->setArg(14, ld_a_[1]);
   }
-  kernel->setArg(14, ld_a_[2]);
-  kernel->setArg(15, ld_a_[3]);
-  kernel->setArg(16, ld_a_[4]);
+  kernel->setArg(15, ld_a_[2]);
+  kernel->setArg(16, ld_a_[3]);
+  kernel->setArg(17, ld_a_[4]);
   // B arguments
   if(ty_ == WGRAD){
-    kernel->setArg(17, ld_b_[0]);
-    kernel->setArg(18, ld_b_[2]);
-    kernel->setArg(19, ld_b_[3]);
-    kernel->setArg(20, ld_b_[4]);
-    kernel->setArg(21, ld_b_[1]);
-  }
-  else{
-    kernel->setArg(17, ld_b_[0]);
-    kernel->setArg(18, ld_b_[1]);
+    kernel->setArg(18, ld_b_[0]);
     kernel->setArg(19, ld_b_[2]);
     kernel->setArg(20, ld_b_[3]);
     kernel->setArg(21, ld_b_[4]);
+    kernel->setArg(22, ld_b_[1]);
+  }
+  else{
+    kernel->setArg(18, ld_b_[0]);
+    kernel->setArg(19, ld_b_[1]);
+    kernel->setArg(20, ld_b_[2]);
+    kernel->setArg(21, ld_b_[3]);
+    kernel->setArg(22, ld_b_[4]);
   }
   // C arguments
   if(ty_ == WGRAD){
-    kernel->setArg(22, ld_c_[0]);
-    kernel->setArg(23, ld_c_[4]);
+    kernel->setArg(23, ld_c_[0]);
+    kernel->setArg(24, ld_c_[4]);
+    kernel->setArg(25, ld_c_[1]);
+    kernel->setArg(26, ld_c_[2]);
+    kernel->setArg(27, ld_c_[3]);
+  }
+  else{
+    kernel->setArg(23, ld_c_[0]);
     kernel->setArg(24, ld_c_[1]);
     kernel->setArg(25, ld_c_[2]);
     kernel->setArg(26, ld_c_[3]);
+    kernel->setArg(27, ld_c_[4]);
   }
-  else{
-    kernel->setArg(22, ld_c_[0]);
-    kernel->setArg(23, ld_c_[1]);
-    kernel->setArg(24, ld_c_[2]);
-    kernel->setArg(25, ld_c_[3]);
-    kernel->setArg(26, ld_c_[4]);
-  }
-  kernel->setArg(27, pad_h_);
-  kernel->setArg(28, pad_w_);
-  size_t idx = 29;
+  kernel->setArg(28, pad_h_);
+  kernel->setArg(29, pad_w_);
+  kernel->setArg(30, stride_h_);
+  kernel->setArg(31, stride_w_);
+  kernel->setArg(32, upsample_h_);
+  kernel->setArg(33, upsample_w_);
+  size_t idx = 34;
   if(!is_a_deltas_cst)
     kernel->setArg(idx++, d_a_deltas_);
   if(!is_b_deltas_cst_)

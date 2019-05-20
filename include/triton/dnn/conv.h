@@ -22,7 +22,8 @@ public:
        int T, int R, int S, int NF,
        int stride_d, int stride_h, int stride_w,
        int pad_d, int pad_h, int pad_w,
-       type ty = FPROP);
+       int upsample_d, int upsample_h, int upsample_w,
+       type ty = FPROP, bool bias = false);
 
   // accessors
   size_t a_size();
@@ -36,7 +37,8 @@ public:
   void init(driver::stream *stream, driver::cu_module *module);
   std::array<size_t, 3> get_grid(size_t TM, size_t TN);
   void set_arg(driver::kernel *kernel,
-               driver::buffer *a, driver::buffer *b, driver::buffer *c);
+               driver::buffer *a, driver::buffer *b, driver::buffer *c,
+               driver::buffer *bias);
 
   // utilities
   size_t get_nflops();
@@ -81,6 +83,7 @@ public:
    void conv(read_only restrict fp32 *a,
              read_only restrict fp32 *b,
              fp32 *c,
+             fp32 *bias,
              int32 M, int32 N, int32 K,
              int32 AH, int32 AW,
              int32 BH, int32 BW,
@@ -88,7 +91,9 @@ public:
              int32 lda_n, int32 lda_c, int32 lda_d, int32 lda_h, int32 lda_w,
              int32 ldb_c, int32 ldb_t, int32 ldb_r, int32 ldb_s, int32 ldb_k,
              int32 ldc_n, int32 ldc_k, int32 ldc_m, int32 ldc_p, int32 ldc_q,
-             int32 pad_h, int32 pad_w)";
+             int32 pad_h, int32 pad_w,
+             int32 stride_h, int32 stride_w,
+             int32 upsample_h, int32 upsample_w)";
   if(!is_a_deltas_cst)
     res += ", int32* delta";
   if(is_wgrad && !is_b_deltas_cst_)
@@ -103,9 +108,11 @@ public:
     fp32 C[TM, TN] = 0;
     int32 ldlut = )" + std::to_string(Fs_) + R"(;
     int32 rabh[TM] = rxa / CW;
-    int32 raw[TM] = rxa % CW - pad_w;
+    int32 raw[TM] = rxa % CW;
     int32 rab[TM] = rabh / CH;
-    int32 rah[TM] = rabh % CH - pad_h;
+    int32 rah[TM] = rabh % CH;
+    raw = raw*stride_w - pad_w;
+    rah = rah*stride_h - pad_h;
     int32 ra0[TM] = rab*lda_n + rah*lda_h + raw*lda_w;
     int32 ra)" + ax[0] + ax[1] + "[TK] = rka / " + redax[2] + R"(;
     int32 ra)" + ax[2] + "[TK] = rka %  " + redax[2] + R"(;
@@ -173,7 +180,14 @@ public:
     int32 rcn[TM] = rxc / (CH*CW);
     int32 rcpq[TM] = rxc % (CH*CW);
     int32 rc0[TM] = rcn * ldc_n + rcpq * ldc_q;
-    fp32* pc[TM, TN]  = c + rc1[newaxis, :]*ldc_k + rc0[:, newaxis];
+    fp32* pc[TM, TN]  = c + rc1[newaxis, :]*ldc_k + rc0[:, newaxis];)";
+  if(bias_ && ty_==FPROP){
+    res += R"(
+    fp32* pbias[TN] = bias + rc1;
+    fp32 bias[TN] = *pbias;
+    C = C + bias[newaxis, :];)";
+  }
+    res += R"(
     int1 checkc0[TM] = rxc < M;
     int1 checkc1[TN] = rc1 < N;
     int1 checkc[TM, TN]  = checkc0[:, newaxis] && checkc1[newaxis, :];
@@ -208,18 +222,18 @@ private:
   int32_t CD_;
   int32_t CH_;
   int32_t CW_;
-  // upsampling
-  int32_t upsample_d_;
-  int32_t upsample_h_;
-  int32_t upsample_w_;
-  // padding
-  int32_t pad_d_;
-  int32_t pad_h_;
-  int32_t pad_w_;
   // striding
   int32_t stride_d_;
   int32_t stride_h_;
   int32_t stride_w_;
+  // padding
+  int32_t pad_d_;
+  int32_t pad_h_;
+  int32_t pad_w_;
+  // upsampling
+  int32_t upsample_d_;
+  int32_t upsample_h_;
+  int32_t upsample_w_;
   // equivalent matmul
   int32_t M_;
   int32_t N_;
@@ -249,6 +263,7 @@ private:
   bool is_mask_cst_;
   // type
   type ty_;
+  bool bias_;
   bool b_trans_;
   bool b_lut_;
 };
