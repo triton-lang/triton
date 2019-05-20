@@ -81,7 +81,10 @@ void host_kernel::setArg(unsigned int index, std::size_t size, void* ptr){
 }
 
 void host_kernel::setArg(unsigned int index, driver::buffer* buffer){
-  kernel::setArg(index, (void*)buffer->hst()->data);
+  if(buffer)
+    kernel::setArg(index, (void*)buffer->hst()->data);
+  else
+    kernel::setArg(index, (std::ptrdiff_t)0);
 }
 
 const std::vector<void *> &host_kernel::params(){
@@ -106,7 +109,10 @@ void ocl_kernel::setArg(unsigned int index, std::size_t size, void* ptr) {
 }
 
 void ocl_kernel::setArg(unsigned int index, driver::buffer* buffer) {
-  check(dispatch::clSetKernelArg(*cl_, index, sizeof(cl_mem), (void*)&*buffer->cl()));
+  if(buffer)
+    check(dispatch::clSetKernelArg(*cl_, index, sizeof(cl_mem), (void*)&*buffer->cl()));
+  else
+    kernel::setArg(index, (std::ptrdiff_t)0);
 }
 
 
@@ -130,8 +136,12 @@ void cu_kernel::setArg(unsigned int index, std::size_t size, void* ptr){
   cu_params_[index] = cu_params_store_[index].get();
 }
 
-void cu_kernel::setArg(unsigned int index, driver::buffer* data)
-{ return kernel::setArg(index, *data->cu());}
+void cu_kernel::setArg(unsigned int index, driver::buffer* data){
+  if(data)
+    kernel::setArg(index, *data->cu());
+  else
+    kernel::setArg(index, (std::ptrdiff_t)0);
+}
 
 void* const* cu_kernel::cu_params() const
 { return cu_params_.data(); }
