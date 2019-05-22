@@ -14,7 +14,7 @@ int main() {
   // initialization
   int32_t B = 4, NF = 32;
   int32_t D = 1, H = 56, W = 56;
-  int32_t NC = 32, T = 1, R = 3, S = 3;
+  int32_t NC = 16, T = 1, R = 3, S = 3;
   int32_t pad_d = 0, pad_h = 0, pad_w = 0;
   int32_t stride_d = 1, stride_h = 1, stride_w = 1;
   int32_t upsample_d = 1, upsample_h = 1, upsample_w = 1;
