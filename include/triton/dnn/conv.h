@@ -266,6 +266,16 @@ private:
   bool bias_;
   bool b_trans_;
   bool b_lut_;
+  // axis index
+  int32_t a_inner_idx_;
+  int32_t a_outer_idx_;
+  int32_t a_pix_idx_;
+  int32_t b_inner_idx_;
+  int32_t b_outer_idx_;
+  int32_t b_pix_idx_;
+  int32_t c_outer_0_idx_;
+  int32_t c_outer_1_idx_;
+  int32_t c_pix_idx;
 };
 
 }
