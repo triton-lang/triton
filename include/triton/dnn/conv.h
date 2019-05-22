@@ -46,7 +46,6 @@ public:
 
   // source
   std::string src(){
-    bool is_wgrad = ty_ == WGRAD;
     std::string BS    = b_trans_ ? "[TN,TK]"      : "[TK, TN]";
     std::string bcb0  = b_trans_ ? "[:, newaxis]" : "[newaxis, :]";
     std::string bcb1  = b_trans_ ? "[newaxis, :]" : "[:, newaxis]";
@@ -61,7 +60,7 @@ public:
       redax = {"C", "BH", "BW"};
     else
       redax = {"BH", "BW", "N"};
-    std::string inc_pb = is_wgrad ? "db[newaxis, :]" : "TK" + ldb0;
+    std::string inc_pb = b_lut_ ? "db[newaxis, :]" : "TK" + ldb0;
     std::string a_delta_mem = is_a_deltas_cst ? "__constant__" : "";
     std::string b_delta_mem = is_b_deltas_cst_? "__constant__" : "";
     std::string masks_mem = is_mask_cst_? "__constant__" : "";
@@ -74,7 +73,7 @@ public:
   )";
   if(is_a_deltas_cst)
     res += "__constant__ int32* delta = alloc_const int32[" + std::to_string(h_a_deltas_.size()) + "];\n";
-  if(is_wgrad && is_b_deltas_cst_)
+  if(b_lut_ && is_b_deltas_cst_)
     res += "__constant__ int32* b_delta = alloc_const int32[" + std::to_string(h_b_deltas_.size()) + "];\n";
   if(is_mask_cst_)
     res += "__constant__ int32* masks = alloc_const int32[" + std::to_string(h_masks_.size()) + "];\n";
@@ -96,7 +95,7 @@ public:
              int32 upsample_h, int32 upsample_w)";
   if(!is_a_deltas_cst)
     res += ", int32* delta";
-  if(is_wgrad && !is_b_deltas_cst_)
+  if(b_lut_ && !is_b_deltas_cst_)
     res += ", int32* b_delta";
   if(!is_mask_cst_)
     res += ", int32* masks";
@@ -122,7 +121,7 @@ public:
     ras = )" + flips + R"( ras;
     int32 ra1[TK] = rac*lda_c + rar*lda_h + ras*lda_w;
     fp32* pa[TM, TK] = a + ra1[newaxis, :] + ra0[:, newaxis];)";
-  if(ty_ == WGRAD){
+  if(b_lut_){
    res += R"(
     int32 rbcr[TK] = rkb / BW;
     int32 rbs[TK] = rkb %  BW;
@@ -158,7 +157,7 @@ public:
       pb = pb + )" + inc_pb + R"(;
       b = *pb;
       pd = pd + incd;)";
-  if(ty_ == WGRAD){
+  if(b_lut_){
     res += R"(
       pdb = pdb + TK;
       db = *pdb;)";
