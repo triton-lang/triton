@@ -301,12 +301,12 @@ void conv::set_arg(driver::kernel *kernel,
 }
 
 std::vector<unsigned> conv::default_params() {
-  if(ty_==FPROP)
+  if(b_lut_)
+    return {32, 2, 64, 32, 2, 64, 16, 8, 2, 2, 4, 2, 8};
+  else if(ty_ == FPROP)
     return {16, 2, 64, 32, 2, 64, 16, 8, 2, 2, 8, 1, 8, 4};
   else if(ty_ == BPROP)
     return {32, 2, 64, 32, 64, 32, 4, 2, 2, 4, 2, 8, 4, 2};
-  else if(ty_ == WGRAD)
-    return {32, 2, 64, 32, 2, 64, 16, 8, 2, 2, 4, 2, 8};
 }
 
 
