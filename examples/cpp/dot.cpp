@@ -1,6 +1,5 @@
 #include <cstring>
 #include <cstdio>
-#include "common.hpp"
 #include "triton/runtime/jit.h"
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
@@ -67,7 +66,7 @@ int main() {
   triton::jit::launch_information info = jit.get_launch_info("matmul");
   std::cout << "Performance: " << benchmark(kernel, info) << " TFLOPS " << std::endl;
   stream->read(dc, true, 0, hc);
-  simple_gemm<float>(AT, BT, rc, ha, hb, M, N, K);
+  triton::dnn::gemm::cpu_ref<float>(AT, BT, rc, ha, hb, M, N, K);
   for(size_t i = 0; i < M*N; i++)
     if(!std::isnan(hc[i]) && std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
       std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
