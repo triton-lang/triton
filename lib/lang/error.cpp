@@ -1,9 +1,10 @@
-#include "triton/ast/error.h"
+#include <iostream>
+#include "triton/lang/error.h"
 
 
 namespace triton{
 
-namespace ast{
+namespace lang{
 
 static int current_line = 0;
 static int current_column = 0;

@@ -8,9 +8,9 @@ IS			(u|U|l|L)*
 %{
 #include <stdio.h>
 #include "parser.hpp"
-#include "../include/triton/ast/ast.h"
-using triton::ast::return_impl;
-using triton::ast::return_void;
+#include "../include/triton/lang/lang.h"
+using triton::lang::return_impl;
+using triton::lang::return_void;
 %}
 
 %%

@@ -1,5 +1,5 @@
-#include "triton/ast/statement.h"
-#include "triton/ast/declaration.h"
+#include "triton/lang/statement.h"
+#include "triton/lang/declaration.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
 #include "triton/ir/basic_block.h"
@@ -9,7 +9,7 @@
 
 namespace triton{
 
-namespace ast{
+namespace lang{
 
 /* Declaration specifier */
 ir::type* typed_declaration_specifier::type(ir::module *mod) const {

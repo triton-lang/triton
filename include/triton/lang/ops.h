@@ -1,14 +1,8 @@
-#ifndef TRITON_INCLUDE_AST_OPS_H
-#define TRITON_INCLUDE_AST_OPS_H
-
-#include "parser.hpp"
-#include <cassert>
-#include <vector>
-#include <string>
-#include <iostream>
+#ifndef TRITON_INCLUDE_LANG_OPS_H
+#define TRITON_INCLUDE_LANG_OPS_H
 
 namespace triton{
-namespace ast{
+namespace lang{
 
 enum ASSIGN_OP_T{
   ASSIGN,

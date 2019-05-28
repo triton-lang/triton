@@ -1,5 +1,5 @@
 ﻿#include <string>
-#include "triton/ast/ast.h"
+#include "triton/lang/lang.h"
 #include "triton/codegen/target.h"
 #include "triton/ir/context.h"
 #include "triton/ir/context_impl.h"
@@ -24,8 +24,7 @@ typedef struct yy_buffer_state * YY_BUFFER_STATE;
 extern int yyparse();
 extern YY_BUFFER_STATE yy_scan_string(const char * str);
 extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
-using triton::ast::translation_unit;
-extern translation_unit *ast_root;
+extern triton::lang::translation_unit *ast_root;
 
 namespace triton {
 
@@ -84,7 +83,7 @@ std::unique_ptr<ir::module> jit::make_triton_module(const char *name, const char
   YY_BUFFER_STATE buffer = yy_scan_string(src);
   yyparse();
   yy_delete_buffer(buffer);
-  translation_unit *program = ast_root;
+  triton::lang::translation_unit *program = ast_root;
   // create Triton-IR from AST
   ir::module* module = new ir::module(name, triton_context_);
   program->codegen(module);

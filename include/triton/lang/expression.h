@@ -1,8 +1,7 @@
-#ifndef TDL_INCLUDE_AST_EXPRESSION_H
-#define TDL_INCLUDE_AST_EXPRESSION_H
+#ifndef TDL_INCLUDE_LANG_EXPRESSION_H
+#define TDL_INCLUDE_LANG_EXPRESSION_H
 
-#include "parser.hpp"
-#include "ast.h"
+#include "lang.h"
 #include <cassert>
 #include <vector>
 #include <string>
@@ -20,7 +19,7 @@ namespace ir{
   class module;
 }
 
-namespace ast{
+namespace lang{
 
 
 enum slice_enum_t{
