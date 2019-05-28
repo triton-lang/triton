@@ -88,10 +88,10 @@ cu_buffer::cu_buffer(driver::context* context, CUdeviceptr cu, bool take_ownersh
   : buffer(context, cu, take_ownership){
 }
 
-void cu_buffer::set_zero(cu_stream const & queue, size_t size)
+void cu_buffer::set_zero(driver::stream* queue, size_t size)
 {
   cu_context::context_switcher ctx_switch(*context_);
-  dispatch::cuMemsetD8Async(*cu_, 0, size, *queue.cu());
+  dispatch::cuMemsetD8Async(*cu_, 0, size, *queue->cu());
 }
 
 }

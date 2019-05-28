@@ -1,7 +1,19 @@
+#include <cmath>
 #include "triton/dnn/conv.h"
 
 namespace triton{
 namespace dnn{
+
+void conv::set_ld(const std::vector<int32_t>& shapes,
+                  std::vector<int32_t>& ld) {
+  size_t size = shapes.size();
+  ld.resize(size);
+  ld[4] = 1;
+  ld[3] = shapes[4]*ld[4];
+  ld[2] = shapes[3]*ld[3];
+  ld[1] = shapes[2]*ld[2];
+  ld[0] = shapes[1]*ld[1];
+}
 
 conv::conv(int B, int NC,
      int D, int H, int W,
@@ -41,9 +53,14 @@ conv::conv(int B, int NC,
     std::swap(AH_, CH_);
     std::swap(AW_, CW_);
     shapes_a_.swap(shapes_c_);
+    std::swap(stride_d_, upsample_d_);
+    std::swap(stride_h_, upsample_h_);
+    std::swap(stride_w_, upsample_w_);
     pad_d_ = (CD_*stride_d_ - AD_*upsample_d_ + BD_ - 1 - stride_d_ + 1)/2;
     pad_h_ = (CH_*stride_h_ - AH_*upsample_h_ + BH_ - 1 - stride_h_ + 1)/2;
     pad_w_ = (CW_*stride_w_ - AW_*upsample_w_ + BW_ - 1 - stride_w_ + 1)/2;
+    std::swap(b_inner_idx_, b_outer_idx_);
+    std::swap(NC_, NF_);
   }
   // swap b and c for wgrad
   if(ty_ == WGRAD){
@@ -57,32 +74,16 @@ conv::conv(int B, int NC,
     std::swap(b_pix_idx_, c_pix_idx);
   }
   // leading dimensions
-  auto set_ld = [](const std::vector<int32_t>& shapes,
-               std::vector<int32_t>& ld) {
-    size_t size = shapes.size();
-    ld.resize(size);
-    ld[4] = 1;
-    ld[3] = shapes[4]*ld[4];
-    ld[2] = shapes[3]*ld[3];
-    ld[1] = shapes[2]*ld[2];
-    ld[0] = shapes[1]*ld[1];
-  };
   set_ld(shapes_a_, ld_a_);
   set_ld(shapes_b_, ld_b_);
   set_ld(shapes_c_, ld_c_);
   // equivalent matmul
+  bool upsampled_b = (ty_ == BPROP) && (upsample_d_ > 1 || upsample_h_ > 1 || upsample_w_ > 1);
   b_trans_ = ty_ != BPROP;
-  b_lut_ = ty_ == WGRAD;
-  if(ty_ == WGRAD) {
-    M_ = shapes_c_[0]*shapes_c_[1]*shapes_c_[2]*shapes_c_[3];
-    N_ = shapes_c_[4];
-    K_ = shapes_b_[0]*shapes_b_[2]*shapes_b_[3]*shapes_b_[4];
-  }
-  else {
-    M_ = shapes_c_[0]*shapes_c_[2]*shapes_c_[3]*shapes_c_[4];
-    N_ = shapes_c_[1];
-    K_ = shapes_b_[0]*shapes_b_[1]*shapes_b_[2]*shapes_b_[3];
-  }
+  b_lut_ = ty_ == WGRAD || upsampled_b;
+  M_ = shapes_c_[c_outer_0_idx_]*shapes_c_[c_pix_idx]*shapes_c_[c_pix_idx+1]*shapes_c_[c_pix_idx+2];
+  N_ = shapes_c_[c_outer_1_idx_];
+  K_ = shapes_b_[b_inner_idx_]*BD_*BH_*BW_;
   // look-up table info
   if(ty_ == FPROP)
     Fs_ = shapes_b_[1]*shapes_b_[2]*shapes_b_[3];
@@ -91,6 +92,8 @@ conv::conv(int B, int NC,
   TK_ = 8;
   Luts_ = (TK_ + Fs_ - 1) / Fs_ * Fs_;
   build_deltas();
+  if(b_lut_)
+    build_b_deltas();
   build_masks();
   size_t cst_size = h_b_deltas_.size()*4;
   is_b_deltas_cst_  = cst_size < 65536;
@@ -98,6 +101,8 @@ conv::conv(int B, int NC,
   is_a_deltas_cst = cst_size < 65536;
   cst_size += h_masks_.size()*4;
   is_mask_cst_ = cst_size < 65536;
+  max_grid_0_ = 256;
+  max_grid_1_ = 256;
 }
 
 size_t conv::a_size()
@@ -115,103 +120,133 @@ size_t conv::c_size()
 std::vector<int32_t> conv::c_shapes()
 { return shapes_c_; }
 
-void conv::build_deltas(){
-  h_a_deltas_.resize(Luts_ + upsample_d_*upsample_h_*upsample_w_*Luts_);
-  if(b_lut_)
-    h_b_deltas_.resize(Luts_);
 
-  auto unpack = [&](int32_t ltrs) {
-    int32_t l = (!b_trans_) ? ltrs % NF_ : ltrs / (BD_*BH_*BW_);
-    int32_t trs = (!b_trans_) ? ltrs / NF_ : ltrs % (BD_*BH_*BW_);
-    int32_t tr = trs / BW_;
-    int32_t s = trs % BW_;
-    int32_t t = tr / BH_;
-    int32_t r = tr % BH_;
-    if(!b_trans_){
-      r = BH_ - 1 - r;
-      s = BW_ - 1 - s;
-    }
-    return std::make_tuple(l, t, r, s);
-  };
+std::tuple<int32_t, int32_t, int32_t, int32_t> conv::unpack(int32_t ltrs, bool flip, int32_t EBD, int32_t EBH, int32_t EBW) {
+  int32_t l, t, r, s;
+  if(b_trans_){
+    l = ltrs / (EBD*EBH*EBW);
+    int32_t trs = ltrs % (EBD*EBH*EBW);
+    int32_t tr = trs / EBW;
+    s = trs % EBW;
+    t = tr / EBH;
+    r = tr % EBH;
+  }
+  else{
+    int32_t rs = ltrs / NC_;
+    l = ltrs % NC_;
+    r = rs / EBW;
+    s = rs % EBW;
+  }
+  if(flip){
+    r = EBH - 1 - r;
+    s = EBW - 1 - s;
+  }
+  return std::make_tuple(l, t, r, s);
+}
 
-  for(size_t i = 0; i < Luts_; ++i)
-    h_a_deltas_[i] = (((i + TK_) % Luts_) - i);
+void conv::build_b_deltas(){
+  h_b_deltas_.resize(Luts_*upsample_d_*upsample_h_*upsample_w_);
 
   size_t Ds0 = Luts_;
   size_t Ds1 = upsample_w_;
   size_t Ds2 = upsample_h_;
   size_t Ds3 = upsample_d_;
-  for(size_t pd = 0; pd < Ds3; ++pd)
-  for(size_t ph = 0; ph < Ds2; ++ph)
-  for(size_t pw = 0; pw < Ds1; ++pw) {
-    int32_t* deltas_ptr = &h_a_deltas_[Luts_ + pw*Ds0 + ph*Ds0*Ds1 + pd*Ds0*Ds1*Ds2];
+  for(size_t ud = 0; ud < Ds3; ++ud)
+  for(size_t uh = 0; uh < Ds2; ++uh)
+  for(size_t uw = 0; uw < Ds1; ++uw) {
+    int32_t* deltas_ptr = &h_b_deltas_[uw*Ds0 + uh*Ds0*Ds1 + ud*Ds0*Ds1*Ds2];
+    for(size_t i = 0; i < Luts_; ++i) {
+      int32_t EBD = 1;
+      int32_t EBH = ((upsample_h_ - uh - 1) + BH_) / upsample_h_;
+      int32_t EBW = ((upsample_w_ - uw - 1) + BW_) / upsample_w_;
+      if(EBD == 0 || EBH == 0 || EBW == 0)
+        continue;
+      int32_t c, t, r, s;
+      int32_t nextc, nextt, nextr, nexts;
+      std::tie(c, t, r, s) = unpack(i, false, EBD, EBH, EBW);
+      std::tie(nextc, nextt, nextr, nexts) = unpack(i + TK_, false, EBD, EBH, EBW);
+      int32_t cdiff = nextc - c;
+      int32_t tdiff = (nextt - t)*upsample_d_;
+      int32_t rdiff = (nextr - r)*upsample_h_;
+      int32_t sdiff = (nexts - s)*upsample_w_;
+      deltas_ptr[i] = cdiff*ld_b_[b_inner_idx_] + tdiff*ld_b_[b_pix_idx_] + rdiff*ld_b_[b_pix_idx_ + 1] + sdiff*ld_b_[b_pix_idx_ + 2];
+    }
+  }
+}
+
+void conv::build_deltas(){
+  h_a_deltas_.resize(Luts_ + upsample_d_*upsample_h_*upsample_w_*Luts_);
+  for(size_t i = 0; i < Luts_; ++i)
+    h_a_deltas_[i] = (((i + TK_) % Luts_) - i);
+  size_t Ds0 = Luts_;
+  size_t Ds1 = upsample_w_;
+  size_t Ds2 = upsample_h_;
+  size_t Ds3 = upsample_d_;
+  for(size_t ud = 0; ud < Ds3; ++ud)
+  for(size_t uh = 0; uh < Ds2; ++uh)
+  for(size_t uw = 0; uw < Ds1; ++uw) {
+    int32_t* deltas_ptr = &h_a_deltas_[Luts_ + uw*Ds0 + uh*Ds0*Ds1 + ud*Ds0*Ds1*Ds2];
     // cumulative increments
     for(size_t i = 0; i < Ds0; ++i) {
+      int32_t EBD = 1;
+      int32_t EBH = ((upsample_h_ - uh - 1) + BH_) / upsample_h_;
+      int32_t EBW = ((upsample_w_ - uw - 1) + BW_) / upsample_w_;
+      if(EBD == 0 || EBH == 0 || EBW == 0)
+        continue;
       // unpack
       int32_t ctrs = i;
       int32_t c, t, r, s;
-      std::tie(c, t, r, s) = unpack(ctrs);
+      std::tie(c, t, r, s) = unpack(ctrs, !b_trans_, EBD, EBH, EBW);
       // next indices
       int32_t nextctrs = ctrs + TK_;
       int32_t nextc, nextt, nextr, nexts;
-      std::tie(nextc, nextt, nextr, nexts) = unpack(nextctrs);
+      std::tie(nextc, nextt, nextr, nexts) = unpack(nextctrs, !b_trans_, EBD, EBH, EBW);
       // diffs
-      int32_t cdiff = nextc - c;
-      int32_t tdiff = (nextt + pd)/upsample_d_ - (t + pd)/upsample_d_;
-      int32_t rdiff = (nextr + ph)/upsample_h_ - (r + ph)/upsample_h_;
-      int32_t sdiff = (nexts + pw)/upsample_w_ - (s + pw)/upsample_w_;
-      // delta pointers
-      deltas_ptr[i] = cdiff*ld_a_[a_inner_idx_] + tdiff*ld_a_[a_pix_idx_] + rdiff*ld_a_[a_pix_idx_ + 1] + sdiff*ld_a_[a_pix_idx_ + 2];
-    }
-  }
-
-  if(b_lut_) {
-    for(size_t i = 0; i < Ds0; ++i) {
-      int32_t c, t, r, s;
-      int32_t nextc, nextt, nextr, nexts;
-      std::tie(c, t, r, s) = unpack(i);
-      std::tie(nextc, nextt, nextr, nexts) = unpack(i + TK_);
       int32_t cdiff = nextc - c;
       int32_t tdiff = nextt - t;
       int32_t rdiff = nextr - r;
       int32_t sdiff = nexts - s;
-      h_b_deltas_[i] = cdiff*ld_b_[b_inner_idx_] + tdiff*ld_b_[b_pix_idx_] + rdiff*ld_b_[b_pix_idx_ + 1] + sdiff*ld_b_[b_pix_idx_ + 2];
+      if(ty_ == WGRAD){
+        tdiff = tdiff * stride_d_;
+        rdiff = rdiff * stride_h_;
+        sdiff = sdiff * stride_w_;
+      }
+      // delta pointers
+      deltas_ptr[i] = cdiff*ld_a_[a_inner_idx_] + tdiff*ld_a_[a_pix_idx_] + rdiff*ld_a_[a_pix_idx_ + 1] + sdiff*ld_a_[a_pix_idx_ + 2];
     }
   }
 }
 
 void conv::build_masks(){
-  h_masks_.resize(Luts_ + (2*pad_h_+1)*(2*pad_w_+1)*(2*pad_d_+1)*Luts_);
+  h_masks_.resize(Luts_ + upsample_d_*upsample_h_*upsample_w_*(2*pad_h_+1)*(2*pad_w_+1)*(2*pad_d_+1)*Luts_);
 
-  auto unpack = [&](int32_t ltrs){
-    int32_t l = (!b_trans_) ? ltrs % NF_ : ltrs / (BD_*BH_*BW_);
-    int32_t trs = (!b_trans_) ? ltrs / NF_ : ltrs % (BD_*BH_*BW_);
-    int32_t tr = trs / BW_;
-    int32_t s = trs % BW_;
-    int32_t t = tr / BH_;
-    int32_t r = tr % BH_;
-    if(!b_trans_){
-      r = BH_ - 1 - r;
-      s = BW_ - 1 - s;
-    }
-    return std::make_tuple(l, t, r, s);
-  };
   size_t Ms0 = Luts_;
   size_t Ms1 = 2*pad_w_ + 1;
   size_t Ms2 = 2*pad_h_ + 1;
   size_t Ms3 = 2*pad_d_ + 1;
+  size_t Ms4 = upsample_w_;
+  size_t Ms5 = upsample_h_;
+  size_t Ms6 = upsample_d_;
+  for(size_t ud = 0; ud < Ms6; ++ud)
+  for(size_t uh = 0; uh < Ms5; ++uh)
+  for(size_t uw = 0; uw < Ms4; ++uw)
   for(size_t pd = 0; pd < Ms3; ++pd)
   for(size_t ph = 0; ph < Ms2; ++ph)
   for(size_t pw = 0; pw < Ms1; ++pw){
-    int32_t* masks_ptr = &h_masks_[Luts_ + pw*Ms0 + ph*Ms0*Ms1 + pd*Ms0*Ms1*Ms2];
+    int32_t* masks_ptr = &h_masks_[Luts_ + pw*Ms0 + ph*Ms0*Ms1 + pd*Ms0*Ms1*Ms2 + uw*Ms0*Ms1*Ms2*Ms3 + uh*Ms0*Ms1*Ms2*Ms3*Ms4 + ud*Ms0*Ms1*Ms2*Ms3*Ms4*Ms5];
     for(size_t i = 0; i < Ms0; ++i){
        int32_t l, t, r, s;
        int32_t mask = 0x0;
        for(size_t j = 0; j < TK_; ++j){
-         std::tie(l, t, r, s) = unpack(i + j);
-         bool in_bounds_d = (t + pd) >= pad_d_ && (t + pd) < (BD_ + pad_d_);
-         bool in_bounds_h = (r + ph) >= pad_h_ && (r + ph) < (BH_ + pad_h_);
-         bool in_bounds_w = (s + pw) >= pad_w_ && (s + pw) < (BW_ + pad_w_);
+         int32_t EBD = 1;
+         int32_t EBH = ((upsample_h_ - uh - 1) + BH_) / upsample_h_;
+         int32_t EBW = ((upsample_w_ - uw - 1) + BW_) / upsample_w_;
+         if(EBD == 0 || EBH == 0 || EBW == 0)
+           continue;
+         std::tie(l, t, r, s) = unpack(i + j, !b_trans_, EBD, EBH, EBW);
+         bool in_bounds_d = (t + pd) >= pad_d_ && (t + pd) < (EBD + pad_d_);
+         bool in_bounds_h = (r + ph) >= pad_h_ && (r + ph) < (EBH + pad_h_);
+         bool in_bounds_w = (s + pw) >= pad_w_ && (s + pw) < (EBW + pad_w_);
          mask |= (in_bounds_d && in_bounds_h && in_bounds_w) << j;
        }
        masks_ptr[i] = mask;
@@ -246,6 +281,8 @@ void conv::init(driver::stream *stream, triton::driver::cu_module* module) {
   d_a_deltas_ = init_lut(is_a_deltas_cst, "delta", h_a_deltas_);
   d_b_deltas_ = init_lut(is_b_deltas_cst_, "b_delta", h_b_deltas_);
   d_masks_ = init_lut(is_mask_cst_, "masks", h_masks_);
+  d_locks_ = triton::driver::buffer::create(stream->context(), max_grid_0_*max_grid_1_*4);
+  ((triton::driver::cu_buffer*)d_locks_)->set_zero(stream, max_grid_0_*max_grid_1_*4);
 }
 
 void conv::set_arg(driver::kernel *kernel,
@@ -264,34 +301,44 @@ void conv::set_arg(driver::kernel *kernel,
   kernel->setArg(10, BW_);
   kernel->setArg(11, CH_);
   kernel->setArg(12, CW_);
+  kernel->setArg(13, NC_);
   // A arguments
-  kernel->setArg(13, ld_a_[a_outer_idx_]);
-  kernel->setArg(14, ld_a_[a_inner_idx_]);
-  kernel->setArg(15, ld_a_[2]);
-  kernel->setArg(16, ld_a_[3]);
-  kernel->setArg(17, ld_a_[4]);
+  kernel->setArg(14, ld_a_[a_outer_idx_]);
+  kernel->setArg(15, ld_a_[a_inner_idx_]);
+  kernel->setArg(16, ld_a_[2]);
+  kernel->setArg(17, ld_a_[3]);
+  kernel->setArg(18, ld_a_[4]);
   // B arguments
-  kernel->setArg(18, ld_b_[b_inner_idx_]);
-  kernel->setArg(19, ld_b_[b_pix_idx_]);
-  kernel->setArg(20, ld_b_[b_pix_idx_+1]);
-  kernel->setArg(21, ld_b_[b_pix_idx_+2]);
-  kernel->setArg(22, ld_b_[b_outer_idx_]);
+  kernel->setArg(19, ld_b_[b_inner_idx_]);
+  kernel->setArg(20, ld_b_[b_pix_idx_]);
+  kernel->setArg(21, ld_b_[b_pix_idx_+1]);
+  kernel->setArg(22, ld_b_[b_pix_idx_+2]);
+  kernel->setArg(23, ld_b_[b_outer_idx_]);
   // C arguments
-  kernel->setArg(23, ld_c_[c_outer_0_idx_]);
-  kernel->setArg(24, ld_c_[c_outer_1_idx_]);
-  kernel->setArg(25, ld_c_[c_pix_idx]);
-  kernel->setArg(26, ld_c_[c_pix_idx+1]);
-  kernel->setArg(27, ld_c_[c_pix_idx+2]);
+  kernel->setArg(24, ld_c_[c_outer_0_idx_]);
+  kernel->setArg(25, ld_c_[c_outer_1_idx_]);
+  kernel->setArg(26, ld_c_[c_pix_idx]);
+  kernel->setArg(27, ld_c_[c_pix_idx+1]);
+  kernel->setArg(28, ld_c_[c_pix_idx+2]);
   // pad
-  kernel->setArg(28, pad_h_);
-  kernel->setArg(29, pad_w_);
+  kernel->setArg(29, pad_h_);
+  kernel->setArg(30, pad_w_);
   // stride
-  kernel->setArg(30, stride_h_);
-  kernel->setArg(31, stride_w_);
+  kernel->setArg(31, stride_h_);
+  kernel->setArg(32, stride_w_);
   // dilate
-  kernel->setArg(32, upsample_h_);
-  kernel->setArg(33, upsample_w_);
-  size_t idx = 34;
+  kernel->setArg(33, upsample_h_);
+  kernel->setArg(34, upsample_w_);
+  kernel->setArg(35, (int32_t)0);
+  kernel->setArg(36, (int32_t)0);
+  kernel->setArg(37, pad_h_);
+  kernel->setArg(38, pad_w_);
+  kernel->setArg(39, (int32_t)0);
+  kernel->setArg(40, (int32_t)0);
+  kernel->setArg(41, d_locks_);
+  kernel->setArg(42, 0);
+  kernel->setArg(43, 0);
+  size_t idx = 44;
   if(!is_a_deltas_cst)
     kernel->setArg(idx++, d_a_deltas_);
   if(!is_b_deltas_cst_)
@@ -300,13 +347,67 @@ void conv::set_arg(driver::kernel *kernel,
     kernel->setArg(idx++, d_masks_);
 }
 
+void conv::enqueue(driver::stream *stream, driver::kernel *kernel,
+                   driver::buffer *a, driver::buffer *b, driver::buffer *c, driver::buffer *bias,
+                   size_t TM, size_t TN, size_t GZ, size_t nthreads) {
+  set_arg(kernel, a, b, c, bias);
+  std::array<size_t, 3> grid = {1};
+  grid[0] = (M_ + TM - 1)/TM;
+  grid[1] = (N_ + TN - 1)/TN;
+  grid[2] = GZ;
+  grid[0] /= upsample_h_*upsample_w_;
+  kernel->setArg(11, CH_/upsample_h_);
+  kernel->setArg(12, CW_/upsample_w_);
+  kernel->setArg(42, (int32_t)grid[0]);
+  kernel->setArg(43, (int32_t)grid[1]);
+
+  // initialize to zero if necessary
+  bool init_zero = false;
+  for(int32_t off_uh = 0; off_uh < upsample_h_; off_uh++)
+  for(int32_t off_uw = 0; off_uw < upsample_w_; off_uw++) {
+    int32_t EBD = 1;
+    int32_t EBH = ((upsample_h_ - off_uh - 1) + BH_) / upsample_h_;
+    int32_t EBW = ((upsample_w_ - off_uw - 1) + BW_) / upsample_w_;
+    if(EBD == 0 || EBH == 0 || EBW == 0)
+      init_zero = true;
+  }
+  if(init_zero)
+    ((driver::cu_buffer*)c)->set_zero(stream, c_size()*4);
+
+  for(int32_t off_uh = 0; off_uh < upsample_h_; off_uh++)
+  for(int32_t off_uw = 0; off_uw < upsample_w_; off_uw++) {
+    int32_t EBD = 1;
+    int32_t EBH = ((upsample_h_ - off_uh - 1) + BH_) / upsample_h_;
+    int32_t EBW = ((upsample_w_ - off_uw - 1) + BW_) / upsample_w_;
+    if(EBD == 0 || EBH == 0 || EBW == 0)
+      continue;
+    int32_t K = shapes_b_[b_inner_idx_]*EBD*EBH*EBW;
+    kernel->setArg(6, K);
+    kernel->setArg(9, EBH);
+    kernel->setArg(10, EBW);
+    kernel->setArg(29, pad_h_);
+    kernel->setArg(30, pad_w_);
+    kernel->setArg(35, off_uh);
+    kernel->setArg(36, off_uw);
+    kernel->setArg(37, (pad_h_ + (1 - upsample_h_)*off_uh)/upsample_h_);
+    kernel->setArg(38, (pad_w_ + (1 - upsample_w_)*off_uw)/upsample_w_);
+    kernel->setArg(39, (off_uh + pad_h_) % upsample_h_);
+    kernel->setArg(40, (off_uw + pad_w_) % upsample_w_);
+    stream->enqueue(kernel, grid, {nthreads, 1, 1});
+  }
+}
+
 std::vector<unsigned> conv::default_params() {
-  if(b_lut_)
-    return {32, 2, 64, 32, 2, 64, 16, 8, 2, 2, 4, 2, 8};
+  if(b_lut_){
+    if(!b_trans_)
+      return {16, 2, 32, 16, 16, 8, 8, 2, 2, 4, 2, 8, 4, 2, 1};
+    else
+      return {32, 2, 64, 32, 2, 64, 16, 8, 2, 2, 4, 2, 8, 1};
+  }
   else if(ty_ == FPROP)
-    return {16, 2, 64, 32, 2, 64, 16, 8, 2, 2, 8, 1, 8, 4};
-  else if(ty_ == BPROP)
-    return {32, 2, 64, 32, 64, 32, 4, 2, 2, 4, 2, 8, 4, 2};
+    return {16, 2, 64, 32, 2, 64, 16, 8, 2, 2, 8, 1, 8, 4, 1};
+  else
+    return {16, 2, 64, 16, 16, 16, 4, 2, 2, 4, 2, 8, 4, 2, 1};
 }
 
 
@@ -393,6 +494,205 @@ void conv::cpu_ref(OUT_DTYPE* C,  IN_DTYPE* A, IN_DTYPE* B)
     cpu_xprop(C, A, B);
   else
     cpu_wgrad(C, A, B);
+}
+
+void conv::src(std::ostream &os){
+  std::string BS    = b_trans_ ? "[TN,TK]"      : "[TK, TN]";
+  std::string bcb0  = b_trans_ ? "[:, newaxis]" : "[newaxis, :]";
+  std::string bcb1  = b_trans_ ? "[newaxis, :]" : "[:, newaxis]";
+  std::string ldb0  = b_trans_ ? "*ldb_s"       : "";
+  std::string useb  = b_trans_ ? "trans(b)"     : "b";
+  std::string flipr = b_trans_ ? ""             : "BH - 1 -";
+  std::string flips = b_trans_ ? ""             : "BW - 1 -";
+  std::string upar = ty_ == WGRAD ? "stride_h * ": "";
+  std::string upas = ty_ == WGRAD ? "stride_w * ": "";
+  std::string upah = ty_ == WGRAD ? "": "*stride_h";
+  std::string upaw = ty_ == WGRAD ? "": "*stride_w";
+  std::vector<std::string> crs = {"c", "r", "s"};
+  std::vector<std::string> rsc = {"r", "s", "c"};
+  std::vector<std::string> ax  = b_trans_ ? crs : rsc;
+  std::vector<std::string> redax;
+  if(b_trans_)
+    redax = {"NC", "BH", "BW"};
+  else
+    redax = {"BH", "BW", "NC"};
+  std::string inc_pb = b_lut_ ? "db" + bcb1 : "TK" + ldb0;
+  std::string inc_pdb = b_trans_ ? "incd" : "TK";
+  std::string a_delta_mem = is_a_deltas_cst ? "__constant__" : "";
+  std::string b_delta_mem = is_b_deltas_cst_? "__constant__" : "";
+  std::string masks_mem = is_mask_cst_? "__constant__" : "";
+
+  os <<
+      R"(
+const tunable int32 TM = {16, 32, 64};
+const tunable int32 TN = {16, 32, 64};
+const tunable int32 TK = {8};
+const tunable int32 GZ = {1};
+)";
+if(is_a_deltas_cst)
+  os << "__constant__ int32* delta = alloc_const int32[" + std::to_string(h_a_deltas_.size()) + "];\n";
+if(b_lut_ && is_b_deltas_cst_)
+  os << "__constant__ int32* b_delta = alloc_const int32[" + std::to_string(h_b_deltas_.size()) + "];\n";
+if(is_mask_cst_)
+  os << "__constant__ int32* masks = alloc_const int32[" + std::to_string(h_masks_.size()) + "];\n";
+os << R"(
+
+ void conv(read_only restrict fp32 *a,
+           read_only restrict fp32 *b,
+           fp32 *c,
+           fp32 *bias,
+           int32 M, int32 N, int32 K,
+           int32 AH, int32 AW,
+           int32 BH, int32 BW,
+           int32 CH, int32 CW,
+           int32 NC,
+           int32 lda_n, int32 lda_c, int32 lda_d, int32 lda_h, int32 lda_w,
+           int32 ldb_c, int32 ldb_t, int32 ldb_r, int32 ldb_s, int32 ldb_k,
+           int32 ldc_n, int32 ldc_k, int32 ldc_m, int32 ldc_p, int32 ldc_q,
+           int32 pad_h, int32 pad_w,
+           int32 stride_h, int32 stride_w,
+           int32 upsample_h, int32 upsample_w,
+           int32 off_uh, int32 off_uw,
+           int32 off_uah, int32 off_uaw,
+           int32 off_uch, int32 off_ucw,
+           int32 *locks, int32 grid0, int32 grid1)";
+if(!is_a_deltas_cst)
+  os << ", int32* delta";
+if(b_lut_ && !is_b_deltas_cst_)
+  os << ", int32* b_delta";
+if(!is_mask_cst_)
+  os << ", int32* masks";
+ os << R"(){
+  int32 rxa[TM] = get_global_range[TM](0);
+  int32 rb0[TN] = get_global_range[TN](1);
+  int32 rz = get_global_range[1](2);
+  int32 rka[TK] = 0 ... TK;
+  int32 rkb[TK] = 0 ... TK;
+  fp32 C[TM, TN] = 0;
+  int32 ldlut = )" + std::to_string(Luts_) + R"(;
+  int32 div = K / GZ;
+  int32 rem = K % GZ;
+  K = select(rz < rem, div, div + rem);
+  int32 offk = rz*div;
+  rka = rka + offk;
+  rkb = rkb + offk;
+  int32 rabh[TM] = rxa / CW;
+  int32 raw[TM] = rxa % CW;
+  int32 rab[TM] = rabh / CH;
+  int32 rah[TM] = rabh % CH;
+  rah = rah)" + upaw + R"( - off_uah;
+  raw = raw)" + upah + R"( - off_uaw;
+  int32 ra0[TM] = rab*lda_n + rah*lda_h + raw*lda_w;
+  int32 ra)" + ax[0] + ax[1] + "[TK] = rka / " + redax[2] + R"(;
+  int32 ra)" + ax[2] + "[TK] = rka %  " + redax[2] + R"(;
+  int32 ra)" + ax[0] + "[TK] = ra" + ax[0] + ax[1] + " / " + redax[1] + R"(;
+  int32 ra)" + ax[1] + "[TK] = ra" + ax[0] + ax[1] + " % " + redax[1] + R"(;
+  rar = )" + flipr + R"( rar;
+  ras = )" + flips + R"( ras;
+  rar = )" + upar + R"( rar;
+  ras = )" + upas + R"( ras;
+  int32 ra1[TK] = rac*lda_c + rar*lda_h + ras*lda_w;
+  fp32* pa[TM, TK] = a + ra1[newaxis, :] + ra0[:, newaxis];)";
+if(b_lut_){
+ os << R"(
+  int32 rb)" + ax[0] + ax[1] + "[TK] = rkb / " + redax[2] + R"(;
+  int32 rb)" + ax[2] + "[TK] = rkb %  " + redax[2] + R"(;
+  int32 rb)" + ax[0] + "[TK] = rb" + ax[0] + ax[1] + " / " + redax[1] + R"(;
+  int32 rb)" + ax[1] + "[TK] = rb" + ax[0] + ax[1] + " % " + redax[1] + R"(;
+  rbr = rbr*upsample_h + off_uh;
+  rbs = rbs*upsample_w + off_uw;
+  int32 offdb[TK] = rkb % ldlut;
+  int32 rb1[TK] = rbc*ldb_c + rbr*ldb_r + rbs*ldb_s;
+  )" + b_delta_mem + R"( int32* pdb[TK] = b_delta + offdb + off_uw*ldlut + off_uh*ldlut*upsample_w;
+  int32 db[TK] = *pdb;)";
+}
+else{
+os << R"(
+  int32 rb1[TK] = rkb)" + ldb0 + ";";
+}
+os << R"(
+  fp32* pb)" + BS + " = b + rb1" + bcb1 + " + rb0" + bcb0 + R"(*ldb_k;
+  int32 offda[TK] = rka % ldlut;
+  )" + a_delta_mem + R"( int32* pincd[TK] = delta + offda;
+  )" + a_delta_mem + R"( int32* pda[TK]  = delta + ldlut + offda + off_uw*ldlut + off_uh*ldlut*upsample_w;
+  int32 da[TK] = *pda;
+  int32 incd[TK] = *pincd;
+  int32 maskh[TM] = pad_h + min(rah, 0) + max(rah + BH - AH, 0);
+  int32 maskw[TM] = pad_w + min(raw, 0) + max(raw + BW - AW, 0);
+  int32 offma = offk % ldlut;
+  )" + masks_mem + R"( int32* pm[TM] = masks + ldlut + offma + maskw*ldlut + maskh*ldlut*(2*pad_w + 1) + off_uw*ldlut*(2*pad_w+1)*(2*pad_h+1) + off_uh*ldlut*(2*pad_w+1)*(2*pad_h+1)*upsample_w;
+  )" + a_delta_mem + R"( int32* pincm[TM] = delta + offma;
+  int32 incm[TM] = *pincm;
+  int32 maska0[TM] = *pm;
+  int32 maska1[TK] = 1 << (0 ... TK);
+  int1 checka[TM, TK] = (maska0[:, newaxis] & maska1[newaxis, :]) > 0;
+  int1 checkb0[TN] = rb0 < N;
+  int1 checkb)" + BS + " = checkb0" + bcb0 + R"(;
+  fp32 a[TM, TK] = checka ? *pa : 0;
+  fp32 b)" + BS + R"( = checkb ? *pb : 0;
+  int32 rkamin[TK] = rka - offk + TK;
+  for(int32 k = K; k > 0; k = k - TK){
+    C = dot(a, )" + useb + R"(, C);
+    pa = pa + da[newaxis, :];
+    pb = pb + )" + inc_pb + R"(;
+    pda = pda + incd;)";
+if(b_lut_){
+  os << R"(
+    pdb = pdb + )" + inc_pdb + R"(;
+    db = *pdb;)";
+}
+  os << R"(
+    pincd = pincd + incd;
+    da = *pda;
+    incd = *pincd;
+    pm = pm + incm;
+    pincm = pincm + incm;
+    incm = *pincm;
+    int1 checka1[TK] = (rkamin < k);
+    maska0 = *pm;
+    checka = (maska0[:, newaxis] & maska1[newaxis, :]) > 0;
+    checka = checka && checka1[newaxis,:];
+    a = checka ? *pa : 0;
+    checkb = checkb && (k > TK);
+    @checkb b = *pb;
+  }
+  int32 rxc[TM] = get_global_range[TM](0);
+  int32 rc1[TN] = get_global_range[TN](1);
+  int32 rcn[TM] = rxc / (CH*CW);
+  int32 rcpq[TM] = rxc % (CH*CW);
+  int32 rcp[TM] = rcpq / CW;
+  int32 rcq[TM] = rcpq % CW;
+  rcp = rcp * upsample_h + off_uch;
+  rcq = rcq * upsample_w + off_ucw;
+  int1 checkc1[TN] = rc1 < N;
+  int32 rc0[TM] = rcn * ldc_n + rcp * ldc_p + rcq * ldc_q;
+  fp32* pc[TM, TN]  = c + rc1[newaxis, :]*ldc_k + rc0[:, newaxis];
+  int1 checkc0[TM] = rxc < M;
+  int1 checkc[TM, TN]  = checkc0[:, newaxis] && checkc1[newaxis, :];
+  int32 ridx = get_range_id(0);
+  int32 ridy = get_range_id(1);
+  int32 *plock = locks + ridx + ridy*grid0;
+  int32 *pcount = plock + grid0*grid1;
+  while(__atomic_cas(plock, 0, 1));
+  int32 count = *pcount;
+  int32 countp1 = select(count == GZ - 1, 0, count + 1);
+  if(count == 0) {)";
+ if(bias_ && ty_==FPROP){
+   os << R"(
+   fp32* pbias[TN] = bias + rc1;
+   fp32 bias[TN] = checkc1 ? *pbias : 0;
+   C = C + bias[newaxis, :];)";
+ }
+   os << R"(
+    @checkc *pc = C;
+    *pcount = countp1;
+  }
+  else {
+    @checkc *pc = C + *pc;
+    *pcount = countp1;
+  }
+  __atomic_cas(plock, 1, 0);
+})";
 }
 
 template void conv::cpu_ref<float,float>(float*, float*, float*);

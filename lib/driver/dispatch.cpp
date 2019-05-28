@@ -101,20 +101,6 @@ namespace driver
 #define NVML_DEFINE2(ret, fname, t1, t2) DEFINE2(nvmlinit, nvml_, ret, fname, t1, t2)
 #define NVML_DEFINE3(ret, fname, t1, t2, t3) DEFINE3(nvmlinit, nvml_, ret, fname, t1, t2, t3)
 
-#define CUBLAS_DEFINE1(ret, fname, t1) DEFINE1(cublasinit, cublas_, ret, fname, t1)
-#define CUBLAS_DEFINE13(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13) DEFINE13(cublasinit, cublas_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13)
-#define CUBLAS_DEFINE19(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19) DEFINE19(cublasinit, cublas_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19)
-
-#define CUDNN_DEFINE1(ret, fname, t1) DEFINE1(cudnninit, cudnn_, ret, fname, t1)
-#define CUDNN_DEFINE2(ret, fname, t1, t2) DEFINE2(cudnninit, cudnn_, ret, fname, t1, t2)
-#define CUDNN_DEFINE3(ret, fname, t1, t2, t3) DEFINE3(cudnninit, cudnn_, ret, fname, t1, t2, t3)
-#define CUDNN_DEFINE5(ret, fname, t1, t2, t3, t4, t5) DEFINE5(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5)
-#define CUDNN_DEFINE6(ret, fname, t1, t2, t3, t4, t5, t6) DEFINE6(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6)
-#define CUDNN_DEFINE7(ret, fname, t1, t2, t3, t4, t5, t6, t7) DEFINE7(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7)
-#define CUDNN_DEFINE8(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8) DEFINE8(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8)
-#define CUDNN_DEFINE13(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13) DEFINE13(cudnninit, cudnn_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13)
-
-
 bool dispatch::clinit()
 {
     if(opencl_==nullptr)
@@ -144,18 +130,6 @@ bool dispatch::nvmlinit(){
   nvmlReturn_t res = (*fptr)();
   check(res);
   return res;
-}
-
-bool dispatch::cublasinit(){
-  if(cublas_==nullptr)
-    cublas_ = dlopen("libcublas.so", RTLD_LAZY);
-  return cublas_ != nullptr;
-}
-
-bool dispatch::cudnninit(){
-  if(cudnn_==nullptr)
-    cudnn_ = dlopen("libcudnn.so", RTLD_LAZY);
-  return cudnn_ != nullptr;
 }
 
 bool dispatch::spvllvminit(){
@@ -206,57 +180,6 @@ NVML_DEFINE2(nvmlReturn_t, nvmlDeviceGetHandleByPciBusId_v2, const char *, nvmlD
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetMaxClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceSetApplicationsClocks, nvmlDevice_t, unsigned int, unsigned int)
-
-cublasHandle_t dispatch::cublasHandle(const cu_context &ctx){
-  static std::map<CUcontext, cublasHandle_t> handles;
-  auto pr = handles.insert({*ctx.cu(), cublasHandle_t()});
-  if(pr.second)
-    cublasCreate_v2(&pr.first->second);
-  return pr.first->second;
-}
-
-cudnnHandle_t dispatch::cudnnHandle(driver::cu_context const & ctx){
-  static std::map<CUcontext, cudnnHandle_t> handles;
-  auto pr = handles.insert({*ctx.cu(), cudnnHandle_t()});
-  if(pr.second)
-    cudnnCreate(&pr.first->second);
-  return pr.first->second;
-}
-
-CUBLAS_DEFINE1(cublasStatus_t, cublasCreate_v2, cublasHandle_t*)
-cublasStatus_t dispatch::cublasGetStream_v2(cublasHandle_t h, cudaStream_t *a)
-{ return f_impl<dispatch::cublasinit>(cublas_, cublasGetStream_v2, cublasGetStream_v2_, "cublasGetStream_v2", h, a); }
-cublasStatus_t dispatch::cublasSetStream_v2(cublasHandle_t h, cudaStream_t a)
-{ return f_impl<dispatch::cublasinit>(cublas_, cublasSetStream_v2, cublasSetStream_v2_, "cublasSetStream_v2", h, a); }
-cublasStatus_t dispatch::cublasSgemm_v2(cublasHandle_t h, cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, float* alpha, const float *A, int lda, const float *B, int ldb, float* beta, float *C, int ldc)
-{ return f_impl<dispatch::cublasinit>(cublas_, cublasSgemm_v2, cublasSgemm_v2_, "cublasSgemm_v2", h, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
-cublasStatus_t dispatch::cublasDgemm_v2(cublasHandle_t h, cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, double* alpha, const double *A, int lda, const double *B, int ldb, double* beta, double *C, int ldc)
-{ return f_impl<dispatch::cublasinit>(cublas_, cublasDgemm_v2, cublasDgemm_v2_, "cublasDgemm_v2", h, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
-cublasStatus_t dispatch::cublasHgemm(cublasHandle_t h, cublasOperation_t at, cublasOperation_t bt, int m, int n, int k, half* alpha, const half *A, int lda, const half *B, int ldb, half* beta, half *C, int ldc)
-{ return f_impl<dispatch::cublasinit>(cublas_, cublasHgemm, cublasHgemm_, "cublasHgemm", h, at, bt, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);}
-CUBLAS_DEFINE19(cublasStatus_t, cublasGemmEx, cublasHandle_t, cublasOperation_t, cublasOperation_t, int, int, int, const void*, const void*, cudaDataType, int, const void*, cudaDataType, int, const void*, void*, cudaDataType, int, cudaDataType, cublasGemmAlgo_t)
-
-//cuDNN
-CUDNN_DEFINE1(cudnnStatus_t, cudnnCreateConvolutionDescriptor, cudnnConvolutionDescriptor_t*)
-CUDNN_DEFINE1(cudnnStatus_t, cudnnCreateTensorDescriptor, cudnnTensorDescriptor_t*)
-CUDNN_DEFINE1(cudnnStatus_t, cudnnCreateFilterDescriptor, cudnnFilterDescriptor_t*)
-CUDNN_DEFINE1(cudnnStatus_t, cudnnCreate, cudnnHandle_t*)
-CUDNN_DEFINE7(cudnnStatus_t, cudnnSetTensor4dDescriptor, cudnnTensorDescriptor_t, cudnnTensorFormat_t, cudnnDataType_t, int, int, int, int)
-CUDNN_DEFINE7(cudnnStatus_t, cudnnSetFilter4dDescriptor, cudnnFilterDescriptor_t, cudnnDataType_t, cudnnTensorFormat_t, int, int, int, int)
-CUDNN_DEFINE5(cudnnStatus_t, cudnnSetTensorNdDescriptorEx, cudnnTensorDescriptor_t, cudnnTensorFormat_t, cudnnDataType_t, int, const int*)
-CUDNN_DEFINE5(cudnnStatus_t, cudnnSetFilterNdDescriptor, cudnnFilterDescriptor_t, cudnnDataType_t, cudnnTensorFormat_t, int, const int*)
-CUDNN_DEFINE1(cudnnStatus_t, cudnnCreatePoolingDescriptor, cudnnPoolingDescriptor_t*)
-CUDNN_DEFINE7(cudnnStatus_t, cudnnSetPoolingNdDescriptor, cudnnPoolingDescriptor_t, const cudnnPoolingMode_t, const cudnnNanPropagation_t, int, const int*, const int*, const int*)
-CUDNN_DEFINE8(cudnnStatus_t, cudnnPoolingForward, cudnnHandle_t, const cudnnPoolingDescriptor_t, const void*, const cudnnTensorDescriptor_t, const void*, const void*, const cudnnTensorDescriptor_t, void*)
-
-
-CUDNN_DEFINE8(cudnnStatus_t, cudnnSetConvolution2dDescriptor, cudnnConvolutionDescriptor_t, int, int, int, int, int, int, cudnnConvolutionMode_t)
-CUDNN_DEFINE7(cudnnStatus_t, cudnnSetConvolutionNdDescriptor, cudnnConvolutionDescriptor_t, int, const int*, const int*, const int*, cudnnConvolutionMode_t, cudnnDataType_t)
-CUDNN_DEFINE8(cudnnStatus_t, cudnnGetConvolutionForwardAlgorithm, cudnnHandle_t, const cudnnTensorDescriptor_t, const cudnnFilterDescriptor_t, const cudnnConvolutionDescriptor_t, const cudnnTensorDescriptor_t, cudnnConvolutionFwdPreference_t, size_t, cudnnConvolutionFwdAlgo_t *)
-CUDNN_DEFINE7(cudnnStatus_t, cudnnGetConvolutionForwardWorkspaceSize, cudnnHandle_t, const cudnnTensorDescriptor_t, const cudnnFilterDescriptor_t, const cudnnConvolutionDescriptor_t, const cudnnTensorDescriptor_t, cudnnConvolutionFwdAlgo_t, size_t*)
-CUDNN_DEFINE13(cudnnStatus_t, cudnnConvolutionForward, cudnnHandle_t, const void *, const cudnnTensorDescriptor_t, const void *, const cudnnFilterDescriptor_t, const void *, const cudnnConvolutionDescriptor_t, cudnnConvolutionFwdAlgo_t, void *, size_t, const void *, const cudnnTensorDescriptor_t, void *)
-CUDNN_DEFINE2(cudnnStatus_t, cudnnSetStream, cudnnHandle_t, cudaStream_t)
-CUDNN_DEFINE7(cudnnStatus_t, cudnnTransformTensor, cudnnHandle_t, const void*, const cudnnTensorDescriptor_t, const void*, const void*, const cudnnTensorDescriptor_t, void*)
 
 // OpenCL
 cl_int dispatch::clBuildProgram(cl_program a, cl_uint b, const cl_device_id * c, const char * d, void (*e)(cl_program, void *), void * f)
@@ -313,21 +236,11 @@ void dispatch::release(){
     dlclose(cuda_);
     cuda_ = nullptr;
   }
-  if(cublas_){
-    dlclose(cublas_);
-    cublas_ = nullptr;
-  }
-  if(cudnn_){
-    dlclose(cudnn_);
-    cudnn_ = nullptr;
-  }
 }
 
 void * dispatch::opencl_;
 void* dispatch::cuda_;
 void* dispatch::nvml_;
-void* dispatch::cublas_;
-void* dispatch::cudnn_;
 void* dispatch::spvllvm_;
 
 //OpenCL
@@ -409,33 +322,6 @@ void* dispatch::nvmlDeviceGetHandleByPciBusId_v2_;
 void* dispatch::nvmlDeviceGetClockInfo_;
 void* dispatch::nvmlDeviceGetMaxClockInfo_;
 void* dispatch::nvmlDeviceSetApplicationsClocks_;
-
-void* dispatch::cublasCreate_v2_;
-void* dispatch::cublasGetStream_v2_;
-void* dispatch::cublasSetStream_v2_;
-void* dispatch::cublasHgemm_;
-void* dispatch::cublasSgemm_v2_;
-void* dispatch::cublasDgemm_v2_;
-void* dispatch::cublasGemmEx_;
-
-void* dispatch::cudnnCreateConvolutionDescriptor_;
-void* dispatch::cudnnCreatePoolingDescriptor_;
-void* dispatch::cudnnCreateTensorDescriptor_;
-void* dispatch::cudnnCreateFilterDescriptor_;
-void* dispatch::cudnnCreate_;
-void* dispatch::cudnnSetTensor4dDescriptor_;
-void* dispatch::cudnnSetFilter4dDescriptor_;
-void* dispatch::cudnnSetTensorNdDescriptorEx_;
-void* dispatch::cudnnSetFilterNdDescriptor_;
-void* dispatch::cudnnSetPoolingNdDescriptor_;
-void* dispatch::cudnnSetConvolution2dDescriptor_;
-void* dispatch::cudnnSetConvolutionNdDescriptor_;
-void* dispatch::cudnnGetConvolutionForwardAlgorithm_;
-void* dispatch::cudnnGetConvolutionForwardWorkspaceSize_;
-void* dispatch::cudnnConvolutionForward_;
-void* dispatch::cudnnPoolingForward_;
-void* dispatch::cudnnSetStream_;
-void* dispatch::cudnnTransformTensor_;
 
 // SPIR-V
 void* dispatch::initializeLLVMToSPIRVPass_;

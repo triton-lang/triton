@@ -31,7 +31,7 @@ namespace triton
 namespace driver
 {
 
-class cu_stream;
+class stream;
 
 // Base
 class buffer : public polymorphic_resource<CUdeviceptr, cl_mem, host_buffer_t> {
@@ -66,7 +66,7 @@ class cu_buffer: public buffer
 public:
   cu_buffer(driver::context* context, size_t size);
   cu_buffer(driver::context* context, CUdeviceptr cu, bool take_ownership);
-  void set_zero(cu_stream const & queue, size_t size);
+  void set_zero(triton::driver::stream *queue, size_t size);
 };
 
 }
