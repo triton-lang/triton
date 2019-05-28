@@ -4,6 +4,7 @@
 #include "triton/runtime/jit.h"
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
+#include "triton/tools/bench.hpp"
 
 // K = channels
 // M = batch * height * width
@@ -180,8 +181,8 @@ int main() {
     stream->enqueue(kernel, grid, {nthreads, 1, 1});
     stream->synchronize();
     // benchmark
-    double ts = bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
-                      [&](){ stream->synchronize(); }, *context->device());
+    double ts = triton::tools::bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
+                      [&](){ stream->synchronize(); }, context->device());
     ts = ts * 1e-9;
     double tflops = 2.*M*N*K / ts * 1e-12;
     return tflops;

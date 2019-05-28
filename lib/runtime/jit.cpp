@@ -97,7 +97,7 @@ jit::jit(driver::context *context): driver_context_(context),
 
 jit::~jit(){ }
 
-void jit::autotune(const char *name, const char *src, benchmark_t benchmark) {
+jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t benchmark) {
   // find metaparameters
   auto ptt_module = make_triton_module(name, src);
   ir::module &tt_module = *ptt_module;
@@ -113,7 +113,7 @@ void jit::autotune(const char *name, const char *src, benchmark_t benchmark) {
 //  std::cout << ranges.size() << std::endl;
   // iterate over parameters
   unsigned i;
-  double best = 0;
+  tune_res_t best;
   loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
     std::map<ir::value*, std::vector<std::string>> errors;
     i = 0;
@@ -153,10 +153,14 @@ void jit::autotune(const char *name, const char *src, benchmark_t benchmark) {
     modules_.insert({name, module.get()});
     double perf;
     perf = benchmark(kernel.get(), info);
-    best = std::max(perf, best);
-    std::cout << perf << " [ " << best << " ] " << std::endl;
+    if(perf > best.perf){
+      best.perf = perf;
+      best.params = params;
+    }
+    std::cout << perf << " [ " << best.perf << " ] " << std::endl;
     modules_.erase(name);
   });
+  return best;
 }
 
 void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params) {

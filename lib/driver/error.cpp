@@ -94,45 +94,6 @@ void check(CUresult err)
   }
 }
 
-void check(cublasStatus_t err){
-  using namespace exception::cublas;
-  switch(err)
-  {
-  case CUBLAS_STATUS_SUCCESS         : break;
-  case CUBLAS_STATUS_NOT_INITIALIZED : throw not_initialized();
-  case CUBLAS_STATUS_ALLOC_FAILED    : throw alloc_failed();
-  case CUBLAS_STATUS_INVALID_VALUE   : throw invalid_value();
-  case CUBLAS_STATUS_ARCH_MISMATCH   : throw arch_mismatch();
-  case CUBLAS_STATUS_MAPPING_ERROR   : throw mapping_error();
-  case CUBLAS_STATUS_EXECUTION_FAILED: throw execution_failed();
-  case CUBLAS_STATUS_INTERNAL_ERROR  : throw internal_error();
-  case CUBLAS_STATUS_NOT_SUPPORTED   : throw not_supported();
-  case CUBLAS_STATUS_LICENSE_ERROR   : throw license_error();
-  default                            : throw unknown();
-  }
-}
-
-void check(cudnnStatus_t err){
-  using namespace exception::cudnn;
-  switch(err)
-  {
-  case CUDNN_STATUS_SUCCESS:            break;
-  case CUDNN_STATUS_NOT_INITIALIZED:    throw not_initialized();
-  case CUDNN_STATUS_ALLOC_FAILED:       throw alloc_failed();
-  case CUDNN_STATUS_BAD_PARAM:          throw bad_param();
-  case CUDNN_STATUS_INTERNAL_ERROR:     throw internal_error();
-  case CUDNN_STATUS_INVALID_VALUE:      throw invalid_value();
-  case CUDNN_STATUS_ARCH_MISMATCH:      throw arch_mismatch();
-  case CUDNN_STATUS_MAPPING_ERROR:      throw mapping_error();
-  case CUDNN_STATUS_EXECUTION_FAILED:   throw execution_failed();
-  case CUDNN_STATUS_NOT_SUPPORTED:      throw not_supported();
-  case CUDNN_STATUS_LICENSE_ERROR:      throw license_error();
-  case CUDNN_STATUS_RUNTIME_PREREQUISITE_MISSING: throw runtime_prerequisite_missing();
-  case CUDNN_STATUS_RUNTIME_IN_PROGRESS: throw runtime_in_progress();
-  case CUDNN_STATUS_RUNTIME_FP_OVERFLOW: throw runtime_fp_overflow();
-  }
-}
-
 void check(cl_int err)
 {
     using namespace exception::ocl;
