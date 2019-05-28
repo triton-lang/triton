@@ -1,17 +1,10 @@
-#ifndef TRITON_INCLUDE_AST_MODULE_H
-#define TRITON_INCLUDE_AST_MODULE_H
+#ifndef TRITON_INCLUDE_LANG_MODULE_H
+#define TRITON_INCLUDE_LANG_MODULE_H
 
-#include "ops.h"
-#include "parser.hpp"
 #include "node.h"
-#include <cassert>
-#include <vector>
-#include <string>
-#include <iostream>
-
 
 namespace triton{
-namespace ast{
+namespace lang{
 
 /* Translation Unit */
 class translation_unit: public node{

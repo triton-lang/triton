@@ -1,13 +1,7 @@
-#ifndef TRITON_INCLUDE_AST_STATEMENT_H
-#define TRITON_INCLUDE_AST_STATEMENT_H
+#ifndef TRITON_INCLUDE_LANG_STATEMENT_H
+#define TRITON_INCLUDE_LANG_STATEMENT_H
 
-#include "parser.hpp"
-#include "triton/ast/ast.h"
-#include <cassert>
-#include <vector>
-#include <string>
-#include <iostream>
-
+#include "expression.h"
 
 namespace triton{
 
@@ -20,7 +14,7 @@ namespace ir{
   class module;
 }
 
-namespace ast{
+namespace lang{
 
 class declaration;
 

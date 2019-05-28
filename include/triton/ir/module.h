@@ -10,7 +10,7 @@
 
 namespace triton{
 
-namespace ast{
+namespace lang{
 
 class iteration_statement;
 class compound_statement;
@@ -43,7 +43,7 @@ public:
   typedef std::map<std::string, global_value*> symbols_map_t;
   typedef std::vector<function*> functions_list_t;
   struct current_iteration_info_t{
-    ast::iteration_statement *statement;
+    lang::iteration_statement *statement;
     basic_block *block;
   };
 

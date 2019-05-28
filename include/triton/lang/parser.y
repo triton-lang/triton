@@ -2,16 +2,13 @@
 
 %{
 namespace triton{
-namespace ast{
+namespace lang{
 class node;
 }
 }
-using namespace triton::ast;
+using namespace triton::lang;
 #define YYSTYPE node*
-#include "../include/triton/ast/ast.h"
-#include "../include/triton/ast/expression.h"
-#include "../include/triton/ast/statement.h"
-#include "../include/triton/ast/declaration.h"
+#include "../include/triton/lang/lang.h"
 
 extern char* yytext;
 void yyerror(const char *s);
@@ -150,8 +147,8 @@ primary_expression_list
 
 /* Postfix */
 slice
-  : ':'                                            { $$ = new slice(triton::ast::ALL); }
-  | NEWAXIS                                        { $$ = new slice(triton::ast::NEWAXIS); }
+  : ':'                                            { $$ = new slice(triton::lang::ALL); }
+  | NEWAXIS                                        { $$ = new slice(triton::lang::NEWAXIS); }
 
 slice_list
   : slice                                          { $$ = new list<slice*>((slice*)$1); }
@@ -387,6 +384,15 @@ storage_class_specifier
   | CONSTANT_SPACE  { $$ = new token(CONSTANT_SPACE_T); }
 ;
 
+external_declaration
+  : function_definition { $$ = $1; }
+  | declaration { $$ = $1; }
+  ;
+
+function_definition
+  : declaration_specifiers declarator compound_statement { $$ = new function_definition($1, $2, $3); }
+  ;
+
 /* -------------------------- */
 /*      Translation Unit      */
 /* -------------------------- */
@@ -395,15 +401,7 @@ translation_unit
   : external_declaration { ast_root = new translation_unit($1); $$ = ast_root; }
   | translation_unit external_declaration { $$ = ((translation_unit*)($1))->add($2); }
   ;
-	
-external_declaration
-  : function_definition { $$ = $1; }
-  | declaration { $$ = $1; }
-  ;
-	
-function_definition
-  : declaration_specifiers declarator compound_statement { $$ = new function_definition($1, $2, $3); }
-  ;
+
 
 %%
 void yyerror (const char *s){

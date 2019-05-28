@@ -1,11 +1,11 @@
-#include "triton/ast/node.h"
+#include "triton/lang/node.h"
 #include "triton/ir/builder.h"
 #include "triton/ir/module.h"
 #include "triton/ir/constant.h"
 
 namespace triton{
 
-namespace ast{
+namespace lang{
 
 /* node */
 ir::value *node::explicit_cast(ir::builder &builder, ir::value *src, ir::type *dst_ty){

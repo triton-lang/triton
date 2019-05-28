@@ -1,5 +1,5 @@
-#include "triton/ast/expression.h"
-#include "triton/ast/declaration.h"
+#include "triton/lang/expression.h"
+#include "triton/lang/declaration.h"
 #include "triton/ir/constant.h"
 #include "triton/ir/module.h"
 #include "triton/ir/builder.h"
@@ -8,7 +8,7 @@
 
 namespace triton{
 
-namespace ast{
+namespace lang{
 
 
 /* Binary operator */
