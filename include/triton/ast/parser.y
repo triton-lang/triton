@@ -9,6 +9,9 @@ class node;
 using namespace triton::ast;
 #define YYSTYPE node*
 #include "../include/triton/ast/ast.h"
+#include "../include/triton/ast/expression.h"
+#include "../include/triton/ast/statement.h"
+#include "../include/triton/ast/declaration.h"
 
 extern char* yytext;
 void yyerror(const char *s);
@@ -86,82 +89,80 @@ pointer
   | '*' pointer { $$ = new pointer($1); }
 	
 abstract_declarator
-	: pointer { $$ = $1; }
+  : pointer { $$ = $1; }
   | pointer direct_abstract_declarator { $$ = ((declarator*)$2)->set_ptr($1); }
-	| direct_abstract_declarator { $$ = $1; }
-	;
+  | direct_abstract_declarator { $$ = $1; }
+  ;
 
 direct_abstract_declarator
-    : '[' primary_expression_list ']' { $$ = new tile(nullptr, $1); }
-
-constant:
-    CONSTANT { $$ = new constant(atoi(yytext)); }
-	;
-
-constant_list:
-      constant { $$ = new list<constant*>((constant*)$1); }
-    | constant_list ',' constant { $$ = append_ptr_list<constant>($1, $3); }
-    ;
+  : '[' primary_expression_list ']' { $$ = new tile(nullptr, $1); }
 
 type_name
   : declaration_specifiers { $$ = new type_name($1, nullptr); }
   | declaration_specifiers abstract_declarator { $$ = new type_name($1, $2); }
-	;
+  ;
 
 /* -------------------------- */
 /*         Expressions        */
 /* -------------------------- */
 
-identifier
-	: IDENTIFIER { $$ = new identifier(yytext); }
-	;
-
-builtin
-  : GET_GLOBAL_RANGE '[' primary_expression ']' '(' constant ')' { $$ = new get_global_range($3, $6); }
-  | GET_RANGE_ID '(' constant ')' { $$ = new get_range_id($3); }
-  | DOT '(' expression ',' expression ',' expression ')' { $$ = new matmul_expression($3, $5, $7); }
-  | ALLOC_CONST type_specifier '[' constant ']' { $$ = new alloc_const(new typed_declaration_specifier(get_type_spec($2)), $4); }
-  | TRANS '(' expression ')' { $$ = new trans_expression($3); }
-  | MAX '(' expression ',' expression ')' { $$ = new max_expression($3, $5); }
-  | MIN '(' expression ',' expression ')' { $$ = new min_expression($3, $5); }
-  | SELECT '(' expression ',' expression ',' expression ')' { $$ = new select_expression($3, $5, $7); }
-  | ATOMIC_CAS '(' expression ',' expression ',' expression ')' { $$ = new atomic_cas($3, $5, $7); }
+/* Constants */
+constant
+  : CONSTANT { $$ = new constant(atoi(yytext)); }
   ;
 
+constant_list
+  : constant { $$ = new list<constant*>((constant*)$1); }
+  | constant_list ',' constant { $$ = append_ptr_list<constant>($1, $3); }
+  ;
+
+identifier
+  : IDENTIFIER { $$ = new identifier(yytext); }
+  ;
+
+/* Built-in */
+builtin_expression
+  : GET_GLOBAL_RANGE '[' primary_expression ']' '(' constant ')' { $$ = new get_global_range_expression($3, $6); }
+  | GET_RANGE_ID '(' constant ')'                                { $$ = new get_range_id_expression($3); }
+  | DOT '(' expression ',' expression ',' expression ')'         { $$ = new matmul_expression($3, $5, $7); }
+  | ALLOC_CONST type_specifier '[' constant ']'                  { $$ = new alloc_const_expression(new typed_declaration_specifier(get_type_spec($2)), $4); }
+  | TRANS '(' expression ')'                                     { $$ = new trans_expression($3); }
+  | MAX '(' expression ',' expression ')'                        { $$ = new max_expression($3, $5); }
+  | MIN '(' expression ',' expression ')'                        { $$ = new min_expression($3, $5); }
+  | SELECT '(' expression ',' expression ',' expression ')'      { $$ = new select_expression($3, $5, $7); }
+  | ATOMIC_CAS '(' expression ',' expression ',' expression ')'  { $$ = new atomic_cas_expression($3, $5, $7); }
+  ;
+
+/* Primary */
 primary_expression
-  : identifier         { $$ = new named_expression($1); }
-  | constant           { $$ = $1; }
+  : identifier                                     { $$ = new named_expression($1); }
+  | constant                                       { $$ = $1; }
   | primary_expression ELLIPSIS primary_expression { $$ = new constant_range($1, $3); }
-  | builtin            { $$ = $1; }
-  | STRING_LITERAL     { $$ = new string_literal(yytext); }
-  | '(' expression ')' { $$ = $2; }
-	;
+  | builtin_expression                             { $$ = $1; }
+  | STRING_LITERAL                                 { $$ = new string_literal(yytext); }
+  | '(' expression ')'                             { $$ = $2; }
+  ;
 
 primary_expression_list
-  : primary_expression { $$ = new list<expression*>((expression*)$1); }
+  : primary_expression                             { $$ = new list<expression*>((expression*)$1); }
   | primary_expression_list ',' primary_expression { $$ = append_ptr_list<expression>($1, $3); }
   ;
 
+/* Postfix */
 slice
-  : ':' { $$ = new slice(triton::ast::ALL); }
-  | NEWAXIS { $$ = new slice(triton::ast::NEWAXIS); }
+  : ':'                                            { $$ = new slice(triton::ast::ALL); }
+  | NEWAXIS                                        { $$ = new slice(triton::ast::NEWAXIS); }
 
 slice_list
-  : slice { $$ = new list<slice*>((slice*)$1); }
-  | slice_list ',' slice { $$ = append_ptr_list<slice>($1, $3); }
+  : slice                                          { $$ = new list<slice*>((slice*)$1); }
+  | slice_list ',' slice                           { $$ = append_ptr_list<slice>($1, $3); }
 
 postfix_expression
-  : primary_expression { $$ = $1;}
-  | identifier '[' slice_list ']' { $$ = new indexing_expression($1, $3);}
+  : primary_expression                             { $$ = $1;}
+  | identifier '[' slice_list ']'                  { $$ = new indexing_expression($1, $3);}
   ;
 
-unary_expression
-  : postfix_expression             { $$ = $1; }
-  | INC_OP unary_expression        { $$ = new unary_operator(INC, $2); }
-  | DEC_OP unary_expression        { $$ = new unary_operator(DEC, $2); }
-  | unary_operator cast_expression { $$ = new unary_operator(get_unary_op($1), $2); }
-	;
-
+/* Unary */
 unary_operator
   : '&' { $$ = new token(ADDR); }
   | '*' { $$ = new token(DEREF); }
@@ -169,79 +170,86 @@ unary_operator
   | '-' { $$ = new token(MINUS); }
   | '~' { $$ = new token(COMPL); }
   | '!' { $$ = new token(NOT); }
-	;
+  ;
+
+unary_expression
+  : postfix_expression             { $$ = $1; }
+  | INC_OP unary_expression        { $$ = new unary_expression(INC, $2); }
+  | DEC_OP unary_expression        { $$ = new unary_expression(DEC, $2); }
+  | unary_operator cast_expression { $$ = new unary_expression(get_unary_op($1), $2); }
+  ;
 
 cast_expression
-	: unary_expression { $$ = $1; }
-  | '(' type_name ')' cast_expression { $$ = new cast_operator($2, $4); }
-	;
+  : unary_expression { $$ = $1; }
+  | '(' type_name ')' cast_expression { $$ = new cast_expression($2, $4); }
+  ;
 
 multiplicative_expression
-	: cast_expression { $$ = $1; }
-  | multiplicative_expression '*' cast_expression { $$ = new binary_operator(MUL, $1, $3); }
-  | multiplicative_expression '/' cast_expression { $$ = new binary_operator(DIV, $1, $3); }
-  | multiplicative_expression '%' cast_expression { $$ = new binary_operator(MOD, $1, $3); }
-	;
+  : cast_expression { $$ = $1; }
+  | multiplicative_expression '*' cast_expression { $$ = new binary_expression(MUL, $1, $3); }
+  | multiplicative_expression '/' cast_expression { $$ = new binary_expression(DIV, $1, $3); }
+  | multiplicative_expression '%' cast_expression { $$ = new binary_expression(MOD, $1, $3); }
+  ;
 
 additive_expression
-	: multiplicative_expression { $$ = $1; }
-  | additive_expression '+' multiplicative_expression { $$ = new binary_operator(ADD, $1, $3); }
-  | additive_expression '-' multiplicative_expression { $$ = new binary_operator(SUB, $1, $3); }
-	;
+  : multiplicative_expression { $$ = $1; }
+  | additive_expression '+' multiplicative_expression { $$ = new binary_expression(ADD, $1, $3); }
+  | additive_expression '-' multiplicative_expression { $$ = new binary_expression(SUB, $1, $3); }
+  ;
 
 shift_expression
-	: additive_expression { $$ = $1; }
-  | shift_expression LEFT_OP additive_expression { $$ = new binary_operator(LEFT_SHIFT, $1, $3); }
-  | shift_expression RIGHT_OP additive_expression { $$ = new binary_operator(RIGHT_SHIFT, $1, $3); }
-	;
+  : additive_expression { $$ = $1; }
+  | shift_expression LEFT_OP additive_expression { $$ = new binary_expression(LEFT_SHIFT, $1, $3); }
+  | shift_expression RIGHT_OP additive_expression { $$ = new binary_expression(RIGHT_SHIFT, $1, $3); }
+  ;
 
 /* Comparison */
 relational_expression
-	: shift_expression { $$ = $1; }
-  | relational_expression '<' shift_expression { $$ = new binary_operator(LT, $1, $3); }
-  | relational_expression '>' shift_expression { $$ = new binary_operator(GT, $1, $3); }
-  | relational_expression LE_OP shift_expression { $$ = new binary_operator(LE, $1, $3); }
-  | relational_expression GE_OP shift_expression { $$ = new binary_operator(GE, $1, $3); }
-	;
+  : shift_expression { $$ = $1; }
+  | relational_expression '<' shift_expression { $$ = new binary_expression(LT, $1, $3); }
+  | relational_expression '>' shift_expression { $$ = new binary_expression(GT, $1, $3); }
+  | relational_expression LE_OP shift_expression { $$ = new binary_expression(LE, $1, $3); }
+  | relational_expression GE_OP shift_expression { $$ = new binary_expression(GE, $1, $3); }
+  ;
 
 equality_expression
-	: relational_expression { $$ = $1; }
-  | equality_expression EQ_OP relational_expression { $$ = new binary_operator(EQ, $1, $3); }
-  | equality_expression NE_OP relational_expression { $$ = new binary_operator(NE, $1, $3); }
-	;
+  : relational_expression { $$ = $1; }
+  | equality_expression EQ_OP relational_expression { $$ = new binary_expression(EQ, $1, $3); }
+  | equality_expression NE_OP relational_expression { $$ = new binary_expression(NE, $1, $3); }
+  ;
 
 /* Binary */
 and_expression
-	: equality_expression { $$ = $1; }
-  | and_expression '&' equality_expression { $$ = new binary_operator(AND, $1, $3); }
-	;
+  : equality_expression { $$ = $1; }
+  | and_expression '&' equality_expression { $$ = new binary_expression(AND, $1, $3); }
+  ;
 
 exclusive_or_expression
-	: and_expression { $$ = $1; }
-  | exclusive_or_expression '^' and_expression { $$ = new binary_operator(XOR, $1, $3); }
-	;
+  : and_expression { $$ = $1; }
+  | exclusive_or_expression '^' and_expression { $$ = new binary_expression(XOR, $1, $3); }
+  ;
 
 inclusive_or_expression
-	: exclusive_or_expression { $$ = $1; }
-  | inclusive_or_expression '|' exclusive_or_expression { $$ = new binary_operator(OR, $1, $3); }
-	;
+  : exclusive_or_expression { $$ = $1; }
+  | inclusive_or_expression '|' exclusive_or_expression { $$ = new binary_expression(OR, $1, $3); }
+  ;
 
 /* Logical */
 logical_and_expression
-	: inclusive_or_expression { $$ = $1; }
-  | logical_and_expression AND_OP inclusive_or_expression { $$ = new binary_operator(LAND, $1, $3); }
-	;
+  : inclusive_or_expression { $$ = $1; }
+  | logical_and_expression AND_OP inclusive_or_expression { $$ = new binary_expression(LAND, $1, $3); }
+  ;
 
 logical_or_expression
-	: logical_and_expression { $$ = $1; }
-  | logical_or_expression OR_OP logical_and_expression { $$ = new binary_operator(LOR, $1, $3); }
-	;
+  : logical_and_expression { $$ = $1; }
+  | logical_or_expression OR_OP logical_and_expression { $$ = new binary_expression(LOR, $1, $3); }
+  ;
 
 /* Conditional */
 conditional_expression
-	: logical_or_expression { $$ = $1; }
+  : logical_or_expression { $$ = $1; }
   | logical_or_expression '?' conditional_expression ':' conditional_expression { $$ = new conditional_expression($1, $3, $5); }
-	;
+  ;
 
 /* Assignment */
 assignment_operator
@@ -259,14 +267,14 @@ assignment_operator
 	;
 
 assignment_expression
-	: conditional_expression { $$ = $1; }
+  : conditional_expression { $$ = $1; }
   | unary_expression assignment_operator assignment_expression { $$ = new assignment_expression($1, get_assign_op($2), $3); }
-	;
+  ;
 
 /* Expression */
 expression
-	: assignment_expression { $$ = $1; }
-	;
+  : assignment_expression { $$ = $1; }
+  ;
 
 /* Initialization */
 initialization_expression
@@ -280,16 +288,16 @@ initialization_expression
 /* -------------------------- */
 
 statement
-	: compound_statement { $$ = $1; }
-	| expression_statement { $$ = $1; }
-	| selection_statement { $$ = $1; }
-	| iteration_statement { $$ = $1; }
-  | jump_statement { $$ = $1; }
-	;
+  : compound_statement   { $$ = $1; }
+  | expression_statement { $$ = $1; }
+  | selection_statement  { $$ = $1; }
+  | iteration_statement  { $$ = $1; }
+  | jump_statement       { $$ = $1; }
+  ;
 
 compound_statement
-    : '{' '}' { $$ = new compound_statement(nullptr); }
-    | '{' block_item_list '}' { $$ = new compound_statement($2); }
+  : '{' '}' { $$ = new compound_statement(nullptr); }
+  | '{' block_item_list '}' { $$ = new compound_statement($2); }
 
 block_item_list
   : block_item { $$ = new list<block_item*>((block_item*)$1); }
@@ -300,7 +308,7 @@ block_item
   | statement { $$ = $1; }
 
 expression_statement
-	: ';' { $$ = new no_op(); }
+  : ';' { $$ = new no_op(); }
   | expression ';' { $$ = new expression_statement($1); }
   | AT primary_expression expression ';' { $$ = new expression_statement($3, $2); }
   ;
@@ -334,7 +342,7 @@ direct_declarator
 
 
 parameter_list
-	: parameter_declaration { $$ = new list<parameter*>((parameter*)$1); }
+  : parameter_declaration { $$ = new list<parameter*>((parameter*)$1); }
   | parameter_list ',' parameter_declaration { $$ = append_ptr_list<parameter>($1, $3); }
 	;
 
@@ -355,20 +363,19 @@ init_declarator_list
 	;
 
 declaration
-	: declaration_specifiers ';' { $$ = new declaration($1, nullptr); }
-	| declaration_specifiers init_declarator_list ';' { $$ = new declaration($1, $2); }
-	;
+  : declaration_specifiers ';' { $$ = new declaration($1, nullptr); }
+  | declaration_specifiers init_declarator_list ';' { $$ = new declaration($1, $2); }
+  ;
 	
 declarator
   : pointer direct_declarator { $$ = ((declarator*)$2)->set_ptr($1); }
-	| direct_declarator { $$ = $1; }
-	;
-
+  | direct_declarator { $$ = $1; }
+  ;
 
 init_declarator
   : declarator { $$ = new initializer($1, nullptr); }
   | declarator '=' initialization_expression { $$ = new initializer($1, $3); }
-	;
+  ;
 
 storage_class_specifier
   : CONST     { $$ = new token(CONST_T); }
@@ -381,13 +388,13 @@ storage_class_specifier
 ;
 
 /* -------------------------- */
-/*      Translation Unit 	  */
+/*      Translation Unit      */
 /* -------------------------- */
 
 translation_unit
   : external_declaration { ast_root = new translation_unit($1); $$ = ast_root; }
-	| translation_unit external_declaration { $$ = ((translation_unit*)($1))->add($2); }
-	;
+  | translation_unit external_declaration { $$ = ((translation_unit*)($1))->add($2); }
+  ;
 	
 external_declaration
   : function_definition { $$ = $1; }
@@ -396,7 +403,7 @@ external_declaration
 	
 function_definition
   : declaration_specifiers declarator compound_statement { $$ = new function_definition($1, $2, $3); }
-	;
+  ;
 
 %%
 void yyerror (const char *s){
