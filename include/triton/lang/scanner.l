@@ -38,6 +38,7 @@ using triton::lang::return_void;
 "int16"			        { return return_impl(INT16, yytext); }
 "int32"			        { return return_impl(INT32, yytext); }
 "int64"			        { return return_impl(INT64, yytext); }
+"fp16"			        { return return_impl(FP16, yytext); }
 "fp32"			        { return return_impl(FP32, yytext); }
 "fp64"			        { return return_impl(FP64, yytext); }
 "..."                   { return return_impl(ELLIPSIS, yytext); }

@@ -16,7 +16,7 @@ int main() {
   triton::jit jit(context);
 
   // matrix multiplication parameters
-  int32_t M = 512, N = 512, K = 512;
+  int32_t M = 2048, N = 2048, K = 2048;
   std::vector<float> hc(M*N);
   std::vector<float> rc(M*N);
   std::vector<float> ha(M*K);
@@ -60,7 +60,7 @@ int main() {
 
   // just-in-time compile source-code
   std::string src = triton::dnn::gemm::src(AT, BT);
-//  jit.autotune("matmul",src.c_str(), benchmark);
+  jit.autotune("matmul",src.c_str(), benchmark);
   jit.add_module("matmul", src.c_str(), triton::dnn::gemm::default_params(AT, BT));
   triton::driver::kernel* kernel = jit.get_function("matmul");
   triton::jit::launch_information info = jit.get_launch_info("matmul");

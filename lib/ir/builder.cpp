@@ -56,6 +56,9 @@ type *builder::get_int32_ty()
 type *builder::get_int64_ty()
 { return type::get_int64_ty(ctx_); }
 
+type *builder::get_half_ty()
+{ return type::get_half_ty(ctx_); }
+
 type *builder::get_float_ty()
 { return type::get_float_ty(ctx_); }
 
