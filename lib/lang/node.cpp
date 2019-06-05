@@ -69,6 +69,12 @@ void node::implicit_cast(ir::builder &builder, ir::value *&lhs, ir::value *&rhs,
     to_convert = explicit_cast(builder, to_convert, builder.get_float_ty());
     is_float = true;
   }
+  // One operand is half
+  else if(left_ty->is_half_ty() || right_ty->is_half_ty()){
+    ir::value *&to_convert = left_ty->is_half_ty()?rhs:lhs;
+    to_convert = explicit_cast(builder, to_convert, builder.get_half_ty());
+    is_float = true;
+  }
   // Both operands are integers
   else if(left_ty->is_integer_ty() && right_ty->is_integer_ty()){
     is_int = true;

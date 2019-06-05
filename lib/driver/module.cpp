@@ -247,8 +247,6 @@ std::string cu_module::compile_llvm_module(llvm::Module* module) {
   return std::string(buffer.begin(), buffer.end());
 }
 
-
-
 cu_module::cu_module(driver::context * context, llvm::Module* ll_module): cu_module(context, compile_llvm_module(ll_module)) { }
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){

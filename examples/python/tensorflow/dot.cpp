@@ -25,7 +25,8 @@ const tunable int32 TN = {16, 32, 64, 128};
 const tunable int32 TK = {8};
 const tunable int32 GZ = {1};
 
-void matmul(restrict read_only fp32 *A, restrict read_only fp32 *B, fp32 *C,
+void matmul(restrict read_only fp16 *A, restrict read_only fp16 *B,
+           fp32 *C,
            int32 M, int32 N, int32 K,
            int32 lda, int32 ldb, int32 ldc,
            int32 *locks, int32 grid0, int32 grid1) {
@@ -39,10 +40,10 @@ void matmul(restrict read_only fp32 *A, restrict read_only fp32 *B, fp32 *C,
   int32 rem = K % GZ;
   K = select(rz < rem, div - 1, div);
   int32 offk = select(rz < rem, rz*(div + 1), rz*div + rem);
-  fp32* pa[TM, TK] = A + (offk + rka[newaxis, :])*lda + rxa[:, newaxis];
-  fp32* pb[TN, TK] = B + (offk + rkb[newaxis, :])*ldb + ryb[:, newaxis];
-  fp32 a[TM, TK] = *pa;
-  fp32 b[TN, TK] = *pb;
+  fp16* pa[TM, TK] = A + (offk + rka[newaxis, :])*lda + rxa[:, newaxis];
+  fp16* pb[TN, TK] = B + (offk + rkb[newaxis, :])*ldb + ryb[:, newaxis];
+  fp16 a[TM, TK] = *pa;
+  fp16 b[TN, TK] = *pb;
   int32 last_a = ((M*K - 1) - (TM*TK + 1)) / lda;
   int32 last_b = ((K*N - 1) - (TN*TK + 1)) / ldb;
   last_a = last_a / TK * TK;
@@ -60,10 +61,10 @@ void matmul(restrict read_only fp32 *A, restrict read_only fp32 *B, fp32 *C,
   for(int32 k = bound; k > 0; k = k - 1){
     int1 checka[TM, 1] = rxc[:, newaxis] < M;
     int1 checkb[TN, 1] = ryc[:, newaxis] < N;
-    fp32* pa[TM, 1] = A + (offk + K - k)*lda + rxc[:, newaxis];
-    fp32* pb[TN, 1] = B + (offk + K - k)*ldb + ryc[:, newaxis];
-    fp32 a[TM, 1] = checka ? *pa : 0;
-    fp32 b[TN, 1] = checkb ? *pb : 0;
+    fp16* pa[TM, 1] = A + (offk + K - k)*lda + rxc[:, newaxis];
+    fp16* pb[TN, 1] = B + (offk + K - k)*ldb + ryc[:, newaxis];
+    fp16 a[TM, 1] = checka ? *pa : 0;
+    fp16 b[TN, 1] = checkb ? *pb : 0;
     c = dot(a, trans(b), c);
   }
   int32 ridx = get_range_id(0);
@@ -89,13 +90,6 @@ void matmul(restrict read_only fp32 *A, restrict read_only fp32 *B, fp32 *C,
 }
 )";
 
-REGISTER_OP("Dot")
-    .Input("a: T")
-    .Input("b: T")
-    .Input("locks: int32")
-    .Output("c: T")
-    .Attr("T: {float}")
-;
 
 class BlockSparseGemmOp : public OpKernel {
  public:
@@ -126,8 +120,8 @@ class BlockSparseGemmOp : public OpKernel {
     // initialize default compute device
     triton::jit jit(ctx);
     // matrix multiplication parameters
-    triton::driver::cu_buffer da(ctx, (CUdeviceptr)a.flat<float>().data(), false);
-    triton::driver::cu_buffer db(ctx, (CUdeviceptr)b.flat<float>().data(), false);
+    triton::driver::cu_buffer da(ctx, (CUdeviceptr)a.flat<Eigen::half>().data(), false);
+    triton::driver::cu_buffer db(ctx, (CUdeviceptr)b.flat<Eigen::half>().data(), false);
     triton::driver::cu_buffer dc(ctx, (CUdeviceptr)c->flat<float>().data(), false);
     triton::driver::cu_buffer dlocks(ctx, (CUdeviceptr)locks.flat<int32_t>().data(), false);
     stream->synchronize();
@@ -160,4 +154,10 @@ class BlockSparseGemmOp : public OpKernel {
 private:
 };
 
-REGISTER_KERNEL_BUILDER(Name("Dot").Device(DEVICE_GPU).TypeConstraint<float>("T"), BlockSparseGemmOp);
+REGISTER_KERNEL_BUILDER(Name("Dot").Device(DEVICE_GPU), BlockSparseGemmOp);
+REGISTER_OP("Dot")
+    .Input("a: float16")
+    .Input("b: float16")
+    .Input("locks: int32")
+    .Output("c: float32")
+;

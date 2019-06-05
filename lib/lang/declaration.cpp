@@ -21,6 +21,7 @@ ir::type* typed_declaration_specifier::type(ir::module *mod) const {
   case INT16_T:     return ir::type::get_int16_ty(ctx);
   case INT32_T:     return ir::type::get_int32_ty(ctx);
   case INT64_T:     return ir::type::get_int64_ty(ctx);
+  case FLOAT16_T:   return ir::type::get_half_ty(ctx);
   case FLOAT32_T:   return ir::type::get_float_ty(ctx);
   case FLOAT64_T:   return ir::type::get_double_ty(ctx);
   default:          throw std::runtime_error("unreachable");
