@@ -3,7 +3,7 @@
 #include "triton/driver/buffer.h"
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
-#include "triton/jit.h"
+#include "triton/runtime/jit.h"
 
 #define EIGEN_USE_GPU
 #include "tensorflow/core/framework/op.h"
