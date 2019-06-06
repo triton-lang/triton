@@ -70,6 +70,7 @@ private:
   unsigned vector_size_;
 };
 
+// Distribtued tile
 class distributed_tile: public tile{
   typedef std::vector<distributed_axis> axes_t;
   typedef std::vector<indices_t> ordered_indices_vec_t;
@@ -98,6 +99,15 @@ private:
 };
 
 
+// Fragmented tile
+class fragmented_tile: public tile{
+public:
+
+private:
+
+};
+
+// Selection pass
 class selection{
   typedef std::map<ir::value *, llvm::Value *> vmap_t;
   typedef std::map<ir::value *, tile *> tmap_t;
@@ -118,9 +128,9 @@ private:
 
   // grid construction
   void create_grids(std::vector<ir::value *> &grids,
-                    std::map<ir::metaparameter *, ir::value *> &references,
+                    std::map<unsigned, ir::value *> &references,
                     ir::function *fn);
-  void create_tile(ir::value *v, llvm::IRBuilder<> &builder, const std::map<ir::metaparameter *, ir::value *> &references, std::set<ir::value *> &seen, llvm::Value *sh_mem_ptr);
+  void create_tile(ir::value *v, llvm::IRBuilder<> &builder, const std::map<unsigned, ir::value *> &references, std::set<ir::value *> &seen, llvm::Value *sh_mem_ptr);
   void init_axes(ir::value *i, llvm::IRBuilder<> &builder, llvm::Value *u_thread_id, llvm::Value *u_warp_id);
   void init_grids(ir::function *fn, llvm::IRBuilder<> &builder, llvm::Value *sh_mem_ptr);
 
@@ -143,7 +153,7 @@ private:
   tune *params_;
   target *tgt_;
   shmem_info *buffer_info_;
-  std::map<ir::metaparameter*, distributed_axis> axes_;
+  std::map<unsigned, distributed_axis> axes_;
   llvm::Value *sh_mem_ptr_;
 };
 

@@ -20,6 +20,6 @@ hresult = np.dot(hb.T, ha)
 sess = tf.InteractiveSession()
 sess.run(tf.global_variables_initializer())
 result = sess.run([c], feed_dict = {locks: np.zeros(4096),
-									a: ha,
-									b: hb})
+                                    a: ha,
+                                    b: hb})
 print(result - hresult)
