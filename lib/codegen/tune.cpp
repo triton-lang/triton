@@ -15,6 +15,19 @@ namespace codegen{
 
 tune::tune(): num_global_ranges_(0){ }
 
+bool is_hmma(ir::value *v){
+  bool result = false;
+  if(auto *x = dynamic_cast<ir::dot_inst*>(v)){
+    ir::value *a = x->get_operand(0);
+    ir::type *a_ty = a->get_type();
+    ir::value *b = x->get_operand(1);
+    ir::type *b_ty = b->get_type();
+    result = !x->is_a_trans() && x->is_b_trans();
+    result = result && a_ty->get_scalar_ty()->is_half_ty() && b_ty->get_scalar_ty()->is_half_ty();
+  }
+  return result;
+}
+
 void tune::add_constraint(node_t x, node_t y) {
   dependencies_[x].insert(y);
   dependencies_[y].insert(x);
@@ -34,6 +47,7 @@ void tune::init_c_phi(ir::instruction *v) {
 }
 
 void tune::init_c_graph(ir::instruction *v) {
+
   // Reference shape
   ir::type::tile_shapes_t::value_type one = ir::tile_type::make_one(v->get_parent()->get_context());
   ir::type::tile_shapes_t shapes;
@@ -83,20 +97,41 @@ void tune::init_c_graph(ir::instruction *v) {
     add_constraint({v, 1}, {D, 1});
   }
   // Element-wise
-  else if(dynamic_cast<ir::user*>(v)){
+  else if(dynamic_cast<ir::user*>(v)) {
     for(unsigned k = 0; k < v->get_num_results(); k++)
-      for(unsigned i = 0; i < shapes.size(); i ++)
-        for(ir::value* op: v->ops())
+      for(unsigned i = 0; i < shapes.size(); i ++){
+        for(ir::value* op: v->ops()){
           add_constraint({v->get_result(k), i}, {op, i});
+        }
+      }
   }
 }
 
-void tune::connected_components(node_t x, const std::vector<ir::metaparameter *> mps, std::set<node_t> &nodes, graph_t &graph) {
+tune::fragment_t tune::get_fragmentation_type(node_t x, graph_t &graph){
+  std::list<node_t> work;
+  std::set<node_t> seen;
+  work.push_back(x);
+  while(!work.empty()){
+    node_t current = work.back();
+    if(is_hmma(current.first))
+      return HMMA_FRAGMENT_C;
+    work.pop_back();
+    seen.insert(current);
+    for(node_t y: graph[current]){
+      if(seen.find(y) == seen.end())
+        work.push_back(y);
+    }
+  }
+  return STRIDED_SCAN;
+}
+
+void tune::connected_components(node_t x, const std::vector<ir::metaparameter *> mps, const std::vector<std::string> prefixes, std::set<node_t> &nodes, graph_t &graph, unsigned group_id) {
+  groups_[x.first][x.second] = group_id;
   if(nodes.find(x) != nodes.end()){
     nodes.erase(x);
     std::string suffix = ".d" + std::to_string(x.second);
-    params_[x.first].insert({"nts" + suffix, mps[0]});
-    params_[x.first].insert({"mts" + suffix, mps[1]});
+    for(int i = 0; i < mps.size(); i++)
+      params_[x.first].insert({prefixes[i] + suffix, mps[i]});
     ir::type *ty = x.first->get_type();
     if(ty->is_tile_ty()){
       ir::type::tile_shapes_t::value_type shape = ty->get_tile_shapes().at(x.second);
@@ -109,11 +144,11 @@ void tune::connected_components(node_t x, const std::vector<ir::metaparameter *>
       num_global_ranges_ = std::max(num_global_ranges_, ax + 1);
     }
     if(static_params_.find(x) != static_params_.end()){
-      mps[0]->set_value(static_params_.at(x));
-      mps[1]->set_value(static_params_.at(x));
+      for(ir::metaparameter *mp: mps)
+        mp->set_value(static_params_.at(x));
     }
     for(const node_t &y: graph[x])
-      connected_components(y, mps, nodes, graph);
+      connected_components(y, mps, prefixes, nodes, graph, group_id);
   }
 }
 
@@ -142,6 +177,10 @@ std::map<std::string, ir::metaparameter *> tune::get_params(ir::instruction* i) 
   return params_.at(i);
 }
 
+unsigned tune::get_param_group(ir::value *value, unsigned ax) {
+  unsigned result = groups_.at(value).at(ax);
+  return result;
+}
 
 void tune::run(ir::module &mod) {
   ir::context &ctx = mod.get_context();
@@ -159,12 +198,21 @@ void tune::run(ir::module &mod) {
     if(i->has_tile_result_or_op())
       init_c_phi(i);
     // Layout parameters
-    while(!nodes_.empty()){
+    unsigned group_id = 0;
+    while(!nodes_.empty()) {
       ir::type *ty = mod.get_builder().get_int32_ty();
-      ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 1, 1);
-      nts->set_value(1);
-      ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
-      connected_components(*nodes_.begin(), {nts, mts}, nodes_, dependencies_);
+      node_t node = *nodes_.begin();
+      fragment_t fragment = get_fragmentation_type(node, dependencies_);
+      if(fragment == STRIDED_SCAN) {
+        ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 1, 1);
+        ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
+        connected_components(node, {nts, mts}, {"nts", "mts"}, nodes_, dependencies_, group_id++);
+        nts->set_value(1);
+      }
+      else {
+        ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 1, 4);
+        connected_components(node, {fpw}, {"fpw"}, nodes_, dependencies_, group_id++);
+      }
     }
   }
 
@@ -269,7 +317,7 @@ bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &er
     int num_threads = 1;
     for(size_t k = 0; k < shapes.size(); k++)
       num_threads *= params_[i]["mts.d" + to_string(k)]->get_value();
-    if(num_threads % 64 != 0)
+    if(num_threads % 32 != 0)
       errors[i].push_back("number of threads per block (" + to_string(num_threads) + ") must be multiple of warp size");
     if(num_threads != num_threads_)
       errors[i].push_back("Number of threads must be the same for all tiles (" + to_string(num_threads_) + ")");

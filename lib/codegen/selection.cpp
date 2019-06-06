@@ -459,12 +459,12 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
       unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
       idx_list[n] = builder.CreateAdd(thread_id, builder.getInt32(offset), "idx_" + str_k + "_" + std::to_string(n));
     }
-    axes_[params_->get_param(v, "nts.d" + str_k)] = distributed_axis{contiguous[k], idx_list};
+    axes_[params_->get_param_group(v, k)] = distributed_axis{contiguous[k], idx_list};
   }
 }
 
 void selection::create_grids(std::vector<ir::value*> &grids,
-                             std::map<ir::metaparameter*, ir::value*> &references,
+                             std::map<unsigned, ir::value*> &references,
                              ir::function *fn) {
   // get number of dimensions greater than 1
   auto get_tile_gt1_dim = [&](ir::value *v){
@@ -479,7 +479,7 @@ void selection::create_grids(std::vector<ir::value*> &grids,
   std::function<void(ir::value*)> bind_references = [&](ir::value *v)
   {
     // skip
-    if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
+    if(!v->get_type()->is_tile_ty() || !seen.insert(v).second || dynamic_cast<ir::mask_inst*>(v))
       return;
     // recurse
     if(auto *user = dynamic_cast<ir::user*>(v))
@@ -492,7 +492,7 @@ void selection::create_grids(std::vector<ir::value*> &grids,
     for(size_t d = 0; d < shapes.size(); d++){
       if(shapes[d]->get_value() == 1)
         continue;
-      ir::metaparameter *x = params_->get_param(v, "nts.d" + std::to_string(d));
+      unsigned x = params_->get_param_group(v, d);
       ir::value *&r = references[x];
       if(!r || get_tile_gt1_dim(v) > get_tile_gt1_dim(r))
         r = v;
@@ -517,7 +517,7 @@ bool static inline has_phi_user(ir::value *v) {
   return false;
 }
 void selection::create_tile(ir::value *v, IRBuilder<> &builder,
-                            const std::map<ir::metaparameter*, ir::value*>& references,
+                            const std::map<unsigned, ir::value*>& references,
                             std::set<ir::value*> &seen, Value *sh_mem_ptr) {
   if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
     return;
@@ -576,7 +576,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     std::vector<distributed_axis> axes(cshapes.size());
     for(size_t d = 0; d < cshapes.size(); d++){
       if(cshapes[d]->get_value() > 1){
-        ir::metaparameter *x = params_->get_param(v, "nts.d" + std::to_string(d));
+        unsigned x = params_->get_param_group(v, d);
         axes[d] = axes_.at(x);
       }
       else{
@@ -607,7 +607,7 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
   Value *u_warp_id = builder.CreateUDiv(u_thread_id, warp_size);
   // create grid
   std::vector<ir::value*> grids;
-  std::map<ir::metaparameter*, ir::value*> references;
+  std::map<unsigned, ir::value*> references;
   create_grids(grids, references, fn);
   for(ir::value* i: grids){
     if(auto *instr = dynamic_cast<ir::instruction*>(i))
@@ -812,7 +812,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
               std::swap(b_idx[0], b_idx[1]);
             Value *a = TA->get_value(a_idx);
             Value *b = TB->get_value(b_idx);
-//            res = builder.CreateCall(f_mul_add, {ConstantFP::get(a->getType(), 1), ConstantFP::get(b->getType(), 1), res});
             res = builder.CreateCall(f_mul_add, {a, b, res});
 
           }
