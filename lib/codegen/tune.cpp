@@ -213,8 +213,8 @@ void tune::run(ir::module &mod) {
         nts->set_value(1);
       }
       else {
-        ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 1, 4);
-        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 4);
+        ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 2, 2);
+        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 1);
         connected_components(node, {fpw, wpt}, {"fpw", "wpt"}, nodes_, dependencies_, group_id++);
       }
     }
@@ -266,6 +266,7 @@ unsigned tune::get_req_num_threads(ir::instruction *i){
       std::string suffix = ".d" + std::to_string(k);
       result *= params_.at(i).at("wpt" + suffix)->get_value();
     }
+    return result;
   }
 }
 
@@ -349,8 +350,9 @@ bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &er
     // the product of mma fragments per warp must be 4
     if(fragments_.at({i, 0}) == HMMA_FRAGMENT_C){
       unsigned prod = 1;
-      for(size_t k = 0; k < shapes.size(); k++)
+      for(size_t k = 0; k < shapes.size(); k++){
         prod *= params_[i]["fpw.d" + std::to_string(k)]->get_value();
+      }
       if(prod != 4)
         errors[i].push_back("HMMA must have only 4 fragments per warp");
     }
