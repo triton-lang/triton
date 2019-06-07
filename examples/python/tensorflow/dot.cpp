@@ -155,7 +155,10 @@ class BlockSparseGemmOp : public OpKernel {
       return  2.*M*N*K / ts * 1e-3;
     };
     // just-in-time compile source-code
-    jit.autotune("matmul", src, benchmark);
+    jit.add_module("matmul", src, {4, 2, 16, 4, 2, 16, 2, 2, 1, 1, 8, 8, 8, 1});
+    triton::driver::kernel* kernel = jit.get_function("matmul");
+    triton::jit::launch_information info = jit.get_launch_info("matmul");
+    benchmark(kernel, info);
   }
 
 private:
