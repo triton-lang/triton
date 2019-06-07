@@ -33,6 +33,7 @@ private:
   fragment_t get_fragmentation_type(node_t x, graph_t &graph);
   void connected_components(node_t x, const std::vector<ir::metaparameter *> mps, const std::vector<std::string> prefixes, std::set<node_t> &nodes, graph_t &graph, unsigned group_id);
   void create_grids(std::vector<ir::instruction*> &grids, std::map<ir::metaparameter *, ir::instruction *> &references, ir::function *fn);
+  unsigned get_req_num_threads(ir::instruction *i);
 
 
 public:
