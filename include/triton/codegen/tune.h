@@ -21,6 +21,7 @@ class tune {
   typedef std::pair<ir::value*, unsigned> node_t;
   typedef std::map <node_t, std::set<node_t>> graph_t;
 
+public:
   enum fragment_t{
     STRIDED_SCAN,
     HMMA_FRAGMENT_C
@@ -41,6 +42,7 @@ public:
   std::vector<ir::metaparameter *> get_params(ir::module& mod);
   std::map<std::string, ir::metaparameter *> get_params(ir::instruction* i);
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
+  fragment_t get_fragment(ir::value *value, unsigned ax) { return fragments_.at({value, ax}); }
   unsigned get_param_group(ir::value *value, unsigned ax);
   void copy(ir::value *dst, ir::value *src) { params_[dst] = params_[src]; groups_[dst] = groups_[src]; }
   bool check_constraints(std::map<ir::value *, std::vector<std::string>> &errors);
