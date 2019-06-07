@@ -121,14 +121,16 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
     passes.target_independent(tt_module);
     passes.tune.init(tt_module);
     passes.tune.check_constraints(errors);
-    for(auto x: errors)
-      for(auto err: x.second)
-        std::cout << err << std::endl;
+//    for(auto x: errors)
+//      for(auto err: x.second)
+//        std::cout << err << std::endl;
     if(!errors.empty())
       return;
     // Deep copy of the module and tuner
     auto ptt_module = make_triton_module(name, src);
     ir::module &tt_module = *ptt_module;
+    for(unsigned p: params)
+      std::cout << p << " " << std::flush;
     passes_wrapper passes(target_.get());
     passes.target_independent(tt_module);
     passes.tune.run(tt_module);
