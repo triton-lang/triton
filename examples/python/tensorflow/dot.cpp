@@ -45,12 +45,7 @@ void matmul(restrict read_only fp16 *A, restrict read_only fp16 *B,
   fp16* pb[TN, TK] = B + (offk + rkb[newaxis, :])*ldb + ryb[:, newaxis];
   fp16 a[TM, TK] = *pa;
   fp16 b[TN, TK] = *pb;
-  int32 last_a = ((M*K - 1) - (TM*TK + 1)) / lda;
-  int32 last_b = ((K*N - 1) - (TN*TK + 1)) / ldb;
-  last_a = last_a / TK * TK;
-  last_b = last_b / TK * TK;
-  int32 bound = K - max(last_a, last_b);
-  for(int32 k = K; k > bound; k = k - TK){
+  for(int32 k = K; k > 0; k = k - TK){
     c = dot(a, trans(b), c);
     pa = pa + TK*lda;
     pb = pb + TK*ldb;
@@ -59,15 +54,6 @@ void matmul(restrict read_only fp16 *A, restrict read_only fp16 *B,
   }
   int32 rxc[TM] = get_global_range[TM](0);
   int32 ryc[TN] = get_global_range[TN](1);
-  for(int32 k = bound; k > 0; k = k - 1){
-    int1 checka[TM, 1] = rxc[:, newaxis] < M;
-    int1 checkb[TN, 1] = ryc[:, newaxis] < N;
-    fp16* pa[TM, 1] = A + (offk + K - k)*lda + rxc[:, newaxis];
-    fp16* pb[TN, 1] = B + (offk + K - k)*ldb + ryc[:, newaxis];
-    fp16 a[TM, 1] = checka ? *pa : 0;
-    fp16 b[TN, 1] = checkb ? *pb : 0;
-    c = dot(a, trans(b), c);
-  }
   int32 ridx = get_range_id(0);
   int32 ridy = get_range_id(1);
   fp32* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];

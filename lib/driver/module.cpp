@@ -119,7 +119,7 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
   opt.UnsafeFPMath = false;
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
-  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
+  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, "-ptx60", opt,
                                                              llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
   // set data layout
   if(layout.empty())
@@ -243,14 +243,17 @@ std::string cu_module::compile_llvm_module(llvm::Module* module) {
   layout += "-i64:64-i128:128-v16:16-v32:32-n16:32:64";
   // create
   llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_52", layout, buffer, "", Assembly);
-  return std::string(buffer.begin(), buffer.end());
+  module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_75", layout, buffer, "", Assembly);
+  std::string result(buffer.begin(), buffer.end());
+  std::string to_replace = ".version 6.3";
+  result.replace(result.find(to_replace), to_replace.size(), ".version 6.4");
+  return result;
 }
 
 cu_module::cu_module(driver::context * context, llvm::Module* ll_module): cu_module(context, compile_llvm_module(ll_module)) { }
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
-//  std::cout << source << std::endl;
+  std::cout << source << std::endl;
   cu_context::context_switcher ctx_switch(*context);
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
