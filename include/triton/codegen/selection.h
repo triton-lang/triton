@@ -57,6 +57,7 @@ private:
 public:
   shared_tile(llvm::Type* ty, const shapes_t &shapes, llvm::Value* ptr, llvm::IRBuilder<> &builder, llvm::Value* offset = nullptr);
   void set_vector_size(unsigned vector_size);
+  void set_return_mode(bool return_vector);
   void set_value(indices_t, llvm::Value *);
   llvm::Value* get_value(indices_t idx);
   llvm::Value* get_pointer() { return ptr_; }
@@ -64,6 +65,7 @@ public:
 
 private:
   llvm::Value *ptr_;
+  bool return_vector_;
   llvm::Value *offset_;
   llvm::IRBuilder<> &builder_;
   std::map<indices_t, llvm::Value*> ptr_cache_;
