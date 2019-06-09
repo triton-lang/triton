@@ -16,7 +16,7 @@ int main() {
   triton::jit jit(context);
 
   // matrix multiplication parameters
-  int32_t M = 2048, N = 2048, K = 2048;
+  int32_t M = 1024, N = 1024, K = 1024;
   std::vector<float> hc(M*N);
   std::vector<float> rc(M*N);
   std::vector<float> ha(M*K);

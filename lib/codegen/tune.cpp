@@ -214,7 +214,7 @@ void tune::run(ir::module &mod) {
       }
       else {
         ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 2, 2);
-        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 1);
+        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 4);
         connected_components(node, {fpw, wpt}, {"fpw", "wpt"}, nodes_, dependencies_, group_id++);
       }
     }
@@ -228,13 +228,13 @@ void tune::run(ir::module &mod) {
       continue;
     if(dynamic_cast<ir::load_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty, 2, 2));
+      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty, 4, 4));
       *params_.at(i).at("nts.d0") = *tmp;
     }
     if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 2, 2));
-      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 2, 2));
+      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 4, 4));
+      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 4, 4));
       *params_.at(i).at("nts.d0") = *tmp1;
       *params_.at(i).at("nts.d1") = *tmp2;
     }
@@ -341,7 +341,7 @@ bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &er
       else {
         ir::metaparameter *fpw = params_[i]["fpw.d" + strk];
         ir::metaparameter *wpt = params_[i]["wpt.d" + strk];
-        multiple = fpw->get_value()*wpt->get_value();
+        multiple = fpw->get_value()*wpt->get_value()*8;
       }
       if(shapes[k]->get_value() % multiple != 0)
         errors[i].push_back("for dim " + strk + ": shape (" + to_string(shapes[k]->get_value()) + ")"
