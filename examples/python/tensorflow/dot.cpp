@@ -21,8 +21,8 @@ using GPUDevice = Eigen::GpuDevice;
 
 const char* src =
 R"(
-const tunable int32 TM = {16};
-const tunable int32 TN = {16};
+const tunable int32 TM = {8, 16, 32, 64, 128};
+const tunable int32 TN = {8, 16, 32, 64, 128};
 const tunable int32 TK = {8};
 const tunable int32 GZ = {1};
 
@@ -54,11 +54,8 @@ void matmul(restrict read_only fp16 *A, restrict read_only fp16 *B,
   }
   int32 rxc[TM] = get_global_range[TM](0);
   int32 ryc[TN] = get_global_range[TN](1);
-  fp32* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis]; 
-  int1 checkc0[TM] = rxc < M;
-  int1 checkc1[TN] = ryc < N;
-  int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
-  @checkc *pc = c;
+  fp32* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
+  *pc = c;
 }
 )";
 
@@ -122,14 +119,17 @@ class BlockSparseGemmOp : public OpKernel {
       stream->enqueue(kernel, grid, {nthreads, 1, 1});
       stream->synchronize();
       double ts = triton::tools::bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
-                        [&](){ stream->synchronize(); }, nullptr);
+                        [&](){ stream->synchronize(); }, ctx->device());
       return  2.*M*N*K / ts * 1e-3;
     };
     // just-in-time compile source-code
-    jit.add_module("matmul", src, {4, 2, 16, 4, 2, 16, 2, 2, 1, 1, 8, 8, 8, 1});
+//    jit.autotune("matmul", src, benchmark);
+//    jit.add_module("matmul", src, {4, 2, 8, 4, 2, 32, 1, 4, 1, 1, 8, 8, 8, 1});
+//    jit.add_module("matmul", src, {32, 2, 128, 32, 2, 128, 2, 2, 2, 2, 4, 8, 4, 1});
+    jit.add_module("matmul", src, {16, 4, 128, 32, 4, 128, 2, 2, 2, 2, 8, 8, 4, 1});
     triton::driver::kernel* kernel = jit.get_function("matmul");
     triton::jit::launch_information info = jit.get_launch_info("matmul");
-    benchmark(kernel, info);
+    std::cout << benchmark(kernel, info) << std::endl;;
   }
 
 private:

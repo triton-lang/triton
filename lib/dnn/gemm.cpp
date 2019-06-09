@@ -62,8 +62,8 @@ std::string gemm::src(bool AT, bool BT) {
   }
   std::string res =
 R"(
-const tunable int32 TM = {16};
-const tunable int32 TN = {16};
+const tunable int32 TM = {16, 32, 64, 128};
+const tunable int32 TN = {16, 32, 64, 128};
 const tunable int32 TK = {8};
 const tunable int32 GZ = {1};
 

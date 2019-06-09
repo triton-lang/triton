@@ -41,6 +41,7 @@ public:
   tile(llvm::Type *ty, const shapes_t &shapes): ty_(ty), shapes_(shapes){ }
   virtual void set_value(indices_t idx, llvm::Value *v) = 0;
   virtual llvm::Value* get_value(indices_t idx) = 0;
+  llvm::Type *get_ty() const { return ty_; }
 
 protected:
   llvm::Type *ty_;
@@ -59,6 +60,7 @@ public:
   void set_vector_size(unsigned vector_size);
   void set_return_mode(bool return_vector);
   void set_value(indices_t, llvm::Value *);
+  llvm::Value* get_ptr_to(indices_t idx);
   llvm::Value* get_value(indices_t idx);
   llvm::Value* get_pointer() { return ptr_; }
   llvm::Value* get_offset() { return offset_; }
