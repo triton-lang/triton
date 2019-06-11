@@ -243,10 +243,12 @@ std::string cu_module::compile_llvm_module(llvm::Module* module) {
   layout += "-i64:64-i128:128-v16:16-v32:32-n16:32:64";
   // create
   llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_75", layout, buffer, "", Assembly);
+  module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_70", layout, buffer, "", Assembly);
   std::string result(buffer.begin(), buffer.end());
-  std::string to_replace = ".version 6.3";
-  result.replace(result.find(to_replace), to_replace.size(), ".version 6.4");
+  size_t start_replace = result.find(".version");
+  size_t end_replace = result.find('\n', start_replace);
+  assert(start_replace != std::string::npos);
+  result.replace(start_replace, end_replace - start_replace, ".version 6.4");
   return result;
 }
 

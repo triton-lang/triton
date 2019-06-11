@@ -29,7 +29,8 @@ void distributed_tile::init_indices() {
     indices_t current;
     for(size_t d = 0; d < id.size(); d++)
       current.push_back(axes_[d].values[id[d]]);
-    indices_[current] = indices_.size();
+    size_t sz = indices_.size();
+    indices_[current] = sz;
     values_[current] = UndefValue::get(ty_);
     ordered_indices_.push_back(current);
     id[0]++;
@@ -840,10 +841,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         unsigned id = linear / vector_size;
         if(linear % vector_size == 0)
           packets[id] = result->get_value(idx);
-      });
-      in->for_each([&](indices_t idx){
-        unsigned linear = in->get_linear_index(idx);
-        unsigned id = linear / vector_size;
         packets[id] = builder.CreateInsertElement(packets.at(id), in->get_value(idx), linear % vector_size);
       });
       result->for_each([&](indices_t idx){
