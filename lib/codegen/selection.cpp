@@ -612,8 +612,9 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   std::vector<unsigned> shapes;
   for(ir::constant_int* shape: cshapes)
     shapes.push_back(shape->get_value());
-  if(alloc_->is_ld_padded(v))
-    shapes[0] += 4;
+  unsigned pad = alloc_->is_ld_padded(v);
+  if(pad > 0)
+    shapes[0] += pad;
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), ctx);
   // create shared tile
   if(buffer_info_->is_shared(v)){
@@ -1039,6 +1040,23 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           result->set_value(idx, res);
         });
       }
+    }
+    else if(auto *ld = dynamic_cast<ir::load_inst*>(ins)){
+      unsigned vector_size = result->axis(0).contiguous;
+      std::map<unsigned, Value*> packets;
+      distributed_tile *TP = (distributed_tile*)tmap_.at(ld->get_pointer_operand());
+      result->for_each([&](indices_t idx){
+        set_mask_insert_pt(idx);
+        unsigned linear = result->get_linear_index(idx);
+        unsigned id = linear / vector_size;
+        if(linear % vector_size == 0){
+          Value *ptr = TP->get_value(idx);
+          ptr= builder.CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
+                                                           ptr->getType()->getPointerAddressSpace()));
+          packets[id] = builder.CreateLoad(ptr);
+        }
+        result->set_value(idx, builder.CreateExtractElement(packets.at(id), linear % vector_size));
+      });
     }
     // element-wise
     else {

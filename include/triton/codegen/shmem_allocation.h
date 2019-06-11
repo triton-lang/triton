@@ -18,15 +18,16 @@ class layout;
 class target_tuner;
 class shmem_liveness;
 class shmem_info;
+class tune;
 
 class shmem_allocation {
 public:
-  shmem_allocation(shmem_liveness *live, shmem_info *buffer_info)
-    : liveness_(live), buffer_info_(buffer_info){ }
+  shmem_allocation(shmem_liveness *live, shmem_info *buffer_info, tune *params)
+    : liveness_(live), buffer_info_(buffer_info), params_(params){ }
 
   // utilities
   unsigned get_num_bytes(ir::value *x);
-  bool is_ld_padded(ir::value* x);
+  unsigned is_ld_padded(ir::value* x);
 
   // accessors
   unsigned get_offset(ir::value *x)    const { return offsets_.at(x); }
@@ -42,6 +43,7 @@ private:
   // dependences
   shmem_liveness *liveness_;
   shmem_info *buffer_info_;
+  tune *params_;
 };
 
 }
