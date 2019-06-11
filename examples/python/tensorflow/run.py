@@ -3,7 +3,7 @@ import tensorflow as tf
 import numpy as np
 from time import time
 data_files_path = tf.resource_loader.get_data_files_path()
-library_dir = '/home/philippe/development/triton/build/examples/python/tensorflow'
+library_dir = os.path.dirname(os.path.realpath(__file__))
 module = tf.load_op_library(os.path.join(library_dir, 'libtf_blocksparse.so'))
 
 M, N, K = 256,256,256

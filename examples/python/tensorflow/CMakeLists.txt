@@ -7,4 +7,9 @@ if(${TensorFlow_FOUND})
   add_definitions(-D_GLIBCXX_USE_CXX11_ABI=${TF_ABI})
   add_library(tf_blocksparse SHARED dot.cpp)
   target_link_libraries(tf_blocksparse tensorflow_framework triton)
+  add_custom_command(
+          TARGET tf_blocksparse POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy
+                  ${CMAKE_CURRENT_SOURCE_DIR}/run.py
+                  ${CMAKE_CURRENT_BINARY_DIR}/run.py)
 endif()
