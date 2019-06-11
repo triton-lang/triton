@@ -6,8 +6,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # FLEX/YACC
 find_package(BISON)
 find_package(FLEX)
-BISON_TARGET(Parser ${CMAKE_CURRENT_SOURCE_DIR}/include/triton/lang/parser.y ${CMAKE_CURRENT_BINARY_DIR}/parser.cpp)
-FLEX_TARGET(Lexer ${CMAKE_CURRENT_SOURCE_DIR}/include/triton/lang/scanner.l ${CMAKE_CURRENT_BINARY_DIR}/scanner.cpp)
+BISON_TARGET(Parser ${CMAKE_CURRENT_SOURCE_DIR}/include/triton/lang/parser.y ${CMAKE_CURRENT_SOURCE_DIR}/lib/lang/parser.cpp)
+FLEX_TARGET(Lexer ${CMAKE_CURRENT_SOURCE_DIR}/include/triton/lang/scanner.l ${CMAKE_CURRENT_SOURCE_DIR}/lib/lang/scanner.cpp)
 get_filename_component(BISON_Parser_INCLUDE_DIRECTORIES ${BISON_Parser_OUTPUT_HEADER} DIRECTORY)
 include_directories(${BISON_Parser_INCLUDE_DIRECTORIES})
 

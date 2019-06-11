@@ -21,9 +21,9 @@ using GPUDevice = Eigen::GpuDevice;
 
 const char* src =
 R"(
-const tunable int32 TM = {8, 16, 32, 64, 128};
-const tunable int32 TN = {8, 16, 32, 64, 128};
-const tunable int32 TK = {8};
+const tunable int32 TM = {64, 128};
+const tunable int32 TN = {64, 128};
+const tunable int32 TK = {32};
 const tunable int32 GZ = {1};
 
 void matmul(restrict read_only fp16 *A, restrict read_only fp16 *B,
@@ -37,20 +37,14 @@ void matmul(restrict read_only fp16 *A, restrict read_only fp16 *B,
   int32 rka[TK] = 0 ... TK;
   int32 rkb[TK] = 0 ... TK;
   fp32 c[TM, TN] = 0;
-  int32 div = K / GZ;
-  int32 rem = K % GZ;
-  K = select(rz < rem, div - 1, div);
-  int32 offk = select(rz < rem, rz*(div + 1), rz*div + rem);
-  fp16* pa[TM, TK] = A + (offk + rka[newaxis, :])*lda + rxa[:, newaxis];
-  fp16* pb[TN, TK] = B + (offk + rkb[newaxis, :])*ldb + ryb[:, newaxis];
-  fp16 a[TM, TK] = *pa;
-  fp16 b[TN, TK] = *pb;
-  for(int32 k = K; k > 0; k = k - TK){
+  fp16* pa[TM, TK] = A + rka[newaxis, :]*lda + rxa[:, newaxis];
+  fp16* pb[TN, TK] = B + rkb[newaxis, :]*ldb + ryb[:, newaxis];
+  for(int32 k = K; k > TK; k = k - TK){
+    fp16 a[TM, TK] = *pa;
+    fp16 b[TN, TK] = *pb;
     c = dot(a, trans(b), c);
     pa = pa + TK*lda;
     pb = pb + TK*ldb;
-    a = *pa;
-    b = *pb;
   }
   int32 rxc[TM] = get_global_range[TM](0);
   int32 ryc[TN] = get_global_range[TN](1);
@@ -123,10 +117,10 @@ class BlockSparseGemmOp : public OpKernel {
       return  2.*M*N*K / ts * 1e-3;
     };
     // just-in-time compile source-code
-//    jit.autotune("matmul", src, benchmark);
+    jit.autotune("matmul", src, benchmark);
 //    jit.add_module("matmul", src, {4, 2, 8, 4, 2, 32, 1, 4, 1, 1, 8, 8, 8, 1});
 //    jit.add_module("matmul", src, {32, 2, 128, 32, 2, 128, 2, 2, 2, 2, 4, 8, 4, 1});
-    jit.add_module("matmul", src, {16, 4, 128, 32, 4, 128, 2, 2, 2, 2, 8, 8, 4, 1});
+    jit.add_module("matmul", src, {16, 4, 128, 16, 4, 128, 2, 2, 2, 2, 8, 32, 8, 1});
     triton::driver::kernel* kernel = jit.get_function("matmul");
     triton::jit::launch_information info = jit.get_launch_info("matmul");
     std::cout << benchmark(kernel, info) << std::endl;;
