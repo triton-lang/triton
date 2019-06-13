@@ -23,7 +23,7 @@ const char* src =
 R"(
 const tunable int32 TM = {64, 128};
 const tunable int32 TN = {64, 128};
-const tunable int32 TK = {32};
+const tunable int32 TK = {16};
 const tunable int32 GZ = {1};
 
 void matmul(restrict read_only fp16 *A, restrict read_only fp16 *B,
@@ -117,7 +117,7 @@ class BlockSparseGemmOp : public OpKernel {
       return  2.*M*N*K / ts * 1e-3;
     };
     // just-in-time compile source-code
-//    jit.autotune("matmul", src, benchmark);
+    jit.autotune("matmul", src, benchmark);
 //    jit.add_module("matmul", src, {4, 2, 8, 4, 2, 32, 1, 4, 1, 1, 8, 8, 8, 1});
 //    jit.add_module("matmul", src, {32, 2, 128, 32, 2, 128, 2, 2, 2, 2, 4, 8, 4, 1});
     jit.add_module("matmul", src, {16, 4, 128, 16, 4, 128, 2, 2, 2, 2, 8, 32, 8, 1});
