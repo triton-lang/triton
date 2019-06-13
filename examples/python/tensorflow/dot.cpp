@@ -39,7 +39,7 @@ void matmul(restrict read_only fp16 *A, restrict read_only fp16 *B,
   fp32 c[TM, TN] = 0;
   fp16* pa[TM, TK] = A + rka[newaxis, :]*lda + rxa[:, newaxis];
   fp16* pb[TN, TK] = B + rkb[newaxis, :]*ldb + ryb[:, newaxis];
-  for(int32 k = K; k > TK; k = k - TK){
+  for(int32 k = K; k > 0; k = k - TK){
     fp16 a[TM, TK] = *pa;
     fp16 b[TN, TK] = *pb;
     c = dot(a, trans(b), c);
@@ -117,7 +117,7 @@ class BlockSparseGemmOp : public OpKernel {
       return  2.*M*N*K / ts * 1e-3;
     };
     // just-in-time compile source-code
-    jit.autotune("matmul", src, benchmark);
+//    jit.autotune("matmul", src, benchmark);
 //    jit.add_module("matmul", src, {4, 2, 8, 4, 2, 32, 1, 4, 1, 1, 8, 8, 8, 1});
 //    jit.add_module("matmul", src, {32, 2, 128, 32, 2, 128, 2, 2, 2, 2, 4, 8, 4, 1});
     jit.add_module("matmul", src, {16, 4, 128, 16, 4, 128, 2, 2, 2, 2, 8, 32, 8, 1});

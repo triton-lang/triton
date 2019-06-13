@@ -480,67 +480,82 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
   else {
     Value *_1 = builder.getInt32(1);
     Value *_2 = builder.getInt32(2);
+    Value *_3 = builder.getInt32(3);
     Value *_4 = builder.getInt32(4);
     Value *_8 = builder.getInt32(8);
     Value *_16 = builder.getInt32(16);
 
-    // warp tile size
+    // fragments per warp
     unsigned fpw_0 = params_->get_param(v, "fpw.d0")->get_value();
     unsigned fpw_1 = params_->get_param(v, "fpw.d1")->get_value();
-    unsigned wts_0 = fpw_0 * 8;
-    unsigned wts_1 = fpw_1 * 8;
-    Value *warp_tile_size_0 = builder.getInt32(wts_0);
-    Value *warp_tile_size_1 = builder.getInt32(wts_1);
-
-    /* intra warp offset */
-    Value *qpa_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4); // quad pair id
-    Value *qpb_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), builder.CreateUDiv(_16, builder.getInt32(fpw_1))); // quad pair id
-    // B ofsets
-    Value *qpb_off = builder.CreateURem(builder.CreateMul(qpb_id, _8), warp_tile_size_1); // offset of quad pair in warp
-    // A offsets
-    Value *qa_off = builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), _4);// offset of quad in pair
-    Value *qpa_off = builder.CreateURem(builder.CreateMul(qpa_id, _8), warp_tile_size_0); // offset of LHS quad pair in warp
-
-    /* inter warp offset */
+    // warps per tile
     unsigned wpt_0 = params_->get_param(v, "wpt.d0")->get_value();
     unsigned wpt_1 = params_->get_param(v, "wpt.d1")->get_value();
+    // hmma warp tile size
+    unsigned hmma_wts_0 = fpw_0 * 8;
+    unsigned hmma_wts_1 = fpw_1 * 8;
+    // hmma block tile size
+    unsigned hmma_bts_0 = hmma_wts_0 * wpt_0;
+    unsigned hmma_bts_1 = hmma_wts_1 * wpt_1;
+    // number of repetition
+    unsigned num_rep_0 = shapes[0]->get_value() / hmma_bts_0;
+    unsigned num_rep_1 = shapes[1]->get_value() / hmma_bts_1;
+    // size of each pack (interleaving)
+    pack_size_0_ = 1;
+    pack_size_1_ = 1;
+    // number of packs (interleaving)
+    num_packs_0_ = num_rep_0 / pack_size_0_;
+    num_packs_1_ = num_rep_1 / pack_size_1_;
+
+
+    /* intra warp offset */
+    // offset of quad in pair
+    Value *in_pair_off_a = builder.CreateMul(builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), builder.getInt32(4)), builder.getInt32(pack_size_0_));
+    Value *in_pair_off_b = builder.CreateMul(builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), builder.getInt32(4)), builder.getInt32(pack_size_1_));
+    // Quad pair id
+    Value *pair_a_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4);
+    Value *pair_b_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), builder.CreateUDiv(_16, builder.getInt32(fpw_1)));
+    // Quad pair offset
+    Value *pair_a_off = builder.CreateURem(builder.CreateMul(pair_a_id, builder.getInt32(8 * pack_size_0_)), builder.getInt32(hmma_wts_0 * pack_size_0_));
+    Value *pair_b_off = builder.CreateURem(builder.CreateMul(pair_b_id, builder.getInt32(8 * pack_size_1_)), builder.getInt32(hmma_wts_1 * pack_size_1_));
+
+    /* inter warp offset */
     Value *warp_id_0 = builder.CreateURem(u_warp_id, builder.getInt32(wpt_0));
     Value *warp_id_1 = builder.CreateUDiv(u_warp_id, builder.getInt32(wpt_0));
-    Value *warp_offset_i = builder.CreateMul(warp_id_0, warp_tile_size_0);
-    Value *warp_offset_j = builder.CreateMul(warp_id_1, warp_tile_size_1);
+    Value *warp_offset_i = builder.CreateMul(warp_id_0, builder.getInt32(hmma_wts_0 * pack_size_0_));
+    Value *warp_offset_j = builder.CreateMul(warp_id_1, builder.getInt32(hmma_wts_1 * pack_size_1_));
 
-    // offset_i = (tid & 1) + (tid & 4)*2 + (tid & 16)/4
-    Value *offset_i = builder.CreateAdd(warp_offset_i,
-                              builder.CreateAdd(builder.CreateAnd(u_thread_id, _1),
-                              builder.CreateAdd(qpa_off, qa_off)));
+    /* offsets */
+    // a offset
+    offset_a_i_ = builder.CreateAdd(warp_offset_i, builder.CreateAdd(pair_a_off, in_pair_off_a));
+    offset_a_k_ = builder.CreateAnd(u_thread_id, _3);
+    // b offsets
+    offset_b_j_ = builder.CreateAdd(warp_offset_j, builder.CreateAdd(pair_b_off, in_pair_off_b));
+    offset_b_k_ = builder.CreateAnd(u_thread_id, _3);
+    // c offsets
+    Value *offset_c_i = builder.CreateAdd(builder.CreateAnd(u_thread_id, _1), offset_a_i_);
+    Value *offset_c_j = builder.CreateAdd(warp_offset_j,
+                                          builder.CreateAdd(builder.CreateAnd(u_thread_id, _2),
+                                          pair_b_off));
 
-    // repetitions
-    unsigned stride_rep_i = wpt_0 * wts_0;
-    unsigned stride_rep_j = wpt_1 * wts_1;
-
-    // idx_i
+    /* indices */
+    // i indices
     std::vector<Value*> idx_i;
-    for(unsigned base_i = 0; base_i < shapes[0]->get_value(); base_i += stride_rep_i)
+    for(unsigned pack = 0; pack < num_packs_0_; pack++)
+    for(unsigned ii = 0; ii < pack_size_0_; ii++)
     for(unsigned i = 0; i < 2; i++){
-      idx_i.push_back(builder.CreateAdd(offset_i, builder.getInt32(base_i + i*2)));
+      idx_i.push_back(builder.CreateAdd(offset_c_i, builder.getInt32(pack*hmma_bts_0*pack_size_0_ + ii*4 + i*2)));
     }
-
-    // offset_j = tid & 2 + tid & 8
-    Value *offset_j = builder.CreateAdd(warp_offset_j,
-                                        builder.CreateAdd(builder.CreateAnd(u_thread_id, _2),
-                                        qpb_off));
-
-
-    // idx_j
+    // j indices
     std::vector<Value*> idx_j;
-    for(unsigned base_j = 0; base_j < shapes[1]->get_value(); base_j += stride_rep_j)
+    for(unsigned pack = 0; pack < num_packs_1_; pack++)
+    for(unsigned jj = 0; jj < pack_size_1_; jj++)
     for(unsigned j = 0; j < 2; j++){
-      idx_j.push_back(builder.CreateAdd(offset_j, builder.getInt32(base_j + j*4)));
-      idx_j.push_back(builder.CreateAdd(offset_j, builder.getInt32(base_j + j*4 + 1)));
+      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*8 + j*4)));
+      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*8 + j*4 + 1)));
     }
 
-
-
+    /* axes */
     axes_[params_->get_param_group(v, 0)] = distributed_axis{1, idx_i};
     axes_[params_->get_param_group(v, 1)] = distributed_axis{1, idx_j};
   }
@@ -910,55 +925,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           TB->set_vector_size(4);
           TA->set_return_mode(true);
           TB->set_return_mode(true);
-          Value *_0 = builder.getInt32(0);
-          Value *_1 = builder.getInt32(1);
-          Value *_2 = builder.getInt32(2);
-          Value *_3 = builder.getInt32(3);
-          Value *_4 = builder.getInt32(4);
-          Value *_8 = builder.getInt32(8);
-          Value *_16 = builder.getInt32(16);
-          unsigned fpw_0 = params_->get_param(dot, "fpw.d0")->get_value();
-          unsigned fpw_1 = params_->get_param(dot, "fpw.d1")->get_value();
-          unsigned wts_0 = fpw_0 * 8;
-          unsigned wts_1 = fpw_1 * 8;
-          Value *warp_tile_size_0 = builder.getInt32(wts_0);
-          Value *warp_tile_size_1 = builder.getInt32(wts_1);
-
-          BasicBlock *current = builder.GetInsertBlock();
-          Module *module = current->getModule();
-          Value *tid = tgt_->get_local_id(module, builder, 0);
-          Value *u_thread_id = builder.CreateURem(tid, builder.getInt32(32));
-          Value *u_warp_id = builder.CreateUDiv(tid, builder.getInt32(32));
-
-          /* intra-warp offset */
-          Value *qpa_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4); // quad pair id
-          Value *qpb_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), builder.CreateUDiv(_16, builder.getInt32(fpw_1))); // quad pair id
-          Value *qpa_off = builder.CreateURem(builder.CreateMul(qpa_id, _8), warp_tile_size_0); // offset of LHS quad pair in warp
-          Value *qpb_off = builder.CreateURem(builder.CreateMul(qpb_id, _8), warp_tile_size_1); // offset of quad pair in warp
-          Value *q_off = builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), _4);// offset of quad in pair
-
-          /* inter-warp offset */
-          unsigned wpt_0 = params_->get_param(dot, "wpt.d0")->get_value();
-          unsigned wpt_1 = params_->get_param(dot, "wpt.d1")->get_value();
-          Value *warp_id_0 = builder.CreateURem(u_warp_id, builder.getInt32(wpt_0));
-          Value *warp_id_1 = builder.CreateUDiv(u_warp_id, builder.getInt32(wpt_0));
-          Value *warp_offset_i = builder.CreateMul(warp_id_0, warp_tile_size_0);
-          Value *warp_offset_j = builder.CreateMul(warp_id_1, warp_tile_size_1);
-
-          /* repetitions */
-          unsigned stride_rep_i = wpt_0 * wts_0;
-          unsigned stride_rep_j = wpt_1 * wts_1;
-
-          // offset_a_i = (tid & 4)*2 + (tid & 16)/4;
-          // offset_a_k = (tid & 3)
-          Value *offset_a_i = builder.CreateAdd(warp_offset_i, builder.CreateAdd(qpa_off, q_off));
-          Value *offset_a_k = builder.CreateAnd(u_thread_id, _3);
-
-          // offset_b_i = (tid & 8)*1 + (tid & 16)/4
-          // offset_b_k = (tid & 3)
-          Value *offset_b_i = builder.CreateAdd(warp_offset_j, builder.CreateAdd(qpb_off, q_off));
-          Value *offset_b_k = builder.CreateAnd(u_thread_id, _3);
-
 
           std::vector<Value *> fc;
           result->for_each([&](indices_t idx){
@@ -976,30 +942,40 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
                                                      "{$10, $11}, "
                                                      "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
 
+          unsigned fpw_0 = params_->get_param(dot, "fpw.d0")->get_value();
+          unsigned fpw_1 = params_->get_param(dot, "fpw.d1")->get_value();
+          unsigned wts_0 = fpw_0 * 8;
+          unsigned wts_1 = fpw_1 * 8;
+          unsigned wpt_0 = params_->get_param(dot, "wpt.d0")->get_value();
+          unsigned wpt_1 = params_->get_param(dot, "wpt.d1")->get_value();
+          unsigned stride_rep_i = wpt_0 * wts_0;
+          unsigned stride_rep_j = wpt_1 * wts_1;
           unsigned num_rep_i = shapes[0]->get_value() / stride_rep_i;
           unsigned num_rep_j = shapes[1]->get_value() / stride_rep_j;
           unsigned ld_fc = num_rep_i * 2;
-          for(unsigned ii = 0; ii < num_rep_i; ii++)
-          for(unsigned jj = 0; jj < num_rep_j; jj++)
+          for(unsigned pack_i = 0; pack_i < num_packs_0_; pack_i++)
+          for(unsigned ii = 0; ii < pack_size_0_; ii++)
+          for(unsigned pack_j = 0; pack_j < num_packs_1_; pack_j++)
+          for(unsigned jj = 0; jj < pack_size_1_; jj++)
           for(unsigned K = 0; K < NK; K += 4){
             Value *_K = builder.getInt32(K);
-            Value *current_offset_a_i = builder.CreateAdd(offset_a_i, builder.getInt32(ii * stride_rep_i));
-            Value *current_offset_b_i = builder.CreateAdd(offset_b_i, builder.getInt32(jj * stride_rep_j));
-            Value *ha = TA->get_value({current_offset_a_i,                        builder.CreateAdd(offset_a_k, _K)});
-            Value *hb = TB->get_value({current_offset_b_i,                        builder.CreateAdd(offset_b_k, _K)});
+            Value *current_offset_a_i = builder.CreateAdd(offset_a_i_, builder.getInt32(pack_i*stride_rep_i*pack_size_0_ + ii*4));
+            Value *current_offset_b_i = builder.CreateAdd(offset_b_j_, builder.getInt32(pack_j*stride_rep_j*pack_size_1_ + jj*4));
+            Value *ha = TA->get_value({current_offset_a_i, builder.CreateAdd(offset_a_k_, _K)});
+            Value *hb = TB->get_value({current_offset_b_i, builder.CreateAdd(offset_b_k_, _K)});
             Value *ha0 = builder.CreateExtractElement(ha, builder.getInt32(0));
             Value *ha1 = builder.CreateExtractElement(ha, builder.getInt32(1));
             Value *hb0 = builder.CreateExtractElement(hb, builder.getInt32(0));
             Value *hb1 = builder.CreateExtractElement(hb, builder.getInt32(1));
             std::vector<size_t> idx = {
-              (ii*2 + 0) + (jj*4 + 0)*ld_fc,
-              (ii*2 + 0) + (jj*4 + 1)*ld_fc,
-              (ii*2 + 1) + (jj*4 + 0)*ld_fc,
-              (ii*2 + 1) + (jj*4 + 1)*ld_fc,
-              (ii*2 + 0) + (jj*4 + 2)*ld_fc,
-              (ii*2 + 0) + (jj*4 + 3)*ld_fc,
-              (ii*2 + 1) + (jj*4 + 2)*ld_fc,
-              (ii*2 + 1) + (jj*4 + 3)*ld_fc
+              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc
             };
             Value *nc = builder.CreateCall(mma_fn, {ha0, ha1, hb0, hb1, fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]], fc[idx[4]], fc[idx[5]], fc[idx[6]], fc[idx[7]]});
             fc[idx[0]] = builder.CreateExtractValue(nc, {0});
