@@ -1,4 +1,4 @@
-#include "triton/codegen/selection.h"
+﻿#include "triton/codegen/selection.h"
 #include "triton/codegen/tune.h"
 #include "triton/codegen/shmem_allocation.h"
 #include "triton/codegen/target.h"
@@ -501,8 +501,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     unsigned num_rep_0 = shapes[0]->get_value() / hmma_bts_0;
     unsigned num_rep_1 = shapes[1]->get_value() / hmma_bts_1;
     // size of each pack (interleaving)
-    pack_size_0_ = 1;
-    pack_size_1_ = 1;
+    pack_size_0_ = 2;
+    pack_size_1_ = 2;
     // number of packs (interleaving)
     num_packs_0_ = num_rep_0 / pack_size_0_;
     num_packs_1_ = num_rep_1 / pack_size_1_;
@@ -514,10 +514,12 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     Value *in_pair_off_b = builder.CreateMul(builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), builder.getInt32(4)), builder.getInt32(pack_size_1_));
     // Quad pair id
     Value *pair_a_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4);
-    Value *pair_b_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), builder.CreateUDiv(_16, builder.getInt32(fpw_1)));
+    Value *pair_b_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4);
+    pair_a_id = builder.CreateURem(pair_a_id, builder.getInt32(fpw_0));
+    pair_b_id = builder.CreateUDiv(pair_b_id, builder.getInt32(fpw_0));
     // Quad pair offset
-    Value *pair_a_off = builder.CreateURem(builder.CreateMul(pair_a_id, builder.getInt32(8 * pack_size_0_)), builder.getInt32(hmma_wts_0 * pack_size_0_));
-    Value *pair_b_off = builder.CreateURem(builder.CreateMul(pair_b_id, builder.getInt32(8 * pack_size_1_)), builder.getInt32(hmma_wts_1 * pack_size_1_));
+    Value *pair_a_off = builder.CreateMul(pair_a_id, builder.getInt32(8 * pack_size_0_));
+    Value *pair_b_off = builder.CreateMul(pair_b_id, builder.getInt32(8 * pack_size_1_));
 
     /* inter warp offset */
     Value *warp_id_0 = builder.CreateURem(u_warp_id, builder.getInt32(wpt_0));
@@ -534,9 +536,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     offset_b_k_ = builder.CreateAnd(u_thread_id, _3);
     // c offsets
     Value *offset_c_i = builder.CreateAdd(builder.CreateAnd(u_thread_id, _1), offset_a_i_);
-    Value *offset_c_j = builder.CreateAdd(warp_offset_j,
-                                          builder.CreateAdd(builder.CreateAnd(u_thread_id, _2),
-                                          pair_b_off));
+    Value *offset_c_j = builder.CreateAdd(builder.CreateAnd(u_thread_id, _2),
+                                          builder.CreateAdd(warp_offset_j, pair_b_off));
 
     /* indices */
     // i indices
@@ -551,8 +552,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     for(unsigned pack = 0; pack < num_packs_1_; pack++)
     for(unsigned jj = 0; jj < pack_size_1_; jj++)
     for(unsigned j = 0; j < 2; j++){
-      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*8 + j*4)));
-      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*8 + j*4 + 1)));
+      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*4 + j*4*pack_size_1_)));
+      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*4 + j*4*pack_size_1_ + 1)));
     }
 
     /* axes */
