@@ -159,6 +159,10 @@ private:
   shmem_info *buffer_info_;
   std::map<unsigned, distributed_axis> axes_;
   llvm::Value *sh_mem_ptr_;
+  llvm::Value *offset_a_i_, *offset_a_k_;
+  llvm::Value *offset_b_j_, *offset_b_k_;
+  unsigned num_packs_0_, num_packs_1_;
+  unsigned pack_size_0_, pack_size_1_;
 };
 
 }
