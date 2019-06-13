@@ -501,8 +501,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     unsigned num_rep_0 = shapes[0]->get_value() / hmma_bts_0;
     unsigned num_rep_1 = shapes[1]->get_value() / hmma_bts_1;
     // size of each pack (interleaving)
-    pack_size_0_ = 2;
-    pack_size_1_ = 2;
+    pack_size_0_ = std::min<unsigned>(num_rep_0, 2);
+    pack_size_1_ = std::min<unsigned>(num_rep_1, 2);
     // number of packs (interleaving)
     num_packs_0_ = num_rep_0 / pack_size_0_;
     num_packs_1_ = num_rep_1 / pack_size_1_;
@@ -922,8 +922,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         }
         else
         {
-          TA->set_vector_size(4);
-          TB->set_vector_size(4);
+          TA->set_vector_size(4*pack_size_0_);
+          TB->set_vector_size(4*pack_size_1_);
           TA->set_return_mode(true);
           TB->set_return_mode(true);
 
@@ -955,38 +955,40 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           unsigned num_rep_j = shapes[1]->get_value() / stride_rep_j;
           unsigned ld_fc = num_rep_i * 2;
           for(unsigned pack_i = 0; pack_i < num_packs_0_; pack_i++)
-          for(unsigned ii = 0; ii < pack_size_0_; ii++)
-          for(unsigned pack_j = 0; pack_j < num_packs_1_; pack_j++)
-          for(unsigned jj = 0; jj < pack_size_1_; jj++)
+          for(unsigned pack_j = 0; pack_j < num_packs_1_; pack_j++){
           for(unsigned K = 0; K < NK; K += 4){
             Value *_K = builder.getInt32(K);
-            Value *current_offset_a_i = builder.CreateAdd(offset_a_i_, builder.getInt32(pack_i*stride_rep_i*pack_size_0_ + ii*4));
-            Value *current_offset_b_i = builder.CreateAdd(offset_b_j_, builder.getInt32(pack_j*stride_rep_j*pack_size_1_ + jj*4));
+            Value *current_offset_a_i = builder.CreateAdd(offset_a_i_, builder.getInt32(pack_i*stride_rep_i*pack_size_0_));
+            Value *current_offset_b_i = builder.CreateAdd(offset_b_j_, builder.getInt32(pack_j*stride_rep_j*pack_size_1_));
             Value *ha = TA->get_value({current_offset_a_i, builder.CreateAdd(offset_a_k_, _K)});
             Value *hb = TB->get_value({current_offset_b_i, builder.CreateAdd(offset_b_k_, _K)});
-            Value *ha0 = builder.CreateExtractElement(ha, builder.getInt32(0));
-            Value *ha1 = builder.CreateExtractElement(ha, builder.getInt32(1));
-            Value *hb0 = builder.CreateExtractElement(hb, builder.getInt32(0));
-            Value *hb1 = builder.CreateExtractElement(hb, builder.getInt32(1));
-            std::vector<size_t> idx = {
-              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
-              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
-              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
-              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
-              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
-              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc,
-              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
-              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc
-            };
-            Value *nc = builder.CreateCall(mma_fn, {ha0, ha1, hb0, hb1, fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]], fc[idx[4]], fc[idx[5]], fc[idx[6]], fc[idx[7]]});
-            fc[idx[0]] = builder.CreateExtractValue(nc, {0});
-            fc[idx[1]] = builder.CreateExtractValue(nc, {1});
-            fc[idx[2]] = builder.CreateExtractValue(nc, {2});
-            fc[idx[3]] = builder.CreateExtractValue(nc, {3});
-            fc[idx[4]] = builder.CreateExtractValue(nc, {4});
-            fc[idx[5]] = builder.CreateExtractValue(nc, {5});
-            fc[idx[6]] = builder.CreateExtractValue(nc, {6});
-            fc[idx[7]] = builder.CreateExtractValue(nc, {7});
+            for(unsigned ii = 0; ii < pack_size_0_; ii++)
+            for(unsigned jj = 0; jj < pack_size_1_; jj++){
+              Value *ha0 = builder.CreateExtractElement(ha, builder.getInt32(ii*pack_size_0_ + 0));
+              Value *ha1 = builder.CreateExtractElement(ha, builder.getInt32(ii*pack_size_0_ + 1));
+              Value *hb0 = builder.CreateExtractElement(hb, builder.getInt32(jj*pack_size_0_ + 0));
+              Value *hb1 = builder.CreateExtractElement(hb, builder.getInt32(jj*pack_size_0_ + 1));
+              std::vector<size_t> idx = {
+                (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
+                (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
+                (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
+                (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
+                (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
+                (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc,
+                (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
+                (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc
+              };
+              Value *nc = builder.CreateCall(mma_fn, {ha0, ha1, hb0, hb1, fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]], fc[idx[4]], fc[idx[5]], fc[idx[6]], fc[idx[7]]});
+              fc[idx[0]] = builder.CreateExtractValue(nc, {0});
+              fc[idx[1]] = builder.CreateExtractValue(nc, {1});
+              fc[idx[2]] = builder.CreateExtractValue(nc, {2});
+              fc[idx[3]] = builder.CreateExtractValue(nc, {3});
+              fc[idx[4]] = builder.CreateExtractValue(nc, {4});
+              fc[idx[5]] = builder.CreateExtractValue(nc, {5});
+              fc[idx[6]] = builder.CreateExtractValue(nc, {6});
+              fc[idx[7]] = builder.CreateExtractValue(nc, {7});
+            }
+          }
           }
 
           // write back
