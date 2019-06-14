@@ -13,9 +13,9 @@ namespace codegen{
 
 unsigned shmem_allocation::is_ld_padded(ir::value *x) {
   if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
-    bool result = false;
+    unsigned result = 0;
     for(unsigned i = 0; i < phi->get_num_incoming(); i++)
-      result = result | is_ld_padded(phi->get_incoming_value(i));
+      result = std::max(result, is_ld_padded(phi->get_incoming_value(i)));
     return result;
   }
   if(dynamic_cast<ir::trans_inst*>(x))
@@ -23,11 +23,7 @@ unsigned shmem_allocation::is_ld_padded(ir::value *x) {
   for(ir::user* user: x->get_users())
     if(dynamic_cast<ir::dot_inst*>(user))
     if(params_->get_fragment(user, 0) == tune::HMMA_FRAGMENT_C){
-      if(x == user->get_operand(0)){
-        return 16;
-      }
-      else
-        return 16;
+      return 16;
     }
   return 0;
 }

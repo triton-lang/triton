@@ -160,12 +160,18 @@ Value* shared_tile::get_value(indices_t idx) {
     vector_size = vector_size / 2;
   }
   if(base_ptr == nullptr){
+//    BasicBlock* store = builder_.GetInsertBlock();
+//    if(!non_cst_idx.empty())
+//    if(isa<Instruction>(non_cst_idx.front())){
+//      builder_.SetInsertPoint((Instruction*)non_cst_idx.front());
+//    }
     base_ptr = builder_.CreateGEP(ptr_, shared_offset(non_cst_idx));
     if(vector_size_ > 1){
       Type *vec_ty = VectorType::get(ty, vector_size);
       Type *vec_ptr_ty = PointerType::get(vec_ty, base_ptr->getType()->getPointerAddressSpace());
       base_ptr = builder_.CreateBitCast(base_ptr, vec_ptr_ty);
     }
+//    builder_.SetInsertPoint(store);
   }
   Value *offset = shared_offset(cst_idx);
   Value *div = offset;
@@ -534,10 +540,6 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
 //    // b offsets
     offset_b_j_ = builder.CreateAdd(warp_offset_j, builder.CreateAdd(pair_b_off, in_pair_off_b));
     offset_b_k_ = builder.CreateAnd(u_thread_id, _3);
-//    offset_a_i_ = builder.getInt32(0);
-//    offset_a_k_ = builder.getInt32(0);
-//    offset_b_j_ = builder.getInt32(0);
-//    offset_b_k_ = builder.getInt32(0);
 
     // c offsets
     Value *offset_c_i = builder.CreateAdd(builder.CreateAnd(u_thread_id, _1), offset_a_i_);
@@ -957,7 +959,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           unsigned stride_rep_i = wpt_0 * wts_0;
           unsigned stride_rep_j = wpt_1 * wts_1;
           unsigned num_rep_i = shapes[0]->get_value() / stride_rep_i;
-          unsigned num_rep_j = shapes[1]->get_value() / stride_rep_j;
           unsigned ld_fc = num_rep_i * 2;
           for(unsigned pack_i = 0; pack_i < num_packs_0_; pack_i++)
           for(unsigned pack_j = 0; pack_j < num_packs_1_; pack_j++){
