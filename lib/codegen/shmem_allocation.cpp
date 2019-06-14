@@ -23,10 +23,11 @@ unsigned shmem_allocation::is_ld_padded(ir::value *x) {
   for(ir::user* user: x->get_users())
     if(dynamic_cast<ir::dot_inst*>(user))
     if(params_->get_fragment(user, 0) == tune::HMMA_FRAGMENT_C){
-      if(x == user->get_operand(0))
-        return 4;
+      if(x == user->get_operand(0)){
+        return 16;
+      }
       else
-        return 4;
+        return 16;
     }
   return 0;
 }
