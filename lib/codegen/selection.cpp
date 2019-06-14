@@ -501,8 +501,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     unsigned num_rep_0 = shapes[0]->get_value() / hmma_bts_0;
     unsigned num_rep_1 = shapes[1]->get_value() / hmma_bts_1;
     // size of each pack (interleaving)
-    pack_size_0_ = std::min<unsigned>(num_rep_0, 2);
-    pack_size_1_ = std::min<unsigned>(num_rep_1, 2);
+    pack_size_0_ = std::min<unsigned>(num_rep_0, 1);
+    pack_size_1_ = std::min<unsigned>(num_rep_1, 1);
     // number of packs (interleaving)
     num_packs_0_ = num_rep_0 / pack_size_0_;
     num_packs_1_ = num_rep_1 / pack_size_1_;
@@ -531,9 +531,14 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     // a offset
     offset_a_i_ = builder.CreateAdd(warp_offset_i, builder.CreateAdd(pair_a_off, in_pair_off_a));
     offset_a_k_ = builder.CreateAnd(u_thread_id, _3);
-    // b offsets
+//    // b offsets
     offset_b_j_ = builder.CreateAdd(warp_offset_j, builder.CreateAdd(pair_b_off, in_pair_off_b));
     offset_b_k_ = builder.CreateAnd(u_thread_id, _3);
+//    offset_a_i_ = builder.getInt32(0);
+//    offset_a_k_ = builder.getInt32(0);
+//    offset_b_j_ = builder.getInt32(0);
+//    offset_b_k_ = builder.getInt32(0);
+
     // c offsets
     Value *offset_c_i = builder.CreateAdd(builder.CreateAnd(u_thread_id, _1), offset_a_i_);
     Value *offset_c_j = builder.CreateAdd(builder.CreateAnd(u_thread_id, _2),
