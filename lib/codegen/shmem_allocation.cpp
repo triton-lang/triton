@@ -25,7 +25,7 @@ unsigned shmem_allocation::is_ld_padded(ir::value *x) {
     if(params_->get_fragment(user, 0) == tune::HMMA_FRAGMENT_C){
       return 16;
     }
-  return 0;
+  return 16;
 }
 
 unsigned shmem_allocation::get_num_bytes(ir::value *x) {
