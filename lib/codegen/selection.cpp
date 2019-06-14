@@ -510,16 +510,16 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
 
     /* intra warp offset */
     // offset of quad in pair
-    Value *in_pair_off_a = builder.CreateMul(builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), builder.getInt32(4)), builder.getInt32(pack_size_0_));
-    Value *in_pair_off_b = builder.CreateMul(builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), builder.getInt32(4)), builder.getInt32(pack_size_1_));
+    Value *in_pair_off_a = builder.CreateMul(builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), builder.getInt32(4)), builder.getInt32(fpw_0 * pack_size_0_));
+    Value *in_pair_off_b = builder.CreateMul(builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), builder.getInt32(4)), builder.getInt32(fpw_1 * pack_size_1_));
     // Quad pair id
     Value *pair_a_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4);
     Value *pair_b_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4);
     pair_a_id = builder.CreateURem(pair_a_id, builder.getInt32(fpw_0));
     pair_b_id = builder.CreateUDiv(pair_b_id, builder.getInt32(fpw_0));
     // Quad pair offset
-    Value *pair_a_off = builder.CreateMul(pair_a_id, builder.getInt32(8 * pack_size_0_));
-    Value *pair_b_off = builder.CreateMul(pair_b_id, builder.getInt32(8 * pack_size_1_));
+    Value *pair_a_off = builder.CreateMul(pair_a_id, builder.getInt32(4 * pack_size_0_));
+    Value *pair_b_off = builder.CreateMul(pair_b_id, builder.getInt32(4 * pack_size_1_));
 
     /* inter warp offset */
     Value *warp_id_0 = builder.CreateURem(u_warp_id, builder.getInt32(wpt_0));
@@ -557,8 +557,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     for(unsigned pack = 0; pack < num_packs_1_; pack++)
     for(unsigned jj = 0; jj < pack_size_1_; jj++)
     for(unsigned j = 0; j < 2; j++){
-      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*4 + j*4*pack_size_1_)));
-      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*4 + j*4*pack_size_1_ + 1)));
+      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*4 + j*4*fpw_1*pack_size_1_)));
+      idx_j.push_back(builder.CreateAdd(offset_c_j, builder.getInt32(pack*hmma_bts_1*pack_size_1_ + jj*4 + j*4*fpw_1*pack_size_1_ + 1)));
     }
 
     /* axes */
