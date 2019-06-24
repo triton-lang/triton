@@ -3,7 +3,7 @@
 
 #include "node.h"
 #include <string>
-
+#include <iostream>
 
 namespace triton{
 
@@ -41,19 +41,45 @@ public:
 
 // Types
 class modifier: public node {
-
+public:
+  virtual bool is_cst_space() const { return false; }
+  virtual bool is_tunable() const { return false; }
+  virtual bool is_cst() const { return false; }
+  virtual void add_attr(ir::function* fn, size_t pos) = 0;
 };
 
-class storage_specifier: public node {
+class storage_specifier: public modifier {
 public:
   storage_specifier(STORAGE_SPEC_T value): value_(value) {}
   STORAGE_SPEC_T value() const { return value_; }
+  bool is_cst_space() const { return value_ == CONSTANT_SPACE_T; }
+  bool is_tunable() const { return value_ == TUNABLE_T; }
+  bool is_cst() const { return value_ == CONST_T; }
+  void add_attr(ir::function* fn, size_t pos);
 
 private:
   const STORAGE_SPEC_T value_;
 };
 
+class alignment_specifier: public modifier {
+public:
+  alignment_specifier(node* value): cst_((constant*)value) { }
+  void add_attr(ir::function* fn, size_t pos);
 
+private:
+  constant* cst_;
+};
+
+class multiple_of_specifier: public modifier {
+public:
+  multiple_of_specifier(node* value): cst_((constant*)value) {}
+  void add_attr(ir::function* fn, size_t pos);
+
+private:
+  constant* cst_;
+};
+
+// declaration specifier
 class declaration_specifier: public node{
 public:
   virtual ir::type* type(ir::module *mod) const = 0;
@@ -70,6 +96,7 @@ private:
   const TYPE_T ty_;
 };
 
+// declaration modifier
 class declaration_modifier: public declaration_specifier {
 public:
   declaration_modifier(node* mod, node *decl_spec)
@@ -91,7 +118,7 @@ public:
       decl_((declarator*)decl) { }
 
   ir::type* type(ir::module *mod) const;
-  std::vector<modifier*> storage() const;
+  std::vector<modifier*> modifiers() const;
   const identifier* id() const;
 
 public:

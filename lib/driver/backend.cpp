@@ -63,7 +63,7 @@ void backend::platforms::init() {
     cache_.push_back(new host_platform());
   }
   if(cache_.empty())
-    throw std::runtime_error("ISAAC: No backend available. Make sure CUDA is available in your library path");
+    throw std::runtime_error("Triton: No backend available. Make sure CUDA is available in your library path");
 }
 
 void backend::platforms::get(std::vector<platform *> &results) {
@@ -83,7 +83,7 @@ void backend::devices::init(std::vector<platform*> const & platforms) {
   for(driver::platform* pf: platforms)
     pf->devices(cache_);
   if(cache_.empty())
-    throw std::runtime_error("ISAAC: No device available. Make sure that your platform is configured properly");
+    throw std::runtime_error("Triton: No device available. Make sure that your platform is configured properly");
 }
 
 void backend::devices::get(std::vector<device*> &devs) {

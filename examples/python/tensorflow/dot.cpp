@@ -26,11 +26,12 @@ const tunable int32 TN = {64, 128};
 const tunable int32 TK = {16};
 const tunable int32 GZ = {1};
 
-void matmul(restrict read_only fp16 *A, restrict read_only fp16 *B,
-           fp32 *C,
-           int32 M, int32 N, int32 K,
-           int32 lda, int32 ldb, int32 ldc,
-           int32 *locks, int32 grid0, int32 grid1) {
+void matmul(restrict read_only align(4) fp16 *A,
+            restrict read_only align(4) fp16 *B,
+            align(4) fp32 *C,
+            int32 M, int32 N, int32 K,
+            int32 lda, int32 ldb, int32 ldc,
+            int32 *locks, int32 grid0, int32 grid1) {
   int32 rxa[TM] = get_global_range[TM](0);
   int32 ryb[TN] = get_global_range[TN](1);
   int32 rz = get_global_range[1](2);
@@ -119,7 +120,7 @@ class BlockSparseGemmOp : public OpKernel {
       return  2.*M*N*K / ts * 1e-3;
     };
 //     just-in-time compile source-code
-    jit.autotune("matmul", src, benchmark);
+//    jit.autotune("matmul", src, benchmark);
 //    jit.add_module("matmul", src, {4, 2, 8, 4, 2, 32, 1, 4, 1, 1, 8, 8, 8, 1});
 //    jit.add_module("matmul", src, {16, 4, 128, 16, 4, 128, 2, 2, 2, 2, 8, 32, 8, 1});
 //    jit.add_module("matmul", src, {8, 8, 128, 16, 8, 128, 2, 2, 2, 2, 16, 32, 8, 1 });
