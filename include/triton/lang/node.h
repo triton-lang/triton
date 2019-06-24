@@ -23,7 +23,7 @@ class identifier;
 class constant;
 class compound_statement;
 class initializer;
-class declaration_specifier;
+class modifier;
 class function;
 
 // Node
