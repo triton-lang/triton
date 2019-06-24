@@ -1074,11 +1074,12 @@ void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
   }
 }
 
-inline llvm::Attribute::AttrKind llvm_attr(ir::attribute_t attr) {
-  switch(attr){
-    case ir::noalias: return llvm::Attribute::NoAlias;
-    case ir::readonly: return llvm::Attribute::ReadOnly;
-    case ir::writeonly: return llvm::Attribute::WriteOnly;
+inline llvm::Attribute llvm_attr(llvm::LLVMContext& ctx, ir::attribute attr) {
+  switch(attr.get_kind()){
+    case ir::noalias: return llvm::Attribute::get(ctx, llvm::Attribute::NoAlias);
+    case ir::readonly: return llvm::Attribute::get(ctx, llvm::Attribute::ReadOnly);
+    case ir::writeonly: return llvm::Attribute::get(ctx, llvm::Attribute::WriteOnly);
+    case ir::aligned: return llvm::Attribute::get(ctx, llvm::Attribute::Alignment, attr.get_value());
     default: throw std::runtime_error("cannot convert ir::attribute_t to llvm::Attribute");
   }
 }
@@ -1101,6 +1102,7 @@ void selection::run(ir::module &src, Module &dst) {
 
   // iterate over functions
   for(ir::function *fn: src.get_function_list()) {
+
     // create LLVM function
     FunctionType *fn_ty = (FunctionType*)llvm_type(fn->get_fn_type(), dst_ctx);
     FunctionType *dst_fn_ty = fn_ty;
@@ -1114,18 +1116,16 @@ void selection::run(ir::module &src, Module &dst) {
       dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
       dst_fn_ty = FunctionType::get(dst_fn_ret_ty, dst_fn_args_ty, false);
     }
+
     // grid indices
     fn->get_fn_type()->get_return_ty();
     Function *dst_fn = Function::Create(dst_fn_ty, Function::ExternalLinkage, fn->get_name(), &dst);
 
-
-
-
     // set attributes
     for(auto attr_pair: fn->attrs()){
       unsigned id = attr_pair.first;
-      for(ir::attribute_t attr: attr_pair.second)
-        dst_fn->addAttribute(id, llvm_attr(attr));
+      for(ir::attribute attr: attr_pair.second)
+        dst_fn->addAttribute(id, llvm_attr(dst_ctx, attr));
     }
     tgt_->set_kernel(dst_builder, dst_ctx, &dst, dst_fn);
 

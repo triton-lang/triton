@@ -49,7 +49,7 @@ ir::type* parameter::type(ir::module *mod) const {
   return decl_->type(mod, spec_->type(mod), {});
 }
 
-std::vector<modifier*> parameter::storage() const {
+std::vector<modifier*> parameter::modifiers() const {
   return spec_->modifiers();
 }
 
@@ -87,7 +87,7 @@ ir::type* tile::type_impl(ir::module *mod, ir::type *type, storage_spec_vec_cons
 
 // Pointer
 ir::type* pointer::type_impl(ir::module*, ir::type *type, storage_spec_vec_const_ref_t storage) const{
-  auto is_cst = [](modifier* x){ return x->value() == CONSTANT_SPACE_T; };
+  auto is_cst = [](modifier* x){ return x->is_cst_space(); };
   bool is_ptr_to_const = std::find_if(storage.begin(), storage.end(), is_cst) != storage.end();
   return ir::pointer_type::get(type, is_ptr_to_const?4:1);
 }
@@ -137,7 +137,7 @@ ir::value* initializer::codegen(ir::module * mod) const{
   ir::type *ty = decl_->type(mod, spec_->type(mod), storage);
   std::string name = decl_->id()->name();
   ir::value *value = ir::undef_value::get(ty);
-  auto is_tunable = [](modifier* x){ return x->value() == TUNABLE_T; };
+  auto is_tunable = [](modifier* x){ return x->is_tunable(); };
   if(std::find_if(storage.begin(), storage.end(), is_tunable) != storage.end()){
     auto csts = dynamic_cast<list<constant*>*>((node*)expr_);
     if(csts == nullptr)
@@ -158,7 +158,7 @@ ir::value* initializer::codegen(ir::module * mod) const{
   mod->get_scope().types[name] = ty;
   if(auto *x = dynamic_cast<ir::alloc_const*>(value))
     mod->add_alloc(x);
-  auto is_cst = [](modifier* mod){ return mod->value() == CONST_T; };
+  auto is_cst = [](modifier* x){ return x->is_cst(); };
   if(std::find_if(storage.begin(), storage.end(), is_cst) != storage.end())
     mod->set_const(name);
   return value;
@@ -169,9 +169,9 @@ ir::type *type_name::type(ir::module *mod) const{
   return decl_->type(mod, spec_->type(mod), {});
 }
 
-/* Function definition */
-ir::attribute_t get_ir_attr(modifier* mod){
-  switch(mod->value()){
+/* Storage specifier */
+inline ir::attribute_kind_t get_ir_attr(STORAGE_SPEC_T spec){
+  switch(spec){
     case RESTRICT_T: return ir::noalias;
     case READONLY_T: return ir::readonly;
     case WRITEONLY_T: return ir::writeonly;
@@ -179,15 +179,31 @@ ir::attribute_t get_ir_attr(modifier* mod){
   }
 }
 
+void storage_specifier::add_attr(ir::function* fn, size_t pos) {
+  fn->add_attr(pos, ir::attribute(get_ir_attr(value_)));
+}
+
+/* Alignment specifier */
+void alignment_specifier::add_attr(ir::function* fn, size_t pos) {
+  fn->add_attr(pos, ir::attribute(ir::aligned, cst_->value()));
+}
+
+/* Multiple-Of specifier */
+void multiple_of_specifier::add_attr(ir::function* fn, size_t pos) {
+  fn->add_attr(pos, ir::attribute(ir::multiple_of, cst_->value()));
+}
+
+
+/* Function definition */
 ir::value* function_definition::codegen(ir::module *mod) const{
   ir::function_type *prototype = (ir::function_type*)header_->type(mod, spec_->type(mod), spec_->modifiers());
   const std::string &name = header_->id()->name();
   ir::function *fn = mod->get_or_insert_function(name, prototype);
   for(unsigned i = 0; i < header_->get_num_args(); i++){
     parameter *param = header_->get_arg(i);
-    std::vector<modifier*> storage = param->storage();
-    for(modifier* spec: storage)
-      fn->add_attr(1 + i, get_ir_attr(spec));
+    std::vector<modifier*> modifiers = param->modifiers();
+    for(modifier* m: modifiers)
+      m->add_attr(fn, 1 + i);
   }
   header_->bind_parameters(mod, fn);
   ir::basic_block *entry = ir::basic_block::create(mod->get_context(), "entry", fn);

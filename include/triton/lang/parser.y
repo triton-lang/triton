@@ -353,6 +353,8 @@ parameter_declaration
 declaration_specifiers
   : type_specifier                                 { $$ = new typed_declaration_specifier(get_type_spec($1)); }
   | storage_class_specifier declaration_specifiers { $$ = new declaration_modifier($1, $2); }
+  | alignment_class_specifier declaration_specifiers { $$ = new declaration_modifier($1, $2); }
+  | multiple_of_class_specifier declaration_specifiers { $$ = new declaration_modifier($1, $2); }
 	;
 
 init_declarator_list
@@ -384,6 +386,13 @@ storage_class_specifier
   | WRITEONLY       { $$ = new storage_specifier(WRITEONLY_T); }
   | CONSTANT_SPACE  { $$ = new storage_specifier(CONSTANT_SPACE_T); }
 ;
+
+alignment_class_specifier
+  : ALIGN '(' constant ')' { $$ = new alignment_specifier($3); }
+
+multiple_of_class_specifier
+  : MULTIPLE_OF '(' constant ')' { $$ = new multiple_of_specifier($3); }
+
 
 external_declaration
   : function_definition { $$ = $1; }

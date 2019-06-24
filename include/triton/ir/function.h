@@ -28,10 +28,34 @@ private:
 };
 
 /* Attribute */
-enum attribute_t {
+enum attribute_kind_t {
   readonly,
   writeonly,
-  noalias
+  noalias,
+  aligned,
+  multiple_of
+};
+
+class attribute {
+public:
+  attribute(attribute_kind_t kind, unsigned value = 0):
+    kind_(kind), value_(value){}
+
+  bool operator<(const attribute& other) const {
+    return std::make_pair(kind_, value_) < std::make_pair(other.kind_, other.value_);
+  }
+
+  const attribute_kind_t get_kind() const {
+    return kind_;
+  }
+
+  const unsigned get_value() const {
+    return value_;
+  }
+
+private:
+  attribute_kind_t kind_;
+  unsigned value_;
 };
 
 /* Function */
@@ -44,7 +68,7 @@ class function: public global_object{
   typedef blocks_t::iterator        block_iterator;
   typedef blocks_t::const_iterator  const_block_iterator;
 
-  typedef std::map<unsigned, std::set<attribute_t>> attr_map_t;
+  typedef std::map<unsigned, std::set<attribute>> attr_map_t;
 
 private:
   function(function_type *ty, linkage_types_t linkage,
@@ -63,7 +87,7 @@ public:
   void insert_block(basic_block* block, basic_block *next = nullptr);
 
   // attributes
-  void add_attr(unsigned arg_id, attribute_t attr) { attrs_[arg_id].insert(attr); }
+  void add_attr(unsigned arg_id, attribute attr) { attrs_[arg_id].insert(attr); }
   const attr_map_t &attrs() { return attrs_; }
 
 private:
