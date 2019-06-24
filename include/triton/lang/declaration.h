@@ -40,33 +40,48 @@ public:
 };
 
 // Types
+class modifier: public node {
+
+};
+
+class storage_specifier: public node {
+public:
+  storage_specifier(STORAGE_SPEC_T value): value_(value) {}
+  STORAGE_SPEC_T value() const { return value_; }
+
+private:
+  const STORAGE_SPEC_T value_;
+};
+
+
 class declaration_specifier: public node{
 public:
   virtual ir::type* type(ir::module *mod) const = 0;
-  virtual std::vector<STORAGE_SPEC_T> storage() const = 0;
+  virtual std::vector<modifier*> modifiers() const = 0;
 };
 
 class typed_declaration_specifier: public declaration_specifier {
 public:
   typed_declaration_specifier(TYPE_T ty): ty_(ty){ }
   ir::type* type(ir::module *mod) const;
-  std::vector<STORAGE_SPEC_T> storage() const;
+  std::vector<modifier*> modifiers() const;
 
 private:
   const TYPE_T ty_;
 };
 
-class storage_declaration_specifier: public declaration_specifier {
+class declaration_modifier: public declaration_specifier {
 public:
-  storage_declaration_specifier(STORAGE_SPEC_T storage_spec, node *decl_spec)
-    : storage_spec_(storage_spec), decl_spec_((declaration_specifier*)decl_spec) {}
+  declaration_modifier(node* mod, node *decl_spec)
+    : mod_((modifier*)mod), decl_spec_((declaration_specifier*)decl_spec) {}
   ir::type* type(ir::module *mod) const;
-  std::vector<STORAGE_SPEC_T> storage() const;
+  std::vector<modifier*> modifiers() const;
 
 private:
-  const STORAGE_SPEC_T storage_spec_;
+  modifier* mod_;
   const declaration_specifier* decl_spec_;
 };
+
 
 class declarator;
 class parameter: public node {
@@ -76,7 +91,7 @@ public:
       decl_((declarator*)decl) { }
 
   ir::type* type(ir::module *mod) const;
-  std::vector<STORAGE_SPEC_T> storage() const;
+  std::vector<modifier*> storage() const;
   const identifier* id() const;
 
 public:
@@ -87,7 +102,7 @@ public:
 /* Declarators */
 class declarator: public node{
 protected:
-  typedef std::vector<STORAGE_SPEC_T> storage_spec_vec_t;
+  typedef std::vector<modifier*> storage_spec_vec_t;
   typedef const storage_spec_vec_t& storage_spec_vec_const_ref_t;
 
 public:
