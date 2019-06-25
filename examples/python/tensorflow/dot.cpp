@@ -26,9 +26,9 @@ const tunable int32 TN = {64, 128};
 const tunable int32 TK = {16};
 const tunable int32 GZ = {1};
 
-void matmul(restrict read_only align(4) fp16 *A,
-            restrict read_only align(4) fp16 *B,
-            align(4) fp32 *C,
+void matmul(restrict read_only align(16) fp16 *A,
+            restrict read_only align(16) fp16 *B,
+            align(16) fp32 *C,
             int32 M, int32 N, int32 K,
             multiple_of(4) int32 lda, multiple_of(4) int32 ldb, multiple_of(4) int32 ldc,
             int32 *locks, int32 grid0, int32 grid1) {

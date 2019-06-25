@@ -25,6 +25,7 @@ class shmem_allocation;
 class tune;
 class shmem_info;
 class target;
+class axis_info;
 
 typedef std::vector<llvm::Value*> indices_t;
 
@@ -143,8 +144,8 @@ private:
   void lower_tile_instruction(ir::instruction *src, llvm::IRBuilder<> &builder);
 
 public:
-  selection(shmem_allocation *alloc, tune *params, shmem_info *buffer_info, target *tgt)
-    : alloc_(alloc), params_(params), buffer_info_(buffer_info), tgt_(tgt){ }
+  selection(shmem_allocation *alloc, tune *params, shmem_info *buffer_info, axis_info *ax_info, target *tgt)
+    : alloc_(alloc), params_(params), buffer_info_(buffer_info), axis_info_(ax_info), tgt_(tgt){ }
 
   void run(ir::module &src, llvm::Module &dst);
 
@@ -157,6 +158,7 @@ private:
   tune *params_;
   target *tgt_;
   shmem_info *buffer_info_;
+  axis_info *axis_info_;
   std::map<unsigned, distributed_axis> axes_;
   llvm::Value *sh_mem_ptr_;
   llvm::Value *offset_a_i_, *offset_a_k_;

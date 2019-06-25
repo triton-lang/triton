@@ -2,6 +2,7 @@
 #include "triton/codegen/tune.h"
 #include "triton/codegen/shmem_allocation.h"
 #include "triton/codegen/target.h"
+#include "triton/codegen/axis_info.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
@@ -1027,7 +1028,11 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       }
     }
     else if(auto *ld = dynamic_cast<ir::load_inst*>(ins)){
-      unsigned vector_size = result->axis(0).contiguous;
+      ir::value *ptr = ld->get_pointer_operand();
+      unsigned starting_multiple = axis_info_->get_starting_multiple(ptr);
+      unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
+      unsigned alignment = std::min(starting_multiple, max_contiguous);
+      unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
       std::map<unsigned, Value*> packets;
       distributed_tile *TP = (distributed_tile*)tmap_.at(ld->get_pointer_operand());
       result->for_each([&](indices_t idx){
