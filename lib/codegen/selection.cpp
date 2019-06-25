@@ -901,7 +901,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       bool AT = dot->is_a_trans();
       bool BT = dot->is_b_trans();
       distributed_tile *TC = (distributed_tile*)tmap_.at(C);
-      Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {llvm_type(C->get_type()->get_scalar_ty(), ctx)});
+      Type *c_ty = llvm_type(C->get_type()->get_scalar_ty(), ctx);
+      Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {c_ty});
       unsigned NK = A->get_type()->get_tile_shapes()[1]->get_value();
       if(NK != 1)
       {
@@ -922,6 +923,10 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
                 std::swap(b_idx[0], b_idx[1]);
               Value *a = TA->get_value(a_idx);
               Value *b = TB->get_value(b_idx);
+              if(a->getType() != c_ty)
+                a = builder.CreateFPCast(a, c_ty);
+              if(b->getType() != c_ty)
+                b = builder.CreateFPCast(b, c_ty);
               res = builder.CreateCall(f_mul_add, {a, b, res});
 
             }
@@ -1022,6 +1027,10 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
             std::swap(b_idx[0], b_idx[1]);
           Value *a = TA->get_value(a_idx);
           Value *b = TB->get_value(b_idx);
+          if(a->getType() != c_ty)
+            a = builder.CreateFPCast(a, c_ty);
+          if(b->getType() != c_ty)
+            b = builder.CreateFPCast(b, c_ty);
           res = builder.CreateCall(f_mul_add, {a, b, res});
           result->set_value(idx, res);
         });

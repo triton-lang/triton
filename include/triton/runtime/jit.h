@@ -57,21 +57,21 @@ public:
                       shmem_allocation(&shmem_liveness, &shmem_info, &tune),
                       shmem_barriers(&shmem_allocation, &shmem_info),
                       vectorize(&tune),
-                      selection(&shmem_allocation, &tune, &shmem_info, &axis_info, target),
+                      selection(&shmem_allocation, &tune, &shmem_info, &alignment_info, target),
                       optimize_dot(&tune),
                       optimize_cse(),
                       optimize_trans(),
-                      axis_info(),
+                      alignment_info(),
                       target_(target) { }
 
     void target_independent(ir::module &module) {
         optimize_dot.run(module);
         optimize_trans.run(module);
-        ir::print(module, std::cout);
+//        ir::print(module, std::cout);
     }
 
     void target_dependent(ir::module &module) {
-      axis_info.run(module);
+      alignment_info.run(module);
       if(target_->is_gpu()){
         shmem_info.run(module);
         shmem_liveness.run(module);
@@ -91,7 +91,7 @@ public:
     codegen::optimize_dot optimize_dot;
     codegen::optimize_cse optimize_cse;
     codegen::optimize_trans optimize_trans;
-    codegen::alignment_info axis_info;
+    codegen::alignment_info alignment_info;
     codegen::target* target_;
   };
 
