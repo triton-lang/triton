@@ -17,6 +17,7 @@
 #include "triton/codegen/shmem_liveness.h"
 #include "triton/codegen/shmem_info.h"
 #include "triton/codegen/shmem_barriers.h"
+#include "triton/codegen/axis_info.h"
 #include "triton/codegen/target.h"
 #include "triton/codegen/vectorize.h"
 #include <functional>
@@ -60,11 +61,13 @@ public:
                       optimize_dot(&tune),
                       optimize_cse(),
                       optimize_trans(),
+                      axis_info(),
                       target_(target) { }
 
     void target_independent(ir::module &module) {
         optimize_dot.run(module);
         optimize_trans.run(module);
+        axis_info.run(module);
 //        ir::print(module, std::cout);
     }
 
@@ -88,6 +91,7 @@ public:
     codegen::optimize_dot optimize_dot;
     codegen::optimize_cse optimize_cse;
     codegen::optimize_trans optimize_trans;
+    codegen::axis_info axis_info;
     codegen::target* target_;
   };
 

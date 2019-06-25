@@ -1125,6 +1125,7 @@ void selection::run(ir::module &src, Module &dst) {
     for(auto attr_pair: fn->attrs()){
       unsigned id = attr_pair.first;
       for(ir::attribute attr: attr_pair.second)
+      if(attr.is_llvm_attr())
         dst_fn->addAttribute(id, llvm_attr(dst_ctx, attr));
     }
     tgt_->set_kernel(dst_builder, dst_ctx, &dst, dst_fn);

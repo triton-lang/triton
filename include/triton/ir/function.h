@@ -5,6 +5,7 @@
 #include <map>
 #include "value.h"
 #include "constant.h"
+#include <iostream>
 
 namespace triton{
 namespace ir{
@@ -21,6 +22,8 @@ class argument: public value{
 public:
   static argument* create(type *ty, const std::string &name,
                           function *parent = nullptr, unsigned arg_no = 0);
+  function* get_parent() const;
+  unsigned get_arg_no() const;
 
 private:
   function *parent_;
@@ -51,6 +54,10 @@ public:
 
   const unsigned get_value() const {
     return value_;
+  }
+
+  bool is_llvm_attr() const {
+    return kind_ != multiple_of;
   }
 
 private:
@@ -89,6 +96,7 @@ public:
   // attributes
   void add_attr(unsigned arg_id, attribute attr) { attrs_[arg_id].insert(attr); }
   const attr_map_t &attrs() { return attrs_; }
+  std::set<attribute> get_attributes(argument* arg) { return attrs_[arg->get_arg_no() + 1]; }
 
 private:
   module *parent_;

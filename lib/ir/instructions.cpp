@@ -109,6 +109,31 @@ std::string binary_operator::repr_impl() const {
   }
 }
 
+bool binary_operator::is_int_div() const {
+  return op_ == llop::UDiv || op_ == llop::SDiv;
+}
+
+bool binary_operator::is_int_rem() const {
+  return op_ == llop::URem || op_ == llop::SRem;
+}
+
+bool binary_operator::is_shl() const {
+  return op_ == llop::Shl;
+}
+
+bool binary_operator::is_shr() const {
+  return op_ == llop::LShr || op_ == llop::AShr;
+}
+
+bool binary_operator::is_int_mult()    const {
+  return op_ == llop::Mul;
+}
+
+bool binary_operator::is_int_add_sub() const {
+  return op_ == llop::Add || llop::Sub;
+}
+
+
 binary_operator::binary_operator(op_t op, value *lhs, value *rhs, type *ty, const std::string &name, instruction *next)
     : instruction(ty, 2, 1, name, next), op_(op){
   set_operand(0, lhs);
