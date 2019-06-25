@@ -30,7 +30,7 @@ void matmul(restrict read_only align(4) fp16 *A,
             restrict read_only align(4) fp16 *B,
             align(4) fp32 *C,
             int32 M, int32 N, int32 K,
-            int32 lda, int32 ldb, int32 ldc,
+            multiple_of(4) int32 lda, multiple_of(4) int32 ldb, multiple_of(4) int32 ldc,
             int32 *locks, int32 grid0, int32 grid1) {
   int32 rxa[TM] = get_global_range[TM](0);
   int32 ryb[TN] = get_global_range[TN](1);

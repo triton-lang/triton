@@ -122,6 +122,12 @@ public:
   bool is_int_div_rem() const;
   bool is_shift()       const;
   bool is_cast()        const;
+  bool is_int_mult()    const;
+  bool is_int_add_sub() const;
+  bool is_int_div()     const;
+  bool is_int_rem()     const;
+  bool is_shl()         const;
+  bool is_shr()         const;
 
   // Wraps
   void set_has_no_unsigned_wrap(bool b = true) { has_no_unsigned_wrap_ = b; }

@@ -16,6 +16,15 @@ argument *argument::create(type *ty, const std::string &name,
   return new argument(ty, name, parent, arg_no);
 }
 
+function* argument::get_parent() const {
+  return parent_;
+}
+
+unsigned argument::get_arg_no() const {
+  return arg_no_;
+}
+
+
 /* function */
 function::function(function_type *ty, linkage_types_t linkage,
                    const std::string &name, module *parent)
