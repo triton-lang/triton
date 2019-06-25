@@ -22,8 +22,12 @@ bool is_hmma(ir::value *v){
     ir::type *a_ty = a->get_type();
     ir::value *b = x->get_operand(1);
     ir::type *b_ty = b->get_type();
+    // only NT supported
     result = !x->is_a_trans() && x->is_b_trans();
+    // inputs have to be FP16
     result = result && a_ty->get_scalar_ty()->is_half_ty() && b_ty->get_scalar_ty()->is_half_ty();
+    // reduction has to be multiple of 4
+    result = result && ((a_ty->get_tile_shapes()[1]->get_value() % 4) == 0);
   }
   return result;
 }
