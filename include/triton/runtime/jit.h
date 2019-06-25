@@ -17,7 +17,7 @@
 #include "triton/codegen/shmem_liveness.h"
 #include "triton/codegen/shmem_info.h"
 #include "triton/codegen/shmem_barriers.h"
-#include "triton/codegen/axis_info.h"
+#include "triton/codegen/alignment_info.h"
 #include "triton/codegen/target.h"
 #include "triton/codegen/vectorize.h"
 #include <functional>
@@ -91,7 +91,7 @@ public:
     codegen::optimize_dot optimize_dot;
     codegen::optimize_cse optimize_cse;
     codegen::optimize_trans optimize_trans;
-    codegen::axis_info axis_info;
+    codegen::alignment_info axis_info;
     codegen::target* target_;
   };
 

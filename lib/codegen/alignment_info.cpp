@@ -1,4 +1,4 @@
-#include "triton/codegen/axis_info.h"
+#include "triton/codegen/alignment_info.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -15,14 +15,14 @@ inline T add_to_cache(ir::value *i, T value, std::map<ir::value*, T> &map) {
 }
 
 
-bool axis_info::is_first_axis_unit(ir::value *x){
+bool alignment_info::is_first_axis_unit(ir::value *x){
   if(x->get_type()->is_tile_ty())
     return x->get_type()->get_tile_shapes()[0]->get_value() == 1;
   else
     return true;
 }
 
-bool axis_info::populate_is_constant(ir::value *v) {
+bool alignment_info::populate_is_constant(ir::value *v) {
   if(is_constant_.find(v) != is_constant_.end())
     return is_constant_.at(v);
   // helper for the cache
@@ -61,7 +61,7 @@ bool axis_info::populate_is_constant(ir::value *v) {
   return cache(true);
 }
 
-unsigned axis_info::populate_max_contiguous(ir::value *v){
+unsigned alignment_info::populate_max_contiguous(ir::value *v){
   if(max_contiguous_.find(v) != max_contiguous_.end())
     return max_contiguous_.at(v);
   // helper for the cache
@@ -128,7 +128,7 @@ unsigned axis_info::populate_max_contiguous(ir::value *v){
   return cache(1);
 }
 
-unsigned axis_info::populate_starting_multiple(ir::value *v){
+unsigned alignment_info::populate_starting_multiple(ir::value *v){
   if(starting_multiple_.find(v) != starting_multiple_.end())
     return starting_multiple_.at(v);
   auto cache = [this,v](unsigned value){ return add_to_cache(v, value, starting_multiple_); };
@@ -201,16 +201,16 @@ unsigned axis_info::populate_starting_multiple(ir::value *v){
   return cache(result);
 }
 
-unsigned axis_info::get_starting_multiple(ir::value* v) const {
+unsigned alignment_info::get_starting_multiple(ir::value* v) const {
   return starting_multiple_.at(v);
 }
 
-unsigned axis_info::get_max_contiguous(ir::value* v) const {
+unsigned alignment_info::get_max_contiguous(ir::value* v) const {
   return max_contiguous_.at(v);
 }
 
 
-void axis_info::run(ir::module &mod) {
+void alignment_info::run(ir::module &mod) {
   // populate constant
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())

@@ -2,7 +2,7 @@
 #include "triton/codegen/tune.h"
 #include "triton/codegen/shmem_allocation.h"
 #include "triton/codegen/target.h"
-#include "triton/codegen/axis_info.h"
+#include "triton/codegen/alignment_info.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"

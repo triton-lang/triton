@@ -1,5 +1,5 @@
-#ifndef TDL_INCLUDE_CODEGEN_AXIS_INFO_PASS_H
-#define TDL_INCLUDE_CODEGEN_AXIS_INFO_PASS_H
+#ifndef TDL_INCLUDE_CODEGEN_ALIGNMENT_INFO_PASS_H
+#define TDL_INCLUDE_CODEGEN_ALIGNMENT_INFO_PASS_H
 
 #include <set>
 #include <map>
@@ -13,7 +13,7 @@ namespace ir {
 
 namespace codegen{
 
-class axis_info {
+class alignment_info {
 private:
   // helpers
   bool is_first_axis_unit(ir::value *v);
