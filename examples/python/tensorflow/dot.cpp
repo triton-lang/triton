@@ -71,6 +71,7 @@ void matmul(restrict read_only align(16) fp16 *A,
 )";
 
 
+
 class BlockSparseGemmOp : public OpKernel {
  public:
   explicit BlockSparseGemmOp(OpKernelConstruction* context) : OpKernel(context) {
