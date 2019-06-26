@@ -166,7 +166,7 @@ std::vector<ir::metaparameter *> tune::get_params(ir::module &mod) {
   for(ir::instruction *i : block->get_inst_list())
   for(auto &x: params_[i])
     if(seen.insert(x.second).second && !x.second->has_value()){
-      std::cout << i->get_name() << " " << x.first << std::endl;
+//      std::cout << i->get_name() << " " << x.first << std::endl;
       result.push_back(x.second);
     }
 
@@ -233,13 +233,13 @@ void tune::run(ir::module &mod) {
       continue;
     if(dynamic_cast<ir::load_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty, 4, 4));
+      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty, 2, 4));
       *params_.at(i).at("nts.d0") = *tmp;
     }
     if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 4, 4));
-      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 4, 4));
+      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 2, 4));
+      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 2, 4));
       *params_.at(i).at("nts.d0") = *tmp1;
       *params_.at(i).at("nts.d1") = *tmp2;
     }
