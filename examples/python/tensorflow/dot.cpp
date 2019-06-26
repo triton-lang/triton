@@ -19,9 +19,9 @@
 using namespace tensorflow;
 using GPUDevice = Eigen::GpuDevice;
 
-class BlockSparseGemmOp : public OpKernel {
+class DotOp : public OpKernel {
  public:
-  explicit BlockSparseGemmOp(OpKernelConstruction* context) : OpKernel(context) {
+  explicit DotOp(OpKernelConstruction* context) : OpKernel(context) {
   }
 
   void Compute(OpKernelContext* context){
@@ -52,7 +52,6 @@ class BlockSparseGemmOp : public OpKernel {
     triton::driver::cu_buffer db(ctx, (CUdeviceptr)b.flat<Eigen::half>().data(), false);
     triton::driver::cu_buffer dc(ctx, (CUdeviceptr)c->flat<float>().data(), false);
     triton::driver::cu_buffer dlocks(ctx, (CUdeviceptr)locks.flat<int32_t>().data(), false);
-    stream->synchronize();
     // benchmark a given matrix multiplication kernel
     auto benchmark = [&](triton::driver::kernel* kernel,
                          triton::jit::launch_information info) {
@@ -85,7 +84,7 @@ class BlockSparseGemmOp : public OpKernel {
 private:
 };
 
-REGISTER_KERNEL_BUILDER(Name("Dot").Device(DEVICE_GPU), BlockSparseGemmOp);
+REGISTER_KERNEL_BUILDER(Name("Dot").Device(DEVICE_GPU), DotOp);
 REGISTER_OP("Dot")
     .Input("a: float16")
     .Input("b: float16")
