@@ -5,6 +5,7 @@
 #include "triton/driver/stream.h"
 #include "triton/runtime/jit.h"
 #include "triton/tools/bench.hpp"
+#include "triton/dnn/gemm.h"
 
 #define EIGEN_USE_GPU
 #include "tensorflow/core/framework/op.h"
@@ -17,60 +18,6 @@
 
 using namespace tensorflow;
 using GPUDevice = Eigen::GpuDevice;
-
-
-const char* src =
-R"(
-const tunable int32 TM = {64, 128};
-const tunable int32 TN = {64, 128};
-const tunable int32 TK = {16};
-const tunable int32 GZ = {1};
-
-void matmul(restrict read_only align(16) fp16 *A,
-            restrict read_only align(16) fp16 *B,
-            align(16) fp32 *C,
-            int32 M, int32 N, int32 K,
-            multiple_of(4) int32 lda, multiple_of(4) int32 ldb, multiple_of(4) int32 ldc,
-            int32 *locks, int32 grid0, int32 grid1) {
-  int32 rxa[TM] = get_global_range[TM](0);
-  int32 ryb[TN] = get_global_range[TN](1);
-  int32 rz = get_global_range[1](2);
-  int32 rka[TK] = 0 ... TK;
-  int32 rkb[TK] = 0 ... TK;
-  fp32 c[TM, TN] = 0;
-  fp16* pa[TM, TK] = A + rka[newaxis, :]*lda + rxa[:, newaxis];
-  fp16* pb[TN, TK] = B + rkb[newaxis, :]*ldb + ryb[:, newaxis];
-  fp16 a[TM, TK] = *pa;
-  fp16 b[TN, TK] = *pb;
-  int32 last_a = ((M*K - 1) - (TM*TK + 1)) / lda;
-  int32 last_b = ((K*N - 1) - (TN*TK + 1)) / ldb;
-  last_a = last_a / TK * TK;
-  last_b = last_b / TK * TK;
-  int32 bound = K - max(last_a, last_b);
-  for(int32 k = K; k > bound; k = k - TK){
-    pa = pa + TK*lda;
-    pb = pb + TK*ldb;
-    c = dot(a, trans(b), c);
-    a = *pa;
-    b = *pb;
-  }
-  int32 rxc[TM] = get_global_range[TM](0);
-  int32 ryc[TN] = get_global_range[TN](1);
-  for(int32 k = bound; k > 0; k = k - 1){
-    int1 checka[TM, 1] = rxc[:, newaxis] < M;
-    int1 checkb[TN, 1] = ryc[:, newaxis] < N;
-    fp16* pa[TM, 1] = A + (K - k)*lda + rxc[:, newaxis];
-    fp16* pb[TN, 1] = B + (K - k)*ldb + ryc[:, newaxis];
-    fp16 a[TM, 1] = checka ? *pa : 0;
-    fp16 b[TN, 1] = checkb ? *pb : 0;
-    c = dot(a, trans(b), c);
-  }
-  fp32* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
-  *pc = c;
-}
-)";
-
-
 
 class BlockSparseGemmOp : public OpKernel {
  public:
@@ -115,31 +62,21 @@ class BlockSparseGemmOp : public OpKernel {
       unsigned nthreads = info.num_threads;
       unsigned GZ = jit.get_int("GZ");
       std::array<size_t, 3> grid = {(M + TM - 1)/TM, (N + TN - 1)/TN, GZ};
-      // set argument
-      kernel->setArg(0, *da.cu());
-      kernel->setArg(1, *db.cu());
-      kernel->setArg(2, *dc.cu());
-      kernel->setArg(3, M);
-      kernel->setArg(4, N);
-      kernel->setArg(5, K);
-      kernel->setArg(6, M);
-      kernel->setArg(7, N);
-      kernel->setArg(8, M);
-      kernel->setArg(9, *dlocks.cu());
-      kernel->setArg(10, grid[0]);
-      kernel->setArg(11, grid[1]);
+      triton::dnn::gemm::set_arg(kernel, &da, &db, &dc, M, N, K, &dlocks, grid[0], grid[1]);
       stream->enqueue(kernel, grid, {nthreads, 1, 1});
       stream->synchronize();
       double ts = triton::tools::bench([&](){stream->enqueue(kernel, grid, {nthreads, 1, 1});},
                         [&](){ stream->synchronize(); }, ctx->device());
       return  2.*M*N*K / ts * 1e-3;
     };
+    std::string src = triton::dnn::gemm::src(false, false, "fp16", "fp16", 1, 1);
 //     just-in-time compile source-code
-//    jit.autotune("matmul", src, benchmark);
-//    jit.add_module("matmul", src, {4, 2, 8, 4, 2, 32, 1, 4, 1, 1, 8, 8, 8, 1});
-//    jit.add_module("matmul", src, {16, 4, 128, 16, 4, 128, 2, 2, 2, 2, 8, 32, 8, 1});
-//    jit.add_module("matmul", src, {8, 8, 128, 16, 8, 128, 2, 2, 2, 2, 16, 32, 8, 1 });
-    jit.add_module("matmul", src, {16, 4, 128, 16, 4, 128, 2, 2, 2, 2, 8, 16, 8, 1});
+//    jit.autotune("matmul", src.c_str(), benchmark);
+//    jit.add_module("matmul", src.c_str(), {4, 2, 8, 4, 2, 32, 1, 4, 1, 1, 8, 8, 8, 1});
+//    jit.add_module("matmul", src.c_str(), {16, 4, 128, 16, 4, 128, 2, 2, 2, 2, 8, 32, 8, 1});
+//    jit.add_module("matmul", src.c_str(), {8, 8, 128, 16, 8, 128, 2, 2, 2, 2, 16, 32, 8, 1 });
+//    jit.add_module("matmul", src.c_str(), {16, 4, 128, 16, 4, 128, 2, 2, 2, 2, 8, 16, 8, 1});
+//    jit.add_module("matmul", src.c_str(), {16, 2, 128, 32, 32, 2, 2, 2, 2, 8, 8, 4, 2, 1}); //NN
     triton::driver::kernel* kernel = jit.get_function("matmul");
     triton::jit::launch_information info = jit.get_launch_info("matmul");
     std::cout << benchmark(kernel, info) << std::endl;;

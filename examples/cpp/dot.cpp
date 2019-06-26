@@ -59,7 +59,7 @@ int main() {
 
 
   // just-in-time compile source-code
-  std::string src = triton::dnn::gemm::src(AT, BT);
+  std::string src = triton::dnn::gemm::src(AT, BT, "fp32", "fp32", 1, 1);
   jit.autotune("matmul",src.c_str(), benchmark);
   jit.add_module("matmul", src.c_str(), triton::dnn::gemm::default_params(AT, BT));
   triton::driver::kernel* kernel = jit.get_function("matmul");

@@ -166,6 +166,7 @@ std::vector<ir::metaparameter *> tune::get_params(ir::module &mod) {
   for(ir::instruction *i : block->get_inst_list())
   for(auto &x: params_[i])
     if(seen.insert(x.second).second && !x.second->has_value()){
+      std::cout << i->get_name() << " " << x.first << std::endl;
       result.push_back(x.second);
     }
 
