@@ -16,7 +16,9 @@ public:
 
   static std::vector<unsigned> default_params(bool AT, bool BT);
 
-  static std::string src(bool AT, bool BT);
+  static std::string src(bool AT, bool BT,
+                         std::string a_ty, std::string b_ty,
+                         unsigned alignment_lda, unsigned alignment_ldb);
 
   template<class T, bool AT, bool BT>
   static void cpu_ref(std::vector<T> &c, const std::vector<T> &a, const std::vector<T> &b, size_t M, size_t N, size_t K){

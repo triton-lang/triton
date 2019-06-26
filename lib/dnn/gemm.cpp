@@ -41,7 +41,9 @@ std::vector<unsigned> gemm::default_params(bool AT, bool BT) {
     return {16, 2, 128, 32, 32, 32, 4, 2, 2, 8, 8, 4, 2, 1};
 }
 
-std::string gemm::src(bool AT, bool BT) {
+std::string gemm::src(bool AT, bool BT,
+                      std::string a_ty, std::string b_ty,
+                      unsigned align_lda, unsigned align_ldb) {
   std::string AS0 = "TM", AS1 = "TK";
   std::string BS0 = "TK", BS1 = "TN";
   std::string bca0 = "[newaxis, :]", bca1 = "[:, newaxis]";
@@ -60,6 +62,8 @@ std::string gemm::src(bool AT, bool BT) {
     std::swap(bcb0, bcb1);
     std::swap(ldb0, ldb1);
   }
+  std::string align_lda_str = "multiple_of(" + std::to_string(align_lda) + ")";
+  std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb) + ")";
   std::string res =
 R"(
 const tunable int32 TM = {16, 32, 64, 128};
@@ -67,10 +71,12 @@ const tunable int32 TN = {16, 32, 64, 128};
 const tunable int32 TK = {8};
 const tunable int32 GZ = {1};
 
-void matmul(restrict read_only fp32 *A, restrict read_only fp32 *B, fp32 *C,
-           int32 M, int32 N, int32 K,
-           int32 lda, int32 ldb, int32 ldc,
-           int32 *locks, int32 grid0, int32 grid1) {
+void matmul(restrict read_only )" + a_ty + R"( *A,
+            restrict read_only )" + b_ty + R"( *B,
+            fp32 *C,
+            int32 M, int32 N, int32 K,
+            )" + align_lda_str + R"( int32 lda, )" + align_ldb_str + R"(" int32 ldb, int32 ldc,
+            int32 *locks, int32 grid0, int32 grid1) {
   int32 rxa[TM] = get_global_range[TM](0);
   int32 ryb[TN] = get_global_range[TN](1);
   int32 rz = get_global_range[1](2);
@@ -81,10 +87,10 @@ void matmul(restrict read_only fp32 *A, restrict read_only fp32 *B, fp32 *C,
   int32 rem = K % GZ;
   K = select(rz < rem, div - 1, div);
   int32 offk = select(rz < rem, rz*(div + 1), rz*div + rem);
-  fp32* pa[)" + AS0 + ", " + AS1 + "] = A + (offk + rka" + bca0 + ")" + lda0 + " + rxa" + bca1 + lda1 + R"(;
-  fp32* pb[)" + BS0 + ", " + BS1 + "] = B + (offk + rkb" + bcb0 + ")" + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
-  fp32 a[)" + AS0 + ", " + AS1 + R"(] = *pa;
-  fp32 b[)" + BS0 + ", " + BS1 + R"(] = *pb;
+  )" + a_ty + R"(* pa[)" + AS0 + ", " + AS1 + "] = A + (offk + rka" + bca0 + ")" + lda0 + " + rxa" + bca1 + lda1 + R"(;
+  )" + b_ty + R"(* pb[)" + BS0 + ", " + BS1 + "] = B + (offk + rkb" + bcb0 + ")" + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
+  )" + a_ty + R"( a[)" + AS0 + ", " + AS1 + R"(] = *pa;
+  )" + b_ty + R"( b[)" + BS0 + ", " + BS1 + R"(] = *pb;
   int32 last_a = ((M*K - 1) - (TM*TK + 1)) / lda;
   int32 last_b = ((K*N - 1) - (TN*TK + 1)) / ldb;
   last_a = last_a / TK * TK;
@@ -102,10 +108,10 @@ void matmul(restrict read_only fp32 *A, restrict read_only fp32 *B, fp32 *C,
   for(int32 k = bound; k > 0; k = k - 1){
     int1 checka[TM, 1] = rxc[:, newaxis] < M;
     int1 checkb[TN, 1] = ryc[:, newaxis] < N;
-    fp32* pa[TM, 1] = A + (offk + K - k))" + lda0 + " + rxc[:, newaxis]" + lda1 + R"(;
-    fp32* pb[TN, 1] = B + (offk + K - k))" + ldb0 + " + ryc[:, newaxis]" + ldb1 + R"(;
-    fp32 a[TM, 1] = checka ? *pa : 0;
-    fp32 b[TN, 1] = checkb ? *pb : 0;
+    )" + a_ty + R"(* pa[TM, 1] = A + (offk + K - k))" + lda0 + " + rxc[:, newaxis]" + lda1 + R"(;
+    )" + b_ty + R"(* pb[TN, 1] = B + (offk + K - k))" + ldb0 + " + ryc[:, newaxis]" + ldb1 + R"(;
+    )" + a_ty + R"( a[TM, 1] = checka ? *pa : 0;
+    )" + b_ty + R"( b[TN, 1] = checkb ? *pb : 0;
     c = dot(a, trans(b), c);
   }
   int32 ridx = get_range_id(0);

@@ -182,9 +182,8 @@ void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params)
   std::map<ir::value*, std::vector<std::string>> errors;
   passes.tune.check_constraints(errors);
   for(auto x: errors){
-    std::cout << x.first << std::endl;
     for(auto str: x.second)
-      std::cout << str << std::endl;
+      std::cout <<  x.first->get_name() << ": " << str << std::endl;
   }
   if(errors.size())
     throw std::runtime_error("invalid parameters");
