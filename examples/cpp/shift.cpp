@@ -99,7 +99,7 @@ int main() {
 
   // shift
   std::vector<unsigned> params = {
-    8, 2, 16, 8, 2, 32, 8, 4, 2, 2, 4, 2, 8, 4
+    8, 2, 32, 8, 2, 64, 8, 4, 2, 2, 4, 2, 8, 4
   };
   std::ostringstream oss;
   shift.src(oss);
