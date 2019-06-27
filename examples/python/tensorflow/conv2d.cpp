@@ -20,21 +20,9 @@
 using namespace tensorflow;
 using GPUDevice = Eigen::GpuDevice;
 
-//torch::Tensor conv_common(
-//    int32_t B, int32_t C, int32_t D, int32_t H, int32_t W,
-//    int32_t T, int32_t R, int32_t S, int32_t NF,
-//    int32_t stride_d, int32_t stride_h, int32_t stride_w,
-//    int32_t pad_d, int32_t pad_h, int32_t pad_w,
-//    triton::dnn::conv::type ty,
-//    torch::Tensor torcha, torch::Tensor torchb, torch::Tensor torchbias,
-//    bool autotune = false
-//    ) {
-
-//}
-
-class DenseConvOp : public OpKernel {
- public:
-  explicit DenseConvOp(OpKernelConstruction* context) : OpKernel(context) {
+class Conv2dOp : public OpKernel {
+public:
+  explicit Conv2dOp(OpKernelConstruction* context) : OpKernel(context) {
   }
 
   void Compute(OpKernelContext* context){
@@ -64,15 +52,19 @@ class DenseConvOp : public OpKernel {
     bool has_bias = false;
 
     // get conv configuration
-    triton::dnn::conv configuration(B, C, D, H, W, T, R, S, NF,
+    triton::dnn::conv configuration(B, C,
+                                    D, H, W,
+                                    T, R, S,
+                                    NF,
                                     stride_d, stride_h, stride_w,
                                     pad_d, pad_h, pad_w,
                                     1, 1, 1,
+                                    "fp16", "fp16",
                                     triton::dnn::conv::FPROP, has_bias);
 
     // Bind memory
-    triton::driver::cu_buffer a(ctx, (CUdeviceptr)tfa.flat<float>().data(), false);
-    triton::driver::cu_buffer b(ctx, (CUdeviceptr)tfb.flat<float>().data(), false);
+    triton::driver::cu_buffer a(ctx, (CUdeviceptr)tfa.flat<Eigen::half>().data(), false);
+    triton::driver::cu_buffer b(ctx, (CUdeviceptr)tfb.flat<Eigen::half>().data(), false);
 //    triton::driver::cu_buffer cubias(ctx, (CUdeviceptr)torchbias.storage().data(), false);
 //    triton::driver::buffer* bias = has_bias ? &cubias : nullptr;
     triton::driver::buffer* bias = nullptr;
@@ -106,12 +98,16 @@ class DenseConvOp : public OpKernel {
 
     triton::jit::tune_res_t best = jit.autotune("conv", src.c_str(), benchmark);
     jit.add_module("conv", src.c_str(), best.params);
+//    jit.add_module("conv", src.c_str(), {16, 2, 32, 32, 2, 64, 2, 2, 2, 2, 8, 2, 16, 4, 1});
+    triton::driver::kernel* kernel = jit.get_function("conv");
+    triton::jit::launch_information info = jit.get_launch_info("conv");
+    std::cout << benchmark(kernel, info) << std::endl;
   }
 };
 
-REGISTER_KERNEL_BUILDER(Name("DenseConv").Device(DEVICE_GPU), DenseConvOp);
-REGISTER_OP("DenseConv")
-    .Input("a: float32")
-    .Input("b: float32")
+REGISTER_KERNEL_BUILDER(Name("Conv2d").Device(DEVICE_GPU), Conv2dOp);
+REGISTER_OP("Conv2d")
+    .Input("a: float16")
+    .Input("b: float16")
     .Output("c: float32")
 ;

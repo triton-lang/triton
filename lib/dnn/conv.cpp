@@ -21,11 +21,13 @@ conv::conv(int B, int NC,
      int stride_d, int stride_h, int stride_w,
      int pad_d, int pad_h, int pad_w,
      int upsample_d, int upsample_h, int upsample_w,
+     std::string a_ty, std::string b_ty,
      type ty, bool bias)
   : NB_(B), NC_(NC), AD_(D), AH_(H), AW_(W), BD_(T), BH_(R), BW_(S), NF_(NF),
     stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
     pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
     upsample_d_(upsample_d), upsample_h_(upsample_h), upsample_w_(upsample_w),
+    a_ty_(a_ty), b_ty_(b_ty),
     ty_(ty), bias_(bias)
 {
   CD_ = (AD_*upsample_d_ - BD_ + 1 + 2*pad_d_ + stride_d_ - 1)/stride_d_;
@@ -281,8 +283,8 @@ void conv::init(driver::stream *stream, triton::driver::cu_module* module) {
   d_a_deltas_ = init_lut(is_a_deltas_cst, "delta", h_a_deltas_);
   d_b_deltas_ = init_lut(is_b_deltas_cst_, "b_delta", h_b_deltas_);
   d_masks_ = init_lut(is_mask_cst_, "masks", h_masks_);
-  d_locks_ = triton::driver::buffer::create(stream->context(), max_grid_0_*max_grid_1_*4);
-  ((triton::driver::cu_buffer*)d_locks_)->set_zero(stream, max_grid_0_*max_grid_1_*4);
+  d_locks_ = triton::driver::buffer::create(stream->context(), max_grid_0_*max_grid_1_*4*2);
+  ((triton::driver::cu_buffer*)d_locks_)->set_zero(stream, max_grid_0_*max_grid_1_*4*2);
 }
 
 void conv::set_arg(driver::kernel *kernel,
@@ -336,8 +338,8 @@ void conv::set_arg(driver::kernel *kernel,
   kernel->setArg(39, (int32_t)0);
   kernel->setArg(40, (int32_t)0);
   kernel->setArg(41, d_locks_);
-  kernel->setArg(42, 0);
-  kernel->setArg(43, 0);
+  kernel->setArg(42, max_grid_0_);
+  kernel->setArg(43, max_grid_1_);
   size_t idx = 44;
   if(!is_a_deltas_cst)
     kernel->setArg(idx++, d_a_deltas_);
@@ -358,8 +360,6 @@ void conv::enqueue(driver::stream *stream, driver::kernel *kernel,
   grid[0] /= upsample_h_*upsample_w_;
   kernel->setArg(11, CH_/upsample_h_);
   kernel->setArg(12, CW_/upsample_w_);
-  kernel->setArg(42, (int32_t)grid[0]);
-  kernel->setArg(43, (int32_t)grid[1]);
 
   // initialize to zero if necessary
   bool init_zero = false;
@@ -526,7 +526,7 @@ void conv::src(std::ostream &os){
       R"(
 const tunable int32 TM = {16, 32, 64};
 const tunable int32 TN = {16, 32, 64};
-const tunable int32 TK = {8};
+const tunable int32 TK = {16};
 const tunable int32 GZ = {1};
 )";
 if(is_a_deltas_cst)
@@ -537,8 +537,8 @@ if(is_mask_cst_)
   os << "__constant__ int32* masks = alloc_const int32[" + std::to_string(h_masks_.size()) + "];\n";
 os << R"(
 
- void conv(read_only restrict fp32 *a,
-           read_only restrict fp32 *b,
+ void conv(read_only restrict )" << a_ty_ << R"( *a,
+           read_only restrict )" << b_ty_ << R"( *b,
            fp32 *c,
            fp32 *bias,
            int32 M, int32 N, int32 K,
@@ -592,7 +592,7 @@ if(!is_mask_cst_)
   rar = )" + upar + R"( rar;
   ras = )" + upas + R"( ras;
   int32 ra1[TK] = rac*lda_c + rar*lda_h + ras*lda_w;
-  fp32* pa[TM, TK] = a + ra1[newaxis, :] + ra0[:, newaxis];)";
+  )" << a_ty_ << R"(* pa[TM, TK] = a + ra1[newaxis, :] + ra0[:, newaxis];)";
 if(b_lut_){
  os << R"(
   int32 rb)" + ax[0] + ax[1] + "[TK] = rkb / " + redax[2] + R"(;
@@ -611,7 +611,7 @@ os << R"(
   int32 rb1[TK] = rkb)" + ldb0 + ";";
 }
 os << R"(
-  fp32* pb)" + BS + " = b + rb1" + bcb1 + " + rb0" + bcb0 + R"(*ldb_k;
+  )" << b_ty_ << R"(* pb)" + BS + " = b + rb1" + bcb1 + " + rb0" + bcb0 + R"(*ldb_k;
   int32 offda[TK] = rka % ldlut;
   )" + a_delta_mem + R"( int32* pincd[TK] = delta + offda;
   )" + a_delta_mem + R"( int32* pda[TK]  = delta + ldlut + offda + off_uw*ldlut + off_uh*ldlut*upsample_w;
@@ -628,8 +628,8 @@ os << R"(
   int1 checka[TM, TK] = (maska0[:, newaxis] & maska1[newaxis, :]) > 0;
   int1 checkb0[TN] = rb0 < N;
   int1 checkb)" + BS + " = checkb0" + bcb0 + R"(;
-  fp32 a[TM, TK] = checka ? *pa : 0;
-  fp32 b)" + BS + R"( = checkb ? *pb : 0;
+  )" << a_ty_ << R"( a[TM, TK] = checka ? *pa : 0;
+  )" << b_ty_ << R"( b)" + BS + R"( = checkb ? *pb : 0;
   int32 rkamin[TK] = rka - offk + TK;
   for(int32 k = K; k > 0; k = k - TK){
     C = dot(a, )" + useb + R"(, C);
@@ -672,8 +672,8 @@ if(b_lut_){
   int32 ridx = get_range_id(0);
   int32 ridy = get_range_id(1);
   int32 *plock = locks + ridx + ridy*grid0;
+  while(__atomic_cas(plock, 0, 1) == 1);
   int32 *pcount = plock + grid0*grid1;
-  while(__atomic_cas(plock, 0, 1));
   int32 count = *pcount;
   int32 countp1 = select(count == GZ - 1, 0, count + 1);
   if(count == 0) {)";
@@ -691,7 +691,7 @@ if(b_lut_){
     @checkc *pc = C + *pc;
     *pcount = countp1;
   }
-  __atomic_cas(plock, 1, 0);
+  *plock = 0;
 })";
 }
 

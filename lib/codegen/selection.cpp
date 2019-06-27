@@ -347,7 +347,7 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
   }
   if(ir::get_range_id_inst* ii = dynamic_cast<ir::get_range_id_inst*>(inst)){
     Value *offset = tgt_->get_block_id(builder.GetInsertBlock()->getModule(), builder, ii->get_axis());
-    return (Instruction*)builder.CreateAdd(offset, builder.getInt32(0));
+    return (Instruction*)offset;
   }
   if(ir::atomic_cas_inst* ii = dynamic_cast<ir::atomic_cas_inst*>(inst)){
     BasicBlock *current = builder.GetInsertBlock();

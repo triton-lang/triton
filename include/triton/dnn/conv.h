@@ -31,6 +31,7 @@ public:
        int stride_d, int stride_h, int stride_w,
        int pad_d, int pad_h, int pad_w,
        int upsample_d, int upsample_h, int upsample_w,
+       std::string a_ty = "fp32", std::string b_ty = "fp32",
        type ty = FPROP, bool bias = false);
 
   // accessors
@@ -126,7 +127,10 @@ private:
   bool is_a_deltas_cst;
   bool is_b_deltas_cst_;
   bool is_mask_cst_;
-  // type
+  // data type
+  std::string a_ty_;
+  std::string b_ty_;
+  // conv type
   type ty_;
   bool bias_;
   bool b_trans_;

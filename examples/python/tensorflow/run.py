@@ -32,7 +32,7 @@ def run_conv():
     R, S, NF = 3, 3, 32
     a = tf.placeholder(tf.float32, shape=[BS, C, H, W])
     b = tf.placeholder(tf.float32, shape=[C, R, S, NF])
-    c = module.dense_conv(a, b)
+    c = module.conv2d(a, b)
     # Reference
     ha = np.random.rand(BS, C, H, W)
     hb = np.random.rand(C, R, S, NF)
