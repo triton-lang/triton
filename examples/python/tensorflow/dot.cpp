@@ -78,7 +78,7 @@ class DotOp : public OpKernel {
     jit.add_module("matmul", src.c_str(), {16, 2, 128, 32, 32, 2, 2, 2, 2, 8, 8, 4, 2, 1}); //NN
     triton::driver::kernel* kernel = jit.get_function("matmul");
     triton::jit::launch_information info = jit.get_launch_info("matmul");
-    std::cout << benchmark(kernel, info) << std::endl;;
+    std::cout << benchmark(kernel, info) << std::endl;
   }
 
 private:
