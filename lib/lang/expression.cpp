@@ -248,7 +248,8 @@ ir::value *conditional_expression::codegen(ir::module *mod) const{
   ir::value *uncasted_true_value = true_value;
   ir::value *uncasted_false_value = false_value;
   implicit_cast(builder, true_value, false_value, is_float, is_ptr, is_int, is_signed);
-  implicit_broadcast(mod, true_value, false_value);
+  implicit_broadcast(mod, pred, true_value);
+  implicit_broadcast(mod, pred, false_value);
   {
     ir::value *current = true_value;
     while(current != uncasted_true_value) {

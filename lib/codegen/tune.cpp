@@ -51,7 +51,6 @@ void tune::init_c_phi(ir::instruction *v) {
 }
 
 void tune::init_c_graph(ir::instruction *v) {
-
   // Reference shape
   ir::type::tile_shapes_t::value_type one = ir::tile_type::make_one(v->get_parent()->get_context());
   ir::type::tile_shapes_t shapes;
@@ -59,8 +58,10 @@ void tune::init_c_graph(ir::instruction *v) {
     shapes = store->get_pointer_operand()->get_type()->get_tile_shapes();
   else if(auto *downcast = dynamic_cast<ir::downcast_inst*>(v))
     return;
-  else
+  else{
+//    std::cout << v->get_name() << std::endl;
     shapes = v->get_type()->get_tile_shapes();
+  }
   // Reshape
   if(dynamic_cast<ir::reshape_inst*>(v)){
     ir::value *op = v->get_operand(0);
@@ -102,13 +103,14 @@ void tune::init_c_graph(ir::instruction *v) {
   }
   // Element-wise
   else if(dynamic_cast<ir::user*>(v)) {
-    for(unsigned k = 0; k < v->get_num_results(); k++)
+    for(unsigned k = 0; k < v->get_num_results(); k++){
+      ir::value *result = v->get_result(k);
       for(unsigned i = 0; i < shapes.size(); i ++){
-        ir::value *result = v->get_result(k);
         for(ir::value* op: v->ops()){
           add_constraint({result, i}, {op, i});
         }
       }
+    }
   }
 }
 
