@@ -68,12 +68,12 @@ int main() {
 
   // shift
   std::vector<unsigned> params = {
-    8, 2, 32, 8, 2, 64, 8, 4, 2, 2, 4, 2, 8, 4
+    4, 2, 32, 8, 2, 32, 8, 4, 2, 2, 8, 8, 4
   };
   std::ostringstream oss;
   shift.src(oss);
   std::string src = oss.str();
-  jit.autotune("shift", src.c_str(), benchmark);
+//  jit.autotune("shift", src.c_str(), benchmark);
   jit.add_module("shift", src.c_str(), params);
   triton::driver::kernel* kernel = jit.get_function("shift");
   triton::jit::launch_information info = jit.get_launch_info("shift");
@@ -81,7 +81,7 @@ int main() {
   stream->read(dc, true, 0, hc);
   shift.cpu_ref(rc.data(), ha.data(), hb.data());
   for(size_t i = 0; i < hc.size(); i++)
-    if(std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
+    if(std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
       std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
       exit(EXIT_FAILURE);
     }
