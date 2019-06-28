@@ -92,10 +92,11 @@ public:
       for(int32_t c = 0; c < NC_; ++c){
         int32_t h = p;
         int32_t w = q;
-        if(h >= BH_/2 && h < AH_ - BH_/2)
+        if(h >= BH_/2 && h < AH_ - BH_/2
+           && w >= BW_/2 && w < AW_ - BW_/2){
           h += shift_h_[c];
-        if(w > BW_/2 && w < AW_ - BW_/2)
           w += shift_w_[c];
+        }
         IN_DTYPE a = I[bs + w*NB_ + h*NB_*AW_ + c*NB_*AH_*AW_];
         IN_DTYPE b = F[k + c*NF_];
         acc = std::fma(a, b, acc);

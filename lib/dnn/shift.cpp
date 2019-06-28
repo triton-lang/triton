@@ -53,6 +53,9 @@ void shift::build_deltas() {
     h_deltas_[c] += shift_h_[c]*ld_a_[1];
     h_deltas_[c] += shift_w_[c]*ld_a_[2];
   }
+  for(unsigned c = 0; c < NC_; c++){
+    h_deltas_[c + 256] = c*ld_a_[0];
+  }
 }
 
 void shift::build_masks() {
