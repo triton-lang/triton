@@ -28,6 +28,8 @@ shift::shift(int B, int NC,
     shift_h_(shift_h), shift_w_(shift_w),
     a_ty_(a_ty), b_ty_(b_ty),
     ty_(ty), bias_(bias) {
+  // max number of channels
+  MAX_C_ = 1024;
   // equivalent matmul
   M_ = NB_*AH_*AW_;
   N_ = NF_;
@@ -52,16 +54,12 @@ void shift::build_deltas() {
   };
   // allocate look-up table
   size_t TK = 8;
-  h_deltas_ = std::vector<int32_t>(512, 0);
+  h_deltas_.resize(MAX_C_);
   // populate look-up table
-  for(unsigned c = 0; c < TK; c++){
-    h_deltas_[c] =  offset(c); // init (shift)
-    h_deltas_[c + 256] = c*ld_a_[0]; // init (no shift)
-  }
-  for(unsigned c = 0; c < NC_; c++){
-    h_deltas_[TK + c] = offset(c + TK) - offset(c); // deltas (shift)
-    h_deltas_[TK + c + 256] = TK*ld_a_[0]; // deltas (shift)
-  }
+  for(unsigned c = 0; c < TK; c++)
+    h_deltas_[c] =  offset(c);
+  for(unsigned c = 0; c < NC_; c++)
+    h_deltas_[TK + c] = offset(c + TK) - offset(c);
 }
 
 size_t shift::a_size(){
@@ -102,11 +100,12 @@ void shift::enqueue(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(3, M_);
   kernel->setArg(4, N_);
   kernel->setArg(5, K_);
-  kernel->setArg(6, NB_);
-  kernel->setArg(7, AH_);
-  kernel->setArg(8, AW_);
-  kernel->setArg(9, BH_);
-  kernel->setArg(10, BW_);
+  kernel->setArg(6, NB_*AH_*AW_);
+  kernel->setArg(7, NB_);
+  kernel->setArg(8, AH_);
+  kernel->setArg(9, AW_);
+  kernel->setArg(10, BH_);
+  kernel->setArg(11, BW_);
   // dry run
   std::array<size_t, 3> grid = {(M_ + TM - 1)/TM, (N_ + TN - 1)/TN, 1};
   stream->enqueue(kernel, grid, {nthreads, 1, 1});
@@ -119,19 +118,19 @@ const tunable int32 TM = {16, 32, 64, 128};
 const tunable int32 TN = {16, 32, 64, 128};
 const tunable int32 TK = {8};
 
-__constant__ int32* delta = alloc_const int32[512];
+__constant__ int32* delta = alloc_const int32[)" << MAX_C_ << R"(];
 
-void shift(restrict read_only align(16) fp32 *a,
-           restrict read_only align(16) fp32 *b,
+void shift(restrict read_only align(16) )" << a_ty_ << R"( *a,
+           restrict read_only align(16) )" << b_ty_ << R"( *b,
            fp32 *c,
            int32 M, int32 N, int32 K,
+           int32 lda,
            int32 ABS, int32 AH, int32 AW, int32 AR, int32 AS) {
   int32 rxa[TM] = get_global_range[TM](0);
   int32 ryb[TN] = get_global_range[TN](1);
   int32 rka[TK] = 0 ... TK;
   int32 rkb[TK] = 0 ... TK;
   fp32 C[TM, TN] = 0;
-  fp32* pb[TN, TK] = b + rkb[newaxis, :]*N + ryb[:, newaxis];
   int32 pad_h = AR/2;
   int32 pad_w = AS/2;
   int32 rawhc[TM] = rxa / ABS;
@@ -140,17 +139,24 @@ void shift(restrict read_only align(16) fp32 *a,
   int32 rah[TM] = rahc % AH;
   int1 maskh[TM] = (rah >= pad_h) && (rah < (AH - pad_h));
   int1 maskw[TM] = (raw >= pad_w) && (raw < (AW - pad_w));
-  int1 mask[TM] = maskh && maskw;
-  int32 offd[TM] = mask ? 0 : 256;
-  __constant__ int32* pd[TM, TK] = delta + rka[newaxis, :] + offd[:, newaxis];
-  fp32* pa[TM, TK] = a + rxa[:, newaxis] + (*pd);
-  for(int32 k = K; k > 0; k = k - TK){
-    fp32 a[TM, TK] = *pa;
-    fp32 b[TN, TK] = *pb;
+  int1 mask[TM, TK] = maskh[:, newaxis] && maskw[:, newaxis];
+  __constant__ int32* pd[TK] = delta + rka;
+  int32 d[TK] = *pd;
+  int32 offa1[TK] = rka*lda;
+  int32 inc[TM, TK] = mask ? d[newaxis, :] : offa1[newaxis, :];
+  )" << a_ty_ << R"(* pa[TM, TK] = a + rxa[:, newaxis] + inc;
+  )" << b_ty_ << R"(* pb[TN, TK] = b + rkb[newaxis, :]*N + ryb[:, newaxis];
+  )" << a_ty_ << R"( a[TM, TK] = *pa;
+  )" << b_ty_ << R"( b[TN, TK] = *pb;
+  for(int32 k = K; k > TK; k = k - TK){
     C = dot(a, trans(b), C);
     pb = pb + TK*N;
     pd = pd + TK;
-    pa = pa + (*pd);
+    d = *pd;
+    inc = mask ? d[newaxis, :] : TK*lda;
+    pa = pa + inc;
+    a = *pa;
+    b = *pb;
   }
   int32 rxc[TM] = get_global_range[TM](0);
   int32 ryc[TN] = get_global_range[TN](1);
