@@ -21,6 +21,7 @@ int main() {
   int32_t BS = 32, F = 1024;
   int32_t H = 32, W = 32;
   int32_t C = 1024;
+
   // random shifts
   std::vector<int32_t> shift_h(C);
   std::vector<int32_t> shift_w(C);
