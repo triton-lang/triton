@@ -106,6 +106,7 @@ public:
   }
 
 private:
+  int32_t MAX_C_;
   // image size
   int32_t NB_;
   int32_t NC_;
