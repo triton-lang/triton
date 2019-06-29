@@ -148,15 +148,16 @@ void shift(restrict read_only align(16) )" << a_ty_ << R"( *a,
   )" << b_ty_ << R"(* pb[TN, TK] = b + rkb[newaxis, :]*N + ryb[:, newaxis];
   )" << a_ty_ << R"( a[TM, TK] = *pa;
   )" << b_ty_ << R"( b[TN, TK] = *pb;
-  for(int32 k = K; k > TK; k = k - TK){
+  for(int32 k = K; k > 0; k = k - TK){
     C = dot(a, trans(b), C);
     pb = pb + TK*N;
     pd = pd + TK;
     d = *pd;
-    inc = mask ? d[newaxis, :] : TK*lda;
-    pa = pa + inc;
-    a = *pa;
-    b = *pb;
+    pa = pa + (mask ? d[newaxis, :] : TK*lda);
+    int1 checka[TM, TK] = k > TK;
+    int1 checkb[TN, TK] = k > TK;
+    @checka a = *pa;
+    @checkb b = *pb;
   }
   int32 rxc[TM] = get_global_range[TM](0);
   int32 ryc[TN] = get_global_range[TN](1);
