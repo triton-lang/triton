@@ -29,7 +29,8 @@ shift::shift(int B, int NC,
     a_ty_(a_ty), b_ty_(b_ty),
     ty_(ty), bias_(bias) {
   // max number of channels
-  MAX_C_ = 1024;
+  TK_ = 16;
+  MAX_C_ = 8192 + TK_;
   // equivalent matmul
   M_ = NB_*AH_*AW_;
   N_ = NF_;
@@ -52,14 +53,12 @@ void shift::build_deltas() {
   auto offset = [&](unsigned c) {
     return c*ld_a_[0] + shift_h_[c]*ld_a_[1] + shift_w_[c]*ld_a_[2];
   };
-  // allocate look-up table
-  size_t TK = 8;
   h_deltas_.resize(MAX_C_);
   // populate look-up table
-  for(unsigned c = 0; c < TK; c++)
+  for(unsigned c = 0; c < TK_; c++)
     h_deltas_[c] =  offset(c);
   for(unsigned c = 0; c < NC_; c++)
-    h_deltas_[TK + c] = offset(c + TK) - offset(c);
+    h_deltas_[TK_ + c] = offset(c + TK_) - offset(c);
 }
 
 size_t shift::a_size(){
@@ -116,14 +115,14 @@ void shift::src(std::ostream &os) {
 R"(
 const tunable int32 TM = {16, 32, 64, 128};
 const tunable int32 TN = {16, 32, 64, 128};
-const tunable int32 TK = {8};
+const tunable int32 TK = {)" << TK_ << R"(};
 
 __constant__ int32* delta = alloc_const int32[)" << MAX_C_ << R"(];
 
 void shift(restrict read_only align(16) )" << a_ty_ << R"( *a,
            restrict read_only align(16) )" << b_ty_ << R"( *b,
            fp32 *c,
-           int32 M, int32 N, int32 K,
+           multiple_of(4) int32 M, multiple_of(4) int32 N, multiple_of(4) int32 K,
            int32 lda,
            int32 ABS, int32 AH, int32 AW, int32 AR, int32 AS) {
   int32 rxa[TM] = get_global_range[TM](0);
@@ -131,8 +130,8 @@ void shift(restrict read_only align(16) )" << a_ty_ << R"( *a,
   int32 rka[TK] = 0 ... TK;
   int32 rkb[TK] = 0 ... TK;
   fp32 C[TM, TN] = 0;
-  int32 pad_h = AR/2;
-  int32 pad_w = AS/2;
+  int32 pad_h = AR / 2;
+  int32 pad_w = AS / 2;
   int32 rawhc[TM] = rxa / ABS;
   int32 raw[TM] = rawhc % AW;
   int32 rahc[TM] = rawhc / AW;
