@@ -123,7 +123,7 @@ void shift(restrict read_only align(16) )" << a_ty_ << R"( *a,
            restrict read_only align(16) )" << b_ty_ << R"( *b,
            fp32 *c,
            multiple_of(4) int32 M, multiple_of(4) int32 N, multiple_of(4) int32 K,
-           int32 lda,
+           multiple_of(4) int32 lda,
            int32 ABS, int32 AH, int32 AW, int32 AR, int32 AS) {
   int32 rxa[TM] = get_global_range[TM](0);
   int32 ryb[TN] = get_global_range[TN](1);
@@ -140,7 +140,8 @@ void shift(restrict read_only align(16) )" << a_ty_ << R"( *a,
   int1 maskw[TM] = (raw >= pad_w) && (raw < (AW - pad_w));
   int1 mask[TM, TK] = maskh[:, newaxis] && maskw[:, newaxis];
   __constant__ int32* pd[TK] = delta + rka;
-  int32 d[TK] = *pd;
+  multiple_of(4) int32 d[TK];
+  d = *pd;
   int32 offa1[TK] = rka*lda;
   int32 inc[TM, TK] = mask ? d[newaxis, :] : offa1[newaxis, :];
   )" << a_ty_ << R"(* pa[TM, TK] = a + rxa[:, newaxis] + inc;

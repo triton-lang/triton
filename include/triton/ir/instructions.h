@@ -2,8 +2,9 @@
 #define TDL_INCLUDE_IR_INSTRUCTIONS_H
 
 #include <vector>
-#include "value.h"
+#include "triton/ir/value.h"
 #include "triton/ir/type.h"
+#include "triton/ir/metadata.h"
 #include "llvm/IR/Instructions.h"
 
 namespace triton{
@@ -48,12 +49,16 @@ public:
   // results
   unsigned get_num_results() const                            { return results_.size(); }
   value* get_result(unsigned i)                               { return results_.at(i); }
-
+  // metadata
+  void set_metadata(ir::metadata::kind_t kind,
+                    unsigned value)                           { metadatas_[kind] = value;}
+  unsigned get_metadata(ir::metadata::kind_t kind)            { return metadatas_[kind];}
 private:
   basic_block *parent_;
   value *pred_;
   value *mask_pred_;
   std::vector<value*> results_;
+  std::map<ir::metadata::kind_t, unsigned> metadatas_;
 };
 
 // result reference

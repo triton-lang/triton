@@ -45,7 +45,9 @@ public:
   virtual bool is_cst_space() const { return false; }
   virtual bool is_tunable() const { return false; }
   virtual bool is_cst() const { return false; }
+  virtual bool is_multiple_of() const { return false; }
   virtual void add_attr(ir::function* fn, size_t pos) = 0;
+  virtual void add_metadata(ir::module* mod, std::string name) = 0;
 };
 
 class storage_specifier: public modifier {
@@ -56,6 +58,7 @@ public:
   bool is_tunable() const { return value_ == TUNABLE_T; }
   bool is_cst() const { return value_ == CONST_T; }
   void add_attr(ir::function* fn, size_t pos);
+  void add_metadata(ir::module* mod, std::string name);
 
 private:
   const STORAGE_SPEC_T value_;
@@ -65,6 +68,7 @@ class alignment_specifier: public modifier {
 public:
   alignment_specifier(node* value): cst_((constant*)value) { }
   void add_attr(ir::function* fn, size_t pos);
+  void add_metadata(ir::module* mod, std::string name);
 
 private:
   constant* cst_;
@@ -74,6 +78,8 @@ class multiple_of_specifier: public modifier {
 public:
   multiple_of_specifier(node* value): cst_((constant*)value) {}
   void add_attr(ir::function* fn, size_t pos);
+  void add_metadata(ir::module* mod, std::string name);
+  bool is_multiple_of() const { return true; }
 
 private:
   constant* cst_;

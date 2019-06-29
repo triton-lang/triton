@@ -23,6 +23,11 @@ ir::context& module::get_context() {
 
 void module::set_value(const std::string& name, ir::basic_block *block, ir::value *value){
   values_[val_key_t{name, block}] = value;
+  auto it = metadatas_.find(name);
+  if(auto *x = dynamic_cast<ir::instruction*>(value))
+  if(it != metadatas_.end()){
+    x->set_metadata(it->second.first, it->second.second);
+  }
 }
 
 void module::set_value(const std::string& name, ir::value *value){

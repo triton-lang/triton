@@ -7,6 +7,7 @@
 #include <string>
 #include <functional>
 #include "builder.h"
+#include "metadata.h"
 
 namespace triton{
 
@@ -38,6 +39,7 @@ struct scope {
 class module {
   typedef std::pair<std::string, basic_block*> val_key_t;
   friend class function;
+  typedef std::pair<ir::metadata::kind_t, unsigned> md_pair_t;
 
 public:
   typedef std::map<std::string, global_value*> symbols_map_t;
@@ -84,6 +86,8 @@ public:
   // Register global
   void register_global(const std::string& name, ir::value *x) { globals_[name] = x; }
   const std::map<std::string, ir::value*>& globals() const    { return globals_; }
+  // Metadata
+  void add_metadata(const std::string &name, md_pair_t x)     { metadatas_[name] = x; }
 
 private:
   std::string name_;
@@ -101,6 +105,7 @@ private:
   std::stack<scope> scopes_;
   std::vector<ir::alloc_const*> allocs_;
   std::map<std::string, ir::value*> globals_;
+  std::map<std::string, md_pair_t> metadatas_;
 };
 
 }

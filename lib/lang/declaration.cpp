@@ -5,6 +5,7 @@
 #include "triton/ir/basic_block.h"
 #include "triton/ir/builder.h"
 #include "triton/ir/type.h"
+#include "triton/ir/metadata.h"
 
 
 namespace triton{
@@ -133,12 +134,12 @@ void initializer::set_specifier(const declaration_specifier *spec) {
 }
 
 ir::value* initializer::codegen(ir::module * mod) const{
-  std::vector<modifier*> storage = spec_->modifiers();
-  ir::type *ty = decl_->type(mod, spec_->type(mod), storage);
+  std::vector<modifier*> modifiers = spec_->modifiers();
+  ir::type *ty = decl_->type(mod, spec_->type(mod), modifiers);
   std::string name = decl_->id()->name();
   ir::value *value = ir::undef_value::get(ty);
   auto is_tunable = [](modifier* x){ return x->is_tunable(); };
-  if(std::find_if(storage.begin(), storage.end(), is_tunable) != storage.end()){
+  if(std::find_if(modifiers.begin(), modifiers.end(), is_tunable) != modifiers.end()){
     auto csts = dynamic_cast<list<constant*>*>((node*)expr_);
     if(csts == nullptr)
       throw std::runtime_error("must specify constant list for metaparameters");
@@ -154,12 +155,19 @@ ir::value* initializer::codegen(ir::module * mod) const{
     implicit_broadcast(mod, ty, value);
   }
   value->set_name(name);
+  // metadata
+  auto is_multiple_of = [](modifier* x){ return x->is_multiple_of(); };
+  auto it = std::find_if(modifiers.begin(), modifiers.end(), is_multiple_of);
+  if(it != modifiers.end())
+    (*it)->add_metadata(mod, name);
+  // register
   mod->set_value(name, value);
   mod->get_scope().types[name] = ty;
   if(auto *x = dynamic_cast<ir::alloc_const*>(value))
     mod->add_alloc(x);
+  // constants
   auto is_cst = [](modifier* x){ return x->is_cst(); };
-  if(std::find_if(storage.begin(), storage.end(), is_cst) != storage.end())
+  if(std::find_if(modifiers.begin(), modifiers.end(), is_cst) != modifiers.end())
     mod->set_const(name);
   return value;
 }
@@ -183,14 +191,26 @@ void storage_specifier::add_attr(ir::function* fn, size_t pos) {
   fn->add_attr(pos, ir::attribute(get_ir_attr(value_)));
 }
 
+void storage_specifier::add_metadata(ir::module*, std::string) {
+  throw std::runtime_error("storage specifier is not a metadata");
+}
+
 /* Alignment specifier */
 void alignment_specifier::add_attr(ir::function* fn, size_t pos) {
   fn->add_attr(pos, ir::attribute(ir::aligned, cst_->value()));
 }
 
+void alignment_specifier::add_metadata(ir::module *mod, std::string name) {
+  throw std::runtime_error("alignment specifier is not a metadata");
+}
+
 /* Multiple-Of specifier */
 void multiple_of_specifier::add_attr(ir::function* fn, size_t pos) {
   fn->add_attr(pos, ir::attribute(ir::multiple_of, cst_->value()));
+}
+
+void multiple_of_specifier::add_metadata(ir::module *mod, std::string name) {
+  mod->add_metadata(name, {ir::metadata::multiple_of, cst_->value()});
 }
 
 
