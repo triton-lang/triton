@@ -59,7 +59,7 @@ void tune::init_c_graph(ir::instruction *v) {
   else if(auto *downcast = dynamic_cast<ir::downcast_inst*>(v))
     return;
   else{
-//    std::cout << v->get_name() << std::endl;
+    std::cout << v->get_name() << std::endl;
     shapes = v->get_type()->get_tile_shapes();
   }
   // Reshape

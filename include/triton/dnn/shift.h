@@ -38,7 +38,9 @@ class shift {
 
 public:
   enum type {
-    FPROP
+    FPROP,
+    BPROP,
+    WGRAD
   };
 
 private:
@@ -85,11 +87,11 @@ public:
     OUT_DTYPE acc;
     for(int32_t p = 0; p < AH_; ++p)
     for(int32_t q = 0; q < AW_; ++q)
-    for(int32_t bs = 0; bs < NB_; ++bs)
-    for(int32_t k = 0; k < NF_; ++k)
+    for(int32_t bs = 0; bs < B_; ++bs)
+    for(int32_t k = 0; k < F_; ++k)
     {
       acc = 0;
-      for(int32_t c = 0; c < NC_; ++c){
+      for(int32_t c = 0; c < C_; ++c){
         int32_t h = p;
         int32_t w = q;
         if(h >= BH_/2 && h < AH_ - BH_/2
@@ -97,11 +99,11 @@ public:
           h += shift_h_[c];
           w += shift_w_[c];
         }
-        IN_DTYPE a = I[bs + w*NB_ + h*NB_*AW_ + c*NB_*AH_*AW_];
-        IN_DTYPE b = F[k + c*NF_];
+        IN_DTYPE a = I[bs + w*B_ + h*B_*AW_ + c*B_*AH_*AW_];
+        IN_DTYPE b = F[k + c*F_];
         acc = std::fma(a, b, acc);
       }
-      O[bs + q*NB_ + p*NB_*AW_ + k*NB_*AH_*AW_] = acc;
+      O[bs + q*B_ + p*B_*AW_ + k*B_*AH_*AW_] = acc;
     }
   }
 
@@ -109,8 +111,8 @@ private:
   int32_t MAX_C_;
   int32_t TK_;
   // image size
-  int32_t NB_;
-  int32_t NC_;
+  int32_t B_;
+  int32_t C_;
   int32_t AD_;
   int32_t AH_;
   int32_t AW_;
@@ -118,7 +120,7 @@ private:
   int32_t BD_;
   int32_t BH_;
   int32_t BW_;
-  int32_t NF_;
+  int32_t F_;
   // activation size
   int32_t CD_;
   int32_t CH_;
@@ -149,6 +151,9 @@ private:
   // convolution type
   type ty_;
   bool bias_;
+  // transpose
+  bool AT_;
+  bool BT_;
 };
 
 }
