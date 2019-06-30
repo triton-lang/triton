@@ -157,7 +157,7 @@ slice_list
 
 postfix_expression
   : primary_expression                             { $$ = $1;}
-  | identifier '[' slice_list ']'                  { $$ = new indexing_expression($1, $3);}
+  | primary_expression '[' slice_list ']'          { $$ = new indexing_expression($1, $3);}
   ;
 
 /* Unary */

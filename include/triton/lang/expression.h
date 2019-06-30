@@ -160,13 +160,13 @@ private:
 
 class indexing_expression: public postfix_expression{
 public:
-  indexing_expression(node *id, node *slices)
-    : id_((const identifier*)id), slices_((const list<slice*>*)slices) {}
+  indexing_expression(node *lhs, node *slices)
+    : lhs_((const expression*)lhs), slices_((const list<slice*>*)slices) {}
 
   ir::value* codegen(ir::module *) const;
 
 private:
-  const identifier* id_;
+  const expression* lhs_;
   const list<slice*>* slices_;
 };
 
