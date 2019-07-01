@@ -237,26 +237,26 @@ private:
   op_t op_;
 };
 
-#define TDL_IR_DECLARE_CAST_INST_SIMPLE(name, op) \
+#define TRITON_IR_DECLARE_CAST_INST_SIMPL(name, op) \
 class name : public cast_inst{ \
   friend class cast_inst; \
   name(type *ty, value *v, const std::string &name, instruction *next) \
     : cast_inst(ty, v, name, next, op){ } \
 };
 
-TDL_IR_DECLARE_CAST_INST_SIMPLE(trunc_inst, llvm::Instruction::CastOps::Trunc)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(z_ext_inst, llvm::Instruction::CastOps::ZExt)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(s_ext_inst, llvm::Instruction::CastOps::SExt)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(fp_trunc_inst, llvm::Instruction::CastOps::FPTrunc)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(fp_ext_inst, llvm::Instruction::CastOps::FPExt)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(ui_to_fp_inst, llvm::Instruction::CastOps::UIToFP)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(si_to_fp_inst, llvm::Instruction::CastOps::SIToFP)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(fp_to_ui_inst, llvm::Instruction::CastOps::FPToUI)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(fp_to_si_inst, llvm::Instruction::CastOps::FPToSI)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(ptr_to_int_inst, llvm::Instruction::CastOps::PtrToInt)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(int_to_ptr_inst, llvm::Instruction::CastOps::IntToPtr)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(bit_cast_inst, llvm::Instruction::CastOps::BitCast)
-TDL_IR_DECLARE_CAST_INST_SIMPLE(addr_space_cast_inst, llvm::Instruction::CastOps::AddrSpaceCast)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(trunc_inst, llvm::Instruction::CastOps::Trunc)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(z_ext_inst, llvm::Instruction::CastOps::ZExt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(s_ext_inst, llvm::Instruction::CastOps::SExt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_trunc_inst, llvm::Instruction::CastOps::FPTrunc)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_ext_inst, llvm::Instruction::CastOps::FPExt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(ui_to_fp_inst, llvm::Instruction::CastOps::UIToFP)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(si_to_fp_inst, llvm::Instruction::CastOps::SIToFP)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_ui_inst, llvm::Instruction::CastOps::FPToUI)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_si_inst, llvm::Instruction::CastOps::FPToSI)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(ptr_to_int_inst, llvm::Instruction::CastOps::PtrToInt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(int_to_ptr_inst, llvm::Instruction::CastOps::IntToPtr)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(bit_cast_inst, llvm::Instruction::CastOps::BitCast)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(addr_space_cast_inst, llvm::Instruction::CastOps::AddrSpaceCast)
 
 //===----------------------------------------------------------------------===//
 //                               terminator_inst classes

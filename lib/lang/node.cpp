@@ -11,6 +11,8 @@ namespace lang{
 ir::value *node::explicit_cast(ir::builder &builder, ir::value *src, ir::type *dst_ty){
   ir::type *src_scalar_ty = src->get_type()->get_scalar_ty();
   ir::type *dst_scalar_ty = dst_ty->get_scalar_ty();
+  if(src->get_type()->is_tile_ty())
+    dst_ty = ir::tile_type::get_same_shapes(dst_scalar_ty, src->get_type());
   bool src_signed = false;
   bool dst_signed = false;
   if(src_scalar_ty == dst_scalar_ty)

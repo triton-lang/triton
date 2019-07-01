@@ -246,20 +246,22 @@ ir::value *conditional_expression::codegen(ir::module *mod) const{
   it_true_begin++;
   auto it_true_end = instructions.end();
   for(auto it = it_true_begin; it != it_true_end; it++)
+//  if(!dynamic_cast<ir::retile_inst*>(*it))
     (*it)->set_mask_pred(true_mask);
   /* false value */
   ir::value *false_mask = mask->get_result(1);
   auto it_false_begin = instructions.end();
   it_false_begin--;
   ir::value *false_value = false_value_->codegen(mod);
-  it_false_begin++;
   implicit_broadcast(mod, pred, false_value);
-  auto it_false_end = instructions.end();
-  for(auto it = it_false_begin; it != it_false_end; it++)
-    (*it)->set_mask_pred(false_mask);
-  /* cast */
   bool is_float, is_ptr, is_int, is_signed;
   implicit_cast(builder, true_value, false_value, is_float, is_ptr, is_int, is_signed);
+  it_false_begin++;
+  auto it_false_end = instructions.end();
+  for(auto it = it_false_begin; it != it_false_end; it++)
+//  if(!dynamic_cast<ir::retile_inst*>(*it))
+    (*it)->set_mask_pred(false_mask);
+  /* psi */
   ir::value *result = builder.create_merge(true_mask, true_value, false_mask, false_value);
   return result;
 }
