@@ -532,6 +532,15 @@ public:
   static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
+class atomic_add_inst: public builtin_inst {
+private:
+  atomic_add_inst(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "atomic_add"; }
+
+public:
+  static instruction* create(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
+};
+
 class dot_inst: public builtin_inst {
 public:
   enum TransT { NoTrans, Trans };

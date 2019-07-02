@@ -620,6 +620,19 @@ atomic_cas_inst::atomic_cas_inst(value *ptr, value *cmp, value *val, const std::
 instruction* atomic_cas_inst::create(value *ptr, value *cmp, value *val, const std::string &name, instruction *next) {
   return new atomic_cas_inst(ptr, cmp, val, name, next);
 }
+
+// atomic add
+
+atomic_add_inst::atomic_add_inst(value *ptr, value *val, const std::string &name, instruction *next)
+  : builtin_inst(ptr->get_type()->get_pointer_element_ty(), 2, 1, name, next) {
+  set_operand(0, ptr);
+  set_operand(1, val);
+}
+
+instruction* atomic_add_inst::create(value *ptr, value *val, const std::string &name, instruction *next) {
+  return new atomic_add_inst(ptr, val, name, next);
+}
+
 //===----------------------------------------------------------------------===//
 //                               intrinsic instructions
 //===----------------------------------------------------------------------===//

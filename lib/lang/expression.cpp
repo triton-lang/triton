@@ -130,6 +130,13 @@ ir::value* atomic_cas_expression::codegen(ir::module *mod) const {
   return mod->get_builder().create_atomic_cas(ptr, cmp, val);
 }
 
+// atomic add
+ir::value* atomic_add_expression::codegen(ir::module *mod) const {
+  ir::value *ptr = ptr_->codegen(mod);
+  ir::value *val = val_->codegen(mod);
+  return mod->get_builder().create_atomic_add(ptr, val);
+}
+
 // matmul
 ir::value* matmul_expression::codegen(ir::module *mod) const {
   ir::value *A = A_->codegen(mod);

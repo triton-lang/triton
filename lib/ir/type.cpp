@@ -59,8 +59,12 @@ unsigned type::get_pointer_address_space() const {
 }
 
 type * type::get_pointer_element_ty() const {
-  assert(is_pointer_ty());
-  return ((pointer_type*)this)->get_element_ty();
+  type *ptr_ty = get_scalar_ty();
+  assert(ptr_ty->is_pointer_ty());
+  type *scalar_ty = ((pointer_type*)ptr_ty)->get_element_ty();
+  if(is_tile_ty())
+    return tile_type::get_same_shapes(scalar_ty, (type*)this);
+  return scalar_ty;
 }
 
 
