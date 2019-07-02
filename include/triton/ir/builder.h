@@ -128,6 +128,7 @@ public:
   value *create_get_global_range(unsigned axis, type::tile_shapes_t::value_type size, const std::string &name = "");
   value *create_get_range_id(unsigned axis, const std::string &name = "");
   value *create_atomic_cas(value *ptr, value *cmp, value *val, const std::string &name = "");
+  value *create_atomic_add(value *ptr, value *val, const std::string &name = "");
   value *create_dot(value *A, value *B, value *C, const std::string &name = "");
   value *create_trans(value *A, const std::string &name = "");
   value *create_select(value *pred, value *if_value, value *else_value, const std::string &name = "");

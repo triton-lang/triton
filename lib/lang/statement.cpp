@@ -31,9 +31,6 @@ ir::value* expression_statement::codegen(ir::module *mod) const{
   ir::builder &builder = mod->get_builder();
   ir::basic_block *block = builder.get_insert_block();
   if(pred_) {
-    // check that it is an assignment
-    assignment_expression *assignment = dynamic_cast<assignment_expression*>(expr_);
-    assert(assignment);
     // generate mask
     ir::value *pred = pred_->codegen(mod);
     ir::mask_inst *mask = (ir::mask_inst*)builder.create_mask(pred);
@@ -53,8 +50,10 @@ ir::value* expression_statement::codegen(ir::module *mod) const{
     // merge with psi
     ir::psi_inst *psi = (ir::psi_inst*)builder.create_merge(mask->get_result(0), expr,
                                                                   mask->get_result(1), ir::undef_value::get(ty));
-    std::string name = ((named_expression*)assignment->lvalue())->id()->name();
-    mod->set_value(name, psi);
+    if(assignment_expression *assignment = dynamic_cast<assignment_expression*>(expr_)){
+      std::string name = ((named_expression*)assignment->lvalue())->id()->name();
+      mod->set_value(name, psi);
+    }
     return psi;
   }
   return expr_->codegen(mod);

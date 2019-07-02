@@ -101,6 +101,16 @@ private:
   const node *val_;
 };
 
+class atomic_add_expression: public builtin_expression{
+public:
+  atomic_add_expression(node *ptr, node *val): ptr_(ptr), val_(val) { }
+  ir::value* codegen(ir::module *) const;
+
+private:
+  const node *ptr_;
+  const node *val_;
+};
+
 
 class matmul_expression: public builtin_expression{
 public:

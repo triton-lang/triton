@@ -308,6 +308,10 @@ value *builder::create_atomic_cas(value *ptr, value *cmp, value *val, const std:
   return insert(atomic_cas_inst::create(ptr, cmp, val, name));
 }
 
+value *builder::create_atomic_add(value *ptr, value *val, const std::string &name){
+  return insert(atomic_add_inst::create(ptr, val, name));
+}
+
 value *builder::create_dot(value *A, value *B, value *C, const std::string &name) {
   return insert(dot_inst::create_nn(A, B, C, name));
 }

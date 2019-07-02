@@ -373,6 +373,13 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     Value *res = builder.CreateLoad(ptr);
     return (Instruction*)res;
   }
+  if(ir::atomic_add_inst* ii = dynamic_cast<ir::atomic_add_inst*>(inst)){
+    Value *ptr = value(ii->get_operand(0));
+    Value *val = value(ii->get_operand(1));
+    Value *atom_f_add = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_atomic_load_add_f32, {ptr->getType()});
+    Value *res = builder.CreateCall(atom_f_add, {ptr, val});
+    return (Instruction*)res;
+  }
   // unknown instruction
   throw std::runtime_error("unknown conversion from ir::instruction to Instruction");
 }
