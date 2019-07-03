@@ -28,13 +28,13 @@ def run_dot():
     print("dif: %f" % np.max(dif))
 
 def run_conv():
-    BS, C, H, W = 16, 32, 32, 32
+    B, C, H, W = 16, 32, 32, 32
     R, S, NF = 3, 3, 32
-    a = tf.placeholder(tf.float32, shape=[BS, C, H, W])
+    a = tf.placeholder(tf.float32, shape=[B, C, H, W])
     b = tf.placeholder(tf.float32, shape=[C, R, S, NF])
     c = module.conv2d(a, b)
     # Reference
-    ha = np.random.rand(BS, C, H, W)
+    ha = np.random.rand(B, C, H, W)
     hb = np.random.rand(C, R, S, NF)
     # Run
     sess = tf.InteractiveSession()
@@ -42,4 +42,23 @@ def run_conv():
     result = sess.run([c], feed_dict = {a: ha,
                                         b: hb})[0]
 
-run_conv()
+def run_shift():
+    B, C, H, W = 16, 32, 32, 32
+    R, S, F = 3, 3, 32
+    a = tf.placeholder(tf.float32, shape=[C, H, W, B])
+    b = tf.placeholder(tf.float32, shape=[C, F])
+    shift_h = tf.zeros(C, tf.int32)
+    shift_w = tf.zeros(C, tf.int32)
+    hshift_h = np.zeros(C, np.int32)
+    hshift_w = np.zeros(C, np.int32)
+    c = module.shift_conv(a, b, shift_h=tf.make_tensor_proto(hshift_h), shift_w=tf.make_tensor_proto(hshift_w))
+    # Reference
+    ha = np.random.rand(C, H, W, B)
+    hb = np.random.rand(C, F)
+    # Run
+    sess = tf.InteractiveSession()
+    sess.run(tf.global_variables_initializer())
+    result = sess.run([c], feed_dict = {a: ha,
+                                        b: hb})[0]
+
+run_shift()
