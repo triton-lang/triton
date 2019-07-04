@@ -217,9 +217,26 @@ if(ty_ == WGRAD){
 }
   os << R"(
   )" << a_ty_ << "* pa[" << AS << "] = a + rxa" << bca1 << lda1 << " + " << rka << bca0 << lda0 << R"(;
-  )" << b_ty_ << "* pb[" << BS << "] = b + ryb" << bcb1 << ldb1 << " + " << rkb << bcb0 << ldb0 << R"(;
   )" << a_ty_ << "   a[" << AS << R"(] = *pa;
-  )" << b_ty_ << "   b[" << BS << R"(] = *pb;
+  )" << b_ty_ << "* pb[" << BS << "] = b + ryb" << bcb1 << ldb1 << " + " << rkb << bcb0 << ldb0 << ";";
+if(ty_ == WGRAD){
+  os << R"(
+    int32 rbwhc[TK] = rkb / ABS;
+    int32 rbw[TK] = rbwhc % AW;
+    int32 rbhc[TK] = rbwhc / AW;
+    int32 rbh[TK] = rbhc % AH;
+    int1 maskh[TK] = (rbh >= pad_h) && (rbh < (AH - pad_h));
+    int1 maskw[TK] = (rbw >= pad_w) && (rbw < (AW - pad_w));
+    int1 mask[TK, TN] = maskh[:, newaxis] && maskw[:, newaxis];
+    int32 inc[TK, TN] = mask ? 0 : shift;
+    )" << b_ty_ << R"(* shifted_pb[TK, TN] = pb + inc;
+    )" << b_ty_ << R"(           b[TK, TN] = *shifted_pb;)";
+}
+else{
+  os << R"(
+  )" << b_ty_ << "   b[" << BS << R"(] = *pb;)";
+}
+  os << R"(
   for(int32 k = K; k > 0; k = k - TK){
     C = dot()" << usea << "," << useb << R"(, C);
     int1 checka[)" << AS << R"(] = k > TK;
@@ -241,17 +258,18 @@ else{
 }
 if(ty_ == WGRAD){
   os << R"(
-    int32 rbwhc[TK] = rkb / ABS;
-    int32 rbw[TK] = rbwhc % AW;
-    int32 rbhc[TK] = rbwhc / AW;
-    int32 rbh[TK] = rbhc % AH;
-    int1 maskh[TK] = (rbh >= pad_h) && (rbh < (AH - pad_h));
-    int1 maskw[TK] = (rbw >= pad_w) && (rbw < (AW - pad_w));
-    int1 mask[TK, TN] = maskh[:, newaxis] && maskw[:, newaxis];
-    int32 inc[TK, TN] = mask ? 0 : shift;
-    pb = pb +  TK)" << ldb0 << R"(;
-    )" << b_ty_ << R"(* pbb[TK, TN] = pb + inc;
-    @checkb b = *pbb;)";
+    pb     = pb +  TK)" << ldb0 << R"(;
+    rkb   = rkb + TK;
+    rbwhc = rkb / ABS;
+    rbw   = rbwhc % AW;
+    rbhc  = rbwhc / AW;
+    rbh   = rbhc % AH;
+    maskh = (rbh >= pad_h) && (rbh < (AH - pad_h));
+    maskw = (rbw >= pad_w) && (rbw < (AW - pad_w));
+    mask  = maskh[:, newaxis] && maskw[:, newaxis];
+    inc   = mask ? 0 : shift;
+    shifted_pb = pb + inc;
+    @checkb b = *shifted_pb;)";
 }
 else{
   os << R"(
