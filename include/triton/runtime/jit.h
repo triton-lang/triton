@@ -103,6 +103,7 @@ private:
 public:
   jit(driver::context* context);
   ~jit();
+  std::vector<unsigned> get_valid(const char *name, const char *src);
   tune_res_t autotune(const char* name, const char* src, benchmark_t benchmark);
   void add_module(ir::module &module, const std::vector<unsigned>& params = {});
   void add_module(const char* name, const char* src, const std::vector<unsigned>& params = {});
