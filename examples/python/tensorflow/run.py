@@ -78,16 +78,16 @@ def run_shift():
                                     extra_feed_dict={a: ha, b: hb})
     dx_t, dx_n = grads[0]
     dw_t, dw_n = grads[1]
-    print(dw_t)
-    print(dw_n)
-    print(np.max(dw_t - dw_n))
+    print(dx_t)
+    print(dx_n)
+    #print(np.max(dw_t - dw_n))
     #np.savetxt('diff.dat', dw_t - dw_n, fmt='%2.4f')
     #np.savetxt('theoretical.dat', dw_t, fmt='%2.4f')
     #np.savetxt('numerical.dat', dw_n, fmt='%2.4f')
     print(np.max(dx_t - dx_n))
-    #np.savetxt('diff.dat', dx_t - dx_n, fmt='%2.4f')
-    #np.savetxt('theoretical.dat', dx_t, fmt='%2.4f')
-    #np.savetxt('numerical.dat', dx_n, fmt='%2.4f')
+    np.savetxt('diff.dat', dx_t - dx_n, fmt='%2.4f')
+    np.savetxt('theoretical.dat', dx_t, fmt='%2.4f')
+    np.savetxt('numerical.dat', dx_n, fmt='%2.4f')
     # Run
     sess.run(tf.global_variables_initializer())
     result = sess.run([c], feed_dict = {a: ha,

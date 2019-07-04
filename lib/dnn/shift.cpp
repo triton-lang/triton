@@ -88,7 +88,7 @@ void shift::build_deltas() {
   }
   if(ty_ == WGRAD){
     for(unsigned c = 0; c < C_; c++)
-      h_deltas_[c] = shift_h_[c]*ld_b_[1] + shift_w_[c]*ld_b_[2];
+      h_deltas_[c] = -shift_h_[c]*ld_b_[1] + -shift_w_[c]*ld_b_[2];
   }
 }
 
