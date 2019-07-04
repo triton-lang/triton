@@ -287,15 +287,15 @@ else{
 if(ty_ == BPROP){
   os << R"(
   int32 rcwhc[TM] = rxc / ABS;
-  int32 rcw[TM] = (rcwhc % AW);
+  int32 rcw[TM] = rcwhc % AW;
   int32 rchc[TM] = rcwhc / AW;
-  int32 rch[TM] = (rchc % AH);
+  int32 rch[TM] = rchc % AH;
   int1 maskh[TM] = (rch >= pad_h) && (rch < (AH - pad_h));
   int1 maskw[TM] = (rcw >= pad_w) && (rcw < (AW - pad_w));
   int1 interior[TM, TN] = maskh[:, newaxis] && maskw[:, newaxis];
   __constant__ int32* pd[TN] = delta + ryc;
   fp32* shift_pc[TM, TN] = pc + (*pd)[newaxis, :];
-  pc = interior ? shift_pc : pc;
+  pc = interior ? pc : shift_pc;
   @checkc __atomic_add(pc, C);
   )";
 }
