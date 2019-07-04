@@ -56,18 +56,20 @@ def blocksparse_matmul_grad(op, dy):
     return (dx, dw)
 
 def run_shift():
-    B, C, H, W = 1, 16, 8, 8
+    B, C, H, W = 1, 16, 4, 4
     R, S, F = 3, 3, 16
     a = tf.placeholder(tf.float32, shape=[C, H, W, B])
     b = tf.placeholder(tf.float32, shape=[C, F])
     #hshift_h = np.random.randint(-R//2, R//2 + 1, size=C, dtype=np.int32)
     #hshift_w = np.random.randint(-S//2, R//2 + 1, size=C, dtype=np.int32)
-    hshift_h = 0*np.ones(C, dtype=np.int32)
-    hshift_w = 0*np.ones(C, dtype=np.int32)
+    hshift_h = np.ones(C, dtype=np.int32)
+    hshift_w = np.ones(C, dtype=np.int32)
     c = module.shift_conv(a, b, shift_h=tf.make_tensor_proto(hshift_h), shift_w=tf.make_tensor_proto(hshift_w))
     # Reference
-    ha = np.ones((C, H, W, B), dtype=np.int32)
-    hb = np.ones((C, F), dtype=np.int32)
+    ha = np.random.rand(C, H, W, B)
+    hb = np.random.rand(C, F)
+    #ha = np.ones((C, H, W, B), dtype=np.int32)
+    #hb = np.ones((C, F), dtype=np.int32)
     sess = tf.InteractiveSession()
     grads = tf.test.compute_gradient([a, b], [(C, H, W, B), (C, F)], c, (C, H, W, B),
                                     extra_feed_dict={a: ha, b: hb})
@@ -75,10 +77,11 @@ def run_shift():
     dw_t, dw_n = grads[1]
     print(dw_t)
     print(dw_n)
-    #print(np.max(dw_t - dw_n))
+    print(np.max(dw_t - dw_n))
     #print(np.max(dx_t - dx_n))
-    np.savetxt('theoretical.dat', dw_t, fmt='%4.2f')
-    np.savetxt('numerical.dat', dw_n, fmt='%4.2f')
+    np.savetxt('diff.dat', dw_t - dw_n, fmt='%2.4f')
+    np.savetxt('theoretical.dat', dw_t, fmt='%2.4f')
+    np.savetxt('numerical.dat', dw_n, fmt='%2.4f')
     # Run
     sess.run(tf.global_variables_initializer())
     result = sess.run([c], feed_dict = {a: ha,
