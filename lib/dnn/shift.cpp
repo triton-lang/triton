@@ -228,7 +228,7 @@ if(ty_ == WGRAD){
     int1 maskh[TK] = (rbh >= pad_h) && (rbh < (AH - pad_h));
     int1 maskw[TK] = (rbw >= pad_w) && (rbw < (AW - pad_w));
     int1 mask[TK, TN] = maskh[:, newaxis] && maskw[:, newaxis];
-    int32 inc[TK, TN] = mask ? 0 : shift;
+    int32 inc[TK, TN] = mask ? shift : 0;
     )" << b_ty_ << R"(* shifted_pb[TK, TN] = pb + inc;
     )" << b_ty_ << R"(           b[TK, TN] = *shifted_pb;)";
 }
