@@ -74,12 +74,12 @@ int main() {
 
   // shift
   std::vector<unsigned> params = {
-    16, 4, 64, 16, 4, 128, 2, 2, 1, 2, 4, 4, 16, 4
+    4, 2, 16, 4, 128, 2, 2, 1, 1, 8, 16, 8, 2
   };
   std::ostringstream oss;
   shift.src(oss);
   std::string src = oss.str();
-  jit.autotune("shift", src.c_str(), benchmark);
+//  jit.autotune("shift", src.c_str(), benchmark);
   jit.add_module("shift", src.c_str(), params);
   triton::driver::kernel* kernel = jit.get_function("shift");
   triton::jit::launch_information info = jit.get_launch_info("shift");

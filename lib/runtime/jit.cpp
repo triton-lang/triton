@@ -96,6 +96,46 @@ jit::jit(driver::context *context): driver_context_(context),
 
 jit::~jit(){ }
 
+std::vector<unsigned> jit::get_valid(const char *name, const char *src) {
+  // find metaparameters
+  auto ptt_module = make_triton_module(name, src);
+  ir::module &tt_module = *ptt_module;
+  // set parameters
+  passes_wrapper passes(target_.get());
+  passes.target_independent(tt_module);
+  passes.tune.run(tt_module);
+  auto mps = passes.tune.get_params(tt_module);
+  // create parameter ranges
+  std::vector<std::vector<unsigned>> ranges;
+  for(ir::metaparameter *mp: mps)
+    ranges.push_back(mp->get_space());
+  // iterate over parameters
+  std::vector<unsigned> result;
+  loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
+    if(!result.empty())
+      return;
+    std::map<ir::value*, std::vector<std::string>> errors;
+    unsigned i = 0;
+    for(ir::metaparameter *mp: mps)
+      mp->set_value(params[i++]);
+    passes.target_independent(tt_module);
+    passes.tune.init(tt_module);
+    passes.tune.check_constraints(errors);
+//    for(auto e: errors)
+//    for(auto x: e.second)
+//      std::cout << x << std::endl;
+//    std::cout << "-----" << std::endl;
+    if(!errors.empty())
+      return;
+    result = params;
+  });
+  if(result.empty())
+    throw std::runtime_error("couldn't find valid parameters");
+  return result;
+}
+
+
+
 jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t benchmark) {
   // find metaparameters
   auto ptt_module = make_triton_module(name, src);
