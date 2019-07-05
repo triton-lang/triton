@@ -83,12 +83,13 @@ void shift::build_deltas() {
       h_deltas_[TK_ + c] = offset(c + TK_) - offset(c);
   }
   if(ty_ == BPROP){
-    for(unsigned c = 0; c < C_; c++)
+    for(unsigned c = 0; c < C_; c++){
       h_deltas_[c] = shift_h_[c]*ld_c_[1] + shift_w_[c]*ld_c_[2];
+    }
   }
   if(ty_ == WGRAD){
     for(unsigned c = 0; c < C_; c++)
-      h_deltas_[c] = -shift_h_[c]*ld_b_[1] + -shift_w_[c]*ld_b_[2];
+      h_deltas_[c] = shift_h_[c]*ld_b_[1] + shift_w_[c]*ld_b_[2];
   }
 }
 
@@ -202,12 +203,12 @@ if(ty_ == FPROP){
   int32 rah[TM] = rahc % AH;
   __constant__ int32* pd[TK] = delta + rka;
   multiple_of(4) int32 d[TK] = *pd;
-  int1 maskh[TM] = (rah >= pad_h) && (rah < (AH - pad_h));
-  int1 maskw[TM] = (raw >= pad_w) && (raw < (AW - pad_w));
-  int1 mask[TM, TK] = maskh[:, newaxis] && maskw[:, newaxis];
+  int1 interiorh[TM] = (rah >= pad_h) && (rah < (AH - pad_h));
+  int1 interiorw[TM] = (raw >= pad_w) && (raw < (AW - pad_w));
+  int1 interior[TM, TK] = interiorh[:, newaxis] && interiorw[:, newaxis];
   int32 inc_true[TM, TK] = d[newaxis, :];
   int32 inc_false[TM, TK] = rka[newaxis, :] * lda;
-  int32 inc[TM, TK] = mask ? inc_true : inc_false;)";
+  int32 inc[TM, TK] = interior ? inc_true : inc_false;)";
 }
 if(ty_ == WGRAD){
   os << R"(
@@ -225,10 +226,10 @@ if(ty_ == WGRAD){
     int32 rbw[TK] = rbwhc % AW;
     int32 rbhc[TK] = rbwhc / AW;
     int32 rbh[TK] = rbhc % AH;
-    int1 maskh[TK] = (rbh >= pad_h) && (rbh < (AH - pad_h));
-    int1 maskw[TK] = (rbw >= pad_w) && (rbw < (AW - pad_w));
-    int1 mask[TK, TN] = maskh[:, newaxis] && maskw[:, newaxis];
-    int32 inc[TK, TN] = mask ? shift : 0;
+    int1 interiorh[TK] = (rbh >= pad_h) && (rbh < (AH - pad_h));
+    int1 interiorw[TK] = (rbw >= pad_w) && (rbw < (AW - pad_w));
+    int1 interior[TK, TN] = interiorh[:, newaxis] && interiorw[:, newaxis];
+    int32 inc[TK, TN] = interior ? shift : 0;
     )" << b_ty_ << R"(* shifted_pb[TK, TN] = pb + inc;
     )" << b_ty_ << R"(           b[TK, TN] = *shifted_pb;)";
 }
@@ -247,7 +248,7 @@ if(ty_ == FPROP){
     d = *pd;
     inc_true = d[newaxis, :];
     inc_false = TK * lda;
-    inc = mask ? inc_true : inc_false;
+    inc = interior ? inc_true : inc_false;
     pa = pa + inc;
     @checka a = *pa;)";
 }
@@ -264,10 +265,10 @@ if(ty_ == WGRAD){
     rbw   = rbwhc % AW;
     rbhc  = rbwhc / AW;
     rbh   = rbhc % AH;
-    maskh = (rbh >= pad_h) && (rbh < (AH - pad_h));
-    maskw = (rbw >= pad_w) && (rbw < (AW - pad_w));
-    mask  = maskh[:, newaxis] && maskw[:, newaxis];
-    inc   = mask ? 0 : shift;
+    interiorh = (rbh >= pad_h) && (rbh < (AH - pad_h));
+    interiorw = (rbw >= pad_w) && (rbw < (AW - pad_w));
+    interior  = interiorh[:, newaxis] && interiorw[:, newaxis];
+    inc   = interior ? shift : 0;
     shifted_pb = pb + inc;
     @checkb b = *shifted_pb;)";
 }
@@ -290,12 +291,12 @@ if(ty_ == BPROP){
   int32 rcw[TM] = rcwhc % AW;
   int32 rchc[TM] = rcwhc / AW;
   int32 rch[TM] = rchc % AH;
-  int1 maskh[TM] = (rch >= pad_h) && (rch < (AH - pad_h));
-  int1 maskw[TM] = (rcw >= pad_w) && (rcw < (AW - pad_w));
-  int1 interior[TM, TN] = maskh[:, newaxis] && maskw[:, newaxis];
+  int1 interiorh[TM] = (rch >= pad_h) && (rch < (AH - pad_h));
+  int1 interiorw[TM] = (rcw >= pad_w) && (rcw < (AW - pad_w));
+  int1 interior[TM, TN] = interiorh[:, newaxis] && interiorw[:, newaxis];
   __constant__ int32* pd[TN] = delta + ryc;
   fp32* shift_pc[TM, TN] = pc + (*pd)[newaxis, :];
-  pc = interior ? pc : shift_pc;
+  pc = interior ? shift_pc : pc;
   @checkc __atomic_add(pc, C);
   )";
 }
