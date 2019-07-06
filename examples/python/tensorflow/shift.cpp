@@ -71,6 +71,8 @@ public:
       // checks
       OP_REQUIRES(context, Ca == Cb, tensorflow::errors::InvalidArgument("operands must have the same number of channels"));
       C = Ca;
+      if(OP == triton::dnn::shift::BPROP)
+        std::swap(C, F);
     }
 
   }
