@@ -49,7 +49,7 @@ shift::shift(int B, int C,
     shapes_a_.swap(shapes_b_);
     AT_ = true;
     BT_ = false;
-    M_ = K_;
+    M_ = F_;
     N_ = C_;
     K_ = B_*AH_*AW_;
   }
