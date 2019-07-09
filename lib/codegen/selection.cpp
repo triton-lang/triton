@@ -787,8 +787,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       // reduce within warp
       Value *shfl = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_shfl_sync_bfly_f32);
       for (int i = 16; i > 0; i >>= 1){
-        Value *rhs = builder.CreateCall(shfl, {builder.getInt32(0x1f), partial,
-                                               builder.getInt32(i), builder.getInt32(0xffffffff)});
+        Value *rhs = builder.CreateCall(shfl, {builder.getInt32(0xffffffff), partial,
+                                               builder.getInt32(i), builder.getInt32(0x1f)});
         partial = builder.CreateFAdd(partial, rhs);
       }
       // reduce within block
