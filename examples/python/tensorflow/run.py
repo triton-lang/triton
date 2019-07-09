@@ -56,8 +56,8 @@ def blocksparse_matmul_grad(op, dy):
     return (dx, dw)
 
 def run_shift():
-    B, C, H, W = 1, 32, 8, 6
-    R, S, F = 3, 3, 16
+    B, C, H, W = 16, 1024, 8, 8
+    R, S, F = 3, 3, 1024
     np.random.seed(2)
     a = tf.placeholder(tf.float32, shape=[C, H, W, B])
     b = tf.placeholder(tf.float32, shape=[C, F])
@@ -65,8 +65,6 @@ def run_shift():
     hshift_w = np.random.randint(- (S//2), R//2 + 1, size=C, dtype=np.int32)
     #hshift_h = np.ones(C, dtype=np.int32)
     #hshift_w = np.ones(C, dtype=np.int32)
-    print(hshift_h)
-    print(hshift_w)
     c = module.shift_conv(a, b, shift_h=tf.make_tensor_proto(hshift_h), shift_w=tf.make_tensor_proto(hshift_w))
     # Reference
     ha = np.random.rand(C, H, W, B)
@@ -74,16 +72,36 @@ def run_shift():
     #ha = np.ones((C, H, W, B), dtype=np.int32)
     #hb = np.ones((C, F), dtype=np.int32)
     sess = tf.InteractiveSession()
-    grads = tf.test.compute_gradient([a, b], [(C, H, W, B), (C, F)], c, (F, H, W, B),
-                                    extra_feed_dict={a: ha, b: hb})
-    dw_t, dw_n = grads[1]
-    dx_t, dx_n = grads[0]
-    print(np.max(np.abs(dw_t - dw_n)))
-    print(np.max(np.abs(dx_t - dx_n)))
+    #grads = tf.test.compute_gradient([a, b], [(C, H, W, B), (C, F)], c, (F, H, W, B),
+    #                                 extra_feed_dict = {a: ha, b: hb})
+    #dw_t, dw_n = grads[1]
+    #dx_t, dx_n = grads[0]
+    #print(np.max(np.abs(dw_t - dw_n)))
+    #print(np.max(np.abs(dx_t - dx_n)))
     # Run
     sess.run(tf.global_variables_initializer())
     result = sess.run([c], feed_dict = {a: ha,
                                         b: hb})[0]
     #print(result)
 
-run_shift()
+def run_batchnorm():
+    C, H, W, B = 32, 16, 16, 16
+    np.random.seed(0)
+    # Placeholders
+    x = tf.placeholder(tf.float32, shape=[C, H, W, B])
+    g = tf.placeholder(tf.float32, shape=[C])
+    b = tf.placeholder(tf.float32, shape=[C])
+    # Feed values
+    hx = np.random.rand(C, H, W, B)
+    hg = np.random.rand(C)
+    hb = np.random.rand(C)
+    # batchnorm
+    y, m, v = module.batchnorm_forward(x, g, b, eps=1e-5)
+    # Run
+    sess = tf.InteractiveSession()
+    sess.run(tf.global_variables_initializer())
+    result = sess.run([y, m, v], feed_dict = {x: hx, g: hg, b: hb})
+    print(hx.sum(axis=(1,2,3)))
+    print(result[1])
+
+run_batchnorm()

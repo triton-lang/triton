@@ -60,6 +60,8 @@ void tune::init_c_graph(ir::instruction *v) {
     shapes = atom->get_operand(0)->get_type()->get_tile_shapes();
   else if(auto *downcast = dynamic_cast<ir::downcast_inst*>(v))
     return;
+  else if(auto *reduce = dynamic_cast<ir::reduce_inst*>(v))
+    return;
   else
     shapes = v->get_type()->get_tile_shapes();
   // Reshape

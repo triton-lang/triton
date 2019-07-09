@@ -581,6 +581,15 @@ public:
   static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
 };
 
+class reduce_inst: public builtin_inst {
+private:
+  reduce_inst(value* arg, const std::string& name, instruction* next);
+  std::string repr_impl() const { return "reduce"; }
+
+public:
+  static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
+};
+
 class select_inst: public builtin_inst {
 private:
   select_inst(value *pred, value *if_value, value *else_value, const std::string& name, instruction* next);

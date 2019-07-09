@@ -167,6 +167,14 @@ private:
   node* arg_;
 };
 
+class reduce_expression: public builtin_expression{
+public:
+  reduce_expression(node *arg): arg_(arg) {}
+  ir::value* codegen(ir::module *mod) const;
+
+private:
+  node* arg_;
+};
 
 class indexing_expression: public postfix_expression{
 public:

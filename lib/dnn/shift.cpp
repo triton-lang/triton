@@ -220,8 +220,10 @@ if(ty_ == WGRAD){
 }
   os << R"(
   )" << a_ty_ << "* pa[" << AS << "] = a + rxa" << bca1 << lda1 << " + " << rka << bca0 << lda0 << R"(;
-  )" << a_ty_ << "   a[" << AS << R"(] = *pa;
-  )" << b_ty_ << "* pb[" << BS << "] = b + ryb" << bcb1 << ldb1 << " + " << rkb << bcb0 << ldb0 << ";";
+  )" << b_ty_ << "* pb[" << BS << "] = b + ryb" << bcb1 << ldb1 << " + " << rkb << bcb0 << ldb0 << R"(;
+  int1 checka[)" << AS << "] = (rka < K)" << bca0  << R"(;
+  int1 checkb[)" << BS << "] = (rkb < K)" << bcb0  << R"(;
+  )" << a_ty_ << "   a[" << AS << R"(] = checka ? *pa : 0;)";
 if(ty_ == WGRAD){
   os << R"(
     int32 rbwhc[TK] = rkb / ABS;
@@ -233,11 +235,11 @@ if(ty_ == WGRAD){
     int1 interior[TK, TN] = interiorh[:, newaxis] && interiorw[:, newaxis];
     int32 inc[TK, TN] = interior ? shift : 0;
     )" << b_ty_ << R"(* shifted_pb[TK, TN] = pb + inc;
-    )" << b_ty_ << R"(           b[TK, TN] = *shifted_pb;)";
+    )" << b_ty_ << R"(           b[TK, TN] = checkb ? *shifted_pb : 0;)";
 }
 else{
   os << R"(
-  )" << b_ty_ << "   b[" << BS << R"(] = *pb;)";
+  )" << b_ty_ << "   b[" << BS << R"(] = checkb ? *pb : 0;)";
 }
   os << R"(
   for(int32 k = K; k > 0; k = k - TK){

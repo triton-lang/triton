@@ -29,6 +29,8 @@ unsigned shmem_allocation::is_ld_padded(ir::value *x) {
 }
 
 unsigned shmem_allocation::get_num_bytes(ir::value *x) {
+  if(dynamic_cast<ir::reduce_inst*>(x))
+    return 32;
   unsigned result = x->get_type()->get_primitive_size_in_bits() / 8;
   unsigned pad = is_ld_padded(x);
   if(pad > 0){

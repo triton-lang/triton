@@ -125,7 +125,7 @@ public:
     triton::driver::cu_buffer dc(ctx,      (CUdeviceptr)tf_c->flat<float>().data(), false);
     // get JIT
     triton::jit* jit;
-    bool autotune = false;
+    bool autotune = true;
     if(m_jit.find(key) == m_jit.end()) {
       jit = m_jit.emplace(key, new triton::jit(ctx)).first->second.get();
       std::ostringstream oss;

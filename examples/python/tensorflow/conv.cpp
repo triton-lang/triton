@@ -65,8 +65,6 @@ public:
     // Bind memory
     triton::driver::cu_buffer a(ctx, (CUdeviceptr)tfa.flat<Eigen::half>().data(), false);
     triton::driver::cu_buffer b(ctx, (CUdeviceptr)tfb.flat<Eigen::half>().data(), false);
-//    triton::driver::cu_buffer cubias(ctx, (CUdeviceptr)torchbias.storage().data(), false);
-//    triton::driver::buffer* bias = has_bias ? &cubias : nullptr;
     triton::driver::buffer* bias = nullptr;
 
     // allocate output

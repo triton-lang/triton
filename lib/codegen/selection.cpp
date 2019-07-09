@@ -773,6 +773,62 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       vmap_[x] = tmap_[x->get_operand(0)]->get_value({builder.getInt32(0)});
       return;
     }
+    if(auto *x = dynamic_cast<ir::reduce_inst*>(ins)){
+      Value *partial = nullptr;
+      distributed_tile* op = (distributed_tile*)tmap_.at(ins->get_operand(0));
+      // reduce within thread
+      op->for_each([&](indices_t idx){
+        Value *current = op->get_value(idx);
+        if(partial == nullptr)
+          partial = current;
+        else
+          partial = builder.CreateFAdd(partial, current);
+      });
+      // reduce within warp
+      Value *shfl = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_shfl_sync_bfly_f32);
+      for (int i = 16; i > 0; i >>= 1){
+        Value *rhs = builder.CreateCall(shfl, {builder.getInt32(0x1f), partial,
+                                               builder.getInt32(i), builder.getInt32(0xffffffff)});
+        partial = builder.CreateFAdd(partial, rhs);
+      }
+      // reduce within block
+      Value *tid = tgt_->get_local_id(module, builder, 0);
+      BasicBlock *partial_reduce_do   = BasicBlock::Create(ctx, "partial_reduce_do", fn);
+      BasicBlock *partial_reduce_done = BasicBlock::Create(ctx, "partial_reduce_done", fn);
+      Value *id_in_warp = builder.CreateURem(tid, builder.getInt32(32));
+      Value *warp_id = builder.CreateUDiv(tid, builder.getInt32(32));
+
+      builder.CreateCondBr(builder.CreateICmpEQ(id_in_warp, builder.getInt32(0)),
+                           partial_reduce_do, partial_reduce_done);
+      builder.SetInsertPoint(partial_reduce_do);
+      unsigned addr_space = sh_mem_ptr_->getType()->getPointerAddressSpace();
+      Type *ptr_ty = PointerType::get(builder.getFloatTy(), addr_space);
+      Value *sh_mem_ptr = builder.CreateBitCast(sh_mem_ptr_, ptr_ty);
+      Value *write_ptr = builder.CreateGEP(sh_mem_ptr, warp_id);
+      builder.CreateStore(partial, write_ptr);
+      builder.CreateBr(partial_reduce_done);
+      builder.SetInsertPoint(partial_reduce_done);
+      // Final reduction with the first warp
+      tgt_->add_barrier(module, builder);
+      BasicBlock *final_reduce_do   = BasicBlock::Create(ctx, "final_reduce_do", fn);
+      BasicBlock *final_reduce_done = BasicBlock::Create(ctx, "final_reduce_done", fn);
+      builder.CreateCondBr(builder.CreateICmpEQ(warp_id, builder.getInt32(0)),
+                           final_reduce_do, final_reduce_done);
+      builder.SetInsertPoint(final_reduce_do);
+      Value *read_ptr = builder.CreateGEP(sh_mem_ptr, tid);
+      Value *result = builder.CreateLoad(read_ptr);
+      for (int i = params_->get_num_threads() / 64; i > 0; i >>= 1){
+        Value *rhs = builder.CreateCall(shfl, {result, builder.getInt32(i),
+                                               builder.getInt32(0x1f), builder.getInt32(0xffffffff)});
+        builder.CreateFAdd(result, rhs);
+      }
+      builder.CreateStore(result, read_ptr);
+      builder.CreateBr(final_reduce_done);
+      builder.SetInsertPoint(final_reduce_done);
+      tgt_->add_barrier(module, builder);
+      vmap_[ins] = builder.CreateLoad(sh_mem_ptr);
+      return;
+    }
     tile *ti = tmap_[ins];
     distributed_tile* result = (distributed_tile*)ti;
     if(!ins->get_type()->is_tile_ty())
