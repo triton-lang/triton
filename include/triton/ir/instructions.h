@@ -581,6 +581,14 @@ public:
   static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
 };
 
+class sqrt_inst: public builtin_inst {
+private:
+  sqrt_inst(value *arg, const std::string& name, instruction* next);
+  std::string repr_impl() const { return "sqrt"; }
+public:
+  static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
+};
+
 class reduce_inst: public builtin_inst {
 private:
   reduce_inst(value* arg, const std::string& name, instruction* next);

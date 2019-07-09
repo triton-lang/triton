@@ -380,6 +380,12 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     Value *res = builder.CreateCall(atom_f_add, {ptr, val});
     return (Instruction*)res;
   }
+  if(ir::sqrt_inst* ii = dynamic_cast<ir::sqrt_inst*>(inst)){
+    Value *val = value(ii->get_operand(0));
+    Value *sqrt = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::sqrt, {val->getType()});
+    Value *res = builder.CreateCall(sqrt, {val});
+    return (Instruction*)res;
+  }
   // unknown instruction
   throw std::runtime_error("unknown conversion from ir::instruction to Instruction");
 }
@@ -797,7 +803,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       BasicBlock *partial_reduce_done = BasicBlock::Create(ctx, "partial_reduce_done", fn);
       Value *id_in_warp = builder.CreateURem(tid, builder.getInt32(32));
       Value *warp_id = builder.CreateUDiv(tid, builder.getInt32(32));
-
       builder.CreateCondBr(builder.CreateICmpEQ(id_in_warp, builder.getInt32(0)),
                            partial_reduce_do, partial_reduce_done);
       builder.SetInsertPoint(partial_reduce_do);

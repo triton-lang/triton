@@ -180,6 +180,12 @@ ir::value* trans_expression::codegen(ir::module *mod) const {
   return mod->get_builder().create_trans(arg_->codegen(mod));
 }
 
+// sqrt
+ir::value* sqrt_expression::codegen(ir::module *mod) const {
+  return mod->get_builder().create_sqrt(arg_->codegen(mod));
+}
+
+
 // reduce
 ir::value* reduce_expression::codegen(ir::module *mod) const {
   return mod->get_builder().create_reduce(arg_->codegen(mod));

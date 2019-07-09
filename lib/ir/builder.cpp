@@ -320,6 +320,10 @@ value *builder::create_trans(value *A, const std::string &name) {
   return insert(trans_inst::create(A, name));
 }
 
+value *builder::create_sqrt(value *A, const std::string &name) {
+  return insert(sqrt_inst::create(A, name));
+}
+
 value *builder::create_reduce(value *A, const std::string &name) {
   return insert(reduce_inst::create(A, name));
 }

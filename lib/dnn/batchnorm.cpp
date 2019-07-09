@@ -30,7 +30,10 @@ namespace dnn{
  * --------------- */
 
 batchnorm_forward::batchnorm_forward(int C, int D, int H, int W, int B, std::string ty)
-  : C_(C), D_(D), H_(H), W_(W), B_(B), ty_(ty) { }
+  : C_(C), D_(D), H_(H), W_(W), B_(B), ty_(ty), eps_(1e-5) {
+  DHWB_ = D_*H_*W_*B_;
+  rcpDHWB_ = (float)1 / DHWB_;
+}
 
 void batchnorm_forward::enqueue(driver::stream *stream, driver::kernel *kernel,
                         driver::buffer *y, driver::buffer *m, driver::buffer *v,
@@ -44,7 +47,9 @@ void batchnorm_forward::enqueue(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(3, x);
   kernel->setArg(4, g);
   kernel->setArg(5, b);
-  kernel->setArg(6, (int32_t)(D_*H_*W_*B_));
+  kernel->setArg(6, DHWB_);
+  kernel->setArg(7, rcpDHWB_);
+  kernel->setArg(8, eps_);
   stream->enqueue(kernel, grid, {nthreads, 1, 1});
 }
 
@@ -57,7 +62,8 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
                restrict read_only fp32 *X,
                restrict read_only fp32 *G,
                restrict read_only fp32 *B,
-               int32 DHWN) {
+               int32 DHWN,
+               fp32 rcpDHWN, fp32 eps) {
   int32 rx[TM] = 0 ... TM;
   fp32 *px[TM];
   fp32 x[TM];
@@ -72,9 +78,8 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
     mean = mean + x;
     px = px + TM;
   }
-  fp32 m = __sum(mean);
   fp32 *pm = M + c;
-  *pm = m;
+  *pm = __sum(mean) * rcpDHWN;
 
   fp32 var[TM] = 0;
   px = X + rx + c*DHWN;
@@ -84,9 +89,21 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
     var = var + x*x;
     px = px + TM;
   }
-  fp32 v = __sum(var);
+  fp32 v = __sum(var) * rcpDHWN;
   fp32 *pv = V + c;
   *pv = v;
+
+  fp32 rstdg = 1 / sqrt(v + eps) * g;
+
+  px = X + rx + c*DHWN;
+  fp32* py[TM] = Y + rx + c*DHWN;
+  for(int32 i = 0; i < DHWN; i = i + TM){
+    x = *px;
+    fp32 y[TM] = (x - mean)*rstdg + b;
+    *py = y;
+    px = px + TM;
+    py = py + TM;
+  }
 })";
 }
 
@@ -148,16 +165,25 @@ void batchnorm(fp32 *DX, fp32 *DG, fp32 *DB,
     fp32 dy[TM] = *pdy;
     dg = dg + dy*(x - mean)*rstd;
     db = db + dy;
+    px = px + TM;
+    pdy = pdy + TM;
   }
+  fp32 sdg = __sum(dg);
+  fp32 sdb = __sum(db);
 
   px  =  X + rx + offset;
   pdy = DY + rx + offset;
   pdx = DX + rx + offset;
   for(int32 i = 0; i < DHWN; i += TM){
+    fp32 x[TM] = *px;
+    fp32 dy[TM] = *pdy;
     fp32 xhat[TM] = (x - mean) * rstd;
     fp32 xtmp[TM] = (xhat * dg + db) * NDHW;
     fp32 dx[TM] = (dy - xtmp) * rstd * g;
     *pdx = dx;
+    px = px + TM;
+    pdy = pdy + TM;
+    pdx = pdx + TM;
   }
 })";
 }
