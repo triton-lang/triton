@@ -167,6 +167,15 @@ private:
   node* arg_;
 };
 
+class sqrt_expression: public builtin_expression{
+public:
+  sqrt_expression(node *arg): arg_(arg) {}
+  ir::value* codegen(ir::module *) const;
+
+private:
+  node* arg_;
+};
+
 class reduce_expression: public builtin_expression{
 public:
   reduce_expression(node *arg): arg_(arg) {}

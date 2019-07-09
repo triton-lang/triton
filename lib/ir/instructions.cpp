@@ -567,6 +567,19 @@ instruction* trans_inst::create(value *arg, const std::string &name, instruction
 }
 
 //===----------------------------------------------------------------------===//
+//                               sqrt instructions
+//===----------------------------------------------------------------------===//
+
+sqrt_inst::sqrt_inst(value *arg, const std::string &name, instruction *next)
+  : builtin_inst(arg->get_type(), 1, 1, name, next){
+  set_operand(0, arg);
+}
+
+instruction* sqrt_inst::create(value *arg, const std::string &name, instruction *next) {
+  return new sqrt_inst(arg, name, next);
+}
+
+//===----------------------------------------------------------------------===//
 //                               reduce instructions
 //===----------------------------------------------------------------------===//
 reduce_inst::reduce_inst(value *arg, const std::string &name, instruction *next)

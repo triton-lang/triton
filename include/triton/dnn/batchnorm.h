@@ -53,6 +53,9 @@ private:
   int32_t W_;
   int32_t B_;
   std::string ty_;
+  float eps_;
+  int32_t DHWB_;
+  float rcpDHWB_;
 };
 
 class batchnorm_backward {
