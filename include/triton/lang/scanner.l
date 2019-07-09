@@ -49,6 +49,7 @@ using triton::lang::return_void;
 "__atomic_cas"          { return return_impl(ATOMIC_CAS, yytext); }
 "__atomic_exchg"        { return return_impl(ATOMIC_EXCHG, yytext); }
 "__atomic_add"          { return return_impl(ATOMIC_ADD, yytext); }
+"__sum"                 { return return_impl(REDUCE_SUM, yytext); }
 "dot"                   { return return_impl(DOT, yytext); }
 "max"                   { return return_impl(MAX, yytext); }
 "min"                   { return return_impl(MIN, yytext); }

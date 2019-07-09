@@ -40,6 +40,8 @@ inline bool get_is_shared(ir::value* v) {
     return true;
   if(auto x = dynamic_cast<ir::copy_to_shared_inst*>(v))
     return true;
+  if(auto x = dynamic_cast<ir::reduce_inst*>(v))
+    return true;
   if(auto x = dynamic_cast<ir::phi_node*>(v)){
     bool res = true;
     for(unsigned inc = 0; inc < x->get_num_incoming(); inc++)

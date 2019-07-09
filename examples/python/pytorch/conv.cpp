@@ -56,7 +56,7 @@ torch::Tensor conv_common(
                                                 stride_d, stride_h, stride_w,
                                                 pad_d, pad_h, pad_w,
                                                 1, 1, 1,
-                                                ty, has_bias)).first->second.get();
+                                                "fp32", "fp32", ty, has_bias)).first->second.get();
   else
     configuration = m_config.at(key).get();
 

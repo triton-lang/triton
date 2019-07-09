@@ -567,6 +567,19 @@ instruction* trans_inst::create(value *arg, const std::string &name, instruction
 }
 
 //===----------------------------------------------------------------------===//
+//                               reduce instructions
+//===----------------------------------------------------------------------===//
+reduce_inst::reduce_inst(value *arg, const std::string &name, instruction *next)
+  : builtin_inst(arg->get_type()->get_scalar_ty(), 1, 1, name, next) {
+  set_operand(0, arg);
+}
+
+instruction* reduce_inst::create(value *arg, const std::string &name, instruction *next) {
+  return new reduce_inst(arg, name, next);
+}
+
+
+//===----------------------------------------------------------------------===//
 //                               select instructions
 //===----------------------------------------------------------------------===//
 

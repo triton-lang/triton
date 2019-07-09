@@ -320,6 +320,10 @@ value *builder::create_trans(value *A, const std::string &name) {
   return insert(trans_inst::create(A, name));
 }
 
+value *builder::create_reduce(value *A, const std::string &name) {
+  return insert(reduce_inst::create(A, name));
+}
+
 value *builder::create_select(value *pred, value *if_value, value *else_value, const std::string &name){
   return insert(select_inst::create(pred, if_value, else_value, name));
 }

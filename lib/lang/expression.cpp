@@ -175,9 +175,14 @@ ir::value* select_expression::codegen(ir::module *mod) const {
   return mod->get_builder().create_select(pred, if_value, else_value);
 }
 
-// Trans
+// trans
 ir::value* trans_expression::codegen(ir::module *mod) const {
   return mod->get_builder().create_trans(arg_->codegen(mod));
+}
+
+// reduce
+ir::value* reduce_expression::codegen(ir::module *mod) const {
+  return mod->get_builder().create_reduce(arg_->codegen(mod));
 }
 
 /* Postfix expression */
