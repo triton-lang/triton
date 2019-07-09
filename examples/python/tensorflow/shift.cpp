@@ -34,6 +34,8 @@ public:
   explicit ShiftConvOp(OpKernelConstruction* context) : OpKernel(context) {
     context->GetAttr("shift_h", &h_shift_h_);
     context->GetAttr("shift_w", &h_shift_w_);
+    context->GetAttr("stride_h", &stride_h_);
+    context->GetAttr("stride_w", &stride_w_);
     R_ = 3;
     S_ = 3;
   }
@@ -52,12 +54,12 @@ public:
       int64_t Hb    = tf_b.dim_size(1);
       int64_t Wb    = tf_b.dim_size(2);
       int64_t Bb    = tf_b.dim_size(3);
-      OP_REQUIRES(context, Ha == Hb, tensorflow::errors::InvalidArgument("operands must have the same image height"));
-      OP_REQUIRES(context, Wa == Wb, tensorflow::errors::InvalidArgument("operands must have the same image width"));
+      OP_REQUIRES(context, Ha*stride_h_ == Hb, tensorflow::errors::InvalidArgument("operands must have the same image height"));
+      OP_REQUIRES(context, Wa*stride_w_ == Wb, tensorflow::errors::InvalidArgument("operands must have the same image width"));
       OP_REQUIRES(context, Ba == Bb, tensorflow::errors::InvalidArgument("operands must have the same batch size"));
-      H = Ha;
-      W = Wa;
-      B = Ba;
+      H = Hb;
+      W = Wb;
+      B = Bb;
     }
     else {
       // shapes for a
@@ -65,6 +67,10 @@ public:
       H   = tf_a.dim_size(1);
       W   = tf_a.dim_size(2);
       B   = tf_a.dim_size(3);
+      if(OP == triton::dnn::shift::BPROP){
+        H *= stride_h_;
+        W *= stride_w_;
+      }
       // shapes for b
       int64_t Cb  = tf_b.dim_size(0);
       F   = tf_b.dim_size(1);
@@ -104,7 +110,9 @@ public:
     if(m_config.find(key) == m_config.end())
       shift = m_config.emplace(key, new triton::dnn::shift(
                                                   B, C, D, H, W, T, R_, S_, F,
-                                                  shift_h, shift_w, "fp32", "fp32", OP, has_bias))
+                                                  stride_h_, stride_w_,
+                                                  shift_h, shift_w,
+                                                  "fp32", "fp32", OP, has_bias))
                                                     .first->second.get();
     else
       shift = m_config.at(key).get();
@@ -125,7 +133,7 @@ public:
     triton::driver::cu_buffer dc(ctx,      (CUdeviceptr)tf_c->flat<float>().data(), false);
     // get JIT
     triton::jit* jit;
-    bool autotune = true;
+    bool autotune = false;
     if(m_jit.find(key) == m_jit.end()) {
       jit = m_jit.emplace(key, new triton::jit(ctx)).first->second.get();
       std::ostringstream oss;
@@ -171,6 +179,8 @@ public:
 private:
   Tensor  h_shift_h_;
   Tensor  h_shift_w_;
+  int stride_h_;
+  int stride_w_;
   int R_;
   int S_;
 };
@@ -181,6 +191,8 @@ REGISTER_OP("ShiftConv")
     .Input("b: float32")
     .Attr("shift_h: tensor")
     .Attr("shift_w: tensor")
+    .Attr("stride_h: int")
+    .Attr("stride_w: int")
     .Output("c: float32");
 
 REGISTER_KERNEL_BUILDER(Name("ShiftConvDx").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::shift::BPROP>);
@@ -189,6 +201,8 @@ REGISTER_OP("ShiftConvDx")
     .Input("b: float32")
     .Attr("shift_h: tensor")
     .Attr("shift_w: tensor")
+    .Attr("stride_h: int")
+    .Attr("stride_w: int")
     .Output("c: float32");
 
 REGISTER_KERNEL_BUILDER(Name("ShiftConvDw").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::shift::WGRAD>);
@@ -197,5 +211,7 @@ REGISTER_OP("ShiftConvDw")
     .Input("b: float32")
     .Attr("shift_h: tensor")
     .Attr("shift_w: tensor")
+    .Attr("stride_h: int")
+    .Attr("stride_w: int")
     .Output("c: float32");
 

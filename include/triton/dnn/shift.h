@@ -52,6 +52,7 @@ public:
   shift(int B, int NC,
        int D, int H, int W,
        int T, int R, int S, int NF,
+        int stride_h, int stride_w,
        const std::vector<int32_t> &shift_h, const std::vector<int32_t> &shift_w,
        std::string a_ty = "fp32", std::string b_ty = "fp32",
        type ty = FPROP, bool bias = false);
@@ -133,6 +134,10 @@ private:
   std::vector<int32_t> shapes_a_;
   std::vector<int32_t> shapes_b_;
   std::vector<int32_t> shapes_c_;
+  // strides
+  int32_t stride_d_;
+  int32_t stride_h_;
+  int32_t stride_w_;
   // memory strides
   std::vector<int32_t> ld_a_;
   std::vector<int32_t> ld_b_;

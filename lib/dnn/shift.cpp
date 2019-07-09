@@ -17,6 +17,7 @@ shift::shift(int B, int C,
              int D, int H, int W,
              int T, int R, int S,
              int F,
+             int stride_h, int stride_w,
              const std::vector<int32_t>& shift_h, const std::vector<int32_t>& shift_w,
              std::string a_ty, std::string b_ty,
              type ty, bool bias)
@@ -24,6 +25,7 @@ shift::shift(int B, int C,
     AD_(D), AH_(H), AW_(W),
     BD_(T), BH_(R), BW_(S),
     F_(F),
+    stride_d_(1), stride_h_(stride_h), stride_w_(stride_w),
     shift_h_(shift_h), shift_w_(shift_w),
     a_ty_(a_ty), b_ty_(b_ty),
     ty_(ty), bias_(bias) {
@@ -33,17 +35,21 @@ shift::shift(int B, int C,
   // transpose
   AT_ = false;
   BT_ = true;
+  // activation sizes
+  CD_ = AD_ / stride_d_;
+  CH_ = AH_ / stride_h_;
+  CW_ = AW_ / stride_w_;
   // equivalent matmul
-  M_ = B_*AH_*AW_;
+  M_ = B_*CH_*CW_;
   N_ = F_;
   K_ = C_;
   // shapes
   // input layout: C, H, W, B
   // filter layout: C, F
   // output layout: F, H, W, B
-  shapes_a_ = {C, H, W, B};
+  shapes_a_ = {C, AH_, AW_, B};
   shapes_b_ = {C, F};
-  shapes_c_ = {F, H, W, B};
+  shapes_c_ = {F, CH_, CW_, B};
   if(ty_ == WGRAD){
     shapes_b_.swap(shapes_c_);
     shapes_a_.swap(shapes_b_);
@@ -51,14 +57,14 @@ shift::shift(int B, int C,
     BT_ = false;
     M_ = F_;
     N_ = C_;
-    K_ = B_*AH_*AW_;
+    K_ = B_*CH_*CW_;
   }
   if(ty_ == BPROP){
     shapes_a_.swap(shapes_c_);
     AT_ = false;
     BT_ = false;
     K_ = F_;
-    M_ = B_*AH_*AW_;
+    M_ = B_*CH_*CW_;
     N_ = C_;
   }
   // memory strides
@@ -133,13 +139,15 @@ void shift::enqueue(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(3, M_);
   kernel->setArg(4, N_);
   kernel->setArg(5, K_);
-  kernel->setArg(6, lda);
-  kernel->setArg(7, ldb);
-  kernel->setArg(8, B_);
-  kernel->setArg(9, AH_);
-  kernel->setArg(10, AW_);
-  kernel->setArg(11, BH_);
-  kernel->setArg(12, BW_);
+  kernel->setArg(6, stride_h_);
+  kernel->setArg(7, stride_w_);
+  kernel->setArg(8, lda);
+  kernel->setArg(9, ldb);
+  kernel->setArg(10, B_);
+  kernel->setArg(11, AH_);
+  kernel->setArg(12, AW_);
+  kernel->setArg(13, BH_);
+  kernel->setArg(14, BW_);
   std::array<size_t, 3> grid = {(M_ + TM - 1)/TM, (N_ + TN - 1)/TN, 1};
   if(ty_ == BPROP)
     ((driver::cu_buffer*)c)->set_zero(stream, M_*N_*4);
@@ -188,6 +196,7 @@ void shift(restrict read_only align(16) )" << a_ty_ << R"( *a,
            restrict read_only align(16) )" << b_ty_ << R"( *b,
            fp32 *c,
            int32 M, int32 N, int32 K,
+           int32 stride_h, int32 stride_w,
            int32 lda, int32 ldb,
            int32 ABS, int32 AH, int32 AW, int32 AR, int32 AS) {
   int32 rxa[TM] = get_global_range[TM](0);
@@ -200,9 +209,9 @@ void shift(restrict read_only align(16) )" << a_ty_ << R"( *a,
 if(ty_ == FPROP){
   os << R"(
   int32 rawhc[TM] = rxa / ABS;
-  int32 raw[TM] = rawhc % AW;
+  int32 raw[TM] = (rawhc % AW)*stride_w;
   int32 rahc[TM] = rawhc / AW;
-  int32 rah[TM] = rahc % AH;
+  int32 rah[TM] = (rahc % AH)*stride_h;
   __constant__ int32* pd[TK] = delta + rka;
   multiple_of(4) int32 d[TK] = *pd;
   int1 interiorh[TM] = (rah >= pad_h) && (rah < (AH - pad_h));
@@ -227,9 +236,9 @@ if(ty_ == WGRAD){
 if(ty_ == WGRAD){
   os << R"(
     int32 rbwhc[TK] = rkb / ABS;
-    int32 rbw[TK] = rbwhc % AW;
+    int32 rbw[TK] = (rbwhc % AW)*stride_w;
     int32 rbhc[TK] = rbwhc / AW;
-    int32 rbh[TK] = rbhc % AH;
+    int32 rbh[TK] = (rbhc % AH)*stride_h;
     int1 interiorh[TK] = (rbh >= pad_h) && (rbh < (AH - pad_h));
     int1 interiorw[TK] = (rbw >= pad_w) && (rbw < (AW - pad_w));
     int1 interior[TK, TN] = interiorh[:, newaxis] && interiorw[:, newaxis];
@@ -266,9 +275,9 @@ if(ty_ == WGRAD){
     pb     = pb +  TK)" << ldb0 << R"(;
     rkb   = rkb + TK;
     rbwhc = rkb / ABS;
-    rbw   = rbwhc % AW;
+    rbw   = (rbwhc % AW)*stride_w;
     rbhc  = rbwhc / AW;
-    rbh   = rbhc % AH;
+    rbh   = (rbhc % AH)*stride_h;
     interiorh = (rbh >= pad_h) && (rbh < (AH - pad_h));
     interiorw = (rbw >= pad_w) && (rbw < (AW - pad_w));
     interior  = interiorh[:, newaxis] && interiorw[:, newaxis];
@@ -292,9 +301,9 @@ else{
 if(ty_ == BPROP){
   os << R"(
   int32 rcwhc[TM] = rxc / ABS;
-  int32 rcw[TM] = rcwhc % AW;
+  int32 rcw[TM] = (rcwhc % AW)*stride_w;
   int32 rchc[TM] = rcwhc / AW;
-  int32 rch[TM] = rchc % AH;
+  int32 rch[TM] = (rchc % AH)*stride_h;
   int1 interiorh[TM] = (rch >= pad_h) && (rch < (AH - pad_h));
   int1 interiorw[TM] = (rcw >= pad_w) && (rcw < (AW - pad_w));
   int1 interior[TM, TN] = interiorh[:, newaxis] && interiorw[:, newaxis];
