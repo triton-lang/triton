@@ -128,3 +128,4 @@ def run_batchnorm():
     print(np.max(np.abs(db_t - db_n)))
 
 run_shift()
+#run_batchnorm()

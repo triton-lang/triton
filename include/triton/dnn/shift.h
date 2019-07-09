@@ -28,13 +28,15 @@
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include "triton/dnn/base.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
+#include "triton/runtime/jit.h"
 
 namespace triton{
 namespace dnn{
 
-class shift {
+class shift: public base {
 
 public:
   enum type {
@@ -44,8 +46,14 @@ public:
   };
 
 private:
+  // leading dimensions
   void set_ld(const std::vector<int32_t>& shapes,
               std::vector<int32_t>& ld);
+  // initialize and enqueue
+  void init_impl(driver::stream *stream, driver::cu_module *module);
+  void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
+                    std::vector<driver::buffer*> args,
+                    size_t TM, size_t TN, size_t nthreads);
 
 public:
 
@@ -60,26 +68,18 @@ public:
   // look-up table
   void build_deltas();
   void build_masks();
-
   // accessors
   size_t a_size();
   size_t b_size();
   size_t c_size();
   std::vector<int32_t> c_shapes();
-
-  // device function
-  void init(driver::stream *stream, driver::cu_module *module);
-  void enqueue(driver::stream *stream, driver::kernel *kernel,
-               driver::buffer *a, driver::buffer *b, driver::buffer *c,
-               size_t TM, size_t TN, size_t nthreads);
-
-  // utils
-  size_t get_nflops();
-
+  // number of flops
+  size_t get_nflops() const;
   // source
-  void src(std::ostream &os);
-
-  // cpu_ref
+  void get_src(std::ostream &os) const;
+  // comparison
+  bool operator<(const base& other) const;
+  // cpu reference
   template<class IN_DTYPE, class OUT_DTYPE>
   void cpu_ref(OUT_DTYPE* O,
                   const IN_DTYPE* I,

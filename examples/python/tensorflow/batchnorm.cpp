@@ -133,7 +133,6 @@ public:
     triton::driver::cu_buffer tdx(ctx, (CUdeviceptr)dx->flat<float>().data(), false);
     triton::driver::cu_buffer tdg(ctx, (CUdeviceptr)dg->flat<float>().data(), false);
     triton::driver::cu_buffer tdb(ctx, (CUdeviceptr)db->flat<float>().data(), false);
-
     // create config
     triton::dnn::batchnorm_backward batchnorm(C, 1, H, W, B, "fp32");
     std::ostringstream oss;
