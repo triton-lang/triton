@@ -58,7 +58,7 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
                restrict read_only fp32 *G,
                restrict read_only fp32 *B,
                int32 DHWN) {
-  int32 rx[TM] = get_global_range[TM](0);
+  int32 rx[TM] = 0 ... TM;
   fp32 *px[TM];
   fp32 x[TM];
   int32 c = get_range_id(0);
@@ -82,6 +82,7 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
     x = *px;
     x = x - mean;
     var = var + x*x;
+    px = px + TM;
   }
   fp32 v = __sum(var);
   fp32 *pv = V + c;
