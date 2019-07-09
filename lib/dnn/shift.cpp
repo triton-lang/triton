@@ -1,5 +1,6 @@
+#include <sstream>
 #include "triton/dnn/shift.h"
-
+#include "triton/tools/bench.hpp"
 
 namespace triton{
 namespace dnn{
@@ -21,7 +22,8 @@ shift::shift(int B, int C,
              const std::vector<int32_t>& shift_h, const std::vector<int32_t>& shift_w,
              std::string a_ty, std::string b_ty,
              type ty, bool bias)
-  : B_(B), C_(C),
+  : base("shift"),
+    B_(B), C_(C),
     AD_(D), AH_(H), AW_(W),
     BD_(T), BH_(R), BW_(S),
     F_(F),
@@ -118,21 +120,33 @@ std::vector<int32_t> shift::c_shapes(){
   return shapes_c_;
 }
 
-size_t shift::get_nflops() {
+size_t shift::get_nflops() const {
   return 2.*M_*N_*K_;
 }
 
+bool shift::operator <(const base& other) const{
+  auto *y = dynamic_cast<const shift*>(&other);
+  if(!y)
+    return false;
+  const int32_t *x_shift_h = shift_h_.data(), *x_shift_w = shift_w_.data();
+  const int32_t *y_shift_h = y->shift_h_.data(), *y_shift_w = y->shift_w_.data();
+  return std::tie(B_, C_, AD_, AH_, AW_, BD_, BH_, BW_, F_,
+                  x_shift_h, x_shift_w, ty_, bias_)
+       < std::tie(y->B_, y->C_, y->AD_, y->AH_, y->AW_, y->BD_, y->BH_, y->BW_, y->F_,
+                  y_shift_h, y_shift_w, y->ty_, y->bias_);
+}
 
-void shift::init(driver::stream *stream, driver::cu_module *module) {
+void shift::init_impl(driver::stream *stream, driver::cu_module *module) {
   triton::driver::buffer* delta = ((triton::driver::cu_module*)module)->symbol("delta");
   stream->write(delta, false, 0, h_deltas_.size()*4, h_deltas_.data());
 }
 
-void shift::enqueue(driver::stream *stream, driver::kernel *kernel,
-                    driver::buffer *a, driver::buffer *b, driver::buffer *c,
+void shift::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
+                    std::vector<driver::buffer *> args,
                     size_t TM, size_t TN, size_t nthreads) {
   int32_t lda = AT_ ? K_ : M_;
   int32_t ldb = BT_ ? N_ : K_;
+  driver::buffer *a = args[0], *b = args[1], *c = args[2];
   kernel->setArg(0, a);
   kernel->setArg(1, b);
   kernel->setArg(2, c);
@@ -154,7 +168,7 @@ void shift::enqueue(driver::stream *stream, driver::kernel *kernel,
   stream->enqueue(kernel, grid, {nthreads, 1, 1});
 }
 
-void shift::src(std::ostream &os) {
+void shift::get_src(std::ostream &os) const {
   std::string AS0 = "TM", AS1 = "TK";
   std::string BS0 = "TK", BS1 = "TN";
   std::string bcb0 = "[:, newaxis]", bcb1 = "[newaxis, :]";
