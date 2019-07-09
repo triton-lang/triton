@@ -49,35 +49,35 @@ def run_conv():
 def blocksparse_matmul_grad(op, dy):
     shift_h = op.get_attr('shift_h')
     shift_w = op.get_attr('shift_w')
+    stride_h = op.get_attr('stride_h')
+    stride_w = op.get_attr('stride_w')
     x = op.inputs[0]
     w = op.inputs[1]
-    dx = module.shift_conv_dx(dy, w, shift_h=shift_h, shift_w=shift_w)
-    dw = module.shift_conv_dw(dy, x, shift_h=shift_h, shift_w=shift_w)
+    dx = module.shift_conv_dx(dy, w, stride_h=stride_h, stride_w=stride_w, shift_h=shift_h, shift_w=shift_w)
+    dw = module.shift_conv_dw(dy, x, stride_h=stride_h, stride_w=stride_w, shift_h=shift_h, shift_w=shift_w)
     return (dx, dw)
 
 def run_shift():
-    B, C, H, W = 16, 1024, 8, 8
-    R, S, F = 3, 3, 1024
+    B, C, H, W = 16, 16, 4, 4
+    R, S, F = 3, 3, 4
+    stride_h, stride_w = 2, 2
     np.random.seed(2)
     a = tf.placeholder(tf.float32, shape=[C, H, W, B])
     b = tf.placeholder(tf.float32, shape=[C, F])
     hshift_h = np.random.randint(- (R//2), R//2 + 1, size=C, dtype=np.int32)
     hshift_w = np.random.randint(- (S//2), R//2 + 1, size=C, dtype=np.int32)
-    #hshift_h = np.ones(C, dtype=np.int32)
-    #hshift_w = np.ones(C, dtype=np.int32)
-    c = module.shift_conv(a, b, shift_h=tf.make_tensor_proto(hshift_h), shift_w=tf.make_tensor_proto(hshift_w))
-    # Reference
+    c = module.shift_conv(a, b, stride_h=stride_h, stride_w=stride_w, shift_h=tf.make_tensor_proto(hshift_h), shift_w=tf.make_tensor_proto(hshift_w))
+    # feed values
     ha = np.random.rand(C, H, W, B)
     hb = np.random.rand(C, F)
-    #ha = np.ones((C, H, W, B), dtype=np.int32)
-    #hb = np.ones((C, F), dtype=np.int32)
     sess = tf.InteractiveSession()
-    #grads = tf.test.compute_gradient([a, b], [(C, H, W, B), (C, F)], c, (F, H, W, B),
-    #                                 extra_feed_dict = {a: ha, b: hb})
-    #dw_t, dw_n = grads[1]
-    #dx_t, dx_n = grads[0]
-    #print(np.max(np.abs(dw_t - dw_n)))
-    #print(np.max(np.abs(dx_t - dx_n)))
+    # test
+    grads = tf.test.compute_gradient([a, b], [(C, H, W, B), (C, F)], c, (F, H//stride_h, W//stride_w, B),
+                                     extra_feed_dict = {a: ha, b: hb})
+    dw_t, dw_n = grads[1]
+    dx_t, dx_n = grads[0]
+    print(np.max(np.abs(dw_t - dw_n)))
+    print(np.max(np.abs(dx_t - dx_n)))
     # Run
     sess.run(tf.global_variables_initializer())
     result = sess.run([c], feed_dict = {a: ha,
@@ -127,4 +127,4 @@ def run_batchnorm():
     print(np.max(np.abs(dg_t - dg_n)))
     print(np.max(np.abs(db_t - db_n)))
 
-run_batchnorm()
+run_shift()
