@@ -79,13 +79,14 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
     px = px + TM;
   }
   fp32 *pm = M + c;
-  *pm = __sum(mean) * rcpDHWN;
+  fp32 m = __sum(mean) * rcpDHWN;
+  *pm = m;
 
   fp32 var[TM] = 0;
   px = X + rx + c*DHWN;
   for(int32 i = 0; i < DHWN; i = i + TM){
     x = *px;
-    x = x - mean;
+    x = x - m;
     var = var + x*x;
     px = px + TM;
   }
@@ -99,7 +100,7 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
   fp32* py[TM] = Y + rx + c*DHWN;
   for(int32 i = 0; i < DHWN; i = i + TM){
     x = *px;
-    fp32 y[TM] = (x - mean)*rstdg + b;
+    fp32 y[TM] = (x - m)*rstdg + b;
     *py = y;
     px = px + TM;
     py = py + TM;
@@ -111,8 +112,8 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
  *    Backward
  * --------------- */
 
-batchnorm_backward::batchnorm_backward(int C, int D, int H, int W, int B, std::string ty)
-  : C_(C), D_(D), H_(H), W_(W), B_(B), ty_(ty)
+batchnorm_backward::batchnorm_backward(int C, int D, int H, int W, int B, std::string ty, float eps)
+  : C_(C), D_(D), H_(H), W_(W), B_(B), ty_(ty), eps_(eps)
 { }
 
 void batchnorm_backward::enqueue(driver::stream *stream, driver::kernel *kernel,
@@ -120,7 +121,7 @@ void batchnorm_backward::enqueue(driver::stream *stream, driver::kernel *kernel,
                         driver::buffer *x, driver::buffer *g, driver::buffer *m, driver::buffer *v,
                         size_t, size_t nthreads) {
 
-  std::array<size_t, 3> grid = {(size_t)C_, 1, 1};
+  std::array<size_t, 3> grid = {1, (size_t)C_, 1};
   kernel->setArg(0, dx);
   kernel->setArg(1, dg);
   kernel->setArg(2, db);
@@ -130,6 +131,8 @@ void batchnorm_backward::enqueue(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(6, m);
   kernel->setArg(7, v);
   kernel->setArg(8, (int32_t)(D_*H_*W_*B_));
+  kernel->setArg(9, (float)1/(D_*H_*W_*B_));
+  kernel->setArg(10, eps_);
   stream->enqueue(kernel, grid, {nthreads, 1, 1});
 }
 
@@ -144,14 +147,14 @@ void batchnorm(fp32 *DX, fp32 *DG, fp32 *DB,
                restrict read_only fp32 *G,
                restrict read_only fp32 *M,
                restrict read_only fp32 *V,
-               int32 DHWN) {
-  int32 rx[TM] = get_global_range[TM](0);
+               int32 DHWN, fp32 rcpDHWN, fp32 epsilon) {
+  int32 rx[TM] = 0 ... TM;
   int32 c = get_range_id(0);
   int32 offset = c*DHWN;
   fp32 g = *(G + c);
   fp32 mean = *(M + c);
   fp32 var = *(V + c);
-  fp32 rstd = var;
+  fp32 rstd = 1 / sqrt(var + epsilon);
   fp32* px[TM];
   fp32* pdx[TM];
   fp32* pdy[TM];
@@ -160,7 +163,7 @@ void batchnorm(fp32 *DX, fp32 *DG, fp32 *DB,
   pdy = DY + rx + offset;
   fp32  dg[TM] = 0;
   fp32  db[TM] = 0;
-  for(int32 i = 0; i < DHWN; i += TM){
+  for(int32 i = 0; i < DHWN; i = i + TM){
     fp32 x[TM] = *px;
     fp32 dy[TM] = *pdy;
     dg = dg + dy*(x - mean)*rstd;
@@ -170,15 +173,19 @@ void batchnorm(fp32 *DX, fp32 *DG, fp32 *DB,
   }
   fp32 sdg = __sum(dg);
   fp32 sdb = __sum(db);
+  fp32 *pdg = DG + c;
+  fp32 *pdb = DB + c;
+  *pdg = sdg;
+  *pdb = sdb;
 
   px  =  X + rx + offset;
   pdy = DY + rx + offset;
   pdx = DX + rx + offset;
-  for(int32 i = 0; i < DHWN; i += TM){
+  for(int32 i = 0; i < DHWN; i = i + TM){
     fp32 x[TM] = *px;
     fp32 dy[TM] = *pdy;
     fp32 xhat[TM] = (x - mean) * rstd;
-    fp32 xtmp[TM] = (xhat * dg + db) * NDHW;
+    fp32 xtmp[TM] = (xhat * dg + db) * rcpDHWN;
     fp32 dx[TM] = (dy - xtmp) * rstd * g;
     *pdx = dx;
     px = px + TM;

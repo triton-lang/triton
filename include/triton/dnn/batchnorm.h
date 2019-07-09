@@ -61,7 +61,7 @@ private:
 class batchnorm_backward {
 public:
   // constructor
-  batchnorm_backward(int C, int D, int H, int W, int B, std::string ty = "fp32");
+  batchnorm_backward(int C, int D, int H, int W, int B, std::string ty = "fp32", float eps = 1e-5);
   // enqueue
   void enqueue(driver::stream *stream, driver::kernel *kernel,
                driver::buffer *dx, driver::buffer *dg, driver::buffer *db, driver::buffer *dy,
@@ -78,6 +78,7 @@ private:
   int32_t W_;
   int32_t B_;
   std::string ty_;
+  float eps_;
 };
 
 }

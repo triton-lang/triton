@@ -100,7 +100,7 @@ def batch_norm_grad(op, dy, mean, var):
 
 
 def run_batchnorm():
-    C, H, W, B = 32, 16, 16, 16
+    C, H, W, B = 1, 4, 4, 4
     np.random.seed(0)
     # Placeholders
     x = tf.placeholder(tf.float32, shape=[C, H, W, B])
@@ -112,11 +112,19 @@ def run_batchnorm():
     hb = np.random.rand(C)
     # batchnorm
     y, m, v = module.batchnorm_forward(x, g, b, eps=1e-5)
+    loss = np.sum(y)
     # Run
     sess = tf.InteractiveSession()
     sess.run(tf.global_variables_initializer())
     result = sess.run([y, m, v], feed_dict = {x: hx, g: hg, b: hb})
-
-
+    #print(result[0], result[1], result[2])
+    grads = tf.test.compute_gradient([x, g, b], [(C, H, W, B), (C, ), (C, )], y, (C, H, W, B),
+                                     extra_feed_dict = {x: hx, g: hg, b: hb})
+    dx_t, dx_n = grads[0]
+    dg_t, dg_n = grads[1]
+    db_t, db_n = grads[2]
+    print(np.max(np.abs(dx_t - dx_n)))
+    print(np.max(np.abs(dg_t - dg_n)))
+    print(np.max(np.abs(db_t - db_n)))
 
 run_batchnorm()
