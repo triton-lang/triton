@@ -73,7 +73,6 @@ public:
       if(OP == triton::dnn::shift::BPROP)
         std::swap(C, F);
     }
-
   }
 
   void Compute(OpKernelContext* context){
