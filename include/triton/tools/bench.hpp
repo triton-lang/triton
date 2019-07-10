@@ -1,6 +1,8 @@
 #ifndef TRITON_TOOLS_BENCH_HPP
 #define TRITON_TOOLS_BENCH_HPP
 
+#include <chrono>
+
 namespace triton{
 namespace tools{
 
