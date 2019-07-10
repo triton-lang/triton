@@ -4,17 +4,6 @@
 namespace triton{
 namespace dnn{
 
-void conv::set_ld(const std::vector<int32_t>& shapes,
-                  std::vector<int32_t>& ld) {
-  size_t size = shapes.size();
-  ld.resize(size);
-  ld[4] = 1;
-  ld[3] = shapes[4]*ld[4];
-  ld[2] = shapes[3]*ld[3];
-  ld[1] = shapes[2]*ld[2];
-  ld[0] = shapes[1]*ld[1];
-}
-
 conv::conv(int B, int NC,
      int D, int H, int W,
      int T, int R, int S, int NF,
@@ -23,7 +12,8 @@ conv::conv(int B, int NC,
      int upsample_d, int upsample_h, int upsample_w,
      std::string a_ty, std::string b_ty,
      type ty, bool bias)
-  : NB_(B), NC_(NC), AD_(D), AH_(H), AW_(W), BD_(T), BH_(R), BW_(S), NF_(NF),
+  : base("conv"),
+    NB_(B), NC_(NC), AD_(D), AH_(H), AW_(W), BD_(T), BH_(R), BW_(S), NF_(NF),
     stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
     pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
     upsample_d_(upsample_d), upsample_h_(upsample_h), upsample_w_(upsample_w),
@@ -93,7 +83,7 @@ conv::conv(int B, int NC,
     Fs_ = K_;
   TK_ = 8;
   Luts_ = (TK_ + Fs_ - 1) / Fs_ * Fs_;
-  build_deltas();
+  build_a_deltas();
   if(b_lut_)
     build_b_deltas();
   build_masks();
@@ -105,6 +95,28 @@ conv::conv(int B, int NC,
   is_mask_cst_ = cst_size < 65536;
   max_grid_0_ = 256;
   max_grid_1_ = 256;
+}
+
+// comparison for maps
+bool conv::operator<(const base& other) const {
+  auto *y = dynamic_cast<const conv*>(&other);
+  if(!y)
+    return true;
+  return  std::tie(NB_, NC_, AD_, AH_, AW_,
+                   NF_, BD_, BH_, BW_,
+                   pad_d_, pad_h_, pad_w_,
+                   stride_d_, stride_h_, stride_w_,
+                   a_ty_, b_ty_, ty_, bias_)
+        < std::tie(y->NB_, y->NC_, y->AD_, y->AH_, y->AW_,
+                   y->NF_, y->BD_, y->BH_, y->BW_,
+                   y->pad_d_, y->pad_h_, y->pad_w_,
+                   y->stride_d_, y->stride_h_, y->stride_w_,
+                   y->a_ty_, y->b_ty_, y->ty_, y->bias_);
+}
+
+// clone
+base* conv::clone() const {
+  return new conv(*this);
 }
 
 size_t conv::a_size()
@@ -176,7 +188,7 @@ void conv::build_b_deltas(){
   }
 }
 
-void conv::build_deltas(){
+void conv::build_a_deltas(){
   h_a_deltas_.resize(Luts_ + upsample_d_*upsample_h_*upsample_w_*Luts_);
   for(size_t i = 0; i < Luts_; ++i)
     h_a_deltas_[i] = (((i + TK_) % Luts_) - i);
@@ -258,13 +270,15 @@ void conv::build_masks(){
     h_masks_[i] = 0x0;
 }
 
-std::array<size_t, 3> conv::get_grid(size_t TM, size_t TN)
-{ return {(M_ + TM - 1)/TM, (N_ + TN - 1)/TN, 1}; }
+std::array<size_t, 3> conv::get_grid(size_t TM, size_t TN){
+  return {(M_ + TM - 1)/TM, (N_ + TN - 1)/TN, 1};
+}
 
-size_t conv::get_nflops()
-{ return 2.*M_*N_*K_; }
+size_t conv::num_flops() const{
+  return 2.*M_*N_*K_;
+}
 
-void conv::init(driver::stream *stream, triton::driver::cu_module* module) {
+void conv::init_impl(driver::stream *stream, triton::driver::cu_module* module) {
   auto init_lut = [&](bool is_cst, const char *name, std::vector<int32_t> host) -> triton::driver::buffer*{
     if(host.empty())
       return nullptr;
@@ -349,9 +363,13 @@ void conv::set_arg(driver::kernel *kernel,
     kernel->setArg(idx++, d_masks_);
 }
 
-void conv::enqueue(driver::stream *stream, driver::kernel *kernel,
-                   driver::buffer *a, driver::buffer *b, driver::buffer *c, driver::buffer *bias,
-                   size_t TM, size_t TN, size_t GZ, size_t nthreads) {
+void conv::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
+                        std::vector<driver::buffer*> args,
+                        const std::vector<unsigned>& ranges,
+                        size_t nthreads) {
+  driver::buffer *a = args[0], *b = args[1], *c = args[2], *bias = args[3];
+  unsigned TM = ranges[0], TN = ranges[1];
+  unsigned GZ = 1;
   set_arg(kernel, a, b, c, bias);
   std::array<size_t, 3> grid = {1};
   grid[0] = (M_ + TM - 1)/TM;
@@ -410,6 +428,8 @@ std::vector<unsigned> conv::default_params() {
     return {16, 2, 64, 16, 16, 16, 4, 2, 2, 4, 2, 8, 4, 2, 1};
 }
 
+
+/* CPU reference implementation */
 
 template<class IN_DTYPE, class OUT_DTYPE>
 void conv::cpu_xprop(OUT_DTYPE* C,  IN_DTYPE* A, IN_DTYPE* B)
@@ -496,7 +516,9 @@ void conv::cpu_ref(OUT_DTYPE* C,  IN_DTYPE* A, IN_DTYPE* B)
     cpu_wgrad(C, A, B);
 }
 
-void conv::src(std::ostream &os){
+/* Triton-C source code */
+
+void conv::triton_c_src(std::ostream &os) const {
   std::string BS    = b_trans_ ? "[TN,TK]"      : "[TK, TN]";
   std::string bcb0  = b_trans_ ? "[:, newaxis]" : "[newaxis, :]";
   std::string bcb1  = b_trans_ ? "[newaxis, :]" : "[:, newaxis]";
@@ -526,7 +548,7 @@ void conv::src(std::ostream &os){
       R"(
 const tunable int32 TM = {16, 32, 64};
 const tunable int32 TN = {16, 32, 64};
-const tunable int32 TK = {16};
+const tunable int32 TK = {)" << TK_ << R"(};
 const tunable int32 GZ = {1};
 )";
 if(is_a_deltas_cst)

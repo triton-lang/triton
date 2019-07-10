@@ -10,7 +10,6 @@
 int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
-  triton::jit jit(context);
   triton::dnn::conv::type ty = triton::dnn::conv::FPROP;
   // initialization
   int32_t B = 16, NF = 128;
@@ -19,8 +18,12 @@ int main() {
   int32_t pad_d = 0, pad_h = 0, pad_w = 0;
   int32_t stride_d = 1, stride_h = 1, stride_w = 1;
   int32_t upsample_d = 1, upsample_h = 1, upsample_w = 1;
-  triton::dnn::conv configuration(128, 256, 1, 14, 14, 1, 5, 5, 512, 1, 1, 1, 0, 0, 0, 1, 1, 1, "fp32", "fp32", triton::dnn::conv::FPROP, 0);
-//  triton::dnn::conv configuration(B, NC, D, H, W, T, R, S, NF, stride_d, stride_h, stride_w, pad_d, pad_h, pad_w, upsample_d, upsample_h, upsample_w, ty);
+//  triton::dnn::conv configuration(128, 256, 1, 14, 14, 1, 5, 5, 512, 1, 1, 1, 0, 0, 0, 1, 1, 1, "fp32", "fp32", triton::dnn::conv::FPROP, 0);
+  triton::dnn::conv configuration(B, NC, D, H, W, T, R, S, NF,
+                                  stride_d, stride_h, stride_w,
+                                  pad_d, pad_h, pad_w,
+                                  upsample_d, upsample_h, upsample_w,
+                                  "fp32", "fp32", ty, 0);
   // convolution configuration
   std::vector<float> hc(configuration.c_size());
   std::vector<float> rc(configuration.c_size());
@@ -42,29 +45,7 @@ int main() {
   stream->write(db, true, 0, hb);
   stream->write(dc, true, 0, hc);
   stream->synchronize();
-  // benchmark a given convolution kernel
-  auto benchmark = [&](triton::driver::kernel* kernel,
-                       triton::jit::launch_information info) {
-    configuration.init(stream, (triton::driver::cu_module*)kernel->module());
-    unsigned TM = info.global_range_size[0];
-    unsigned TN = info.global_range_size[1];
-    unsigned nthreads = info.num_threads;
-    unsigned GZ = jit.get_int("GZ");
-    configuration.enqueue(stream, kernel, da, db, dc, nullptr, TM, TN, GZ, nthreads);
-    stream->synchronize();
-    double ts = triton::tools::bench([&](){ configuration.enqueue(stream, kernel, da, db, dc, nullptr, TM, TN, GZ, nthreads); },
-                      [&](){ stream->synchronize(); }, nullptr);
-    return configuration.get_nflops() / ts * 1e-3;
-  };
-  std::ostringstream oss;
-  configuration.src(oss);
-  std::string src = oss.str();
-  triton::jit::tune_res_t best = jit.autotune("conv", src.c_str(), benchmark);
-  jit.add_module("conv", src.c_str(), best.params);
-//  jit.add_module("conv", src.c_str(), configuration.default_params());
-  triton::driver::kernel* kernel = jit.get_function("conv");
-  triton::jit::launch_information info = jit.get_launch_info("conv");
-  std::cout << "Performance: " << benchmark(kernel, info) << " TFLOPS " << std::endl;
+  configuration.enqueue(stream, {da, db, dc, nullptr});
   stream->read(dc, true, 0, hc);
   configuration.cpu_ref(rc.data(), ha.data(), hb.data());
   for(size_t i = 0; i < hc.size(); i++){

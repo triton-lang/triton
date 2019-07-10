@@ -29,7 +29,7 @@ int main() {
     shift_w[c] = rand() % S - S/2;
   }
   // configuration
-  triton::dnn::shift shift(BS, C, 1, H, W, 1, R, S, F, 1, 1, shift_h, shift_w, numeric_t_str, numeric_t_str, triton::dnn::shift::BPROP);
+  triton::dnn::shift shift(BS, C, 1, H, W, 1, R, S, F, 1, 1, shift_h.data(), shift_w.data(), numeric_t_str, numeric_t_str, triton::dnn::shift::BPROP);
   // host buffers
   std::vector<float> hc(shift.c_size());
   std::vector<float> rc(shift.c_size());
@@ -53,7 +53,7 @@ int main() {
   stream->write(db, true, 0, hb);
   stream->write(dc, true, 0, hc);
   stream->synchronize();
-  shift.enqueue(stream, da, db, dc);
+  shift.enqueue(stream, {da, db, dc});
 //  stream->read(dc, true, 0, hc);
 //  shift.cpu_ref(rc.data(), ha.data(), hb.data());
 //  for(size_t i = 0; i < hc.size(); i++)

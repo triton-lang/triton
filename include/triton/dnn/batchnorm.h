@@ -28,23 +28,32 @@
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include "triton/dnn/base.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
 
 namespace triton{
 namespace dnn{
 
-class batchnorm_forward {
+class batchnorm_forward: public base {
+private:
+  // enqueue
+  void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
+                            std::vector<driver::buffer*> args,
+                            const std::vector<unsigned> &ranges, size_t nthreads);
+  // number of flops
+  size_t num_flops() const;
+  // comparison for maps
+  bool operator<(const base& other) const;
+  // clone
+  base* clone() const;
+
 public:
   // constructor
-  batchnorm_forward(int C, int D, int H, int W, int B, std::string ty = "fp32");
-  // enqueue
-  void enqueue(driver::stream *stream, driver::kernel *kernel,
-               driver::buffer *y, driver::buffer *m, driver::buffer *v,
-               driver::buffer *x, driver::buffer *g, driver::buffer *b,
-               size_t TM, size_t nthreads);
-  // triton-c source code
-  void src(std::ostream &os);
+  batchnorm_forward(int C, int D, int H, int W, int B,
+                    std::string ty = "fp32", float eps = 1e-5);
+  // triton-c source
+  void triton_c_src(std::ostream &os) const;
 
 private:
   int32_t C_;
@@ -58,18 +67,25 @@ private:
   float rcpDHWB_;
 };
 
-class batchnorm_backward {
+class batchnorm_backward: public base{
+private:
+  // enqueue
+  void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
+                            std::vector<driver::buffer*> args,
+                            const std::vector<unsigned> &ranges, size_t nthreads);
+  // number of flops
+  size_t num_flops() const;
+  // comparison for maps
+  bool operator<(const base& other) const;
+  // clone
+  base* clone() const;
+
 public:
   // constructor
-  batchnorm_backward(int C, int D, int H, int W, int B, std::string ty = "fp32", float eps = 1e-5);
-  // enqueue
-  void enqueue(driver::stream *stream, driver::kernel *kernel,
-               driver::buffer *dx, driver::buffer *dg, driver::buffer *db, driver::buffer *dy,
-               driver::buffer *x, driver::buffer *g, driver::buffer *m, driver::buffer *v,
-               size_t TM, size_t nthreads);
-  // triton-c source code
-  void src(std::ostream &os);
-
+  batchnorm_backward(int C, int D, int H, int W, int B,
+                     std::string ty = "fp32", float eps = 1e-5);
+  // triton-c source
+  void triton_c_src(std::ostream &os) const;
 
 private:
   int32_t C_;

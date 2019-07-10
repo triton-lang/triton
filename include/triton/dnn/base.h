@@ -29,7 +29,11 @@
 namespace triton{
 namespace dnn{
 
+
+
 class base {
+  friend class cmp_recompile;
+
 protected:
   // leading dimensions
   static void set_ld(const std::vector<int32_t>& shapes,
@@ -37,26 +41,35 @@ protected:
 
 private:
   // initialize
-  virtual void init_impl(driver::stream *stream, driver::cu_module *module) = 0;
+  virtual void init_impl(driver::stream *, driver::cu_module *){ }
   // enqueue
   virtual void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
-                    size_t TM, size_t TN, size_t nthreads) = 0;
+                    const std::vector<unsigned>& ranges,
+                    size_t nthreads) = 0;
+  // number of flops
+  virtual size_t num_flops() const = 0;
+  // comparison for maps
+  virtual bool operator<(const base& other) const = 0;
 
 public:
   // constructor
   base(const std::string& name);
-  // number of flops
-  virtual size_t get_nflops() const = 0;
   // triton-c source
-  virtual void get_src(std::ostream &os) const = 0;
-  // comparison for maps
-  virtual bool operator<(const base& other) const = 0;
+  virtual void triton_c_src(std::ostream &os) const = 0;
+  // clone
+  virtual base* clone() const = 0;
   // enqueue
   void enqueue(driver::stream* stream, std::vector<driver::buffer*> args);
 
 private:
   std::string name_;
+};
+
+struct cmp_recompile{
+  bool operator()(base* x, base* y) const{
+    return *x < *y;
+  }
 };
 
 }
