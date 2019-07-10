@@ -127,5 +127,5 @@ def run_batchnorm():
     print(np.max(np.abs(dg_t - dg_n)))
     print(np.max(np.abs(db_t - db_n)))
 
-run_shift()
-#run_batchnorm()
+#run_shift()
+run_batchnorm()

@@ -72,7 +72,7 @@ torch::Tensor shift_common(
   if(m_shift_jit.find(key) == m_shift_jit.end()){
     jit = m_shift_jit.emplace(key, new triton::jit(ctx)).first->second.get();
     std::ostringstream oss;
-    configuration->get_src(oss);
+    configuration->triton_c_src(oss);
     std::string src = oss.str();
     // benchmark a given shiftolution kernel
     auto benchmark = [&](triton::driver::kernel* kernel,
@@ -85,7 +85,7 @@ torch::Tensor shift_common(
       stream->synchronize();
       double ts = triton::tools::bench([&](){ configuration->enqueue_impl(stream, kernel, &a, &b, &c, TM, TN, nthreads); },
                         [&](){ stream->synchronize(); }, stream->context()->device());
-      return configuration->get_nflops() / ts * 1e-3;
+      return configuration->num_flops() / ts * 1e-3;
     };
     // auto-tune and save result
     if(autotune) {

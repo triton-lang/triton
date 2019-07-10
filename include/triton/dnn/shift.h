@@ -46,14 +46,12 @@ public:
   };
 
 private:
-  // leading dimensions
-  void set_ld(const std::vector<int32_t>& shapes,
-              std::vector<int32_t>& ld);
   // initialize and enqueue
   void init_impl(driver::stream *stream, driver::cu_module *module);
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
-                    size_t TM, size_t TN, size_t nthreads);
+                    const std::vector<unsigned>& ranges,
+                    size_t nthreads);
 
 public:
 
@@ -61,7 +59,7 @@ public:
        int D, int H, int W,
        int T, int R, int S, int NF,
         int stride_h, int stride_w,
-       const std::vector<int32_t> &shift_h, const std::vector<int32_t> &shift_w,
+       const int32_t* shift_h, const int32_t* shift_w,
        std::string a_ty = "fp32", std::string b_ty = "fp32",
        type ty = FPROP, bool bias = false);
 
@@ -74,11 +72,13 @@ public:
   size_t c_size();
   std::vector<int32_t> c_shapes();
   // number of flops
-  size_t get_nflops() const;
+  size_t num_flops() const;
   // source
-  void get_src(std::ostream &os) const;
+  void triton_c_src(std::ostream &os) const;
   // comparison
   bool operator<(const base& other) const;
+  // clone
+  base* clone() const;
   // cpu reference
   template<class IN_DTYPE, class OUT_DTYPE>
   void cpu_ref(OUT_DTYPE* O,
@@ -143,8 +143,8 @@ private:
   std::vector<int32_t> ld_b_;
   std::vector<int32_t> ld_c_;
   // shift values
-  std::vector<int32_t> shift_h_;
-  std::vector<int32_t> shift_w_;
+  const int32_t* shift_h_;
+  const int32_t* shift_w_;
   // look-up tables
   std::vector<int32_t> h_deltas_;
   std::vector<int32_t> h_masks_;

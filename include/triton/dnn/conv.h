@@ -4,11 +4,12 @@
 #include <numeric>
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
+#include "triton/dnn/base.h"
 
 namespace triton{
 namespace dnn{
 
-class conv {
+class conv: public base{
 public:
   enum type {
     FPROP,
@@ -17,11 +18,29 @@ public:
   };
 
 private:
-  void set_ld(const std::vector<int32_t>& shapes,
-                    std::vector<int32_t>& ld);
-
+  // initialize
   std::tuple<int32_t, int32_t, int32_t, int32_t>
       unpack(int32_t ltrs, bool flip, int32_t EBD, int32_t EBH, int32_t EBW);
+  void build_b_deltas();
+  void build_a_deltas();
+  void build_masks();
+  void init_impl(driver::stream *, driver::cu_module *);
+
+  // enqueue
+  std::array<size_t, 3> get_grid(size_t TM, size_t TN);
+  void set_arg(driver::kernel *kernel,
+               driver::buffer *a, driver::buffer *b, driver::buffer *c,
+               driver::buffer *bias);
+  void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
+                    std::vector<driver::buffer*> args,
+                    const std::vector<unsigned>& ranges,
+                    size_t nthreads);
+  // number of flops
+  size_t num_flops() const;
+  // comparison for maps
+  bool operator<(const base& other) const;
+  // clone
+  base* clone() const;
 
 public:
 
@@ -39,35 +58,17 @@ public:
   size_t b_size();
   size_t c_size();
   std::vector<int32_t> c_shapes();
-
-  // initialize
-  void build_b_deltas();
-  void build_deltas();
-  void build_masks();
-  void init(driver::stream *stream, driver::cu_module *module);
-  std::array<size_t, 3> get_grid(size_t TM, size_t TN);
-  void set_arg(driver::kernel *kernel,
-               driver::buffer *a, driver::buffer *b, driver::buffer *c,
-               driver::buffer *bias);
-  void enqueue(driver::stream *stream, driver::kernel *kernel,
-               driver::buffer *a, driver::buffer *b, driver::buffer *c,
-               driver::buffer *bias,
-               size_t TM, size_t TN, size_t GZ, size_t nthreads);
-
-  // utilities
-  size_t get_nflops();
+  // default params
   std::vector<unsigned> default_params();
 
-  // source
-  void src(std::ostream &os);
+  // triton-c source code
+  void triton_c_src(std::ostream &os) const;
 
-  // cpu check
+  // cpu reference implementations
   template<class IN_DTYPE, class OUT_DTYPE>
   void cpu_xprop(OUT_DTYPE* C,  IN_DTYPE* A, IN_DTYPE* B);
-
   template<class IN_DTYPE, class OUT_DTYPE>
   void cpu_wgrad(OUT_DTYPE* C,  IN_DTYPE* A, IN_DTYPE* B);
-
   template<class IN_DTYPE, class OUT_DTYPE>
   void cpu_ref(OUT_DTYPE* C,  IN_DTYPE* A, IN_DTYPE* B);
 
