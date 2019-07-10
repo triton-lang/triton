@@ -12,16 +12,6 @@
 #define CHECK_CONTIGUOUS(x) AT_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
-typedef std::tuple<int32_t, int32_t, int32_t, int32_t, int32_t,
-                   int32_t, int32_t, int32_t, int32_t,
-                   int32_t, int32_t, int32_t,
-                   int32_t, int32_t, int32_t,
-                   triton::dnn::conv::type, bool> conv_key_t;
-
-static std::map<CUstream, std::unique_ptr<triton::driver::stream>> m_stream;
-static std::map<conv_key_t,  std::unique_ptr<triton::jit>>         m_jit;
-static std::map<conv_key_t, std::unique_ptr<triton::dnn::conv>>    m_config;
-
 torch::Tensor conv_common(
     int32_t B, int32_t C, int32_t D, int32_t H, int32_t W,
     int32_t T, int32_t R, int32_t S, int32_t NF,
@@ -31,95 +21,34 @@ torch::Tensor conv_common(
     torch::Tensor torcha, torch::Tensor torchb, torch::Tensor torchbias,
     bool autotune = false
     ) {
-
   // Wrap CUDA handles
   c10::DeviceIndex device = torcha.storage().device().index();
-
   // Get stream
   CUstream custream = (CUstream)at::cuda::getCurrentCUDAStream(device).stream();
-  triton::driver::stream* stream;
-  if(m_stream.find(custream) == m_stream.end())
-    stream = m_stream.emplace(custream, new triton::driver::cu_stream(custream, false)).first->second.get();
-  else
-    stream = m_stream.at(custream).get();
-
-  // Get context
-  triton::driver::context* ctx = stream->context();
-
-  // Get configuration
+  triton::driver::cu_stream stream(custream, false);
+  triton::driver::context* ctx = stream.context();
+  // Get template
   bool has_bias = torchbias.storage().size() > 0;
-  conv_key_t key = {B, C, D, H, W, T, R, S, NF, stride_d, stride_h, stride_w, pad_d, pad_h, pad_w, ty, has_bias};
-  triton::dnn::conv* configuration;
-  if(m_config.find(key) == m_config.end())
-    configuration = m_config.emplace(key, new triton::dnn::conv(
-                                                B, C, D, H, W, T, R, S, NF,
-                                                stride_d, stride_h, stride_w,
-                                                pad_d, pad_h, pad_w,
-                                                1, 1, 1,
-                                                "fp32", "fp32", ty, has_bias)).first->second.get();
-  else
-    configuration = m_config.at(key).get();
-
+  triton::dnn::conv conv(B, C, D, H, W, T, R, S, NF,
+                          stride_d, stride_h, stride_w,
+                          pad_d, pad_h, pad_w,
+                          1, 1, 1,
+                          "fp32", "fp32", ty, has_bias);
   // Bind memory
   triton::driver::cu_buffer a(ctx, (CUdeviceptr)torcha.storage().data(), false);
   triton::driver::cu_buffer b(ctx, (CUdeviceptr)torchb.storage().data(), false);
   triton::driver::cu_buffer cubias(ctx, (CUdeviceptr)torchbias.storage().data(), false);
   triton::driver::buffer* bias = has_bias ? &cubias : nullptr;
-
   // Allocate output
-  std::vector<int32_t> c_shapes = configuration->c_shapes();
+  std::vector<int32_t> c_shapes = conv.c_shapes();
   torch::Tensor torchc;
   if(ty == triton::dnn::conv::WGRAD)
     torchc = torch::empty({c_shapes[0], c_shapes[2], c_shapes[3], c_shapes[4]}, torch::kFloat).cuda();
   else
     torchc = torch::empty({c_shapes[0], c_shapes[1], c_shapes[3], c_shapes[4]}, torch::kFloat).cuda();
   triton::driver::cu_buffer c(ctx, (CUdeviceptr)torchc.storage().data(), false);
-
-  // Get JIT
-  triton::jit* jit;
-  if(m_jit.find(key) == m_jit.end()){
-    jit = m_jit.emplace(key, new triton::jit(ctx)).first->second.get();
-    std::ostringstream oss;
-    configuration->src(oss);
-    std::string src = oss.str();
-    // benchmark a given convolution kernel
-    auto benchmark = [&](triton::driver::kernel* kernel,
-                         triton::jit::launch_information info) {
-      configuration->init(stream, (triton::driver::cu_module*)kernel->module());
-      unsigned TM = info.global_range_size[0];
-      unsigned TN = info.global_range_size[1];
-      unsigned nthreads = info.num_threads;
-      unsigned GZ = jit->get_int("GZ");
-      configuration->enqueue(stream, kernel, &a, &b, &c, bias, TM, TN, GZ, nthreads);
-      stream->synchronize();
-      double ts = triton::tools::bench([&](){ configuration->enqueue(stream, kernel, &a, &b, &c, bias, TM, TN, GZ, nthreads); },
-                        [&](){ stream->synchronize(); }, stream->context()->device());
-      return configuration->get_nflops() / ts * 1e-3;
-    };
-    // auto-tune and save result
-    if(autotune) {
-      triton::jit::tune_res_t best = jit->autotune("conv", src.c_str(), benchmark);
-      jit->add_module("conv", src.c_str(), best.params);
-    }
-    else {
-      jit->add_module("conv", src.c_str(), configuration->default_params());
-    }
-    triton::driver::kernel* kernel = jit->get_function("conv");
-    configuration->init(stream, (triton::driver::cu_module*)kernel->module());
-  }
-  else
-    jit = m_jit.at(key).get();
-
-  // Run
-  triton::driver::kernel* kernel = jit->get_function("conv");
-  triton::jit::launch_information info = jit->get_launch_info("conv");
-  unsigned GZ = jit->get_int("GZ");
-  // launch info
-  unsigned TM = info.global_range_size[0];
-  unsigned TN = info.global_range_size[1];
-  unsigned nthreads = info.num_threads;
-  // enqueue
-  configuration->enqueue(stream, kernel, &a, &b, &c, bias, TM, TN, GZ, nthreads);
+  // Enqueue
+  conv.enqueue(&stream, {&a, &b, &c, bias});
   return torchc;
 }
 
