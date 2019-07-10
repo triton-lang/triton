@@ -3,7 +3,6 @@
 #include "ATen/cuda/CUDAContext.h"
 #include "triton/driver/stream.h"
 #include "triton/dnn/batchnorm.h"
-#include "triton/tools/bench.hpp"
 
 std::vector<torch::Tensor>
       batchnorm_ymv(const torch::Tensor fw_x,

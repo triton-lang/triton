@@ -31,7 +31,6 @@
 #include "triton/dnn/base.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
-#include "triton/runtime/jit.h"
 
 namespace triton{
 namespace dnn{
