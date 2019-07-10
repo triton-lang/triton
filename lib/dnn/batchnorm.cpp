@@ -59,7 +59,7 @@ void batchnorm_forward::enqueue_impl(driver::stream *stream, driver::kernel *ker
 {
   driver::buffer *y = args[0], *m = args[1], *v = args[2];
   driver::buffer *x = args[3], *g = args[4], *b = args[5];
-  std::array<size_t, 3> grid = {(size_t)C_, 1, 1};
+  std::array<size_t, 3> grid = {1, (size_t)C_, 1};
   kernel->setArg(0, y);
   kernel->setArg(1, m);
   kernel->setArg(2, v);
@@ -86,7 +86,7 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
   int32 rx[TM] = 0 ... TM;
   fp32 *px[TM];
   fp32 x[TM];
-  int32 c = get_range_id(0);
+  int32 c = get_range_id(1);
   fp32 g = *(G + c);
   fp32 b = *(B + c);
 
@@ -112,7 +112,6 @@ void batchnorm(fp32 *Y, fp32 *M, fp32 *V,
   fp32 v = __sum(var) * rcpDHWN;
   fp32 *pv = V + c;
   *pv = v;
-
   fp32 rstdg = 1 / sqrt(v + eps) * g;
 
   px = X + rx + c*DHWN;
@@ -186,7 +185,7 @@ void batchnorm(fp32 *DX, fp32 *DG, fp32 *DB,
                restrict read_only fp32 *V,
                int32 DHWN, fp32 rcpDHWN, fp32 epsilon) {
   int32 rx[TM] = 0 ... TM;
-  int32 c = get_range_id(0);
+  int32 c = get_range_id(1);
   int32 offset = c*DHWN;
   fp32 g = *(G + c);
   fp32 mean = *(M + c);
