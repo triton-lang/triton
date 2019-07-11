@@ -59,15 +59,15 @@ def blocksparse_matmul_grad(op, dy):
 
 def run_shift():
     B, C, H, W = 16, 16, 4, 4
-    R, S, F = 3, 3, 16
+    R, S, F = 3, 3, 32
     stride_h, stride_w = 2, 2
     np.random.seed(2)
     a = tf.placeholder(tf.float32, shape=[C, H, W, B])
     b = tf.placeholder(tf.float32, shape=[C, F])
-    #hshift_h = np.random.randint(- (R//2), R//2 + 1, size=C, dtype=np.int32)
-    #hshift_w = np.random.randint(- (S//2), R//2 + 1, size=C, dtype=np.int32)
-    hshift_h = np.zeros(C, dtype=np.int32)
-    hshift_w = np.zeros(C, dtype=np.int32)
+    hshift_h = np.random.randint(- (R//2), R//2 + 1, size=C, dtype=np.int32)
+    hshift_w = np.random.randint(- (S//2), R//2 + 1, size=C, dtype=np.int32)
+    #hshift_h = np.zeros(C, dtype=np.int32)
+    #hshift_w = np.zeros(C, dtype=np.int32)
     c = module.shift_conv(a, b, stride_h=stride_h, stride_w=stride_w, shift_h=tf.make_tensor_proto(hshift_h), shift_w=tf.make_tensor_proto(hshift_w))
     # feed values
     ha = np.random.rand(C, H, W, B)
@@ -122,8 +122,6 @@ def run_batchnorm():
     sess = tf.InteractiveSession()
     sess.run(tf.global_variables_initializer())
     result = sess.run([y, m, v], feed_dict = {x: hx, g: hg, b: hb})
-    print(result[1])
-    print(np.mean(hx, (1, 2, 3)))
     grads = tf.test.compute_gradient([x, g, b], [(C, H, W, B), (C, ), (C, )], y, (C, H, W, B),
                                      extra_feed_dict = {x: hx, g: hg, b: hb})
     dx_t, dx_n = grads[0]

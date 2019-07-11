@@ -68,11 +68,11 @@ def ShiftConv2d(in_planes, out_planes, kernel_size=3, stride=1, groups=1, dilati
 class NetReference(nn.Module):
     def __init__(self):
         super(NetReference, self).__init__()
-        self.conv1 = ShiftConv2d(1, 32, 3, 2)
-        #self.conv1 = triton.ShiftConv2d(1, 32, 3, 2)
+        #self.conv1 = ShiftConv2d(1, 32, 3, 2)
+        self.conv1 = triton.ShiftConv2d(1, 32, 3, 2)
         self.bn1 = nn.BatchNorm2d(32)
-        #self.conv2 = triton.ShiftConv2d(32, 32, 3, 2)
-        self.conv2 = ShiftConv2d(32, 32, 3, 2)
+        self.conv2 = triton.ShiftConv2d(32, 32, 3, 2)
+        #self.conv2 = ShiftConv2d(32, 32, 3, 2)
         self.bn2 = nn.BatchNorm2d(32)
         self.fc1 = nn.Linear(32*7*7, 500)
         self.fc2 = nn.Linear(500, 10)
