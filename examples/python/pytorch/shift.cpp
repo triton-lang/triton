@@ -53,6 +53,8 @@ torch::Tensor shift_y(
     int64_t R, int64_t S,
     int64_t stride_h, int64_t stride_w,
     const torch::Tensor shift_h, const torch::Tensor shift_w) {
+  CHECK_INPUT(x);
+  CHECK_INPUT(w);
   // shapes for a
   int64_t Ca  = x.size(0);
   int64_t H   = x.size(1);
@@ -76,6 +78,8 @@ torch::Tensor shift_dx(
     int64_t R, int64_t S,
     int64_t stride_h, int64_t stride_w,
     const torch::Tensor shift_h, const torch::Tensor shift_w) {
+  CHECK_INPUT(dy);
+  CHECK_INPUT(w);
   // shapes for a
   int64_t Ca  = dy.size(0);
   int64_t H   = dy.size(1);
@@ -104,6 +108,8 @@ torch::Tensor shift_dw(
     int64_t R, int64_t S,
     int64_t stride_h, int64_t stride_w,
     const torch::Tensor shift_h, const torch::Tensor shift_w) {
+  CHECK_INPUT(dy);
+  CHECK_INPUT(x);
   // shapes for a
   int64_t F    = dy.size(0);
   int64_t Ha   = dy.size(1);
