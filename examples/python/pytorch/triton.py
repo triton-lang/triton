@@ -152,7 +152,7 @@ class _ShiftConvNd(torch.nn.Module):
 
     def make_shift(self, kernel_size):
         if kernel_size == 3:
-            p = torch.Tensor([0., 1., 0.])
+            p = torch.Tensor([0.3, 0.4, 0.3])
         elif kernel_size == 5:
             p = torch.Tensor([0.1, 0.25, 0.3, 0.25, 0.1])
         elif kernel_size == 7:
