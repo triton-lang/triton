@@ -158,7 +158,7 @@ void shift::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
   unsigned TM = ranges[0], TN = ranges[1];
   std::array<size_t, 3> grid = {(M_ + TM - 1)/TM, (N_ + TN - 1)/TN, 1};
   if(ty_ == BPROP)
-    ((driver::cu_buffer*)c)->set_zero(stream, M_*N_*4);
+    ((driver::cu_buffer*)c)->set_zero(stream, M_*N_*stride_h_*stride_w_*4);
   stream->enqueue(kernel, grid, {nthreads, 1, 1});
 }
 
@@ -217,6 +217,7 @@ void shift(restrict read_only align(16) )" << a_ty_ << R"( *a,
 if(ty_ == FPROP){
   os << R"(
   int32 rawhc[TM] = rxa / ABS;
+  int32 rab[TM] = rxa % ABS;
   int32 raw[TM] = (rawhc % AW)*stride_w;
   int32 rahc[TM] = rawhc / AW;
   int32 rah[TM] = (rahc % AH)*stride_h;
@@ -227,26 +228,32 @@ if(ty_ == FPROP){
   int1 interior[TM, TK] = interiorh[:, newaxis] && interiorw[:, newaxis];
   int32 inc_true[TM, TK] = d[newaxis, :];
   int32 inc_false[TM, TK] = rka[newaxis, :] * lda;
-  int32 inc[TM, TK] = interior ? inc_true : inc_false;)";
+  int32 inc[TM, TK] = interior ? inc_true : inc_false;
+  rxa = rab + raw*ABS + rah*ABS*AW;
+  int32 offa0[TM, TK] = rxa[:, newaxis];)";
+}
+else{
+  os << "  int32 offa0[" << AS << "] = rxa" << bca1 << lda1 << ";" << std::endl;
 }
 if(ty_ == WGRAD){
   os << R"(
   __constant__ int32* pd[TN] = delta + ryb;
   int32 d[TN] = *pd;
-  int32 shift[TK, TN] = d[newaxis, :];)";
+  int32 shift[TK, TN] = d[newaxis, :];
+  int32 rbwhc[TK] = rkb / ABS;
+  int32 rbw[TK] = (rbwhc % AW)*stride_w;
+  int32 rbhc[TK] = rbwhc / AW;
+  int32 rbh[TK] = (rbhc % AH)*stride_h;
+  )";
 }
   os << R"(
-  )" << a_ty_ << "* pa[" << AS << "] = a + rxa" << bca1 << lda1 << " + " << rka << bca0 << lda0 << R"(;
+  )" << a_ty_ << "* pa[" << AS << "] = a + offa0 + " << rka << bca0 << lda0 << R"(;
   )" << b_ty_ << "* pb[" << BS << "] = b + ryb" << bcb1 << ldb1 << " + " << rkb << bcb0 << ldb0 << R"(;
   int1 checka[)" << AS << "] = (rka < K)" << bca0  << R"(;
   int1 checkb[)" << BS << "] = (rkb < K)" << bcb0  << R"(;
   )" << a_ty_ << "   a[" << AS << R"(] = checka ? *pa : 0;)";
 if(ty_ == WGRAD){
   os << R"(
-    int32 rbwhc[TK] = rkb / ABS;
-    int32 rbw[TK] = (rbwhc % AW)*stride_w;
-    int32 rbhc[TK] = rbwhc / AW;
-    int32 rbh[TK] = (rbhc % AH)*stride_h;
     int1 interiorh[TK] = (rbh >= pad_h) && (rbh < (AH - pad_h));
     int1 interiorw[TK] = (rbw >= pad_w) && (rbw < (AW - pad_w));
     int1 interior[TK, TN] = interiorh[:, newaxis] && interiorw[:, newaxis];
@@ -301,17 +308,28 @@ else{
   os << R"(
   }
   int32 rxc[TM] = get_global_range[TM](0);
-  int32 ryc[TN] = get_global_range[TN](1);
-  fp32* pc[TM, TN] = c + ryc[newaxis, :]*M + rxc[:, newaxis];
+  int32 ryc[TN] = get_global_range[TN](1);)";
+  if(ty_ == BPROP){
+  os << R"(
+  int32 rcwhc[TM] = rxc / ABS;
+  int32 rcb[TM] = rxc % ABS;
+  int32 rcw[TM] = (rcwhc % AW)*stride_w;
+  int32 rchc[TM] = rcwhc / AW;
+  int32 rch[TM] = (rchc % AH)*stride_h;
+  rxc = rcb + rcw*ABS + rch*ABS*AW;
+  int32 offc0[TM, TN] = rxc[:, newaxis];)";
+  }
+  else{
+  os << R"(
+  int32 offc0[TM, TN] = rxc[:, newaxis];)";
+  }
+  os << R"("
+  fp32* pc[TM, TN] = c + ryc[newaxis, :]*M + offc0;
   int1 checkc0[TM] = rxc < M;
   int1 checkc1[TN] = ryc < N;
   int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];)";
 if(ty_ == BPROP){
   os << R"(
-  int32 rcwhc[TM] = rxc / ABS;
-  int32 rcw[TM] = (rcwhc % AW)*stride_w;
-  int32 rchc[TM] = rcwhc / AW;
-  int32 rch[TM] = (rchc % AH)*stride_h;
   int1 interiorh[TM] = (rch >= pad_h) && (rch < (AH - pad_h));
   int1 interiorw[TM] = (rcw >= pad_w) && (rcw < (AW - pad_w));
   int1 interior[TM, TN] = interiorh[:, newaxis] && interiorw[:, newaxis];

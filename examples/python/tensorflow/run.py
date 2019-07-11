@@ -58,8 +58,8 @@ def blocksparse_matmul_grad(op, dy):
     return (dx, dw)
 
 def run_shift():
-    B, C, H, W = 16, 16, 4, 4
-    R, S, F = 3, 3, 4
+    B, C, H, W = 16, 1, 4, 4
+    R, S, F = 3, 3, 32
     stride_h, stride_w = 2, 2
     np.random.seed(2)
     a = tf.placeholder(tf.float32, shape=[C, H, W, B])
@@ -68,8 +68,8 @@ def run_shift():
     hshift_w = np.random.randint(- (S//2), R//2 + 1, size=C, dtype=np.int32)
     c = module.shift_conv(a, b, stride_h=stride_h, stride_w=stride_w, shift_h=tf.make_tensor_proto(hshift_h), shift_w=tf.make_tensor_proto(hshift_w))
     # feed values
-    ha = np.random.rand(C, H, W, B)
-    hb = np.random.rand(C, F)
+    ha = np.ones((C, H, W, B), dtype=np.float32)
+    hb = np.ones((C, F), dtype=np.float32)
     sess = tf.InteractiveSession()
     # test
     grads = tf.test.compute_gradient([a, b], [(C, H, W, B), (C, F)], c, (F, H//stride_h, W//stride_w, B),
@@ -128,5 +128,5 @@ def run_batchnorm():
     print(np.max(np.abs(dg_t - dg_n)))
     print(np.max(np.abs(db_t - db_n)))
 
-#run_shift()
-run_batchnorm()
+run_shift()
+#run_batchnorm()
