@@ -33,7 +33,7 @@ class Shift(nn.Module):
         self.channels = in_channels
         self.kernel_size = kernel_size
         if kernel_size == 3:
-            p = torch.Tensor([0., 1., 0.])
+            p = torch.Tensor([0.3, 0.4, 0.3])
         elif kernel_size == 5:
             p = torch.Tensor([0.1, 0.25, 0.3, 0.25, 0.1])
         elif kernel_size == 7:
@@ -68,25 +68,24 @@ def ShiftConv2d(in_planes, out_planes, kernel_size=3, stride=1, groups=1, dilati
 class NetReference(nn.Module):
     def __init__(self):
         super(NetReference, self).__init__()
-        #self.conv1 = ShiftConv2d(1, 32, 3, 2)
-        self.conv1 = triton.ShiftConv2d(1, 32, 3, 2)
+        self.conv1 = ShiftConv2d(1, 32, 3, 2)
+        #self.conv1 = triton.ShiftConv2d(1, 32, 3, 2)
         self.bn1 = nn.BatchNorm2d(32)
-        #self.conv2a = ShiftConv2d(32, 32, 3, 1)
-        self.conv2b = triton.ShiftConv2d(32, 32, 3, 2)
-        #self.conv2b = ShiftConv2d(32, 32, 3, 2)
+        #self.conv2 = triton.ShiftConv2d(32, 32, 3, 2)
+        self.conv2 = ShiftConv2d(32, 32, 3, 2)
         self.bn2 = nn.BatchNorm2d(32)
         self.fc1 = nn.Linear(32*7*7, 500)
         self.fc2 = nn.Linear(500, 10)
 
     def forward(self, x):
-        x = x.permute(1, 2, 3, 0).contiguous()
+        #x = x.permute(1, 2, 3, 0).contiguous()
         x = self.conv1(x)
-        x = x.permute(3, 0, 1, 2).contiguous()
+        #x = x.permute(3, 0, 1, 2).contiguous()
         x = self.bn1(x)
         x = F.relu(x)
-        x = x.permute(1, 2, 3, 0).contiguous()
-        x = self.conv2b(x)
-        x = x.permute(3, 0, 1, 2).contiguous()
+        #x = x.permute(1, 2, 3, 0).contiguous()
+        x = self.conv2(x)
+        #x = x.permute(3, 0, 1, 2).contiguous()
         x = self.bn2(x)
         x = F.relu(x)
         x = x.view(-1, 32*7*7)
