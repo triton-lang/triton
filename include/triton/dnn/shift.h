@@ -63,11 +63,9 @@ public:
        type ty = FPROP, bool bias = false);
 
   // look-up table
-  void build_deltas();
+  void build_delta_a();
   void build_masks();
   // accessors
-  size_t a_size();
-  size_t b_size();
   size_t c_size();
   std::vector<int32_t> c_shapes();
   // number of flops
@@ -130,25 +128,23 @@ private:
   int32_t N_;
   int32_t K_;
   // shapes
-  std::vector<int32_t> shapes_a_;
-  std::vector<int32_t> shapes_b_;
   std::vector<int32_t> shapes_c_;
   // strides
   int32_t stride_d_;
   int32_t stride_h_;
   int32_t stride_w_;
   // memory strides
-  std::vector<int32_t> ld_a_;
-  std::vector<int32_t> ld_b_;
-  std::vector<int32_t> ld_c_;
+  int32_t lda_n_, lda_c_, lda_h_, lda_w_;
+  int32_t ldb_n_, ldb_c_, ldb_h_, ldb_w_;
+  int32_t ldc_n_, ldc_f_, ldc_h_, ldc_w_;
   // shift values
   const int32_t* shift_h_;
   const int32_t* shift_w_;
   // look-up tables
-  std::vector<int32_t> h_deltas_;
-  std::vector<int32_t> h_masks_;
-  driver::buffer* d_deltas_;
-  driver::buffer* d_masks_;
+  std::vector<int32_t> h_delta_a;
+  std::vector<int32_t> h_delta_b;
+  driver::buffer* d_delta_a;
+  driver::buffer* d_delta_b;
   // data types
   std::string a_ty_;
   std::string b_ty_;
