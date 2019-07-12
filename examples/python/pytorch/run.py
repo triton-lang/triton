@@ -78,14 +78,10 @@ class NetReference(nn.Module):
         self.fc2 = nn.Linear(500, 10)
 
     def forward(self, x):
-        #x = x.permute(1, 2, 3, 0).contiguous()
         x = self.conv1(x)
-        #x = x.permute(3, 0, 1, 2).contiguous()
         x = self.bn1(x)
         x = F.relu(x)
-        #x = x.permute(1, 2, 3, 0).contiguous()
         x = self.conv2(x)
-        #x = x.permute(3, 0, 1, 2).contiguous()
         x = self.bn2(x)
         x = F.relu(x)
         x = x.view(-1, 32*7*7)

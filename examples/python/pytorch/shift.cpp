@@ -9,12 +9,34 @@
 #define CHECK_CONTIGUOUS(x) AT_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
+void extract_shapes(const torch::Tensor &x,
+                   int64_t &C, int64_t &H, int64_t &W, int64_t &B,
+                   triton::dnn::shift::layout_t layout) {
+  if(layout == triton::dnn::shift::CHWN){
+    C  = x.size(0);
+    H  = x.size(1);
+    W  = x.size(2);
+    B  = x.size(3);
+  }
+  else if(layout == triton::dnn::shift::NCHW){
+    B  = x.size(0);
+    C  = x.size(1);
+    H  = x.size(2);
+    W  = x.size(3);
+  }
+  else{
+    throw std::runtime_error("unsupported layout");
+  }
+}
+
+static const triton::dnn::shift::layout_t layout = triton::dnn::shift::NCHW;
+
 torch::Tensor shift_common(
     int32_t B, int32_t C, int32_t D, int32_t H, int32_t W,
     int32_t T, int32_t R, int32_t S, int32_t F,
     int32_t stride_h, int32_t stride_w,
     int32_t* shift_h, int32_t* shift_w,
-    triton::dnn::shift::type ty,
+    triton::dnn::shift::type ty, triton::dnn::shift::layout_t layout,
     torch::Tensor torcha, torch::Tensor torchb, torch::Tensor torchbias,
     bool autotune = false
     ) {
@@ -28,7 +50,7 @@ torch::Tensor shift_common(
   triton::dnn::shift shift(B, C, D, H, W, T, R, S, F,
                            stride_h, stride_w,
                            shift_h, shift_w, "fp32", "fp32",
-                           ty, has_bias);
+                           ty, has_bias, layout);
   // Bind memory
   triton::driver::cu_buffer a(ctx, (CUdeviceptr)torcha.storage().data(), false);
   triton::driver::cu_buffer b(ctx, (CUdeviceptr)torchb.storage().data(), false);
@@ -56,10 +78,8 @@ torch::Tensor shift_y(
   CHECK_INPUT(x);
   CHECK_INPUT(w);
   // shapes for a
-  int64_t Ca  = x.size(0);
-  int64_t H   = x.size(1);
-  int64_t W   = x.size(2);
-  int64_t B   = x.size(3);
+  int64_t Ca, H, W, B;
+  extract_shapes(x, Ca, H, W, B, layout);
   // shapes for b
   int64_t Cb  = w.size(0);
   int64_t F   = w.size(1);
@@ -68,7 +88,7 @@ torch::Tensor shift_y(
   // run
   return shift_common(B, C, 1, H, W, 1, R, S, F, stride_h, stride_w,
                      (int32_t*)shift_h.storage().data(), (int32_t*)shift_w.storage().data(),
-                     triton::dnn::shift::FPROP, x, w, bias);
+                     triton::dnn::shift::FPROP, layout, x, w, bias);
 }
 
 torch::Tensor shift_dx(
@@ -81,10 +101,8 @@ torch::Tensor shift_dx(
   CHECK_INPUT(dy);
   CHECK_INPUT(w);
   // shapes for a
-  int64_t Ca  = dy.size(0);
-  int64_t H   = dy.size(1);
-  int64_t W   = dy.size(2);
-  int64_t B   = dy.size(3);
+  int64_t Ca, H, W, B;
+  extract_shapes(dy, Ca, H, W, B, layout);
   H *= stride_h;
   W *= stride_w;
   // shapes for b
@@ -98,7 +116,7 @@ torch::Tensor shift_dx(
   // run
   return shift_common(B, C, 1, H, W, 1, R, S, F, stride_h, stride_w,
                      (int32_t*)shift_h.storage().data(), (int32_t*)shift_w.storage().data(),
-                     triton::dnn::shift::BPROP, dy, w, bias);
+                     triton::dnn::shift::BPROP, layout, dy, w, bias);
 }
 
 torch::Tensor shift_dw(
@@ -111,15 +129,11 @@ torch::Tensor shift_dw(
   CHECK_INPUT(dy);
   CHECK_INPUT(x);
   // shapes for a
-  int64_t F    = dy.size(0);
-  int64_t Ha   = dy.size(1);
-  int64_t Wa   = dy.size(2);
-  int64_t Ba   = dy.size(3);
+  int64_t F, Ha, Wa, Ba;
+  extract_shapes(dy, F, Ha, Wa, Ba, layout);
   // shapes for b
-  int64_t C     = x.size(0);
-  int64_t Hb    = x.size(1);
-  int64_t Wb    = x.size(2);
-  int64_t Bb    = x.size(3);
+  int64_t C, Hb, Wb, Bb;
+  extract_shapes(x, C, Hb, Wb, Bb, layout);
   // check
   AT_CHECK(Ha*stride_h == Hb, "operands must have the same image height");
   AT_CHECK(Wa*stride_w == Wb, "operands must have the same image width");
@@ -130,7 +144,7 @@ torch::Tensor shift_dw(
   // run
   return shift_common(B, C, 1, H, W, 1, R, S, F, stride_h, stride_w,
                      (int32_t*)shift_h.storage().data(), (int32_t*)shift_w.storage().data(),
-                     triton::dnn::shift::WGRAD, dy, x, bias);
+                     triton::dnn::shift::WGRAD, layout, dy, x, bias);
 }
 
 static auto registry =

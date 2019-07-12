@@ -13,7 +13,8 @@ shift::shift(int B, int C,
              int stride_h, int stride_w,
              const int32_t *shift_h, const int32_t *shift_w,
              std::string a_ty, std::string b_ty,
-             type ty, bool bias)
+             type ty, bool bias,
+             layout_t layout)
   : base("shift"),
     B_(B), C_(C),
     AD_(D), AH_(H), AW_(W),
@@ -23,7 +24,7 @@ shift::shift(int B, int C,
     shift_h_(shift_h), shift_w_(shift_w),
     a_ty_(a_ty), b_ty_(b_ty),
     ty_(ty), bias_(bias),
-    layout_(CHWN){
+    layout_(layout){
   // max number of channels
   TK_ = 16;
   MAX_C_ = 8192 + TK_;

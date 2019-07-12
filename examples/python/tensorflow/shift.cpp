@@ -22,7 +22,7 @@ using GPUDevice = Eigen::GpuDevice;
 template<triton::dnn::shift::type OP>
 class ShiftConvOp : public OpKernel {
 public:
-  explicit ShiftConvOp(OpKernelConstruction* context) : OpKernel(context) {
+  explicit ShiftConvOp(OpKernelConstruction* context) : OpKernel(context), layout_(triton::dnn::shift::NCHW) {
     context->GetAttr("shift_h", &h_shift_h_);
     context->GetAttr("shift_w", &h_shift_w_);
     context->GetAttr("stride_h", &stride_h_);
@@ -31,20 +31,32 @@ public:
     S_ = 3;
   }
 
+  void ExtractShapes(const Tensor &x, int64_t &C, int64_t &H, int64_t &W, int64_t &B) {
+    if(layout_ == triton::dnn::shift::CHWN){
+      C  = x.dim_size(0);
+      H  = x.dim_size(1);
+      W  = x.dim_size(2);
+      B  = x.dim_size(3);
+    }
+    else if(layout_ == triton::dnn::shift::NCHW){
+      B  = x.dim_size(0);
+      C  = x.dim_size(1);
+      H  = x.dim_size(2);
+      W  = x.dim_size(3);
+    }
+    else{
+      throw std::runtime_error("unsupported layout");
+    }
+  }
+
   void FillShapes(OpKernelContext* context,
                   int64_t &C, int64_t &H, int64_t &W, int64_t &B, int64_t &F,
                   const Tensor& tf_a, const Tensor& tf_b) {
     if(OP == triton::dnn::shift::WGRAD) {
-      // shapes for a
-      F  = tf_a.dim_size(0);
-      int64_t Ha   = tf_a.dim_size(1);
-      int64_t Wa   = tf_a.dim_size(2);
-      int64_t Ba   = tf_a.dim_size(3);
-      // shapes for b
-      C = tf_b.dim_size(0);
-      int64_t Hb    = tf_b.dim_size(1);
-      int64_t Wb    = tf_b.dim_size(2);
-      int64_t Bb    = tf_b.dim_size(3);
+      int64_t Ha, Wa, Ba;
+      int64_t Hb, Wb, Bb;
+      ExtractShapes(tf_a, F, Ha, Wa, Ba);
+      ExtractShapes(tf_b, C, Hb, Wb, Bb);
       OP_REQUIRES(context, Ha*stride_h_ == Hb, tensorflow::errors::InvalidArgument("operands must have the same image height"));
       OP_REQUIRES(context, Wa*stride_w_ == Wb, tensorflow::errors::InvalidArgument("operands must have the same image width"));
       OP_REQUIRES(context, Ba == Bb, tensorflow::errors::InvalidArgument("operands must have the same batch size"));
@@ -54,10 +66,8 @@ public:
     }
     else {
       // shapes for a
-      int64_t Ca  = tf_a.dim_size(0);
-      H   = tf_a.dim_size(1);
-      W   = tf_a.dim_size(2);
-      B   = tf_a.dim_size(3);
+      int64_t Ca;
+      ExtractShapes(tf_a, Ca, H, W, B);
       if(OP == triton::dnn::shift::BPROP){
         H *= stride_h_;
         W *= stride_w_;
@@ -96,7 +106,7 @@ public:
     triton::dnn::shift shift(B, C, D, H, W, T, R_, S_, F,
                              stride_h_, stride_w_,
                              shift_h_data, shift_w_data,
-                             "fp32", "fp32", OP, has_bias);
+                             "fp32", "fp32", OP, has_bias, layout_);
 
     // shapes for c
     std::vector<int64> c_shapes;
@@ -122,6 +132,7 @@ private:
   int stride_w_;
   int R_;
   int S_;
+  triton::dnn::shift::layout_t layout_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("ShiftConv").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::shift::FPROP>);
