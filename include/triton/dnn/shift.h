@@ -65,7 +65,7 @@ public:
         int stride_h, int stride_w,
        const int32_t* shift_h, const int32_t* shift_w,
        std::string a_ty = "fp32", std::string b_ty = "fp32",
-       type ty = FPROP, bool bias = false);
+       type ty = FPROP, bool bias = false, layout_t layout = CHWN);
 
   // look-up table
   void build_delta_a();

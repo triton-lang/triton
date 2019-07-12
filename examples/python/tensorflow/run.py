@@ -62,7 +62,7 @@ def run_shift():
     R, S, F = 3, 3, 32
     stride_h, stride_w = 2, 2
     np.random.seed(2)
-    a = tf.placeholder(tf.float32, shape=[C, H, W, B])
+    a = tf.placeholder(tf.float32, shape=[B, C, H, W])
     b = tf.placeholder(tf.float32, shape=[C, F])
     hshift_h = np.random.randint(- (R//2), R//2 + 1, size=C, dtype=np.int32)
     hshift_w = np.random.randint(- (S//2), R//2 + 1, size=C, dtype=np.int32)
@@ -70,13 +70,13 @@ def run_shift():
     #hshift_w = np.zeros(C, dtype=np.int32)
     c = module.shift_conv(a, b, stride_h=stride_h, stride_w=stride_w, shift_h=tf.make_tensor_proto(hshift_h), shift_w=tf.make_tensor_proto(hshift_w))
     # feed values
-    ha = np.random.rand(C, H, W, B)
+    ha = np.random.rand(B, C, H, W)
     hb = np.random.rand(C, F)
-    #ha = np.ones((C, H, W, B), dtype=np.float32)
+    #ha = np.ones((B, C, H, W), dtype=np.float32)
     #hb = np.ones((C, F), dtype=np.float32)
     sess = tf.InteractiveSession()
     # test
-    grads = tf.test.compute_gradient([a, b], [(C, H, W, B), (C, F)], c, (F, H//stride_h, W//stride_w, B),
+    grads = tf.test.compute_gradient([a, b], [(B, C, H, W), (C, F)], c, (B, F, H//stride_h, W//stride_w),
                                      extra_feed_dict = {a: ha, b: hb})
     dw_t, dw_n = grads[1]
     dx_t, dx_n = grads[0]
