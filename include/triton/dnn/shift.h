@@ -44,6 +44,11 @@ public:
     WGRAD
   };
 
+  enum layout_t {
+    NCHW,
+    CHWN
+  };
+
 private:
   // initialize and enqueue
   void init_impl(driver::stream *stream, driver::cu_module *module);
@@ -154,6 +159,8 @@ private:
   // transpose
   bool AT_;
   bool BT_;
+  // layout
+  layout_t layout_;
 };
 
 }
