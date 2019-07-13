@@ -65,55 +65,33 @@ def ShiftConv2d(in_planes, out_planes, kernel_size=3, stride=1, groups=1, dilati
     )
 
 
-class NetReference(nn.Module):
+class Net(nn.Module):
     def __init__(self):
-        super(NetReference, self).__init__()
-        #self.conv1 = ShiftConv2d(1, 32, 3, 2)
-        self.conv1 = triton.ShiftConv2d(1, 32, 3, 2)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = triton.ShiftConv2d(32, 32, 3, 2)
-        #self.conv2 = ShiftConv2d(32, 32, 3, 2)
-        self.bn2 = nn.BatchNorm2d(32)
-        self.fc1 = nn.Linear(32*7*7, 500)
+        super(Net, self).__init__()
+        self.conv1 = ShiftConv2d(1, 32, 3, 1)
+        self.conv2 = ShiftConv2d(32, 128, 3, 1)
+        self.conv3 = ShiftConv2d(128, 128, 3, 2)
+        self.bn1 = nn.BatchNorm2d(128)
+        self.conv4 = ShiftConv2d(128, 256, 3, 2)
+        self.bn2 = nn.BatchNorm2d(256)
+        self.fc1 = nn.Linear(256*7*7, 500)
         self.fc2 = nn.Linear(500, 10)
 
     def forward(self, x):
         x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
         x = self.bn1(x)
         x = F.relu(x)
-        x = self.conv2(x)
+        x = self.conv4(x)
         x = self.bn2(x)
         x = F.relu(x)
-        x = x.view(-1, 32*7*7)
+        x = x.view(-1, 256*7*7)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
-class NetTriton(nn.Module):
-    def __init__(self):
-        super(NetTriton, self).__init__()
-        self.conv1 = triton.ShiftConv2d(1, 32, 3, 2)
-        self.bn1 = triton.BatchNorm2d(32)
-        self.conv2 = triton.ShiftConv2d(32, 64, 3, 2)
-        self.bn2 = triton.BatchNorm2d(64)
-        self.fc1 = nn.Linear(64*7*7, 500)
-        self.fc2 = nn.Linear(500, 10)
-
-    def forward(self, x):
-        x = x.permute(1, 2, 3, 0).contiguous()
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = x.permute(3, 0, 1, 2).contiguous()
-        x = x.view(-1, 64*7*7)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
-
-Net = NetReference()
+Net = Net()
 
 def train(args, model, device, train_loader, optimizer, epoch):
     model.train()
