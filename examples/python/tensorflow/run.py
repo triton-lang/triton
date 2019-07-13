@@ -58,7 +58,7 @@ def blocksparse_matmul_grad(op, dy):
     return (dx, dw)
 
 def run_shift():
-    B, C, H, W = 16, 16, 4, 4
+    B, C, H, W = 16, 16, 2, 2
     R, S, F = 3, 3, 32
     stride_h, stride_w = 2, 2
     np.random.seed(2)

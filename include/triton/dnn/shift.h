@@ -62,7 +62,7 @@ public:
   shift(int B, int NC,
        int D, int H, int W,
        int T, int R, int S, int NF,
-        int stride_h, int stride_w,
+       int stride_h, int stride_w,
        const int32_t* shift_h, const int32_t* shift_w,
        std::string a_ty = "fp32", std::string b_ty = "fp32",
        type ty = FPROP, bool bias = false, layout_t layout = CHWN);
@@ -145,6 +145,8 @@ private:
   // shift values
   const int32_t* shift_h_;
   const int32_t* shift_w_;
+  bool shift_edge_h_;
+  bool shift_edge_w_;
   // look-up tables
   std::vector<int32_t> h_delta_a;
   std::vector<int32_t> h_delta_b;
@@ -154,7 +156,7 @@ private:
   std::string a_ty_;
   std::string b_ty_;
   // convolution type
-  type ty_;
+  type op_;
   bool bias_;
   // transpose
   bool AT_;
