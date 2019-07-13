@@ -33,7 +33,7 @@ int main() {
   triton::dnn::shift shift(B, C, 1, H, W, 1, R, S, F, 1, 1,
                            shift_h.data(), shift_w.data(),
                            numeric_t_str, numeric_t_str,
-                           op, false);
+                           op, false, triton::dnn::shift::NCHW);
   // host buffers
   std::vector<NumericT> ha(B*C*H*W);
   std::vector<NumericT> hb(C*F);
