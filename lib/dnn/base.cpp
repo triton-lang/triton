@@ -24,7 +24,7 @@ base::base(const std::string& name)
 
 void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args) {
   static std::map<base*, std::unique_ptr<triton::jit>, cmp_recompile> m_jit;
-  bool autotune = false;
+  bool autotune = true;
   driver::context* ctx = stream->context();
   triton::jit* jit;
   /* the current template has not already been compiled */
