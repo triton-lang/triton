@@ -10,11 +10,11 @@
 
 int main() {
   typedef float NumericT;
-  std::string numeric_t_str = "fp32";
+  std::string numeric_t_str = "fp16";
 
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
-  auto op = triton::dnn::shift::FPROP;
+  auto op = triton::dnn::shift::BPROP;
 
   // initialization
   int32_t R = 3, S = 3;
@@ -35,6 +35,15 @@ int main() {
                            numeric_t_str, numeric_t_str,
                            op, false, triton::dnn::shift::NCHW);
   // host buffers
+  size_t a_size = B*C*H*W;
+  size_t b_size = C*F;
+  size_t c_size = B*F*H*W;
+  if(op == triton::dnn::shift::BPROP)
+    std::swap(a_size, c_size);
+  if(op == triton::dnn::shift::WGRAD){
+    std::swap(b_size, c_size);
+    std::swap(a_size, b_size);
+  }
   std::vector<NumericT> ha(B*C*H*W);
   std::vector<NumericT> hb(C*F);
   std::vector<float> hc(B*F*H*W);

@@ -149,7 +149,6 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
   std::vector<std::vector<unsigned>> ranges;
   for(ir::metaparameter *mp: mps)
     ranges.push_back(mp->get_space());
-//  std::cout << ranges.size() << std::endl;
   // iterate over parameters
   unsigned i;
   tune_res_t best;

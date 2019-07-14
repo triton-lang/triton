@@ -376,7 +376,15 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
   if(ir::atomic_add_inst* ii = dynamic_cast<ir::atomic_add_inst*>(inst)){
     Value *ptr = value(ii->get_operand(0));
     Value *val = value(ii->get_operand(1));
-    Value *atom_f_add = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_atomic_load_add_f32, {ptr->getType()});
+    Value *atom_f_add;
+    if(val->getType()->isFloatTy())
+      atom_f_add = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_atomic_load_add_f32, {ptr->getType()});
+    else if(val->getType()->isHalfTy()){
+      Type *fp16 = Type::getHalfTy(ctx);
+
+      FunctionType *atom_ty = FunctionType::get(fp16, {fp16->getPointerTo(), fp16}, false);
+      atom_f_add = InlineAsm::get(atom_ty, " atom.relaxed.global.gpu.add.noftz.f16 $0, [$1], $2;", "=h,l,h", true);
+    }
     Value *res = builder.CreateCall(atom_f_add, {ptr, val});
     return (Instruction*)res;
   }
@@ -1110,6 +1118,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
       unsigned alignment = std::min(starting_multiple, max_contiguous);
       unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
+      vector_size = 1;
 //      vector_size = result->axis(0).contiguous;
       std::map<unsigned, Value*> packets;
       distributed_tile *TP = (distributed_tile*)tmap_.at(ld->get_pointer_operand());

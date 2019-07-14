@@ -60,7 +60,7 @@ public:
   // clone
   virtual base* clone() const = 0;
   // enqueue
-  void enqueue(driver::stream* stream, std::vector<driver::buffer*> args);
+  void enqueue(driver::stream* stream, std::vector<driver::buffer*> args, bool autotune = false);
 
 private:
   std::string name_;

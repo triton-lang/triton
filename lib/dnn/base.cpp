@@ -22,9 +22,8 @@ void base::set_ld(const std::vector<int32_t>& shapes,
 base::base(const std::string& name)
   : name_(name) { }
 
-void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args) {
+void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, bool autotune) {
   static std::map<base*, std::unique_ptr<triton::jit>, cmp_recompile> m_jit;
-  bool autotune = true;
   driver::context* ctx = stream->context();
   triton::jit* jit;
   /* the current template has not already been compiled */
