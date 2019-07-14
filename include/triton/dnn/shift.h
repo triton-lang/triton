@@ -155,6 +155,7 @@ private:
   // data types
   std::string a_ty_;
   std::string b_ty_;
+  std::string c_ty_;
   // convolution type
   type op_;
   bool bias_;

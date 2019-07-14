@@ -106,7 +106,7 @@ public:
     triton::dnn::shift shift(B, C, D, H, W, T, R_, S_, F,
                              stride_h_, stride_w_,
                              shift_h_data, shift_w_data,
-                             "fp32", "fp32", OP, has_bias, layout_);
+                             "fp16", "fp16", OP, has_bias, layout_);
 
     // shapes for c
     std::vector<int64> c_shapes;
@@ -119,9 +119,9 @@ public:
     if (out_shapes.num_elements() == 0)
       return;
     // matrix multiplication parameters
-    triton::driver::cu_buffer da(ctx,      (CUdeviceptr)tf_a.flat<float>().data(), false);
-    triton::driver::cu_buffer db(ctx,      (CUdeviceptr)tf_b.flat<float>().data(), false);
-    triton::driver::cu_buffer dc(ctx,      (CUdeviceptr)tf_c->flat<float>().data(), false);
+    triton::driver::cu_buffer da(ctx,      (CUdeviceptr)tf_a.flat<Eigen::half>().data(), false);
+    triton::driver::cu_buffer db(ctx,      (CUdeviceptr)tf_b.flat<Eigen::half>().data(), false);
+    triton::driver::cu_buffer dc(ctx,      (CUdeviceptr)tf_c->flat<Eigen::half>().data(), false);
     shift.enqueue(stream, {&da, &db, &dc});
   }
 
@@ -137,31 +137,31 @@ private:
 
 REGISTER_KERNEL_BUILDER(Name("ShiftConv").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::shift::FPROP>);
 REGISTER_OP("ShiftConv")
-    .Input("a: float32")
-    .Input("b: float32")
+    .Input("a: float16")
+    .Input("b: float16")
     .Attr("shift_h: tensor")
     .Attr("shift_w: tensor")
     .Attr("stride_h: int")
     .Attr("stride_w: int")
-    .Output("c: float32");
+    .Output("c: float16");
 
 REGISTER_KERNEL_BUILDER(Name("ShiftConvDx").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::shift::BPROP>);
 REGISTER_OP("ShiftConvDx")
-    .Input("a: float32")
-    .Input("b: float32")
+    .Input("a: float16")
+    .Input("b: float16")
     .Attr("shift_h: tensor")
     .Attr("shift_w: tensor")
     .Attr("stride_h: int")
     .Attr("stride_w: int")
-    .Output("c: float32");
+    .Output("c: float16");
 
 REGISTER_KERNEL_BUILDER(Name("ShiftConvDw").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::shift::WGRAD>);
 REGISTER_OP("ShiftConvDw")
-    .Input("a: float32")
-    .Input("b: float32")
+    .Input("a: float16")
+    .Input("b: float16")
     .Attr("shift_h: tensor")
     .Attr("shift_w: tensor")
     .Attr("stride_h: int")
     .Attr("stride_w: int")
-    .Output("c: float32");
+    .Output("c: float16");
 

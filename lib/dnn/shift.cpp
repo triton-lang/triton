@@ -22,7 +22,7 @@ shift::shift(int B, int C,
     F_(F),
     stride_d_(1), stride_h_(stride_h), stride_w_(stride_w),
     shift_h_(shift_h), shift_w_(shift_w),
-    a_ty_(a_ty), b_ty_(b_ty),
+    a_ty_(a_ty), b_ty_(b_ty), c_ty_(b_ty),
     op_(ty), bias_(bias),
     layout_(layout){
 //  std::cout << B_ << " " << C_ << " " << F_ << " " << stride_h_ << " " << stride_w_ << " " << a_ty_ << " " << b_ty_ << " " << ty_ << " " << layout_ << std::endl;
@@ -230,8 +230,10 @@ void shift::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(26, CW_);
   unsigned TM = ranges[0], TN = ranges[1];
   std::array<size_t, 3> grid = {(M_ + TM - 1)/TM, (N_ + TN - 1)/TN, 1};
-  if(op_ == BPROP)
-    ((driver::cu_buffer*)c)->set_zero(stream, AH_*AW_*B_*C_*4);
+  if(op_ == BPROP){
+    size_t c_nbytes = (c_ty_ == "fp16") ? 2 : 4;
+    ((driver::cu_buffer*)c)->set_zero(stream, AH_*AW_*B_*C_*c_nbytes);
+  }
   stream->enqueue(kernel, grid, {nthreads, 1, 1});
 }
 
@@ -264,7 +266,7 @@ __constant__ int32* delta_a = alloc_const int32[)" + std::to_string(MAX_C_) + R"
 
 void shift(restrict read_only align(16) )" + a_ty_ + R"( *A,
            restrict read_only align(16) )" + b_ty_ + R"( *B,
-           fp32 *C,
+           )" + c_ty_ + R"( *C,
            int32 M, int32 N, int32 K,
            int32 stride_h, int32 stride_w,
            int32 lda_b, int32 lda_w, int32 lda_h, int32 lda_c,
@@ -278,7 +280,7 @@ void shift(restrict read_only align(16) )" + a_ty_ + R"( *A,
   int32 ryb[TN] = get_global_range[TN](1);
   int32 rka[TK] = 0 ... TK;
   int32 rkb[TK] = 0 ... TK;
-  fp32 c[TM, TN] = 0;
+  fp32 acc[TM, TN] = 0;
   int32 pad_h = BH / 2;
   int32 pad_w = BW / 2;)";
 
@@ -304,7 +306,7 @@ if(op_ == FPROP){
   int32 offxa[TM] =  rab*lda_b + raw*lda_w + rah*lda_h;
   int32 offa0[TM, TK] = offxa[:, newaxis];
   __constant__ int32* pd[TK] = delta_a + rka;
-  multiple_of(4) int32 d[TK] = *pd;
+  int32 d[TK] = *pd;
   int32 offa_interior[TM, TK] = d[newaxis, :];
   int32 offa_exterior[TM, TK] = rka[newaxis, :] * lda_c;
   )";
@@ -424,7 +426,7 @@ if(op_ == WGRAD){
   )" + a_ty_ + "   a[" + AS + R"(] = checka ? *pa : 0;
   )" + b_ty_ + "   b[" + BS + R"(] = checkb ? *pb : 0;
   for(int32 k = K; k > 0; k = k - TK){
-    c = dot()" + usea + "," + useb + R"(, c);
+    acc = dot()" + usea + "," + useb + R"(, acc);
     int1 checka[)" + AS + R"(] = k > TK;
     int1 checkb[)" + BS + R"(] = k > TK;)";
 
@@ -564,7 +566,8 @@ if(op_ == WGRAD){
   int32 offxc[TM] = rxc;)";
 }
   result +=  R"("
-  fp32* pc[TM, TN] = C + offxc[:, newaxis] + ryc[newaxis, :]*ldc_c;
+  )" + c_ty_ + R"( c[TM, TN] = acc;
+  )" + c_ty_ + R"(* pc[TM, TN] = C + offxc[:, newaxis] + ryc[newaxis, :]*ldc_c;
   int1 checkc0[TM] = rxc < M;
   int1 checkc1[TN] = ryc < N;
   int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];)";
@@ -581,7 +584,7 @@ if(op_ == BPROP){
   result +=  R"(
   int1 interior[TM, TN] = interiorh[:, newaxis] && interiorw[:, newaxis];
   __constant__ int32* pd[TN] = delta_a + ryc;
-  fp32* shift_pc[TM, TN] = pc + (*pd)[newaxis, :];
+  )" + c_ty_ + R"(* shift_pc[TM, TN] = pc + (*pd)[newaxis, :];
   pc = interior ? shift_pc : pc;
   @checkc __atomic_add(pc, c);
   )";
@@ -593,6 +596,7 @@ else{
   result +=  R"(
 })";
 
+//  std::cout << result << std::endl;
   os << result;
 }
 
