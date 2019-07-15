@@ -28,6 +28,10 @@ namespace llvm {
 
 namespace triton {
 
+namespace lang{
+class translation_unit;
+}
+
 namespace codegen{
 class tune;
 }
@@ -97,8 +101,9 @@ public:
 
 private:
   std::string compute_data_layout(bool is_64bit = true, bool use_short_pointers = true);
-  std::unique_ptr<llvm::Module> make_llvm_module(triton::ir::module &module, passes_wrapper &passes);
-  std::unique_ptr<ir::module> make_triton_module(const char* name, const char* src);
+  std::unique_ptr<llvm::Module> make_llvm_module(triton::ir::module &module, passes_wrapper &passes, llvm::LLVMContext &context, launch_information &info);
+  std::unique_ptr<ir::module> make_triton_module(const char *name, triton::ir::context &context, triton::lang::translation_unit *program);
+  triton::lang::translation_unit *parse_program(const char *name, const char *src);
 
 public:
   jit(driver::context* context);
