@@ -54,8 +54,7 @@ base* batchnorm_forward::clone() const {
 
 void batchnorm_forward::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                                      std::vector<driver::buffer*> args,
-                                     const std::vector<unsigned>&,
-                                     size_t nthreads)
+                                     runtime::launch_information info)
 {
   driver::buffer *y = args[0], *m = args[1], *v = args[2];
   driver::buffer *x = args[3], *g = args[4], *b = args[5];
@@ -69,7 +68,7 @@ void batchnorm_forward::enqueue_impl(driver::stream *stream, driver::kernel *ker
   kernel->setArg(6, DHWB_);
   kernel->setArg(7, rcpDHWB_);
   kernel->setArg(8, eps_);
-  stream->enqueue(kernel, grid, {nthreads, 1, 1});
+  stream->enqueue(kernel, grid, {info.num_threads, 1, 1});
 }
 
 void batchnorm_forward::triton_c_src(std::ostream &os) const {
@@ -154,7 +153,7 @@ base* batchnorm_backward::clone() const {
 
 void batchnorm_backward::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                                       std::vector<driver::buffer *> args,
-                                      const std::vector<unsigned> &, size_t nthreads) {
+                                      runtime::launch_information info) {
   driver::buffer *dx = args[0], *dg = args[1], *db = args[2], *dy = args[3];
   driver::buffer *x = args[4], *g = args[5], *m = args[6], *v = args[7];
   std::array<size_t, 3> grid = {1, (size_t)C_, 1};
@@ -169,7 +168,7 @@ void batchnorm_backward::enqueue_impl(driver::stream *stream, driver::kernel *ke
   kernel->setArg(8, (int32_t)(D_*H_*W_*B_));
   kernel->setArg(9, (float)1/(D_*H_*W_*B_));
   kernel->setArg(10, eps_);
-  stream->enqueue(kernel, grid, {nthreads, 1, 1});
+  stream->enqueue(kernel, grid, {info.num_threads, 1, 1});
 }
 
 void batchnorm_backward::triton_c_src(std::ostream &os) const {

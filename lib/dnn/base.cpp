@@ -23,29 +23,30 @@ base::base(const std::string& name)
   : name_(name) { }
 
 void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, bool autotune) {
-  static std::map<base*, std::unique_ptr<triton::jit>, cmp_recompile> m_jit;
+  namespace rt = triton::runtime;
+  static std::map<base*, std::unique_ptr<rt::jit>, cmp_recompile> m_jit;
   driver::context* ctx = stream->context();
-  triton::jit* jit;
+  rt::jit* jit;
   /* the current template has not already been compiled */
   if(m_jit.find(this) == m_jit.end()) {
-    jit = m_jit.emplace(this->clone(), new triton::jit(ctx)).first->second.get();
+    jit = m_jit.emplace(this->clone(), new rt::jit(ctx)).first->second.get();
     std::ostringstream oss;
     triton_c_src(oss);
     std::string src = oss.str();
     auto benchmark = [&](triton::driver::kernel* kernel,
-                         triton::jit::launch_information info) {
+                         rt::launch_information info) {
       // launch info
       unsigned nthreads = info.num_threads;
       init_impl(stream, (triton::driver::cu_module*)kernel->module());
-      enqueue_impl(stream, kernel, args, info.global_range_size, nthreads);
+      enqueue_impl(stream, kernel, args, info);
       stream->synchronize();
-      double ts = triton::tools::bench([&](){ enqueue_impl(stream, kernel, args, info.global_range_size, nthreads); },
+      double ts = triton::tools::bench([&](){ enqueue_impl(stream, kernel, args, info); },
                         [&](){ stream->synchronize(); }, ctx->device());
       return num_flops() / ts * 1e-3;
     };
     // auto-tune and save result
     if(autotune) {
-      triton::jit::tune_res_t best = jit->autotune(name_.c_str(), src.c_str(), benchmark);
+      rt::jit::tune_res_t best = jit->autotune(name_.c_str(), src.c_str(), benchmark);
       jit->add_module(name_.c_str(), src.c_str(), best.params);
     }
     else {
@@ -60,10 +61,9 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, b
 
   /* get launch parameters */
   driver::kernel* kernel = jit->get_function(name_.c_str());
-  triton::jit::launch_information info = jit->get_launch_info(name_.c_str());
+  rt::launch_information info = jit->get_launch_info(name_.c_str());
   /* launch */
-  enqueue_impl(stream, kernel, args,
-               info.global_range_size, info.num_threads);
+  enqueue_impl(stream, kernel, args, info);
 }
 
 }

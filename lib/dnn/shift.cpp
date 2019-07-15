@@ -199,7 +199,7 @@ void shift::init_impl(driver::stream *stream, driver::cu_module *module) {
 
 void shift::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer *> args,
-                    const std::vector<unsigned> &ranges, size_t nthreads) {
+                    runtime::launch_information info) {
   driver::buffer *a = args[0], *b = args[1], *c = args[2];
   kernel->setArg(0, a);
   kernel->setArg(1, b);
@@ -228,13 +228,13 @@ void shift::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(24, BW_);
   kernel->setArg(25, CH_);
   kernel->setArg(26, CW_);
-  unsigned TM = ranges[0], TN = ranges[1];
+  unsigned TM = info.global_range_size[0], TN = info.global_range_size[1];
   std::array<size_t, 3> grid = {(M_ + TM - 1)/TM, (N_ + TN - 1)/TN, 1};
   if(op_ == BPROP){
     size_t c_nbytes = (c_ty_ == "fp16") ? 2 : 4;
     ((driver::cu_buffer*)c)->set_zero(stream, AH_*AW_*B_*C_*c_nbytes);
   }
-  stream->enqueue(kernel, grid, {nthreads, 1, 1});
+  stream->enqueue(kernel, grid, {info.num_threads, 1, 1});
 }
 
 void shift::triton_c_src(std::ostream &os) const {

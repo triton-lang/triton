@@ -47,11 +47,10 @@ void gemm::init_impl(driver::stream* stream, driver::cu_module *) {
 
 void gemm::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                         std::vector<driver::buffer*> args,
-                        const std::vector<unsigned>& ranges,
-                        size_t nthreads) {
+                        runtime::launch_information info) {
   driver::buffer *a = args[0], *b = args[1], *c = args[2];
-  unsigned TM = ranges[0];
-  unsigned TN = ranges[1];
+  unsigned TM = info.global_range_size[0];
+  unsigned TN = info.global_range_size[1];
   unsigned grid_0 = (M_ + TM - 1)/TM;
   unsigned grid_1 = (N_ + TN - 1)/TN;
   unsigned grid_2 = 1;
@@ -68,7 +67,7 @@ void gemm::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(9, locks_);
   kernel->setArg(10, grid_0);
   kernel->setArg(11, grid_1);
-  stream->enqueue(kernel, grid, {nthreads, 1, 1});
+  stream->enqueue(kernel, grid, {info.num_threads, 1, 1});
 }
 
 std::vector<unsigned> gemm::default_params() {

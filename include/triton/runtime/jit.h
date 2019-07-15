@@ -20,6 +20,7 @@
 #include "triton/codegen/alignment_info.h"
 #include "triton/codegen/target.h"
 #include "triton/codegen/vectorize.h"
+#include "triton/runtime/launch_info.h"
 #include <functional>
 
 namespace llvm {
@@ -42,12 +43,10 @@ class context;
 class metaparameter;
 }
 
+namespace runtime{
+
 class jit {
 public:
-  struct launch_information{
-    std::vector<unsigned> global_range_size;
-    unsigned num_threads;
-  };
   typedef std::function<double(driver::kernel*, launch_information)> benchmark_t;
 
   struct tune_res_t{
@@ -114,7 +113,6 @@ public:
   void add_module(const char* name, const char* src, const std::vector<unsigned>& params = {});
   driver::kernel* get_function(const char* name);
   launch_information get_launch_info(const char* name);
-  unsigned get_int(const char* name);
 
 private:
   std::map<std::string, driver::module*> modules_;
@@ -122,11 +120,10 @@ private:
   llvm::LLVMContext llvm_context_;
   ir::context triton_context_;
   std::map<std::string, launch_information> launch_info_map_;
-  std::map<std::string, unsigned> global_ints_;
   std::shared_ptr<triton::codegen::target> target_;
 };
 
-
+}
 }
 
 #endif

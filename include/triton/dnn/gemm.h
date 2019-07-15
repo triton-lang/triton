@@ -13,8 +13,7 @@ private:
   // enqueue
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
-                    const std::vector<unsigned>& ranges,
-                    size_t nthreads);
+                    triton::runtime::launch_information info);
   // number of flops
   size_t num_flops() const;
   // comparison for maps
