@@ -29,6 +29,7 @@ extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
 extern triton::lang::translation_unit *ast_root;
 
 namespace triton {
+namespace runtime{
 
 void loop_nest(std::vector<size_t> const & ranges,
                std::function<void(std::vector<size_t> const &)> const & f,
@@ -80,6 +81,10 @@ std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, passes_w
   info.global_range_size.clear();
   for(unsigned i = 0; i < passes.tune.get_num_global_range(); i++)
     info.global_range_size.push_back(passes.tune.get_global_range_size(i));
+  // add globals
+  for(auto x: module.globals())
+    info.globals[x.first] = ((ir::metaparameter*)x.second)->get_value();
+  // number of threads
   info.num_threads = passes.tune.get_num_threads();
   return std::unique_ptr<llvm::Module>(result);
 }
@@ -164,7 +169,7 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
     ranges.push_back(mp->get_space());
   // iterate over parameters
   tune_res_t best;
-  size_t nthreads = 4;
+  size_t nthreads = 1;
   std::mutex mutex;
   loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
     std::map<ir::value*, std::vector<std::string>> errors;
@@ -203,10 +208,6 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
     auto ll_module = make_llvm_module(tt_module_1, passes_1, llvm_context, info);
     std::unique_ptr<driver::module> module(driver::module::create(driver_context_, &*ll_module));
     std::unique_ptr<driver::kernel> kernel(driver::kernel::create(module.get(), name));
-    // add globals
-    for(auto x: tt_module_1.globals())
-      global_ints_[x.first] = ((ir::metaparameter*)x.second)->get_value();
-    modules_.insert({name, module.get()});
     double perf;
     perf = benchmark(kernel.get(), info);
     {
@@ -219,7 +220,6 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
         std::cout << p << " " << std::flush;
       std::cout << perf << " [ " << best.perf << " ] " << std::endl;
     }
-    modules_.erase(name);
   }, nthreads);
   return best;
 }
@@ -248,9 +248,6 @@ void jit::add_module(ir::module &tt_module, const std::vector<unsigned> &params)
   auto ll_module = make_llvm_module(tt_module, passes, llvm_context_, launch_info_map_[name]);
   // llvm module -> machine code
   modules_.insert({name, driver::module::create(driver_context_, &*ll_module)});
-  // add globals
-  for(auto x: tt_module.globals())
-    global_ints_[x.first] = ((ir::metaparameter*)x.second)->get_value();
 }
 
 void jit::add_module(const char *name, const char *src, const std::vector<unsigned> &params) {
@@ -263,12 +260,10 @@ driver::kernel *jit::get_function(const char *name) {
   return driver::kernel::create(modules_.at(name), name);
 }
 
-jit::launch_information jit::get_launch_info(const char *name) {
+launch_information jit::get_launch_info(const char *name) {
   return launch_info_map_.at(name);
 }
 
-unsigned jit::get_int(const char *name){
-  return global_ints_.at(name);
-}
 
+}
 }

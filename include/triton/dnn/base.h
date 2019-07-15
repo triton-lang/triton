@@ -25,6 +25,7 @@
 
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
+#include "triton/runtime/launch_info.h"
 
 namespace triton{
 namespace dnn{
@@ -45,8 +46,7 @@ private:
   // enqueue
   virtual void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
-                    const std::vector<unsigned>& ranges,
-                    size_t nthreads) = 0;
+                    triton::runtime::launch_information info) = 0;
   // number of flops
   virtual size_t num_flops() const = 0;
   // comparison for maps

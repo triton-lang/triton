@@ -365,10 +365,9 @@ void conv::set_arg(driver::kernel *kernel,
 
 void conv::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                         std::vector<driver::buffer*> args,
-                        const std::vector<unsigned>& ranges,
-                        size_t nthreads) {
+                        runtime::launch_information info) {
   driver::buffer *a = args[0], *b = args[1], *c = args[2], *bias = args[3];
-  unsigned TM = ranges[0], TN = ranges[1];
+  unsigned TM = info.global_range_size[0], TN = info.global_range_size[1];
   unsigned GZ = 1;
   set_arg(kernel, a, b, c, bias);
   std::array<size_t, 3> grid = {1};
@@ -411,7 +410,7 @@ void conv::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
     kernel->setArg(38, (pad_w_ + (1 - upsample_w_)*off_uw)/upsample_w_);
     kernel->setArg(39, (off_uh + pad_h_) % upsample_h_);
     kernel->setArg(40, (off_uw + pad_w_) % upsample_w_);
-    stream->enqueue(kernel, grid, {nthreads, 1, 1});
+    stream->enqueue(kernel, grid, {info.num_threads, 1, 1});
   }
 }
 
