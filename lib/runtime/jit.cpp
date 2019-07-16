@@ -43,8 +43,8 @@ void loop_nest(std::vector<size_t> const & ranges,
   size_t current = 0;
   while(true){
     //Execute function
-//    pool.add_job([values, &f](){ f(values); });
-    f(values);
+    pool.add_job([values, &f](){ f(values); });
+//    f(values);
     //Increment counters
     while(values[i]++ == ranges[i] - 1){
       if(i == 0)
@@ -210,9 +210,9 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
     std::unique_ptr<driver::module> module(driver::module::create(driver_context_, &*ll_module));
     std::unique_ptr<driver::kernel> kernel(driver::kernel::create(module.get(), name));
     double perf;
-    perf = benchmark(kernel.get(), info);
     {
       std::lock_guard<std::mutex> lock(mutex);
+      perf = benchmark(kernel.get(), info);
       if(perf > best.perf){
         best.perf = perf;
         best.params = params;

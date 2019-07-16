@@ -317,7 +317,7 @@ const tunable int32 TM = {16, 32, 64, 128};
 const tunable int32 TN = {16, 32, 64, 128};
 const tunable int32 TK = {)" + std::to_string(TK_) + "};";
 if(op_ == WGRAD)
-  result += "const tunable int32 GZ = {1, 4, 16};";
+  result += "const tunable int32 GZ = {1};";
 else
   result += "const tunable int32 GZ = {1};";
 
