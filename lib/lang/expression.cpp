@@ -73,10 +73,14 @@ ir::value *binary_expression::llvm_op(ir::module *mod, ir::builder &builder, ir:
     return builder.create_icmpSGE(lhs, rhs, name);
   if(op_ == GE && is_int && !is_signed)
     return builder.create_icmpUGE(lhs, rhs, name);
+  if(op_ == EQ && is_ptr)
+    return builder.create_icmpEQ(lhs, rhs, name);
   if(op_ == EQ && is_float)
     return builder.create_fcmpOEQ(lhs, rhs, name);
   if(op_ == EQ && is_int)
     return builder.create_icmpEQ(lhs, rhs, name);
+  if(op_ == NE && is_ptr)
+    return builder.create_icmpNE(lhs, rhs, name);
   if(op_ == NE && is_float)
     return builder.create_fcmpONE(lhs, rhs, name);
   if(op_ == NE && is_int)

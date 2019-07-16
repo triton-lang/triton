@@ -43,6 +43,8 @@ protected:
 private:
   // initialize
   virtual void init_impl(driver::stream *, driver::cu_module *){ }
+  // deinitialize
+  virtual void deinit_impl(){ }
   // enqueue
   virtual void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
