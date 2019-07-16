@@ -43,7 +43,8 @@ void loop_nest(std::vector<size_t> const & ranges,
   size_t current = 0;
   while(true){
     //Execute function
-    pool.add_job([values, &f](){ f(values); });
+//    pool.add_job([values, &f](){ f(values); });
+    f(values);
     //Increment counters
     while(values[i]++ == ranges[i] - 1){
       if(i == 0)
@@ -169,7 +170,7 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
     ranges.push_back(mp->get_space());
   // iterate over parameters
   tune_res_t best;
-  size_t nthreads = 1;
+  size_t nthreads = 4;
   std::mutex mutex;
   loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
     std::map<ir::value*, std::vector<std::string>> errors;

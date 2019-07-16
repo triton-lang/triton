@@ -52,6 +52,7 @@ public:
 private:
   // initialize and enqueue
   void init_impl(driver::stream *stream, driver::cu_module *module);
+  void deinit_impl();
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
                     triton::runtime::launch_information info);
@@ -163,6 +164,9 @@ private:
   bool BT_;
   // layout
   layout_t layout_;
+  // locks
+  size_t max_locks_;
+  driver::buffer *locks_;
 };
 
 }

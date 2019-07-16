@@ -29,19 +29,20 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, b
   rt::jit* jit;
   /* the current template has not already been compiled */
   if(m_jit.find(this) == m_jit.end()) {
-    jit = m_jit.emplace(this->clone(), new rt::jit(ctx)).first->second.get();
+    base* clone = this->clone();
+    jit = m_jit.emplace(clone, new rt::jit(ctx)).first->second.get();
     std::ostringstream oss;
-    triton_c_src(oss);
+    clone->triton_c_src(oss);
     std::string src = oss.str();
     auto benchmark = [&](triton::driver::kernel* kernel,
                          rt::launch_information info) {
       // launch info
-      unsigned nthreads = info.num_threads;
-      init_impl(stream, (triton::driver::cu_module*)kernel->module());
-      enqueue_impl(stream, kernel, args, info);
+      clone->init_impl(stream, (triton::driver::cu_module*)kernel->module());
+      clone->enqueue_impl(stream, kernel, args, info);
       stream->synchronize();
-      double ts = triton::tools::bench([&](){ enqueue_impl(stream, kernel, args, info); },
+      double ts = triton::tools::bench([&](){ clone->enqueue_impl(stream, kernel, args, info); },
                         [&](){ stream->synchronize(); }, ctx->device());
+      clone->deinit_impl();
       return num_flops() / ts * 1e-3;
     };
     // auto-tune and save result
@@ -53,7 +54,7 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, b
       jit->add_module(name_.c_str(), src.c_str(), jit->get_valid(name_.c_str(), src.c_str()));
     }
     triton::driver::kernel* kernel = jit->get_function(name_.c_str());
-    init_impl(stream, (triton::driver::cu_module*)kernel->module());
+    clone->init_impl(stream, (triton::driver::cu_module*)kernel->module());
   }
   /* retrieved compiled template */
   else
@@ -63,7 +64,8 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, b
   driver::kernel* kernel = jit->get_function(name_.c_str());
   rt::launch_information info = jit->get_launch_info(name_.c_str());
   /* launch */
-  enqueue_impl(stream, kernel, args, info);
+  auto it = m_jit.find(this);
+  it->first->enqueue_impl(stream, kernel, args, info);
 }
 
 }

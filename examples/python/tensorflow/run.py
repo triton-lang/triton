@@ -58,9 +58,9 @@ def blocksparse_matmul_grad(op, dy):
     return (dx, dw)
 
 def run_shift():
-    B, C, H, W = 1, 16, 4, 4
+    B, C, H, W = 2, 16, 4, 4
     R, S, F = 3, 3, 16
-    stride_h, stride_w = 2, 2
+    stride_h, stride_w = 1, 1
     np.random.seed(2)
     a = tf.placeholder(tf.float16, shape=[B, C, H, W])
     b = tf.placeholder(tf.float16, shape=[C, F])
@@ -82,8 +82,8 @@ def run_shift():
     dx_t, dx_n = grads[0]
     #import sys
     #np.set_printoptions(threshold=sys.maxsize)
-    print(dx_t)
-    print(dx_n)
+    print(dw_t)
+    print(dw_n)
     print(np.max(np.abs(dw_t - dw_n)))
     print(np.max(np.abs(dx_t - dx_n)))
     # Run
