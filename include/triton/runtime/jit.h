@@ -105,7 +105,7 @@ private:
   triton::lang::translation_unit *parse_program(const char *name, const char *src);
 
 public:
-  jit(driver::context* context);
+  jit(driver::context* context, unsigned nthreads = 4);
   ~jit();
   std::vector<unsigned> get_valid(const char *name, const char *src);
   tune_res_t autotune(const char* name, const char* src, benchmark_t benchmark);
@@ -121,6 +121,7 @@ private:
   ir::context triton_context_;
   std::map<std::string, launch_information> launch_info_map_;
   std::shared_ptr<triton::codegen::target> target_;
+  unsigned nthreads_;
 };
 
 }

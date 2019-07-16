@@ -75,7 +75,7 @@ torch::Tensor shift_common(
 
   triton::driver::cu_buffer c(ctx, (CUdeviceptr)torchc.storage().data(), false);
   // Enqueue
-  shift.enqueue(&stream, {&a, &b, &c});
+  shift.enqueue(&stream, {&a, &b, &c}, true);
   return torchc;
 }
 
