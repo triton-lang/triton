@@ -214,9 +214,9 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
         best.perf = perf;
         best.params = params;
       }
-//      for(unsigned p: params)
-//        std::cout << p << " " << std::flush;
-//      std::cout << perf << " [ " << best.perf << " ] " << std::endl;
+      for(unsigned p: params)
+        std::cout << p << " " << std::flush;
+      std::cout << perf << " [ " << best.perf << " ] " << std::endl;
     }
   }, nthreads_);
   std::cout << "Autotuning done - Best performance: " << best.perf << std::endl;
