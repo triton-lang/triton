@@ -66,16 +66,12 @@ def run_shift():
     b = tf.placeholder(tf.float16, shape=[C, F])
     hshift_h = np.random.randint(- (R//2), R//2 + 1, size=C, dtype=np.int32)
     hshift_w = np.random.randint(- (S//2), R//2 + 1, size=C, dtype=np.int32)
-    #hshift_h = np.zeros(C, dtype=np.int32)
-    #hshift_w = np.zeros(C, dtype=np.int32)
     c = module.shift_conv(a, b, stride_h=stride_h, stride_w=stride_w, shift_h=tf.make_tensor_proto(hshift_h), shift_w=tf.make_tensor_proto(hshift_w))
     # feed values
     ha = np.random.rand(B, C, H, W)*0.1
     hb = np.random.rand(C, F)*0.1
-    #ha = np.ones((B, C, H, W), dtype=np.float16)
-    #hb = np.ones((C, F), dtype=np.float16)
     sess = tf.InteractiveSession()
-    # test
+    # check gradients
     grads = tf.test.compute_gradient([a, b], [(B, C, H, W), (C, F)], c, (B, F, H//stride_h, W//stride_w),
                                      extra_feed_dict = {a: ha, b: hb}, delta=1e-2)
     dw_t, dw_n = grads[1]

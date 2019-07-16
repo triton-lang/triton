@@ -37,20 +37,24 @@ void loop_nest(std::vector<size_t> const & ranges,
   size_t D = ranges.size();
   std::vector<size_t> values(D, 0);
   // thread pools
-  nbsdx::concurrent::thread_pool pool(nthreads);
+//  nbsdx::concurrent::thread_pool pool(nthreads);
   // Start with innermost loop
   size_t i = D - 1;
-  size_t current = 0;
+//  size_t current = 0;
   while(true){
     //Execute function
-    pool.add_job([values, &f](){ f(values); });
-//    f(values);
+//    pool.add_job([values, &f](){ f(values); });
+    f(values);
     //Increment counters
     while(values[i]++ == ranges[i] - 1){
       if(i == 0)
         return;
       values[i--] = 0;
     }
+//    if(current++ >= 1024){
+//      current = 0;
+//      pool.join_all();
+//    }
     i = D - 1;
   }
 }
@@ -128,7 +132,6 @@ std::vector<unsigned> jit::get_valid(const char *name, const char *src) {
     ranges.push_back(mp->get_space());
   // iterate over parameters
   std::vector<unsigned> result;
-  size_t nthreads = 1;
   loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
     if(!result.empty())
       return;
@@ -146,7 +149,7 @@ std::vector<unsigned> jit::get_valid(const char *name, const char *src) {
     if(!errors.empty())
       return;
     result = params;
-  }, nthreads);
+  }, 1);
   if(result.empty())
     throw std::runtime_error("couldn't find valid parameters");
   return result;
