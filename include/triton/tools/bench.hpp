@@ -32,7 +32,7 @@ double bench(OP const & op, SYNC const & sync, const triton::driver::device * de
   double total_time = 0;
   op();
   sync();
-//  while(total_time*1e-9 < 1e-3){
+  while(total_time*1e-9 < 1e-3){
     float norm = 1;
     // normalize clock if possible to get roughly constant result
     if(auto cu_device = dynamic_cast<const triton::driver::cu_device*>(device))
@@ -42,7 +42,7 @@ double bench(OP const & op, SYNC const & sync, const triton::driver::device * de
     sync();
     times.push_back(norm*tmr.get().count());
     total_time+=times.back();
-//  }
+  }
   return *std::min_element(times.begin(), times.end());
 }
 

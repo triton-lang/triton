@@ -9,25 +9,23 @@ library_dir = os.path.dirname(os.path.realpath(__file__))
 module = tf.load_op_library(os.path.join(library_dir, 'libtf_blocksparse.so'))
 
 def run_dot():
-    M, N, K = 128,128,128
+    M, N, K = 8192, 8192, 8192
     a = tf.placeholder(tf.float16, shape=[M, K])
     b = tf.placeholder(tf.float16, shape=[N, K])
-    locks = tf.placeholder(tf.int32, shape=[4096])
     # c = tf.matmul(a, b, transpose_a=True)
-    c = module.dot(a, b, locks)
+    c = module.dot(a, b)
     # Reference
     ha = np.random.rand(M, K).astype(np.float16)
     hb = np.random.rand(N, K).astype(np.float16)
     # Run
     sess = tf.InteractiveSession()
     sess.run(tf.global_variables_initializer())
-    result = sess.run([c], feed_dict = {locks: np.zeros(4096),
-                                        a: ha,
+    result = sess.run([c], feed_dict = {a: ha,
                                         b: hb})[0]
     # Test
-    hresult = np.dot(ha.T, hb).T
-    dif = np.abs(result - hresult)
-    print("dif: %f" % np.max(dif))
+    #hresult = np.dot(ha.T, hb).T
+    #dif = np.abs(result - hresult)
+    #print("dif: %f" % np.max(dif))
 
 def run_conv():
     B, C, H, W = 16, 32, 32, 32
@@ -130,5 +128,6 @@ def run_batchnorm():
     print(np.max(np.abs(dg_t - dg_n)))
     print(np.max(np.abs(db_t - db_n)))
 
-run_shift()
+run_dot()
+#run_shift()
 #run_batchnorm()
