@@ -109,8 +109,8 @@ const tunable int32 TN = {16, 32, 64, 128};
 const tunable int32 TK = {16};
 const tunable int32 GZ = {1};
 
-void matmul(restrict read_only )" + a_ty_ + R"( *A,
-            restrict read_only )" + b_ty_ + R"( *B,
+void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
+            restrict read_only align(16) )" + b_ty_ + R"( *B,
             fp32 *C,
             int32 M, int32 N, int32 K,
             )" + align_lda_str + R"( int32 lda, )" + align_ldb_str + R"(" int32 ldb, int32 ldc,
@@ -158,20 +158,7 @@ void matmul(restrict read_only )" + a_ty_ + R"( *A,
   int1 checkc1[TN] = ryc < N;
   int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
   fp32* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
-  int32 *plock = locks + ridx + ridy*grid0;
-  while(__atomic_cas(plock, 0, 1));
-  int32 *pcount = plock + grid0*grid1;
-  int32 count = *pcount;
-  int32 countp1 = select(count == GZ - 1, 0, count + 1);
-  if(count == 0) {
-    @checkc *pc = c;
-    *pcount = countp1;
-  }
-  else {
-    @checkc *pc = c + *pc;
-    *pcount = countp1;
-  }
-  __atomic_cas(plock, 1, 0);
+  @checkc *pc = c;
 }
 )";
   os << res;
