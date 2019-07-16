@@ -13,7 +13,7 @@ int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   // matrix multiplication parameters
-  int32_t M = 32768, N = 128, K = 128;
+  int32_t M = 8192, N = 8192, K = 8192;
   std::vector<float> hc(M*N);
   std::vector<float> rc(M*N);
   std::vector<float> ha(M*K);

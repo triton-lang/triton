@@ -106,7 +106,7 @@ void gemm::triton_c_src(std::ostream &os) const {
 R"(
 const tunable int32 TM = {16, 32, 64, 128};
 const tunable int32 TN = {16, 32, 64, 128};
-const tunable int32 TK = {8};
+const tunable int32 TK = {16};
 const tunable int32 GZ = {1};
 
 void matmul(restrict read_only )" + a_ty_ + R"( *A,
