@@ -37,24 +37,18 @@ void loop_nest(std::vector<size_t> const & ranges,
   size_t D = ranges.size();
   std::vector<size_t> values(D, 0);
   // thread pools
-//  nbsdx::concurrent::thread_pool pool(nthreads);
+  ThreadPool pool(nthreads);
   // Start with innermost loop
   size_t i = D - 1;
 //  size_t current = 0;
   while(true){
     //Execute function
-//    pool.add_job([values, &f](){ f(values); });
-    f(values);
-    //Increment counters
+    pool.enqueue([values, &f](){ f(values); });
     while(values[i]++ == ranges[i] - 1){
       if(i == 0)
         return;
       values[i--] = 0;
     }
-//    if(current++ >= 1024){
-//      current = 0;
-//      pool.join_all();
-//    }
     i = D - 1;
   }
 }
@@ -111,8 +105,9 @@ std::unique_ptr<ir::module> jit::make_triton_module(const char * name, triton::i
 }
 
 
-jit::jit(driver::context *context): driver_context_(context),
-                                    target_(context->device()->make_target()) { }
+jit::jit(driver::context *context, unsigned nthreads): driver_context_(context),
+                                    target_(context->device()->make_target()),
+                                    nthreads_(nthreads) { }
 
 jit::~jit(){ }
 
@@ -173,7 +168,6 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
     ranges.push_back(mp->get_space());
   // iterate over parameters
   tune_res_t best;
-  size_t nthreads = 4;
   std::mutex mutex;
   loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
     std::map<ir::value*, std::vector<std::string>> errors;
@@ -220,11 +214,12 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
         best.perf = perf;
         best.params = params;
       }
-      for(unsigned p: params)
-        std::cout << p << " " << std::flush;
-      std::cout << perf << " [ " << best.perf << " ] " << std::endl;
+//      for(unsigned p: params)
+//        std::cout << p << " " << std::flush;
+//      std::cout << perf << " [ " << best.perf << " ] " << std::endl;
     }
-  }, nthreads);
+  }, nthreads_);
+  std::cout << "Autotuning done - Best performance: " << best.perf << std::endl;
   return best;
 }
 

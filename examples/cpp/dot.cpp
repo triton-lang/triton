@@ -13,7 +13,7 @@ int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   // matrix multiplication parameters
-  int32_t M = 131072, N = 128, K = 128;
+  int32_t M = 32768, N = 128, K = 128;
   std::vector<float> hc(M*N);
   std::vector<float> rc(M*N);
   std::vector<float> ha(M*K);
@@ -33,8 +33,8 @@ int main() {
   stream->write(db, true, 0, hb);
   stream->write(dc, true, 0, hc);
   stream->synchronize();
-  triton::dnn::gemm gemm(M, N, K, AT, BT, "fp32", "fp32", 4, 4);
-  gemm.enqueue(stream, {da, db, dc});
+  triton::dnn::gemm gemm(M, N, K, AT, BT, "fp16", "fp16", 4, 4);
+  gemm.enqueue(stream, {da, db, dc}, true);
   stream->read(dc, true, 0, hc);
   gemm.cpu_ref<float>(rc, ha, hb);
   for(size_t i = 0; i < M*N; i++)
