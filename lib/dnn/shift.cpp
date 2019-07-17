@@ -79,10 +79,15 @@ shift::shift(int B, int C,
   default:
     throw std::runtime_error("unsupported input layout");
   }
+  IAD_ = AD_ - 2*(BD_/2);
+  IAH_ = AH_ - 2*(BH_/2);
+  IAW_ = AW_ - 2*(BW_/2);
+  ICD_ = IAD_ / stride_d_;
+  ICH_ = IAH_ / stride_h_;
+  ICW_ = IAW_ / stride_w_;
+
   // Equivalent matmul
-  M_ = B_*(CH_ - BH_ / 2)*(CW_ - BW_/2);
-  if(M_ == 0)
-    throw std::runtime_error("unsupported input shapes - no interior !");
+  M_ = B_*ICH_*ICW_;
   N_ = F_;
   K_ = C_;
   // transpose
@@ -247,21 +252,21 @@ void shift::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(18, ldc_h_);
   kernel->setArg(19, ldc_f_);
   kernel->setArg(20, B_);
-  kernel->setArg(21, AH_);
-  kernel->setArg(22, AW_);
+  kernel->setArg(21, IAH_);
+  kernel->setArg(22, IAW_);
   kernel->setArg(23, BH_);
   kernel->setArg(24, BW_);
-  kernel->setArg(25, CH_);
-  kernel->setArg(26, CW_);
+  kernel->setArg(25, ICH_);
+  kernel->setArg(26, ICW_);
   kernel->setArg(27, (num_locks > max_locks_) ? nullptr : locks_);
   kernel->setArg(28, (int32_t)grid[0]);
   kernel->setArg(29, (int32_t)grid[1]);
   kernel->setArg(30, (int32_t)grid[2]);
   if(locks_)
     ((driver::cu_buffer*)locks_)->set_zero(stream, 2*max_locks_*4);
-  if(op_ == BPROP){
+  if(op_ == FPROP || op_ == BPROP){
     size_t c_nbytes = (c_ty_ == "fp16") ? 2 : 4;
-    ((driver::cu_buffer*)c)->set_zero(stream, AH_*AW_*B_*C_*c_nbytes);
+    ((driver::cu_buffer*)c)->set_zero(stream, c_size()*c_nbytes);
   }
   stream->enqueue(kernel, grid, {info.num_threads, 1, 1});
 }
@@ -290,31 +295,16 @@ void shift::triton_c_src(std::ostream &os) const {
       return R"(
   int32 )" + rx + "wh[" + sz + "] =  "  + rkx + R"( / NB;
   int32 )" + rx + "b[" + sz + "]  =  "  + rkx + R"( % NB;
-  int32 )" + rx + "w[" + sz + "]  =  "  + rx  + R"(wh % CW + pad_w;
-  int32 )" + rx + "h[" + sz + "]  =  "  + rx  + R"(wh / CW + pad_h;)";
+  int32 )" + rx + "w[" + sz + "]  =  ("  + rx  + R"(wh % CW) + pad_w;
+  int32 )" + rx + "h[" + sz + "]  =  ("  + rx  + R"(wh / CW) + pad_h;)";
     }
     else {
       return R"(
   int32 )" + rx + "bh[" + sz + "] = " + rkx + R"( / CW;
-  int32 )" + rx + "w[" + sz + "]  = " + rkx + R"( % CW + pad_w;
-  int32 )" + rx + "h[" + sz + "]  = " + rx  + R"(bh % CH + pad_h;
+  int32 )" + rx + "w[" + sz + "]  = (" + rkx + R"( % CW) + pad_w;
+  int32 )" + rx + "h[" + sz + "]  = (" + rx  + R"(bh % CH) + pad_h;
   int32 )" + rx + "b[" + sz + "]  = " + rx  + R"(bh / CH;)";
     }
-  };
-
-  auto compute_interior = [&](std::string rx, std::string sz0, std::string sz1) {
-    std::string result;
-    if(shift_edge_h_)
-      result +=  "int1 interiorh[" + sz0 + "] = 1;\n  ";
-    else
-      result +=  "int1 interiorh[" + sz0 + "] = (" + rx + "h >= pad_h) && (" + rx + "h < (AH - pad_h));\n  ";
-    if(shift_edge_w_)
-      result +=  "int1 interiorw[" + sz0 + "] = 1;";
-    else
-      result +=  "int1 interiorw[" + sz0 + "] = (" + rx + "w >= pad_w) && (" + rx + "w < (AW - pad_w));";
-    result +=  R"(
-    int1 interior[)" + sz0 + ", " + sz1 + "] = interiorh[:, newaxis] && interiorw[:, newaxis];";
-    return result;
   };
 
   std::string result =
@@ -506,8 +496,8 @@ if(op_ == WGRAD){
 if(op_ == BPROP){
   result += R"(
   __constant__ int32* pd[TN] = delta_a + ryc;
-  pc = pc + (*pd)[newaxis, :];
-  @checkc *pc = c;
+  )" + c_ty_ + R"(* shift_pc[TM, TN] = pc + (*pd)[newaxis, :];
+  @checkc *shift_pc = c;
   )";
 }
 else{

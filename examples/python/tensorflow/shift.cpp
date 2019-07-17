@@ -122,7 +122,7 @@ public:
     triton::driver::cu_buffer da(ctx,      (CUdeviceptr)tf_a.flat<Eigen::half>().data(), false);
     triton::driver::cu_buffer db(ctx,      (CUdeviceptr)tf_b.flat<Eigen::half>().data(), false);
     triton::driver::cu_buffer dc(ctx,      (CUdeviceptr)tf_c->flat<Eigen::half>().data(), false);
-    shift.enqueue(stream, {&da, &db, &dc});
+    shift.enqueue(stream, {&da, &db, &dc}, false);
   }
 
 private:
