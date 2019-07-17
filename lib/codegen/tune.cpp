@@ -237,7 +237,7 @@ void tune::run(ir::module &mod) {
       continue;
     if(dynamic_cast<ir::load_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  4, 4));
+      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  2, 4));
       *params_.at(i).at("nts.d0") = *tmp;
     }
     if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
