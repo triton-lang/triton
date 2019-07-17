@@ -68,9 +68,9 @@ public:
                       target_(target) { }
 
     void target_independent(ir::module &module) {
-//      ir::print(module, std::cout);
       optimize_dot.run(module);
       optimize_trans.run(module);
+//      ir::print(module, std::cout);
     }
 
     void target_dependent(ir::module &module) {

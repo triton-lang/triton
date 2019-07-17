@@ -550,6 +550,7 @@ private:
   std::string repr_impl() const { return std::string("dot.") + ((AT_==NoTrans)?"n":"t") + ((BT_==NoTrans)?"n":"t"); }
 
 public:
+  static instruction *create(value *A, value *B, value *C, bool AT, bool BT, const std::string &name = "", instruction *next = nullptr);
   static instruction* create_nn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
   static instruction* create_nt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
   static instruction* create_tn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
