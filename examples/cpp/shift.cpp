@@ -14,7 +14,7 @@ int main() {
 
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
-  auto op = triton::dnn::shift::BPROP;
+  auto op = triton::dnn::shift::FPROP;
 
   // initialization
   int32_t R = 3, S = 3;

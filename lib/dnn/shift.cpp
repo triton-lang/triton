@@ -291,19 +291,23 @@ void shift::triton_c_src(std::ostream &os) const {
   bool is_chwn = layout_ == CHWN;
 
   auto compute_bhw = [&](std::string rx, std::string sz, std::string rkx){
+    std::string B = std::to_string(B_);
+    std::string CW = std::to_string(CW_);
+    std::string CH = std::to_string(CH_);
+
     if(is_chwn) {
       return R"(
-  int32 )" + rx + "wh[" + sz + "] =  "  + rkx + R"( / NB;
-  int32 )" + rx + "b[" + sz + "]  =  "  + rkx + R"( % NB;
-  int32 )" + rx + "w[" + sz + "]  =  ("  + rx  + R"(wh % CW) + pad_w;
-  int32 )" + rx + "h[" + sz + "]  =  ("  + rx  + R"(wh / CW) + pad_h;)";
+  int32 )" + rx + "wh[" + sz + "] =  "  + rkx + " / " + B + R"(;
+  int32 )" + rx + "b[" + sz + "]  =  "  + rkx + " % " + B + R"();
+  int32 )" + rx + "w[" + sz + "]  =  ("  + rx  + "(wh % " + CW + R"() + pad_w;
+  int32 )" + rx + "h[" + sz + "]  =  ("  + rx  + "(wh / " + CW + R"() + pad_h;)";
     }
     else {
       return R"(
-  int32 )" + rx + "bh[" + sz + "] = " + rkx + R"( / CW;
-  int32 )" + rx + "w[" + sz + "]  = (" + rkx + R"( % CW) + pad_w;
-  int32 )" + rx + "h[" + sz + "]  = (" + rx  + R"(bh % CH) + pad_h;
-  int32 )" + rx + "b[" + sz + "]  = " + rx  + R"(bh / CH;)";
+  int32 )" + rx + "bh[" + sz + "] = " + rkx + " / " + CW + R"(;
+  int32 )" + rx + "w[" + sz + "]  = (" + rkx + " % " + CW + R"() + pad_w;
+  int32 )" + rx + "h[" + sz + "]  = (" + rx  + "bh % " + CH + R"() + pad_h;
+  int32 )" + rx + "b[" + sz + "]  = " + rx  + "bh / " + CH + ";";
     }
   };
 
