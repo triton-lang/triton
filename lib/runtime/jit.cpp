@@ -43,8 +43,8 @@ void loop_nest(std::vector<size_t> const & ranges,
 //  size_t current = 0;
   while(true){
     //Execute function
-//    pool.enqueue([values, &f](){ f(values); });
-    f(values);
+    pool.enqueue([values, &f](){ f(values); });
+//    f(values);
     while(values[i]++ == ranges[i] - 1){
       if(i == 0)
         return;
