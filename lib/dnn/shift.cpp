@@ -292,8 +292,8 @@ void shift::triton_c_src(std::ostream &os) const {
 
   auto compute_bhw = [&](std::string rx, std::string sz, std::string rkx){
     std::string B = std::to_string(B_);
-    std::string CW = std::to_string(CW_);
-    std::string CH = std::to_string(CH_);
+    std::string CW = std::to_string(ICW_);
+    std::string CH = std::to_string(ICH_);
 
     if(is_chwn) {
       return R"(
