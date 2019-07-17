@@ -128,6 +128,14 @@ private:
   int32_t CD_;
   int32_t CH_;
   int32_t CW_;
+  // interior image size
+  int32_t IAD_;
+  int32_t IAH_;
+  int32_t IAW_;
+  // interior activation size
+  int32_t ICD_;
+  int32_t ICH_;
+  int32_t ICW_;
   // equivalent matmul
   int32_t M_;
   int32_t N_;
