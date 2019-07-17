@@ -527,6 +527,14 @@ dot_inst::dot_inst(value *A, value *B, value *C, TransT AT, TransT BT,
   set_operand(2, C);
 }
 
+instruction *dot_inst::create(value *A, value *B, value *C,
+                              bool AT, bool BT,
+                              const std::string &name, instruction *next) {
+  TransT OPA = AT ? Trans : NoTrans;
+  TransT OPB = BT ? Trans : NoTrans;
+  return new dot_inst(A, B, C, OPA, OPB, name, next);
+}
+
 instruction *dot_inst::create_nn(value *A, value *B, value *C,
                                  const std::string &name, instruction *next) {
   return new dot_inst(A, B, C, NoTrans, NoTrans, name, next);

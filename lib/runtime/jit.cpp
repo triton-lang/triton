@@ -135,13 +135,8 @@ std::vector<unsigned> jit::get_valid(const char *name, const char *src) {
     unsigned i = 0;
     for(ir::metaparameter *mp: mps)
       mp->set_value(params[i++]);
-    passes.target_independent(tt_module);
     passes.tune.init(tt_module);
     passes.tune.check_constraints(errors);
-//    for(auto e: errors)
-//    for(auto x: e.second)
-//      std::cout << x << std::endl;
-//    std::cout << "-----" << std::endl;
     if(!errors.empty())
       return;
     result = params;

@@ -9,7 +9,7 @@
 
 int main() {
   bool AT = false;
-  bool BT = true;
+  bool BT = false;
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   // matrix multiplication parameters

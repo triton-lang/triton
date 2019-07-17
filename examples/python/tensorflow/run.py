@@ -23,7 +23,7 @@ def run_dot():
     result = sess.run([c], feed_dict = {a: ha,
                                         b: hb})[0]
     # Test
-    hresult = np.dot(ha.T, hb).T
+    hresult = np.dot(ha.T, hb.T).T
     dif = np.abs(result - hresult)
     print(hresult)
     print(result)
