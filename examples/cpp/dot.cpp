@@ -8,12 +8,12 @@
 
 
 int main() {
-  bool AT = false;
-  bool BT = true;
+  bool AT = true;
+  bool BT = false;
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   // matrix multiplication parameters
-  int32_t M = 8192, N = 8192, K = 8192;
+  int32_t M = 2048, N = 2048, K = 2048;
   std::vector<float> hc(M*N);
   std::vector<float> rc(M*N);
   std::vector<float> ha(M*K);

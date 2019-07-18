@@ -984,7 +984,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       distributed_tile *TC = (distributed_tile*)tmap_.at(C);
       Type *c_ty = llvm_type(C->get_type()->get_scalar_ty(), ctx);
       Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {c_ty});
-      unsigned NK = A->get_type()->get_tile_shapes()[1]->get_value();
+      size_t red_axis = dot->is_a_trans() ? 0 : 1;
+      unsigned NK = A->get_type()->get_tile_shapes()[red_axis]->get_value();
       if(NK != 1)
       {
         shared_tile *TA = (shared_tile*)tmap_.at(A);
@@ -1147,6 +1148,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
       unsigned alignment = std::min(starting_multiple, max_contiguous);
       unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
+//      vector_size = result->axis(0).contiguous;
       std::map<unsigned, Value*> packets;
       distributed_tile *TP = (distributed_tile*)tmap_.at(ld->get_pointer_operand());
       result->for_each([&](indices_t idx){

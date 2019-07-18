@@ -21,13 +21,13 @@ unsigned shmem_allocation::is_ld_padded(ir::value *x) {
       bool is_op_1 = x == dot->get_operand(1);
       if(is_hmma && is_op_0){
         if(dot->is_a_trans())
-          return 20;
+          return 4;
         else
           return 16;
       }
       if(is_hmma && is_op_1){
         if(!dot->is_b_trans())
-          return 20;
+          return 4;
         else
           return 16;
       }
