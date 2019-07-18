@@ -67,6 +67,8 @@ class constant_range: public constant{
 
 public:
   static constant *get(constant_int *first, constant_int *last);
+  const constant_int* get_first() const;
+  const constant_int* get_last() const;
 
 private:
   constant_int* first_;

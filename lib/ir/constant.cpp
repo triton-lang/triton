@@ -71,6 +71,13 @@ constant *constant_range::get(constant_int *first, constant_int *last) {
   return new constant_range(ty, first, last);
 }
 
+const constant_int* constant_range::get_first() const {
+  return first_;
+}
+
+const constant_int* constant_range::get_last() const {
+  return last_;
+}
 
 // constant_fp
 // FIXME use something like APFloat

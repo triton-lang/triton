@@ -117,16 +117,11 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
             int32 *locks, int32 grid0, int32 grid1) {
   int32 rxa[TM] = get_global_range[TM](0);
   int32 ryb[TN] = get_global_range[TN](1);
-  int32 rz = get_global_range[1](2);
   int32 rka[TK] = 0 ... TK;
   int32 rkb[TK] = 0 ... TK;
   fp32 c[TM, TN] = 0;
-  int32 div = K / GZ;
-  int32 rem = K % GZ;
-  K = select(rz < rem, div - 1, div);
-  int32 offk = select(rz < rem, rz*(div + 1), rz*div + rem);
-  )" + a_ty_ + R"(* pa[)" + AS0 + ", " + AS1 + "] = A + (offk + rka" + bca0 + ")" + lda0 + " + rxa" + bca1 + lda1 + R"(;
-  )" + b_ty_ + R"(* pb[)" + BS0 + ", " + BS1 + "] = B + (offk + rkb" + bcb0 + ")" + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
+  )" + a_ty_ + R"(* pa[)" + AS0 + ", " + AS1 + "] = A + rka" + bca0 + lda0 + " + rxa" + bca1 + lda1 + R"(;
+  )" + b_ty_ + R"(* pb[)" + BS0 + ", " + BS1 + "] = B + rkb" + bcb0 + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
   )" + a_ty_ + R"( a[)" + AS0 + ", " + AS1 + R"(] = *pa;
   )" + b_ty_ + R"( b[)" + BS0 + ", " + BS1 + R"(] = *pb;
   int32 last_a = ((M*K - 1) - (TM*TK + 1)) / lda;
@@ -146,8 +141,8 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
   for(int32 k = bound; k > 0; k = k - 1){
     int1 checka[TM, 1] = rxc[:, newaxis] < M;
     int1 checkb[TN, 1] = ryc[:, newaxis] < N;
-    )" + a_ty_ + R"(* pa[TM, 1] = A + (offk + K - k))" + lda0 + " + rxc[:, newaxis]" + lda1 + R"(;
-    )" + b_ty_ + R"(* pb[TN, 1] = B + (offk + K - k))" + ldb0 + " + ryc[:, newaxis]" + ldb1 + R"(;
+    )" + a_ty_ + R"(* pa[TM, 1] = A + (K - k))" + lda0 + " + rxc[:, newaxis]" + lda1 + R"(;
+    )" + b_ty_ + R"(* pb[TN, 1] = B + (K - k))" + ldb0 + " + ryc[:, newaxis]" + ldb1 + R"(;
     )" + a_ty_ + R"( a[TM, 1] = checka ? *pa : 0;
     )" + b_ty_ + R"( b[TN, 1] = checkb ? *pb : 0;
     c = dot(a, trans(b), c);
