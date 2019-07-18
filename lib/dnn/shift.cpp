@@ -298,9 +298,9 @@ void shift::triton_c_src(std::ostream &os) const {
     if(is_chwn) {
       return R"(
   int32 )" + rx + "wh[" + sz + "] =  "  + rkx + " / " + B + R"(;
-  int32 )" + rx + "b[" + sz + "]  =  "  + rkx + " % " + B + R"();
-  int32 )" + rx + "w[" + sz + "]  =  ("  + rx  + "(wh % " + CW + R"() + pad_w;
-  int32 )" + rx + "h[" + sz + "]  =  ("  + rx  + "(wh / " + CW + R"() + pad_h;)";
+  int32 )" + rx + "b[" + sz + "]  =  "  + rkx + " % " + B + R"(;
+  int32 )" + rx + "w[" + sz + "]  =  ("  + rx  + "wh % " + CW + R"() + pad_w;
+  int32 )" + rx + "h[" + sz + "]  =  ("  + rx  + "wh / " + CW + R"() + pad_h;)";
     }
     else {
       return R"(

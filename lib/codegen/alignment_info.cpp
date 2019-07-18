@@ -34,6 +34,8 @@ bool alignment_info::populate_is_constant(ir::value *v) {
     if(is_first_axis_unit(op))
       return cache(true);
   }
+  if(auto *x = dynamic_cast<ir::constant_int*>(v))
+    return cache(true);
   if(auto *x = dynamic_cast<ir::binary_operator*>(v)){
     bool lhs = populate_is_constant(x->get_operand(0));
     bool rhs = populate_is_constant(x->get_operand(1));
@@ -138,6 +140,18 @@ unsigned alignment_info::populate_max_contiguous(ir::value *v){
   return cache(1);
 }
 
+inline int gcd(int a, int b) {
+    if (a == 0)
+       return b;
+    if (b == 0)
+       return a;
+    if (a == b)
+        return a;
+    if (a > b)
+        return gcd(a-b, b);
+    return gcd(a, b-a);
+}
+
 unsigned alignment_info::populate_starting_multiple(ir::value *v){
   if(starting_multiple_.find(v) != starting_multiple_.end())
     return starting_multiple_.at(v);
@@ -168,7 +182,7 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
     if(x->is_int_mult())
       return cache(lhs * rhs);
     if(x->is_int_add_sub())
-      return cache(std::min(lhs, rhs));
+      return cache(gcd(lhs, rhs));
     if(x->is_int_div())
       return cache(std::max(lhs / rhs, 1));
     if(x->is_int_rem())
@@ -178,10 +192,15 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
     if(x->is_shr())
       return cache(std::max(lhs >> rhs, 1));
   }
+  if(auto *x = dynamic_cast<ir::constant_int*>(v))
+    return cache(x->get_value());
+  if(auto *x = dynamic_cast<ir::constant_range*>(v)){
+    return cache(x->get_first()->get_value());
+  }
   if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v)){
     int lhs = populate_starting_multiple(x->get_operand(0));
     int rhs = populate_starting_multiple(x->get_operand(1));
-    return cache(std::min(lhs, rhs));
+    return cache(gcd(lhs, rhs));
   }
   if(auto *x = dynamic_cast<ir::retile_inst*>(v)){
     int op = populate_starting_multiple(x->get_operand(0));
@@ -193,7 +212,7 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
   if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
     int value_true = populate_starting_multiple(x->get_value_true());
     int value_false = populate_starting_multiple(x->get_value_false());
-    return cache(std::min(value_true, value_false));
+    return cache(gcd(value_true, value_false));
   }
   if(auto *x = dynamic_cast<ir::phi_node*>(v)){
     // put a conservative initial value in phi node to avoid infinite recursion
@@ -207,7 +226,7 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
     // recurse
     for(unsigned n = 0; n < x->get_num_incoming(); n++){
       ir::value* inc = x->get_incoming_value(n);
-      result = std::min(result, populate_starting_multiple(inc));
+      result = gcd(result, populate_starting_multiple(inc));
     }
     return cache(result);
   }
@@ -230,7 +249,7 @@ unsigned alignment_info::get_max_contiguous(ir::value* v) const {
   return max_contiguous_.at(v);
 }
 
-
+///TODO: This doesn't seem to work in DOT-NN, DOT-TT, DOT-TN
 void alignment_info::run(ir::module &mod) {
   // populate constant
   for(ir::function *fn: mod.get_function_list())
@@ -251,6 +270,7 @@ void alignment_info::run(ir::module &mod) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list()){
     populate_max_contiguous(i);
+//    std::cout << i->get_name() << " " << max_contiguous_.at(i) << " " << starting_multiple_.at(i) << std::endl;
   }
 }
 

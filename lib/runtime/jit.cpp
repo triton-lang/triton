@@ -51,6 +51,7 @@ void loop_nest(std::vector<size_t> const & ranges,
       values[i--] = 0;
     }
     i = D - 1;
+    std::this_thread::sleep_for(std::chrono::microseconds(1));
   }
 }
 
