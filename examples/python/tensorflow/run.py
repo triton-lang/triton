@@ -25,6 +25,7 @@ def run_dot():
     # Test
     hresult = np.dot(ha.T, hb.T).T
     dif = np.abs(result - hresult)
+    np.savetxt('dif.dat', dif, '%2.4f')
     print(hresult)
     print(result)
     print("dif: %f" % np.max(dif))

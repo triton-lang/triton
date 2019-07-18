@@ -15,9 +15,22 @@ unsigned shmem_allocation::is_ld_padded(ir::value *x) {
   if(dynamic_cast<ir::trans_inst*>(x))
     return 4;
   for(ir::user* user: x->get_users())
-    if(dynamic_cast<ir::dot_inst*>(user))
-    if(params_->get_fragment(user, 0) == tune::HMMA_FRAGMENT_C){
-      return 16;
+    if(auto dot = dynamic_cast<ir::dot_inst*>(user)){
+      bool is_hmma = params_->get_fragment(user, 0) == tune::HMMA_FRAGMENT_C;
+      bool is_op_0 = x == dot->get_operand(0);
+      bool is_op_1 = x == dot->get_operand(1);
+      if(is_hmma && is_op_0){
+        if(dot->is_a_trans())
+          return 20;
+        else
+          return 16;
+      }
+      if(is_hmma && is_op_1){
+        if(!dot->is_b_trans())
+          return 20;
+        else
+          return 16;
+      }
     }
   if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
     unsigned result = 0;
