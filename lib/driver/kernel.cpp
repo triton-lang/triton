@@ -124,6 +124,7 @@ cu_kernel::cu_kernel(driver::module *program, const char * name) : kernel(progra
   cu_params_store_.reserve(64);
   cu_params_.reserve(64);
   dispatch::cuModuleGetFunction(&*cu_, *program->cu(), name);
+//  dispatch::cuFuncSetCacheConfig(*cu_, CU_FUNC_CACHE_PREFER_SHARED);
 }
 
 void cu_kernel::setArg(unsigned int index, std::size_t size, void* ptr){

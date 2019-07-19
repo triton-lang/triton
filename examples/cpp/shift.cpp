@@ -18,22 +18,22 @@ int main() {
 
   // initialization
   int32_t R = 3, S = 3;
-  int32_t B = 128, F = 128;
+  int32_t B = 16, F = 4096;
   int32_t H = 16, W = 16;
-  int32_t C = 128;
+  int32_t C = 4096;
 
   // random shifts
   std::vector<int32_t> shift_h(C);
   std::vector<int32_t> shift_w(C);
   for(int32_t c = 0; c < C; c++){
-    shift_h[c] = rand() % R - R/2;
-    shift_w[c] = rand() % S - S/2;
+    shift_h[c] = 0;
+    shift_w[c] = 0;
   }
   // configuration
   triton::dnn::shift shift(B, C, 1, H, W, 1, R, S, F, 1, 1,
                            shift_h.data(), shift_w.data(),
                            numeric_t_str, numeric_t_str,
-                           op, false, triton::dnn::shift::NCHW);
+                           op, false, triton::dnn::shift::CHWN);
   // host buffers
   size_t a_size = B*C*H*W;
   size_t b_size = C*F;

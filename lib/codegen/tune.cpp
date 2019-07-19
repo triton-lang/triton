@@ -215,7 +215,7 @@ void tune::run(ir::module &mod) {
       node_t node = *nodes_.begin();
       if(fragments_[node] == STRIDED_SCAN) {
         ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 1, 1);
-        ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
+        ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 2, 64);
         connected_components(node, {nts, mts}, {"nts", "mts"}, nodes_, dependencies_, group_id++);
         nts->set_value(1);
       }
@@ -235,13 +235,13 @@ void tune::run(ir::module &mod) {
       continue;
     if(dynamic_cast<ir::load_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  4, 4));
+      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  8, 8));
       *params_.at(i).at("nts.d0") = *tmp;
     }
     if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 4, 4));
-      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 4, 4));
+      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 8, 8));
+      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 8, 8));
       *params_.at(i).at("nts.d0") = *tmp1;
       *params_.at(i).at("nts.d1") = *tmp2;
     }
