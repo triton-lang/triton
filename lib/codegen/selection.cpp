@@ -529,8 +529,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     unsigned num_rep_0 = shapes[0]->get_value() / hmma_bts_0;
     unsigned num_rep_1 = shapes[1]->get_value() / hmma_bts_1;
     // size of each pack (interleaving)
-    pack_size_0_ = std::min<unsigned>(num_rep_0, 1);
-    pack_size_1_ = std::min<unsigned>(num_rep_1, 1);
+    pack_size_0_ = std::min<unsigned>(num_rep_0, 2);
+    pack_size_1_ = std::min<unsigned>(num_rep_1, 2);
     // number of packs (interleaving)
     num_packs_0_ = num_rep_0 / pack_size_0_;
     num_packs_1_ = num_rep_1 / pack_size_1_;
@@ -1148,7 +1148,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
       unsigned alignment = std::min(starting_multiple, max_contiguous);
       unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
-//      vector_size = result->axis(0).contiguous;
+      vector_size = result->axis(0).contiguous;
 //      vector_size = 1;
       std::map<unsigned, Value*> packets;
       distributed_tile *TP = (distributed_tile*)tmap_.at(ld->get_pointer_operand());
@@ -1251,6 +1251,14 @@ void selection::run(ir::module &src, Module &dst) {
         dst_fn->addAttribute(id, llvm_attr(dst_ctx, attr));
     }
     tgt_->set_kernel(dst_builder, dst_ctx, &dst, dst_fn);
+    // set metadata
+    Metadata *md_args[] = {
+      ValueAsMetadata::get(dst_fn),
+      MDString::get(dst_ctx, "maxntidx"),
+      ValueAsMetadata::get(dst_builder.getInt32(params_->get_num_threads()))
+    };
+    dst.getOrInsertNamedMetadata("nvvm.annotations")->addOperand(MDNode::get(dst_ctx, md_args));
+
 
     // map parameters
     for(unsigned i = 0; i < fn->args().size(); i++)

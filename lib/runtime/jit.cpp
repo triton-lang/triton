@@ -40,17 +40,16 @@ void loop_nest(std::vector<size_t> const & ranges,
   ThreadPool pool(nthreads);
   // Start with innermost loop
   size_t i = D - 1;
-//  size_t current = 0;
   while(true){
-    //Execute function
-    pool.enqueue([values, &f](){ f(values); });
-//    f(values);
+    //  Execute function
+    pool.enqueue(f,values);
     while(values[i]++ == ranges[i] - 1){
       if(i == 0)
         return;
       values[i--] = 0;
     }
     i = D - 1;
+    // Small sleep so that the thread pool doesn't grow too big
     std::this_thread::sleep_for(std::chrono::microseconds(1));
   }
 }
@@ -201,19 +200,19 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
     launch_information info;
     llvm::LLVMContext llvm_context;
     auto ll_module = make_llvm_module(tt_module_1, passes_1, llvm_context, info);
-    std::unique_ptr<driver::module> module(driver::module::create(driver_context_, &*ll_module));
-    std::unique_ptr<driver::kernel> kernel(driver::kernel::create(module.get(), name));
     double perf;
     {
       std::lock_guard<std::mutex> lock(mutex);
+      std::unique_ptr<driver::module> module(driver::module::create(driver_context_, &*ll_module));
+      std::unique_ptr<driver::kernel> kernel(driver::kernel::create(module.get(), name));
       perf = benchmark(kernel.get(), info);
       if(perf > best.perf){
         best.perf = perf;
         best.params = params;
       }
-      for(unsigned p: params)
-        std::cout << p << " " << std::flush;
-      std::cout << perf << " [ " << best.perf << " ] " << std::endl;
+      for(size_t i = 0; i < params.size(); i++)
+        std::cout << ((i==0)?"":", ") << params[i] << std::flush;
+      std::cout << ", " << perf << " [ " << best.perf << " ] " << std::endl;
     }
   }, nthreads_);
   std::cout << "Autotuning done - Best performance: " << best.perf << std::endl;

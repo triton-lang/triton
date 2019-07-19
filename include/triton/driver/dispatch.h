@@ -159,6 +159,9 @@ public:
   static CUresult cuPointerGetAttribute(void * data, CUpointer_attribute attribute, CUdeviceptr ptr);
   static CUresult cuCtxGetDevice(CUdevice* result);
   static CUresult cuMemsetD8Async(CUdeviceptr dst, unsigned char x, size_t N, CUstream stream);
+  static CUresult cuFuncGetAttribute(int* pi, CUfunction_attribute attrib, CUfunction hfunc);
+  static CUresult cuFuncSetAttribute(CUfunction hfunc, CUfunction_attribute attrib, int  value);
+  static CUresult cuFuncSetCacheConfig (CUfunction hfunc, CUfunc_cache config);
   // NVML
   static nvmlReturn_t nvmlDeviceGetHandleByPciBusId_v2( const char* pciBusId, nvmlDevice_t* device);
   static nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, nvmlClockType_t type, unsigned int *clock);
@@ -252,6 +255,9 @@ private:
   static void* cuMemsetD8Async_;
   static void* cuCtxPushCurrent_v2_;
   static void* cuCtxPopCurrent_v2_;
+  static void* cuFuncGetAttribute_;
+  static void* cuFuncSetAttribute_;
+  static void* cuFuncSetCacheConfig_;
   // NVML
   static void* nvmlInit_v2_;
   static void* nvmlDeviceGetHandleByPciBusId_v2_;

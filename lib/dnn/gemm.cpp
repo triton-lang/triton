@@ -49,8 +49,8 @@ void gemm::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                         std::vector<driver::buffer*> args,
                         runtime::launch_information info) {
   driver::buffer *a = args[0], *b = args[1], *c = args[2];
-  unsigned TM = info.global_range_size[0];
-  unsigned TN = info.global_range_size[1];
+  unsigned TM = info.globals.at("TM");
+  unsigned TN = info.globals.at("TN");
   unsigned grid_0 = (M_ + TM - 1)/TM;
   unsigned grid_1 = (N_ + TN - 1)/TN;
   unsigned grid_2 = 1;
@@ -109,7 +109,7 @@ void gemm::triton_c_src(std::ostream &os) const {
 R"(
 const tunable int32 TM = {16, 32, 64, 128};
 const tunable int32 TN = {16, 32, 64, 128};
-const tunable int32 TK = {16};
+const tunable int32 TK = {32};
 const tunable int32 GZ = {1};
 
 void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
@@ -127,12 +127,7 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
   )" + b_ty_ + R"(* pb[)" + BS0 + ", " + BS1 + "] = B + rkb" + bcb0 + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
   )" + a_ty_ + R"( a[)" + AS0 + ", " + AS1 + R"(] = *pa;
   )" + b_ty_ + R"( b[)" + BS0 + ", " + BS1 + R"(] = *pb;
-  int32 last_a = ((M*K - 1) - (TM*TK + 1)) / lda;
-  int32 last_b = ((K*N - 1) - (TN*TK + 1)) / ldb;
-  last_a = last_a / TK * TK;
-  last_b = last_b / TK * TK;
-  int32 bound = K - max(last_a, last_b);
-  for(int32 k = K; k > bound; k = k - TK){
+  for(int32 k = K; k > TK; k = k - TK){
     c = dot()" + usea + ", " + useb + R"(, c);
     pa = pa + TK)" + lda0 + R"(;
     pb = pb + TK)" + ldb0 + R"(;
@@ -141,22 +136,8 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
   }
   int32 rxc[TM] = get_global_range[TM](0);
   int32 ryc[TN] = get_global_range[TN](1);
-  for(int32 k = bound; k > 0; k = k - 1){
-    int1 checka[TM, 1] = rxc[:, newaxis] < M;
-    int1 checkb[TN, 1] = ryc[:, newaxis] < N;
-    )" + a_ty_ + R"(* pa[TM, 1] = A + (K - k))" + lda0 + " + rxc[:, newaxis]" + lda1 + R"(;
-    )" + b_ty_ + R"(* pb[TN, 1] = B + (K - k))" + ldb0 + " + ryc[:, newaxis]" + ldb1 + R"(;
-    )" + a_ty_ + R"( a[TM, 1] = checka ? *pa : 0;
-    )" + b_ty_ + R"( b[TN, 1] = checkb ? *pb : 0;
-    c = dot(a, trans(b), c);
-  }
-  int32 ridx = get_range_id(0);
-  int32 ridy = get_range_id(1);
-  int1 checkc0[TM] = rxc < M;
-  int1 checkc1[TN] = ryc < N;
-  int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
   fp32* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
-  @checkc *pc = c;
+  *pc = c;
 }
 )";
   os << res;

@@ -175,6 +175,9 @@ CUDA_DEFINE1(CUresult, cuCtxSetCurrent, CUcontext)
 CUDA_DEFINE4(CUresult, cuMemsetD8Async, CUdeviceptr, unsigned char, size_t, CUstream)
 CUDA_DEFINE1(CUresult, cuCtxPushCurrent_v2, CUcontext)
 CUDA_DEFINE1(CUresult, cuCtxPopCurrent_v2, CUcontext*)
+CUDA_DEFINE3(CUresult, cuFuncGetAttribute, int*, CUfunction_attribute, CUfunction)
+CUDA_DEFINE3(CUresult, cuFuncSetAttribute, CUfunction, CUfunction_attribute, int)
+CUDA_DEFINE2(CUresult, cuFuncSetCacheConfig, CUfunction, CUfunc_cache)
 
 NVML_DEFINE2(nvmlReturn_t, nvmlDeviceGetHandleByPciBusId_v2, const char *, nvmlDevice_t*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
@@ -316,6 +319,9 @@ void* dispatch::cuCtxGetDevice_;
 void* dispatch::cuMemsetD8Async_;
 void* dispatch::cuCtxPushCurrent_v2_;
 void* dispatch::cuCtxPopCurrent_v2_;
+void* dispatch::cuFuncGetAttribute_;
+void* dispatch::cuFuncSetAttribute_;
+void* dispatch::cuFuncSetCacheConfig_;
 
 void* dispatch::nvmlInit_v2_;
 void* dispatch::nvmlDeviceGetHandleByPciBusId_v2_;

@@ -77,14 +77,44 @@ Value* nvidia_cu_target::get_global_offset(Module *module, IRBuilder<>& builder,
 }
 
 Value* nvidia_cu_target::get_block_id(Module *module, IRBuilder<>& builder, unsigned ax) {
-  static std::array<Intrinsic::ID, 3> ids = {
+  static std::array<Intrinsic::ID, 3> cta_ids = {
     Intrinsic::nvvm_read_ptx_sreg_ctaid_x,
     Intrinsic::nvvm_read_ptx_sreg_ctaid_y,
     Intrinsic::nvvm_read_ptx_sreg_ctaid_z
   };
-  Value* get_group_id = Intrinsic::getDeclaration(module, ids[ax]);
-  Value* group_id = builder.CreateCall(get_group_id, {});
-  return group_id;
+  bool z_order = true;
+  if(z_order && ax < 2){
+    static std::array<Intrinsic::ID, 3> n_cta_ids = {
+      Intrinsic::nvvm_read_ptx_sreg_nctaid_x,
+      Intrinsic::nvvm_read_ptx_sreg_nctaid_y,
+      Intrinsic::nvvm_read_ptx_sreg_nctaid_z
+    };
+    Value* cta_id_0 = builder.CreateIntrinsic(cta_ids[0], {}, {});
+    Value* cta_id_1 = builder.CreateIntrinsic(cta_ids[1], {}, {});
+    Value* n_cta_id_0 = builder.CreateIntrinsic(n_cta_ids[0], {}, {});
+    Value* n_cta_id_1 = builder.CreateIntrinsic(n_cta_ids[1], {}, {});
+    // global block ID
+    Value* bid = builder.CreateAdd(cta_id_0, builder.CreateMul(cta_id_1, n_cta_id_0));
+    // helper for minimum
+    auto Min = [&](Value *x, Value *y){
+      return builder.CreateSelect(builder.CreateICmpSGE(x, y), y, x);
+    };
+    // super-tile size
+    Value* sts = Min(builder.getInt32(16), n_cta_id_1);
+    // number of CTAs per super-block
+    Value *nscta = builder.CreateMul(n_cta_id_0, sts);
+    Value *bid0 = builder.CreateURem(builder.CreateUDiv(bid, sts), n_cta_id_0);
+    Value *bid1 = builder.CreateAdd(builder.CreateMul(builder.CreateUDiv(bid, nscta), sts),builder.CreateURem(bid, sts));
+    if(ax == 0)
+      return bid0;
+    else
+      return bid1;
+  }
+  else{
+    Value* get_cta_id = Intrinsic::getDeclaration(module, cta_ids[ax]);
+    Value* cta_id = builder.CreateCall(get_cta_id, {});
+    return cta_id;
+  }
 }
 
 Value* nvidia_cu_target::get_local_id(Module *module, IRBuilder<>& builder, unsigned ax) {

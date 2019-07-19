@@ -30,7 +30,7 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, b
   /* the current template has not already been compiled */
   if(m_jit.find(this) == m_jit.end()) {
     base* clone = this->clone();
-    jit = m_jit.emplace(clone, std::unique_ptr<rt::jit>(new rt::jit(ctx))).first->second.get();
+    jit = m_jit.emplace(clone, std::unique_ptr<rt::jit>(new rt::jit(ctx, 8))).first->second.get();
     std::ostringstream oss;
     clone->triton_c_src(oss);
     std::string src = oss.str();
@@ -51,7 +51,8 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, b
       jit->add_module(name_.c_str(), src.c_str(), best.params);
     }
     else {
-      jit->add_module(name_.c_str(), src.c_str(), jit->get_valid(name_.c_str(), src.c_str()));
+//      jit->add_module(name_.c_str(), src.c_str(), jit->get_valid(name_.c_str(), src.c_str()));
+      jit->add_module(name_.c_str(), src.c_str(), {32, 128, 16, 128, 2, 2, 2, 2, 4, 4, 32, 8, 4, 1});
     }
     triton::driver::kernel* kernel = jit->get_function(name_.c_str());
     clone->init_impl(stream, (triton::driver::cu_module*)kernel->module());
