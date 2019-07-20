@@ -31,9 +31,6 @@ public:
   // clone
   base* clone() const;
 
-  // default params
-  std::vector<unsigned> default_params();
-
   // CPU reference implementation
   template<class T, bool AT, bool BT>
   static void cpu_ref(std::vector<T> &c, const std::vector<T> &a, const std::vector<T> &b,

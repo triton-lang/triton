@@ -49,7 +49,7 @@ void loop_nest(std::vector<size_t> const & ranges,
       values[i--] = 0;
     }
     i = D - 1;
-    // Small sleep so that the thread pool doesn't grow too big
+    // Short sleep so that the thread pool doesn't grow too big
     std::this_thread::sleep_for(std::chrono::microseconds(1));
   }
 }

@@ -8,15 +8,15 @@
 
 
 int main() {
-  bool AT = true;
-  bool BT = false;
+  bool AT = false;
+  bool BT = true;
   typedef float T;
   std::string ty = "fp16";
   size_t dt_nbytes = sizeof(T);
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   // matrix multiplication parameters
-  int32_t M = 65536, N = 2048, K = 2048;
+  int32_t M = 4096, N = 4096, K = 4096;
   std::vector<T> hc(M*N);
   std::vector<T> rc(M*N);
   std::vector<T> ha(M*K);
