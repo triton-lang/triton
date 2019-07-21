@@ -354,11 +354,6 @@ void shift(restrict read_only align(16) )" + a_ty_ + R"( *A,
   fp32 acc[TM, TN] = 0;
   int32 pad_h = BH / 2;
   int32 pad_w = BW / 2;)";
-if(op_ == WGRAD){
-  result += R"(
-
-  )";
-}
 
 /* A offsets */
 if(op_ == FPROP){
@@ -408,13 +403,21 @@ if(op_ == WGRAD){
   rbh = rbh * )" + stride_h + R"(;
   int32 offkb[TK] = rbb*)" + ldb_b + R"( + rbw*ldb_w + rbh*ldb_h;
   int32 offb0[TK, TN] = ryb[newaxis, :] * ldb_c;
-  int32 offb1[TK, TN] = offkb[:, newaxis] + shift;)";
+  int32 offb1[TK, TN] = offkb[:, newaxis];
+  )" + a_ty_ + "* pa_base[" + AS + R"(] = A + offa0;
+  )" + b_ty_ + "* pb_base[" + BS + R"(] = B + offb0 + shift;
+  )" + a_ty_ + "* pa[" + AS + R"(] = pa_base + offa1;
+  )" + b_ty_ + "* pb[" + BS + R"(] = pb_base + offb1;)";
+}
+else{
+  result +=  R"(
+  )" + a_ty_ + "* pa[" + AS + R"(] = A + offa0 + offa1;
+  )" + b_ty_ + "* pb[" + BS + R"(] = B + offb0 + offb1;)";
 }
 
 /* Main loop */
+/* Increment A pointers */
   result +=  R"(
-  )" + a_ty_ + "* pa[" + AS + R"(] = A + offa0 + offa1;
-  )" + b_ty_ + "* pb[" + BS + R"(] = B + offb0 + offb1;
   int1 checka[)" + AS + "] = (rka < K)" + bca0  + R"(;
   int1 checkb[)" + BS + "] = (rkb < K)" + bcb0  + R"(;
   )" + a_ty_ + "   a[" + AS + R"(] = checka ? *pa : 0;
@@ -440,7 +443,7 @@ if(op_ == WGRAD){
     rka = rka + TK;)"
     + compute_bhw("ra", "TK", "rka") + R"(
     offxa =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
-    pa = A + offa0 + offxa[:, newaxis];)";
+    pa = pa_base + offxa[:, newaxis];)";
 }
   result +=  R"(
     @checka a = *pa;)";
@@ -453,7 +456,7 @@ if(op_ == WGRAD){
     rbw = rbw * )" + stride_w + R"(;
     rbh = rbh * )" + stride_h + R"(;
     offkb = rbb*)" + ldb_b + R"( + rbw*ldb_w + rbh*ldb_h;
-    pb = B + offb0 + offkb[:, newaxis] + shift;)";
+    pb = pb_base + offkb[:, newaxis];)";
 }
 if(op_ == FPROP){
   result +=  R"(

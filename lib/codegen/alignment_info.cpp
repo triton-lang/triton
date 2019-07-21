@@ -59,8 +59,9 @@ alignment_info::cst_info alignment_info::populate_is_constant(ir::value *v) {
     cst_info rhs = populate_is_constant(rhs_op);
     if(lhs.num_cst==0 && rhs.value && x->is_int_div()){
       unsigned max_contiguous = populate_max_contiguous(lhs_op);
-      unsigned starting_multiple = populate_starting_multiple(lhs_op);
-      return cache({gcd(max_contiguous, rhs.value) - (starting_multiple % rhs.value), 0});
+      // todo might not be entirely true
+      unsigned num_constants = gcd(max_contiguous, rhs.value);
+      return cache({num_constants, 0});
     }
     return cache({std::min(lhs.num_cst, rhs.num_cst), 0});
   }
@@ -300,6 +301,7 @@ void alignment_info::run(ir::module &mod) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list()){
     populate_max_contiguous(i);
+//    std::cout << i->get_name() << " " << is_constant_.at(i).num_cst << " " << max_contiguous_.at(i) << " " << starting_multiple_.at(i) << std::endl;
   }
 }
 

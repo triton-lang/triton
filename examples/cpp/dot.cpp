@@ -8,15 +8,15 @@
 
 
 int main() {
-  bool AT = true;
-  bool BT = false;
+  bool AT = false;
+  bool BT = true;
   typedef float T;
   std::string ty = "fp16";
   size_t dt_nbytes = sizeof(T);
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   // matrix multiplication parameters
-  int32_t M = 4096, N = 4096, K = 4096;
+  int32_t M = 65536, N = 2048, K = 2048;
   std::vector<T> hc(M*N);
   std::vector<T> rc(M*N);
   std::vector<T> ha(M*K);
@@ -37,7 +37,7 @@ int main() {
   stream->write(dc, true, 0, hc);
   stream->synchronize();
   triton::dnn::gemm gemm(M, N, K, AT, BT, ty, ty, 4, 4);
-  gemm.enqueue(stream, {da, db, dc}, false);
+  gemm.enqueue(stream, {da, db, dc}, true);
 //  stream->read(dc, true, 0, hc);
 //  gemm.cpu_ref<T>(rc, ha, hb);
 //  for(size_t i = 0; i < M*N; i++)

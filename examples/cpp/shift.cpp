@@ -14,13 +14,13 @@ int main() {
 
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
-  auto op = triton::dnn::shift::WGRAD;
+  auto op = triton::dnn::shift::FPROP;
 
   // initialization
   int32_t R = 3, S = 3;
-  int32_t B = 16, F = 4096;
-  int32_t H = 16, W = 16;
-  int32_t C = 4096;
+  int32_t B = 64, F = 2048;
+  int32_t H = 32, W = 32;
+  int32_t C = 2048;
 
   // random shifts
   std::vector<int32_t> shift_h(C);
