@@ -51,8 +51,7 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, b
       jit->add_module(name_.c_str(), src.c_str(), best.params);
     }
     else {
-//      jit->add_module(name_.c_str(), src.c_str(), jit->get_valid(name_.c_str(), src.c_str()));
-      jit->add_module(name_.c_str(), src.c_str(), {32, 128, 16, 128, 2, 2, 2, 2, 4, 4, 32, 8, 4, 1});
+      jit->add_module(name_.c_str(), src.c_str(), jit->get_valid(name_.c_str(), src.c_str()));
     }
     triton::driver::kernel* kernel = jit->get_function(name_.c_str());
     clone->init_impl(stream, (triton::driver::cu_module*)kernel->module());

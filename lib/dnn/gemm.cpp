@@ -113,8 +113,8 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
             int32 bound, int32 *locks, int32 grid0, int32 grid1) {
   int32 ridx = get_range_id(0);
   int32 ridy = get_range_id(1);
-  int32 rxa[TM] = ridx*TM + (0 ... TM);
-  int32 ryb[TN] = ridy*TN + (0 ... TN);
+  int32 rxa[TM] = ridx * TM + (0 ... TM);
+  int32 ryb[TN] = ridy * TN + (0 ... TN);
   int32 rka[TK] = 0 ... TK;
   int32 rkb[TK] = 0 ... TK;
   fp32 c[TM, TN] = 0;
