@@ -8,8 +8,8 @@
 
 
 int main() {
-  bool AT = false;
-  bool BT = true;
+  bool AT = true;
+  bool BT = false;
   typedef float T;
   std::string ty = "fp16";
   size_t dt_nbytes = sizeof(T);
@@ -37,7 +37,7 @@ int main() {
   stream->write(dc, true, 0, hc);
   stream->synchronize();
   triton::dnn::gemm gemm(M, N, K, AT, BT, ty, ty, 4, 4);
-  gemm.enqueue(stream, {da, db, dc}, true);
+  gemm.enqueue(stream, {da, db, dc}, false);
 //  stream->read(dc, true, 0, hc);
 //  gemm.cpu_ref<T>(rc, ha, hb);
 //  for(size_t i = 0; i < M*N; i++)

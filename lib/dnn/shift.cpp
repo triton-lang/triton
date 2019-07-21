@@ -27,7 +27,7 @@ shift::shift(int B, int C,
     layout_(layout){
 //  std::cout << B_ << " " << C_ << " " << F_ << " " << stride_h_ << " " << stride_w_ << " " << a_ty_ << " " << b_ty_ << " " << ty_ << " " << layout_ << std::endl;
   // max number of channels
-  TK_ = (ty == FPROP && a_ty_ == "fp32") ? 8 : 16;
+  TK_ = (ty == FPROP && a_ty_ == "fp32") ? 8 : 32;
   MAX_C_ = 8192 + TK_;
   // activation sizes
   CD_ = AD_ / stride_d_;
@@ -223,7 +223,7 @@ void shift::deinit_impl() {
 void shift::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer *> args,
                     runtime::launch_information info) {
-  unsigned TM = info.global_range_size[0], TN = info.global_range_size[1];
+  unsigned TM = info.globals.at("TM"), TN = info.globals.at("TN");
   unsigned grid_0 = (M_ + TM - 1)/TM;
   unsigned grid_1 = (N_ + TN - 1)/TN;
   unsigned num_locks = grid_0 * grid_1;
@@ -278,6 +278,8 @@ void shift::triton_c_src(std::ostream &os) const {
   std::string usea = AT_ ? "trans(a)" : "a";
   std::string useb = BT_ ? "trans(b)" : "b";
   std::string bca0 = "[newaxis, :]", bca1 = "[:, newaxis]";
+  std::string stride_h = std::to_string(stride_h_);
+  std::string stride_w = std::to_string(stride_w_);
   if(AT_){
     std::swap(AS0, AS1);
     std::swap(bca0, bca1);
@@ -289,6 +291,11 @@ void shift::triton_c_src(std::ostream &os) const {
   std::string AS = AS0 + ", " + AS1;
   std::string BS = BS0 + ", " + BS1;
   bool is_chwn = layout_ == CHWN;
+
+  std::string lda_b = is_chwn ? "1" : "lda_b";
+  std::string ldb_b = is_chwn ? "1" : "ldb_b";
+  std::string ldc_b = is_chwn ? "1" : "ldc_b";
+
 
   auto compute_bhw = [&](std::string rx, std::string sz, std::string rkx){
     std::string B = std::to_string(B_);
@@ -317,7 +324,7 @@ const tunable int32 TM = {16, 32, 64, 128};
 const tunable int32 TN = {16, 32, 64, 128};
 const tunable int32 TK = {)" + std::to_string(TK_) + "};";
 if(op_ == WGRAD)
-  result += "const tunable int32 GZ = {1, 4, 16};";
+  result += "const tunable int32 GZ = {1};";
 else
   result += "const tunable int32 GZ = {1};";
 
@@ -329,30 +336,27 @@ void shift(restrict read_only align(16) )" + a_ty_ + R"( *A,
            )" + c_ty_ + R"( *C,
            int32 M, int32 N, int32 K,
            int32 stride_h, int32 stride_w,
-           multiple_of(4) int32 lda_b, multiple_of(4) int32 lda_w, multiple_of(4) int32 lda_h, multiple_of(4) int32 lda_c,
-           multiple_of(4) int32 ldb_b, multiple_of(4) int32 ldb_w, multiple_of(4) int32 ldb_h, multiple_of(4) int32 ldb_c,
-           multiple_of(4) int32 ldc_b, multiple_of(4) int32 ldc_w, multiple_of(4) int32 ldc_h, multiple_of(4) int32 ldc_c,
+           multiple_of(8) int32 lda_b, multiple_of(8) int32 lda_w, multiple_of(8) int32 lda_h, multiple_of(8) int32 lda_c,
+           multiple_of(8) int32 ldb_b, multiple_of(8) int32 ldb_w, multiple_of(8) int32 ldb_h, multiple_of(8) int32 ldb_c,
+           multiple_of(8) int32 ldc_b, multiple_of(8) int32 ldc_w, multiple_of(8) int32 ldc_h, multiple_of(8) int32 ldc_c,
            int32 NB,
            int32 AH, int32 AW,
            int32 BH, int32 BW,
            int32 CH, int32 CW,
            int32* locks, int32 grid0, int32 grid1, int32 grid2) {
-  int32 rxa[TM] = get_global_range[TM](0);
-  int32 ryb[TN] = get_global_range[TN](1);
-  int32 rz = get_global_range[1](2);
+  int32 ridx = get_range_id(0);
+  int32 ridy = get_range_id(1);
+  int32 rz = get_range_id(2);
+  int32 rxa[TM] = ridx*TM + (0 ... TM);
+  int32 ryb[TN] = ridy*TN + (0 ... TN);
   int32 rka[TK] = 0 ... TK;
   int32 rkb[TK] = 0 ... TK;
   fp32 acc[TM, TN] = 0;
   int32 pad_h = BH / 2;
-  int32 pad_w = BW / 2;
-  int32 div = K / grid2;
-  int32 rem = K % grid2;
-  K = select(rz < rem, div - 1, div);
-  int32 offk = select(rz < rem, rz*(div + 1), rz*div + rem);)";
+  int32 pad_w = BW / 2;)";
 if(op_ == WGRAD){
   result += R"(
-  rka = rka + offk;
-  rkb = rkb + offk;
+
   )";
 }
 
@@ -360,31 +364,26 @@ if(op_ == WGRAD){
 if(op_ == FPROP){
   result +=
   compute_bhw("ra", "TM", "rxa") + R"(
-  raw = raw * stride_w;
-  rah = rah * stride_h;
-  int32 offxa[TM] =  rab*lda_b + raw*lda_w + rah*lda_h;
+  raw = raw * )" + stride_w + R"(;
+  rah = rah * )" + stride_h + R"(;
+  int32 offxa[TM] =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
   int32 offa0[TM, TK] = offxa[:, newaxis];
   __constant__ int32* pd[TK] = delta_a + rka;
-  multiple_of(4) int32 d[TK] = *pd;
+  multiple_of(8) int32 d[TK] = *pd;
   int32 offa1[TM, TK] = d[newaxis, :];)";
 }
 if(op_ == BPROP){
   result +=
   compute_bhw("ra", "TM", "rxa") + R"(
-  int32 offxa[TM] =  rab*lda_b + raw*lda_w + rah*lda_h;
+  int32 offxa[TM] =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
   int32 offa0[TM, TK] = offxa[:, newaxis];
   int32 offa1[TM, TK] = rka[newaxis, :] * lda_c;)";
 }
-if(op_ == WGRAD && layout_ == CHWN){
-  result +=  R"(
-  int32 offa0[TK, TM] = rxa[newaxis, :] * lda_c;
-  int32 offa1[TK, TM] = rka[:, newaxis];)";
-}
-if(op_ == WGRAD && layout_ == NCHW){
+if(op_ == WGRAD){
   result +=
   compute_bhw("ra", "TK", "rka") + R"(
   int32 offa0[TK, TM] = rxa[newaxis, :] * lda_c;
-  int32 offxa[TK] =  rab*lda_b + raw*lda_w + rah*lda_h;
+  int32 offxa[TK] =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
   int32 offa1[TK, TM] = offxa[:, newaxis];)";
 }
 
@@ -403,11 +402,11 @@ if(op_ == WGRAD){
   result +=
   compute_bhw("rb", "TK", "rkb") + R"(
   __constant__ int32* pd[TN] = delta_a + ryb;
-  int32 d[TN] = *pd;
-  int32 shift[TK, TN] = d[newaxis, :];
-  rbw = rbw * stride_w;
-  rbh = rbh * stride_h;
-  int32 offkb[TK] = rbb*ldb_b + rbw*ldb_w + rbh*ldb_h;
+  multiple_of(8) int32 d[TN] = *pd;
+  multiple_of(8) int32 shift[TK, TN] = d[newaxis, :];
+  rbw = rbw * )" + stride_w + R"(;
+  rbh = rbh * )" + stride_h + R"(;
+  int32 offkb[TK] = rbb*)" + ldb_b + R"( + rbw*ldb_w + rbh*ldb_h;
   int32 offb0[TK, TN] = ryb[newaxis, :] * ldb_c;
   int32 offb1[TK, TN] = offkb[:, newaxis] + shift;)";
 }
@@ -416,8 +415,8 @@ if(op_ == WGRAD){
   result +=  R"(
   )" + a_ty_ + "* pa[" + AS + R"(] = A + offa0 + offa1;
   )" + b_ty_ + "* pb[" + BS + R"(] = B + offb0 + offb1;
-  int1 checka[)" + AS + "] = (rka < K + offk)" + bca0  + R"(;
-  int1 checkb[)" + BS + "] = (rkb < K + offk)" + bcb0  + R"(;
+  int1 checka[)" + AS + "] = (rka < K)" + bca0  + R"(;
+  int1 checkb[)" + BS + "] = (rkb < K)" + bcb0  + R"(;
   )" + a_ty_ + "   a[" + AS + R"(] = checka ? *pa : 0;
   )" + b_ty_ + "   b[" + BS + R"(] = checkb ? *pb : 0;
   for(int32 k = K; k > 0; k = k - TK){
@@ -436,15 +435,11 @@ if(op_ == BPROP){
   result +=  R"(
     pa = pa + TK * lda_c;)";
 }
-if(op_ == WGRAD && layout_ == CHWN){
-  result +=  R"(
-    pa = pa + TK;)";
-}
-if(op_ == WGRAD && layout_ == NCHW){
+if(op_ == WGRAD){
   result += R"(
     rka = rka + TK;)"
     + compute_bhw("ra", "TK", "rka") + R"(
-    offxa =  rab*lda_b + raw*lda_w + rah*lda_h;
+    offxa =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
     pa = A + offa0 + offxa[:, newaxis];)";
 }
   result +=  R"(
@@ -455,9 +450,9 @@ if(op_ == WGRAD){
   result += R"(
     rkb = rkb + TK;)"
     + compute_bhw("rb", "TK", "rkb") + R"(
-    rbw = rbw * stride_w;
-    rbh = rbh * stride_h;
-    offkb = rbb*ldb_b + rbw*ldb_w + rbh*ldb_h;
+    rbw = rbw * )" + stride_w + R"(;
+    rbh = rbh * )" + stride_h + R"(;
+    offkb = rbb*)" + ldb_b + R"( + rbw*ldb_w + rbh*ldb_h;
     pb = B + offb0 + offkb[:, newaxis] + shift;)";
 }
 if(op_ == FPROP){
@@ -471,21 +466,21 @@ if(op_ == BPROP){
   result +=  R"(
     @checkb b = *pb;
   }
-  int32 rxc[TM] = get_global_range[TM](0);
-  int32 ryc[TN] = get_global_range[TN](1);)";
+  int32 rxc[TM] = ridx*TM + (0 ... TM);
+  int32 ryc[TN] = ridy*TN + (0 ... TN);)";
 
 /* C offsets */
 if(op_ == BPROP){
   result +=
   compute_bhw("rc", "TM", "rxc") + R"(
-  rcw = rcw * stride_w;
-  rch = rch * stride_h;
-  int32 offxc[TM] = rcb*ldc_b + rcw*ldc_w + rch*ldc_h;)";
+  rcw = rcw * )" + stride_w + R"(;
+  rch = rch * )" + stride_h + R"(;
+  int32 offxc[TM] = rcb*)" + ldc_b + R"( + rcw*ldc_w + rch*ldc_h;)";
   }
 if(op_ == FPROP){
   result +=
   compute_bhw("rc", "TM", "rxc") + R"(
-  int32 offxc[TM] = rcb*ldc_b + rcw*ldc_w + rch*ldc_h;)";
+  int32 offxc[TM] = rcb*)" + ldc_b + R"( + rcw*ldc_w + rch*ldc_h;)";
 }
 if(op_ == WGRAD){
   result +=  R"(
@@ -506,27 +501,7 @@ if(op_ == BPROP){
 }
 else{
   result +=  R"(
-  int1 has_lock = (GZ > 1) && (locks != 0);
-  if(has_lock){
-    int32 ridx = get_range_id(0);
-    int32 ridy = get_range_id(1);
-    int32 *plock = locks + ridx + ridy*grid0;
-    int32 *pcount = plock + grid0*grid1;
-    while(__atomic_cas(plock, 0, 1) == 1);
-    int32 count = *pcount;
-    int32 countp1 = select(count == grid2 - 1, 0, count + 1);
-    if(count == 0) {
-      @checkc *pc = c;
-    }
-    else {
-      @checkc *pc = c + *pc;
-    }
-    *pcount = countp1;
-    *plock = 0;
-  }
-  else{
-    @checkc *pc = c;
-  })";
+  @checkc *pc = c;)";
 }
   result +=  R"(
 })";

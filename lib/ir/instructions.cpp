@@ -130,7 +130,7 @@ bool binary_operator::is_int_mult()    const {
 }
 
 bool binary_operator::is_int_add_sub() const {
-  return op_ == llop::Add || llop::Sub;
+  return op_ == llop::Add || op_ == llop::Sub;
 }
 
 

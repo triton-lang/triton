@@ -233,10 +233,15 @@ void tune::run(ir::module &mod) {
   for(ir::instruction *i : block->get_inst_list()){
     if(fragments_.find({i, 0}) != fragments_.end() && fragments_.at({i, 0}) != STRIDED_SCAN)
       continue;
-    if(dynamic_cast<ir::load_inst*>(i) && i->get_type()->is_tile_ty()){
-      ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  4, 8));
-      *params_.at(i).at("nts.d0") = *tmp;
+    if(auto *ld = dynamic_cast<ir::load_inst*>(i))
+    if(i->get_type()->is_tile_ty()){
+      ir::type *ptr_ty = ld->get_pointer_operand()->get_type()->get_scalar_ty();
+      size_t addr_space = ptr_ty->get_pointer_address_space();
+      if(addr_space < 4){
+        ir::type *ty = mod.get_builder().get_int32_ty();
+        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  8, 8));
+        *params_.at(i).at("nts.d0") = *tmp;
+      }
     }
     if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();

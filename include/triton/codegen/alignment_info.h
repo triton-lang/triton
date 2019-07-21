@@ -14,12 +14,17 @@ namespace ir {
 namespace codegen{
 
 class alignment_info {
+  struct cst_info {
+    unsigned num_cst;
+    unsigned value;
+  };
+
 private:
   // helpers
   bool is_first_axis_unit(ir::value *v);
 
   // populate maps
-  bool populate_is_constant(ir::value *v);
+  cst_info populate_is_constant(ir::value *v);
   unsigned populate_max_contiguous(ir::value *v);
   unsigned populate_starting_multiple(ir::value *v);
 
@@ -29,7 +34,7 @@ public:
   unsigned get_max_contiguous(ir::value* v) const;
 
 private:
-  std::map<ir::value*, bool> is_constant_;
+  std::map<ir::value*, cst_info> is_constant_;
   std::map<ir::value*, unsigned> max_contiguous_;
   std::map<ir::value*, unsigned> starting_multiple_;
 };
