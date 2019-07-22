@@ -108,7 +108,7 @@ public:
   jit(driver::context* context, unsigned nthreads = 4);
   ~jit();
   std::vector<unsigned> get_valid(const char *name, const char *src);
-  tune_res_t autotune(const char* name, const char* src, benchmark_t benchmark);
+  tune_res_t autotune(const char* name, const char* src, benchmark_t benchmark, const std::vector<std::vector<unsigned> > &targets = {});
   void add_module(ir::module &module, const std::vector<unsigned>& params = {});
   void add_module(const char* name, const char* src, const std::vector<unsigned>& params = {});
   driver::kernel* get_function(const char* name);

@@ -529,8 +529,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     unsigned num_rep_0 = shapes[0]->get_value() / hmma_bts_0;
     unsigned num_rep_1 = shapes[1]->get_value() / hmma_bts_1;
     // size of each pack (interleaving)
-    pack_size_0_ = std::min<unsigned>(num_rep_0, 2);
-    pack_size_1_ = std::min<unsigned>(num_rep_1, 2);
+    pack_size_0_ = std::min<unsigned>(num_rep_0, 1);
+    pack_size_1_ = std::min<unsigned>(num_rep_1, 1);
     // number of packs (interleaving)
     num_packs_0_ = num_rep_0 / pack_size_0_;
     num_packs_1_ = num_rep_1 / pack_size_1_;

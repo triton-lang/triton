@@ -31,6 +31,13 @@ namespace triton{
 namespace dnn{
 
 
+enum autotuning_t{
+  FULL_TUNING,
+  PARTIAL_TUNING,
+  NO_TUNING
+};
+
+typedef std::vector<unsigned> params_t;
 
 class base {
   friend class cmp_recompile;
@@ -53,6 +60,9 @@ private:
   virtual size_t num_flops() const = 0;
   // comparison for maps
   virtual bool operator<(const base& other) const = 0;
+  // default parameters
+  virtual std::vector<params_t> search_space() const;
+  virtual params_t heuristics() const;
 
 public:
   // constructor
@@ -62,7 +72,7 @@ public:
   // clone
   virtual base* clone() const = 0;
   // enqueue
-  void enqueue(driver::stream* stream, std::vector<driver::buffer*> args, bool autotune = false);
+  void enqueue(driver::stream* stream, std::vector<driver::buffer*> args, autotuning_t autotune = PARTIAL_TUNING);
 
 private:
   std::string name_;

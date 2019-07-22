@@ -19,7 +19,7 @@
 using namespace tensorflow;
 using GPUDevice = Eigen::GpuDevice;
 
-template<triton::dnn::shift::type OP>
+template<triton::dnn::shift::op_t OP>
 class ShiftConvOp : public OpKernel {
 public:
   explicit ShiftConvOp(OpKernelConstruction* context) : OpKernel(context), layout_(triton::dnn::shift::NCHW) {

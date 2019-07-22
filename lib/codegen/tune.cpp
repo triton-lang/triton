@@ -221,7 +221,7 @@ void tune::run(ir::module &mod) {
       }
       else {
         ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 2, 2);
-        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 2, 4);
+        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 4);
         connected_components(node, {fpw, wpt}, {"fpw", "wpt"}, nodes_, dependencies_, group_id++);
       }
     }
@@ -239,7 +239,7 @@ void tune::run(ir::module &mod) {
       size_t addr_space = ptr_ty->get_pointer_address_space();
       if(addr_space < 4){
         ir::type *ty = mod.get_builder().get_int32_ty();
-        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  8, 8));
+        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  4, 8));
         *params_.at(i).at("nts.d0") = *tmp;
       }
     }

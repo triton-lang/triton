@@ -49,7 +49,7 @@ class DotOp : public OpKernel {
     triton::driver::cu_buffer db(ctx, (CUdeviceptr)b.flat<Eigen::half>().data(), false);
     triton::driver::cu_buffer dc(ctx, (CUdeviceptr)c->flat<float>().data(), false);
     // template
-    triton::dnn::gemm dot(M, N, K, false, false, "fp16", "fp16", 4, 4);
+    triton::dnn::dot dot(M, N, K, false, false, "fp16", "fp16", 8, 8);
     dot.enqueue(stream, {&da, &db, &dc});
   }
 
