@@ -35,20 +35,18 @@
 namespace triton{
 namespace dnn{
 
+enum op_t {
+  FPROP,
+  BPROP,
+  WGRAD
+};
+
+enum layout_t {
+  NCHW,
+  CHWN
+};
+
 class shift: public base {
-
-public:
-  enum op_t {
-    FPROP,
-    BPROP,
-    WGRAD
-  };
-
-  enum layout_t {
-    NCHW,
-    CHWN
-  };
-
 private:
   // initialize and enqueue
   void init_impl(driver::stream *stream, driver::cu_module *module);
@@ -56,7 +54,8 @@ private:
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
                     triton::runtime::launch_information info);
-  std::vector<unsigned> default_params() const;
+  std::vector<params_t> search_space() const;
+  params_t heuristics() const;
 
 public:
 

@@ -1,5 +1,6 @@
 #include <sstream>
 #include "triton/dnn/shift.h"
+#include "triton/dnn/heuristics.h"
 #include "triton/tools/bench.hpp"
 
 namespace triton{
@@ -513,12 +514,14 @@ else{
 }
 
 
+// small search space for partial auto-tuning
+std::vector<params_t> shift::search_space() const {
+  return dot_search_space(AT_, BT_);
+}
+
 // simple parameter heuristics
-std::vector<unsigned> shift::default_params() const {
-  typedef std::vector<unsigned> params_t;
-  std::map<std::tuple<op_t, size_t, size_t>, params_t> params = {
-    {{}, {}}
-  };
+params_t shift::heuristics() const {
+  return dot_heuristics(AT_, BT_, M_, N_, K_);
 }
 
 
