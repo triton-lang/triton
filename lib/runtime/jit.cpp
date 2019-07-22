@@ -211,9 +211,9 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
         best.perf = perf;
         best.params = params;
       }
-      for(size_t i = 0; i < params.size(); i++)
-        std::cout << ((i==0)?"":", ") << params[i] << std::flush;
-      std::cout << ", " << perf << " [ " << best.perf << " ] " << std::endl;
+//      for(size_t i = 0; i < params.size(); i++)
+//        std::cout << ((i==0)?"":", ") << params[i] << std::flush;
+//      std::cout << ", " << perf << " [ " << best.perf << " ] " << std::endl;
     }
   };
 

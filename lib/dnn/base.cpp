@@ -66,8 +66,9 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, a
     clone->init_impl(stream, (triton::driver::cu_module*)kernel->module());
   }
   /* retrieved compiled template */
-  else
+  else{
     jit = m_jit.at(this).get();
+  }
 
   /* get launch parameters */
   driver::kernel* kernel = jit->get_function(name_.c_str());

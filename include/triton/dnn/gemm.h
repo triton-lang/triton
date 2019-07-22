@@ -14,8 +14,6 @@ private:
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
                     triton::runtime::launch_information info);
-  // number of flops
-  size_t num_flops() const;
   // comparison for maps
   bool operator<(const base& other) const;
   // default parameters
@@ -26,6 +24,9 @@ public:
   dot(int M, int N, int K, bool AT, bool BT,
        std::string a_ty, std::string b_ty,
        unsigned alignment_lda, unsigned alignment_ldb);
+
+  // number of flops
+  size_t num_flops() const;
 
   // triton-c source
   void triton_c_src(std::ostream &os) const;

@@ -10,7 +10,7 @@
 
 double do_bench(triton::driver::context* context,
                 int32_t R, int32_t S, int32_t B, int32_t F, int32_t H, int32_t W, int32_t C,
-                triton::dnn::shift::op_t op, triton::dnn::shift::layout_t layout,
+                triton::dnn::op_t op, triton::dnn::layout_t layout,
                 std::string numeric_t) {
   typedef float NumericT;
 
@@ -25,14 +25,14 @@ double do_bench(triton::driver::context* context,
   triton::dnn::shift shift(B, C, 1, H, W, 1, R, S, F, 1, 1,
                            shift_h.data(), shift_w.data(),
                            numeric_t, numeric_t,
-                           op, false, triton::dnn::shift::CHWN);
+                           op, false, layout);
   // host buffers
   size_t a_size = B*C*H*W;
   size_t b_size = C*F;
   size_t c_size = B*F*H*W;
-  if(op == triton::dnn::shift::BPROP)
+  if(op == triton::dnn::BPROP)
     std::swap(a_size, c_size);
-  if(op == triton::dnn::shift::WGRAD){
+  if(op == triton::dnn::WGRAD){
     std::swap(b_size, c_size);
     std::swap(a_size, b_size);
   }
@@ -58,20 +58,57 @@ double do_bench(triton::driver::context* context,
   stream->write(db, true, 0, hb);
   stream->write(dc, true, 0, hc);
   stream->synchronize();
-  shift.enqueue(stream, {da, db, dc}, true);
-  double tns = triton::tools::bench([&]() { shift.enqueue(stream, {da, db, dc}, true);}, stream);
-  std::cout << tns << std::endl;
+  double nanosec = triton::tools::bench([&]() { shift.enqueue(stream, {da, db, dc});}, stream);
+  return shift.num_flops() / nanosec * 1e-3;
 }
 
 int main() {
+  using triton::dnn::op_t;
+  using triton::dnn::layout_t;
+
+  struct config_t{
+    int32_t B;
+    int32_t C;
+    int32_t H;
+    int32_t W;
+    int32_t R;
+    int32_t S;
+    int32_t F;
+    int32_t stride_h;
+    int32_t stride_w;
+    op_t op;
+    layout_t layout;
+    std::string ty;
+
+    std::string repr() {
+      std::ostringstream oss;
+      oss << B << ", " << C << ", " << H << ", " << W << ", " << R << ", " << S << ", " << F << ", " << op << ", " << layout << ", " << ty;
+      return oss.str();
+    }
+
+    double perf(triton::driver::context *context){
+      return do_bench(context, R, S, B, F, H, W, C, op, layout, ty);
+    }
+  };
+  // shapes to benchmark
+  std::vector<config_t> configs;
+  std::vector<config_t> resnet18 = {
+    {128, 128, 32, 32, 3, 3, 128, 1, 1},
+    {128, 128, 32, 32, 3, 3, 256, 2, 2},
+    {128, 256, 16, 16, 3, 3, 256, 1, 1},
+    {128, 256, 16, 16, 3, 3, 512, 2, 2},
+    {128, 512,  8,  8, 3, 3, 512, 1, 1},
+    {128, 512,  8,  8, 3, 3, 1024, 1, 1},
+    {128, 1024, 8, 8, 3, 3, 1024, 1, 1}
+  };
+  for(config_t c: resnet18){
+    for(op_t op: {op_t::FPROP, op_t::BPROP, op_t::WGRAD})
+      configs.push_back({c.B, c.C, c.H, c.W, c.R, c.S, c.F, c.stride_h, c.stride_w, op, layout_t::CHWN, "fp16"});
+  }
+
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
-  // shapes
-  int32_t R = 3, S = 3;
-  int32_t B = 16, F = 4096;
-  int32_t H = 32, W = 32;
-  int32_t C = 4096;
-  // benchmark
-  do_bench(context, R, S, B, F, H, W, C, triton::dnn::shift::FPROP, triton::dnn::shift::CHWN, "fp16");
+  for(config_t c: configs)
+    std::cout << c.repr() << ", " << c.perf(context) << std::endl;
 
 }
