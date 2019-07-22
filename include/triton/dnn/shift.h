@@ -38,7 +38,7 @@ namespace dnn{
 class shift: public base {
 
 public:
-  enum type {
+  enum op_t {
     FPROP,
     BPROP,
     WGRAD
@@ -56,6 +56,7 @@ private:
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
                     triton::runtime::launch_information info);
+  std::vector<unsigned> default_params() const;
 
 public:
 
@@ -65,7 +66,7 @@ public:
        int stride_h, int stride_w,
        const int32_t* shift_h, const int32_t* shift_w,
        std::string a_ty = "fp32", std::string b_ty = "fp32",
-       type ty = FPROP, bool bias = false, layout_t layout = CHWN);
+       op_t ty = FPROP, bool bias = false, layout_t layout = CHWN);
 
   // look-up table
   void build_delta_a();
@@ -165,7 +166,7 @@ private:
   std::string b_ty_;
   std::string c_ty_;
   // convolution type
-  type op_;
+  op_t op_;
   bool bias_;
   // transpose
   bool AT_;

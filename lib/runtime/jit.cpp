@@ -31,7 +31,7 @@ extern triton::lang::translation_unit *ast_root;
 namespace triton {
 namespace runtime{
 
-void loop_nest(std::vector<size_t> const & ranges,
+void parallel_loop_nest(std::vector<size_t> const & ranges,
                std::function<void(std::vector<size_t> const &)> const & f,
                size_t nthreads){
   size_t D = ranges.size();
@@ -55,7 +55,7 @@ void loop_nest(std::vector<size_t> const & ranges,
 }
 
 template<class T>
-void loop_nest(std::vector<std::vector<T>> const & iterates, std::function<void(std::vector<T>)> const & f, size_t nthreads){
+void parallel_loop_nest(std::vector<std::vector<T>> const & iterates, std::function<void(std::vector<T>)> const & f, size_t nthreads){
   //Ranges to iterate over
   std::vector<size_t> ranges;
   for(auto const & x: iterates)
@@ -68,10 +68,14 @@ void loop_nest(std::vector<std::vector<T>> const & iterates, std::function<void(
   f(x);
   };
   //Iterate
-  loop_nest(ranges, proxy, nthreads);
+  parallel_loop_nest(ranges, proxy, nthreads);
 }
 
-
+void parallel_for_each(std::vector<std::vector<unsigned>> const & iterates, std::function<void(std::vector<unsigned>)> const & f, size_t nthreads) {
+  ThreadPool pool(nthreads);
+  for(const std::vector<unsigned>& values: iterates)
+    pool.enqueue(f, values);
+}
 
 
 std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, passes_wrapper &passes, llvm::LLVMContext& llvm_context, launch_information& info) {
@@ -128,7 +132,7 @@ std::vector<unsigned> jit::get_valid(const char *name, const char *src) {
     ranges.push_back(mp->get_space());
   // iterate over parameters
   std::vector<unsigned> result;
-  loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
+  parallel_loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
     if(!result.empty())
       return;
     std::map<ir::value*, std::vector<std::string>> errors;
@@ -148,7 +152,7 @@ std::vector<unsigned> jit::get_valid(const char *name, const char *src) {
 
 
 
-jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t benchmark) {
+jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t benchmark, const std::vector<std::vector<unsigned>> & targets) {
   // find metaparameters
   triton::lang::translation_unit* program = parse_program(name, src);
   auto ptt_module_0 = make_triton_module(name, triton_context_, program);
@@ -157,15 +161,12 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
   passes_wrapper passes_0(target_.get());
   passes_0.target_independent(tt_module_0);
   passes_0.tune.run(tt_module_0);
-  // create parameter ranges
-  std::vector<std::vector<unsigned>> ranges;
   auto mps = passes_0.tune.get_params(tt_module_0);
-  for(ir::metaparameter *mp: mps)
-    ranges.push_back(mp->get_space());
   // iterate over parameters
   tune_res_t best;
   std::mutex mutex;
-  loop_nest<unsigned>(ranges, [&](const std::vector<unsigned> params){
+  // update_best
+  auto update_best = [&](const std::vector<unsigned> params){
     std::map<ir::value*, std::vector<std::string>> errors;
     unsigned i = 0;
     {
@@ -200,10 +201,10 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
     launch_information info;
     llvm::LLVMContext llvm_context;
     auto ll_module = make_llvm_module(tt_module_1, passes_1, llvm_context, info);
+    std::unique_ptr<driver::module> module(driver::module::create(driver_context_, &*ll_module));
     double perf;
     {
       std::lock_guard<std::mutex> lock(mutex);
-      std::unique_ptr<driver::module> module(driver::module::create(driver_context_, &*ll_module));
       std::unique_ptr<driver::kernel> kernel(driver::kernel::create(module.get(), name));
       perf = benchmark(kernel.get(), info);
       if(perf > best.perf){
@@ -214,8 +215,21 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
         std::cout << ((i==0)?"":", ") << params[i] << std::flush;
       std::cout << ", " << perf << " [ " << best.perf << " ] " << std::endl;
     }
-  }, nthreads_);
-  std::cout << "Autotuning done - Best performance: " << best.perf << std::endl;
+  };
+
+
+  if(targets.empty()) {
+    // create parameter ranges
+    std::vector<std::vector<unsigned>> ranges;
+    for(ir::metaparameter *mp: mps)
+      ranges.push_back(mp->get_space());
+    parallel_loop_nest<unsigned>(ranges, update_best, nthreads_);
+  }
+  else {
+    parallel_for_each(targets, update_best, nthreads_);
+  }
+
+//  std::cout << "Autotuning done - Best performance: " << best.perf << std::endl;
   return best;
 }
 

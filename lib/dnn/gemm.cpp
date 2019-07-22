@@ -6,7 +6,7 @@
 namespace triton{
 namespace dnn{
 
-gemm::gemm(int M, int N, int K,
+dot::dot(int M, int N, int K,
            bool AT, bool BT,
            std::string a_ty, std::string b_ty,
            unsigned alignment_lda, unsigned alignment_ldb)
@@ -18,13 +18,13 @@ gemm::gemm(int M, int N, int K,
 
 }
 
-size_t gemm::num_flops() const {
+size_t dot::num_flops() const {
   return 2.*M_*N_*K_;
 }
 
 // comparison for maps
-bool gemm::operator<(const base& other) const {
-  auto *y = dynamic_cast<const gemm*>(&other);
+bool dot::operator<(const base& other) const {
+  auto *y = dynamic_cast<const dot*>(&other);
   if(!y)
     return true;
   return  std::tie(M_, N_, K_, AT_, BT_,
@@ -34,18 +34,18 @@ bool gemm::operator<(const base& other) const {
 }
 
 // clone
-base* gemm::clone() const {
-  return new gemm(*this);
+base* dot::clone() const {
+  return new dot(*this);
 }
 
-void gemm::init_impl(driver::stream* stream, driver::cu_module *) {
+void dot::init_impl(driver::stream* stream, driver::cu_module *) {
   std::vector<int32_t> hlocks(2048, 0);
   if(locks_ == nullptr)
     locks_ = triton::driver::buffer::create(stream->context(), hlocks.size()*4);
   stream->write(locks_, false, 0, hlocks);
 }
 
-void gemm::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
+void dot::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                         std::vector<driver::buffer*> args,
                         runtime::launch_information info) {
   driver::buffer *a = args[0], *b = args[1], *c = args[2];
@@ -75,7 +75,7 @@ void gemm::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
   stream->enqueue(kernel, grid, {info.num_threads, 1, 1});
 }
 
-void gemm::triton_c_src(std::ostream &os) const {
+void dot::triton_c_src(std::ostream &os) const {
   std::string AS0 = "TM", AS1 = "TK";
   std::string BS0 = "TK", BS1 = "TN";
   std::string bca0 = "[newaxis, :]", bca1 = "[:, newaxis]";
@@ -100,8 +100,8 @@ void gemm::triton_c_src(std::ostream &os) const {
   std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb_) + ")";
   std::string res =
 R"(
-const tunable int32 TM = {32, 64, 128, 256};
-const tunable int32 TN = {32, 64, 128, 256};
+const tunable int32 TM = {16, 32, 64, 128};
+const tunable int32 TN = {16, 32, 64, 128};
 const tunable int32 TK = {32};
 const tunable int32 GZ = {1};
 
@@ -143,6 +143,103 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
 }
 )";
   os << res;
+}
+
+// small search space for partial auto-tuning
+std::vector<params_t> dot::search_space() const {
+  typedef std::vector<unsigned> params_t;
+  typedef std::tuple<size_t, size_t> key_t;
+  static std::vector<key_t> keys  = {
+    {16, 16}, {16, 32}, {16, 64}, {16, 128},
+    {32, 16}, {32, 32}, {32, 64}, {32, 128},
+    {64, 16}, {64, 32}, {64, 64}, {64, 128},
+    {128, 16},{128, 32},{128, 64},{128, 128}
+  };
+  static std::vector<params_t> space_nn = {
+    {4, 4, 16, 8, 16, 2, 2, 1, 1, 8, 32, 4, 8, 1},
+    {2, 8, 16, 8, 32, 2, 2, 1, 1, 16, 32, 4, 8, 1},
+    {4, 4, 16, 4, 64, 2, 2, 1, 1, 8, 32, 8, 4, 1},
+    {4, 4, 16, 16, 128, 2, 2, 1, 2, 16, 32, 4, 8, 1},
+    {4, 8, 32, 8, 16, 2, 2, 1, 1, 8, 32, 4, 8, 1},
+    {4, 8, 32, 8, 32, 2, 2, 1, 1, 8, 32, 4, 8, 1},
+    {8, 4, 32, 8, 64, 2, 2, 1, 1, 4, 32, 4, 8, 1},
+    {8, 4, 32, 16, 128, 2, 2, 1, 4, 16, 32, 8, 4, 1},
+    {8, 8, 64, 4, 16, 2, 2, 1, 1, 4, 32, 8, 4, 1},
+    {8, 8, 64, 8, 32, 2, 2, 1, 1, 4, 32, 4, 8, 1},
+    {8, 8, 64, 16, 64, 2, 2, 2, 1, 8, 32, 4, 8, 1},
+    {16, 4, 64, 16, 128, 2, 2, 2, 2, 8, 32, 8, 4, 1},
+    {8, 8, 128, 8, 16, 2, 2, 2, 1, 8, 32, 8, 4, 1},
+    {8, 8, 128, 16, 32, 2, 2, 2, 1, 8, 32, 4, 8, 1},
+    {8, 8, 128, 32, 64, 2, 2, 2, 2, 16, 32, 4, 8, 1},
+    {8, 8, 128, 32, 128, 2, 2, 1, 4, 16, 32, 4, 8, 1},
+  };
+  static std::vector<params_t> space_nt = {
+    {4, 4, 16, 2, 8, 16, 2, 2, 1, 1, 8, 32, 16, 1},
+    {4, 4, 16, 4, 8, 32, 2, 2, 1, 1, 8, 32, 8, 1},
+    {4, 4, 16, 8, 8, 64, 2, 2, 1, 4, 32, 32, 16, 1},
+    {4, 4, 16, 32, 4, 128, 2, 2, 1, 2, 16, 32, 2, 1},
+    {8, 4, 32, 2, 8, 16, 2, 2, 1, 1, 4, 32, 16, 1},
+    {4, 8, 32, 4, 8, 32, 2, 2, 1, 1, 8, 32, 8, 1},
+    {16, 8, 128, 4, 4, 64, 2, 2, 1, 4, 8, 32, 32, 1},
+    {4, 8, 32, 8, 8, 128, 2, 2, 1, 2, 16, 32, 8, 1},
+    {8, 8, 64, 2, 8, 16, 2, 2, 1, 1, 4, 32, 16, 1},
+    {8, 8, 64, 4, 8, 32, 2, 2, 1, 1, 4, 32, 8, 1},
+    {8, 8, 64, 8, 8, 64, 2, 2, 1, 2, 8, 32, 8, 1},
+    {8, 8, 64, 16, 8, 128, 2, 2, 1, 4, 16, 32, 8, 1},
+    {8, 8, 128, 2, 8, 16, 2, 2, 2, 1, 8, 32, 32, 1},
+    {16, 8, 128, 4, 8, 32, 2, 2, 2, 1, 4, 32, 16, 1},
+    {8, 8, 128, 8, 8, 64, 2, 2, 2, 2, 16, 32, 16, 1},
+    {8, 8, 128, 8, 8, 128, 2, 2, 4, 1, 16, 32, 16, 1},
+  };
+  static std::vector<params_t> space_tn = {
+    {8, 16, 16, 16, 2, 2, 1, 1, 4, 8, 32, 2, 8, 1},
+    {4, 16, 8, 32, 2, 2, 1, 1, 8, 4, 32, 4, 8, 1},
+    {4, 16, 4, 64, 2, 2, 1, 1, 8, 4, 32, 8, 4, 1},
+    {16, 16, 16, 128, 2, 2, 1, 2, 4, 8, 32, 4, 8, 1},
+    {4, 32, 8, 16, 2, 2, 1, 1, 8, 4, 32, 4, 8, 1},
+    {8, 32, 8, 32, 2, 2, 1, 1, 4, 8, 32, 4, 8, 1},
+    {8, 32, 8, 64, 2, 2, 1, 1, 4, 8, 32, 4, 8, 1},
+    {32, 32, 64, 128, 2, 2, 2, 2, 4, 8, 32, 2, 8, 1},
+    {8, 64, 8, 16, 2, 2, 1, 1, 4, 8, 32, 4, 8, 1},
+    {8, 64, 8, 32, 2, 2, 1, 1, 4, 8, 32, 4, 8, 1},
+    {16, 64, 16, 64, 2, 2, 2, 1, 4, 8, 32, 4, 8, 1},
+    {32, 64, 16, 128, 2, 2, 2, 2, 4, 8, 32, 8, 4, 1},
+    {16, 128, 16, 16, 2, 2, 2, 1, 4, 8, 32, 4, 8, 1},
+    {32, 128, 32, 32, 2, 2, 4, 1, 4, 8, 32, 4, 8, 1},
+    {32, 128, 32, 64, 2, 2, 4, 1, 4, 8, 32, 4, 8, 1},
+    {32, 128, 32, 128, 2, 2, 4, 1, 4, 8, 32, 4, 8, 1},
+  };
+  static std::vector<params_t> space_tt = {
+    {4, 16, 2, 8, 16, 2, 2, 1, 1, 8, 4, 32, 16, 1},
+    {8, 16, 4, 8, 32, 2, 2, 1, 1, 4, 8, 32, 8, 1},
+    {16, 16, 4, 8, 64, 2, 2, 1, 4, 8, 4, 32, 32, 1},
+    {16, 16, 8, 4, 128, 2, 2, 1, 2, 4, 8, 32, 8, 1},
+    {4, 32, 2, 8, 16, 2, 2, 1, 1, 8, 4, 32, 16, 1},
+    {8, 32, 4, 8, 32, 2, 2, 1, 1, 4, 8, 32, 8, 1},
+    {16, 64, 4, 8, 64, 2, 2, 2, 1, 4, 8, 32, 16, 1},
+    {32, 32, 8, 8, 128, 2, 2, 1, 4, 4, 8, 32, 16, 1},
+    {8, 64, 2, 8, 16, 2, 2, 1, 1, 4, 8, 32, 16, 1},
+    {8, 64, 4, 8, 32, 2, 2, 1, 1, 4, 8, 32, 8, 1},
+    {16, 64, 8, 8, 64, 2, 2, 2, 1, 4, 8, 32, 8, 1},
+    {32, 64, 8, 8, 128, 2, 2, 1, 4, 4, 8, 32, 16, 1},
+    {16, 128, 2, 8, 16, 2, 2, 2, 1, 4, 8, 32, 32, 1},
+    {32, 128, 8, 4, 32, 2, 2, 4, 1, 4, 8, 32, 16, 1},
+    {32, 128, 16, 4, 64, 2, 2, 4, 1, 4, 8, 32, 8, 1},
+    {32, 128, 8, 8, 128, 2, 2, 4, 1, 4, 8, 32, 16, 1}
+  };
+  if(!AT_ && !BT_)
+    return space_nn;
+  else if(!AT_ && BT_)
+    return space_nt;
+  else if(AT_ && !BT_)
+    return space_tn;
+  else
+    return space_tt;
+}
+
+// simple parameter heuristics
+params_t dot::heuristics() const {
+  return search_space().back();
 }
 
 }

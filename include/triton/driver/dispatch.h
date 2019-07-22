@@ -167,6 +167,8 @@ public:
   static nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, nvmlClockType_t type, unsigned int *clock);
   static nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, nvmlClockType_t type, unsigned int *clock);
   static nvmlReturn_t nvmlDeviceSetApplicationsClocks(nvmlDevice_t device, unsigned int mem_clock, unsigned int sm_clock);
+
+
   // SPIR-V libraries
   static int initializeLLVMToSPIRVPass(llvm::PassRegistry &);
   static bool writeSpirv(llvm::Module *M, std::ostream &OS, std::string &ErrMsg);

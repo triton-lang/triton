@@ -8,31 +8,23 @@
 #include "triton/dnn/shift.h"
 #include "triton/external/half.hpp"
 
-int main() {
+double do_bench(triton::driver::context* context,
+                int32_t R, int32_t S, int32_t B, int32_t F, int32_t H, int32_t W, int32_t C,
+                triton::dnn::shift::op_t op, triton::dnn::shift::layout_t layout,
+                std::string numeric_t) {
   typedef float NumericT;
-  std::string numeric_t_str = "fp16";
-
-  // initialize default compute device
-  auto context = triton::driver::backend::contexts::get_default();
-  auto op = triton::dnn::shift::FPROP;
-
-  // initialization
-  int32_t R = 3, S = 3;
-  int32_t B = 64, F = 2048;
-  int32_t H = 32, W = 32;
-  int32_t C = 2048;
 
   // random shifts
   std::vector<int32_t> shift_h(C);
   std::vector<int32_t> shift_w(C);
   for(int32_t c = 0; c < C; c++){
-    shift_h[c] = 0;
-    shift_w[c] = 0;
+    shift_h[c] = rand() % R - R / 2;
+    shift_w[c] = rand() % S - S / 2;
   }
   // configuration
   triton::dnn::shift shift(B, C, 1, H, W, 1, R, S, F, 1, 1,
                            shift_h.data(), shift_w.data(),
-                           numeric_t_str, numeric_t_str,
+                           numeric_t, numeric_t,
                            op, false, triton::dnn::shift::CHWN);
   // host buffers
   size_t a_size = B*C*H*W;
@@ -67,13 +59,19 @@ int main() {
   stream->write(dc, true, 0, hc);
   stream->synchronize();
   shift.enqueue(stream, {da, db, dc}, true);
-//  stream->read(dc, true, 0, hc);
-//  shift.cpu_ref(rc.data(), ha.data(), hb.data());
-//  for(size_t i = 0; i < hc.size(); i++)
-//    if(std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
-//      std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
-//      exit(EXIT_FAILURE);
-//    }
-//  std::cout << "Pass!" << std::endl;
+  double tns = triton::tools::bench([&]() { shift.enqueue(stream, {da, db, dc}, true);}, stream);
+  std::cout << tns << std::endl;
+}
+
+int main() {
+  // initialize default compute device
+  auto context = triton::driver::backend::contexts::get_default();
+  // shapes
+  int32_t R = 3, S = 3;
+  int32_t B = 16, F = 4096;
+  int32_t H = 32, W = 32;
+  int32_t C = 4096;
+  // benchmark
+  do_bench(context, R, S, B, F, H, W, C, triton::dnn::shift::FPROP, triton::dnn::shift::CHWN, "fp16");
 
 }

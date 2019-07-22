@@ -36,7 +36,7 @@ torch::Tensor shift_common(
     int32_t T, int32_t R, int32_t S, int32_t F,
     int32_t stride_h, int32_t stride_w,
     int32_t* shift_h, int32_t* shift_w,
-    triton::dnn::shift::type ty, triton::dnn::shift::layout_t layout,
+    triton::dnn::shift::op_t ty, triton::dnn::shift::layout_t layout,
     torch::Tensor torcha, torch::Tensor torchb, torch::Tensor torchbias,
     bool autotune = false
     ) {

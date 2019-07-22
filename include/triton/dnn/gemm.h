@@ -6,7 +6,7 @@
 namespace triton{
 namespace dnn{
 
-class gemm: public base {
+class dot: public base {
 private:
   // initialize
   void init_impl(driver::stream *, driver::cu_module *);
@@ -18,10 +18,12 @@ private:
   size_t num_flops() const;
   // comparison for maps
   bool operator<(const base& other) const;
-
+  // default parameters
+  virtual std::vector<params_t> search_space() const;
+  virtual params_t heuristics() const;
 
 public:
-  gemm(int M, int N, int K, bool AT, bool BT,
+  dot(int M, int N, int K, bool AT, bool BT,
        std::string a_ty, std::string b_ty,
        unsigned alignment_lda, unsigned alignment_ldb);
 
@@ -46,13 +48,13 @@ public:
   template<class T>
   void cpu_ref(std::vector<T> &c, const std::vector<T> &a, const std::vector<T> &b) {
     if(AT_ && BT_)
-      gemm::cpu_ref<T, true, true>(c, a, b, M_, N_, K_);
+      dot::cpu_ref<T, true, true>(c, a, b, M_, N_, K_);
     else if(AT_ && !BT_)
-      gemm::cpu_ref<T, true, false>(c, a, b, M_, N_, K_);
+      dot::cpu_ref<T, true, false>(c, a, b, M_, N_, K_);
     else if(!AT_ && BT_)
-      gemm::cpu_ref<T, false, true>(c, a, b, M_, N_, K_);
+      dot::cpu_ref<T, false, true>(c, a, b, M_, N_, K_);
     else
-      gemm::cpu_ref<T, false, false>(c, a, b, M_, N_, K_);
+      dot::cpu_ref<T, false, false>(c, a, b, M_, N_, K_);
   }
 
 private:

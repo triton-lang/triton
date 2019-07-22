@@ -13,7 +13,7 @@ shift::shift(int B, int C,
              int stride_h, int stride_w,
              const int32_t *shift_h, const int32_t *shift_w,
              std::string a_ty, std::string b_ty,
-             type ty, bool bias,
+             op_t ty, bool bias,
              layout_t layout)
   : base("shift"),
     B_(B), C_(C),
@@ -511,6 +511,16 @@ else{
 
   os << result;
 }
+
+
+// simple parameter heuristics
+std::vector<unsigned> shift::default_params() const {
+  typedef std::vector<unsigned> params_t;
+  std::map<std::tuple<op_t, size_t, size_t>, params_t> params = {
+    {{}, {}}
+  };
+}
+
 
 }
 }
