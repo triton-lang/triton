@@ -255,37 +255,38 @@ ir::value* cast_expression::codegen(ir::module *mod) const{
 
 /* Conditional expression */
 ir::value *conditional_expression::codegen(ir::module *mod) const{
-  ir::builder &builder = mod->get_builder();
-  ir::basic_block::inst_list_t &instructions = builder.get_insert_block()->get_inst_list();
-  ir::value *pred = cond_->codegen(mod);
-  ir::instruction *mask = (ir::instruction*)builder.create_mask(pred);
-  /* true value */
-  ir::value *true_mask = mask->get_result(0);
-  auto it_true_begin = instructions.end();
-  it_true_begin--;
-  ir::value *true_value = true_value_->codegen(mod);
-  implicit_broadcast(mod, pred, true_value);
-  it_true_begin++;
-  auto it_true_end = instructions.end();
-  for(auto it = it_true_begin; it != it_true_end; it++)
-//  if(!dynamic_cast<ir::retile_inst*>(*it))
-    (*it)->set_mask_pred(true_mask);
-  /* false value */
-  ir::value *false_mask = mask->get_result(1);
-  auto it_false_begin = instructions.end();
-  it_false_begin--;
-  ir::value *false_value = false_value_->codegen(mod);
-  implicit_broadcast(mod, pred, false_value);
-  bool is_float, is_ptr, is_int, is_signed;
-  implicit_cast(builder, true_value, false_value, is_float, is_ptr, is_int, is_signed);
-  it_false_begin++;
-  auto it_false_end = instructions.end();
-  for(auto it = it_false_begin; it != it_false_end; it++)
-//  if(!dynamic_cast<ir::retile_inst*>(*it))
-    (*it)->set_mask_pred(false_mask);
-  /* psi */
-  ir::value *result = builder.create_merge(true_mask, true_value, false_mask, false_value);
-  return result;
+  throw std::runtime_error("not implemented");
+//  ir::builder &builder = mod->get_builder();
+//  ir::basic_block::inst_list_t &instructions = builder.get_insert_block()->get_inst_list();
+//  ir::value *pred = cond_->codegen(mod);
+//  ir::instruction *mask = (ir::instruction*)builder.create_mask(pred);
+//  /* true value */
+//  ir::value *true_mask = mask->get_result(0);
+//  auto it_true_begin = instructions.end();
+//  it_true_begin--;
+//  ir::value *true_value = true_value_->codegen(mod);
+//  implicit_broadcast(mod, pred, true_value);
+//  it_true_begin++;
+//  auto it_true_end = instructions.end();
+//  for(auto it = it_true_begin; it != it_true_end; it++)
+////  if(!dynamic_cast<ir::retile_inst*>(*it))
+//    (*it)->set_mask_pred(true_mask);
+//  /* false value */
+//  ir::value *false_mask = mask->get_result(1);
+//  auto it_false_begin = instructions.end();
+//  it_false_begin--;
+//  ir::value *false_value = false_value_->codegen(mod);
+//  implicit_broadcast(mod, pred, false_value);
+//  bool is_float, is_ptr, is_int, is_signed;
+//  implicit_cast(builder, true_value, false_value, is_float, is_ptr, is_int, is_signed);
+//  it_false_begin++;
+//  auto it_false_end = instructions.end();
+//  for(auto it = it_false_begin; it != it_false_end; it++)
+////  if(!dynamic_cast<ir::retile_inst*>(*it))
+//    (*it)->set_mask_pred(false_mask);
+//  /* psi */
+//  ir::value *result = builder.create_merge(true_mask, true_value, false_mask, false_value);
+//  return result;
 }
 
 /* Assignment expression */

@@ -48,7 +48,7 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   stream->synchronize();
   triton::dnn::dot dot(M, N, K, AT, BT, ty, ty, 8, 8);
   // benchmark triton
-  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::PARTIAL_TUNING);}, stream);
+  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::NO_TUNING);}, stream);
   // benchmark cublas
   NumericT alpha = 1;
   NumericT beta = 0;
@@ -98,8 +98,8 @@ int main() {
   // shapes to benchmark
   std::vector<config_t> configs = {
 //    {false, false, 8192, 512, 512},
-    {false, true, 8192, 8192, 8192},
-    {false, true, 32768, 256, 512}
+    {false, true, 8192, 8192, 8192}
+//    {false, true, 32768, 256, 512}
 //    {true,  false, 8192, 512, 512},
 //    {true,  true,  8192, 512, 512}
   };

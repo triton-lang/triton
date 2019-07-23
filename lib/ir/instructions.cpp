@@ -349,31 +349,31 @@ cond_branch_inst::cond_branch_inst(basic_block *if_dst, basic_block *else_dst, v
 }
 
 // mask_inst
-mask_inst::mask_inst(value *pred, const std::string &name, instruction *next)
-  : instruction(pred->get_type(), 1, 2, name, next) {
-  set_operand(0, pred);
-}
+//mask_inst::mask_inst(value *pred, const std::string &name, instruction *next)
+//  : instruction(pred->get_type(), 1, 2, name, next) {
+//  set_operand(0, pred);
+//}
 
-mask_inst* mask_inst::create(value *pred, const std::string &name, instruction *next) {
-  return new mask_inst(pred, name, next);
-}
+//mask_inst* mask_inst::create(value *pred, const std::string &name, instruction *next) {
+//  return new mask_inst(pred, name, next);
+//}
 
-// merge_inst
-psi_inst::psi_inst(value *mask_true, value *value_true,
-                       value *mask_false, value *value_false,
-                       const std::string &name, instruction *next)
-    : instruction(value_true->get_type(), 4, 1, name, next) {
-  set_operand(0, mask_true);
-  set_operand(1, value_true);
-  set_operand(2, mask_false);
-  set_operand(3, value_false);
-}
+//// merge_inst
+//psi_inst::psi_inst(value *mask_true, value *value_true,
+//                       value *mask_false, value *value_false,
+//                       const std::string &name, instruction *next)
+//    : instruction(value_true->get_type(), 4, 1, name, next) {
+//  set_operand(0, mask_true);
+//  set_operand(1, value_true);
+//  set_operand(2, mask_false);
+//  set_operand(3, value_false);
+//}
 
-psi_inst* psi_inst::create(value *mask_true, value *value_true,
-                               value *mask_false, value *value_false,
-                               const std::string &name, instruction *next) {
-  return new psi_inst(mask_true, value_true, mask_false, value_false, name, next);
-}
+//psi_inst* psi_inst::create(value *mask_true, value *value_true,
+//                               value *mask_false, value *value_false,
+//                               const std::string &name, instruction *next) {
+//  return new psi_inst(mask_true, value_true, mask_false, value_false, name, next);
+//}
 
 
 
@@ -449,7 +449,16 @@ type *load_inst::get_pointee_type(type *ty) {
 }
 
 load_inst::load_inst(value *ptr, const std::string &name, instruction *next)
-  : unary_inst(get_pointee_type(ptr->get_type()), ptr, name, next) {
+  : unary_inst(get_pointee_type(ptr->get_type()), ptr, name, next), mask_(nullptr){
+}
+
+value *load_inst::get_mask() const {
+  return mask_;
+}
+
+value *load_inst::set_mask(value *mask) {
+  mask_ = mask;
+  return this;
 }
 
 load_inst* load_inst::create(value *ptr, const std::string &name, instruction *next) {
@@ -458,9 +467,18 @@ load_inst* load_inst::create(value *ptr, const std::string &name, instruction *n
 
 // store
 store_inst::store_inst(value *ptr, value *v, const std::string &name, instruction *next)
-    : instruction(type::get_void_ty(ptr->get_type()->get_context()), 2, 1, name, next) {
+    : instruction(type::get_void_ty(ptr->get_type()->get_context()), 2, 1, name, next), mask_(nullptr) {
   set_operand(0, ptr);
   set_operand(1, v);
+}
+
+value *store_inst::get_mask() const {
+  return mask_;
+}
+
+value *store_inst::set_mask(value *mask) {
+  mask_ = mask;
+  return this;
 }
 
 store_inst* store_inst::create(value *ptr, value *v, const std::string &name, instruction *next) {

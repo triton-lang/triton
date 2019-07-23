@@ -72,11 +72,11 @@ alignment_info::cst_info alignment_info::populate_is_constant(ir::value *v) {
     cst_info rhs = populate_is_constant(rhs_op);
     return cache({std::min(lhs.num_cst, rhs.num_cst), 0});
   }
-  if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
-    cst_info value_true = populate_is_constant(x->get_value_true());
-    cst_info value_false = populate_is_constant(x->get_value_false());
-    return cache({std::min(value_true.num_cst, value_false.num_cst), 0});
-  }
+//  if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
+//    cst_info value_true = populate_is_constant(x->get_value_true());
+//    cst_info value_false = populate_is_constant(x->get_value_false());
+//    return cache({std::min(value_true.num_cst, value_false.num_cst), 0});
+//  }
   if(v->get_type()->is_tile_ty())
     return cache({0, 0});
   if(auto *x = dynamic_cast<ir::phi_node*>(v)){
@@ -144,11 +144,11 @@ unsigned alignment_info::populate_max_contiguous(ir::value *v){
         return cache(gcd(lhs_max_contiguous, rhs_cst_info.num_cst));
     }
   }
-  if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
-    int value_true = populate_max_contiguous(x->get_value_true());
-    int value_false = populate_max_contiguous(x->get_value_false());
-    return cache(std::min(value_true, value_false));
-  }
+//  if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
+//    int value_true = populate_max_contiguous(x->get_value_true());
+//    int value_false = populate_max_contiguous(x->get_value_false());
+//    return cache(std::min(value_true, value_false));
+//  }
   if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v)){
     ir::value* lhs = x->get_operand(0);
     ir::value* rhs = x->get_operand(1);
@@ -240,11 +240,11 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
   if(auto *x = dynamic_cast<ir::get_global_range_inst*>(v)){
     return cache(v->get_type()->get_tile_shapes()[0]->get_value());
   }
-  if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
-    int value_true = populate_starting_multiple(x->get_value_true());
-    int value_false = populate_starting_multiple(x->get_value_false());
-    return cache(gcd(value_true, value_false));
-  }
+//  if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
+//    int value_true = populate_starting_multiple(x->get_value_true());
+//    int value_false = populate_starting_multiple(x->get_value_false());
+//    return cache(gcd(value_true, value_false));
+//  }
   if(auto *x = dynamic_cast<ir::phi_node*>(v)){
     // put a conservative initial value in phi node to avoid infinite recursion
     unsigned result = 1;

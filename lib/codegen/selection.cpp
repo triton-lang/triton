@@ -236,39 +236,6 @@ Constant *selection::llvm_constant(ir::constant *cst, LLVMContext &ctx) {
   throw std::runtime_error("unknown conversion from ir::constant to Constant");
 }
 
-inline Value *Reassociate(Value *V, IRBuilder<> &Builder){
-  BinaryOperator *BinOp = dyn_cast<BinaryOperator>(V);
-  if(BinOp)
-  if(BinOp->getOpcode()==BinaryOperator::BinaryOps::Add){
-    Value *LHS = Reassociate(BinOp->getOperand(0), Builder);
-    Value *RHS = Reassociate(BinOp->getOperand(1), Builder);
-    if(BinaryOperator *BinLHS = dyn_cast<BinaryOperator>(LHS))
-    if(BinLHS->getOpcode()==BinaryOperator::BinaryOps::Add){
-      Value *LLHS = BinLHS->getOperand(0);
-      Value *RLHS = BinLHS->getOperand(1);
-      // (cst + x) + y -> cst + (x + y)
-      if(isa<Constant>(LLHS))
-        return Builder.CreateAdd(LLHS, Builder.CreateAdd(RLHS, RHS));
-      // (x + cst) + y -> cst + (x + y)
-      if(isa<Constant>(RLHS))
-        return Builder.CreateAdd(RLHS, Builder.CreateAdd(LLHS, RHS));
-    }
-    if(BinaryOperator *BinRHS = dyn_cast<BinaryOperator>(RHS))
-    if(BinRHS->getOpcode()==BinaryOperator::BinaryOps::Add){
-      Value *LRHS = BinRHS->getOperand(0);
-      Value *RRHS = BinRHS->getOperand(1);
-      // x + (cst + y) -> cst + (x + y)
-      if(isa<Constant>(LRHS))
-        return Builder.CreateAdd(LRHS, Builder.CreateAdd(RRHS, LHS));
-      // x + (cst + y) -> cst + (x + y)
-      if(isa<Constant>(LRHS))
-        return Builder.CreateAdd(RRHS, Builder.CreateAdd(LRHS, LHS));
-    }
-    return BinOp;
-  }
-  return V;
-}
-
 /* convert ir::instruction to llvm::Instruction */
 Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir::value*)> value, IRBuilder<> &builder) {
   LLVMContext & ctx = builder.getContext();
@@ -320,13 +287,14 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     return builder.Insert(CastInst::Create(ii->get_op(), arg, dst_ty));
   }
   if(auto* ii = dynamic_cast<ir::getelementptr_inst*>(inst)){
+    // get pointer
+    Value *ptr = value(ii->get_operand(0));
+    // reassociate first index
     std::vector<Value*> idx_vals;
     std::transform(ii->idx_begin(), ii->idx_end(), std::back_inserter(idx_vals),
                    [&value](ir::value* x){ return value(x);});
     Type *source_ty = type(ii->get_source_elt_ty()->get_scalar_ty());
-    idx_vals[0] = Reassociate(idx_vals[0], builder);
-    Value *arg = value(ii->get_operand(0));
-    return builder.Insert(GetElementPtrInst::CreateInBounds(source_ty, arg, idx_vals));
+    return builder.Insert(GetElementPtrInst::CreateInBounds(source_ty, ptr, idx_vals));
   }
   if(ir::load_inst* ii = dynamic_cast<ir::load_inst*>(inst)){
     Value *ptr = value(ii->get_pointer_operand());
@@ -612,7 +580,7 @@ void selection::create_grids(std::vector<ir::value*> &grids,
   std::function<void(ir::value*)> bind_references = [&](ir::value *v)
   {
     // skip
-    if(!v->get_type()->is_tile_ty() || !seen.insert(v).second || dynamic_cast<ir::mask_inst*>(v))
+    if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
       return;
     // recurse
     if(auto *user = dynamic_cast<ir::user*>(v))
@@ -767,40 +735,32 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
   Module *module = block->getModule();
   LLVMContext &ctx = builder.getContext();
   Function *fn = block->getParent();
-  ir::value *mask = ins->get_mask_pred();
-  BasicBlock *last_block = nullptr;
-  auto set_mask_insert_pt = [&](indices_t idx){
-    if(mask){
-      distributed_tile *mask_tile = (distributed_tile*)tmap_.at(ins->get_mask_pred());
-      BasicBlock *block = pmap_.at({mask_tile, idx});
-      builder.SetInsertPoint(block->getTerminator());
-      last_block = last_block_.at({mask_tile, idx});
-    }
-  };
   // store
   if(auto *x = dynamic_cast<ir::store_inst*>(ins)) {
     distributed_tile* ptr = (distributed_tile*)tmap_.at(x->get_pointer_operand());
     tile *value = tmap_.at(x->get_value_operand());
-    distributed_tile *mask_tile;
-    if(mask)
-      mask_tile =  (distributed_tile*)tmap_.at(ins->get_mask_pred());
-    ptr->for_each([&](indices_t idx){
-      set_mask_insert_pt(idx);
-      Value *ptr_value = ptr->get_value(idx);
-      Value *value_value = value->get_value(idx);
-      Instruction *store;
-//      if(mask){
-//        Value *pred_value = mask_tile->get_value(idx);
-//        value_value = builder.CreateVectorSplat(1, value_value);
-//        pred_value = builder.CreateVectorSplat(1, pred_value);
-//        Type *ptr_ty = PointerType::get(value_value->getType(), ptr_value->getType()->getPointerAddressSpace());
-//        ptr_value = builder.CreateBitCast(ptr_value, ptr_ty);
-//        store = builder.CreateMaskedStore(value_value, ptr_value, 1, pred_value);
-//      }
-//      else
-        store = new StoreInst(value_value, ptr_value);
-      builder.Insert(store);
-    });
+    ir::value *mask = x->get_mask();
+    if(mask) {
+      distributed_tile* preds = (distributed_tile*)tmap_.at(mask);
+      ptr->for_each([&](indices_t idx){
+        BasicBlock *mask_then_bb = BasicBlock::Create(ctx, "mask_then", fn);
+        BasicBlock *mask_done_bb = BasicBlock::Create(ctx, "mask_done", fn);
+        builder.CreateCondBr(preds->get_value(idx), mask_then_bb, mask_done_bb);
+        builder.SetInsertPoint(mask_then_bb);
+        builder.CreateStore(value->get_value(idx), ptr->get_value(idx));
+        builder.CreateBr(mask_done_bb);
+        builder.SetInsertPoint(mask_done_bb);
+      });
+    }
+    else {
+      ptr->for_each([&](indices_t idx){
+        if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr->get_value(idx)))
+        if(BinaryOperator *binop = dyn_cast<BinaryOperator>(*gep->idx_begin())){
+          std::cout << isa<Constant>(binop->getOperand(0)) << " " << isa<Constant>(binop->getOperand(1)) << std::endl;
+        }
+        builder.CreateStore(value->get_value(idx), ptr->get_value(idx));
+      });
+    }
   }
   else {
     if(auto *x = dynamic_cast<ir::downcast_inst*>(ins)){
@@ -875,49 +835,49 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         result->set_value(idx, builder.CreateAdd(bin, offset));
       });
     }
-    // mask
-    else if(dynamic_cast<ir::mask_inst*>(ins)) {
-      distributed_tile* pred = (distributed_tile*)tmap_.at(ins->get_operand(0));
-      distributed_tile* mask_tile_true = (distributed_tile*)tmap_.at(ins->get_result(0));
-      distributed_tile* mask_tile_false = (distributed_tile*)tmap_.at(ins->get_result(1));
-      pred->for_each([&](indices_t idx){
-        BasicBlock *mask_then_bb   = BasicBlock::Create(ctx, "mask_then", fn);
-        BasicBlock* mask_else_bb = BasicBlock::Create(ctx, "mask_else", fn);
-        BasicBlock *mask_done_bb = BasicBlock::Create(ctx, "mask_done", fn);
-        builder.CreateCondBr(pred->get_value(idx), mask_then_bb, mask_else_bb);
-        builder.SetInsertPoint(mask_then_bb);
-        builder.CreateBr(mask_done_bb);
-        builder.SetInsertPoint(mask_else_bb);
-        builder.CreateBr(mask_done_bb);
-        builder.SetInsertPoint(mask_done_bb);
-        pmap_.insert({{mask_tile_true, idx}, mask_then_bb});
-        pmap_.insert({{mask_tile_false, idx}, mask_else_bb});
-        last_block_.insert({{mask_tile_true, idx}, mask_done_bb});
-        last_block_.insert({{mask_tile_false, idx}, mask_done_bb});
-      });
-    }
-    // merge
-    else if(auto *merge = dynamic_cast<ir::psi_inst*>(ins)) {
-      distributed_tile* mask_tile_true = (distributed_tile*)tmap_.at(merge->get_mask_true());
-      distributed_tile *value_tile_true = (distributed_tile*)tmap_.at(merge->get_value_true());
-      distributed_tile* mask_tile_false = (distributed_tile*)tmap_.at(merge->get_mask_false());
-      distributed_tile *value_tile_false = (distributed_tile*)tmap_.at(merge->get_value_false());
-      result->for_each([&](indices_t idx){
-        BasicBlock *block_true = pmap_.at({mask_tile_true, idx});
-        Value *value_true = value_tile_true->get_value(idx);
-        BasicBlock *block_false =  pmap_.at({mask_tile_false, idx});
-        Value *value_false = value_tile_false->get_value(idx);
-        BasicBlock *block_done = last_block_.at({mask_tile_true, idx});
-        if(block_done->getTerminator())
-          builder.SetInsertPoint(block_done->getTerminator());
-        else
-          builder.SetInsertPoint(block_done);
-        PHINode *phi = builder.CreatePHI(value_true->getType(), 2);
-        phi->addIncoming(value_true, block_true);
-        phi->addIncoming(value_false,block_false);
-        result->set_value(idx, phi);
-      });
-    }
+//    // mask
+//    else if(dynamic_cast<ir::mask_inst*>(ins)) {
+//      distributed_tile* pred = (distributed_tile*)tmap_.at(ins->get_operand(0));
+//      distributed_tile* mask_tile_true = (distributed_tile*)tmap_.at(ins->get_result(0));
+//      distributed_tile* mask_tile_false = (distributed_tile*)tmap_.at(ins->get_result(1));
+//      pred->for_each([&](indices_t idx){
+//        BasicBlock *mask_then_bb   = BasicBlock::Create(ctx, "mask_then", fn);
+//        BasicBlock* mask_else_bb = BasicBlock::Create(ctx, "mask_else", fn);
+//        BasicBlock *mask_done_bb = BasicBlock::Create(ctx, "mask_done", fn);
+//        builder.CreateCondBr(pred->get_value(idx), mask_then_bb, mask_else_bb);
+//        builder.SetInsertPoint(mask_then_bb);
+//        builder.CreateBr(mask_done_bb);
+//        builder.SetInsertPoint(mask_else_bb);
+//        builder.CreateBr(mask_done_bb);
+//        builder.SetInsertPoint(mask_done_bb);
+//        pmap_.insert({{mask_tile_true, idx}, mask_then_bb});
+//        pmap_.insert({{mask_tile_false, idx}, mask_else_bb});
+//        last_block_.insert({{mask_tile_true, idx}, mask_done_bb});
+//        last_block_.insert({{mask_tile_false, idx}, mask_done_bb});
+//      });
+//    }
+//    // merge
+//    else if(auto *merge = dynamic_cast<ir::psi_inst*>(ins)) {
+//      distributed_tile* mask_tile_true = (distributed_tile*)tmap_.at(merge->get_mask_true());
+//      distributed_tile *value_tile_true = (distributed_tile*)tmap_.at(merge->get_value_true());
+//      distributed_tile* mask_tile_false = (distributed_tile*)tmap_.at(merge->get_mask_false());
+//      distributed_tile *value_tile_false = (distributed_tile*)tmap_.at(merge->get_value_false());
+//      result->for_each([&](indices_t idx){
+//        BasicBlock *block_true = pmap_.at({mask_tile_true, idx});
+//        Value *value_true = value_tile_true->get_value(idx);
+//        BasicBlock *block_false =  pmap_.at({mask_tile_false, idx});
+//        Value *value_false = value_tile_false->get_value(idx);
+//        BasicBlock *block_done = last_block_.at({mask_tile_true, idx});
+//        if(block_done->getTerminator())
+//          builder.SetInsertPoint(block_done->getTerminator());
+//        else
+//          builder.SetInsertPoint(block_done);
+//        PHINode *phi = builder.CreatePHI(value_true->getType(), 2);
+//        phi->addIncoming(value_true, block_true);
+//        phi->addIncoming(value_false,block_false);
+//        result->set_value(idx, phi);
+//      });
+//    }
     // reshape
     else if(dynamic_cast<ir::reshape_inst*>(ins)) {
       ir::value* in = ins->get_operand(0);
@@ -934,7 +894,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     // splat
     else if(dynamic_cast<ir::splat_inst*>(ins)) {
       result->for_each([&](indices_t idx) {
-        set_mask_insert_pt(idx);
         result->set_value(idx, llvm_value(ins->get_operand(0), builder));
       });
     }
@@ -1163,12 +1122,9 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
       unsigned alignment = std::min(starting_multiple, max_contiguous);
       unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
-//      vector_size = result->axis(0).contiguous;
-//      vector_size = 1;
       std::map<unsigned, Value*> packets;
       distributed_tile *TP = (distributed_tile*)tmap_.at(ld->get_pointer_operand());
       result->for_each([&](indices_t idx){
-        set_mask_insert_pt(idx);
         unsigned linear = result->get_linear_index(idx);
         unsigned id = linear / vector_size;
         if(linear % vector_size == 0){
@@ -1189,20 +1145,14 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           else
             return llvm_value(x, builder);
         };
-        set_mask_insert_pt(idx);
         result->set_value(idx, llvm_inst(ins, value, builder));
       });
     }
   }
-  if(mask){
-    builder.SetInsertPoint(block);
-    if(last_block)
-      builder.SetInsertPoint(last_block);
-  }
 }
 
 void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
-  if(src->has_tile_result_or_op() || (src->get_mask_pred() && src->get_mask_pred()->get_type()->is_tile_ty())) {
+  if(src->has_tile_result_or_op()) {
     lower_tile_instruction(src, builder);
   }
   else {
@@ -1310,7 +1260,7 @@ void selection::run(ir::module &src, Module &dst) {
       dst_builder.SetInsertPoint(parent);
       for(ir::instruction *i: block->get_inst_list()){
         BasicBlock *current = dst_builder.GetInsertBlock();
-        bool phi_inserted = (dynamic_cast<ir::phi_node*>(i) || dynamic_cast<ir::psi_inst*>(i)) && !current->empty();
+        bool phi_inserted = (dynamic_cast<ir::phi_node*>(i)) && !current->empty();
         if(phi_inserted && current->getFirstNonPHI())
           dst_builder.SetInsertPoint(&*current->getFirstNonPHI());
         lower_instruction(i, dst_builder);

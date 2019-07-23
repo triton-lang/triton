@@ -29,34 +29,22 @@ ir::value* compound_statement::codegen(ir::module* mod) const{
 /* Expression statement */
 ir::value* expression_statement::codegen(ir::module *mod) const{
   ir::builder &builder = mod->get_builder();
-  ir::basic_block *block = builder.get_insert_block();
-  if(pred_) {
-    // generate mask
-    ir::value *pred = pred_->codegen(mod);
-    ir::mask_inst *mask = (ir::mask_inst*)builder.create_mask(pred);
-    // generate expression
-    unsigned szbegin = block->get_inst_list().size();
-    ir::value *expr = expr_->codegen(mod);
-    ir::basic_block::iterator begin = block->begin();
-    std::advance(begin, szbegin);
-    // set mask
-    ir::type *ty = expr->get_type();
-    for(auto it = begin; it != builder.get_insert_point(); it++)
-      (*it)->set_mask_pred(mask->get_result(0));
-//    if(auto *itn = dynamic_cast<ir::instruction*>(expr))
-//      itn->set_mask_pred(mask->get_result(0));
-    if(ty->is_void_ty())
-      return expr;
-    // merge with psi
-    ir::psi_inst *psi = (ir::psi_inst*)builder.create_merge(mask->get_result(0), expr,
-                                                                  mask->get_result(1), ir::undef_value::get(ty));
-    if(assignment_expression *assignment = dynamic_cast<assignment_expression*>(expr_)){
-      std::string name = ((named_expression*)assignment->lvalue())->id()->name();
-      mod->set_value(name, psi);
-    }
-    return psi;
+  ir::value *expr = expr_->codegen(mod);
+  if(pred_ == nullptr)
+    return expr;
+  ir::value *pred = pred_->codegen(mod);
+  if(auto *x = dynamic_cast<ir::load_inst*>(expr))
+    x->set_mask(pred);
+  else if(auto *x = dynamic_cast<ir::store_inst*>(expr))
+    x->set_mask(pred);
+  else
+    expr = builder.create_select(pred, expr, ir::undef_value::get(expr->get_type()));
+  if(assignment_expression *assignment = dynamic_cast<assignment_expression*>(expr_))
+  if(auto *named = dynamic_cast<named_expression*>(assignment)){
+    std::string name = named->lvalue()->id()->name();
+    mod->set_value(name, expr);
   }
-  return expr_->codegen(mod);
+  return expr;
 }
 
 /* For statement */

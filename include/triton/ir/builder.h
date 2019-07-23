@@ -57,8 +57,8 @@ public:
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
   value* create_ret_void();
   // Tile-level control flow
-  value *create_mask(value *pred, const std::string &name = "");
-  value *create_merge(value *mask_true, value *value_true, value *mask_false, value *value_false, const std::string &name = "");
+//  value *create_mask(value *pred, const std::string &name = "");
+//  value *create_merge(value *mask_true, value *value_true, value *mask_false, value *value_false, const std::string &name = "");
   // Cast instructions
   value *create_cast(cast_inst::op_t op, value *v, type *dst_ty, const std::string &name = "");
   value* create_si_to_fp(value *src, type *dst_ty, const std::string &name = "");

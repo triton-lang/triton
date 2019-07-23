@@ -20,10 +20,10 @@ class context;
 class result_reference;
 class instruction: public user{
 public:
-  struct mask_info_t {
-    value *pred;
-    value *else_value;
-  };
+//  struct mask_info_t {
+//    value *pred;
+//    value *else_value;
+//  };
 
   virtual std::string repr_impl() const = 0;
 
@@ -37,11 +37,11 @@ public:
   const basic_block *get_parent() const                       { return parent_;  }
   basic_block *get_parent()                                   { return parent_;  }
   void erase_from_parent();
-  // mask
-  void set_mask_pred(value *pred)                             { resize_hidden(1); set_operand(get_num_operands(), pred); }
-  value* get_mask_pred() const                                { if(get_num_hidden() == 0) return nullptr; return get_operand(get_num_operands()); }
-  void set_mask_else(value *x)                                { resize_hidden(2); set_operand(get_num_operands() + 1, x); }
-  value* get_mask_else() const                                { if(get_num_hidden() < 2) return nullptr; return get_operand(get_num_operands() + 1);  }
+//  // mask
+//  void set_mask_pred(value *pred)                             { resize_hidden(1); set_operand(get_num_operands(), pred); }
+//  value* get_mask_pred() const                                { if(get_num_hidden() == 0) return nullptr; return get_operand(get_num_operands()); }
+//  void set_mask_else(value *x)                                { resize_hidden(2); set_operand(get_num_operands() + 1, x); }
+//  value* get_mask_else() const                                { if(get_num_hidden() < 2) return nullptr; return get_operand(get_num_operands() + 1);  }
   // helpers
   bool has_tile_result_or_op();
   // repr
@@ -55,8 +55,8 @@ public:
   unsigned get_metadata(ir::metadata::kind_t kind)            { return metadatas_[kind];}
 private:
   basic_block *parent_;
-  value *pred_;
-  value *mask_pred_;
+//  value *pred_;
+//  value *mask_pred_;
   std::vector<value*> results_;
   std::map<ir::metadata::kind_t, unsigned> metadatas_;
 };
@@ -335,34 +335,34 @@ public:
                               const std::string &name = "", instruction *next = nullptr);
 };
 
-// mask
-class mask_inst: public instruction {
-private:
-  std::string repr_impl() const { return "mask"; }
-  mask_inst(ir::value *pred, const std::string &name, instruction *next);
+//// mask
+//class mask_inst: public instruction {
+//private:
+//  std::string repr_impl() const { return "mask"; }
+//  mask_inst(ir::value *pred, const std::string &name, instruction *next);
 
-public:
-  static mask_inst* create(ir::value *pred, const std::string &name = "", instruction *next = nullptr);
-};
+//public:
+//  static mask_inst* create(ir::value *pred, const std::string &name = "", instruction *next = nullptr);
+//};
 
-// merge
-class psi_inst: public instruction {
-private:
-  std::string repr_impl() const { return "merge"; }
-  psi_inst(ir::value *mask_true, ir::value *value_true,
-             ir::value *mask_false, ir::value *value_false,
-             const std::string &name, instruction *next);
+//// merge
+//class psi_inst: public instruction {
+//private:
+//  std::string repr_impl() const { return "merge"; }
+//  psi_inst(ir::value *mask_true, ir::value *value_true,
+//             ir::value *mask_false, ir::value *value_false,
+//             const std::string &name, instruction *next);
 
-public:
-  static psi_inst* create(ir::value *mask_true, ir::value *value_true,
-                            ir::value *mask_false, ir::value *value_false,
-                            const std::string &name = "", instruction *next = nullptr);
-  ir::value *get_mask_true() { return get_operand(0); }
-  ir::value *get_value_true() { return get_operand(1); }
-  ir::value *get_mask_false() { return get_operand(2); }
-  ir::value *get_value_false() { return get_operand(3); }
+//public:
+//  static psi_inst* create(ir::value *mask_true, ir::value *value_true,
+//                            ir::value *mask_false, ir::value *value_false,
+//                            const std::string &name = "", instruction *next = nullptr);
+//  ir::value *get_mask_true() { return get_operand(0); }
+//  ir::value *get_value_true() { return get_operand(1); }
+//  ir::value *get_mask_false() { return get_operand(2); }
+//  ir::value *get_value_false() { return get_operand(3); }
 
-};
+//};
 
 //===----------------------------------------------------------------------===//
 //                               getelementptr_inst classes
@@ -408,9 +408,14 @@ private:
 public:
   // accessors
   value *get_pointer_operand() { return get_operand(0); }
+  value *get_mask() const;
+  value *set_mask(value *mask);
   // factory method
   static load_inst* create(value *ptr, const std::string &name = "",
                            instruction *next = nullptr);
+
+private:
+  value *mask_;
 };
 
 class store_inst: public instruction{
@@ -421,9 +426,14 @@ private:
 public:
   value *get_pointer_operand() { return get_operand(0); }
   value *get_value_operand() { return get_operand(1); }
+  value *get_mask() const;
+  value *set_mask(value *mask);
   // factory method
   static store_inst* create(value* ptr, value *v, const std::string &name = "",
                             instruction *next = nullptr);
+
+private:
+  ir::value *mask_;
 };
 
 //===----------------------------------------------------------------------===//
