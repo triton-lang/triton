@@ -36,7 +36,7 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, a
   /* the current template has not already been compiled */
   if(m_jit.find(this) == m_jit.end()) {
     base* clone = this->clone();
-    jit = m_jit.emplace(clone, std::unique_ptr<rt::jit>(new rt::jit(ctx))).first->second.get();
+    jit = m_jit.emplace(clone, std::unique_ptr<rt::jit>(new rt::jit(ctx, 8))).first->second.get();
     std::ostringstream oss;
     clone->triton_c_src(oss);
     std::string src = oss.str();

@@ -781,9 +781,24 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
   if(auto *x = dynamic_cast<ir::store_inst*>(ins)) {
     distributed_tile* ptr = (distributed_tile*)tmap_.at(x->get_pointer_operand());
     tile *value = tmap_.at(x->get_value_operand());
+    distributed_tile *mask_tile;
+    if(mask)
+      mask_tile =  (distributed_tile*)tmap_.at(ins->get_mask_pred());
     ptr->for_each([&](indices_t idx){
       set_mask_insert_pt(idx);
-      StoreInst *store = new StoreInst(value->get_value(idx), ptr->get_value(idx));
+      Value *ptr_value = ptr->get_value(idx);
+      Value *value_value = value->get_value(idx);
+      Instruction *store;
+//      if(mask){
+//        Value *pred_value = mask_tile->get_value(idx);
+//        value_value = builder.CreateVectorSplat(1, value_value);
+//        pred_value = builder.CreateVectorSplat(1, pred_value);
+//        Type *ptr_ty = PointerType::get(value_value->getType(), ptr_value->getType()->getPointerAddressSpace());
+//        ptr_value = builder.CreateBitCast(ptr_value, ptr_ty);
+//        store = builder.CreateMaskedStore(value_value, ptr_value, 1, pred_value);
+//      }
+//      else
+        store = new StoreInst(value_value, ptr_value);
       builder.Insert(store);
     });
   }

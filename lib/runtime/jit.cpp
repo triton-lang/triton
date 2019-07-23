@@ -164,8 +164,8 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
   auto mps = passes_0.tune.get_params(tt_module_0);
   // iterate over parameters
   tune_res_t best;
-  std::mutex mutex;
   // update_best
+  std::mutex mutex;
   auto update_best = [&](const std::vector<unsigned> params){
     std::map<ir::value*, std::vector<std::string>> errors;
     unsigned i = 0;
@@ -211,9 +211,9 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
         best.perf = perf;
         best.params = params;
       }
-//      for(size_t i = 0; i < params.size(); i++)
-//        std::cout << ((i==0)?"":", ") << params[i] << std::flush;
-//      std::cout << ", " << perf << " [ " << best.perf << " ] " << std::endl;
+      for(size_t i = 0; i < params.size(); i++)
+        std::cout << ((i==0)?"":", ") << params[i] << std::flush;
+      std::cout << ", " << perf << " [ " << best.perf << " ] " << std::endl;
     }
   };
 

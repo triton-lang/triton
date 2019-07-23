@@ -215,7 +215,7 @@ void tune::run(ir::module &mod) {
       node_t node = *nodes_.begin();
       if(fragments_[node] == STRIDED_SCAN) {
         ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 1, 1);
-        ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 2, 64);
+        ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
         connected_components(node, {nts, mts}, {"nts", "mts"}, nodes_, dependencies_, group_id++);
         nts->set_value(1);
       }
@@ -239,7 +239,7 @@ void tune::run(ir::module &mod) {
       size_t addr_space = ptr_ty->get_pointer_address_space();
       if(addr_space < 4){
         ir::type *ty = mod.get_builder().get_int32_ty();
-        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  4, 8));
+        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  8, 8));
         *params_.at(i).at("nts.d0") = *tmp;
       }
     }

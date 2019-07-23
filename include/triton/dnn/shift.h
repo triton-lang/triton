@@ -73,6 +73,15 @@ public:
   // accessors
   size_t c_size();
   std::vector<int32_t> c_shapes();
+  // equivalent GEMM
+  bool AT() const;
+  bool BT() const;
+  size_t M() const;
+  size_t N() const;
+  size_t K() const;
+  size_t lda() const;
+  size_t ldb() const;
+  size_t ldc() const;
   // number of flops
   size_t num_flops() const;
   // source

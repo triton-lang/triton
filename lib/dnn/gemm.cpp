@@ -129,10 +129,8 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
     c = dot()" + usea + ", " + useb + R"(, c);
     pa = pa + TK)" + lda0 + R"(;
     pb = pb + TK)" + ldb0 + R"(;
-    int1 checka[)" + AS + R"(] = k > bound;
-    int1 checkb[)" + BS + R"(] = k > bound;
-    @checka a = *pa;
-    @checkb b = *pb;
+    a = *pa;
+    b = *pb;
   }
   int32 rxc[TM] = ridx*TM + (0 ... TM);
   int32 ryc[TN] = ridy*TN + (0 ... TN);
