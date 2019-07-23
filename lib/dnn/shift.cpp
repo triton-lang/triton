@@ -180,6 +180,30 @@ size_t shift::num_flops() const {
   return 2.*M_*N_*K_;
 }
 
+bool shift::AT() const
+{ return AT_; }
+
+bool shift::BT() const
+{ return BT_; }
+
+size_t shift::M() const
+{ return M_; }
+
+size_t shift::N() const
+{ return N_; }
+
+size_t shift::K() const
+{ return K_; }
+
+size_t shift::lda() const
+{ return AT_ ? K_ : M_; }
+
+size_t shift::ldb() const
+{ return BT_ ? N_ : K_; }
+
+size_t shift::ldc() const
+{ return M_; }
+
 bool shift::operator <(const base& other) const{
   auto *y = dynamic_cast<const shift*>(&other);
   if(!y)
@@ -265,10 +289,6 @@ void shift::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(30, (int32_t)grid[2]);
   if(locks_)
     ((driver::cu_buffer*)locks_)->set_zero(stream, 2*max_locks_*4);
-  if(op_ == FPROP || op_ == BPROP){
-    size_t c_nbytes = (c_ty_ == "fp16") ? 2 : 4;
-    ((driver::cu_buffer*)c)->set_zero(stream, c_size()*c_nbytes);
-  }
   stream->enqueue(kernel, grid, {info.num_threads, 1, 1});
 }
 
