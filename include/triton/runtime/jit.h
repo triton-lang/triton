@@ -18,6 +18,7 @@
 #include "triton/codegen/shmem_info.h"
 #include "triton/codegen/shmem_barriers.h"
 #include "triton/codegen/alignment_info.h"
+#include "triton/codegen/reassociate.h"
 #include "triton/codegen/target.h"
 #include "triton/codegen/vectorize.h"
 #include "triton/runtime/launch_info.h"
@@ -70,10 +71,12 @@ public:
     void target_independent(ir::module &module) {
       optimize_dot.run(module);
       optimize_trans.run(module);
-//      ir::print(module, std::cout);
+      ir::print(module, std::cout);
+      reassociate_.run(module);
     }
 
     void target_dependent(ir::module &module) {
+      ir::print(module, std::cout);
       alignment_info.run(module);
       if(target_->is_gpu()){
         shmem_info.run(module);
@@ -95,6 +98,7 @@ public:
     codegen::optimize_cse optimize_cse;
     codegen::optimize_trans optimize_trans;
     codegen::alignment_info alignment_info;
+    codegen::reassociate reassociate_;
     codegen::target* target_;
   };
 

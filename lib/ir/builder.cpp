@@ -90,13 +90,13 @@ value *builder::create_ret_void() {
 //                       tile-level control-flow instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_mask(value *pred, const std::string &name){
-  return insert(mask_inst::create(pred, name));
-}
+//value *builder::create_mask(value *pred, const std::string &name){
+//  return insert(mask_inst::create(pred, name));
+//}
 
-value *builder::create_merge(value *mask_true, value *value_true, value *mask_false, value *value_false, const std::string &name) {
-  return insert(psi_inst::create(mask_true, value_true, mask_false, value_false, name));
-}
+//value *builder::create_merge(value *mask_true, value *value_true, value *mask_false, value *value_false, const std::string &name) {
+//  return insert(psi_inst::create(mask_true, value_true, mask_false, value_false, name));
+//}
 
 
 //===----------------------------------------------------------------------===//
