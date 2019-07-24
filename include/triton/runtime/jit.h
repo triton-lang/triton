@@ -66,18 +66,19 @@ public:
                       optimize_cse(),
                       optimize_trans(),
                       alignment_info(),
+                      reassociate(&tune),
                       target_(target) { }
 
     void target_independent(ir::module &module) {
       optimize_dot.run(module);
       optimize_trans.run(module);
-      ir::print(module, std::cout);
-      reassociate_.run(module);
+//      ir::print(module, std::cout);
     }
 
     void target_dependent(ir::module &module) {
-      ir::print(module, std::cout);
       alignment_info.run(module);
+      reassociate.run(module);
+      ir::print(module, std::cout);
       if(target_->is_gpu()){
         shmem_info.run(module);
         shmem_liveness.run(module);
@@ -98,7 +99,7 @@ public:
     codegen::optimize_cse optimize_cse;
     codegen::optimize_trans optimize_trans;
     codegen::alignment_info alignment_info;
-    codegen::reassociate reassociate_;
+    codegen::reassociate reassociate;
     codegen::target* target_;
   };
 

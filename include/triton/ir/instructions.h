@@ -2,6 +2,7 @@
 #define TDL_INCLUDE_IR_INSTRUCTIONS_H
 
 #include <vector>
+#include "triton/ir/constant.h"
 #include "triton/ir/value.h"
 #include "triton/ir/type.h"
 #include "triton/ir/metadata.h"
@@ -650,6 +651,31 @@ private:
 public:
   static vectorize_inst* create(value *arg, const std::string &name = "", instruction *next = nullptr);
 };
+
+// On NVIDIA, implementation is such that
+// constant_range = nv_dynamic_range_idx + nv_static_range_idx
+// so as to enable re-association on nv_static_range_idx which is constant
+class nv_dynamic_range_idx_inst: public instruction {
+private:
+  nv_dynamic_range_idx_inst(type *ty, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "nv_dynamic_range_idx"; }
+
+public:
+  static nv_dynamic_range_idx_inst* create(type *ty, const std::string &name = "", instruction *next = nullptr);
+};
+
+class nv_static_range_idx: public constant {
+private:
+  nv_static_range_idx(constant_range *range);
+
+public:
+  static nv_static_range_idx *get(constant_range* range);
+  constant_range* get_range() const;
+
+private:
+  constant_range *range_;
+};
+
 
 }
 }

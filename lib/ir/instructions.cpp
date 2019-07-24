@@ -688,22 +688,48 @@ instruction* atomic_add_inst::create(value *ptr, value *val, const std::string &
 //===----------------------------------------------------------------------===//
 //                               intrinsic instructions
 //===----------------------------------------------------------------------===//
+// copy to shared
 copy_to_shared_inst* copy_to_shared_inst::create(value *arg, const std::string &name,
                                                  instruction *next) {
   return new copy_to_shared_inst(arg->get_type(), arg, name, next);
 }
 
+// vectorize
 vectorize_inst* vectorize_inst::create(value *arg, const std::string &name, instruction *next) {
   return new vectorize_inst(arg->get_type(), arg, name, next);
 }
 
+// barrier
 barrier_inst::barrier_inst(context &ctx, const std::string &name,
                                                        instruction *next)
-  : instruction(type::get_void_ty(ctx), 0, 0, name, next){ }
+  : instruction(type::get_void_ty(ctx), 0, 0, name, next) { }
 
 barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instruction *next) {
   return new barrier_inst(ctx, name, next);
 }
+
+// nv_dynamic_range_idx
+nv_dynamic_range_idx_inst::nv_dynamic_range_idx_inst(type *ty, const std::string &name, instruction *next)
+  : instruction(ty, 0, 1, name, next) { }
+
+nv_dynamic_range_idx_inst* nv_dynamic_range_idx_inst::create(type *ty, const std::string &name, instruction *next) {
+  return new nv_dynamic_range_idx_inst(ty, name, next);
+}
+
+// nv_static_range_idx
+nv_static_range_idx::nv_static_range_idx(constant_range *range)
+  : constant(range->get_type(), 0), range_(range) { }
+
+constant_range* nv_static_range_idx::get_range() const
+{ return range_; }
+
+nv_static_range_idx* nv_static_range_idx::get(constant_range* range) {
+  static std::map<constant_range*, nv_static_range_idx*> cache;
+  if(cache.find(range) == cache.end())
+    cache.insert({range, new nv_static_range_idx(range)});
+  return cache.at(range);
+}
+
 
 }
 }

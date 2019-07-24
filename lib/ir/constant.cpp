@@ -59,6 +59,8 @@ constant_int *constant_int::get(type *ty, uint64_t value) {
 // constant_range
 // FIXME use something like APInt
 
+//"[" + std::to_string(first->get_value()) + " ... " + std::to_string(ty->get_tile_shapes()[0]->get_value()) + "]"
+
 constant_range::constant_range(type *ty, constant_int *first, constant_int *last)
   : constant(ty, 0), first_(first), last_(last){ }
 

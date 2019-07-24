@@ -228,6 +228,12 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
   if(auto *x = dynamic_cast<ir::constant_range*>(v)){
     return cache(x->get_first()->get_value());
   }
+  if(auto *x = dynamic_cast<ir::nv_dynamic_range_idx_inst*>(v)){
+    return cache(128);
+  }
+  if(auto *x = dynamic_cast<ir::nv_static_range_idx*>(v)){
+    return cache(x->get_range()->get_first()->get_value());
+  }
   if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v)){
     int lhs = populate_starting_multiple(x->get_operand(0));
     int rhs = populate_starting_multiple(x->get_operand(1));
@@ -280,6 +286,12 @@ unsigned alignment_info::get_max_contiguous(ir::value* v) const {
   return max_contiguous_.at(v);
 }
 
+void alignment_info::copy(ir::value *dst, ir::value *src) {
+  starting_multiple_[dst] = starting_multiple_[src];
+  max_contiguous_[dst] = max_contiguous_[src];
+  is_constant_[dst] = is_constant_[src];
+}
+
 ///TODO: This doesn't seem to work in DOT-NN, DOT-TT, DOT-TN
 void alignment_info::run(ir::module &mod) {
   // populate constant
@@ -301,7 +313,7 @@ void alignment_info::run(ir::module &mod) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list()){
     populate_max_contiguous(i);
-//    std::cout << i->get_name() << " " << is_constant_.at(i).num_cst << " " << max_contiguous_.at(i) << " " << starting_multiple_.at(i) << std::endl;
+    std::cout << i->get_name() << " " << is_constant_.at(i).num_cst << " " << max_contiguous_.at(i) << " " << starting_multiple_.at(i) << std::endl;
   }
 }
 

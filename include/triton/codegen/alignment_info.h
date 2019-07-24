@@ -32,6 +32,7 @@ public:
   void run(ir::module &mod);
   unsigned get_starting_multiple(ir::value* v) const;
   unsigned get_max_contiguous(ir::value* v) const;
+  void copy(ir::value *dst, ir::value *src);
 
 private:
   std::map<ir::value*, cst_info> is_constant_;
