@@ -66,7 +66,7 @@ public:
                       optimize_cse(),
                       optimize_trans(),
                       alignment_info(),
-                      reassociate(&tune),
+                      reassociate(&tune, &alignment_info),
                       target_(target) { }
 
     void target_independent(ir::module &module) {
@@ -79,7 +79,7 @@ public:
       alignment_info.run(module);
       reassociate.run(module);
       ir::print(module, std::cout);
-      //exit(EXIT_FAILURE);
+//      exit(EXIT_FAILURE);
       if(target_->is_gpu()){
         shmem_info.run(module);
         shmem_liveness.run(module);
