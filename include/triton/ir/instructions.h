@@ -384,6 +384,7 @@ public:
   type *get_source_elt_ty() { return source_elt_ty; }
   op_iterator idx_begin()       { return op_begin() + 1; }
   op_iterator idx_end()         { return op_end(); }
+  value *get_pointer_operand()  { return *op_begin(); }
 
   // factory methods
   static getelementptr_inst* create(value *ptr, const std::vector<value*> &idx,
