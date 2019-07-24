@@ -79,6 +79,7 @@ public:
       alignment_info.run(module);
       reassociate.run(module);
       ir::print(module, std::cout);
+      //exit(EXIT_FAILURE);
       if(target_->is_gpu()){
         shmem_info.run(module);
         shmem_liveness.run(module);

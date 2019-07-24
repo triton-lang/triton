@@ -14,6 +14,7 @@ class module;
 class value;
 class builder;
 class instruction;
+class getelementptr_inst;
 }
 
 namespace codegen{
@@ -21,9 +22,15 @@ namespace codegen{
 class tune;
 
 class reassociate {
+  struct cst_info {
+    ir::value* sta;
+    ir::value* dyn;
+  };
+
 private:
   ir::instruction* is_bin_add(ir::value *x);
-  ir::value *reorder_op(ir::value *value, ir::builder &builder, std::vector<ir::instruction*>& to_delete, ir::value *&noncst, ir::value *&cst);
+  ir::value *reassociate_idx(ir::value *value, ir::builder &builder, std::vector<ir::instruction*>& to_delete, ir::value *&noncst, ir::value *&cst);
+  ir::value *reassociate_ptr(ir::getelementptr_inst* pz, ir::builder &builder, std::map<ir::value*, cst_info> &offsets);
 
 public:
   reassociate(tune *params);
