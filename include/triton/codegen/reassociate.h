@@ -20,24 +20,26 @@ class getelementptr_inst;
 namespace codegen{
 
 class tune;
+class alignment_info;
 
 class reassociate {
   struct cst_info {
-    ir::value* sta;
-    ir::value* dyn;
+    ir::getelementptr_inst* dyn_ptr;
+    ir::getelementptr_inst* sta_ptr;
   };
 
 private:
   ir::instruction* is_bin_add(ir::value *x);
-  ir::value *reassociate_idx(ir::value *value, ir::builder &builder, std::vector<ir::instruction*>& to_delete, ir::value *&noncst, ir::value *&cst);
+  ir::value *reassociate_idx(ir::value *value, ir::builder &builder, ir::value *&noncst, ir::value *&cst);
   ir::value *reassociate_ptr(ir::getelementptr_inst* pz, ir::builder &builder, std::map<ir::value*, cst_info> &offsets);
 
 public:
-  reassociate(tune *params);
+  reassociate(tune *params, alignment_info *align);
   void run(ir::module& module);
 
 private:
   tune* params_;
+  alignment_info* align_;
 };
 
 }
