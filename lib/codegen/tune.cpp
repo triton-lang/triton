@@ -133,7 +133,7 @@ tune::fragment_t tune::get_fragmentation_type(node_t x, graph_t &graph){
 }
 
 void tune::connected_components(node_t x, const std::vector<ir::metaparameter *> mps, const std::vector<std::string> prefixes, std::set<node_t> &nodes, graph_t &graph, unsigned group_id) {
-  groups_[x.first][x.second] = group_id;
+  groups_[x.first].insert({x.second, group_id});
   if(nodes.find(x) != nodes.end()){
     nodes.erase(x);
     std::string suffix = ".d" + std::to_string(x.second);
@@ -145,11 +145,11 @@ void tune::connected_components(node_t x, const std::vector<ir::metaparameter *>
       if(auto mp = dynamic_cast<ir::metaparameter*>(shape))
         params_[x.first].insert({"shape" + suffix, mp});
     }
-    if(auto range = dynamic_cast<ir::get_global_range_inst*>(x.first)){
-      unsigned ax = range->get_axis();
-      global_range_sizes_[ax] = params_[x.first].at("shape.d0");
-      num_global_ranges_ = std::max(num_global_ranges_, ax + 1);
-    }
+//    if(auto range = dynamic_cast<ir::get_global_range_inst*>(x.first)){
+//      unsigned ax = range->get_axis();
+//      global_range_sizes_[ax] = params_[x.first].at("shape.d0");
+//      num_global_ranges_ = std::max(num_global_ranges_, ax + 1);
+//    }
     if(static_params_.find(x) != static_params_.end()){
       for(ir::metaparameter *mp: mps)
         mp->set_value(static_params_.at(x));
@@ -189,6 +189,14 @@ unsigned tune::get_param_group(ir::value *value, unsigned ax) {
   unsigned result = groups_.at(value).at(ax);
   return result;
 }
+
+//TODO: This shouldn't exist!
+void tune::copy(ir::value *dst, ir::value *src) {
+  params_[dst] = params_[src];
+  groups_[dst] = groups_[src];
+  fragments_[{dst, 0}] = fragments_[{src, 0}];
+}
+
 
 void tune::run(ir::module &mod) {
   ir::context &ctx = mod.get_context();

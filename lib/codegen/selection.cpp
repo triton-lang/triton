@@ -690,10 +690,20 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     distributed_tile *T = new distributed_tile(ty, shapes, axes, builder, vectorize);
     tmap_.insert({v, T});
     // constant range
-    if(dynamic_cast<ir::constant*>(v) && !dynamic_cast<ir::undef_value*>(v)){
+    if(dynamic_cast<ir::constant_range*>(v)){
       T->for_each([&](indices_t idx){
         assert(idx.size() == 1);
         T->set_value(idx, idx[0]);
+      });
+    }
+    if(dynamic_cast<ir::nv_static_range_idx*>(v)){
+      T->for_each([&](indices_t idx){
+        assert(idx.size() == 1);
+        BinaryOperator *bin_add = dyn_cast<BinaryOperator>(idx[0]);
+        assert(bin_add);
+        Value *res = bin_add->getOperand(1);
+        assert(isa<Constant>(res));
+        T->set_value(idx, res);
       });
     }
 
@@ -833,6 +843,16 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       result->for_each([&](indices_t idx){
         BinaryOperator *bin = static_cast<BinaryOperator*>(idx[0]);
         result->set_value(idx, builder.CreateAdd(bin, offset));
+      });
+    }
+    // nv_dynamic_range_idx_inst
+    if(dynamic_cast<ir::nv_dynamic_range_idx_inst*>(ins)){
+      result->for_each([&](indices_t idx){
+        assert(idx.size() == 1);
+        BinaryOperator *bin_add = dyn_cast<BinaryOperator>(idx[0]);
+        assert(bin_add);
+        Value *res = bin_add->getOperand(0);
+        result->set_value(idx, res);
       });
     }
 //    // mask

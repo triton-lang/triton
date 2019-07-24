@@ -44,7 +44,7 @@ public:
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   fragment_t get_fragment(ir::value *value, unsigned ax) { return fragments_.at({value, ax}); }
   unsigned get_param_group(ir::value *value, unsigned ax);
-  void copy(ir::value *dst, ir::value *src) { params_[dst] = params_[src]; groups_[dst] = groups_[src]; }
+  void copy(ir::value *dst, ir::value *src);
   bool check_constraints(std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);
   void init(ir::module &mod);
