@@ -270,6 +270,7 @@ std::string cast_inst::repr_impl() const {
 }
 // TODO
 bool cast_inst::is_valid(op_t op, value *arg, type *ty) {
+  assert(arg->get_type()->is_tile_ty() == ty->is_tile_ty());
   return true;
 }
 
@@ -348,34 +349,6 @@ cond_branch_inst::cond_branch_inst(basic_block *if_dst, basic_block *else_dst, v
   set_operand(2, cond);
 }
 
-// mask_inst
-//mask_inst::mask_inst(value *pred, const std::string &name, instruction *next)
-//  : instruction(pred->get_type(), 1, 2, name, next) {
-//  set_operand(0, pred);
-//}
-
-//mask_inst* mask_inst::create(value *pred, const std::string &name, instruction *next) {
-//  return new mask_inst(pred, name, next);
-//}
-
-//// merge_inst
-//psi_inst::psi_inst(value *mask_true, value *value_true,
-//                       value *mask_false, value *value_false,
-//                       const std::string &name, instruction *next)
-//    : instruction(value_true->get_type(), 4, 1, name, next) {
-//  set_operand(0, mask_true);
-//  set_operand(1, value_true);
-//  set_operand(2, mask_false);
-//  set_operand(3, value_false);
-//}
-
-//psi_inst* psi_inst::create(value *mask_true, value *value_true,
-//                               value *mask_false, value *value_false,
-//                               const std::string &name, instruction *next) {
-//  return new psi_inst(mask_true, value_true, mask_false, value_false, name, next);
-//}
-
-
 
 //===----------------------------------------------------------------------===//
 //                               getelementptr_inst classes
@@ -440,6 +413,13 @@ getelementptr_inst *getelementptr_inst::create(value *ptr, const std::vector<val
 //===----------------------------------------------------------------------===//
 //                               load_inst/store_inst classes
 //===----------------------------------------------------------------------===//
+
+// io_inst
+io_inst::io_inst(type *ty, unsigned num_ops, unsigned num_results, const std::string &name, instruction *next)
+  : instruction(ty, num_ops, num_results, name, next)
+{ }
+
+// load
 type *load_inst::get_pointee_type(type *ty) {
   type *scalar_ty = ty->get_scalar_ty();
   type *pointee_ty = scalar_ty->get_pointer_element_ty();
@@ -448,43 +428,52 @@ type *load_inst::get_pointee_type(type *ty) {
   return pointee_ty;
 }
 
-load_inst::load_inst(value *ptr, const std::string &name, instruction *next)
-  : unary_inst(get_pointee_type(ptr->get_type()), ptr, name, next), mask_(nullptr){
-}
-
-value *load_inst::get_mask() const {
-  return mask_;
-}
-
-value *load_inst::set_mask(value *mask) {
-  mask_ = mask;
-  return this;
+load_inst::load_inst(value *ptr, unsigned num_extra_ops, const std::string &name, instruction *next)
+  : io_inst(get_pointee_type(ptr->get_type()), 1 + num_extra_ops, 1, name, next) {
+  set_operand(0, ptr);
 }
 
 load_inst* load_inst::create(value *ptr, const std::string &name, instruction *next) {
-  return new load_inst(ptr, name, next);
+  return new load_inst(ptr, 0, name, next);
 }
+
+// masked load
+masked_load_inst::masked_load_inst(value *ptr, value *mask, value *false_value,
+                                   const std::string &name, instruction *next)
+  : load_inst(ptr, 2, name, next) {
+  set_operand(1, mask);
+  set_operand(2, false_value);
+}
+
+masked_load_inst* masked_load_inst::create(value *ptr, value *mask, value *false_value,
+                                           const std::string &name, instruction *next) {
+  return new masked_load_inst(ptr, mask, false_value, name, next);
+}
+
 
 // store
-store_inst::store_inst(value *ptr, value *v, const std::string &name, instruction *next)
-    : instruction(type::get_void_ty(ptr->get_type()->get_context()), 2, 1, name, next), mask_(nullptr) {
+store_inst::store_inst(value *ptr, value *val, unsigned num_extra_ops,
+                       const std::string &name, instruction *next)
+    : io_inst(type::get_void_ty(ptr->get_type()->get_context()), 2 + num_extra_ops, 1, name, next)  {
   set_operand(0, ptr);
-  set_operand(1, v);
+  set_operand(1, val);
 }
 
-value *store_inst::get_mask() const {
-  return mask_;
+store_inst* store_inst::create(value *ptr, value *val,
+                               const std::string &name, instruction *next) {
+  return new store_inst(ptr, val, 0, name, next);
 }
 
-value *store_inst::set_mask(value *mask) {
-  mask_ = mask;
-  return this;
+// masked store
+masked_store_inst::masked_store_inst(value *ptr, value *val, value *mask,
+                                     const std::string &name, instruction *next)
+  : store_inst(ptr, val, 1, name, next) {
+  set_operand(2, mask);
 }
 
-store_inst* store_inst::create(value *ptr, value *v, const std::string &name, instruction *next) {
-  return new store_inst(ptr, v, name, next);
+masked_store_inst* masked_store_inst::create(value *ptr, value *val, value *mask, const std::string &name, instruction *next)  {
+  return new masked_store_inst(ptr, val, mask, name, next);
 }
-
 //===----------------------------------------------------------------------===//
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
@@ -636,19 +625,6 @@ instruction* select_inst::create(value *pred, value *if_value, value *else_value
 //                               builtin instructions
 //===----------------------------------------------------------------------===//
 
-// get_global_range
-get_global_range_inst::get_global_range_inst(type *ty, unsigned axis,
-                                             const std::string &name, instruction *next)
-  : builtin_inst(ty, 0, 1, name, next), axis_(axis) {
-
-}
-
-instruction* get_global_range_inst::create(context &ctx, unsigned axis, type::tile_shapes_t::value_type size,
-                                           const std::string &name, instruction *next) {
-  type *int_ty = type::get_int32_ty(ctx);
-  type *tile_ty = tile_type::get(int_ty, {size});
-  return new get_global_range_inst(tile_ty, axis, name, next);
-}
 
 // get_range_id
 get_range_id_inst::get_range_id_inst(type *ty, unsigned axis, const std::string &name, instruction *next)

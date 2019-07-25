@@ -35,12 +35,6 @@ void print(module &mod, std::ostream& os) {
       os << std::endl;
       for(ir::instruction *inst: block->get_inst_list()){
         os << "  ";
-        if(auto *x = dynamic_cast<ir::load_inst*>(inst))
-        if(ir::value *mask = x->get_mask())
-          os << "@" << get_name(mask, cnt++) << " ";
-        if(auto *x = dynamic_cast<ir::store_inst*>(inst))
-        if(ir::value *mask = x->get_mask())
-          os << "@" << get_name(mask, cnt++) << " ";
         unsigned num_results = inst->get_num_results();
         for(unsigned i = 0; i < num_results; i++){
           os << get_name(inst->get_result(i), cnt++);

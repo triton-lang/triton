@@ -11,7 +11,7 @@
 #include "triton/codegen/selection.h"
 #include "triton/codegen/tune.h"
 #include "triton/codegen/optimize_dot.h"
-#include "triton/codegen/optimize_cse.h"
+#include "triton/codegen/optimize_dce.h"
 #include "triton/codegen/optimize_trans.h"
 #include "triton/codegen/shmem_allocation.h"
 #include "triton/codegen/shmem_liveness.h"
@@ -63,7 +63,7 @@ public:
                       vectorize(&tune),
                       selection(&shmem_allocation, &tune, &shmem_info, &alignment_info, target),
                       optimize_dot(&tune),
-                      optimize_cse(),
+                      optimize_dce(),
                       optimize_trans(),
                       alignment_info(),
                       reassociate(&tune, &alignment_info),
@@ -72,14 +72,11 @@ public:
     void target_independent(ir::module &module) {
       optimize_dot.run(module);
       optimize_trans.run(module);
-//      ir::print(module, std::cout);
     }
 
     void target_dependent(ir::module &module) {
       alignment_info.run(module);
       reassociate.run(module);
-      ir::print(module, std::cout);
-//      exit(EXIT_FAILURE);
       if(target_->is_gpu()){
         shmem_info.run(module);
         shmem_liveness.run(module);
@@ -87,6 +84,8 @@ public:
         shmem_barriers.run(module);
       }
       vectorize.run(module);
+      optimize_dce.run(module);
+//      ir::print(module, std::cout);
     }
 
     codegen::tune tune;
@@ -97,7 +96,7 @@ public:
     codegen::vectorize vectorize;
     codegen::selection selection;
     codegen::optimize_dot optimize_dot;
-    codegen::optimize_cse optimize_cse;
+    codegen::optimize_dce optimize_dce;
     codegen::optimize_trans optimize_trans;
     codegen::alignment_info alignment_info;
     codegen::reassociate reassociate;

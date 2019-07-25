@@ -19,7 +19,7 @@ namespace codegen{
 
 class optimize_trans {
 private:
-  ir::value *replace_phi(ir::value* value, std::vector<ir::instruction*>& to_delete, ir::builder &builder);
+  ir::value *replace_phi(ir::value* value, ir::builder &builder);
 
 public:
   optimize_trans() {}

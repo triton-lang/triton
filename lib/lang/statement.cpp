@@ -29,21 +29,35 @@ ir::value* compound_statement::codegen(ir::module* mod) const{
 /* Expression statement */
 ir::value* expression_statement::codegen(ir::module *mod) const{
   ir::builder &builder = mod->get_builder();
-  ir::value *expr = expr_->codegen(mod);
-  if(pred_ == nullptr)
-    return expr;
-  ir::value *pred = pred_->codegen(mod);
-  if(auto *x = dynamic_cast<ir::load_inst*>(expr))
-    x->set_mask(pred);
-  else if(auto *x = dynamic_cast<ir::store_inst*>(expr))
-    x->set_mask(pred);
-  else
-    expr = builder.create_select(pred, expr, ir::undef_value::get(expr->get_type()));
+  // get name if applicable
+  std::string name = "";
+  ir::value *current = nullptr;
   if(assignment_expression *assignment = dynamic_cast<assignment_expression*>(expr_))
-  if(auto *named = dynamic_cast<named_expression*>(assignment)){
-    std::string name = named->lvalue()->id()->name();
-    mod->set_value(name, expr);
+  if(const named_expression* named = dynamic_cast<const named_expression*>(assignment->lvalue())){
+    name = named->id()->name();
+    current = mod->get_value(name);
   }
+  // lower expression
+  ir::value *expr = expr_->codegen(mod);
+  // modify expression if predicated
+  if(pred_) {
+    ir::value *pred = pred_->codegen(mod);
+    if(!current)
+      current = ir::undef_value::get(expr->get_type());
+    if(auto *x = dynamic_cast<ir::load_inst*>(expr)){
+      x->erase_from_parent();
+      expr = builder.create_masked_load(x->get_pointer_operand(), pred, current);
+    }
+    else if(auto *x = dynamic_cast<ir::store_inst*>(expr)){
+      x->erase_from_parent();
+      expr =builder.create_masked_store(x->get_pointer_operand(), x->get_value_operand(), pred);
+    }
+    else
+      expr = builder.create_select(pred, expr, current);
+  }
+  // update symbols table
+  if(!name.empty())
+    mod->set_value(name, expr);
   return expr;
 }
 

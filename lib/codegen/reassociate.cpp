@@ -189,8 +189,6 @@ void reassociate::run(ir::module &mod) {
 
   // reassociate
   std::map<ir::value*, cst_info> infos;
-  std::map<ir::basic_block*, std::set<ir::value*>> re_ordered;
-
   for(ir::function *fn: mod.get_function_list()){
     std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
     // iterate through blocks
@@ -259,11 +257,6 @@ void reassociate::run(ir::module &mod) {
         params_->copy(new_pz, pz);
         align_->copy(new_pz, pz);
       }
-
-//      // reassociate pointer
-//      reassociate_ptr(pz, builder, offsets);
-
-
     }
     }
     }

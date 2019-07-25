@@ -106,9 +106,9 @@ void tune::init_c_graph(ir::instruction *v) {
     for(unsigned k = 0; k < v->get_num_results(); k++){
       ir::value *result = v->get_result(k);
       for(unsigned i = 0; i < shapes.size(); i ++){
-        for(ir::value* op: v->ops()){
+        std::vector<ir::value*> ops = v->ops();
+        for(ir::value* op: ops)
           add_constraint({result, i}, {op, i});
-        }
       }
     }
   }

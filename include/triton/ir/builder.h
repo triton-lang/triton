@@ -50,15 +50,14 @@ public:
     block_->get_inst_list().insert(insert_point_, inst);
     inst->set_parent(block_);
     inst->set_name(name);
+//    for(ir::value* op: inst->ops())
+//      op->add_use(inst);
     return inst;
   }
   // terminator instructions
   value* create_br(basic_block *dest);
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
   value* create_ret_void();
-  // Tile-level control flow
-//  value *create_mask(value *pred, const std::string &name = "");
-//  value *create_merge(value *mask_true, value *value_true, value *mask_false, value *value_false, const std::string &name = "");
   // Cast instructions
   value *create_cast(cast_inst::op_t op, value *v, type *dst_ty, const std::string &name = "");
   value* create_si_to_fp(value *src, type *dst_ty, const std::string &name = "");
@@ -120,6 +119,8 @@ public:
   // Input/Output
   value *create_load(value *arg, const std::string &name = "");
   value *create_store(value *ptr, value *val, const std::string &name = "");
+  value *create_masked_load(value *arg, value *mask, value *false_value, const std::string &name = "");
+  value *create_masked_store(value *ptr, value *val, value *mask, const std::string &name = "");
   // Tile instruction
   value *create_splat(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");
   value *create_reshape(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");

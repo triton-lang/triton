@@ -48,14 +48,14 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   stream->synchronize();
   triton::dnn::dot dot(M, N, K, AT, BT, ty, ty, 8, 8);
   // benchmark triton
-  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::NO_TUNING);}, stream);
+  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::FULL_TUNING);}, stream);
   // benchmark cublas
   NumericT alpha = 1;
   NumericT beta = 0;
   int32_t lda = AT ? K : M;
   int32_t ldb = BT ? N : K;
   int32_t ldc = M;
-  cublasGemmAlgo_t fastest;
+//  cublasGemmAlgo_t fastest;
 //  cublasGemm(HALF_TYPE, stream, AT, BT, M, N, K,
 //             &alpha, da, lda,
 //             db, ldb, &beta,
@@ -109,6 +109,6 @@ int main() {
   // does the work
   for(config_t c: configs){
     perf_t perf = c.perf(stream);
-    std::cout << c.repr() << ", " << perf.triton << ", " << perf.cublas << std::endl;
+    std::cout << "// " << c.repr() << ", " << perf.triton << ", " << perf.cublas << std::endl;
   }
 }

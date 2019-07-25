@@ -109,8 +109,6 @@ unsigned alignment_info::populate_max_contiguous(ir::value *v){
   if(!v->get_type()->is_tile_ty())
     return cache(1);
   auto shapes = v->get_type()->get_tile_shapes();
-  if(dynamic_cast<ir::get_global_range_inst*>(v))
-    return cache(shapes[0]->get_value());
   if(dynamic_cast<ir::constant_range*>(v))
     return cache(shapes[0]->get_value());
   if(auto *x = dynamic_cast<ir::retile_inst*>(v)){
@@ -243,14 +241,6 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
     int op = populate_starting_multiple(x->get_operand(0));
     return cache(op);
   }
-  if(auto *x = dynamic_cast<ir::get_global_range_inst*>(v)){
-    return cache(v->get_type()->get_tile_shapes()[0]->get_value());
-  }
-//  if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
-//    int value_true = populate_starting_multiple(x->get_value_true());
-//    int value_false = populate_starting_multiple(x->get_value_false());
-//    return cache(gcd(value_true, value_false));
-//  }
   if(auto *x = dynamic_cast<ir::phi_node*>(v)){
     // put a conservative initial value in phi node to avoid infinite recursion
     unsigned result = 1;
@@ -313,7 +303,6 @@ void alignment_info::run(ir::module &mod) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list()){
     populate_max_contiguous(i);
-    std::cout << i->get_name() << " " << is_constant_.at(i).num_cst << " " << max_contiguous_.at(i) << " " << starting_multiple_.at(i) << std::endl;
   }
 }
 

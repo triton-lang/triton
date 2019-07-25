@@ -151,7 +151,7 @@ ir::value* initializer::codegen(ir::module * mod) const{
   }
   else if(expr_){
     value = expr_->codegen(mod);
-    value = explicit_cast(mod->get_builder(), value, ty);
+    value = explicit_cast(mod->get_builder(), value, ty->get_scalar_ty());
     implicit_broadcast(mod, ty, value);
   }
   value->set_name(name);
