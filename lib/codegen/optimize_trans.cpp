@@ -7,20 +7,18 @@ namespace codegen{
 
 
 ir::value* optimize_trans::replace_phi(ir::value* value,
-                                 std::vector<ir::instruction*>& to_delete,
                                  ir::builder& builder){
   if(auto phi = dynamic_cast<ir::phi_node*>(value)) {
     // transpose operands
     std::vector<ir::value*> incs;
     for(unsigned n = 0; n < phi->get_num_incoming(); n++)
-      incs.push_back(replace_phi(phi->get_incoming_value(n), to_delete, builder));
+      incs.push_back(replace_phi(phi->get_incoming_value(n), builder));
     // create phi for transposed values
     builder.set_insert_point(phi);
     ir::phi_node* result = builder.create_phi(incs[0]->get_type(), incs.size(), phi->get_name());
     for(unsigned n = 0; n < phi->get_num_incoming(); n++)
       result->add_incoming(incs[n], phi->get_incoming_block(n));
     phi->replace_all_uses_with(result);
-    to_delete.push_back(phi);
     return result;
   }
   else if(auto i = dynamic_cast<ir::instruction*>(value)){
@@ -39,7 +37,6 @@ ir::value* optimize_trans::replace_phi(ir::value* value,
 
 void optimize_trans::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
-  std::vector<ir::instruction*> to_delete;
   // iterate
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
@@ -56,15 +53,11 @@ void optimize_trans::run(ir::module &mod) {
 
       // trans(phi) -> phi(trans(), trans()...)
       if(dynamic_cast<ir::phi_node*>(op)){
-        ir::value* new_phi = replace_phi(op, to_delete, builder);
-        to_delete.push_back(trans);
+        ir::value* new_phi = replace_phi(op, builder);
         trans->replace_all_uses_with(new_phi);
       }
     }
   }
-  // erase dead code
-  for(ir::instruction* i: to_delete)
-    i->erase_from_parent();
 }
 
 }

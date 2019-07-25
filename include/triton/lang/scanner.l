@@ -44,7 +44,6 @@ using triton::lang::return_void;
 "fp32"                  { return return_impl(FP32, yytext); }
 "fp64"                  { return return_impl(FP64, yytext); }
 "..."                   { return return_impl(ELLIPSIS, yytext); }
-"get_global_range"      { return return_impl(GET_GLOBAL_RANGE, yytext); }
 "get_range_id"          { return return_impl(GET_RANGE_ID, yytext); }
 "__atomic_cas"          { return return_impl(ATOMIC_CAS, yytext); }
 "__atomic_exchg"        { return return_impl(ATOMIC_EXCHG, yytext); }

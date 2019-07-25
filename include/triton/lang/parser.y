@@ -55,7 +55,7 @@ STORAGE_SPEC_T get_storage_spec(node *op) { return ((token*)op)->storage_spec;}
 %token VOID UINT1 UINT8 UINT16 UINT32 UINT64 INT1 INT8 INT16 INT32 INT64 FP16 FP32 FP64
 %token IF ELSE FOR CONTINUE WHILE
 %token NEWAXIS ELLIPSIS AT
-%token GET_GLOBAL_RANGE GET_RANGE_ID DOT SQRT REDUCE_SUM TRANS MAX MIN SELECT ATOMIC_CAS ATOMIC_EXCHG ATOMIC_ADD ALLOC_CONST
+%token GET_RANGE_ID DOT SQRT REDUCE_SUM TRANS MAX MIN SELECT ATOMIC_CAS ATOMIC_EXCHG ATOMIC_ADD ALLOC_CONST
 
 %start translation_unit
 %%
@@ -120,8 +120,7 @@ identifier
 
 /* Built-in */
 builtin_expression
-  : GET_GLOBAL_RANGE '[' primary_expression ']' '(' constant ')' { $$ = new get_global_range_expression($3, $6); }
-  | GET_RANGE_ID '(' constant ')'                                { $$ = new get_range_id_expression($3); }
+  : GET_RANGE_ID '(' constant ')'                                { $$ = new get_range_id_expression($3); }
   | DOT '(' expression ',' expression ',' expression ')'         { $$ = new matmul_expression($3, $5, $7); }
   | SQRT '(' expression ')'                                      { $$ = new sqrt_expression($3); }
   | ALLOC_CONST type_specifier '[' constant ']'                  { $$ = new alloc_const_expression(new typed_declaration_specifier(get_type_spec($2)), $4); }

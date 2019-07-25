@@ -101,7 +101,7 @@ inline std::vector<params_t> dot_search_space(bool AT, bool BT) {
 inline params_t dot_heuristics(bool AT, bool BT, size_t M, size_t N, size_t K) {
   size_t TM = 128;
   size_t TN = 128;
-//  return {4, 8, 256, 8, 8, 64, 2, 2, 2, 2, 32, 32, 16, 1};
+//  return {4, 4, 128, 8, 4, 128, 2, 2, 2, 2, 32, 32, 16, 1};
   return params.at(trans_key_t{AT, BT}).at(size_key_t{TM, TN});
 }
 

@@ -71,16 +71,6 @@ private:
   const constant* size_;
 };
 
-class get_global_range_expression: public builtin_expression{
-public:
-  get_global_range_expression(node *size, node *axis): size_((constant*)size), axis_((constant*)axis) { }
-  ir::value* codegen(ir::module *) const;
-
-private:
-  const constant* size_;
-  const constant* axis_;
-};
-
 class get_range_id_expression: public builtin_expression{
 public:
   get_range_id_expression(node *axis): axis_((constant*)axis) { }

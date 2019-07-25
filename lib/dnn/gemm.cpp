@@ -123,14 +123,16 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
   )" + b_ty_ + R"(* pb[)" + BS + "] = B + rkb" + bcb0 + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
   int1 checka[)" + AS + R"(] = (rka < K))" + bca0 + " && (rxa < M)" + bca1 + R"(;
   int1 checkb[)" + BS + R"(] = (rkb < K))" + bcb0 + " && (ryb < N)" + bcb1 + R"(;
-  )" + a_ty_ + R"( a[)" + AS + R"(] = *pa;
-  )" + b_ty_ + R"( b[)" + BS + R"(] = *pb;
+  )" + a_ty_ + R"( a[)" + AS + R"(] = checka ? *pa : 0;
+  )" + b_ty_ + R"( b[)" + BS + R"(] = checkb ? *pb : 0;
   for(int32 k = K; k > 0; k = k - TK){
     c = dot()" + usea + ", " + useb + R"(, c);
     pa = pa + TK)" + lda0 + R"(;
     pb = pb + TK)" + ldb0 + R"(;
-    a = *pa;
-    b = *pb;
+    int1 checka[)" + AS + R"(] = k > TK;
+    int1 checkb[)" + BS + R"(] = k > TK;
+    a = checka ? *pa : 0;
+    b = checkb ? *pb : 0;
   }
   int32 rxc[TM] =  ridx * TM + (0 ... TM);
   int32 ryc[TN] =  ridy * TN + (0 ... TN);
@@ -138,11 +140,10 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
   int1 checkc1[TN] = ryc < N;
   int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
   fp32* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
-  *pc = c;
+  @checkc *pc = c;
 }
 )";
 
-  std::cout << res << std::endl;
   os << res;
 }
 

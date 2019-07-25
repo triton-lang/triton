@@ -14,9 +14,9 @@ namespace ir {
 namespace codegen{
 class tune;
 
-class optimize_cse {
+class optimize_dce {
 public:
-  optimize_cse() {}
+  optimize_dce() {}
   void run(ir::module &mod);
 };
 

@@ -144,6 +144,6 @@ int main() {
   for(config_t c: configs){
     std::string repr = c.repr();
     perf_t perf = c.perf(stream);
-    std::cout << repr << ", " << perf.triton << ", " << perf.cublas << std::endl;
+    std::cout << "// " << repr << ", " << perf.triton << ", " << perf.cublas << std::endl;
   }
 }

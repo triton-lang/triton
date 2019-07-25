@@ -85,20 +85,6 @@ value *builder::create_ret_void() {
   return insert(return_inst::create(ctx_));
 }
 
-
-//===----------------------------------------------------------------------===//
-//                       tile-level control-flow instructions
-//===----------------------------------------------------------------------===//
-
-//value *builder::create_mask(value *pred, const std::string &name){
-//  return insert(mask_inst::create(pred, name));
-//}
-
-//value *builder::create_merge(value *mask_true, value *value_true, value *mask_false, value *value_false, const std::string &name) {
-//  return insert(psi_inst::create(mask_true, value_true, mask_false, value_false, name));
-//}
-
-
 //===----------------------------------------------------------------------===//
 //                               cast instructions
 //===----------------------------------------------------------------------===//
@@ -264,12 +250,20 @@ DEFINE_FCMP_INSTR(ONE, llvm::FCmpInst::FCMP_ONE)
 //                               load/store instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_load(value *arg, const std::string &name){
-  return insert(load_inst::create(arg, name));
+value *builder::create_load(value *ptr, const std::string &name){
+  return insert(load_inst::create(ptr, name));
 }
 
 value *builder::create_store(value *ptr, value *val, const std::string &name){
   return insert(store_inst::create(ptr, val, name));
+}
+
+value *builder::create_masked_load(value *ptr, value *mask, value *false_value, const std::string &name){
+  return insert(masked_load_inst::create(ptr, mask, false_value, name));
+}
+
+value *builder::create_masked_store(value *ptr, value *val, value *mask, const std::string &name){
+  return insert(masked_store_inst::create(ptr, val, mask, name));
 }
 
 //===----------------------------------------------------------------------===//
@@ -295,10 +289,6 @@ value *builder::create_downcast(value *arg, const std::string &name) {
 //===----------------------------------------------------------------------===//
 //                               built-in instructions
 //===----------------------------------------------------------------------===//
-
-value *builder::create_get_global_range(unsigned axis, type::tile_shapes_t::value_type size, const std::string &name) {
-  return insert(get_global_range_inst::create(ctx_, axis, size, name));
-}
 
 value *builder::create_get_range_id(unsigned axis, const std::string &name) {
   return insert(get_range_id_inst::create(ctx_, axis, name));
