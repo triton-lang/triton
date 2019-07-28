@@ -59,8 +59,8 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, a
       jit->add_module(name_.c_str(), src.c_str(), best.params);
     }
     else {
-      params_t params = heuristics();
-//      params_t params = jit->get_valid(name_.c_str(), src.c_str());
+//      params_t params = heuristics();
+      params_t params = jit->get_valid(name_.c_str(), src.c_str());
       jit->add_module(name_.c_str(), src.c_str(), params);
     }
     triton::driver::kernel* kernel = jit->get_function(name_.c_str());

@@ -37,12 +37,13 @@ void parallel_loop_nest(std::vector<size_t> const & ranges,
   size_t D = ranges.size();
   std::vector<size_t> values(D, 0);
   // thread pools
-  ThreadPool pool(nthreads);
+//  ThreadPool pool(nthreads);
   // Start with innermost loop
   size_t i = D - 1;
   while(true){
     //  Execute function
-    pool.enqueue(f,values);
+//    pool.enqueue(f,values);
+    f(values);
     while(values[i]++ == ranges[i] - 1){
       if(i == 0)
         return;
@@ -50,7 +51,7 @@ void parallel_loop_nest(std::vector<size_t> const & ranges,
     }
     i = D - 1;
     // Short sleep so that the thread pool doesn't grow too big
-    std::this_thread::sleep_for(std::chrono::microseconds(1));
+//    std::this_thread::sleep_for(std::chrono::microseconds(1));
   }
 }
 
@@ -211,9 +212,9 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
         best.perf = perf;
         best.params = params;
       }
-      for(size_t i = 0; i < params.size(); i++)
-        std::cout << ((i==0)?"":", ") << params[i] << std::flush;
-      std::cout << ", " << perf << " [ " << best.perf << " ] " << std::endl;
+//      for(size_t i = 0; i < params.size(); i++)
+//        std::cout << ((i==0)?"":", ") << params[i] << std::flush;
+//      std::cout << ", " << perf << " [ " << best.perf << " ] " << std::endl;
     }
   };
 

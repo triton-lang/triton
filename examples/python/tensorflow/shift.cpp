@@ -19,10 +19,10 @@
 using namespace tensorflow;
 using GPUDevice = Eigen::GpuDevice;
 
-template<triton::dnn::shift::op_t OP>
+template<triton::dnn::op_t OP>
 class ShiftConvOp : public OpKernel {
 public:
-  explicit ShiftConvOp(OpKernelConstruction* context) : OpKernel(context), layout_(triton::dnn::shift::NCHW) {
+  explicit ShiftConvOp(OpKernelConstruction* context) : OpKernel(context), layout_(triton::dnn::NCHW) {
     context->GetAttr("shift_h", &h_shift_h_);
     context->GetAttr("shift_w", &h_shift_w_);
     context->GetAttr("stride_h", &stride_h_);
@@ -32,13 +32,13 @@ public:
   }
 
   void ExtractShapes(const Tensor &x, int64_t &C, int64_t &H, int64_t &W, int64_t &B) {
-    if(layout_ == triton::dnn::shift::CHWN){
+    if(layout_ == triton::dnn::CHWN){
       C  = x.dim_size(0);
       H  = x.dim_size(1);
       W  = x.dim_size(2);
       B  = x.dim_size(3);
     }
-    else if(layout_ == triton::dnn::shift::NCHW){
+    else if(layout_ == triton::dnn::NCHW){
       B  = x.dim_size(0);
       C  = x.dim_size(1);
       H  = x.dim_size(2);
@@ -52,7 +52,7 @@ public:
   void FillShapes(OpKernelContext* context,
                   int64_t &C, int64_t &H, int64_t &W, int64_t &B, int64_t &F,
                   const Tensor& tf_a, const Tensor& tf_b) {
-    if(OP == triton::dnn::shift::WGRAD) {
+    if(OP == triton::dnn::WGRAD) {
       int64_t Ha, Wa, Ba;
       int64_t Hb, Wb, Bb;
       ExtractShapes(tf_a, F, Ha, Wa, Ba);
@@ -68,19 +68,19 @@ public:
       // shapes for a
       int64_t Ca;
       ExtractShapes(tf_a, Ca, H, W, B);
-      if(OP == triton::dnn::shift::BPROP){
+      if(OP == triton::dnn::BPROP){
         H *= stride_h_;
         W *= stride_w_;
       }
       // shapes for b
       int64_t Cb  = tf_b.dim_size(0);
       F   = tf_b.dim_size(1);
-      if(OP == triton::dnn::shift::BPROP)
+      if(OP == triton::dnn::BPROP)
         std::swap(Cb, F);
       // checks
       OP_REQUIRES(context, Ca == Cb, tensorflow::errors::InvalidArgument("operands must have the same number of channels"));
       C = Ca;
-      if(OP == triton::dnn::shift::BPROP)
+      if(OP == triton::dnn::BPROP)
         std::swap(C, F);
     }
   }
@@ -122,7 +122,7 @@ public:
     triton::driver::cu_buffer da(ctx,      (CUdeviceptr)tf_a.flat<Eigen::half>().data(), false);
     triton::driver::cu_buffer db(ctx,      (CUdeviceptr)tf_b.flat<Eigen::half>().data(), false);
     triton::driver::cu_buffer dc(ctx,      (CUdeviceptr)tf_c->flat<Eigen::half>().data(), false);
-    shift.enqueue(stream, {&da, &db, &dc}, false);
+    shift.enqueue(stream, {&da, &db, &dc}, triton::dnn::PARTIAL_TUNING);
   }
 
 private:
@@ -132,10 +132,10 @@ private:
   int stride_w_;
   int R_;
   int S_;
-  triton::dnn::shift::layout_t layout_;
+  triton::dnn::layout_t layout_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("ShiftConv").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::shift::FPROP>);
+REGISTER_KERNEL_BUILDER(Name("ShiftConv").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::FPROP>);
 REGISTER_OP("ShiftConv")
     .Input("a: float16")
     .Input("b: float16")
@@ -145,7 +145,7 @@ REGISTER_OP("ShiftConv")
     .Attr("stride_w: int")
     .Output("c: float16");
 
-REGISTER_KERNEL_BUILDER(Name("ShiftConvDx").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::shift::BPROP>);
+REGISTER_KERNEL_BUILDER(Name("ShiftConvDx").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::BPROP>);
 REGISTER_OP("ShiftConvDx")
     .Input("a: float16")
     .Input("b: float16")
@@ -155,7 +155,7 @@ REGISTER_OP("ShiftConvDx")
     .Attr("stride_w: int")
     .Output("c: float16");
 
-REGISTER_KERNEL_BUILDER(Name("ShiftConvDw").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::shift::WGRAD>);
+REGISTER_KERNEL_BUILDER(Name("ShiftConvDw").Device(DEVICE_GPU), ShiftConvOp<triton::dnn::WGRAD>);
 REGISTER_OP("ShiftConvDw")
     .Input("a: float16")
     .Input("b: float16")

@@ -467,7 +467,7 @@ if(op_ == WGRAD){
     pa = pa_base + offxa[:, newaxis];)";
 }
   result +=  R"(
-    @checka a = *pa;)";
+    a = checka ? *pa : 0;)";
 
 /* Increment B pointers */
 if(op_ == WGRAD){
@@ -488,7 +488,7 @@ if(op_ == BPROP){
     pb = pb + TK;)";
 }
   result +=  R"(
-    @checkb b = *pb;
+    b = checkb ? *pb : 0;
   }
   int32 rxc[TM] = ridx*TM + (0 ... TM);
   int32 ryc[TN] = ridy*TN + (0 ... TN);)";

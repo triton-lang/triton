@@ -5,7 +5,7 @@
 #include "triton/driver/stream.h"
 #include "triton/runtime/jit.h"
 #include "triton/tools/bench.hpp"
-#include "triton/dnn/gemm.h"
+#include "triton/dnn/dot.h"
 
 #define EIGEN_USE_GPU
 #include "tensorflow/core/framework/op.h"
