@@ -5,7 +5,7 @@ if(${TensorFlow_FOUND})
   include_directories("${CUDA_HOME}/include")
   link_directories(${TF_LIB})
   add_definitions(-D_GLIBCXX_USE_CXX11_ABI=${TF_ABI})
-  add_library(tf_blocksparse SHARED dot.cpp conv.cpp shift.cpp batchnorm.cpp)
+  add_library(tf_blocksparse SHARED blocksparse.cpp dot.cpp conv.cpp shift.cpp batchnorm.cpp)
   target_link_libraries(tf_blocksparse tensorflow_framework triton)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/run.py
                   ${CMAKE_CURRENT_BINARY_DIR}/run.py

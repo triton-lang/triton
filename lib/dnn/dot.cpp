@@ -1,6 +1,6 @@
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
-#include "triton/dnn/gemm.h"
+#include "triton/dnn/dot.h"
 #include "triton/dnn/heuristics.h"
 #include <string>
 
@@ -101,8 +101,8 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb_) + ")";
   std::string res =
 R"(
-const tunable int32 TM = {16, 32, 64, 128};
-const tunable int32 TN = {16, 32, 64, 128};
+const tunable int32 TM = {16, 32, 64, 128, 256};
+const tunable int32 TN = {16, 32, 64, 128, 256};
 const tunable int32 TK = {32};
 const tunable int32 GZ = {1};
 

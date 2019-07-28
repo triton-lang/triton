@@ -1190,9 +1190,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           Value *ptr = pointers->get_value(idx);
           ConstantInt *cst = nullptr;
           if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
-          if(gep->getNumIndices() == 1){
+          if(gep->getNumIndices() == 1)
             cst = dyn_cast<ConstantInt>(gep->idx_begin());
-          }
           ptr = builder.CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
                                                             ptr->getType()->getPointerAddressSpace()));
           packets[id] = builder.CreateLoad(ptr);
@@ -1202,7 +1201,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       result->for_each([&](indices_t idx){
         unsigned linear = result->get_linear_index(idx);
         unsigned id = linear / vector_size;
-//      result->set_value(idx, builder.CreateExtractElement(packets.at(id), linear % vector_size));
+        result->set_value(idx, builder.CreateExtractElement(packets.at(id), linear % vector_size));
       });
     }
     // element-wise

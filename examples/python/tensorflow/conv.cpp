@@ -5,7 +5,6 @@
 #include "triton/driver/stream.h"
 #include "triton/runtime/jit.h"
 #include "triton/tools/bench.hpp"
-#include "triton/dnn/gemm.h"
 #include "triton/dnn/conv.h"
 
 #define EIGEN_USE_GPU

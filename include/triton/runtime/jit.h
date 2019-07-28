@@ -72,6 +72,7 @@ public:
     void target_independent(ir::module &module) {
       optimize_dot.run(module);
       optimize_trans.run(module);
+//      optimize_dce.run(module);
     }
 
     void target_dependent(ir::module &module) {
