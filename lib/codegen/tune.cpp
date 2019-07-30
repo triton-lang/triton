@@ -247,14 +247,14 @@ void tune::run(ir::module &mod) {
       size_t addr_space = ptr_ty->get_pointer_address_space();
       if(addr_space < 4){
         ir::type *ty = mod.get_builder().get_int32_ty();
-        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  4, 8));
+        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  2, 2));
         *params_.at(i).at("nts.d0") = *tmp;
       }
     }
     if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 4, 8));
-      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 4, 8));
+      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 2, 2));
+      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 2, 2));
       *params_.at(i).at("nts.d0") = *tmp1;
       *params_.at(i).at("nts.d1") = *tmp2;
     }

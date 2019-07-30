@@ -7,6 +7,11 @@ namespace triton{
 namespace dnn{
 namespace blocksparse{
 
+enum op_t{
+  FPROP,
+  BPROP,
+  WGRAD
+};
 
 class dot: public base {
 private:
@@ -26,7 +31,7 @@ private:
   void deinit_impl();
 public:
   // constructor
-  dot(int32_t N, int32_t K, int32_t S, int32_t C, const std::string &ty, int32_t BS, int32_t nlocks);
+  dot(int32_t N, int32_t K, int32_t S, int32_t C, const std::string &ty, int32_t BS, int32_t nlocks, op_t op = FPROP);
   // triton-c source
   void triton_c_src(std::ostream &os) const;
   // clone
@@ -42,6 +47,7 @@ private:
   int32_t BS_;
   int32_t nlocks_;
   driver::buffer *locks_;
+  op_t op_;
 };
 
 }
