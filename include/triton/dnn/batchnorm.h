@@ -37,6 +37,10 @@ namespace dnn{
 
 class batchnorm_forward: public base {
 private:
+  // init
+  void init_impl(driver::stream *, driver::cu_module *) { }
+  void deinit_impl() { }
+
   // enqueue
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                             std::vector<driver::buffer*> args,
@@ -69,6 +73,9 @@ private:
 
 class batchnorm_backward: public base{
 private:
+  // init
+  void init_impl(driver::stream *, driver::cu_module *) { }
+  void deinit_impl() { }
   // enqueue
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                             std::vector<driver::buffer*> args,

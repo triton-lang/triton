@@ -10,6 +10,8 @@ class dot: public base {
 private:
   // initialize
   void init_impl(driver::stream *, driver::cu_module *);
+  void deinit_impl() { }
+
   // enqueue
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,

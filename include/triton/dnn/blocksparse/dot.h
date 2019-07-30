@@ -14,27 +14,34 @@ private:
                     std::vector<driver::buffer*> args,
                     triton::runtime::launch_information info);
   // number of flops
-  virtual size_t num_flops() const;
+  size_t num_flops() const;
   // comparison for maps
-  virtual bool operator<(const base& other) const;
+  bool operator<(const base& other) const;
   // default parameters
-  virtual std::vector<params_t> search_space() const;
-  virtual params_t heuristics() const;
-
+  std::vector<params_t> search_space() const;
+  params_t heuristics() const;
+  // init
+  void init_impl(driver::stream *stream, driver::cu_module *module);
+  // deinit
+  void deinit_impl();
 public:
   // constructor
-  dot(int32_t M, int32_t N, int32_t K);
+  dot(int32_t N, int32_t K, int32_t S, int32_t C, const std::string &ty, int32_t BS, int32_t nlocks);
   // triton-c source
-  virtual void triton_c_src(std::ostream &os) const;
+  void triton_c_src(std::ostream &os) const;
   // clone
-  virtual base* clone() const;
+  base* clone() const;
 
 private:
   std::string ab_ty_;
   std::string c_ty_;
-  int32_t M_;
   int32_t N_;
+  int32_t S_;
+  int32_t C_;
   int32_t K_;
+  int32_t BS_;
+  int32_t nlocks_;
+  driver::buffer *locks_;
 };
 
 }

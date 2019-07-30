@@ -514,6 +514,19 @@ private:
   unsigned axis_;
 };
 
+class get_num_program_inst: public builtin_inst {
+private:
+  get_num_program_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "get_num_program(" + std::to_string(axis_) + ")"; }
+
+public:
+  static instruction* create(context &ctx, unsigned axis, const std::string &name = "", instruction *next = nullptr);
+  unsigned get_axis() const { return axis_; }
+
+private:
+  unsigned axis_;
+};
+
 class atomic_cas_inst: public builtin_inst {
 private:
   atomic_cas_inst(value *ptr, value *cmp, value *val, const std::string &name, instruction *next);
@@ -521,6 +534,15 @@ private:
 
 public:
   static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
+};
+
+class atomic_exch_inst: public builtin_inst {
+private:
+  atomic_exch_inst(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "atomic_exch"; }
+
+public:
+  static instruction* create(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
 class atomic_add_inst: public builtin_inst {
