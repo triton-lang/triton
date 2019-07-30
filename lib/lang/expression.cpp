@@ -120,12 +120,24 @@ ir::value* get_range_id_expression::codegen(ir::module *mod) const {
   return mod->get_builder().create_get_range_id(axis_->value());
 }
 
+// get_num_program
+ir::value* get_num_program_expression::codegen(ir::module *mod) const {
+  return mod->get_builder().create_get_num_program(axis_->value());
+}
+
 // atomic cas
 ir::value* atomic_cas_expression::codegen(ir::module *mod) const {
   ir::value *ptr = ptr_->codegen(mod);
   ir::value *cmp = cmp_->codegen(mod);
   ir::value *val = val_->codegen(mod);
   return mod->get_builder().create_atomic_cas(ptr, cmp, val);
+}
+
+// atomic exch
+ir::value* atomic_exch_expression::codegen(ir::module *mod) const {
+  ir::value *ptr = ptr_->codegen(mod);
+  ir::value *val = val_->codegen(mod);
+  return mod->get_builder().create_atomic_exch(ptr, val);
 }
 
 // atomic add

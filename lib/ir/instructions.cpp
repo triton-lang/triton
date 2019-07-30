@@ -636,6 +636,17 @@ instruction* get_range_id_inst::create(context &ctx, unsigned axis, const std::s
   return new get_range_id_inst(type::get_int32_ty(ctx), axis, name, next);
 }
 
+// get_num_program
+get_num_program_inst::get_num_program_inst(type *ty, unsigned axis, const std::string &name, instruction *next)
+  : builtin_inst(ty, 0, 1, name, next), axis_(axis){
+
+}
+
+instruction* get_num_program_inst::create(context &ctx, unsigned axis, const std::string &name, instruction *next) {
+  return new get_num_program_inst(type::get_int32_ty(ctx), axis, name, next);
+}
+
+
 // atomic cas
 
 atomic_cas_inst::atomic_cas_inst(value *ptr, value *cmp, value *val, const std::string &name, instruction *next)
@@ -647,6 +658,18 @@ atomic_cas_inst::atomic_cas_inst(value *ptr, value *cmp, value *val, const std::
 
 instruction* atomic_cas_inst::create(value *ptr, value *cmp, value *val, const std::string &name, instruction *next) {
   return new atomic_cas_inst(ptr, cmp, val, name, next);
+}
+
+// atomic exch
+
+atomic_exch_inst::atomic_exch_inst(value *ptr, value *val, const std::string &name, instruction *next)
+  : builtin_inst(ptr->get_type()->get_pointer_element_ty(), 2, 1, name, next) {
+  set_operand(0, ptr);
+  set_operand(1, val);
+}
+
+instruction* atomic_exch_inst::create(value *ptr, value *val, const std::string &name, instruction *next) {
+  return new atomic_exch_inst(ptr, val, name, next);
 }
 
 // atomic add

@@ -25,6 +25,7 @@ private:
   void build_a_deltas();
   void build_masks();
   void init_impl(driver::stream *, driver::cu_module *);
+  void deinit_impl() { }
 
   // enqueue
   std::array<size_t, 3> get_grid(size_t TM, size_t TN);

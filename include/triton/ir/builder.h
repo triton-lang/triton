@@ -126,9 +126,10 @@ public:
   value *create_reshape(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");
   value *create_broadcast(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");
   // Built-in instruction
-  value *create_get_global_range(unsigned axis, type::tile_shapes_t::value_type size, const std::string &name = "");
   value *create_get_range_id(unsigned axis, const std::string &name = "");
+  value *create_get_num_program(unsigned axis, const std::string &name = "");
   value *create_atomic_cas(value *ptr, value *cmp, value *val, const std::string &name = "");
+  value *create_atomic_exch(value *ptr, value *val, const std::string &name = "");
   value *create_atomic_add(value *ptr, value *val, const std::string &name = "");
   value *create_dot(value *A, value *B, value *C, const std::string &name = "");
   value *create_trans(value *A, const std::string &name = "");

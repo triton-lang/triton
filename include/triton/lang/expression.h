@@ -80,6 +80,15 @@ private:
   const constant* axis_;
 };
 
+class get_num_program_expression: public builtin_expression{
+public:
+  get_num_program_expression(node *axis): axis_((constant*)axis) { }
+  ir::value* codegen(ir::module *mod) const;
+
+private:
+  const constant* axis_;
+};
+
 class atomic_cas_expression: public builtin_expression{
 public:
   atomic_cas_expression(node *ptr, node *cmp, node *val): ptr_(ptr), cmp_(cmp), val_(val) { }
@@ -90,6 +99,17 @@ private:
   const node *cmp_;
   const node *val_;
 };
+
+class atomic_exch_expression: public builtin_expression{
+public:
+  atomic_exch_expression(node *ptr, node *val): ptr_(ptr), val_(val) { }
+  ir::value* codegen(ir::module *) const;
+
+private:
+  const node *ptr_;
+  const node *val_;
+};
+
 
 class atomic_add_expression: public builtin_expression{
 public:

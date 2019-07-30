@@ -319,8 +319,12 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     return builder.Insert(SelectInst::Create(pred, if_value, else_value));
   }
   if(ir::get_range_id_inst* ii = dynamic_cast<ir::get_range_id_inst*>(inst)){
-    Value *offset = tgt_->get_block_id(builder.GetInsertBlock()->getModule(), builder, ii->get_axis());
-    return (Instruction*)offset;
+    Value *result = tgt_->get_block_id(builder.GetInsertBlock()->getModule(), builder, ii->get_axis());
+    return (Instruction*)result;
+  }
+  if(ir::get_num_program_inst* ii = dynamic_cast<ir::get_num_program_inst*>(inst)){
+    Value *result = tgt_->get_num_blocks(builder.GetInsertBlock()->getModule(), builder, ii->get_axis());
+    return (Instruction*)result;
   }
   if(ir::atomic_cas_inst* ii = dynamic_cast<ir::atomic_cas_inst*>(inst)){
     BasicBlock *current = builder.GetInsertBlock();
@@ -331,6 +335,7 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     BasicBlock *tid_0_done_bb = BasicBlock::Create(ctx, "tid_0_done", current->getParent());
     Value *ptr = builder.CreateGEP(sh_mem_ptr_, builder.getInt32(alloc_->get_offset(ii)));
     ptr = builder.CreateBitCast(ptr, PointerType::get(builder.getInt32Ty(), ptr->getType()->getPointerAddressSpace()));
+    tgt_->add_memfence(module, builder);
     tgt_->add_barrier(module, builder);
     builder.CreateCondBr(pred, tid_0_bb, tid_0_done_bb);
     builder.SetInsertPoint(tid_0_bb);
@@ -342,8 +347,27 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     builder.CreateStore(old, ptr);
     builder.CreateBr(tid_0_done_bb);
     builder.SetInsertPoint(tid_0_done_bb);
+    tgt_->add_memfence(module, builder);
     tgt_->add_barrier(module, builder);
     Value *res = builder.CreateLoad(ptr);
+    return (Instruction*)res;
+  }
+  if(ir::atomic_exch_inst* ii = dynamic_cast<ir::atomic_exch_inst*>(inst)){
+    BasicBlock *current = builder.GetInsertBlock();
+    Module *module = current->getModule();
+    Value *rmw_ptr = value(ii->get_operand(0));
+    Value *rmw_val = value(ii->get_operand(1));
+    Value *tid = tgt_->get_local_id(module, builder, 0);
+    Value *pred = builder.CreateICmpEQ(tid, builder.getInt32(0));
+    BasicBlock *tid_0_bb = BasicBlock::Create(ctx, "tid_0", current->getParent());
+    BasicBlock *tid_0_done_bb = BasicBlock::Create(ctx, "tid_0_done", current->getParent());
+    tgt_->add_memfence(module, builder);
+    tgt_->add_barrier(module, builder);
+    builder.CreateCondBr(pred, tid_0_bb, tid_0_done_bb);
+    builder.SetInsertPoint(tid_0_bb);
+    Value *res = builder.CreateAtomicRMW(AtomicRMWInst::Xchg, rmw_ptr, rmw_val, AtomicOrdering::Monotonic, SyncScope::System);
+    builder.CreateBr(tid_0_done_bb);
+    builder.SetInsertPoint(tid_0_done_bb);
     return (Instruction*)res;
   }
   if(ir::atomic_add_inst* ii = dynamic_cast<ir::atomic_add_inst*>(inst)){
@@ -1136,17 +1160,17 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           Value *result_then = builder.CreateLoad(ptr);
           builder.CreateBr(mask_done_bb);
           builder.SetInsertPoint(mask_done_bb);
-          Value *result = nullptr;
+          Value *current_result = nullptr;
           if(false_values){
-            result = builder.CreatePHI(result_then->getType(), 2);
-            ((PHINode*)result)->addIncoming(result_then, mask_then_bb);
+            current_result = builder.CreatePHI(result_then->getType(), 2);
+            ((PHINode*)current_result)->addIncoming(result_then, mask_then_bb);
             Value *result_false = false_values->get_value(idx);
-            if(vector_size > 1)
+            if(result_then->getType()->isVectorTy())
               result_false = builder.CreateVectorSplat(vector_size, result_false);
-            ((PHINode*)result)->addIncoming(result_false, current_bb);
+            ((PHINode*)current_result)->addIncoming(result_false, current_bb);
           }
           else
-            result = result_then;
+            current_result = result_then;
 
 //          std::string offset = "";
 //          if(cst)
@@ -1160,7 +1184,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
 //          InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,=r,=r,=r,=r,l", true);
 //          Value *result = builder.CreateCall(iasm, {mask, ptr});
 
-          packets[id] = result;
+          packets[id] = current_result;
         }
       });
       // extract result element

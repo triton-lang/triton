@@ -294,8 +294,16 @@ value *builder::create_get_range_id(unsigned axis, const std::string &name) {
   return insert(get_range_id_inst::create(ctx_, axis, name));
 }
 
+value *builder::create_get_num_program(unsigned axis, const std::string &name) {
+  return insert(get_num_program_inst::create(ctx_, axis, name));
+}
+
 value *builder::create_atomic_cas(value *ptr, value *cmp, value *val, const std::string &name){
   return insert(atomic_cas_inst::create(ptr, cmp, val, name));
+}
+
+value *builder::create_atomic_exch(value *ptr, value *val, const std::string &name){
+  return insert(atomic_exch_inst::create(ptr, val, name));
 }
 
 value *builder::create_atomic_add(value *ptr, value *val, const std::string &name){

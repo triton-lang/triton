@@ -28,6 +28,11 @@
 #include "triton/runtime/launch_info.h"
 
 namespace triton{
+
+namespace runtime{
+  class jit;
+}
+
 namespace dnn{
 
 
@@ -35,6 +40,13 @@ enum autotuning_t{
   FULL_TUNING,
   PARTIAL_TUNING,
   NO_TUNING
+};
+
+class base;
+struct launch_context_t{
+  base *op;
+  driver::kernel* kernel;
+  triton::runtime::launch_information info;
 };
 
 typedef std::vector<unsigned> params_t;
@@ -49,9 +61,9 @@ protected:
 
 private:
   // initialize
-  virtual void init_impl(driver::stream *, driver::cu_module *){ }
+  virtual void init_impl(driver::stream *, driver::cu_module *) = 0;
   // deinitialize
-  virtual void deinit_impl(){ }
+  virtual void deinit_impl() = 0;
   // enqueue
   virtual void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
@@ -63,6 +75,8 @@ private:
   // default parameters
   virtual std::vector<params_t> search_space() const;
   virtual params_t heuristics() const;
+  // obtain execution jit
+  std::pair<base*, triton::runtime::jit*> get_profile_impl(driver::stream *stream, std::vector<driver::buffer *> args, autotuning_t autotune);
 
 public:
   // constructor
@@ -73,6 +87,8 @@ public:
   virtual base* clone() const = 0;
   // enqueue
   void enqueue(driver::stream* stream, std::vector<driver::buffer*> args, autotuning_t autotune = PARTIAL_TUNING);
+  // get profile
+  launch_context_t get_launch_context(driver::stream *stream, std::vector<driver::buffer *> args, autotuning_t autotune = PARTIAL_TUNING);
 
 private:
   std::string name_;

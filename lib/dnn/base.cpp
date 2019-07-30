@@ -6,6 +6,8 @@
 namespace triton{
 namespace dnn{
 
+namespace rt = triton::runtime;
+
 
 void base::set_ld(const std::vector<int32_t>& shapes,
                   std::vector<int32_t>& ld) {
@@ -28,8 +30,7 @@ params_t base::heuristics() const {
   return *search_space().begin();
 }
 
-void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, autotuning_t autotune) {
-  namespace rt = triton::runtime;
+std::pair<base*, rt::jit*> base::get_profile_impl(driver::stream *stream, std::vector<driver::buffer *> args, autotuning_t autotune) {
   static std::map<base*, std::unique_ptr<rt::jit>, cmp_recompile> m_jit;
   driver::context* ctx = stream->context();
   rt::jit* jit;
@@ -67,16 +68,23 @@ void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, a
     clone->init_impl(stream, (triton::driver::cu_module*)kernel->module());
   }
   /* retrieved compiled template */
-  else{
+  else {
     jit = m_jit.at(this).get();
   }
-
-  /* get launch parameters */
-  driver::kernel* kernel = jit->get_function(name_.c_str());
-  rt::launch_information info = jit->get_launch_info(name_.c_str());
-  /* launch */
   auto it = m_jit.find(this);
-  it->first->enqueue_impl(stream, kernel, args, info);
+  return {it->first, jit};
+}
+
+void base::enqueue(driver::stream *stream, std::vector<driver::buffer *> args, autotuning_t autotune) {
+  launch_context_t info = get_launch_context(stream, args, autotune);
+  info.op->enqueue_impl(stream, info.kernel, args, info.info);
+}
+
+launch_context_t base::get_launch_context(driver::stream *stream, std::vector<driver::buffer *> args, autotuning_t autotune) {
+  std::pair<base*, rt::jit*> profile = get_profile_impl(stream, args, autotune);
+  driver::kernel* kernel = profile.second->get_function(name_.c_str());
+  rt::launch_information info = profile.second->get_launch_info(name_.c_str());
+  return {profile.first, kernel, info};
 }
 
 }
