@@ -9,7 +9,7 @@ namespace dnn{
 class dot: public base {
 private:
   // initialize
-  void init_impl(driver::stream *, driver::cu_module *);
+  void init_impl(driver::stream *, driver::cu_module *, triton::runtime::launch_information);
   void deinit_impl() { }
 
   // enqueue

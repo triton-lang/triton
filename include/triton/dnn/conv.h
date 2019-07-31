@@ -24,7 +24,7 @@ private:
   void build_b_deltas();
   void build_a_deltas();
   void build_masks();
-  void init_impl(driver::stream *, driver::cu_module *);
+  void init_impl(driver::stream *stream, driver::cu_module *module, triton::runtime::launch_information info);
   void deinit_impl() { }
 
   // enqueue

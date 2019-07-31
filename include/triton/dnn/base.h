@@ -61,7 +61,7 @@ protected:
 
 private:
   // initialize
-  virtual void init_impl(driver::stream *, driver::cu_module *) = 0;
+  virtual void init_impl(driver::stream *, driver::cu_module *, triton::runtime::launch_information) = 0;
   // deinitialize
   virtual void deinit_impl() = 0;
   // enqueue
@@ -86,7 +86,7 @@ public:
   // clone
   virtual base* clone() const = 0;
   // enqueue
-  void enqueue(driver::stream* stream, std::vector<driver::buffer*> args, autotuning_t autotune = PARTIAL_TUNING);
+  base* enqueue(driver::stream* stream, std::vector<driver::buffer*> args, autotuning_t autotune = PARTIAL_TUNING);
   // get profile
   launch_context_t get_launch_context(driver::stream *stream, std::vector<driver::buffer *> args, autotuning_t autotune = PARTIAL_TUNING);
 

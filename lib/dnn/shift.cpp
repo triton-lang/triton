@@ -226,7 +226,7 @@ bool shift::operator <(const base& other) const{
                   y->bias_);
 }
 
-void shift::init_impl(driver::stream *stream, driver::cu_module *module) {
+void shift::init_impl(driver::stream *stream, driver::cu_module *module, triton::runtime::launch_information info) {
   build_delta_a();
   triton::driver::buffer* delta_a = ((triton::driver::cu_module*)module)->symbol("delta_a");
   stream->write(delta_a, false, 0, h_delta_a.size()*4, h_delta_a.data());

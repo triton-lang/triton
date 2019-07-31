@@ -36,18 +36,22 @@ namespace driver
 
 //
 
-buffer::buffer(driver::context* ctx, CUdeviceptr cu, bool take_ownership)
-  : polymorphic_resource(cu, take_ownership), context_(ctx) { }
+buffer::buffer(driver::context* ctx, size_t size, CUdeviceptr cu, bool take_ownership)
+  : polymorphic_resource(cu, take_ownership), context_(ctx), size_(size) { }
 
-buffer::buffer(driver::context* ctx, cl_mem cl, bool take_ownership)
-  : polymorphic_resource(cl, take_ownership), context_(ctx) { }
+buffer::buffer(driver::context* ctx, size_t size, cl_mem cl, bool take_ownership)
+  : polymorphic_resource(cl, take_ownership), context_(ctx), size_(size) { }
 
-buffer::buffer(driver::context* ctx, host_buffer_t hst, bool take_ownership)
-  : polymorphic_resource(hst, take_ownership), context_(ctx) { }
+buffer::buffer(driver::context* ctx, size_t size, host_buffer_t hst, bool take_ownership)
+  : polymorphic_resource(hst, take_ownership), context_(ctx), size_(size) { }
 
 
 driver::context* buffer::context() {
   return context_;
+}
+
+size_t buffer::size() {
+  return size_;
 }
 
 buffer* buffer::create(driver::context* ctx, size_t size) {
@@ -62,14 +66,14 @@ buffer* buffer::create(driver::context* ctx, size_t size) {
 //
 
 host_buffer::host_buffer(driver::context *context, size_t size)
-  :  buffer(context, host_buffer_t(), true){
+  :  buffer(context, size, host_buffer_t(), true){
   hst_->data = new char[size];
 }
 
 //
 
 ocl_buffer::ocl_buffer(driver::context* context, size_t size)
-  : buffer(context, cl_mem(), true){
+  : buffer(context, size, cl_mem(), true){
   cl_int err;
   *cl_ = dispatch::clCreateBuffer(*context->cl(), CL_MEM_READ_WRITE, size, NULL, &err);
   check(err);
@@ -79,13 +83,13 @@ ocl_buffer::ocl_buffer(driver::context* context, size_t size)
 //
 
 cu_buffer::cu_buffer(driver::context* context, size_t size)
-  : buffer(context, CUdeviceptr(), true) {
+  : buffer(context, size, CUdeviceptr(), true) {
   cu_context::context_switcher ctx_switch(*context_);
   dispatch::cuMemAlloc(&*cu_, size);
 }
 
-cu_buffer::cu_buffer(driver::context* context, CUdeviceptr cu, bool take_ownership)
-  : buffer(context, cu, take_ownership){
+cu_buffer::cu_buffer(driver::context* context, size_t size, CUdeviceptr cu, bool take_ownership)
+  : buffer(context, size, cu, take_ownership){
 }
 
 void cu_buffer::set_zero(driver::stream* queue, size_t size)
