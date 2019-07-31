@@ -6,7 +6,7 @@ namespace blocksparse{
 
 
 size_t dot::num_flops() const {
-
+  return 2.*nblocks_*BS_*BS_*N_;
 }
 
 bool dot::operator <(const base& other) const {
@@ -30,25 +30,23 @@ base * dot::clone() const {
 }
 
 dot::dot(int32_t N, int32_t K, int32_t S, int32_t C,
-         const std::string& ty, int32_t BS, int32_t nlocks, op_t op):
+         const std::string& ty, int32_t BS, int32_t nlocks, int32_t nblocks, op_t op):
     base("bsdot"),
     N_(N), K_(K), S_(S), C_(C),
     ab_ty_(ty), c_ty_(ty),
-    BS_(BS), nlocks_(nlocks), op_(op){
+    BS_(BS), nlocks_(nlocks), nblocks_(nblocks), op_(op){
 }
 
-void dot::init_impl(driver::stream *stream, driver::cu_module *module) {
-//  int32_t TM = info.globals["TM"];
-//  size_t grid_0 = (N_ + TM - 1) / TM;
-//  if(nlocks_){
-//    locks_ = triton::driver::buffer::create(stream->context(), grid_0 * nlocks_ * 2 * 4);
-//    ((driver::cu_buffer*)locks_)->set_zero(stream, grid_0 * nlocks_ * 2 * 4);
-//  }
+void dot::init_impl(driver::stream *stream, driver::cu_module *module, triton::runtime::launch_information info) {
+  int32_t TM = info.globals["TM"];
+  size_t grid_0 = (N_ + TM - 1) / TM;
+  if(nlocks_ && !locks_){
+    locks_.reset(triton::driver::buffer::create(stream->context(), grid_0 * nlocks_ * 2 * 4));
+    ((driver::cu_buffer*)locks_.get())->set_zero(stream, grid_0 * nlocks_ * 2 * 4);
+  }
 }
 
 void dot::deinit_impl() {
-//  if(locks_)
-//    delete locks_;
 }
 
 void dot::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
@@ -57,7 +55,6 @@ void dot::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
   driver::buffer *b = args[1];
   driver::buffer *c = args[2];
   driver::buffer *lut = args[3];
-  driver::buffer *locks = args[4];
   int32_t lda = N_;
   int32_t ldc = N_;
   kernel->setArg(0, a);
@@ -67,14 +64,18 @@ void dot::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
   kernel->setArg(4, ldc);
   kernel->setArg(5, N_);
   kernel->setArg(6, lut);
-  kernel->setArg(7, locks);
+  kernel->setArg(7, locks_.get());
   kernel->setArg(8, nlocks_);
   int32_t TM = info.globals["TM"];
   size_t grid_0 = (N_ + TM - 1) / TM;
   size_t grid_1 = S_;
   if(nlocks_)
-    ((driver::cu_buffer*)locks)->set_zero(stream, grid_0 * nlocks_ * 2 * 4);
+    ((driver::cu_buffer*)locks_.get())->set_zero(stream, grid_0 * nlocks_ * 2 * 4);
   stream->enqueue(kernel, {grid_0, grid_1, 1}, {info.num_threads, 1, 1});
+}
+
+driver::buffer* dot::get_locks() const {
+  return locks_.get();
 }
 
 void dot::triton_c_src(std::ostream &os) const {
@@ -90,7 +91,7 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string ldb1 = (op_ == FPROP) ? "TK" : "1" ;
   std::string result =
   R"(
-  const tunable int32 TM = {64};
+  const tunable int32 TM = {32, 64, 128};
   const tunable int32 TN = {)" + std::to_string(BS_) + R"(};
   const tunable int32 TK = {)" + std::to_string(BS_) + R"(};
 
@@ -106,6 +107,7 @@ void dot::triton_c_src(std::ostream &os) const {
     int32 ryb[TN] = 0 ... TN;
     int32 rka[TK] = 0 ... TK;
     int32 rkb[TK] = 0 ... TK;
+    int1 checka[TM, TK] = (rxa < N)[:, newaxis];
     int32 offa[)" + sizea + "] = rxa[" + bca0 + "] + rka[" + bca1 + R"(]*lda;
     int32 offb[)" + sizeb + "] = ryb[" + bcb0 + "]*" + ldb0 + " + rkb[" + bcb1 + "]*" + ldb1 + R"(;
     int32 *header = lut + ridy * 4;
@@ -119,7 +121,7 @@ void dot::triton_c_src(std::ostream &os) const {
        int32 bk = *(plut + 1);
        )" + ab_ty_ + "* pa[" + sizea + R"(] = A + offa + ak * TK * lda;
        )" + ab_ty_ + "* pb[" + sizeb + R"(] = B + offb + bk * TK * TN;
-       )" + ab_ty_ + "   a[" + sizea + R"(] = *pa;
+       )" + ab_ty_ + "   a[" + sizea + R"(] = checka ? *pa : 0;
        )" + ab_ty_ + "   b[" + sizeb + R"(] = *pb;
        acc = dot()" + usea + ", " + useb + R"(, acc);
        plut = plut + 2;

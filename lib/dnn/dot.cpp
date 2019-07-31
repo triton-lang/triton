@@ -39,7 +39,7 @@ base* dot::clone() const {
   return new dot(*this);
 }
 
-void dot::init_impl(driver::stream* stream, driver::cu_module *) {
+void dot::init_impl(driver::stream* stream, driver::cu_module *, runtime::launch_information) {
   std::vector<int32_t> hlocks(2048, 0);
   if(locks_ == nullptr)
     locks_ = triton::driver::buffer::create(stream->context(), hlocks.size()*4);

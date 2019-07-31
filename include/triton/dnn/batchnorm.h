@@ -38,7 +38,7 @@ namespace dnn{
 class batchnorm_forward: public base {
 private:
   // init
-  void init_impl(driver::stream *, driver::cu_module *) { }
+  void init_impl(driver::stream *, driver::cu_module *, triton::runtime::launch_information) { }
   void deinit_impl() { }
 
   // enqueue
@@ -74,7 +74,7 @@ private:
 class batchnorm_backward: public base{
 private:
   // init
-  void init_impl(driver::stream *, driver::cu_module *) { }
+  void init_impl(driver::stream *, driver::cu_module *, triton::runtime::launch_information) { }
   void deinit_impl() { }
   // enqueue
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,

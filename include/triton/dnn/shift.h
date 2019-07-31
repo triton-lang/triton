@@ -49,7 +49,7 @@ enum layout_t {
 class shift: public base {
 private:
   // initialize and enqueue
-  void init_impl(driver::stream *stream, driver::cu_module *module);
+  void init_impl(driver::stream *stream, driver::cu_module *module, triton::runtime::launch_information info);
   void deinit_impl();
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,

@@ -275,7 +275,7 @@ cu_buffer* cu_module::symbol(const char *name) const{
   CUdeviceptr handle;
   size_t size;
   dispatch::cuModuleGetGlobal_v2(&handle, &size, *cu_, name);
-  return new cu_buffer(ctx_, handle, false);
+  return new cu_buffer(ctx_, size, handle, false);
 }
 
 

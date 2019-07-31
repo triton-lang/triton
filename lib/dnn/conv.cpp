@@ -278,7 +278,7 @@ size_t conv::num_flops() const{
   return 2.*M_*N_*K_;
 }
 
-void conv::init_impl(driver::stream *stream, triton::driver::cu_module* module) {
+void conv::init_impl(driver::stream *stream, triton::driver::cu_module* module, triton::runtime::launch_information info) {
   auto init_lut = [&](bool is_cst, const char *name, std::vector<int32_t> host) -> triton::driver::buffer*{
     if(host.empty())
       return nullptr;
@@ -293,12 +293,16 @@ void conv::init_impl(driver::stream *stream, triton::driver::cu_module* module) 
     stream->write(buffer, false, 0, nbytes, host.data());
     return buffer;
   };
-
-  d_a_deltas_ = init_lut(is_a_deltas_cst, "delta", h_a_deltas_);
-  d_b_deltas_ = init_lut(is_b_deltas_cst_, "b_delta", h_b_deltas_);
-  d_masks_ = init_lut(is_mask_cst_, "masks", h_masks_);
-  d_locks_ = triton::driver::buffer::create(stream->context(), max_grid_0_*max_grid_1_*4*2);
-  ((triton::driver::cu_buffer*)d_locks_)->set_zero(stream, max_grid_0_*max_grid_1_*4*2);
+  if(d_a_deltas_ == nullptr)
+    d_a_deltas_ = init_lut(is_a_deltas_cst, "delta", h_a_deltas_);
+  if(d_b_deltas_ == nullptr)
+    d_b_deltas_ = init_lut(is_b_deltas_cst_, "b_delta", h_b_deltas_);
+  if(d_masks_ == nullptr)
+    d_masks_ = init_lut(is_mask_cst_, "masks", h_masks_);
+  if(d_locks_ == nullptr){
+    d_locks_ = triton::driver::buffer::create(stream->context(), max_grid_0_*max_grid_1_*4*2);
+    ((triton::driver::cu_buffer*)d_locks_)->set_zero(stream, max_grid_0_*max_grid_1_*4*2);
+  }
 }
 
 void conv::set_arg(driver::kernel *kernel,
