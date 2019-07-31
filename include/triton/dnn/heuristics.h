@@ -7,10 +7,12 @@
 namespace triton{
 namespace dnn{
 
+/* Dense matrix multiplication */
+
 typedef std::vector<unsigned> params_t;
 typedef std::tuple<bool, bool> trans_key_t;
 typedef std::tuple<size_t, size_t> size_key_t;
-static const std::map<trans_key_t, std::map<size_key_t, params_t>> params = {
+static const std::map<trans_key_t, std::map<size_key_t, params_t>> dot_params = {
   /* NN */
   {trans_key_t(false, false), std::map<size_key_t, params_t>{
       {size_key_t(16, 16),   {2, 8, 16, 4, 16, 2, 2, 1, 1, 16, 32, 8, 4, 1}},
@@ -108,7 +110,7 @@ static const std::map<trans_key_t, std::map<size_key_t, params_t>> params = {
 // small search space for partial auto-tuning
 inline std::vector<params_t> dot_search_space(bool AT, bool BT) {
   std::vector<params_t> result;
-  for(auto x: params.at(trans_key_t{AT, BT}))
+  for(auto x: dot_params.at(trans_key_t{AT, BT}))
     result.push_back(x.second);
   return result;
 }
@@ -118,9 +120,41 @@ inline params_t dot_heuristics(bool AT, bool BT, size_t M, size_t N, size_t K) {
   size_t TM = 128;
   size_t TN = 128;
 //  return {4, 4, 128, 8, 4, 128, 2, 2, 2, 2, 32, 32, 16, 1};
-  return params.at(trans_key_t{AT, BT}).at(size_key_t{TM, TN});
+  return dot_params.at(trans_key_t{AT, BT}).at(size_key_t{TM, TN});
 }
+
+
+/* Block-sparse matrix multiplication */
+
+static const std::map<std::pair<bool, size_t>, std::map<size_t, params_t>> bsdot_params = {
+  /* 32x32 */
+  {{true, 32}, std::map<size_t, params_t>{
+      {32, {2, 2, 32, 32, 2, 2, 4, 8, 32, 32, 8, 4, 16}},
+      {64, {2, 2, 64, 32, 2, 1, 16, 4, 4, 32, 16, 2, 4}},
+      {128, {2, 2, 128, 32, 4, 1, 32, 4, 4, 32, 8, 4, 16}}
+  }},
+  {{false, 32}, std::map<size_t, params_t>{
+      {32, {2, 2, 32, 32, 1, 1, 8, 4, 4, 32, 8, 4, 8}},
+      {64, {2, 2, 64, 32, 2, 1, 16, 4, 4, 32, 16, 4, 8}},
+      {128, {2, 2, 128, 32, 4, 1, 32, 4, 4, 32, 32, 4, 8}}
+   }}
+};
+
+// small search space for partial auto-tuning
+inline std::vector<params_t> bsdot_search_space(bool is_fprop, size_t block_size) {
+  std::vector<params_t> result;
+  for(auto x: bsdot_params.at({is_fprop, block_size}))
+    result.push_back(x.second);
+  return result;
+}
+
+// simple parameter heuristics
+inline params_t bsdot_heuristics(bool is_fprop, size_t block_size, size_t N, size_t S) {
+  return bsdot_params.at({is_fprop,block_size}).at(128);
+}
+
 
 }
 }
+
 #endif

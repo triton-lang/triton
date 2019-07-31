@@ -368,6 +368,8 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     Value *res = builder.CreateAtomicRMW(AtomicRMWInst::Xchg, rmw_ptr, rmw_val, AtomicOrdering::Monotonic, SyncScope::System);
     builder.CreateBr(tid_0_done_bb);
     builder.SetInsertPoint(tid_0_done_bb);
+    tgt_->add_memfence(module, builder);
+    tgt_->add_barrier(module, builder);
     return (Instruction*)res;
   }
   if(ir::atomic_add_inst* ii = dynamic_cast<ir::atomic_add_inst*>(inst)){

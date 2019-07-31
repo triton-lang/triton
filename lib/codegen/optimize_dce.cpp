@@ -20,7 +20,8 @@ void optimize_dce::run(ir::module &mod) {
     for(ir::instruction *i: block->get_inst_list()){
       if(dynamic_cast<ir::io_inst*>(i) || dynamic_cast<ir::copy_to_shared_inst*>(i) || dynamic_cast<ir::return_inst*>(i)
          || dynamic_cast<ir::branch_inst*>(i) || dynamic_cast<ir::cond_branch_inst*>(i)
-         || dynamic_cast<ir::atomic_cas_inst*>(i) || dynamic_cast<ir::atomic_exch_inst*>(i) || dynamic_cast<ir::atomic_add_inst*>(i) ){
+         || dynamic_cast<ir::atomic_cas_inst*>(i) || dynamic_cast<ir::atomic_exch_inst*>(i) || dynamic_cast<ir::atomic_add_inst*>(i)
+         || dynamic_cast<ir::barrier_inst*>(i)){
         work_list.push_back(i);
         marked.insert(i);
       }
