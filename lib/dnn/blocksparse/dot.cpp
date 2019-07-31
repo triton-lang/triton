@@ -1,3 +1,4 @@
+#include "triton/dnn/heuristics.h"
 #include "triton/dnn/blocksparse/dot.h"
 
 namespace triton{
@@ -18,11 +19,11 @@ bool dot::operator <(const base& other) const {
 }
 
 std::vector<params_t> dot::search_space() const {
-  throw std::runtime_error("not implemented");
+  return bsdot_search_space(op_ == FPROP, BS_);
 }
 
 params_t dot::heuristics() const {
-  throw std::runtime_error("not implemented");
+  return bsdot_heuristics(op_ == FPROP, BS_, N_, S_);
 }
 
 base * dot::clone() const {
@@ -116,7 +117,8 @@ void dot::triton_c_src(std::ostream &os) const {
     int32 column = *(header + 2);
     int32 lockid = *(header + 3);
     int32 *plut   = lut + offset * 2;
-    for(int32 k = K; k > 0; k = k - 1){
+    for(int32 k = K; k > 0; k = k - 1)
+    {
        int32 ak = *(plut + 0);
        int32 bk = *(plut + 1);
        )" + ab_ty_ + "* pa[" + sizea + R"(] = A + offa + ak * TK * lda;
@@ -133,16 +135,19 @@ void dot::triton_c_src(std::ostream &os) const {
     int1 checkc[TM, TN] = (rxc < N)[:, newaxis];
     if(lockid == 0)
       @checkc *pc = c;
-    else {
+    else
+    {
       int32 *plock = locks + ridx*nlocks + lockid - 1;
       int32 *pcount = plock + get_num_program(0)*nlocks;
       while(__atomic_cas(plock, 0, 1));
       int32 count = *pcount;
-      if(count == 0)
+      if(count == 0){
         @checkc *pc = c;
-      else
+        __atomic_exch(pcount, 1);
+      }
+      else{
         @checkc *pc = c + *pc;
-      *pcount = 1;
+      }
       __atomic_exch(plock, 0);
     }
   })";
