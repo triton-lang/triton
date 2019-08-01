@@ -228,7 +228,7 @@ void tune::run(ir::module &mod) {
         nts->set_value(1);
       }
       else {
-        ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 2, 2);
+        ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 1, 4);
         ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 4);
         connected_components(node, {fpw, wpt}, {"fpw", "wpt"}, nodes_, dependencies_, group_id++);
       }
