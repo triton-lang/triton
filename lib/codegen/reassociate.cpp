@@ -215,6 +215,21 @@ void reassociate::run(ir::module &mod) {
         infos[sta_ptr].dyn_ptr = (ir::getelementptr_inst*)dyn_ptr;
         infos[sta_ptr].sta_ptr = (ir::getelementptr_inst*)sta_ptr;
       }
+      // reassociate pointer argument
+      if(ir::getelementptr_inst* gepy = dynamic_cast<ir::getelementptr_inst*>(py))
+      if(infos.find(gepy) != infos.end()){
+        builder.set_insert_point(pz);
+        ir::getelementptr_inst *sta = infos[gepy].sta_ptr;
+        ir::getelementptr_inst *dyn = infos[gepy].dyn_ptr;
+        ir::value *cst = *sta->idx_begin();
+        ir::value *off = *pz->idx_begin();
+        ir::value *new_dyn = builder.create_gep(dyn, {off});
+        ir::value *new_pz = builder.create_gep(new_dyn, {cst}, pz->get_name());
+        params_->copy(new_dyn, pz);
+        params_->copy(new_pz, pz);
+        align_->copy(new_pz, pz);
+        pz->replace_all_uses_with(new_pz);
+      }
       // reassociate phi-node pointer
       if(ir::phi_node* phi = dynamic_cast<ir::phi_node*>(py)){
         // only optimize the case where py = phi pa, pz for now
