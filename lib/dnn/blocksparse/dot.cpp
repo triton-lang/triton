@@ -92,7 +92,7 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string ldb1 = (op_ == FPROP) ? "TK" : "1" ;
   std::string result =
   R"(
-  const tunable int32 TM = {32, 64, 128};
+  const tunable int32 TM = {16, 32, 64, 128};
   const tunable int32 TN = {)" + std::to_string(BS_) + R"(};
   const tunable int32 TK = {)" + std::to_string(BS_) + R"(};
 
@@ -143,11 +143,11 @@ void dot::triton_c_src(std::ostream &os) const {
       int32 count = *pcount;
       if(count == 0){
         @checkc *pc = c;
-        __atomic_exch(pcount, 1);
       }
       else{
         @checkc *pc = c + *pc;
       }
+      __atomic_exch(pcount, 1);
       __atomic_exch(plock, 0);
     }
   })";

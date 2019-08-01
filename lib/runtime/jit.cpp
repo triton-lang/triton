@@ -230,6 +230,8 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
     parallel_for_each(targets, update_best, nthreads_);
   }
 
+  if(best.params.empty())
+    throw std::runtime_error("auto-tuning didn't find valid parameters");
 //  std::cout << "Autotuning done - Best performance: " << best.perf << std::endl;
   return best;
 }
