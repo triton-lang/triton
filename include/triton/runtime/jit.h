@@ -77,6 +77,7 @@ public:
 
     void target_dependent(ir::module &module) {
       alignment_info.run(module);
+//      ir::print(module, std::cout);
       reassociate.run(module);
       if(target_->is_gpu()){
         shmem_info.run(module);
