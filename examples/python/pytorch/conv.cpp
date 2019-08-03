@@ -30,7 +30,7 @@ torch::Tensor conv_common(
                           stride_d, stride_h, stride_w,
                           pad_d, pad_h, pad_w,
                           1, 1, 1,
-                          "fp32", "fp32", ty, has_bias);
+                          "float", "float", ty, has_bias);
   // Bind memory
   triton::driver::cu_buffer a(ctx, (CUdeviceptr)torcha.storage().data(), false);
   triton::driver::cu_buffer b(ctx, (CUdeviceptr)torchb.storage().data(), false);

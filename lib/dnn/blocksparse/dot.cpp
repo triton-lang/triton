@@ -10,12 +10,8 @@ size_t dot::num_flops() const {
   return 2.*nblocks_*BS_*BS_*N_;
 }
 
-bool dot::operator <(const base& other) const {
-  auto *y = dynamic_cast<const dot*>(&other);
-  if(!y)
-    return true;
-  return  std::tie(N_, S_, C_, BS_, nlocks_, ab_ty_, c_ty_, op_)
-        < std::tie(y->N_, y->S_, y->C_, y->BS_, y->nlocks_, y->ab_ty_, y->c_ty_, y->op_);
+std::vector<int64_t> dot::retune_params() const{
+  return {N_, S_, C_, BS_, nlocks_, op_};
 }
 
 std::vector<params_t> dot::search_space() const {
@@ -92,35 +88,35 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string ldb1 = (op_ == FPROP) ? "*TK" : "" ;
   std::string result =
   R"(
-  const tunable int32 TM = {16, 32, 64, 128};
-  const tunable int32 TN = {)" + std::to_string(BS_) + R"(};
-  const tunable int32 TK = {)" + std::to_string(BS_) + R"(};
+  const tunable int TM = {16, 32, 64, 128};
+  const tunable int TN = {)" + std::to_string(BS_) + R"(};
+  const tunable int TK = {)" + std::to_string(BS_) + R"(};
 
   void bsdot(restrict read_only align(16) )" + ab_ty_ + R"( *A,
              restrict read_only align(16) )" + ab_ty_ + R"( *B,
              )" + c_ty_ + R"(* C,
-             int32 lda, int32 ldc, int32 N,
-             int32* lut, int32* locks, int32 nlocks){
-    int32 ridx = get_range_id(0);
-    int32 ridy = get_range_id(1);
-    fp32 acc[TM, TN] = 0;
-    int32 rxa[TM] = ridx * TM + (0 ... TM);
-    int32 ryb[TN] = 0 ... TN;
-    int32 rka[TK] = 0 ... TK;
-    int32 rkb[TK] = 0 ... TK;
-    int1 checka[TM, TK] = (rxa < N)[:, newaxis];
-    int32 offa[)" + sizea + "] = rxa[" + bca0 + "] + rka[" + bca1 + R"(]*lda;
-    int32 offb[)" + sizeb + "] = ryb[" + bcb0 + "]" + ldb0 + " + rkb[" + bcb1 + "]" + ldb1 + R"(;
-    int32 *header = lut + ridy * 4;
-    int32 offset = *(header + 0);
-    int32 K      = *(header + 1);
-    int32 column = *(header + 2);
-    int32 lockid = *(header + 3);
-    int32 *plut   = lut + offset * 2;
-    for(int32 k = K; k > 0; k = k - 1)
+             int lda, int ldc, int N,
+             int* lut, int* locks, int nlocks){
+    int ridx = get_range_id(0);
+    int ridy = get_range_id(1);
+    float acc[TM, TN] = 0;
+    int rxa[TM] = ridx * TM + (0 ... TM);
+    int ryb[TN] = 0 ... TN;
+    int rka[TK] = 0 ... TK;
+    int rkb[TK] = 0 ... TK;
+    bool checka[TM, TK] = (rxa < N)[:, newaxis];
+    int offa[)" + sizea + "] = rxa[" + bca0 + "] + rka[" + bca1 + R"(]*lda;
+    int offb[)" + sizeb + "] = ryb[" + bcb0 + "]" + ldb0 + " + rkb[" + bcb1 + "]" + ldb1 + R"(;
+    int *header = lut + ridy * 4;
+    int offset = *(header + 0);
+    int K      = *(header + 1);
+    int column = *(header + 2);
+    int lockid = *(header + 3);
+    int *plut   = lut + offset * 2;
+    for(int k = K; k > 0; k = k - 1)
     {
-       int32 ak = *(plut + 0);
-       int32 bk = *(plut + 1);
+       int ak = *(plut + 0);
+       int bk = *(plut + 1);
        )" + ab_ty_ + "* pa[" + sizea + R"(] = A + offa + ak * TK * lda;
        )" + ab_ty_ + "* pb[" + sizeb + R"(] = B + offb + bk * TK * TN;
        )" + ab_ty_ + "   a[" + sizea + R"(] = checka ? *pa : 0;
@@ -128,19 +124,19 @@ void dot::triton_c_src(std::ostream &os) const {
        acc = dot()" + usea + ", " + useb + R"(, acc);
        plut = plut + 2;
     }
-    int32 rxc[TM] = ridx * TM + (0 ... TM);
-    int32 ryc[TN] = column * TN + (0 ... TN);
+    int rxc[TM] = ridx * TM + (0 ... TM);
+    int ryc[TN] = column * TN + (0 ... TN);
     )" + c_ty_ + R"(" c[TM, TN] = acc;
     )" + c_ty_ + R"(* pc[TM, TN] = C + rxc[:, newaxis] + ryc[newaxis, :]*ldc;
-    int1 checkc[TM, TN] = (rxc < N)[:, newaxis];
+    bool checkc[TM, TN] = (rxc < N)[:, newaxis];
     if(lockid == 0)
       @checkc *pc = c;
     else
     {
-      int32 *plock = locks + ridx*nlocks + lockid - 1;
-      int32 *pcount = plock + get_num_program(0)*nlocks;
+      int *plock = locks + ridx*nlocks + lockid - 1;
+      int *pcount = plock + get_num_program(0)*nlocks;
       while(__atomic_cas(plock, 0, 1));
-      int32 count = *pcount;
+      int count = *pcount;
       if(count == 0){
         @checkc *pc = c;
       }

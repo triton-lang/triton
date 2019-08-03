@@ -105,7 +105,7 @@ def batch_norm_grad(op, dy, mean, var):
 
 
 def run_batchnorm():
-    C, H, W, B = 32, 14, 14, 64
+    C, H, W, B = 8, 4, 4, 32
     np.random.seed(0)
     # Placeholders
     x = tf.placeholder(tf.float32, shape=[C, H, W, B])
@@ -131,6 +131,6 @@ def run_batchnorm():
     print(np.max(np.abs(dg_t - dg_n)))
     print(np.max(np.abs(db_t - db_n)))
 
-run_dot()
+#run_dot()
 #run_shift()
-#run_batchnorm()
+run_batchnorm()

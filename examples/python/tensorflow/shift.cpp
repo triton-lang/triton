@@ -106,7 +106,7 @@ public:
     triton::dnn::shift shift(B, C, D, H, W, T, R_, S_, F,
                              stride_h_, stride_w_,
                              shift_h_data, shift_w_data,
-                             "fp16", "fp16", OP, has_bias, layout_);
+                             "half", "half", OP, has_bias, layout_);
 
     // shapes for c
     std::vector<int64> c_shapes;

@@ -16,8 +16,8 @@ private:
   void enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                     std::vector<driver::buffer*> args,
                     triton::runtime::launch_information info);
-  // comparison for maps
-  bool operator<(const base& other) const;
+  // retuning parameters
+  std::vector<int64_t> retune_params() const;
   // default parameters
   virtual std::vector<params_t> search_space() const;
   virtual params_t heuristics() const;
@@ -25,7 +25,7 @@ private:
 public:
   dot(int M, int N, int K, bool AT, bool BT,
        std::string a_ty, std::string b_ty,
-       unsigned alignment_lda, unsigned alignment_ldb);
+       unsigned align_lda, unsigned align_ldb, unsigned align_ldc);
 
   // number of flops
   size_t num_flops() const;
@@ -70,6 +70,7 @@ private:
   std::string b_ty_;
   unsigned align_lda_;
   unsigned align_ldb_;
+  unsigned align_ldc_;
   driver::buffer *locks_;
 };
 

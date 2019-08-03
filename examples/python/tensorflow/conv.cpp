@@ -61,7 +61,7 @@ public:
                            stride_d, stride_h, stride_w,
                            pad_d, pad_h, pad_w,
                            1, 1, 1,
-                           "fp16", "fp16",
+                           "half", "half",
                            triton::dnn::conv::FPROP, has_bias);
     // allocate output
     auto c_shapes = conv.c_shapes();

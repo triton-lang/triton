@@ -10,11 +10,11 @@ namespace dnn{
 dot::dot(int M, int N, int K,
            bool AT, bool BT,
            std::string a_ty, std::string b_ty,
-           unsigned alignment_lda, unsigned alignment_ldb)
+           unsigned align_lda, unsigned align_ldb, unsigned align_ldc)
   : base("matmul"),
     M_(M), N_(N), K_(K), AT_(AT), BT_(BT),
     a_ty_(a_ty), b_ty_(b_ty),
-    align_lda_(alignment_lda), align_ldb_(alignment_ldb),
+    align_lda_(align_lda), align_ldb_(align_ldb), align_ldc_(align_ldc),
     locks_(nullptr) {
 
 }
@@ -23,15 +23,10 @@ size_t dot::num_flops() const {
   return 2.*M_*N_*K_;
 }
 
-// comparison for maps
-bool dot::operator<(const base& other) const {
-  auto *y = dynamic_cast<const dot*>(&other);
-  if(!y)
-    return true;
-  return  std::tie(M_, N_, K_, AT_, BT_,
-                   a_ty_, b_ty_, align_lda_, align_ldb_)
-        < std::tie(y->M_, y->N_, y->K_, y->AT_, y->BT_,
-                   y->a_ty_, y->b_ty_, y->align_lda_, y->align_ldb_);
+// retune parameters
+std::vector<int64_t> dot::retune_params() const {
+  return {M_, N_, K_, AT_, BT_,
+          (int)align_lda_, (int)align_ldb_};
 }
 
 // clone
@@ -101,45 +96,45 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb_) + ")";
   std::string res =
 R"(
-const tunable int32 TM = {16, 32, 64, 128, 256};
-const tunable int32 TN = {16, 32, 64, 128, 256};
-const tunable int32 TK = {32};
-const tunable int32 GZ = {1};
+const tunable int TM = {16, 32, 64, 128};
+const tunable int TN = {16, 32, 64, 128};
+const tunable int TK = {32};
+const tunable int GZ = {1};
 
 void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
             restrict read_only align(16) )" + b_ty_ + R"( *B,
-            fp32 *C,
-            int32 M, int32 N, int32 K,
-            )" + align_lda_str + R"( int32 lda, )" + align_ldb_str + R"(" int32 ldb, int32 ldc,
-            int32 bound, int32 *locks, int32 grid0, int32 grid1) {
-  int32 ridx = get_range_id(0);
-  int32 ridy = get_range_id(1);
-  int32 rxa[TM] = ridx * TM + (0 ... TM);
-  int32 ryb[TN] = ridy * TN + (0 ... TN);
-  int32 rka[TK] = 0 ... TK;
-  int32 rkb[TK] = 0 ... TK;
-  fp32 c[TM, TN] = 0;
+            restrict read_only align(16) float *C,
+            int M, int N, int K,
+            )" + align_lda_str + R"( int lda, )" + align_ldb_str + R"(" int ldb, int ldc,
+            int bound, int *locks, int grid0, int grid1) {
+  int ridx = get_range_id(0);
+  int ridy = get_range_id(1);
+  int rxa[TM] = ridx * TM + (0 ... TM);
+  int ryb[TN] = ridy * TN + (0 ... TN);
+  int rka[TK] = 0 ... TK;
+  int rkb[TK] = 0 ... TK;
+  float c[TM, TN] = 0;
   )" + a_ty_ + R"(* pa[)" + AS + "] = A + rka" + bca0 + lda0 + " + rxa" + bca1 + lda1 + R"(;
   )" + b_ty_ + R"(* pb[)" + BS + "] = B + rkb" + bcb0 + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
-  int1 checka[)" + AS + R"(] = (rka < K))" + bca0 + " && (rxa < M)" + bca1 + R"(;
-  int1 checkb[)" + BS + R"(] = (rkb < K))" + bcb0 + " && (ryb < N)" + bcb1 + R"(;
+  bool checka[)" + AS + R"(] = (rka < K))" + bca0 + " && (rxa < M)" + bca1 + R"(;
+  bool checkb[)" + BS + R"(] = (rkb < K))" + bcb0 + " && (ryb < N)" + bcb1 + R"(;
   )" + a_ty_ + R"( a[)" + AS + R"(] = checka ? *pa : 0;
   )" + b_ty_ + R"( b[)" + BS + R"(] = checkb ? *pb : 0;
-  for(int32 k = K; k > 0; k = k - TK){
+  for(int k = K; k > 0; k = k - TK){
     c = dot()" + usea + ", " + useb + R"(, c);
     pa = pa + TK)" + lda0 + R"(;
     pb = pb + TK)" + ldb0 + R"(;
-    int1 checka[)" + AS + R"(] = k > TK;
-    int1 checkb[)" + BS + R"(] = k > TK;
+    bool checka[)" + AS + R"(] = k > TK;
+    bool checkb[)" + BS + R"(] = k > TK;
     a = checka ? *pa : 0;
     b = checkb ? *pb : 0;
   }
-  int32 rxc[TM] =  ridx * TM + (0 ... TM);
-  int32 ryc[TN] =  ridy * TN + (0 ... TN);
-  int1 checkc0[TM] = rxc < M;
-  int1 checkc1[TN] = ryc < N;
-  int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
-  fp32* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
+  int rxc[TM] =  ridx * TM + (0 ... TM);
+  int ryc[TN] =  ridy * TN + (0 ... TN);
+  bool checkc0[TM] = rxc < M;
+  bool checkc1[TN] = ryc < N;
+  bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
+  float* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
   @checkc *pc = c;
 }
 )";

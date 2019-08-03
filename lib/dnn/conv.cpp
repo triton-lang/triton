@@ -98,20 +98,12 @@ conv::conv(int B, int NC,
 }
 
 // comparison for maps
-bool conv::operator<(const base& other) const {
-  auto *y = dynamic_cast<const conv*>(&other);
-  if(!y)
-    return true;
-  return  std::tie(NB_, NC_, AD_, AH_, AW_,
-                   NF_, BD_, BH_, BW_,
-                   pad_d_, pad_h_, pad_w_,
-                   stride_d_, stride_h_, stride_w_,
-                   a_ty_, b_ty_, ty_, bias_)
-        < std::tie(y->NB_, y->NC_, y->AD_, y->AH_, y->AW_,
-                   y->NF_, y->BD_, y->BH_, y->BW_,
-                   y->pad_d_, y->pad_h_, y->pad_w_,
-                   y->stride_d_, y->stride_h_, y->stride_w_,
-                   y->a_ty_, y->b_ty_, y->ty_, y->bias_);
+std::vector<int64_t> conv::retune_params() const {
+  return {NB_, NC_, AD_, AH_, AW_,
+          NF_, BD_, BH_, BW_,
+          pad_d_, pad_h_, pad_w_,
+          stride_d_, stride_h_, stride_w_,
+          ty_, bias_};
 }
 
 // clone
@@ -549,114 +541,114 @@ void conv::triton_c_src(std::ostream &os) const {
 
   os <<
       R"(
-const tunable int32 TM = {16, 32, 64};
-const tunable int32 TN = {16, 32, 64};
-const tunable int32 TK = {)" << TK_ << R"(};
-const tunable int32 GZ = {1};
+const tunable int TM = {16, 32, 64};
+const tunable int TN = {16, 32, 64};
+const tunable int TK = {)" << TK_ << R"(};
+const tunable int GZ = {1};
 )";
 if(is_a_deltas_cst)
-  os << "__constant__ int32* delta = alloc_const int32[" + std::to_string(h_a_deltas_.size()) + "];\n";
+  os << "__constant__ int* delta = alloc_const int[" + std::to_string(h_a_deltas_.size()) + "];\n";
 if(b_lut_ && is_b_deltas_cst_)
-  os << "__constant__ int32* b_delta = alloc_const int32[" + std::to_string(h_b_deltas_.size()) + "];\n";
+  os << "__constant__ int* b_delta = alloc_const int[" + std::to_string(h_b_deltas_.size()) + "];\n";
 if(is_mask_cst_)
-  os << "__constant__ int32* masks = alloc_const int32[" + std::to_string(h_masks_.size()) + "];\n";
+  os << "__constant__ int* masks = alloc_const int[" + std::to_string(h_masks_.size()) + "];\n";
 os << R"(
 
  void conv(read_only restrict )" << a_ty_ << R"( *a,
            read_only restrict )" << b_ty_ << R"( *b,
-           fp32 *c,
-           fp32 *bias,
-           int32 M, int32 N, int32 K,
-           int32 AH, int32 AW,
-           int32 BH, int32 BW,
-           int32 CH, int32 CW,
-           int32 NC,
-           int32 lda_n, int32 lda_c, int32 lda_d, int32 lda_h, int32 lda_w,
-           int32 ldb_c, int32 ldb_t, int32 ldb_r, int32 ldb_s, int32 ldb_k,
-           int32 ldc_n, int32 ldc_k, int32 ldc_m, int32 ldc_p, int32 ldc_q,
-           int32 pad_h, int32 pad_w,
-           int32 stride_h, int32 stride_w,
-           int32 upsample_h, int32 upsample_w,
-           int32 off_uh, int32 off_uw,
-           int32 off_uah, int32 off_uaw,
-           int32 off_uch, int32 off_ucw,
-           int32 *locks, int32 grid0, int32 grid1)";
+           float *c,
+           float *bias,
+           int M, int N, int K,
+           int AH, int AW,
+           int BH, int BW,
+           int CH, int CW,
+           int NC,
+           int lda_n, int lda_c, int lda_d, int lda_h, int lda_w,
+           int ldb_c, int ldb_t, int ldb_r, int ldb_s, int ldb_k,
+           int ldc_n, int ldc_k, int ldc_m, int ldc_p, int ldc_q,
+           int pad_h, int pad_w,
+           int stride_h, int stride_w,
+           int upsample_h, int upsample_w,
+           int off_uh, int off_uw,
+           int off_uah, int off_uaw,
+           int off_uch, int off_ucw,
+           int *locks, int grid0, int grid1)";
 if(!is_a_deltas_cst)
-  os << ", int32* delta";
+  os << ", int* delta";
 if(b_lut_ && !is_b_deltas_cst_)
-  os << ", int32* b_delta";
+  os << ", int* b_delta";
 if(!is_mask_cst_)
-  os << ", int32* masks";
+  os << ", int* masks";
  os << R"(){
-  int32 rxa[TM] = get_global_range[TM](0);
-  int32 rb0[TN] = get_global_range[TN](1);
-  int32 rz = get_global_range[1](2);
-  int32 rka[TK] = 0 ... TK;
-  int32 rkb[TK] = 0 ... TK;
-  fp32 C[TM, TN] = 0;
-  int32 ldlut = )" + std::to_string(Luts_) + R"(;
-  int32 div = K / GZ;
-  int32 rem = K % GZ;
+  int rxa[TM] = get_global_range[TM](0);
+  int rb0[TN] = get_global_range[TN](1);
+  int rz = get_global_range[1](2);
+  int rka[TK] = 0 ... TK;
+  int rkb[TK] = 0 ... TK;
+  float C[TM, TN] = 0;
+  int ldlut = )" + std::to_string(Luts_) + R"(;
+  int div = K / GZ;
+  int rem = K % GZ;
   K = select(rz < rem, div, div + rem);
-  int32 offk = rz*div;
+  int offk = rz*div;
   rka = rka + offk;
   rkb = rkb + offk;
-  int32 rabh[TM] = rxa / CW;
-  int32 raw[TM] = rxa % CW;
-  int32 rab[TM] = rabh / CH;
-  int32 rah[TM] = rabh % CH;
+  int rabh[TM] = rxa / CW;
+  int raw[TM] = rxa % CW;
+  int rab[TM] = rabh / CH;
+  int rah[TM] = rabh % CH;
   rah = rah)" + upaw + R"( - off_uah;
   raw = raw)" + upah + R"( - off_uaw;
-  int32 ra0[TM] = rab*lda_n + rah*lda_h + raw*lda_w;
-  int32 ra)" + ax[0] + ax[1] + "[TK] = rka / " + redax[2] + R"(;
-  int32 ra)" + ax[2] + "[TK] = rka %  " + redax[2] + R"(;
-  int32 ra)" + ax[0] + "[TK] = ra" + ax[0] + ax[1] + " / " + redax[1] + R"(;
-  int32 ra)" + ax[1] + "[TK] = ra" + ax[0] + ax[1] + " % " + redax[1] + R"(;
+  int ra0[TM] = rab*lda_n + rah*lda_h + raw*lda_w;
+  int ra)" + ax[0] + ax[1] + "[TK] = rka / " + redax[2] + R"(;
+  int ra)" + ax[2] + "[TK] = rka %  " + redax[2] + R"(;
+  int ra)" + ax[0] + "[TK] = ra" + ax[0] + ax[1] + " / " + redax[1] + R"(;
+  int ra)" + ax[1] + "[TK] = ra" + ax[0] + ax[1] + " % " + redax[1] + R"(;
   rar = )" + flipr + R"( rar;
   ras = )" + flips + R"( ras;
   rar = )" + upar + R"( rar;
   ras = )" + upas + R"( ras;
-  int32 ra1[TK] = rac*lda_c + rar*lda_h + ras*lda_w;
+  int ra1[TK] = rac*lda_c + rar*lda_h + ras*lda_w;
   )" << a_ty_ << R"(* pa[TM, TK] = a + ra1[newaxis, :] + ra0[:, newaxis];)";
 if(b_lut_){
  os << R"(
-  int32 rb)" + ax[0] + ax[1] + "[TK] = rkb / " + redax[2] + R"(;
-  int32 rb)" + ax[2] + "[TK] = rkb %  " + redax[2] + R"(;
-  int32 rb)" + ax[0] + "[TK] = rb" + ax[0] + ax[1] + " / " + redax[1] + R"(;
-  int32 rb)" + ax[1] + "[TK] = rb" + ax[0] + ax[1] + " % " + redax[1] + R"(;
+  int rb)" + ax[0] + ax[1] + "[TK] = rkb / " + redax[2] + R"(;
+  int rb)" + ax[2] + "[TK] = rkb %  " + redax[2] + R"(;
+  int rb)" + ax[0] + "[TK] = rb" + ax[0] + ax[1] + " / " + redax[1] + R"(;
+  int rb)" + ax[1] + "[TK] = rb" + ax[0] + ax[1] + " % " + redax[1] + R"(;
   rbr = rbr*upsample_h + off_uh;
   rbs = rbs*upsample_w + off_uw;
-  int32 offdb[TK] = rkb % ldlut;
-  int32 rb1[TK] = rbc*ldb_c + rbr*ldb_r + rbs*ldb_s;
-  )" + b_delta_mem + R"( int32* pdb[TK] = b_delta + offdb + off_uw*ldlut + off_uh*ldlut*upsample_w;
-  int32 db[TK] = *pdb;)";
+  int offdb[TK] = rkb % ldlut;
+  int rb1[TK] = rbc*ldb_c + rbr*ldb_r + rbs*ldb_s;
+  )" + b_delta_mem + R"( int* pdb[TK] = b_delta + offdb + off_uw*ldlut + off_uh*ldlut*upsample_w;
+  int db[TK] = *pdb;)";
 }
 else{
 os << R"(
-  int32 rb1[TK] = rkb)" + ldb0 + ";";
+  int rb1[TK] = rkb)" + ldb0 + ";";
 }
 os << R"(
   )" << b_ty_ << R"(* pb)" + BS + " = b + rb1" + bcb1 + " + rb0" + bcb0 + R"(*ldb_k;
-  int32 offda[TK] = rka % ldlut;
-  )" + a_delta_mem + R"( int32* pincd[TK] = delta + offda;
-  )" + a_delta_mem + R"( int32* pda[TK]  = delta + ldlut + offda + off_uw*ldlut + off_uh*ldlut*upsample_w;
-  int32 da[TK] = *pda;
-  int32 incd[TK] = *pincd;
-  int32 maskh[TM] = pad_h + min(rah, 0) + max(rah + BH - AH, 0);
-  int32 maskw[TM] = pad_w + min(raw, 0) + max(raw + BW - AW, 0);
-  int32 offma = offk % ldlut;
-  )" + masks_mem + R"( int32* pm[TM] = masks + ldlut + offma + maskw*ldlut + maskh*ldlut*(2*pad_w + 1) + off_uw*ldlut*(2*pad_w+1)*(2*pad_h+1) + off_uh*ldlut*(2*pad_w+1)*(2*pad_h+1)*upsample_w;
-  )" + a_delta_mem + R"( int32* pincm[TM] = delta + offma;
-  int32 incm[TM] = *pincm;
-  int32 maska0[TM] = *pm;
-  int32 maska1[TK] = 1 << (0 ... TK);
-  int1 checka[TM, TK] = (maska0[:, newaxis] & maska1[newaxis, :]) > 0;
-  int1 checkb0[TN] = rb0 < N;
-  int1 checkb)" + BS + " = checkb0" + bcb0 + R"(;
+  int offda[TK] = rka % ldlut;
+  )" + a_delta_mem + R"( int* pincd[TK] = delta + offda;
+  )" + a_delta_mem + R"( int* pda[TK]  = delta + ldlut + offda + off_uw*ldlut + off_uh*ldlut*upsample_w;
+  int da[TK] = *pda;
+  int incd[TK] = *pincd;
+  int maskh[TM] = pad_h + min(rah, 0) + max(rah + BH - AH, 0);
+  int maskw[TM] = pad_w + min(raw, 0) + max(raw + BW - AW, 0);
+  int offma = offk % ldlut;
+  )" + masks_mem + R"( int* pm[TM] = masks + ldlut + offma + maskw*ldlut + maskh*ldlut*(2*pad_w + 1) + off_uw*ldlut*(2*pad_w+1)*(2*pad_h+1) + off_uh*ldlut*(2*pad_w+1)*(2*pad_h+1)*upsample_w;
+  )" + a_delta_mem + R"( int* pincm[TM] = delta + offma;
+  int incm[TM] = *pincm;
+  int maska0[TM] = *pm;
+  int maska1[TK] = 1 << (0 ... TK);
+  bool checka[TM, TK] = (maska0[:, newaxis] & maska1[newaxis, :]) > 0;
+  bool checkb0[TN] = rb0 < N;
+  bool checkb)" + BS + " = checkb0" + bcb0 + R"(;
   )" << a_ty_ << R"( a[TM, TK] = checka ? *pa : 0;
   )" << b_ty_ << R"( b)" + BS + R"( = checkb ? *pb : 0;
-  int32 rkamin[TK] = rka - offk + TK;
-  for(int32 k = K; k > 0; k = k - TK){
+  int rkamin[TK] = rka - offk + TK;
+  for(int k = K; k > 0; k = k - TK){
     C = dot(a, )" + useb + R"(, C);
     pa = pa + da[newaxis, :];
     pb = pb + )" + inc_pb + R"(;
@@ -673,7 +665,7 @@ if(b_lut_){
     pm = pm + incm;
     pincm = pincm + incm;
     incm = *pincm;
-    int1 checka1[TK] = (rkamin < k);
+    bool checka1[TK] = (rkamin < k);
     maska0 = *pm;
     checka = (maska0[:, newaxis] & maska1[newaxis, :]) > 0;
     checka = checka && checka1[newaxis,:];
@@ -681,31 +673,31 @@ if(b_lut_){
     checkb = checkb && (k > TK);
     @checkb b = *pb;
   }
-  int32 rxc[TM] = get_global_range[TM](0);
-  int32 rc1[TN] = get_global_range[TN](1);
-  int32 rcn[TM] = rxc / (CH*CW);
-  int32 rcpq[TM] = rxc % (CH*CW);
-  int32 rcp[TM] = rcpq / CW;
-  int32 rcq[TM] = rcpq % CW;
+  int rxc[TM] = get_global_range[TM](0);
+  int rc1[TN] = get_global_range[TN](1);
+  int rcn[TM] = rxc / (CH*CW);
+  int rcpq[TM] = rxc % (CH*CW);
+  int rcp[TM] = rcpq / CW;
+  int rcq[TM] = rcpq % CW;
   rcp = rcp * upsample_h + off_uch;
   rcq = rcq * upsample_w + off_ucw;
-  int1 checkc1[TN] = rc1 < N;
-  int32 rc0[TM] = rcn * ldc_n + rcp * ldc_p + rcq * ldc_q;
-  fp32* pc[TM, TN]  = c + rc1[newaxis, :]*ldc_k + rc0[:, newaxis];
-  int1 checkc0[TM] = rxc < M;
-  int1 checkc[TM, TN]  = checkc0[:, newaxis] && checkc1[newaxis, :];
-  int32 ridx = get_range_id(0);
-  int32 ridy = get_range_id(1);
-  int32 *plock = locks + ridx + ridy*grid0;
+  bool checkc1[TN] = rc1 < N;
+  int rc0[TM] = rcn * ldc_n + rcp * ldc_p + rcq * ldc_q;
+  float* pc[TM, TN]  = c + rc1[newaxis, :]*ldc_k + rc0[:, newaxis];
+  bool checkc0[TM] = rxc < M;
+  bool checkc[TM, TN]  = checkc0[:, newaxis] && checkc1[newaxis, :];
+  int ridx = get_range_id(0);
+  int ridy = get_range_id(1);
+  int *plock = locks + ridx + ridy*grid0;
   while(__atomic_cas(plock, 0, 1) == 1);
-  int32 *pcount = plock + grid0*grid1;
-  int32 count = *pcount;
-  int32 countp1 = select(count == GZ - 1, 0, count + 1);
+  int *pcount = plock + grid0*grid1;
+  int count = *pcount;
+  int countp1 = select(count == GZ - 1, 0, count + 1);
   if(count == 0) {)";
  if(bias_ && ty_==FPROP){
    os << R"(
-   fp32* pbias[TN] = bias + rc1;
-   fp32 bias[TN] = checkc1 ? *pbias : 0;
+   float* pbias[TN] = bias + rc1;
+   float bias[TN] = checkc1 ? *pbias : 0;
    C = C + bias[newaxis, :];)";
  }
    os << R"(

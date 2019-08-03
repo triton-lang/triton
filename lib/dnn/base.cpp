@@ -1,4 +1,5 @@
 #include <sstream>
+#include <unordered_map>
 #include "triton/dnn/base.h"
 #include "triton/runtime/jit.h"
 #include "triton/tools/bench.hpp"
@@ -31,7 +32,7 @@ params_t base::heuristics() const {
 }
 
 std::pair<base*, rt::jit*> base::get_profile_impl(driver::stream *stream, std::vector<driver::buffer *> args, autotuning_t autotune) {
-  static std::map<base*, std::unique_ptr<rt::jit>, cmp_recompile> m_jit;
+  static std::unordered_map<base*, std::unique_ptr<rt::jit>, recompile_hash, recompile_equal> m_jit;
   driver::context* ctx = stream->context();
   rt::jit* jit;
   /* the current template has not already been compiled */

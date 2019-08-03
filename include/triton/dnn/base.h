@@ -52,12 +52,15 @@ struct launch_context_t{
 typedef std::vector<unsigned> params_t;
 
 class base {
-  friend class cmp_recompile;
+  friend class recompile_hash;
+  friend class recompile_equal;
 
 protected:
   // leading dimensions
   static void set_ld(const std::vector<int32_t>& shapes,
                      std::vector<int32_t>& ld);
+  // list of retuning parameters
+  virtual std::vector<int64_t> retune_params() const = 0;
 
 private:
   // initialize
@@ -70,8 +73,6 @@ private:
                     triton::runtime::launch_information info) = 0;
   // number of flops
   virtual size_t num_flops() const = 0;
-  // comparison for maps
-  virtual bool operator<(const base& other) const = 0;
   // default parameters
   virtual std::vector<params_t> search_space() const;
   virtual params_t heuristics() const;
@@ -94,11 +95,20 @@ private:
   std::string name_;
 };
 
-struct cmp_recompile{
+
+struct recompile_equal{
   bool operator()(base* x, base* y) const{
-    return *x < *y;
+    return typeid(*x) == typeid(*y) &&
+           x->retune_params() == y->retune_params();
   }
 };
+
+struct recompile_hash{
+  unsigned operator()(base* x) const{
+    return x->retune_params()[0];
+  }
+};
+
 
 }
 }

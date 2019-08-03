@@ -49,9 +49,9 @@ torch::Tensor shift_common(
   std::string dtype;
   at::ScalarType type = torcha.scalar_type();
   switch(type){
-    case at::ScalarType::Double: dtype = "fp64"; break;
-    case at::ScalarType::Float: dtype = "fp32"; break;
-    case at::ScalarType::Half: dtype = "fp16"; break;
+    case at::ScalarType::Double: dtype = "double"; break;
+    case at::ScalarType::Float: dtype = "float"; break;
+    case at::ScalarType::Half: dtype = "half"; break;
     default: AT_ERROR("unknown data-type for shift-conv");
   }
   // Get configuration

@@ -28,7 +28,7 @@ shift::shift(int B, int C,
     layout_(layout){
 //  std::cout << B_ << " " << C_ << " " << F_ << " " << stride_h_ << " " << stride_w_ << " " << a_ty_ << " " << b_ty_ << " " << ty_ << " " << layout_ << std::endl;
   // max number of channels
-  TK_ = (ty == FPROP && a_ty_ == "fp32") ? 8 : 32;
+  TK_ = (ty == FPROP && a_ty_ == "float") ? 8 : 32;
   MAX_C_ = 8192 + TK_;
   // activation sizes
   CD_ = AD_ / stride_d_;
@@ -204,26 +204,15 @@ size_t shift::ldb() const
 size_t shift::ldc() const
 { return M_; }
 
-bool shift::operator <(const base& other) const{
-  auto *y = dynamic_cast<const shift*>(&other);
-  if(!y)
-    return true;
-  return std::tie(B_, C_, F_,
-                  AD_, AH_, AW_,
-                  BD_, BH_, BW_,
-                  CD_, CH_, CW_,
-                  shift_h_, shift_w_,
-                  stride_h_, stride_w_,
-                  layout_, op_,
-                  bias_)
-       < std::tie(y->B_, y->C_, y->F_,
-                  y->AD_, y->AH_, y->AW_,
-                  y->BD_, y->BH_, y->BW_,
-                  y->CD_, y->CH_, y->CW_,
-                  y->shift_h_, y->shift_w_,
-                  y->stride_h_, y->stride_w_,
-                  y->layout_, y->op_,
-                  y->bias_);
+std::vector<int64_t> shift::retune_params() const {
+  return {B_, C_, F_,
+          AD_, AH_, AW_,
+          BD_, BH_, BW_,
+          CD_, CH_, CW_,
+          (int64_t)shift_h_, (int64_t)shift_w_,
+          stride_h_, stride_w_,
+          layout_, op_,
+          bias_};
 }
 
 void shift::init_impl(driver::stream *stream, driver::cu_module *module, triton::runtime::launch_information info) {
@@ -325,56 +314,56 @@ void shift::triton_c_src(std::ostream &os) const {
 
     if(is_chwn) {
       return R"(
-  int32 )" + rx + "wh[" + sz + "] =  "  + rkx + " / " + B + R"(;
-  int32 )" + rx + "b[" + sz + "]  =  "  + rkx + " % " + B + R"(;
-  int32 )" + rx + "w[" + sz + "]  =  ("  + rx  + "wh % " + CW + R"() + pad_w;
-  int32 )" + rx + "h[" + sz + "]  =  ("  + rx  + "wh / " + CW + R"() + pad_h;)";
+  int )" + rx + "wh[" + sz + "] =  "  + rkx + " / " + B + R"(;
+  int )" + rx + "b[" + sz + "]  =  "  + rkx + " % " + B + R"(;
+  int )" + rx + "w[" + sz + "]  =  ("  + rx  + "wh % " + CW + R"() + pad_w;
+  int )" + rx + "h[" + sz + "]  =  ("  + rx  + "wh / " + CW + R"() + pad_h;)";
     }
     else {
       return R"(
-  int32 )" + rx + "bh[" + sz + "] = " + rkx + " / " + CW + R"(;
-  int32 )" + rx + "w[" + sz + "]  = (" + rkx + " % " + CW + R"() + pad_w;
-  int32 )" + rx + "h[" + sz + "]  = (" + rx  + "bh % " + CH + R"() + pad_h;
-  int32 )" + rx + "b[" + sz + "]  = " + rx  + "bh / " + CH + ";";
+  int )" + rx + "bh[" + sz + "] = " + rkx + " / " + CW + R"(;
+  int )" + rx + "w[" + sz + "]  = (" + rkx + " % " + CW + R"() + pad_w;
+  int )" + rx + "h[" + sz + "]  = (" + rx  + "bh % " + CH + R"() + pad_h;
+  int )" + rx + "b[" + sz + "]  = " + rx  + "bh / " + CH + ";";
     }
   };
 
   std::string result =
 R"(
-const tunable int32 TM = {16, 32, 64, 128};
-const tunable int32 TN = {16, 32, 64, 128};
-const tunable int32 TK = {)" + std::to_string(TK_) + "};";
+const tunable int TM = {16, 32, 64, 128};
+const tunable int TN = {16, 32, 64, 128};
+const tunable int TK = {)" + std::to_string(TK_) + "};";
 if(op_ == WGRAD)
-  result += "const tunable int32 GZ = {1};";
+  result += "const tunable int GZ = {1};";
 else
-  result += "const tunable int32 GZ = {1};";
+  result += "const tunable int GZ = {1};";
 
 result += R"(
-__constant__ int32* delta_a = alloc_const int32[)" + std::to_string(MAX_C_) + R"(];
+__constant__ int* delta_a = alloc_const int[)" + std::to_string(MAX_C_) + R"(];
 
 void shift(restrict read_only align(16) )" + a_ty_ + R"( *A,
            restrict read_only align(16) )" + b_ty_ + R"( *B,
            )" + c_ty_ + R"( *C,
-           int32 M, int32 N, int32 K,
-           int32 stride_h, int32 stride_w,
-           multiple_of(8) int32 lda_b, multiple_of(8) int32 lda_w, multiple_of(8) int32 lda_h, multiple_of(8) int32 lda_c,
-           multiple_of(8) int32 ldb_b, multiple_of(8) int32 ldb_w, multiple_of(8) int32 ldb_h, multiple_of(8) int32 ldb_c,
-           multiple_of(8) int32 ldc_b, multiple_of(8) int32 ldc_w, multiple_of(8) int32 ldc_h, multiple_of(8) int32 ldc_c,
-           int32 NB,
-           int32 AH, int32 AW,
-           int32 BH, int32 BW,
-           int32 CH, int32 CW,
-           int32* locks, int32 grid0, int32 grid1, int32 grid2) {
-  int32 ridx = get_range_id(0);
-  int32 ridy = get_range_id(1);
-  int32 rz = get_range_id(2);
-  int32 rxa[TM] = ridx*TM + (0 ... TM);
-  int32 ryb[TN] = ridy*TN + (0 ... TN);
-  int32 rka[TK] = 0 ... TK;
-  int32 rkb[TK] = 0 ... TK;
-  fp32 acc[TM, TN] = 0;
-  int32 pad_h = BH / 2;
-  int32 pad_w = BW / 2;)";
+           int M, int N, int K,
+           int stride_h, int stride_w,
+           multiple_of(8) int lda_b, multiple_of(8) int lda_w, multiple_of(8) int lda_h, multiple_of(8) int lda_c,
+           multiple_of(8) int ldb_b, multiple_of(8) int ldb_w, multiple_of(8) int ldb_h, multiple_of(8) int ldb_c,
+           multiple_of(8) int ldc_b, multiple_of(8) int ldc_w, multiple_of(8) int ldc_h, multiple_of(8) int ldc_c,
+           int NB,
+           int AH, int AW,
+           int BH, int BW,
+           int CH, int CW,
+           int* locks, int grid0, int grid1, int grid2) {
+  int ridx = get_range_id(0);
+  int ridy = get_range_id(1);
+  int rz = get_range_id(2);
+  int rxa[TM] = ridx*TM + (0 ... TM);
+  int ryb[TN] = ridy*TN + (0 ... TN);
+  int rka[TK] = 0 ... TK;
+  int rkb[TK] = 0 ... TK;
+  float acc[TM, TN] = 0;
+  int pad_h = BH / 2;
+  int pad_w = BW / 2;)";
 
 /* A offsets */
 if(op_ == FPROP){
@@ -382,49 +371,49 @@ if(op_ == FPROP){
   compute_bhw("ra", "TM", "rxa") + R"(
   raw = raw * )" + stride_w + R"(;
   rah = rah * )" + stride_h + R"(;
-  int32 offxa[TM] =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
-  int32 offa0[TM, TK] = offxa[:, newaxis];
-  __constant__ int32* pd[TK] = delta_a + rka;
-  multiple_of(8) int32 d[TK] = *pd;
-  int32 offa1[TM, TK] = d[newaxis, :];)";
+  int offxa[TM] =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
+  int offa0[TM, TK] = offxa[:, newaxis];
+  __constant__ int* pd[TK] = delta_a + rka;
+  multiple_of(8) int d[TK] = *pd;
+  int offa1[TM, TK] = d[newaxis, :];)";
 }
 if(op_ == BPROP){
   result +=
   compute_bhw("ra", "TM", "rxa") + R"(
-  int32 offxa[TM] =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
-  int32 offa0[TM, TK] = offxa[:, newaxis];
-  int32 offa1[TM, TK] = rka[newaxis, :] * lda_c;)";
+  int offxa[TM] =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
+  int offa0[TM, TK] = offxa[:, newaxis];
+  int offa1[TM, TK] = rka[newaxis, :] * lda_c;)";
 }
 if(op_ == WGRAD){
   result +=
   compute_bhw("ra", "TK", "rka") + R"(
-  int32 offa0[TK, TM] = rxa[newaxis, :] * lda_c;
-  int32 offxa[TK] =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
-  int32 offa1[TK, TM] = offxa[:, newaxis];)";
+  int offa0[TK, TM] = rxa[newaxis, :] * lda_c;
+  int offxa[TK] =  rab*)" + lda_b + R"( + raw*lda_w + rah*lda_h;
+  int offa1[TK, TM] = offxa[:, newaxis];)";
 }
 
 /* B offsets */
 if(op_ == FPROP){
   result +=  R"(
-  int32 offb0[TN, TK] = ryb[:, newaxis];
-  int32 offb1[TN, TK] = rkb[newaxis, :] * ldb_c;)";
+  int offb0[TN, TK] = ryb[:, newaxis];
+  int offb1[TN, TK] = rkb[newaxis, :] * ldb_c;)";
 }
 if(op_ == BPROP){
   result +=  R"(
-  int32 offb0[TK, TN] = ryb[newaxis, :] * ldb_c;
-  int32 offb1[TK, TN] = rkb[:, newaxis];)";
+  int offb0[TK, TN] = ryb[newaxis, :] * ldb_c;
+  int offb1[TK, TN] = rkb[:, newaxis];)";
 }
 if(op_ == WGRAD){
   result +=
   compute_bhw("rb", "TK", "rkb") + R"(
-  __constant__ int32* pd[TN] = delta_a + ryb;
-  multiple_of(8) int32 d[TN] = *pd;
-  multiple_of(8) int32 shift[TK, TN] = d[newaxis, :];
+  __constant__ int* pd[TN] = delta_a + ryb;
+  multiple_of(8) int d[TN] = *pd;
+  multiple_of(8) int shift[TK, TN] = d[newaxis, :];
   rbw = rbw * )" + stride_w + R"(;
   rbh = rbh * )" + stride_h + R"(;
-  int32 offkb[TK] = rbb*)" + ldb_b + R"( + rbw*ldb_w + rbh*ldb_h;
-  int32 offb0[TK, TN] = ryb[newaxis, :] * ldb_c;
-  int32 offb1[TK, TN] = offkb[:, newaxis];
+  int offkb[TK] = rbb*)" + ldb_b + R"( + rbw*ldb_w + rbh*ldb_h;
+  int offb0[TK, TN] = ryb[newaxis, :] * ldb_c;
+  int offb1[TK, TN] = offkb[:, newaxis];
   )" + a_ty_ + "* pa_base[" + AS + R"(] = A + offa0;
   )" + b_ty_ + "* pb_base[" + BS + R"(] = B + offb0 + shift;
   )" + a_ty_ + "* pa[" + AS + R"(] = pa_base + offa1;
@@ -439,14 +428,14 @@ else{
 /* Main loop */
 /* Increment A pointers */
   result +=  R"(
-  int1 checka[)" + AS + "] = (rka < K)" + bca0  + R"(;
-  int1 checkb[)" + BS + "] = (rkb < K)" + bcb0  + R"(;
+  bool checka[)" + AS + "] = (rka < K)" + bca0  + R"(;
+  bool checkb[)" + BS + "] = (rkb < K)" + bcb0  + R"(;
   )" + a_ty_ + "   a[" + AS + R"(] = checka ? *pa : 0;
   )" + b_ty_ + "   b[" + BS + R"(] = checkb ? *pb : 0;
-  for(int32 k = K; k > 0; k = k - TK){
+  for(int k = K; k > 0; k = k - TK){
     acc = dot()" + usea + "," + useb + R"(, acc);
-    int1 checka[)" + AS + R"(] = k > TK;
-    int1 checkb[)" + BS + R"(] = k > TK;)";
+    bool checka[)" + AS + R"(] = k > TK;
+    bool checkb[)" + BS + R"(] = k > TK;)";
 
 /* Increment A pointers */
 if(op_ == FPROP){
@@ -490,8 +479,8 @@ if(op_ == BPROP){
   result +=  R"(
     b = checkb ? *pb : 0;
   }
-  int32 rxc[TM] = ridx*TM + (0 ... TM);
-  int32 ryc[TN] = ridy*TN + (0 ... TN);)";
+  int rxc[TM] = ridx*TM + (0 ... TM);
+  int ryc[TN] = ridy*TN + (0 ... TN);)";
 
 /* C offsets */
 if(op_ == BPROP){
@@ -499,26 +488,26 @@ if(op_ == BPROP){
   compute_bhw("rc", "TM", "rxc") + R"(
   rcw = rcw * )" + stride_w + R"(;
   rch = rch * )" + stride_h + R"(;
-  int32 offxc[TM] = rcb*)" + ldc_b + R"( + rcw*ldc_w + rch*ldc_h;)";
+  int offxc[TM] = rcb*)" + ldc_b + R"( + rcw*ldc_w + rch*ldc_h;)";
   }
 if(op_ == FPROP){
   result +=
   compute_bhw("rc", "TM", "rxc") + R"(
-  int32 offxc[TM] = rcb*)" + ldc_b + R"( + rcw*ldc_w + rch*ldc_h;)";
+  int offxc[TM] = rcb*)" + ldc_b + R"( + rcw*ldc_w + rch*ldc_h;)";
 }
 if(op_ == WGRAD){
   result +=  R"(
-  int32 offxc[TM] = rxc;)";
+  int offxc[TM] = rxc;)";
 }
   result +=  R"("
   )" + c_ty_ + R"( c[TM, TN] = acc;
   )" + c_ty_ + R"(* pc[TM, TN] = C + offxc[:, newaxis] + ryc[newaxis, :]*ldc_c;
-  int1 checkc0[TM] = rxc < M;
-  int1 checkc1[TN] = ryc < N;
-  int1 checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];)";
+  bool checkc0[TM] = rxc < M;
+  bool checkc1[TN] = ryc < N;
+  bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];)";
 if(op_ == BPROP){
   result += R"(
-  __constant__ int32* pd[TN] = delta_a + ryc;
+  __constant__ int* pd[TN] = delta_a + ryc;
   )" + c_ty_ + R"(* shift_pc[TM, TN] = pc + (*pd)[newaxis, :];
   @checkc *shift_pc = c;
   )";
