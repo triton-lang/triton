@@ -37,8 +37,8 @@ private:
                     triton::runtime::launch_information info);
   // number of flops
   size_t num_flops() const;
-  // comparison for maps
-  bool operator<(const base& other) const;
+  // retuning parameters
+  std::vector<int64_t> retune_params() const;
   // clone
   base* clone() const;
 
@@ -50,7 +50,7 @@ public:
        int stride_d, int stride_h, int stride_w,
        int pad_d, int pad_h, int pad_w,
        int upsample_d, int upsample_h, int upsample_w,
-       std::string a_ty = "fp32", std::string b_ty = "fp32",
+       std::string a_ty = "float", std::string b_ty = "float",
        type ty = FPROP, bool bias = false);
 
   // accessors

@@ -134,7 +134,7 @@ int main() {
   };
   for(config_t c: resnet18){
     for(op_t op: {op_t::FPROP, op_t::BPROP, op_t::WGRAD}){
-      configs.push_back({c.B, c.C, c.H, c.W, c.R, c.S, c.F, c.stride_h, c.stride_w, op, layout_t::CHWN, "fp16"});
+      configs.push_back({c.B, c.C, c.H, c.W, c.R, c.S, c.F, c.stride_h, c.stride_w, op, layout_t::CHWN, "half"});
     }
   }
 

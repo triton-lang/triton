@@ -63,14 +63,19 @@ void tune::init_c_graph(ir::instruction *v) {
   else
     shapes = v->get_type()->get_tile_shapes();
   // Reshape
-  if(dynamic_cast<ir::reshape_inst*>(v)){
+  if(dynamic_cast<ir::reshape_inst*>(v)) {
     ir::value *op = v->get_operand(0);
     unsigned current = 0;
+    bool is_skewed = false;
     for(unsigned i = 0; i < shapes.size(); i ++){
-      if(shapes[i] == one)
+      bool is_one  = shapes[i] == one;
+      bool is_same = shapes[i] == op->get_type()->get_tile_shapes()[current];
+      if(is_one)
         static_params_.insert({{v, i}, 1});
-      else
+      else if(!is_skewed && is_same)
         add_constraint({v, i}, {op, current++});
+      else
+        is_skewed = true;
     }
   }
   // Splat
@@ -81,9 +86,8 @@ void tune::init_c_graph(ir::instruction *v) {
   else if(dynamic_cast<ir::trans_inst*>(v)){
     ir::value *op = v->get_operand(0);
     size_t n_shapes = shapes.size();
-    for(unsigned i = 0; i < n_shapes; i++){
+    for(unsigned i = 0; i < n_shapes; i++)
       add_constraint({v, (i + 1) % n_shapes}, {op, i});
-    }
   }
   // Broadcast
   else if(dynamic_cast<ir::broadcast_inst*>(v)){
@@ -247,14 +251,14 @@ void tune::run(ir::module &mod) {
       size_t addr_space = ptr_ty->get_pointer_address_space();
       if(addr_space < 4){
         ir::type *ty = mod.get_builder().get_int32_ty();
-        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  4, 8));
+        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  1, 8));
         *params_.at(i).at("nts.d0") = *tmp;
       }
     }
     if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 4, 8));
-      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 4, 8));
+      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 1, 8));
+      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 1, 8));
       *params_.at(i).at("nts.d0") = *tmp1;
       *params_.at(i).at("nts.d1") = *tmp2;
     }

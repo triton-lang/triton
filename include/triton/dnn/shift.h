@@ -64,7 +64,7 @@ public:
        int T, int R, int S, int NF,
        int stride_h, int stride_w,
        const int32_t* shift_h, const int32_t* shift_w,
-       std::string a_ty = "fp32", std::string b_ty = "fp32",
+       std::string a_ty = "float", std::string b_ty = "float",
        op_t ty = FPROP, bool bias = false, layout_t layout = CHWN);
 
   // look-up table
@@ -86,8 +86,8 @@ public:
   size_t num_flops() const;
   // source
   void triton_c_src(std::ostream &os) const;
-  // comparison
-  bool operator<(const base& other) const;
+  // retuning parameters
+  std::vector<int64_t> retune_params() const;
   // clone
   base* clone() const;
   // cpu reference

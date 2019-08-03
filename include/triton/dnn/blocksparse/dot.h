@@ -20,8 +20,8 @@ private:
                     triton::runtime::launch_information info);
   // number of flops
   size_t num_flops() const;
-  // comparison for maps
-  bool operator<(const base& other) const;
+  // retuning parameters
+  std::vector<int64_t> retune_params() const;
   // default parameters
   std::vector<params_t> search_space() const;
   params_t heuristics() const;

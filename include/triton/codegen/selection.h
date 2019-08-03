@@ -91,6 +91,7 @@ public:
   void set_value(indices_t idx, llvm::Value *v);
   llvm::Value* get_value(indices_t idx);
   unsigned get_linear_index(indices_t idx);
+  indices_t get_ordered_indices(unsigned id);
   void for_each(std::function<void(indices_t)> fn);
   const distributed_axis &axis(unsigned dim) { return axes_.at(dim); }
 

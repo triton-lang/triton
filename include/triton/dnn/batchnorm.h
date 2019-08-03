@@ -47,15 +47,15 @@ private:
                             triton::runtime::launch_information info);
   // number of flops
   size_t num_flops() const;
-  // comparison for maps
-  bool operator<(const base& other) const;
+  // retuning parameters
+  std::vector<int64_t> retune_params() const;
   // clone
   base* clone() const;
 
 public:
   // constructor
   batchnorm_forward(int C, int D, int H, int W, int B,
-                    std::string ty = "fp32", float eps = 1e-5);
+                    std::string ty = "float", float eps = 1e-5);
   // triton-c source
   void triton_c_src(std::ostream &os) const;
 
@@ -82,15 +82,15 @@ private:
                             runtime::launch_information info);
   // number of flops
   size_t num_flops() const;
-  // comparison for maps
-  bool operator<(const base& other) const;
+  // retuning parameters
+  std::vector<int64_t> retune_params() const;
   // clone
   base* clone() const;
 
 public:
   // constructor
   batchnorm_backward(int C, int D, int H, int W, int B,
-                     std::string ty = "fp32", float eps = 1e-5);
+                     std::string ty = "float", float eps = 1e-5);
   // triton-c source
   void triton_c_src(std::ostream &os) const;
 
