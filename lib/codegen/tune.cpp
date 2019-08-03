@@ -227,7 +227,7 @@ void tune::run(ir::module &mod) {
       node_t node = *nodes_.begin();
       if(fragments_[node] == STRIDED_SCAN) {
         ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 1, 1);
-        ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
+        ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 2, 64);
         connected_components(node, {nts, mts}, {"nts", "mts"}, nodes_, dependencies_, group_id++);
         nts->set_value(1);
       }
@@ -381,7 +381,7 @@ bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &er
         errors[i].push_back("HMMA must have only 4 fragments per warp");
     }
     int num_threads = get_req_num_threads(i);
-    if(num_threads % 32 != 0)
+    if(num_threads % 64 != 0)
       errors[i].push_back("number of threads per block (" + to_string(num_threads) + ") must be multiple of warp size");
     if(num_threads != num_threads_)
       errors[i].push_back("Number of threads must be the same for all tiles (" + to_string(num_threads_) + ")");

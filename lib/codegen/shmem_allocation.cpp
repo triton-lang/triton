@@ -42,17 +42,25 @@ unsigned shmem_allocation::is_ld_padded(ir::value *x) {
 }
 
 unsigned shmem_allocation::get_num_bytes(ir::value *x) {
-  if(dynamic_cast<ir::reduce_inst*>(x))
-    return 32;
-  unsigned result = x->get_type()->get_primitive_size_in_bits() / 8;
+  unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;
+  if(dynamic_cast<ir::reduce_inst*>(x)){
+    size_t shape = 1;
+    if(x->get_type()->is_tile_ty()){
+      auto shapes = x->get_type()->get_tile_shapes();
+      for(auto x: shapes)
+        shape *= x->get_value();
+    }
+    size_t n_warps = params_->get_num_threads() / 32;
+    return shape * num_bytes * n_warps;
+  }
   unsigned pad = is_ld_padded(x);
   if(pad > 0){
     unsigned ld = x->get_type()->get_tile_shapes()[0]->get_value();
-    result += pad * result / ld;
+    num_bytes += pad * num_bytes / ld;
   }
   if(buffer_info_->is_double(x))
-    result *= 2;
-  return result;
+    num_bytes *= 2;
+  return num_bytes;
 }
 
 void shmem_allocation::run(){

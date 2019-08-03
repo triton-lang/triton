@@ -43,6 +43,7 @@ public:
   virtual void set_value(indices_t idx, llvm::Value *v) = 0;
   virtual llvm::Value* get_value(indices_t idx) = 0;
   llvm::Type *get_ty() const { return ty_; }
+  shapes_t get_shapes() const { return shapes_; }
 
 protected:
   llvm::Type *ty_;
@@ -54,7 +55,6 @@ private:
   void extract_constant(llvm::Value *arg, llvm::Value *&non_cst, llvm::Value *&cst);
   void extract_constant(const indices_t &arg_idx, indices_t &non_cst_idx, indices_t &cst_idx);
 
-  llvm::Value* shared_offset(indices_t idx);
 
 public:
   shared_tile(llvm::Type* ty, const shapes_t &shapes, llvm::Value* ptr, llvm::IRBuilder<> &builder, llvm::Value* offset = nullptr);
@@ -65,6 +65,7 @@ public:
   llvm::Value* get_value(indices_t idx);
   llvm::Value* get_pointer() { return ptr_; }
   llvm::Value* get_offset() { return offset_; }
+  static llvm::Value* shared_offset(llvm::IRBuilder<>& builder, const shapes_t& shapes, indices_t idx);
 
 private:
   llvm::Value *ptr_;
