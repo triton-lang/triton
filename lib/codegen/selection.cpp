@@ -80,9 +80,10 @@ indices_t distributed_tile::get_ordered_indices(unsigned id) {
 
 
 void distributed_tile::for_each(std::function<void (indices_t)> fn) {
-  for(unsigned i = 0; i < ordered_indices_.size(); i++)
+  for(unsigned i = 0; i < ordered_indices_.size(); i++){
     if(i % vector_size_ == 0)
       fn(ordered_indices_[i]);
+  }
 }
 
 /* Shared Tile */
@@ -498,15 +499,15 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
       Value *warp_size_k = builder.getInt32(warp_size[k]);
       Value *contiguous_k = builder.getInt32(contiguous[k]);
       Value *thread_id   = builder.CreateAdd(thread_id_in_warp[k], builder.CreateMul(warp_id[k], warp_size_k));
-      thread_id = builder.CreateMul(thread_id, contiguous_k);
+      Value *scaled_thread_id = builder.CreateMul(thread_id, contiguous_k);
       unsigned per_block = contiguous[k] * warp_size[k] * n_warps[k];
       unsigned per_thread = contiguous[k] * shapes[k]->get_value() / per_block;
       std::vector<Value*> idx_list(per_thread);
       for(unsigned n = 0 ; n < per_thread; n++){
         unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
-        idx_list[n] = builder.CreateAdd(thread_id, builder.getInt32(offset), "idx_" + str_k + "_" + std::to_string(n));
+        idx_list[n] = builder.CreateAdd(scaled_thread_id, builder.getInt32(offset), "idx_" + str_k + "_" + std::to_string(n));
       }
-      axes_[params_->get_param_group(v, k)] = distributed_axis{contiguous[k], idx_list};
+      axes_[params_->get_param_group(v, k)] = distributed_axis{contiguous[k], idx_list, thread_id};
     }
   }
   else {
@@ -671,7 +672,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     shapes[0] += pad;
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), ctx);
   // create shared tile
-  if(buffer_info_->is_shared(v)){
+  if(buffer_info_->is_shared(v) && !dynamic_cast<ir::reduce_inst*>(v)){
     // shared copy
     PointerType *ptr_ty = ty->getPointerTo(sh_mem_ptr->getType()->getPointerAddressSpace());
     // phi-node (double-buffering)
@@ -825,88 +826,72 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     }
     if(auto *x = dynamic_cast<ir::reduce_inst*>(ins)){
       std::map<indices_t, Value*> partial;
-      distributed_tile* op = (distributed_tile*)tmap_.at(ins->get_operand(0));
-      size_t axis = 0;
-      unsigned num_warps = params_->get_num_threads() / 32;
-      std::vector<unsigned> shapes = op->get_shapes();
-      shapes.erase(shapes.begin() + axis);
-      if(shapes.empty())
-        shapes.push_back(1);
+      ir::value *op = ins->get_operand(0);
+      distributed_tile* op_tile = (distributed_tile*)tmap_.at(op);
+      unsigned axis = x->get_axis();
 
       // reduce within thread
-      op->for_each([&](indices_t idx){
+      op_tile->for_each([&](indices_t idx) {
         indices_t pidx = idx;
         pidx.erase(pidx.begin() + axis);
-        if(pidx.empty())
-          pidx.push_back(builder.getInt32(0));
-        Value *current = op->get_value(idx);
+        Value *current = op_tile->get_value(idx);
+        // current partial result is not initialized -- create
         if(partial.find(pidx) == partial.end())
           partial[pidx] = current;
+        // current partial result is initialized -- accumulate
         else
           partial[pidx] = builder.CreateFAdd(partial[pidx], current);
       });
 
-      // reduce within warp
-      Value *shfl = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_shfl_sync_bfly_f32);
-      for (int i = 16; i > 0; i >>= 1)
-      for(auto& x: partial)
-      {
-        Value *rhs = builder.CreateCall(shfl, {builder.getInt32(0xffffffff), x.second,
-                                               builder.getInt32(i),
-                                               builder.getInt32(0x1f)});
-        x.second = builder.CreateFAdd(x.second, rhs);
-      }
-
-      // reduce within block
-      Value *tid = tgt_->get_local_id(module, builder, 0);
-      BasicBlock *partial_reduce_do   = BasicBlock::Create(ctx, "partial_reduce_do", fn);
-      BasicBlock *partial_reduce_done = BasicBlock::Create(ctx, "partial_reduce_done", fn);
-      Value *id_in_warp = builder.CreateURem(tid, builder.getInt32(32));
-      Value *warp_id = builder.CreateUDiv(tid, builder.getInt32(32));
-      builder.CreateCondBr(builder.CreateICmpEQ(id_in_warp, builder.getInt32(0)),
-                           partial_reduce_do, partial_reduce_done);
-      builder.SetInsertPoint(partial_reduce_do);
+      // reduce within blocks
       unsigned addr_space = sh_mem_ptr_->getType()->getPointerAddressSpace();
-      Type *ptr_ty = PointerType::get(builder.getFloatTy(), addr_space);
-      Value *sh_mem_ptr = builder.CreateBitCast(sh_mem_ptr_, ptr_ty);
-      for(auto& x: partial){
-        Value *offset = shared_tile::shared_offset(builder, shapes, x.first);
-        offset = builder.CreateAdd(offset, builder.CreateMul(warp_id, builder.getInt32(shapes[0])));
-        Value *write_ptr = builder.CreateGEP(sh_mem_ptr, offset);
-        builder.CreateStore(x.second, write_ptr);
-      }
-      builder.CreateBr(partial_reduce_done);
-      builder.SetInsertPoint(partial_reduce_done);
+      Type *res_ty = builder.getFloatTy();
+      Value *base_ptr = builder.CreateBitCast(sh_mem_ptr_, PointerType::get(res_ty, addr_space));
+      unsigned depth = params_->get_param(op, "mts.d" + std::to_string(axis))->get_value();
+      for(auto& x: partial) {
+        // current element being computed
+        Value *lane = axes_.at(params_->get_param_group(op, axis)).thread_id;
+        Value *&result = x.second;
+        indices_t write_idx = x.first;
+        write_idx.insert(write_idx.begin() + axis, lane);
+        // shared memory write  pointer
+        Value *write_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), write_idx);
+        Value *write_ptr = builder.CreateGEP(base_ptr, write_offset);
+        // initialize shared memory
+        builder.CreateStore(result, write_ptr);
+        // build result
+        for(unsigned i = depth/2; i > 0; i >>= 1){
+          // current indices
+          indices_t current(write_idx.size(), builder.getInt32(0));
+          current[axis] = builder.getInt32(i);
+          // shared memory offset
+          Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), current);
+          Value *is_active = builder.CreateICmpULT(lane, builder.getInt32(i));
+          read_offset = builder.CreateSelect(is_active, read_offset, builder.getInt32(0));
+          // shared memory read pointer
+          Value *read_ptr = builder.CreateGEP(write_ptr, read_offset);
+          tgt_->add_barrier(module, builder);
+          Value *next = builder.CreateLoad(read_ptr);
+          // accumulate
+          result = builder.CreateFAdd(result, next);
+          // write back
+          builder.CreateStore(result, write_ptr);
+        }
 
-      // Final reduction with the first warp
-      tgt_->add_barrier(module, builder);
-      BasicBlock *final_reduce_do   = BasicBlock::Create(ctx, "final_reduce_do", fn);
-      BasicBlock *final_reduce_done = BasicBlock::Create(ctx, "final_reduce_done", fn);
-      builder.CreateCondBr(builder.CreateICmpEQ(warp_id, builder.getInt32(0)),
-                           final_reduce_do, final_reduce_done);
-      builder.SetInsertPoint(final_reduce_do);
-      Value *read_ptr = builder.CreateGEP(sh_mem_ptr, tid);
-      BasicBlock *read_shmem_do   = BasicBlock::Create(ctx, "read_shmem_do", fn);
-      BasicBlock *read_shmem_done = BasicBlock::Create(ctx, "read_shmem_done", fn);
-      builder.CreateCondBr(builder.CreateICmpULT(id_in_warp, builder.getInt32(num_warps)),
-                           read_shmem_do, read_shmem_done);
-      builder.SetInsertPoint(read_shmem_do);
-      Value *loaded= builder.CreateLoad(read_ptr);
-      builder.CreateBr(read_shmem_done);
-      builder.SetInsertPoint(read_shmem_done);
-      Value *result = builder.CreatePHI(loaded->getType(), 2);
-      ((PHINode*)result)->addIncoming(ConstantFP::get(loaded->getType(), (double)0), final_reduce_do);
-      ((PHINode*)result)->addIncoming(loaded, read_shmem_do);
-      for (int i = params_->get_num_threads() / 64; i > 0; i >>= 1){
-        Value *rhs = builder.CreateCall(shfl, {builder.getInt32(0xffffffff), result,
-                                               builder.getInt32(i), builder.getInt32(0x1f)});
-        result = builder.CreateFAdd(result, rhs);
+        // result is on the first lane of shared memory
+        indices_t final = write_idx;
+        final[axis] = builder.getInt32(0);
+        Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), final);
+        Value *read_ptr = builder.CreateGEP(base_ptr, read_offset);
+        tgt_->add_barrier(module, builder);
+        result = builder.CreateLoad(read_ptr);
+        if(tmap_.find(ins) == tmap_.end())
+          vmap_[ins] = result;
+        else{
+          distributed_tile *ti = (distributed_tile*)tmap_[ins];
+          ti->set_value(x.first, result);
+        }
       }
-      builder.CreateStore(result, read_ptr);
-      builder.CreateBr(final_reduce_done);
-      builder.SetInsertPoint(final_reduce_done);
-      tgt_->add_barrier(module, builder);
-      vmap_[ins] = builder.CreateLoad(sh_mem_ptr);
       return;
     }
     tile *ti = tmap_[ins];

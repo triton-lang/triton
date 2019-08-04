@@ -43,15 +43,16 @@ unsigned shmem_allocation::is_ld_padded(ir::value *x) {
 
 unsigned shmem_allocation::get_num_bytes(ir::value *x) {
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;
-  if(dynamic_cast<ir::reduce_inst*>(x)){
-    size_t shape = 1;
-    if(x->get_type()->is_tile_ty()){
-      auto shapes = x->get_type()->get_tile_shapes();
-      for(auto x: shapes)
-        shape *= x->get_value();
-    }
-    size_t n_warps = params_->get_num_threads() / 32;
-    return shape * num_bytes * n_warps;
+  if(auto *red = dynamic_cast<ir::reduce_inst*>(x)){
+    size_t axis = red->get_axis();
+    ir::value *op = red->get_operand(0);
+    auto shapes = op->get_type()->get_tile_shapes();
+    shapes.erase(shapes.begin() + axis);
+    size_t num_elements = 1;
+    for(auto x: shapes)
+      num_elements *= x->get_value();
+    size_t depth = params_->get_param(op, "mts.d" + std::to_string(axis))->get_value();
+    return num_elements * num_bytes * depth;
   }
   unsigned pad = is_ld_padded(x);
   if(pad > 0){

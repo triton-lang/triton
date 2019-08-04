@@ -161,6 +161,21 @@ ir::value* matmul_expression::codegen(ir::module *mod) const {
   return mod->get_builder().create_dot(A, B, C);
 }
 
+// reshape
+ir::value* reshape_expression::codegen(ir::module *mod) const {
+  // arg
+  ir::value *arg = arg_->codegen(mod);
+  // shapes
+  ir::type::tile_shapes_t shapes;
+  for(expression *expr: shapes_->values()){
+    ir::constant_int *shape = dynamic_cast<ir::constant_int*>(expr->codegen(mod));
+    assert(shape);
+    shapes.push_back(shape);
+  }
+  // return
+  return mod->get_builder().create_reshape(arg, shapes);
+}
+
 // min
 ir::value* min_expression::codegen(ir::module *mod) const {
   ir::value* cmp = binary_expression(LT, (node*)x_, (node*)y_).codegen(mod);
@@ -198,7 +213,7 @@ ir::value* sqrt_expression::codegen(ir::module *mod) const {
 
 // reduce
 ir::value* reduce_expression::codegen(ir::module *mod) const {
-  return mod->get_builder().create_reduce(arg_->codegen(mod));
+  return mod->get_builder().create_reduce(arg_->codegen(mod), axis_->value());
 }
 
 /* Postfix expression */

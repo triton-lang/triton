@@ -134,6 +134,16 @@ private:
   const expression *C_;
 };
 
+class reshape_expression: public builtin_expression{
+public:
+  reshape_expression(node *arg, node *shapes): arg_(arg), shapes_((list<expression*>*)shapes) { }
+  ir::value* codegen(ir::module *) const;
+
+private:
+  const node *arg_;
+  const list<expression*>* shapes_;
+};
+
 class max_expression: public builtin_expression{
 public:
   max_expression(node* x, node* y)
@@ -188,11 +198,12 @@ private:
 
 class reduce_expression: public builtin_expression{
 public:
-  reduce_expression(node *arg): arg_(arg) {}
+  reduce_expression(node *arg, node *axis): arg_(arg), axis_((constant*)axis) {}
   ir::value* codegen(ir::module *mod) const;
 
 private:
   node* arg_;
+  constant* axis_;
 };
 
 class indexing_expression: public postfix_expression{

@@ -605,11 +605,18 @@ public:
 
 class reduce_inst: public builtin_inst {
 private:
-  reduce_inst(value* arg, const std::string& name, instruction* next);
+  static type* get_type(value *arg, unsigned axis);
+
+private:
+  reduce_inst(value* arg, unsigned axis, const std::string& name, instruction* next);
   std::string repr_impl() const { return "reduce"; }
 
 public:
-  static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create(value *arg, unsigned axis, const std::string &name = "", instruction *next = nullptr);
+  unsigned get_axis() const { return axis_; }
+
+private:
+  unsigned axis_;
 };
 
 class select_inst: public builtin_inst {
