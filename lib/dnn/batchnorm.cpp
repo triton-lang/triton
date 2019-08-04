@@ -71,7 +71,7 @@ void batchnorm_forward::enqueue_impl(driver::stream *stream, driver::kernel *ker
 void batchnorm_forward::triton_c_src(std::ostream &os) const {
   os <<
 R"(
-const tunable int TM = {32, 64, 128};
+const tunable int TM = {128};
 
 void batchnorm_forward(float *Y, float *M, float *V,
                restrict read_only float *X,
@@ -94,7 +94,7 @@ void batchnorm_forward(float *Y, float *M, float *V,
     px = px + TM;
   }
   float *pm = M + c;
-  float m = __sum(mean) * rcpDHWN;
+  float m = __sum(mean, 0) * rcpDHWN;
   *pm = m;
 
   float var[TM] = 0;
@@ -105,7 +105,7 @@ void batchnorm_forward(float *Y, float *M, float *V,
     var = var + x*x;
     px = px + TM;
   }
-  float v = __sum(var) * rcpDHWN;
+  float v = __sum(var, 0) * rcpDHWN;
   float *pv = V + c;
   *pv = v;
   float rstdg = 1 / sqrt(v + eps) * g;
@@ -167,7 +167,7 @@ void batchnorm_backward::enqueue_impl(driver::stream *stream, driver::kernel *ke
 void batchnorm_backward::triton_c_src(std::ostream &os) const {
   os <<
 R"(
-const tunable int TM = {32, 64, 128};
+const tunable int TM = {128};
 
 void batchnorm_backward(float *DX, float *DG, float *DB,
                restrict read_only float *DY,
@@ -199,8 +199,8 @@ void batchnorm_backward(float *DX, float *DG, float *DB,
     px = px + TM;
     pdy = pdy + TM;
   }
-  float sdg = __sum(dg);
-  float sdb = __sum(db);
+  float sdg = __sum(dg, 0);
+  float sdb = __sum(db, 0);
   float *pdg = DG + c;
   float *pdb = DB + c;
   *pdg = sdg;

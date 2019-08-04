@@ -32,6 +32,7 @@ typedef std::vector<llvm::Value*> indices_t;
 struct distributed_axis {
   size_t contiguous;
   std::vector<llvm::Value*> values;
+  llvm::Value* thread_id;
 };
 
 class tile {

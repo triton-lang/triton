@@ -597,13 +597,24 @@ instruction* sqrt_inst::create(value *arg, const std::string &name, instruction 
 //===----------------------------------------------------------------------===//
 //                               reduce instructions
 //===----------------------------------------------------------------------===//
-reduce_inst::reduce_inst(value *arg, const std::string &name, instruction *next)
-  : builtin_inst(arg->get_type()->get_scalar_ty(), 1, 1, name, next) {
+type* reduce_inst::get_type(value *arg, unsigned axis) {
+  ir::tile_type::tile_shapes_t shapes = arg->get_type()->get_tile_shapes();
+  shapes.erase(shapes.begin() + axis);
+  type *scalar_ty = arg->get_type()->get_scalar_ty();
+  if(shapes.size() == 0)
+    return scalar_ty;
+  else
+    return tile_type::get(scalar_ty, shapes);
+}
+
+reduce_inst::reduce_inst(value *arg, unsigned axis, const std::string &name, instruction *next)
+  : builtin_inst(get_type(arg, axis), 1, 1, name, next),
+    axis_(axis){
   set_operand(0, arg);
 }
 
-instruction* reduce_inst::create(value *arg, const std::string &name, instruction *next) {
-  return new reduce_inst(arg, name, next);
+instruction* reduce_inst::create(value *arg, unsigned axis, const std::string &name, instruction *next) {
+  return new reduce_inst(arg, axis, name, next);
 }
 
 

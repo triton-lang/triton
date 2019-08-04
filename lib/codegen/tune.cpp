@@ -58,8 +58,19 @@ void tune::init_c_graph(ir::instruction *v) {
     shapes = atom->get_operand(0)->get_type()->get_tile_shapes();
   else if(auto *downcast = dynamic_cast<ir::downcast_inst*>(v))
     return;
-  else if(auto *reduce = dynamic_cast<ir::reduce_inst*>(v))
+  else if(auto *reduce = dynamic_cast<ir::reduce_inst*>(v)) {
+    unsigned axis = reduce->get_axis();
+    ir::value *arg = reduce->get_operand(0);
+    auto in_shapes = arg->get_type()->get_tile_shapes();
+    unsigned current = 0;
+    for(unsigned i = 0; i < in_shapes.size(); i++){
+      if(i == axis)
+        continue;
+//      std::cout << arg->get_name() << " " << v->get_name() << std::endl;
+      add_constraint({reduce, current++}, {arg, i});
+    }
     return;
+  }
   else
     shapes = v->get_type()->get_tile_shapes();
   // Reshape
@@ -74,8 +85,10 @@ void tune::init_c_graph(ir::instruction *v) {
         static_params_.insert({{v, i}, 1});
       else if(!is_skewed && is_same)
         add_constraint({v, i}, {op, current++});
-      else
+      else{
         is_skewed = true;
+        add_constraint({v, i}, {v, i});
+      }
     }
   }
   // Splat
@@ -137,6 +150,7 @@ tune::fragment_t tune::get_fragmentation_type(node_t x, graph_t &graph){
 }
 
 void tune::connected_components(node_t x, const std::vector<ir::metaparameter *> mps, const std::vector<std::string> prefixes, std::set<node_t> &nodes, graph_t &graph, unsigned group_id) {
+//  std::cout << "connected component: " << x.first->get_name() << " " << x.second << std::endl;
   groups_[x.first].insert({x.second, group_id});
   if(nodes.find(x) != nodes.end()){
     nodes.erase(x);
@@ -190,6 +204,7 @@ std::map<std::string, ir::metaparameter *> tune::get_params(ir::instruction* i) 
 }
 
 unsigned tune::get_param_group(ir::value *value, unsigned ax) {
+//  std::cout << "group? " << value->get_name() << " " << ax << std::endl;
   unsigned result = groups_.at(value).at(ax);
   return result;
 }
