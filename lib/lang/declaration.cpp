@@ -79,7 +79,8 @@ ir::type* tile::type_impl(ir::module *mod, ir::type *type, storage_spec_vec_cons
   ir::type::tile_shapes_t shapes;
   for(expression *expr: shapes_->values()){
     ir::constant_int *shape = dynamic_cast<ir::constant_int*>(expr->codegen(mod));
-    assert(shape);
+    if(shape == nullptr)
+      throw std::runtime_error("tile shapes must be constant expressions");
     shapes.push_back(shape);
   }
   return ir::tile_type::get(type, shapes);

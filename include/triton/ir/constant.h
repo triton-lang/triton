@@ -3,6 +3,7 @@
 
 #include "value.h"
 #include <cassert>
+#include "llvm/IR/Instructions.h"
 
 namespace triton{
 namespace ir{
@@ -36,14 +37,14 @@ protected:
   constant_int(type *ty, uint64_t value);
 
 public:
-  uint64_t get_value() const { return value_; }
+  virtual uint64_t get_value() const { return value_; }
   static constant_int *get(type *ty, uint64_t value);
 
 protected:
   uint64_t value_;
 };
 
-/* Metaparameter int */
+/* Metaparameter (int) */
 class metaparameter: public constant_int {
 private:
   metaparameter(type *ty, const std::vector<unsigned>& space);
@@ -55,10 +56,34 @@ public:
   bool has_value() { return has_value_; }
   const std::vector<unsigned>& get_space() { return space_; }
   void set_space(const std::vector<unsigned> &space) { space_ = space; }
+  uint64_t get_value() const { assert(has_value_); return value_; }
 
 private:
   std::vector<unsigned> space_;
   bool has_value_;
+};
+
+class constant_expression: public constant_int {
+  typedef llvm::BinaryOperator::BinaryOps op_t;
+  using llop = llvm::BinaryOperator::BinaryOps;
+
+private:
+  constant_expression(op_t op, constant_int* lhs, constant_int* rhs);
+
+public:
+  uint64_t get_value() const;
+  // Wraps
+  void set_has_no_unsigned_wrap(bool b = true) { has_no_unsigned_wrap_ = b; }
+  void set_has_no_signed_wrap(bool b = true)   { has_no_signed_wrap_ = b; }
+  // Factory
+  static constant_expression *create(op_t op, constant_int* lhs, constant_int* rhs);
+
+private:
+  op_t op_;
+  constant_int* lhs_;
+  constant_int* rhs_;
+  bool has_no_unsigned_wrap_;
+  bool has_no_signed_wrap_;
 };
 
 /* constant range */
