@@ -93,7 +93,6 @@ private:
 //===----------------------------------------------------------------------===//
 //                               binary_operator classes
 //===----------------------------------------------------------------------===//
-
 class binary_operator: public instruction{
 public:
   typedef llvm::BinaryOperator::BinaryOps op_t;

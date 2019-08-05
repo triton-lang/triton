@@ -9,6 +9,8 @@ namespace triton{
 namespace ir{
 
 class context;
+class constant;
+class constant_expression;
 class constant_int;
 class constant_fp;
 class undef_value;
@@ -36,6 +38,8 @@ public:
   std::map<type*, undef_value*> uv_constants_;
   // Metaparameters
   std::vector<metaparameter*> mp_constants_;
+  // Expr constants
+  std::map<std::tuple<int, constant*, constant*>, constant_expression*> expr_constants_;
 };
 
 }

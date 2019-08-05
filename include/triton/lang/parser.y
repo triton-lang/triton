@@ -93,7 +93,7 @@ abstract_declarator
   ;
 
 direct_abstract_declarator
-  : '[' primary_expression_list ']' { $$ = new tile(nullptr, $1); }
+  : '[' constant_expression_list ']' { $$ = new tile(nullptr, $2); }
 
 type_name
   : declaration_specifiers { $$ = new type_name($1, nullptr); }
@@ -133,7 +133,7 @@ builtin_expression
   | ATOMIC_CAS '(' expression ',' expression ',' expression ')'  { $$ = new atomic_cas_expression($3, $5, $7); }
   | ATOMIC_EXCH '(' expression ',' expression ')'                { $$ = new atomic_exch_expression($3, $5); }
   | ATOMIC_ADD '(' expression ',' expression ')'                 { $$ = new atomic_add_expression($3, $5); }
-  | RESHAPE '(' expression ',' primary_expression_list ')'       { $$ = new reshape_expression($3, $5); }
+  | RESHAPE '(' expression ',' constant_expression_list ')'      { $$ = new reshape_expression($3, $5); }
   ;
 
 /* Primary */
@@ -144,11 +144,6 @@ primary_expression
   | builtin_expression                             { $$ = $1; }
   | STRING_LITERAL                                 { $$ = new string_literal(yytext); }
   | '(' expression ')'                             { $$ = $2; }
-  ;
-
-primary_expression_list
-  : primary_expression                             { $$ = new list<expression*>((expression*)$1); }
-  | primary_expression_list ',' primary_expression { $$ = append_ptr_list<expression>($1, $3); }
   ;
 
 /* Postfix */
@@ -279,6 +274,10 @@ expression
   : assignment_expression { $$ = $1; }
   ;
 
+constant_expression_list
+  : expression                                   { $$ = new list<expression*>((expression*)$1); }
+  | constant_expression_list ',' expression         { $$ = append_ptr_list<expression>($1, $3); }
+
 /* Initialization */
 initialization_expression
   : assignment_expression { $$ = $1; }
@@ -338,7 +337,7 @@ jump_statement
 
 direct_declarator
   : identifier { $$ = $1; }
-  | identifier '[' primary_expression_list ']' { $$ = new tile($1, $3); }
+  | identifier '[' constant_expression_list ']' { $$ = new tile($1, $3); }
   | identifier '(' parameter_list ')' { $$ = new function($1, $3); }
   | identifier '(' ')' { $$ = new function($1, nullptr); }
   ;
