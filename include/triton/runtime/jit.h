@@ -73,7 +73,6 @@ public:
       optimize_dot.run(module);
       optimize_trans.run(module);
       optimize_dce.run(module);
-//      ir::print(module, std::cout);
     }
 
     void target_dependent(ir::module &module) {
