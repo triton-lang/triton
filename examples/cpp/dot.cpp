@@ -6,6 +6,7 @@
 #include "triton/driver/stream.h"
 #include "triton/dnn/dot.h"
 #include "triton/tools/bench.hpp"
+#include "triton/external/half.hpp"
 #include "cuda.h"
 
 template<class T>
@@ -25,7 +26,7 @@ struct perf_t {
 
 
 perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K){
-  typedef float NumericT;
+  typedef half NumericT;
   std::string ty = "half";
   size_t dt_nbytes = sizeof(NumericT);
   triton::driver::context* context = stream->context();
@@ -34,11 +35,11 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   std::vector<NumericT> hb(K*N);
   srand(0);
   for(size_t i = 0; i < ha.size(); i++)
-    ha[i] = (NumericT)rand()/RAND_MAX;
+    ha[i] = static_cast<NumericT>((double)rand()/RAND_MAX);
   for(size_t i = 0; i < hb.size(); i++)
-    hb[i] = (NumericT)rand()/RAND_MAX;
+    hb[i] = static_cast<NumericT>((double)rand()/RAND_MAX);
   for(size_t i = 0; i < hc.size(); i++)
-    hc[i] = 0;
+    hc[i] = static_cast<NumericT>((double)0);
   triton::driver::buffer* dc = triton::driver::buffer::create(context, hc.size()*dt_nbytes);
   triton::driver::buffer* da = triton::driver::buffer::create(context, ha.size()*dt_nbytes);
   triton::driver::buffer* db = triton::driver::buffer::create(context, hb.size()*dt_nbytes);
@@ -48,7 +49,7 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   stream->synchronize();
   triton::dnn::dot dot(M, N, K, AT, BT, ty, ty, 8, 8, 8);
   // benchmark triton
-  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::FULL_TUNING);}, stream);
+  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::NO_TUNING);}, stream);
   // benchmark cublas
 //  NumericT alpha = 1;
 //  NumericT beta = 0;
@@ -73,10 +74,10 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
 
   // test
   stream->read(dc, true, 0, hc);
-  std::vector<float> rc(hc.size());
+  std::vector<NumericT> rc(hc.size());
   dot.cpu_ref(rc, ha, hb);
   for(size_t i = 0; i < M*N; i++)
-    if(!std::isnan(hc[i]) && std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
+    if(std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
       std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
       exit(EXIT_FAILURE);
     }
@@ -111,7 +112,7 @@ int main() {
   std::vector<config_t> configs = {
 //    {false, false, 8192, 512, 512},
 //    {false, true, 8192, 8192, 8192}
-    {true, true, 128, 128, 128},
+    {false, true, 128, 128, 128},
 //    {false, true, 32768, 256, 512}
 //    {true,  false, 8192, 512, 512},
 //    {true,  true,  8192, 512, 512}

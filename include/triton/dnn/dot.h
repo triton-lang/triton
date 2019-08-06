@@ -42,9 +42,9 @@ public:
                       size_t M, size_t N, size_t K){
     for(size_t m = 0; m < M; m++)
     for(size_t n = 0; n < N; n++){
-      T acc = 0;
+      T acc = static_cast<T>((double)0);
       for(size_t k = 0; k < K; k++)
-        acc += (AT?a[k + m*K]:a[m + k*M]) * (BT?b[n + k*N]:b[k + n*K]);
+        acc = acc + (AT?a[k + m*K]:a[m + k*M]) * (BT?b[n + k*N]:b[k + n*K]);
       c[m + n*M] = acc;
     }
   }
