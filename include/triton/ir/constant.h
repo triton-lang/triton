@@ -38,6 +38,7 @@ protected:
 
 public:
   virtual uint64_t get_value() const { return value_; }
+  virtual std::string repr() const { return std::to_string(get_value()); }
   static constant_int *get(type *ty, uint64_t value);
 
 protected:
@@ -57,7 +58,7 @@ public:
   const std::vector<unsigned>& get_space() { return space_; }
   void set_space(const std::vector<unsigned> &space) { space_ = space; }
   uint64_t get_value() const { assert(has_value_); return value_; }
-
+  std::string repr() const { return has_value_? std::to_string(value_) : "?" ;}
 private:
   std::vector<unsigned> space_;
   bool has_value_;

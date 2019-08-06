@@ -26,7 +26,7 @@ struct perf_t {
 
 perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K){
   typedef float NumericT;
-  std::string ty = "float";
+  std::string ty = "half";
   size_t dt_nbytes = sizeof(NumericT);
   triton::driver::context* context = stream->context();
   std::vector<NumericT> hc(M*N);
@@ -48,7 +48,7 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   stream->synchronize();
   triton::dnn::dot dot(M, N, K, AT, BT, ty, ty, 8, 8, 8);
   // benchmark triton
-  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::NO_TUNING);}, stream);
+  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::FULL_TUNING);}, stream);
   // benchmark cublas
 //  NumericT alpha = 1;
 //  NumericT beta = 0;
@@ -111,7 +111,7 @@ int main() {
   std::vector<config_t> configs = {
 //    {false, false, 8192, 512, 512},
 //    {false, true, 8192, 8192, 8192}
-    {false, true, 128, 128, 128},
+    {true, true, 128, 128, 128},
 //    {false, true, 32768, 256, 512}
 //    {true,  false, 8192, 512, 512},
 //    {true,  true,  8192, 512, 512}

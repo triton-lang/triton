@@ -180,11 +180,12 @@ private:
 
 class trans_expression: public builtin_expression{
 public:
-  trans_expression(node *arg): arg_(arg) {}
+  trans_expression(node *arg, node *perm): arg_(arg), perm_((list<expression*>*)perm) {}
   ir::value* codegen(ir::module *mod) const;
 
 private:
   node* arg_;
+  const list<expression*>* perm_;
 };
 
 class sqrt_expression: public builtin_expression{

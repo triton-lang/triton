@@ -67,8 +67,6 @@ void tune::init_c_graph(ir::instruction *v) {
         continue;
       add_constraint({reduce, current++}, {arg, i});
     }
-//    add_constraint({reduce, 0}, {arg, 0});
-//    add_constraint({reduce, 1}, {arg, 1});
     return;
   }
   else
@@ -115,7 +113,7 @@ void tune::init_c_graph(ir::instruction *v) {
     }
   }
   // Matrix multiplication
-  else if(dynamic_cast<ir::dot_inst*>(v)){
+  else if(auto *x = dynamic_cast<ir::dot_inst*>(v)){
     ir::value *A = v->get_operand(0);
     ir::value *B = v->get_operand(1);
     ir::value *D = v->get_operand(2);
@@ -124,8 +122,8 @@ void tune::init_c_graph(ir::instruction *v) {
     for(unsigned i = 2; i < shapes.size(); i++){
       if(shapes[i] == one)
         static_params_.insert({{v, i}, 1});
-      add_constraint({v, i}, {A, i});
-      add_constraint({v, i}, {B, i});
+//      add_constraint({v, i}, {A, i});
+//      add_constraint({v, i}, {B, i});
     }
   }
   // Element-wise
@@ -268,35 +266,53 @@ void tune::run(ir::module &mod) {
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i : block->get_inst_list()){
+
+
     if(fragments_.find({i, 0}) != fragments_.end() && fragments_.at({i, 0}) != STRIDED_SCAN)
       continue;
-    if(auto *ld = dynamic_cast<ir::load_inst*>(i))
+
+    if(auto *x = dynamic_cast<ir::load_inst*>(i))
     if(i->get_type()->is_tile_ty()){
-      ir::type *ptr_ty = ld->get_pointer_operand()->get_type()->get_scalar_ty();
+      ir::type *ptr_ty = x->get_pointer_operand()->get_type()->get_scalar_ty();
       size_t addr_space = ptr_ty->get_pointer_address_space();
       if(addr_space < 4){
         ir::type *ty = mod.get_builder().get_int32_ty();
-        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  1, 1));
+        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  2, 4));
         *params_.at(i).at("nts.d0") = *tmp;
       }
     }
     if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 1, 1));
-      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 1, 1));
+      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 2, 4));
+      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 2, 4));
       *params_.at(i).at("nts.d0") = *tmp1;
       *params_.at(i).at("nts.d1") = *tmp2;
+    }
+  }
+
+  // initialize grids
+  for(ir::function *fn: mod.get_function_list()){
+    std::map<ir::metaparameter*, ir::instruction*> references;
+    create_grids(grids_, references, fn);
+  }
+
+  for(ir::instruction *i: grids_){
+    auto shapes = i->get_type()->get_tile_shapes();
+    for(size_t k = 0; k < shapes.size(); k++)
+    if(shapes[k]->get_value() == 1) {
+      if(fragments_.at({i, k}) == STRIDED_SCAN){
+        params_.at(i).at("nts.d" + std::to_string(k))->set_value(1);
+        params_.at(i).at("mts.d" + std::to_string(k))->set_value(1);
+      }
+      if(fragments_.at({i, k}) == HMMA_FRAGMENT_C){
+        params_.at(i).at("fpw.d" + std::to_string(k))->set_value(1);
+        params_.at(i).at("wpt.d" + std::to_string(k))->set_value(1);
+      }
     }
   }
 }
 
 void tune::init(ir::module &mod) {
-  for(ir::function *fn: mod.get_function_list()){
-    // initialize grids
-    std::map<ir::metaparameter*, ir::instruction*> references;
-    create_grids(grids_, references, fn);
-  }
-  // number of threads
   num_threads_ = get_req_num_threads(grids_.front());
 }
 

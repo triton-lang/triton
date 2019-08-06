@@ -584,12 +584,18 @@ private:
 
 class trans_inst: public builtin_inst {
 public:
-  ir::type* get_res_ty(ir::type* in);
-  std::vector<constant_int*> get_default_perm(ir::type* ty);
+  ir::type* get_res_ty(ir::type* in, std::vector<constant_int *> perm);
+  std::vector<constant_int*> init_perm(ir::type* ty, const std::vector<constant_int*>& perm);
 
 private:
   trans_inst(value *arg, const std::vector<constant_int*>& perm, const std::string& name, instruction* next);
-  std::string repr_impl() const { return "trans"; }
+  std::string repr_impl() const {
+    std::string res = "trans<";
+    for(ir::constant_int *x: perm_)
+      res += x->repr() + ",";
+    res[res.size()-1] = '>';
+    return res;
+  }
 
 public:
   static instruction* create(value *arg, const std::vector<constant_int*>& perm = {}, const std::string &name = "", instruction *next = nullptr);
@@ -609,7 +615,7 @@ public:
 
 class reduce_inst: public builtin_inst {
 private:
-  static type* get_type(value *arg, unsigned axis);
+  static type* get_res_type(value *arg, unsigned axis);
 
 private:
   reduce_inst(value* arg, unsigned axis, const std::string& name, instruction* next);

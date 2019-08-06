@@ -42,22 +42,32 @@ void optimize_trans::run(ir::module &mod) {
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction* i: block->get_inst_list()){
-    // filter transposition
+    // transposition
     if(auto trans = dynamic_cast<ir::trans_inst*>(i)) {
       auto users = trans->get_users();
       auto ops = trans->ops();
       if(users.size() > 1 || ops.size() > 1)
         continue;
       ir::value* op = *ops.begin();
-      // chains of transpositions
-      // TODO
-
+      // todo: chains of transpositions
       // trans(phi) -> phi(trans(), trans()...)
       if(dynamic_cast<ir::phi_node*>(op)){
         ir::value* new_phi = replace_phi(op, builder, trans->get_perm());
         trans->replace_all_uses_with(new_phi);
       }
     }
+    // reductions
+    if(auto x = dynamic_cast<ir::reduce_inst*>(i)) {
+      ir::constant_int *one = ir::constant_int::get(ir::type::get_int32_ty(i->get_type()->get_context()), 1);
+      ir::value *arg = x->get_operand(0);
+      auto shapes = arg->get_type()->get_tile_shapes();
+      if(shapes[x->get_axis()] == one){
+        builder.set_insert_point(x);
+        ir::value* new_red = builder.create_reshape(arg, x->get_type()->get_tile_shapes());
+        x->replace_all_uses_with(new_red);
+      }
+    }
+
   }
 }
 

@@ -482,7 +482,8 @@ std::string retile_inst::shape_suffix(ir::type* ty){
   std::string res = "[";
   const auto& shapes = ty->get_tile_shapes();
   for(unsigned i = 0; i < shapes.size(); i++){
-    res += std::to_string(ty->get_tile_shapes()[i]->get_value());
+    ir::constant_int *shape_i = ty->get_tile_shapes()[i];
+    res += shape_i->repr();
     if(i < shapes.size() - 1)
       res += ", ";
   }
@@ -566,26 +567,33 @@ instruction *dot_inst::create_tt(value *A, value *B, value *C,
 //                               trans instructions
 //===----------------------------------------------------------------------===//
 
-ir::type* trans_inst::get_res_ty(ir::type* ty) {
-  auto shapes = ty->get_tile_shapes();
-  std::rotate(shapes.begin(), shapes.begin() + 1, shapes.end());
-  return tile_type::get(ty->get_scalar_ty(), shapes);
+ir::type* trans_inst::get_res_ty(ir::type* ty, std::vector<constant_int*> perm) {
+  // get argument shapes
+  ir::tile_type::tile_shapes_t arg_shapes = ty->get_tile_shapes();
+  // permutate argument shapes
+  perm = init_perm(ty, perm);
+  ir::tile_type::tile_shapes_t res_shapes = arg_shapes;
+  for(int i = 0; i < perm.size(); i++)
+    res_shapes[i] = arg_shapes[perm[i]->get_value()];
+  // construct type
+  return tile_type::get(ty->get_scalar_ty(), res_shapes);
 }
 
-std::vector<constant_int*> trans_inst::get_default_perm(ir::type* ty) {
+std::vector<constant_int*> trans_inst::init_perm(ir::type* ty, const std::vector<constant_int*>& perm) {
+  if(!perm.empty())
+    return perm;
   auto size = ty->get_tile_shapes().size();
   ir::type* int32_ty = type::get_int32_ty(ty->get_context());
   std::vector<constant_int*> result;
-  for(size_t i = 0; i < size; i++)
-    result.push_back(ir::constant_int::get(int32_ty, i + 1 % size));
+  result.push_back(ir::constant_int::get(int32_ty, size - 1));
+  for(int i = 0; i < size - 1; i++)
+    result.push_back(ir::constant_int::get(int32_ty, i));
   return result;
 }
 
 trans_inst::trans_inst(value *arg, const std::vector<constant_int*>& perm, const std::string &name, instruction *next)
-  : builtin_inst(get_res_ty(arg->get_type()), 1, 1, name, next) {
-  perm_ = perm;
-  if(perm_.empty())
-    perm_ = get_default_perm(arg->get_type());
+  : builtin_inst(get_res_ty(arg->get_type(), perm), 1, 1, name, next) {
+  perm_ = init_perm(arg->get_type(), perm);
   auto size = arg->get_type()->get_tile_shapes().size();
   assert(perm_.size() == size);
   set_operand(0, arg);
@@ -615,7 +623,7 @@ instruction* sqrt_inst::create(value *arg, const std::string &name, instruction 
 //===----------------------------------------------------------------------===//
 //                               reduce instructions
 //===----------------------------------------------------------------------===//
-type* reduce_inst::get_type(value *arg, unsigned axis) {
+type* reduce_inst::get_res_type(value *arg, unsigned axis) {
   ir::tile_type::tile_shapes_t shapes = arg->get_type()->get_tile_shapes();
   shapes.erase(shapes.begin() + axis);
   type *scalar_ty = arg->get_type()->get_scalar_ty();
@@ -626,7 +634,7 @@ type* reduce_inst::get_type(value *arg, unsigned axis) {
 }
 
 reduce_inst::reduce_inst(value *arg, unsigned axis, const std::string &name, instruction *next)
-  : builtin_inst(get_type(arg, axis), 1, 1, name, next),
+  : builtin_inst(get_res_type(arg, axis), 1, 1, name, next),
     axis_(axis){
   set_operand(0, arg);
 }
