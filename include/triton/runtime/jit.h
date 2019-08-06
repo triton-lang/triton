@@ -73,11 +73,11 @@ public:
       optimize_dot.run(module);
       optimize_trans.run(module);
       optimize_dce.run(module);
+//      ir::print(module, std::cout);
     }
 
     void target_dependent(ir::module &module) {
       alignment_info.run(module);
-//      ir::print(module, std::cout);
 //      reassociate.run(module);
       if(target_->is_gpu()){
         shmem_info.run(module);

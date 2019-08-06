@@ -49,7 +49,7 @@ class DotOp : public OpKernel {
     triton::driver::cu_buffer db(ctx, b.tensor_data().size(), (CUdeviceptr)b.tensor_data().data(), false);
     triton::driver::cu_buffer dc(ctx, c->tensor_data().size(), (CUdeviceptr)c->tensor_data().data(), false);
     // template
-    triton::dnn::dot dot(M, N, K, false, false, "half", "half", 8, 8, 8);
+    triton::dnn::dot dot(M, N, K, false, true, "half", "half", 8, 8, 8);
     dot.enqueue(stream, {&da, &db, &dc});
   }
 

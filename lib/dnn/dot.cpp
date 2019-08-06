@@ -74,12 +74,14 @@ void dot::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
 void dot::triton_c_src(std::ostream &os) const {
   std::string AS0 = "TM", AS1 = "TK";
   std::string BS0 = "TK", BS1 = "TN";
+  std::string XAS0 = "TM", XAS1 = "TK/4", XAS2 = "4";
+  std::string XBS0 = "TN", XBS1 = "TK/4", XBS2 = "4";
   std::string bca0 = "[newaxis, :]", bca1 = "[:, newaxis]";
   std::string bcb0 = "[:, newaxis]", bcb1 = "[newaxis, :]";
   std::string lda0 = "*lda", lda1 = "";
   std::string ldb0 = "", ldb1 = "*ldb";
-  std::string usea = AT_ ? "trans(a)" : "a";
-  std::string useb = BT_ ? "trans(b)" : "b";
+  std::string usea = AT_ ? "trans(xa)" : "xa";
+  std::string useb = BT_ ? "trans(xb)" : "xb";
   if(AT_){
     std::swap(AS0, AS1);
     std::swap(bca0, bca1);
@@ -92,12 +94,15 @@ void dot::triton_c_src(std::ostream &os) const {
   }
   std::string AS = AS0 + ", " + AS1;
   std::string BS = BS0 + ", " + BS1;
+  std::string XAS = XAS0 + ", " + XAS1 + ", " + XAS2;
+  std::string XBS = XBS0 + ", " + XBS1 + ", " + XBS2;
+  std::string XCS = "TM, TN, 4";
   std::string align_lda_str = "multiple_of(" + std::to_string(align_lda_) + ")";
   std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb_) + ")";
   std::string res =
 R"(
-const tunable int TM = {16, 32, 64, 128};
-const tunable int TN = {16, 32, 64, 128};
+const tunable int TM = {32};
+const tunable int TN = {32};
 const tunable int TK = {32};
 const tunable int GZ = {1};
 
@@ -113,7 +118,7 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
   int ryb[TN] = ridy * TN + (0 ... TN);
   int rka[TK] = 0 ... TK;
   int rkb[TK] = 0 ... TK;
-  float c[TM, TN] = 0;
+  float xc[)" + XCS + R"(] = 0;
   )" + a_ty_ + R"(* pa[)" + AS + "] = A + rka" + bca0 + lda0 + " + rxa" + bca1 + lda1 + R"(;
   )" + b_ty_ + R"(* pb[)" + BS + "] = B + rkb" + bcb0 + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
   bool checka[)" + AS + R"(] = (rka < K))" + bca0 + " && (rxa < M)" + bca1 + R"(;
@@ -121,7 +126,9 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
   )" + a_ty_ + R"( a[)" + AS + R"(] = checka ? *pa : 0;
   )" + b_ty_ + R"( b[)" + BS + R"(] = checkb ? *pb : 0;
   for(int k = K; k > 0; k = k - TK){
-    c = dot()" + usea + ", " + useb + R"(, c);
+    )" + a_ty_ + R"( xa[)" + XAS + "] = __reshape(a, " + XAS + R"();
+    )" + b_ty_ + R"( xb[)" + XBS + "] = __reshape(b, " + XBS + R"();
+    xc = dot()" + usea + ", " + useb + R"(, xc);
     pa = pa + TK)" + lda0 + R"(;
     pb = pb + TK)" + ldb0 + R"(;
     bool checka[)" + AS + R"(] = k > TK;
@@ -131,11 +138,9 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
   }
   int rxc[TM] =  ridx * TM + (0 ... TM);
   int ryc[TN] =  ridy * TN + (0 ... TN);
-  bool checkc0[TM] = rxc < M;
-  bool checkc1[TN] = ryc < N;
-  bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
   float* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
-  @checkc *pc = c;
+  float c[TM, TN] = __sum(xc, 2);
+  *pc = c;
 }
 )";
 
