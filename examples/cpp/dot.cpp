@@ -26,7 +26,7 @@ struct perf_t {
 
 perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K){
   typedef float NumericT;
-  std::string ty = "half";
+  std::string ty = "float";
   size_t dt_nbytes = sizeof(NumericT);
   triton::driver::context* context = stream->context();
   std::vector<NumericT> hc(M*N);
@@ -48,28 +48,40 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   stream->synchronize();
   triton::dnn::dot dot(M, N, K, AT, BT, ty, ty, 8, 8, 8);
   // benchmark triton
-  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::PARTIAL_TUNING);}, stream);
+  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::NO_TUNING);}, stream);
   // benchmark cublas
-  NumericT alpha = 1;
-  NumericT beta = 0;
-  int32_t lda = AT ? K : M;
-  int32_t ldb = BT ? N : K;
-  int32_t ldc = M;
+//  NumericT alpha = 1;
+//  NumericT beta = 0;
+//  int32_t lda = AT ? K : M;
+//  int32_t ldb = BT ? N : K;
+//  int32_t ldc = M;
 //  cublasGemmAlgo_t fastest;
 //  cublasGemm(HALF_TYPE, stream, AT, BT, M, N, K,
 //             &alpha, da, lda,
 //             db, ldb, &beta,
 //             dc, ldc, &fastest);
-  double cublas_ns = triton::tools::bench([&]() {   cublasGemm(HALF_TYPE, stream, AT, BT, M, N, K,
-                                                               &alpha, da, lda,
-                                                               db, ldb, &beta,
-                                                               dc, ldc, nullptr, CUBLAS_GEMM_DEFAULT_TENSOR_OP); }, stream);
+//  double cublas_ns = triton::tools::bench([&]() {   cublasGemm(HALF_TYPE, stream, AT, BT, M, N, K,
+//                                                               &alpha, da, lda,
+//                                                               db, ldb, &beta,
+//                                                               dc, ldc, nullptr, CUBLAS_GEMM_DEFAULT_TENSOR_OP); }, stream);
   // result
   auto tflops = [&](double nanosec) { return dot.num_flops() / nanosec * 1e-3; };
 
   perf_t result;
-  result.cublas = tflops(cublas_ns);
+//  result.cublas = tflops(cublas_ns);
   result.triton = tflops(triton_ns);
+
+  // test
+  stream->read(dc, true, 0, hc);
+  std::vector<float> rc(hc.size());
+  dot.cpu_ref(rc, ha, hb);
+  for(size_t i = 0; i < M*N; i++)
+    if(!std::isnan(hc[i]) && std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
+      std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
+      exit(EXIT_FAILURE);
+    }
+  std::cout << "Pass!" << std::endl;
+
   // clean-up
   delete dc;
   delete da;
@@ -99,8 +111,8 @@ int main() {
   std::vector<config_t> configs = {
 //    {false, false, 8192, 512, 512},
 //    {false, true, 8192, 8192, 8192}
-    {false, true, 32768, 256, 256},
-    {false, true, 32768, 256, 512}
+    {false, true, 128, 128, 128},
+//    {false, true, 32768, 256, 512}
 //    {true,  false, 8192, 512, 512},
 //    {true,  true,  8192, 512, 512}
   };

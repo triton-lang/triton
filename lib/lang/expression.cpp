@@ -101,7 +101,6 @@ ir::value *binary_expression::llvm_op(ir::module *mod, ir::builder &builder, ir:
 ir::value* binary_expression::codegen(ir::module *mod) const{
   ir::value *lhs = lhs_->codegen(mod);
   ir::value *rhs = rhs_->codegen(mod);
-  std::cout << " " << typeid(*lhs_).name() << " " << typeid(*rhs_).name() << std::endl;
   ir::value *result = llvm_op(mod, mod->get_builder(), lhs, rhs, "");
   return result;
 }

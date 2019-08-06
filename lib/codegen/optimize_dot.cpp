@@ -33,8 +33,7 @@ void optimize_dot::run(ir::module &mod) {
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list())
-  if(auto dot = dynamic_cast<ir::dot_inst*>(i))
-  if(dot->get_operand(1)->get_type()->get_tile_shapes()[1]->get_value() != 1){
+  if(auto dot = dynamic_cast<ir::dot_inst*>(i)){
     builder.set_insert_point(i);
     ir::value *A = dot->get_operand(0);
     ir::value *B = dot->get_operand(1);

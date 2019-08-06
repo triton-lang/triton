@@ -54,16 +54,17 @@ std::pair<base*, rt::jit*> base::get_profile_impl(driver::stream *stream, std::v
       return num_flops() / ts * 1e-3;
     };
     // auto-tune and save result
-    if(autotune != NO_TUNING) {
+    if(autotune == FULL_TUNING || autotune == PARTIAL_TUNING) {
       std::vector<params_t> space = {};
       if(autotune == PARTIAL_TUNING)
         space = search_space();
       rt::jit::tune_res_t best = jit->autotune(name_.c_str(), src.c_str(), benchmark, space);
       jit->add_module(name_.c_str(), src.c_str(), best.params);
     }
-    else {
-      params_t params = heuristics();
+    else{
+//      params_t params = heuristics();
 //      params_t params = jit->get_valid(name_.c_str(), src.c_str());
+      params_t params = {4, 1, 32, 4, 1, 32, 4, 4, 4, 1, 1, 16, 32, 16, 4, 4, 1};
       jit->add_module(name_.c_str(), src.c_str(), params);
     }
     triton::driver::kernel* kernel = jit->get_function(name_.c_str());

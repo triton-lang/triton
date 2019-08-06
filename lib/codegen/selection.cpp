@@ -135,8 +135,12 @@ void shared_tile::extract_constant(const indices_t &arg_idx, indices_t &non_cst_
 Value* shared_tile::shared_offset(llvm::IRBuilder<> &builder, const shapes_t& shapes, indices_t idx) {
   Value *result = builder.getInt32(0);
   result = builder.CreateAdd(result, idx[0]);
-  for(size_t i = 1; i < idx.size(); i++)
-    result = builder.CreateAdd(result, builder.CreateMul(idx[i], builder.getInt32(shapes[i-1])));
+  Value *ld = builder.getInt32(shapes[0]);
+  for(size_t i = 1; i < idx.size(); i++) {
+    result = builder.CreateAdd(result, builder.CreateMul(idx[i], ld));
+    if(i < idx.size() - 1)
+      ld = builder.CreateMul(ld, builder.getInt32(shapes[i]));
+  }
   return result;
 }
 
@@ -854,10 +858,13 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
         Value *&result = x.second;
         indices_t write_idx = x.first;
         write_idx.insert(write_idx.begin() + axis, lane);
+
         // shared memory write  pointer
         Value *write_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), write_idx);
         Value *write_ptr = builder.CreateGEP(base_ptr, write_offset);
+
         // initialize shared memory
+        tgt_->add_barrier(module, builder);
         builder.CreateStore(result, write_ptr);
         // build result
         for(unsigned i = depth/2; i > 0; i >>= 1){
@@ -993,15 +1000,14 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       {
         shared_tile *TA = (shared_tile*)tmap_.at(A);
         shared_tile *TB = (shared_tile*)tmap_.at(B);
-        if(params_->get_fragment(ins, 0) == tune::STRIDED_SCAN)
-        {
+        if(params_->get_fragment(ins, 0) == tune::STRIDED_SCAN) {
           TA->set_vector_size(TC->axis(0).contiguous);
           TB->set_vector_size(TC->axis(1).contiguous);
           result->for_each([&](indices_t idx){
             Value *res = TC->get_value(idx);
             for(unsigned K = 0; K < NK; ++K){
-              indices_t a_idx = {idx[0], builder.getInt32(K)};
-              indices_t b_idx = {builder.getInt32(K), idx[1]};
+              indices_t a_idx = {idx[0], builder.getInt32(K), idx[2]};
+              indices_t b_idx = {builder.getInt32(K), idx[1], idx[2]};
               if(AT)
                 std::swap(a_idx[0], a_idx[1]);
               if(BT)
@@ -1013,13 +1019,11 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
               if(b->getType() != c_ty)
                 b = builder.CreateFPCast(b, c_ty);
               res = builder.CreateCall(f_mul_add, {a, b, res});
-
             }
             result->set_value(idx, res);
           });
         }
-        else
-        {
+        else {
           TA->set_vector_size(4*pack_size_0_);
           TB->set_vector_size(4*pack_size_1_);
           TA->set_return_mode(true);
