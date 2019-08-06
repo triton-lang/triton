@@ -68,7 +68,13 @@ void optimize_dot::run(ir::module &mod) {
         }
         // dot(op(a), b)
         if(!trans_b){
-          ir::value* BB = builder.create_trans(B);
+          size_t size = B->get_type()->get_tile_shapes().size();
+          std::vector<ir::constant_int*> perm(size);
+          ir::type *int32_ty = ir::type::get_int32_ty(B->get_type()->get_context());
+          for(size_t i = 0; i < size; i++)
+            perm[i] = ir::constant_int::get(int32_ty, i);
+          std::swap(perm[0], perm[1]);
+          ir::value* BB = builder.create_trans(B, perm);
           ir::instruction *NT = builder.insert(ir::dot_inst::create_nt(A, BB, D));
           dot->replace_all_uses_with(NT);
           to_delete.push_back(dot);

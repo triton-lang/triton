@@ -572,13 +572,31 @@ ir::type* trans_inst::get_res_ty(ir::type* ty) {
   return tile_type::get(ty->get_scalar_ty(), shapes);
 }
 
-trans_inst::trans_inst(value *arg, const std::string &name, instruction *next)
+std::vector<constant_int*> trans_inst::get_default_perm(ir::type* ty) {
+  auto size = ty->get_tile_shapes().size();
+  ir::type* int32_ty = type::get_int32_ty(ty->get_context());
+  std::vector<constant_int*> result;
+  for(size_t i = 0; i < size; i++)
+    result.push_back(ir::constant_int::get(int32_ty, i + 1 % size));
+  return result;
+}
+
+trans_inst::trans_inst(value *arg, const std::vector<constant_int*>& perm, const std::string &name, instruction *next)
   : builtin_inst(get_res_ty(arg->get_type()), 1, 1, name, next) {
+  perm_ = perm;
+  if(perm_.empty())
+    perm_ = get_default_perm(arg->get_type());
+  auto size = arg->get_type()->get_tile_shapes().size();
+  assert(perm_.size() == size);
   set_operand(0, arg);
 }
 
-instruction* trans_inst::create(value *arg, const std::string &name, instruction *next) {
-  return new trans_inst(arg, name, next);
+instruction* trans_inst::create(value *arg, const std::vector<constant_int *> &perm, const std::string &name, instruction *next) {
+  return new trans_inst(arg, perm, name, next);
+}
+
+const std::vector<constant_int*> trans_inst::get_perm() const {
+  return perm_;
 }
 
 //===----------------------------------------------------------------------===//

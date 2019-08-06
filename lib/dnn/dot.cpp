@@ -75,7 +75,7 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string AS0 = "TM", AS1 = "TK";
   std::string BS0 = "TK", BS1 = "TN";
   std::string XAS0 = "TM", XAS1 = "TK/4", XAS2 = "4";
-  std::string XBS0 = "TN", XBS1 = "TK/4", XBS2 = "4";
+  std::string XBS0 = "TK/4", XBS1 = "TN", XBS2 = "4";
   std::string bca0 = "[newaxis, :]", bca1 = "[:, newaxis]";
   std::string bcb0 = "[:, newaxis]", bcb1 = "[newaxis, :]";
   std::string lda0 = "*lda", lda1 = "";
@@ -84,11 +84,13 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string useb = BT_ ? "trans(xb)" : "xb";
   if(AT_){
     std::swap(AS0, AS1);
+    std::swap(XAS0, XAS1);
     std::swap(bca0, bca1);
     std::swap(lda0, lda1);
   }
   if(BT_){
     std::swap(BS0, BS1);
+    std::swap(XBS0, XBS1);
     std::swap(bcb0, bcb1);
     std::swap(ldb0, ldb1);
   }
@@ -144,6 +146,7 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
 }
 )";
 
+  std::cout << res << std::endl;
   os << res;
 }
 

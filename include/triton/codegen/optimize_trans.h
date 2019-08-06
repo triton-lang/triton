@@ -13,13 +13,14 @@ namespace ir {
   class instruction;
   class trans_inst;
   class builder;
+  class constant_int;
 }
 
 namespace codegen{
 
 class optimize_trans {
 private:
-  ir::value *replace_phi(ir::value* value, ir::builder &builder);
+  ir::value *replace_phi(ir::value* value, ir::builder &builder, const std::vector<ir::constant_int *> &perm);
 
 public:
   optimize_trans() {}

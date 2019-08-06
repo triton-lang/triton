@@ -7,12 +7,13 @@ namespace codegen{
 
 
 ir::value* optimize_trans::replace_phi(ir::value* value,
-                                 ir::builder& builder){
+                                       ir::builder& builder,
+                                       const std::vector<ir::constant_int*> &perm){
   if(auto phi = dynamic_cast<ir::phi_node*>(value)) {
     // transpose operands
     std::vector<ir::value*> incs;
     for(unsigned n = 0; n < phi->get_num_incoming(); n++)
-      incs.push_back(replace_phi(phi->get_incoming_value(n), builder));
+      incs.push_back(replace_phi(phi->get_incoming_value(n), builder, perm));
     // create phi for transposed values
     builder.set_insert_point(phi);
     ir::phi_node* result = builder.create_phi(incs[0]->get_type(), incs.size(), phi->get_name());
@@ -26,7 +27,7 @@ ir::value* optimize_trans::replace_phi(ir::value* value,
     auto it = std::find(block->begin(), block->end(), i);
     it++;
     builder.set_insert_point(it);
-    ir::instruction *trans = (ir::instruction*)builder.create_trans(i);
+    ir::instruction *trans = (ir::instruction*)builder.create_trans(i, perm);
     i->replace_all_uses_with(trans);
     trans->set_operand(0, i);
     return trans;
@@ -53,7 +54,7 @@ void optimize_trans::run(ir::module &mod) {
 
       // trans(phi) -> phi(trans(), trans()...)
       if(dynamic_cast<ir::phi_node*>(op)){
-        ir::value* new_phi = replace_phi(op, builder);
+        ir::value* new_phi = replace_phi(op, builder, trans->get_perm());
         trans->replace_all_uses_with(new_phi);
       }
     }

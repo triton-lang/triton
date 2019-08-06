@@ -98,11 +98,11 @@ void tune::init_c_graph(ir::instruction *v) {
 
   }
   // Trans
-  else if(dynamic_cast<ir::trans_inst*>(v)){
+  else if(auto *x = dynamic_cast<ir::trans_inst*>(v)){
     ir::value *op = v->get_operand(0);
-    size_t n_shapes = shapes.size();
-    for(unsigned i = 0; i < n_shapes; i++)
-      add_constraint({v, (i + 1) % n_shapes}, {op, i});
+    auto perm = x->get_perm();
+    for(unsigned i = 0; i < perm.size(); i++)
+      add_constraint({v, perm[i]->get_value()}, {op, i});
   }
   // Broadcast
   else if(dynamic_cast<ir::broadcast_inst*>(v)){
