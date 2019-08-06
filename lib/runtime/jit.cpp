@@ -37,13 +37,13 @@ void parallel_loop_nest(std::vector<size_t> const & ranges,
   size_t D = ranges.size();
   std::vector<size_t> values(D, 0);
   // thread pools
-//  ThreadPool pool(nthreads);
+  ThreadPool pool(nthreads);
   // Start with innermost loop
   size_t i = D - 1;
   while(true){
     //  Execute function
-//    pool.enqueue(f,values);
-    f(values);
+    pool.enqueue(f,values);
+//    f(values);
     while(values[i]++ == ranges[i] - 1){
       if(i == 0)
         return;

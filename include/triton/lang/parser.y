@@ -125,7 +125,8 @@ builtin_expression
   | DOT '(' expression ',' expression ',' expression ')'         { $$ = new matmul_expression($3, $5, $7); }
   | SQRT '(' expression ')'                                      { $$ = new sqrt_expression($3); }
   | ALLOC_CONST type_specifier '[' constant ']'                  { $$ = new alloc_const_expression(new typed_declaration_specifier(get_type_spec($2)), $4); }
-  | TRANS '(' expression ')'                                     { $$ = new trans_expression($3); }
+  | TRANS '(' expression ',' constant_expression_list ')'        { $$ = new trans_expression($3, $5); }
+  | TRANS '(' expression ')'                                     { $$ = new trans_expression($3, nullptr); }
   | REDUCE_SUM '(' expression ',' constant ')'                   { $$ = new reduce_expression($3, $5);}
   | MAX '(' expression ',' expression ')'                        { $$ = new max_expression($3, $5); }
   | MIN '(' expression ',' expression ')'                        { $$ = new min_expression($3, $5); }

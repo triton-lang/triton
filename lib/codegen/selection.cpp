@@ -996,8 +996,9 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       distributed_tile *TC = (distributed_tile*)tmap_.at(C);
       Type *c_ty = llvm_type(C->get_type()->get_scalar_ty(), ctx);
       Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {c_ty});
+      auto A_shapes = A->get_type()->get_tile_shapes();
       size_t red_axis = dot->is_a_trans() ? 0 : 1;
-      unsigned NK = A->get_type()->get_tile_shapes()[red_axis]->get_value();
+      unsigned NK = A_shapes[red_axis]->get_value();
       if(NK != 1)
       {
         shared_tile *TA = (shared_tile*)tmap_.at(A);
@@ -1008,18 +1009,27 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           result->for_each([&](indices_t idx){
             Value *res = TC->get_value(idx);
             for(unsigned K = 0; K < NK; ++K){
-              indices_t a_idx = {idx[0], builder.getInt32(K), idx[2]};
-              indices_t b_idx = {builder.getInt32(K), idx[1], idx[2]};
+              // input indices
+              indices_t a_idx = {idx[0], builder.getInt32(K)};
+              indices_t b_idx = {builder.getInt32(K), idx[1]};
               if(AT)
                 std::swap(a_idx[0], a_idx[1]);
               if(BT)
                 std::swap(b_idx[0], b_idx[1]);
+              // add batching dimension
+              for(size_t i = 2; i < idx.size(); i++){
+                a_idx.insert(a_idx.end(), idx[i]);
+                b_idx.insert(b_idx.end(), idx[i]);
+              }
+              // load value
               Value *a = TA->get_value(a_idx);
               Value *b = TB->get_value(b_idx);
               if(a->getType() != c_ty)
                 a = builder.CreateFPCast(a, c_ty);
               if(b->getType() != c_ty)
                 b = builder.CreateFPCast(b, c_ty);
+//              a = ConstantFP::get(builder.getFloatTy(), 1);
+//              b = ConstantFP::get(builder.getFloatTy(), 1);
               res = builder.CreateCall(f_mul_add, {a, b, res});
             }
             result->set_value(idx, res);

@@ -64,7 +64,9 @@ std::pair<base*, rt::jit*> base::get_profile_impl(driver::stream *stream, std::v
     else{
 //      params_t params = heuristics();
 //      params_t params = jit->get_valid(name_.c_str(), src.c_str());
-      params_t params = {4, 1, 32, 4, 1, 32, 4, 4, 4, 1, 1, 16, 32, 16, 4, 4, 1};
+//      params_t params = {4, 1, 32, 4, 1, 32, 4, 4, 4, 1, 1, 16, 32, 16, 4, 4, 4, 4, 1}; //NT
+//      params_t params = {4, 1, 32, 4, 32, 4, 4, 4, 1, 1, 16, 32, 16, 1, 4, 4, 4, 4, 4, 1}; //NN
+      params_t params = {4, 32, 4, 1, 32, 4, 4, 4, 1, 1, 16, 1, 32, 16, 4, 4, 4, 4, 4, 1}; // TT
       jit->add_module(name_.c_str(), src.c_str(), params);
     }
     triton::driver::kernel* kernel = jit->get_function(name_.c_str());

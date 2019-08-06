@@ -203,7 +203,17 @@ ir::value* select_expression::codegen(ir::module *mod) const {
 
 // trans
 ir::value* trans_expression::codegen(ir::module *mod) const {
-  return mod->get_builder().create_trans(arg_->codegen(mod));
+  // shapes
+  std::vector<ir::constant_int*> perm;
+  if(perm_) {
+    for(expression *expr: perm_->values()){
+      ir::constant_int *shape = dynamic_cast<ir::constant_int*>(expr->codegen(mod));
+      if(shape == nullptr)
+        throw std::runtime_error("tile shapes must be constant expressions");
+      perm.push_back(shape);
+    }
+  }
+  return mod->get_builder().create_trans(arg_->codegen(mod), perm);
 }
 
 // sqrt
