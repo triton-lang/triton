@@ -585,13 +585,18 @@ private:
 class trans_inst: public builtin_inst {
 public:
   ir::type* get_res_ty(ir::type* in);
+  std::vector<constant_int*> get_default_perm(ir::type* ty);
 
 private:
-  trans_inst(value *arg, const std::string& name, instruction* next);
+  trans_inst(value *arg, const std::vector<constant_int*>& perm, const std::string& name, instruction* next);
   std::string repr_impl() const { return "trans"; }
 
 public:
-  static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create(value *arg, const std::vector<constant_int*>& perm = {}, const std::string &name = "", instruction *next = nullptr);
+  const std::vector<constant_int*> get_perm() const;
+
+private:
+  std::vector<constant_int*> perm_;
 };
 
 class sqrt_inst: public builtin_inst {

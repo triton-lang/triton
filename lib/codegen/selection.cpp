@@ -974,11 +974,13 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       });
     }
     // trans
-    else if(dynamic_cast<ir::trans_inst*>(ins)) {
+    else if(auto* x = dynamic_cast<ir::trans_inst*>(ins)) {
       distributed_tile* in = (distributed_tile*)tmap_.at(ins->get_operand(0));
+      auto perm = x->get_perm();
       in->for_each([&](indices_t idx){
-        indices_t out_idx = idx;
-        std::rotate(out_idx.begin(), out_idx.begin() + 1, out_idx.end());
+        indices_t out_idx(idx.size());
+        for(size_t i = 0; i < idx.size(); i++)
+          out_idx[i] = idx[perm[i]->get_value()];
         ti->set_value(out_idx, in->get_value(idx));
       });
     }
