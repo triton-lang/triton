@@ -40,7 +40,7 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
     hb[i] = static_cast<NumericT>((double)rand()/RAND_MAX);
   for(size_t i = 0; i < hc.size(); i++)
     hc[i] = static_cast<NumericT>((double)0);
-  triton::driver::buffer* dc = triton::driver::buffer::create(context, hc.size()*dt_nbytes);
+  triton::driver::buffer* dc = triton::driver::buffer::create(context, hc.size()*4);
   triton::driver::buffer* da = triton::driver::buffer::create(context, ha.size()*dt_nbytes);
   triton::driver::buffer* db = triton::driver::buffer::create(context, hb.size()*dt_nbytes);
   stream->write(da, true, 0, ha);
@@ -49,7 +49,7 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   stream->synchronize();
   triton::dnn::dot dot(M, N, K, AT, BT, ty, ty, ty, 8, 8, 8);
   // benchmark triton
-  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::NO_TUNING);}, stream);
+  double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::PARTIAL_TUNING);}, stream);
   // benchmark cublas
 //  NumericT alpha = 1;
 //  NumericT beta = 0;
@@ -77,7 +77,7 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   std::vector<NumericT> rc(hc.size());
   dot.cpu_ref(rc, ha, hb);
   for(size_t i = 0; i < M*N; i++)
-    if(std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
+    if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
       std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
       exit(EXIT_FAILURE);
     }
@@ -111,8 +111,8 @@ int main() {
   // shapes to benchmark
   std::vector<config_t> configs = {
 //    {false, false, 8192, 512, 512},
-//    {false, true, 8192, 8192, 8192}
-    {false, true, 128, 128, 128},
+    {false, true, 128, 128, 128}
+//    {false, true, 128, 128, 128},
 //    {false, false, 128, 128, 128},
 //    {true, false, 128, 128, 128},
 //    {true, true, 128, 128, 128}

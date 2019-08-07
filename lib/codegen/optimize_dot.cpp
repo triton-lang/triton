@@ -30,8 +30,8 @@ inline bool is_hmma(ir::value *v){
     ir::type *b_ty = b->get_type();
     // inputs have to be FP16
     result = a_ty->get_scalar_ty()->is_half_ty() && b_ty->get_scalar_ty()->is_half_ty();
-    // reduction has to be multiple of 4
-    result = result && ((a_ty->get_tile_shapes()[1]->get_value() % 4) == 0);
+//     reduction has to be multiple of 4
+//    result = result && ((a_ty->get_tile_shapes()[1]->get_value() % 4) == 0);
   }
   return result;
 }
@@ -70,13 +70,13 @@ void optimize_dot::run(ir::module &mod) {
           BB = ((ir::trans_inst*)B)->get_operand(0);
         }
         else{
-          if(auto *T = dynamic_cast<ir::trans_inst*>(A)){
-            std::vector<ir::constant_int*> perm(T->get_perm());
-            std::swap(perm[0], perm[1]);
-            AA = builder.create_trans(T->get_operand(0), perm);
-            T->replace_all_uses_with(AA);
-            trans_a = true;
-          }
+//          if(auto *T = dynamic_cast<ir::trans_inst*>(A)){
+//            std::vector<ir::constant_int*> perm(T->get_perm());
+//            std::swap(perm[0], perm[1]);
+//            AA = builder.create_trans(T->get_operand(0), perm);
+//            T->replace_all_uses_with(AA);
+//            trans_a = true;
+//          }
         }
         ir::instruction *dot_atbt = builder.insert(ir::dot_inst::create(AA, BB, D, trans_a, trans_b));
         dot->replace_all_uses_with(dot_atbt);
