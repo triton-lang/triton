@@ -80,7 +80,7 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string bcb0 = "[:, newaxis]", bcb1 = "[newaxis, :]";
   std::string lda0 = "*lda", lda1 = "";
   std::string ldb0 = "", ldb1 = "*ldb";
-  std::string usea = AT_ ? "trans(xa, 0, 2, 1)" : "xa";
+  std::string usea = AT_ ? "trans(xa, 2, 0, 1)" : "xa";
   std::string useb = BT_ ? "trans(xb, 1, 0, 2)" : "trans(xb, 0, 2, 1)";
   if(AT_){
     std::swap(AS0, AS1);
@@ -149,7 +149,6 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
 }
 )";
 
-//  std::cout << res << std::endl;
   os << res;
 }
 
