@@ -12,8 +12,10 @@ namespace triton{
 namespace codegen{
 
 unsigned shmem_allocation::is_ld_padded(ir::value *x) {
-  if(dynamic_cast<ir::trans_inst*>(x))
-    return 4;
+  if(auto *trans = dynamic_cast<ir::trans_inst*>(x)){
+    if(trans->get_perm()[0]->get_value() != 0)
+      return 4;
+  }
   for(ir::user* user: x->get_users())
     if(auto dot = dynamic_cast<ir::dot_inst*>(user)){
       bool is_hmma = params_->get_fragment(user, 0) == tune::HMMA_FRAGMENT_C;
@@ -51,7 +53,11 @@ unsigned shmem_allocation::get_num_bytes(ir::value *x) {
     size_t num_elements = 1;
     for(auto x: shapes)
       num_elements *= x->get_value();
-    size_t depth = params_->get_param(op, "mts.d" + std::to_string(axis))->get_value();
+    size_t depth;
+    if(params_->get_fragment(x, 0) == tune::HMMA_FRAGMENT_C)
+      depth = params_->get_param(op, "wpt.d" + std::to_string(axis))->get_value();
+    else
+      depth = params_->get_param(op, "mts.d" + std::to_string(axis))->get_value();
     return num_elements * num_bytes * depth;
   }
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;

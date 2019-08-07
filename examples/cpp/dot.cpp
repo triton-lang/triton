@@ -113,9 +113,9 @@ int main() {
 //    {false, false, 8192, 512, 512},
 //    {false, true, 8192, 8192, 8192}
     {false, true, 128, 128, 128},
-    {false, false, 128, 128, 128},
-    {true, false, 128, 128, 128},
-    {true, true, 128, 128, 128}
+//    {false, false, 128, 128, 128},
+//    {true, false, 128, 128, 128},
+//    {true, true, 128, 128, 128}
 
 //    {false, true, 32768, 256, 512}
 //    {true,  false, 8192, 512, 512},
