@@ -57,8 +57,26 @@ void optimize_dot::run(ir::module &mod) {
         if(trans_a){
           AA = ((ir::trans_inst*)A)->get_operand(0);
         }
+        else{
+          if(auto *T = dynamic_cast<ir::trans_inst*>(A)){
+            std::vector<ir::constant_int*> perm(T->get_perm());
+            std::swap(perm[0], perm[1]);
+            AA = builder.create_trans(T->get_operand(0), perm);
+            T->replace_all_uses_with(AA);
+            trans_a = true;
+          }
+        }
         if(trans_b){
           BB = ((ir::trans_inst*)B)->get_operand(0);
+        }
+        else{
+          if(auto *T = dynamic_cast<ir::trans_inst*>(A)){
+            std::vector<ir::constant_int*> perm(T->get_perm());
+            std::swap(perm[0], perm[1]);
+            AA = builder.create_trans(T->get_operand(0), perm);
+            T->replace_all_uses_with(AA);
+            trans_a = true;
+          }
         }
         ir::instruction *dot_atbt = builder.insert(ir::dot_inst::create(AA, BB, D, trans_a, trans_b));
         dot->replace_all_uses_with(dot_atbt);

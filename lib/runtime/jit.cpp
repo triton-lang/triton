@@ -174,9 +174,9 @@ jit::tune_res_t jit::autotune(const char *name, const char *src, benchmark_t ben
       std::lock_guard<std::mutex> lock(mutex);
       for(ir::metaparameter *mp: mps)
         mp->set_value(params[i++]);
-//      for(size_t i = 0; i < params.size(); i++)
-//        std::cout << ((i==0)?"":", ") << params[i] << std::flush;
-//      std::cout << std::endl;
+      for(size_t i = 0; i < params.size(); i++)
+        std::cout << ((i==0)?"":", ") << params[i] << std::flush;
+      std::cout << std::endl;
       passes_0.tune.init(tt_module_0);
       passes_0.tune.check_constraints(errors);
 //      for(auto x: errors)

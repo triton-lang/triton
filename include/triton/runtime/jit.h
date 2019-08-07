@@ -77,7 +77,7 @@ public:
 
     void target_dependent(ir::module &module) {
       alignment_info.run(module);
-//      reassociate.run(module);
+      reassociate.run(module);
       if(target_->is_gpu()){
         shmem_info.run(module);
         shmem_liveness.run(module);
@@ -86,7 +86,7 @@ public:
       }
       vectorize.run(module);
       optimize_dce.run(module);
-//      ir::print(module, std::cout);
+      ir::print(module, std::cout);
     }
 
     codegen::tune tune;

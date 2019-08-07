@@ -72,10 +72,11 @@ void dot::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
 }
 
 void dot::triton_c_src(std::ostream &os) const {
+  std::string ZS = "4";
   std::string AS0 = "TM", AS1 = "TK";
   std::string BS0 = "TK", BS1 = "TN";
-  std::string XAS0 = "TM", XAS1 = "TK", XAS2 = "1";
-  std::string XBS0 = "TK", XBS1 = "1", XBS2 = "TN";
+  std::string XAS0 = "TM", XAS1 = "TK / " + ZS, XAS2 = ZS;
+  std::string XBS0 = "TK / " + ZS, XBS1 = ZS, XBS2 = "TN";
   std::string bca0 = "[newaxis, :]", bca1 = "[:, newaxis]";
   std::string bcb0 = "[:, newaxis]", bcb1 = "[newaxis, :]";
   std::string lda0 = "*lda", lda1 = "";
@@ -100,7 +101,7 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string BS = BS0 + ", " + BS1;
   std::string XAS = XAS0 + ", " + XAS1 + ", " + XAS2;
   std::string XBS = XBS0 + ", " + XBS1 + ", " + XBS2;
-  std::string XCS = "TM, TN, 1";
+  std::string XCS = "TM, TN, " + ZS;
   std::string align_lda_str = "multiple_of(" + std::to_string(align_lda_) + ")";
   std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb_) + ")";
   std::string res =
