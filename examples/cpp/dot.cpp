@@ -26,8 +26,8 @@ struct perf_t {
 
 
 perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K){
-  typedef half NumericT;
-  std::string ty = "half";
+  typedef float NumericT;
+  std::string ty = "float";
   size_t dt_nbytes = sizeof(NumericT);
   triton::driver::context* context = stream->context();
   std::vector<NumericT> hc(M*N);
@@ -112,7 +112,11 @@ int main() {
   std::vector<config_t> configs = {
 //    {false, false, 8192, 512, 512},
 //    {false, true, 8192, 8192, 8192}
-    {false, true, 128, 128, 128},
+//    {false, true, 128, 128, 128},
+//    {false, false, 128, 128, 128},
+//    {true, false, 128, 128, 128},
+    {true, true, 128, 128, 128}
+
 //    {false, true, 32768, 256, 512}
 //    {true,  false, 8192, 512, 512},
 //    {true,  true,  8192, 512, 512}
