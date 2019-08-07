@@ -257,56 +257,54 @@ void tune::run(ir::module &mod) {
         ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 2, 2);
         if(node.second == 2)
           fpw->set_value(1);
-        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 4);
+        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 2, 4);
         connected_components(node, {fpw, wpt}, {"fpw", "wpt"}, nodes_, dependencies_, group_id++);
       }
     }
   }
 
-  // Simplify metaparameters
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i : block->get_inst_list()){
-
-
-    if(fragments_.find({i, 0}) != fragments_.end() && fragments_.at({i, 0}) != STRIDED_SCAN)
+    if(!i->get_type()->is_tile_ty())
       continue;
+    auto shapes = i->get_type()->get_tile_shapes();
 
-    if(auto *x = dynamic_cast<ir::load_inst*>(i))
-    if(i->get_type()->is_tile_ty()){
+    if(auto *x = dynamic_cast<ir::load_inst*>(i)){
       ir::type *ptr_ty = x->get_pointer_operand()->get_type()->get_scalar_ty();
       size_t addr_space = ptr_ty->get_pointer_address_space();
       if(addr_space < 4){
         ir::type *ty = mod.get_builder().get_int32_ty();
-        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  2, 4));
+        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  4, 8));
         *params_.at(i).at("nts.d0") = *tmp;
       }
     }
     if(dynamic_cast<ir::dot_inst*>(i) && i->get_type()->is_tile_ty()){
       ir::type *ty = mod.get_builder().get_int32_ty();
-      std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 2, 4));
-      std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 2, 4));
-      *params_.at(i).at("nts.d0") = *tmp1;
-      *params_.at(i).at("nts.d1") = *tmp2;
+//      std::unique_ptr<ir::metaparameter> mts_2(ir::metaparameter::create(ctx, ty,  1, 4));
+//      *params_.at(i->get_operand(0)).at("mts.d2") = *mts_2;
+//      *params_.at(i->get_operand(1)).at("mts.d2") = *mts_2;
+      if(fragments_.at({i, 0}) == STRIDED_SCAN){
+        std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 4, 8));
+        std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 4, 8));
+        *params_.at(i).at("nts.d0") = *tmp1;
+        *params_.at(i).at("nts.d1") = *tmp2;
+//        for(size_t k = 2; k < shapes.size(); k++)
+//          if(auto *x = dynamic_cast<ir::metaparameter*>(shapes[k]))
+//            *params_.at(i).at("mts.d" + std::to_string(k)) = *x;
+//          else
+//            params_.at(i).at("mts.d" + std::to_string(k))->set_value(shapes[k]->get_value());
+      }
+      else{
+//        for(size_t k = 2; k < shapes.size(); k++)
+//          if(auto *x = dynamic_cast<ir::metaparameter*>(shapes[k]))
+//            *params_.at(i).at("wpt.d" + std::to_string(k)) = *x;
+//          else
+//            params_.at(i).at("wpt.d" + std::to_string(k))->set_value(shapes[k]->get_value());
+      }
     }
   }
 
-  // initialize grids
-
-//  for(ir::instruction *i: grids_){
-//    auto shapes = i->get_type()->get_tile_shapes();
-//    for(size_t k = 0; k < shapes.size(); k++)
-//    if(shapes[k]->get_value() == 1) {
-//      if(fragments_.at({i, k}) == STRIDED_SCAN){
-//        params_.at(i).at("nts.d" + std::to_string(k))->set_value(1);
-//        params_.at(i).at("mts.d" + std::to_string(k))->set_value(1);
-//      }
-//      if(fragments_.at({i, k}) == HMMA_FRAGMENT_C){
-//        params_.at(i).at("fpw.d" + std::to_string(k))->set_value(1);
-//        params_.at(i).at("wpt.d" + std::to_string(k))->set_value(1);
-//      }
-//    }
-//  }
 }
 
 void tune::init(ir::module &mod) {

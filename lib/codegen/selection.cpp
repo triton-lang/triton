@@ -516,6 +516,10 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     }
   }
   else {
+    if(shapes.size() > 3)
+      throw std::runtime_error("unsupported");
+    bool is_batched = shapes.size() >= 3;
+
     Value *_1 = builder.getInt32(1);
     Value *_2 = builder.getInt32(2);
     Value *_3 = builder.getInt32(3);
@@ -526,23 +530,23 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     // fragments per warp
     unsigned fpw_0 = params_->get_param(v, "fpw.d0")->get_value();
     unsigned fpw_1 = params_->get_param(v, "fpw.d1")->get_value();
-    unsigned fpw_2 = params_->get_param(v, "fpw.d2")->get_value();
+    unsigned fpw_2 = is_batched ? params_->get_param(v, "fpw.d2")->get_value() : 1;
     // warps per tile
     unsigned wpt_0 = params_->get_param(v, "wpt.d0")->get_value();
     unsigned wpt_1 = params_->get_param(v, "wpt.d1")->get_value();
-    unsigned wpt_2 = params_->get_param(v, "wpt.d2")->get_value();
+    unsigned wpt_2 = is_batched ? params_->get_param(v, "wpt.d2")->get_value() : 1;
     // hmma warp tile size
     unsigned hmma_wts_0 = fpw_0 * 8;
     unsigned hmma_wts_1 = fpw_1 * 8;
-    unsigned hmma_wts_2 = 1;
+    unsigned hmma_wts_2 = is_batched ? fpw_2 : 1;
     // hmma block tile size
     unsigned hmma_bts_0 = hmma_wts_0 * wpt_0;
     unsigned hmma_bts_1 = hmma_wts_1 * wpt_1;
-    unsigned hmma_bts_2 = hmma_wts_2 * wpt_2;
+    unsigned hmma_bts_2 = is_batched ? hmma_wts_2 * wpt_2 : 1;
     // number of repetition
     unsigned num_rep_0 = shapes[0]->get_value() / hmma_bts_0;
     unsigned num_rep_1 = shapes[1]->get_value() / hmma_bts_1;
-    unsigned num_rep_2 = shapes[2]->get_value() / hmma_bts_2;
+    unsigned num_rep_2 = is_batched ? shapes[2]->get_value() / hmma_bts_2 : 1;
     // size of each pack (interleaving)
     pack_size_0_ = std::min<unsigned>(num_rep_0, 1);
     pack_size_1_ = std::min<unsigned>(num_rep_1, 1);
@@ -579,18 +583,14 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     // a offset
     offset_a_i_ = builder.CreateAdd(warp_offset_i, builder.CreateAdd(pair_a_off, in_pair_off_a));
     offset_a_k_ = builder.CreateAnd(u_thread_id, _3);
-    offset_a_z_ = warp_id_2;
     // b offsets
     offset_b_j_ = builder.CreateAdd(warp_offset_j, builder.CreateAdd(pair_b_off, in_pair_off_b));
     offset_b_k_ = builder.CreateAnd(u_thread_id, _3);
-    offset_b_z_ = warp_id_2;
-
 
     // c offsets
     Value *offset_c_i = builder.CreateAdd(builder.CreateAnd(u_thread_id, _1), offset_a_i_);
     Value *offset_c_j = builder.CreateAdd(builder.CreateAnd(u_thread_id, _2),
                                           builder.CreateAdd(warp_offset_j, pair_b_off));
-
 
     /* indices */
     // i indices
@@ -617,7 +617,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     /* axes */
     axes_[params_->get_param_group(v, 0)] = distributed_axis{1, idx_i, warp_id_0};
     axes_[params_->get_param_group(v, 1)] = distributed_axis{1, idx_j, warp_id_1};
-    axes_[params_->get_param_group(v, 2)] = distributed_axis{1, idx_z, warp_id_2};
+    if(is_batched)
+      axes_[params_->get_param_group(v, 2)] = distributed_axis{1, idx_z, warp_id_2};
   }
 }
 
@@ -1062,9 +1063,9 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           std::map<Value*, std::vector<Value*>> fcs;
 
           result->for_each([&](indices_t idx){
-            fcs[idx[2]].push_back(TC->get_value(idx));
-//            fc.push_back(UndefValue::get(TC->get_value(idx)->getType()));
+            fcs[{builder.getInt32(0)}].push_back(TC->get_value(idx));
           });
+
 
           Type *fp32_ty = builder.getFloatTy();
           Type *fp16x2_ty = VectorType::get(builder.getHalfTy(), 2);
@@ -1121,8 +1122,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
                 std::swap(idx_a[0], idx_a[1]);
               if(!dot->is_b_trans())
                 std::swap(idx_b[0], idx_b[1]);
-              idx_a.push_back(x.first);
-              idx_b.push_back(x.first);
+//              idx_a.push_back(builder.getInt32(0));
+//              idx_b.push_back(builder.getInt32(0));
               Value *ha = TA->get_value(idx_a);
               Value *hb = TB->get_value(idx_b);
               for(unsigned ii = 0; ii < pack_size_0_; ii++)
@@ -1158,9 +1159,9 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           // write back
           unsigned i = 0;
           result->for_each([&](indices_t idx){
-            if(i >= fcs.at(idx[2]).size())
+            if(i >= fcs.at({builder.getInt32(0)}).size())
               i = 0;
-            result->set_value(idx, fcs.at(idx[2])[i++]);
+            result->set_value(idx, fcs.at({builder.getInt32(0)})[i++]);
           });
 
           TA->set_return_mode(false);
