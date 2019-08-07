@@ -999,6 +999,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       auto A_shapes = A->get_type()->get_tile_shapes();
       size_t red_axis = dot->is_a_trans() ? 0 : 1;
       unsigned NK = A_shapes[red_axis]->get_value();
+//      std::cout << red_axis << " " << NK << std::endl;
       if(NK != 1)
       {
         shared_tile *TA = (shared_tile*)tmap_.at(A);
