@@ -24,7 +24,7 @@ private:
 
 public:
   dot(int M, int N, int K, bool AT, bool BT,
-       std::string a_ty, std::string b_ty,
+       std::string a_ty, std::string b_ty, std::string c_ty,
        unsigned align_lda, unsigned align_ldb, unsigned align_ldc);
 
   // number of flops
@@ -42,10 +42,10 @@ public:
                       size_t M, size_t N, size_t K){
     for(size_t m = 0; m < M; m++)
     for(size_t n = 0; n < N; n++){
-      T acc = static_cast<T>((double)0);
+      float acc = 0;
       for(size_t k = 0; k < K; k++)
-        acc = acc + (AT?a[k + m*K]:a[m + k*M]) * (BT?b[n + k*N]:b[k + n*K]);
-      c[m + n*M] = acc;
+        acc = acc + (AT ? a[k + m*K] : a[m + k*M]) * (BT ? b[n + k*N] : b[k + n*K]);
+      c[m + n*M] = static_cast<T>(acc);
     }
   }
   template<class T>
@@ -68,6 +68,7 @@ private:
   bool BT_;
   std::string a_ty_;
   std::string b_ty_;
+  std::string c_ty_;
   unsigned align_lda_;
   unsigned align_ldb_;
   unsigned align_ldc_;

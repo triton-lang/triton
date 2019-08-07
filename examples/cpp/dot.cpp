@@ -47,7 +47,7 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   stream->write(db, true, 0, hb);
   stream->write(dc, true, 0, hc);
   stream->synchronize();
-  triton::dnn::dot dot(M, N, K, AT, BT, ty, ty, 8, 8, 8);
+  triton::dnn::dot dot(M, N, K, AT, BT, ty, ty, ty, 8, 8, 8);
   // benchmark triton
   double triton_ns = triton::tools::bench([&]() { dot.enqueue(stream, {da, db, dc}, triton::dnn::NO_TUNING);}, stream);
   // benchmark cublas
@@ -77,7 +77,7 @@ perf_t do_bench(triton::driver::stream* stream, bool AT, bool BT, int32_t M, int
   std::vector<NumericT> rc(hc.size());
   dot.cpu_ref(rc, ha, hb);
   for(size_t i = 0; i < M*N; i++)
-    if(std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
+    if(std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
       std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
       exit(EXIT_FAILURE);
     }
