@@ -1,7 +1,7 @@
-#include "triton/codegen/shmem_allocation.h"
-#include "triton/codegen/shmem_liveness.h"
-#include "triton/codegen/shmem_info.h"
-#include "triton/codegen/tune.h"
+#include "triton/codegen/analysis/shmem/allocation.h"
+#include "triton/codegen/analysis/shmem/liveness.h"
+#include "triton/codegen/analysis/shmem/info.h"
+#include "triton/codegen/analysis/tune.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/type.h"
 #include "triton/ir/value.h"
@@ -10,8 +10,10 @@
 
 namespace triton{
 namespace codegen{
+namespace analysis{
+namespace shmem{
 
-unsigned shmem_allocation::is_ld_padded(ir::value *x) {
+unsigned allocation::is_ld_padded(ir::value *x) {
   if(auto *trans = dynamic_cast<ir::trans_inst*>(x)){
     if(trans->get_perm()[0]->get_value() != 0)
       return 4;
@@ -43,7 +45,7 @@ unsigned shmem_allocation::is_ld_padded(ir::value *x) {
   return 0;
 }
 
-unsigned shmem_allocation::get_num_bytes(ir::value *x) {
+unsigned allocation::get_num_bytes(ir::value *x) {
   if(auto *red = dynamic_cast<ir::reduce_inst*>(x)){
     unsigned num_bytes = x->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
     size_t axis = red->get_axis();
@@ -71,7 +73,7 @@ unsigned shmem_allocation::get_num_bytes(ir::value *x) {
   return num_bytes;
 }
 
-void shmem_allocation::run(){
+void allocation::run(){
   using std::max;
   using std::min;
   typedef std::multimap<unsigned, segment> triples_map_type;
@@ -172,5 +174,7 @@ void shmem_allocation::run(){
   }
 }
 
+}
+}
 }
 }

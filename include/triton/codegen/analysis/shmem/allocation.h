@@ -13,16 +13,18 @@ namespace ir{
 }
 
 namespace codegen{
+namespace analysis{
 
-class layout;
-class target_tuner;
-class shmem_liveness;
-class shmem_info;
 class tune;
 
-class shmem_allocation {
+namespace shmem{
+
+class liveness;
+class info;
+
+class allocation {
 public:
-  shmem_allocation(shmem_liveness *live, shmem_info *buffer_info, tune *params)
+  allocation(liveness *live, info *buffer_info, tune *params)
     : liveness_(live), buffer_info_(buffer_info), params_(params){ }
 
   // utilities
@@ -41,11 +43,13 @@ private:
   std::map<ir::value*, unsigned> num_bytes_;
   size_t allocated_size_;
   // dependences
-  shmem_liveness *liveness_;
-  shmem_info *buffer_info_;
+  liveness *liveness_;
+  info *buffer_info_;
   tune *params_;
 };
 
+}
+}
 }
 }
 

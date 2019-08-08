@@ -1,4 +1,4 @@
-#include "triton/codegen/target.h"
+#include "triton/codegen/selection/target.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Intrinsics.h"

@@ -96,7 +96,7 @@ void dot::triton_c_src(std::ostream &os) const {
              restrict read_only align(16) )" + ab_ty_ + R"( *B,
              )" + c_ty_ + R"(* C,
              int lda, int ldc, int N,
-             int* lut, int* locks, int nlocks){
+             int* lut, int* locks, int nlocks) {
     int ridx = get_range_id(0);
     int ridy = get_range_id(1);
     float acc[TM, TN] = 0;
@@ -129,10 +129,10 @@ void dot::triton_c_src(std::ostream &os) const {
     )" + c_ty_ + R"(" c[TM, TN] = acc;
     )" + c_ty_ + R"(* pc[TM, TN] = C + rxc[:, newaxis] + ryc[newaxis, :]*ldc;
     bool checkc[TM, TN] = (rxc < N)[:, newaxis];
-    if(lockid == 0)
+    if(lockid == 0) {
       @checkc *pc = c;
-    else
-    {
+    }
+    else {
       int *plock = locks + ridx*nlocks + lockid - 1;
       int *pcount = plock + get_num_program(0)*nlocks;
       while(__atomic_cas(plock, 0, 1));
@@ -147,9 +147,10 @@ void dot::triton_c_src(std::ostream &os) const {
       __atomic_exch(plock, 0);
     }
   })";
-
   os << result;
 }
+
+
 
 }
 }

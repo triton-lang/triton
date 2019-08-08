@@ -1,5 +1,5 @@
-#include "triton/codegen/vectorize.h"
-#include "triton/codegen/tune.h"
+#include "triton/codegen/transform/vectorize.h"
+#include "triton/codegen/analysis/tune.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -8,6 +8,7 @@
 namespace triton {
 
 namespace codegen{
+namespace transform{
 
 void vectorize::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
@@ -37,5 +38,6 @@ void vectorize::run(ir::module &mod) {
   }
 }
 
+}
 }
 }

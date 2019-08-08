@@ -1,15 +1,16 @@
 #include <algorithm>
-#include "triton/codegen/reassociate.h"
-#include "triton/codegen/alignment_info.h"
+#include "triton/codegen/transform/reassociate.h"
+#include "triton/codegen/analysis/alignment.h"
+#include "triton/codegen/analysis/tune.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/cfg.h"
-#include "triton/codegen/tune.h"
 
 namespace triton {
 namespace codegen{
+namespace transform{
 
 //inline Constant *get_gep_cst_offset(GetElementPtrInst *gep){
 //  std::vector<Value*> idx_vals;
@@ -154,7 +155,7 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
   return new_value;
 }
 
-reassociate::reassociate(tune* params, alignment_info* align)
+reassociate::reassociate(analysis::tune* params, analysis::alignment_info* align)
   : params_(params), align_(align)
 { }
 
@@ -278,5 +279,6 @@ void reassociate::run(ir::module &mod) {
   }
 }
 
+}
 }
 }

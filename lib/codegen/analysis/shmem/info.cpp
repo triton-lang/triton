@@ -1,4 +1,4 @@
-#include "triton/codegen/shmem_info.h"
+#include "triton/codegen/analysis/shmem/info.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -8,10 +8,11 @@
 namespace triton {
 
 namespace codegen{
-
+namespace analysis{
+namespace shmem{
 
 // run pass on module
-bool shmem_info::is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
+bool info::is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
   if(phi->get_parent() != terminator->get_parent())
     return false;
   if(auto *br = dynamic_cast<ir::cond_branch_inst*>(terminator))
@@ -23,7 +24,7 @@ bool shmem_info::is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
     throw std::runtime_error("unreachable");
 }
 
-void shmem_info::replace(ir::value* before, ir::value *after) {
+void info::replace(ir::value* before, ir::value *after) {
   shared_.erase(before);
   shared_.insert(after);
   if(refs_.find(before) != refs_.end()){
@@ -70,7 +71,7 @@ void add_copy(ir::value *x, ir::builder &builder) {
   }
 }
 
-void shmem_info::run(ir::module &mod) {
+void info::run(ir::module &mod) {
   // Add shared copies
   for(ir::function *fn: mod.get_function_list()){
     ir::builder builder(mod.get_context());
@@ -120,18 +121,20 @@ void shmem_info::run(ir::module &mod) {
 }
 
 // query double-buffered status
-bool shmem_info::is_double(ir::value *x)
+bool info::is_double(ir::value *x)
 { return double_.find(x) != double_.end(); }
 
 // query shared status
-bool shmem_info::is_shared(ir::value *x)
+bool info::is_shared(ir::value *x)
 { return shared_.find(x) != shared_.end(); }
 
 // get reference if any
-ir::value *shmem_info::get_reference(ir::value *x)
+ir::value *info::get_reference(ir::value *x)
 { return refs_[x]; }
 
 
 
+}
+}
 }
 }

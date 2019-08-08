@@ -8,19 +8,19 @@
 #include "triton/ir/print.h"
 #include "triton/driver/module.h"
 #include "triton/driver/kernel.h"
-#include "triton/codegen/selection.h"
-#include "triton/codegen/tune.h"
-#include "triton/codegen/optimize_dot.h"
-#include "triton/codegen/optimize_dce.h"
-#include "triton/codegen/optimize_trans.h"
-#include "triton/codegen/shmem_allocation.h"
-#include "triton/codegen/shmem_liveness.h"
-#include "triton/codegen/shmem_info.h"
-#include "triton/codegen/shmem_barriers.h"
-#include "triton/codegen/alignment_info.h"
-#include "triton/codegen/reassociate.h"
-#include "triton/codegen/target.h"
-#include "triton/codegen/vectorize.h"
+#include "triton/codegen/selection/selection.h"
+#include "triton/codegen/selection/target.h"
+#include "triton/codegen/analysis/tune.h"
+#include "triton/codegen/analysis/shmem/allocation.h"
+#include "triton/codegen/analysis/shmem/liveness.h"
+#include "triton/codegen/analysis/shmem/info.h"
+#include "triton/codegen/analysis/alignment.h"
+#include "triton/codegen/transform/dot.h"
+#include "triton/codegen/transform/dce.h"
+#include "triton/codegen/transform/trans.h"
+#include "triton/codegen/transform/shmem/barriers.h"
+#include "triton/codegen/transform/reassociate.h"
+#include "triton/codegen/transform/vectorize.h"
 #include "triton/runtime/launch_info.h"
 #include <functional>
 
@@ -35,7 +35,9 @@ class translation_unit;
 }
 
 namespace codegen{
+namespace analysis{
 class tune;
+}
 }
 
 namespace ir {
@@ -90,18 +92,18 @@ public:
 //      ir::print(module, std::cout);
     }
 
-    codegen::tune tune;
-    codegen::shmem_info shmem_info;
-    codegen::shmem_liveness shmem_liveness;
-    codegen::shmem_allocation shmem_allocation;
-    codegen::shmem_barriers shmem_barriers;
-    codegen::vectorize vectorize;
     codegen::selection selection;
-    codegen::optimize_dot optimize_dot;
-    codegen::optimize_dce optimize_dce;
-    codegen::optimize_trans optimize_trans;
-    codegen::alignment_info alignment_info;
-    codegen::reassociate reassociate;
+    codegen::analysis::tune tune;
+    codegen::analysis::shmem::info shmem_info;
+    codegen::analysis::shmem::liveness shmem_liveness;
+    codegen::analysis::shmem::allocation shmem_allocation;
+    codegen::analysis::alignment_info alignment_info;
+    codegen::transform::shmem_barriers shmem_barriers;
+    codegen::transform::vectorize vectorize;
+    codegen::transform::optimize_dot optimize_dot;
+    codegen::transform::optimize_dce optimize_dce;
+    codegen::transform::optimize_trans optimize_trans;
+    codegen::transform::reassociate reassociate;
     codegen::target* target_;
   };
 

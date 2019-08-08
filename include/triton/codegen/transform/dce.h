@@ -12,7 +12,7 @@ namespace ir {
 }
 
 namespace codegen{
-class tune;
+namespace transform{
 
 class optimize_dce {
 public:
@@ -20,7 +20,7 @@ public:
   void run(ir::module &mod);
 };
 
-
+}
 }
 }
 

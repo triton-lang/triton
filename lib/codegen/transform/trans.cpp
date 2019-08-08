@@ -1,9 +1,10 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
-#include "triton/codegen/optimize_trans.h"
+#include "triton/codegen/transform/trans.h"
 
 namespace triton {
 namespace codegen{
+namespace transform{
 
 
 ir::value* optimize_trans::replace_phi(ir::value* value,
@@ -71,5 +72,6 @@ void optimize_trans::run(ir::module &mod) {
   }
 }
 
+}
 }
 }

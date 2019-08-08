@@ -19,8 +19,12 @@ class getelementptr_inst;
 
 namespace codegen{
 
+namespace analysis{
 class tune;
 class alignment_info;
+}
+
+namespace transform{
 
 class reassociate {
   struct cst_info {
@@ -34,13 +38,15 @@ private:
   ir::value *reassociate_ptr(ir::getelementptr_inst* pz, ir::builder &builder, std::map<ir::value*, cst_info> &offsets);
 
 public:
-  reassociate(tune *params, alignment_info *align);
+  reassociate(analysis::tune *params, analysis::alignment_info *align);
   void run(ir::module& module);
 
 private:
-  tune* params_;
-  alignment_info* align_;
+  analysis::tune* params_;
+  analysis::alignment_info* align_;
 };
+
+}
 
 }
 

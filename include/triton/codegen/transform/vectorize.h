@@ -9,18 +9,22 @@ namespace ir {
 
 namespace codegen{
 
-class tune;
+namespace analysis{
+  class tune;
+}
+
+namespace transform{
 
 class vectorize {
 public:
-  vectorize(tune *params): params_(params){}
+  vectorize(analysis::tune *params): params_(params){}
   void run(ir::module &mod);
 
 private:
-  tune *params_;
+  analysis::tune *params_;
 };
 
-
+}
 }
 }
 

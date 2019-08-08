@@ -17,6 +17,7 @@ namespace ir {
 }
 
 namespace codegen{
+namespace transform{
 
 class optimize_trans {
 private:
@@ -28,6 +29,7 @@ public:
 };
 
 
+}
 }
 }
 
