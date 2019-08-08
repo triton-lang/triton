@@ -65,7 +65,7 @@ public:
                       vectorize(&tune),
                       selection(&shmem_allocation, &tune, &shmem_info, &alignment_info, target),
                       optimize_dot(&tune),
-                      optimize_dce(),
+                      dce(),
                       optimize_trans(),
                       alignment_info(),
                       reassociate(&tune, &alignment_info),
@@ -73,9 +73,9 @@ public:
 
     void target_independent(ir::module &module) {
       optimize_dot.run(module);
-      optimize_dce.run(module);
       optimize_trans.run(module);
-      optimize_dce.run(module);
+      dce.run(module);
+//      ir::print(module, std::cout);
     }
 
     void target_dependent(ir::module &module) {
@@ -88,8 +88,7 @@ public:
         shmem_barriers.run(module);
       }
       vectorize.run(module);
-      optimize_dce.run(module);
-//      ir::print(module, std::cout);
+      dce.run(module);
     }
 
     codegen::selection selection;
@@ -101,7 +100,7 @@ public:
     codegen::transform::shmem_barriers shmem_barriers;
     codegen::transform::vectorize vectorize;
     codegen::transform::optimize_dot optimize_dot;
-    codegen::transform::optimize_dce optimize_dce;
+    codegen::transform::optimize_dce dce;
     codegen::transform::optimize_trans optimize_trans;
     codegen::transform::reassociate reassociate;
     codegen::target* target_;

@@ -17,10 +17,9 @@ ir::value* optimize_trans::replace_phi(ir::value* value,
       incs.push_back(replace_phi(phi->get_incoming_value(n), builder, perm));
     // create phi for transposed values
     builder.set_insert_point(phi);
-    ir::phi_node* result = builder.create_phi(incs[0]->get_type(), incs.size(), phi->get_name());
+    ir::phi_node* result = builder.create_phi(incs[0]->get_type(), incs.size());
     for(unsigned n = 0; n < phi->get_num_incoming(); n++)
       result->add_incoming(incs[n], phi->get_incoming_block(n));
-    phi->replace_all_uses_with(result);
     return result;
   }
   else if(auto i = dynamic_cast<ir::instruction*>(value)){
@@ -29,7 +28,6 @@ ir::value* optimize_trans::replace_phi(ir::value* value,
     it++;
     builder.set_insert_point(it);
     ir::instruction *trans = (ir::instruction*)builder.create_trans(i, perm);
-    i->replace_all_uses_with(trans);
     trans->set_operand(0, i);
     return trans;
   }
