@@ -13,18 +13,22 @@ namespace ir {
 
 namespace codegen{
 
+namespace analysis{
 class tune;
+}
+
+namespace transform{
 
 class optimize_dot {
 public:
-  optimize_dot(tune* params): params_(params) {}
+  optimize_dot(analysis::tune* params): params_(params) {}
   void run(ir::module &mod);
 
 private:
-  tune* params_;
+  analysis::tune* params_;
 };
 
-
+}
 }
 }
 

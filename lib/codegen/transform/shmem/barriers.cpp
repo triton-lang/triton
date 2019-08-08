@@ -1,7 +1,7 @@
 #include <algorithm>
-#include "triton/codegen/shmem_barriers.h"
-#include "triton/codegen/shmem_allocation.h"
-#include "triton/codegen/shmem_info.h"
+#include "triton/codegen/transform/shmem/barriers.h"
+#include "triton/codegen/analysis/shmem/allocation.h"
+#include "triton/codegen/analysis/shmem/info.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -11,6 +11,7 @@
 namespace triton {
 
 namespace codegen{
+namespace transform{
 
 bool shmem_barriers::intersect(const interval_vec_t &X, interval_t x) {
   return std::any_of(X.begin(), X.end(), [&](const interval_t &y){
@@ -135,5 +136,6 @@ void shmem_barriers::run(ir::module &mod) {
   }
 }
 
+}
 }
 }

@@ -1,11 +1,12 @@
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/module.h"
-#include "triton/codegen/optimize_dot.h"
-#include "triton/codegen/tune.h"
+#include "triton/codegen/transform/dot.h"
+#include "triton/codegen/analysis/tune.h"
 
 namespace triton {
 namespace codegen{
+namespace transform{
 
 inline bool is_trans(ir::value *v){
   auto *x = dynamic_cast<ir::trans_inst*>(v);
@@ -107,5 +108,6 @@ void optimize_dot::run(ir::module &mod) {
   }
 }
 
+}
 }
 }

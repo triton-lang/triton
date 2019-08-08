@@ -17,8 +17,16 @@ namespace ir {
 
 namespace codegen{
 
-class shmem_allocation;
-class shmem_info;
+namespace analysis{
+namespace shmem{
+
+class allocation;
+class info;
+
+}
+}
+
+namespace transform{
 
 class shmem_barriers {
 private:
@@ -36,15 +44,16 @@ private:
   std::pair<interval_vec_t, interval_vec_t> transfer(ir::basic_block *block, const interval_vec_t &written_to, const interval_vec_t &read_from, std::set<ir::instruction *> &insert_loc);
 
 public:
-  shmem_barriers(shmem_allocation *alloc, shmem_info *buffer_info): alloc_(alloc), buffer_info_(buffer_info) {}
+  shmem_barriers(analysis::shmem::allocation *alloc, analysis::shmem::info *buffer_info): alloc_(alloc), buffer_info_(buffer_info) {}
   void run(ir::module &mod);
 
 private:
-  shmem_allocation *alloc_;
-  shmem_info *buffer_info_;
+  analysis::shmem::allocation *alloc_;
+  analysis::shmem::info *buffer_info_;
 };
 
 
+}
 }
 }
 

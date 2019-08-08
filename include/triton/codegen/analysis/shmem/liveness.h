@@ -12,10 +12,12 @@ namespace ir{
 }
 
 namespace codegen{
+namespace analysis{
+namespace shmem{
 
 typedef unsigned slot_index;
 
-class shmem_info;
+class info;
 
 struct segment {
   slot_index start;
@@ -30,7 +32,7 @@ struct segment {
   }
 };
 
-class shmem_liveness {
+class liveness {
 private:
   typedef std::map<ir::value*, slot_index> indices_map_t;
   typedef std::map<ir::value*, segment>    intervals_map_t;
@@ -43,7 +45,7 @@ public:
 
 public:
   // constructor
-  shmem_liveness(shmem_info *info): info_(info){ }
+  liveness(info *info): info_(info){ }
 
   // accessors
   const intervals_map_t& intervals() const { return intervals_; }
@@ -53,7 +55,7 @@ public:
   void run(ir::module &mod);
 
 private:
-  shmem_info *info_;
+  info *info_;
   has_storage_map_t has_dedicated_storage_;
   indices_map_t indices_;
   intervals_map_t intervals_;
@@ -61,5 +63,8 @@ private:
 
 }
 }
+}
+}
+
 
 #endif

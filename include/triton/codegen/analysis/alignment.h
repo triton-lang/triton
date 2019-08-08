@@ -12,6 +12,7 @@ namespace ir {
 }
 
 namespace codegen{
+namespace analysis{
 
 class alignment_info {
   struct cst_info {
@@ -41,6 +42,7 @@ private:
 };
 
 
+}
 }
 }
 

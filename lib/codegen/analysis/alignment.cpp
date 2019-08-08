@@ -1,4 +1,4 @@
-#include "triton/codegen/alignment_info.h"
+#include "triton/codegen/analysis/alignment.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -7,6 +7,7 @@
 
 namespace triton {
 namespace codegen{
+namespace analysis{
 
 
 inline int gcd(int a, int b) {
@@ -308,5 +309,6 @@ void alignment_info::run(ir::module &mod) {
 }
 
 
+}
 }
 }

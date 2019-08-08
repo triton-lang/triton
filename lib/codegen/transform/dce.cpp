@@ -2,10 +2,11 @@
 #include "triton/ir/basic_block.h"
 #include "triton/ir/module.h"
 #include "triton/ir/cfg.h"
-#include "triton/codegen/optimize_dce.h"
+#include "triton/codegen/transform/dce.h"
 
 namespace triton {
 namespace codegen{
+namespace transform{
 
 
 void optimize_dce::run(ir::module &mod) {
@@ -58,5 +59,6 @@ void optimize_dce::run(ir::module &mod) {
     i->erase_from_parent();
 }
 
+}
 }
 }

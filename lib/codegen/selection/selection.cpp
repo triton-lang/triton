@@ -1,15 +1,15 @@
-﻿#include "triton/codegen/selection.h"
-#include "triton/codegen/tune.h"
-#include "triton/codegen/shmem_allocation.h"
-#include "triton/codegen/target.h"
-#include "triton/codegen/alignment_info.h"
-#include "llvm/IR/InstrTypes.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/IRBuilder.h"
+﻿#include "triton/codegen/selection/selection.h"
+#include "triton/codegen/analysis/tune.h"
+#include "triton/codegen/analysis/shmem/allocation.h"
+#include "triton/codegen/selection/target.h"
+#include "triton/codegen/analysis/alignment.h"
 #include "triton/ir/context.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/type.h"
+#include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -485,7 +485,7 @@ inline void to_warps(const std::vector<unsigned> &bs, std::vector<unsigned> &nw,
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
   const auto& shapes = v->get_type()->get_tile_shapes();
   size_t dim = shapes.size();
-  if(params_->get_fragment(v, 0) == tune::STRIDED_SCAN){
+  if(params_->get_fragment(v, 0) == analysis::tune::STRIDED_SCAN){
     std::vector<unsigned> contiguous(dim);
     std::vector<unsigned> block_size(dim);
     std::vector<unsigned> warp_size(dim);
@@ -1022,7 +1022,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
       {
         shared_tile *TA = (shared_tile*)tmap_.at(A);
         shared_tile *TB = (shared_tile*)tmap_.at(B);
-        if(params_->get_fragment(ins, 0) == tune::STRIDED_SCAN) {
+        if(params_->get_fragment(ins, 0) == analysis::tune::STRIDED_SCAN) {
           TA->set_vector_size(TC->axis(0).contiguous);
           TB->set_vector_size(TC->axis(1).contiguous);
           result->for_each([&](indices_t idx){
@@ -1047,8 +1047,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
                 a = builder.CreateFPCast(a, c_ty);
               if(b->getType() != c_ty)
                 b = builder.CreateFPCast(b, c_ty);
-//              a = ConstantFP::get(builder.getFloatTy(), 1);
-//              b = ConstantFP::get(builder.getFloatTy(), 1);
               res = builder.CreateCall(f_mul_add, {a, b, res});
             }
             result->set_value(idx, res);
@@ -1060,12 +1058,13 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           TA->set_return_mode(true);
           TB->set_return_mode(true);
 
-          std::map<Value*, std::vector<Value*>> fcs;
+          std::map<std::vector<Value*>, std::vector<Value*>> fcs;
 
           result->for_each([&](indices_t idx){
-            fcs[{builder.getInt32(0)}].push_back(TC->get_value(idx));
+            std::vector<Value*> key(idx.size() - 2);
+            std::copy(idx.begin() + 2, idx.end(), key.begin());
+            fcs[key].push_back(TC->get_value(idx));
           });
-
 
           Type *fp32_ty = builder.getFloatTy();
           Type *fp16x2_ty = VectorType::get(builder.getHalfTy(), 2);
@@ -1122,8 +1121,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
                 std::swap(idx_a[0], idx_a[1]);
               if(!dot->is_b_trans())
                 std::swap(idx_b[0], idx_b[1]);
-//              idx_a.push_back(builder.getInt32(0));
-//              idx_b.push_back(builder.getInt32(0));
+              idx_a.insert(idx_a.end(), x.first.begin(), x.first.end());
+              idx_b.insert(idx_b.end(), x.first.begin(), x.first.end());
               Value *ha = TA->get_value(idx_a);
               Value *hb = TB->get_value(idx_b);
               for(unsigned ii = 0; ii < pack_size_0_; ii++)
@@ -1159,9 +1158,11 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           // write back
           unsigned i = 0;
           result->for_each([&](indices_t idx){
-            if(i >= fcs.at({builder.getInt32(0)}).size())
+            std::vector<Value*> key(idx.size() - 2);
+            std::copy(idx.begin() + 2, idx.end(), key.begin());
+            if(i >= fcs.at(key).size())
               i = 0;
-            result->set_value(idx, fcs.at({builder.getInt32(0)})[i++]);
+            result->set_value(idx, fcs.at(key)[i++]);
           });
 
           TA->set_return_mode(false);

@@ -1,4 +1,4 @@
-#include "triton/codegen/tune.h"
+#include "triton/codegen/analysis/tune.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
 #include "triton/ir/module.h"
@@ -12,6 +12,7 @@
 
 namespace triton{
 namespace codegen{
+namespace analysis{
 
 tune::tune(): num_global_ranges_(0){ }
 
@@ -257,7 +258,7 @@ void tune::run(ir::module &mod) {
         ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 2, 2);
         if(node.second == 2)
           fpw->set_value(1);
-        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 2, 4);
+        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 4);
         connected_components(node, {fpw, wpt}, {"fpw", "wpt"}, nodes_, dependencies_, group_id++);
       }
     }
@@ -270,7 +271,8 @@ void tune::run(ir::module &mod) {
       continue;
     auto shapes = i->get_type()->get_tile_shapes();
 
-    if(auto *x = dynamic_cast<ir::load_inst*>(i)){
+    if(auto *x = dynamic_cast<ir::load_inst*>(i))
+    if(fragments_.at({i, 0}) == STRIDED_SCAN){
       ir::type *ptr_ty = x->get_pointer_operand()->get_type()->get_scalar_ty();
       size_t addr_space = ptr_ty->get_pointer_address_space();
       if(addr_space < 4){
@@ -450,5 +452,6 @@ unsigned tune::get_num_threads() {
 }
 
 
+}
 }
 }

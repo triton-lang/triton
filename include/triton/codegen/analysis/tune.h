@@ -16,6 +16,7 @@ namespace ir{
 }
 
 namespace codegen{
+namespace analysis{
 
 class tune {
   typedef std::pair<ir::value*, unsigned> node_t;
@@ -67,6 +68,7 @@ private:
 };
 
 
+}
 }
 }
 

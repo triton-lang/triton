@@ -1,6 +1,6 @@
 ﻿#include <string>
 #include "triton/lang/lang.h"
-#include "triton/codegen/target.h"
+#include "triton/codegen/selection/target.h"
 #include "triton/ir/context.h"
 #include "triton/ir/context_impl.h"
 #include "triton/driver/device.h"
