@@ -106,11 +106,9 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb_) + ")";
   std::string res =
 R"(
-const tunable int TM = {8};
-const tunable int TN = {8};
+const tunable int TM = {128};
+const tunable int TN = {128};
 const tunable int TK = {32};
-const tunable int GZ = {1};
-
 
 void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
             restrict read_only align(16) )" + b_ty_ + R"( *B,
@@ -127,18 +125,14 @@ void matmul(restrict read_only align(16) )" + a_ty_ + R"( *A,
   float xc[)" + XCS + R"(] = 0;
   )" + a_ty_ + R"(* pa[)" + AS + "] = A + rka" + bca0 + lda0 + " + rxa" + bca1 + lda1 + R"(;
   )" + b_ty_ + R"(* pb[)" + BS + "] = B + rkb" + bcb0 + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
-  bool checka[)" + AS + R"(] = (rka < K))" + bca0 + " && (rxa < M)" + bca1 + R"(;
-  bool checkb[)" + BS + R"(] = (rkb < K))" + bcb0 + " && (ryb < N)" + bcb1 + R"(;
-  )" + a_ty_ + R"( a[)" + AS + R"(] = checka ? *pa : 0;
-  )" + b_ty_ + R"( b[)" + BS + R"(] = checkb ? *pb : 0;
+  )" + a_ty_ + R"( a[)" + AS + R"(] = *pa;
+  )" + b_ty_ + R"( b[)" + BS + R"(] = *pb;
   for(int k = K; k > 0; k = k - TK){
     xc = dot()" + usea + ", " + useb + R"(, xc);
     pa = pa + TK)" + lda0 + R"(;
     pb = pb + TK)" + ldb0 + R"(;
-    bool checka[)" + AS + R"(] = k > TK;
-    bool checkb[)" + BS + R"(] = k > TK;
-    a = checka ? *pa : 0;
-    b = checkb ? *pb : 0;
+    a = *pa;
+    b = *pb;
   }
   int rxc[TM] =  ridx * TM + (0 ... TM);
   int ryc[TN] =  ridy * TN + (0 ... TN);

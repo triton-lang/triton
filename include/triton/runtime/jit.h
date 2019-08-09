@@ -66,29 +66,30 @@ public:
                       selection(&shmem_allocation, &tune, &shmem_info, &alignment_info, target),
                       optimize_dot(&tune),
                       dce(),
-                      optimize_trans(),
+                      peephole(),
                       alignment_info(),
-                      reassociate(&tune, &alignment_info),
+                      reassociate(&tune),
                       target_(target) { }
 
     void target_independent(ir::module &module) {
-      optimize_dot.run(module);
-      optimize_trans.run(module);
+      ir::print(module, std::cout);
+      peephole.run(module);
       dce.run(module);
     }
 
     void target_dependent(ir::module &module) {
-      alignment_info.run(module);
       reassociate.run(module);
+      peephole.run(module);
       if(target_->is_gpu()){
         shmem_info.run(module);
         shmem_liveness.run(module);
         shmem_allocation.run();
         shmem_barriers.run(module);
       }
+      alignment_info.run(module);
       vectorize.run(module);
       dce.run(module);
-//      ir::print(module, std::cout);
+      ir::print(module, std::cout);
     }
 
     codegen::selection selection;
@@ -100,8 +101,8 @@ public:
     codegen::transform::shmem_barriers shmem_barriers;
     codegen::transform::vectorize vectorize;
     codegen::transform::optimize_dot optimize_dot;
-    codegen::transform::optimize_dce dce;
-    codegen::transform::optimize_trans optimize_trans;
+    codegen::transform::dce dce;
+    codegen::transform::peephole peephole;
     codegen::transform::reassociate reassociate;
     codegen::target* target_;
   };

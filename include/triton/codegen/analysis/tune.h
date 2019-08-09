@@ -13,6 +13,7 @@ namespace ir{
   class instruction;
   class function;
   class metaparameter;
+  class constant_int;
 }
 
 namespace codegen{
@@ -34,7 +35,9 @@ private:
   void init_c_graph(ir::instruction *v);
   fragment_t get_fragmentation_type(node_t x, graph_t &graph);
   void connected_components(node_t x, const std::vector<ir::metaparameter *> mps, const std::vector<std::string> prefixes, std::set<node_t> &nodes, graph_t &graph, unsigned group_id);
-  void create_grids(std::vector<ir::instruction*> &grids, std::map<ir::metaparameter *, ir::instruction *> &references, ir::function *fn);
+  void create_grids(std::vector<ir::value*> &grids,
+                    std::map<unsigned, ir::value*> &references,
+                    ir::function *fn);
   unsigned get_req_num_threads(ir::instruction *i);
 
 
@@ -49,8 +52,6 @@ public:
   bool check_constraints(std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);
   void init(ir::module &mod);
-  unsigned get_num_global_range();
-  unsigned get_global_range_size(unsigned axis);
   unsigned get_num_threads();
 
 private:
@@ -61,10 +62,9 @@ private:
   std::map<node_t, unsigned> static_params_;
   std::map<ir::value*, std::map<std::string, ir::metaparameter*>> params_;
   std::map<unsigned, ir::metaparameter*> global_range_sizes_;
-  unsigned num_global_ranges_;
-  unsigned num_threads_;
-  std::vector<ir::instruction*> grids_;
+  std::vector<ir::value*> grids_;
   std::map<ir::value*, std::map<unsigned, unsigned>> groups_;
+  ir::metaparameter* num_warps_;
 };
 
 

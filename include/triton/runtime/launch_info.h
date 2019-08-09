@@ -8,7 +8,6 @@ namespace triton{
 namespace runtime{
 
 struct launch_information{
-  std::vector<unsigned> global_range_size;
   unsigned num_threads;
   std::map<std::string, unsigned> globals;
 };

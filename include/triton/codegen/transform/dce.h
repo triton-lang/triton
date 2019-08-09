@@ -14,9 +14,9 @@ namespace ir {
 namespace codegen{
 namespace transform{
 
-class optimize_dce {
+class dce {
 public:
-  optimize_dce() {}
+  dce() {}
   void run(ir::module &mod);
 };
 

@@ -12,7 +12,7 @@ namespace ir{
 
 constant *constant::get_null_value(type *ty) {
   context &ctx = ty->get_context();
-  switch (ty->get_type_id()) {
+  switch (ty->get_scalar_ty()->get_type_id()) {
   case type::IntegerTyID:
     return constant_int::get(ty, 0);
   case type::HalfTyID:
