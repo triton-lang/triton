@@ -363,7 +363,7 @@ void conv::enqueue_impl(driver::stream *stream, driver::kernel *kernel,
                         std::vector<driver::buffer*> args,
                         runtime::launch_information info) {
   driver::buffer *a = args[0], *b = args[1], *c = args[2], *bias = args[3];
-  unsigned TM = info.global_range_size[0], TN = info.global_range_size[1];
+  unsigned TM = info.globals["TM"], TN = info.globals["TN"];
   unsigned GZ = 1;
   set_arg(kernel, a, b, c, bias);
   std::array<size_t, 3> grid = {1};

@@ -57,10 +57,8 @@ unsigned user::get_num_hidden() const {
 }
 
 void user::replace_all_uses_with(value *target) {
-  for(auto it = users_.begin(); it != users_.end();){
+  for(auto it = users_.begin(); it != users_.end(); it++){
     (*it)->replace_uses_of_with(this, target);
-    target->add_use(*it);
-    erase_use(*it++);
   }
 }
 
@@ -68,6 +66,8 @@ void user::replace_uses_of_with(value *before, value *after) {
   for(size_t i = 0; i < ops_.size(); i++)
     if(ops_[i] == before)
       ops_[i] = after;
+  after->add_use(this);
+  erase_use(this);
 }
 
 }

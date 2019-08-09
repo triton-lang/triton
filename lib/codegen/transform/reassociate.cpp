@@ -155,8 +155,8 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
   return new_value;
 }
 
-reassociate::reassociate(analysis::tune* params, analysis::alignment_info* align)
-  : params_(params), align_(align)
+reassociate::reassociate(analysis::tune* params)
+  : params_(params)
 { }
 
 
@@ -190,93 +190,108 @@ void reassociate::run(ir::module &mod) {
 
   // reassociate
   std::map<ir::value*, cst_info> infos;
-  for(ir::function *fn: mod.get_function_list()){
-    std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
-    // iterate through blocks
-    for(ir::basic_block *block: rpo){
-    // iterate through instruction
-    for(ir::instruction *i: block->get_inst_list()){
-    // getelementptr instruction
-    if(ir::getelementptr_inst *pz = dynamic_cast<ir::getelementptr_inst*>(i)){
-      // unpack GEP instruction
-      ir::value* py = pz->get_pointer_operand();
-      ir::value* offset = *pz->idx_begin();
-      // reassociate index
-      ir::value *sta = nullptr;
-      ir::value *dyn = offset;
-      reassociate_idx(offset, builder, dyn, sta);
-      if(sta){
-        builder.set_insert_point(pz);
-        ir::value *dyn_ptr = builder.create_gep(py, {dyn});
-        ir::value *sta_ptr = builder.create_gep(dyn_ptr, {sta});
-        params_->copy(dyn_ptr, pz);
-        params_->copy(sta_ptr, pz);
-        align_->copy(sta_ptr, pz);
-        pz->replace_all_uses_with(sta_ptr);
-        infos[sta_ptr].dyn_ptr = (ir::getelementptr_inst*)dyn_ptr;
-        infos[sta_ptr].sta_ptr = (ir::getelementptr_inst*)sta_ptr;
-      }
-      // reassociate pointer argument
-      if(ir::getelementptr_inst* gepy = dynamic_cast<ir::getelementptr_inst*>(py))
-      if(infos.find(gepy) != infos.end()){
-        builder.set_insert_point(pz);
-        ir::getelementptr_inst *sta = infos[gepy].sta_ptr;
-        ir::getelementptr_inst *dyn = infos[gepy].dyn_ptr;
-        ir::value *cst = *sta->idx_begin();
-        ir::value *off = *pz->idx_begin();
-        ir::value *new_dyn = builder.create_gep(dyn, {off});
-        ir::value *new_pz = builder.create_gep(new_dyn, {cst}, pz->get_name());
-        params_->copy(new_dyn, pz);
-        params_->copy(new_pz, pz);
-        align_->copy(new_pz, pz);
-        pz->replace_all_uses_with(new_pz);
-      }
-      // reassociate phi-node pointer
-      if(ir::phi_node* phi = dynamic_cast<ir::phi_node*>(py)){
-        // only optimize the case where py = phi pa, pz for now
-        std::vector<ir::value*> ops = phi->ops();
-        if(ops.size() != 2)
+  std::set<ir::value*> replaced;
+  size_t n_replaced;
+  do{
+    n_replaced = replaced.size();
+    for(ir::function *fn: mod.get_function_list()){
+      std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
+      // iterate through blocks
+      for(ir::basic_block *block: rpo){
+      // iterate through instruction
+      for(ir::instruction *i: block->get_inst_list()){
+      // getelementptr instruction
+      if(ir::getelementptr_inst *pz = dynamic_cast<ir::getelementptr_inst*>(i)){
+        if(replaced.find(pz) != replaced.end())
           continue;
-        if(ops[0] != pz && ops[1] != pz)
-           continue;
-        // grab  incoming
-        size_t idx_z = (ops[0] == pz) ? 0 : 1;
-        size_t idx_a = (ops[0] == pz) ? 1 : 0;
-        // check if pa is known to have constant offset
-        ir::value *vpa = phi->get_incoming_value(idx_a);
-        auto it = infos.find(vpa);
-        if(it == infos.end())
-          continue;
-        ir::getelementptr_inst *pa = (ir::getelementptr_inst*)vpa;
-        // unpack dynamically/statically offset pointer
-        ir::getelementptr_inst *dyn_ptr = it->second.dyn_ptr;
-        ir::getelementptr_inst *sta_ptr = it->second.sta_ptr;
-        // we take static offset out of the phi function
-        builder.set_insert_point(phi);
-        ir::phi_node *new_phi = builder.create_phi(phi->get_type(), 2);
-        // new pz for phi has the same offsets
-        builder.set_insert_point(pz);
-        std::vector<ir::value*> idxs(pz->idx_begin(), pz->idx_end());
-        ir::value *new_phi_pz = builder.create_gep(new_phi, idxs);
-        // fold the static offset into the new pz value
-        ir::value *new_pz = builder.create_gep(new_phi_pz, {*sta_ptr->idx_begin()});
-        // populate incoming values
-        new_phi->add_incoming(dyn_ptr, phi->get_incoming_block(idx_a));
-        new_phi->add_incoming(new_phi_pz, phi->get_incoming_block(idx_z));
-        // replace phi uses
-        phi->replace_all_uses_with(new_phi);
-        // replace pz uses
-        pz->replace_all_uses_with(new_pz);
-        // copy params
-        params_->copy(new_phi_pz, pz);
-        params_->copy(new_phi, phi);
-        params_->copy(new_pz, pz);
-        align_->copy(new_pz, pz);
+        // unpack GEP instruction
+        ir::value* py = pz->get_pointer_operand();
+        ir::value* offset = *pz->idx_begin();
+        // reassociate index
+        ir::value *sta = nullptr;
+        ir::value *dyn = offset;
+        reassociate_idx(offset, builder, dyn, sta);
+        if(sta){
+          builder.set_insert_point(pz);
+          ir::value *dyn_ptr = builder.create_gep(py, {dyn});
+          ir::value *sta_ptr = builder.create_gep(dyn_ptr, {sta});
+          params_->copy(dyn_ptr, pz);
+          params_->copy(sta_ptr, pz);
+          pz->replace_all_uses_with(sta_ptr);
+          infos[sta_ptr].dyn_ptr = dyn_ptr;
+          infos[sta_ptr].sta_ptr = (ir::getelementptr_inst*)sta_ptr;
+          replaced.insert(pz);
+        }
+        // reassociate pointer argument
+        if(infos.find(py) != infos.end()){
+          builder.set_insert_point(pz);
+          ir::getelementptr_inst *sta = infos[py].sta_ptr;
+          ir::value *dyn = infos[py].dyn_ptr;
+          ir::value *cst = *sta->idx_begin();
+          ir::value *off = *pz->idx_begin();
+          ir::value *pz_dyn = builder.create_gep(dyn, {off});
+          ir::value *pz_sta = builder.create_gep(pz_dyn, {cst}, pz->get_name());
+          params_->copy(pz_dyn, pz);
+          params_->copy(pz_sta, pz);
+          pz->replace_all_uses_with(pz_sta);
+          infos[pz_sta].dyn_ptr = pz_dyn;
+          infos[pz_sta].sta_ptr = (ir::getelementptr_inst*)pz_sta;
+          replaced.insert(pz);
+        }
+        // reassociate phi-node pointer
+        if(ir::phi_node* phi = dynamic_cast<ir::phi_node*>(py)){
+          // only optimize the case where py = phi pa, pz for now
+          std::vector<ir::value*> ops = phi->ops();
+          if(ops.size() != 2)
+            continue;
+          if(ops[0] != pz && ops[1] != pz)
+             continue;
+          // grab  incoming
+          size_t idx_z = (ops[0] == pz) ? 0 : 1;
+          size_t idx_a = (ops[0] == pz) ? 1 : 0;
+          // check if pa is known to have constant offset
+          ir::value *vpa = phi->get_incoming_value(idx_a);
+          auto it_a = infos.find(vpa);
+          if(it_a == infos.end())
+            continue;
+          // unpack dynamically/statically offset pointer
+          ir::value *pa_dyn = it_a->second.dyn_ptr;
+          ir::getelementptr_inst *pa_sta = it_a->second.sta_ptr;
+          ir::value *pz = phi->get_incoming_value(idx_z);
+          // extract offset
+          ir::value *off = *pa_sta->idx_begin();
+          builder.set_insert_point(phi);
+          ir::phi_node *phi_dyn = builder.create_phi(phi->get_type(), 2);
+          phi_dyn->add_incoming(pa_dyn, phi->get_incoming_block(idx_a));
+          builder.set_insert_point(phi->get_parent()->get_first_non_phi());
+          // re-add the offset
+          ir::value *phi_sta = builder.create_gep(phi_dyn, {off}, phi->get_name() + "_sta");
+          phi->replace_all_uses_with(phi_sta);
+          // remove offset from pz
+          if(auto *x = dynamic_cast<ir::instruction*>(pz)){
+            auto insts = x->get_parent()->get_inst_list();
+            auto it = std::find(insts.begin(), insts.end(), x);
+            it++;
+            builder.set_insert_point(*it);
+          }
+          ir::value *neg_off = builder.create_neg(off);
+          ir::value *pz_dyn = builder.create_gep(pz, {neg_off});
+          phi_dyn->add_incoming(pz_dyn, phi->get_incoming_block(idx_z));
+          // copy parameters
+          params_->copy(pz_dyn, pz);
+          params_->copy(((ir::instruction*)neg_off)->get_operand(0), off);
+          params_->copy(neg_off, off);
+          params_->copy(phi_dyn, phi);
+          params_->copy(phi_sta, phi);
+          infos[phi_sta].dyn_ptr = phi_dyn;
+          infos[phi_sta].sta_ptr = (ir::getelementptr_inst*)phi_sta;
+          replaced.insert(phi);
+        }
       }
+      }
+     }
     }
-    }
-    }
-  }
+  }while(replaced.size() != n_replaced);
 }
 
 }

@@ -243,7 +243,7 @@ Type *selection::llvm_type(ir::type *ty, LLVMContext &ctx) {
 
 /* convert ir::constant to Constant */
 Constant *selection::llvm_constant(ir::constant *cst, LLVMContext &ctx) {
-  Type *dst_ty = llvm_type(cst->get_type(), ctx);
+  Type *dst_ty = llvm_type(cst->get_type()->get_scalar_ty(), ctx);
   if(auto* cc = dynamic_cast<ir::constant_int*>(cst))
     return ConstantInt::get(dst_ty, cc->get_value());
   if(auto* cc = dynamic_cast<ir::constant_fp*>(cst))
@@ -478,8 +478,9 @@ inline void to_warps(const std::vector<unsigned> &bs, std::vector<unsigned> &nw,
     nw[i] = ceil(nthreads, nwarps*warp_size);
     nwarps *= nw[i];
   }
-  for(size_t i = 0; i < bs.size(); ++i)
+  for(size_t i = 0; i < bs.size(); ++i){
     ws[i] = bs[i] / nw[i];
+  }
 }
 
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
@@ -565,7 +566,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     Value *pair_a_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4);
     Value *pair_b_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4);
     pair_a_id = builder.CreateURem(pair_a_id, builder.getInt32(fpw_0));
-    pair_b_id = builder.CreateURem(builder.CreateUDiv(pair_b_id, builder.getInt32(fpw_0)), builder.getInt32(fpw_1));
+    pair_b_id = builder.CreateUDiv(pair_b_id, builder.getInt32(fpw_0));
+    pair_b_id = builder.CreateURem(pair_b_id, builder.getInt32(fpw_1));
     // Quad pair offset
     Value *pair_a_off = builder.CreateMul(pair_a_id, builder.getInt32(4 * pack_size_0_));
     Value *pair_b_off = builder.CreateMul(pair_b_id, builder.getInt32(4 * pack_size_1_));
@@ -1296,7 +1298,9 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     else {
       result->for_each([&](indices_t idx){
         auto value = [&](ir::value *x) {
-          if(x->get_type()->is_tile_ty())
+          if(auto *cst = dynamic_cast<ir::constant_int*>(x))
+            return (Value*)llvm_constant(cst, ctx);
+          else if(x->get_type()->is_tile_ty())
             return tmap_.at(x)->get_value(idx);
           else
             return llvm_value(x, builder);

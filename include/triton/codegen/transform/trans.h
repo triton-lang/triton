@@ -19,12 +19,17 @@ namespace ir {
 namespace codegen{
 namespace transform{
 
-class optimize_trans {
+class peephole {
 private:
-  ir::value *replace_phi(ir::value* value, ir::builder &builder, const std::vector<ir::constant_int *> &perm);
+  bool rewrite_trans_phi(ir::instruction* value, ir::builder &builder);
+  bool rewrite_dot(ir::instruction *value, ir::builder& builder);
+  bool rewrite_unit_red(ir::instruction *value, ir::builder& builder);
+  bool rewrite_gep_ptr_min_off_plus_off(ir::instruction *value, ir::builder& builder);
+
+private:
 
 public:
-  optimize_trans() {}
+  peephole() {}
   void run(ir::module &mod);
 };
 

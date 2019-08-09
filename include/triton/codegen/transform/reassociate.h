@@ -28,7 +28,7 @@ namespace transform{
 
 class reassociate {
   struct cst_info {
-    ir::getelementptr_inst* dyn_ptr;
+    ir::value* dyn_ptr;
     ir::getelementptr_inst* sta_ptr;
   };
 
@@ -38,12 +38,11 @@ private:
   ir::value *reassociate_ptr(ir::getelementptr_inst* pz, ir::builder &builder, std::map<ir::value*, cst_info> &offsets);
 
 public:
-  reassociate(analysis::tune *params, analysis::alignment_info *align);
+  reassociate(analysis::tune *params);
   void run(ir::module& module);
 
 private:
   analysis::tune* params_;
-  analysis::alignment_info* align_;
 };
 
 }

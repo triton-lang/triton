@@ -9,7 +9,7 @@ namespace codegen{
 namespace transform{
 
 
-void optimize_dce::run(ir::module &mod) {
+void dce::run(ir::module &mod) {
   std::list<ir::instruction*> work_list;
   std::set<ir::instruction*> marked;
 

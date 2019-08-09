@@ -82,10 +82,6 @@ void parallel_for_each(std::vector<std::vector<unsigned>> const & iterates, std:
 std::unique_ptr<llvm::Module> jit::make_llvm_module(ir::module &module, passes_wrapper &passes, llvm::LLVMContext& llvm_context, launch_information& info) {
   llvm::Module* result = new llvm::Module(module.get_name(), llvm_context);
   passes.selection.run(module, *result);
-  // launch information
-  info.global_range_size.clear();
-  for(unsigned i = 0; i < passes.tune.get_num_global_range(); i++)
-    info.global_range_size.push_back(passes.tune.get_global_range_size(i));
   // add globals
   for(auto x: module.globals())
     info.globals[x.first] = ((ir::metaparameter*)x.second)->get_value();

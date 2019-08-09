@@ -147,13 +147,13 @@ binary_operator *binary_operator::create(op_t op, value *lhs, value *rhs, const 
 }
 
 binary_operator *binary_operator::create_fneg(value *arg, const std::string &name, instruction *next){
-  assert(arg->get_type()->is_floating_point_ty());
+  assert(arg->get_type()->get_scalar_ty()->is_floating_point_ty());
   value *zero = constant_fp::get_zero_value_for_negation(arg->get_type());
   return binary_operator::create(llvm::Instruction::FSub, zero, arg, name, next);
 }
 
 binary_operator *binary_operator::create_neg(value *arg, const std::string &name, instruction *next){
-  assert(arg->get_type()->is_integer_ty());
+  assert(arg->get_type()->get_scalar_ty()->is_integer_ty());
   value *zero = constant_fp::get_zero_value_for_negation(arg->get_type());
   return binary_operator::create(llvm::Instruction::Sub, zero, arg, name, next);
 }
