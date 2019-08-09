@@ -250,15 +250,15 @@ void tune::run(ir::module &mod) {
       node_t node = *nodes_.begin();
       if(fragments_[node] == STRIDED_SCAN) {
         ir::metaparameter *nts = ir::metaparameter::create(ctx, ty, 1, 1);
-        ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 4, 32);
+        ir::metaparameter *mts = ir::metaparameter::create(ctx, ty, 1, 8);
         connected_components(node, {nts, mts}, {"nts", "mts"}, nodes_, dependencies_, group_id++);
         nts->set_value(1);
       }
       else {
-        ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 2, 2);
+        ir::metaparameter *fpw = ir::metaparameter::create(ctx, ty, 1, 1);
         if(node.second == 2)
           fpw->set_value(1);
-        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 4);
+        ir::metaparameter *wpt = ir::metaparameter::create(ctx, ty, 1, 1);
         connected_components(node, {fpw, wpt}, {"fpw", "wpt"}, nodes_, dependencies_, group_id++);
       }
     }
@@ -277,7 +277,7 @@ void tune::run(ir::module &mod) {
       size_t addr_space = ptr_ty->get_pointer_address_space();
       if(addr_space < 4){
         ir::type *ty = mod.get_builder().get_int32_ty();
-        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  4, 8));
+        std::unique_ptr<ir::metaparameter> tmp(ir::metaparameter::create(ctx, ty,  1, 1));
         *params_.at(i).at("nts.d0") = *tmp;
       }
     }
@@ -287,8 +287,8 @@ void tune::run(ir::module &mod) {
 //      *params_.at(i->get_operand(0)).at("mts.d2") = *mts_2;
 //      *params_.at(i->get_operand(1)).at("mts.d2") = *mts_2;
       if(fragments_.at({i, 0}) == STRIDED_SCAN){
-        std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 4, 8));
-        std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 4, 8));
+        std::unique_ptr<ir::metaparameter> tmp1(ir::metaparameter::create(ctx, ty, 1, 1));
+        std::unique_ptr<ir::metaparameter> tmp2(ir::metaparameter::create(ctx, ty, 1, 1));
         *params_.at(i).at("nts.d0") = *tmp1;
         *params_.at(i).at("nts.d1") = *tmp2;
 //        for(size_t k = 2; k < shapes.size(); k++)
@@ -423,7 +423,7 @@ bool tune::check_constraints(std::map<ir::value *, std::vector<std::string>> &er
       for(size_t k = 0; k < shapes.size(); k++){
         prod *= params_[i]["fpw.d" + std::to_string(k)]->get_value();
       }
-      if(prod != 4)
+      if(prod > 4)
         errors[i].push_back("HMMA must have only 4 fragments per warp");
     }
     int num_threads = get_req_num_threads(i);

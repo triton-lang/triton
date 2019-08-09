@@ -554,7 +554,6 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     num_packs_0_ = num_rep_0 / pack_size_0_;
     num_packs_1_ = num_rep_1 / pack_size_1_;
 
-
     /* intra warp offset */
     // offset of quad in pair
     Value *in_pair_off_a = builder.CreateMul(builder.CreateUDiv(builder.CreateAnd(u_thread_id, _16), builder.getInt32(4)),
@@ -566,7 +565,7 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     Value *pair_a_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4);
     Value *pair_b_id = builder.CreateUDiv(builder.CreateURem(u_thread_id, _16), _4);
     pair_a_id = builder.CreateURem(pair_a_id, builder.getInt32(fpw_0));
-    pair_b_id = builder.CreateUDiv(pair_b_id, builder.getInt32(fpw_0));
+    pair_b_id = builder.CreateURem(builder.CreateUDiv(pair_b_id, builder.getInt32(fpw_0)), builder.getInt32(fpw_1));
     // Quad pair offset
     Value *pair_a_off = builder.CreateMul(pair_a_id, builder.getInt32(4 * pack_size_0_));
     Value *pair_b_off = builder.CreateMul(pair_b_id, builder.getInt32(4 * pack_size_1_));
