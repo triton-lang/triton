@@ -29,6 +29,9 @@ private:
   void init_impl(driver::stream *stream, driver::cu_module *module, triton::runtime::launch_information info);
   // deinit
   void deinit_impl();
+  // source
+  std::string triton_c_src_ydx() const;
+  std::string triton_c_src_dw() const;
 public:
   // constructor
   dot(int32_t N, int32_t K, int32_t S, int32_t C, const std::string &ty, int32_t BS, int32_t nlocks, int32_t nblocks, op_t op = FPROP);

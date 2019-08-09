@@ -106,8 +106,8 @@ void dot::triton_c_src(std::ostream &os) const {
   std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb_) + ")";
   std::string res =
 R"(
-const tunable int TM = {32};
-const tunable int TN = {32};
+const tunable int TM = {8};
+const tunable int TN = {8};
 const tunable int TK = {32};
 const tunable int GZ = {1};
 
