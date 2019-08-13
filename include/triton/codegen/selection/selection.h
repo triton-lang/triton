@@ -165,11 +165,20 @@ private:
   void lower_vectorize(ir::vectorize_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_trans(ir::trans_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
-  void lower_hmma_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
-  void lower_scalar_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  // matrix multiply
+  void lower_hmma_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder,
+                      distributed_tile *TC, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK);
+  void lower_scanline_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder,
+                        distributed_tile *TC, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK,
+                        Type *c_ty, Function *f_mul_add);
+  void lower_outer_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder,
+                        distributed_tile *TC, distributed_tile *TA, distributed_tile *TB, distributed_tile *TD,
+                        Type *c_ty, Function *f_mul_add);
   void lower_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  // load
   void lower_masked_load(ir::masked_load_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_load(ir::load_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  // element-wise
   void lower_elementwise(ir::instruction *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_tile_instruction(ir::instruction *src, Builder &builder);
 
