@@ -120,36 +120,66 @@ class selection{
   typedef std::map<ir::value *, llvm::Value *> vmap_t;
   typedef std::map<ir::value *, tile *> tmap_t;
 
+  typedef llvm::LLVMContext LLVMContext;
+  typedef llvm::IRBuilder<> Builder;
+  typedef llvm::Type Type;
+  typedef llvm::Value Value;
+  typedef llvm::Module Module;
+  typedef llvm::Instruction Instruction;
+  typedef llvm::Constant Constant;
+  typedef llvm::ArrayType ArrayType;
+  typedef llvm::Function Function;
+
 private:
   // utils
-  llvm::Type *make_vector_ty(llvm::Type *ty, size_t vector_size);
+  Type *make_vector_ty(Type *ty, size_t vector_size);
   std::vector<unsigned> extract_shapes(ir::value *v);
 
   // LLVM conversions
-  llvm::Type*        llvm_type(ir::type *ty, llvm::LLVMContext &ctx);
-  llvm::Value*       llvm_value(ir::value *v, llvm::IRBuilder<> &builder);
-  llvm::Instruction* llvm_inst(ir::instruction *inst, std::function<llvm::Value*(ir::value*)> value, llvm::IRBuilder<> &builder);
-  llvm::Constant*    llvm_constant(ir::constant *cst, llvm::LLVMContext &ctx);
-  llvm::Value*       llvm_alloc_const(ir::alloc_const *v, llvm::Module *module, llvm::IRBuilder<> &builder);
-  llvm::ArrayType*   llvm_linearized_tile_type(ir::type *ty, llvm::LLVMContext &ctx);
+  Type*        llvm_type(ir::type *ty, LLVMContext &ctx);
+  Value*       llvm_value(ir::value *v, Builder &builder);
+  Instruction* llvm_inst(ir::instruction *inst, std::function<Value*(ir::value*)> value, Builder &builder);
+  Constant*    llvm_constant(ir::constant *cst, LLVMContext &ctx);
+  Value*       llvm_alloc_const(ir::alloc_const *v, Module *module, Builder &builder);
+  ArrayType*   llvm_linearized_tile_type(ir::type *ty, LLVMContext &ctx);
 
   // grid construction
   void create_grids(std::vector<ir::value *> &grids,
                     std::map<unsigned, ir::value *> &references,
                     ir::function *fn);
-  void create_tile(ir::value *v, llvm::IRBuilder<> &builder, const std::map<unsigned, ir::value *> &references, std::set<ir::value *> &seen, llvm::Value *sh_mem_ptr);
-  void init_axes(ir::value *i, llvm::IRBuilder<> &builder, llvm::Value *u_thread_id, llvm::Value *u_warp_id);
-  void init_grids(ir::function *fn, llvm::IRBuilder<> &builder, llvm::Value *sh_mem_ptr);
+  void create_tile(ir::value *v, Builder &builder, const std::map<unsigned, ir::value *> &references, std::set<ir::value *> &seen, Value *sh_mem_ptr);
+  void init_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
+  void init_grids(ir::function *fn, Builder &builder, Value *sh_mem_ptr);
 
-  // lowering
-  void lower_instruction(ir::instruction *src, llvm::IRBuilder<> &builder);
-  void lower_tile_instruction(ir::instruction *src, llvm::IRBuilder<> &builder);
+  // lower scalar instruction
+  void lower_instruction(ir::instruction *src, Builder &builder);
+  // lower tile instruction
+  void lower_masked_store(ir::masked_store_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_store(ir::store_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_downcast(ir::downcast_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_dynamic_range_idx(ir::nv_dynamic_range_idx_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_reshape(ir::reshape_inst* x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_splat(ir::splat_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_broadcast(ir::broadcast_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_vectorize(ir::vectorize_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_trans(ir::trans_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_hmma_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_scalar_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_masked_load(ir::masked_load_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_load(ir::load_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_elementwise(ir::instruction *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_tile_instruction(ir::instruction *src, Builder &builder);
+
+
 
 public:
   selection(analysis::shmem::allocation *alloc, analysis::tune *params, analysis::shmem::info *buffer_info, analysis::alignment_info *ax_info, target *tgt)
     : alloc_(alloc), params_(params), buffer_info_(buffer_info), axis_info_(ax_info), tgt_(tgt){ }
 
-  void run(ir::module &src, llvm::Module &dst);
+  void run(ir::module &src, Module &dst);
 
 private:
   vmap_t vmap_;
@@ -160,9 +190,9 @@ private:
   analysis::shmem::info *buffer_info_;
   analysis::alignment_info *axis_info_;
   std::map<unsigned, distributed_axis> axes_;
-  llvm::Value *sh_mem_ptr_;
-  llvm::Value *offset_a_i_, *offset_a_k_;
-  llvm::Value *offset_b_j_, *offset_b_k_;
+  Value *sh_mem_ptr_;
+  Value *offset_a_i_, *offset_a_k_;
+  Value *offset_b_j_, *offset_b_k_;
   unsigned num_packs_0_, num_packs_1_;
   unsigned pack_size_0_, pack_size_1_;
 };

@@ -15,9 +15,8 @@
 #include "triton/codegen/analysis/shmem/liveness.h"
 #include "triton/codegen/analysis/shmem/info.h"
 #include "triton/codegen/analysis/alignment.h"
-#include "triton/codegen/transform/dot.h"
 #include "triton/codegen/transform/dce.h"
-#include "triton/codegen/transform/trans.h"
+#include "triton/codegen/transform/peephole.h"
 #include "triton/codegen/transform/shmem/barriers.h"
 #include "triton/codegen/transform/reassociate.h"
 #include "triton/codegen/transform/vectorize.h"
@@ -64,7 +63,6 @@ public:
                       shmem_barriers(&shmem_allocation, &shmem_info),
                       vectorize(&tune),
                       selection(&shmem_allocation, &tune, &shmem_info, &alignment_info, target),
-                      optimize_dot(&tune),
                       dce(),
                       peephole(),
                       alignment_info(),
@@ -72,7 +70,6 @@ public:
                       target_(target) { }
 
     void target_independent(ir::module &module) {
-      ir::print(module, std::cout);
       peephole.run(module);
       dce.run(module);
     }
@@ -89,7 +86,6 @@ public:
       alignment_info.run(module);
       vectorize.run(module);
       dce.run(module);
-      ir::print(module, std::cout);
     }
 
     codegen::selection selection;
@@ -100,7 +96,6 @@ public:
     codegen::analysis::alignment_info alignment_info;
     codegen::transform::shmem_barriers shmem_barriers;
     codegen::transform::vectorize vectorize;
-    codegen::transform::optimize_dot optimize_dot;
     codegen::transform::dce dce;
     codegen::transform::peephole peephole;
     codegen::transform::reassociate reassociate;
