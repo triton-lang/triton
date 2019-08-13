@@ -798,30 +798,22 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
   }
 }
 
-
-void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &builder) {
-  BasicBlock *block = builder.GetInsertBlock();
-  Module *module = block->getModule();
-  LLVMContext &ctx = builder.getContext();
-  Function *fn = block->getParent();
-  // store
-  if(auto *x = dynamic_cast<ir::masked_store_inst*>(ins)){
-    distributed_tile* ptrs = (distributed_tile*)tmap_.at(x->get_pointer_operand());
-    distributed_tile* scalars = (distributed_tile*)tmap_.at(x->get_value_operand());
-    ir::value *mask = x->get_mask_operand();
-    distributed_tile* preds = (distributed_tile*)tmap_.at(mask);
-    ptrs->for_each([&](indices_t idx){
-      Value *scalar = scalars->get_value(idx);
-      Value *ptr = ptrs->get_value(idx);
-      Value *pred = preds->get_value(idx);
-      BasicBlock *mask_then_bb = BasicBlock::Create(ctx, "mask_then", fn);
-      BasicBlock *mask_done_bb = BasicBlock::Create(ctx, "mask_done", fn);
-      builder.CreateCondBr(pred, mask_then_bb, mask_done_bb);
-      builder.SetInsertPoint(mask_then_bb);
-      builder.CreateStore(scalar, ptr);
-      builder.CreateBr(mask_done_bb);
-      builder.SetInsertPoint(mask_done_bb);
-
+void selection::lower_masked_store(ir::masked_store_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* ptrs = (distributed_tile*)tmap_.at(x->get_pointer_operand());
+  distributed_tile* scalars = (distributed_tile*)tmap_.at(x->get_value_operand());
+  ir::value *mask = x->get_mask_operand();
+  distributed_tile* preds = (distributed_tile*)tmap_.at(mask);
+  ptrs->for_each([&](indices_t idx){
+    Value *scalar = scalars->get_value(idx);
+    Value *ptr = ptrs->get_value(idx);
+    Value *pred = preds->get_value(idx);
+    BasicBlock *mask_then_bb = BasicBlock::Create(ctx, "mask_then", fn);
+    BasicBlock *mask_done_bb = BasicBlock::Create(ctx, "mask_done", fn);
+    builder.CreateCondBr(pred, mask_then_bb, mask_done_bb);
+    builder.SetInsertPoint(mask_then_bb);
+    builder.CreateStore(scalar, ptr);
+    builder.CreateBr(mask_done_bb);
+    builder.SetInsertPoint(mask_done_bb);
 //      std::string offset = "";
 //      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
 //      if(gep->getNumIndices() == 1)
@@ -832,356 +824,229 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
 //      std::string asm_str = "@$0 st.global.b32 [$1" + offset + "], $2;";
 //      InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,l,f", true);
 //      builder.CreateCall(iasm, {pred, ptr, scalar});
-    });
+  });
+}
+
+void selection::lower_store(ir::store_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* ptrs = (distributed_tile*)tmap_.at(x->get_pointer_operand());
+  tile *scalars = tmap_.at(x->get_value_operand());
+  ptrs->for_each([&](indices_t idx){
+    builder.CreateStore(scalars->get_value(idx), ptrs->get_value(idx));
+  });
+}
+
+void selection::lower_downcast(ir::downcast_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  vmap_[x] = tmap_[x->get_operand(0)]->get_value({builder.getInt32(0)});
+}
+
+void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  ir::instruction *ins = (ir::instruction*)x;
+  Module *module = fn->getParent();
+  std::map<indices_t, Value*> partial;
+  ir::value *op = x->get_operand(0);
+  distributed_tile* op_tile = (distributed_tile*)tmap_.at(op);
+  unsigned axis = x->get_axis();
+
+  // reduce within thread
+  op_tile->for_each([&](indices_t idx) {
+    indices_t pidx = idx;
+    pidx.erase(pidx.begin() + axis);
+    Value *current = op_tile->get_value(idx);
+    // current partial result is not initialized -- create
+    if(partial.find(pidx) == partial.end())
+      partial[pidx] = current;
+    // current partial result is initialized -- accumulate
+    else
+      partial[pidx] = builder.CreateFAdd(partial[pidx], current);
+  });
+
+  // reduce within blocks
+  unsigned addr_space = sh_mem_ptr_->getType()->getPointerAddressSpace();
+  Type *res_ty = builder.getFloatTy();
+  Value *base_ptr = builder.CreateBitCast(sh_mem_ptr_, PointerType::get(res_ty, addr_space));
+  for(auto& x: partial) {
+    // current element being computed
+    Value *lane = axes_.at(params_->get_param_group(op, axis)).thread_id;
+    Value *&result = x.second;
+    indices_t write_idx = x.first;
+    write_idx.insert(write_idx.begin() + axis, lane);
+
+    // shared memory write  pointer
+    Value *write_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), write_idx);
+    Value *write_ptr = builder.CreateGEP(base_ptr, write_offset);
+
+    // initialize shared memory
+    tgt_->add_barrier(module, builder);
+    builder.CreateStore(result, write_ptr);
+    // build result
+    unsigned depth = params_->get_param(op, "wpt.d" + std::to_string(axis))->get_value();
+    for(unsigned i = depth/2; i > 0; i >>= 1){
+      // current indices
+      indices_t current(write_idx.size(), builder.getInt32(0));
+      current[axis] = builder.getInt32(i);
+      // shared memory offset
+      Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), current);
+      Value *is_active = builder.CreateICmpULT(lane, builder.getInt32(i));
+      read_offset = builder.CreateSelect(is_active, read_offset, builder.getInt32(0));
+      // shared memory read pointer
+      Value *read_ptr = builder.CreateGEP(write_ptr, read_offset);
+      tgt_->add_barrier(module, builder);
+      Value *next = builder.CreateLoad(read_ptr);
+      // accumulate
+      result = builder.CreateFAdd(result, next);
+      // write back
+      builder.CreateStore(result, write_ptr);
+    }
+
+    // result is on the first lane of shared memory
+    indices_t final = write_idx;
+    final[axis] = builder.getInt32(0);
+    Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), final);
+    Value *read_ptr = builder.CreateGEP(base_ptr, read_offset);
+    tgt_->add_barrier(module, builder);
+    result = builder.CreateLoad(read_ptr);
+    if(tmap_.find(ins) == tmap_.end())
+      vmap_[ins] = result;
+    else{
+      distributed_tile *ti = (distributed_tile*)tmap_[ins];
+      ti->set_value(x.first, result);
+    }
   }
-  else if(auto *x = dynamic_cast<ir::store_inst*>(ins)) {
-    distributed_tile* ptrs = (distributed_tile*)tmap_.at(x->get_pointer_operand());
-    tile *scalars = tmap_.at(x->get_value_operand());
-    ptrs->for_each([&](indices_t idx){
-      builder.CreateStore(scalars->get_value(idx), ptrs->get_value(idx));
-    });
-  }
-  else {
-    if(auto *x = dynamic_cast<ir::downcast_inst*>(ins)){
-      vmap_[x] = tmap_[x->get_operand(0)]->get_value({builder.getInt32(0)});
-      return;
-    }
-    if(auto *x = dynamic_cast<ir::reduce_inst*>(ins)){
-      std::map<indices_t, Value*> partial;
-      ir::value *op = ins->get_operand(0);
-      distributed_tile* op_tile = (distributed_tile*)tmap_.at(op);
-      unsigned axis = x->get_axis();
+}
 
-      // reduce within thread
-      op_tile->for_each([&](indices_t idx) {
-        indices_t pidx = idx;
-        pidx.erase(pidx.begin() + axis);
-        Value *current = op_tile->get_value(idx);
-        // current partial result is not initialized -- create
-        if(partial.find(pidx) == partial.end())
-          partial[pidx] = current;
-        // current partial result is initialized -- accumulate
-        else
-          partial[pidx] = builder.CreateFAdd(partial[pidx], current);
-      });
+void selection::lower_dynamic_range_idx(ir::nv_dynamic_range_idx_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* result = (distributed_tile*)tmap_.at(x);
+  result->for_each([&](indices_t idx){
+    assert(idx.size() == 1);
+    BinaryOperator *bin_add = dyn_cast<BinaryOperator>(idx[0]);
+    assert(bin_add);
+    Value *res = bin_add->getOperand(0);
+    result->set_value(idx, res);
+  });
+}
 
-      // reduce within blocks
-      unsigned addr_space = sh_mem_ptr_->getType()->getPointerAddressSpace();
-      Type *res_ty = builder.getFloatTy();
-      Value *base_ptr = builder.CreateBitCast(sh_mem_ptr_, PointerType::get(res_ty, addr_space));
-      for(auto& x: partial) {
-        // current element being computed
-        Value *lane = axes_.at(params_->get_param_group(op, axis)).thread_id;
-        Value *&result = x.second;
-        indices_t write_idx = x.first;
-        write_idx.insert(write_idx.begin() + axis, lane);
+void selection::lower_reshape(ir::reshape_inst* x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* result = (distributed_tile*)tmap_.at(x);
+  ir::value* in = x->get_operand(0);
+  distributed_tile *in_tile = (distributed_tile*)tmap_.at(in);
+  result->for_each([&](indices_t out_idx){
+    unsigned pos = result->get_linear_index(out_idx);
+    indices_t in_idx = in_tile->get_ordered_indices(pos);
+    result->set_value(out_idx, in_tile->get_value(in_idx));
+  });
+}
 
-        // shared memory write  pointer
-        Value *write_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), write_idx);
-        Value *write_ptr = builder.CreateGEP(base_ptr, write_offset);
+void selection::lower_splat(ir::splat_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* result = (distributed_tile*)tmap_.at(x);
+  result->for_each([&](indices_t idx) {
+    result->set_value(idx, llvm_value(x->get_operand(0), builder));
+  });
+}
 
-        // initialize shared memory
-        tgt_->add_barrier(module, builder);
-        builder.CreateStore(result, write_ptr);
-        // build result
-        unsigned depth = params_->get_param(op, "wpt.d" + std::to_string(axis))->get_value();
-        for(unsigned i = depth/2; i > 0; i >>= 1){
-          // current indices
-          indices_t current(write_idx.size(), builder.getInt32(0));
-          current[axis] = builder.getInt32(i);
-          // shared memory offset
-          Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), current);
-          Value *is_active = builder.CreateICmpULT(lane, builder.getInt32(i));
-          read_offset = builder.CreateSelect(is_active, read_offset, builder.getInt32(0));
-          // shared memory read pointer
-          Value *read_ptr = builder.CreateGEP(write_ptr, read_offset);
-          tgt_->add_barrier(module, builder);
-          Value *next = builder.CreateLoad(read_ptr);
-          // accumulate
-          result = builder.CreateFAdd(result, next);
-          // write back
-          builder.CreateStore(result, write_ptr);
-        }
+void selection::lower_broadcast(ir::broadcast_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* result = (distributed_tile*)tmap_.at(x);
+  ir::value* in = x->get_operand(0);
+  const auto& in_shapes = in->get_type()->get_tile_shapes();
+  distributed_tile *in_tile = (distributed_tile*)tmap_.at(in);
+  result->for_each([&](indices_t out_idx){
+    indices_t in_idx = out_idx;
+    for(size_t k = 0; k < in_idx.size(); k++){
+      if(in_shapes[k]->get_value() == 1)
+        in_idx[k] = builder.getInt32(0);
+    }
+    result->set_value(out_idx, in_tile->get_value(in_idx));
+  });
+}
 
-        // result is on the first lane of shared memory
-        indices_t final = write_idx;
-        final[axis] = builder.getInt32(0);
-        Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), final);
-        Value *read_ptr = builder.CreateGEP(base_ptr, read_offset);
-        tgt_->add_barrier(module, builder);
-        result = builder.CreateLoad(read_ptr);
-        if(tmap_.find(ins) == tmap_.end())
-          vmap_[ins] = result;
-        else{
-          distributed_tile *ti = (distributed_tile*)tmap_[ins];
-          ti->set_value(x.first, result);
-        }
-      }
-      return;
-    }
-    tile *ti = tmap_[ins];
-    distributed_tile* result = (distributed_tile*)ti;
-    if(!ins->get_type()->is_tile_ty())
-      return;
-    const auto& shapes = ins->get_type()->get_tile_shapes();
-    // nv_dynamic_range_idx_inst
-    if(dynamic_cast<ir::nv_dynamic_range_idx_inst*>(ins)){
-      result->for_each([&](indices_t idx){
-        assert(idx.size() == 1);
-        BinaryOperator *bin_add = dyn_cast<BinaryOperator>(idx[0]);
-        assert(bin_add);
-        Value *res = bin_add->getOperand(0);
-        result->set_value(idx, res);
-      });
-    }
-    // reshape
-    else if(dynamic_cast<ir::reshape_inst*>(ins)) {
-      ir::value* in = ins->get_operand(0);
-      distributed_tile *in_tile = (distributed_tile*)tmap_.at(in);
-      result->for_each([&](indices_t out_idx){
-        unsigned pos = result->get_linear_index(out_idx);
-        indices_t in_idx = in_tile->get_ordered_indices(pos);
-        result->set_value(out_idx, in_tile->get_value(in_idx));
-      });
-    }
-    // splat
-    else if(dynamic_cast<ir::splat_inst*>(ins)) {
-      result->for_each([&](indices_t idx) {
-        result->set_value(idx, llvm_value(ins->get_operand(0), builder));
-      });
-    }
-    // broadcast
-    else if(dynamic_cast<ir::broadcast_inst*>(ins)) {
-      ir::value* in = ins->get_operand(0);
-      const auto& in_shapes = in->get_type()->get_tile_shapes();
-      distributed_tile *in_tile = (distributed_tile*)tmap_.at(in);
-      result->for_each([&](indices_t out_idx){
-        indices_t in_idx = out_idx;
-        for(size_t k = 0; k < in_idx.size(); k++){
-          if(in_shapes[k]->get_value() == 1)
-            in_idx[k] = builder.getInt32(0);
-        }
-        result->set_value(out_idx, in_tile->get_value(in_idx));
-      });
-    }
-    // vectorize
-    else if(dynamic_cast<ir::vectorize_inst*>(ins)) {
-      distributed_tile* in = (distributed_tile*)tmap_.at(ins->get_operand(0));
-      unsigned vector_size = result->axis(0).contiguous;
-      std::map<unsigned, Value*> packets;
-      in->for_each([&](indices_t idx){
-        unsigned linear = in->get_linear_index(idx);
-        unsigned id = linear / vector_size;
-        Value *in_value = in->get_value(idx);
-        if(linear % vector_size == 0)
-          packets[id] = UndefValue::get(VectorType::get(in_value->getType(), vector_size));
-        packets[id] = builder.CreateInsertElement(packets.at(id), in_value, linear % vector_size);
-      });
-      result->for_each([&](indices_t idx){
-        unsigned linear = in->get_linear_index(idx);
-        unsigned id = linear / vector_size;
-        if(linear % vector_size == 0)
-          result->set_value(idx, packets[id]);
-      });
-    }
-    // copy to shared
-    else if(dynamic_cast<ir::copy_to_shared_inst*>(ins)) {
-      distributed_tile* in = (distributed_tile*)tmap_.at(ins->get_operand(0));
-      in->for_each([&](indices_t idx){
-        ti->set_value(idx, in->get_value(idx));
-      });
-    }
-    // trans
-    else if(auto* x = dynamic_cast<ir::trans_inst*>(ins)) {
-      distributed_tile* in = (distributed_tile*)tmap_.at(ins->get_operand(0));
-      auto perm = x->get_perm();
-      in->for_each([&](indices_t idx){
-        indices_t out_idx(idx.size());
-        for(size_t i = 0; i < idx.size(); i++)
-          out_idx[i] = idx[perm[i]->get_value()];
-        ti->set_value(out_idx, in->get_value(idx));
-      });
-    }
-    else if(buffer_info_->is_shared(ins))
-      return;
-    // dot
-    else if(auto dot = dynamic_cast<ir::dot_inst*>(ins)) {
-      ir::value *A = ins->get_operand(0);
-      ir::value *B = ins->get_operand(1);
-      ir::value *C = ins->get_operand(2);
-      bool AT = dot->is_a_trans();
-      bool BT = dot->is_b_trans();
-      distributed_tile *TC = (distributed_tile*)tmap_.at(C);
-      Type *c_ty = llvm_type(C->get_type()->get_scalar_ty(), ctx);
-      Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {c_ty});
-      auto A_shapes = A->get_type()->get_tile_shapes();
-      size_t red_axis = dot->is_a_trans() ? 0 : 1;
-      unsigned NK = A_shapes[red_axis]->get_value();
+void selection::lower_vectorize(ir::vectorize_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* result = (distributed_tile*)tmap_.at(x);
+  distributed_tile* in = (distributed_tile*)tmap_.at(x->get_operand(0));
+  unsigned vector_size = result->axis(0).contiguous;
+  std::map<unsigned, Value*> packets;
+  in->for_each([&](indices_t idx){
+    unsigned linear = in->get_linear_index(idx);
+    unsigned id = linear / vector_size;
+    Value *in_value = in->get_value(idx);
+    if(linear % vector_size == 0)
+      packets[id] = UndefValue::get(VectorType::get(in_value->getType(), vector_size));
+    packets[id] = builder.CreateInsertElement(packets.at(id), in_value, linear % vector_size);
+  });
+  result->for_each([&](indices_t idx){
+    unsigned linear = in->get_linear_index(idx);
+    unsigned id = linear / vector_size;
+    if(linear % vector_size == 0)
+      result->set_value(idx, packets[id]);
+  });
+}
+
+void selection::lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  shared_tile* result = (shared_tile*)tmap_.at(x);
+  distributed_tile* in = (distributed_tile*)tmap_.at(x->get_operand(0));
+  in->for_each([&](indices_t idx){
+    result->set_value(idx, in->get_value(idx));
+  });
+}
+
+void selection::lower_trans(ir::trans_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  shared_tile* result = (shared_tile*)tmap_.at(x);
+  distributed_tile* in = (distributed_tile*)tmap_.at(x->get_operand(0));
+  auto perm = x->get_perm();
+  in->for_each([&](indices_t idx){
+    indices_t out_idx(idx.size());
+    for(size_t i = 0; i < idx.size(); i++)
+      out_idx[i] = idx[perm[i]->get_value()];
+    result->set_value(out_idx, in->get_value(idx));
+  });
+}
+
+void selection::lower_hmma_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+
+}
+
+void selection::lower_scalar_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+
+}
+
+void selection::lower_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  const auto& shapes = dot->get_type()->get_tile_shapes();
+  distributed_tile* result = (distributed_tile*)tmap_.at(dot);
+  Module *module = fn->getParent();
+  ir::value *A = dot->get_operand(0);
+  ir::value *B = dot->get_operand(1);
+  ir::value *C = dot->get_operand(2);
+  bool AT = dot->is_a_trans();
+  bool BT = dot->is_b_trans();
+  distributed_tile *TC = (distributed_tile*)tmap_.at(C);
+  Type *c_ty = llvm_type(C->get_type()->get_scalar_ty(), ctx);
+  Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {c_ty});
+  auto A_shapes = A->get_type()->get_tile_shapes();
+  size_t red_axis = dot->is_a_trans() ? 0 : 1;
+  unsigned NK = A_shapes[red_axis]->get_value();
 
 //      std::cout << red_axis << " " << NK << std::endl;
-      if(NK != 1)
-      {
-        shared_tile *TA = (shared_tile*)tmap_.at(A);
-        shared_tile *TB = (shared_tile*)tmap_.at(B);
-        if(params_->get_fragment(ins, 0) == analysis::tune::STRIDED_SCAN) {
-          TA->set_vector_size(TC->axis(0).contiguous);
-          TB->set_vector_size(TC->axis(1).contiguous);
-          result->for_each([&](indices_t idx){
-            Value *res = TC->get_value(idx);
-            for(unsigned K = 0; K < NK; ++K){
-              // input indices
-              indices_t a_idx = {idx[0], builder.getInt32(K)};
-              indices_t b_idx = {builder.getInt32(K), idx[1]};
-              if(AT)
-                std::swap(a_idx[0], a_idx[1]);
-              if(BT)
-                std::swap(b_idx[0], b_idx[1]);
-              // add batching dimension
-              for(size_t i = 2; i < idx.size(); i++){
-                a_idx.insert(a_idx.end(), idx[i]);
-                b_idx.insert(b_idx.end(), idx[i]);
-              }
-              // load value
-              Value *a = TA->get_value(a_idx);
-              Value *b = TB->get_value(b_idx);
-              if(a->getType() != c_ty)
-                a = builder.CreateFPCast(a, c_ty);
-              if(b->getType() != c_ty)
-                b = builder.CreateFPCast(b, c_ty);
-              res = builder.CreateCall(f_mul_add, {a, b, res});
-            }
-            result->set_value(idx, res);
-          });
-        }
-        else {
-          TA->set_vector_size(4*pack_size_0_);
-          TB->set_vector_size(4*pack_size_1_);
-          TA->set_return_mode(true);
-          TB->set_return_mode(true);
-
-          std::map<std::vector<Value*>, std::vector<Value*>> fcs;
-
-          result->for_each([&](indices_t idx){
-            std::vector<Value*> key(idx.size() - 2);
-            std::copy(idx.begin() + 2, idx.end(), key.begin());
-            fcs[key].push_back(TC->get_value(idx));
-          });
-
-          Type *fp32_ty = builder.getFloatTy();
-          Type *fp16x2_ty = VectorType::get(builder.getHalfTy(), 2);
-          Type *fp32_pack8_ty = StructType::get(ctx, {fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty});
-          FunctionType *mma_ty = FunctionType::get(fp32_pack8_ty, {fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
-
-          Value *offset_a_i = offset_a_i_;
-          Value *offset_a_k = offset_a_k_;
-          Value *offset_b_j = offset_b_j_;
-          Value *offset_b_k = offset_b_k_;
-
-          Value* u_thread_id = tgt_->get_local_id(builder.GetInsertBlock()->getModule(), builder, 0);
-          if(dot->is_a_trans()){
-            offset_a_i = builder.CreateAdd(offset_a_i, builder.CreateURem(u_thread_id, builder.getInt32(4)));
-            offset_a_k = builder.getInt32(0);
-          }
-          if(!dot->is_b_trans()){
-            offset_b_j = builder.CreateAdd(offset_b_j, builder.CreateURem(u_thread_id, builder.getInt32(4)));
-            offset_b_k = builder.getInt32(0);
-          }
-
-          std::string op_a = dot->is_a_trans() ? "row" : "col";
-          std::string op_b = dot->is_b_trans() ? "row" : "col";
-
-          InlineAsm *mma_fn = InlineAsm::get(mma_ty, " mma.sync.aligned.m8n8k4." + op_a + "." + op_b + ".f32.f16.f16.f32 "
-                                                     "{$0, $1, $2, $3, $4, $5, $6, $7}, "
-                                                     "{$8, $9}, "
-                                                     "{$10, $11}, "
-                                                     "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
-
-          unsigned fpw_0 = params_->get_param(dot, "fpw.d0")->get_value();
-          unsigned fpw_1 = params_->get_param(dot, "fpw.d1")->get_value();
-          unsigned wts_0 = fpw_0 * 8;
-          unsigned wts_1 = fpw_1 * 8;
-          unsigned wpt_0 = params_->get_param(dot, "wpt.d0")->get_value();
-          unsigned wpt_1 = params_->get_param(dot, "wpt.d1")->get_value();
-          unsigned stride_rep_i = wpt_0 * wts_0;
-          unsigned stride_rep_j = wpt_1 * wts_1;
-          unsigned num_rep_i = shapes[0]->get_value() / stride_rep_i;
-          unsigned ld_fc = num_rep_i * 2;
-
-
-          for(auto& x: fcs){
-            std::vector<Value *>& fc = x.second;
-            for(unsigned pack_i = 0; pack_i < num_packs_0_; pack_i++)
-            for(unsigned pack_j = 0; pack_j < num_packs_1_; pack_j++){
-            for(unsigned K = 0; K < NK; K += 4){
-              Value *_K = builder.getInt32(K);
-              Value *current_offset_a_i = builder.CreateAdd(offset_a_i, builder.getInt32(pack_i*stride_rep_i*pack_size_0_));
-              Value *current_offset_b_i = builder.CreateAdd(offset_b_j, builder.getInt32(pack_j*stride_rep_j*pack_size_1_));
-              indices_t idx_a = {current_offset_a_i, builder.CreateAdd(offset_a_k, _K)};
-              indices_t idx_b = {current_offset_b_i, builder.CreateAdd(offset_b_k, _K)};
-              if(dot->is_a_trans())
-                std::swap(idx_a[0], idx_a[1]);
-              if(!dot->is_b_trans())
-                std::swap(idx_b[0], idx_b[1]);
-              idx_a.insert(idx_a.end(), x.first.begin(), x.first.end());
-              idx_b.insert(idx_b.end(), x.first.begin(), x.first.end());
-              Value *ha = TA->get_value(idx_a);
-              Value *hb = TB->get_value(idx_b);
-              for(unsigned ii = 0; ii < pack_size_0_; ii++)
-              for(unsigned jj = 0; jj < pack_size_1_; jj++){
-                Value *ha0 = builder.CreateBitCast(builder.CreateExtractElement(ha, builder.getInt32(ii*pack_size_0_ + 0)), fp16x2_ty);
-                Value *ha1 = builder.CreateBitCast(builder.CreateExtractElement(ha, builder.getInt32(ii*pack_size_0_ + 1)), fp16x2_ty);
-                Value *hb0 = builder.CreateBitCast(builder.CreateExtractElement(hb, builder.getInt32(jj*pack_size_0_ + 0)), fp16x2_ty);
-                Value *hb1 = builder.CreateBitCast(builder.CreateExtractElement(hb, builder.getInt32(jj*pack_size_0_ + 1)), fp16x2_ty);
-                std::vector<size_t> idx = {
-                  (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
-                  (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
-                  (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
-                  (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
-                  (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
-                  (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc,
-                  (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
-                  (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc
-                };
-                Value *nc = builder.CreateCall(mma_fn, {ha0, ha1, hb0, hb1, fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]], fc[idx[4]], fc[idx[5]], fc[idx[6]], fc[idx[7]]});
-                fc[idx[0]] = builder.CreateExtractValue(nc, {0});
-                fc[idx[1]] = builder.CreateExtractValue(nc, {1});
-                fc[idx[2]] = builder.CreateExtractValue(nc, {2});
-                fc[idx[3]] = builder.CreateExtractValue(nc, {3});
-                fc[idx[4]] = builder.CreateExtractValue(nc, {4});
-                fc[idx[5]] = builder.CreateExtractValue(nc, {5});
-                fc[idx[6]] = builder.CreateExtractValue(nc, {6});
-                fc[idx[7]] = builder.CreateExtractValue(nc, {7});
-              }
-            }
-            }
-          }
-
-          // write back
-          unsigned i = 0;
-          result->for_each([&](indices_t idx){
-            std::vector<Value*> key(idx.size() - 2);
-            std::copy(idx.begin() + 2, idx.end(), key.begin());
-            if(i >= fcs.at(key).size())
-              i = 0;
-            result->set_value(idx, fcs.at(key)[i++]);
-          });
-
-          TA->set_return_mode(false);
-          TB->set_return_mode(false);
-        }
-      }
-      else
-      {
-        distributed_tile *TA = (distributed_tile*)tmap_.at(A);
-        distributed_tile *TB = (distributed_tile*)tmap_.at(B);
-        result->for_each([&](indices_t idx){
-          Value *res = TC->get_value(idx);
-          indices_t a_idx = {idx[0], builder.getInt32(0)};
-          indices_t b_idx = {builder.getInt32(0), idx[1]};
+  if(NK != 1)
+  {
+    shared_tile *TA = (shared_tile*)tmap_.at(A);
+    shared_tile *TB = (shared_tile*)tmap_.at(B);
+    if(params_->get_fragment(dot, 0) == analysis::tune::STRIDED_SCAN) {
+      TA->set_vector_size(TC->axis(0).contiguous);
+      TB->set_vector_size(TC->axis(1).contiguous);
+      result->for_each([&](indices_t idx){
+        Value *res = TC->get_value(idx);
+        for(unsigned K = 0; K < NK; ++K){
+          // input indices
+          indices_t a_idx = {idx[0], builder.getInt32(K)};
+          indices_t b_idx = {builder.getInt32(K), idx[1]};
           if(AT)
             std::swap(a_idx[0], a_idx[1]);
           if(BT)
             std::swap(b_idx[0], b_idx[1]);
+          // add batching dimension
+          for(size_t i = 2; i < idx.size(); i++){
+            a_idx.insert(a_idx.end(), idx[i]);
+            b_idx.insert(b_idx.end(), idx[i]);
+          }
+          // load value
           Value *a = TA->get_value(a_idx);
           Value *b = TB->get_value(b_idx);
           if(a->getType() != c_ty)
@@ -1189,54 +1054,196 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
           if(b->getType() != c_ty)
             b = builder.CreateFPCast(b, c_ty);
           res = builder.CreateCall(f_mul_add, {a, b, res});
-          result->set_value(idx, res);
-        });
-      }
+        }
+        result->set_value(idx, res);
+      });
     }
-    else if(auto *ld = dynamic_cast<ir::masked_load_inst*>(ins)){
-      // find vector size
-      ir::value *ptr = ld->get_pointer_operand();
-      unsigned starting_multiple = axis_info_->get_starting_multiple(ptr);
-      unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
-      unsigned alignment = std::min(starting_multiple, max_contiguous);
-      unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
-      distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
-      distributed_tile *masks = (distributed_tile*)tmap_.at(ld->get_mask_operand());
-      distributed_tile *false_values = (distributed_tile*)tmap_.at(ld->get_false_value_operand());
-      std::map<unsigned, Value*> packets;
-      result->for_each([&](indices_t idx){
-        unsigned linear = result->get_linear_index(idx);
-        unsigned id = linear / vector_size;
-        if(linear % vector_size == 0) {
-          Value *ptr = pointers->get_value(idx);
-          ConstantInt *cst = nullptr;
-          if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
-          if(gep->getNumIndices() == 1){
-            cst = dyn_cast<ConstantInt>(gep->idx_begin());
-          }
+    else {
+      TA->set_vector_size(4*pack_size_0_);
+      TB->set_vector_size(4*pack_size_1_);
+      TA->set_return_mode(true);
+      TB->set_return_mode(true);
 
-          ptr = builder.CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
-                                                            ptr->getType()->getPointerAddressSpace()));
-          Value *mask = masks->get_value(idx);
-          BasicBlock *current_bb = builder.GetInsertBlock();
-          BasicBlock *mask_then_bb = BasicBlock::Create(ctx, "mask_then", fn);
-          BasicBlock *mask_done_bb = BasicBlock::Create(ctx, "mask_done", fn);
-          builder.CreateCondBr(mask, mask_then_bb, mask_done_bb);
-          builder.SetInsertPoint(mask_then_bb);
-          Value *result_then = builder.CreateLoad(ptr);
-          builder.CreateBr(mask_done_bb);
-          builder.SetInsertPoint(mask_done_bb);
-          Value *current_result = nullptr;
-          if(false_values){
-            current_result = builder.CreatePHI(result_then->getType(), 2);
-            ((PHINode*)current_result)->addIncoming(result_then, mask_then_bb);
-            Value *result_false = false_values->get_value(idx);
-            if(result_then->getType()->isVectorTy())
-              result_false = builder.CreateVectorSplat(vector_size, result_false);
-            ((PHINode*)current_result)->addIncoming(result_false, current_bb);
+      std::map<std::vector<Value*>, std::vector<Value*>> fcs;
+
+      result->for_each([&](indices_t idx){
+        std::vector<Value*> key(idx.size() - 2);
+        std::copy(idx.begin() + 2, idx.end(), key.begin());
+        fcs[key].push_back(TC->get_value(idx));
+      });
+
+      Type *fp32_ty = builder.getFloatTy();
+      Type *fp16x2_ty = VectorType::get(builder.getHalfTy(), 2);
+      Type *fp32_pack8_ty = StructType::get(ctx, {fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty});
+      FunctionType *mma_ty = FunctionType::get(fp32_pack8_ty, {fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
+
+      Value *offset_a_i = offset_a_i_;
+      Value *offset_a_k = offset_a_k_;
+      Value *offset_b_j = offset_b_j_;
+      Value *offset_b_k = offset_b_k_;
+
+      Value* u_thread_id = tgt_->get_local_id(builder.GetInsertBlock()->getModule(), builder, 0);
+      if(dot->is_a_trans()){
+        offset_a_i = builder.CreateAdd(offset_a_i, builder.CreateURem(u_thread_id, builder.getInt32(4)));
+        offset_a_k = builder.getInt32(0);
+      }
+      if(!dot->is_b_trans()){
+        offset_b_j = builder.CreateAdd(offset_b_j, builder.CreateURem(u_thread_id, builder.getInt32(4)));
+        offset_b_k = builder.getInt32(0);
+      }
+
+      std::string op_a = dot->is_a_trans() ? "row" : "col";
+      std::string op_b = dot->is_b_trans() ? "row" : "col";
+
+      InlineAsm *mma_fn = InlineAsm::get(mma_ty, " mma.sync.aligned.m8n8k4." + op_a + "." + op_b + ".f32.f16.f16.f32 "
+                                                 "{$0, $1, $2, $3, $4, $5, $6, $7}, "
+                                                 "{$8, $9}, "
+                                                 "{$10, $11}, "
+                                                 "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
+
+      unsigned fpw_0 = params_->get_param(dot, "fpw.d0")->get_value();
+      unsigned fpw_1 = params_->get_param(dot, "fpw.d1")->get_value();
+      unsigned wts_0 = fpw_0 * 8;
+      unsigned wts_1 = fpw_1 * 8;
+      unsigned wpt_0 = params_->get_param(dot, "wpt.d0")->get_value();
+      unsigned wpt_1 = params_->get_param(dot, "wpt.d1")->get_value();
+      unsigned stride_rep_i = wpt_0 * wts_0;
+      unsigned stride_rep_j = wpt_1 * wts_1;
+      unsigned num_rep_i = shapes[0]->get_value() / stride_rep_i;
+      unsigned ld_fc = num_rep_i * 2;
+
+
+      for(auto& x: fcs){
+        std::vector<Value *>& fc = x.second;
+        for(unsigned pack_i = 0; pack_i < num_packs_0_; pack_i++)
+        for(unsigned pack_j = 0; pack_j < num_packs_1_; pack_j++){
+        for(unsigned K = 0; K < NK; K += 4){
+          Value *_K = builder.getInt32(K);
+          Value *current_offset_a_i = builder.CreateAdd(offset_a_i, builder.getInt32(pack_i*stride_rep_i*pack_size_0_));
+          Value *current_offset_b_i = builder.CreateAdd(offset_b_j, builder.getInt32(pack_j*stride_rep_j*pack_size_1_));
+          indices_t idx_a = {current_offset_a_i, builder.CreateAdd(offset_a_k, _K)};
+          indices_t idx_b = {current_offset_b_i, builder.CreateAdd(offset_b_k, _K)};
+          if(dot->is_a_trans())
+            std::swap(idx_a[0], idx_a[1]);
+          if(!dot->is_b_trans())
+            std::swap(idx_b[0], idx_b[1]);
+          idx_a.insert(idx_a.end(), x.first.begin(), x.first.end());
+          idx_b.insert(idx_b.end(), x.first.begin(), x.first.end());
+          Value *ha = TA->get_value(idx_a);
+          Value *hb = TB->get_value(idx_b);
+          for(unsigned ii = 0; ii < pack_size_0_; ii++)
+          for(unsigned jj = 0; jj < pack_size_1_; jj++){
+            Value *ha0 = builder.CreateBitCast(builder.CreateExtractElement(ha, builder.getInt32(ii*pack_size_0_ + 0)), fp16x2_ty);
+            Value *ha1 = builder.CreateBitCast(builder.CreateExtractElement(ha, builder.getInt32(ii*pack_size_0_ + 1)), fp16x2_ty);
+            Value *hb0 = builder.CreateBitCast(builder.CreateExtractElement(hb, builder.getInt32(jj*pack_size_0_ + 0)), fp16x2_ty);
+            Value *hb1 = builder.CreateBitCast(builder.CreateExtractElement(hb, builder.getInt32(jj*pack_size_0_ + 1)), fp16x2_ty);
+            std::vector<size_t> idx = {
+              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 0)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 1)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 0) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 2)*ld_fc,
+              (pack_i*2*pack_size_0_ + ii*2 + 1) + (pack_j*4*pack_size_1_ + jj*4 + 3)*ld_fc
+            };
+            Value *nc = builder.CreateCall(mma_fn, {ha0, ha1, hb0, hb1, fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]], fc[idx[4]], fc[idx[5]], fc[idx[6]], fc[idx[7]]});
+            fc[idx[0]] = builder.CreateExtractValue(nc, {0});
+            fc[idx[1]] = builder.CreateExtractValue(nc, {1});
+            fc[idx[2]] = builder.CreateExtractValue(nc, {2});
+            fc[idx[3]] = builder.CreateExtractValue(nc, {3});
+            fc[idx[4]] = builder.CreateExtractValue(nc, {4});
+            fc[idx[5]] = builder.CreateExtractValue(nc, {5});
+            fc[idx[6]] = builder.CreateExtractValue(nc, {6});
+            fc[idx[7]] = builder.CreateExtractValue(nc, {7});
           }
-          else
-            current_result = result_then;
+        }
+        }
+      }
+
+      // write back
+      unsigned i = 0;
+      result->for_each([&](indices_t idx){
+        std::vector<Value*> key(idx.size() - 2);
+        std::copy(idx.begin() + 2, idx.end(), key.begin());
+        if(i >= fcs.at(key).size())
+          i = 0;
+        result->set_value(idx, fcs.at(key)[i++]);
+      });
+
+      TA->set_return_mode(false);
+      TB->set_return_mode(false);
+    }
+  }
+  else
+  {
+    distributed_tile *TA = (distributed_tile*)tmap_.at(A);
+    distributed_tile *TB = (distributed_tile*)tmap_.at(B);
+    result->for_each([&](indices_t idx){
+      Value *res = TC->get_value(idx);
+      indices_t a_idx = {idx[0], builder.getInt32(0)};
+      indices_t b_idx = {builder.getInt32(0), idx[1]};
+      if(AT)
+        std::swap(a_idx[0], a_idx[1]);
+      if(BT)
+        std::swap(b_idx[0], b_idx[1]);
+      Value *a = TA->get_value(a_idx);
+      Value *b = TB->get_value(b_idx);
+      if(a->getType() != c_ty)
+        a = builder.CreateFPCast(a, c_ty);
+      if(b->getType() != c_ty)
+        b = builder.CreateFPCast(b, c_ty);
+      res = builder.CreateCall(f_mul_add, {a, b, res});
+      result->set_value(idx, res);
+    });
+  }
+}
+
+void selection::lower_masked_load(ir::masked_load_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  // find vector size
+  distributed_tile* result = (distributed_tile*)tmap_.at(x);
+  ir::value *ptr = x->get_pointer_operand();
+  unsigned starting_multiple = axis_info_->get_starting_multiple(ptr);
+  unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
+  unsigned alignment = std::min(starting_multiple, max_contiguous);
+  unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
+  distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
+  distributed_tile *masks = (distributed_tile*)tmap_.at(x->get_mask_operand());
+  distributed_tile *false_values = (distributed_tile*)tmap_.at(x->get_false_value_operand());
+  std::map<unsigned, Value*> packets;
+  result->for_each([&](indices_t idx){
+    unsigned linear = result->get_linear_index(idx);
+    unsigned id = linear / vector_size;
+    if(linear % vector_size == 0) {
+      Value *ptr = pointers->get_value(idx);
+      ConstantInt *cst = nullptr;
+      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
+      if(gep->getNumIndices() == 1){
+        cst = dyn_cast<ConstantInt>(gep->idx_begin());
+      }
+
+      ptr = builder.CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
+                                                        ptr->getType()->getPointerAddressSpace()));
+      Value *mask = masks->get_value(idx);
+      BasicBlock *current_bb = builder.GetInsertBlock();
+      BasicBlock *mask_then_bb = BasicBlock::Create(ctx, "mask_then", fn);
+      BasicBlock *mask_done_bb = BasicBlock::Create(ctx, "mask_done", fn);
+      builder.CreateCondBr(mask, mask_then_bb, mask_done_bb);
+      builder.SetInsertPoint(mask_then_bb);
+      Value *result_then = builder.CreateLoad(ptr);
+      builder.CreateBr(mask_done_bb);
+      builder.SetInsertPoint(mask_done_bb);
+      Value *current_result = nullptr;
+      if(false_values){
+        current_result = builder.CreatePHI(result_then->getType(), 2);
+        ((PHINode*)current_result)->addIncoming(result_then, mask_then_bb);
+        Value *result_false = false_values->get_value(idx);
+        if(result_then->getType()->isVectorTy())
+          result_false = builder.CreateVectorSplat(vector_size, result_false);
+        ((PHINode*)current_result)->addIncoming(result_false, current_bb);
+      }
+      else
+        current_result = result_then;
 
 //          std::string offset = "";
 //          if(cst)
@@ -1250,65 +1257,102 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
 //          InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,=r,=r,=r,=r,l", true);
 //          Value *result = builder.CreateCall(iasm, {mask, ptr});
 
-          packets[id] = current_result;
-        }
-      });
-      // extract result element
-      result->for_each([&](indices_t idx){
-        unsigned linear = result->get_linear_index(idx);
-        unsigned id = linear / vector_size;
+      packets[id] = current_result;
+    }
+  });
+  // extract result element
+  result->for_each([&](indices_t idx){
+    unsigned linear = result->get_linear_index(idx);
+    unsigned id = linear / vector_size;
 //        Value *tmp = builder.CreateExtractValue(packets.at(id), {(linear % vector_size) / 2});
 //        Value *res = builder.CreateExtractElement(tmp, (linear % vector_size) % 2);
 //        result->set_value(idx, res);
-        result->set_value(idx, builder.CreateExtractElement(packets.at(id), linear % vector_size));
-      });
+    result->set_value(idx, builder.CreateExtractElement(packets.at(id), linear % vector_size));
+  });
+}
+
+void selection::lower_load(ir::load_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* result = (distributed_tile*)tmap_.at(x);
+  // find vector size
+  ir::value *ptr = x->get_pointer_operand();
+  unsigned starting_multiple = axis_info_->get_starting_multiple(ptr);
+  unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
+  unsigned alignment = std::min(starting_multiple, max_contiguous);
+  unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
+  distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
+  // vector loads
+  std::map<unsigned, Value*> packets;
+  result->for_each([&](indices_t idx){
+    unsigned linear = result->get_linear_index(idx);
+    unsigned id = linear / vector_size;
+    if(linear % vector_size == 0) {
+      Value *ptr = pointers->get_value(idx);
+      ConstantInt *cst = nullptr;
+      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
+      if(gep->getNumIndices() == 1)
+        cst = dyn_cast<ConstantInt>(gep->idx_begin());
+      ptr = builder.CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
+                                                        ptr->getType()->getPointerAddressSpace()));
+      packets[id] = builder.CreateLoad(ptr);
     }
-    else if(auto *ld = dynamic_cast<ir::load_inst*>(ins)){
-      // find vector size
-      ir::value *ptr = ld->get_pointer_operand();
-      unsigned starting_multiple = axis_info_->get_starting_multiple(ptr);
-      unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
-      unsigned alignment = std::min(starting_multiple, max_contiguous);
-      unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
-      distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
-      // vector loads
-      std::map<unsigned, Value*> packets;
-      result->for_each([&](indices_t idx){
-        unsigned linear = result->get_linear_index(idx);
-        unsigned id = linear / vector_size;
-        if(linear % vector_size == 0) {
-          Value *ptr = pointers->get_value(idx);
-          ConstantInt *cst = nullptr;
-          if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
-          if(gep->getNumIndices() == 1)
-            cst = dyn_cast<ConstantInt>(gep->idx_begin());
-          ptr = builder.CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
-                                                            ptr->getType()->getPointerAddressSpace()));
-          packets[id] = builder.CreateLoad(ptr);
-        }
-      });
-      // extract result element
-      result->for_each([&](indices_t idx){
-        unsigned linear = result->get_linear_index(idx);
-        unsigned id = linear / vector_size;
-        result->set_value(idx, builder.CreateExtractElement(packets.at(id), linear % vector_size));
-      });
-    }
-    // element-wise
-    else {
-      result->for_each([&](indices_t idx){
-        auto value = [&](ir::value *x) {
-          if(auto *cst = dynamic_cast<ir::constant_int*>(x))
-            return (Value*)llvm_constant(cst, ctx);
-          else if(x->get_type()->is_tile_ty())
-            return tmap_.at(x)->get_value(idx);
-          else
-            return llvm_value(x, builder);
-        };
-        result->set_value(idx, llvm_inst(ins, value, builder));
-      });
-    }
-  }
+  });
+  // extract result element
+  result->for_each([&](indices_t idx){
+    unsigned linear = result->get_linear_index(idx);
+    unsigned id = linear / vector_size;
+    result->set_value(idx, builder.CreateExtractElement(packets.at(id), linear % vector_size));
+  });
+}
+
+void selection::lower_elementwise(ir::instruction *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* result = (distributed_tile*)tmap_.at(x);
+  result->for_each([&](indices_t idx){
+    auto value = [&](ir::value *v) {
+      if(auto *cst = dynamic_cast<ir::constant_int*>(v))
+        return (Value*)llvm_constant(cst, ctx);
+      else if(v->get_type()->is_tile_ty())
+        return tmap_.at(v)->get_value(idx);
+      else
+        return llvm_value(v, builder);
+    };
+    result->set_value(idx, llvm_inst(x, value, builder));
+  });
+}
+
+void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &builder) {
+  BasicBlock *block = builder.GetInsertBlock();
+  LLVMContext &ctx = builder.getContext();
+  Function *fn = block->getParent();
+  if(auto *x = dynamic_cast<ir::masked_store_inst*>(ins))
+    lower_masked_store(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::store_inst*>(ins))
+    lower_store(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::downcast_inst*>(ins))
+    lower_downcast(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::reduce_inst*>(ins))
+    lower_reduce(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::nv_dynamic_range_idx_inst*>(ins))
+    lower_dynamic_range_idx(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::reshape_inst*>(ins))
+    lower_reshape(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::splat_inst*>(ins))
+    lower_splat(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::broadcast_inst*>(ins))
+    lower_broadcast(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::vectorize_inst*>(ins))
+    lower_vectorize(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::copy_to_shared_inst*>(ins))
+    lower_copy_to_shared(x, ctx, fn, builder);
+  else if(auto* x = dynamic_cast<ir::trans_inst*>(ins))
+    lower_trans(x, ctx, fn, builder);
+  else if(auto x = dynamic_cast<ir::dot_inst*>(ins))
+    lower_dot(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::masked_load_inst*>(ins))
+    lower_masked_load(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::load_inst*>(ins))
+    lower_load(x, ctx, fn, builder);
+  else if(!buffer_info_->is_shared(ins))
+    lower_elementwise(ins, ctx, fn, builder);
 }
 
 void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {

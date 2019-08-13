@@ -1,6 +1,6 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
-#include "triton/codegen/transform/trans.h"
+#include "triton/codegen/transform/peephole.h"
 
 namespace triton {
 namespace codegen{
@@ -70,82 +70,94 @@ bool peephole::rewrite_trans_phi(ir::instruction* value, ir::builder& builder) {
   if(users.size() > 1 || ops.size() > 1)
     return false;
   ir::value* op = *ops.begin();
+  // trans(phi) -> phi(trans(), trans()...)
   auto* phi = dynamic_cast<ir::phi_node*>(op);
   if(!phi)
     return false;
-  ir::value* new_phi = rewrite_trans_phi_impl(op, builder, trans->get_perm());
+  ir::value* new_phi = rewrite_trans_phi_impl(phi, builder, trans->get_perm());
   trans->replace_all_uses_with(new_phi);
+
   return true;
 }
 
-bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
-  if(auto dot = dynamic_cast<ir::dot_inst*>(value)){
-    builder.set_insert_point(value);
-    ir::value *A = dot->get_operand(0);
-    ir::value *B = dot->get_operand(1);
-    ir::value *D = dot->get_operand(2);
-    bool trans_a = is_trans(A);
-    bool trans_b = is_trans(B);
-    // NN
-    if(!dot->is_a_trans() && !dot->is_b_trans()){
-      if(is_hmma(dot)) {
-        ir::value *AA = A;
-        ir::value *BB = B;
-        if(trans_a){
-          AA = ((ir::trans_inst*)A)->get_operand(0);
-        }
-        else{
-          if(auto *T = dynamic_cast<ir::trans_inst*>(A)){
-            std::vector<ir::constant_int*> perm(T->get_perm());
-            std::swap(perm[0], perm[1]);
-            AA = builder.create_trans(T->get_operand(0), perm);
-            T->replace_all_uses_with(AA);
-            trans_a = true;
-          }
-        }
-        if(trans_b){
-          BB = ((ir::trans_inst*)B)->get_operand(0);
-        }
-        else{
-          if(auto *T = dynamic_cast<ir::trans_inst*>(A)){
-            std::vector<ir::constant_int*> perm(T->get_perm());
-            std::swap(perm[0], perm[1]);
-            AA = builder.create_trans(T->get_operand(0), perm);
-            T->replace_all_uses_with(AA);
-            trans_a = true;
-          }
-        }
-        ir::instruction *dot_atbt = builder.insert(ir::dot_inst::create(AA, BB, D, trans_a, trans_b));
-        dot->replace_all_uses_with(dot_atbt);
-        return true;
-      }
-      else{
-        // dot(op(a), trans(b))
-        if(trans_b){
-          ir::value* BB = ((ir::trans_inst*)B)->get_operand(0);
-          ir::instruction *NT = builder.insert(ir::dot_inst::create_nt(A, BB, D));
-          dot->replace_all_uses_with(NT);
-          return true;
-        }
-        // dot(op(a), b)
-        if(!trans_b){
-          // create permutations
-          size_t size = B->get_type()->get_tile_shapes().size();
-          std::vector<ir::constant_int*> perm(size);
-          ir::type *int32_ty = ir::type::get_int32_ty(B->get_type()->get_context());
-          for(size_t i = 0; i < size; i++)
-            perm[i] = ir::constant_int::get(int32_ty, i);
-          std::swap(perm[0], perm[1]);
-          // replace NN -> NT (trans)
-          ir::value* BB = builder.create_trans(B, perm);
-          ir::instruction *NT = builder.insert(ir::dot_inst::create_nt(A, BB, D));
-          dot->replace_all_uses_with(NT);
-          return true;
-        }
-      }
+bool peephole::rewrite_dot_hmma(ir::dot_inst *dot, ir::builder& builder, bool trans_a, bool trans_b,
+                                ir::value *A, ir::value *B, ir::value *D){
+  ir::value *AA = A;
+  ir::value *BB = B;
+  if(trans_a){
+    AA = ((ir::trans_inst*)A)->get_operand(0);
+  }
+  else{
+    if(auto *T = dynamic_cast<ir::trans_inst*>(A)){
+      std::vector<ir::constant_int*> perm(T->get_perm());
+      std::swap(perm[0], perm[1]);
+      AA = builder.create_trans(T->get_operand(0), perm);
+      T->replace_all_uses_with(AA);
+      trans_a = true;
     }
   }
+  if(trans_b){
+    BB = ((ir::trans_inst*)B)->get_operand(0);
+  }
+  else{
+    if(auto *T = dynamic_cast<ir::trans_inst*>(A)){
+      std::vector<ir::constant_int*> perm(T->get_perm());
+      std::swap(perm[0], perm[1]);
+      AA = builder.create_trans(T->get_operand(0), perm);
+      T->replace_all_uses_with(AA);
+      trans_a = true;
+    }
+  }
+  ir::instruction *dot_atbt = builder.insert(ir::dot_inst::create(AA, BB, D, trans_a, trans_b));
+  dot->replace_all_uses_with(dot_atbt);
+  return true;
+}
+
+bool peephole::rewrite_dot_fp32(ir::dot_inst *dot, ir::builder& builder, bool trans_a, bool trans_b,
+                                ir::value *A, ir::value *B, ir::value *D){
+  // dot(op(a), trans(b))
+  if(trans_b){
+    ir::value* BB = ((ir::trans_inst*)B)->get_operand(0);
+    ir::instruction *NT = builder.insert(ir::dot_inst::create_nt(A, BB, D));
+    dot->replace_all_uses_with(NT);
+    return true;
+  }
+  // dot(op(a), b)
+  if(!trans_b){
+    // create permutations
+    size_t size = B->get_type()->get_tile_shapes().size();
+    std::vector<ir::constant_int*> perm(size);
+    ir::type *int32_ty = ir::type::get_int32_ty(B->get_type()->get_context());
+    for(size_t i = 0; i < size; i++)
+      perm[i] = ir::constant_int::get(int32_ty, i);
+    std::swap(perm[0], perm[1]);
+    // replace NN -> NT (trans)
+    ir::value* BB = builder.create_trans(B, perm);
+    ir::instruction *NT = builder.insert(ir::dot_inst::create_nt(A, BB, D));
+    dot->replace_all_uses_with(NT);
+    return true;
+  }
   return false;
+}
+
+bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
+  auto dot = dynamic_cast<ir::dot_inst*>(value);
+  if(!dot)
+    return false;
+  builder.set_insert_point(value);
+  ir::value *A = dot->get_operand(0);
+  ir::value *B = dot->get_operand(1);
+  ir::value *D = dot->get_operand(2);
+  bool trans_a = is_trans(A);
+  bool trans_b = is_trans(B);
+  // only consider dot-nn
+  if(dot->is_a_trans() || dot->is_b_trans())
+    return false;
+  // hmma
+  if(is_hmma(dot))
+    return rewrite_dot_hmma(dot, builder, trans_a, trans_b, A, B, D);
+  else
+    return rewrite_dot_fp32(dot, builder, trans_a, trans_b, A, B, D);
 }
 
 bool peephole::rewrite_unit_red(ir::instruction *value, ir::builder& builder){
@@ -190,28 +202,40 @@ bool peephole::rewrite_gep_ptr_min_off_plus_off(ir::instruction *value, ir::buil
 void peephole::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
   // keep track of whether any modification was made
-  bool was_modified = false;
+  std::set<ir::value*> seen;
+  size_t n_seen;
 
   // rewrite dots first
   do{
-    was_modified = false;
-    for(ir::function *fn: mod.get_function_list())
-    for(ir::basic_block *block: fn->blocks())
-    for(ir::instruction* i: block->get_inst_list())
-      rewrite_dot(i, builder);
-  }while(was_modified);
-
-  // rewrite other ops
-  do{
-    was_modified = false;
+    n_seen = seen.size();
     for(ir::function *fn: mod.get_function_list())
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction* i: block->get_inst_list()){
+      if(seen.find(i) != seen.end())
+        continue;
+      bool was_modified = rewrite_dot(i, builder);
+      if(was_modified)
+        seen.insert(i);
+    }
+  }while(seen.size() != n_seen);
+
+  // rewrite other ops
+  seen.clear();
+  do{
+    n_seen = seen.size();
+    for(ir::function *fn: mod.get_function_list())
+    for(ir::basic_block *block: fn->blocks())
+    for(ir::instruction* i: block->get_inst_list()){
+      if(seen.find(i) != seen.end())
+        continue;
+      bool was_modified = false;
       was_modified = was_modified || rewrite_trans_phi(i, builder);
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);
+      if(was_modified)
+        seen.insert(i);
     }
-  }while(was_modified);
+  }while(seen.size() != n_seen);
 }
 
 }
