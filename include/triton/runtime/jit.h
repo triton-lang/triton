@@ -58,7 +58,8 @@ public:
 
   struct passes_wrapper {
     passes_wrapper(codegen::target* target)
-                    : shmem_liveness(&shmem_info),
+                    : tune(0),
+                      shmem_liveness(&shmem_info),
                       shmem_allocation(&shmem_liveness, &shmem_info, &tune),
                       shmem_barriers(&shmem_allocation, &shmem_info),
                       vectorize(&tune),

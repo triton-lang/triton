@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <functional>
+#include <algorithm>
 #include "triton/driver/device.h"
 #include "triton/driver/stream.h"
 
@@ -29,7 +30,7 @@ private:
 
 inline double bench(std::function<void()> const & op, driver::stream * stream)
 {
-  const driver::device * device = stream->context()->device();
+//  const driver::device * device = stream->context()->device();
   timer tmr;
   std::vector<size_t> times;
   double total_time = 0;
