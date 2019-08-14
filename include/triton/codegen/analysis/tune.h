@@ -38,16 +38,14 @@ private:
   void create_grids(std::vector<ir::value*> &grids,
                     std::map<unsigned, ir::value*> &references,
                     ir::function *fn);
-  unsigned get_req_num_threads(ir::instruction *i);
 
 
 public:
-  tune();
+  tune(size_t num_warps);
   std::vector<ir::metaparameter *> get_params(ir::module& mod);
-  std::map<std::string, ir::metaparameter *> get_params(ir::instruction* i);
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
-  fragment_t get_fragment(ir::value *value, unsigned ax) { return fragments_.at({value, ax}); }
   unsigned get_param_group(ir::value *value, unsigned ax);
+  fragment_t get_fragment(ir::value *value, unsigned ax) { return fragments_.at({value, ax}); }
   void copy(ir::value *dst, ir::value *src);
   bool check_constraints(std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);
@@ -64,7 +62,7 @@ private:
   std::map<unsigned, ir::metaparameter*> global_range_sizes_;
   std::vector<ir::value*> grids_;
   std::map<ir::value*, std::map<unsigned, unsigned>> groups_;
-  ir::metaparameter* num_warps_;
+  size_t num_warps_;
 };
 
 

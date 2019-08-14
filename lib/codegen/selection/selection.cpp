@@ -1208,8 +1208,8 @@ void selection::lower_masked_load(ir::masked_load_inst *x, LLVMContext &ctx, Fun
   // find vector size
   distributed_tile* result = (distributed_tile*)tmap_.at(x);
   ir::value *ptr = x->get_pointer_operand();
-  unsigned starting_multiple = axis_info_->get_starting_multiple(ptr);
-  unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
+  unsigned starting_multiple = alignment_->get_starting_multiple(ptr);
+  unsigned max_contiguous = alignment_->get_max_contiguous(ptr);
   unsigned alignment = std::min(starting_multiple, max_contiguous);
   unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
   distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
@@ -1280,8 +1280,8 @@ void selection::lower_load(ir::load_inst *x, LLVMContext &ctx, Function *fn, IRB
   distributed_tile* result = (distributed_tile*)tmap_.at(x);
   // find vector size
   ir::value *ptr = x->get_pointer_operand();
-  unsigned starting_multiple = axis_info_->get_starting_multiple(ptr);
-  unsigned max_contiguous = axis_info_->get_max_contiguous(ptr);
+  unsigned starting_multiple = alignment_->get_starting_multiple(ptr);
+  unsigned max_contiguous = alignment_->get_max_contiguous(ptr);
   unsigned alignment = std::min(starting_multiple, max_contiguous);
   unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
   distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);

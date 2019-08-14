@@ -66,16 +66,18 @@ public:
   type *get_pointer_element_ty() const;
 
   // primitive predicates
-  bool is_void_ty() const     { return id_ == VoidTyID; }
-  bool is_half_ty() const     { return id_ == HalfTyID; }
-  bool is_float_ty() const    { return id_ == FloatTyID; }
-  bool is_double_ty() const   { return id_ == DoubleTyID; }
-  bool is_label_ty()  const   { return id_ == LabelTyID;}
-  bool is_metadata_ty() const { return id_ == MetadataTyID; }
-  bool is_token_ty() const    { return id_ == TokenTyID; }
-  bool is_integer_ty() const  { return id_ == IntegerTyID; }
-  bool is_pointer_ty() const  { return id_ == PointerTyID; }
-  bool is_tile_ty() const     { return id_ == TileTyID; }
+  bool is_void_ty() const               { return id_ == VoidTyID; }
+  bool is_half_ty() const               { return id_ == HalfTyID; }
+  bool is_float_ty() const              { return id_ == FloatTyID; }
+  bool is_double_ty() const             { return id_ == DoubleTyID; }
+  bool is_label_ty()  const             { return id_ == LabelTyID;}
+  bool is_metadata_ty() const           { return id_ == MetadataTyID; }
+  bool is_token_ty() const              { return id_ == TokenTyID; }
+  bool is_integer_ty() const            { return id_ == IntegerTyID; }
+  bool is_integer_ty(unsigned bitwidth) { return is_integer_ty() &&
+                                                 get_integer_bitwidth() == bitwidth;}
+  bool is_pointer_ty() const            { return id_ == PointerTyID; }
+  bool is_tile_ty() const               { return id_ == TileTyID; }
 
   // Composite predicates
   bool is_int_or_tileint_ty();

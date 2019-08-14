@@ -54,6 +54,7 @@ size_t buffer::size() {
   return size_;
 }
 
+
 buffer* buffer::create(driver::context* ctx, size_t size) {
   switch(ctx->backend()){
   case CUDA: return new cu_buffer(ctx, size);

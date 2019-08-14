@@ -185,8 +185,8 @@ private:
 
 
 public:
-  selection(analysis::shmem::allocation *alloc, analysis::tune *params, analysis::shmem::info *buffer_info, analysis::alignment_info *ax_info, target *tgt)
-    : alloc_(alloc), params_(params), buffer_info_(buffer_info), axis_info_(ax_info), tgt_(tgt){ }
+  selection(analysis::shmem::allocation *alloc, analysis::tune *params, analysis::shmem::info *buffer_info, analysis::alignment_info *alignment, target *tgt)
+    : alloc_(alloc), params_(params), buffer_info_(buffer_info), alignment_(alignment), tgt_(tgt){ }
 
   void run(ir::module &src, Module &dst);
 
@@ -197,7 +197,7 @@ private:
   analysis::tune *params_;
   target *tgt_;
   analysis::shmem::info *buffer_info_;
-  analysis::alignment_info *axis_info_;
+  analysis::alignment_info *alignment_;
   std::map<unsigned, distributed_axis> axes_;
   Value *sh_mem_ptr_;
   Value *offset_a_i_, *offset_a_k_;
