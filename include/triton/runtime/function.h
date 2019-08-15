@@ -97,6 +97,7 @@ public:
   function(const std::string& src);
   void operator()(const std::vector<arg>& args, const std::array<size_t, 3>& grid, driver::stream* stream);
   void operator()(const std::vector<arg>& args, const grid_fn_ty& grid, driver::stream *stream);
+  std::string make_tensorflow_src(const std::vector<size_t> &outputs, const std::string &macro);
 
 private:
   // execution context

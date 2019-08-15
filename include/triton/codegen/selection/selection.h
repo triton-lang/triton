@@ -1,7 +1,6 @@
 #ifndef TDL_INCLUDE_CODEGEN_SELECTION_H
 #define TDL_INCLUDE_CODEGEN_SELECTION_H
 
-#include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include "triton/ir/context.h"
 #include "triton/ir/module.h"
@@ -16,6 +15,7 @@ namespace llvm{
   class Instruction;
   class Constant;
   class LLVMContext;
+  class Module;
 }
 
 namespace triton{
