@@ -36,7 +36,7 @@ namespace transform{
 
 inline ir::instruction* reassociate::is_bin_add(ir::value *x) {
   ir::binary_operator *bin_op = dynamic_cast<ir::binary_operator*>(x);
-  bool is_bin_add = bin_op && bin_op->get_op()==llvm::Instruction::Add;
+  bool is_bin_add = bin_op && bin_op->get_op()== ir::binary_op_t::Add;
   if(is_bin_add)
     return (ir::instruction*)x;
   return nullptr;

@@ -203,6 +203,88 @@ Value* shared_tile::get_value(indices_t idx) {
   return result;
 }
 
+llvm::Instruction::BinaryOps llvm_op(ir::binary_op_t op) {
+  using llop = llvm::Instruction::BinaryOps;
+  using ttop = ir::binary_op_t;
+  switch(op) {
+    case ttop::Add: return llop::Add;
+    case ttop::FAdd: return llop::FAdd;
+    case ttop::Sub: return llop::Sub;
+    case ttop::FSub: return llop::FSub;
+    case ttop::Mul: return llop::Mul;
+    case ttop::FMul: return llop::FMul;
+    case ttop::UDiv: return llop::UDiv;
+    case ttop::SDiv: return llop::SDiv;
+    case ttop::FDiv: return llop::FDiv;
+    case ttop::URem: return llop::URem;
+    case ttop::SRem: return llop::SRem;
+    case ttop::FRem: return llop::FRem;
+    case ttop::Shl: return llop::Shl;
+    case ttop::LShr: return llop::LShr;
+    case ttop::AShr: return llop::AShr;
+    case ttop::And: return llop::And;
+    case ttop::Or: return llop::Or;
+    case ttop::Xor: return llop::Xor;
+  }
+}
+
+llvm::Instruction::CastOps llvm_op(ir::cast_op_t op) {
+  using llop = llvm::Instruction::CastOps;
+  using ttop = ir::cast_op_t;
+  switch(op){
+  case ttop::Trunc: return llop::Trunc;
+  case ttop::ZExt: return llop::ZExt;
+  case ttop::SExt: return llop::SExt;
+  case ttop::FPTrunc: return llop::FPTrunc;
+  case ttop::FPExt: return llop::FPExt;
+  case ttop::UIToFP: return llop::UIToFP;
+  case ttop::SIToFP: return llop::SIToFP;
+  case ttop::FPToUI: return llop::FPToUI;
+  case ttop::FPToSI: return llop::FPToSI;
+  case ttop::PtrToInt: return llop::PtrToInt;
+  case ttop::IntToPtr: return llop::IntToPtr;
+  case ttop::BitCast: return llop::BitCast;
+  case ttop::AddrSpaceCast: return llop::AddrSpaceCast;
+  }
+}
+
+llvm::CmpInst::Predicate llvm_pred(ir::cmp_pred_t pred) {
+  using llop = llvm::CmpInst::Predicate;
+  using ttop = ir::cmp_pred_t;
+  switch(pred){
+    case ttop::FIRST_FCMP_PREDICATE: return llop::FIRST_FCMP_PREDICATE;
+    case ttop::FCMP_FALSE: return llop::FCMP_FALSE;
+    case ttop::FCMP_OEQ: return llop::FCMP_OEQ;
+    case ttop::FCMP_OGT: return llop::FCMP_OGT;
+    case ttop::FCMP_OGE: return llop::FCMP_OGE;
+    case ttop::FCMP_OLT: return llop::FCMP_OLT;
+    case ttop::FCMP_OLE: return llop::FCMP_OLE;
+    case ttop::FCMP_ONE: return llop::FCMP_ONE;
+    case ttop::FCMP_ORD: return llop::FCMP_ORD;
+    case ttop::FCMP_UNO: return llop::FCMP_UNO;
+    case ttop::FCMP_UEQ: return llop::FCMP_UEQ;
+    case ttop::FCMP_UGT: return llop::FCMP_UGT;
+    case ttop::FCMP_UGE: return llop::FCMP_UGE;
+    case ttop::FCMP_ULT: return llop::FCMP_ULT;
+    case ttop::FCMP_ULE: return llop::FCMP_ULE;
+    case ttop::FCMP_UNE: return llop::FCMP_UNE;
+    case ttop::FCMP_TRUE: return llop::FCMP_TRUE;
+    case ttop::LAST_FCMP_PREDICATE: return llop::LAST_FCMP_PREDICATE;
+    case ttop::FIRST_ICMP_PREDICATE: return llop::FIRST_ICMP_PREDICATE;
+    case ttop::ICMP_EQ: return llop::ICMP_EQ;
+    case ttop::ICMP_NE: return llop::ICMP_NE;
+    case ttop::ICMP_UGT: return llop::ICMP_UGT;
+    case ttop::ICMP_UGE: return llop::ICMP_UGE;
+    case ttop::ICMP_ULT: return llop::ICMP_ULT;
+    case ttop::ICMP_ULE: return llop::ICMP_ULE;
+    case ttop::ICMP_SGT: return llop::ICMP_SGT;
+    case ttop::ICMP_SGE: return llop::ICMP_SGE;
+    case ttop::ICMP_SLT: return llop::ICMP_SLT;
+    case ttop::ICMP_SLE: return llop::ICMP_SLE;
+    case ttop::LAST_ICMP_PREDICATE: return llop::LAST_ICMP_PREDICATE;
+  }
+}
+
 /* convert ir::type to Type */
 Type *selection::llvm_type(ir::type *ty, LLVMContext &ctx) {
   // function
@@ -283,24 +365,24 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
   if(auto* ii = dynamic_cast<ir::binary_operator*>(inst)){
     Value *lhs = value(ii->get_operand(0));
     Value *rhs = value(ii->get_operand(1));
-    return builder.Insert(BinaryOperator::Create(ii->get_op(), lhs, rhs));
+    return builder.Insert(BinaryOperator::Create(llvm_op(ii->get_op()), lhs, rhs));
   }
   if(auto* ii = dynamic_cast<ir::icmp_inst*>(inst)){
-    CmpInst::Predicate pred = ii->get_pred();
+    ir::cmp_pred_t pred = ii->get_pred();
     Value *lhs = value(ii->get_operand(0));
     Value *rhs = value(ii->get_operand(1));
-    return builder.Insert(CmpInst::Create(Instruction::ICmp, pred, lhs, rhs));
+    return builder.Insert(CmpInst::Create(Instruction::ICmp, llvm_pred(pred), lhs, rhs));
   }
   if(auto* ii = dynamic_cast<ir::fcmp_inst*>(inst)){
-    CmpInst::Predicate pred = ii->get_pred();
+    ir::cmp_pred_t pred = ii->get_pred();
     Value *lhs = value(ii->get_operand(0));
     Value *rhs = value(ii->get_operand(1));
-    return builder.Insert(FCmpInst::Create(Instruction::FCmp, pred, lhs, rhs));
+    return builder.Insert(FCmpInst::Create(Instruction::FCmp, llvm_pred(pred), lhs, rhs));
   }
   if(auto* ii = dynamic_cast<ir::cast_inst*>(inst)){
     Value *arg = value(ii->get_operand(0));
     Type *dst_ty = type(ii->get_type()->get_scalar_ty());
-    return builder.Insert(CastInst::Create(ii->get_op(), arg, dst_ty));
+    return builder.Insert(CastInst::Create(llvm_op(ii->get_op()), arg, dst_ty));
   }
   if(auto* ii = dynamic_cast<ir::getelementptr_inst*>(inst)){
     // get pointer

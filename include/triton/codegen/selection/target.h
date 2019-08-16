@@ -4,14 +4,36 @@
 #include <map>
 #include <set>
 #include <vector>
-#include "llvm/IR/IRBuilder.h"
 
 namespace llvm{
-class Instruction;
-class Value;
-class Module;
-class LLVMContext;
-class Function;
+  class Type;
+  class Value;
+  class Instruction;
+  class Constant;
+  class LLVMContext;
+  class Module;
+  class ConstantFolder;
+  class IRBuilderDefaultInserter;
+  template <typename T, typename Inserter>
+  class IRBuilder;
+  class ArrayType;
+  class Function;
+}
+
+// typedefs
+namespace triton{
+namespace codegen{
+  typedef llvm::IRBuilder<llvm::ConstantFolder,
+                          llvm::IRBuilderDefaultInserter> Builder;
+  typedef llvm::LLVMContext LLVMContext;
+  typedef llvm::Type Type;
+  typedef llvm::Value Value;
+  typedef llvm::Module Module;
+  typedef llvm::Instruction Instruction;
+  typedef llvm::Constant Constant;
+  typedef llvm::ArrayType ArrayType;
+  typedef llvm::Function Function;
+}
 }
 
 namespace triton{
@@ -21,13 +43,13 @@ class target {
 public:
   target(bool is_gpu): is_gpu_(is_gpu){}
   virtual ~target() {}
-  virtual void set_kernel(llvm::IRBuilder<>& builder, llvm::LLVMContext &ctx, llvm::Module *module, llvm::Function* fn) = 0;
-  virtual llvm::Instruction* add_barrier(llvm::Module *module, llvm::IRBuilder<>& builder) = 0;
-  virtual llvm::Instruction* add_memfence(llvm::Module *module, llvm::IRBuilder<>& builder) = 0;
-  virtual llvm::Value* get_global_offset(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned stride, unsigned ax) = 0;
-  virtual llvm::Value* get_local_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax) = 0;
-  virtual llvm::Value* get_block_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax) = 0;
-  virtual llvm::Value* get_num_blocks(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax) = 0;
+  virtual void set_kernel(Builder& builder, LLVMContext &ctx, Module *module, Function* fn) = 0;
+  virtual Instruction* add_barrier(Module *module, Builder& builder) = 0;
+  virtual Instruction* add_memfence(Module *module, Builder& builder) = 0;
+  virtual Value* get_global_offset(Module *module, Builder& builder, unsigned stride, unsigned ax) = 0;
+  virtual Value* get_local_id(Module *module, Builder& builder, unsigned ax) = 0;
+  virtual Value* get_block_id(Module *module, Builder& builder, unsigned ax) = 0;
+  virtual Value* get_num_blocks(Module *module, Builder& builder, unsigned ax) = 0;
   bool is_gpu() const;
 
 private:
@@ -37,37 +59,37 @@ private:
 class amd_cl_target: public target {
 public:
   amd_cl_target(): target(true){}
-  void set_kernel(llvm::IRBuilder<>& builder, llvm::LLVMContext &ctx, llvm::Module *module, llvm::Function* fn);
-  llvm::Instruction* add_barrier(llvm::Module *module, llvm::IRBuilder<>& builder);
-  llvm::Instruction* add_memfence(llvm::Module *module, llvm::IRBuilder<>& builder);
-  llvm::Value* get_global_offset(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned stride, unsigned ax);
-  llvm::Value* get_local_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
-  llvm::Value* get_block_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
-  llvm::Value* get_num_blocks(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
+  void set_kernel(Builder& builder, LLVMContext &ctx, Module *module, Function* fn);
+  Instruction* add_barrier(Module *module, Builder& builder);
+  Instruction* add_memfence(Module *module, Builder& builder);
+  Value* get_global_offset(Module *module, Builder& builder, unsigned stride, unsigned ax);
+  Value* get_local_id(Module *module, Builder& builder, unsigned ax);
+  Value* get_block_id(Module *module, Builder& builder, unsigned ax);
+  Value* get_num_blocks(Module *module, Builder& builder, unsigned ax);
 };
 
 class nvidia_cu_target: public target {
 public:
   nvidia_cu_target(): target(true){}
-  void set_kernel(llvm::IRBuilder<>& builder, llvm::LLVMContext &ctx, llvm::Module *module, llvm::Function* fn);
-  llvm::Instruction* add_barrier(llvm::Module *module, llvm::IRBuilder<>& builder);
-  llvm::Instruction* add_memfence(llvm::Module *module, llvm::IRBuilder<>& builder);
-  llvm::Value* get_global_offset(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned stride, unsigned ax);
-  llvm::Value* get_local_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
-  llvm::Value* get_block_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
-  llvm::Value* get_num_blocks(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
+  void set_kernel(Builder& builder, LLVMContext &ctx, Module *module, Function* fn);
+  Instruction* add_barrier(Module *module, Builder& builder);
+  Instruction* add_memfence(Module *module, Builder& builder);
+  Value* get_global_offset(Module *module, Builder& builder, unsigned stride, unsigned ax);
+  Value* get_local_id(Module *module, Builder& builder, unsigned ax);
+  Value* get_block_id(Module *module, Builder& builder, unsigned ax);
+  Value* get_num_blocks(Module *module, Builder& builder, unsigned ax);
 };
 
 class cpu_target: public target {
 public:
   cpu_target(): target(false){}
-  void set_kernel(llvm::IRBuilder<>& builder, llvm::LLVMContext &ctx, llvm::Module *module, llvm::Function* fn);
-  llvm::Instruction* add_barrier(llvm::Module *module, llvm::IRBuilder<>& builder);
-  llvm::Instruction* add_memfence(llvm::Module *module, llvm::IRBuilder<>& builder);
-  llvm::Value* get_global_offset(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned stride, unsigned ax);
-  llvm::Value* get_local_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
-  llvm::Value* get_block_id(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
-  llvm::Value* get_num_blocks(llvm::Module *module, llvm::IRBuilder<>& builder, unsigned ax);
+  void set_kernel(Builder& builder, LLVMContext &ctx, Module *module, Function* fn);
+  Instruction* add_barrier(Module *module, Builder& builder);
+  Instruction* add_memfence(Module *module, Builder& builder);
+  Value* get_global_offset(Module *module, Builder& builder, unsigned stride, unsigned ax);
+  Value* get_local_id(Module *module, Builder& builder, unsigned ax);
+  Value* get_block_id(Module *module, Builder& builder, unsigned ax);
+  Value* get_num_blocks(Module *module, Builder& builder, unsigned ax);
 };
 
 }

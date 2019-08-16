@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "triton/ir/basic_block.h"
 #include "triton/ir/module.h"
 #include "triton/ir/type.h"

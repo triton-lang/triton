@@ -1,9 +1,9 @@
 #ifndef TDL_INCLUDE_IR_CONSTANT_H
 #define TDL_INCLUDE_IR_CONSTANT_H
 
+#include "enums.h"
 #include "value.h"
 #include <cassert>
-#include "llvm/IR/Instructions.h"
 
 namespace triton{
 namespace ir{
@@ -65,8 +65,7 @@ private:
 };
 
 class constant_expression: public constant_int {
-  typedef llvm::BinaryOperator::BinaryOps op_t;
-  using llop = llvm::BinaryOperator::BinaryOps;
+  typedef binary_op_t op_t;
 
 private:
   constant_expression(op_t op, constant_int* lhs, constant_int* rhs);

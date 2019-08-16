@@ -145,19 +145,19 @@ uint64_t constant_expression::get_value() const {
   uint64_t lhs = lhs_->get_value();
   uint64_t rhs = rhs_->get_value();
   switch(op_) {
-  case llop::Add  : return lhs + rhs;
-  case llop::Sub  : return lhs - rhs;
-  case llop::Mul  : return lhs * rhs;
-  case llop::UDiv : return lhs / rhs;
-  case llop::SDiv : return lhs / rhs;
-  case llop::URem : return lhs % rhs;
-  case llop::SRem : return lhs % rhs;
-  case llop::Shl  : return lhs << rhs;
-  case llop::LShr : return lhs >> rhs;
-  case llop::AShr : return lhs >> rhs;
-  case llop::And  : return lhs && rhs;
-  case llop::Or   : return lhs || rhs;
-  case llop::Xor  : return lhs ^ rhs;
+  case op_t::Add  : return lhs + rhs;
+  case op_t::Sub  : return lhs - rhs;
+  case op_t::Mul  : return lhs * rhs;
+  case op_t::UDiv : return lhs / rhs;
+  case op_t::SDiv : return lhs / rhs;
+  case op_t::URem : return lhs % rhs;
+  case op_t::SRem : return lhs % rhs;
+  case op_t::Shl  : return lhs << rhs;
+  case op_t::LShr : return lhs >> rhs;
+  case op_t::AShr : return lhs >> rhs;
+  case op_t::And  : return lhs && rhs;
+  case op_t::Or   : return lhs || rhs;
+  case op_t::Xor  : return lhs ^ rhs;
   default: throw std::runtime_error("unsupported constexpr binary operator");
   }
 }

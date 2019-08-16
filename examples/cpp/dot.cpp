@@ -154,8 +154,6 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
   stream->synchronize();
   // run
   rt::function function(src(AT, BT, ty, ty, ty, 8, 8));
-  std::cout << function.make_tensorflow_src({2}, "(M + #TM - 1)/#TM, (N + #TN - 1)/#TN, 1") << std::endl;
-  exit(EXIT_FAILURE);
 
   auto ceil = [](size_t x, size_t y) { return (x + y - 1) / y; };
   auto grid = [&](const rt::params_t& x) { return rt::grid_t{ceil(M, x.at("TM")), ceil(N, x.at("TN")), 1}; };

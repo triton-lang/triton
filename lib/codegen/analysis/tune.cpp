@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cstdlib>
 #include "triton/codegen/analysis/tune.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
@@ -7,7 +9,6 @@
 #include "triton/ir/constant.h"
 #include "triton/driver/device.h"
 
-#include <cstdlib>
 
 
 namespace triton{

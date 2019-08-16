@@ -2,15 +2,19 @@
 #define TDL_INCLUDE_IR_INSTRUCTIONS_H
 
 #include <vector>
+#include <map>
+#include "triton/ir/enums.h"
 #include "triton/ir/constant.h"
 #include "triton/ir/value.h"
 #include "triton/ir/type.h"
 #include "triton/ir/metadata.h"
-#include "llvm/IR/Instructions.h"
 
 namespace triton{
 namespace ir{
 
+class constant_int;
+class constant;
+class constant_range;
 class basic_block;
 class context;
 
@@ -95,19 +99,18 @@ private:
 //===----------------------------------------------------------------------===//
 class binary_operator: public instruction{
 public:
-  typedef llvm::BinaryOperator::BinaryOps op_t;
-  using llop = llvm::BinaryOperator::BinaryOps;
+  typedef binary_op_t op_t;
 
 private:
   std::string repr_impl() const;
 
 protected:
   // Constructors
-  binary_operator(op_t op, value *lhs, value *rhs, type *ty, const std::string &name, instruction *next);
+  binary_operator(binary_op_t op, value *lhs, value *rhs, type *ty, const std::string &name, instruction *next);
 
 public:
   // Get operand
-  op_t get_op() const { return op_; }
+  binary_op_t get_op() const { return op_; }
 
   // Bool
   bool is_terminator()  const;
@@ -127,14 +130,14 @@ public:
   void set_has_no_signed_wrap(bool b = true)   { has_no_signed_wrap_ = b; }
 
   // Factory methods
-  static binary_operator *create(op_t op, value *lhs, value *rhs,
+  static binary_operator *create(binary_op_t op, value *lhs, value *rhs,
                                  const std::string &name = "", instruction *next = nullptr);
   static binary_operator *create_fneg(value *arg, const std::string &name = "", instruction *next = nullptr);
   static binary_operator *create_neg(value *arg, const std::string &name = "", instruction *next = nullptr);
   static binary_operator *create_not(value *arg, const std::string &name = "", instruction *next = nullptr);
 
 public:
-  op_t op_;
+  binary_op_t op_;
   bool has_no_unsigned_wrap_;
   bool has_no_signed_wrap_;
 };
@@ -146,30 +149,28 @@ public:
 
 class cmp_inst: public instruction{
 public:
-  typedef llvm::CmpInst::Predicate pred_t;
-  using llop = llvm::CmpInst;
-
+  typedef cmp_pred_t pred_t;
 private:
   std::string repr_impl() const;
 
 protected:
-  cmp_inst(type *ty, pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next);
-  static bool is_fp_predicate(pred_t pred);
-  static bool is_int_predicate(pred_t pred);
+  cmp_inst(type *ty, cmp_pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next);
+  static bool is_fp_predicate(cmp_pred_t pred);
+  static bool is_int_predicate(cmp_pred_t pred);
   static type* make_cmp_result_type(type *ty);
 
 public:
-  pred_t get_pred() const { return pred_; }
+  cmp_pred_t get_pred() const { return pred_; }
 
 private:
-  pred_t pred_;
+  cmp_pred_t pred_;
 };
 
 class icmp_inst: public cmp_inst{
   using cmp_inst::cmp_inst;
 
 public:
-  static icmp_inst* create(pred_t pred, value *lhs, value *rhs,
+  static icmp_inst* create(cmp_pred_t pred, value *lhs, value *rhs,
                     const std::string &name = "", instruction *next = nullptr);
 };
 
@@ -177,7 +178,7 @@ class fcmp_inst: public cmp_inst{
   using cmp_inst::cmp_inst;
 
 public:
-  static fcmp_inst* create(pred_t pred, value *lhs, value *rhs,
+  static fcmp_inst* create(cmp_pred_t pred, value *lhs, value *rhs,
                     const std::string &name = "", instruction *next = nullptr);
 };
 
@@ -196,33 +197,28 @@ protected:
 //===----------------------------------------------------------------------===//
 
 class cast_inst: public unary_inst{
-  using ic = llvm::Instruction::CastOps;
-
 private:
   std::string repr_impl() const;
 
-public:
-  typedef llvm::CastInst::CastOps op_t;
-
 protected:
-  cast_inst(type *ty, value *v, const std::string &name, instruction *next, op_t op)
+  cast_inst(type *ty, value *v, const std::string &name, instruction *next, cast_op_t op)
     : unary_inst(ty, v, name, next), op_(op) { }
 
 private:
-  static bool is_valid(op_t op, value *arg, type *ty);
+  static bool is_valid(cast_op_t op, value *arg, type *ty);
 
 public:
   // accessors
-  op_t get_op() const { return op_; }
+  cast_op_t get_op() const { return op_; }
 
   // factory methods
-  static cast_inst *create(op_t op, value *arg, type *ty,
+  static cast_inst *create(cast_op_t op, value *arg, type *ty,
                            const std::string &name = "", instruction *next = nullptr);
   static cast_inst *create_integer_cast(value *arg, type *ty, bool is_signed,
                            const std::string &name = "", instruction *next = nullptr);
 
 private:
-  op_t op_;
+  cast_op_t op_;
 };
 
 #define TRITON_IR_DECLARE_CAST_INST_SIMPL(name, op) \
@@ -232,19 +228,19 @@ class name : public cast_inst{ \
     : cast_inst(ty, v, name, next, op){ } \
 };
 
-TRITON_IR_DECLARE_CAST_INST_SIMPL(trunc_inst, llvm::Instruction::CastOps::Trunc)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(z_ext_inst, llvm::Instruction::CastOps::ZExt)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(s_ext_inst, llvm::Instruction::CastOps::SExt)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_trunc_inst, llvm::Instruction::CastOps::FPTrunc)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_ext_inst, llvm::Instruction::CastOps::FPExt)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(ui_to_fp_inst, llvm::Instruction::CastOps::UIToFP)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(si_to_fp_inst, llvm::Instruction::CastOps::SIToFP)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_ui_inst, llvm::Instruction::CastOps::FPToUI)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_si_inst, llvm::Instruction::CastOps::FPToSI)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(ptr_to_int_inst, llvm::Instruction::CastOps::PtrToInt)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(int_to_ptr_inst, llvm::Instruction::CastOps::IntToPtr)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(bit_cast_inst, llvm::Instruction::CastOps::BitCast)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(addr_space_cast_inst, llvm::Instruction::CastOps::AddrSpaceCast)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(trunc_inst, cast_op_t::Trunc)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(z_ext_inst, cast_op_t::ZExt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(s_ext_inst, cast_op_t::SExt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_trunc_inst, cast_op_t::FPTrunc)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_ext_inst, cast_op_t::FPExt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(ui_to_fp_inst, cast_op_t::UIToFP)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(si_to_fp_inst, cast_op_t::SIToFP)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_ui_inst, cast_op_t::FPToUI)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_si_inst, cast_op_t::FPToSI)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(ptr_to_int_inst, cast_op_t::PtrToInt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(int_to_ptr_inst, cast_op_t::IntToPtr)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(bit_cast_inst, cast_op_t::BitCast)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(addr_space_cast_inst, cast_op_t::AddrSpaceCast)
 
 //===----------------------------------------------------------------------===//
 //                               terminator_inst classes
@@ -591,8 +587,8 @@ private:
   trans_inst(value *arg, const std::vector<constant_int*>& perm, const std::string& name, instruction* next);
   std::string repr_impl() const {
     std::string res = "trans<";
-    for(ir::constant_int *x: perm_)
-      res += x->repr() + ",";
+    //for(ir::constant_int *x: perm_)
+    //  res += x->repr() + ",";
     res[res.size()-1] = '>';
     return res;
   }

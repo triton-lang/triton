@@ -1,7 +1,6 @@
 #ifndef TDL_INCLUDE_CODEGEN_SELECTION_H
 #define TDL_INCLUDE_CODEGEN_SELECTION_H
 
-#include "llvm/IR/IRBuilder.h"
 #include "triton/ir/context.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
@@ -16,6 +15,28 @@ namespace llvm{
   class Constant;
   class LLVMContext;
   class Module;
+  class ConstantFolder;
+  class IRBuilderDefaultInserter;
+  template <typename T, typename Inserter>
+  class IRBuilder;
+  class ArrayType;
+  class Function;
+}
+
+// typedefs
+namespace triton{
+namespace codegen{
+  typedef llvm::IRBuilder<llvm::ConstantFolder,
+                          llvm::IRBuilderDefaultInserter> Builder;
+  typedef llvm::LLVMContext LLVMContext;
+  typedef llvm::Type Type;
+  typedef llvm::Value Value;
+  typedef llvm::Module Module;
+  typedef llvm::Instruction Instruction;
+  typedef llvm::Constant Constant;
+  typedef llvm::ArrayType ArrayType;
+  typedef llvm::Function Function;
+}
 }
 
 namespace triton{
@@ -35,12 +56,12 @@ class info;
 }
 class target;
 
-typedef std::vector<llvm::Value*> indices_t;
+typedef std::vector<Value*> indices_t;
 
 struct distributed_axis {
   size_t contiguous;
-  std::vector<llvm::Value*> values;
-  llvm::Value* thread_id;
+  std::vector<Value*> values;
+  Value* thread_id;
 };
 
 class tile {
@@ -48,40 +69,40 @@ protected:
   typedef std::vector<unsigned> shapes_t;
 
 public:
-  tile(llvm::Type *ty, const shapes_t &shapes): ty_(ty), shapes_(shapes){ }
-  virtual void set_value(indices_t idx, llvm::Value *v) = 0;
-  virtual llvm::Value* get_value(indices_t idx) = 0;
-  llvm::Type *get_ty() const { return ty_; }
+  tile(Type *ty, const shapes_t &shapes): ty_(ty), shapes_(shapes){ }
+  virtual void set_value(indices_t idx, Value *v) = 0;
+  virtual Value* get_value(indices_t idx) = 0;
+  Type *get_ty() const { return ty_; }
   shapes_t get_shapes() const { return shapes_; }
 
 protected:
-  llvm::Type *ty_;
+  Type *ty_;
   shapes_t shapes_;
 };
 
 class shared_tile: public tile {
 private:
-  void extract_constant(llvm::Value *arg, llvm::Value *&non_cst, llvm::Value *&cst);
+  void extract_constant(Value *arg, Value *&non_cst, Value *&cst);
   void extract_constant(const indices_t &arg_idx, indices_t &non_cst_idx, indices_t &cst_idx);
 
 
 public:
-  shared_tile(llvm::Type* ty, const shapes_t &shapes, llvm::Value* ptr, llvm::IRBuilder<> &builder, llvm::Value* offset = nullptr);
+  shared_tile(Type* ty, const shapes_t &shapes, Value* ptr, Builder &builder, Value* offset = nullptr);
   void set_vector_size(unsigned vector_size);
   void set_return_mode(bool return_vector);
-  void set_value(indices_t, llvm::Value *);
-  llvm::Value* get_ptr_to(indices_t idx);
-  llvm::Value* get_value(indices_t idx);
-  llvm::Value* get_pointer() { return ptr_; }
-  llvm::Value* get_offset() { return offset_; }
-  static llvm::Value* shared_offset(llvm::IRBuilder<>& builder, const shapes_t& shapes, indices_t idx);
+  void set_value(indices_t, Value *);
+  Value* get_ptr_to(indices_t idx);
+  Value* get_value(indices_t idx);
+  Value* get_pointer() { return ptr_; }
+  Value* get_offset() { return offset_; }
+  static Value* shared_offset(Builder& builder, const shapes_t& shapes, indices_t idx);
 
 private:
-  llvm::Value *ptr_;
+  Value *ptr_;
   bool return_vector_;
-  llvm::Value *offset_;
-  llvm::IRBuilder<> &builder_;
-  std::map<indices_t, llvm::Value*> ptr_cache_;
+  Value *offset_;
+  Builder &builder_;
+  std::map<indices_t, Value*> ptr_cache_;
   unsigned vector_size_;
 };
 
@@ -90,16 +111,16 @@ class distributed_tile: public tile{
   typedef std::vector<distributed_axis> axes_t;
   typedef std::vector<indices_t> ordered_indices_vec_t;
   typedef std::map<indices_t, unsigned> indices_map_t;
-  typedef std::map<indices_t, llvm::Value*> values_map_t;
+  typedef std::map<indices_t, Value*> values_map_t;
 
 private:
   void init_indices();
-  llvm::Type *make_vector_ty(llvm::Type *ty, size_t vector_size);
+  Type *make_vector_ty(Type *ty, size_t vector_size);
 
 public:
-  distributed_tile(llvm::Type *ty, const shapes_t& shapes, const axes_t &axes, llvm::IRBuilder<> &builder, bool vectorize);
-  void set_value(indices_t idx, llvm::Value *v);
-  llvm::Value* get_value(indices_t idx);
+  distributed_tile(Type *ty, const shapes_t& shapes, const axes_t &axes, Builder &builder, bool vectorize);
+  void set_value(indices_t idx, Value *v);
+  Value* get_value(indices_t idx);
   unsigned get_linear_index(indices_t idx);
   indices_t get_ordered_indices(unsigned id);
   void for_each(std::function<void(indices_t)> fn);
@@ -111,24 +132,14 @@ private:
   values_map_t values_;
   ordered_indices_vec_t ordered_indices_;
   size_t vector_size_;
-  llvm::IRBuilder<> &builder_;
+  Builder &builder_;
 };
 
 
 // Selection pass
 class selection{
-  typedef std::map<ir::value *, llvm::Value *> vmap_t;
+  typedef std::map<ir::value *, Value *> vmap_t;
   typedef std::map<ir::value *, tile *> tmap_t;
-
-  typedef llvm::LLVMContext LLVMContext;
-  typedef llvm::IRBuilder<> Builder;
-  typedef llvm::Type Type;
-  typedef llvm::Value Value;
-  typedef llvm::Module Module;
-  typedef llvm::Instruction Instruction;
-  typedef llvm::Constant Constant;
-  typedef llvm::ArrayType ArrayType;
-  typedef llvm::Function Function;
 
 private:
   // utils
