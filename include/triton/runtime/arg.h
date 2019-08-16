@@ -24,7 +24,7 @@ enum arg_type {
   BUFFER_T
 };
 
-size_t size_of(arg_type ty){
+inline size_t size_of(arg_type ty){
   switch(ty){
     case INT1_T: return 1;
     case INT8_T: return 1;
@@ -39,7 +39,7 @@ size_t size_of(arg_type ty){
   }
 }
 
-bool is_int_type(arg_type ty){
+inline bool is_int_type(arg_type ty){
   return ty == INT1_T || ty == INT8_T || ty == INT16_T ||
          ty == INT32_T || ty == INT64_T;
 }
