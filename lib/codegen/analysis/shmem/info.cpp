@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "triton/codegen/analysis/shmem/info.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"

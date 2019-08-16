@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "triton/ir/context.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
@@ -87,60 +88,60 @@ phi_node* phi_node::create(type *ty, unsigned num_reserved, const std::string &n
 
 std::string binary_operator::repr_impl() const {
   switch(op_) {
-  case llop::Add  : return "add";
-  case llop::FAdd : return "fadd";
-  case llop::Sub  : return "sub";
-  case llop::FSub : return "fsub";
-  case llop::Mul  : return "mul";
-  case llop::FMul : return "fmul";
-  case llop::UDiv : return "udiv";
-  case llop::SDiv : return "sdiv";
-  case llop::FDiv : return "fdiv";
-  case llop::URem : return "urem";
-  case llop::SRem : return "srem";
-  case llop::FRem : return "frem";
-  case llop::Shl  : return "shl";
-  case llop::LShr : return "lshr";
-  case llop::AShr : return "ashr";
-  case llop::And  : return "and";
-  case llop::Or   : return "or";
-  case llop::Xor  : return "xor";
+  case Add  : return "add";
+  case FAdd : return "fadd";
+  case Sub  : return "sub";
+  case FSub : return "fsub";
+  case Mul  : return "mul";
+  case FMul : return "fmul";
+  case UDiv : return "udiv";
+  case SDiv : return "sdiv";
+  case FDiv : return "fdiv";
+  case URem : return "urem";
+  case SRem : return "srem";
+  case FRem : return "frem";
+  case Shl  : return "shl";
+  case LShr : return "lshr";
+  case AShr : return "ashr";
+  case And  : return "and";
+  case Or   : return "or";
+  case Xor  : return "xor";
   default: throw std::runtime_error("unknown binary operator");
   }
 }
 
 bool binary_operator::is_int_div() const {
-  return op_ == llop::UDiv || op_ == llop::SDiv;
+  return op_ == binary_op_t::UDiv || op_ == binary_op_t::SDiv;
 }
 
 bool binary_operator::is_int_rem() const {
-  return op_ == llop::URem || op_ == llop::SRem;
+  return op_ == binary_op_t::URem || op_ == binary_op_t::SRem;
 }
 
 bool binary_operator::is_shl() const {
-  return op_ == llop::Shl;
+  return op_ == binary_op_t::Shl;
 }
 
 bool binary_operator::is_shr() const {
-  return op_ == llop::LShr || op_ == llop::AShr;
+  return op_ == binary_op_t::LShr || op_ == binary_op_t::AShr;
 }
 
 bool binary_operator::is_int_mult()    const {
-  return op_ == llop::Mul;
+  return op_ == binary_op_t::Mul;
 }
 
 bool binary_operator::is_int_add_sub() const {
-  return op_ == llop::Add || op_ == llop::Sub;
+  return op_ == binary_op_t::Add || op_ == binary_op_t::Sub;
 }
 
 
-binary_operator::binary_operator(op_t op, value *lhs, value *rhs, type *ty, const std::string &name, instruction *next)
+binary_operator::binary_operator(binary_op_t op, value *lhs, value *rhs, type *ty, const std::string &name, instruction *next)
     : instruction(ty, 2, 1, name, next), op_(op){
   set_operand(0, lhs);
   set_operand(1, rhs);
 }
 
-binary_operator *binary_operator::create(op_t op, value *lhs, value *rhs, const std::string &name, instruction *next){
+binary_operator *binary_operator::create(binary_op_t op, value *lhs, value *rhs, const std::string &name, instruction *next){
   assert(lhs->get_type() == rhs->get_type() &&
          "Cannot create binary operator with two operands of differing type!");
   return new binary_operator(op, lhs, rhs, lhs->get_type(), name, next);
@@ -149,19 +150,19 @@ binary_operator *binary_operator::create(op_t op, value *lhs, value *rhs, const 
 binary_operator *binary_operator::create_fneg(value *arg, const std::string &name, instruction *next){
   assert(arg->get_type()->get_scalar_ty()->is_floating_point_ty());
   value *zero = constant_fp::get_zero_value_for_negation(arg->get_type());
-  return binary_operator::create(llvm::Instruction::FSub, zero, arg, name, next);
+  return binary_operator::create(binary_op_t::FSub, zero, arg, name, next);
 }
 
 binary_operator *binary_operator::create_neg(value *arg, const std::string &name, instruction *next){
   assert(arg->get_type()->get_scalar_ty()->is_integer_ty());
   value *zero = constant_fp::get_zero_value_for_negation(arg->get_type());
-  return binary_operator::create(llvm::Instruction::Sub, zero, arg, name, next);
+  return binary_operator::create(binary_op_t::Sub, zero, arg, name, next);
 }
 
 binary_operator *binary_operator::create_not(value *arg, const std::string &name, instruction *next){
   assert(arg->get_type()->is_integer_ty());
   constant *mask = constant::get_all_ones_value(arg->get_type());
-  return binary_operator::create(llvm::Instruction::Xor, arg, mask, name, next);
+  return binary_operator::create(binary_op_t::Xor, arg, mask, name, next);
 }
 
 //===----------------------------------------------------------------------===//
@@ -171,37 +172,37 @@ binary_operator *binary_operator::create_not(value *arg, const std::string &name
 // cmp_inst
 std::string cmp_inst::repr_impl() const {
   switch (pred_) {
-    case llop::FCMP_FALSE :  return "false";
-    case llop::FCMP_OEQ   :  return "fcmp_oeq";
-    case llop::FCMP_OGT   :  return "fcmp_ogt";
-    case llop::FCMP_OGE   :  return "fcmp_oge";
-    case llop::FCMP_OLT   :  return "fcmp_olt";
-    case llop::FCMP_OLE   :  return "fcmp_ole";
-    case llop::FCMP_ONE   :  return "fcmp_one";
-    case llop::FCMP_ORD   :  return "fcmp_ord";
-    case llop::FCMP_UNO   :  return "fcmp_uno";
-    case llop::FCMP_UEQ   :  return "fcmp_ueq";
-    case llop::FCMP_UGT   :  return "fcmp_ugt";
-    case llop::FCMP_UGE   :  return "fcmp_uge";
-    case llop::FCMP_ULT   :  return "fcmp_ult";
-    case llop::FCMP_ULE   :  return "fcmp_ule";
-    case llop::FCMP_UNE   :  return "fcmp_une";
-    case llop::FCMP_TRUE  :  return "true";
-    case llop::ICMP_EQ    :  return "icmp_eq";
-    case llop::ICMP_NE    :  return "icmp_ne";
-    case llop::ICMP_UGT   :  return "icmp_ugt";
-    case llop::ICMP_UGE   :  return "icmp_uge";
-    case llop::ICMP_ULT   :  return "icmp_ult";
-    case llop::ICMP_ULE   :  return "icmp_ule";
-    case llop::ICMP_SGT   :  return "icmp_sgt";
-    case llop::ICMP_SGE   :  return "icmp_sge";
-    case llop::ICMP_SLT   :  return "icmp_slt";
-    case llop::ICMP_SLE   :  return "icmp_sle";
+    case FCMP_FALSE :  return "false";
+    case FCMP_OEQ   :  return "fcmp_oeq";
+    case FCMP_OGT   :  return "fcmp_ogt";
+    case FCMP_OGE   :  return "fcmp_oge";
+    case FCMP_OLT   :  return "fcmp_olt";
+    case FCMP_OLE   :  return "fcmp_ole";
+    case FCMP_ONE   :  return "fcmp_one";
+    case FCMP_ORD   :  return "fcmp_ord";
+    case FCMP_UNO   :  return "fcmp_uno";
+    case FCMP_UEQ   :  return "fcmp_ueq";
+    case FCMP_UGT   :  return "fcmp_ugt";
+    case FCMP_UGE   :  return "fcmp_uge";
+    case FCMP_ULT   :  return "fcmp_ult";
+    case FCMP_ULE   :  return "fcmp_ule";
+    case FCMP_UNE   :  return "fcmp_une";
+    case FCMP_TRUE  :  return "true";
+    case ICMP_EQ    :  return "icmp_eq";
+    case ICMP_NE    :  return "icmp_ne";
+    case ICMP_UGT   :  return "icmp_ugt";
+    case ICMP_UGE   :  return "icmp_uge";
+    case ICMP_ULT   :  return "icmp_ult";
+    case ICMP_ULE   :  return "icmp_ule";
+    case ICMP_SGT   :  return "icmp_sgt";
+    case ICMP_SGE   :  return "icmp_sge";
+    case ICMP_SLT   :  return "icmp_slt";
+    case ICMP_SLE   :  return "icmp_sle";
     default: throw std::runtime_error("unreachable");
   }
 }
 
-cmp_inst::cmp_inst(type *ty, cmp_inst::pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next)
+cmp_inst::cmp_inst(type *ty, cmp_pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next)
     : instruction(ty, 2, 1, name, next), pred_(pred) {
   set_operand(0, lhs);
   set_operand(1, rhs);
@@ -215,23 +216,23 @@ type* cmp_inst::make_cmp_result_type(type *ty){
 }
 
 
-bool cmp_inst::is_fp_predicate(pred_t pred) {
-  return pred >= llop::FIRST_FCMP_PREDICATE && pred <= llop::LAST_FCMP_PREDICATE;
+bool cmp_inst::is_fp_predicate(cmp_pred_t pred) {
+  return pred >= FIRST_FCMP_PREDICATE && pred <= LAST_FCMP_PREDICATE;
 }
 
-bool cmp_inst::is_int_predicate(pred_t pred) {
-  return pred >= llop::FIRST_ICMP_PREDICATE && pred <= llop::LAST_ICMP_PREDICATE;
+bool cmp_inst::is_int_predicate(cmp_pred_t pred) {
+  return pred >= FIRST_ICMP_PREDICATE && pred <= LAST_ICMP_PREDICATE;
 }
 
 // icmp_inst
-icmp_inst* icmp_inst::create(pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next){
+icmp_inst* icmp_inst::create(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next){
   assert(is_int_predicate(pred));
   type *res_ty = make_cmp_result_type(lhs->get_type());
   return new icmp_inst(res_ty, pred, lhs, rhs, name, next);
 }
 
 // fcmp_inst
-fcmp_inst* fcmp_inst::create(pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next){
+fcmp_inst* fcmp_inst::create(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next){
   assert(is_fp_predicate(pred));
   type *res_ty = make_cmp_result_type(lhs->get_type());
   return new fcmp_inst(res_ty, pred, lhs, rhs, name, next);
@@ -252,45 +253,45 @@ unary_inst::unary_inst(type *ty, value *v, const std::string &name, instruction 
 
 std::string cast_inst::repr_impl() const {
   switch (op_){
-  case ic::Trunc:         return "trunc";
-  case ic::ZExt:          return "zext";
-  case ic::SExt:          return "sext";
-  case ic::FPTrunc:       return "fp_trunc";
-  case ic::FPExt:         return "fp_ext";
-  case ic::UIToFP:        return "ui_to_fp";
-  case ic::SIToFP:        return "si_to_fp";
-  case ic::FPToUI:        return "fp_to_ui";
-  case ic::FPToSI:        return "fp_to_si";
-  case ic::PtrToInt:      return "ptr_to_int";
-  case ic::IntToPtr:      return "int_to_ptr";
-  case ic::BitCast:       return "bitcast";
-  case ic::AddrSpaceCast: return "addr_space_cast";
+  case cast_op_t::Trunc:         return "trunc";
+  case cast_op_t::ZExt:          return "zext";
+  case cast_op_t::SExt:          return "sext";
+  case cast_op_t::FPTrunc:       return "fp_trunc";
+  case cast_op_t::FPExt:         return "fp_ext";
+  case cast_op_t::UIToFP:        return "ui_to_fp";
+  case cast_op_t::SIToFP:        return "si_to_fp";
+  case cast_op_t::FPToUI:        return "fp_to_ui";
+  case cast_op_t::FPToSI:        return "fp_to_si";
+  case cast_op_t::PtrToInt:      return "ptr_to_int";
+  case cast_op_t::IntToPtr:      return "int_to_ptr";
+  case cast_op_t::BitCast:       return "bitcast";
+  case cast_op_t::AddrSpaceCast: return "addr_space_cast";
   default: throw std::runtime_error("unreachable");
   }
 }
 // TODO
-bool cast_inst::is_valid(op_t op, value *arg, type *ty) {
+bool cast_inst::is_valid(cast_op_t op, value *arg, type *ty) {
   assert(arg->get_type()->is_tile_ty() == ty->is_tile_ty());
   return true;
 }
 
-cast_inst *cast_inst::create(op_t op, value *arg, type *ty, const std::string &name, instruction *next){
+cast_inst *cast_inst::create(cast_op_t op, value *arg, type *ty, const std::string &name, instruction *next){
   assert(is_valid(op, arg, ty) && "Invalid cast!");
   // Construct and return the appropriate CastInst subclass
   switch (op) {
-  case ic::Trunc:         return new trunc_inst           (ty, arg, name, next);
-  case ic::ZExt:          return new z_ext_inst           (ty, arg, name, next);
-  case ic::SExt:          return new s_ext_inst           (ty, arg, name, next);
-  case ic::FPTrunc:       return new fp_trunc_inst        (ty, arg, name, next);
-  case ic::FPExt:         return new fp_ext_inst          (ty, arg, name, next);
-  case ic::UIToFP:        return new ui_to_fp_inst        (ty, arg, name, next);
-  case ic::SIToFP:        return new si_to_fp_inst        (ty, arg, name, next);
-  case ic::FPToUI:        return new fp_to_ui_inst        (ty, arg, name, next);
-  case ic::FPToSI:        return new fp_to_si_inst        (ty, arg, name, next);
-  case ic::PtrToInt:      return new ptr_to_int_inst      (ty, arg, name, next);
-  case ic::IntToPtr:      return new int_to_ptr_inst      (ty, arg, name, next);
-  case ic::BitCast:       return new bit_cast_inst        (ty, arg, name, next);
-  case ic::AddrSpaceCast: return new addr_space_cast_inst (ty, arg, name, next);
+  case cast_op_t::Trunc:         return new trunc_inst           (ty, arg, name, next);
+  case cast_op_t::ZExt:          return new z_ext_inst           (ty, arg, name, next);
+  case cast_op_t::SExt:          return new s_ext_inst           (ty, arg, name, next);
+  case cast_op_t::FPTrunc:       return new fp_trunc_inst        (ty, arg, name, next);
+  case cast_op_t::FPExt:         return new fp_ext_inst          (ty, arg, name, next);
+  case cast_op_t::UIToFP:        return new ui_to_fp_inst        (ty, arg, name, next);
+  case cast_op_t::SIToFP:        return new si_to_fp_inst        (ty, arg, name, next);
+  case cast_op_t::FPToUI:        return new fp_to_ui_inst        (ty, arg, name, next);
+  case cast_op_t::FPToSI:        return new fp_to_si_inst        (ty, arg, name, next);
+  case cast_op_t::PtrToInt:      return new ptr_to_int_inst      (ty, arg, name, next);
+  case cast_op_t::IntToPtr:      return new int_to_ptr_inst      (ty, arg, name, next);
+  case cast_op_t::BitCast:       return new bit_cast_inst        (ty, arg, name, next);
+  case cast_op_t::AddrSpaceCast: return new addr_space_cast_inst (ty, arg, name, next);
   default: throw std::runtime_error("unreachable");
   }
 }
@@ -300,9 +301,9 @@ cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, 
   assert(arg_ty->is_int_or_tileint_ty() && ty->is_int_or_tileint_ty() && "Invalid integer cast!");
   unsigned arg_bits = arg_ty->get_scalar_ty()->get_integer_bitwidth();
   unsigned dst_bits = ty->get_scalar_ty()->get_integer_bitwidth();
-  op_t op = (arg_bits == dst_bits ? ic::BitCast :
-            (arg_bits > dst_bits  ? ic::Trunc :
-            (is_signed            ? ic::SExt : ic::ZExt)));
+  cast_op_t op = (arg_bits == dst_bits ? cast_op_t::BitCast :
+            (arg_bits > dst_bits  ? cast_op_t::Trunc :
+            (is_signed            ? cast_op_t::SExt : cast_op_t::ZExt)));
   return create(op, arg, ty, name, next);
 }
 

@@ -59,7 +59,7 @@ public:
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
   value* create_ret_void();
   // Cast instructions
-  value *create_cast(cast_inst::op_t op, value *v, type *dst_ty, const std::string &name = "");
+  value *create_cast(cast_op_t op, value *v, type *dst_ty, const std::string &name = "");
   value* create_si_to_fp(value *src, type *dst_ty, const std::string &name = "");
   value* create_ui_to_fp(value *src, type *dst_ty, const std::string &name = "");
   value* create_fp_to_si(value *src, type *dst_ty, const std::string &name = "");
@@ -71,7 +71,7 @@ public:
   // Phi instruction
   phi_node* create_phi(type *ty, unsigned num_reserved, const std::string &name = "");
   // Binary instructions
-  value *create_insert_nuwnswb_binop(binary_operator::op_t op, value *lhs, value *rhs, const std::string &name, bool has_nuw, bool has_nsw);
+  value *create_insert_nuwnswb_binop(binary_op_t op, value *lhs, value *rhs, const std::string &name, bool has_nuw, bool has_nsw);
   value *create_fmul(value *lhs, value *rhs, const std::string &name = "");
   value *create_fdiv(value *lhs, value *rhs, const std::string &name = "");
   value *create_frem(value *lhs, value *rhs, const std::string &name = "");
@@ -89,7 +89,7 @@ public:
   // GEP
   value *create_gep(value *ptr, const std::vector<value*>& idx_list, const std::string &name = "");
   // Comparison (int)
-  value *create_icmp(cmp_inst::pred_t pred, value *lhs, value *rhs, const std::string &name = "");
+  value *create_icmp(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name = "");
   value *create_icmpSLE(value *lhs, value *rhs, const std::string &name = "");
   value *create_icmpSLT(value *lhs, value *rhs, const std::string &name = "");
   value *create_icmpSGE(value *lhs, value *rhs, const std::string &name = "");
@@ -101,7 +101,7 @@ public:
   value *create_icmpEQ(value *lhs, value *rhs, const std::string &name = "");
   value *create_icmpNE(value *lhs, value *rhs, const std::string &name = "");
   // Comparison (float)
-  value *create_fcmp(cmp_inst::pred_t pred, value *lhs, value *rhs, const std::string &name = "");
+  value *create_fcmp(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name = "");
   value *create_fcmpOLT(value *lhs, value *rhs, const std::string &name = "");
   value *create_fcmpOGT(value *lhs, value *rhs, const std::string &name = "");
   value *create_fcmpOLE(value *lhs, value *rhs, const std::string &name = "");

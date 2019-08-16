@@ -1,10 +1,10 @@
 #include <string>
+#include <algorithm>
 #include "triton/ir/basic_block.h"
 #include "triton/ir/builder.h"
 #include "triton/ir/constant.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
-#include "llvm/IR/Instruction.h"
 
 namespace triton{
 namespace ir{
@@ -93,14 +93,14 @@ value *builder::create_ret_void() {
     return create_cast(OPCODE, src, dst_ty, name);\
   }
 
-DEFINE_CAST_INSTR(si_to_fp, llvm::Instruction::SIToFP)
-DEFINE_CAST_INSTR(ui_to_fp, llvm::Instruction::UIToFP)
-DEFINE_CAST_INSTR(fp_to_si, llvm::Instruction::FPToSI)
-DEFINE_CAST_INSTR(fp_to_ui, llvm::Instruction::FPToUI)
-DEFINE_CAST_INSTR(fp_ext, llvm::Instruction::FPExt)
-DEFINE_CAST_INSTR(fp_trunc, llvm::Instruction::FPTrunc)
+DEFINE_CAST_INSTR(si_to_fp, cast_op_t::SIToFP)
+DEFINE_CAST_INSTR(ui_to_fp, cast_op_t::UIToFP)
+DEFINE_CAST_INSTR(fp_to_si, cast_op_t::FPToSI)
+DEFINE_CAST_INSTR(fp_to_ui, cast_op_t::FPToUI)
+DEFINE_CAST_INSTR(fp_ext, cast_op_t::FPExt)
+DEFINE_CAST_INSTR(fp_trunc, cast_op_t::FPTrunc)
 
-value* builder::create_cast(cast_inst::op_t op, value *v, type *dst_ty, const std::string &name){
+value* builder::create_cast(cast_op_t op, value *v, type *dst_ty, const std::string &name){
   return insert(cast_inst::create(op, v, dst_ty), name);
 }
 
@@ -131,11 +131,11 @@ phi_node* builder::create_phi(type *ty, unsigned num_reserved, const std::string
   }
 
 // Binary
-DEFINE_BINARY_FLOAT(fmul, llvm::Instruction::FMul)
-DEFINE_BINARY_FLOAT(fdiv, llvm::Instruction::FDiv)
-DEFINE_BINARY_FLOAT(frem, llvm::Instruction::FRem)
-DEFINE_BINARY_FLOAT(fadd, llvm::Instruction::FAdd)
-DEFINE_BINARY_FLOAT(fsub, llvm::Instruction::FSub)
+DEFINE_BINARY_FLOAT(fmul, binary_op_t::FMul)
+DEFINE_BINARY_FLOAT(fdiv, binary_op_t::FDiv)
+DEFINE_BINARY_FLOAT(frem, binary_op_t::FRem)
+DEFINE_BINARY_FLOAT(fadd, binary_op_t::FAdd)
+DEFINE_BINARY_FLOAT(fsub, binary_op_t::FSub)
 // Unary
 DEFINE_UNARY_FLOAT(fneg)
 
@@ -145,7 +145,7 @@ DEFINE_UNARY_FLOAT(fneg)
 //===----------------------------------------------------------------------===//
 
 
-value* builder::create_insert_nuwnswb_binop(binary_operator::op_t op, value *lhs,
+value* builder::create_insert_nuwnswb_binop(binary_op_t op, value *lhs,
                                             value *rhs, const std::string &name,
                                             bool has_nuw, bool has_nsw) {
   auto *clhs = dynamic_cast<constant_int*>(lhs);
@@ -180,18 +180,18 @@ value* builder::create_insert_nuwnswb_binop(binary_operator::op_t op, value *lhs
   }
 
 // Binary
-DEFINE_NOWRAP_BINARY(mul, llvm::Instruction::Mul)
-DEFINE_NOWRAP_BINARY(add, llvm::Instruction::Add)
-DEFINE_NOWRAP_BINARY(sub, llvm::Instruction::Sub)
-DEFINE_NOWRAP_BINARY(shl, llvm::Instruction::Shl)
-DEFINE_NOWRAP_BINARY(ashr, llvm::Instruction::AShr)
-DEFINE_BINARY_INT(sdiv, llvm::Instruction::SDiv)
-DEFINE_BINARY_INT(udiv, llvm::Instruction::UDiv)
-DEFINE_BINARY_INT(srem, llvm::Instruction::SRem)
-DEFINE_BINARY_INT(urem, llvm::Instruction::URem)
-DEFINE_BINARY_INT(and, llvm::Instruction::And)
-DEFINE_BINARY_INT(or, llvm::Instruction::Or)
-DEFINE_BINARY_INT(xor, llvm::Instruction::Xor)
+DEFINE_NOWRAP_BINARY(mul, binary_op_t::Mul)
+DEFINE_NOWRAP_BINARY(add, binary_op_t::Add)
+DEFINE_NOWRAP_BINARY(sub, binary_op_t::Sub)
+DEFINE_NOWRAP_BINARY(shl, binary_op_t::Shl)
+DEFINE_NOWRAP_BINARY(ashr, binary_op_t::AShr)
+DEFINE_BINARY_INT(sdiv, binary_op_t::SDiv)
+DEFINE_BINARY_INT(udiv, binary_op_t::UDiv)
+DEFINE_BINARY_INT(srem, binary_op_t::SRem)
+DEFINE_BINARY_INT(urem, binary_op_t::URem)
+DEFINE_BINARY_INT(and, binary_op_t::And)
+DEFINE_BINARY_INT(or, binary_op_t::Or)
+DEFINE_BINARY_INT(xor, binary_op_t::Xor)
 // Unary
 DEFINE_UNARY_INT(neg)
 DEFINE_UNARY_INT(not)
@@ -209,7 +209,7 @@ value* builder::create_gep(value *ptr, const std::vector<value*>& idx_list, cons
 //                               icmp instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_icmp(cmp_inst::pred_t pred, value *lhs, value *rhs, const std::string &name){
+value *builder::create_icmp(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name){
   return insert(icmp_inst::create(pred, lhs, rhs), name);
 }
 
@@ -219,25 +219,25 @@ value *builder::create_icmp(cmp_inst::pred_t pred, value *lhs, value *rhs, const
   }
 
 // Signed
-DEFINE_ICMP_INSTR(SLE, llvm::ICmpInst::ICMP_SLE)
-DEFINE_ICMP_INSTR(SLT, llvm::ICmpInst::ICMP_SLT)
-DEFINE_ICMP_INSTR(SGE, llvm::ICmpInst::ICMP_SGE)
-DEFINE_ICMP_INSTR(SGT, llvm::ICmpInst::ICMP_SGT)
+DEFINE_ICMP_INSTR(SLE, cmp_pred_t::ICMP_SLE)
+DEFINE_ICMP_INSTR(SLT, cmp_pred_t::ICMP_SLT)
+DEFINE_ICMP_INSTR(SGE, cmp_pred_t::ICMP_SGE)
+DEFINE_ICMP_INSTR(SGT, cmp_pred_t::ICMP_SGT)
 // Unsigned
-DEFINE_ICMP_INSTR(ULE, llvm::ICmpInst::ICMP_ULE)
-DEFINE_ICMP_INSTR(ULT, llvm::ICmpInst::ICMP_ULT)
-DEFINE_ICMP_INSTR(UGE, llvm::ICmpInst::ICMP_UGE)
-DEFINE_ICMP_INSTR(UGT, llvm::ICmpInst::ICMP_UGT)
+DEFINE_ICMP_INSTR(ULE, cmp_pred_t::ICMP_ULE)
+DEFINE_ICMP_INSTR(ULT, cmp_pred_t::ICMP_ULT)
+DEFINE_ICMP_INSTR(UGE, cmp_pred_t::ICMP_UGE)
+DEFINE_ICMP_INSTR(UGT, cmp_pred_t::ICMP_UGT)
 // General
-DEFINE_ICMP_INSTR(EQ, llvm::ICmpInst::ICMP_EQ)
-DEFINE_ICMP_INSTR(NE, llvm::ICmpInst::ICMP_NE)
+DEFINE_ICMP_INSTR(EQ, cmp_pred_t::ICMP_EQ)
+DEFINE_ICMP_INSTR(NE, cmp_pred_t::ICMP_NE)
 
 
 //===----------------------------------------------------------------------===//
 //                               fcmp instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_fcmp(cmp_inst::pred_t pred, value *lhs, value *rhs, const std::string &name){
+value *builder::create_fcmp(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name){
   return insert(fcmp_inst::create(pred, lhs, rhs), name);
 }
 
@@ -247,12 +247,12 @@ value *builder::create_fcmp(cmp_inst::pred_t pred, value *lhs, value *rhs, const
   }
 
 // Ordered
-DEFINE_FCMP_INSTR(OLE, llvm::FCmpInst::FCMP_OLE)
-DEFINE_FCMP_INSTR(OLT, llvm::FCmpInst::FCMP_OLT)
-DEFINE_FCMP_INSTR(OGE, llvm::FCmpInst::FCMP_OGE)
-DEFINE_FCMP_INSTR(OGT, llvm::FCmpInst::FCMP_OGT)
-DEFINE_FCMP_INSTR(OEQ, llvm::FCmpInst::FCMP_OEQ)
-DEFINE_FCMP_INSTR(ONE, llvm::FCmpInst::FCMP_ONE)
+DEFINE_FCMP_INSTR(OLE, cmp_pred_t::FCMP_OLE)
+DEFINE_FCMP_INSTR(OLT, cmp_pred_t::FCMP_OLT)
+DEFINE_FCMP_INSTR(OGE, cmp_pred_t::FCMP_OGE)
+DEFINE_FCMP_INSTR(OGT, cmp_pred_t::FCMP_OGT)
+DEFINE_FCMP_INSTR(OEQ, cmp_pred_t::FCMP_OEQ)
+DEFINE_FCMP_INSTR(ONE, cmp_pred_t::FCMP_ONE)
 
 
 

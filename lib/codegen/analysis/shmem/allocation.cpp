@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "triton/codegen/analysis/shmem/allocation.h"
 #include "triton/codegen/analysis/shmem/liveness.h"
 #include "triton/codegen/analysis/shmem/info.h"

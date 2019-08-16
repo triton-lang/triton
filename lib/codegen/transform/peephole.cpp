@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/codegen/transform/peephole.h"
@@ -187,7 +188,7 @@ bool peephole::rewrite_gep_ptr_min_off_plus_off(ir::instruction *value, ir::buil
   auto z = dynamic_cast<ir::binary_operator*>(idx);
   if(!z)
     return false;
-  bool is_sub = z->get_op() == ir::binary_operator::llop::Sub;
+  bool is_sub = z->get_op() == ir::binary_op_t::Sub;
   auto *lhs = dynamic_cast<ir::constant_int*>(z->get_operand(0));
   bool is_lhs_0 = lhs && (lhs->get_value()==0);
   bool is_rhs_eq_x_rhs = z->get_operand(1) == *x->idx_begin();

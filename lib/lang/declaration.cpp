@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "triton/lang/statement.h"
 #include "triton/lang/declaration.h"
 #include "triton/ir/function.h"

@@ -25,6 +25,7 @@
 
 namespace llvm {
   class Module;
+
 }
 
 namespace triton {
