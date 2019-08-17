@@ -164,16 +164,17 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
   res.cublas = 0;
 
   // test
-//  stream->synchronize();
-//  stream->read(dc, true, 0, hc);
-//  std::vector<NumericT> rc(hc.size());
-//  cpu_ref(AT, BT, M, N, K, rc, ha, hb);
-//  for(size_t i = 0; i < M*N; i++)
-//    if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
-//      std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
-//      exit(EXIT_FAILURE);
-//    }
-//  std::cout << "Pass!" << std::endl;
+  stream->synchronize();
+  stream->read(dc, true, 0, hc);
+  std::vector<NumericT> rc(hc.size());
+  cpu_ref(AT, BT, M, N, K, rc, ha, hb);
+  for(size_t i = 0; i < M*N; i++)
+    if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
+      std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
+      exit(EXIT_FAILURE);
+    }
+  std::cout << hc[0] << " " << std::endl;
+  std::cout << "Pass!" << std::endl;
 
   // clean-up
   delete dc;

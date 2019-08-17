@@ -161,7 +161,7 @@ result += R"(
     // extract outputs)";
 for(unsigned i = 0; i < n_outputs; i++)
   result += R"(
-    context->set_output()" + str_i[i] + ", " + arg_names[outputs[i]] + ");";
+   context->set_output()" + str_i[i] + ", " + arg_names[outputs[i]] + ");";
 
 result += R"(
 
@@ -201,15 +201,26 @@ private:
   rt::function fn_;
 };
 
-REGISTER_KERNEL_BUILDER(Name(")" + name + "\").Device(DEVICE_GPU), " + classname + R"();
+REGISTER_KERNEL_BUILDER(Name(")" + name + "\").Device(DEVICE_GPU)";
+for(size_t i = 0; i < tf_scalar_tys.size(); i++){
+   std::string arg_name = arg_names[i];
+  std::transform(arg_name.begin(), arg_name.end(), arg_name.begin(), [](char c) { return std::tolower(c);});
+  if(!fn_ty->get_param_ty(i)->is_pointer_ty())
+    result += ".HostMemory(\"" + arg_name + "\")";
+}
+result += ", " + classname + R"();
+
 
 REGISTER_OP(")" + name + "\")\n";
 for(size_t i = 0; i < tf_scalar_tys.size(); i++){
   bool is_output = std::find(outputs.begin(), outputs.end(), i) != outputs.end();
-  std::string mode = is_output ? "Output" : "Input" ;
+  std::string mode = is_output ? "Input" : "Input" ;
   std::string arg_name = arg_names[i];
   std::transform(arg_name.begin(), arg_name.end(), arg_name.begin(), [](char c) { return std::tolower(c);});
-  result += "  ." + mode + "(\"" + arg_name + ": " + tf_scalar_tys[i] + "\")\n";
+  result += "  .Input(\"" + arg_name + ": " + tf_scalar_tys[i] + "\")\n";
+}
+for(size_t i = 0; i < outputs.size(); i++){
+  result += "  .Output(\"out: " + tf_scalar_tys[outputs[i]] + "\")\n";
 }
 result += ";\n";
 
