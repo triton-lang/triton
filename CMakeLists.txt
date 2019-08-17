@@ -48,9 +48,16 @@ endif()
 # Python module
 if(BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
-    file(GLOB_RECURSE PYTHON_SRC python/src/*.cpp)
-    include_directories(python/src/ ${PYTHON_INCLUDE_DIRS})
-    set(PYTHON_LIBS )
+    # PyBind11 wrapper source file
+    file(GLOB_RECURSE PYTHON_SRC python/src/tensorflow.cpp)
+    # update include directory
+    include_directories(python/src/ ${PYTHON_INCLUDE_DIRS} ${TF_INCLUDE_DIRS})
+    # update link directories
+    link_directories(${TF_LIB_DIRS})
+    # extra tensorflow ops (e.g., alloc_empty)
+    file(GLOB_RECURSE EXTRA_TF_OPS_SRC python/src/tensorflow/*.cpp)
+    add_library(extra_tf_ops SHARED ${EXTRA_TF_OPS_SRC})
+    target_link_libraries(extra_tf_ops ${TF_LIBS})
 endif()
 
 

@@ -35,12 +35,22 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
+        # python directors
         python_include_dirs = distutils.sysconfig.get_python_inc()
         python_lib_dirs = distutils.sysconfig.get_config_var('LIBDIR')
+        # tensorflow directories
+        import tensorflow as tf
+        tf_include_dirs = tf.sysconfig.get_include()
+        tf_lib_dirs = tf.sysconfig.get_lib()
+        tf_libs = 'tensorflow_framework'
+
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
                       '-DBUILD_EXAMPLES=OFF',
                       '-DBUILD_PYTHON_MODULE=ON',
-                      '-DPYTHON_INCLUDE_DIRS=' + python_include_dirs]
+                      '-DPYTHON_INCLUDE_DIRS=' + python_include_dirs,
+                      '-DTF_INCLUDE_DIRS=' + tf_include_dirs,
+                      '-DTF_LIB_DIRS=' + tf_lib_dirs,
+                      '-DTF_LIBS=' + tf_libs]
 
         cfg = 'Debug' if self.debug else 'Release'
         build_args = ['--config', cfg]
