@@ -75,8 +75,8 @@ inline std::unique_ptr<ir::module> make_ir(ir::context& ctx, triton::lang::trans
 }
 
 std::string make_tensorflow_src(const std::string src,
-                                const std::vector<size_t>& outputs,
-                                const std::string& macro) {
+                                const std::vector<std::string>& outputs,
+                                const std::vector<std::string>& macros) {
   triton::lang::translation_unit *ast = make_ast(src.c_str());
   triton::ir::context context;
   std::unique_ptr<ir::module> ir = make_ir(context, ast);
@@ -108,7 +108,12 @@ std::string make_tensorflow_src(const std::string src,
   std::transform(fn_ty->params_begin(), fn_ty->params_end(), std::back_inserter(tf_scalar_tys), to_tf_scalar_ty);
   std::vector<std::string> tf_cref_tys;
   std::transform(fn_ty->params_begin(), fn_ty->params_end(), std::back_inserter(tf_cref_tys), ref_to_tf_ty);
-
+  // output indices
+  std::vector<long> out_idx;
+  for(const std::string &name : outputs){
+    auto it = std::find(arg_names.begin(), arg_names.end(), name);
+    out_idx.push_back(std::distance(arg_names.begin(), it));
+  }
   std::ostringstream oss;
 
   std::string result = R"(
@@ -161,7 +166,7 @@ result += R"(
     // extract outputs)";
 for(unsigned i = 0; i < n_outputs; i++)
   result += R"(
-   context->set_output()" + str_i[i] + ", " + arg_names[outputs[i]] + ");";
+   context->set_output()" + str_i[i] + ", " + outputs[i] + ");";
 
 result += R"(
 
@@ -172,12 +177,21 @@ result += R"(
 
 
 std::regex regex("#([a-zA-Z]([a-zA-Z]|[0-9])*)");
-std::string grid_str = std::regex_replace(macro, regex, "x.at(\"$1\")");
+std::vector<std::string> grids;
+for(size_t i = macros.size(); i < 3; i++)
+  grids.push_back("1");
+std::string grid = "rt::grid_t{";
+for(size_t i = 0; i < grids.size(); i++){
+  if(i > 0)
+    grid += ", ";
+  grid += std::regex_replace(grids[i], regex, "x.at(\"$1\")");
+}
+grid += "}";
 
 result += R"(
 
     // create launch grid;
-    auto grid = [&](const rt::params_t& x) { return rt::grid_t{)" + grid_str + R"(}; };)";
+    auto grid = [&](const rt::params_t& x) { return )" + grid + R"(; };)";
 
 result += R"(
 
@@ -213,14 +227,12 @@ result += ", " + classname + R"();
 
 REGISTER_OP(")" + name + "\")\n";
 for(size_t i = 0; i < tf_scalar_tys.size(); i++){
-  bool is_output = std::find(outputs.begin(), outputs.end(), i) != outputs.end();
-  std::string mode = is_output ? "Input" : "Input" ;
   std::string arg_name = arg_names[i];
   std::transform(arg_name.begin(), arg_name.end(), arg_name.begin(), [](char c) { return std::tolower(c);});
   result += "  .Input(\"" + arg_name + ": " + tf_scalar_tys[i] + "\")\n";
 }
 for(size_t i = 0; i < outputs.size(); i++){
-  result += "  .Output(\"out: " + tf_scalar_tys[outputs[i]] + "\")\n";
+  result += "  .Output(\"out" + std::to_string(i) + ": " + tf_scalar_tys[out_idx[i]] + "\")\n";
 }
 result += ";\n";
 

@@ -6,6 +6,9 @@ import setuptools.command.build_ext
 import setuptools
 import numpy as np
 import os
+import tempfile
+import shutil
+import hashlib
 
 src = """
 const tunable int TM = {128};
@@ -46,55 +49,94 @@ void matmul(restrict read_only align(16) half *A,
 }
 """
 
+
 extra_ops = tf.load_op_library('/home/philippe/development/triton/python/build/lib.linux-x86_64-3.6/libextra_tf_ops.so')
 
 
-with open('test.cpp', 'w+') as test:
-  src = libtriton.make_tensorflow_src(src, [2], '(M + #TM - 1)/#TM, (N + #TN - 1)/#TN, 1')
-  test.writelines(src)
+def make_bindings(src, outputs, grids):
+  return libtriton.make_tensorflow_src(src, outputs, grids)
 
-triton_include_dirs = ['/home/philippe/development/triton/include']
-tensorflow_include_dirs = [tf.sysconfig.get_include()]
-cuda_include_dirs = ['/usr/local/cuda-10.1/targets/x86_64-linux/include/']
+def make_cache_path(src):
+  md5 = hashlib.sha1(src.encode())
+  hexhash = md5.hexdigest()
+  home = os.path.expanduser('~')
+  cacheroot = os.path.join(home, '.triton', 'cache')
+  cachepath = os.path.join(cacheroot, str(hexhash))
+  if not os.path.exists(cachepath):
+    os.makedirs(cachepath)
+  print(cachepath)
+  return cachepath
 
-triton_library_dirs = [os.path.realpath(os.path.join(libtriton.__file__, os.path.pardir))]
-tensorflow_library_dirs = [tf.sysconfig.get_lib()]
+def write_bindings(src, root):
+  cpp = os.path.join(root, 'tensorflow.cpp')
+  so = os.path.join(root, 'tensorflow.so')
+  recompile = False
+  # recompile if .so does not exist
+  if not os.path.exists(cpp) or not os.path.exists(so):
+    recompile = True
+  # recompile if cpp was modified after .so
+  elif max(cpp, so, key=os.path.getctime) == cpp:
+    recompile = True
+  # write cpp file
+  if recompile:
+    with open(cpp, 'w+') as handle:
+      handle.writelines(src)
+  # return path of cpp file
+  return cpp
+  
+def build(src, path):
+  # include directories
+  triton_include_dirs = ['/home/philippe/development/triton/include']
+  tensorflow_include_dirs = [tf.sysconfig.get_include()]
+  cuda_include_dirs = ['/usr/local/cuda-10.1/targets/x86_64-linux/include/']
+  include_dirs = triton_include_dirs + tensorflow_include_dirs + cuda_include_dirs
+  # library directories
+  triton_library_dirs = [os.path.realpath(os.path.join(libtriton.__file__, os.path.pardir))]
+  tensorflow_library_dirs = [tf.sysconfig.get_lib()]
+  library_dirs = triton_library_dirs + tensorflow_library_dirs
+  # libraries
+  libraries = ['tensorflow_framework', 'triton']
+  # extra arguments
+  extra_compile_args = []
+  extra_link_args = []
+  # create extension module
+  ext = setuptools.Extension(
+      name = 'test',
+      language = 'c++',
+      sources = [src],
+      include_dirs = include_dirs,
+      extra_compile_args = extra_compile_args,
+      extra_link_args = extra_link_args,
+      library_dirs = library_dirs,
+      libraries = libraries
+  )
+  # build extension module
+  args = ['build_ext']
+  tmp = tempfile.mkdtemp()
+  args.append('--build-temp=' + tmp)
+  args.append('--build-lib=' + path)
+  args.append('-q')
+  args = dict(
+      name = 'test',
+      ext_modules = [ext],
+      script_args = args,
+  ) 
+  setuptools.setup(**args)
+  shutil.rmtree(tmp)
 
-include_dirs = triton_include_dirs + tensorflow_include_dirs + cuda_include_dirs
-extra_compile_args = []
-extra_link_args = []
-library_dirs = triton_library_dirs + tensorflow_library_dirs
-libraries = ['tensorflow_framework', 'triton']
+def make_tensorflow_op(src, outputs, grids):
+  bindings = make_bindings(src, outputs, grids)
+  cache_path = make_cache_path(bindings)
+  cpp = write_bindings(bindings, cache_path)
+  build(cpp, cache_path)
+  result = tf.load_op_library(os.path.join(cache_path, 'test.cpython-36m-x86_64-linux-gnu.so'))
+  return result
 
-ext = setuptools.Extension(
-    name = 'test',
-    language = 'c++',
-    sources = ['/home/philippe/development/triton/python/examples/test.cpp'],
-    include_dirs = include_dirs,
-    extra_compile_args = extra_compile_args,
-    extra_link_args = extra_link_args,
-    library_dirs = library_dirs,
-    libraries = libraries
-)
 
-build_path = '.'
-args = ['build_ext']
-#args.append('--build-temp=' + build_path)
-#args.append('--build-lib=' + build_path)
-args.append('-q')
-args = dict(
-    name = 'test',
-    ext_modules = [ext],
-    script_args = args,
-    cmdclass = {
-      'build_ext': setuptools.command.build_ext.build_ext
-  }
-
-) 
-
-setuptools.setup(**args)
 library_dir = os.path.dirname(os.path.realpath(__file__))
-module = tf.load_op_library(os.path.join(library_dir, 'build/lib.linux-x86_64-3.6/test.cpython-36m-x86_64-linux-gnu.so'))
+module = make_tensorflow_op(src, ['C'], ['(M + #TM - 1)/#TM', '(N + #TN - 1)/#TN'])
+print(module.matmul)
+
 
 class dot:
 
