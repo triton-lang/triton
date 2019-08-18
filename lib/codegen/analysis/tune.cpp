@@ -232,9 +232,7 @@ void tune::run(ir::module &mod) {
       }
     }
   }
-}
 
-void tune::init(ir::module &mod) {
   for(ir::function *fn: mod.get_function_list()){
     std::map<unsigned, ir::value*> references;
     create_grids(grids_, references, fn);
@@ -316,6 +314,7 @@ void tune::init(ir::module &mod) {
       assert(num_threads == effective_num_threads);
     }
   }
+
 }
 
 

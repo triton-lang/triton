@@ -199,7 +199,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   peephole.run(module);
   dce.run(module);
   tune.run(module);
-  tune.init(module);
   reassociate.run(module);
   peephole.run(module);
   if(target->is_gpu()){
