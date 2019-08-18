@@ -88,8 +88,8 @@ void matmul(restrict read_only align(16) )" + a_ty + R"( *A,
             restrict read_only align(16) )" + c_ty + R"( *C,
             int M, int N, int K,
             )" + align_lda_str + R"( int lda, )" + align_ldb_str + R"(" int ldb, int ldc) {
-  int ridx = get_range_id(0);
-  int ridy = get_range_id(1);
+  int ridx = get_program_id(0);
+  int ridy = get_program_id(1);
   int rxa[TM] = ridx * TM + (0 ... TM);
   int ryb[TN] = ridy * TN + (0 ... TN);
   int rka[TK] = 0 ... TK;

@@ -71,9 +71,9 @@ private:
   const constant* size_;
 };
 
-class get_range_id_expression: public builtin_expression{
+class get_program_id_expression: public builtin_expression{
 public:
-  get_range_id_expression(node *axis): axis_((constant*)axis) { }
+  get_program_id_expression(node *axis): axis_((constant*)axis) { }
   ir::value* codegen(ir::module *) const;
 
 private:

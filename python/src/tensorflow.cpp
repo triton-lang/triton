@@ -177,8 +177,8 @@ result += R"(
 
 
 std::regex regex("#([a-zA-Z]([a-zA-Z]|[0-9])*)");
-std::vector<std::string> grids;
-for(size_t i = macros.size(); i < 3; i++)
+std::vector<std::string> grids = macros;
+for(size_t i = grids.size(); i < 3; i++)
   grids.push_back("1");
 std::string grid = "rt::grid_t{";
 for(size_t i = 0; i < grids.size(); i++){

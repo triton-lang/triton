@@ -114,11 +114,11 @@ std::string dot::triton_c_src_ydx() const {
              int lda, int ldb, int ldc,
              int N, int* lut,
              int* locks, int nlocks) {
-    int ridx = get_range_id(0);
+    int ridx = get_program_id(0);
     float acc[TM, TN] = 0;
     int rka[TK] = 0 ... TK;
     int rkb[TK] = 0 ... TK;
-    int *header = lut + get_range_id(1) * 4;
+    int *header = lut + get_program_id(1) * 4;
     int offset = *(header + 0);
     int K      = *(header + 1);
     int column = *(header + 2);
@@ -191,7 +191,7 @@ std::string dot::triton_c_src_dw() const {
              int lda, int ldb, int ldc,
              int N, int* lut,
              int* locks, int nlocks) {
-    int ridx = get_range_id(0);
+    int ridx = get_program_id(0);
     float acc[TM, TN] = 0;
     int rka[TK] = 0 ... TK;
     int rkb[TK] = 0 ... TK;
