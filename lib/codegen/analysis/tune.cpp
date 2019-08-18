@@ -183,20 +183,6 @@ void tune::connected_components(node_t x, const std::vector<ir::metaparameter *>
   }
 }
 
-std::vector<ir::metaparameter *> tune::get_params(ir::module &mod) {
-  throw std::runtime_error("remove me");
-//  std::vector<ir::metaparameter*> result;
-//  std::set<ir::metaparameter*> seen;
-//  for(auto x: mod.globals()) {
-//    if(auto mp = dynamic_cast<ir::metaparameter*>(x.second))
-//      if(seen.insert(mp).second && !mp->has_value())
-//        result.push_back(mp);
-//  }
-//  num_warps_ = ir::metaparameter::create(mod.get_context(), mod.get_builder().get_int32_ty(), 4, 4);
-//  result.push_back(num_warps_);
-//  return result;
-}
-
 unsigned tune::get_param_group(ir::value *value, unsigned ax) {
   unsigned result = groups_.at(value).at(ax);
   return result;
