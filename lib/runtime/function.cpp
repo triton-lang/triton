@@ -147,7 +147,7 @@ options function::autotune(lang::translation_unit *ast, driver::stream* stream, 
     double ts;
     std::vector<unsigned> params;
   };
-  profile_t best = { INFINITY };
+  profile_t best = { INFINITY, {} };
   std::function<void(std::vector<unsigned>)> benchmark =
       [&](std::vector<unsigned> params) {
     // options
@@ -184,7 +184,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   if(auto* mp = dynamic_cast<ir::metaparameter*>(module.globals().at(x.first)))
     mp->set_value(x.second);
   // create passes
-  codegen::analysis::tune tune(opt.num_warps);
+  codegen::analysis::grids tune(opt.num_warps);
   codegen::analysis::shmem::info shmem_info;
   codegen::analysis::shmem::liveness shmem_liveness(&shmem_info);
   codegen::analysis::shmem::allocation shmem_allocation(&shmem_liveness, &shmem_info, &tune);

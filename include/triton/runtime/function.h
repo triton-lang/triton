@@ -42,7 +42,7 @@ class translation_unit;
 
 namespace codegen{
 namespace analysis{
-class tune;
+class grids;
 }
 }
 
