@@ -58,7 +58,7 @@ void tune::init_c_graph(ir::instruction *v) {
     shapes = store->get_pointer_operand()->get_type()->get_tile_shapes();
   else if(auto *atom = dynamic_cast<ir::atomic_add_inst*>(v))
     shapes = atom->get_operand(0)->get_type()->get_tile_shapes();
-  else if(auto *downcast = dynamic_cast<ir::downcast_inst*>(v))
+  else if(dynamic_cast<ir::downcast_inst*>(v))
     return;
   else if(auto *reduce = dynamic_cast<ir::reduce_inst*>(v)) {
     unsigned axis = reduce->get_axis();
@@ -116,7 +116,7 @@ void tune::init_c_graph(ir::instruction *v) {
     }
   }
   // Matrix multiplication
-  else if(auto *x = dynamic_cast<ir::dot_inst*>(v)){
+  else if(dynamic_cast<ir::dot_inst*>(v)){
     ir::value *A = v->get_operand(0);
     ir::value *B = v->get_operand(1);
     ir::value *D = v->get_operand(2);
@@ -166,7 +166,7 @@ void tune::connected_components(node_t x, const std::vector<ir::metaparameter *>
   if(nodes.find(x) != nodes.end()){
     nodes.erase(x);
     std::string suffix = ".d" + std::to_string(x.second);
-    for(int i = 0; i < mps.size(); i++)
+    for(unsigned i = 0; i < mps.size(); i++)
       params_[x.first].insert({prefixes[i] + suffix, mps[i]});
     ir::type *ty = x.first->get_type();
     if(ty->is_tile_ty()){
@@ -254,24 +254,24 @@ void tune::init(ir::module &mod) {
     create_grids(grids_, references, fn);
   }
 
-  int num_threads = get_num_threads();
-  auto clamp = [&](int x, int lo, int hi) { return std::min(std::max(x, lo), hi); };
+  unsigned num_threads = get_num_threads();
+  auto clamp = [&](unsigned x, unsigned lo, unsigned hi) { return std::min(std::max(x, lo), hi); };
 
   for(ir::value *i: grids_){
     if(!i->get_type()->is_tile_ty())
       continue;
     auto shapes = i->get_type()->get_tile_shapes();
-    int shape_0 = shapes[0]->get_value();
-    int shape_1 = shapes[1]->get_value();
-    int size = i->get_type()->get_tile_num_elements();
+    unsigned shape_0 = shapes[0]->get_value();
+    unsigned shape_1 = shapes[1]->get_value();
+    unsigned size = i->get_type()->get_tile_num_elements();
     /* HMMA parameters*/
     if(fragments_.at({i, 0}) == HMMA_FRAGMENT_C){
 
       /* fragments per warp */
       // try to make things as square as possible to maximize data re-use
-      std::vector<int> fpw = {1, 1, 1};
-      std::vector<int> fpw_nm1;
-      int num_fragments = std::min((shape_0/8)*(shape_1/8), 4);
+      std::vector<unsigned> fpw = {1, 1, 1};
+      std::vector<unsigned> fpw_nm1;
+      unsigned num_fragments = std::min<unsigned>((shape_0/8)*(shape_1/8), 4);
       do {
         fpw_nm1 = fpw;
         if(fpw[0]*fpw[1] < num_fragments)
@@ -280,13 +280,13 @@ void tune::init(ir::module &mod) {
           fpw[1] = clamp(fpw[1]*2, 1, shape_1 / 8);
       }while(fpw_nm1 != fpw);
       // store parameters
-      for(int d = 0; d < shapes.size(); d++)
+      for(unsigned d = 0; d < shapes.size(); d++)
         params_.at(i).at("fpw.d" + std::to_string(d))->set_value(fpw[d]);
 
       /* warps per tile */
       // try to make things as square as possible to maximize data re-use
-      std::vector<int> wpt = {1, 1, 1};
-      std::vector<int> wpt_nm1;
+      std::vector<unsigned> wpt = {1, 1, 1};
+      std::vector<unsigned> wpt_nm1;
       do{
         wpt_nm1 = wpt;
         if(wpt[0] * wpt[1] * wpt[2] < num_warps_)
@@ -295,7 +295,7 @@ void tune::init(ir::module &mod) {
           wpt[1] = clamp(wpt[1]*2, 1, shape_1 / (fpw[1]*8));
       }while(wpt_nm1 != wpt);
       // store parameters
-      for(int d = 0; d < shapes.size(); d++)
+      for(unsigned d = 0; d < shapes.size(); d++)
         params_.at(i).at("wpt.d" + std::to_string(d))->set_value(wpt[d]);
 
       /* sanity check */
@@ -309,8 +309,8 @@ void tune::init(ir::module &mod) {
 
     /* Scan-line */
     else{
-      int shape = shapes[0]->get_value();
-      int current = num_threads;
+      unsigned shape = shapes[0]->get_value();
+      unsigned current = num_threads;
       params_.at(i).at("nts.d0")->set_value(clamp(size / num_threads, 1, 8));
       params_.at(i).at("mts.d0")->set_value(clamp(current, 1, shape / params_.at(i).at("nts.d0")->get_value()));
       current = current / params_.at(i).at("mts.d0")->get_value();

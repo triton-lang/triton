@@ -100,8 +100,8 @@ public:
 private:
   Value *ptr_;
   bool return_vector_;
-  Value *offset_;
   Builder &builder_;
+  Value *offset_;
   std::map<indices_t, Value*> ptr_cache_;
   unsigned vector_size_;
 };
@@ -206,9 +206,9 @@ private:
   tmap_t tmap_;
   analysis::shmem::allocation *alloc_;
   analysis::tune *params_;
-  target *tgt_;
   analysis::shmem::info *buffer_info_;
   analysis::alignment_info *alignment_;
+  target *tgt_;
   std::map<unsigned, distributed_axis> axes_;
   Value *sh_mem_ptr_;
   Value *offset_a_i_, *offset_a_k_;

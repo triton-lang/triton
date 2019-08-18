@@ -227,7 +227,7 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
   if(auto *x = dynamic_cast<ir::constant_range*>(v)){
     return cache(x->get_first()->get_value());
   }
-  if(auto *x = dynamic_cast<ir::nv_dynamic_program_idx_inst*>(v)){
+  if(dynamic_cast<ir::nv_dynamic_program_idx_inst*>(v)){
     return cache(128);
   }
   if(auto *x = dynamic_cast<ir::nv_static_program_idx*>(v)){

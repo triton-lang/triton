@@ -17,8 +17,8 @@ import tensorflow as tf
 extra_ops = tf.load_op_library('/home/philippe/development/triton/python/build/lib.linux-x86_64-3.6/libextra_tf_ops.so')
 
 
-def make_bindings(src, outputs, grids):
-  return libtriton.make_tensorflow_src(src, outputs, grids)
+def make_bindings(src, out, grid):
+  return libtriton.make_tensorflow_src(src, out, grid)
 
 def make_cache_path(src):
   md5 = hashlib.sha1(src.encode())

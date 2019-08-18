@@ -60,6 +60,7 @@ ir::value* rewrite_trans_phi_impl(ir::value *value, ir::builder &builder,
     trans->set_operand(0, i);
     return trans;
   }
+  return nullptr;
 }
 
 bool peephole::rewrite_trans_phi(ir::instruction* value, ir::builder& builder) {
@@ -76,6 +77,8 @@ bool peephole::rewrite_trans_phi(ir::instruction* value, ir::builder& builder) {
   if(!phi)
     return false;
   ir::value* new_phi = rewrite_trans_phi_impl(phi, builder, trans->get_perm());
+  if(!new_phi)
+    return false;
   trans->replace_all_uses_with(new_phi);
 
   return true;

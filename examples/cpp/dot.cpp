@@ -3,7 +3,6 @@
 #include <cstdio>
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
-#include "triton/dnn/dot.h"
 #include "triton/tools/bench.hpp"
 #include "triton/external/half.hpp"
 #include "triton/runtime/function.h"

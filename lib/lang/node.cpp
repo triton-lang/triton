@@ -106,7 +106,7 @@ void node::implicit_broadcast(ir::module *mod, ir::value *&lhs, ir::value *&rhs)
     size_t res_size = std::max(lhs_size, rhs_size);
     ir::type::tile_shapes_t res_shapes(res_size);
     ir::type::tile_shapes_t::value_type one = ir::tile_type::make_one(mod->get_context());
-    for(int i = 0; i < res_size; i++){
+    for(size_t i = 0; i < res_size; i++){
       if(i >= res_size - lhs_size && i >= res_size - rhs_size)
         res_shapes[i] = lhs_shapes[i]==one?rhs_shapes[i]:lhs_shapes[i];
       else if(i >= res_size - lhs_size)
@@ -147,7 +147,7 @@ void node::implicit_broadcast(ir::module *mod, ir::type *ty, ir::value *&src){
   int src_dim = src_shapes.size();
   // Pad
   int off = dst_dim - src_dim;
-  for(size_t i = 0; i < off; i++)
+  for(int i = 0; i < off; i++)
     src_shapes.insert(src_shapes.begin(), one);
   if(off > 0)
     src = builder.create_reshape(src, src_shapes);

@@ -344,8 +344,8 @@ public:
   const expression *rvalue() const { return rvalue_; }
 
 public:
-  ASSIGN_OP_T op_;
   const expression *lvalue_;
+  ASSIGN_OP_T op_;
   const expression *rvalue_;
 };
 

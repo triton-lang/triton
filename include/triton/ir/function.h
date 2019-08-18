@@ -47,11 +47,11 @@ public:
     return std::make_pair(kind_, value_) < std::make_pair(other.kind_, other.value_);
   }
 
-  const attribute_kind_t get_kind() const {
+  attribute_kind_t get_kind() const {
     return kind_;
   }
 
-  const unsigned get_value() const {
+  unsigned get_value() const {
     return value_;
   }
 

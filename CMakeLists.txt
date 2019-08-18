@@ -25,7 +25,7 @@ include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 #llvm_map_components_to_libnames(llvm_libs all)
 
-#Default build type
+# Default build type
 if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "Default build type: Release")
   set(CMAKE_BUILD_TYPE "Release")
@@ -63,7 +63,14 @@ endif()
 
 # Triton
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cpp)
-add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC} ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
+add_library(triton SHARED ${LIBTRITON_SRC} ${EIGHTCC_SRC} ${PYTHON_SRC} ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
 target_link_libraries(triton LLVM)
+
+# Warning level
+if(MSVC)
+  target_compile_options(triton PRIVATE /W4)
+else()
+  target_compile_options(triton PRIVATE -Wno-unused-parameter -Wall -Wextra -pedantic)
+endif()
 
 
