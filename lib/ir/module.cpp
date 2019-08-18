@@ -96,8 +96,7 @@ ir::value *module::get_value_recursive(const std::string& name, ir::basic_block 
   bool is_const = const_.find(name) != const_.end();
   auto &preds = block->get_predecessors();
   ir::type *ty = get_scope().types.at(name);
-  if(block)
-  if(!is_const && sealed_blocks_.find(block) == sealed_blocks_.end()){
+  if(block && !is_const && sealed_blocks_.find(block) == sealed_blocks_.end()){
     incomplete_phis_[block][name] = make_phi(ty, 1, block);
     result = (ir::value*)incomplete_phis_[block][name];
   }
@@ -106,9 +105,9 @@ ir::value *module::get_value_recursive(const std::string& name, ir::basic_block 
     result = get_value(name, has_pred?preds.front():nullptr);
   }
   else{
-    result = make_phi(ty, 1, block);
-    set_value(name, block, result);
-    result = add_phi_operands(name, (ir::phi_node*&)result);
+    ir::phi_node* phi = make_phi(ty, 1, block);
+    set_value(name, block, phi);
+    result = add_phi_operands(name, phi);
   }
   if(auto *phi = dynamic_cast<ir::phi_node*>(result))
     result = try_remove_trivial_phis(phi);

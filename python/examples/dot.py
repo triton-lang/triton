@@ -11,7 +11,8 @@ void matmul(restrict read_only align(16) half *A,
             restrict read_only align(16) half *B,
             restrict read_only align(16) half *C,
             int M, int N, int K,
-            multiple_of(8) int lda, multiple_of(8) int ldb, int ldc) {
+            multiple_of(8) int lda, multiple_of(8) int ldb, int ldc) 
+{
   int ridx = get_program_id(0);
   int ridy = get_program_id(1);
   int rxa[TM] = ridx * TM + (0 ... TM);

@@ -226,6 +226,7 @@ llvm::Instruction::BinaryOps llvm_op(ir::binary_op_t op) {
     case ttop::Or: return llop::Or;
     case ttop::Xor: return llop::Xor;
   }
+  throw std::runtime_error("unknown operator");
 }
 
 llvm::Instruction::CastOps llvm_op(ir::cast_op_t op) {
@@ -246,6 +247,7 @@ llvm::Instruction::CastOps llvm_op(ir::cast_op_t op) {
   case ttop::BitCast: return llop::BitCast;
   case ttop::AddrSpaceCast: return llop::AddrSpaceCast;
   }
+  throw std::runtime_error("unknown operator");
 }
 
 llvm::CmpInst::Predicate llvm_pred(ir::cmp_pred_t pred) {
@@ -283,6 +285,7 @@ llvm::CmpInst::Predicate llvm_pred(ir::cmp_pred_t pred) {
     case ttop::ICMP_SLE: return llop::ICMP_SLE;
     case ttop::LAST_ICMP_PREDICATE: return llop::LAST_ICMP_PREDICATE;
   }
+  throw std::runtime_error("unknown operator");
 }
 
 /* convert ir::type to Type */
@@ -468,7 +471,7 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
   if(ir::atomic_add_inst* ii = dynamic_cast<ir::atomic_add_inst*>(inst)){
     Value *ptr = value(ii->get_operand(0));
     Value *val = value(ii->get_operand(1));
-    Value *atom_f_add;
+    Value *atom_f_add = nullptr;
     if(val->getType()->isFloatTy())
       atom_f_add = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_atomic_load_add_f32, {ptr->getType()});
     else if(val->getType()->isHalfTy()){
@@ -477,6 +480,8 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
       FunctionType *atom_ty = FunctionType::get(fp16, {fp16->getPointerTo(), fp16}, false);
       atom_f_add = InlineAsm::get(atom_ty, " atom.relaxed.global.gpu.add.noftz.f16 $0, [$1], $2;", "=h,l,h", true);
     }
+    if(atom_f_add == nullptr)
+      throw std::runtime_error("unsupported atomic add");
     Value *res = builder.CreateCall(atom_f_add, {ptr, val});
     return (Instruction*)res;
   }
@@ -607,7 +612,6 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     Value *_2 = builder.getInt32(2);
     Value *_3 = builder.getInt32(3);
     Value *_4 = builder.getInt32(4);
-    Value *_8 = builder.getInt32(8);
     Value *_16 = builder.getInt32(16);
 
     // fragments per warp
@@ -1303,11 +1307,10 @@ void selection::lower_masked_load(ir::masked_load_inst *x, LLVMContext &ctx, Fun
     unsigned id = linear / vector_size;
     if(linear % vector_size == 0) {
       Value *ptr = pointers->get_value(idx);
-      ConstantInt *cst = nullptr;
-      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
-      if(gep->getNumIndices() == 1){
-        cst = dyn_cast<ConstantInt>(gep->idx_begin());
-      }
+//      ConstantInt *cst = nullptr;
+//      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
+//        if(gep->getNumIndices() == 1)
+//          cst = dyn_cast<ConstantInt>(gep->idx_begin());
 
       ptr = builder.CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
                                                         ptr->getType()->getPointerAddressSpace()));
@@ -1374,10 +1377,6 @@ void selection::lower_load(ir::load_inst *x, LLVMContext &ctx, Function *fn, IRB
     unsigned id = linear / vector_size;
     if(linear % vector_size == 0) {
       Value *ptr = pointers->get_value(idx);
-      ConstantInt *cst = nullptr;
-      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
-      if(gep->getNumIndices() == 1)
-        cst = dyn_cast<ConstantInt>(gep->idx_begin());
       ptr = builder.CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
                                                         ptr->getType()->getPointerAddressSpace()));
       packets[id] = builder.CreateLoad(ptr);

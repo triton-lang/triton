@@ -359,8 +359,11 @@ getelementptr_inst::getelementptr_inst(type *pointee_ty, value *ptr, const std::
     : instruction(get_return_type(pointee_ty, ptr, idx), 1 + idx.size(), 1, name, next),
       source_elt_ty(pointee_ty),
       res_elt_ty(get_indexed_type(pointee_ty, idx)){
-  type *expected_ty = ((pointer_type*)(get_type()->get_scalar_ty()))->get_element_ty();
+  // sanity check
+  type *expected_ty = get_type()->get_scalar_ty();
+  expected_ty = ((pointer_type*)expected_ty)->get_element_ty();
   assert(res_elt_ty == expected_ty);
+  // set operands
   set_operand(0, ptr);
   for(size_t i = 0; i < idx.size(); i++)
     set_operand(1 + i, idx[i]);
@@ -574,7 +577,7 @@ ir::type* trans_inst::get_res_ty(ir::type* ty, std::vector<constant_int*> perm) 
   // permutate argument shapes
   perm = init_perm(ty, perm);
   ir::tile_type::tile_shapes_t res_shapes = arg_shapes;
-  for(int i = 0; i < perm.size(); i++)
+  for(size_t i = 0; i < perm.size(); i++)
     res_shapes[i] = arg_shapes[perm[i]->get_value()];
   // construct type
   return tile_type::get(ty->get_scalar_ty(), res_shapes);
@@ -587,16 +590,17 @@ std::vector<constant_int*> trans_inst::init_perm(ir::type* ty, const std::vector
   ir::type* int32_ty = type::get_int32_ty(ty->get_context());
   std::vector<constant_int*> result;
   result.push_back(ir::constant_int::get(int32_ty, size - 1));
-  for(int i = 0; i < size - 1; i++)
+  for(size_t i = 0; i < size - 1; i++)
     result.push_back(ir::constant_int::get(int32_ty, i));
   return result;
 }
 
 trans_inst::trans_inst(value *arg, const std::vector<constant_int*>& perm, const std::string &name, instruction *next)
   : builtin_inst(get_res_ty(arg->get_type(), perm), 1, 1, name, next) {
+  // sanity check
   perm_ = init_perm(arg->get_type(), perm);
-  auto size = arg->get_type()->get_tile_shapes().size();
-  assert(perm_.size() == size);
+  //auto size = arg->get_type()->get_tile_shapes().size();
+  //assert(perm_.size() == size);
   set_operand(0, arg);
 }
 

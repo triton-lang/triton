@@ -19,7 +19,7 @@ bool info::is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
   if(auto *br = dynamic_cast<ir::cond_branch_inst*>(terminator))
     return br->get_true_dest() == phi->get_parent()
            || br->get_false_dest() == phi->get_parent();
-  else if(auto *br = dynamic_cast<ir::uncond_branch_inst*>(terminator))
+  else if(dynamic_cast<ir::uncond_branch_inst*>(terminator))
     return false;
   else
     throw std::runtime_error("unreachable");
@@ -36,15 +36,15 @@ void info::replace(ir::value* before, ir::value *after) {
 }
 
 inline bool get_is_shared(ir::value* v) {
-  if(auto x = dynamic_cast<ir::atomic_cas_inst*>(v))
+  if(dynamic_cast<ir::atomic_cas_inst*>(v))
     return true;
-  if(auto x = dynamic_cast<ir::trans_inst*>(v))
+  if(dynamic_cast<ir::trans_inst*>(v))
     return true;
-  if(auto x = dynamic_cast<ir::copy_to_shared_inst*>(v))
+  if(dynamic_cast<ir::copy_to_shared_inst*>(v))
     return true;
-  if(auto x = dynamic_cast<ir::reduce_inst*>(v))
+  if(dynamic_cast<ir::reduce_inst*>(v))
     return true;
-  if(auto x = dynamic_cast<ir::phi_node*>(v)){
+  if(auto *x = dynamic_cast<ir::phi_node*>(v)){
     bool res = true;
     for(unsigned inc = 0; inc < x->get_num_incoming(); inc++)
       res = res && get_is_shared(x->get_incoming_value(inc));

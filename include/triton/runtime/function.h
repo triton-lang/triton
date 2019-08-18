@@ -76,8 +76,8 @@ private:
     void operator()(driver::stream *stream, const std::array<size_t, 3>& grid, const std::vector<arg>& args) const;
 
   private:
-    std::shared_ptr<driver::module> parent_;
     std::shared_ptr<driver::kernel> bin_;
+    std::shared_ptr<driver::module> parent_;
     std::vector<arg_type> param_tys_;
     size_t n_threads_;
   };

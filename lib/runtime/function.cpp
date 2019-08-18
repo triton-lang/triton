@@ -88,10 +88,10 @@ arg_type convert(ir::type *ty) {
 }
 
 function::caller::caller(ir::function *ir, std::shared_ptr<driver::module> parent, size_t n_threads)
-  : bin_(driver::kernel::create(&*parent, ir->get_name().c_str())), n_threads_(n_threads), parent_(parent) {
+  : bin_(driver::kernel::create(&*parent, ir->get_name().c_str())), parent_(parent), n_threads_(n_threads) {
   // extract signature
   ir::function_type* ty = ir->get_fn_type();
-  for(int i = 0; i < ty->get_num_params(); i++)
+  for(size_t i = 0; i < ty->get_num_params(); i++)
     param_tys_.push_back(convert(ty->get_param_ty(i)));
 }
 
