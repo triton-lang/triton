@@ -20,9 +20,7 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include <iostream>
-#include <cstring>
-#include "llvm/ExecutionEngine/GenericValue.h"
+#include <string.h>
 #include "triton/driver/kernel.h"
 #include "triton/driver/buffer.h"
 

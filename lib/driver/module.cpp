@@ -23,11 +23,11 @@
 #include <fstream>
 #include <memory>
 #include <fstream>
-#include "llvm/IR/IRBuilder.h"
 #include "triton/driver/module.h"
 #include "triton/driver/context.h"
 #include "triton/driver/error.h"
 #include "triton/tools/sys/getenv.hpp"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Verifier.h"

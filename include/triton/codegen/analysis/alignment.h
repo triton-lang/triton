@@ -1,7 +1,6 @@
 #ifndef TDL_INCLUDE_CODEGEN_ALIGNMENT_INFO_PASS_H
 #define TDL_INCLUDE_CODEGEN_ALIGNMENT_INFO_PASS_H
 
-#include <set>
 #include <map>
 
 namespace triton {

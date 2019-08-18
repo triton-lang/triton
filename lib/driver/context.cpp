@@ -20,12 +20,9 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include <iostream>
 #include <cassert>
-
 #include "triton/driver/context.h"
 #include "triton/driver/module.h"
-
 #include "triton/tools/sys/getenv.hpp"
 #include "triton/tools/sys/mkdir.hpp"
 

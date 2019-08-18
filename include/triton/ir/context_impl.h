@@ -1,7 +1,6 @@
 #ifndef TDL_INCLUDE_IR_CONTEXT_IMPL_H
 #define TDL_INCLUDE_IR_CONTEXT_IMPL_H
 
-#include <memory>
 #include <map>
 #include "triton/ir/type.h"
 

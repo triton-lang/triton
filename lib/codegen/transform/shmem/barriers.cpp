@@ -1,4 +1,7 @@
+#include <vector>
+#include <set>
 #include <algorithm>
+
 #include "triton/codegen/transform/shmem/barriers.h"
 #include "triton/codegen/analysis/shmem/allocation.h"
 #include "triton/codegen/analysis/shmem/info.h"

@@ -1,10 +1,6 @@
 #ifndef TDL_INCLUDE_IR_CODEGEN_TARGET_H
 #define TDL_INCLUDE_IR_CODEGEN_TARGET_H
 
-#include <map>
-#include <set>
-#include <vector>
-
 namespace llvm{
   class Type;
   class Value;

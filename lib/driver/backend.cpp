@@ -20,6 +20,8 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+#include <vector>
+#include <stdexcept>
 #include "triton/driver/dispatch.h"
 #include "triton/driver/backend.h"
 #include "triton/driver/buffer.h"
@@ -27,9 +29,6 @@
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
 
-#include <assert.h>
-#include <stdexcept>
-#include <vector>
 
 namespace triton
 {

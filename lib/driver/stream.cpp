@@ -20,10 +20,8 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include <iostream>
 #include <cassert>
 #include <array>
-
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/context.h"

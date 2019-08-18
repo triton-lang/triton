@@ -5,7 +5,6 @@
 #include <map>
 #include "value.h"
 #include "constant.h"
-#include <iostream>
 
 namespace triton{
 namespace ir{

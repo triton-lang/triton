@@ -3,7 +3,6 @@
 
 #include "node.h"
 #include <string>
-#include <iostream>
 
 namespace triton{
 

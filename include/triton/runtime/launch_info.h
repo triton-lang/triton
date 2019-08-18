@@ -1,7 +1,6 @@
 #ifndef TRITON_INCLUDE_RUNTIME_LAUNCH_INFO_H
 #define TRITON_INCLUDE_RUNTIME_LAUNCH_INFO_H
 
-#include <vector>
 #include <map>
 
 namespace triton{
