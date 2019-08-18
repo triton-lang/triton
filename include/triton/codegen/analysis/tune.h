@@ -42,7 +42,6 @@ private:
 
 public:
   tune(size_t num_warps);
-  std::vector<ir::metaparameter *> get_params(ir::module& mod);
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   unsigned get_param_group(ir::value *value, unsigned ax);
   fragment_t get_fragment(ir::value *value, unsigned ax) { return fragments_.at({value, ax}); }
