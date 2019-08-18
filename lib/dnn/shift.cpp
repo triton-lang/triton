@@ -354,9 +354,9 @@ void shift(restrict read_only align(16) )" + a_ty_ + R"( *A,
            int BH, int BW,
            int CH, int CW,
            int* locks, int grid0, int grid1, int grid2) {
-  int ridx = get_range_id(0);
-  int ridy = get_range_id(1);
-  int rz = get_range_id(2);
+  int ridx = get_program_id(0);
+  int ridy = get_program_id(1);
+  int rz = get_program_id(2);
   int rxa[TM] = ridx*TM + (0 ... TM);
   int ryb[TN] = ridy*TN + (0 ... TN);
   int rka[TK] = 0 ... TK;

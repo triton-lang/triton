@@ -496,10 +496,10 @@ protected:
   using instruction::instruction;
 };
 
-class get_range_id_inst: public builtin_inst {
+class get_program_id_inst: public builtin_inst {
 private:
-  get_range_id_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
-  std::string repr_impl() const { return "get_range_id(" + std::to_string(axis_) + ")"; }
+  get_program_id_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "get_program_id(" + std::to_string(axis_) + ")"; }
 
 public:
   static instruction* create(context &ctx, unsigned axis, const std::string &name = "", instruction *next = nullptr);
@@ -668,23 +668,23 @@ public:
 };
 
 // On NVIDIA, implementation is such that
-// constant_range = nv_dynamic_range_idx + nv_static_range_idx
-// so as to enable re-association on nv_static_range_idx which is constant
-class nv_dynamic_range_idx_inst: public instruction {
+// constant_range = nv_dynamic_program_idx + nv_static_program_idx
+// so as to enable re-association on nv_static_program_idx which is constant
+class nv_dynamic_program_idx_inst: public instruction {
 private:
-  nv_dynamic_range_idx_inst(type *ty, const std::string &name, instruction *next);
-  std::string repr_impl() const { return "nv_dynamic_range_idx"; }
+  nv_dynamic_program_idx_inst(type *ty, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "nv_dynamic_program_idx"; }
 
 public:
-  static nv_dynamic_range_idx_inst* create(type *ty, const std::string &name = "", instruction *next = nullptr);
+  static nv_dynamic_program_idx_inst* create(type *ty, const std::string &name = "", instruction *next = nullptr);
 };
 
-class nv_static_range_idx: public constant {
+class nv_static_program_idx: public constant {
 private:
-  nv_static_range_idx(constant_range *range);
+  nv_static_program_idx(constant_range *range);
 
 public:
-  static nv_static_range_idx *get(constant_range* range);
+  static nv_static_program_idx *get(constant_range* range);
   constant_range* get_range() const;
 
 private:

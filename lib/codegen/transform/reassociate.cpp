@@ -164,7 +164,7 @@ reassociate::reassociate(analysis::tune* params)
 void reassociate::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
 
-  // constant_range -> nv_dynamic_range_idx + nv_static_range_idx
+  // constant_range -> nv_dynamic_program_idx + nv_static_program_idx
   for(ir::function *fn: mod.get_function_list()){
     std::vector<ir::constant_range*> ranges;
     std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
@@ -178,8 +178,8 @@ void reassociate::run(ir::module &mod) {
 
     builder.set_insert_point(rpo.front()->get_first_non_phi());
     for(ir::constant_range* old_range: ranges){
-      ir::value* dyn_range = builder.insert(ir::nv_dynamic_range_idx_inst::create(old_range->get_type()));
-      ir::value* static_range = ir::nv_static_range_idx::get(old_range);
+      ir::value* dyn_range = builder.insert(ir::nv_dynamic_program_idx_inst::create(old_range->get_type()));
+      ir::value* static_range = ir::nv_static_program_idx::get(old_range);
       ir::value* new_range = builder.create_add(dyn_range, static_range);
       old_range->replace_all_uses_with(new_range);
       params_->copy(dyn_range, old_range);

@@ -18,6 +18,7 @@ class CMakeExtension(Extension):
 
 
 class CMakeBuild(build_ext):
+
     def run(self):
         try:
             out = subprocess.check_output(['cmake', '--version'])
@@ -80,6 +81,7 @@ setup(
     author_email='ptillet@g.harvard.edu',
     description='A language and compiler for custom Deep Learning operations',
     long_description='',
+    packages=['triton'],
     ext_modules=[CMakeExtension('triton')],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,

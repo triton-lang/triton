@@ -82,7 +82,7 @@ void batchnorm_forward(float *Y, float *M, float *V,
   int rx[TM] = 0 ... TM;
   float *px[TM];
   float x[TM] = 0;
-  int c = get_range_id(1);
+  int c = get_program_id(1);
   float g = *(G + c);
   float b = *(B + c);
 
@@ -177,7 +177,7 @@ void batchnorm_backward(float *DX, float *DG, float *DB,
                restrict read_only float *V,
                int DHWN, float rcpDHWN, float epsilon) {
   int rx[TM] = 0 ... TM;
-  int c = get_range_id(1);
+  int c = get_program_id(1);
   int offset = c*DHWN;
   float g = *(G + c);
   float mean = *(M + c);

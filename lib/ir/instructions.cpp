@@ -664,14 +664,14 @@ instruction* select_inst::create(value *pred, value *if_value, value *else_value
 //===----------------------------------------------------------------------===//
 
 
-// get_range_id
-get_range_id_inst::get_range_id_inst(type *ty, unsigned axis, const std::string &name, instruction *next)
+// get_program_id
+get_program_id_inst::get_program_id_inst(type *ty, unsigned axis, const std::string &name, instruction *next)
   : builtin_inst(ty, 0, 1, name, next), axis_(axis){
 
 }
 
-instruction* get_range_id_inst::create(context &ctx, unsigned axis, const std::string &name, instruction *next) {
-  return new get_range_id_inst(type::get_int32_ty(ctx), axis, name, next);
+instruction* get_program_id_inst::create(context &ctx, unsigned axis, const std::string &name, instruction *next) {
+  return new get_program_id_inst(type::get_int32_ty(ctx), axis, name, next);
 }
 
 // get_num_program
@@ -745,25 +745,25 @@ barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instru
   return new barrier_inst(ctx, name, next);
 }
 
-// nv_dynamic_range_idx
-nv_dynamic_range_idx_inst::nv_dynamic_range_idx_inst(type *ty, const std::string &name, instruction *next)
+// nv_dynamic_program_idx
+nv_dynamic_program_idx_inst::nv_dynamic_program_idx_inst(type *ty, const std::string &name, instruction *next)
   : instruction(ty, 0, 1, name, next) { }
 
-nv_dynamic_range_idx_inst* nv_dynamic_range_idx_inst::create(type *ty, const std::string &name, instruction *next) {
-  return new nv_dynamic_range_idx_inst(ty, name, next);
+nv_dynamic_program_idx_inst* nv_dynamic_program_idx_inst::create(type *ty, const std::string &name, instruction *next) {
+  return new nv_dynamic_program_idx_inst(ty, name, next);
 }
 
-// nv_static_range_idx
-nv_static_range_idx::nv_static_range_idx(constant_range *range)
+// nv_static_program_idx
+nv_static_program_idx::nv_static_program_idx(constant_range *range)
   : constant(range->get_type(), 0), range_(range) { }
 
-constant_range* nv_static_range_idx::get_range() const
+constant_range* nv_static_program_idx::get_range() const
 { return range_; }
 
-nv_static_range_idx* nv_static_range_idx::get(constant_range* range) {
-  static std::map<constant_range*, nv_static_range_idx*> cache;
+nv_static_program_idx* nv_static_program_idx::get(constant_range* range) {
+  static std::map<constant_range*, nv_static_program_idx*> cache;
   if(cache.find(range) == cache.end())
-    cache.insert({range, new nv_static_range_idx(range)});
+    cache.insert({range, new nv_static_program_idx(range)});
   return cache.at(range);
 }
 

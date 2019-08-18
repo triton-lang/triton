@@ -300,8 +300,8 @@ value *builder::create_downcast(value *arg, const std::string &name) {
 //                               built-in instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_get_range_id(unsigned axis, const std::string &name) {
-  return insert(get_range_id_inst::create(ctx_, axis, name));
+value *builder::create_get_program_id(unsigned axis, const std::string &name) {
+  return insert(get_program_id_inst::create(ctx_, axis, name));
 }
 
 value *builder::create_get_num_program(unsigned axis, const std::string &name) {

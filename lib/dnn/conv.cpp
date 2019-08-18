@@ -686,8 +686,8 @@ if(b_lut_){
   float* pc[TM, TN]  = c + rc1[newaxis, :]*ldc_k + rc0[:, newaxis];
   bool checkc0[TM] = rxc < M;
   bool checkc[TM, TN]  = checkc0[:, newaxis] && checkc1[newaxis, :];
-  int ridx = get_range_id(0);
-  int ridy = get_range_id(1);
+  int ridx = get_program_id(0);
+  int ridy = get_program_id(1);
   int *plock = locks + ridx + ridy*grid0;
   while(__atomic_cas(plock, 0, 1) == 1);
   int *pcount = plock + grid0*grid1;
