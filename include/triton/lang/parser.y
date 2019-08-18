@@ -120,7 +120,7 @@ identifier
 
 /* Built-in */
 builtin_expression
-  : GET_PROGRAM_ID '(' constant ')'                                { $$ = new get_program_id_expression($3); }
+  : GET_PROGRAM_ID '(' constant ')'                              { $$ = new get_program_id_expression($3); }
   | GET_NUM_PROGRAM '(' constant ')'                             { $$ = new get_num_program_expression($3); }
   | DOT '(' expression ',' expression ',' expression ')'         { $$ = new matmul_expression($3, $5, $7); }
   | SQRT '(' expression ')'                                      { $$ = new sqrt_expression($3); }

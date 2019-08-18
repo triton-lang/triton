@@ -48,7 +48,6 @@ public:
   void copy(ir::value *dst, ir::value *src);
   bool check_constraints(std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);
-  void init(ir::module &mod);
   unsigned get_num_threads();
 
 private:
