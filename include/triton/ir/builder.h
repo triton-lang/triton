@@ -1,7 +1,6 @@
 #ifndef TDL_INCLUDE_IR_BUILDER_H
 #define TDL_INCLUDE_IR_BUILDER_H
 
-#include <iostream>
 #include <vector>
 #include <string>
 #include "instructions.h"

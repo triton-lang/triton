@@ -25,7 +25,6 @@
 
 #include "triton/driver/module.h"
 #include "triton/driver/handle.h"
-
 #include <memory>
 
 namespace llvm

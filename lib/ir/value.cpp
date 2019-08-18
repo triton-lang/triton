@@ -1,7 +1,6 @@
+#include <cassert>
 #include "triton/ir/value.h"
 #include "triton/ir/instructions.h"
-#include <iostream>
-#include <cassert>
 
 namespace triton{
 namespace ir{

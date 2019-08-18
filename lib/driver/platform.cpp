@@ -20,11 +20,10 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-
+#include <string>
 #include "triton/driver/platform.h"
 #include "triton/driver/device.h"
 
-#include <string>
 
 namespace triton
 {

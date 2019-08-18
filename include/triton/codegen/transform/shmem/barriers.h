@@ -1,10 +1,6 @@
 #ifndef TDL_INCLUDE_CODEGEN_BARRIERS_H
 #define TDL_INCLUDE_CODEGEN_BARRIERS_H
 
-#include <tuple>
-#include <vector>
-#include <set>
-
 namespace triton {
 
 namespace ir {

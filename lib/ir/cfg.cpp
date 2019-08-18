@@ -1,8 +1,7 @@
+#include <stack>
 #include "triton/ir/cfg.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/function.h"
-#include <stack>
-#include <iostream>
 
 namespace triton{
 namespace ir{

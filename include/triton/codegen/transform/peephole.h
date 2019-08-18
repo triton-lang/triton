@@ -1,9 +1,6 @@
 #ifndef TDL_INCLUDE_CODEGEN_OPTIMIZE_TRANS_H
 #define TDL_INCLUDE_CODEGEN_OPTIMIZE_TRANS_H
 
-#include <tuple>
-#include <vector>
-#include <set>
 
 namespace triton {
 

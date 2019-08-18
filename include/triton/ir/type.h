@@ -2,8 +2,6 @@
 #define TDL_INCLUDE_IR_TYPE_H
 
 #include <vector>
-#include <iostream>
-#include <set>
 
 namespace triton{
 namespace ir{

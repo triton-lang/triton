@@ -20,7 +20,6 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include <map>
 #include "triton/driver/dispatch.h"
 #include "triton/driver/context.h"
 
