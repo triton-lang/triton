@@ -19,7 +19,7 @@ namespace ir{
 namespace codegen{
 namespace analysis{
 
-class tune {
+class grids {
   typedef std::pair<ir::value*, unsigned> node_t;
   typedef std::map <node_t, std::set<node_t>> graph_t;
 
@@ -41,12 +41,11 @@ private:
 
 
 public:
-  tune(size_t num_warps);
+  grids(size_t num_warps);
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   unsigned get_param_group(ir::value *value, unsigned ax);
   fragment_t get_fragment(ir::value *value, unsigned ax) { return fragments_.at({value, ax}); }
   void copy(ir::value *dst, ir::value *src);
-  bool check_constraints(std::map<ir::value *, std::vector<std::string>> &errors);
   void run(ir::module &mod);
   unsigned get_num_threads();
 

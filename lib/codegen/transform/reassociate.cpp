@@ -155,7 +155,7 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
   return new_value;
 }
 
-reassociate::reassociate(analysis::tune* params)
+reassociate::reassociate(analysis::grids* params)
   : params_(params)
 { }
 

@@ -44,7 +44,7 @@ namespace codegen{
 
 namespace analysis{
 
-class tune;
+class grids;
 class alignment_info;
 
 namespace shmem{
@@ -196,7 +196,7 @@ private:
 
 
 public:
-  selection(analysis::shmem::allocation *alloc, analysis::tune *params, analysis::shmem::info *buffer_info, analysis::alignment_info *alignment, target *tgt)
+  selection(analysis::shmem::allocation *alloc, analysis::grids *params, analysis::shmem::info *buffer_info, analysis::alignment_info *alignment, target *tgt)
     : alloc_(alloc), params_(params), buffer_info_(buffer_info), alignment_(alignment), tgt_(tgt){ }
 
   void run(ir::module &src, Module &dst);
@@ -205,7 +205,7 @@ private:
   vmap_t vmap_;
   tmap_t tmap_;
   analysis::shmem::allocation *alloc_;
-  analysis::tune *params_;
+  analysis::grids *params_;
   analysis::shmem::info *buffer_info_;
   analysis::alignment_info *alignment_;
   target *tgt_;

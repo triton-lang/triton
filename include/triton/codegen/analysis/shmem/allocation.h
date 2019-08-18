@@ -15,7 +15,7 @@ namespace ir{
 namespace codegen{
 namespace analysis{
 
-class tune;
+class grids;
 
 namespace shmem{
 
@@ -24,7 +24,7 @@ class info;
 
 class allocation {
 public:
-  allocation(liveness *live, info *buffer_info, tune *params)
+  allocation(liveness *live, info *buffer_info, grids *params)
     : liveness_(live), buffer_info_(buffer_info), params_(params){ }
 
   // utilities
@@ -45,7 +45,7 @@ private:
   // dependences
   liveness *liveness_;
   info *buffer_info_;
-  tune *params_;
+  grids *params_;
 };
 
 }

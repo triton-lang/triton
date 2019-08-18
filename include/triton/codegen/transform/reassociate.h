@@ -19,7 +19,7 @@ class getelementptr_inst;
 namespace codegen{
 
 namespace analysis{
-class tune;
+class grids;
 class alignment_info;
 }
 
@@ -37,11 +37,11 @@ private:
   ir::value *reassociate_ptr(ir::getelementptr_inst* pz, ir::builder &builder, std::map<ir::value*, cst_info> &offsets);
 
 public:
-  reassociate(analysis::tune *params);
+  reassociate(analysis::grids *params);
   void run(ir::module& module);
 
 private:
-  analysis::tune* params_;
+  analysis::grids* params_;
 };
 
 }

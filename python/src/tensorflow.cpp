@@ -74,49 +74,118 @@ inline std::unique_ptr<ir::module> make_ir(ir::context& ctx, triton::lang::trans
   return std::unique_ptr<ir::module>(module);
 }
 
+
+void gen_extract_inputs(std::ostream &os, const std::vector<ir::argument*>& args) {
+  for(unsigned i = 0; i < args.size(); i++){
+    ir::value *arg = args[i];
+    std::string suffix = "";
+    ir::type *tr_ty = arg->get_type();
+    std::string tf_ty = ref_to_tf_ty(tr_ty);
+    if(!tr_ty->is_pointer_ty())
+      suffix = ".scalar<" + tf_ty + ">()()";
+    os << "  " << tf_ty << " " << arg->get_name() << " = context->input(" << i << ")" << suffix << ";\n  ";
+  }
+}
+
+void gen_set_outputs(std::ostream &os, const std::vector<std::string>& outputs) {
+  for(unsigned i = 0; i < outputs.size(); i++)
+    os << "  context->set_output(" << i << ", " << outputs[i] << ");\n  ";
+}
+
+void gen_make_handles(std::ostream &os, const std::vector<ir::argument*>& args) {
+  for(unsigned i = 0; i < args.size(); i++){
+    ir::argument *arg = args[i];
+    if(!arg->get_type()->is_pointer_ty())
+      continue;
+    const std::string& name = arg->get_name();
+    os << "  drv::cu_buffer cu_" + name + "(ctx, " + name + ".tensor_data().size(), (CUdeviceptr)" + name + ".tensor_data().data(), false);\n  ";
+  }
+}
+
+void gen_make_spmd_grid(std::ostream &os, const std::vector<std::string>& macros) {
+  std::regex regex("#([a-zA-Z]([a-zA-Z]|[0-9])*)");
+  std::vector<std::string> grids = macros;
+  for(size_t i = grids.size(); i < 3; i++)
+    grids.push_back("1");
+  std::string grid = "rt::grid_t{";
+  for(size_t i = 0; i < grids.size(); i++){
+    if(i > 0)
+      grid += ", ";
+    grid += std::regex_replace(grids[i], regex, "x.at(\"$1\")");
+  }
+  grid += "}";
+
+  os << "  auto grid = [&](const rt::params_t& x) { return " << grid << "; };\n  ";
+}
+
+void gen_make_launch_function(std::ostream &os, const std::vector<ir::argument*>& args) {
+  os << "  fn_({";
+  for(unsigned i = 0; i < args.size() ; i++){
+    ir::argument *arg = args[i];
+    std::string name = arg->get_name();
+    if(arg->get_type()->is_pointer_ty())
+      name = "&cu_" + name;
+    if(i > 0)
+      os << ", ";
+    os << name;
+  }
+  os << "}, grid, stream);  \n";
+}
+
+void gen_register_kernel_builder(std::ostream &os, const std::string &name,
+                                 const std::string &classname,
+                                 const std::vector<ir::argument*>& args){
+  os << "REGISTER_KERNEL_BUILDER(Name(\"" + name + "\").Device(DEVICE_GPU)";
+  for(size_t i = 0; i < args.size(); i++){
+    ir::argument *arg = args[i];
+    std::string name = arg->get_name();
+    auto tolower = [](char c) { return std::tolower(c);};
+    std::transform(name.begin(), name.end(), name.begin(), tolower);
+    if(!arg->get_type()->is_pointer_ty())
+      os << ".HostMemory(\"" + name + "\")";
+  }
+  os <<  ", " + classname << ");\n";
+}
+
+void gen_register_op(std::ostream &os, const std::string &name,
+                     const std::vector<ir::argument*>& args,
+                     const std::vector<std::string>& outputs){
+  os << "REGISTER_OP(\"" << name << "\")\n";
+  for(size_t i = 0; i < args.size(); i++){
+    ir::argument *arg = args[i];
+    std::string name = arg->get_name();
+    auto tolower = [](char c) { return std::tolower(c);};
+    std::transform(name.begin(), name.end(), name.begin(), tolower);
+    os << "  .Input(\"" << name << ": " << to_tf_scalar_ty(arg->get_type()) << "\")\n";
+  }
+  for(size_t i = 0; i < outputs.size(); i++){
+    std::string name = outputs[i];
+    size_t idx;
+    for(idx = 0; idx < args.size(); idx++)
+      if(args[idx]->get_name() == name)
+        break;
+    if(idx == args.size())
+      throw std::runtime_error("unknown output");
+    os << "  .Output(\"out" << i << ": " << to_tf_scalar_ty(args[idx]->get_type()) << "\")\n";
+  }
+  os << ";\n";
+}
+
 std::string make_tensorflow_src(const std::string src,
                                 const std::vector<std::string>& outputs,
                                 const std::vector<std::string>& macros) {
   triton::lang::translation_unit *ast = make_ast(src.c_str());
   triton::ir::context context;
   std::unique_ptr<ir::module> ir = make_ir(context, ast);
-  // extract function signature
+  // function
   ir::function* fn = ir->get_function_list().front();
-  ir::function_type* fn_ty = fn->get_fn_type();
-  // numberof arguments
-  size_t n_args = fn_ty->get_num_params();
-  size_t n_outputs = outputs.size();
-  // extract function name
   std::string name = fn->get_name();
   name[0] = static_cast<char>(std::toupper(name[0]));
   std::string classname = name + "Op";
-  // extract argument name
-  std::vector<std::string> arg_names;
-  for(ir::argument *arg: fn->args())
-    arg_names.push_back(arg->get_name());
-  // cached int to str
-  std::vector<std::string> str_i;
-  for(size_t i = 0; i < fn_ty->get_num_params(); i++)
-    str_i.push_back(std::to_string(i));
-  // index of tensors
-  std::vector<size_t> ptr_idx;
-  for(unsigned i = 0; i < fn_ty->get_num_params(); i++)
-    if(fn_ty->get_param_ty(i)->is_pointer_ty())
-      ptr_idx.push_back(i);
-  // extract tensorflow types
-  std::vector<std::string> tf_scalar_tys;
-  std::transform(fn_ty->params_begin(), fn_ty->params_end(), std::back_inserter(tf_scalar_tys), to_tf_scalar_ty);
-  std::vector<std::string> tf_cref_tys;
-  std::transform(fn_ty->params_begin(), fn_ty->params_end(), std::back_inserter(tf_cref_tys), ref_to_tf_ty);
-  // output indices
-  std::vector<long> out_idx;
-  for(const std::string &name : outputs){
-    auto it = std::find(arg_names.begin(), arg_names.end(), name);
-    out_idx.push_back(std::distance(arg_names.begin(), it));
-  }
+
   std::ostringstream oss;
 
-  std::string result = R"(
+  oss << R"(
 #include "triton/driver/buffer.h"
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
@@ -138,106 +207,52 @@ namespace drv = triton::driver;
 
 std::string src = R"TTKERNSRC( )" + src + ")TTKERNSRC\";" + R"(
 
-class )" + classname + R"(: public OpKernel {
+class )" << classname << R"(: public OpKernel {
  public:
-  explicit )" + classname + R"((OpKernelConstruction* context)
+  explicit )" << classname << R"((OpKernelConstruction* context)
     : OpKernel(context), fn_(src) { }
 
   void Compute(OpKernelContext* context){
-
     // get device/stream
     GPUDevice device =  context->eigen_device<GPUDevice>();
     drv::cu_stream sstream(device.stream(), false);
     drv::context* ctx = sstream.context();
     drv::stream* stream = &sstream;
-
-    // extract inputs)";
-for(unsigned i = 0; i < n_args; i++){
-  std::string suffix = "";
-  std::string ty = tf_cref_tys[i];
-  if(!fn_ty->get_param_ty(i)->is_pointer_ty())
-    suffix = ".scalar<" + ty + ">()()";
-  result += R"(
-    )" + ty + " " + arg_names[i] + " = context->input(" + str_i[i] + ")" + suffix + ";";
-}
-
-result += R"(
-
-    // extract outputs)";
-for(unsigned i = 0; i < n_outputs; i++)
-  result += R"(
-   context->set_output()" + str_i[i] + ", " + outputs[i] + ");";
-
-result += R"(
-
-    // wrap tensors)";
-for(size_t i: ptr_idx)
-result += R"(
-    drv::cu_buffer cu_)" + arg_names[i] + "(ctx, " + arg_names[i] + ".tensor_data().size(), (CUdeviceptr)" + arg_names[i] + R"(.tensor_data().data(), false);)";
-
-
-std::regex regex("#([a-zA-Z]([a-zA-Z]|[0-9])*)");
-std::vector<std::string> grids = macros;
-for(size_t i = grids.size(); i < 3; i++)
-  grids.push_back("1");
-std::string grid = "rt::grid_t{";
-for(size_t i = 0; i < grids.size(); i++){
-  if(i > 0)
-    grid += ", ";
-  grid += std::regex_replace(grids[i], regex, "x.at(\"$1\")");
-}
-grid += "}";
-
-result += R"(
-
-    // create launch grid;
-    auto grid = [&](const rt::params_t& x) { return )" + grid + R"(; };)";
-
-result += R"(
-
-    // execute function
-    fn_({
+    // extract inputs
     )";
-for(unsigned i = 0; i < n_args; i++){
-  std::string arg = arg_names[i];
-  if(fn_ty->get_param_ty(i)->is_pointer_ty())
-    arg = "&cu_" + arg;
-  if(i > 0)
-    result += ", ";
-  result += arg;
-}
-result += R"(
-    }, grid, stream);
-
+gen_extract_inputs(oss, fn->args());
+oss << R"(
+    // set outputs
+    )";
+gen_set_outputs(oss, outputs);
+oss << R"(
+    // wrap tensors
+    )";
+gen_make_handles(oss, fn->args());
+oss << R"(
+    // create spmd grid
+    )";
+gen_make_spmd_grid(oss, macros);
+oss << R"(
+    // launch function
+    )";
+gen_make_launch_function(oss, fn->args());
+oss << R"(
   }
 
 private:
   rt::function fn_;
 };
 
-REGISTER_KERNEL_BUILDER(Name(")" + name + "\").Device(DEVICE_GPU)";
-for(size_t i = 0; i < tf_scalar_tys.size(); i++){
-   std::string arg_name = arg_names[i];
-  std::transform(arg_name.begin(), arg_name.end(), arg_name.begin(), [](char c) { return std::tolower(c);});
-  if(!fn_ty->get_param_ty(i)->is_pointer_ty())
-    result += ".HostMemory(\"" + arg_name + "\")";
-}
-result += ", " + classname + R"();
+// register kernel builder
+)";
+gen_register_kernel_builder(oss, name, classname, fn->args());
+oss << R"(
+// register op
+)";
+gen_register_op(oss, name, fn->args(), outputs);
 
-
-REGISTER_OP(")" + name + "\")\n";
-for(size_t i = 0; i < tf_scalar_tys.size(); i++){
-  std::string arg_name = arg_names[i];
-  std::transform(arg_name.begin(), arg_name.end(), arg_name.begin(), [](char c) { return std::tolower(c);});
-  result += "  .Input(\"" + arg_name + ": " + tf_scalar_tys[i] + "\")\n";
-}
-for(size_t i = 0; i < outputs.size(); i++){
-  result += "  .Output(\"out" + std::to_string(i) + ": " + tf_scalar_tys[out_idx[i]] + "\")\n";
-}
-result += ";\n";
-
-
-  return result;
+  return oss.str();
 }
 
 
