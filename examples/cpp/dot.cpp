@@ -78,19 +78,23 @@ std::string src(bool AT, bool BT, std::string a_ty, std::string b_ty, std::strin
   std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb) + ")";
   std::string res =
 R"(
-const tunable int TM = {128};
-const tunable int TN = {128};
-const tunable int TK = {32};
+#define TM 128
+#define TN 128
+#define TK 32
 
-void matmul(restrict read_only align(16) )" + a_ty + R"( *A,
-            restrict read_only align(16) )" + b_ty + R"( *B,
-            restrict read_only align(16) )" + c_ty + R"( *C,
+extern int get_program_id(int);
+
+void matmul(restrict )" + a_ty + R"( * A __attribute__((readonly, aligned(16))),
+            restrict )" + b_ty + R"( * B __attribute__((readonly, aligned(16))),
+            restrict )" + c_ty + R"( * C __attribute__((aligned(16))),
             int M, int N, int K,
-            )" + align_lda_str + R"( int lda, )" + align_ldb_str + R"(" int ldb, int ldc) {
+            int lda __attribute__((multiple_of(8))),
+            int ldb __attribute__((multiple_of(8))),
+            int ldc) {
   int ridx = get_program_id(0);
   int ridy = get_program_id(1);
-  int rxa[TM] = ridx * TM + (0 ... TM);
-  int ryb[TN] = ridy * TN + (0 ... TN);
+  int rxa[{TM, TN}] = ridx * TM + 0 ... TM;
+  int ryb[TN] = ridy * TN + 0 ... TN;
   int rka[TK] = 0 ... TK;
   int rkb[TK] = 0 ... TK;
   float xc[)" + XCS + R"(] = 0;
@@ -112,7 +116,7 @@ void matmul(restrict read_only align(16) )" + a_ty + R"( *A,
   bool checkc0[TM] = rxc < M;
   bool checkc1[TN] = ryc < N;
   bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
-  @checkc *pc = c;
+  *pc = c;
 }
 )";
   return res;

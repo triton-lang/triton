@@ -62,15 +62,15 @@ endif()
 
 
 # Triton
-file(GLOB_RECURSE LIBTRITON_SRC lib/*.cpp)
+file(GLOB_RECURSE LIBTRITON_SRC lib/*.cpp lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${EIGHTCC_SRC} ${PYTHON_SRC} ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
 target_link_libraries(triton LLVM)
 
 # Warning level
-if(MSVC)
-  target_compile_options(triton PRIVATE /W4)
-else()
-  target_compile_options(triton PRIVATE -Wno-unused-parameter -Wall -Wextra -pedantic)
-endif()
+#if(MSVC)
+#  target_compile_options(triton PRIVATE /W4)
+#else()
+#  target_compile_options(triton PRIVATE -Wno-unused-parameter -Wall -Wextra -pedantic)
+#endif()
 
 

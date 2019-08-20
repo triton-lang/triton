@@ -6,6 +6,8 @@
 #include "triton/codegen/selection/selection.h"
 #include "triton/runtime/function.h"
 #include "triton/lang/lang.h"
+#include "triton/lang/wgtcc/cpp.h"
+#include "triton/lang/wgtcc/parser.h"
 #include "triton/driver/device.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
@@ -115,8 +117,30 @@ void function::caller::operator ()(driver::stream *stream, const std::array<size
 
 
 // module
-triton::lang::translation_unit *function::make_ast(const char *src) {
-  YY_BUFFER_STATE buffer = yy_scan_string(src);
+triton::lang::translation_unit *function::make_ast(const char *csrc) {
+  std::string src(csrc);
+  Preprocessor cpp(&src, true);
+//  for (auto& def: defines)
+//    DefineMacro(cpp, def);
+//  for (auto& path: include_paths)
+//    cpp.AddSearchPath(path);
+
+  FILE* fp = stdout;
+//  if (specified_out_name) {
+//    fp = fopen(filename_out.c_str(), "w");
+//  }
+  TokenSequence ts;
+  cpp.Process(ts);
+  Parser parser(ts);
+  parser.Parse();
+  exit(EXIT_FAILURE);
+
+//  if (only_preprocess) {
+//    ts.Print(fp);
+//    return 0;
+//  }
+
+  YY_BUFFER_STATE buffer = yy_scan_string(csrc);
   yyparse();
   yy_delete_buffer(buffer);
   triton::lang::translation_unit *program = ast_root;
