@@ -133,7 +133,7 @@ void gen_make_launch_function(std::ostream &os, const std::vector<ir::argument*>
 }
 
 void gen_register_kernel_builder(std::ostream &os, const std::string &name,
-                                 const std::string &classname,
+                                 const std::string &opname,
                                  const std::vector<ir::argument*>& args){
   os << "REGISTER_KERNEL_BUILDER(Name(\"" + name + "\").Device(DEVICE_GPU)";
   for(size_t i = 0; i < args.size(); i++){
@@ -144,7 +144,7 @@ void gen_register_kernel_builder(std::ostream &os, const std::string &name,
     if(!arg->get_type()->is_pointer_ty())
       os << ".HostMemory(\"" + name + "\")";
   }
-  os <<  ", " + classname << ");\n";
+  os <<  ", " + opname << ");\n";
 }
 
 void gen_register_op(std::ostream &os, const std::string &name,
@@ -181,10 +181,9 @@ std::string make_tensorflow_src(const std::string src,
   ir::function* fn = ir->get_function_list().front();
   std::string name = fn->get_name();
   name[0] = static_cast<char>(std::toupper(name[0]));
-  std::string classname = name + "Op";
+  std::string opname = name + "Op";
 
   std::ostringstream oss;
-
   oss << R"(
 #include "triton/driver/buffer.h"
 #include "triton/driver/backend.h"
@@ -207,9 +206,9 @@ namespace drv = triton::driver;
 
 std::string src = R"TTKERNSRC( )" + src + ")TTKERNSRC\";" + R"(
 
-class )" << classname << R"(: public OpKernel {
+class )" << opname << R"(: public OpKernel {
  public:
-  explicit )" << classname << R"((OpKernelConstruction* context)
+  explicit )" << opname << R"((OpKernelConstruction* context)
     : OpKernel(context), fn_(src) { }
 
   void Compute(OpKernelContext* context){
@@ -246,7 +245,7 @@ private:
 
 // register kernel builder
 )";
-gen_register_kernel_builder(oss, name, classname, fn->args());
+gen_register_kernel_builder(oss, name, opname, fn->args());
 oss << R"(
 // register op
 )";
