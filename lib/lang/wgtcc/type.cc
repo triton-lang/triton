@@ -32,6 +32,18 @@ QualType Type::MayCast(QualType type, bool inProtoScope) {
   return type;
 }
 
+const Type* Type::ScalarType() const {
+  if(IsScalar())
+    return this;
+  if(const TileType* p = ToTile())
+    return p->Derived().GetPtr();
+  return nullptr;
+}
+
+Type* Type::ScalarType() {
+  auto cthis = const_cast<const Type*>(this);
+  return const_cast<Type*>(cthis->ScalarType());
+}
 
 VoidType* VoidType::New() {
   static auto ret = new (voidTypePool.Alloc()) VoidType(&voidTypePool);
@@ -143,12 +155,16 @@ int ArithmType::Width() const {
     return intWidth_ << 1;
   case T_LLONG: case T_UNSIGNED | T_LLONG:
     return intWidth_ << 1;
+  case T_HALF:
+    return intWidth_ >> 1;
   case T_FLOAT:
     return intWidth_;
   case T_DOUBLE:
     return intWidth_ << 1;
   case T_LONG | T_DOUBLE:
     return intWidth_ << 1;
+  case T_HALF | T_COMPLEX:
+    return intWidth_;
   case T_FLOAT | T_COMPLEX:
     return intWidth_ << 1;
   case T_DOUBLE | T_COMPLEX:
@@ -171,9 +187,10 @@ int ArithmType::Rank() const {
   case T_INT: case T_UNSIGNED: case T_UNSIGNED | T_INT: return 3;
   case T_LONG: case T_UNSIGNED | T_LONG: return 4;
   case T_LLONG: case T_UNSIGNED | T_LLONG: return 5;
-  case T_FLOAT: return 6;
-  case T_DOUBLE: return 7;
-  case T_LONG | T_DOUBLE: return 8;
+  case T_HALF: return 6;
+  case T_FLOAT: return 7;
+  case T_DOUBLE: return 8;
+  case T_LONG | T_DOUBLE: return 9;
   default:
     assert(tag_ & T_COMPLEX);
     Error("complex not supported yet");

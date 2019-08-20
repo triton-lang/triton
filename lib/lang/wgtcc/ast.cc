@@ -144,6 +144,26 @@ Expr* Expr::MayCast(Expr* expr, QualType desType) {
   return expr;
 }
 
+// Extract the operand's scalar type if possible
+// and emit an error otherwise
+::Type* Expr::TryExtractScalarType(Expr* loc, Expr *operand) {
+  auto scalType = operand->Type()->ScalarType();
+  if(!scalType)
+    Error(loc, "expect tile or scalar operand");
+  return scalType;
+}
+
+// If operand is a tile, return a tile of the same shape and
+// provided element type
+// If operand is a scalar, return provided element type
+// directly
+::Type* Expr::ScalarOrLikeTile(Expr* operand, ::Type* ty) {
+  assert(ty->IsScalar());
+  ::Type *retTy = ty;
+  if(TileType *T = operand->Type()->ToTile())
+    retTy = TileType::New(T->Shape(), retTy);
+  return retTy;
+}
 
 BinaryOp* BinaryOp::New(const Token* tok, Expr* lhs, Expr* rhs) {
   return New(tok, tok->tag_, lhs, rhs);
@@ -166,6 +186,7 @@ BinaryOp* BinaryOp::New(const Token* tok, int op, Expr* lhs, Expr* rhs) {
   case Token::LOGICAL_AND:
   case Token::LOGICAL_OR:
   case Token::ELLIPSIS:
+  case Token::MATMUL:
     break;
   default:
     assert(0);
@@ -180,18 +201,18 @@ BinaryOp* BinaryOp::New(const Token* tok, int op, Expr* lhs, Expr* rhs) {
 
 
 ArithmType* BinaryOp::Convert() {
-  // Both lhs and rhs are ensured to be have arithmetic type
-  auto lhsType = lhs_->Type()->ToArithm();
-  auto rhsType = rhs_->Type()->ToArithm();
+  // Both lhs and rhs are ensured to be have arithmetic scalar type
+  auto lhsType = lhs_->Type()->ScalarType()->ToArithm();
+  auto rhsType = rhs_->Type()->ScalarType()->ToArithm();
   assert(lhsType && rhsType);
-  auto type = ArithmType::MaxType(lhsType, rhsType);
-  if (lhsType != type) { // Pointer comparation is enough!
-    lhs_ = UnaryOp::New(Token::CAST, lhs_, type);
+  auto maxType = ArithmType::MaxType(lhsType, rhsType);
+  if (lhsType != maxType) { // Pointer comparation is enough!
+    lhs_ = UnaryOp::New(Token::CAST, lhs_, ScalarOrLikeTile(lhs_, maxType));
   }
-  if (rhsType != type) {
-    rhs_ = UnaryOp::New(Token::CAST, rhs_, type);
+  if (rhsType != maxType) {
+    rhs_ = UnaryOp::New(Token::CAST, rhs_, ScalarOrLikeTile(rhs_, maxType));
   }
-  return type;
+  return maxType;
 }
 
 void BinaryOp::Broadcast() {
@@ -225,6 +246,8 @@ void BinaryOp::Broadcast() {
         retShape[i] = rhsShape[i];
       else if(rhsShape[i] == 1)
         retShape[i] = lhsShape[i];
+      else if(lhsShape[i] == rhsShape[i])
+        retShape[i] = lhsShape[i];
       else
         Error(this, "cannot broadcast dimension %d "
                     "for operands of shape %d and %d",
@@ -232,8 +255,10 @@ void BinaryOp::Broadcast() {
     }
     auto eleType = lhsType->Derived();
     type_ = TileType::New(retShape, eleType);
-    lhs_ = UnaryOp::New(Token::CAST, lhs_, type_);
-    rhs_ = UnaryOp::New(Token::CAST, rhs_, type_);
+    if(retShape != lhsShape)
+      lhs_ = UnaryOp::New(Token::CAST, lhs_, type_);
+    if(retShape != rhsShape)
+      rhs_ = UnaryOp::New(Token::CAST, rhs_, type_);
   }
 }
 
@@ -303,6 +328,9 @@ void BinaryOp::TypeChecking() {
   case Token::ELLIPSIS:
     return RangeOpTypeChecking();
 
+  case Token::MATMUL:
+    return MatmulOpTypeChecking();
+
   default:
     assert(0);
   }
@@ -315,12 +343,15 @@ void BinaryOp::CommaOpTypeChecking() {
 
 
 void BinaryOp::SubScriptingOpTypeChecking() {
-  auto lhsType = lhs_->Type()->ToPointer();
+  assert(false);
+  auto lhsType = lhs_->Type()->ToTile();
+
   if (!lhsType) {
-    Error(this, "an pointer expected");
+    Error(this, "operator [] can only be used on tiles");
   }
+
   if (!rhs_->Type()->IsInteger()) {
-    Error(this, "the operand of [] should be intger");
+    Error(this, "the operand of [] should be integer");
   }
 
   // The type of [] operator is the derived type
@@ -334,14 +365,20 @@ void BinaryOp::MemberRefOpTypeChecking() {
 
 
 void BinaryOp::MultiOpTypeChecking() {
-  if (!lhs_->Type()->ToArithm() || !rhs_->Type()->ToArithm()) {
+  ::Type* lhsScalType = lhs_->Type()->ScalarType();
+  ::Type* rhsScalType = rhs_->Type()->ScalarType();
+  if(!lhsScalType || !rhsScalType) {
+    Error(this, "operands should have type or scalar type");
+  }
+  if (!lhsScalType->ToArithm() || !rhsScalType->ToArithm()) {
     Error(this, "operands should have arithmetic type");
   }
   if ('%' == op_ &&
-      !(lhs_->Type()->IsInteger() && rhs_->Type()->IsInteger())) {
+      !(lhsScalType->IsInteger() && rhsScalType->IsInteger())) {
     Error(this, "operands of '%%' should be integers");
   }
   type_ = Convert();
+  Broadcast();
 }
 
 
@@ -351,40 +388,47 @@ void BinaryOp::MultiOpTypeChecking() {
  *  2. pointer can be used:
  *    1. lhs of MINUS operator, and rhs must be integer or pointer;
  *    2. lhs/rhs of ADD operator, and the other operand must be integer;
+ *  3. tiles can be used:
+ *    1. the scalar type of lhs/rhs satisfy the above requirements
+ *    2. lhs/rhs that have identical shape
+ *    3. lhs/rhs that can be broadcast as per numpy-like semantics
  */
 void BinaryOp::AdditiveOpTypeChecking() {
-  auto lhsType = lhs_->Type()->ToPointer();
-  auto rhsType = rhs_->Type()->ToPointer();
-  if (lhsType) {
+  ::Type* lhsScalType = TryExtractScalarType(this, lhs_);
+  ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
+  auto lhsPtrType = lhsScalType->ToPointer();
+  auto rhsPtrType = rhsScalType->ToPointer();
+  if (lhsPtrType) {
     if (op_ == '-') {
-      if (rhsType) {
-        if (!lhsType->Compatible(*rhsType))
+      if (rhsPtrType) {
+        if (!lhsPtrType->Compatible(*rhsPtrType))
           Error(this, "invalid operands to binary -");
         type_ = ArithmType::New(T_LONG); // ptrdiff_t
-      } else if (!rhs_->Type()->IsInteger()) {
+      } else if (!rhsScalType->IsInteger()) {
         Error(this, "invalid operands to binary -");
       } else {
-        type_ = lhsType;
+        type_ = lhsPtrType;
       }
-    } else if (!rhs_->Type()->IsInteger()) {
+    } else if (!rhsScalType->IsInteger()) {
       Error(this, "invalid operands to binary +");
     } else {
-      type_ = lhsType;
+      type_ = lhsPtrType;
     }
-  } else if (rhsType) {
-    if (op_ == '+' && !lhs_->Type()->IsInteger()) {
+  } else if (rhsPtrType) {
+    if (op_ == '+' && !lhsScalType->IsInteger()) {
       Error(this, "invalid operands to binary '+'");
-    } else if (op_ == '-' && !lhsType) {
+    } else if (op_ == '-' && !lhsPtrType) {
       Error(this, "invalid operands to binary '-'");
     }
-    type_ = op_ == '-' ? ArithmType::New(T_LONG): rhs_->Type();
+    type_ = op_ == '-' ? ArithmType::New(T_LONG): rhsScalType;
     std::swap(lhs_, rhs_); // To simplify code gen
   } else {
-    if (!lhs_->Type()->ToArithm() || !rhs_->Type()->ToArithm()) {
+    if (!lhsScalType->ToArithm() || !rhsScalType->ToArithm()) {
       Error(this, "invalid operands to binary %s", tok_->str_.c_str());
     }
     type_ = Convert();
   }
+  Broadcast();
 }
 
 void BinaryOp::RangeOpTypeChecking() {
@@ -396,59 +440,95 @@ void BinaryOp::RangeOpTypeChecking() {
   rhs_ = Expr::MayCast(rhs_, ArithmType::IntegerPromote(rhsType));
   long begin = Evaluator<long>().Eval(lhs_);
   long end = Evaluator<long>().Eval(rhs_);
-  int len = end - begin;
+  int len = static_cast<int>(end - begin);
   if(len < 0)
     Error(this, "range cannot be negative");
   type_ = TileType::New(TileType::ShapeInt{len}, lhs_->Type());
 }
 
+void BinaryOp::MatmulOpTypeChecking() {
+  auto lhsType = lhs_->Type()->ToTile();
+  auto rhsType = rhs_->Type()->ToTile();
+  if(!lhsType || !rhsType)
+    Error(this, "expect tile operands for matrix multiplication");
+  auto lhsShape = lhsType->Shape();
+  auto rhsShape = rhsType->Shape();
+  size_t lhsRank = lhsShape.size();
+  size_t rhsRank = rhsShape.size();
+  if(lhsRank != 2 || rhsRank != 2)
+    Error(this, "matrix multiplication operands must have rank 2");
+  if(lhsShape[1] != rhsShape[0])
+    Error(this, "matrix multiplication operands have incompatible inner dimension"
+                " %d and %d", lhsShape[1], rhsShape[0]);
+  TileType::ShapeInt retShape = {lhsShape[0], rhsShape[1]};
+  QualType retType = lhsType->Derived();
+  if(retType != rhsType->Derived())
+    Error(this, "matrix multiplication operands have incompatible data types");
+  type_ = TileType::New(retShape, lhsType->Derived());
+}
+
 void BinaryOp::ShiftOpTypeChecking() {
-  auto lhsType = lhs_->Type()->ToArithm();
-  auto rhsType = rhs_->Type()->ToArithm();
+  ::Type* lhsScalType = TryExtractScalarType(this, lhs_);
+  ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
+  auto lhsType = lhsScalType->ToArithm();
+  auto rhsType = rhsScalType->ToArithm();
   if (!lhsType || !lhsType->IsInteger() || !rhsType || !rhsType->IsInteger())
     Error(this, "expect integers for shift operator");
-  lhs_ = Expr::MayCast(lhs_, ArithmType::IntegerPromote(lhsType));
-  rhs_ = Expr::MayCast(rhs_, ArithmType::IntegerPromote(rhsType));
+  lhs_ = Expr::MayCast(lhs_, ScalarOrLikeTile(lhs_, ArithmType::IntegerPromote(lhsType)));
+  rhs_ = Expr::MayCast(rhs_, ScalarOrLikeTile(rhs_, ArithmType::IntegerPromote(rhsType)));
   type_ = lhs_->Type();
+  Broadcast();
 }
 
 
 void BinaryOp::RelationalOpTypeChecking() {
-  if (lhs_->Type()->ToPointer() || rhs_->Type()->ToPointer()) {
-    EnsureCompatible(lhs_->Type(), rhs_->Type());
+  ::Type* lhsScalType = TryExtractScalarType(this, lhs_);
+  ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
+  if (lhsScalType->ToPointer() || rhsScalType->ToPointer()) {
+    EnsureCompatible(lhsScalType, rhsScalType);
   } else {
-    if (!lhs_->Type()->IsReal() || !rhs_->Type()->IsReal()) {
+    if (!lhsScalType->IsReal() || !rhsScalType->IsReal()) {
       Error(this, "expect real type of operands");
     }
     Convert();
   }
   type_ = ArithmType::New(T_INT);
+  Broadcast();
 }
 
 
 void BinaryOp::EqualityOpTypeChecking() {
-  if (lhs_->Type()->ToPointer() || rhs_->Type()->ToPointer()) {
-    EnsureCompatibleOrVoidPointer(lhs_->Type(), rhs_->Type());
+  ::Type* lhsScalType = TryExtractScalarType(this, lhs_);
+  ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
+  if (lhsScalType->ToPointer() || rhsScalType->ToPointer()) {
+    EnsureCompatibleOrVoidPointer(lhsScalType, rhsScalType);
   } else {
-    if (!lhs_->Type()->ToArithm() || !rhs_->Type()->ToArithm())
+    if (!lhsScalType->ToArithm() || !rhsScalType->ToArithm())
       Error(this, "invalid operands to binary %s", tok_->str_.c_str());
     Convert();
   }
   type_ = ArithmType::New(T_INT);
+  Broadcast();
 }
 
 
 void BinaryOp::BitwiseOpTypeChecking() {
-  if (!lhs_->Type()->IsInteger() || !rhs_->Type()->IsInteger())
+  ::Type* lhsScalType = TryExtractScalarType(this, lhs_);
+  ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
+  if (!lhsScalType->IsInteger() || !rhsScalType->IsInteger())
     Error(this, "operands of '&' should be integer");
   type_ = Convert();
+  Broadcast();
 }
 
 
 void BinaryOp::LogicalOpTypeChecking() {
-  if (!lhs_->Type()->IsScalar() || !rhs_->Type()->IsScalar())
+  ::Type* lhsScalType = TryExtractScalarType(this, lhs_);
+  ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
+  if (!lhsScalType->IsScalar() || !rhsScalType->IsScalar())
     Error(this, "the operand should be arithmetic type or pointer");
   type_ = ArithmType::New(T_INT);
+  Broadcast();
 }
 
 
@@ -459,12 +539,14 @@ void BinaryOp::AssignOpTypeChecking() {
     Error(lhs_, "lvalue expression expected");
   }
 
-  if (!lhs_->Type()->ToArithm() || !rhs_->Type()->ToArithm()) {
-    EnsureCompatibleOrVoidPointer(lhs_->Type(), rhs_->Type());
+  ::Type* lhsScalType = TryExtractScalarType(this, lhs_);
+  ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
+  if (!lhsScalType->ToArithm() || !rhsScalType->ToArithm()) {
+    EnsureCompatibleOrVoidPointer(lhsScalType, rhsScalType);
   }
 
   // The other constraints are lefted to cast operator
-  rhs_ = Expr::MayCast(rhs_, lhs_->Type());
+  rhs_ = Expr::MayCast(rhs_, ScalarOrLikeTile(rhs_, lhsScalType));
   type_ = lhs_->Type();
 }
 
@@ -488,13 +570,16 @@ bool UnaryOp::IsLVal() {
 }
 
 
-ArithmType* UnaryOp::Convert() {
-  auto arithmType = operand_->Type()->ToArithm();
+::Type* UnaryOp::Convert() {
+  auto scalType = operand_->Type()->ScalarType();
+  assert(scalType);
+  auto arithmType = scalType->ToArithm();
   assert(arithmType);
   if (arithmType->IsInteger())
     arithmType = ArithmType::IntegerPromote(arithmType);
-  operand_ = Expr::MayCast(operand_, arithmType);
-  return arithmType;
+  ::Type* retType = ScalarOrLikeTile(operand_, arithmType);
+  operand_ = Expr::MayCast(operand_, retType);
+  return retType;
 }
 
 
@@ -521,11 +606,13 @@ void UnaryOp::TypeChecking() {
   case Token::CAST:
     return CastOpTypeChecking();
 
+  case '^':
+    return TransOpTypeChecking();
+
   default:
     assert(false);
   }
 }
-
 
 void UnaryOp::IncDecOpTypeChecking() {
   if (operand_->IsConstQualified()) {
@@ -533,8 +620,8 @@ void UnaryOp::IncDecOpTypeChecking() {
   } else if (!operand_->IsLVal()) {
     Error(this, "lvalue expression expected");
   }
-
-  if (!operand_->Type()->IsReal() && !operand_->Type()->ToPointer()) {
+  auto scalType = TryExtractScalarType(this, operand_);
+  if (!scalType->IsReal() && !scalType->ToPointer()) {
     Error(this, "expect operand of real type or pointer");
   }
   type_ = operand_->Type();
@@ -545,43 +632,78 @@ void UnaryOp::AddrOpTypeChecking() {
   auto funcType = operand_->Type()->ToFunc();
   if (funcType == nullptr && !operand_->IsLVal())
     Error(this, "expression must be an lvalue or function designator");
+  if(operand_->Type()->IsTile())
+    Error(this, "cannot take the address of a tile");
   type_ = PointerType::New(operand_->Type());
 }
 
 
 void UnaryOp::DerefOpTypeChecking() {
-  auto pointerType = operand_->Type()->ToPointer();
+  auto scalType = TryExtractScalarType(this, operand_);
+  auto pointerType = scalType->ToPointer();
   if (!pointerType)
     Error(this, "pointer expected for deref operator '*'");
-  type_ = pointerType->Derived();
+  type_ = ScalarOrLikeTile(operand_, pointerType->Derived().GetPtr());
 }
 
 
+void UnaryOp::TransOpTypeChecking() {
+  auto tileType = operand_->Type()->ToTile();
+  if(!tileType)
+    Error(this, "tile expected for transposition operator '^'");
+  auto shape = tileType->Shape();
+  std::rotate(shape.begin(), shape.begin() + 1, shape.end());
+  type_ = TileType::New(shape, tileType->Derived());
+}
+
 void UnaryOp::UnaryArithmOpTypeChecking() {
+  auto scalType = TryExtractScalarType(this, operand_);
   if (Token::PLUS == op_ || Token::MINUS == op_) {
-    if (!operand_->Type()->ToArithm())
+    if (!scalType->ToArithm())
       Error(this, "Arithmetic type expected");
     Convert();
     type_ = operand_->Type();
   } else if ('~' == op_) {
-    if (!operand_->Type()->IsInteger())
+    if (!scalType->IsInteger())
       Error(this, "integer expected for operator '~'");
     Convert();
     type_ = operand_->Type();
-  } else if (!operand_->Type()->IsScalar()) {
+  } else if (!scalType->IsScalar()) {
     Error(this, "arithmetic type or pointer expected for operator '!'");
   } else {
-    type_ = ArithmType::New(T_INT);
+    type_ = ScalarOrLikeTile(operand_, ArithmType::New(T_INT));
   }
 }
 
 
 void UnaryOp::CastOpTypeChecking() {
   auto operandType = Type::MayCast(operand_->Type());
-
   // The type_ has been initiated to dest type
   if (type_->ToVoid()) {
     // The expression becomes a void expression
+  } else if(type_->IsTile() || operandType->IsTile()) {
+    /* Broadcasting rules:
+     *   1. Tiles with 1 element can be converted to scalar
+     *   2. Scalar can be converted to tiles of any shapes
+     *   3. Tiles can be converted to another tile only if the
+     *       mismatching dimensions are unitary
+     */
+    if(type_->IsScalar() && operandType->ToTile()->NumEle() != 1)
+      Error(this, "tile with more than one element cannot be casted to scalar");
+    if(type_->IsTile() && operandType->IsTile()){
+      auto shape = type_->ToTile()->Shape();
+      auto operandShape = operandType->ToTile()->Shape();
+      if(operandShape.size() > shape.size())
+        Error(this, "cast cannot reduce operand rank");
+      while(operandShape.size() < shape.size())
+        operandShape.insert(operandShape.begin(), 1);
+      for(size_t i = 0; i < shape.size(); i++) {
+        if(shape[i] != 1 && operandShape[i] != 1 && shape[i] != operandShape[i])
+          Error(this, "cannot broadcast dimension %d "
+                      "for operands of shape %d and %d",
+                      i, shape[i], operandShape[i]);
+      }
+    }
   } else if (!type_->IsScalar() || !operandType->IsScalar()) {
     if (!type_->Compatible(*operandType))
       Error(this, "the cast type should be arithemetic type or pointer");

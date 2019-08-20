@@ -442,11 +442,27 @@ Expr* Parser::ParsePostfixExprTail(Expr* lhs) {
 
 
 Expr* Parser::ParseSubScripting(Expr* lhs) {
-  auto rhs = ParseExpr();
-  auto tok = ts_.Peek();
+  auto lhsTile = lhs->Type()->ToTile();
+  if(lhsTile == nullptr)
+    Error(lhs, "tile expected");
+  TileType::ShapeInt lhsShape = lhsTile->Shape();
+  QualType lhsQual = lhsTile->Derived();
+  // create ret shape
+  TileType::ShapeInt shape;
+  size_t i = 0;
+  do {
+    auto tok = ts_.Next();
+    if(tok->tag_ == ':')
+      shape.push_back(lhsShape[i++]);
+    else if(tok->tag_ == Token::NEWAXIS)
+      shape.push_back(1);
+    else
+      Error(tok, "only ':' and newaxis are supported in subscripts");
+  }while(ts_.Try(','));
   ts_.Expect(']');
-  auto operand = BinaryOp::New(tok, '+', lhs, rhs);
-  return UnaryOp::New(Token::DEREF, operand);
+  // create ret tile
+  TileType *retType = TileType::New(shape, lhsQual);
+  return UnaryOp::New(Token::CAST, lhs, retType);
 }
 
 
@@ -501,6 +517,7 @@ Expr* Parser::ParseUnaryExpr() {
   case '-': return ParseUnaryOp(tok, Token::MINUS);
   case '~': return ParseUnaryOp(tok, '~');
   case '!': return ParseUnaryOp(tok, '!');
+  case '^': return ParseUnaryOp(tok, Token::XOR);
   default:
     ts_.PutBack();
     return ParsePostfixExpr();
@@ -584,7 +601,7 @@ Expr* Parser::ParseCastExpr() {
 Expr* Parser::ParseRangeExpr() {
   auto lhs = ParseCastExpr();
   auto tok = ts_.Next();
-  while (tok->tag_ == Token::ELLIPSIS){
+  while (tok->tag_ == Token::ELLIPSIS) {
     auto rhs = ParseCastExpr();
     lhs = BinaryOp::New(tok, lhs, rhs);
     tok = ts_.Next();
@@ -593,16 +610,26 @@ Expr* Parser::ParseRangeExpr() {
   return  lhs;
 }
 
-Expr* Parser::ParseMultiplicativeExpr() {
+Expr* Parser::ParseMatmulExpr() {
   auto lhs = ParseRangeExpr();
   auto tok = ts_.Next();
-  while (tok->tag_ == '*' || tok->tag_ == '/' || tok->tag_ == '%') {
+  while (tok->tag_ == Token::MATMUL) {
     auto rhs = ParseRangeExpr();
     lhs = BinaryOp::New(tok, lhs, rhs);
-
     tok = ts_.Next();
   }
+  ts_.PutBack();
+  return lhs;
+}
 
+Expr* Parser::ParseMultiplicativeExpr() {
+  auto lhs = ParseMatmulExpr();
+  auto tok = ts_.Next();
+  while (tok->tag_ == '*' || tok->tag_ == '/' || tok->tag_ == '%') {
+    auto rhs = ParseMatmulExpr();
+    lhs = BinaryOp::New(tok, lhs, rhs);
+    tok = ts_.Next();
+  }
   ts_.PutBack();
   return lhs;
 }
