@@ -153,6 +153,10 @@ public:
   virtual bool IsBool() const { return false; }
   virtual bool IsVoidPointer() const { return false; }
   virtual bool IsUnsigned() const { return false; }
+  virtual bool IsTile() const { return ToTile() != nullptr; }
+
+  const Type* ScalarType() const;
+  Type* ScalarType();
 
   virtual VoidType*           ToVoid() { return nullptr; }
   virtual const VoidType*     ToVoid() const { return nullptr; }
@@ -327,16 +331,22 @@ public:
   static TileType* New(const ShapeInt& shape, QualType eleType);
   virtual ~TileType() { }
 
-  virtual TileType* toTile() { return this; }
-  virtual const TileType* toTile() const { return this; }
+  virtual TileType* ToTile() { return this; }
+  virtual const TileType* ToTile() const { return this; }
   virtual bool Compatible(const Type& other) const;
-  virtual int Width() const { return 0; }
+  virtual int Width() const { return Complete() ? derived_->Width()*NumEle() : 0; }
   virtual int Align() const { return derived_->Align(); }
   virtual std::string Str() const {
     return derived_->Str() + "[{}]:" + std::to_string(Width());
   }
 
   ShapeInt Shape() { return shape_; }
+  int NumEle() const {
+    int ret = 1;
+    for(int s: shape_)
+      ret *= s;
+    return ret;
+  }
 
 protected:
   TileType(MemPool* pool, const ShapeExpr& expr, QualType derived)

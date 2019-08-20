@@ -278,6 +278,9 @@ public:
 
   static Expr* MayCast(Expr* expr);
   static Expr* MayCast(Expr* expr, QualType desType);
+  static ::Type* TryExtractScalarType(Expr* loc, Expr *operand);
+  static ::Type* ScalarOrLikeTile(Expr* operand, ::Type* ty);
+
   virtual bool IsNullPointerConstant() const { return false; }
   bool IsConstQualified() const { return type_.IsConstQualified(); }
   bool IsRestrictQualified() const { return type_.IsRestrictQualified(); }
@@ -332,6 +335,7 @@ public:
   void AdditiveOpTypeChecking();
   void ShiftOpTypeChecking();
   void RangeOpTypeChecking();
+  void MatmulOpTypeChecking();
   void RelationalOpTypeChecking();
   void EqualityOpTypeChecking();
   void BitwiseOpTypeChecking();
@@ -378,11 +382,12 @@ public:
   virtual ~UnaryOp() {}
   virtual void Accept(Visitor* v);
   virtual bool IsLVal();
-  ArithmType* Convert();
+  ::Type *Convert();
   void TypeChecking();
   void IncDecOpTypeChecking();
   void AddrOpTypeChecking();
   void DerefOpTypeChecking();
+  void TransOpTypeChecking();
   void UnaryArithmOpTypeChecking();
   void CastOpTypeChecking();
 

@@ -75,6 +75,7 @@ public:
   QualType ParseTypeName();
   Expr* ParseCastExpr();
   Expr* ParseRangeExpr();
+  Expr* ParseMatmulExpr();
   Expr* ParseMultiplicativeExpr();
   Expr* ParseAdditiveExpr();
   Expr* ParseShiftExpr();

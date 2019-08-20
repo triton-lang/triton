@@ -64,7 +64,7 @@ public:
     NOT = '!',
     COND = '?',
     SHARP = '#',
-    AT = '@',
+    MATMUL = '@',
     NEW_LINE = '\n',
 
     DSHARP = 128, // '##'
@@ -125,6 +125,10 @@ public:
     INLINE,
     NORETURN,	// _Noreturn
     // FUNCTION SPECIFIER END
+
+    // TILE ARITHMETICS BEGIN
+    NEWAXIS,
+    // TILE ARITHMETICS END
 
     ALIGNAS, // _Alignas
     // For syntactic convenience
