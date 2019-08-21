@@ -1,6 +1,4 @@
 #include "triton/lang/wgtcc/ast.h"
-
-#include "triton/lang/wgtcc/code_gen.h"
 #include "triton/lang/wgtcc/error.h"
 #include "triton/lang/wgtcc/evaluator.h"
 #include "triton/lang/wgtcc/mem_pool.h"
