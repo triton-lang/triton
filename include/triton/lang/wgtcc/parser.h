@@ -146,7 +146,7 @@ public:
   CompoundStmt* ParseSwitchStmt();
   CompoundStmt* ParseWhileStmt();
   CompoundStmt* ParseDoStmt();
-  CompoundStmt* ParseForStmt();
+  ForStmt *ParseForStmt();
   JumpStmt* ParseGotoStmt();
   JumpStmt* ParseContinueStmt();
   JumpStmt* ParseBreakStmt();

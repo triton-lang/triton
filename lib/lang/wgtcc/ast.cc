@@ -18,6 +18,7 @@ static MemPoolImp<TempVar>          tempVarPool;
 static MemPoolImp<UnaryOp>          unaryOpPool;
 static MemPoolImp<EmptyStmt>        emptyStmtPool;
 static MemPoolImp<IfStmt>           ifStmtPool;
+static MemPoolImp<ForStmt>          forStmtPool;
 static MemPoolImp<JumpStmt>         jumpStmtPool;
 static MemPoolImp<ReturnStmt>       returnStmtPool;
 static MemPoolImp<LabelStmt>        labelStmtPool;
@@ -46,6 +47,10 @@ void LabelStmt::Accept(Visitor* v) {
 
 void IfStmt::Accept(Visitor* v) {
   v->VisitIfStmt(this);
+}
+
+void ForStmt::Accept(Visitor* v) {
+  v->VisitForStmt(this);
 }
 
 
@@ -396,6 +401,7 @@ void BinaryOp::AdditiveOpTypeChecking() {
   ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
   auto lhsPtrType = lhsScalType->ToPointer();
   auto rhsPtrType = rhsScalType->ToPointer();
+  std::cout << "adding" << std::endl;
   if (lhsPtrType) {
     if (op_ == '-') {
       if (rhsPtrType) {
@@ -430,6 +436,7 @@ void BinaryOp::AdditiveOpTypeChecking() {
 }
 
 void BinaryOp::RangeOpTypeChecking() {
+  std::cout << "range" << std::endl;
   auto lhsType = lhs_->Type()->ToArithm();
   auto rhsType = rhs_->Type()->ToArithm();
   if(!lhsType || !lhsType->IsInteger() || !rhsType || !rhsType->IsInteger())
@@ -546,6 +553,7 @@ void BinaryOp::AssignOpTypeChecking() {
   // The other constraints are lefted to cast operator
   rhs_ = Expr::MayCast(rhs_, ScalarOrLikeTile(rhs_, lhsScalType));
   type_ = lhs_->Type();
+  Broadcast();
 }
 
 
@@ -969,6 +977,11 @@ CompoundStmt* CompoundStmt::New(std::list<Stmt*>& stmts, ::Scope* scope) {
   return ret;
 }
 
+ForStmt* ForStmt::New(Stmt* body, Stmt* init, Expr* cond, Expr* step) {
+  auto ret = new (forStmtPool.Alloc()) ForStmt(body, init, cond, step);
+  ret->pool_ = &forStmtPool;
+  return ret;
+}
 
 JumpStmt* JumpStmt::New(LabelStmt* label) {
   auto ret = new (jumpStmtPool.Alloc()) JumpStmt(label);

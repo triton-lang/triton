@@ -8,6 +8,7 @@
 #include "triton/lang/lang.h"
 #include "triton/lang/wgtcc/cpp.h"
 #include "triton/lang/wgtcc/parser.h"
+#include "triton/lang/wgtcc/code_gen.h"
 #include "triton/driver/device.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
@@ -133,6 +134,9 @@ triton::lang::translation_unit *function::make_ast(const char *csrc) {
   cpp.Process(ts);
   Parser parser(ts);
   parser.Parse();
+  Generator gen(&parser);
+  ir::module out("", ctx_);
+  gen.Gen(&out);
   exit(EXIT_FAILURE);
 
 //  if (only_preprocess) {

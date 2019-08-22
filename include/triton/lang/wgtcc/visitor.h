@@ -14,6 +14,7 @@ class TempVar;
 
 class Declaration;
 class IfStmt;
+class ForStmt;
 class JumpStmt;
 class ReturnStmt;
 class LabelStmt;
@@ -38,6 +39,7 @@ public:
 
   virtual void VisitDeclaration(Declaration* init) = 0;
   virtual void VisitIfStmt(IfStmt* ifStmt) = 0;
+  virtual void VisitForStmt(ForStmt* ifStmt) = 0;
   virtual void VisitJumpStmt(JumpStmt* jumpStmt) = 0;
   virtual void VisitReturnStmt(ReturnStmt* returnStmt) = 0;
   virtual void VisitLabelStmt(LabelStmt* labelStmt) = 0;

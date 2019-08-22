@@ -3,6 +3,7 @@
 #include "triton/lang/wgtcc/parser.h"
 #include "triton/lang/wgtcc/token.h"
 #include "triton/ir/module.h"
+#include "triton/ir/function.h"
 
 // Helpers
 void Generator::set_ret(ir::value* value) {
@@ -25,10 +26,12 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
 
   Visit(binary->lhs_);
   ir::value* lhs = ret_;
+
   // op info
   auto type = binary->lhs_->Type();
   auto flt = type->IsFloat();
   auto sign = !type->IsUnsigned();
+
   // return
   switch(binary->op_){
     case Token::LOGICAL_AND: return set_ret(bld_->create_and(lhs, rhs));
@@ -40,6 +43,13 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
     case Token::RIGHT: return set_ret(bld_->create_lshr(lhs, rhs));
     case '.': return error_not_implemented();
     case ',': return error_not_implemented();
+    case Token::ELLIPSIS: {
+      auto clhs = dynamic_cast<ir::constant_int*>(lhs);
+      auto crhs = dynamic_cast<ir::constant_int*>(rhs);
+      if(!clhs || !crhs)
+        should_not_happen();
+      return set_ret(ir::constant_range::get(clhs, crhs));
+    }
     case '+':
       if(binary->lhs_->Type()->ToPointer())
         return set_ret(bld_->create_gep(lhs, {rhs}));
@@ -210,6 +220,14 @@ void Generator::VisitDeclaration(Declaration* decl) {
   if(inits.size() > 1)
     assert(false);
   val = inits[0];
+  std::cout << obj->Name() << " " << val->get_type()->get_type_id() << " " << ty->get_type_id() << std::endl;
+  if(val->get_type()->is_tile_ty() && ty->is_tile_ty()) {
+    for(auto s: val->get_type()->get_tile_shapes())
+      std::cout << s->get_value() << std::endl;
+    std::cout << "---" << std::endl;
+    for(auto s: ty->get_tile_shapes())
+      std::cout << s->get_value() << std::endl;
+  }
   assert(val->get_type() == ty);
   // update scope symbols table
   const std::string &name = obj->Name();
@@ -258,6 +276,38 @@ void Generator::VisitIfStmt(IfStmt* ifStmt) {
   bld_->set_insert_point(endif_bb);
 }
 
+void Generator::VisitForStmt(ForStmt *forStmt) {
+  Stmt *init_ = forStmt->init_;
+  Expr *cond_ = forStmt->cond_;
+  Expr *step_ = forStmt->step_;
+  Stmt *body_ = forStmt->body_;
+  ir::basic_block *current_bb = bld_->get_insert_block();
+  ir::function *fn = current_bb->get_parent();
+  ir::basic_block *loop_bb = ir::basic_block::create(*ctx_, "loop", fn);
+  ir::basic_block *next_bb = ir::basic_block::create(*ctx_, "postloop", fn);
+  mod_->set_continue_fn([&](){
+    if(step_)
+      VisitExpr(step_);
+    VisitExpr(cond_);
+    ir::value *cond = ret_;
+    return bld_->create_cond_br(cond, loop_bb, next_bb);
+  });
+  VisitStmt(init_);
+  VisitExpr(cond_);
+  ir::value *cond = ret_;
+  bld_->create_cond_br(cond, loop_bb, next_bb);
+  bld_->set_insert_point(loop_bb);
+  VisitStmt(body_);
+  if(!is_terminator(ret_))
+    mod_->get_continue_fn()();
+  ir::basic_block *stop_bb = bld_->get_insert_block();
+  mod_->seal_block(stop_bb);
+  mod_->seal_block(loop_bb);
+  mod_->seal_block(bld_->get_insert_block());
+  mod_->seal_block(next_bb);
+  bld_->set_insert_point(next_bb);
+}
+
 void Generator::VisitJumpStmt(JumpStmt* jumpStmt) {
   return error_not_implemented();
 }
@@ -277,7 +327,7 @@ void Generator::VisitLabelStmt(LabelStmt* labelStmt) {
 
 void Generator::VisitCompoundStmt(CompoundStmt* compoundStmt) {
   if (compoundStmt->scope_){
-    AllocObjects(compoundStmt->scope_);
+//    AllocObjects(compoundStmt->scope_);
     pushScope();
   }
   for (auto stmt: compoundStmt->stmts_)
@@ -287,32 +337,99 @@ void Generator::VisitCompoundStmt(CompoundStmt* compoundStmt) {
 }
 
 void Generator::VisitFuncDef(FuncDef* funcDef) {
-  return error_not_implemented();
+  Stmt *body = funcDef->body_;
+  const std::string& name = funcDef->Name();
+  FuncType* type = funcDef->FuncType();
+  auto prototype = dynamic_cast<ir::function_type*>(GenIRType(type, *ctx_));
+  if(!prototype)
+    should_not_happen();
+  ir::function *fn = mod_->get_or_insert_function(name, prototype);
+  std::vector<ir::argument*> args = fn->args();
+  size_t i = 0;
+  for(Object* obj: type->Params()){
+    std::string name = obj->Name();
+    args[i]->set_name(name);
+    mod_->set_value(name, nullptr, args[i]);
+    mod_->get_scope().types[name] = args[i]->get_type();
+  }
+  ir::basic_block *entry = ir::basic_block::create(mod_->get_context(), "entry", fn);
+  mod_->seal_block(entry);
+  mod_->get_builder().set_insert_point(entry);
+  VisitStmt(body);
+  if(!dynamic_cast<ir::return_inst*>(ret_))
+    mod_->get_builder().create_ret_void();
 }
 
 void Generator::VisitTranslationUnit(TranslationUnit* unit) {
+  pushScope();
   for (auto extDecl: unit->ExtDecls())
     Visit(extDecl);
+  popScope();
 }
 
 void Generator::Gen(ir::module *mod) {
-  pushScope();
   mod_ = mod;
   ctx_ = &mod_->get_context();
   bld_ = &mod_->get_builder();
-  std::unique_ptr<LValAssigner> assign(new LValAssigner(this));
-  assign_ = assign.get();
+  assign_ = new LValAssigner(this);
   VisitTranslationUnit(parser_->Unit());
+  delete assign_;
   assign_ = nullptr;
 }
 
 
 // Triton-IR Values
 
-ir::value* Generator::GenCastOp(ir::value* op, ir::type* type) {
-  //TODO
-  assert(false);
-  return nullptr;
+ir::value* Generator::GenCastOp(ir::value* src, ir::type* dst_ty) {
+  if(dst_ty->is_tile_ty()) {
+    auto dst_shapes = dst_ty->get_tile_shapes();
+    if(!src->get_type()->is_tile_ty())
+      return bld_->create_splat(src, dst_shapes);
+    auto src_shapes = src->get_type()->get_tile_shapes();
+    if(src_shapes.size() != dst_shapes.size())
+      return bld_->create_reshape(src, dst_shapes);
+    else
+      return bld_->create_broadcast(src, dst_shapes);
+  }
+  ir::type *src_scalar_ty = src->get_type()->get_scalar_ty();
+  ir::type *dst_scalar_ty = dst_ty->get_scalar_ty();
+  bool src_signed = false;
+  bool dst_signed = false;
+
+  if(src->get_type()->is_tile_ty())
+    dst_ty = ir::tile_type::get_same_shapes(dst_scalar_ty, src->get_type());
+
+  if(src_scalar_ty == dst_scalar_ty)
+    return src;
+
+  else if(src_scalar_ty->is_integer_ty() && src_signed && dst_scalar_ty->is_floating_point_ty())
+    return bld_->create_si_to_fp(src, dst_ty);
+
+  else if(src_scalar_ty->is_integer_ty() && !src_signed && dst_scalar_ty->is_floating_point_ty())
+    return bld_->create_ui_to_fp(src, dst_ty);
+
+  else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_integer_ty() && dst_signed)
+    return bld_->create_fp_to_si(src, dst_ty);
+
+  else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_integer_ty() && !dst_signed)
+    return bld_->create_fp_to_ui(src, dst_ty);
+
+  else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_floating_point_ty() &&
+          src_scalar_ty->get_fp_mantissa_width() < dst_scalar_ty->get_fp_mantissa_width())
+    return bld_->create_fp_ext(src, dst_ty);
+
+  else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_floating_point_ty() &&
+          src_scalar_ty->get_fp_mantissa_width() > dst_scalar_ty->get_fp_mantissa_width())
+    return bld_->create_fp_trunc(src, dst_ty);
+
+  else if(src_scalar_ty->is_integer_ty() && dst_scalar_ty->is_integer_ty() &&
+          src_scalar_ty->get_integer_bitwidth())
+    return bld_->create_int_cast(src, dst_ty, dst_signed);
+
+  else{
+    should_not_happen();
+    return nullptr;
+  }
 }
 
 // Triton-IR Types

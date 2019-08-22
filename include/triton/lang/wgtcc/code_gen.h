@@ -31,7 +31,7 @@ using StaticInitList = std::vector<StaticInitializer>;
 
 // Error
 inline void should_not_happen() { assert(false); }
-inline void error_not_implemented() { assert(false); }
+inline void error_not_implemented() { throw std::runtime_error("not implemented"); }
 
 class Generator: public Visitor {
   friend class Evaluator<Addr>;
@@ -48,32 +48,33 @@ protected:
 public:
   Generator(Parser* parser) : parser_(parser) {}
 
-  virtual void Visit(ASTNode* node) { node->Accept(this); }
+  void Visit(ASTNode* node) { node->Accept(this); }
   void VisitExpr(Expr* expr) { expr->Accept(this); }
   void VisitStmt(Stmt* stmt) { stmt->Accept(this); }
 
   // Expression
-  virtual void VisitBinaryOp(BinaryOp* binaryOp);
-  virtual void VisitUnaryOp(UnaryOp* unaryOp);
-  virtual void VisitConditionalOp(ConditionalOp* condOp);
-  virtual void VisitFuncCall(FuncCall* funcCall);
-  virtual void VisitObject(Object* obj);
-  virtual void VisitEnumerator(Enumerator* enumer);
-  virtual void VisitIdentifier(Identifier* ident);
-  virtual void VisitConstant(Constant* cons);
-  virtual void VisitTempVar(TempVar* tempVar);
+  void VisitBinaryOp(BinaryOp* binaryOp);
+  void VisitUnaryOp(UnaryOp* unaryOp);
+  void VisitConditionalOp(ConditionalOp* condOp);
+  void VisitFuncCall(FuncCall* funcCall);
+  void VisitObject(Object* obj);
+  void VisitEnumerator(Enumerator* enumer);
+  void VisitIdentifier(Identifier* ident);
+  void VisitConstant(Constant* cons);
+  void VisitTempVar(TempVar* tempVar);
 
   // Statement
-  virtual void VisitDeclaration(Declaration* init);
-  virtual void VisitEmptyStmt(EmptyStmt* emptyStmt);
-  virtual void VisitIfStmt(IfStmt* ifStmt);
-  virtual void VisitJumpStmt(JumpStmt* jumpStmt);
-  virtual void VisitReturnStmt(ReturnStmt* returnStmt);
-  virtual void VisitLabelStmt(LabelStmt* labelStmt);
-  virtual void VisitCompoundStmt(CompoundStmt* compoundStmt);
+  void VisitDeclaration(Declaration* init);
+  void VisitEmptyStmt(EmptyStmt* emptyStmt);
+  void VisitIfStmt(IfStmt* ifStmt);
+  void VisitForStmt(ForStmt* ifStmt);
+  void VisitJumpStmt(JumpStmt* jumpStmt);
+  void VisitReturnStmt(ReturnStmt* returnStmt);
+  void VisitLabelStmt(LabelStmt* labelStmt);
+  void VisitCompoundStmt(CompoundStmt* compoundStmt);
 
-  virtual void VisitFuncDef(FuncDef* funcDef);
-  virtual void VisitTranslationUnit(TranslationUnit* unit);
+  void VisitFuncDef(FuncDef* funcDef);
+  void VisitTranslationUnit(TranslationUnit* unit);
 
   void Gen(ir::module *mod);
 
@@ -127,6 +128,7 @@ public:
   void VisitDeclaration(Declaration*)          { should_not_happen(); }
   void VisitEmptyStmt(EmptyStmt*)              { should_not_happen(); }
   void VisitIfStmt(IfStmt*)                    { should_not_happen(); }
+  void VisitForStmt(ForStmt*)                  { should_not_happen(); }
   void VisitJumpStmt(JumpStmt*)                { should_not_happen(); }
   void VisitReturnStmt(ReturnStmt*)            { should_not_happen(); }
   void VisitLabelStmt(LabelStmt*)              { should_not_happen(); }
