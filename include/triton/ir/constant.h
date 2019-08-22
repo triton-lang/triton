@@ -102,13 +102,14 @@ private:
 
 /* constant fp */
 class constant_fp: public constant{
-  constant_fp(context &ctx, double value);
+  constant_fp(type *ty, double value);
 
 public:
   double get_value() { return value_; }
   static constant* get_negative_zero(type *ty);
   static constant* get_zero_value_for_negation(type *ty);
-  static constant *get(context &ctx, double v);
+  static constant* get(context &ctx, double v);
+  static constant* get(type *ty, double v);
 
 private:
   double value_;

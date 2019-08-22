@@ -34,6 +34,7 @@ class alloc_const;
 /* Module */
 struct scope {
   std::map<std::string, ir::type*> types;
+  std::map<std::string, ir::value*> values;
 };
 
 class module {

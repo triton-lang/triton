@@ -38,7 +38,8 @@ public:
     IntegerTyID,     ///< 10: Arbitrary bit width integers
     FunctionTyID,    ///< 11: Functions
     PointerTyID,     ///< 12: Pointers
-    TileTyID,        ///< 13: Tile
+    StructTyID,      ///< 13: Struct
+    TileTyID,        ///< 14: Tile
   };
 
 public:
