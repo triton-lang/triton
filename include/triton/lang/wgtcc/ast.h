@@ -40,6 +40,7 @@ class Enumerator;
 // Statements
 class Stmt;
 class IfStmt;
+class ForStmt;
 class JumpStmt;
 class LabelStmt;
 class EmptyStmt;
@@ -263,7 +264,7 @@ class Expr : public Stmt {
   template<typename T> friend class Evaluator;
   friend class AddrEvaluator;
   friend class Generator;
-  friend class LValGenerator;
+  friend class LValAssigner;
 
 public:
   virtual ~Expr() {}
@@ -308,7 +309,7 @@ class BinaryOp : public Expr {
   template<typename T> friend class Evaluator;
   friend class AddrEvaluator;
   friend class Generator;
-  friend class LValGenerator;
+  friend class LValAssigner;
   friend class Declaration;
 
 public:
@@ -375,7 +376,7 @@ class UnaryOp : public Expr {
   template<typename T> friend class Evaluator;
   friend class AddrEvaluator;
   friend class Generator;
-  friend class LValGenerator;
+  friend class LValAssigner;
 
 public:
   static UnaryOp* New(int op, Expr* operand, QualType type=nullptr);
@@ -538,7 +539,7 @@ class Identifier: public Expr {
   template<typename T> friend class Evaluator;
   friend class AddrEvaluator;
   friend class Generator;
-  friend class LValGenerator;
+  friend class LValAssigner;
 
 public:
   static Identifier* New(const Token* tok, QualType type, Linkage linkage);
@@ -596,7 +597,7 @@ class Object : public Identifier {
   template<typename T> friend class Evaluator;
   friend class AddrEvaluator;
   friend class Generator;
-  friend class LValGenerator;
+  friend class LValAssigner;
 
 public:
   static Object* New(const Token* tok,

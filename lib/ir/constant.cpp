@@ -16,17 +16,11 @@ constant *constant::get_null_value(type *ty) {
   case type::IntegerTyID:
     return constant_int::get(ty, 0);
   case type::HalfTyID:
-    return constant_fp::get(ctx, 0);
+    return constant_fp::get(type::get_half_ty(ctx), 0);
   case type::FloatTyID:
-    return constant_fp::get(ctx, 0);
+    return constant_fp::get(type::get_float_ty(ctx), 0);
   case type::DoubleTyID:
-    return constant_fp::get(ctx, 0);
-  case type::X86_FP80TyID:
-    return constant_fp::get(ctx, 0);
-  case type::FP128TyID:
-    return constant_fp::get(ctx, 0);
-  case type::PPC_FP128TyID:
-    return constant_fp::get(ctx, 0);
+    return constant_fp::get(type::get_double_ty(ctx), 0);
   default:
     throw std::runtime_error("Cannot create a null constant of that type!");
   }
@@ -38,7 +32,7 @@ constant *constant::get_all_ones_value(type *ty) {
   if(ty->is_integer_ty())
     return constant_int::get(ty, 0xFFFFFFFF);
   if(ty->is_floating_point_ty())
-    return constant_fp::get(ty->get_context(), 0xFFFFFFFF);
+    return constant_fp::get(ty, 0xFFFFFFFF);
   throw std::runtime_error("Cannot create all ones value for that type!");
 }
 
@@ -83,12 +77,12 @@ const constant_int* constant_range::get_last() const {
 // constant_fp
 // FIXME use something like APFloat
 
-constant_fp::constant_fp(context &ctx, double value)
-  : constant(type::get_float_ty(ctx), 0), value_(value){ }
+constant_fp::constant_fp(type *ty, double value)
+  : constant(ty, 0), value_(value){ }
 
 constant *constant_fp::get_negative_zero(type *ty){
   double neg_zero = 0;
-  return get(ty->get_context(), neg_zero);
+  return get(ty, neg_zero);
 }
 
 constant *constant_fp::get_zero_value_for_negation(type *ty) {
@@ -97,11 +91,11 @@ constant *constant_fp::get_zero_value_for_negation(type *ty) {
   return constant::get_null_value(ty);
 }
 
-constant *constant_fp::get(context &ctx, double v){
-  context_impl *impl = ctx.p_impl.get();
-  constant_fp *&result = impl->fp_constants_[v];
+constant *constant_fp::get(type *ty, double v){
+  context_impl *impl = ty->get_context().p_impl.get();
+  constant_fp *&result = impl->fp_constants_[std::make_pair(ty, v)];
   if(!result)
-    result = new constant_fp(ctx, v);
+    result = new constant_fp(ty, v);
   return result;
 }
 
