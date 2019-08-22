@@ -45,6 +45,7 @@ public:
   // We may should assert here
   virtual void VisitDeclaration(Declaration* init) {}
   virtual void VisitIfStmt(IfStmt* ifStmt) {}
+  virtual void VisitForStmt(ForStmt* forStmt) {}
   virtual void VisitJumpStmt(JumpStmt* jumpStmt) {}
   virtual void VisitReturnStmt(ReturnStmt* returnStmt) {}
   virtual void VisitLabelStmt(LabelStmt* labelStmt) {}
@@ -100,6 +101,7 @@ public:
   // We may should assert here
   virtual void VisitDeclaration(Declaration* init) {}
   virtual void VisitIfStmt(IfStmt* ifStmt) {}
+  virtual void VisitForStmt(ForStmt* forStmt) {}
   virtual void VisitJumpStmt(JumpStmt* jumpStmt) {}
   virtual void VisitReturnStmt(ReturnStmt* returnStmt) {}
   virtual void VisitLabelStmt(LabelStmt* labelStmt) {}

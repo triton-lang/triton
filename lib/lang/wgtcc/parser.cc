@@ -450,8 +450,9 @@ Expr* Parser::ParseSubScripting(Expr* lhs) {
   // create ret shape
   TileType::ShapeInt shape;
   size_t i = 0;
+  const Token* tok;
   do {
-    auto tok = ts_.Next();
+    tok = ts_.Next();
     if(tok->tag_ == ':')
       shape.push_back(lhsShape[i++]);
     else if(tok->tag_ == Token::NEWAXIS)
@@ -460,6 +461,8 @@ Expr* Parser::ParseSubScripting(Expr* lhs) {
       Error(tok, "only ':' and newaxis are supported in subscripts");
   }while(ts_.Try(','));
   ts_.Expect(']');
+//  if(lhsShape.size() > i)
+//    Error(tok, "broadcasting not using all operand axes");
   // create ret tile
   TileType *retType = TileType::New(shape, lhsQual);
   return UnaryOp::New(Token::CAST, lhs, retType);
@@ -2298,61 +2301,33 @@ IfStmt* Parser::ParseIfStmt() {
   continueDest_ = continueDestBackup; \
 }
 
-CompoundStmt* Parser::ParseForStmt() {
+ForStmt* Parser::ParseForStmt() {
   EnterBlock();
   ts_.Expect('(');
-
-  std::list<Stmt*> stmts;
-
+  // init
+  Stmt* init = nullptr;
   if (IsType(ts_.Peek())) {
-    stmts.push_back(ParseDecl());
+    init = ParseDecl();
   } else if (!ts_.Try(';')) {
-    stmts.push_back(ParseExpr());
+    init = ParseExpr();
     ts_.Expect(';');
   }
-
-  Expr* condExpr = nullptr;
+  // cond
+  Expr* cond = nullptr;
   if (!ts_.Try(';')) {
-    condExpr = ParseExpr();
+    cond = ParseExpr();
     ts_.Expect(';');
   }
-
-  Expr* stepExpr = nullptr;
+  // step
+  Expr* step = nullptr;
   if (!ts_.Try(')')) {
-    stepExpr = ParseExpr();
+    step = ParseExpr();
     ts_.Expect(')');
   }
-
-  auto condLabel = LabelStmt::New();
-  auto stepLabel = LabelStmt::New();
-  auto endLabel = LabelStmt::New();
-  stmts.push_back(condLabel);
-  if (condExpr) {
-    auto gotoEndStmt = JumpStmt::New(endLabel);
-    auto ifStmt = IfStmt::New(condExpr, EmptyStmt::New(), gotoEndStmt);
-    stmts.push_back(ifStmt);
-  }
-
-  // 我们需要给break和continue语句提供相应的标号，不然不知往哪里跳
-  Stmt* bodyStmt;
-  ENTER_LOOP_BODY(endLabel, stepLabel);
-  bodyStmt = ParseStmt();
-  // 因为for的嵌套结构，在这里需要回复break和continue的目标标号
-  EXIT_LOOP_BODY()
-
-  stmts.push_back(bodyStmt);
-  stmts.push_back(stepLabel);
-  if (stepExpr)
-    stmts.push_back(stepExpr);
-  else
-    stmts.push_back(EmptyStmt::New());
-  stmts.push_back(JumpStmt::New(condLabel));
-  stmts.push_back(endLabel);
-
-  auto scope = curScope_;
+  // body
+  Stmt* body = ParseStmt();
   ExitBlock();
-
-  return CompoundStmt::New(stmts, scope);
+  return ForStmt::New(body, init, cond, step);
 }
 
 

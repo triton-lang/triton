@@ -138,6 +138,25 @@ private:
   Stmt* else_;
 };
 
+class ForStmt: public Stmt {
+  template<typename T> friend class Evaluator;
+  friend class AddrEvaluator;
+  friend class Generator;
+public:
+  static ForStmt* New(Stmt* body, Stmt* init = nullptr, Expr* cond = nullptr, Expr* step = nullptr);
+  virtual ~ForStmt() {}
+  virtual void Accept(Visitor* v);
+
+protected:
+  ForStmt(Stmt* body, Stmt* init = nullptr, Expr* cond = nullptr, Expr* step = nullptr)
+      : body_(body), init_(init), cond_(cond), step_(step) {}
+
+private:
+  Stmt* body_;
+  Stmt* init_;
+  Expr* cond_;
+  Expr* step_;
+};
 
 class JumpStmt : public Stmt {
   template<typename T> friend class Evaluator;
