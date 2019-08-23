@@ -55,6 +55,13 @@ class TranslationUnit;
 
 class ASTNode {
 public:
+  struct Attr{
+    std::string name;
+    std::vector<Expr*> vals;
+  };
+  using AttrList = std::vector<Attr>;
+
+public:
   virtual ~ASTNode() {}
   virtual void Accept(Visitor* v) = 0;
 
@@ -561,7 +568,7 @@ class Identifier: public Expr {
   friend class LValAssigner;
 
 public:
-  static Identifier* New(const Token* tok, QualType type, Linkage linkage);
+  static Identifier* New(const Token* tok, QualType type, Linkage linkage, const AttrList& attrList={});
   virtual ~Identifier() {}
   virtual void Accept(Visitor* v);
   virtual bool IsLVal() { return false; }
@@ -583,11 +590,12 @@ public:
   virtual void TypeChecking() {}
 
 protected:
-  Identifier(const Token* tok, QualType type, enum Linkage linkage)
-      : Expr(tok, type), linkage_(linkage) {}
+  Identifier(const Token* tok, QualType type, enum Linkage linkage, const AttrList& attrList={})
+      : Expr(tok, type), linkage_(linkage), attrList_(attrList) {}
 
   // An identifier has property linkage
   enum Linkage linkage_;
+  AttrList attrList_;
 };
 
 
@@ -624,13 +632,15 @@ public:
                      int storage=0,
                      enum Linkage linkage=L_NONE,
                      unsigned char bitFieldBegin=0,
-                     unsigned char bitFieldWidth=0);
+                     unsigned char bitFieldWidth=0,
+                     const AttrList& attrList={});
   static Object* NewAnony(const Token* tok,
                           QualType type,
                           int storage=0,
                           enum Linkage linkage=L_NONE,
                           unsigned char bitFieldBegin=0,
-                          unsigned char bitFieldWidth=0);
+                          unsigned char bitFieldWidth=0,
+                          const AttrList& attrList={});
   ~Object() {}
   virtual void Accept(Visitor* v);
   virtual Object* ToObject() { return this; }
@@ -685,7 +695,8 @@ protected:
          int storage=0,
          enum Linkage linkage=L_NONE,
          unsigned char bitFieldBegin=0,
-         unsigned char bitFieldWidth=0)
+         unsigned char bitFieldWidth=0,
+         const AttrList& attrList={})
       : Identifier(tok, type, linkage),
         storage_(storage),
         offset_(0),
@@ -693,7 +704,8 @@ protected:
         decl_(nullptr),
         bitFieldBegin_(bitFieldBegin),
         bitFieldWidth_(bitFieldWidth),
-        anonymous_(false) {}
+        anonymous_(false),
+        attrList_(attrList){}
 
 private:
   int storage_;
@@ -708,6 +720,8 @@ private:
 
   bool anonymous_;
   long id_ {0};
+
+  ASTNode::AttrList attrList_;
 };
 
 

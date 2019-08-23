@@ -823,8 +823,9 @@ void FuncCall::TypeChecking() {
 
 Identifier* Identifier::New(const Token* tok,
                             QualType type,
-                            enum Linkage linkage) {
-  auto ret = new (identifierPool.Alloc()) Identifier(tok, type, linkage);
+                            enum Linkage linkage,
+                            const AttrList &attrList) {
+  auto ret = new (identifierPool.Alloc()) Identifier(tok, type, linkage, attrList);
   ret->pool_ = &identifierPool;
   return ret;
 }
@@ -862,9 +863,10 @@ Object* Object::New(const Token* tok,
                     int storage,
                     enum Linkage linkage,
                     unsigned char bitFieldBegin,
-                    unsigned char bitFieldWidth) {
+                    unsigned char bitFieldWidth,
+                    const AttrList& attrList) {
   auto ret = new (objectPool.Alloc())
-             Object(tok, type, storage, linkage, bitFieldBegin, bitFieldWidth);
+             Object(tok, type, storage, linkage, bitFieldBegin, bitFieldWidth, attrList);
   ret->pool_ = &objectPool;
 
   static long id = 0;
@@ -879,9 +881,10 @@ Object* Object::NewAnony(const Token* tok,
                          int storage,
                          enum Linkage linkage,
                          unsigned char bitFieldBegin,
-                         unsigned char bitFieldWidth) {
+                         unsigned char bitFieldWidth,
+                         const AttrList& attrList) {
   auto ret = new (objectPool.Alloc())
-             Object(tok, type, storage, linkage, bitFieldBegin, bitFieldWidth);
+             Object(tok, type, storage, linkage, bitFieldBegin, bitFieldWidth, attrList);
   ret->pool_ = &objectPool;
   ret->anonymous_ = true;
 

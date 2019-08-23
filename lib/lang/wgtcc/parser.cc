@@ -72,16 +72,18 @@ void Parser::ParseTranslationUnit() {
 
     int storageSpec, funcSpec, align;
     auto declType = ParseDeclSpec(&storageSpec, &funcSpec, &align);
-    auto tokTypePair = ParseDeclarator(declType);
-    auto tok = tokTypePair.first;
-    auto type = tokTypePair.second;
+    auto declInfo = ParseDeclarator(declType);
+
+    auto tok = declInfo.tok;
+    auto type = declInfo.type;
+    auto attrs = declInfo.attrs;
 
     if (tok == nullptr) {
       ts_.Expect(';');
       continue;
     }
 
-    auto ident = ProcessDeclarator(tok, type, storageSpec, funcSpec, align);
+    auto ident = ProcessDeclarator(tok, type, attrs, storageSpec, funcSpec, align);
     type = ident->Type();
 
     if (tok && type->ToFunc() && ts_.Try('{')) { // Function definition
@@ -1339,9 +1341,9 @@ StructType* Parser::ParseStructUnionDecl(StructType* type) {
     int align;
     auto baseType = ParseDeclSpec(nullptr, nullptr, &align);
     do {
-      auto tokTypePair = ParseDeclarator(baseType);
-      auto tok = tokTypePair.first;
-      auto memberType = tokTypePair.second;
+      auto declInfo = ParseDeclarator(baseType);
+      auto tok = declInfo.tok;
+      auto memberType = declInfo.type;
 
       if (ts_.Try(':')) {
         ParseBitField(type, tok, memberType);
@@ -1505,15 +1507,15 @@ static QualType ModifyBase(QualType type, QualType base, QualType newBase) {
  *     if token is nullptr, then we are parsing abstract declarator
  *     else, parsing direct declarator.
  */
-TokenTypePair Parser::ParseDeclarator(QualType base) {
+DeclInfo Parser::ParseDeclarator(QualType base) {
   // May be pointer
   auto pointerType = ParsePointer(base);
 
   if (ts_.Try('(')) {
     // 现在的 pointerType 并不是正确的 base type
-    auto tokenTypePair = ParseDeclarator(pointerType);
-    auto tok = tokenTypePair.first;
-    auto type = tokenTypePair.second;
+    auto declInfo = ParseDeclarator(pointerType);
+    auto tok = declInfo.tok;
+    auto type = declInfo.type;
 
     ts_.Expect(')');
 
@@ -1521,23 +1523,24 @@ TokenTypePair Parser::ParseDeclarator(QualType base) {
 
     // 修正 base type
     auto retType = ModifyBase(type, pointerType, newBase);
-    return TokenTypePair(tokenTypePair.first, retType);
+    return DeclInfo(declInfo.tok, retType);
   } else if (ts_.Peek()->IsIdentifier()) {
     auto tok = ts_.Next();
     // GNU extension: variable attributes
-    TryAttributeSpecList();
+    ASTNode::AttrList attrList = TryAttributeSpecList();
     auto retType = ParseArrayFuncDeclarator(tok, pointerType);
-    return TokenTypePair(tok, retType);
+    return DeclInfo(tok, retType, attrList);
   } else {
     errTok_ = ts_.Peek();
     auto retType = ParseArrayFuncDeclarator(nullptr, pointerType);
-    return TokenTypePair(nullptr, retType);
+    return DeclInfo(nullptr, retType);
   }
 }
 
 
 Identifier* Parser::ProcessDeclarator(const Token* tok,
                                       QualType type,
+                                      const ASTNode::AttrList& attrs,
                                       int storageSpec,
                                       int funcSpec,
                                       int align) {
@@ -1564,6 +1567,11 @@ Identifier* Parser::ProcessDeclarator(const Token* tok,
       // TODO(wgtdkp): add previous declaration information
       return ident;
     }
+
+    if(!attrs.empty()) {
+      Error(tok, "typedef attributes not allowed");
+    }
+
     ident = Identifier::New(tok, type, L_NONE);
     curScope_->Insert(ident);
     return ident;
@@ -1658,9 +1666,9 @@ Identifier* Parser::ProcessDeclarator(const Token* tok,
     // C11 6.7.5 [2]: alignment specifier
     if (align > 0)
       Error(tok, "alignment specified for function");
-    ret = Identifier::New(tok, type, linkage);
+    ret = Identifier::New(tok, type, linkage, attrs);
   } else {
-    auto obj = Object::New(tok, type, storageSpec, linkage);
+    auto obj = Object::New(tok, type, storageSpec, linkage, 0, 0, attrs);
     if (align > 0)
       obj->SetAlign(align);
     ret = obj;
@@ -1797,14 +1805,15 @@ Object* Parser::ParseParamDecl() {
   // C11 6.7.5 [2]: alignment specifier cannot be specified in params
   auto type = ParseDeclSpec(&storageSpec, &funcSpec, nullptr);
   auto tokTypePair = ParseDeclarator(type);
-  auto tok = tokTypePair.first;
-  type = Type::MayCast(tokTypePair.second, true);
+  auto tok = tokTypePair.tok;
+  type = Type::MayCast(tokTypePair.type, true);
+  auto attrs = tokTypePair.attrs;
   if (!tok) { // Abstract declarator
     return Object::NewAnony(ts_.Peek(), type, 0, Linkage::L_NONE);
   }
 
   // Align set to non positive, stands for not specified
-  auto ident = ProcessDeclarator(tok, type, storageSpec, funcSpec, -1);
+  auto ident = ProcessDeclarator(tok, type, attrs, storageSpec, funcSpec, -1);
   if (!ident->ToObject())
     Error(ident, "expect object in param list");
 
@@ -1813,9 +1822,9 @@ Object* Parser::ParseParamDecl() {
 
 
 QualType Parser::ParseAbstractDeclarator(QualType type) {
-  auto tokenTypePair = ParseDeclarator(type);
-  auto tok = tokenTypePair.first;
-  type = tokenTypePair.second;
+  auto declInfo = ParseDeclarator(type);
+  auto tok = declInfo.tok;
+  type = declInfo.type;
   if (tok) { // Not a abstract declarator!
     Error(tok, "unexpected identifier '%s'", tok->str_.c_str());
   }
@@ -1827,14 +1836,15 @@ Identifier* Parser::ParseDirectDeclarator(QualType type,
                                           int storageSpec,
                                           int funcSpec,
                                           int align) {
-  auto tokenTypePair = ParseDeclarator(type);
-  auto tok = tokenTypePair.first;
-  type = tokenTypePair.second;
+  auto declInfo = ParseDeclarator(type);
+  auto tok = declInfo.tok;
+  type = declInfo.type;
+  auto attrs = declInfo.attrs;
   if (tok == nullptr) {
     Error(errTok_, "expect identifier or '('");
   }
 
-  return ProcessDeclarator(tok, type, storageSpec, funcSpec, align);
+  return ProcessDeclarator(tok, type, attrs, storageSpec, funcSpec, align);
 }
 
 
@@ -2654,18 +2664,20 @@ Identifier* Parser::GetBuiltin(const Token* tok) {
  */
 
 // Attribute
-void Parser::TryAttributeSpecList() {
+ASTNode::AttrList Parser::TryAttributeSpecList() {
+  ASTNode::AttrList attrList;
   while (ts_.Try(Token::ATTRIBUTE))
-    ParseAttributeSpec();
+    ParseAttributeSpec(attrList);
+  return attrList;
 }
 
 
-void Parser::ParseAttributeSpec() {
+void Parser::ParseAttributeSpec(ASTNode::AttrList& attrList) {
   ts_.Expect('(');
   ts_.Expect('(');
 
   while (!ts_.Try(')')) {
-    ParseAttribute();
+    attrList.push_back(ParseAttribute());
     if (!ts_.Try(',')) {
       ts_.Expect(')');
       break;
@@ -2675,17 +2687,20 @@ void Parser::ParseAttributeSpec() {
 }
 
 
-void Parser::ParseAttribute() {
+ASTNode::Attr Parser::ParseAttribute() {
+  ASTNode::Attr ret;
   if (!ts_.Test(Token::IDENTIFIER))
-    return;
+    return ret;
   auto tok = ts_.Next();
+  ret.name = tok->str_;
   if (ts_.Try('(')) {
     if (ts_.Try(')'))
-      return;
-    auto tok = ts_.Next();
+      return ret;
+    ret.vals.push_back(ParseExpr());
     if (ts_.Test(',')) {
       while (ts_.Try(',')) {}
     }
     ts_.Try(')');
   }
+  return ret;
 }

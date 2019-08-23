@@ -14,7 +14,18 @@
 
 
 class Preprocessor;
-using TokenTypePair = std::pair<const Token*, QualType>;
+
+struct DeclInfo {
+  DeclInfo(const Token* _tok,
+           QualType _type,
+           ASTNode::AttrList _attrs = {})
+    : tok(_tok), type(_type), attrs(_attrs) {}
+
+  const Token* tok;
+  QualType type;
+  ASTNode::AttrList attrs;
+};
+
 
 class Parser {
   using LiteralList = std::vector<Constant*>;
@@ -103,7 +114,7 @@ public:
   Type* ParseEnumerator(ArithmType* type);
   int ParseQual();
   QualType ParsePointer(QualType typePointedTo);
-  TokenTypePair ParseDeclarator(QualType type);
+  DeclInfo ParseDeclarator(QualType type);
   QualType ParseArrayFuncDeclarator(const Token* ident, QualType base);
   int ParseArrayLength();
   TileType::ShapeInt ParseTileShape();
@@ -155,14 +166,14 @@ public:
   CompoundStmt* ParseCaseStmt();
   CompoundStmt* ParseDefaultStmt();
   Identifier* ProcessDeclarator(const Token* tok,
-                                QualType type,
+                                QualType type, const ASTNode::AttrList &attrs,
                                 int storageSpec,
                                 int funcSpec,
                                 int align);
   // GNU extensions
-  void TryAttributeSpecList();
-  void ParseAttributeSpec();
-  void ParseAttribute();
+  ASTNode::AttrList TryAttributeSpecList();
+  void ParseAttributeSpec(ASTNode::AttrList &attrList);
+  ASTNode::Attr ParseAttribute();
   bool IsTypeName(const Token* tok) const{
     if (tok->IsTypeSpecQual())
       return true;
