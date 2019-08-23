@@ -29,7 +29,7 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
   ir::value* lhs = ret_;
 
   // op info
-  auto type = binary->lhs_->Type();
+  auto type = binary->lhs_->Type()->ScalarType();
   auto flt = type->IsFloat();
   auto sign = !type->IsUnsigned();
 

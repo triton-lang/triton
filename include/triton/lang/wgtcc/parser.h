@@ -25,7 +25,7 @@ class Parser {
   friend class Generator;
 
 public:
-  explicit Parser(const TokenSequence& ts)
+  explicit Parser(TokenSequence& ts)
     : unit_(TranslationUnit::New()),
       ts_(ts),
       externalSymbols_(new Scope(nullptr, S_BLOCK)),
@@ -224,7 +224,7 @@ private:
   // The root of the AST
   TranslationUnit* unit_;
 
-  TokenSequence ts_;
+  TokenSequence& ts_;
 
   // It is not the real scope,
   // It contains all external symbols(resolved and not resolved)

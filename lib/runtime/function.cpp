@@ -17,6 +17,7 @@
 #include "triton/ir/function.h"
 #include "triton/tools/bench.hpp"
 #include "llvm/IR/Module.h"
+#include "triton/ir/print.h"
 
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
@@ -117,50 +118,17 @@ void function::caller::operator ()(driver::stream *stream, const std::array<size
 
 
 
-// module
-triton::lang::translation_unit *function::make_ast(const char *csrc) {
-  std::string src(csrc);
-  std::cout << src << std::endl;
-  Preprocessor cpp(&src, true);
-//  for (auto& def: defines)
-//    DefineMacro(cpp, def);
-//  for (auto& path: include_paths)
-//    cpp.AddSearchPath(path);
 
-  FILE* fp = stdout;
-//  if (specified_out_name) {
-//    fp = fopen(filename_out.c_str(), "w");
-//  }
-  TokenSequence ts;
-  cpp.Process(ts);
-  Parser parser(ts);
-  parser.Parse();
-  Generator gen(&parser);
-  ir::module out("", ctx_);
-  gen.Gen(&out);
-  exit(EXIT_FAILURE);
-
-//  if (only_preprocess) {
-//    ts.Print(fp);
-//    return 0;
-//  }
-
-  YY_BUFFER_STATE buffer = yy_scan_string(csrc);
-  yyparse();
-  yy_delete_buffer(buffer);
-  triton::lang::translation_unit *program = ast_root;
-  return program;
-}
-
-std::unique_ptr<ir::module> function::make_ir(triton::lang::translation_unit *program) {
+std::unique_ptr<ir::module> function::make_ir(Parser& parser) {
   // create Triton-IR from AST
   ir::module* module = new ir::module("", ctx_);
-  program->codegen(module);
+  Generator gen(&parser);
+  gen.Gen(module);
   return std::unique_ptr<ir::module>(module);
 }
 
-options function::autotune(lang::translation_unit *ast, driver::stream* stream, const grid_fn_ty& grid_fn, const std::vector<arg>& args) {
-  std::unique_ptr<ir::module> ir = make_ir(ast);
+options function::autotune(Parser& parser, driver::stream* stream, const grid_fn_ty& grid_fn, const std::vector<arg>& args) {
+  std::unique_ptr<ir::module> ir = make_ir(parser);
   // extract tunable values
   std::vector<std::pair<std::string, ir::metaparameter*>> values;
   for(auto it: ir->globals())
@@ -186,7 +154,7 @@ options function::autotune(lang::translation_unit *ast, driver::stream* stream, 
     for(auto it: values)
       opt.params[it.first] = params[i++];
     // make binary
-    auto ir = make_ir(ast);
+    auto ir = make_ir(parser);
     auto bin = make_bin(*ir, stream->context(), opt);
     // benchmark
     ir::function *tmp = ir->get_function_list()[0];
@@ -242,6 +210,8 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   // generate llvm code
   llvm::LLVMContext ctx;
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
+  ir::print(module, std::cout);
+  exit(EXIT_FAILURE);
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, llvm.get()));
@@ -249,9 +219,11 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
 }
 
 
-function::function(const std::string &src): src_(src) {
-  // src -> ast
-  ast_ = make_ast(src_.c_str());
+function::function(const std::string &src):  parser_(ts_), src_(src){
+  Preprocessor cpp(&src_, true);
+  cpp.Process(ts_);
+  ts_.Print();
+  parser_.Parse();
 }
 
 void function::operator()(const std::vector<arg>& args, const grid_fn_ty& grid_fn, driver::stream *stream) {
@@ -277,8 +249,8 @@ void function::operator()(const std::vector<arg>& args, const grid_fn_ty& grid_f
   }
 
   /* re-tune and re-compile */
-  options opt = autotune(ast_, stream, grid_fn, args);
-  std::unique_ptr<ir::module> ir = make_ir(ast_);
+  options opt = autotune(parser_, stream, grid_fn, args);
+  std::unique_ptr<ir::module> ir = make_ir(parser_);
   std::unique_ptr<driver::module> bin = make_bin(*ir, stream->context(), opt);
   ir::function* fn = ir->get_function_list().front();
   const caller& run = cache_.insert({key, cache_val_t{opt, caller(fn, std::move(bin), opt.num_warps*32)}}).first->second.second;

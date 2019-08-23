@@ -223,7 +223,7 @@ public:
   virtual bool IsInteger() const { return !IsFloat() && !IsComplex(); }
   virtual bool IsUnsigned() const { return tag_ & T_UNSIGNED; }
   virtual bool IsFloat() const {
-    return (tag_ & T_FLOAT) || (tag_ & T_DOUBLE);
+    return (tag_ & T_HALF) || (tag_ & T_FLOAT) || (tag_ & T_DOUBLE);
   }
   virtual bool IsBool() const { return tag_ & T_BOOL; }
   bool IsComplex() const { return tag_ & T_COMPLEX; }
