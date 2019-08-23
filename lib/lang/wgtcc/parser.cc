@@ -461,8 +461,8 @@ Expr* Parser::ParseSubScripting(Expr* lhs) {
       Error(tok, "only ':' and newaxis are supported in subscripts");
   }while(ts_.Try(','));
   ts_.Expect(']');
-//  if(lhsShape.size() > i)
-//    Error(tok, "broadcasting not using all operand axes");
+  if(lhsShape.size() > i)
+    Error(tok, "broadcasting not using all operand axes");
   // create ret tile
   TileType *retType = TileType::New(shape, lhsQual);
   return UnaryOp::New(Token::CAST, lhs, retType);
@@ -1919,6 +1919,7 @@ void Parser::ParseInitializer(Declaration* decl,
     ts_.Expect('=');
   }
 
+//  std::cout << "parsing initialized " << decl->Obj()->Name() << std::endl;
   Expr* expr;
   auto arrType = type->ToArray();
   auto structType = type->ToStruct();

@@ -221,15 +221,20 @@ ArithmType* BinaryOp::Convert() {
 void BinaryOp::Broadcast() {
   auto lhsType = lhs_->Type()->ToTile();
   auto rhsType = rhs_->Type()->ToTile();
+  auto eleType = type_->ScalarType();
+  assert(eleType);
   if(!lhsType && !rhsType)
     return ;
   else if(lhsType && !rhsType){
-    type_ = lhsType;
-    rhs_ = UnaryOp::New(Token::CAST, lhs_, type_);
+    type_ = TileType::New(lhsType->Shape(), eleType);
+    ::Type* rtype = TileType::New(lhsType->Shape(), rhs_->Type()->ScalarType());
+    rhs_ = UnaryOp::New(Token::CAST, rhs_, rtype);
   }
   else if(!lhsType && rhsType){
-    type_ = rhsType;
-    lhs_ = UnaryOp::New(Token::CAST, rhs_, type_);
+    type_ = TileType::New(rhsType->Shape(), eleType);
+    ::Type* ltype = TileType::New(rhsType->Shape(), lhs_->Type()->ScalarType());
+    lhs_ = UnaryOp::New(Token::CAST, lhs_, ltype);
+
   }
   else {
     auto lhsShape = lhsType->Shape();
@@ -256,12 +261,13 @@ void BinaryOp::Broadcast() {
                     "for operands of shape %d and %d",
                     i, lhsShape[i], rhsShape[i]);
     }
-    auto eleType = lhsType->Derived();
+    ::Type* ltype = TileType::New(retShape, lhsType->ScalarType());
+    ::Type* rtype = TileType::New(retShape, rhsType->ScalarType());
     type_ = TileType::New(retShape, eleType);
     if(retShape != lhsShape)
-      lhs_ = UnaryOp::New(Token::CAST, lhs_, type_);
+      lhs_ = UnaryOp::New(Token::CAST, lhs_, ltype);
     if(retShape != rhsShape)
-      rhs_ = UnaryOp::New(Token::CAST, rhs_, type_);
+      rhs_ = UnaryOp::New(Token::CAST, rhs_, rtype);
   }
 }
 
@@ -347,18 +353,6 @@ void BinaryOp::CommaOpTypeChecking() {
 
 void BinaryOp::SubScriptingOpTypeChecking() {
   assert(false);
-  auto lhsType = lhs_->Type()->ToTile();
-
-  if (!lhsType) {
-    Error(this, "operator [] can only be used on tiles");
-  }
-
-  if (!rhs_->Type()->IsInteger()) {
-    Error(this, "the operand of [] should be integer");
-  }
-
-  // The type of [] operator is the derived type
-  type_ = lhsType->Derived();
 }
 
 
@@ -401,7 +395,6 @@ void BinaryOp::AdditiveOpTypeChecking() {
   ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
   auto lhsPtrType = lhsScalType->ToPointer();
   auto rhsPtrType = rhsScalType->ToPointer();
-  std::cout << "adding" << std::endl;
   if (lhsPtrType) {
     if (op_ == '-') {
       if (rhsPtrType) {
@@ -436,7 +429,6 @@ void BinaryOp::AdditiveOpTypeChecking() {
 }
 
 void BinaryOp::RangeOpTypeChecking() {
-  std::cout << "range" << std::endl;
   auto lhsType = lhs_->Type()->ToArithm();
   auto rhsType = rhs_->Type()->ToArithm();
   if(!lhsType || !lhsType->IsInteger() || !rhsType || !rhsType->IsInteger())
@@ -850,7 +842,6 @@ Declaration* Declaration::New(Object* obj) {
 
 void Declaration::AddInit(Initializer init) {
   init.expr_ = Expr::MayCast(init.expr_, init.type_);
-
   auto res = inits_.insert(init);
   if (!res.second) {
     inits_.erase(res.first);

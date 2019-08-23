@@ -18,6 +18,7 @@ inline bool is_terminator(ir::value* x) {
 // Expression
 
 void Generator::VisitBinaryOp(BinaryOp* binary) {
+
   Visit(binary->rhs_);
   ir::value* rhs = ret_;
 
@@ -43,6 +44,17 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
     case Token::RIGHT: return set_ret(bld_->create_lshr(lhs, rhs));
     case '.': return error_not_implemented();
     case ',': return error_not_implemented();
+    case '@' : {
+      ir::type* ret_ty = GenIRType(binary->Type(), *ctx_);
+      ir::type* ret_scal_ty = ret_ty->get_scalar_ty();
+      ir::value* _0;
+      if(ret_scal_ty->is_float_ty())
+        _0 = ir::constant_fp::get(ret_scal_ty, 0);
+      else
+        _0 = ir::constant_int::get(ret_scal_ty, 0);
+      _0 = bld_->create_splat(_0, ret_ty->get_tile_shapes());
+      return set_ret(bld_->create_dot(lhs, rhs, _0));
+    }
     case Token::ELLIPSIS: {
       auto clhs = dynamic_cast<ir::constant_int*>(lhs);
       auto crhs = dynamic_cast<ir::constant_int*>(rhs);
@@ -51,8 +63,9 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
       return set_ret(ir::constant_range::get(clhs, crhs));
     }
     case '+':
-      if(binary->lhs_->Type()->ToPointer())
+      if(binary->lhs_->Type()->ScalarType()->ToPointer()){
         return set_ret(bld_->create_gep(lhs, {rhs}));
+      }
       else if(flt)
         return set_ret(bld_->create_fadd(lhs, rhs));
       else
@@ -138,10 +151,11 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
 }
 
 void Generator::VisitUnaryOp(UnaryOp* unary) {
+
   // recursion
   Visit(unary->operand_);
   ir::value* op = ret_;
-  ir::type* type = GenIRType(unary->operand_->Type(), *ctx_);
+
   // return
   switch  (unary->op_) {
     case Token::PREFIX_INC: return error_not_implemented();
@@ -149,13 +163,14 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
     case Token::POSTFIX_INC: return error_not_implemented();
     case Token::POSTFIX_DEC: return error_not_implemented();
     case Token::ADDR: return error_not_implemented();
-    case Token::DEREF: return error_not_implemented();
+    case Token::DEREF: return set_ret(bld_->create_load(op));
     case Token::PLUS: return error_not_implemented();
     case Token::MINUS: return error_not_implemented();
     case '~': return set_ret(bld_->create_neg(op));
     case '!': return set_ret(bld_->create_not(op));
-    case Token::CAST: return set_ret(GenCastOp(op, type));
-    default: assert(false);
+    case Token::CAST: return set_ret(GenCastOp(op, GenIRType(unary->Type(), *ctx_)));
+    case '^': return set_ret(bld_->create_trans(op));
+    default: error_not_implemented();
   }
   return error_not_implemented();
 }
@@ -176,7 +191,7 @@ void Generator::VisitFuncCall(FuncCall* funcCall) {
 }
 
 void Generator::VisitObject(Object* obj) {
-  return error_not_implemented();
+  return set_ret(mod_->get_value(obj->Name()));
 }
 
 void Generator::VisitEnumerator(Enumerator* enumer) {
@@ -220,14 +235,6 @@ void Generator::VisitDeclaration(Declaration* decl) {
   if(inits.size() > 1)
     assert(false);
   val = inits[0];
-  std::cout << obj->Name() << " " << val->get_type()->get_type_id() << " " << ty->get_type_id() << std::endl;
-  if(val->get_type()->is_tile_ty() && ty->is_tile_ty()) {
-    for(auto s: val->get_type()->get_tile_shapes())
-      std::cout << s->get_value() << std::endl;
-    std::cout << "---" << std::endl;
-    for(auto s: ty->get_tile_shapes())
-      std::cout << s->get_value() << std::endl;
-  }
   assert(val->get_type() == ty);
   // update scope symbols table
   const std::string &name = obj->Name();
@@ -351,6 +358,7 @@ void Generator::VisitFuncDef(FuncDef* funcDef) {
     args[i]->set_name(name);
     mod_->set_value(name, nullptr, args[i]);
     mod_->get_scope().types[name] = args[i]->get_type();
+    i++;
   }
   ir::basic_block *entry = ir::basic_block::create(mod_->get_context(), "entry", fn);
   mod_->seal_block(entry);
@@ -378,58 +386,56 @@ void Generator::Gen(ir::module *mod) {
 }
 
 
-// Triton-IR Values
 
-ir::value* Generator::GenCastOp(ir::value* src, ir::type* dst_ty) {
+ir::value* Generator::GenBroadcastOp(ir::value* src, ir::type* dst_ty) {
   if(dst_ty->is_tile_ty()) {
+    ir::type *src_ty = src->get_type();
     auto dst_shapes = dst_ty->get_tile_shapes();
-    if(!src->get_type()->is_tile_ty())
+    if(!src_ty->is_tile_ty())
       return bld_->create_splat(src, dst_shapes);
-    auto src_shapes = src->get_type()->get_tile_shapes();
+    auto src_shapes = src_ty->get_tile_shapes();
     if(src_shapes.size() != dst_shapes.size())
       return bld_->create_reshape(src, dst_shapes);
     else
       return bld_->create_broadcast(src, dst_shapes);
   }
+  return src;
+}
+
+ir::value* Generator::GenNumcastOp(ir::value*src, ir::type* dst_ty) {
   ir::type *src_scalar_ty = src->get_type()->get_scalar_ty();
   ir::type *dst_scalar_ty = dst_ty->get_scalar_ty();
-  bool src_signed = false;
-  bool dst_signed = false;
-
   if(src->get_type()->is_tile_ty())
     dst_ty = ir::tile_type::get_same_shapes(dst_scalar_ty, src->get_type());
-
+  bool src_signed = false;
+  bool dst_signed = false;
   if(src_scalar_ty == dst_scalar_ty)
     return src;
-
   else if(src_scalar_ty->is_integer_ty() && src_signed && dst_scalar_ty->is_floating_point_ty())
     return bld_->create_si_to_fp(src, dst_ty);
-
   else if(src_scalar_ty->is_integer_ty() && !src_signed && dst_scalar_ty->is_floating_point_ty())
     return bld_->create_ui_to_fp(src, dst_ty);
-
   else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_integer_ty() && dst_signed)
     return bld_->create_fp_to_si(src, dst_ty);
-
   else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_integer_ty() && !dst_signed)
     return bld_->create_fp_to_ui(src, dst_ty);
-
   else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_floating_point_ty() &&
           src_scalar_ty->get_fp_mantissa_width() < dst_scalar_ty->get_fp_mantissa_width())
     return bld_->create_fp_ext(src, dst_ty);
-
   else if(src_scalar_ty->is_floating_point_ty() && dst_scalar_ty->is_floating_point_ty() &&
           src_scalar_ty->get_fp_mantissa_width() > dst_scalar_ty->get_fp_mantissa_width())
     return bld_->create_fp_trunc(src, dst_ty);
-
   else if(src_scalar_ty->is_integer_ty() && dst_scalar_ty->is_integer_ty() &&
           src_scalar_ty->get_integer_bitwidth())
     return bld_->create_int_cast(src, dst_ty, dst_signed);
-
   else{
     should_not_happen();
     return nullptr;
   }
+}
+
+ir::value* Generator::GenCastOp(ir::value* src, ir::type* dst_ty) {
+  return GenNumcastOp(GenBroadcastOp(src, dst_ty), dst_ty);
 }
 
 // Triton-IR Types
@@ -504,7 +510,7 @@ ir::type* Generator::GenIRPointerType(PointerType* type, ir::context& ctx) {
 }
 
 ir::type* Generator::GenIRStructType(StructType* type, ir::context& ctx) {
-  assert(false);
+  error_not_implemented();
   return nullptr;
 }
 
@@ -535,12 +541,15 @@ void LValAssigner::VisitUnaryOp(UnaryOp* unary) {
 }
 
 void LValAssigner::VisitObject(Object* obj) {
-  error_not_implemented();
+  std::string name = obj->Name();
+  gen_->mod_->set_value(name, rhs_);
+  ret_ = rhs_;
 }
 
 void LValAssigner::VisitIdentifier(Identifier* ident) {
   std::string name = ident->Name();
   gen_->mod_->set_value(name, rhs_);
+  ret_ = rhs_;
 }
 
 

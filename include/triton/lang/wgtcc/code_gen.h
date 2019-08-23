@@ -81,6 +81,8 @@ public:
 protected:
   // Triton-IR values
   ir::value* GenAssignOp(Expr* lvalue, ir::value* rhs);
+  ir::value* GenBroadcastOp(ir::value* src, ir::type* dst_ty);
+  ir::value* GenNumcastOp(ir::value*src, ir::type* dst_ty);
   ir::value* GenCastOp(ir::value* op, ir::type* type);
 
   // Triton-IR types

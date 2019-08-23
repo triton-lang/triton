@@ -120,6 +120,7 @@ void function::caller::operator ()(driver::stream *stream, const std::array<size
 // module
 triton::lang::translation_unit *function::make_ast(const char *csrc) {
   std::string src(csrc);
+  std::cout << src << std::endl;
   Preprocessor cpp(&src, true);
 //  for (auto& def: defines)
 //    DefineMacro(cpp, def);
