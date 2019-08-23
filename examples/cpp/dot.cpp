@@ -82,12 +82,12 @@ R"(
 #define true 1
 #define false 0
 #define __bool_true_false_are_defined 1
+
 extern int get_program_id(int);
 
-#define TN 128
-#define TK 32
-
-static const int TM = 128;
+static const int TM __attribute__((one_of(128)));
+static const int TN __attribute__((one_of(128)));
+static const int TK __attribute__((one_of(32)));
 
 void matmul(restrict )" + a_ty + R"( * A __attribute__((readonly, aligned(16))),
             restrict )" + b_ty + R"( * B __attribute__((readonly, aligned(16))),
