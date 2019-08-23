@@ -461,7 +461,10 @@ void BinaryOp::MatmulOpTypeChecking() {
   QualType retType = lhsType->Derived();
   if(retType != rhsType->Derived())
     Error(this, "matrix multiplication operands have incompatible data types");
-  type_ = TileType::New(retShape, lhsType->Derived());
+  ArithmType* ScalType = lhsType->ScalarType()->ToArithm();
+  if(ScalType->Tag() & T_HALF)
+    ScalType = ArithmType::New(T_FLOAT);
+  type_ = TileType::New(retShape, ScalType);
 }
 
 void BinaryOp::ShiftOpTypeChecking() {

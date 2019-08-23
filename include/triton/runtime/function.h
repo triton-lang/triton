@@ -20,6 +20,7 @@
 #include "triton/codegen/transform/shmem/barriers.h"
 #include "triton/codegen/transform/reassociate.h"
 #include "triton/codegen/transform/vectorize.h"
+#include "triton/lang/wgtcc/parser.h"
 
 namespace llvm {
   class Module;
@@ -87,9 +88,9 @@ private:
   typedef std::pair<options, caller> cache_val_t;
 
 private:
-  triton::lang::translation_unit *make_ast(const char *src);
-  std::unique_ptr<ir::module> make_ir(triton::lang::translation_unit *program);
-  options autotune(lang::translation_unit *ast, driver::stream *stream, const grid_fn_ty& grid, const std::vector<arg> &args);
+  triton::lang::translation_unit *make_ast(const std::string &src);
+  std::unique_ptr<ir::module> make_ir(Parser &parser);
+  options autotune(Parser &parser, driver::stream *stream, const grid_fn_ty& grid, const std::vector<arg> &args);
   std::unique_ptr<driver::module> make_bin(ir::module &function, driver::context *context, const options &opt);
 
 
@@ -100,11 +101,12 @@ public:
   std::string make_tensorflow_src(const std::vector<size_t> &outputs, const std::string &macro);
 
 private:
+  TokenSequence ts_;
+  Parser parser_;
   // execution context
   ir::context ctx_;
   // program representations
   std::string src_;
-  lang::translation_unit *ast_;
   std::map<cache_key_t, cache_val_t> cache_;
 };
 

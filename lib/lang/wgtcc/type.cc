@@ -318,7 +318,7 @@ bool ArrayType::Compatible(const Type& other) const {
 bool TileType::Compatible(const Type& other) const {
   // For two tile type to be compatible,
   // the element types must be compatible
-  // and they must have the same shape
+  // and they must have the same shapea
   auto otherTile = other.ToTile();
   if(!otherTile)
     return false;
