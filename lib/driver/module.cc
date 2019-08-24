@@ -19,38 +19,23 @@
 * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
-#include <iostream>
 #include <fstream>
 #include <memory>
-#include <fstream>
 #include "triton/driver/module.h"
 #include "triton/driver/context.h"
 #include "triton/driver/error.h"
-#include "triton/tools/sys/getenv.hpp"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/IRPrintingPasses.h"
-#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/PassManager.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Linker/Linker.h"
-#include "llvm/IRReader/IRReader.h"
-#include "llvm/AsmParser/Parser.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/LegacyPassManager.h"
-#include "llvm/Transforms/Scalar/EarlyCSE.h"
-#include "llvm/Analysis/LoopPass.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
-#include "llvm/ExecutionEngine/OrcMCJITReplacement.h"
-#include <llvm/ExecutionEngine/SectionMemoryManager.h>
+#include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 namespace triton
