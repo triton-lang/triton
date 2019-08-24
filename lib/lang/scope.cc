@@ -1,6 +1,6 @@
-#include "triton/lang/wgtcc/scope.h"
+#include "triton/lang/scope.h"
 
-#include "triton/lang/wgtcc/ast.h"
+#include "triton/lang/ast.h"
 
 #include <cassert>
 #include <iostream>

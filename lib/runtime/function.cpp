@@ -5,10 +5,9 @@
 #include <algorithm>
 #include "triton/codegen/selection/selection.h"
 #include "triton/runtime/function.h"
-#include "triton/lang/lang.h"
-#include "triton/lang/wgtcc/cpp.h"
-#include "triton/lang/wgtcc/parser.h"
-#include "triton/lang/wgtcc/code_gen.h"
+#include "triton/lang/cpp.h"
+#include "triton/lang/parser.h"
+#include "triton/lang/code_gen.h"
 #include "triton/driver/device.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
@@ -19,15 +18,10 @@
 #include "llvm/IR/Module.h"
 
 
-typedef struct yy_buffer_state * YY_BUFFER_STATE;
-extern int yyparse();
-extern YY_BUFFER_STATE yy_scan_string(const char * str);
-extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
-extern triton::lang::translation_unit *ast_root;
+
 
 namespace triton{
 namespace runtime {
-
 
 // helpers
 void _parallel_loop_nest(std::vector<size_t> const & ranges,
@@ -148,7 +142,6 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     opt.num_warps = std::stoi(params[i++]);
     for(auto it: opt_space_.defines)
       opt.defines[it.first] = params[i++];
-
     // pre-process
     TokenSequence tokens;
     Preprocessor cpp(&src_, true);
@@ -241,9 +234,7 @@ void function::operator()(const std::vector<arg>& args, const grid_fn_ty& grid_f
   }
 
   /* re-tune and re-compile */
-  caller call = autotune(stream, grid_fn, args);
-  cache_.insert({key, call});
-
+  cache_.insert({key, autotune(stream, grid_fn, args)});
 }
 
 void function::operator()(const std::vector<arg>& args, const grid_t& grid, driver::stream *stream) {

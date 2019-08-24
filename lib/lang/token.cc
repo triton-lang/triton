@@ -1,7 +1,7 @@
-#include "triton/lang/wgtcc/token.h"
+#include "triton/lang/token.h"
 
-#include "triton/lang/wgtcc/mem_pool.h"
-#include "triton/lang/wgtcc/parser.h"
+#include "triton/lang/mem_pool.h"
+#include "triton/lang/parser.h"
 
 
 static MemPoolImp<Token> tokenPool;

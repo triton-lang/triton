@@ -1,9 +1,9 @@
-#include "triton/lang/wgtcc/ast.h"
-#include "triton/lang/wgtcc/error.h"
-#include "triton/lang/wgtcc/evaluator.h"
-#include "triton/lang/wgtcc/mem_pool.h"
-#include "triton/lang/wgtcc/parser.h"
-#include "triton/lang/wgtcc/token.h"
+#include "triton/lang/ast.h"
+#include "triton/lang/error.h"
+#include "triton/lang/evaluator.h"
+#include "triton/lang/mem_pool.h"
+#include "triton/lang/parser.h"
+#include "triton/lang/token.h"
 
 
 static MemPoolImp<BinaryOp>         binaryOpPool;

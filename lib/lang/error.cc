@@ -1,7 +1,7 @@
-#include "triton/lang/wgtcc/error.h"
+#include "triton/lang/error.h"
 
-#include "triton/lang/wgtcc/ast.h"
-#include "triton/lang/wgtcc/token.h"
+#include "triton/lang/ast.h"
+#include "triton/lang/token.h"
 
 #include <cstdarg>
 #include <cstdio>

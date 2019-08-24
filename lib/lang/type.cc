@@ -1,8 +1,8 @@
-#include "triton/lang/wgtcc/type.h"
+#include "triton/lang/type.h"
 
-#include "triton/lang/wgtcc/ast.h"
-#include "triton/lang/wgtcc/scope.h"
-#include "triton/lang/wgtcc/token.h"
+#include "triton/lang/ast.h"
+#include "triton/lang/scope.h"
+#include "triton/lang/token.h"
 
 #include <cassert>
 #include <algorithm>
