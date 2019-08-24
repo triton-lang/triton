@@ -18,13 +18,9 @@
 #define ANSI_COLOR_RESET   "\x1b[0m"
 
 
-extern std::string program;
-
-
 void Error(const char* format, ...) {
   fprintf(stderr,
-          "%s: " ANSI_COLOR_RED "error: " ANSI_COLOR_RESET,
-          program.c_str());
+          ANSI_COLOR_RED "error: " ANSI_COLOR_RESET);
 
   va_list args;
   va_start(args, format);
