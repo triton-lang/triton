@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef _WGTCC_EVALUATOR_H_
 #define _WGTCC_EVALUATOR_H_
 

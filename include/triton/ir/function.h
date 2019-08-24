@@ -1,5 +1,7 @@
-#ifndef TDL_INCLUDE_IR_FUNCTION_H
-#define TDL_INCLUDE_IR_FUNCTION_H
+#pragma once
+
+#ifndef _TRITON_IR_FUNCTION_H_
+#define _TRITON_IR_FUNCTION_H_
 
 #include <string>
 #include <map>

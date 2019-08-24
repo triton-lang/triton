@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef _WGTCC_TYPE_H_
 #define _WGTCC_TYPE_H_
 

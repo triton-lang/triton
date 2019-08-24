@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef _WGTCC_ENCODING_H_
 #define _WGTCC_ENCODING_H_
 

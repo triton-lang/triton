@@ -1,5 +1,7 @@
-#ifndef TDL_INCLUDE_IR_CONSTANT_H
-#define TDL_INCLUDE_IR_CONSTANT_H
+#pragma once
+
+#ifndef _TRITON_IR_CONSTANT_H_
+#define _TRITON_IR_CONSTANT_H_
 
 #include "enums.h"
 #include "value.h"

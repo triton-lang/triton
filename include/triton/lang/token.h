@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef _WGTCC_TOKEN_H_
 #define _WGTCC_TOKEN_H_
 

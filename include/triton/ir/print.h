@@ -1,6 +1,7 @@
-#ifndef TDL_INCLUDE_IR_PRINT_H
-#define TDL_INCLUDE_IR_PRINT_H
+#pragma once
 
+#ifndef _TRITON_IR_PRINT_H_
+#define _TRITON_IR_PRINT_H_
 
 #include "builder.h"
 

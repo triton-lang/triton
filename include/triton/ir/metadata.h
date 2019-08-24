@@ -1,5 +1,7 @@
-#ifndef TDL_INCLUDE_IR_METADATA_H
-#define TDL_INCLUDE_IR_METADATA_H
+#pragma once
+
+#ifndef _TRITON_IR_METADATA_H_
+#define _TRITON_IR_METADATA_H_
 
 namespace triton{
 namespace ir{
