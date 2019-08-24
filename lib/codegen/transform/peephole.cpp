@@ -2,7 +2,7 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/codegen/transform/peephole.h"
-
+#include <iostream>
 namespace triton {
 namespace codegen{
 namespace transform{
@@ -145,6 +145,34 @@ bool peephole::rewrite_dot_fp32(ir::dot_inst *dot, ir::builder& builder, bool tr
 }
 
 bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
+  // dot(a, b, 0) + c -> dot(a, b, c)
+  auto add = dynamic_cast<ir::binary_operator*>(value);
+  if(add && add->get_op() == ir::binary_op_t::FAdd) {
+    ir::value *lhs = add->get_operand(0);
+    ir::value *rhs = add->get_operand(1);
+    ir::dot_inst *lhs_dot = dynamic_cast<ir::dot_inst*>(lhs);
+    ir::dot_inst *rhs_dot = dynamic_cast<ir::dot_inst*>(rhs);
+    if(!lhs_dot && !rhs_dot)
+      return false;
+    ir::dot_inst *dot = lhs_dot ? lhs_dot : rhs_dot;
+    ir::value *other = (dot == lhs) ? rhs : lhs;
+    ir::value *acc = dot->get_operand(2);
+    ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(acc);
+    ir::constant_fp *_0 = nullptr;
+    if(splat)
+      _0 = dynamic_cast<ir::constant_fp*>(splat->get_operand(0));
+    if(!(_0 && _0->get_value() == 0.0))
+      return false;
+    ir::value *a = dot->get_operand(0);
+    ir::value *b = dot->get_operand(1);
+    ir::value * new_dot = builder.insert(ir::dot_inst::create(a, b, other,
+                                                              dot->is_a_trans(), dot->is_b_trans(),
+                                                              dot->get_name()));
+    add->replace_all_uses_with(new_dot);
+    return true;
+  }
+
+  // dot(a, b, c)
   auto dot = dynamic_cast<ir::dot_inst*>(value);
   if(!dot)
     return false;
