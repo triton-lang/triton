@@ -1806,7 +1806,8 @@ Object* Parser::ParseParamDecl() {
   auto type = ParseDeclSpec(&storageSpec, &funcSpec, nullptr);
   auto tokTypePair = ParseDeclarator(type);
   auto tok = tokTypePair.tok;
-  type = Type::MayCast(tokTypePair.type, true);
+  QualType fullType(tokTypePair.type.GetPtr(), type.Qual());
+  type = Type::MayCast(fullType, true);
   auto attrs = tokTypePair.attrs;
   if (!tok) { // Abstract declarator
     return Object::NewAnony(ts_.Peek(), type, 0, Linkage::L_NONE);
@@ -2692,7 +2693,21 @@ ASTNode::Attr Parser::ParseAttribute() {
   if (!ts_.Test(Token::IDENTIFIER))
     return ret;
   auto tok = ts_.Next();
-  ret.name = tok->str_;
+  std::string name = tok->str_;
+  // set kind
+  if(name == "aligned")
+    ret.kind = ASTNode::Attr::ALIGNED;
+  else if(name == "readonly")
+    ret.kind = ASTNode::Attr::READONLY;
+  else if(name == "writeonly")
+    ret.kind = ASTNode::Attr::WRITEONLY;
+  else if(name == "multipleof")
+    ret.kind = ASTNode::Attr::MULTIPLEOF;
+  else if(name == "noalias")
+    ret.kind = ASTNode::Attr::NOALIAS;
+  else
+    Error(tok, "unknown attribute kind");
+  // set exprs
   if (ts_.Try('(')) {
     if (ts_.Try(')'))
       return ret;

@@ -58,7 +58,16 @@ class TranslationUnit;
 class ASTNode {
 public:
   struct Attr{
-    std::string name;
+
+    enum KindT{
+      MULTIPLEOF,
+      ALIGNED,
+      NOALIAS,
+      READONLY,
+      WRITEONLY
+    };
+
+    KindT kind;
     std::vector<Expr*> vals;
   };
   using AttrList = std::vector<Attr>;
