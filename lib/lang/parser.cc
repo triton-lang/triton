@@ -1684,37 +1684,17 @@ Identifier* Parser::ProcessDeclarator(const Token* tok,
 
 QualType Parser::ParseArrayFuncDeclarator(const Token* ident, QualType base) {
   if (ts_.Try('[')) {
-
-    if (ts_.Try('{')) {
-      if(!base->IsScalar()) {
-        Error(ts_.Peek(), "tiles must have scalar elements");
-      }
-      auto shape = ParseTileShape();
-      ts_.Expect('}');
-      ts_.Expect(']');
-      base = ParseArrayFuncDeclarator(ident, base);
-      if (!base->Complete()) {
-        // FIXME(wgtdkp): ident could be nullptr
-        Error(ident, "'%s' has incomplete element type",
-            ident->str_.c_str());
-      }
-      return TileType::New(shape, base);
+    if(!base->IsScalar()) {
+      Error(ts_.Peek(), "tiles must have scalar elements");
     }
-
-    if (nullptr != base->ToFunc()) {
-      Error(ts_.Peek(), "the element of array cannot be a function");
-    }
-
-    auto len = ParseArrayLength();
+    auto shape = ParseTileShape();
     ts_.Expect(']');
-
     base = ParseArrayFuncDeclarator(ident, base);
     if (!base->Complete()) {
-      // FIXME(wgtdkp): ident could be nullptr
-      Error(ident, "'%s' has incomplete element type",
-          ident->str_.c_str());
+      Error(ident, "'%s' has incomplete element type", ident->str_.c_str());
     }
-    return ArrayType::New(len, base);
+    return TileType::New(shape, base);
+
   } else if (ts_.Try('(')) {	// Function declaration
     if (base->ToFunc()) {
       Error(ts_.Peek(),

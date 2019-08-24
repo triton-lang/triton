@@ -74,8 +74,8 @@ std::string src(bool AT, bool BT, std::string a_ty, std::string b_ty, std::strin
   std::string AS = AS0 + ", " + AS1;
   std::string BS = BS0 + ", " + BS1;
   std::string XCS = "TM, TN";
-  std::string align_lda_str = "multiple_of(" + std::to_string(align_lda) + ")";
-  std::string align_ldb_str = "multiple_of(" + std::to_string(align_ldb) + ")";
+  std::string align_lda_str = "multipleof(" + std::to_string(align_lda) + ")";
+  std::string align_ldb_str = "multipleof(" + std::to_string(align_ldb) + ")";
   std::string res =
 R"(
 #define bool _Bool
@@ -100,15 +100,15 @@ void matmul()" + a_ty + R"( * A __noalias __readonly __aligned(16),
             int ldc) {
   int ridx = get_program_id(0);
   int ridy = get_program_id(1);
-  int rxa[{TM}] = ridx * TM + 0 ... TM;
-  int ryb[{TN}] = ridy * TN + 0 ... TN;
-  int rka[{TK}] = 0 ... TK;
-  int rkb[{TK}] = 0 ... TK;
-  float xc[{)" + XCS + R"(}] = 0;
-  )" + a_ty + R"(* pa[{)" + AS + "}] = A + rka" + bca0 + lda0 + " + rxa" + bca1 + lda1 + R"(;
-  )" + b_ty + R"(* pb[{)" + BS + "}] = B + rkb" + bcb0 + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
-  )" + a_ty + R"( a[{)" + AS + R"(}] = *pa;
-  )" + b_ty + R"( b[{)" + BS + R"(}] = *pb;
+  int rxa[TM] = ridx * TM + 0 ... TM;
+  int ryb[TN] = ridy * TN + 0 ... TN;
+  int rka[TK] = 0 ... TK;
+  int rkb[TK] = 0 ... TK;
+  float xc[)" + XCS + R"(] = 0;
+  )" + a_ty + R"(* pa[)" + AS + "] = A + rka" + bca0 + lda0 + " + rxa" + bca1 + lda1 + R"(;
+  )" + b_ty + R"(* pb[)" + BS + "] = B + rkb" + bcb0 + ldb0 + " + ryb" + bcb1 + ldb1 + R"(;
+  )" + a_ty + R"( a[)" + AS + R"(] = *pa;
+  )" + b_ty + R"( b[)" + BS + R"(] = *pb;
   for(int k = K; k > 0; k = k - TK){
     xc = )" + usea + " @ " + useb + R"( + xc;
     pa = pa + TK)" + lda0 + R"(;
@@ -116,13 +116,13 @@ void matmul()" + a_ty + R"( * A __noalias __readonly __aligned(16),
     a = *pa;
     b = *pb;
   }
-  int rxc[{TM}] =  ridx * TM + (0 ... TM);
-  int ryc[{TN}] =  ridy * TN + (0 ... TN);
-  )" + c_ty + R"(* pc[{TM, TN}] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
-  )" + c_ty + R"( c[{TM, TN}] = xc;
-  bool checkc0[{TM}] = rxc < M;
-  bool checkc1[{TN}] = ryc < N;
-  bool checkc[{TM, TN}] = checkc0[:, newaxis] && checkc1[newaxis, :];
+  int rxc[TM] =  ridx * TM + (0 ... TM);
+  int ryc[TN] =  ridy * TN + (0 ... TN);
+  )" + c_ty + R"(* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
+  )" + c_ty + R"( c[TM, TN] = xc;
+  bool checkc0[TM] = rxc < M;
+  bool checkc1[TN] = ryc < N;
+  bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
   *pc = c;
 }
 )";
