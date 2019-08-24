@@ -206,9 +206,25 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   return res;
 }
 
+std::string preheader() {
+return R"(
+    #define bool _Bool
+    #define true 1
+    #define false 0
+    #define __bool_true_false_are_defined 1
+
+    #define __readonly      __attribute__((readonly))
+    #define __writeonly     __attribute__((writeonly))
+    #define __noalias       __attribute__((noalias))
+    #define __aligned(A)    __attribute__((aligned(A)))
+    #define __multipleof(A) __attribute__((multipleof(A)))
+
+    extern int get_program_id(int);
+    )";
+}
 
 function::function(const std::string &src, const options_space_t& opt):  src_(src), opt_space_(opt) {
-
+  src_ = preheader() + src_;
 }
 
 void function::operator()(const std::vector<arg>& args, const grid_fn_ty& grid_fn, driver::stream *stream) {

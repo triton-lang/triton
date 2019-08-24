@@ -112,8 +112,12 @@ bool peephole::rewrite_dot_hmma(ir::dot_inst *dot, ir::builder& builder, bool tr
       trans_a = true;
     }
   }
+  if(!trans_a && !trans_b)
+    return false;
+
   ir::instruction *dot_atbt = builder.insert(ir::dot_inst::create(AA, BB, D, trans_a, trans_b));
   dot->replace_all_uses_with(dot_atbt);
+
   return true;
 }
 
@@ -186,8 +190,9 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
   if(dot->is_a_trans() || dot->is_b_trans())
     return false;
   // hmma
-  if(is_hmma(dot))
+  if(is_hmma(dot)){
     return rewrite_dot_hmma(dot, builder, trans_a, trans_b, A, B, D);
+  }
   else
     return rewrite_dot_fp32(dot, builder, trans_a, trans_b, A, B, D);
 }
