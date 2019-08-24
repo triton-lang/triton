@@ -20,3 +20,7 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+
+// The compiler front-end is based on a modified version of WGTCC
+// https://github.com/wgtdkp/wgtcc
+// Copyright (c) 2016 wgtdkp

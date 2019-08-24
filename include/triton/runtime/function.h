@@ -116,13 +116,10 @@ public:
   std::string make_tensorflow_src(const std::vector<size_t> &outputs, const std::string &macro);
 
 private:
-  // execution context
   ir::context ctx_;
-  // program representations
   std::string src_;
-  std::map<cache_key_t, caller> cache_;
-  // options
   options_space_t opt_space_;
+  std::map<cache_key_t, caller> cache_;
 };
 
 }
