@@ -1,5 +1,7 @@
-#ifndef TRITON_IR_ENUMS_H
-#define TRITON_IR_ENUMS_H
+#pragma once
+
+#ifndef _TRITON_IR_ENUMS_H_
+#define _TRITON_IR_ENUMS_H_
 
 namespace triton{
 namespace ir{

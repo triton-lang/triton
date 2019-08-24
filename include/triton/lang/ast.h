@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef _WGTCC_AST_H_
 #define _WGTCC_AST_H_
 

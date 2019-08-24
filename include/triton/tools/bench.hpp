@@ -1,5 +1,7 @@
-#ifndef TRITON_TOOLS_BENCH_HPP
-#define TRITON_TOOLS_BENCH_HPP
+#pragma once
+
+#ifndef _TRITON_TOOLS_BENCH_H_
+#define _TRITON_TOOLS_BENCH_H_
 
 #include <chrono>
 #include <functional>

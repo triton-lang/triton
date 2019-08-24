@@ -1,5 +1,7 @@
-#ifndef THREAD_POOL_H
-#define THREAD_POOL_H
+#pragma once
+
+#ifndef _TRITON_TOOLS_THREAD_POOL_H_
+#define _TRITON_TOOLS_THREAD_POOL_H_
 
 #include <vector>
 #include <queue>

@@ -1,5 +1,8 @@
-#ifndef TDL_INCLUDE_FUNCTION_H
-#define TDL_INCLUDE_FUNCTION_H
+#pragma once
+
+#ifndef _TRITON_RUNTIME_FUNCTION_H_
+#define _TRITON_RUNTIME_FUNCTION_H_
+
 
 #include <unordered_map>
 #include <vector>

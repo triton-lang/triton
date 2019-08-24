@@ -1,5 +1,7 @@
-#ifndef TDL_INCLUDE_IR_CFG_H
-#define TDL_INCLUDE_IR_CFG_H
+#pragma once
+
+#ifndef _TRITON_IR_CFG_H_
+#define _TRITON_IR_CFG_H_
 
 #include <vector>
 

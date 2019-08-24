@@ -1,5 +1,7 @@
-#ifndef TDL_INCLUDE_IR_CONTEXT_H
-#define TDL_INCLUDE_IR_CONTEXT_H
+#pragma once
+
+#ifndef _TRITON_IR_CONTEXT_H_
+#define _TRITON_IR_CONTEXT_H_
 
 #include <memory>
 #include "triton/ir/type.h"

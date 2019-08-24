@@ -1,5 +1,7 @@
-#ifndef TDL_INCLUDE_ARG_H
-#define TDL_INCLUDE_ARG_H
+#pragma once
+
+#ifndef _TRITON_RUNTIME_ARG_H_
+#define _TRITON_RUNTIME_ARG_H_
 
 #include <string>
 #include <stdexcept>

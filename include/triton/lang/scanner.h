@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef _WGTCC_SCANNER_H_
 #define _WGTCC_SCANNER_H_
 

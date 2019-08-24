@@ -1,5 +1,7 @@
-#ifndef TDL_INCLUDE_IR_BASIC_BLOCK_H
-#define TDL_INCLUDE_IR_BASIC_BLOCK_H
+#pragma once
+
+#ifndef _TRITON_IR_BASIC_BLOCK_H_
+#define _TRITON_IR_BASIC_BLOCK_H_
 
 #include <string>
 #include <list>

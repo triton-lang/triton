@@ -1,5 +1,7 @@
-#ifndef TDL_INCLUDE_IR_BUILDER_H
-#define TDL_INCLUDE_IR_BUILDER_H
+#pragma once
+
+#ifndef _TRITON_IR_BUILDER_H_
+#define _TRITON_IR_BUILDER_H_
 
 #include <vector>
 #include <string>

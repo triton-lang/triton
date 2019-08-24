@@ -1,5 +1,7 @@
-#ifndef TDL_INCLUDE_IR_INSTRUCTIONS_H
-#define TDL_INCLUDE_IR_INSTRUCTIONS_H
+#pragma once
+
+#ifndef _TRITON_IR_INSTRUCTIONS_H_
+#define _TRITON_IR_INSTRUCTIONS_H_
 
 #include <vector>
 #include <map>
