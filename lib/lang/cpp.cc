@@ -1,7 +1,7 @@
-#include "triton/lang/wgtcc/cpp.h"
+#include "triton/lang/cpp.h"
 
-#include "triton/lang/wgtcc/evaluator.h"
-#include "triton/lang/wgtcc/parser.h"
+#include "triton/lang/evaluator.h"
+#include "triton/lang/parser.h"
 
 #include <ctime>
 #include <fcntl.h>
@@ -823,7 +823,7 @@ void Preprocessor::Init() {
   AddSearchPath("/usr/include/x86_64-linux-gnu/");
   AddSearchPath("/usr/include/linux/");
   AddSearchPath("/usr/include/");
-  AddSearchPath("/usr/local/wgtcc/include/");
+  AddSearchPath("/usr/local/include/");
 
   // The __FILE__ and __LINE__ macro is empty
   // They are handled seperately

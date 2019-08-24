@@ -1,6 +1,6 @@
-#include "triton/lang/wgtcc/evaluator.h"
-#include "triton/lang/wgtcc/ast.h"
-#include "triton/lang/wgtcc/token.h"
+#include "triton/lang/evaluator.h"
+#include "triton/lang/ast.h"
+#include "triton/lang/token.h"
 
 
 template<typename T>

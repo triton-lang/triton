@@ -1,7 +1,7 @@
-#include "triton/lang/wgtcc/code_gen.h"
-#include "triton/lang/wgtcc/evaluator.h"
-#include "triton/lang/wgtcc/parser.h"
-#include "triton/lang/wgtcc/token.h"
+#include "triton/lang/code_gen.h"
+#include "triton/lang/evaluator.h"
+#include "triton/lang/parser.h"
+#include "triton/lang/token.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 

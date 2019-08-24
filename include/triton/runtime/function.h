@@ -20,7 +20,7 @@
 #include "triton/codegen/transform/shmem/barriers.h"
 #include "triton/codegen/transform/reassociate.h"
 #include "triton/codegen/transform/vectorize.h"
-#include "triton/lang/wgtcc/parser.h"
+#include "triton/lang/parser.h"
 
 namespace llvm {
   class Module;

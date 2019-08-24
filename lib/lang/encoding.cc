@@ -1,4 +1,4 @@
-#include "triton/lang/wgtcc/encoding.h"
+#include "triton/lang/encoding.h"
 
 #include <climits>
 #include <codecvt>

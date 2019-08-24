@@ -7,18 +7,6 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 option(BUILD_EXAMPLES "Build C++ Triton examples" ON)
 option(BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 
-# FLEX/YACC
-find_package(BISON)
-find_package(FLEX)
-BISON_TARGET(Parser ${CMAKE_CURRENT_SOURCE_DIR}/include/triton/lang/parser.y ${CMAKE_CURRENT_SOURCE_DIR}/lib/lang/parser.cpp)
-FLEX_TARGET(Lexer ${CMAKE_CURRENT_SOURCE_DIR}/include/triton/lang/scanner.l ${CMAKE_CURRENT_SOURCE_DIR}/lib/lang/scanner.cpp)
-get_filename_component(BISON_Parser_INCLUDE_DIRECTORIES ${BISON_Parser_OUTPUT_HEADER} DIRECTORY)
-include_directories(${BISON_Parser_INCLUDE_DIRECTORIES})
-
-#execute_process(COMMAND python -c "import tensorflow as tf; print(tf.__cxx11_abi_flag__ if \"__cxx11_abi_flag__\" in tf.__dict__ else 0)"
-#                OUTPUT_VARIABLE TF_ABI OUTPUT_STRIP_TRAILING_WHITESPACE)
-#add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
-
 # LLVM
 find_package(LLVM REQUIRED CONFIG)
 include_directories(${LLVM_INCLUDE_DIRS})
@@ -32,7 +20,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Gather headers for cmake-based IDEs
-file( GLOB_RECURSE ALL_SRC *.cpp *.hpp *.h *.py *.y *.l CMakeLists*)
+file( GLOB_RECURSE ALL_SRC *.cpp *.hpp *.h *.py CMakeLists*)
 add_custom_target( ALL SOURCES ${ALL_SRC} )
 
 # Compiler flags
@@ -63,7 +51,7 @@ endif()
 
 # Triton
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cpp lib/*.cc)
-add_library(triton SHARED ${LIBTRITON_SRC} ${EIGHTCC_SRC} ${PYTHON_SRC} ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
+add_library(triton SHARED ${LIBTRITON_SRC} ${EIGHTCC_SRC} ${PYTHON_SRC})
 target_link_libraries(triton LLVM)
 
 # Warning level

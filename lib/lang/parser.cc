@@ -1,11 +1,11 @@
-#include "triton/lang/wgtcc/parser.h"
+#include "triton/lang/parser.h"
 
-#include "triton/lang/wgtcc/cpp.h"
-#include "triton/lang/wgtcc/encoding.h"
-#include "triton/lang/wgtcc/error.h"
-#include "triton/lang/wgtcc/evaluator.h"
-#include "triton/lang/wgtcc/scope.h"
-#include "triton/lang/wgtcc/type.h"
+#include "triton/lang/cpp.h"
+#include "triton/lang/encoding.h"
+#include "triton/lang/error.h"
+#include "triton/lang/evaluator.h"
+#include "triton/lang/scope.h"
+#include "triton/lang/type.h"
 
 #include <iostream>
 #include <set>

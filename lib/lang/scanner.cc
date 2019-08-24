@@ -1,4 +1,4 @@
-#include "triton/lang/wgtcc/scanner.h"
+#include "triton/lang/scanner.h"
 
 #include <cctype>
 #include <climits>
