@@ -82,14 +82,21 @@ R"(
 #define true 1
 #define false 0
 #define __bool_true_false_are_defined 1
+
+#define __readonly      __attribute__((readonly))
+#define __writeonly     __attribute__((writeonly))
+#define __noalias       __attribute__((noalias))
+#define __aligned(A)    __attribute__((aligned(A)))
+#define __multipleof(A) __attribute__((multipleof(A)))
+
 extern int get_program_id(int);
 
-void matmul(restrict )" + a_ty + R"( * A __attribute__((readonly, aligned(16))),
-            restrict )" + b_ty + R"( * B __attribute__((readonly, aligned(16))),
-            restrict )" + c_ty + R"( * C __attribute__((aligned(16))),
+void matmul()" + a_ty + R"( * A __noalias __readonly __aligned(16),
+            )" + b_ty + R"( * B __noalias __readonly __aligned(16),
+            )" + c_ty + R"( * C __noalias __readonly __aligned(16),
             int M, int N, int K,
-            int lda __attribute__((multiple_of(8))),
-            int ldb __attribute__((multiple_of(8))),
+            int lda __multipleof(8),
+            int ldb __multipleof(8),
             int ldc) {
   int ridx = get_program_id(0);
   int ridy = get_program_id(1);

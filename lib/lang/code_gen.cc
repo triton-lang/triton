@@ -356,6 +356,8 @@ void Generator::VisitFuncDef(FuncDef* funcDef) {
     args[i]->set_name(name);
     for(ASTNode::Attr attr: obj->GetAttrList())
       fn->add_attr(i, GenIRAttr(attr));
+    if(obj->IsRestrictQualified())
+      fn->add_attr(i, ir::attribute(ir::noalias));
     mod_->set_value(name, nullptr, args[i]);
     mod_->get_scope().types[name] = args[i]->get_type();
     i++;
@@ -440,22 +442,22 @@ ir::value* Generator::GenCastOp(ir::value* src, ir::type* dst_ty) {
 
 // Triton-IR Attr
 ir::attribute Generator::GenIRAttr(ASTNode::Attr attr) {
-  if(attr.name == "multiple_of") {
+  if(attr.kind == ASTNode::Attr::MULTIPLEOF) {
     VisitExpr(attr.vals[0]);
     auto cst = dynamic_cast<ir::constant_int*>(ret_);
     if(!cst) should_not_happen();
     return ir::attribute(ir::multiple_of, cst->get_value());
   }
-  if(attr.name == "aligned") {
+  if(attr.kind == ASTNode::Attr::ALIGNED) {
     VisitExpr(attr.vals[0]);
     auto cst = dynamic_cast<ir::constant_int*>(ret_);
     return ir::attribute(ir::aligned, cst->get_value());
   }
-  if(attr.name == "noalias")
+  if(attr.kind == ASTNode::Attr::NOALIAS)
     return ir::attribute(ir::noalias);
-  if(attr.name == "readonly")
+  if(attr.kind == ASTNode::Attr::READONLY)
     return ir::attribute(ir::readonly);
-  if(attr.name == "writeonly")
+  if(attr.kind == ASTNode::Attr::WRITEONLY)
     return ir::attribute(ir::writeonly);
   should_not_happen();
 }
