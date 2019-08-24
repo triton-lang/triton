@@ -15,6 +15,7 @@ class module;
 class type;
 class context;
 class builder;
+class attribute;
 
 }
 }
@@ -32,7 +33,7 @@ using LocationList = std::vector<std::string>;
 using StaticInitList = std::vector<StaticInitializer>;
 
 // Error
-inline void should_not_happen() { assert(false); }
+inline void should_not_happen() { throw std::runtime_error("should not happen"); }
 inline void error_not_implemented() { throw std::runtime_error("not implemented"); }
 
 class Generator: public Visitor {
@@ -81,6 +82,9 @@ public:
   void Gen(ir::module *mod);
 
 protected:
+  // Triton-IR attributes
+  ir::attribute GenIRAttr(ASTNode::Attr attr);
+
   // Triton-IR values
   ir::value* GenAssignOp(Expr* lvalue, ir::value* rhs);
   ir::value* GenBroadcastOp(ir::value* src, ir::type* dst_ty);

@@ -354,6 +354,8 @@ void Generator::VisitFuncDef(FuncDef* funcDef) {
   for(Object* obj: type->Params()){
     std::string name = obj->Name();
     args[i]->set_name(name);
+    for(ASTNode::Attr attr: obj->GetAttrList())
+      fn->add_attr(i, GenIRAttr(attr));
     mod_->set_value(name, nullptr, args[i]);
     mod_->get_scope().types[name] = args[i]->get_type();
     i++;
@@ -434,6 +436,28 @@ ir::value* Generator::GenNumcastOp(ir::value*src, ir::type* dst_ty) {
 
 ir::value* Generator::GenCastOp(ir::value* src, ir::type* dst_ty) {
   return GenNumcastOp(GenBroadcastOp(src, dst_ty), dst_ty);
+}
+
+// Triton-IR Attr
+ir::attribute Generator::GenIRAttr(ASTNode::Attr attr) {
+  if(attr.name == "multiple_of") {
+    VisitExpr(attr.vals[0]);
+    auto cst = dynamic_cast<ir::constant_int*>(ret_);
+    if(!cst) should_not_happen();
+    return ir::attribute(ir::multiple_of, cst->get_value());
+  }
+  if(attr.name == "aligned") {
+    VisitExpr(attr.vals[0]);
+    auto cst = dynamic_cast<ir::constant_int*>(ret_);
+    return ir::attribute(ir::aligned, cst->get_value());
+  }
+  if(attr.name == "noalias")
+    return ir::attribute(ir::noalias);
+  if(attr.name == "readonly")
+    return ir::attribute(ir::readonly);
+  if(attr.name == "writeonly")
+    return ir::attribute(ir::writeonly);
+  should_not_happen();
 }
 
 // Triton-IR Types
