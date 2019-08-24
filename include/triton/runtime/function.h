@@ -4,12 +4,10 @@
 #define _TRITON_RUNTIME_FUNCTION_H_
 
 
-#include <unordered_map>
 #include <vector>
 #include <string>
 #include <memory>
 #include <functional>
-#include "arg.h"
 // codegen
 #include "triton/codegen/selection/selection.h"
 #include "triton/codegen/selection/target.h"
@@ -24,6 +22,7 @@
 #include "triton/codegen/transform/reassociate.h"
 #include "triton/codegen/transform/vectorize.h"
 #include "triton/lang/parser.h"
+#include "triton/runtime/arg.h"
 
 namespace llvm {
   class Module;

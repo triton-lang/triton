@@ -1,5 +1,5 @@
 foreach(PROG dot)
-     add_executable(${PROG} ${PROG}.cpp)
+     add_executable(${PROG} ${PROG}.cc)
      set_target_properties(${PROG} PROPERTIES OUTPUT_NAME ${PROG})
      include_directories(/usr/local/cuda/include/)
      target_link_libraries(${PROG} triton cublas)
