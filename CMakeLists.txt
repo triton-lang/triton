@@ -11,7 +11,7 @@ option(BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 find_package(LLVM REQUIRED CONFIG)
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
-#llvm_map_components_to_libnames(llvm_libs all)
+llvm_map_components_to_libnames(llvm_libs all)
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -51,7 +51,7 @@ endif()
 
 # Triton
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cpp lib/*.cc)
-add_library(triton SHARED ${LIBTRITON_SRC} ${EIGHTCC_SRC} ${PYTHON_SRC})
+add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 target_link_libraries(triton LLVM)
 
 # Warning level

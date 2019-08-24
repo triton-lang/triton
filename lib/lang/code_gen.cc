@@ -333,10 +333,8 @@ void Generator::VisitLabelStmt(LabelStmt* labelStmt) {
 }
 
 void Generator::VisitCompoundStmt(CompoundStmt* compoundStmt) {
-  if (compoundStmt->scope_){
-//    AllocObjects(compoundStmt->scope_);
+  if (compoundStmt->scope_)
     pushScope();
-  }
   for (auto stmt: compoundStmt->stmts_)
     Visit(stmt);
   if(compoundStmt->scope_)

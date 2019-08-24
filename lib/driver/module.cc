@@ -185,29 +185,30 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 /* ------------------------ */
 
 ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(context, cl_program(), true) {
-  init_llvm();
-  llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(src, "amdgcn-amd-amdhsa-amdgizcl", "gfx902", "", buffer, "code-object-v3", Object);
-  std::ofstream output("/tmp/tmp.o", std::ios::binary);
-  std::copy(buffer.begin(), buffer.end(), std::ostreambuf_iterator<char>(output));
-  system("ld.lld-8 /tmp/tmp.o -shared -o /tmp/tmp.o");
-  std::ifstream input("/tmp/tmp.o", std::ios::in | std::ios::binary );
-  std::vector<unsigned char> in_buffer(std::istreambuf_iterator<char>(input), {});
-  size_t sizes[] = {in_buffer.size()};
-  const unsigned char* data[] = {(unsigned char*)in_buffer.data()};
-  cl_int status;
-  cl_int err;
-  *cl_ = dispatch::clCreateProgramWithBinary(*context->cl(), 1, &*context->device()->cl(), sizes, data, &status, &err);
-  check(status);
-  check(err);
-  try{
-  dispatch::clBuildProgram(*cl_, 1, &*context->device()->cl(), NULL, NULL, NULL);
-  }
-  catch(...){
-  char log[2048];
-  dispatch::clGetProgramBuildInfo(*cl_, *context->device()->cl(), CL_PROGRAM_BUILD_LOG, 1024, log, NULL);
-  throw;
-  }
+  throw std::runtime_error("not supported");
+//  init_llvm();
+//  llvm::SmallVector<char, 0> buffer;
+//  module::compile_llvm_module(src, "amdgcn-amd-amdhsa-amdgizcl", "gfx902", "", buffer, "code-object-v3", Object);
+//  std::ofstream output("/tmp/tmp.o", std::ios::binary);
+//  std::copy(buffer.begin(), buffer.end(), std::ostreambuf_iterator<char>(output));
+//  system("ld.lld-8 /tmp/tmp.o -shared -o /tmp/tmp.o");
+//  std::ifstream input("/tmp/tmp.o", std::ios::in | std::ios::binary );
+//  std::vector<unsigned char> in_buffer(std::istreambuf_iterator<char>(input), {});
+//  size_t sizes[] = {in_buffer.size()};
+//  const unsigned char* data[] = {(unsigned char*)in_buffer.data()};
+//  cl_int status;
+//  cl_int err;
+//  *cl_ = dispatch::clCreateProgramWithBinary(*context->cl(), 1, &*context->device()->cl(), sizes, data, &status, &err);
+//  check(status);
+//  check(err);
+//  try{
+//  dispatch::clBuildProgram(*cl_, 1, &*context->device()->cl(), NULL, NULL, NULL);
+//  }
+//  catch(...){
+//  char log[2048];
+//  dispatch::clGetProgramBuildInfo(*cl_, *context->device()->cl(), CL_PROGRAM_BUILD_LOG, 1024, log, NULL);
+//  throw;
+//  }
 }
 
 
