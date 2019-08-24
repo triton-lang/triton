@@ -489,9 +489,8 @@ ir::type* Generator::GenIRTileType(TileType* type, ir::context& ctx) {
   ir::type* ele_ty = GenIRType(type->Derived().GetPtr(), ctx);
   auto _shape = type->Shape();
   ir::tile_type::tile_shapes_t shape;
-  ir::type* int32_ty = ir::type::get_int32_ty(ctx);
   for(int s: _shape)
-    shape.push_back(ir::constant_int::get(int32_ty, s));
+    shape.push_back(static_cast<unsigned>(s));
   return ir::tile_type::get(ele_ty, shape);
 }
 

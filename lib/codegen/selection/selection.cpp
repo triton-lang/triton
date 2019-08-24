@@ -594,7 +594,7 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
       Value *thread_id   = builder.CreateAdd(thread_id_in_warp[k], builder.CreateMul(warp_id[k], warp_size_k));
       Value *scaled_thread_id = builder.CreateMul(thread_id, contiguous_k);
       unsigned per_block = contiguous[k] * warp_size[k] * n_warps[k];
-      unsigned per_thread = contiguous[k] * shapes[k]->get_value() / per_block;
+      unsigned per_thread = contiguous[k] * shapes[k] / per_block;
       std::vector<Value*> idx_list(per_thread);
       for(unsigned n = 0 ; n < per_thread; n++){
         unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
@@ -631,9 +631,9 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     unsigned hmma_bts_1 = hmma_wts_1 * wpt_1;
     unsigned hmma_bts_2 = is_batched ? hmma_wts_2 * wpt_2 : 1;
     // number of repetition
-    unsigned num_rep_0 = shapes[0]->get_value() / hmma_bts_0;
-    unsigned num_rep_1 = shapes[1]->get_value() / hmma_bts_1;
-    unsigned num_rep_2 = is_batched ? shapes[2]->get_value() / hmma_bts_2 : 1;
+    unsigned num_rep_0 = shapes[0] / hmma_bts_0;
+    unsigned num_rep_1 = shapes[1] / hmma_bts_1;
+    unsigned num_rep_2 = is_batched ? shapes[2] / hmma_bts_2 : 1;
     // size of each pack (interleaving)
     pack_size_0_ = std::min<unsigned>(num_rep_0, 1);
     pack_size_1_ = std::min<unsigned>(num_rep_1, 1);
@@ -715,8 +715,8 @@ void selection::create_grids(std::vector<ir::value*> &grids,
   // get number of dimensions greater than 1
   auto get_tile_gt1_dim = [&](ir::value *v){
     unsigned result = 0;
-    for(ir::constant_int* shape: v->get_type()->get_tile_shapes()) {
-      result += (shape->get_value() > 1)?shape->get_value():0;
+    for(auto shape: v->get_type()->get_tile_shapes()) {
+      result += (shape > 1)? shape : 0;
     }
     return result;
   };
@@ -736,7 +736,7 @@ void selection::create_grids(std::vector<ir::value*> &grids,
     if(buffer_info_->is_shared(v))
       return;
     for(size_t d = 0; d < shapes.size(); d++){
-      if(shapes[d]->get_value() == 1)
+      if(shapes[d] == 1)
         continue;
       unsigned x = params_->get_param_group(v, d);
       ir::value *&r = references[x];
@@ -771,10 +771,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     for(ir::value *op: user->ops())
       create_tile(op, builder, references, seen, sh_mem_ptr);
   LLVMContext &ctx = builder.getContext();
-  const auto& cshapes = v->get_type()->get_tile_shapes();
-  std::vector<unsigned> shapes;
-  for(ir::constant_int* shape: cshapes)
-    shapes.push_back(shape->get_value());
+  auto shapes = v->get_type()->get_tile_shapes();
   unsigned pad = alloc_->is_ld_padded(v);
   if(pad > 0)
     shapes[0] += pad;
@@ -819,10 +816,10 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   }
   // create distributed tile
   else {
-    const auto &cshapes = v->get_type()->get_tile_shapes();
-    std::vector<distributed_axis> axes(cshapes.size());
-    for(size_t d = 0; d < cshapes.size(); d++){
-      if(cshapes[d]->get_value() > 1){
+    const auto &shapes = v->get_type()->get_tile_shapes();
+    std::vector<distributed_axis> axes(shapes.size());
+    for(size_t d = 0; d < shapes.size(); d++){
+      if(shapes[d] > 1){
         unsigned x = params_->get_param_group(v, d);
         axes[d] = axes_.at(x);
       }
@@ -1037,7 +1034,7 @@ void selection::lower_broadcast(ir::broadcast_inst *x, LLVMContext &ctx, Functio
   result->for_each([&](indices_t out_idx){
     indices_t in_idx = out_idx;
     for(size_t k = 0; k < in_idx.size(); k++){
-      if(in_shapes[k]->get_value() == 1)
+      if(in_shapes[k] == 1)
         in_idx[k] = builder.getInt32(0);
     }
     result->set_value(out_idx, in_tile->get_value(in_idx));
@@ -1140,7 +1137,7 @@ void selection::lower_hmma_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn
   unsigned wpt_1 = params_->get_param(dot, "wpt.d1")->get_value();
   unsigned stride_rep_i = wpt_0 * wts_0;
   unsigned stride_rep_j = wpt_1 * wts_1;
-  unsigned num_rep_i = shapes[0]->get_value() / stride_rep_i;
+  unsigned num_rep_i = shapes[0] / stride_rep_i;
   unsigned ld_fc = num_rep_i * 2;
 
 
@@ -1273,7 +1270,7 @@ void selection::lower_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn, IRB
   Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {c_ty});
   auto A_shapes = A->get_type()->get_tile_shapes();
   size_t red_axis = dot->is_a_trans() ? 0 : 1;
-  unsigned NK = A_shapes[red_axis]->get_value();
+  unsigned NK = A_shapes[red_axis];
 
   if(NK != 1) {
     shared_tile *TA = (shared_tile*)tmap_.at(A);
@@ -1463,8 +1460,8 @@ inline llvm::Attribute llvm_attr(llvm::LLVMContext& ctx, ir::attribute attr) {
 
 ArrayType* selection::llvm_linearized_tile_type(ir::type *ty, LLVMContext &ctx) {
   unsigned size = 1;
-  for(ir::constant_int* shape: ty->get_tile_shapes())
-    size *= shape->get_value();
+  for(auto shape: ty->get_tile_shapes())
+    size *= shape;
   return ArrayType::get(llvm_type(ty->get_scalar_ty(), ctx), size);
 }
 

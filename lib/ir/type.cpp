@@ -76,8 +76,8 @@ const type::tile_shapes_t &type::get_tile_shapes() const {
 unsigned type::get_tile_num_elements() const {
   const tile_shapes_t& shapes = get_tile_shapes();
   unsigned result = 1;
-  for(ir::constant_int *x: shapes)
-    result *= x->get_value();
+  for(auto shape: shapes)
+    result *= shape;
   return result;
 }
 
@@ -173,7 +173,7 @@ bool tile_type::is_valid_elt_ty(type *ty) {
 unsigned tile_type::get_num_elements() const {
   unsigned res = 1;
   for(auto shape: shapes_)
-    res *= shape->get_value();
+    res *= shape;
   return res;
 }
 
@@ -197,11 +197,6 @@ tile_type* tile_type::get_same_shapes(type *ty, type *ref){
   assert(ref->is_tile_ty());
   return get(ty, ref->get_tile_shapes());
 }
-
-type::tile_shapes_t::value_type tile_type::make_one(ir::context& ctx){
-  return constant_int::get(type::get_int32_ty(ctx), 1);
-}
-
 
 //===----------------------------------------------------------------------===//
 //                               function_type class

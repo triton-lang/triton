@@ -486,8 +486,7 @@ std::string retile_inst::shape_suffix(ir::type* ty){
   std::string res = "[";
   const auto& shapes = ty->get_tile_shapes();
   for(unsigned i = 0; i < shapes.size(); i++){
-    ir::constant_int *shape_i = ty->get_tile_shapes()[i];
-    res += shape_i->repr();
+    res += std::to_string(ty->get_tile_shapes()[i]);
     if(i < shapes.size() - 1)
       res += ", ";
   }

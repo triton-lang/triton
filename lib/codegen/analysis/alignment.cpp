@@ -30,7 +30,7 @@ inline T add_to_cache(ir::value *i, T value, std::map<ir::value*, T> &map) {
 
 bool alignment_info::is_first_axis_unit(ir::value *x){
   if(x->get_type()->is_tile_ty())
-    return x->get_type()->get_tile_shapes()[0]->get_value() == 1;
+    return x->get_type()->get_tile_shapes()[0] == 1;
   else
     return true;
 }
@@ -47,7 +47,7 @@ alignment_info::cst_info alignment_info::populate_is_constant(ir::value *v) {
     ir::value *op = x->get_operand(0);
     auto op_cst = populate_is_constant(op);
     if(is_first_axis_unit(op)){
-      unsigned num_cst = x->get_type()->get_tile_shapes()[0]->get_value();
+      unsigned num_cst = x->get_type()->get_tile_shapes()[0];
       return cache({num_cst, op_cst.value});
     }
   }
@@ -111,7 +111,7 @@ unsigned alignment_info::populate_max_contiguous(ir::value *v){
     return cache(1);
   auto shapes = v->get_type()->get_tile_shapes();
   if(dynamic_cast<ir::constant_range*>(v))
-    return cache(shapes[0]->get_value());
+    return cache(shapes[0]);
   if(auto *x = dynamic_cast<ir::retile_inst*>(v)){
     ir::value *op = x->get_operand(0);
     if(op->get_type()->is_tile_ty()){
@@ -265,7 +265,7 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
   auto shapes = v->get_type()->get_tile_shapes();
   unsigned result = 1;
   for(unsigned i = 0; i < shapes.size() - 1; i++)
-    result *= shapes[i]->get_value();
+    result *= shapes[i];
   return cache(result);
 }
 

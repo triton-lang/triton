@@ -196,10 +196,9 @@ bool peephole::rewrite_unit_red(ir::instruction *value, ir::builder& builder){
   auto x = dynamic_cast<ir::reduce_inst*>(value);
   if(!x)
     return false;
-  ir::constant_int *one = ir::constant_int::get(ir::type::get_int32_ty(value->get_type()->get_context()), 1);
   ir::value *arg = x->get_operand(0);
   auto shapes = arg->get_type()->get_tile_shapes();
-  if(shapes[x->get_axis()] == one){
+  if(shapes[x->get_axis()] == 1){
     builder.set_insert_point(x);
     ir::value* new_red = builder.create_reshape(arg, x->get_type()->get_tile_shapes());
     x->replace_all_uses_with(new_red);
