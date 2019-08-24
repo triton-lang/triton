@@ -60,54 +60,69 @@ namespace runtime{
 typedef std::array<size_t, 3> grid_t;
 typedef std::map<std::string, size_t> params_t;
 
-struct options {
-  size_t num_warps;
-  params_t params;
-};
-
+template<typename T> T convert(const std::string& name);
+template<> long convert<long>(const std::string& name) { return std::stol(name); }
+template<> int convert<int>(const std::string& name) { return std::stoi(name); }
 
 class function {
 public:
-  typedef std::function<grid_t(const params_t&)> grid_fn_ty;
+  struct options_space_t {
+    typedef std::pair<std::string, std::vector<std::string>> define_t;
+    std::vector<define_t> defines;
+    std::vector<size_t> num_warps;
+  };
+
+  struct options_t {
+    template<class T>
+    T D(const std::string& name) const {
+      return convert<T>(defines.at(name));
+    }
+
+    std::map<std::string, std::string> defines;
+    size_t num_warps;
+  };
+
+  typedef std::function<grid_t(const options_t&)> grid_fn_ty;
+
 
 private:
   class caller {
   public:
-    caller(ir::function *ir, std::shared_ptr<driver::module> program, size_t n_threads);
+    caller(ir::function *ir, std::shared_ptr<driver::module> program, const options_t& opt_);
     void operator()(driver::stream *stream, const std::array<size_t, 3>& grid, const std::vector<arg>& args) const;
+    const options_t opt() const { return opt_; }
 
   private:
     std::shared_ptr<driver::kernel> bin_;
     std::shared_ptr<driver::module> parent_;
     std::vector<arg_type> param_tys_;
-    size_t n_threads_;
+    options_t opt_;
   };
 
 private:
   typedef std::pair<driver::device*, std::vector<int64_t>> cache_key_t;
-  typedef std::pair<options, caller> cache_val_t;
 
 private:
   triton::lang::translation_unit *make_ast(const std::string &src);
   std::unique_ptr<ir::module> make_ir(Parser &parser);
-  options autotune(Parser &parser, driver::stream *stream, const grid_fn_ty& grid, const std::vector<arg> &args);
-  std::unique_ptr<driver::module> make_bin(ir::module &function, driver::context *context, const options &opt);
+  std::unique_ptr<driver::module> make_bin(ir::module &function, driver::context *context, const options_t &opt);
+  caller autotune(driver::stream *stream, const grid_fn_ty& grid, const std::vector<arg> &args);
 
 
 public:
-  function(const std::string& src);
+  function(const std::string& src, const options_space_t& opt = options_space_t());
   void operator()(const std::vector<arg>& args, const std::array<size_t, 3>& grid, driver::stream* stream);
   void operator()(const std::vector<arg>& args, const grid_fn_ty& grid, driver::stream *stream);
   std::string make_tensorflow_src(const std::vector<size_t> &outputs, const std::string &macro);
 
 private:
-  TokenSequence ts_;
-  Parser parser_;
   // execution context
   ir::context ctx_;
   // program representations
   std::string src_;
-  std::map<cache_key_t, cache_val_t> cache_;
+  std::map<cache_key_t, caller> cache_;
+  // options
+  options_space_t opt_space_;
 };
 
 }

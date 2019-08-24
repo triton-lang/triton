@@ -82,12 +82,7 @@ R"(
 #define true 1
 #define false 0
 #define __bool_true_false_are_defined 1
-
 extern int get_program_id(int);
-
-static const int TM __attribute__((one_of(128)));
-static const int TN __attribute__((one_of(128)));
-static const int TK __attribute__((one_of(32)));
 
 void matmul(restrict )" + a_ty + R"( * A __attribute__((readonly, aligned(16))),
             restrict )" + b_ty + R"( * B __attribute__((readonly, aligned(16))),
@@ -162,10 +157,15 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
   stream->write(dc, true, 0, hc);
   stream->synchronize();
   // run
-  rt::function function(src(AT, BT, ty, ty, ty, 8, 8));
+  rt::function::options_space_t opt;
+  opt.defines.push_back({"TM", {"128"}});
+  opt.defines.push_back({"TN", {"128"}});
+  opt.defines.push_back({"TK", {"32"}});
+  opt.num_warps = {1, 2, 4, 8};
+  rt::function function(src(AT, BT, ty, ty, ty, 8, 8), opt);
 
   auto ceil = [](size_t x, size_t y) { return (x + y - 1) / y; };
-  auto grid = [&](const rt::params_t& x) { return rt::grid_t{ceil(M, x.at("TM")), ceil(N, x.at("TN")), 1}; };
+  auto grid = [&](const rt::function::options_t& x) { return rt::grid_t{ceil(M, x.D<int>("TM")), ceil(N, x.D<int>("TN")), 1}; };
 
   auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
   perf_t res;

@@ -17,7 +17,6 @@
 #include "triton/ir/function.h"
 #include "triton/tools/bench.hpp"
 #include "llvm/IR/Module.h"
-#include "triton/ir/print.h"
 
 
 typedef struct yy_buffer_state * YY_BUFFER_STATE;
@@ -91,8 +90,8 @@ arg_type convert(ir::type *ty) {
   throw std::runtime_error("unknown type");
 }
 
-function::caller::caller(ir::function *ir, std::shared_ptr<driver::module> parent, size_t n_threads)
-  : bin_(driver::kernel::create(&*parent, ir->get_name().c_str())), parent_(parent), n_threads_(n_threads) {
+function::caller::caller(ir::function *ir, std::shared_ptr<driver::module> parent, const options_t& opt)
+  : bin_(driver::kernel::create(&*parent, ir->get_name().c_str())), parent_(parent), opt_(opt) {
   // extract signature
   ir::function_type* ty = ir->get_fn_type();
   for(size_t i = 0; i < ty->get_num_params(); i++)
@@ -113,10 +112,8 @@ void function::caller::operator ()(driver::stream *stream, const std::array<size
     else
       bin_->setArg(i, size_of(ty), arg_i.data());
   }
-  stream->enqueue(&*bin_, grid, {n_threads_, 1, 1});
+  stream->enqueue(&*bin_, grid, {opt_.num_warps * 32, 1, 1});
 }
-
-
 
 
 std::unique_ptr<ir::module> function::make_ir(Parser& parser) {
@@ -127,59 +124,59 @@ std::unique_ptr<ir::module> function::make_ir(Parser& parser) {
   return std::unique_ptr<ir::module>(module);
 }
 
-options function::autotune(Parser& parser, driver::stream* stream, const grid_fn_ty& grid_fn, const std::vector<arg>& args) {
-  std::unique_ptr<ir::module> ir = make_ir(parser);
-  // extract tunable values
-  std::vector<std::pair<std::string, ir::metaparameter*>> values;
-  for(auto it: ir->globals())
-  if(auto *mp = dynamic_cast<ir::metaparameter*>(it.second))
-    values.push_back({it.first, mp});
-  // extract search space
-  std::vector<std::vector<unsigned>> space;
-  space.push_back({1, 2, 4, 8}); // num warps
-  for(auto it: values)
-    space.push_back(it.second->get_space());
+
+function::caller function::autotune(driver::stream* stream, const grid_fn_ty& grid_fn,
+                                       const std::vector<arg>& args) {
+
+  // all tuning parameters are strings
+  std::vector<std::string> num_warps;
+  for(size_t i: opt_space_.num_warps)
+    num_warps.push_back(std::to_string(i));
+  std::vector<std::vector<std::string>> space;
+  space.push_back(num_warps);
+  for(const auto& i: opt_space_.defines)
+    space.push_back(i.second);
+
   // exhaustive search
-  struct profile_t{
-    double ts;
-    std::vector<unsigned> params;
-  };
-  profile_t best = { INFINITY, {} };
-  std::function<void(std::vector<unsigned>)> benchmark =
-      [&](std::vector<unsigned> params) {
-    // options
-    options opt;
+  double best_ts = INFINITY;
+  std::unique_ptr<caller> ret;
+
+  auto benchmark = [&](std::vector<std::string> params) {
+    // extract options
+    options_t opt;
     unsigned i = 0;
-    opt.num_warps = params[i++];
-    for(auto it: values)
-      opt.params[it.first] = params[i++];
-    // make binary
+    opt.num_warps = std::stoi(params[i++]);
+    for(auto it: opt_space_.defines)
+      opt.defines[it.first] = params[i++];
+
+    // pre-process
+    TokenSequence tokens;
+    Preprocessor cpp(&src_, true);
+    for(auto it: opt_space_.defines)
+      cpp.AddMacro(it.first, &opt.defines.at(it.first));
+    cpp.Process(tokens);
+    // parse
+    Parser parser(tokens);
+    parser.Parse();
+    // triton-ir code-gen
     auto ir = make_ir(parser);
+    // binary code-gen
     auto bin = make_bin(*ir, stream->context(), opt);
     // benchmark
     ir::function *tmp = ir->get_function_list()[0];
-    caller fn(tmp, std::move(bin), opt.num_warps * 32);
-    double ts = tools::bench([&]() { fn(stream, grid_fn(opt.params), args); }, stream);
-    if(ts < best.ts)
-      best = {ts, params};
+    caller call(tmp, std::move(bin), opt);
+    double ts = tools::bench([&]() { call(stream, grid_fn(opt), args); }, stream);
+    // save best
+    if(ts < best_ts)
+      ret.reset(new caller(call));
   };
-  _parallel_loop_nest<unsigned>(space, benchmark, 1);
-  // populate options
-  unsigned current = 0;
-  options opt;
-  opt.num_warps = best.params[current++];
-  for(auto it: values)
-    opt.params[it.first] = best.params[current++];
-  return opt;
+  _parallel_loop_nest<std::string>(space, benchmark, 1);
+  return *ret;
 }
 
 
-std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::context *context, const options& opt) {
+std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::context *context, const options_t& opt) {
   std::unique_ptr<codegen::target> target = context->device()->make_target();
-  // update metaparameter values
-  for(auto x: opt.params)
-  if(auto* mp = dynamic_cast<ir::metaparameter*>(module.globals().at(x.first)))
-    mp->set_value(x.second);
   // create passes
   codegen::analysis::grids tune(opt.num_warps);
   codegen::analysis::shmem::info shmem_info;
@@ -210,8 +207,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   // generate llvm code
   llvm::LLVMContext ctx;
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
-  ir::print(module, std::cout);
-  exit(EXIT_FAILURE);
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, llvm.get()));
@@ -219,11 +214,8 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
 }
 
 
-function::function(const std::string &src):  parser_(ts_), src_(src){
-  Preprocessor cpp(&src_, true);
-  cpp.Process(ts_);
-  ts_.Print();
-  parser_.Parse();
+function::function(const std::string &src, const options_space_t& opt):  src_(src), opt_space_(opt) {
+
 }
 
 void function::operator()(const std::vector<arg>& args, const grid_fn_ty& grid_fn, driver::stream *stream) {
@@ -244,21 +236,18 @@ void function::operator()(const std::vector<arg>& args, const grid_fn_ty& grid_f
   /* find existing configuration */
   auto it = cache_.find(key);
   if(it != cache_.end()){
-    it->second.second(stream, grid_fn(it->second.first.params), args);
+    it->second(stream, grid_fn(it->second.opt()), args);
     return;
   }
 
   /* re-tune and re-compile */
-  options opt = autotune(parser_, stream, grid_fn, args);
-  std::unique_ptr<ir::module> ir = make_ir(parser_);
-  std::unique_ptr<driver::module> bin = make_bin(*ir, stream->context(), opt);
-  ir::function* fn = ir->get_function_list().front();
-  const caller& run = cache_.insert({key, cache_val_t{opt, caller(fn, std::move(bin), opt.num_warps*32)}}).first->second.second;
-  run(stream, grid_fn(opt.params), args);
+  caller call = autotune(stream, grid_fn, args);
+  cache_.insert({key, call});
+
 }
 
 void function::operator()(const std::vector<arg>& args, const grid_t& grid, driver::stream *stream) {
-  return this->operator()(args, [&grid](const params_t&){ return grid; }, stream);
+  return this->operator()(args, [&grid](const options_t&){ return grid; }, stream);
 }
 
 }
