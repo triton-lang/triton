@@ -55,7 +55,7 @@ unsigned allocation::get_num_bytes(ir::value *x) {
     shapes.erase(shapes.begin() + axis);
     size_t num_elements = 1;
     for(auto x: shapes)
-      num_elements *= x->get_value();
+      num_elements *= x;
     size_t depth;
     if(params_->get_fragment(x, 0) == grids::HMMA_FRAGMENT_C)
       depth = params_->get_param(op, "wpt.d" + std::to_string(axis))->get_value();
@@ -66,7 +66,7 @@ unsigned allocation::get_num_bytes(ir::value *x) {
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;
   unsigned pad = is_ld_padded(x);
   if(pad > 0){
-    unsigned ld = x->get_type()->get_tile_shapes()[0]->get_value();
+    unsigned ld = x->get_type()->get_tile_shapes()[0];
     num_bytes += pad * num_bytes / ld;
   }
   if(buffer_info_->is_double(x))

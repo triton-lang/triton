@@ -14,7 +14,7 @@ class constant_int;
 /* Type */
 class type {
 public:
-  typedef std::vector<constant_int*>	         tile_shapes_t;
+  typedef std::vector<unsigned>	         tile_shapes_t;
 
 protected:
   typedef std::vector<type*>                  contained_tys_vec_t;
@@ -151,9 +151,6 @@ public:
   // factory methods
   static tile_type* get(type *ty, const tile_shapes_t &shapes);
   static tile_type* get_same_shapes(type *ty, type *ref);
-
-  // shortcut to get a 1 element in the shape
-  static tile_shapes_t::value_type make_one(context &ctx);
 
 private:
   tile_shapes_t shapes_;

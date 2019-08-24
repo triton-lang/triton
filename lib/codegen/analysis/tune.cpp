@@ -52,7 +52,6 @@ void grids::init_c_phi(ir::instruction *v) {
 
 void grids::init_c_graph(ir::instruction *v) {
   // Reference shape
-  ir::type::tile_shapes_t::value_type one = ir::tile_type::make_one(v->get_parent()->get_context());
   ir::type::tile_shapes_t shapes;
   if(auto *store = dynamic_cast<ir::store_inst*>(v))
     shapes = store->get_pointer_operand()->get_type()->get_tile_shapes();
@@ -80,7 +79,7 @@ void grids::init_c_graph(ir::instruction *v) {
     unsigned current = 0;
     bool is_skewed = false;
     for(unsigned i = 0; i < shapes.size(); i ++){
-      bool is_one  = shapes[i] == one;
+      bool is_one  = shapes[i] == 1;
       bool is_same = shapes[i] == op->get_type()->get_tile_shapes()[current];
       if(is_one){
         static_params_.insert({{v, i}, 1});
@@ -123,7 +122,7 @@ void grids::init_c_graph(ir::instruction *v) {
     for(unsigned i = 0; i < shapes.size(); i++)
       add_constraint({v, i}, {D, i});
     for(unsigned i = 2; i < shapes.size(); i++){
-      if(shapes[i] == one)
+      if(shapes[i] == 1)
         static_params_.insert({{v, i}, 1});
       add_constraint({v, i}, {A, i});
       add_constraint({v, i}, {B, i});
@@ -169,11 +168,6 @@ void grids::connected_components(node_t x, const std::vector<ir::metaparameter *
     for(unsigned i = 0; i < mps.size(); i++)
       params_[x.first].insert({prefixes[i] + suffix, mps[i]});
     ir::type *ty = x.first->get_type();
-    if(ty->is_tile_ty()){
-      ir::type::tile_shapes_t::value_type shape = ty->get_tile_shapes().at(x.second);
-      if(auto mp = dynamic_cast<ir::metaparameter*>(shape))
-        params_[x.first].insert({"shape" + suffix, mp});
-    }
     if(static_params_.find(x) != static_params_.end()){
       for(ir::metaparameter *mp: mps)
         mp->set_value(static_params_.at(x));
@@ -245,8 +239,8 @@ void grids::run(ir::module &mod) {
     if(!i->get_type()->is_tile_ty())
       continue;
     auto shapes = i->get_type()->get_tile_shapes();
-    unsigned shape_0 = shapes[0]->get_value();
-    unsigned shape_1 = shapes[1]->get_value();
+    unsigned shape_0 = shapes[0];
+    unsigned shape_1 = shapes[1];
     unsigned size = i->get_type()->get_tile_num_elements();
     /* HMMA parameters*/
     if(fragments_.at({i, 0}) == HMMA_FRAGMENT_C){
@@ -293,14 +287,14 @@ void grids::run(ir::module &mod) {
 
     /* Scan-line */
     else{
-      unsigned shape = shapes[0]->get_value();
+      unsigned shape = shapes[0];
       unsigned current = num_threads;
       params_.at(i).at("nts.d0")->set_value(clamp(size / num_threads, 1, 8));
       params_.at(i).at("mts.d0")->set_value(clamp(current, 1, shape / params_.at(i).at("nts.d0")->get_value()));
       current = current / params_.at(i).at("mts.d0")->get_value();
       for(size_t d = 1; d < shapes.size(); d++){
         std::string str_d = std::to_string(d);
-        shape = shapes[d]->get_value();
+        shape = shapes[d];
         params_.at(i).at("nts.d" + str_d)->set_value(1);
         params_.at(i).at("mts.d" + str_d)->set_value(clamp(current, 1, shape));
         current = current / params_.at(i).at("mts.d" + str_d)->get_value();
@@ -324,8 +318,8 @@ void grids::create_grids(std::vector<ir::value*> &grids,
   // get number of dimensions greater than 1
   auto get_tile_gt1_dim = [&](ir::value *v){
     unsigned result = 0;
-    for(ir::constant_int* shape: v->get_type()->get_tile_shapes()) {
-      result += (shape->get_value() > 1)?shape->get_value():0;
+    for(auto shape: v->get_type()->get_tile_shapes()) {
+      result += (shape > 1)? shape : 0;
     }
     return result;
   };
@@ -343,7 +337,7 @@ void grids::create_grids(std::vector<ir::value*> &grids,
     // bind
     const auto& shapes = v->get_type()->get_tile_shapes();
     for(size_t d = 0; d < shapes.size(); d++){
-      if(shapes[d]->get_value() == 1)
+      if(shapes[d] == 1)
         continue;
       unsigned x = get_param_group(v, d);
       ir::value *&r = references[x];
