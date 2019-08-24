@@ -667,7 +667,7 @@ public:
   void SetOffset(int offset) { offset_ = offset; }
   Declaration* Decl() { return decl_; }
   void SetDecl(Declaration* decl) { decl_ = decl; }
-
+  const AttrList& GetAttrList() const { return attrList_; }
   unsigned char BitFieldBegin() const { return bitFieldBegin_; }
   unsigned char BitFieldEnd() const { return bitFieldBegin_ + bitFieldWidth_; }
   unsigned char BitFieldWidth() const { return bitFieldWidth_; }
@@ -723,7 +723,7 @@ private:
   bool anonymous_;
   long id_ {0};
 
-  ASTNode::AttrList attrList_;
+  AttrList attrList_;
 };
 
 
