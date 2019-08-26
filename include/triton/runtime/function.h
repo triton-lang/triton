@@ -59,12 +59,11 @@ class metaparameter;
 namespace runtime{
 
 
-typedef std::array<size_t, 3> grid_t;
+typedef std::vector<size_t> grid_t;
 typedef std::map<std::string, size_t> params_t;
-
-template<typename T> T convert(const std::string& name);
-template<> long convert<long>(const std::string& name) { return std::stol(name); }
-template<> int convert<int>(const std::string& name) { return std::stoi(name); }
+template<typename T> inline T convert(const std::string& name);
+template<> inline long convert<long>(const std::string& name) { return std::stol(name); }
+template<> inline int convert<int>(const std::string& name) { return std::stoi(name); }
 
 class function {
 public:
@@ -91,7 +90,7 @@ private:
   class caller {
   public:
     caller(ir::function *ir, std::shared_ptr<driver::module> program, const options_t& opt_);
-    void operator()(driver::stream *stream, const std::array<size_t, 3>& grid, const std::vector<arg>& args) const;
+    void operator()(driver::stream *stream, const grid_t& grid, const std::vector<arg>& args) const;
     const options_t opt() const { return opt_; }
 
   private:
@@ -113,7 +112,7 @@ private:
 
 public:
   function(const std::string& src, const options_space_t& opt = options_space_t());
-  void operator()(const std::vector<arg>& args, const std::array<size_t, 3>& grid, driver::stream* stream);
+  void operator()(const std::vector<arg>& args, const grid_t& grid, driver::stream* stream);
   void operator()(const std::vector<arg>& args, const grid_fn_ty& grid, driver::stream *stream);
   std::string make_tensorflow_src(const std::vector<size_t> &outputs, const std::string &macro);
 

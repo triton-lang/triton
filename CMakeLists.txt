@@ -33,20 +33,20 @@ endif()
 if(BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
     # PyBind11 wrapper source file
-    file(GLOB_RECURSE PYTHON_SRC python/src/tensorflow.cpp)
+    file(GLOB_RECURSE PYTHON_SRC python/src/tensorflow.cc)
     # update include directory
     include_directories(python/src/ ${PYTHON_INCLUDE_DIRS} ${TF_INCLUDE_DIRS})
     # update link directories
     link_directories(${TF_LIB_DIRS})
     # extra tensorflow ops (e.g., alloc_empty)
-    file(GLOB_RECURSE EXTRA_TF_OPS_SRC python/src/tensorflow/*.cpp)
+    file(GLOB_RECURSE EXTRA_TF_OPS_SRC python/src/tensorflow/*.cc)
     add_library(extra_tf_ops SHARED ${EXTRA_TF_OPS_SRC})
     target_link_libraries(extra_tf_ops ${TF_LIBS})
 endif()
 
 
 # Triton
-file(GLOB_RECURSE LIBTRITON_SRC lib/*.cpp lib/*.cc)
+file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 target_link_libraries(triton LLVM)
 
