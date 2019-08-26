@@ -93,7 +93,7 @@ function::caller::caller(ir::function *ir, std::shared_ptr<driver::module> paren
 }
 
 
-void function::caller::operator ()(driver::stream *stream, const std::array<size_t, 3>& grid, const std::vector<arg>& args) const {
+void function::caller::operator ()(driver::stream *stream, const grid_t& _grid, const std::vector<arg>& args) const {
   if(args.size() != param_tys_.size())
     throw std::runtime_error("invalid number of arguments");
   for(size_t i = 0; i < args.size(); i++){
@@ -106,6 +106,12 @@ void function::caller::operator ()(driver::stream *stream, const std::array<size
     else
       bin_->setArg(i, size_of(ty), arg_i.data());
   }
+  // sanity check
+  if(_grid.size() > 3)
+    throw std::runtime_error("grid size must be no greater than 3");
+  std::array<size_t, 3> grid;
+  for(size_t i = 0; i < 3; i++)
+    grid[i] = (i < _grid.size()) ? _grid[i] : 1;
   stream->enqueue(&*bin_, grid, {opt_.num_warps * 32, 1, 1});
 }
 
@@ -207,20 +213,21 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
 }
 
 std::string preheader() {
-return R"(
-    #define bool _Bool
-    #define true 1
-    #define false 0
-    #define __bool_true_false_are_defined 1
+return
+R"(
+#define bool _Bool
+#define true 1
+#define false 0
+#define __bool_true_false_are_defined 1
 
-    #define __readonly      __attribute__((readonly))
-    #define __writeonly     __attribute__((writeonly))
-    #define __noalias       __attribute__((noalias))
-    #define __aligned(A)    __attribute__((aligned(A)))
-    #define __multipleof(A) __attribute__((multipleof(A)))
+#define __readonly      __attribute__((readonly))
+#define __writeonly     __attribute__((writeonly))
+#define __noalias       __attribute__((noalias))
+#define __aligned(A)    __attribute__((aligned(A)))
+#define __multipleof(A) __attribute__((multipleof(A)))
 
-    extern int get_program_id(int);
-    )";
+extern int get_program_id(int);
+)";
 }
 
 function::function(const std::string &src, const options_space_t& opt):  src_(src), opt_space_(opt) {
@@ -228,9 +235,10 @@ function::function(const std::string &src, const options_space_t& opt):  src_(sr
 }
 
 void function::operator()(const std::vector<arg>& args, const grid_fn_ty& grid_fn, driver::stream *stream) {
-  /* determine if should re-tune or not */
   cache_key_t key;
-  // re-tune if device is difference
+
+  /* figure out if the kernel should be re-tuned */
+  // re-tune if device is different
   key.first = stream->context()->device();
   // re-tune if any int argument is different
   for(size_t i = 0; i < args.size(); i++){

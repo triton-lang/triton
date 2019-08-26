@@ -91,13 +91,71 @@ def build(src, path):
   setuptools.setup(**args)
   shutil.rmtree(tmp)
 
+def _cvt_to_def_str(obj):
+  if isinstance(obj, bool):
+    return str(int(obj))
+  if isinstance(obj, tf.DType):
+    return {tf.int8: 'char',
+            tf.int16: 'short',
+            tf.int32: 'int',
+            tf.int64: 'long',
+            tf.float16: 'half',
+            tf.float32: 'float',
+            tf.float64: 'double'}[obj]
+  return str(obj)
+
+class op:
+
+  def _make_tensorflow_op(self, src, outputs, options):
+    src, name = make_bindings(src, outputs, options)
+    cache_path = make_cache_path(src)
+    cpp, so = write_bindings(src, cache_path)
+    build(cpp, cache_path)
+    result = tf.load_op_library(so)
+    return result.__dict__[name]
+
+  def __init__(self, src, outputs):
+    self.fw_ops = dict()
+    self.src = src
+    self.outputs = outputs
+    pass
+  
+  def D(self, name):
+    pass
+  
+  def __call__(self, *args, **kwargs):
+    # recompilation key
+    key = zip(kwargs.keys(), kwargs.values())
+    # create a new op when non-iterable defines are different
+    if key not in self.fw_ops:
+      # code generation options
+      defines = []
+      for k, v in kwargs.items():
+        try:
+          values = list(map(_cvt_to_def_str, v))
+        except TypeError:
+          values = [_cvt_to_def_str(v)]
+        defines.append((k, values))
+      opt = libtriton.options_space()
+      opt.defines = defines
+      opt.num_warps = [1, 2, 4, 8]
+      # register framework op
+      id = libtriton.register_fn(self.src, opt)
+      self.fw_ops[key] = (self._make_tensorflow_op(self.src, self.outputs, opt), id)
+    # retrieve framework op
+    op, id = self.fw_ops[key] 
+    libtriton.register_grid(id, args[-1])
+    op_args = args[:-1]
+    return op(*op_args, id=id)
+
+
 def make_tensorflow_op(src, outputs, grids):
-  bindings = make_bindings(src, outputs, grids)
-  cache_path = make_cache_path(bindings)
-  cpp, so = write_bindings(bindings, cache_path)
+  src, name = make_bindings(src, outputs, grids)
+  cache_path = make_cache_path(src)
+  cpp, so = write_bindings(src, cache_path)
   build(cpp, cache_path)
   result = tf.load_op_library(so)
-  return result
+  return result.__dict__[name]
 
 def empty(shapes):
   return extra_ops.alloc_empty(tf.stack(shapes))

@@ -15,8 +15,8 @@ namespace triton{
 namespace codegen{
 namespace analysis{
 
-grids::grids(size_t num_warps): num_warps_(num_warps){
-}
+grids::grids(size_t num_warps): num_warps_(num_warps)
+{ }
 
 bool is_hmma(ir::value *v){
   bool result = false;

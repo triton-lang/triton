@@ -35,6 +35,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
+        self.debug = True
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
         # python directors
         python_include_dirs = distutils.sysconfig.get_python_inc()

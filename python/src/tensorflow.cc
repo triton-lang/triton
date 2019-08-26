@@ -1,11 +1,14 @@
-#include <pybind11/pybind11.h>
+﻿#include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/functional.h>
 #include <string>
 #include <regex>
 #include <algorithm>
 #include "triton/codegen/selection/selection.h"
 #include "triton/runtime/function.h"
-#include "triton/lang/lang.h"
+#include "triton/lang/code_gen.h"
+#include "triton/lang/parser.h"
+#include "triton/lang/cpp.h"
 #include "triton/driver/device.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
@@ -14,13 +17,32 @@
 #include "triton/ir/function.h"
 #include "triton/tools/bench.hpp"
 
-typedef struct yy_buffer_state * YY_BUFFER_STATE;
-extern int yyparse();
-extern YY_BUFFER_STATE yy_scan_string(const char * str);
-extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
-extern triton::lang::translation_unit *ast_root;
-
 using namespace triton;
+
+namespace rt = triton::runtime;
+
+
+/* TF triton op properties */
+
+std::map<size_t, rt::function::grid_fn_ty> id_grid_map;
+std::map<size_t, rt::function*> id_fn_map;
+
+void register_grid(size_t id,
+                   const rt::function::grid_fn_ty& grid_fn) {
+  id_grid_map[id] = grid_fn;
+}
+
+size_t register_fn(const std::string& src,
+                   const rt::function::options_space_t& opt) {
+  size_t id = id_grid_map.size();
+  bool is_inserted = id_fn_map.insert({id, new rt::function(src, opt)}).second;
+  if(!is_inserted)
+    assert(false);
+  return id;
+}
+
+
+/* TF source-code generation */
 
 inline std::string to_tf_ty(ir::type *ty) {
   if(ty->is_integer_ty(1))
@@ -59,21 +81,6 @@ inline std::string ref_to_tf_ty(ir::type *ty) {
   return res;
 }
 
-inline triton::lang::translation_unit *make_ast(const char *src) {
-  YY_BUFFER_STATE buffer = yy_scan_string(src);
-  yyparse();
-  yy_delete_buffer(buffer);
-  triton::lang::translation_unit *program = ast_root;
-  return program;
-}
-
-inline std::unique_ptr<ir::module> make_ir(ir::context& ctx, triton::lang::translation_unit *program) {
-  // create Triton-IR from AST
-  ir::module* module = new ir::module("", ctx);
-  program->codegen(module);
-  return std::unique_ptr<ir::module>(module);
-}
-
 
 void gen_extract_inputs(std::ostream &os, const std::vector<ir::argument*>& args) {
   for(unsigned i = 0; i < args.size(); i++){
@@ -102,24 +109,8 @@ void gen_make_handles(std::ostream &os, const std::vector<ir::argument*>& args) 
   }
 }
 
-void gen_make_spmd_grid(std::ostream &os, const std::vector<std::string>& macros) {
-  std::regex regex("#([a-zA-Z]([a-zA-Z]|[0-9])*)");
-  std::vector<std::string> grids = macros;
-  for(size_t i = grids.size(); i < 3; i++)
-    grids.push_back("1");
-  std::string grid = "rt::grid_t{";
-  for(size_t i = 0; i < grids.size(); i++){
-    if(i > 0)
-      grid += ", ";
-    grid += std::regex_replace(grids[i], regex, "x.at(\"$1\")");
-  }
-  grid += "}";
-
-  os << "  auto grid = [&](const rt::params_t& x) { return " << grid << "; };\n  ";
-}
-
 void gen_make_launch_function(std::ostream &os, const std::vector<ir::argument*>& args) {
-  os << "  fn_({";
+  os << "  (*id_fn_map.at(id_))({";
   for(unsigned i = 0; i < args.size() ; i++){
     ir::argument *arg = args[i];
     std::string name = arg->get_name();
@@ -129,7 +120,7 @@ void gen_make_launch_function(std::ostream &os, const std::vector<ir::argument*>
       os << ", ";
     os << name;
   }
-  os << "}, grid, stream);  \n";
+  os << "}, id_grid_map.at(id_), stream);  \n";
 }
 
 void gen_register_kernel_builder(std::ostream &os, const std::string &name,
@@ -168,20 +159,55 @@ void gen_register_op(std::ostream &os, const std::string &name,
       throw std::runtime_error("unknown output");
     os << "  .Output(\"out" << i << ": " << to_tf_scalar_ty(args[idx]->get_type()) << "\")\n";
   }
+  os << "  .Attr(\"id: int\")" << std::endl;
   os << ";\n";
 }
 
-std::string make_tensorflow_src(const std::string src,
+inline std::string preheader() {
+return
+R"(
+#define bool _Bool
+#define true 1
+#define false 0
+#define __bool_true_false_are_defined 1
+
+#define __readonly      __attribute__((readonly))
+#define __writeonly     __attribute__((writeonly))
+#define __noalias       __attribute__((noalias))
+#define __aligned(A)    __attribute__((aligned(A)))
+#define __multipleof(A) __attribute__((multipleof(A)))
+
+extern int get_program_id(int);
+)";
+}
+
+std::tuple<std::string,
+           std::string> make_tensorflow_src(std::string src,
                                 const std::vector<std::string>& outputs,
-                                const std::vector<std::string>& macros) {
-  triton::lang::translation_unit *ast = make_ast(src.c_str());
-  triton::ir::context context;
-  std::unique_ptr<ir::module> ir = make_ir(context, ast);
+                                const runtime::function::options_space_t& opt)
+{
+  src = preheader() + src;
+  // pre-process
+  TokenSequence tokens;
+  Preprocessor cpp(&src, true);
+  for(auto it: opt.defines){
+    cpp.AddMacro(it.first, &it.second[0]);
+  }
+  cpp.Process(tokens);
+  // parse
+  Parser parser(tokens);
+  parser.Parse();
+  // triton-ir code-gen
+  ir::context ctx;
+  auto ir = std::unique_ptr<ir::module>(new ir::module("", ctx));
+  Generator gen(&parser);
+  gen.Gen(&*ir);
   // function
   ir::function* fn = ir->get_function_list().front();
   std::string name = fn->get_name();
-  name[0] = static_cast<char>(std::toupper(name[0]));
-  std::string opname = name + "Op";
+  std::string cc_name = name;
+  cc_name[0] = static_cast<char>(std::toupper(cc_name[0]));
+  std::string opname = cc_name + "Op";
 
   std::ostringstream oss;
   oss << R"(
@@ -204,12 +230,16 @@ using GPUDevice = Eigen::GpuDevice;
 namespace rt = triton::runtime;
 namespace drv = triton::driver;
 
-std::string src = R"TTKERNSRC( )" + src + ")TTKERNSRC\";" + R"(
+extern std::map<size_t, rt::function::grid_fn_ty> id_grid_map;
+extern std::map<size_t, rt::function*> id_fn_map;
+
 
 class )" << opname << R"(: public OpKernel {
  public:
   explicit )" << opname << R"((OpKernelConstruction* context)
-    : OpKernel(context), fn_(src) { }
+    : OpKernel(context) {
+    OP_REQUIRES_OK(context, context->GetAttr("id", &id_));
+  }
 
   void Compute(OpKernelContext* context){
     // get device/stream
@@ -229,9 +259,7 @@ oss << R"(
     )";
 gen_make_handles(oss, fn->args());
 oss << R"(
-    // create spmd grid
     )";
-gen_make_spmd_grid(oss, macros);
 oss << R"(
     // launch function
     )";
@@ -240,22 +268,42 @@ oss << R"(
   }
 
 private:
-  rt::function fn_;
+  int id_;
 };
 
 // register kernel builder
 )";
-gen_register_kernel_builder(oss, name, opname, fn->args());
+gen_register_kernel_builder(oss, cc_name, opname, fn->args());
 oss << R"(
 // register op
 )";
-gen_register_op(oss, name, fn->args(), outputs);
+gen_register_op(oss, cc_name, fn->args(), outputs);
 
-  return oss.str();
+  return {oss.str(), name};
 }
 
+typedef triton::runtime::function::options_t options_t;
+typedef triton::runtime::function::options_space_t options_space_t;
 
 PYBIND11_MODULE(libtriton, m) {
     m.doc() = "Python bindings to the C++ Triton API";
-    m.def("make_tensorflow_src", &make_tensorflow_src, "Creates C++ source code for a custom Tensorflow op corresponding to the specified Triton kernel");
+
+    // framework binding source code generation
+    m.def("make_tensorflow_src", &make_tensorflow_src,
+          "Creates C++ source code for a custom Tensorflow op "
+          "corresponding to the specified Triton kernel");
+
+    // bindings for triton classes
+    pybind11::class_<options_t>(m, "options")
+        .def(pybind11::init<>())
+        .def("D", &options_t::D<int>);
+
+    pybind11::class_<options_space_t>(m, "options_space")
+        .def(pybind11::init<>())
+        .def_readwrite("defines", &options_space_t::defines)
+        .def_readwrite("num_warps", &options_space_t::num_warps);
+
+    // hooks into triton constructs since frameworks may not use pybind11
+    m.def("register_grid", &register_grid);
+    m.def("register_fn", &register_fn);
 }
