@@ -22,6 +22,8 @@ void dot(TYPE * A __noalias __readonly __aligned(16),
          int lda __multipleof(8),
          int ldb __multipleof(8),
          int ldc) {
+
+  /* prologue */
   int ridx = get_program_id(0);
   int ridy = get_program_id(1);
   int rxa[TM] = ridx * TM + 0 ... TM;
@@ -88,8 +90,8 @@ class dot:
     self.trans_b = trans_b
   
   def __call__(self, a, b):
-    shape_a = tf.shape(a)
-    shape_b = tf.shape(b)
+    shape_a = triton.shape(a)
+    shape_b = triton.shape(b)
     M = shape_a[0]
     K = shape_a[1]
     N = shape_b[0]
@@ -98,9 +100,9 @@ class dot:
     ldc = N
     c = triton.empty([M, N])
     return self.dot(a, b, c, M, N, K, lda, ldb, ldc, 
-                    lambda opt: [cdiv(M, opt.D('TM')), cdiv(N, opt.D('TN')), 1],             
+                    lambda opt: [cdiv(M, opt.d('TM')), cdiv(N, opt.d('TN'))],             
                     AT = self.trans_a, BT = self.trans_b, TYPE = tf.float16, 
-                    TM = [128], TN = [128], TK = [32])
+                    TM = [32, 64, 128], TN = [32, 64, 128], TK = [32])
 
 dot_tn = dot()
 
@@ -119,7 +121,7 @@ def run_dot():
   result = sess.run([c], feed_dict = {a: ha,
                                       b: hb})[0]
   # Test
-  hresult = np.dot(ha.T, hb)
+  hresult = np.dot(ha.T, hb).T
   dif = np.abs(result - hresult)
   np.savetxt('dif.dat', dif, '%2.4f')
   print(hresult)

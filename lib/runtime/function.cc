@@ -160,7 +160,12 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     // triton-ir code-gen
     auto ir = make_ir(parser);
     // binary code-gen
-    auto bin = make_bin(*ir, stream->context(), opt);
+    std::unique_ptr<driver::module> bin;
+    try{
+      bin = make_bin(*ir, stream->context(), opt);
+    }catch(const std::runtime_error& e) {
+      return;
+    }
     // benchmark
     ir::function *tmp = ir->get_function_list()[0];
     caller call(tmp, std::move(bin), opt);
@@ -177,21 +182,21 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
 std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::context *context, const options_t& opt) {
   std::unique_ptr<codegen::target> target = context->device()->make_target();
   // create passes
-  codegen::analysis::grids tune(opt.num_warps);
+  codegen::analysis::grids grids(opt.num_warps);
   codegen::analysis::shmem::info shmem_info;
   codegen::analysis::shmem::liveness shmem_liveness(&shmem_info);
-  codegen::analysis::shmem::allocation shmem_allocation(&shmem_liveness, &shmem_info, &tune);
+  codegen::analysis::shmem::allocation shmem_allocation(&shmem_liveness, &shmem_info, &grids);
   codegen::analysis::alignment_info alignment_info;
   codegen::transform::shmem_barriers shmem_barriers(&shmem_allocation, &shmem_info);
-  codegen::transform::vectorize vectorize(&tune);
+  codegen::transform::vectorize vectorize(&grids);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
-  codegen::transform::reassociate reassociate(&tune);
-  codegen::selection selection(&shmem_allocation, &tune, &shmem_info, &alignment_info, target.get());
+  codegen::transform::reassociate reassociate(&grids);
+  codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, target.get());
   // run passes
   peephole.run(module);
   dce.run(module);
-  tune.run(module);
+  grids.run(module);
   reassociate.run(module);
   peephole.run(module);
   if(target->is_gpu()){

@@ -104,9 +104,77 @@ def _cvt_to_def_str(obj):
             tf.float64: 'double'}[obj]
   return str(obj)
 
-class op:
 
-  def _make_tensorflow_op(self, src, outputs, options):
+class scalar:
+  
+  def __init__(self, x):
+    self.id = libtriton.make_scalar_id()
+    self.handle = extra_ops.register_scalar(x, id=self.id)
+    self.assume_initialized = False
+  
+  def set_assume_initialized(self):
+    self.assume_initialized = True
+  
+  def unset_assume_initialized(self):
+    self.assume_initialized = False
+
+  def get_value(self):
+    if self.assume_initialized:
+      return libtriton.retrieve_scalar(self.id)
+    else:
+      return self.handle
+
+  def __add__(self, other):
+    return self.get_value() + other
+
+  def __radd__(self, other):
+    return other + self.get_value()
+
+  def __sub__(self, other):
+    return self.get_value() - other
+  
+  def __rsub(self, other):
+    return other - self.get_value()
+  
+  def __mul__(self, other):
+    return self.get_value() * other
+  
+  def __rmul(self, other):
+    return other * self.get_value()
+
+  def __floordiv__(self, other):
+    return self.get_value() // other
+  
+  def __rfloordiv__(self, other):
+    return other // self.get_value()
+
+  def __div__(self, other):
+    return self.get_value() / other
+
+  def __rdiv__(self, other):
+    return other / self.get_value()
+
+  def __truediv__(self, other):
+    self.get_value().__truediv__(other)
+  
+  def __rtruediv__(self, other):
+    other.__truediv__(self.get_value())
+  
+  def __neg__(self):
+    return -self.get_value()
+
+class lazy_shape:
+
+  def __init__(self, shape):
+    self.shape = shape
+  
+  def __getitem__(self, key):
+    return scalar(self.shape[key])
+
+def shape(A) :
+  return lazy_shape(tf.shape(A))
+
+def _make_tensorflow_op(src, outputs, options):
     src, name = make_bindings(src, outputs, options)
     cache_path = make_cache_path(src)
     cpp, so = write_bindings(src, cache_path)
@@ -114,15 +182,18 @@ class op:
     result = tf.load_op_library(so)
     return result.__dict__[name]
 
+
+class op:
+
   def __init__(self, src, outputs):
     self.fw_ops = dict()
     self.src = src
     self.outputs = outputs
     pass
   
-  def D(self, name):
-    pass
-  
+  def __del__(self):
+    libtriton.unregister_grid(self.id)
+
   def __call__(self, *args, **kwargs):
     # recompilation key
     key = zip(kwargs.keys(), kwargs.values())
@@ -141,11 +212,23 @@ class op:
       opt.num_warps = [1, 2, 4, 8]
       # register framework op
       id = libtriton.register_fn(self.src, opt)
-      self.fw_ops[key] = (self._make_tensorflow_op(self.src, self.outputs, opt), id)
+      self.fw_ops[key] = (_make_tensorflow_op(self.src, self.outputs, opt), id)
     # retrieve framework op
-    op, id = self.fw_ops[key] 
-    libtriton.register_grid(id, args[-1])
-    op_args = args[:-1]
+    op, id = self.fw_ops[key]
+    # create grid function
+    scalars = [x for x in args[:-1] if isinstance(x, scalar)]
+    def grid(opt):
+      for x in scalars:
+        x.set_assume_initialized()
+      result = args[-1](opt)
+      for x in scalars:
+        x.unset_assume_initialized()
+      return result
+    # register grid function
+    self.grid = grid
+    libtriton.register_grid(id, self.grid)
+    # create operands
+    op_args = [x.handle if isinstance(x, scalar) else x for x in args[:-1]]
     return op(*op_args, id=id)
 
 
@@ -158,4 +241,6 @@ def make_tensorflow_op(src, outputs, grids):
   return result.__dict__[name]
 
 def empty(shapes):
-  return extra_ops.alloc_empty(tf.stack(shapes))
+  args = [x.handle if isinstance(x, scalar) else x for x in shapes]
+  args = tf.stack(args)
+  return extra_ops.alloc_empty(args)
