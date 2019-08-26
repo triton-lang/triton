@@ -200,8 +200,7 @@ struct function_record {
 /// Special data structure which (temporarily) holds metadata about a bound class
 struct type_record {
     PYBIND11_NOINLINE type_record()
-        : multiple_inheritance(false), dynamic_attr(false), buffer_protocol(false),
-          default_holder(true), module_local(false) { }
+        : multiple_inheritance(false), dynamic_attr(false), buffer_protocol(false), module_local(false) { }
 
     /// Handle to the parent scope
     handle scope;
@@ -215,14 +214,11 @@ struct type_record {
     /// How large is the underlying C++ type?
     size_t type_size = 0;
 
-    /// What is the alignment of the underlying C++ type?
-    size_t type_align = 0;
-
     /// How large is the type's holder?
     size_t holder_size = 0;
 
     /// The global operator new can be overridden with a class-specific variant
-    void *(*operator_new)(size_t) = nullptr;
+    void *(*operator_new)(size_t) = ::operator new;
 
     /// Function pointer to class_<..>::init_instance
     void (*init_instance)(instance *, const void *) = nullptr;
@@ -282,7 +278,7 @@ struct type_record {
     }
 };
 
-inline function_call::function_call(const function_record &f, handle p) :
+inline function_call::function_call(function_record &f, handle p) :
         func(f), parent(p) {
     args.reserve(f.nargs);
     args_convert.reserve(f.nargs);

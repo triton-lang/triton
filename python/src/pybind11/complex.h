@@ -25,12 +25,8 @@ template <typename T> struct format_descriptor<std::complex<T>, detail::enable_i
     static std::string format() { return std::string(value); }
 };
 
-#ifndef PYBIND11_CPP17
-
 template <typename T> constexpr const char format_descriptor<
     std::complex<T>, detail::enable_if_t<std::is_floating_point<T>::value>>::value[3];
-
-#endif
 
 NAMESPACE_BEGIN(detail)
 

@@ -114,35 +114,6 @@ public:
     bool is(object_api const& other) const { return derived().ptr() == other.derived().ptr(); }
     /// Equivalent to ``obj is None`` in Python.
     bool is_none() const { return derived().ptr() == Py_None; }
-    /// Equivalent to obj == other in Python
-    bool equal(object_api const &other) const      { return rich_compare(other, Py_EQ); }
-    bool not_equal(object_api const &other) const  { return rich_compare(other, Py_NE); }
-    bool operator<(object_api const &other) const  { return rich_compare(other, Py_LT); }
-    bool operator<=(object_api const &other) const { return rich_compare(other, Py_LE); }
-    bool operator>(object_api const &other) const  { return rich_compare(other, Py_GT); }
-    bool operator>=(object_api const &other) const { return rich_compare(other, Py_GE); }
-
-    object operator-() const;
-    object operator~() const;
-    object operator+(object_api const &other) const;
-    object operator+=(object_api const &other) const;
-    object operator-(object_api const &other) const;
-    object operator-=(object_api const &other) const;
-    object operator*(object_api const &other) const;
-    object operator*=(object_api const &other) const;
-    object operator/(object_api const &other) const;
-    object operator/=(object_api const &other) const;
-    object operator|(object_api const &other) const;
-    object operator|=(object_api const &other) const;
-    object operator&(object_api const &other) const;
-    object operator&=(object_api const &other) const;
-    object operator^(object_api const &other) const;
-    object operator^=(object_api const &other) const;
-    object operator<<(object_api const &other) const;
-    object operator<<=(object_api const &other) const;
-    object operator>>(object_api const &other) const;
-    object operator>>=(object_api const &other) const;
-
     PYBIND11_DEPRECATED("Use py::str(obj) instead")
     pybind11::str str() const;
 
@@ -153,9 +124,6 @@ public:
     int ref_count() const { return static_cast<int>(Py_REFCNT(derived().ptr())); }
     /// Return a handle to the Python type object underlying the instance
     handle get_type() const;
-
-private:
-    bool rich_compare(object_api const &other, int value) const;
 };
 
 NAMESPACE_END(detail)
@@ -324,18 +292,15 @@ public:
     /// Constructs a new exception from the current Python error indicator, if any.  The current
     /// Python error indicator will be cleared.
     error_already_set() : std::runtime_error(detail::error_string()) {
-        PyErr_Fetch(&m_type.ptr(), &m_value.ptr(), &m_trace.ptr());
+        PyErr_Fetch(&type.ptr(), &value.ptr(), &trace.ptr());
     }
-
-    error_already_set(const error_already_set &) = default;
-    error_already_set(error_already_set &&) = default;
 
     inline ~error_already_set();
 
     /// Give the currently-held error back to Python, if any.  If there is currently a Python error
     /// already set it is cleared first.  After this call, the current object no longer stores the
     /// error variables (but the `.what()` string is still available).
-    void restore() { PyErr_Restore(m_type.release().ptr(), m_value.release().ptr(), m_trace.release().ptr()); }
+    void restore() { PyErr_Restore(type.release().ptr(), value.release().ptr(), trace.release().ptr()); }
 
     // Does nothing; provided for backwards compatibility.
     PYBIND11_DEPRECATED("Use of error_already_set.clear() is deprecated")
@@ -344,14 +309,10 @@ public:
     /// Check if the currently trapped error type matches the given Python exception class (or a
     /// subclass thereof).  May also be passed a tuple to search for any exception class matches in
     /// the given tuple.
-    bool matches(handle exc) const { return PyErr_GivenExceptionMatches(m_type.ptr(), exc.ptr()); }
-
-    const object& type() const { return m_type; }
-    const object& value() const { return m_value; }
-    const object& trace() const { return m_trace; }
+    bool matches(handle ex) const { return PyErr_GivenExceptionMatches(ex.ptr(), type.ptr()); }
 
 private:
-    object m_type, m_value, m_trace;
+    object type, value, trace;
 };
 
 /** \defgroup python_builtins _
@@ -390,14 +351,6 @@ inline bool hasattr(handle obj, handle name) {
 
 inline bool hasattr(handle obj, const char *name) {
     return PyObject_HasAttrString(obj.ptr(), name) == 1;
-}
-
-inline void delattr(handle obj, handle name) {
-    if (PyObject_DelAttr(obj.ptr(), name.ptr()) != 0) { throw error_already_set(); }
-}
-
-inline void delattr(handle obj, const char *name) {
-    if (PyObject_DelAttrString(obj.ptr(), name) != 0) { throw error_already_set(); }
 }
 
 inline object getattr(handle obj, handle name) {
@@ -470,6 +423,7 @@ template <typename T, enable_if_t<!is_pyobject<T>::value, int> = 0>
 object object_or_cast(T &&o);
 // Match a PyObject*, which we want to convert directly to handle via its converting constructor
 inline handle object_or_cast(PyObject *ptr) { return ptr; }
+
 
 template <typename Policy>
 class accessor : public object_api<accessor<Policy>> {
@@ -708,7 +662,7 @@ protected:
 
 private:
     handle obj;
-    PyObject *key = nullptr, *value = nullptr;
+    PyObject *key, *value;
     ssize_t pos = -1;
 };
 NAMESPACE_END(iterator_policies)
@@ -736,13 +690,8 @@ inline bool PyIterable_Check(PyObject *obj) {
 }
 
 inline bool PyNone_Check(PyObject *o) { return o == Py_None; }
-#if PY_MAJOR_VERSION >= 3
-inline bool PyEllipsis_Check(PyObject *o) { return o == Py_Ellipsis; }
-#endif
 
 inline bool PyUnicode_Check_Permissive(PyObject *o) { return PyUnicode_Check(o) || PYBIND11_BYTES_CHECK(o); }
-
-inline bool PyStaticMethod_Check(PyObject *o) { return o->ob_type == &PyStaticMethod_Type; }
 
 class kwargs_proxy : public handle {
 public:
@@ -1015,14 +964,6 @@ public:
     none() : object(Py_None, borrowed_t{}) { }
 };
 
-#if PY_MAJOR_VERSION >= 3
-class ellipsis : public object {
-public:
-    PYBIND11_OBJECT(ellipsis, object, detail::PyEllipsis_Check)
-    ellipsis() : object(Py_Ellipsis, borrowed_t{}) { }
-};
-#endif
-
 class bool_ : public object {
 public:
     PYBIND11_OBJECT_CVT(bool_, object, PyBool_Check, raw_bool)
@@ -1133,13 +1074,6 @@ public:
                                     (ssize_t *) stop, (ssize_t *) step,
                                     (ssize_t *) slicelength) == 0;
     }
-    bool compute(ssize_t length, ssize_t *start, ssize_t *stop, ssize_t *step,
-      ssize_t *slicelength) const {
-      return PySlice_GetIndicesEx((PYBIND11_SLICE_OBJECT *) m_ptr,
-          length, start,
-          stop, step,
-          slicelength) == 0;
-    }
 };
 
 class capsule : public object {
@@ -1203,7 +1137,6 @@ public:
     }
     size_t size() const { return (size_t) PyTuple_Size(m_ptr); }
     detail::tuple_accessor operator[](size_t index) const { return {*this, index}; }
-    detail::item_accessor operator[](handle h) const { return object::operator[](h); }
     detail::tuple_iterator begin() const { return {*this, 0}; }
     detail::tuple_iterator end() const { return {*this, PyTuple_GET_SIZE(m_ptr)}; }
 };
@@ -1241,7 +1174,6 @@ public:
     PYBIND11_OBJECT_DEFAULT(sequence, object, PySequence_Check)
     size_t size() const { return (size_t) PySequence_Size(m_ptr); }
     detail::sequence_accessor operator[](size_t index) const { return {*this, index}; }
-    detail::item_accessor operator[](handle h) const { return object::operator[](h); }
     detail::sequence_iterator begin() const { return {*this, 0}; }
     detail::sequence_iterator end() const { return {*this, PySequence_Size(m_ptr)}; }
 };
@@ -1254,7 +1186,6 @@ public:
     }
     size_t size() const { return (size_t) PyList_Size(m_ptr); }
     detail::list_accessor operator[](size_t index) const { return {*this, index}; }
-    detail::item_accessor operator[](handle h) const { return object::operator[](h); }
     detail::list_iterator begin() const { return {*this, 0}; }
     detail::list_iterator end() const { return {*this, PyList_GET_SIZE(m_ptr)}; }
     template <typename T> void append(T &&val) const {
@@ -1288,11 +1219,6 @@ public:
         return handle();
     }
     bool is_cpp_function() const { return (bool) cpp_function(); }
-};
-
-class staticmethod : public object {
-public:
-    PYBIND11_OBJECT_CVT(staticmethod, object, detail::PyStaticMethod_Check, PyStaticMethod_New)
 };
 
 class buffer : public object {
@@ -1353,21 +1279,6 @@ inline size_t len(handle h) {
     return (size_t) result;
 }
 
-inline size_t len_hint(handle h) {
-#if PY_VERSION_HEX >= 0x03040000
-    ssize_t result = PyObject_LengthHint(h.ptr(), 0);
-#else
-    ssize_t result = PyObject_Length(h.ptr());
-#endif
-    if (result < 0) {
-        // Sometimes a length can't be determined at all (eg generators)
-        // In which case simply return 0
-        PyErr_Clear();
-        return 0;
-    }
-    return (size_t) result;
-}
-
 inline str repr(handle h) {
     PyObject *str_value = PyObject_Repr(h.ptr());
     if (!str_value) throw error_already_set();
@@ -1416,56 +1327,6 @@ str_attr_accessor object_api<D>::doc() const { return attr("__doc__"); }
 
 template <typename D>
 handle object_api<D>::get_type() const { return (PyObject *) Py_TYPE(derived().ptr()); }
-
-template <typename D>
-bool object_api<D>::rich_compare(object_api const &other, int value) const {
-    int rv = PyObject_RichCompareBool(derived().ptr(), other.derived().ptr(), value);
-    if (rv == -1)
-        throw error_already_set();
-    return rv == 1;
-}
-
-#define PYBIND11_MATH_OPERATOR_UNARY(op, fn)                                   \
-    template <typename D> object object_api<D>::op() const {                   \
-        object result = reinterpret_steal<object>(fn(derived().ptr()));        \
-        if (!result.ptr())                                                     \
-            throw error_already_set();                                         \
-        return result;                                                         \
-    }
-
-#define PYBIND11_MATH_OPERATOR_BINARY(op, fn)                                  \
-    template <typename D>                                                      \
-    object object_api<D>::op(object_api const &other) const {                  \
-        object result = reinterpret_steal<object>(                             \
-            fn(derived().ptr(), other.derived().ptr()));                       \
-        if (!result.ptr())                                                     \
-            throw error_already_set();                                         \
-        return result;                                                         \
-    }
-
-PYBIND11_MATH_OPERATOR_UNARY (operator~,   PyNumber_Invert)
-PYBIND11_MATH_OPERATOR_UNARY (operator-,   PyNumber_Negative)
-PYBIND11_MATH_OPERATOR_BINARY(operator+,   PyNumber_Add)
-PYBIND11_MATH_OPERATOR_BINARY(operator+=,  PyNumber_InPlaceAdd)
-PYBIND11_MATH_OPERATOR_BINARY(operator-,   PyNumber_Subtract)
-PYBIND11_MATH_OPERATOR_BINARY(operator-=,  PyNumber_InPlaceSubtract)
-PYBIND11_MATH_OPERATOR_BINARY(operator*,   PyNumber_Multiply)
-PYBIND11_MATH_OPERATOR_BINARY(operator*=,  PyNumber_InPlaceMultiply)
-PYBIND11_MATH_OPERATOR_BINARY(operator/,   PyNumber_TrueDivide)
-PYBIND11_MATH_OPERATOR_BINARY(operator/=,  PyNumber_InPlaceTrueDivide)
-PYBIND11_MATH_OPERATOR_BINARY(operator|,   PyNumber_Or)
-PYBIND11_MATH_OPERATOR_BINARY(operator|=,  PyNumber_InPlaceOr)
-PYBIND11_MATH_OPERATOR_BINARY(operator&,   PyNumber_And)
-PYBIND11_MATH_OPERATOR_BINARY(operator&=,  PyNumber_InPlaceAnd)
-PYBIND11_MATH_OPERATOR_BINARY(operator^,   PyNumber_Xor)
-PYBIND11_MATH_OPERATOR_BINARY(operator^=,  PyNumber_InPlaceXor)
-PYBIND11_MATH_OPERATOR_BINARY(operator<<,  PyNumber_Lshift)
-PYBIND11_MATH_OPERATOR_BINARY(operator<<=, PyNumber_InPlaceLshift)
-PYBIND11_MATH_OPERATOR_BINARY(operator>>,  PyNumber_Rshift)
-PYBIND11_MATH_OPERATOR_BINARY(operator>>=, PyNumber_InPlaceRshift)
-
-#undef PYBIND11_MATH_OPERATOR_UNARY
-#undef PYBIND11_MATH_OPERATOR_BINARY
 
 NAMESPACE_END(detail)
 NAMESPACE_END(PYBIND11_NAMESPACE)

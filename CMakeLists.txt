@@ -41,7 +41,7 @@ if(BUILD_PYTHON_MODULE)
     # extra tensorflow ops (e.g., alloc_empty)
     file(GLOB_RECURSE EXTRA_TF_OPS_SRC python/src/tensorflow/*.cc)
     add_library(extra_tf_ops SHARED ${EXTRA_TF_OPS_SRC})
-    target_link_libraries(extra_tf_ops ${TF_LIBS})
+    target_link_libraries(extra_tf_ops triton ${TF_LIBS})
 endif()
 
 

@@ -282,7 +282,10 @@ void grids::run(ir::module &mod) {
         std::string str_d = std::to_string(d);
         effective_num_warps *= params_.at(i).at("wpt.d" + str_d)->get_value();
       }
-      assert(num_warps_ == effective_num_warps);
+
+      if(num_warps_ != effective_num_warps)
+        throw std::runtime_error("cannot create a kernel with this amount of warps");
+
     }
 
     /* Scan-line */
@@ -305,7 +308,9 @@ void grids::run(ir::module &mod) {
         std::string str_d = std::to_string(d);
         effective_num_threads *= params_.at(i).at("mts.d" + str_d)->get_value();
       }
-      assert(num_threads == effective_num_threads);
+
+      if(num_threads != effective_num_threads)
+        throw std::runtime_error("cannot create a kernel with this amount of warps");
     }
   }
 
