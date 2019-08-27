@@ -33,13 +33,16 @@ void register_grid(size_t id,
   id_grid_map[id] = grid_fn;
 }
 
-size_t register_fn(const std::string& src,
+void register_fn(size_t id,
+                   const std::string& src,
                    const rt::function::options_space_t& opt) {
-  size_t id = id_grid_map.size();
   bool is_inserted = id_fn_map.insert({id, new rt::function(src, opt)}).second;
   if(!is_inserted)
     assert(false);
-  return id;
+}
+
+size_t make_op_id() {
+  return id_fn_map.size();
 }
 
 size_t make_scalar_id() {
@@ -319,6 +322,8 @@ PYBIND11_MODULE(libtriton, m) {
     // hooks into triton constructs since frameworks may not use pybind11
     m.def("register_grid", &register_grid);
     m.def("register_fn", &register_fn);
+    m.def("make_op_id", &make_op_id);
     m.def("make_scalar_id", &make_scalar_id);
-    m.def("retrieve_scalar", &retrieve_scalar);
+    m.def("retrieve_scalar", &retrieve_scalar)
+    ;
 }
