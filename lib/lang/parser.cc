@@ -517,7 +517,7 @@ Expr* Parser::ParseUnaryExpr() {
   case Token::INC: return ParsePrefixIncDec(tok);
   case Token::DEC: return ParsePrefixIncDec(tok);
   case '&': return ParseUnaryOp(tok, Token::ADDR);
-  case '*': return ParseUnaryOp(tok, Token::DEREF);
+  case '*': return ParseDerefOp(tok);
   case '+': return ParseUnaryOp(tok, Token::PLUS);
   case '-': return ParseUnaryOp(tok, Token::MINUS);
   case '~': return ParseUnaryOp(tok, '~');
@@ -577,6 +577,19 @@ UnaryOp* Parser::ParseUnaryOp(const Token* tok, int op) {
   return UnaryOp::New(op, operand);
 }
 
+Expr* Parser::ParseDerefOp(const Token* tok) {
+  Expr* pred = nullptr;
+  if(ts_.Try('?')){
+    ts_.Expect('(');
+    pred = ParseCastExpr();
+    ts_.Expect(')');
+  }
+  Expr* addr = ParseCastExpr();
+  if(pred)
+    return BinaryOp::New(tok, Token::MASKED_DEREF, pred, addr);
+  else
+    return UnaryOp::New(Token::DEREF, addr);
+}
 
 QualType Parser::ParseTypeName() {
   auto type = ParseSpecQual();

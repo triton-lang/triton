@@ -84,6 +84,7 @@ public:
   Constant* ParseAlignof();
   UnaryOp* ParsePrefixIncDec(const Token* tok);
   UnaryOp* ParseUnaryOp(const Token* tok, int op);
+  Expr* ParseDerefOp(const Token* tok);
 
   QualType ParseTypeName();
   Expr* ParseCastExpr();

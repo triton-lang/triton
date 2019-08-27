@@ -360,11 +360,12 @@ public:
     switch (op_) {
     case '.': return !Type()->ToArray() && lhs_->IsLVal();
     case ']': return !Type()->ToArray();
+    case Token::MASKED_DEREF: return true;
     default: return false;
     }
   }
   ArithmType* Convert();
-  void Broadcast();
+  static void Broadcast(Expr* loc, Expr*& lhs, Expr*& rhs, QualType &type);
 
   virtual void TypeChecking();
   void SubScriptingOpTypeChecking();
@@ -374,6 +375,7 @@ public:
   void ShiftOpTypeChecking();
   void RangeOpTypeChecking();
   void MatmulOpTypeChecking();
+  void MaskedDerefOpTypeChecking();
   void RelationalOpTypeChecking();
   void EqualityOpTypeChecking();
   void BitwiseOpTypeChecking();
