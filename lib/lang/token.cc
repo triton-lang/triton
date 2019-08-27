@@ -107,7 +107,6 @@ const std::unordered_map<int, const char*> Token::tagLexemeMap_ {
   { Token::XOR_ASSIGN, "^=" },
   { Token::OR_ASSIGN, "|=" },
   { Token::ELLIPSIS, "..." },
-
   { Token::AUTO, "auto" },
   { Token::BREAK, "break" },
   { Token::CASE, "case" },

@@ -94,6 +94,7 @@ public:
     OR_ASSIGN,
 
     ELLIPSIS,
+    MASKED_DEREF,
     // Punctuators end
 
     // KEYWORD BEGIN

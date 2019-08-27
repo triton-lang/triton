@@ -37,11 +37,12 @@ private:
   ir::value *reassociate_ptr(ir::getelementptr_inst* pz, ir::builder &builder, std::map<ir::value*, cst_info> &offsets);
 
 public:
-  reassociate(analysis::grids *params);
+  reassociate(analysis::alignment_info* align, analysis::grids *params);
   void run(ir::module& module);
 
 private:
   analysis::grids* params_;
+  analysis::alignment_info* align_;
 };
 
 }

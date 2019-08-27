@@ -55,6 +55,10 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
       _0 = bld_->create_splat(_0, ret_ty->get_tile_shapes());
       return set_ret(bld_->create_dot(lhs, rhs, _0));
     }
+    case Token::MASKED_DEREF: {
+      ir::type* ret_ty = GenIRType(binary->Type(), *ctx_);
+      return set_ret(bld_->create_masked_load(rhs, lhs, ir::undef_value::get(ret_ty)));
+    }
     case Token::ELLIPSIS: {
       auto clhs = dynamic_cast<ir::constant_int*>(lhs);
       auto crhs = dynamic_cast<ir::constant_int*>(rhs);
@@ -176,6 +180,21 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
 }
 
 void Generator::VisitConditionalOp(ConditionalOp* condOp) {
+//  auto &instructions = bld_->get_insert_block()->get_inst_list();
+  VisitExpr(condOp->cond_);
+  ir::value* cond = ret_;
+  VisitExpr(condOp->exprTrue_);
+  ir::value* true_val = ret_;
+  VisitExpr(condOp->exprFalse_);
+  ir::value* false_val = ret_;
+  if(ir::load_inst* ld = dynamic_cast<ir::load_inst*>(true_val)) {
+    ir::value* new_ld = bld_->create_masked_load(ld->get_pointer_operand(),
+                                                  cond,
+                                                  false_val);
+    ld->replace_all_uses_with(new_ld);
+    ld->erase_from_parent();
+    return set_ret(new_ld);
+  }
   return error_not_implemented();
 }
 
@@ -528,7 +547,7 @@ ir::type* Generator::GenIRFuncType(FuncType* type, ir::context& ctx) {
 
 ir::type* Generator::GenIRPointerType(PointerType* type, ir::context& ctx) {
   ir::type* ele_ty = GenIRType(type->Derived().GetPtr(), ctx);
-  unsigned addr_space = 0;
+  unsigned addr_space = 1;
   return ir::pointer_type::get(ele_ty, addr_space);
 }
 
@@ -552,7 +571,13 @@ void Generator::popScope() {
 
 // LValue Generator
 void LValAssigner::VisitBinaryOp(BinaryOp* binary) {
-  error_not_implemented();
+  if(binary->op_ != Token::MASKED_DEREF)
+    error_not_implemented();
+  gen_->VisitExpr(binary->lhs_);
+  ir::value* mask = gen_->ret_;
+  gen_->VisitExpr(binary->rhs_);
+  ir::value* addr = gen_->ret_;
+  ret_ = gen_->bld_->create_masked_store(addr, rhs_, mask);
 }
 
 void LValAssigner::VisitUnaryOp(UnaryOp* unary) {

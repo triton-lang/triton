@@ -49,7 +49,7 @@ inline size_t size_of(DType dtype){
   }
 }
 
-std::vector<cublasGemmAlgo_t> gather_all_algos() {
+inline std::vector<cublasGemmAlgo_t> gather_all_algos() {
   std::vector<cublasGemmAlgo_t> result;
   // non-tensor ops
   for(int i = -1; i < 24; i++)
@@ -124,7 +124,7 @@ inline cublasStatus_t cublasGemmEx(cublasHandle_t handle, cudaDataType cudt, cub
 
 
 /* Get cuBLAS handle */
-cublasHandle_t cublasGetHandle(triton::driver::stream* stream) {
+inline cublasHandle_t cublasGetHandle(triton::driver::stream* stream) {
   static std::map<CUstream, cublasHandle_t> cache;
   CUstream key = *stream->cu();
 

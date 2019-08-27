@@ -172,8 +172,10 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     caller call(tmp, std::move(bin), opt);
     double ts = tools::bench([&]() { call(stream, grid_fn(opt), args); }, stream);
     // save best
-    if(ts < best_ts)
+    if(ts < best_ts) {
+      best_ts = ts;
       ret.reset(new caller(call));
+    }
   };
   _parallel_loop_nest<std::string>(space, benchmark, 1);
   return *ret;
@@ -192,12 +194,13 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::vectorize vectorize(&grids);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
-  codegen::transform::reassociate reassociate(&grids);
+  codegen::transform::reassociate reassociate(&alignment_info, &grids);
   codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, target.get());
   // run passes
   peephole.run(module);
   dce.run(module);
   grids.run(module);
+  alignment_info.run(module);
   reassociate.run(module);
   peephole.run(module);
   if(target->is_gpu()){
@@ -207,8 +210,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
     shmem_barriers.run(module);
   }
   dce.run(module);
-  ir::print(module, std::cout);
-  alignment_info.run(module);
   vectorize.run(module);
   dce.run(module);
   // generate llvm code
