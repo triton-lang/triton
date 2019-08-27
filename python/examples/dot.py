@@ -84,7 +84,7 @@ def cdiv(a, b):
 
 class dot:
 
-  def __init__(self, trans_a = False, trans_b = True):
+  def __init__(self, trans_a = False, trans_b = False):
     self.dot = triton.op(src, ['C'])
     self.trans_a = trans_a
     self.trans_b = trans_b
@@ -102,26 +102,36 @@ class dot:
     return self.dot(a, b, c, M, N, K, lda, ldb, ldc, 
                     lambda opt: [cdiv(M, opt.d('TM')), cdiv(N, opt.d('TN'))],             
                     AT = self.trans_a, BT = self.trans_b, TYPE = tf.float16, 
-                    TM = [32, 64, 128], TN = [32, 64, 128], TK = [32])
+                    TM = [128], TN = [ 128], TK = [32])
 
-dot_tn = dot()
+dot_nt = dot(False, True)
+dot_nn = dot(False, False)
+dot_tn = dot(True, False)
+dot_tt = dot(True, True)
+
+@triton.register_gradient(dot)
+def _dot_grad(op, dy):
+  a = op.inputs[0]
+  b = op.inputs[1]
+  return [dot_tn(dy, b), dot_nt(a, dy), None, None, None, None, None, None, None]
 
 def run_dot():
   M, N, K = 128, 128, 128
   a = tf.placeholder(tf.float16, shape=[M, K])
   b = tf.placeholder(tf.float16, shape=[N, K])
   # c = tf.matmul(a, b, transpose_a=True)
-  c = dot_tn(a, b)
+  c = dot_nn(a, b)
+  grads = tf.gradients(c, [a])
   # Reference
   ha = np.random.rand(M, K).astype(np.float16)
   hb = np.random.rand(N, K).astype(np.float16)
   # Run
   sess = tf.InteractiveSession()
   sess.run(tf.global_variables_initializer())
-  result = sess.run([c], feed_dict = {a: ha,
+  result = sess.run([grads], feed_dict = {a: ha,
                                       b: hb})[0]
   # Test
-  hresult = np.dot(ha.T, hb).T
+  hresult = np.dot(ha.T, hb.T).T
   dif = np.abs(result - hresult)
   np.savetxt('dif.dat', dif, '%2.4f')
   print(hresult)

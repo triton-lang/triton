@@ -13,6 +13,8 @@ import setuptools
 import libtriton
 # frameworks
 import tensorflow as tf
+from tensorflow.python.framework import ops
+
 
 extra_ops = tf.load_op_library('/home/philippe/development/triton/python/build/lib.linux-x86_64-3.6/libextra_tf_ops.so')
 
@@ -230,12 +232,23 @@ class op:
     op = self.fw_ops[key]
     # register grid
     grid = _make_grid(args)
-    libtriton.register_grid(op_id, grid)
     self.fw_grids[key] = grid
+    libtriton.register_grid(op_id, self.fw_grids[key])
     # create operands
     op_args = [x.handle if isinstance(x, scalar) else x for x in args[:-1]]
     # call framework op
     return op(*op_args, id=op_id)
+
+
+class register_gradient:
+
+  def __init__(self, op):
+    self.op = op
+
+  def __call__(self, f):
+    name = 'Dot'
+    ops.RegisterGradient(name)(f)
+
 
 def empty(shapes):
   args = [x.handle if isinstance(x, scalar) else x for x in shapes]

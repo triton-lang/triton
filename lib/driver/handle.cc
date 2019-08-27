@@ -21,6 +21,7 @@
 */
 
 #include "triton/driver/handle.h"
+#include "triton/driver/error.h"
 
 namespace triton
 {
@@ -68,8 +69,13 @@ handle<T>::handle(): has_ownership_(false){ }
 
 template<class T>
 handle<T>::~handle(){
-  if(has_ownership_ && h_ && h_.unique())
-    _delete(*h_);
+  try{
+    if(has_ownership_ && h_ && h_.unique())
+      _delete(*h_);
+  }catch(const exception::cuda::deinitialized&){
+    // order of destruction for global variables
+    // is not guaranteed
+  }
 }
 
 template class handle<CUdeviceptr>;
