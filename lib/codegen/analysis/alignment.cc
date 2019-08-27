@@ -4,6 +4,7 @@
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
+#include <iostream>
 
 namespace triton {
 namespace codegen{
@@ -304,7 +305,7 @@ void alignment_info::run(ir::module &mod) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list()){
     populate_max_contiguous(i);
-//    std::cout << i->get_name() << " " << is_constant_.at(i).num_cst << " " << starting_multiple_.at(i) << " " << max_contiguous_.at(i) << std::endl;
+    std::cout << i->get_name() << " " << is_constant_.at(i).num_cst << " " << starting_multiple_.at(i) << " " << max_contiguous_.at(i) << std::endl;
   }
 }
 

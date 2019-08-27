@@ -153,10 +153,10 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
     opt.defines.push_back({"AT", {""}});
   if(BT)
     opt.defines.push_back({"BT", {""}});
-  opt.defines.push_back({"TM", {"32"}});
-  opt.defines.push_back({"TN", {"32"}});
+  opt.defines.push_back({"TM", {"128"}});
+  opt.defines.push_back({"TN", {"128"}});
   opt.defines.push_back({"TK", {"32"}});
-  opt.num_warps = {1, 2, 4, 8};
+  opt.num_warps = {4};
   rt::function function(src, opt);
 
   auto ceil = [](size_t x, size_t y) { return (x + y - 1) / y; };
@@ -169,16 +169,16 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
 
   // test
   stream->synchronize();
-  stream->read(dc, true, 0, hc);
-  std::vector<NumericT> rc(hc.size());
-  cpu_ref(AT, BT, M, N, K, rc, ha, hb);
-  for(size_t i = 0; i < M*N; i++)
-    if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
-      std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
-      exit(EXIT_FAILURE);
-    }
-  std::cout << hc[0] << " " << std::endl;
-  std::cout << "Pass!" << std::endl;
+//  stream->read(dc, true, 0, hc);
+//  std::vector<NumericT> rc(hc.size());
+//  cpu_ref(AT, BT, M, N, K, rc, ha, hb);
+//  for(size_t i = 0; i < M*N; i++)
+//    if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
+//      std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
+//      exit(EXIT_FAILURE);
+//    }
+//  std::cout << hc[0] << " " << std::endl;
+//  std::cout << "Pass!" << std::endl;
 
   // clean-up
   delete dc;
@@ -208,7 +208,7 @@ int main() {
   // shapes to benchmark
   std::vector<config_t> configs = {
 //    {false, false, 8192, 512, 512},
-    {false, true, 128, 128, 128}
+    {false, true, 8192, 8192, 8192}
 //    {false, true, 128, 128, 128},
 //    {false, false, 128, 128, 128},
 //    {true, false, 128, 128, 128},

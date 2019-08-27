@@ -14,6 +14,7 @@
 #include "triton/driver/module.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
+#include "triton/ir/print.h"
 #include "triton/tools/bench.hpp"
 #include "llvm/IR/Module.h"
 
@@ -205,6 +206,8 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
     shmem_allocation.run();
     shmem_barriers.run(module);
   }
+  dce.run(module);
+  ir::print(module, std::cout);
   alignment_info.run(module);
   vectorize.run(module);
   dce.run(module);
