@@ -6,7 +6,8 @@
 #include "triton/tools/bench.hpp"
 #include "triton/external/half.hpp"
 #include "triton/runtime/function.h"
-#include "cuda.h"
+#include "src/dot.h"
+#include "cuda/cublas.h"
 
 template<class T>
 void diff(const std::vector<T>& x, const std::vector<T>& y){
@@ -44,81 +45,6 @@ void cpu_ref(bool AT_, bool BT_, size_t M, size_t N, size_t K,
 }
 
 
-
-std::string src =
-R"(
-#ifdef AT
-#define USEA ^a
-#else
-#define USEA a
-#endif
-
-#ifdef BT
-#define USEB ^b
-#else
-#define USEB b
-#endif
-
-void dot(TYPE * A __noalias __readonly __aligned(16),
-         TYPE * B __noalias __readonly __aligned(16),
-         TYPE * C __noalias __readonly __aligned(16),
-         int M, int N, int K,
-         int lda __multipleof(8),
-         int ldb __multipleof(8),
-         int ldc) {
-  int ridx = get_program_id(0);
-  int ridy = get_program_id(1);
-  int rxa[TM] = ridx * TM + 0 ... TM;
-  int ryb[TN] = ridy * TN + 0 ... TN;
-  int rka[TK] = 0 ... TK;
-  int rkb[TK] = 0 ... TK;
-  float xc[TM, TN] = 0;
-#ifdef AT
-  TYPE* pa[TK, TM] = A + rka[:, newaxis] + rxa[newaxis, :]*lda;
-  bool checka[TK, TM] = rka[:, newaxis] < K;
-  TYPE a[TK, TM] = checka ? *pa : 0;
-#else
-  TYPE* pa[TM, TK] = A + rka[newaxis, :]*lda + rxa[:, newaxis];
-  bool checka[TM, TK] = rka[newaxis, :] < K;
-  TYPE a[TM, TK] = checka ? *pa : 0;
-#endif
-#ifdef BT
-  TYPE* pb[TN, TK] = B + rkb[newaxis, :]*ldb + ryb[:, newaxis];
-  bool checkb[TN, TK] = rkb[newaxis, :] < K;
-  TYPE b[TN, TK] = checkb ? *pb : 0;
-#else
-  TYPE* pb[TK, TN] = B + rkb[:, newaxis] + ryb[newaxis, :]*ldb;
-  bool checkb[TK, TN] = rkb[:, newazis] < K;
-  TYPE b[TK, TN] = checkb ? *pb : 0;
-#endif
-  for(int k = K; k > 0; k = k - TK){
-    xc = USEA @ USEB + xc;
-#ifdef AT
-    pa = pa + TK;
-#else
-    pa = pa + TK*lda;
-#endif
-#ifdef BT
-    pb = pb + TK*ldb;
-#else
-    pb = pb + TK;
-#endif
-    checka = k > TK;
-    checkb = k > TK;
-    a = checka ? *pa : 0;
-    b = checkb ? *pb : 0;
-  }
-  int rxc[TM] =  ridx * TM + (0 ... TM);
-  int ryc[TN] =  ridy * TN + (0 ... TN);
-  TYPE* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
-  TYPE c[TM, TN] = xc;
-  bool checkc0[TM] = rxc < M;
-  bool checkc1[TN] = ryc < N;
-  bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
-  *?(checkc) pc = c;
-}
-)";
-
 struct perf_t {
   double triton;
   double cublas;
@@ -128,7 +54,7 @@ namespace drv = triton::driver;
 namespace rt = triton::runtime;
 
 perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K){
-  typedef half NumericT;
+  typedef half_float::half NumericT;
   std::string ty = "half";
   size_t dt_nbytes = sizeof(NumericT);
   drv::context* context = stream->context();
@@ -140,9 +66,9 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
   int32_t ldc = M;
   srand(0);
   for(size_t i = 0; i < ha.size(); i++)
-    ha[i] = static_cast<NumericT>((double)rand()/RAND_MAX);
+    ha[i] = static_cast<NumericT>((float)rand()/RAND_MAX);
   for(size_t i = 0; i < hb.size(); i++)
-    hb[i] = static_cast<NumericT>((double)rand()/RAND_MAX);
+    hb[i] = static_cast<NumericT>((float)rand()/RAND_MAX);
   for(size_t i = 0; i < hc.size(); i++)
     hc[i] = static_cast<NumericT>((double)0);
   drv::buffer* dc = drv::buffer::create(context, hc.size()*dt_nbytes);
@@ -159,11 +85,11 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
     opt.defines.push_back({"AT", {""}});
   if(BT)
     opt.defines.push_back({"BT", {""}});
-  opt.defines.push_back({"TM", {"128"}});
-  opt.defines.push_back({"TN", {"128"}});
+  opt.defines.push_back({"TM", {"16", "32", "64", "128"}});
+  opt.defines.push_back({"TN", {"16", "32", "64", "128"}});
   opt.defines.push_back({"TK", {"32"}});
-  opt.num_warps = {4};
-  rt::function function(src, opt);
+  opt.num_warps = {1, 2, 4, 8};
+  rt::function function(src::dot, opt);
 
   auto ceil = [](size_t x, size_t y) { return (x + y - 1) / y; };
   auto grid = [&](const rt::function::options_t& x) { return rt::grid_t{ceil(M, x.D<int>("TM")), ceil(N, x.D<int>("TN")), 1}; };
@@ -171,10 +97,15 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
   auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
   perf_t res;
   res.triton = tflops(triton::tools::bench([&]() { function({da, db, dc, M, N, K, lda, ldb, ldc}, grid, stream);}, stream));
-  res.cublas = 0;
+  NumericT alpha(static_cast<double>(1));
+  NumericT beta(static_cast<double>(0));
+  cublasGemmAlgo_t fastest;
+  cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, da, lda, db, ldb, &beta, dc, ldc, &fastest);
+  res.cublas = tflops(triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
+                                                              &alpha, da, lda, db, ldb, &beta, dc, ldc, nullptr, fastest); },
+                      stream));
 
   // test
-  stream->synchronize();
 //  stream->read(dc, true, 0, hc);
 //  std::vector<NumericT> rc(hc.size());
 //  cpu_ref(AT, BT, M, N, K, rc, ha, hb);
@@ -214,7 +145,7 @@ int main() {
   // shapes to benchmark
   std::vector<config_t> configs = {
 //    {false, false, 8192, 512, 512},
-    {false, true, 8192, 8192, 8192}
+    {false, true, 128, 128, 128}
 //    {false, true, 128, 128, 128},
 //    {false, false, 128, 128, 128},
 //    {true, false, 128, 128, 128},

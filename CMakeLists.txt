@@ -4,7 +4,7 @@ include(CTest)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # Options
-option(BUILD_EXAMPLES "Build C++ Triton examples" ON)
+option(BUILD_TESTS "Build C++ Triton tests" ON)
 option(BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 
 # LLVM
@@ -23,10 +23,10 @@ endif()
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS} -std=c++11")
 
-# Examples
-if(BUILD_EXAMPLES)
-  message(STATUS "Adding C++ examples")
-  add_subdirectory(examples)
+# Tests
+if(BUILD_TESTS)
+  message(STATUS "Adding C++ tests")
+  add_subdirectory(tests)
 endif() 
 
 # Python module

@@ -34,7 +34,7 @@ void check(cl_int err);
 
 class dispatch
 {
-private:
+protected:
   template <class F>
   struct return_type;
 
