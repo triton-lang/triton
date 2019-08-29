@@ -1,4 +1,5 @@
-﻿#include <cstring>
+﻿#include <iomanip>
+#include <cstring>
 #include <sstream>
 #include <cstdio>
 #include "triton/driver/backend.h"
@@ -8,6 +9,7 @@
 #include "triton/runtime/function.h"
 #include "src/dot.h"
 #include "cuda/cublas.h"
+#include "util.h"
 
 namespace drv = triton::driver;
 namespace rt = triton::runtime;
@@ -45,42 +47,6 @@ void cpu_ref(bool AT_, bool BT_, size_t M, size_t N, size_t K,
     cpu_ref<T, false, true>(c, a, b, M, N, K);
   else
     cpu_ref<T, false, false>(c, a, b, M, N, K);
-}
-
-inline size_t ceil(size_t x, size_t y) {
-  return (x + y - 1) / y;
-};
-
-inline rt::function::grid_fn_ty grid(size_t M, size_t N) {
-  return [M, N](const rt::function::options_t& x) {
-    return rt::grid_t{ceil(M, x.D<int>("TM")),
-                      ceil(N, x.D<int>("TN"))};
-  };
-}
-
-namespace aux{
-template<std::size_t...> struct seq{};
-
-template<std::size_t N, std::size_t... Is>
-struct gen_seq : gen_seq<N-1, N-1, Is...>{};
-
-template<std::size_t... Is>
-struct gen_seq<0, Is...> : seq<Is...>{};
-
-template<class Ch, class Tr, class Tuple, std::size_t... Is>
-void print_tuple(std::basic_ostream<Ch,Tr>& os, Tuple const& t, seq<Is...>){
-  using swallow = int[];
-  (void)swallow{0, (void(os << (Is == 0? "" : ", ") << std::get<Is>(t)), 0)...};
-}
-} // aux::
-
-template<class Ch, class Tr, class... Args>
-auto operator<<(std::basic_ostream<Ch, Tr>& os, std::tuple<Args...> const& t)
-    -> std::basic_ostream<Ch, Tr>&
-{
-  os << "(";
-  aux::print_tuple(os, t, aux::gen_seq<sizeof...(Args)>());
-  return os << ")";
 }
 
 
@@ -130,10 +96,7 @@ bool do_test(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_
   stream->read(&*dc, true, 0, hc);
   std::vector<NumericT> rc(hc.size());
   cpu_ref(AT, BT, M, N, K, rc, ha, hb);
-  for(size_t i = 0; i < M*N; i++)
-    if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2)
-      return false;
-  return true;
+  return testing::diff(hc, rc);
 }
 
 int main() {

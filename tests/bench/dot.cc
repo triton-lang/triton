@@ -46,10 +46,10 @@ std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, i
     opt.defines.push_back({"AT", {""}});
   if(BT)
     opt.defines.push_back({"BT", {""}});
-  opt.defines.push_back({"TM", {"16", "32", "64", "128"}});
-  opt.defines.push_back({"TN", {"16", "32", "64", "128"}});
+  opt.defines.push_back({"TM", {"64", "128"}});
+  opt.defines.push_back({"TN", {"128"}});
   opt.defines.push_back({"TK", {"32"}});
-  opt.num_warps = {1, 2, 4, 8};
+  opt.num_warps = {4};
   // create function
   rt::function function(src::dot, opt);
   // benchmark available libraries
