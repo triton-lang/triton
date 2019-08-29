@@ -160,7 +160,8 @@ void gen_register_op(std::ostream &os, const std::string &name,
     std::string name = arg->get_name();
     auto tolower = [](char c) { return std::tolower(c);};
     std::transform(name.begin(), name.end(), name.begin(), tolower);
-    os << "  .Input(\"" << name << ": " << to_tf_scalar_ty(arg->get_type()) << "\")\n";
+    os << "  .Attr(\"T" << i << " : {bool, int8, int16, int32, int64, float16, float32, float64}\")" << std::endl;
+    os << "  .Input(\"" << name << ": T" << i << "\")\n";
   }
   for(size_t i = 0; i < outputs.size(); i++){
     std::string name = outputs[i];

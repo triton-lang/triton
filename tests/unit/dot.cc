@@ -9,6 +9,9 @@
 #include "src/dot.h"
 #include "cuda/cublas.h"
 
+namespace drv = triton::driver;
+namespace rt = triton::runtime;
+
 template<class T>
 void diff(const std::vector<T>& x, const std::vector<T>& y){
     for(size_t i = 0; i < x.size(); i++)
@@ -44,16 +47,44 @@ void cpu_ref(bool AT_, bool BT_, size_t M, size_t N, size_t K,
     cpu_ref<T, false, false>(c, a, b, M, N, K);
 }
 
-
-struct perf_t {
-  double triton;
-  double cublas;
+inline size_t ceil(size_t x, size_t y) {
+  return (x + y - 1) / y;
 };
 
-namespace drv = triton::driver;
-namespace rt = triton::runtime;
+inline rt::function::grid_fn_ty grid(size_t M, size_t N) {
+  return [M, N](const rt::function::options_t& x) {
+    return rt::grid_t{ceil(M, x.D<int>("TM")),
+                      ceil(N, x.D<int>("TN"))};
+  };
+}
 
-perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K){
+namespace aux{
+template<std::size_t...> struct seq{};
+
+template<std::size_t N, std::size_t... Is>
+struct gen_seq : gen_seq<N-1, N-1, Is...>{};
+
+template<std::size_t... Is>
+struct gen_seq<0, Is...> : seq<Is...>{};
+
+template<class Ch, class Tr, class Tuple, std::size_t... Is>
+void print_tuple(std::basic_ostream<Ch,Tr>& os, Tuple const& t, seq<Is...>){
+  using swallow = int[];
+  (void)swallow{0, (void(os << (Is == 0? "" : ", ") << std::get<Is>(t)), 0)...};
+}
+} // aux::
+
+template<class Ch, class Tr, class... Args>
+auto operator<<(std::basic_ostream<Ch, Tr>& os, std::tuple<Args...> const& t)
+    -> std::basic_ostream<Ch, Tr>&
+{
+  os << "(";
+  aux::print_tuple(os, t, aux::gen_seq<sizeof...(Args)>());
+  return os << ")";
+}
+
+
+bool do_test(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K, int32_t TM, int32_t TN, int32_t TK, size_t nwarp){
   typedef half_float::half NumericT;
   std::string ty = "half";
   size_t dt_nbytes = sizeof(NumericT);
@@ -71,12 +102,12 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
     hb[i] = static_cast<NumericT>((float)rand()/RAND_MAX);
   for(size_t i = 0; i < hc.size(); i++)
     hc[i] = static_cast<NumericT>((double)0);
-  drv::buffer* dc = drv::buffer::create(context, hc.size()*dt_nbytes);
-  drv::buffer* da = drv::buffer::create(context, ha.size()*dt_nbytes);
-  drv::buffer* db = drv::buffer::create(context, hb.size()*dt_nbytes);
-  stream->write(da, true, 0, ha);
-  stream->write(db, true, 0, hb);
-  stream->write(dc, true, 0, hc);
+  auto dc = std::shared_ptr<drv::buffer>(drv::buffer::create(context, hc.size()*dt_nbytes));
+  auto da = std::shared_ptr<drv::buffer>(drv::buffer::create(context, ha.size()*dt_nbytes));
+  auto db = std::shared_ptr<drv::buffer>(drv::buffer::create(context, hb.size()*dt_nbytes));
+  stream->write(&*da, true, 0, ha);
+  stream->write(&*db, true, 0, hb);
+  stream->write(&*dc, true, 0, hc);
   stream->synchronize();
   // run
   rt::function::options_space_t opt;
@@ -85,81 +116,50 @@ perf_t do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int
     opt.defines.push_back({"AT", {""}});
   if(BT)
     opt.defines.push_back({"BT", {""}});
-  opt.defines.push_back({"TM", {"16", "32", "64", "128"}});
-  opt.defines.push_back({"TN", {"16", "32", "64", "128"}});
-  opt.defines.push_back({"TK", {"32"}});
-  opt.num_warps = {1, 2, 4, 8};
+  opt.defines.push_back({"TM", {std::to_string(TM)}});
+  opt.defines.push_back({"TN", {std::to_string(TN)}});
+  opt.defines.push_back({"TK", {std::to_string(TK)}});
+  opt.num_warps = {nwarp};
   rt::function function(src::dot, opt);
-
-  auto ceil = [](size_t x, size_t y) { return (x + y - 1) / y; };
-  auto grid = [&](const rt::function::options_t& x) { return rt::grid_t{ceil(M, x.D<int>("TM")), ceil(N, x.D<int>("TN")), 1}; };
-
-  auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
-  perf_t res;
-  res.triton = tflops(triton::tools::bench([&]() { function({da, db, dc, M, N, K, lda, ldb, ldc}, grid, stream);}, stream));
-  NumericT alpha(static_cast<double>(1));
-  NumericT beta(static_cast<double>(0));
-  cublasGemmAlgo_t fastest;
-  cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, da, lda, db, ldb, &beta, dc, ldc, &fastest);
-  res.cublas = tflops(triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
-                                                              &alpha, da, lda, db, ldb, &beta, dc, ldc, nullptr, fastest); },
-                      stream));
-
+  try {
+    function({&*da, &*db, &*dc, M, N, K, lda, ldb, ldc}, grid(M, N), stream);
+  } catch (const std::runtime_error& e) {
+    return true;
+  }
   // test
-//  stream->read(dc, true, 0, hc);
-//  std::vector<NumericT> rc(hc.size());
-//  cpu_ref(AT, BT, M, N, K, rc, ha, hb);
-//  for(size_t i = 0; i < M*N; i++)
-//    if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
-//      std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
-//      exit(EXIT_FAILURE);
-//    }
-//  std::cout << hc[0] << " " << std::endl;
-//  std::cout << "Pass!" << std::endl;
-
-  // clean-up
-  delete dc;
-  delete da;
-  delete db;
-  return res;
+  stream->read(&*dc, true, 0, hc);
+  std::vector<NumericT> rc(hc.size());
+  cpu_ref(AT, BT, M, N, K, rc, ha, hb);
+  for(size_t i = 0; i < M*N; i++)
+    if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2)
+      return false;
+  return true;
 }
 
 int main() {
-  struct config_t{
-    bool AT;
-    bool BT;
-    int32_t M;
-    int32_t N;
-    int32_t K;
-
-    std::string repr() {
-      std::ostringstream oss;
-      oss << AT << " " << BT << " " << M << " " << N << " " << K;
-      return oss.str();
-    }
-
-    perf_t perf(triton::driver::stream *stream){
-      return do_bench(stream, AT, BT, M, N, K);
-    }
-  };
-  // shapes to benchmark
-  std::vector<config_t> configs = {
-//    {false, false, 8192, 512, 512},
-    {false, true, 128, 128, 128}
-//    {false, true, 128, 128, 128},
-//    {false, false, 128, 128, 128},
-//    {true, false, 128, 128, 128},
-//    {true, true, 128, 128, 128}
-//    {false, true, 32768, 256, 512}
-//    {true,  false, 8192, 512, 512},
-//    {true,  true,  8192, 512, 512}
-  };
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
   triton::driver::stream* stream = triton::driver::stream::create(context);
+  // shapes to benchmark
+  typedef std::tuple<bool, bool, int, int, int, int, int, int, int> config_t;
+  std::vector<config_t> configs;
+  for(bool AT: std::array<bool, 2>{false, true})
+  for(bool BT: std::array<bool, 2>{false, true})
+  for(int TM: std::vector<int>{16, 128})
+  for(int TN: std::vector<int>{16, 128})
+  for(int TK: std::vector<int>{16, 32})
+  for(int nwarps: std::vector<int>{1, 2, 4, 8}){
+    configs.push_back(config_t{AT, BT, 128, 128, 128, TM, TN, TK, nwarps});
+  }
   // does the work
-  for(config_t c: configs){
-    perf_t perf = c.perf(stream);
-    std::cout << "// " << c.repr() << ", " << perf.triton << ", " << perf.cublas << std::endl;
+  bool AT, BT;
+  int M, N, K, TM, TN, TK, nwarp;
+  for(const auto& c: configs){
+    std::tie(AT, BT, M, N, K, TM, TN, TK, nwarp) = c;
+    std::cout << "Testing " << c << " ... " << std::flush;
+    if(do_test(stream, AT, BT, M, N, K, TM, TN, TK, (size_t)nwarp))
+      std::cout << " Pass! " << std::endl;
+    else
+      std::cout << " Fail! " << std::endl;
   }
 }
