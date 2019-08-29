@@ -72,7 +72,7 @@ handle<T>::~handle(){
   try{
     if(has_ownership_ && h_ && h_.unique())
       _delete(*h_);
-  }catch(const exception::cuda::deinitialized&){
+  }catch(const exception::cuda::base&){
     // order of destruction for global variables
     // is not guaranteed
   }

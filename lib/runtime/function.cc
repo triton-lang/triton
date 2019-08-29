@@ -12,6 +12,7 @@
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
 #include "triton/driver/module.h"
+#include "triton/driver/error.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/print.h"
@@ -166,6 +167,8 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
       bin = make_bin(*ir, stream->context(), opt);
     }catch(const std::runtime_error& e) {
       return;
+    }catch(const driver::exception::cuda::invalid_ptx& e) {
+      return;
     }
     // benchmark
     ir::function *tmp = ir->get_function_list()[0];
@@ -178,6 +181,8 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     }
   };
   _parallel_loop_nest<std::string>(space, benchmark, 1);
+  if(!ret)
+    throw std::runtime_error("could not find valid option in provided space");
   return *ret;
 }
 

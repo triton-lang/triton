@@ -30,21 +30,21 @@ void dot(TYPE * A __noalias __readonly __aligned(16),
   float xc[TM, TN] = 0;
 #ifdef AT
   TYPE* pa[TK, TM] = A + rka[:, newaxis] + rxa[newaxis, :]*lda;
-  bool checka[TK, TM] = rka[:, newaxis] < K;
-  TYPE a[TK, TM] = checka ? *pa : 0;
+  bool checka[TK, TM] = rka[:, newaxis] < TK;
+  TYPE a[TK, TM] = *pa;
 #else
   TYPE* pa[TM, TK] = A + rka[newaxis, :]*lda + rxa[:, newaxis];
-  bool checka[TM, TK] = rka[newaxis, :] < K;
-  TYPE a[TM, TK] = checka ? *pa : 0;
+  bool checka[TM, TK] = rka[newaxis, :] < TK;
+  TYPE a[TM, TK] = *pa;
 #endif
 #ifdef BT
   TYPE* pb[TN, TK] = B + rkb[newaxis, :]*ldb + ryb[:, newaxis];
-  bool checkb[TN, TK] = rkb[newaxis, :] < K;
-  TYPE b[TN, TK] = checkb ? *pb : 0;
+  bool checkb[TN, TK] = rkb[newaxis, :] < TK;
+  TYPE b[TN, TK] = *pb;
 #else
   TYPE* pb[TK, TN] = B + rkb[:, newaxis] + ryb[newaxis, :]*ldb;
-  bool checkb[TK, TN] = rkb[:, newaxis] < K;
-  TYPE b[TK, TN] = checkb ? *pb : 0;
+  bool checkb[TK, TN] = rkb[:, newaxis] < TK;
+  TYPE b[TK, TN] = *pb;
 #endif
   for(int k = K; k > 0; k = k - TK){
     xc = USEA @ USEB + xc;
@@ -60,8 +60,8 @@ void dot(TYPE * A __noalias __readonly __aligned(16),
 #endif
     checka = k > TK;
     checkb = k > TK;
-    a = checka ? *pa : 0;
-    b = checkb ? *pb : 0;
+    a = *pa;
+    b = *pb;
   }
   int rxc[TM] =  ridx * TM + (0 ... TM);
   int ryc[TN] =  ridy * TN + (0 ... TN);
@@ -70,7 +70,7 @@ void dot(TYPE * A __noalias __readonly __aligned(16),
   bool checkc0[TM] = rxc < M;
   bool checkc1[TN] = ryc < N;
   bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
-  *?(checkc) pc = c;
+  *pc = c;
 }
 )";
 

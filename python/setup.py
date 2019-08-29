@@ -47,7 +47,7 @@ class CMakeBuild(build_ext):
         tf_libs = 'tensorflow_framework'
 
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
-                      '-DBUILD_EXAMPLES=OFF',
+                      '-DBUILD_TESTS=OFF',
                       '-DBUILD_PYTHON_MODULE=ON',
                       '-DPYTHON_INCLUDE_DIRS=' + python_include_dirs,
                       '-DTF_INCLUDE_DIRS=' + tf_include_dirs,

@@ -26,6 +26,7 @@
 #include "triton/driver/error.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
@@ -240,7 +241,6 @@ std::string cu_module::compile_llvm_module(llvm::Module* module) {
 cu_module::cu_module(driver::context * context, llvm::Module* ll_module): cu_module(context, compile_llvm_module(ll_module)) { }
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
-//  std::cout << source << std::endl;
   cu_context::context_switcher ctx_switch(*context);
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
@@ -250,8 +250,10 @@ cu_module::cu_module(driver::context * context, std::string const & source) : mo
   try{
     dispatch::cuModuleLoadDataEx(&*cu_, source_.data(), 2, opt, optval);
   }catch(exception::cuda::base const &){
+#ifdef TRITON_LOG_PTX_ERROR
     std::cerr << "Compilation Failed! Log: " << std::endl;
     std::cerr << errbuf << std::endl;
+#endif
     throw;
   }
 }
