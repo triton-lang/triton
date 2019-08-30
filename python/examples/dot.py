@@ -34,19 +34,19 @@ void dot(TYPE * A __noalias __readonly __aligned(16),
 
   /* pointers for A */
 #if AT == 1
-  TYPE* pa[TK, TM] = A + rka[:, newaxis] + rxa[newaxis, :]*lda;
+  TYPE* pa[TK, TM] = A + rka[:, newaxis]*lda + rxa[newaxis, :];
   TYPE a[TK, TM] = *pa;
 #else
-  TYPE* pa[TM, TK] = A + rka[newaxis, :]*lda + rxa[:, newaxis];
+  TYPE* pa[TM, TK] = A + rka[newaxis, :] + rxa[:, newaxis]*lda;
   TYPE a[TM, TK] = *pa;
 #endif
 
   /* pointers for B */
 #if BT == 1
-  TYPE* pb[TN, TK] = B + rkb[newaxis, :]*ldb + ryb[:, newaxis];
+  TYPE* pb[TN, TK] = B + rkb[newaxis, :] + ryb[:, newaxis]*ldb;
   TYPE b[TN, TK] = *pb;
 #else
-  TYPE* pb[TK, TN] = B + rkb[:, newaxis] + ryb[newaxis, :]*ldb;
+  TYPE* pb[TK, TN] = B + rkb[:, newaxis]*ldb + ryb[newaxis, :];
   TYPE b[TK, TN] = *pb;
 #endif
 
@@ -54,14 +54,14 @@ void dot(TYPE * A __noalias __readonly __aligned(16),
   for(int k = K; k > 0; k = k - TK){
     xc = USEA @ USEB + xc;
 #if AT == 1
-    pa = pa + TK;
-#else
     pa = pa + TK*lda;
+#else
+    pa = pa + TK;
 #endif
 #if BT == 1
-    pb = pb + TK*ldb;
-#else
     pb = pb + TK;
+#else
+    pb = pb + TK*ldb;
 #endif
     a = *pa;
     b = *pb;
@@ -70,19 +70,19 @@ void dot(TYPE * A __noalias __readonly __aligned(16),
   /* epilogue */
   int rxc[TM] =  ridx * TM + (0 ... TM);
   int ryc[TN] =  ridy * TN + (0 ... TN);
-  TYPE* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
+  TYPE* pc[TM, TN] = C + ryc[newaxis, :] + rxc[:, newaxis] * ldc;
   TYPE c[TM, TN] = xc;
   bool checkc0[TM] = rxc < M;
   bool checkc1[TN] = ryc < N;
   bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
-  *pc = c;
+  *?(checkc) pc = c;
 }
 """
 
 def cdiv(a, b):
     return -(-a // b)
 
-class dot:
+class dot_op:
 
   def __init__(self, trans_a = False, trans_b = False):
     self.dot = triton.op(src, ['C'])
@@ -93,10 +93,18 @@ class dot:
     shape_a = triton.shape(a)
     shape_b = triton.shape(b)
     M = shape_a[0]
-    K = shape_a[1]
-    N = shape_b[0]
-    lda = M
-    ldb = K
+    Ka = shape_a[1]
+    Kb = shape_b[0]
+    N = shape_b[1]
+    # transpose shapes
+    if self.trans_a:
+      M, Ka = Ka, M
+    if self.trans_b:
+      Kb, N = N, Kb
+    K = Ka
+    # contiguous dimensions
+    lda = Ka
+    ldb = N
     ldc = N
     c = triton.empty([M, N])
     return self.dot(a, b, c, M, N, K, lda, ldb, ldc, 
@@ -104,34 +112,34 @@ class dot:
                     AT = self.trans_a, BT = self.trans_b, TYPE = tf.float16, 
                     TM = [128], TN = [ 128], TK = [32])
 
-dot_nt = dot(False, True)
-dot_nn = dot(False, False)
-dot_tn = dot(True, False)
-dot_tt = dot(True, True)
+dot_nt = dot_op(False, True)
+dot_nn = dot_op(False, False)
+dot_tn = dot_op(True, False)
+dot_tt = dot_op(True, True)
 
-@triton.register_gradient(dot)
-def _dot_grad(op, dy):
-  a = op.inputs[0]
-  b = op.inputs[1]
-  return [dot_tn(dy, b), dot_nt(a, dy), None, None, None, None, None, None, None]
+# @triton.register_gradient(dot_op)
+# def _dot_grad(op, dy):
+#   a = op.inputs[0]
+#   b = op.inputs[1]
+#   return [dot_tn(dy, b), dot_nt(a, dy), None, None, None, None, None, None, None]
 
 def run_dot():
   M, N, K = 128, 128, 128
   a = tf.placeholder(tf.float16, shape=[M, K])
   b = tf.placeholder(tf.float16, shape=[N, K])
   # c = tf.matmul(a, b, transpose_a=True)
-  c = dot_nn(a, b)
-  grads = tf.gradients(c, [a])
+  c = dot_nt(a, b)
+  # grads = tf.gradients(c, [a])
   # Reference
   ha = np.random.rand(M, K).astype(np.float16)
-  hb = np.random.rand(N, K).astype(np.float16)
+  hb = np.random.rand(K, N).astype(np.float16)
   # Run
   sess = tf.InteractiveSession()
   sess.run(tf.global_variables_initializer())
-  result = sess.run([grads], feed_dict = {a: ha,
+  result = sess.run([c], feed_dict = {a: ha,
                                       b: hb})[0]
   # Test
-  hresult = np.dot(ha.T, hb.T).T
+  hresult = np.dot(ha, hb.T)
   dif = np.abs(result - hresult)
   np.savetxt('dif.dat', dif, '%2.4f')
   print(hresult)
