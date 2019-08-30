@@ -169,6 +169,7 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
       return false;
     ir::value *a = dot->get_operand(0);
     ir::value *b = dot->get_operand(1);
+    builder.set_insert_point(add);
     ir::value * new_dot = builder.insert(ir::dot_inst::create(a, b, other,
                                                               dot->is_a_trans(), dot->is_b_trans(),
                                                               dot->get_name()));
@@ -212,6 +213,30 @@ bool peephole::rewrite_unit_red(ir::instruction *value, ir::builder& builder){
   return false;
 }
 
+bool peephole::rewrite_mult(ir::instruction *value, ir::builder& builder) {
+    auto binop = dynamic_cast<ir::binary_operator*>(value);
+    if(binop && binop->get_op() == ir::binary_op_t::Mul) {
+      ir::value *lhs = binop->get_operand(0);
+      ir::value *rhs = binop->get_operand(1);
+      ir::constant_int *_1_lhs = nullptr;
+      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(lhs))
+        _1_lhs = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+      ir::constant_int *_1_rhs = nullptr;
+      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(rhs))
+        _1_rhs = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+      if(_1_lhs){
+        binop->replace_all_uses_with(rhs);
+        return true;
+      }
+      else if(_1_rhs){
+        binop->replace_all_uses_with(lhs);
+        return true;
+      }
+    }
+    return false;
+}
+
+
 bool peephole::rewrite_gep_ptr_min_off_plus_off(ir::instruction *value, ir::builder& builder) {
   auto x = dynamic_cast<ir::getelementptr_inst*>(value);
   if(!x)
@@ -250,8 +275,9 @@ void peephole::run(ir::module &mod) {
       if(seen.find(i) != seen.end())
         continue;
       bool was_modified = rewrite_dot(i, builder);
-      if(was_modified)
+      if(was_modified){
         seen.insert(i);
+      }
     }
   }while(seen.size() != n_seen);
 
@@ -265,6 +291,7 @@ void peephole::run(ir::module &mod) {
       if(seen.find(i) != seen.end())
         continue;
       bool was_modified = false;
+      was_modified = was_modified || rewrite_mult(i, builder);
       was_modified = was_modified || rewrite_trans_phi(i, builder);
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);

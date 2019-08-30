@@ -218,29 +218,24 @@ ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(con
 /* ------------------------ */
 
 std::string cu_module::compile_llvm_module(llvm::Module* module) {
-  // set data layout
-  std::string layout = "e";
-  bool is_64bit = true;
-  bool use_short_pointers = true;
-  if (!is_64bit)
-    layout += "-p:32:32";
-  else if (use_short_pointers)
-    layout += "-p3:32:32-p4:32:32-p5:32:32";
-  layout += "-i64:64-i128:128-v16:16-v32:32-n16:32:64";
-  // create
-  llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_70", layout, buffer, "", Assembly);
-  std::string result(buffer.begin(), buffer.end());
-  size_t start_replace = result.find(".version");
-  size_t end_replace = result.find('\n', start_replace);
-  assert(start_replace != std::string::npos);
-  result.replace(start_replace, end_replace - start_replace, ".version 6.4");
-  return result;
+   // options
+   auto options = llvm::cl::getRegisteredOptions();
+   static_cast<llvm::cl::opt<bool>*>(options["nvptx-short-ptr"])->setValue(true);
+   // create
+   llvm::SmallVector<char, 0> buffer;
+   module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_70", "", buffer, "", Assembly);
+   std::string result(buffer.begin(), buffer.end());
+   size_t start_replace = result.find(".version");
+   size_t end_replace = result.find('\n', start_replace);
+   assert(start_replace != std::string::npos);
+   result.replace(start_replace, end_replace - start_replace, ".version 6.4");
+   return result;
 }
 
 cu_module::cu_module(driver::context * context, llvm::Module* ll_module): cu_module(context, compile_llvm_module(ll_module)) { }
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
+//  std::cout << source << std::endl;
   cu_context::context_switcher ctx_switch(*context);
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};

@@ -49,8 +49,13 @@ void print(module &mod, std::ostream& os) {
         size_t num_ops = inst->get_num_operands();
         if(num_ops > 0)
           os << " ";;
-        for(unsigned i = 0; i < num_ops; i++)
-          os << get_name(ops[i], cnt++) << (i < num_ops - 1?", ":"");
+        for(unsigned i = 0; i < num_ops; i++){
+          if(auto *x = dynamic_cast<ir::constant_int*>(ops[i]))
+            os << x->get_value();
+          else
+            os << get_name(ops[i], cnt++);
+          os << (i < num_ops - 1?", ":"");
+        }
         os << ";" << std::endl;
       }
       os << std::endl;
