@@ -95,7 +95,7 @@ void grids::init_c_graph(ir::instruction *v) {
   }
   // Splat
   else if(dynamic_cast<ir::splat_inst*>(v)){
-
+    return;
   }
   // Trans
   else if(auto *x = dynamic_cast<ir::trans_inst*>(v)){

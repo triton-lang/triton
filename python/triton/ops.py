@@ -105,7 +105,8 @@ def _build(src, path, framework):
   if framework == tensorflow_id:
     _import_tensorflow()
     library_dirs += [tensorflow.sysconfig.get_lib()]
-    include_dirs += [tensorflow.sysconfig.get_lib()]
+    include_dirs += [tensorflow.sysconfig.get_include()]
+    include_dirs += ['/usr/local/cuda/include/']
     libraries += ['tensorflow_framework']
   elif framework == torch_id:
     _import_torch()
@@ -215,7 +216,7 @@ class op:
     self.fw_grids = dict()
     self.src = src
     self.outputs = outputs
-    self.framework = _find_framework(None)
+    self.framework = _find_framework(framework)
       
   def __call__(self, *args, **kwargs):
     # create a new op when defines are different

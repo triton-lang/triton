@@ -469,21 +469,21 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     return (Instruction*)res;
   }
   if(ir::atomic_add_inst* ii = dynamic_cast<ir::atomic_add_inst*>(inst)){
-    Value *ptr = value(ii->get_operand(0));
-    Value *val = value(ii->get_operand(1));
-    Value *atom_f_add = nullptr;
-    if(val->getType()->isFloatTy())
-      atom_f_add = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_atomic_load_add_f32, {ptr->getType()});
-    else if(val->getType()->isHalfTy()){
-      Type *fp16 = Type::getHalfTy(ctx);
+//    Value *ptr = value(ii->get_operand(0));
+//    Value *val = value(ii->get_operand(1));
+//    Value *atom_f_add = nullptr;
+//    if(val->getType()->isFloatTy())
+//      atom_f_add = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_atomic_load_add_f32, {ptr->getType()});
+//    else if(val->getType()->isHalfTy()){
+//      Type *fp16 = Type::getHalfTy(ctx);
 
-      FunctionType *atom_ty = FunctionType::get(fp16, {fp16->getPointerTo(), fp16}, false);
-      atom_f_add = InlineAsm::get(atom_ty, " atom.relaxed.global.gpu.add.noftz.f16 $0, [$1], $2;", "=h,l,h", true);
-    }
-    if(atom_f_add == nullptr)
-      throw std::runtime_error("unsupported atomic add");
-    Value *res = builder.CreateCall(atom_f_add, {ptr, val});
-    return (Instruction*)res;
+//      FunctionType *atom_ty = FunctionType::get(fp16, {fp16->getPointerTo(), fp16}, false);
+//      atom_f_add = InlineAsm::get(atom_ty, " atom.relaxed.global.gpu.add.noftz.f16 $0, [$1], $2;", "=h,l,h", true);
+//    }
+//    if(atom_f_add == nullptr)
+    throw std::runtime_error("unsupported");
+//    Value *res = builder.CreateCall(atom_f_add, {ptr, val});
+//    return (Instruction*)res;
   }
   if(ir::sqrt_inst* ii = dynamic_cast<ir::sqrt_inst*>(inst)){
     Value *val = value(ii->get_operand(0));
