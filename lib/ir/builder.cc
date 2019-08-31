@@ -148,20 +148,10 @@ DEFINE_UNARY_FLOAT(fneg)
 value* builder::create_insert_nuwnswb_binop(binary_op_t op, value *lhs,
                                             value *rhs, const std::string &name,
                                             bool has_nuw, bool has_nsw) {
-  auto *clhs = dynamic_cast<constant_int*>(lhs);
-  auto *crhs = dynamic_cast<constant_int*>(rhs);
-  if(clhs && crhs){
-    constant_expression* result = constant_expression::create(op, clhs, crhs);
-    if (has_nuw) result->set_has_no_unsigned_wrap();
-    if (has_nsw) result->set_has_no_signed_wrap();
-    return result;
-  }
-  else {
-    binary_operator* result = insert(binary_operator::create(op, lhs, rhs), name);
-    if (has_nuw) result->set_has_no_unsigned_wrap();
-    if (has_nsw) result->set_has_no_signed_wrap();
-    return result;
-  }
+  binary_operator* result = insert(binary_operator::create(op, lhs, rhs), name);
+  if (has_nuw) result->set_has_no_unsigned_wrap();
+  if (has_nsw) result->set_has_no_signed_wrap();
+  return result;
 }
 
 #define DEFINE_NOWRAP_BINARY(SUFFIX, OPCODE)\

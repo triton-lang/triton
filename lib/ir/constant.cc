@@ -120,41 +120,6 @@ metaparameter* metaparameter::create(context &ctx, type *ty, const std::vector<u
   return result;
 }
 
-// constant expression
-constant_expression::constant_expression(op_t op, constant_int* lhs, constant_int* rhs)
-  : constant_int(lhs->get_type(), 0),
-    op_(op), lhs_(lhs), rhs_(rhs) { }
-
-
-constant_expression *constant_expression::create(op_t op, constant_int* lhs, constant_int* rhs) {
-  context_impl *impl = lhs->get_type()->get_context().p_impl.get();
-  constant_expression *& result = impl->expr_constants_[std::make_tuple((int)op, lhs, rhs)];
-  if(!result)
-    result = new constant_expression(op, lhs, rhs);
-  return result;
-}
-
-uint64_t constant_expression::get_value() const {
-  uint64_t lhs = lhs_->get_value();
-  uint64_t rhs = rhs_->get_value();
-  switch(op_) {
-  case op_t::Add  : return lhs + rhs;
-  case op_t::Sub  : return lhs - rhs;
-  case op_t::Mul  : return lhs * rhs;
-  case op_t::UDiv : return lhs / rhs;
-  case op_t::SDiv : return lhs / rhs;
-  case op_t::URem : return lhs % rhs;
-  case op_t::SRem : return lhs % rhs;
-  case op_t::Shl  : return lhs << rhs;
-  case op_t::LShr : return lhs >> rhs;
-  case op_t::AShr : return lhs >> rhs;
-  case op_t::And  : return lhs && rhs;
-  case op_t::Or   : return lhs || rhs;
-  case op_t::Xor  : return lhs ^ rhs;
-  default: throw std::runtime_error("unsupported constexpr binary operator");
-  }
-}
-
 
 // undef value
 undef_value::undef_value(type *ty)

@@ -21,6 +21,7 @@ protected:
 public:
   static constant* get_all_ones_value(type *ty);
   static constant* get_null_value(type *ty);
+  virtual std::string repr() const = 0;
 };
 
 /* Undef value */
@@ -30,6 +31,7 @@ private:
 
 public:
   static undef_value* get(type* ty);
+  std::string repr() const { return "undef"; }
 };
 
 
@@ -40,8 +42,8 @@ protected:
 
 public:
   virtual uint64_t get_value() const { return value_; }
-  virtual std::string repr() const { return std::to_string(get_value()); }
   static constant_int *get(type *ty, uint64_t value);
+  std::string repr() const { return std::to_string(value_); }
 
 protected:
   uint64_t value_;
@@ -66,28 +68,6 @@ private:
   bool has_value_;
 };
 
-class constant_expression: public constant_int {
-  typedef binary_op_t op_t;
-
-private:
-  constant_expression(op_t op, constant_int* lhs, constant_int* rhs);
-
-public:
-  uint64_t get_value() const;
-  // Wraps
-  void set_has_no_unsigned_wrap(bool b = true) { has_no_unsigned_wrap_ = b; }
-  void set_has_no_signed_wrap(bool b = true)   { has_no_signed_wrap_ = b; }
-  // Factory
-  static constant_expression *create(op_t op, constant_int* lhs, constant_int* rhs);
-
-private:
-  op_t op_;
-  constant_int* lhs_;
-  constant_int* rhs_;
-  bool has_no_unsigned_wrap_;
-  bool has_no_signed_wrap_;
-};
-
 /* constant range */
 class constant_range: public constant{
   constant_range(type *ty, constant_int* first, constant_int* last);
@@ -96,6 +76,7 @@ public:
   static constant *get(constant_int *first, constant_int *last);
   const constant_int* get_first() const;
   const constant_int* get_last() const;
+  std::string repr() const { return first_->repr() + " ... " + last_->repr(); }
 
 private:
   constant_int* first_;
@@ -112,6 +93,7 @@ public:
   static constant* get_zero_value_for_negation(type *ty);
   static constant* get(context &ctx, double v);
   static constant* get(type *ty, double v);
+  std::string repr() const { return std::to_string(value_); }
 
 private:
   double value_;
@@ -128,6 +110,7 @@ public:
   global_value(type *ty, unsigned num_ops,
                linkage_types_t linkage, const std::string &name,
                unsigned addr_space);
+  std::string repr() const { return get_name(); }
 
 private:
   linkage_types_t linkage_;
@@ -139,6 +122,8 @@ public:
   global_object(type *ty, unsigned num_ops,
                linkage_types_t linkage, const std::string &name,
                unsigned addr_space = 0);
+  std::string repr() const { return get_name(); }
+
 };
 
 /* global variable */
@@ -146,6 +131,8 @@ class alloc_const: public global_object {
 public:
   alloc_const(type *ty, constant_int *size,
               const std::string &name = "");
+  std::string repr() const { return get_name(); }
+
 };
 
 }
