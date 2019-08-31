@@ -3,7 +3,9 @@
 #ifndef _TRITON_IR_TYPE_H_
 #define _TRITON_IR_TYPE_H_
 
+#include <cassert>
 #include <vector>
+#include <string>
 
 namespace triton{
 namespace ir{
@@ -102,6 +104,42 @@ public:
   static integer_type *get_int64_ty(context &ctx);
   static integer_type *get_int128_ty(context &ctx);
 
+  // repr
+  std::string tile_repr() const {
+    std::string res = get_tile_element_ty()->repr();
+    auto shapes = get_tile_shapes();
+    res += "<";
+    for(size_t i = 0; i < shapes.size(); i++){
+      if(i > 0)
+        res += ", ";
+      res += std::to_string(shapes[i]);
+    }
+    res+= ">";
+    return res;
+  }
+
+  std::string repr() const {
+    switch(id_) {
+      case VoidTyID: return "void";
+      case HalfTyID: return "f16";
+      case FloatTyID: return "f32";
+      case DoubleTyID: return "f64";
+      case X86_FP80TyID: return "f80";
+      case FP128TyID: return "f128";
+      case PPC_FP128TyID: return "ppcf128";
+      case LabelTyID: return "label";
+      case MetadataTyID: return "md";
+      case TokenTyID: return "tok";
+      case IntegerTyID: return "i" + std::to_string(get_integer_bitwidth());
+      case FunctionTyID: return "fn";
+      case PointerTyID: return get_pointer_element_ty()->repr() + "*";
+      case StructTyID: return "struct";
+      case TileTyID: return tile_repr();
+      default: break;
+    }
+    assert(false);
+    return "";
+  };
 
 private:
   context &ctx_;

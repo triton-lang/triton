@@ -309,7 +309,7 @@ public:
 // ternary
 class ternary_inst: public instruction {
 private:
-  std::string repr_impl() const { return "ternary"; }
+  std::string repr_impl() const { return "cond"; }
   ternary_inst(value *cond, value *true_value, value *false_value,
                const std::string &name, instruction *next);
 
@@ -438,7 +438,6 @@ public:
 class retile_inst: public unary_inst {
 protected:
   retile_inst(value *arg, const type::tile_shapes_t &shapes, const std::string &name, instruction *next);
-  static std::string shape_suffix(ir::type* ty);
 };
 
 // reshape
@@ -446,7 +445,7 @@ protected:
 class reshape_inst: public retile_inst {
 private:
   using retile_inst::retile_inst;
-  std::string repr_impl() const { return "reshape" + shape_suffix(get_type()); }
+  std::string repr_impl() const { return "reshape"; }
 
 public:
   static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
@@ -458,7 +457,7 @@ public:
 class splat_inst: public retile_inst {
 private:
   using retile_inst::retile_inst;
-  std::string repr_impl() const { return "splat" + shape_suffix(get_type()); }
+  std::string repr_impl() const { return "splat"; }
 
 public:
   static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
@@ -470,7 +469,7 @@ public:
 class broadcast_inst: public retile_inst {
 private:
   using retile_inst::retile_inst;
-  std::string repr_impl() const { return "broadcast" + shape_suffix(get_type()); }
+  std::string repr_impl() const { return "broadcast"; }
 
 public:
   static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
@@ -688,6 +687,7 @@ private:
 public:
   static nv_static_program_idx *get(constant_range* range);
   constant_range* get_range() const;
+  std::string repr() const { return get_name(); }
 
 private:
   constant_range *range_;

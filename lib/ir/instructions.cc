@@ -482,18 +482,6 @@ masked_store_inst* masked_store_inst::create(value *ptr, value *val, value *mask
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
 
-std::string retile_inst::shape_suffix(ir::type* ty){
-  std::string res = "[";
-  const auto& shapes = ty->get_tile_shapes();
-  for(unsigned i = 0; i < shapes.size(); i++){
-    res += std::to_string(ty->get_tile_shapes()[i]);
-    if(i < shapes.size() - 1)
-      res += ", ";
-  }
-  res += "]";
-  return res;
-}
-
 retile_inst::retile_inst(value *arg, const type::tile_shapes_t &shapes,
                          const std::string &name, instruction *next)
    : unary_inst(tile_type::get(arg->get_type()->get_scalar_ty(), shapes), arg, name, next) { }
