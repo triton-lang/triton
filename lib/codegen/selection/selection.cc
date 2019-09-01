@@ -1209,7 +1209,7 @@ void selection::lower_scanline_dot(ir::dot_inst *dot, LLVMContext &ctx, Function
   TA->set_vector_size(TC->axis(0).contiguous);
   TB->set_vector_size(TC->axis(1).contiguous);
   TC->for_each([&](indices_t idx){
-    Value *res = TC->get_value(idx);
+    Value *res = TD->get_value(idx);
     for(unsigned K = 0; K < NK; ++K){
       // input indices
       indices_t a_idx = {idx[0], builder.getInt32(K)};

@@ -4,74 +4,71 @@ namespace src {
 R"(
 #ifdef AT
 #define USEA ^a
+#define STRIDE_AK lda
+#define STRIDE_AM 1
+#define BROADCAST_AK :, newaxis
+#define BROADCAST_AM newaxis, :
+#define SHAPE_A TK, TM
 #else
 #define USEA a
+#define STRIDE_AK 1
+#define STRIDE_AM lda
+#define BROADCAST_AK newaxis, :
+#define BROADCAST_AM :, newaxis
+#define SHAPE_A TM, TK
 #endif
 
 #ifdef BT
 #define USEB ^b
+#define STRIDE_BK 1
+#define STRIDE_BN ldb
+#define BROADCAST_BK newaxis, :
+#define BROADCAST_BN :, newaxis
+#define SHAPE_B TN, TK
 #else
 #define USEB b
+#define STRIDE_BK ldb
+#define STRIDE_BN 1
+#define BROADCAST_BK :, newaxis
+#define BROADCAST_BN newaxis, :
+#define SHAPE_B TK, TN
 #endif
 
-void dot(TYPE * A __noalias __readonly __aligned(16),
-         TYPE * B __noalias __readonly __aligned(16),
-         TYPE * C __noalias __readonly __aligned(16),
+void dot(TYPE * A, TYPE * B, TYPE * C,
          int M, int N, int K,
          int lda __multipleof(8),
          int ldb __multipleof(8),
          int ldc) {
+  // prologue
   int ridx = get_program_id(0);
   int ridy = get_program_id(1);
   int rxa[TM] = ridx * TM + 0 ... TM;
   int ryb[TN] = ridy * TN + 0 ... TN;
   int rka[TK] = 0 ... TK;
   int rkb[TK] = 0 ... TK;
-  float xc[TM, TN] = 0;
-#ifdef AT
-  TYPE* pa[TK, TM] = A + rka[:, newaxis] + rxa[newaxis, :]*lda;
-  bool checka[TK, TM] = rka[:, newaxis] < TK;
-  TYPE a[TK, TM] = checka ? *pa : 0;
-#else
-  TYPE* pa[TM, TK] = A + rka[newaxis, :]*lda + rxa[:, newaxis];
-  bool checka[TM, TK] = rka[newaxis, :] < TK;
-  TYPE a[TM, TK] = checka ? *pa : 0;
-#endif
-#ifdef BT
-  TYPE* pb[TN, TK] = B + rkb[newaxis, :]*ldb + ryb[:, newaxis];
-  bool checkb[TN, TK] = rkb[newaxis, :] < TK;
-  TYPE b[TN, TK] = checkb ? *pb : 0;
-#else
-  TYPE* pb[TK, TN] = B + rkb[:, newaxis] + ryb[newaxis, :]*ldb;
-  bool checkb[TK, TN] = rkb[:, newaxis] < TK;
-  TYPE b[TK, TN] = checkb ? *pb : 0;
-#endif
-  for(int k = K; k > 0; k = k - TK){
-    xc = USEA @ USEB + xc;
-#ifdef AT
-    pa = pa + TK;
-#else
-    pa = pa + TK*lda;
-#endif
-#ifdef BT
-    pb = pb + TK*ldb;
-#else
-    pb = pb + TK;
-#endif
-    checka = k > TK;
-    checkb = k > TK;
-    a = checka ? *pa : 0;
-    b = checkb ? *pb : 0;
+  float c[TM, TN] = 0;
+  // pointers to operands
+  TYPE* pa[SHAPE_A] = A + rka[BROADCAST_AK] * STRIDE_AK + rxa[BROADCAST_AM] * STRIDE_AM;
+  TYPE* pb[SHAPE_B] = B + rkb[BROADCAST_BK] * STRIDE_BK + ryb[BROADCAST_BN] * STRIDE_BN;
+  // prefetches operands
+  TYPE a[SHAPE_A] = *pa;
+  TYPE b[SHAPE_B] = *pb;
+  // reduction loop
+  for(int k = K; k > 0; k-= TK){
+    c += USEA @ USEB;
+    pa = pa + TK * STRIDE_AK;
+    pb = pb + TK * STRIDE_BK;
+    a = *pa;
+    b = *pb;
   }
-  int rxc[TM] =  ridx * TM + (0 ... TM);
-  int ryc[TN] =  ridy * TN + (0 ... TN);
-  TYPE* pc[TM, TN] = C + ryc[newaxis, :]*ldc + rxc[:, newaxis];
-  TYPE c[TM, TN] = xc;
-  bool checkc0[TM] = rxc < M;
-  bool checkc1[TN] = ryc < N;
-  bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
+  // epilogue
+  int rxc[TM] =  ridx * TM + 0 ... TM;
+  int ryc[TN] =  ridy * TN + 0 ... TN;
+  TYPE* pc[TM, TN] = C + ryc[newaxis, :] + rxc[:, newaxis] * ldc;
+  bool checkc[TM, TN] = (rxc < M)[:, newaxis] && (ryc < N)[newaxis, :];
   *?(checkc) pc = c;
 }
+
 )";
 
 }

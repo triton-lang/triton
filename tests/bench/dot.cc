@@ -27,8 +27,8 @@ inline rt::function::grid_fn_ty grid(size_t M, size_t N) {
 
 
 std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K){
-  typedef half_float::half NumericT;
-  std::string ty = "half";
+  typedef float NumericT;
+  std::string ty = "float";
   size_t dt_nbytes = sizeof(NumericT);
   drv::context* context = stream->context();
   // leading dimensions
@@ -46,25 +46,25 @@ std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, i
     opt.defines.push_back({"AT", {""}});
   if(BT)
     opt.defines.push_back({"BT", {""}});
-  opt.defines.push_back({"TM", {"64", "128"}});
-  opt.defines.push_back({"TN", {"128"}});
-  opt.defines.push_back({"TK", {"32"}});
+  opt.defines.push_back({"TM", {"64"}});
+  opt.defines.push_back({"TN", {"64"}});
+  opt.defines.push_back({"TK", {"8"}});
   opt.num_warps = {4};
   // create function
   rt::function function(src::dot, opt);
   // benchmark available libraries
   std::vector<double> result;
   auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
-  // cublas
-  if(cublas::cublasinit()){
-    NumericT alpha(static_cast<double>(1));
-    NumericT beta(static_cast<double>(0));
-    cublasGemmAlgo_t fastest;
-    cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
-    double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
-                                                    &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, nullptr, fastest); }, stream);
-    result.push_back(tflops(cublas_ms));
-  }
+//  // cublas
+//  if(cublas::cublasinit()){
+//    NumericT alpha(static_cast<double>(1));
+//    NumericT beta(static_cast<double>(0));
+//    cublasGemmAlgo_t fastest;
+//    cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
+//    double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
+//                                                    &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, nullptr, fastest); }, stream);
+//    result.push_back(tflops(cublas_ms));
+//  }
   // triton
   double triton_ms = triton::tools::bench([&]() { function({&*da, &*db, &*dc, M, N, K, lda, ldb, ldc}, grid(M, N), stream);}, stream);
   result.push_back(tflops(triton_ms));
