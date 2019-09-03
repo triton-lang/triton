@@ -687,7 +687,7 @@ private:
 public:
   static nv_static_program_idx *get(constant_range* range);
   constant_range* get_range() const;
-  std::string repr() const { return get_name(); }
+  std::string repr() const { return "nv_static_program_idx"; }
 
 private:
   constant_range *range_;

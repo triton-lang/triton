@@ -17,7 +17,7 @@ inline size_t ceil(size_t x, size_t y) {
   return (x + y - 1) / y;
 };
 
-inline rt::function::grid_fn_ty grid(size_t M, size_t N) {
+inline rt::function::grid_fn_ty grid2d(size_t M, size_t N) {
   return [M, N](const rt::function::options_t& x) {
     return rt::grid_t{ceil(M, x.D<int>("TM")),
                       ceil(N, x.D<int>("TN"))};
@@ -42,11 +42,9 @@ std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, i
   // create options
   rt::function::options_space_t opt;
   opt.defines.push_back({"TYPE", {ty}});
-  if(AT)
-    opt.defines.push_back({"AT", {""}});
-  if(BT)
-    opt.defines.push_back({"BT", {""}});
-  opt.defines.push_back({"TM", {"64"}});
+  opt.defines.push_back({"AT", {AT?"1":"0"}});
+  opt.defines.push_back({"BT", {BT?"1":"0"}});
+  opt.defines.push_back({"TM", {"128"}});
   opt.defines.push_back({"TN", {"64"}});
   opt.defines.push_back({"TK", {"8"}});
   opt.num_warps = {4};
@@ -55,18 +53,18 @@ std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, i
   // benchmark available libraries
   std::vector<double> result;
   auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
-//  // cublas
-//  if(cublas::cublasinit()){
-//    NumericT alpha(static_cast<double>(1));
-//    NumericT beta(static_cast<double>(0));
-//    cublasGemmAlgo_t fastest;
-//    cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
-//    double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
-//                                                    &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, nullptr, fastest); }, stream);
-//    result.push_back(tflops(cublas_ms));
-//  }
+  // cublas
+  if(cublas::cublasinit()){
+    NumericT alpha(static_cast<double>(1));
+    NumericT beta(static_cast<double>(0));
+    cublasGemmAlgo_t fastest = CUBLAS_GEMM_ALGO5;
+//    cublasGemm(CUDA_R_32F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
+    double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_32F, stream, AT, BT, M, N, K,
+                                                    &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, nullptr, fastest); }, stream);
+    result.push_back(tflops(cublas_ms));
+  }
   // triton
-  double triton_ms = triton::tools::bench([&]() { function({&*da, &*db, &*dc, M, N, K, lda, ldb, ldc}, grid(M, N), stream);}, stream);
+  double triton_ms = triton::tools::bench([&]() { function({&*da, &*db, &*dc, M, N, K, lda, ldb, ldc}, grid2d(M, N), stream);}, stream);
   result.push_back(tflops(triton_ms));
   // done
   return result;
@@ -79,11 +77,9 @@ int main() {
   // shapes to benchmark
   typedef std::tuple<bool, bool, int, int, int> config_t;
   std::vector<config_t> configs;
-  for(auto x: std::vector<std::array<bool, 2>>{{false, false},
-                                               {false, true},
-                                               {true, false}}){
+  for(auto x: std::vector<std::array<bool, 2>>{{false, true}}){
     std::vector<config_t> tmp = {
-      config_t{x[0], x[1], 8192, 8192, 8192}
+      config_t{x[0], x[1], 2048, 2048, 2048}
 //      config_t{x[0], x[1], 16, 2048, 2048},
 //      config_t{x[0], x[1], 32, 2048, 2048},
 //      config_t{x[0], x[1], 64, 2048, 2048},

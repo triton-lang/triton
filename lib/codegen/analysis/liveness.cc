@@ -1,5 +1,5 @@
-#include "triton/codegen/analysis/shmem/liveness.h"
-#include "triton/codegen/analysis/shmem/info.h"
+#include "triton/codegen/analysis/liveness.h"
+#include "triton/codegen/analysis/meminfo.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
@@ -9,7 +9,6 @@
 namespace triton{
 namespace codegen{
 namespace analysis{
-namespace shmem{
 
 // Entry point
 void liveness::run(ir::module &mod) {
@@ -38,7 +37,6 @@ void liveness::run(ir::module &mod) {
   }
 }
 
-}
 }
 }
 }

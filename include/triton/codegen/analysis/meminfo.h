@@ -15,9 +15,8 @@ namespace ir {
 
 namespace codegen{
 namespace analysis{
-namespace shmem{
 
-class info {
+class meminfo {
 public:
   void run(ir::module &mod);
   // queries
@@ -35,7 +34,6 @@ private:
   std::map<ir::value*, ir::value*> refs_;
 };
 
-}
 }
 }
 }

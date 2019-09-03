@@ -1,7 +1,8 @@
 #include <algorithm>
+#include <iostream>
 #include "triton/codegen/transform/reassociate.h"
-#include "triton/codegen/analysis/alignment.h"
-#include "triton/codegen/analysis/tune.h"
+#include "triton/codegen/analysis/align.h"
+#include "triton/codegen/analysis/grid.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -161,7 +162,7 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
   return new_value;
 }
 
-reassociate::reassociate(analysis::alignment_info *align, analysis::grids* params)
+reassociate::reassociate(analysis::align *align, analysis::grids* params)
   : params_(params), align_(align)
 { }
 
@@ -209,6 +210,29 @@ void reassociate::run(ir::module &mod) {
       for(ir::basic_block *block: rpo){
       // iterate through instruction
       for(ir::instruction *i: block->get_inst_list()){
+      // retiling
+      if(ir::retile_inst *rt = dynamic_cast<ir::retile_inst*>(i)) {
+        ir::value* op = rt->get_operand(0);
+        if(infos.find(op) != infos.end()){
+          builder.set_insert_point(rt);
+          ir::getelementptr_inst* sta = infos.at(op).sta_ptr;
+          ir::value* dyn = infos.at(op).dyn_ptr;
+          ir::value* cst = *sta->idx_begin();
+          if(dynamic_cast<ir::broadcast_inst*>(rt)) {
+            auto shapes = rt->get_type()->get_tile_shapes();
+            ir::value* ndyn = builder.create_broadcast(dyn, shapes);
+            ir::value* broadcast = builder.create_broadcast(cst, shapes);
+            ir::getelementptr_inst* nsta = (ir::getelementptr_inst*)builder.create_gep(ndyn, {broadcast});
+            params_->copy(ndyn, rt);
+            params_->copy(nsta, rt);
+            params_->copy(broadcast, rt);
+            align_->copy(ndyn, rt);
+            align_->copy(nsta, rt);
+            align_->copy(broadcast, rt);
+            infos[rt] = cst_info{ndyn, nsta};
+          }
+        }
+      }
       // getelementptr instruction
       if(ir::getelementptr_inst *pz = dynamic_cast<ir::getelementptr_inst*>(i)){
         if(replaced.find(pz) != replaced.end())

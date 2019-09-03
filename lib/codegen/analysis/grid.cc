@@ -1,6 +1,6 @@
 #include <algorithm>
 #include <cstdlib>
-#include "triton/codegen/analysis/tune.h"
+#include "triton/codegen/analysis/grid.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
 #include "triton/ir/module.h"
@@ -292,7 +292,7 @@ void grids::run(ir::module &mod) {
     else{
       unsigned shape = shapes[0];
       unsigned current = num_threads;
-      params_.at(i).at("nts.d0")->set_value(clamp(size / num_threads, 1, 8));
+      params_.at(i).at("nts.d0")->set_value(clamp(size / num_threads, 1, 4));
       params_.at(i).at("mts.d0")->set_value(clamp(current, 1, shape / params_.at(i).at("nts.d0")->get_value()));
       current = current / params_.at(i).at("mts.d0")->get_value();
       for(size_t d = 1; d < shapes.size(); d++){

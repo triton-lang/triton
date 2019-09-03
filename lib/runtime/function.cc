@@ -3,7 +3,7 @@
 #include <regex>
 #include <functional>
 #include <algorithm>
-#include "triton/codegen/selection/selection.h"
+#include "triton/codegen/selection.h"
 #include "triton/runtime/function.h"
 #include "triton/lang/cpp.h"
 #include "triton/lang/parser.h"
@@ -167,8 +167,6 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
       bin = make_bin(*ir, stream->context(), opt);
     }catch(const std::runtime_error& e) {
       return;
-    }catch(const driver::exception::cuda::invalid_ptx& e) {
-      return;
     }
     // benchmark
     ir::function *tmp = ir->get_function_list()[0];
@@ -191,23 +189,31 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   std::unique_ptr<codegen::target> target = context->device()->make_target();
   // create passes
   codegen::analysis::grids grids(opt.num_warps);
-  codegen::analysis::shmem::info shmem_info;
-  codegen::analysis::shmem::liveness shmem_liveness(&shmem_info);
-  codegen::analysis::shmem::allocation shmem_allocation(&shmem_liveness, &shmem_info, &grids);
-  codegen::analysis::alignment_info alignment_info;
-  codegen::transform::shmem_barriers shmem_barriers(&shmem_allocation, &shmem_info);
+  codegen::analysis::meminfo shmem_info;
+  codegen::analysis::liveness shmem_liveness(&shmem_info);
+  codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &grids);
+  codegen::analysis::align alignment_info;
+  codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
   codegen::transform::vectorize vectorize(&grids);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&alignment_info, &grids);
   codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, target.get());
+
+
   // run passes
   peephole.run(module);
   dce.run(module);
-  grids.run(module);
   alignment_info.run(module);
+  grids.run(module);
+//  ir::print(module, std::cout);
+
   reassociate.run(module);
+  dce.run(module);
+//  ir::print(module, std::cout);
+
   peephole.run(module);
+
   if(target->is_gpu()){
     shmem_info.run(module);
     shmem_liveness.run(module);
@@ -217,7 +223,8 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   vectorize.run(module);
   dce.run(module);
-//  ir::print(module, std::cout);
+
+
   // generate llvm code
   llvm::LLVMContext ctx;
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));

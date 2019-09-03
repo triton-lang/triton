@@ -5,7 +5,7 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/type.h"
-#include "triton/codegen/analysis/shmem/info.h"
+#include "triton/codegen/analysis/meminfo.h"
 
 
 namespace llvm{
@@ -45,14 +45,10 @@ namespace codegen{
 namespace analysis{
 
 class grids;
-class alignment_info;
+class align;
+class memalloc;
+class meminfo;
 
-namespace shmem{
-
-class allocation;
-class info;
-
-}
 }
 class target;
 
@@ -196,7 +192,7 @@ private:
 
 
 public:
-  selection(analysis::shmem::allocation *alloc, analysis::grids *params, analysis::shmem::info *buffer_info, analysis::alignment_info *alignment, target *tgt)
+  selection(analysis::memalloc *alloc, analysis::grids *params, analysis::meminfo *buffer_info, analysis::align *alignment, target *tgt)
     : alloc_(alloc), params_(params), buffer_info_(buffer_info), alignment_(alignment), tgt_(tgt){ }
 
   void run(ir::module &src, Module &dst);
@@ -204,10 +200,10 @@ public:
 private:
   vmap_t vmap_;
   tmap_t tmap_;
-  analysis::shmem::allocation *alloc_;
+  analysis::memalloc *alloc_;
   analysis::grids *params_;
-  analysis::shmem::info *buffer_info_;
-  analysis::alignment_info *alignment_;
+  analysis::meminfo *buffer_info_;
+  analysis::align *alignment_;
   target *tgt_;
   std::map<unsigned, distributed_axis> axes_;
   Value *sh_mem_ptr_;
