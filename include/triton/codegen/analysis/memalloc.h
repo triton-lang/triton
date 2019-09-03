@@ -17,14 +17,12 @@ namespace analysis{
 
 class grids;
 
-namespace shmem{
-
 class liveness;
-class info;
+class meminfo;
 
-class allocation {
+class memalloc {
 public:
-  allocation(liveness *live, info *buffer_info, grids *params)
+  memalloc(liveness *live, meminfo *buffer_info, grids *params)
     : liveness_(live), buffer_info_(buffer_info), params_(params){ }
 
   // utilities
@@ -44,11 +42,10 @@ private:
   size_t allocated_size_;
   // dependences
   liveness *liveness_;
-  info *buffer_info_;
+  meminfo *buffer_info_;
   grids *params_;
 };
 
-}
 }
 }
 }

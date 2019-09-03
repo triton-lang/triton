@@ -2,33 +2,33 @@ namespace src {
 
     const char *dot =
 R"(
-#ifdef AT
+#if AT == 1
 #define USEA ^a
-#define STRIDE_AK lda
-#define STRIDE_AM 1
+#define STRIDE_AK 1
+#define STRIDE_AM lda
 #define BROADCAST_AK :, newaxis
 #define BROADCAST_AM newaxis, :
 #define SHAPE_A TK, TM
 #else
 #define USEA a
-#define STRIDE_AK 1
-#define STRIDE_AM lda
+#define STRIDE_AK lda
+#define STRIDE_AM 1
 #define BROADCAST_AK newaxis, :
 #define BROADCAST_AM :, newaxis
 #define SHAPE_A TM, TK
 #endif
 
-#ifdef BT
+#if BT == 1
 #define USEB ^b
-#define STRIDE_BK 1
-#define STRIDE_BN ldb
+#define STRIDE_BK ldb
+#define STRIDE_BN 1
 #define BROADCAST_BK newaxis, :
 #define BROADCAST_BN :, newaxis
 #define SHAPE_B TN, TK
 #else
 #define USEB b
-#define STRIDE_BK ldb
-#define STRIDE_BN 1
+#define STRIDE_BK 1
+#define STRIDE_BN ldb
 #define BROADCAST_BK :, newaxis
 #define BROADCAST_BN newaxis, :
 #define SHAPE_B TK, TN
@@ -58,17 +58,15 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
     c += USEA @ USEB;
     pa = pa + TK * STRIDE_AK;
     pb = pb + TK * STRIDE_BK;
-    a = *pa;
-    b = *pb;
+    a = ((bool[SHAPE_A])(k > TK)) ? *pa : 0;
+    b = ((bool[SHAPE_B])(k > TK)) ? *pb : 0;
   }
   // epilogue
   int rxc[TM] =  ridx * TM + 0 ... TM;
   int ryc[TN] =  ridy * TN + 0 ... TN;
-  TYPE* pc[TM, TN] = C + ryc[newaxis, :] + rxc[:, newaxis] * ldc;
-  bool checkc[TM, TN] = (rxc < M)[:, newaxis] && (ryc < N)[newaxis, :];
-  *?(checkc) pc = c;
+  TYPE* pc[TM, TN] = C + ryc[newaxis, :] * ldc + rxc[:, newaxis];
+  *pc = c;
 }
-
 )";
 
 }

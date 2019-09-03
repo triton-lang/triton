@@ -51,8 +51,8 @@ void cpu_ref(bool AT_, bool BT_, size_t M, size_t N, size_t K,
 
 
 bool do_test(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K, int32_t TM, int32_t TN, int32_t TK, size_t nwarp){
-  typedef half_float::half NumericT;
-  std::string ty = "half";
+  typedef float NumericT;
+  std::string ty = "float";
   size_t dt_nbytes = sizeof(NumericT);
   drv::context* context = stream->context();
   std::vector<NumericT> hc(M*N);
@@ -78,17 +78,15 @@ bool do_test(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_
   // run
   rt::function::options_space_t opt;
   opt.defines.push_back({"TYPE", {ty}});
-  if(AT)
-    opt.defines.push_back({"AT", {""}});
-  if(BT)
-    opt.defines.push_back({"BT", {""}});
+  opt.defines.push_back({"AT", {AT?"1":"0"}});
+  opt.defines.push_back({"BT", {BT?"1":"0"}});
   opt.defines.push_back({"TM", {std::to_string(TM)}});
   opt.defines.push_back({"TN", {std::to_string(TN)}});
   opt.defines.push_back({"TK", {std::to_string(TK)}});
   opt.num_warps = {nwarp};
   rt::function function(src::dot, opt);
   try {
-    function({&*da, &*db, &*dc, M, N, K, lda, ldb, ldc}, grid(M, N), stream);
+    function({&*da, &*db, &*dc, M, N, K, lda, ldb, ldc}, grid2d(M, N), stream);
   } catch (const std::runtime_error& e) {
     return true;
   }

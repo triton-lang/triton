@@ -22,6 +22,18 @@ std::string get_name(ir::value *v, unsigned i) {
 void print(module &mod, std::ostream& os) {
   unsigned cnt = 0;
   for(ir::function *fn: mod.get_function_list()){
+    os << "def " << fn->get_fn_type()->get_return_ty()->repr() << " " << fn->get_name() << "(" ;
+    for(ir::argument* arg: fn->args()) {
+      if(arg->get_arg_no() > 0)
+        os << ", ";
+      os << arg->get_type()->repr() << " " << arg->get_name();
+      auto attrs = fn->get_attributes(arg);
+      if(attrs.size() > 0)
+        os << " ";
+      for(ir::attribute attr: attrs)
+        os << attr.repr() << " ";
+    }
+    os << ")" << std::endl;
     os << "{" << std::endl;
     for(ir::basic_block *block: fn->blocks()){
       auto const &predecessors = block->get_predecessors();

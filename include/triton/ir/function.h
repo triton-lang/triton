@@ -61,6 +61,19 @@ public:
     return kind_ != multiple_of;
   }
 
+  std::string repr() const {
+    switch(kind_){
+      case readonly: return ".readonly";
+      case writeonly: return ".writeonly";
+      case noalias: return ".noalias";
+      case aligned: return ".aligned(" + std::to_string(value_) + ")";
+      case multiple_of: return ".readonly";
+      default: break;
+    }
+    assert(false);
+    return "";
+  }
+
 private:
   attribute_kind_t kind_;
   unsigned value_;

@@ -1,5 +1,5 @@
 #include "triton/codegen/transform/vectorize.h"
-#include "triton/codegen/analysis/tune.h"
+#include "triton/codegen/analysis/grid.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"

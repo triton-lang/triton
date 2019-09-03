@@ -13,7 +13,7 @@ namespace ir {
 namespace codegen{
 namespace analysis{
 
-class alignment_info {
+class align {
   struct cst_info {
     unsigned num_cst;
     unsigned value;

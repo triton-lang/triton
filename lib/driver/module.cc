@@ -223,12 +223,12 @@ std::string cu_module::compile_llvm_module(llvm::Module* module) {
    static_cast<llvm::cl::opt<bool>*>(options["nvptx-short-ptr"])->setValue(true);
    // create
    llvm::SmallVector<char, 0> buffer;
-   module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_70", "", buffer, "", Assembly);
+   module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_60", "", buffer, "", Assembly);
    std::string result(buffer.begin(), buffer.end());
    size_t start_replace = result.find(".version");
    size_t end_replace = result.find('\n', start_replace);
    assert(start_replace != std::string::npos);
-   result.replace(start_replace, end_replace - start_replace, ".version 6.4");
+   result.replace(start_replace, end_replace - start_replace, ".version 6.0");
    return result;
 }
 
@@ -245,10 +245,10 @@ cu_module::cu_module(driver::context * context, std::string const & source) : mo
   try{
     dispatch::cuModuleLoadDataEx(&*cu_, source_.data(), 2, opt, optval);
   }catch(exception::cuda::base const &){
-#ifdef TRITON_LOG_PTX_ERROR
+//#ifdef TRITON_LOG_PTX_ERROR
     std::cerr << "Compilation Failed! Log: " << std::endl;
     std::cerr << errbuf << std::endl;
-#endif
+//#endif
     throw;
   }
 }

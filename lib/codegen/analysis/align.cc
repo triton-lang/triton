@@ -1,4 +1,4 @@
-#include "triton/codegen/analysis/alignment.h"
+#include "triton/codegen/analysis/align.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -29,14 +29,14 @@ inline T add_to_cache(ir::value *i, T value, std::map<ir::value*, T> &map) {
 }
 
 
-bool alignment_info::is_first_axis_unit(ir::value *x){
+bool align::is_first_axis_unit(ir::value *x){
   if(x->get_type()->is_tile_ty())
     return x->get_type()->get_tile_shapes()[0] == 1;
   else
     return true;
 }
 
-alignment_info::cst_info alignment_info::populate_is_constant(ir::value *v) {
+align::cst_info align::populate_is_constant(ir::value *v) {
   if(is_constant_.find(v) != is_constant_.end())
     return is_constant_.at(v);
   // helper for the cache
@@ -102,7 +102,7 @@ alignment_info::cst_info alignment_info::populate_is_constant(ir::value *v) {
   return cache({1, 0});
 }
 
-unsigned alignment_info::populate_max_contiguous(ir::value *v){
+unsigned align::populate_max_contiguous(ir::value *v){
   if(max_contiguous_.find(v) != max_contiguous_.end())
     return max_contiguous_.at(v);
   // helper for the cache
@@ -181,7 +181,7 @@ unsigned alignment_info::populate_max_contiguous(ir::value *v){
   return cache(1);
 }
 
-unsigned alignment_info::populate_starting_multiple(ir::value *v){
+unsigned align::populate_starting_multiple(ir::value *v){
   if(starting_multiple_.find(v) != starting_multiple_.end())
     return starting_multiple_.at(v);
   auto cache = [this,v](unsigned value){
@@ -240,7 +240,19 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
     int rhs = populate_starting_multiple(x->get_operand(1));
     return cache(gcd(lhs, rhs));
   }
-  if(auto *x = dynamic_cast<ir::retile_inst*>(v)){
+  if(auto *x = dynamic_cast<ir::splat_inst*>(v)){
+    int op = populate_starting_multiple(x->get_operand(0));
+    return cache(op);
+  }
+  if(auto *x = dynamic_cast<ir::reshape_inst*>(v)){
+    int op = populate_starting_multiple(x->get_operand(0));
+    auto shapes = x->get_type()->get_tile_shapes();
+    if(shapes[0] == 1)
+      return cache(1);
+    else
+      return cache(op);
+  }
+  if(auto *x = dynamic_cast<ir::broadcast_inst*>(v)){
     int op = populate_starting_multiple(x->get_operand(0));
     return cache(op);
   }
@@ -271,22 +283,22 @@ unsigned alignment_info::populate_starting_multiple(ir::value *v){
   return cache(result);
 }
 
-unsigned alignment_info::get_starting_multiple(ir::value* v) const {
+unsigned align::get_starting_multiple(ir::value* v) const {
   return starting_multiple_.at(v);
 }
 
-unsigned alignment_info::get_max_contiguous(ir::value* v) const {
+unsigned align::get_max_contiguous(ir::value* v) const {
   return max_contiguous_.at(v);
 }
 
-void alignment_info::copy(ir::value *dst, ir::value *src) {
+void align::copy(ir::value *dst, ir::value *src) {
   starting_multiple_[dst] = starting_multiple_[src];
   max_contiguous_[dst] = max_contiguous_[src];
   is_constant_[dst] = is_constant_[src];
 }
 
 ///TODO: This doesn't seem to work in DOT-NN, DOT-TT, DOT-TN
-void alignment_info::run(ir::module &mod) {
+void align::run(ir::module &mod) {
   // populate constant
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
@@ -304,9 +316,13 @@ void alignment_info::run(ir::module &mod) {
   // populate maximum contiguous
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
-  for(ir::instruction *i: block->get_inst_list()){
+  for(ir::instruction *i: block->get_inst_list())
     populate_max_contiguous(i);
-  }
+
+//  for(ir::function *fn: mod.get_function_list())
+//  for(ir::basic_block *block: fn->blocks())
+//  for(ir::instruction *i: block->get_inst_list())
+//    std::cout << i->get_name() << " " << max_contiguous_.at(i) << " " << is_constant_.at(i).num_cst << " " << starting_multiple_.at(i) << std::endl;
 }
 
 

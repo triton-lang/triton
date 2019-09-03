@@ -1,8 +1,8 @@
-﻿#include "triton/codegen/selection/selection.h"
-#include "triton/codegen/analysis/tune.h"
-#include "triton/codegen/analysis/shmem/allocation.h"
-#include "triton/codegen/selection/target.h"
-#include "triton/codegen/analysis/alignment.h"
+﻿#include "triton/codegen/selection.h"
+#include "triton/codegen/target.h"
+#include "triton/codegen/analysis/grid.h"
+#include "triton/codegen/analysis/memalloc.h"
+#include "triton/codegen/analysis/align.h"
 #include "triton/ir/context.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
@@ -1304,10 +1304,7 @@ void selection::lower_masked_load(ir::masked_load_inst *x, LLVMContext &ctx, Fun
     unsigned id = linear / vector_size;
     if(linear % vector_size == 0) {
       Value *ptr = pointers->get_value(idx);
-//      ConstantInt *cst = nullptr;
-//      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
-//        if(gep->getNumIndices() == 1)
-//          cst = dyn_cast<ConstantInt>(gep->idx_begin());
+
 
       ptr = builder.CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
                                                         ptr->getType()->getPointerAddressSpace()));
@@ -1326,23 +1323,28 @@ void selection::lower_masked_load(ir::masked_load_inst *x, LLVMContext &ctx, Fun
         ((PHINode*)current_result)->addIncoming(result_then, mask_then_bb);
         Value *result_false = false_values->get_value(idx);
         if(result_then->getType()->isVectorTy())
-          result_false = builder.CreateVectorSplat(vector_size, result_false);
+          result_false = builder.CreateVectorSplat(vector_size, llvm::UndefValue::get(result_false->getType()));
         ((PHINode*)current_result)->addIncoming(result_false, current_bb);
       }
       else
         current_result = result_then;
 
+//      ConstantInt *cst = nullptr;
+//      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
+//        if(gep->getNumIndices() == 1)
+//          cst = dyn_cast<ConstantInt>(gep->idx_begin());
+//          llvm::Value* mask = masks->get_value(idx);
 //          std::string offset = "";
 //          if(cst)
 //            offset = " + " + std::to_string(cst->getValue().getSExtValue()*2*vector_size);
 //          Type *fp16x2_ty = VectorType::get(builder.getHalfTy(), 2);
 //          Type *fp16x2_pack4_ty = StructType::get(ctx, {fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
 //          FunctionType *ty = FunctionType::get(fp16x2_pack4_ty, {mask->getType(), ptr->getType()}, false);
-//          std::string asm_str = "@$0 ld.global.nc.v4.b32 {$1, $2, $3, $4}, [$5" + offset + "];";
-//          if(false_value)
+//          std::string asm_str = "@$0 ld.global.nc.b32 {$1, $2, $3, $4}, [$5" + offset + "];";
+//          if(false_values)
 //            asm_str += "\n\t@!$0 mov.v4.b32 {$1, $2, $3, $4}, {0, 0, 0, 0};";
 //          InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,=r,=r,=r,=r,l", true);
-//          Value *result = builder.CreateCall(iasm, {mask, ptr});
+//          Value *current_result = builder.CreateCall(iasm, {mask, ptr});
 
       packets[id] = current_result;
     }
@@ -1499,9 +1501,11 @@ void selection::run(ir::module &src, Module &dst) {
     for(auto attr_pair: fn->attrs()){
       unsigned id = attr_pair.first;
       for(ir::attribute attr: attr_pair.second)
-      if(attr.is_llvm_attr())
+      if(attr.is_llvm_attr()){
         dst_fn->addAttribute(id, llvm_attr(dst_ctx, attr));
+      }
     }
+
     tgt_->set_kernel(dst_builder, dst_ctx, &dst, dst_fn);
     // set metadata
     Metadata *md_args[] = {

@@ -46,6 +46,7 @@ public:
   virtual Value* get_local_id(Module *module, Builder& builder, unsigned ax) = 0;
   virtual Value* get_block_id(Module *module, Builder& builder, unsigned ax) = 0;
   virtual Value* get_num_blocks(Module *module, Builder& builder, unsigned ax) = 0;
+  virtual unsigned guaranteed_alignment() = 0;
   bool is_gpu() const;
 
 private:
@@ -62,6 +63,7 @@ public:
   Value* get_local_id(Module *module, Builder& builder, unsigned ax);
   Value* get_block_id(Module *module, Builder& builder, unsigned ax);
   Value* get_num_blocks(Module *module, Builder& builder, unsigned ax);
+  unsigned guaranteed_alignment() { return 16; }
 };
 
 class nvidia_cu_target: public target {
@@ -74,6 +76,7 @@ public:
   Value* get_local_id(Module *module, Builder& builder, unsigned ax);
   Value* get_block_id(Module *module, Builder& builder, unsigned ax);
   Value* get_num_blocks(Module *module, Builder& builder, unsigned ax);
+  unsigned guaranteed_alignment() { return 16; }
 };
 
 class cpu_target: public target {
@@ -86,6 +89,7 @@ public:
   Value* get_local_id(Module *module, Builder& builder, unsigned ax);
   Value* get_block_id(Module *module, Builder& builder, unsigned ax);
   Value* get_num_blocks(Module *module, Builder& builder, unsigned ax);
+  unsigned guaranteed_alignment() { return 1; }
 };
 
 }

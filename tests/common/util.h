@@ -3,20 +3,34 @@
 #ifndef _TRITON_TESTS_UTIL_H
 #define _TRITON_TESTS_UTIL_H
 
+#include <iomanip>
 #include "triton/runtime/function.h"
 
+namespace drv = triton::driver;
 namespace rt = triton::runtime;
 
 inline size_t ceil(size_t x, size_t y) {
   return (x + y - 1) / y;
 };
 
-inline rt::function::grid_fn_ty grid(size_t M, size_t N) {
+inline rt::function::grid_fn_ty grid1d(size_t N) {
+  return [N](const rt::function::options_t& x) {
+    return rt::grid_t{ceil(N, x.D<int>("TN"))};
+  };
+}
+
+inline rt::function::grid_fn_ty grid2d(size_t M, size_t N) {
   return [M, N](const rt::function::options_t& x) {
     return rt::grid_t{ceil(M, x.D<int>("TM")),
                       ceil(N, x.D<int>("TN"))};
   };
 }
+
+enum order_t {
+  ROWMAJOR,
+  COLMAJOR
+};
+
 
 namespace aux{
 template<std::size_t...> struct seq{};
@@ -51,8 +65,11 @@ namespace testing {
     if(hc.size() != rc.size())
         return false;
     for(size_t i = 0; i < hc.size(); i++)
-        if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2)
+      if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
+        std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
+
         return false;
+      }
     return true;
     }
 

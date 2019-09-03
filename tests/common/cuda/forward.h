@@ -24,11 +24,11 @@ typedef enum{
 typedef enum {
     CUBLAS_GEMM_DFALT               = -1,
     CUBLAS_GEMM_DEFAULT             = -1,
-    CUBLAS_GEMM_ALGO0               =  0,
-    CUBLAS_GEMM_ALGO1               =  1,
-    CUBLAS_GEMM_ALGO2               =  2,
-    CUBLAS_GEMM_ALGO3               =  3,
-    CUBLAS_GEMM_ALGO4               =  4,
+    CUBLAS_GEMM_ALGO0               =  0, // maxwell_sgemm_32x128_nt
+    CUBLAS_GEMM_ALGO1               =  1, // maxwell_sgemm_64x64_nt
+    CUBLAS_GEMM_ALGO2               =  2, // maxwell_sgemm_128x32_nt
+    CUBLAS_GEMM_ALGO3               =  3, // maxwell_sgemm_128x64_nt
+    CUBLAS_GEMM_ALGO4               =  4, // maxwell_sgemm_128x128_nt
     CUBLAS_GEMM_ALGO5               =  5,
     CUBLAS_GEMM_ALGO6               =  6,
     CUBLAS_GEMM_ALGO7               =  7,

@@ -2,9 +2,9 @@
 #include <set>
 #include <algorithm>
 
-#include "triton/codegen/transform/shmem/barriers.h"
-#include "triton/codegen/analysis/shmem/allocation.h"
-#include "triton/codegen/analysis/shmem/info.h"
+#include "triton/codegen/transform/membar.h"
+#include "triton/codegen/analysis/memalloc.h"
+#include "triton/codegen/analysis/meminfo.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -16,7 +16,7 @@ namespace triton {
 namespace codegen{
 namespace transform{
 
-bool shmem_barriers::intersect(const interval_vec_t &X, interval_t x) {
+bool membar::intersect(const interval_vec_t &X, interval_t x) {
   return std::any_of(X.begin(), X.end(), [&](const interval_t &y){
     bool left_intersect = y.first <= x.first && x.first < y.second;
     bool right_intersect = y.first <= x.second && x.second < y.second;
@@ -24,13 +24,13 @@ bool shmem_barriers::intersect(const interval_vec_t &X, interval_t x) {
   });
 }
 
-bool shmem_barriers::intersect(const interval_vec_t &X, const interval_vec_t &Y) {
+bool membar::intersect(const interval_vec_t &X, const interval_vec_t &Y) {
   return std::any_of(Y.begin(), Y.end(), [&](const interval_t &y){
     return intersect(X, y);
   });
 }
 
-void shmem_barriers::add_reference(ir::value *v, interval_vec_t &res){
+void membar::add_reference(ir::value *v, interval_vec_t &res){
   if(buffer_info_->is_shared(v) && !dynamic_cast<ir::phi_node*>(v)){
     unsigned offset = alloc_->get_offset(v);
     unsigned num_bytes = alloc_->get_num_bytes(v);
@@ -38,17 +38,17 @@ void shmem_barriers::add_reference(ir::value *v, interval_vec_t &res){
   }
 }
 
-void shmem_barriers::get_read_intervals(ir::instruction *i, interval_vec_t &res){
+void membar::get_read_intervals(ir::instruction *i, interval_vec_t &res){
   for(ir::value *op: i->ops())
     add_reference(op, res);
 }
 
-void shmem_barriers::get_written_intervals(ir::instruction *i, interval_vec_t &res){
+void membar::get_written_intervals(ir::instruction *i, interval_vec_t &res){
   if(!dynamic_cast<ir::phi_node*>(i))
     add_reference(i, res);
 }
 
-void shmem_barriers::insert_barrier(ir::instruction *instr, ir::builder &builder) {
+void membar::insert_barrier(ir::instruction *instr, ir::builder &builder) {
   if(auto *phi = dynamic_cast<ir::phi_node*>(instr)) {
     std::set<ir::value*> incoming;
     for(unsigned n = 0; n < phi->get_num_incoming(); n++){
@@ -67,16 +67,16 @@ void shmem_barriers::insert_barrier(ir::instruction *instr, ir::builder &builder
   }
 }
 
-shmem_barriers::interval_vec_t shmem_barriers::join(const std::vector<interval_vec_t>& intervals) {
-  shmem_barriers::interval_vec_t result;
+membar::interval_vec_t membar::join(const std::vector<interval_vec_t>& intervals) {
+  membar::interval_vec_t result;
   for(auto x: intervals)
     for(interval_t i: x)
       result.push_back(i);
   return result;
 }
 
-std::pair<shmem_barriers::interval_vec_t,
-          shmem_barriers::interval_vec_t> shmem_barriers::transfer(ir::basic_block *block,
+std::pair<membar::interval_vec_t,
+          membar::interval_vec_t> membar::transfer(ir::basic_block *block,
                                             const interval_vec_t &written_to,
                                             const interval_vec_t &read_from,
                                             std::set<ir::instruction*>& insert_loc) {
@@ -104,7 +104,7 @@ std::pair<shmem_barriers::interval_vec_t,
   return std::make_pair(new_written_to, new_read_from);
 }
 
-void shmem_barriers::run(ir::module &mod) {
+void membar::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
   for(ir::function *fn: mod.get_function_list()){
     std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);

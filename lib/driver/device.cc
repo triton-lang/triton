@@ -27,7 +27,7 @@
 #include <memory>
 #include "triton/driver/device.h"
 #include "triton/driver/context.h"
-#include "triton/codegen/selection/target.h"
+#include "triton/codegen/target.h"
 
 namespace triton
 {
