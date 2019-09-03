@@ -65,7 +65,7 @@ public:
 
 // CUDA
 class cu_module: public module {
-  std::string compile_llvm_module(llvm::Module* module);
+  std::string compile_llvm_module(llvm::Module* module, driver::device* device);
 
 public:
   cu_module(driver::context* context, llvm::Module *module);

@@ -105,7 +105,7 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
   opt.UnsafeFPMath = false;
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
-  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, "-ptx60", opt,
+  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
                                                              llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
   // set data layout
   if(layout.empty())
@@ -217,22 +217,27 @@ ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(con
 //         CUDA             //
 /* ------------------------ */
 
-std::string cu_module::compile_llvm_module(llvm::Module* module) {
+std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device* device) {
    // options
    auto options = llvm::cl::getRegisteredOptions();
+//   for(auto& opt: options)
+//     std::cout << opt.getKey().str() << std::endl;
    static_cast<llvm::cl::opt<bool>*>(options["nvptx-short-ptr"])->setValue(true);
+   // compute capability
+   auto cc = ((driver::cu_device*)device)->compute_capability();
+   std::string sm = "sm_" + std::to_string(cc.first) + std::to_string(cc.second);
    // create
    llvm::SmallVector<char, 0> buffer;
-   module::compile_llvm_module(module, "nvptx64-nvidia-cuda", "sm_60", "", buffer, "", Assembly);
+   module::compile_llvm_module(module, "nvptx64-nvidia-cuda", sm, "", buffer, "ptx63", Assembly);
    std::string result(buffer.begin(), buffer.end());
    size_t start_replace = result.find(".version");
    size_t end_replace = result.find('\n', start_replace);
    assert(start_replace != std::string::npos);
-   result.replace(start_replace, end_replace - start_replace, ".version 6.0");
+   result.replace(start_replace, end_replace - start_replace, ".version 6.4");
    return result;
 }
 
-cu_module::cu_module(driver::context * context, llvm::Module* ll_module): cu_module(context, compile_llvm_module(ll_module)) { }
+cu_module::cu_module(driver::context * context, llvm::Module* ll_module): cu_module(context, compile_llvm_module(ll_module, context->device())) { }
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
 //  std::cout << source << std::endl;
