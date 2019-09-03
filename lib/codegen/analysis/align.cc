@@ -36,11 +36,11 @@ bool align::is_first_axis_unit(ir::value *x){
     return true;
 }
 
-std::vector<align::cst_info> align::populate_is_constant(ir::value *v) {
+align::cst_info align::populate_is_constant(ir::value *v) {
   if(is_constant_.find(v) != is_constant_.end())
     return is_constant_.at(v);
   // helper for the cache
-  auto cache = [this,v](const std::vector<cst_info>& value){
+  auto cache = [this,v](cst_info value){
     return add_to_cache(v, value, is_constant_); }
   ;
   // populate

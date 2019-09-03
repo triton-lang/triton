@@ -2,7 +2,6 @@
 #define TDL_INCLUDE_CODEGEN_ALIGNMENT_INFO_PASS_H
 
 #include <map>
-#include <vector>
 
 namespace triton {
 
@@ -25,7 +24,7 @@ private:
   bool is_first_axis_unit(ir::value *v);
 
   // populate maps
-  std::vector<cst_info> populate_is_constant(ir::value *v);
+  cst_info populate_is_constant(ir::value *v);
   unsigned populate_max_contiguous(ir::value *v);
   unsigned populate_starting_multiple(ir::value *v);
 
@@ -36,9 +35,9 @@ public:
   void copy(ir::value *dst, ir::value *src);
 
 private:
-  std::map<ir::value*, std::vector<cst_info>> is_constant_;
-  std::map<ir::value*, std::vector<unsigned>> max_contiguous_;
-  std::map<ir::value*, std::vector<unsigned>> starting_multiple_;
+  std::map<ir::value*, cst_info> is_constant_;
+  std::map<ir::value*, unsigned> max_contiguous_;
+  std::map<ir::value*, unsigned> starting_multiple_;
 };
 
 
