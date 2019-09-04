@@ -3,15 +3,16 @@ import triton
 import numpy as np
 
 src = """
+// Templates for accessing A
 #if AT == 1
-#define USEA ^a
+#define USE_A ^a
 #define STRIDE_AK lda
 #define STRIDE_AM 1
 #define BROADCAST_AK :, newaxis
 #define BROADCAST_AM newaxis, :
 #define SHAPE_A TK, TM
 #else
-#define USEA a
+#define USE_A a
 #define STRIDE_AK 1
 #define STRIDE_AM lda
 #define BROADCAST_AK newaxis, :
@@ -19,15 +20,16 @@ src = """
 #define SHAPE_A TM, TK
 #endif
 
+// Templates for accessing B
 #if BT == 1
-#define USEB ^b
+#define USE_B ^b
 #define STRIDE_BK 1
 #define STRIDE_BN ldb
 #define BROADCAST_BK newaxis, :
 #define BROADCAST_BN :, newaxis
 #define SHAPE_B TN, TK
 #else
-#define USEB b
+#define USE_B b
 #define STRIDE_BK ldb
 #define STRIDE_BN 1
 #define BROADCAST_BK :, newaxis
@@ -56,7 +58,7 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
   TYPE b[SHAPE_B] = *pb;
   // reduction loop
   for(int k = K; k > 0; k-= TK){
-    c += USEA @ USEB;
+    c += USE_A @ USE_B;
     pa = pa + TK * STRIDE_AK;
     pb = pb + TK * STRIDE_BK;
     a = *pa;
@@ -71,57 +73,54 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
 }
 """
 
-def cdiv(a, b):
-    return -(-a // b)
-
 class dot_op:
 
-  def __init__(self, trans_a = False, trans_b = False):
+  def __init__(self, transpose_a = False, transpose_b = False):
     self.dot = triton.op(src, ['C'])
-    self.trans_a = trans_a
-    self.trans_b = trans_b
+    self.transpose_a = transpose_a
+    self.transpose_b = transpose_b
   
   def __call__(self, a, b):
+    # extract shapes
     shape_a = triton.shape(a)
     shape_b = triton.shape(b)
-    M = shape_a[0]
-    Ka = shape_a[1]
-    Kb = shape_b[0]
-    N = shape_b[1]
+    M, Ka = shape_a[0], shape_a[1]
+    Kb, N = shape_b[0], shape_b[1]
     # transpose shapes
-    if self.trans_a:
+    if self.transpose_a:
       M, Ka = Ka, M
-    if self.trans_b:
+    if self.transpose_b:
       Kb, N = N, Kb
-    K = Ka
     # contiguous dimensions
-    lda = Ka
-    ldb = N
+    lda = M if self.transpose_a else Ka
+    ldb = Kb if self.transpose_b else N
     ldc = N
+    # allocate output
     c = triton.empty([M, N])
-    return self.dot(a, b, c, M, N, K, lda, ldb, ldc, 
-                    lambda opt: [cdiv(M, opt.d('TM')), cdiv(N, opt.d('TN'))],             
-                    AT = self.trans_a, BT = self.trans_b, TYPE = tf.float16, 
-                    TM = [128], TN = [ 128], TK = [32])
+    # compute
+    return self.dot(a, b, c, M, N, Ka, lda, ldb, ldc, 
+                    lambda opt: [triton.cdiv(M, opt.d('TM')), triton.cdiv(N, opt.d('TN'))],             
+                    AT = self.transpose_a, BT = self.transpose_b, TYPE = tf.float16, 
+                    TM = [128], TN = [128], TK = [32])
 
 
-def dot(a, b, trans_a = False, trans_b = False):
-  if (trans_a, trans_b) not in dot.ops:
-    dot.ops[trans_a, trans_b] = dot_op(trans_a, trans_b)
-  return dot.ops[trans_a, trans_b](a, b)
+def dot(a, b, transpose_a = False, transpose_b = False):
+  if (transpose_a, transpose_b) not in dot.ops:
+    dot.ops[transpose_a, transpose_b] = dot_op(transpose_a, transpose_b)
+  return dot.ops[transpose_a, transpose_b](a, b)
 dot.ops = dict()
 
-# @triton.register_gradient(dot_op)
-# def _dot_grad(op, dy):
-#   a = op.inputs[0]
-#   b = op.inputs[1]
-#   return [dot_tn(dy, b), dot_nt(a, dy), None, None, None, None, None, None, None]
+@tf.RegisterGradient("Dot")
+def _dot_grad(op, dy):
+   a = op.inputs[0]
+   b = op.inputs[1]
+   return [dot_tn(dy, b), dot_nt(a, dy), None, None, None, None, None, None, None]
 
 def run_dot():
   M, N, K = 128, 128, 128
   a = tf.placeholder(tf.float16, shape=[M, K])
   b = tf.placeholder(tf.float16, shape=[N, K])
-  c = dot(a, b, trans_a = False, trans_b = True)
+  c = dot(a, b, transpose_a = False, transpose_b = False)
   # Reference
   ha = np.random.rand(M, K).astype(np.float16)
   hb = np.random.rand(K, N).astype(np.float16)
@@ -131,7 +130,8 @@ def run_dot():
   result = sess.run([c], feed_dict = {a: ha,
                                       b: hb})[0]
   # Test
-  hresult = np.dot(ha, hb.T)
+  print(result)
+  hresult = np.dot(ha, hb)
   dif = np.abs(result - hresult)
   np.savetxt('dif.dat', dif, '%2.4f')
   print("dif: %f" % np.max(dif))

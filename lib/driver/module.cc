@@ -250,10 +250,10 @@ cu_module::cu_module(driver::context * context, std::string const & source) : mo
   try{
     dispatch::cuModuleLoadDataEx(&*cu_, source_.data(), 2, opt, optval);
   }catch(exception::cuda::base const &){
-//#ifdef TRITON_LOG_PTX_ERROR
+#ifdef TRITON_LOG_PTX_ERROR
     std::cerr << "Compilation Failed! Log: " << std::endl;
     std::cerr << errbuf << std::endl;
-//#endif
+#endif
     throw;
   }
 }

@@ -102,12 +102,15 @@ def _build(src, path, framework):
   # libraries
   libraries = ['triton']
   # add framework
+  extra_compile_args = []
   if framework == tensorflow_id:
     _import_tensorflow()
     library_dirs += [tensorflow.sysconfig.get_lib()]
     include_dirs += [tensorflow.sysconfig.get_include()]
     include_dirs += ['/usr/local/cuda/include/']
     libraries += ['tensorflow_framework']
+    ABI = tensorflow.__cxx11_abi_flag__ if "__cxx11_abi_flag__" in tensorflow.__dict__ else 0
+    extra_compile_args += ['-D_GLIBCXX_USE_CXX11_ABI={ABI}'.format(ABI=ABI)]
   elif framework == torch_id:
     _import_torch()
     prefix = os.path.dirname(torch.__file__)
@@ -120,7 +123,6 @@ def _build(src, path, framework):
   else:
     assert False
   # extra arguments
-  extra_compile_args = []
   extra_link_args = []
   # dependences
   depends = [os.path.realpath(libtriton.__file__)]
@@ -254,14 +256,14 @@ class op:
     return op(*op_args, id=op_id)
 
 
-# class register_gradient:
+class register_gradient:
 
-#   def __init__(self, op):
-#     self.op = op
+   def __init__(self, op):
+     self.op = op
 
-#   def __call__(self, f):
-#     name = 'Dot'
-#     ops.RegisterGradient(name)(f)
+   def __call__(self, f):
+     name = 'Dot'
+     ops.RegisterGradient(name)(f)
 
 
 def empty(shapes, framework = None):
@@ -275,6 +277,9 @@ def empty(shapes, framework = None):
   elif framework == torch_id:
     _import_torch()
     return torch.empty(*shapes)
+
+def cdiv(a, b):
+    return -(-a // b)
 
 class scalar:
   
