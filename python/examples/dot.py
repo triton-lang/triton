@@ -73,14 +73,14 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
 }
 """
 
-class dot_op:
+class dot_op(triton.op2):
 
   def __init__(self, transpose_a = False, transpose_b = False):
     self.dot = triton.op(src, ['C'])
     self.transpose_a = transpose_a
     self.transpose_b = transpose_b
   
-  def __call__(self, a, b):
+  def forward(self, a, b):
     dtype = a.dtype
     # extract shapes
     shape_a = triton.shape(a)
@@ -104,28 +104,27 @@ class dot_op:
                     AT = self.transpose_a, BT = self.transpose_b, TYPE = dtype, 
                     TM = [128], TN = [128], TK = [8])
 
+  def backward(self, op, dy):
+    a = op.inputs[0]
+    b = op.inputs[1]
+    da = dot_op(self.transpose_a, self.transpose_b).forward(dy, b)
+    db = dot_op(self.transpose_a, self.transpose_b).forward(a, dy)
+    return [da, db, None, None, None, None, None, None, None]
+
+
 def dot(a, b, transpose_a = False, transpose_b = False):
   if (transpose_a, transpose_b) not in dot.ops:
     dot.ops[transpose_a, transpose_b] = dot_op(transpose_a, transpose_b)
   return dot.ops[transpose_a, transpose_b](a, b)
 dot.ops = dict()
 
-@tf.RegisterGradient("Dot")
-def _dot_grad(op, dy):
-   a = op.inputs[0]
-   b = op.inputs[1]
-   print(op.triton)
-   return [dot_tn(dy, b), dot_nt(a, dy), None, None, None, None, None, None, None]
 
 def run_dot():
   M, N, K = 128, 128, 128
   a = tf.placeholder(tf.float32, shape=[M, K])
   b = tf.placeholder(tf.float32, shape=[N, K])
   c = dot(a, b, transpose_a = False, transpose_b = False)
-  print("LULZ")
-  da, db = tf.gradients(c, [a, b])
-  print(da, db)
-  exit
+  da = tf.gradients(c, [a])
   # Reference
   ha = np.random.rand(M, K).astype(np.float32)
   hb = np.random.rand(K, N).astype(np.float32)
