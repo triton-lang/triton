@@ -148,8 +148,9 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     options_t opt;
     unsigned i = 0;
     opt.num_warps = std::stoi(params[i++]);
-    for(auto it: opt_space_.defines)
+    for(auto it: opt_space_.defines){
       opt.defines[it.first] = params[i++];
+    }
     // pre-process
     TokenSequence tokens;
     Preprocessor cpp(&src_, true);
