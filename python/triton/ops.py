@@ -13,12 +13,22 @@ import setuptools
 import libtriton
 
 
+# clean-up libtriton resources
+import atexit
+@atexit.register
+def cleanup():
+  libtriton.cleanup()
+
+
 torch_id = 'torch'
 tensorflow_id = 'tensorflow'
 
 torch = None
 tensorflow = None
 tf_extra_ops = None
+
+
+
 
 def _import_torch():
   global torch
@@ -211,18 +221,24 @@ def _make_grid(args) :
   return grid
 
 
+class op2:
+
+  def __init__(self):
+    pass
+  
+  def __call__(self, *args, **kwargs):
+    result = self.forward(*args, **kwargs)
+    # backprop is defined
+    if(callable(getattr(self, 'backward', None))):
+      _import_tensorflow()
+      @tensorflow.RegisterGradient('Dot')
+      def gradient(op, dy):
+        return self.backward(op, dy)
+    return result
+
+
+
 class op:
-
-  class _definitions_descriptor:
-    def __init__(self):
-      self.values = dict()
-
-    def __set__(self, instance, value):
-      self.values[value[0]] = value[1]
-    
-    def __get__(self, instance, owner):
-      return self.values
-
 
   def __init__(self, src, outputs, framework = None):
     self.fw_id = dict()
@@ -233,9 +249,8 @@ class op:
     self.framework = _find_framework(framework)
     if self.framework == tensorflow_id:
       _import_tensorflow()
-      tensorflow.Operation.triton = property(op._definitions_descriptor)
 
-      
+
   def __call__(self, *args, **kwargs):
     # create a new op when defines are different
     key = zip(kwargs.keys(), kwargs.values())
@@ -251,7 +266,7 @@ class op:
         defines.append((k, values))
       opt = libtriton.options_space()
       opt.defines = defines
-      opt.num_warps = [1, 2, 4, 8]
+      opt.num_warps = [4]
       # create unique id for this op
       op_id = libtriton.make_op_id()
       self.fw_id[key] = op_id
@@ -269,9 +284,7 @@ class op:
     # create operands
     op_args = [x.handle if isinstance(x, scalar) else x for x in args[:-1]]
     # call framework op
-    tensor = op(*op_args, id=op_id)
-    tensor.op.triton = ('lol', 1)
-    return tensor
+    return op(*op_args, id=op_id)
 
 
 class register_gradient:

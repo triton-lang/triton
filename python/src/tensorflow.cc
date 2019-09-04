@@ -33,10 +33,26 @@ void register_grid(size_t id,
   id_grid_map[id].reset(new rt::function::grid_fn_ty(grid_fn));
 }
 
+void delete_grid(size_t id) {
+  id_grid_map.erase(id);
+  std::cout << "deleted " << id_grid_map.size() << std::endl;
+}
+
 void register_fn(size_t id,
                    const std::string& src,
                    const rt::function::options_space_t& opt) {
   id_fn_map[id].reset(new rt::function(src, opt));
+}
+
+void delete_fn(size_t id) {
+  id_fn_map.erase(id);
+    std::cout << "deleted " << id_fn_map.size() << std::endl;
+}
+
+void cleanup() {
+  id_grid_map.clear();
+  id_fn_map.clear();
+  i64scalar_map.clear();
 }
 
 size_t make_op_id() {
@@ -453,9 +469,12 @@ PYBIND11_MODULE(libtriton, m) {
 
     // hooks into triton constructs since frameworks may not use pybind11
     m.def("register_grid", &register_grid);
+    m.def("delete_grid", &delete_grid);
     m.def("register_fn", &register_fn);
+    m.def("delete_fn", &delete_fn);
     m.def("make_op_id", &make_op_id);
     m.def("make_scalar_id", &make_scalar_id);
-    m.def("retrieve_scalar", &retrieve_scalar)
+    m.def("retrieve_scalar", &retrieve_scalar);
+    m.def("cleanup", &cleanup);
     ;
 }
