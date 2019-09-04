@@ -25,6 +25,7 @@ tensorflow_id = 'tensorflow'
 
 torch = None
 tensorflow = None
+_gradient_registry = None
 tf_extra_ops = None
 
 
@@ -39,6 +40,9 @@ def _import_tensorflow():
   global tensorflow
   if tensorflow is None:
     import tensorflow
+  global _gradient_registry
+  if _gradient_registry is None:
+    from tensorflow.python.framework.ops import _gradient_registry
 
 def _import_tf_extra_ops():
   global tf_extra_ops
@@ -221,47 +225,85 @@ def _make_grid(args) :
   return grid
 
 
-class op2:
 
-  def __init__(self):
+class OpContext(object):
+
+    def save_for_backward(self, *tensors):
+      self.to_save = tensors
+
+    def mark_dirty(self, *args):
+      self.dirty_tensors = args
+    
+    @property
+    def saved_tensors(self):
+      return self.to_save
+
+
+class function_meta(type):
+
+    def __init__(cls, name, bases, attrs):
+        cls.contexts = dict()
+        cls.registered = False
+        return super(function_meta, cls).__init__(name, bases, attrs)
+
+class function(metaclass = function_meta):
+
+  def __init__(self, framework = None):
+    self.framework = _find_framework(framework)
     pass
   
-  def __call__(self, *args, **kwargs):
-    result = self.forward(*args, **kwargs)
-    # backprop is defined
-    if(callable(getattr(self, 'backward', None))):
-      _import_tensorflow()
-      @tensorflow.RegisterGradient('Dot')
-      def gradient(op, dy):
-        return self.backward(op, dy)
-    return result
+  @staticmethod
+  def forward(ctx, *args, **kwargs):
+      raise NotImplementedError
 
+  @staticmethod
+  def backward(ctx, grad_output):
+      raise NotImplementedError
+
+  @classmethod
+  def apply(cls, *args, **kwargs):
+    # call forward
+    ctx = OpContext()
+    result = cls.forward(ctx, *args, **kwargs)
+    id = result.op.get_attr('id')
+    cls.contexts[id] = ctx
+    # register backward
+    _import_tensorflow()
+    from tensorflow.python.framework.ops import _gradient_registry
+    name = result.op.op_def.name
+    if not cls.registered:
+      @tensorflow.RegisterGradient(name)
+      def gradient(op, dy):
+        id = op.get_attr('id')
+        return cls.backward(cls.contexts[id], dy)
+      cls.registered = True
+    # return result tensor
+    return result
+  
 
 
 class op:
 
   def __init__(self, src, outputs, framework = None):
     self.fw_id = dict()
-    self.fw_ops = dict()
     self.fw_grids = dict()
+    self.fw_op = None
     self.src = src
     self.outputs = outputs
     self.framework = _find_framework(framework)
-    if self.framework == tensorflow_id:
-      _import_tensorflow()
 
 
   def __call__(self, *args, **kwargs):
     # create a new op when defines are different
-    key = zip(kwargs.keys(), kwargs.values())
-    if key not in self.fw_ops:
+    key = '-'.join(['{key}-{val}'.format(key=key, val=val) for key, val in kwargs.items()])
+    if key not in self.fw_id.keys():
       # code generation options
       defines = []
       for k, v in kwargs.items():
         cvt = lambda x: _cvt_to_def_str(x, self.framework)
-        try:
+        if(isinstance(v, list)):
           values = list(map(cvt, v))
-        except TypeError:
+        else:
           values = [cvt(v)]
         defines.append((k, values))
       opt = libtriton.options_space()
@@ -272,30 +314,18 @@ class op:
       self.fw_id[key] = op_id
       # register function
       libtriton.register_fn(op_id, self.src, opt)
-      self.fw_ops[key] = _make_framework_op(self.src, self.outputs, opt, self.framework)
+      if self.fw_op is None:
+        self.fw_op = _make_framework_op(self.src, self.outputs, opt, self.framework)
 
     # retrieve framework op
     op_id = self.fw_id[key]
-    op = self.fw_ops[key]
     # register grid
-    grid = _make_grid(args)
-    self.fw_grids[key] = grid
-    libtriton.register_grid(op_id, self.fw_grids[key])
+    libtriton.register_grid(op_id, _make_grid(args))
     # create operands
     op_args = [x.handle if isinstance(x, scalar) else x for x in args[:-1]]
     # call framework op
-    return op(*op_args, id=op_id)
-
-
-class register_gradient:
-
-   def __init__(self, op):
-     self.op = op
-
-   def __call__(self, f):
-     name = 'Dot'
-     ops.RegisterGradient(name)(f)
-
+    return self.fw_op(*op_args, id=op_id)
+    
 
 def empty(shapes, dtype, framework = None):
   framework = _find_framework(framework)
