@@ -171,7 +171,7 @@ void gen_tf_register_op(std::ostream &os, const std::string &name,
         break;
     if(idx == args.size())
       throw std::runtime_error("unknown output");
-    os << "  .Output(\"out" << i << ": " << to_tf_scalar_ty(args[idx]->get_type()) << "\")\n";
+    os << "  .Output(\"out" << i << ": T" << idx << "\")\n";
   }
   os << "  .Attr(\"id: int\")" << std::endl;
   os << ";\n";
@@ -239,10 +239,6 @@ std::tuple<std::string,
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/op_kernel.h"
-#include "tensorflow/core/util/cuda_kernel_helper.h"
-#include "tensorflow/core/util/padding.h"
-#include "tensorflow/core/util/tensor_format.h"
-#include "tensorflow/core/framework/common_shape_fns.h"
 
 using namespace tensorflow;
 using GPUDevice = Eigen::GpuDevice;

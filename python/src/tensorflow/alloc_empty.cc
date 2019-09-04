@@ -26,5 +26,6 @@ class AllocEmptyOp : public OpKernel {
 REGISTER_KERNEL_BUILDER(Name("AllocEmpty").HostMemory("x").Device(DEVICE_CPU).Device(DEVICE_GPU), AllocEmptyOp);
 REGISTER_OP("AllocEmpty")
   .Input("x: int32")
-  .Output("y: float16")
+  .Attr("T : {bool, int8, int16, int32, int64, float16, float32, float64}")
+  .Output("y: T")
 ;
