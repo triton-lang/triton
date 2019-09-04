@@ -44,6 +44,7 @@ class CMakeBuild(build_ext):
         import tensorflow as tf
         tf_include_dirs = tf.sysconfig.get_include()
         tf_lib_dirs = tf.sysconfig.get_lib()
+        tf_abi = tf.__cxx11_abi_flag__ if "__cxx11_abi_flag__" in tf.__dict__ else 0
         tf_libs = 'tensorflow_framework'
 
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
@@ -52,7 +53,8 @@ class CMakeBuild(build_ext):
                       '-DPYTHON_INCLUDE_DIRS=' + python_include_dirs,
                       '-DTF_INCLUDE_DIRS=' + tf_include_dirs,
                       '-DTF_LIB_DIRS=' + tf_lib_dirs,
-                      '-DTF_LIBS=' + tf_libs]
+                      '-DTF_LIBS=' + tf_libs,
+                      '-DTF_ABI=' + str(tf_abi)]
 
         cfg = 'Debug' if self.debug else 'Release'
         build_args = ['--config', cfg]

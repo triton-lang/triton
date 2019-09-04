@@ -4,7 +4,7 @@
 #include <string>
 #include <regex>
 #include <algorithm>
-#include "triton/codegen/selection/selection.h"
+#include "triton/codegen/selection.h"
 #include "triton/runtime/function.h"
 #include "triton/lang/code_gen.h"
 #include "triton/lang/parser.h"

@@ -42,6 +42,8 @@ if(BUILD_PYTHON_MODULE)
     file(GLOB_RECURSE EXTRA_TF_OPS_SRC python/src/tensorflow/*.cc)
     add_library(extra_tf_ops SHARED ${EXTRA_TF_OPS_SRC})
     target_link_libraries(extra_tf_ops triton ${TF_LIBS})
+    target_compile_definitions(extra_tf_ops PRIVATE "-D_GLIBCXX_USE_CXX11_ABI=${TF_ABI}")
+
 endif()
 
 

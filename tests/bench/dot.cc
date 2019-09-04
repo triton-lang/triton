@@ -29,6 +29,7 @@ inline rt::function::grid_fn_ty grid2d(size_t M, size_t N) {
 std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K){
   typedef float NumericT;
   std::string ty = "float";
+  cublasDataType_t cuty = CUDA_R_32F;
   size_t dt_nbytes = sizeof(NumericT);
   drv::context* context = stream->context();
   // leading dimensions
@@ -44,10 +45,10 @@ std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, i
   opt.defines.push_back({"TYPE", {ty}});
   opt.defines.push_back({"AT", {AT?"1":"0"}});
   opt.defines.push_back({"BT", {BT?"1":"0"}});
-  opt.defines.push_back({"TM", {"128"}});
-  opt.defines.push_back({"TN", {"64"}});
+  opt.defines.push_back({"TM", {"64", "128"}});
+  opt.defines.push_back({"TN", {"64", "128"}});
   opt.defines.push_back({"TK", {"8"}});
-  opt.num_warps = {4};
+  opt.num_warps = {2, 4, 8};
   // create function
   rt::function function(src::dot, opt);
   // benchmark available libraries
@@ -57,10 +58,11 @@ std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, i
   if(cublas::cublasinit()){
     NumericT alpha(static_cast<double>(1));
     NumericT beta(static_cast<double>(0));
-    cublasGemmAlgo_t fastest = CUBLAS_GEMM_ALGO5;
-//    cublasGemm(CUDA_R_32F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
-    double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_32F, stream, AT, BT, M, N, K,
-                                                    &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, nullptr, fastest); }, stream);
+    cublasGemmAlgo_t fastest;
+    cublasGemm(cuty, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
+    double cublas_ms = triton::tools::bench([&]() { cublasGemm(cuty, stream, AT, BT, M, N, K,
+                                                               &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
+                                                               ldc, nullptr, fastest); }, stream);
     result.push_back(tflops(cublas_ms));
   }
   // triton

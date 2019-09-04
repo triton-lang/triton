@@ -22,8 +22,8 @@ std::vector<double> do_bench(drv::stream* stream, int32_t N){
   // create options
   rt::function::options_space_t opt;
   opt.defines.push_back({"TYPE", {ty}});
-  opt.defines.push_back({"TN", {"512"}});
-  opt.num_warps = {4};
+  opt.defines.push_back({"TN", {"128"}});
+  opt.num_warps = {1, 2, 4, 8};
   // create function
   rt::function function(src::copy1d, opt);
   // benchmark available libraries
@@ -42,7 +42,7 @@ int main() {
   triton::driver::stream* stream = triton::driver::stream::create(context);
   // shapes to benchmark
   typedef std::tuple<int> config_t;
-  std::vector<config_t> configs = { 1024*1024*16 };
+  std::vector<config_t> configs = { 1024*1024*32 };
   int N;
   for(const auto& c: configs){
     std::tie(N) = c;
