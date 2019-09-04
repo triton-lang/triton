@@ -50,7 +50,7 @@ endif()
 # Triton
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-target_link_libraries(triton LLVM ${TF_LIBS})
+target_link_libraries(triton LLVM)
 
 # Warning level
 #if(MSVC)

@@ -108,7 +108,7 @@ def _build(src, path, framework):
     library_dirs += [tensorflow.sysconfig.get_lib()]
     include_dirs += [tensorflow.sysconfig.get_include()]
     include_dirs += ['/usr/local/cuda/include/']
-    libraries += ['tensorflow_framework']
+    libraries += [tensorflow.sysconfig.get_link_flags()[1].replace('-l', '')]
     ABI = tensorflow.__cxx11_abi_flag__ if "__cxx11_abi_flag__" in tensorflow.__dict__ else 0
     extra_compile_args += ['-D_GLIBCXX_USE_CXX11_ABI={ABI}'.format(ABI=ABI)]
   elif framework == torch_id:
@@ -210,7 +210,19 @@ def _make_grid(args) :
     return result
   return grid
 
+
 class op:
+
+  class _definitions_descriptor:
+    def __init__(self):
+      self.values = dict()
+
+    def __set__(self, instance, value):
+      self.values[value[0]] = value[1]
+    
+    def __get__(self, instance, owner):
+      return self.values
+
 
   def __init__(self, src, outputs, framework = None):
     self.fw_id = dict()
@@ -219,6 +231,10 @@ class op:
     self.src = src
     self.outputs = outputs
     self.framework = _find_framework(framework)
+    if self.framework == tensorflow_id:
+      _import_tensorflow()
+      tensorflow.Operation.triton = property(op._definitions_descriptor)
+
       
   def __call__(self, *args, **kwargs):
     # create a new op when defines are different
@@ -253,7 +269,9 @@ class op:
     # create operands
     op_args = [x.handle if isinstance(x, scalar) else x for x in args[:-1]]
     # call framework op
-    return op(*op_args, id=op_id)
+    tensor = op(*op_args, id=op_id)
+    tensor.op.triton = ('lol', 1)
+    return tensor
 
 
 class register_gradient:
@@ -266,14 +284,14 @@ class register_gradient:
      ops.RegisterGradient(name)(f)
 
 
-def empty(shapes, framework = None):
+def empty(shapes, dtype, framework = None):
   framework = _find_framework(framework)
   if framework == tensorflow_id:
     _import_tensorflow()
     _import_tf_extra_ops
     args = [x.handle if isinstance(x, scalar) else x for x in shapes]
     args = tensorflow.stack(args)
-    return tf_extra_ops.alloc_empty(args)
+    return tf_extra_ops.alloc_empty(args, T = dtype)
   elif framework == torch_id:
     _import_torch()
     return torch.empty(*shapes)

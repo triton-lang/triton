@@ -81,6 +81,7 @@ class dot_op:
     self.transpose_b = transpose_b
   
   def __call__(self, a, b):
+    dtype = a.dtype
     # extract shapes
     shape_a = triton.shape(a)
     shape_b = triton.shape(b)
@@ -96,13 +97,12 @@ class dot_op:
     ldb = Kb if self.transpose_b else N
     ldc = N
     # allocate output
-    c = triton.empty([M, N])
+    c = triton.empty([M, N], dtype = dtype)
     # compute
     return self.dot(a, b, c, M, N, Ka, lda, ldb, ldc, 
                     lambda opt: [triton.cdiv(M, opt.d('TM')), triton.cdiv(N, opt.d('TN'))],             
-                    AT = self.transpose_a, BT = self.transpose_b, TYPE = tf.float16, 
-                    TM = [128], TN = [128], TK = [32])
-
+                    AT = self.transpose_a, BT = self.transpose_b, TYPE = dtype, 
+                    TM = [128], TN = [128], TK = [8])
 
 def dot(a, b, transpose_a = False, transpose_b = False):
   if (transpose_a, transpose_b) not in dot.ops:
@@ -114,20 +114,25 @@ dot.ops = dict()
 def _dot_grad(op, dy):
    a = op.inputs[0]
    b = op.inputs[1]
+   print(op.triton)
    return [dot_tn(dy, b), dot_nt(a, dy), None, None, None, None, None, None, None]
 
 def run_dot():
   M, N, K = 128, 128, 128
-  a = tf.placeholder(tf.float16, shape=[M, K])
-  b = tf.placeholder(tf.float16, shape=[N, K])
+  a = tf.placeholder(tf.float32, shape=[M, K])
+  b = tf.placeholder(tf.float32, shape=[N, K])
   c = dot(a, b, transpose_a = False, transpose_b = False)
+  print("LULZ")
+  da, db = tf.gradients(c, [a, b])
+  print(da, db)
+  exit
   # Reference
-  ha = np.random.rand(M, K).astype(np.float16)
-  hb = np.random.rand(K, N).astype(np.float16)
+  ha = np.random.rand(M, K).astype(np.float32)
+  hb = np.random.rand(K, N).astype(np.float32)
   # Run
   sess = tf.InteractiveSession()
   sess.run(tf.global_variables_initializer())
-  result = sess.run([c], feed_dict = {a: ha,
+  result = sess.run([da], feed_dict = {a: ha,
                                       b: hb})[0]
   # Test
   print(result)

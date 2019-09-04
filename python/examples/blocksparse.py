@@ -87,18 +87,17 @@ src = '''
     else {
       int *plock = locks + ridx*nlocks + lockid - 1;
       int *pcount = plock + get_num_program(0)*nlocks;
-      while(__atomic_cas(plock, 0, 1));
+      while(atomic_cas(plock, 0, 1));
       int count = *pcount;
       if(count == 0)
         *?(checkc) pc = c;
       else
         *?(checkc) pc = c + *pc;
-      __atomic_exch(pcount, 1);
-      __atomic_exch(plock, 0);
+      atomic_exch(pcount, 1);
+      atomic_exch(plock, 0);
     }
   }
 '''
-
 
 # std::string dot::triton_c_src_dw() const {
 #   bool AT = (op_ == WGRAD);
