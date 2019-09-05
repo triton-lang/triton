@@ -58,7 +58,7 @@ def _write_bindings(src, root):
   
 def _build(src, path):
   # include directories
-  triton_include_dirs = ['/home/philippe/development/triton/include']
+  triton_include_dirs = [os.path.realpath(os.path.join(libtriton.__file__, 'include'))]
   include_dirs = triton_include_dirs 
   # library directories
   triton_library_dirs = [os.path.realpath(os.path.join(libtriton.__file__, os.path.pardir))]
