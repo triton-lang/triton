@@ -25,7 +25,14 @@ def _import_tf_extra_ops():
     tf_extra_ops = tensorflow.load_op_library(path)
 
 def has_tensorflow():
-  return 'tensorflow' in sys.modules
+  result = 'tensorflow' in sys.modules
+  if result:
+    _import_tensorflow()
+    _import_tf_extra_ops()
+  return result
 
 def has_torch():
-  return 'torch' in sys.modules
+  result = 'torch' in sys.modules
+  if result:
+    _import_torch()
+  return result

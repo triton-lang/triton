@@ -28,7 +28,6 @@ class function(metaclass = function_meta):
 
   @classmethod
   def apply_torch(cls, *args, **kwargs):
-    fw._import_torch()
     class TorchFunction(fw.torch.autograd.Function):
       @staticmethod
       def forward(ctx, *targs, **tkwargs):
@@ -40,7 +39,6 @@ class function(metaclass = function_meta):
 
   @classmethod
   def apply_tensorflow(cls, *args, **kwargs):
-    fw._import_tensorflow()
     ctx = OpContext()
     result = cls.forward(ctx, *args, **kwargs)
     id = result.op.get_attr('id')

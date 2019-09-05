@@ -183,17 +183,7 @@ class kernel:
     self.src = src
     self.outputs = outputs
 
-  def _init_framework(self):
-    if fw.has_tensorflow():
-      fw._import_tensorflow()
-      fw._import_tf_extra_ops()
-    elif fw.has_torch():
-      fw._import_torch()
-    else:
-      assert False
-
   def __call__(self, *args, **kwargs):
-    self._init_framework()
     # create a new framework op when defines are different
     key = '-'.join(['{key}-{val}'.format(key=key, val=val) for key, val in kwargs.items()])
     if key not in self.fw_id.keys():
