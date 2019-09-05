@@ -188,6 +188,7 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
 
 std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::context *context, const options_t& opt) {
   std::unique_ptr<codegen::target> target = context->device()->make_target();
+
   // create passes
   codegen::analysis::grids grids(opt.num_warps);
   codegen::analysis::meminfo shmem_info;
@@ -201,20 +202,13 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::reassociate reassociate(&alignment_info, &grids);
   codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, target.get());
 
-
-
   // run passes
   peephole.run(module);
   dce.run(module);
-//  ir::print(module, std::cout);
   alignment_info.run(module);
   grids.run(module);
-//  ir::print(module, std::cout);
-
   reassociate.run(module);
   dce.run(module);
-//  ir::print(module, std::cout);
-
   peephole.run(module);
 
   if(target->is_gpu()){
@@ -233,7 +227,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
   selection.run(module, *llvm);
   // return binary
-  std::unique_ptr<driver::module> res(driver::module::create(context, llvm.get()));
+  std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   return res;
 }
 

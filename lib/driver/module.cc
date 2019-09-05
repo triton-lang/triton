@@ -76,16 +76,16 @@ driver::context* module::context() const {
   return ctx_;
 }
 
-module* module::create(driver::context* ctx, llvm::Module *src) {
+module* module::create(driver::context* ctx, std::unique_ptr<llvm::Module> src) {
   switch(ctx->backend()){
-    case CUDA: return new cu_module(ctx, src);
-    case OpenCL: return new ocl_module(ctx, src);
-    case Host: return new host_module(ctx, src);
+    case CUDA: return new cu_module(ctx, std::move(src));
+    case OpenCL: return new ocl_module(ctx, std::move(src));
+    case Host: return new host_module(ctx, std::move(src));
     default: throw std::runtime_error("unknown backend");
   }
 }
 
-void module::compile_llvm_module(llvm::Module* module, const std::string& triple,
+void module::compile_llvm_module(std::unique_ptr<llvm::Module> module, const std::string& triple,
                                  const std::string &proc, std::string layout,
                                  llvm::SmallVectorImpl<char> &buffer,
                                  const std::string& features,
@@ -133,7 +133,7 @@ void module::compile_llvm_module(llvm::Module* module, const std::string& triple
 //        Host              //
 /* ------------------------ */
 
-host_module::host_module(driver::context * context, llvm::Module* src): module(context, host_module_t(), true) {
+host_module::host_module(driver::context * context, std::unique_ptr<llvm::Module> src): module(context, host_module_t(), true) {
   init_llvm();
   // host info
 //  std::string triple = llvm::sys::getDefaultTargetTriple();
@@ -147,7 +147,7 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
   llvm::Type *args_ty = llvm::Type::getInt8PtrTy(ctx)->getPointerTo();
   llvm::Type *int32_ty = llvm::Type::getInt32Ty(ctx);
   llvm::FunctionType *main_ty = llvm::FunctionType::get(void_ty, {args_ty, int32_ty, int32_ty, int32_ty}, false);
-  llvm::Function* main = llvm::Function::Create(main_ty, llvm::Function::ExternalLinkage, "main", src);
+  llvm::Function* main = llvm::Function::Create(main_ty, llvm::Function::ExternalLinkage, "main", &*src);
   llvm::Function* fn = src->getFunction("matmul");
   llvm::FunctionType *fn_ty = fn->getFunctionType();
   std::vector<llvm::Value*> fn_args(fn_ty->getNumParams());
@@ -169,10 +169,9 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 
 
   // create execution engine
-  auto cloned = llvm::CloneModule(*src);
-  for(llvm::Function& fn: cloned->functions())
+  for(llvm::Function& fn: src->functions())
     hst_->functions[fn.getName()] = &fn;
-  llvm::EngineBuilder builder(std::move(cloned));
+  llvm::EngineBuilder builder(std::move(src));
   builder.setErrorStr(&hst_->error);
   builder.setMCJITMemoryManager(llvm::make_unique<llvm::SectionMemoryManager>());
   builder.setOptLevel(llvm::CodeGenOpt::Aggressive);
@@ -185,7 +184,7 @@ host_module::host_module(driver::context * context, llvm::Module* src): module(c
 //         OpenCL           //
 /* ------------------------ */
 
-ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(context, cl_program(), true) {
+ocl_module::ocl_module(driver::context * context, std::unique_ptr<llvm::Module> src): module(context, cl_program(), true) {
   throw std::runtime_error("not supported");
 //  init_llvm();
 //  llvm::SmallVector<char, 0> buffer;
@@ -217,18 +216,20 @@ ocl_module::ocl_module(driver::context * context, llvm::Module* src): module(con
 //         CUDA             //
 /* ------------------------ */
 
-std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device* device) {
+std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module, driver::device* device) {
    // options
    auto options = llvm::cl::getRegisteredOptions();
 //   for(auto& opt: options)
 //     std::cout << opt.getKey().str() << std::endl;
-   static_cast<llvm::cl::opt<bool>*>(options["nvptx-short-ptr"])->setValue(true);
+   auto* short_ptr = static_cast<llvm::cl::opt<bool>*>(options["nvptx-short-ptr"]);
+   assert(short_ptr);
+   short_ptr->setValue(true);
    // compute capability
    auto cc = ((driver::cu_device*)device)->compute_capability();
    std::string sm = "sm_" + std::to_string(cc.first) + std::to_string(cc.second);
    // create
    llvm::SmallVector<char, 0> buffer;
-   module::compile_llvm_module(module, "nvptx64-nvidia-cuda", sm, "", buffer, "ptx63", Assembly);
+   module::compile_llvm_module(std::move(module), "nvptx64-nvidia-cuda", sm, "", buffer, "ptx63", Assembly);
    std::string result(buffer.begin(), buffer.end());
    size_t start_replace = result.find(".version");
    size_t end_replace = result.find('\n', start_replace);
@@ -237,7 +238,7 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
    return result;
 }
 
-cu_module::cu_module(driver::context * context, llvm::Module* ll_module): cu_module(context, compile_llvm_module(ll_module, context->device())) { }
+cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll_module): cu_module(context, compile_llvm_module(std::move(ll_module), context->device())) { }
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
 //  std::cout << source << std::endl;

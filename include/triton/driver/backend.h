@@ -66,7 +66,6 @@ struct backend
 
   public:
     static void release();
-    static driver::module* get(driver::stream* stream, std::string const & name, llvm::Module *src);
 
   private:
     static std::map<std::tuple<driver::stream*, std::string>, driver::module*> cache_;
