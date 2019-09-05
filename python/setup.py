@@ -37,10 +37,9 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         self.debug = True
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
-        # python directors
+        # python directories
         python_include_dirs = distutils.sysconfig.get_python_inc()
         python_lib_dirs = distutils.sysconfig.get_config_var('LIBDIR')
-        # tensorflow directories
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
                       '-DBUILD_TESTS=OFF',
                       '-DBUILD_PYTHON_MODULE=ON',
