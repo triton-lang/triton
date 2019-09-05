@@ -202,9 +202,11 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, target.get());
 
 
+
   // run passes
   peephole.run(module);
   dce.run(module);
+//  ir::print(module, std::cout);
   alignment_info.run(module);
   grids.run(module);
 //  ir::print(module, std::cout);
