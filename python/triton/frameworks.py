@@ -9,6 +9,13 @@ torch = None
 tensorflow = None
 tf_extra_ops = None
 
+def to_str(framework):
+  if framework == tensorflow_id:
+    return 'tensorflow'
+  elif framework == torch_id:
+    return 'torch'
+  else:
+    assert False
 
 def _import_torch():
   global torch

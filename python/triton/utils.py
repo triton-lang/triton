@@ -7,12 +7,13 @@ def cdiv(a, b):
 def empty(shapes, dtype, framework = None):
   framework = fw._find_framework(framework)
   if framework == fw.tensorflow_id:
+    fw._import_tensorflow()
     args = [x.handle if isinstance(x, scalar) else x for x in shapes]
     args = fw.tensorflow.stack(args)
     return fw.tf_extra_ops.alloc_empty(args, T = dtype)
   elif framework == fw.torch_id:
-    _import_torch()
-    return fw.torch.empty(*shapes)
+    fw._import_torch()
+    return fw.torch.empty(*shapes).cuda()
 
 class lazy_shape:
 
@@ -22,15 +23,20 @@ class lazy_shape:
   def __getitem__(self, key):
     return scalar(self.shape[key])
 
-def shape(A) :
-  fw._import_tensorflow()
-  return lazy_shape(fw.tensorflow.shape(A))
+def shape(A, framework = None) :
+  framework = fw._find_framework(framework)
+  if framework == fw.tensorflow_id:
+    fw._import_tensorflow()
+    return lazy_shape(fw.tensorflow.shape(A))
+  else:
+    return A.shape
 
 
 class scalar:
   
-  def __init__(self, x):
+  def __init__(self, x, framework = None):
     self.id = libtriton.make_scalar_id()
+    fw._import_tf_extra_ops()
     self.handle = fw.tf_extra_ops.register_scalar(x, id=self.id)
     self.assume_initialized = False
   
