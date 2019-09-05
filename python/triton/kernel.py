@@ -12,7 +12,7 @@ import setuptools
 # triton
 import triton.frameworks as fw
 import triton.utils
-import libtriton
+import triton._C.libtriton as libtriton
 
 def _make_framework_src(src, out, grid):
   if fw.has_tensorflow():
