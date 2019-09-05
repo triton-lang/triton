@@ -103,14 +103,6 @@ void backend::modules::release(){
   cache_.clear();
 }
 
-driver::module* backend::modules::get(driver::stream* stream, std::string const & name, llvm::Module* src){
-  std::tuple<driver::stream*, std::string> key(stream, name);
-  if(cache_.find(key)==cache_.end()){
-    return &*cache_.insert({key, driver::module::create(stream->context(), src)}).first->second;
-  }
-  return &*cache_.at(key);
-}
-
 std::map<std::tuple<driver::stream*, std::string>, driver::module*>  backend::modules::cache_;
 
 /*-----------------------------------*/
