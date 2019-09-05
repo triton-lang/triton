@@ -10,6 +10,23 @@ from distutils.version import LooseVersion
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
 from setuptools.command.test import test as TestCommand
+import distutils.spawn
+
+
+def find_llvm():
+    versions = ['9.0', '9', '90', '8.0', '8', '80']
+    supported = ['llvm-config-{v}'.format(v=v) for v in versions]
+    paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
+    paths = [p for p in paths if p is not None]
+    if paths:
+      return paths[0]
+    config = distutils.spawn.find_executable('llvm-config')
+    instructions = 'Please install llvm-{8, 9, 10}-dev'
+    if config is None:
+        raise RuntimeError('Could not find llvm-config. ' + instructions)
+    version = os.popen('{config} --version'.format(config=config)).read()
+    raise RuntimeError('Version {v} not supported. '.format(v=version) + instructions)
+
 
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=''):
@@ -44,7 +61,8 @@ class CMakeBuild(build_ext):
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
                       '-DBUILD_TESTS=OFF',
                       '-DBUILD_PYTHON_MODULE=ON',
-                      '-DPYTHON_INCLUDE_DIRS=' + python_include_dirs]
+                      '-DPYTHON_INCLUDE_DIRS=' + python_include_dirs,
+                      '-DLLVM_CONFIG=' + find_llvm()]
         # tensorflow compatibility
         try:
             import tensorflow as tf
@@ -79,6 +97,8 @@ class CMakeBuild(build_ext):
         subprocess.check_call(['cmake', sourcedir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(['cmake', '--build', '.'] + build_args, cwd=self.build_temp)
        
+
+find_llvm()
 
 directories = [x[0] for x in os.walk(os.path.join(os.path.pardir, 'include'))]
 data = []
