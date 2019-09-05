@@ -1,6 +1,6 @@
 import sys
 import os
-import libtriton
+import triton._C.libtriton as libtriton
 
 torch = None
 tensorflow = None

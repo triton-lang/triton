@@ -1,5 +1,5 @@
 import triton.frameworks as fw
-import libtriton
+import triton._C.libtriton as libtriton
 
 def cdiv(a, b):
     return -(-a // b)
