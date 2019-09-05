@@ -122,7 +122,7 @@ void vector_modifiers(enable_if_t<is_copy_constructible<typename Vector::value_t
 
     cl.def(init([](iterable it) {
         auto v = std::unique_ptr<Vector>(new Vector());
-        v->reserve(len(it));
+        v->reserve(len_hint(it));
         for (handle h : it)
            v->push_back(h.cast<T>());
         return v.release();
@@ -131,6 +131,28 @@ void vector_modifiers(enable_if_t<is_copy_constructible<typename Vector::value_t
     cl.def("extend",
        [](Vector &v, const Vector &src) {
            v.insert(v.end(), src.begin(), src.end());
+       },
+       arg("L"),
+       "Extend the list by appending all the items in the given list"
+    );
+
+    cl.def("extend",
+       [](Vector &v, iterable it) {
+           const size_t old_size = v.size();
+           v.reserve(old_size + len_hint(it));
+           try {
+               for (handle h : it) {
+                   v.push_back(h.cast<T>());
+               }
+           } catch (const cast_error &) {
+               v.erase(v.begin() + static_cast<typename Vector::difference_type>(old_size), v.end());
+               try {
+                   v.shrink_to_fit();
+               } catch (const std::exception &) {
+                   // Do nothing
+               }
+               throw;
+           }
        },
        arg("L"),
        "Extend the list by appending all the items in the given list"
@@ -577,6 +599,15 @@ class_<Map, holder_type> bind_map(handle scope, const std::string &name, Args&&.
            return it->second;
         },
         return_value_policy::reference_internal // ref + keepalive
+    );
+
+    cl.def("__contains__",
+        [](Map &m, const KeyType &k) -> bool {
+            auto it = m.find(k);
+            if (it == m.end())
+              return false;
+           return true;
+        }
     );
 
     // Assignment provided only if the type is copyable

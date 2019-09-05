@@ -25,7 +25,8 @@ class pythonbuf : public std::streambuf {
 private:
     using traits_type = std::streambuf::traits_type;
 
-    char d_buffer[1024];
+    const size_t buf_size;
+    std::unique_ptr<char[]> d_buffer;
     object pywrite;
     object pyflush;
 
@@ -42,8 +43,11 @@ private:
             // This subtraction cannot be negative, so dropping the sign
             str line(pbase(), static_cast<size_t>(pptr() - pbase()));
 
-            pywrite(line);
-            pyflush();
+            {
+                gil_scoped_acquire tmp;
+                pywrite(line);
+                pyflush();
+            }
 
             setp(pbase(), epptr());
         }
@@ -51,10 +55,13 @@ private:
     }
 
 public:
-    pythonbuf(object pyostream)
-        : pywrite(pyostream.attr("write")),
+
+    pythonbuf(object pyostream, size_t buffer_size = 1024)
+        : buf_size(buffer_size),
+          d_buffer(new char[buf_size]),
+          pywrite(pyostream.attr("write")),
           pyflush(pyostream.attr("flush")) {
-        setp(d_buffer, d_buffer + sizeof(d_buffer) - 1);
+        setp(d_buffer.get(), d_buffer.get() + buf_size - 1);
     }
 
     /// Sync before destroy
@@ -194,7 +201,7 @@ inline class_<detail::OstreamRedirect> add_ostream_redirect(module m, std::strin
     return class_<detail::OstreamRedirect>(m, name.c_str(), module_local())
         .def(init<bool,bool>(), arg("stdout")=true, arg("stderr")=true)
         .def("__enter__", &detail::OstreamRedirect::enter)
-        .def("__exit__", [](detail::OstreamRedirect &self, args) { self.exit(); });
+        .def("__exit__", [](detail::OstreamRedirect &self_, args) { self_.exit(); });
 }
 
 NAMESPACE_END(PYBIND11_NAMESPACE)

@@ -16,6 +16,8 @@
 #include <cxxabi.h>
 #endif
 
+#include "common.h"
+
 NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
 NAMESPACE_BEGIN(detail)
 /// Erase all occurrences of a substring

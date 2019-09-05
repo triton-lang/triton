@@ -54,9 +54,20 @@ public:
             }
         }
 
-        value = [func](Args... args) -> Return {
+        // ensure GIL is held during functor destruction
+        struct func_handle {
+            function f;
+            func_handle(function&& f_) : f(std::move(f_)) {}
+            func_handle(const func_handle&) = default;
+            ~func_handle() {
+                gil_scoped_acquire acq;
+                function kill_f(std::move(f));
+            }
+        };
+
+        value = [hfunc = func_handle(std::move(func))](Args... args) -> Return {
             gil_scoped_acquire acq;
-            object retval(func(std::forward<Args>(args)...));
+            object retval(hfunc.f(std::forward<Args>(args)...));
             /* Visual studio 2015 parser issue: need parentheses around this expression */
             return (retval.template cast<Return>());
         };
@@ -75,10 +86,8 @@ public:
             return cpp_function(std::forward<Func>(f_), policy).release();
     }
 
-    PYBIND11_TYPE_CASTER(type, _("Callable[[") +
-            argument_loader<Args...>::arg_names() + _("], ") +
-            make_caster<retval_type>::name() +
-            _("]"));
+    PYBIND11_TYPE_CASTER(type, _("Callable[[") + concat(make_caster<Args>::name...) + _("], ")
+                               + make_caster<retval_type>::name + _("]"));
 };
 
 NAMESPACE_END(detail)

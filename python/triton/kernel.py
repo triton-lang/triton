@@ -217,6 +217,7 @@ class kernel:
     if fw.has_tensorflow():
       return self.fw_op(*op_args, id=op_id)
     elif fw.has_torch():
-      return self.fw_op(op_id, *op_args)
+      args = [x.contiguous() if isinstance(x, fw.torch.Tensor) else x for x in op_args]
+      return self.fw_op(op_id, *args)
     else:
       assert False

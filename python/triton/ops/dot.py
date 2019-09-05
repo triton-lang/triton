@@ -20,8 +20,8 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
   TYPE* pa[SHAPE_A] = A + rka[BROADCAST_AK] * STRIDE_AK + rxa[BROADCAST_AM] * STRIDE_AM;
   TYPE* pb[SHAPE_B] = B + rkb[BROADCAST_BK] * STRIDE_BK + ryb[BROADCAST_BN] * STRIDE_BN;
   // prefetches operands
-  TYPE a[SHAPE_A] = *pa;
-  TYPE b[SHAPE_B] = *pb;
+  TYPE a[SHAPE_A] = (*pa);
+  TYPE b[SHAPE_B] = (*pb);
   // reduction loop
   for(int k = K; k > 0; k-= TK){
     c += USE_A @ USE_B;
@@ -80,16 +80,19 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
               'SHAPE_B'     : 'TN, TK'     if transpose_b else 'TK, TN'}
     return _dot.kernel(a, b, c, M, N, Ka, lda, ldb, ldc, grid,           
                   AT = transpose_a, BT = transpose_b, TYPE = dtype, 
-                  TM = [64, 128], TN = [64, 128], TK = [8], **macros)
+                  TM = [128], TN = [128], TK = [8], **macros)
 
   @staticmethod
   def forward(ctx, a, b, transpose_a = False, transpose_b = False):
-    ctx.save_for_backward(a, b, transpose_a, transpose_b)
+    ctx.save_for_backward(a, b)
+    ctx.t_a = transpose_a
+    ctx.t_b = transpose_b
     return _dot._call(a, b, transpose_a, transpose_b)
 
   @staticmethod
   def backward(ctx, dy):
-    a, b, t_a, t_b = ctx.saved_tensors
+    a, b = ctx.saved_tensors
+    t_a, t_b = ctx.t_a, ctx.t_b
     if not t_a and not t_b:
       da = _dot._call(dy, b, False, True)
       db = _dot._call(a, dy, True, False)
@@ -104,6 +107,6 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
       db = _dot._call(dy, a, True, True)
     else:
       assert False
-    return [da, db, None, None, None, None, None, None, None]
+    return da, db, None, None, None, None, None, None, None
   
 dot = _dot.apply
