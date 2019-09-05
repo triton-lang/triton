@@ -34,5 +34,6 @@ def run_torch():
   b = th.randn(K, N).cuda()
   th_c = th.matmul(a, b)
   tr_c = triton.ops.dot(a, b)
+  print(tr_c)
 
 run_torch()

@@ -14,7 +14,6 @@ class function_meta(type):
     def __init__(cls, name, bases, attrs):
         cls.contexts = dict()
         cls.registered = False
-        cls.framework = None
         return super(function_meta, cls).__init__(name, bases, attrs)
 
 class function(metaclass = function_meta):
@@ -59,8 +58,9 @@ class function(metaclass = function_meta):
 
   @classmethod
   def apply(cls, *args, **kwargs):
-    cls.framework = fw._find_framework(cls.framework)
-    if cls.framework == fw.tensorflow_id:
+    if fw.has_tensorflow():
         return cls.apply_tensorflow(*args, **kwargs)
-    else:
+    elif fw.has_torch():
         return cls.apply_torch(*args, **kwargs)
+    else:
+        assert False
