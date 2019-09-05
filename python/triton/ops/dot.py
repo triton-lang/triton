@@ -1,6 +1,6 @@
 import triton
 
-class dot(triton.function):
+class _dot(triton.function):
 
   src = """
 void dot(TYPE * A, TYPE * B, TYPE * C,
@@ -78,30 +78,32 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
               'BROADCAST_BK': 'newaxis, :' if transpose_b else ':, newaxis',
               'BROADCAST_BN': ':, newaxis' if transpose_b else 'newaxis, :',
               'SHAPE_B'     : 'TN, TK'     if transpose_b else 'TK, TN'}
-    return dot.kernel(a, b, c, M, N, Ka, lda, ldb, ldc, grid,           
+    return _dot.kernel(a, b, c, M, N, Ka, lda, ldb, ldc, grid,           
                   AT = transpose_a, BT = transpose_b, TYPE = dtype, 
                   TM = [64, 128], TN = [64, 128], TK = [8], **macros)
 
   @staticmethod
   def forward(ctx, a, b, transpose_a = False, transpose_b = False):
     ctx.save_for_backward(a, b, transpose_a, transpose_b)
-    return dot._call(a, b, transpose_a, transpose_b)
+    return _dot._call(a, b, transpose_a, transpose_b)
 
   @staticmethod
   def backward(ctx, dy):
     a, b, t_a, t_b = ctx.saved_tensors
     if not t_a and not t_b:
-      da = dot._call(dy, b, False, True)
-      db = dot._call(a, dy, True, False)
+      da = _dot._call(dy, b, False, True)
+      db = _dot._call(a, dy, True, False)
     elif not t_a and t_b:
-      da = dot._call(dy, b, False, False)
-      db = dot._call(dy, a, True, False)
+      da = _dot._call(dy, b, False, False)
+      db = _dot._call(dy, a, True, False)
     elif t_a and not t_b:
-      da = dot._call(b, dy, False, True)
-      db = dot._call(a, dy, False, False)
+      da = _dot._call(b, dy, False, True)
+      db = _dot._call(a, dy, False, False)
     elif t_a and t_b:
-      da = dot._call(b, dy, True, True)
-      db = dot._call(dy, a, True, True)
+      da = _dot._call(b, dy, True, True)
+      db = _dot._call(dy, a, True, True)
     else:
       assert False
     return [da, db, None, None, None, None, None, None, None]
+  
+dot = _dot.apply

@@ -315,16 +315,8 @@ gen_tf_register_op(oss, cc_name, fn->args(), outputs);
 
 
 inline std::string to_torch_ty(ir::type *ty) {
-  if(ty->is_integer_ty(1))
-    return "bool";
-  if(ty->is_integer_ty(8))
-    return "int8";
-  if(ty->is_integer_ty(16))
-    return "int16";
-  if(ty->is_integer_ty(32))
-    return "int32";
-  if(ty->is_integer_ty(64))
-    return "int64";
+  if(ty->is_integer_ty())
+    return "int64_t";
   if(ty->is_half_ty())
     return "float16";
   if(ty->is_float_ty())
@@ -332,7 +324,29 @@ inline std::string to_torch_ty(ir::type *ty) {
   if(ty->is_double_ty())
     return "float64";
   if(ty->is_pointer_ty())
-    return "Tensor";
+    return "torch::Tensor";
+  throw std::runtime_error("unknown type");
+}
+
+inline std::string to_c_ty(ir::type *ty) {
+  if(ty->is_integer_ty(1))
+    return "bool";
+  if(ty->is_integer_ty(8))
+    return "int8_t";
+  if(ty->is_integer_ty(16))
+    return "int16_t";
+  if(ty->is_integer_ty(32))
+    return "int32_t";
+  if(ty->is_integer_ty(64))
+    return "int64_t";
+  if(ty->is_half_ty())
+    return "float16";
+  if(ty->is_float_ty())
+    return "float32";
+  if(ty->is_double_ty())
+    return "float64";
+  if(ty->is_pointer_ty())
+    return "drv::cu_buffer";
   throw std::runtime_error("unknown type");
 }
 
@@ -352,15 +366,22 @@ void gen_torch_signature(std::ostringstream& oss,
     out_types.push_back((*it)->get_type());
   }
 
-  oss << "std::tuple<";
-  for(size_t i = 0; i < out_types.size(); i++){
-    if(i > 0)
-      oss << ", ";
-    oss << to_torch_ty(out_types[i]);
+  std::string ret_ty;
+  if(out_types.empty())
+    ret_ty = "void";
+  else{
+    ir::type* ty = out_types[0];
+    ret_ty = to_torch_ty(ty);
+    if(out_types.size() > 1){
+      for(size_t i = 1; i < out_types.size(); i++)
+        if(out_types[i] != ty)
+          throw std::runtime_error("outputs of different types not supported by pytorch");
+      ret_ty = "std::vector<" + ret_ty + ">";
+    }
   }
-  oss << "> ";
-  oss << name << "(";
-  oss << "int64 id" << std::endl;
+
+  oss << ret_ty << " " << name << "(";
+  oss << "int64_t id, ";
   for(size_t i = 0; i < args.size(); i++) {
     ir::argument* arg = args[i];
     if(i > 0)
@@ -370,9 +391,16 @@ void gen_torch_signature(std::ostringstream& oss,
   oss << ")";
 }
 
-void gen_torch_init_driver(std::ostringstream &oss) {
+void gen_torch_init_driver(std::ostringstream &oss,
+                           const std::vector<ir::argument*>&args) {
+  ir::argument* tensor = nullptr;
+  for(ir::argument* arg: args)
+    if(arg->get_type()->is_pointer_ty()){
+      tensor = arg;
+      break;
+    }
   oss <<  "  // Wrap CUDA handles" << std::endl;
-  oss <<  "  c10::DeviceIndex device = torcha.storage().device().index();" << std::endl;
+  oss <<  "  c10::DeviceIndex device = " << tensor->get_name() << ".storage().device().index();" << std::endl;
   oss <<  "  // Get stream" << std::endl;
   oss <<  "  CUstream custream = (CUstream)at::cuda::getCurrentCUDAStream(device).stream();" << std::endl;
   oss <<  "  triton::driver::cu_stream stream(custream, false);" << std::endl;
@@ -383,10 +411,12 @@ void gen_torch_make_handles(std::ostream &os,
                             const std::vector<ir::argument*>& args) {
   for(unsigned i = 0; i < args.size(); i++){
     ir::argument *arg = args[i];
-    if(!arg->get_type()->is_pointer_ty())
-      continue;
     const std::string& name = arg->get_name();
-    os << "  drv::cu_buffer cu_" + name + "(ctx, " + name + ".storage().size(), (CUdeviceptr)" + name + ".storage.data(), false);\n  ";
+    ir::type* ty = arg->get_type();
+    if(!ty->is_pointer_ty())
+      os << "  " << to_c_ty(ty) << " arg_" << name << " = " << name << ";" << std::endl;
+    else
+      os << "  drv::cu_buffer arg_" + name + "(ctx, " + name + ".storage().size(), (CUdeviceptr)" + name + ".storage().data(), false);" << std::endl;
   }
 }
 
@@ -394,19 +424,28 @@ void gen_torch_make_launch_function(std::ostream &os, const std::vector<ir::argu
   os << "  (*id_fn_map.at(id))({";
   for(unsigned i = 0; i < args.size() ; i++){
     ir::argument *arg = args[i];
-    std::string name = arg->get_name();
+    std::string name = "arg_" + arg->get_name();
     if(arg->get_type()->is_pointer_ty())
-      name = "&cu_" + name;
+      name = "&" + name;
     if(i > 0)
       os << ", ";
     os << name;
   }
-  os << "}, *id_grid_map.at(id), stream);  \n";
+  os << "}, *id_grid_map.at(id), &stream);\n";
 }
 
+void gen_torch_ret(std::ostream &os, const std::vector<std::string>& outputs) {
+  os << "  return {";
+  for(size_t i = 0; i < outputs.size(); i++){
+    if(i > 0)
+      os << ", ";
+    os << outputs[i];
+  }
+  os << "};" << std::endl;
+}
 
 std::tuple<std::string,
-           std::string> make_pytorch_src(const std::string& src,
+           std::string> make_torch_src(const std::string& src,
                                          const std::vector<std::string>& outputs,
                                          const runtime::function::options_space_t& opt) {
   // triton-ir code-gen
@@ -423,6 +462,10 @@ std::tuple<std::string,
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
 #include "triton/runtime/function.h"
+#include "torch/extension.h"
+#include "torch/script.h"
+#include "ATen/cuda/CUDAContext.h"
+#include "ATen/cuda/detail/CUDAHooks.h"
 
 namespace rt = triton::runtime;
 namespace drv = triton::driver;
@@ -434,12 +477,17 @@ extern std::map<size_t, std::shared_ptr<rt::function>> id_fn_map;
 
   gen_torch_signature(oss, fn, outputs, name);
   oss << " {" << std::endl;
-  gen_torch_init_driver(oss);
+  gen_torch_init_driver(oss, fn->args());
   gen_torch_make_handles(oss, fn->args());
   gen_torch_make_launch_function(oss, fn->args());
-  oss << std::endl << "}";
+  gen_torch_ret(oss, outputs);
+  oss << "}" << std::endl;
 
+  oss << std::endl;
+  oss << std::endl;
   oss << "static auto registry = torch::jit::RegisterOperators(\"triton::" << name << "\", &" << name << ");" << std::endl;
+
+  return {oss.str(), name};
 }
 
 
@@ -453,7 +501,7 @@ PYBIND11_MODULE(libtriton, m) {
     m.def("make_tensorflow_src", &make_tensorflow_src,
           "Creates C++ source code for a custom Tensorflow op "
           "corresponding to the specified Triton kernel");
-    m.def("make_pytorch_src", &make_pytorch_src,
+    m.def("make_torch_src", &make_torch_src,
           "Creates C++ source code for a custom PyTorch op ");
 
     // bindings for triton classes
