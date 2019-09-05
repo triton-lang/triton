@@ -84,9 +84,7 @@ directories = [x[0] for x in os.walk(os.path.join(os.path.pardir, 'include'))]
 data = []
 for d in directories:
     files = glob.glob(os.path.join(d, '*.h'), recursive=False)
-    dest = os.path.relpath(d, os.path.pardir)
-    dest = os.path.join('triton', '_C', dest)
-    data += [(dest, files)]
+    data += [os.path.relpath(f, os.path.pardir) for f in files]
 
 setup(
     name='triton',
@@ -95,8 +93,8 @@ setup(
     author_email='ptillet@g.harvard.edu',
     description='A language and compiler for custom Deep Learning operations',
     long_description='',
-    packages=['triton', 'triton/ops'],
-    data_files=data,
+    packages=['triton', 'triton/_C', 'triton/ops'],
+    package_data={'': data},
     ext_modules=[CMakeExtension('triton', 'triton/_C/')],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
