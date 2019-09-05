@@ -57,11 +57,13 @@ def _write_bindings(src, root):
   return (cpp, so)
   
 def _build(src, path):
+  ccdir = os.path.join(libtriton.__file__, os.path.pardir)
+  ccdir = os.path.realpath(ccdir)
   # include directories
-  triton_include_dirs = [os.path.realpath(os.path.join(libtriton.__file__, 'include'))]
+  triton_include_dirs = [os.path.join(ccdir, 'include')]
   include_dirs = triton_include_dirs 
   # library directories
-  triton_library_dirs = [os.path.realpath(os.path.join(libtriton.__file__, os.path.pardir))]
+  triton_library_dirs = [ccdir]
   library_dirs = triton_library_dirs
   # libraries
   libraries = ['triton']
