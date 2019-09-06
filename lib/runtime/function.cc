@@ -169,6 +169,9 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     }catch(const std::runtime_error& e) {
       return;
     }
+    // kernel uses too much resources
+    if(!bin)
+      return;
     // benchmark
     ir::function *tmp = ir->get_function_list()[0];
     caller call(tmp, std::move(bin), opt);
@@ -201,7 +204,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&alignment_info, &grids);
   codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, target.get());
-
   // run passes
   peephole.run(module);
   dce.run(module);
@@ -210,11 +212,12 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   reassociate.run(module);
   dce.run(module);
   peephole.run(module);
-
   if(target->is_gpu()){
     shmem_info.run(module);
     shmem_liveness.run(module);
     shmem_allocation.run();
+    if(shmem_allocation.get_allocated_size() > context->device()->max_shared_memory())
+      return std::unique_ptr<driver::module>();
     shmem_barriers.run(module);
   }
   dce.run(module);
@@ -226,6 +229,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
+  // done
   return res;
 }
 
