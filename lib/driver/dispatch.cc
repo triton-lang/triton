@@ -22,6 +22,7 @@
 
 #include "triton/driver/dispatch.h"
 #include "triton/driver/context.h"
+#include "triton/tools/sys/getenv.hpp"
 
 namespace triton
 {
@@ -108,8 +109,13 @@ bool dispatch::clinit()
 }
 
 bool dispatch::cuinit(){
-  if(cuda_==nullptr)
-    cuda_ = dlopen("libcuda.so", RTLD_LAZY);
+  if(cuda_==nullptr){
+    std::string libcuda = tools::getenv("TRITON_LIBCUDA");
+    if(libcuda.empty())
+      cuda_ = dlopen("libcuda.so", RTLD_LAZY);
+    else
+      cuda_ = dlopen(libcuda.c_str(), RTLD_LAZY);
+  }
   if(cuda_ == nullptr)
     return false;
   CUresult (*fptr)(unsigned int);

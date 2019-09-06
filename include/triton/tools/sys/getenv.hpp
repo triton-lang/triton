@@ -38,11 +38,11 @@ namespace tools
             std::size_t sz = 0;
             _dupenv_s(&cache_path, &sz, name);
         #else
-            const char * cache_path = std::getenv(name);
+            const char * cstr = std::getenv(name);
         #endif
-        if(!cache_path)
+        if(!cstr)
             return "";
-        std::string result(cache_path);
+        std::string result(cstr);
         #ifdef _MSC_VER
             free(cache_path);
         #endif
