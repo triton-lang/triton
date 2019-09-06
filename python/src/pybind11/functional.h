@@ -65,12 +65,26 @@ public:
             }
         };
 
-        value = [hfunc = func_handle(std::move(func))](Args... args) -> Return {
-            gil_scoped_acquire acq;
-            object retval(hfunc.f(std::forward<Args>(args)...));
-            /* Visual studio 2015 parser issue: need parentheses around this expression */
-            return (retval.template cast<Return>());
+        // value = [hfunc = func_handle(std::move(func))](Args... args) -> Return {
+        //     gil_scoped_acquire acq;
+        //     object retval(hfunc.f(std::forward<Args>(args)...));
+        //     /* Visual studio 2015 parser issue: need parentheses around this expression */
+        //     return (retval.template cast<Return>());
+        // };
+
+        struct func_wrapper {
+            func_handle hfunc;
+            func_wrapper(func_handle&& hf): hfunc(std::move(hf)) {}
+            Return operator()(Args... args) const {
+                gil_scoped_acquire acq;
+                object retval(hfunc.f(std::forward<Args>(args)...));
+                /* Visual studio 2015 parser issue: need parentheses around this expression */
+                return (retval.template cast<Return>());
+            }
         };
+
+        value = func_wrapper(func_handle(std::move(func)));
+
         return true;
     }
 

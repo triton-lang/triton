@@ -493,7 +493,7 @@ extern std::map<size_t, std::shared_ptr<rt::function>> id_fn_map;
 
   oss << std::endl;
   oss << std::endl;
-  oss << "static auto registry = torch::jit::RegisterOperators(\"triton::" << name << "\", &" << name << ");" << std::endl;
+  oss << "static auto registry = torch::RegisterOperators(\"triton::" << name << "\", &" << name << ");" << std::endl;
 
   return {oss.str(), name};
 }
