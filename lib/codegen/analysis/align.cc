@@ -5,6 +5,8 @@
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
 #include <iostream>
+#include <numeric>
+#include <algorithm>
 
 namespace triton {
 namespace codegen{
@@ -36,258 +38,448 @@ bool align::is_first_axis_unit(ir::value *x){
     return true;
 }
 
-align::cst_info align::populate_is_constant(ir::value *v) {
+/*
+ * is constant
+ */
+
+std::vector<unsigned> align::get_shapes(ir::value *v) {
+  ir::type *ty = v->get_type();
+  if(ty->is_tile_ty())
+    return ty->get_tile_shapes();
+  else
+    return {1};
+}
+
+std::vector<align::cst_info> align::populate_is_constant_phi(ir::phi_node* x) {
+  auto shapes = get_shapes(x);
+  std::vector<cst_info> result(shapes.size(), cst_info{1, 0});
+  for(unsigned n = 0; n < x->get_num_incoming(); n++){
+    ir::value* inc = x->get_incoming_value(n);
+    auto it = is_constant_.find(inc);
+    if(it != is_constant_.end())
+      result = it->second;
+  }
+  return add_to_cache(x, result, is_constant_);
+  // recurse
+  for(unsigned n = 0; n < x->get_num_incoming(); n++){
+    ir::value* inc = x->get_incoming_value(n);
+    auto cst = populate_is_constant(inc);
+    for(size_t d = 0; d < cst.size(); d++)
+      result[d].num_cst = std::min(result[d].num_cst, cst[d].num_cst);
+  }
+  return add_to_cache(x, result, is_constant_);
+}
+
+std::vector<align::cst_info> align::populate_is_constant_splat(ir::splat_inst* x) {
+  auto shapes = get_shapes(x);
+  std::vector<cst_info> result;
+  ir::value* op = x->get_operand(0);
+  auto op_cst = populate_is_constant(op);
+  for(auto d: shapes)
+    result.push_back(cst_info{d, op_cst[0].value});
+  return add_to_cache(x, result, is_constant_);
+}
+
+std::vector<align::cst_info> align::populate_is_constant_reshape(ir::reshape_inst* x) {
+  auto x_shapes = get_shapes(x);
+  std::vector<cst_info> result;
+  ir::value *op = x->get_operand(0);
+  auto op_shapes = op->get_type()->get_tile_shapes();
+  auto op_cst = populate_is_constant(op);
+  unsigned current = 0;
+  bool is_skewed = false;
+  for(size_t d = 0; d < x_shapes.size(); d ++){
+    cst_info ax ;
+    if(x_shapes[d] == 1)
+      ax = {1, op_cst[current].value};
+    else if(!is_skewed
+            && x_shapes[d] == op_shapes[current])
+      ax = {x_shapes[d], op_cst[current++].value};
+    else {
+      is_skewed = true;
+      ax = {x_shapes[d], 0};
+    }
+    result.push_back(ax);
+  }
+  return add_to_cache(x, result, is_constant_);
+}
+
+std::vector<align::cst_info> align::populate_is_constant_broadcast(ir::broadcast_inst* x) {
+  auto x_shapes = get_shapes(x);
+  std::vector<cst_info> result;
+  ir::value *op = x->get_operand(0);
+  auto op_shapes = op->get_type()->get_tile_shapes();
+  auto op_cst = populate_is_constant(op);
+  for(size_t d = 0; d < x_shapes.size(); d++)
+    if(op_shapes[d] == 1)
+      result.push_back(cst_info{x_shapes[d], op_cst[d].value});
+    else
+      result.push_back(op_cst[d]);
+  return add_to_cache(x, result, is_constant_);
+}
+
+std::vector<align::cst_info> align::populate_is_constant_binop(ir::binary_operator* x) {
+  auto x_shapes = get_shapes(x);
+  std::vector<cst_info> result;
+  ir::value* lhs_op = x->get_operand(0);
+  ir::value* rhs_op = x->get_operand(1);
+  auto lhs = populate_is_constant(lhs_op);
+  auto rhs = populate_is_constant(rhs_op);
+  auto max_contiguous = populate_max_contiguous(lhs_op);
+  for(size_t d = 0; d < x_shapes.size(); d++) {
+    cst_info ax;
+    if(lhs[d].num_cst==0 && rhs[d].value && x->is_int_div()){
+      // todo might not be entirely true
+      unsigned num_constants = gcd(max_contiguous[d], rhs[d].value);
+      ax = {num_constants, 0};
+    }
+    else
+      ax = {std::min(lhs[d].num_cst, rhs[d].num_cst), 0};
+    result.push_back(ax);
+  }
+  return add_to_cache(x, result, is_constant_);
+}
+
+std::vector<align::cst_info> align::populate_is_constant_gep(ir::getelementptr_inst* x) {
+  auto x_shapes = get_shapes(x);
+  ir::value* lhs_op = x->get_operand(0);
+  ir::value* rhs_op = x->get_operand(1);
+  auto lhs = populate_is_constant(lhs_op);
+  auto rhs = populate_is_constant(rhs_op);
+  std::vector<cst_info> result;
+  for(size_t d = 0; d < x_shapes.size(); d++)
+    result.push_back({std::min(lhs[d].num_cst, rhs[d].num_cst), 0});
+  return add_to_cache(x, result, is_constant_);
+}
+
+std::vector<align::cst_info> align::populate_is_constant_default(ir::value *v) {
+  auto shapes = get_shapes(v);
+  std::vector<cst_info> result(shapes.size(), {1, 0});
+  return add_to_cache(v, result, is_constant_);
+}
+
+std::vector<align::cst_info> align::populate_is_constant(ir::value *v) {
   if(is_constant_.find(v) != is_constant_.end())
     return is_constant_.at(v);
-  // helper for the cache
-  auto cache = [this,v](cst_info value){
-    return add_to_cache(v, value, is_constant_); }
-  ;
-  // populate
-  if(auto *x = dynamic_cast<ir::retile_inst*>(v)){
-    ir::value *op = x->get_operand(0);
-    auto op_cst = populate_is_constant(op);
-    if(is_first_axis_unit(op)){
-      unsigned num_cst = x->get_type()->get_tile_shapes()[0];
-      return cache({num_cst, op_cst.value});
-    }
-  }
   if(auto *x = dynamic_cast<ir::constant_int*>(v))
-    return cache({true, (unsigned)x->get_value()});
-  if(auto *x = dynamic_cast<ir::binary_operator*>(v)){
-    ir::value* lhs_op = x->get_operand(0);
-    ir::value* rhs_op = x->get_operand(1);
-    cst_info lhs = populate_is_constant(lhs_op);
-    cst_info rhs = populate_is_constant(rhs_op);
-    if(lhs.num_cst==0 && rhs.value && x->is_int_div()){
-      unsigned max_contiguous = populate_max_contiguous(lhs_op);
-      // todo might not be entirely true
-      unsigned num_constants = gcd(max_contiguous, rhs.value);
-      return cache({num_constants, 0});
-    }
-    return cache({std::min(lhs.num_cst, rhs.num_cst), 0});
-  }
-  if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v)){
-    ir::value* lhs_op = x->get_operand(0);
-    ir::value* rhs_op = x->get_operand(1);
-    cst_info lhs = populate_is_constant(lhs_op);
-    cst_info rhs = populate_is_constant(rhs_op);
-    return cache({std::min(lhs.num_cst, rhs.num_cst), 0});
-  }
-//  if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
-//    cst_info value_true = populate_is_constant(x->get_value_true());
-//    cst_info value_false = populate_is_constant(x->get_value_false());
-//    return cache({std::min(value_true.num_cst, value_false.num_cst), 0});
-//  }
-  if(v->get_type()->is_tile_ty())
-    return cache({0, 0});
-  if(auto *x = dynamic_cast<ir::phi_node*>(v)){
-    // put a conservative initial value in phi node to avoid infinite recursion
-    unsigned result = 1;
-    for(unsigned n = 0; n < x->get_num_incoming(); n++){
-      ir::value* inc = x->get_incoming_value(n);
-      if(is_constant_.find(inc) != is_constant_.end())
-        result = is_constant_.at(inc).num_cst;
-    }
-    cache({result, 0});
-    // recurse
-    for(unsigned n = 0; n < x->get_num_incoming(); n++){
-      ir::value* inc = x->get_incoming_value(n);
-      result = std::min(result, populate_is_constant(inc).num_cst);
-    }
-    return cache({result, 0});
-  }
-  // scalars are always constant in the contiguous dimension
-  // but value is not known at compile-time
-  return cache({1, 0});
+    return add_to_cache(v, {cst_info{true, (unsigned)x->get_value()}}, is_constant_);
+  if(auto *x = dynamic_cast<ir::phi_node*>(v))
+    return populate_is_constant_phi(x);
+  if(auto *x = dynamic_cast<ir::splat_inst*>(v))
+    return populate_is_constant_splat(x);
+  if(auto *x = dynamic_cast<ir::reshape_inst*>(v))
+    return populate_is_constant_reshape(x);
+  if(auto *x = dynamic_cast<ir::broadcast_inst*>(v))
+    return populate_is_constant_broadcast(x);
+  if(auto *x = dynamic_cast<ir::binary_operator*>(v))
+    return populate_is_constant_binop(x);
+  if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v))
+    return populate_is_constant_gep(x);
+  return populate_is_constant_default(v);
 }
 
-unsigned align::populate_max_contiguous(ir::value *v){
-  if(max_contiguous_.find(v) != max_contiguous_.end())
-    return max_contiguous_.at(v);
-  // helper for the cache
-  auto cache = [this,v](unsigned value){ return add_to_cache(v, value, max_contiguous_); };
-  // populate
-  if(!v->get_type()->is_tile_ty())
-    return cache(1);
-  auto shapes = v->get_type()->get_tile_shapes();
-  if(dynamic_cast<ir::constant_range*>(v)){
-    return cache(shapes[0]);
+
+/*
+ * max contiguous
+ */
+
+std::vector<unsigned> align::populate_max_contiguous_phi(ir::phi_node* x) {
+  auto shapes = get_shapes(x);
+  std::vector<unsigned> result(shapes.size(), 1);
+  for(unsigned n = 0; n < x->get_num_incoming(); n++){
+    ir::value* inc = x->get_incoming_value(n);
+    auto it = max_contiguous_.find(inc);
+    if(it != max_contiguous_.end())
+      result = it->second;
   }
-  if(auto *x = dynamic_cast<ir::retile_inst*>(v)){
-    ir::value *op = x->get_operand(0);
-    if(op->get_type()->is_tile_ty()){
-      auto op_shapes = op->get_type()->get_tile_shapes();
-      if(op_shapes[0] == shapes[0])
-        return cache(populate_max_contiguous(op));
+  add_to_cache(x, result, max_contiguous_);
+  // recurse
+  for(unsigned n = 0; n < x->get_num_incoming(); n++){
+    ir::value* inc = x->get_incoming_value(n);
+    auto contiguous = populate_max_contiguous(inc);
+    for(size_t d = 0; d < result.size(); d++)
+      result[d] = std::min(result[d], contiguous[d]);
+  }
+  return add_to_cache(x, result, max_contiguous_);
+
+}
+
+std::vector<unsigned> align::populate_max_contiguous_splat(ir::splat_inst* x) {
+  auto x_shapes = get_shapes(x);
+  std::vector<unsigned> result;
+  for(size_t d = 0; d < x_shapes.size(); d++)
+    result.push_back({1});
+  return add_to_cache(x, result, max_contiguous_);
+}
+
+std::vector<unsigned> align::populate_max_contiguous_reshape(ir::reshape_inst* x) {
+  auto shapes = get_shapes(x);
+  std::vector<unsigned> result;
+  ir::value *op = x->get_operand(0);
+  auto op_shapes = op->get_type()->get_tile_shapes();
+  auto op_mc = populate_max_contiguous(op);
+  unsigned current = 0;
+  bool is_skewed = false;
+  for(size_t d = 0; d < shapes.size(); d ++){
+    if(shapes[d] == 1)
+      result.push_back(1);
+    else if(!is_skewed
+            && shapes[d] == op_shapes[current])
+      result.push_back(op_mc[current++]);
+    else {
+      is_skewed = true;
+      result.push_back(1);
     }
-    return cache(1);
   }
-  if(auto *x = dynamic_cast<ir::binary_operator*>(v)){
-    ir::value* lhs = x->get_operand(0);
-    ir::value* rhs = x->get_operand(1);
-    unsigned lhs_max_contiguous = populate_max_contiguous(lhs);
-    unsigned rhs_max_contiguous = populate_max_contiguous(rhs);
-    cst_info lhs_cst_info = populate_is_constant(lhs);
-    cst_info rhs_cst_info = populate_is_constant(rhs);
-    if(x->is_int_rem() && rhs_cst_info.value > 0)
-      return cache(std::min(lhs_max_contiguous, rhs_cst_info.value));
+  return add_to_cache(x, result, max_contiguous_);
+}
+
+std::vector<unsigned> align::populate_max_contiguous_broadcast(ir::broadcast_inst* x) {
+  auto shapes = get_shapes(x);
+  std::vector<unsigned> result;
+  ir::value *op = x->get_operand(0);
+  auto op_shapes = op->get_type()->get_tile_shapes();
+  auto op_mc = populate_max_contiguous(op);
+  for(size_t d = 0; d < shapes.size(); d++)
+    if(op_shapes[d] == 1)
+      result.push_back(1);
+    else
+      result.push_back(op_mc[d]);
+  return add_to_cache(x, result, max_contiguous_);
+}
+
+std::vector<unsigned> align::populate_max_contiguous_binop(ir::binary_operator* x) {
+  auto shapes = get_shapes(x);
+  ir::value* lhs = x->get_operand(0);
+  ir::value* rhs = x->get_operand(1);
+  auto lhs_max_contiguous = populate_max_contiguous(lhs);
+  auto rhs_max_contiguous = populate_max_contiguous(rhs);
+  auto lhs_cst_info = populate_is_constant(lhs);
+  auto rhs_cst_info = populate_is_constant(rhs);
+  std::vector<unsigned> result;
+  for(size_t d = 0; d < shapes.size(); d++){
+    unsigned value = 1;
+    if(x->is_int_rem() && rhs_cst_info[d].value > 0)
+      value = std::min(lhs_max_contiguous[d], rhs_cst_info[d].value);
     if(x->is_int_mult()){
-      if(rhs_cst_info.value == 1)
-        return cache(lhs_max_contiguous);
-      if(lhs_cst_info.value == 1)
-        return cache(rhs_max_contiguous);
+      unsigned lvalue = 1, rvalue = 1;
+      if(rhs_cst_info[d].value == 1)
+        lvalue = lhs_max_contiguous[d];
+      if(lhs_cst_info[d].value == 1)
+        rvalue = rhs_max_contiguous[d];
+      value = std::max(lvalue, rvalue);
     }
     if(x->is_int_add_sub()){
-      if(lhs_cst_info.num_cst)
-        return cache(gcd(rhs_max_contiguous, lhs_cst_info.num_cst));
-      if(rhs_cst_info.num_cst)
-        return cache(gcd(lhs_max_contiguous, rhs_cst_info.num_cst));
+      unsigned lvalue = 1, rvalue = 1;
+      if(lhs_cst_info[d].num_cst)
+        lvalue = gcd(rhs_max_contiguous[d], lhs_cst_info[d].num_cst);
+      if(rhs_cst_info[d].num_cst)
+        rvalue = gcd(lhs_max_contiguous[d], rhs_cst_info[d].num_cst);
+      value = std::max(lvalue, rvalue);
     }
+    result.push_back(value);
   }
-//  if(auto *x = dynamic_cast<ir::psi_inst*>(v)){
-//    int value_true = populate_max_contiguous(x->get_value_true());
-//    int value_false = populate_max_contiguous(x->get_value_false());
-//    return cache(std::min(value_true, value_false));
-//  }
-  if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v)){
-    ir::value* lhs = x->get_operand(0);
-    ir::value* rhs = x->get_operand(1);
-    unsigned lhs_max_contiguous = populate_max_contiguous(lhs);
-    unsigned rhs_max_contiguous = populate_max_contiguous(rhs);
-    auto lhs_cst_info = populate_is_constant(lhs);
-    auto rhs_cst_info = populate_is_constant(rhs);
-    if(lhs_cst_info.num_cst)
-      return cache(rhs_max_contiguous);
-    if(rhs_cst_info.num_cst)
-      return cache(lhs_max_contiguous);
-  }
-  if(auto *x = dynamic_cast<ir::phi_node*>(v)){
-    // put a conservative initial value in phi node to avoid infinite recursion
-    unsigned result = 1;
-    for(unsigned n = 0; n < x->get_num_incoming(); n++){
-      ir::value* inc = x->get_incoming_value(n);
-      if(max_contiguous_.find(inc) != max_contiguous_.end())
-        result = max_contiguous_.at(inc);
-    }
-    cache(result);
-    // recurse
-    for(unsigned n = 0; n < x->get_num_incoming(); n++){
-      ir::value* inc = x->get_incoming_value(n);
-      result = std::min(result, populate_max_contiguous(inc));
-    }
-    return cache(result);
-  }
-  return cache(1);
+  return add_to_cache(x, result, max_contiguous_);
 }
 
-unsigned align::populate_starting_multiple(ir::value *v){
-  if(starting_multiple_.find(v) != starting_multiple_.end())
-    return starting_multiple_.at(v);
-  auto cache = [this,v](unsigned value){
-    return add_to_cache(v, value, starting_multiple_);
-  };
-  // has metadata
+std::vector<unsigned> align::populate_max_contiguous_gep(ir::getelementptr_inst* x) {
+  auto shapes = get_shapes(x);
+  ir::value* lhs = x->get_operand(0);
+  ir::value* rhs = x->get_operand(1);
+  auto lhs_max_contiguous = populate_max_contiguous(lhs);
+  auto rhs_max_contiguous = populate_max_contiguous(rhs);
+  auto lhs_cst_info = populate_is_constant(lhs);
+  auto rhs_cst_info = populate_is_constant(rhs);
+  std::vector<unsigned> result(shapes.size(), 1);
+  for(size_t d = 0; d < shapes.size(); d++){
+    unsigned lvalue = 1, rvalue = 1;
+    if(lhs_cst_info[d].num_cst)
+      lvalue = rhs_max_contiguous[d];
+    if(rhs_cst_info[d].num_cst)
+      rvalue = lhs_max_contiguous[d];
+    result[d] = std::max(lvalue, rvalue);
+  }
+  return add_to_cache(x, result, max_contiguous_);
+}
+
+std::vector<unsigned> align::populate_max_contiguous_default(ir::value* v) {
+  if(!v->get_type()->is_tile_ty())
+    return add_to_cache(v, {1}, max_contiguous_);
+  auto shapes = v->get_type()->get_tile_shapes();
+  if(dynamic_cast<ir::constant_range*>(v))
+    return add_to_cache(v, {shapes[0]}, max_contiguous_);
+  return add_to_cache(v, std::vector<unsigned>(shapes.size(), 1), max_contiguous_);
+}
+
+std::vector<unsigned> align::populate_max_contiguous(ir::value *v){
+  if(max_contiguous_.find(v) != max_contiguous_.end())
+    return max_contiguous_.at(v);
+  if(auto *x = dynamic_cast<ir::splat_inst*>(v))
+    return populate_max_contiguous_splat(x);
+  if(auto *x = dynamic_cast<ir::reshape_inst*>(v))
+    return populate_max_contiguous_reshape(x);
+  if(auto *x = dynamic_cast<ir::broadcast_inst*>(v))
+    return populate_max_contiguous_broadcast(x);
+  if(auto *x = dynamic_cast<ir::binary_operator*>(v))
+    return populate_max_contiguous_binop(x);
+  if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v))
+    return populate_max_contiguous_gep(x);
+  if(auto *x = dynamic_cast<ir::phi_node*>(v))
+    return populate_max_contiguous_phi(x);
+  return populate_max_contiguous_default(v);
+}
+
+
+/*
+ * starting multiple
+ */
+
+std::vector<unsigned> align::populate_starting_multiple_splat(ir::splat_inst* x){
+  auto shapes = get_shapes(x);
+  auto op = populate_starting_multiple(x->get_operand(0));
+  std::vector<unsigned> result(shapes.size(), op[0]);
+  return add_to_cache(x, result, starting_multiple_);
+}
+
+std::vector<unsigned> align::populate_starting_multiple_reshape(ir::reshape_inst* x){
+  auto op = populate_starting_multiple(x->get_operand(0));
+  auto op_shapes = get_shapes(x->get_operand(0));
+  auto shapes = get_shapes(x);
+  std::vector<unsigned> result(shapes.size(), 1);
+  unsigned current = 0;
+  bool is_skewed = false;
+  for(size_t d = 0; d < shapes.size(); d ++){
+    if(shapes[d] == 1)
+      result[d] = 1;
+    else if(!is_skewed
+            && shapes[d] == op_shapes[current])
+      result[d] = op[current++];
+    else {
+      is_skewed = true;
+      result[d] = 1;
+    }
+  }
+  return add_to_cache(x, result, starting_multiple_);
+}
+
+std::vector<unsigned> align::populate_starting_multiple_broadcast(ir::broadcast_inst* x){
+  auto result = populate_starting_multiple(x->get_operand(0));
+  return add_to_cache(x, result, starting_multiple_);
+}
+
+std::vector<unsigned> align::populate_starting_multiple_binop(ir::binary_operator* x){
+  auto lhs = populate_starting_multiple(x->get_operand(0));
+  auto rhs = populate_starting_multiple(x->get_operand(1));
+  std::vector<unsigned> result(lhs.size(), 1);
+  for(size_t d = 0; d < lhs.size(); d++){
+    if(x->is_int_mult())
+      result[d] = lhs[d] * rhs[d];
+    if(x->is_int_add_sub())
+      result[d] = gcd(lhs[d], rhs[d]);
+    if(x->is_int_div())
+      result[d] = std::max<unsigned>(lhs[d] / rhs[d], 1);
+    if(x->is_int_rem() && rhs[d] > 1)
+      result[d] = gcd(lhs[d], rhs[d]);
+    if(x->is_shl())
+      result[d] = lhs[d] << rhs[d];
+    if(x->is_shr())
+      result[d] = std::max<unsigned>(lhs[d] >> rhs[d], 1);
+  }
+  return add_to_cache(x, result, starting_multiple_);
+}
+
+std::vector<unsigned> align::populate_starting_multiple_gep(ir::getelementptr_inst* x){
+  auto lhs = populate_starting_multiple(x->get_operand(0));
+  auto rhs = populate_starting_multiple(x->get_operand(1));
+  std::vector<unsigned> result(lhs.size(), 1);
+  for(size_t d = 0; d < lhs.size(); d++)
+    result[d] = gcd(lhs[d], rhs[d]);
+  return add_to_cache(x, result, starting_multiple_);
+}
+
+std::vector<unsigned> align::populate_starting_multiple_phi(ir::phi_node* x){
+  auto shape = get_shapes(x);
+  std::vector<unsigned> result(shape.size(), 1);
+  for(unsigned n = 0; n < x->get_num_incoming(); n++){
+    ir::value* inc = x->get_incoming_value(n);
+    if(starting_multiple_.find(inc) != starting_multiple_.end())
+      result = starting_multiple_.at(inc);
+  }
+  add_to_cache(x, result, starting_multiple_);
+  // recurse
+  for(unsigned n = 0; n < x->get_num_incoming(); n++){
+    ir::value* inc = x->get_incoming_value(n);
+    auto sm = populate_starting_multiple(inc);
+    for(size_t d = 0; d < result.size(); d++)
+      result[d] = gcd(result[d], sm[d]);
+  }
+  return add_to_cache(x, result, starting_multiple_);
+}
+
+
+std::vector<unsigned> align::populate_starting_multiple_default(ir::value* v) {
+  ir::type* ty = v->get_type();
+  if(ty->is_tile_ty()) {
+    return add_to_cache(v, ty->get_tile_shapes(), starting_multiple_);
+  }
   if(auto *x = dynamic_cast<ir::instruction*>(v)){
     unsigned multiple_of = x->get_metadata(ir::metadata::multiple_of);
     if(multiple_of > 0)
-      return cache(multiple_of);
+      return add_to_cache(x, {multiple_of}, starting_multiple_);
   }
-  // arguments
   if(auto *x = dynamic_cast<ir::argument*>(v)){
     std::set<ir::attribute> attributes = x->get_parent()->get_attributes(x);
     for(auto attr: attributes){
-      if(attr.get_kind() == ir::multiple_of)
-        return cache(attr.get_value());
+      if(attr.get_kind() == ir::multiple_of){
+        return add_to_cache(x, {attr.get_value()}, starting_multiple_);
+      }
       if(attr.get_kind() == ir::aligned){
         ir::type* ty = x->get_type()->get_pointer_element_ty();
         int nbits  = ty->get_primitive_size_in_bits();
         int nbytes = nbits / 8;
-        return cache(attr.get_value() / nbytes);
+        return add_to_cache(x, {attr.get_value() / nbytes}, starting_multiple_);
       }
     }
   }
-  if(auto *x = dynamic_cast<ir::binary_operator*>(v)){
-    int lhs = populate_starting_multiple(x->get_operand(0));
-    int rhs = populate_starting_multiple(x->get_operand(1));
-    if(x->is_int_mult())
-      return cache(lhs * rhs);
-    if(x->is_int_add_sub())
-      return cache(gcd(lhs, rhs));
-    if(x->is_int_div())
-      return cache(std::max(lhs / rhs, 1));
-    if(x->is_int_rem() && rhs > 1)
-      return cache(gcd(lhs, rhs));
-    if(x->is_shl())
-      return cache(lhs << rhs);
-    if(x->is_shr())
-      return cache(std::max(lhs >> rhs, 1));
-  }
-  if(auto *x = dynamic_cast<ir::constant_int*>(v)){
-    return cache(x->get_value());
-  }
-  if(auto *x = dynamic_cast<ir::constant_range*>(v)){
-    return cache(x->get_first()->get_value());
-  }
-  if(dynamic_cast<ir::nv_dynamic_program_idx_inst*>(v)){
-    return cache(128);
-  }
-  if(auto *x = dynamic_cast<ir::nv_static_program_idx*>(v)){
-    return cache(x->get_range()->get_first()->get_value());
-  }
-  if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v)){
-    int lhs = populate_starting_multiple(x->get_operand(0));
-    int rhs = populate_starting_multiple(x->get_operand(1));
-    return cache(gcd(lhs, rhs));
-  }
-  if(auto *x = dynamic_cast<ir::splat_inst*>(v)){
-    int op = populate_starting_multiple(x->get_operand(0));
-    return cache(op);
-  }
-  if(auto *x = dynamic_cast<ir::reshape_inst*>(v)){
-    int op = populate_starting_multiple(x->get_operand(0));
-    auto shapes = x->get_type()->get_tile_shapes();
-    if(shapes[0] == 1)
-      return cache(1);
-    else
-      return cache(op);
-  }
-  if(auto *x = dynamic_cast<ir::broadcast_inst*>(v)){
-    int op = populate_starting_multiple(x->get_operand(0));
-    return cache(op);
-  }
-  if(auto *x = dynamic_cast<ir::phi_node*>(v)){
-    // put a conservative initial value in phi node to avoid infinite recursion
-    unsigned result = 1;
-    for(unsigned n = 0; n < x->get_num_incoming(); n++){
-      ir::value* inc = x->get_incoming_value(n);
-      if(starting_multiple_.find(inc) != starting_multiple_.end())
-        result = starting_multiple_.at(inc);
-    }
-    cache(result);
-    // recurse
-    for(unsigned n = 0; n < x->get_num_incoming(); n++){
-      ir::value* inc = x->get_incoming_value(n);
-      result = gcd(result, populate_starting_multiple(inc));
-    }
-    return cache(result);
-  }
-  // scalars
-  if(!v->get_type()->is_tile_ty())
-    return cache(1);
-  // tiles
-  auto shapes = v->get_type()->get_tile_shapes();
-  unsigned result = 1;
-  for(unsigned i = 0; i < shapes.size() - 1; i++)
-    result *= shapes[i];
-  return cache(result);
+  return add_to_cache(v, {1}, starting_multiple_);
+}
+
+
+std::vector<unsigned> align::populate_starting_multiple(ir::value *v){
+  if(starting_multiple_.find(v) != starting_multiple_.end())
+    return starting_multiple_.at(v);
+  if(auto *x = dynamic_cast<ir::binary_operator*>(v))
+    return populate_starting_multiple_binop(x);
+  if(auto *x = dynamic_cast<ir::constant_int*>(v))
+    return add_to_cache(x, {(unsigned)x->get_value()}, starting_multiple_);
+  if(auto *x = dynamic_cast<ir::constant_range*>(v))
+    return add_to_cache(x, {(unsigned)x->get_first()->get_value()}, starting_multiple_);
+  if(auto *x = dynamic_cast<ir::nv_dynamic_program_idx_inst*>(v))
+    return add_to_cache(x, {128}, starting_multiple_);
+  if(auto *x = dynamic_cast<ir::nv_static_program_idx*>(v))
+    return add_to_cache(x, {(unsigned)x->get_range()->get_first()->get_value()}, starting_multiple_);
+  if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v))
+    return populate_starting_multiple_gep(x);
+  if(auto *x = dynamic_cast<ir::splat_inst*>(v))
+    return populate_starting_multiple_splat(x);
+  if(auto *x = dynamic_cast<ir::reshape_inst*>(v))
+    return populate_starting_multiple_reshape(x);
+  if(auto *x = dynamic_cast<ir::broadcast_inst*>(v))
+    return populate_starting_multiple_broadcast(x);
+  if(auto *x = dynamic_cast<ir::phi_node*>(v))
+    return populate_starting_multiple_phi(x);
+  return populate_starting_multiple_default(v);
 }
 
 unsigned align::get_starting_multiple(ir::value* v) const {
-  return starting_multiple_.at(v);
+  return starting_multiple_.at(v)[0];
 }
 
 unsigned align::get_max_contiguous(ir::value* v) const {
+  return max_contiguous_.at(v)[0];
+}
+
+std::vector<unsigned> align::get_max_contiguous_vec(ir::value* v) const {
   return max_contiguous_.at(v);
 }
 
@@ -297,7 +489,7 @@ void align::copy(ir::value *dst, ir::value *src) {
   is_constant_[dst] = is_constant_[src];
 }
 
-///TODO: This doesn't seem to work in DOT-NN, DOT-TT, DOT-TN
+
 void align::run(ir::module &mod) {
   // populate constant
   for(ir::function *fn: mod.get_function_list())
@@ -316,13 +508,9 @@ void align::run(ir::module &mod) {
   // populate maximum contiguous
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
-  for(ir::instruction *i: block->get_inst_list())
+  for(ir::instruction *i: block->get_inst_list()){
     populate_max_contiguous(i);
-
-//  for(ir::function *fn: mod.get_function_list())
-//  for(ir::basic_block *block: fn->blocks())
-//  for(ir::instruction *i: block->get_inst_list())
-//    std::cout << i->get_name() << " " << max_contiguous_.at(i) << " " << is_constant_.at(i).num_cst << " " << starting_multiple_.at(i) << std::endl;
+  }
 }
 
 

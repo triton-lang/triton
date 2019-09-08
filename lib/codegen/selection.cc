@@ -864,11 +864,7 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
   std::map<unsigned, ir::value*> references;
   create_grids(grids, references, fn);
   for(ir::value* i: grids){
-    if(auto *instr = dynamic_cast<ir::instruction*>(i))
-      for(unsigned r = 0; r < instr->get_num_results(); r++)
-        init_axes(instr->get_result(r), builder, u_thread_warp_id, u_warp_id);
-    else
-      init_axes(i, builder, u_thread_warp_id, u_warp_id);
+    init_axes(i, builder, u_thread_warp_id, u_warp_id);
   }
   // create tile
   std::set<ir::value*> seen;
@@ -876,8 +872,7 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
   for(ir::instruction *i: block->get_inst_list()){
     if(!i->get_type()->is_tile_ty())
       continue;
-    for(unsigned r = 0; r < i->get_num_results(); r++)
-      create_tile(i->get_result(r), builder, references, seen, sh_mem_ptr);
+    create_tile(i, builder, references, seen, sh_mem_ptr);
   }
 }
 
