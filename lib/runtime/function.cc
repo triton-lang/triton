@@ -5,6 +5,7 @@
 #include <algorithm>
 #include "triton/codegen/selection.h"
 #include "triton/runtime/function.h"
+#include "triton/codegen/transform/reorder.h"
 #include "triton/lang/cpp.h"
 #include "triton/lang/parser.h"
 #include "triton/lang/code_gen.h"
@@ -198,6 +199,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::analysis::liveness shmem_liveness(&shmem_info);
   codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &grids);
   codegen::analysis::align alignment_info;
+  codegen::transform::reorder reorder(&alignment_info);
   codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
   codegen::transform::vectorize vectorize(&grids);
   codegen::transform::dce dce;
@@ -208,6 +210,10 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   peephole.run(module);
   dce.run(module);
   alignment_info.run(module);
+  ir::print(module, std::cout);
+//  reorder.run(module);
+  dce.run(module);
+  ir::print(module, std::cout);
   grids.run(module);
   reassociate.run(module);
   dce.run(module);

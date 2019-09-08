@@ -48,14 +48,8 @@ void print(module &mod, std::ostream& os) {
       os << std::endl;
       for(ir::instruction *inst: block->get_inst_list()){
         os << "  ";
-        unsigned num_results = inst->get_num_results();
-        for(unsigned i = 0; i < num_results; i++){
-          os << get_name(inst->get_result(i), cnt++);
-          if(i < num_results - 1)
-            os << ", ";
-          else
-            os << " = ";
-        }
+        os << get_name(inst, cnt++);
+        os << " = ";
         ir::type* type = inst->get_type();
         os << inst->repr() << " " << type->repr();
         ir::instruction::ops_t ops = inst->ops();

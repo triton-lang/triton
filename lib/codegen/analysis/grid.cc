@@ -76,16 +76,16 @@ void grids::init_c_graph(ir::instruction *v) {
   // Reshape
   if(dynamic_cast<ir::reshape_inst*>(v)) {
     ir::value *op = v->get_operand(0);
+    auto op_shapes = op->get_type()->get_tile_shapes();
     unsigned current = 0;
     bool is_skewed = false;
     for(unsigned i = 0; i < shapes.size(); i ++){
-      bool is_one  = shapes[i] == 1;
-      bool is_same = shapes[i] == op->get_type()->get_tile_shapes()[current];
-      if(is_one){
+      if(shapes[i] == 1){
         static_params_.insert({{v, i}, 1});
         add_constraint({v, i}, {v, i});
       }
-      else if(!is_skewed && is_same)
+      else if(!is_skewed &&
+        shapes[i] == op_shapes[current])
         add_constraint({v, i}, {op, current++});
       else{
         is_skewed = true;
@@ -130,13 +130,10 @@ void grids::init_c_graph(ir::instruction *v) {
   }
   // Element-wise
   else if(dynamic_cast<ir::user*>(v)) {
-    for(unsigned k = 0; k < v->get_num_results(); k++){
-      ir::value *result = v->get_result(k);
-      for(unsigned i = 0; i < shapes.size(); i ++){
-        std::vector<ir::value*> ops = v->ops();
-        for(ir::value* op: ops)
-          add_constraint({result, i}, {op, i});
-      }
+    for(unsigned i = 0; i < shapes.size(); i ++){
+      std::vector<ir::value*> ops = v->ops();
+      for(ir::value* op: ops)
+        add_constraint({v, i}, {op, i});
     }
   }
 }

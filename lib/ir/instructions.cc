@@ -20,11 +20,6 @@ instruction::instruction(type *ty, unsigned num_ops, unsigned num_results, const
     auto it = std::find(block->begin(), block->end(), next);
     block->get_inst_list().insert(it, next);
   }
-  if(num_results == 1)
-    results_.push_back(this);
-  else
-    for(unsigned i = 0; i < num_results; i++)
-      results_.push_back(new result_reference(this, i));
 }
 
 void instruction::erase_from_parent() {
