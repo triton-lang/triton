@@ -731,6 +731,7 @@ barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instru
   return new barrier_inst(ctx, name, next);
 }
 
+
 // nv_dynamic_program_idx
 nv_dynamic_program_idx_inst::nv_dynamic_program_idx_inst(type *ty, const std::string &name, instruction *next)
   : instruction(ty, 0, 1, name, next) { }
@@ -752,6 +753,7 @@ nv_static_program_idx* nv_static_program_idx::get(constant_range* range) {
     cache.insert({range, new nv_static_program_idx(range)});
   return cache.at(range);
 }
+
 
 
 }
