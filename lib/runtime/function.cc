@@ -194,12 +194,12 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   std::unique_ptr<codegen::target> target = context->device()->make_target();
 
   // create passes
-  codegen::analysis::grids grids(opt.num_warps);
   codegen::analysis::meminfo shmem_info;
   codegen::analysis::liveness shmem_liveness(&shmem_info);
-  codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &grids);
   codegen::analysis::align alignment_info;
   codegen::transform::reorder reorder(&alignment_info, &shmem_info);
+  codegen::analysis::grids grids(opt.num_warps, &reorder);
+  codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &grids);
   codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
   codegen::transform::vectorize vectorize(&grids);
   codegen::transform::dce dce;

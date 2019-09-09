@@ -17,6 +17,11 @@ namespace ir{
 }
 
 namespace codegen{
+
+namespace transform{
+class reorder;
+}
+
 namespace analysis{
 
 class grids {
@@ -36,12 +41,12 @@ private:
   fragment_t get_fragmentation_type(node_t x, graph_t &graph);
   void connected_components(node_t x, const std::vector<ir::metaparameter *> mps, const std::vector<std::string> prefixes, std::set<node_t> &nodes, graph_t &graph, unsigned group_id);
   void create_grids(std::vector<ir::value*> &grids,
-                    std::map<unsigned, ir::value*> &references,
+                    std::map<std::pair<unsigned, std::vector<unsigned> >, triton::ir::value *> &references,
                     ir::function *fn);
 
 
 public:
-  grids(size_t num_warps);
+  grids(size_t num_warps, transform::reorder* reorder);
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   unsigned get_param_group(ir::value *value, unsigned ax);
   fragment_t get_fragment(ir::value *value, unsigned ax) { return fragments_.at({value, ax}); }
@@ -60,6 +65,8 @@ private:
   std::vector<ir::value*> grids_;
   std::map<ir::value*, std::map<unsigned, unsigned>> groups_;
   size_t num_warps_;
+  transform::reorder* reorder_;
+
 };
 
 
