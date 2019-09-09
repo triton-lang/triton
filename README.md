@@ -6,12 +6,11 @@ The formal foundations of this project are described in the following MAPL2019 p
 
 
 The main features of Triton at the moment are:
+-  **PyTriton**: A Python API for writing custom operations for Triton-C compute-kernels. PyTriton automatically generates and just-in-time Tensorflow and PyTorch bindings.
+- **Triton-C**: An imperative, single-threaded language for writing highly efficient compute-kernels at a relatively high abstraction level using numpy-like extensions of the C language.
+- **Triton-IR**: An intermediate-representation for optimizing multi-dimensional array operations in linear algebra programs
+- **Triton-JIT**: An optimizing just-in-time compiler for Triton-C, which generates GPU code on par with state-of-the-art CUDA-C  (e.g.,  [CUTLASS](https://github.com/NVIDIA/cutlass)) and PTX (e.g., [ISAAC](https://github.com/ptillet/isaac)). This includes transparent support for mixed-precision and Tensor Cores.
 
-- Triton-C: An imperative, single-threaded language for writing highly efficient compute-kernels at a relatively high abstraction level using numpy-like extensions of the C language.
-
--  PyTriton: A Python API for writing custom operations for Triton-C compute-kernels. PyTriton automatically generates and just-in-time Tensorflow and PyTorch bindings.
-
--  Triton-JIT: An optimizing just-in-time compiler for Triton-C, which generates GPU code on par with state-of-the-art CUDA-C  (e.g.,  [CUTLASS](https://github.com/NVIDIA/cutlass)) and PTX (e.g., [ISAAC](https://github.com/ptillet/isaac)). This includes transparent support for mixed-precision and Tensor Cores.
 
 
 
@@ -30,7 +29,8 @@ python dot.py
 
 ## Tutorials
 
-- [Write your own custom kernel using Triton-C](https://github.com/ptillet/triton/blob/master/docs/triton-c.md)
-- [Write your own custom Deep Learning op using PyTriton](https://github.com/ptillet/triton/blob/master/docs/pytriton.md)
-
+- The PyTriton API (coming soon...)
+- [The Triton-C language](https://github.com/ptillet/triton/blob/master/docs/triton-c.md)
+- The Triton-IR representation (coming soon...)
+- The Triton-JIT compiler (coming soon...)
 
