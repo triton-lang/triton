@@ -11,9 +11,15 @@
     	2. [Parameterization](#parameterization)
     	3. [Auto-Tuning](#auto-tuning)
 3. [Matrix Transposition](#matrix-transposition)
+    1. [Compute Kernel](#trans-compute-kernel)
+    2. [Conditional Dereferencing](#conditional-dereferencing)
 4. [Matrix Multiplication](#matrix-multiplication)
-
-
+    1. [Compute Kernel](#matmul-compute-kernel)
+    2. [Optimizations](#optimizations)
+    	1. [Pre-Fetching](#pre-fetching)
+    	1. [Rematerialization](#rematerialization)
+    3. [Fused Transpositions](#fused-trans)
+  
 ## <span style="color:darkred"> Motivations </span> <a name="motivations"></a>
 
 ## <span style="color:darkblue"> Issues of C/C++ for Linear Algebra </span> <a name="issues-c-c++"></a>
@@ -163,7 +169,226 @@ _Note: Tuning our reference CUDA kernel would be much more cumbersome, as templa
 
 ## <span style="color:darkred">  Matrix Transposition </span> <a name="matrix-transposition"></a>
 
+Transpositions are (relatively) hard to efficiently write in CUDA because a naive implementation would lead to _uncoalesced_ memory operations when writing back the transposed matrix to DRAM. Therefore, optimized CUDA implementations require the explicit use of shared memory, as shown [here](https://devblogs.nvidia.com/efficient-matrix-transpose-cuda-cc/).
 
-## <span style="color:darkred">  Matrix Multiplication </span> <a name="matrix-transposition"></a>
+### <span style="color:darkblue"> Compute Kernel </span> <a name="trans-compute-kernel"></a>
 
-## <span style="color:darkred">  Next Steps</span> <a name="matrix-transposition"></a>
+In Triton, however, kernels are single-threaded and the compiler automatically detects if and when data should be temporarily stashed to shared memory. Therefore, an optimal Triton kernel for this operation would look like:
+
+```c
+// launched on a grid of (M / TM) x (N / TN) programs of 1 thread each
+__global__ void transpose(TYPE * X, TYPE * Y,  int M, int N, int ldx, int ldy) {
+// extract program ID
+  int pidm = get_program_id(0); //(1)
+  int pidn = get_program_id(1); //(2)
+  // create 1D range along the two matrix's axes
+  int rm[TM] = pidm * TM + 0 ... TM; //(3)
+  int rn[TN] = pidn * TN + 0 ... TN; //(4)
+  // create 2D array of pointers
+  TYPE* px[TM, TN] = X + rm[:, newaxis] + rn[newaxis, :] * ldx; //(5)
+  TYPE* py[TN, TM] = Y + rm[newaxis, :] * ldy + rn[:, newaxis]; //(6)
+  // write back using the transposition operator '^'
+  *py = ^(*px); //(7)
+}
+```
+
+This kernel loads a `TM x TN` tile from the input matrix `X`, transposes it and write the resulting `TN x TM` tile to the output matrix `Y`. As a result, transposition of the full input matrix is achieved by launching a grid of `(M / TM) x (N / TN)` programs decomposed as follows:
+
+- Statements (1) and (2) extract the location of the program in the grid. For example, the program producing the output tile `Y[TN:2TN-1, 2TN:3TN-1]` will hold the values:
+```
+pidm = 2
+pidn = 1
+``` 
+
+- Statements (3) and (4) construct the ranges of indices to read from  the first and second axis of X:
+```
+rm = [pidm*TM + 0, pidm*TM + 1, ..., pidm*TM + (TM - 1)]
+rn = [pidn*TN + 0, pidn*TN + 1, ..., pidn*TN + (TN - 1)]
+```
+
+- Statements (5) constructs the following array of pointers `px` using numpy-style broadcasting semantics:
+```
+│ X + (pidm*TM + 0)       + (pidn*TN + 0)*ldx,  ...,  ...,  X + (pidm*TM + 0)      +  (pidn*TN + TN - 1)*ldx) │
+│      ⋮                                                                                       ⋮             │
+│      ⋮                                                                                       ⋮             │
+│ X + (pidm*TM + TM - 1)  + (pidn*TN + 0)*ldx,  ...,  ...,  X + (pidm*TM + TM - 1) +  (pidn*TN + TN - 1)*ldx) │
+```
+- Statement (6) constructs the following array of pointers `py` using numpy-style broadcasting semantics:
+```
+│ Y + (pidn*TN + 0)       + (pidm*TM + 0)*ldy,  ...,  ...,  Y + (pidn*TN + 0)      +  (pidm*TM + TM - 1)*ldy) │
+│      ⋮                                                                                       ⋮             │
+│      ⋮                                                                                       ⋮             │
+│ Y + (pidn*TN + TN - 1)  + (pidn*TN + 0)*ldy,  ...,  ...,  Y + (pidn*TN + TN - 1) +  (pidm*TM + TM - 1)*ldy) │
+```
+- Statement (7) element-wise dereferences the above array of pointers `*px`, transposes it using the unary transposition operator `^`, and writes it back at the location specified by `py`.
+
+### <span style="color:darkblue"> Conditional Dereferencing </span> <a name="conditional-dereferencing"></a>
+
+You might have noticed that the above code will fail when `M` and `N` are not multiples of `TM` and `TN` respectively. Fortunately, the above kernel can be slightly modified to handle thie situation, as shown below:
+```
+// launched on a grid of ((M + TM - 1) / TM) x ((N + TN - 1) / TN) programs
+__global__ void transpose(TYPE * X, TYPE * Y,  int M, int N, int ldx, int ldy) {
+   // ...
+   // create bounds-checking mask
+   bool checkx[TM, TN] = (rm[:, newaxis] < M) && (rn[newaxis, :] < N); //(7a)
+   bool checky[TN, TM] = (rm[newaxis, :] < M) && (rn[:, newaxis] < N); //(7b)
+   // conditional write-back using the conditional dereferencing operatior '*?()'
+   *?(checky)py = ^(*?(checkx)px); //(7)
+}
+```
+
+Here, statements (7a) creates an array of booleans `checkx[TM, TN]` such that `checkx(i, j) = True` if and only if `px(i, j)` should be dereferenced. Statement (7b) does the same for `py`. Then, both `px` and `py` can be conditionally dereferenced using Triton-C's conditional dereferencing operator `*?(predicate) pointer`.
+
+
+## <span style="color:darkred">  Matrix Multiplication </span> <a name="matrix-multiplication"></a>
+
+The purpose of this section is to present a Triton-C implementation of matrix multiplication that achieves performance competitive with the best existing hand-written CUDA-C kernels (see [CUTLASS](https://github.com/NVIDIA/cutlass)). We will also see how pre-processors macros can be leveraged to fuse transposition operations as well as to provide support for auto-tuning and FP16 Tensor Cores.
+
+_Note: Bounds-checking is ommitted for the sake of clarity. This feature can be easily added into our kernel, but may result in a slight performance hit because LLVM and PTXAS have issues dealing with conditionals and predicates inside loops._
+
+### <span style="color:darkblue"> Compute Kernel </span> <a name="matmul-compute-kernel"></a>
+
+Matrix multiplications of the form `C = A x B` can be implemented in Triton-C fairly concisely, as shown below:
+
+```c
+// launched on a grid of (M / TM) x (N / TN) programs of 1 thread each
+__global__ void dot(TYPE * A, TYPE * B, TYPE * C,  int M, int N, int K,
+        	        int lda __multipleof(8),  int ldb __multipleof(8),  int ldc __multipleof(8)) {
+  // prologue
+  int pm = get_program_id(0); //(1)
+  int pn = get_program_id(1); //(2)
+  int rm[TM] = pm * TM + 0 ... TM; //(3)
+  int rn[TN] = pn * TN + 0 ... TN; //(4)
+  int rk[TK] = 0 ... TK; //(5)
+  // initialize accumulator 
+  float c[TM, TN] = 0; //(6)
+  // pointers to operands
+  TYPE* pa[TM, TK] = A + rk[newaxis, :] * 1 + rm[:, newaxis] * lda; //(7)
+  TYPE* pb[TK, TN] = B + rk[:, newaxis] * ldb + rn[newaxis, :] * 1; //(8)
+  // reduction loop
+  for(int k = K; k > 0; k-= TK){
+    // fetch operands
+    TYPE a[TM, TK] = *pa; //(9) 
+    TYPE b[TK, TN] = *pb; //(10)
+    // matrix-multiply accumulate
+    c += a @ b; //(11)
+    // increment pointers
+    pa = pa + TK * 1; //(12)
+    pb = pb + TK * ldb; //(13)
+  }
+  // epilogue
+  TYPE* pc[TM, TN] = C + rn[newaxis, :] + rm[:, newaxis] * ldc; //(14)
+  *pc = c; //(15)
+}
+```
+Here, each kernel instance produces a `TM x TN` tile of the output matrix C as follows:
+
+- Statements (1) - (2) fetch the id of the current program instance.
+- Statements (3) - (4) construct ranges of indices to process for the vertical and horizontal axes of the output matrix `C`
+- Statement (5) constructs a range of indices along the reduction axis: `rk = [0, 1, ..., TK - 1]`
+- Statement (6) initialize a `TM x TN` array of accumulators to hold the result of `A[rm, :] x B[:, rn]`
+- Statements (7) - (8) initializes arrays of pointers `pa` and `pb` to the operands `A` and `B` using logic similar to that of the above transposition kernel
+- Statements (9) - (10) load tiles of operands by dereferencing `pa` and `pb`
+- Statement (11) performs updates the accumulator array using Triton-C's matrix multiplication operator '@'
+- Statements (12) - (13) updates `pa` and `pb`
+- Statement (14) creates an array of pointers `pc` to the result matrix `C`
+- Statement (15) writes back the accumulator to `C`
+
+Internally, the Triton compiler will perform quite a few optimizations that will ensure good performance for this kernel:
+
+- Automatic coalescing of load/store operations
+- Automatic vectorization of load/store operations
+- Stashing `a` and `b` to shared memory
+- Automatic allocation of shared memory
+- Automatic synchronization of shared memory
+- Automatic padding of shared memory to avoid bank conflicts
+- Automatic usage of tensor cores when TYPE = half and TK % 4 = 0
+
+### <span style="color:darkblue"> Optimizations </span> <a name="optimizations"></a>
+
+Nonetheless, there are two important optimizations that the Triton compiler does not do at the moment yet are critical to achieve peak performance: pre-fetching and rematerialization. In this subsection we describe how these optimizations can be done manually by  modifying the above source-code.
+
+#### <span style="color:purple"> Pre-Fetching </span> <a name="pre-fetching"></a>
+
+The purpose of pre-fetching is to overlap the update of the accumulator `c` with the memory loads for the next tiles that will need to be multiplied. This can be done by modifying the above reduction loop as follows:
+
+```
+// pre-fetch operands
+TYPE a[TM, TK] = *pa; //(9) 
+TYPE b[TK, TN] = *pb; //(10)
+for(int k = K; k > 0; k-= TK){
+   c += a @ b;
+   pa = pa + TK * 1;
+   pb = pb + TK * ldb;
+   // don't prefetch last iteration
+   bool check = k > TK;
+   // pre-fetch operands
+   a = check ? *pa : 0;
+   b = check ? *pb : 0;
+ }
+```
+
+Note that the Triton-C compiler will now also be able to use double-buffering techniques to make sure that the array `a` can be used and updated at the same time without any memory hazard.
+
+#### <span style="color:purple"> Rematerialization </span> <a name="rematerialization"></a>
+
+[Rematerialization](https://en.wikipedia.org/wiki/Rematerialization) is a compiler optimization which consists in recomputing some values instead of storing and reloading them from (register) memory, so as to decrease register pressure in the compute kernel. Although LLVM does this automatically to some extent, it fails to find good heuristics for the above kernel -- thereby requiring some source code modification to achieve optimal performance. Fortunately, only `rm` and `rn` need to be rematerialized, leading to the  following epilogue:
+
+```c
+// epilogue
+int rcm[TM] = pm * TM + 0 ... TM;
+int rcn[TN] = pn * TN + 0 ... TN;
+TYPE* pc[TM, TN] = C + rcn[newaxis, :] + rcm[:, newaxis] * ldc;
+*pc = c; 
+```
+
+### <span style="color:darkblue"> Fused Transpositions </span> <a name="fused-trans"></a>
+
+It is common for optimized matrix-multiplication implementations (e.g., BLAS) to provide variants in which one or both operands are transposed. This is also what is done in the [PyTriton](https://github.com/ptillet/triton/blob/master/python/triton/ops/dot.py) implementation of matrix-multiplication. Fortunately, this can be done by using pre-processors macros for tile shapes and broadcasting directives, leading to the following kernel:
+
+```c
+void dot(TYPE * A, TYPE * B, TYPE * C,
+         int M, int N, int K,
+         int lda __multipleof(8),  int ldb __multipleof(8),  int ldc __multipleof(8)) {
+  // prologue
+  int pm = get_program_id(0);
+  int pn = get_program_id(1);
+  int rm[TM] = pm * TM + 0 ... TM;
+  int rn[TN] = pn * TN + 0 ... TN;
+  int rk[TK] = 0 ... TK;
+  float c[TM, TN] = 0;
+  // pointers to operands
+  TYPE* pa[SHAPE_A] = A + rk[BROADCAST_AK] * STRIDE_AK + rm[BROADCAST_AM] * STRIDE_AM;
+  TYPE* pb[SHAPE_B] = B + rk[BROADCAST_BK] * STRIDE_BK + rn[BROADCAST_BN] * STRIDE_BN;
+  // prefetches operands
+  TYPE a[SHAPE_A] = (*pa);
+  TYPE b[SHAPE_B] = (*pb);
+  // reduction loop
+  for(int k = K; k > 0; k-= TK){
+    c += USE_A @ USE_B;
+    pa = pa + TK * STRIDE_AK;
+    pb = pb + TK * STRIDE_BK;
+    a = *pa;
+    b = *pb;
+  }
+  // epilogue
+  int rcm[TM] =  pm * TM + 0 ... TM;
+  int rcn[TN] =  pn * TN + 0 ... TN;
+  TYPE* pc[TM, TN] = C + rcn[newaxis, :] + rcm[:, newaxis] * ldc;
+  *pc = c;
+}
+```
+
+All matrix multiplications variants can then be retrieved using the following compilation option:
+```c
+// A is not transposed
+-DUSE_A=a -DSTRIDE_AK=1-DSTRIDE_AM=lda -DBROADCAST_AK=newaxis,: -DBROADCAST_AN=:,newaxis -DSHAPE_A=TM,TK
+// A is transposed
+-DUSE_A=^a -DSTRIDE_AK=lda-DSTRIDE_AM=1 -DBROADCAST_AK=:,newaxis -DBROADCAST_AN=newaxis,: -DSHAPE_A=TK,TM
+// B is not transpose
+-DUSE_B=b -DSTRIDE_BK=ldb-DSTRIDE_BN=1 -DBROADCAST_BK=:,newaxis -DBROADCAST_BN=newaxis,: -DSHAPE_B=TK,TN
+// B is transpose
+-DUSE_B=^b -DSTRIDE_BK=1-DSTRIDE_BN=ldb -DBROADCAST_BK=newaxis,: -DBROADCAST_BN=:,newaxis -DSHAPE_B=TN,TK
+```
+
+
