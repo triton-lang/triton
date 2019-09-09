@@ -1436,6 +1436,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
 }
 
 void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
+  std::cout << src->get_name() << std::endl;
   if(src->has_tile_result_or_op()) {
     lower_tile_instruction(src, builder);
   }

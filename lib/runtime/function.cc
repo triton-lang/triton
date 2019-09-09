@@ -199,7 +199,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::analysis::liveness shmem_liveness(&shmem_info);
   codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &grids);
   codegen::analysis::align alignment_info;
-  codegen::transform::reorder reorder(&alignment_info);
+  codegen::transform::reorder reorder(&alignment_info, &shmem_info);
   codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
   codegen::transform::vectorize vectorize(&grids);
   codegen::transform::dce dce;
@@ -211,7 +211,9 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   alignment_info.run(module);
   ir::print(module, std::cout);
-//  reorder.run(module);
+  if(target->is_gpu())
+    shmem_info.run(module);
+  reorder.run(module);
   dce.run(module);
   ir::print(module, std::cout);
   grids.run(module);
@@ -229,6 +231,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   vectorize.run(module);
   dce.run(module);
+  ir::print(module, std::cout);
   // generate llvm code
   llvm::LLVMContext ctx;
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));

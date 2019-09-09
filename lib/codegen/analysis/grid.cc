@@ -157,7 +157,7 @@ grids::fragment_t grids::get_fragmentation_type(node_t x, graph_t &graph){
 }
 
 void grids::connected_components(node_t x, const std::vector<ir::metaparameter *> mps, const std::vector<std::string> prefixes, std::set<node_t> &nodes, graph_t &graph, unsigned group_id) {
-//  std::cout << "connected component: " << x.first->get_name() << " " << x.second << std::endl;
+  std::cout << "connected component: " << x.first->get_name() << " " << x.second << std::endl;
   groups_[x.first].insert({x.second, group_id});
   if(nodes.find(x) != nodes.end()){
     nodes.erase(x);
@@ -229,10 +229,13 @@ void grids::run(ir::module &mod) {
     create_grids(grids_, references, fn);
   }
 
+
   unsigned num_threads = get_num_threads();
   auto clamp = [&](unsigned x, unsigned lo, unsigned hi) { return std::min(std::max(x, lo), hi); };
 
   for(ir::value *i: grids_){
+    std::cout << "grid: " << i->get_name() << std::endl;
+
     if(!i->get_type()->is_tile_ty())
       continue;
     auto shapes = i->get_type()->get_tile_shapes();
