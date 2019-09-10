@@ -10,7 +10,8 @@
     	3. [Auto-Tuning](#auto-tuning)
 3. [Matrix Transposition](#matrix-transposition)
     1. [Compute Kernel](#trans-compute-kernel)
-    2. [Conditional Dereferencing](#conditional-dereferencing)
+    2. [The __multipleof Attribute](#trans-multipleof)
+    3. [Conditional Dereferencing](#conditional-dereferencing)
 4. [Matrix Multiplication](#matrix-multiplication)
     1. [Compute Kernel](#matmul-compute-kernel)
     2. [Optimizations](#optimizations)
@@ -243,6 +244,18 @@ which will be used in statements (5) and (6) to construct tiles of pointers
 ```
 - Statement (7) element-wise dereferences the above array of pointers `*px`, transposes it using the unary transposition operator `^`, and writes it back at the location specified by `py`.
 
+### <span style="color:darkblue"> The __multipleof Attribute </span> <a name="trans-multipleof"></a>
+
+The memory loads and store in our transposition kernel are not vectorizable by default, since `X + ldx` (and `Y + ldy`) may be misaligned when `ldx` (and `ldy`) are not multiples of e.g., 4. This is unfortunate because tensor dimensions can be easily made into  nice powers of two in Deep Learning, due to batch-sizes and layer width being flexible.
+
+For this reason, Triton provides a __multipleof(N) attributes for variables that are guaranteed to always be multiple of N. In the case of Matrix Transpositions, vector loads can be enabled by modifying the function's signature as follows:
+
+```c
+__global__ void transpose(TYPE * X, TYPE * Y,  int M, int N, int ldx __multipleof(8), int ldy __multipleof(8)) {
+// ...
+}
+```
+    
 ### <span style="color:darkblue"> Conditional Dereferencing </span> <a name="conditional-dereferencing"></a>
 
 You might have noticed that the above code will fail when `M` and `N` are not multiples of `TM` and `TN` respectively. Fortunately, the above kernel can be slightly modified to handle thie situation, as shown below:
