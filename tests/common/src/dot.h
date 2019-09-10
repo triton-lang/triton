@@ -34,11 +34,11 @@ R"(
 #define SHAPE_B TK, TN
 #endif
 
-void dot(TYPE * A, TYPE * B, TYPE * C,
-         int M, int N, int K,
-         int lda __multipleof(8),
-         int ldb __multipleof(8),
-         int ldc) {
+__global__ void dot(TYPE * A, TYPE * B, TYPE * C,
+                    int M, int N, int K,
+                    int lda __multipleof(8),
+                    int ldb __multipleof(8),
+                    int ldc) {
   // prologue
   int ridx = get_program_id(0);
   int ridy = get_program_id(1);

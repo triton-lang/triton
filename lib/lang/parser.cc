@@ -1000,6 +1000,10 @@ QualType Parser::ParseDeclSpec(int* storageSpec, int* funcSpec, int* alignSpec) 
       EnsureAndSetStorageSpec(tok, storageSpec, S_EXTERN);
       break;
 
+    case Token::GLOBAL:
+      EnsureAndSetStorageSpec(tok, storageSpec, S_GLOBAL);
+      break;
+
     case Token::STATIC:
       if (!storageSpec)
         Error(tok, ERR_FUNC_SPEC);
@@ -1018,10 +1022,6 @@ QualType Parser::ParseDeclSpec(int* storageSpec, int* funcSpec, int* alignSpec) 
 
     case Token::AUTO:
       EnsureAndSetStorageSpec(tok, storageSpec, S_AUTO);
-      break;
-
-    case Token::REGISTER:
-      EnsureAndSetStorageSpec(tok, storageSpec, S_REGISTER);
       break;
 
     // Type qualifier
