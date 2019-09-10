@@ -227,7 +227,7 @@ which will be used in statements (5) and (6) to construct tiles of pointers
 ### <span style="color:darkblue"> Conditional Dereferencing </span> <a name="conditional-dereferencing"></a>
 
 You might have noticed that the above code will fail when `M` and `N` are not multiples of `TM` and `TN` respectively. Fortunately, the above kernel can be slightly modified to handle thie situation, as shown below:
-```
+```c
 // launched on a grid of ((M + TM - 1) / TM) x ((N + TN - 1) / TN) programs
 __global__ void transpose(TYPE * X, TYPE * Y,  int M, int N, int ldx, int ldy) {
    // ...
