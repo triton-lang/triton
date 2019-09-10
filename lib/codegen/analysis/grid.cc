@@ -332,10 +332,10 @@ void grids::create_grids(std::vector<ir::value*> &grids,
   std::set<ir::value*> seen;
   std::function<void(ir::value*)> bind_references = [&](ir::value *v)
   {
-    auto order = reorder_->get_order(v);
     // skip
     if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
       return;
+    auto order = reorder_->get_order(v);
     // recurse
     if(auto *user = dynamic_cast<ir::user*>(v))
       for(ir::value *op: user->ops())
@@ -360,6 +360,7 @@ void grids::create_grids(std::vector<ir::value*> &grids,
   for(auto &ref: references)
     if(std::find(grids.begin(), grids.end(), ref.second) == grids.end())
       grids.push_back(ref.second);
+  std::cout << grids.size() << std::endl;
 }
 
 

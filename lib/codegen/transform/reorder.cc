@@ -18,13 +18,26 @@ reorder::reorder(analysis::align* align, analysis::meminfo *mem)
   : align_(align), mem_(mem) { }
 
 std::vector<unsigned> reorder::get_order(ir::value* v) {
-  std::cout << v->get_name() << std::endl;
   return order_.at(v);
 }
 
 void reorder::run(ir::module &mod) {
 
   std::set<ir::io_inst*> io;
+
+  std::function<void(ir::value*)> set_order = [&](ir::value *v) -> void {
+    if(order_.find(v) != order_.end())
+      return;
+    if(ir::user* u = dynamic_cast<ir::user*>(v))
+      for(ir::value* op: u->ops())
+        set_order(op);
+    ir::type* ty = v->get_type();
+    if(!ty->is_tile_ty())
+      return;
+    std::vector<unsigned> order(ty->get_tile_shapes().size());
+    std::iota(order.begin(), order.end(), 0);
+    order_[v] = order;
+  };
 
   // initialize work-list
   for(ir::function *fn: mod.get_function_list())
@@ -34,10 +47,8 @@ void reorder::run(ir::module &mod) {
       ir::type* ptr_ty = x->get_pointer_operand()->get_type();
       if(ptr_ty->is_tile_ty())
         io.insert(x);
-      std::vector<unsigned> order(ptr_ty->get_tile_shapes().size());
-      std::iota(order.begin(), order.end(), 0);
-      order_[i] = order;
     }
+    set_order(i);
   }
 
   ir::builder &builder = mod.get_builder();
@@ -48,9 +59,8 @@ void reorder::run(ir::module &mod) {
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(), [&](unsigned a, unsigned b) { return max_contiguous[a] > max_contiguous[b]; } );
     std::list<ir::instruction*> work_list;
-    if(order != order_[i]){
+    if(order != order_[i])
       work_list.push_back(i);
-    }
     // rematerialize recursively
     while(!work_list.empty()) {
       ir::instruction* current = work_list.back();

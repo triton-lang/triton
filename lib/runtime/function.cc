@@ -210,9 +210,9 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   peephole.run(module);
   dce.run(module);
   alignment_info.run(module);
-  ir::print(module, std::cout);
   if(target->is_gpu())
     shmem_info.run(module);
+  ir::print(module, std::cout);
   reorder.run(module);
   dce.run(module);
   ir::print(module, std::cout);
