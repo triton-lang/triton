@@ -66,7 +66,6 @@ float v[16, 32] = u[:, newaxis]; // broadcasting along the second axis
 ```
 which is valid _Triton-C_. 
 
-_Note: Triton-C is single-threaded._
 
 - **Portability**: One other issue with our initial C99 program is that it is not portable. While it will run well on a single CPU thread, the operation `z = x + y` would perform poorly on a GPU Streaming Processor as it would execute on a single thread only. For this readon, it would have to be rewritten for GPUs as follows:
 ```
@@ -76,7 +75,7 @@ float x = 3.14;
 float y = 5.17;
 float z = x + y
 ```
-In Triton-C, the same code can be used on many different platforms (only CPUs and GPUs are supported at the moment).
+In Triton-C, the same code can be used on many different platforms (only CPUs and GPUs are supported at the moment). Furthermore, Triton-C is single-threaded, hence easier to write than CUDA.
 
 - **Performance**: Another issue with our initial C99 code snippet is its performance. Although the loops are unrolled, the program does not carry the data-flow information of array operations. This issue gets more and more problematic as programs get increasingly complex, eventually culminating in matrix multiplication being remarkably hard to optimize. 
 
