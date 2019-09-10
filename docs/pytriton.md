@@ -10,8 +10,8 @@ This tutorial is the continuation of the [Triton-C tutorial](https://github.com/
     1. [Creation of Triton Kernels](#creation-triton-kernels)
     2. [Usage of Triton Kernels](#usage-triton-kernels)
 3. [Integration with Automatic Differentiation](#autodiff)
-    1. [Basics](#autodiff:basics)
-    2. [Convenience](#autodiff:convenience)
+    1. [Basics](#autodiff-basics)
+    2. [Convenience](#autodiff-convenience)
 
 
 ## <span style="color:darkred"> Motivations </span> <a name="motivations"></a>
@@ -192,7 +192,7 @@ While this code should be mostly self-explanatory, there are a few of noteworthy
 
 At this point, our custom operation only takes two tensor arguments and transposition information, which is good. However, it is still not compatible with PyTorch's or TensorFlow's automatic differentiation engine, and a small amount of additional effort is needed.
 
-### <span style="color:darkblue"> Basics </span> <a name="autodiff:basics"></a>
+### <span style="color:darkblue"> Basics </span> <a name="autodiff-basics"></a>
 
 PyTriton binds to Tensorflow's and PyTorch's automatic differentiation framework using a single, common API inspired by PyTorch. It consists of two static methods `forward` and `backward` that take a context as their first input:
 
@@ -225,7 +225,7 @@ PyTriton binds to Tensorflow's and PyTorch's automatic differentiation framework
     return da, db, None, None, None, None, None, None, None
 ```
 
-### <span style="color:darkblue">Convenience </span> <a name="autodiff:convenience"></a>
+### <span style="color:darkblue">Convenience </span> <a name="autodiff-convenience"></a>
 
 Still like for PyTorch, a callable operation can be created using the `apply` method of our `triton.function` class. We wrap it as a module variable for convenience:
 
