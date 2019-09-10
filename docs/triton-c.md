@@ -67,7 +67,7 @@ float v[16, 32] = u[:, newaxis]; // broadcasting along the second axis
 which is valid _Triton-C_. 
 
 
-- **Portability**: One other issue with our initial C99 program is that it is not portable. While it will run well on a single CPU thread, the operation `z = x + y` would perform poorly on a GPU Streaming Processor as it would execute on a single thread only. For this readon, it would have to be rewritten for GPUs as follows:
+- **Portability**: One other issue with our initial C program is that it is not portable. While it will run well on a single CPU thread, the operation `z = x + y` would underutilize a GPU Streaming Processor as it would execute on a single thread only. For this reason, it would have to be rewritten in CUDA as follows:
 ```
 // CUDA
 // Launch on a block of 16 x 8 threads
@@ -75,16 +75,16 @@ float x = 3.14;
 float y = 5.17;
 float z = x + y
 ```
-In Triton-C, the same code can be used on many different platforms (only CPUs and GPUs are supported at the moment). Furthermore, Triton-C is single-threaded, hence easier to write than CUDA.
+In Triton-C, the same code can be used across many different platforms (only CPUs and GPUs are supported at the moment). Furthermore, Triton-C is single-threaded, hence easier to write than CUDA.
 
-- **Performance**: Another issue with our initial C99 code snippet is its performance. Although the loops are unrolled, the program does not carry the data-flow information of array operations. This issue gets more and more problematic as programs get increasingly complex, eventually culminating in matrix multiplication being remarkably hard to optimize. 
+- **Performance**: Another issue with our initial C code snippet is its performance. Although the loops are unrolled, the program does not carry any data-flow information pertaining to array operations. This issue gets more and more problematic as programs get increasingly complex, eventually culminating in matrix multiplication being remarkably hard to optimize. 
 
-    This can be worked around using heavy metaprogramming techniques (see [CUTLASS](https://github.com/NVIDIA/cutlass)), but even then programmers still have to allocate and synchronize shared memory manually and endure prohibitively long compilation procedures not easily amenable to auto-tuning. For these reasons, most Deep-Learning frameworks still rely heavily on highly optimized subroutines (e.g., BLAS), which makes the development of novel custom primitives time-consuming for experts and challenging for others.
+    This can be worked around using heavy metaprogramming techniques (see [CUTLASS](https://github.com/NVIDIA/cutlass)), but even then programmers still have to allocate and synchronize shared memory manually and endure prohibitively long compilation procedures not easily amenable to auto-tuning. For these reasons, most Deep-Learning frameworks still rely heavily on highly optimized subroutines (e.g., BLAS), which makes the development of novel custom primitives time-consuming for experts and almost impossible for others.
     
     Triton addresses this issue by relying on **Triton-IR**, an LLVM-like IR for array operations, and **Triton-JIT**, an optimizing compiler for Triton-IR. These two systems are, however, beyond the scope of this tutorial. More information can be found [here](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf).
 
     
-_Note: You might be thinking that this is exactly what [MLIR](https://github.com/tensorflow/mlir) was made for... and you're right! You can think of Triton-IR as a dialect for MLIR, and Triton-C as a frontend for it. If you're interested in making this a thing, let me know._
+_Note: You might be thinking that this is exactly what [MLIR](https://github.com/tensorflow/mlir) was made for... and you're right! You can conceptually think of Triton-IR as a dialect for MLIR, and Triton-C as a frontend for it. I would like to integrate Triton-IR into MLIR in the future; If you're interested in making this a thing, let me know._
 
 
 
