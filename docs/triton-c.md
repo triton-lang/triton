@@ -169,11 +169,11 @@ _Note: Tuning our reference CUDA kernel would be much more cumbersome, as templa
 
 ## <span style="color:darkred">  Matrix Transposition </span> <a name="matrix-transposition"></a>
 
-Transpositions are (relatively) hard to efficiently write in CUDA because a naive implementation would lead to _uncoalesced_ memory operations when writing back the transposed matrix to DRAM. Therefore, optimized CUDA implementations require the explicit use of shared memory, as shown [here](https://devblogs.nvidia.com/efficient-matrix-transpose-cuda-cc/).
+Transpositions are (relatively) hard to efficiently write in CUDA as naive implementations typically suffer from _uncoalesced_ memory operations when writing back the transposed matrix to DRAM.  Of course, this can be fixed by using shared memory as shown [here](https://devblogs.nvidia.com/efficient-matrix-transpose-cuda-cc/), but this comes at the cost of simplicity and -- more importantly -- interferes with auto-tuning.
 
 ### <span style="color:darkblue"> Compute Kernel </span> <a name="trans-compute-kernel"></a>
 
-In Triton, however, kernels are single-threaded and the compiler automatically detects if and when data should be temporarily stashed to shared memory. Therefore, an optimal Triton kernel for this operation would look like:
+In Triton, however, kernels are single-threaded and the compiler automatically detects if and when data should be temporarily stashed to shared memory in order to enable shared memory stores/loads. Therefore, an optimal Triton kernel for this operation would look like:
 
 ```c
 // launched on a grid of (M / TM) x (N / TN) programs of 1 thread each
@@ -192,19 +192,21 @@ __global__ void transpose(TYPE * X, TYPE * Y,  int M, int N, int ldx, int ldy) {
 }
 ```
 
-This kernel loads a `TM x TN` tile from the input matrix `X`, transposes it and write the resulting `TN x TM` tile to the output matrix `Y`. As a result, transposition of the full input matrix is achieved by launching a grid of `(M / TM) x (N / TN)` programs decomposed as follows:
+At a high level, this kernel loads a `TM x TN` tile from the input matrix `X`, transposes it and writes the resulting `TN x TM` tile to the output matrix `Y`. As a result, transposition of the full input matrix is achieved by launching a grid of `(M / TM) x (N / TN)` programs decomposed as follows:
 
-- Statements (1) and (2) extract the location of the program in the grid. For example, the program producing the output tile `Y[TN:2TN-1, 2TN:3TN-1]` will hold the values:
+- Statements (1) and (2) extract the coordinates the program in the above 2D launch grid. For example, the program producing the output tile `Y[TN:2TN-1, 2TN:3TN-1]` holds the values:
 ```
 pidm = 2
 pidn = 1
 ``` 
 
-- Statements (3) and (4) construct the ranges of indices to read from  the first and second axis of X:
+- Statements (3) and (4) construct the ranges of indices:
 ```
 rm = [pidm*TM + 0, pidm*TM + 1, ..., pidm*TM + (TM - 1)]
 rn = [pidn*TN + 0, pidn*TN + 1, ..., pidn*TN + (TN - 1)]
 ```
+
+which will be used in statements (5) and (6) to construct tiles of pointers
 
 - Statements (5) constructs the following array of pointers `px` using numpy-style broadcasting semantics:
 ```
