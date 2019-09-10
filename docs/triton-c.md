@@ -72,7 +72,7 @@ float v[16, 32] = u[:, newaxis]; // broadcasting along the second axis
 
 Of course, we can do much more than additions, reduction and broadcasting. The purpose of this tutorial is to walk you through all the features of Triton-C, and eventually show you how it can be used to build auto-tuned matrix-multiplication kernels on par with state-of-the-art CUDA-C implementation in less than an afternoon.
 
-_Note: You might be thinking that this is exactly what [MLIR](https://github.com/tensorflow/mlir) was made for... and you're right! You can think of Triton-IR as a dialect for MLIR, and Triton-C as a frontend for it. If you're interested in making this a thing, let me know._
+_Note: You might be thinking that this is exactly what [MLIR](https://github.com/tensorflow/mlir) was made for... and you're right! You can think of Triton-IR  conceptually as a dialect for MLIR, and Triton-C as a frontend for it -- although not yet implemented as such. If you're interested in making this a thing, let me know._
 
 ## <span style="color:darkred">  Vector Addition </span> <a name="vector-addition"></a>
 
