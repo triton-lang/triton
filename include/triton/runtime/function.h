@@ -70,7 +70,7 @@ public:
   struct options_space_t {
     typedef std::pair<std::string, std::vector<std::string>> define_t;
     std::vector<define_t> defines;
-    std::vector<size_t> num_warps;
+    std::vector<int> num_warps;
   };
 
   struct options_t {

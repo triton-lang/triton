@@ -453,14 +453,27 @@ Expr* Parser::ParseSubScripting(Expr* lhs) {
   TileType::ShapeInt shape;
   size_t i = 0;
   const Token* tok;
+  std::vector<std::pair<int, int>> redList;
   do {
     tok = ts_.Next();
-    if(tok->tag_ == ':')
-      shape.push_back(lhsShape[i++]);
-    else if(tok->tag_ == Token::NEWAXIS)
-      shape.push_back(1);
-    else
-      Error(tok, "only ':' and newaxis are supported in subscripts");
+    switch(tok->tag_) {
+      case ':':
+        shape.push_back(lhsShape[i++]);
+        break;
+
+      case Token::NEWAXIS:
+        shape.push_back(1);
+        break;
+
+//      case Token::ADD:
+//      case Token::SUB:
+//        redList.push_back({i, tok->tag_});
+//        break;
+
+      default:
+        Error(tok, "Unexpected subscript symbol encountered at dimension %d", i);
+        break;
+    }
   }while(ts_.Try(','));
   ts_.Expect(']');
   if(lhsShape.size() > i)
