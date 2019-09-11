@@ -64,7 +64,7 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
       auto crhs = dynamic_cast<ir::constant_int*>(rhs);
       if(!clhs || !crhs)
         should_not_happen();
-      return set_ret(ir::constant_range::get(clhs, crhs));
+      return set_ret(bld_->insert(ir::make_range::create(clhs, crhs)));
     }
     case '+':
       if(binary->lhs_->Type()->ScalarType()->ToPointer()){

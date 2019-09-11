@@ -733,25 +733,46 @@ barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instru
 
 
 // nv_dynamic_program_idx
-nv_dynamic_program_idx_inst::nv_dynamic_program_idx_inst(type *ty, const std::string &name, instruction *next)
+make_range_dyn::make_range_dyn(type *ty, const std::string &name, instruction *next)
   : instruction(ty, 0, 1, name, next) { }
 
-nv_dynamic_program_idx_inst* nv_dynamic_program_idx_inst::create(type *ty, const std::string &name, instruction *next) {
-  return new nv_dynamic_program_idx_inst(ty, name, next);
+make_range_dyn* make_range_dyn::create(type *ty, const std::string &name, instruction *next) {
+  return new make_range_dyn(ty, name, next);
 }
 
 // nv_static_program_idx
-nv_static_program_idx::nv_static_program_idx(constant_range *range)
+make_range_sta::make_range_sta(make_range *range)
   : constant(range->get_type(), 0), range_(range) { }
 
-constant_range* nv_static_program_idx::get_range() const
+make_range* make_range_sta::get_range() const
 { return range_; }
 
-nv_static_program_idx* nv_static_program_idx::get(constant_range* range) {
-  static std::map<constant_range*, nv_static_program_idx*> cache;
+make_range_sta* make_range_sta::get(make_range* range) {
+  static std::map<make_range*, make_range_sta*> cache;
   if(cache.find(range) == cache.end())
-    cache.insert({range, new nv_static_program_idx(range)});
+    cache.insert({range, new make_range_sta(range)});
   return cache.at(range);
+}
+
+
+// make_range
+make_range::make_range(type *ty, constant_int *first, constant_int *last)
+  : instruction(ty, 0), first_(first), last_(last){ }
+
+make_range *make_range::create(constant_int *first, constant_int *last) {
+  assert(first->get_type()->is_integer_ty());
+  assert(first->get_type() == last->get_type());
+  assert(((constant_int*)first)->get_value() == 0);
+  type *ty = tile_type::get(first->get_type(), {(unsigned)last->get_value()});
+  return new make_range(ty, first, last);
+}
+
+const constant_int* make_range::get_first() const {
+  return first_;
+}
+
+const constant_int* make_range::get_last() const {
+  return last_;
 }
 
 

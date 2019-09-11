@@ -173,20 +173,20 @@ void reassociate::run(ir::module &mod) {
 
   // constant_range -> nv_dynamic_program_idx + nv_static_program_idx
   for(ir::function *fn: mod.get_function_list()){
-    std::vector<ir::constant_range*> ranges;
+    std::vector<ir::make_range*> ranges;
     std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
     for(ir::basic_block *block: rpo){
       // iterate through instruction
       for(ir::instruction *i: block->get_inst_list())
       for(ir::value* op: i->ops())
-      if(auto *range = dynamic_cast<ir::constant_range*>(op))
+      if(auto *range = dynamic_cast<ir::make_range*>(op))
         ranges.push_back(range);
     }
 
     builder.set_insert_point(rpo.front()->get_first_non_phi());
-    for(ir::constant_range* old_range: ranges){
-      ir::value* dyn_range = builder.insert(ir::nv_dynamic_program_idx_inst::create(old_range->get_type()));
-      ir::value* static_range = ir::nv_static_program_idx::get(old_range);
+    for(ir::make_range* old_range: ranges){
+      ir::value* dyn_range = builder.insert(ir::make_range_dyn::create(old_range->get_type()));
+      ir::value* static_range = ir::make_range_sta::get(old_range);
       ir::value* new_range = builder.create_add(dyn_range, static_range);
       old_range->replace_all_uses_with(new_range);
       params_->copy(dyn_range, old_range);

@@ -50,29 +50,6 @@ constant_int *constant_int::get(type *ty, uint64_t value) {
   return cst;
 }
 
-// constant_range
-// FIXME use something like APInt
-
-//"[" + std::to_string(first->get_value()) + " ... " + std::to_string(ty->get_tile_shapes()[0]->get_value()) + "]"
-
-constant_range::constant_range(type *ty, constant_int *first, constant_int *last)
-  : constant(ty, 0), first_(first), last_(last){ }
-
-constant *constant_range::get(constant_int *first, constant_int *last) {
-  assert(first->get_type()->is_integer_ty());
-  assert(first->get_type() == last->get_type());
-  assert(((constant_int*)first)->get_value() == 0);
-  type *ty = tile_type::get(first->get_type(), {(unsigned)last->get_value()});
-  return new constant_range(ty, first, last);
-}
-
-const constant_int* constant_range::get_first() const {
-  return first_;
-}
-
-const constant_int* constant_range::get_last() const {
-  return last_;
-}
 
 // constant_fp
 // FIXME use something like APFloat
