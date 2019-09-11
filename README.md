@@ -29,8 +29,8 @@ python dot.py
 
 ## Tutorials
 
-- [The Triton-C language](https://github.com/ptillet/triton/blob/master/docs/triton-c.md)
 - [The PyTriton API](https://github.com/ptillet/triton/blob/master/docs/pytriton.md)
+- [The Triton-C language](https://github.com/ptillet/triton/blob/master/docs/triton-c.md)
 - The Triton-IR representation (coming soon...)
 - The Triton-JIT compiler (coming soon...)
 
