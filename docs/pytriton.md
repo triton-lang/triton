@@ -3,8 +3,6 @@
 
 ## <span style="color:darkred"> Table of Contents </span>
 
-This tutorial is the continuation of the [Triton-C tutorial](https://github.com/ptillet/triton/blob/master/docs/triton-c.md), so check it out if you have not already!
-
 1. [Motivations](#motivations)
 2. [Triton Functions](#pytriton-function)
     1. [Creation of Triton Kernels](#creation-triton-kernels)
