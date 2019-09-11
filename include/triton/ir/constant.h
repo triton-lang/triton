@@ -68,21 +68,6 @@ private:
   bool has_value_;
 };
 
-/* constant range */
-class constant_range: public constant{
-  constant_range(type *ty, constant_int* first, constant_int* last);
-
-public:
-  static constant *get(constant_int *first, constant_int *last);
-  const constant_int* get_first() const;
-  const constant_int* get_last() const;
-  std::string repr() const { return first_->repr() + " ... " + last_->repr(); }
-
-private:
-  constant_int* first_;
-  constant_int* last_;
-};
-
 /* constant fp */
 class constant_fp: public constant{
   constant_fp(type *ty, double value);
@@ -98,6 +83,7 @@ public:
 private:
   double value_;
 };
+
 
 /* global value */
 class global_value: public constant {

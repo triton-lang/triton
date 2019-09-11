@@ -48,7 +48,7 @@ int main() {
   std::vector<config_t> configs;
   for(auto x: std::vector<order_t>{COLMAJOR}){
     std::vector<config_t> tmp = {
-      config_t{1024, 1024, x}
+      config_t{2048, 2048, x}
     };
     configs.insert(configs.end(), tmp.begin(), tmp.end());
   }

@@ -60,6 +60,8 @@ void grids::init_c_graph(ir::instruction *v) {
     shapes = atom->get_operand(0)->get_type()->get_tile_shapes();
   else if(dynamic_cast<ir::downcast_inst*>(v))
     return;
+  else if(dynamic_cast<ir::copy_to_shared_inst*>(v))
+    return;
   else if(auto *reduce = dynamic_cast<ir::reduce_inst*>(v)) {
     unsigned axis = reduce->get_axis();
     ir::value *arg = reduce->get_operand(0);
@@ -169,8 +171,9 @@ void grids::connected_components(node_t x, const std::vector<ir::metaparameter *
       for(ir::metaparameter *mp: mps)
         mp->set_value(static_params_.at(x));
     }
-    for(const node_t &y: graph[x])
+    for(const node_t &y: graph[x]){
       connected_components(y, mps, prefixes, nodes, graph, group_id);
+    }
   }
 }
 
@@ -225,7 +228,7 @@ void grids::run(ir::module &mod) {
   }
 
   for(ir::function *fn: mod.get_function_list()){
-    std::map<std::pair<unsigned, std::vector<unsigned>>, ir::value*> references;
+    std::map<unsigned, ir::value*> references;
     create_grids(grids_, references, fn);
   }
 
@@ -234,16 +237,16 @@ void grids::run(ir::module &mod) {
   auto clamp = [&](unsigned x, unsigned lo, unsigned hi) { return std::min(std::max(x, lo), hi); };
 
   for(ir::value *i: grids_){
-    std::cout << "grid: " << i->get_name() << std::endl;
-
     if(!i->get_type()->is_tile_ty())
       continue;
+    auto order = reorder_->get_order(i);
     auto shapes = i->get_type()->get_tile_shapes();
-    unsigned shape_0 = shapes[0];
-    unsigned shape_1 = shapes[1];
     unsigned size = i->get_type()->get_tile_num_elements();
     /* HMMA parameters*/
     if(fragments_.at({i, 0}) == HMMA_FRAGMENT_C){
+
+      unsigned shape_0 = shapes[order[0]];
+      unsigned shape_1 = shapes[order[1]];
 
       /* fragments per warp */
       // try to make things as square as possible to maximize data re-use
@@ -290,17 +293,22 @@ void grids::run(ir::module &mod) {
 
     /* Scan-line */
     else{
-      unsigned shape = shapes[0];
+      unsigned ld = order[0];
+      std::string s_ld = std::to_string(ld);
       unsigned current = num_threads;
-      params_.at(i).at("nts.d0")->set_value(clamp(size / num_threads, 1, 4));
-      params_.at(i).at("mts.d0")->set_value(clamp(current, 1, shape / params_.at(i).at("nts.d0")->get_value()));
-      current = current / params_.at(i).at("mts.d0")->get_value();
+      std::string nts = "nts.d" + s_ld;
+      std::string mts = "mts.d" + s_ld;
+      params_.at(i).at(nts)->set_value(clamp(size / num_threads, 1, 1));
+      params_.at(i).at(mts)->set_value(clamp(current, 1, shapes[ld] / params_.at(i).at(nts)->get_value()));
+      current = current / params_.at(i).at(mts)->get_value();
       for(size_t d = 1; d < shapes.size(); d++){
-        std::string str_d = std::to_string(d);
-        shape = shapes[d];
-        params_.at(i).at("nts.d" + str_d)->set_value(1);
-        params_.at(i).at("mts.d" + str_d)->set_value(clamp(current, 1, shape));
-        current = current / params_.at(i).at("mts.d" + str_d)->get_value();
+        ld = order[d];
+        s_ld = std::to_string(ld);
+        nts = "nts.d" + s_ld;
+        mts = "mts.d" + s_ld;
+        params_.at(i).at(nts)->set_value(1);
+        params_.at(i).at(mts)->set_value(clamp(current, 1, shapes[ld]));
+        current = current / params_.at(i).at(mts)->get_value();
       }
       /* sanity check */
       unsigned effective_num_threads = 1;
@@ -317,8 +325,7 @@ void grids::run(ir::module &mod) {
 
 
 void grids::create_grids(std::vector<ir::value*> &grids,
-                             std::map<std::pair<unsigned,
-                                                std::vector<unsigned>>, ir::value*> &references,
+                             std::map<unsigned, ir::value*> &references,
                              ir::function *fn) {
   // get number of dimensions greater than 1
   auto get_tile_gt1_dim = [&](ir::value *v){
@@ -335,7 +342,6 @@ void grids::create_grids(std::vector<ir::value*> &grids,
     // skip
     if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
       return;
-    auto order = reorder_->get_order(v);
     // recurse
     if(auto *user = dynamic_cast<ir::user*>(v))
       for(ir::value *op: user->ops())
@@ -346,7 +352,7 @@ void grids::create_grids(std::vector<ir::value*> &grids,
       if(shapes[d] == 1)
         continue;
       unsigned x = get_param_group(v, d);
-      ir::value *&r = references[{x, order}];
+      ir::value *&r = references[x];
       if(!r || get_tile_gt1_dim(v) > get_tile_gt1_dim(r))
         r = v;
     }
@@ -360,7 +366,6 @@ void grids::create_grids(std::vector<ir::value*> &grids,
   for(auto &ref: references)
     if(std::find(grids.begin(), grids.end(), ref.second) == grids.end())
       grids.push_back(ref.second);
-  std::cout << grids.size() << std::endl;
 }
 
 

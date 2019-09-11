@@ -306,7 +306,7 @@ std::vector<unsigned> align::populate_max_contiguous_default(ir::value* v) {
   if(!v->get_type()->is_tile_ty())
     return add_to_cache(v, {1}, max_contiguous_);
   auto shapes = v->get_type()->get_tile_shapes();
-  if(dynamic_cast<ir::constant_range*>(v))
+  if(dynamic_cast<ir::make_range*>(v))
     return add_to_cache(v, {shapes[0]}, max_contiguous_);
   return add_to_cache(v, std::vector<unsigned>(shapes.size(), 1), max_contiguous_);
 }
@@ -452,11 +452,11 @@ std::vector<unsigned> align::populate_starting_multiple(ir::value *v){
     return populate_starting_multiple_binop(x);
   if(auto *x = dynamic_cast<ir::constant_int*>(v))
     return add_to_cache(x, {(unsigned)x->get_value()}, starting_multiple_);
-  if(auto *x = dynamic_cast<ir::constant_range*>(v))
+  if(auto *x = dynamic_cast<ir::make_range*>(v))
     return add_to_cache(x, {(unsigned)x->get_first()->get_value()}, starting_multiple_);
-  if(auto *x = dynamic_cast<ir::nv_dynamic_program_idx_inst*>(v))
+  if(auto *x = dynamic_cast<ir::make_range_dyn*>(v))
     return add_to_cache(x, {128}, starting_multiple_);
-  if(auto *x = dynamic_cast<ir::nv_static_program_idx*>(v))
+  if(auto *x = dynamic_cast<ir::make_range_sta*>(v))
     return add_to_cache(x, {(unsigned)x->get_range()->get_first()->get_value()}, starting_multiple_);
   if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v))
     return populate_starting_multiple_gep(x);

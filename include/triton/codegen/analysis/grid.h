@@ -41,7 +41,7 @@ private:
   fragment_t get_fragmentation_type(node_t x, graph_t &graph);
   void connected_components(node_t x, const std::vector<ir::metaparameter *> mps, const std::vector<std::string> prefixes, std::set<node_t> &nodes, graph_t &graph, unsigned group_id);
   void create_grids(std::vector<ir::value*> &grids,
-                    std::map<std::pair<unsigned, std::vector<unsigned> >, triton::ir::value *> &references,
+                    std::map<unsigned, triton::ir::value *> &references,
                     ir::function *fn);
 
 
@@ -53,6 +53,7 @@ public:
   void copy(ir::value *dst, ir::value *src);
   void run(ir::module &mod);
   unsigned get_num_threads();
+  const std::vector<ir::value*> get_grids() const { return grids_; }
 
 private:
   std::vector<unsigned*> pool_;

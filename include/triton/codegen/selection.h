@@ -43,13 +43,16 @@ namespace triton{
 namespace codegen{
 
 namespace analysis{
-
 class grids;
 class align;
 class memalloc;
 class meminfo;
-
 }
+
+namespace transform{
+class reorder;
+}
+
 class target;
 
 typedef std::vector<Value*> indices_t;
@@ -154,7 +157,7 @@ private:
   void create_grids(std::vector<ir::value *> &grids,
                     std::map<unsigned, ir::value *> &references,
                     ir::function *fn);
-  void create_tile(ir::value *v, Builder &builder, const std::map<unsigned, ir::value *> &references, std::set<ir::value *> &seen, Value *sh_mem_ptr);
+  void create_tile(ir::value *v, Builder &builder, std::set<ir::value *> &seen, Value *sh_mem_ptr);
   void init_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
   void init_grids(ir::function *fn, Builder &builder, Value *sh_mem_ptr);
 
@@ -165,7 +168,7 @@ private:
   void lower_store(ir::store_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_downcast(ir::downcast_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
-  void lower_dynamic_program_idx(ir::nv_dynamic_program_idx_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_dynamic_program_idx(ir::make_range_dyn *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_reshape(ir::reshape_inst* x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_splat(ir::splat_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_broadcast(ir::broadcast_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
@@ -192,8 +195,8 @@ private:
 
 
 public:
-  selection(analysis::memalloc *alloc, analysis::grids *params, analysis::meminfo *buffer_info, analysis::align *alignment, target *tgt)
-    : alloc_(alloc), params_(params), buffer_info_(buffer_info), alignment_(alignment), tgt_(tgt){ }
+  selection(analysis::memalloc *alloc, analysis::grids *params, analysis::meminfo *buffer_info, analysis::align *alignment, transform::reorder* reorder, target *tgt)
+    : alloc_(alloc), params_(params), buffer_info_(buffer_info), alignment_(alignment), reorder_(reorder), tgt_(tgt){ }
 
   void run(ir::module &src, Module &dst);
 
@@ -204,6 +207,7 @@ private:
   analysis::grids *params_;
   analysis::meminfo *buffer_info_;
   analysis::align *alignment_;
+  transform::reorder *reorder_;
   target *tgt_;
   std::map<unsigned, distributed_axis> axes_;
   Value *sh_mem_ptr_;

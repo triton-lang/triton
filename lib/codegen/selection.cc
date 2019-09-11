@@ -3,6 +3,7 @@
 #include "triton/codegen/analysis/grid.h"
 #include "triton/codegen/analysis/memalloc.h"
 #include "triton/codegen/analysis/align.h"
+#include "triton/codegen/transform/reorder.h"
 #include "triton/ir/context.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
@@ -538,16 +539,16 @@ Value* selection::llvm_value(ir::value *v, IRBuilder<> &builder) {
 }
 
 // Grid construction
-std::vector<Value*> delinearize(Value *trailing, std::vector<unsigned> &shapes, IRBuilder<> &builder){
+std::vector<Value*> delinearize(Value *trailing, const std::vector<unsigned>& order, std::vector<unsigned> &shapes, IRBuilder<> &builder){
   size_t dim = shapes.size();
   std::vector<Value*> result(dim);
   for(unsigned k = 0; k < dim - 1; k++){
-    Constant *dim_k = builder.getInt32(shapes[k]);
+    Constant *dim_k = builder.getInt32(shapes[order[k]]);
     Value *rem = builder.CreateURem(trailing, dim_k);
     trailing = builder.CreateUDiv(trailing, dim_k);
-    result[k] = rem;
+    result[order[k]] = rem;
   }
-  result[dim - 1] = trailing;
+  result[order[dim - 1]] = trailing;
   return result;
 }
 
@@ -571,6 +572,7 @@ inline void to_warps(const std::vector<unsigned> &bs, std::vector<unsigned> &nw,
 }
 
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
+  auto order = reorder_->get_order(v);
   const auto& shapes = v->get_type()->get_tile_shapes();
   size_t dim = shapes.size();
   if(params_->get_fragment(v, 0) == analysis::grids::STRIDED_SCAN){
@@ -584,8 +586,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
       block_size[i] = params_->get_param(v, "mts.d" + str_i)->get_value();
     }
     to_warps(block_size, n_warps, warp_size);
-    std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, warp_size, builder);
-    std::vector<Value*> warp_id = delinearize(u_warp_id, n_warps, builder);
+    std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, order, warp_size, builder);
+    std::vector<Value*> warp_id = delinearize(u_warp_id, order, n_warps, builder);
     // Create axes
     for(unsigned k = 0; k < dim; k++) {
       std::string str_k = std::to_string(k);
@@ -763,13 +765,12 @@ bool static inline has_phi_user(ir::value *v) {
   return false;
 }
 void selection::create_tile(ir::value *v, IRBuilder<> &builder,
-                            const std::map<unsigned, ir::value*>& references,
                             std::set<ir::value*> &seen, Value *sh_mem_ptr) {
   if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
     return;
   if(auto *user = dynamic_cast<ir::user*>(v))
     for(ir::value *op: user->ops())
-      create_tile(op, builder, references, seen, sh_mem_ptr);
+      create_tile(op, builder, seen, sh_mem_ptr);
   LLVMContext &ctx = builder.getContext();
   auto shapes = v->get_type()->get_tile_shapes();
   unsigned pad = alloc_->is_ld_padded(v);
@@ -832,13 +833,13 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     distributed_tile *T = new distributed_tile(ty, shapes, axes, builder, vectorize);
     bool is_inserted = tmap_.insert({v, T}).second;
     // constant range
-    if(is_inserted && dynamic_cast<ir::constant_range*>(v)){
+    if(is_inserted && dynamic_cast<ir::make_range*>(v)){
       T->for_each([&](indices_t idx){
         assert(idx.size() == 1);
         T->set_value(idx, idx[0]);
       });
     }
-    if(is_inserted && dynamic_cast<ir::nv_static_program_idx*>(v)){
+    if(is_inserted && dynamic_cast<ir::make_range_sta*>(v)){
       T->for_each([&](indices_t idx){
         assert(idx.size() == 1);
         BinaryOperator *bin_add = dyn_cast<BinaryOperator>(idx[0]);
@@ -860,19 +861,15 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
   Value *u_thread_warp_id = builder.CreateURem(u_thread_id, warp_size);
   Value *u_warp_id = builder.CreateUDiv(u_thread_id, warp_size);
   // create grid
-  std::vector<ir::value*> grids;
-  std::map<unsigned, ir::value*> references;
-  create_grids(grids, references, fn);
-  for(ir::value* i: grids){
+  for(ir::value* i: params_->get_grids())
     init_axes(i, builder, u_thread_warp_id, u_warp_id);
-  }
   // create tile
   std::set<ir::value*> seen;
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i: block->get_inst_list()){
     if(!i->get_type()->is_tile_ty())
       continue;
-    create_tile(i, builder, references, seen, sh_mem_ptr);
+    create_tile(i, builder, seen, sh_mem_ptr);
   }
 }
 
@@ -992,7 +989,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
   }
 }
 
-void selection::lower_dynamic_program_idx(ir::nv_dynamic_program_idx_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+void selection::lower_dynamic_program_idx(ir::make_range_dyn *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
   distributed_tile* result = (distributed_tile*)tmap_.at(x);
   result->for_each([&](indices_t idx){
     assert(idx.size() == 1);
@@ -1411,7 +1408,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     lower_downcast(x, ctx, fn, builder);
   else if(auto *x = dynamic_cast<ir::reduce_inst*>(ins))
     lower_reduce(x, ctx, fn, builder);
-  else if(auto *x = dynamic_cast<ir::nv_dynamic_program_idx_inst*>(ins))
+  else if(auto *x = dynamic_cast<ir::make_range_dyn*>(ins))
     lower_dynamic_program_idx(x, ctx, fn, builder);
   else if(auto *x = dynamic_cast<ir::reshape_inst*>(ins))
     lower_reshape(x, ctx, fn, builder);
@@ -1436,7 +1433,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
 }
 
 void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
-  std::cout << src->get_name() << std::endl;
   if(src->has_tile_result_or_op()) {
     lower_tile_instruction(src, builder);
   }
