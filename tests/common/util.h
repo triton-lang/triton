@@ -37,6 +37,12 @@ void init_rand(std::vector<T>& x) {
     x[i] = static_cast<T>((double)rand()/RAND_MAX);
 }
 
+template<class T>
+void init_zeros(std::vector<T>& x) {
+  for(size_t i = 0; i < x.size(); i++)
+    x[i] = 0;
+}
+
 
 
 namespace aux{

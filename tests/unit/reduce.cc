@@ -15,15 +15,26 @@ namespace drv = triton::driver;
 namespace rt = triton::runtime;
 
 
+template<class T>
+void cpu_ref(std::vector<T> &y, const std::vector<T> &x, int M, int N) {
+  for(int m = 0; m < M; m++){
+    T acc = 0;
+    for(int n = 0; n < N; n++)
+      acc = acc + x[m + n*M];
+    y[m] = acc;
+  }
+}
+
 bool do_test(drv::stream* stream, int M, int N, std::string op, int nwarp){
   typedef float NumericT;
   std::string ty = "float";
   size_t dt_nbytes = sizeof(NumericT);
   drv::context* context = stream->context();
   std::vector<NumericT> hy(M);
+  std::vector<NumericT> ry(M);
   std::vector<NumericT> hx(M*N);
   srand(0);
-  init_rand(hy);
+  init_zeros(hy);
   init_rand(hx);
   auto dy = std::shared_ptr<drv::buffer>(drv::buffer::create(context, hy.size()*dt_nbytes));
   auto dx = std::shared_ptr<drv::buffer>(drv::buffer::create(context, hx.size()*dt_nbytes));
@@ -35,8 +46,11 @@ bool do_test(drv::stream* stream, int M, int N, std::string op, int nwarp){
   opt.defines.push_back({"TN", {std::to_string(N)}});
   opt.num_warps = {nwarp};
   rt::function function(src::reduce2d, opt);
-  function({&*dy, &*dx, M, N, M}, grid2d(M, N), stream);
+  function({&*dx, &*dy, M, N, M}, grid2d(M, N), stream);
   stream->synchronize();
+  stream->read(&*dy, true, 0, hy);
+  cpu_ref(ry, hx, M, N);
+  return testing::diff(hy, ry);
 }
 
 int main() {

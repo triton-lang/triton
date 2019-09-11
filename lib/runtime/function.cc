@@ -204,6 +204,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&alignment_info, &grids);
   codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, target.get());
+//  ir::print(module, std::cout);
   // run passes
   peephole.run(module);
   dce.run(module);

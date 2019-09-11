@@ -174,6 +174,11 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
     case '!': return set_ret(bld_->create_not(op));
     case Token::CAST: return set_ret(GenCastOp(op, GenIRType(unary->Type(), *ctx_)));
     case '^': return set_ret(bld_->create_trans(op));
+    case Token::REDUCE: {
+      int ax, tag;
+      UnaryOp::decodeRed(unary->info_, ax, tag);
+      return set_ret(bld_->create_reduce(op, ax));
+    }
     default: error_not_implemented();
   }
   return error_not_implemented();
@@ -412,16 +417,41 @@ void Generator::Gen(ir::module *mod) {
 
 
 ir::value* Generator::GenBroadcastOp(ir::value* src, ir::type* dst_ty) {
+  if(src->get_type() == dst_ty)
+    return src;
   if(dst_ty->is_tile_ty()) {
     ir::type *src_ty = src->get_type();
     auto dst_shapes = dst_ty->get_tile_shapes();
     if(!src_ty->is_tile_ty())
       return bld_->create_splat(src, dst_shapes);
     auto src_shapes = src_ty->get_tile_shapes();
-    if(src_shapes.size() != dst_shapes.size())
-      return bld_->create_reshape(src, dst_shapes);
-    else
+    if(src_shapes.size() != dst_shapes.size()){
+      unsigned src_numel = 1;
+      for(unsigned s: src_shapes)
+        src_numel *= s;
+      unsigned dst_numel = 1;
+      for(unsigned s: dst_shapes)
+        dst_numel *= s;
+      if(src_numel == dst_numel)
+        return bld_->create_reshape(src, dst_shapes);
+      else {
+        auto padded_shapes = src_shapes;
+        while(padded_shapes.size() != dst_shapes.size())
+          padded_shapes.insert(padded_shapes.begin(), 1);
+        // check that broadcast is legal
+        for(size_t d = 0; d < padded_shapes.size(); d++){
+          if(dst_shapes[d] != padded_shapes[d] &&
+             padded_shapes[d] != 1)
+            should_not_happen();
+        }
+        // pad and broadcast
+        ir::value *padded = bld_->create_reshape(src, padded_shapes);
+        return bld_->create_broadcast(padded, dst_shapes);
+      }
+    }
+    else{
       return bld_->create_broadcast(src, dst_shapes);
+    }
   }
   return src;
 }

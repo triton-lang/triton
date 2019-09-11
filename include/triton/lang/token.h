@@ -180,9 +180,7 @@ public:
     PLUS,
     MINUS,
     CAST,
-    REDUCE_ADD,
-    REDUCE_MAX,
-    REDUCE_MIN,
+    REDUCE,
 
     // For preprocessor
     PP_IF,
