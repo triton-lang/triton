@@ -923,7 +923,6 @@ void selection::lower_downcast(ir::downcast_inst *x, LLVMContext &ctx, Function 
 }
 
 void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
-  ir::instruction *ins = (ir::instruction*)x;
   Module *module = fn->getParent();
   std::map<indices_t, Value*> partial;
   ir::value *op = x->get_operand(0);
@@ -933,7 +932,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
   // reduce within thread
   op_tile->for_each([&](indices_t idx) {
     indices_t pidx = idx;
-    pidx.erase(pidx.begin() + axis);
+    pidx[axis] = builder.getInt32(0);
     Value *current = op_tile->get_value(idx);
     // current partial result is not initialized -- create
     if(partial.find(pidx) == partial.end())
@@ -942,6 +941,15 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
     else
       partial[pidx] = builder.CreateFAdd(partial[pidx], current);
   });
+
+  // depth
+  unsigned shape_ax = op->get_type()->get_tile_shapes()[axis];
+  unsigned per_thread = op_tile->axis(axis).values.size();
+  unsigned depth = shape_ax / per_thread;
+
+  // shapes
+  auto shared_shapes = op_tile->get_shapes();
+  shared_shapes[axis] = depth;
 
   // reduce within blocks
   unsigned addr_space = sh_mem_ptr_->getType()->getPointerAddressSpace();
@@ -952,25 +960,20 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
     Value *lane = axes_.at(params_->get_param_group(op, axis)).thread_id;
     Value *&result = x.second;
     indices_t write_idx = x.first;
-    write_idx.insert(write_idx.begin() + axis, lane);
-
+    write_idx[axis] = lane;
     // shared memory write  pointer
-    Value *write_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), write_idx);
+    Value *write_offset = shared_tile::shared_offset(builder, shared_shapes, write_idx);
     Value *write_ptr = builder.CreateGEP(base_ptr, write_offset);
-
     // initialize shared memory
     tgt_->add_barrier(module, builder);
     builder.CreateStore(result, write_ptr);
     // build result
-    unsigned shape_ax = op->get_type()->get_tile_shapes()[axis];
-    unsigned per_thread = op_tile->axis(axis).values.size();
-    unsigned depth = shape_ax / per_thread;
     for(unsigned i = depth/2; i > 0; i >>= 1){
       // current indices
       indices_t current(write_idx.size(), builder.getInt32(0));
       current[axis] = builder.getInt32(i);
       // shared memory offset
-      Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), current);
+      Value *read_offset = shared_tile::shared_offset(builder, shared_shapes, current);
       Value *is_active = builder.CreateICmpULT(lane, builder.getInt32(i));
       read_offset = builder.CreateSelect(is_active, read_offset, builder.getInt32(0));
       // shared memory read pointer
@@ -987,10 +990,11 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
 
   distributed_tile* x_tile = (distributed_tile*)tmap_.at(x);
   x_tile->for_each([&](indices_t idx) {
-//    Value *read_offset = shared_tile::shared_offset(builder, x_tile->get_shapes(), idx);
-//    Value *read_ptr = builder.CreateGEP(base_ptr, read_offset);
-//    x_tile->set_value(idx, builder.CreateLoad(read_ptr));
-    x_tile->set_value(idx, ConstantFP::get(builder.getFloatTy(), 0));
+    indices_t red_idx = idx;
+    red_idx.insert(red_idx.begin() + axis, builder.getInt32(0));
+    Value *read_offset = shared_tile::shared_offset(builder, shared_shapes, red_idx);
+    Value *read_ptr = builder.CreateGEP(base_ptr, read_offset);
+    x_tile->set_value(idx, builder.CreateLoad(read_ptr));
   });
 }
 

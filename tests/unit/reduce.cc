@@ -73,6 +73,9 @@ bool do_test(drv::stream* stream, int M, int N, std::string op, int nwarp){
   srand(0);
   init_zeros(hy);
   init_rand(hx);
+  for(int i = 0; i < M; i++)
+  for(int j = 0; j < N; j++)
+    hx[i + j*M] = i+j;
   auto dy = std::shared_ptr<drv::buffer>(drv::buffer::create(context, hy.size()*dt_nbytes));
   auto dx = std::shared_ptr<drv::buffer>(drv::buffer::create(context, hx.size()*dt_nbytes));
   stream->write(&*dy, true, 0, hy);
