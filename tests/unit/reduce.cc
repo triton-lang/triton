@@ -15,31 +15,6 @@
 namespace drv = triton::driver;
 namespace rt = triton::runtime;
 
-void _loop_nest(std::vector<int> const & ranges,
-                std::function<void(std::vector<int> const &)> const & f){
-  int D = ranges.size();
-  std::vector<int> values(D, 0);
-  // Start with innermost loop
-  int i = D - 1;
-  while(true){
-    //  Execute function
-    f(values);
-    while(values[i]++ == ranges[i] - 1){
-      if(i == 0)
-        return;
-      values[i--] = 0;
-    }
-    i = D - 1;
-  }
-}
-
-int offset(const std::vector<int>& idx, const std::vector<int>& shapes) {
-  int result = idx[0];
-  for(int i = 1; i < idx.size(); i++)
-    result += idx[i]*shapes[i-1];
-  return result;
-}
-
 template<class T>
 void reduce_nd(std::vector<T> &y, const std::vector<T> &x, reduce_op_t op, size_t axis, const std::vector<int>& shapes) {
   assert(axis <= shapes.size() - 1);
@@ -101,7 +76,7 @@ bool do_test(drv::stream* stream, std::vector<int> shape, int axis, reduce_op_t 
   stream->synchronize();
   stream->read(&*dy, true, 0, hy);
   reduce_nd(ry, hx, op, axis, shape);
-  return testing::diff(hy, ry);
+  return diff(hy, ry);
 }
 
 int main() {
