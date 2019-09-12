@@ -131,6 +131,8 @@ public:
 
     // TILE ARITHMETICS BEGIN
     NEWAXIS,
+    MAX,
+    MIN,
     // TILE ARITHMETICS END
 
     ALIGNAS, // _Alignas
@@ -180,6 +182,7 @@ public:
     PLUS,
     MINUS,
     CAST,
+    REDUCE,
 
     // For preprocessor
     PP_IF,

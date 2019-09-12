@@ -50,7 +50,7 @@ void cpu_ref(bool AT_, bool BT_, size_t M, size_t N, size_t K,
 }
 
 
-bool do_test(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K, int32_t TM, int32_t TN, int32_t TK, size_t nwarp){
+bool do_test(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K, int32_t TM, int32_t TN, int32_t TK, int nwarp){
   typedef float NumericT;
   std::string ty = "float";
   size_t dt_nbytes = sizeof(NumericT);
@@ -62,12 +62,9 @@ bool do_test(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_
   int32_t ldb = BT ? N : K;
   int32_t ldc = M;
   srand(0);
-  for(size_t i = 0; i < ha.size(); i++)
-    ha[i] = static_cast<NumericT>((float)rand()/RAND_MAX);
-  for(size_t i = 0; i < hb.size(); i++)
-    hb[i] = static_cast<NumericT>((float)rand()/RAND_MAX);
-  for(size_t i = 0; i < hc.size(); i++)
-    hc[i] = static_cast<NumericT>((double)0);
+  init_rand(ha);
+  init_rand(hb);
+  init_rand(hc);
   auto dc = std::shared_ptr<drv::buffer>(drv::buffer::create(context, hc.size()*dt_nbytes));
   auto da = std::shared_ptr<drv::buffer>(drv::buffer::create(context, ha.size()*dt_nbytes));
   auto db = std::shared_ptr<drv::buffer>(drv::buffer::create(context, hb.size()*dt_nbytes));
@@ -94,7 +91,7 @@ bool do_test(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_
   stream->read(&*dc, true, 0, hc);
   std::vector<NumericT> rc(hc.size());
   cpu_ref(AT, BT, M, N, K, rc, ha, hb);
-  return testing::diff(hc, rc);
+  return diff(hc, rc);
 }
 
 int main() {

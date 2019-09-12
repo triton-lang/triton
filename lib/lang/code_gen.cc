@@ -154,12 +154,24 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
   error_not_implemented();
 }
 
+ir::reduce_inst::op_t reduce_op(int tag, bool is_float) {
+  using ir::reduce_inst;
+  switch(tag){
+    case Token::ADD: return is_float ? reduce_inst::FADD : reduce_inst::ADD;
+    case Token::SUB: return is_float ? reduce_inst::FSUB : reduce_inst::SUB;
+    case Token::MAX: return is_float ? reduce_inst::FMAX : reduce_inst::MAX;
+    case Token::MIN: return is_float ? reduce_inst::FMIN : reduce_inst::MIN;
+    default: break;
+  }
+  should_not_happen();
+  return reduce_inst::op_t();
+}
 void Generator::VisitUnaryOp(UnaryOp* unary) {
-
   // recursion
   Visit(unary->operand_);
-  ir::value* op = ret_;
-
+  ir::value* arg = ret_;
+  ir::type *arg_ty = arg->get_type();
+  ir::type *arg_scal_ty = arg_ty->get_scalar_ty();
   // return
   switch  (unary->op_) {
     case Token::PREFIX_INC: return error_not_implemented();
@@ -167,13 +179,20 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
     case Token::POSTFIX_INC: return error_not_implemented();
     case Token::POSTFIX_DEC: return error_not_implemented();
     case Token::ADDR: return error_not_implemented();
-    case Token::DEREF: return set_ret(bld_->create_load(op));
+    case Token::DEREF: return set_ret(bld_->create_load(arg));
     case Token::PLUS: return error_not_implemented();
     case Token::MINUS: return error_not_implemented();
-    case '~': return set_ret(bld_->create_neg(op));
-    case '!': return set_ret(bld_->create_not(op));
-    case Token::CAST: return set_ret(GenCastOp(op, GenIRType(unary->Type(), *ctx_)));
-    case '^': return set_ret(bld_->create_trans(op));
+    case '~': return set_ret(bld_->create_neg(arg));
+    case '!': return set_ret(bld_->create_not(arg));
+    case Token::CAST: return set_ret(GenCastOp(arg, GenIRType(unary->Type(), *ctx_)));
+    case '^': return set_ret(bld_->create_trans(arg));
+    case Token::REDUCE: {
+      int ax, tag;
+      UnaryOp::decodeRed(unary->info_, ax, tag);
+      bool is_float = arg_scal_ty->is_floating_point_ty();
+      ir::reduce_inst::op_t op = reduce_op(tag, is_float);
+      return set_ret(bld_->create_reduce(arg, op, ax));
+    }
     default: error_not_implemented();
   }
   return error_not_implemented();
@@ -412,16 +431,41 @@ void Generator::Gen(ir::module *mod) {
 
 
 ir::value* Generator::GenBroadcastOp(ir::value* src, ir::type* dst_ty) {
+  if(src->get_type() == dst_ty)
+    return src;
   if(dst_ty->is_tile_ty()) {
     ir::type *src_ty = src->get_type();
     auto dst_shapes = dst_ty->get_tile_shapes();
     if(!src_ty->is_tile_ty())
       return bld_->create_splat(src, dst_shapes);
     auto src_shapes = src_ty->get_tile_shapes();
-    if(src_shapes.size() != dst_shapes.size())
-      return bld_->create_reshape(src, dst_shapes);
-    else
+    if(src_shapes.size() != dst_shapes.size()){
+      unsigned src_numel = 1;
+      for(unsigned s: src_shapes)
+        src_numel *= s;
+      unsigned dst_numel = 1;
+      for(unsigned s: dst_shapes)
+        dst_numel *= s;
+      if(src_numel == dst_numel)
+        return bld_->create_reshape(src, dst_shapes);
+      else {
+        auto padded_shapes = src_shapes;
+        while(padded_shapes.size() != dst_shapes.size())
+          padded_shapes.insert(padded_shapes.begin(), 1);
+        // check that broadcast is legal
+        for(size_t d = 0; d < padded_shapes.size(); d++){
+          if(dst_shapes[d] != padded_shapes[d] &&
+             padded_shapes[d] != 1)
+            should_not_happen();
+        }
+        // pad and broadcast
+        ir::value *padded = bld_->create_reshape(src, padded_shapes);
+        return bld_->create_broadcast(padded, dst_shapes);
+      }
+    }
+    else{
       return bld_->create_broadcast(src, dst_shapes);
+    }
   }
   return src;
 }

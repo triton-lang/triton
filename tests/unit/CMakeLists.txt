@@ -1,4 +1,4 @@
-foreach(PROG dot)
+foreach(PROG dot reduce)
      set(TARGET unit_${PROG})
      add_executable(${TARGET} ${PROG}.cc)
      set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME ${TARGET})
