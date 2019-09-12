@@ -616,7 +616,7 @@ private:
 
 private:
   reduce_inst(value* arg, unsigned axis, const std::string& name, instruction* next);
-  std::string repr_impl() const { return "reduce"; }
+  std::string repr_impl() const { return "red<" + std::to_string(axis_) + ">"; }
 
 public:
   static instruction* create(value *arg, unsigned axis, const std::string &name = "", instruction *next = nullptr);

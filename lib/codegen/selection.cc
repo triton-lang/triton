@@ -982,21 +982,16 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
       // write back
       builder.CreateStore(result, write_ptr);
     }
-
-    // result is on the first lane of shared memory
-    indices_t final = write_idx;
-    final[axis] = builder.getInt32(0);
-    Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), final);
-    Value *read_ptr = builder.CreateGEP(base_ptr, read_offset);
-    tgt_->add_barrier(module, builder);
-    result = builder.CreateLoad(read_ptr);
-    if(tmap_.find(ins) == tmap_.end())
-      vmap_[ins] = result;
-    else{
-      distributed_tile *ti = (distributed_tile*)tmap_[ins];
-      ti->set_value(x.first, result);
-    }
   }
+  tgt_->add_barrier(module, builder);
+
+  distributed_tile* x_tile = (distributed_tile*)tmap_.at(x);
+  x_tile->for_each([&](indices_t idx) {
+//    Value *read_offset = shared_tile::shared_offset(builder, x_tile->get_shapes(), idx);
+//    Value *read_ptr = builder.CreateGEP(base_ptr, read_offset);
+//    x_tile->set_value(idx, builder.CreateLoad(read_ptr));
+    x_tile->set_value(idx, ConstantFP::get(builder.getFloatTy(), 0));
+  });
 }
 
 void selection::lower_dynamic_program_idx(ir::nv_dynamic_program_idx_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
