@@ -157,6 +157,7 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     for(auto it: opt_space_.defines)
       cpp.AddMacro(it.first, &opt.defines.at(it.first));
     cpp.Process(tokens);
+//    tokens.Print(stdout);
     // parse
     Parser parser(tokens);
     parser.Parse();
@@ -200,7 +201,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&alignment_info, &grids);
   codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, target.get());
-  ir::print(module, std::cout);
+//  ir::print(module, std::cout);
   // run passes
   peephole.run(module);
   dce.run(module);

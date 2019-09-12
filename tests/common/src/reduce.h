@@ -19,7 +19,7 @@ void reduce2d(TYPE * X __noalias __readonly __aligned(16),
   int rm[TM] = ridm * TM + 0 ... TM;
   int rn[TN] = ridn * TN + 0 ... TN;
   TYPE* px[TM, TN] = X + rm[:, newaxis] + rn[newaxis, :] * ldx;
-  TYPE* py[TY] = Y + rm;
+  TYPE* py[TY] = Y + RY;
   *py = (*px)[RED];
 }
 )";

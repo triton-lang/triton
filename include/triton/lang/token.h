@@ -131,6 +131,8 @@ public:
 
     // TILE ARITHMETICS BEGIN
     NEWAXIS,
+    MAX,
+    MIN,
     // TILE ARITHMETICS END
 
     ALIGNAS, // _Alignas

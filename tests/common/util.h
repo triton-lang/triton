@@ -43,6 +43,34 @@ void init_zeros(std::vector<T>& x) {
     x[i] = 0;
 }
 
+enum reduce_op_t {
+  ADD,
+  MAX,
+  MIN
+};
+
+std::string to_str(reduce_op_t op) {
+  switch (op) {
+    case ADD: return "+";
+    case MAX: return "max";
+    case MIN: return "min";
+    default: break;
+  }
+  assert(false);
+  return "";
+}
+
+template<class T>
+std::function<T(T,T)> get_accumulator(reduce_op_t op) {
+  switch (op) {
+    case ADD: return [](T x, T y) { return x + y; };
+    case MAX: return [](T x, T y) { return std::max(x, y); };
+    case MIN: return [](T x, T y) { return std::min(x, y); };
+    default: break;
+  }
+  assert(false);
+  return std::function<T(T,T)>();
+}
 
 
 namespace aux{
@@ -68,6 +96,23 @@ auto operator<<(std::basic_ostream<Ch, Tr>& os, std::tuple<Args...> const& t)
   os << "(";
   aux::print_tuple(os, t, aux::gen_seq<sizeof...(Args)>());
   return os << ")";
+}
+
+template<class Ch, class Tr, class T>
+std::basic_ostream<Ch, Tr>& operator<<(std::basic_ostream<Ch, Tr>& os, const std::vector<T>& vec) {
+  os << "{";
+  for(size_t i = 0; i < vec.size(); i++){
+    if(i > 0)
+      os << ", ";
+    os << vec[i];
+  }
+  os << "}";
+  return os;
+}
+
+template<class Ch, class Tr>
+std::basic_ostream<Ch, Tr>& operator<<(std::basic_ostream<Ch, Tr>& os, reduce_op_t op) {
+  return os << to_str(op);
 }
 
 

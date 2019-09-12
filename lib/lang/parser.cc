@@ -466,7 +466,9 @@ Expr* Parser::ParseSubScripting(Expr* lhs) {
         break;
 
       case Token::ADD:
-      case Token::SUB:{
+      case Token::SUB:
+      case Token::MAX:
+      case Token::MIN:{
           int info = UnaryOp::encodeRed(i, tok->tag_);
           redInfo.push_back({i, info});
           shape.push_back(lhsShape[i++]);

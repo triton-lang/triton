@@ -54,6 +54,8 @@ const std::unordered_map<std::string, int> Token::kwTypeMap_ {
   { "_Noreturn", Token::NORETURN },
   { "_Static_assert", Token::STATIC_ASSERT },
   { "_Thread_local", Token::THREAD },
+  { "max", Token::MAX },
+  { "min", Token::MIN },
 };
 
 const std::unordered_map<int, const char*> Token::tagLexemeMap_ {
