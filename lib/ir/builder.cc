@@ -323,8 +323,8 @@ value *builder::create_sqrt(value *A, const std::string &name) {
   return insert(sqrt_inst::create(A, name));
 }
 
-value *builder::create_reduce(value *A, unsigned axis, const std::string &name) {
-  return insert(reduce_inst::create(A, axis, name));
+value *builder::create_reduce(value *A, reduce_inst::op_t op, unsigned axis, const std::string &name) {
+  return insert(reduce_inst::create(A, op, axis, name));
 }
 
 value *builder::create_select(value *pred, value *if_value, value *else_value, const std::string &name){

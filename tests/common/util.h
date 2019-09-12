@@ -9,6 +9,10 @@
 namespace drv = triton::driver;
 namespace rt = triton::runtime;
 
+/* ------------------------
+ *        Launch Grid
+ * ------------------------ */
+
 inline size_t ceil(size_t x, size_t y) {
   return (x + y - 1) / y;
 };
@@ -26,11 +30,115 @@ inline rt::function::grid_fn_ty grid2d(size_t M, size_t N) {
   };
 }
 
+
+/* ------------------------
+ *   Tensor Initialization
+ * ------------------------ */
+
+template<class T>
+void init_rand(std::vector<T>& x) {
+  for(size_t i = 0; i < x.size(); i++)
+    x[i] = static_cast<T>((double)rand()/RAND_MAX);
+}
+
+template<class T>
+void init_zeros(std::vector<T>& x) {
+  for(size_t i = 0; i < x.size(); i++)
+    x[i] = 0;
+}
+
+/* ------------------------
+ *       Loop Nests
+ * ------------------------ */
+
+void _loop_nest(std::vector<int> const & ranges,
+                std::function<void(std::vector<int> const &)> const & f){
+  int D = ranges.size();
+  std::vector<int> values(D, 0);
+  // Start with innermost loop
+  int i = D - 1;
+  while(true){
+    //  Execute function
+    f(values);
+    while(values[i]++ == ranges[i] - 1){
+      if(i == 0)
+        return;
+      values[i--] = 0;
+    }
+    i = D - 1;
+  }
+}
+
+/* -----------------------
+ *     TENSOR INDEXING
+ * ----------------------- */
+
 enum order_t {
   ROWMAJOR,
   COLMAJOR
 };
 
+
+int offset(const std::vector<int>& idx, const std::vector<int>& shapes) {
+  int result = idx[0];
+  for(int i = 1; i < idx.size(); i++)
+    result += idx[i]*shapes[i-1];
+  return result;
+}
+
+/* -----------------------
+ *    REDUCTION HELPERS
+ * ----------------------- */
+
+enum reduce_op_t {
+  ADD,
+  MAX,
+  MIN
+};
+
+std::string to_str(reduce_op_t op) {
+  switch (op) {
+    case ADD: return "+";
+    case MAX: return "max";
+    case MIN: return "min";
+    default: break;
+  }
+  assert(false);
+  return "";
+}
+
+template<class T>
+std::function<T(T,T)> get_accumulator(reduce_op_t op) {
+  switch (op) {
+    case ADD: return [](T x, T y) { return x + y; };
+    case MAX: return [](T x, T y) { return std::max(x, y); };
+    case MIN: return [](T x, T y) { return std::min(x, y); };
+    default: break;
+  }
+  assert(false);
+  return std::function<T(T,T)>();
+}
+
+
+/* -----------------------
+ *     TENSOR COMPARISON
+ * ----------------------- */
+
+template<class T>
+bool diff(const std::vector<T>& hc, const std::vector<T>& rc) {
+if(hc.size() != rc.size())
+    return false;
+for(size_t i = 0; i < hc.size(); i++)
+  if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
+    std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
+    return false;
+  }
+return true;
+}
+
+/* -----------------------
+ *    PRETTY PRINTING
+ * ----------------------- */
 
 namespace aux{
 template<std::size_t...> struct seq{};
@@ -57,22 +165,23 @@ auto operator<<(std::basic_ostream<Ch, Tr>& os, std::tuple<Args...> const& t)
   return os << ")";
 }
 
-
-namespace testing {
-
-    template<class T>
-    bool diff(const std::vector<T>& hc, const std::vector<T>& rc) {
-    if(hc.size() != rc.size())
-        return false;
-    for(size_t i = 0; i < hc.size(); i++)
-      if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
-        std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
-
-        return false;
-      }
-    return true;
-    }
-
+template<class Ch, class Tr, class T>
+std::basic_ostream<Ch, Tr>& operator<<(std::basic_ostream<Ch, Tr>& os, const std::vector<T>& vec) {
+  os << "{";
+  for(size_t i = 0; i < vec.size(); i++){
+    if(i > 0)
+      os << ", ";
+    os << vec[i];
+  }
+  os << "}";
+  return os;
 }
+
+template<class Ch, class Tr>
+std::basic_ostream<Ch, Tr>& operator<<(std::basic_ostream<Ch, Tr>& os, reduce_op_t op) {
+  return os << to_str(op);
+}
+
+
 
 #endif

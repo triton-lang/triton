@@ -611,19 +611,28 @@ public:
 };
 
 class reduce_inst: public builtin_inst {
+public:
+  enum op_t{
+    ADD, SUB, MAX, MIN,
+    FADD, FSUB, FMAX, FMIN
+  };
+
 private:
   static type* get_res_type(value *arg, unsigned axis);
+  static std::string to_str(op_t op);
 
 private:
-  reduce_inst(value* arg, unsigned axis, const std::string& name, instruction* next);
-  std::string repr_impl() const { return "reduce"; }
+  reduce_inst(value* arg, op_t op, unsigned axis, const std::string& name, instruction* next);
+  std::string repr_impl() const { return "red<" + std::to_string(axis_) + ">"; }
 
 public:
-  static instruction* create(value *arg, unsigned axis, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create(value *arg, op_t op, unsigned axis, const std::string &name = "", instruction *next = nullptr);
   unsigned get_axis() const { return axis_; }
+  op_t get_op() const { return op_; }
 
 private:
   unsigned axis_;
+  op_t op_;
 };
 
 class select_inst: public builtin_inst {
