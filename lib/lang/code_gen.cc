@@ -154,12 +154,24 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
   error_not_implemented();
 }
 
+ir::reduce_inst::op_t reduce_op(int tag, bool is_float) {
+  using ir::reduce_inst;
+  switch(tag){
+    case Token::ADD: return is_float ? reduce_inst::FADD : reduce_inst::ADD;
+    case Token::SUB: return is_float ? reduce_inst::FSUB : reduce_inst::SUB;
+    case Token::MAX: return is_float ? reduce_inst::FMAX : reduce_inst::MAX;
+    case Token::MIN: return is_float ? reduce_inst::FMIN : reduce_inst::MIN;
+    default: break;
+  }
+  should_not_happen();
+  return reduce_inst::op_t();
+}
 void Generator::VisitUnaryOp(UnaryOp* unary) {
-
   // recursion
   Visit(unary->operand_);
-  ir::value* op = ret_;
-
+  ir::value* arg = ret_;
+  ir::type *arg_ty = arg->get_type();
+  ir::type *arg_scal_ty = arg_ty->get_scalar_ty();
   // return
   switch  (unary->op_) {
     case Token::PREFIX_INC: return error_not_implemented();
@@ -167,17 +179,19 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
     case Token::POSTFIX_INC: return error_not_implemented();
     case Token::POSTFIX_DEC: return error_not_implemented();
     case Token::ADDR: return error_not_implemented();
-    case Token::DEREF: return set_ret(bld_->create_load(op));
+    case Token::DEREF: return set_ret(bld_->create_load(arg));
     case Token::PLUS: return error_not_implemented();
     case Token::MINUS: return error_not_implemented();
-    case '~': return set_ret(bld_->create_neg(op));
-    case '!': return set_ret(bld_->create_not(op));
-    case Token::CAST: return set_ret(GenCastOp(op, GenIRType(unary->Type(), *ctx_)));
-    case '^': return set_ret(bld_->create_trans(op));
+    case '~': return set_ret(bld_->create_neg(arg));
+    case '!': return set_ret(bld_->create_not(arg));
+    case Token::CAST: return set_ret(GenCastOp(arg, GenIRType(unary->Type(), *ctx_)));
+    case '^': return set_ret(bld_->create_trans(arg));
     case Token::REDUCE: {
       int ax, tag;
       UnaryOp::decodeRed(unary->info_, ax, tag);
-      return set_ret(bld_->create_reduce(op, ax));
+      bool is_float = arg_scal_ty->is_floating_point_ty();
+      ir::reduce_inst::op_t op = reduce_op(tag, is_float);
+      return set_ret(bld_->create_reduce(arg, op, ax));
     }
     default: error_not_implemented();
   }
