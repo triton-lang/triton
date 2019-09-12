@@ -91,7 +91,7 @@ bool do_test(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_
   stream->read(&*dc, true, 0, hc);
   std::vector<NumericT> rc(hc.size());
   cpu_ref(AT, BT, M, N, K, rc, ha, hb);
-  return testing::diff(hc, rc);
+  return diff(hc, rc);
 }
 
 int main() {
