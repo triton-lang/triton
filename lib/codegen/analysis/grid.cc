@@ -59,16 +59,16 @@ void grids::init_c_graph(ir::instruction *v) {
     shapes = atom->get_operand(0)->get_type()->get_tile_shapes();
   else if(dynamic_cast<ir::downcast_inst*>(v))
     return;
-  else if(auto *reduce = dynamic_cast<ir::reduce_inst*>(v)) {
-    unsigned axis = reduce->get_axis();
-    ir::value *arg = reduce->get_operand(0);
-    auto in_shapes = arg->get_type()->get_tile_shapes();
-    unsigned current = 0;
-    for(unsigned i = 0; i < in_shapes.size(); i++){
-      if(i == axis)
-        continue;
-      add_constraint({reduce, current++}, {arg, i});
-    }
+  else if(dynamic_cast<ir::reduce_inst*>(v)) {
+//    unsigned axis = reduce->get_axis();
+//    ir::value *arg = reduce->get_operand(0);
+//    auto in_shapes = arg->get_type()->get_tile_shapes();
+//    unsigned current = 0;
+//    for(unsigned i = 0; i < in_shapes.size(); i++){
+//      if(i == axis)
+//        continue;
+//      add_constraint({reduce, current++}, {arg, i});
+//    }
     return;
   }
   else
@@ -244,7 +244,6 @@ void grids::run(ir::module &mod) {
     unsigned size = i->get_type()->get_tile_num_elements();
     /* HMMA parameters*/
     if(fragments_.at({i, 0}) == HMMA_FRAGMENT_C){
-
       /* fragments per warp */
       // try to make things as square as possible to maximize data re-use
       std::vector<unsigned> fpw = {1, 1, 1};
@@ -285,7 +284,6 @@ void grids::run(ir::module &mod) {
 
       if(num_warps_ != effective_num_warps)
         throw std::runtime_error("cannot create a kernel with this amount of warps");
-
     }
 
     /* Scan-line */
@@ -307,6 +305,7 @@ void grids::run(ir::module &mod) {
       for(size_t d = 0; d < shapes.size(); d++){
         std::string str_d = std::to_string(d);
         effective_num_threads *= params_.at(i).at("mts.d" + str_d)->get_value();
+        std::cout << shapes[d] << " " << params_.at(i).at("mts.d" + str_d)->get_value() << " " << params_.at(i).at("nts.d" + str_d)->get_value() << std::endl;
       }
       if(num_threads != effective_num_threads)
         throw std::runtime_error("cannot create a kernel with this amount of warps");
