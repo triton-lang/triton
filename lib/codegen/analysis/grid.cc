@@ -298,7 +298,7 @@ void grids::run(ir::module &mod) {
       unsigned current = num_threads;
       std::string nts = "nts.d" + s_ld;
       std::string mts = "mts.d" + s_ld;
-      params_.at(i).at(nts)->set_value(clamp(size / num_threads, 1, 8));
+      params_.at(i).at(nts)->set_value(clamp(size / num_threads, 1, 4));
       params_.at(i).at(mts)->set_value(clamp(current, 1, shapes[ld] / params_.at(i).at(nts)->get_value()));
       current = current / params_.at(i).at(mts)->get_value();
       for(size_t d = 1; d < shapes.size(); d++){

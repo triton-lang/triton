@@ -3,6 +3,7 @@
 #include "triton/ir/module.h"
 #include "triton/ir/cfg.h"
 #include "triton/codegen/transform/dce.h"
+#include <iostream>
 
 namespace triton {
 namespace codegen{
@@ -35,9 +36,10 @@ void dce::run(ir::module &mod) {
     work_list.pop_back();
     // mark instruction operands
     for(ir::value* op: current->ops()) {
-      if(auto *i = dynamic_cast<ir::instruction*>(op))
+      if(auto *i = dynamic_cast<ir::instruction*>(op)){
         if(marked.insert(i).second)
           work_list.push_back(i);
+      }
     }
     // TODO: mark last intstruction of current's reverse-dominance frontier
   }

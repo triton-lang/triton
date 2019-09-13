@@ -34,6 +34,16 @@ void meminfo::replace(ir::value* before, ir::value *after) {
   }
 }
 
+void meminfo::copy(ir::value* y, ir::value *x) {
+  if(shared_.find(x) != shared_.end())
+    shared_.insert(y);
+  if(refs_.find(x) != refs_.end())
+    refs_[y] = refs_[x];
+  if(double_.find(x) != double_.end())
+    double_.insert(y);
+}
+
+
 inline bool get_is_shared(ir::value* v) {
   if(dynamic_cast<ir::atomic_cas_inst*>(v))
     return true;
