@@ -66,7 +66,7 @@ void user::replace_uses_of_with(value *before, value *after) {
     if(ops_[i] == before)
       ops_[i] = after;
   after->add_use(this);
-  erase_use(this);
+  before->erase_use(this);
 }
 
 }

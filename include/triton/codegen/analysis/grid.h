@@ -49,7 +49,7 @@ public:
   grids(size_t num_warps, transform::coalesce* reorder);
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   unsigned get_param_group(ir::value *value, unsigned ax);
-  fragment_t get_fragment(ir::value *value, unsigned ax) { return fragments_.at({value, ax}); }
+  fragment_t get_fragment(ir::value *value, unsigned ax);
   void copy(ir::value *dst, ir::value *src);
   void run(ir::module &mod);
   unsigned get_num_threads();
