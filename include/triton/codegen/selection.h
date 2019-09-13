@@ -50,7 +50,7 @@ class meminfo;
 }
 
 namespace transform{
-class reorder;
+class coalesce;
 }
 
 class target;
@@ -195,7 +195,7 @@ private:
 
 
 public:
-  selection(analysis::memalloc *alloc, analysis::grids *params, analysis::meminfo *buffer_info, analysis::align *alignment, transform::reorder* reorder, target *tgt)
+  selection(analysis::memalloc *alloc, analysis::grids *params, analysis::meminfo *buffer_info, analysis::align *alignment, transform::coalesce* reorder, target *tgt)
     : alloc_(alloc), params_(params), buffer_info_(buffer_info), alignment_(alignment), reorder_(reorder), tgt_(tgt){ }
 
   void run(ir::module &src, Module &dst);
@@ -207,7 +207,7 @@ private:
   analysis::grids *params_;
   analysis::meminfo *buffer_info_;
   analysis::align *alignment_;
-  transform::reorder *reorder_;
+  transform::coalesce *reorder_;
   target *tgt_;
   std::map<unsigned, distributed_axis> axes_;
   Value *sh_mem_ptr_;

@@ -5,7 +5,7 @@
 #include <algorithm>
 #include "triton/codegen/selection.h"
 #include "triton/runtime/function.h"
-#include "triton/codegen/transform/reorder.h"
+#include "triton/codegen/transform/coalesce.h"
 #include "triton/lang/cpp.h"
 #include "triton/lang/parser.h"
 #include "triton/lang/code_gen.h"
@@ -197,7 +197,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::analysis::meminfo shmem_info;
   codegen::analysis::liveness shmem_liveness(&shmem_info);
   codegen::analysis::align alignment_info;
-  codegen::transform::reorder reorder(&alignment_info, &shmem_info);
+  codegen::transform::coalesce reorder(&alignment_info, &shmem_info);
   codegen::analysis::grids grids(opt.num_warps, &reorder);
   codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &grids);
   codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
@@ -215,7 +215,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
 //  ir::print(module, std::cout);
   reorder.run(module);
   dce.run(module);
-  ir::print(module, std::cout);
+//  ir::print(module, std::cout);
   grids.run(module);
   reassociate.run(module);
   dce.run(module);
@@ -231,7 +231,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   vectorize.run(module);
   dce.run(module);
-  ir::print(module, std::cout);
+//  ir::print(module, std::cout);
   // generate llvm code
   llvm::LLVMContext ctx;
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));

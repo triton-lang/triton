@@ -3,7 +3,7 @@
 #include "triton/codegen/analysis/grid.h"
 #include "triton/codegen/analysis/memalloc.h"
 #include "triton/codegen/analysis/align.h"
-#include "triton/codegen/transform/reorder.h"
+#include "triton/codegen/transform/coalesce.h"
 #include "triton/ir/context.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"

@@ -20,9 +20,9 @@ namespace analysis{
 
 namespace transform{
 
-class reorder {
+class coalesce {
 public:
-  reorder(analysis::align* algin, analysis::meminfo* mem);
+  coalesce(analysis::align* algin, analysis::meminfo* mem);
   std::vector<unsigned> get_order(ir::value* v);
   void run(ir::module &mod);
 
