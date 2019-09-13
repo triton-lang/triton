@@ -61,18 +61,20 @@ void coalesce::run(ir::module &mod) {
     std::vector<unsigned> order(max_contiguous.size());
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(), [&](unsigned a, unsigned b) { return max_contiguous[a] > max_contiguous[b]; } );
-    std::list<ir::instruction*> work_list;
+    std::list<std::pair<ir::instruction*, ir::instruction*>> work_list;
     if(order != order_[i])
-      work_list.push_back(i);
+      work_list.push_back({i, nullptr});
     // rematerialize recursively
     while(!work_list.empty()) {
-      ir::instruction* current = work_list.back();
-      order_[current] = order;
+      auto pair = work_list.back();
+      ir::instruction* cloned = pair.first;
+      ir::instruction* original = pair.second;
+      order_[cloned] = order;
       work_list.pop_back();
-      for(ir::value *op: current->ops()) {
+      for(ir::value *op: cloned->ops()) {
         ir::instruction* i_op = dynamic_cast<ir::instruction*>(op);
         if(replaced.find(i_op) != replaced.end()){
-          current->replace_uses_of_with(i_op, replaced.at(i_op));
+          cloned->replace_uses_of_with(i_op, replaced.at(i_op));
           continue;
         }
         if(!i_op)
@@ -90,17 +92,19 @@ void coalesce::run(ir::module &mod) {
           continue;
         if(auto* ld = dynamic_cast<ir::load_inst*>(i_op))
           n_op = ir::copy_to_shared_inst::create(ld);
-        // not a load; rematerialize and recurse
+        // not a load; rematerialize and add to worklist
         else {
           n_op = i_op->clone();
-          work_list.push_back(n_op);
+          work_list.push_back({n_op, i_op});
         }
         n_op = builder.insert(n_op);
         replaced.insert({i_op, n_op});
         order_[n_op] = order;
         align_->copy(n_op, i_op);
-//        mem_->copy(n_op, i_op);
-        current->replace_uses_of_with(i_op, n_op);
+        mem_->copy(n_op, i_op);
+        if(original)
+          n_op->erase_use(original);
+        cloned->replace_uses_of_with(i_op, n_op);
       }
     }
 

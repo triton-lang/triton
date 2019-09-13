@@ -182,6 +182,11 @@ unsigned grids::get_param_group(ir::value *value, unsigned ax) {
   return result;
 }
 
+grids::fragment_t grids::get_fragment(ir::value *value, unsigned ax) {
+  return fragments_.at({value, ax});
+}
+
+
 //TODO: This shouldn't exist!
 void grids::copy(ir::value *dst, ir::value *src) {
   params_[dst] = params_[src];

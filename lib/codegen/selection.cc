@@ -723,8 +723,9 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
     return;
   if(auto *user = dynamic_cast<ir::user*>(v))
-    for(ir::value *op: user->ops())
+    for(ir::value *op: user->ops()){
       create_tile(op, builder, seen, sh_mem_ptr);
+    }
   LLVMContext &ctx = builder.getContext();
   auto shapes = v->get_type()->get_tile_shapes();
   unsigned pad = alloc_->is_ld_padded(v);
