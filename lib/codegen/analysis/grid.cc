@@ -1,6 +1,6 @@
 #include <algorithm>
 #include <cstdlib>
-#include "triton/codegen/transform/reorder.h"
+#include "triton/codegen/transform/coalesce.h"
 #include "triton/codegen/analysis/grid.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
@@ -16,7 +16,7 @@ namespace triton{
 namespace codegen{
 namespace analysis{
 
-grids::grids(size_t num_warps, transform::reorder *reorder): num_warps_(num_warps), reorder_(reorder)
+grids::grids(size_t num_warps, transform::coalesce *reorder): num_warps_(num_warps), reorder_(reorder)
 { }
 
 bool is_hmma(ir::value *v){
@@ -298,7 +298,7 @@ void grids::run(ir::module &mod) {
       unsigned current = num_threads;
       std::string nts = "nts.d" + s_ld;
       std::string mts = "mts.d" + s_ld;
-      params_.at(i).at(nts)->set_value(clamp(size / num_threads, 1, 1));
+      params_.at(i).at(nts)->set_value(clamp(size / num_threads, 1, 8));
       params_.at(i).at(mts)->set_value(clamp(current, 1, shapes[ld] / params_.at(i).at(nts)->get_value()));
       current = current / params_.at(i).at(mts)->get_value();
       for(size_t d = 1; d < shapes.size(); d++){

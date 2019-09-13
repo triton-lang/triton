@@ -19,7 +19,7 @@ namespace ir{
 namespace codegen{
 
 namespace transform{
-class reorder;
+class coalesce;
 }
 
 namespace analysis{
@@ -46,7 +46,7 @@ private:
 
 
 public:
-  grids(size_t num_warps, transform::reorder* reorder);
+  grids(size_t num_warps, transform::coalesce* reorder);
   ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   unsigned get_param_group(ir::value *value, unsigned ax);
   fragment_t get_fragment(ir::value *value, unsigned ax) { return fragments_.at({value, ax}); }
@@ -66,7 +66,7 @@ private:
   std::vector<ir::value*> grids_;
   std::map<ir::value*, std::map<unsigned, unsigned>> groups_;
   size_t num_warps_;
-  transform::reorder* reorder_;
+  transform::coalesce* reorder_;
 
 };
 
