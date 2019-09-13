@@ -14,16 +14,6 @@
 namespace drv = triton::driver;
 namespace rt = triton::runtime;
 
-template<class T>
-void diff(const std::vector<T>& x, const std::vector<T>& y){
-    for(size_t i = 0; i < x.size(); i++)
-      if(std::isnan(x[i]) || std::abs(x[i] - y[i])/std::max(x[i], y[i]) > 1e-4){
-        std::cout << i << " " << x[i] << " " << y[i] << std::endl;
-        exit(EXIT_FAILURE);
-      }
-    std::cout << "Pass!" << std::endl;
-}
-
 template<class T, bool AT, bool BT>
 static void cpu_ref(std::vector<T> &c, const std::vector<T> &a, const std::vector<T> &b,
                     size_t M, size_t N, size_t K){
