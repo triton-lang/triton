@@ -26,7 +26,7 @@ public:
   bool is_loop_latch(ir::phi_node *phi, ir::instruction *terminator);
   ir::value *get_reference(ir::value *x);
   void replace(ir::value* before, ir::value *after);
-
+  void copy(ir::value* y, ir::value *x);
 
 private:
   std::set<ir::value*> shared_;

@@ -556,15 +556,15 @@ inline int32_t ceil(int32_t num, int32_t div){
   return (num + div - 1)/div;
 }
 
-inline void to_warps(const std::vector<unsigned> &bs, std::vector<unsigned> &nw, std::vector<unsigned> &ws){
+inline void to_warps(const std::vector<unsigned> &bs, const std::vector<unsigned>& order, std::vector<unsigned> &nw, std::vector<unsigned> &ws){
   static const size_t warp_size = 32;
   size_t nthreads = 1, nwarps = 1;
   nw.resize(bs.size());
   ws.resize(bs.size());
   for(size_t i = 0; i < bs.size(); ++i){
     nthreads *= bs[i];
-    nw[i] = ceil(nthreads, nwarps*warp_size);
-    nwarps *= nw[i];
+    nw[order[i]] = ceil(nthreads, nwarps*warp_size);
+    nwarps *= nw[order[i]];
   }
   for(size_t i = 0; i < bs.size(); ++i){
     ws[i] = bs[i] / nw[i];
@@ -585,7 +585,7 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
       contiguous[i] = params_->get_param(v, "nts.d" + str_i)->get_value();
       block_size[i] = params_->get_param(v, "mts.d" + str_i)->get_value();
     }
-    to_warps(block_size, n_warps, warp_size);
+    to_warps(block_size, order, n_warps, warp_size);
     std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, order, warp_size, builder);
     std::vector<Value*> warp_id = delinearize(u_warp_id, order, n_warps, builder);
     // Create axes
@@ -709,52 +709,6 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     if(is_batched)
       axes_[params_->get_param_group(v, 2)] = distributed_axis{1, idx_z, warp_id_2};
   }
-}
-
-void selection::create_grids(std::vector<ir::value*> &grids,
-                             std::map<unsigned, ir::value*> &references,
-                             ir::function *fn) {
-  // get number of dimensions greater than 1
-  auto get_tile_gt1_dim = [&](ir::value *v){
-    unsigned result = 0;
-    for(auto shape: v->get_type()->get_tile_shapes()) {
-      result += (shape > 1)? shape : 0;
-    }
-    return result;
-  };
-  // bind references
-  std::set<ir::value*> seen;
-  std::function<void(ir::value*)> bind_references = [&](ir::value *v)
-  {
-    // skip
-    if(!v->get_type()->is_tile_ty() || !seen.insert(v).second)
-      return;
-    // recurse
-    if(auto *user = dynamic_cast<ir::user*>(v))
-      for(ir::value *op: user->ops())
-        bind_references(op);
-    // bind
-    const auto& shapes = v->get_type()->get_tile_shapes();
-    if(buffer_info_->is_shared(v))
-      return;
-    for(size_t d = 0; d < shapes.size(); d++){
-      if(shapes[d] == 1)
-        continue;
-      unsigned x = params_->get_param_group(v, d);
-      ir::value *&r = references[x];
-      if(!r || get_tile_gt1_dim(v) > get_tile_gt1_dim(r))
-        r = v;
-    }
-  };
-
-  for(ir::basic_block *block: fn->blocks())
-  for(ir::instruction *i: block->get_inst_list())
-    bind_references(i);
-
-  // create grid
-  for(auto &ref: references)
-    if(std::find(grids.begin(), grids.end(), ref.second) == grids.end())
-      grids.push_back(ref.second);
 }
 
 bool static inline has_phi_user(ir::value *v) {

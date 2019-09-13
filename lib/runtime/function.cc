@@ -212,10 +212,8 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   alignment_info.run(module);
   if(target->is_gpu())
     shmem_info.run(module);
-//  ir::print(module, std::cout);
   reorder.run(module);
   dce.run(module);
-//  ir::print(module, std::cout);
   grids.run(module);
   reassociate.run(module);
   dce.run(module);
