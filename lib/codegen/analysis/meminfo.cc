@@ -82,6 +82,10 @@ void add_copy(ir::value *x, ir::builder &builder) {
 }
 
 void meminfo::run(ir::module &mod) {
+//  shared_.clear();
+//  refs_.clear();
+//  double_.clear();
+
   // Add shared copies
   for(ir::function *fn: mod.get_function_list()){
     ir::builder builder(mod.get_context());

@@ -1,3 +1,4 @@
+#include <iostream>
 #include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/analysis/meminfo.h"
 #include "triton/ir/basic_block.h"
