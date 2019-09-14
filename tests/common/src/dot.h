@@ -64,7 +64,7 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
   // epilogue
   int rxc[TM] =  ridx * TM + 0 ... TM;
   int ryc[TN] =  ridy * TN + 0 ... TN;
-  TYPE* pc[TM, TN] = C + ryc[newaxis, :] + rxc[:, newaxis] * ldc;
+  TYPE* pc[TM, TN] = C + rxc[:, newaxis] * ldc + ryc[newaxis, :];
   *pc = c;
 }
 )";
