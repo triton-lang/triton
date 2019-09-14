@@ -49,20 +49,20 @@ private:
 
 
 public:
-  grids(size_t num_warps, transform::coalesce* reorder);
-  fragment_t get_fragment(ir::value *value, unsigned ax);
-  void copy(ir::value *dst, ir::value *src);
+  grids(size_t num_warps, transform::coalesce* coalesce);
   void run(ir::module &mod);
-  unsigned get_param_group(ir::value *value, unsigned ax);
-  const std::vector<ir::value*> get_grids() const { return grids_; }
+  const std::vector<ir::value*> get() const { return grids_; }
+  fragment_t fragment_of(ir::value *value, unsigned ax);
+  unsigned group_of(ir::value *value, unsigned ax);
   int mts(ir::value *value, unsigned ax);
   int nts(ir::value *value, unsigned ax);
   int fpw(ir::value *value, unsigned ax);
   int wpt(ir::value *value, unsigned ax);
+  void copy(ir::value *dst, ir::value *src);
 
 private:
 
-  transform::coalesce* reorder_;
+  transform::coalesce* coalesce_;
   // number of warps
   size_t num_warps_;
   // grids

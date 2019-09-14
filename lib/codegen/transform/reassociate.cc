@@ -94,9 +94,6 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
         params_->copy(new_value, old_value);
         params_->copy(new_lhs, old_value);
         params_->copy(new_rhs, old_value);
-        align_->copy(new_value, old_value);
-        align_->copy(new_lhs, old_value);
-        align_->copy(new_rhs, old_value);
       }
     }
   }
@@ -134,9 +131,6 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
       params_->copy(new_value, old_value);
       params_->copy(((ir::instruction*)new_value)->get_operand(0), old_value);
       params_->copy(((ir::instruction*)new_value)->get_operand(1), old_value);
-      align_->copy(new_value, old_value);
-      align_->copy(((ir::instruction*)new_value)->get_operand(0), old_value);
-      align_->copy(((ir::instruction*)new_value)->get_operand(1), old_value);
     }
   }
 
@@ -192,9 +186,6 @@ void reassociate::run(ir::module &mod) {
       params_->copy(dyn_range, old_range);
       params_->copy(static_range, old_range);
       params_->copy(new_range, old_range);
-      align_->copy(dyn_range, old_range);
-      align_->copy(static_range, old_range);
-      align_->copy(new_range, old_range);
     }
   }
 
@@ -226,9 +217,6 @@ void reassociate::run(ir::module &mod) {
             params_->copy(ndyn, rt);
             params_->copy(nsta, rt);
             params_->copy(broadcast, rt);
-            align_->copy(ndyn, rt);
-            align_->copy(nsta, rt);
-            align_->copy(broadcast, rt);
             infos[rt] = cst_info{ndyn, nsta};
           }
         }
@@ -250,8 +238,6 @@ void reassociate::run(ir::module &mod) {
           ir::value *sta_ptr = builder.create_gep(dyn_ptr, {sta});
           params_->copy(dyn_ptr, pz);
           params_->copy(sta_ptr, pz);
-          align_->copy(dyn_ptr, pz);
-          align_->copy(sta_ptr, pz);
           pz->replace_all_uses_with(sta_ptr);
           infos[sta_ptr].dyn_ptr = dyn_ptr;
           infos[sta_ptr].sta_ptr = (ir::getelementptr_inst*)sta_ptr;
@@ -268,8 +254,6 @@ void reassociate::run(ir::module &mod) {
           ir::value *pz_sta = builder.create_gep(pz_dyn, {cst}, pz->get_name());
           params_->copy(pz_dyn, pz);
           params_->copy(pz_sta, pz);
-          align_->copy(pz_dyn, pz);
-          align_->copy(pz_sta, pz);
           pz->replace_all_uses_with(pz_sta);
           infos[pz_sta].dyn_ptr = pz_dyn;
           infos[pz_sta].sta_ptr = (ir::getelementptr_inst*)pz_sta;
@@ -320,11 +304,6 @@ void reassociate::run(ir::module &mod) {
           params_->copy(neg_off, off);
           params_->copy(phi_dyn, phi);
           params_->copy(phi_sta, phi);
-          align_->copy(pz_dyn, pz);
-          align_->copy(((ir::instruction*)neg_off)->get_operand(0), off);
-          align_->copy(neg_off, off);
-          align_->copy(phi_dyn, phi);
-          align_->copy(phi_sta, phi);
           infos[phi_sta].dyn_ptr = phi_dyn;
           infos[phi_sta].sta_ptr = (ir::getelementptr_inst*)phi_sta;
           replaced.insert(phi);

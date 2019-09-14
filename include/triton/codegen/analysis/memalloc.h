@@ -24,15 +24,12 @@ class memalloc {
 public:
   memalloc(liveness *live, meminfo *buffer_info, grids *params)
     : liveness_(live), buffer_info_(buffer_info), params_(params){ }
-
   // utilities
-  unsigned get_num_bytes(ir::value *x);
+  unsigned num_bytes(ir::value *x);
   unsigned is_ld_padded(ir::value* x);
-
   // accessors
-  unsigned get_offset(ir::value *x)    const { return offsets_.at(x); }
-  unsigned get_allocated_size()        const { return allocated_size_; }
-
+  unsigned offset(ir::value *x)    const { return offsets_.at(x); }
+  unsigned allocated_size()        const { return allocated_size_; }
   // run
   void run();
 

@@ -16,7 +16,7 @@ namespace triton{
 namespace codegen{
 namespace analysis{
 
-grids::grids(size_t num_warps, transform::coalesce *reorder): num_warps_(num_warps), reorder_(reorder)
+grids::grids(size_t num_warps, transform::coalesce *reorder): num_warps_(num_warps), coalesce_(reorder)
 { }
 
 bool is_hmma(ir::value *v){
@@ -168,12 +168,12 @@ void grids::connected_components(node_t x, const std::vector<param_ptr_t>& ptr_v
   }
 }
 
-unsigned grids::get_param_group(ir::value *value, unsigned ax) {
+unsigned grids::group_of(ir::value *value, unsigned ax) {
   unsigned result = groups_.at(value).at(ax);
   return result;
 }
 
-grids::fragment_t grids::get_fragment(ir::value *value, unsigned ax) {
+grids::fragment_t grids::fragment_of(ir::value *value, unsigned ax) {
   return fragments_.at({value, ax});
 }
 
@@ -233,7 +233,7 @@ void grids::run(ir::module &mod) {
   for(ir::value *i: grids_){
     if(!i->get_type()->is_tile_ty())
       continue;
-    auto order = reorder_->get_order(i);
+    auto order = coalesce_->get_order(i);
     auto shapes = i->get_type()->get_tile_shapes();
     unsigned size = i->get_type()->get_tile_num_elements();
     /* HMMA parameters*/
@@ -329,7 +329,7 @@ void grids::create_grids(std::vector<ir::value*> &grids,
     for(size_t d = 0; d < shapes.size(); d++){
       if(shapes[d] == 1)
         continue;
-      unsigned x = get_param_group(v, d);
+      unsigned x = group_of(v, d);
       ir::value *&r = references[x];
       if(!r || get_tile_gt1_dim(v) > get_tile_gt1_dim(r))
         r = v;

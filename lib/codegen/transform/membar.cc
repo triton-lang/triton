@@ -32,8 +32,8 @@ bool membar::intersect(const interval_vec_t &X, const interval_vec_t &Y) {
 
 void membar::add_reference(ir::value *v, interval_vec_t &res){
   if(buffer_info_->is_shared(v) && !dynamic_cast<ir::phi_node*>(v)){
-    unsigned offset = alloc_->get_offset(v);
-    unsigned num_bytes = alloc_->get_num_bytes(v);
+    unsigned offset = alloc_->offset(v);
+    unsigned num_bytes = alloc_->num_bytes(v);
     res.push_back(interval_t(offset, offset + num_bytes));
   }
 }

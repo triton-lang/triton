@@ -21,16 +21,13 @@ namespace codegen{
 namespace analysis{
 
 class align {
+private:
   struct cst_info {
     unsigned num_cst;
     unsigned value;
   };
-
-private:
   // helpers
-  bool is_first_axis_unit(ir::value *v);
   std::vector<unsigned> get_shapes(ir::value *v);
-
   // populate is_constant
   std::vector<cst_info> populate_is_constant_phi(ir::phi_node* x);
   std::vector<cst_info> populate_is_constant_splat(ir::splat_inst* x);
@@ -61,10 +58,8 @@ private:
 
 public:
   void run(ir::module &mod);
-  unsigned get_starting_multiple(ir::value* v) const;
-  unsigned get_max_contiguous(ir::value* v) const;
-  std::vector<unsigned> get_max_contiguous_vec(ir::value* v) const;
-  void copy(ir::value *dst, ir::value *src);
+  unsigned get(ir::value* v, unsigned ax) const;
+  std::vector<unsigned> contiguous(ir::value* v) const;
 
 private:
   std::map<ir::value*, std::vector<cst_info>> is_constant_;

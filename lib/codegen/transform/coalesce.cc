@@ -57,7 +57,7 @@ void coalesce::run(ir::module &mod) {
   std::map<ir::value*, ir::value*> replaced;
   for(ir::io_inst *i: io) {
     ir::value *ptr = i->get_pointer_operand();
-    auto max_contiguous = align_->get_max_contiguous_vec(ptr);
+    auto max_contiguous = align_->contiguous(ptr);
     std::vector<unsigned> order(max_contiguous.size());
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(), [&](unsigned a, unsigned b) { return max_contiguous[a] > max_contiguous[b]; } );
@@ -102,7 +102,6 @@ void coalesce::run(ir::module &mod) {
         n_op = builder.insert(n_op);
         replaced.insert({i_op, n_op});
         order_[n_op] = order;
-        align_->copy(n_op, i_op);
         mem_->copy(n_op, i_op);
         if(original)
           n_op->erase_use(original);

@@ -20,7 +20,7 @@ unsigned memalloc::is_ld_padded(ir::value *x) {
   }
   for(ir::user* user: x->get_users())
     if(auto dot = dynamic_cast<ir::dot_inst*>(user)){
-      bool is_hmma = params_->get_fragment(user, 0) == grids::HMMA_FRAGMENT_C;
+      bool is_hmma = params_->fragment_of(user, 0) == grids::HMMA_FRAGMENT_C;
       bool is_op_0 = x == dot->get_operand(0);
       bool is_op_1 = x == dot->get_operand(1);
       if(is_hmma && is_op_0){
@@ -45,7 +45,7 @@ unsigned memalloc::is_ld_padded(ir::value *x) {
   return 0;
 }
 
-unsigned memalloc::get_num_bytes(ir::value *x) {
+unsigned memalloc::num_bytes(ir::value *x) {
   if(auto *red = dynamic_cast<ir::reduce_inst*>(x)){
     unsigned num_bytes = x->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
     size_t axis = red->get_axis();
@@ -56,7 +56,7 @@ unsigned memalloc::get_num_bytes(ir::value *x) {
     for(auto x: shapes)
       num_elements *= x;
     size_t depth;
-    if(params_->get_fragment(x, 0) == grids::HMMA_FRAGMENT_C)
+    if(params_->fragment_of(x, 0) == grids::HMMA_FRAGMENT_C)
       depth = params_->wpt(op, axis);
     else
       depth = params_->mts(op, axis);
@@ -102,7 +102,7 @@ void memalloc::run(){
       return res;
     });
     if(j_it != J.end()){
-      unsigned size = get_num_bytes(*j_it);
+      unsigned size = num_bytes(*j_it);
       segment xj = liveness_->get_interval(*j_it);
       starts[*j_it] = w;
       H.insert({w + size, segment{max(xh.start, xj.start), min(xh.end, xj.end)}});
@@ -123,8 +123,8 @@ void memalloc::run(){
     if(x == y)
       continue;
     unsigned X0 = starts[x], Y0 = starts[y];
-    unsigned NX = get_num_bytes(x);
-    unsigned NY = get_num_bytes(y);
+    unsigned NX = num_bytes(x);
+    unsigned NY = num_bytes(y);
     segment XS = {X0, X0 + NX};
     segment YS = {Y0, Y0 + NY};
     if(liveness_->get_interval(x).intersect(liveness_->get_interval(y))
@@ -156,7 +156,7 @@ void memalloc::run(){
   for(ir::value *x: V){
     unsigned Adj = 0;
     for(ir::value *y: interferences[x])
-      Adj = std::max(Adj, starts[y] + get_num_bytes(y));
+      Adj = std::max(Adj, starts[y] + num_bytes(y));
     offsets_[x] = starts[x] + colors[x] * Adj;
     if(buffer_info_->is_double(x)){
       ir::phi_node *phi = (ir::phi_node*)x;
@@ -170,7 +170,7 @@ void memalloc::run(){
   // Save maximum size of induced memory space
   allocated_size_ = 0;
   for(auto &x: offsets_){
-    allocated_size_ = std::max<size_t>(allocated_size_, x.second + get_num_bytes(x.first));
+    allocated_size_ = std::max<size_t>(allocated_size_, x.second + num_bytes(x.first));
   }
 }
 
