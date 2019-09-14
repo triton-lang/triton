@@ -430,7 +430,7 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     Value *pred = builder.CreateICmpEQ(tid, builder.getInt32(0));
     BasicBlock *tid_0_bb = BasicBlock::Create(ctx, "tid_0", current->getParent());
     BasicBlock *tid_0_done_bb = BasicBlock::Create(ctx, "tid_0_done", current->getParent());
-    Value *ptr = builder.CreateGEP(sh_mem_ptr_, builder.getInt32(alloc_->get_offset(ii)));
+    Value *ptr = builder.CreateGEP(sh_mem_ptr_, builder.getInt32(alloc_->offset(ii)));
     ptr = builder.CreateBitCast(ptr, PointerType::get(builder.getInt32Ty(), ptr->getType()->getPointerAddressSpace()));
     tgt_->add_memfence(module, builder);
     tgt_->add_barrier(module, builder);
@@ -538,6 +538,10 @@ Value* selection::llvm_value(ir::value *v, IRBuilder<> &builder) {
   throw std::runtime_error("unknown conversion from ir::value to Value");
 }
 
+/*  -------------------
+ *  ---- Init Axes ----
+ *  ------------------- */
+
 // Grid construction
 std::vector<Value*> delinearize(Value *trailing, const std::vector<unsigned>& order, std::vector<unsigned> &shapes, IRBuilder<> &builder){
   size_t dim = shapes.size();
@@ -600,7 +604,7 @@ void selection::init_strided_scan_axes(ir::value *v, IRBuilder<> &builder, Value
       unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
       idx_list[n] = builder.CreateAdd(scaled_thread_id, builder.getInt32(offset), "idx_" + str_k + "_" + std::to_string(n));
     }
-    axes_[params_->get_param_group(v, k)] = distributed_axis{contiguous[k], idx_list, thread_id};
+    axes_[params_->group_of(v, k)] = distributed_axis{contiguous[k], idx_list, thread_id};
   }
 }
 
@@ -705,27 +709,23 @@ void selection::init_hmma_axes(ir::value *v, IRBuilder<> &builder, Value *u_thre
 
 
   /* axes */
-  axes_[params_->get_param_group(v, 0)] = distributed_axis{1, idx_i, warp_id_0};
-  axes_[params_->get_param_group(v, 1)] = distributed_axis{1, idx_j, warp_id_1};
+  axes_[params_->group_of(v, 0)] = distributed_axis{1, idx_i, warp_id_0};
+  axes_[params_->group_of(v, 1)] = distributed_axis{1, idx_j, warp_id_1};
   if(is_batched)
-    axes_[params_->get_param_group(v, 2)] = distributed_axis{1, idx_z, warp_id_2};
+    axes_[params_->group_of(v, 2)] = distributed_axis{1, idx_z, warp_id_2};
 }
 
 
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
-  if(params_->get_fragment(v, 0) == analysis::grids::STRIDED_SCAN)
+  if(params_->fragment_of(v, 0) == analysis::grids::STRIDED_SCAN)
     init_strided_scan_axes(v, builder, u_thread_id, u_warp_id);
   else
     init_hmma_axes(v, builder, u_thread_id, u_warp_id);
 }
 
-bool static inline has_phi_user(ir::value *v) {
-  for(ir::user *usr: v->get_users()){
-    if(dynamic_cast<ir::phi_node*>(usr))
-      return true;
-  }
-  return false;
-}
+/*  -------------------
+ *  ---- Init Tiles ----
+ *  ------------------- */
 
 void selection::create_shared_tile(ir::value *v, IRBuilder<> &builder, Value *sh_mem_ptr) {
   auto shapes = v->get_type()->get_tile_shapes();
@@ -748,7 +748,7 @@ void selection::create_shared_tile(ir::value *v, IRBuilder<> &builder, Value *sh
     PHINode *ptr = builder.CreatePHI(ptr_ty, 2);
     PHINode *offset = builder.CreatePHI(builder.getInt32Ty(), 2);
     // next pointer
-    Value *pre_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(alloc_->get_offset(phi)));
+    Value *pre_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(alloc_->offset(phi)));
     pre_ptr = builder.CreateBitCast(pre_ptr, ptr->getType());
     Value *next_ptr = builder.CreateGEP(ptr, offset, "next_ptr");
     tmap_.insert({phi, new shared_tile(ty, shapes, ptr, builder, offset)});
@@ -761,8 +761,12 @@ void selection::create_shared_tile(ir::value *v, IRBuilder<> &builder, Value *sh
     }
   }
   else {
-    if(!has_phi_user(v)){
-      size_t offset = alloc_->get_offset(v);
+    bool has_phi_user = false;
+    for(ir::user *usr: v->get_users())
+      if(dynamic_cast<ir::phi_node*>(usr))
+        has_phi_user = true;
+    if(has_phi_user){
+      size_t offset = alloc_->offset(v);
       Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
       ptr = builder.CreateBitCast(ptr, ptr_ty);
       tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
@@ -776,7 +780,7 @@ void selection::create_distributed_tile(ir::value *v, IRBuilder<> &builder) {
   std::vector<distributed_axis> axes(shapes.size());
   for(size_t d = 0; d < shapes.size(); d++){
     if(shapes[d] > 1){
-      unsigned x = params_->get_param_group(v, d);
+      unsigned x = params_->group_of(v, d);
       axes[d] = axes_.at(x);
     }
     else{
@@ -827,7 +831,7 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
   Value *u_thread_warp_id = builder.CreateURem(u_thread_id, warp_size);
   Value *u_warp_id = builder.CreateUDiv(u_thread_id, warp_size);
   // create grid
-  for(ir::value* i: params_->get_grids())
+  for(ir::value* i: params_->get())
     init_axes(i, builder, u_thread_warp_id, u_warp_id);
   // create tile
   std::set<ir::value*> seen;
@@ -838,6 +842,10 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
     create_tile(i, builder, seen, sh_mem_ptr);
   }
 }
+
+/*  ----------------------------
+ *  ---- Lower Instructions ----
+ *  ---------------------------- */
 
 void selection::lower_masked_store(ir::masked_store_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
   distributed_tile* ptrs = (distributed_tile*)tmap_.at(x->get_pointer_operand());
@@ -907,7 +915,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
   Value *base_ptr = builder.CreateBitCast(sh_mem_ptr_, PointerType::get(res_ty, addr_space));
   for(auto& x: partial) {
     // current element being computed
-    Value *lane = axes_.at(params_->get_param_group(op, axis)).thread_id;
+    Value *lane = axes_.at(params_->group_of(op, axis)).thread_id;
     Value *&result = x.second;
     indices_t write_idx = x.first;
     write_idx.insert(write_idx.begin() + axis, lane);
@@ -1233,7 +1241,7 @@ void selection::lower_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn, IRB
   if(NK != 1) {
     shared_tile *TA = (shared_tile*)tmap_.at(A);
     shared_tile *TB = (shared_tile*)tmap_.at(B);
-    if(params_->get_fragment(dot, 0) == analysis::grids::STRIDED_SCAN)
+    if(params_->fragment_of(dot, 0) == analysis::grids::STRIDED_SCAN)
       lower_scanline_dot(dot, ctx, fn, builder, TC, TA, TB, TD, NK, c_ty, f_mul_add);
     else
       lower_hmma_dot(dot, ctx, fn, builder, TC, TA, TB, TD, NK);
@@ -1249,9 +1257,7 @@ void selection::lower_masked_load(ir::masked_load_inst *x, LLVMContext &ctx, Fun
   // find vector size
   distributed_tile* result = (distributed_tile*)tmap_.at(x);
   ir::value *ptr = x->get_pointer_operand();
-  unsigned starting_multiple = alignment_->get_starting_multiple(ptr);
-  unsigned max_contiguous = alignment_->get_max_contiguous(ptr);
-  unsigned alignment = std::min(starting_multiple, max_contiguous);
+  unsigned alignment = alignment_->get(ptr, 0);
   unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
   distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
   distributed_tile *masks = (distributed_tile*)tmap_.at(x->get_mask_operand());
@@ -1322,9 +1328,7 @@ void selection::lower_load(ir::load_inst *x, LLVMContext &ctx, Function *fn, IRB
   distributed_tile* result = (distributed_tile*)tmap_.at(x);
   // find vector size
   ir::value *ptr = x->get_pointer_operand();
-  unsigned starting_multiple = alignment_->get_starting_multiple(ptr);
-  unsigned max_contiguous = alignment_->get_max_contiguous(ptr);
-  unsigned alignment = std::min(starting_multiple, max_contiguous);
+  unsigned alignment = alignment_->get(ptr, 0);
   unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
   distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
   // vector loads
@@ -1408,6 +1412,10 @@ void selection::lower_instruction(ir::instruction *src, IRBuilder<> &builder) {
   }
 }
 
+/*  ----------------------------
+ *  ---- Generate LLVM code ----
+ *  ---------------------------- */
+
 inline llvm::Attribute llvm_attr(llvm::LLVMContext& ctx, ir::attribute attr) {
   switch(attr.get_kind()){
     case ir::noalias: return llvm::Attribute::get(ctx, llvm::Attribute::NoAlias);
@@ -1487,7 +1495,7 @@ void selection::run(ir::module &src, Module &dst) {
     // allocate shared memory
     Value *sh_mem_ptr = nullptr;
     if(tgt_->is_gpu())
-    if(unsigned alloc_size = alloc_->get_allocated_size()){
+    if(unsigned alloc_size = alloc_->allocated_size()){
       Type *int_8_ty = Type::getInt8Ty(dst_ctx);
       ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
       Type *ptr_ty = PointerType::get(int_8_ty, 3);
@@ -1540,7 +1548,7 @@ void selection::run(ir::module &src, Module &dst) {
           }
           else {
             unsigned num_bytes = phi->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
-            offset->addIncoming(dst_builder.getInt32(alloc_->get_num_bytes(phi)/(2*num_bytes)), llvm_inc_block);
+            offset->addIncoming(dst_builder.getInt32(alloc_->num_bytes(phi)/(2*num_bytes)), llvm_inc_block);
           }
           ptr->addIncoming(inc_shared->get_pointer(), llvm_inc_block);
         }

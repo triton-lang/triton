@@ -197,24 +197,25 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::analysis::meminfo shmem_info;
   codegen::analysis::liveness shmem_liveness(&shmem_info);
   codegen::analysis::align alignment_info;
-  codegen::transform::coalesce reorder(&alignment_info, &shmem_info);
-  codegen::analysis::grids grids(opt.num_warps, &reorder);
+  codegen::transform::coalesce coalesce(&alignment_info, &shmem_info);
+  codegen::analysis::grids grids(opt.num_warps, &coalesce);
   codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &grids);
   codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
   codegen::transform::vectorize vectorize(&grids);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&alignment_info, &grids);
-  codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, &reorder, target.get(), opt.num_warps);
+  codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, &coalesce, target.get(), opt.num_warps);
   // run passes
   peephole.run(module);
   dce.run(module);
   alignment_info.run(module);
   if(target->is_gpu())
     shmem_info.run(module);
-  reorder.run(module);
+  coalesce.run(module);
   dce.run(module);
   grids.run(module);
+  alignment_info.run(module);
   reassociate.run(module);
   dce.run(module);
   peephole.run(module);
@@ -222,13 +223,14 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
     shmem_info.run(module);
     shmem_liveness.run(module);
     shmem_allocation.run();
-    if(shmem_allocation.get_allocated_size() > context->device()->max_shared_memory())
+    if(shmem_allocation.allocated_size() > context->device()->max_shared_memory())
       return std::unique_ptr<driver::module>();
     shmem_barriers.run(module);
   }
   dce.run(module);
   vectorize.run(module);
   dce.run(module);
+  alignment_info.run(module);
 //  ir::print(module, std::cout);
   // generate llvm code
   llvm::LLVMContext ctx;

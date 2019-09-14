@@ -45,11 +45,9 @@ public:
 public:
   // constructor
   liveness(meminfo *info): info_(info){ }
-
   // accessors
   const intervals_map_t& intervals() const { return intervals_; }
   segment get_interval(ir::value* v) const { return intervals_.at(v); }
-
   // run
   void run(ir::module &mod);
 

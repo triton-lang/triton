@@ -30,14 +30,6 @@ inline T add_to_cache(ir::value *i, T value, std::map<ir::value*, T> &map) {
   return map[i] = value;
 }
 
-
-bool align::is_first_axis_unit(ir::value *x){
-  if(x->get_type()->is_tile_ty())
-    return x->get_type()->get_tile_shapes()[0] == 1;
-  else
-    return true;
-}
-
 /*
  * is constant
  */
@@ -471,26 +463,19 @@ std::vector<unsigned> align::populate_starting_multiple(ir::value *v){
   return populate_starting_multiple_default(v);
 }
 
-unsigned align::get_starting_multiple(ir::value* v) const {
-  return starting_multiple_.at(v)[0];
+
+unsigned align::get(ir::value *v, unsigned ax) const {
+  unsigned starting_multiple = starting_multiple_.at(v)[ax];
+  unsigned max_contiguous = max_contiguous_.at(v)[ax];
+  return std::min(starting_multiple, max_contiguous);
 }
 
-unsigned align::get_max_contiguous(ir::value* v) const {
-  return max_contiguous_.at(v)[0];
-}
-
-std::vector<unsigned> align::get_max_contiguous_vec(ir::value* v) const {
+std::vector<unsigned> align::contiguous(ir::value* v) const {
   return max_contiguous_.at(v);
 }
 
-void align::copy(ir::value *dst, ir::value *src) {
-  starting_multiple_[dst] = starting_multiple_[src];
-  max_contiguous_[dst] = max_contiguous_[src];
-  is_constant_[dst] = is_constant_[src];
-}
-
-
 void align::run(ir::module &mod) {
+
   // populate constant
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
