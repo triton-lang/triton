@@ -581,9 +581,8 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     std::vector<unsigned> warp_size(dim);
     std::vector<unsigned> n_warps(dim);
     for(unsigned i = 0; i < shapes.size(); i++){
-      std::string str_i = std::to_string(i);
-      contiguous[i] = params_->get_param(v, "nts.d" + str_i)->get_value();
-      block_size[i] = params_->get_param(v, "mts.d" + str_i)->get_value();
+      contiguous[i] = params_->get_nts(v, i);
+      block_size[i] = params_->get_mts(v, i);
     }
     to_warps(block_size, order, n_warps, warp_size);
     std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, order, warp_size, builder);
@@ -617,13 +616,13 @@ void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id
     Value *_16 = builder.getInt32(16);
 
     // fragments per warp
-    unsigned fpw_0 = params_->get_param(v, "fpw.d0")->get_value();
-    unsigned fpw_1 = params_->get_param(v, "fpw.d1")->get_value();
-    unsigned fpw_2 = is_batched ? params_->get_param(v, "fpw.d2")->get_value() : 1;
+    unsigned fpw_0 = params_->get_fpw(v, 0);
+    unsigned fpw_1 = params_->get_fpw(v, 1);
+    unsigned fpw_2 = is_batched ? params_->get_fpw(v, 2) : 1;
     // warps per tile
-    unsigned wpt_0 = params_->get_param(v, "wpt.d0")->get_value();
-    unsigned wpt_1 = params_->get_param(v, "wpt.d1")->get_value();
-    unsigned wpt_2 = is_batched ? params_->get_param(v, "wpt.d2")->get_value() : 1;
+    unsigned wpt_0 = params_->get_wpt(v, 0);
+    unsigned wpt_1 = params_->get_wpt(v, 1);
+    unsigned wpt_2 = is_batched ? params_->get_wpt(v, 2) : 1;
     // hmma warp tile size
     unsigned hmma_wts_0 = fpw_0 * 8;
     unsigned hmma_wts_1 = fpw_1 * 8;
@@ -909,7 +908,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
     tgt_->add_barrier(module, builder);
     builder.CreateStore(result, write_ptr);
     // build result
-    unsigned depth = params_->get_param(op, "wpt.d" + std::to_string(axis))->get_value();
+    unsigned depth = params_->get_wpt(op, axis);
     for(unsigned i = depth/2; i > 0; i >>= 1){
       // current indices
       indices_t current(write_idx.size(), builder.getInt32(0));
@@ -1076,12 +1075,12 @@ void selection::lower_hmma_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn
                                              "{$10, $11}, "
                                              "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
 
-  unsigned fpw_0 = params_->get_param(dot, "fpw.d0")->get_value();
-  unsigned fpw_1 = params_->get_param(dot, "fpw.d1")->get_value();
+  unsigned fpw_0 = params_->get_fpw(dot, 0);
+  unsigned fpw_1 = params_->get_fpw(dot, 1);
   unsigned wts_0 = fpw_0 * 8;
   unsigned wts_1 = fpw_1 * 8;
-  unsigned wpt_0 = params_->get_param(dot, "wpt.d0")->get_value();
-  unsigned wpt_1 = params_->get_param(dot, "wpt.d1")->get_value();
+  unsigned wpt_0 = params_->get_wpt(dot, 0);
+  unsigned wpt_1 = params_->get_wpt(dot, 1);
   unsigned stride_rep_i = wpt_0 * wts_0;
   unsigned stride_rep_j = wpt_1 * wts_1;
   unsigned num_rep_i = shapes[0] / stride_rep_i;

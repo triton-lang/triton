@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <memory>
 
 namespace triton{
 
@@ -27,6 +28,8 @@ namespace analysis{
 class grids {
   typedef std::pair<ir::value*, unsigned> node_t;
   typedef std::map <node_t, std::set<node_t>> graph_t;
+  typedef std::shared_ptr<int> param_ptr_t;
+  typedef std::map<ir::value*, std::map<int, param_ptr_t>> param_map_t;
 
 public:
   enum fragment_t{
@@ -39,7 +42,7 @@ private:
   void init_c_phi(ir::instruction *i);
   void init_c_graph(ir::instruction *v);
   fragment_t get_fragmentation_type(node_t x, graph_t &graph);
-  void connected_components(node_t x, const std::vector<ir::metaparameter *> mps, const std::vector<std::string> prefixes, std::set<node_t> &nodes, graph_t &graph, unsigned group_id);
+  void connected_components(node_t x, const std::vector<param_ptr_t>& params, const std::vector<param_map_t*>& maps, std::set<node_t> &nodes, graph_t &graph, unsigned group_id);
   void create_grids(std::vector<ir::value*> &grids,
                     std::map<unsigned, triton::ir::value *> &references,
                     ir::function *fn);
@@ -47,27 +50,36 @@ private:
 
 public:
   grids(size_t num_warps, transform::coalesce* reorder);
-  ir::metaparameter* get_param(ir::value *value, const std::string &key) { return params_[value][key]; }
   unsigned get_param_group(ir::value *value, unsigned ax);
   fragment_t get_fragment(ir::value *value, unsigned ax);
   void copy(ir::value *dst, ir::value *src);
   void run(ir::module &mod);
   unsigned get_num_threads();
   const std::vector<ir::value*> get_grids() const { return grids_; }
+  int get_mts(ir::value *value, unsigned ax);
+  int get_nts(ir::value *value, unsigned ax);
+  int get_fpw(ir::value *value, unsigned ax);
+  int get_wpt(ir::value *value, unsigned ax);
 
 private:
-  std::vector<unsigned*> pool_;
+
+  transform::coalesce* reorder_;
+  // number of warps
+  size_t num_warps_;
+  // grids
+  std::vector<ir::value*> grids_;
+  // grid parameters
+  param_map_t fpw_;
+  param_map_t wpt_;
+  param_map_t mts_;
+  param_map_t nts_;
+  // constraints graph
   graph_t dependencies_;
   std::set<node_t> nodes_;
+  // fragments
   std::map<node_t, fragment_t> fragments_;
-  std::map<node_t, unsigned> static_params_;
-  std::map<ir::value*, std::map<std::string, ir::metaparameter*>> params_;
-  std::map<unsigned, ir::metaparameter*> global_range_sizes_;
-  std::vector<ir::value*> grids_;
+  // parameter groups
   std::map<ir::value*, std::map<unsigned, unsigned>> groups_;
-  size_t num_warps_;
-  transform::coalesce* reorder_;
-
 };
 
 
