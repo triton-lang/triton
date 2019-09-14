@@ -88,8 +88,10 @@ void coalesce::run(ir::module &mod) {
         builder.set_insert_point(it);
         // found a load; write to shared memory and stop recursion
         ir::instruction *n_op = nullptr;
-        if(mem_->is_shared(i_op))
+        if(mem_->is_shared(i_op)){
+          i_op->add_use(cloned);
           continue;
+        }
         if(auto* ld = dynamic_cast<ir::load_inst*>(i_op))
           n_op = ir::copy_to_shared_inst::create(ld);
         // not a load; rematerialize and add to worklist
