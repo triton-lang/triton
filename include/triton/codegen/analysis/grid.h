@@ -50,16 +50,15 @@ private:
 
 public:
   grids(size_t num_warps, transform::coalesce* reorder);
-  unsigned get_param_group(ir::value *value, unsigned ax);
   fragment_t get_fragment(ir::value *value, unsigned ax);
   void copy(ir::value *dst, ir::value *src);
   void run(ir::module &mod);
-  unsigned get_num_threads();
+  unsigned get_param_group(ir::value *value, unsigned ax);
   const std::vector<ir::value*> get_grids() const { return grids_; }
-  int get_mts(ir::value *value, unsigned ax);
-  int get_nts(ir::value *value, unsigned ax);
-  int get_fpw(ir::value *value, unsigned ax);
-  int get_wpt(ir::value *value, unsigned ax);
+  int mts(ir::value *value, unsigned ax);
+  int nts(ir::value *value, unsigned ax);
+  int fpw(ir::value *value, unsigned ax);
+  int wpt(ir::value *value, unsigned ax);
 
 private:
 

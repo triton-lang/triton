@@ -157,7 +157,11 @@ private:
   void create_grids(std::vector<ir::value *> &grids,
                     std::map<unsigned, ir::value *> &references,
                     ir::function *fn);
+  void create_shared_tile(ir::value *v, Builder &builder, Value *sh_mem_ptr);
+  void create_distributed_tile(ir::value *v, Builder &builder);
   void create_tile(ir::value *v, Builder &builder, std::set<ir::value *> &seen, Value *sh_mem_ptr);
+  void init_strided_scan_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
+  void init_hmma_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
   void init_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
   void init_grids(ir::function *fn, Builder &builder, Value *sh_mem_ptr);
 
@@ -195,8 +199,8 @@ private:
 
 
 public:
-  selection(analysis::memalloc *alloc, analysis::grids *params, analysis::meminfo *buffer_info, analysis::align *alignment, transform::coalesce* reorder, target *tgt)
-    : alloc_(alloc), params_(params), buffer_info_(buffer_info), alignment_(alignment), reorder_(reorder), tgt_(tgt){ }
+  selection(analysis::memalloc *alloc, analysis::grids *params, analysis::meminfo *buffer_info, analysis::align *alignment, transform::coalesce* reorder, target *tgt, unsigned num_warps)
+    : alloc_(alloc), params_(params), buffer_info_(buffer_info), alignment_(alignment), reorder_(reorder), tgt_(tgt), num_warps_(num_warps){ }
 
   void run(ir::module &src, Module &dst);
 
@@ -215,6 +219,7 @@ private:
   Value *offset_b_j_, *offset_b_k_;
   unsigned num_packs_0_, num_packs_1_;
   unsigned pack_size_0_, pack_size_1_;
+  unsigned num_warps_;
 };
 
 }

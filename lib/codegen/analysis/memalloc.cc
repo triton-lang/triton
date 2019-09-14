@@ -57,9 +57,9 @@ unsigned memalloc::get_num_bytes(ir::value *x) {
       num_elements *= x;
     size_t depth;
     if(params_->get_fragment(x, 0) == grids::HMMA_FRAGMENT_C)
-      depth = params_->get_wpt(op, axis);
+      depth = params_->wpt(op, axis);
     else
-      depth = params_->get_mts(op, axis);
+      depth = params_->mts(op, axis);
     return num_elements * num_bytes * depth;
   }
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;
