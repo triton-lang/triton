@@ -156,8 +156,8 @@ grids::fragment_t grids::get_fragmentation_type(node_t x, graph_t &graph){
   return STRIDED_SCAN;
 }
 
-void grids::connected_components(node_t x, const std::vector<param_ptr_t>& ptr_vec, const std::vector<param_map_t*>& maps, std::set<node_t> &nodes, graph_t &graph, unsigned group_id)
-{
+void grids::connected_components(node_t x, const std::vector<param_ptr_t>& ptr_vec, const std::vector<param_map_t*>& maps,
+                                 std::set<node_t> &nodes, graph_t &graph, unsigned group_id) {
   groups_[x.first].insert({x.second, group_id});
   if(nodes.find(x) != nodes.end()){
     nodes.erase(x);
@@ -190,22 +190,18 @@ void grids::copy(ir::value *dst, ir::value *src) {
 
 
 void grids::run(ir::module &mod) {
-  ir::context &ctx = mod.get_context();
-  // Create metaparameters
+  // Create tiling parameters
   for(ir::function *fn: mod.get_function_list()){
-
     // Build constraints graph
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *i : block->get_inst_list())
     if(i->has_tile_result_or_op())
       init_c_graph(i);
-
     // Build phi constraints
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *i : block->get_inst_list())
     if(i->has_tile_result_or_op())
       init_c_phi(i);
-
     // Layout parameters
     unsigned group_id = 0;
     for(auto x: nodes_)
@@ -231,7 +227,7 @@ void grids::run(ir::module &mod) {
   }
 
 
-  unsigned num_threads = get_num_threads();
+  unsigned num_threads = num_warps_*32;
   auto clamp = [&](unsigned x, unsigned lo, unsigned hi) { return std::min(std::max(x, lo), hi); };
 
   for(ir::value *i: grids_){
@@ -242,10 +238,8 @@ void grids::run(ir::module &mod) {
     unsigned size = i->get_type()->get_tile_num_elements();
     /* HMMA parameters*/
     if(fragments_.at({i, 0}) == HMMA_FRAGMENT_C){
-
       unsigned shape_0 = shapes[order[0]];
       unsigned shape_1 = shapes[order[1]];
-
       /* fragments per warp */
       // try to make things as square as possible to maximize data re-use
       std::vector<unsigned> fpw = {1, 1, 1};
@@ -261,7 +255,6 @@ void grids::run(ir::module &mod) {
       // store parameters
       for(unsigned d = 0; d < shapes.size(); d++)
         *fpw_[i][d] = fpw[d];
-
       /* warps per tile */
       // try to make things as square as possible to maximize data re-use
       std::vector<unsigned> wpt = {1, 1, 1};
@@ -276,15 +269,12 @@ void grids::run(ir::module &mod) {
       // store parameters
       for(unsigned d = 0; d < shapes.size(); d++)
         *wpt_[i][d] = wpt[d];
-
       /* sanity check */
       unsigned effective_num_warps = 1;
       for(size_t d = 0; d < shapes.size(); d++)
         effective_num_warps *= *wpt_[i][d];
-
       if(num_warps_ != effective_num_warps)
         throw std::runtime_error("cannot create a kernel with this amount of warps");
-
     }
 
     /* Scan-line */
@@ -356,24 +346,19 @@ void grids::create_grids(std::vector<ir::value*> &grids,
       grids.push_back(ref.second);
 }
 
-
-unsigned grids::get_num_threads() {
-  return num_warps_*32;
-}
-
-int grids::get_mts(ir::value *value, unsigned ax) {
+int grids::mts(ir::value *value, unsigned ax) {
   return *mts_.at(value).at(ax);
 }
 
-int grids::get_nts(ir::value *value, unsigned ax) {
+int grids::nts(ir::value *value, unsigned ax) {
   return *nts_.at(value).at(ax);
 }
 
-int grids::get_fpw(ir::value *value, unsigned ax) {
+int grids::fpw(ir::value *value, unsigned ax) {
   return *fpw_.at(value).at(ax);
 }
 
-int grids::get_wpt(ir::value *value, unsigned ax) {
+int grids::wpt(ir::value *value, unsigned ax) {
   return *wpt_.at(value).at(ax);
 }
 
