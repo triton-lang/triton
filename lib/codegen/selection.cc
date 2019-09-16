@@ -1,6 +1,8 @@
 ﻿#include "triton/codegen/selection.h"
 #include "triton/codegen/target.h"
-#include "triton/codegen/analysis/grid.h"
+#include "triton/codegen/analysis/layout.h"
+#include "triton/codegen/analysis/axes.h"
+#include "triton/codegen/analysis/tiles.h"
 #include "triton/codegen/analysis/memalloc.h"
 #include "triton/codegen/analysis/align.h"
 #include "triton/codegen/transform/coalesce.h"
@@ -584,8 +586,8 @@ void selection::init_strided_scan_axes(ir::value *v, IRBuilder<> &builder, Value
   std::vector<unsigned> warp_size(dim);
   std::vector<unsigned> n_warps(dim);
   for(unsigned i = 0; i < shapes.size(); i++){
-    contiguous[i] = params_->nts(v, i);
-    block_size[i] = params_->mts(v, i);
+    contiguous[i] = tiles_->nts(v, i);
+    block_size[i] = tiles_->mts(v, i);
   }
   to_warps(block_size, order, n_warps, warp_size);
   std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, order, warp_size, builder);
@@ -604,7 +606,7 @@ void selection::init_strided_scan_axes(ir::value *v, IRBuilder<> &builder, Value
       unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
       idx_list[n] = builder.CreateAdd(scaled_thread_id, builder.getInt32(offset), "idx_" + str_k + "_" + std::to_string(n));
     }
-    axes_[params_->group_of(v, k)] = distributed_axis{contiguous[k], idx_list, thread_id};
+    axes_[a_axes_->get(v, k)] = distributed_axis{contiguous[k], idx_list, thread_id};
   }
 }
 
@@ -622,13 +624,13 @@ void selection::init_hmma_axes(ir::value *v, IRBuilder<> &builder, Value *u_thre
   Value *_16 = builder.getInt32(16);
 
   // fragments per warp
-  unsigned fpw_0 = params_->fpw(v, 0);
-  unsigned fpw_1 = params_->fpw(v, 1);
-  unsigned fpw_2 = is_batched ? params_->fpw(v, 2) : 1;
+  unsigned fpw_0 = tiles_->fpw(v, 0);
+  unsigned fpw_1 = tiles_->fpw(v, 1);
+  unsigned fpw_2 = is_batched ? tiles_->fpw(v, 2) : 1;
   // warps per tile
-  unsigned wpt_0 = params_->wpt(v, 0);
-  unsigned wpt_1 = params_->wpt(v, 1);
-  unsigned wpt_2 = is_batched ? params_->wpt(v, 2) : 1;
+  unsigned wpt_0 = tiles_->wpt(v, 0);
+  unsigned wpt_1 = tiles_->wpt(v, 1);
+  unsigned wpt_2 = is_batched ? tiles_->wpt(v, 2) : 1;
   // hmma warp tile size
   unsigned hmma_wts_0 = fpw_0 * 8;
   unsigned hmma_wts_1 = fpw_1 * 8;
@@ -709,18 +711,18 @@ void selection::init_hmma_axes(ir::value *v, IRBuilder<> &builder, Value *u_thre
 
 
   /* axes */
-  axes_[params_->group_of(v, 0)] = distributed_axis{1, idx_i, warp_id_0};
-  axes_[params_->group_of(v, 1)] = distributed_axis{1, idx_j, warp_id_1};
+  axes_[a_axes_->get(v, 0)] = distributed_axis{1, idx_i, warp_id_0};
+  axes_[a_axes_->get(v, 1)] = distributed_axis{1, idx_j, warp_id_1};
   if(is_batched)
-    axes_[params_->group_of(v, 2)] = distributed_axis{1, idx_z, warp_id_2};
+    axes_[a_axes_->get(v, 2)] = distributed_axis{1, idx_z, warp_id_2};
 }
 
 
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
-  if(params_->fragment_of(v, 0) == analysis::grids::STRIDED_SCAN)
-    init_strided_scan_axes(v, builder, u_thread_id, u_warp_id);
-  else
+  if(tiles_->hmma(v))
     init_hmma_axes(v, builder, u_thread_id, u_warp_id);
+  else
+    init_strided_scan_axes(v, builder, u_thread_id, u_warp_id);
 }
 
 /*  -------------------
@@ -780,7 +782,7 @@ void selection::create_distributed_tile(ir::value *v, IRBuilder<> &builder) {
   std::vector<distributed_axis> axes(shapes.size());
   for(size_t d = 0; d < shapes.size(); d++){
     if(shapes[d] > 1){
-      unsigned x = params_->group_of(v, d);
+      unsigned x = a_axes_->get(v, d);
       axes[d] = axes_.at(x);
     }
     else{
@@ -831,8 +833,8 @@ void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem
   Value *u_thread_warp_id = builder.CreateURem(u_thread_id, warp_size);
   Value *u_warp_id = builder.CreateUDiv(u_thread_id, warp_size);
   // create grid
-  for(ir::value* i: params_->get())
-    init_axes(i, builder, u_thread_warp_id, u_warp_id);
+  for(auto x: tiles_->largest())
+    init_axes(x.second, builder, u_thread_warp_id, u_warp_id);
   // create tile
   std::set<ir::value*> seen;
   for(ir::basic_block *block: fn->blocks())
@@ -915,7 +917,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
   Value *base_ptr = builder.CreateBitCast(sh_mem_ptr_, PointerType::get(res_ty, addr_space));
   for(auto& x: partial) {
     // current element being computed
-    Value *lane = axes_.at(params_->group_of(op, axis)).thread_id;
+    Value *lane = axes_.at(a_axes_->get(op, axis)).thread_id;
     Value *&result = x.second;
     indices_t write_idx = x.first;
     write_idx.insert(write_idx.begin() + axis, lane);
@@ -928,7 +930,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
     tgt_->add_barrier(module, builder);
     builder.CreateStore(result, write_ptr);
     // build result
-    unsigned depth = params_->wpt(op, axis);
+    unsigned depth = tiles_->wpt(op, axis);
     for(unsigned i = depth/2; i > 0; i >>= 1){
       // current indices
       indices_t current(write_idx.size(), builder.getInt32(0));
@@ -1095,12 +1097,12 @@ void selection::lower_hmma_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn
                                              "{$10, $11}, "
                                              "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
 
-  unsigned fpw_0 = params_->fpw(dot, 0);
-  unsigned fpw_1 = params_->fpw(dot, 1);
+  unsigned fpw_0 = tiles_->fpw(dot, 0);
+  unsigned fpw_1 = tiles_->fpw(dot, 1);
   unsigned wts_0 = fpw_0 * 8;
   unsigned wts_1 = fpw_1 * 8;
-  unsigned wpt_0 = params_->wpt(dot, 0);
-  unsigned wpt_1 = params_->wpt(dot, 1);
+  unsigned wpt_0 = tiles_->wpt(dot, 0);
+  unsigned wpt_1 = tiles_->wpt(dot, 1);
   unsigned stride_rep_i = wpt_0 * wts_0;
   unsigned stride_rep_j = wpt_1 * wts_1;
   unsigned num_rep_i = shapes[0] / stride_rep_i;
@@ -1241,10 +1243,11 @@ void selection::lower_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn, IRB
   if(NK != 1) {
     shared_tile *TA = (shared_tile*)tmap_.at(A);
     shared_tile *TB = (shared_tile*)tmap_.at(B);
-    if(params_->fragment_of(dot, 0) == analysis::grids::STRIDED_SCAN)
-      lower_scanline_dot(dot, ctx, fn, builder, TC, TA, TB, TD, NK, c_ty, f_mul_add);
-    else
+    if(tiles_->hmma(dot))
       lower_hmma_dot(dot, ctx, fn, builder, TC, TA, TB, TD, NK);
+    else
+      lower_scanline_dot(dot, ctx, fn, builder, TC, TA, TB, TD, NK, c_ty, f_mul_add);
+
   }
   else {
     distributed_tile *TA = (distributed_tile*)tmap_.at(A);

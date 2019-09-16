@@ -3,6 +3,9 @@
 #include <regex>
 #include <functional>
 #include <algorithm>
+#include "triton/codegen/analysis/axes.h"
+#include "triton/codegen/analysis/layout.h"
+#include "triton/codegen/analysis/tiles.h"
 #include "triton/codegen/selection.h"
 #include "triton/runtime/function.h"
 #include "triton/codegen/transform/coalesce.h"
@@ -192,49 +195,54 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
 
 std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::context *context, const options_t& opt) {
   std::unique_ptr<codegen::target> target = context->device()->make_target();
-
+  // generate llvm code
+  llvm::LLVMContext ctx;
+  std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
   // create passes
   codegen::analysis::meminfo shmem_info;
-  codegen::analysis::liveness shmem_liveness(&shmem_info);
   codegen::analysis::align alignment_info;
+  codegen::analysis::liveness shmem_liveness(&shmem_info);
   codegen::transform::coalesce coalesce(&alignment_info, &shmem_info);
-  codegen::analysis::grids grids(opt.num_warps, &coalesce);
-  codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &grids);
+  codegen::analysis::axes axes;
+  codegen::analysis::layout layouts(&axes);
+  codegen::analysis::tiles tiles(opt.num_warps, &coalesce, &axes, &layouts);
+  codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &tiles);
   codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
-  codegen::transform::vectorize vectorize(&grids);
+  codegen::transform::vectorize vectorize(&tiles);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
-  codegen::transform::reassociate reassociate(&alignment_info, &grids);
-  codegen::selection selection(&shmem_allocation, &grids, &shmem_info, &alignment_info, &coalesce, target.get(), opt.num_warps);
+  codegen::transform::reassociate reassociate(&alignment_info);
+  codegen::selection selection(&shmem_allocation, &tiles, &shmem_info, &alignment_info, &axes, &layouts, &coalesce, target.get(), opt.num_warps);
   // run passes
   peephole.run(module);
   dce.run(module);
   alignment_info.run(module);
-  if(target->is_gpu())
-    shmem_info.run(module);
+  shmem_info.run(module);
   coalesce.run(module);
   dce.run(module);
-  grids.run(module);
+  axes.run(module);
+  layouts.run(module);
+  tiles.run(module);
   alignment_info.run(module);
   reassociate.run(module);
   dce.run(module);
   peephole.run(module);
-  if(target->is_gpu()){
-    shmem_info.run(module);
-    shmem_liveness.run(module);
-    shmem_allocation.run();
-    if(shmem_allocation.allocated_size() > context->device()->max_shared_memory())
-      return std::unique_ptr<driver::module>();
-    shmem_barriers.run(module);
-  }
+  shmem_info.run(module);
+  shmem_liveness.run(module);
+  shmem_allocation.run();
+  if(shmem_allocation.allocated_size() > context->device()->max_shared_memory())
+    return std::unique_ptr<driver::module>();
+  shmem_barriers.run(module);
   dce.run(module);
   vectorize.run(module);
   dce.run(module);
   alignment_info.run(module);
+  coalesce.run(module);
+  dce.run(module);
 //  ir::print(module, std::cout);
-  // generate llvm code
-  llvm::LLVMContext ctx;
-  std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
+  axes.run(module);
+  layouts.run(module);
+  tiles.run(module);
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));

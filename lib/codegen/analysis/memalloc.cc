@@ -2,7 +2,7 @@
 #include "triton/codegen/analysis/memalloc.h"
 #include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/analysis/meminfo.h"
-#include "triton/codegen/analysis/grid.h"
+#include "triton/codegen/analysis/tiles.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/type.h"
 #include "triton/ir/value.h"
@@ -20,7 +20,7 @@ unsigned memalloc::is_ld_padded(ir::value *x) {
   }
   for(ir::user* user: x->get_users())
     if(auto dot = dynamic_cast<ir::dot_inst*>(user)){
-      bool is_hmma = params_->fragment_of(user, 0) == grids::HMMA_FRAGMENT_C;
+      bool is_hmma = tiles_->hmma(user);
       bool is_op_0 = x == dot->get_operand(0);
       bool is_op_1 = x == dot->get_operand(1);
       if(is_hmma && is_op_0){
@@ -56,10 +56,10 @@ unsigned memalloc::num_bytes(ir::value *x) {
     for(auto x: shapes)
       num_elements *= x;
     size_t depth;
-    if(params_->fragment_of(x, 0) == grids::HMMA_FRAGMENT_C)
-      depth = params_->wpt(op, axis);
+    if(tiles_->hmma(x))
+      depth = tiles_->wpt(op, axis);
     else
-      depth = params_->mts(op, axis);
+      depth = tiles_->mts(op, axis);
     return num_elements * num_bytes * depth;
   }
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;

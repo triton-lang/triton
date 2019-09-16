@@ -15,15 +15,15 @@ namespace ir{
 namespace codegen{
 namespace analysis{
 
-class grids;
+class tiles;
 
 class liveness;
 class meminfo;
 
 class memalloc {
 public:
-  memalloc(liveness *live, meminfo *buffer_info, grids *params)
-    : liveness_(live), buffer_info_(buffer_info), params_(params){ }
+  memalloc(liveness *live, meminfo *buffer_info, tiles *params)
+    : liveness_(live), buffer_info_(buffer_info), tiles_(params){ }
   // utilities
   unsigned num_bytes(ir::value *x);
   unsigned is_ld_padded(ir::value* x);
@@ -40,7 +40,7 @@ private:
   // dependences
   liveness *liveness_;
   meminfo *buffer_info_;
-  grids *params_;
+  tiles *tiles_;
 };
 
 }

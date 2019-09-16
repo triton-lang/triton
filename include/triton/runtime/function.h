@@ -11,7 +11,7 @@
 // codegen
 #include "triton/codegen/selection.h"
 #include "triton/codegen/target.h"
-#include "triton/codegen/analysis/grid.h"
+#include "triton/codegen/analysis/tiles.h"
 #include "triton/codegen/analysis/memalloc.h"
 #include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/analysis/meminfo.h"
@@ -45,7 +45,7 @@ class translation_unit;
 
 namespace codegen{
 namespace analysis{
-class grids;
+class tiles;
 }
 }
 

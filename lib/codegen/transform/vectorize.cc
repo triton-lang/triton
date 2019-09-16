@@ -1,5 +1,5 @@
 #include "triton/codegen/transform/vectorize.h"
-#include "triton/codegen/analysis/grid.h"
+#include "triton/codegen/analysis/tiles.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -23,7 +23,6 @@ void vectorize::run(ir::module &mod) {
       ir::instruction *rx = (ir::instruction*)builder.create_vectorize(x);
       x->replace_all_uses_with(rx);
       rx->set_operand(0, x);
-      params_->copy(rx, x);
     }
     if(dynamic_cast<ir::copy_to_shared_inst*>(i)){
       ir::value *x = i->get_operand(0);
@@ -33,7 +32,6 @@ void vectorize::run(ir::module &mod) {
       ir::instruction *rx = (ir::instruction*)builder.create_vectorize(x);
       x->replace_all_uses_with(rx);
       rx->set_operand(0, x);
-      params_->copy(rx, x);
     }
   }
 }

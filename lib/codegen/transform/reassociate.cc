@@ -2,7 +2,6 @@
 #include <iostream>
 #include "triton/codegen/transform/reassociate.h"
 #include "triton/codegen/analysis/align.h"
-#include "triton/codegen/analysis/grid.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -90,11 +89,6 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
         new_rhs = builder.create_splat(old_rhs, shapes);
         new_value = builder.create_add(new_lhs, new_rhs, op->get_name());
       }
-      if(new_value != old_value){
-        params_->copy(new_value, old_value);
-        params_->copy(new_lhs, old_value);
-        params_->copy(new_rhs, old_value);
-      }
     }
   }
 
@@ -127,11 +121,6 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
       if(is_cst(rrhs))
         new_value = builder.create_add(rrhs, builder.create_add(lrhs, lhs), name, cst);
     }
-    if(new_value != old_value){
-      params_->copy(new_value, old_value);
-      params_->copy(((ir::instruction*)new_value)->get_operand(0), old_value);
-      params_->copy(((ir::instruction*)new_value)->get_operand(1), old_value);
-    }
   }
 
   // extract constant and non-constant
@@ -156,8 +145,7 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
   return new_value;
 }
 
-reassociate::reassociate(analysis::align *align, analysis::grids* params)
-  : params_(params), align_(align)
+reassociate::reassociate(analysis::align *align): align_(align)
 { }
 
 
@@ -183,9 +171,6 @@ void reassociate::run(ir::module &mod) {
       ir::value* static_range = ir::make_range_sta::get(old_range);
       ir::value* new_range = builder.create_add(dyn_range, static_range);
       old_range->replace_all_uses_with(new_range);
-      params_->copy(dyn_range, old_range);
-      params_->copy(static_range, old_range);
-      params_->copy(new_range, old_range);
     }
   }
 
@@ -214,9 +199,6 @@ void reassociate::run(ir::module &mod) {
             ir::value* ndyn = builder.create_broadcast(dyn, shapes);
             ir::value* broadcast = builder.create_broadcast(cst, shapes);
             ir::getelementptr_inst* nsta = (ir::getelementptr_inst*)builder.create_gep(ndyn, {broadcast});
-            params_->copy(ndyn, rt);
-            params_->copy(nsta, rt);
-            params_->copy(broadcast, rt);
             infos[rt] = cst_info{ndyn, nsta};
           }
         }
@@ -236,8 +218,6 @@ void reassociate::run(ir::module &mod) {
           builder.set_insert_point(pz);
           ir::value *dyn_ptr = builder.create_gep(py, {dyn});
           ir::value *sta_ptr = builder.create_gep(dyn_ptr, {sta});
-          params_->copy(dyn_ptr, pz);
-          params_->copy(sta_ptr, pz);
           pz->replace_all_uses_with(sta_ptr);
           infos[sta_ptr].dyn_ptr = dyn_ptr;
           infos[sta_ptr].sta_ptr = (ir::getelementptr_inst*)sta_ptr;
@@ -252,8 +232,6 @@ void reassociate::run(ir::module &mod) {
           ir::value *off = *pz->idx_begin();
           ir::value *pz_dyn = builder.create_gep(dyn, {off});
           ir::value *pz_sta = builder.create_gep(pz_dyn, {cst}, pz->get_name());
-          params_->copy(pz_dyn, pz);
-          params_->copy(pz_sta, pz);
           pz->replace_all_uses_with(pz_sta);
           infos[pz_sta].dyn_ptr = pz_dyn;
           infos[pz_sta].sta_ptr = (ir::getelementptr_inst*)pz_sta;
@@ -298,12 +276,6 @@ void reassociate::run(ir::module &mod) {
           ir::value *neg_off = builder.create_neg(off);
           ir::value *pz_dyn = builder.create_gep(pz, {neg_off});
           phi_dyn->add_incoming(pz_dyn, phi->get_incoming_block(idx_z));
-          // copy parameters
-          params_->copy(pz_dyn, pz);
-          params_->copy(((ir::instruction*)neg_off)->get_operand(0), off);
-          params_->copy(neg_off, off);
-          params_->copy(phi_dyn, phi);
-          params_->copy(phi_sta, phi);
           infos[phi_sta].dyn_ptr = phi_dyn;
           infos[phi_sta].sta_ptr = (ir::getelementptr_inst*)phi_sta;
           replaced.insert(phi);
