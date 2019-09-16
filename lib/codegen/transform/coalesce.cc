@@ -6,6 +6,7 @@
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/module.h"
+#include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/meminfo.h"
 #include "triton/codegen/analysis/align.h"
 #include "triton/codegen/transform/coalesce.h"
@@ -14,62 +15,59 @@ namespace triton {
 namespace codegen{
 namespace transform{
 
-coalesce::coalesce(analysis::align* align, analysis::meminfo *mem)
-  : align_(align), mem_(mem) { }
+coalesce::coalesce(analysis::align* align, analysis::layout *layouts, analysis::meminfo *mem)
+  : align_(align), layout_(layouts), mem_(mem) { }
 
-std::vector<unsigned> coalesce::get_order(ir::value* v) {
-  return order_.at(v);
+// Find all values that are used as pointer operands in LD/ST
+void coalesce::extract_io_use(ir::value *v, std::set<ir::io_inst*>& result) {
+  for(ir::user* u: v->get_users()){
+    auto i = dynamic_cast<ir::io_inst*>(u);
+    if(i && i->get_pointer_operand() == v)
+      result.insert(i);
+  }
+}
+
+void coalesce::extract_ld(ir::io_inst* i, std::map<int, std::vector<ir::io_inst*>>& result) {
+  ir::value *ptr = i->get_pointer_operand();
+  auto contiguous = align_->contiguous(ptr);
+  auto it = std::max_element(contiguous.begin(), contiguous.end());
+  int axis = std::distance(contiguous.begin(), it);
+  result[axis].push_back(i);
 }
 
 void coalesce::run(ir::module &mod) {
-
-  std::set<ir::io_inst*> io;
-
-  std::function<void(ir::value*)> set_order = [&](ir::value *v) -> void {
-    if(order_.find(v) != order_.end())
-      return;
-    ir::type *tile_ty = v->get_type();
-    if(auto *x = dynamic_cast<ir::store_inst*>(v))
-      tile_ty = x->get_operand(0)->get_type();
-    if(!tile_ty->is_tile_ty())
-      return;
-    std::vector<unsigned> order(tile_ty->get_tile_shapes().size());
-    std::iota(order.begin(), order.end(), 0);
-    order_[v] = order;
-    if(ir::user* u = dynamic_cast<ir::user*>(v))
-      for(ir::value* op: u->ops())
-        set_order(op);
-  };
-
-  // initialize work-list
-  for(ir::function *fn: mod.get_function_list())
-  for(ir::basic_block *block: ir::cfg::reverse_post_order(fn))
-  for(ir::instruction *i: block->get_inst_list()){
-    if(auto *x = dynamic_cast<ir::io_inst*>(i)) {
-      ir::type* ptr_ty = x->get_pointer_operand()->get_type();
-      if(ptr_ty->is_tile_ty())
-        io.insert(x);
-    }
-    set_order(i);
+  // find values to rematerialize
+  size_t num_groups = layout_->get_num_groups();
+  std::vector<ir::io_inst*> remat;
+  for(size_t id = 0; id < num_groups; id++) {
+    const auto& values = layout_->values(id);
+    // extract pointers used in ld/st operations
+    std::set<ir::io_inst*> io;
+    for(ir::value *v: values)
+      extract_io_use(v, io);
+    // extract leading axes
+    std::map<int, std::vector<ir::io_inst*>> axes;
+    for(ir::io_inst *i: io)
+      extract_ld(i, axes);
+    // update list of values to rematerialize
+    if(axes.empty())
+      continue;
+    for(auto it = ++axes.rbegin(); it != axes.rend(); it++)
+      remat.insert(remat.begin(),
+                   it->second.begin(), it->second.end());
   }
 
+  // rematerialize values
   ir::builder &builder = mod.get_builder();
-  std::map<ir::value*, ir::value*> replaced;
-  for(ir::io_inst *i: io) {
-    ir::value *ptr = i->get_pointer_operand();
-    auto max_contiguous = align_->contiguous(ptr);
-    std::vector<unsigned> order(max_contiguous.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](unsigned a, unsigned b) { return max_contiguous[a] > max_contiguous[b]; } );
+  for(ir::io_inst *r: remat) {
     std::list<std::pair<ir::instruction*, ir::instruction*>> work_list;
-    if(order != order_[i])
-      work_list.push_back({i, nullptr});
+    std::map<ir::value*, ir::value*> replaced;
+    work_list.push_back({r, nullptr});
     // rematerialize recursively
     while(!work_list.empty()) {
       auto pair = work_list.back();
       ir::instruction* cloned = pair.first;
       ir::instruction* original = pair.second;
-      order_[cloned] = order;
       work_list.pop_back();
       for(ir::value *op: cloned->ops()) {
         ir::instruction* i_op = dynamic_cast<ir::instruction*>(op);
@@ -101,14 +99,12 @@ void coalesce::run(ir::module &mod) {
         }
         n_op = builder.insert(n_op);
         replaced.insert({i_op, n_op});
-        order_[n_op] = order;
         mem_->copy(n_op, i_op);
         if(original)
           n_op->erase_use(original);
         cloned->replace_uses_of_with(i_op, n_op);
       }
     }
-
   }
 }
 

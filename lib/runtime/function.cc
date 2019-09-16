@@ -200,30 +200,30 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
   // create passes
   codegen::analysis::meminfo shmem_info;
-  codegen::analysis::align alignment_info;
+  codegen::analysis::align align;
   codegen::analysis::liveness shmem_liveness(&shmem_info);
-  codegen::transform::coalesce coalesce(&alignment_info, &shmem_info);
   codegen::analysis::axes axes;
   codegen::analysis::layout layouts(&axes);
-  codegen::analysis::tiles tiles(opt.num_warps, &coalesce, &axes, &layouts);
+  codegen::transform::coalesce coalesce(&align, &layouts, &shmem_info);
+  codegen::analysis::tiles tiles(opt.num_warps, &align, &axes, &layouts);
   codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &tiles);
   codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
   codegen::transform::vectorize vectorize(&tiles);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
-  codegen::transform::reassociate reassociate(&alignment_info);
-  codegen::selection selection(&shmem_allocation, &tiles, &shmem_info, &alignment_info, &axes, &layouts, &coalesce, target.get(), opt.num_warps);
+  codegen::transform::reassociate reassociate(&align);
+  codegen::selection selection(&shmem_allocation, &tiles, &shmem_info, &align, &axes, &layouts, &coalesce, target.get(), opt.num_warps);
   // run passes
   peephole.run(module);
   dce.run(module);
-  alignment_info.run(module);
+  align.run(module);
   shmem_info.run(module);
-  coalesce.run(module);
-  dce.run(module);
   axes.run(module);
   layouts.run(module);
+  coalesce.run(module);
+  align.run(module);
+  dce.run(module);
   tiles.run(module);
-  alignment_info.run(module);
   reassociate.run(module);
   dce.run(module);
   peephole.run(module);
@@ -236,12 +236,9 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   vectorize.run(module);
   dce.run(module);
-  alignment_info.run(module);
-  coalesce.run(module);
-  dce.run(module);
-//  ir::print(module, std::cout);
   axes.run(module);
   layouts.run(module);
+  align.run(module);
   tiles.run(module);
   selection.run(module, *llvm);
   // return binary
