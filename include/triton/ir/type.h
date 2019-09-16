@@ -63,6 +63,7 @@ public:
   unsigned get_primitive_size_in_bits() const;
   type *get_scalar_ty() const;
   const tile_shapes_t& get_tile_shapes() const;
+  const size_t get_tile_rank() const;
   unsigned get_tile_num_elements() const;
   type *get_tile_element_ty() const;
   unsigned get_pointer_address_space() const;

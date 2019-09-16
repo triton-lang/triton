@@ -43,10 +43,12 @@ namespace triton{
 namespace codegen{
 
 namespace analysis{
-class grids;
+class tiles;
 class align;
 class memalloc;
 class meminfo;
+class axes;
+class layout;
 }
 
 namespace transform{
@@ -199,8 +201,12 @@ private:
 
 
 public:
-  selection(analysis::memalloc *alloc, analysis::grids *params, analysis::meminfo *buffer_info, analysis::align *alignment, transform::coalesce* reorder, target *tgt, unsigned num_warps)
-    : alloc_(alloc), params_(params), buffer_info_(buffer_info), alignment_(alignment), reorder_(reorder), tgt_(tgt), num_warps_(num_warps){ }
+  selection(analysis::memalloc *alloc, analysis::tiles *tiles, analysis::meminfo *buffer_info,
+            analysis::align *alignment, analysis::axes *axes, analysis::layout *layouts,
+            transform::coalesce* reorder, target *tgt, unsigned num_warps)
+    : alloc_(alloc), tiles_(tiles), buffer_info_(buffer_info),
+      alignment_(alignment), a_axes_(axes), layouts_(layouts),
+      reorder_(reorder), tgt_(tgt), num_warps_(num_warps){ }
 
   void run(ir::module &src, Module &dst);
 
@@ -208,7 +214,9 @@ private:
   vmap_t vmap_;
   tmap_t tmap_;
   analysis::memalloc *alloc_;
-  analysis::grids *params_;
+  analysis::tiles *tiles_;
+  analysis::axes *a_axes_;
+  analysis::layout *layouts_;
   analysis::meminfo *buffer_info_;
   analysis::align *alignment_;
   transform::coalesce *reorder_;

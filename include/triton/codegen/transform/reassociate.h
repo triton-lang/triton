@@ -19,7 +19,7 @@ class getelementptr_inst;
 namespace codegen{
 
 namespace analysis{
-class grids;
+class tiles;
 class align;
 }
 
@@ -37,11 +37,10 @@ private:
   ir::value *reassociate_ptr(ir::getelementptr_inst* pz, ir::builder &builder, std::map<ir::value*, cst_info> &offsets);
 
 public:
-  reassociate(analysis::align* align, analysis::grids *params);
+  reassociate(analysis::align* align);
   void run(ir::module& module);
 
 private:
-  analysis::grids* params_;
   analysis::align* align_;
 };
 

@@ -10,18 +10,18 @@ namespace ir {
 namespace codegen{
 
 namespace analysis{
-  class grids;
+  class tiles;
 }
 
 namespace transform{
 
 class vectorize {
 public:
-  vectorize(analysis::grids *params): params_(params){}
+  vectorize(analysis::tiles *params): params_(params){}
   void run(ir::module &mod);
 
 private:
-  analysis::grids *params_;
+  analysis::tiles *params_;
 };
 
 }
