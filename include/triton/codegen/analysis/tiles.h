@@ -19,14 +19,11 @@ namespace ir{
 
 namespace codegen{
 
-namespace transform{
-class coalesce;
-}
-
 namespace analysis{
 
 class axes;
 class layout;
+class align;
 
 class tiles {
   typedef std::map<ir::value*, std::map<int, int>> param_map_t;
@@ -35,25 +32,27 @@ private:
   void init_scanline_tile(ir::value *i);
 
 public:
-  tiles(size_t num_warps, transform::coalesce* coalesce, analysis::axes* axes, analysis::layout* layout);
+  tiles(size_t num_warps, analysis::align* align, analysis::axes* axes, analysis::layout* layout);
   void run(ir::module &mod);
   bool hmma(ir::value *value);
   int mts(ir::value *value, unsigned ax);
   int nts(ir::value *value, unsigned ax);
   int fpw(ir::value *value, unsigned ax);
   int wpt(ir::value *value, unsigned ax);
+  std::vector<int> order(ir::value *v);
   const std::map<int, ir::value*>& largest();
 
 private:
   // dependencies
+  analysis::align* align_;
   analysis::layout* layout_;
   analysis::axes* axes_;
-  transform::coalesce* coalesce_;
   // number of warps
   size_t num_warps_;
   // tile properties
-  std::map<int, bool> hmma_;
   std::map<int, ir::value*> largest_;
+  std::map<int, std::vector<int>> order_;
+  std::map<int, bool> hmma_;
   std::map<int, int> fpw_;
   std::map<int, int> wpt_;
   std::map<int, int> mts_;

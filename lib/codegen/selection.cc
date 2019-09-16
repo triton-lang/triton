@@ -545,7 +545,7 @@ Value* selection::llvm_value(ir::value *v, IRBuilder<> &builder) {
  *  ------------------- */
 
 // Grid construction
-std::vector<Value*> delinearize(Value *trailing, const std::vector<unsigned>& order, std::vector<unsigned> &shapes, IRBuilder<> &builder){
+std::vector<Value*> delinearize(Value *trailing, const std::vector<int>& order, std::vector<unsigned> &shapes, IRBuilder<> &builder){
   size_t dim = shapes.size();
   std::vector<Value*> result(dim);
   for(unsigned k = 0; k < dim - 1; k++){
@@ -562,7 +562,7 @@ inline int32_t ceil(int32_t num, int32_t div){
   return (num + div - 1)/div;
 }
 
-inline void to_warps(const std::vector<unsigned> &bs, const std::vector<unsigned>& order, std::vector<unsigned> &nw, std::vector<unsigned> &ws){
+inline void to_warps(const std::vector<unsigned> &bs, const std::vector<int>& order, std::vector<unsigned> &nw, std::vector<unsigned> &ws){
   static const size_t warp_size = 32;
   size_t nthreads = 1, nwarps = 1;
   nw.resize(bs.size());
@@ -578,7 +578,7 @@ inline void to_warps(const std::vector<unsigned> &bs, const std::vector<unsigned
 }
 
 void selection::init_strided_scan_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
-  auto order = reorder_->get_order(v);
+  auto order = tiles_->order(v);
   const auto& shapes = v->get_type()->get_tile_shapes();
   size_t dim = shapes.size();
   std::vector<unsigned> contiguous(dim);
