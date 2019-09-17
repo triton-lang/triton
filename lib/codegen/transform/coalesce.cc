@@ -87,7 +87,7 @@ void coalesce::run(ir::module &mod) {
     // rematerialize operands
     std::map<ir::value*, ir::value*> seen;
     for(ir::value *op: r->ops())
-      rematerialize(op, mod.get_builder(), seen);
+      r->replace_uses_of_with(op, rematerialize(op, mod.get_builder(), seen));
     // copy to shared if load
     auto& inst_list = r->get_parent()->get_inst_list();
     auto pos = ++std::find(inst_list.begin(), inst_list.end(), r);

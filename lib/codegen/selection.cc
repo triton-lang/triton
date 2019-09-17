@@ -799,8 +799,7 @@ void selection::create_distributed_tile(ir::value *v, IRBuilder<> &builder) {
       axes[d].values = {builder.getInt32(0)};
     }
   }
-  bool vectorize = dynamic_cast<ir::vectorize_inst*>(v);
-  distributed_tile *T = new distributed_tile(ty, shapes, tiles_->order(v), axes, builder, vectorize);
+  distributed_tile *T = new distributed_tile(ty, shapes, tiles_->order(v), axes, builder, false);
   bool is_inserted = tmap_.insert({v, T}).second;
   // constant range
   if(is_inserted && dynamic_cast<ir::make_range*>(v)){
@@ -890,8 +889,25 @@ void selection::lower_masked_store(ir::masked_store_inst *x, LLVMContext &ctx, F
 void selection::lower_store(ir::store_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
   distributed_tile* ptrs = (distributed_tile*)tmap_.at(x->get_pointer_operand());
   tile *scalars = tmap_.at(x->get_value_operand());
+//  size_t ld = tiles_->order(x->get_pointer_operand())[0];
+//  unsigned vector_size = 2;
+//  // vectorize pointers
+//  std::map<unsigned, Value*> ptr_packets;
+//  ptrs->for_each([&](indices_t idx){
+//    unsigned linear = ptrs->get_linear_index(idx);
+//    unsigned id = linear / vector_size;
+//    if(linear % vector_size == 0) {
+//      Value *ptr = ptrs->get_value(idx);
+//      ptr = builder.CreateBitCast(ptr, PointerType::get(VectorType::get(ptr->getType()->getPointerElementType(), vector_size),
+//                                                        ptr->getType()->getPointerAddressSpace()));
+//      ptr_packets[id] = ptr;
+//    }
+//  });
+//  ((shared_tile*)(scalars))->set_vector_size(vector_size);
+//  ((shared_tile*)(scalars))->set_return_mode(true);
+  // extract result element
   ptrs->for_each([&](indices_t idx){
-    builder.CreateStore(scalars->get_value(idx), ptrs->get_value(idx));
+      builder.CreateStore(scalars->get_value(idx), ptrs->get_value(idx));
   });
 }
 
@@ -1018,10 +1034,13 @@ void selection::lower_broadcast(ir::broadcast_inst *x, LLVMContext &ctx, Functio
   });
 }
 
-void selection::lower_vectorize(ir::vectorize_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
-  distributed_tile* result = (distributed_tile*)tmap_.at(x);
-  distributed_tile* in = (distributed_tile*)tmap_.at(x->get_operand(0));
-  unsigned vector_size = result->axis(0).contiguous;
+void selection::lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  shared_tile* result = (shared_tile*)tmap_.at(x);
+  ir::value *arg = x->get_operand(0);
+  distributed_tile* in = (distributed_tile*)tmap_.at(arg);
+  size_t ld = tiles_->order(arg)[0];
+  unsigned vector_size = in->axis(ld).contiguous;
+
   std::map<unsigned, Value*> packets;
   in->for_each([&](indices_t idx){
     unsigned linear = in->get_linear_index(idx);
@@ -1031,19 +1050,11 @@ void selection::lower_vectorize(ir::vectorize_inst *x, LLVMContext &ctx, Functio
       packets[id] = UndefValue::get(VectorType::get(in_value->getType(), vector_size));
     packets[id] = builder.CreateInsertElement(packets.at(id), in_value, linear % vector_size);
   });
-  result->for_each([&](indices_t idx){
+  in->for_each([&](indices_t idx){
     unsigned linear = in->get_linear_index(idx);
     unsigned id = linear / vector_size;
     if(linear % vector_size == 0)
       result->set_value(idx, packets[id]);
-  });
-}
-
-void selection::lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
-  shared_tile* result = (shared_tile*)tmap_.at(x);
-  distributed_tile* in = (distributed_tile*)tmap_.at(x->get_operand(0));
-  in->for_each([&](indices_t idx){
-    result->set_value(idx, in->get_value(idx));
   });
 }
 
@@ -1400,8 +1411,6 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     lower_splat(x, ctx, fn, builder);
   else if(auto *x = dynamic_cast<ir::broadcast_inst*>(ins))
     lower_broadcast(x, ctx, fn, builder);
-  else if(auto *x = dynamic_cast<ir::vectorize_inst*>(ins))
-    lower_vectorize(x, ctx, fn, builder);
   else if(auto *x = dynamic_cast<ir::copy_to_shared_inst*>(ins))
     lower_copy_to_shared(x, ctx, fn, builder);
   else if(auto* x = dynamic_cast<ir::trans_inst*>(ins))

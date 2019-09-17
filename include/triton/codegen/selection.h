@@ -179,7 +179,6 @@ private:
   void lower_reshape(ir::reshape_inst* x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_splat(ir::splat_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_broadcast(ir::broadcast_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
-  void lower_vectorize(ir::vectorize_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_trans(ir::trans_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   // matrix multiply
