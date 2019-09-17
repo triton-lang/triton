@@ -220,7 +220,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   axes.run(module);
   layouts.run(module);
   coalesce.run(module);
-//  ir::print(module, std::cout);
+  dce.run(module);
   align.run(module);
   dce.run(module);
   tiles.run(module);

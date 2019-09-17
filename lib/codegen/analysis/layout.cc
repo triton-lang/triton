@@ -53,6 +53,27 @@ const std::vector<ir::value*>& layout::values(unsigned id) const
 size_t layout::get_num_groups() const
 { return values_.size(); }
 
+void layout::connect(ir::value *x, ir::value *y) {
+  if(x == y)
+    return;
+  if(!x->get_type()->is_tile_ty())
+    return;
+  if(!y->get_type()->is_tile_ty())
+    return;
+  std::set<int> x_axes = axes_of(x);
+  std::set<int> y_axes = axes_of(y);
+  std::set<int> common;
+  std::set_intersection(x_axes.begin(), x_axes.end(),
+                        y_axes.begin(), y_axes.end(),
+                        std::inserter(common, common.begin()));
+  if(!common.empty()){
+    nodes_.insert(x);
+    nodes_.insert(y);
+    dependencies_[x].insert(y);
+    dependencies_[y].insert(x);
+  }
+}
+
 // run
 void layout::run(ir::module &mod) {
   nodes_.clear();
@@ -63,26 +84,12 @@ void layout::run(ir::module &mod) {
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction *i : block->get_inst_list()) {
-    // skip scalars
-    if(!i->get_type()->is_tile_ty())
-      continue;
-    // add an edge between i and the operands that share an axis
-    std::set<int> i_axes = axes_of(i);
-    nodes_.insert(i);
-    for(ir::value* op: i->ops()){
-      if(!op->get_type()->is_tile_ty())
-        continue;
-      nodes_.insert(op);
-      std::set<int> op_axes = axes_of(op);
-      std::set<int> common;
-      std::set_intersection(i_axes.begin(), i_axes.end(),
-                            op_axes.begin(), op_axes.end(),
-                            std::inserter(common, common.begin()));
-      if(!common.empty() || !op->get_type()->is_tile_ty()){
-        dependencies_[i].insert(op);
-        dependencies_[op].insert(i);
+    for(ir::value* opx: i->ops())
+      for(ir::value* opy: i->ops()){
+        connect(i, opx);
+        connect(opx, opy);
       }
-    }
+
   }
   // Grids
   unsigned group_id = 0;

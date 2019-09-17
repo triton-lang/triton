@@ -51,6 +51,11 @@ ir::value* coalesce::rematerialize(ir::value *x, ir::builder &builder,
   auto& inst_list = i->get_parent()->get_inst_list();
   auto pos = ++std::find(inst_list.begin(), inst_list.end(), i);
   builder.set_insert_point(pos);
+  if(dynamic_cast<ir::load_inst*>(x)){
+    ir::value *ret = builder.insert(ir::copy_to_shared_inst::create(x));
+//    x->replace_all_uses_with(ret);
+    return ret;
+  }
   // default -- recursive clone
   ir::instruction *cloned = builder.insert(i->clone());
   seen[i] = cloned;
@@ -96,6 +101,9 @@ void coalesce::run(ir::module &mod) {
       ir::instruction *cts = builder.insert(ir::copy_to_shared_inst::create(r));
       r->replace_all_uses_with(cts);
       cts->replace_uses_of_with(cts, r);
+    }
+    else{
+
     }
   }
 }
