@@ -208,7 +208,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::analysis::tiles tiles(opt.num_warps, &align, &axes, &layouts);
   codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &tiles);
   codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
-  codegen::transform::vectorize vectorize(&tiles);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&align);
@@ -235,7 +234,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
     return std::unique_ptr<driver::module>();
   shmem_barriers.run(module);
   dce.run(module);
-  vectorize.run(module);
   dce.run(module);
   axes.run(module);
   layouts.run(module);
