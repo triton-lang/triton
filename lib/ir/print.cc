@@ -48,8 +48,10 @@ void print(module &mod, std::ostream& os) {
       os << std::endl;
       for(ir::instruction *inst: block->get_inst_list()){
         os << "  ";
-        os << get_name(inst, cnt++);
-        os << " = ";
+        if(!inst->get_type()->is_void_ty()){
+          os << get_name(inst, cnt++);
+          os << " = ";
+        }
         ir::type* type = inst->get_type();
         os << inst->repr() << " " << type->repr();
         ir::instruction::ops_t ops = inst->ops();
@@ -65,7 +67,6 @@ void print(module &mod, std::ostream& os) {
         }
         os << ";" << std::endl;
       }
-      os << std::endl;
     }
     os << "}" << std::endl;
   }

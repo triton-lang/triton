@@ -11,6 +11,8 @@ namespace ir {
   class module;
   class value;
   class io_inst;
+  class instruction;
+  class builder;
 }
 
 namespace codegen{
@@ -27,6 +29,7 @@ class coalesce {
 private:
   void extract_io_use(ir::value *v, std::set<ir::io_inst*>& result);
   void extract_ld(ir::io_inst *i, std::map<int, std::vector<triton::ir::io_inst *> > &result);
+  ir::value* rematerialize(ir::value *v, ir::builder& builder, std::map<ir::value*, ir::value*>& seen);
 
 public:
   coalesce(analysis::align* align, triton::codegen::analysis::layout *layouts, analysis::meminfo* mem);
