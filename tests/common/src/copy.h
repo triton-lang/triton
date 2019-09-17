@@ -38,7 +38,7 @@ void copy2d(TYPE * X __noalias __readonly __aligned(16),
   int rm[TM] = ridm * TM + 0 ... TM;
   int rn[TN] = ridn * TN + 0 ... TN;
   TYPE* px[TM, TN] = X + rm[:, newaxis] + rn[newaxis, :] * ldx;
-  TYPE* py[TM, TN] = Y + rm[:, newaxis] * ldy + rn[newaxis, :];
+  TYPE* py[TM, TN] = Y + rm[:, newaxis] + rn[newaxis, :] * ldy;
   *py = *px;
 }
 )";

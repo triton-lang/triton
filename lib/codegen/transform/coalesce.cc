@@ -35,6 +35,31 @@ void coalesce::extract_ld(ir::io_inst* i, std::map<int, std::vector<ir::io_inst*
   result[axis].push_back(i);
 }
 
+ir::value* coalesce::rematerialize(ir::value *x, ir::builder &builder,
+                                   std::map<ir::value*, ir::value*>& seen) {
+  if(seen.find(x) != seen.end())
+    return seen.at(x);
+  auto i = dynamic_cast<ir::instruction*>(x);
+  // not an instruction -- forward value
+  if(!i)
+    return x;
+  // already in shared memory -- forward value
+  if(dynamic_cast<ir::copy_to_shared_inst*>(x)){
+    return x;
+  }
+  // set insert point
+  auto& inst_list = i->get_parent()->get_inst_list();
+  auto pos = ++std::find(inst_list.begin(), inst_list.end(), i);
+  builder.set_insert_point(pos);
+  // default -- recursive clone
+  ir::instruction *cloned = builder.insert(i->clone());
+  seen[i] = cloned;
+  // rematerialize operands
+  for(ir::value *op: cloned->ops())
+    cloned->replace_uses_of_with(op, rematerialize(op, builder, seen));
+  return cloned;
+}
+
 void coalesce::run(ir::module &mod) {
   // find values to rematerialize
   size_t num_groups = layout_->get_num_groups();
@@ -56,54 +81,21 @@ void coalesce::run(ir::module &mod) {
       remat.insert(remat.begin(),
                    it->second.begin(), it->second.end());
   }
-
   // rematerialize values
-  ir::builder &builder = mod.get_builder();
   for(ir::io_inst *r: remat) {
-    std::list<std::pair<ir::instruction*, ir::instruction*>> work_list;
-    std::map<ir::value*, ir::value*> replaced;
-    work_list.push_back({r, nullptr});
-    // rematerialize recursively
-    while(!work_list.empty()) {
-      auto pair = work_list.back();
-      ir::instruction* cloned = pair.first;
-      ir::instruction* original = pair.second;
-      work_list.pop_back();
-      for(ir::value *op: cloned->ops()) {
-        ir::instruction* i_op = dynamic_cast<ir::instruction*>(op);
-        if(replaced.find(i_op) != replaced.end()){
-          cloned->replace_uses_of_with(i_op, replaced.at(i_op));
-          continue;
-        }
-        if(!i_op)
-          continue;
-        ir::type *ty = i_op->get_type();
-        if(!ty->is_tile_ty())
-          continue;
-        auto& inst_list = i_op->get_parent()->get_inst_list();
-        auto it = std::find(inst_list.begin(), inst_list.end(), i_op);
-        it++;
-        builder.set_insert_point(it);
-        // found a load; write to shared memory and stop recursion
-        ir::instruction *n_op = nullptr;
-        if(mem_->is_shared(i_op)){
-          i_op->add_use(cloned);
-          continue;
-        }
-        if(auto* ld = dynamic_cast<ir::load_inst*>(i_op))
-          n_op = ir::copy_to_shared_inst::create(ld);
-        // not a load; rematerialize and add to worklist
-        else {
-          n_op = i_op->clone();
-          work_list.push_back({n_op, i_op});
-        }
-        n_op = builder.insert(n_op);
-        replaced.insert({i_op, n_op});
-        mem_->copy(n_op, i_op);
-        if(original)
-          n_op->erase_use(original);
-        cloned->replace_uses_of_with(i_op, n_op);
-      }
+    ir::builder& builder = mod.get_builder();
+    // rematerialize operands
+    std::map<ir::value*, ir::value*> seen;
+    for(ir::value *op: r->ops())
+      rematerialize(op, mod.get_builder(), seen);
+    // copy to shared if load
+    auto& inst_list = r->get_parent()->get_inst_list();
+    auto pos = ++std::find(inst_list.begin(), inst_list.end(), r);
+    builder.set_insert_point(pos);
+    if(dynamic_cast<ir::load_inst*>(r)){
+      ir::instruction *cts = builder.insert(ir::copy_to_shared_inst::create(r));
+      r->replace_all_uses_with(cts);
+      cts->replace_uses_of_with(cts, r);
     }
   }
 }

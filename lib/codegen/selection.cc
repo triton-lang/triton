@@ -1,4 +1,5 @@
-﻿#include "triton/codegen/selection.h"
+﻿#include <numeric>
+#include "triton/codegen/selection.h"
 #include "triton/codegen/target.h"
 #include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/axes.h"
@@ -28,6 +29,14 @@ using namespace llvm;
 /* Distributed Tile */
 void distributed_tile::init_indices() {
   std::vector<size_t> id(axes_.size(), 0);
+  // create iteration order
+  std::vector<size_t> order(id.size());
+  std::iota(order.begin(), order.end(), 0);
+  auto cmp = [&](int x, int y) {
+    return axes_[x].contiguous > axes_[y].contiguous;
+  };
+  std::sort(order.begin(), order.end(), cmp);
+  // build
   size_t k = 0;
   while(true) {
     indices_t current;
@@ -37,12 +46,12 @@ void distributed_tile::init_indices() {
     indices_[current] = sz;
     values_[current] = nullptr;
     ordered_indices_.push_back(current);
-    id[0]++;
-    while(id[k] == axes_[k].values.size()){
+    id[order[0]]++;
+    while(id[order[k]] == axes_[order[k]].values.size()){
       if(k == id.size() - 1)
         return;
-      id[k++] = 0;
-      id[k]++;
+      id[order[k++]] = 0;
+      id[order[k]]++;
     }
     k = 0;
   }
@@ -54,8 +63,8 @@ llvm::Type *distributed_tile::make_vector_ty(llvm::Type *ty, size_t vector_size)
   return VectorType::get(ty, vector_size);
 }
 
-distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const axes_t &axes, llvm::IRBuilder<> &builder, bool vectorize)
-    : tile(make_vector_ty(ty, vectorize?axes[0].contiguous:1), shapes), axes_(axes), builder_(builder) {
+distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const std::vector<int>& order, const axes_t &axes, llvm::IRBuilder<> &builder, bool vectorize)
+    : tile(make_vector_ty(ty, vectorize?axes[0].contiguous:1), shapes), axes_(axes), order_(order), builder_(builder) {
   vector_size_ = vectorize?ty_->getVectorNumElements():1;
   init_indices();
 }
@@ -767,7 +776,7 @@ void selection::create_shared_tile(ir::value *v, IRBuilder<> &builder, Value *sh
     for(ir::user *usr: v->get_users())
       if(dynamic_cast<ir::phi_node*>(usr))
         has_phi_user = true;
-    if(has_phi_user){
+    if(!has_phi_user){
       size_t offset = alloc_->offset(v);
       Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
       ptr = builder.CreateBitCast(ptr, ptr_ty);
@@ -791,7 +800,7 @@ void selection::create_distributed_tile(ir::value *v, IRBuilder<> &builder) {
     }
   }
   bool vectorize = dynamic_cast<ir::vectorize_inst*>(v);
-  distributed_tile *T = new distributed_tile(ty, shapes, axes, builder, vectorize);
+  distributed_tile *T = new distributed_tile(ty, shapes, tiles_->order(v), axes, builder, vectorize);
   bool is_inserted = tmap_.insert({v, T}).second;
   // constant range
   if(is_inserted && dynamic_cast<ir::make_range*>(v)){
@@ -1260,8 +1269,9 @@ void selection::lower_masked_load(ir::masked_load_inst *x, LLVMContext &ctx, Fun
   // find vector size
   distributed_tile* result = (distributed_tile*)tmap_.at(x);
   ir::value *ptr = x->get_pointer_operand();
-  unsigned alignment = alignment_->get(ptr, 0);
-  unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
+  size_t ld = tiles_->order(ptr)[0];
+  unsigned alignment = alignment_->get(ptr, ld);
+  unsigned vector_size = std::min<unsigned>(result->axis(ld).contiguous, alignment);
   distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
   distributed_tile *masks = (distributed_tile*)tmap_.at(x->get_mask_operand());
   distributed_tile *false_values = (distributed_tile*)tmap_.at(x->get_false_value_operand());
@@ -1331,8 +1341,9 @@ void selection::lower_load(ir::load_inst *x, LLVMContext &ctx, Function *fn, IRB
   distributed_tile* result = (distributed_tile*)tmap_.at(x);
   // find vector size
   ir::value *ptr = x->get_pointer_operand();
-  unsigned alignment = alignment_->get(ptr, 0);
-  unsigned vector_size = std::min<unsigned>(result->axis(0).contiguous, alignment);
+  size_t ld = tiles_->order(ptr)[0];
+  unsigned alignment = alignment_->get(ptr, ld);
+  unsigned vector_size = std::min<unsigned>(result->axis(ld).contiguous, alignment);
   distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
   // vector loads
   std::map<unsigned, Value*> packets;

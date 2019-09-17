@@ -92,10 +92,10 @@ void module::compile_llvm_module(std::unique_ptr<llvm::Module> module, const std
                                  file_type_t ft) {
   init_llvm();
   // debug
-//  llvm::legacy::PassManager pm;
-//  pm.add(llvm::createPrintModulePass(llvm::outs()));
+  llvm::legacy::PassManager pm;
+  pm.add(llvm::createPrintModulePass(llvm::outs()));
 //  pm.add(llvm::createVerifierPass());
-//  pm.run(*module);
+  pm.run(*module);
   // create machine
   module->setTargetTriple(triple);
   std::string error;
@@ -241,7 +241,7 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
 cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll_module): cu_module(context, compile_llvm_module(std::move(ll_module), context->device())) { }
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
-//  std::cout << source_ << std::endl;
+  std::cout << source_ << std::endl;
   cu_context::context_switcher ctx_switch(*context);
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
