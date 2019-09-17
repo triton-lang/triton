@@ -1035,11 +1035,17 @@ void selection::lower_broadcast(ir::broadcast_inst *x, LLVMContext &ctx, Functio
 }
 
 void selection::lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
-  shared_tile* result = (shared_tile*)tmap_.at(x);
+  unsigned vector_size = 1;
+  auto x_order = tiles_->order(x);
   ir::value *arg = x->get_operand(0);
+  auto arg_order = tiles_->order(arg);
+  // tiles
+  shared_tile* result = (shared_tile*)tmap_.at(x);
   distributed_tile* in = (distributed_tile*)tmap_.at(arg);
-  size_t ld = tiles_->order(arg)[0];
-  unsigned vector_size = in->axis(ld).contiguous;
+  if(x_order == arg_order){
+    size_t ld = arg_order[0];
+    vector_size = std::min(tiles_->nts(x, ld),tiles_->nts(arg, ld));
+  }
 
   std::map<unsigned, Value*> packets;
   in->for_each([&](indices_t idx){

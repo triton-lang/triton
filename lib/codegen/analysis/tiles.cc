@@ -190,8 +190,6 @@ void tiles::run(ir::module &) {
       );
     }
     order_[i] = order;
-    std::cout << "order: " << order[0] << " " << order[1] << std::endl;
-
   }
   // tiling parameters
   for(auto x: largest_){

@@ -158,7 +158,6 @@ void axes::run(ir::module &mod) {
   unsigned group_id = 0;
   while(!nodes_.empty())
     connected_components(*nodes_.begin(), nodes_, dependencies_, group_id++);
-  std::cout << "Number of axes: " << group_id << std::endl;
 }
 
 }
