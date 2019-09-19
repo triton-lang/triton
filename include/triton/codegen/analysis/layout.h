@@ -24,8 +24,9 @@ class layout {
   typedef std::map <node_t, std::set<node_t>> graph_t;
 
 private:
-  // create edge
+  // graph creation
   void connect(ir::value *x, ir::value *y);
+  void make_graph(ir::instruction *i);
   // connected components
   void connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, unsigned id);
   // list the axes of the given value

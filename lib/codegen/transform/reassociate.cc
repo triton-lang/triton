@@ -6,7 +6,7 @@
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
-#include "triton/ir/cfg.h"
+#include "triton/ir/utils.h"
 
 namespace triton {
 namespace codegen{

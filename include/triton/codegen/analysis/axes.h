@@ -23,15 +23,24 @@ class axes {
 
 private:
   void add_constraint(node_t x, node_t y);
-  void init_c_phi(ir::instruction *i);
-  void init_c_graph(ir::instruction *v);
+  // update graph
+  void update_graph_store(ir::instruction *i);
+  void update_graph_reduce(ir::instruction *i);
+  void update_graph_reshape(ir::instruction *i);
+  void update_graph_splat(ir::instruction *i);
+  void update_graph_trans(ir::instruction *i);
+  void update_graph_broadcast(ir::instruction *i);
+  void update_graph_dot(ir::instruction *i);
+  void update_graph_elementwise(ir::instruction *i);
+  void update_graph(ir::instruction *i);
+  // connected components
   void connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, unsigned group_id);
 
 public:
   axes();
   void run(ir::module &mod);
-  unsigned get(ir::value *value, unsigned ax);
-  bool has(ir::value *value, unsigned ax);
+  unsigned get_id(ir::value *value, unsigned ax);
+  bool has_id(ir::value *value, unsigned ax);
 
 private:
   // constraints graph

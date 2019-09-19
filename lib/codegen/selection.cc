@@ -615,7 +615,7 @@ void selection::init_strided_scan_axes(ir::value *v, IRBuilder<> &builder, Value
       unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
       idx_list[n] = builder.CreateAdd(scaled_thread_id, builder.getInt32(offset), "idx_" + str_k + "_" + std::to_string(n));
     }
-    axes_[a_axes_->get(v, k)] = distributed_axis{contiguous[k], idx_list, thread_id};
+    axes_[a_axes_->get_id(v, k)] = distributed_axis{contiguous[k], idx_list, thread_id};
   }
 }
 
@@ -720,10 +720,10 @@ void selection::init_hmma_axes(ir::value *v, IRBuilder<> &builder, Value *u_thre
 
 
   /* axes */
-  axes_[a_axes_->get(v, 0)] = distributed_axis{1, idx_i, warp_id_0};
-  axes_[a_axes_->get(v, 1)] = distributed_axis{1, idx_j, warp_id_1};
+  axes_[a_axes_->get_id(v, 0)] = distributed_axis{1, idx_i, warp_id_0};
+  axes_[a_axes_->get_id(v, 1)] = distributed_axis{1, idx_j, warp_id_1};
   if(is_batched)
-    axes_[a_axes_->get(v, 2)] = distributed_axis{1, idx_z, warp_id_2};
+    axes_[a_axes_->get_id(v, 2)] = distributed_axis{1, idx_z, warp_id_2};
 }
 
 
@@ -791,7 +791,7 @@ void selection::create_distributed_tile(ir::value *v, IRBuilder<> &builder) {
   std::vector<distributed_axis> axes(shapes.size());
   for(size_t d = 0; d < shapes.size(); d++){
     if(shapes[d] > 1){
-      unsigned x = a_axes_->get(v, d);
+      unsigned x = a_axes_->get_id(v, d);
       axes[d] = axes_.at(x);
     }
     else{
@@ -942,7 +942,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
   Value *base_ptr = builder.CreateBitCast(sh_mem_ptr_, PointerType::get(res_ty, addr_space));
   for(auto& x: partial) {
     // current element being computed
-    Value *lane = axes_.at(a_axes_->get(op, axis)).thread_id;
+    Value *lane = axes_.at(a_axes_->get_id(op, axis)).thread_id;
     Value *&result = x.second;
     indices_t write_idx = x.first;
     write_idx.insert(write_idx.begin() + axis, lane);

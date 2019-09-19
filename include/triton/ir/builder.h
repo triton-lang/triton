@@ -140,7 +140,6 @@ public:
   value *create_select(value *pred, value *if_value, value *else_value, const std::string &name = "");
   // Intrinsics
   value *create_copy_to_shared(value *arg, const std::string &name = "");
-  value *create_vectorize(value *arg, const std::string &name = "");
   value *create_barrier(const std::string &name = "");
 
 private:

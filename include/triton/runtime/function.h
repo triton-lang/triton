@@ -20,7 +20,6 @@
 #include "triton/codegen/transform/peephole.h"
 #include "triton/codegen/transform/membar.h"
 #include "triton/codegen/transform/reassociate.h"
-#include "triton/codegen/transform/vectorize.h"
 #include "triton/lang/parser.h"
 #include "triton/runtime/arg.h"
 

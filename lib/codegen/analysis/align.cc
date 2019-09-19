@@ -1,4 +1,5 @@
 #include "triton/codegen/analysis/align.h"
+#include "triton/ir/utils.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -14,15 +15,19 @@ namespace analysis{
 
 
 inline int gcd(int a, int b) {
-    if (a == 0)
-       return b;
-    if (b == 0)
-       return a;
-    if (a == b)
-        return a;
-    if (a > b)
-        return gcd(a-b, b);
-    return gcd(a, b-a);
+  if (a == 0)
+    return b;
+  if (b == 0)
+    return a;
+  if (a == b)
+    return a;
+  if (a > b)
+    return gcd(a - b, b);
+  return gcd(a, b - a);
+}
+
+inline int lcm(int a, int b) {
+  return (a * b) / gcd(a, b);
 }
 
 template<class T>
@@ -64,8 +69,8 @@ std::vector<align::cst_info> align::populate_is_constant_phi(ir::phi_node* x) {
 
 std::vector<align::cst_info> align::populate_is_constant_splat(ir::splat_inst* x) {
   auto shapes = get_shapes(x);
-  std::vector<cst_info> result;
   ir::value* op = x->get_operand(0);
+  std::vector<cst_info> result;
   auto op_cst = populate_is_constant(op);
   for(auto d: shapes)
     result.push_back(cst_info{d, op_cst[0].value});
@@ -478,28 +483,15 @@ std::vector<unsigned> align::contiguous(ir::value* v) const {
   return max_contiguous_.at(v);
 }
 
+
+void align::populate(ir::value *v) {
+  populate_is_constant(v);
+  populate_starting_multiple(v);
+  populate_max_contiguous(v);
+}
+
 void align::run(ir::module &mod) {
-
-  // populate constant
-  for(ir::function *fn: mod.get_function_list())
-  for(ir::basic_block *block: fn->blocks())
-  for(ir::instruction *i: block->get_inst_list()){
-    populate_is_constant(i);
-  }
-
-  // populate starting multiple
-  for(ir::function *fn: mod.get_function_list())
-  for(ir::basic_block *block: fn->blocks())
-  for(ir::instruction *i: block->get_inst_list()){
-    populate_starting_multiple(i);
-  }
-
-  // populate maximum contiguous
-  for(ir::function *fn: mod.get_function_list())
-  for(ir::basic_block *block: fn->blocks())
-  for(ir::instruction *i: block->get_inst_list()){
-    populate_max_contiguous(i);
-  }
+  ir::for_each_value(mod, [this](ir::value* v) { populate(v); } );
 }
 
 

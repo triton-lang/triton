@@ -40,7 +40,8 @@ private:
 
 protected:
   // constructors
-  instruction(type *ty, unsigned num_ops, unsigned num_results = 1, const std::string &name = "", instruction *next = nullptr);
+  instruction(type *ty, value_id_t ity, unsigned num_ops,
+              const std::string &name = "", instruction *next = nullptr);
 
 public:
   // parent
@@ -59,31 +60,20 @@ public:
   // cloning
   ir::instruction* clone() {
     ir::instruction* res = clone_impl();
-//    for(auto it = op_begin(); it != op_end(); it++){
-//      (*it)->add_use(res);
-//    }
-    res->set_name("testcloned");
+    for(auto it = op_begin(); it != op_end(); it++)
+      (*it)->add_use(res);
     res->parent_ = nullptr;
     return res;
   }
+  // instruction id
+  value_id_t get_id() const { return id_; }
 
 private:
   basic_block *parent_;
   std::map<ir::metadata::kind_t, unsigned> metadatas_;
+  value_id_t id_;
 };
 
-
-// result reference
-class result_reference: public value {
-public:
-  result_reference(instruction *ref, unsigned arg_id, const std::string &name = "");
-  instruction *get_ref();
-  unsigned     get_arg_id();
-
-private:
-  instruction *ref_;
-  unsigned arg_id_;
-};
 
 //===----------------------------------------------------------------------===//
 //                               phi_node classes
@@ -173,11 +163,13 @@ public:
 class cmp_inst: public instruction{
 public:
   typedef cmp_pred_t pred_t;
+
 private:
   std::string repr_impl() const;
 
 protected:
-  cmp_inst(type *ty, cmp_pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next);
+  cmp_inst(type *ty, value_id_t id, cmp_pred_t pred,
+           value *lhs, value *rhs, const std::string &name, instruction *next);
   static bool is_fp_predicate(cmp_pred_t pred);
   static bool is_int_predicate(cmp_pred_t pred);
   static type* make_cmp_result_type(type *ty);
@@ -190,7 +182,8 @@ private:
 };
 
 class icmp_inst: public cmp_inst {
-  using cmp_inst::cmp_inst;
+  icmp_inst(type *ty, cmp_pred_t pred,
+            value *lhs, value *rhs, const std::string &name, instruction *next);
 
 public:
   static icmp_inst* create(cmp_pred_t pred, value *lhs, value *rhs,
@@ -199,7 +192,8 @@ public:
 };
 
 class fcmp_inst: public cmp_inst {
-  using cmp_inst::cmp_inst;
+  fcmp_inst(type *ty, cmp_pred_t pred,
+            value *lhs, value *rhs, const std::string &name, instruction *next);
 
 public:
   static fcmp_inst* create(cmp_pred_t pred, value *lhs, value *rhs,
@@ -213,7 +207,7 @@ public:
 
 class unary_inst: public instruction {
 protected:
-  unary_inst(type *Ty, value *v, const std::string &name, instruction *next);
+  unary_inst(type *ty, value_id_t id, value *v, const std::string &name, instruction *next);
 };
 
 
@@ -226,8 +220,8 @@ private:
   std::string repr_impl() const;
 
 protected:
-  cast_inst(type *ty, value *v, const std::string &name, instruction *next, cast_op_t op)
-    : unary_inst(ty, v, name, next), op_(op) { }
+  cast_inst(type *ty, value_id_t id, value *v, const std::string &name, instruction *next, cast_op_t op)
+    : unary_inst(ty, id, v, name, next), op_(op) { }
 
 private:
   static bool is_valid(cast_op_t op, value *arg, type *ty);
@@ -246,27 +240,27 @@ private:
   cast_op_t op_;
 };
 
-#define TRITON_IR_DECLARE_CAST_INST_SIMPL(name, op) \
+#define TRITON_IR_DECLARE_CAST_INST_SIMPL(name, id, op) \
 class name : public cast_inst { \
   _TRITON_DEFINE_CLONE(name); \
   friend class cast_inst; \
   name(type *ty, value *v, const std::string &name, instruction *next) \
-    : cast_inst(ty, v, name, next, op){ } \
+    : cast_inst(ty, id, v, name, next, op){ } \
 };
 
-TRITON_IR_DECLARE_CAST_INST_SIMPL(trunc_inst, cast_op_t::Trunc)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(z_ext_inst, cast_op_t::ZExt)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(s_ext_inst, cast_op_t::SExt)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_trunc_inst, cast_op_t::FPTrunc)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_ext_inst, cast_op_t::FPExt)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(ui_to_fp_inst, cast_op_t::UIToFP)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(si_to_fp_inst, cast_op_t::SIToFP)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_ui_inst, cast_op_t::FPToUI)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_si_inst, cast_op_t::FPToSI)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(ptr_to_int_inst, cast_op_t::PtrToInt)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(int_to_ptr_inst, cast_op_t::IntToPtr)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(bit_cast_inst, cast_op_t::BitCast)
-TRITON_IR_DECLARE_CAST_INST_SIMPL(addr_space_cast_inst, cast_op_t::AddrSpaceCast)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(trunc_inst, INST_CAST_TRUNC, cast_op_t::Trunc)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(z_ext_inst, INST_CAST_ZEXT, cast_op_t::ZExt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(s_ext_inst, INST_CAST_SEXT, cast_op_t::SExt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_trunc_inst, INST_CAST_FP_TRUNC, cast_op_t::FPTrunc)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_ext_inst, INST_CAST_FP_EXT, cast_op_t::FPExt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(ui_to_fp_inst, INST_CAST_UI_TO_FP, cast_op_t::UIToFP)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(si_to_fp_inst, INST_CAST_SI_TO_FP, cast_op_t::SIToFP)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_ui_inst, INST_CAST_FP_TO_UI, cast_op_t::FPToUI)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(fp_to_si_inst, INST_CAST_FP_TO_SI, cast_op_t::FPToSI)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(ptr_to_int_inst, INST_CAST_PTR_TO_INT, cast_op_t::PtrToInt)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(int_to_ptr_inst, INST_CAST_INT_TO_PTR, cast_op_t::IntToPtr)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(bit_cast_inst, INST_CAST_BIT_CAST, cast_op_t::BitCast)
+TRITON_IR_DECLARE_CAST_INST_SIMPL(addr_space_cast_inst, INST_CAST_ADDR_SPACE_CAST, cast_op_t::AddrSpaceCast)
 
 //===----------------------------------------------------------------------===//
 //                               terminator_inst classes
@@ -372,33 +366,38 @@ private:
 
 class io_inst: public instruction {
 protected:
-  io_inst(type *ty, unsigned num_ops, unsigned num_results = 1, const std::string &name = "", instruction *next = nullptr);
+  io_inst(type *ty, value_id_t id, unsigned num_ops,
+          const std::string &name = "", instruction *next = nullptr);
 
 public:
   // accessors
   value *get_pointer_operand() { return get_operand(0); }
-
-//  value *get_mask() const;
-//  value *get_false_value() const;
 };
 
+// load
 class load_inst: public io_inst {
 protected:
-  load_inst(value *ptr, unsigned num_extra_ops, const std::string &name, instruction *next);
+  load_inst(value *ptr, value_id_t id, unsigned num_ops,
+          const std::string &name = "", instruction *next = nullptr);
 
 private:
-  std::string repr_impl() const { return "load"; }
   static type *get_pointee_type(type *ty);
-
-public:
-
-  // factory method
-  static load_inst* create(value *ptr,
-                           const std::string &name = "",
-                           instruction *next = nullptr);
-  _TRITON_DEFINE_CLONE(load_inst)
 };
 
+// unmasked load
+class unmasked_load_inst: public load_inst {
+private:
+  std::string repr_impl() const { return "unmasked_load"; }
+  unmasked_load_inst(value *ptr, const std::string &name, instruction *next);
+
+public:
+  static unmasked_load_inst* create(value *ptr,
+                                    const std::string &name = "",
+                                    instruction *next = nullptr);
+  _TRITON_DEFINE_CLONE(unmasked_load_inst)
+};
+
+// masked load
 class masked_load_inst: public load_inst {
 private:
   std::string repr_impl() const { return "masked_load"; }
@@ -416,22 +415,28 @@ public:
   _TRITON_DEFINE_CLONE(masked_load_inst)
 };
 
-class store_inst: public io_inst{
+// store
+class store_inst: public io_inst {
 protected:
-  store_inst(value *ptr, value *v, unsigned num_extra_ops,
-             const std::string &name, instruction *next);
-
-private:
-  std::string repr_impl() const { return "store"; }
+  store_inst(value *ptr, value_id_t id, unsigned num_ops,
+            const std::string &name = "", instruction *next = nullptr);
 
 public:
-  // accessors
   value *get_value_operand() { return get_operand(1); }
+};
+
+// unmasked_store
+class unmasked_store_inst: public store_inst{
+private:
+  std::string repr_impl() const { return "unmasked_store"; }
+  unmasked_store_inst(value *ptr, value *v, const std::string &name, instruction *next);
+
+public:
   // factory method
-  static store_inst* create(value* ptr, value *v,
-                            const std::string &name = "",
-                            instruction *next = nullptr);
-  _TRITON_DEFINE_CLONE(store_inst)
+  static unmasked_store_inst* create(value* ptr, value *v,
+                                    const std::string &name = "",
+                                    instruction *next = nullptr);
+  _TRITON_DEFINE_CLONE(unmasked_store_inst)
 };
 
 class masked_store_inst: public store_inst{
@@ -458,7 +463,7 @@ public:
 
 class retile_inst: public unary_inst {
 protected:
-  retile_inst(value *arg, const type::tile_shapes_t &shapes, const std::string &name, instruction *next);
+  retile_inst(value *arg, value_id_t id, const type::tile_shapes_t &shapes, const std::string &name, instruction *next);
 };
 
 // reshape
@@ -688,16 +693,6 @@ private:
 public:
   static barrier_inst* create(context &ctx, const std::string &name = "",
                                             instruction *next = nullptr);
-};
-
-class vectorize_inst: public unary_inst{
-private:
-  using unary_inst::unary_inst;
-  std::string repr_impl() const { return "vectorize"; }
-  _TRITON_DEFINE_CLONE(vectorize_inst)
-
-public:
-  static vectorize_inst* create(value *arg, const std::string &name = "", instruction *next = nullptr);
 };
 
 // On NVIDIA, implementation is such that
