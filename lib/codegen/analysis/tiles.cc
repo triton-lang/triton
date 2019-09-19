@@ -43,19 +43,19 @@ bool tiles::hmma(ir::value *value) {
 }
 
 int tiles::mts(ir::value *value, unsigned ax) {
-  return mts_.at(axes_->get(value, ax));
+  return mts_.at(axes_->get_id(value, ax));
 }
 
 int tiles::nts(ir::value *value, unsigned ax) {
-  return nts_.at(axes_->get(value, ax));
+  return nts_.at(axes_->get_id(value, ax));
 }
 
 int tiles::fpw(ir::value *value, unsigned ax) {
-  return fpw_.at(axes_->get(value, ax));
+  return fpw_.at(axes_->get_id(value, ax));
 }
 
 int tiles::wpt(ir::value *value, unsigned ax) {
-  return wpt_.at(axes_->get(value, ax));
+  return wpt_.at(axes_->get_id(value, ax));
 }
 
 std::vector<int> tiles::order(ir::value *v) {
@@ -92,7 +92,7 @@ void tiles::init_hmma_tile(ir::value *i) {
   }while(fpw_nm1 != fpw);
   // store parameters
   for(unsigned d = 0; d < shapes.size(); d++)
-    fpw_[axes_->get(i, d)] = fpw[d];
+    fpw_[axes_->get_id(i, d)] = fpw[d];
   /* warps per tile */
   // try to make things as square as possible to maximize data re-use
   std::vector<unsigned> wpt = {1, 1, 1};
@@ -106,11 +106,11 @@ void tiles::init_hmma_tile(ir::value *i) {
   }while(wpt_nm1 != wpt);
   // store parameters
   for(unsigned d = 0; d < shapes.size(); d++)
-    wpt_[axes_->get(i, d)] = wpt[d];
+    wpt_[axes_->get_id(i, d)] = wpt[d];
   /* sanity check */
   unsigned effective_num_warps = 1;
   for(size_t d = 0; d < shapes.size(); d++)
-    effective_num_warps *= wpt_[axes_->get(i, d)];
+    effective_num_warps *= wpt_[axes_->get_id(i, d)];
   if(num_warps_ != effective_num_warps)
     throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
@@ -122,19 +122,19 @@ void tiles::init_scanline_tile(ir::value *i) {
   unsigned ld = ord[0];
   unsigned num_threads = num_warps_*32;
   unsigned current = num_threads;
-  nts_[axes_->get(i, ld)] = clamp(size / num_threads, 1, 4);
-  mts_[axes_->get(i, ld)] = clamp(current, 1, shapes[ld] / nts_[axes_->get(i, ld)]);
-  current = current / mts_[axes_->get(i, ld)];
+  nts_[axes_->get_id(i, ld)] = clamp(size / num_threads, 1, 4);
+  mts_[axes_->get_id(i, ld)] = clamp(current, 1, shapes[ld] / nts_[axes_->get_id(i, ld)]);
+  current = current / mts_[axes_->get_id(i, ld)];
   for(size_t d = 1; d < shapes.size(); d++){
     ld = ord[d];
-    nts_[axes_->get(i, ld)] = 1;
-    mts_[axes_->get(i, ld)] = clamp(current, 1, shapes[ld]);
-    current = current / mts_[axes_->get(i, ld)];
+    nts_[axes_->get_id(i, ld)] = 1;
+    mts_[axes_->get_id(i, ld)] = clamp(current, 1, shapes[ld]);
+    current = current / mts_[axes_->get_id(i, ld)];
   }
   /* sanity check */
   unsigned effective_num_threads = 1;
   for(size_t d = 0; d < shapes.size(); d++)
-    effective_num_threads *= mts_[axes_->get(i, d)];
+    effective_num_threads *= mts_[axes_->get_id(i, d)];
   if(num_threads != effective_num_threads)
     throw std::runtime_error("cannot create a kernel with this amount of warps");
 }

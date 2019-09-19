@@ -55,6 +55,8 @@ private:
   std::vector<unsigned> populate_starting_multiple_gep(ir::getelementptr_inst* x);
   std::vector<unsigned> populate_starting_multiple_default(ir::value* v);
   std::vector<unsigned> populate_starting_multiple(ir::value *v);
+  // populate all maps
+  void populate(ir::value *v);
 
 public:
   void run(ir::module &mod);

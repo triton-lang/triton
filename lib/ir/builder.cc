@@ -252,11 +252,11 @@ DEFINE_FCMP_INSTR(ONE, cmp_pred_t::FCMP_ONE)
 //===----------------------------------------------------------------------===//
 
 value *builder::create_load(value *ptr, const std::string &name){
-  return insert(load_inst::create(ptr, name));
+  return insert(unmasked_load_inst::create(ptr, name));
 }
 
 value *builder::create_store(value *ptr, value *val, const std::string &name){
-  return insert(store_inst::create(ptr, val, name));
+  return insert(unmasked_store_inst::create(ptr, val, name));
 }
 
 value *builder::create_masked_load(value *ptr, value *mask, value *false_value, const std::string &name){
@@ -338,10 +338,6 @@ value *builder::create_select(value *pred, value *if_value, value *else_value, c
 
 value *builder::create_copy_to_shared(value *arg, const std::string &name) {
   return insert(copy_to_shared_inst::create(arg, name));
-}
-
-value *builder::create_vectorize(value *arg, const std::string &name) {
-  return insert(vectorize_inst::create(arg, name));
 }
 
 value *builder::create_barrier(const std::string &name) {

@@ -4,6 +4,7 @@
 #include "triton/codegen/analysis/layout.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
+#include "triton/ir/utils.h"
 
 namespace triton{
 namespace codegen{
@@ -20,8 +21,8 @@ std::set<int> layout::axes_of(ir::value *value) {
   // create result
   std::set<int> result;
   for(size_t d = 0; d < rank; d++){
-    if(axes_->has(value, d))
-      result.insert(axes_->get(value, d));
+    if(axes_->has_id(value, d))
+      result.insert(axes_->get_id(value, d));
   }
   return result;
 }
@@ -74,24 +75,23 @@ void layout::connect(ir::value *x, ir::value *y) {
   }
 }
 
+void layout::make_graph(ir::instruction *i) {
+  for(ir::value* opx: i->ops())
+  for(ir::value* opy: i->ops()){
+    connect(i, opx);
+    connect(opx, opy);
+  }
+}
+
 // run
 void layout::run(ir::module &mod) {
   nodes_.clear();
   dependencies_.clear();
   groups_.clear();
   values_.clear();
-  // Create graph
-  for(ir::function *fn: mod.get_function_list())
-  for(ir::basic_block *block: fn->blocks())
-  for(ir::instruction *i : block->get_inst_list()) {
-    for(ir::value* opx: i->ops())
-      for(ir::value* opy: i->ops()){
-        connect(i, opx);
-        connect(opx, opy);
-      }
-
-  }
-  // Grids
+  // make graph
+  ir::for_each_instruction(mod, [this](ir::instruction* i) { make_graph(i); });
+  // connected components
   unsigned group_id = 0;
   while(!nodes_.empty()){
     connected_components(*nodes_.begin(), nodes_, dependencies_, group_id++);
