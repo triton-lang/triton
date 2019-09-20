@@ -7,7 +7,7 @@
 #include "triton/ir/instructions.h"
 #include "triton/ir/module.h"
 #include "triton/codegen/analysis/layout.h"
-#include "triton/codegen/analysis/meminfo.h"
+#include "triton/codegen/transform/cts.h"
 #include "triton/codegen/analysis/align.h"
 #include "triton/codegen/transform/coalesce.h"
 
@@ -15,7 +15,7 @@ namespace triton {
 namespace codegen{
 namespace transform{
 
-coalesce::coalesce(analysis::align* align, analysis::layout *layouts, analysis::meminfo *mem)
+coalesce::coalesce(analysis::align* align, analysis::layout *layouts, analysis::cts *mem)
   : align_(align), layout_(layouts), mem_(mem) { }
 
 // Find all values that are used as pointer operands in LD/ST
@@ -101,9 +101,6 @@ void coalesce::run(ir::module &mod) {
       ir::instruction *cts = builder.insert(ir::copy_to_shared_inst::create(r));
       r->replace_all_uses_with(cts);
       cts->replace_uses_of_with(cts, r);
-    }
-    else{
-
     }
   }
 }

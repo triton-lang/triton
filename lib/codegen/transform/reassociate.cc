@@ -122,7 +122,6 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
         new_value = builder.create_add(rrhs, builder.create_add(lrhs, lhs), name, cst);
     }
   }
-
   // extract constant and non-constant
   if(ir::instruction *bin_add = is_bin_add(new_value)){
     ir::value *new_lhs = bin_add->get_operand(0);
@@ -136,12 +135,9 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
       noncst = new_lhs;
     }
   }
-
   // clean-up if some re-ordering happened
-  if(old_value != new_value){
+  if(old_value != new_value)
     old_value->replace_all_uses_with(new_value);
-  }
-
   return new_value;
 }
 

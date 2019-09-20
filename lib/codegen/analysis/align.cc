@@ -445,7 +445,6 @@ std::vector<unsigned> align::populate_starting_multiple_default(ir::value* v) {
   return add_to_cache(v, {1}, starting_multiple_);
 }
 
-
 std::vector<unsigned> align::populate_starting_multiple(ir::value *v){
   if(starting_multiple_.find(v) != starting_multiple_.end())
     return starting_multiple_.at(v);

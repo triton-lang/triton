@@ -20,7 +20,7 @@ namespace codegen{
 namespace analysis{
   class align;
   class layout;
-  class meminfo;
+  class cts;
 }
 
 namespace transform{
@@ -32,13 +32,13 @@ private:
   ir::value* rematerialize(ir::value *v, ir::builder& builder, std::map<ir::value*, ir::value*>& seen);
 
 public:
-  coalesce(analysis::align* align, triton::codegen::analysis::layout *layouts, analysis::meminfo* mem);
+  coalesce(analysis::align* align, triton::codegen::analysis::layout *layouts, analysis::cts* mem);
   void run(ir::module &mod);
 
 private:
   analysis::align* align_;
   analysis::layout* layout_;
-  analysis::meminfo* mem_;
+  analysis::cts* mem_;
 };
 
 }

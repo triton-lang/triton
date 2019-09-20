@@ -5,7 +5,7 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/type.h"
-#include "triton/codegen/analysis/meminfo.h"
+#include "triton/codegen/transform/cts.h"
 
 
 namespace llvm{
@@ -45,8 +45,8 @@ namespace codegen{
 namespace analysis{
 class tiles;
 class align;
-class memalloc;
-class meminfo;
+class allocation;
+class cts;
 class axes;
 class layout;
 }
@@ -201,7 +201,7 @@ private:
 
 
 public:
-  selection(analysis::memalloc *alloc, analysis::tiles *tiles, analysis::meminfo *buffer_info,
+  selection(analysis::allocation *alloc, analysis::tiles *tiles, analysis::cts *buffer_info,
             analysis::align *alignment, analysis::axes *axes, analysis::layout *layouts,
             transform::coalesce* reorder, target *tgt, unsigned num_warps)
     : alloc_(alloc), tiles_(tiles), buffer_info_(buffer_info),
@@ -213,11 +213,11 @@ public:
 private:
   vmap_t vmap_;
   tmap_t tmap_;
-  analysis::memalloc *alloc_;
+  analysis::allocation *alloc_;
   analysis::tiles *tiles_;
   analysis::axes *a_axes_;
   analysis::layout *layouts_;
-  analysis::meminfo *buffer_info_;
+  analysis::cts *buffer_info_;
   analysis::align *alignment_;
   transform::coalesce *reorder_;
   target *tgt_;
