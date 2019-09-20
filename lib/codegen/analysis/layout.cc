@@ -20,10 +20,9 @@ std::set<int> layout::axes_of(ir::value *value) {
     rank = ty->get_tile_rank();
   // create result
   std::set<int> result;
-  for(size_t d = 0; d < rank; d++){
+  for(size_t d = 0; d < rank; d++)
     if(axes_->has_id(value, d))
       result.insert(axes_->get_id(value, d));
-  }
   return result;
 }
 
@@ -54,6 +53,7 @@ const std::vector<ir::value*>& layout::values(unsigned id) const
 size_t layout::get_num_groups() const
 { return values_.size(); }
 
+// connect two values
 void layout::connect(ir::value *x, ir::value *y) {
   if(x == y)
     return;
@@ -75,6 +75,7 @@ void layout::connect(ir::value *x, ir::value *y) {
   }
 }
 
+// make graph
 void layout::make_graph(ir::instruction *i) {
   for(ir::value* opx: i->ops())
   for(ir::value* opy: i->ops()){

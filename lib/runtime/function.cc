@@ -199,14 +199,14 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   llvm::LLVMContext ctx;
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
   // create passes
-  codegen::analysis::meminfo shmem_info;
+  codegen::analysis::cts shmem_info;
   codegen::analysis::align align;
   codegen::analysis::liveness shmem_liveness(&shmem_info);
   codegen::analysis::axes axes;
   codegen::analysis::layout layouts(&axes);
   codegen::transform::coalesce coalesce(&align, &layouts, &shmem_info);
   codegen::analysis::tiles tiles(opt.num_warps, &align, &axes, &layouts);
-  codegen::analysis::memalloc shmem_allocation(&shmem_liveness, &shmem_info, &tiles);
+  codegen::analysis::allocation shmem_allocation(&shmem_liveness, &shmem_info, &tiles);
   codegen::transform::membar shmem_barriers(&shmem_allocation, &shmem_info);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
@@ -229,6 +229,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   peephole.run(module);
   shmem_info.run(module);
   shmem_liveness.run(module);
+  ir::print(module, std::cout);
   shmem_allocation.run();
   if(shmem_allocation.allocated_size() > context->device()->max_shared_memory())
     return std::unique_ptr<driver::module>();

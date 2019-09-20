@@ -1,6 +1,7 @@
 #include <iostream>
+#include "triton/codegen/instructions.h"
 #include "triton/codegen/analysis/liveness.h"
-#include "triton/codegen/analysis/meminfo.h"
+#include "triton/codegen/transform/cts.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
@@ -25,6 +26,11 @@ void liveness::run(ir::module &mod) {
     // Creates live intervals
     for(auto i: indices_){
       ir::value *v = i.first;
+//      ir::instruction* instr = dynamic_cast<ir::instruction*>(v);
+//      if(!instr)
+//        continue;
+//      if(storage_info.at(instr->get_id()).first != SHARED)
+//        continue;
       if(!info_->is_shared(v) || info_->get_reference(v))
         continue;
       unsigned start = i.second;

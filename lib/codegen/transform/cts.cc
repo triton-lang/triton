@@ -1,5 +1,7 @@
 #include <algorithm>
-#include "triton/codegen/analysis/meminfo.h"
+#include <iostream>
+#include "triton/codegen/transform/cts.h"
+#include "triton/codegen/instructions.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -12,7 +14,7 @@ namespace codegen{
 namespace analysis{
 
 // run pass on module
-bool meminfo::is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
+bool cts::is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
   if(phi->get_parent() != terminator->get_parent())
     return false;
   if(auto *br = dynamic_cast<ir::cond_branch_inst*>(terminator))
@@ -24,24 +26,6 @@ bool meminfo::is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
     throw std::runtime_error("unreachable");
 }
 
-void meminfo::replace(ir::value* before, ir::value *after) {
-  shared_.erase(before);
-  shared_.insert(after);
-  if(refs_.find(before) != refs_.end()){
-    ir::value* v = refs_.at(before);
-    refs_.erase(before);
-    refs_.insert({after, v});
-  }
-}
-
-void meminfo::copy(ir::value* y, ir::value *x) {
-  if(shared_.find(x) != shared_.end())
-    shared_.insert(y);
-  if(refs_.find(x) != refs_.end())
-    refs_[y] = refs_[x];
-  if(double_.find(x) != double_.end())
-    double_.insert(y);
-}
 
 
 inline bool get_is_shared(ir::value* v) {
@@ -62,40 +46,46 @@ inline bool get_is_shared(ir::value* v) {
   return false;
 }
 
-void add_copy(ir::value *x, ir::builder &builder) {
-  if(auto phi = dynamic_cast<ir::phi_node*>(x)){
+void add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder) {
+  auto *i = dynamic_cast<ir::instruction*>(x);
+  // not an instruction
+  if(!i) {
+    builder.set_insert_point(parent);
+    ir::value *cts = builder.create_copy_to_shared(x);
+    parent->replace_uses_of_with(x, cts);
+    return;
+  }
+  // phi node
+  if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
     for(unsigned i = 0; i < phi->get_num_incoming(); ++i)
-      add_copy(phi->get_incoming_value(i), builder);
+      add_copy(phi, phi->get_incoming_value(i), builder);
+    return;
   }
-  else {
-    if(get_is_shared(x))
-      return;
-    if(auto *i = dynamic_cast<ir::instruction*>(x)){
-      ir::basic_block* block = i->get_parent();
-      auto it = std::find(block->begin(), block->end(), i);
-      builder.set_insert_point(++it);
-    }
-    ir::instruction *rx = (ir::instruction*)builder.create_copy_to_shared(x);
-    x->replace_all_uses_with(rx);
-    rx->set_operand(0, x);
-  }
+  ir::value_id_t id = i->get_id();
+  // already in shared memory
+  if(storage_info.at(id).first == SHARED)
+    return;
+  // copy
+  builder.set_insert_point_after(i);
+  ir::value *cts = builder.create_copy_to_shared(x);
+  parent->replace_uses_of_with(x, cts);
 }
 
-void meminfo::run(ir::module &mod) {
+void cts::run(ir::module &mod) {
   shared_.clear();
   refs_.clear();
   double_.clear();
 
   // Add shared copies
+  ir::builder &builder = mod.get_builder();
   for(ir::function *fn: mod.get_function_list()){
-    ir::builder builder(mod.get_context());
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *i: block->get_inst_list()){
-      if(dynamic_cast<ir::dot_inst*>(i))
-      if(i->get_operand(1)->get_type()->get_tile_shapes()[1] != 1){
-        add_copy(i->get_operand(0), builder);
-        add_copy(i->get_operand(1), builder);
-      }
+      auto storage = storage_info.at(i->get_id());
+      // copy to shared operands when necessary
+      for(size_t k = 0; k < storage.second.size(); k++)
+        if(storage.second[k] == SHARED)
+          add_copy(i, i->get_operand(k), builder);
     }
   }
 
@@ -135,15 +125,15 @@ void meminfo::run(ir::module &mod) {
 }
 
 // query double-buffered status
-bool meminfo::is_double(ir::value *x)
+bool cts::is_double(ir::value *x)
 { return double_.find(x) != double_.end(); }
 
 // query shared status
-bool meminfo::is_shared(ir::value *x)
+bool cts::is_shared(ir::value *x)
 { return shared_.find(x) != shared_.end(); }
 
 // get reference if any
-ir::value *meminfo::get_reference(ir::value *x)
+ir::value *cts::get_reference(ir::value *x)
 { return refs_[x]; }
 
 

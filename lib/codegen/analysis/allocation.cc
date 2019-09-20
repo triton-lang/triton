@@ -1,7 +1,7 @@
 #include <algorithm>
-#include "triton/codegen/analysis/memalloc.h"
+#include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/liveness.h"
-#include "triton/codegen/analysis/meminfo.h"
+#include "triton/codegen/transform/cts.h"
 #include "triton/codegen/analysis/tiles.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/type.h"
@@ -13,7 +13,7 @@ namespace triton{
 namespace codegen{
 namespace analysis{
 
-unsigned memalloc::is_ld_padded(ir::value *x) {
+unsigned allocation::is_ld_padded(ir::value *x) {
   if(auto *trans = dynamic_cast<ir::trans_inst*>(x)){
     if(trans->get_perm()[0]->get_value() != 0)
       return 4;
@@ -45,7 +45,7 @@ unsigned memalloc::is_ld_padded(ir::value *x) {
   return 0;
 }
 
-unsigned memalloc::num_bytes(ir::value *x) {
+unsigned allocation::num_bytes(ir::value *x) {
   if(auto *red = dynamic_cast<ir::reduce_inst*>(x)){
     unsigned num_bytes = x->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
     size_t axis = red->get_axis();
@@ -73,15 +73,15 @@ unsigned memalloc::num_bytes(ir::value *x) {
   return num_bytes;
 }
 
-void memalloc::run(){
+
+void allocation::run() {
   using std::max;
   using std::min;
   typedef std::multimap<unsigned, segment> triples_map_type;
 
   std::vector<ir::value *> I;
-  for(auto x: liveness_->intervals()){
+  for(auto x: liveness_->intervals())
     I.push_back(x.first);
-  }
   std::vector<ir::value *> J = I;
 
   triples_map_type H;
@@ -137,7 +137,7 @@ void memalloc::run(){
   for(ir::value *X: V)
     colors[X] = (X==V[0])?0:-1;
 
-  // First-fit coloring
+  // First-fit graph coloring
   std::vector<bool> available(V.size());
   for(ir::value *x: V){
     // Non-neighboring colors are available
@@ -158,6 +158,7 @@ void memalloc::run(){
     for(ir::value *y: interferences[x])
       Adj = std::max(Adj, starts[y] + num_bytes(y));
     offsets_[x] = starts[x] + colors[x] * Adj;
+//    std::cout << x->get_name() << " " << offsets_[x] << " " << num_bytes(x) << std::endl;
     if(buffer_info_->is_double(x)){
       ir::phi_node *phi = (ir::phi_node*)x;
       for(unsigned i = 0; i < phi->get_num_incoming(); i++){
@@ -166,6 +167,8 @@ void memalloc::run(){
       }
     }
   }
+
+//  exit(EXIT_FAILURE);
 
   // Save maximum size of induced memory space
   allocated_size_ = 0;

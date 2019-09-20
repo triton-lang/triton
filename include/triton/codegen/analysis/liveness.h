@@ -16,7 +16,7 @@ namespace analysis{
 
 typedef unsigned slot_index;
 
-class meminfo;
+class cts;
 
 struct segment {
   slot_index start;
@@ -44,7 +44,7 @@ public:
 
 public:
   // constructor
-  liveness(meminfo *info): info_(info){ }
+  liveness(cts *info): info_(info){ }
   // accessors
   const intervals_map_t& intervals() const { return intervals_; }
   segment get_interval(ir::value* v) const { return intervals_.at(v); }
@@ -52,7 +52,7 @@ public:
   void run(ir::module &mod);
 
 private:
-  meminfo *info_;
+  cts *info_;
   has_storage_map_t has_dedicated_storage_;
   indices_map_t indices_;
   intervals_map_t intervals_;

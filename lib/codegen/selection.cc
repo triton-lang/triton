@@ -4,7 +4,7 @@
 #include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/axes.h"
 #include "triton/codegen/analysis/tiles.h"
-#include "triton/codegen/analysis/memalloc.h"
+#include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/align.h"
 #include "triton/codegen/transform/coalesce.h"
 #include "triton/ir/context.h"

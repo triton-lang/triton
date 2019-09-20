@@ -27,6 +27,13 @@ void builder::set_insert_point(instruction* i){
 }
 
 
+void builder::set_insert_point_after(instruction* i){
+  block_ = i->get_parent();
+  auto it = std::find(block_->begin(), block_->end(), i);
+  set_insert_point(++it);
+}
+
+
 void builder::set_insert_point(basic_block *block){
   block_ = block;
   insert_point_ = block->end();

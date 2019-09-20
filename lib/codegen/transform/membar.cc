@@ -3,8 +3,8 @@
 #include <algorithm>
 
 #include "triton/codegen/transform/membar.h"
-#include "triton/codegen/analysis/memalloc.h"
-#include "triton/codegen/analysis/meminfo.h"
+#include "triton/codegen/analysis/allocation.h"
+#include "triton/codegen/transform/cts.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"

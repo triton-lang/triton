@@ -30,6 +30,7 @@ public:
   // Setters
   void set_insert_point(iterator instr);
   void set_insert_point(instruction* i);
+  void set_insert_point_after(instruction* i);
   void set_insert_point(basic_block* block);
   basic_block* get_insert_block() { return block_; }
   iterator get_insert_point() { return insert_point_;}

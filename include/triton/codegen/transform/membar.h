@@ -15,8 +15,8 @@ namespace codegen{
 
 namespace analysis{
 
-class memalloc;
-class meminfo;
+class allocation;
+class cts;
 
 }
 
@@ -38,12 +38,12 @@ private:
   std::pair<interval_vec_t, interval_vec_t> transfer(ir::basic_block *block, const interval_vec_t &written_to, const interval_vec_t &read_from, std::set<ir::instruction *> &insert_loc);
 
 public:
-  membar(analysis::memalloc *alloc, analysis::meminfo *buffer_info): alloc_(alloc), buffer_info_(buffer_info) {}
+  membar(analysis::allocation *alloc, analysis::cts *buffer_info): alloc_(alloc), buffer_info_(buffer_info) {}
   void run(ir::module &mod);
 
 private:
-  analysis::memalloc *alloc_;
-  analysis::meminfo *buffer_info_;
+  analysis::allocation *alloc_;
+  analysis::cts *buffer_info_;
 };
 
 

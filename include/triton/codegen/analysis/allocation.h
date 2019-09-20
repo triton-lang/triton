@@ -18,11 +18,11 @@ namespace analysis{
 class tiles;
 
 class liveness;
-class meminfo;
+class cts;
 
-class memalloc {
+class allocation {
 public:
-  memalloc(liveness *live, meminfo *buffer_info, tiles *params)
+  allocation(liveness *live, cts *buffer_info, tiles *params)
     : liveness_(live), buffer_info_(buffer_info), tiles_(params){ }
   // utilities
   unsigned num_bytes(ir::value *x);
@@ -39,7 +39,7 @@ private:
   size_t allocated_size_;
   // dependences
   liveness *liveness_;
-  meminfo *buffer_info_;
+  cts *buffer_info_;
   tiles *tiles_;
 };
 
