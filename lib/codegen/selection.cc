@@ -1,12 +1,14 @@
 ﻿#include <numeric>
 #include "triton/codegen/selection.h"
 #include "triton/codegen/target.h"
+#include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/axes.h"
 #include "triton/codegen/analysis/tiles.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/align.h"
 #include "triton/codegen/transform/coalesce.h"
+#include "triton/codegen/instructions.h"
 #include "triton/ir/context.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
@@ -746,42 +748,31 @@ void selection::create_shared_tile(ir::value *v, IRBuilder<> &builder, Value *sh
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), builder.getContext());
   // shared copy
   PointerType *ptr_ty = ty->getPointerTo(sh_mem_ptr->getType()->getPointerAddressSpace());
-  // phi-node (double-buffering)
-  if(auto *phi = dynamic_cast<ir::phi_node*>(v)) {
+  // double-buffered
+  if(liveness_->has_double(v)) {
+    auto info = liveness_->get_double(v);
+    ir::phi_node *phi = info.phi;
     BasicBlock *parent = (BasicBlock*)vmap_[phi->get_parent()];
-    unsigned id_pre = 0, id_loop = 1;
-    if(phi->get_incoming_block(0) == phi->get_parent())
-      std::swap(id_pre, id_loop);
     if(parent->empty())
       builder.SetInsertPoint(parent);
     else
       builder.SetInsertPoint(&*parent->getFirstInsertionPt());
+    // create double-buffered pointer
     PHINode *ptr = builder.CreatePHI(ptr_ty, 2);
     PHINode *offset = builder.CreatePHI(builder.getInt32Ty(), 2);
     // next pointer
-    Value *pre_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(alloc_->offset(phi)));
+    Value *pre_ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(alloc_->offset(v)));
     pre_ptr = builder.CreateBitCast(pre_ptr, ptr->getType());
     Value *next_ptr = builder.CreateGEP(ptr, offset, "next_ptr");
     tmap_.insert({phi, new shared_tile(ty, shapes, ptr, builder, offset)});
-    for(unsigned i = 0; i < phi->get_num_incoming(); i++) {
-      ir::basic_block* inc_block = phi->get_incoming_block(i);
-      ir::value* inc_value = phi->get_incoming_value(i);
-      ir::instruction* terminator = inc_block->get_inst_list().back();
-      bool is_loop_latch = buffer_info_->is_loop_latch(phi, terminator);
-      tmap_.insert({inc_value, new shared_tile(ty, shapes, is_loop_latch?next_ptr:pre_ptr, builder)});
-    }
+    tmap_.insert({v, new shared_tile(ty, shapes, pre_ptr, builder)});
+    tmap_.insert({info.latch, new shared_tile(ty, shapes, next_ptr, builder)});
   }
   else {
-    bool has_phi_user = false;
-    for(ir::user *usr: v->get_users())
-      if(dynamic_cast<ir::phi_node*>(usr))
-        has_phi_user = true;
-    if(!has_phi_user){
-      size_t offset = alloc_->offset(v);
-      Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
-      ptr = builder.CreateBitCast(ptr, ptr_ty);
-      tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
-    }
+    size_t offset = alloc_->offset(v);
+    Value *ptr = builder.CreateGEP(sh_mem_ptr, builder.getInt32(offset));
+    ptr = builder.CreateBitCast(ptr, ptr_ty);
+    tmap_.insert({v, new shared_tile(ty, shapes, ptr, builder)});
   }
 }
 
@@ -827,8 +818,9 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
   if(auto *user = dynamic_cast<ir::user*>(v))
     for(ir::value *op: user->ops())
       create_tile(op, builder, seen, sh_mem_ptr);
-  if(buffer_info_->is_shared(v) && !dynamic_cast<ir::reduce_inst*>(v))
-    create_shared_tile(v, builder, sh_mem_ptr);
+  auto *i = dynamic_cast<ir::instruction*>(v);
+  if(i && storage_info.at(i->get_id()).first == SHARED && !dynamic_cast<ir::reduce_inst*>(v))
+    create_shared_tile(i, builder, sh_mem_ptr);
   else
     create_distributed_tile(v, builder);
 }
@@ -1427,7 +1419,7 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     lower_masked_load(x, ctx, fn, builder);
   else if(auto *x = dynamic_cast<ir::load_inst*>(ins))
     lower_load(x, ctx, fn, builder);
-  else if(!buffer_info_->is_shared(ins))
+  else if(!dynamic_cast<shared_tile*>(tmap_.at(ins)))
     lower_elementwise(ins, ctx, fn, builder);
 }
 
@@ -1556,21 +1548,19 @@ void selection::run(ir::module &src, Module &dst) {
       }
     }
 
-    // add phi operands
     for(ir::basic_block *block: fn->blocks())
-    for(ir::instruction *inst: block->get_inst_list())
-    if(auto *phi = dynamic_cast<ir::phi_node*>(inst)){
-      if(buffer_info_->is_double(phi)) {
+    for(ir::instruction *inst: block->get_inst_list()) {
+      if(liveness_->has_double(inst)) {
+        auto info = liveness_->get_double(inst);
+        ir::phi_node *phi = info.phi;
         PHINode *ptr = (PHINode*)((shared_tile*)tmap_.at(phi))->get_pointer();
         PHINode *offset = (PHINode*)((shared_tile*)tmap_.at(phi))->get_offset();
         for(unsigned n = 0; n < phi->get_num_incoming(); n++){
           ir::basic_block* inc_block = phi->get_incoming_block(n);
           ir::value* inc_val = phi->get_incoming_value(n);
-          ir::instruction* terminator = inc_block->get_inst_list().back();
           BasicBlock *llvm_inc_block = last_block.at(inc_block);
           shared_tile *inc_shared = (shared_tile*)tmap_.at(inc_val);
-          bool is_loop_latch = buffer_info_->is_loop_latch(phi, terminator);
-          if(is_loop_latch){
+          if(inc_val == info.latch){
             dst_builder.SetInsertPoint(llvm_inc_block->getTerminator());
             Value *next_offset = dst_builder.CreateNeg(offset);
             offset->addIncoming(next_offset, llvm_inc_block);
@@ -1582,7 +1572,14 @@ void selection::run(ir::module &src, Module &dst) {
           ptr->addIncoming(inc_shared->get_pointer(), llvm_inc_block);
         }
       }
-      else {
+    }
+
+    // add phi operands
+    for(ir::basic_block *block: fn->blocks())
+    for(ir::instruction *inst: block->get_inst_list())
+    if(auto *phi = dynamic_cast<ir::phi_node*>(inst)){
+      if(tmap_.find(phi) == tmap_.end() ||
+        !dynamic_cast<shared_tile*>(tmap_.at(phi))) {
         for(unsigned n = 0; n < phi->get_num_incoming(); n++){
           ir::value *inc_val = phi->get_incoming_value(n);
           ir::basic_block *inc_block = phi->get_incoming_block(n);

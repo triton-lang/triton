@@ -15,8 +15,8 @@ namespace triton {
 namespace codegen{
 namespace transform{
 
-coalesce::coalesce(analysis::align* align, analysis::layout *layouts, analysis::cts *mem)
-  : align_(align), layout_(layouts), mem_(mem) { }
+coalesce::coalesce(analysis::align* align, analysis::layout *layouts)
+  : align_(align), layout_(layouts) { }
 
 // Find all values that are used as pointer operands in LD/ST
 void coalesce::extract_io_use(ir::value *v, std::set<ir::io_inst*>& result) {

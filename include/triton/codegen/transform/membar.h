@@ -16,6 +16,7 @@ namespace codegen{
 namespace analysis{
 
 class allocation;
+class liveness;
 class cts;
 
 }
@@ -35,15 +36,17 @@ private:
   void add_reference(ir::value *v, interval_vec_t &res);
   void get_read_intervals(ir::instruction *i, interval_vec_t &res);
   void get_written_intervals(ir::instruction *i, interval_vec_t &res);
-  std::pair<interval_vec_t, interval_vec_t> transfer(ir::basic_block *block, const interval_vec_t &written_to, const interval_vec_t &read_from, std::set<ir::instruction *> &insert_loc);
+  std::pair<interval_vec_t, interval_vec_t> transfer(ir::basic_block *block, const interval_vec_t &written_to, const interval_vec_t &read_from,
+                                                     std::set<ir::instruction *> &insert_loc, std::set<triton::ir::value *> &safe_war);
 
 public:
-  membar(analysis::allocation *alloc, analysis::cts *buffer_info): alloc_(alloc), buffer_info_(buffer_info) {}
+  membar(analysis::liveness *liveness, analysis::allocation *alloc):
+    liveness_(liveness), alloc_(alloc) {}
   void run(ir::module &mod);
 
 private:
+  analysis::liveness *liveness_;
   analysis::allocation *alloc_;
-  analysis::cts *buffer_info_;
 };
 
 

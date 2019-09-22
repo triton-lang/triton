@@ -43,6 +43,7 @@ namespace triton{
 namespace codegen{
 
 namespace analysis{
+class liveness;
 class tiles;
 class align;
 class allocation;
@@ -201,10 +202,10 @@ private:
 
 
 public:
-  selection(analysis::allocation *alloc, analysis::tiles *tiles, analysis::cts *buffer_info,
-            analysis::align *alignment, analysis::axes *axes, analysis::layout *layouts,
-            transform::coalesce* reorder, target *tgt, unsigned num_warps)
-    : alloc_(alloc), tiles_(tiles), buffer_info_(buffer_info),
+  selection(analysis::liveness* liveness, analysis::allocation *alloc, analysis::tiles *tiles,
+            analysis::align *alignment, analysis::axes *axes,
+            analysis::layout *layouts, transform::coalesce* reorder, target *tgt, unsigned num_warps)
+    : liveness_(liveness), alloc_(alloc), tiles_(tiles),
       alignment_(alignment), a_axes_(axes), layouts_(layouts),
       reorder_(reorder), tgt_(tgt), num_warps_(num_warps){ }
 
@@ -213,11 +214,11 @@ public:
 private:
   vmap_t vmap_;
   tmap_t tmap_;
+  analysis::liveness *liveness_;
   analysis::allocation *alloc_;
   analysis::tiles *tiles_;
   analysis::axes *a_axes_;
   analysis::layout *layouts_;
-  analysis::cts *buffer_info_;
   analysis::align *alignment_;
   transform::coalesce *reorder_;
   target *tgt_;
