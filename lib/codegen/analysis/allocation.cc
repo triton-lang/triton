@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <climits>
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/transform/cts.h"
@@ -8,6 +9,7 @@
 #include "triton/ir/value.h"
 #include "triton/ir/function.h"
 #include "triton/ir/instructions.h"
+#include "triton/ir/utils.h"
 
 namespace triton{
 namespace codegen{
@@ -68,13 +70,12 @@ unsigned allocation::num_bytes(ir::value *x) {
     unsigned ld = x->get_type()->get_tile_shapes()[0];
     num_bytes += pad * num_bytes / ld;
   }
-  if(buffer_info_->is_double(x))
+  if(liveness_->has_double(x))
     num_bytes *= 2;
   return num_bytes;
 }
 
-
-void allocation::run() {
+void allocation::run(ir::module &mod) {
   using std::max;
   using std::min;
   typedef std::multimap<unsigned, segment> triples_map_type;
@@ -85,7 +86,7 @@ void allocation::run() {
   std::vector<ir::value *> J = I;
 
   triples_map_type H;
-  H.insert({0, segment{0, 1024}});
+  H.insert({0, segment{0, INT_MAX}});
 
   std::vector<ir::value *> V;
   std::map<ir::value *, unsigned> starts;
@@ -115,7 +116,6 @@ void allocation::run() {
     }
   }
 
-
   // Build interference graph
   std::map<ir::value*, std::set<ir::value *>> interferences;
   for(ir::value *x: V)
@@ -136,6 +136,7 @@ void allocation::run() {
   std::map<ir::value *, int> colors;
   for(ir::value *X: V)
     colors[X] = (X==V[0])?0:-1;
+
 
   // First-fit graph coloring
   std::vector<bool> available(V.size());
@@ -158,17 +159,11 @@ void allocation::run() {
     for(ir::value *y: interferences[x])
       Adj = std::max(Adj, starts[y] + num_bytes(y));
     offsets_[x] = starts[x] + colors[x] * Adj;
-//    std::cout << x->get_name() << " " << offsets_[x] << " " << num_bytes(x) << std::endl;
-    if(buffer_info_->is_double(x)){
-      ir::phi_node *phi = (ir::phi_node*)x;
-      for(unsigned i = 0; i < phi->get_num_incoming(); i++){
-        ir::value *inc_val = phi->get_incoming_value(i);
-        offsets_[inc_val] = offsets_[phi];
-      }
+    if(liveness_->has_double(x)){
+      auto info = liveness_->get_double(x);
+      offsets_[info.latch] = offsets_[x] + num_bytes(x) / 2;
     }
   }
-
-//  exit(EXIT_FAILURE);
 
   // Save maximum size of induced memory space
   allocated_size_ = 0;

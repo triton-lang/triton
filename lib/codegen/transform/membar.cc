@@ -2,8 +2,10 @@
 #include <set>
 #include <algorithm>
 
-#include "triton/codegen/transform/membar.h"
+#include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/analysis/allocation.h"
+#include "triton/codegen/instructions.h"
+#include "triton/codegen/transform/membar.h"
 #include "triton/codegen/transform/cts.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
@@ -31,7 +33,10 @@ bool membar::intersect(const interval_vec_t &X, const interval_vec_t &Y) {
 }
 
 void membar::add_reference(ir::value *v, interval_vec_t &res){
-  if(buffer_info_->is_shared(v) && !dynamic_cast<ir::phi_node*>(v)){
+  auto *i = dynamic_cast<ir::instruction*>(v);
+  if(!i)
+    return;
+  if(storage_info.at(i->get_id()).first == SHARED){
     unsigned offset = alloc_->offset(v);
     unsigned num_bytes = alloc_->num_bytes(v);
     res.push_back(interval_t(offset, offset + num_bytes));
@@ -79,10 +84,12 @@ std::pair<membar::interval_vec_t,
           membar::interval_vec_t> membar::transfer(ir::basic_block *block,
                                             const interval_vec_t &written_to,
                                             const interval_vec_t &read_from,
-                                            std::set<ir::instruction*>& insert_loc) {
+                                            std::set<ir::instruction*>& insert_loc,
+                                            std::set<ir::value*>& safe_war) {
   ir::basic_block::inst_list_t instructions = block->get_inst_list();
   interval_vec_t new_written_to = written_to;
   interval_vec_t new_read_from = read_from;
+
   for(ir::instruction *i: instructions){
     interval_vec_t read, written;
     get_read_intervals(i, read);
@@ -90,9 +97,9 @@ std::pair<membar::interval_vec_t,
     bool read_after_write = intersect(new_written_to, read);
     bool write_after_read = intersect(new_read_from, written);
     // double buffering: write and phi-node read won't intersect
-    if(buffer_info_->is_shared(i) &&
-       buffer_info_->is_double(buffer_info_->get_reference(i)))
+    if(safe_war.find(i) != safe_war.end())
       write_after_read = false;
+    // record hazards
     if(read_after_write || write_after_read) {
       insert_loc.insert(i);
       new_written_to.clear();
@@ -106,6 +113,18 @@ std::pair<membar::interval_vec_t,
 
 void membar::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
+  // extract phi-node associates with double-buffered
+  // shared-memory copies. These can be read from and written to
+  // without needing synchronization
+  std::set<ir::value*> safe_war;
+  ir::for_each_instruction(mod, [&](ir::instruction* i){
+    if(liveness_->has_double(i)){
+      auto info = liveness_->get_double(i);
+      safe_war.insert(i);
+      safe_war.insert(info.latch);
+    }
+  });
+
   for(ir::function *fn: mod.get_function_list()){
     std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
     std::map<ir::basic_block*, interval_vec_t> written_to;
@@ -125,7 +144,7 @@ void membar::run(ir::module &mod) {
         for(ir::basic_block* pred: block->get_predecessors())
           pred_read_from.push_back(read_from[pred]);
         // apply transfer function
-        auto result = transfer(block, join(pred_written_to), join(pred_read_from), insert_locs);
+        auto result = transfer(block, join(pred_written_to), join(pred_read_from), insert_locs, safe_war);
         written_to[block] = result.first;
         read_from[block] = result.second;
       }

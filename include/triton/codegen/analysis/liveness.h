@@ -7,6 +7,7 @@ namespace triton{
 
 namespace ir{
   class value;
+  class phi_node;
   class function;
   class module;
 }
@@ -31,6 +32,11 @@ struct segment {
   }
 };
 
+struct double_buffer_info_t {
+  ir::value* latch;
+  ir::phi_node* phi;
+};
+
 class liveness {
 private:
   typedef std::map<ir::value*, slot_index> indices_map_t;
@@ -43,19 +49,20 @@ public:
   using const_iterator = intervals_map_t::const_iterator;
 
 public:
-  // constructor
-  liveness(cts *info): info_(info){ }
   // accessors
   const intervals_map_t& intervals() const { return intervals_; }
   segment get_interval(ir::value* v) const { return intervals_.at(v); }
+  // double-buffering
+  bool has_double(ir::value *x)       const { return double_.find(x) != double_.end(); }
+  double_buffer_info_t get_double(ir::value *x) const { return double_.at(x); }
   // run
   void run(ir::module &mod);
 
 private:
-  cts *info_;
   has_storage_map_t has_dedicated_storage_;
   indices_map_t indices_;
   intervals_map_t intervals_;
+  std::map<ir::value*, double_buffer_info_t> double_;
 };
 
 }
