@@ -1546,7 +1546,7 @@ void selection::run(ir::module &src, Module &dst) {
           }
           else {
             unsigned num_bytes = phi->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
-            offset->addIncoming(dst_builder.getInt32(alloc_->num_bytes(phi)/(2*num_bytes)), llvm_inc_block);
+            offset->addIncoming(dst_builder.getInt32(alloc_->num_bytes(phi)/(num_bytes)), llvm_inc_block);
           }
           ptr->addIncoming(inc_shared->get_pointer(), llvm_inc_block);
         }
