@@ -9,9 +9,8 @@
 #include "triton/ir/type.h"
 
 namespace triton {
-
 namespace codegen{
-namespace analysis{
+namespace transform{
 
 // run pass on module
 void add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder) {
