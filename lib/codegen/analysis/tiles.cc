@@ -23,7 +23,7 @@ tiles::tiles(size_t num_warps, analysis::align *align, analysis::axes *axes, ana
     num_warps_(num_warps), align_(align), axes_(axes), layout_(layout)
 { }
 
-bool is_hmma(ir::value *v){
+bool is_hmma_c(ir::value *v){
   bool result = false;
   if(auto *x = dynamic_cast<ir::dot_inst*>(v)){
     ir::value *a = x->get_operand(0);
@@ -36,9 +36,44 @@ bool is_hmma(ir::value *v){
   return result;
 }
 
+bool is_hmma_a_col(ir::value* v) {
+  for(ir::user *u: v->get_users())
+    if(is_hmma_c(u)){
+      ir::dot_inst* dot = (ir::dot_inst*)u;
+      if((v == dot->get_operand(0)) && !dot->is_a_trans())
+        return true;
+    }
+}
+
+bool is_hmma_a_row(ir::value* v) {
+  for(ir::user *u: v->get_users())
+    if(is_hmma_c(u)){
+      ir::dot_inst* dot = (ir::dot_inst*)u;
+      if((v == dot->get_operand(0)) && dot->is_a_trans())
+        return true;
+    }
+}
+
+bool is_hmma_b_col(ir::value* v) {
+  for(ir::user *u: v->get_users())
+    if(is_hmma_c(u)){
+      ir::dot_inst* dot = (ir::dot_inst*)u;
+      if((v == dot->get_operand(1)) && !dot->is_b_trans())
+        return true;
+    }
+}
+
+bool is_hmma_b_row(ir::value* v) {
+  for(ir::user *u: v->get_users())
+    if(is_hmma_c(u)){
+      ir::dot_inst* dot = (ir::dot_inst*)u;
+      if((v == dot->get_operand(1)) && dot->is_b_trans())
+        return true;
+    }
+}
 
 
-bool tiles::hmma(ir::value *value) {
+layout_t tiles::hmma(ir::value *value) {
   return hmma_.at(layout_->id(value));
 }
 
@@ -164,7 +199,18 @@ void tiles::run(ir::module &) {
   // find out which groups require hmma layout
   for(size_t i = 0; i < num_groups; i++) {
     const auto& values = layout_->values(i);
-    hmma_[i] = std::any_of(values.begin(), values.end(), &is_hmma);
+    bool hmma_c = std::any_of(values.begin(), values.end(), &is_hmma_c);
+    bool hmma_a_col = std::any_of(values.begin(), values.end(), &is_hmma_a_col);
+    bool hmma_a_row = std::any_of(values.begin(), values.end(), &is_hmma_a_row);
+    bool hmma_b_col = std::any_of(values.begin(), values.end(), &is_hmma_b_col);
+    bool hmma_b_row = std::any_of(values.begin(), values.end(), &is_hmma_b_row);
+    if(hmma_c)          hmma_[i] = HMMA_C;
+    else if(hmma_a_col) hmma_[i] = HMMA_A_COL;
+    else if(hmma_a_row) hmma_[i] = HMMA_A_ROW;
+    else if(hmma_b_col) hmma_[i] = HMMA_B_COL;
+    else if(hmma_b_row) hmma_[i] = HMMA_B_ROW;
+    else                hmma_[i] = SCANLINE;
+
   }
   // find out which value is the largest in each group
   for(size_t i = 0; i < num_groups; i++) {
@@ -197,7 +243,7 @@ void tiles::run(ir::module &) {
     if(!i->get_type()->is_tile_ty())
       continue;
     /* HMMA parameters*/
-    if(hmma_[x.first])
+    if(hmma_[x.first] == HMMA_C)
       init_hmma_tile(i);
     else
       init_scanline_tile(i);

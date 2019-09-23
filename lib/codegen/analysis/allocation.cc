@@ -20,24 +20,14 @@ unsigned allocation::is_ld_padded(ir::value *x) {
     if(trans->get_perm()[0]->get_value() != 0)
       return 4;
   }
-  for(ir::user* user: x->get_users())
-    if(auto dot = dynamic_cast<ir::dot_inst*>(user)){
-      bool is_hmma = tiles_->hmma(user);
-      bool is_op_0 = x == dot->get_operand(0);
-      bool is_op_1 = x == dot->get_operand(1);
-      if(is_hmma && is_op_0){
-        if(dot->is_a_trans())
-          return 8;
-        else
-          return 16;
-      }
-      if(is_hmma && is_op_1){
-        if(!dot->is_b_trans())
-          return 8;
-        else
-          return 16;
-      }
-    }
+  if(tiles_->hmma(x) == HMMA_A_ROW)
+    return 8;
+  if(tiles_->hmma(x) == HMMA_A_COL)
+    return 16;
+  if(tiles_->hmma(x) == HMMA_B_COL)
+    return 8;
+  if(tiles_->hmma(x) == HMMA_B_ROW)
+    return 16;
   if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
     unsigned result = 0;
     for(unsigned i = 0; i < phi->get_num_incoming(); i++)

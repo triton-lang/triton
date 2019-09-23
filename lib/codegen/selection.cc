@@ -710,7 +710,7 @@ void selection::init_hmma_axes(ir::value *v, IRBuilder<> &builder, Value *u_thre
 
 
 void selection::init_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
-  if(tiles_->hmma(v))
+  if(tiles_->hmma(v) == analysis::HMMA_C)
     init_hmma_axes(v, builder, u_thread_id, u_warp_id);
   else
     init_strided_scan_axes(v, builder, u_thread_id, u_warp_id);
@@ -1241,11 +1241,10 @@ void selection::lower_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn, IRB
   if(NK != 1) {
     shared_tile *TA = (shared_tile*)tmap_.at(A);
     shared_tile *TB = (shared_tile*)tmap_.at(B);
-    if(tiles_->hmma(dot))
+    if(tiles_->hmma(dot) == analysis::HMMA_C)
       lower_hmma_dot(dot, ctx, fn, builder, TC, TA, TB, TD, NK);
     else
       lower_scanline_dot(dot, ctx, fn, builder, TC, TA, TB, TD, NK, c_ty, f_mul_add);
-
   }
   else {
     distributed_tile *TA = (distributed_tile*)tmap_.at(A);

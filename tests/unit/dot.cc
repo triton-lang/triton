@@ -32,7 +32,7 @@ static void cpu_ref(std::vector<T> &c, const std::vector<T> &a, const std::vecto
     float acc = 0;
     for(size_t k = 0; k < K; k++)
       acc = acc + (AT ? a[k + m*K] : a[m + k*M]) * (BT ? b[n + k*N] : b[k + n*K]);
-    c[m*N + n] = static_cast<T>(acc);
+    c[m + n*M] = static_cast<T>(acc);
   }
 }
 

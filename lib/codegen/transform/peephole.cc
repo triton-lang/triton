@@ -104,12 +104,12 @@ bool peephole::rewrite_dot_hmma(ir::dot_inst *dot, ir::builder& builder, bool tr
     BB = ((ir::trans_inst*)B)->get_operand(0);
   }
   else{
-    if(auto *T = dynamic_cast<ir::trans_inst*>(A)){
+    if(auto *T = dynamic_cast<ir::trans_inst*>(B)){
       std::vector<ir::constant_int*> perm(T->get_perm());
       std::swap(perm[0], perm[1]);
-      AA = builder.create_trans(T->get_operand(0), perm);
-      T->replace_all_uses_with(AA);
-      trans_a = true;
+      BB = builder.create_trans(T->get_operand(0), perm);
+      T->replace_all_uses_with(BB);
+      trans_b = true;
     }
   }
   if(!trans_a && !trans_b)

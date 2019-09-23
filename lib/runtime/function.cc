@@ -201,17 +201,17 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   // create passes
   codegen::transform::cts cts;
   codegen::analysis::align align;
-  codegen::analysis::liveness shmem_liveness;
+  codegen::analysis::liveness liveness;
   codegen::analysis::axes axes;
   codegen::analysis::layout layouts(&axes);
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::analysis::tiles tiles(opt.num_warps, &align, &axes, &layouts);
-  codegen::analysis::allocation shmem_allocation(&shmem_liveness, &tiles);
-  codegen::transform::membar shmem_barriers(&shmem_liveness, &shmem_allocation);
+  codegen::analysis::allocation allocation(&liveness, &tiles);
+  codegen::transform::membar barriers(&liveness, &allocation);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&align);
-  codegen::selection selection(&shmem_liveness, &shmem_allocation, &tiles, &align, &axes, &layouts, &coalesce, target.get(), opt.num_warps);
+  codegen::selection selection(&liveness, &allocation, &tiles, &align, &axes, &layouts, &coalesce, target.get(), opt.num_warps);
   // run passes
   peephole.run(module);
   dce.run(module);
@@ -226,14 +226,12 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   tiles.run(module);
   reassociate.run(module);
   dce.run(module);
-  peephole.run(module);
-  dce.run(module);
   cts.run(module);
-  shmem_liveness.run(module);
-  shmem_allocation.run(module);
-  if(shmem_allocation.allocated_size() > context->device()->max_shared_memory())
+  liveness.run(module);
+  allocation.run(module);
+  if(allocation.allocated_size() > context->device()->max_shared_memory())
     return std::unique_ptr<driver::module>();
-  shmem_barriers.run(module);
+  barriers.run(module);
   dce.run(module);
   dce.run(module);
   axes.run(module);
