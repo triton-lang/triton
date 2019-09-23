@@ -25,6 +25,15 @@ class axes;
 class layout;
 class align;
 
+enum layout_t {
+  SCANLINE,
+  HMMA_C,
+  HMMA_A_COL,
+  HMMA_A_ROW,
+  HMMA_B_COL,
+  HMMA_B_ROW
+};
+
 class tiles {
   typedef std::map<ir::value*, std::map<int, int>> param_map_t;
 private:
@@ -34,7 +43,7 @@ private:
 public:
   tiles(size_t num_warps, analysis::align* align, analysis::axes* axes, analysis::layout* layout);
   void run(ir::module &mod);
-  bool hmma(ir::value *value);
+  layout_t hmma(ir::value *value);
   int mts(ir::value *value, unsigned ax);
   int nts(ir::value *value, unsigned ax);
   int fpw(ir::value *value, unsigned ax);
@@ -52,7 +61,7 @@ private:
   // tile properties
   std::map<int, ir::value*> largest_;
   std::map<int, std::vector<int>> order_;
-  std::map<int, bool> hmma_;
+  std::map<int, layout_t> hmma_;
   std::map<int, int> fpw_;
   std::map<int, int> wpt_;
   std::map<int, int> mts_;
