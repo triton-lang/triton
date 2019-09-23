@@ -573,51 +573,31 @@ inline int32_t ceil(int32_t num, int32_t div){
   return (num + div - 1)/div;
 }
 
-inline void to_warps(const std::vector<unsigned> &bs, const std::vector<int>& order, std::vector<unsigned> &nw, std::vector<unsigned> &ws){
-  static const size_t warp_size = 32;
-  size_t nthreads = 1, nwarps = 1;
-  nw.resize(bs.size());
-  ws.resize(bs.size());
-  for(size_t i = 0; i < bs.size(); ++i){
-    nthreads *= bs[i];
-    nw[order[i]] = ceil(nthreads, nwarps*warp_size);
-    nwarps *= nw[order[i]];
-  }
-  for(size_t i = 0; i < bs.size(); ++i){
-    ws[i] = bs[i] / nw[i];
-  }
-}
-
 void selection::init_strided_scan_axes(ir::value *v, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
   auto order = tiles_->order(v);
   const auto& shapes = v->get_type()->get_tile_shapes();
   size_t dim = shapes.size();
   std::vector<unsigned> contiguous(dim);
   std::vector<unsigned> block_size(dim);
-  std::vector<unsigned> warp_size(dim);
-  std::vector<unsigned> n_warps(dim);
   for(unsigned i = 0; i < shapes.size(); i++){
     contiguous[i] = tiles_->nts(v, i);
     block_size[i] = tiles_->mts(v, i);
   }
-  to_warps(block_size, order, n_warps, warp_size);
-  std::vector<Value*> thread_id_in_warp = delinearize(u_thread_id, order, warp_size, builder);
-  std::vector<Value*> warp_id = delinearize(u_warp_id, order, n_warps, builder);
+  Value* full_thread_id = builder.CreateAdd(builder.CreateMul(u_warp_id, builder.getInt32(32)), u_thread_id);
+  std::vector<Value*> thread_id = delinearize(full_thread_id, order, block_size, builder);
   // Create axes
   for(unsigned k = 0; k < dim; k++) {
     std::string str_k = std::to_string(k);
-    Value *warp_size_k = builder.getInt32(warp_size[k]);
     Value *contiguous_k = builder.getInt32(contiguous[k]);
-    Value *thread_id   = builder.CreateAdd(thread_id_in_warp[k], builder.CreateMul(warp_id[k], warp_size_k));
-    Value *scaled_thread_id = builder.CreateMul(thread_id, contiguous_k);
-    unsigned per_block = contiguous[k] * warp_size[k] * n_warps[k];
+    Value *scaled_thread_id = builder.CreateMul(thread_id[k], contiguous_k);
+    unsigned per_block  = contiguous[k] * block_size[k];
     unsigned per_thread = contiguous[k] * shapes[k] / per_block;
     std::vector<Value*> idx_list(per_thread);
     for(unsigned n = 0 ; n < per_thread; n++){
       unsigned offset = n / contiguous[k] * per_block + n % contiguous[k];
       idx_list[n] = builder.CreateAdd(scaled_thread_id, builder.getInt32(offset), "idx_" + str_k + "_" + std::to_string(n));
     }
-    axes_[a_axes_->get_id(v, k)] = distributed_axis{contiguous[k], idx_list, thread_id};
+    axes_[a_axes_->get_id(v, k)] = distributed_axis{contiguous[k], idx_list, thread_id[k]};
   }
 }
 
@@ -825,7 +805,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     create_distributed_tile(v, builder);
 }
 
-void selection::init_grids(ir::function *fn, IRBuilder<> &builder, Value *sh_mem_ptr){
+void selection::init_layouts(ir::function *fn, IRBuilder<> &builder, Value *sh_mem_ptr){
   // fetch linear ID
   Module *mod = builder.GetInsertBlock()->getParent()->getParent();
   Value *warp_size = builder.getInt32(32);
@@ -1454,84 +1434,83 @@ ArrayType* selection::llvm_linearized_tile_type(ir::type *ty, LLVMContext &ctx) 
   return ArrayType::get(llvm_type(ty->get_scalar_ty(), ctx), size);
 }
 
+Function* selection::llvm_fn(ir::function *fn, IRBuilder<>& builder, Module& dst) {
+  LLVMContext &ctx = builder.getContext();
+  FunctionType *fn_ty = (FunctionType*)llvm_type(fn->get_fn_type(), ctx);
+  FunctionType *dst_fn_ty = fn_ty;
+  if(!tgt_->is_gpu()){
+    Type *dst_fn_ret_ty = fn_ty->getReturnType();
+    std::vector<Type*> dst_fn_args_ty;
+    for(unsigned i = 0; i < fn_ty->getNumParams(); i++)
+      dst_fn_args_ty.push_back(fn_ty->getParamType(i));
+    dst_fn_args_ty.push_back(builder.getInt32Ty());
+    dst_fn_args_ty.push_back(builder.getInt32Ty());
+    dst_fn_args_ty.push_back(builder.getInt32Ty());
+    dst_fn_ty = FunctionType::get(dst_fn_ret_ty, dst_fn_args_ty, false);
+  }
+  Function *ret = Function::Create(dst_fn_ty, Function::ExternalLinkage, fn->get_name(), &dst);
+  // set attributes
+  for(auto attr_pair: fn->attrs()){
+    unsigned id = attr_pair.first;
+    for(ir::attribute attr: attr_pair.second)
+    if(attr.is_llvm_attr())
+      ret->addAttribute(id, llvm_attr(ctx, attr));
+  }
+  // set metadata
+  tgt_->set_kernel(builder, ctx, &dst, ret);
+  Metadata *md_args[] = {
+    ValueAsMetadata::get(ret),
+    MDString::get(ctx, "maxntidx"),
+    ValueAsMetadata::get(builder.getInt32(num_warps_*32))
+  };
+  dst.getOrInsertNamedMetadata("nvvm.annotations")->addOperand(MDNode::get(ctx, md_args));
+  // map parameters
+  for(unsigned i = 0; i < fn->args().size(); i++)
+    vmap_[fn->args()[i]] = &*(ret->arg_begin() + i);
+  // create blocks
+  for(ir::basic_block *block: fn->blocks()) {
+    BasicBlock *dst_block = BasicBlock::Create(ctx, block->get_name(), ret);
+    vmap_[block] = dst_block;
+  }
+  builder.SetInsertPoint((BasicBlock*)vmap_[fn->blocks()[0]]);
+}
+
+Value* selection::alloc_shared(IRBuilder<> &builder, Module& dst) {
+  Value *ret = nullptr;
+  LLVMContext &ctx = builder.getContext();
+  if(tgt_->is_gpu())
+  if(unsigned alloc_size = alloc_->allocated_size()){
+    Type *int_8_ty = Type::getInt8Ty(ctx);
+    ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
+    Type *ptr_ty = PointerType::get(int_8_ty, 3);
+    GlobalVariable *sh_mem_array =
+      new GlobalVariable(dst, array_ty, false, GlobalVariable::ExternalLinkage,
+                         nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
+    ret = builder.CreateBitCast(sh_mem_array, ptr_ty);
+  }
+  return ret;
+}
+
 void selection::run(ir::module &src, Module &dst) {
   vmap_.clear();
+  tmap_.clear();
+
   LLVMContext &dst_ctx = dst.getContext();
   IRBuilder<> dst_builder(dst_ctx);
 
-  for(ir::alloc_const *x: src.allocs()) {
+  // constant memory
+  for(ir::alloc_const *x: src.allocs())
     vmap_[x] = llvm_alloc_const(x, &dst, dst_builder);
-  }
 
   // iterate over functions
   for(ir::function *fn: src.get_function_list()) {
-
     // create LLVM function
-    FunctionType *fn_ty = (FunctionType*)llvm_type(fn->get_fn_type(), dst_ctx);
-    FunctionType *dst_fn_ty = fn_ty;
-    if(!tgt_->is_gpu()){
-      Type *dst_fn_ret_ty = fn_ty->getReturnType();
-      std::vector<Type*> dst_fn_args_ty;
-      for(unsigned i = 0; i < fn_ty->getNumParams(); i++)
-        dst_fn_args_ty.push_back(fn_ty->getParamType(i));
-      dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
-      dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
-      dst_fn_args_ty.push_back(dst_builder.getInt32Ty());
-      dst_fn_ty = FunctionType::get(dst_fn_ret_ty, dst_fn_args_ty, false);
-    }
-
-    // grid indices
-    fn->get_fn_type()->get_return_ty();
-    Function *dst_fn = Function::Create(dst_fn_ty, Function::ExternalLinkage, fn->get_name(), &dst);
-
-    // set attributes
-    for(auto attr_pair: fn->attrs()){
-      unsigned id = attr_pair.first;
-      for(ir::attribute attr: attr_pair.second)
-      if(attr.is_llvm_attr()){
-        dst_fn->addAttribute(id, llvm_attr(dst_ctx, attr));
-      }
-    }
-
-    tgt_->set_kernel(dst_builder, dst_ctx, &dst, dst_fn);
-    // set metadata
-    Metadata *md_args[] = {
-      ValueAsMetadata::get(dst_fn),
-      MDString::get(dst_ctx, "maxntidx"),
-      ValueAsMetadata::get(dst_builder.getInt32(num_warps_*32))
-    };
-    dst.getOrInsertNamedMetadata("nvvm.annotations")->addOperand(MDNode::get(dst_ctx, md_args));
-
-
-    // map parameters
-    for(unsigned i = 0; i < fn->args().size(); i++)
-      vmap_[fn->args()[i]] = &*(dst_fn->arg_begin() + i);
-    // create blocks
-    for(ir::basic_block *block: fn->blocks()) {
-      BasicBlock *dst_block = BasicBlock::Create(dst_ctx, block->get_name(), dst_fn);
-      vmap_[block] = dst_block;
-    }
-    dst_builder.SetInsertPoint((BasicBlock*)vmap_[fn->blocks()[0]]);
-
+    llvm_fn(fn, dst_builder, dst);
     // allocate shared memory
-    Value *sh_mem_ptr = nullptr;
-    if(tgt_->is_gpu())
-    if(unsigned alloc_size = alloc_->allocated_size()){
-      Type *int_8_ty = Type::getInt8Ty(dst_ctx);
-      ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
-      Type *ptr_ty = PointerType::get(int_8_ty, 3);
-      GlobalVariable *sh_mem_array =
-        new GlobalVariable(dst, array_ty, false, GlobalVariable::ExternalLinkage,
-                           nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
-      sh_mem_ptr = dst_builder.CreateBitCast(sh_mem_array, ptr_ty);
-    }
-    sh_mem_ptr_ = sh_mem_ptr;
-
-    // create grids
-    init_grids(fn, dst_builder, sh_mem_ptr);
-
-
-    // iterate through block
+    sh_mem_ptr_ = alloc_shared(dst_builder, dst);
+    // initialize layouts
+    init_layouts(fn, dst_builder, sh_mem_ptr_);
+    // generate LLVM-IR code
     std::map<ir::basic_block*, BasicBlock*> last_block;
     for(ir::basic_block *block: fn->blocks()) {
       BasicBlock *parent = (BasicBlock*)vmap_[block];
@@ -1547,7 +1526,7 @@ void selection::run(ir::module &src, Module &dst) {
         last_block[block] = dst_builder.GetInsertBlock();
       }
     }
-
+    // finalize double-buffering
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *inst: block->get_inst_list()) {
       if(liveness_->has_double(inst)) {
@@ -1574,7 +1553,7 @@ void selection::run(ir::module &src, Module &dst) {
       }
     }
 
-    // add phi operands
+    // finalize phi
     for(ir::basic_block *block: fn->blocks())
     for(ir::instruction *inst: block->get_inst_list())
     if(auto *phi = dynamic_cast<ir::phi_node*>(inst)){

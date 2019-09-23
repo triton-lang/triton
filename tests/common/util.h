@@ -4,6 +4,7 @@
 #define _TRITON_TESTS_UTIL_H
 
 #include <iomanip>
+#include <cmath>
 #include "triton/runtime/function.h"
 
 namespace drv = triton::driver;
@@ -26,6 +27,30 @@ inline rt::function::grid_fn_ty grid2d(size_t M, size_t N) {
   };
 }
 
+inline rt::function::grid_fn_ty grid_nd(const std::vector<int32_t> &shape,
+                                       const std::vector<std::string>& ts) {
+  return [&shape, &ts](const rt::function::options_t& x) {
+    rt::grid_t ret;
+    for(size_t d = 0; d < shape.size(); d++)
+      ret.push_back(ceil(shape[d], x.D<int>(ts[d])));
+    return ret;
+  };
+}
+
+inline std::vector<std::vector<std::string>> tile_nd(size_t rank) {
+  assert(rank <= 3);
+  if(rank == 1)
+    return {{"128", "256", "512", "1024"}};
+  if(rank == 2)
+    return {{"16", "32", "64"},
+            {"16", "32", "64"}};
+  if(rank == 3)
+    return {{"4", "16", "32"},
+            {"4", "16", "32"},
+            {"4", "16", "32"}};
+  return {};
+}
+
 enum order_t {
   ROWMAJOR,
   COLMAJOR
@@ -44,17 +69,30 @@ struct gen_seq<0, Is...> : seq<Is...>{};
 template<class Ch, class Tr, class Tuple, std::size_t... Is>
 void print_tuple(std::basic_ostream<Ch,Tr>& os, Tuple const& t, seq<Is...>){
   using swallow = int[];
-  (void)swallow{0, (void(os << (Is == 0? "" : ", ") << std::setfill(' ') << std::setw(3) << std::get<Is>(t)), 0)...};
+  (void)swallow{0, (void(os << (Is == 0? "" : ", ") << std::get<Is>(t)), 0)...};
 }
 } // aux::
+
 
 template<class Ch, class Tr, class... Args>
 auto operator<<(std::basic_ostream<Ch, Tr>& os, std::tuple<Args...> const& t)
     -> std::basic_ostream<Ch, Tr>&
 {
-  os << "(";
   aux::print_tuple(os, t, aux::gen_seq<sizeof...(Args)>());
-  return os << ")";
+  return os;
+}
+
+template<class Ch, class Tr, class T>
+auto operator<<(std::basic_ostream<Ch, Tr>& os, std::vector<T> const& t)
+    -> std::basic_ostream<Ch, Tr>&
+{
+  os << "{";
+  for(size_t i = 0; i < t.size(); i++) {
+    if(i > 0)
+      os << ", ";
+    os << t[i];
+  }
+  return os << "}";
 }
 
 

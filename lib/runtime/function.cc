@@ -199,7 +199,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   llvm::LLVMContext ctx;
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
   // create passes
-  codegen::analysis::cts cts;
+  codegen::transform::cts cts;
   codegen::analysis::align align;
   codegen::analysis::liveness shmem_liveness;
   codegen::analysis::axes axes;

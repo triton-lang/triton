@@ -14,7 +14,7 @@ namespace ir {
 }
 
 namespace codegen{
-namespace analysis{
+namespace transform{
 
 class cts {
 public:

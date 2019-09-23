@@ -156,6 +156,8 @@ private:
   Constant*    llvm_constant(ir::constant *cst, LLVMContext &ctx);
   Value*       llvm_alloc_const(ir::alloc_const *v, Module *module, Builder &builder);
   ArrayType*   llvm_linearized_tile_type(ir::type *ty, LLVMContext &ctx);
+  Function*    llvm_fn(ir::function *fn, Builder& builder, Module &dst);
+  Value*       alloc_shared(Builder &builder, Module& dst);
 
   // grid construction
   void create_grids(std::vector<ir::value *> &grids,
@@ -167,7 +169,7 @@ private:
   void init_strided_scan_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
   void init_hmma_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
   void init_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
-  void init_grids(ir::function *fn, Builder &builder, Value *sh_mem_ptr);
+  void init_layouts(ir::function *fn, Builder &builder, Value *sh_mem_ptr);
 
   // lower scalar instruction
   void lower_instruction(ir::instruction *src, Builder &builder);
