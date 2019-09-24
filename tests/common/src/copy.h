@@ -59,7 +59,7 @@ void copy3d(TYPE * X __noalias __readonly __aligned(16),
 }
 )";
 
-    const char* copy_nd[] = {copy1d, copy2d, copy3d};
+  const char* copy_nd[] = {copy1d, copy2d, copy3d};
 
 }
 
