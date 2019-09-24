@@ -57,7 +57,7 @@ unsigned allocation::num_bytes(ir::value *x) {
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;
   unsigned pad = is_ld_padded(x);
   if(pad > 0){
-    unsigned ld = x->get_type()->get_tile_shapes()[0];
+    unsigned ld = x->get_type()->get_tile_shapes()[tiles_->order(x)[0]];
     num_bytes += pad * num_bytes / ld;
   }
   if(liveness_->has_double(x))

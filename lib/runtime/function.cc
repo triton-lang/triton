@@ -222,13 +222,11 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   axes.run(module);
   layouts.run(module);
   coalesce.run(module);
-//  ir::print(module, std::cout);
   dce.run(module);
   align.run(module);
   dce.run(module);
   tiles.run(module);
   reassociate.run(module);
-  peephole.run(module);
   dce.run(module);
   cts.run(module);
   liveness.run(module);
@@ -242,6 +240,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   layouts.run(module);
   align.run(module);
   tiles.run(module);
+//  ir::print(module, std::cout);
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));

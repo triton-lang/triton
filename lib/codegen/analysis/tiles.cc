@@ -218,6 +218,7 @@ void tiles::run(ir::module &) {
     auto cmp = [&rank](ir::value* x, ir::value *y) { return rank(x) < rank(y); };
     largest_[i] = *std::max_element(values.begin(), values.end(), cmp);
   }
+
   // find out the order of a group
   for(size_t i = 0; i < num_groups; i++){
     std::set<ir::io_inst*> io;
@@ -236,6 +237,20 @@ void tiles::run(ir::module &) {
       );
     }
     order_[i] = order;
+  }
+  for(size_t i = 0; i < num_groups; i++){
+    bool is_hmma_op = hmma_[i] == HMMA_A_COL || hmma_[i] == HMMA_A_ROW ||
+                      hmma_[i] == HMMA_B_COL || hmma_[i] == HMMA_B_ROW;
+    if(!is_hmma_op)
+      continue;
+    // extract copies to shared memory
+    std::vector<ir::copy_to_shared_inst*> cts;
+    for(ir::value* v: layout_->values(i))
+      if(auto *x = dynamic_cast<ir::copy_to_shared_inst*>(v))
+        cts.push_back(x);
+    if(cts.empty())
+      continue;
+    order_[i] = order(cts[0]->get_operand(0));
   }
   // tiling parameters
   for(auto x: largest_){

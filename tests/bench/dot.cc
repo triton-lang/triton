@@ -79,7 +79,10 @@ int main() {
   // shapes to benchmark
   typedef std::tuple<bool, bool, int, int, int> config_t;
   std::vector<config_t> configs;
-  for(auto x: std::vector<std::array<bool, 2>>{{false, false}}){
+  for(auto x: std::vector<std::array<bool, 2>>{{false, false},
+                                               {false, true},
+                                               {true, false},
+                                               {true, true}}){
     std::vector<config_t> tmp = {
       config_t{x[0], x[1], 4096, 4096, 4096}
 //      config_t{x[0], x[1], 16, 2048, 2048},
