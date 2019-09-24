@@ -487,6 +487,9 @@ void align::populate(ir::value *v) {
   populate_is_constant(v);
   populate_starting_multiple(v);
   populate_max_contiguous(v);
+//  std::cout << v->get_name() << std::endl;
+//  if(max_contiguous_[v].size() == 2)
+//    std::cout << max_contiguous_[v][0] << " " << max_contiguous_[v][1] << std::endl;
 }
 
 void align::run(ir::module &mod) {

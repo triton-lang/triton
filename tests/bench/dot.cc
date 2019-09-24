@@ -48,7 +48,7 @@ std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, i
   opt.defines.push_back({"TM", {"128"}});
   opt.defines.push_back({"TN", {"128"}});
   opt.defines.push_back({"TK", {"16"}});
-  opt.num_warps = {2, 4, 8};
+  opt.num_warps = {4};
   // create function
   rt::function function(src::dot, opt);
   // benchmark available libraries
@@ -79,12 +79,9 @@ int main() {
   // shapes to benchmark
   typedef std::tuple<bool, bool, int, int, int> config_t;
   std::vector<config_t> configs;
-  for(auto x: std::vector<std::array<bool, 2>>{{false, false},
-                                               {false, true},
-                                               {true, false},
-                                               {true, true}}){
+  for(auto x: std::vector<std::array<bool, 2>>{{false, false}}){
     std::vector<config_t> tmp = {
-      config_t{x[0], x[1], 2048, 2048, 2048}
+      config_t{x[0], x[1], 4096, 4096, 4096}
 //      config_t{x[0], x[1], 16, 2048, 2048},
 //      config_t{x[0], x[1], 32, 2048, 2048},
 //      config_t{x[0], x[1], 64, 2048, 2048},

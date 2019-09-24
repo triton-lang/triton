@@ -161,6 +161,7 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     for(auto it: opt_space_.defines)
       cpp.AddMacro(it.first, &opt.defines.at(it.first));
     cpp.Process(tokens);
+//    tokens.Print(stdout);
     // parse
     Parser parser(tokens);
     parser.Parse();
@@ -215,16 +216,19 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   // run passes
   peephole.run(module);
   dce.run(module);
+//  ir::print(module, std::cout);
   align.run(module);
   cts.run(module);
   axes.run(module);
   layouts.run(module);
   coalesce.run(module);
+//  ir::print(module, std::cout);
   dce.run(module);
   align.run(module);
   dce.run(module);
   tiles.run(module);
   reassociate.run(module);
+  peephole.run(module);
   dce.run(module);
   cts.run(module);
   liveness.run(module);
