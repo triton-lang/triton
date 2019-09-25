@@ -20,14 +20,16 @@ unsigned allocation::is_ld_padded(ir::value *x) {
     if(trans->get_perm()[0]->get_value() != 0)
       return 4;
   }
+  auto order = tiles_->order(x);
+  bool is_col_major = order[0] == 0;
   if(tiles_->hmma(x) == HMMA_A_ROW)
-    return 8;
+    return is_col_major ? 16 : 8;
   if(tiles_->hmma(x) == HMMA_A_COL)
-    return 16;
+    return is_col_major ? 8 : 16;
   if(tiles_->hmma(x) == HMMA_B_COL)
-    return 8;
+    return is_col_major ? 16 : 8;
   if(tiles_->hmma(x) == HMMA_B_ROW)
-    return 16;
+    return is_col_major ? 8 : 16;
   if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
     unsigned result = 0;
     for(unsigned i = 0; i < phi->get_num_incoming(); i++)
