@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 #include <iostream>
+#include "triton/codegen/analysis/liveness.h"
 
 namespace triton{
 
@@ -25,10 +26,8 @@ class allocation {
 public:
   allocation(liveness *live, tiles *params)
     : liveness_(live), tiles_(params){ }
-  // utilities
-  unsigned num_bytes(ir::value *x);
-  unsigned is_ld_padded(ir::value* x);
   // accessors
+  bool has_offset(ir::value *x)    const { return offsets_.find(x) != offsets_.end(); }
   unsigned offset(ir::value *x)    const { return offsets_.at(x); }
   unsigned allocated_size()        const { return allocated_size_; }
   // run
@@ -36,7 +35,6 @@ public:
 
 private:
   std::map<ir::value*, unsigned> offsets_;
-  std::map<ir::value*, unsigned> num_bytes_;
   size_t allocated_size_;
   // dependences
   liveness *liveness_;

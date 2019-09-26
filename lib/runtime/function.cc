@@ -202,11 +202,11 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   // create passes
   codegen::transform::cts cts;
   codegen::analysis::align align;
-  codegen::analysis::liveness liveness;
   codegen::analysis::axes axes;
   codegen::analysis::layout layouts(&axes);
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::analysis::tiles tiles(opt.num_warps, &align, &axes, &layouts);
+  codegen::analysis::liveness liveness(&tiles);
   codegen::analysis::allocation allocation(&liveness, &tiles);
   codegen::transform::membar barriers(&liveness, &allocation);
   codegen::transform::dce dce;
@@ -235,12 +235,10 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
     return std::unique_ptr<driver::module>();
   barriers.run(module);
   dce.run(module);
-  dce.run(module);
   axes.run(module);
   layouts.run(module);
   align.run(module);
   tiles.run(module);
-//  ir::print(module, std::cout);
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));

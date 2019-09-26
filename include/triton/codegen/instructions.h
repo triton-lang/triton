@@ -56,7 +56,7 @@ static const std::map<ir::value_id_t, inst_storage_info_t> storage_info = {
   { ir::INST_BROADCAST,            {DISTRIBUTED, {REPLICATED}}},
   { ir::INST_DOWNCAST,             {DISTRIBUTED, {REPLICATED}}},
   // array arithmetic
-  { ir::INST_TRANS,                {SHARED,      {DISTRIBUTED}}}, // TODO: not necessarily
+  { ir::INST_TRANS,                {SHARED,      {SHARED}}},
   { ir::INST_REDUCE,               {SHARED,      {DISTRIBUTED}}},
   { ir::INST_DOT,                  {DISTRIBUTED, {SHARED, SHARED, DISTRIBUTED}}},
   // terminator

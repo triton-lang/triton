@@ -36,9 +36,9 @@ void membar::add_reference(ir::value *v, interval_vec_t &res){
   auto *i = dynamic_cast<ir::instruction*>(v);
   if(!i)
     return;
-  if(storage_info.at(i->get_id()).first == SHARED){
+  if(alloc_->has_offset(v)){
     unsigned offset = alloc_->offset(v);
-    unsigned num_bytes = alloc_->num_bytes(v);
+    unsigned num_bytes = liveness_->num_bytes(v);
     res.push_back(interval_t(offset, offset + num_bytes));
   }
 }
@@ -97,8 +97,10 @@ std::pair<membar::interval_vec_t,
     bool read_after_write = intersect(new_written_to, read);
     bool write_after_read = intersect(new_read_from, written);
     // double buffering: write and phi-node read won't intersect
-    if(safe_war.find(i) != safe_war.end())
+    if(safe_war.find(i) != safe_war.end()){
       write_after_read = false;
+      read_after_write = false;
+    }
     // record hazards
     if(read_after_write || write_after_read) {
       insert_loc.insert(i);
@@ -122,7 +124,12 @@ void membar::run(ir::module &mod) {
       auto info = liveness_->get_double(i);
       safe_war.insert(i);
       safe_war.insert(info.latch);
+      auto *trans = dynamic_cast<ir::trans_inst*>(info.latch);
+      if(trans)
+        safe_war.insert(trans->get_operand(0));
     }
+    if(i->get_id() == ir::INST_TRANS)
+      safe_war.insert(i);
   });
 
   for(ir::function *fn: mod.get_function_list()){
@@ -152,9 +159,8 @@ void membar::run(ir::module &mod) {
       done = (n_inserted_im1 == n_inserted_i);
       n_inserted_im1 = n_inserted_i;
     }while(!done);
-    for(ir::instruction* i: insert_locs){
+    for(ir::instruction* i: insert_locs)
       insert_barrier(i, builder);
-    }
   }
 }
 

@@ -725,7 +725,7 @@ void selection::create_shared_tile(ir::value *v, IRBuilder<> &builder, Value *sh
     return;
   auto order = tiles_->order(v);
   auto shapes = v->get_type()->get_tile_shapes();
-  unsigned pad = alloc_->is_ld_padded(v);
+  unsigned pad = liveness_->is_ld_padded(v);
   if(pad > 0)
     shapes[order[0]] += pad;
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), builder.getContext());
@@ -1040,15 +1040,13 @@ void selection::lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ct
 }
 
 void selection::lower_trans(ir::trans_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
-  shared_tile* result = (shared_tile*)tmap_.at(x);
-  distributed_tile* in = (distributed_tile*)tmap_.at(x->get_operand(0));
-  auto perm = x->get_perm();
-  in->for_each([&](indices_t idx){
-    indices_t out_idx(idx.size());
-    for(size_t i = 0; i < idx.size(); i++)
-      out_idx[i] = idx[perm[i]->get_value()];
-    result->set_value(out_idx, in->get_value(idx));
-  });
+  shared_tile* in = (shared_tile*)tmap_.at(x->get_operand(0));
+  auto in_order = in->get_order();
+  std::vector<int> order;
+  for(auto p: x->get_perm())
+    order.push_back(in_order[p->get_value()]);
+  shared_tile* out = new shared_tile(in->get_ty(), in->get_shapes(), order, in->get_pointer(), builder, in->get_offset());
+  tmap_[x] = out;
 }
 
 void selection::lower_hmma_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn, IRBuilder<> &builder,
@@ -1555,7 +1553,7 @@ void selection::run(ir::module &src, Module &dst) {
           }
           else {
             unsigned num_bytes = phi->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
-            offset->addIncoming(dst_builder.getInt32(alloc_->num_bytes(phi)/(num_bytes)), llvm_inc_block);
+            offset->addIncoming(dst_builder.getInt32(liveness_->num_bytes(phi)/(num_bytes)), llvm_inc_block);
           }
           ptr->addIncoming(inc_shared->get_pointer(), llvm_inc_block);
         }
