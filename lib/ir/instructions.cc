@@ -536,7 +536,7 @@ instruction* downcast_inst::create(value *arg, const std::string &name, instruct
 
 dot_inst::dot_inst(value *A, value *B, value *C, TransT AT, TransT BT,
                          const std::string &name, instruction *next)
-    : builtin_inst(C->get_type(), INST_DOT, 3, name, next), AT_(AT), BT_(BT) {
+    : builtin_inst(C->get_type(), INST_DOT, 3, name, next) {
   set_operand(0, A);
   set_operand(1, B);
   set_operand(2, C);
@@ -574,31 +574,30 @@ instruction *dot_inst::create_tt(value *A, value *B, value *C,
 //                               trans instructions
 //===----------------------------------------------------------------------===//
 
-ir::type* trans_inst::get_res_ty(ir::type* ty, std::vector<constant_int*> perm) {
+ir::type* trans_inst::get_res_ty(ir::type* ty, std::vector<int> perm) {
   // get argument shapes
   ir::tile_type::tile_shapes_t arg_shapes = ty->get_tile_shapes();
   // permutate argument shapes
   perm = init_perm(ty, perm);
   ir::tile_type::tile_shapes_t res_shapes = arg_shapes;
   for(size_t i = 0; i < perm.size(); i++)
-    res_shapes[i] = arg_shapes[perm[i]->get_value()];
+    res_shapes[i] = arg_shapes[perm[i]];
   // construct type
   return tile_type::get(ty->get_scalar_ty(), res_shapes);
 }
 
-std::vector<constant_int*> trans_inst::init_perm(ir::type* ty, const std::vector<constant_int*>& perm) {
+std::vector<int> trans_inst::init_perm(ir::type* ty, const std::vector<int>& perm) {
   if(!perm.empty())
     return perm;
   auto size = ty->get_tile_shapes().size();
-  ir::type* int32_ty = type::get_int32_ty(ty->get_context());
-  std::vector<constant_int*> result;
-  result.push_back(ir::constant_int::get(int32_ty, size - 1));
+  std::vector<int> result;
+  result.push_back(size - 1);
   for(size_t i = 0; i < size - 1; i++)
-    result.push_back(ir::constant_int::get(int32_ty, i));
+    result.push_back(i);
   return result;
 }
 
-trans_inst::trans_inst(value *arg, const std::vector<constant_int*>& perm, const std::string &name, instruction *next)
+trans_inst::trans_inst(value *arg, const std::vector<int> &perm, const std::string &name, instruction *next)
   : builtin_inst(get_res_ty(arg->get_type(), perm), INST_TRANS, 1, name, next) {
   // sanity check
   perm_ = init_perm(arg->get_type(), perm);
@@ -607,11 +606,11 @@ trans_inst::trans_inst(value *arg, const std::vector<constant_int*>& perm, const
   set_operand(0, arg);
 }
 
-instruction* trans_inst::create(value *arg, const std::vector<constant_int *> &perm, const std::string &name, instruction *next) {
+instruction* trans_inst::create(value *arg, const std::vector<int> &perm, const std::string &name, instruction *next) {
   return new trans_inst(arg, perm, name, next);
 }
 
-const std::vector<constant_int*> trans_inst::get_perm() const {
+const std::vector<int> trans_inst::get_perm() const {
   return perm_;
 }
 

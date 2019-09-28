@@ -591,7 +591,7 @@ public:
 
 private:
   dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, const std::string &name, instruction *next);
-  std::string repr_impl() const { return std::string("dot.") + ((AT_==NoTrans)?"n":"t") + ((BT_==NoTrans)?"n":"t"); }
+  std::string repr_impl() const { return "dot"; }
 
 public:
   static instruction *create(value *A, value *B, value *C, bool AT, bool BT, const std::string &name = "", instruction *next = nullptr);
@@ -599,13 +599,7 @@ public:
   static instruction* create_nt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
   static instruction* create_tn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
   static instruction* create_tt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
-  bool is_a_trans() { return AT_ == Trans; }
-  bool is_b_trans() { return BT_ == Trans; }
   _TRITON_DEFINE_CLONE(dot_inst)
-
-private:
-  TransT AT_;
-  TransT BT_;
 };
 
 //class outer_inst: public builtin_inst {
@@ -617,20 +611,20 @@ private:
 
 class trans_inst: public builtin_inst {
 public:
-  ir::type* get_res_ty(ir::type* in, std::vector<constant_int *> perm);
-  std::vector<constant_int*> init_perm(ir::type* ty, const std::vector<constant_int*>& perm);
+  ir::type* get_res_ty(ir::type* in, std::vector<int> perm);
+  std::vector<int> init_perm(ir::type* ty, const std::vector<int>& perm);
 
 private:
-  trans_inst(value *arg, const std::vector<constant_int*>& perm, const std::string& name, instruction* next);
+  trans_inst(value *arg, const std::vector<int>& perm, const std::string& name, instruction* next);
   std::string repr_impl() const { return "trans"; }
 
 public:
-  static instruction* create(value *arg, const std::vector<constant_int*>& perm = {}, const std::string &name = "", instruction *next = nullptr);
-  const std::vector<constant_int*> get_perm() const;
+  static instruction* create(value *arg, const std::vector<int> &perm = {}, const std::string &name = "", instruction *next = nullptr);
+  const std::vector<int> get_perm() const;
   _TRITON_DEFINE_CLONE(trans_inst)
 
 private:
-  std::vector<constant_int*> perm_;
+  std::vector<int> perm_;
 };
 
 class sqrt_inst: public builtin_inst {

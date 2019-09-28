@@ -74,7 +74,7 @@ void axes::update_graph_trans(ir::instruction *i) {
   auto perm = trans->get_perm();
   // add edge between axis perm[d] and axis d
   for(unsigned d = 0; d < perm.size(); d++)
-    add_constraint({i, perm[d]->get_value()}, {op, d});
+    add_constraint({i, perm[d]}, {op, d});
 }
 
 void axes::update_graph_broadcast(ir::instruction *i) {

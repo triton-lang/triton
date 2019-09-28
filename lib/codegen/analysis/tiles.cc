@@ -40,7 +40,7 @@ bool is_hmma_a_col(ir::value* v) {
   for(ir::user *u: v->get_users())
     if(is_hmma_c(u)){
       ir::dot_inst* dot = (ir::dot_inst*)u;
-      if((v == dot->get_operand(0)) && !dot->is_a_trans())
+      if((v == dot->get_operand(0)))
         return true;
     }
 }
@@ -49,7 +49,7 @@ bool is_hmma_a_row(ir::value* v) {
   for(ir::user *u: v->get_users())
     if(is_hmma_c(u)){
       ir::dot_inst* dot = (ir::dot_inst*)u;
-      if((v == dot->get_operand(0)) && dot->is_a_trans())
+      if((v == dot->get_operand(0)))
         return true;
     }
 }
@@ -58,7 +58,7 @@ bool is_hmma_b_col(ir::value* v) {
   for(ir::user *u: v->get_users())
     if(is_hmma_c(u)){
       ir::dot_inst* dot = (ir::dot_inst*)u;
-      if((v == dot->get_operand(1)) && !dot->is_b_trans())
+      if((v == dot->get_operand(1)))
         return true;
     }
 }
@@ -67,7 +67,7 @@ bool is_hmma_b_row(ir::value* v) {
   for(ir::user *u: v->get_users())
     if(is_hmma_c(u)){
       ir::dot_inst* dot = (ir::dot_inst*)u;
-      if((v == dot->get_operand(1)) && dot->is_b_trans())
+      if((v == dot->get_operand(1)))
         return true;
     }
 }
@@ -170,6 +170,7 @@ void tiles::init_scanline_tile(ir::value *i) {
   unsigned effective_num_threads = 1;
   for(size_t d = 0; d < shapes.size(); d++)
     effective_num_threads *= mts_[axes_->get_id(i, d)];
+//  std::cout << num_threads << " " << effective_num_threads << std::endl;
   if(num_threads != effective_num_threads)
     throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
@@ -219,7 +220,7 @@ void tiles::run(ir::module &) {
     largest_[i] = *std::max_element(values.begin(), values.end(), cmp);
   }
 
-  // find out the order of a group
+  // find out the layout ordering of a group
   for(size_t i = 0; i < num_groups; i++){
     std::set<ir::io_inst*> io;
     for(ir::value* v: layout_->values(i))
@@ -239,11 +240,6 @@ void tiles::run(ir::module &) {
     order_[i] = order;
   }
   for(size_t i = 0; i < num_groups; i++){
-    bool is_hmma_op = hmma_[i] == HMMA_A_COL || hmma_[i] == HMMA_A_ROW ||
-                      hmma_[i] == HMMA_B_COL || hmma_[i] == HMMA_B_ROW;
-    if(!is_hmma_op)
-      continue;
-    // extract copies to shared memory
     std::vector<ir::copy_to_shared_inst*> cts;
     for(ir::value* v: layout_->values(i))
       if(auto *x = dynamic_cast<ir::copy_to_shared_inst*>(v))

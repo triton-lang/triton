@@ -58,6 +58,18 @@ void liveness::make_graph(ir::instruction *i) {
     graph_[i].insert(latch);
     graph_[latch].insert(i);
   }
+  if(i->get_id() == ir::INST_PHI){
+    ir::phi_node* phi = (ir::phi_node*)i;
+    for(ir::value* op: phi->ops()){
+      auto* iop = dynamic_cast<ir::instruction*>(op);
+      if(!iop || storage_info.at(iop->get_id()).first != SHARED)
+        continue;
+      nodes_.insert(phi);
+      nodes_.insert(op);
+      graph_[phi].insert(op);
+      graph_[op].insert(phi);
+    }
+  }
   if(i->get_id() == ir::INST_TRANS){
     nodes_.insert(i);
     nodes_.insert(i->get_operand(0));
@@ -67,39 +79,63 @@ void liveness::make_graph(ir::instruction *i) {
 }
 
 // connected components
-void liveness::connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, unsigned group_id) {
-  buffer_t buffer{group_id, num_bytes(x)};
+void liveness::connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, buffer_t* buffer) {
   groups_[x] = buffer;
   values_[buffer].push_back(x);
   if(nodes.find(x) != nodes.end()){
     nodes.erase(x);
     for(const node_t &y: graph[x])
-      connected_components(y, nodes, graph, group_id);
+      connected_components(y, nodes, graph, buffer);
   }
 }
 
-unsigned liveness::is_ld_padded(ir::value *x) {
-  if(auto *trans = dynamic_cast<ir::trans_inst*>(x)){
-    if(trans->get_perm()[0]->get_value() != 0)
-      return 4;
+bool liveness::do_pad(ir::value *x) {
+  // alignment for matrix product
+  if(auto* dot = dynamic_cast<ir::dot_inst*>(x)) {
+    auto order = tiles_->order(x);
+    // a
+    ir::value *a = dot->get_operand(0);\
+    size_t previous_a = pad_[a];
+    bool a_trans = dynamic_cast<ir::trans_inst*>(a);
+    bool a_row = order[0] == 1;
+    if(tiles_->hmma(x) == HMMA_A_ROW)
+      pad_[a] = 16;
+    else if(tiles_->hmma(x) == HMMA_A_COL)
+      pad_[a] = 8;
+    else if(a_trans ^ a_row)
+      pad_[a] = 4;
+    else
+      pad_[a] = 0;
+    // b
+    ir::value *b = dot->get_operand(1);
+    size_t previous_b = pad_[b];
+    bool b_trans = dynamic_cast<ir::trans_inst*>(a);
+    bool b_col = order[0] == 0;
+    if(tiles_->hmma(x) == HMMA_B_COL)
+      pad_[b] = 16;
+    if(tiles_->hmma(x) == HMMA_B_ROW)
+      pad_[b] = 8;
+    if(b_trans ^ b_col)
+      pad_[b] = 4;
+    else
+      pad_[b] = 0;
+    return previous_a != pad_[a] || previous_b != pad_[b];
   }
-  auto order = tiles_->order(x);
-  bool is_col_major = order[0] == 0;
-  if(tiles_->hmma(x) == HMMA_A_ROW)
-    return is_col_major ? 16 : 16;
-  if(tiles_->hmma(x) == HMMA_A_COL)
-    return is_col_major ? 8 : 8;
-  if(tiles_->hmma(x) == HMMA_B_COL)
-    return is_col_major ? 16 : 16;
-  if(tiles_->hmma(x) == HMMA_B_ROW)
-    return is_col_major ? 8 : 8;
+  // padding for phi-nodes
   if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
-    unsigned result = 0;
-    for(unsigned i = 0; i < phi->get_num_incoming(); i++)
-      result = std::max(result, is_ld_padded(phi->get_incoming_value(i)));
-    return result;
+    bool has_changed = false;
+    for(unsigned i = 0; i < phi->get_num_incoming(); i++){
+      ir::value* op = phi->get_operand(i);
+      size_t previous = pad_[op];
+      pad_[op] = std::max(pad_[op], pad_[phi]);
+      has_changed |= previous != pad_[op];
+    }
+    return has_changed;
   }
-  return 0;
+  // default -- no pading
+  size_t previous = pad_[x];
+  pad_[x] = std::max<int>(previous, 0);
+  return pad_[x] != previous;
 }
 
 unsigned liveness::num_bytes(ir::value *x) {
@@ -120,7 +156,8 @@ unsigned liveness::num_bytes(ir::value *x) {
     return num_elements * num_bytes * depth;
   }
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;
-  unsigned pad = is_ld_padded(x);
+  unsigned pad = pad_.at(x);
+  std::cout << x->get_name() << " " << pad << std::endl;
   if(pad > 0){
     unsigned ld = x->get_type()->get_tile_shapes()[tiles_->order(x)[0]];
     num_bytes += pad * num_bytes / ld;
@@ -134,6 +171,7 @@ unsigned liveness::num_bytes(ir::value *x) {
 void liveness::run(ir::module &mod) {
   double_.clear();
   indices.clear();
+  pad_.clear();
   intervals_.clear();
   parents_.clear();
 
@@ -141,6 +179,15 @@ void liveness::run(ir::module &mod) {
   ir::for_each_instruction(mod, [this](ir::instruction* i) {
     this->extract_double_bufferable(i);
   });
+
+  // Padding information
+  bool has_changed;
+  do{
+    has_changed = false;
+    ir::for_each_value(mod, [this, &has_changed](ir::value* v){
+      has_changed |= this->do_pad(v);
+    });
+  }while(has_changed);
 
   // Create buffer dependency graph
   ir::for_each_instruction(mod, [this](ir::instruction* i) {
@@ -150,7 +197,10 @@ void liveness::run(ir::module &mod) {
   // connected components
   unsigned group_id = 0;
   while(!nodes_.empty()){
-    connected_components(*nodes_.begin(), nodes_, graph_, group_id++);
+    buffer_t* buffer = new buffer_t{group_id++};
+    connected_components(*nodes_.begin(), nodes_, graph_, buffer);
+    for(ir::value *v: values_.at(buffer))
+      buffer->size = std::max<int>(buffer->size, num_bytes(v));
   }
 
   // Assigns index to each instruction

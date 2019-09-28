@@ -54,12 +54,12 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
   TYPE a[SHAPE_A] = *pa;
   TYPE b[SHAPE_B] = *pb;
   // reduction loop
-  for(int k = K; k > 0; k-= TK){
+  for(int k = K; k > TK; k-= TK){
     c += USEA @ USEB;
     pa = pa + TK * STRIDE_AK;
     pb = pb + TK * STRIDE_BK;
-    a = ((bool[SHAPE_A])(k > TK)) ? *pa : 0;
-    b = ((bool[SHAPE_B])(k > TK)) ? *pb : 0;
+    a = *pa;
+    b = *pb;
   }
   // epilogue
   int rxc[TM] =  ridx * TM + 0 ... TM;

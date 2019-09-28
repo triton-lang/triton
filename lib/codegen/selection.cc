@@ -146,26 +146,30 @@ void shared_tile::extract_constant(const indices_t &arg_idx, indices_t &non_cst_
 }
 
 
-Value* shared_tile::shared_offset(llvm::IRBuilder<> &builder, const shapes_t& shapes, const std::vector<int>& order, indices_t idx) {
+Value* shared_tile::shared_offset(llvm::IRBuilder<> &builder, const shapes_t& shapes, const std::vector<int>& perm, const std::vector<int>& order, indices_t idx) {
+  // strides
+  std::vector<Value*> strides(order.size());
+  strides[order[0]] = builder.getInt32(1);
+  for(size_t i = 1; i < idx.size(); i++)
+    strides[order[i]] = builder.CreateMul(strides[order[i-1]], builder.getInt32(shapes[order[i-1]]));
+  // result
   Value *result = builder.getInt32(0);
-  result = builder.CreateAdd(result, idx[order[0]]);
-  Value *ld = builder.getInt32(shapes[order[0]]);
-  for(size_t i = 1; i < idx.size(); i++) {
-    result = builder.CreateAdd(result, builder.CreateMul(idx[order[i]], ld));
-    if(i < idx.size() - 1){
-      ld = builder.CreateMul(ld, builder.getInt32(shapes[order[i]]));
-    }
-  }
+  for(size_t i = 0; i < strides.size(); i++)
+    result = builder.CreateAdd(result, builder.CreateMul(idx[perm[i]], strides[i]));
   return result;
 }
 
-shared_tile::shared_tile(Type *ty, const shapes_t &shapes, const std::vector<int>& order, Value *ptr, llvm::IRBuilder<> &builder, Value *offset):
-  tile(ty, shapes), order_(order), ptr_(ptr), builder_(builder), offset_(offset), vector_size_(1){
+shared_tile::shared_tile(Type *ty, const shapes_t &shapes, const std::vector<int>& order, Value *ptr, llvm::IRBuilder<> &builder, Value *offset, const std::vector<int>& perm):
+  tile(ty, shapes), order_(order), ptr_(ptr), builder_(builder), offset_(offset), vector_size_(1), perm_(perm){
   return_vector_ = false;
+  if(perm_.empty()){
+    perm_.resize(shapes.size());
+    std::iota(perm_.begin(), perm_.end(), 0);
+  }
 }
 
 void shared_tile::set_value(indices_t idx, Value *value) {
-  Value *ptr = builder_.CreateGEP(ptr_, shared_offset(builder_, shapes_, order_, idx));
+  Value *ptr = builder_.CreateGEP(ptr_, shared_offset(builder_, shapes_, perm_, order_, idx));
   unsigned addr_space = ptr->getType()->getPointerAddressSpace();
   ptr = builder_.CreateBitCast(ptr, value->getType()->getPointerTo(addr_space));
   builder_.CreateStore(value, ptr);
@@ -196,7 +200,7 @@ Value* shared_tile::get_value(indices_t idx) {
 //    if(isa<Instruction>(non_cst_idx.front())){
 //      builder_.SetInsertPoint((Instruction*)non_cst_idx.front());
 //    }
-    base_ptr = builder_.CreateGEP(ptr_, shared_offset(builder_, shapes_, order_, non_cst_idx));
+    base_ptr = builder_.CreateGEP(ptr_, shared_offset(builder_, shapes_, perm_, order_, non_cst_idx));
     if(vector_size_ > 1){
       Type *vec_ty = VectorType::get(ty, vector_size);
       Type *vec_ptr_ty = PointerType::get(vec_ty, base_ptr->getType()->getPointerAddressSpace());
@@ -204,7 +208,7 @@ Value* shared_tile::get_value(indices_t idx) {
     }
 //    builder_.SetInsertPoint(store);
   }
-  Value *offset = shared_offset(builder_, shapes_, order_, cst_idx);
+  Value *offset = shared_offset(builder_, shapes_, perm_, order_, cst_idx);
   Value *div = offset;
   if(vector_size_ > 1)
     div = builder_.CreateUDiv(offset, builder_.getInt32(vector_size_));
@@ -725,7 +729,7 @@ void selection::create_shared_tile(ir::value *v, IRBuilder<> &builder, Value *sh
     return;
   auto order = tiles_->order(v);
   auto shapes = v->get_type()->get_tile_shapes();
-  unsigned pad = liveness_->is_ld_padded(v);
+  unsigned pad = liveness_->get_pad(v);
   if(pad > 0)
     shapes[order[0]] += pad;
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), builder.getContext());
@@ -923,7 +927,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
     write_idx.insert(write_idx.begin() + axis, lane);
 
     // shared memory write  pointer
-    Value *write_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), op_tile->get_order(), write_idx);
+    Value *write_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), {0, 1}, op_tile->get_order(), write_idx);
     Value *write_ptr = builder.CreateGEP(base_ptr, write_offset);
 
     // initialize shared memory
@@ -936,7 +940,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
       indices_t current(write_idx.size(), builder.getInt32(0));
       current[axis] = builder.getInt32(i);
       // shared memory offset
-      Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), op_tile->get_order(), current);
+      Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), {0, 1}, op_tile->get_order(), current);
       Value *is_active = builder.CreateICmpULT(lane, builder.getInt32(i));
       read_offset = builder.CreateSelect(is_active, read_offset, builder.getInt32(0));
       // shared memory read pointer
@@ -952,7 +956,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
     // result is on the first lane of shared memory
     indices_t final = write_idx;
     final[axis] = builder.getInt32(0);
-    Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), op_tile->get_order(), final);
+    Value *read_offset = shared_tile::shared_offset(builder, op_tile->get_shapes(), {0, 1}, op_tile->get_order(), final);
     Value *read_ptr = builder.CreateGEP(base_ptr, read_offset);
     tgt_->add_barrier(module, builder);
     result = builder.CreateLoad(read_ptr);
@@ -1041,11 +1045,7 @@ void selection::lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ct
 
 void selection::lower_trans(ir::trans_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
   shared_tile* in = (shared_tile*)tmap_.at(x->get_operand(0));
-  auto in_order = in->get_order();
-  std::vector<int> order;
-  for(auto p: x->get_perm())
-    order.push_back(in_order[p->get_value()]);
-  shared_tile* out = new shared_tile(in->get_ty(), in->get_shapes(), order, in->get_pointer(), builder, in->get_offset());
+  shared_tile* out = new shared_tile(in->get_ty(), in->get_shapes(), in->get_order(), in->get_pointer(), builder, in->get_offset(), x->get_perm());
   tmap_[x] = out;
 }
 
@@ -1082,8 +1082,8 @@ void selection::lower_hmma_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn
   auto ord_a = tiles_->order(dot->get_operand(0));
   auto ord_b = tiles_->order(dot->get_operand(1));
 
-  bool is_a_row = dot->is_a_trans() ^ ord_a[ord_a.size() - 2] == 1;
-  bool is_b_row = dot->is_b_trans() ^ ord_b[ord_b.size() - 2] == 1;
+  bool is_a_row = ord_a[ord_a.size() - 2] == 1;
+  bool is_b_row = ord_b[ord_b.size() - 2] == 1;
 
   if(is_a_row){
     offset_a_i = builder.CreateAdd(offset_a_i, builder.CreateURem(u_thread_id, builder.getInt32(4)));
@@ -1125,10 +1125,6 @@ void selection::lower_hmma_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn
       Value *current_offset_b_i = builder.CreateAdd(offset_b_j, builder.getInt32(pack_j*stride_rep_j*pack_size_1_));
       indices_t idx_a = {current_offset_a_i, builder.CreateAdd(offset_a_k, _K)};
       indices_t idx_b = {current_offset_b_i, builder.CreateAdd(offset_b_k, _K)};
-      if(dot->is_a_trans())
-        std::swap(idx_a[0], idx_a[1]);
-      if(!dot->is_b_trans())
-        std::swap(idx_b[0], idx_b[1]);
       idx_a.insert(idx_a.end(), x.first.begin(), x.first.end());
       idx_b.insert(idx_b.end(), x.first.begin(), x.first.end());
       Value *ha = TA->get_value(idx_a);
@@ -1188,10 +1184,6 @@ void selection::lower_scanline_dot(ir::dot_inst *dot, LLVMContext &ctx, Function
       // input indices
       indices_t a_idx = {idx[0], builder.getInt32(K)};
       indices_t b_idx = {builder.getInt32(K), idx[1]};
-      if(dot->is_a_trans())
-        std::swap(a_idx[0], a_idx[1]);
-      if(dot->is_b_trans())
-        std::swap(b_idx[0], b_idx[1]);
       // add batching dimension
       for(size_t i = 2; i < idx.size(); i++){
         a_idx.insert(a_idx.end(), idx[i]);
@@ -1217,10 +1209,8 @@ void selection::lower_outer_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *f
     Value *res = TD->get_value(idx);
     indices_t a_idx = {idx[0], builder.getInt32(0)};
     indices_t b_idx = {builder.getInt32(0), idx[1]};
-    if(dot->is_a_trans())
-      std::swap(a_idx[0], a_idx[1]);
-    if(dot->is_b_trans())
-      std::swap(b_idx[0], b_idx[1]);
+    std::swap(a_idx[0], a_idx[1]);
+    std::swap(b_idx[0], b_idx[1]);
     Value *a = TA->get_value(a_idx);
     Value *b = TB->get_value(b_idx);
     if(a->getType() != c_ty)
@@ -1243,7 +1233,7 @@ void selection::lower_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn, IRB
   Type *c_ty = llvm_type(D->get_type()->get_scalar_ty(), ctx);
   Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {c_ty});
   auto A_shapes = A->get_type()->get_tile_shapes();
-  size_t red_axis = dot->is_a_trans() ? 0 : 1;
+  size_t red_axis = 1;
   unsigned NK = A_shapes[red_axis];
 
   if(NK != 1) {
@@ -1552,8 +1542,8 @@ void selection::run(ir::module &src, Module &dst) {
             offset->addIncoming(next_offset, llvm_inc_block);
           }
           else {
-            unsigned num_bytes = phi->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
-            offset->addIncoming(dst_builder.getInt32(liveness_->num_bytes(phi)/(num_bytes)), llvm_inc_block);
+            unsigned num_bytes = inst->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
+            offset->addIncoming(dst_builder.getInt32(liveness_->get_buffer(inst)->size / (2*num_bytes)), llvm_inc_block);
           }
           ptr->addIncoming(inc_shared->get_pointer(), llvm_inc_block);
         }

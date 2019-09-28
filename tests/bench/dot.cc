@@ -27,9 +27,9 @@ inline rt::function::grid_fn_ty grid2d(size_t M, size_t N) {
 
 
 std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, int32_t N, int32_t K){
-  typedef half_float::half NumericT;
-  std::string ty = "half";
-  cublasDataType_t cuty = CUDA_R_16F;
+  typedef float NumericT;
+  std::string ty = "float";
+  cublasDataType_t cuty = CUDA_R_32F;
   size_t dt_nbytes = sizeof(NumericT);
   drv::context* context = stream->context();
   // leading dimensions
@@ -45,9 +45,9 @@ std::vector<double> do_bench(drv::stream* stream, bool AT, bool BT, int32_t M, i
   opt.defines.push_back({"TYPE", {ty}});
   opt.defines.push_back({"AT", {AT?"1":"0"}});
   opt.defines.push_back({"BT", {BT?"1":"0"}});
-  opt.defines.push_back({"TM", {"128"}});
-  opt.defines.push_back({"TN", {"128"}});
-  opt.defines.push_back({"TK", {"16"}});
+  opt.defines.push_back({"TM", {"64"}});
+  opt.defines.push_back({"TN", {"64"}});
+  opt.defines.push_back({"TK", {"8"}});
   opt.num_warps = {4};
   // create function
   rt::function function(src::dot, opt);
@@ -79,10 +79,9 @@ int main() {
   // shapes to benchmark
   typedef std::tuple<bool, bool, int, int, int> config_t;
   std::vector<config_t> configs;
-  for(auto x: std::vector<std::array<bool, 2>>{{false, true},
-                                               {true, false}, {true, true}}){
+  for(auto x: std::vector<std::array<bool, 2>>{{false, false}}){
     std::vector<config_t> tmp = {
-      config_t{x[0], x[1], 4096, 4096, 4096}
+      config_t{x[0], x[1], 2048, 2048, 2048}
 //      config_t{x[0], x[1], 16, 2048, 2048},
 //      config_t{x[0], x[1], 32, 2048, 2048},
 //      config_t{x[0], x[1], 64, 2048, 2048},
