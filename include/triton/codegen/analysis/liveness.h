@@ -49,7 +49,7 @@ struct buffer_t {
 class liveness {
 private:
   typedef std::map<ir::value*, slot_index> indices_map_t;
-  typedef std::map<buffer_t, segment>    intervals_map_t;
+  typedef std::map<buffer_t*, segment>    intervals_map_t;
   typedef std::map<ir::value*, bool>       has_storage_map_t;
   typedef ir::value* node_t;
   typedef std::map <node_t, std::set<node_t>> graph_t;
@@ -63,24 +63,26 @@ public:
 
 
 private:
-  void connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, unsigned group_id);
+  void connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, buffer_t *buffer);
   void extract_double_bufferable(ir::instruction *i);
   void extract_buffers(ir::instruction *i);
   void get_parents(ir::instruction *i, std::vector<ir::value *>& res);
   void make_graph(ir::instruction *i);
+  bool do_pad(ir::value *x);
 
 
 public:
   liveness(tiles *t): tiles_(t){ }
+  // padding
+  unsigned get_pad(ir::value *v) const { return pad_.at(v); }
   // buffer size
-  unsigned is_ld_padded(ir::value *x);
   unsigned num_bytes(ir::value *x);
   // accessors
   const intervals_map_t& intervals()  const { return intervals_; }
-  segment get_interval(buffer_t v)  const { return intervals_.at(v); }
+  segment get_interval(buffer_t* v)  const { return intervals_.at(v); }
   // buffers
-  buffer_t get_buffer(ir::value *v) const { return groups_.at(v); }
-  std::vector<ir::value*> get_values(buffer_t x) const { return values_.at(x); }
+  buffer_t* get_buffer(ir::value *v) const { return groups_.at(v); }
+  std::vector<ir::value*> get_values(buffer_t* x) const { return values_.at(x); }
   // double-buffering
   bool has_double(ir::value *x)       const { return double_.find(x) != double_.end(); }
   double_buffer_info_t get_double(ir::value *x) const { return double_.at(x); }
@@ -95,12 +97,14 @@ private:
   indices_map_t indices;
   intervals_map_t intervals_;
   std::map<ir::value*, double_buffer_info_t> double_;
+  std::map<ir::value*, size_t> pad_;
   std::map<ir::value*, std::vector<ir::value*>> parents_;
   // graph
   std::set<node_t> nodes_;
   graph_t graph_;
-  std::map<ir::value*, buffer_t> groups_;
-  std::map<buffer_t, std::vector<ir::value*>> values_;
+  std::vector<buffer_t*> buffers_;
+  std::map<ir::value*, buffer_t*> groups_;
+  std::map<buffer_t*, std::vector<ir::value*>> values_;
 };
 
 }

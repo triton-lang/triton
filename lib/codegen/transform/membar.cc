@@ -38,8 +38,8 @@ void membar::add_reference(ir::value *v, interval_vec_t &res){
     return;
   if(alloc_->has_offset(v)){
     unsigned offset = alloc_->offset(v);
-    unsigned num_bytes = liveness_->num_bytes(v);
-    res.push_back(interval_t(offset, offset + num_bytes));
+    unsigned size = liveness_->get_buffer(v)->size;
+    res.push_back(interval_t(offset, offset + size));
   }
 }
 

@@ -89,7 +89,7 @@ private:
 
 
 public:
-  shared_tile(Type* ty, const shapes_t &shapes, const std::vector<int> &order, Value* ptr, Builder &builder, Value* offset = nullptr);
+  shared_tile(Type* ty, const shapes_t &shapes, const std::vector<int> &order, Value* ptr, Builder &builder, Value* offset = nullptr, const std::vector<int>& perm = {});
   void set_vector_size(unsigned vector_size);
   void set_return_mode(bool return_vector);
   void set_value(indices_t, Value *);
@@ -97,8 +97,9 @@ public:
   Value* get_value(indices_t idx);
   Value* get_pointer() { return ptr_; }
   Value* get_offset() { return offset_; }
+  const std::vector<int>& get_perm() { return perm_; }
   const std::vector<int>& get_order() { return order_; }
-  static Value* shared_offset(Builder& builder, const shapes_t& shapes, const std::vector<int>& order, indices_t idx);
+  static Value* shared_offset(Builder& builder, const shapes_t& shapes, const std::vector<int>& perm, const std::vector<int>& order, indices_t idx);
 
 private:
   Value *ptr_;
@@ -108,6 +109,7 @@ private:
   std::map<indices_t, Value*> ptr_cache_;
   unsigned vector_size_;
   std::vector<int> order_;
+  std::vector<int> perm_;
 };
 
 // Distribtued tile

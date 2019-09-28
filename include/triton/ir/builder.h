@@ -135,7 +135,7 @@ public:
   value *create_atomic_exch(value *ptr, value *val, const std::string &name = "");
   value *create_atomic_add(value *ptr, value *val, const std::string &name = "");
   value *create_dot(value *A, value *B, value *C, const std::string &name = "");
-  value *create_trans(value *A, const std::vector<constant_int *> &perm = {}, const std::string &name = "");
+  value *create_trans(value *A, const std::vector<int> &perm = {}, const std::string &name = "");
   value *create_sqrt(value *A, const std::string &name = "");
   value *create_reduce(value *A, unsigned axis, const std::string &name = "");
   value *create_select(value *pred, value *if_value, value *else_value, const std::string &name = "");

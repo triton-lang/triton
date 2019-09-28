@@ -8,37 +8,8 @@ namespace codegen{
 namespace transform{
 
 
-inline bool is_trans(ir::value *v){
-  auto *x = dynamic_cast<ir::trans_inst*>(v);
-  if(!x)
-    return false;
-  std::vector<ir::constant_int*> perm = x->get_perm();
-  std::vector<ir::constant_int*> ref;
-  ir::type *int32_ty = ir::type::get_int32_ty(v->get_type()->get_context());
-  for(size_t i = 0; i < perm.size(); i++)
-    ref.push_back(ir::constant_int::get(int32_ty, i));
-  std::swap(ref[0], ref[1]);
-  // true is perm == ref
-  return std::equal(perm.begin(), perm.end(), ref.begin());
-}
-
-inline bool is_hmma(ir::value *v){
-  bool result = false;
-  if(auto *x = dynamic_cast<ir::dot_inst*>(v)){
-    ir::value *a = x->get_operand(0);
-    ir::type *a_ty = a->get_type();
-    ir::value *b = x->get_operand(1);
-    ir::type *b_ty = b->get_type();
-    // inputs have to be FP16
-    result = a_ty->get_scalar_ty()->is_half_ty() && b_ty->get_scalar_ty()->is_half_ty();
-//   reduction has to be multiple of 4
-//    result = result && ((a_ty->get_tile_shapes()[1]->get_value() % 4) == 0);
-  }
-  return result;
-}
-
 ir::value* rewrite_trans_phi_impl(ir::value *value, ir::builder &builder,
-                                 const std::vector<ir::constant_int*>& perm) {
+                                 const std::vector<int>& perm) {
   if(auto phi = dynamic_cast<ir::phi_node*>(value)) {
     // transpose operands
     std::vector<ir::value*> incs;
@@ -106,9 +77,7 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
     ir::value *a = dot->get_operand(0);
     ir::value *b = dot->get_operand(1);
     builder.set_insert_point(add);
-    ir::value * new_dot = builder.insert(ir::dot_inst::create(a, b, other,
-                                                              dot->is_a_trans(), dot->is_b_trans(),
-                                                              dot->get_name()));
+    ir::value * new_dot = builder.insert(ir::dot_inst::create_nn(a, b, other, dot->get_name()));
     add->replace_all_uses_with(new_dot);
     return true;
   }

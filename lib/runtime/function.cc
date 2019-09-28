@@ -229,6 +229,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   reassociate.run(module);
   dce.run(module);
   cts.run(module);
+//  ir::print(module, std::cout);
   liveness.run(module);
   allocation.run(module);
   if(allocation.allocated_size() > context->device()->max_shared_memory())

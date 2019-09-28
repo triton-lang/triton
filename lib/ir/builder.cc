@@ -322,7 +322,7 @@ value *builder::create_dot(value *A, value *B, value *C, const std::string &name
   return insert(dot_inst::create_nn(A, B, C, name));
 }
 
-value *builder::create_trans(value *A, const std::vector<ir::constant_int*>& perm, const std::string &name) {
+value *builder::create_trans(value *A, const std::vector<int>& perm, const std::string &name) {
   return insert(trans_inst::create(A, perm, name));
 }
 
