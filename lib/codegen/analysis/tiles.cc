@@ -184,6 +184,20 @@ void extract_io_use(ir::value *v, std::set<ir::io_inst*>& result) {
 }
 
 
+bool tiles::is_trans(ir::value *v) {
+  if(dynamic_cast<ir::trans_inst *>(v)) {
+    return true;
+  }
+  if(auto *phi = dynamic_cast<ir::instruction *>(v)) {
+    bool result = true;
+    for(ir::value *op: phi->ops())
+      result = result && is_trans(op);
+    return result;
+  }
+  return false;
+}
+
+
 void tiles::run(ir::module &) {
   hmma_.clear();
   largest_.clear();
@@ -220,6 +234,7 @@ void tiles::run(ir::module &) {
     largest_[i] = *std::max_element(values.begin(), values.end(), cmp);
   }
 
+
   // find out the layout ordering of a group
   for(size_t i = 0; i < num_groups; i++){
     std::set<ir::io_inst*> io;
@@ -240,13 +255,18 @@ void tiles::run(ir::module &) {
     order_[i] = order;
   }
   for(size_t i = 0; i < num_groups; i++){
-    std::vector<ir::copy_to_shared_inst*> cts;
+    std::vector<ir::dot_inst*> dots;
     for(ir::value* v: layout_->values(i))
-      if(auto *x = dynamic_cast<ir::copy_to_shared_inst*>(v))
-        cts.push_back(x);
-    if(cts.empty())
-      continue;
-    order_[i] = order(cts[0]->get_operand(0));
+      if(auto *x = dynamic_cast<ir::dot_inst*>(v))
+        dots.push_back(x);
+    for(ir::dot_inst* dot: dots){
+      ir::value* a = dot->get_operand(0);
+      ir::value* b = dot->get_operand(1);
+      std::vector<int> col = {0, 1};
+      std::vector<int> row = {1, 0};
+      order_[layout_->id(a)] = is_trans(a) ? row : col;
+      order_[layout_->id(b)] = is_trans(b) ? col : row;
+    }
   }
   // tiling parameters
   for(auto x: largest_){

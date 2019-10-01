@@ -39,6 +39,7 @@ class tiles {
 private:
   void init_hmma_tile(ir::value *i);
   void init_scanline_tile(ir::value *i);
+  bool is_trans(ir::value *i);
 
 public:
   tiles(size_t num_warps, analysis::align* align, analysis::axes* axes, analysis::layout* layout);
