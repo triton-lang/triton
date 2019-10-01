@@ -91,36 +91,46 @@ void liveness::connected_components(node_t x, std::set<node_t> &nodes, graph_t &
 
 bool liveness::do_pad(ir::value *x) {
   // alignment for matrix product
-  if(auto* dot = dynamic_cast<ir::dot_inst*>(x)) {
-    auto order = tiles_->order(x);
-    // a
-    ir::value *a = dot->get_operand(0);\
-    size_t previous_a = pad_[a];
-    bool a_trans = dynamic_cast<ir::trans_inst*>(a);
-    bool a_row = order[0] == 1;
-    if(tiles_->hmma(x) == HMMA_A_ROW)
-      pad_[a] = 16;
-    else if(tiles_->hmma(x) == HMMA_A_COL)
-      pad_[a] = 8;
-    else if(a_trans ^ a_row)
-      pad_[a] = 4;
-    else
-      pad_[a] = 0;
-    // b
-    ir::value *b = dot->get_operand(1);
-    size_t previous_b = pad_[b];
-    bool b_trans = dynamic_cast<ir::trans_inst*>(a);
-    bool b_col = order[0] == 0;
-    if(tiles_->hmma(x) == HMMA_B_COL)
-      pad_[b] = 16;
-    if(tiles_->hmma(x) == HMMA_B_ROW)
-      pad_[b] = 8;
-    if(b_trans ^ b_col)
-      pad_[b] = 4;
-    else
-      pad_[b] = 0;
-    return previous_a != pad_[a] || previous_b != pad_[b];
+//  if(auto* dot = dynamic_cast<ir::dot_inst*>(x)) {
+//    auto order = tiles_->order(x);
+//    // a
+//    ir::value *a = dot->get_operand(0);\
+//    size_t previous_a = pad_[a];
+//    bool a_trans = dynamic_cast<ir::trans_inst*>(a);
+//    bool a_row = order[0] == 0;
+//    if(tiles_->hmma(x) == HMMA_A_ROW)
+//      pad_[a] = 16;
+//    else if(tiles_->hmma(x) == HMMA_A_COL)
+//      pad_[a] = 8;
+//    else if(a_trans ^ a_row)
+//      pad_[a] = 4;
+//    else
+//      pad_[a] = 0;
+//    // b
+//    ir::value *b = dot->get_operand(1);
+//    size_t previous_b = pad_[b];
+//    bool b_trans = dynamic_cast<ir::trans_inst*>(b);
+//    bool b_col = order[0] == 0;
+//    if(tiles_->hmma(x) == HMMA_B_COL)
+//      pad_[b] = 16;
+//    if(tiles_->hmma(x) == HMMA_B_ROW)
+//      pad_[b] = 8;
+//    if(b_trans ^ b_col)
+//      pad_[b] = 4;
+//    else
+//      pad_[b] = 0;
+//    return previous_a != pad_[a] || previous_b != pad_[b];
+//  }
+  if(auto* cts = dynamic_cast<ir::copy_to_shared_inst*>(x)) {
+    auto cts_order = tiles_->order(cts);
+    ir::value *arg = cts->get_operand(0);
+    auto arg_order = tiles_->order(arg);
+    if(cts_order != arg_order)
+      pad_[cts] = 4;
   }
+//  if(auto* tr = dynamic_cast<ir::trans_inst*>(x)) {
+//    pad_[tr] = 4;
+//  }
   // padding for phi-nodes
   if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
     bool has_changed = false;
@@ -157,7 +167,6 @@ unsigned liveness::num_bytes(ir::value *x) {
   }
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;
   unsigned pad = pad_.at(x);
-  std::cout << x->get_name() << " " << pad << std::endl;
   if(pad > 0){
     unsigned ld = x->get_type()->get_tile_shapes()[tiles_->order(x)[0]];
     num_bytes += pad * num_bytes / ld;
