@@ -26,8 +26,10 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
     c += USEA @ USEB;
     pa = pa + TK * STRIDE_AK;
     pb = pb + TK * STRIDE_BK;
-    a = *pa;
-    b = *pb;
+    bool checka[SHAPE_A] = k > TK;
+    bool checkb[SHAPE_B] = k > TK;
+    a = checka ? *pa : 0;
+    b = checkb ? *pb : 0;
   }
   // epilogue
   int rxc[TM] =  ridx * TM + 0 ... TM;
