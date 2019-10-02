@@ -2,38 +2,6 @@ namespace src {
 
     const char *dot =
 R"(
-#if AT == 1
-#define USEA ^a
-#define STRIDE_AK lda
-#define STRIDE_AM 1
-#define BROADCAST_AK :, newaxis
-#define BROADCAST_AM newaxis, :
-#define SHAPE_A TK, TM
-#else
-#define USEA a
-#define STRIDE_AK 1
-#define STRIDE_AM lda
-#define BROADCAST_AK newaxis, :
-#define BROADCAST_AM :, newaxis
-#define SHAPE_A TM, TK
-#endif
-
-#if BT == 1
-#define USEB ^b
-#define STRIDE_BK 1
-#define STRIDE_BN ldb
-#define BROADCAST_BK newaxis, :
-#define BROADCAST_BN :, newaxis
-#define SHAPE_B TN, TK
-#else
-#define USEB b
-#define STRIDE_BK ldb
-#define STRIDE_BN 1
-#define BROADCAST_BK :, newaxis
-#define BROADCAST_BN newaxis, :
-#define SHAPE_B TK, TN
-#endif
-
 void dot(TYPE * A, TYPE * B, TYPE * C,
          int M, int N, int K,
          int lda __multipleof(8),
