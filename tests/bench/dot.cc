@@ -32,7 +32,7 @@ int main() {
   for(const auto& c: configs){
     std::tie(AT, BT, M, N, K) = c;
     std::cout << "// " << AT << " " << BT << " " << M << " " << N << " " << K << std::flush;
-    for(auto perf: bench_dot(stream, FLOAT, AT, BT, M, N, K))
+    for(auto perf: bench_dot(stream, HALF, AT, BT, M, N, K))
       std::cout << ", " << perf << std::flush;
     std::cout << std::endl;
   }

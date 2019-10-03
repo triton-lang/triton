@@ -254,20 +254,20 @@ void tiles::run(ir::module &) {
     }
     order_[i] = order;
   }
-  for(size_t i = 0; i < num_groups; i++){
-    std::vector<ir::dot_inst*> dots;
-    for(ir::value* v: layout_->values(i))
-      if(auto *x = dynamic_cast<ir::dot_inst*>(v))
-        dots.push_back(x);
-    for(ir::dot_inst* dot: dots){
-      ir::value* a = dot->get_operand(0);
-      ir::value* b = dot->get_operand(1);
-      std::vector<int> col = {0, 1};
-      std::vector<int> row = {1, 0};
-      order_[layout_->id(a)] = is_trans(a) ? row : col;
-      order_[layout_->id(b)] = is_trans(b) ? col : row;
-    }
-  }
+//  for(size_t i = 0; i < num_groups; i++){
+//    std::vector<ir::dot_inst*> dots;
+//    for(ir::value* v: layout_->values(i))
+//      if(auto *x = dynamic_cast<ir::dot_inst*>(v))
+//        dots.push_back(x);
+//    for(ir::dot_inst* dot: dots){
+//      ir::value* a = dot->get_operand(0);
+//      ir::value* b = dot->get_operand(1);
+//      std::vector<int> col = {0, 1};
+//      std::vector<int> row = {1, 0};
+//      order_[layout_->id(a)] = is_trans(a) ? row : col;
+//      order_[layout_->id(b)] = is_trans(b) ? col : row;
+//    }
+//  }
   // tiling parameters
   for(auto x: largest_){
     ir::value *i = x.second;
