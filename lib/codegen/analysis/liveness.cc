@@ -89,28 +89,43 @@ void liveness::connected_components(node_t x, std::set<node_t> &nodes, graph_t &
   }
 }
 
+bool is_trans(ir::value *v) {
+  if(dynamic_cast<ir::trans_inst *>(v)) {
+    return true;
+  }
+  if(auto *phi = dynamic_cast<ir::instruction *>(v)) {
+    bool result = true;
+    for(ir::value *op: phi->ops())
+      result = result && is_trans(op);
+    return result;
+  }
+  return false;
+}
+
+
 bool liveness::do_pad(ir::value *x) {
   // alignment for matrix product
   if(auto* dot = dynamic_cast<ir::dot_inst*>(x)) {
     // a
-    ir::value *a = dot->get_operand(0);\
-    size_t previous_a = pad_[a];
-    if(tiles_->hmma(a) == HMMA_A_ROW)
-      pad_[a] = 16;
-    else if(tiles_->hmma(a) == HMMA_A_COL)
-      pad_[a] = 8;
-    else
-      pad_[a] = 0;
-    // b
+    ir::value *a = dot->get_operand(0);
     ir::value *b = dot->get_operand(1);
-    size_t previous_b = pad_[b];
-    if(tiles_->hmma(b) == HMMA_B_COL)
-      pad_[b] = 16;
-    if(tiles_->hmma(b) == HMMA_B_ROW)
-      pad_[b] = 8;
-    else
-      pad_[b] = 0;
-    return previous_a != pad_[a] || previous_b != pad_[b];
+    size_t a_previous = pad_[a];
+    size_t b_previous = pad_[b];
+    auto a_order = tiles_->order(a);
+    auto b_order = tiles_->order(b);
+    bool a_row = is_trans(a) ^ (a_order[0] == 1);
+    bool b_row = is_trans(b) ^ (b_order[0] == 1);
+    auto a_shapes = a->get_type()->get_tile_shapes();
+    auto b_shapes = b->get_type()->get_tile_shapes();
+    pad_[a] = std::max<int>(pad_[a], (24 - a_shapes[a_row ? 0 : 1]) % 32);
+    pad_[b] = std::max<int>(pad_[b], (24 - b_shapes[b_row ? 1 : 0]) % 32);
+    return a_previous != pad_[a] || b_previous != pad_[b];
+  }
+  if(auto* trans = dynamic_cast<ir::trans_inst*>(x)) {
+    ir::value *op = trans->get_operand(0);
+    size_t previous = pad_[op];
+    pad_[op] = std::max(pad_[op], pad_[x]);
+    return previous != pad_[op];
   }
   if(auto* cts = dynamic_cast<ir::copy_to_shared_inst*>(x)) {
     auto cts_order = tiles_->order(cts);
@@ -118,7 +133,7 @@ bool liveness::do_pad(ir::value *x) {
     auto arg_order = tiles_->order(arg);
     size_t previous = pad_[cts];
     if(cts_order != arg_order)
-      pad_[cts] = 4;
+      pad_[cts] = std::max<int>(pad_[cts], 4);
     return pad_[cts] != previous;
   }
   // padding for phi-nodes

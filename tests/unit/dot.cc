@@ -25,7 +25,7 @@ int main() {
   for(const auto& c: configs){
     std::tie(dtype, AT, BT, M, N, K, TM, TN, TK, nwarp) = c;
     std::cout << "Testing " << c << " ... " << std::flush;
-    if(test_dot(stream, dtype, AT, BT, M, N, K, TM, TN, TK, (size_t)nwarp))
+    if(test_dot(stream, dtype, AT, BT, M, N, K, {0, 1}, {0, 1}, TM, TN, TK, (size_t)nwarp))
       std::cout << " Pass! " << std::endl;
     else{
       std::cout << " Fail! " << std::endl;

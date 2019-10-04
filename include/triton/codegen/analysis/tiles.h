@@ -27,11 +27,7 @@ class align;
 
 enum layout_t {
   SCANLINE,
-  HMMA_C,
-  HMMA_A_COL,
-  HMMA_A_ROW,
-  HMMA_B_COL,
-  HMMA_B_ROW
+  HMMA_C
 };
 
 class tiles {
