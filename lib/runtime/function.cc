@@ -239,7 +239,9 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   axes.run(module);
   layouts.run(module);
   align.run(module);
+//    ir::print(module, std::cout);
   tiles.run(module);
+//  ir::print(module, std::cout);
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));

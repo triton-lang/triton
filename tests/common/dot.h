@@ -19,7 +19,7 @@ static void cc_dot(std::vector<T> &c, const std::vector<T> &a, const std::vector
   for(size_t n = 0; n < N; n++){
     float acc = 0;
     for(size_t k = 0; k < K; k++)
-      acc = acc + (AT ? a[k*M + m] : a[m*K + k]) * (BT ? b[n*K + k] : b[k*N + n]);
+      acc = acc + (!AT ? a[k*M + m] : a[m*K + k]) * (!BT ? b[n*K + k] : b[k*N + n]);
     c[m + n*M] = static_cast<T>(acc);
   }
 }
@@ -67,6 +67,7 @@ template<class T>
 bool triton_dot(drv::stream* stream, bool AT, bool BT,
                 int32_t M, int32_t N, int32_t K,
                 int32_t TM, int32_t TN, int32_t TK, size_t nwarp,
+                const std::vector<int>& a_order, const std::vector<int>& b_order,
                 run_mode_t mode, std::vector<double>& bench, bool &test){
   std::string ty = to_string<T>::value;
   size_t dt_nbytes = sizeof(T);
@@ -74,6 +75,8 @@ bool triton_dot(drv::stream* stream, bool AT, bool BT,
   int32_t lda = AT ? K : M;
   int32_t ldb = BT ? N : K;
   int32_t ldc = M;
+  std::vector<std::string> sa = { "1", "lda" };
+  std::vector<std::string> sb = { "1", "ldb" };
 
   // inputs
   auto dc = std::shared_ptr<drv::buffer>(drv::buffer::create(context, M*N*dt_nbytes));
@@ -82,20 +85,20 @@ bool triton_dot(drv::stream* stream, bool AT, bool BT,
 
   // macros
   rt::function::options_space_t opt;
-  // B access patterns
-  opt.defines.push_back({"USEB",         {BT? "^b"         : "b"          }});
-  opt.defines.push_back({"BROADCAST_BK", {BT? "newaxis, :" : ":, newaxis" }});
-  opt.defines.push_back({"BROADCAST_BN", {BT? ":, newaxis" : "newaxis, :" }});
-  opt.defines.push_back({"SHAPE_B",      {BT? "TN, TK"     : "TK, TN"     }});
-  opt.defines.push_back({"STRIDE_BK",    {BT? "1"          : "ldb"        }});
-  opt.defines.push_back({"STRIDE_BN",    {BT? "ldb"        : "1"          }});
   // A access patterns
-  opt.defines.push_back({"USEA",         {AT? "^a"         : "a"          }});
-  opt.defines.push_back({"BROADCAST_AK", {AT? ":, newaxis" : "newaxis, :" }});
-  opt.defines.push_back({"BROADCAST_AM", {AT? "newaxis, :" : ":, newaxis" }});
-  opt.defines.push_back({"SHAPE_A",      {AT? "TK, TM"     : "TM, TK"     }});
-  opt.defines.push_back({"STRIDE_AK",    {AT? "lda"        : "1"          }});
-  opt.defines.push_back({"STRIDE_AM",    {AT? "1"          : "lda"        }});
+  opt.defines.push_back({"USEA",         {AT? "^a"           : "a"            }});
+  opt.defines.push_back({"BROADCAST_AK", {AT? ":, newaxis"   : "newaxis, :"   }});
+  opt.defines.push_back({"BROADCAST_AM", {AT? "newaxis, :"   : ":, newaxis"   }});
+  opt.defines.push_back({"SHAPE_A",      {AT? "TK, TM"       : "TM, TK"       }});
+  opt.defines.push_back({"STRIDE_AK",    {AT? sa[a_order[0]] : sa[a_order[1]] }});
+  opt.defines.push_back({"STRIDE_AM",    {AT? sa[a_order[1]] : sa[a_order[0]] }});
+  // B access patterns
+  opt.defines.push_back({"USEB",         {BT? "^b"           : "b"            }});
+  opt.defines.push_back({"BROADCAST_BK", {BT? "newaxis, :"   : ":, newaxis"   }});
+  opt.defines.push_back({"BROADCAST_BN", {BT? ":, newaxis"   : "newaxis, :"   }});
+  opt.defines.push_back({"SHAPE_B",      {BT? "TN, TK"       : "TK, TN"       }});
+  opt.defines.push_back({"STRIDE_BK",    {BT? sb[b_order[1]] : sb[b_order[0]] }});
+  opt.defines.push_back({"STRIDE_BN",    {BT? sb[b_order[0]] : sb[b_order[1]] }});
   // data-type
   opt.defines.push_back({"TYPE", {ty}});
   // tile sizes
@@ -164,13 +167,14 @@ bool triton_dot(drv::stream* stream, bool AT, bool BT,
 
 std::vector<double> bench_dot(drv::stream* stream,
                dtype_t dtype, bool AT, bool BT,
-               int32_t M, int32_t N, int32_t K) {
+               int32_t M, int32_t N, int32_t K,
+               const std::vector<int>& a_order, const std::vector<int>& b_order) {
   std::vector<double> bench;
   bool test;
   switch(dtype){
-    case HALF:   triton_dot<half_float::half>(stream, AT, BT, M, N, K, 0, 0, 0, 0, BENCH, bench, test); break;
-    case FLOAT:  triton_dot<float>(stream, AT, BT, M, N, K, 0, 0, 0, 0, BENCH, bench, test); break;
-    case DOUBLE: triton_dot<double>(stream, AT, BT, M, N, K, 0, 0, 0, 0, BENCH, bench, test); break;
+    case HALF:   triton_dot<half_float::half>(stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
+    case FLOAT:  triton_dot<float>(stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
+    case DOUBLE: triton_dot<double>(stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
     default: break;
   }
   return bench;
@@ -178,13 +182,14 @@ std::vector<double> bench_dot(drv::stream* stream,
 bool test_dot(drv::stream* stream,
               dtype_t dtype, bool AT, bool BT,
               int32_t M, int32_t N, int32_t K,
+              const std::vector<int>& a_order, const std::vector<int>& b_order,
               int32_t TM, int32_t TN, int32_t TK, size_t nwarp) {
   std::vector<double> bench;
   bool test = false;
   switch(dtype){
-    case HALF:   triton_dot<half_float::half>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, TEST, bench, test); break;
-    case FLOAT:  triton_dot<float>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, TEST, bench, test); break;
-    case DOUBLE: triton_dot<double>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, TEST, bench, test); break;
+    case HALF:   triton_dot<half_float::half>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
+    case FLOAT:  triton_dot<float>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
+    case DOUBLE: triton_dot<double>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
     default: break;
   }
   return test;

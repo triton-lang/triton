@@ -215,15 +215,7 @@ void tiles::run(ir::module &) {
   for(size_t i = 0; i < num_groups; i++) {
     const auto& values = layout_->values(i);
     bool hmma_c = std::any_of(values.begin(), values.end(), &is_hmma_c);
-    bool hmma_a_col = std::any_of(values.begin(), values.end(), &is_hmma_a_col);
-    bool hmma_a_row = std::any_of(values.begin(), values.end(), &is_hmma_a_row);
-    bool hmma_b_col = std::any_of(values.begin(), values.end(), &is_hmma_b_col);
-    bool hmma_b_row = std::any_of(values.begin(), values.end(), &is_hmma_b_row);
     if(hmma_c)          hmma_[i] = HMMA_C;
-    else if(hmma_a_col) hmma_[i] = HMMA_A_COL;
-    else if(hmma_a_row) hmma_[i] = HMMA_A_ROW;
-    else if(hmma_b_col) hmma_[i] = HMMA_B_COL;
-    else if(hmma_b_row) hmma_[i] = HMMA_B_ROW;
     else                hmma_[i] = SCANLINE;
 
   }
@@ -254,20 +246,33 @@ void tiles::run(ir::module &) {
     }
     order_[i] = order;
   }
-//  for(size_t i = 0; i < num_groups; i++){
-//    std::vector<ir::dot_inst*> dots;
-//    for(ir::value* v: layout_->values(i))
-//      if(auto *x = dynamic_cast<ir::dot_inst*>(v))
-//        dots.push_back(x);
-//    for(ir::dot_inst* dot: dots){
-//      ir::value* a = dot->get_operand(0);
-//      ir::value* b = dot->get_operand(1);
-//      std::vector<int> col = {0, 1};
-//      std::vector<int> row = {1, 0};
-//      order_[layout_->id(a)] = is_trans(a) ? row : col;
-//      order_[layout_->id(b)] = is_trans(b) ? col : row;
-//    }
-//  }
+  // matrix multiplication optimizations
+  for(size_t i = 0; i < num_groups; i++){
+    std::vector<ir::dot_inst*> dots;
+    for(ir::value* v: layout_->values(i))
+      if(auto *x = dynamic_cast<ir::dot_inst*>(v))
+        dots.push_back(x);
+    for(ir::dot_inst* dot: dots){
+      ir::value* a = dot->get_operand(0);
+      ir::value* b = dot->get_operand(1);
+      if(hmma_.at(layout_->id(dot)) == HMMA_C){
+        auto a_val = layout_->values(layout_->id(a));
+        auto b_val = layout_->values(layout_->id(b));
+        for(ir::value *v: a_val)
+          if(auto *cts = dynamic_cast<ir::copy_to_shared_inst*>(v))
+            order_[layout_->id(a)] = order_[layout_->id(cts->get_operand(0))];
+        for(ir::value *v: b_val)
+          if(auto *cts = dynamic_cast<ir::copy_to_shared_inst*>(v))
+            order_[layout_->id(b)] = order_[layout_->id(cts->get_operand(0))];
+      }
+      else{
+        std::vector<int> col = {0, 1};
+        std::vector<int> row = {1, 0};
+        order_[layout_->id(a)] = is_trans(a) ? row : col;
+        order_[layout_->id(b)] = is_trans(b) ? col : row;
+      }
+    }
+  }
   // tiling parameters
   for(auto x: largest_){
     ir::value *i = x.second;
