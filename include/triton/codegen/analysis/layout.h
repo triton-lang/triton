@@ -5,6 +5,7 @@
 #include <set>
 #include <vector>
 #include <memory>
+#include "triton/tools/graph.h"
 
 namespace triton{
 
@@ -27,29 +28,24 @@ private:
   // graph creation
   void connect(ir::value *x, ir::value *y);
   void make_graph(ir::instruction *i);
-  // connected components
-  void connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, unsigned id);
   // list the axes of the given value
   std::set<int> axes_of(ir::value *value);
 
 public:
   // constructor
   layout(analysis::axes *axes);
-  // run the passes
+  // accessors
+  unsigned layout_of(ir::value *value) const;
+  const std::vector<ir::value*>& values_of(unsigned id) const;
+  size_t num_layouts() const;
+  // execution
   void run(ir::module &mod);
-  // get the layout ID of the given value
-  unsigned id(ir::value *value) const;
-  // get the values associates with the given ID
-  const std::vector<ir::value*>& values(unsigned id) const;
-  // get number of groups
-  size_t get_num_groups() const;
 
 private:
   analysis::axes* axes_;
-  graph_t dependencies_;
-  std::set<node_t> nodes_;
-  std::map<ir::value*, unsigned> groups_;
-  std::map<unsigned, std::vector<ir::value*>> values_;
+  tools::graph<ir::value*> graph_;
+  std::map<ir::value*, size_t> groups_;
+  std::map<size_t, std::vector<ir::value*>> values_;
 };
 
 }

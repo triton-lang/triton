@@ -53,42 +53,20 @@ void liveness::extract_double_bufferable(ir::instruction *i) {
 void liveness::make_graph(ir::instruction *i) {
   if(has_double(i)){
     ir::value *latch = double_[i].latch;
-    nodes_.insert(i);
-    nodes_.insert(latch);
-    graph_[i].insert(latch);
-    graph_[latch].insert(i);
+    graph_.add_edge(i, latch);
   }
-  if(i->get_id() == ir::INST_PHI){
-    ir::phi_node* phi = (ir::phi_node*)i;
-    for(ir::value* op: phi->ops()){
+  if(storage_info.at(i->get_id()).first == SHARED){
+    graph_.add_edge(i, i);
+    for(ir::value* op: i->ops()){
       auto* iop = dynamic_cast<ir::instruction*>(op);
       if(!iop || storage_info.at(iop->get_id()).first != SHARED)
         continue;
-      nodes_.insert(phi);
-      nodes_.insert(op);
-      graph_[phi].insert(op);
-      graph_[op].insert(phi);
+      graph_.add_edge(i, op);
     }
-  }
-  if(i->get_id() == ir::INST_TRANS){
-    nodes_.insert(i);
-    nodes_.insert(i->get_operand(0));
-    graph_[i].insert(i->get_operand(0));
-    graph_[i->get_operand(0)].insert(i);
   }
 }
 
 // connected components
-void liveness::connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, buffer_t* buffer) {
-  groups_[x] = buffer;
-  values_[buffer].push_back(x);
-  if(nodes.find(x) != nodes.end()){
-    nodes.erase(x);
-    for(const node_t &y: graph[x])
-      connected_components(y, nodes, graph, buffer);
-  }
-}
-
 bool is_trans(ir::value *v) {
   if(dynamic_cast<ir::trans_inst *>(v)) {
     return true;
@@ -121,12 +99,14 @@ bool liveness::do_pad(ir::value *x) {
     pad_[b] = std::max<int>(pad_[b], (24 - b_shapes[b_row ? 1 : 0]) % 32);
     return a_previous != pad_[a] || b_previous != pad_[b];
   }
+  // padding for trans
   if(auto* trans = dynamic_cast<ir::trans_inst*>(x)) {
     ir::value *op = trans->get_operand(0);
     size_t previous = pad_[op];
     pad_[op] = std::max(pad_[op], pad_[x]);
     return previous != pad_[op];
   }
+  // padding for copy to shared
   if(auto* cts = dynamic_cast<ir::copy_to_shared_inst*>(x)) {
     auto cts_order = tiles_->order(cts);
     ir::value *arg = cts->get_operand(0);
@@ -187,7 +167,7 @@ void liveness::run(ir::module &mod) {
   indices.clear();
   pad_.clear();
   intervals_.clear();
-  parents_.clear();
+  graph_.clear();
 
   // Create set of pair of values that can be double-buffered
   ir::for_each_instruction(mod, [this](ir::instruction* i) {
@@ -209,12 +189,16 @@ void liveness::run(ir::module &mod) {
   });
 
   // connected components
-  unsigned group_id = 0;
-  while(!nodes_.empty()){
-    buffer_t* buffer = new buffer_t{group_id++};
-    connected_components(*nodes_.begin(), nodes_, graph_, buffer);
-    for(ir::value *v: values_.at(buffer))
+  tools::graph<node_t>::cmap_t cmap;
+  tools::graph<node_t>::nmap_t nmap;
+  graph_.connected_components(&cmap, &nmap);
+  for(auto x: cmap) {
+    buffer_t* buffer = new buffer_t{x.first};
+    values_[buffer] = x.second;
+    for(ir::value *v: x.second){
       buffer->size = std::max<int>(buffer->size, num_bytes(v));
+      groups_[v] = buffer;
+    }
   }
 
   // Assigns index to each instruction
@@ -244,6 +228,8 @@ void liveness::run(ir::module &mod) {
     }
     intervals_[x.first] = segment{start, end};
   }
+
+
 
 }
 

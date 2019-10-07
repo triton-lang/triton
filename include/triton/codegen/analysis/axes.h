@@ -5,6 +5,7 @@
 #include <set>
 #include <vector>
 #include <memory>
+#include "triton/tools/graph.h"
 
 namespace triton{
 
@@ -19,10 +20,8 @@ namespace analysis{
 
 class axes {
   typedef std::pair<ir::value*, unsigned> node_t;
-  typedef std::map <node_t, std::set<node_t>> graph_t;
 
 private:
-  void add_constraint(node_t x, node_t y);
   // update graph
   void update_graph_store(ir::instruction *i);
   void update_graph_reduce(ir::instruction *i);
@@ -32,21 +31,15 @@ private:
   void update_graph_dot(ir::instruction *i);
   void update_graph_elementwise(ir::instruction *i);
   void update_graph(ir::instruction *i);
-  // connected components
-  void connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, unsigned group_id);
 
 public:
   axes();
   void run(ir::module &mod);
-  unsigned get_id(ir::value *value, unsigned ax);
-  bool has_id(ir::value *value, unsigned ax);
+  unsigned get_id(ir::value *value, unsigned dim);
 
 private:
-  // constraints graph
-  graph_t dependencies_;
-  std::set<node_t> nodes_;
-  // parameter groups
-  std::map<ir::value*, std::map<unsigned, unsigned>> groups_;
+  tools::graph<node_t> graph_;
+  std::map<node_t, size_t> axes_;
 };
 
 }

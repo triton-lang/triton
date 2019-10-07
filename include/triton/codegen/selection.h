@@ -211,10 +211,10 @@ private:
 public:
   selection(analysis::liveness* liveness, analysis::allocation *alloc, analysis::tiles *tiles,
             analysis::align *alignment, analysis::axes *axes,
-            analysis::layout *layouts, transform::coalesce* reorder, target *tgt, unsigned num_warps)
+            analysis::layout *layouts, target *tgt, unsigned num_warps)
     : liveness_(liveness), alloc_(alloc), tiles_(tiles),
       alignment_(alignment), a_axes_(axes), layouts_(layouts),
-      reorder_(reorder), tgt_(tgt), num_warps_(num_warps){ }
+      tgt_(tgt), num_warps_(num_warps){ }
 
   void run(ir::module &src, Module &dst);
 
@@ -227,7 +227,6 @@ private:
   analysis::axes *a_axes_;
   analysis::layout *layouts_;
   analysis::align *alignment_;
-  transform::coalesce *reorder_;
   target *tgt_;
   std::map<unsigned, distributed_axis> axes_;
   Value *sh_mem_ptr_;

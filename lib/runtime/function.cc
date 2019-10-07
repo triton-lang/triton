@@ -200,11 +200,9 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   llvm::LLVMContext ctx;
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
   // create passes
-  codegen::transform::cts cts;
   codegen::analysis::align align;
   codegen::analysis::axes axes;
   codegen::analysis::layout layouts(&axes);
-  codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::analysis::tiles tiles(opt.num_warps, &align, &axes, &layouts);
   codegen::analysis::liveness liveness(&tiles);
   codegen::analysis::allocation allocation(&liveness, &tiles);
@@ -212,11 +210,12 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&align);
-  codegen::selection selection(&liveness, &allocation, &tiles, &align, &axes, &layouts, &coalesce, target.get(), opt.num_warps);
+  codegen::transform::coalesce coalesce(&align, &layouts);
+  codegen::transform::cts cts;
+  codegen::selection selection(&liveness, &allocation, &tiles, &align, &axes, &layouts, target.get(), opt.num_warps);
   // run passes
   peephole.run(module);
   dce.run(module);
-//  ir::print(module, std::cout);
   align.run(module);
   cts.run(module);
   axes.run(module);
@@ -225,11 +224,15 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   align.run(module);
   dce.run(module);
-  tiles.run(module);
   reassociate.run(module);
+//  ir::print(module, std::cout);
+//  exit(EXIT_FAILURE);
   dce.run(module);
   cts.run(module);
-//  ir::print(module, std::cout);
+  align.run(module);
+  axes.run(module);
+  layouts.run(module);
+  tiles.run(module);
   liveness.run(module);
   allocation.run(module);
   if(allocation.allocated_size() > context->device()->max_shared_memory())
@@ -238,10 +241,9 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   axes.run(module);
   layouts.run(module);
-  align.run(module);
-//    ir::print(module, std::cout);
-  tiles.run(module);
 //  ir::print(module, std::cout);
+  align.run(module);
+  tiles.run(module);
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));

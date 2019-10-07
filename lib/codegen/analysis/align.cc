@@ -270,9 +270,9 @@ std::vector<unsigned> align::populate_max_contiguous_binop(ir::binary_operator* 
     }
     if(x->is_int_add_sub()){
       unsigned lvalue = 1, rvalue = 1;
-      if(lhs_cst_info[d].num_cst)
+      if(lhs_cst_info[d].num_cst > 0)
         lvalue = gcd(rhs_max_contiguous[d], lhs_cst_info[d].num_cst);
-      if(rhs_cst_info[d].num_cst)
+      if(rhs_cst_info[d].num_cst > 0)
         rvalue = gcd(lhs_max_contiguous[d], rhs_cst_info[d].num_cst);
       value = std::max(lvalue, rvalue);
     }

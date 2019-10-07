@@ -16,22 +16,6 @@ namespace analysis{
 
 axes::axes() {}
 
-void axes::add_constraint(node_t x, node_t y) {
-  size_t shape_x = 1;
-  size_t shape_y = 1;
-  if(x.first->get_type()->is_tile_ty())
-    shape_x = x.first->get_type()->get_tile_shapes()[x.second];
-  if(y.first->get_type()->is_tile_ty())
-    shape_y = y.first->get_type()->get_tile_shapes()[y.second];
-  if(shape_x == 1 && shape_y == 1)
-    return;
-  dependencies_[x].insert(y);
-  dependencies_[y].insert(x);
-  nodes_.insert(x);
-  nodes_.insert(y);
-}
-
-
 void axes::update_graph_reduce(ir::instruction *i) {
   auto* red = static_cast<ir::reduce_inst*>(i);
   unsigned axis = red->get_axis();
@@ -41,7 +25,7 @@ void axes::update_graph_reduce(ir::instruction *i) {
   for(unsigned d = 0; d < in_shapes.size(); d++){
     if(d == axis)
       continue;
-    add_constraint({i, current++}, {arg, d});
+    graph_.add_edge({i, current++}, {arg, d});
   }
 }
 
@@ -59,9 +43,9 @@ void axes::update_graph_reshape(ir::instruction *i) {
     bool same_shape = res_shapes[d] == op_shapes[current];
     // either add edge between axis or just add a node in the graph
     if(!is_skewed && same_shape)
-      add_constraint({i, d}, {op, current++});
+      graph_.add_edge({i, d}, {op, current++});
     else
-      add_constraint({i, d}, {i, d});
+      graph_.add_edge({i, d}, {i, d});
     // reshaping is skewed
     if(res_shapes[d] > 1 && !same_shape)
       is_skewed = true;
@@ -74,7 +58,7 @@ void axes::update_graph_trans(ir::instruction *i) {
   auto perm = trans->get_perm();
   // add edge between axis perm[d] and axis d
   for(unsigned d = 0; d < perm.size(); d++)
-    add_constraint({i, perm[d]}, {op, d});
+    graph_.add_edge({i, perm[d]}, {op, d});
 }
 
 void axes::update_graph_broadcast(ir::instruction *i) {
@@ -86,7 +70,7 @@ void axes::update_graph_broadcast(ir::instruction *i) {
   // add edge between non-broadcast axes
   for(unsigned d = 0; d < shapes.size(); d ++)
     if(op_shapes[d] == shapes[d])
-      add_constraint({i, d}, {op, d});
+      graph_.add_edge({i, d}, {op, d});
 }
 
 void axes::update_graph_dot(ir::instruction *i) {
@@ -97,11 +81,11 @@ void axes::update_graph_dot(ir::instruction *i) {
   ir::value *D = dot->get_operand(2);
   // add edges between result and accumulator
   for(unsigned d = 0; d < shapes.size(); d++)
-    add_constraint({dot, d}, {D, d});
+    graph_.add_edge({dot, d}, {D, d});
   // add edge for batch dimension
   for(unsigned d = 2; d < shapes.size(); d++){
-    add_constraint({dot, d}, {A, d});
-    add_constraint({dot, d}, {B, d});
+    graph_.add_edge({dot, d}, {A, d});
+    graph_.add_edge({dot, d}, {B, d});
   }
 }
 
@@ -116,8 +100,8 @@ void axes::update_graph_elementwise(ir::instruction *i) {
   for(ir::value* opx: i->ops())
   for(ir::value* opy: i->ops()){
     if(!i->get_type()->is_void_ty())
-      add_constraint({i, d}, {opx, d});
-    add_constraint({opx, d}, {opy, d});
+      graph_.add_edge({i, d}, {opx, d});
+    graph_.add_edge({opx, d}, {opy, d});
   }
 }
 
@@ -136,41 +120,19 @@ void axes::update_graph(ir::instruction *i) {
   return;
 }
 
-void axes::connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, unsigned group_id) {
-  groups_[x.first].insert({x.second, group_id});
-  if(nodes.find(x) != nodes.end()){
-    nodes.erase(x);
-    for(const node_t &y: graph[x])
-      connected_components(y, nodes, graph, group_id);
-  }
-}
 
-unsigned axes::get_id(ir::value *value, unsigned ax) {
-  unsigned result = groups_.at(value).at(ax);
-  return result;
+unsigned axes::get_id(ir::value *value, unsigned dim) {
+  return axes_.at({value, dim});
 }
-
-bool axes::has_id(ir::value *value, unsigned ax) {
-  auto it = groups_.find(value);
-  if(it == groups_.end())
-    return false;
-  auto iit = it->second.find(ax);
-  if(iit == it->second.end())
-    return false;
-  return true;
-}
-
 
 void axes::run(ir::module &mod) {
-  nodes_.clear();
-  dependencies_.clear();
-  groups_.clear();
   // make graph
-  ir::for_each_instruction(mod, [this](ir::instruction *x) { update_graph(x); });
-  // connected components
-  unsigned group_id = 0;
-  while(!nodes_.empty())
-    connected_components(*nodes_.begin(), nodes_, dependencies_, group_id++);
+  graph_.clear();
+  ir::for_each_instruction(mod, [this](ir::instruction *x) {
+    update_graph(x);
+  });
+  // find connected components
+  graph_.connected_components(nullptr, &axes_);
 }
 
 }

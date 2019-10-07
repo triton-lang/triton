@@ -269,7 +269,10 @@ void reassociate::run(ir::module &mod) {
             it++;
             builder.set_insert_point(*it);
           }
-          ir::value *neg_off = builder.create_neg(off);
+          ir::value *_0 = builder.get_int32(0);
+          if(off->get_type()->is_tile_ty())
+            _0 = builder.create_splat(_0, off->get_type()->get_tile_shapes());
+          ir::value *neg_off = builder.create_sub(_0, off);
           ir::value *pz_dyn = builder.create_gep(pz, {neg_off});
           phi_dyn->add_incoming(pz_dyn, phi->get_incoming_block(idx_z));
           infos[phi_sta].dyn_ptr = phi_dyn;

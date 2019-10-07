@@ -67,10 +67,10 @@ ir::value* coalesce::rematerialize(ir::value *x, ir::builder &builder,
 
 void coalesce::run(ir::module &mod) {
   // find values to rematerialize
-  size_t num_groups = layout_->get_num_groups();
+  size_t num_groups = layout_->num_layouts();
   std::vector<ir::io_inst*> remat;
   for(size_t id = 0; id < num_groups; id++) {
-    const auto& values = layout_->values(id);
+    const auto& values = layout_->values_of(id);
     // extract pointers used in ld/st operations
     std::set<ir::io_inst*> io;
     for(ir::value *v: values)
