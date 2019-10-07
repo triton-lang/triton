@@ -74,7 +74,7 @@ bool is_hmma_b_row(ir::value* v) {
 
 
 layout_t tiles::hmma(ir::value *value) {
-  return hmma_.at(layout_->id(value));
+  return hmma_.at(layout_->layout_of(value));
 }
 
 int tiles::mts(ir::value *value, unsigned ax) {
@@ -94,7 +94,7 @@ int tiles::wpt(ir::value *value, unsigned ax) {
 }
 
 std::vector<int> tiles::order(ir::value *v) {
-  auto ret = order_[layout_->id(v)];
+  auto ret = order_[layout_->layout_of(v)];
   return ret;
 }
 
@@ -201,7 +201,9 @@ bool tiles::is_trans(ir::value *v) {
 void tiles::run(ir::module &) {
   hmma_.clear();
   largest_.clear();
-  size_t num_groups = layout_->get_num_groups();
+  order_.clear();
+
+  size_t num_groups = layout_->num_layouts();
   // helpers
   auto rank = [](ir::value* v) {
     ir::type *ty = v->get_type();
@@ -213,7 +215,7 @@ void tiles::run(ir::module &) {
   };
   // find out which groups require hmma layout
   for(size_t i = 0; i < num_groups; i++) {
-    const auto& values = layout_->values(i);
+    const auto& values = layout_->values_of(i);
     bool hmma_c = std::any_of(values.begin(), values.end(), &is_hmma_c);
     if(hmma_c)          hmma_[i] = HMMA_C;
     else                hmma_[i] = SCANLINE;
@@ -221,7 +223,7 @@ void tiles::run(ir::module &) {
   }
   // find out which value is the largest in each group
   for(size_t i = 0; i < num_groups; i++) {
-    const auto& values = layout_->values(i);
+    const auto& values = layout_->values_of(i);
     auto cmp = [&rank](ir::value* x, ir::value *y) { return rank(x) < rank(y); };
     largest_[i] = *std::max_element(values.begin(), values.end(), cmp);
   }
@@ -230,7 +232,7 @@ void tiles::run(ir::module &) {
   // find out the layout ordering of a group
   for(size_t i = 0; i < num_groups; i++){
     std::set<ir::io_inst*> io;
-    for(ir::value* v: layout_->values(i))
+    for(ir::value* v: layout_->values_of(i))
       extract_io_use(v, io);
     auto cmp = [&rank](ir::io_inst* x, ir::io_inst *y) {
       return rank(x->get_pointer_operand()) < rank(y->get_pointer_operand());
@@ -249,27 +251,27 @@ void tiles::run(ir::module &) {
   // matrix multiplication optimizations
   for(size_t i = 0; i < num_groups; i++){
     std::vector<ir::dot_inst*> dots;
-    for(ir::value* v: layout_->values(i))
+    for(ir::value* v: layout_->values_of(i))
       if(auto *x = dynamic_cast<ir::dot_inst*>(v))
         dots.push_back(x);
     for(ir::dot_inst* dot: dots){
       ir::value* a = dot->get_operand(0);
       ir::value* b = dot->get_operand(1);
-      if(hmma_.at(layout_->id(dot)) == HMMA_C){
-        auto a_val = layout_->values(layout_->id(a));
-        auto b_val = layout_->values(layout_->id(b));
+      if(hmma_.at(layout_->layout_of(dot)) == HMMA_C){
+        auto a_val = layout_->values_of(layout_->layout_of(a));
+        auto b_val = layout_->values_of(layout_->layout_of(b));
         for(ir::value *v: a_val)
           if(auto *cts = dynamic_cast<ir::copy_to_shared_inst*>(v))
-            order_[layout_->id(a)] = order_[layout_->id(cts->get_operand(0))];
+            order_[layout_->layout_of(a)] = order_[layout_->layout_of(cts->get_operand(0))];
         for(ir::value *v: b_val)
           if(auto *cts = dynamic_cast<ir::copy_to_shared_inst*>(v))
-            order_[layout_->id(b)] = order_[layout_->id(cts->get_operand(0))];
+            order_[layout_->layout_of(b)] = order_[layout_->layout_of(cts->get_operand(0))];
       }
       else{
         std::vector<int> col = {0, 1};
         std::vector<int> row = {1, 0};
-        order_[layout_->id(a)] = is_trans(a) ? row : col;
-        order_[layout_->id(b)] = is_trans(b) ? col : row;
+        order_[layout_->layout_of(a)] = is_trans(a) ? row : col;
+        order_[layout_->layout_of(b)] = is_trans(b) ? col : row;
       }
     }
   }

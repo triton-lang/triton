@@ -21,20 +21,8 @@ std::set<int> layout::axes_of(ir::value *value) {
   // create result
   std::set<int> result;
   for(size_t d = 0; d < rank; d++)
-    if(axes_->has_id(value, d))
-      result.insert(axes_->get_id(value, d));
+    result.insert(axes_->get_id(value, d));
   return result;
-}
-
-// connected components
-void layout::connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, unsigned group_id) {
-  groups_[x] = group_id;
-  values_[group_id].push_back(x);
-  if(nodes.find(x) != nodes.end()){
-    nodes.erase(x);
-    for(const node_t &y: graph[x])
-      connected_components(y, nodes, graph, group_id);
-  }
 }
 
 // constructor
@@ -42,15 +30,15 @@ layout::layout(analysis::axes *axes)
   : axes_(axes) { }
 
 // get group id
-unsigned layout::id(ir::value *value) const
+unsigned layout::layout_of(ir::value *value) const
 { return groups_.at(value); }
 
 // get values
-const std::vector<ir::value*>& layout::values(unsigned id) const
+const std::vector<ir::value*>& layout::values_of(unsigned id) const
 { return values_.at(id); }
 
 // get number of groups
-size_t layout::get_num_groups() const
+size_t layout::num_layouts() const
 { return values_.size(); }
 
 // connect two values
@@ -67,12 +55,8 @@ void layout::connect(ir::value *x, ir::value *y) {
   std::set_intersection(x_axes.begin(), x_axes.end(),
                         y_axes.begin(), y_axes.end(),
                         std::inserter(common, common.begin()));
-  if(!common.empty()){
-    nodes_.insert(x);
-    nodes_.insert(y);
-    dependencies_[x].insert(y);
-    dependencies_[y].insert(x);
-  }
+  if(!common.empty())
+    graph_.add_edge(x, y);
 }
 
 // make graph
@@ -84,19 +68,16 @@ void layout::make_graph(ir::instruction *i) {
   }
 }
 
-// run
 void layout::run(ir::module &mod) {
-  nodes_.clear();
-  dependencies_.clear();
-  groups_.clear();
-  values_.clear();
   // make graph
-  ir::for_each_instruction(mod, [this](ir::instruction* i) { make_graph(i); });
+  graph_.clear();
+  ir::for_each_instruction(mod, [this](ir::instruction* i) {
+    make_graph(i);
+  });
   // connected components
-  unsigned group_id = 0;
-  while(!nodes_.empty()){
-    connected_components(*nodes_.begin(), nodes_, dependencies_, group_id++);
-  }
+  values_.clear();
+  groups_.clear();
+  graph_.connected_components(&values_, &groups_);
 }
 
 }

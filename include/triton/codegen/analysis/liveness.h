@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include "triton/tools/graph.h"
 
 namespace triton{
 
@@ -41,7 +42,7 @@ struct double_buffer_info_t {
 };
 
 struct buffer_t {
-  unsigned id;
+  size_t id;
   size_t size;
   bool operator<(buffer_t other) const { return id < other.id; }
 };
@@ -63,7 +64,6 @@ public:
 
 
 private:
-  void connected_components(node_t x, std::set<node_t> &nodes, graph_t &graph, buffer_t *buffer);
   void extract_double_bufferable(ir::instruction *i);
   void extract_buffers(ir::instruction *i);
   void get_parents(ir::instruction *i, std::vector<ir::value *>& res);
@@ -98,11 +98,8 @@ private:
   intervals_map_t intervals_;
   std::map<ir::value*, double_buffer_info_t> double_;
   std::map<ir::value*, size_t> pad_;
-  std::map<ir::value*, std::vector<ir::value*>> parents_;
-  // graph
-  std::set<node_t> nodes_;
-  graph_t graph_;
-  std::vector<buffer_t*> buffers_;
+  // buffers
+  tools::graph<node_t> graph_;
   std::map<ir::value*, buffer_t*> groups_;
   std::map<buffer_t*, std::vector<ir::value*>> values_;
 };
