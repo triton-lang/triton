@@ -206,21 +206,20 @@ void tiles::run(ir::module &) {
   size_t num_groups = layout_->num_layouts();
   // helpers
   auto rank = [](ir::value* v) {
-    ir::type *ty = v->get_type();
-    size_t ret = 0;
-    if(ty->is_tile_ty())
-      for(int s: ty->get_tile_shapes())
-        ret += s > 1;
+    int ret = 0;
+    for(int s: v->get_type()->get_tile_shapes())
+      ret += s > 1;
     return ret;
   };
+
   // find out which groups require hmma layout
   for(size_t i = 0; i < num_groups; i++) {
     const auto& values = layout_->values_of(i);
     bool hmma_c = std::any_of(values.begin(), values.end(), &is_hmma_c);
     if(hmma_c)          hmma_[i] = HMMA_C;
     else                hmma_[i] = SCANLINE;
-
   }
+
   // find out which value is the largest in each group
   for(size_t i = 0; i < num_groups; i++) {
     const auto& values = layout_->values_of(i);
