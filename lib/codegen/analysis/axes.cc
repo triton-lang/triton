@@ -121,8 +121,15 @@ void axes::update_graph(ir::instruction *i) {
 }
 
 
-unsigned axes::get_id(ir::value *value, unsigned dim) {
+int axes::get(ir::value *value, unsigned dim) {
   return axes_.at({value, dim});
+}
+
+std::vector<int> axes::get(ir::value *value) {
+  std::vector<int> result;
+  for(size_t d = 0; d < value->get_type()->get_tile_rank(); d++)
+    result.push_back(this->get(value, d));
+  return result;
 }
 
 void axes::run(ir::module &mod) {

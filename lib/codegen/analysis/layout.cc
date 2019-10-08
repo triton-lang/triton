@@ -11,20 +11,6 @@ namespace codegen{
 namespace analysis{
 
 
-// axes
-std::set<int> layout::axes_of(ir::value *value) {
-  auto ty = value->get_type();
-  // rank of value
-  size_t rank = 0;
-  if(ty->is_tile_ty())
-    rank = ty->get_tile_rank();
-  // create result
-  std::set<int> result;
-  for(size_t d = 0; d < rank; d++)
-    result.insert(axes_->get_id(value, d));
-  return result;
-}
-
 // constructor
 layout::layout(analysis::axes *axes)
   : axes_(axes) { }
@@ -49,11 +35,13 @@ void layout::connect(ir::value *x, ir::value *y) {
     return;
   if(!y->get_type()->is_tile_ty())
     return;
-  std::set<int> x_axes = axes_of(x);
-  std::set<int> y_axes = axes_of(y);
+  std::vector<int> x_axes = axes_->get(x);
+  std::vector<int> y_axes = axes_->get(y);
+  std::set<int> sx_axes(x_axes.begin(), x_axes.end());
+  std::set<int> sy_axes(y_axes.begin(), y_axes.end());
   std::set<int> common;
-  std::set_intersection(x_axes.begin(), x_axes.end(),
-                        y_axes.begin(), y_axes.end(),
+  std::set_intersection(sx_axes.begin(), sx_axes.end(),
+                        sy_axes.begin(), sy_axes.end(),
                         std::inserter(common, common.begin()));
   if(!common.empty())
     graph_.add_edge(x, y);
@@ -75,8 +63,6 @@ void layout::run(ir::module &mod) {
     make_graph(i);
   });
   // connected components
-  values_.clear();
-  groups_.clear();
   graph_.connected_components(&values_, &groups_);
 }
 
