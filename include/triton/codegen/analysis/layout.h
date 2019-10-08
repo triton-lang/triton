@@ -28,8 +28,6 @@ private:
   // graph creation
   void connect(ir::value *x, ir::value *y);
   void make_graph(ir::instruction *i);
-  // list the axes of the given value
-  std::set<int> axes_of(ir::value *value);
 
 public:
   // constructor

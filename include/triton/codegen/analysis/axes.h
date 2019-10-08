@@ -35,7 +35,9 @@ private:
 public:
   axes();
   void run(ir::module &mod);
-  unsigned get_id(ir::value *value, unsigned dim);
+  // accessors
+  int get(ir::value *value, unsigned dim);
+  std::vector<int> get(ir::value *value);
 
 private:
   tools::graph<node_t> graph_;
