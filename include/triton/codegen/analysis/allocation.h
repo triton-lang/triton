@@ -24,8 +24,8 @@ class cts;
 
 class allocation {
 public:
-  allocation(liveness *live, tiles *params)
-    : liveness_(live), tiles_(params){ }
+  allocation(liveness *live)
+    : liveness_(live) { }
   // accessors
   bool has_offset(ir::value *x)    const { return offsets_.find(x) != offsets_.end(); }
   unsigned offset(ir::value *x)    const { return offsets_.at(x); }
@@ -38,7 +38,6 @@ private:
   size_t allocated_size_;
   // dependences
   liveness *liveness_;
-  tiles *tiles_;
 };
 
 }

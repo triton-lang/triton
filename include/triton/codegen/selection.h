@@ -210,10 +210,10 @@ private:
 
 
 public:
-  selection(analysis::liveness* liveness, analysis::allocation *alloc, analysis::tiles *tiles,
+  selection(analysis::liveness* liveness, analysis::allocation *alloc,
             analysis::align *alignment, analysis::axes *axes,
             analysis::layout *layouts, target *tgt, unsigned num_warps)
-    : liveness_(liveness), alloc_(alloc), tiles_(tiles),
+    : liveness_(liveness), alloc_(alloc),
       alignment_(alignment), a_axes_(axes), layouts_(layouts),
       tgt_(tgt), num_warps_(num_warps){ }
 
@@ -224,7 +224,6 @@ private:
   tmap_t tmap_;
   analysis::liveness *liveness_;
   analysis::allocation *alloc_;
-  analysis::tiles *tiles_;
   analysis::axes *a_axes_;
   analysis::layout *layouts_;
   analysis::align *alignment_;

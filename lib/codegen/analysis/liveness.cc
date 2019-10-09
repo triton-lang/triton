@@ -3,7 +3,6 @@
 #include <unordered_set>
 #include "triton/codegen/instructions.h"
 #include "triton/codegen/analysis/liveness.h"
-#include "triton/codegen/analysis/tiles.h"
 #include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/transform/cts.h"
 #include "triton/ir/basic_block.h"
@@ -146,9 +145,9 @@ unsigned liveness::num_bytes(ir::value *x) {
       num_elements *= x;
     size_t depth;
     if(layouts_->get(x).type == HMMA_884)
-      depth = tiles_->wpt(op, axis);
+      depth = layouts_->get(op).wpt.at(axis);
     else
-      depth = tiles_->mts(op, axis);
+      depth = layouts_->get(op).mts.at(axis);
     return num_elements * num_bytes * depth;
   }
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;

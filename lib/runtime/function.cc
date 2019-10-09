@@ -4,11 +4,17 @@
 #include <functional>
 #include <algorithm>
 #include "triton/codegen/analysis/axes.h"
-#include "triton/codegen/analysis/layout.h"
-#include "triton/codegen/analysis/tiles.h"
+#include "triton/codegen/analysis/allocation.h"
+#include "triton/codegen/analysis/liveness.h"
+#include "triton/codegen/analysis/align.h"
+#include "triton/codegen/transform/coalesce.h"
+#include "triton/codegen/transform/dce.h"
+#include "triton/codegen/transform/peephole.h"
+#include "triton/codegen/transform/membar.h"
+#include "triton/codegen/transform/reassociate.h"
+#include "triton/codegen/transform/cts.h"
 #include "triton/codegen/selection.h"
 #include "triton/runtime/function.h"
-#include "triton/codegen/transform/coalesce.h"
 #include "triton/lang/cpp.h"
 #include "triton/lang/parser.h"
 #include "triton/lang/code_gen.h"
@@ -202,17 +208,16 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   // create passes
   codegen::analysis::align align;
   codegen::analysis::axes axes;
-  codegen::analysis::layout layouts(&axes, &align);
-  codegen::analysis::tiles tiles(opt.num_warps, &align, &axes, &layouts);
-  codegen::analysis::liveness liveness(&tiles, &layouts);
-  codegen::analysis::allocation allocation(&liveness, &tiles);
+  codegen::analysis::layout layouts(&axes, &align, opt.num_warps);
+  codegen::analysis::liveness liveness(&layouts);
+  codegen::analysis::allocation allocation(&liveness);
   codegen::transform::membar barriers(&liveness, &allocation);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&align);
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::transform::cts cts;
-  codegen::selection selection(&liveness, &allocation, &tiles, &align, &axes, &layouts, target.get(), opt.num_warps);
+  codegen::selection selection(&liveness, &allocation, &align, &axes, &layouts, target.get(), opt.num_warps);
   // run passes
   peephole.run(module);
   dce.run(module);
@@ -226,24 +231,20 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   reassociate.run(module);
 //  ir::print(module, std::cout);
-//  exit(EXIT_FAILURE);
   dce.run(module);
   cts.run(module);
   align.run(module);
   axes.run(module);
   layouts.run(module);
-  tiles.run(module);
   liveness.run(module);
   allocation.run(module);
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     return std::unique_ptr<driver::module>();
   barriers.run(module);
   dce.run(module);
+  align.run(module);
   axes.run(module);
   layouts.run(module);
-//  ir::print(module, std::cout);
-  align.run(module);
-  tiles.run(module);
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));

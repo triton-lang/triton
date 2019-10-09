@@ -4,7 +4,6 @@
 #include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/axes.h"
-#include "triton/codegen/analysis/tiles.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/align.h"
 #include "triton/codegen/transform/coalesce.h"
@@ -584,8 +583,8 @@ void selection::init_strided_scan_axes(const analysis::layout_t& layout, IRBuild
   std::vector<unsigned> nts(dim);
   std::vector<unsigned> mts(dim);
   for(unsigned i = 0; i < shapes.size(); i++){
-    nts[i] = tiles_->nts(layout.i, i);
-    mts[i] = tiles_->mts(layout.i, i);
+    nts[i] = layout.nts.at(i);
+    mts[i] = layout.mts.at(i);
   }
   Value* full_thread_id = builder.CreateAdd(builder.CreateMul(u_warp_id, builder.getInt32(32)), u_thread_id);
   std::vector<Value*> thread_id = delinearize(full_thread_id, order, mts, builder);
@@ -618,13 +617,13 @@ void selection::init_hmma_axes(const analysis::layout_t& layout, IRBuilder<> &bu
   Value *_16 = builder.getInt32(16);
 
   // fragments per warp
-  unsigned fpw_0 = tiles_->fpw(layout.i, 0);
-  unsigned fpw_1 = tiles_->fpw(layout.i, 1);
-  unsigned fpw_2 = is_batched ? tiles_->fpw(layout.i, 2) : 1;
+  unsigned fpw_0 = layout.fpw.at(0);
+  unsigned fpw_1 = layout.fpw.at(1);
+  unsigned fpw_2 = is_batched ? layout.fpw.at(2) : 1;
   // warps per tile
-  unsigned wpt_0 = tiles_->wpt(layout.i, 0);
-  unsigned wpt_1 = tiles_->wpt(layout.i, 1);
-  unsigned wpt_2 = is_batched ? tiles_->wpt(layout.i, 2) : 1;
+  unsigned wpt_0 = layout.wpt.at(0);
+  unsigned wpt_1 = layout.wpt.at(1);
+  unsigned wpt_2 = is_batched ? layout.wpt.at(2) : 1;
   // hmma warp tile size
   unsigned hmma_wts_0 = fpw_0 * 8;
   unsigned hmma_wts_1 = fpw_1 * 8;
@@ -933,7 +932,7 @@ void selection::lower_reduce(ir::reduce_inst *x, LLVMContext &ctx, Function *fn,
     tgt_->add_barrier(module, builder);
     builder.CreateStore(result, write_ptr);
     // build result
-    unsigned depth = tiles_->wpt(op, axis);
+    unsigned depth = layouts_->get(op).wpt.at(axis);
     for(unsigned i = depth/2; i > 0; i >>= 1){
       // current indices
       indices_t current(write_idx.size(), builder.getInt32(0));
@@ -1022,7 +1021,7 @@ void selection::lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ct
   distributed_tile* in = (distributed_tile*)tmap_.at(arg);
   if(x_order == arg_order){
     size_t ld = arg_order[0];
-    vector_size = std::min(tiles_->nts(x, ld),tiles_->nts(arg, ld));
+    vector_size = std::min(layouts_->get(x).nts.at(ld), layouts_->get(arg).nts.at(ld));
   }
 
   std::map<unsigned, Value*> packets;
@@ -1118,12 +1117,12 @@ void selection::lower_hmma_dot(ir::dot_inst *dot, LLVMContext &ctx, Function *fn
                                              "{$10, $11}, "
                                              "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
 
-  unsigned fpw_0 = tiles_->fpw(dot, 0);
-  unsigned fpw_1 = tiles_->fpw(dot, 1);
+  unsigned fpw_0 = layouts_->get(dot).fpw.at(0);
+  unsigned fpw_1 = layouts_->get(dot).fpw.at(1);
   unsigned wts_0 = fpw_0 * 8;
   unsigned wts_1 = fpw_1 * 8;
-  unsigned wpt_0 = tiles_->wpt(dot, 0);
-  unsigned wpt_1 = tiles_->wpt(dot, 1);
+  unsigned wpt_0 = layouts_->get(dot).wpt.at(0);
+  unsigned wpt_1 = layouts_->get(dot).wpt.at(1);
   unsigned stride_rep_i = wpt_0 * wts_0;
   unsigned stride_rep_j = wpt_1 * wts_1;
   unsigned num_rep_i = shapes[0] / stride_rep_i;
