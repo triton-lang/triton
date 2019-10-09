@@ -5,6 +5,7 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/type.h"
+#include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/transform/cts.h"
 
 
@@ -171,9 +172,9 @@ private:
   void create_shared_tile(ir::value *v, Builder &builder, Value *sh_mem_ptr);
   void create_distributed_tile(ir::value *v, Builder &builder);
   void create_tile(ir::value *v, Builder &builder, std::set<ir::value *> &seen, Value *sh_mem_ptr);
-  void init_strided_scan_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
-  void init_hmma_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
-  void init_axes(ir::value *i, Builder &builder, Value *u_thread_id, Value *u_warp_id);
+  void init_strided_scan_axes(const analysis::layout_t& layout, Builder &builder, Value *u_thread_id, Value *u_warp_id);
+  void init_hmma_axes(const analysis::layout_t& layout, Builder &builder, Value *u_thread_id, Value *u_warp_id);
+  void init_axes(const analysis::layout_t& layout, Builder &builder, Value *u_thread_id, Value *u_warp_id);
   void init_layouts(ir::function *fn, Builder &builder, Value *sh_mem_ptr);
 
   // lower scalar instruction

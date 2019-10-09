@@ -83,8 +83,7 @@ void coalesce::run(ir::module &mod) {
     if(axes.empty())
       continue;
     for(auto it = ++axes.rbegin(); it != axes.rend(); it++)
-      remat.insert(remat.begin(),
-                   it->second.begin(), it->second.end());
+      remat.insert(remat.begin(), it->second.begin(), it->second.end());
   }
   // rematerialize values
   for(ir::io_inst *r: remat) {

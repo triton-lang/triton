@@ -202,9 +202,9 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   // create passes
   codegen::analysis::align align;
   codegen::analysis::axes axes;
-  codegen::analysis::layout layouts(&axes);
+  codegen::analysis::layout layouts(&axes, &align);
   codegen::analysis::tiles tiles(opt.num_warps, &align, &axes, &layouts);
-  codegen::analysis::liveness liveness(&tiles);
+  codegen::analysis::liveness liveness(&tiles, &layouts);
   codegen::analysis::allocation allocation(&liveness, &tiles);
   codegen::transform::membar barriers(&liveness, &allocation);
   codegen::transform::dce dce;

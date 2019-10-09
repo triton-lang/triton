@@ -4,6 +4,7 @@
 #include "triton/codegen/instructions.h"
 #include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/analysis/tiles.h"
+#include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/transform/cts.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/function.h"
@@ -89,8 +90,8 @@ bool liveness::do_pad(ir::value *x) {
     ir::value *b = dot->get_operand(1);
     size_t a_previous = pad_[a];
     size_t b_previous = pad_[b];
-    auto a_order = tiles_->order(a);
-    auto b_order = tiles_->order(b);
+    auto a_order = layouts_->get(a).order;
+    auto b_order = layouts_->get(b).order;
     bool a_row = is_trans(a) ^ (a_order[0] == 1);
     bool b_row = is_trans(b) ^ (b_order[0] == 1);
     auto a_shapes = a->get_type()->get_tile_shapes();
@@ -108,9 +109,9 @@ bool liveness::do_pad(ir::value *x) {
   }
   // padding for copy to shared
   if(auto* cts = dynamic_cast<ir::copy_to_shared_inst*>(x)) {
-    auto cts_order = tiles_->order(cts);
+    auto cts_order = layouts_->get(cts).order;
     ir::value *arg = cts->get_operand(0);
-    auto arg_order = tiles_->order(arg);
+    auto arg_order = layouts_->get(arg).order;
     size_t previous = pad_[cts];
     if(cts_order != arg_order)
       pad_[cts] = std::max<int>(pad_[cts], 4);
@@ -144,7 +145,7 @@ unsigned liveness::num_bytes(ir::value *x) {
     for(auto x: shapes)
       num_elements *= x;
     size_t depth;
-    if(tiles_->hmma(x))
+    if(layouts_->get(x).type == HMMA_884)
       depth = tiles_->wpt(op, axis);
     else
       depth = tiles_->mts(op, axis);
@@ -153,7 +154,7 @@ unsigned liveness::num_bytes(ir::value *x) {
   unsigned num_bytes = x->get_type()->get_primitive_size_in_bits() / 8;
   unsigned pad = pad_.at(x);
   if(pad > 0){
-    unsigned ld = x->get_type()->get_tile_shapes()[tiles_->order(x)[0]];
+    unsigned ld = x->get_type()->get_tile_shapes()[layouts_->get(x).order[0]];
     num_bytes += pad * num_bytes / ld;
   }
   if(has_double(x))

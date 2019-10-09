@@ -22,6 +22,7 @@ namespace analysis{
 typedef unsigned slot_index;
 
 class tiles;
+class layout;
 
 struct segment {
   slot_index start;
@@ -72,7 +73,7 @@ private:
 
 
 public:
-  liveness(tiles *t): tiles_(t){ }
+  liveness(tiles *t, layout *l): tiles_(t), layouts_(l){ }
   // padding
   unsigned get_pad(ir::value *v) const { return pad_.at(v); }
   // buffer size
@@ -92,6 +93,7 @@ public:
 private:
   // analysis
   tiles *tiles_;
+  layout *layouts_;
   // stuff
   has_storage_map_t has_dedicated_storage_;
   indices_map_t indices;
