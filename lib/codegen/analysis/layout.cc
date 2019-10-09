@@ -14,8 +14,8 @@ namespace analysis{
 
 
 // constructor
-layout::layout(analysis::axes *axes, analysis::align *align)
-  : axes_(axes), align_(align) { }
+layout::layout(analysis::axes *axes, analysis::align *align, size_t num_warps)
+  : axes_(axes), align_(align), num_warps_(num_warps) { }
 
 // get group id
 unsigned layout::layout_of(ir::value *value) const
@@ -72,19 +72,19 @@ bool is_hmma_c(ir::value *v){
   return result;
 }
 
-layout_t layout::get(ir::value *v) const {
+const layout_t &layout::get(ir::value *v) const {
   return layouts_.at(groups_.at(v));
 }
 
-const std::map<size_t, layout_t>& layout::get_all() const {
+std::map<size_t, layout_t>& layout::get_all() {
   return layouts_;
 }
 
-void extract_io_use(ir::value *v, std::set<ir::io_inst*>& result) {
+void extract_io_use(ir::value *v, std::set<ir::value*>& result) {
   for(ir::user* u: v->get_users()){
     auto i = dynamic_cast<ir::io_inst*>(u);
     if(i && i->get_pointer_operand() == v)
-      result.insert(i);
+      result.insert(v);
   }
 }
 
@@ -102,6 +102,75 @@ inline bool is_trans(ir::value *v) {
   return false;
 }
 
+inline unsigned clamp(unsigned x, unsigned lo, unsigned hi) {
+  return std::min(std::max(x, lo), hi);
+}
+
+void layout::init_hmma_tile(layout_t& layout) {
+  auto ord = layout.order;
+  auto shapes = layout.shapes;
+  unsigned shape_0 = shapes[ord[0]];
+  unsigned shape_1 = shapes[ord[1]];
+  /* fragments per warp */
+  // try to make things as square as possible to maximize data re-use
+  std::vector<unsigned> fpw = {1, 1, 1};
+  std::vector<unsigned> fpw_nm1;
+  unsigned num_fragments = std::min<unsigned>((shape_0/8)*(shape_1/8), 4);
+  do {
+    fpw_nm1 = fpw;
+    if(fpw[0]*fpw[1] < num_fragments)
+      fpw[0] = clamp(fpw[0]*2, 1, shape_0 / 8);
+    if(fpw[0]*fpw[1] < num_fragments)
+      fpw[1] = clamp(fpw[1]*2, 1, shape_1 / 8);
+  }while(fpw_nm1 != fpw);
+  // store parameters
+  for(unsigned d = 0; d < shapes.size(); d++)
+    layout.fpw[d] = fpw[d];
+  /* warps per tile */
+  // try to make things as square as possible to maximize data re-use
+  std::vector<unsigned> wpt = {1, 1, 1};
+  std::vector<unsigned> wpt_nm1;
+  do{
+    wpt_nm1 = wpt;
+    if(wpt[0] * wpt[1] * wpt[2] < num_warps_)
+      wpt[0] = clamp(wpt[0]*2, 1, shape_0 / (fpw[0]*8));
+    if(wpt[0] * wpt[1] * wpt[2] < num_warps_)
+      wpt[1] = clamp(wpt[1]*2, 1, shape_1 / (fpw[1]*8));
+  }while(wpt_nm1 != wpt);
+  // store parameters
+  for(unsigned d = 0; d < shapes.size(); d++)
+    layout.wpt[d] = wpt[d];
+  /* sanity check */
+  unsigned effective_num_warps = 1;
+  for(size_t d = 0; d < shapes.size(); d++)
+    effective_num_warps *= layout.wpt[d];
+  if(num_warps_ != effective_num_warps)
+    throw std::runtime_error("cannot create a kernel with this amount of warps");
+}
+
+void layout::init_scanline_tile(layout_t& layout) {
+  auto ord = layout.order;
+  auto shapes = layout.shapes;
+  unsigned size = std::accumulate(shapes.begin(), shapes.end(), 1, std::multiplies<int>());
+  unsigned ld = ord[0];
+  unsigned num_threads = num_warps_*32;
+  unsigned current = num_threads;
+  layout.nts[ld] = clamp(size / num_threads, 1, 4);
+  layout.mts[ld] = clamp(current, 1, shapes[ld] / layout.nts[ld]);
+  current = current / layout.mts[ld];
+  for(size_t d = 1; d < shapes.size(); d++){
+    ld = ord[d];
+    layout.nts[ld] = 1;
+    layout.mts[ld] = clamp(current, 1, shapes[ld]);
+    current = current / layout.mts[ld];
+  }
+  /* sanity check */
+  unsigned effective_num_threads = 1;
+  for(size_t d = 0; d < shapes.size(); d++)
+    effective_num_threads *= layout.mts[d];
+  if(num_threads != effective_num_threads)
+    throw std::runtime_error("cannot create a kernel with this amount of warps");
+}
 
 void layout::run(ir::module &mod) {
   // make graph
@@ -114,8 +183,8 @@ void layout::run(ir::module &mod) {
   // create layouts
   for(const auto& x: values_) {
     bool hmma_c = std::any_of(x.second.begin(), x.second.end(), &is_hmma_c);
+    // type
     layouts_[x.first].type = hmma_c ? HMMA_884 : SCANLINE;
-
   }
 
 
@@ -130,35 +199,32 @@ void layout::run(ir::module &mod) {
     return ret;
   };
 
-  // find out which value is the largest in each group
+  // find out axes for each layout
   for(const auto& x: values_) {
     auto cmp = [&rank](ir::value* x, ir::value *y) { return rank(x) < rank(y); };
     ir::value *largest = *std::max_element(x.second.begin(), x.second.end(), cmp);
     layouts_[x.first].axes = axes_->get(largest);
-    layouts_[x.first].i = largest;
     layouts_[x.first].shapes = largest->get_type()->get_tile_shapes();
   }
 
 
   // find out the layout ordering of a group
-  for(size_t i = 0; i < num_groups; i++){
-    std::set<ir::io_inst*> io;
-    for(ir::value* v: values_of(i))
-      extract_io_use(v, io);
-    auto cmp = [&rank](ir::io_inst* x, ir::io_inst *y) {
-      return rank(x->get_pointer_operand()) < rank(y->get_pointer_operand());
-    };
-    auto it = std::max_element(io.begin(), io.end(), cmp);
-    std::vector<int> order(layouts_[i].axes.size());
+  for(const auto& x: values_) {
+    std::set<ir::value*> ptr;
+    for(ir::value* v: x.second)
+      extract_io_use(v, ptr);
+    size_t rank = layouts_[x.first].axes.size();
+    std::vector<int> order(rank);
     std::iota(order.begin(), order.end(), 0);
-    if(it != io.end()) {
-      auto max_contiguous = align_->contiguous((*it)->get_pointer_operand());
+    for(ir::value *v: ptr){
+      auto max_contiguous = align_->contiguous(v);
       std::sort(order.begin(), order.end(), [&](unsigned a, unsigned b) {
         return max_contiguous[a] > max_contiguous[b]; }
       );
     }
-    layouts_[i].order = order;
+    layouts_[x.first].order = order;
   }
+
   // matrix multiplication optimizations
   for(size_t i = 0; i < num_groups; i++){
     std::vector<ir::dot_inst*> dots;
@@ -187,6 +253,14 @@ void layout::run(ir::module &mod) {
     }
   }
 
+  // tiling parameters
+  for(auto& x: layouts_){
+    /* HMMA parameters*/
+    if(x.second.type == HMMA_884)
+      init_hmma_tile(x.second);
+    else
+      init_scanline_tile(x.second);
+  }
 }
 
 }

@@ -73,7 +73,7 @@ private:
 
 
 public:
-  liveness(tiles *t, layout *l): tiles_(t), layouts_(l){ }
+  liveness(layout *l): layouts_(l){ }
   // padding
   unsigned get_pad(ir::value *v) const { return pad_.at(v); }
   // buffer size
@@ -92,7 +92,6 @@ public:
 
 private:
   // analysis
-  tiles *tiles_;
   layout *layouts_;
   // stuff
   has_storage_map_t has_dedicated_storage_;

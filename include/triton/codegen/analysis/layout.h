@@ -28,10 +28,13 @@ enum layout_type_t {
 
 struct layout_t {
   layout_type_t type;
-  ir::value *i;
   std::vector<int> axes;
   std::vector<unsigned> shapes;
   std::vector<int> order;
+  std::map<int, int> mts;
+  std::map<int, int> nts;
+  std::map<int, int> fpw;
+  std::map<int, int> wpt;
 };
 
 class layout {
@@ -43,15 +46,18 @@ private:
   void connect(ir::value *x, ir::value *y);
   void make_graph(ir::instruction *i);
 
+  void init_hmma_tile(layout_t& layout);
+  void init_scanline_tile(layout_t &layout);
+
 public:
   // constructor
-  layout(analysis::axes *axes, analysis::align *align);
+  layout(analysis::axes *axes, analysis::align *align, size_t num_warps);
   // accessors
   unsigned layout_of(ir::value *value) const;
   const std::vector<ir::value*>& values_of(unsigned id) const;
   size_t num_layouts() const;
-  layout_t get(ir::value *v) const;
-  const std::map<size_t, layout_t>& get_all() const;
+  const layout_t& get(ir::value *v) const;
+  std::map<size_t, layout_t> &get_all();
 
   // execution
   void run(ir::module &mod);
@@ -59,6 +65,7 @@ public:
 private:
   analysis::axes* axes_;
   analysis::align* align_;
+  size_t num_warps_;
   tools::graph<ir::value*> graph_;
   std::map<ir::value*, size_t> groups_;
   std::map<size_t, std::vector<ir::value*>> values_;
