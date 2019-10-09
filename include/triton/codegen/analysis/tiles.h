@@ -5,6 +5,7 @@
 #include <set>
 #include <vector>
 #include <memory>
+#include "triton/codegen/analysis/layout.h"
 
 namespace triton{
 
@@ -25,28 +26,22 @@ class axes;
 class layout;
 class align;
 
-enum layout_t {
-  SCANLINE,
-  HMMA_C
-};
 
 class tiles {
   typedef std::map<ir::value*, std::map<int, int>> param_map_t;
 private:
-  void init_hmma_tile(ir::value *i);
-  void init_scanline_tile(ir::value *i);
+  void init_hmma_tile(const layout_t& layout);
+  void init_scanline_tile(const layout_t& layout);
   bool is_trans(ir::value *i);
 
 public:
   tiles(size_t num_warps, analysis::align* align, analysis::axes* axes, analysis::layout* layout);
   void run(ir::module &mod);
-  layout_t hmma(ir::value *value);
   int mts(ir::value *value, unsigned ax);
   int nts(ir::value *value, unsigned ax);
   int fpw(ir::value *value, unsigned ax);
   int wpt(ir::value *value, unsigned ax);
-  std::vector<int> order(ir::value *v);
-  const std::map<int, ir::value*>& largest();
+
 
 private:
   // dependencies
@@ -56,9 +51,6 @@ private:
   // number of warps
   size_t num_warps_;
   // tile properties
-  std::map<int, ir::value*> largest_;
-  std::map<int, std::vector<int>> order_;
-  std::map<int, layout_t> hmma_;
   std::map<int, int> fpw_;
   std::map<int, int> wpt_;
   std::map<int, int> mts_;
