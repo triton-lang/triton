@@ -53,7 +53,6 @@ ir::value* coalesce::rematerialize(ir::value *x, ir::builder &builder,
   builder.set_insert_point(pos);
   if(dynamic_cast<ir::load_inst*>(x)){
     ir::value *ret = builder.insert(ir::copy_to_shared_inst::create(x));
-//    x->replace_all_uses_with(ret);
     return ret;
   }
   // default -- recursive clone

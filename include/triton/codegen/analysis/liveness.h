@@ -45,7 +45,9 @@ struct double_buffer_info_t {
 struct buffer_t {
   size_t id;
   size_t size;
-  bool operator<(buffer_t other) const { return id < other.id; }
+  bool operator<(buffer_t other) const {
+    return id < other.id;
+  }
 };
 
 class liveness {

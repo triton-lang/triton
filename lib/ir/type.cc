@@ -77,6 +77,14 @@ const size_t type::get_tile_rank() const {
   return get_tile_shapes().size();
 }
 
+const size_t type::get_tile_ranks1() const {
+  int ret = 0;
+  for(int s: get_tile_shapes())
+    ret += s > 1;
+  return ret;
+}
+
+
 unsigned type::get_tile_num_elements() const {
   const tile_shapes_t& shapes = get_tile_shapes();
   unsigned result = 1;

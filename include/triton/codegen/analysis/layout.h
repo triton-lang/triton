@@ -27,14 +27,35 @@ enum layout_type_t {
 };
 
 struct layout_t {
+  layout_t(layout_type_t _type,
+           const std::vector<int>& _axes,
+           const std::vector<unsigned> &_shapes,
+           const std::vector<ir::value *> &values,
+           analysis::align* align);
   layout_type_t type;
   std::vector<int> axes;
   std::vector<unsigned> shapes;
   std::vector<int> order;
-  std::map<int, int> mts;
-  std::map<int, int> nts;
-  std::map<int, int> fpw;
-  std::map<int, int> wpt;
+  std::vector<int> mts;
+  std::vector<int> nts;
+  std::vector<int> fpw;
+  std::vector<int> wpt;
+};
+
+struct layout_hmma_884_t: public layout_t {
+  layout_hmma_884_t(size_t num_warps,
+                    const std::vector<int>& _axes,
+                    const std::vector<unsigned>& _shapes,
+                    const std::vector<ir::value *> &values,
+                    analysis::align* align);
+};
+
+struct layout_scanline_t: public layout_t {
+  layout_scanline_t(size_t num_warps,
+                    const std::vector<int>& _axes,
+                    const std::vector<unsigned>& _shapes,
+                    const std::vector<ir::value *> &values,
+                    analysis::align* align);
 };
 
 class layout {
@@ -52,12 +73,13 @@ private:
 public:
   // constructor
   layout(analysis::axes *axes, analysis::align *align, size_t num_warps);
+
   // accessors
   unsigned layout_of(ir::value *value) const;
   const std::vector<ir::value*>& values_of(unsigned id) const;
   size_t num_layouts() const;
-  const layout_t& get(ir::value *v) const;
-  std::map<size_t, layout_t> &get_all();
+  const layout_t* get(ir::value *v) const;
+  std::map<size_t, layout_t*> &get_all();
 
   // execution
   void run(ir::module &mod);
@@ -69,7 +91,7 @@ private:
   tools::graph<ir::value*> graph_;
   std::map<ir::value*, size_t> groups_;
   std::map<size_t, std::vector<ir::value*>> values_;
-  std::map<size_t, layout_t> layouts_;
+  std::map<size_t, layout_t*> layouts_;
 };
 
 }
