@@ -62,7 +62,7 @@ class target;
 typedef std::vector<Value*> indices_t;
 
 struct distributed_axis {
-  size_t contiguous;
+  int contiguous;
   std::vector<Value*> values;
   Value* thread_id;
 };

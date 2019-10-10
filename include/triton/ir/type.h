@@ -64,6 +64,7 @@ public:
   type *get_scalar_ty() const;
   const tile_shapes_t& get_tile_shapes() const;
   const size_t get_tile_rank() const;
+  const size_t get_tile_ranks1() const;
   unsigned get_tile_num_elements() const;
   type *get_tile_element_ty() const;
   unsigned get_pointer_address_space() const;
