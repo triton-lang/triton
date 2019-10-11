@@ -211,7 +211,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::analysis::layout layouts(&axes, &align, opt.num_warps);
   codegen::analysis::liveness liveness(&layouts);
   codegen::analysis::allocation allocation(&liveness);
-  codegen::transform::membar barriers(&liveness, &allocation);
+  codegen::transform::membar barriers(&liveness, &layouts, &allocation);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate(&align);
@@ -230,11 +230,11 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   align.run(module);
   dce.run(module);
   reassociate.run(module);
-//  ir::print(module, std::cout);
   dce.run(module);
   cts.run(module);
   align.run(module);
   axes.run(module);
+//  ir::print(module, std::cout);
   layouts.run(module);
   liveness.run(module);
   allocation.run(module);
@@ -245,6 +245,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   align.run(module);
   axes.run(module);
   layouts.run(module);
+//  ir::print(module, std::cout);
   selection.run(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));

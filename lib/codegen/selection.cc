@@ -486,21 +486,7 @@ Instruction *selection::llvm_inst(ir::instruction *inst, std::function<Value*(ir
     return (Instruction*)res;
   }
   if(ir::atomic_add_inst* ii = dynamic_cast<ir::atomic_add_inst*>(inst)){
-//    Value *ptr = value(ii->get_operand(0));
-//    Value *val = value(ii->get_operand(1));
-//    Value *atom_f_add = nullptr;
-//    if(val->getType()->isFloatTy())
-//      atom_f_add = Intrinsic::getDeclaration(builder.GetInsertBlock()->getModule(), Intrinsic::nvvm_atomic_load_add_f32, {ptr->getType()});
-//    else if(val->getType()->isHalfTy()){
-//      Type *fp16 = Type::getHalfTy(ctx);
-
-//      FunctionType *atom_ty = FunctionType::get(fp16, {fp16->getPointerTo(), fp16}, false);
-//      atom_f_add = InlineAsm::get(atom_ty, " atom.relaxed.global.gpu.add.noftz.f16 $0, [$1], $2;", "=h,l,h", true);
-//    }
-//    if(atom_f_add == nullptr)
     throw std::runtime_error("unsupported");
-//    Value *res = builder.CreateCall(atom_f_add, {ptr, val});
-//    return (Instruction*)res;
   }
   if(ir::sqrt_inst* ii = dynamic_cast<ir::sqrt_inst*>(inst)){
     Value *val = value(ii->get_operand(0));
@@ -711,7 +697,7 @@ void selection::init_hmma_axes(const analysis::layout_t& layout, IRBuilder<> &bu
 void selection::init_axes(const analysis::layout_t& layout, IRBuilder<> &builder, Value *u_thread_id, Value *u_warp_id) {
   if(layout.type == analysis::HMMA_884)
     init_hmma_axes(layout, builder, u_thread_id, u_warp_id);
-  else
+  else if(layout.type == analysis::SCANLINE)
     init_strided_scan_axes(layout, builder, u_thread_id, u_warp_id);
 }
 
@@ -801,7 +787,7 @@ void selection::create_tile(ir::value *v, IRBuilder<> &builder,
     for(ir::value *op: user->ops())
       create_tile(op, builder, seen, sh_mem_ptr);
   auto *i = dynamic_cast<ir::instruction*>(v);
-  if(i && storage_info.at(i->get_id()).first == SHARED && !dynamic_cast<ir::reduce_inst*>(v))
+  if(i && layouts_->get(i)->type == analysis::SHARED && !dynamic_cast<ir::reduce_inst*>(v))
     create_shared_tile(i, builder, sh_mem_ptr);
   else
     create_distributed_tile(v, builder);
@@ -1018,7 +1004,7 @@ void selection::lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ct
   distributed_tile* in = (distributed_tile*)tmap_.at(arg);
   if(x_order == arg_order){
     size_t ld = arg_order[0];
-    vector_size = std::min(layouts_->get(x)->nts.at(ld), layouts_->get(arg)->nts.at(ld));
+    vector_size = layouts_->get(arg)->nts.at(ld);
   }
 
   std::map<unsigned, Value*> packets;
@@ -1035,6 +1021,15 @@ void selection::lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ct
     unsigned id = linear / vector_size;
     if(linear % vector_size == 0)
       result->set_value(idx, packets[id]);
+  });
+}
+
+void selection::lower_copy_from_shared(ir::copy_from_shared_inst *x, LLVMContext &ctx, Function *fn, IRBuilder<> &builder) {
+  distributed_tile* result = (distributed_tile*)tmap_.at(x);
+  shared_tile* arg = (shared_tile*)tmap_.at(x->get_operand(0));
+
+  result->for_each([&](indices_t idx){
+    result->set_value(idx, arg->get_value(idx));
   });
 }
 
@@ -1399,6 +1394,8 @@ void selection::lower_tile_instruction(ir::instruction *ins, llvm::IRBuilder<> &
     lower_broadcast(x, ctx, fn, builder);
   else if(auto *x = dynamic_cast<ir::copy_to_shared_inst*>(ins))
     lower_copy_to_shared(x, ctx, fn, builder);
+  else if(auto *x = dynamic_cast<ir::copy_from_shared_inst*>(ins))
+    lower_copy_from_shared(x, ctx, fn, builder);
   else if(auto* x = dynamic_cast<ir::trans_inst*>(ins))
     lower_trans(x, ctx, fn, builder);
   else if(auto x = dynamic_cast<ir::dot_inst*>(ins))
@@ -1554,7 +1551,7 @@ void selection::run(ir::module &src, Module &dst) {
           }
           else {
             unsigned num_bytes = inst->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
-            offset->addIncoming(dst_builder.getInt32(liveness_->get_buffer(inst)->size / (2*num_bytes)), llvm_inc_block);
+            offset->addIncoming(dst_builder.getInt32(layouts_->get(inst)->size / (2*num_bytes)), llvm_inc_block);
           }
           ptr->addIncoming(inc_shared->get_pointer(), llvm_inc_block);
         }

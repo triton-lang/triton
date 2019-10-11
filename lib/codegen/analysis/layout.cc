@@ -45,6 +45,8 @@ void layout::connect(ir::value *x, ir::value *y) {
   std::set_intersection(sx_axes.begin(), sx_axes.end(),
                         sy_axes.begin(), sy_axes.end(),
                         std::inserter(common, common.begin()));
+  graph_.add_edge(x, x);
+  graph_.add_edge(y, y);
   if(!common.empty())
     graph_.add_edge(x, y);
 }
@@ -89,6 +91,23 @@ void extract_io_use(ir::value *v, std::set<ir::value*>& result) {
   }
 }
 
+void extract_dot_use(ir::value *v, ir::value*& result, size_t n) {
+  for(ir::user* u: v->get_users()){
+    auto i = dynamic_cast<ir::dot_inst*>(u);
+    if(i && i->get_operand(n) == v)
+      result = v;
+  }
+}
+
+void extract_hmma_dot_use(ir::value *v, ir::value*& result, size_t n) {
+  for(ir::user* u: v->get_users()){
+    auto i = dynamic_cast<ir::dot_inst*>(u);
+    if(i && is_hmma_c(i) && i->get_operand(n) == v)
+      result = v;
+  }
+}
+
+
 
 inline bool is_trans(ir::value *v) {
   if(dynamic_cast<ir::trans_inst *>(v)) {
@@ -108,14 +127,14 @@ inline bool is_trans(ir::value *v) {
 layout_t::layout_t(layout_type_t _type,
                    const std::vector<int> &_axes,
                    const std::vector<unsigned> &_shapes,
-                   const std::vector<ir::value *> &values,
-                   analysis::align* align): type(_type), axes(_axes), shapes(_shapes) {
+                   const std::vector<ir::value *> &_values,
+                   size_t _id,
+                   analysis::align* align): type(_type), axes(_axes), shapes(_shapes), values(_values), id(_id) {
   // io pointer
   std::set<ir::value*> ptr;
   for(ir::value* v: values)
     extract_io_use(v, ptr);
-  size_t rank = axes.size();
-  std::vector<int> order(rank);
+  order.resize(axes.size());
   std::iota(order.begin(), order.end(), 0);
   for(ir::value *v: ptr){
     auto max_contiguous = align->contiguous(v);
@@ -123,7 +142,6 @@ layout_t::layout_t(layout_type_t _type,
       return max_contiguous[a] > max_contiguous[b];
     });
   }
-  this->order = order;
 }
 
 inline unsigned clamp(unsigned x, unsigned lo, unsigned hi) {
@@ -133,8 +151,8 @@ inline unsigned clamp(unsigned x, unsigned lo, unsigned hi) {
 layout_hmma_884_t::layout_hmma_884_t(size_t num_warps,
                                      const std::vector<int>& _axes,
                                      const std::vector<unsigned>& _shapes,
-                                     const std::vector<ir::value *> &values,
-                                     analysis::align* align): layout_t(HMMA_884, _axes, _shapes, values, align) {
+                                     const std::vector<ir::value *> &values, size_t _id,
+                                     analysis::align* align): layout_t(HMMA_884, _axes, _shapes, values, _id, align) {
 
   unsigned shape_0 = shapes[order[0]];
   unsigned shape_1 = shapes[order[1]];
@@ -173,7 +191,8 @@ layout_scanline_t::layout_scanline_t(size_t num_warps,
                                      const std::vector<int>& _axes,
                                      const std::vector<unsigned>& _shapes,
                                      const std::vector<ir::value *> &values,
-                                     analysis::align* align): layout_t(SCANLINE, _axes, _shapes, values, align){
+                                     size_t _id,
+                                     analysis::align* align): layout_t(SCANLINE, _axes, _shapes, values, _id, align){
   unsigned size = std::accumulate(shapes.begin(), shapes.end(), 1, std::multiplies<int>());
   unsigned num_threads = num_warps * 32;
   nts.resize(shapes.size());
@@ -196,6 +215,58 @@ layout_scanline_t::layout_scanline_t(size_t num_warps,
     throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
 
+layout_shared_t::layout_shared_t(const layout_t *arg,
+                                 const std::vector<int>& _axes,
+                                 const std::vector<unsigned>& _shapes,
+                                 const std::vector<ir::value *> &values,
+                                 size_t _id,
+                                 analysis::align* align): layout_t(SHARED, _axes, _shapes, values, _id, align) {
+
+  if(arg->type == SCANLINE)
+    order = arg->order;
+
+  ir::value* dot_a = nullptr;
+  ir::value* dot_b = nullptr;
+  ir::value* hmma_dot_a = nullptr;
+  ir::value* hmma_dot_b = nullptr;
+  for(ir::value* v: values){
+    extract_dot_use(v, dot_a, 0);
+    extract_dot_use(v, dot_b, 1);
+    extract_hmma_dot_use(v, hmma_dot_a, 0);
+    extract_hmma_dot_use(v, hmma_dot_b, 1);
+  }
+  std::vector<int> col = {0, 1};
+  std::vector<int> row = {1, 0};
+  if(dot_a && !hmma_dot_a)
+    order = is_trans(dot_a) ? row : col;
+  if(dot_b && !hmma_dot_b)
+    order = is_trans(dot_b) ? col : row;
+}
+
+void layout::create(size_t id, const std::vector<ir::value*>& values) {
+  auto it_hmma_c = std::find_if(values.begin(), values.end(), &is_hmma_c);
+  auto cmp = [](ir::value* x, ir::value *y) {
+    return x->get_type()->get_tile_ranks1() <
+           y->get_type()->get_tile_ranks1();
+  };
+  ir::value *largest = *std::max_element(values.begin(), values.end(), cmp);
+  const auto& axes = axes_->get(largest);
+  const auto& shapes = largest->get_type()->get_tile_shapes();
+  auto it_cts = std::find_if(values.begin(), values.end(), [](ir::value* v) {
+      return dynamic_cast<ir::copy_to_shared_inst*>(v);
+  });
+  // type
+  if(it_hmma_c != values.end())
+    layouts_[id] = new layout_hmma_884_t(num_warps_, axes, shapes, values, id, align_);
+  else if(it_cts != values.end()){
+    ir::copy_to_shared_inst *cts = (ir::copy_to_shared_inst*)*it_cts;
+    ir::value *arg = cts->get_operand(0);
+    create(groups_.at(arg), values_.at(groups_.at(arg)));
+    layouts_[id] = new layout_shared_t(get(arg), axes, shapes, values, id, align_);
+  }
+  else
+    layouts_[id] = new layout_scanline_t(num_warps_, axes, shapes, values, id, align_);
+}
 
 void layout::run(ir::module &mod) {
   // make graph
@@ -208,50 +279,8 @@ void layout::run(ir::module &mod) {
   graph_.connected_components(&values_, &groups_);
 
   // create layouts
-  for(const auto& x: values_) {
-    bool hmma_c = std::any_of(x.second.begin(), x.second.end(), &is_hmma_c);
-    auto cmp = [](ir::value* x, ir::value *y) {
-      return x->get_type()->get_tile_ranks1() <
-             y->get_type()->get_tile_ranks1();
-    };
-    ir::value *largest = *std::max_element(x.second.begin(), x.second.end(), cmp);
-    const auto& axes = axes_->get(largest);
-    const auto& shapes = largest->get_type()->get_tile_shapes();
-    // type
-    if(hmma_c)
-      layouts_[x.first] = new layout_hmma_884_t(num_warps_, axes, shapes, x.second, align_);
-    else
-      layouts_[x.first] = new layout_scanline_t(num_warps_, axes, shapes, x.second, align_);
-  }
-
-
-  // matrix multiplication optimizations
-  for(const auto& x: values_) {
-    std::vector<ir::dot_inst*> dots;
-    for(ir::value* v: x.second)
-      if(auto *x = dynamic_cast<ir::dot_inst*>(v))
-        dots.push_back(x);
-    for(ir::dot_inst* dot: dots){
-      ir::value* a = dot->get_operand(0);
-      ir::value* b = dot->get_operand(1);
-      if(get(dot)->type == HMMA_884){
-        auto a_val = values_of(layout_of(a));
-        auto b_val = values_of(layout_of(b));
-        for(ir::value *v: a_val)
-          if(auto *cts = dynamic_cast<ir::copy_to_shared_inst*>(v))
-            layouts_[layout_of(a)]->order = layouts_[layout_of(cts->get_operand(0))]->order;
-        for(ir::value *v: b_val)
-          if(auto *cts = dynamic_cast<ir::copy_to_shared_inst*>(v))
-            layouts_[layout_of(b)]->order = layouts_[layout_of(cts->get_operand(0))]->order;
-      }
-      else{
-        std::vector<int> col = {0, 1};
-        std::vector<int> row = {1, 0};
-        layouts_[layout_of(a)]->order = is_trans(a) ? row : col;
-        layouts_[layout_of(b)]->order = is_trans(b) ? col : row;
-      }
-    }
-  }
+  for(const auto& x: values_)
+    create(x.first, x.second);
 }
 
 }

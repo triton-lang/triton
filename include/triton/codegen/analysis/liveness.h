@@ -23,6 +23,7 @@ typedef unsigned slot_index;
 
 class tiles;
 class layout;
+class layout_t;
 
 struct segment {
   slot_index start;
@@ -42,18 +43,11 @@ struct double_buffer_info_t {
   ir::phi_node* phi;
 };
 
-struct buffer_t {
-  size_t id;
-  size_t size;
-  bool operator<(buffer_t other) const {
-    return id < other.id;
-  }
-};
 
 class liveness {
 private:
   typedef std::map<ir::value*, slot_index> indices_map_t;
-  typedef std::map<buffer_t*, segment>    intervals_map_t;
+  typedef std::map<layout_t*, segment>    intervals_map_t;
   typedef std::map<ir::value*, bool>       has_storage_map_t;
   typedef ir::value* node_t;
   typedef std::map <node_t, std::set<node_t>> graph_t;
@@ -82,10 +76,7 @@ public:
   unsigned num_bytes(ir::value *x);
   // accessors
   const intervals_map_t& intervals()  const { return intervals_; }
-  segment get_interval(buffer_t* v)  const { return intervals_.at(v); }
-  // buffers
-  buffer_t* get_buffer(ir::value *v) const { return groups_.at(v); }
-  std::vector<ir::value*> get_values(buffer_t* x) const { return values_.at(x); }
+  segment get_interval(layout_t* v)  const { return intervals_.at(v); }
   // double-buffering
   bool has_double(ir::value *x)       const { return double_.find(x) != double_.end(); }
   double_buffer_info_t get_double(ir::value *x) const { return double_.at(x); }
@@ -101,10 +92,6 @@ private:
   intervals_map_t intervals_;
   std::map<ir::value*, double_buffer_info_t> double_;
   std::map<ir::value*, size_t> pad_;
-  // buffers
-  tools::graph<node_t> graph_;
-  std::map<ir::value*, buffer_t*> groups_;
-  std::map<buffer_t*, std::vector<ir::value*>> values_;
 };
 
 }

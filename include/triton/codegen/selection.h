@@ -189,6 +189,7 @@ private:
   void lower_splat(ir::splat_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_broadcast(ir::broadcast_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_copy_to_shared(ir::copy_to_shared_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
+  void lower_copy_from_shared(ir::copy_from_shared_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_trans(ir::trans_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   // matrix multiply
   void lower_hmma_dot(ir::dot_inst *x, LLVMContext &ctx, Function *fn, Builder &builder,

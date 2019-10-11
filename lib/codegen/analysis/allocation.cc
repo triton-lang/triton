@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <climits>
+#include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/transform/cts.h"
@@ -20,22 +21,22 @@ void allocation::run(ir::module &mod) {
   using std::min;
   typedef std::multimap<unsigned, segment> triples_map_type;
 
-  std::vector<buffer_t*> I;
+  std::vector<layout_t*> I;
   for(auto x: liveness_->intervals())
     I.push_back(x.first);
-  std::vector<buffer_t*> J = I;
+  std::vector<layout_t*> J = I;
 
   triples_map_type H;
   H.insert({0, segment{0, INT_MAX}});
 
-  std::vector<buffer_t*> V;
-  std::map<buffer_t*, unsigned> starts;
+  std::vector<layout_t*> V;
+  std::map<layout_t*, unsigned> starts;
   while(!J.empty()){
     auto h_it = H.begin();
     unsigned w = h_it->first;
     segment xh = h_it->second;
     H.erase(h_it);
-    auto j_it = std::find_if(J.begin(), J.end(), [&](buffer_t* JJ){
+    auto j_it = std::find_if(J.begin(), J.end(), [&](layout_t* JJ){
       segment xj = liveness_->get_interval(JJ);
       bool res = xj.intersect(xh);
       for(auto val: H)
@@ -57,9 +58,9 @@ void allocation::run(ir::module &mod) {
   }
 
   // Build interference graph
-  std::map<buffer_t*, std::set<buffer_t*>> interferences;
-  for(buffer_t* x: V)
-  for(buffer_t* y: V){
+  std::map<layout_t*, std::set<layout_t*>> interferences;
+  for(layout_t* x: V)
+  for(layout_t* y: V){
     if(x->id == y->id)
       continue;
     unsigned X0 = starts[x], Y0 = starts[y];
@@ -73,17 +74,17 @@ void allocation::run(ir::module &mod) {
   }
 
   // Initialize colors
-  std::map<buffer_t*, int> colors;
-  for(buffer_t* X: V)
+  std::map<layout_t*, int> colors;
+  for(layout_t* X: V)
     colors[X] = (X->id==V[0]->id)?0:-1;
 
 
   // First-fit graph coloring
   std::vector<bool> available(V.size());
-  for(buffer_t* x: V){
+  for(layout_t* x: V){
     // Non-neighboring colors are available
     std::fill(available.begin(), available.end(), true);
-    for(buffer_t* Y: interferences[x]){
+    for(layout_t* Y: interferences[x]){
       int color = colors[Y];
       if(color >= 0)
         available[color] = false;
@@ -94,12 +95,12 @@ void allocation::run(ir::module &mod) {
   }
 
   // Finalize allocation
-  for(buffer_t* x: V){
+  for(layout_t* x: V){
     unsigned Adj = 0;
-    for(buffer_t* y: interferences[x])
+    for(layout_t* y: interferences[x])
       Adj = std::max<unsigned>(Adj, starts[y] + y->size);
     // create offsets
-    for(ir::value *v: liveness_->get_values(x)){
+    for(ir::value *v: x->values){
       offsets_[v] = starts[x] + colors[x] * Adj;
       if(liveness_->has_double(v)){
         auto info = liveness_->get_double(v);
@@ -110,7 +111,7 @@ void allocation::run(ir::module &mod) {
 
   // Save maximum size of induced memory space
   allocated_size_ = 0;
-  for(buffer_t* x: V)
+  for(layout_t* x: V)
     allocated_size_ = std::max<size_t>(allocated_size_, starts[x] + x->size);
 }
 
