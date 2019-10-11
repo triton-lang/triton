@@ -66,6 +66,7 @@ static const std::map<ir::value_id_t, inst_storage_info_t> storage_info = {
 
   // intrinsics
   { ir::INST_COPY_TO_SHARED,       {SHARED,      {DISTRIBUTED}}},
+  { ir::INST_COPY_FROM_SHARED,     {DISTRIBUTED, {SHARED}}},
   { ir::INST_BARRIER,              {NONE,        {}}},
   { ir::INST_MAKE_RANGE_DYN,       {DISTRIBUTED, {}}},
   { ir::INST_MAKE_RANGE_STA,       {DISTRIBUTED, {}}},

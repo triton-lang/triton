@@ -347,6 +347,10 @@ value *builder::create_copy_to_shared(value *arg, const std::string &name) {
   return insert(copy_to_shared_inst::create(arg, name));
 }
 
+value *builder::create_copy_from_shared(value *arg, const std::string &name) {
+  return insert(copy_from_shared_inst::create(arg, name));
+}
+
 value *builder::create_barrier(const std::string &name) {
   return insert(barrier_inst::create(ctx_, name));
 }

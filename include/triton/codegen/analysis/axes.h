@@ -30,6 +30,7 @@ private:
   void update_graph_broadcast(ir::instruction *i);
   void update_graph_dot(ir::instruction *i);
   void update_graph_elementwise(ir::instruction *i);
+  void update_graph_no_edge(ir::instruction *i);
   void update_graph(ir::instruction *i);
 
 public:

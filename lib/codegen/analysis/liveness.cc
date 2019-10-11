@@ -42,7 +42,7 @@ void liveness::extract_double_bufferable(ir::instruction *i) {
   ir::value *value_1 = phi->get_incoming_value(1);
   ir::instruction *i_0 = dynamic_cast<ir::instruction*>(value_0);
   ir::instruction *i_1 = dynamic_cast<ir::instruction*>(value_1);
-  if(!i_0 || !i_1 || storage_info.at(i_0->get_id()).first != SHARED || storage_info.at(i_1->get_id()).first != SHARED)
+  if(!i_0 || !i_1 || storage_info.at(i_0->get_id()).first != codegen::SHARED || storage_info.at(i_1->get_id()).first != codegen::SHARED)
     return;
   if(is_latch_1)
     double_[value_0] = double_buffer_info_t{value_1, phi};
@@ -50,21 +50,6 @@ void liveness::extract_double_bufferable(ir::instruction *i) {
     double_[value_1] = double_buffer_info_t{value_0, phi};
 }
 
-void liveness::make_graph(ir::instruction *i) {
-  if(has_double(i)){
-    ir::value *latch = double_[i].latch;
-    graph_.add_edge(i, latch);
-  }
-  if(storage_info.at(i->get_id()).first == SHARED){
-    graph_.add_edge(i, i);
-    for(ir::value* op: i->ops()){
-      auto* iop = dynamic_cast<ir::instruction*>(op);
-      if(!iop || storage_info.at(iop->get_id()).first != SHARED)
-        continue;
-      graph_.add_edge(i, op);
-    }
-  }
-}
 
 // connected components
 bool is_trans(ir::value *v) {
@@ -151,7 +136,6 @@ void liveness::run(ir::module &mod) {
   indices.clear();
   pad_.clear();
   intervals_.clear();
-  graph_.clear();
 
   // Create set of pair of values that can be double-buffered
   ir::for_each_instruction(mod, [this](ir::instruction* i) {
@@ -167,22 +151,14 @@ void liveness::run(ir::module &mod) {
     });
   }while(has_changed);
 
-  // Create buffer dependency graph
-  ir::for_each_instruction(mod, [this](ir::instruction* i) {
-    this->make_graph(i);
-  });
 
   // connected components
-  tools::graph<node_t>::cmap_t cmap;
-  tools::graph<node_t>::nmap_t nmap;
-  graph_.connected_components(&cmap, &nmap);
-  for(auto x: cmap) {
-    buffer_t* buffer = new buffer_t{x.first};
-    values_[buffer] = x.second;
-    for(ir::value *v: x.second){
-      buffer->size = std::max<int>(buffer->size, num_bytes(v));
-      groups_[v] = buffer;
-    }
+  for(auto &x: layouts_->get_all()) {
+    layout_t* layout = x.second;
+    if(layout->type != SHARED)
+      continue;
+    for(ir::value *v: layout->values)
+      layout->size = std::max<int>(layout->size, num_bytes(v));
   }
 
   // Assigns index to each instruction
@@ -195,22 +171,25 @@ void liveness::run(ir::module &mod) {
     }
   }
 
-  for(auto x: values_) {
+  for(auto &x: layouts_->get_all()) {
+    layout_t* layout = x.second;
+    if(layout->type != SHARED)
+      continue;
     // users
-    std::set<ir::value*> values;
-    for(ir::value *v: x.second){
-      values.insert(v);
+    std::set<ir::value*> users;
+    for(ir::value *v: layout->values){
+      users.insert(v);
       for(ir::user *u: v->get_users())
-        values.insert(u);
+        users.insert(u);
     }
     // compute intervals
     unsigned start = INT32_MAX;
     unsigned end = 0;
-    for(ir::value *u: values){
+    for(ir::value *u: users){
       start = std::min(start, indices.at(u));
       end = std::max(end, indices.at(u));
     }
-    intervals_[x.first] = segment{start, end};
+    intervals_[layout] = segment{start, end};
   }
 
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "triton/codegen/analysis/liveness.h"
+#include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/instructions.h"
 #include "triton/codegen/transform/membar.h"
@@ -38,7 +39,7 @@ void membar::add_reference(ir::value *v, interval_vec_t &res){
     return;
   if(alloc_->has_offset(v)){
     unsigned offset = alloc_->offset(v);
-    unsigned size = liveness_->get_buffer(v)->size;
+    unsigned size = layouts_->get(v)->size;
     res.push_back(interval_t(offset, offset + size));
   }
 }
