@@ -154,7 +154,7 @@ void liveness::run(ir::module &mod) {
 
   // connected components
   for(auto &x: layouts_->get_all()) {
-    layout_t* layout = x.second;
+    layout_t*& layout = x.second;
     if(layout->type != SHARED)
       continue;
     for(ir::value *v: layout->values)

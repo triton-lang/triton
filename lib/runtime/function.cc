@@ -245,6 +245,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   align.run(module);
   axes.run(module);
   layouts.run(module);
+  liveness.run(module);
 //  ir::print(module, std::cout);
   selection.run(module, *llvm);
   // return binary
