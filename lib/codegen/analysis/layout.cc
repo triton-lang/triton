@@ -222,6 +222,7 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
                                  size_t _id,
                                  analysis::align* align): layout_t(SHARED, _axes, _shapes, values, _id, align) {
 
+  size = 0;
   if(arg->type == SCANLINE)
     order = arg->order;
 
