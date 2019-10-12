@@ -188,17 +188,6 @@ layout_hmma_884_t::layout_hmma_884_t(size_t num_warps,
     throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
 
-inline bool is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
-  if(phi->get_parent() != terminator->get_parent())
-    return false;
-  if(auto *br = dynamic_cast<ir::cond_branch_inst*>(terminator))
-    return br->get_true_dest() == phi->get_parent()
-           || br->get_false_dest() == phi->get_parent();
-  else if(dynamic_cast<ir::uncond_branch_inst*>(terminator))
-    return false;
-  else
-    throw std::runtime_error("unreachable");
-}
 
 
 
@@ -229,6 +218,19 @@ layout_scanline_t::layout_scanline_t(size_t num_warps,
   if(num_warps * 32 != effective_num_threads)
     throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
+
+inline bool is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
+  if(phi->get_parent() != terminator->get_parent())
+    return false;
+  if(auto *br = dynamic_cast<ir::cond_branch_inst*>(terminator))
+    return br->get_true_dest() == phi->get_parent()
+           || br->get_false_dest() == phi->get_parent();
+  else if(dynamic_cast<ir::uncond_branch_inst*>(terminator))
+    return false;
+  else
+    throw std::runtime_error("unreachable");
+}
+
 
 void extract_double_bufferable(ir::value *v, std::shared_ptr<double_buffer_info_t>& res) {
   auto* phi = dynamic_cast<ir::phi_node*>(v);
@@ -303,7 +305,7 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
     pad = 24 - shapes[row ? 1 : 0] % 32;
   }
   else if(order != arg->order) {
-    pad = 16;
+    pad = 4;
   }
 
   // size
@@ -316,6 +318,7 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
     size *= 2;
 }
 
+// layout factory method
 void layout::create(size_t id, const std::vector<ir::value*>& values) {
   auto it_hmma_c = std::find_if(values.begin(), values.end(), &is_hmma_c);
   auto cmp = [](ir::value* x, ir::value *y) {

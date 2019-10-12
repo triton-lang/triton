@@ -22,7 +22,7 @@ void allocation::run(ir::module &mod) {
   typedef std::multimap<unsigned, segment> triples_map_type;
 
   std::vector<layout_t*> I;
-  for(auto x: liveness_->intervals())
+  for(auto x: liveness_->get())
     I.push_back(x.first);
   std::vector<layout_t*> J = I;
 
@@ -37,7 +37,7 @@ void allocation::run(ir::module &mod) {
     segment xh = h_it->second;
     H.erase(h_it);
     auto j_it = std::find_if(J.begin(), J.end(), [&](layout_t* JJ){
-      segment xj = liveness_->get_interval(JJ);
+      segment xj = liveness_->get(JJ);
       bool res = xj.intersect(xh);
       for(auto val: H)
         res = res && !val.second.intersect(xj);
@@ -45,7 +45,7 @@ void allocation::run(ir::module &mod) {
     });
     if(j_it != J.end()){
       unsigned size = (*j_it)->size;
-      segment xj = liveness_->get_interval(*j_it);
+      segment xj = liveness_->get(*j_it);
       starts[*j_it] = w;
       H.insert({w + size, segment{max(xh.start, xj.start), min(xh.end, xj.end)}});
       if(xh.start < xj.start)
@@ -68,7 +68,7 @@ void allocation::run(ir::module &mod) {
     unsigned NY = y->size;
     segment XS = {X0, X0 + NX};
     segment YS = {Y0, Y0 + NY};
-    if(liveness_->get_interval(x).intersect(liveness_->get_interval(y))
+    if(liveness_->get(x).intersect(liveness_->get(y))
         && XS.intersect(YS))
       interferences[x].insert(y);
   }
