@@ -710,15 +710,15 @@ void selection::create_shared_tile(ir::value *v, IRBuilder<> &builder, Value *sh
     return;
   auto order = layouts_->get(v)->order;
   auto shapes = v->get_type()->get_tile_shapes();
-  unsigned pad = liveness_->get_pad(v);
+  unsigned pad = layouts_->get(v)->pad;
   if(pad > 0)
     shapes[order[0]] += pad;
   Type* ty = llvm_type(v->get_type()->get_scalar_ty(), builder.getContext());
   // shared copy
   PointerType *ptr_ty = ty->getPointerTo(sh_mem_ptr->getType()->getPointerAddressSpace());
   // double-buffered
-  if(liveness_->has_double(v)) {
-    auto info = liveness_->get_double(v);
+  if(layouts_->get(v)->double_buffer) {
+    auto info = *layouts_->get(v)->double_buffer;
     ir::phi_node *phi = info.phi;
     BasicBlock *parent = (BasicBlock*)vmap_[phi->get_parent()];
     if(parent->empty())
@@ -1532,10 +1532,9 @@ void selection::run(ir::module &src, Module &dst) {
       }
     }
     // finalize double-buffering
-    for(ir::basic_block *block: fn->blocks())
-    for(ir::instruction *inst: block->get_inst_list()) {
-      if(liveness_->has_double(inst)) {
-        auto info = liveness_->get_double(inst);
+    for(const auto& x: layouts_->get_all()) {
+      if(x.second->double_buffer) {
+        auto info = *x.second->double_buffer;
         ir::phi_node *phi = info.phi;
         PHINode *ptr = (PHINode*)((shared_tile*)tmap_.at(phi))->get_pointer();
         PHINode *offset = (PHINode*)((shared_tile*)tmap_.at(phi))->get_offset();
@@ -1550,8 +1549,8 @@ void selection::run(ir::module &src, Module &dst) {
             offset->addIncoming(next_offset, llvm_inc_block);
           }
           else {
-            unsigned num_bytes = inst->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
-            offset->addIncoming(dst_builder.getInt32(layouts_->get(inst)->size / (2*num_bytes)), llvm_inc_block);
+            unsigned num_bytes = x.second->ty->get_primitive_size_in_bits() / 8;
+            offset->addIncoming(dst_builder.getInt32(x.second->size / (2*num_bytes)), llvm_inc_block);
           }
           ptr->addIncoming(inc_shared->get_pointer(), llvm_inc_block);
         }

@@ -120,18 +120,15 @@ void membar::run(ir::module &mod) {
   // shared-memory copies. These can be read from and written to
   // without needing synchronization
   std::set<ir::value*> safe_war;
-  ir::for_each_instruction(mod, [&](ir::instruction* i){
-    if(liveness_->has_double(i)){
-      auto info = liveness_->get_double(i);
-      safe_war.insert(i);
+  for(const auto& x: layouts_->get_all()){
+    if(x.second->double_buffer){
+      auto info = *x.second->double_buffer;
+      safe_war.insert(info.first);
       safe_war.insert(info.latch);
-      auto *trans = dynamic_cast<ir::trans_inst*>(info.latch);
-      if(trans)
-        safe_war.insert(trans->get_operand(0));
     }
-    if(i->get_id() == ir::INST_TRANS)
-      safe_war.insert(i);
-  });
+  }
+
+
 
   for(ir::function *fn: mod.get_function_list()){
     std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);

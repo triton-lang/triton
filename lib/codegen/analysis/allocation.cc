@@ -102,10 +102,10 @@ void allocation::run(ir::module &mod) {
     // create offsets
     for(ir::value *v: x->values){
       offsets_[v] = starts[x] + colors[x] * Adj;
-      if(liveness_->has_double(v)){
-        auto info = liveness_->get_double(v);
-        offsets_[info.latch] = offsets_[v] + x->size / 2;
-      }
+    }
+    if(x->double_buffer){
+      auto info = *x->double_buffer;
+      offsets_[info.latch] = offsets_[info.first] + x->size / 2;
     }
   }
 

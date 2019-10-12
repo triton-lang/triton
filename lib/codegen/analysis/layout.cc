@@ -4,6 +4,7 @@
 #include "triton/codegen/analysis/axes.h"
 #include "triton/codegen/analysis/align.h"
 #include "triton/codegen/analysis/layout.h"
+#include "triton/codegen/instructions.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
 #include "triton/ir/utils.h"
@@ -187,6 +188,20 @@ layout_hmma_884_t::layout_hmma_884_t(size_t num_warps,
     throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
 
+inline bool is_loop_latch(ir::phi_node *phi, ir::instruction *terminator){
+  if(phi->get_parent() != terminator->get_parent())
+    return false;
+  if(auto *br = dynamic_cast<ir::cond_branch_inst*>(terminator))
+    return br->get_true_dest() == phi->get_parent()
+           || br->get_false_dest() == phi->get_parent();
+  else if(dynamic_cast<ir::uncond_branch_inst*>(terminator))
+    return false;
+  else
+    throw std::runtime_error("unreachable");
+}
+
+
+
 layout_scanline_t::layout_scanline_t(size_t num_warps,
                                      const std::vector<int>& _axes,
                                      const std::vector<unsigned>& _shapes,
@@ -215,17 +230,49 @@ layout_scanline_t::layout_scanline_t(size_t num_warps,
     throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
 
+void extract_double_bufferable(ir::value *v, std::shared_ptr<double_buffer_info_t>& res) {
+  auto* phi = dynamic_cast<ir::phi_node*>(v);
+  if(!phi || phi->get_num_incoming() != 2)
+    return;
+  ir::basic_block *block_0 = phi->get_incoming_block(0);
+  ir::basic_block *block_1 = phi->get_incoming_block(1);
+  ir::instruction *terminator_0 = block_0->get_inst_list().back();
+  ir::instruction *terminator_1 = block_1->get_inst_list().back();
+  bool is_latch_0 = is_loop_latch(phi, terminator_0);
+  bool is_latch_1 = is_loop_latch(phi, terminator_1);
+  ir::value *value_0 = phi->get_incoming_value(0);
+  ir::value *value_1 = phi->get_incoming_value(1);
+  ir::instruction *i_0 = dynamic_cast<ir::instruction*>(value_0);
+  ir::instruction *i_1 = dynamic_cast<ir::instruction*>(value_1);
+  if(!i_0 || !i_1 ||
+     storage_info.at(i_0->get_id()).first != codegen::SHARED ||
+     storage_info.at(i_1->get_id()).first != codegen::SHARED)
+    return;
+  if(is_latch_1)
+    res.reset(new double_buffer_info_t{value_0, value_1, phi});
+  if(is_latch_0)
+    res.reset(new double_buffer_info_t{value_1, value_0, phi});
+}
+
+
 layout_shared_t::layout_shared_t(const layout_t *arg,
                                  const std::vector<int>& _axes,
                                  const std::vector<unsigned>& _shapes,
                                  const std::vector<ir::value *> &values,
+                                 ir::type *ty,
                                  size_t _id,
                                  analysis::align* align): layout_t(SHARED, _axes, _shapes, values, _id, align) {
 
+  this->ty = ty;
   size = 0;
+
+  // double-buffering
+  for(ir::value *v: values)
+    extract_double_bufferable(v, double_buffer);
+
+  // order
   if(arg->type == SCANLINE)
     order = arg->order;
-
   ir::value* dot_a = nullptr;
   ir::value* dot_b = nullptr;
   ir::value* hmma_dot_a = nullptr;
@@ -238,10 +285,35 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
   }
   std::vector<int> col = {0, 1};
   std::vector<int> row = {1, 0};
-  if(dot_a && !hmma_dot_a)
+  bool is_nonhmma_dot_a = dot_a && !hmma_dot_a;
+  bool is_nonhmma_dot_b = dot_b && !hmma_dot_b;
+  if(is_nonhmma_dot_a)
     order = is_trans(dot_a) ? row : col;
-  if(dot_b && !hmma_dot_b)
+  if(is_nonhmma_dot_b)
     order = is_trans(dot_b) ? col : row;
+
+  // padding
+  pad = 0;
+  if(hmma_dot_a){
+    bool row = is_trans(hmma_dot_a) ^ order[0] == 1;
+    pad = 24 - shapes[row ? 0: 1] % 32;
+  }
+  else if(hmma_dot_b){
+    bool row = is_trans(hmma_dot_b) ^ order[0] == 1;
+    pad = 24 - shapes[row ? 1 : 0] % 32;
+  }
+  else if(order != arg->order) {
+    pad = 16;
+  }
+
+  // size
+  auto shape = this->shapes;
+  shape[order[0]] += pad;
+  size = ty->get_primitive_size_in_bits() / 8;
+  for(auto s: shape)
+     size *= s;
+  if(double_buffer)
+    size *= 2;
 }
 
 void layout::create(size_t id, const std::vector<ir::value*>& values) {
@@ -263,7 +335,7 @@ void layout::create(size_t id, const std::vector<ir::value*>& values) {
     ir::copy_to_shared_inst *cts = (ir::copy_to_shared_inst*)*it_cts;
     ir::value *arg = cts->get_operand(0);
     create(groups_.at(arg), values_.at(groups_.at(arg)));
-    layouts_[id] = new layout_shared_t(get(arg), axes, shapes, values, id, align_);
+    layouts_[id] = new layout_shared_t(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), id, align_);
   }
   else
     layouts_[id] = new layout_scanline_t(num_warps_, axes, shapes, values, id, align_);
