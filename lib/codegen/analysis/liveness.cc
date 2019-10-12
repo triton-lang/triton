@@ -17,13 +17,11 @@ namespace codegen{
 namespace analysis{
 
 
-// Entry point
 void liveness::run(ir::module &mod) {
-  indices.clear();
   intervals_.clear();
 
-
   // Assigns index to each instruction
+  std::map<ir::value*, slot_index> indices;
   for(ir::function *fn: mod.get_function_list()){
     slot_index index = 0;
     for(ir::basic_block *block: fn->blocks())
@@ -33,6 +31,7 @@ void liveness::run(ir::module &mod) {
     }
   }
 
+  // create live intervals
   for(auto &x: layouts_->get_all()) {
     layout_t* layout = x.second;
     if(layout->type != SHARED)
