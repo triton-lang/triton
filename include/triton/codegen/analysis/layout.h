@@ -11,8 +11,10 @@ namespace triton{
 
 namespace ir{
   class value;
+  class type;
   class module;
   class instruction;
+  class phi_node;
 }
 
 namespace codegen{
@@ -26,6 +28,13 @@ enum layout_type_t {
   SCANLINE,
   SHARED
 };
+
+struct double_buffer_info_t {
+  ir::value* first;
+  ir::value* latch;
+  ir::phi_node* phi;
+};
+
 
 struct layout_t {
   layout_t(layout_type_t _type,
@@ -41,6 +50,9 @@ struct layout_t {
   std::vector<int> order;
   size_t id;
   size_t size;
+  std::shared_ptr<double_buffer_info_t> double_buffer;
+  ir::type *ty;
+  size_t pad;
   std::vector<int> mts;
   std::vector<int> nts;
   std::vector<int> fpw;
@@ -70,6 +82,7 @@ struct layout_shared_t: public layout_t {
                     const std::vector<int>& _axes,
                     const std::vector<unsigned>& _shapes,
                     const std::vector<ir::value *> &values,
+                    ir::type *ty,
                     size_t _id,
                     analysis::align* align);
 };
