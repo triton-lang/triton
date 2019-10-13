@@ -146,6 +146,21 @@ private:
   Builder &builder_;
 };
 
+class machine_layout_t {
+
+};
+
+class machine_layout_shared_t: public machine_layout_t {
+
+};
+
+class machine_layout_hmma_884_t: public machine_layout_t {
+
+};
+
+class machine_layout_scanline_t: public machine_layout_t {
+
+};
 
 class generator: public ir::visitor, public analysis::layout_visitor {
 private:
@@ -160,9 +175,7 @@ private:
   void set_value(ir::value *x, const indices_t& idx, Value* v);
 
 public:
-
   generator(LLVMContext *ctx,
-            Function *fn,
             Module *dst,
             Builder *builder,
             std::map<unsigned, distributed_axis>& axes,
@@ -178,7 +191,7 @@ public:
             unsigned num_packs_0, unsigned num_packs_1,
             unsigned pack_size_0, unsigned pack_size_1,
             unsigned num_warps)
-    : ctx_(ctx), fn_(fn), mod_(dst), builder_(builder), axes_(axes), vmap_(vmap), tmap_(tmap), tgt_(tgt),
+    : ctx_(ctx), mod_(dst), builder_(builder), axes_(axes), vmap_(vmap), tmap_(tmap), tgt_(tgt),
       layouts_(layouts), alignment_(alignment), alloc_(alloc), sh_mem_ptr_(sh_mem_ptr),
       offset_a_i_(offset_a_i), offset_a_k_(offset_a_k), offset_b_j_(offset_b_j), offset_b_k_(offset_b_k),
       num_packs_0_(num_packs_0), num_packs_1_(num_packs_1), pack_size_0_(pack_size_0), pack_size_1_(pack_size_1),
@@ -243,6 +256,7 @@ private:
   Builder *builder_;
   Module *mod_;
 
+  std::map<analysis::layout_t*, machine_layout_t*> machine_layouts_;
   std::map<unsigned, distributed_axis>& axes_;
   std::map<ir::value *, Value *>& vmap_;
   std::map<ir::value *, tile *>& tmap_;
@@ -258,6 +272,8 @@ private:
   unsigned num_warps_;
 };
 
+
+
 // Selection pass
 class selection{
   typedef std::map<ir::value *, Value *> vmap_t;
@@ -266,8 +282,6 @@ class selection{
 private:
   // LLVM conversions
   Type*        llvm_type(ir::type *ty, LLVMContext &ctx);
-  Value*       llvm_alloc_const(ir::alloc_const *v, Module *module, Builder &builder);
-  Function*    llvm_fn(ir::function *fn, Builder& builder, Module &dst);
   Value*       alloc_shared(Builder &builder, Module& dst);
 
   // grid construction
