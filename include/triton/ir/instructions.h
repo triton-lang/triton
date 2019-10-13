@@ -71,6 +71,8 @@ public:
   }
   // instruction id
   value_id_t get_id() const { return id_; }
+  // visit
+  virtual void accept(visitor *v) = 0;
 
 private:
   basic_block *parent_;

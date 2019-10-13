@@ -3,9 +3,11 @@
 #ifndef _TRITON_IR_VISITOR_H_
 #define _TRITON_IR_VISITOR_H_
 
+
 namespace triton{
 namespace ir{
 
+class instruction;
 
 class phi_node;
 class binary_operator;
@@ -13,6 +15,7 @@ class getelementptr_inst;
 
 class icmp_inst;
 class fcmp_inst;
+class cast_inst;
 class trunc_inst;
 class z_ext_inst;
 class s_ext_inst;
@@ -73,7 +76,7 @@ public:
 
   virtual void visit_icmp_inst(icmp_inst*) = 0;
   virtual void visit_fcmp_inst(fcmp_inst*) = 0;
-  virtual void visit_cast_inst(trunc_inst*) = 0;
+  virtual void visit_cast_inst(cast_inst*) = 0;
 
   virtual void visit_return_inst(return_inst*) = 0;
   virtual void visit_cond_branch_inst(cond_branch_inst*) = 0;
@@ -85,7 +88,6 @@ public:
   virtual void visit_unmasked_store_inst(unmasked_store_inst*) = 0;
   virtual void visit_masked_store_inst(masked_store_inst*) = 0;
 
-  virtual void visit_retile_inst(retile_inst*) = 0;
   virtual void visit_reshape_inst(reshape_inst*) = 0;
   virtual void visit_splat_inst(splat_inst*) = 0;
   virtual void visit_broadcast_inst(broadcast_inst*) = 0;
