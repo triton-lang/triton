@@ -147,7 +147,7 @@ private:
 };
 
 
-class generator: public ir::visitor {
+class generator: public ir::visitor, public analysis::layout_visitor {
 private:
   void visit_hmma_dot(ir::dot_inst*, distributed_tile *TC, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK);
   void visit_scanline_dot(ir::dot_inst*, distributed_tile *TC, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK, Type *c_ty, Function *f_mul_add);
@@ -163,7 +163,9 @@ public:
 
   generator(LLVMContext *ctx,
             Function *fn,
+            Module *dst,
             Builder *builder,
+            std::map<unsigned, distributed_axis>& axes,
             std::map<ir::value *, Value *>& vmap,
             std::map<ir::value *, tile *>& tmap,
             target *tgt,
@@ -176,7 +178,7 @@ public:
             unsigned num_packs_0, unsigned num_packs_1,
             unsigned pack_size_0, unsigned pack_size_1,
             unsigned num_warps)
-    : ctx_(ctx), fn_(fn), builder_(builder), vmap_(vmap), tmap_(tmap), tgt_(tgt),
+    : ctx_(ctx), fn_(fn), mod_(dst), builder_(builder), axes_(axes), vmap_(vmap), tmap_(tmap), tgt_(tgt),
       layouts_(layouts), alignment_(alignment), alloc_(alloc), sh_mem_ptr_(sh_mem_ptr),
       offset_a_i_(offset_a_i), offset_a_k_(offset_a_k), offset_b_j_(offset_b_j), offset_b_k_(offset_b_k),
       num_packs_0_(num_packs_0), num_packs_1_(num_packs_1), pack_size_0_(pack_size_0), pack_size_1_(pack_size_1),
@@ -221,14 +223,27 @@ public:
   void visit_copy_from_shared_inst(ir::copy_from_shared_inst*);
   void visit_barrier_inst(ir::barrier_inst*);
   void visit_make_range_dyn(ir::make_range_dyn*);
-  void visit_make_range_sta(ir::make_range_sta*);
   void visit_make_range(ir::make_range*);
+
+  void visit_make_range_sta(ir::make_range_sta*);
+  void visit_undef_value(ir::undef_value*);
+  void visit_constant_int(ir::constant_int*);
+  void visit_constant_fp(ir::constant_fp*);
+  void visit_alloc_const(ir::alloc_const*);
+
+  void visit_function(ir::function*);
+
+  void visit_layout_hmma_884(analysis::layout_hmma_884_t*);
+  void visit_layout_scanline(analysis::layout_scanline_t*);
+  void visit_layout_shared(analysis::layout_shared_t*);
 
 private:
   LLVMContext *ctx_;
   Function *fn_;
   Builder *builder_;
+  Module *mod_;
 
+  std::map<unsigned, distributed_axis>& axes_;
   std::map<ir::value *, Value *>& vmap_;
   std::map<ir::value *, tile *>& tmap_;
   target *tgt_;
@@ -249,29 +264,15 @@ class selection{
   typedef std::map<ir::value *, tile *> tmap_t;
 
 private:
-  // utils
-  Type *make_vector_ty(Type *ty, size_t vector_size);
-  std::vector<unsigned> extract_shapes(ir::value *v);
-
   // LLVM conversions
   Type*        llvm_type(ir::type *ty, LLVMContext &ctx);
-  Constant*    llvm_constant(ir::constant *cst, LLVMContext &ctx);
   Value*       llvm_alloc_const(ir::alloc_const *v, Module *module, Builder &builder);
-  ArrayType*   llvm_linearized_tile_type(ir::type *ty, LLVMContext &ctx);
   Function*    llvm_fn(ir::function *fn, Builder& builder, Module &dst);
   Value*       alloc_shared(Builder &builder, Module& dst);
 
   // grid construction
-  void create_grids(std::vector<ir::value *> &grids,
-                    std::map<unsigned, ir::value *> &references,
-                    ir::function *fn);
   void create_shared_tile(ir::value *v, Builder &builder, Value *sh_mem_ptr);
   void create_distributed_tile(ir::value *v, Builder &builder);
-  void create_tile(ir::value *v, Builder &builder, std::set<ir::value *> &seen, Value *sh_mem_ptr);
-  void init_strided_scan_axes(const analysis::layout_t& layout, Builder &builder, Value *u_thread_id, Value *u_warp_id);
-  void init_hmma_axes(const analysis::layout_t& layout, Builder &builder, Value *u_thread_id, Value *u_warp_id);
-  void init_axes(const analysis::layout_t& layout, Builder &builder, Value *u_thread_id, Value *u_warp_id);
-  void init_layouts(ir::function *fn, Builder &builder, Value *sh_mem_ptr);
 
   // lower scalar instruction
   void lower_value(ir::value *src, Builder &builder, generator* gen, std::set<ir::value*>& seen);

@@ -6,6 +6,7 @@
 #include "enums.h"
 #include "value.h"
 #include <cassert>
+#include "visitor.h"
 
 namespace triton{
 namespace ir{
@@ -32,6 +33,7 @@ private:
 public:
   static undef_value* get(type* ty);
   std::string repr() const { return "undef"; }
+  void accept(visitor* vst) { vst->visit_undef_value(this); }
 };
 
 
@@ -44,31 +46,13 @@ public:
   virtual uint64_t get_value() const { return value_; }
   static constant_int *get(type *ty, uint64_t value);
   std::string repr() const { return std::to_string(value_); }
+  void accept(visitor* vst) { vst->visit_constant_int(this); }
 
 protected:
   uint64_t value_;
 };
 
-/* Metaparameter (int) */
-class metaparameter: public constant_int {
-private:
-  metaparameter(type *ty, const std::vector<unsigned>& space);
-
-public:
-  static metaparameter *create(context &ctx, type *ty, unsigned lo, unsigned hi);
-  static metaparameter *create(context &ctx, type *ty, const std::vector<unsigned>& space);
-  void set_value(uint64_t value) { has_value_ = true; value_ = value; }
-  bool has_value() { return has_value_; }
-  const std::vector<unsigned>& get_space() { return space_; }
-  void set_space(const std::vector<unsigned> &space) { space_ = space; }
-  uint64_t get_value() const { assert(has_value_); return value_; }
-  std::string repr() const { return has_value_? std::to_string(value_) : "?" ;}
-private:
-  std::vector<unsigned> space_;
-  bool has_value_;
-};
-
-/* constant fp */
+/* Constant fp */
 class constant_fp: public constant{
   constant_fp(type *ty, double value);
 
@@ -79,13 +63,14 @@ public:
   static constant* get(context &ctx, double v);
   static constant* get(type *ty, double v);
   std::string repr() const { return std::to_string(value_); }
+  void accept(visitor* vst) { vst->visit_constant_fp(this); }
 
 private:
   double value_;
 };
 
 
-/* global value */
+/* Global Value */
 class global_value: public constant {
 public:
   enum linkage_types_t {
@@ -109,7 +94,6 @@ public:
                linkage_types_t linkage, const std::string &name,
                unsigned addr_space = 0);
   std::string repr() const { return get_name(); }
-
 };
 
 /* global variable */
@@ -118,6 +102,8 @@ public:
   alloc_const(type *ty, constant_int *size,
               const std::string &name = "");
   std::string repr() const { return get_name(); }
+  void accept(visitor* vst) { vst->visit_alloc_const(this); }
+
 
 };
 

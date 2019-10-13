@@ -71,8 +71,6 @@ public:
   }
   // instruction id
   value_id_t get_id() const { return id_; }
-  // visit
-  virtual void accept(visitor *v) = 0;
 
 private:
   basic_block *parent_;
@@ -759,6 +757,7 @@ public:
   static make_range_sta *get(make_range* range);
   make_range* get_range() const;
   std::string repr() const { return "nv_static_program_idx"; }
+  _TRITON_DEFINE_ACCEPT(make_range_sta)
 
 private:
   make_range *range_;

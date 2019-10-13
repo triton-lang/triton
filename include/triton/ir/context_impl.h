@@ -14,7 +14,6 @@ class constant;
 class constant_int;
 class constant_fp;
 class undef_value;
-class metaparameter;
 
 /* Context impl */
 class context_impl {
@@ -36,8 +35,6 @@ public:
   std::map<std::pair<type*, double>, constant_fp*> fp_constants_;
   // undef values
   std::map<type*, undef_value*> uv_constants_;
-  // Metaparameters
-  std::vector<metaparameter*> mp_constants_;
 };
 
 }

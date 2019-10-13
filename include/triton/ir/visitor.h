@@ -61,10 +61,25 @@ class copy_to_shared_inst;
 class copy_from_shared_inst;
 class barrier_inst;
 class make_range_dyn;
-class make_range_sta;
 class make_range;
 
+class make_range_sta;
+class undef_value;
+class constant_int;
+class constant_fp;
+class global_value;
+class global_object;
+class alloc_const;
 
+class constant_fp;
+class undef_value;
+class constant_int;
+class constant_fp;
+class global_value;
+class global_object;
+class alloc_const;
+
+class function;
 
 class visitor {
 public:
@@ -108,8 +123,15 @@ public:
   virtual void visit_copy_from_shared_inst(copy_from_shared_inst*) = 0;
   virtual void visit_barrier_inst(barrier_inst*) = 0;
   virtual void visit_make_range_dyn(make_range_dyn*) = 0;
-  virtual void visit_make_range_sta(make_range_sta*) = 0;
   virtual void visit_make_range(make_range*) = 0;
+
+  virtual void visit_function(function*) = 0;
+
+  virtual void visit_make_range_sta(make_range_sta*) = 0;
+  virtual void visit_undef_value(undef_value*) = 0;
+  virtual void visit_constant_int(constant_int*) = 0;
+  virtual void visit_constant_fp(constant_fp*) = 0;
+  virtual void visit_alloc_const(alloc_const*) = 0;
 };
 
 }
