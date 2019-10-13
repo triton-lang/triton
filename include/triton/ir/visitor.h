@@ -1,0 +1,116 @@
+#pragma once
+
+#ifndef _TRITON_IR_VISITOR_H_
+#define _TRITON_IR_VISITOR_H_
+
+namespace triton{
+namespace ir{
+
+
+class phi_node;
+class binary_operator;
+class getelementptr_inst;
+
+class icmp_inst;
+class fcmp_inst;
+class trunc_inst;
+class z_ext_inst;
+class s_ext_inst;
+class fp_trunc_inst;
+class fp_ext_inst;
+class ui_to_fp_inst;
+class si_to_fp_inst;
+class fp_to_ui_inst;
+class fp_to_si_inst;
+class ptr_to_int_inst;
+class int_to_ptr_inst;
+class bit_cast_inst;
+class addr_space_cast_inst;
+
+class return_inst;
+class cond_branch_inst;
+class uncond_branch_inst;
+
+
+class unmasked_load_inst;
+class masked_load_inst;
+class unmasked_store_inst;
+class masked_store_inst;
+
+class retile_inst;
+class reshape_inst;
+class splat_inst;
+class broadcast_inst;
+class downcast_inst;
+
+class get_program_id_inst;
+class get_num_program_inst;
+class atomic_cas_inst;
+class atomic_exch_inst;
+class atomic_add_inst;
+class dot_inst;
+class trans_inst;
+class sqrt_inst;
+class reduce_inst;
+class select_inst;
+
+class copy_to_shared_inst;
+class copy_from_shared_inst;
+class barrier_inst;
+class make_range_dyn;
+class make_range_sta;
+class make_range;
+
+
+
+class visitor {
+public:
+  virtual ~visitor() {}
+
+  virtual void visit_phi_node(phi_node*) = 0;
+  virtual void visit_binary_operator(binary_operator*) = 0;
+  virtual void visit_getelementptr_inst(getelementptr_inst*) = 0;
+
+  virtual void visit_icmp_inst(icmp_inst*) = 0;
+  virtual void visit_fcmp_inst(fcmp_inst*) = 0;
+  virtual void visit_cast_inst(trunc_inst*) = 0;
+
+  virtual void visit_return_inst(return_inst*) = 0;
+  virtual void visit_cond_branch_inst(cond_branch_inst*) = 0;
+  virtual void visit_uncond_branch_inst(uncond_branch_inst*) = 0;
+
+
+  virtual void visit_unmasked_load_inst(unmasked_load_inst*) = 0;
+  virtual void visit_masked_load_inst(masked_load_inst*) = 0;
+  virtual void visit_unmasked_store_inst(unmasked_store_inst*) = 0;
+  virtual void visit_masked_store_inst(masked_store_inst*) = 0;
+
+  virtual void visit_retile_inst(retile_inst*) = 0;
+  virtual void visit_reshape_inst(reshape_inst*) = 0;
+  virtual void visit_splat_inst(splat_inst*) = 0;
+  virtual void visit_broadcast_inst(broadcast_inst*) = 0;
+  virtual void visit_downcast_inst(downcast_inst*) = 0;
+
+  virtual void visit_get_program_id_inst(get_program_id_inst*) = 0;
+  virtual void visit_get_num_program_inst(get_num_program_inst*) = 0;
+  virtual void visit_atomic_cas_inst(atomic_cas_inst*) = 0;
+  virtual void visit_atomic_exch_inst(atomic_exch_inst*) = 0;
+  virtual void visit_atomic_add_inst(atomic_add_inst*) = 0;
+  virtual void visit_dot_inst(dot_inst*) = 0;
+  virtual void visit_trans_inst(trans_inst*) = 0;
+  virtual void visit_sqrt_inst(sqrt_inst*) = 0;
+  virtual void visit_reduce_inst(reduce_inst*) = 0;
+  virtual void visit_select_inst(select_inst*) = 0;
+
+  virtual void visit_copy_to_shared_inst(copy_to_shared_inst*) = 0;
+  virtual void visit_copy_from_shared_inst(copy_from_shared_inst*) = 0;
+  virtual void visit_barrier_inst(barrier_inst*) = 0;
+  virtual void visit_make_range_dyn(make_range_dyn*) = 0;
+  virtual void visit_make_range_sta(make_range_sta*) = 0;
+  virtual void visit_make_range(make_range*) = 0;
+};
+
+}
+}
+
+#endif

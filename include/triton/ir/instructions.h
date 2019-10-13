@@ -10,10 +10,13 @@
 #include "triton/ir/value.h"
 #include "triton/ir/type.h"
 #include "triton/ir/metadata.h"
+#include "triton/ir/visitor.h"
 
 #define _TRITON_DEFINE_CLONE(name) \
   ir::instruction* clone_impl() const { return new name(*this); }
 
+#define _TRITON_DEFINE_ACCEPT(name) \
+  void accept(visitor* v) { v->visit_ ## name (this); }
 
 namespace triton{
 namespace ir{
@@ -23,6 +26,7 @@ class constant;
 class make_range;
 class basic_block;
 class context;
+class visitor;
 
 //===----------------------------------------------------------------------===//
 //                               instruction classes
@@ -99,6 +103,7 @@ public:
   static phi_node* create(type *ty, unsigned num_reserved, const std::string &name = "", instruction *next = nullptr);
 
   _TRITON_DEFINE_CLONE(phi_node)
+  _TRITON_DEFINE_ACCEPT(phi_node)
 
 private:
   unsigned num_reserved_;
@@ -148,6 +153,7 @@ public:
   static binary_operator *create_not(value *arg, const std::string &name = "", instruction *next = nullptr);
 
   _TRITON_DEFINE_CLONE(binary_operator)
+  _TRITON_DEFINE_ACCEPT(binary_operator)
 
 public:
   binary_op_t op_;
@@ -189,6 +195,7 @@ public:
   static icmp_inst* create(cmp_pred_t pred, value *lhs, value *rhs,
                     const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(icmp_inst)
+  _TRITON_DEFINE_ACCEPT(icmp_inst)
 };
 
 class fcmp_inst: public cmp_inst {
@@ -199,6 +206,7 @@ public:
   static fcmp_inst* create(cmp_pred_t pred, value *lhs, value *rhs,
                     const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(fcmp_inst)
+  _TRITON_DEFINE_ACCEPT(fcmp_inst)
 };
 
 //===----------------------------------------------------------------------===//
@@ -236,13 +244,15 @@ public:
   static cast_inst *create_integer_cast(value *arg, type *ty, bool is_signed,
                            const std::string &name = "", instruction *next = nullptr);
 
+  _TRITON_DEFINE_ACCEPT(cast_inst)
+
 private:
   cast_op_t op_;
 };
 
 #define TRITON_IR_DECLARE_CAST_INST_SIMPL(name, id, op) \
 class name : public cast_inst { \
-  _TRITON_DEFINE_CLONE(name); \
+  _TRITON_DEFINE_CLONE(name) \
   friend class cast_inst; \
   name(type *ty, value *v, const std::string &name, instruction *next) \
     : cast_inst(ty, id, v, name, next, op){ } \
@@ -287,6 +297,7 @@ public:
   static return_inst* create(context &ctx, value *ret_val = nullptr, instruction *next = nullptr);
 
   _TRITON_DEFINE_CLONE(return_inst)
+  _TRITON_DEFINE_ACCEPT(return_inst)
 };
 
 // base branch instruction
@@ -315,6 +326,7 @@ public:
   basic_block *get_false_dest() { return (basic_block*)get_operand(1); }
   value *get_cond()             { return get_operand(2); }
   _TRITON_DEFINE_CLONE(cond_branch_inst)
+  _TRITON_DEFINE_ACCEPT(cond_branch_inst)
 };
 
 // unconditional branch
@@ -326,6 +338,7 @@ private:
 public:
   basic_block *get_dest()  { return (basic_block*)get_operand(0); }
   _TRITON_DEFINE_CLONE(uncond_branch_inst)
+  _TRITON_DEFINE_ACCEPT(uncond_branch_inst)
 };
 
 
@@ -354,6 +367,7 @@ public:
   static getelementptr_inst* create(value *ptr, const std::vector<value*> &idx,
                                     const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(getelementptr_inst)
+  _TRITON_DEFINE_ACCEPT(getelementptr_inst)
 
 private:
   type *source_elt_ty;
@@ -395,6 +409,7 @@ public:
                                     const std::string &name = "",
                                     instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(unmasked_load_inst)
+  _TRITON_DEFINE_ACCEPT(unmasked_load_inst)
 };
 
 // masked load
@@ -413,6 +428,7 @@ public:
                                   const std::string &name = "",
                                   instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_load_inst)
+  _TRITON_DEFINE_ACCEPT(masked_load_inst)
 };
 
 // store
@@ -437,6 +453,7 @@ public:
                                     const std::string &name = "",
                                     instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(unmasked_store_inst)
+  _TRITON_DEFINE_ACCEPT(unmasked_store_inst)
 };
 
 class masked_store_inst: public store_inst{
@@ -453,6 +470,7 @@ public:
                                    const std::string &name = "",
                                    instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_store_inst)
+  _TRITON_DEFINE_ACCEPT(masked_store_inst)
 };
 
 //===----------------------------------------------------------------------===//
@@ -477,6 +495,7 @@ public:
   static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(reshape_inst)
+  _TRITON_DEFINE_ACCEPT(reshape_inst)
 };
 
 // splat
@@ -490,6 +509,7 @@ public:
   static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(splat_inst)
+  _TRITON_DEFINE_ACCEPT(splat_inst)
 };
 
 // broadcast
@@ -503,6 +523,7 @@ public:
   static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(broadcast_inst)
+  _TRITON_DEFINE_ACCEPT(broadcast_inst)
 };
 
 
@@ -516,6 +537,7 @@ private:
 public:
   static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(downcast_inst)
+  _TRITON_DEFINE_ACCEPT(downcast_inst)
 };
 
 //===----------------------------------------------------------------------===//
@@ -536,6 +558,7 @@ public:
   static instruction* create(context &ctx, unsigned axis, const std::string &name = "", instruction *next = nullptr);
   unsigned get_axis() const { return axis_; }
   _TRITON_DEFINE_CLONE(get_program_id_inst)
+  _TRITON_DEFINE_ACCEPT(get_program_id_inst)
 
 private:
   unsigned axis_;
@@ -550,6 +573,7 @@ public:
   static instruction* create(context &ctx, unsigned axis, const std::string &name = "", instruction *next = nullptr);
   unsigned get_axis() const { return axis_; }
   _TRITON_DEFINE_CLONE(get_num_program_inst)
+  _TRITON_DEFINE_ACCEPT(get_num_program_inst)
 
 private:
   unsigned axis_;
@@ -560,6 +584,7 @@ private:
   atomic_cas_inst(value *ptr, value *cmp, value *val, const std::string &name, instruction *next);
   std::string repr_impl() const { return "atomic_cas"; }
   _TRITON_DEFINE_CLONE(atomic_cas_inst)
+  _TRITON_DEFINE_ACCEPT(atomic_cas_inst)
 
 public:
   static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
@@ -570,6 +595,7 @@ private:
   atomic_exch_inst(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
   std::string repr_impl() const { return "atomic_exch"; }
   _TRITON_DEFINE_CLONE(atomic_exch_inst)
+  _TRITON_DEFINE_ACCEPT(atomic_exch_inst)
 
 public:
   static instruction* create(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
@@ -580,6 +606,7 @@ private:
   atomic_add_inst(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
   std::string repr_impl() const { return "atomic_add"; }
   _TRITON_DEFINE_CLONE(atomic_add_inst)
+  _TRITON_DEFINE_ACCEPT(atomic_add_inst)
 
 public:
   static instruction* create(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
@@ -600,6 +627,7 @@ public:
   static instruction* create_tn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
   static instruction* create_tt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(dot_inst)
+  _TRITON_DEFINE_ACCEPT(dot_inst)
 };
 
 //class outer_inst: public builtin_inst {
@@ -622,6 +650,7 @@ public:
   static instruction* create(value *arg, const std::vector<int> &perm = {}, const std::string &name = "", instruction *next = nullptr);
   const std::vector<int> get_perm() const;
   _TRITON_DEFINE_CLONE(trans_inst)
+  _TRITON_DEFINE_ACCEPT(trans_inst)
 
 private:
   std::vector<int> perm_;
@@ -634,6 +663,7 @@ private:
 public:
   static instruction* create(value *arg, const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(sqrt_inst)
+  _TRITON_DEFINE_ACCEPT(sqrt_inst)
 };
 
 class reduce_inst: public builtin_inst {
@@ -644,6 +674,7 @@ private:
   reduce_inst(value* arg, unsigned axis, const std::string& name, instruction* next);
   std::string repr_impl() const { return "reduce"; }
   _TRITON_DEFINE_CLONE(reduce_inst)
+  _TRITON_DEFINE_ACCEPT(reduce_inst)
 
 public:
   static instruction* create(value *arg, unsigned axis, const std::string &name = "", instruction *next = nullptr);
@@ -658,6 +689,7 @@ private:
   select_inst(value *pred, value *if_value, value *else_value, const std::string& name, instruction* next);
   std::string repr_impl() const { return "select"; }
   _TRITON_DEFINE_CLONE(select_inst)
+  _TRITON_DEFINE_ACCEPT(select_inst)
 
 public:
   static instruction* create(value *pred, value *if_value, value *else_value, const std::string &name = "", instruction *next = nullptr);
@@ -676,6 +708,7 @@ public:
   static copy_to_shared_inst* create(value *arg, const std::string &name = "",
                                      instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(copy_to_shared_inst)
+  _TRITON_DEFINE_ACCEPT(copy_to_shared_inst)
 };
 
 class copy_from_shared_inst: public unary_inst{
@@ -687,6 +720,7 @@ public:
   static copy_from_shared_inst* create(value *arg, const std::string &name = "",
                                      instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(copy_from_shared_inst)
+  _TRITON_DEFINE_ACCEPT(copy_from_shared_inst)
 };
 
 class barrier_inst: public instruction{
@@ -694,6 +728,7 @@ private:
   barrier_inst(context &ctx, const std::string &name, instruction *next);
   std::string repr_impl() const { return "barrier"; }
   _TRITON_DEFINE_CLONE(barrier_inst)
+  _TRITON_DEFINE_ACCEPT(barrier_inst)
 
 public:
   static barrier_inst* create(context &ctx, const std::string &name = "",
@@ -708,6 +743,7 @@ private:
   make_range_dyn(type *ty, const std::string &name, instruction *next);
   std::string repr_impl() const { return "nv_dynamic_program_idx"; }
   _TRITON_DEFINE_CLONE(make_range_dyn)
+  _TRITON_DEFINE_ACCEPT(make_range_dyn)
 
 public:
   static make_range_dyn* create(type *ty, const std::string &name = "", instruction *next = nullptr);
@@ -732,6 +768,7 @@ class make_range: public instruction{
   make_range(type *ty, constant_int* first, constant_int* last);
   std::string repr_impl() const { return "make_range[" + first_->repr() + " : " + last_->repr() + "]"; }
   _TRITON_DEFINE_CLONE(make_range)
+  _TRITON_DEFINE_ACCEPT(make_range)
 
 public:
   static make_range *create(constant_int *first, constant_int *last);

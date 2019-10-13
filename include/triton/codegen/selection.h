@@ -5,6 +5,7 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/type.h"
+#include "triton/ir/visitor.h"
 #include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/transform/cts.h"
 
@@ -23,6 +24,7 @@ namespace llvm{
   class ArrayType;
   class Function;
 }
+
 
 // typedefs
 namespace triton{
@@ -145,6 +147,82 @@ private:
 };
 
 
+class generator: public ir::visitor {
+private:
+  Type *type(ir::type *ty);
+
+private:
+  void visit_hmma_dot(ir::dot_inst*, distributed_tile *TC, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK);
+  void visit_scanline_dot(ir::dot_inst*, distributed_tile *TC, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK, Type *c_ty, Function *f_mul_add);
+  void visit_outer_dot(ir::dot_inst*, distributed_tile *TC, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK,
+                       Type *c_ty, Function *f_mul_add);
+
+  void for_each(ir::value *x, const std::function<void(indices_t)>& fn);
+  void get_value(ir::value *x, const indices_t& idx);
+  void set_value(ir::value *x, const indices_t& idx, Value* v);
+
+public:
+  void visit_phi_node(ir::phi_node*);
+  void visit_binary_operator(ir::binary_operator*);
+  void visit_getelementptr_inst(ir::getelementptr_inst*);
+
+  void visit_icmp_inst(ir::icmp_inst*);
+  void visit_fcmp_inst(ir::fcmp_inst*);
+  void visit_cast_inst(ir::cast_inst*);
+
+  void visit_return_inst(ir::return_inst*);
+  void visit_cond_branch_inst(ir::cond_branch_inst*);
+  void visit_uncond_branch_inst(ir::uncond_branch_inst*);
+
+
+  void visit_unmasked_load_inst(ir::unmasked_load_inst*);
+  void visit_masked_load_inst(ir::masked_load_inst*);
+  void visit_unmasked_store_inst(ir::unmasked_store_inst*);
+  void visit_masked_store_inst(ir::masked_store_inst*);
+
+  void visit_retile_inst(ir::retile_inst*);
+  void visit_reshape_inst(ir::reshape_inst*);
+  void visit_splat_inst(ir::splat_inst*);
+  void visit_broadcast_inst(ir::broadcast_inst*);
+  void visit_downcast_inst(ir::downcast_inst*);
+
+  void visit_get_program_id_inst(ir::get_program_id_inst*);
+  void visit_get_num_program_inst(ir::get_num_program_inst*);
+  void visit_atomic_cas_inst(ir::atomic_cas_inst*);
+  void visit_atomic_exch_inst(ir::atomic_exch_inst*);
+  void visit_atomic_add_inst(ir::atomic_add_inst*);
+  void visit_dot_inst(ir::dot_inst*);
+  void visit_trans_inst(ir::trans_inst*);
+  void visit_sqrt_inst(ir::sqrt_inst*);
+  void visit_reduce_inst(ir::reduce_inst*);
+  void visit_select_inst(ir::select_inst*);
+
+  void visit_copy_to_shared_inst(ir::copy_to_shared_inst*);
+  void visit_copy_from_shared_inst(ir::copy_from_shared_inst*);
+  void visit_barrier_inst(ir::barrier_inst*);
+  void visit_make_range_dyn(ir::make_range_dyn*);
+  void visit_make_range_sta(ir::make_range_sta*);
+  void visit_make_range(ir::make_range*);
+
+private:
+  LLVMContext *ctx_;
+  Function *fn_;
+  Builder *builder_;
+
+  std::map<ir::value *, Value *> vmap_;
+  std::map<ir::value *, tile *> tmap_;
+  target *tgt_;
+  analysis::layout *layouts_;
+  analysis::align *alignment_;
+  analysis::allocation *alloc_;
+  Value *sh_mem_ptr_;
+  Value *offset_a_i_, *offset_a_k_;
+  Value *offset_b_j_, *offset_b_k_;
+  unsigned num_packs_0_, num_packs_1_;
+  unsigned pack_size_0_, pack_size_1_;
+  unsigned num_warps_;
+};
+
 // Selection pass
 class selection{
   typedef std::map<ir::value *, Value *> vmap_t;
@@ -178,7 +256,7 @@ private:
   void init_layouts(ir::function *fn, Builder &builder, Value *sh_mem_ptr);
 
   // lower scalar instruction
-  void lower_instruction(ir::instruction *src, Builder &builder);
+  void lower_value(ir::value *src, Builder &builder, std::set<ir::value*>& seen);
   // lower tile instruction
   void lower_masked_store(ir::masked_store_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
   void lower_store(ir::store_inst *x, LLVMContext &ctx, Function *fn, Builder &builder);
