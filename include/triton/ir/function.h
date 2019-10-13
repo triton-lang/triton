@@ -112,6 +112,9 @@ public:
   const attr_map_t &attrs() { return attrs_; }
   std::set<attribute> get_attributes(argument* arg) { return attrs_[arg->get_arg_no() + 1]; }
 
+  // visitor
+  void accept(visitor *v) { v->visit_function(this); }
+
 private:
   module *parent_;
   bool init_;

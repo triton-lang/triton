@@ -35,6 +35,18 @@ struct double_buffer_info_t {
   ir::phi_node* phi;
 };
 
+class layout_visitor;
+class layout_hmma_884_t;
+class layout_scanline_t;
+class layout_shared_t;
+
+
+class layout_visitor {
+public:
+  virtual void visit_layout_hmma_884(layout_hmma_884_t*) = 0;
+  virtual void visit_layout_scanline(layout_scanline_t*) = 0;
+  virtual void visit_layout_shared(layout_shared_t*) = 0;
+};
 
 struct layout_t {
   layout_t(layout_type_t _type,
@@ -43,6 +55,9 @@ struct layout_t {
            const std::vector<ir::value *> &_values,
            size_t _id,
            analysis::align* align);
+
+  virtual void accept(layout_visitor* vst) = 0;
+
   layout_type_t type;
   std::vector<int> axes;
   std::vector<unsigned> shapes;
@@ -66,6 +81,7 @@ struct layout_hmma_884_t: public layout_t {
                     const std::vector<ir::value *> &_values,
                     size_t _id,
                     analysis::align* align);
+  void accept(layout_visitor* vst) { vst->visit_layout_hmma_884(this); }
 };
 
 struct layout_scanline_t: public layout_t {
@@ -75,6 +91,7 @@ struct layout_scanline_t: public layout_t {
                     const std::vector<ir::value *> &values,
                     size_t _id,
                     analysis::align* align);
+  void accept(layout_visitor* vst) { vst->visit_layout_scanline(this); }
 };
 
 struct layout_shared_t: public layout_t {
@@ -85,7 +102,9 @@ struct layout_shared_t: public layout_t {
                     ir::type *ty,
                     size_t _id,
                     analysis::align* align);
+  void accept(layout_visitor* vst) { vst->visit_layout_shared(this); }
 };
+
 
 
 class layout {

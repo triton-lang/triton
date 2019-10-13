@@ -13,6 +13,7 @@ namespace ir{
 class type;
 class use;
 class user;
+class visitor;
 
 //===----------------------------------------------------------------------===//
 //                               value class
@@ -73,6 +74,9 @@ public:
   // Utils
   void replace_all_uses_with(value *target);
   void replace_uses_of_with(value *before, value *after);
+
+  // Visitor
+  virtual void accept(visitor *v) = 0;
 
 private:
   ops_t ops_;

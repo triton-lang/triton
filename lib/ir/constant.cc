@@ -76,27 +76,6 @@ constant *constant_fp::get(type *ty, double v){
   return result;
 }
 
-// metaparameter
-metaparameter::metaparameter(type *ty, const std::vector<unsigned> &space)
-  : constant_int(ty, 0), space_(space), has_value_(false){ }
-
-metaparameter* metaparameter::create(context &ctx, type *ty, unsigned lo, unsigned hi) {
-  context_impl *impl = ctx.p_impl.get();
-  std::vector<unsigned> space;
-  for(unsigned i = lo; i <= hi; i *= 2)
-    space.push_back(i);
-  metaparameter *result = new metaparameter(ty, space);
-  impl->mp_constants_.push_back(result);
-  return result;
-}
-
-metaparameter* metaparameter::create(context &ctx, type *ty, const std::vector<unsigned> &space) {
-  context_impl *impl = ctx.p_impl.get();
-  metaparameter *result = new metaparameter(ty, space);
-  impl->mp_constants_.push_back(result);
-  return result;
-}
-
 
 // undef value
 undef_value::undef_value(type *ty)

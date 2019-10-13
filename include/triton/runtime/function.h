@@ -43,7 +43,6 @@ namespace ir {
 class module;
 class function;
 class context;
-class metaparameter;
 }
 
 namespace runtime{
