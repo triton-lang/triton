@@ -73,8 +73,18 @@ The PyTriton API provides a `triton.function` class which automatically handles 
 ```python
 import triton
 
+# Entry point
 class _dot(triton.function):
 
+  @staticmethod
+  # Forward Pass
+  def forward(ctx, *args):
+    #...
+  
+  @staticmethod
+  # Backward Pass
+  def backward(ctx, dy):
+    #...
 ```
 
 ### <span style="color:darkblue">Creation of Triton Kernels </span> <a name="creation-triton-kernel"></a>
