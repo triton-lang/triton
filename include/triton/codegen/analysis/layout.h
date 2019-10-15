@@ -53,6 +53,7 @@ struct layout_t {
            const std::vector<int>& _axes,
            const std::vector<unsigned> &_shapes,
            const std::vector<ir::value *> &_values,
+           ir::type *_ty,
            size_t _id,
            analysis::align* align);
 
@@ -79,6 +80,7 @@ struct layout_hmma_884_t: public layout_t {
                     const std::vector<int>& _axes,
                     const std::vector<unsigned>& _shapes,
                     const std::vector<ir::value *> &_values,
+                    ir::type *_ty,
                     size_t _id,
                     analysis::align* align);
   void accept(layout_visitor* vst) { vst->visit_layout_hmma_884(this); }
@@ -89,6 +91,7 @@ struct layout_scanline_t: public layout_t {
                     const std::vector<int>& _axes,
                     const std::vector<unsigned>& _shapes,
                     const std::vector<ir::value *> &values,
+                    ir::type *_ty,
                     size_t _id,
                     analysis::align* align);
   void accept(layout_visitor* vst) { vst->visit_layout_scanline(this); }
