@@ -1331,7 +1331,16 @@ void generator::visit_function(ir::function* fn) {
   fn_ = ret;
 }
 
-void generator::visit_layout_hmma_884(analysis::layout_hmma_884_t* layout) {
+machine_layout_hmma_884_t::machine_layout_hmma_884_t(Module *mod, Builder *builder,
+                          target *tgt, std::map<unsigned, distributed_axis>& axes,
+                          Value *&offset_a_i, Value *&offset_a_k, Value *&offset_b_j, Value *&offset_b_k,
+                          unsigned &pack_size_0, unsigned &pack_size_1,
+                          unsigned &num_packs_0, unsigned &num_packs_1,
+                          analysis::layout_hmma_884_t* layout)
+  : mod_(mod), builder_(builder), tgt_(tgt), axes_(axes),
+    offset_a_i_(offset_a_i), offset_a_k_(offset_a_k), offset_b_j_(offset_b_j), offset_b_k_(offset_b_k),
+    pack_size_0_(pack_size_0), pack_size_1_(pack_size_1), num_packs_0_(num_packs_0), num_packs_1_(num_packs_1),
+    layout_(layout) {
   Value *warp_size = builder_->getInt32(32);
   Value* u_thread_id_0 = tgt_->get_local_id(mod_, *builder_, 0);
   Value *u_thread_id = builder_->CreateURem(u_thread_id_0, warp_size);
@@ -1441,11 +1450,14 @@ void generator::visit_layout_hmma_884(analysis::layout_hmma_884_t* layout) {
   axes_[layout->axes[1]] = distributed_axis{1, idx_j, warp_id_1};
   if(is_batched)
     axes_[layout->axes[2]] = distributed_axis{1, idx_z, warp_id_2};
-
-  machine_layouts_[layout] = new machine_layout_hmma_884_t();
 }
 
-void generator::visit_layout_scanline(analysis::layout_scanline_t* layout) {
+
+machine_layout_scanline_t::machine_layout_scanline_t(Module *mod, Builder *builder,
+                                                     target *tgt, std::map<unsigned, distributed_axis> &axes,
+                                                     analysis::layout_scanline_t* layout)
+  : mod_(mod), builder_(builder), tgt_(tgt), axes_(axes), layout_(layout)
+{
   Value *warp_size = builder_->getInt32(32);
   Value* u_thread_id_0 = tgt_->get_local_id(mod_, *builder_, 0);
   Value *u_thread_id = builder_->CreateURem(u_thread_id_0, warp_size);
@@ -1472,8 +1484,17 @@ void generator::visit_layout_scanline(analysis::layout_scanline_t* layout) {
     }
     axes_[layout->axes[k]] = distributed_axis{nts[k], idx_list, thread_id[k]};
   }
+}
 
-  machine_layouts_[layout] = new machine_layout_scanline_t();
+void generator::visit_layout_hmma_884(analysis::layout_hmma_884_t* layout) {
+  machine_layouts_[layout] = new machine_layout_hmma_884_t(mod_, builder_, tgt_, axes_, offset_a_i_, offset_a_k_, offset_b_j_, offset_b_k_,
+                                                           pack_size_0_, pack_size_1_,
+                                                           num_packs_0_, num_packs_1_,
+                                                           layout);
+}
+
+void generator::visit_layout_scanline(analysis::layout_scanline_t* layout) {
+  machine_layouts_[layout] = new machine_layout_scanline_t(mod_, builder_, tgt_, axes_, layout);
 }
 
 void generator::visit_layout_shared(analysis::layout_shared_t* layout) {
