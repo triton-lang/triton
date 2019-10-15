@@ -155,11 +155,36 @@ class machine_layout_shared_t: public machine_layout_t {
 };
 
 class machine_layout_hmma_884_t: public machine_layout_t {
-
+public:
+  machine_layout_hmma_884_t(Module *mod, Builder *builder,
+                            target *tgt, std::map<unsigned, distributed_axis>& axes,
+                            Value *&offset_a_i, Value *&offset_a_k, Value *&offset_b_j, Value *&offset_b_k,
+                            unsigned &pack_size_0, unsigned &pack_size_1,
+                            unsigned &num_packs_0, unsigned &num_packs_1,
+                            analysis::layout_hmma_884_t* layout);
+  Module *mod_;
+  Builder *builder_;
+  target *tgt_;
+  std::map<unsigned, distributed_axis>& axes_;
+  Value *&offset_a_i_, *&offset_a_k_;
+  Value *&offset_b_j_, *&offset_b_k_;
+  unsigned &pack_size_0_;
+  unsigned& pack_size_1_;
+  unsigned &num_packs_0_;
+  unsigned& num_packs_1_;
+  analysis::layout_hmma_884_t* layout_;
 };
 
 class machine_layout_scanline_t: public machine_layout_t {
-
+public:
+  machine_layout_scanline_t(Module *mod, Builder *builder,
+                            target *tgt, std::map<unsigned, distributed_axis>& axes,
+                            analysis::layout_scanline_t* layout);
+  Module *mod_;
+  Builder *builder_;
+  target *tgt_;
+  std::map<unsigned, distributed_axis>& axes_;
+  analysis::layout_scanline_t* layout_;
 };
 
 class generator: public ir::visitor, public analysis::layout_visitor {
