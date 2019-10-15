@@ -147,44 +147,54 @@ private:
 };
 
 class machine_layout_t {
-
+  virtual tile* create(ir::value *v) = 0;
 };
 
 class machine_layout_shared_t: public machine_layout_t {
-
+public:
+  shared_tile* create(ir::value *v);
 };
 
-class machine_layout_hmma_884_t: public machine_layout_t {
+class machine_layout_distributed_t: public machine_layout_t {
+public:
+  machine_layout_distributed_t(Module *mod, Builder *builder, target *tgt, Type *ty,
+                               analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
+                               analysis::layout_t* layout);
+
+  distributed_tile* create(ir::value *v);
+  Module *mod_;
+  Builder *builder_;
+  target *tgt_;
+  Type *ty_;
+  analysis::axes *a_axes_;
+  std::map<unsigned, distributed_axis>& axes_;
+  analysis::layout_t* layout_;
+};
+
+
+class machine_layout_hmma_884_t: public machine_layout_distributed_t {
 public:
   machine_layout_hmma_884_t(Module *mod, Builder *builder,
-                            target *tgt, std::map<unsigned, distributed_axis>& axes,
+                            target *tgt, Type *ty,
+                            analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
                             Value *&offset_a_i, Value *&offset_a_k, Value *&offset_b_j, Value *&offset_b_k,
                             unsigned &pack_size_0, unsigned &pack_size_1,
                             unsigned &num_packs_0, unsigned &num_packs_1,
                             analysis::layout_hmma_884_t* layout);
-  Module *mod_;
-  Builder *builder_;
-  target *tgt_;
-  std::map<unsigned, distributed_axis>& axes_;
   Value *&offset_a_i_, *&offset_a_k_;
   Value *&offset_b_j_, *&offset_b_k_;
   unsigned &pack_size_0_;
   unsigned& pack_size_1_;
   unsigned &num_packs_0_;
   unsigned& num_packs_1_;
-  analysis::layout_hmma_884_t* layout_;
 };
 
-class machine_layout_scanline_t: public machine_layout_t {
+class machine_layout_scanline_t: public machine_layout_distributed_t {
 public:
   machine_layout_scanline_t(Module *mod, Builder *builder,
-                            target *tgt, std::map<unsigned, distributed_axis>& axes,
+                            target *tgt, Type *ty,
+                            analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
                             analysis::layout_scanline_t* layout);
-  Module *mod_;
-  Builder *builder_;
-  target *tgt_;
-  std::map<unsigned, distributed_axis>& axes_;
-  analysis::layout_scanline_t* layout_;
 };
 
 class generator: public ir::visitor, public analysis::layout_visitor {
@@ -194,7 +204,6 @@ private:
   void visit_outer_dot(ir::dot_inst*, distributed_tile *TC, distributed_tile *TA, distributed_tile *TB, distributed_tile *TD, unsigned NK,
                        Type *c_ty, Function *f_mul_add);
 
-  Type *type(ir::type *ty);
   void for_each(ir::value *x, const std::function<void(indices_t)>& fn);
   Value* get_value(ir::value *x, const indices_t& idx);
   void set_value(ir::value *x, const indices_t& idx, Value* v);
@@ -203,6 +212,7 @@ public:
   generator(LLVMContext *ctx,
             Module *dst,
             Builder *builder,
+            analysis::axes *a_axes,
             std::map<unsigned, distributed_axis>& axes,
             std::map<ir::value *, Value *>& vmap,
             std::map<ir::value *, tile *>& tmap,
@@ -216,12 +226,13 @@ public:
             unsigned num_packs_0, unsigned num_packs_1,
             unsigned pack_size_0, unsigned pack_size_1,
             unsigned num_warps)
-    : ctx_(ctx), mod_(dst), builder_(builder), axes_(axes), vmap_(vmap), tmap_(tmap), tgt_(tgt),
+    : ctx_(ctx), mod_(dst), builder_(builder), a_axes_(a_axes), axes_(axes), vmap_(vmap), tmap_(tmap), tgt_(tgt),
       layouts_(layouts), alignment_(alignment), alloc_(alloc), sh_mem_ptr_(sh_mem_ptr),
       offset_a_i_(offset_a_i), offset_a_k_(offset_a_k), offset_b_j_(offset_b_j), offset_b_k_(offset_b_k),
       num_packs_0_(num_packs_0), num_packs_1_(num_packs_1), pack_size_0_(pack_size_0), pack_size_1_(pack_size_1),
       num_warps_(num_warps) { }
 
+  machine_layout_t *get_machine_layout(const analysis::layout_t *layout) { return machine_layouts_.at(layout); }
 
   void visit_phi_node(ir::phi_node*);
   void visit_binary_operator(ir::binary_operator*);
@@ -281,7 +292,8 @@ private:
   Builder *builder_;
   Module *mod_;
 
-  std::map<analysis::layout_t*, machine_layout_t*> machine_layouts_;
+  std::map<const analysis::layout_t*, machine_layout_t*> machine_layouts_;
+  analysis::axes *a_axes_;
   std::map<unsigned, distributed_axis>& axes_;
   std::map<ir::value *, Value *>& vmap_;
   std::map<ir::value *, tile *>& tmap_;
@@ -311,7 +323,6 @@ private:
 
   // grid construction
   void create_shared_tile(ir::value *v, Builder &builder, Value *sh_mem_ptr);
-  void create_distributed_tile(ir::value *v, Builder &builder);
 
   // lower scalar instruction
   void lower_value(ir::value *src, Builder &builder, generator* gen, std::set<ir::value*>& seen);

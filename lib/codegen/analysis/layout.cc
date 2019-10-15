@@ -128,9 +128,9 @@ inline bool is_trans(ir::value *v) {
 layout_t::layout_t(layout_type_t _type,
                    const std::vector<int> &_axes,
                    const std::vector<unsigned> &_shapes,
-                   const std::vector<ir::value *> &_values,
+                   const std::vector<ir::value *> &_values, ir::type *_ty,
                    size_t _id,
-                   analysis::align* align): type(_type), axes(_axes), shapes(_shapes), values(_values), id(_id) {
+                   analysis::align* align): type(_type), axes(_axes), shapes(_shapes), values(_values), id(_id), ty(_ty) {
   // io pointer
   std::set<ir::value*> ptr;
   for(ir::value* v: values)
@@ -152,8 +152,8 @@ inline unsigned clamp(unsigned x, unsigned lo, unsigned hi) {
 layout_hmma_884_t::layout_hmma_884_t(size_t num_warps,
                                      const std::vector<int>& _axes,
                                      const std::vector<unsigned>& _shapes,
-                                     const std::vector<ir::value *> &values, size_t _id,
-                                     analysis::align* align): layout_t(HMMA_884, _axes, _shapes, values, _id, align) {
+                                     const std::vector<ir::value *> &values, ir::type *_ty, size_t _id,
+                                     analysis::align* align): layout_t(HMMA_884, _axes, _shapes, values, _ty, _id, align) {
 
   unsigned shape_0 = shapes[order[0]];
   unsigned shape_1 = shapes[order[1]];
@@ -194,9 +194,9 @@ layout_hmma_884_t::layout_hmma_884_t(size_t num_warps,
 layout_scanline_t::layout_scanline_t(size_t num_warps,
                                      const std::vector<int>& _axes,
                                      const std::vector<unsigned>& _shapes,
-                                     const std::vector<ir::value *> &values,
+                                     const std::vector<ir::value *> &values, ir::type *_ty,
                                      size_t _id,
-                                     analysis::align* align): layout_t(SCANLINE, _axes, _shapes, values, _id, align){
+                                     analysis::align* align): layout_t(SCANLINE, _axes, _shapes, values, _ty, _id, align){
   unsigned size = std::accumulate(shapes.begin(), shapes.end(), 1, std::multiplies<int>());
   unsigned num_threads = num_warps * 32;
   nts.resize(shapes.size());
@@ -263,9 +263,8 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
                                  const std::vector<ir::value *> &values,
                                  ir::type *ty,
                                  size_t _id,
-                                 analysis::align* align): layout_t(SHARED, _axes, _shapes, values, _id, align) {
+                                 analysis::align* align): layout_t(SHARED, _axes, _shapes, values, ty, _id, align) {
 
-  this->ty = ty;
   size = 0;
 
   // double-buffering
@@ -333,7 +332,7 @@ void layout::create(size_t id, const std::vector<ir::value*>& values) {
   });
   // type
   if(it_hmma_c != values.end())
-    layouts_[id] = new layout_hmma_884_t(num_warps_, axes, shapes, values, id, align_);
+    layouts_[id] = new layout_hmma_884_t(num_warps_, axes, shapes, values, largest->get_type()->get_scalar_ty(), id, align_);
   else if(it_cts != values.end()){
     ir::copy_to_shared_inst *cts = (ir::copy_to_shared_inst*)*it_cts;
     ir::value *arg = cts->get_operand(0);
@@ -341,7 +340,7 @@ void layout::create(size_t id, const std::vector<ir::value*>& values) {
     layouts_[id] = new layout_shared_t(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), id, align_);
   }
   else
-    layouts_[id] = new layout_scanline_t(num_warps_, axes, shapes, values, id, align_);
+    layouts_[id] = new layout_scanline_t(num_warps_, axes, shapes, values, largest->get_type()->get_scalar_ty(), id, align_);
 }
 
 void layout::run(ir::module &mod) {
