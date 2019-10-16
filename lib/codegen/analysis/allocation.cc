@@ -99,15 +99,9 @@ void allocation::run(ir::module &mod) {
     unsigned Adj = 0;
     for(layout_t* y: interferences[x])
       Adj = std::max<unsigned>(Adj, starts[y] + y->size);
-    // create offsets
-    for(ir::value *v: x->values){
-      offsets_[v] = starts[x] + colors[x] * Adj;
-    }
-    if(x->double_buffer){
-      auto info = *x->double_buffer;
-      offsets_[info.latch] = offsets_[info.first] + x->size / 2;
-    }
+    offsets_[x] = starts[x] + colors[x] * Adj;
   }
+
 
   // Save maximum size of induced memory space
   allocated_size_ = 0;

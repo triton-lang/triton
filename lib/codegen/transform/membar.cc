@@ -37,8 +37,10 @@ void membar::add_reference(ir::value *v, interval_vec_t &res){
   auto *i = dynamic_cast<ir::instruction*>(v);
   if(!i)
     return;
-  if(alloc_->has_offset(v)){
-    unsigned offset = alloc_->offset(v);
+  if(!i->get_type()->is_tile_ty())
+    return;
+  if(alloc_->has_offset(layouts_->get(v))){
+    unsigned offset = alloc_->offset(layouts_->get(v));
     unsigned size = layouts_->get(v)->size;
     res.push_back(interval_t(offset, offset + size));
   }
