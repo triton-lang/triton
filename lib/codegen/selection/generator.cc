@@ -214,7 +214,7 @@ void generator::visit_phi_node(ir::phi_node* phi) {
   Type *ty = llvm_type(phi->get_type()->get_scalar_ty(), *ctx_);
   unsigned num_ops = phi->get_num_operands();
   for_each(phi, [&](indices_t idx){
-    set_value(phi, idx, builder_->Insert(PHINode::Create(ty, num_ops)));
+    set_value(phi, idx, builder_->CreatePHI(ty, num_ops));
   });
 }
 
@@ -222,7 +222,7 @@ void generator::visit_binary_operator(ir::binary_operator*binop) {
   for_each(binop, [&](indices_t idx){
     Value *lhs = get_value(binop->get_operand(0), idx);
     Value *rhs = get_value(binop->get_operand(1), idx);
-    Value *ret = builder_->Insert(BinaryOperator::Create(llvm_op(binop->get_op()), lhs, rhs));
+    Value *ret = builder_->CreateBinOp(llvm_op(binop->get_op()), lhs, rhs);
     set_value(binop, idx, ret);
   });
 }
@@ -234,7 +234,7 @@ void generator::visit_getelementptr_inst(ir::getelementptr_inst* gep) {
     std::transform(gep->idx_begin(), gep->idx_end(), std::back_inserter(idx_vals),
                    [&](ir::value* x){ return get_value(x, idx);});
     Type *source_ty = llvm_type(gep->get_source_elt_ty()->get_scalar_ty(), *ctx_);
-    Value *ret = builder_->Insert(GetElementPtrInst::CreateInBounds(source_ty, ptr, idx_vals));
+    Value *ret = builder_->CreateGEP(source_ty, ptr, idx_vals);
     set_value(gep, idx, ret);
   });
 }
@@ -244,7 +244,7 @@ void generator::visit_icmp_inst(ir::icmp_inst* icmp) {
     ir::cmp_pred_t pred = icmp->get_pred();
     Value *lhs = get_value(icmp->get_operand(0), idx);
     Value *rhs = get_value(icmp->get_operand(1), idx);
-    Value *ret = builder_->Insert(CmpInst::Create(Instruction::ICmp, llvm_pred(pred), lhs, rhs));
+    Value *ret = builder_->CreateICmp(llvm_pred(pred), lhs, rhs);
     set_value(icmp, idx, ret);
   });
 }
@@ -254,7 +254,7 @@ void generator::visit_fcmp_inst(ir::fcmp_inst* fcmp) {
     ir::cmp_pred_t pred = fcmp->get_pred();
     Value *lhs = get_value(fcmp->get_operand(0), idx);
     Value *rhs = get_value(fcmp->get_operand(1), idx);
-    Value *ret = builder_->Insert(FCmpInst::Create(Instruction::FCmp, llvm_pred(pred), lhs, rhs));
+    Value *ret = builder_->CreateFCmp(llvm_pred(pred), lhs, rhs);
     set_value(fcmp, idx, ret);
   });
 }
@@ -263,26 +263,26 @@ void generator::visit_cast_inst(ir::cast_inst* cast) {
   for_each(cast, [&](indices_t idx){
     Value *arg = get_value(cast->get_operand(0), idx);
     Type *dst_ty = llvm_type(cast->get_type()->get_scalar_ty(), *ctx_);
-    Value *ret = builder_->Insert(CastInst::Create(llvm_op(cast->get_op()), arg, dst_ty));
+    Value *ret = builder_->CreateCast(llvm_op(cast->get_op()), arg, dst_ty);
     set_value(cast, idx, ret);
   });
 }
 
 void generator::visit_return_inst(ir::return_inst* rr) {
   ir::value *ret_val = rr->get_return_value();
-  builder_->Insert(ReturnInst::Create(*ctx_, ret_val ? vmap_.at(ret_val) : nullptr));
+  builder_->CreateRet(ret_val ? vmap_.at(ret_val) : nullptr);
 }
 
 void generator::visit_cond_branch_inst(ir::cond_branch_inst* br) {
   BasicBlock *true_dest  = (BasicBlock*)vmap_.at(br->get_true_dest());
   BasicBlock *false_dest = (BasicBlock*)vmap_.at(br->get_false_dest());
   Value *cond = vmap_.at(br->get_cond());
-  builder_->Insert(BranchInst::Create(true_dest, false_dest, cond));
+  builder_->CreateCondBr(cond, true_dest, false_dest);
 }
 
 void generator::visit_uncond_branch_inst(ir::uncond_branch_inst* br) {
   BasicBlock *dest = (BasicBlock*)vmap_.at(br->get_dest());
-  builder_->Insert(BranchInst::Create(dest));
+  builder_->CreateBr(dest);
 }
 
 
@@ -757,7 +757,7 @@ void generator::visit_select_inst(ir::select_inst* select) {
     Value *pred = get_value(select->get_operand(0), idx);
     Value *if_value = get_value(select->get_operand(1), idx);
     Value *else_value = get_value(select->get_operand(2), idx);
-    Value *ret = builder_->Insert(SelectInst::Create(pred, if_value, else_value));
+    Value *ret = builder_->CreateSelect(pred, if_value, else_value);
     set_value(select, idx, ret);
   });
 
