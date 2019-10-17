@@ -124,6 +124,10 @@ inline bool is_trans(ir::value *v) {
 }
 
 
+void layout_visitor::visit_layout(layout_t *layout) {
+  layout->accept(this);
+}
+
 
 layout_t::layout_t(layout_type_t _type,
                    const std::vector<int> &_axes,
@@ -144,6 +148,7 @@ layout_t::layout_t(layout_type_t _type,
     });
   }
 }
+
 
 inline unsigned clamp(unsigned x, unsigned lo, unsigned hi) {
   return std::min(std::max(x, lo), hi);

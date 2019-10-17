@@ -7,6 +7,8 @@
 namespace triton{
 namespace ir{
 
+class value;
+
 class instruction;
 
 class phi_node;
@@ -81,10 +83,18 @@ class alloc_const;
 
 class function;
 
+class basic_block;
+
+class argument;
+
 class visitor {
 public:
   virtual ~visitor() {}
 
+  virtual void visit_value(ir::value*);
+
+  virtual void visit_basic_block(basic_block*) = 0;
+  virtual void visit_argument(argument*) = 0;
   virtual void visit_phi_node(phi_node*) = 0;
   virtual void visit_binary_operator(binary_operator*) = 0;
   virtual void visit_getelementptr_inst(getelementptr_inst*) = 0;

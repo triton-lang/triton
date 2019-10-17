@@ -6,6 +6,7 @@
 #include <string>
 #include <list>
 #include "value.h"
+#include "visitor.h"
 
 namespace triton{
 namespace ir{
@@ -65,6 +66,9 @@ public:
 
   // factory functions
   static basic_block* create(context &ctx, const std::string &name, function *parent);
+
+  // visitor
+  void accept(visitor *v) { v->visit_basic_block(this); }
 
 private:
   context &ctx_;

@@ -25,6 +25,10 @@ unsigned argument::get_arg_no() const {
   return arg_no_;
 }
 
+void argument::accept(visitor *v) {
+  v->visit_argument(this);
+}
+
 
 /* function */
 function::function(function_type *ty, linkage_types_t linkage,
