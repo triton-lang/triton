@@ -79,12 +79,11 @@ private:
   void finalize_phi_node(ir::phi_node*);
 
 public:
-  generator(Module *dst,
-            analysis::axes *a_axes,
-            target *tgt,
+  generator(analysis::axes *a_axes,
             analysis::layout *layouts,
             analysis::align *alignment,
             analysis::allocation *alloc,
+            target *tgt,
             unsigned num_warps);
 
   void visit_value(ir::value* v);
@@ -142,6 +141,8 @@ public:
   void visit_layout_hmma_884(analysis::layout_hmma_884_t*);
   void visit_layout_scanline(analysis::layout_scanline_t*);
   void visit_layout_shared(analysis::layout_shared_t*);
+
+  void visit(ir::module &, llvm::Module &);
 
 private:
   LLVMContext *ctx_;

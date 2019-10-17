@@ -1,6 +1,7 @@
 #include <numeric>
 #include "triton/codegen/selection/machine_layout.h"
 #include "triton/codegen/selection/machine_value.h"
+#include "triton/codegen/selection/generator.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/axes.h"
 #include "triton/codegen/target.h"
@@ -13,18 +14,18 @@ namespace codegen{
 
 using namespace llvm;
 
-inline Type *type(ir::type *ty, LLVMContext &ctx) {
+inline Type *llvm_type(ir::type *ty, LLVMContext &ctx) {
   // function
   if(auto* tt = dynamic_cast<ir::function_type*>(ty)){
-    Type *return_ty = type(tt->get_return_ty(), ctx);
+    Type *return_ty = llvm_type(tt->get_return_ty(), ctx);
     std::vector<Type*> param_tys;
     std::transform(tt->params_begin(), tt->params_end(), std::back_inserter(param_tys),
-                   [&ctx](ir::type* t){ return type(t, ctx);});
+                   [&ctx](ir::type* t){ return llvm_type(t, ctx);});
     return FunctionType::get(return_ty, param_tys, false);
   }
   // pointer
   if(ty->is_pointer_ty()){
-    Type *elt_ty = type(ty->get_pointer_element_ty(), ctx);
+    Type *elt_ty = llvm_type(ty->get_pointer_element_ty(), ctx);
     unsigned addr_space = ty->get_pointer_address_space();
     return PointerType::get(elt_ty, addr_space);
   }
@@ -80,7 +81,7 @@ machine_layout_shared_t::machine_layout_shared_t(Module *mod, Builder *builder, 
   auto shapes = layout_->shapes;
   shapes[order[0]] += layout_->pad;
 
-  Type* ty = type(layout_->ty, builder_->getContext());
+  Type* ty = llvm_type(layout_->ty, builder_->getContext());
 
   PointerType *ptr_ty = ty->getPointerTo(sh_mem_ptr_->getType()->getPointerAddressSpace());
   // double-buffered
@@ -113,7 +114,7 @@ tile* machine_layout_shared_t::create(ir::value *v) {
   auto order = layout_->order;
   auto shapes = layout_->shapes;
   shapes[order[0]] += layout_->pad;
-  Type* ty = type(layout_->ty, builder_->getContext());
+  Type* ty = llvm_type(layout_->ty, builder_->getContext());
   // double-buffered
   if(layout_->double_buffer) {
     if(v == layout_->double_buffer->phi)
@@ -135,7 +136,7 @@ machine_layout_distributed_t::machine_layout_distributed_t(Module *mod, Builder 
 }
 
 tile *machine_layout_distributed_t::create(ir::value *v) {
-  Type *ty = type(v->get_type()->get_scalar_ty(), builder_->getContext());
+  Type *ty = llvm_type(v->get_type()->get_scalar_ty(), builder_->getContext());
   const auto &shapes = v->get_type()->get_tile_shapes();
   std::vector<distributed_axis> axes(shapes.size());
   for(size_t d = 0; d < shapes.size(); d++){

@@ -9,7 +9,7 @@
 #include <memory>
 #include <functional>
 // codegen
-#include "triton/codegen/selection.h"
+#include "triton/ir/context.h"
 #include "triton/codegen/target.h"
 #include "triton/lang/parser.h"
 #include "triton/runtime/arg.h"
