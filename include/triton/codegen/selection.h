@@ -178,7 +178,7 @@ public:
 class machine_layout_distributed_t: public machine_layout_t {
 public:
   machine_layout_distributed_t(Module *mod, Builder *builder, target *tgt, Type *ty,
-                               analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
+                               std::map<unsigned, distributed_axis>& axes,
                                analysis::layout_t* layout);
 
   tile* create(ir::value *v);
@@ -186,7 +186,6 @@ public:
   Builder *builder_;
   target *tgt_;
   Type *ty_;
-  analysis::axes *a_axes_;
   std::map<unsigned, distributed_axis>& axes_;
   analysis::layout_t* layout_;
 };
@@ -196,7 +195,7 @@ class machine_layout_hmma_884_t: public machine_layout_distributed_t {
 public:
   machine_layout_hmma_884_t(Module *mod, Builder *builder,
                             target *tgt, Type *ty,
-                            analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
+                            std::map<unsigned, distributed_axis>& axes,
                             analysis::layout_hmma_884_t* layout);
   Value *offset_a_i_, *offset_a_k_;
   Value *offset_b_j_, *offset_b_k_;
@@ -210,7 +209,7 @@ class machine_layout_scanline_t: public machine_layout_distributed_t {
 public:
   machine_layout_scanline_t(Module *mod, Builder *builder,
                             target *tgt, Type *ty,
-                            analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
+                            std::map<unsigned, distributed_axis>& axes,
                             analysis::layout_scanline_t* layout);
 };
 
@@ -230,22 +229,12 @@ private:
   void finalize_phi_node(ir::phi_node*);
 
 public:
-  generator(LLVMContext *ctx,
-            Module *dst,
-            Builder *builder,
-            analysis::axes *a_axes,
-            std::map<unsigned, distributed_axis>& axes,
-            std::map<ir::value *, Value *>& vmap,
-            std::map<ir::value *, tile *>& tmap,
+  generator(Module *dst,
             target *tgt,
             analysis::layout *layouts,
             analysis::align *alignment,
             analysis::allocation *alloc,
-            Value *sh_mem_ptr,
-            unsigned num_warps)
-    : ctx_(ctx), mod_(dst), builder_(builder), a_axes_(a_axes), axes_(axes), vmap_(vmap), tmap_(tmap), tgt_(tgt),
-      layouts_(layouts), alignment_(alignment), alloc_(alloc), sh_mem_ptr_(sh_mem_ptr),
-      num_warps_(num_warps) { }
+            unsigned num_warps);
 
   void visit_value(ir::value* v);
 
@@ -305,14 +294,13 @@ public:
 
 private:
   LLVMContext *ctx_;
-  Builder *builder_;
+  std::unique_ptr<Builder> builder_;
   Module *mod_;
 
   std::map<const analysis::layout_t*, machine_layout_t*> machine_layouts_;
-  analysis::axes *a_axes_;
-  std::map<unsigned, distributed_axis>& axes_;
-  std::map<ir::value *, Value *>& vmap_;
-  std::map<ir::value *, tile *>& tmap_;
+  std::map<unsigned, distributed_axis> axes_;
+  std::map<ir::value *, Value *> vmap_;
+  std::map<ir::value *, tile *> tmap_;
   target *tgt_;
   analysis::layout *layouts_;
   analysis::align *alignment_;
@@ -329,30 +317,22 @@ class selection{
   typedef std::map<ir::value *, Value *> vmap_t;
   typedef std::map<ir::value *, tile *> tmap_t;
 
-private:
-  // LLVM conversions
-  Value*       alloc_shared(Builder &builder, Module& dst);
-
 public:
   selection(analysis::liveness* liveness, analysis::allocation *alloc,
-            analysis::align *alignment, analysis::axes *axes,
+            analysis::align *alignment,
             analysis::layout *layouts, target *tgt, unsigned num_warps)
     : liveness_(liveness), alloc_(alloc),
-      alignment_(alignment), a_axes_(axes), layouts_(layouts),
+      alignment_(alignment), layouts_(layouts),
       tgt_(tgt), num_warps_(num_warps){ }
 
   void run(ir::module &src, Module &dst);
 
 private:
-  vmap_t vmap_;
-  tmap_t tmap_;
   analysis::liveness *liveness_;
   analysis::allocation *alloc_;
-  analysis::axes *a_axes_;
   analysis::layout *layouts_;
   analysis::align *alignment_;
   target *tgt_;
-  std::map<unsigned, distributed_axis> axes_;
   unsigned num_warps_;
 };
 

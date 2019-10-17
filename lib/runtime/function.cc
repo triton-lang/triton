@@ -217,7 +217,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::reassociate reassociate(&align);
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::transform::cts cts;
-  codegen::selection selection(&liveness, &allocation, &align, &axes, &layouts, target.get(), opt.num_warps);
+  codegen::selection selection(&liveness, &allocation, &align, &layouts, target.get(), opt.num_warps);
   // run passes
 //    ir::print(module, std::cout);
   peephole.run(module);
