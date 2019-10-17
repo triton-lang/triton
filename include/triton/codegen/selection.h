@@ -178,7 +178,7 @@ public:
 class machine_layout_distributed_t: public machine_layout_t {
 public:
   machine_layout_distributed_t(Module *mod, Builder *builder, target *tgt, Type *ty,
-                               std::map<unsigned, distributed_axis>& axes,
+                               analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
                                analysis::layout_t* layout);
 
   tile* create(ir::value *v);
@@ -186,6 +186,7 @@ public:
   Builder *builder_;
   target *tgt_;
   Type *ty_;
+  analysis::axes *a_axes_;
   std::map<unsigned, distributed_axis>& axes_;
   analysis::layout_t* layout_;
 };
@@ -195,7 +196,7 @@ class machine_layout_hmma_884_t: public machine_layout_distributed_t {
 public:
   machine_layout_hmma_884_t(Module *mod, Builder *builder,
                             target *tgt, Type *ty,
-                            std::map<unsigned, distributed_axis>& axes,
+                            analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
                             analysis::layout_hmma_884_t* layout);
   Value *offset_a_i_, *offset_a_k_;
   Value *offset_b_j_, *offset_b_k_;
@@ -209,7 +210,7 @@ class machine_layout_scanline_t: public machine_layout_distributed_t {
 public:
   machine_layout_scanline_t(Module *mod, Builder *builder,
                             target *tgt, Type *ty,
-                            std::map<unsigned, distributed_axis>& axes,
+                            analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
                             analysis::layout_scanline_t* layout);
 };
 
@@ -230,6 +231,7 @@ private:
 
 public:
   generator(Module *dst,
+            analysis::axes *a_axes,
             target *tgt,
             analysis::layout *layouts,
             analysis::align *alignment,
@@ -298,6 +300,7 @@ private:
   Module *mod_;
 
   std::map<const analysis::layout_t*, machine_layout_t*> machine_layouts_;
+  analysis::axes *a_axes_;
   std::map<unsigned, distributed_axis> axes_;
   std::map<ir::value *, Value *> vmap_;
   std::map<ir::value *, tile *> tmap_;
@@ -319,10 +322,10 @@ class selection{
 
 public:
   selection(analysis::liveness* liveness, analysis::allocation *alloc,
-            analysis::align *alignment,
+            analysis::align *alignment, analysis::axes *axes,
             analysis::layout *layouts, target *tgt, unsigned num_warps)
     : liveness_(liveness), alloc_(alloc),
-      alignment_(alignment), layouts_(layouts),
+      alignment_(alignment), a_axes_(axes), layouts_(layouts),
       tgt_(tgt), num_warps_(num_warps){ }
 
   void run(ir::module &src, Module &dst);
@@ -330,6 +333,7 @@ public:
 private:
   analysis::liveness *liveness_;
   analysis::allocation *alloc_;
+  analysis::axes *a_axes_;
   analysis::layout *layouts_;
   analysis::align *alignment_;
   target *tgt_;
