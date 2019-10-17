@@ -13,7 +13,7 @@
 #include "triton/codegen/transform/membar.h"
 #include "triton/codegen/transform/reassociate.h"
 #include "triton/codegen/transform/cts.h"
-#include "triton/codegen/selection.h"
+#include "triton/codegen/selection/generator.h"
 #include "triton/runtime/function.h"
 #include "triton/lang/cpp.h"
 #include "triton/lang/parser.h"
@@ -217,7 +217,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::reassociate reassociate(&align);
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::transform::cts cts;
-  codegen::selection selection(&liveness, &allocation, &align, &axes, &layouts, target.get(), opt.num_warps);
+  codegen::generator isel(&axes, &layouts, &align, &allocation, target.get(), opt.num_warps);
   // run passes
 //    ir::print(module, std::cout);
   peephole.run(module);
@@ -243,7 +243,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
     return std::unique_ptr<driver::module>();
   barriers.run(module);
 //  ir::print(module, std::cout);
-  selection.run(module, *llvm);
+  isel.visit(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   // done

@@ -109,18 +109,18 @@ llvm::CmpInst::Predicate llvm_pred(ir::cmp_pred_t pred) {
 }
 
 
-inline Type *type(ir::type *ty, LLVMContext &ctx) {
+inline Type *llvm_type(ir::type *ty, LLVMContext &ctx) {
   // function
   if(auto* tt = dynamic_cast<ir::function_type*>(ty)){
-    Type *return_ty = type(tt->get_return_ty(), ctx);
+    Type *return_ty = llvm_type(tt->get_return_ty(), ctx);
     std::vector<Type*> param_tys;
     std::transform(tt->params_begin(), tt->params_end(), std::back_inserter(param_tys),
-                   [&ctx](ir::type* t){ return type(t, ctx);});
+                   [&ctx](ir::type* t){ return llvm_type(t, ctx);});
     return FunctionType::get(return_ty, param_tys, false);
   }
   // pointer
   if(ty->is_pointer_ty()){
-    Type *elt_ty = type(ty->get_pointer_element_ty(), ctx);
+    Type *elt_ty = llvm_type(ty->get_pointer_element_ty(), ctx);
     unsigned addr_space = ty->get_pointer_address_space();
     return PointerType::get(elt_ty, addr_space);
   }
@@ -173,29 +173,14 @@ inline bool is_trans(ir::value *v) {
 
 
 
-generator::generator(Module *dst,
-          analysis::axes *a_axes,
-          target *tgt,
-          analysis::layout *layouts,
-          analysis::align *alignment,
-          analysis::allocation *alloc,
-          unsigned num_warps)
-  : ctx_(&dst->getContext()), mod_(dst),
-    builder_(new Builder(dst->getContext())),
-    a_axes_(a_axes), tgt_(tgt),
-    layouts_(layouts), alignment_(alignment), alloc_(alloc),
-    num_warps_(num_warps) {
-
-  if(tgt_->is_gpu())
-  if(unsigned alloc_size = alloc_->allocated_size()){
-    Type *int_8_ty = Type::getInt8Ty(*ctx_);
-    ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
-    Type *ptr_ty = PointerType::get(int_8_ty, 3);
-    GlobalVariable *sh_mem_array =
-      new GlobalVariable(*dst, array_ty, false, GlobalVariable::ExternalLinkage,
-                         nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
-    sh_mem_ptr_ = builder_->CreateBitCast(sh_mem_array, ptr_ty);
-  }
+generator::generator(analysis::axes *a_axes,
+                    analysis::layout *layouts,
+                    analysis::align *alignment,
+                    analysis::allocation *alloc,
+                     target *tgt,
+                    unsigned num_warps)
+  : a_axes_(a_axes), layouts_(layouts), alignment_(alignment), alloc_(alloc),
+    tgt_(tgt), num_warps_(num_warps) {
 
 }
 
@@ -226,7 +211,7 @@ void generator::visit_value(ir::value* v) {
 }
 
 void generator::visit_phi_node(ir::phi_node* phi) {
-  Type *ty = type(phi->get_type()->get_scalar_ty(), *ctx_);
+  Type *ty = llvm_type(phi->get_type()->get_scalar_ty(), *ctx_);
   unsigned num_ops = phi->get_num_operands();
   for_each(phi, [&](indices_t idx){
     set_value(phi, idx, builder_->Insert(PHINode::Create(ty, num_ops)));
@@ -248,7 +233,7 @@ void generator::visit_getelementptr_inst(ir::getelementptr_inst* gep) {
     std::vector<Value*> idx_vals;
     std::transform(gep->idx_begin(), gep->idx_end(), std::back_inserter(idx_vals),
                    [&](ir::value* x){ return get_value(x, idx);});
-    Type *source_ty = type(gep->get_source_elt_ty()->get_scalar_ty(), *ctx_);
+    Type *source_ty = llvm_type(gep->get_source_elt_ty()->get_scalar_ty(), *ctx_);
     Value *ret = builder_->Insert(GetElementPtrInst::CreateInBounds(source_ty, ptr, idx_vals));
     set_value(gep, idx, ret);
   });
@@ -277,7 +262,7 @@ void generator::visit_fcmp_inst(ir::fcmp_inst* fcmp) {
 void generator::visit_cast_inst(ir::cast_inst* cast) {
   for_each(cast, [&](indices_t idx){
     Value *arg = get_value(cast->get_operand(0), idx);
-    Type *dst_ty = type(cast->get_type()->get_scalar_ty(), *ctx_);
+    Type *dst_ty = llvm_type(cast->get_type()->get_scalar_ty(), *ctx_);
     Value *ret = builder_->Insert(CastInst::Create(llvm_op(cast->get_op()), arg, dst_ty));
     set_value(cast, idx, ret);
   });
@@ -726,7 +711,7 @@ void generator::visit_dot_inst(ir::dot_inst* dot) {
   ir::value *D = dot->get_operand(2);
 
   distributed_tile *TD = (distributed_tile*)tmap_.at(D);
-  Type *c_ty = type(D->get_type()->get_scalar_ty(), *ctx_);
+  Type *c_ty = llvm_type(D->get_type()->get_scalar_ty(), *ctx_);
   Function *f_mul_add = Intrinsic::getDeclaration(module, Intrinsic::fmuladd, {c_ty});
   auto A_shapes = A->get_type()->get_tile_shapes();
   size_t red_axis = 1;
@@ -851,22 +836,22 @@ void generator::visit_make_range(ir::make_range* x) {
 
 
 void generator::visit_undef_value(ir::undef_value *ud) {
-  vmap_[ud] = llvm::UndefValue::get(type(ud->get_type(), *ctx_));
+  vmap_[ud] = llvm::UndefValue::get(llvm_type(ud->get_type(), *ctx_));
 }
 
 void generator::visit_constant_int(ir::constant_int *cst){
-  Type *ty = type(cst->get_type()->get_scalar_ty(), *ctx_);
+  Type *ty = llvm_type(cst->get_type()->get_scalar_ty(), *ctx_);
   vmap_[cst] = ConstantInt::get(ty, cst->get_value());
 }
 
 void generator::visit_constant_fp(ir::constant_fp *cst){
-  Type *ty = type(cst->get_type()->get_scalar_ty(), *ctx_);
+  Type *ty = llvm_type(cst->get_type()->get_scalar_ty(), *ctx_);
   vmap_[cst] = ConstantFP::get(ty, cst->get_value());
 }
 
 void generator::visit_alloc_const(ir::alloc_const *alloc) {
   unsigned size = ((ir::constant_int*)alloc->get_operand(0))->get_value();
-  Type *element_ty = type(alloc->get_type()->get_pointer_element_ty(), *ctx_);
+  Type *element_ty = llvm_type(alloc->get_type()->get_pointer_element_ty(), *ctx_);
   Type *array_ty = llvm::ArrayType::get(element_ty, size);
   Value *array = new llvm::GlobalVariable(*mod_, array_ty, false, llvm::GlobalVariable::ExternalLinkage,
                                             nullptr, alloc->get_name(), nullptr, llvm::GlobalVariable::NotThreadLocal, 4);
@@ -876,7 +861,7 @@ void generator::visit_alloc_const(ir::alloc_const *alloc) {
 
 void generator::visit_function(ir::function* fn) {
   LLVMContext &ctx = builder_->getContext();
-  FunctionType *fn_ty = (FunctionType*)type(fn->get_fn_type(), *ctx_);
+  FunctionType *fn_ty = (FunctionType*)llvm_type(fn->get_fn_type(), *ctx_);
   if(!tgt_->is_gpu()){
     Type *fn_ret_ty = fn_ty->getReturnType();
     std::vector<Type*> fn_args_ty;
@@ -925,11 +910,11 @@ void generator::visit_function(ir::function* fn) {
 
 
 void generator::visit_layout_hmma_884(analysis::layout_hmma_884_t* layout) {
-  machine_layouts_[layout] = new machine_layout_hmma_884_t(mod_, &*builder_, tgt_, type(layout->ty->get_scalar_ty(), *ctx_), a_axes_, axes_, layout);
+  machine_layouts_[layout] = new machine_layout_hmma_884_t(mod_, &*builder_, tgt_, llvm_type(layout->ty->get_scalar_ty(), *ctx_), a_axes_, axes_, layout);
 }
 
 void generator::visit_layout_scanline(analysis::layout_scanline_t* layout) {
-  machine_layouts_[layout] = new machine_layout_scanline_t(mod_, &*builder_, tgt_, type(layout->ty->get_scalar_ty(), *ctx_), a_axes_, axes_, layout);
+  machine_layouts_[layout] = new machine_layout_scanline_t(mod_, &*builder_, tgt_, llvm_type(layout->ty->get_scalar_ty(), *ctx_), a_axes_, axes_, layout);
 }
 
 void generator::visit_layout_shared(analysis::layout_shared_t* layout) {
@@ -1025,6 +1010,30 @@ void generator::finalize_phi_node(ir::phi_node *phi) {
     });
   }
 }
+
+void generator::visit(ir::module &src, llvm::Module &dst) {
+  mod_ = &dst;
+  ctx_ = &dst.getContext();
+  builder_ = new Builder(*ctx_);
+  // allocate shared memory
+  if(tgt_->is_gpu())
+  if(unsigned alloc_size = alloc_->allocated_size()){
+    Type *int_8_ty = Type::getInt8Ty(*ctx_);
+    ArrayType *array_ty = ArrayType::get(int_8_ty, alloc_size);
+    Type *ptr_ty = PointerType::get(int_8_ty, 3);
+    GlobalVariable *sh_mem_array =
+      new GlobalVariable(*mod_, array_ty, false, GlobalVariable::ExternalLinkage,
+                         nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
+    sh_mem_ptr_ = builder_->CreateBitCast(sh_mem_array, ptr_ty);
+  }
+  // allocate constant memory
+  for(ir::alloc_const *x: src.allocs())
+    visit_alloc_const(x);
+  // visit functions
+  for(ir::function *fn: src.get_function_list())
+    visit_function(fn);
+}
+
 
 }
 }
