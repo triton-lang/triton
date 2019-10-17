@@ -225,6 +225,7 @@ private:
   void visit_outer_dot(ir::dot_inst*, distributed_tile *TA, distributed_tile *TB, distributed_tile *TD, unsigned NK,
                        Type *c_ty, Function *f_mul_add);
 
+  void finalize_shared_layout(analysis::layout_shared_t*);
   void finalize_function(ir::function*);
   void finalize_phi_node(ir::phi_node*);
 
@@ -321,6 +322,7 @@ private:
 
   std::set<ir::value*> seen_;
 };
+
 
 // Selection pass
 class selection{
