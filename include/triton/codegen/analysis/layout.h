@@ -36,6 +36,7 @@ struct double_buffer_info_t {
 };
 
 class layout_visitor;
+class layout_t;
 class layout_hmma_884_t;
 class layout_scanline_t;
 class layout_shared_t;
@@ -43,6 +44,7 @@ class layout_shared_t;
 
 class layout_visitor {
 public:
+  virtual void visit_layout(layout_t *);
   virtual void visit_layout_hmma_884(layout_hmma_884_t*) = 0;
   virtual void visit_layout_scanline(layout_scanline_t*) = 0;
   virtual void visit_layout_shared(layout_shared_t*) = 0;

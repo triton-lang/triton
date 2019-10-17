@@ -32,6 +32,10 @@ void value::replace_all_uses_with(value *target){
   throw std::runtime_error("not implemented");
 }
 
+void visitor::visit_value(ir::value* v) {
+  v->accept(this);
+}
+
 
 //===----------------------------------------------------------------------===//
 //                               user class
@@ -68,6 +72,8 @@ void user::replace_uses_of_with(value *before, value *after) {
   after->add_use(this);
   before->erase_use(this);
 }
+
+
 
 }
 }

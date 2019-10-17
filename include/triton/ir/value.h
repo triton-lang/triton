@@ -33,6 +33,8 @@ public:
   void set_name(const std::string &name);
   const std::string &get_name() const { return name_; }
   type* get_type() const { return ty_; }
+  // visitor
+  virtual void accept(visitor *v) = 0;
 
 private:
   std::string name_;
@@ -75,8 +77,6 @@ public:
   void replace_all_uses_with(value *target);
   void replace_uses_of_with(value *before, value *after);
 
-  // Visitor
-  virtual void accept(visitor *v) = 0;
 
 private:
   ops_t ops_;

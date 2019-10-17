@@ -197,16 +197,13 @@ public:
   machine_layout_hmma_884_t(Module *mod, Builder *builder,
                             target *tgt, Type *ty,
                             analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
-                            Value *&offset_a_i, Value *&offset_a_k, Value *&offset_b_j, Value *&offset_b_k,
-                            unsigned &pack_size_0, unsigned &pack_size_1,
-                            unsigned &num_packs_0, unsigned &num_packs_1,
                             analysis::layout_hmma_884_t* layout);
-  Value *&offset_a_i_, *&offset_a_k_;
-  Value *&offset_b_j_, *&offset_b_k_;
-  unsigned &pack_size_0_;
-  unsigned& pack_size_1_;
-  unsigned &num_packs_0_;
-  unsigned& num_packs_1_;
+  Value *offset_a_i_, *offset_a_k_;
+  Value *offset_b_j_, *offset_b_k_;
+  unsigned pack_size_0_;
+  unsigned pack_size_1_;
+  unsigned num_packs_0_;
+  unsigned num_packs_1_;
 };
 
 class machine_layout_scanline_t: public machine_layout_distributed_t {
@@ -219,14 +216,17 @@ public:
 
 class generator: public ir::visitor, public analysis::layout_visitor {
 private:
-  void visit_hmma_dot(ir::dot_inst*, distributed_tile *TC, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK);
-  void visit_scanline_dot(ir::dot_inst*, distributed_tile *TC, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK, Type *c_ty, Function *f_mul_add);
-  void visit_outer_dot(ir::dot_inst*, distributed_tile *TC, distributed_tile *TA, distributed_tile *TB, distributed_tile *TD, unsigned NK,
-                       Type *c_ty, Function *f_mul_add);
-
   void for_each(ir::value *x, const std::function<void(indices_t)>& fn);
   Value* get_value(ir::value *x, const indices_t& idx);
   void set_value(ir::value *x, const indices_t& idx, Value* v);
+
+  void visit_hmma_dot(ir::dot_inst*, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK);
+  void visit_scanline_dot(ir::dot_inst*, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK, Type *c_ty, Function *f_mul_add);
+  void visit_outer_dot(ir::dot_inst*, distributed_tile *TA, distributed_tile *TB, distributed_tile *TD, unsigned NK,
+                       Type *c_ty, Function *f_mul_add);
+
+  void finalize_function(ir::function*);
+  void finalize_phi_node(ir::phi_node*);
 
 public:
   generator(LLVMContext *ctx,
@@ -241,18 +241,12 @@ public:
             analysis::align *alignment,
             analysis::allocation *alloc,
             Value *sh_mem_ptr,
-            Value *offset_a_i, Value *offset_a_k,
-            Value *offset_b_j, Value *offset_b_k,
-            unsigned num_packs_0, unsigned num_packs_1,
-            unsigned pack_size_0, unsigned pack_size_1,
             unsigned num_warps)
     : ctx_(ctx), mod_(dst), builder_(builder), a_axes_(a_axes), axes_(axes), vmap_(vmap), tmap_(tmap), tgt_(tgt),
       layouts_(layouts), alignment_(alignment), alloc_(alloc), sh_mem_ptr_(sh_mem_ptr),
-      offset_a_i_(offset_a_i), offset_a_k_(offset_a_k), offset_b_j_(offset_b_j), offset_b_k_(offset_b_k),
-      num_packs_0_(num_packs_0), num_packs_1_(num_packs_1), pack_size_0_(pack_size_0), pack_size_1_(pack_size_1),
       num_warps_(num_warps) { }
 
-  machine_layout_t *get_machine_layout(const analysis::layout_t *layout) { return machine_layouts_.at(layout); }
+  void visit_value(ir::value* v);
 
   void visit_phi_node(ir::phi_node*);
   void visit_binary_operator(ir::binary_operator*);
@@ -301,6 +295,8 @@ public:
   void visit_alloc_const(ir::alloc_const*);
 
   void visit_function(ir::function*);
+  void visit_basic_block(ir::basic_block*);
+  void visit_argument(ir::argument*);
 
   void visit_layout_hmma_884(analysis::layout_hmma_884_t*);
   void visit_layout_scanline(analysis::layout_scanline_t*);
@@ -308,7 +304,6 @@ public:
 
 private:
   LLVMContext *ctx_;
-  Function *fn_;
   Builder *builder_;
   Module *mod_;
 
@@ -322,78 +317,9 @@ private:
   analysis::align *alignment_;
   analysis::allocation *alloc_;
   Value *sh_mem_ptr_;
-  Value *offset_a_i_, *offset_a_k_;
-  Value *offset_b_j_, *offset_b_k_;
-  unsigned num_packs_0_, num_packs_1_;
-  unsigned pack_size_0_, pack_size_1_;
   unsigned num_warps_;
-};
 
-class finalizer: public ir::visitor, public analysis::layout_visitor {
-private:
-  void for_each(ir::value *x, const std::function<void(indices_t)>& fn);
-  Value* get_value(ir::value *x, const indices_t& idx);
-  void set_value(ir::value *x, const indices_t& idx, Value* v);
-
-public:
-  finalizer(Builder *builder, std::map<ir::value *, Value *>& vmap, std::map<ir::value *, tile *>& tmap);
-
-  void visit_phi_node(ir::phi_node*);
-  void visit_binary_operator(ir::binary_operator*) { }
-  void visit_getelementptr_inst(ir::getelementptr_inst*) { }
-
-  void visit_icmp_inst(ir::icmp_inst*) { }
-  void visit_fcmp_inst(ir::fcmp_inst*) { }
-  void visit_cast_inst(ir::cast_inst*) { }
-
-  void visit_return_inst(ir::return_inst*) { }
-  void visit_cond_branch_inst(ir::cond_branch_inst*) { }
-  void visit_uncond_branch_inst(ir::uncond_branch_inst*) { }
-
-
-  void visit_unmasked_load_inst(ir::unmasked_load_inst*) { }
-  void visit_masked_load_inst(ir::masked_load_inst*) { }
-  void visit_unmasked_store_inst(ir::unmasked_store_inst*) { }
-  void visit_masked_store_inst(ir::masked_store_inst*) { }
-
-  void visit_reshape_inst(ir::reshape_inst*) { }
-  void visit_splat_inst(ir::splat_inst*) { }
-  void visit_broadcast_inst(ir::broadcast_inst*) { }
-  void visit_downcast_inst(ir::downcast_inst*) { }
-
-  void visit_get_program_id_inst(ir::get_program_id_inst*) { }
-  void visit_get_num_program_inst(ir::get_num_program_inst*) { }
-  void visit_atomic_cas_inst(ir::atomic_cas_inst*) { }
-  void visit_atomic_exch_inst(ir::atomic_exch_inst*) { }
-  void visit_atomic_add_inst(ir::atomic_add_inst*) { }
-  void visit_dot_inst(ir::dot_inst*) { }
-  void visit_trans_inst(ir::trans_inst*) { }
-  void visit_sqrt_inst(ir::sqrt_inst*) { }
-  void visit_reduce_inst(ir::reduce_inst*) { }
-  void visit_select_inst(ir::select_inst*) { }
-
-  void visit_copy_to_shared_inst(ir::copy_to_shared_inst*) { }
-  void visit_copy_from_shared_inst(ir::copy_from_shared_inst*) { }
-  void visit_barrier_inst(ir::barrier_inst*) { }
-  void visit_make_range_dyn(ir::make_range_dyn*) { }
-  void visit_make_range(ir::make_range*) { }
-
-  void visit_make_range_sta(ir::make_range_sta*) { }
-  void visit_undef_value(ir::undef_value*) { }
-  void visit_constant_int(ir::constant_int*) { }
-  void visit_constant_fp(ir::constant_fp*) { }
-  void visit_alloc_const(ir::alloc_const*) { }
-
-  void visit_function(ir::function*) { }
-
-  void visit_layout_hmma_884(analysis::layout_hmma_884_t*) { }
-  void visit_layout_scanline(analysis::layout_scanline_t*) { }
-  void visit_layout_shared(analysis::layout_shared_t*);
-
-private:
-  Builder *builder_;
-  std::map<ir::value *, Value *>& vmap_;
-  std::map<ir::value *, tile *>& tmap_;
+  std::set<ir::value*> seen_;
 };
 
 // Selection pass
@@ -404,9 +330,6 @@ class selection{
 private:
   // LLVM conversions
   Value*       alloc_shared(Builder &builder, Module& dst);
-
-  // lower scalar instruction
-  void lower_value(ir::value *src, Builder &builder, generator* gen, std::set<ir::value*>& seen);
 
 public:
   selection(analysis::liveness* liveness, analysis::allocation *alloc,
@@ -428,11 +351,6 @@ private:
   analysis::align *alignment_;
   target *tgt_;
   std::map<unsigned, distributed_axis> axes_;
-  Value *sh_mem_ptr_;
-  Value *offset_a_i_, *offset_a_k_;
-  Value *offset_b_j_, *offset_b_k_;
-  unsigned num_packs_0_, num_packs_1_;
-  unsigned pack_size_0_, pack_size_1_;
   unsigned num_warps_;
 };
 

@@ -26,6 +26,8 @@ public:
   function* get_parent() const;
   unsigned get_arg_no() const;
 
+  void accept(visitor *v);
+
 private:
   function *parent_;
   unsigned arg_no_;
