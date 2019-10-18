@@ -37,16 +37,16 @@ void liveness::run(ir::module &mod) {
     if(layout->type != SHARED)
       continue;
     // users
-    std::set<ir::value*> users;
+    std::set<ir::user*> users;
     for(ir::value *v: layout->values){
-      users.insert(v);
       for(ir::user *u: v->get_users())
         users.insert(u);
     }
     // compute intervals
     unsigned start = INT32_MAX;
     unsigned end = 0;
-    for(ir::value *u: users){
+    for(ir::user *u: users)
+    if(indices.find(u) != indices.end()){
       start = std::min(start, indices.at(u));
       end = std::max(end, indices.at(u));
     }

@@ -231,11 +231,10 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   align.run(module);
   dce.run(module);
   reassociate.run(module);
-  dce.run(module);
   cts.run(module);
+  dce.run(module);
   align.run(module);
   axes.run(module);
-//  ir::print(module, std::cout);
   layouts.run(module);
   liveness.run(module);
   allocation.run(module);
