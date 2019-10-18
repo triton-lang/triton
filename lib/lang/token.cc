@@ -7,6 +7,7 @@
 static MemPoolImp<Token> tokenPool;
 
 const std::unordered_map<std::string, int> Token::kwTypeMap_ {
+  { "__global__", Token::GLOBAL },
   { "auto", Token::AUTO },
   { "break", Token::BREAK },
   { "case", Token::CASE },
@@ -30,7 +31,6 @@ const std::unordered_map<std::string, int> Token::kwTypeMap_ {
   { "newaxis", Token::NEWAXIS },
   { "signed", Token::SIGNED },
   { "unsigned", Token::UNSIGNED },
-  { "register", Token::REGISTER },
   { "restrict", Token::RESTRICT },
   { "return", Token::RETURN },
   { "short", Token::SHORT },
@@ -54,6 +54,8 @@ const std::unordered_map<std::string, int> Token::kwTypeMap_ {
   { "_Noreturn", Token::NORETURN },
   { "_Static_assert", Token::STATIC_ASSERT },
   { "_Thread_local", Token::THREAD },
+  { "max", Token::MAX },
+  { "min", Token::MIN },
 };
 
 const std::unordered_map<int, const char*> Token::tagLexemeMap_ {
@@ -121,6 +123,7 @@ const std::unordered_map<int, const char*> Token::tagLexemeMap_ {
   { Token::EXTERN, "extern" },
   { Token::FLOAT, "float" },
   { Token::FOR, "for" },
+  { Token::GLOBAL, "global" },
   { Token::GOTO, "goto" },
   { Token::IF, "if" },
   { Token::INLINE, "inline" },
@@ -129,7 +132,6 @@ const std::unordered_map<int, const char*> Token::tagLexemeMap_ {
   { Token::NEWAXIS, "newaxis" },
   { Token::SIGNED, "signed" },
   { Token::UNSIGNED, "unsigned" },
-  { Token::REGISTER, "register" },
   { Token::RESTRICT, "restrict" },
   { Token::RETURN, "return" },
   { Token::SHORT, "short" },

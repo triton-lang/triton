@@ -630,6 +630,23 @@ instruction* sqrt_inst::create(value *arg, const std::string &name, instruction 
 //===----------------------------------------------------------------------===//
 //                               reduce instructions
 //===----------------------------------------------------------------------===//
+
+std::string reduce_inst::to_str(op_t op) {
+  switch (op) {
+    case ADD: return "+";
+    case SUB: return "-";
+    case MAX: return "imax";
+    case MIN: return "imin";
+    case FADD: return "+";
+    case FSUB: return "-";
+    case FMAX: return "fmax";
+    case FMIN: return "fmin";
+    default: break;
+  }
+  assert(false);
+  return "";
+}
+
 type* reduce_inst::get_res_type(value *arg, unsigned axis) {
   ir::tile_type::tile_shapes_t shapes = arg->get_type()->get_tile_shapes();
   shapes.erase(shapes.begin() + axis);
@@ -640,14 +657,15 @@ type* reduce_inst::get_res_type(value *arg, unsigned axis) {
     return tile_type::get(scalar_ty, shapes);
 }
 
-reduce_inst::reduce_inst(value *arg, unsigned axis, const std::string &name, instruction *next)
+reduce_inst::reduce_inst(value *arg, op_t op, unsigned axis, const std::string &name, instruction *next)
   : builtin_inst(get_res_type(arg, axis), INST_REDUCE, 1, name, next),
+    op_(op),
     axis_(axis){
   set_operand(0, arg);
 }
 
-instruction* reduce_inst::create(value *arg, unsigned axis, const std::string &name, instruction *next) {
-  return new reduce_inst(arg, axis, name, next);
+instruction* reduce_inst::create(value *arg, op_t op, unsigned axis, const std::string &name, instruction *next) {
+  return new reduce_inst(arg, op, axis, name, next);
 }
 
 

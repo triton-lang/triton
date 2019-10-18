@@ -40,7 +40,7 @@ enum {
   S_STATIC = 0x04,
   S_THREAD = 0x08,
   S_AUTO = 0x10,
-  S_REGISTER = 0x20,
+  S_GLOBAL = 0x20,
 
   // Type specifier
   T_SIGNED = 0x40,

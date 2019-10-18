@@ -448,6 +448,8 @@ void BinaryOp::RangeOpTypeChecking() {
 }
 
 void BinaryOp::MaskedDerefOpTypeChecking() {
+//  auto lhsTileType = lhs_->Type()->ToTile();
+//  auto rhsTileType = rhs_->Type()->ToTile();
   ::Type* lhsScalType = TryExtractScalarType(this, lhs_);
   ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
   auto lhsType = lhsScalType->ToArithm();
@@ -572,14 +574,26 @@ void BinaryOp::AssignOpTypeChecking() {
  * Unary Operators
  */
 
-UnaryOp* UnaryOp::New(int op, Expr* operand, QualType type) {
-  auto ret = new (unaryOpPool.Alloc()) UnaryOp(op, operand, type);
+UnaryOp* UnaryOp::New(int op, Expr* operand, QualType type, int info) {
+  auto ret = new (unaryOpPool.Alloc()) UnaryOp(op, operand, type, info);
   ret->pool_ = &unaryOpPool;
 
   ret->TypeChecking();
   return ret;
 }
 
+
+int UnaryOp::encodeRed(int ax, int tag) {
+  int result = 0;
+  result |= ax;
+  result |= tag << 16;
+  return result;
+}
+
+void UnaryOp::decodeRed(int info, int& ax, int& tag) {
+  ax = info & 0x0000FFFF;
+  tag = (info & 0xFFFF0000) >> 16;
+}
 
 bool UnaryOp::IsLVal() {
   // Only deref('*') could be lvalue;
@@ -626,6 +640,9 @@ void UnaryOp::TypeChecking() {
   case '^':
     return TransOpTypeChecking();
 
+  case Token::REDUCE:
+    return ReduceOpTypeChecking();
+
   default:
     assert(false);
   }
@@ -663,6 +680,16 @@ void UnaryOp::DerefOpTypeChecking() {
   type_ = ScalarOrLikeTile(operand_, pointerType->Derived().GetPtr());
 }
 
+void UnaryOp::ReduceOpTypeChecking() {
+  int ax, tag;
+  decodeRed(info_, ax, tag);
+  auto tileType = operand_->Type()->ToTile();
+  if(!tileType)
+    Error(this, "array expected for reduction operation");
+  auto shape = tileType->Shape();
+  shape.erase(shape.begin() + ax);
+  type_ = TileType::New(shape, tileType->Derived());
+}
 
 void UnaryOp::TransOpTypeChecking() {
   auto tileType = operand_->Type()->ToTile();

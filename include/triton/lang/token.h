@@ -131,6 +131,8 @@ public:
 
     // TILE ARITHMETICS BEGIN
     NEWAXIS,
+    MAX,
+    MIN,
     // TILE ARITHMETICS END
 
     ALIGNAS, // _Alignas
@@ -142,7 +144,7 @@ public:
     STATIC,
     THREAD,	// _Thread_local
     AUTO,
-    REGISTER,
+    GLOBAL,
 
     // STORAGE CLASS SPECIFIER END
     BREAK,
@@ -180,6 +182,7 @@ public:
     PLUS,
     MINUS,
     CAST,
+    REDUCE,
 
     // For preprocessor
     PP_IF,
@@ -236,7 +239,7 @@ public:
   bool IsIdentifier() const { return IDENTIFIER == tag_; }
   bool IsEOF() const { return tag_ == Token::END; }
   bool IsTypeSpecQual() const { return CONST <= tag_ && tag_ <= ENUM; }
-  bool IsDecl() const { return CONST <= tag_ && tag_ <= REGISTER; }
+  bool IsDecl() const { return CONST <= tag_ && tag_ <= GLOBAL; }
   static const char* Lexeme(int tag) {
     auto iter = tagLexemeMap_.find(tag);
     if (iter == tagLexemeMap_.end())

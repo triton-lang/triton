@@ -418,22 +418,25 @@ class UnaryOp : public Expr {
   friend class LValAssigner;
 
 public:
-  static UnaryOp* New(int op, Expr* operand, QualType type=nullptr);
+  static UnaryOp* New(int op, Expr* operand, QualType type=nullptr, int info=0);
   virtual ~UnaryOp() {}
   virtual void Accept(Visitor* v);
   virtual bool IsLVal();
   ::Type *Convert();
+  static int encodeRed(int ax, int tag);
+  static void decodeRed(int info, int& ax, int& tag);
   void TypeChecking();
   void IncDecOpTypeChecking();
   void AddrOpTypeChecking();
   void DerefOpTypeChecking();
+  void ReduceOpTypeChecking();
   void TransOpTypeChecking();
   void UnaryArithmOpTypeChecking();
   void CastOpTypeChecking();
 
 protected:
-  UnaryOp(int op, Expr* operand, QualType type=nullptr)
-    : Expr(operand->Tok(), type), op_(op) {
+  UnaryOp(int op, Expr* operand, QualType type=nullptr, int info=0)
+    : Expr(operand->Tok(), type), op_(op), info_(info) {
       operand_ = operand;
       if (op_ != Token::CAST && op_ != Token::ADDR) {
         operand_ = MayCast(operand);
@@ -441,6 +444,7 @@ protected:
     }
 
   int op_;
+  int info_;
   Expr* operand_;
 };
 

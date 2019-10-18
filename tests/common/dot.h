@@ -66,7 +66,7 @@ template<> struct to_string<double>{
 template<class T>
 bool triton_dot(drv::stream* stream, bool AT, bool BT,
                 int32_t M, int32_t N, int32_t K,
-                int32_t TM, int32_t TN, int32_t TK, size_t nwarp,
+                int32_t TM, int32_t TN, int32_t TK, int32_t nwarp,
                 const std::vector<int>& a_order, const std::vector<int>& b_order,
                 run_mode_t mode, std::vector<double>& bench, bool &test){
   std::string ty = to_string<T>::value;
