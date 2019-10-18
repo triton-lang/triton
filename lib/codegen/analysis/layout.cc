@@ -291,6 +291,7 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
   }
   std::vector<int> col = {0, 1};
   std::vector<int> row = {1, 0};
+  order = col;
   bool is_nonhmma_dot_a = dot_a && !hmma_dot_a;
   bool is_nonhmma_dot_b = dot_b && !hmma_dot_b;
   if(is_nonhmma_dot_a)
@@ -329,7 +330,9 @@ void layout::create(size_t id, const std::vector<ir::value*>& values) {
     return x->get_type()->get_tile_ranks1() <
            y->get_type()->get_tile_ranks1();
   };
-  ir::value *largest = *std::max_element(values.begin(), values.end(), cmp);
+  std::vector<ir::value*> lvalue = values;
+  std::remove_if(lvalue.begin(), lvalue.end(), [&](ir::value* v) { return dynamic_cast<ir::trans_inst*>(v); });
+  ir::value *largest = *std::max_element(lvalue.begin(), lvalue.end(), cmp);
   const auto& axes = axes_->get(largest);
   const auto& shapes = largest->get_type()->get_tile_shapes();
   auto it_cts = std::find_if(values.begin(), values.end(), [](ir::value* v) {

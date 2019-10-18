@@ -77,12 +77,7 @@ machine_layout_shared_t::machine_layout_shared_t(Module *mod, Builder *builder, 
                                                  std::map<ir::value *, tile *>& tmap)
   : mod_(mod), builder_(builder), tgt_(tgt), alloc_(alloc), sh_mem_ptr_(sh_mem_ptr), layout_(layout), vmap_(vmap), tmap_(tmap) {
 
-  auto order = layout_->order;
-  auto shapes = layout_->shapes;
-  shapes[order[0]] += layout_->pad;
-
   Type* ty = llvm_type(layout_->ty, builder_->getContext());
-
   PointerType *ptr_ty = ty->getPointerTo(sh_mem_ptr_->getType()->getPointerAddressSpace());
   // double-buffered
   if(layout_->double_buffer) {

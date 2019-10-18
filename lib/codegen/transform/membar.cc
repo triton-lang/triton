@@ -52,7 +52,7 @@ void membar::get_read_intervals(ir::instruction *i, interval_vec_t &res){
 }
 
 void membar::get_written_intervals(ir::instruction *i, interval_vec_t &res){
-  if(!dynamic_cast<ir::phi_node*>(i))
+  if(!dynamic_cast<ir::phi_node*>(i) && !dynamic_cast<ir::trans_inst*>(i))
     add_reference(i, res);
 }
 
@@ -99,7 +99,7 @@ std::pair<membar::interval_vec_t,
     get_written_intervals(i, written);
     bool read_after_write = intersect(new_written_to, read);
     bool write_after_read = intersect(new_read_from, written);
-    // double buffering: write and phi-node read won't intersect
+    // double buffering
     if(safe_war.find(i) != safe_war.end()){
       write_after_read = false;
       read_after_write = false;
@@ -125,8 +125,9 @@ void membar::run(ir::module &mod) {
   for(const auto& x: layouts_->get_all()){
     if(x.second->double_buffer){
       auto info = *x.second->double_buffer;
-      safe_war.insert(info.first);
-      safe_war.insert(info.latch);
+      for(ir::value *v: x.second->values)
+        if(v != info.phi)
+          safe_war.insert(v);
     }
   }
 
