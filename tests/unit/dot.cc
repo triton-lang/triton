@@ -12,8 +12,8 @@ int main() {
   std::vector<config_t> configs;
   for(int TM: std::vector<int>{32, 64})
   for(int TN: std::vector<int>{32, 64})
-  for(int TK: std::vector<int>{8})
-  for(int nwarps: std::vector<int>{8})
+  for(int TK: std::vector<int>{16})
+  for(int nwarps: std::vector<int>{4})
   for(bool AT: std::array<bool, 2>{false, true})
   for(bool BT: std::array<bool, 2>{false, true}){
     configs.push_back(config_t{FLOAT, AT, BT, 128, 128, 128, TM, TN, TK, nwarps});
