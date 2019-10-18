@@ -108,7 +108,6 @@ machine_layout_shared_t::machine_layout_shared_t(Module *mod, Builder *builder, 
 tile* machine_layout_shared_t::create(ir::value *v) {
   auto order = layout_->order;
   auto shapes = layout_->shapes;
-  shapes[order[0]] += layout_->pad;
   Type* ty = llvm_type(layout_->ty, builder_->getContext());
   // double-buffered
   if(layout_->double_buffer) {
