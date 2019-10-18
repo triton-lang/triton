@@ -3,6 +3,7 @@
 #include "triton/codegen/selection/machine_layout.h"
 #include "triton/codegen/selection/machine_value.h"
 #include "triton/codegen/target.h"
+#include "triton/codegen/analysis/axes.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/align.h"
 #include "triton/codegen/transform/coalesce.h"
@@ -748,8 +749,97 @@ void generator::visit_sqrt_inst(ir::sqrt_inst* sqt) {
   });
 }
 
-void generator::visit_reduce_inst(ir::reduce_inst*) {
+void generator::visit_reduce_inst(ir::reduce_inst* x) {
   throw std::runtime_error("not implemented");
+//  std::map<indices_t, Value*> partial;
+//  ir::value *arg = x->get_operand(0);
+//  distributed_tile* arg_tile = (distributed_tile*)tmap_.at(arg);
+//  ir::reduce_inst::op_t op = x->get_op();
+//  auto accumulate = [&](Value* x, Value *y) -> Value* {
+//    switch(op) {
+//      case ir::reduce_inst::ADD: return builder_->CreateAdd(x, y);
+//      case ir::reduce_inst::SUB: return builder_->CreateSub(x, y);
+//      case ir::reduce_inst::MAX: return builder_->CreateMaximum(x, y);
+//      case ir::reduce_inst::MIN: return builder_->CreateMinimum(x, y);
+//      case ir::reduce_inst::FADD: return builder_->CreateFAdd(x, y);
+//      case ir::reduce_inst::FSUB: return builder_->CreateFSub(x, y);
+//      case ir::reduce_inst::FMAX: return builder_->CreateSelect(builder_->CreateFCmpOGT(x, y), x, y);
+//      case ir::reduce_inst::FMIN: return builder_->CreateSelect(builder_->CreateFCmpOLT(x, y), x, y);
+//      default: break;
+//    }
+//    assert(false);
+//    return nullptr;
+//  };
+
+//  unsigned axis = x->get_axis();
+
+//  // reduce within thread
+//  arg_tile->for_each([&](indices_t idx) {
+//    indices_t pidx = idx;
+//    pidx[axis] = builder_->getInt32(0);
+//    Value *current = arg_tile->get_value(idx);
+//    // current partial result is not initialized -- create
+//    if(partial.find(pidx) == partial.end())
+//      partial[pidx] = current;
+//    // current partial result is initialized -- accumulate
+//    else
+//      partial[pidx] = accumulate(partial[pidx], current);
+//  });
+
+//  // depth
+//  unsigned shape_ax = arg->get_type()->get_tile_shapes()[axis];
+//  unsigned per_thread = arg_tile->axis(axis).values.size();
+//  unsigned depth = shape_ax / per_thread;
+
+//  // shapes
+//  auto shared_shapes = arg_tile->get_shapes();
+//  shared_shapes[axis] = depth;
+
+//  // reduce within blocks
+//  unsigned addr_space = sh_mem_ptr_->getType()->getPointerAddressSpace();
+//  Type *res_ty = builder_->getFloatTy();
+//  Value *base_ptr = builder_->CreateBitCast(sh_mem_ptr_, PointerType::get(res_ty, addr_space));
+//  for(auto& x: partial) {
+//    // current element being computed
+//    Value *lane = axes_.at(a_axes_->get(arg, axis)).thread_id;
+//    Value *&result = x.second;
+//    indices_t write_idx = x.first;
+//    write_idx[axis] = lane;
+//    // shared memory write  pointer
+//    Value *write_offset = shared_tile::shared_offset(*builder_, shared_shapes, write_idx);
+//    Value *write_ptr = builder_->CreateGEP(base_ptr, write_offset);
+//    // initialize shared memory
+//    tgt_->add_barrier(*mod_, *builder_);
+//    builder_->CreateStore(result, write_ptr);
+//    // build result
+//    for(unsigned i = depth/2; i > 0; i >>= 1){
+//      // current indices
+//      indices_t current(write_idx.size(), builder_->getInt32(0));
+//      current[axis] = builder_->getInt32(i);
+//      // shared memory offset
+//      Value *read_offset = shared_tile::shared_offset(*builder_, shared_shapes, current);
+//      Value *is_active = builder_->CreateICmpULT(lane, builder_->getInt32(i));
+//      read_offset = builder_->CreateSelect(is_active, read_offset, builder_->getInt32(0));
+//      // shared memory read pointer
+//      Value *read_ptr = builder_->CreateGEP(write_ptr, read_offset);
+//      tgt_->add_barrier(*mod_, *builder_);
+//      Value *next = builder_->CreateLoad(read_ptr);
+//      // accumulate
+//      result = accumulate(result, next);
+//      // write back
+//      builder_->CreateStore(result, write_ptr);
+//    }
+//  }
+//  tgt_->add_barrier(*mod_, *builder_);
+
+//  distributed_tile* x_tile = (distributed_tile*)tmap_.at(x);
+//  x_tile->for_each([&](indices_t idx) {
+//    indices_t red_idx = idx;
+//    red_idx.insert(red_idx.begin() + axis, builder_->getInt32(0));
+//    Value *read_offset = shared_tile::shared_offset(*builder_, shared_shapes, red_idx);
+//    Value *read_ptr = builder_->CreateGEP(base_ptr, read_offset);
+//    x_tile->set_value(idx, builder_->CreateLoad(read_ptr));
+//  });
 }
 
 void generator::visit_select_inst(ir::select_inst* select) {

@@ -453,21 +453,52 @@ Expr* Parser::ParseSubScripting(Expr* lhs) {
   TileType::ShapeInt shape;
   size_t i = 0;
   const Token* tok;
+  std::vector<std::pair<int, int>> redInfo;
   do {
     tok = ts_.Next();
-    if(tok->tag_ == ':')
-      shape.push_back(lhsShape[i++]);
-    else if(tok->tag_ == Token::NEWAXIS)
-      shape.push_back(1);
-    else
-      Error(tok, "only ':' and newaxis are supported in subscripts");
+    switch(tok->tag_) {
+      case ':':
+        shape.push_back(lhsShape[i++]);
+        break;
+
+      case Token::NEWAXIS:
+        shape.push_back(1);
+        break;
+
+      case Token::ADD:
+      case Token::SUB:
+      case Token::MAX:
+      case Token::MIN:{
+          int info = UnaryOp::encodeRed(i, tok->tag_);
+          redInfo.push_back({i, info});
+          shape.push_back(lhsShape[i++]);
+          break;
+      }
+
+      default:
+        Error(tok, "Unexpected subscript symbol encountered at dimension %d", i);
+        break;
+    }
   }while(ts_.Try(','));
   ts_.Expect(']');
   if(lhsShape.size() > i)
     Error(tok, "broadcasting not using all operand axes");
   // create ret tile
-  TileType *retType = TileType::New(shape, lhsQual);
-  return UnaryOp::New(Token::CAST, lhs, retType);
+  Expr* res = lhs;
+  for(auto r: redInfo){
+    shape.erase(shape.begin() + r.first);
+    Type *retType;
+    if(shape.empty())
+      retType = lhsQual.GetPtr();
+    else
+      retType = TileType::New(shape, lhsQual);
+    res = UnaryOp::New(Token::REDUCE, res, retType, r.second);
+  }
+  if(!shape.empty()){
+    TileType *retType = TileType::New(shape, lhsQual);
+    res = UnaryOp::New(Token::CAST, res, retType);
+  }
+  return res;
 }
 
 
@@ -1000,6 +1031,10 @@ QualType Parser::ParseDeclSpec(int* storageSpec, int* funcSpec, int* alignSpec) 
       EnsureAndSetStorageSpec(tok, storageSpec, S_EXTERN);
       break;
 
+    case Token::GLOBAL:
+      EnsureAndSetStorageSpec(tok, storageSpec, S_GLOBAL);
+      break;
+
     case Token::STATIC:
       if (!storageSpec)
         Error(tok, ERR_FUNC_SPEC);
@@ -1018,10 +1053,6 @@ QualType Parser::ParseDeclSpec(int* storageSpec, int* funcSpec, int* alignSpec) 
 
     case Token::AUTO:
       EnsureAndSetStorageSpec(tok, storageSpec, S_AUTO);
-      break;
-
-    case Token::REGISTER:
-      EnsureAndSetStorageSpec(tok, storageSpec, S_REGISTER);
       break;
 
     // Type qualifier
