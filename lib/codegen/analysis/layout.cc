@@ -76,12 +76,20 @@ bool is_hmma_c(ir::value *v){
   return result;
 }
 
+const layout_t* layout::get(size_t id) const {
+  return layouts_.at(id);
+}
+
 const layout_t* layout::get(ir::value *v) const {
   return layouts_.at(groups_.at(v));
 }
 
 std::map<size_t, layout_t*>& layout::get_all() {
   return layouts_;
+}
+
+size_t layout::tmp(ir::instruction* i) {
+  return tmp_.at(i);
 }
 
 void extract_io_use(ir::value *v, std::set<ir::value*>& result) {
@@ -323,6 +331,7 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
     size *= 2;
 }
 
+
 // layout factory method
 void layout::create(size_t id, const std::vector<ir::value*>& values) {
   auto it_hmma_c = std::find_if(values.begin(), values.end(), &is_hmma_c);
@@ -364,6 +373,17 @@ void layout::run(ir::module &mod) {
   // create layouts
   for(const auto& x: values_)
     create(x.first, x.second);
+
+  // create temporaries
+  size_t id = values_.size();
+  ir::for_each_instruction(mod, [this, &id](ir::instruction* i) {
+    if(auto *red = dynamic_cast<ir::reduce_inst*>(i)) {
+      id++;
+      ir::value *arg = red->get_operand(0);
+      layouts_[id] = new layout_shared_t(get(arg), axes_->get(arg), arg->get_type()->get_tile_shapes(), {red}, red->get_type()->get_scalar_ty(), id, align_);
+      tmp_[red] = id;
+    }
+  });
 }
 
 }

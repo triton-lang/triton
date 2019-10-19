@@ -6,8 +6,12 @@
 #include <vector>
 
 namespace triton{
-namespace codegen{
 
+namespace ir{
+class instruction;
+}
+
+namespace codegen{
 
 enum storage_info_t {
   NONE,
@@ -63,7 +67,6 @@ static const std::map<ir::value_id_t, inst_storage_info_t> storage_info = {
   { ir::INST_RETURN,               {NONE,        {}}},
   { ir::INST_UNCOND_BRANCH,        {NONE,        {}}},
   { ir::INST_COND_BRANCH,          {NONE,        {REPLICATED}}},
-
   // intrinsics
   { ir::INST_COPY_TO_SHARED,       {SHARED,      {DISTRIBUTED}}},
   { ir::INST_COPY_FROM_SHARED,     {DISTRIBUTED, {SHARED}}},
@@ -72,6 +75,7 @@ static const std::map<ir::value_id_t, inst_storage_info_t> storage_info = {
   { ir::INST_MAKE_RANGE_STA,       {DISTRIBUTED, {}}},
   { ir::INST_MAKE_RANGE,           {DISTRIBUTED, {}}}
 };
+
 
 }
 }
