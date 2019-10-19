@@ -126,6 +126,18 @@ private:
 
   void create(size_t id, const std::vector<ir::value*>& values);
 
+//  size_t shared_tmp_req(ir::instruction* i) {
+//    switch(i->get_id()) {
+//      case ir::INST_REDUCE: {
+//        ir::reduce_inst *red = (ir::reduce_inst*)i;
+//        ir::type *ty = red->get_type();
+
+
+//      }
+//      default: return 0;
+//    }
+//  }
+
 public:
   // constructor
   layout(analysis::axes *axes, analysis::align *align, size_t num_warps);
@@ -134,8 +146,10 @@ public:
   unsigned layout_of(ir::value *value) const;
   const std::vector<ir::value*>& values_of(unsigned id) const;
   size_t num_layouts() const;
+  const layout_t* get(size_t id) const;
   const layout_t* get(ir::value *v) const;
   std::map<size_t, layout_t*> &get_all();
+  size_t tmp(ir::instruction* i);
 
   // execution
   void run(ir::module &mod);
@@ -148,6 +162,7 @@ private:
   std::map<ir::value*, size_t> groups_;
   std::map<size_t, std::vector<ir::value*>> values_;
   std::map<size_t, layout_t*> layouts_;
+  std::map<ir::value*, size_t> tmp_;
 };
 
 }
