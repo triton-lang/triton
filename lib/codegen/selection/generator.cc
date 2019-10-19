@@ -784,18 +784,10 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
       partial[pidx] = accumulate(partial[pidx], current);
   });
 
-  // depth
-  unsigned shape_ax = arg->get_type()->get_tile_shapes()[axis];
-  unsigned per_thread = arg_tile->axis(axis).values.size();
-  unsigned depth = shape_ax / per_thread;
-
-  // shapes
-  auto shared_shapes = arg_tile->get_shapes();
-  shared_shapes[axis] = depth;
-
   // reduce within blocks
   machine_layout_t *slayout = machine_layouts_.at(layouts_->get(layouts_->tmp(x)));
   shared_tile *stile = (shared_tile*)slayout->create(x);
+  unsigned depth = stile->get_shapes()[axis];
 
   unsigned addr_space = sh_mem_ptr_->getType()->getPointerAddressSpace();
   Type *res_ty = builder_->getFloatTy();
@@ -832,7 +824,7 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     }
   }
   tgt_->add_barrier(mod_, *builder_);
-
+  // write back
   distributed_tile* x_tile = (distributed_tile*)tmap_.at(x);
   x_tile->for_each([&](indices_t idx) {
     indices_t red_idx = idx;
