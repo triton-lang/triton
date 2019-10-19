@@ -380,7 +380,16 @@ void layout::run(ir::module &mod) {
     if(auto *red = dynamic_cast<ir::reduce_inst*>(i)) {
       id++;
       ir::value *arg = red->get_operand(0);
-      layouts_[id] = new layout_shared_t(get(arg), axes_->get(arg), arg->get_type()->get_tile_shapes(), {red}, red->get_type()->get_scalar_ty(), id, align_);
+      unsigned axis = red->get_axis();
+      // shape
+      auto shapes = arg->get_type()->get_tile_shapes();
+      unsigned shape_ax = shapes[axis];
+      const layout_t *layout = get(arg);
+      unsigned per_thread = layout->nts[axis];
+      unsigned depth = shape_ax / per_thread;
+      shapes[axis] = depth;
+      // create layout
+      layouts_[id] = new layout_shared_t(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), id, align_);
       tmp_[red] = id;
     }
   });
