@@ -825,13 +825,12 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
   }
   tgt_->add_barrier(mod_, *builder_);
   // write back
-  distributed_tile* x_tile = (distributed_tile*)tmap_.at(x);
-  x_tile->for_each([&](indices_t idx) {
+  for_each(x, [&](indices_t idx) {
     indices_t red_idx = idx;
     red_idx.insert(red_idx.begin() + axis, builder_->getInt32(0));
     Value *read_offset = shared_tile::shared_offset(*builder_, stile->get_shapes(), stile->get_perm(), stile->get_order(),  red_idx);
     Value *read_ptr = builder_->CreateGEP(base_ptr, read_offset);
-    x_tile->set_value(idx, builder_->CreateLoad(read_ptr));
+    set_value(x, idx, builder_->CreateLoad(read_ptr));
   });
 }
 

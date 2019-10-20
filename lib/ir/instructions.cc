@@ -651,10 +651,10 @@ type* reduce_inst::get_res_type(value *arg, unsigned axis) {
   ir::tile_type::tile_shapes_t shapes = arg->get_type()->get_tile_shapes();
   shapes.erase(shapes.begin() + axis);
   type *scalar_ty = arg->get_type()->get_scalar_ty();
-  if(shapes.size() == 0)
+  if(shapes.empty())
+//    shapes.push_back(1);
     return scalar_ty;
-  else
-    return tile_type::get(scalar_ty, shapes);
+  return tile_type::get(scalar_ty, shapes);
 }
 
 reduce_inst::reduce_inst(value *arg, op_t op, unsigned axis, const std::string &name, instruction *next)
