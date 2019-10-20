@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <iostream>
 #include <numeric>
 #include "triton/codegen/analysis/axes.h"
 #include "triton/codegen/analysis/align.h"

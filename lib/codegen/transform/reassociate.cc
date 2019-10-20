@@ -1,7 +1,5 @@
 #include <algorithm>
-#include <iostream>
 #include "triton/codegen/transform/reassociate.h"
-#include "triton/codegen/analysis/align.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -11,27 +9,6 @@
 namespace triton {
 namespace codegen{
 namespace transform{
-
-//inline Constant *get_gep_cst_offset(GetElementPtrInst *gep){
-//  std::vector<Value*> idx_vals;
-//  std::transform(gep->idx_begin(), gep->idx_end(),
-//                 std::back_inserter(idx_vals),
-//                 [](Value* x){ return x;});
-//  if(idx_vals.size() > 1)
-//    return nullptr;
-//  Value *idx = idx_vals[0];
-//  if(isa<Constant>(idx))
-//    return idx;
-//  if(Instruction *BinOp = is_bin_add(idx)){
-//    Value *LHS = BinOp->getOperand(0);
-//    Value *RHS = BinOp->getOperand(1);
-//    if(Constant* Res = dyn_cast<Constant>(LHS))
-//      return Res;
-//    if(Constant* Res = dyn_cast<Constant>(RHS))
-//      return Res;
-//  }
-//  return nullptr;
-//}
 
 
 inline ir::instruction* reassociate::is_bin_add(ir::value *x) {
@@ -140,10 +117,6 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
     old_value->replace_all_uses_with(new_value);
   return new_value;
 }
-
-reassociate::reassociate(analysis::align *align): align_(align)
-{ }
-
 
 /* run */
 void reassociate::run(ir::module &mod) {

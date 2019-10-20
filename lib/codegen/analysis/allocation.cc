@@ -3,12 +3,6 @@
 #include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/liveness.h"
-#include "triton/codegen/transform/cts.h"
-#include "triton/ir/basic_block.h"
-#include "triton/ir/type.h"
-#include "triton/ir/value.h"
-#include "triton/ir/function.h"
-#include "triton/ir/instructions.h"
 #include "triton/ir/utils.h"
 
 namespace triton{

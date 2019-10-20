@@ -16,8 +16,8 @@ void reduce1d(TYPE * X __noalias __readonly __aligned(16),
     const char *reduce2d =
 R"(
 void reduce2d(TYPE * X __noalias __readonly __aligned(16),
-            TYPE * Y __noalias __writeonly __aligned(16),
-            int S0, int S1) {
+              TYPE * Y __noalias __writeonly __aligned(16),
+              int S0, int S1) {
   int pid0 = get_program_id(0);
   int pid1 = get_program_id(1);
   int rs0[TS0] = pid0 * TS0 + 0 ... TS0;

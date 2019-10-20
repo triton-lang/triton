@@ -37,11 +37,7 @@ private:
   ir::value *reassociate_ptr(ir::getelementptr_inst* pz, ir::builder &builder, std::map<ir::value*, cst_info> &offsets);
 
 public:
-  reassociate(analysis::align* align);
   void run(ir::module& module);
-
-private:
-  analysis::align* align_;
 };
 
 }
