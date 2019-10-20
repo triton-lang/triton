@@ -53,7 +53,8 @@ void triton_reduce_nd(drv::stream* stream, const std::vector<int32_t>& shape_x,
   std::string ty = "float";
   size_t dtsize = sizeof(NumericT);
   drv::context* context = stream->context();
-  size_t axy = (axis == 0) ? 1 : 0;
+
+
 
   // shape
   std::vector<int> shape_y = shape_x;
@@ -95,9 +96,16 @@ void triton_reduce_nd(drv::stream* stream, const std::vector<int32_t>& shape_x,
     TS = tile_nd(rank_x);
   for(int d = 0; d < rank_x; d++)
     opt.defines.push_back({"TS" + std::to_string(d), TS[d]});
-  std::string RY = (axis == 0) ? "rs1" : "rs0";
-  opt.defines.push_back({"TY", {std::to_string(shape_x[axy])}});
-  opt.defines.push_back({"RY", {RY}});
+
+  std::vector<size_t> axy;
+  for(int d = 0; d < rank_x; d++)
+    if(d != axis)
+      axy.push_back(d);
+  for(int d = 0; d < rank_y; d++)
+    opt.defines.push_back({"TY" + std::to_string(d), {std::to_string(shape_x[axy[d]])}});
+  for(int d = 0; d < rank_y; d++)
+    opt.defines.push_back({"RY" + std::to_string(d), {"rs" + std::to_string(axy[d])}});
+
   std::string RED = "";
   for(int n = 0; n < rank_x; n++){
     if(n > 0)
@@ -150,6 +158,6 @@ bool do_test(drv::stream* stream, std::vector<int> shape, int axis, reduce_op_t 
   std::vector<std::vector<std::string>> TSS;
   for(int32_t d: shape)
     TSS.push_back({std::to_string(d)});
-  triton_reduce_nd(stream, shape, axis, op, {0, 1}, {0, 1}, TSS, TEST, bench, test);
+  triton_reduce_nd(stream, shape, axis, op, {0, 1, 2}, {0, 1, 2}, TSS, TEST, bench, test);
   return test;
 }

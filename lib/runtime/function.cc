@@ -175,7 +175,11 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     auto ir = make_ir(parser);
     // binary code-gen
     std::unique_ptr<driver::module> bin;
-    bin = make_bin(*ir, stream->context(), opt);
+    try{
+      bin = make_bin(*ir, stream->context(), opt);
+    }catch(...){
+      return;
+    }
     // kernel uses too much resources
     if(!bin)
       return;
