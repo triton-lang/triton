@@ -1,4 +1,4 @@
-foreach(PROG dot copy1d copy2d)
+foreach(PROG dot copy)
      set(TARGET bench_${PROG})
      add_executable(${TARGET} ${PROG}.cc)
      set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME ${TARGET})

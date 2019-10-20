@@ -20,6 +20,7 @@ int main() {
   // shapes to benchmark
   typedef std::tuple<std::vector<int>, int, reduce_op_t> config_t;
   std::vector<config_t> configs = {
+    config_t{{8, 8, 4}, 2, ADD},
     config_t{{32}, 0, ADD},
     config_t{{32, 32}, 0, MAX},
     config_t{{32, 32}, 1, ADD},

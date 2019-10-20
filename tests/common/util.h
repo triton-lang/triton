@@ -62,7 +62,7 @@ inline std::vector<std::vector<std::string>> tile_nd(size_t rank) {
 template<class T>
 void init_rand(std::vector<T>& x) {
   for(size_t i = 0; i < x.size(); i++)
-    x[i] = static_cast<T>((double)rand()/RAND_MAX);
+    x[i] = i;
 }
 
 template<class T>
@@ -107,8 +107,11 @@ enum order_t {
 
 int offset(const std::vector<int>& idx, const std::vector<int>& shapes) {
   int result = idx[0];
-  for(int i = 1; i < idx.size(); i++)
-    result += idx[i]*shapes[i-1];
+  int ld = 1;
+  for(int i = 1; i < idx.size(); i++){
+    ld *= shapes[i - 1];
+    result += idx[i]*ld;
+  }
   return result;
 }
 
