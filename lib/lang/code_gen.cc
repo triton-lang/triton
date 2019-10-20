@@ -467,6 +467,9 @@ ir::value* Generator::GenBroadcastOp(ir::value* src, ir::type* dst_ty) {
       return bld_->create_broadcast(src, dst_shapes);
     }
   }
+  else if(src->get_type()->is_tile_ty() && src->get_type()->get_tile_num_elements() == 1){
+    return bld_->create_downcast(src);
+  }
   return src;
 }
 

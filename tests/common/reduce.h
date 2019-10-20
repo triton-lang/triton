@@ -19,6 +19,8 @@ void cc_reduce_nd(std::vector<T> &y, const std::vector<T> &x, reduce_op_t op, si
   // remove shape at index axis to get outer dimensions
   std::vector<int> outer = shapes;
   outer.erase(outer.begin() + axis);
+  if(outer.empty())
+    outer.push_back(1);
   // retrieve shape at index axis to get inner dimension
   int inner = shapes[axis];
   // accumualtion function
@@ -42,7 +44,7 @@ enum run_mode_t {
   TEST
 };
 
-void triton_reduce_nd(drv::stream* stream, const std::vector<int32_t>& shape,
+void triton_reduce_nd(drv::stream* stream, const std::vector<int32_t>& shape_x,
                       int axis, reduce_op_t op,
                       const std::vector<int32_t>& x_order, const std::vector<int32_t>& y_order,
                       std::vector<std::vector<std::string>> TS,
@@ -53,86 +55,91 @@ void triton_reduce_nd(drv::stream* stream, const std::vector<int32_t>& shape,
   drv::context* context = stream->context();
   size_t axy = (axis == 0) ? 1 : 0;
 
+  // shape
+  std::vector<int> shape_y = shape_x;
+  shape_y.erase(shape_y.begin() + axis);
+
   // rank
-  size_t rank = shape.size();
+  int rank_x = shape_x.size();
+  int rank_y = shape_y.size();
+
   // size
-  size_t size = 1;
-  for(int32_t d: shape)
-    size *= d;
-  std::vector<std::string> shapename = {"S0", "S1", "S2"};
+  size_t size_x = 1;
+  for(int32_t d: shape_x)
+    size_x *= d;
+  size_t size_y = 1;
+  for(int32_t d: shape_y)
+    size_y *= d;
+
   // strides for x
+  std::vector<std::string> x_shapename = {"S0", "S1", "S2"};
   std::vector<std::string> x_strides = {"1"};
-  for(size_t d = 0; d < rank - 1; d++)
-    x_strides.push_back(x_strides[d] + " * " + shapename[x_order[d]]);
+  for(int d = 0; d < rank_x - 1; d++)
+    x_strides.push_back(x_strides[d] + " * " + x_shapename[x_order[d]]);
+
   // strides for y
+  std::vector<std::string> y_shapename = x_shapename;
+  y_shapename.erase(y_shapename.begin() + axis);
   std::vector<std::string> y_strides = {"1"};
-  for(size_t d = 0; d < rank - 1; d++)
-    y_strides.push_back(y_strides[d] + " * " + shapename[y_order[d]]);
+  for(int d = 0; d < rank_y - 1; d++)
+    y_strides.push_back(y_strides[d] + " * " + y_shapename[y_order[d]]);
 
-  // create inputs
-  auto dx = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size*dtsize));
-  auto dy = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size*dtsize));
-  // create options
+  // options
   rt::function::options_space_t opt;
-
-  // type
   opt.defines.push_back({"TYPE", {ty}});
-  // x strides
-  for(size_t d = 0; d < rank; d++)
+  for(int d = 0; d < rank_x; d++)
     opt.defines.push_back({"STRIDE_XS" + std::to_string(x_order[d]), {x_strides[d]}});
-  // y strides
-  for(size_t d = 0; d < rank; d++)
+  for(int d = 0; d < rank_y; d++)
     opt.defines.push_back({"STRIDE_YS" + std::to_string(y_order[d]), {y_strides[d]}});
   if(TS.empty())
-    TS = tile_nd(rank);
-  // tile size
-  for(size_t d = 0; d < rank; d++)
+    TS = tile_nd(rank_x);
+  for(int d = 0; d < rank_x; d++)
     opt.defines.push_back({"TS" + std::to_string(d), TS[d]});
-  // non-reduced axis
-  std::string RY = (axis == 0) ? "rn" : "rm";
-  opt.defines.push_back({"TY", {std::to_string(shape[axy])}});
+  std::string RY = (axis == 0) ? "rs1" : "rs0";
+  opt.defines.push_back({"TY", {std::to_string(shape_x[axy])}});
   opt.defines.push_back({"RY", {RY}});
-  // reduction broadcasting
   std::string RED = "";
-  for(int n = 0; n < 2; n++){
+  for(int n = 0; n < rank_x; n++){
     if(n > 0)
       RED += ", ";
     RED += (n==axis) ? to_str(op) : ":";
   }
   opt.defines.push_back({"RED", {RED}});
-
-  opt.num_warps = {4};
+  opt.num_warps = {1};
 
   // kernel
-  rt::function function(src::reduce2d, opt);
+  rt::function function(src::reduce_nd[rank_x - 1], opt);
+
+  // input buffers
+  auto dx = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size_x*dtsize));
+  auto dy = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size_y*dtsize));
 
   // grid
   std::vector<rt::arg> args = {&*dx, &*dy};
-  for(int32_t d: shape)
+  for(int32_t d: shape_x)
     args.push_back(d);
-  args.push_back(shape[0]);
   std::vector<std::string> ts = {"TS0", "TS1", "TS2"};
-  auto grid = grid_nd(shape, ts);
+  auto grid = grid_nd(shape_x, ts);
 
   // metrics
   if(mode == BENCH){
-    auto gbps = [&](double ns) { return 2 * size * dtsize / (ns * 1e-9) * 1e-9; };
+    auto gbps = [&](double ns) { return 2 * size_x * dtsize / (ns * 1e-9) * 1e-9; };
     double triton_ns = triton::tools::bench([&]() { function(args, grid, stream);}, stream);
     bench.push_back(gbps(triton_ns));
   }
 
   // test triton
   if(mode == TEST){
-    std::vector<NumericT> hy(shape[axy]);
-    std::vector<NumericT> ry(shape[axy]);
-    std::vector<NumericT> hx(shape[0]*shape[1]);
+    std::vector<NumericT> hy(size_y);
+    std::vector<NumericT> ry(size_y);
+    std::vector<NumericT> hx(size_x);
     init_zeros(hy);
     init_rand(hx);
     stream->write(&*dx, true, 0, hx);
     function(args, grid, stream);
     stream->synchronize();
     stream->read(&*dy, true, 0, hy);
-    cc_reduce_nd(ry, hx, op, axis, shape);
+    cc_reduce_nd(ry, hx, op, axis, shape_x);
     test = testing::diff(hy, ry);
   }
 }

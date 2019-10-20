@@ -106,6 +106,8 @@ void axes::update_graph_elementwise(ir::instruction *i) {
 }
 
 void axes::update_graph_no_edge(ir::instruction *i) {
+  if(!i->get_type()->is_tile_ty())
+    return;
   auto rank = i->get_type()->get_tile_rank();
   for(unsigned d = 0; d < rank; d++)
     graph_.add_edge({i, d}, {i, d});

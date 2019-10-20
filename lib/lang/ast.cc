@@ -567,7 +567,7 @@ void BinaryOp::AssignOpTypeChecking() {
   // The other constraints are lefted to cast operator
   rhs_ = Expr::MayCast(rhs_, ScalarOrLikeTile(rhs_, lhsScalType));
   type_ = lhs_->Type();
-  Broadcast(this, lhs_, rhs_, type_);
+  rhs_ = UnaryOp::New(Token::CAST, rhs_, type_);
 }
 
 /*
@@ -688,7 +688,10 @@ void UnaryOp::ReduceOpTypeChecking() {
     Error(this, "array expected for reduction operation");
   auto shape = tileType->Shape();
   shape.erase(shape.begin() + ax);
-  type_ = TileType::New(shape, tileType->Derived());
+  if(shape.empty())
+    type_ = tileType->Derived();
+  else
+    type_ = TileType::New(shape, tileType->Derived());
 }
 
 void UnaryOp::TransOpTypeChecking() {
