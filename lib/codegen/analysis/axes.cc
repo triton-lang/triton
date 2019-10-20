@@ -1,12 +1,7 @@
 #include "triton/codegen/analysis/axes.h"
-#include "triton/ir/instructions.h"
 #include "triton/ir/utils.h"
+#include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
-#include "triton/ir/module.h"
-#include "triton/ir/function.h"
-#include "triton/ir/context_impl.h"
-#include "triton/ir/constant.h"
-#include "triton/driver/device.h"
 
 
 

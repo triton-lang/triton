@@ -5,9 +5,6 @@
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
-#include <iostream>
-#include <numeric>
-#include <algorithm>
 
 namespace triton {
 namespace codegen{

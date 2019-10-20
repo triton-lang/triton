@@ -1,11 +1,9 @@
 #ifndef _TRITON_CODEGEN_ANALYSIS_AXES_H_
 #define _TRITON_CODEGEN_ANALYSIS_AXES_H_
 
-#include <map>
-#include <set>
-#include <vector>
-#include <memory>
 #include "triton/tools/graph.h"
+#include <map>
+#include <vector>
 
 namespace triton{
 

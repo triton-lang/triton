@@ -1,15 +1,10 @@
-#include <iostream>
 #include <algorithm>
-#include <numeric>
-#include "triton/ir/function.h"
 #include "triton/ir/utils.h"
-#include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/module.h"
-#include "triton/codegen/analysis/layout.h"
-#include "triton/codegen/transform/cts.h"
-#include "triton/codegen/analysis/align.h"
 #include "triton/codegen/transform/coalesce.h"
+#include "triton/codegen/analysis/align.h"
+#include "triton/codegen/analysis/layout.h"
 
 namespace triton {
 namespace codegen{

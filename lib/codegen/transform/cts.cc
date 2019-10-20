@@ -1,12 +1,9 @@
-#include <algorithm>
-#include <iostream>
 #include "triton/codegen/transform/cts.h"
 #include "triton/codegen/instructions.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
-#include "triton/ir/type.h"
 
 namespace triton {
 namespace codegen{
