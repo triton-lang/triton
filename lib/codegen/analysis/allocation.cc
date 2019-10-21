@@ -96,7 +96,6 @@ void allocation::run(ir::module &mod) {
     offsets_[x] = starts[x] + colors[x] * Adj;
   }
 
-
   // Save maximum size of induced memory space
   allocated_size_ = 0;
   for(layout_t* x: V)

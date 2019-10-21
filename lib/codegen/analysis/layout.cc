@@ -300,6 +300,10 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
   }
   std::vector<int> col = {0, 1};
   std::vector<int> row = {1, 0};
+  for(size_t s = 2; s < shapes.size(); s++){
+    col.push_back(s);
+    row.push_back(s);
+  }
   bool is_nonhmma_dot_a = dot_a && !hmma_dot_a;
   bool is_nonhmma_dot_b = dot_b && !hmma_dot_b;
   if(is_nonhmma_dot_a)
