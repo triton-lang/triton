@@ -471,12 +471,20 @@ void BinaryOp::MatmulOpTypeChecking() {
   auto rhsShape = rhsType->Shape();
   size_t lhsRank = lhsShape.size();
   size_t rhsRank = rhsShape.size();
-  if(lhsRank != 2 || rhsRank != 2)
-    Error(this, "matrix multiplication operands must have rank 2");
+  if(lhsRank != rhsRank)
+    Error(this, "matrix multiplication operands have incompatible rank"
+                "%d and %d", lhsRank, rhsRank);
+  for(int d = 2; d < lhsRank; d++)
+    if(lhsShape[d] != rhsShape[d])
+      Error(this, "matrix multiplication operands have incompatible batch dimension"
+                  "%d and %d for axis %d", lhsShape[d], rhsShape[d], d);
   if(lhsShape[1] != rhsShape[0])
     Error(this, "matrix multiplication operands have incompatible inner dimension"
                 " %d and %d", lhsShape[1], rhsShape[0]);
+  // ret shape
   TileType::ShapeInt retShape = {lhsShape[0], rhsShape[1]};
+  for(int d = 2; d < lhsRank; d++)
+    retShape.push_back(lhsShape[d]);
   QualType retType = lhsType->Derived();
   if(retType != rhsType->Derived())
     Error(this, "matrix multiplication operands have incompatible data types");

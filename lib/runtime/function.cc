@@ -219,7 +219,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::cts cts;
   codegen::generator isel(&axes, &layouts, &align, &allocation, target.get(), opt.num_warps);
   // run passes
-//    ir::print(module, std::cout);
+//  ir::print(module, std::cout);
   peephole.run(module);
   dce.run(module);
   align.run(module);

@@ -77,11 +77,6 @@ void axes::update_graph_dot(ir::instruction *i) {
   // add edges between result and accumulator
   for(unsigned d = 0; d < shapes.size(); d++)
     graph_.add_edge({dot, d}, {D, d});
-  // add edge for batch dimension
-  for(unsigned d = 2; d < shapes.size(); d++){
-    graph_.add_edge({dot, d}, {A, d});
-    graph_.add_edge({dot, d}, {B, d});
-  }
 }
 
 void axes::update_graph_elementwise(ir::instruction *i) {

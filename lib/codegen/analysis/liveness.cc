@@ -1,4 +1,5 @@
 #include <climits>
+#include <iostream>
 #include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/analysis/layout.h"
 #include "triton/ir/function.h"
@@ -37,12 +38,13 @@ void liveness::run(ir::module &mod) {
     }
     // compute intervals
     unsigned start = INT32_MAX;
+    for(ir::value *v: layout->values)
+      if(indices.find(v) != indices.end())
+        start = std::min(start, indices.at(v));
     unsigned end = 0;
     for(ir::user *u: users)
-    if(indices.find(u) != indices.end()){
-      start = std::min(start, indices.at(u));
-      end = std::max(end, indices.at(u));
-    }
+      if(indices.find(u) != indices.end())
+        end = std::max(end, indices.at(u));
     intervals_[layout] = segment{start, end};
   }
 
