@@ -7,8 +7,43 @@ class _einsum(triton.function):
                 int dim_M, int dim_N, int dim_K, 
                 int std_A0, int std_B0, int std_C0, 
                 int std_A1, int std_B1, int std_C1) {
+        // program id
         int pid0 = get_program_id(0);
         int pid1 = get_program_id(1);
+        int pid2 = get_program_id(2);
+        // range
+        int rma[TM] = pid0 * TM + 0 ... TM;
+        int rnb[TN] = pid1 * TN + 0 ... TN;
+        int rka[TK] = 0 ... TK;
+        int rkb[TK] = 0 ... TK;
+        int rba[TB] = pid2 * TB + 0 ... TB;
+        int rbb[TB] = pid2 * TB + 0 ... TB;
+        // accumulator
+        TYPE c[TM, TN, TB] = 0;
+        // pointers to a
+        TYPE *pa[TM, TK, TB] = A + rka[newaxis, :, newaxis] * 1
+                                 + rma[:, newaxis, newaxis] * std_A1
+                                 + rba[newaxis, newaxis, :] * std_A0;
+        // pointers to b
+        TYPE *pb[TK, TN, TB] = B + rkb[:, newaxis, newaxis] * 1
+                                 + rnb[newaxis, :, newaxis] * std_B1
+                                 + rbb[newaxis, newaxis, :] * std_B0;
+        // accumulation
+        for(int k = dim_K; k > 0; k -= TK) {
+            TYPE a[TM, TK, TB] = *pa;
+            TYPE b[TK, TN, TB] = *pb;
+            c += a @ b;
+            pa += TK;
+            pb += TK;
+        }
+        // write-back
+        int rmc[TM] = pid0 * TM + 0 ... TM;
+        int rnc[TN] = pid1 * TN + 0 ... TN;
+        int rbc[TB] = pid2 * TB + 0 ... TB;
+        TYPE *pc[TM, TN, TB] = C + rmc[:, newaxis, newaxis] * std_C1
+                                 + rnc[newaxis, :, newaxis] * 1
+                                 + rbc[newaxis, newaxis, :] * std_C0;
+        *pc = c;
     }
     """
 
@@ -100,13 +135,16 @@ class _einsum(triton.function):
              std0, std1, einsum_a, einsum_b, einsum_c):
         dtype = a.dtype
         c = triton.empty(shape_c, dtype)
-        grid = lambda opt: (1, 1, 1)
+        grid = lambda opt: [triton.cdiv(bmnk[1], opt.d('TM')), 
+                            triton.cdiv(bmnk[2], opt.d('TN')), 
+                            triton.cdiv(bmnk[0], opt.d('TB'))]
+        #print(std0, std1)
         return _einsum.kernel(a, b, c, 
                               bmnk[1], bmnk[2], bmnk[3], 
                               std0[0], std0[1], std0[2], 
                               std1[0], std1[1], std1[2], 
                               grid,
-                              TYPE=['float'])
+                              TYPE='float', TM=32, TN=32, TK=8, TB=8)
     
 
     @staticmethod
