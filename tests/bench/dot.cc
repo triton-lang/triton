@@ -34,7 +34,7 @@ int main() {
   for(const auto& c: configs){
     std::tie(ord, AT, BT, M, N, K) = c;
     std::cout << "// " << c << std::flush;
-    for(auto perf: bench_dot(stream, FLOAT, AT, BT, M, N, K, ord, ord))
+    for(auto perf: bench_dot(stream, HALF, AT, BT, M, N, K, ord, ord))
       std::cout << ", " << perf << std::flush;
     std::cout << std::endl;
   }
