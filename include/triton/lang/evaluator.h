@@ -30,6 +30,9 @@ public:
   virtual void VisitIdentifier(Identifier* ident) {
     Error(ident, "expect constant expression");
   }
+  virtual void VisitTransOp(TransOp* trans) {
+    Error(trans, "expect constant expression");
+  }
   virtual void VisitObject(Object* obj) {
     Error(obj, "expect constant expression");
   }
@@ -82,6 +85,9 @@ public:
 
   virtual void VisitFuncCall(FuncCall* funcCall) {
     Error(funcCall, "expect constant expression");
+  }
+  virtual void VisitTransOp(TransOp* trans) {
+    Error(trans, "expect constant expression");
   }
   virtual void VisitEnumerator(Enumerator* enumer) {
     addr_.offset_ = enumer->Val();

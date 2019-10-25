@@ -8,41 +8,36 @@ class _einsum(triton.function):
                 int std_A0, int std_B0, int std_C0, 
                 int std_A1, int std_B1, int std_C1) {
         // program id
-        int pid0 = get_program_id(0);
-        int pid1 = get_program_id(1);
-        int pid2 = get_program_id(2);
+        int pgm = get_program_id(0);
+        int pgn = get_program_id(1);
+        int pgb = get_program_id(2);
         // range
-        int rma[TM] = pid0 * TM + 0 ... TM;
-        int rnb[TN] = pid1 * TN + 0 ... TN;
-        int rka[TK] = 0 ... TK;
-        int rkb[TK] = 0 ... TK;
-        int rba[TB] = pid2 * TB + 0 ... TB;
-        int rbb[TB] = pid2 * TB + 0 ... TB;
+        int rm[TM] = pgm * TM + 0 ... TM;
+        int rn[TN] = pgn * TN + 0 ... TN;
+        int rb[TB] = pgb * TB + 0 ... TB;
+        int rk[TK] = 0 ... TK;
         // accumulator
         TYPE c[TM, TN, TB] = 0;
         // pointers to a
-        TYPE *pa[TM, TK, TB] = A + rka[newaxis, :, newaxis] * 1
-                                 + rma[:, newaxis, newaxis] * std_A1
-                                 + rba[newaxis, newaxis, :] * std_A0;
+        TYPE *pa[SHAPE_A] = A + rk[BROADCAST_AK] * STRIDE_AK
+                              + rm[BROADCAST_AM] * STRIDE_AM
+                              + rb[newaxis, newaxis, :] * std_A0;
         // pointers to b
-        TYPE *pb[TK, TN, TB] = B + rkb[:, newaxis, newaxis] * 1
-                                 + rnb[newaxis, :, newaxis] * std_B1
-                                 + rbb[newaxis, newaxis, :] * std_B0;
+        TYPE *pb[SHAPE_B] = B + rk[BROADCAST_BK] * STRIDE_BK
+                              + rn[BROADCAST_BN] * STRIDE_BN
+                              + rb[newaxis, newaxis, :] * std_B0;
         // accumulation
         for(int k = dim_K; k > 0; k -= TK) {
-            TYPE a[TM, TK, TB] = *pa;
-            TYPE b[TK, TN, TB] = *pb;
+            TYPE a[SHAPE_A] = *pa;
+            TYPE b[SHAPE_B] = *pb;
             c += a @ b;
             pa += TK;
             pb += TK;
         }
         // write-back
-        int rmc[TM] = pid0 * TM + 0 ... TM;
-        int rnc[TN] = pid1 * TN + 0 ... TN;
-        int rbc[TB] = pid2 * TB + 0 ... TB;
-        TYPE *pc[TM, TN, TB] = C + rmc[:, newaxis, newaxis] * std_C1
-                                 + rnc[newaxis, :, newaxis] * 1
-                                 + rbc[newaxis, newaxis, :] * std_C0;
+        TYPE *pc[TM, TN, TB] = C + rm[:, newaxis, newaxis] * std_C1
+                                 + rn[newaxis, :, newaxis] * 1
+                                 + rb[newaxis, newaxis, :] * std_C0;
         *pc = c;
     }
     """
@@ -138,12 +133,25 @@ class _einsum(triton.function):
         grid = lambda opt: [triton.cdiv(bmnk[1], opt.d('TM')), 
                             triton.cdiv(bmnk[2], opt.d('TN')), 
                             triton.cdiv(bmnk[0], opt.d('TB'))]
-        #print(std0, std1)
+        macros = {# handle A transposition
+              'USE_A'       : 'a[^1, ^0, ^2]'          if trans_a else 'a',
+              'STRIDE_AK'   : 'std_A1'                 if trans_a else '1',
+              'STRIDE_AM'   : '1'                      if trans_a else 'std_A1',
+              'BROADCAST_AK': ':, newaxis, newaxis'    if trans_a else 'newaxis, :, newaxis',
+              'BROADCAST_AM': 'newaxis, :, newaxis'    if trans_a else ':, newaxis, newaxis',
+              'SHAPE_A'     : 'TK, TM, TB'             if trans_a else 'TM, TK, TB',
+              # handle B transposition
+              'USE_B'       : 'b[^1, ^0, ^2]'          if not trans_b else 'b',
+              'STRIDE_BK'   : 'std_B1'                 if not trans_b else '1',
+              'STRIDE_BN'   : '1'                      if not trans_b else 'std_B1',
+              'BROADCAST_BK': 'newaxis, :, newaxis'    if not trans_b else ':, newaxis, newaxis',
+              'BROADCAST_BN': ':, newaxis, newaxis'    if not trans_b else 'newaxis, :, newaxis',
+              'SHAPE_B'     : 'TN, TK, TB'             if not trans_b else 'TK, TN, TB'}
         return _einsum.kernel(a, b, c, 
                               bmnk[1], bmnk[2], bmnk[3], 
                               std0[0], std0[1], std0[2], 
                               std1[0], std1[1], std1[2], 
-                              grid,
+                              grid, **macros,
                               TYPE='float', TM=32, TN=32, TK=8, TB=1)
     
 

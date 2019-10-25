@@ -86,14 +86,14 @@ bool triton_dot(drv::stream* stream, bool AT, bool BT,
   // macros
   rt::function::options_space_t opt;
   // A access patterns
-  opt.defines.push_back({"USEA",         {AT? "^a"           : "a"            }});
+  opt.defines.push_back({"USEA",         {AT? "a[^1, ^0]"    : "a"            }});
   opt.defines.push_back({"BROADCAST_AK", {AT? ":, newaxis"   : "newaxis, :"   }});
   opt.defines.push_back({"BROADCAST_AM", {AT? "newaxis, :"   : ":, newaxis"   }});
   opt.defines.push_back({"SHAPE_A",      {AT? "TK, TM"       : "TM, TK"       }});
   opt.defines.push_back({"STRIDE_AK",    {AT? sa[a_order[0]] : sa[a_order[1]] }});
   opt.defines.push_back({"STRIDE_AM",    {AT? sa[a_order[1]] : sa[a_order[0]] }});
   // B access patterns
-  opt.defines.push_back({"USEB",         {BT? "^b"           : "b"            }});
+  opt.defines.push_back({"USEB",         {BT? "b[^1, ^0]"    : "b"            }});
   opt.defines.push_back({"BROADCAST_BK", {BT? "newaxis, :"   : ":, newaxis"   }});
   opt.defines.push_back({"BROADCAST_BN", {BT? ":, newaxis"   : "newaxis, :"   }});
   opt.defines.push_back({"SHAPE_B",      {BT? "TN, TK"       : "TK, TN"       }});

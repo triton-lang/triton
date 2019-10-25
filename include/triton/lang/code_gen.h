@@ -58,6 +58,7 @@ public:
   // Expression
   void VisitBinaryOp(BinaryOp* binaryOp);
   void VisitUnaryOp(UnaryOp* unaryOp);
+  void VisitTransOp(TransOp* transOp);
   void VisitConditionalOp(ConditionalOp* condOp);
   void VisitFuncCall(FuncCall* funcCall);
   void VisitObject(Object* obj);
@@ -130,6 +131,7 @@ public:
 
   void VisitConditionalOp(ConditionalOp*)      { should_not_happen(); }
   void VisitFuncCall(FuncCall*)                { should_not_happen(); }
+  void VisitTransOp(TransOp*)                  { should_not_happen(); }
   void VisitEnumerator(Enumerator*)            { should_not_happen(); }
   void VisitConstant(Constant*)                { should_not_happen(); }
   void VisitTempVar(TempVar*)                  { should_not_happen(); }
