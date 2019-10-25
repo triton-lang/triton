@@ -144,7 +144,7 @@ class _einsum(triton.function):
                               std0[0], std0[1], std0[2], 
                               std1[0], std1[1], std1[2], 
                               grid,
-                              TYPE='float', TM=32, TN=32, TK=8, TB=8)
+                              TYPE='float', TM=32, TN=32, TK=8, TB=1)
     
 
     @staticmethod
