@@ -890,21 +890,30 @@ void generator::visit_barrier_inst(ir::barrier_inst*) {
 void generator::visit_make_range_dyn(ir::make_range_dyn* x) {
   for_each(x, [&](indices_t idx){
     assert(idx.size() == 1);
-    BinaryOperator *bin_add = dyn_cast<BinaryOperator>(idx[0]);
-    assert(bin_add);
-    Value *res = bin_add->getOperand(0);
-    set_value(x, idx, res);
+    if(idx[0] == builder_->getInt32(0))
+      set_value(x, idx, idx[0]);
+    else{
+      BinaryOperator *bin_add = dyn_cast<BinaryOperator>(idx[0]);
+      assert(bin_add);
+      Value *res = bin_add->getOperand(0);
+      set_value(x, idx, res);
+    }
   });
 }
 
 void generator::visit_make_range_sta(ir::make_range_sta* x) {
   for_each(x, [&](indices_t idx){
     assert(idx.size() == 1);
-    BinaryOperator *bin_add = dyn_cast<BinaryOperator>(idx[0]);
-    assert(bin_add);
-    Value *res = bin_add->getOperand(1);
-    assert(isa<Constant>(res));
-    set_value(x, idx, res);
+    if(idx[0] == builder_->getInt32(0)){
+      set_value(x, idx, idx[0]);
+    }
+    else{
+      BinaryOperator *bin_add = dyn_cast<BinaryOperator>(idx[0]);
+      assert(bin_add);
+      Value *res = bin_add->getOperand(1);
+      assert(isa<Constant>(res));
+      set_value(x, idx, res);
+    }
   });
 }
 
