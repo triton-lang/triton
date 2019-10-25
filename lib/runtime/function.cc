@@ -13,6 +13,7 @@
 #include "triton/codegen/transform/membar.h"
 #include "triton/codegen/transform/reassociate.h"
 #include "triton/codegen/transform/cts.h"
+#include "triton/codegen/transform/disassociate.h"
 #include "triton/codegen/selection/generator.h"
 #include "triton/runtime/function.h"
 #include "triton/lang/cpp.h"
@@ -208,6 +209,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   // create passes
   codegen::analysis::align align;
   codegen::analysis::axes axes;
+  codegen::transform::disassociate disassociate;
   codegen::analysis::layout layouts(&axes, &align, opt.num_warps);
   codegen::analysis::liveness liveness(&layouts);
   codegen::analysis::allocation allocation(&liveness);
@@ -219,7 +221,8 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::cts cts;
   codegen::generator isel(&axes, &layouts, &align, &allocation, target.get(), opt.num_warps);
   // run passes
-//  ir::print(module, std::cout);
+  disassociate.run(module);
+  dce.run(module);
   peephole.run(module);
   dce.run(module);
   align.run(module);
