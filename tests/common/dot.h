@@ -147,9 +147,9 @@ bool triton_dot(drv::stream* stream, bool AT, bool BT,
     std::vector<T> ha(M*K);
     std::vector<T> hb(K*N);
     for(size_t i = 0; i < ha.size(); i++)
-      ha[i] = static_cast<T>((float)rand()/RAND_MAX);
+      ha[i] = 1;
     for(size_t i = 0; i < hb.size(); i++)
-      hb[i] = static_cast<T>((float)rand()/RAND_MAX);
+      hb[i] = 1;
     // copy buffer
     stream->write(&*da, true, 0, ha);
     stream->write(&*db, true, 0, hb);

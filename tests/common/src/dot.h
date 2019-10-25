@@ -25,8 +25,10 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
     c += USEA @ USEB;
     pa = pa + TK * STRIDE_AK;
     pb = pb + TK * STRIDE_BK;
-    a = ((bool[SHAPE_A]) k > TK) ? *pa : 0;
-    b = ((bool[SHAPE_B]) k > TK) ? *pb : 0;
+    bool checka[SHAPE_A] = k > TK;
+    bool checkb[SHAPE_B] = k > TK;
+    a = checka ? *pa : 0;
+    b = checkb ? *pb : 0;
   }
   // epilogue
   TYPE* pc[TM, TN] = C + rm[:, newaxis] + rn[newaxis, :] * ldc;
