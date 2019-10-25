@@ -10,14 +10,13 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
   // prologue
   int ridx = get_program_id(0);
   int ridy = get_program_id(1);
-  int rxa[TM] = ridx * TM + 0 ... TM;
-  int ryb[TN] = ridy * TN + 0 ... TN;
-  int rka[TK] = 0 ... TK;
-  int rkb[TK] = 0 ... TK;
+  int rm[TM] = ridx * TM + 0 ... TM;
+  int rn[TN] = ridy * TN + 0 ... TN;
+  int rk[TK] = 0 ... TK;
   float c[TM, TN] = 0;
   // pointers to operands
-  TYPE* pa[SHAPE_A] = A + rka[BROADCAST_AK] * STRIDE_AK + rxa[BROADCAST_AM] * STRIDE_AM;
-  TYPE* pb[SHAPE_B] = B + rkb[BROADCAST_BK] * STRIDE_BK + ryb[BROADCAST_BN] * STRIDE_BN;
+  TYPE* pa[SHAPE_A] = A + rk[BROADCAST_AK] * STRIDE_AK + rm[BROADCAST_AM] * STRIDE_AM;
+  TYPE* pb[SHAPE_B] = B + rk[BROADCAST_BK] * STRIDE_BK + rn[BROADCAST_BN] * STRIDE_BN;
   // prefetches operands
   TYPE a[SHAPE_A] = *pa;
   TYPE b[SHAPE_B] = *pb;
@@ -32,9 +31,7 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
     b = checkb ? *pb : 0;
   }
   // epilogue
-  int rxc[TM] =  ridx * TM + 0 ... TM;
-  int ryc[TN] =  ridy * TN + 0 ... TN;
-  TYPE* pc[TM, TN] = C + rxc[:, newaxis] + ryc[newaxis, :] * ldc;
+  TYPE* pc[TM, TN] = C + rm[:, newaxis] + rn[newaxis, :] * ldc;
   *pc = c;
 }
 )";
