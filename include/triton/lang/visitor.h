@@ -6,6 +6,7 @@
 
 class BinaryOp;
 class UnaryOp;
+class TransOp;
 class ConditionalOp;
 class FuncCall;
 class Identifier;
@@ -31,6 +32,7 @@ public:
   virtual ~Visitor() {}
   virtual void VisitBinaryOp(BinaryOp* binary) = 0;
   virtual void VisitUnaryOp(UnaryOp* unary) = 0;
+  virtual void VisitTransOp(TransOp* trans) = 0;
   virtual void VisitConditionalOp(ConditionalOp* cond) = 0;
   virtual void VisitFuncCall(FuncCall* funcCall) = 0;
   virtual void VisitEnumerator(Enumerator* enumer) = 0;

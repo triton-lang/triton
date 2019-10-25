@@ -185,7 +185,6 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
     case '~': return set_ret(bld_->create_neg(arg));
     case '!': return set_ret(bld_->create_not(arg));
     case Token::CAST: return set_ret(GenCastOp(arg, GenIRType(unary->Type(), *ctx_)));
-    case '^': return set_ret(bld_->create_trans(arg));
     case Token::REDUCE: {
       int ax, tag;
       UnaryOp::decodeRed(unary->info_, ax, tag);
@@ -196,6 +195,12 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
     default: error_not_implemented();
   }
   return error_not_implemented();
+}
+
+void Generator::VisitTransOp(TransOp *trans) {
+  Visit(trans->operand_);
+  ir::value* arg = ret_;
+  return set_ret(bld_->create_trans(arg, trans->getPerm()));
 }
 
 void Generator::VisitConditionalOp(ConditionalOp* condOp) {

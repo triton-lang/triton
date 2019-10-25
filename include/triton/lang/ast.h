@@ -430,7 +430,6 @@ public:
   void AddrOpTypeChecking();
   void DerefOpTypeChecking();
   void ReduceOpTypeChecking();
-  void TransOpTypeChecking();
   void UnaryArithmOpTypeChecking();
   void CastOpTypeChecking();
 
@@ -446,6 +445,28 @@ protected:
   int op_;
   int info_;
   Expr* operand_;
+};
+
+class TransOp: public Expr {
+  friend class Generator;
+
+public:
+  using PermInt = std::vector<int>;
+
+public:
+  static TransOp* New(const PermInt& perm, Expr* operand);
+  const PermInt& getPerm() const { return perm_; }
+  void Accept(Visitor* v);
+  bool IsLVal() { return false; }
+  void TypeChecking();
+
+protected:
+  TransOp(const PermInt& perm, Expr* operand)
+    : Expr(operand->Tok(), nullptr), operand_(operand), perm_(perm) {}
+
+private:
+  Expr* operand_;
+  PermInt perm_;
 };
 
 
