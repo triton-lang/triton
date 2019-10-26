@@ -187,6 +187,7 @@ generator::generator(analysis::axes *a_axes,
 
 
 void generator::visit_value(ir::value* v) {
+  std::cout << "visiting " << typeid(*v).name() << std::endl;
   if(!seen_.insert(v).second)
     return;
   // create machine tile
@@ -559,8 +560,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
   bool is_a_trans = is_trans(dot->get_operand(0));
   bool is_b_trans = is_trans(dot->get_operand(1));
-  bool is_a_row = is_a_trans ^ (ord_a[ord_a.size() - 2] == 1);
-  bool is_b_row = is_b_trans ^ (ord_b[ord_b.size() - 2] == 1);
+  bool is_a_row = is_a_trans ^ (ord_a[0] == 1);
+  bool is_b_row = is_b_trans ^ (ord_b[0] == 1);
 
 
   Value *offset_a_i = hmma->offset_a_i_;
