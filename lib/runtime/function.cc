@@ -221,6 +221,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::cts cts;
   codegen::generator isel(&axes, &layouts, &align, &allocation, target.get(), opt.num_warps);
   // run passes
+  std::cout << "begin" << std::endl;
   disassociate.run(module);
   dce.run(module);
   peephole.run(module);
@@ -244,9 +245,10 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     return std::unique_ptr<driver::module>();
   barriers.run(module);
+  std::cout << "isel" << std::endl;
 //  ir::print(module, std::cout);
-//  exit(EXIT_FAILURE);
   isel.visit(module, *llvm);
+  std::cout << "done" << std::endl;
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   // done

@@ -1,2 +1,2 @@
-from .dot import dot
-from .einsum import einsum
+from .dot import _dot, dot
+from .einsum import _einsum, einsum

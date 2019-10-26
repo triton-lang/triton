@@ -1,4 +1,5 @@
 #include <numeric>
+#include <iostream>
 #include "llvm/IR/IRBuilder.h"
 #include "triton/codegen/selection/machine_value.h"
 
