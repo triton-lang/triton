@@ -12,7 +12,8 @@ from tensorflow.python.ops import gradient_checker
 
 one = 0
 out = 0
-bench = 0
+bench = 10
+
 class ProdKeyTest(tf.test.TestCase):
 
     def testEinsum(self):
@@ -36,9 +37,9 @@ class ProdKeyTest(tf.test.TestCase):
             # key_dim   = 16
 
             for a_shape, b_shape, c_shape, einsum in [
-                [ [ 4, 8, 8 ], [ 8, 8 ], [ 4, 8, 8 ], "btc,ck->btk" ],
-                [ [ 4, 1024, 1024 ], [ 1024, 512 ], [ 4, 1024, 512 ], "btc,ck->btk" ],
-                [ (batch_dim, ctx_dim, head_dim, 2, key_dim//2),(head_dim, 2, n_keys,  key_dim//2), (batch_dim, ctx_dim, head_dim, 2, n_keys), "bchak,hank->bchan" ],
+                #[ [ 4, 8, 8 ], [ 8, 8 ], [ 4, 8, 8 ], "btc,ck->btk" ],
+                [ [4, 2048, 2048 ], [ 2048, 2048 ], [4, 2048, 2048 ], "btc,ck->btk" ],
+                #[ (batch_dim, ctx_dim, head_dim, 2, key_dim//2),(head_dim, 2, n_keys,  key_dim//2), (batch_dim, ctx_dim, head_dim, 2, n_keys), "bchak,hank->bchan" ],
             ]:
 
                 if one:
@@ -57,7 +58,7 @@ class ProdKeyTest(tf.test.TestCase):
                 e = tf.placeholder(tf.float32, c_shape, name="e")
                 feed_dict = { a:A, b:B, e:E }
 
-                cc = triton.ops.einsum(einsum, a, b)
+                cc = triton.ops.einsum(einsum, a, b, bench=bench)
 
                 # error = gradient_checker.compute_gradient_error(a, a_shape, c, c_shape, delta=1e-1, extra_feed_dict={ b:B }) #
                 # print(error)
@@ -71,8 +72,12 @@ class ProdKeyTest(tf.test.TestCase):
                 # c, = sess.run( [ c, ], feed_dict )
                 c, da, db = sess.run( [ cc, da, db ], feed_dict )
 
-                if bench == 0:
+                if bench > 0:
+                    nanosec = triton.bench_registry[cc]
+                    print(A.shape, B.shape)
+                    print(nanosec)
 
+                else:
                     C = np.einsum(einsum, A, B)
                     id = cc.op.get_attr('id')
                     ctx = triton.ops._einsum.contexts[id]

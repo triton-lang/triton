@@ -22,7 +22,8 @@ class lazy_shape:
 
 def shape(A) :
   if fw.has_tensorflow():
-    return lazy_shape(fw.tensorflow.shape(A))
+    return A.shape.as_list()
+    #return lazy_shape(fw.tensorflow.shape(A))
   elif fw.has_torch():
     return A.shape
   else:

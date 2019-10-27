@@ -11,38 +11,36 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
   // prologue
   int ridx = get_program_id(0);
   int ridy = get_program_id(1);
-  int rxa[TM] = ridx * TM + 0 ... TM;
-  int ryb[TN] = ridy * TN + 0 ... TN;
-  int rka[TK] = 0 ... TK;
-  int rkb[TK] = 0 ... TK;
+  int rm[TM] = ridx * TM + 0 ... TM;
+  int rn[TN] = ridy * TN + 0 ... TN;
+  int rk[TK] = 0 ... TK;
   float c[TM, TN] = 0;
   // pointers to operands
-  TYPE* pa[SHAPE_A] = A + rka[BROADCAST_AK] * STRIDE_AK + rxa[BROADCAST_AM] * STRIDE_AM;
-  TYPE* pb[SHAPE_B] = B + rkb[BROADCAST_BK] * STRIDE_BK + ryb[BROADCAST_BN] * STRIDE_BN;
+  TYPE* pa[SHAPE_A] = A + rk[BROADCAST_AK] * STRIDE_AK + rm[BROADCAST_AM] * STRIDE_AM;
+  TYPE* pb[SHAPE_B] = B + rk[BROADCAST_BK] * STRIDE_BK + rn[BROADCAST_BN] * STRIDE_BN;
   // prefetches operands
-  TYPE a[SHAPE_A] = (*pa);
-  TYPE b[SHAPE_B] = (*pb);
+  TYPE a[SHAPE_A] = *pa;
+  TYPE b[SHAPE_B] = *pb;
   // reduction loop
   for(int k = K; k > 0; k-= TK){
     c += USE_A @ USE_B;
     pa = pa + TK * STRIDE_AK;
     pb = pb + TK * STRIDE_BK;
-    a = *pa;
-    b = *pb;
+    bool checka[SHAPE_A] = k > TK;
+    bool checkb[SHAPE_B] = k > TK;
+    a = checka ? *pa : 0;
+    b = checkb ? *pb : 0;
   }
   // epilogue
-  int rxc[TM] =  ridx * TM + 0 ... TM;
-  int ryc[TN] =  ridy * TN + 0 ... TN;
-  TYPE* pc[TM, TN] = C + ryc[newaxis, :] + rxc[:, newaxis] * ldc;
-  bool checkc[TM, TN] = (rxc < M)[:, newaxis] && (ryc < N)[newaxis, :];
-  *?(checkc) pc = c;
+  TYPE* pc[TM, TN] = C + rm[:, newaxis] * ldc + rn[newaxis, :];
+  *pc = c;
 }
 """
 
   kernel = triton.kernel(src, ['C'])
 
   @staticmethod
-  def _call(a, b, transpose_a, transpose_b):
+  def _call(a, b, transpose_a, transpose_b, bench = 0):
     # extract shapes
     shape_a = triton.shape(a)
     shape_b = triton.shape(b)
@@ -78,16 +76,17 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
               'BROADCAST_BK': 'newaxis, :' if transpose_b else ':, newaxis',
               'BROADCAST_BN': ':, newaxis' if transpose_b else 'newaxis, :',
               'SHAPE_B'     : 'TN, TK'     if transpose_b else 'TK, TN'}
-    return _dot.kernel(a, b, c, M, N, Ka, lda, ldb, ldc, grid,           
+    return _dot.kernel(a, b, c, M, N, Ka, lda, ldb, ldc, 
+                  grid, bench=bench,           
                   AT = transpose_a, BT = transpose_b, TYPE = dtype, 
-                  TM = [128], TN = [128], TK = [8], **macros)
+                  TM = [64, 128], TN = [64, 128], TK = [8], **macros)
 
   @staticmethod
-  def forward(ctx, a, b, transpose_a = False, transpose_b = False):
+  def forward(ctx, a, b, transpose_a = False, transpose_b = False, bench = 0):
     ctx.save_for_backward(a, b)
     ctx.t_a = transpose_a
     ctx.t_b = transpose_b
-    return _dot._call(a, b, transpose_a, transpose_b)
+    return _dot._call(a, b, transpose_a, transpose_b, bench)
 
   @staticmethod
   def backward(ctx, dy):
@@ -108,5 +107,5 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
     else:
       assert False
     return da, db, None, None, None, None, None, None, None
-  
+
 dot = _dot.apply
