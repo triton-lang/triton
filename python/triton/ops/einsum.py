@@ -1,3 +1,6 @@
+# Special thanks to Scott Gray from OpenAI for writing the einsum parsing function
+
+
 import triton
 
 class _einsum(triton.function):
@@ -31,14 +34,18 @@ class _einsum(triton.function):
             TYPE a[SHAPE_A] = *pa;
             TYPE b[SHAPE_B] = *pb;
             c += USE_A @ USE_B;
-            pa += TK;
-            pb += TK;
+            pa += TK * STRIDE_AK;
+            pb += TK * STRIDE_BK;
         }
         // write-back
         TYPE *pc[TM, TN, TB] = C + rm[:, newaxis, newaxis] * std_C1
                                  + rn[newaxis, :, newaxis] * 1
                                  + rb[newaxis, newaxis, :] * std_C0;
-        *pc = c;
+        bool checkm[TM] = rm < dim_M;
+        bool checkn[TN] = rn < dim_N;
+        bool checkc[TM, TN, TB] = checkm[:, newaxis, newaxis] && 
+                                  checkn[newaxis, :, newaxis];
+        *?(checkc)pc = c;
     }
     """
 
@@ -141,12 +148,12 @@ class _einsum(triton.function):
               'BROADCAST_AM': 'newaxis, :, newaxis'    if trans_a else ':, newaxis, newaxis',
               'SHAPE_A'     : 'TK, TM, TB'             if trans_a else 'TM, TK, TB',
               # handle B transposition
-              'USE_B'       : 'b[^1, ^0, ^2]'          if not trans_b else 'b',
+              'USE_B'       : 'b'                      if not trans_b else 'b[^1, ^0, ^2]',
               'STRIDE_BK'   : 'std_B1'                 if not trans_b else '1',
               'STRIDE_BN'   : '1'                      if not trans_b else 'std_B1',
-              'BROADCAST_BK': 'newaxis, :, newaxis'    if not trans_b else ':, newaxis, newaxis',
-              'BROADCAST_BN': ':, newaxis, newaxis'    if not trans_b else 'newaxis, :, newaxis',
-              'SHAPE_B'     : 'TN, TK, TB'             if not trans_b else 'TK, TN, TB'}
+              'BROADCAST_BK': ':, newaxis, newaxis'    if not trans_b else 'newaxis, :, newaxis',
+              'BROADCAST_BN': 'newaxis, :, newaxis'    if not trans_b else ':, newaxis, newaxis',
+              'SHAPE_B'     : 'TK, TN, TB'             if not trans_b else 'TN, TK, TB'}
         return _einsum.kernel(a, b, c, 
                               bmnk[1], bmnk[2], bmnk[3], 
                               std0[0], std0[1], std0[2], 
