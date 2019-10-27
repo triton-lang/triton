@@ -187,12 +187,12 @@ generator::generator(analysis::axes *a_axes,
 
 
 void generator::visit_value(ir::value* v) {
-  std::cout << "visiting " << typeid(*v).name() << std::endl;
   if(!seen_.insert(v).second)
     return;
   // create machine tile
-  if(v->get_type()->is_tile_ty())
+  if(v->get_type()->is_tile_ty()){
     tmap_[v] = machine_layouts_.at(layouts_->get(v))->create(v);
+  }
   // visit operands
   BasicBlock *current = builder_->GetInsertBlock();
   auto *inst = dynamic_cast<ir::instruction*>(v);
