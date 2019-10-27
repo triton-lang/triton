@@ -2,52 +2,58 @@
 
 
 import triton
+import math
 
 class _einsum(triton.function):
 
     src = """
-    void einsum_(TYPE * A, TYPE * B, TYPE * C,
-                int dim_M, int dim_N, int dim_K, 
-                int std_A0, int std_B0, int std_C0, 
-                int std_A1, int std_B1, int std_C1) {
-        // program id
-        int pgm = get_program_id(0);
-        int pgn = get_program_id(1);
-        int pgb = get_program_id(2);
-        // range
-        int rm[TM] = pgm * TM + 0 ... TM;
-        int rn[TN] = pgn * TN + 0 ... TN;
-        int rb[TB] = pgb * TB + 0 ... TB;
-        int rk[TK] = 0 ... TK;
-        // accumulator
-        TYPE c[TM, TN, TB] = 0;
-        // pointers to a
-        TYPE *pa[SHAPE_A] = A + rk[BROADCAST_AK] * STRIDE_AK
-                              + rm[BROADCAST_AM] * STRIDE_AM
-                              + rb[newaxis, newaxis, :] * std_A0;
-        // pointers to b
-        TYPE *pb[SHAPE_B] = B + rk[BROADCAST_BK] * STRIDE_BK
-                              + rn[BROADCAST_BN] * STRIDE_BN
-                              + rb[newaxis, newaxis, :] * std_B0;
-        // accumulation
-        for(int k = dim_K; k > 0; k -= TK) {
-            TYPE a[SHAPE_A] = *pa;
-            TYPE b[SHAPE_B] = *pb;
-            c += USE_A @ USE_B;
-            pa += TK * STRIDE_AK;
-            pb += TK * STRIDE_BK;
-        }
-        // write-back
-        TYPE *pc[TM, TN, TB] = C + rm[:, newaxis, newaxis] * std_C1
-                                 + rn[newaxis, :, newaxis] * 1
-                                 + rb[newaxis, newaxis, :] * std_C0;
-        bool checkm[TM] = rm < dim_M;
-        bool checkn[TN] = rn < dim_N;
-        bool checkc[TM, TN, TB] = checkm[:, newaxis, newaxis] && 
-                                  checkn[newaxis, :, newaxis];
-        *?(checkc)pc = c;
+void einsum_(TYPE * A, TYPE * B, TYPE * C,
+            int dim_M, int dim_N, int dim_K, 
+            int std_A0, int std_B0, int std_C0, 
+            int std_A1, int std_B1, int std_C1) {
+    // program id
+    int pgm = get_program_id(0);
+    int pgn = get_program_id(1);
+    int pgb = get_program_id(2);
+    // range
+    int rm[TM] = pgm * TM + 0 ... TM;
+    int rn[TN] = pgn * TN + 0 ... TN;
+    int rb[TB] = pgb * TB + 0 ... TB;
+    int rk[TK] = 0 ... TK;
+    // accumulator
+    TYPE c[TM, TN, TB] = 0;
+    // pointers to a
+    TYPE *pa[SHAPE_A] =   A + rk[BROADCAST_AK] * STRIDE_AK
+                            + rm[BROADCAST_AM] * STRIDE_AM
+                            + rb[newaxis, newaxis, :] * std_A0;
+    // pointers to b
+    TYPE *pb[SHAPE_B] =   B + rk[BROADCAST_BK] * STRIDE_BK
+                            + rn[BROADCAST_BN] * STRIDE_BN
+                            + rb[newaxis, newaxis, :] * std_B0;
+    // prefetch
+    TYPE a[SHAPE_A] = *pa;
+    TYPE b[SHAPE_B] = *pb;
+    // accumulation
+    for(int k = dim_K; k > 0; k -= TK) {
+        c += USE_A @ USE_B;
+        pa += TK * STRIDE_AK;
+        pb += TK * STRIDE_BK;
+        bool checka[SHAPE_A] = k > TK;
+        bool checkb[SHAPE_B] = k > TK;
+        a = checka ? *pa : 0;
+        b = checkb ? *pb : 0;
     }
-    """
+    // write-back
+    TYPE *pc[TM, TN, TB] = C + rm[:, newaxis, newaxis] * std_C1
+                                + rn[newaxis, :, newaxis] * 1
+                                + rb[newaxis, newaxis, :] * std_C0;
+    bool checkm[TM] = rm < dim_M;
+    bool checkn[TN] = rn < dim_N;
+    bool checkc[TM, TN, TB] = checkm[:, newaxis, newaxis] && 
+                                checkn[newaxis, :, newaxis];
+    *?(checkc)pc = c;
+}
+"""
 
     kernel = triton.kernel(src, ['C'])
   
@@ -134,7 +140,8 @@ class _einsum(triton.function):
 
     @staticmethod
     def call(a, b, trans_a, trans_b, shape_c, bmnk,
-             std0, std1, einsum_a, einsum_b, einsum_c):
+             std0, std1, einsum_a, einsum_b, einsum_c,
+             bench):
         dtype = a.dtype
         c = triton.empty(shape_c, dtype)
         grid = lambda opt: [triton.cdiv(bmnk[1], opt.d('TM')), 
@@ -154,16 +161,22 @@ class _einsum(triton.function):
               'BROADCAST_BK': ':, newaxis, newaxis'    if not trans_b else 'newaxis, :, newaxis',
               'BROADCAST_BN': 'newaxis, :, newaxis'    if not trans_b else ':, newaxis, newaxis',
               'SHAPE_B'     : 'TK, TN, TB'             if not trans_b else 'TN, TK, TB'}
-        return _einsum.kernel(a, b, c, 
+        TM = [2**i for i in range(5, max(6, min(8, int(math.log2(bmnk[1]) + 1 ))))]
+        TN = [2**i for i in range(5, max(6, min(8, int(math.log2(bmnk[2]) + 1 ))))]
+        TB = [2**i for i in range(0, max(1, min(3, int(math.log2(bmnk[0]) + 1 ))))]
+        print(TM)
+        print(TN)
+        return  _einsum.kernel(a, b, c, 
                               bmnk[1], bmnk[2], bmnk[3], 
                               std0[0], std0[1], std0[2], 
                               std1[0], std1[1], std1[2], 
-                              grid, **macros,
-                              TYPE='float', TM=32, TN=32, TK=8, TB=1)
+                              grid, bench=bench,
+                              **macros,
+                              TYPE='float', TM=TM, TN=TN, TK=8, TB=TB)
     
 
     @staticmethod
-    def forward(ctx, subscripts, a, b):
+    def forward(ctx, subscripts, a, b, **kwargs):
         ctx.save_for_backward(a, b)
         if type(subscripts) is str:
             einsum_a, einsum_bc = subscripts.split(",")
@@ -173,14 +186,16 @@ class _einsum(triton.function):
 
         shape_c, bmnk, std0, std1, ta, tb = _einsum._parse_einsum(
                                                 einsum_a, einsum_b, einsum_c,
-                                                a.shape.as_list(), b.shape.as_list()
+                                                triton.shape(a), triton.shape(b)
                                                 )
+        bench = kwargs['bench'] if 'bench' in kwargs else 0
         ctx.trans_a = ta
         ctx.trans_b = tb
         ctx.einsum_a = einsum_a
         ctx.einsum_b = einsum_b
         ctx.einsum_c = einsum_c
-        return _einsum.call(a, b, ta, tb, shape_c, bmnk, std0, std1, einsum_a, einsum_b, einsum_c)
+        ctx.bench = bench
+        return _einsum.call(a, b, ta, tb, shape_c, bmnk, std0, std1, einsum_a, einsum_b, einsum_c, bench)
         
 
     @staticmethod
@@ -191,22 +206,23 @@ class _einsum(triton.function):
         einsum_a = ctx.einsum_a
         einsum_b = ctx.einsum_b
         einsum_c = ctx.einsum_c
+        bench = ctx.bench
 
         if not trans_a and not trans_b: # NN
-            da = einsum((einsum_c, einsum_b, einsum_a), dc, b)
-            db = einsum((einsum_a, einsum_c, einsum_b), a, dc)
+            da = einsum((einsum_c, einsum_b, einsum_a), dc, b, bench=bench)
+            db = einsum((einsum_a, einsum_c, einsum_b), a, dc, bench=bench)
 
         elif not trans_a and trans_b:   # NT
-            da = einsum((einsum_c, einsum_b, einsum_a), dc, b)
-            db = einsum((einsum_c, einsum_a, einsum_b), dc, a)
+            da = einsum((einsum_c, einsum_b, einsum_a), dc, b, bench=bench)
+            db = einsum((einsum_c, einsum_a, einsum_b), dc, a, bench=bench)
 
         elif trans_a and not trans_b:   # TN
-            da = einsum((einsum_b, einsum_c, einsum_a), b, dc)
-            db = einsum((einsum_a, einsum_c, einsum_b), a, dc)
+            da = einsum((einsum_b, einsum_c, einsum_a), b, dc, bench=bench)
+            db = einsum((einsum_a, einsum_c, einsum_b), a, dc, bench=bench)
 
         elif trans_a and trans_b:       # TT (not used)
-            da = einsum((einsum_b, einsum_c, einsum_a), b, dc)
-            db = einsum((einsum_c, einsum_a, einsum_b), dc, a)
+            da = einsum((einsum_b, einsum_c, einsum_a), b, dc, bench=bench)
+            db = einsum((einsum_c, einsum_a, einsum_b), dc, a, bench=bench)
 
         return da, db, None, None, None, None, None, None, None, None, None, None
 

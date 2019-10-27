@@ -56,14 +56,12 @@ void disassociate::run(ir::module &mod) {
         bld.set_insert_point(y);
         bld.insert(cloned);
         clone_map[y] = cloned;
-        // replace in above level
-        if(depth > 1){
+        // replace operands of parents
+        if(depth > 1)
           for(ir::user* ux: x.second.at(depth - 1))
             clone_map.at((ir::instruction*)ux)->replace_uses_of_with(y, cloned);
-        }
-        else{
+        else
           x.first->replace_uses_of_with(y, cloned);
-        }
       }
       depth += 1;
     }
