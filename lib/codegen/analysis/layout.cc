@@ -314,11 +314,11 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
   // padding
   pad = 0;
   if(hmma_dot_a){
-    bool row = is_trans(hmma_dot_a) ^ order[0] == 1;
+    bool row = is_trans(hmma_dot_a) ^ order[0] != 0;
     pad = 24 - shapes[row ? order[0] : order[1]] % 32;
   }
   else if(hmma_dot_b){
-    bool row = is_trans(hmma_dot_b) ^ order[0] == 1;
+    bool row = is_trans(hmma_dot_b) ^ order[0] != 0;
     pad = 24 - shapes[row ? order[1] : order[0]] % 32;
   }
   else if(order != arg->order) {

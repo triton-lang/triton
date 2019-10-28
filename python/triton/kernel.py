@@ -177,37 +177,7 @@ def _make_grid(args) :
   return grid
 
 
-class bench_dict:
-
-  # Lazy entry for e.g., tensorflow, when value of benchmark is
-  # not known at graph compile time
-  class lazy_entry:
-    def __init__(self, id):
-      self.id = id
-
-    def get(self):
-      return libtriton.retrieve_scalar(self.id)
-
-
-  def __init__(self):
-    self.data = dict()
-
-  def __delitem__(self, key):
-    del self.data[id(key)]
-
-  def __getitem__(self, key):
-    ret = self.data[id(key)]
-    if isinstance(ret, bench_dict.lazy_entry):
-      return ret.get()
-    return ret
-
-  def __len__(self):
-    return len(self.data)
-
-  def __setitem__(self, key, value):
-    self.data[id(key)] = value
-
-bench_registry = bench_dict()
+bench_registry = triton.utils.id_dict()
 
 class kernel:
 
@@ -233,7 +203,7 @@ class kernel:
         defines.append((k, values))
       opt = libtriton.options_space()
       opt.defines = defines
-      opt.num_warps = [2, 4, 8]
+      opt.num_warps = [4]
       # create unique id for this op
       op_id = libtriton.make_op_id()
       self.fw_id[key] = op_id
@@ -257,7 +227,7 @@ class kernel:
       bench_id = libtriton.make_scalar_id() if bench > 0 else 0
       ret = self.fw_op(*op_args, id=op_id, bench=bench, bench_id=bench_id)
       if bench > 0:
-        bench_registry[ret] = bench_dict.lazy_entry(bench_id)
+        bench_registry[ret] = triton.utils.id_dict.lazy_entry(bench_id)
 
     elif fw.has_torch():
       args = [x.contiguous() if isinstance(x, fw.torch.Tensor) else x for x in op_args]
