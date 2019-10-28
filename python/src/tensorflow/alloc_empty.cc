@@ -1,4 +1,5 @@
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/shape_inference.h"
 
 using namespace tensorflow;
 
@@ -28,4 +29,10 @@ REGISTER_OP("AllocEmpty")
   .Input("x: int32")
   .Attr("T : {bool, int8, int16, int32, int64, float16, float32, float64}")
   .Output("y: T")
+  .SetShapeFn([](shape_inference::InferenceContext* c) {
+    shape_inference::ShapeHandle handle;
+    c->MakeShapeFromShapeTensor(0, &handle);
+    c->set_output(0, handle);
+    return Status::OK();
+  });
 ;

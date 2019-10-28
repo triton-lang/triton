@@ -40,7 +40,7 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
   kernel = triton.kernel(src, ['C'])
 
   @staticmethod
-  def _call(a, b, transpose_a, transpose_b, bench = 0):
+  def _call(a, b, transpose_a, transpose_b, bench):
     # extract shapes
     shape_a = triton.shape(a)
     shape_b = triton.shape(b)
@@ -86,24 +86,26 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
     ctx.save_for_backward(a, b)
     ctx.t_a = transpose_a
     ctx.t_b = transpose_b
+    ctx.bench = bench
     return _dot._call(a, b, transpose_a, transpose_b, bench)
 
   @staticmethod
   def backward(ctx, dy):
     a, b = ctx.saved_tensors
     t_a, t_b = ctx.t_a, ctx.t_b
+    bench = ctx.bench
     if not t_a and not t_b:
-      da = _dot._call(dy, b, False, True)
-      db = _dot._call(a, dy, True, False)
+      da = _dot._call(dy, b, False, True, bench)
+      db = _dot._call(a, dy, True, False, bench)
     elif not t_a and t_b:
-      da = _dot._call(dy, b, False, False)
-      db = _dot._call(dy, a, True, False)
+      da = _dot._call(dy, b, False, False, bench)
+      db = _dot._call(dy, a, True, False, bench)
     elif t_a and not t_b:
-      da = _dot._call(b, dy, False, True)
-      db = _dot._call(a, dy, False, False)
+      da = _dot._call(b, dy, False, True, bench)
+      db = _dot._call(a, dy, False, False, bench)
     elif t_a and t_b:
-      da = _dot._call(b, dy, True, True)
-      db = _dot._call(dy, a, True, True)
+      da = _dot._call(b, dy, True, True, bench)
+      db = _dot._call(dy, a, True, True, bench)
     else:
       assert False
     return da, db, None, None, None, None, None, None, None

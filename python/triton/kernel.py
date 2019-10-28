@@ -220,18 +220,18 @@ class kernel:
     op_id = self.fw_id[key]
     # register grid
     libtriton.register_grid(op_id, _make_grid(args))
+    # id for the benchmark result
+    bench_id = libtriton.make_scalar_id() if bench > 0 else -1
     # create operands
-    op_args = [x.handle if isinstance(x, triton.utils.scalar) else x for x in args[:-1]]
     # call framework function
     if fw.has_tensorflow():
-      bench_id = libtriton.make_scalar_id() if bench > 0 else 0
-      ret = self.fw_op(*op_args, id=op_id, bench=bench, bench_id=bench_id)
+      args = [x for x in args[:-1]]
+      ret = self.fw_op(*args, id=op_id, bench=bench, bench_id=bench_id)
       if bench > 0:
         bench_registry[ret] = triton.utils.id_dict.lazy_entry(bench_id)
-
     elif fw.has_torch():
-      args = [x.contiguous() if isinstance(x, fw.torch.Tensor) else x for x in op_args]
-      ret = self.fw_op(op_id, bench, *args)
+      args = [x.contiguous() if isinstance(x, fw.torch.Tensor) else x for x in args[:-1]]
+      ret = self.fw_op(op_id, bench, bench_id, *args)
       if bench > 0:
         bench_registry[ret] = libtriton.retrieve_scalar(op_id)
     else:
