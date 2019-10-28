@@ -560,9 +560,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
   bool is_a_trans = is_trans(dot->get_operand(0));
   bool is_b_trans = is_trans(dot->get_operand(1));
-  bool is_a_row = is_a_trans ^ (ord_a[0] == 1);
-  bool is_b_row = is_b_trans ^ (ord_b[0] == 1);
-
+  bool is_a_row = is_a_trans ^ (ord_a[0] != 0);
+  bool is_b_row = is_b_trans ^ (ord_b[0] != 0);
 
   Value *offset_a_i = hmma->offset_a_i_;
   Value *offset_a_k = hmma->offset_a_k_;

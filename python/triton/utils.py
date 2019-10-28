@@ -89,3 +89,32 @@ class scalar:
     return -self.get_value()
 
 
+class id_dict:
+
+  # Lazy entry for e.g., tensorflow, when value of benchmark is
+  # not known at graph compile time
+  class lazy_entry:
+    def __init__(self, id):
+      self.id = id
+
+    def get(self):
+      return libtriton.retrieve_scalar(self.id)
+
+
+  def __init__(self):
+    self.data = dict()
+
+  def __delitem__(self, key):
+    del self.data[id(key)]
+
+  def __getitem__(self, key):
+    ret = self.data[id(key)]
+    if isinstance(ret, id_dict.lazy_entry):
+      return ret.get()
+    return ret
+
+  def __len__(self):
+    return len(self.data)
+
+  def __setitem__(self, key, value):
+    self.data[id(key)] = value

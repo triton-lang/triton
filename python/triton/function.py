@@ -1,4 +1,5 @@
 import triton.frameworks as fw
+import triton.utils
 
 class OpContext(object):
 
@@ -16,6 +17,8 @@ class function_meta(type):
         cls.registered = False
         return super(function_meta, cls).__init__(name, bases, attrs)
 
+ctx_registry = triton.utils.id_dict()
+
 class function(metaclass = function_meta):
   
   @staticmethod
@@ -31,7 +34,9 @@ class function(metaclass = function_meta):
     class TorchFunction(fw.torch.autograd.Function):
       @staticmethod
       def forward(ctx, *targs, **tkwargs):
-        return cls.forward(ctx, *targs, **tkwargs)
+        y = cls.forward(ctx, *targs, **tkwargs)
+        ctx_registry[y] = ctx
+        return y
       @staticmethod
       def backward(ctx, grad_output):
         return cls.backward(ctx, grad_output)
@@ -43,6 +48,7 @@ class function(metaclass = function_meta):
     result = cls.forward(ctx, *args, **kwargs)
     id = result.op.get_attr('id')
     cls.contexts[id] = ctx
+    ctx_registry[result] = ctx
     # register backward
     name = result.op.op_def.name
     if not cls.registered:

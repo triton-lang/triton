@@ -23,8 +23,8 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
   // reduction loop
   for(int k = K; k > 0; k-= TK){
     c += USEA @ USEB;
-    pa = pa + TK * STRIDE_AK;
-    pb = pb + TK * STRIDE_BK;
+    pa += TK * STRIDE_AK;
+    pb += TK * STRIDE_BK;
     bool checka[SHAPE_A] = k > TK;
     bool checkb[SHAPE_B] = k > TK;
     a = checka ? *pa : 0;

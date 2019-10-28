@@ -7,10 +7,14 @@ import math
 class _einsum(triton.function):
 
     src = """
-void einsum_(TYPE * A, TYPE * B, TYPE * C,
+void einsumk(TYPE * A, TYPE * B, TYPE * C,
             int dim_M, int dim_N, int dim_K, 
-            int std_A0, int std_B0, int std_C0, 
-            int std_A1, int std_B1, int std_C1) {
+            int std_A0 __multipleof(8),
+            int std_B0 __multipleof(8),
+            int std_C0 __multipleof(8),
+            int std_A1 __multipleof(8), 
+            int std_B1 __multipleof(8), 
+            int std_C1 __multipleof(8)) {
     // program id
     int pgm = get_program_id(0);
     int pgn = get_program_id(1);
@@ -21,7 +25,7 @@ void einsum_(TYPE * A, TYPE * B, TYPE * C,
     int rb[TB] = pgb * TB + 0 ... TB;
     int rk[TK] = 0 ... TK;
     // accumulator
-    TYPE c[TM, TN, TB] = 0;
+    float c[TM, TN, TB] = 0;
     // pointers to a
     TYPE *pa[SHAPE_A] =   A + rk[BROADCAST_AK] * STRIDE_AK
                             + rm[BROADCAST_AM] * STRIDE_AM
@@ -51,7 +55,7 @@ void einsum_(TYPE * A, TYPE * B, TYPE * C,
     bool checkn[TN] = rn < dim_N;
     bool checkc[TM, TN, TB] = checkm[:, newaxis, newaxis] && 
                                 checkn[newaxis, :, newaxis];
-    *?(checkc)pc = c;
+    *?(checkc)pc = (TYPE[TM, TN, TB])c;
 }
 """
 
@@ -164,15 +168,14 @@ void einsum_(TYPE * A, TYPE * B, TYPE * C,
         TM = [2**i for i in range(5, max(6, min(8, int(math.log2(bmnk[1]) + 1 ))))]
         TN = [2**i for i in range(5, max(6, min(8, int(math.log2(bmnk[2]) + 1 ))))]
         TB = [2**i for i in range(0, max(1, min(3, int(math.log2(bmnk[0]) + 1 ))))]
-        print(TM)
-        print(TN)
+        TK = [bmnk[2]] if bmnk[2] < 16 else [8, 16]
         return  _einsum.kernel(a, b, c, 
                               bmnk[1], bmnk[2], bmnk[3], 
                               std0[0], std0[1], std0[2], 
                               std1[0], std1[1], std1[2], 
                               grid, bench=bench,
                               **macros,
-                              TYPE='float', TM=TM, TN=TN, TK=8, TB=TB)
+                              TYPE=dtype, TM=TM, TN=TN, TK=TK, TB=TB)
     
 
     @staticmethod
@@ -195,6 +198,7 @@ void einsum_(TYPE * A, TYPE * B, TYPE * C,
         ctx.einsum_b = einsum_b
         ctx.einsum_c = einsum_c
         ctx.bench = bench
+        ctx.bmnk = bmnk
         return _einsum.call(a, b, ta, tb, shape_c, bmnk, std0, std1, einsum_a, einsum_b, einsum_c, bench)
         
 
