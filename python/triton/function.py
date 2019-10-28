@@ -13,7 +13,6 @@ class OpContext(object):
 class function_meta(type):
 
     def __init__(cls, name, bases, attrs):
-        cls.contexts = dict()
         cls.registered = False
         return super(function_meta, cls).__init__(name, bases, attrs)
 
@@ -45,17 +44,20 @@ class function(metaclass = function_meta):
   @classmethod
   def apply_tensorflow(cls, *args, **kwargs):
     ctx = OpContext()
-    result = cls.forward(ctx, *args, **kwargs)
-    id = result.op.get_attr('id')
-    cls.contexts[id] = ctx
+    # Acquire a mutex here to ensure that calls to alloc_empty() 
+    # are handled properly
+    mutex = fw.gen_resource_variable_ops.mutex_v2()
+    lock = fw.gen_resource_variable_ops.mutex_lock(mutex)
+    with fw.tensorflow.python.ops.control_dependencies([lock]):
+      result = cls.forward(ctx, *args, **kwargs)
     ctx_registry[result] = ctx
     # register backward
     name = result.op.op_def.name
     if not cls.registered:
       @fw.tensorflow.RegisterGradient(name)
       def gradient(op, dy):
-        id = op.get_attr('id')
-        return cls.backward(cls.contexts[id], dy)
+        with fw.tensorflow.control_dependencies([op]):
+          return cls.backward(ctx_registry[op.outputs[0]], dy)
       cls.registered = True
     # return result tensor
     return result

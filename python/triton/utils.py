@@ -1,13 +1,22 @@
 import triton.frameworks as fw
 import triton._C.libtriton as libtriton
+import numpy as np
 
 def cdiv(a, b):
     return -(-a // b)
 
+class tf_empty_proxy:
+
+  def __init__(self, args, dtype):
+    self.args = args
+    self.dtype = dtype
+
 def empty(shapes, dtype):
   if fw.has_tensorflow():
-    args = [x.handle if isinstance(x, scalar) else x for x in shapes]
+    #return fw.tensorflow.Variable(np.empty(shapes),shape=shapes, dtype=dtype)
+    args = [x.handle if isinstance(x, scalar) else fw.tensorflow.constant(x) for x in shapes]
     args = fw.tensorflow.stack(args)
+    #return tf_empty_proxy(args, dtype)
     return fw.tf_extra_ops.alloc_empty(args, T = dtype)
   elif fw.has_torch():
     return fw.torch.empty(*shapes).cuda()

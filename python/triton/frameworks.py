@@ -5,6 +5,7 @@ import triton._C.libtriton as libtriton
 torch = None
 tensorflow = None
 tf_extra_ops = None
+gen_resource_variable_ops = None
 
 def _import_torch():
   global torch
@@ -13,8 +14,10 @@ def _import_torch():
 
 def _import_tensorflow():
   global tensorflow
+  global gen_resource_variable_ops
   if tensorflow is None:
     import tensorflow
+    from tensorflow.python.ops import gen_resource_variable_ops
 
 def _import_tf_extra_ops():
   global tf_extra_ops
