@@ -113,7 +113,7 @@ void function::caller::operator ()(driver::stream *stream, const grid_t& _grid, 
     arg arg_i = args.at(i);
     arg_type ty = arg_i.type();
     if(ty != param_tys_.at(i))
-      throw std::runtime_error("invalid type");
+      throw std::runtime_error("invalid type for argument " + std::to_string(i));
     if(ty == BUFFER_T)
       bin_->setArg(i, *((driver::buffer**)arg_i.data()));
     else
@@ -253,16 +253,14 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
     return std::unique_ptr<driver::module>();
   barriers.run(module);
 //  std::cout << "isel" << std::endl;
-//  ir::print(module, std::cout);
   isel.visit(module, *llvm);
-//  std::cout << "done" << std::endl;
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   // done
   return res;
 }
 
-std::string preheader() {
+std::string function::preheader() {
 return
 R"(
 #define bool _Bool
@@ -277,6 +275,7 @@ R"(
 #define __multipleof(A) __attribute__((multipleof(A)))
 
 extern int get_program_id(int);
+extern float sqrtf(float);
 )";
 }
 

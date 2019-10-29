@@ -181,15 +181,16 @@ void einsumk(TYPE * A, TYPE * B, TYPE * C,
     @staticmethod
     def forward(ctx, subscripts, a, b, bench = 0):
         ctx.save_for_backward(a, b)
+        # parse
         if type(subscripts) is str:
             einsum_a, einsum_bc = subscripts.split(",")
             einsum_b, einsum_c  = einsum_bc.split("->")
         else:
             einsum_a, einsum_b, einsum_c = subscripts
-
         shape_c, bmnk, std0, std1, ta, tb = _einsum._parse_einsum(
                                                 einsum_a, einsum_b, einsum_c,
                                                 triton.shape(a), triton.shape(b))
+        # save for backward
         ctx.trans_a = ta
         ctx.trans_b = tb
         ctx.einsum_a = einsum_a
@@ -197,6 +198,7 @@ void einsumk(TYPE * A, TYPE * B, TYPE * C,
         ctx.einsum_c = einsum_c
         ctx.bench = bench
         ctx.bmnk = bmnk
+        # run
         return _einsum.call(a, b, ta, tb, shape_c, bmnk, std0, std1, einsum_a, einsum_b, einsum_c, bench)
         
 

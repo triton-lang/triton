@@ -77,7 +77,7 @@ class CMakeBuild(build_ext):
             pass
 
         cfg = 'Debug' if self.debug else 'Release'
-        cfg = 'Release'
+        #cfg = 'Release'
         build_args = ['--config', cfg]
 
         if platform.system() == "Windows":

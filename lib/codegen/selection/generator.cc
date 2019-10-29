@@ -289,6 +289,11 @@ void generator::visit_uncond_branch_inst(ir::uncond_branch_inst* br) {
 
 
 void generator::visit_unmasked_load_inst(ir::unmasked_load_inst* x) {
+  if(!x->get_type()->is_tile_ty()){
+    Value *ptr = get_value(x->get_pointer_operand(), {});
+    set_value(x, {}, builder_->CreateLoad(ptr));
+    return;
+  }
   // find vector size
   ir::value *ptr = x->get_pointer_operand();
   size_t ld = layouts_->get(ptr)->order[0];
