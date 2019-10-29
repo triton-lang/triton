@@ -8,6 +8,7 @@
 #include <string>
 #include <memory>
 #include <functional>
+#include <mutex>
 // codegen
 #include "triton/ir/context.h"
 #include "triton/codegen/target.h"
@@ -110,6 +111,7 @@ private:
   std::string src_;
   options_space_t opt_space_;
   std::map<cache_key_t, caller> cache_;
+  std::mutex src_mutex_;
 };
 
 }

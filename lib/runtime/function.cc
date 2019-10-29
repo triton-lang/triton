@@ -29,9 +29,9 @@
 #include "triton/ir/print.h"
 #include "triton/tools/bench.hpp"
 #include "llvm/IR/Module.h"
+#include <mutex>
 
-
-
+std::mutex mut;
 
 namespace triton{
 namespace runtime {
@@ -168,7 +168,6 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     for(auto it: opt_space_.defines)
       cpp.AddMacro(it.first, &opt.defines.at(it.first));
     cpp.Process(tokens);
-//    tokens.Print(stdout);
     // parse
     Parser parser(tokens);
     parser.Parse();
@@ -309,7 +308,10 @@ void function::operator()(const std::vector<arg>& args, const grid_fn_ty& grid_f
   }
 
   /* re-tune and re-compile */
-  cache_.insert({key, autotune(stream, grid_fn, args)});
+  {
+    std::lock_guard<std::mutex> lock(mut);
+    cache_.insert({key, autotune(stream, grid_fn, args)});
+  }
 }
 
 void function::operator()(const std::vector<arg>& args, const grid_t& grid, driver::stream *stream) {

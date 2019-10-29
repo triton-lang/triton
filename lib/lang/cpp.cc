@@ -9,8 +9,6 @@
 #include <unordered_map>
 
 
-extern std::string filename_in;
-extern std::string filename_out;
 
 using DirectiveMap = std::unordered_map<std::string, int>;
 
