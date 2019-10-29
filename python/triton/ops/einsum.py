@@ -226,6 +226,6 @@ void einsumk(TYPE * A, TYPE * B, TYPE * C,
             da = einsum((einsum_b, einsum_c, einsum_a), b, dc, bench)
             db = einsum((einsum_c, einsum_a, einsum_b), dc, a, bench)
 
-        return da, db, None, None, None, None, None, None, None, None, None, None
+        return None, da, db, None
 
 einsum = _einsum.apply
