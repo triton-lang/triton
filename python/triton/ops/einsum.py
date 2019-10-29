@@ -179,7 +179,7 @@ void einsumk(TYPE * A, TYPE * B, TYPE * C,
     
 
     @staticmethod
-    def forward(ctx, subscripts, a, b, **kwargs):
+    def forward(ctx, subscripts, a, b, bench = 0):
         ctx.save_for_backward(a, b)
         if type(subscripts) is str:
             einsum_a, einsum_bc = subscripts.split(",")
@@ -189,9 +189,7 @@ void einsumk(TYPE * A, TYPE * B, TYPE * C,
 
         shape_c, bmnk, std0, std1, ta, tb = _einsum._parse_einsum(
                                                 einsum_a, einsum_b, einsum_c,
-                                                triton.shape(a), triton.shape(b)
-                                                )
-        bench = kwargs['bench'] if 'bench' in kwargs else 0
+                                                triton.shape(a), triton.shape(b))
         ctx.trans_a = ta
         ctx.trans_b = tb
         ctx.einsum_a = einsum_a
@@ -213,20 +211,20 @@ void einsumk(TYPE * A, TYPE * B, TYPE * C,
         bench = ctx.bench
 
         if not trans_a and not trans_b: # NN
-            da = einsum((einsum_c, einsum_b, einsum_a), dc, b, bench=bench)
-            db = einsum((einsum_a, einsum_c, einsum_b), a, dc, bench=bench)
+            da = einsum((einsum_c, einsum_b, einsum_a), dc, b, bench)
+            db = einsum((einsum_a, einsum_c, einsum_b), a, dc, bench)
 
         elif not trans_a and trans_b:   # NT
-            da = einsum((einsum_c, einsum_b, einsum_a), dc, b, bench=bench)
-            db = einsum((einsum_c, einsum_a, einsum_b), dc, a, bench=bench)
+            da = einsum((einsum_c, einsum_b, einsum_a), dc, b, bench)
+            db = einsum((einsum_c, einsum_a, einsum_b), dc, a, bench)
 
         elif trans_a and not trans_b:   # TN
-            da = einsum((einsum_b, einsum_c, einsum_a), b, dc, bench=bench)
-            db = einsum((einsum_a, einsum_c, einsum_b), a, dc, bench=bench)
+            da = einsum((einsum_b, einsum_c, einsum_a), b, dc, bench)
+            db = einsum((einsum_a, einsum_c, einsum_b), a, dc, bench)
 
         elif trans_a and trans_b:       # TT (not used)
-            da = einsum((einsum_b, einsum_c, einsum_a), b, dc, bench=bench)
-            db = einsum((einsum_c, einsum_a, einsum_b), dc, a, bench=bench)
+            da = einsum((einsum_b, einsum_c, einsum_a), b, dc, bench)
+            db = einsum((einsum_c, einsum_a, einsum_b), dc, a, bench)
 
         return da, db, None, None, None, None, None, None, None, None, None, None
 
