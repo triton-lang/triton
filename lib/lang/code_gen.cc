@@ -229,6 +229,13 @@ void Generator::VisitFuncCall(FuncCall* funcCall) {
     ir::value* ret = ret_;
     if(auto axis = dynamic_cast<ir::constant_int*>(ret))
       return set_ret(bld_->create_get_program_id(axis->get_value()));
+    else
+      return should_not_happen();
+  }
+  if(name == "sqrtf"){
+    VisitExpr(funcCall->Args()->at(0));
+    ir::value* ret = ret_;
+    return set_ret(bld_->create_sqrt(ret));
   }
   return error_not_implemented();
 }
@@ -274,10 +281,11 @@ void Generator::VisitDeclaration(Declaration* decl) {
   // initialize declaration
   ir::type::id_t id = ty->get_type_id();
   if(id == ir::type::StructTyID)
-    assert(false);
+    should_not_happen();
   if(inits.size() > 1)
-    assert(false);
-  val = inits[0];
+    should_not_happen();
+  if(inits.size() > 0)
+    val = inits[0];
   assert(val->get_type() == ty);
   // update scope symbols table
   const std::string &name = obj->Name();

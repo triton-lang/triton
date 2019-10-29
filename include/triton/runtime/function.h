@@ -99,6 +99,8 @@ private:
   std::unique_ptr<driver::module> make_bin(ir::module &function, driver::context *context, const options_t &opt);
   caller autotune(driver::stream *stream, const grid_fn_ty& grid, const std::vector<arg> &args);
 
+public:
+  static std::string preheader();
 
 public:
   function(const std::string& src, const options_space_t& opt = options_space_t());
