@@ -34,18 +34,6 @@ if(BUILD_PYTHON_MODULE)
     # PyBind11 wrapper source file
     file(GLOB_RECURSE PYTHON_SRC python/src/bindings.cc)
     include_directories(python/src/ ${PYTHON_INCLUDE_DIRS})
-    if(TF_LIBS)
-        # extra tensorflow ops (e.g., alloc_empty)
-        # update directories
-        link_directories(${TF_LIB_DIRS})
-        include_directories(${TF_INCLUDE_DIRS})
-        # get sources
-        file(GLOB_RECURSE EXTRA_TF_OPS_SRC python/src/tensorflow/*.cc)
-        add_library(extra_tf_ops SHARED ${EXTRA_TF_OPS_SRC})
-        # create target
-        target_link_libraries(extra_tf_ops triton ${TF_LIBS})
-        target_compile_definitions(extra_tf_ops PRIVATE "-D_GLIBCXX_USE_CXX11_ABI=${TF_ABI}")
-    endif()
 endif()
 
 
