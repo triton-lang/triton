@@ -44,12 +44,7 @@ class function(metaclass = function_meta):
   @classmethod
   def apply_tensorflow(cls, *args, **kwargs):
     ctx = OpContext()
-    # Acquire a mutex here to ensure that calls to alloc_empty() 
-    # are handled properly
-    mutex = fw.gen_resource_variable_ops.mutex_v2()
-    lock = fw.gen_resource_variable_ops.mutex_lock(mutex)
-    with fw.tensorflow.control_dependencies([lock]):
-      result = cls.forward(ctx, *args, **kwargs)
+    result = cls.forward(ctx, *args, **kwargs)
     # Find a mapping between ::forward arguments and tensorflow op arguments
     remap = dict()
     for i, ix in enumerate(result.op.inputs):

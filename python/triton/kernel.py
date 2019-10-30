@@ -222,11 +222,17 @@ class kernel:
     libtriton.register_grid(op_id, _make_grid(args))
     # id for the benchmark result
     bench_id = libtriton.make_scalar_id() if bench > 0 else -1
-    # create operands
     # call framework function
     if fw.has_tensorflow():
-      args = [x for x in args[:-1]]
-      ret = self.fw_op(*args, id=op_id, bench=bench, bench_id=bench_id)
+      # operands
+      operands = [x.shape if isinstance(x, triton.utils.tf_empty_proxy) else x for x in args[:-1]]
+      # output data types
+      kwargs = {'id': op_id, 'bench': bench, 'bench_id': bench_id}
+      for i, x in enumerate(args[:-1]):
+        if isinstance(x, triton.utils.tf_empty_proxy):
+          kwargs['T' + str(i)] = x.dtype
+      # launch
+      ret = self.fw_op(*operands, **kwargs)
       if bench > 0:
         bench_registry[ret] = triton.utils.id_dict.lazy_entry(bench_id)
     elif fw.has_torch():
