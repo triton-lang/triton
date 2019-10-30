@@ -10,6 +10,11 @@ class tf_empty_proxy:
   def __init__(self, shape, dtype):
     self.shape = shape
     self.dtype = dtype
+    self.tensor = None
+  
+  def to_tensor(self):
+    assert self.tensor
+    return self.tensor
 
 def empty(shape, dtype):
   if fw.has_tensorflow():

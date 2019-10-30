@@ -42,23 +42,42 @@ class function(metaclass = function_meta):
     return TorchFunction.apply(*args, **kwargs)
 
   @classmethod
+  def extract_tf_tensors(cls, lst, err):
+    for x in lst:
+      if x and not isinstance(x, triton.utils.tf_empty_proxy):
+        raise ValueError('Results of ' + err + ' must be created using triton.empty()')
+      if x and x.tensor is None:
+        raise ValueError('Empty tensor never filled during ' + err)
+    return [x.tensor if x else None for x in lst]
+  
+  @classmethod
   def apply_tensorflow(cls, *args, **kwargs):
     ctx = OpContext()
     result = cls.forward(ctx, *args, **kwargs)
-    op = result[0].op if isinstance(result, tuple) else result.op
+
+    # check that all the results stem from triton.empty
+    # and get the corresponding TF tensors if possible
+    result = result if isinstance(result, tuple) else (result, )
+    result = function.extract_tf_tensors(result, 'forward')
+    
     # Find a mapping between ::forward arguments and tensorflow op arguments
+    op = result[0].op
     remap = dict()
-    for i, ix in enumerate(result.op.inputs):
+    for i, ix in enumerate(op.inputs):
       for j, jx in enumerate(args):
         if ix is jx:
           remap[j] = i
-    # register backward
+
+    # Register backward pass
     ctx_registry[op] = ctx
     name = op.op_def.name
     if not cls.registered:
       @fw.tensorflow.RegisterGradient(name)
-      def gradient(op, *dys):
-        grad = cls.backward(ctx_registry[op], dys if len(dys) > 1 else dys[0])
+      def gradient(op, *dy):
+        dy = dy if len(dy) > 1 else dy[0]
+        grad = cls.backward(ctx_registry[op], dy)
+        grad = function.extract_tf_tensors(grad, 'backward')
+
         # Remap gradient in the right order
         ret = [None] * len(op.inputs)
         for i in range(len(grad)):
@@ -67,7 +86,8 @@ class function(metaclass = function_meta):
         # Return
         return ret
       cls.registered = True
-    # return result tensor
+
+    # Return tensor
     return result
 
   @classmethod
