@@ -18,7 +18,7 @@ def empty(shape, dtype):
     return tf_empty_proxy(shape, dtype)
     #return fw.tf_extra_ops.alloc_empty(args, T = dtype)
   elif fw.has_torch():
-    return fw.torch.empty(*shapes).cuda()
+    return fw.torch.empty(*shape).cuda()
 
 class lazy_shape:
 
