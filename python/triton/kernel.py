@@ -15,11 +15,11 @@ import triton.frameworks as fw
 import triton.utils
 import triton._C.libtriton as libtriton
 
-def _make_framework_src(src, out, grid):
+def _make_framework_src(src, out, tmp, grid):
   if fw.has_tensorflow():
-    return libtriton.make_tensorflow_src(src, out, grid)
+    return libtriton.make_tensorflow_src(src, out, tmp, grid)
   elif fw.has_torch:
-    return libtriton.make_torch_src(src, out, grid)
+    return libtriton.make_torch_src(src, out, tmp, grid)
   else:
     assert False
 
@@ -152,8 +152,8 @@ def _cvt_to_def_str(obj):
   return str(obj)
 
 
-def _make_framework_op(src, outputs, options):
-  src, name = _make_framework_src(src, outputs, options)
+def _make_framework_op(src, outputs, tmp, options):
+  src, name = _make_framework_src(src, outputs, tmp, options)
   cache_path = _make_cache_path(src)
   cpp, so = _write_bindings(src, cache_path)
   _build(cpp, cache_path)
@@ -181,12 +181,13 @@ bench_registry = triton.utils.id_dict()
 
 class kernel:
 
-  def __init__(self, src, outputs):
+  def __init__(self, src, outputs, tmp=[]):
     self.fw_id = dict()
     self.fw_grids = dict()
     self.fw_op = None
     self.src = src
     self.outputs = outputs
+    self.tmp = tmp
 
   def __call__(self, *args, **kwargs):
     # create a new framework op when defines are different
@@ -210,7 +211,7 @@ class kernel:
       # register function
       libtriton.register_fn(op_id, self.src, opt)
       if self.fw_op is None:
-        self.fw_op = _make_framework_op(self.src, self.outputs, opt)
+        self.fw_op = _make_framework_op(self.src, self.outputs, self.tmp, opt)
 
     # benchmarking info
     bench = 0
@@ -225,6 +226,7 @@ class kernel:
     # call framework function
     if fw.has_tensorflow():
       # operands
+      outputs = [x for x in args[:-1] if isinstance(x, triton.utils.tf_empty_proxy)]
       operands = [x.shape if isinstance(x, triton.utils.tf_empty_proxy) else x for x in args[:-1]]
       # output data types
       kwargs = {'id': op_id, 'bench': bench, 'bench_id': bench_id}
@@ -233,13 +235,16 @@ class kernel:
           kwargs['T' + str(i)] = x.dtype
       # launch
       ret = self.fw_op(*operands, **kwargs)
+      assert len(ret) == len(outputs)
+      # record results
+      for i in range(len(outputs)):
+        outputs[i].tensor = ret[i]
       if bench > 0:
         bench_registry[ret] = triton.utils.id_dict.lazy_entry(bench_id)
     elif fw.has_torch():
       args = [x.contiguous() if isinstance(x, fw.torch.Tensor) else x for x in args[:-1]]
-      ret = self.fw_op(op_id, bench, bench_id, *args)
+      self.fw_op(op_id, bench, bench_id, *args)
       if bench > 0:
         bench_registry[ret] = libtriton.retrieve_scalar(op_id)
     else:
       assert False
-    return ret

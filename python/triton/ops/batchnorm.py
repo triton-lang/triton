@@ -13,9 +13,22 @@ void fwdbatchnorm(float *Y, float *M, float *V,
   float *px[TM] = X + rm + c*N;
   float* py[TM] = Y + rm + c*N;
 
-  // fetch mean/var
-  float mean = *(M + c);
-  float var = *(V + c);
+  // compute mean
+  float accm[TM] = 0;
+  for(int i = 0; i < N; i = i + TM)
+    accm = accm + *(px + i);
+  float mean = (float)accm[+] / N;
+  *(M + c) = mean;
+
+  // compute variance
+  float accv[TM] = 0;
+  for(int i = 0; i < N; i = i + TM){
+    float x[TM] = *(px + i);
+    x = x - mean;
+    accv = accv + x*x;
+  }
+  float var = (float)accv[+] / N;
+  *(V + c) = var;
 
   // Normalize batch
   float gamma = *(G + c);
@@ -28,7 +41,7 @@ void fwdbatchnorm(float *Y, float *M, float *V,
   }
 }
 """
-  fwd_kernel = triton.kernel(fwd_src, ['Y'])
+  fwd_kernel = triton.kernel(fwd_src, ['Y', 'M', 'V'])
 
   bwd_src = """
 void bwdbatchnorm(float *DX, float *DG, float *DB,
@@ -78,23 +91,26 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
   bwd_kernel = triton.kernel(bwd_src, ['DX', 'DG', 'DB'])
 
   @staticmethod
-  def forward(ctx, x, mean, var, gamma, beta, eps):
+  def forward(ctx, x, gamma, beta, eps):
     shape = triton.shape(x)
     dtype = x.dtype
     # allocate outputs
     C, H, W, B = shape[0], shape[1], shape[2], shape[3]
     y = triton.empty(shape, dtype=dtype)
+    mean = triton.empty([C], dtype=dtype)
+    var = triton.empty([C], dtype=dtype)
     # execute kernels
-    y = _batchnorm.fwd_kernel(y, mean, var, x, gamma, beta, H*W*B, eps,
-                              lambda opt: [1, C],
-                              TM = 128)
+    _batchnorm.fwd_kernel(y, mean, var, x, gamma, beta, H*W*B, eps,
+                          lambda opt: [1, C],
+                          TM = 128)
     # save
-    ctx.save_for_backward(x, gamma, beta, mean, var)
+    ctx.save_for_backward(x, gamma, beta, mean.tensor, var.tensor)
     ctx.eps = eps
     return y
 
   @staticmethod
-  def backward(ctx, dy):
+  def backward(ctx, grads):
+    dy, dmean, dvar = grads
     # retrieve info
     x, gamma, beta, mean, var = ctx.saved_tensors
     eps = ctx.eps
@@ -104,11 +120,11 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
     dbeta = triton.empty(triton.shape(beta), dtype=beta.dtype)
     # execute
     C, H, W, B = triton.shape(x)
-    dx, dgamma, dbeta = _batchnorm.bwd_kernel(dx, dgamma, dbeta, dy, 
+    _batchnorm.bwd_kernel(dx, dgamma, dbeta, dy, 
                           x, gamma, mean, var, 
                           H*W*B, eps,
                           lambda opt: [1, C],
                           TM = 128)
-    return dx, None, None, dgamma, dbeta, None
+    return dx, dgamma, dbeta, None
 
 batchnorm = _batchnorm.apply
