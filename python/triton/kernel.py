@@ -219,7 +219,7 @@ class kernel:
     # retrieve framework op
     op_id = self.fw_id[key]
     # register grid
-    libtriton.register_grid(op_id, _make_grid(args))
+    libtriton.register_grid(op_id, args[-1])
     # id for the benchmark result
     bench_id = libtriton.make_scalar_id() if bench > 0 else -1
     # call framework function
