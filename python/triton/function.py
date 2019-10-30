@@ -45,6 +45,7 @@ class function(metaclass = function_meta):
   def apply_tensorflow(cls, *args, **kwargs):
     ctx = OpContext()
     result = cls.forward(ctx, *args, **kwargs)
+    op = result[0].op if isinstance(result, tuple) else result.op
     # Find a mapping between ::forward arguments and tensorflow op arguments
     remap = dict()
     for i, ix in enumerate(result.op.inputs):
@@ -52,13 +53,12 @@ class function(metaclass = function_meta):
         if ix is jx:
           remap[j] = i
     # register backward
-    ctx_registry[result] = ctx
-    name = result.op.op_def.name
+    ctx_registry[op] = ctx
+    name = op.op_def.name
     if not cls.registered:
       @fw.tensorflow.RegisterGradient(name)
-      def gradient(op, dy):
-        y = op.outputs[0]
-        grad = cls.backward(ctx_registry[y], dy)
+      def gradient(op, *dys):
+        grad = cls.backward(ctx_registry[op], dys if len(dys) > 1 else dys[0])
         # Remap gradient in the right order
         ret = [None] * len(op.inputs)
         for i in range(len(grad)):

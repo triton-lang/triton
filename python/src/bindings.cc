@@ -192,18 +192,19 @@ void gen_tf_register_kernel_builder(std::ostream &os, const std::string &name,
                                  const std::string &opname,
                                  const std::vector<ir::argument*>& args,
                                  const std::vector<std::string>& outputs){
+
+  auto tolower = [](char c) { return std::tolower(c);};
   os << "REGISTER_KERNEL_BUILDER(Name(\"" + name + "\").Device(DEVICE_GPU)";
   for(size_t i = 0; i < args.size(); i++){
     ir::argument *arg = args[i];
     std::string name = arg->get_name();
-    auto tolower = [](char c) { return std::tolower(c);};
     std::transform(name.begin(), name.end(), name.begin(), tolower);
     if(!arg->get_type()->is_pointer_ty())
       os << ".HostMemory(\"" + name + "\")";
   }
   for(size_t i = 0; i < outputs.size(); i++){
     std::string name = outputs[i];
-    name[0] = std::tolower(name[0]);
+    std::transform(name.begin(), name.end(), name.begin(), tolower);
     os << ".HostMemory(\"" << name << "_shape\")";
   }
   os <<  ", " + opname << ");\n";
