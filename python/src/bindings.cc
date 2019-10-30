@@ -89,9 +89,9 @@ inline std::string to_tf_ty(ir::type *ty) {
   if(ty->is_half_ty())
     return "float16";
   if(ty->is_float_ty())
-    return "float32";
+    return "float";
   if(ty->is_double_ty())
-    return "float64";
+    return "double";
   if(ty->is_pointer_ty())
     return "Tensor";
   throw std::runtime_error("unknown type");
@@ -113,21 +113,50 @@ inline std::string ref_to_tf_ty(ir::type *ty) {
 }
 
 
-void gen_extract_inputs(std::ostream &os, const std::vector<ir::argument*>& args) {
+void gen_extract_inputs(std::ostream &os, const std::vector<ir::argument*>& args, const std::vector<std::string>& outputs) {
   for(unsigned i = 0; i < args.size(); i++){
     ir::value *arg = args[i];
-    std::string suffix = "";
-    ir::type *tr_ty = arg->get_type();
-    std::string tf_ty = ref_to_tf_ty(tr_ty);
-    if(!tr_ty->is_pointer_ty())
-      suffix = ".scalar<" + tf_ty + ">()()";
-    os << "  " << tf_ty << " " << arg->get_name() << " = context->input(" << i << ")" << suffix << ";\n  ";
+    const std::string& name = arg->get_name();
+    std::string ty = to_tf_ty(arg->get_type());
+    if(!arg->get_type()->is_pointer_ty())
+      os << "  " << ty << " " << name << " = context->input(" << i << ").scalar<" << ty << ">()();\n  ";
+    else if(std::find(outputs.begin(), outputs.end(), arg->get_name()) == outputs.end())
+      os << "  const Tensor* " << name << " = &context->input(" << i << ");\n  ";
+    else
+      os << "  Tensor* " << name << " = nullptr;\n  ";
   }
 }
 
-void gen_set_outputs(std::ostream &os, const std::vector<std::string>& outputs) {
+void gen_set_outputs(std::ostream &os, const std::vector<ir::argument*>& args, const std::vector<std::string>& outputs) {
   for(unsigned i = 0; i < outputs.size(); i++)
-    os << "  context->set_output(" << i << ", " << outputs[i] << ");\n  ";
+    os << "  TensorShape shape" << i << ";\n  ";
+  // initialize shapes
+
+  std::vector<int> out_idx;
+  for(size_t i = 0; i < outputs.size(); i++){
+    std::string name = outputs[i];
+    size_t idx;
+    for(idx = 0; idx < args.size(); idx++)
+      if(args[idx]->get_name() == name)
+        break;
+    if(idx == args.size())
+      throw std::runtime_error("unknown output");
+    out_idx.push_back(idx);
+  }
+
+  for(unsigned i = 0; i < outputs.size(); i++)
+    os << "  const Tensor& " << outputs[i] << "_shape = context->input(" << out_idx[i] << ");\n  ";
+  for(unsigned i = 0; i < outputs.size(); i++)
+    os << "  const int32* " << outputs[i] << "_shape_data = (const int32*)" << outputs[i] << "_shape.tensor_data().data();\n  ";
+  for(unsigned i = 0; i < outputs.size(); i++)
+    os << "  size_t " << outputs[i] << "_rank = " << outputs[i] << "_shape.dim_size(0);\n  ";
+  for(unsigned i = 0; i < outputs.size(); i++)
+    os << "  for(size_t d = 0; d < " << outputs[i] << "_rank ; d++) "
+       << "shape" << i << ".AddDim(" << outputs[i] << "_shape_data[d]);\n  ";
+  
+  // allocate
+  for(unsigned i = 0; i < outputs.size(); i++)
+    os << "  OP_REQUIRES_OK(context, context->allocate_output(" << i << ", shape" << i << ", &" << outputs[i] << "));\n  ";
 }
 
 void gen_make_handles(std::ostream &os, const std::vector<ir::argument*>& args) {
@@ -136,7 +165,7 @@ void gen_make_handles(std::ostream &os, const std::vector<ir::argument*>& args) 
     if(!arg->get_type()->is_pointer_ty())
       continue;
     const std::string& name = arg->get_name();
-    os << "  drv::cu_buffer cu_" + name + "(ctx, " + name + ".tensor_data().size(), (CUdeviceptr)" + name + ".tensor_data().data(), false);\n  ";
+    os << "  drv::cu_buffer cu_" + name + "(ctx, " + name + "->tensor_data().size(), (CUdeviceptr)" + name + "->tensor_data().data(), false);\n  ";
   }
 }
 
@@ -161,7 +190,8 @@ void gen_make_launch_function(std::ostream &os, int num_outputs, const std::vect
 
 void gen_tf_register_kernel_builder(std::ostream &os, const std::string &name,
                                  const std::string &opname,
-                                 const std::vector<ir::argument*>& args){
+                                 const std::vector<ir::argument*>& args,
+                                 const std::vector<std::string>& outputs){
   os << "REGISTER_KERNEL_BUILDER(Name(\"" + name + "\").Device(DEVICE_GPU)";
   for(size_t i = 0; i < args.size(); i++){
     ir::argument *arg = args[i];
@@ -171,20 +201,31 @@ void gen_tf_register_kernel_builder(std::ostream &os, const std::string &name,
     if(!arg->get_type()->is_pointer_ty())
       os << ".HostMemory(\"" + name + "\")";
   }
+  for(size_t i = 0; i < outputs.size(); i++){
+    std::string name = outputs[i];
+    name[0] = std::tolower(name[0]);
+    os << ".HostMemory(\"" << name << "_shape\")";
+  }
   os <<  ", " + opname << ");\n";
 }
 
 void gen_tf_register_op(std::ostream &os, const std::string &name,
                      const std::vector<ir::argument*>& args,
                      const std::vector<std::string>& outputs){
+  
+  auto tolower = [](char c) { return std::tolower(c);};
+  
   os << "REGISTER_OP(\"" << name << "\")\n";
+  for(size_t i = 0; i < args.size(); i++)
+    os << "  .Attr(\"T" << i << " : {bool, int8, int16, int32, int64, float16, float32, float64}\")" << std::endl;
   for(size_t i = 0; i < args.size(); i++){
     ir::argument *arg = args[i];
     std::string name = arg->get_name();
-    auto tolower = [](char c) { return std::tolower(c);};
     std::transform(name.begin(), name.end(), name.begin(), tolower);
-    os << "  .Attr(\"T" << i << " : {bool, int8, int16, int32, int64, float16, float32, float64}\")" << std::endl;
-    os << "  .Input(\"" << name << ": T" << i << "\")\n";
+    if(std::find(outputs.begin(), outputs.end(), arg->get_name()) == outputs.end())
+      os << "  .Input(\"" << name << ": T" << i << "\")\n";
+    else
+      os << "  .Input(\"" << name << "_shape: int32\")\n";
   }
   std::vector<int> out_idx;
   for(size_t i = 0; i < outputs.size(); i++){
@@ -197,15 +238,22 @@ void gen_tf_register_op(std::ostream &os, const std::string &name,
       throw std::runtime_error("unknown output");
     out_idx.push_back(idx);
   }
-  for(size_t i = 0; i < out_idx.size(); i++)
-    os << "  .Output(\"out" << i << ": T" << out_idx[i] << "\")\n";
+  for(size_t i = 0; i < out_idx.size(); i++){
+    std::string name = outputs[i];
+    std::transform(name.begin(), name.end(), name.begin(), tolower);
+    os << "  .Output(\"" << name << ": T" << out_idx[i] << "\")\n";
+  }
   os << "  .Attr(\"id: int\")\n";
   os << "  .Attr(\"bench: int\")\n";
   os << "  .Attr(\"bench_id: int\")\n";
-  os << "  .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {\n";
+  os << "  .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* ctx) {\n";
   for(size_t i = 0; i < out_idx.size(); i++)
-    os << "     c->set_output(" << i << ", c->input(" << out_idx[i] << "));\n";
-  os << "     return Status::OK();\n";
+    os << "    shape_inference::ShapeHandle handle" << i << ";\n";
+  for(size_t i = 0; i < out_idx.size(); i++)
+    os << "    ctx->MakeShapeFromShapeTensor(" << out_idx[i] << ", &handle" << i << ");\n";
+  for(size_t i = 0; i < out_idx.size(); i++)
+    os << "    ctx->set_output(" << i << ", handle" << i << ");\n";
+  os << "      return Status::OK();\n";
   os << "  })\n";
 
   os << ";\n";
@@ -237,6 +285,7 @@ std::tuple<std::string,
   ir::context ctx;
   auto ir = std::shared_ptr<ir::module>(new ir::module("", ctx));
   make_module(src, &*ir, opt);
+
   // function
   ir::function* fn = ir->get_function_list().front();
   std::string name = fn->get_name();
@@ -276,18 +325,20 @@ class )" << opname << R"(: public OpKernel {
   }
 
   void Compute(OpKernelContext* context){
+
     // get device/stream
     GPUDevice device =  context->eigen_device<GPUDevice>();
     drv::cu_stream sstream(device.stream(), false);
     drv::context* ctx = sstream.context();
     drv::stream* stream = &sstream;
+    
     // extract inputs
     )";
-gen_extract_inputs(oss, fn->args());
+gen_extract_inputs(oss, fn->args(), outputs);
 oss << R"(
     // set outputs
     )";
-gen_set_outputs(oss, outputs);
+gen_set_outputs(oss, fn->args(), outputs);
 oss << R"(
     // wrap tensors
     )";
@@ -309,7 +360,7 @@ private:
 
 // register kernel builder
 )";
-gen_tf_register_kernel_builder(oss, cc_name, opname, fn->args());
+gen_tf_register_kernel_builder(oss, cc_name, opname, fn->args(), outputs);
 oss << R"(
 // register op
 )";

@@ -7,17 +7,16 @@ def cdiv(a, b):
 
 class tf_empty_proxy:
 
-  def __init__(self, args, dtype):
-    self.args = args
+  def __init__(self, shape, dtype):
+    self.shape = shape
     self.dtype = dtype
 
-def empty(shapes, dtype):
+def empty(shape, dtype):
   if fw.has_tensorflow():
-    #return fw.tensorflow.Variable(np.empty(shapes),shape=shapes, dtype=dtype)
-    args = [x.handle if isinstance(x, scalar) else fw.tensorflow.constant(x) for x in shapes]
-    args = fw.tensorflow.stack(args)
-    #return tf_empty_proxy(args, dtype)
-    return fw.tf_extra_ops.alloc_empty(args, T = dtype)
+    shape = [x.handle if isinstance(x, scalar) else fw.tensorflow.constant(x) for x in shape]
+    shape = fw.tensorflow.stack(shape)
+    return tf_empty_proxy(shape, dtype)
+    #return fw.tf_extra_ops.alloc_empty(args, T = dtype)
   elif fw.has_torch():
     return fw.torch.empty(*shapes).cuda()
 

@@ -8,6 +8,7 @@ class AllocEmptyOp : public OpKernel {
   explicit AllocEmptyOp(OpKernelConstruction* context) : OpKernel(context) {}
 
   void Compute(OpKernelContext* context) override {
+     std::cout << "executing allocempty" << std::endl;
     // fetch input
     const Tensor& x = context->input(0);
     const int32* x_data = (const int32*)x.tensor_data().data();
