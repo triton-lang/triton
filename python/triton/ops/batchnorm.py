@@ -109,8 +109,7 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
     return y
 
   @staticmethod
-  def backward(ctx, grads):
-    dy, dmean, dvar = grads
+  def backward(ctx, dy):
     # retrieve info
     x, gamma, beta, mean, var = ctx.saved_tensors
     eps = ctx.eps

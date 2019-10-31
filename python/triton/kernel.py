@@ -225,8 +225,10 @@ class kernel:
     bench_id = libtriton.make_scalar_id() if bench > 0 else -1
     # call framework function
     if fw.has_tensorflow():
+      empty = [x for x in args[:-1] if isinstance(x, triton.utils.tf_empty_proxy)]
+      if len(empty) != len(self.outputs):
+        raise ValueError('Number of empty arguments does not much number of outputs provided')
       # operands
-      outputs = [x for x in args[:-1] if isinstance(x, triton.utils.tf_empty_proxy)]
       operands = [x.shape if isinstance(x, triton.utils.tf_empty_proxy) else x for x in args[:-1]]
       # output data types
       kwargs = {'id': op_id, 'bench': bench, 'bench_id': bench_id}
@@ -235,10 +237,12 @@ class kernel:
           kwargs['T' + str(i)] = x.dtype
       # launch
       ret = self.fw_op(*operands, **kwargs)
-      assert len(ret) == len(outputs)
-      # record results
-      for i in range(len(outputs)):
-        outputs[i].tensor = ret[i]
+      # fill empty tensors with corresponding values
+      for j, y in enumerate(ret[0].op.op_def.output_arg):
+        for i, x in enumerate(ret[0].op.op_def.input_arg):
+          if y.name + '_shape' == x.name:
+            empty[i].tensor = ret[j]
+      # store timing information
       if bench > 0:
         bench_registry[ret] = triton.utils.id_dict.lazy_entry(bench_id)
     elif fw.has_torch():
