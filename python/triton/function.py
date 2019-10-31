@@ -62,11 +62,16 @@ class function(metaclass = function_meta):
     
     # Find a mapping between ::forward arguments and tensorflow op arguments
     op = result[0].op
-    remap = dict()
+    remap_in = dict()
     for i, ix in enumerate(op.inputs):
       for j, jx in enumerate(args):
         if ix is jx:
-          remap[j] = i
+          remap_in[j] = i
+    remap_out = []
+    for i, ix in enumerate(result):
+      for j, jx in enumerate(op.outputs):
+        if ix is jx:
+          remap_out.append(j)
 
     # Register backward pass
     ctx_registry[op] = ctx
@@ -75,14 +80,16 @@ class function(metaclass = function_meta):
       @fw.tensorflow.RegisterGradient(name)
       def gradient(op, *dy):
         dy = dy if len(dy) > 1 else dy[0]
-        grad = cls.backward(ctx_registry[op], dy)
+        # Remap gradient inputs in the right order
+        grads = [dy[i] for i in remap_out]
+        # Execute gradient function
+        grad = cls.backward(ctx_registry[op], grads)
         grad = function.extract_tf_tensors(grad, 'backward')
-
         # Remap gradient in the right order
         ret = [None] * len(op.inputs)
         for i in range(len(grad)):
-          if i in remap:
-            ret[remap[i]] = grad[i]
+          if i in remap_in:
+            ret[remap_in[i]] = grad[i]
         # Return
         return ret
       cls.registered = True
