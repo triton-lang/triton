@@ -13,7 +13,7 @@ class tf_empty_proxy:
     self.tensor = None
   
   def to_tensor(self):
-    assert self.tensor
+    assert self.tensor is not None
     return self.tensor
 
 def empty(shape, dtype):

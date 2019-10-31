@@ -104,7 +104,7 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
                           lambda opt: [1, C],
                           TM = 128)
     # save
-    ctx.save_for_backward(x, gamma, beta, mean.tensor, var.tensor)
+    ctx.save_for_backward(x, gamma, beta, mean, var)
     ctx.eps = eps
     return y
 
