@@ -76,10 +76,11 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
               'BROADCAST_BK': 'newaxis, :' if transpose_b else ':, newaxis',
               'BROADCAST_BN': ':, newaxis' if transpose_b else 'newaxis, :',
               'SHAPE_B'     : 'TN, TK'     if transpose_b else 'TK, TN'}
-    return _dot.kernel(a, b, c, M, N, Ka, lda, ldb, ldc, 
-                  grid, bench=bench,           
-                  AT = transpose_a, BT = transpose_b, TYPE = dtype, 
-                  TM = [64, 128], TN = [64, 128], TK = [8], **macros)
+    _dot.kernel(a, b, c, M, N, Ka, lda, ldb, ldc, 
+                grid, bench=bench,           
+                AT = transpose_a, BT = transpose_b, TYPE = dtype, 
+                TM = [64, 128], TN = [64, 128], TK = [8], **macros)
+    return c
 
   @staticmethod
   def forward(ctx, a, b, transpose_a = False, transpose_b = False, bench = 0):

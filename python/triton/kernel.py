@@ -237,14 +237,20 @@ class kernel:
           kwargs['T' + str(i)] = x.dtype
       # launch
       ret = self.fw_op(*operands, **kwargs)
-      # fill empty tensors with corresponding values
-      for j, y in enumerate(ret[0].op.op_def.output_arg):
-        for i, x in enumerate(ret[0].op.op_def.input_arg):
+      ret = [ret] if isinstance(ret, fw.tensorflow.Tensor) else ret
+      op_def = ret[0].op.op_def
+       # fill empty tensors with corresponding values
+      for j, y in enumerate(op_def.output_arg):
+        found = False
+        for i, x in enumerate(op_def.input_arg):
           if y.name + '_shape' == x.name:
-            empty[i].tensor = ret[j]
+            args[i].tensor = ret[j]
+            found = True
+        assert found
       # store timing information
       if bench > 0:
-        bench_registry[ret] = triton.utils.id_dict.lazy_entry(bench_id)
+        for y in ret: 
+          bench_registry[y] = triton.utils.id_dict.lazy_entry(bench_id)
     elif fw.has_torch():
       args = [x.contiguous() if isinstance(x, fw.torch.Tensor) else x for x in args[:-1]]
       self.fw_op(op_id, bench, bench_id, *args)

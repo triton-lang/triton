@@ -169,14 +169,15 @@ void einsumk(TYPE * A, TYPE * B, TYPE * C,
         TN = [2**i for i in range(5, max(6, min(8, int(math.log2(bmnk[2]) + 1 ))))]
         TB = [2**i for i in range(0, max(1, min(3, int(math.log2(bmnk[0]) + 1 ))))]
         TK = [bmnk[2]] if bmnk[2] < 16 else [8, 16]
-        return  _einsum.kernel(a, b, c, 
-                              bmnk[1], bmnk[2], bmnk[3], 
-                              std0[0], std0[1], std0[2], 
-                              std1[0], std1[1], std1[2], 
-                              grid, bench=bench,
-                              **macros,
-                              TYPE=dtype, TM=TM, TN=TN, TK=TK, TB=TB)
-    
+        _einsum.kernel(a, b, c, 
+                    bmnk[1], bmnk[2], bmnk[3], 
+                    std0[0], std0[1], std0[2], 
+                    std1[0], std1[1], std1[2], 
+                    grid, bench=bench,
+                    **macros,
+                    TYPE=dtype, TM=TM, TN=TN, TK=TK, TB=TB)
+        return c
+
 
     @staticmethod
     def forward(ctx, subscripts, a, b, bench = 0):
