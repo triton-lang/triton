@@ -1,6 +1,7 @@
 import triton.frameworks as fw
 import triton._C.libtriton as libtriton
 import numpy as np
+import weakref
 
 def cdiv(a, b):
     return -(-a // b)
@@ -23,7 +24,7 @@ def empty(shape, dtype):
     return tf_empty_proxy(shape, dtype)
     #return fw.tf_extra_ops.alloc_empty(args, T = dtype)
   elif fw.has_torch():
-    return fw.torch.empty(*shape).cuda()
+    return fw.torch.empty(shape).cuda()
 
 def shape(A) :
   if fw.has_tensorflow():
@@ -45,15 +46,17 @@ class id_dict:
     def get(self):
       return libtriton.retrieve_scalar(self.id)
 
-
   def __init__(self):
-    self.data = dict()
+    self.data = weakref.WeakKeyDictionary()
 
   def __delitem__(self, key):
-    del self.data[id(key)]
+    del self.data[key]
 
   def __getitem__(self, key):
-    ret = self.data[id(key)]
+    if fw.has_tensorflow():
+      if isinstance(key, fw.tensorflow.Tensor):
+        key = key.op
+    ret = self.data[key]
     if isinstance(ret, id_dict.lazy_entry):
       return ret.get()
     return ret
@@ -62,4 +65,7 @@ class id_dict:
     return len(self.data)
 
   def __setitem__(self, key, value):
-    self.data[id(key)] = value
+    if fw.has_tensorflow():
+      if isinstance(key, fw.tensorflow.Tensor):
+        key = key.op
+    self.data[key] = value
