@@ -168,6 +168,7 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     for(auto it: opt_space_.defines)
       cpp.AddMacro(it.first, &opt.defines.at(it.first));
     cpp.Process(tokens);
+
     // parse
     Parser parser(tokens);
     parser.Parse();
@@ -220,7 +221,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::transform::cts cts;
   codegen::generator isel(&axes, &layouts, &align, &allocation, target.get(), opt.num_warps);
   // run passes
-//    ir::print(module, std::cout);
+    ir::print(module, std::cout);
   dce.run(module);
 //  ir::print(module, std::cout);
 
@@ -266,7 +267,6 @@ R"(
 #define bool _Bool
 #define true 1
 #define false 0
-#define __bool_true_false_are_defined 1
 
 #define __readonly      __attribute__((readonly))
 #define __writeonly     __attribute__((writeonly))

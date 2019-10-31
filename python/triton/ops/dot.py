@@ -36,7 +36,6 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
   *pc = c;
 }
 """
-
   kernel = triton.kernel(src, ['C'])
 
   @staticmethod
@@ -109,6 +108,6 @@ void dot(TYPE * A, TYPE * B, TYPE * C,
       db = _dot._call(dy, a, True, True, bench)
     else:
       assert False
-    return da, db, None, None, None, None, None, None, None
+    return da, db, None, None, None
 
 dot = _dot.apply

@@ -83,28 +83,25 @@ class function(metaclass = function_meta):
   @classmethod
   def apply_tensorflow(cls, *args, **kwargs):
     ctx = OpContext()
-    result = cls.forward(ctx, *args, **kwargs)
 
-    # check that all the results stem from triton.empty
-    # and get the corresponding TF tensors if possible
+    # run forward pass
+    result = cls.forward(ctx, *args, **kwargs)
     result = result if isinstance(result, tuple) else (result, )
     result = function.extract_tf_tensors(result, 'forward')
     
     # Register backward pass
-    key = result[0]
     op = result[0].op
-    ctx_registry[key] = ctx
-    remap_in = cls.map_in_to_args(op, args)
-    remap_out = cls.map_res_to_out(op, result)
-    name = op.op_def.name
+    ctx_registry[op] = ctx
     if not cls.registered:
-      @fw.tensorflow.RegisterGradient(name)
+      remap_in = cls.map_in_to_args(op, args)
+      remap_out = cls.map_res_to_out(op, result)
+      @fw.tensorflow.RegisterGradient(op.op_def.name)
       def gradient(op, *dy):
         # Remap gradient inputs in the right order
         dy = [dy[i] for i in remap_out]
         dy = dy if len(dy) > 1 else dy[0]
         # Execute gradient function
-        grad = cls.backward(ctx_registry[key], dy)
+        grad = cls.backward(ctx_registry[op], dy)
         grad = function.extract_tf_tensors(grad, 'backward')
         # Remap gradient in the right order
         ret = [None] * len(op.inputs)

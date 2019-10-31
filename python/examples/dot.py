@@ -53,8 +53,8 @@ def run_torch():
   triton_da = a.grad.clone()
   triton_db = b.grad.clone()
 
-  nanosec = triton.bench_registry[triton_d]
-  print('TFLOPS:', 2. * M * N * K / nanosec * 1e-3)
+  #nanosec = triton.bench_registry[triton_d]
+  #print('TFLOPS:', 2. * M * N * K / nanosec * 1e-3)
   print('Diff DA:', (torch_da - triton_da).max())
   print('Diff DB:', (torch_db - triton_db).max())
 
