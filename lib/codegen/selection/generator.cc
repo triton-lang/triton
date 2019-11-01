@@ -297,12 +297,18 @@ void generator::visit_unmasked_load_inst(ir::unmasked_load_inst* x) {
   // find vector size
   ir::value *ptr = x->get_pointer_operand();
   size_t ld = layouts_->get(ptr)->order[0];
-  unsigned alignment = alignment_->get(ptr, ld);
+  unsigned alignment = std::max<int>(alignment_->get(ptr, ld), 1);
+
+
   // vector loads
   std::map<unsigned, Value*> packets;
   for_each(x, [&](indices_t idx){
     distributed_tile* result = (distributed_tile*)tmap_.at(x);
-    unsigned vector_size = std::min<unsigned>(result->axis(ld).contiguous, alignment);
+    // vector size
+    unsigned contiguous = 1;
+    if(ld < x->get_type()->get_tile_rank())
+      contiguous = result->axis(ld).contiguous;
+    unsigned vector_size = std::min<unsigned>(contiguous, alignment);
 
     unsigned linear = result->get_linear_index(idx);
     unsigned id = linear / vector_size;
@@ -314,10 +320,15 @@ void generator::visit_unmasked_load_inst(ir::unmasked_load_inst* x) {
       packets[id] = builder_->CreateLoad(ptr);
     }
   });
+
   // extract result element
   for_each(x, [&](indices_t idx){
     distributed_tile* result = (distributed_tile*)tmap_.at(x);
-    unsigned vector_size = std::min<unsigned>(result->axis(ld).contiguous, alignment);
+    // vector size
+    unsigned contiguous = 1;
+    if(ld < x->get_type()->get_tile_rank())
+      contiguous = result->axis(ld).contiguous;
+    unsigned vector_size = std::min<unsigned>(contiguous, alignment);
     unsigned linear = result->get_linear_index(idx);
     unsigned id = linear / vector_size;
     set_value(x, idx, builder_->CreateExtractElement(packets.at(id), linear % vector_size));

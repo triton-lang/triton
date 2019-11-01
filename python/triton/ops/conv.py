@@ -21,7 +21,7 @@ void convnd(A_TYPE *A,
           int off_uh, int off_uw,
           int off_uah, int off_uaw,
           int off_uch, int off_ucw,
-          int* a_delta){
+          int* a_delta, int* inc_a){
 
   // range of indices along the reduction axis
   int rka[TK] = 0 ... TK;
@@ -42,8 +42,6 @@ void convnd(A_TYPE *A,
   int ras[TK] = rka % BW;
   int rac[TK] = racr / BH;
   int rar[TK] = racr % BH;
-  rar = FLIPR rar;
-  ras = FLIPS ras;
   rar = UPAR * rar;
   ras = UPAS * ras;
   int ra0[TM] = rab*lda_n + rah*lda_h + raw*lda_w;
@@ -51,55 +49,35 @@ void convnd(A_TYPE *A,
   A_TYPE* pa[TM, TK] = A + ra0[:, newaxis] + ra1[newaxis, :];
 
   // pointers for B
-  int rb0[TN] = get_program_id(1) * TN + 0 ... TN;
-#ifdef B_LUT
-  int rbcr[TK] = rkb / BW;
-  int rbs[TK] = rkb % BW;
-  int rbc[TK] = rbcr / BH;
-  int rbr[TK] = rbcr % BH;
-  rbr = rbr * upsample_h + off_uh;
-  rbs = rbs * upsample_w + off_uw;
-  int rb1[TK] = rbc*ldb_c + rbr*ldb_r + rbs*ldb_s;
-#else
-  int rb1[TK] = rkb * STRIDE_B0;
-#endif
-  B_TYPE* pb [B_SHAPE] = B + rb1[BROADCAST_B1] * STRIDE_B1 + rb0[BROADCAST_B0] * STRIDE_B0 * ldb_k;
+  int rbn[TN] = get_program_id(1) * TN + 0 ... TN;
+  B_TYPE* pb[TK, TN] = B + rbn[newaxis, :] * ldb_k + rkb[:, newaxis] * ldb_s;
 
   // pointers for A look-up table
   int offda[TK] = rka % LUT_SIZE;
-  int* pincd[TK] = a_delta + offda;
-  int* pda[TK]  = a_delta + LUT_SIZE + offda + off_uw * LUT_SIZE + off_uh * LUT_SIZE * upsample_w;
+  int* pincd[TK] = inc_a + offda;
+  int* pda[TK]  = a_delta + offda + off_uw * LUT_SIZE + off_uh * LUT_SIZE * upsample_w;
   int da[TK] = *pda;
   int incd[TK] = *pincd;
 
-  // pointers for B look-up table
-  int offdb[TK] = rkb % LUT_SIZE;
-#ifdef B_LUT
-  int* pdb[TK] = b_delta + offdb + off_uw * LUT_SIZE + off_uh * LUT_SIZE * upsample_w;
-  int db[TK] = *pdb;
-#endif
-
   // reduction loop
   A_TYPE a[TM, TK] = *pa;
-  B_TYPE b[B_SHAPE] = *pb;
+  B_TYPE b[TK, TN] = *pb;
   for(int k = K; k > 0; k = k - TK){
-    c += a @ USE_B;
-    pa = pa + da[newaxis, :];
-    pb = pb + INC_PB;
+    c += a @ b;
+    pa += da[newaxis, :];
+    pb += TK * ldb_s;
     // increment A look-up table
     pda = pda + incd;
     da = *pda;
     pincd = pincd + incd;
     incd = *pincd;
-    // increment B look-up table
-#ifdef B_LUT
-    pdb = pdb + INC_PDB;
-    db = *pdb;
-#endif
     // pre-fetches
-    a = *pa;
-    b = *pb;
+    bool checka[TM, TK] = k > TK;
+    bool checkb[TK, TN] = k > TK;
+    a = checka ? *pa : 0;
+    b = checkb ? *pb : 0;
   }
+
 
   // write back
   int rxc[TM] = get_program_id(0) * TM + 0 ... TM;
@@ -112,28 +90,31 @@ void convnd(A_TYPE *A,
   rcq = rcq * upsample_w + off_ucw;
   int rc0[TM] = rcn * ldc_n + rcp * ldc_p + rcq * ldc_q;
   float* pc[TM, TN]  = C + rc1[newaxis, :]*ldc_k + rc0[:, newaxis];
-  *pc = c;
+  bool checkc0[TM] = rxc < M;
+  bool checkc1[TN] = rc1 < N;
+  bool checkc[TM, TN] = checkc0[:, newaxis] && checkc1[newaxis, :];
+  *?(checkc)pc = c;
 }
 """
   kernel = triton.kernel(src, ['C'])
 
   @staticmethod
   def _unpack(idx, D, H, W):
-    c = idx // (D*H*W)
-    dhw = idx % (D*H*W)
-    dh = dhw // W
-    w = dhw % W
-    d = dh // H
-    h = dh % H
+    cdh = idx // W
+    w = idx % W
+    cd = cdh // H
+    h = cdh % H
+    c = cd // D
+    d = cd % D
     return c, d, h, w
 
   @staticmethod
   def _delta_a(upsample_d, upsample_h, upsample_w, depth, TK,
                T, R, S, stride_a):
-    ud = np.arange(upsample_d)[:, np.newaxis, np.newaxis, np.newaxis]
-    uh = np.arange(upsample_h)[np.newaxis, :, np.newaxis, np.newaxis]
-    uw = np.arange(upsample_w)[np.newaxis, np.newaxis, :, np.newaxis]
-    ctrs = np.arange(depth)[np.newaxis, np.newaxis, np.newaxis, :]
+    ud = np.arange(upsample_d, dtype=np.int32)[:, np.newaxis, np.newaxis, np.newaxis]
+    uh = np.arange(upsample_h, dtype=np.int32)[np.newaxis, :, np.newaxis, np.newaxis]
+    uw = np.arange(upsample_w, dtype=np.int32)[np.newaxis, np.newaxis, :, np.newaxis]
+    ctrs = np.arange(depth, dtype=np.int32)[np.newaxis, np.newaxis, np.newaxis, :]
     c, t, r, s = _conv._unpack(ctrs, T, R, S)
     nextc, nextt, nextr, nexts = _conv._unpack(ctrs + TK, T, R, S)
     cdiff = nextc - c
@@ -181,31 +162,18 @@ void convnd(A_TYPE *A,
     delta_a = _conv._delta_a(upsample_d, upsample_h, upsample_w, 
                              depth, TK, BD, BH, BW, stride_a)
     delta_a = triton.fw.torch.from_numpy(delta_a).cuda()
+    inc_a = np.arange(depth, dtype=np.int32)
+    inc_a = ((inc_a + TK) % depth) - inc_a
+    inc_a = triton.fw.torch.from_numpy(inc_a).cuda()
 
     trans_b = False
     is_wgrad = False
     is_blut = False 
-    macros = { 
-               'B_SHAPE':      'TN, TK'       if trans_b else 'TK, TN',
-               'BROADCAST_B0': ':, newaxis'   if trans_b else 'newaxis, :',
-               'BROADCAST_B1': 'newaxis, :'   if trans_b else ':, newaxis',
-               'STRIDE_B0':    'ldb_s'          if trans_b else '1',
-               'STRIDE_B1':    '1'              if trans_b else 'ldb_s',
-               'USE_B':        '^b'             if trans_b else 'b',
-               'FLIPR':        ''               if trans_b else 'BH - 1 -',
-               'FLIPS':        ''               if trans_b else 'BW - 1 -',
+    macros = {  
                'UPAR':         'stride_h'       if is_wgrad else '1',
                'UPAS':         'stride_w'       if is_wgrad else '1',
                'UPAH':         ''               if is_wgrad else 'stride_h',
                'UPAW':         ''               if is_wgrad else 'stride_w',
-               'REDAX0':       'NC'             if trans_b else 'BH',
-               'REDAX1':       'BH'             if trans_b else 'BW',
-               'REDAX2':       'BW'             if trans_b else 'NC',
-               'AX0':          'c'              if trans_b else 'r',
-               'AX1':          'r'              if trans_b else 's',
-               'AX2':          's'              if trans_b else 'c',
-               'INC_PB':       'db[newaxis, :]' if is_blut else 'TK',
-               'INC_PDB':      'incd'           if trans_b else 'TK',
                'LUT_SIZE':      depth,
                'TM': [32],
                'TN': [32],
@@ -215,20 +183,22 @@ void convnd(A_TYPE *A,
               }
     
     shape_c.pop(2)
-    print(shape_c)
     c = triton.empty(shape_c, dtype=a.dtype)
-    _conv.kernel(a, b, c, CD*CH*CW, NF, NC*BD*BH*BW, AH, AW, BH, BW, CH, CW, NC,
+    grid = lambda opt: [triton.cdiv(NB*CD*CH*CW, opt.d('TM')), triton.cdiv(NF, opt.d('TN'))]
+    print(stride_c)
+    print(stride_b)
+    _conv.kernel(a, b, c, NB*CD*CH*CW, NF, NC*BD*BH*BW, AH, AW, BH, BW, CH, CW, NC,
                  stride_a[0], stride_a[1], stride_a[2], stride_a[3], stride_a[4],
                  stride_b[0], stride_b[1], stride_b[2], stride_b[3], stride_b[4],
                  stride_c[0], stride_c[1], stride_c[2], stride_c[3], stride_c[4],
                  pad_h, pad_w, stride_h, stride_w, upsample_h, upsample_w, 
                  0, 0, 0, 0, 0, 0,
-                 delta_a,
-                 lambda opt: (1, 1, 1), **macros)
+                 delta_a, inc_a,
+                 grid, **macros)
     return c
   
   @staticmethod
   def forward(ctx, input, weight):
-    _conv._call(input, weight, 1, 1, 1, 0, 0, 0, 1, 1, 1, '')
+    return _conv._call(input, weight, 1, 1, 1, 0, 0, 0, 1, 1, 1, '')
 
 conv = _conv.apply
