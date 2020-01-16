@@ -180,6 +180,11 @@ host_module::host_module(driver::context * context, std::unique_ptr<llvm::Module
   hst_->engine = builder.create();
 }
 
+std::unique_ptr<buffer> host_module::symbol(const char *name) const {
+  throw std::runtime_error("not implemented");
+}
+
+
 /* ------------------------ */
 //         OpenCL           //
 /* ------------------------ */
@@ -211,10 +216,21 @@ ocl_module::ocl_module(driver::context * context, std::unique_ptr<llvm::Module> 
 //  }
 }
 
+std::unique_ptr<buffer> ocl_module::symbol(const char *name) const {
+  throw std::runtime_error("not implemented");
+}
 
 /* ------------------------ */
 //         CUDA             //
 /* ------------------------ */
+static bool find_and_replace(std::string& str, const std::string& begin, const std::string& end, const std::string& target){
+  size_t start_replace = str.find(begin);
+  size_t end_replace = str.find(end, start_replace);
+  if(start_replace == std::string::npos)
+    return false;
+  str.replace(start_replace, end_replace + 1 - start_replace, target);
+  return true;
+}
 
 std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module, driver::device* device) {
    // options
@@ -231,19 +247,17 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
    llvm::SmallVector<char, 0> buffer;
    module::compile_llvm_module(std::move(module), "nvptx64-nvidia-cuda", sm, "", buffer, "ptx63", Assembly);
    std::string result(buffer.begin(), buffer.end());
-   size_t start_replace = result.find(".version");
-   size_t end_replace = result.find('\n', start_replace);
-   assert(start_replace != std::string::npos);
-   result.replace(start_replace, end_replace - start_replace, ".version 6.4");
+   find_and_replace(result, ".version", "\n", ".version 6.4\n");
+   while(find_and_replace(result, "\t// begin inline asm", "\n", ""));
+   while(find_and_replace(result, "\t// end inline asm", "\n", ""));
    return result;
 }
 
 cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll_module): cu_module(context, compile_llvm_module(std::move(ll_module), context->device())) { }
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
-//  exit(EXIT_FAILURE);
-//  std::cout << source << std::endl;
   cu_context::context_switcher ctx(*context);
+//  std::cout << source << std::endl;
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
   unsigned int errbufsize = 8096;
@@ -260,11 +274,12 @@ cu_module::cu_module(driver::context * context, std::string const & source) : mo
   }
 }
 
-cu_buffer* cu_module::symbol(const char *name) const{
+std::unique_ptr<buffer> cu_module::symbol(const char *name) const{
   CUdeviceptr handle;
   size_t size;
   dispatch::cuModuleGetGlobal_v2(&handle, &size, *cu_, name);
-  return new cu_buffer(ctx_, size, handle, false);
+  std::unique_ptr<buffer> res(new cu_buffer(ctx_, size, handle, false));
+  return std::move(res);
 }
 
 

@@ -138,23 +138,23 @@ binary_operator *binary_operator::create(binary_op_t op, value *lhs, value *rhs,
   return new binary_operator(op, lhs, rhs, lhs->get_type(), name, next);
 }
 
-binary_operator *binary_operator::create_fneg(value *arg, const std::string &name, instruction *next){
-  assert(arg->get_type()->get_scalar_ty()->is_floating_point_ty());
-  value *zero = constant_fp::get_zero_value_for_negation(arg->get_type());
-  return binary_operator::create(binary_op_t::FSub, zero, arg, name, next);
-}
+//binary_operator *binary_operator::create_fneg(value *arg, const std::string &name, instruction *next){
+//  assert(arg->get_type()->get_scalar_ty()->is_floating_point_ty());
+//  value *zero = constant_fp::get_zero_value_for_negation(arg->get_type());
+//  return binary_operator::create(binary_op_t::FSub, zero, arg, name, next);
+//}
 
-binary_operator *binary_operator::create_neg(value *arg, const std::string &name, instruction *next){
-  assert(arg->get_type()->get_scalar_ty()->is_integer_ty());
-  value *zero = constant_fp::get_zero_value_for_negation(arg->get_type());
-  return binary_operator::create(binary_op_t::Sub, zero, arg, name, next);
-}
+//binary_operator *binary_operator::create_neg(value *arg, const std::string &name, instruction *next){
+//  assert(arg->get_type()->get_scalar_ty()->is_integer_ty());
+//  value *zero = constant_fp::get_zero_value_for_negation(arg->get_type()->get_scalar_ty());
+//  return binary_operator::create(binary_op_t::Sub, zero, arg, name, next);
+//}
 
-binary_operator *binary_operator::create_not(value *arg, const std::string &name, instruction *next){
-  assert(arg->get_type()->is_integer_ty());
-  constant *mask = constant::get_all_ones_value(arg->get_type());
-  return binary_operator::create(binary_op_t::Xor, arg, mask, name, next);
-}
+//binary_operator *binary_operator::create_not(value *arg, const std::string &name, instruction *next){
+//  assert(arg->get_type()->is_integer_ty());
+//  constant *mask = constant::get_all_ones_value(arg->get_type());
+//  return binary_operator::create(binary_op_t::Xor, arg, mask, name, next);
+//}
 
 //===----------------------------------------------------------------------===//
 //                               cmp_inst classes
@@ -761,6 +761,12 @@ copy_from_shared_inst* copy_from_shared_inst::create(value *arg, const std::stri
                                                  instruction *next) {
   return new copy_from_shared_inst(arg->get_type(), INST_COPY_FROM_SHARED, arg, name, next);
 }
+
+// recoalesce
+recoalesce_inst* recoalesce_inst::create(value *arg, const std::string &name, instruction *next) {
+  return new recoalesce_inst(arg->get_type(), INST_RECOALESCE, arg, name, next);
+}
+
 
 
 // barrier

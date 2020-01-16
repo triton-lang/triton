@@ -113,6 +113,7 @@ void axes::update_graph(ir::instruction *i) {
     case ir::INST_DOT:              return update_graph_dot(i);
     case ir::INST_COPY_TO_SHARED:   return update_graph_no_edge(i);;
     case ir::INST_COPY_FROM_SHARED: return update_graph_no_edge(i);
+    case ir::INST_RECOALESCE:       return update_graph_no_edge(i);
     default:                        return update_graph_elementwise(i);
   }
   return;

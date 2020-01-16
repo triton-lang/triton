@@ -8,17 +8,17 @@
 #include <string>
 #include <memory>
 #include <functional>
-#include <mutex>
 // codegen
 #include "triton/ir/context.h"
 #include "triton/codegen/target.h"
-#include "triton/lang/parser.h"
 #include "triton/runtime/arg.h"
 
 namespace llvm {
   class Module;
   class LLVMContext;
 }
+
+class Parser;
 
 namespace triton {
 
@@ -106,14 +106,14 @@ public:
   function(const std::string& src, const options_space_t& opt = options_space_t());
   void operator()(const std::vector<arg>& args, const grid_t& grid, driver::stream* stream);
   void operator()(const std::vector<arg>& args, const grid_fn_ty& grid, driver::stream *stream);
-  std::string make_tensorflow_src(const std::vector<size_t> &outputs, const std::string &macro);
+  void set_cst(const std::string& name, void* data, size_t n_bytes);
 
 private:
   ir::context ctx_;
   std::string src_;
   options_space_t opt_space_;
   std::map<cache_key_t, caller> cache_;
-  std::mutex src_mutex_;
+  std::map<std::string, std::vector<char>> cst_;
 };
 
 }

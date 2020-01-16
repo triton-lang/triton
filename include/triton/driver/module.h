@@ -45,6 +45,8 @@ public:
                            llvm::SmallVectorImpl<char> &buffer,
                            const std::string &features,
                            file_type_t file_type);
+  virtual std::unique_ptr<buffer> symbol(const char * name) const = 0;
+
 
 protected:
   driver::context* ctx_;
@@ -54,13 +56,14 @@ protected:
 class host_module: public module{
 public:
   host_module(driver::context* context, std::unique_ptr<llvm::Module> module);
+  std::unique_ptr<buffer> symbol(const char * name) const;
 };
 
 // OpenCL
 class ocl_module: public module{
-
 public:
   ocl_module(driver::context* context, std::unique_ptr<llvm::Module> module);
+  std::unique_ptr<buffer> symbol(const char * name) const;
 };
 
 // CUDA
@@ -70,7 +73,7 @@ class cu_module: public module {
 public:
   cu_module(driver::context* context, std::unique_ptr<llvm::Module> module);
   cu_module(driver::context* context, const std::string& source);
-  cu_buffer* symbol(const char * name) const;
+  std::unique_ptr<buffer> symbol(const char * name) const;
 
 private:
   std::string source_;

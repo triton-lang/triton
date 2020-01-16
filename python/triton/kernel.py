@@ -6,6 +6,8 @@ import hashlib
 import sysconfig
 import sys
 import weakref
+import contextlib
+import io
 # import for just-in-time compilation
 import distutils
 import setuptools.command.build_ext
@@ -56,7 +58,16 @@ def _write_bindings(src, root):
       handle.writelines(src)
   # return path of cpp file
   return (cpp, so)
-  
+
+@contextlib.contextmanager
+def quiet():
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = old_stdout, old_stderr
+
 def _build(src, path):
   ccdir = os.path.join(libtriton.__file__, os.path.pardir)
   ccdir = os.path.realpath(ccdir)
@@ -102,7 +113,7 @@ def _build(src, path):
       language = 'c++',
       sources = [src],
       include_dirs = include_dirs,
-      extra_compile_args = extra_compile_args,
+      extra_compile_args = extra_compile_args + ['-g0'],
       extra_link_args = extra_link_args,
       library_dirs = library_dirs,
       libraries = libraries,
@@ -119,7 +130,8 @@ def _build(src, path):
       ext_modules = [ext],
       script_args = args,
   ) 
-  setuptools.setup(**args)
+  with quiet():
+    setuptools.setup(**args)
   shutil.rmtree(tmp)
 
 def _cvt_to_def_str(obj):
@@ -188,6 +200,10 @@ class kernel:
     self.src = src
     self.outputs = outputs
     self.tmp = tmp
+    self.cst = dict()
+
+  def set_constant(self, name, value):
+    self.cst[name] = value
 
   def __call__(self, *args, **kwargs):
     # create a new framework op when defines are different
@@ -204,15 +220,16 @@ class kernel:
         defines.append((k, values))
       opt = libtriton.options_space()
       opt.defines = defines
-      opt.num_warps = [4]
+      opt.num_warps = [2, 4]
       # create unique id for this op
       op_id = libtriton.make_op_id()
       self.fw_id[key] = op_id
       # register function
       libtriton.register_fn(op_id, self.src, opt)
+      for name, value in self.cst.items():
+        libtriton.register_cst(op_id, name, value)
       if self.fw_op is None:
         self.fw_op = _make_framework_op(self.src, self.outputs, self.tmp, opt)
-
     # benchmarking info
     bench = 0
     if 'bench' in kwargs:
@@ -252,9 +269,9 @@ class kernel:
         for y in ret: 
           bench_registry[y] = triton.utils.id_dict.lazy_entry(bench_id)
     elif fw.has_torch():
-      args = [x.contiguous() if isinstance(x, fw.torch.Tensor) else x for x in args[:-1]]
+      args = [x if isinstance(x, fw.torch.Tensor) else x for x in args[:-1]]
       ret = self.fw_op(op_id, bench, bench_id, *args)
       if bench > 0:
-        bench_registry[ret] = libtriton.retrieve_scalar(op_id)
+        bench_registry[ret] = libtriton.retrieve_scalar(bench_id)
     else:
       assert False

@@ -294,7 +294,8 @@ std::string ArithmType::Str() const {
 bool PointerType::Compatible(const Type& other) const {
   // C11 6.7.6.1 [2]: pointer compatibility
   auto otherPointer = other.ToPointer();
-  return otherPointer && derived_->Compatible(*otherPointer->derived_);
+  return otherPointer &&
+         derived_->Compatible(*otherPointer->derived_);
 
   // FIXME(wgtdkp): cannot loose compatible constraints
   //return other.IsInteger() ||

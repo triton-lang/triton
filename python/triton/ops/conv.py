@@ -38,25 +38,19 @@ void convnd(A_TYPE *A,
   int rah[TM] = rabh % CH;
   rah = rah * UPAW - off_uah;
   raw = raw * UPAH - off_uaw;
-  int racr[TK] = rk / BW;
-  int ras[TK] = rk % BW;
-  int rac[TK] = racr / BH;
-  int rar[TK] = racr % BH;
-  rar = UPAR * rar;
-  ras = UPAS * ras;
   int ram[TM] = rab*lda_n + rah*lda_h + raw*lda_w;
-  int rak[TK] = rac*lda_c + rar*lda_h + ras*lda_w;
+  int rak[TK] = *(ADELTA + rk);
   A_TYPE* pa[TM, TK] = A + ram[:, newaxis] + rak[newaxis, :];
 
   // pointers for B
   int rbk[TK] = rk;
   int rbn[TN] = ryb;
-  B_TYPE* pb[TK, TN] = B + rbn[newaxis, :] * ldb_k + rbk[:, newaxis] * ldb_s;
+  B_TYPE* pb[TK, TN] = B + rbn[newaxis, :] * ldb_k + rbk[:, newaxis] * ldb_c;
 
   // pointers for A look-up table
   int rklut[TK] = rk % LUT_SIZE;
   int* padiff[TK] = ADIFF + rklut;
-  int* padelta[TK] = ADELTA + rklut + off_uw * LUT_SIZE + off_uh * LUT_SIZE * upsample_w;
+  int* padelta[TK] = ADELTA + TK + rklut + off_uw * LUT_SIZE + off_uh * LUT_SIZE * upsample_w;
   int adiff[TK] = *padiff;
   int adelta[TK] = *padelta;
 
@@ -66,7 +60,7 @@ void convnd(A_TYPE *A,
   for(int k = K; k > 0; k = k - TK){
     c += a @ b;
     pa += adelta[newaxis, :];
-    pb += TK * ldb_s;
+    pb += TK * ldb_c;
     // increment A look-up table
     padelta = padelta + adiff;
     adelta = *padelta;
@@ -99,29 +93,54 @@ void convnd(A_TYPE *A,
   kernel = triton.kernel(src, ['C'])
 
   @staticmethod
-  def _unpack(idx, D, H, W):
-    cdh = idx // W
-    w = idx % W
-    cd = cdh // H
-    h = cdh % H
-    c = cd // D
-    d = cd % D
-    return c, d, h, w
+  def _unpack(idx, order, shape_b):
+    _123 = idx  // shape_b[order[0]]
+    _0   = idx   % shape_b[order[0]]
+    _23  = _123 // shape_b[order[1]]
+    _1   = _123  % shape_b[order[1]]
+    _3   = _23  // shape_b[order[2]]
+    _2   = _23   % shape_b[order[2]]
+    return _0, _1, _2, _3
 
   @staticmethod
-  def _delta_a(upsample_d, upsample_h, upsample_w, depth, TK,
-               T, R, S, stride_a):
+  def _roundup(x, div):
+    return (x + div - 1) // div * div
+
+  @staticmethod
+  def _delta_a(upsample_d, upsample_h, upsample_w, 
+               bc, bd, bh, bw,
+               ac, ad, ah, aw,
+               stride_a, shape_b,
+               TK):
+    # Parse the axes so that the reduction is done 
+    # from the innermost dimension outward
+    order = sorted([bc, bd, bh, bw], reverse = True)
+    c, d, h, w = [order.index(x) for x in [bc, bd, bh, bw]]
+    # Size of the lookup table is the product of the 3 innermost dimensions
+    K = _conv._roundup(TK, shape_b[order[0]] * shape_b[order[1]] * shape_b[order[2]])
+    # Allocate temporary arrays
     ud = np.arange(upsample_d, dtype=np.int32)[:, np.newaxis, np.newaxis, np.newaxis]
     uh = np.arange(upsample_h, dtype=np.int32)[np.newaxis, :, np.newaxis, np.newaxis]
     uw = np.arange(upsample_w, dtype=np.int32)[np.newaxis, np.newaxis, :, np.newaxis]
-    ctrs = np.arange(depth, dtype=np.int32)[np.newaxis, np.newaxis, np.newaxis, :]
-    c, t, r, s = _conv._unpack(ctrs, T, R, S)
-    nextc, nextt, nextr, nexts = _conv._unpack(ctrs + TK, T, R, S)
-    cdiff = nextc - c
-    tdiff = nextt - t
-    rdiff = nextr - r
-    sdiff = nexts - s
-    return cdiff*stride_a[1] + tdiff*stride_a[2] + rdiff*stride_a[3] + sdiff*stride_a[4]
+    k  = np.arange(K         , dtype=np.int32)[np.newaxis, np.newaxis, np.newaxis, :]
+    # Find reduction indices at the current and next reduction indices
+    currentk = _conv._unpack(k     , order, shape_b)
+    nextk    = _conv._unpack(k + TK, order, shape_b)
+    # Compute memory stride
+    result = 0
+    result += (nextk[c] - currentk[c]) * stride_a[ac]
+    result += (nextk[d] - currentk[d]) * stride_a[ad]
+    result += (nextk[h] - currentk[h]) * stride_a[ah]
+    result += (nextk[w] - currentk[w]) * stride_a[aw]
+    # Initial k
+    ki = np.arange(TK       , dtype=np.int32)[np.newaxis, np.newaxis, np.newaxis, :]
+    currentk = _conv._unpack(ki, order, shape_b)
+    resulti = 0
+    resulti += currentk[c] * stride_a[ac]
+    resulti += currentk[d] * stride_a[ad]
+    resulti += currentk[h] * stride_a[ah]
+    resulti += currentk[w] * stride_a[aw]
+    return np.concatenate((resulti, result), axis=-1)
 
   @staticmethod
   def _extract_strides(shape):
@@ -134,38 +153,56 @@ void convnd(A_TYPE *A,
 
   @staticmethod
   def _call(a, b, 
-            upsample_d, upsample_h, upsample_w, 
             pad_d, pad_h, pad_w, 
-            stride_d, stride_h, stride_w, 
-            mode):
+            stride_d, stride_h, stride_w,
+            upsample_d, upsample_h, upsample_w,
+            a_layout, b_layout, c_layout):
     # input shapes
     shape_a = list(triton.shape(a))
     shape_b = list(triton.shape(b))
-    # add depth
-    shape_a.insert(2, 1)
-    shape_b.insert(1, 1)
-    NB, NC, AD, AH, AW = shape_a
-    NC, BD, BH, BW, NF = shape_b
+    dim = len(shape_a) - 2
+    # indices
+    an, ac, ad, ah, aw = [a_layout.find(x) for x in 'ncdhw']
+    bk, bc, bd, bh, bw = [b_layout.find(x) for x in 'kctrs']
+    cn, ck, cd, ch, cw = [c_layout.find(x) for x in 'nkdhw']
+    # extract shapes
+    if dim == 2:
+      shape_a.insert(ad, 1)
+    if dim == 2:
+      shape_b.insert(bd, 1)
     # output shape
-    CD = (AD*upsample_d - BD + 1 + 2*pad_d + stride_d - 1) // stride_d
-    CH = (AH*upsample_h - BH + 1 + 2*pad_h + stride_h - 1) // stride_h
-    CW = (AW*upsample_w - BW + 1 + 2*pad_w + stride_w - 1) // stride_w
-    shape_c = [NB, NF, CD, CH, CW]
+    shape_c = [0] * 5
+    shape_c[cn] = shape_a[an]
+    shape_c[ck] = shape_b[bk]
+    shape_c[cd] = (shape_a[ad]*upsample_d - shape_b[bd] + 1 + 2*pad_d + stride_d - 1) // stride_d
+    shape_c[ch] = (shape_a[ah]*upsample_h - shape_b[bh] + 1 + 2*pad_h + stride_h - 1) // stride_h
+    shape_c[cw] = (shape_a[aw]*upsample_w - shape_b[bw] + 1 + 2*pad_w + stride_w - 1) // stride_w
     # strides
     stride_a = _conv._extract_strides(shape_a)
     stride_b = _conv._extract_strides(shape_b)
     stride_c = _conv._extract_strides(shape_c)
-    # look-up tables
+    # tiling parameters
+    TM = [32]
+    TN = [32]
     TK = 8
-    FS = BD * BH * BW 
-    depth = (TK + FS - 1)//FS * FS
+    # pointer deltas for a
     delta_a = _conv._delta_a(upsample_d, upsample_h, upsample_w, 
-                             depth, TK, BD, BH, BW, stride_a)
+                             bc, bd, bh, bw,
+                             ac, ad, ah, aw,
+                             stride_a, shape_b,
+                             TK)
     delta_a = triton.fw.torch.from_numpy(delta_a).cuda()
-    inc_a = np.arange(depth, dtype=np.int32)
-    inc_a = ((inc_a + TK) % depth) - inc_a
+    # delta increments for a
+    inc_a = np.arange(delta_a.shape[-1] - TK, dtype=np.int32)
+    inc_a = ((inc_a + TK) % inc_a.size) - inc_a
     inc_a = triton.fw.torch.from_numpy(inc_a).cuda()
-
+    # allocate output
+    if dim == 2:
+      shape_c.pop(cd)
+    c = triton.empty(shape_c, dtype=a.dtype)
+    if dim == 2:
+      shape_c.insert(cd, 1)
+    # execute kernel
     trans_b = False
     is_wgrad = False
     is_blut = False 
@@ -174,31 +211,99 @@ void convnd(A_TYPE *A,
                'UPAS':         'stride_w'       if is_wgrad else '1',
                'UPAH':         ''               if is_wgrad else 'stride_h',
                'UPAW':         ''               if is_wgrad else 'stride_w',
-               'LUT_SIZE':      depth,
-               'TM': [32],
-               'TN': [32],
-               'TK': TK,
-               'A_TYPE': 'float',
-               'B_TYPE': 'float'
+               'LUT_SIZE':     delta_a.shape[-1],
+               'TM': TM, 'TN': TN, 'TK': TK,
+               'A_TYPE': 'float', 'B_TYPE': 'float'
               }
-    
-    shape_c.pop(2)
-    c = triton.empty(shape_c, dtype=a.dtype)
-    grid = lambda opt: [triton.cdiv(NB*CD*CH*CW, opt.d('TM')), triton.cdiv(NF, opt.d('TN'))]
-    print(stride_c)
-    print(stride_b)
-    _conv.kernel(a, b, c, NB*CD*CH*CW, NF, NC*BD*BH*BW, AH, AW, BH, BW, CH, CW, NC,
-                 stride_a[0], stride_a[1], stride_a[2], stride_a[3], stride_a[4],
-                 stride_b[0], stride_b[1], stride_b[2], stride_b[3], stride_b[4],
-                 stride_c[0], stride_c[1], stride_c[2], stride_c[3], stride_c[4],
-                 pad_h, pad_w, stride_h, stride_w, upsample_h, upsample_w, 
+    MATMUL_M = shape_c[cn] * shape_c[cd] * shape_c[ch] * shape_c[cw]
+    MATMUL_N = shape_c[ck]
+    MATMUL_K = shape_b[bc] * shape_b[bd] * shape_b[bh] * shape_b[bw]
+    _conv.kernel(a, b, c, 
+                 # matrix multiplication shapes
+                 MATMUL_M, MATMUL_N, MATMUL_K,
+                 # shapes for a 
+                 shape_a[ah], shape_a[aw], 
+                 # shapes for b
+                 shape_b[bh], shape_b[bw], 
+                 # chapes for c
+                 shape_c[ch], shape_c[cw], shape_c[cn],
+                 # strides for a
+                 stride_a[an], stride_a[ac], stride_a[ad + 0], stride_a[ad + 1], stride_a[ad + 2],
+                 # strides for b
+                 stride_b[bc], stride_b[bd + 0], stride_b[bd + 1], stride_b[bd + 2], stride_b[bk],
+                 # strides for c
+                 stride_c[cn], stride_c[ck], stride_c[cd], stride_c[cd + 1], stride_c[cd + 2],
+                 # padding
+                 pad_h, pad_w,
+                 # striding 
+                 stride_h, stride_w, 
+                 # upsampling
+                 upsample_h, upsample_w, 
                  0, 0, 0, 0, 0, 0,
+                 # look-up table
                  delta_a, inc_a,
-                 grid, **macros)
+                 lambda opt: [triton.cdiv(MATMUL_M, opt.d('TM')), triton.cdiv(MATMUL_N, opt.d('TN'))],
+                 **macros)
     return c
   
   @staticmethod
-  def forward(ctx, input, weight):
-    return _conv._call(input, weight, 1, 1, 1, 0, 0, 0, 1, 1, 1, '')
+  def forward(ctx, x, w, 
+              pad_d = 0, pad_h = 0, pad_w = 0, 
+              stride_d = 1, stride_h = 1, stride_w = 1, 
+              upsample_d = 1, upsample_h = 1, upsample_w = 1,
+              layout_a = 'ncdhw', layout_b = 'ktrsc', layout_c = 'nkdhw'):
+    # save for backward
+    ctx.save_for_backward(x, w)
+    ctx.pad_d = pad_d
+    ctx.pad_h = pad_h
+    ctx.pad_w = pad_w
+    ctx.stride_d = stride_d
+    ctx.stride_h = stride_h
+    ctx.stride_w = stride_w
+    ctx.upsample_d = upsample_d
+    ctx.upsample_h = upsample_h
+    ctx.upsample_w = upsample_w
+    ctx.layout_a = layout_a
+    ctx.layout_b = layout_b
+    ctx.layout_c = layout_c
+    # return
+    return _conv._call(x, w, 
+                    pad_d, pad_h, pad_w, 
+                    stride_d, stride_h, stride_w, 
+                    upsample_d, upsample_h, upsample_w, 
+                    layout_a, layout_b, layout_c)
+
+  @staticmethod
+  def backward(ctx, dy):
+    x, w = ctx.saved_tensors
+    pad_d = ctx.pad_d
+    pad_h = ctx.pad_h
+    pad_w = ctx.pad_w
+    stride_d = ctx.stride_d
+    stride_h = ctx.stride_h
+    stride_w = ctx.stride_w
+    upsample_d = ctx.upsample_d
+    upsample_h = ctx.upsample_h
+    upsample_w = ctx.upsample_w
+    layout_a = ctx.layout_a
+    layout_b = ctx.layout_b
+    layout_c = ctx.layout_c
+
+    # TODO: Deal with this
+    dx_pad_d = 1
+    dx_pad_h = 1
+    dx_pad_w = 1
+    dx = _conv.call(dy, w, 
+                    dw_pad_d, dw_pad_h, dw_pad_w,
+                    upsample_w, upsample_h, upsample_w,
+                    stride_d, stride_h, stride_w,
+                    'ncdhw', 'cktrs', 'nkdhw')
+    
+
+
+    ret = [None] * 14
+    ret[0] = None
+    ret[1] = dw
+    return None, 
 
 conv = _conv.apply

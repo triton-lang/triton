@@ -30,7 +30,7 @@ private:
     high_resolution_clock::time_point _start;
 };
 
-inline double bench(std::function<void()> const & op, driver::stream * stream)
+inline double bench(std::function<void()> const & op, driver::stream * stream, bool normalize = false)
 {
 //  const driver::device * device = stream->context()->device();
   timer tmr;
@@ -38,9 +38,10 @@ inline double bench(std::function<void()> const & op, driver::stream * stream)
   double total_time = 0;
   op();
   stream->synchronize();
-  while(total_time*1e-9 < 1e-2){
+  while(total_time*1e-9 < 1e-1){
     float norm = 1;
     // normalize clock if possible to reduce noise in auto-tuning
+    if(normalize)
     if(auto cu_device = dynamic_cast<const triton::driver::cu_device*>(stream->context()->device()))
       norm = (float)cu_device->current_sm_clock()/cu_device->max_sm_clock();
     tmr.start();

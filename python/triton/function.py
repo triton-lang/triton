@@ -36,14 +36,16 @@ class function(metaclass = function_meta):
   def apply_torch(cls, *args, **kwargs):
     class TorchFunction(fw.torch.autograd.Function):
       @staticmethod
-      def forward(ctx, *targs, **tkwargs):
-        y = cls.forward(ctx, *targs, **tkwargs)
+      def forward(ctx, *targs):
+        y = cls.forward(ctx, *targs, **cls.torch_kwargs)
         ctx_registry[y] = ctx
         return y
       @staticmethod
       def backward(ctx, grad_output):
         return cls.backward(ctx, grad_output)
-    return TorchFunction.apply(*args, **kwargs)
+    cls.torch_kwargs = kwargs
+    return TorchFunction.apply(*args)
+  torch_kwargs = 0
 
   @classmethod
   def extract_tf_tensors(cls, lst, err):

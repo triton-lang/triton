@@ -10,10 +10,12 @@ int main() {
   typedef std::tuple<std::vector<int>, bool, bool, int, int, int> config_t;
   std::vector<config_t> configs;
   for(auto ord: std::vector<std::vector<int>>{{1, 0}})
-  for(auto x: std::vector<std::array<bool, 2>>{{false, false}, {false, true},
-                                               {true, false}}){
+    for(auto x: std::vector<std::array<bool, 2>>{{false, false}}){
     std::vector<config_t> tmp = {
-      config_t{ord, x[0], x[1], 2048, 2048, 2048},
+//      config_t{ord, x[0], x[1], 512, 512, 512},
+//      config_t{ord, x[0], x[1], 1024, 1024, 1024},
+      config_t{ord, x[0], x[1], 127008, 768, 576},
+//      config_t{ord, x[0], x[1], 8192, 8192, 8192}
 //      config_t{ord, x[0], x[1], 16, 2048, 2048},
 //      config_t{ord, x[0], x[1], 32, 2048, 2048},
 //      config_t{ord, x[0], x[1], 64, 2048, 2048},
@@ -33,7 +35,7 @@ int main() {
   int32_t M, N, K;
   for(const auto& c: configs){
     std::tie(ord, AT, BT, M, N, K) = c;
-    std::cout << "// " << c << std::flush;
+    std::cout << "// " << c ;
     for(auto perf: bench_dot(stream, HALF, AT, BT, M, N, K, ord, ord))
       std::cout << ", " << perf << std::flush;
     std::cout << std::endl;

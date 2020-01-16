@@ -1083,14 +1083,12 @@ QualType Parser::ParseDeclSpec(int* storageSpec, int* funcSpec, int* alignSpec) 
       *storageSpec |= S_THREAD;
       break;
 
-    case Token::AUTO:
-      EnsureAndSetStorageSpec(tok, storageSpec, S_AUTO);
-      break;
 
     // Type qualifier
     case Token::CONST:    qualSpec |= Qualifier::CONST;    break;
     case Token::RESTRICT: qualSpec |= Qualifier::RESTRICT; break;
     case Token::VOLATILE: qualSpec |= Qualifier::VOLATILE; break;
+    case Token::CMEM:     qualSpec |= Qualifier::CMEM; break;
 
     // Type specifier
     case Token::SIGNED:
@@ -1551,6 +1549,7 @@ int Parser::ParseQual() {
     case Token::CONST:    qualSpec |= Qualifier::CONST;    break;
     case Token::RESTRICT: qualSpec |= Qualifier::RESTRICT; break;
     case Token::VOLATILE: qualSpec |= Qualifier::VOLATILE; break;
+    case Token::CMEM:     qualSpec |= Qualifier::CMEM; break;
     case Token::ATOMIC:   Error(tok, "do not support 'atomic'"); break;
     default: ts_.PutBack(); return qualSpec;
     }
@@ -1769,6 +1768,7 @@ QualType Parser::ParseArrayFuncDeclarator(const Token* ident, QualType base) {
     if (!base->Complete()) {
       Error(ident, "'%s' has incomplete element type", ident->str_.c_str());
     }
+    // return a pointer for tiles in constant memory:
     return TileType::New(shape, base);
 
   } else if (ts_.Try('(')) {	// Function declaration

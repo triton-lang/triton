@@ -1,4 +1,5 @@
 ﻿#include <pybind11/pybind11.h>
+#include <pybind11/buffer_info.h>
 #include <pybind11/stl.h>
 #include <pybind11/functional.h>
 #include <string>
@@ -46,6 +47,11 @@ void register_fn(size_t id,
 
 void delete_fn(size_t id) {
   id_fn_map.erase(id);
+}
+
+void register_cst(size_t id, const std::string& name, pybind11::buffer& data) {
+  pybind11::buffer_info info = data.request();
+  id_fn_map[id]->set_cst(name, info.ptr, info.size*info.itemsize);
 }
 
 void cleanup() {
@@ -508,7 +514,8 @@ void gen_torch_make_handles(std::ostream &os,
       os << "  " << to_c_ty(ty) << " arg_" << name << " = " << name << ";" << std::endl;
     else{
       os << "  CHECK_INPUT(" << name << ");" << std::endl;
-      os << "  drv::cu_buffer arg_" + name + "(ctx, " + name + ".storage().size(), (CUdeviceptr)" + name + ".storage().data(), false);" << std::endl;
+      os << "  drv::cu_buffer arg_" + name + "(ctx, " + name + ".storage().size(), "
+            " (CUdeviceptr)((char*)" + name + ".storage().data() + " + name + ".storage_offset() * " + name + ".itemsize()), false);" << std::endl;
     }
   }
 }
@@ -526,8 +533,8 @@ void gen_torch_make_launch_function(std::ostream &os, const std::vector<ir::argu
     os << name;
   }
   os << "}, *id_grid_map.at(id), &stream);\n";
-  os << "  };\n  ";
-  os << "  run();";
+  os << "  };\n";
+  os << "  run();\n";
   os << "  if(bench > 0)\n  ";
   os << "    i64scalar_map[bench_id] = triton::tools::bench(run, &stream);\n  ";
   }
@@ -562,18 +569,15 @@ std::tuple<std::string,
   std::ostringstream oss;
   oss << R"(
 #include "triton/driver/buffer.h"
-#include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
 #include "triton/runtime/function.h"
 #include "triton/tools/bench.hpp"
-#include "torch/extension.h"
 #include "torch/script.h"
 #include "ATen/cuda/CUDAContext.h"
-#include "ATen/cuda/detail/CUDAHooks.h"
 
 #define CHECK_CUDA(x) AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
-#define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
+#define CHECK_INPUT(x) CHECK_CUDA(x);
 
 namespace rt = triton::runtime;
 namespace drv = triton::driver;
@@ -628,6 +632,7 @@ PYBIND11_MODULE(libtriton, m) {
     m.def("register_grid", &register_grid);
     m.def("delete_grid", &delete_grid);
     m.def("register_fn", &register_fn);
+    m.def("register_cst", &register_cst);
     m.def("delete_fn", &delete_fn);
     m.def("make_op_id", &make_op_id);
     m.def("make_scalar_id", &make_scalar_id);

@@ -134,6 +134,7 @@ enum value_id_t: unsigned {
   // intrinsics
   INST_COPY_TO_SHARED,
   INST_COPY_FROM_SHARED,
+  INST_RECOALESCE,
   INST_BARRIER,
   INST_MAKE_RANGE_DYN,
   INST_MAKE_RANGE_STA,
