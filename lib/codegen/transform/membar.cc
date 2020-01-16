@@ -3,7 +3,6 @@
 #include <algorithm>
 #include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/allocation.h"
-#include "triton/codegen/instructions.h"
 #include "triton/codegen/transform/membar.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"

@@ -7,6 +7,7 @@
 static MemPoolImp<Token> tokenPool;
 
 const std::unordered_map<std::string, int> Token::kwTypeMap_ {
+  { "__constant__", Token::CMEM },
   { "__global__", Token::GLOBAL },
   { "auto", Token::AUTO },
   { "break", Token::BREAK },

@@ -45,9 +45,8 @@ llvm::Type *distributed_tile::make_vector_ty(llvm::Type *ty, size_t vector_size)
   return VectorType::get(ty, vector_size);
 }
 
-distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const std::vector<int>& order, const axes_t &axes, llvm::IRBuilder<> &builder, bool vectorize)
-    : tile(make_vector_ty(ty, vectorize?axes[0].contiguous:1), shapes), axes_(axes), order_(order), builder_(builder) {
-  vector_size_ = vectorize?ty_->getVectorNumElements():1;
+distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const std::vector<int>& order, const axes_t &axes, llvm::IRBuilder<> &builder)
+    : tile(ty, shapes), axes_(axes), order_(order), builder_(builder) {
   init_indices();
 }
 
@@ -73,12 +72,30 @@ indices_t distributed_tile::get_ordered_indices(unsigned id) {
 }
 
 
-void distributed_tile::for_each(std::function<void (indices_t)> fn) {
-  for(unsigned i = 0; i < ordered_indices_.size(); i++){
-    if(i % vector_size_ == 0)
-      fn(ordered_indices_[i]);
+void distributed_tile::for_each(std::function<void (indices_t)> fn, int start, int end) {
+  if(end < 0)
+    end = ordered_indices_.size() + end + 1;
+  for(unsigned i = start; i < end; i++)
+    fn(ordered_indices_[i]);
+}
+
+void distributed_tile::for_each(std::function<void(indices_t)> fn, std::vector<int> starts, std::vector<int> sizes){
+  int rank = sizes.size();
+  int len = 1;
+  for(int s: sizes)
+    len *= s;
+
+  for(int i = 0; i < len; i++){
+    indices_t idx(rank);
+    int current = i;
+    for(int k = 0; k < rank; k++){
+      idx[k] = axes_[k].values.at(starts[k] + current % sizes[k]);
+      current = current / sizes[k];
+    }
+    fn(idx);
   }
 }
+
 
 /* Shared Tile */
 void shared_tile::extract_constant(Value *arg, Value *&non_cst, Value *&cst) {
@@ -126,7 +143,9 @@ void shared_tile::extract_constant(const indices_t &arg_idx, indices_t &non_cst_
 }
 
 
-Value* shared_tile::shared_offset(llvm::IRBuilder<> &builder, const shapes_t& shapes, const std::vector<int>& perm, const std::vector<int>& order, indices_t idx) {
+Value* shared_tile::shared_offset(llvm::IRBuilder<> &builder, const shapes_t& shapes,
+                                  const std::vector<int>& perm, const std::vector<int>& order,
+                                  indices_t idx) {
   // strides
   std::vector<Value*> strides(order.size());
   strides[order[0]] = builder.getInt32(1);

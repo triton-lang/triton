@@ -128,22 +128,22 @@ private:
   Type *make_vector_ty(Type *ty, size_t vector_size);
 
 public:
-  distributed_tile(Type *ty, const shapes_t& shapes, const std::vector<int>& order, const axes_t &axes, Builder &builder, bool vectorize);
+  distributed_tile(Type *ty, const shapes_t& shapes, const std::vector<int>& order, const axes_t &axes, Builder &builder);
   void set_value(indices_t idx, Value *v);
   Value* get_value(indices_t idx);
   const std::vector<int>& get_order() { return order_; }
   unsigned get_linear_index(indices_t idx);
   indices_t get_ordered_indices(unsigned id);
-  void for_each(std::function<void(indices_t)> fn);
-  const distributed_axis &axis(unsigned dim) { return axes_.at(dim); }
+  void for_each(std::function<void(indices_t)> fn, int start = 0, int end = -1);
+  void for_each(std::function<void(indices_t)> fn, std::vector<int> start, std::vector<int> size);
 
+  const distributed_axis &axis(unsigned dim) { return axes_.at(dim); }
 private:
   axes_t axes_;
   std::vector<int> order_;
   indices_map_t indices_;
   values_map_t values_;
   ordered_indices_vec_t ordered_indices_;
-  size_t vector_size_;
   Builder &builder_;
 };
 

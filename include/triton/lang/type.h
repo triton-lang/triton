@@ -39,7 +39,7 @@ enum {
   S_EXTERN = 0x02,
   S_STATIC = 0x04,
   S_THREAD = 0x08,
-  S_AUTO = 0x10,
+  S_CONSTANT = 0x10,
   S_GLOBAL = 0x20,
 
   // Type specifier
@@ -73,7 +73,8 @@ struct Qualifier {
     CONST = 0x01,
     RESTRICT = 0x02,
     VOLATILE = 0x04,
-    MASK = CONST | RESTRICT | VOLATILE
+    CMEM = 0x08,
+    MASK = CONST | RESTRICT | VOLATILE | CMEM
   };
 };
 
@@ -111,6 +112,7 @@ public:
   bool IsConstQualified() const { return ptr_ & Qualifier::CONST; }
   bool IsRestrictQualified() const { return ptr_ & Qualifier::RESTRICT; }
   bool IsVolatileQualified() const { return ptr_ & Qualifier::VOLATILE; }
+  bool IsConstantQualified() const { return ptr_ & Qualifier::CMEM; }
 
 private:
   intptr_t ptr_;

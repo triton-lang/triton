@@ -148,9 +148,9 @@ public:
   // Factory methods
   static binary_operator *create(binary_op_t op, value *lhs, value *rhs,
                                  const std::string &name = "", instruction *next = nullptr);
-  static binary_operator *create_fneg(value *arg, const std::string &name = "", instruction *next = nullptr);
-  static binary_operator *create_neg(value *arg, const std::string &name = "", instruction *next = nullptr);
-  static binary_operator *create_not(value *arg, const std::string &name = "", instruction *next = nullptr);
+//  static binary_operator *create_fneg(value *arg, const std::string &name = "", instruction *next = nullptr);
+//  static binary_operator *create_neg(value *arg, const std::string &name = "", instruction *next = nullptr);
+//  static binary_operator *create_not(value *arg, const std::string &name = "", instruction *next = nullptr);
 
   _TRITON_DEFINE_CLONE(binary_operator)
   _TRITON_DEFINE_ACCEPT(binary_operator)
@@ -730,6 +730,17 @@ public:
                                      instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(copy_from_shared_inst)
   _TRITON_DEFINE_ACCEPT(copy_from_shared_inst)
+};
+
+class recoalesce_inst: public unary_inst{
+private:
+  using unary_inst::unary_inst;
+  std::string repr_impl() const { return "recoalesce_inst"; }
+
+public:
+  static recoalesce_inst* create(value *arg, const std::string &name = "", instruction *next = nullptr);
+  _TRITON_DEFINE_CLONE(recoalesce_inst)
+  _TRITON_DEFINE_ACCEPT(recoalesce_inst)
 };
 
 class barrier_inst: public instruction{

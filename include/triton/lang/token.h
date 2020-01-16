@@ -145,6 +145,7 @@ public:
     THREAD,	// _Thread_local
     AUTO,
     GLOBAL,
+    CMEM, // constant memory
 
     // STORAGE CLASS SPECIFIER END
     BREAK,

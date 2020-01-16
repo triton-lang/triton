@@ -57,7 +57,10 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
     }
     case Token::MASKED_DEREF: {
       ir::type* ret_ty = GenIRType(binary->Type(), *ctx_);
-      return set_ret(bld_->create_masked_load(rhs, lhs, ir::undef_value::get(ret_ty)));
+      ir::value* false_value = ir::undef_value::get(ret_ty->get_scalar_ty());
+      if(ret_ty->is_tile_ty())
+        false_value = bld_->create_splat(false_value, ret_ty->get_tile_shapes());
+      return set_ret(bld_->create_masked_load(rhs, lhs, false_value));
     }
     case Token::ELLIPSIS: {
       auto clhs = dynamic_cast<ir::constant_int*>(lhs);
@@ -76,7 +79,7 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
         return set_ret(bld_->create_add(lhs, rhs));
     case '-':
       if(binary->lhs_->Type()->ToPointer())
-        return set_ret(bld_->create_gep(lhs, {bld_->create_neg(rhs)}));
+        return set_ret(bld_->create_gep(lhs, {GenUnaryMinus(rhs)}));
       else if(flt)
         return set_ret(bld_->create_fsub(lhs, rhs));
       else
@@ -147,7 +150,7 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
       if(flt)
         return set_ret(bld_->create_fcmpONE(lhs, rhs));
       else
-        return set_ret(bld_->create_icmpEQ(lhs, rhs));
+        return set_ret(bld_->create_icmpNE(lhs, rhs));
     default:
       error_not_implemented();
   }
@@ -166,6 +169,16 @@ ir::reduce_inst::op_t reduce_op(int tag, bool is_float) {
   should_not_happen();
   return reduce_inst::op_t();
 }
+
+ir::value* Generator::GenUnaryMinus(ir::value* arg) {
+  ir::type *ty = arg->get_type();
+  ir::type *sca_ty = ty->get_scalar_ty();
+  ir::value *_0 = ir::constant_fp::get_zero_value_for_negation(sca_ty);
+  if(ty->is_tile_ty())
+    _0 = bld_->create_splat(_0, ty->get_tile_shapes());
+  return bld_->create_sub(_0, arg);
+}
+
 void Generator::VisitUnaryOp(UnaryOp* unary) {
   // recursion
   Visit(unary->operand_);
@@ -174,17 +187,17 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
   ir::type *arg_scal_ty = arg_ty->get_scalar_ty();
   // return
   switch  (unary->op_) {
-    case Token::PREFIX_INC: return error_not_implemented();
-    case Token::PREFIX_DEC: return error_not_implemented();
+    case Token::PREFIX_INC:  return error_not_implemented();
+    case Token::PREFIX_DEC:  return error_not_implemented();
     case Token::POSTFIX_INC: return error_not_implemented();
     case Token::POSTFIX_DEC: return error_not_implemented();
-    case Token::ADDR: return error_not_implemented();
-    case Token::DEREF: return set_ret(bld_->create_load(arg));
-    case Token::PLUS: return error_not_implemented();
-    case Token::MINUS: return error_not_implemented();
-    case '~': return set_ret(bld_->create_neg(arg));
-    case '!': return set_ret(bld_->create_not(arg));
-    case Token::CAST: return set_ret(GenCastOp(arg, GenIRType(unary->Type(), *ctx_)));
+    case Token::ADDR:        return error_not_implemented();
+    case Token::DEREF:       return set_ret(bld_->create_load(arg));
+    case Token::PLUS:        return error_not_implemented();
+    case Token::MINUS:       return set_ret(GenUnaryMinus(arg));
+    case '~':                return error_not_implemented();
+    case '!':                return error_not_implemented();
+    case Token::CAST:        return set_ret(GenCastOp(arg, GenIRType(unary->Type(), *ctx_)));
     case Token::REDUCE: {
       int ax, tag;
       UnaryOp::decodeRed(unary->info_, ax, tag);
@@ -232,10 +245,53 @@ void Generator::VisitFuncCall(FuncCall* funcCall) {
     else
       return should_not_happen();
   }
+  if(name == "get_num_programs"){
+    VisitExpr(funcCall->Args()->at(0));
+    ir::value* ret = ret_;
+    if(auto axis = dynamic_cast<ir::constant_int*>(ret))
+      return set_ret(bld_->create_get_num_program(axis->get_value()));
+    else
+      return should_not_happen();
+  }
+  if(name == "atomic_cas"){
+    VisitExpr(funcCall->Args()->at(0));
+    ir::value* ptr = ret_;
+    VisitExpr(funcCall->Args()->at(1));
+    ir::value* cmp = ret_;
+    VisitExpr(funcCall->Args()->at(2));
+    ir::value* val = ret_;
+    return set_ret(bld_->create_atomic_cas(ptr, cmp, val));
+  }
+  if(name == "atomic_xchg"){
+    VisitExpr(funcCall->Args()->at(0));
+    ir::value* ptr = ret_;
+    VisitExpr(funcCall->Args()->at(1));
+    ir::value* val = ret_;
+    return set_ret(bld_->create_atomic_exch(ptr, val));
+  }
   if(name == "sqrtf"){
     VisitExpr(funcCall->Args()->at(0));
     ir::value* ret = ret_;
     return set_ret(bld_->create_sqrt(ret));
+  }
+  if(name == "calloc"){
+    VisitExpr(funcCall->Args()->at(0));
+    ir::value* ret = ret_;
+    ir::constant_int *size = dynamic_cast<ir::constant_int*>(ret);
+    assert(size);
+    ir::alloc_const* alloc = new ir::alloc_const(bld_->get_int8_ty(), size);
+    mod_->add_alloc(alloc);
+    return set_ret(alloc);
+  }
+  //TODO: integrate this into conditionalop
+  if(name == "select"){
+    VisitExpr(funcCall->Args()->at(0));
+    ir::value* cond = ret_;
+    VisitExpr(funcCall->Args()->at(1));
+    ir::value* true_val = ret_;
+    VisitExpr(funcCall->Args()->at(2));
+    ir::value* false_val = ret_;
+    return set_ret(bld_->create_select(cond, true_val, false_val));
   }
   return error_not_implemented();
 }
@@ -350,12 +406,15 @@ void Generator::VisitForStmt(ForStmt *forStmt) {
     ir::value *cond = ret_;
     return bld_->create_cond_br(cond, loop_bb, next_bb);
   });
-  VisitStmt(init_);
-  VisitExpr(cond_);
-  ir::value *cond = ret_;
-  bld_->create_cond_br(cond, loop_bb, next_bb);
+  if(init_)
+    VisitStmt(init_);
+//  VisitExpr(cond_);
+//  ir::value *cond = ret_;
+//  bld_->create_cond_br(cond, loop_bb, next_bb);
+  bld_->create_br(loop_bb);
   bld_->set_insert_point(loop_bb);
-  VisitStmt(body_);
+  if(body_)
+    VisitStmt(body_);
   if(!is_terminator(ret_))
     mod_->get_continue_fn()();
   ir::basic_block *stop_bb = bld_->get_insert_block();
@@ -512,6 +571,8 @@ ir::value* Generator::GenNumcastOp(ir::value*src, ir::type* dst_ty) {
   else if(src_scalar_ty->is_integer_ty() && dst_scalar_ty->is_integer_ty() &&
           src_scalar_ty->get_integer_bitwidth())
     return bld_->create_int_cast(src, dst_ty, dst_signed);
+  else if(src_scalar_ty->is_pointer_ty() && dst_scalar_ty->is_pointer_ty())
+    return bld_->create_cast(ir::BitCast, src, dst_ty);
   else{
     should_not_happen();
     return nullptr;
@@ -611,6 +672,8 @@ ir::type* Generator::GenIRFuncType(FuncType* type, ir::context& ctx) {
 ir::type* Generator::GenIRPointerType(PointerType* type, ir::context& ctx) {
   ir::type* ele_ty = GenIRType(type->Derived().GetPtr(), ctx);
   unsigned addr_space = 1;
+  if(type->Derived().IsConstantQualified())
+    addr_space = 4;
   return ir::pointer_type::get(ele_ty, addr_space);
 }
 

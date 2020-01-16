@@ -159,7 +159,7 @@ bool diff(const std::vector<T>& hc, const std::vector<T>& rc) {
 if(hc.size() != rc.size())
     return false;
 for(size_t i = 0; i < hc.size(); i++)
-  if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-4){
+  if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
     std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
     return false;
   }

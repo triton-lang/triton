@@ -184,10 +184,20 @@ function::caller function::autotune(driver::stream* stream, const grid_fn_ty& gr
     // kernel uses too much resources
     if(!bin)
       return;
+    // copy constants
+    std::unique_ptr<driver::buffer> buffer;
+    for(ir::alloc_const* alloc: ir->allocs()){
+      std::string name = alloc->get_name();
+      auto it = cst_.find(name);
+      if(it == cst_.end())
+        throw std::runtime_error("constant not set before execution");
+      buffer = bin->symbol(name.c_str());
+      stream->write(&*buffer, true, 0, it->second);
+    }
     // benchmark
     ir::function *tmp = ir->get_function_list()[0];
     caller call(tmp, std::move(bin), opt);
-    double ts = tools::bench([&]() { call(stream, grid_fn(opt), args); }, stream);
+    double ts = tools::bench([&]() { call(stream, grid_fn(opt), args); }, stream, true);
     // save best
     if(ts < best_ts) {
       best_ts = ts;
@@ -222,20 +232,14 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::generator isel(&axes, &layouts, &align, &allocation, target.get(), opt.num_warps);
   // run passes
   dce.run(module);
-//  ir::print(module, std::cout);
-
   disassociate.run(module);
-
-//  ir::print(module, std::cout);
-
   dce.run(module);
-//  ir::print(module, std::cout);
-
   peephole.run(module);
   dce.run(module);
   align.run(module);
   cts.run(module);
   axes.run(module);
+//  ir::print(module, std::cout);
   layouts.run(module);
   coalesce.run(module);
   dce.run(module);
@@ -246,17 +250,19 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   align.run(module);
   axes.run(module);
+//  ir::print(module, std::cout);
   layouts.run(module);
   liveness.run(module);
   allocation.run(module);
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     return std::unique_ptr<driver::module>();
   barriers.run(module);
-//  std::cout << "isel" << std::endl;
+//  ir::print(module, std::cout);
   isel.visit(module, *llvm);
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   // done
+//  exit(EXIT_FAILURE);
   return res;
 }
 
@@ -273,8 +279,13 @@ R"(
 #define __aligned(A)    __attribute__((aligned(A)))
 #define __multipleof(A) __attribute__((multipleof(A)))
 
+extern int atomic_cas(int*, int, int);
+extern int atomic_xchg(int*, int);
 extern int get_program_id(int);
+extern int get_num_programs(int);
 extern float sqrtf(float);
+extern int select(bool, int, int);
+extern char __constant__ * calloc(int);
 )";
 }
 
@@ -314,6 +325,10 @@ void function::operator()(const std::vector<arg>& args, const grid_fn_ty& grid_f
 
 void function::operator()(const std::vector<arg>& args, const grid_t& grid, driver::stream *stream) {
   return this->operator()(args, [&grid](const options_t&){ return grid; }, stream);
+}
+
+void function::set_cst(const std::string& name, void* data, size_t n_bytes) {
+   cst_[name] = std::vector<char>((char*)data, (char*)data + n_bytes);
 }
 
 }

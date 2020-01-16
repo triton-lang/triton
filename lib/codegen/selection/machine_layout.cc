@@ -143,7 +143,7 @@ tile *machine_layout_distributed_t::create(ir::value *v) {
       axes[d].values = {builder_->getInt32(0)};
     }
   }
-  return new distributed_tile(ty, shapes, layout_->order, axes, *builder_, false);
+  return new distributed_tile(ty, shapes, layout_->order, axes, *builder_);
 }
 
 machine_layout_hmma_884_t::machine_layout_hmma_884_t(Module *mod, Builder *builder,

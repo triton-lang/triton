@@ -47,6 +47,7 @@ protected:
   };
 
   void set_ret(ir::value* value);
+  ir::value *GenUnaryMinus(ir::value* arg);
 
 public:
   Generator(Parser* parser) : parser_(parser) {}
