@@ -75,11 +75,11 @@ bool is_hmma_c(ir::value *v){
   return result;
 }
 
-const layout_t* layout::get(size_t id) const {
+layout_t* layout::get(size_t id) {
   return layouts_.at(id);
 }
 
-const layout_t* layout::get(ir::value *v) const {
+layout_t* layout::get(ir::value *v) {
   return layouts_.at(groups_.at(v));
 }
 
@@ -140,8 +140,7 @@ layout_t::layout_t(layout_type_t _type,
                    const std::vector<int> &_axes,
                    const std::vector<unsigned> &_shapes,
                    const std::vector<ir::value *> &_values, ir::type *_ty,
-                   size_t _id,
-                   analysis::align* align): type(_type), axes(_axes), shapes(_shapes), values(_values), id(_id), ty(_ty) {
+                   analysis::align* align): type(_type), axes(_axes), shapes(_shapes), values(_values), ty(_ty) {
   // io pointer
   std::set<ir::value*> ptr;
   for(ir::value* v: values)
@@ -159,6 +158,21 @@ layout_t::layout_t(layout_type_t _type,
   }
 }
 
+// downcast
+layout_hmma_884_t* layout_t::to_hmma884() {
+  assert(type == HMMA_884);
+  return static_cast<layout_hmma_884_t*>(this);
+}
+
+layout_scanline_t* layout_t::to_scanline() {
+  assert(type == SCANLINE);
+  return static_cast<layout_scanline_t*>(this);
+}
+
+layout_shared_t* layout_t::to_shared() {
+  assert(type == SHARED);
+  return static_cast<layout_shared_t*>(this);
+}
 
 inline unsigned clamp(unsigned x, unsigned lo, unsigned hi) {
   return std::min(std::max(x, lo), hi);
@@ -167,8 +181,8 @@ inline unsigned clamp(unsigned x, unsigned lo, unsigned hi) {
 layout_hmma_884_t::layout_hmma_884_t(size_t num_warps,
                                      const std::vector<int>& _axes,
                                      const std::vector<unsigned>& _shapes,
-                                     const std::vector<ir::value *> &values, ir::type *_ty, size_t _id,
-                                     analysis::align* align): layout_t(HMMA_884, _axes, _shapes, values, _ty, _id, align) {
+                                     const std::vector<ir::value *> &values, ir::type *_ty,
+                                     analysis::align* align): layout_t(HMMA_884, _axes, _shapes, values, _ty, align) {
   unsigned shape_0 = shapes[0];
   unsigned shape_1 = shapes[1];
   /* fragments per warp */
@@ -210,8 +224,7 @@ layout_scanline_t::layout_scanline_t(size_t num_warps,
                                      const std::vector<int>& _axes,
                                      const std::vector<unsigned>& _shapes,
                                      const std::vector<ir::value *> &values, ir::type *_ty,
-                                     size_t _id,
-                                     analysis::align* align): layout_t(SCANLINE, _axes, _shapes, values, _ty, _id, align){
+                                     analysis::align* align): layout_t(SCANLINE, _axes, _shapes, values, _ty, align){
   unsigned size = std::accumulate(shapes.begin(), shapes.end(), 1, std::multiplies<int>());
   unsigned num_threads = num_warps * 32;
   nts.resize(shapes.size());
@@ -295,8 +308,7 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
                                  const std::vector<unsigned>& _shapes,
                                  const std::vector<ir::value *> &values,
                                  ir::type *ty,
-                                 size_t _id,
-                                 analysis::align* align): layout_t(SHARED, _axes, _shapes, values, ty, _id, align) {
+                                 analysis::align* align): layout_t(SHARED, _axes, _shapes, values, ty, align) {
 
   size = 0;
 
@@ -335,7 +347,7 @@ layout_shared_t::layout_shared_t(const layout_t *arg,
 //  else
 //    order = row;
   // padding
-  pad = 0;
+  size_t pad = 0;
   if(hmma_dot_a){
     bool row = is_trans(hmma_dot_a) ^ order[0] != 0;
     pad = 24 - shapes[row ? 0 : 1] % 32;
@@ -375,15 +387,15 @@ void layout::create(size_t id, const std::vector<ir::value*>& values) {
   });
   // type
   if(it_hmma_c != values.end())
-    layouts_[id] = new layout_hmma_884_t(num_warps_, axes, shapes, values, largest->get_type()->get_scalar_ty(), id, align_);
+    layouts_[id] = new layout_hmma_884_t(num_warps_, axes, shapes, values, largest->get_type()->get_scalar_ty(), align_);
   else if(it_cts != values.end()){
     ir::copy_to_shared_inst *cts = (ir::copy_to_shared_inst*)*it_cts;
     ir::value *arg = cts->get_operand(0);
     create(groups_.at(arg), values_.at(groups_.at(arg)));
-    layouts_[id] = new layout_shared_t(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), id, align_);
+    layouts_[id] = new layout_shared_t(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), align_);
   }
   else
-    layouts_[id] = new layout_scanline_t(num_warps_, axes, shapes, values, largest->get_type()->get_scalar_ty(), id, align_);
+    layouts_[id] = new layout_scanline_t(num_warps_, axes, shapes, values, largest->get_type()->get_scalar_ty(), align_);
 }
 
 void layout::run(ir::module &mod) {
@@ -410,18 +422,18 @@ void layout::run(ir::module &mod) {
       // shape
       auto shapes = arg->get_type()->get_tile_shapes();
       unsigned shape_ax = shapes[axis];
-      const layout_t *layout = get(arg);
+      layout_scanline_t *layout = get(arg)->to_scanline();
       unsigned per_thread = layout->nts[axis];
       unsigned depth = shape_ax / per_thread;
       shapes[axis] = depth;
       // create layout
-      layouts_[id] = new layout_shared_t(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), id, align_);
+      layouts_[id] = new layout_shared_t(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_);
       tmp_[red] = id;
     }
     if(auto *recoalasce = dynamic_cast<ir::recoalesce_inst*>(i)){
       ir::value *val = recoalasce->get_operand(0);
-      const layout_t* in_layout = get(val);
-      const layout_t* out_layout = get(i);
+      layout_t* in_layout = get(val);
+      layout_t* out_layout = get(i);
       if(in_layout->type != HMMA_884)
         return;
       id++;
@@ -431,14 +443,14 @@ void layout::run(ir::module &mod) {
       shape[ld] = in_shape[ld];
       for(size_t k = 0; k < in_shape.size(); k++)
         if(k != ld)
-          shape[k] = 4*in_layout->fpw[k]*in_layout->wpt[k];
+          shape[k] = 4*in_layout->to_hmma884()->fpw[k]*in_layout->to_hmma884()->wpt[k];
       // create layout
-      layouts_[id] = new layout_shared_t(out_layout, axes_->get(val), shape, {recoalasce}, val->get_type()->get_scalar_ty(), id, align_);
+      layouts_[id] = new layout_shared_t(out_layout, axes_->get(val), shape, {recoalasce}, val->get_type()->get_scalar_ty(), align_);
       tmp_[recoalasce] = id;
     }
     if(auto *atom = dynamic_cast<ir::atomic_cas_inst*>(i)){
       id++;
-      layouts_[id] = new layout_shared_t(nullptr, {}, {1}, {atom}, atom->get_type()->get_scalar_ty(), id, align_);
+      layouts_[id] = new layout_shared_t(nullptr, {}, {1}, {atom}, atom->get_type()->get_scalar_ty(), align_);
       tmp_[atom] = id;
     }
   });

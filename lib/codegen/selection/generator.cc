@@ -655,13 +655,14 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
                                              "{$8, $9}, "
                                              "{$10, $11}, "
                                              "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
+  analysis::layout_hmma_884_t* layout = layouts_->get(dot)->to_hmma884();
 
-  unsigned fpw_0 = layouts_->get(dot)->fpw.at(0);
-  unsigned fpw_1 = layouts_->get(dot)->fpw.at(1);
+  unsigned fpw_0 = layout->fpw.at(0);
+  unsigned fpw_1 = layout->fpw.at(1);
   unsigned wts_0 = fpw_0 * 8;
   unsigned wts_1 = fpw_1 * 8;
-  unsigned wpt_0 = layouts_->get(dot)->wpt.at(0);
-  unsigned wpt_1 = layouts_->get(dot)->wpt.at(1);
+  unsigned wpt_0 = layout->wpt.at(0);
+  unsigned wpt_1 = layout->wpt.at(1);
   unsigned stride_rep_i = wpt_0 * wts_0;
   unsigned stride_rep_j = wpt_1 * wts_1;
   unsigned num_rep_i = shapes[0] / stride_rep_i;
@@ -925,8 +926,8 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   // pointer to temporary shared memory
   Type *ty = llvm_type(rc->get_type()->get_scalar_ty(), *ctx_);
   // layouts
-  const analysis::layout_t* in_layout = layouts_->get(op);
-  const analysis::layout_t* out_layout = layouts_->get(rc);
+  analysis::layout_hmma_884_t* in_layout = layouts_->get(op)->to_hmma884();
+  analysis::layout_scanline_t* out_layout = layouts_->get(rc)->to_scanline();
   // machine tiles
   distributed_tile *in_dt = (distributed_tile*)(tmap_.at(op));
   distributed_tile *out_dt = (distributed_tile*)(tmap_.at(rc));
@@ -1026,14 +1027,14 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
 
 void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   unsigned vector_size = 1;
-  auto x_order = layouts_->get(cts)->order;
   ir::value *arg = cts->get_operand(0);
-  auto arg_order = layouts_->get(arg)->order;
+  analysis::layout_shared_t* out_layout = layouts_->get(cts)->to_shared();
+  analysis::layout_scanline_t* in_layout = layouts_->get(arg)->to_scanline();
+  auto out_order = out_layout->order;
+  auto in_order = in_layout->order;
   // tiles
-  if(x_order == arg_order){
-    size_t ld = arg_order[0];
-    vector_size = layouts_->get(arg)->nts.at(ld);
-  }
+  if(out_order == in_order)
+    vector_size = in_layout->nts.at(in_order[0]);
 
   std::map<unsigned, Value*> packets;
   for_each(arg, [&](indices_t idx){

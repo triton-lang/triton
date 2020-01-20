@@ -11,13 +11,6 @@ using namespace llvm;
 /* Distributed Tile */
 void distributed_tile::init_indices() {
   std::vector<size_t> id(axes_.size(), 0);
-  // create iteration order
-  std::vector<size_t> order(id.size());
-  std::iota(order.begin(), order.end(), 0);
-  auto cmp = [&](int x, int y) {
-    return order_[x] < order_[y];
-  };
-  std::sort(order.begin(), order.end(), cmp);
   // build
   size_t k = 0;
   while(true) {
@@ -28,12 +21,12 @@ void distributed_tile::init_indices() {
     indices_[current] = sz;
     values_[current] = nullptr;
     ordered_indices_.push_back(current);
-    id[order[0]]++;
-    while(id[order[k]] == axes_[order[k]].values.size()){
+    id[order_[0]]++;
+    while(id[order_[k]] == axes_[order_[k]].values.size()){
       if(k == id.size() - 1)
         return;
-      id[order[k++]] = 0;
-      id[order[k]]++;
+      id[order_[k++]] = 0;
+      id[order_[k]]++;
     }
     k = 0;
   }

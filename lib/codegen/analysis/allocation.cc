@@ -15,22 +15,22 @@ void allocation::run(ir::module &mod) {
   using std::min;
   typedef std::multimap<unsigned, segment> triples_map_type;
 
-  std::vector<layout_t*> I;
+  std::vector<layout_shared_t*> I;
   for(auto x: liveness_->get())
     I.push_back(x.first);
-  std::vector<layout_t*> J = I;
+  std::vector<layout_shared_t*> J = I;
 
   triples_map_type H;
   H.insert({0, segment{0, INT_MAX}});
 
-  std::vector<layout_t*> V;
-  std::map<layout_t*, unsigned> starts;
+  std::vector<layout_shared_t*> V;
+  std::map<layout_shared_t*, unsigned> starts;
   while(!J.empty()){
     auto h_it = H.begin();
     unsigned w = h_it->first;
     segment xh = h_it->second;
     H.erase(h_it);
-    auto j_it = std::find_if(J.begin(), J.end(), [&](layout_t* JJ){
+    auto j_it = std::find_if(J.begin(), J.end(), [&](layout_shared_t* JJ){
       segment xj = liveness_->get(JJ);
       bool res = xj.intersect(xh);
       for(auto val: H)
@@ -52,10 +52,10 @@ void allocation::run(ir::module &mod) {
   }
 
   // Build interference graph
-  std::map<layout_t*, std::set<layout_t*>> interferences;
-  for(layout_t* x: V)
-  for(layout_t* y: V){
-    if(x->id == y->id)
+  std::map<layout_shared_t*, std::set<layout_shared_t*>> interferences;
+  for(layout_shared_t* x: V)
+  for(layout_shared_t* y: V){
+    if(x == y)
       continue;
     unsigned X0 = starts[x], Y0 = starts[y];
     unsigned NX = x->size;
@@ -68,17 +68,17 @@ void allocation::run(ir::module &mod) {
   }
 
   // Initialize colors
-  std::map<layout_t*, int> colors;
-  for(layout_t* X: V)
-    colors[X] = (X->id==V[0]->id)?0:-1;
+  std::map<layout_shared_t*, int> colors;
+  for(layout_shared_t* X: V)
+    colors[X] = (X==V[0])?0:-1;
 
 
   // First-fit graph coloring
   std::vector<bool> available(V.size());
-  for(layout_t* x: V){
+  for(layout_shared_t* x: V){
     // Non-neighboring colors are available
     std::fill(available.begin(), available.end(), true);
-    for(layout_t* Y: interferences[x]){
+    for(layout_shared_t* Y: interferences[x]){
       int color = colors[Y];
       if(color >= 0)
         available[color] = false;
@@ -89,16 +89,16 @@ void allocation::run(ir::module &mod) {
   }
 
   // Finalize allocation
-  for(layout_t* x: V){
+  for(layout_shared_t* x: V){
     unsigned Adj = 0;
-    for(layout_t* y: interferences[x])
+    for(layout_shared_t* y: interferences[x])
       Adj = std::max<unsigned>(Adj, starts[y] + y->size);
     offsets_[x] = starts[x] + colors[x] * Adj;
   }
 
   // Save maximum size of induced memory space
   allocated_size_ = 0;
-  for(layout_t* x: V)
+  for(layout_shared_t* x: V)
     allocated_size_ = std::max<size_t>(allocated_size_, starts[x] + x->size);
 }
 
