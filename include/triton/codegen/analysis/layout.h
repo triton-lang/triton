@@ -50,31 +50,31 @@ public:
   virtual void visit_layout_shared(layout_shared_t*) = 0;
 };
 
+class layout_hmma_884_t;
+class layout_scanline_t;
+class layout_shared_t;
+
 struct layout_t {
   layout_t(layout_type_t _type,
            const std::vector<int>& _axes,
            const std::vector<unsigned> &_shapes,
            const std::vector<ir::value *> &_values,
            ir::type *_ty,
-           size_t _id,
            analysis::align* align);
-
+  // visitor
   virtual void accept(layout_visitor* vst) = 0;
+  // downcast
+  layout_hmma_884_t* to_hmma884();
+  layout_scanline_t* to_scanline();
+  layout_shared_t* to_shared();
+
 
   layout_type_t type;
   std::vector<int> axes;
   std::vector<unsigned> shapes;
   std::vector<ir::value*> values;
   std::vector<int> order;
-  size_t id;
-  size_t size;
-  std::shared_ptr<double_buffer_info_t> double_buffer;
   ir::type *ty;
-  size_t pad;
-  std::vector<int> mts;
-  std::vector<int> nts;
-  std::vector<int> fpw;
-  std::vector<int> wpt;
 };
 
 struct layout_hmma_884_t: public layout_t {
@@ -83,9 +83,11 @@ struct layout_hmma_884_t: public layout_t {
                     const std::vector<unsigned>& _shapes,
                     const std::vector<ir::value *> &_values,
                     ir::type *_ty,
-                    size_t _id,
                     analysis::align* align);
   void accept(layout_visitor* vst) { vst->visit_layout_hmma_884(this); }
+
+  std::vector<int> fpw;
+  std::vector<int> wpt;
 };
 
 struct layout_scanline_t: public layout_t {
@@ -94,9 +96,11 @@ struct layout_scanline_t: public layout_t {
                     const std::vector<unsigned>& _shapes,
                     const std::vector<ir::value *> &values,
                     ir::type *_ty,
-                    size_t _id,
                     analysis::align* align);
   void accept(layout_visitor* vst) { vst->visit_layout_scanline(this); }
+
+  std::vector<int> mts;
+  std::vector<int> nts;
 };
 
 struct layout_shared_t: public layout_t {
@@ -105,9 +109,11 @@ struct layout_shared_t: public layout_t {
                     const std::vector<unsigned>& _shapes,
                     const std::vector<ir::value *> &values,
                     ir::type *ty,
-                    size_t _id,
                     analysis::align* align);
   void accept(layout_visitor* vst) { vst->visit_layout_shared(this); }
+
+  std::shared_ptr<double_buffer_info_t> double_buffer;
+  size_t size;
 };
 
 
@@ -126,18 +132,6 @@ private:
 
   void create(size_t id, const std::vector<ir::value*>& values);
 
-//  size_t shared_tmp_req(ir::instruction* i) {
-//    switch(i->get_id()) {
-//      case ir::INST_REDUCE: {
-//        ir::reduce_inst *red = (ir::reduce_inst*)i;
-//        ir::type *ty = red->get_type();
-
-
-//      }
-//      default: return 0;
-//    }
-//  }
-
 public:
   // constructor
   layout(analysis::axes *axes, analysis::align *align, size_t num_warps);
@@ -146,8 +140,8 @@ public:
   unsigned layout_of(ir::value *value) const;
   const std::vector<ir::value*>& values_of(unsigned id) const;
   size_t num_layouts() const;
-  const layout_t* get(size_t id) const;
-  const layout_t* get(ir::value *v) const;
+  layout_t* get(size_t id);
+  layout_t* get(ir::value *v);
   std::map<size_t, layout_t*> &get_all();
   size_t tmp(ir::instruction* i);
 

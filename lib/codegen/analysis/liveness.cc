@@ -27,9 +27,9 @@ void liveness::run(ir::module &mod) {
 
   // create live intervals
   for(auto &x: layouts_->get_all()) {
-    layout_t* layout = x.second;
-    if(layout->type != SHARED)
+    if(x.second->type != SHARED)
       continue;
+    layout_shared_t* layout = x.second->to_shared();
     // users
     std::set<ir::user*> users;
     for(ir::value *v: layout->values){

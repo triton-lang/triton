@@ -42,14 +42,14 @@ struct segment {
 
 class liveness {
 private:
-  typedef std::map<layout_t*, segment>    intervals_map_t;
+  typedef std::map<layout_shared_t*, segment>    intervals_map_t;
 
 public:
   // constructor
   liveness(layout *l): layouts_(l){ }
   // accessors
   const intervals_map_t& get()  const { return intervals_; }
-  segment get(layout_t* v)  const { return intervals_.at(v); }
+  segment get(layout_shared_t* v)  const { return intervals_.at(v); }
   // run
   void run(ir::module &mod);
 

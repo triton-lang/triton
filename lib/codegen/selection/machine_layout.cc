@@ -72,7 +72,7 @@ inline int32_t ceil(int32_t num, int32_t div){
 
 
 machine_layout_shared_t::machine_layout_shared_t(Module *mod, Builder *builder, target *tgt, analysis::allocation* alloc,
-                                                 Value *&sh_mem_ptr, analysis::layout_t *layout,
+                                                 Value *&sh_mem_ptr, analysis::layout_shared_t *layout,
                                                  std::map<ir::value *, Value *>& vmap,
                                                  std::map<ir::value *, tile *>& tmap)
   : mod_(mod), builder_(builder), tgt_(tgt), alloc_(alloc), sh_mem_ptr_(sh_mem_ptr), layout_(layout), vmap_(vmap), tmap_(tmap) {
@@ -132,7 +132,10 @@ machine_layout_distributed_t::machine_layout_distributed_t(Module *mod, Builder 
 tile *machine_layout_distributed_t::create(ir::value *v) {
   Type *ty = llvm_type(v->get_type()->get_scalar_ty(), builder_->getContext());
   const auto &shapes = v->get_type()->get_tile_shapes();
-  std::vector<distributed_axis> axes(shapes.size());
+  size_t rank = shapes.size();
+  std::vector<distributed_axis> axes(rank);
+  std::vector<int> order(rank);
+  // compute axes
   for(size_t d = 0; d < shapes.size(); d++){
     if(shapes[d] > 1){
       unsigned x = a_axes_->get(v, d);
@@ -143,7 +146,22 @@ tile *machine_layout_distributed_t::create(ir::value *v) {
       axes[d].values = {builder_->getInt32(0)};
     }
   }
-  return new distributed_tile(ty, shapes, layout_->order, axes, *builder_);
+  // compute order
+  std::iota(order.begin(), order.end(), 0);
+  auto cmp = [&](int x, int y) {
+    unsigned axx = a_axes_->get(v, x);
+    unsigned axy = a_axes_->get(v, y);
+    auto itx = std::find(layout_->axes.begin(), layout_->axes.end(), axx);
+    auto ity = std::find(layout_->axes.begin(), layout_->axes.end(), axy);
+    size_t posx = std::distance(layout_->axes.begin(), itx);
+    size_t posy = std::distance(layout_->axes.begin(), ity);
+    if(posx < rank && posy < rank)
+      return layout_->order[posx] < layout_->order[posy];
+    return false;
+  };
+  std::sort(order.begin(), order.end(), cmp);
+
+  return new distributed_tile(ty, shapes, order, axes, *builder_);
 }
 
 machine_layout_hmma_884_t::machine_layout_hmma_884_t(Module *mod, Builder *builder,

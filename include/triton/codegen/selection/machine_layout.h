@@ -71,7 +71,8 @@ public:
 
 class machine_layout_shared_t: public machine_layout_t {
 public:
-  machine_layout_shared_t(Module *mod, Builder *builder, target *tgt, analysis::allocation* alloc, Value *&sh_mem_ptr, analysis::layout_t* layout,
+  machine_layout_shared_t(Module *mod, Builder *builder, target *tgt, analysis::allocation* alloc, Value *&sh_mem_ptr,
+                          analysis::layout_shared_t* layout,
                           std::map<ir::value *, Value *>& vmap,
                           std::map<ir::value *, tile *>& tmap);
 
@@ -82,7 +83,7 @@ public:
   target *tgt_;
   analysis::allocation* alloc_;
   Value *&sh_mem_ptr_;
-  analysis::layout_t* layout_;
+  analysis::layout_shared_t* layout_;
   std::map<ir::value *, Value *>& vmap_;
   std::map<ir::value *, tile *>& tmap_;
 
