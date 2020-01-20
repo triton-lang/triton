@@ -17,7 +17,7 @@ namespace analysis{
 
 class allocation;
 class liveness;
-class layout;
+class layouts;
 class cts;
 
 }
@@ -41,13 +41,13 @@ private:
                                                      std::set<ir::instruction *> &insert_loc, std::set<triton::ir::value *> &safe_war);
 
 public:
-  membar(analysis::liveness *liveness, analysis::layout *layouts, analysis::allocation *alloc):
+  membar(analysis::liveness *liveness, analysis::layouts *layouts, analysis::allocation *alloc):
     liveness_(liveness), layouts_(layouts), alloc_(alloc) {}
   void run(ir::module &mod);
 
 private:
   analysis::liveness *liveness_;
-  analysis::layout *layouts_;
+  analysis::layouts *layouts_;
   analysis::allocation *alloc_;
 };
 

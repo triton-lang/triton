@@ -220,7 +220,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   codegen::analysis::align align;
   codegen::analysis::axes axes;
   codegen::transform::disassociate disassociate;
-  codegen::analysis::layout layouts(&axes, &align, opt.num_warps);
+  codegen::analysis::layouts layouts(&axes, &align, opt.num_warps);
   codegen::analysis::liveness liveness(&layouts);
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation);
@@ -239,7 +239,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   align.run(module);
   cts.run(module);
   axes.run(module);
-//  ir::print(module, std::cout);
   layouts.run(module);
   coalesce.run(module);
   dce.run(module);
@@ -250,15 +249,14 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
   dce.run(module);
   align.run(module);
   axes.run(module);
-//  ir::print(module, std::cout);
   layouts.run(module);
   liveness.run(module);
   allocation.run(module);
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     return std::unique_ptr<driver::module>();
   barriers.run(module);
-//  ir::print(module, std::cout);
   isel.visit(module, *llvm);
+
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   // done

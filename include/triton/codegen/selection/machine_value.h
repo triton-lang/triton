@@ -47,11 +47,11 @@ class align;
 class allocation;
 class cts;
 class axes;
-class layout;
+class layouts;
 }
 
 class distributed_axis;
-class machine_layout_t;
+class machine_data_layout;
 class tile;
 class shared_tile;
 class distributed_tile;

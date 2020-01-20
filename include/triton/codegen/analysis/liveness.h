@@ -23,8 +23,8 @@ namespace analysis{
 typedef unsigned slot_index;
 
 class tiles;
-class layout;
-class layout_t;
+class layouts;
+class data_layout;
 
 struct segment {
   slot_index start;
@@ -42,20 +42,20 @@ struct segment {
 
 class liveness {
 private:
-  typedef std::map<layout_shared_t*, segment>    intervals_map_t;
+  typedef std::map<shared_layout*, segment>    intervals_map_t;
 
 public:
   // constructor
-  liveness(layout *l): layouts_(l){ }
+  liveness(layouts *l): layouts_(l){ }
   // accessors
   const intervals_map_t& get()  const { return intervals_; }
-  segment get(layout_shared_t* v)  const { return intervals_.at(v); }
+  segment get(shared_layout* v)  const { return intervals_.at(v); }
   // run
   void run(ir::module &mod);
 
 private:
   // analysis
-  layout *layouts_;
+  layouts *layouts_;
   intervals_map_t intervals_;
 };
 

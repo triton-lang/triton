@@ -27,18 +27,18 @@ void liveness::run(ir::module &mod) {
 
   // create live intervals
   for(auto &x: layouts_->get_all()) {
-    if(x.second->type != SHARED)
+    shared_layout* layout = x.second->to_shared();
+    if(!layout)
       continue;
-    layout_shared_t* layout = x.second->to_shared();
     // users
     std::set<ir::user*> users;
-    for(ir::value *v: layout->values){
+    for(ir::value *v: layout->get_values()){
       for(ir::user *u: v->get_users())
         users.insert(u);
     }
     // compute intervals
     unsigned start = INT32_MAX;
-    for(ir::value *v: layout->values)
+    for(ir::value *v: layout->get_values())
       if(indices.find(v) != indices.end())
         start = std::min(start, indices.at(v));
     unsigned end = 0;

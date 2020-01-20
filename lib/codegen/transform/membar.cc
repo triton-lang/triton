@@ -35,10 +35,11 @@ void membar::add_reference(ir::value *v, interval_vec_t &res){
     return;
   if(!i->get_type()->is_tile_ty())
     return;
-  if(alloc_->has_offset(layouts_->get(v))){
-    unsigned offset = alloc_->offset(layouts_->get(v));
-    unsigned size = layouts_->get(v)->to_shared()->size;
-    res.push_back(interval_t(offset, offset + size));
+  analysis::shared_layout* layout = layouts_->get(v)->to_shared();
+  assert(layout);
+  if(alloc_->has_offset(layout)){
+    unsigned offset = alloc_->offset(layout);
+    res.push_back(interval_t(offset, offset + layout->get_size()));
   }
 }
 
@@ -119,13 +120,11 @@ void membar::run(ir::module &mod) {
   // without needing synchronization
   std::set<ir::value*> safe_war;
   for(const auto& x: layouts_->get_all()){
-    if(x.second->type != analysis::SHARED)
+    analysis::shared_layout* layout = x.second->to_shared();
+    if(!layout || !layout->get_double_buffer())
       continue;
-    analysis::layout_shared_t* layout = x.second->to_shared();
-    if(!layout->double_buffer)
-      continue;
-    for(ir::value *v: layout->values)
-      if(v != layout->double_buffer->phi)
+    for(ir::value *v: layout->get_values())
+      if(v != layout->get_double_buffer()->phi)
         safe_war.insert(v);
   }
 

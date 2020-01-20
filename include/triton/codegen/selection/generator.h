@@ -35,7 +35,7 @@ class align;
 class allocation;
 class cts;
 class axes;
-class layout;
+class layouts;
 }
 // typedef
 typedef llvm::IRBuilder<llvm::ConstantFolder,
@@ -50,7 +50,7 @@ typedef llvm::ArrayType ArrayType;
 typedef llvm::Function Function;
 typedef std::vector<Value*> indices_t;
 // forward
-class machine_layout_t;
+class machine_data_layout;
 class tile;
 class shared_tile;
 class distributed_tile;
@@ -74,13 +74,13 @@ private:
   void visit_outer_dot(ir::dot_inst*, distributed_tile *TA, distributed_tile *TB, distributed_tile *TD, unsigned NK,
                        Type *c_ty, Function *f_mul_add);
 
-  void finalize_shared_layout(analysis::layout_shared_t*);
+  void finalize_shared_layout(analysis::shared_layout*);
   void finalize_function(ir::function*);
   void finalize_phi_node(ir::phi_node*);
 
 public:
   generator(analysis::axes *a_axes,
-            analysis::layout *layouts,
+            analysis::layouts *layouts,
             analysis::align *alignment,
             analysis::allocation *alloc,
             target *tgt,
@@ -139,9 +139,9 @@ public:
   void visit_basic_block(ir::basic_block*);
   void visit_argument(ir::argument*);
 
-  void visit_layout_hmma_884(analysis::layout_hmma_884_t*);
-  void visit_layout_scanline(analysis::layout_scanline_t*);
-  void visit_layout_shared(analysis::layout_shared_t*);
+  void visit_layout_hmma_884(analysis::mma884_layout*);
+  void visit_layout_scanline(analysis::scanline_layout*);
+  void visit_layout_shared(analysis::shared_layout*);
 
   void visit(ir::module &, llvm::Module &);
 
@@ -150,13 +150,13 @@ private:
   Builder* builder_;
   Module *mod_;
 
-  std::map<const analysis::layout_t*, machine_layout_t*> machine_layouts_;
+  std::map<const analysis::data_layout*, machine_data_layout*> machine_layouts_;
   analysis::axes *a_axes_;
   std::map<unsigned, distributed_axis> axes_;
   std::map<ir::value *, Value *> vmap_;
   std::map<ir::value *, tile *> tmap_;
   target *tgt_;
-  analysis::layout *layouts_;
+  analysis::layouts *layouts_;
   analysis::align *alignment_;
   analysis::allocation *alloc_;
   Value *sh_mem_ptr_;
