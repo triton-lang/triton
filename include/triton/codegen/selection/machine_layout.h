@@ -36,7 +36,7 @@ class align;
 class allocation;
 class cts;
 class axes;
-class layout;
+class layouts;
 }
 
 typedef llvm::IRBuilder<llvm::ConstantFolder,
@@ -51,7 +51,7 @@ typedef llvm::ArrayType ArrayType;
 typedef llvm::Function Function;
 
 class distributed_axis;
-class machine_layout_t;
+class machine_data_layout;
 class tile;
 class shared_tile;
 class distributed_tile;
@@ -64,15 +64,15 @@ namespace triton{
 namespace codegen{
 
 
-class machine_layout_t {
+class machine_data_layout {
 public:
   virtual tile* create(ir::value *v) = 0;
 };
 
-class machine_layout_shared_t: public machine_layout_t {
+class machine_shared_layout: public machine_data_layout {
 public:
-  machine_layout_shared_t(Module *mod, Builder *builder, target *tgt, analysis::allocation* alloc, Value *&sh_mem_ptr,
-                          analysis::layout_shared_t* layout,
+  machine_shared_layout(Module *mod, Builder *builder, target *tgt, analysis::allocation* alloc, Value *&sh_mem_ptr,
+                          analysis::shared_layout* layout,
                           std::map<ir::value *, Value *>& vmap,
                           std::map<ir::value *, tile *>& tmap);
 
@@ -83,7 +83,7 @@ public:
   target *tgt_;
   analysis::allocation* alloc_;
   Value *&sh_mem_ptr_;
-  analysis::layout_shared_t* layout_;
+  analysis::shared_layout* layout_;
   std::map<ir::value *, Value *>& vmap_;
   std::map<ir::value *, tile *>& tmap_;
 
@@ -94,29 +94,28 @@ public:
 
 };
 
-class machine_layout_distributed_t: public machine_layout_t {
+class machine_distributed_layout: public machine_data_layout {
 public:
-  machine_layout_distributed_t(Module *mod, Builder *builder, target *tgt, Type *ty,
-                               analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
-                               analysis::layout_t* layout);
+  machine_distributed_layout(Module *mod, Builder *builder, target *tgt,
+                          analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
+                          analysis::data_layout* layout);
 
   tile* create(ir::value *v);
   Module *mod_;
   Builder *builder_;
   target *tgt_;
-  Type *ty_;
   analysis::axes *a_axes_;
   std::map<unsigned, distributed_axis>& axes_;
-  analysis::layout_t* layout_;
+  analysis::data_layout* layout_;
 };
 
 
-class machine_layout_hmma_884_t: public machine_layout_distributed_t {
+class machine_mma884_layout: public machine_distributed_layout {
 public:
-  machine_layout_hmma_884_t(Module *mod, Builder *builder,
-                            target *tgt, Type *ty,
-                            analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
-                            analysis::layout_hmma_884_t* layout);
+  machine_mma884_layout(Module *mod, Builder *builder,
+                        target *tgt,
+                        analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
+                        analysis::mma884_layout* layout);
   Value *offset_a_i_, *offset_a_k_;
   Value *offset_b_j_, *offset_b_k_;
   unsigned pack_size_0_;
@@ -125,12 +124,12 @@ public:
   unsigned num_packs_1_;
 };
 
-class machine_layout_scanline_t: public machine_layout_distributed_t {
+class machine_scanline_layout: public machine_distributed_layout {
 public:
-  machine_layout_scanline_t(Module *mod, Builder *builder,
-                            target *tgt, Type *ty,
-                            analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
-                            analysis::layout_scanline_t* layout);
+  machine_scanline_layout(Module *mod, Builder *builder,
+                          target *tgt,
+                          analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
+                          analysis::scanline_layout* layout);
 };
 
 }

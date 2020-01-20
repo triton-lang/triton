@@ -12,7 +12,7 @@ namespace triton {
 namespace codegen{
 namespace transform{
 
-coalesce::coalesce(analysis::align* align, analysis::layout *layouts)
+coalesce::coalesce(analysis::align* align, analysis::layouts *layouts)
   : align_(align), layout_(layouts) { }
 
 // Find all values that are used as pointer operands in LD/ST
@@ -64,8 +64,9 @@ ir::value* coalesce::rematerialize(ir::value *x, ir::builder &builder,
 void coalesce::run(ir::module &mod) {
   size_t num_groups = layout_->num_layouts();
 
+
   for(size_t id = 0; id < num_groups; id++) {
-    if(layout_->get(id)->type != analysis::HMMA_884)
+    if(!layout_->get(id)->to_mma884())
       continue;
     // extract memory stores
     const auto& values = layout_->values_of(id);
@@ -97,7 +98,6 @@ void coalesce::run(ir::module &mod) {
     }
   }
 
-
   // find values to rematerialize
   std::vector<ir::io_inst*> remat;
   for(size_t id = 0; id < num_groups; id++) {
@@ -109,7 +109,7 @@ void coalesce::run(ir::module &mod) {
     // extract leading axes
     std::map<int, std::vector<ir::io_inst*>> axes;
     for(ir::io_inst *i: io){
-      if(i->get_pointer_operand()->get_type()->get_tile_ranks1() == layout_->get(id)->axes.size())
+      if(i->get_pointer_operand()->get_type()->get_tile_ranks1() == layout_->get(id)->get_rank())
         extract_ld(i, axes);
     }
     // update list of values to rematerialize

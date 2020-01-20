@@ -22,11 +22,106 @@ namespace analysis{
 
 class axes;
 class align;
+class layout_visitor;
+class data_layout;
+class mma884_layout;
+class scanline_layout;
+class shared_layout;
 
-enum layout_type_t {
-  HMMA_884,
-  SCANLINE,
-  SHARED
+
+class layout_visitor {
+public:
+  virtual void visit_layout(data_layout *);
+  virtual void visit_layout_hmma_884(mma884_layout*) = 0;
+  virtual void visit_layout_scanline(scanline_layout*) = 0;
+  virtual void visit_layout_shared(shared_layout*) = 0;
+};
+
+class data_layout {
+protected:
+  enum id_t {
+    HMMA_884,
+    SCANLINE,
+    SHARED
+  };
+
+  typedef std::vector<int> axes_t;
+  typedef std::vector<unsigned> shape_t;
+  typedef std::vector<int> order_t;
+  typedef std::vector<ir::value*> values_t;
+
+private:
+  template<typename T>
+  T* downcast(id_t id) {
+    if(id_ == id)
+      return static_cast<T*>(this);
+    return nullptr;
+  }
+
+public:
+  data_layout(id_t id,
+             const std::vector<int>& axes,
+             const std::vector<unsigned> &shape,
+             const std::vector<ir::value *> &values,
+             analysis::align* align);
+  // visitor
+  virtual void accept(layout_visitor* vst) = 0;
+  // downcast
+  mma884_layout* to_mma884()          { return downcast<mma884_layout>(HMMA_884); }
+  scanline_layout* to_scanline()      { return downcast<scanline_layout>(SCANLINE); }
+  shared_layout* to_shared()          { return downcast<shared_layout>(SHARED); }
+  // accessors
+  size_t get_rank()                   { return shape_.size(); }
+  const shape_t& get_shape() const    { return shape_; }
+  const order_t& get_order() const    { return order_; }
+  const values_t& get_values() const  { return values_;}
+  int get_axis(size_t k) const        { return axes_.at(k); }
+  const int get_order(size_t k) const { return order_.at(k); }
+  // find the position of given axis
+  size_t find_axis(int to_find) const;
+
+
+private:
+  id_t id_;
+  axes_t axes_;
+  values_t values_;
+
+protected:
+  order_t order_;
+  shape_t shape_;
+};
+
+class mma884_layout: public data_layout {
+public:
+  mma884_layout(size_t num_warps,
+                const std::vector<int>& axes,
+                const std::vector<unsigned>& shapes,
+                const std::vector<ir::value *> &values,
+                analysis::align* align);
+  void accept(layout_visitor* vst) { vst->visit_layout_hmma_884(this); }
+  // accessor
+  int fpw(size_t k) { return fpw_.at(k); }
+  int wpt(size_t k) { return wpt_.at(k); }
+
+private:
+  std::vector<int> fpw_;
+  std::vector<int> wpt_;
+};
+
+struct scanline_layout: public data_layout {
+  scanline_layout(size_t num_warps,
+                    const std::vector<int>& axes,
+                    const std::vector<unsigned>& shape,
+                    const std::vector<ir::value *> &values,
+                    analysis::align* align);
+  void accept(layout_visitor* vst) { vst->visit_layout_scanline(this); }
+  // accessor
+  int mts(size_t k) { return mts_.at(k); }
+  int nts(size_t k) { return nts_.at(k); }
+
+private:
+  std::vector<int> mts_;
+  std::vector<int> nts_;
 };
 
 struct double_buffer_info_t {
@@ -35,90 +130,33 @@ struct double_buffer_info_t {
   ir::phi_node* phi;
 };
 
-class layout_visitor;
-class layout_t;
-class layout_hmma_884_t;
-class layout_scanline_t;
-class layout_shared_t;
+class shared_layout: public data_layout {
+private:
+  static bool is_loop_latch(ir::phi_node *phi, ir::instruction *terminator);
+  static void extract_double_bufferable(ir::value *v, std::shared_ptr<double_buffer_info_t>& res);
 
-
-class layout_visitor {
 public:
-  virtual void visit_layout(layout_t *);
-  virtual void visit_layout_hmma_884(layout_hmma_884_t*) = 0;
-  virtual void visit_layout_scanline(layout_scanline_t*) = 0;
-  virtual void visit_layout_shared(layout_shared_t*) = 0;
-};
-
-class layout_hmma_884_t;
-class layout_scanline_t;
-class layout_shared_t;
-
-struct layout_t {
-  layout_t(layout_type_t _type,
-           const std::vector<int>& _axes,
-           const std::vector<unsigned> &_shapes,
-           const std::vector<ir::value *> &_values,
-           ir::type *_ty,
-           analysis::align* align);
-  // visitor
-  virtual void accept(layout_visitor* vst) = 0;
-  // downcast
-  layout_hmma_884_t* to_hmma884();
-  layout_scanline_t* to_scanline();
-  layout_shared_t* to_shared();
-
-
-  layout_type_t type;
-  std::vector<int> axes;
-  std::vector<unsigned> shapes;
-  std::vector<ir::value*> values;
-  std::vector<int> order;
-  ir::type *ty;
-};
-
-struct layout_hmma_884_t: public layout_t {
-  layout_hmma_884_t(size_t num_warps,
-                    const std::vector<int>& _axes,
-                    const std::vector<unsigned>& _shapes,
-                    const std::vector<ir::value *> &_values,
-                    ir::type *_ty,
-                    analysis::align* align);
-  void accept(layout_visitor* vst) { vst->visit_layout_hmma_884(this); }
-
-  std::vector<int> fpw;
-  std::vector<int> wpt;
-};
-
-struct layout_scanline_t: public layout_t {
-  layout_scanline_t(size_t num_warps,
-                    const std::vector<int>& _axes,
-                    const std::vector<unsigned>& _shapes,
-                    const std::vector<ir::value *> &values,
-                    ir::type *_ty,
-                    analysis::align* align);
-  void accept(layout_visitor* vst) { vst->visit_layout_scanline(this); }
-
-  std::vector<int> mts;
-  std::vector<int> nts;
-};
-
-struct layout_shared_t: public layout_t {
-  layout_shared_t(const layout_t *arg,
-                    const std::vector<int>& _axes,
-                    const std::vector<unsigned>& _shapes,
-                    const std::vector<ir::value *> &values,
-                    ir::type *ty,
-                    analysis::align* align);
+  shared_layout(const data_layout *arg,
+                const std::vector<int>& axes,
+                const std::vector<unsigned>& shapes,
+                const std::vector<ir::value *> &values_,
+                ir::type *ty,
+                analysis::align* align);
   void accept(layout_visitor* vst) { vst->visit_layout_shared(this); }
+  // accessors
+  size_t get_size()                         { return size_; }
+  ir::type* get_type()                      { return ty_; }
+  double_buffer_info_t* get_double_buffer() { return double_buffer_.get(); }
 
-  std::shared_ptr<double_buffer_info_t> double_buffer;
-  size_t size;
+private:
+  size_t size_;
+  ir::type *ty_;
+  std::shared_ptr<double_buffer_info_t> double_buffer_;
 };
 
 
 
-class layout {
+class layouts {
   typedef ir::value* node_t;
   typedef std::map <node_t, std::set<node_t>> graph_t;
 
@@ -127,23 +165,23 @@ private:
   void connect(ir::value *x, ir::value *y);
   void make_graph(ir::instruction *i);
 
-  void init_hmma_tile(layout_t& layout);
-  void init_scanline_tile(layout_t &layout);
+  void init_hmma_tile(data_layout& layouts);
+  void init_scanline_tile(data_layout &layouts);
 
   void create(size_t id, const std::vector<ir::value*>& values);
 
 public:
   // constructor
-  layout(analysis::axes *axes, analysis::align *align, size_t num_warps);
+  layouts(analysis::axes *axes, analysis::align *align, size_t num_warps);
 
   // accessors
-  unsigned layout_of(ir::value *value) const;
-  const std::vector<ir::value*>& values_of(unsigned id) const;
-  size_t num_layouts() const;
-  layout_t* get(size_t id);
-  layout_t* get(ir::value *v);
-  std::map<size_t, layout_t*> &get_all();
-  size_t tmp(ir::instruction* i);
+  unsigned layout_of(ir::value *value) const                  { return groups_.at(value); }
+  const std::vector<ir::value*>& values_of(unsigned id) const { return values_.at(id); }
+  size_t num_layouts() const                                  { return values_.size();}
+  data_layout* get(size_t id)                                 { return layouts_.at(id); }
+  data_layout* get(ir::value *v)                              { return get(layout_of(v));}
+  std::map<size_t, data_layout*> &get_all()                   { return layouts_; }
+  size_t tmp(ir::instruction* i)                              { return tmp_.at((ir::value*)i);}
 
   // execution
   void run(ir::module &mod);
@@ -155,7 +193,7 @@ private:
   tools::graph<ir::value*> graph_;
   std::map<ir::value*, size_t> groups_;
   std::map<size_t, std::vector<ir::value*>> values_;
-  std::map<size_t, layout_t*> layouts_;
+  std::map<size_t, data_layout*> layouts_;
   std::map<ir::value*, size_t> tmp_;
 };
 
