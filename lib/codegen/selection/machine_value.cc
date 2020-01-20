@@ -15,7 +15,7 @@ void distributed_tile::init_indices() {
   std::vector<size_t> order(id.size());
   std::iota(order.begin(), order.end(), 0);
   auto cmp = [&](int x, int y) {
-    return axes_[x].contiguous > axes_[y].contiguous;
+    return order_[x] < order_[y];
   };
   std::sort(order.begin(), order.end(), cmp);
   // build
@@ -39,11 +39,6 @@ void distributed_tile::init_indices() {
   }
 }
 
-llvm::Type *distributed_tile::make_vector_ty(llvm::Type *ty, size_t vector_size) {
-  if(vector_size == 1)
-    return ty;
-  return VectorType::get(ty, vector_size);
-}
 
 distributed_tile::distributed_tile(Type *ty, const shapes_t &shapes, const std::vector<int>& order, const axes_t &axes, llvm::IRBuilder<> &builder)
     : tile(ty, shapes), axes_(axes), order_(order), builder_(builder) {

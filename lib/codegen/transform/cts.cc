@@ -15,6 +15,8 @@ inline bool is_shmem_op(ir::instruction* i, int op) {
     return op==0 || op==1;
   if(i->get_id() == ir::INST_COPY_FROM_SHARED)
     return op==0;
+  if(i->get_id() == ir::INST_TRANS)
+    return op==0;
   return false;
 }
 
