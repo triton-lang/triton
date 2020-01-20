@@ -125,7 +125,6 @@ class distributed_tile: public tile{
 
 private:
   void init_indices();
-  Type *make_vector_ty(Type *ty, size_t vector_size);
 
 public:
   distributed_tile(Type *ty, const shapes_t& shapes, const std::vector<int>& order, const axes_t &axes, Builder &builder);
