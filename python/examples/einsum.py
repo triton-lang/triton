@@ -11,25 +11,25 @@ configs = []
 
 # Matrix multiplication
 MNK = [
-        (512, 512 ,512), 
-        (2048, 2048, 2048),
-        (8192, 8192, 8192),
+        # (512, 512 ,512), 
+        # (2048, 2048, 2048),
+        # (8192, 8192, 8192),
        
-        (64, 64, 64000),
-        (64, 64, 128000),
-        (256, 256, 64000),
-        (256, 256, 128000),
+        # (64, 64, 64000),
+        # (64, 64, 128000),
+        # (256, 256, 64000),
+        # (256, 256, 128000),
 
-        (1536, 16, 1536),
-        (1536, 32, 1536),
-        (1536, 64, 1536),
-        (1536, 128, 1536),
-        (4096, 16, 4096),
-        (4096, 32, 4096),
-        (4096, 64, 4096),
-        (4096, 128, 4096),
+        # (1536, 16, 1536),
+        # (1536, 32, 1536),
+        # (1536, 64, 1536),
+        # (1536, 128, 1536),
+        # (4096, 16, 4096),
+        # (4096, 32, 4096),
+        # (4096, 64, 4096),
+        # (4096, 128, 4096),
     
-        #(127008, 768, 576) 
+        # (127008, 768, 576) 
       ]
 for M, N, K in MNK:
     matmul = lambda a, b: torch.matmul(a, b)
@@ -43,32 +43,32 @@ for M, N, K in MNK:
 
 # Relative attention
 NTHSE = [
-          #(16, 512, 1, 64, 64), 
+          (16, 512, 1, 64, 64), 
         #  (16, 512, 1, 128, 128),
         #  (16, 512, 1, 256, 256),
         #  (16, 512, 1, 256, 512),
-          #(16, 512, 8, 64, 64), 
+          (16, 512, 8, 64, 64), 
         #  (16, 512, 8, 128, 128),
         #  (16, 512, 8, 256, 256),
         #  (16, 512, 8, 256, 512),
 
         #  (64, 1024, 1, 64, 64), 
-          #(64, 1024, 1, 128, 128),
+          (64, 1024, 1, 128, 128),
         #  (64, 1024, 1, 256, 256),
         #  (64, 1024, 1, 256, 512),
         #  (64, 1024, 8, 64, 64), 
-          #(64, 1024, 8, 128, 128),
+          (64, 1024, 8, 128, 128),
         #  (64, 1024, 8, 256, 256),
         #  (64, 1024, 8, 256, 512),
 
         #  (128, 1024, 1, 64, 64), 
         #  (128, 1024, 1, 128, 128),
         #  (128, 1024, 1, 256, 256),
-          #(128, 1024, 1, 256, 512),
+          (128, 1024, 1, 256, 512),
         #  (128, 1024, 8, 64, 64), 
         #  (128, 1024, 8, 128, 128),
         #  (128, 1024, 8, 256, 256),
-          #(128, 1024, 8, 256, 512)
+          (128, 1024, 8, 256, 512)
         ]
 for N, T, H, S, E in NTHSE:
     configs += [([N, T, H, S], [H, E, S], [N, H, T, E], None, 'nths,hes->nhte', dict())]
@@ -168,12 +168,11 @@ for N, C, H, W, K, R, S in NCHWKRS:
 # Benchmark
 torch.set_num_threads(1)
 for a_shape, b_shape, c_shape, torch_fn, expr, arrays in configs:
-    dtype = torch.cuda.HalfTensor
+    dtype = torch.cuda.FloatTensor
     # initialize input tensors
     a = torch.rand(*a_shape).type(dtype).cuda()
     b = torch.rand(*b_shape).type(dtype).cuda()
     # triton output
-    #ta = triton.ops._einsum.pad(a, [4,4,4,4])
     tc = triton.ops.einsum(expr, a, b, c_shape, arrays = arrays, bench = True)
     # reference output
     if torch_fn:
@@ -183,12 +182,16 @@ for a_shape, b_shape, c_shape, torch_fn, expr, arrays in configs:
     # performance relative to equivalent matrix multiplication
     ctx = triton.ctx_registry[tc]
     B, M, N, K = ctx.matmul_B, ctx.matmul_M, ctx.matmul_N, ctx.matmul_K
-    # a = torch.rand(B, M, K).type(dtype).cuda()
-    # b = torch.rand(B, K, N).type(dtype).cuda()
-    # tmmc = triton.ops.einsum('bmk,bkn->bmn', a, b, [B, M, N], bench = True)
-    # ratio = triton.bench_registry[tmmc] / triton.bench_registry[tc]
-    ratio = 0
+    cmp_eqbmm = True
+    if cmp_eqbmm:
+        a = torch.rand(B, M, K).type(dtype).cuda()
+        b = torch.rand(B, K, N).type(dtype).cuda()
+        tmmc = triton.ops.einsum('bmk,bkn->bmn', a, b, [B, M, N], bench = True)
+        ratio = triton.bench_registry[tmmc] / triton.bench_registry[tc]
+        cmp_str = f'({ratio:4.2f})'
+    else:
+        cmp_str = ''
     # test and benchmark
     bench = 2. * B * M * N * K / triton.bench_registry[tc] * 1e-3
     diff = (tc - rc).abs().max() / rc.abs().max()
-    print(f'{expr:>15}; {str(a_shape):>20}; {str(b_shape):>20};          {bench:4.2f} ({ratio:4.2f});          {diff:4.2f}')
+    print(f'{expr:>15}; {str(a_shape):>20}; {str(b_shape):>20};          {bench:4.2f} {cmp_str};          {diff:4.2f}')
