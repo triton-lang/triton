@@ -256,7 +256,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::c
     return std::unique_ptr<driver::module>();
   barriers.run(module);
   isel.visit(module, *llvm);
-
   // return binary
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   // done

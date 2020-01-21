@@ -24,7 +24,7 @@ def empty(shape, dtype):
     return tf_empty_proxy(shape, dtype)
     #return fw.tf_extra_ops.alloc_empty(args, T = dtype)
   elif fw.has_torch():
-    return fw.torch.empty(shape, dtype=dtype).cuda()
+    return fw.torch.empty(shape, dtype=dtype, device='cuda:0')
 
 def shape(A) :
   if fw.has_tensorflow():

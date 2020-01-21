@@ -206,6 +206,9 @@ class kernel:
     self.cst[name] = value
 
   def __call__(self, *args, **kwargs):
+    #########################
+    # cache
+    ########################
     # create a new framework op when defines are different
     key = '-'.join(['{key}-{val}'.format(key=key, val=val) for key, val in kwargs.items()])
     if key not in self.fw_id.keys():
@@ -230,17 +233,18 @@ class kernel:
         libtriton.register_cst(op_id, name, value)
       if self.fw_op is None:
         self.fw_op = _make_framework_op(self.src, self.outputs, self.tmp, opt)
-    # benchmarking info
-    bench = 0
-    if 'bench' in kwargs:
-      bench = kwargs['bench']
-    # retrieve framework op
+
+    ########################
+    # initialize
+    ########################
     op_id = self.fw_id[key]
-    # register grid
     libtriton.register_grid(op_id, args[-1])
-    # id for the benchmark result
+    bench = kwargs['bench'] if 'bench' in kwargs else 0
     bench_id = libtriton.make_scalar_id() if bench > 0 else -1
+
+    #########################
     # call framework function
+    #########################
     if fw.has_tensorflow():
       empty = [x for x in args[:-1] if isinstance(x, triton.utils.tf_empty_proxy)]
       if len(empty) != len(self.outputs):
@@ -268,10 +272,15 @@ class kernel:
       if bench > 0:
         for y in ret: 
           bench_registry[y] = triton.utils.id_dict.lazy_entry(bench_id)
+    
+    ############################
+    # call torch function
+    ############################
     elif fw.has_torch():
       args = [x if isinstance(x, fw.torch.Tensor) else x for x in args[:-1]]
       ret = self.fw_op(op_id, bench, bench_id, *args)
       if bench > 0:
         bench_registry[ret] = libtriton.retrieve_scalar(bench_id)
+
     else:
       assert False

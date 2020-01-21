@@ -536,8 +536,8 @@ __global__ void {name}(
             self.pos_b = 1
             self.pos_c = 2
             # pre-processor macros
-            TM = [x for x in [16, 32, 64, 128] if x <= M]
-            TN = [x for x in [16, 32, 64, 128] if x <= N]
+            TM = [16] + [x for x in [32, 64, 128] if x <= M]
+            TN = [16] + [x for x in [32, 64, 128] if x <= N]
             TB = [x for x in [1, 2, 4] if x <= B]
             MAX_GZ = K // 2048
             MIN_GM = M // max(TM)
@@ -546,8 +546,8 @@ __global__ void {name}(
             TZ = [x for x in [1, 2, 4, 8, 16, 32] \
                     if x < MAX_GZ and x*MIN_GM*MIN_GN*MIN_GB < 256]
             TZ = [1] if not TZ else [TZ[-1], TZ[-1]*2]
-            #TB, TZ = [1], [1]
-            #TM, TN, TB, TZ = [128], [128], [1], [1]
+            TM, TN, TB = [128], [64], [1]
+            #print(TM, TN, TB)
             self.macros = {  'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype }
             self.dtype = dtype
             self.flops = 2 * B * M * N * K
@@ -582,13 +582,13 @@ __global__ void {name}(
         # allocate output
         dtype = a.dtype
         c = triton.empty(shape_c, dtype=dtype)
+        # compile einsum instance
+        cache = _einsum.instance_cache
         key = (einsum, dtype, 
                a.stride(), b.stride(), c.stride(), 
                a.shape, b.shape, c.shape)
-        # compile einsum instance
-        cache = _einsum.instance_cache
-        #if key not in cache:
-        cache[key] = _einsum.instance(einsum, dtype, 
+        if key not in cache:
+            cache[key] = _einsum.instance(einsum, dtype, 
                                           a.stride(), b.stride(), c.stride(),
                                           a.shape, b.shape, c.shape, arrays)
         instance = cache[key]
