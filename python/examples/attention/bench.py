@@ -4,7 +4,7 @@ import reference
 import optimized
 from time import time
 
-use_half = False
+use_half = True
 def cast(x):
     if use_half:
         return x.half()
@@ -14,9 +14,9 @@ def cast(x):
 # GPU device
 device = torch.device("cuda:0")
 # shapes
-batch, nhead = 16, 8
-dm, dk, dv = 512, 512, 512
-lq, lk, lv = 256, 256, 256
+batch, nhead = 8, 28
+dm, dk, dv = 1024, 1024, 1024
+lq, lk, lv = 1024, 1024, 1024
 # initialize tensors
 torch.manual_seed(0)
 np.random.seed(0)
@@ -44,4 +44,5 @@ start = time()
 toutput, _ = tattn(query, key, value)
 end = time()
 ttime = end - start
-print(rtime, ttime)
+print(f'Torch:  {rtime} s')
+print(f'Triton: {ttime} s')
