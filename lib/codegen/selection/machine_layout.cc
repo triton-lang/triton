@@ -192,11 +192,11 @@ machine_mma884_layout::machine_mma884_layout(Module *mod, Builder *builder,
   unsigned wpt_0 = layout->wpt(0);
   unsigned wpt_1 = layout->wpt(1);
   unsigned wpt_2 = is_batched ? layout->wpt(2) : 1;
-  // hmma warp tile size
+  // mma warp tile size
   unsigned hmma_wts_0 = fpw_0 * 8;
   unsigned hmma_wts_1 = fpw_1 * 8;
   unsigned hmma_wts_2 = is_batched ? fpw_2 : 1;
-  // hmma block tile size
+  // mma block tile size
   unsigned hmma_bts_0 = hmma_wts_0 * wpt_0;
   unsigned hmma_bts_1 = hmma_wts_1 * wpt_1;
   unsigned hmma_bts_2 = is_batched ? hmma_wts_2 * wpt_2 : 1;

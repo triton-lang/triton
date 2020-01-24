@@ -36,7 +36,8 @@ void membar::add_reference(ir::value *v, interval_vec_t &res){
   if(!i->get_type()->is_tile_ty())
     return;
   analysis::shared_layout* layout = layouts_->get(v)->to_shared();
-  assert(layout);
+  if(!layout)
+    return;
   if(alloc_->has_offset(layout)){
     unsigned offset = alloc_->offset(layout);
     res.push_back(interval_t(offset, offset + layout->get_size()));
