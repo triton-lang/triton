@@ -16,7 +16,7 @@ int main() {
   for(int nwarps: std::vector<int>{4})
   for(bool AT: std::array<bool, 2>{false, true})
   for(bool BT: std::array<bool, 2>{false, true}){
-    configs.push_back(config_t{HALF, AT, BT, 128, 128, 128, TM, TN, TK, nwarps});
+    configs.push_back(config_t{HALF, AT, BT, TM, TN, TK, TM, TN, TK, nwarps});
   }
   // test
   dtype_t dtype;

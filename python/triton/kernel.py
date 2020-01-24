@@ -223,7 +223,7 @@ class kernel:
         defines.append((k, values))
       opt = libtriton.options_space()
       opt.defines = defines
-      opt.num_warps = [2, 4]
+      opt.num_warps = [4]
       # create unique id for this op
       op_id = libtriton.make_op_id()
       self.fw_id[key] = op_id
