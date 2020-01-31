@@ -527,10 +527,10 @@ __global__ void {name}(
                 delta_b = delta_b[0] if lut_mode_b == _einsum.LUT_MODE.SCALAR else torch.from_numpy(delta_b).cuda()
                 self.args += [delta_b]
             self.args += arrays
-            self.args += [lambda opt: [triton.cdiv(M, opt.d('TM')) * 
-                                       triton.cdiv(N, opt.d('TN')),
-                                       triton.cdiv(B, opt.d('TB')),
-                                       opt.d('TZ')]]
+            self.grid = lambda opt: [triton.cdiv(M, opt.d('TM')) * 
+                                    triton.cdiv(N, opt.d('TN')),
+                                    triton.cdiv(B, opt.d('TB')),
+                                    opt.d('TZ')]
             # position of dynamic arguments
             self.pos_a = 0
             self.pos_b = 1
@@ -546,9 +546,8 @@ __global__ void {name}(
             TZ = [x for x in [1, 2, 4, 8, 16, 32] \
                     if x < MAX_GZ and x*MIN_GM*MIN_GN*MIN_GB < 256]
             TZ = [1] if not TZ else [TZ[-1], TZ[-1]*2]
-            #TM, TN, TB = [128], [64], [1]
-            #print(TM, TN, TB)
             self.macros = {  'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype }
+            # information on compute
             self.dtype = dtype
             self.flops = 2 * B * M * N * K
             self.sym_a = sym_a
@@ -564,7 +563,7 @@ __global__ void {name}(
             self.args[self.pos_a] = a
             self.args[self.pos_b] = b
             self.args[self.pos_c] = c
-            self.kernel(*self.args, bench=bench, **self.macros)
+            self.kernel(*self.args, grid=self.grid, bench=bench, defines=self.macros)
 
 
 
