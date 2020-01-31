@@ -101,8 +101,8 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
     var = triton.empty([C], dtype=dtype)
     # execute kernels
     _batchnorm.fwd_kernel(y, mean, var, x, gamma, beta, H*W*B, eps,
-                          lambda opt: [1, C],
-                          TM = 128)
+                          grid = lambda opt: [1, C],
+                          defines = {'TM': 128})
     # save
     ctx.save_for_backward(x, gamma, beta, mean, var)
     ctx.eps = eps
@@ -122,8 +122,8 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
     _batchnorm.bwd_kernel(dx, dgamma, dbeta, dy, 
                           x, gamma, mean, var, 
                           H*W*B, eps,
-                          lambda opt: [1, C],
-                          TM = 128)
+                          grid = lambda opt: [1, C],
+                          defines = {'TM': 128})
     return dx, dgamma, dbeta, None
 
 batchnorm = _batchnorm.apply

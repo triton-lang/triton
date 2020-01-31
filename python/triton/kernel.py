@@ -177,12 +177,12 @@ def _make_framework_op(src, outputs, tmp, options):
   else:
     assert False
 
-def _make_grid(args) :
-  scalars = [x for x in args[:-1] if isinstance(x, triton.utils.scalar)]
+def _make_grid(grid, args) :
+  scalars = [x for x in args if isinstance(x, triton.utils.scalar)]
   def grid(opt):
     for x in scalars:
       x.set_assume_initialized()
-    result = args[-1](opt)
+    result = grid(opt)
     for x in scalars:
       x.unset_assume_initialized()
     return result
@@ -206,24 +206,37 @@ class kernel:
     self.cst[name] = value
 
   def __call__(self, *args, **kwargs):
+
+    ########################
+    # keyword arguments
+    ########################
+    num_warps = kwargs['num_warps'] if 'num_warps' in kwargs else [2, 4, 8]
+    defines = kwargs['defines']     if 'defines'   in kwargs else dict()
+    bench = kwargs['bench']         if 'bench'     in kwargs else 0
+    if 'grid' not in kwargs:
+      raise RuntimeError('Must provide grid for kernel launch')
+    grid = kwargs['grid']
+
+
     #########################
     # cache
     ########################
+
     # create a new framework op when defines are different
-    key = '-'.join(['{key}-{val}'.format(key=key, val=val) for key, val in kwargs.items()])
+    key = '-'.join(['{key}-{val}'.format(key=key, val=val) for key, val in defines.items()])
     if key not in self.fw_id.keys():
       # code generation options
-      defines = []
-      for k, v in kwargs.items():
+      macros = []
+      for k, v in defines.items():
         cvt = lambda x: _cvt_to_def_str(x)
         if(isinstance(v, list)):
           values = list(map(cvt, v))
         else:
           values = [cvt(v)]
-        defines.append((k, values))
+        macros.append((k, values))
       opt = libtriton.options_space()
-      opt.defines = defines
-      opt.num_warps = [4]
+      opt.defines = macros
+      opt.num_warps = [2, 4, 8]
       # create unique id for this op
       op_id = libtriton.make_op_id()
       self.fw_id[key] = op_id
@@ -238,22 +251,21 @@ class kernel:
     # initialize
     ########################
     op_id = self.fw_id[key]
-    libtriton.register_grid(op_id, args[-1])
-    bench = kwargs['bench'] if 'bench' in kwargs else 0
+    libtriton.register_grid(op_id, grid)
     bench_id = libtriton.make_scalar_id() if bench > 0 else -1
 
     #########################
     # call framework function
     #########################
     if fw.has_tensorflow():
-      empty = [x for x in args[:-1] if isinstance(x, triton.utils.tf_empty_proxy)]
+      empty = [x for x in args if isinstance(x, triton.utils.tf_empty_proxy)]
       if len(empty) != len(self.outputs):
         raise ValueError('Number of empty arguments does not much number of outputs provided')
       # operands
-      operands = [x.shape if isinstance(x, triton.utils.tf_empty_proxy) else x for x in args[:-1]]
+      operands = [x.shape if isinstance(x, triton.utils.tf_empty_proxy) else x for x in args]
       # output data types
       kwargs = {'id': op_id, 'bench': bench, 'bench_id': bench_id}
-      for i, x in enumerate(args[:-1]):
+      for i, x in enumerate(args):
         if isinstance(x, triton.utils.tf_empty_proxy):
           kwargs['T' + str(i)] = x.dtype
       # launch
@@ -277,7 +289,7 @@ class kernel:
     # call torch function
     ############################
     elif fw.has_torch():
-      args = [x if isinstance(x, fw.torch.Tensor) else x for x in args[:-1]]
+      args = [x if isinstance(x, fw.torch.Tensor) else x for x in args]
       ret = self.fw_op(op_id, bench, bench_id, *args)
       if bench > 0:
         bench_registry[ret] = libtriton.retrieve_scalar(bench_id)
