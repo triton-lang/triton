@@ -1,6 +1,6 @@
 # Triton
 
-This is the development repository of Triton, a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write custom ops at higher productivity than CUDA, but also with much higher flexibility than [TVM](https://github.com/apache/incubator-tvm).
+This is the development repository of Triton, a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with much higher flexibility than [TVM](https://github.com/apache/incubator-tvm) and without having to manually specify compute schedules.
 
 The main scope of Triton at the moment are:
 - **Triton-C**: An imperative, single-threaded language for writing highly efficient compute-kernels at a relatively high abstraction level using numpy-like extensions of the C language.
@@ -16,7 +16,7 @@ The formal foundations of this project are described in the following MAPL2019 p
 
 ## Installation
 
-Triton is a fairly self-contained package and uses its own parser (forked from [wgtcc](https://github.com/wgtdkp/wgtcc)) and LLVM code-generator. However, at the moment it relies on LLVM-8.0+ for PTX code generation.
+Triton is a fairly self-contained package and uses its own parser (forked from [wgtcc](https://github.com/wgtdkp/wgtcc)) and LLVM code-generator. However, at the moment it relies on LLVM-8.0+ for PTX code generation. The whole compiler stack (~30k lines of C++ code) should take around 15 secs to compile.
 
 ```
 sudo apt-get install llvm-8-dev
