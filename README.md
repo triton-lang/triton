@@ -12,8 +12,6 @@ Bindings for **automatic** PyTorch custom op generations are included in -  **Py
 The formal foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please cite us if you use our work!
 
 
-
-
 ## Installation
 
 Triton is a fairly self-contained package and uses its own parser (forked from [wgtcc](https://github.com/wgtdkp/wgtcc)) and LLVM code-generator. However, at the moment it relies on LLVM-8.0+ for PTX code generation. The whole compiler stack (~30k lines of C++ code) should take around 15 secs to compile.
@@ -35,3 +33,6 @@ python einsum.py
 - The Triton-IR representation (coming soon...)
 - The Triton-JIT compiler (coming soon...)
 
+## ISAAC (deprecated) for fast inference
+
+Before working on Triton, I wrote custom auto-tuned PTX code for fast, quantized inference on GPUs. While this project is now deprecated, you can use it at your own risk by checking out the "isaac" tag in this repository.
