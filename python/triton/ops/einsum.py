@@ -646,5 +646,4 @@ __global__ void {name}(
         return None, da, None, None, None
 
 
-
 einsum = _einsum.apply
