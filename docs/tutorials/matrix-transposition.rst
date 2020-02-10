@@ -53,21 +53,21 @@ which will be used in statements (5) and (6) to construct tiles of pointers
 
 - Statements (5) constructs the following array of pointers `px` using numpy-style broadcasting semantics:
 
-  .. code-block:: C
+::
   
     │ X + (pidm*TM + 0)       + (pidn*TN + 0)*ldx,  ...,  ...,  X + (pidm*TM + 0)      +  (pidn*TN + TN - 1)*ldx) │
-    │      ⋮                                                                                       ⋮             │
-    │      ⋮                                                                                       ⋮             │
+    │      ⋮                                                                                       ⋮              │
+    │      ⋮                                                                                       ⋮              │
     │ X + (pidm*TM + TM - 1)  + (pidn*TN + 0)*ldx,  ...,  ...,  X + (pidm*TM + TM - 1) +  (pidn*TN + TN - 1)*ldx) │
 
 
 - Statement (6) constructs the following array of pointers `py` using numpy-style broadcasting semantics:
 
-  .. code-block:: C
+::
 
     │ Y + (pidn*TN + 0)       + (pidm*TM + 0)*ldy,  ...,  ...,  Y + (pidn*TN + 0)      +  (pidm*TM + TM - 1)*ldy) │
-    │      ⋮                                                                                       ⋮             │
-    │      ⋮                                                                                       ⋮             │
+    │      ⋮                                                                                       ⋮              │
+    │      ⋮                                                                                       ⋮              │
     │ Y + (pidn*TN + TN - 1)  + (pidn*TN + 0)*ldy,  ...,  ...,  Y + (pidn*TN + TN - 1) +  (pidm*TM + TM - 1)*ldy) │
 
 - Statement (7) element-wise dereferences the above array of pointers `*px`, transposes it using the unary transposition operator `^`, and writes it back at the location specified by `py`.
