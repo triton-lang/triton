@@ -10,7 +10,7 @@ The purpose of this section is to present a Triton-C implementation of matrix mu
 Compute Kernel
 ==============
 
-Matrix multiplications of the form `C = A x B` can be implemented in Triton-C fairly concisely, as shown below:
+Matrix multiplications of the form `C = A x B` can be implemented in Triton-C fairly concisely, as shown below: 
 
 .. code-block:: C
 
@@ -35,7 +35,7 @@ Matrix multiplications of the form `C = A x B` can be implemented in Triton-C fa
         TYPE a[TM, TK] = *pa; //(9) 
         TYPE b[TK, TN] = *pb; //(10)
         // matrix-multiply accumulate
-        c += a @ b; //(11)
+        c += dot(a, b); //(11)
         // increment pointers
         pa = pa + TK * 1; //(12)
         pb = pb + TK * ldb; //(13)
@@ -88,7 +88,7 @@ The purpose of pre-fetching is to overlap the update of the accumulator `c` with
     TYPE a[TM, TK] = *pa; //(9) 
     TYPE b[TK, TN] = *pb; //(10)
     for(int k = K; k > 0; k-= TK){
-       c += a @ b;
+       c += dot(a, b);
        pa = pa + TK * 1;
        pb = pb + TK * ldb;
        // don't prefetch last iteration
@@ -144,7 +144,7 @@ It is common for optimized matrix-multiplication implementations (e.g., BLAS) to
       TYPE b[SHAPE_B] = (*pb);
       // reduction loop
       for(int k = K; k > 0; k-= TK){
-        c += USE_A @ USE_B;
+        c += dot(USE_A, USE_B);
         pa = pa + TK * STRIDE_AK;
         pb = pb + TK * STRIDE_BK;
         a = *pa;
