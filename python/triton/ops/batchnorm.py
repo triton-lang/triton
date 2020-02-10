@@ -41,7 +41,7 @@ void fwdbatchnorm(float *Y, float *M, float *V,
   }
 }
 """
-  fwd_kernel = triton.kernel(fwd_src, ['Y', 'M', 'V'])
+  fwd_kernel = triton.kernel(fwd_src)
 
   bwd_src = """
 void bwdbatchnorm(float *DX, float *DG, float *DB,
@@ -88,7 +88,7 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
   }
 }
 """
-  bwd_kernel = triton.kernel(bwd_src, ['DX', 'DG', 'DB'])
+  bwd_kernel = triton.kernel(bwd_src)
 
   @staticmethod
   def forward(ctx, x, gamma, beta, eps):

@@ -17,11 +17,9 @@ import triton.frameworks as fw
 import triton.utils
 import triton._C.libtriton as libtriton
 
-def _make_framework_src(src, out, tmp, grid):
-  if fw.has_tensorflow():
-    return libtriton.make_tensorflow_src(src, out, tmp, grid)
-  elif fw.has_torch:
-    return libtriton.make_torch_src(src, out, tmp, grid)
+def _make_framework_src(src, grid):
+  if fw.has_torch:
+    return libtriton.make_torch_src(src, grid)
   else:
     assert False
 
@@ -36,9 +34,7 @@ def _make_cache_path(src):
   return cachepath
 
 def _write_bindings(src, root):
-  if fw.has_tensorflow():
-    name = 'tensorflow'
-  elif fw.has_torch():
+  if fw.has_torch():
     name = 'torch'
   else:
     assert False
@@ -81,15 +77,7 @@ def _build(src, path):
   libraries = ['triton']
   # add framework
   extra_compile_args = []
-  if fw.has_tensorflow():
-    library_dirs += [fw.tensorflow.sysconfig.get_lib()]
-    include_dirs += [fw.tensorflow.sysconfig.get_include()]
-    include_dirs += ['/usr/local/cuda/include/']
-    libraries += [fw.tensorflow.sysconfig.get_link_flags()[1].replace('-l', '')]
-    abi = fw.tensorflow.__cxx11_abi_flag__ if "__cxx11_abi_flag__" in fw.tensorflow.__dict__ else 0
-    extra_compile_args += ['-D_GLIBCXX_USE_CXX11_ABI={abi}'.format(abi=abi)]
-    name = 'tensorflow'
-  elif fw.has_torch():
+  if fw.has_torch():
     prefix = os.path.dirname(fw.torch.__file__)
     library_dirs += [os.path.join(prefix, 'lib')]
     include_dirs += ['/usr/local/cuda/include/',
@@ -138,18 +126,8 @@ def _cvt_to_def_str(obj):
   # bool
   if isinstance(obj, bool):
     return str(int(obj))
-  # tensorflow type
-  if fw.has_tensorflow():
-    if isinstance(obj, fw.tensorflow.DType):
-      return {fw.tensorflow.int8: 'char',
-              fw.tensorflow.int16: 'short',
-              fw.tensorflow.int32: 'int',
-              fw.tensorflow.int64: 'long',
-              fw.tensorflow.float16: 'half',
-              fw.tensorflow.float32: 'float',
-              fw.tensorflow.float64: 'double'}[obj]
   # torch type
-  elif fw.has_torch():
+  if fw.has_torch():
     if isinstance(obj, fw.torch.dtype):
       return {fw.torch.int8: 'char',
               fw.torch.int16: 'short',
@@ -164,14 +142,12 @@ def _cvt_to_def_str(obj):
   return str(obj)
 
 
-def _make_framework_op(src, outputs, tmp, options):
-  src, name = _make_framework_src(src, outputs, tmp, options)
+def _make_framework_op(src, options):
+  src, name = _make_framework_src(src, options)
   cache_path = _make_cache_path(src)
   cpp, so = _write_bindings(src, cache_path)
   _build(cpp, cache_path)
-  if fw.has_tensorflow():
-    return fw.tensorflow.load_op_library(so).__dict__[name]
-  elif fw.has_torch():
+  if fw.has_torch():
     fw.torch.ops.load_library(so)
     return getattr(fw.torch.ops.triton, name)
   else:
@@ -193,13 +169,11 @@ bench_registry = triton.utils.id_dict()
 
 class kernel:
 
-  def __init__(self, src, outputs, tmp=[]):
+  def __init__(self, src):
     self.fw_id = dict()
     self.fw_grids = dict()
     self.fw_op = None
     self.src = src
-    self.outputs = outputs
-    self.tmp = tmp
     self.cst = dict()
 
   def set_constant(self, name, value):
@@ -245,7 +219,7 @@ class kernel:
       for name, value in self.cst.items():
         libtriton.register_cst(op_id, name, value)
       if self.fw_op is None:
-        self.fw_op = _make_framework_op(self.src, self.outputs, self.tmp, opt)
+        self.fw_op = _make_framework_op(self.src, opt)
 
     ########################
     # initialize
@@ -254,45 +228,13 @@ class kernel:
     libtriton.register_grid(op_id, grid)
     bench_id = libtriton.make_scalar_id() if bench > 0 else -1
 
-    #########################
-    # call framework function
-    #########################
-    if fw.has_tensorflow():
-      empty = [x for x in args if isinstance(x, triton.utils.tf_empty_proxy)]
-      if len(empty) != len(self.outputs):
-        raise ValueError('Number of empty arguments does not much number of outputs provided')
-      # operands
-      operands = [x.shape if isinstance(x, triton.utils.tf_empty_proxy) else x for x in args]
-      # output data types
-      kwargs = {'id': op_id, 'bench': bench, 'bench_id': bench_id}
-      for i, x in enumerate(args):
-        if isinstance(x, triton.utils.tf_empty_proxy):
-          kwargs['T' + str(i)] = x.dtype
-      # launch
-      ret = self.fw_op(*operands, **kwargs)
-      ret = [ret] if isinstance(ret, fw.tensorflow.Tensor) else ret
-      op_def = ret[0].op.op_def
-       # fill empty tensors with corresponding values
-      for j, y in enumerate(op_def.output_arg):
-        found = False
-        for i, x in enumerate(op_def.input_arg):
-          if y.name + '_shape' == x.name:
-            args[i].tensor = ret[j]
-            found = True
-        assert found
-      # store timing information
-      if bench > 0:
-        for y in ret: 
-          bench_registry[y] = triton.utils.id_dict.lazy_entry(bench_id)
-    
     ############################
     # call torch function
     ############################
-    elif fw.has_torch():
-      args = [x if isinstance(x, fw.torch.Tensor) else x for x in args]
-      ret = self.fw_op(op_id, bench, bench_id, *args)
+    if fw.has_torch():
+      self.fw_op(op_id, bench, bench_id, *args)
       if bench > 0:
-        bench_registry[ret] = libtriton.retrieve_scalar(bench_id)
+        return libtriton.retrieve_scalar(bench_id)
 
     else:
       assert False
