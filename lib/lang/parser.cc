@@ -664,6 +664,17 @@ QualType Parser::ParseTypeName() {
 
 Expr* Parser::ParseCastExpr() {
   auto tok = ts_.Next();
+  // bitcast
+  if (tok->tag_ == Token::BITCAST) {
+    ts_.Expect('<');
+    auto type = ParseTypeName();
+    ts_.Expect('>');
+    ts_.Expect('(');
+    auto operand = ParseExpr();
+    ts_.Expect(')');
+    return UnaryOp::New(Token::BITCAST, operand, type);
+  }
+  // semantic cast
   if (tok->tag_ == '(' && IsTypeName(ts_.Peek())) {
     auto type = ParseTypeName();
     ts_.Expect(')');
