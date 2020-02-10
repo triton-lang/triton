@@ -23,7 +23,7 @@ Let us start with something simple, and see how Triton can be used to create a c
         // bounds checking
         bool check[TILE] = offset < N;
         // write-back
-        *?(check)pz = *?(check)*px + *?(check)py;
+        *?(check)pz = *?(check)px + *?(check)py;
     }
 
 As you can see, arrays are first-class citizen in Triton. This has a number of important advantages that will be highlighted in the next tutorial. For now, let's keep it simple and see how to execute the above operation in PyTorch.
@@ -53,7 +53,7 @@ As you will see, a wrapper for the above Triton function can be created in just 
         // bounds checking
         bool check[TILE] = offset < N;
         // write-back
-        *?(check)pz = *?(check)*px + *?(check)py;
+        *?(check)pz = *?(check)px + *?(check)py;
     }
         """
         # create callable kernel for the source-code
