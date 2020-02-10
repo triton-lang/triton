@@ -164,6 +164,7 @@ public:
     ALIGNOF, // _Alignof
     GENERIC, // _Generic
     IMAGINARY, // _Imaginary
+    BITCAST,
     // KEYWORD END
 
     IDENTIFIER,
