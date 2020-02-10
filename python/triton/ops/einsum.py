@@ -313,7 +313,7 @@ __global__ void {name}(
 """
 
         #print(src)
-        ret = triton.kernel(src, ['C'])
+        ret = triton.kernel(src)
         if use_lut_a and lut_mode_a == _einsum.LUT_MODE.CONSTANT:
             ret.set_constant('AD', delta_a)
         if use_lut_b and lut_mode_b == _einsum.LUT_MODE.CONSTANT:
@@ -563,7 +563,7 @@ __global__ void {name}(
             self.args[self.pos_a] = a
             self.args[self.pos_b] = b
             self.args[self.pos_c] = c
-            self.kernel(*self.args, grid=self.grid, bench=bench, defines=self.macros)
+            return self.kernel(*self.args, grid=self.grid, bench=bench, defines=self.macros)
 
 
 
@@ -591,7 +591,7 @@ __global__ void {name}(
                                           a.stride(), b.stride(), c.stride(),
                                           a.shape, b.shape, c.shape, arrays)
         instance = cache[key]
-        instance.run(a, b, c, bench)
+        speed = instance.run(a, b, c, bench)
         # save information in context
         ctx.flops = instance.flops
         ctx.sym_a = instance.sym_a
@@ -602,6 +602,7 @@ __global__ void {name}(
         ctx.matmul_N = instance.matmul_N
         ctx.matmul_K = instance.matmul_K
         ctx.bench = bench
+        ctx.forward_ms = speed
         ctx.save_for_backward(a, b)
         return c
 
