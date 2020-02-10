@@ -91,7 +91,8 @@ protected:
   ir::value* GenAssignOp(Expr* lvalue, ir::value* rhs);
   ir::value* GenBroadcastOp(ir::value* src, ir::type* dst_ty);
   ir::value* GenNumcastOp(ir::value*src, ir::type* dst_ty);
-  ir::value* GenCastOp(ir::value* op, ir::type* type);
+  ir::value* GenSemCastOp(ir::value* op, ir::type* type);
+  ir::value* GenBitCastOp(ir::value* src, ir::type* dst_ty);
 
   // Triton-IR types
   static ir::type* GenIRType(::Type* type, ir::context &ctx);
