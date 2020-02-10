@@ -431,6 +431,7 @@ public:
   void DerefOpTypeChecking();
   void ReduceOpTypeChecking();
   void UnaryArithmOpTypeChecking();
+  void BitcastOpTypeChecking();
   void CastOpTypeChecking();
 
 protected:

@@ -646,6 +646,9 @@ void UnaryOp::TypeChecking() {
   case '!':
     return UnaryArithmOpTypeChecking();
 
+  case Token::BITCAST:
+    return BitcastOpTypeChecking();
+
   case Token::CAST:
     return CastOpTypeChecking();
 
@@ -722,6 +725,11 @@ void UnaryOp::UnaryArithmOpTypeChecking() {
   }
 }
 
+void UnaryOp::BitcastOpTypeChecking() {
+  auto operandType = Type::MayCast(operand_->Type());
+  if(type_->Width() != operandType->Width())
+    Error(this, "cannot bitcast to type of different width");
+}
 
 void UnaryOp::CastOpTypeChecking() {
   auto operandType = Type::MayCast(operand_->Type());

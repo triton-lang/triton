@@ -197,7 +197,8 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
     case Token::MINUS:       return set_ret(GenUnaryMinus(arg));
     case '~':                return error_not_implemented();
     case '!':                return error_not_implemented();
-    case Token::CAST:        return set_ret(GenCastOp(arg, GenIRType(unary->Type(), *ctx_)));
+    case Token::BITCAST:     return set_ret(GenBitCastOp(arg, GenIRType(unary->Type(), *ctx_)));
+    case Token::CAST:        return set_ret(GenSemCastOp(arg, GenIRType(unary->Type(), *ctx_)));
     case Token::REDUCE: {
       int ax, tag;
       UnaryOp::decodeRed(unary->info_, ax, tag);
@@ -579,9 +580,14 @@ ir::value* Generator::GenNumcastOp(ir::value*src, ir::type* dst_ty) {
   }
 }
 
-ir::value* Generator::GenCastOp(ir::value* src, ir::type* dst_ty) {
+ir::value* Generator::GenSemCastOp(ir::value* src, ir::type* dst_ty) {
   return GenNumcastOp(GenBroadcastOp(src, dst_ty), dst_ty);
 }
+
+ir::value* Generator::GenBitCastOp(ir::value* src, ir::type* dst_ty) {
+  return bld_->create_cast(ir::BitCast, GenBroadcastOp(src, dst_ty), dst_ty);
+}
+
 
 // Triton-IR Attr
 ir::attribute Generator::GenIRAttr(ASTNode::Attr attr) {
