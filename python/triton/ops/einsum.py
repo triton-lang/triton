@@ -110,13 +110,16 @@ __global__ void {name}(
             src += "\n            "
         if lut_mode_a == _einsum.LUT_MODE.SCALAR:
             src += f", int stride_a_inner __multipleof({multipleof_a})"
+            src += f", int rem_delta_a __multipleof({multipleof_a})"
         elif lut_mode_a == _einsum.LUT_MODE.DRAM:
             src += ", int* AD __noalias __readonly __aligned(16)"
         src += "\n            "
         if lut_mode_b == _einsum.LUT_MODE.SCALAR:
             src += f", int stride_b_inner __multipleof({multipleof_b})"
+            src += f", int rem_delta_b __multipleof({multipleof_b})"
         elif lut_mode_b == _einsum.LUT_MODE.DRAM:
             src += ", int* BD"
+        src += "\n"
         for ptr in subscripted:
             src += f", int* {ptr}"
         src += """) {
@@ -142,6 +145,7 @@ __global__ void {name}(
     int off_k = pid_z * div_z;
     matmul_k = select(pid_z < rem_z, div_z, div_z + rem_z);
 #endif
+    int rem_k = matmul_k % TK;
     
     // create ranges
 """
@@ -204,13 +208,33 @@ __global__ void {name}(
         src += f"""
 
     // prefetch 
+    int prefetch_k = select(rem_k > 0, rem_k, TK);
     bool checkm[TM] = r""" + ''.join(map(str,axes_m)) + f""" < matmul_m;
     bool checkn[TN] = r""" + ''.join(map(str,axes_n)) + f""" < matmul_n;
-    bool checkk[TK] = {rk} < matmul_k + off_k;
+    bool checkk[TK] = {rk} < prefetch_k;
     bool checka[TM, TK, TB] = checkm[:, newaxis, newaxis] && checkk[newaxis, :, newaxis];
     bool checkb[TK, TN, TB] = checkk[:, newaxis, newaxis] && checkn[newaxis, :, newaxis];
     TYPE a[TM, TK, TB] = checka ? *pa : 0;
-    TYPE b[TK, TN, TB] = checkb ? *pb : 0;
+    TYPE b[TK, TN, TB] = checkb ? *pb : 0;"""
+
+        if lut_mode_a == _einsum.LUT_MODE.SCALAR:
+            src += """
+    pa += rem_delta_a;"""
+        else:
+            src += """
+    pa += incda;
+    padelta += TK;
+    incda = (*padelta)[newaxis, :, newaxis];"""
+
+        if lut_mode_b == _einsum.LUT_MODE.SCALAR:
+            src += """
+    pb += rem_delta_b;"""
+        else:
+            src += """
+    pb += (*pbdelta)[:, newaxis, newaxis];
+    pbdelta += TK;"""
+
+        src += f"""
     // accumulate
     float acc[TM, TN, TB] = 0;
     for(int k = matmul_k; k > 0; k -= TK) {{
@@ -219,36 +243,21 @@ __global__ void {name}(
         uint32 bits[TM, TN, TB] = bitcast<uint32[TM,TN,TB]>(acc);
         acc = bitcast<TYPE[TM, TN, TB]>(bits & MASK);
         #endif
-    """
 
-        if not use_lut_a or not use_lut_b:
-            src += f"""
-        {rk} += TK;
-"""
-            src += _einsum.unpack_cc(tile, axes_k, 'r', True)
-            
+        checkk = k > TK;
+        checka = checkm[:, newaxis, newaxis] && checkk[newaxis, :, newaxis];
+        checkb = checkk[:, newaxis, newaxis] && checkn[newaxis, :, newaxis];
+        a = *?(checka)pa;
+        b = *?(checkb)pb;"""
 
-        if use_lut_a:
-            if lut_mode_a == _einsum.LUT_MODE.SCALAR:
-                src += """
-            pa += stride_a_inner;"""
-            else:
-                src += """
-            pa += incda;
-            padelta += TK;
-            incda = (*padelta)[newaxis, :, newaxis];"""
+        if lut_mode_a == _einsum.LUT_MODE.SCALAR:
+            src += """
+        pa += stride_a_inner;"""
         else:
             src += """
-            offa = """
-            for i, sym in enumerate(expr_a):
-                ccode = _einsum.print_cc(sym, axes_m, axes_k, axes_b)
-                stride = f'stride_a_{i}' if i < len(expr_a) - 1 else '1'
-                if i > 0:
-                    src += ' + '
-                src += f"({ccode}) * {stride}\n                            "
-            src += """;
-            TYPE *pa[TM, TK, TB] = A + offa;"""
-
+        pa += incda;
+        padelta += TK;
+        incda = (*padelta)[newaxis, :, newaxis];"""
 
 
         if lut_mode_b == _einsum.LUT_MODE.SCALAR:
@@ -260,11 +269,6 @@ __global__ void {name}(
         pbdelta += TK;"""
 
         src += f"""
-        checkk = k > TK;
-        checka = checkm[:, newaxis, newaxis] && checkk[newaxis, :, newaxis];
-        checkb = checkk[:, newaxis, newaxis] && checkn[newaxis, :, newaxis];
-        a = *?(checka)pa;
-        b = *?(checkb)pb;
     }}
     TYPE c[TM, TN, TB] = acc;
 
@@ -367,16 +371,27 @@ __global__ void {name}(
         fn = sp.lambdify(args, delta, 'numpy')
         # inner axes values
         inner = [dims[d] for d in axes]
-        k = np.arange(np.prod(inner), dtype=np.int32)
+        inner = np.prod(inner)
+        rem = inner % step
+        rem = rem if rem > 0 else step
+        # k = [0, 1, ..., step, 
+        #      rem, rem + 1, ... rem + inner]
+        k = np.concatenate((np.arange(step), 
+                            np.arange(rem, inner))).astype(np.int32)
+        # nextk = [rem, 1 + rem, ..., step + rem, 
+        #          rem + step, rem + 1 + step, ..., inner + step]
+        nextk = np.concatenate((k[:step] + rem, 
+                                k[step:] + step))
+        # offsets
         off      = _einsum.unpack_offset(k, axes, dims)
-        nextoff  = _einsum.unpack_offset(k + step, axes, dims)
+        nextoff  = _einsum.unpack_offset(nextk, axes, dims)
         # evaluate deltas
         args  = [s for s in stride]
         args += [off[sk] for sk in axes]
         args += [nextoff[sk] for sk in axes]
         args += [x for _, x in arrays]
         delta = fn(*args)
-        return delta, _einsum.lut_mode(delta[:-step])
+        return delta, _einsum.lut_mode(delta[step:-step])
 
     ############################
     ## Einsum parsing
@@ -525,17 +540,22 @@ __global__ void {name}(
                          alpha, M, N, K, div_m] +\
                          dim_m + dim_n +  dim_k + dim_b +\
                          stride_a + stride_b + stride_c
-            if lut_mode_a != _einsum.LUT_MODE.CONSTANT:
-                delta_a = delta_a[0] if lut_mode_a == _einsum.LUT_MODE.SCALAR else torch.from_numpy(delta_a).cuda()
-                self.args += [delta_a]
-            if lut_mode_b != _einsum.LUT_MODE.CONSTANT:
-                delta_b = delta_b[0] if lut_mode_b == _einsum.LUT_MODE.SCALAR else torch.from_numpy(delta_b).cuda()
-                self.args += [delta_b]
+            # LUT for A
+            if lut_mode_a == _einsum.LUT_MODE.SCALAR:
+                self.args += [delta_a[TK], delta_a[0]]
+            if lut_mode_a == _einsum.LUT_MODE.DRAM:
+                self.args += [torch.from_numpy(delta_a).cuda()]
+            # LUT for B
+            if lut_mode_b == _einsum.LUT_MODE.SCALAR:
+                self.args += [delta_b[TK], delta_b[0]]
+            if lut_mode_b == _einsum.LUT_MODE.DRAM:
+                self.args += [torch.from_numpy(delta_b).cuda()]
+            # Einsum dependents
             self.args += arrays
             self.grid = lambda opt: [triton.cdiv(M, opt.d('TM')) * 
-                                    triton.cdiv(N, opt.d('TN')),
-                                    triton.cdiv(B, opt.d('TB')),
-                                    opt.d('TZ')]
+                                     triton.cdiv(N, opt.d('TN')),
+                                     triton.cdiv(B, opt.d('TB')),
+                                     opt.d('TZ')]
             # position of dynamic arguments
             self.pos_a = 0
             self.pos_b = 1
@@ -551,6 +571,7 @@ __global__ void {name}(
             TZ = [x for x in [1, 2, 4, 8, 16, 32] \
                     if x < MAX_GZ and x*MIN_GM*MIN_GN*MIN_GB < 256]
             TZ = [1] if not TZ else [TZ[-1], TZ[-1]*2]
+            TM, TN, TB, TZ = 64, 64, 1, 1
             self.macros = {  'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
             if mask:
                 self.macros['MASK'] = '{0:#0{1}x}'.format(mask, 10)
@@ -613,6 +634,7 @@ __global__ void {name}(
         ctx.matmul_K = instance.matmul_K
         ctx.bench = bench
         ctx.forward_ms = speed
+        ctx.mask = mask
         ctx.save_for_backward(a, b)
         return c
 
@@ -621,7 +643,7 @@ __global__ void {name}(
     ############################
 
     @staticmethod
-    def sym_invert(sym_c, sym_x, prefix, renamed, inverse, mask):
+    def sym_invert(sym_c, sym_x, prefix, renamed, inverse):
         for i, expr in enumerate(sym_x):
            if expr.is_symbol:
                continue
@@ -652,9 +674,9 @@ __global__ void {name}(
         expr_a =  _einsum.sym_to_expr(sym_a)
         expr_b =  _einsum.sym_to_expr(sym_b)
         expr_c =  _einsum.sym_to_expr(sym_c)
-        expr = f'{expr_c},{expr_b}->{expr_a}'
-        da = einsum(expr, dy, b, a.shape, False)
-        return None, da, None, None, None
+        da = einsum(f'{expr_c},{expr_b}->{expr_a}', dy, b, a.shape, mask=ctx.mask)
+        db = einsum(f'{expr_a},{expr_c}->{expr_b}', a, dy, b.shape, mask=ctx.mask)
+        return None, da, db, None, None
 
 
 einsum = _einsum.apply

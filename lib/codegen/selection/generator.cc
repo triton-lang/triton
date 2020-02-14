@@ -369,7 +369,7 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
         ((PHINode*)current_result)->addIncoming(result_then, mask_then_bb);
         Value *result_false = false_values->get_value(idx);
         if(result_then->getType()->isVectorTy())
-          result_false = builder_->CreateVectorSplat(vector_size, llvm::UndefValue::get(result_false->getType()));
+          result_false = builder_->CreateVectorSplat(vector_size, result_false);
         ((PHINode*)current_result)->addIncoming(result_false, current_bb);
       }
       else
