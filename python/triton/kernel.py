@@ -210,7 +210,7 @@ class kernel:
         macros.append((k, values))
       opt = libtriton.options_space()
       opt.defines = macros
-      opt.num_warps = [2, 4, 8]
+      opt.num_warps = num_warps
       # create unique id for this op
       op_id = libtriton.make_op_id()
       self.fw_id[key] = op_id
