@@ -104,11 +104,17 @@ bool peephole::rewrite_mult(ir::instruction *value, ir::builder& builder) {
       ir::value *lhs = binop->get_operand(0);
       ir::value *rhs = binop->get_operand(1);
       ir::constant_int *_1_lhs = nullptr;
-      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(lhs))
-        _1_lhs = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(lhs)){
+        auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+        if(cst && cst->get_value() == 1)
+          _1_lhs = cst;
+      }
       ir::constant_int *_1_rhs = nullptr;
-      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(rhs))
-        _1_rhs = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(rhs)){
+        auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+        if(cst && cst->get_value() == 1)
+          _1_rhs = cst;
+      }
       if(_1_lhs){
         binop->replace_all_uses_with(rhs);
         return true;
