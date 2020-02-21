@@ -1,7 +1,8 @@
 import triton
+import torch
 import math
 
-class _batchnorm(triton.function):
+class _batchnorm(torch.autograd.Function):
 
   fwd_src = """
 void fwdbatchnorm(float *Y, float *M, float *V,

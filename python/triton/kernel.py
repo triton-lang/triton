@@ -17,43 +17,6 @@ import triton.frameworks as fw
 import triton.utils
 import triton._C.libtriton as libtriton
 
-def _make_framework_src(src, grid):
-  if fw.has_torch:
-    return libtriton.make_torch_src(src, grid)
-  else:
-    assert False
-
-def _make_cache_path(src):
-  md5 = hashlib.sha1(src.encode())
-  hexhash = md5.hexdigest()
-  home = os.path.expanduser('~')
-  cacheroot = os.path.join(home, '.triton', 'cache')
-  cachepath = os.path.join(cacheroot, str(hexhash))
-  if not os.path.exists(cachepath):
-    os.makedirs(cachepath)
-  return cachepath
-
-def _write_bindings(src, root):
-  if fw.has_torch():
-    name = 'torch'
-  else:
-    assert False
-  cpp = os.path.join(root, '{name}.cpp'.format(name=name))
-  suffix = sysconfig.get_config_var('EXT_SUFFIX')
-  so = os.path.join(root, '{name}{suffix}'.format(name=name, suffix=suffix))
-  recompile = False
-  # recompile if .so does not exist
-  if not os.path.exists(cpp) or not os.path.exists(so):
-    recompile = True
-  # recompile if cpp was modified after .so
-  elif max(cpp, so, key=os.path.getctime) == cpp:
-    recompile = True
-  # write cpp file
-  if recompile:
-    with open(cpp, 'w+') as handle:
-      handle.writelines(src)
-  # return path of cpp file
-  return (cpp, so)
 
 @contextlib.contextmanager
 def quiet():
@@ -64,7 +27,7 @@ def quiet():
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
-def _build(src, path):
+def _build(src, path, name):
   ccdir = os.path.join(libtriton.__file__, os.path.pardir)
   ccdir = os.path.realpath(ccdir)
   # include directories
@@ -88,7 +51,6 @@ def _build(src, path):
     libraries += ['torch']
     abi = fw.torch._C._GLIBCXX_USE_CXX11_ABI
     extra_compile_args += ['-D_GLIBCXX_USE_CXX11_ABI={abi}'.format(abi=abi)]
-    name = 'torch'
   else:
     assert False
   # extra arguments
@@ -142,30 +104,47 @@ def _cvt_to_def_str(obj):
   return str(obj)
 
 
-def _make_framework_op(src, options):
-  src, name = _make_framework_src(src, options)
-  cache_path = _make_cache_path(src)
-  cpp, so = _write_bindings(src, cache_path)
-  _build(cpp, cache_path)
-  if fw.has_torch():
-    fw.torch.ops.load_library(so)
-    return getattr(fw.torch.ops.triton, name)
-  else:
-    assert False
+def _encode(arg_types):
+  codes = {
+    libtriton.arg_type.int1:   'i1',
+    libtriton.arg_type.int8:   'i8',
+    libtriton.arg_type.int32:  'i32',
+    libtriton.arg_type.int64:  'i64',
+    libtriton.arg_type.half:   'f16',
+    libtriton.arg_type.float:  'f32',
+    libtriton.arg_type.double: 'f64',
+    libtriton.arg_type.buffer: 'buf'
+  }
+  ret = '_'.join(map(codes.get, arg_types))
+  return ret
 
-def _make_grid(grid, args) :
-  scalars = [x for x in args if isinstance(x, triton.utils.scalar)]
-  def grid(opt):
-    for x in scalars:
-      x.set_assume_initialized()
-    result = grid(opt)
-    for x in scalars:
-      x.unset_assume_initialized()
-    return result
-  return grid
-
-
-bench_registry = triton.utils.id_dict()
+def _make_framework_op(arg_types):
+  name = _encode(arg_types)
+  # path of .cpp and .so file
+  home = os.path.expanduser('~')
+  root = os.path.join(home, '.triton', 'torch', name)
+  if not os.path.exists(root):
+    os.makedirs(root)
+  suffix = sysconfig.get_config_var('EXT_SUFFIX')
+  so = os.path.join(root, f'op{suffix}')
+  cpp = os.path.join(root, f'op.cpp')
+  # handle cached .so file
+  if os.path.exists(so):
+    tt_mtime = os.stat(os.path.realpath(libtriton.__file__)).st_mtime
+    so_mtime = os.stat(so).st_mtime
+    # can use cached if libtriton is older than the .so
+    if tt_mtime < so_mtime:
+      fw.torch.ops.load_library(so)
+      return getattr(fw.torch.ops.triton, name)
+  # create torch source code
+  src, _ = libtriton.make_torch_src(name, arg_types)
+  with open(cpp, 'w+') as handle:
+      handle.writelines(src)
+  # compile torch source code
+  _build(cpp, root, 'op')
+  fw.torch.ops.load_library(so)
+  return getattr(fw.torch.ops.triton, name)
+  
 
 class kernel:
 
@@ -180,9 +159,8 @@ class kernel:
     self.cst[name] = value
 
   def __call__(self, *args, **kwargs):
-
     ########################
-    # keyword arguments
+    # JIT Options
     ########################
     num_warps = kwargs['num_warps'] if 'num_warps' in kwargs else [2, 4, 8]
     defines = kwargs['defines']     if 'defines'   in kwargs else dict()
@@ -195,7 +173,6 @@ class kernel:
     #########################
     # cache
     ########################
-
     # create a new framework op when defines are different
     key = '-'.join(['{key}-{val}'.format(key=key, val=val) for key, val in defines.items()])
     if key not in self.fw_id.keys():
@@ -211,15 +188,16 @@ class kernel:
       opt = libtriton.options_space()
       opt.defines = macros
       opt.num_warps = num_warps
-      # create unique id for this op
+      # create triton function for this op
       op_id = libtriton.make_op_id()
       self.fw_id[key] = op_id
-      # register function
-      libtriton.register_fn(op_id, self.src, opt)
+      libtriton.register_fn(op_id, self.src, opt, os.path.realpath(libtriton.__file__))
       for name, value in self.cst.items():
         libtriton.register_cst(op_id, name, value)
+      # create pytorch hook for this op
+      arg_types = libtriton.get_fn_signature(self.src, opt)
       if self.fw_op is None:
-        self.fw_op = _make_framework_op(self.src, opt)
+        self.fw_op = _make_framework_op(arg_types)
 
     ########################
     # initialize

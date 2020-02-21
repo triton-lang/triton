@@ -1,5 +1,4 @@
 from .kernel import *
-from .function import *
 from .utils import *
 import triton.ops
 

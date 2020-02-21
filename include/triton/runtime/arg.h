@@ -7,6 +7,9 @@
 #include <stdexcept>
 
 namespace triton{
+namespace ir{
+  class type;
+}
 
 namespace driver{
   class buffer;
@@ -25,6 +28,9 @@ enum arg_type {
   DOUBLE_T,
   BUFFER_T
 };
+
+arg_type convert(ir::type *ty);
+
 
 inline size_t size_of(arg_type ty){
   switch(ty){
