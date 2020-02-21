@@ -73,7 +73,7 @@ class _einsum(torch.autograd.Function):
                     stride_a_last, stride_b_last, stride_c_last,
                     lut_mode_a, lut_mode_b,
                     delta_a, delta_b,
-                    subscripted):
+                    subscripted, varnames):
 
         use_lut_a = True
         use_lut_b = True
@@ -123,6 +123,8 @@ __global__ void {name}(
         src += "\n"
         for ptr in subscripted:
             src += f", int* {ptr}"
+        for name in varnames:
+            src += f", int {name}"
         src += """) {
 
     // re-order outer program ids
@@ -274,6 +276,9 @@ __global__ void {name}(
     TYPE c[TM, TN, TB] = acc;
 
     // re-materialize ranges
+    pid_mn = get_program_id(0) / div_m;
+    pid_n = pid_mn % grid_n;
+    pid_m = (pid_mn / grid_n)*div_m + (get_program_id(0) % div_m);
 """
         for axes, tile, off in zip([axes_m, axes_n, axes_b],
                                    ['TM', 'TN', 'TB'],
@@ -410,11 +415,8 @@ __global__ void {name}(
         batch = [d for d in sym_a if d in sym_b and d in sym_c]
         outer = [d for d in sym_a if d not in sym_b and d in sym_c]
         inner = [d for d in sym_a if d in sym_b and d not in sym_c]
-        illegal = [d for d in sym_a if d not in sym_b and d not in sym_c]
-        if illegal:
-            raise ValueError(f"einsum labels {illegal} ({expr_a}) "\
-                             f"not present in {expr_b} or {expr_c}")
-        return _einsum.uniq(batch), _einsum.uniq(outer), _einsum.uniq(inner)
+        variables = [d for d in sym_a if d not in sym_b and d not in sym_c]
+        return _einsum.uniq(batch), _einsum.uniq(outer), _einsum.uniq(inner), variables
 
 
     def replace_subscript(expr, arrays):
@@ -467,7 +469,33 @@ __global__ void {name}(
         locks = None
         kernel_cache = dict()
 
-        def __init__(self, einsum, dtype, stride_a, stride_b, stride_c, shape_a, shape_b, arrays, mask, shape_c):
+        @staticmethod
+        def _tile(M, N, B, TMs, TNs, TBs, TZs, TK):
+            smp = 15
+            # occupancy estimation
+            grid = lambda TM, TN, TB, TZ:   \
+                        triton.cdiv(M, TM)* \
+                        triton.cdiv(N, TN)* \
+                        triton.cdiv(B, TB)* \
+                        TZ
+            occupancy = lambda TM, TN, TB, TZ: \
+                           min(grid(TM, TN, TB, TZ), 4*smp)
+            # arithmetic intensity estimation
+            intensity = lambda TM, TN: \
+                           TM * TN * TK / (TM*TK + TK*TN)
+            # occupancy/intensity for all configurations
+            estimates = {(TM, TN, TB, TZ): (occupancy(TM, TN, TB, TZ), intensity(TM, TN)) \
+                        for TM in TMs \
+                        for TN in TNs \
+                        for TB in TBs \
+                        for TZ in TZs }
+            # returns configuration that maximizes occupancy subject to maximizing intensity
+            estimates = sorted(estimates.items(), 
+                               key=lambda item: item[1], 
+                               reverse=True)
+            return estimates[0][0]
+
+        def __init__(self, einsum, dtype, stride_a, stride_b, stride_c, shape_a, shape_b, arrays, mask, shape_c, varnames):
             # parse symbols
             expr_a, expr_bc = einsum.split(",")
             expr_b, expr_c  = expr_bc.split("->")
@@ -476,9 +504,13 @@ __global__ void {name}(
             sym_b = _einsum.parse_expr(expr_b, subscripted)
             sym_c = _einsum.parse_expr(expr_c, subscripted)
             # parse axes
-            axes_b, axes_m, axes_k = _einsum.parse_axes(sym_a, sym_b, sym_c, subscripted)
-            _, axes_n, _           = _einsum.parse_axes(sym_b, sym_a, sym_c, subscripted)
+            axes_b, axes_m, axes_k, var = _einsum.parse_axes(sym_a, sym_b, sym_c, subscripted)
+            _, axes_n, _, _           = _einsum.parse_axes(sym_b, sym_a, sym_c, subscripted)
             axes = axes_b + axes_m + axes_n + axes_k
+            # unresolved symbols
+            unresolved = [x for x in map(str, var) if x not in varnames]
+            if unresolved:
+                raise ValueError(f'unresolved symbols: {unresolved}')
             # check dimensions
             dims_a  = dict(zip(sym_a, shape_a))
             dims_b  = dict(zip(sym_b, shape_b))
@@ -520,7 +552,7 @@ __global__ void {name}(
                                                         stride_a_last, stride_b_last, stride_c_last,
                                                         lut_mode_a, lut_mode_b,
                                                         delta_a, delta_b,
-                                                        subscripted)
+                                                        subscripted, varnames)
             self.kernel = cache[name]
             # Initialize locks
             if _einsum.instance.locks is None:
@@ -565,19 +597,21 @@ __global__ void {name}(
             self.pos_a = 0
             self.pos_b = 1
             self.pos_c = 2
-            # pre-processor macros
-            TM = [16] + [x for x in [32, 64, 128] if x <= M]
-            TN = [16] + [x for x in [32, 64, 128] if x <= N]
-            TB = [x for x in [1, 2, 4] if x <= B]
-            MAX_GZ = K // 2048
-            MIN_GM = M // max(TM)
-            MIN_GN = N // max(TN)
-            MIN_GB = B // max(TB)
-            TZ = [x for x in [1, 2, 4, 8, 16, 32] \
-                    if x < MAX_GZ and x*MIN_GM*MIN_GN*MIN_GB < 256]
-            TZ = [1] if not TZ else [TZ[-1], TZ[-1]*2]
-            TM, TN, TB, TZ = 64, 64, 1, 1
-            self.macros = {  'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
+            # user-provided variables
+            self.pos_vars = len(self.args)
+            self.varnames = varnames
+            self.args += [None] * len(varnames)
+            # tile size ranges
+            MAX_GZ = triton.cdiv(K, 2048)
+            TMs = [16] + [x for x in [32, 64, 128] if x <= M]
+            TNs = [16] + [x for x in [32, 64, 128] if x <= N]
+            TBs = [x for x in [1, 2, 4, 8] if x <= B]
+            TZs = [x for x in [1, 2, 4, 8, 16, 32] if x <= MAX_GZ]
+            # tile sizes
+            TM, TN, TB, TZ = _einsum.instance._tile(M, N, B, TMs, TNs, TBs, TZs, TK)
+            TM, TN, TB, TZ = 64, 128, 1, 1
+            self.macros =  {'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
+            self.num_warps = [4]
             if mask:
                 self.macros['MASK'] = '{0:#0{1}x}'.format(mask, 10)
             # save information on the operation
@@ -589,12 +623,15 @@ __global__ void {name}(
             self.matmul_N = N
             self.matmul_K = K
             self.is_extended = any([not x.is_symbol for x in sym_a + sym_b])
+
                     
-        def run(self, a, b, c, bench):
+        def run(self, a, b, c, values, bench):
             self.args[self.pos_a] = a
             self.args[self.pos_b] = b
             self.args[self.pos_c] = c
-            return self.kernel(*self.args, grid=self.grid, bench=bench, defines=self.macros)
+            for i, name in enumerate(self.varnames):
+                self.args[self.pos_vars + i] = values[name]
+            return self.kernel(*self.args, grid=self.grid, bench=bench, defines=self.macros, num_warps=self.num_warps)
 
 
 
@@ -604,8 +641,9 @@ __global__ void {name}(
     ############################
 
     instance_cache = dict()
+    registry = triton.utils.id_dict()
     @staticmethod
-    def forward(ctx, expr, a, b, output, mask=None, arrays=dict(), bench=False):
+    def forward(ctx, expr, a, b, output, mask, arrays, bench, values):
         # compile einsum instance
         cache = _einsum.instance_cache
         key = (expr, a.dtype, 
@@ -615,10 +653,10 @@ __global__ void {name}(
             cache[key] = _einsum.instance(expr, a.dtype, 
                                           a.stride(), b.stride(), output.stride(),
                                           a.shape, b.shape, arrays,
-                                          mask, output.shape)
+                                          mask, output.shape, values.keys())
         instance = cache[key]
         # run and mark as dirty output modified in-place
-        perf = instance.run(a, b, output, bench)
+        perf = instance.run(a, b, output, values, bench)
         ctx.mark_dirty(output)
         # save information in context
         ctx.is_extended = instance.is_extended
@@ -629,8 +667,9 @@ __global__ void {name}(
         ctx.matmul_M = instance.matmul_M
         ctx.matmul_N = instance.matmul_N
         ctx.matmul_K = instance.matmul_K
-        ctx.perf = perf
+        ctx.forward_ms = perf
         ctx.save_for_backward(a, b)
+        _einsum.registry[output] = ctx
         return output
 
 
@@ -662,5 +701,5 @@ __global__ void {name}(
 
 def einsum(expr, a, b, output, 
            mask=None, arrays=dict(), 
-           bench=False):
-    return _einsum.apply(expr, a, b, output, mask, arrays, bench)
+           bench=False, values=dict()):
+    return _einsum.apply(expr, a, b, output, mask, arrays, bench, values)

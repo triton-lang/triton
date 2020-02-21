@@ -61,6 +61,14 @@ namespace tools
         return (status==0 || errno==EEXIST)?0:-1;
     }
 
+    inline int mtime(std::string const & path)
+    {
+      struct stat st;
+      if(stat(path.c_str(), &st) != 0)
+        return 0;
+      return st.st_mtime;
+    }
+
 }
 
 }
