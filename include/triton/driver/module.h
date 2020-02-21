@@ -74,6 +74,7 @@ public:
   cu_module(driver::context* context, std::unique_ptr<llvm::Module> module);
   cu_module(driver::context* context, const std::string& source);
   std::unique_ptr<buffer> symbol(const char * name) const;
+  const std::string& source() const { return source_; }
 
 private:
   std::string source_;
