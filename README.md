@@ -16,17 +16,14 @@ The formal foundations of this project are described in the following MAPL2019 p
 
 ## Installation
 
-Triton is a fairly self-contained package and uses its own parser (forked from [wgtcc](https://github.com/wgtdkp/wgtcc)) and LLVM-8.0+ for code generation.
+Triton is a fairly self-contained package and uses its own parser (forked from [wgtcc](https://github.com/wgtdkp/wgtcc)) and LLVM-8.0+ for code generation. 
 
 
 ```
 sudo apt-get install llvm-8-dev
-git clone https://github.com/ptillet/triton.git;
-cd triton/python/;
-python setup.py develop;
-cd examples;
-python einsum.py
+ pip install -e "git+https://github.com/ptillet/triton.git#egg=triton&subdirectory=python"
 ```
+
 
 ## Getting Started
 
