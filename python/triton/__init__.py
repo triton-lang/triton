@@ -1,6 +1,7 @@
 from .kernel import *
 from .utils import *
 import triton.ops
+import triton.nn
 
 
 # clean-up libtriton resources
