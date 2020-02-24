@@ -63,19 +63,7 @@ class CMakeBuild(build_ext):
                       '-DBUILD_PYTHON_MODULE=ON',
                       '-DPYTHON_INCLUDE_DIRS=' + python_include_dirs,
                       '-DLLVM_CONFIG=' + find_llvm()]
-        # tensorflow compatibility
-        try:
-            import tensorflow as tf
-            tf_abi = tf.__cxx11_abi_flag__ if "__cxx11_abi_flag__" in tf.__dict__ else 0
-            tf_include_dirs = tf.sysconfig.get_include()
-            tf_libs = tf.sysconfig.get_link_flags()[1].replace('-l', '')
-            cmake_args += ['-DTF_INCLUDE_DIRS=' + tf_include_dirs,
-                        '-DTF_LIB_DIRS='     + tf.sysconfig.get_lib(),
-                        '-DTF_LIBS='         + tf_libs,
-                        '-DTF_ABI='          + str(tf_abi)]
-        except ModuleNotFoundError:
-            pass
-
+        # configuration
         cfg = 'Debug' if self.debug else 'Release'
         cfg = 'Release'
         build_args = ['--config', cfg]
@@ -104,8 +92,10 @@ find_llvm()
 directories = [x[0] for x in os.walk(os.path.join(os.path.pardir, 'include'))]
 data = []
 for d in directories:
-    files = glob.glob(os.path.join(d, '*.h'), recursive=False)
-    data += [os.path.relpath(f, os.path.pardir) for f in files]
+    for htype in ['h', 'hpp']:
+        files = glob.glob(os.path.join(d, f'*.{htype}'), recursive=False)
+        data += [os.path.relpath(f, os.path.pardir) for f in files]
+print(data)
 
 setup(
     name='triton',
@@ -114,7 +104,8 @@ setup(
     author_email='ptillet@g.harvard.edu',
     description='A language and compiler for custom Deep Learning operations',
     long_description='',
-    packages=['triton', 'triton/_C', 'triton/ops'],
+    packages=['triton', 'triton/_C', 'triton/ops', 'triton/nn'],
+    install_requires=['numpy', 'torch', 'sympy'],
     package_data={'': data},
     ext_modules=[CMakeExtension('triton', 'triton/_C/')],
     cmdclass=dict(build_ext=CMakeBuild),

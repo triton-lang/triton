@@ -1,18 +1,21 @@
-import numpy as np
-import torch
 from math import ceil, log2
 from enum import IntEnum
-import triton
 from functools import reduce
 from operator import mul
-from sympy.parsing.sympy_parser import parse_expr
-import sympy as sp
 from collections import OrderedDict
 from collections import namedtuple
 import re
+import triton
+# torch
+import torch
+# numpy -- ideally removed in a future release
+import numpy as np
+# sympy -- ideally removed in a future release
+import sympy as sp
+from sympy.parsing.sympy_parser import parse_expr
 from sympy.printing.ccode import C89CodePrinter
 
-       
+
 class _einsum(torch.autograd.Function):
 
 
@@ -612,7 +615,7 @@ __global__ void {name}(
             TM, TN, TB, TZ = 64, 128, 1, 1
             self.macros =  {'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
             self.num_warps = [4]
-            if mask:
+            if mask is not None:
                 self.macros['MASK'] = '{0:#0{1}x}'.format(mask, 10)
             # save information on the operation
             self.expr_a = expr_a
@@ -696,7 +699,7 @@ __global__ void {name}(
         if ctx.needs_input_grad[2]:
             db = torch.empty_like(b)
             einsum(f'{expr_a},{expr_c}->{expr_b}', a, dy, db)
-        return None, da, db, None, None, None, None
+        return None, da, db, None, None, None, None, None
 
 
 def einsum(expr, a, b, output, 
