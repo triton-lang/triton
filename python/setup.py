@@ -95,7 +95,6 @@ for d in directories:
     for htype in ['h', 'hpp']:
         files = glob.glob(os.path.join(d, f'*.{htype}'), recursive=False)
         data += [os.path.relpath(f, os.path.pardir) for f in files]
-print(data)
 
 setup(
     name='triton',
