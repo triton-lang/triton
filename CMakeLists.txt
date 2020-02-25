@@ -40,6 +40,6 @@ endif()
 # Triton
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-link_directories(${LLVM_LIBRARY_DIRS})
+target_link_directories(triton PRIVATE ${LLVM_LIBRARY_DIRS})
 target_link_libraries(triton ${LLVM_LIBRARIES})
 
