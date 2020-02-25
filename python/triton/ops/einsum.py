@@ -247,7 +247,7 @@ __global__ void {name}(
         acc += a @ b;
         #ifdef MASK
         uint32 bits[TM, TN, TB] = bitcast<uint32[TM,TN,TB]>(acc);
-        acc = bitcast<TYPE[TM, TN, TB]>(bits & MASK);
+        acc = bitcast<float[TM, TN, TB]>(bits & MASK);
         #endif
 
         checkk = k > TK;
