@@ -69,7 +69,7 @@ class _einsum(torch.autograd.Function):
         ret = dict(zip(expr, ret))
         return ret
 
-    def make_kernel(name,
+    def make_kernel(name, dtype, mask,
                     expr_a, expr_b, expr_c,
                     axes_m, axes_n, axes_k, axes_b,
                     multipleof_a, multipleof_b, multipleof_c,
@@ -329,8 +329,15 @@ __global__ void {name}(
 #endif
 }
 """
-
-        ret = triton.kernel(src)
+        # compilation options
+        TM, TN, TB, TZ = [16, 32, 64, 128], [16, 32, 64, 128], 1, [1, 4, 16]
+        TK = 16 if dtype==torch.float16 else 8
+        defines =  {'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
+        if mask is not None:
+            defines['MASK'] = '{0:#0{1}x}'.format(mask, 10)
+        # create kernel
+        ret = triton.kernel(src, defines=defines)
+        # set constant
         if use_lut_a and lut_mode_a == _einsum.LUT_MODE.CONSTANT:
             ret.set_constant('AD', delta_a)
         if use_lut_b and lut_mode_b == _einsum.LUT_MODE.CONSTANT:
@@ -541,14 +548,15 @@ __global__ void {name}(
             stride_a_last = stride_a[-1]
             stride_b_last = stride_b[-1]
             stride_c_last = stride_c[-1]
-            name = f'{expr_a}_{expr_b}_{expr_c}_{lut_mode_a}_{lut_mode_b}'\
+            name = f'{dtype}_{mask}_{expr_a}_{expr_b}_{expr_c}_{lut_mode_a}_{lut_mode_b}'\
                    f'_{stride_a_multiple}_{stride_b_multiple}_{stride_c_multiple}'\
                    f'_{stride_a_last}_{stride_b_last}_{stride_c_last}'  
             # recompile if necessary
             cache = _einsum.instance.kernel_cache
             if name not in cache:
                 cachesize = len(cache)
-                cache[name] = _einsum.make_kernel(f'__einsum{cachesize}', 
+                cache[name] = _einsum.make_kernel(f'__einsum{cachesize}',
+                                                        dtype, mask,
                                                         sym_a, sym_b, sym_c, 
                                                         axes_m, axes_n, axes_k, axes_b, 
                                                         stride_a_multiple, stride_b_multiple, stride_c_multiple,
@@ -604,19 +612,6 @@ __global__ void {name}(
             self.pos_vars = len(self.args)
             self.varnames = varnames
             self.args += [None] * len(varnames)
-            # tile size ranges
-            MAX_GZ = triton.cdiv(K, 2048)
-            TMs = [16] + [x for x in [32, 64, 128] if x <= M]
-            TNs = [16] + [x for x in [32, 64, 128] if x <= N]
-            TBs = [x for x in [1, 2, 4, 8] if x <= B]
-            TZs = [x for x in [1, 2, 4, 8, 16, 32] if x <= MAX_GZ]
-            # tile sizes
-            TM, TN, TB, TZ = _einsum.instance._tile(M, N, B, TMs, TNs, TBs, TZs, TK)
-            TM, TN, TB, TZ = 64, 128, 1, 1
-            self.macros =  {'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
-            self.num_warps = [4]
-            if mask is not None:
-                self.macros['MASK'] = '{0:#0{1}x}'.format(mask, 10)
             # save information on the operation
             self.expr_a = expr_a
             self.expr_b = expr_b
@@ -634,7 +629,7 @@ __global__ void {name}(
             self.args[self.pos_c] = c
             for i, name in enumerate(self.varnames):
                 self.args[self.pos_vars + i] = values[name]
-            return self.kernel(*self.args, grid=self.grid, bench=bench, defines=self.macros, num_warps=self.num_warps)
+            return self.kernel(*self.args, grid=self.grid, bench=bench)
 
 
 
