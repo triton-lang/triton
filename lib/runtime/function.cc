@@ -3,6 +3,7 @@
 #include <regex>
 #include <functional>
 #include <algorithm>
+#include <memory>
 #include "triton/codegen/analysis/axes.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/liveness.h"
@@ -343,6 +344,17 @@ function::cache_key_t function::get_key(driver::stream *stream, const std::vecto
 // returns program with best compilation options for given parameter
 function::caller* function::autotune(driver::stream* stream, const grid_fn_ty& grid_fn,
                                        const std::vector<arg>& args) {
+//  // copy buffer argument so that auto-tuning doesn't corrupt data
+//  std::list<std::shared_ptr<driver::cu_buffer>> copies;
+//  std::vector<arg> args = args;
+//  for(arg& x: args)
+//    if(x.type() == BUFFER_T){
+//      driver::buffer* old = x.buffer();
+//      driver::context* ctx = old->context();
+//      size_t size = old->size();
+//      copies.push_back(std::make_shared<driver::cu_buffer>(ctx, size));
+//      x = arg(copies.back().get());
+//    }
   // fast path -- no autotuning necessary
   if(callers_.size() == 1)
     return &*callers_.begin()->second;

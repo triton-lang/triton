@@ -148,71 +148,41 @@ def _make_framework_op(arg_types):
 
 class kernel:
 
-  def __init__(self, src):
-    self.fw_id = dict()
-    self.fw_grids = dict()
-    self.fw_op = None
+  def __init__(self, src, defines = dict(), num_warps = [2, 4, 8]):
     self.src = src
+    # create constants
     self.cst = dict()
+    # create triton op
+    macros = []
+    for k, v in defines.items():
+      cvt = lambda x: _cvt_to_def_str(x)
+      if(isinstance(v, list)):
+        values = list(map(cvt, v))
+      else:
+        values = [cvt(v)]
+      macros.append((k, values))
+    opt = libtriton.options_space()
+    opt.defines = macros
+    opt.num_warps = num_warps
+    self.op_id = libtriton.make_op_id()
+    libtriton.register_fn(self.op_id, self.src, opt, os.path.realpath(libtriton.__file__))
+    # create pytorch hook
+    arg_types = libtriton.get_fn_signature(self.src, opt)
+    self.fw_op = _make_framework_op(arg_types)
 
   def set_constant(self, name, value):
-    self.cst[name] = value
+    libtriton.register_cst(self.op_id, name, value)
 
   def __call__(self, *args, **kwargs):
-    ########################
-    # JIT Options
-    ########################
-    num_warps = kwargs['num_warps'] if 'num_warps' in kwargs else [2, 4, 8]
-    defines = kwargs['defines']     if 'defines'   in kwargs else dict()
+    # launch options
     bench = kwargs['bench']         if 'bench'     in kwargs else 0
+    bench_id = libtriton.make_scalar_id() if bench > 0 else -1
+    # launch grid
     if 'grid' not in kwargs:
       raise RuntimeError('Must provide grid for kernel launch')
     grid = kwargs['grid']
-
-
-    #########################
-    # cache
-    ########################
-    # create a new framework op when defines are different
-    key = '-'.join(['{key}-{val}'.format(key=key, val=val) for key, val in defines.items()])
-    if key not in self.fw_id.keys():
-      # code generation options
-      macros = []
-      for k, v in defines.items():
-        cvt = lambda x: _cvt_to_def_str(x)
-        if(isinstance(v, list)):
-          values = list(map(cvt, v))
-        else:
-          values = [cvt(v)]
-        macros.append((k, values))
-      opt = libtriton.options_space()
-      opt.defines = macros
-      opt.num_warps = num_warps
-      # create triton function for this op
-      op_id = libtriton.make_op_id()
-      self.fw_id[key] = op_id
-      libtriton.register_fn(op_id, self.src, opt, os.path.realpath(libtriton.__file__))
-      for name, value in self.cst.items():
-        libtriton.register_cst(op_id, name, value)
-      # create pytorch hook for this op
-      arg_types = libtriton.get_fn_signature(self.src, opt)
-      if self.fw_op is None:
-        self.fw_op = _make_framework_op(arg_types)
-
-    ########################
-    # initialize
-    ########################
-    op_id = self.fw_id[key]
-    libtriton.register_grid(op_id, grid)
-    bench_id = libtriton.make_scalar_id() if bench > 0 else -1
-
-    ############################
-    # call torch function
-    ############################
-    if fw.has_torch():
-      self.fw_op(op_id, bench, bench_id, *args)
-      if bench > 0:
-        return libtriton.retrieve_scalar(bench_id)
-
-    else:
-      assert False
+    libtriton.register_grid(self.op_id, grid)
+    # launch
+    self.fw_op(self.op_id, bench, bench_id, *args)
+    if bench > 0:
+      return libtriton.retrieve_scalar(bench_id)
