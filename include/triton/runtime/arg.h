@@ -75,6 +75,7 @@ public:
   // accessors
   arg_type type() const { return ty_; }
   void* data() const { return (void*)&val_; }
+  driver::buffer* buffer() const { return val_.buf; }
 
 
 private:
