@@ -42,7 +42,6 @@ void fwdbatchnorm(float *Y, float *M, float *V,
   }
 }
 """
-  fwd_kernel = triton.kernel(fwd_src)
 
   bwd_src = """
 void bwdbatchnorm(float *DX, float *DG, float *DB,
@@ -89,10 +88,16 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
   }
 }
 """
-  bwd_kernel = triton.kernel(bwd_src)
+
+  fwd_kernel = None
+  bwd_kernel = None
 
   @staticmethod
   def forward(ctx, x, gamma, beta, eps):
+    # lazy compilation of kernel
+    if _batchnorm.fwd_kernel is None:
+      _batchnorm.fwd_kernel = triton.kernel(fwd_src, defines = {'TM': 128})
+    # shapes
     shape = triton.shape(x)
     dtype = x.dtype
     # allocate outputs
@@ -102,8 +107,7 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
     var = triton.empty([C], dtype=dtype)
     # execute kernels
     _batchnorm.fwd_kernel(y, mean, var, x, gamma, beta, H*W*B, eps,
-                          grid = lambda opt: [1, C],
-                          defines = {'TM': 128})
+                          grid = lambda opt: [1, C])
     # save
     ctx.save_for_backward(x, gamma, beta, mean, var)
     ctx.eps = eps
@@ -111,6 +115,9 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
 
   @staticmethod
   def backward(ctx, dy):
+    # lazy compilation of kernel
+    if _batchnorm.bwd_kernel is None:
+      _batchnorm.bwd_kernel = triton.kernel(bwd_src, defines = {'TN': 128})
     # retrieve info
     x, gamma, beta, mean, var = ctx.saved_tensors
     eps = ctx.eps
@@ -123,8 +130,7 @@ void bwdbatchnorm(float *DX, float *DG, float *DB,
     _batchnorm.bwd_kernel(dx, dgamma, dbeta, dy, 
                           x, gamma, mean, var, 
                           H*W*B, eps,
-                          grid = lambda opt: [1, C],
-                          defines = {'TM': 128})
+                          grid = lambda opt: [1, C])
     return dx, dgamma, dbeta, None
 
 batchnorm = _batchnorm.apply

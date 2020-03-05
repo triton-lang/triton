@@ -4,7 +4,7 @@ import numpy as np
 import weakref
 
 def cdiv(a, b):
-    return -(-a // b)
+    return (a + b - 1) // b
 
 class tf_empty_proxy:
 

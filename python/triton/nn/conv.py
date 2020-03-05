@@ -125,7 +125,7 @@ def replace_conv2d(model, acc_bitmask = None):
 #torch.Size([128, 256, 8, 8]) torch.Size([512, 256, 3, 3])
 
 if __name__ == '__main__':
-  N, C, H, W, K, RS = 128, 64, 30, 30, 128, 1
+  N, C, H, W, K, RS = 128, 64, 30, 30, 128, 3
   #N, C, H, W, K, RS = 128, 128, 15, 15, 256, 3
   #N, C, H, W, K, RS = 128, 256, 8, 8, 512, 3
   pad, stride = 0, 1
