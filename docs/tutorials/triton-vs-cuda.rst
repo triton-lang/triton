@@ -97,12 +97,10 @@ Auto-Tuning
 Now assume that you want to tune the above code for different data types, tile sizes and thread block sizes. This is doable in CUDA but would require you to write cumbersome machinery to handle different vector sizes and loop unrolling factors. In Triton, this can be trivially done by adjusting some compilation parameters. For example:
 
 .. code-block:: python
+ 
+  kernel = triton.kernel(src, defines = {'TILE': [256, 512, 1024]}, num_warps = [2, 4, 8])
 
-  _vector_add.kernel(y, x, N, grid=grid, 
-                     defines={'TILE': [256, 512, 1024]},
-                     num_warps = [2, 4, 8])
-
-would benchmark our above triton-code for tile sizes of 256, 512 and 1024 executed with 2, 4 or 8 warps -- and cache the fastest kernel.
+would benchmark our above triton source-code for tile sizes of 256, 512 and 1024 executed with 2, 4 or 8 warps -- and cache the fastest kernel.
 
 =============================
 Going Further

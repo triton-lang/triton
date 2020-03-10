@@ -57,7 +57,8 @@ As you will see, a wrapper for the above Triton function can be created in just 
     }
         """
         # create callable kernel for the source-code
-        kernel = triton.kernel(src)
+        # options: 4 warps and a -DTILE=1024
+        kernel = triton.kernel(src, defines = {'TILE': 1024}; num_warps = [4])
 
         # Forward pass
         @staticmethod
@@ -72,11 +73,7 @@ As you will see, a wrapper for the above Triton function can be created in just 
             N = x.numel()
             grid = lambda opt: (triton.cdiv(N, opt.d('TILE')), )
             # launch kernel
-            # options: 4 warps and a -DTILE=1024
-            _add.kernel(z, x, y, N, 
-                        grid = grid, 
-                        num_warps = 4,
-                        defines = {'TILE': 1024})
+            _add.kernel(z, x, y, N, grid = grid)
             # return output
             return z
 

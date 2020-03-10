@@ -8,4 +8,3 @@ Tutorials
    triton-vs-cuda
    matrix-transposition
    matrix-multiplication
-   putting-it-all-together
