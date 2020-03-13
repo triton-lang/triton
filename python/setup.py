@@ -14,8 +14,8 @@ import distutils.spawn
 
 
 def find_llvm():
-    versions = ['9.0', '9', '90', '8.0', '8', '80']
-    supported = ['llvm-config-{v}'.format(v=v) for v in versions]
+    versions = ['','-9.0', '-9', '-90', '-8.0', '-8', '-80']
+    supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
     if paths:
@@ -85,7 +85,7 @@ class CMakeBuild(build_ext):
         sourcedir =  os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         subprocess.check_call(['cmake', sourcedir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(['cmake', '--build', '.'] + build_args, cwd=self.build_temp)
-       
+
 
 find_llvm()
 
