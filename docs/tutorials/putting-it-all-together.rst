@@ -15,7 +15,7 @@ The PyTriton API provides a :code:`triton.function` class which automatically ha
     import triton
 
     # Entry point
-    class _dot(triton.function):
+    class _dot(torch.autograd.Function):
 
       @staticmethod
       # Forward Pass
@@ -170,7 +170,7 @@ Creating custom operations for Triton and PyTorch is very similar; programmers h
     return da, db, None, None, None, None, None, None, None
 
 
-A callable operation can be created using the :code:`apply` method of our :code:`triton.function` class.
+A callable operation can be created using the :code:`apply` method of the :code:`torch.autograd.Function` class.
 
 .. code:: python
 
