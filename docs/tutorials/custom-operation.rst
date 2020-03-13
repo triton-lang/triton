@@ -39,7 +39,7 @@ As you will see, a wrapper for the above Triton function can be created in just 
     import torch
     import triton
 
-    class _add(triton.function):
+    class _add(torch.autograd.Function):
         # source-code for Triton compute kernel
         src = """
     __global__ void add(float* z, float* x, float* y, int N){
