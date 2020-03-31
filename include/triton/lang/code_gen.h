@@ -33,8 +33,8 @@ using LocationList = std::vector<std::string>;
 using StaticInitList = std::vector<StaticInitializer>;
 
 // Error
-inline void should_not_happen() { throw std::runtime_error("should not happen"); }
-inline void error_not_implemented() { throw std::runtime_error("not implemented"); }
+inline void should_not_happen(const std::string& suffix) { throw std::runtime_error("internal compiler error: " + suffix); }
+inline void error_not_implemented(const std::string& msg) { throw std::runtime_error(msg); }
 
 class Generator: public Visitor {
   friend class Evaluator<Addr>;
@@ -87,6 +87,9 @@ protected:
   // Triton-IR attributes
   ir::attribute GenIRAttr(ASTNode::Attr attr);
 
+  // Triton-IR metadata
+  void SetIRMetadata(ASTNode::Attr attr, ir::value *rhs);
+
   // Triton-IR values
   ir::value* GenAssignOp(Expr* lvalue, ir::value* rhs);
   ir::value* GenBroadcastOp(ir::value* src, ir::type* dst_ty);
@@ -131,22 +134,22 @@ public:
   void VisitObject(Object* obj);
   void VisitIdentifier(Identifier* ident);
 
-  void VisitConditionalOp(ConditionalOp*)      { should_not_happen(); }
-  void VisitFuncCall(FuncCall*)                { should_not_happen(); }
-  void VisitTransOp(TransOp*)                  { should_not_happen(); }
-  void VisitEnumerator(Enumerator*)            { should_not_happen(); }
-  void VisitConstant(Constant*)                { should_not_happen(); }
-  void VisitTempVar(TempVar*)                  { should_not_happen(); }
-  void VisitDeclaration(Declaration*)          { should_not_happen(); }
-  void VisitEmptyStmt(EmptyStmt*)              { should_not_happen(); }
-  void VisitIfStmt(IfStmt*)                    { should_not_happen(); }
-  void VisitForStmt(ForStmt*)                  { should_not_happen(); }
-  void VisitJumpStmt(JumpStmt*)                { should_not_happen(); }
-  void VisitReturnStmt(ReturnStmt*)            { should_not_happen(); }
-  void VisitLabelStmt(LabelStmt*)              { should_not_happen(); }
-  void VisitCompoundStmt(CompoundStmt*)        { should_not_happen(); }
-  void VisitFuncDef(FuncDef*)                  { should_not_happen(); }
-  void VisitTranslationUnit(TranslationUnit*)  { should_not_happen(); }
+  void VisitConditionalOp(ConditionalOp*)      { should_not_happen("conditional cannot be lvalue"); }
+  void VisitFuncCall(FuncCall*)                { should_not_happen("funccall cannot be lvalue"); }
+  void VisitTransOp(TransOp*)                  { should_not_happen("transop cannot be lvalue"); }
+  void VisitEnumerator(Enumerator*)            { should_not_happen("enumerator cannot be lvalue"); }
+  void VisitConstant(Constant*)                { should_not_happen("constant cannot be lvalue"); }
+  void VisitTempVar(TempVar*)                  { should_not_happen("tempvar cannot be lvalue"); }
+  void VisitDeclaration(Declaration*)          { should_not_happen("declaration cannot be lvalue"); }
+  void VisitEmptyStmt(EmptyStmt*)              { should_not_happen("empty statement cannot be lvalue"); }
+  void VisitIfStmt(IfStmt*)                    { should_not_happen("if statement cannot be lvalue"); }
+  void VisitForStmt(ForStmt*)                  { should_not_happen("for statement cannot be lvalue"); }
+  void VisitJumpStmt(JumpStmt*)                { should_not_happen("jump statement cannot be lvalue"); }
+  void VisitReturnStmt(ReturnStmt*)            { should_not_happen("return statement cannot be lvalue"); }
+  void VisitLabelStmt(LabelStmt*)              { should_not_happen("label statement cannot be lvalue"); }
+  void VisitCompoundStmt(CompoundStmt*)        { should_not_happen("compound statement cannot be lvalue"); }
+  void VisitFuncDef(FuncDef*)                  { should_not_happen("function definition cannot be lvalue"); }
+  void VisitTranslationUnit(TranslationUnit*)  { should_not_happen("translation unit cannot be lvalue"); }
 
   ir::value* GenExpr(Expr* expr, ir::value* rhs) {
     rhs_ = rhs;

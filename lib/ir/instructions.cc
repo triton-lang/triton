@@ -746,6 +746,18 @@ instruction* atomic_add_inst::create(value *ptr, value *val, const std::string &
   return new atomic_add_inst(ptr, val, name, next);
 }
 
+// exp
+
+exp_inst::exp_inst(value *val, const std::string &name, instruction *next)
+  : builtin_inst(val->get_type(), INST_EXP, 1, name, next) {
+  set_operand(0, val);
+}
+
+instruction* exp_inst::create(value *val, const std::string& name, instruction *next) {
+  return new exp_inst(val, name, next);
+}
+
+
 //===----------------------------------------------------------------------===//
 //                               intrinsic instructions
 //===----------------------------------------------------------------------===//

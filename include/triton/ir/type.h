@@ -81,6 +81,7 @@ public:
   bool is_integer_ty() const            { return id_ == IntegerTyID; }
   bool is_integer_ty(unsigned bitwidth) { return is_integer_ty() &&
                                                  get_integer_bitwidth() == bitwidth;}
+  bool is_bool_ty() const               { return is_integer_ty(1); }
   bool is_pointer_ty() const            { return id_ == PointerTyID; }
   bool is_tile_ty() const               { return id_ == TileTyID; }
 

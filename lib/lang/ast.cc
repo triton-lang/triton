@@ -655,6 +655,9 @@ void UnaryOp::TypeChecking() {
   case Token::REDUCE:
     return ReduceOpTypeChecking();
 
+  case Token::EXP:
+    return IntrinsicOpTypeChecking();
+
   default:
     assert(false);
   }
@@ -767,6 +770,10 @@ void UnaryOp::CastOpTypeChecking() {
   } else if (type_->ToPointer() && operandType->IsFloat()) {
     Error(this, "cannot cast a floating to pointer");
   }
+}
+
+void UnaryOp::IntrinsicOpTypeChecking() {
+  type_ = ScalarOrLikeTile(operand_, ArithmType::New(T_FLOAT));
 }
 
 /*

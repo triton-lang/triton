@@ -44,9 +44,11 @@ void builder::set_insert_point(basic_block *block){
 //                               convenience functions
 //===----------------------------------------------------------------------===//
 
-value *builder::get_int32(unsigned val) {
-  return constant_int::get(type::get_int32_ty(ctx_), val);
-}
+value *builder::get_int32(int32_t val)
+{ return constant_int::get(type::get_int32_ty(ctx_), val);}
+
+value *builder::get_int64(int64_t val)
+{ return constant_int::get(type::get_int64_ty(ctx_), val);}
 
 type *builder::get_void_ty()
 { return type::get_void_ty(ctx_); }
@@ -103,6 +105,7 @@ value *builder::create_ret_void() {
     return create_cast(OPCODE, src, dst_ty, name);\
   }
 
+DEFINE_CAST_INSTR(ptr_to_int, cast_op_t::PtrToInt)
 DEFINE_CAST_INSTR(si_to_fp, cast_op_t::SIToFP)
 DEFINE_CAST_INSTR(ui_to_fp, cast_op_t::UIToFP)
 DEFINE_CAST_INSTR(fp_to_si, cast_op_t::FPToSI)
@@ -306,6 +309,10 @@ value *builder::create_atomic_exch(value *ptr, value *val, const std::string &na
 
 value *builder::create_atomic_add(value *ptr, value *val, const std::string &name){
   return insert(atomic_add_inst::create(ptr, val, name));
+}
+
+value *builder::create_exp(value *arg, const std::string &name){
+  return insert(exp_inst::create(arg, name));
 }
 
 value *builder::create_dot(value *A, value *B, value *C, const std::string &name) {

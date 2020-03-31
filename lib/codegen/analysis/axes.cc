@@ -2,7 +2,7 @@
 #include "triton/ir/utils.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
-
+#include <iostream>
 
 
 namespace triton{

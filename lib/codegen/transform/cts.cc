@@ -26,8 +26,6 @@ inline bool is_shmem_res(ir::value* v){
     return false;
   if(i->get_id() == ir::INST_TRANS)
     return true;
-  if(i->get_id() == ir::INST_REDUCE)
-    return true;
   if(i->get_id() == ir::INST_COPY_TO_SHARED)
     return true;
   return false;
@@ -76,8 +74,9 @@ void cts::run(ir::module &mod) {
       size_t num_op = i->get_num_operands();
       // copy to shared operands
       for(size_t k = 0; k < num_op; k++)
-        if(is_shmem_op(i, k))
+        if(is_shmem_op(i, k)){
           add_copy(i, i->get_operand(k), builder, true);
+        }
       // copy from shared operands
       for(size_t k = 0; k < num_op; k++)
         if(!dynamic_cast<ir::phi_node*>(i) &&
