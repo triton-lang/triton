@@ -35,7 +35,8 @@ public:
   basic_block* get_insert_block() { return block_; }
   iterator get_insert_point() { return insert_point_;}
   // Constants
-  value *get_int32(unsigned val);
+  value *get_int32(int32_t val);
+  value *get_int64(int64_t val);
   // Types
   type *get_void_ty();
   type *get_int1_ty();
@@ -63,6 +64,7 @@ public:
   value* create_ret_void();
   // Cast instructions
   value *create_cast(cast_op_t op, value *v, type *dst_ty, const std::string &name = "");
+  value* create_ptr_to_int(value *src, type *dst_ty, const std::string &name = "");
   value* create_si_to_fp(value *src, type *dst_ty, const std::string &name = "");
   value* create_ui_to_fp(value *src, type *dst_ty, const std::string &name = "");
   value* create_fp_to_si(value *src, type *dst_ty, const std::string &name = "");
@@ -135,6 +137,7 @@ public:
   value *create_atomic_cas(value *ptr, value *cmp, value *val, const std::string &name = "");
   value *create_atomic_exch(value *ptr, value *val, const std::string &name = "");
   value *create_atomic_add(value *ptr, value *val, const std::string &name = "");
+  value *create_exp(value* arg, const std::string &name = "");
   value *create_dot(value *A, value *B, value *C, const std::string &name = "");
   value *create_trans(value *A, const std::vector<int> &perm = {}, const std::string &name = "");
   value *create_sqrt(value *A, const std::string &name = "");

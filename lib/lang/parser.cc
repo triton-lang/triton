@@ -258,7 +258,6 @@ Constant* Parser::ParseFloat(const Token* tok) {
   }
   if (str[end] != 0)
     Error(tok, "invalid suffix");
-
   return Constant::New(tok, tag, val);
 }
 
@@ -571,6 +570,7 @@ Expr* Parser::ParseUnaryExpr() {
   case Token::SIZEOF: return ParseSizeof();
   case Token::INC: return ParsePrefixIncDec(tok);
   case Token::DEC: return ParsePrefixIncDec(tok);
+  case Token::EXP: return ParseUnaryIntrinsicOp(tok, Token::EXP); //FIXME: merge into generic array functions
   case '&': return ParseUnaryOp(tok, Token::ADDR);
   case '*': return ParseDerefOp(tok);
   case '+': return ParseUnaryOp(tok, Token::PLUS);
@@ -634,6 +634,12 @@ UnaryOp* Parser::ParsePrefixIncDec(const Token* tok) {
   return UnaryOp::New(op, operand);
 }
 
+UnaryOp* Parser::ParseUnaryIntrinsicOp(const Token* tok, int op) {
+  ts_.Expect('(');
+  auto operand = ParseExpr();
+  ts_.Expect(')');
+  return UnaryOp::New(op, operand);
+}
 
 UnaryOp* Parser::ParseUnaryOp(const Token* tok, int op) {
   auto operand = ParseCastExpr();

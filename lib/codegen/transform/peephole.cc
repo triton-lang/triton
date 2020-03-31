@@ -83,6 +83,19 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
   }
 }
 
+bool peephole::rewrite_cts_cfs(ir::instruction *value, ir::builder &builder){
+  auto cfs = dynamic_cast<ir::copy_from_shared_inst*>(value);
+  if(cfs) {
+    ir::value *arg = cfs->get_operand(0);
+    ir::copy_to_shared_inst* cts = dynamic_cast<ir::copy_to_shared_inst*>(arg);
+    if(!cts)
+      return false;
+    cfs->replace_all_uses_with(cts->get_operand(0));
+    return true;
+  }
+
+}
+
 bool peephole::rewrite_unit_red(ir::instruction *value, ir::builder& builder){
   auto x = dynamic_cast<ir::reduce_inst*>(value);
   if(!x)
@@ -183,6 +196,7 @@ void peephole::run(ir::module &mod) {
         continue;
       bool was_modified = false;
       was_modified = was_modified || rewrite_mult(i, builder);
+      was_modified = was_modified || rewrite_cts_cfs(i, builder);
       was_modified = was_modified || rewrite_trans_phi(i, builder);
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);

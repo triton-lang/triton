@@ -16,7 +16,9 @@ namespace analysis{
  *          Helper Functions        *
  * -------------------------------- */
 
-inline unsigned clamp(unsigned x, unsigned lo, unsigned hi) {
+inline unsigned clamp(unsigned x, unsigned a, unsigned b) {
+  unsigned lo = std::min(a, b);
+  unsigned hi = std::max(a, b);
   return std::min(std::max(x, lo), hi);
 }
 
@@ -97,7 +99,9 @@ data_layout::data_layout(id_t id,
   order_.resize(axes_.size());
   std::iota(order_.begin(), order_.end(), 0);
   auto largest = std::max_element(ptr.begin(), ptr.end(), [&](ir::value *x, ir::value *y){
-    return x->get_type()->get_tile_rank() < y->get_type()->get_tile_rank();
+    std::pair<int, int> xx = {x->get_type()->get_tile_rank(), x->get_type()->get_tile_num_elements()};
+    std::pair<int, int> yy = {y->get_type()->get_tile_rank(), y->get_type()->get_tile_num_elements()};
+    return xx < yy;
   });
   if(*largest){
     auto max_contiguous = align->contiguous(*largest);
@@ -201,8 +205,9 @@ scanline_layout::scanline_layout(size_t num_warps,
   for(size_t d = 0; d < shape_.size(); d++)
     effective_num_threads *= mts_[d];
 
-  if(num_warps * 32 != effective_num_threads)
-    throw std::runtime_error("cannot create a kernel with this amount of warps");
+//  std::cout <<values.size() << " " << num_warps << " " << effective_num_threads << std::endl;
+//  if(num_warps * 32 != effective_num_threads)
+//    throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
 
 
@@ -355,8 +360,9 @@ void layouts::make_graph(ir::instruction *i) {
 void layouts::create(size_t id, const std::vector<ir::value*>& values) {
   auto it_hmma_c = std::find_if(values.begin(), values.end(), &is_hmma_c);
   auto cmp = [](ir::value* x, ir::value *y) {
-    return x->get_type()->get_tile_ranks1() <
-           y->get_type()->get_tile_ranks1();
+    std::pair<int, int> xx = {x->get_type()->get_tile_rank(), x->get_type()->get_tile_num_elements()};
+    std::pair<int, int> yy = {y->get_type()->get_tile_rank(), y->get_type()->get_tile_num_elements()};
+    return xx < yy;
   };
   std::vector<ir::value*> lvalue = values;
   std::remove_if(lvalue.begin(), lvalue.end(), [&](ir::value* v) { return dynamic_cast<ir::trans_inst*>(v); });
@@ -402,11 +408,8 @@ void layouts::run(ir::module &mod) {
       unsigned axis = red->get_axis();
       // shape
       auto shapes = arg->get_type()->get_tile_shapes();
-      unsigned shape_ax = shapes[axis];
       scanline_layout *layout = get(arg)->to_scanline();
-      unsigned per_thread = layout->nts(axis);
-      unsigned depth = shape_ax / per_thread;
-      shapes[axis] = depth;
+      shapes[axis] = layout->mts(axis);
       // create layout
       layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_);
       tmp_[red] = id;
