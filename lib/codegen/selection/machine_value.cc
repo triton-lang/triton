@@ -135,13 +135,13 @@ Value* shared_tile::shared_offset(llvm::IRBuilder<> &builder, const shapes_t& sh
                                   const std::vector<int>& perm, const std::vector<int>& order,
                                   indices_t idx) {
   // strides
-  std::vector<Value*> strides(order.size());
+  std::vector<Value*> strides(shapes.size(), builder.getInt32(0));
   strides[order[0]] = builder.getInt32(1);
   for(size_t i = 1; i < idx.size(); i++)
     strides[order[i]] = builder.CreateMul(strides[order[i-1]], builder.getInt32(shapes[order[i-1]]));
   // result
   Value *result = builder.getInt32(0);
-  for(size_t i = 0; i < strides.size(); i++)
+  for(size_t i = 0; i < idx.size(); i++)
     result = builder.CreateAdd(result, builder.CreateMul(idx[perm[i]], strides[i]));
   return result;
 }

@@ -433,6 +433,7 @@ public:
   void UnaryArithmOpTypeChecking();
   void BitcastOpTypeChecking();
   void CastOpTypeChecking();
+  void IntrinsicOpTypeChecking();
 
 protected:
   UnaryOp(int op, Expr* operand, QualType type=nullptr, int info=0)

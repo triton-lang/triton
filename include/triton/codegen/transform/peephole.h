@@ -19,6 +19,7 @@ namespace transform{
 
 class peephole {
 private:
+  bool rewrite_cts_cfs(ir::instruction *value, ir::builder &builder);
   bool rewrite_trans_phi(ir::instruction* value, ir::builder &builder);
   bool rewrite_dot_fp32(ir::dot_inst *dot, ir::builder& builder, bool trans_a, bool trans_b, ir::value *A, ir::value *B, ir::value *D);
   bool rewrite_dot_hmma(ir::dot_inst *dot, ir::builder& builder, bool trans_a, bool trans_b, ir::value *A, ir::value *B, ir::value *D);

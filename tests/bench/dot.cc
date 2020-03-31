@@ -13,7 +13,7 @@ int main() {
     for(auto x: std::vector<std::array<bool, 2>>{{false, false}}){
     std::vector<config_t> tmp = {
 //      config_t{ord, x[0], x[1], 512, 512, 512},
-      config_t{ord, x[0], x[1], 2048, 2048, 2048},
+      config_t{ord, x[0], x[1], 1024, 1024, 1024},
 //      config_t{ord, x[0], x[1], 127008, 768, 576},
 //      config_t{ord, x[0], x[1], 8192, 8192, 8192}
 //      config_t{ord, x[0], x[1], 16, 2048, 2048},

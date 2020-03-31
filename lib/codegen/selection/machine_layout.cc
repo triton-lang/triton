@@ -158,7 +158,6 @@ tile *machine_distributed_layout::create(ir::value *v) {
     return false;
   };
   std::sort(order.begin(), order.end(), cmp);
-
   return new distributed_tile(ty, shapes, order, axes, *builder_);
 }
 

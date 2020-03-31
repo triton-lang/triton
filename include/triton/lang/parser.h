@@ -83,6 +83,7 @@ public:
   Constant* ParseSizeof();
   Constant* ParseAlignof();
   UnaryOp* ParsePrefixIncDec(const Token* tok);
+  UnaryOp* ParseUnaryIntrinsicOp(const Token* tok, int op);
   UnaryOp* ParseUnaryOp(const Token* tok, int op);
   Expr* ParseDerefOp(const Token* tok);
 

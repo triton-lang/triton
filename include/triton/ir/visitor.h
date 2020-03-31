@@ -48,6 +48,8 @@ class splat_inst;
 class broadcast_inst;
 class downcast_inst;
 
+class exp_inst;
+
 class get_program_id_inst;
 class get_num_program_inst;
 class atomic_cas_inst;
@@ -113,6 +115,8 @@ public:
   virtual void visit_masked_load_inst(masked_load_inst*) = 0;
   virtual void visit_unmasked_store_inst(unmasked_store_inst*) = 0;
   virtual void visit_masked_store_inst(masked_store_inst*) = 0;
+
+  virtual void visit_exp_inst(exp_inst*) = 0;
 
   virtual void visit_reshape_inst(reshape_inst*) = 0;
   virtual void visit_splat_inst(splat_inst*) = 0;

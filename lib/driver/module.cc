@@ -91,7 +91,7 @@ void module::compile_llvm_module(std::unique_ptr<llvm::Module> module, const std
                                  const std::string& features,
                                  file_type_t ft) {
   init_llvm();
-  // debug
+//  // debug
 //  llvm::legacy::PassManager pm;
 //  pm.add(llvm::createPrintModulePass(llvm::outs()));
 //  pm.add(llvm::createVerifierPass());
