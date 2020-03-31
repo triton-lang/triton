@@ -119,7 +119,7 @@ struct scanline_layout: public data_layout {
   int mts(size_t k) { return mts_.at(k); }
   int nts(size_t k) { return nts_.at(k); }
 
-private:
+public:
   std::vector<int> mts_;
   std::vector<int> nts_;
 };

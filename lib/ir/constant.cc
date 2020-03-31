@@ -64,7 +64,7 @@ constant *constant_fp::get_negative_zero(type *ty){
 
 constant *constant_fp::get_zero_value_for_negation(type *ty) {
   if(ty->get_scalar_ty()->is_floating_point_ty())
-    return get_negative_zero(ty);
+    return constant_fp::get(ty, 0);
   return constant::get_null_value(ty);
 }
 
