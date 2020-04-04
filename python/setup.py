@@ -14,7 +14,7 @@ import distutils.spawn
 
 
 def find_llvm():
-    versions = ['','-9.0', '-9', '-90', '-8.0', '-8', '-80']
+    versions = ['-9.0', '-9', '-90', '-8.0', '-8', '-80', '']
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
