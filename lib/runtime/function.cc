@@ -395,7 +395,8 @@ std::string function::preheader() {
 #define __aligned(A)    __attribute__((aligned(A)))
 #define __multipleof(A) __attribute__((multipleof(A)))
 
-#define INFINITY bitcast<float>(0x7F800000)
+#define F32_INFINITY bitcast<float>(0x7F800000)
+#define F16_INFINITY bitcast<half>((int16)0x7C00)
 
 extern int atomic_cas(int*, int, int);
 extern int atomic_xchg(int*, int);

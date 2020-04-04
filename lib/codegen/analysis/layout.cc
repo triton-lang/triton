@@ -155,8 +155,8 @@ mma884_layout::mma884_layout(size_t num_warps,
   unsigned effective_num_warps = 1;
   for(size_t d = 0; d < shape.size(); d++)
     effective_num_warps *= wpt_[d];
-  if(num_warps != effective_num_warps)
-    throw std::runtime_error("cannot create a kernel with this amount of warps");
+//  if(num_warps != effective_num_warps)
+//    throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
 
 

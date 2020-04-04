@@ -62,7 +62,7 @@ static void VError(const SourceLocation& loc,
   fprintf(stderr, "\n    ");
   for (unsigned i = 1; i + nspaces < loc.column_; ++i)
     fputc(' ', stderr);
-  fprintf(stderr, ANSI_COLOR_GREEN "^\n");
+  fprintf(stderr, "^\n");
   exit(-1);
 }
 

@@ -835,11 +835,9 @@ ArithmType* ConditionalOp::Convert() {
 
 void ConditionalOp::TypeChecking() {
   auto condScalarType = TryExtractScalarType(this, cond_);
-
   if (!condScalarType) {
     Error(cond_->Tok(), "condition must be tile or scalar");
   }
-
   auto lhsType = TryExtractScalarType(this, exprTrue_);
   auto rhsType = TryExtractScalarType(this, exprFalse_);
   if (lhsType->ToArithm() && rhsType->ToArithm()) {
