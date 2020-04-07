@@ -328,7 +328,7 @@ void function::precompile(driver::stream* stream,
   // multi-threaded compilation
   _loop_nest(ranges, do_make);
   if(callers_.empty())
-    throw std::runtime_error("could not find valid option in provided space");
+    throw std::runtime_error("could not compile kernel");
 }
 
 // return auto-tuning key for given function arguments
