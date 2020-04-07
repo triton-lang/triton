@@ -123,8 +123,10 @@ def _make_framework_op(arg_types):
   # path of .cpp and .so file
   home = os.path.expanduser('~')
   root = os.path.join(home, '.triton', 'torch', name)
-  if not os.path.exists(root):
+  try:
     os.makedirs(root)
+  except FileExistsError:
+    pass
   suffix = sysconfig.get_config_var('EXT_SUFFIX')
   so = os.path.join(root, f'op{suffix}')
   cpp = os.path.join(root, f'op.cpp')
