@@ -46,8 +46,8 @@ inline std::vector<std::vector<std::string>> tile_nd(size_t rank) {
   if(rank == 1)
     return {{"128", "256", "512", "1024"}};
   if(rank == 2)
-    return {{"64"},
-            {"64"}};
+    return {{"16", "32", "64"},
+            {"16", "32", "64"}};
   if(rank == 3)
     return {{"4", "16", "32"},
             {"4", "16", "32"},
