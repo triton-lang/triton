@@ -26,9 +26,10 @@ void copy2d(TYPE * X __noalias __readonly __aligned(16),
   int pid1 = get_program_id(1);
   int rs0[TS0] = pid0 * TS0 + 0 ... TS0;
   int rs1[TS1] = pid1 * TS1 + 0 ... TS1;
+  bool in_bounds[TS0, TS1] = rs0[:, newaxis] < S0 && rs1[newaxis, :] < S1;
   TYPE* px[TS0, TS1] = X + rs0[:, newaxis] * STRIDE_XS0 + rs1[newaxis, :] * STRIDE_XS1;
   TYPE* py[TS0, TS1] = Y + rs0[:, newaxis] * STRIDE_YS0 + rs1[newaxis, :] * STRIDE_YS1;
-  *py = *px;
+  *?(in_bounds)py = *?(in_bounds)px;
 }
 )";
 

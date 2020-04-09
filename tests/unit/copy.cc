@@ -50,7 +50,7 @@ int main() {
   bool result = true;
   for(const auto& c: configs){
     std::tie(shape, tile, ord_x, ord_y) = c;
-    bool pass = test_copy_nd(stream, shape, tile, ord_x, ord_y);
+    bool pass = test_copy_nd(stream, FLOAT, shape, tile, ord_x, ord_y);
     result = result && pass;
     std::cout << "// " << c << ", " << pass << std::endl;
   }
