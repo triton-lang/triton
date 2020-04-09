@@ -2,6 +2,7 @@
 #include "triton/driver/stream.h"
 #include "triton/runtime/function.h"
 #include "triton/tools/bench.hpp"
+#include "triton/external/half.hpp"
 #include "util.h"
 
 int32_t off(const std::vector<int32_t>& idx, const std::vector<int32_t>& strides) {
@@ -15,6 +16,13 @@ enum run_mode_t {
   BENCH,
   TEST
 };
+
+enum dtype_t {
+  FLOAT,
+  HALF,
+  DOUBLE
+};
+
 
 template<class T>
 void cc_copy_nd(const std::vector<T>& x, std::vector<T>& y,
@@ -46,13 +54,28 @@ void cc_copy_nd(const std::vector<T>& x, std::vector<T>& y,
       y[off({i, j, k}, y_strides)] = x[off({i, j, k}, x_strides)];
 }
 
+template<class T>
+struct to_string;
+
+template<> struct to_string<half_float::half>{
+  static constexpr const char* value = "half";
+};
+
+template<> struct to_string<float>{
+  static constexpr const char* value = "float";
+};
+
+template<> struct to_string<double>{
+  static constexpr const char* value = "double";
+};
+
+template<typename T>
 void triton_copy_nd(drv::stream* stream, const std::vector<int32_t>& shape,
                     const std::vector<int32_t>& x_order, const std::vector<int32_t>& y_order,
                     std::vector<std::vector<std::string>> TS,
                     run_mode_t mode, std::vector<double>& bench, bool &test) {
-  typedef float NumericT;
-  std::string ty = "float";
-  size_t dtsize = sizeof(NumericT);
+  std::string ty = to_string<T>::value;
+  size_t dtsize = sizeof(T);
   drv::context* context = stream->context();
 
   // rank
@@ -107,11 +130,11 @@ void triton_copy_nd(drv::stream* stream, const std::vector<int32_t>& shape,
 
   // test triton
   if(mode == TEST){
-    std::vector<NumericT> hx(size);
-    std::vector<NumericT> hy(size);
-    std::vector<NumericT> ry(size);
+    std::vector<T> hx(size);
+    std::vector<T> hy(size);
+    std::vector<T> ry(size);
     for(size_t i = 0; i < hx.size(); i++)
-      hx[i] = static_cast<NumericT>((float)rand()/RAND_MAX);
+      hx[i] = static_cast<T>((float)rand()/RAND_MAX);
     stream->write(&*dx, true, 0, hx);
     function(args, grid, stream);
     stream->synchronize();
@@ -121,15 +144,23 @@ void triton_copy_nd(drv::stream* stream, const std::vector<int32_t>& shape,
   }
 }
 
-std::vector<double> bench_copy_nd(drv::stream* stream, const std::vector<int32_t>& shape,
+std::vector<double> bench_copy_nd(drv::stream* stream, dtype_t dtype, const std::vector<int32_t>& shape,
                                   const std::vector<int32_t>& x_order, const std::vector<int32_t>& y_order) {
   std::vector<double> bench;
   bool test;
-  triton_copy_nd(stream, shape, x_order, y_order, {}, BENCH, bench, test);
+  switch(dtype){
+    case HALF:
+      triton_copy_nd<half_float::half>(stream, shape, x_order, y_order, {}, BENCH, bench, test);
+      break;
+    case FLOAT:
+      triton_copy_nd<float>(stream, shape, x_order, y_order, {}, BENCH, bench, test);
+      break;
+    default: break;
+  }
   return bench;
 }
 
-bool test_copy_nd(drv::stream* stream, const std::vector<int32_t>& shape,
+bool test_copy_nd(drv::stream* stream, dtype_t dtype, const std::vector<int32_t>& shape,
                   const std::vector<int32_t>& TS,
                   const std::vector<int32_t>& x_order, const std::vector<int32_t>& y_order) {
   std::vector<double> bench;
@@ -137,6 +168,14 @@ bool test_copy_nd(drv::stream* stream, const std::vector<int32_t>& shape,
   std::vector<std::vector<std::string>> TSS;
   for(int32_t d: TS)
     TSS.push_back({std::to_string(d)});
-  triton_copy_nd(stream, shape, x_order, y_order, TSS, TEST, bench, test);
+  switch(dtype){
+    case HALF:
+      triton_copy_nd<half_float::half>(stream, shape, x_order, y_order, TSS, TEST, bench, test);
+      break;
+    case FLOAT:
+      triton_copy_nd<float>(stream, shape, x_order, y_order, TSS, TEST, bench, test);
+      break;
+    default: break;
+  }
   return test;
 }
