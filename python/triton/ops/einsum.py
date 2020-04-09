@@ -329,16 +329,14 @@ __global__ void {name}(
 #endif
 }
 """
-        # print(src)
         # compilation options
-        #TM, TN, TB, TZ = [16, 32, 64, 128], [16, 32, 64, 128], 1, [1, 4, 16]
-        #TK = 16 if dtype==torch.float16 else 8
-        TM, TN, TB, TZ, TK = 128, 128, 1, 1, 16
+        TM, TN, TB, TZ = [16, 32, 64, 128], [16, 32, 64, 128], 1, [1, 4, 16]
+        TK = 16 if dtype==torch.float16 else 8
         defines =  {'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
         if mask is not None:
             defines['MASK'] = '{0:#0{1}x}'.format(mask, 10)
         # create kernel
-        ret = triton.kernel(src, defines=defines, num_warps=[4])
+        ret = triton.kernel(src, defines=defines)
         # set constant
         if use_lut_a and lut_mode_a == _einsum.LUT_MODE.CONSTANT:
             ret.set_constant('AD', delta_a)
