@@ -408,7 +408,7 @@ oss << R"(
 )";
 gen_tf_register_op(oss, cc_name, args, allocs);
 
-  return {oss.str(), name};
+  return std::tuple<std::string, std::string>{oss.str(), name};
 }
 
 
@@ -598,7 +598,7 @@ extern std::map<size_t, int64_t> i64scalar_map;
   oss << std::endl;
   oss << "static auto registry = torch::RegisterOperators(\"triton::" << name << "\", &" << name << ");" << std::endl;
 
-  return {oss.str(), name};
+  return std::tuple<std::string, std::string>{oss.str(), name};
 }
 
 /* Function signature */
