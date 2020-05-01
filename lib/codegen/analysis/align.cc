@@ -269,11 +269,14 @@ std::vector<unsigned> align::populate_max_contiguous_binop(ir::binary_operator* 
   auto rhs_max_contiguous = populate_max_contiguous(rhs);
   auto lhs_cst_info = populate_is_constant(lhs);
   auto rhs_cst_info = populate_is_constant(rhs);
+  auto lhs_starting_multiple = populate_starting_multiple(lhs);
+  auto rhs_starting_multiple = populate_starting_multiple(rhs);
   std::vector<unsigned> result;
   for(size_t d = 0; d < shapes.size(); d++){
     unsigned value = 1;
-    if(x->is_int_rem() && rhs_cst_info[d].value > 0)
-      value = std::min(lhs_max_contiguous[d], rhs_cst_info[d].value);
+    if(x->is_int_rem() && rhs_starting_multiple[d] > 0){
+      value = std::min(lhs_max_contiguous[d], rhs_starting_multiple[d]);
+    }
     if(x->is_int_mult()){
       unsigned lvalue = 1, rvalue = 1;
       if(rhs_cst_info[d].value == 1)
@@ -393,8 +396,9 @@ std::vector<unsigned> align::populate_starting_multiple_binop(ir::binary_operato
       result[d] = gcd(lhs[d], rhs[d]);
     if(x->is_int_div())
       result[d] = std::max<unsigned>(lhs[d] / rhs[d], 1);
-    if(x->is_int_rem() && rhs[d] > 1)
+    if(x->is_int_rem() && rhs[d] > 1){
       result[d] = gcd(lhs[d], rhs[d]);
+    }
     if(x->is_shl())
       result[d] = lhs[d] << rhs[d];
     if(x->is_shr())
