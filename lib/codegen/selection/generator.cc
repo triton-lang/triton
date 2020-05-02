@@ -195,9 +195,10 @@ void generator::visit_value(ir::value* v) {
   // visit operands
   BasicBlock *current = builder_->GetInsertBlock();
   auto *inst = dynamic_cast<ir::instruction*>(v);
-  if(inst && !dynamic_cast<ir::phi_node*>(v))
+  if(inst)
     for(ir::value *op: inst->ops()){
-      visit_value(op);
+      if(dynamic_cast<ir::constant*>(op) || !dynamic_cast<ir::phi_node*>(v))
+        visit_value(op);
     }
   // change insert point for phi node
   builder_->SetInsertPoint(current);
