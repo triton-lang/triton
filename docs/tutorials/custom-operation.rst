@@ -58,7 +58,7 @@ As you will see, a wrapper for the above Triton function can be created in just 
         """
         # create callable kernel for the source-code
         # options: 4 warps and a -DTILE=1024
-        kernel = triton.kernel(src, defines = {'TILE': 1024}; num_warps = [4])
+        kernel = triton.kernel(src, defines = {'TILE': 1024}, num_warps = [4])
 
         # Forward pass
         @staticmethod
@@ -88,6 +88,7 @@ As you will see, a wrapper for the above Triton function can be created in just 
     zb = add(x, y)
     diff = (za - zb).abs().max()
     print(diff)
+    print(torch.allclose(za,zb))
 
 Executing the above code will:
 
@@ -97,3 +98,5 @@ Executing the above code will:
 - Call the resulting custom op
 
 In other words, the first program run will generate and cache a bunch of files in $HOME/.triton/cache, but subsequent runs should be just as fast as using a handwritten custom operation.
+
+A runnable version of this kernel is available `here <https://github.com/ptillet/triton/tree/master/python/examples/tutorials/vec_add.py>`_.
