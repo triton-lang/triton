@@ -3,7 +3,7 @@ Matrix Transpositions
 *********************
 
 
-Transpositions are (relatively) hard to efficiently write in CUDA because naive implementations typically suffer from *uncoalesced* memory operations when writing back the transposed matrix to DRAM.  
+Transpositions are (relatively) hard to efficiently write in CUDA because naive implementations typically suffer from *uncoalesced* memory operations when writing back the transposed matrix to DRAM.
 
 Of course, this can be fixed by using shared memory as shown `here <https://devblogs.nvidia.com/efficient-matrix-transpose-cuda-cc>`_, but this comes at the cost of simplicity interferes with auto-tuning.
 
@@ -16,7 +16,7 @@ In Triton, however, kernels are single-threaded and the compiler automatically d
 .. code-block:: C
 
     // launched on a grid of (M / TM) x (N / TN) programs of 1 thread each
-    __global__ void transpose(TYPE * X, TYPE * Y,  
+    __global__ void transpose(TYPE * X, TYPE * Y,
                               int M, int N, int ldx, int ldy) {
     // extract program ID
       int pidm = get_program_id(0); //(1)
@@ -30,7 +30,7 @@ In Triton, however, kernels are single-threaded and the compiler automatically d
       // write back using the transposition operator '^'
       *py = ^(*px); //(7)
     }
-    
+
 At a high level, this kernel loads a :code:`TM x TN` tile from the input matrix :code:`X`, transposes it and writes the resulting :code:`TN x TM` tile to the output matrix :code:`Y`. Eventually, transposition of the full input matrix is achieved by launching a grid of :code:`(M / TM) x (N / TN)` programs decomposed as follows:
 
 - Statements (1) and (2) extract the coordinates the program in the above 2D launch grid. For example, the program producing the output tile `Y[TN:2TN-1, 2TN:3TN-1]` holds the values:
@@ -54,7 +54,7 @@ which will be used in statements (5) and (6) to construct tiles of pointers
 - Statements (5) constructs the following array of pointers `px` using numpy-style broadcasting semantics:
 
 ::
-  
+
     │ X + (pidm*TM + 0)       + (pidn*TN + 0)*ldx,  ...,  ...,  X + (pidm*TM + 0)      +  (pidn*TN + TN - 1)*ldx) │
     │      ⋮                                                                                       ⋮              │
     │      ⋮                                                                                       ⋮              │
@@ -83,19 +83,19 @@ For this reason, Triton provides a __multipleof(N) attributes for variables that
 
 .. code-block:: C
 
-  __global__ void transpose(TYPE * X, TYPE * Y,  int M, int N, 
-                            int ldx __multipleof(8), 
+  __global__ void transpose(TYPE * X, TYPE * Y,  int M, int N,
+                            int ldx __multipleof(8),
                             int ldy __multipleof(8)) {
   // ...
   }
 
-    
+
 ==========================
 Bounds Checking
 ==========================
 
 
-You might have noticed that the above code will fail when `M` and `N` are not multiples of `TM` and `TN` respectively. Fortunately, the above kernel can be slightly modified to handle thie situation, as shown below:
+You might have noticed that the above code will fail when `M` and `N` are not multiples of `TM` and `TN` respectively. Fortunately, the above kernel can be slightly modified to handle this situation, as shown below:
 
 .. code-block:: C
 
@@ -108,6 +108,6 @@ You might have noticed that the above code will fail when `M` and `N` are not mu
        // conditional write-back using the conditional dereferencing operatior '*?()'
        *?(checky)py = ^(*?(checkx)px); //(7)
     }
-    
+
 
 Here, statements (7a) creates an array of booleans :code:`checkx[TM, TN]` such that :code:`checkx(i, j) = True` if and only if `px(i, j)` should be dereferenced. Statement (7b) does the same for `py`. Both `px` and `py` are then conditionally dereferenced using Triton-C's conditional dereferencing operator :code:`*?(predicate) pointer`.
