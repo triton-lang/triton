@@ -33,8 +33,8 @@ endif()
 if(BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
     # PyBind11 wrapper source file
-    file(GLOB_RECURSE PYTHON_SRC python/src/bindings.cc)
-    include_directories(python/src/ ${PYTHON_INCLUDE_DIRS})
+    set(PYTHON_SRC bindings.cc)
+    include_directories("." ${PYTHON_INCLUDE_DIRS})
 endif()
 
 
