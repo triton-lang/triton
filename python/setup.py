@@ -82,19 +82,19 @@ class CMakeBuild(build_ext):
                                                               self.distribution.get_version())
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
-        sourcedir =  os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        sourcedir =  os.path.abspath(os.path.join(os.path.dirname(__file__), 'src'))
         subprocess.check_call(['cmake', sourcedir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(['cmake', '--build', '.'] + build_args, cwd=self.build_temp)
 
 
 find_llvm()
 
-directories = [x[0] for x in os.walk(os.path.join(os.path.pardir, 'include'))]
+directories = [x[0] for x in os.walk(os.path.join('src', 'include'))]
 data = []
 for d in directories:
     for htype in ['h', 'hpp']:
         files = glob.glob(os.path.join(d, f'*.{htype}'), recursive=False)
-        data += [os.path.relpath(f, os.path.pardir) for f in files]
+        data += [os.path.relpath(f, 'src') for f in files]
 
 setup(
     name='triton',
