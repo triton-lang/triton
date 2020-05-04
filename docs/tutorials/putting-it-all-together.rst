@@ -110,9 +110,9 @@ However, in practice only A, B are provided by the user, and all the other :code
               'TYPE'        : dtype,
               'AT'          : transpose_a,
               'BT'          : transpose_b,
-              'TM'          : [32, 64, 128]
-              'TN'          : [32, 64, 128]
-              'TK'          : [8]
+              'TM'          : [32, 64, 128],
+              'TN'          : [32, 64, 128],
+              'TK'          : [8],
               # handle A transposition
               'USE_A'       : '^a'         if transpose_a else 'a',
               'STRIDE_AK'   : 'lda'        if transpose_a else '1',
