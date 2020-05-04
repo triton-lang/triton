@@ -109,4 +109,15 @@ setup(
     ext_modules=[CMakeExtension('triton', 'triton/_C/')],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
+    # for PyPI
+    keyword=['Compiler', 'Deep Learning']
+    url='https://github.com/ptillet/triton/'
+    download_url='https://github.com/ptillet/triton/archive/v0.1.tar.gz'
+    classifiers=[
+    'Development Status :: 4 - Beta',      # Chose either "3 - Alpha", "4 - Beta" or "5 - Production/Stable" as the current state of your package
+    'Intended Audience :: Developers',      # Define that your audience are developers
+    'Topic :: Software Development :: Build Tools',
+    'License :: OSI Approved :: MIT License',   # Again, pick a license
+    'Programming Language :: Python :: 3.6',
+  ],
 )
