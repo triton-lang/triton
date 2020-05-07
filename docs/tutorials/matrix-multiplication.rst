@@ -10,7 +10,7 @@ The purpose of this section is to present a Triton-C implementation of matrix mu
 Compute Kernel
 ==============
 
-Matrix multiplications of the form `C = A x B` can be implemented in Triton-C fairly concisely, as shown below: 
+Matrix multiplications of the form `C = A x B` can be implemented in Triton-C fairly concisely, as shown below:
 
 .. code-block:: C
 
@@ -24,7 +24,7 @@ Matrix multiplications of the form `C = A x B` can be implemented in Triton-C fa
       int rm[TM] = pm * TM + 0 ... TM; //(3)
       int rn[TN] = pn * TN + 0 ... TN; //(4)
       int rk[TK] = 0 ... TK; //(5)
-      // initialize accumulator 
+      // initialize accumulator
       float c[TM, TN] = 0; //(6)
       // pointers to operands
       TYPE* pa[TM, TK] = A + rk[newaxis, :] * 1 + rm[:, newaxis] * lda; //(7)
@@ -32,10 +32,10 @@ Matrix multiplications of the form `C = A x B` can be implemented in Triton-C fa
       // reduction loop
       for(int k = K; k > 0; k-= TK){
         // fetch operands
-        TYPE a[TM, TK] = *pa; //(9) 
+        TYPE a[TM, TK] = *pa; //(9)
         TYPE b[TK, TN] = *pb; //(10)
         // matrix-multiply accumulate
-        c += dot(a, b); //(11)
+        c += a @ b; //(11)
         // increment pointers
         pa = pa + TK * 1; //(12)
         pb = pb + TK * ldb; //(13)
@@ -85,10 +85,10 @@ The purpose of pre-fetching is to overlap the update of the accumulator `c` with
 .. code-block:: C
 
     // pre-fetch operands
-    TYPE a[TM, TK] = *pa; //(9) 
+    TYPE a[TM, TK] = *pa; //(9)
     TYPE b[TK, TN] = *pb; //(10)
     for(int k = K; k > 0; k-= TK){
-       c += dot(a, b);
+       c += a @ b;
        pa = pa + TK * 1;
        pb = pb + TK * ldb;
        // don't prefetch last iteration
@@ -113,7 +113,7 @@ Rematerialization
     int rcm[TM] = pm * TM + 0 ... TM;
     int rcn[TN] = pn * TN + 0 ... TN;
     TYPE* pc[TM, TN] = C + rcn[newaxis, :] + rcm[:, newaxis] * ldc;
-    *pc = c; 
+    *pc = c;
 
 
 ------------------------------------
@@ -144,7 +144,7 @@ It is common for optimized matrix-multiplication implementations (e.g., BLAS) to
       TYPE b[SHAPE_B] = (*pb);
       // reduction loop
       for(int k = K; k > 0; k-= TK){
-        c += dot(USE_A, USE_B);
+        c += USE_A @ USE_B;
         pa = pa + TK * STRIDE_AK;
         pb = pb + TK * STRIDE_BK;
         a = *pa;
@@ -163,16 +163,16 @@ All matrix multiplications variants can then be retrieved using the following co
 .. code-block:: C
 
     // A is not transposed
-    -DUSE_A=a -DSTRIDE_AK=1-DSTRIDE_AM=lda 
+    -DUSE_A=a -DSTRIDE_AK=1-DSTRIDE_AM=lda
     -DBROADCAST_AK=newaxis,: -DBROADCAST_AN=:,newaxis -DSHAPE_A=TM,TK
     // A is transposed
-    -DUSE_A=^a -DSTRIDE_AK=lda-DSTRIDE_AM=1 
+    -DUSE_A=^a -DSTRIDE_AK=lda-DSTRIDE_AM=1
     -DBROADCAST_AK=:,newaxis -DBROADCAST_AN=newaxis,: -DSHAPE_A=TK,TM
     // B is not transpose
-    -DUSE_B=b -DSTRIDE_BK=ldb-DSTRIDE_BN=1 
+    -DUSE_B=b -DSTRIDE_BK=ldb-DSTRIDE_BN=1
     -DBROADCAST_BK=:,newaxis -DBROADCAST_BN=newaxis,: -DSHAPE_B=TK,TN
     // B is transpose
-    -DUSE_B=^b -DSTRIDE_BK=1-DSTRIDE_BN=ldb 
+    -DUSE_B=^b -DSTRIDE_BK=1-DSTRIDE_BN=ldb
     -DBROADCAST_BK=newaxis,: -DBROADCAST_BN=:,newaxis -DSHAPE_B=TN,TK
 
 
@@ -182,3 +182,5 @@ Auto-tuning can also be handled using pre-processor macros:
 
     // Auto-tuning TM and TN in {32, 64, 128}; TK in {8, 16}
     -DTM=[32, 64, 128] -DTN=[32, 64, 128] -DTK=[8, 16]
+
+A runnable version of this kernel is available `here <https://github.com/ptillet/triton/tree/master/python/examples/tutorials/mat_mul.py>`_.
