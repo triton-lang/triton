@@ -22,38 +22,39 @@ using namespace triton;
 
 namespace rt = triton::runtime;
 
-std::map<size_t, std::shared_ptr<rt::function::grid_fn_ty>> id_grid_map;
-std::map<size_t, std::shared_ptr<rt::function>> id_fn_map;
+typedef std::pair<size_t, size_t> map_key_t;
+std::map<map_key_t, std::shared_ptr<rt::function::grid_fn_ty>> id_grid_map;
+std::map<map_key_t, std::shared_ptr<rt::function>> id_fn_map;
 std::map<size_t, double> fp64scalar_map;
 std::map<size_t, int64_t> i64scalar_map;
 
 /* Grid map */
 
-void register_grid(size_t id,
+void register_grid(const map_key_t& key,
                    const rt::function::grid_fn_ty& grid_fn) {
-  id_grid_map[id].reset(new rt::function::grid_fn_ty(grid_fn));
+  id_grid_map[key].reset(new rt::function::grid_fn_ty(grid_fn));
 }
 
-void delete_grid(size_t id) {
-  id_grid_map.erase(id);
+void delete_grid(const map_key_t& key) {
+  id_grid_map.erase(key);
 }
 
 /* Function map */
 
-void register_fn(size_t id,
+void register_fn(const map_key_t& key,
                  const std::string& src,
                  const rt::function::options_space_t& opt,
                  const std::string &cache_ref) {
-  id_fn_map[id].reset(new rt::function(src, opt, cache_ref));
+  id_fn_map[key].reset(new rt::function(src, opt, cache_ref));
 }
 
-void delete_fn(size_t id) {
-  id_fn_map.erase(id);
+void delete_fn(const map_key_t& key) {
+  id_fn_map.erase(key);
 }
 
-void register_cst(size_t id, const std::string& name, pybind11::buffer& data) {
+void register_cst(const map_key_t& key, const std::string& name, pybind11::buffer& data) {
   pybind11::buffer_info info = data.request();
-  id_fn_map[id]->set_cst(name, info.ptr, info.size*info.itemsize);
+  id_fn_map[key]->set_cst(name, info.ptr, info.size*info.itemsize);
 }
 
 void cleanup() {
@@ -487,6 +488,7 @@ void gen_torch_signature(std::ostringstream& oss,
   std::string ret_ty = "void";
   oss << ret_ty << " " << name << "(";
   oss << "int64_t id, ";
+  oss << "int64_t dev_id, ";
   oss << "int64_t bench, ";
   oss << "int64_t bench_id,  ";
   for(size_t i = 0; i < args.size(); i++) {
@@ -531,7 +533,7 @@ void gen_torch_make_handles(std::ostream &os,
 void gen_torch_make_launch_function(std::ostream &os, 
                                     const std::vector<rt::arg_type>& args) {
   os << "  std::function<void()> run = [&](){\n  ";
-  os << "    (*id_fn_map.at(id))({";
+  os << "    (*id_fn_map.at({id, dev_id}))({";
   for(unsigned i = 0; i < args.size() ; i++){
     std::string name = "arg_" + std::to_string(i);
     if(args[i] == rt::BUFFER_T)
@@ -540,7 +542,7 @@ void gen_torch_make_launch_function(std::ostream &os,
       os << ", ";
     os << name;
   }
-  os << "}, *id_grid_map.at(id), &stream);\n";
+  os << "}, *id_grid_map.at({id, dev_id}), &stream);\n";
   os << "  };\n";
   os << "  run();\n";
   os << "  if(bench > 0)\n  ";
@@ -580,8 +582,9 @@ std::tuple<std::string,
 namespace rt = triton::runtime;
 namespace drv = triton::driver;
 
-extern std::map<size_t, std::shared_ptr<rt::function::grid_fn_ty>> id_grid_map;
-extern std::map<size_t, std::shared_ptr<rt::function>> id_fn_map;
+typedef std::pair<size_t, size_t> map_key_t;
+extern std::map<map_key_t, std::shared_ptr<rt::function::grid_fn_ty>> id_grid_map;
+extern std::map<map_key_t, std::shared_ptr<rt::function>> id_fn_map;
 extern std::map<size_t, int64_t> i64scalar_map;
 
 )";
