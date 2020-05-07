@@ -185,7 +185,8 @@ class kernel:
     opt.defines = macros
     opt.num_warps = num_warps
     self.op_id = libtriton.make_op_id()
-    libtriton.register_fn(self.op_id, self.src, opt, os.path.realpath(libtriton.__file__))
+    self.opt = opt
+    self.registered = set()
     # create pytorch hook
     arg_types = libtriton.get_fn_signature(self.src, opt)
     self.fw_op = _make_framework_op(arg_types)
@@ -194,6 +195,14 @@ class kernel:
     libtriton.register_cst(self.op_id, name, value)
 
   def __call__(self, *args, **kwargs):
+    for x in args:
+      if isinstance(x, fw.torch.Tensor):
+        device = x.device.index
+        break
+    # lazily register function for device
+    if device not in self.registered:
+      self.registered.add(device)
+      libtriton.register_fn((self.op_id, device), self.src, self.opt, os.path.realpath(libtriton.__file__))
     # launch options
     bench = kwargs['bench']         if 'bench'     in kwargs else 0
     bench_id = libtriton.make_scalar_id() if bench > 0 else -1
@@ -201,8 +210,8 @@ class kernel:
     if 'grid' not in kwargs:
       raise RuntimeError('Must provide grid for kernel launch')
     grid = kwargs['grid']
-    libtriton.register_grid(self.op_id, grid)
+    libtriton.register_grid((self.op_id, device), grid)
     # launch
-    self.fw_op(self.op_id, bench, bench_id, *args)
+    self.fw_op(self.op_id, device, bench, bench_id, *args)
     if bench > 0:
       return libtriton.retrieve_scalar(bench_id)
