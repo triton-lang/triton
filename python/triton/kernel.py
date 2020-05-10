@@ -19,6 +19,7 @@ import triton._C.libtriton as libtriton
 import os
 import time
 import torch.utils.cpp_extension
+import platform
 
 
 def _cvt_to_def_str(obj):
@@ -85,10 +86,12 @@ def _make_framework_op(arg_types):
   ccdir = os.path.join(libtriton.__file__, os.path.pardir)
   ccdir = os.path.realpath(ccdir)
   print('[TRITON] Compiling op...')
+  machine = platform.machine()
+  extra_cflags = ['-std=gnu++11'] if machine == 'ppc64le' else None
   lib = torch.utils.cpp_extension.load(name, cpp, 
                                       extra_ldflags = [f'-L{ccdir}', '-ltriton'],
                                       extra_include_paths = [os.path.join(ccdir, 'include')],
-                                      #extra_cflags = [f'-std=gnu++11'],
+                                      extra_cflags = extra_cflags,
                                       build_directory = root,
                                       is_python_module = False,
                                       with_cuda = True)
