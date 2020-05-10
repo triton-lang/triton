@@ -85,13 +85,13 @@ def _make_framework_op(arg_types):
   ccdir = os.path.join(libtriton.__file__, os.path.pardir)
   ccdir = os.path.realpath(ccdir)
   print('[TRITON] Compiling op...')
-  lib = torch.utils.cpp_extension.load_inline(name, src, 
-                                              extra_ldflags = [f'-L{ccdir}', '-ltriton'],
-                                              extra_include_paths = [os.path.join(ccdir, 'include')],
-                                              extra_cflags = [f'-std=gnu++11'],
-                                              build_directory = root,
-                                              is_python_module = False,
-                                              with_cuda = True)
+  lib = torch.utils.cpp_extension.load(name, cpp, 
+                                      extra_ldflags = [f'-L{ccdir}', '-ltriton'],
+                                      extra_include_paths = [os.path.join(ccdir, 'include')],
+                                      #extra_cflags = [f'-std=gnu++11'],
+                                      build_directory = root,
+                                      is_python_module = False,
+                                      with_cuda = True)
   fw.torch.ops.load_library(so)
   return getattr(fw.torch.ops.triton, name)
   
