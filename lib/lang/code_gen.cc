@@ -624,6 +624,7 @@ ir::attribute Generator::GenIRAttr(ASTNode::Attr attr) {
   if(attr.kind == ASTNode::Attr::WRITEONLY)
     return ir::attribute(ir::writeonly);
   error_not_implemented("attribute " + std::to_string(attr.kind) + " not implemented");
+  return ir::attribute(ir::not_implemented);
 }
 
 void Generator::SetIRMetadata(ASTNode::Attr attr, ir::value *v) {

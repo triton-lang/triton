@@ -146,7 +146,8 @@ host_module::host_module(driver::context * context, std::unique_ptr<llvm::Module
   llvm::Type *void_ty = llvm::Type::getVoidTy(ctx);
   llvm::Type *args_ty = llvm::Type::getInt8PtrTy(ctx)->getPointerTo();
   llvm::Type *int32_ty = llvm::Type::getInt32Ty(ctx);
-  llvm::FunctionType *main_ty = llvm::FunctionType::get(void_ty, {args_ty, int32_ty, int32_ty, int32_ty}, false);
+  std::vector<llvm::Type*> tys = {args_ty, int32_ty, int32_ty, int32_ty};
+  llvm::FunctionType *main_ty = llvm::FunctionType::get(void_ty, tys, false);
   llvm::Function* main = llvm::Function::Create(main_ty, llvm::Function::ExternalLinkage, "main", &*src);
   llvm::Function* fn = src->getFunction("matmul");
   llvm::FunctionType *fn_ty = fn->getFunctionType();
