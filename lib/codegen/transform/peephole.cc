@@ -81,6 +81,7 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
     add->replace_all_uses_with(new_dot);
     return true;
   }
+  return false;
 }
 
 //bool peephole::rewrite_cts_cfs(ir::instruction *value, ir::builder &builder){
