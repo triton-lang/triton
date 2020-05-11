@@ -39,7 +39,8 @@ enum attribute_kind_t {
   writeonly,
   noalias,
   aligned,
-  multiple_of
+  multiple_of,
+  not_implemented
 };
 
 class attribute {

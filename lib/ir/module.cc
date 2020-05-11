@@ -70,6 +70,7 @@ ir::value *module::try_remove_trivial_phis(ir::phi_node *&phi){
     return phi;
   // unique value or self-reference
   ir::value *same = *non_self_ref.begin();
+  assert(same != nullptr);
   std::set<ir::user*> users = phi->get_users();
   phi->replace_all_uses_with(same);
   phi->erase_from_parent();
