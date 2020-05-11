@@ -1,4 +1,5 @@
 #include <cassert>
+#include <iostream>
 #include "triton/ir/value.h"
 #include "triton/ir/instructions.h"
 
@@ -19,8 +20,11 @@ void value::add_use(user *arg) {
   users_.insert(arg);
 }
 
-unsigned value::erase_use(user *arg){
-  return users_.erase(arg);
+value::users_t::iterator value::erase_use(user *arg){
+  auto it = users_.find(arg);
+  if(it == users_.end())
+    return it;
+  return users_.erase(it);
 }
 
 // TODO: automatic naming scheme + update symbol table
@@ -29,8 +33,11 @@ void value::set_name(const std::string &name){
 }
 
 void value::replace_all_uses_with(value *target){
-  throw std::runtime_error("not implemented");
+  for (auto it = users_.begin(); it != users_.end(); ) {
+    it = (*it)->replace_uses_of_with(this, target);
+  }
 }
+
 
 void visitor::visit_value(ir::value* v) {
   v->accept(this);
@@ -59,18 +66,12 @@ unsigned user::get_num_hidden() const {
   return num_hidden_;
 }
 
-void user::replace_all_uses_with(value *target) {
-  for(auto it = users_.begin(); it != users_.end(); it++){
-    (*it)->replace_uses_of_with(this, target);
-  }
-}
-
-void user::replace_uses_of_with(value *before, value *after) {
+value::users_t::iterator user::replace_uses_of_with(value *before, value *after) {
   for(size_t i = 0; i < ops_.size(); i++)
     if(ops_[i] == before)
       ops_[i] = after;
   after->add_use(this);
-  before->erase_use(this);
+  return before->erase_use(this);
 }
 
 

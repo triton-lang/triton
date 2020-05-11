@@ -21,14 +21,17 @@ class visitor;
 
 class value {
 public:
+  typedef std::set<user*> users_t;
+
+public:
   // constructor
   value(type *ty, const std::string &name = "");
   virtual ~value(){ }
   // uses
   void add_use(user* arg);
-  unsigned erase_use(user* arg);
+  users_t::iterator erase_use(user* arg);
   const std::set<user*> &get_users() { return users_; }
-  virtual void replace_all_uses_with(value *target);
+  void replace_all_uses_with(value *target);
   // name
   void set_name(const std::string &name);
   const std::string &get_name() const { return name_; }
@@ -41,7 +44,7 @@ private:
 
 protected:
   type *ty_;
-  std::set<user*> users_;
+  users_t users_;
 };
 
 //===----------------------------------------------------------------------===//
@@ -63,6 +66,7 @@ public:
   user(type *ty, unsigned num_ops, const std::string &name = "")
       : value(ty, name), ops_(num_ops), num_ops_(num_ops), num_hidden_(0){
   }
+  virtual ~user() { }
 
   // Operands
   const ops_t& ops() { return ops_; }
@@ -74,8 +78,7 @@ public:
   unsigned get_num_hidden() const;
 
   // Utils
-  void replace_all_uses_with(value *target);
-  void replace_uses_of_with(value *before, value *after);
+  value::users_t::iterator replace_uses_of_with(value *before, value *after);
 
 
 private:
