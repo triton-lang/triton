@@ -618,8 +618,25 @@ void generator::visit_atomic_exch_inst(ir::atomic_exch_inst* xchg) {
   tgt_->add_memfence(module, *builder_);
 }
 
-void generator::visit_atomic_add_inst(ir::atomic_add_inst*) {
-  throw std::runtime_error("unsupported");
+void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
+    BasicBlock *current = builder_->GetInsertBlock();
+    Module *module = current->getModule();
+    Value *rmw_ptr = vmap_.at(add->get_operand(0));
+    Value *rmw_val = vmap_.at(add->get_operand(1));
+    Value *tid = tgt_->get_local_id(module, *builder_, 0);
+    Value *pred = builder_->CreateICmpEQ(tid, builder_->getInt32(0));
+    BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
+    BasicBlock *tid_0_done_bb = BasicBlock::Create(*ctx_, "tid_0_done", current->getParent());
+    tgt_->add_memfence(module, *builder_);
+    tgt_->add_barrier(module, *builder_);
+    builder_->CreateCondBr(pred, tid_0_bb, tid_0_done_bb);
+    builder_->SetInsertPoint(tid_0_bb);
+    builder_->CreateAtomicRMW(AtomicRMWInst::FAdd, rmw_ptr, rmw_val,
+                                            AtomicOrdering::Monotonic,
+                                            SyncScope::System);
+    builder_->CreateBr(tid_0_done_bb);
+    builder_->SetInsertPoint(tid_0_done_bb);
+    tgt_->add_memfence(module, *builder_);
 }
 
 void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK) {
