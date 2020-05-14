@@ -399,6 +399,7 @@ std::string function::preheader() {
 
 extern int atomic_cas(int*, int, int);
 extern int atomic_xchg(int*, int);
+extern float f32_atomic_add(float*, float);
 extern int get_program_id(int);
 extern int get_num_programs(int);
 extern float sqrtf(float);

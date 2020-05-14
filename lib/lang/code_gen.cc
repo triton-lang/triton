@@ -277,6 +277,13 @@ void Generator::VisitFuncCall(FuncCall* funcCall) {
     ir::value* val = ret_;
     return set_ret(bld_->create_atomic_exch(ptr, val));
   }
+  if(name == "f32_atomic_add"){
+    VisitExpr(funcCall->Args()->at(0));
+    ir::value* ptr = ret_;
+    VisitExpr(funcCall->Args()->at(1));
+    ir::value* val = ret_;
+    return set_ret(bld_->create_atomic_add(ptr, val));
+  }
   if(name == "sqrtf"){
     VisitExpr(funcCall->Args()->at(0));
     ir::value* ret = ret_;
