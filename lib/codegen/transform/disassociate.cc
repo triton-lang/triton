@@ -34,10 +34,13 @@ void disassociate::run(ir::module &mod) {
   std::map<ir::user*, std::map<int, std::set<ir::user*>>> clone_info;
   ir::for_each_instruction(mod, [&](ir::instruction *i){
     if(dynamic_cast<ir::reshape_inst*>(i)){
+      ir::value* op = i->get_operand(0);
+      if(!dynamic_cast<ir::user*>(op))
+        return;
+      if(op->get_type()->get_tile_rank() > i->get_type()->get_tile_rank())
+        return;
       std::map<int, std::set<ir::user*>> chains;
       std::set<ir::value*> seen;
-      if(!dynamic_cast<ir::user*>(i->get_operand(0)))
-        return;
       extract_retile_chain(i, chains, 0, seen);
       if(chains.size())
         clone_info[i] = chains;
