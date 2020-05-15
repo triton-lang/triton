@@ -53,13 +53,14 @@ inline bool is_int_type(arg_type ty){
 }
 
 class arg {
-private:
+public:
   union value_t {
     bool    int1;
     int8_t  int8;
     int16_t int16;
     int32_t int32;
     int64_t int64;
+    uint16_t fp16;
     float   fp32;
     double  fp64;
     driver::buffer* buf;
@@ -67,6 +68,7 @@ private:
 
 public:
   // construct from primitive types
+  arg(arg_type ty, value_t val): ty_(ty) { val_ = val; }
   arg(int32_t x): ty_(INT32_T) { val_.int32 = x; }
   arg(int64_t x): ty_(INT64_T) { val_.int64 = x; }
   arg(float x): ty_(FLOAT_T)   { val_.fp32 = x; }
