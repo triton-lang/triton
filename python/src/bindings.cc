@@ -194,7 +194,7 @@ void gen_make_handles(std::ostream &os, const std::vector<ir::argument*>& args) 
     if(!arg->get_type()->is_pointer_ty())
       continue;
     const std::string& name = arg->get_name();
-    os << "  drv::cu_buffer cu_" + name + "(ctx, " + name + "->tensor_data().size(), (CUdeviceptr)" + name + "->tensor_data().data(), false);\n  ";
+    os << "  drv::cu_buffer cu_" + name + "(ctx, " + name + "->nbytes(), (CUdeviceptr)" + name + "->tensor_data().data(), false);\n  ";
   }
 }
 
@@ -524,7 +524,7 @@ void gen_torch_make_handles(std::ostream &os,
       os << "  " << to_c_ty(arg) << " " << name << " = " << th_name << ";" << std::endl;
     else{
       os << "  CHECK_INPUT(" << th_name << ");" << std::endl;
-      os << "  drv::cu_buffer " + name + "(ctx, " + th_name + ".storage().size(), "
+      os << "  drv::cu_buffer " + name + "(ctx, " + th_name + ".nbytes(), "
             " (CUdeviceptr)((char*)" + th_name + ".storage().data() + " + th_name + ".storage_offset() * " + th_name + ".itemsize()), false);" << std::endl;
     }
   }
@@ -561,16 +561,7 @@ void gen_torch_make_launch_function(std::ostream &os,
     os << "args.push_back(rt::arg(ty" << i << ", val" << i << "));\n  ";
   }
   os << "  std::function<void()> run = [&](){\n  ";
-  os << "    (*id_fn_map.at({id, dev_id}))({";
-  for(unsigned i = 0; i < args.size() ; i++){
-    std::string name = "arg_" + std::to_string(i);
-    if(args[i] == rt::BUFFER_T)
-      name = "&" + name;
-    if(i > 0)
-      os << ", ";
-    os << name;
-  }
-  os << "}, *id_grid_map.at({id, dev_id}), &stream);\n";
+  os << "    (*id_fn_map.at({id, dev_id}))(args , *id_grid_map.at({id, dev_id}), &stream);\n";
   os << "  };\n";
   os << "  run();\n";
   os << "  if(bench > 0)\n  ";
