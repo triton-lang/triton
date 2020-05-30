@@ -116,8 +116,11 @@ void coalesce::run(ir::module &mod) {
     // update list of values to rematerialize
     if(axes.empty())
       continue;
-    for(auto it = ++axes.rbegin(); it != axes.rend(); it++)
+    for(auto it = ++axes.rbegin(); it != axes.rend(); it++){
+      if(it->second.size() == 1)
+        continue;
       remat.insert(remat.begin(), it->second.begin(), it->second.end());
+    }
   }
   // rematerialize values
   for(ir::io_inst *r: remat) {
