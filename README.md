@@ -18,7 +18,7 @@ Triton is a fairly self-contained package and uses its own parser (forked from [
 
 You can install the latest release with pip as follows:
 ```
-sudo apt-get install llvm-8-dev
+sudo apt-get install llvm-9-dev
 pip install triton
 ```
 
