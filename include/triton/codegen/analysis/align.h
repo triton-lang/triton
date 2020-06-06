@@ -11,6 +11,7 @@ namespace ir {
   class module;
   class phi_node;
   class splat_inst;
+  class cast_inst;
   class reshape_inst;
   class broadcast_inst;
   class binary_operator;
@@ -44,6 +45,7 @@ private:
   std::vector<unsigned> populate_max_contiguous_broadcast(ir::broadcast_inst* x);
   std::vector<unsigned> populate_max_contiguous_binop(ir::binary_operator* x);
   std::vector<unsigned> populate_max_contiguous_gep(ir::getelementptr_inst* x);
+  std::vector<unsigned> populate_max_contiguous_cast(ir::cast_inst* x);
   std::vector<unsigned> populate_max_contiguous_default(ir::value* v);
   std::vector<unsigned> populate_max_contiguous(ir::value *v);
   // populate starting_multiple
@@ -53,6 +55,7 @@ private:
   std::vector<unsigned> populate_starting_multiple_broadcast(ir::broadcast_inst* x);
   std::vector<unsigned> populate_starting_multiple_binop(ir::binary_operator* x);
   std::vector<unsigned> populate_starting_multiple_gep(ir::getelementptr_inst* x);
+  std::vector<unsigned> populate_starting_multiple_cast(ir::cast_inst* x);
   std::vector<unsigned> populate_starting_multiple_default(ir::value* v);
   std::vector<unsigned> populate_starting_multiple(ir::value *v);
   // populate all maps
