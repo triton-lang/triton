@@ -16,6 +16,29 @@ namespace analysis{
  *          Helper Functions        *
  * -------------------------------- */
 
+inline int gcd_impl(int a, int b, int *x, int *y)
+{
+    // Base Case
+    if (a == 0)
+    {
+        *x = 0;
+        *y = 1;
+        return b;
+    }
+    int x1, y1; // To store results of recursive call
+    int gcd = gcd_impl(b%a, a, &x1, &y1);
+    // Update x and y using results of
+    // recursive call
+    *x = y1 - (b/a) * x1;
+    *y = x1;
+    return gcd;
+}
+
+inline int gcd(int a, int b) {
+  int x, y;
+  return gcd_impl(a, b, &x, &y);
+}
+
 inline unsigned clamp(unsigned x, unsigned a, unsigned b) {
   unsigned lo = std::min(a, b);
   unsigned hi = std::max(a, b);
@@ -187,7 +210,8 @@ scanline_layout::scanline_layout(size_t num_warps,
   if(ptr)
     contiguous = std::min<int>(align->contiguous(ptr)[i], 4);
 
-  nts_[i] = clamp(size / num_threads, 1, std::min<int>(contiguous, shape_[i]));
+  int max_contiguous = shape_[i] / (num_warps*32);
+  nts_[i] = clamp(size / num_threads, 1, gcd(contiguous, max_contiguous));
   mts_[i] = clamp(num_threads, 1, shape_[i] / nts_[i]);
   size /= shape_[i];
   num_threads /= mts_[i];
