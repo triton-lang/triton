@@ -100,7 +100,7 @@ for d in directories:
 
 setup(
     name='triton',
-    version='0.1.3',
+    version='0.2.0',
     author='Philippe Tillet',
     author_email='ptillet@g.harvard.edu',
     description='A language and compiler for custom Deep Learning operations',
