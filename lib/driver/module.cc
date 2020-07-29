@@ -251,11 +251,10 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
    int version;
    dispatch::cuDriverGetVersion(&version);
    int major = version / 1000;
-   int minor = (version - major*1000) / 10;
+//   int minor = (version - major*1000) / 10;
    if(major < 10)
      throw std::runtime_error("Triton requires CUDA 10+");
-   if(minor >= 1)
-     find_and_replace(result, ".version", "\n", ".version 6.4\n");
+   find_and_replace(result, ".version", "\n", ".version 6.4\n");
    while(find_and_replace(result, "\t// begin inline asm", "\n", ""));
    while(find_and_replace(result, "\t// end inline asm", "\n", ""));
    return result;
