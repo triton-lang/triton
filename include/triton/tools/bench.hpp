@@ -38,19 +38,22 @@ inline double bench(std::function<void()> const & op, driver::stream * stream, b
   double total_time = 0;
   op();
   stream->synchronize();
-  while(total_time*1e-9 < 1e-2){
-    float norm = 1;
+  tmr.start();
+  for(size_t i = 0; i < 10; i++){
+//  while(total_time*1e-9 < 1e-2){
+//    float norm = 1;
     // normalize clock if possible to reduce noise in auto-tuning
 //    if(normalize)
 //    if(auto cu_device = dynamic_cast<const triton::driver::cu_device*>(stream->context()->device()))
 //      norm = (float)cu_device->current_sm_clock()/cu_device->max_sm_clock();
-    tmr.start();
     op();
-    stream->synchronize();
-    times.push_back(norm*tmr.get().count());
-    total_time+=times.back();
+//    times.push_back(norm*tmr.get().count());
+//    total_time+=times.back();
   }
-  return *std::min_element(times.begin(), times.end());
+  stream->synchronize();
+  return (float)tmr.get().count() / 10;
+
+//  return *std::min_element(times.begin(), times.end());
 }
 
 }

@@ -21,13 +21,11 @@ class _conv(torch.autograd.Function):
       int ridx = get_program_id(0);
       int ridy = get_program_id(1);
       int ridz = get_program_id(2);
-      /*
       int gridx = M / TM;
       int gridy = N / TN;
       int rid = ridx + ridy * gridx;
       ridx = rid / gridy;
       ridy = rid % gridy;
-      */
       int rm[TM] = ridx * TM + 0 ... TM;
       int rn[TN] = ridy * TN + 0 ... TN;
       // reduction splitting
@@ -36,10 +34,10 @@ class _conv(torch.autograd.Function):
 
       // unpack aggregate rows
       // m = (z, p, q)
-      int rq[TM]  = rm  % QQ;
-      int rzp[TM] = rm  / QQ;
-      int rp[TM]  = rzp % PP;
-      int rz[TM]  = rzp / PP;
+      int rq[TM]   = rm  % QQ;
+      int rzp[TM]  = rm  / QQ;
+      int rp[TM]   = rzp % PP;
+      int rz[TM]   = rzp / PP;
       // unpack aggregate reduction
       // k = (ci, r, s)
       int rs  [TK] = rk % SS;
@@ -68,10 +66,12 @@ class _conv(torch.autograd.Function):
       TYPE* pb[TK, TN] = B + offb;
 
       // prefetches operands
-      bool checka[TM, TK] = rh >= 0 && rh < HH && rw >= 0 && rw < WW;
+      bool checkam[TM, TK] = rm[:, newaxis] < M;
+      bool checka[TM, TK] = checkam && rh >= 0 && rh < HH && rw >= 0 && rw < WW;
       bool checkb[TK, TN] = rk[:, newaxis] < K;
       TYPE a[TM, TK] = checka ? *pa : 0;
       TYPE b[TK, TN] = checkb ? *pb : 0;
+      int total = 0;
 
       // reduction loop
       float acc[TM, TN] = 0;
@@ -81,8 +81,6 @@ class _conv(torch.autograd.Function):
         int adelta[TK] = *padelta;
         padelta += TK;
         pa += adelta[newaxis, :];
-        // increment B
-        pb += TK * ldb_s;
         // bounds-checking A
         rk += TK;
         rs = rk % SS;
@@ -90,7 +88,9 @@ class _conv(torch.autograd.Function):
         rr = rcir % RR;
         rh = rh_0[:, newaxis] + rr[newaxis, :];
         rw = rw_0[:, newaxis] + rs[newaxis, :];
-        bool checka[TM, TK] = rh >= 0 && rh < HH && rw >= 0 && rw < WW;
+        bool checka[TM, TK] = checkam && rh >= 0 && rh < HH && rw >= 0 && rw < WW;
+        // increment B
+        pb += TK * ldb_s;
         // bounds-checking B
         bool checkb[TK, TN] = k > TK;
         a = checka ? *pa : 0;
@@ -152,18 +152,18 @@ class _conv(torch.autograd.Function):
       Q = (W + 2*pad[1] - S)//stride[1] + 1
       # compile kernel
       if dtype not in _conv.kernel:
+          TK = 8
           defines = {
               'TYPE' : dtype,
-              'TM'   : [64, 128],
-              'TN'   : [64, 128],
-              'TK'   : [8],
+              'TM'   : [16, 32, 64, 128],
+              'TN'   : [16, 32, 64, 128],
+              'TK'   : [TK],
               'TZ'   : [1],
-              'LUTSIZE' : 4*CI*R*S,
               'HH': H, 'WW': W, 'PP': P, 'QQ': Q, 'SS': S, 'RR': R,
           }
           idx = torch.arange(CI*R*S)
           ci,   r,  s = _conv.unpack(idx, CI, R, S)
-          nci, nr, ns = _conv.unpack(idx + 8, CI, R, S)
+          nci, nr, ns = _conv.unpack(idx + TK, CI, R, S)
           delta = (nci - ci)*a.stride(1) + (nr - r)*a.stride(2) + (ns - s)*a.stride(3)
           delta = delta.type(torch.int32).cuda()
           _conv.kernel[dtype] = (delta, triton.kernel(_conv.src, num_warps=[2, 4], defines=defines))
@@ -186,7 +186,7 @@ class _conv(torch.autograd.Function):
 
 conv = _conv.apply
 torch.manual_seed(0)
-Z, H, W, CI, CO, R, S = 1, 32, 64, 256, 2048, 3, 3
+Z, H, W, CI, CO, R, S = 1, 56, 56, 1024, 1024, 3, 3
 pad = (1, 1)
 stride = (1, 1)
 a = torch.rand((Z, CI, H, W)).cuda()
