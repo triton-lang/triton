@@ -170,8 +170,8 @@ class kernel:
     arg_types = libtriton.get_fn_signature(self.src, opt)
     self.fw_op = _make_framework_op(arg_types)
 
-  def set_constant(self, name, value):
-    libtriton.register_cst(self.op_id, name, value)
+  def set_constant(self, device, name, value):
+    libtriton.register_cst((self.op_id, device), name, value)
 
   def __call__(self, *args, **kwargs):
     for x in args:
