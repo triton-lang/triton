@@ -1,3 +1,5 @@
+#include <unistd.h>
+#include <fstream>
 #include <string>
 #include <mutex>
 #include <regex>
@@ -33,8 +35,6 @@
 #include "triton/tools/sys/getenv.hpp"
 #include "triton/tools/sys/mkdir.hpp"
 #include "llvm/IR/Module.h"
-#include <mutex>
-#include <fstream>
 
 std::mutex mut;
 
@@ -290,8 +290,26 @@ function::caller* function::make(driver::stream *stream, options_t opt) {
   caller* ret = new caller(tmp, std::move(bin), opt);
   // serialize callable
   if(!cache_path_.empty()){
-    std::ofstream ofs(cache_path);
+    int pid = getpid();
+    char pid_str[100];
+    sprintf(pid_str, "%d", pid);
+    std::string tmp_cache_path = cache_path + "." + pid_str;
+    std::ofstream ofs(tmp_cache_path);
     ret->write(ofs);
+    std::string command = "rm -f " + tmp_cache_path;
+    std::ifstream ifs(cache_path);
+    // file is empty -- invalid
+    if(ifs && ifs.peek() == std::ifstream::traits_type::eof()) {
+      system(const_cast<char*>(command.c_str()));
+      return nullptr;
+    }
+    // load cached caller
+    if(ifs) {
+      system(const_cast<char*>(command.c_str()));
+      return new caller(stream->context(), ifs, opt);
+    }
+    command = "mv " + tmp_cache_path + " " + cache_path;
+    system(const_cast<char*>(command.c_str()));
   }
   return ret;
 }
