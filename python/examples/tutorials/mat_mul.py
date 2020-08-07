@@ -112,7 +112,7 @@ class _dot(torch.autograd.Function):
         time = kernel(a, b, c, 1., M, N, K, 
                       a.stride(0), b.stride(0), c.stride(0), 
                       grid=grid, bench=100)
-        print(time)
+        print(2*M*N*K/(time*1e-6)*1e-9)
         return c
 
 

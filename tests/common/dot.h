@@ -79,9 +79,11 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   std::vector<std::string> sb = { "1", "ldb" };
 
   // inputs
-  auto dc = std::shared_ptr<drv::buffer>(drv::buffer::create(context, M*N*dt_nbytes));
-  auto da = std::shared_ptr<drv::buffer>(drv::buffer::create(context, M*K*dt_nbytes));
-  auto db = std::shared_ptr<drv::buffer>(drv::buffer::create(context, K*N*dt_nbytes));
+  auto dc     = std::shared_ptr<drv::buffer>(drv::buffer::create(context, M*N*dt_nbytes));
+  auto da     = std::shared_ptr<drv::buffer>(drv::buffer::create(context, M*K*dt_nbytes));
+  auto db     = std::shared_ptr<drv::buffer>(drv::buffer::create(context, K*N*dt_nbytes));
+  auto dlocks = std::shared_ptr<drv::buffer>(drv::buffer::create(context, 1024*1024*2*4));
+  ((drv::cu_buffer*)dlocks.get())->set_zero(stream, dlocks->size());
 
   // macros
   rt::function::options_space_t opt;
@@ -110,15 +112,21 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   }
   if(mode == BENCH) {
     opt.defines.push_back({"TM", {"128"}});
-    opt.defines.push_back({"TN", {"32"}});
-    opt.defines.push_back({"TK", {to_string<T>::value == "half" ? "16" : "8"}});
+    opt.defines.push_back({"TN", {"128"}});
+    opt.defines.push_back({"TK", {"16"}});
+    opt.defines.push_back({"TZ", {"1"}});
     opt.num_warps = {4};
   }
 
   // kernels
+
   rt::function function(src::dot, opt);
-  std::vector<rt::arg> args = {&*da, &*db, &*dc, (float)1, M, N, K, lda, ldb, ldc};
-  auto grid = grid2d(M, N);
+  std::vector<rt::arg> args = {&*da, &*db, &*dc, (float)1, M, N, K, lda, ldb, ldc, &*dlocks};
+  auto grid = [M, N](const rt::function::options_t& x) {
+    return rt::grid_t{ceil(M, x.D<int>("TM")),
+                      ceil(N, x.D<int>("TN")),
+                      (size_t)x.D<int>("TZ")};
+  };
 
   // metrics
   if(mode == BENCH){
@@ -126,13 +134,13 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     double triton_ns = triton::tools::bench([&]() { function(args, grid, stream);}, stream);
     bench.push_back(tflops(triton_ns));
 
-//    // cublas
+    // cublas
 //    if(cublas::cublasinit()){
 //      T alpha(static_cast<double>(1));
 //      T beta(static_cast<double>(0));
 //      cublasGemmAlgo_t fastest;
 //      cublasGemm(CUDA_R_32F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
-//      double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
+//      double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_32F, stream, AT, BT, M, N, K,
 //                                                                 &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
 //                                                                 ldc, nullptr, fastest); }, stream);
 //      bench.push_back(tflops(cublas_ms));
