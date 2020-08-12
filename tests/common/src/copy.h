@@ -7,7 +7,7 @@ namespace src {
 R"(
 void copy1d(TYPE * X __noalias __readonly __aligned(16),
             TYPE * Y __noalias __readonly __aligned(16),
-            int S0) {
+            int S0 __retune) {
   int pid0 = get_program_id(0);
   int rs0[TS0] = pid0 * TS0 + 0 ... TS0;
   TYPE* px[TS0] = X + rs0;
@@ -20,8 +20,8 @@ void copy1d(TYPE * X __noalias __readonly __aligned(16),
 R"(
 void copy2d(TYPE * X __noalias __readonly __aligned(16),
             TYPE * Y __noalias __writeonly __aligned(16),
-            int S0 __multipleof(8),
-            int S1 __multipleof(8)) {
+            int S0 __multipleof(8) __retune,
+            int S1 __multipleof(8) __retune) {
   int pid0 = get_program_id(0);
   int pid1 = get_program_id(1);
   int rs0[TS0] = pid0 * TS0 + 0 ... TS0;
@@ -37,9 +37,9 @@ void copy2d(TYPE * X __noalias __readonly __aligned(16),
 R"(
 void copy3d(TYPE * X __noalias __readonly __aligned(16),
             TYPE * Y __noalias __writeonly __aligned(16),
-            int S0 __multipleof(8),
-            int S1 __multipleof(8),
-            int S2 __multipleof(8)) {
+            int S0 __multipleof(8) __retune,
+            int S1 __multipleof(8) __retune,
+            int S2 __multipleof(8) __retune) {
   // program id
   int pid0 = get_program_id(0);
   int pid1 = get_program_id(1);
