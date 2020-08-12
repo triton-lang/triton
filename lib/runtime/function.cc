@@ -151,27 +151,23 @@ function::caller::caller(ir::function *ir,
   bin_.reset(driver::kernel::create(&*parent, name_.c_str()));
   // extract signature
   ir::function_type* ty = ir->get_fn_type();
-  for(size_t i = 0; i < ty->get_num_params(); i++)
+  for(size_t i = 0; i < ty->get_num_params(); i++){
     param_tys_.push_back(convert(ty->get_param_ty(i)));
+    if(!ir->has_attr(i+1))
+      continue;
+    for(ir::attribute attr: ir->attrs().at(i + 1))
+      if(attr.get_kind() == ir::retune)
+        retune_.push_back(i);
+  }
 }
 
 
-void function::caller::operator ()(driver::stream *stream, const grid_t& _grid, const std::vector<arg>& args) const {
-  if(args.size() != param_tys_.size())
-    throw std::runtime_error("invalid number of arguments");
-  // set arguments
-  for(size_t i = 0; i < args.size(); i++){
-    arg arg_i = args.at(i);
-    arg_type ty = arg_i.type();
-    if(ty != param_tys_.at(i))
-      throw std::runtime_error("invalid type for argument " + std::to_string(i));
-    if(ty == BUFFER_T){
-      driver::buffer* buf = *((driver::buffer**)arg_i.data());
-      bin_->setArg(i, buf->size() == 0 ? nullptr : buf);
-    }
-    else
-      bin_->setArg(i, size_of(ty), arg_i.data());
-  }
+void function::caller::operator ()(driver::stream *stream, const grid_t& _grid, void** args, size_t args_size) const {
+  void *config[] = {
+      CU_LAUNCH_PARAM_BUFFER_POINTER, args,
+      CU_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
+      CU_LAUNCH_PARAM_END
+  };
   // set grid
   if(_grid.size() > 3)
     throw std::runtime_error("grid size must be no greater than 3");
@@ -179,7 +175,7 @@ void function::caller::operator ()(driver::stream *stream, const grid_t& _grid, 
   for(size_t i = 0; i < 3; i++)
     grid[i] = (i < _grid.size()) ? _grid[i] : 1;
   // enqueue
-  stream->enqueue(&*bin_, grid, {opt_.num_warps * 32, 1, 1});
+  stream->enqueue(&*bin_, grid, {opt_.num_warps * 32, 1, 1}, NULL, NULL, config);
 }
 
 
@@ -251,20 +247,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
 
 // create Binary from options
 function::caller* function::make(driver::stream *stream, options_t opt) {
-  // cache path
-  std::string cache_path = cache_path_ + opt.to_str() + ".ptx";
-  int ref_mtime = tools::mtime(cache_ref_);
-  int ptx_mtime = tools::mtime(cache_path);
-  // if cached ptx is newer than reference library
-  if(!ref_mtime || !ptx_mtime || ref_mtime < ptx_mtime){
-    std::ifstream ifs(cache_path);
-    // file is empty -- invalid
-    if(ifs && ifs.peek() == std::ifstream::traits_type::eof())
-      return nullptr;
-    // load cached caller
-    if(ifs)
-      return new caller(stream->context(), ifs, opt);
-  }
   // pre-process
   TokenSequence tokens;
   Preprocessor cpp(&src_, true);
@@ -281,18 +263,11 @@ function::caller* function::make(driver::stream *stream, options_t opt) {
   try{
     bin = make_bin(*ir, stream->context(), opt);
   }catch(const std::runtime_error&){
-    if(!cache_path_.empty())
-      std::ofstream ofs(cache_path);
     return nullptr;
   }
   // create callable
   ir::function *tmp = ir->get_function_list()[0];
   caller* ret = new caller(tmp, std::move(bin), opt);
-  // serialize callable
-  if(!cache_path_.empty()){
-    std::ofstream ofs(cache_path);
-    ret->write(ofs);
-  }
   return ret;
 }
 
@@ -330,48 +305,20 @@ void function::precompile(driver::stream* stream,
     throw std::runtime_error("could not compile kernel");
 }
 
-// return auto-tuning key for given function arguments
-function::cache_key_t function::get_key(driver::stream *stream, const std::vector<arg>& args) {
-  cache_key_t ret;
-  ret.first = stream->context()->device();
-  for(size_t i = 0; i < args.size(); i++){
-    arg_type ty = args.at(i).type();
-    if(!is_int_type(ty))
-      continue;
-    long val = 0;
-    std::memcpy((void*)&val, args.at(i).data(), size_of(ty));
-    ret.second.push_back(val);
-  }
-  return ret;
-}
 // returns program with best compilation options for given parameter
 function::caller* function::autotune(driver::stream* stream, const grid_fn_ty& grid_fn,
-                                       const std::vector<arg>& args) {
+                                     void** args, size_t args_size) {
   // fast path -- no autotuning necessary
   if(callers_.size() == 1)
     return &*callers_.begin()->second;
-  // slow path -- autotuning necessary
-  // copy buffer argument so that auto-tuning doesn't corrupt data
-  std::list<std::shared_ptr<driver::cu_buffer>> copies;
-  std::vector<arg> _args = args;
-  for(size_t i = 0; i < args.size(); i++)
-    if(_args[i].type() == BUFFER_T){
-      driver::buffer* old = _args[i].buffer();
-      size_t size = old->size();
-      // only copy scalars
-      // TODO: change that
-      if(size != 4 && size != 2)
-        continue;
-      copies.push_back(std::make_shared<driver::cu_buffer>(old->context(), size));
-      _args[i] = arg(copies.back().get());
-    }
+  // TODO" copy buffer argument so that auto-tuning doesn't corrupt data
   double best_ts = INFINITY;
   caller* ret = nullptr;
   for(auto &x : callers_){
     if(x.second == nullptr)
       throw std::runtime_error("configuration not compiled");
     caller* current = &*x.second;
-    double ts = tools::bench([&]() { (*current)(stream, grid_fn(x.first), args); },
+    double ts = tools::bench([&]() { (*current)(stream, grid_fn(x.first), args, args_size); },
                                      stream, true);
     ret = (ts < best_ts) ? current : ret;
     best_ts = std::min(ts, best_ts);
@@ -397,6 +344,7 @@ std::string function::preheader() {
 #define __noalias       __attribute__((noalias))
 #define __aligned(A)    __attribute__((aligned(A)))
 #define __multipleof(A) __attribute__((multipleof(A)))
+#define __retune        __attribute__((retune))
 
 #define F32_INFINITY bitcast<float>(0x7F800000)
 #define F16_INFINITY bitcast<half>((int16)0x7C00)
@@ -456,27 +404,35 @@ function::function(const std::string &src,
   src_ = preheader() + src_;
 }
 
-void function::operator()(const std::vector<arg>& args,
-                          const grid_fn_ty& grid_fn,
-                          driver::stream *stream) {
+void function::operator()(void** args, size_t args_size, const grid_fn_ty& grid_fn, driver::stream *stream) {
   // pre-compile kernels
-  if(callers_.empty())
+  if(callers_.empty()){
     precompile(stream, opt_);
+    size_t cumsum = 0;
+    for(arg_type ty: callers_.begin()->second->param_tys()){
+      args_off_.push_back(cumsum);
+      cumsum += size_of(ty);
+    }
+  }
+  // re-tuning key
+  cache_key_t key;
+  key.first = stream->context()->device();
+  key.second = callers_.begin()->second->retune();
   // auto-tune if necessary
-  auto key = get_key(stream, args);
   auto it = cache_.find(key);
   if(it == cache_.end()){
-    auto best = autotune(stream, grid_fn, args);
+    auto best = autotune(stream, grid_fn, args, args_size);
     it = cache_.insert({key, best}).first;
   }
   // run
-  (*it->second)(stream, grid_fn(it->second->opt()), args);
+  (*it->second)(stream, grid_fn(it->second->opt()), args, args_size);
 }
 
-void function::operator()(const std::vector<arg>& args,
+void function::operator()(void** args,
+                          size_t args_size,
                           const grid_t& grid,
                           driver::stream *stream) {
-  return this->operator()(args, [&grid](const options_t&){ return grid; }, stream);
+  return this->operator()(args, args_size, [&grid](const options_t&){ return grid; }, stream);
 }
 
 

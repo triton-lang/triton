@@ -33,8 +33,10 @@ endif()
 if(BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
     # PyBind11 wrapper source file
-    set(PYTHON_SRC bindings.cc)
+    set(PYTHON_SRC bindings.cc launch.cc)
+    set_source_files_properties(launch.cc PROPERTIES COMPILE_FLAGS "-std=c++14 -D_GLIBCXX_USE_CXX11_ABI=0")
     include_directories("." ${PYTHON_INCLUDE_DIRS})
+    link_directories(${PYTHON_LINK_DIRS})
 endif()
 
 
@@ -43,3 +45,6 @@ file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 target_link_libraries(triton ${LLVM_LIBRARIES})
 
+if(BUILD_PYTHON_MODULE)
+    target_link_libraries(triton ${TORCH_LIBRARIES})
+endif()

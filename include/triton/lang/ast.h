@@ -64,7 +64,8 @@ public:
       ALIGNED,
       NOALIAS,
       READONLY,
-      WRITEONLY
+      WRITEONLY,
+      RETUNE,
     };
 
     KindT kind;

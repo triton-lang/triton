@@ -177,6 +177,7 @@ inline llvm::Attribute llvm_attr(llvm::LLVMContext& ctx, ir::attribute attr) {
     case ir::readonly: return llvm::Attribute::get(ctx, llvm::Attribute::ReadOnly);
     case ir::writeonly: return llvm::Attribute::get(ctx, llvm::Attribute::WriteOnly);
     case ir::aligned: return llvm::Attribute::get(ctx, llvm::Attribute::Alignment, attr.get_value());
+    case ir::retune: return llvm::Attribute::get(ctx, llvm::Attribute::None);
     default: throw std::runtime_error("cannot convert ir::attribute_t to llvm::Attribute");
   }
 }

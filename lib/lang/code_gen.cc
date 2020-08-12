@@ -630,6 +630,8 @@ ir::attribute Generator::GenIRAttr(ASTNode::Attr attr) {
     return ir::attribute(ir::readonly);
   if(attr.kind == ASTNode::Attr::WRITEONLY)
     return ir::attribute(ir::writeonly);
+  if(attr.kind == ASTNode::Attr::RETUNE)
+    return ir::attribute(ir::retune);
   error_not_implemented("attribute " + std::to_string(attr.kind) + " not implemented");
   return ir::attribute(ir::not_implemented);
 }
