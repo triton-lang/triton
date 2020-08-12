@@ -40,6 +40,7 @@ enum attribute_kind_t {
   noalias,
   aligned,
   multiple_of,
+  retune,
   not_implemented
 };
 
@@ -113,6 +114,7 @@ public:
   // attributes
   void add_attr(unsigned arg_id, attribute attr) { attrs_[arg_id].insert(attr); }
   const attr_map_t &attrs() { return attrs_; }
+  bool has_attr(unsigned arg_id) const { return  attrs_.find(arg_id) != attrs_.end(); }
   std::set<attribute> get_attributes(argument* arg) { return attrs_[arg->get_arg_no() + 1]; }
 
   // visitor
