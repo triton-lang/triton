@@ -13,23 +13,19 @@
 #include "util.h"
 
 
-//struct dot_arg_t{
-//  CUdeviceptr a;
-//  CUdeviceptr b;
-//  CUdeviceptr c;
-//  float alpha;
-//  int M;
-//  int N;
-//  int K;
-//  int lda;
-//  int ldb;
-//  int ldc;
-//  CUdeviceptr locks;
-//};
-
-//typedef std::tuple<CUdeviceptr, CUdeviceptr, CUdeviceptr,
-//                   float, int, int, int, int, int, int,
-//                   CUdeviceptr> dot_arg_t;
+struct dot_arg_t{
+  CUdeviceptr a;
+  CUdeviceptr b;
+  CUdeviceptr c;
+  float alpha;
+  int M;
+  int N;
+  int K;
+  int lda;
+  int ldb;
+  int ldc;
+  CUdeviceptr locks;
+};
 
 template<class T, bool AT, bool BT>
 static void cc_dot(std::vector<T> &c, const std::vector<T> &a, const std::vector<T> &b,
@@ -140,24 +136,9 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
 
   // kernels
   rt::function function(src::dot, opt);
-  float alpha = 1;
-  char args[60];
-  memcpy(args + 0, &*da->cu(), 8);
-  memcpy(args + 8, &*db->cu(), 8);
-  memcpy(args + 16, &*dc->cu(), 8);
-  memcpy(args + 24, &alpha, 4);
-  memcpy(args + 28, &M, 4);
-  memcpy(args + 32, &N, 4);
-  memcpy(args + 36, &K, 4);
-  memcpy(args + 40, &lda, 4);
-  memcpy(args + 44, &ldb, 4);
-  memcpy(args + 48, &ldc, 4);
-  memcpy(args + 52, &*dlocks->cu(), 8);
+  dot_arg_t args = {*da->cu(), *db->cu(), *dc->cu(),
+                    1, M, N, K, lda, ldb, ldc, *dlocks->cu()};
 
-
-//  dot_arg_t args = {*da->cu(), *db->cu(), *dc->cu(),
-//                    1, M, N, K, lda, ldb, ldc, *dlocks->cu()};
-//  std::cout << sizeof(dot_arg_t) << std::endl;
   auto grid = [M, N](const rt::function::options_t& x) {
     return rt::grid_t{ceil(M, x.D<int>("TM")),
                       ceil(N, x.D<int>("TN")),
@@ -167,7 +148,7 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   // metrics
   if(mode == BENCH){
     auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
-    double triton_ns = triton::tools::bench([&]() { function((void**)&args, grid, stream);}, stream);
+    double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
     bench.push_back(tflops(triton_ns));
 
     // cublas
@@ -198,7 +179,7 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     stream->write(&*da, true, 0, ha);
     stream->write(&*db, true, 0, hb);
     // run kernel
-    function((void**)&args, grid, stream);
+    function((void**)&args, sizeof(args), grid, stream);
     // write back
     stream->synchronize();
     // compare with CPU

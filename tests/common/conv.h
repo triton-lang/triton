@@ -12,6 +12,32 @@
 #include "util.h"
 
 
+struct conv_arg_t{
+  CUdeviceptr a;
+  CUdeviceptr b;
+  CUdeviceptr c;
+  float alpha;
+  int M;
+  int N;
+  int K;
+  int pad_h;
+  int pad_w;
+  int stride_h;
+  int stride_w;
+  CUdeviceptr adelta;
+  int lda_z;
+  int lda_ci;
+  int lda_h;
+  int lda_w;
+  int ldb_ci;
+  int ldb_r;
+  int ldb_s;
+  int ldb_co;
+  int ldc_z;
+  int ldc_co;
+  int ldc_p;
+  int ldc_q;
+};
 
 enum run_mode_t {
   BENCH,
@@ -93,19 +119,19 @@ void triton_conv(drv::stream* stream,
 
   // kernels
   rt::function function(src::conv, opt);
-  std::vector<rt::arg> args = {&*da, &*db, &*dc, (float)1, Z*P*Q, CO, CI*R*S,
-                               pad_h, pad_w, stride_h, stride_w,
-                               &*ddelta,
-                               W*H*CI, W*H, W, 1,
-                               CO*S*R , CO*S, CO, 1,
-                               Q*P*CO, Q*P, Q, 1};
+  conv_arg_t args{*da->cu(), *db->cu(), *dc->cu(), 1, Z*P*Q, CO, CI*R*S,
+                  pad_h, pad_w, stride_h, stride_w,
+                  *ddelta->cu(),
+                  W*H*CI, W*H, W, 1,
+                  CO*S*R , CO*S, CO, 1,
+                  Q*P*CO, Q*P, Q, 1};
   auto grid = [Z,P,Q,CO](const rt::function::options_t& x) {
     return rt::grid_t{ceil(Z*P*Q, x.D<int>("TM")),
                       ceil(CO   , x.D<int>("TN")),
                       (size_t)x.D<int>("TZ")};
   };
   auto tflops = [&](double nanosec) { return 2.*Z*P*Q*CI*CO*R*S / nanosec * 1e-3; };
-  double triton_ns = triton::tools::bench([&]() { function(args, grid, stream);}, stream);
+  double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
   bench.push_back(tflops(triton_ns));
 }
 
