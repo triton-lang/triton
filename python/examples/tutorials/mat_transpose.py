@@ -4,7 +4,9 @@ import triton
 class _transpose(torch.autograd.Function):
     src = """
     __global__ void transpose(TYPE * X, TYPE * Y,
-                                  int M, int N, int ldx __multipleof(8), int ldy __multipleof(8)) {
+                              int M __retune,
+                              int N __retune,
+                              int ldx __multipleof(8), int ldy __multipleof(8)) {
           // extract program ID
           int pidm = get_program_id(0); //(1)
           int pidn = get_program_id(1); //(2)

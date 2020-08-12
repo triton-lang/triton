@@ -79,7 +79,7 @@ void host_stream::synchronize() {
 
 }
 
-void host_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event) {
+void host_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void **extra) {
   driver::host_kernel* hst_kernel = (host_kernel*)kernel;
   llvm::ExecutionEngine* engine = kernel->module()->hst()->engine;
   void (*fn)(char**, int32_t, int32_t, int32_t) = (void(*)(char**, int32_t, int32_t, int32_t))engine->getFunctionAddress("main");
@@ -112,7 +112,7 @@ void cl_stream::synchronize() {
   check(dispatch::clFinish(*cl_));
 }
 
-void cl_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event) {
+void cl_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void **extra) {
   std::array<size_t, 3> global = {grid[0]*block[0], grid[1]*block[1], grid[2]*block[2]};
   check(dispatch::clEnqueueNDRangeKernel(*cl_, *kernel->cl(), grid.size(), NULL, (const size_t*)global.data(), (const size_t*)block.data(), 0, NULL, NULL));
 }
@@ -149,12 +149,11 @@ void cu_stream::synchronize() {
   dispatch::cuStreamSynchronize(*cu_);
 }
 
-void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event) {
-  driver::cu_kernel* cu_kernel = (driver::cu_kernel*)kernel;
+void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void** extra) {
   cu_context::context_switcher ctx_switch(*ctx_);
   if(event)
     dispatch::cuEventRecord(event->cu()->first, *cu_);
-  dispatch::cuLaunchKernel(*kernel->cu(), grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_,(void**)cu_kernel->cu_params(), NULL);
+  dispatch::cuLaunchKernel(*kernel->cu(), grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_, nullptr, extra);
   if(event)
     dispatch::cuEventRecord(event->cu()->second, *cu_);
 }
