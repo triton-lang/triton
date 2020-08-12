@@ -7,7 +7,9 @@ R"(
                          TYPE *C __noalias __aligned(16),
                          float alpha,
                          // equivalent matmul
-                         int M, int N, int K,
+                         int M __retune,
+                         int N __retune,
+                         int K __retune,
                          // convolution properties
                          int pad_h, int pad_w, int stride_h, int stride_w,
                          // pointer increment
@@ -16,7 +18,7 @@ R"(
                          int lda_z  __multipleof(8), int lda_ci __multipleof(8), int lda_h __multipleof(8), int lda_w __multipleof(8),
                          int ldb_ci __multipleof(8), int ldb_r  __multipleof(8), int ldb_s __multipleof(8), int ldb_co __multipleof(8),
                          int ldc_z  __multipleof(8), int ldc_co __multipleof(8), int ldc_p __multipleof(8), int ldc_q __multipleof(8)) {
-    // prologue
+     // prologue
      int ridx = get_program_id(0);
      int ridy = get_program_id(1);
      int ridz = get_program_id(2);

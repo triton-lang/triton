@@ -12,6 +12,15 @@ int32_t off(const std::vector<int32_t>& idx, const std::vector<int32_t>& strides
   return res;
 }
 
+struct copy_arg_t{
+  CUdeviceptr X;
+  CUdeviceptr Y;
+  int S0;
+  int S1;
+  int S2;
+};
+
+
 enum run_mode_t {
   BENCH,
   TEST
@@ -115,16 +124,16 @@ void triton_copy_nd(drv::stream* stream, const std::vector<int32_t>& shape,
 
   // kernel
   rt::function function(src::copy_nd[rank - 1], opt);
-  std::vector<rt::arg> args = {&*dx, &*dy};
-  for(int32_t d: shape)
-    args.push_back(d);
+  copy_arg_t args = {*dx->cu(), *dy->cu(), shape[0]};
+  if(shape.size() > 1) args.S1 = shape[1];
+  if(shape.size() > 2) args.S2 = shape[2];
   std::vector<std::string> ts = {"TS0", "TS1", "TS2"};
   auto grid = grid_nd(shape, ts);
 
   // metrics
   if(mode == BENCH){
     auto gbps = [&](double ns) { return 2 * size * dtsize / (ns * 1e-9) * 1e-9; };
-    double triton_ns = triton::tools::bench([&]() { function(args, grid, stream);}, stream);
+    double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
     bench.push_back(gbps(triton_ns));
   }
 
@@ -136,7 +145,7 @@ void triton_copy_nd(drv::stream* stream, const std::vector<int32_t>& shape,
     for(size_t i = 0; i < hx.size(); i++)
       hx[i] = static_cast<T>((float)rand()/RAND_MAX);
     stream->write(&*dx, true, 0, hx);
-    function(args, grid, stream);
+    function((void**)&args, sizeof(args), grid, stream);
     stream->synchronize();
     stream->read(&*dy, true, 0, hy);
     cc_copy_nd(hx, ry, shape, x_order, y_order);
