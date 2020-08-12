@@ -1,3 +1,6 @@
+// Thanks to Scott Gray (OpenAI) for the idea to pass the arguments
+// as a string constructed with struct.pack in python
+
 #include "triton/driver/buffer.h"
 #include "triton/driver/stream.h"
 #include "triton/runtime/function.h"
