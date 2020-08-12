@@ -7,7 +7,9 @@ class _dot(torch.autograd.Function):
                         TYPE *B __noalias __readonly __aligned(16), 
                         TYPE *C __noalias __aligned(16), 
                         float alpha,
-                        int M, int N, int K,
+                        int M __retune,
+                        int N __retune,
+                        int K __retune,
                         int lda __multipleof(8), 
                         int ldb __multipleof(8), 
                         int ldc __multipleof(8)) {

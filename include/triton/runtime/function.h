@@ -3,7 +3,7 @@
 #ifndef _TRITON_RUNTIME_FUNCTION_H_
 #define _TRITON_RUNTIME_FUNCTION_H_
 
-
+#include <map>
 #include <vector>
 #include <string>
 #include <memory>
@@ -62,6 +62,7 @@ public:
     typedef std::pair<std::string, std::vector<std::string>> define_t;
     std::vector<define_t> defines;
     std::vector<int> num_warps;
+    std::vector<int> recompile_key;
   };
 
   struct options_t {
@@ -94,19 +95,25 @@ private:
     // accessors
     const options_t opt() const { return opt_; }
     const driver::module* parent() const { return &*parent_; }
+    const driver::kernel* bin() const { return &*bin_; }
+    arg_type param_ty(size_t i) const { return param_tys_.at(i);}
+    const std::vector<arg_type>& param_tys() const { return param_tys_; }
+
+    std::vector<int> retune() const { return retune_; }
     // entry points
-    void operator()(driver::stream *stream, const grid_t& grid, const std::vector<arg>& args) const;
+    void operator()(driver::stream *stream, const grid_t& grid, void **args, size_t args_size) const;
 
   private:
     std::shared_ptr<driver::kernel> bin_;
     std::shared_ptr<driver::module> parent_;
     std::vector<arg_type> param_tys_;
+    std::vector<int> retune_;
     options_t opt_;
     std::string name_;
   };
 
 private:
-  typedef std::pair<driver::device*, std::vector<int64_t>> cache_key_t;
+  typedef std::pair<driver::device*, std::vector<int32_t>> cache_key_t;
 
 private:
   // cache
@@ -118,16 +125,15 @@ private:
   caller *make(driver::stream *stream, options_t opt);
   void precompile(driver::stream *stream, const options_space_t& tuning_space);
   // autotune
-  function::cache_key_t get_key(driver::stream *stream, const std::vector<arg>& args);
-  caller* autotune(driver::stream *stream, const grid_fn_ty& grid, const std::vector<arg> &args);
+  caller* autotune(driver::stream *stream, const grid_fn_ty& grid, void **args, size_t args_size);
 
 public:
   static std::string preheader();
 
 public:
   function(const std::string& src, const options_space_t& opt, const std::string &cache_ref = "");
-  void operator()(const std::vector<arg>& args, const grid_t& grid, driver::stream* stream);
-  void operator()(const std::vector<arg>& args, const grid_fn_ty& grid, driver::stream *stream);
+  void operator()(void** args, size_t args_size, const grid_t& grid, driver::stream* stream);
+  void operator()(void** args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
   void set_cst(const std::string& name, void* data, size_t n_bytes);
 
 private:
@@ -138,6 +144,8 @@ private:
   options_space_t opt_;
   std::set<options_t> compiled_;
   std::map<options_t, std::unique_ptr<caller>> callers_;
+  std::vector<int> args_off_;
+  size_t args_size_;
   // caching
   std::string cache_ref_;
   std::string cache_path_;

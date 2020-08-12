@@ -2778,6 +2778,8 @@ ASTNode::Attr Parser::ParseAttribute() {
     ret.kind = ASTNode::Attr::MULTIPLEOF;
   else if(name == "noalias")
     ret.kind = ASTNode::Attr::NOALIAS;
+  else if(name == "retune")
+    ret.kind = ASTNode::Attr::RETUNE;
   else
     Error(tok, "unknown attribute kind");
   // set exprs

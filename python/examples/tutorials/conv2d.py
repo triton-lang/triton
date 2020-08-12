@@ -8,7 +8,9 @@ class _conv(torch.autograd.Function):
                          TYPE *C __noalias __aligned(16), 
                          float alpha,
                          // equivalent matmul
-                         int M, int N, int K,
+                         int M __retune,
+                         int N __retune,
+                         int K __retune,
                          // convolution properties
                          int pad_h, int pad_w, int stride_h, int stride_w,
                          // pointer increment

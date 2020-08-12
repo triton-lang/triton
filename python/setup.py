@@ -8,9 +8,11 @@ import distutils
 import glob
 from distutils.version import LooseVersion
 from setuptools import setup, Extension, find_packages
+from torch.utils.cpp_extension import include_paths, library_paths
 from setuptools.command.build_ext import build_ext
 from setuptools.command.test import test as TestCommand
 import distutils.spawn
+import torch
 
 
 def find_llvm():
@@ -58,12 +60,17 @@ class CMakeBuild(build_ext):
         # python directories
         python_include_dirs = distutils.sysconfig.get_python_inc()
         python_lib_dirs = distutils.sysconfig.get_config_var('LIBDIR')
+        torch_include_dirs = include_paths(True)
+        torch_library_dirs = library_paths(True)
+        abi = torch._C._GLIBCXX_USE_CXX11_ABI
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
                       '-DBUILD_TESTS=OFF',
                       '-DBUILD_PYTHON_MODULE=ON',
                       #'-DPYTHON_EXECUTABLE=' + sys.executable,
                       #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON,
-                      '-DPYTHON_INCLUDE_DIRS=' + python_include_dirs,
+                      '-DPYTHON_INCLUDE_DIRS=' + ';'.join([python_include_dirs] + include_paths(True)),
+                      '-DPYTHON_LINK_DIRS=' + ';'.join(library_paths(True)),
+                      '-DTORCH_LIBRARIES=c10;c10_cuda;torch;torch_cuda;torch_cpu;torch_python;triton',
                       '-DLLVM_CONFIG=' + find_llvm()]
         # configuration
         cfg = 'Debug' if self.debug else 'Release'
@@ -80,8 +87,6 @@ class CMakeBuild(build_ext):
             build_args += ['--', '-j4']
 
         env = os.environ.copy()
-        env['CXXFLAGS'] = '{} -DVERSION_INFO=\\"{}\\"'.format(env.get('CXXFLAGS', ''),
-                                                              self.distribution.get_version())
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         sourcedir =  os.path.abspath(os.path.join(os.path.dirname(__file__), 'src'))

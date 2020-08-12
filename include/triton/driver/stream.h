@@ -32,7 +32,7 @@ public:
   driver::context* context() const;
   // methods
   virtual void synchronize() = 0;
-  virtual void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const * = NULL, event *event = NULL) = 0;
+  virtual void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const * = NULL, event *event = NULL, void **extra = NULL) = 0;
   virtual void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr) = 0;
   virtual void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr) = 0;
   // template helpers
@@ -53,7 +53,7 @@ public:
 
   // Overridden
   void synchronize();
-  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event *event);
+  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event *event, void **extra);
   void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
   void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr);
 };
@@ -66,7 +66,7 @@ public:
 
   // Overridden
   void synchronize();
-  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event *event);
+  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event *event, void **extra);
   void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
   void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr);
 };
@@ -80,7 +80,7 @@ public:
 
   // Overridden
   void synchronize();
-  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event *event);
+  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event *event, void **extra);
   void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
   void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr);
 };
