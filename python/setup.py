@@ -74,7 +74,7 @@ class CMakeBuild(build_ext):
                       '-DLLVM_CONFIG=' + find_llvm()]
         # configuration
         cfg = 'Debug' if self.debug else 'Release'
-        cfg = 'Release'
+        cfg = 'Debug'
         build_args = ['--config', cfg]
 
         if platform.system() == "Windows":

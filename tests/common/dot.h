@@ -14,9 +14,9 @@
 
 
 struct dot_arg_t{
-  CUdeviceptr a;
-  CUdeviceptr b;
-  CUdeviceptr c;
+  uintptr_t a;
+  uintptr_t b;
+  uintptr_t c;
   float alpha;
   int M;
   int N;
@@ -24,7 +24,7 @@ struct dot_arg_t{
   int lda;
   int ldb;
   int ldc;
-  CUdeviceptr locks;
+  uintptr_t locks;
 };
 
 template<class T, bool AT, bool BT>
@@ -98,7 +98,7 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   auto da     = std::shared_ptr<drv::buffer>(drv::buffer::create(context, M*K*dt_nbytes));
   auto db     = std::shared_ptr<drv::buffer>(drv::buffer::create(context, K*N*dt_nbytes));
   auto dlocks = std::shared_ptr<drv::buffer>(drv::buffer::create(context, 1024*1024*2*4));
-  ((drv::cu_buffer*)dlocks.get())->set_zero(stream, dlocks->size());
+//  ((drv::cu_buffer*)dlocks.get())->set_zero(stream, dlocks->size());
 
   // macros
   rt::function::options_space_t opt;
@@ -127,17 +127,17 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     opt.num_warps = {nwarp};
   }
   if(mode == BENCH) {
-    opt.defines.push_back({"TM", {"128"}});
-    opt.defines.push_back({"TN", {"128"}});
-    opt.defines.push_back({"TK", {"16"}});
+    opt.defines.push_back({"TM", {"64", "128"}});
+    opt.defines.push_back({"TN", {"64", "128"}});
+    opt.defines.push_back({"TK", {"8"}});
     opt.defines.push_back({"TZ", {"1"}});
     opt.num_warps = {4};
   }
 
   // kernels
   rt::function function(src::dot, opt);
-  dot_arg_t args = {*da->cu(), *db->cu(), *dc->cu(),
-                    1, M, N, K, lda, ldb, ldc, *dlocks->cu()};
+  dot_arg_t args = {da->addr_as_uintptr_t(), db->addr_as_uintptr_t(), dc->addr_as_uintptr_t(),
+                    1, M, N, K, lda, ldb, ldc, dlocks->addr_as_uintptr_t()};
 
   auto grid = [M, N](const rt::function::options_t& x) {
     return rt::grid_t{ceil(M, x.D<int>("TM")),
