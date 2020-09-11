@@ -67,6 +67,7 @@ class kernel:
     for x in args:
       if isinstance(x, torch.Tensor):
         device = x.device.index
+        device = -1 if device is None else device
         break
     # lazily register function for device
     if device not in self.registered:

@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 #include "triton/tools/graph.h"
+#include "triton/codegen/target.h"
 
 namespace triton{
 
@@ -113,7 +114,8 @@ struct scanline_layout: public data_layout {
                     const std::vector<int>& axes,
                     const std::vector<unsigned>& shape,
                     const std::vector<ir::value *> &values,
-                    analysis::align* align);
+                    analysis::align* align,
+                    target* tgt);
   void accept(layout_visitor* vst) { vst->visit_layout_scanline(this); }
   // accessor
   int mts(size_t k) { return mts_.at(k); }
@@ -172,7 +174,7 @@ private:
 
 public:
   // constructor
-  layouts(analysis::axes *axes, analysis::align *align, size_t num_warps);
+  layouts(analysis::axes *axes, analysis::align *align, size_t num_warps, target* tgt);
 
   // accessors
   unsigned layout_of(ir::value *value) const                  { return groups_.at(value); }
@@ -190,6 +192,7 @@ private:
   analysis::axes* axes_;
   analysis::align* align_;
   size_t num_warps_;
+  target* tgt_;
   tools::graph<ir::value*> graph_;
   std::map<ir::value*, size_t> groups_;
   std::map<size_t, std::vector<ir::value*>> values_;
