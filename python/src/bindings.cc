@@ -15,7 +15,7 @@ using namespace triton;
 
 namespace rt = triton::runtime;
 
-typedef std::pair<size_t, size_t> map_key_t;
+typedef std::pair<int, int> map_key_t;
 std::map<map_key_t, std::shared_ptr<rt::function::grid_fn_ty>> id_grid_map;
 std::map<map_key_t, std::shared_ptr<rt::function>> id_fn_map;
 std::map<size_t, double> fp64scalar_map;

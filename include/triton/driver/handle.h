@@ -9,6 +9,15 @@
 #include <functional>
 #include <type_traits>
 #include "triton/driver/dispatch.h"
+#include "llvm/ExecutionEngine/JITSymbol.h"
+#include "llvm/ExecutionEngine/Orc/CompileUtils.h"
+#include "llvm/ExecutionEngine/Orc/Core.h"
+#include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
+#include "llvm/ExecutionEngine/Orc/IRCompileLayer.h"
+#include "llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h"
+#include "llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h"
+#include "llvm/ExecutionEngine/SectionMemoryManager.h"
+#include "triton/tools/thread_pool.h"
 
 namespace llvm
 {
@@ -42,13 +51,21 @@ struct host_context_t{
 };
 
 struct host_stream_t{
-
+  std::shared_ptr<ThreadPool> pool;
 };
 
 struct host_module_t{
   std::string error;
   llvm::ExecutionEngine* engine;
   std::map<std::string, llvm::Function*> functions;
+  void(*fn)(char**, int32_t, int32_t, int32_t);
+  llvm::orc::ExecutionSession* ES;
+  llvm::orc::RTDyldObjectLinkingLayer* ObjectLayer;
+  llvm::orc::IRCompileLayer* CompileLayer;
+  llvm::DataLayout* DL;
+  llvm::orc::MangleAndInterner* Mangle;
+  llvm::orc::ThreadSafeContext* Ctx;
+  llvm::orc::JITDylib *MainJD;
 };
 
 struct host_function_t{

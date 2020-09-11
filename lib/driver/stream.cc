@@ -72,21 +72,20 @@ driver::context* stream::context() const {
 /* ------------------------ */
 
 host_stream::host_stream(driver::context *ctx): stream(ctx, host_stream_t(), true) {
-
+  hst_->pool.reset(new ThreadPool(8));
 }
 
 void host_stream::synchronize() {
-
+  hst_->pool.reset(new ThreadPool(8));
 }
 
-void host_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void **extra) {
-  driver::host_kernel* hst_kernel = (host_kernel*)kernel;
-  llvm::ExecutionEngine* engine = kernel->module()->hst()->engine;
-  void (*fn)(char**, int32_t, int32_t, int32_t) = (void(*)(char**, int32_t, int32_t, int32_t))engine->getFunctionAddress("main");
+void host_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void **args, size_t args_size) {
+  ThreadPool pool(4);
+  auto hst = kernel->module()->hst();
   for(size_t i = 0; i < grid[0]; i++)
     for(size_t j = 0; j < grid[1]; j++)
       for(size_t k = 0; k < grid[2]; k++)
-        fn((char**)hst_kernel->params().data(), int32_t(i), int32_t(j), int32_t(k));
+        hst_->pool->enqueue(hst->fn, (char**)args, int32_t(i), int32_t(j), int32_t(k));
 }
 
 void host_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
@@ -112,7 +111,7 @@ void cl_stream::synchronize() {
   check(dispatch::clFinish(*cl_));
 }
 
-void cl_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void **extra) {
+void cl_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void **args, size_t args_size) {
   std::array<size_t, 3> global = {grid[0]*block[0], grid[1]*block[1], grid[2]*block[2]};
   check(dispatch::clEnqueueNDRangeKernel(*cl_, *kernel->cl(), grid.size(), NULL, (const size_t*)global.data(), (const size_t*)block.data(), 0, NULL, NULL));
 }
@@ -149,11 +148,16 @@ void cu_stream::synchronize() {
   dispatch::cuStreamSynchronize(*cu_);
 }
 
-void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void** extra) {
+void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void** args, size_t args_size) {
   cu_context::context_switcher ctx_switch(*ctx_);
+  void *config[] = {
+      CU_LAUNCH_PARAM_BUFFER_POINTER, args,
+      CU_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
+      CU_LAUNCH_PARAM_END
+  };
   if(event)
     dispatch::cuEventRecord(event->cu()->first, *cu_);
-  dispatch::cuLaunchKernel(*kernel->cu(), grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_, nullptr, extra);
+  dispatch::cuLaunchKernel(*kernel->cu(), grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_, nullptr, config);
   if(event)
     dispatch::cuEventRecord(event->cu()->second, *cu_);
 }

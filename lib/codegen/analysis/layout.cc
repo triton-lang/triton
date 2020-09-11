@@ -168,9 +168,9 @@ scanline_layout::scanline_layout(size_t num_warps,
                                  const std::vector<int>& axes,
                                  const std::vector<unsigned>& shape,
                                  const std::vector<ir::value *> &values,
-                                 analysis::align* align): data_layout(SCANLINE, axes, shape, values, align){
+                                 analysis::align* align, target *tgt): data_layout(SCANLINE, axes, shape, values, align){
   unsigned size = std::accumulate(shape_.begin(), shape_.end(), 1, std::multiplies<int>());
-  unsigned num_threads = num_warps * 32;
+  unsigned num_threads = tgt->is_gpu() ? num_warps * 32 : 1;
   nts_.resize(shape_.size());
   mts_.resize(shape_.size());
   bool is_dot = std::any_of(values.begin(), values.end(),
@@ -324,8 +324,8 @@ shared_layout::shared_layout(const data_layout *arg,
  * ---- Layouts Inference Pass ---- *
  * -------------------------------- */
 
-layouts::layouts(analysis::axes *axes, analysis::align *align, size_t num_warps)
-  : axes_(axes), align_(align), num_warps_(num_warps) { }
+layouts::layouts(analysis::axes *axes, analysis::align *align, size_t num_warps, target* tgt)
+  : axes_(axes), align_(align), num_warps_(num_warps), tgt_(tgt){ }
 
 
 void layouts::connect(ir::value *x, ir::value *y) {
@@ -382,7 +382,7 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
     layouts_[id] = new shared_layout(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), align_);
   }
   else
-    layouts_[id] = new scanline_layout(num_warps_, axes, shapes, values, align_);
+    layouts_[id] = new scanline_layout(num_warps_, axes, shapes, values, align_, tgt_);
 }
 
 void layouts::run(ir::module &mod) {
