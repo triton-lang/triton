@@ -488,41 +488,47 @@ void generator::visit_masked_store_inst(ir::masked_store_inst* st) {
         ptr = gep->getPointerOperand();
       }
       ptr = builder_->CreateBitCast(ptr, ty->getPointerTo(1));
-      // asm argument type
-      std::vector<Type*> arg_ty = {pred->getType(), ptr->getType()};
-      for(int v = 0; v < vector_size; v++)
-        arg_ty.push_back(ty->getScalarType());
-      // asm function type
-      FunctionType *fn_ty = FunctionType::get(builder_->getVoidTy(), arg_ty, false);
-      // asm string
-      std::string asm_str;
-      asm_str += "@$0 st.global";
-      if(vector_size > 1)
-        asm_str += ".v" + std::to_string(vector_size);
-      asm_str += ".b" + std::to_string(nbits) + " [$1" + offset + "],";
-      if(vector_size > 1)
-        asm_str += "{";
-      for(int v = 0; v < vector_size; v++){
-        if(v > 0)
-          asm_str += ", ";
-        asm_str += "$" + std::to_string(2 + v);
+      if(tgt_->is_gpu()){
+        // asm argument type
+        std::vector<Type*> arg_ty = {pred->getType(), ptr->getType()};
+        for(int v = 0; v < vector_size; v++)
+          arg_ty.push_back(ty->getScalarType());
+        // asm function type
+        FunctionType *fn_ty = FunctionType::get(builder_->getVoidTy(), arg_ty, false);
+        // asm string
+        std::string asm_str;
+        asm_str += "@$0 st.global";
+        if(vector_size > 1)
+          asm_str += ".v" + std::to_string(vector_size);
+        asm_str += ".b" + std::to_string(nbits) + " [$1" + offset + "],";
+        if(vector_size > 1)
+          asm_str += "{";
+        for(int v = 0; v < vector_size; v++){
+          if(v > 0)
+            asm_str += ", ";
+          asm_str += "$" + std::to_string(2 + v);
+        }
+        if(vector_size > 1)
+          asm_str += "}";
+        asm_str += ";";
+        // asm constraint
+        std::string constraint = "b,l";
+        for(int v = 0; v < vector_size; v++){
+          constraint += ",";
+          constraint += (nbits == 32 ? "r" : "h");
+        }
+        // create inline asm
+        InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
+        // call asm
+        std::vector<Value*> args = {pred, ptr};
+        for(int v = 0; v < vector_size; v++)
+          args.push_back(builder_->CreateExtractElement(elt, builder_->getInt32(v)));
+        builder_->CreateCall(iasm, args);
       }
-      if(vector_size > 1)
-        asm_str += "}";
-      asm_str += ";";
-      // asm constraint
-      std::string constraint = "b,l";
-      for(int v = 0; v < vector_size; v++){
-        constraint += ",";
-        constraint += (nbits == 32 ? "r" : "h");
+      else{
+        builder_->CreateMaskedStore(elt, ptr, alignment, builder_->CreateVectorSplat(vector_size, pred));
       }
-      // create inline asm
-      InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
-      // call asm
-      std::vector<Value*> args = {pred, ptr};
-      for(int v = 0; v < vector_size; v++)
-        args.push_back(builder_->CreateExtractElement(elt, builder_->getInt32(v)));
-      builder_->CreateCall(iasm, args);
+
     }
   });
 }
@@ -1302,17 +1308,22 @@ void generator::visit_function(ir::function* fn) {
   for(auto attr_pair: fn->attrs()){
     unsigned id = attr_pair.first;
     for(ir::attribute attr: attr_pair.second)
-    if(attr.is_llvm_attr())
-      ret->addAttribute(id, llvm_attr(ctx, attr));
+    if(attr.is_llvm_attr()){
+      llvm::Attribute llattr = llvm_attr(ctx, attr);
+      if(llattr.getKindAsEnum() != llvm::Attribute::None)
+        ret->addAttribute(id, llvm_attr(ctx, attr));
+    }
   }
   // set metadata
-  tgt_->set_kernel(*builder_, ctx, mod_, ret);
-  Metadata *md_args[] = {
-    ValueAsMetadata::get(ret),
-    MDString::get(ctx, "maxntidx"),
-    ValueAsMetadata::get(builder_->getInt32(num_warps_*32))
-  };
-  mod_->getOrInsertNamedMetadata("nvvm.annotations")->addOperand(MDNode::get(ctx, md_args));
+  if(tgt_->is_gpu()){
+      tgt_->set_kernel(*builder_, ctx, mod_, ret);
+      Metadata *md_args[] = {
+        ValueAsMetadata::get(ret),
+        MDString::get(ctx, "maxntidx"),
+        ValueAsMetadata::get(builder_->getInt32(num_warps_*32))
+      };
+      mod_->getOrInsertNamedMetadata("nvvm.annotations")->addOperand(MDNode::get(ctx, md_args));
+  }
   // set arguments
   for(unsigned i = 0; i < fn->args().size(); i++)
     vmap_[fn->args()[i]] = &*(ret->arg_begin() + i);

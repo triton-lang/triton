@@ -53,6 +53,14 @@ size_t buffer::size() {
   return size_;
 }
 
+uintptr_t buffer::addr_as_uintptr_t() {
+  switch(backend_){
+    case CUDA: return *cu_;
+    case Host: return (uintptr_t)hst_->data;
+    default: return 0;
+  }
+}
+
 
 buffer* buffer::create(driver::context* ctx, size_t size) {
   switch(ctx->backend()){

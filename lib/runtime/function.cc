@@ -163,11 +163,6 @@ function::caller::caller(ir::function *ir,
 
 
 void function::caller::operator ()(driver::stream *stream, const grid_t& _grid, void** args, size_t args_size) const {
-  void *config[] = {
-      CU_LAUNCH_PARAM_BUFFER_POINTER, args,
-      CU_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
-      CU_LAUNCH_PARAM_END
-  };
   // set grid
   if(_grid.size() > 3)
     throw std::runtime_error("grid size must be no greater than 3");
@@ -175,7 +170,7 @@ void function::caller::operator ()(driver::stream *stream, const grid_t& _grid, 
   for(size_t i = 0; i < 3; i++)
     grid[i] = (i < _grid.size()) ? _grid[i] : 1;
   // enqueue
-  stream->enqueue(&*bin_, grid, {opt_.num_warps * 32, 1, 1}, NULL, NULL, config);
+  stream->enqueue(&*bin_, grid, {opt_.num_warps * 32, 1, 1}, NULL, NULL, args, args_size);
 }
 
 
@@ -203,7 +198,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   codegen::analysis::align align;
   codegen::analysis::axes axes;
   codegen::transform::disassociate disassociate;
-  codegen::analysis::layouts layouts(&axes, &align, opt.num_warps);
+  codegen::analysis::layouts layouts(&axes, &align, opt.num_warps, target.get());
   codegen::analysis::liveness liveness(&layouts);
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation);
@@ -220,15 +215,18 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   peephole.run(module);
   dce.run(module);
   align.run(module);
-  cts.run(module);
+  if(target->is_gpu())
+    cts.run(module);
   axes.run(module);
   layouts.run(module);
   coalesce.run(module);
   dce.run(module);
   align.run(module);
   dce.run(module);
-  reassociate.run(module);
-  cts.run(module);
+  if(target->is_gpu()){
+    reassociate.run(module);
+    cts.run(module);
+  }
   peephole.run(module);
   dce.run(module);
   align.run(module);
@@ -260,11 +258,11 @@ function::caller* function::make(driver::stream *stream, options_t opt) {
   auto ir = make_ir(parser);
   // triton-ir -> binary
   std::unique_ptr<driver::module> bin;
-  try{
+//  try{
     bin = make_bin(*ir, stream->context(), opt);
-  }catch(const std::runtime_error&){
-    return nullptr;
-  }
+//  }catch(const std::runtime_error&){
+//    return nullptr;
+//  }
   // create callable
   ir::function *tmp = ir->get_function_list()[0];
   caller* ret = new caller(tmp, std::move(bin), opt);
