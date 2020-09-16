@@ -1,5 +1,5 @@
 from .kernel import *
-#import triton.ops
+import triton.ops
 #import triton.nn
 
 

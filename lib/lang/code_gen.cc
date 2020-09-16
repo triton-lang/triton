@@ -338,6 +338,7 @@ void Generator::VisitTempVar(TempVar* tempVar) {
 }
 
 // Statement
+// TODO: int x = x; crashes
 void Generator::VisitDeclaration(Declaration* decl) {
   auto obj = decl->obj_;
   // initialize to undef
