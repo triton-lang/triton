@@ -253,13 +253,7 @@ __global__ void {name}(
     int offbdelta[TK] = off_k + 0 ... TK;
     int *pbdelta[TK]  = BD  + offbdelta;"""
 
-        if sparse_a:
-            src += f"""
-    // update pointers to look-up tables
-    pdelta += 2;
-    int incda = *(pdelta + 0);
-    int incdb = *(pdelta + 1);"""
-
+   
         rk = 'r{}'.format(''.join(map(str,axes_k)))
         src += f"""
 
@@ -272,6 +266,15 @@ __global__ void {name}(
     bool checkb[TK, TN, TB] = checkk[:, newaxis, newaxis] && checkbn[newaxis, :, newaxis];
     TYPE a[TM, TK, TB] = checka ? *pa : 0;
     TYPE b[TK, TN, TB] = checkb ? *pb : 0;"""
+
+        if sparse_a:
+            src += f"""
+    // update pointers to look-up tables
+    pdelta += 2;
+    int incda = *(pdelta + 0);
+    int incdb = *(pdelta + 1);
+    pa += incda;
+    pb += incdb;"""
 
         if not sparse_a and lut_mode_a == _einsum.LUT_MODE.SCALAR:
             src += """
@@ -301,15 +304,15 @@ __global__ void {name}(
         checka = checkam[:, newaxis, newaxis] && checkk[newaxis, :, newaxis];
         checkb = checkk[:, newaxis, newaxis] && checkbn[newaxis, :, newaxis];
         a = *?(checka)pa;
-        //b = *?(checkb)pb;"""
+        b = *?(checkb)pb;"""
 
         if sparse_a:
             src += """
-        pa += incda;
-        pb += incdb;
         pdelta += 2;
         incda = *(pdelta + 0);
         incdb = *(pdelta + 1);
+        pa += incda;
+        pb += incdb;
         """
         else:
             if lut_mode_a == _einsum.LUT_MODE.SCALAR:
