@@ -153,6 +153,16 @@ __global__ void {name}(
     int inca  = *(pdelta + 0);
     int incb  = *(pdelta + 1);
 """
+        elif sparse_b:
+            src += f"""
+    int* header = BD + pid_0 * 3;
+    int* pdelta = BD + *(header + 0);
+    matmul_k  = *(header + 1);
+    int pid_n = *(header + 2);
+    int pid_m = pid_1;
+    int incb  = *(pdelta + 0);
+    int inca  = *(pdelta + 1);
+"""
         elif sparse_c:
             src += f"""
     // load LUT header
@@ -199,7 +209,7 @@ __global__ void {name}(
             src += f"    int r{currs}[{tile}] = {off} + 0 ... {tile};\n"
             src += _einsum.unpack_cc(tile, axes, f'r', False)
             for pfx in prefixes:
-                if sparse_a and pfx == 'a':
+                if sparse_a and pfx == 'a' or sparse_b and pfx == 'b':
                     for d in axes[:-1]:
                         src += f"    int {pfx}r{d}[{tile}] = pid_{d};\n"
                     src += f"    int {pfx}r{axes[-1]}[{tile}] = 0 ... {tile};\n"
@@ -229,16 +239,14 @@ __global__ void {name}(
     int {spec} *padelta[TK]  = {cast}AD  + offadelta;
     int incda[TM, TK, TB] = (*padelta)[newaxis, :, newaxis];"""
     
-        src += """
+        src += f"""
 
     // initialize pointers to B
-    int offb[TK, TN, TB] = """
+    int offb[TK, TN, TB] = {'incb' if sparse_b else '0'}"""
         for i, sym in enumerate(expr_b):
             ccode = _einsum.print_cc(sym, axes_k, axes_n, axes_b, 'b')
             stride = f'stride_b_{i}' if i < len(expr_b) - 1 else f'{stride_b_last}'
-            if i > 0:
-                src += ' + '
-            src += f"({ccode}) * {stride}\n                            "
+            src += f" + ({ccode}) * {stride}\n                            "
         src += ';'
 
         src += """
@@ -275,20 +283,28 @@ __global__ void {name}(
     int incdb = *(pdelta + 1);
     pa += incda;
     pb += incdb;"""
+        if sparse_b:
+            src += f"""
+    // update pointers to look-up tables
+    pdelta += 2;
+    int incdb = *(pdelta + 0);
+    int incda = *(pdelta + 1);
+    pa += incda;
+    pb += incdb;"""
 
-        if not sparse_a and lut_mode_a == _einsum.LUT_MODE.SCALAR:
+        if not sparse_a and not sparse_b and lut_mode_a == _einsum.LUT_MODE.SCALAR:
             src += """
     pa += rem_delta_a;"""
-        elif not sparse_a:
+        elif not sparse_a and not sparse_b:
             src += """
     pa += incda;
     padelta += TK;
     incda = (*padelta)[newaxis, :, newaxis];"""
 
-        if not sparse_a and lut_mode_b == _einsum.LUT_MODE.SCALAR:
+        if not sparse_a and not sparse_b and lut_mode_b == _einsum.LUT_MODE.SCALAR:
             src += """
     pb += rem_delta_b;"""
-        elif not sparse_a:
+        elif not sparse_a and not sparse_b:
             src += """
     pb += (*pbdelta)[:, newaxis, newaxis];
     pbdelta += TK;"""
@@ -311,6 +327,14 @@ __global__ void {name}(
         pdelta += 2;
         incda = *(pdelta + 0);
         incdb = *(pdelta + 1);
+        pa += incda;
+        pb += incdb;
+        """
+        elif sparse_b:
+                    src += """
+        pdelta += 2;
+        incdb = *(pdelta + 0);
+        incda = *(pdelta + 1);
         pa += incda;
         pb += incdb;
         """
@@ -340,6 +364,11 @@ __global__ void {name}(
             src += f"""
     pid_m = *(header + 2);
     pid_n = pid_1;
+"""
+        elif sparse_b:
+            src += f"""
+    pid_n = *(header + 2);
+    pid_m = pid_1;
 """
         elif sparse_c:
             src += f"""
@@ -411,7 +440,7 @@ __global__ void {name}(
 #endif
 }
 """
-        print(src)
+        # print(src)
         # compilation options
         TM, TN, TB, TZ = [32], [32], 1, [1]
         TK = 16 if dtype==torch.float16 else 32
@@ -473,6 +502,7 @@ __global__ void {name}(
         # compute delta for a
         idx = [i for i, d in enumerate(symbols[::-1]) if d in axes] +\
             [i for i, d in enumerate(symbols[::-1]) if d not in axes]
+        layout = layout.clone()
         layout[layout > 0] = 1 + torch.arange(layout.sum(), device=layout.device)
         layout = layout.permute(*idx)
         delta_a = layout[layout > 0] - 1
@@ -484,7 +514,7 @@ __global__ void {name}(
         #delta_b[:] = 0
         delta = torch.stack((delta_a, delta_b), dim=1).view(-1).contiguous()
         # form look-up table
-        #depth *= blocks[symbols[-1].name.upper()]
+        depth *= blocks[symbols[-1].name.upper()]
         header = torch.stack((offsets, depth, outer), dim=1).view(-1).contiguous()
         header[::3] = header[::3]*2 + header.shape[0]
         lut = torch.cat((header, delta)).int().int().cpu().numpy()
@@ -693,14 +723,13 @@ __global__ void {name}(
                 delta_a, lut_mode_a = _einsum.make_dsd_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, blocks)
                 delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b, delta_a)
             if sparse_b and not sparse_a:
-                delta_b, lut_mode_b = _einsum.make_dsd_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b)
+                delta_b, lut_mode_b = _einsum.make_dsd_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b, blocks)
                 delta_a, lut_mode_a = _einsum.make_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, delta_b)
             if not sparse_a and not sparse_b:
                 delta_a, lut_mode_a = _einsum.make_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a)
                 delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b)
             if sparse_c:
                 delta_c = _einsum.make_sdd_lut(layout_c, sparse_c, blocks)
-            delta_a[1:delta_a[0]:3] = 512
             # hash for recompilation
             stride_a_multiple = max([x for x in [1, 2, 4, 8] if shape_a[-1] % x == 0])
             stride_b_multiple = max([x for x in [1, 2, 4, 8] if shape_b[-1] % x == 0])
@@ -772,6 +801,9 @@ __global__ void {name}(
             if sparse_a:
                 width = delta_a[0] // 3
                 self.grid = lambda opt: [width, triton.cdiv(N, opt.d('TN')), opt.d('TZ')]
+            elif sparse_b:
+                width = delta_b[0] // 3
+                self.grid = lambda opt: [width, triton.cdiv(M, opt.d('TM')), opt.d('TZ')]
             elif sparse_c:
                 width = int(layout_c.sum())
                 self.grid = lambda opt: [width, 1, opt.d('TZ')]
