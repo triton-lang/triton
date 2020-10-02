@@ -365,12 +365,12 @@ __global__ void {name}(
         if sparse_a:
             src += f"""
     pid_m = *(header + 2);
-    pid_n = pid_1;
+    pid_n = pid_0 % width;
 """
         elif sparse_b:
             src += f"""
     pid_n = *(header + 2);
-    pid_m = pid_1;
+    pid_m = pid_0 % width;
 """
         elif sparse_c:
             src += f"""
