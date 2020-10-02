@@ -113,9 +113,9 @@ __global__ void {name}(
                                          ['a', 'b', 'c'],
                                          [multipleof_a, multipleof_b, multipleof_c],
                                          [sparse_a, sparse_b, sparse_c]):
-            if sparse:
-                src += f', int stride_{name}_block __multipleof({mult})'
             for d in range(len(dim) - 1):
+                if sparse and d == 1:
+                  src += f', int stride_{name}_block __multipleof({mult})'
                 src += f", int stride_{name}_{d} __multipleof({mult})"
             src += "\n            "
         if lut_mode_a == _einsum.LUT_MODE.SCALAR:
@@ -144,24 +144,27 @@ __global__ void {name}(
     // program identifiers
     int pid_0 = get_program_id(0);
     int pid_1 = get_program_id(1);
+
+    pid_1 = pid_0 / width;
+    pid_0 = pid_0 % width;
 """
         if sparse_a:
             src += f"""
-    int* header = AD + (pid_0 % width) * 3;
+    int* header = AD + pid_0 * 3;
     int* pdelta = AD + *(header + 0);
     matmul_k  = *(header + 1);
     int pid_m = *(header + 2);
-    int pid_n = pid_0 / width;
+    int pid_n = pid_1;
     int inca  = *(pdelta + 0);
     int incb  = *(pdelta + 1);
 """
         elif sparse_b:
             src += f"""
-    int* header = BD + (pid_0 % width) * 3;
+    int* header = BD + pid_0 * 3;
     int* pdelta = BD + *(header + 0);
     matmul_k  = *(header + 1);
     int pid_n = *(header + 2);
-    int pid_m = pid_0 / width;
+    int pid_m = pid_1;
     int incb  = *(pdelta + 0);
     int inca  = *(pdelta + 1);
 """
@@ -183,7 +186,7 @@ __global__ void {name}(
 
         src += """
     // get batch program id
-    int pid_b = pid_1;
+    int pid_b = get_program_id(1);
 
 #if TZ == 1
     int off_k = 0;
@@ -211,7 +214,8 @@ __global__ void {name}(
             src += f"    int r{currs}[{tile}] = {off} + 0 ... {tile};\n"
             src += _einsum.unpack_cc(tile, axes, f'r', False)
             for pfx in prefixes:
-                if sparse_a and pfx == 'a' or sparse_b and pfx == 'b':
+                if sparse_a and pfx == 'a' and tile == 'TM' or\
+                   sparse_b and pfx == 'b' and tile == 'TN':
                     for d in axes[:-1]:
                         src += f"    int {pfx}r{d}[{tile}] = pid_{d};\n"
                     src += f"    int {pfx}r{axes[-1]}[{tile}] = 0 ... {tile};\n"
@@ -365,12 +369,12 @@ __global__ void {name}(
         if sparse_a:
             src += f"""
     pid_m = *(header + 2);
-    pid_n = pid_0 % width;
+    pid_n = pid_1;
 """
         elif sparse_b:
             src += f"""
     pid_n = *(header + 2);
-    pid_m = pid_0 % width;
+    pid_m = pid_1;
 """
         elif sparse_c:
             src += f"""
