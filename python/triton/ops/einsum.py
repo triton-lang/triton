@@ -132,6 +132,8 @@ __global__ void {name}(
         src += "\n            "
         if sparse_c:
             src += ", int* CD"
+        if sparse_a or sparse_b:
+            src += ", int width"
         src += "\n            "
         for ptr in subscripted:
             src += f", int* {ptr}"
@@ -145,21 +147,21 @@ __global__ void {name}(
 """
         if sparse_a:
             src += f"""
-    int* header = AD + pid_0 * 3;
+    int* header = AD + (pid_0 % width) * 3;
     int* pdelta = AD + *(header + 0);
     matmul_k  = *(header + 1);
     int pid_m = *(header + 2);
-    int pid_n = pid_1;
+    int pid_n = pid_0 / width;
     int inca  = *(pdelta + 0);
     int incb  = *(pdelta + 1);
 """
         elif sparse_b:
             src += f"""
-    int* header = BD + pid_0 * 3;
+    int* header = BD + (pid_0 % width) * 3;
     int* pdelta = BD + *(header + 0);
     matmul_k  = *(header + 1);
     int pid_n = *(header + 2);
-    int pid_m = pid_1;
+    int pid_m = pid_0 / width;
     int incb  = *(pdelta + 0);
     int inca  = *(pdelta + 1);
 """
@@ -202,7 +204,7 @@ __global__ void {name}(
         for axes, tile, off, prefixes in zip([axes_m, axes_n, axes_b, axes_k],
                                              ['TM', 'TN', 'TB', 'TK'],
                                              ['pid_m*TM', 'pid_n*TN', 'pid_b*TB', 'off_k'],
-                                             [['a'], ['b'], ['a', 'b', 'c'], ['a', 'b']]):
+                                             [['a'], ['b'], ['a', 'b'], ['a', 'b']]):
             if not axes:
                 continue
             currs = ''.join(map(str,axes))
@@ -488,8 +490,10 @@ __global__ void {name}(
     
         
     def make_dsd_delta(axes, step, stride, dims, symbols, arrays, sparse, layout, blocks):
+        symbols = [x.name for x in symbols]
+        axes = [x.name for x in axes]
         # depth of reductions
-        depth = layout.sum(*[i for i, d in enumerate(symbols) if d in axes])
+        depth = layout.sum(*[i for i, d in enumerate(sparse) if d in axes])
         # outer dimension indices
         outer = torch.arange(depth.shape[0], device=depth.device)
         # find offset of outer dimensions
@@ -498,10 +502,10 @@ __global__ void {name}(
         # compute delta for b
         # TODO: make more general
         delta_b = torch.narrow(layout.nonzero(), 1, 1, 1).reshape(-1).contiguous()
-        delta_b *= blocks[symbols[-1].name.upper()]
+        delta_b *= blocks[sparse[-1].upper()]
         # compute delta for a
-        idx = [i for i, d in enumerate(symbols[::-1]) if d in axes] +\
-            [i for i, d in enumerate(symbols[::-1]) if d not in axes]
+        idx = [i for i, d in enumerate(sparse[::-1]) if d in axes] +\
+              [i for i, d in enumerate(sparse[::-1]) if d not in axes]
         layout = layout.clone()
         layout[layout > 0] = 1 + torch.arange(layout.sum(), device=layout.device)
         layout = layout.permute(*idx)
@@ -512,7 +516,7 @@ __global__ void {name}(
         delta_a *= np.prod(list(blocks.values()))
         delta = torch.stack((delta_a, delta_b), dim=1).view(-1).contiguous()
         # form look-up table
-        depth *= blocks[symbols[-1].name.upper()]
+        depth *= blocks[symbols[-1].upper()]
         header = torch.stack((offsets, depth, outer), dim=1).view(-1).contiguous()
         header[::3] = header[::3]*2 + header.shape[0]
         lut = torch.cat((header, delta)).int().int().cpu().numpy()
@@ -731,7 +735,7 @@ __global__ void {name}(
                 delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b)
             if sparse_c:
                 delta_c = _einsum.make_sdd_lut(layout_c, sparse_c, blocks)
-            print(delta_a)
+            #print(delta_a)
             # hash for recompilation
             stride_a_multiple = max([x for x in [1, 2, 4, 8] if shape_a[-1] % x == 0])
             stride_b_multiple = max([x for x in [1, 2, 4, 8] if shape_b[-1] % x == 0])
@@ -798,14 +802,15 @@ __global__ void {name}(
             # LUT for C
             if sparse_c:
                 self.args += [delta_c]
+            if sparse_a or sparse_b:
+                width = delta_a[0] // 3 if sparse_a else delta_b[0] // 3
+                self.args += [width]
             self.args += arrays
             # Grid
             if sparse_a:
-                width = delta_a[0] // 3
-                self.grid = lambda opt: [width, triton.cdiv(N, opt.d('TN')), opt.d('TZ')]
+                self.grid = lambda opt: [width*triton.cdiv(N, opt.d('TN')), B, opt.d('TZ')]
             elif sparse_b:
-                width = delta_b[0] // 3
-                self.grid = lambda opt: [width, triton.cdiv(M, opt.d('TM')), opt.d('TZ')]
+                self.grid = lambda opt: [width*triton.cdiv(M, opt.d('TM')), B, opt.d('TZ')]
             elif sparse_c:
                 width = int(layout_c.sum())
                 self.grid = lambda opt: [width, 1, opt.d('TZ')]
