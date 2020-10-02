@@ -220,7 +220,7 @@ __global__ void {name}(
 
         src += f"""    
     // initialize pointers to A
-    int offa[TM, TK, TB] = {'inca' if sparse_a else '0'} """
+    int offa[TM, TK, TB] = {'inca' if sparse_a or sparse_b else '0'} """
         for i, sym in enumerate(expr_a):
             ccode = _einsum.print_cc(sym, axes_m, axes_k, axes_b, 'a')
             stride = f'stride_a_{i}' if i < len(expr_a) - 1 else f'{stride_a_last}'
@@ -242,7 +242,7 @@ __global__ void {name}(
         src += f"""
 
     // initialize pointers to B
-    int offb[TK, TN, TB] = {'incb' if sparse_b else '0'}"""
+    int offb[TK, TN, TB] = {'incb' if sparse_a or sparse_b else '0'}"""
         for i, sym in enumerate(expr_b):
             ccode = _einsum.print_cc(sym, axes_k, axes_n, axes_b, 'b')
             stride = f'stride_b_{i}' if i < len(expr_b) - 1 else f'{stride_b_last}'
@@ -552,11 +552,9 @@ __global__ void {name}(
         args += [x for _, x in arrays]
         delta = fn(*args)
         if lut is not None:
-            idx += np.arange(idx.shape[0]) - 1
-            delta = np.delete(delta, idx[1:])
-            print(delta//512)
-            exit()
-            lut[lut[0]+3::2] = delta[:-1]
+            idx   = idx[1:] + np.arange(idx.shape[0] - 1)
+            delta = np.delete(delta, idx)
+            lut[lut[0]+1::2] = delta
             return None, None
         return delta, _einsum.lut_mode(delta[step:-step])
 
