@@ -440,7 +440,7 @@ __global__ void {name}(
 #endif
 }
 """
-        # print(src)
+        print(src)
         # compilation options
         TM, TN, TB, TZ = [32], [32], 1, [1]
         TK = 16 if dtype==torch.float16 else 32
@@ -510,8 +510,6 @@ __global__ void {name}(
         delta_a[1:] = delta_a[1:] - delta_a[:-1]
         delta_a[offsets] = saved
         delta_a *= np.prod(list(blocks.values()))
-        #delta_a[:] = 0
-        #delta_b[:] = 0
         delta = torch.stack((delta_a, delta_b), dim=1).view(-1).contiguous()
         # form look-up table
         depth *= blocks[symbols[-1].name.upper()]
@@ -539,8 +537,11 @@ __global__ void {name}(
             k = np.concatenate((np.arange(step), np.arange(rem, inner))).astype(np.int32)
             nextk = np.concatenate((k[:step] + rem, k[step:] + step))
         else:
-            k     = lut[lut[0]+1:-2:2]
-            nextk = lut[lut[0]+3:  :2]
+            idx   = (lut[:lut[0]:3] - lut[0])//2
+            k     = lut[lut[0]+1::2]
+            k     = np.insert(k, idx, 0)
+            nextk = k[1:]
+            k     = k[:-1]
         # offsets
         off      = _einsum.unpack_offset(k, axes, dims)
         nextoff  = _einsum.unpack_offset(nextk, axes, dims)
@@ -551,9 +552,11 @@ __global__ void {name}(
         args += [x for _, x in arrays]
         delta = fn(*args)
         if lut is not None:
-            saved = lut[1 + lut[:lut[0]:3]]
-            lut[lut[0]+3::2] = delta
-            lut[1 + lut[:lut[0]:3]] = saved
+            idx += np.arange(idx.shape[0]) - 1
+            delta = np.delete(delta, idx[1:])
+            print(delta//512)
+            exit()
+            lut[lut[0]+3::2] = delta[:-1]
             return None, None
         return delta, _einsum.lut_mode(delta[step:-step])
 
@@ -730,6 +733,7 @@ __global__ void {name}(
                 delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b)
             if sparse_c:
                 delta_c = _einsum.make_sdd_lut(layout_c, sparse_c, blocks)
+            print(delta_a)
             # hash for recompilation
             stride_a_multiple = max([x for x in [1, 2, 4, 8] if shape_a[-1] % x == 0])
             stride_b_multiple = max([x for x in [1, 2, 4, 8] if shape_b[-1] % x == 0])
