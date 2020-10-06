@@ -114,7 +114,7 @@ __global__ void {name}(
                                          [multipleof_a, multipleof_b, multipleof_c],
                                          [sparse_a, sparse_b, sparse_c]):
             for d in range(len(dim) - 1):
-                if sparse and d == 1:
+                if sparse and dim[d].name == sparse[0]:
                   src += f', int stride_{name}_block __multipleof({mult})'
                 src += f", int stride_{name}_{d} __multipleof({mult})"
             src += "\n            "
@@ -140,6 +140,7 @@ __global__ void {name}(
         for name in varnames:
             src += f", int {name}"
         src += """) {
+
 
     // program identifiers
     int pid_0 = get_program_id(0);
@@ -499,8 +500,13 @@ __global__ void {name}(
         # depth of reductions
         depth = layout.sum(*[i for i, d in enumerate(sparse) if d in axes])
         # outer dimension indices
+        nnz = layout.nonzero()
+        print(layout.nonzero())
         outer = torch.arange(depth.shape[0], device=depth.device)
+        print(outer)
+        exit()
         # find offset of outer dimensions
+        depth = depth.view(-1)
         offsets = torch.zeros_like(depth)
         offsets[1:] = torch.cumsum(depth[:-1], 0)
         # compute delta for b
