@@ -85,6 +85,9 @@ class _einsum(torch.autograd.Function):
         use_lut_a = True
         use_lut_b = True
 
+        outer_sparse_a = [x for x in expr_a if x.name in sparse_a and x not in axes_k] 
+        outer_sparse_b = [x for x in expr_b if x.name in sparse_b and x not in axes_k]
+
         src = ""
 
         if use_lut_a and lut_mode_a == _einsum.LUT_MODE.CONSTANT:
@@ -151,11 +154,14 @@ __global__ void {name}(
 """
         if sparse_a:
             src += f"""
-    int* header = AD + pid_0 * 3;
+    int* header = AD + pid_0 * {2 + len(outer_sparse_a)};
     int* pdelta = AD + *(header + 0);
-    matmul_k  = *(header + 1);
-    int pid_m = *(header + 2);
-    int pid_n = pid_1;
+    matmul_k  = *(header + 1);"""
+            for i, d in enumerate(outer_sparse_a):
+                src += f"""
+    int off_{d} = *(header + {2 + i});"""
+            src += """
+    int off_n = pid_1;
     int inca  = *(pdelta + 0);
     int incb  = *(pdelta + 1);
 """
@@ -163,9 +169,12 @@ __global__ void {name}(
             src += f"""
     int* header = BD + pid_0 * 3;
     int* pdelta = BD + *(header + 0);
-    matmul_k  = *(header + 1);
-    int pid_n = *(header + 2);
-    int pid_m = pid_1;
+    matmul_k  = *(header + 1);"""
+            for i, d in enumerate(outer_sparse_b):
+                src += f"""
+    int off_{d} = *(header + {2 + i});"""
+            src += f"""
+    int off_m = pid_1;
     int incb  = *(pdelta + 0);
     int inca  = *(pdelta + 1);
 """
@@ -187,7 +196,7 @@ __global__ void {name}(
 
         src += """
     // get batch program id
-    int pid_b = get_program_id(1);
+    int off_b = get_program_id(1);
 
 #if TZ == 1
     int off_k = 0;
@@ -207,22 +216,36 @@ __global__ void {name}(
 
         for axes, tile, off, prefixes in zip([axes_m, axes_n, axes_b, axes_k],
                                              ['TM', 'TN', 'TB', 'TK'],
-                                             ['pid_m*TM', 'pid_n*TN', 'pid_b*TB', 'off_k'],
+                                             ['off_m*TM', 'off_n*TN', 'off_b*TB', 'off_k'],
                                              [['a'], ['b'], ['a', 'b'], ['a', 'b']]):
             if not axes:
                 continue
+
             currs = ''.join(map(str,axes))
-            src += f"    int r{currs}[{tile}] = {off} + 0 ... {tile};\n"
-            src += _einsum.unpack_cc(tile, axes, f'r', False)
-            for pfx in prefixes:
-                if sparse_a and pfx == 'a' and tile == 'TM' or\
-                   sparse_b and pfx == 'b' and tile == 'TN':
-                    for d in axes[:-1]:
-                        src += f"    int {pfx}r{d}[{tile}] = pid_{d};\n"
-                    src += f"    int {pfx}r{axes[-1]}[{tile}] = 0 ... {tile};\n"
-                else:
-                    for d in axes:
-                        src += f"    int {pfx}r{d}[{tile}] = r{d};\n"
+            if {x.name for x in axes} & (set(sparse_a) | set(sparse_b)):
+                src += f"    int r{currs}[{tile}] = 0 ... {tile};\n"
+                src += _einsum.unpack_cc(tile, axes, f'r', False) 
+            else:
+                src += f"    int r{currs}[{tile}] = {off} + 0 ... {tile};\n"
+                src += _einsum.unpack_cc(tile, axes, f'r', False) 
+
+
+            # for pfx in prefixes:
+                    
+
+            #     if not {x.name for x in axes} & (set(sparse_a) | set(sparse_b)):
+            #         src += f"    int {pfx}r{currs}[{tile}] = {off} + 0 ... {tile};\n"
+            #         src += _einsum.unpack_cc(tile, axes, f'{pfx}r', False) 
+            #     else:
+            #         for d in axes:
+            #             if d.name in sparse_a and pfx == 'a' or\
+            #             d.name in sparse_b and pfx == 'b':
+            #                 src += f"    int {pfx}r{d}[{tile}] = 0 ... BLOCK{d.name.upper()};\n"
+            #             elif d.name in sparse_a and pfx == 'b' or\
+            #                 d.name in sparse_b and pfx == 'a':
+            #                 src += f"    int {pfx}r{d}[{tile}] = off_{d}*BLOCK{d.name.upper()} + 0 ... BLOCK{d.name.upper()};\n"
+            #             else:
+            #                 src += f"    int {pfx}r{d}[{tile}] = off_{d};\n"
 
 
         src += f"""    
@@ -448,6 +471,7 @@ __global__ void {name}(
 }
 """
         print(src)
+        #exit()
         # compilation options
         TM, TN, TB, TZ = [32], [32], 1, [1]
         TK = 16 if dtype==torch.float16 else 32
@@ -500,11 +524,8 @@ __global__ void {name}(
         # depth of reductions
         depth = layout.sum(*[i for i, d in enumerate(sparse) if d in axes])
         # outer dimension indices
-        nnz = layout.nonzero()
-        print(layout.nonzero())
-        outer = torch.arange(depth.shape[0], device=depth.device)
-        print(outer)
-        exit()
+        outer = depth.nonzero()
+        outer = [outer[:,i] for i in range(outer.shape[1])]
         # find offset of outer dimensions
         depth = depth.view(-1)
         offsets = torch.zeros_like(depth)
@@ -527,8 +548,9 @@ __global__ void {name}(
         delta = torch.stack((delta_a, delta_b), dim=1).view(-1).contiguous()
         # form look-up table
         depth *= blocks[symbols[-1].upper()]
-        header = torch.stack((offsets, depth, outer), dim=1).view(-1).contiguous()
-        header[::3] = header[::3]*2 + header.shape[0]
+        header = torch.stack((offsets, depth, *outer), dim=1).view(-1).contiguous()
+        stride = 2 + len(outer)
+        header[::stride] = header[::stride]*2 + header.shape[0]
         lut = torch.cat((header, delta)).int().int().cpu().numpy()
         return lut, _einsum.LUT_MODE.DRAM
 
@@ -551,7 +573,7 @@ __global__ void {name}(
             k = np.concatenate((np.arange(step), np.arange(rem, inner))).astype(np.int32)
             nextk = np.concatenate((k[:step] + rem, k[step:] + step))
         else:
-            idx   = (lut[:lut[0]:3] - lut[0])//2
+            idx   = (lut[:lut[0]:4] - lut[0])//2
             k     = lut[lut[0]+1::2]
             k     = np.insert(k, idx, 0)
             nextk = k[1:]
