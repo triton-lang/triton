@@ -46,9 +46,6 @@ stream::stream(driver::context *ctx, CUstream cu, bool has_ownership)
   : polymorphic_resource(cu, has_ownership), ctx_(ctx) {
 }
 
-stream::stream(driver::context *ctx, cl_command_queue cl, bool has_ownership)
-  : polymorphic_resource(cl, has_ownership), ctx_(ctx) {
-}
 
 stream::stream(driver::context *ctx, host_stream_t cl, bool has_ownership)
   : polymorphic_resource(cl, has_ownership), ctx_(ctx) {
@@ -57,7 +54,6 @@ stream::stream(driver::context *ctx, host_stream_t cl, bool has_ownership)
 driver::stream* stream::create(driver::context* ctx) {
   switch(ctx->backend()){
     case CUDA: return new cu_stream(ctx);
-    case OpenCL: return new cl_stream(ctx);
     case Host: return new host_stream(ctx);
     default: throw std::runtime_error("unknown backend");
   }
@@ -96,33 +92,6 @@ void host_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset
   std::memcpy(ptr, (const void*)buffer->hst()->data, size);
 }
 
-
-/* ------------------------ */
-//         OpenCL           //
-/* ------------------------ */
-
-cl_stream::cl_stream(driver::context *ctx): stream(ctx, cl_command_queue(), true) {
-  cl_int err;
-  *cl_ = dispatch::clCreateCommandQueue(*ctx->cl(), *ctx->device()->cl(), 0, &err);
-  check(err);
-}
-
-void cl_stream::synchronize() {
-  check(dispatch::clFinish(*cl_));
-}
-
-void cl_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void **args, size_t args_size) {
-  std::array<size_t, 3> global = {grid[0]*block[0], grid[1]*block[1], grid[2]*block[2]};
-  check(dispatch::clEnqueueNDRangeKernel(*cl_, *kernel->cl(), grid.size(), NULL, (const size_t*)global.data(), (const size_t*)block.data(), 0, NULL, NULL));
-}
-
-void cl_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
-  check(dispatch::clEnqueueWriteBuffer(*cl_, *buffer->cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
-}
-
-void cl_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
-  check(dispatch::clEnqueueReadBuffer(*cl_, *buffer->cl(), blocking?CL_TRUE:CL_FALSE, offset, size, ptr, 0, NULL, NULL));
-}
 
 /* ------------------------ */
 //         CUDA             //

@@ -20,7 +20,7 @@ namespace driver
 class context;
 
 // Base device
-class device: public polymorphic_resource<CUdevice, cl_device_id, host_device_t>{
+class device: public polymorphic_resource<CUdevice, host_device_t>{
 public:
   using polymorphic_resource::polymorphic_resource;
   virtual size_t max_threads_per_block() const = 0;
@@ -34,15 +34,6 @@ public:
   host_device(): device(host_device_t(), true){ }
   size_t max_threads_per_block() const { return 1; }
   size_t max_shared_memory() const { return 0; }
-  std::unique_ptr<codegen::target> make_target() const;
-};
-
-// OpenCL device
-class ocl_device: public device {
-public:
-  ocl_device(cl_device_id cl, bool take_ownership = true): device(cl, take_ownership) { }
-  size_t max_threads_per_block() const;
-  size_t max_shared_memory() const;
   std::unique_ptr<codegen::target> make_target() const;
 };
 

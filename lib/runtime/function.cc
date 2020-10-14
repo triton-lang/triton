@@ -3,6 +3,7 @@
 #include <regex>
 #include <functional>
 #include <algorithm>
+#include <sstream>
 #include <memory>
 #include "triton/codegen/analysis/axes.h"
 #include "triton/codegen/analysis/allocation.h"

@@ -39,9 +39,6 @@ kernel::kernel(driver::module *program, CUfunction fn, bool has_ownership):
   polymorphic_resource(fn, has_ownership), program_(program){
 }
 
-kernel::kernel(driver::module *program, cl_kernel fn, bool has_ownership):
-  polymorphic_resource(fn, has_ownership), program_(program){
-}
 
 kernel::kernel(driver::module *program, host_function_t fn, bool has_ownership):
   polymorphic_resource(fn, has_ownership), program_(program){
@@ -50,7 +47,6 @@ kernel::kernel(driver::module *program, host_function_t fn, bool has_ownership):
 kernel* kernel::create(driver::module* program, const char* name) {
     switch(program->backend()){
     case CUDA: return new cu_kernel(program, name);
-    case OpenCL: return new ocl_kernel(program, name);
     case Host: return new host_kernel(program, name);
     default: throw std::runtime_error("unknown backend");
     }
@@ -88,31 +84,6 @@ void host_kernel::setArg(unsigned int index, driver::buffer* buffer){
 const std::vector<void *> &host_kernel::params(){
   return params_;
 }
-
-/* ------------------------ */
-//         OpenCL           //
-/* ------------------------ */
-
-ocl_kernel::ocl_kernel(driver::module* program, const char* name): kernel(program, cl_kernel(), true) {
-//  cl_uint res;
-//  check(dispatch::clCreateKernelsInProgram(*program->cl(), 0, NULL, &res));
-//  std::cout << res << std::endl;
-  cl_int err;
-  *cl_ = dispatch::clCreateKernel(*program->cl(), "matmul", &err);
-  check(err);
-}
-
-void ocl_kernel::setArg(unsigned int index, std::size_t size, void* ptr) {
-  check(dispatch::clSetKernelArg(*cl_, index, size, ptr));
-}
-
-void ocl_kernel::setArg(unsigned int index, driver::buffer* buffer) {
-  if(buffer)
-    check(dispatch::clSetKernelArg(*cl_, index, sizeof(cl_mem), (void*)&*buffer->cl()));
-  else
-    kernel::setArg(index, (std::ptrdiff_t)0);
-}
-
 
 /* ------------------------ */
 //         CUDA             //
