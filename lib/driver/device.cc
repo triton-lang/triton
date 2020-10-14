@@ -45,25 +45,6 @@ std::unique_ptr<codegen::target> host_device::make_target() const {
 
 
 /* ------------------------ */
-//         OpenCL           //
-/* ------------------------ */
-
-// maximum amount of shared memory per block
-size_t ocl_device::max_shared_memory() const {
-  throw std::runtime_error("not implemented");
-//  return ocl::info<CL_DEVICE_LOCAL_MEM_SIZE>(*cl_);
-}
-
-size_t ocl_device::max_threads_per_block() const {
-  throw std::runtime_error("not implemented");
-//  return ocl::info<CL_DEVICE_MAX_WORK_ITEM_SIZES>(*cl_).at(0);
-}
-
-std::unique_ptr<codegen::target> ocl_device::make_target() const {
-  return std::unique_ptr<codegen::amd_cl_target>(new codegen::amd_cl_target());
-}
-
-/* ------------------------ */
 //         CUDA             //
 /* ------------------------ */
 

@@ -10,7 +10,7 @@ namespace triton{
 namespace ir{
 
 builder::builder(context &ctx):
-  ctx_(ctx), block_(nullptr), insert_point_(nullptr) {}
+  ctx_(ctx), block_(nullptr) {}
 
 //===----------------------------------------------------------------------===//
 //                               utilities
