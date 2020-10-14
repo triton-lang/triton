@@ -11,13 +11,12 @@ namespace triton
 namespace driver
 {
 
-class context: public polymorphic_resource<CUcontext, cl_context, host_context_t>{
+class context: public polymorphic_resource<CUcontext, host_context_t>{
 protected:
   static std::string get_cache_path();
 
 public:
   context(driver::device *dev, CUcontext cu, bool take_ownership);
-  context(driver::device *dev, cl_context cl, bool take_ownership);
   context(driver::device *dev, host_context_t hst, bool take_ownership);
   driver::device* device() const;
   std::string const & cache_path() const;
@@ -54,15 +53,6 @@ public:
   cu_context(CUcontext cu, bool take_ownership = true);
   cu_context(driver::device* dev);
 };
-
-// OpenCL
-class ocl_context: public context {
-public:
-  ocl_context(driver::device* dev);
-};
-
-
-
 
 }
 }

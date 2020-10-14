@@ -38,15 +38,6 @@ inline void _delete(host_stream_t)   { }
 inline void _delete(host_buffer_t x)   { if(x.data) delete[] x.data; }
 inline void _delete(host_function_t) { }
 
-//OpenCL
-inline void _delete(cl_platform_id) { }
-inline void _delete(cl_device_id x) { dispatch::clReleaseDevice(x); }
-inline void _delete(cl_context x) { dispatch::clReleaseContext(x); }
-inline void _delete(cl_program x) { dispatch::clReleaseProgram(x); }
-inline void _delete(cl_kernel x) { dispatch::clReleaseKernel(x); }
-inline void _delete(cl_command_queue x) { dispatch::clReleaseCommandQueue(x); }
-inline void _delete(cl_mem x) { dispatch::clReleaseMemObject(x); }
-
 //CUDA
 inline void _delete(CUcontext x) { dispatch::cuCtxDestroy(x); }
 inline void _delete(CUdeviceptr x) { dispatch::cuMemFree(x); }
@@ -86,14 +77,6 @@ template class handle<cu_event_t>;
 template class handle<CUfunction>;
 template class handle<CUmodule>;
 template class handle<CUPlatform>;
-
-template class handle<cl_platform_id>;
-template class handle<cl_device_id>;
-template class handle<cl_context>;
-template class handle<cl_program>;
-template class handle<cl_command_queue>;
-template class handle<cl_mem>;
-template class handle<cl_kernel>;
 
 template class handle<host_platform_t>;
 template class handle<host_device_t>;
