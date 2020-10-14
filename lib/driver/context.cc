@@ -41,11 +41,6 @@ context::context(driver::device *dev, CUcontext cu, bool take_ownership):
   dev_(dev), cache_path_(get_cache_path()) {
 }
 
-context::context(driver::device *dev, cl_context cl, bool take_ownership):
-  polymorphic_resource(cl, take_ownership),
-  dev_(dev), cache_path_(get_cache_path()){
-}
-
 context::context(driver::device *dev, host_context_t hst, bool take_ownership):
   polymorphic_resource(hst, take_ownership),
   dev_(dev), cache_path_(get_cache_path()){
@@ -54,7 +49,6 @@ context::context(driver::device *dev, host_context_t hst, bool take_ownership):
 context* context::create(driver::device *dev){
   switch(dev->backend()){
   case CUDA: return new cu_context(dev);
-  case OpenCL: return new ocl_context(dev);
   case Host: return new host_context(dev);
   default: throw std::runtime_error("unknown backend");
   }
@@ -129,18 +123,6 @@ cu_context::cu_context(driver::device* device): context(device, CUcontext(), tru
   dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, *((driver::cu_device*)dev_)->cu());
   dispatch::cuCtxPopCurrent_v2(NULL);
 }
-
-
-/* ------------------------ */
-//         OpenCL           //
-/* ------------------------ */
-
-ocl_context::ocl_context(driver::device* dev): context(dev, cl_context(), true) {
-  cl_int err;
-  *cl_ = dispatch::clCreateContext(nullptr, 1, &*dev->cl(), nullptr, nullptr, &err);
-  check(err);
-}
-
 
 
 }

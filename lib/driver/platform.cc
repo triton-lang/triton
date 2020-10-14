@@ -52,27 +52,6 @@ void cu_platform::devices(std::vector<device *> &devices) const{
 }
 
 /* ------------------------ */
-//        OpenCL            //
-/* ------------------------ */
-
-std::string cl_platform::version() const {
-  size_t size;
-  check(dispatch::clGetPlatformInfo(*cl_, CL_PLATFORM_VERSION, 0, nullptr, &size));
-  std::string result(size, 0);
-  check(dispatch::clGetPlatformInfo(*cl_, CL_PLATFORM_VERSION, size, (void*)&*result.begin(), nullptr));
-  return result;
-}
-
-void cl_platform::devices(std::vector<device*> &devices) const{
-  cl_uint num_devices;
-  check(dispatch::clGetDeviceIDs(*cl_, CL_DEVICE_TYPE_GPU, 0, nullptr, &num_devices));
-  std::vector<cl_device_id> ids(num_devices);
-  check(dispatch::clGetDeviceIDs(*cl_, CL_DEVICE_TYPE_GPU, num_devices, ids.data(), nullptr));
-  for(cl_device_id id: ids)
-    devices.push_back(new driver::ocl_device(id));
-}
-
-/* ------------------------ */
 //        Host              //
 /* ------------------------ */
 

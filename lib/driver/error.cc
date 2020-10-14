@@ -94,67 +94,6 @@ void check(CUresult err)
   }
 }
 
-void check(cl_int err)
-{
-    using namespace exception::ocl;
-    switch(err)
-    {
-        case CL_SUCCESS:                        break;
-        case CL_DEVICE_NOT_FOUND:               throw device_not_found();
-        case CL_DEVICE_NOT_AVAILABLE:           throw device_not_available();
-        case CL_COMPILER_NOT_AVAILABLE:         throw compiler_not_available();
-        case CL_MEM_OBJECT_ALLOCATION_FAILURE:  throw mem_object_allocation_failure();
-        case CL_OUT_OF_RESOURCES:               throw out_of_resources();
-        case CL_OUT_OF_HOST_MEMORY:             throw out_of_host_memory();
-        case CL_PROFILING_INFO_NOT_AVAILABLE:   throw profiling_info_not_available();
-        case CL_MEM_COPY_OVERLAP:               throw mem_copy_overlap();
-        case CL_IMAGE_FORMAT_MISMATCH:          throw image_format_mismatch();
-        case CL_IMAGE_FORMAT_NOT_SUPPORTED:     throw image_format_not_supported();
-        case CL_BUILD_PROGRAM_FAILURE:          throw build_program_failure();
-        case CL_MAP_FAILURE:                    throw map_failure();
-
-        case CL_INVALID_VALUE:                  throw invalid_value();
-        case CL_INVALID_DEVICE_TYPE:            throw invalid_device_type();
-        case CL_INVALID_PLATFORM:               throw invalid_platform();
-        case CL_INVALID_DEVICE:                 throw invalid_device();
-        case CL_INVALID_CONTEXT:                throw invalid_context();
-        case CL_INVALID_QUEUE_PROPERTIES:       throw invalid_queue_properties();
-        case CL_INVALID_COMMAND_QUEUE:          throw invalid_command_queue();
-        case CL_INVALID_HOST_PTR:               throw invalid_host_ptr();
-        case CL_INVALID_MEM_OBJECT:             throw invalid_mem_object();
-        case CL_INVALID_IMAGE_FORMAT_DESCRIPTOR: throw invalid_image_format_descriptor();
-        case CL_INVALID_IMAGE_SIZE:             throw invalid_image_size();
-        case CL_INVALID_SAMPLER:                throw invalid_sampler();
-        case CL_INVALID_BINARY:                 throw invalid_binary();
-        case CL_INVALID_BUILD_OPTIONS:          throw invalid_build_options();
-        case CL_INVALID_PROGRAM:                throw invalid_program();
-        case CL_INVALID_PROGRAM_EXECUTABLE:     throw invalid_program_executable();
-        case CL_INVALID_KERNEL_NAME:            throw invalid_kernel_name();
-        case CL_INVALID_KERNEL_DEFINITION:      throw invalid_kernel_definition();
-        case CL_INVALID_KERNEL:                 throw invalid_kernel();
-        case CL_INVALID_ARG_INDEX:              throw invalid_arg_index();
-        case CL_INVALID_ARG_VALUE:              throw invalid_arg_value();
-        case CL_INVALID_ARG_SIZE:               throw invalid_arg_size();
-        case CL_INVALID_KERNEL_ARGS:            throw invalid_kernel_args();
-        case CL_INVALID_WORK_DIMENSION:         throw invalid_work_dimension();
-        case CL_INVALID_WORK_GROUP_SIZE:        throw invalid_work_group_size();
-        case CL_INVALID_WORK_ITEM_SIZE:         throw invalid_work_item_size();
-        case CL_INVALID_GLOBAL_OFFSET:          throw invalid_global_offset();
-        case CL_INVALID_EVENT_WAIT_LIST:        throw invalid_event_wait_list();
-        case CL_INVALID_EVENT:                  throw invalid_event();
-        case CL_INVALID_OPERATION:              throw invalid_operation();
-        case CL_INVALID_GL_OBJECT:              throw invalid_gl_object();
-        case CL_INVALID_BUFFER_SIZE:            throw invalid_buffer_size();
-        case CL_INVALID_MIP_LEVEL:              throw invalid_mip_level();
-        case CL_INVALID_GLOBAL_WORK_SIZE:       throw invalid_global_work_size();
-    #ifdef CL_INVALID_PROPERTY
-        case CL_INVALID_PROPERTY:               throw invalid_property();
-    #endif
-        default: throw;
-    }
-}
-
-
 }
 }
 

@@ -14,10 +14,9 @@ namespace driver
 class stream;
 
 // Base
-class buffer : public polymorphic_resource<CUdeviceptr, cl_mem, host_buffer_t> {
+class buffer : public polymorphic_resource<CUdeviceptr, host_buffer_t> {
 public:
   buffer(driver::context* ctx, size_t size, CUdeviceptr cl, bool take_ownership);
-  buffer(driver::context* ctx, size_t size, cl_mem cl, bool take_ownership);
   buffer(driver::context* ctx, size_t size, host_buffer_t hst, bool take_ownership);
   uintptr_t addr_as_uintptr_t();
   static buffer* create(driver::context* ctx, size_t size);
@@ -34,13 +33,6 @@ class host_buffer: public buffer
 {
 public:
   host_buffer(driver::context* context, size_t size);
-};
-
-// OpenCL
-class ocl_buffer: public buffer
-{
-public:
-  ocl_buffer(driver::context* context, size_t size);
 };
 
 // CUDA

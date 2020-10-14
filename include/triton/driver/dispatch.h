@@ -9,8 +9,6 @@
 //CUDA Backend
 #include "triton/external/CUDA/cuda.h"
 #include "triton/external/CUDA/nvml.h"
-#include "triton/external/CL/cl.h"
-#include "triton/external/CL/cl_ext.h"
 
 //Exceptions
 #include <iostream>
@@ -30,7 +28,6 @@ class cu_context;
 
 template<class T> void check(T){}
 void check(CUresult err);
-void check(cl_int err);
 
 class dispatch
 {
@@ -61,47 +58,10 @@ protected:
   }
 
 public:
-  static bool clinit();
   static bool nvmlinit();
   static bool cuinit();
   static bool spvllvminit();
   static void release();
-
-  // OpenCL
-  static cl_int clBuildProgram(cl_program, cl_uint, const cl_device_id *, const char *, void (*)(cl_program, void *), void *);
-  static cl_int clEnqueueNDRangeKernel(cl_command_queue, cl_kernel, cl_uint, const size_t *, const size_t *, const size_t *, cl_uint, const cl_event *, cl_event *);
-  static cl_int clSetKernelArg(cl_kernel, cl_uint, size_t, const void *);
-  static cl_int clReleaseMemObject(cl_mem);
-  static cl_int clFinish(cl_command_queue);
-  static cl_int clGetMemObjectInfo(cl_mem, cl_mem_info, size_t, void *, size_t *);
-  static cl_int clGetCommandQueueInfo(cl_command_queue, cl_command_queue_info, size_t, void *, size_t *);
-  static cl_int clReleaseContext(cl_context);
-  static cl_int clReleaseEvent(cl_event);
-  static cl_int clEnqueueWriteBuffer(cl_command_queue, cl_mem, cl_bool, size_t, size_t, const void *, cl_uint, const cl_event *, cl_event *);
-  static cl_int clEnqueueReadBuffer(cl_command_queue, cl_mem, cl_bool, size_t, size_t, void *, cl_uint, const cl_event *, cl_event *);
-  static cl_int clGetProgramBuildInfo(cl_program, cl_device_id, cl_program_build_info, size_t, void *, size_t *);
-  static cl_int clReleaseDevice(cl_device_id);
-  static cl_context clCreateContext(const cl_context_properties *, cl_uint, const cl_device_id *, void (*)(const char *, const void *, size_t, void *), void *, cl_int *);
-  static cl_int clGetDeviceIDs(cl_platform_id, cl_device_type, cl_uint, cl_device_id *, cl_uint *);
-  static cl_int clGetContextInfo(cl_context, cl_context_info, size_t, void *, size_t *);
-  static cl_int clGetDeviceInfo(cl_device_id, cl_device_info, size_t, void *, size_t *);
-  static cl_int clReleaseCommandQueue(cl_command_queue);
-  static cl_int clGetPlatformIDs(cl_uint, cl_platform_id *, cl_uint *);
-  static cl_int clGetPlatformInfo(cl_platform_id, cl_platform_info, size_t, void *, size_t *);
-  static cl_int clGetEventProfilingInfo(cl_event, cl_profiling_info, size_t, void *, size_t *);
-  static cl_program clCreateProgramWithBinary(cl_context, cl_uint, const cl_device_id *, const size_t *, const unsigned char **, cl_int *, cl_int *);
-  static cl_command_queue clCreateCommandQueue(cl_context, cl_device_id, cl_command_queue_properties, cl_int *);
-  static cl_int clRetainEvent(cl_event);
-  static cl_int clReleaseProgram(cl_program);
-  static cl_int clFlush(cl_command_queue);
-  static cl_int clGetProgramInfo(cl_program, cl_program_info, size_t, void *, size_t *);
-  static cl_int clGetKernelInfo(cl_kernel, cl_kernel_info, size_t, void *, size_t *);
-  static cl_int clGetKernelWorkGroupInfo(cl_kernel, cl_device_id, cl_kernel_work_group_info, size_t, void *, size_t *);
-  static cl_kernel clCreateKernel(cl_program, const char *, cl_int *);
-  static cl_int clCreateKernelsInProgram(cl_program, cl_uint, cl_kernel*, cl_uint*);
-  static cl_mem clCreateBuffer(cl_context, cl_mem_flags, size_t, void *, cl_int *);
-  static cl_program clCreateProgramWithSource(cl_context, cl_uint, const char **, const size_t *, cl_int *);
-  static cl_int clReleaseKernel(cl_kernel);
 
   // CUDA
   static CUresult cuCtxGetCurrent(CUcontext *pctx);
@@ -157,7 +117,6 @@ public:
 private:
 
   // Libraries
-  static void* opencl_;
   static void* cuda_;
   static void* nvml_;
   static void* vulkan_;
@@ -165,41 +124,6 @@ private:
   static void* spvcross_;
   static void* opengl_;
 
-  // OpenCL functions
-  static void* clBuildProgram_;
-  static void* clEnqueueNDRangeKernel_;
-  static void* clSetKernelArg_;
-  static void* clReleaseMemObject_;
-  static void* clFinish_;
-  static void* clGetMemObjectInfo_;
-  static void* clGetCommandQueueInfo_;
-  static void* clReleaseContext_;
-  static void* clReleaseEvent_;
-  static void* clEnqueueWriteBuffer_;
-  static void* clEnqueueReadBuffer_;
-  static void* clGetProgramBuildInfo_;
-  static void* clReleaseDevice_;
-  static void* clCreateContext_;
-  static void* clGetDeviceIDs_;
-  static void* clGetContextInfo_;
-  static void* clGetDeviceInfo_;
-  static void* clReleaseCommandQueue_;
-  static void* clGetPlatformIDs_;
-  static void* clGetPlatformInfo_;
-  static void* clGetEventProfilingInfo_;
-  static void* clCreateProgramWithBinary_;
-  static void* clCreateCommandQueue_;
-  static void* clRetainEvent_;
-  static void* clReleaseProgram_;
-  static void* clFlush_;
-  static void* clGetProgramInfo_;
-  static void* clGetKernelInfo_;
-  static void* clGetKernelWorkGroupInfo_;
-  static void* clCreateKernel_;
-  static void* clCreateKernelsInProgram_;
-  static void* clCreateBuffer_;
-  static void* clCreateProgramWithSource_;
-  static void* clReleaseKernel_;
 
   // CUDA functions
   static void* cuCtxGetCurrent_;

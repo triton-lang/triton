@@ -64,10 +64,6 @@ module::module(driver::context* ctx, CUmodule mod, bool has_ownership)
   : polymorphic_resource(mod, has_ownership), ctx_(ctx) {
 }
 
-module::module(driver::context* ctx, cl_program mod, bool has_ownership)
-  : polymorphic_resource(mod, has_ownership), ctx_(ctx) {
-}
-
 module::module(driver::context* ctx, host_module_t mod, bool has_ownership)
   : polymorphic_resource(mod, has_ownership), ctx_(ctx) {
 }
@@ -79,7 +75,6 @@ driver::context* module::context() const {
 module* module::create(driver::context* ctx, std::unique_ptr<llvm::Module> src) {
   switch(ctx->backend()){
     case CUDA: return new cu_module(ctx, std::move(src));
-    case OpenCL: return new ocl_module(ctx, std::move(src));
     case Host: return new host_module(ctx, std::move(src));
     default: throw std::runtime_error("unknown backend");
   }
@@ -211,42 +206,6 @@ host_module::host_module(driver::context * context, std::unique_ptr<llvm::Module
 }
 
 std::unique_ptr<buffer> host_module::symbol(const char *name) const {
-  throw std::runtime_error("not implemented");
-}
-
-
-/* ------------------------ */
-//         OpenCL           //
-/* ------------------------ */
-
-ocl_module::ocl_module(driver::context * context, std::unique_ptr<llvm::Module> src): module(context, cl_program(), true) {
-  throw std::runtime_error("not supported");
-//  init_llvm();
-//  llvm::SmallVector<char, 0> buffer;
-//  module::compile_llvm_module(src, "amdgcn-amd-amdhsa-amdgizcl", "gfx902", "", buffer, "code-object-v3", Object);
-//  std::ofstream output("/tmp/tmp.o", std::ios::binary);
-//  std::copy(buffer.begin(), buffer.end(), std::ostreambuf_iterator<char>(output));
-//  system("ld.lld-8 /tmp/tmp.o -shared -o /tmp/tmp.o");
-//  std::ifstream input("/tmp/tmp.o", std::ios::in | std::ios::binary );
-//  std::vector<unsigned char> in_buffer(std::istreambuf_iterator<char>(input), {});
-//  size_t sizes[] = {in_buffer.size()};
-//  const unsigned char* data[] = {(unsigned char*)in_buffer.data()};
-//  cl_int status;
-//  cl_int err;
-//  *cl_ = dispatch::clCreateProgramWithBinary(*context->cl(), 1, &*context->device()->cl(), sizes, data, &status, &err);
-//  check(status);
-//  check(err);
-//  try{
-//  dispatch::clBuildProgram(*cl_, 1, &*context->device()->cl(), NULL, NULL, NULL);
-//  }
-//  catch(...){
-//  char log[2048];
-//  dispatch::clGetProgramBuildInfo(*cl_, *context->device()->cl(), CL_PROGRAM_BUILD_LOG, 1024, log, NULL);
-//  throw;
-//  }
-}
-
-std::unique_ptr<buffer> ocl_module::symbol(const char *name) const {
   throw std::runtime_error("not implemented");
 }
 

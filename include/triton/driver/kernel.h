@@ -21,10 +21,9 @@ namespace driver
 class cu_buffer;
 
 // Base
-class kernel: public polymorphic_resource<CUfunction, cl_kernel, host_function_t> {
+class kernel: public polymorphic_resource<CUfunction, host_function_t> {
 public:
   kernel(driver::module* program, CUfunction fn, bool has_ownership);
-  kernel(driver::module* program, cl_kernel fn, bool has_ownership);
   kernel(driver::module* program, host_function_t fn, bool has_ownership);
   // Getters
   driver::module* module();
@@ -51,17 +50,6 @@ public:
 private:
   std::vector<std::shared_ptr<void> >  params_store_;
   std::vector<void*>  params_;
-};
-
-// OpenCL
-class ocl_kernel: public kernel {
-public:
-  //Constructors
-  ocl_kernel(driver::module* program, const char* name);
-  // Arguments setters
-  void setArg(unsigned int index, std::size_t size, void* ptr);
-  void setArg(unsigned int index, driver::buffer* buffer);
-
 };
 
 // CUDA
