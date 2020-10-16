@@ -80,7 +80,7 @@ class _einsum(torch.autograd.Function):
                     stride_a_last, stride_b_last, stride_c_last,
                     lut_mode_a, lut_mode_b,
                     delta_a, delta_b,
-                    subscripted, varnames):
+                    blocks, subscripted, varnames):
 
         use_lut_a = True
         use_lut_b = True
@@ -190,9 +190,9 @@ __global__ void {name}(
     // re-order outer program ids
     int grid_m = (matmul_m + TM - 1) / TM;
     int grid_n = (matmul_n + TN - 1) / TN;
-    int pid_mn = pid_0 / div_m;
-    int pid_n = pid_mn % grid_n;
-    int pid_m = (pid_mn / grid_n)*div_m + (pid_0 % div_m);"""
+    int off_mn = pid_0 / div_m;
+    int off_n = off_mn % grid_n;
+    int off_m = (off_mn / grid_n)*div_m + (pid_0 % div_m);"""
 
         src += """
     // get batch program id
@@ -217,35 +217,26 @@ __global__ void {name}(
         for axes, tile, off, prefixes in zip([axes_m, axes_n, axes_b, axes_k],
                                              ['TM', 'TN', 'TB', 'TK'],
                                              ['off_m*TM', 'off_n*TN', 'off_b*TB', 'off_k'],
-                                             [['a'], ['b'], ['a', 'b'], ['a', 'b']]):
+                                             [['a', 'c'], ['b', 'c'], ['a', 'b', 'c'], ['a', 'b']]):
             if not axes:
                 continue
-
             currs = ''.join(map(str,axes))
-            if {x.name for x in axes} & (set(sparse_a) | set(sparse_b)):
+            if {x.name for x in axes} & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
                 src += f"    int r{currs}[{tile}] = 0 ... {tile};\n"
                 src += _einsum.unpack_cc(tile, axes, f'r', False) 
             else:
                 src += f"    int r{currs}[{tile}] = {off} + 0 ... {tile};\n"
                 src += _einsum.unpack_cc(tile, axes, f'r', False) 
-
-
-            # for pfx in prefixes:
-                    
-
-            #     if not {x.name for x in axes} & (set(sparse_a) | set(sparse_b)):
-            #         src += f"    int {pfx}r{currs}[{tile}] = {off} + 0 ... {tile};\n"
-            #         src += _einsum.unpack_cc(tile, axes, f'{pfx}r', False) 
-            #     else:
-            #         for d in axes:
-            #             if d.name in sparse_a and pfx == 'a' or\
-            #             d.name in sparse_b and pfx == 'b':
-            #                 src += f"    int {pfx}r{d}[{tile}] = 0 ... BLOCK{d.name.upper()};\n"
-            #             elif d.name in sparse_a and pfx == 'b' or\
-            #                 d.name in sparse_b and pfx == 'a':
-            #                 src += f"    int {pfx}r{d}[{tile}] = off_{d}*BLOCK{d.name.upper()} + 0 ... BLOCK{d.name.upper()};\n"
-            #             else:
-            #                 src += f"    int {pfx}r{d}[{tile}] = off_{d};\n"
+            for pfx in prefixes:
+                for d in axes:
+                    if pfx == 'a' and d.name in sparse_a \
+                    or pfx == 'b' and d.name in sparse_b \
+                    or pfx == 'c' and d.name in sparse_c:
+                        src += f"    int {pfx}r{d}[{tile}] = r{d};\n"
+                    elif d.name in sparse_a + sparse_b + sparse_c:
+                        src += f"    int {pfx}r{d}[{tile}] = off_{d} * BLOCK{d.name.upper()} + r{d};\n"
+                    else:
+                        src += f"    int {pfx}r{d}[{tile}] = r{d};\n"
 
 
         src += f"""    
@@ -361,7 +352,7 @@ __global__ void {name}(
         pb += incdb;
         """
         elif sparse_b:
-                    src += """
+            src += """
         pdelta += 2;
         incdb = *(pdelta + 0);
         incda = *(pdelta + 1);
@@ -388,55 +379,9 @@ __global__ void {name}(
         src += f"""
     }}
     TYPE c[TM, TN, TB] = acc;
-
-    // re-materialize ranges"""
-        if sparse_a:
-            src += f"""
-    pid_m = *(header + 2);
-    pid_n = pid_1;
-"""
-        elif sparse_b:
-            src += f"""
-    pid_n = *(header + 2);
-    pid_m = pid_1;
-"""
-        elif sparse_c:
-            src += f"""
-    header  = CD + pid_0 * {len(sparse_c)};"""
-            for i, d in enumerate(sparse_c):
-                src += f"""
-    pid_{d}  = *(header + {i});"""
-        else:
-            src += """
-    grid_m = (matmul_m + TM - 1) / TM;
-    grid_n = (matmul_n + TN - 1) / TN;
-    pid_mn = pid_0 / div_m;
-    pid_n = pid_mn % grid_n;
-    pid_m = (pid_mn / grid_n)*div_m + (pid_0 % div_m);"""
-        src += '\n'
-        for axes, tile, off in zip([axes_m, axes_n, axes_b],
-                                   ['TM', 'TN', 'TB'],
-                                   ['pid_m*TM', 'pid_n*TN', 'pid_b*TB']):
-            if not axes:
-                continue
-            currs = ''.join(map(str,axes))
-            src += f"    r{currs} = {off} + 0 ... {tile};\n"
-            src += _einsum.unpack_cc(tile, axes, 'r', True)
-            if sparse_c:
-                for d in axes[:-1]:
-                    src += f"    r{d} = pid_{d};\n"
-                src += f"    r{axes[-1]} = 0 ... {tile};\n"
-            else:
-                for d in axes:
-                    src += f"    int cr{d}[{tile}] = r{d};\n"
-
-
-
-        off = 'pid_0*TM*TN' if sparse_c else 0
-        src += f"""
+   
     // initialize pointers to C
-    int offc[TM, TN, TB] = {off}"""
-    
+    int offc[TM, TN, TB] = {'pid_0*TN*TN' if sparse_c else 0}"""
         for i, sym in enumerate(expr_c):
             stride = f'stride_c_{i}' if i < len(expr_c) - 1 else f'{stride_c_last}'
             ccode = _einsum.print_cc(sym, axes_m, axes_n, axes_b, 'c')
@@ -471,11 +416,12 @@ __global__ void {name}(
 }
 """
         print(src)
-        #exit()
         # compilation options
         TM, TN, TB, TZ = [32], [32], 1, [1]
         TK = 16 if dtype==torch.float16 else 32
         defines =  {'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
+        for d, B in blocks.items():
+            defines[f'BLOCK{d}'] = B
         # create kernel
         ret = triton.kernel(src, defines=defines)
         # set constant
@@ -531,8 +477,9 @@ __global__ void {name}(
         offsets = torch.zeros_like(depth)
         offsets[1:] = torch.cumsum(depth[:-1], 0)
         # compute delta for b
-        # TODO: make more general
-        delta_b = torch.narrow(layout.nonzero(), 1, 1, 1).reshape(-1).contiguous()
+        # TODO: support multiple sparse red indices
+        col = next((i for i, d in enumerate(symbols) if d in axes), None)
+        delta_b = torch.narrow(layout.nonzero(), 1, col, 1).reshape(-1).contiguous()
         delta_b *= blocks[sparse[-1].upper()]
         # compute delta for a
         idx = [i for i, d in enumerate(sparse[::-1]) if d in axes] +\
@@ -549,12 +496,12 @@ __global__ void {name}(
         # form look-up table
         depth *= blocks[symbols[-1].upper()]
         header = torch.stack((offsets, depth, *outer), dim=1).view(-1).contiguous()
-        stride = 2 + len(outer)
-        header[::stride] = header[::stride]*2 + header.shape[0]
+        nouter = 2 + len(outer)
+        header[::nouter] = header[::nouter]*2 + header.shape[0]
         lut = torch.cat((header, delta)).int().int().cpu().numpy()
-        return lut, _einsum.LUT_MODE.DRAM
+        return lut, nouter, _einsum.LUT_MODE.DRAM
 
-    def make_delta(axes, step, stride, dims, symbols, arrays, sparse, layout, lut = None):
+    def make_delta(axes, step, stride, dims, symbols, arrays, sparse, layout, lut = None, nouter = None):
         # symbolic pointer increments
         delta = _einsum.symbolic_delta(symbols, axes)
         args =  [f'stride{d}' for d in range(len(stride))]
@@ -573,7 +520,7 @@ __global__ void {name}(
             k = np.concatenate((np.arange(step), np.arange(rem, inner))).astype(np.int32)
             nextk = np.concatenate((k[:step] + rem, k[step:] + step))
         else:
-            idx   = (lut[:lut[0]:4] - lut[0])//2
+            idx   = (lut[:lut[0]:nouter] - lut[0])//2
             k     = lut[lut[0]+1::2]
             k     = np.insert(k, idx, 0)
             nextk = k[1:]
@@ -757,17 +704,16 @@ __global__ void {name}(
             TK = 16 if dtype == torch.float16 else 8
             arrays = [(x, arrays[x]) for x in subscripted]
             if sparse_a and not sparse_b:
-                delta_a, lut_mode_a = _einsum.make_dsd_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, blocks)
-                delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b, delta_a)
+                delta_a, nouter, lut_mode_a = _einsum.make_dsd_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, blocks)
+                delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b, delta_a, nouter)
             if sparse_b and not sparse_a:
-                delta_b, lut_mode_b = _einsum.make_dsd_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b, blocks)
-                delta_a, lut_mode_a = _einsum.make_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, delta_b)
+                delta_b, nouter, lut_mode_b = _einsum.make_dsd_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b, blocks)
+                delta_a, lut_mode_a = _einsum.make_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, delta_b, nouter)
             if not sparse_a and not sparse_b:
                 delta_a, lut_mode_a = _einsum.make_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a)
                 delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b)
             if sparse_c:
                 delta_c = _einsum.make_sdd_lut(layout_c, sparse_c, blocks)
-            #print(delta_a)
             # hash for recompilation
             stride_a_multiple = max([x for x in [1, 2, 4, 8] if shape_a[-1] % x == 0])
             stride_b_multiple = max([x for x in [1, 2, 4, 8] if shape_b[-1] % x == 0])
@@ -791,7 +737,7 @@ __global__ void {name}(
                                                         stride_a_last, stride_b_last, stride_c_last,
                                                         lut_mode_a, lut_mode_b,
                                                         delta_a, delta_b,
-                                                        subscripted, varnames)
+                                                        blocks, subscripted, varnames)
             self.kernel = cache[name]
             # Initialize locks
             if _einsum.instance.locks is None:
@@ -835,7 +781,7 @@ __global__ void {name}(
             if sparse_c:
                 self.args += [delta_c]
             if sparse_a or sparse_b:
-                width = delta_a[0] // 3 if sparse_a else delta_b[0] // 3
+                width = delta_a[0] // nouter if sparse_a else delta_b[0] // nouter
                 self.args += [width]
             self.args += arrays
             # Grid
