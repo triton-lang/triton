@@ -49,7 +49,7 @@ def test_expr(expr, shape, blocks):
     ref_a = torch.rand(*shape_a, device='cuda')
     ref_b = torch.rand(*shape_b, device='cuda')
     ref_c = torch.zeros(*shape_c, device='cuda')
-    ref_a[:] = 1
+    #ref_a[:] = 1
     #ref_b[:] = 1
     # layouts
     layout_a = [shape[d.lower()]//blocks[d] for d in expr_a if d.isupper()]
@@ -75,7 +75,7 @@ def test_expr(expr, shape, blocks):
 
 
 # shape characteristics
-B, H, M, N, K = 1, 2, 256, 256, 256
+B, H, M, N, K = 2, 2, 256, 256, 256
 BH, BM, BK = 1, 32, 32
-test_expr('HMK,hkn->hmn', {'b': B, 'h': H, 'm': M, 'k': K, 'n': N}, {'H': BH, 'M': BM, 'K': BK})
+test_expr('bHMK,bhkn->bhmn', {'b': B, 'h': H, 'm': M, 'k': K, 'n': N}, {'H': BH, 'M': BM, 'K': BK})
 
