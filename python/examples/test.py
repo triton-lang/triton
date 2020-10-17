@@ -13,11 +13,11 @@ def to_sparse(expr, data, layout, shape, block):
     for i, d in enumerate(expr):
         if d.isupper() and sparse is None:
             sparse = i
-            shape_ret.append(layout.sum())
+            shape_ret.append(int(layout.sum()))
         if d.isupper():
             shape_ret.append(block[d])
         else:
-            shape_ret.append(shape[d])
+            shape_ret.append(shape[i])
     # iterator
     steps = [block[d] if d.isupper() else 1 for d in expr]
     it = [range(0, shape[i], steps[i]) for i in range(len(expr))]
@@ -25,8 +25,10 @@ def to_sparse(expr, data, layout, shape, block):
     ret = torch.empty(*shape_ret, dtype=data.dtype, device=data.device)
     blockid = 0
     for curr in itertools.product(*it):
+        if all([curr[i] == it[i][0] for i in range(len(curr)) if expr[i].isupper()]):
+            blockid = 0
         data_slice = [slice(curr[i], curr[i] + steps[i], 1) for i in range(len(curr))]
-        ret_slice = [slice(0, block[expr[i]], 1) if d.isupper() else slice(curr[i], curr[i] + 1) for i in range(len(curr))]
+        ret_slice = [slice(0, block[expr[i]], 1) if expr[i].isupper() else slice(curr[i], curr[i] + 1) for i in range(len(curr))]
         ret_slice.insert(sparse, blockid)
         blockid += 1
         ret[ret_slice] = data[data_slice]
@@ -73,7 +75,7 @@ def test_expr(expr, shape, blocks):
 
 
 # shape characteristics
-B, H, M, N, K = 8, 2, 256, 256, 256
+B, H, M, N, K = 1, 2, 256, 256, 256
 BH, BM, BK = 1, 32, 32
-test_expr('HMK,hkn->hmn', {'h': H, 'm': M, 'k': K, 'n': N}, {'H': BH, 'M': BM, 'K': BK})
+test_expr('HMK,hkn->hmn', {'b': B, 'h': H, 'm': M, 'k': K, 'n': N}, {'H': BH, 'M': BM, 'K': BK})
 

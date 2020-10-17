@@ -147,9 +147,7 @@ __global__ void {name}(
 
     // program identifiers
     int pid_0 = get_program_id(0);
-    int pid_1 = get_program_id(1);
-
-    pid_1 = pid_0 / width;
+    int pid_1 = pid_0 / width;
     pid_0 = pid_0 % width;
 """
         if sparse_a:
@@ -220,8 +218,9 @@ __global__ void {name}(
                                              [['a', 'c'], ['b', 'c'], ['a', 'b', 'c'], ['a', 'b']]):
             if not axes:
                 continue
+            axes = [x.name for x in axes]
             currs = ''.join(map(str,axes))
-            if {x.name for x in axes} & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
+            if set(axes) & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
                 src += f"    int r{currs}[{tile}] = 0 ... {tile};\n"
                 src += _einsum.unpack_cc(tile, axes, f'r', False) 
             else:
@@ -229,12 +228,14 @@ __global__ void {name}(
                 src += _einsum.unpack_cc(tile, axes, f'r', False) 
             for pfx in prefixes:
                 for d in axes:
-                    if pfx == 'a' and d.name in sparse_a \
-                    or pfx == 'b' and d.name in sparse_b \
-                    or pfx == 'c' and d.name in sparse_c:
+                    if pfx == 'a' and d in sparse_a \
+                    or pfx == 'b' and d in sparse_b \
+                    or pfx == 'c' and d in sparse_c:
                         src += f"    int {pfx}r{d}[{tile}] = r{d};\n"
-                    elif d.name in sparse_a + sparse_b + sparse_c:
-                        src += f"    int {pfx}r{d}[{tile}] = off_{d} * BLOCK{d.name.upper()} + r{d};\n"
+                    elif d in sparse_a + sparse_b + sparse_c:
+                        src += f"    int {pfx}r{d}[{tile}] = off_{d} * BLOCK{d.upper()} + r{d};\n"
+                    elif set(axes) & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
+                        src += f"    int {pfx}r{d}[{tile}] = off_{d};\n"
                     else:
                         src += f"    int {pfx}r{d}[{tile}] = r{d};\n"
 
@@ -478,7 +479,7 @@ __global__ void {name}(
         offsets[1:] = torch.cumsum(depth[:-1], 0)
         # compute delta for b
         # TODO: support multiple sparse red indices
-        col = next((i for i, d in enumerate(symbols) if d in axes), None)
+        col = next((i for i, d in enumerate(sparse)), None)
         delta_b = torch.narrow(layout.nonzero(), 1, col, 1).reshape(-1).contiguous()
         delta_b *= blocks[sparse[-1].upper()]
         # compute delta for a
@@ -750,7 +751,7 @@ __global__ void {name}(
             M = reduce(mul, dim_m, 1)
             N = reduce(mul, dim_n, 1)
             K = reduce(mul, dim_k, 1)
-            B = reduce(mul, dim_b, 1)
+            B = reduce(mul, [dims[d] for d in axes_b if d.name.upper() not in einsum], 1)
             stride_a = list(stride_a[:-1])
             stride_b = list(stride_b[:-1])
             stride_c = list(stride_c[:-1])
