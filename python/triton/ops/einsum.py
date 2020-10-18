@@ -69,6 +69,7 @@ class _einsum(torch.autograd.Function):
         outer_sparse_b = [x for x in expr_b if x in sparse_b and x not in axes_k]
         outer_dense_b = [x for x in expr_b if x not in sparse_b and x not in axes_k] 
 
+
         src = ""
 
         if use_lut_a and lut_mode_a == _einsum.LUT_MODE.CONSTANT:
@@ -197,6 +198,7 @@ __global__ void {name}(
     // create ranges
 """
 
+        sparse = sparse_a + sparse_b + sparse_c
         for axes, tile, off, prefixes in zip([axes_m, axes_n, axes_b, axes_k],
                                              ['TM', 'TN', 'TB', 'TK'],
                                              ['off_m*TM', 'off_n*TN', 'off_b*TB', 'off_k'],
@@ -204,7 +206,8 @@ __global__ void {name}(
             if not axes:
                 continue
             currs = ''.join(map(str,axes))
-            if {x for x in axes} & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
+            has_sparse_component = set(axes) & set(sparse)
+            if has_sparse_component:
                 src += f"    int r{currs}[{tile}] = 0 ... {tile};\n"
                 src += _einsum.unpack_cc(tile, axes, f'r', False) 
             else:
@@ -212,17 +215,16 @@ __global__ void {name}(
                 src += _einsum.unpack_cc(tile, axes, f'r', False) 
             for pfx in prefixes:
                 for d in axes:
-                    if pfx == 'a' and d in sparse_a \
-                    or pfx == 'b' and d in sparse_b \
-                    or pfx == 'c' and d in sparse_c:
-                        src += f"    int {pfx}r{d}[{tile}] = r{d};\n"
-                    elif d in sparse_a + sparse_b + sparse_c:
+                    is_dense_dim = d not in sparse
+                    is_dense_storage = (pfx == 'a' and not sparse_a) or\
+                                       (pfx == 'b' and not sparse_b) or\
+                                       (pfx == 'c' and not sparse_c)
+                    if not is_dense_dim and is_dense_storage:
                         src += f"    int {pfx}r{d}[{tile}] = off_{d} * BLOCK{d.upper()} + r{d};\n"
-                    elif {x for x in axes} & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
+                    elif is_dense_dim and has_sparse_component:
                         src += f"    int {pfx}r{d}[{tile}] = off_{d};\n"
                     else:
                         src += f"    int {pfx}r{d}[{tile}] = r{d};\n"
-
 
         src += f"""    
     // initialize pointers to A
@@ -321,13 +323,15 @@ __global__ void {name}(
     float acc[TM, TN, TB] = 0;
     for(int k = matmul_k; k > 0; k -= TK) {{
         acc += a @ b;
-
+        
+        // load inputs
         checkk = k > TK;
         checka = checkam[:, newaxis, newaxis] && checkk[newaxis, :, newaxis];
         checkb = checkk[:, newaxis, newaxis] && checkbn[newaxis, :, newaxis];
         a = *?(checka)pa;
-        b = *?(checkb)pb;"""
-
+        b = *?(checkb)pb;
+        
+        // update pointers"""
         if sparse_a:
             src += """
         pdelta += 2;
