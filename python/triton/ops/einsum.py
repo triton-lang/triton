@@ -407,7 +407,7 @@ __global__ void {name}(
         print(src)
         # compilation options
         TM, TN, TB, TZ = [32], [32], 1, [1]
-        TK = 16 if dtype==torch.float16 else 32
+        TK = 16 if dtype==torch.float16 else 8
         defines =  {'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
         for d, B in blocks.items():
             defines[f'BLOCK{d}'] = B
@@ -454,7 +454,6 @@ __global__ void {name}(
     
         
     def make_dsd_delta(axes, step, stride, dims, symbols, arrays, sparse, layout, blocks):
-        axes = [x for x in axes]
         # depth of reductions
         depth = layout.sum(*[i for i, d in enumerate(sparse) if d in axes])
         # outer dimension indices
@@ -467,22 +466,37 @@ __global__ void {name}(
         # compute delta for b
         # TODO: support multiple sparse red indices
         col = next((i for i, d in enumerate(sparse) if d in axes), None)
+        block = blocks[sparse[-1].upper()]
+        div = block // step
         delta_b = torch.narrow(layout.nonzero(), 1, col, 1).reshape(-1).contiguous()
-        delta_b *= blocks[sparse[-1].upper()]
+        delta_b *= block
+        delta_b = [delta_b + step*i for i in range(div)]
+        delta_b = torch.stack(delta_b, dim=1)
+        delta_b = delta_b.view(-1)
         # compute delta for a
+        bstride = 1
+        for d in sparse[::-1]:
+            if d in axes:
+                break
+            bstride *= blocks[d]
         idx = [i for i, d in enumerate(sparse[::-1]) if d in axes] +\
               [i for i, d in enumerate(sparse[::-1]) if d not in axes]
         layout = layout.clone()
         layout[layout > 0] = 1 + torch.arange(layout.sum(), device=layout.device)
         layout = layout.permute(*idx)
         delta_a = layout[layout > 0] - 1
+        delta_a *= np.prod(list(blocks.values()))
         saved = delta_a[offsets]
         delta_a[1:] = delta_a[1:] - delta_a[:-1]
-        delta_a[offsets] = saved
-        delta_a *= np.prod(list(blocks.values()))
+        delta_a = delta_a.view(-1, 1).repeat(1, div)
+        delta_a[:, 1:] = step*bstride
+        delta_a[:, 0] -= (div - 1)*step*bstride
+        delta_a[offsets, 0] = saved
+        delta_a = delta_a.view(-1)
         delta = torch.stack((delta_a, delta_b), dim=1).view(-1).contiguous()
         # form look-up table
         depth *= blocks[symbols[-1].upper()]
+        offsets *= div
         header = torch.stack((offsets, depth, *outer), dim=1).view(-1).contiguous()
         nouter = 2 + len(outer)
         header[::nouter] = header[::nouter]*2 + header.shape[0]
