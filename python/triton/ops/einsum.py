@@ -24,34 +24,13 @@ class _einsum(torch.autograd.Function):
     ## Triton-C code generation
     #############################
     def print_cc(expr, axes_0, axes_1, axes_2, prefix):
-
-        class TritonCodePrinter(C89CodePrinter):
-            
-            def __init__(self, axes_0, axes_1, axes_2, prefix):
-                super(TritonCodePrinter, self).__init__()
-                self.axes_0 = axes_0
-                self.axes_1 = axes_1
-                self.axes_2 = axes_2
-                self.prefix = prefix
-
-            def _print_Symbol(self, expr):
-                name = super(C89CodePrinter, self)._print_Symbol(expr)
-                pfx  = self.prefix
-                if expr in self.axes_0:
-                    return f'{pfx}r{name}[:, newaxis, newaxis]'
-                if expr in self.axes_1:
-                    return f'{pfx}r{name}[newaxis, :, newaxis]'
-                if expr in self.axes_2:
-                    return f'{pfx}r{name}[newaxis, newaxis, :]'
-                return name
-
-            def _print_Indexed(self, expr):
-                assert len(expr.indices) == 1
-                return "*(%s + %s)" % (self._print(expr.base.label),
-                                    self._print(expr.indices[0]))
-        
-        return TritonCodePrinter(axes_0, axes_1, axes_2, prefix).doprint(expr)
-
+        if expr in axes_0:
+            return f'{prefix}r{expr}[:, newaxis, newaxis]'
+        if expr in axes_1:
+            return f'{prefix}r{expr}[newaxis, :, newaxis]'
+        if expr in axes_2:
+            return f'{prefix}r{expr}[newaxis, newaxis, :]'
+        return expr
 
     def unpack_cc(tile, axes, prefix, remat):
         ret = ''
@@ -62,7 +41,7 @@ class _einsum(torch.autograd.Function):
             currs = ''.join(axes[: len(axes) - i])
             nexts = ''.join(axes[: len(axes) - (i + 1)])
             ty = '' if remat else 'int '
-            sz = '' if remat else f'[{tile}]'
+            sz = '' if remat or tile is None else f'[{tile}]'
             ret += f'    {ty}{prefix}{nexts}{sz} = r{currs} / dim_{d};\n'
             ret += f'    {ty}{prefix}{d}{sz} = r{currs} % dim_{d};\n'
         return ret
@@ -85,8 +64,10 @@ class _einsum(torch.autograd.Function):
         use_lut_a = True
         use_lut_b = True
 
-        outer_sparse_a = [x for x in expr_a if x.name in sparse_a and x not in axes_k] 
-        outer_sparse_b = [x for x in expr_b if x.name in sparse_b and x not in axes_k]
+        outer_sparse_a = [x for x in expr_a if x in sparse_a and x not in axes_k] 
+        outer_dense_a = [x for x in expr_a if x not in sparse_a and x not in axes_k] 
+        outer_sparse_b = [x for x in expr_b if x in sparse_b and x not in axes_k]
+        outer_dense_b = [x for x in expr_b if x not in sparse_b and x not in axes_k] 
 
         src = ""
 
@@ -117,7 +98,7 @@ __global__ void {name}(
                                          [multipleof_a, multipleof_b, multipleof_c],
                                          [sparse_a, sparse_b, sparse_c]):
             for d in range(len(dim) - 1):
-                if sparse and dim[d].name == sparse[0]:
+                if sparse and dim[d] == sparse[0]:
                   src += f', int stride_{name}_block __multipleof({mult})'
                 src += f", int stride_{name}_{d} __multipleof({mult})"
             src += "\n            "
@@ -149,35 +130,39 @@ __global__ void {name}(
     int pid_0 = get_program_id(0);
     int pid_1 = get_program_id(1);
 
-    pid_1 = pid_0 / width;
-    pid_0 = pid_0 % width;
 """
         if sparse_a:
             src += f"""
-    int* header = AD + pid_0 * {2 + len(outer_sparse_a)};
+    int off_n = pid_0 / width;
+    int off_header = pid_0 % width;
+    int* header = AD + off_header * {2 + len(outer_sparse_a)};
     int* pdelta = AD + *(header + 0);
     matmul_k  = *(header + 1);"""
             for i, d in enumerate(outer_sparse_a):
                 src += f"""
     int off_{d} = *(header + {2 + i});"""
-            src += """
-    int off_n = pid_1;
+            src += f"""
     int inca  = *(pdelta + 0);
     int incb  = *(pdelta + 1);
+    int off_{''.join(map(str, outer_dense_a))} = pid_1;
 """
+            _einsum.unpack_cc(None, outer_dense_a, "off_", False)
         elif sparse_b:
             src += f"""
-    int* header = BD + pid_0 * 3;
+    int off_m = pid_0 / width;
+    int off_header = pid_0 % width;
+    int* header = BD + off_header * {2 + len(outer_sparse_b)};
     int* pdelta = BD + *(header + 0);
     matmul_k  = *(header + 1);"""
             for i, d in enumerate(outer_sparse_b):
                 src += f"""
     int off_{d} = *(header + {2 + i});"""
             src += f"""
-    int off_m = pid_1;
     int incb  = *(pdelta + 0);
     int inca  = *(pdelta + 1);
+    int off_{''.join(map(str, outer_dense_b))} = pid_1;
 """
+            _einsum.unpack_cc(None, outer_dense_b, "off_", False)
         elif sparse_c:
             src += f"""
     // load LUT header
@@ -192,12 +177,10 @@ __global__ void {name}(
     int grid_n = (matmul_n + TN - 1) / TN;
     int off_mn = pid_0 / div_m;
     int off_n = off_mn % grid_n;
-    int off_m = (off_mn / grid_n)*div_m + (pid_0 % div_m);"""
+    int off_m = (off_mn / grid_n)*div_m + (pid_0 % div_m);
+    int off_b = get_program_id(1);"""
 
         src += """
-    // get batch program id
-    int off_b = get_program_id(1);
-
 #if TZ == 1
     int off_k = 0;
 #else
@@ -221,7 +204,7 @@ __global__ void {name}(
             if not axes:
                 continue
             currs = ''.join(map(str,axes))
-            if {x.name for x in axes} & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
+            if {x for x in axes} & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
                 src += f"    int r{currs}[{tile}] = 0 ... {tile};\n"
                 src += _einsum.unpack_cc(tile, axes, f'r', False) 
             else:
@@ -229,13 +212,13 @@ __global__ void {name}(
                 src += _einsum.unpack_cc(tile, axes, f'r', False) 
             for pfx in prefixes:
                 for d in axes:
-                    if pfx == 'a' and d.name in sparse_a \
-                    or pfx == 'b' and d.name in sparse_b \
-                    or pfx == 'c' and d.name in sparse_c:
+                    if pfx == 'a' and d in sparse_a \
+                    or pfx == 'b' and d in sparse_b \
+                    or pfx == 'c' and d in sparse_c:
                         src += f"    int {pfx}r{d}[{tile}] = r{d};\n"
-                    elif d.name in sparse_a + sparse_b + sparse_c:
-                        src += f"    int {pfx}r{d}[{tile}] = off_{d} * BLOCK{d.name.upper()} + r{d};\n"
-                    elif {x.name for x in axes} & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
+                    elif d in sparse_a + sparse_b + sparse_c:
+                        src += f"    int {pfx}r{d}[{tile}] = off_{d} * BLOCK{d.upper()} + r{d};\n"
+                    elif {x for x in axes} & (set(sparse_a) | set(sparse_b) | set(sparse_c)):
                         src += f"    int {pfx}r{d}[{tile}] = off_{d};\n"
                     else:
                         src += f"    int {pfx}r{d}[{tile}] = r{d};\n"
@@ -467,8 +450,7 @@ __global__ void {name}(
     
         
     def make_dsd_delta(axes, step, stride, dims, symbols, arrays, sparse, layout, blocks):
-        symbols = [x.name for x in symbols]
-        axes = [x.name for x in axes]
+        axes = [x for x in axes]
         # depth of reductions
         depth = layout.sum(*[i for i, d in enumerate(sparse) if d in axes])
         # outer dimension indices
@@ -505,6 +487,7 @@ __global__ void {name}(
 
     def make_delta(axes, step, stride, dims, symbols, arrays, sparse, layout, lut = None, nouter = None):
         # symbolic pointer increments
+        symbols = [sp.symbols(x) for x in symbols]
         delta = _einsum.symbolic_delta(symbols, axes)
         args =  [f'stride{d}' for d in range(len(stride))]
         args += [f'{sk}' for sk in axes]
@@ -554,9 +537,9 @@ __global__ void {name}(
 
     def parse_axes(expr_a, expr_b, expr_c, subscripted):
         is_index = lambda x: type(x) == sp.indexed.Indexed or str(x) in subscripted
-        sym_a = [x for s in expr_a for x in s.free_symbols if not is_index(x)]
-        sym_b = [x for s in expr_b for x in s.free_symbols if not is_index(x)]
-        sym_c = [x for s in expr_c for x in s.free_symbols]
+        sym_a = [x for s in expr_a for x in s if not is_index(x)]
+        sym_b = [x for s in expr_b for x in s if not is_index(x)]
+        sym_c = [x for s in expr_c for x in s]
         batch = [d for d in sym_a if d in sym_b and d in sym_c]
         outer = [d for d in sym_a if d not in sym_b and d in sym_c]
         inner = [d for d in sym_a if d in sym_b and d not in sym_c]
@@ -589,7 +572,7 @@ __global__ void {name}(
             else:
                 if d.isupper():
                   sparse += [d.lower()]
-                sym.append(parse_expr(d.lower()))
+                sym.append(d.lower())
                 i += 1
         return sym, sparse
   
@@ -678,14 +661,14 @@ __global__ void {name}(
             if sparse_c and layout_c is None:
                 raise ValueError('C is sparse but not layout provided')
             # check dimensions
-            dims_a  = dict([(x, y) for x,y in zip(sym_a, shape_a) if x.name not in sparse_a])
-            dims_b  = dict([(x, y) for x,y in zip(sym_b, shape_b) if x.name not in sparse_b])
-            dims_c  = dict([(x, y) for x,y in zip(sym_c, shape_c) if x.name not in sparse_c])
+            dims_a  = dict([(x, y) for x,y in zip(sym_a, shape_a) if x not in sparse_a])
+            dims_b  = dict([(x, y) for x,y in zip(sym_b, shape_b) if x not in sparse_b])
+            dims_c  = dict([(x, y) for x,y in zip(sym_c, shape_c) if x not in sparse_c])
             dims_La = None if layout_a is None else dict(zip([x for x in expr_a if x.isupper()], layout_a.shape))
             dims_Lb = None if layout_b is None else dict(zip([x for x in expr_b if x.isupper()], layout_b.shape))
             dims_Lc = None if layout_c is None else dict(zip([x for x in expr_c if x.isupper()], layout_c.shape))
             # TODO: could be cleaner
-            read_shape = lambda d, dimsT, dimsL, sparse: dimsL[d.name.upper()] * blocks[d.name.upper()] if d.name in sparse else dimsT[d]
+            read_shape = lambda d, dimsT, dimsL, sparse: dimsL[d.upper()] * blocks[d.upper()] if d in sparse else dimsT[d]
             for d in axes_b + axes_m + axes_n + axes_k:
                 dim_a = read_shape(d, dims_a, dims_La, sparse_a) if d in sym_a else None
                 dim_b = read_shape(d, dims_b, dims_Lb, sparse_b) if d in sym_b else None
@@ -752,7 +735,7 @@ __global__ void {name}(
             M = reduce(mul, dim_m, 1)
             N = reduce(mul, dim_n, 1)
             K = reduce(mul, dim_k, 1)
-            B = reduce(mul, [dims[d] for d in axes_b if d.name.upper() not in einsum], 1)
+            B = reduce(mul, [dims[d] for d in axes_b if d.upper() not in einsum], 1)
             stride_a = list(stride_a[:-1])
             stride_b = list(stride_b[:-1])
             stride_c = list(stride_c[:-1])
@@ -815,7 +798,6 @@ __global__ void {name}(
             self.matmul_M = M
             self.matmul_N = N
             self.matmul_K = K
-            self.is_extended = any([not x.is_symbol for x in sym_a + sym_b])
 
                     
         def run(self, a, b, c, values, bench):
@@ -853,7 +835,6 @@ __global__ void {name}(
         perf = instance.run(a, b, c, values, bench)
         ctx.mark_dirty(c)
         # save information in context
-        ctx.is_extended = instance.is_extended
         ctx.expr_a = instance.expr_a
         ctx.expr_b = instance.expr_b
         ctx.expr_c = instance.expr_c
@@ -873,9 +854,6 @@ __global__ void {name}(
 
     @staticmethod
     def backward(ctx, dy):
-        if ctx.is_extended:
-            raise NotImplementedError('Automatic differentiation for extended einsum not yet implemented;'
-                                      ' print write your own autograd function')
         a, b = ctx.saved_tensors
         expr_a = ctx.expr_a
         expr_b = ctx.expr_b

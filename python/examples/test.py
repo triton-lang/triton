@@ -49,8 +49,6 @@ def test_expr(expr, shape, blocks):
     ref_a = torch.rand(*shape_a, device='cuda')
     ref_b = torch.rand(*shape_b, device='cuda')
     ref_c = torch.zeros(*shape_c, device='cuda')
-    #ref_a[:] = 1
-    #ref_b[:] = 1
     # layouts
     layout_a = [shape[d.lower()]//blocks[d] for d in expr_a if d.isupper()]
     layout_b = [shape[d.lower()]//blocks[d] for d in expr_b if d.isupper()]
