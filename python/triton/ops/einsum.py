@@ -410,7 +410,7 @@ __global__ void {name}(
         #print(src)
         # compilation options
         TM, TN, TB, TZ = [32], [32], 1, [1]
-        TK = 16 if dtype==torch.float16 else 32
+        TK = 16 if dtype==torch.float16 else 8
         defines =  {'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
         for d, B in blocks.items():
             defines[f'BLOCK{d}'] = B
@@ -712,7 +712,7 @@ __global__ void {name}(
             dims.update(dims_b)
             dims.update(dims_c)
             # look-up tables
-            TK = 16 if dtype == torch.float16 else 32
+            TK = 16 if dtype == torch.float16 else 8
             arrays = [(x, arrays[x]) for x in subscripted]
             if sparse_a and not sparse_b:
                 delta_a, nouter, lut_mode_a = _einsum.make_dsd_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, blocks)
