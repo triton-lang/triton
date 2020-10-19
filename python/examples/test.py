@@ -62,10 +62,6 @@ def to_dense(expr, data, layout, shape, block):
         blockid += 1
     return ret
 
-
-
-
-
 def test_expr(expr, shape, blocks):
     # decompose expr
     expr_a, expr_bc = expr.split(",")
@@ -91,8 +87,7 @@ def test_expr(expr, shape, blocks):
     # triton computation
     triton_a = to_sparse(expr_a, ref_a, layout_a, shape_a, blocks) if sparse_a else ref_a
     triton_b = to_sparse(expr_b, ref_b, layout_b, shape_b, blocks) if sparse_b else ref_b
-    triton_c = to_sparse(expr_c, ref_c, layout_c, shape_c, blocks) if sparse_c else ref_c
-    triton.ops.einsum(expr, triton_a, triton_b, triton_c, layout_a, layout_b, layout_c, blocks)
+    triton_c = triton.ops.einsum(expr, triton_a, triton_b, layout_a, layout_b, layout_c, blocks)
     torch.cuda.synchronize()
     # reference computation
     ref_a = to_dense(expr_a, triton_a, layout_a, shape_a, blocks) if sparse_a else ref_a
@@ -101,8 +96,6 @@ def test_expr(expr, shape, blocks):
     if sparse_c:
         ref_c = to_sparse(expr_c, ref_c, layout_c, shape_c, blocks)
     torch.cuda.synchronize()
-    #print(ref_c)
-    #print(triton_c)
     print((ref_c - triton_c).abs().max())
 
 

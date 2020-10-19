@@ -659,7 +659,7 @@ __global__ void {name}(
             return estimates[0][0]
         
         
-        def __init__(self, einsum, dtype, stride_a, stride_b, stride_c, shape_a, shape_b, shape_c, layout_a, layout_b, layout_c, blocks, arrays, varnames):
+        def __init__(self, einsum, dtype, stride_a, stride_b, shape_a, shape_b, layout_a, layout_b, layout_c, blocks, arrays, varnames):
             # parse symbols
             expr_a, expr_bc = einsum.split(",")
             expr_b, expr_c  = expr_bc.split("->")
@@ -687,30 +687,25 @@ __global__ void {name}(
             if sparse_c and layout_c is None:
                 raise ValueError('C is sparse but not layout provided')
             # check dimensions
-            dims_a  = dict([(x, y) for x,y in zip(sym_a, shape_a) if x not in sparse_a])
-            dims_b  = dict([(x, y) for x,y in zip(sym_b, shape_b) if x not in sparse_b])
-            dims_c  = dict([(x, y) for x,y in zip(sym_c, shape_c) if x not in sparse_c])
+            dims_a  = dict([(x, y) for x,y in zip(sym_a, shape_a)])
+            dims_b  = dict([(x, y) for x,y in zip(sym_b, shape_b)])
             dims_La = None if layout_a is None else dict(zip([x for x in expr_a if x.isupper()], layout_a.shape))
             dims_Lb = None if layout_b is None else dict(zip([x for x in expr_b if x.isupper()], layout_b.shape))
-            dims_Lc = None if layout_c is None else dict(zip([x for x in expr_c if x.isupper()], layout_c.shape))
             # TODO: could be cleaner
             read_shape = lambda d, dimsT, dimsL, sparse: dimsL[d.upper()] * blocks[d.upper()] if d in sparse else dimsT[d]
             for d in axes_b + axes_m + axes_n + axes_k:
                 dim_a = read_shape(d, dims_a, dims_La, sparse_a) if d in sym_a else None
                 dim_b = read_shape(d, dims_b, dims_Lb, sparse_b) if d in sym_b else None
-                dim_c = read_shape(d, dims_c, dims_Lc, sparse_c) if d in sym_c else None
-                if d in axes_b and dim_a and dim_b and dim_c and dim_a != dim_b and dim_a != dim_c:
-                    raise ValueError(f'incomparible batch dimension {d} (A: {dim_a}, B: {dim_b}, C: {dim_c})')
-                if d in axes_m and dim_a and dim_c and dim_a != dim_c:
-                    raise ValueError(f'incompatible outer dimension {d} (A: {dim_a}, C: {dim_c})')
-                if d in axes_n and dim_b and dim_c and dim_b != dim_c:
-                    raise ValueError(f'incompatible outer dimension {d} (B: {dim_b}, C: {dim_c})')
+                if d in axes_b and dim_a and dim_b and dim_a != dim_b:
+                    raise ValueError(f'incomparible batch dimension {d} (A: {dim_a}, B: {dim_b})')
                 if d in axes_k and dim_a and dim_b and dim_a != dim_b:
                     raise ValueError(f'incompatible inner dimension {d} (A: {dim_a}, B: {dim_b})')
             dims = dict()
             dims.update(dims_a)
             dims.update(dims_b)
-            dims.update(dims_c)
+            # allocate output
+            shape_c = [dims[d] for d in sym_c]
+            stride_c = np.cumprod(shape_c[::-1])[::-1]
             # look-up tables
             TK = 16 if dtype == torch.float16 else 8
             arrays = [(x, arrays[x]) for x in subscripted]
@@ -824,15 +819,19 @@ __global__ void {name}(
             self.matmul_M = M
             self.matmul_N = N
             self.matmul_K = K
+            # output shape
+            self.shape_c = shape_c
 
                     
-        def run(self, a, b, c, values, bench):
+        def run(self, a, b, values, bench):
+            c = torch.empty(*self.shape_c, dtype = a.dtype, device = a.device)
             self.args[self.pos_a] = a
             self.args[self.pos_b] = b
             self.args[self.pos_c] = c
             for i, name in enumerate(self.varnames):
                 self.args[self.pos_vars + i] = values[name]
-            return self.kernel(*self.args, grid=self.grid, bench=bench)
+            self.kernel(*self.args, grid=self.grid, bench=bench)
+            return c
 
 
 
@@ -844,22 +843,22 @@ __global__ void {name}(
     instance_cache = dict()
     registry = dict()
     @staticmethod
-    def forward(ctx, expr, a, b, c, layout_a, layout_b, layout_c, blocks, arrays, bench, values):
+    def forward(ctx, expr, a, b, layout_a, layout_b, layout_c, blocks, arrays, bench, values):
         # compile einsum instance
         cache = _einsum.instance_cache
         key = (expr, a.dtype, 
-               a.stride(), b.stride(), c.stride(), 
-               a.shape   , b.shape   , c.shape)
+               a.stride(), b.stride(),
+               a.shape   , b.shape)
         if key not in cache:
             cache[key] = _einsum.instance(expr, a.dtype, 
-                                          a.stride(), b.stride(), c.stride(),
-                                          a.shape   , b.shape   , c.shape   ,
+                                          a.stride(), b.stride(),
+                                          a.shape   , b.shape   ,
                                           layout_a  , layout_b  , layout_c  , blocks,
                                           arrays    , values.keys())
         instance = cache[key]
         # run and mark as dirty c modified in-place
-        perf = instance.run(a, b, c, values, bench)
-        ctx.mark_dirty(c)
+        c = instance.run(a, b, values, bench)
+        print(c)
         # save information in context
         ctx.expr_a = instance.expr_a
         ctx.expr_b = instance.expr_b
@@ -868,9 +867,7 @@ __global__ void {name}(
         ctx.matmul_M = instance.matmul_M
         ctx.matmul_N = instance.matmul_N
         ctx.matmul_K = instance.matmul_K
-        ctx.forward_ms = perf
         ctx.save_for_backward(a, b)
-        _einsum.registry[id(c)] = ctx
         return c
 
 
@@ -897,7 +894,7 @@ __global__ void {name}(
         return None, da, db, None, None, None, None, None
 
 
-def einsum(expr, a, b, c, 
+def einsum(expr, a, b,
            layout_a = None, layout_b = None, layout_c = None, blocks = dict(),
            arrays = dict(), bench = False, values = dict()):
-    return _einsum.apply(expr, a, b, c, layout_a, layout_b, layout_c, blocks, arrays, bench, values)
+    return _einsum.apply(expr, a, b, layout_a, layout_b, layout_c, blocks, arrays, bench, values)
