@@ -68,6 +68,7 @@ class _einsum(torch.autograd.Function):
         outer_dense_a = [x for x in expr_a if x not in sparse_a and x not in axes_k] 
         outer_sparse_b = [x for x in expr_b if x in sparse_b and x not in axes_k]
         outer_dense_b = [x for x in expr_b if x not in sparse_b and x not in axes_k] 
+        outer_dense_c = [x for x in expr_c if x not in sparse_c and x not in axes_k] 
 
 
         src = ""
@@ -170,7 +171,9 @@ __global__ void {name}(
     int *header  = CD + pid_0 * {len(sparse_c)};"""
             for i, d in enumerate(sparse_c):
                 src += f"""
-    int pid_{d}  = *(header + {i});"""
+    int off_{d}  = *(header + {i});"""
+            src += f"""
+    int off_{''.join(map(str, outer_dense_c))} = pid_1;"""
         else:
             src += """
     // re-order outer program ids
@@ -404,10 +407,10 @@ __global__ void {name}(
 #endif
 }
 """
-        print(src)
+        #print(src)
         # compilation options
         TM, TN, TB, TZ = [32], [32], 1, [1]
-        TK = 16 if dtype==torch.float16 else 8
+        TK = 16 if dtype==torch.float16 else 32
         defines =  {'TM': TM, 'TN': TN, 'TB': TB, 'TK': TK, 'TZ': TZ, 'TYPE': dtype}
         for d, B in blocks.items():
             defines[f'BLOCK{d}'] = B
@@ -468,7 +471,7 @@ __global__ void {name}(
         col = next((i for i, d in enumerate(sparse) if d in axes), None)
         block = blocks[sparse[-1].upper()]
         div = block // step
-        delta_b = torch.narrow(layout.nonzero(), 1, col, 1).reshape(-1).contiguous()
+        delta_b = layout.transpose(-1, col).nonzero()[:, -1].reshape(-1).contiguous()
         delta_b *= block
         delta_b = [delta_b + step*i for i in range(div)]
         delta_b = torch.stack(delta_b, dim=1)
@@ -478,10 +481,11 @@ __global__ void {name}(
         for d in sparse[::-1]:
             if d in axes:
                 break
-            bstride *= blocks[d]
-        idx = [i for i, d in enumerate(sparse[::-1]) if d in axes] +\
-              [i for i, d in enumerate(sparse[::-1]) if d not in axes]
-        layout = layout.clone()
+            bstride *= blocks[d.upper()]
+        order = [d for d in sparse if d not in axes] +\
+                [d for d in sparse if d in axes]
+        idx = [sparse.index(d) for d in order]
+        #layout = layout.clone().transpose(-1, col)
         layout[layout > 0] = 1 + torch.arange(layout.sum(), device=layout.device)
         layout = layout.permute(*idx)
         delta_a = layout[layout > 0] - 1
@@ -537,6 +541,10 @@ __global__ void {name}(
         args += [nextoff[sk] for sk in axes]
         args += [x for _, x in arrays]
         delta = fn(*args)
+        delta = np.maximum(delta, 0)
+        #print(k, nextk, lut)
+        #print(args)
+        #exit()
         if lut is not None:
             idx   = idx[1:] + np.arange(idx.shape[0] - 1)
             delta = np.delete(delta, idx)
@@ -704,7 +712,7 @@ __global__ void {name}(
             dims.update(dims_b)
             dims.update(dims_c)
             # look-up tables
-            TK = 16 if dtype == torch.float16 else 8
+            TK = 16 if dtype == torch.float16 else 32
             arrays = [(x, arrays[x]) for x in subscripted]
             if sparse_a and not sparse_b:
                 delta_a, nouter, lut_mode_a = _einsum.make_dsd_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, blocks)
@@ -794,7 +802,7 @@ __global__ void {name}(
                 self.grid = lambda opt: [width*triton.cdiv(M, opt.d('TM')), B, opt.d('TZ')]
             elif sparse_c:
                 width = int(layout_c.sum())
-                self.grid = lambda opt: [width, 1, opt.d('TZ')]
+                self.grid = lambda opt: [width, B, opt.d('TZ')]
             else:
                 self.grid = lambda opt: [triton.cdiv(M, opt.d('TM')) * 
                                          triton.cdiv(N, opt.d('TN')),

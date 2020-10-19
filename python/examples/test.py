@@ -66,16 +66,18 @@ def test_expr(expr, shape, blocks):
     torch.cuda.synchronize()
     # reference computation
     ref_c = torch.einsum(expr.lower(), ref_a, ref_b)
+    if sparse_c:
+        ref_c = to_sparse(expr_c, ref_c, layout_c, shape_c, blocks)
     torch.cuda.synchronize()
-    print(ref_c)
-    print(triton_c)
+    #print(ref_c)
+    #print(triton_c)
     print((ref_c - triton_c).abs().max())
 
 
 
 
 # shape characteristics
-B, H, M, N, K = 2, 2, 256, 256, 256
-BH, BM, BK = 1, 32, 32
-test_expr('bHMK,bhkn->bhmn', {'b': B, 'h': H, 'm': M, 'k': K, 'n': N}, {'H': BH, 'M': BM, 'K': BK})
+test_expr('bHMK,bhkn->bhmn', {'b': 2, 'h': 2, 'm': 64, 'k': 64, 'n': 64}, {'H': 1, 'M': 32, 'K': 32})
+test_expr('bhmk,bHKN->bhmn', {'b': 2, 'h': 2, 'm': 64, 'k': 64, 'n': 64}, {'H': 1, 'K': 32, 'N': 32})
+test_expr('bhmk,bhkn->bHMN', {'b': 2, 'h': 2, 'm': 64, 'k': 64, 'n': 64}, {'H': 1, 'M': 32, 'N': 32})
 
