@@ -59,7 +59,7 @@ class _einsum(torch.autograd.Function):
                     stride_a_last, stride_b_last, stride_c_last,
                     lut_mode_a, lut_mode_b,
                     delta_a, delta_b,
-                    blocks, subscripted, varnames):
+                    blocks):
 
         use_lut_a = True
         use_lut_b = True
@@ -120,11 +120,6 @@ __global__ void {name}(
             src += ", int* CD"
         if sparse_a or sparse_b:
             src += ", int width"
-        src += "\n            "
-        for ptr in subscripted:
-            src += f", int* {ptr}"
-        for name in varnames:
-            src += f", int {name}"
         src += """) {
 
 
@@ -456,7 +451,7 @@ __global__ void {name}(
         return ret
     
         
-    def make_dsd_delta(axes, step, stride, dims, symbols, arrays, sparse, layout, blocks):
+    def make_dsd_delta(axes, step, stride, dims, symbols, sparse, layout, blocks):
         # depth of reductions
         depth = layout.sum(*[i for i, d in enumerate(sparse) if d in axes])
         # outer dimension indices
@@ -507,14 +502,13 @@ __global__ void {name}(
         lut = torch.cat((header, delta)).int().int().cpu().numpy()
         return lut, nouter, _einsum.LUT_MODE.DRAM
 
-    def make_delta(axes, step, stride, dims, symbols, arrays, sparse, layout, lut = None, nouter = None):
+    def make_delta(axes, step, stride, dims, symbols, sparse, layout, lut = None, nouter = None):
         # symbolic pointer increments
         symbols = [sp.symbols(x) for x in symbols]
         delta = _einsum.symbolic_delta(symbols, axes)
         args =  [f'stride{d}' for d in range(len(stride))]
         args += [f'{sk}' for sk in axes]
         args += [f'next{sk}' for sk in axes]
-        args += [f'{sk}' for sk, _ in arrays]
         fn = sp.lambdify(args, delta, 'numpy')
         if lut is None:
             # inner axes values
@@ -539,7 +533,6 @@ __global__ void {name}(
         args  = [s for s in stride]
         args += [off[sk] for sk in axes]
         args += [nextoff[sk] for sk in axes]
-        args += [x for _, x in arrays]
         delta = fn(*args)
         delta = np.maximum(delta, 0)
         #print(k, nextk, lut)
@@ -561,10 +554,9 @@ __global__ void {name}(
         seen_add = seen.add
         return [x for x in seq if not (x in seen or seen_add(x))]
 
-    def parse_axes(expr_a, expr_b, expr_c, subscripted):
-        is_index = lambda x: type(x) == sp.indexed.Indexed or str(x) in subscripted
-        sym_a = [x for s in expr_a for x in s if not is_index(x)]
-        sym_b = [x for s in expr_b for x in s if not is_index(x)]
+    def parse_axes(expr_a, expr_b, expr_c):
+        sym_a = [x for s in expr_a for x in s]
+        sym_b = [x for s in expr_b for x in s]
         sym_c = [x for s in expr_c for x in s]
         batch = [d for d in sym_a if d in sym_b and d in sym_c]
         outer = [d for d in sym_a if d not in sym_b and d in sym_c]
@@ -582,7 +574,7 @@ __global__ void {name}(
         return expr
 
 
-    def parse_expr(expr, arrays):
+    def parse_expr(expr):
         # extract symbols
         sym = []
         sparse = []
@@ -592,7 +584,6 @@ __global__ void {name}(
             if d == '(':
                 size = expr[i:].find(')')
                 d = expr[i : i + size + 1]
-                d = _einsum.replace_subscript(d, arrays)
                 sym.append(parse_expr(d))
                 i += size + 1
             else:
@@ -659,22 +650,17 @@ __global__ void {name}(
             return estimates[0][0]
         
         
-        def __init__(self, einsum, dtype, stride_a, stride_b, shape_a, shape_b, layout_a, layout_b, layout_c, blocks, arrays, varnames):
+        def __init__(self, einsum, dtype, stride_a, stride_b, shape_a, shape_b, layout_a, layout_b, layout_c, blocks):
             # parse symbols
             expr_a, expr_bc = einsum.split(",")
             expr_b, expr_c  = expr_bc.split("->")
-            subscripted = []
-            sym_a, sparse_a = _einsum.parse_expr(expr_a, subscripted)
-            sym_b, sparse_b = _einsum.parse_expr(expr_b, subscripted)
-            sym_c, sparse_c = _einsum.parse_expr(expr_c, subscripted)
+            sym_a, sparse_a = _einsum.parse_expr(expr_a)
+            sym_b, sparse_b = _einsum.parse_expr(expr_b)
+            sym_c, sparse_c = _einsum.parse_expr(expr_c)
             # parse axes
-            axes_b, axes_m, axes_k, var = _einsum.parse_axes(sym_a, sym_b, sym_c, subscripted)
-            _, axes_n, _, _           = _einsum.parse_axes(sym_b, sym_a, sym_c, subscripted)
+            axes_b, axes_m, axes_k, var = _einsum.parse_axes(sym_a, sym_b, sym_c)
+            _, axes_n, _, _           = _einsum.parse_axes(sym_b, sym_a, sym_c)
             axes = axes_b + axes_m + axes_n + axes_k
-            # unresolved symbols
-            unresolved = [x for x in map(str, var) if x not in varnames]
-            if unresolved:
-                raise ValueError(f'unresolved symbols: {unresolved}')
             # check block sizes
             for d in sparse_a + sparse_b + sparse_c:
                 if d.upper() not in blocks:
@@ -687,8 +673,8 @@ __global__ void {name}(
             if sparse_c and layout_c is None:
                 raise ValueError('C is sparse but not layout provided')
             # check dimensions
-            dims_a  = dict([(x, y) for x,y in zip(sym_a, shape_a)])
-            dims_b  = dict([(x, y) for x,y in zip(sym_b, shape_b)])
+            dims_a  = dict([(x, y) for x,y in zip(sym_a, shape_a) if x not in sparse_a])
+            dims_b  = dict([(x, y) for x,y in zip(sym_b, shape_b) if x not in sparse_b])
             dims_La = None if layout_a is None else dict(zip([x for x in expr_a if x.isupper()], layout_a.shape))
             dims_Lb = None if layout_b is None else dict(zip([x for x in expr_b if x.isupper()], layout_b.shape))
             # TODO: could be cleaner
@@ -703,21 +689,29 @@ __global__ void {name}(
             dims = dict()
             dims.update(dims_a)
             dims.update(dims_b)
+            for i, d in enumerate(sparse_a):
+                dims[d] = layout_a.shape[i] * blocks[d.upper()]
+            for i, d in enumerate(sparse_b):
+                dims[d] = layout_b.shape[i] * blocks[d.upper()]
             # allocate output
-            shape_c = [dims[d] for d in sym_c]
-            stride_c = np.cumprod(shape_c[::-1])[::-1]
+            shape_c = [dims[d] if d.islower() else blocks[d] for d in expr_c]
+            if sparse_c:
+                shape_c.insert(expr_c.index(sparse_c[0].upper()), int(layout_c.sum()))
+            stride_c = [None] * len(shape_c)
+            stride_c[-1] = 1
+            for i in reversed(range(len(shape_c) - 1)):
+                stride_c[i] = stride_c[i+1] * shape_c[i+1]
             # look-up tables
             TK = 16 if dtype == torch.float16 else 8
-            arrays = [(x, arrays[x]) for x in subscripted]
             if sparse_a and not sparse_b:
-                delta_a, nouter, lut_mode_a = _einsum.make_dsd_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, blocks)
-                delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b, delta_a, nouter)
+                delta_a, nouter, lut_mode_a = _einsum.make_dsd_delta(axes_k, TK, stride_a, dims, sym_a, sparse_a, layout_a, blocks)
+                delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, sparse_b, layout_b, delta_a, nouter)
             if sparse_b and not sparse_a:
-                delta_b, nouter, lut_mode_b = _einsum.make_dsd_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b, blocks)
-                delta_a, lut_mode_a = _einsum.make_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a, delta_b, nouter)
+                delta_b, nouter, lut_mode_b = _einsum.make_dsd_delta(axes_k, TK, stride_b, dims, sym_b, sparse_b, layout_b, blocks)
+                delta_a, lut_mode_a = _einsum.make_delta(axes_k, TK, stride_a, dims, sym_a, sparse_a, layout_a, delta_b, nouter)
             if not sparse_a and not sparse_b:
-                delta_a, lut_mode_a = _einsum.make_delta(axes_k, TK, stride_a, dims, sym_a, arrays, sparse_a, layout_a)
-                delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, arrays, sparse_b, layout_b)
+                delta_a, lut_mode_a = _einsum.make_delta(axes_k, TK, stride_a, dims, sym_a, sparse_a, layout_a)
+                delta_b, lut_mode_b = _einsum.make_delta(axes_k, TK, stride_b, dims, sym_b, sparse_b, layout_b)
             if sparse_c:
                 delta_c = _einsum.make_sdd_lut(layout_c, sparse_c, blocks)
             # hash for recompilation
@@ -743,7 +737,7 @@ __global__ void {name}(
                                                         stride_a_last, stride_b_last, stride_c_last,
                                                         lut_mode_a, lut_mode_b,
                                                         delta_a, delta_b,
-                                                        blocks, subscripted, varnames)
+                                                        blocks)
             self.kernel = cache[name]
             # Initialize locks
             if _einsum.instance.locks is None:
@@ -760,7 +754,6 @@ __global__ void {name}(
             stride_a = list(stride_a[:-1])
             stride_b = list(stride_b[:-1])
             stride_c = list(stride_c[:-1])
-            arrays = [torch.from_numpy(x).cuda() for _, x in arrays]
             alpha = 1.
             div_m = 1
             self.args  = [None, None, None]
@@ -789,7 +782,6 @@ __global__ void {name}(
             if sparse_a or sparse_b:
                 width = delta_a[0] // nouter if sparse_a else delta_b[0] // nouter
                 self.args += [width]
-            self.args += arrays
             # Grid
             if sparse_a:
                 self.grid = lambda opt: [width*triton.cdiv(N, opt.d('TN')), B, opt.d('TZ')]
@@ -807,10 +799,6 @@ __global__ void {name}(
             self.pos_a = 0
             self.pos_b = 1
             self.pos_c = 2
-            # user-provided variables
-            self.pos_vars = len(self.args)
-            self.varnames = varnames
-            self.args += [None] * len(varnames)
             # save information on the operation
             self.expr_a = expr_a
             self.expr_b = expr_b
@@ -823,14 +811,12 @@ __global__ void {name}(
             self.shape_c = shape_c
 
                     
-        def run(self, a, b, values, bench):
-            c = torch.empty(*self.shape_c, dtype = a.dtype, device = a.device)
+        def run(self, a, b):
+            c = torch.empty(*self.shape_c, dtype=a.dtype, device=a.device)
             self.args[self.pos_a] = a
             self.args[self.pos_b] = b
             self.args[self.pos_c] = c
-            for i, name in enumerate(self.varnames):
-                self.args[self.pos_vars + i] = values[name]
-            self.kernel(*self.args, grid=self.grid, bench=bench)
+            self.kernel(*self.args, grid=self.grid)
             return c
 
 
@@ -843,7 +829,7 @@ __global__ void {name}(
     instance_cache = dict()
     registry = dict()
     @staticmethod
-    def forward(ctx, expr, a, b, layout_a, layout_b, layout_c, blocks, arrays, bench, values):
+    def forward(ctx, expr, a, b, layout_a, layout_b, layout_c, blocks):
         # compile einsum instance
         cache = _einsum.instance_cache
         key = (expr, a.dtype, 
@@ -853,12 +839,10 @@ __global__ void {name}(
             cache[key] = _einsum.instance(expr, a.dtype, 
                                           a.stride(), b.stride(),
                                           a.shape   , b.shape   ,
-                                          layout_a  , layout_b  , layout_c  , blocks,
-                                          arrays    , values.keys())
+                                          layout_a, layout_b, layout_c, blocks)
         instance = cache[key]
         # run and mark as dirty c modified in-place
-        c = instance.run(a, b, values, bench)
-        print(c)
+        c = instance.run(a, b)
         # save information in context
         ctx.expr_a = instance.expr_a
         ctx.expr_b = instance.expr_b
@@ -891,10 +875,9 @@ __global__ void {name}(
         if ctx.needs_input_grad[2]:
             db = torch.empty_like(b)
             einsum(f'{expr_a},{expr_c}->{expr_b}', a, dy, db)
-        return None, da, db, None, None, None, None, None
+        return None, da, db, None, None, None, None, None, None, None
 
 
 def einsum(expr, a, b,
-           layout_a = None, layout_b = None, layout_c = None, blocks = dict(),
-           arrays = dict(), bench = False, values = dict()):
-    return _einsum.apply(expr, a, b, layout_a, layout_b, layout_c, blocks, arrays, bench, values)
+           layout_a = None, layout_b = None, layout_c = None, blocks = dict()):
+    return _einsum.apply(expr, a, b, layout_a, layout_b, layout_c, blocks)
