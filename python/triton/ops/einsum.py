@@ -7,7 +7,6 @@ from collections import namedtuple
 import re
 import string
 import triton
-# torch
 import torch
 # numpy -- ideally removed in a future release
 import numpy as np
@@ -402,7 +401,6 @@ __global__ void {name}(
 #endif
 }
 """
-        #print(src)
         # compilation options
         TM, TN, TB, TZ = [32], [32], 1, [1]
         TK = 16 if dtype==torch.float16 else 8
@@ -455,7 +453,7 @@ __global__ void {name}(
         # depth of reductions
         depth = layout.sum(*[i for i, d in enumerate(sparse) if d in axes])
         # outer dimension indices
-        outer = depth.nonzero()
+        outer = torch.nonzero(depth, as_tuple=False)
         outer = [outer[:,i] for i in range(outer.shape[1])]
         # find offset of outer dimensions
         depth = depth.view(-1)
@@ -466,7 +464,7 @@ __global__ void {name}(
         col = next((i for i, d in enumerate(sparse) if d in axes), None)
         block = blocks[sparse[-1].upper()]
         div = block // step
-        delta_b = layout.transpose(-1, col).nonzero()[:, -1].reshape(-1).contiguous()
+        delta_b = torch.nonzero(layout.transpose(-1, col), as_tuple=False)[:, -1].reshape(-1).contiguous()
         delta_b *= block
         delta_b = [delta_b + step*i for i in range(div)]
         delta_b = torch.stack(delta_b, dim=1)
@@ -480,7 +478,6 @@ __global__ void {name}(
         order = [d for d in sparse if d not in axes] +\
                 [d for d in sparse if d in axes]
         idx = [sparse.index(d) for d in order]
-        #layout = layout.clone().transpose(-1, col)
         layout[layout > 0] = 1 + torch.arange(layout.sum(), device=layout.device)
         layout = layout.permute(*idx)
         delta_a = layout[layout > 0] - 1
@@ -535,9 +532,6 @@ __global__ void {name}(
         args += [nextoff[sk] for sk in axes]
         delta = fn(*args)
         delta = np.maximum(delta, 0)
-        #print(k, nextk, lut)
-        #print(args)
-        #exit()
         if lut is not None:
             idx   = idx[1:] + np.arange(idx.shape[0] - 1)
             delta = np.delete(delta, idx)
@@ -545,74 +539,11 @@ __global__ void {name}(
             return None, None
         return delta, _einsum.lut_mode(delta[step:-step])
 
-    ############################
-    ## Einsum parsing
-    ############################
-
-    def uniq(seq):
-        seen = set()
-        seen_add = seen.add
-        return [x for x in seq if not (x in seen or seen_add(x))]
-
-    def parse_axes(expr_a, expr_b, expr_c):
-        sym_a = [x for s in expr_a for x in s]
-        sym_b = [x for s in expr_b for x in s]
-        sym_c = [x for s in expr_c for x in s]
-        batch = [d for d in sym_a if d in sym_b and d in sym_c]
-        outer = [d for d in sym_a if d not in sym_b and d in sym_c]
-        inner = [d for d in sym_a if d in sym_b and d not in sym_c]
-        variables = [d for d in sym_a if d not in sym_b and d not in sym_c]
-        return _einsum.uniq(batch), _einsum.uniq(outer), _einsum.uniq(inner), variables
-
-
-    def replace_subscript(expr, arrays):
-        # replace array indexing by Indexed()
-        indexed = re.findall('([_a-zA-Z][_a-zA-Z0-9]*)\[([_a-z]*)\]', expr)
-        for x in indexed:
-            arrays.append(x[0])
-            expr = expr.replace(f'{x[0]}[{x[1]}]', f'Indexed({x[0]},{x[1]})')
-        return expr
-
-
-    def parse_expr(expr):
-        # extract symbols
-        sym = []
-        sparse = []
-        i = 0
-        while i < len(expr):
-            d = expr[i]
-            if d == '(':
-                size = expr[i:].find(')')
-                d = expr[i : i + size + 1]
-                sym.append(parse_expr(d))
-                i += size + 1
-            else:
-                if d.isupper():
-                  sparse += [d.lower()]
-                sym.append(d.lower())
-                i += 1
-        return sym, sparse
-  
-    ############################
-    ## Preprocessing
-    ############################
-
-    @staticmethod
-    def pad(tensor, pad):
-        pad = pad + [0] *  (2*len(tensor.shape) - len(pad))
-        begin = [ x if x > 0 else None for x in pad[-1::-2]]
-        end   = [-x if x > 0 else None for x in pad[-2::-2]]
-        slices = [slice(b, e) for b, e in zip(begin, end)]
-        tensor = torch.nn.functional.pad(tensor, pad, 'constant', 0)
-        tensor = tensor[slices]
-        return tensor
-
     @staticmethod
     def make_sdd_lut(layout_c, sparse_c, blocks):
-        nnz = layout_c.nonzero()
+        nnz = torch.nonzero(layout_c, as_tuple=False)
         lut = nnz.reshape(-1).int().cuda()
         return lut
-
 
     ############################
     ## Compilation
@@ -622,44 +553,25 @@ __global__ void {name}(
 
         locks = None
         kernel_cache = dict()
-
-        @staticmethod
-        def _tile(M, N, B, TMs, TNs, TBs, TZs, TK):
-            smp = 15
-            # occupancy estimation
-            grid = lambda TM, TN, TB, TZ:   \
-                        triton.cdiv(M, TM)* \
-                        triton.cdiv(N, TN)* \
-                        triton.cdiv(B, TB)* \
-                        TZ
-            occupancy = lambda TM, TN, TB, TZ: \
-                           min(grid(TM, TN, TB, TZ), 4*smp)
-            # arithmetic intensity estimation
-            intensity = lambda TM, TN: \
-                           TM * TN * TK / (TM*TK + TK*TN)
-            # occupancy/intensity for all configurations
-            estimates = {(TM, TN, TB, TZ): (occupancy(TM, TN, TB, TZ), intensity(TM, TN)) \
-                        for TM in TMs \
-                        for TN in TNs \
-                        for TB in TBs \
-                        for TZ in TZs }
-            # returns configuration that maximizes occupancy subject to maximizing intensity
-            estimates = sorted(estimates.items(), 
-                               key=lambda item: item[1], 
-                               reverse=True)
-            return estimates[0][0]
         
-        
-        def __init__(self, einsum, dtype, stride_a, stride_b, shape_a, shape_b, layout_a, layout_b, layout_c, blocks):
+        def __init__(self, einsum, dtype, stride_a, stride_b, shape_a, shape_b, layouts, blocks):
             # parse symbols
             expr_a, expr_bc = einsum.split(",")
             expr_b, expr_c  = expr_bc.split("->")
-            sym_a, sparse_a = _einsum.parse_expr(expr_a)
-            sym_b, sparse_b = _einsum.parse_expr(expr_b)
-            sym_c, sparse_c = _einsum.parse_expr(expr_c)
+            sym_a = expr_a.lower()
+            sym_b = expr_b.lower()
+            sym_c = expr_c.lower()
+            sparse_a = [x.lower() for x in expr_a if x.isupper()]
+            sparse_b = [x.lower() for x in expr_b if x.isupper()]
+            sparse_c = [x.lower() for x in expr_c if x.isupper()]
+            layout_a = layouts.get(expr_a)
+            layout_b = layouts.get(expr_b)
+            layout_c = layouts.get(expr_c)
             # parse axes
-            axes_b, axes_m, axes_k, var = _einsum.parse_axes(sym_a, sym_b, sym_c)
-            _, axes_n, _, _           = _einsum.parse_axes(sym_b, sym_a, sym_c)
+            axes_b = [d for d in sym_a if d in     sym_b and d in     sym_c]
+            axes_m = [d for d in sym_a if d not in sym_b and d in     sym_c]
+            axes_k = [d for d in sym_a if d in     sym_b and d not in sym_c]
+            axes_n = [d for d in sym_b if d not in sym_a and d in     sym_c]
             axes = axes_b + axes_m + axes_n + axes_k
             # check block sizes
             for d in sparse_a + sparse_b + sparse_c:
@@ -829,7 +741,7 @@ __global__ void {name}(
     instance_cache = dict()
     registry = dict()
     @staticmethod
-    def forward(ctx, expr, a, b, layout_a, layout_b, layout_c, blocks):
+    def forward(ctx, expr, a, b, layouts, blocks):
         # compile einsum instance
         cache = _einsum.instance_cache
         key = (expr, a.dtype, 
@@ -839,7 +751,7 @@ __global__ void {name}(
             cache[key] = _einsum.instance(expr, a.dtype, 
                                           a.stride(), b.stride(),
                                           a.shape   , b.shape   ,
-                                          layout_a, layout_b, layout_c, blocks)
+                                          layouts, blocks)
         instance = cache[key]
         # run and mark as dirty c modified in-place
         c = instance.run(a, b)
@@ -878,6 +790,5 @@ __global__ void {name}(
         return None, da, db, None, None, None, None, None, None, None
 
 
-def einsum(expr, a, b,
-           layout_a = None, layout_b = None, layout_c = None, blocks = dict()):
-    return _einsum.apply(expr, a, b, layout_a, layout_b, layout_c, blocks)
+def einsum(expr, a, b, layouts = None, blocks = dict()):
+    return _einsum.apply(expr, a, b, layouts, blocks)
