@@ -56,8 +56,8 @@ class _dot(torch.autograd.Function):
       TYPE c[TM, TN] = acc;
 
       // epilogue
-      int rxm[TM] = get_program_id(0) * TM + 0 ... TM;
-      int rxn[TN] = get_program_id(1) * TN + 0 ... TN;
+      int rxm[TM] = ridx * TM + 0 ... TM;
+      int rxn[TN] = ridy * TN + 0 ... TN;
       int offc[TM, TN] = rxm[:, newaxis] * ldc + rxn[newaxis, :];
       TYPE* pc[TM, TN] = C + offc;
       bool checkc[TM, TN] = (rxm[:, newaxis] < M) && (rxn[newaxis, :] < N);
@@ -95,7 +95,7 @@ class _dot(torch.autograd.Function):
         if dtype not in _dot.kernel:
             defines = {
                 'TYPE' : dtype,
-                'STRIDE_AM': '1', 'STRIDE_AK': 'lda',
+                'STRIDE_AM': 'lda', 'STRIDE_AK': '1',
                 'STRIDE_BN': '1', 'STRIDE_BK': 'ldb',
                 'TM'   : [64, 128],
                 'TN'   : [64, 128],
@@ -107,14 +107,12 @@ class _dot(torch.autograd.Function):
         # allocate output
         M, K = a.shape
         K, N = b.shape
-        c = triton.empty([M,N], dtype=dtype)
+        c = torch.empty([M,N], dtype=dtype, device=a.device)
         # enqueue
         grid = lambda opt: [triton.cdiv(M, opt.d('TM')), 
                             triton.cdiv(N, opt.d('TN'))]
         time = kernel(a, b, c, 1., M, N, K, 
-                      a.stride(0), b.stride(0), c.stride(0), 
-                      grid=grid, bench=100)
-        print(2*M*N*K/(time*1e-6)*1e-9)
+                      a.stride(0), b.stride(0), c.stride(0), grid=grid)
         return c
 
 
@@ -126,8 +124,10 @@ M, N, K = 2048, 2048, 2048
 a = torch.rand((M, K)).cuda()
 b = torch.rand((K, N)).cuda()
 
+#a[:] = 1
+#b[:] = 1
 
-#zc  = torch.matmul(a,b)
+zc  = torch.matmul(a,b)
 zc_ = dot(a,b)
 
-#print(torch.allclose(zc, zc_))
+print(torch.allclose(zc, zc_))

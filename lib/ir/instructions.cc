@@ -736,14 +736,15 @@ instruction* atomic_exch_inst::create(value *ptr, value *val, const std::string 
 
 // atomic add
 
-atomic_add_inst::atomic_add_inst(value *ptr, value *val, const std::string &name, instruction *next)
-  : builtin_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_ADD, 2, name, next) {
+atomic_add_inst::atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name, instruction *next)
+  : builtin_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_ADD, 3, name, next) {
   set_operand(0, ptr);
   set_operand(1, val);
+  set_operand(2, msk);
 }
 
-instruction* atomic_add_inst::create(value *ptr, value *val, const std::string &name, instruction *next) {
-  return new atomic_add_inst(ptr, val, name, next);
+instruction* atomic_add_inst::create(value *ptr, value *val, value *msk, const std::string &name, instruction *next) {
+  return new atomic_add_inst(ptr, val, msk, name, next);
 }
 
 // exp
