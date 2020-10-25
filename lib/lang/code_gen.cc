@@ -277,12 +277,14 @@ void Generator::VisitFuncCall(FuncCall* funcCall) {
     ir::value* val = ret_;
     return set_ret(bld_->create_atomic_exch(ptr, val));
   }
-  if(name == "f32_atomic_add"){
+  if(name == "f32_atomic_add" || name == "atomic_add_64x64"){
     VisitExpr(funcCall->Args()->at(0));
     ir::value* ptr = ret_;
     VisitExpr(funcCall->Args()->at(1));
     ir::value* val = ret_;
-    return set_ret(bld_->create_atomic_add(ptr, val));
+    VisitExpr(funcCall->Args()->at(2));
+    ir::value* msk = ret_;
+    return set_ret(bld_->create_atomic_add(ptr, val, msk));
   }
   if(name == "sqrtf"){
     VisitExpr(funcCall->Args()->at(0));
@@ -338,6 +340,7 @@ void Generator::VisitTempVar(TempVar* tempVar) {
 }
 
 // Statement
+// TODO: int x = x; crashes
 void Generator::VisitDeclaration(Declaration* decl) {
   auto obj = decl->obj_;
   // initialize to undef

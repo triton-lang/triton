@@ -239,6 +239,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
     throw std::runtime_error("using too much shared memory");
   barriers.run(module);
   isel.visit(module, *llvm);
+  // ir::print(module, std::cout);
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   return res;
 }
@@ -351,6 +352,8 @@ std::string function::preheader() {
 extern int atomic_cas(int*, int, int);
 extern int atomic_xchg(int*, int);
 extern float f32_atomic_add(float*, float);
+extern void atomic_add_128x128(float*[128, 128], float[128, 128], bool[128, 128]);
+extern void atomic_add_64x64(float*[64, 64], float[64, 64], bool[64, 64]);
 extern int get_program_id(int);
 extern int get_num_programs(int);
 extern float sqrtf(float);
