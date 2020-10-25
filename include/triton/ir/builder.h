@@ -136,7 +136,7 @@ public:
   value *create_get_num_program(unsigned axis, const std::string &name = "");
   value *create_atomic_cas(value *ptr, value *cmp, value *val, const std::string &name = "");
   value *create_atomic_exch(value *ptr, value *val, const std::string &name = "");
-  value *create_atomic_add(value *ptr, value *val, const std::string &name = "");
+  value *create_atomic_add(value *ptr, value *val, value *msk, const std::string &name = "");
   value *create_exp(value* arg, const std::string &name = "");
   value *create_dot(value *A, value *B, value *C, const std::string &name = "");
   value *create_trans(value *A, const std::vector<int> &perm = {}, const std::string &name = "");

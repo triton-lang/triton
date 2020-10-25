@@ -650,7 +650,7 @@ Expr* Parser::ParseDerefOp(const Token* tok) {
   Expr* pred = nullptr;
   if(ts_.Try('?')){
     ts_.Expect('(');
-    pred = ParseCastExpr();
+    pred = ParseExpr();
     ts_.Expect(')');
   }
   Expr* addr = ParseCastExpr();

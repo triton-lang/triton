@@ -307,8 +307,8 @@ value *builder::create_atomic_exch(value *ptr, value *val, const std::string &na
   return insert(atomic_exch_inst::create(ptr, val, name));
 }
 
-value *builder::create_atomic_add(value *ptr, value *val, const std::string &name){
-  return insert(atomic_add_inst::create(ptr, val, name));
+value *builder::create_atomic_add(value *ptr, value *val, value *msk, const std::string &name){
+  return insert(atomic_add_inst::create(ptr, val, msk, name));
 }
 
 value *builder::create_exp(value *arg, const std::string &name){

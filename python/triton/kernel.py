@@ -82,6 +82,7 @@ class kernel:
     grid = kwargs['grid']
     libtriton.register_grid((self.op_id, device), grid)
     # launch
+    #print(self.tys)
     params = pack(self.tys, *[x.data_ptr() if isinstance(x, torch.Tensor) else x for x in args])
     torch.cuda.synchronize()
     torch.ops.triton.launch_kernel(self.op_id, device, params)
