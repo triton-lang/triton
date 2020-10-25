@@ -110,7 +110,7 @@ setup(
     author_email='ptillet@g.harvard.edu',
     description='A language and compiler for custom Deep Learning operations',
     long_description='',
-    packages=['triton', 'triton/_C', 'triton/ops', 'triton/nn'],
+    packages=['triton', 'triton/_C', 'triton/ops'],
     install_requires=['numpy', 'torch', 'sympy'],
     package_data={'': data},
     ext_modules=[CMakeExtension('triton', 'triton/_C/')],

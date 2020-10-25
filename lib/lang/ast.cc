@@ -523,7 +523,7 @@ void BinaryOp::RelationalOpTypeChecking() {
     }
     Convert();
   }
-  type_ = ArithmType::New(T_INT);
+  type_ = ArithmType::New(T_BOOL);
   Broadcast(this, lhs_, rhs_, type_);
 }
 
@@ -538,7 +538,7 @@ void BinaryOp::EqualityOpTypeChecking() {
       Error(this, "invalid operands to binary %s", tok_->str_.c_str());
     Convert();
   }
-  type_ = ArithmType::New(T_INT);
+  type_ = ArithmType::New(T_BOOL);
   Broadcast(this, lhs_, rhs_, type_);
 }
 
@@ -558,7 +558,7 @@ void BinaryOp::LogicalOpTypeChecking() {
   ::Type* rhsScalType = TryExtractScalarType(this, rhs_);
   if (!lhsScalType->IsScalar() || !rhsScalType->IsScalar())
     Error(this, "the operand should be arithmetic type or pointer");
-  type_ = ArithmType::New(T_INT);
+  type_ = ArithmType::New(T_BOOL);
   Broadcast(this, lhs_, rhs_, type_);
 }
 
