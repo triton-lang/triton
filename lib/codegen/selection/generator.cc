@@ -977,11 +977,13 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
 
   analysis::data_layout* arg_layout = layouts_->get(arg);
   if(auto* L = dynamic_cast<analysis::scanline_layout*>(arg_layout)){
-    bool can_optimize = true;
+    bool can_optimize = L->get_rank() == 1;
+    /*
     for(size_t r = 0; r < L->get_rank(); r++){
       if(r != axis)
         can_optimize = can_optimize && (L->mts(r) == L->get_shape()[r]);
     }
+    */
     if(can_optimize){
       Value *thread_acc = nullptr;
       // reduce within thread
