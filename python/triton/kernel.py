@@ -47,6 +47,9 @@ def th_to_triton(obj):
 def cdiv(a, b):
     return (a + b - 1) // b
 
+def cdiv_sum(a, b):
+    return torch.ops.triton.cdiv_sum(a, b)
+
 class kernel:
 
   def __init__(self, src, defines = dict(), num_warps = [2, 4, 8]):
@@ -73,9 +76,6 @@ class kernel:
     if device not in self.registered:
       self.registered.add(device)
       libtriton.register_fn((self.op_id, device), self.src, self.opt, os.path.realpath(libtriton.__file__))
-    # launch options
-    bench = kwargs['bench']         if 'bench'     in kwargs else 0
-    bench_id = libtriton.make_scalar_id() if bench > 0 else -1
     # launch grid
     if 'grid' not in kwargs:
       raise RuntimeError('Must provide grid for kernel launch')
