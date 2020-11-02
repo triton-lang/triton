@@ -21,7 +21,7 @@ std::map<map_key_t, std::shared_ptr<rt::function>> id_fn_map;
 std::map<size_t, double> fp64scalar_map;
 std::map<size_t, int64_t> i64scalar_map;
 
-/* Grid map */
+/* Grid utilities */
 
 void register_grid(const map_key_t& key,
                    const rt::function::grid_fn_ty& grid_fn) {
@@ -32,7 +32,7 @@ void delete_grid(const map_key_t& key) {
   id_grid_map.erase(key);
 }
 
-/* Function map */
+/* Function utilities */
 
 void register_fn(const map_key_t& key,
                  const std::string& src,
@@ -60,22 +60,7 @@ size_t make_op_id() {
   return id_fn_map.size();
 }
 
-
-/* TF scalar wrapper */
-size_t make_scalar_id() {
-  size_t ret = i64scalar_map.size();
-  i64scalar_map[ret] = int64_t();
-  return ret;
-}
-
-bool has_scalar(size_t id) {
-  return i64scalar_map.find(id) != i64scalar_map.end();
-}
-
-int64_t retrieve_scalar(size_t id) {
-  return i64scalar_map.at(id);
-}
-
+/* Function signature */
 void make_module(const std::string& src, ir::module* ir,
                  const runtime::function::options_space_t& opt) {
   std::string copy = triton::runtime::function::preheader() + src;
@@ -93,7 +78,6 @@ void make_module(const std::string& src, ir::module* ir,
   gen.Gen(ir);
 }
 
-/* Function signature */
 std::vector<rt::arg_type> get_fn_signature(const std::string& src,
                                            const runtime::function::options_space_t& opt) {
   // triton-ir code-gen
@@ -146,8 +130,6 @@ PYBIND11_MODULE(libtriton, m) {
     m.def("register_cst", &register_cst);
     m.def("delete_fn", &delete_fn);
     m.def("make_op_id", &make_op_id);
-    m.def("make_scalar_id", &make_scalar_id);
-    m.def("retrieve_scalar", &retrieve_scalar);
     m.def("cleanup", &cleanup);
     ;
 }
