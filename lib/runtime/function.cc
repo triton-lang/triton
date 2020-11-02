@@ -349,11 +349,17 @@ std::string function::preheader() {
 #define F32_INFINITY bitcast<float>(0x7F800000)
 #define F16_INFINITY bitcast<half>((int16)0x7C00)
 
+
+#define PASTER(a, b, _) a ## _ ## b
+#define EVALUATOR(a, b, _)  PASTER(a, b, _)
+#define atomic_add(TM, TN) EVALUATOR(atomic_add, EVALUATOR(TM, TN, x), _)
+extern void atomic_add_64(float*[64], float[64], bool[64]);
+extern void atomic_add_128x128(float*[128, 128], float[128, 128], bool[128, 128]);
+extern void atomic_add_64x64(float*[64, 64], float[64, 64], bool[64, 64]);
+
 extern int atomic_cas(int*, int, int);
 extern int atomic_xchg(int*, int);
 extern float f32_atomic_add(float*, float);
-extern void atomic_add_128x128(float*[128, 128], float[128, 128], bool[128, 128]);
-extern void atomic_add_64x64(float*[64, 64], float[64, 64], bool[64, 64]);
 extern int get_program_id(int);
 extern int get_num_programs(int);
 extern float sqrtf(float);
