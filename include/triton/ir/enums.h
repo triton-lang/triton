@@ -129,6 +129,7 @@ enum value_id_t: unsigned {
   INST_ATOMIC_ADD,
   // math
   INST_EXP,
+  INST_LOG,
   // array arithmetic
   INST_TRANS,
   INST_REDUCE,

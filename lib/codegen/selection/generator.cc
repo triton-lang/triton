@@ -598,12 +598,30 @@ void generator::visit_exp_inst(ir::exp_inst* x){
   Constant *log2e = ConstantFP::get(builder_->getFloatTy(), 1.4426950408889634);
   std::vector<llvm::Type*> tys = {builder_->getFloatTy()};
   FunctionType *fn_ty = FunctionType::get(builder_->getFloatTy(), tys, false);
-  InlineAsm *ex2 = InlineAsm::get(fn_ty, "ex2.approx.ftz.f32 $0, $1;", "=f,f", false);
+  InlineAsm *ex2 = InlineAsm::get(fn_ty, "ex2.approx.f32 $0, $1;", "=f,f", false);
 
 
   for_each(x, [&](indices_t idx){
     Value *ex2arg = builder_->CreateFMul(arg->get_value(idx), log2e);
     set_value(x, idx, builder_->CreateCall(ex2, std::vector<llvm::Value*>{ex2arg}));
+  });
+}
+
+void generator::visit_log_inst(ir::log_inst* x){
+  distributed_tile *arg = (distributed_tile*)tmap_.at(x->get_operand(0));
+//  Function *fn = builder_->GetInsertBlock()->getParent();
+//  Module *module = fn->getParent();
+//  Type *ty = llvm_type(x->get_type()->get_scalar_ty(), *ctx_);
+//  Function *ex2 = Intrinsic::getDeclaration(module, Intrinsic::nvvm_ex2_approx_ftz_f, {ty});
+  Constant *rcplog2e = ConstantFP::get(builder_->getFloatTy(), 0.6931471805599453);
+  std::vector<llvm::Type*> tys = {builder_->getFloatTy()};
+  FunctionType *fn_ty = FunctionType::get(builder_->getFloatTy(), tys, false);
+  InlineAsm *lg2 = InlineAsm::get(fn_ty, "lg2.approx.f32 $0, $1;", "=f,f", false);
+
+
+  for_each(x, [&](indices_t idx){
+    Value *lg2arg = builder_->CreateCall(lg2, std::vector<llvm::Value*>{arg->get_value(idx)});
+    set_value(x, idx, builder_->CreateFMul(lg2arg, rcplog2e));
   });
 }
 

@@ -571,6 +571,7 @@ Expr* Parser::ParseUnaryExpr() {
   case Token::INC: return ParsePrefixIncDec(tok);
   case Token::DEC: return ParsePrefixIncDec(tok);
   case Token::EXP: return ParseUnaryIntrinsicOp(tok, Token::EXP); //FIXME: merge into generic array functions
+  case Token::LOG: return ParseUnaryIntrinsicOp(tok, Token::LOG); //FIXME: merge into generic array functions
   case '&': return ParseUnaryOp(tok, Token::ADDR);
   case '*': return ParseDerefOp(tok);
   case '+': return ParseUnaryOp(tok, Token::PLUS);

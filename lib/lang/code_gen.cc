@@ -203,6 +203,7 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
     case Token::BITCAST:     return set_ret(GenBitCastOp(arg, GenIRType(unary->Type(), *ctx_)));
     case Token::CAST:        return set_ret(GenSemCastOp(arg, GenIRType(unary->Type(), *ctx_)));
     case Token::EXP:         return set_ret(bld_->create_exp(arg)); //FIXME cast
+    case Token::LOG:         return set_ret(bld_->create_log(arg));
     case Token::REDUCE: {
       int ax, tag;
       UnaryOp::decodeRed(unary->info_, ax, tag);
@@ -277,7 +278,10 @@ void Generator::VisitFuncCall(FuncCall* funcCall) {
     ir::value* val = ret_;
     return set_ret(bld_->create_atomic_exch(ptr, val));
   }
-  if(name == "f32_atomic_add" || name == "atomic_add_64x64"){
+  if(name == "f32_atomic_add" || 
+     name == "atomic_add_32x32" || name == "atomic_add_32x64" || name == "atomic_add_32x128" ||
+     name == "atomic_add_64x32" || name == "atomic_add_64x64" || name == "atomic_add_64x128" ||
+     name == "atomic_add_128x32"|| name == "atomic_add_128x64"|| name == "atomic_add_128x128"){
     VisitExpr(funcCall->Args()->at(0));
     ir::value* ptr = ret_;
     VisitExpr(funcCall->Args()->at(1));

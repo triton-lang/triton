@@ -758,6 +758,17 @@ instruction* exp_inst::create(value *val, const std::string& name, instruction *
   return new exp_inst(val, name, next);
 }
 
+// log
+
+log_inst::log_inst(value *val, const std::string &name, instruction *next)
+  : builtin_inst(val->get_type(), INST_LOG, 1, name, next) {
+  set_operand(0, val);
+}
+
+instruction* log_inst::create(value *val, const std::string& name, instruction *next) {
+  return new log_inst(val, name, next);
+}
+
 
 //===----------------------------------------------------------------------===//
 //                               intrinsic instructions
