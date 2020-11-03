@@ -138,6 +138,7 @@ public:
   value *create_atomic_exch(value *ptr, value *val, const std::string &name = "");
   value *create_atomic_add(value *ptr, value *val, value *msk, const std::string &name = "");
   value *create_exp(value* arg, const std::string &name = "");
+  value *create_log(value* arg, const std::string &name = "");
   value *create_dot(value *A, value *B, value *C, const std::string &name = "");
   value *create_trans(value *A, const std::vector<int> &perm = {}, const std::string &name = "");
   value *create_sqrt(value *A, const std::string &name = "");

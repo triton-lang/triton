@@ -18,8 +18,6 @@ namespace rt = triton::runtime;
 typedef std::pair<int, int> map_key_t;
 std::map<map_key_t, std::shared_ptr<rt::function::grid_fn_ty>> id_grid_map;
 std::map<map_key_t, std::shared_ptr<rt::function>> id_fn_map;
-std::map<size_t, double> fp64scalar_map;
-std::map<size_t, int64_t> i64scalar_map;
 
 /* Grid utilities */
 
@@ -45,6 +43,7 @@ void delete_fn(const map_key_t& key) {
   id_fn_map.erase(key);
 }
 
+
 void register_cst(const map_key_t& key, const std::string& name, pybind11::buffer& data) {
   pybind11::buffer_info info = data.request();
   id_fn_map[key]->set_cst(name, info.ptr, info.size*info.itemsize);
@@ -53,7 +52,6 @@ void register_cst(const map_key_t& key, const std::string& name, pybind11::buffe
 void cleanup() {
   id_grid_map.clear();
   id_fn_map.clear();
-  i64scalar_map.clear();
 }
 
 size_t make_op_id() {

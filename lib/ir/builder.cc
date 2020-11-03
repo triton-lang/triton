@@ -315,6 +315,10 @@ value *builder::create_exp(value *arg, const std::string &name){
   return insert(exp_inst::create(arg, name));
 }
 
+value *builder::create_log(value *arg, const std::string &name){
+  return insert(log_inst::create(arg, name));
+}
+
 value *builder::create_dot(value *A, value *B, value *C, const std::string &name) {
   return insert(dot_inst::create_nn(A, B, C, name));
 }

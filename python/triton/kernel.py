@@ -81,8 +81,9 @@ class kernel:
       raise RuntimeError('Must provide grid for kernel launch')
     grid = kwargs['grid']
     libtriton.register_grid((self.op_id, device), grid)
+    # re-allocate buffers for auto-tuning
+    if 'autotune_buf' in kwargs:
+      pass
     # launch
-    #print(self.tys)
     params = pack(self.tys, *[x.data_ptr() if isinstance(x, torch.Tensor) else x for x in args])
-    torch.cuda.synchronize()
     torch.ops.triton.launch_kernel(self.op_id, device, params)
