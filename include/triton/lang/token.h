@@ -167,6 +167,7 @@ public:
     // function keywords
     BITCAST,
     EXP,
+    LOG,
     // KEYWORD END
 
     IDENTIFIER,

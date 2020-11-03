@@ -311,7 +311,7 @@ function::caller* function::autotune(driver::stream* stream, const grid_fn_ty& g
   // fast path -- no autotuning necessary
   if(callers_.size() == 1)
     return &*callers_.begin()->second;
-  // TODO" copy buffer argument so that auto-tuning doesn't corrupt data
+  // run auto-tuner
   double best_ts = INFINITY;
   caller* ret = nullptr;
   for(auto &x : callers_){
@@ -354,8 +354,15 @@ std::string function::preheader() {
 #define EVALUATOR(a, b, _)  PASTER(a, b, _)
 #define atomic_add(TM, TN) EVALUATOR(atomic_add, EVALUATOR(TM, TN, x), _)
 extern void atomic_add_64(float*[64], float[64], bool[64]);
-extern void atomic_add_128x128(float*[128, 128], float[128, 128], bool[128, 128]);
+extern void atomic_add_32x32(float*[32, 32], float[32, 32], bool[32, 32]);
+extern void atomic_add_32x64(float*[32, 64], float[32, 64], bool[32, 64]);
+extern void atomic_add_32x128(float*[32, 128], float[32, 128], bool[32, 128]);
+extern void atomic_add_64x32(float*[64, 32], float[64, 32], bool[64, 32]);
 extern void atomic_add_64x64(float*[64, 64], float[64, 64], bool[64, 64]);
+extern void atomic_add_64x128(float*[64, 128], float[64, 128], bool[64, 128]);
+extern void atomic_add_128x32(float*[128, 32], float[128, 32], bool[128, 32]);
+extern void atomic_add_128x64(float*[128, 64], float[128, 64], bool[128, 64]);
+extern void atomic_add_128x128(float*[128, 128], float[128, 128], bool[128, 128]);
 
 extern int atomic_cas(int*, int, int);
 extern int atomic_xchg(int*, int);
@@ -416,11 +423,6 @@ void function::operator()(void** args, size_t args_size, const grid_fn_ty& grid_
   // pre-compile kernels
   if(callers_.empty()){
     precompile(stream, opt_);
-    size_t cumsum = 0;
-    for(arg_type ty: callers_.begin()->second->param_tys()){
-      args_off_.push_back(cumsum);
-      cumsum += size_of(ty);
-    }
   }
   // re-tuning key
   cache_key_t key;

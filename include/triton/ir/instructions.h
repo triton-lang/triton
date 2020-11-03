@@ -623,6 +623,18 @@ public:
   static instruction* create(value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
+class log_inst: public builtin_inst {
+private:
+  log_inst(value *val, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "log"; }
+  _TRITON_DEFINE_CLONE(log_inst)
+  _TRITON_DEFINE_ACCEPT(log_inst)
+
+public:
+  static instruction* create(value *val, const std::string &name = "", instruction *next = nullptr);
+};
+
+
 class dot_inst: public builtin_inst {
 public:
   enum TransT { NoTrans, Trans };
