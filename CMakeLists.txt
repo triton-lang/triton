@@ -34,7 +34,7 @@ if(BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
     # PyBind11 wrapper source file
     set(PYTHON_SRC bindings.cc launch.cc)
-    set_source_files_properties(launch.cc PROPERTIES COMPILE_FLAGS "-std=c++14 -D_GLIBCXX_USE_CXX11_ABI=0")
+    set_source_files_properties(launch.cc PROPERTIES COMPILE_FLAGS "-std=c++14 -D_GLIBCXX_USE_CXX11_ABI=${TORCH_CXX11_ABI}")
     include_directories("." ${PYTHON_INCLUDE_DIRS})
     link_directories(${PYTHON_LINK_DIRS})
 endif()
