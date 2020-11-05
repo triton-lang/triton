@@ -8,8 +8,8 @@
 #include <stack>
 #include <string>
 #include <functional>
-#include "builder.h"
-#include "metadata.h"
+#include "triton/ir/builder.h"
+#include "triton/ir/metadata.h"
 
 namespace triton{
 
