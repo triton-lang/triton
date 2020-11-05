@@ -62,7 +62,7 @@ class CMakeBuild(build_ext):
         python_lib_dirs = distutils.sysconfig.get_config_var('LIBDIR')
         torch_include_dirs = include_paths(True)
         torch_library_dirs = library_paths(True)
-        abi = torch._C._GLIBCXX_USE_CXX11_ABI
+        cxx11abi = str(int(torch._C._GLIBCXX_USE_CXX11_ABI))
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
                       '-DBUILD_TESTS=OFF',
                       '-DBUILD_PYTHON_MODULE=ON',
@@ -70,6 +70,7 @@ class CMakeBuild(build_ext):
                       #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON,
                       '-DPYTHON_INCLUDE_DIRS=' + ';'.join([python_include_dirs] + include_paths(True)),
                       '-DPYTHON_LINK_DIRS=' + ';'.join(library_paths(True)),
+                      '-DTORCH_CXX11_ABI=' + cxx11abi,
                       '-DTORCH_LIBRARIES=c10;c10_cuda;torch;torch_cuda;torch_cpu;torch_python;triton',
                       '-DLLVM_CONFIG=' + find_llvm()]
         # configuration
