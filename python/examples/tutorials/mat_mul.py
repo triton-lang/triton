@@ -121,8 +121,8 @@ dot = _dot.apply
 torch.manual_seed(0)
 
 M, N, K = 2048, 2048, 2048
-a = torch.rand((M, K)).cuda()
-b = torch.rand((K, N)).cuda()
+a = torch.rand((M, K)).cuda().half()
+b = torch.rand((K, N)).cuda().half()
 
 #a[:] = 1
 #b[:] = 1
