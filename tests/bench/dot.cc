@@ -17,11 +17,11 @@ int main() {
 //      config_t{ord, x[0], x[1], 384, 384, 384},
 //      config_t{ord, x[0], x[1], 512, 512, 512},
 //      config_t{ord, x[0], x[1], 768, 768, 768},
-      config_t{ord, x[0], x[1], 1024, 1024, 1024},
+      // config_t{ord, x[0], x[1], 1024, 1024, 1024},
 //      config_t{ord, x[0], x[1], 1280, 1280, 1280},
 //      config_t{ord, x[0], x[1], 1536, 1536, 1536},
 //      config_t{ord, x[0], x[1], 2048, 2048, 2048},
-//      config_t{ord, x[0], x[1], 8192, 8192, 8192},
+     config_t{ord, x[0], x[1], 8192, 8192, 8192},
 
 //      config_t{ord, x[0], x[1], 256, 16, 256},
 //      config_t{ord, x[0], x[1], 512, 16, 512},
@@ -65,7 +65,7 @@ int main() {
   for(const auto& c: configs){
     std::tie(ord, AT, BT, M, N, K) = c;
     std::cout << "// " << c ;
-    for(auto perf: bench_dot(stream, FLOAT, AT, BT, M, N, K, ord, ord))
+    for(auto perf: bench_dot(stream, HALF, AT, BT, M, N, K, ord, ord))
       std::cout << ", " << perf << std::flush;
     std::cout << std::endl;
   }

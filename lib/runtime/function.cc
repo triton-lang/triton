@@ -246,7 +246,9 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
 
 
 // create Binary from options
-function::caller* function::make(driver::stream *stream, options_t opt) {
+void function::make(driver::stream *stream, options_t opt) {
+  if(callers_.find(opt) != callers_.end())
+    return;
   // pre-process
   TokenSequence tokens;
   Preprocessor cpp(&src_, true);
@@ -267,8 +269,14 @@ function::caller* function::make(driver::stream *stream, options_t opt) {
 //  }
   // create callable
   ir::function *tmp = ir->get_function_list()[0];
-  caller* ret = new caller(tmp, std::move(bin), opt);
-  return ret;
+  callers_[opt].reset(new caller(tmp, std::move(bin), opt));
+  auto& call = callers_[opt];
+  // copy constants
+  if(call)
+  for(const auto& cst: cst_){
+    std::unique_ptr<driver::buffer> buffer = call->parent()->symbol(cst.first.c_str());
+    stream->write(&*buffer, true, 0, cst.second);
+  }
 }
 
 // precompile all kernels spanned by given options space
@@ -288,21 +296,20 @@ void function::precompile(driver::stream* stream,
     for(auto D: space.defines)
       opt.defines[D.first] = D.second[params[i++]];
     // compile
-    caller* call = make(stream, opt);
-    if(!call)
-      return;
-    // copy constants
-    std::unique_ptr<driver::buffer> buffer;
-    for(const auto& cst: cst_){
-      buffer = call->parent()->symbol(cst.first.c_str());
-      stream->write(&*buffer, true, 0, cst.second);
-    }
-    callers_[opt].reset(call);
+    make(stream, opt);
   };
   // multi-threaded compilation
   _loop_nest(ranges, do_make);
   if(callers_.empty())
     throw std::runtime_error("could not compile kernel");
+}
+
+std::string function::ptx(driver::stream* stream, const options_t& opt) {
+  make(stream, opt);
+  const auto& fn = callers_.at(opt);
+  if(!fn)
+    return "";
+  return ((driver::cu_module*)fn->parent())->source();
 }
 
 // returns program with best compilation options for given parameter

@@ -66,6 +66,26 @@ class kernel:
   def set_constant(self, device, name, value):
     libtriton.register_cst((self.op_id, device), name, value)
 
+  def ptx(self, device, **kwargs):
+    dev_id = device.index
+    libtriton.register_fn((self.op_id, dev_id), self.src, self.opt)
+    def _single_value_or_err(x, key):
+      if isinstance(x, list) and len(x) == 1:
+        return x[0]
+      if isinstance(x, list) and len(x) > 1:
+        if key in kwargs:
+          return kwargs[key]
+        raise ValueError(f'Parameter {key}={x} was auto-tuned during kernel creation. '
+                          'Please supply an explicit value as a keyword argument.')
+      return str(x)
+    defines = dict()
+    for (D, V) in self.opt.defines:
+      defines[D] = _single_value_or_err(V, D)
+    opt = libtriton.options()
+    opt.num_warps = _single_value_or_err(self.opt.num_warps, 'num_warps')
+    opt.defines = defines
+    return libtriton.get_fn_ptx((self.op_id, dev_id), opt)
+
   def __call__(self, *args, **kwargs):
     for x in args:
       if isinstance(x, torch.Tensor):
@@ -73,9 +93,7 @@ class kernel:
         device = -1 if device is None else device
         break
     # lazily register function for device
-    if device not in self.registered:
-      self.registered.add(device)
-      libtriton.register_fn((self.op_id, device), self.src, self.opt, os.path.realpath(libtriton.__file__))
+    libtriton.register_fn((self.op_id, device), self.src, self.opt)
     # launch grid
     if 'grid' not in kwargs:
       raise RuntimeError('Must provide grid for kernel launch')

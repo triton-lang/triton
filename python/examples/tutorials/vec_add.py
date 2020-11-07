@@ -23,12 +23,9 @@ __global__ void add(float* z, float* x, float* y, int N) {
     @staticmethod
     def forward(ctx, x, y):
        z = torch.empty_like(x).cuda()
-
        N = x.numel()
        grid = lambda opt: (triton.cdiv(N, opt.d('TILE')),)
-
        _add.kernel(z,x,y, N, grid=grid)
-
        return z
 
 add = _add.apply
