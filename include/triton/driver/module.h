@@ -40,7 +40,7 @@ public:
   static module* create(driver::context* ctx, std::unique_ptr<llvm::Module> src);
   driver::context* context() const;
   void compile_llvm_module(std::unique_ptr<llvm::Module> module, const std::string& triple,
-                                  const std::string &proc, std::string layout,
+                           const std::string &proc, std::string layout,
                            llvm::SmallVectorImpl<char> &buffer,
                            const std::string &features,
                            file_type_t file_type);

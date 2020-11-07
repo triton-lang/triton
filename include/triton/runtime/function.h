@@ -122,7 +122,7 @@ private:
   triton::lang::translation_unit *make_ast(const std::string &src);
   std::unique_ptr<ir::module> make_ir(Parser &parser);
   std::unique_ptr<driver::module> make_bin(ir::module &function, driver::context *context, const options_t &opt);
-  caller *make(driver::stream *stream, options_t opt);
+  void make(driver::stream *stream, options_t opt);
   void precompile(driver::stream *stream, const options_space_t& tuning_space);
   // autotune
   caller* autotune(driver::stream *stream, const grid_fn_ty& grid, void **args, size_t args_size);
@@ -135,6 +135,7 @@ public:
   void operator()(void** args, size_t args_size, const grid_t& grid, driver::stream* stream);
   void operator()(void** args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
   void set_cst(const std::string& name, void* data, size_t n_bytes);
+  std::string ptx(driver::stream *stream, const options_t& opt);
 
 private:
   std::map<std::string, std::vector<char>> cst_;
