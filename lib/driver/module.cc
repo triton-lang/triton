@@ -28,6 +28,8 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetRegistry.h"
@@ -115,8 +117,8 @@ void module::compile_llvm_module(std::unique_ptr<llvm::Module> module, const std
   // convert triton file type to llvm file type
   auto ll_file_type = [&](module::file_type_t type){
     if(type == Object)
-      return llvm::TargetMachine::CGFT_ObjectFile;
-    return llvm::TargetMachine::CGFT_AssemblyFile;
+      return llvm::CodeGenFileType::CGFT_ObjectFile;
+    return llvm::CodeGenFileType::CGFT_AssemblyFile;
   };
   // emit
   machine->addPassesToEmitFile(pass, stream, nullptr, ll_file_type(ft));
@@ -198,7 +200,7 @@ host_module::host_module(driver::context * context, std::unique_ptr<llvm::Module
 
   llvm::EngineBuilder builder(std::move(src));
   builder.setErrorStr(&hst_->error);
-  builder.setMCJITMemoryManager(llvm::make_unique<llvm::SectionMemoryManager>());
+  builder.setMCJITMemoryManager(std::make_unique<llvm::SectionMemoryManager>());
   builder.setOptLevel(llvm::CodeGenOpt::Aggressive);
   builder.setEngineKind(llvm::EngineKind::JIT);
   hst_->engine = builder.create();

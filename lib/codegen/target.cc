@@ -2,6 +2,8 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsNVPTX.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/IRBuilder.h"
 #include <iostream>
@@ -49,13 +51,7 @@ Value* amd_cl_target::get_block_id(Module *module, IRBuilder<>& builder, unsigne
 }
 
 Value* amd_cl_target::get_num_blocks(Module *module, IRBuilder<>& builder, unsigned ax) {
-  static std::array<Intrinsic::ID, 3> ids = {
-    Intrinsic::r600_read_ngroups_x,
-    Intrinsic::r600_read_ngroups_y,
-    Intrinsic::r600_read_ngroups_z
-  };
-  Value* get_num_group = Intrinsic::getDeclaration(module, ids[ax]);
-  return builder.CreateCall(get_num_group, {});
+  throw std::runtime_error("not implemented on AMD");
 }
 
 Value* amd_cl_target::get_local_id(Module *module, IRBuilder<>& builder, unsigned ax) {
