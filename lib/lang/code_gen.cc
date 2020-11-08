@@ -278,10 +278,7 @@ void Generator::VisitFuncCall(FuncCall* funcCall) {
     ir::value* val = ret_;
     return set_ret(bld_->create_atomic_exch(ptr, val));
   }
-  if(name == "f32_atomic_add" || 
-     name == "atomic_add_32x32" || name == "atomic_add_32x64" || name == "atomic_add_32x128" ||
-     name == "atomic_add_64x32" || name == "atomic_add_64x64" || name == "atomic_add_64x128" ||
-     name == "atomic_add_128x32"|| name == "atomic_add_128x64"|| name == "atomic_add_128x128"){
+  if(name.substr(0, 10) == "atomic_add"){
     VisitExpr(funcCall->Args()->at(0));
     ir::value* ptr = ret_;
     VisitExpr(funcCall->Args()->at(1));

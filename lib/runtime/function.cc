@@ -359,17 +359,11 @@ std::string function::preheader() {
 
 #define PASTER(a, b, _) a ## _ ## b
 #define EVALUATOR(a, b, _)  PASTER(a, b, _)
-#define atomic_add(TM, TN) EVALUATOR(atomic_add, EVALUATOR(TM, TN, x), _)
-extern void atomic_add_64(float*[64], float[64], bool[64]);
-extern void atomic_add_32x32(float*[32, 32], float[32, 32], bool[32, 32]);
-extern void atomic_add_32x64(float*[32, 64], float[32, 64], bool[32, 64]);
-extern void atomic_add_32x128(float*[32, 128], float[32, 128], bool[32, 128]);
-extern void atomic_add_64x32(float*[64, 32], float[64, 32], bool[64, 32]);
-extern void atomic_add_64x64(float*[64, 64], float[64, 64], bool[64, 64]);
-extern void atomic_add_64x128(float*[64, 128], float[64, 128], bool[64, 128]);
-extern void atomic_add_128x32(float*[128, 32], float[128, 32], bool[128, 32]);
-extern void atomic_add_128x64(float*[128, 64], float[128, 64], bool[128, 64]);
-extern void atomic_add_128x128(float*[128, 128], float[128, 128], bool[128, 128]);
+#define atomic_add(TYPE, TM, TN) EVALUATOR(atomic_add, EVALUATOR(TYPE, EVALUATOR(TM, TN, x), _), _)
+#define DECLARATION(TYPE, TM, TN) extern void atomic_add(TYPE, TM, TN)(TYPE*[TM, TN], TYPE[TM, TN], bool[TM, TN])
+
+DECLARATION(float, 64, 64);
+DECLARATION(half , 64, 64);
 
 extern int atomic_cas(int*, int, int);
 extern int atomic_xchg(int*, int);
