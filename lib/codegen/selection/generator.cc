@@ -695,7 +695,7 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
       builder_->CreateCondBr(rmw_msk, mask_then_bb, mask_done_bb);
       builder_->SetInsertPoint(mask_then_bb);
       builder_->CreateAtomicRMW(AtomicRMWInst::FAdd, rmw_ptr, rmw_val,
-                                AtomicOrdering::Monotonic,
+                                AtomicOrdering::Unordered,
                                 SyncScope::System);
       builder_->CreateBr(mask_done_bb);
       builder_->SetInsertPoint(mask_done_bb);
