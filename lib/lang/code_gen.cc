@@ -231,7 +231,7 @@ void Generator::VisitConditionalOp(ConditionalOp* condOp) {
   VisitExpr(condOp->exprFalse_);
   ir::value* false_val = ret_;
   if(ir::unmasked_load_inst* ld = dynamic_cast<ir::unmasked_load_inst*>(true_val)) {
-    if(!false_val->get_type()->is_tile_ty())
+    if(true_val->get_type()->is_tile_ty() && !false_val->get_type()->is_tile_ty())
       false_val = bld_->create_splat(false_val, cond->get_type()->get_tile_shapes());
     ir::value* new_ld = bld_->create_masked_load(ld->get_pointer_operand(),
                                                   cond,
