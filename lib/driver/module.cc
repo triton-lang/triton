@@ -255,7 +255,6 @@ cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
   cu_context::context_switcher ctx(*context);
-  // std::cout << source << std::endl;
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
   unsigned int errbufsize = 8096;
@@ -264,10 +263,11 @@ cu_module::cu_module(driver::context * context, std::string const & source) : mo
   try{
     dispatch::cuModuleLoadDataEx(&*cu_, source_.data(), 2, opt, optval);
   }catch(exception::cuda::base const &){
-#ifdef TRITON_LOG_PTX_ERROR
-    std::cerr << "Compilation Failed! Log: " << std::endl;
+//#ifdef TRITON_LOG_PTX_ERROR
+    std::cout << source << std::endl;
+    std::cerr << "It appears that Triton produced invalid PTX code:" << std::endl;
     std::cerr << errbuf << std::endl;
-#endif
+//#endif
     throw;
   }
 }

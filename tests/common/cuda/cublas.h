@@ -147,7 +147,7 @@ inline cublasGemmAlgo_t cublasGemmFastest(
                                                                  M, N, K,
                                                                  alpha, (const void*)A, cudt, lda,
                                                                  (const void*)B, cudt, ldb,
-                                                                 beta, (void*)C, cudt, ldc, cudt,
+                                                                 beta, (void*)C, cudt, ldc, CUDA_R_32F,
                                                                  a); }, stream);
       if(status != CUBLAS_STATUS_SUCCESS)
         nanosec = INFINITY;
@@ -216,6 +216,6 @@ inline void cublasGemm(cublasDataType_t dtype,
     cublasStatus_t status = cublas::cublasGemmEx(handle, opa, opb, M, N, K,
                                                  alpha, (const void*)*A->cu(), dtype, lda,
                                                  (const void*)*B->cu(), dtype, ldb,
-                                                 beta, (void*)*C->cu(), dtype, ldc, dtype, algo);
+                                                 beta, (void*)*C->cu(), dtype, ldc, CUDA_R_32F, algo);
   }
 }
