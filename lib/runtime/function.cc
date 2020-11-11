@@ -238,8 +238,8 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     throw std::runtime_error("using too much shared memory");
   barriers.run(module);
+  //ir::print(module, std::cout);
   isel.visit(module, *llvm);
-  // ir::print(module, std::cout);
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   return res;
 }
@@ -364,6 +364,7 @@ std::string function::preheader() {
 
 DECLARATION(float, 64, 64);
 DECLARATION(half , 64, 64);
+DECLARATION(half , 128, 128);
 
 extern int atomic_cas(int*, int, int);
 extern int atomic_xchg(int*, int);

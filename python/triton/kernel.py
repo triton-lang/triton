@@ -63,9 +63,6 @@ class kernel:
     size = sum([sizes[x] for x in arg_types])
     self.tys = ''.join([codes[x] for x in arg_types])
 
-  def set_constant(self, device, name, value):
-    libtriton.register_cst((self.op_id, device), name, value)
-
   def ptx(self, device, **kwargs):
     dev_id = device.index
     libtriton.register_fn((self.op_id, dev_id), self.src, self.opt)
@@ -103,5 +100,7 @@ class kernel:
     if 'autotune_buf' in kwargs:
       pass
     # launch
-    params = pack(self.tys, *[x.data_ptr() if isinstance(x, torch.Tensor) else x for x in args])
-    torch.ops.triton.launch_kernel(self.op_id, device, params)
+    params    = pack(self.tys, *[x.data_ptr() if isinstance(x, torch.Tensor) else x for x in args])
+    names     = list(kwargs['constants'].keys()) if 'constants' in kwargs else []
+    constants = list(kwargs['constants'].values()) if 'constants' in kwargs else []
+    torch.ops.triton.launch_kernel(self.op_id, device, params, names, constants)

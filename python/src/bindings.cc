@@ -51,11 +51,6 @@ std::string get_fn_ptx(const map_key_t& key, const rt::function::options_t& opt)
   return id_fn_map[key]->ptx(&stream, opt);
 }
 
-void register_cst(const map_key_t& key, const std::string& name, pybind11::buffer& data) {
-  pybind11::buffer_info info = data.request();
-  id_fn_map[key]->set_cst(name, info.ptr, info.size*info.itemsize);
-}
-
 void cleanup() {
   id_grid_map.clear();
   id_fn_map.clear();
@@ -134,7 +129,6 @@ PYBIND11_MODULE(libtriton, m) {
     m.def("register_grid", &register_grid);
     m.def("delete_grid", &delete_grid);
     m.def("register_fn", &register_fn);
-    m.def("register_cst", &register_cst);
     m.def("delete_fn", &delete_fn);
     m.def("make_op_id", &make_op_id);
     m.def("cleanup", &cleanup);
