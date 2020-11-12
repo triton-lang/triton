@@ -49,6 +49,11 @@ def cdiv(a, b):
 
 def cdiv_sum(a, b):
     return torch.ops.triton.cdiv_sum(a, b)
+  
+def synchronize(device):
+    dev_id = device.index
+    dev_id = -1 if dev_id is None else dev_id
+    torch.ops.triton.synchronize(dev_id)
 
 class kernel:
 
