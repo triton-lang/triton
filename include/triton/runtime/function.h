@@ -134,7 +134,7 @@ public:
   function(const std::string& src, const options_space_t& opt, const std::string &cache_ref = "");
   void operator()(void** args, size_t args_size, const grid_t& grid, driver::stream* stream);
   void operator()(void** args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
-  void set_cst(const std::string& name, void* data, size_t n_bytes);
+  void set_cst(const char* name, void* data, size_t n_bytes);
   std::string ptx(driver::stream *stream, const options_t& opt);
 
 private:

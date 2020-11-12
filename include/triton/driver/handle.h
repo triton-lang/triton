@@ -51,6 +51,8 @@ struct host_context_t{
 
 struct host_stream_t{
   std::shared_ptr<ThreadPool> pool;
+  std::shared_ptr<std::vector<std::future<void>>> futures;
+  std::vector<std::shared_ptr<char*>> args;
 };
 
 struct host_module_t{
