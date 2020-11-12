@@ -335,8 +335,8 @@ function::caller* function::autotune(driver::stream* stream, const grid_fn_ty& g
 }
 
 // set copy host buffer "data" into constant memory buffer "name"
-void function::set_cst(const std::string& name, void* data, size_t n_bytes) {
-   cst_[name] = std::vector<char>((char*)data, (char*)data + n_bytes);
+void function::set_cst(const char* name, void* data, size_t n_bytes) {
+   cst_[std::string(name)] = std::vector<char>((char*)data, (char*)data + n_bytes);
 }
 
 
