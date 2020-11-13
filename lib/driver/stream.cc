@@ -82,6 +82,7 @@ void host_stream::synchronize() {
 
 void host_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void **args, size_t args_size) {
   auto hst = kernel->module()->hst();
+  hst_->futures->reserve(hst_->futures->size() + grid[0]*grid[1]*grid[2]);
   char* params = new char[args_size];
   std::memcpy((void*)params, (void*)args, args_size);
   for(size_t i = 0; i < grid[0]; i++)

@@ -713,12 +713,10 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
     
     // vector size
     int vector_size = 1;
-    /*
     int ld = ptrs->get_order()[0];
     unsigned alignment = alignment_->get(ptr, ld);
     vector_size = gcd(ptrs->axis(ld).contiguous, alignment);
     vector_size = std::min(vector_size, val->get_type()->get_tile_element_ty()->is_half_ty() ? 2 : 1);
-    vector_size = 1;
 
     std::map<unsigned, Value*> packets;
     for_each(val, [&](indices_t idx){
@@ -729,19 +727,18 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
         packets[id] = UndefValue::get(VectorType::get(in_value->getType(), vector_size));
       packets[id] = builder_->CreateInsertElement(packets.at(id), in_value, linear % vector_size);
     });
-    */
 
     for_each(ptr, [&](indices_t idx){
       unsigned linear = vals->get_linear_index(idx);
       unsigned id = linear / vector_size;
-      //if(linear % vector_size != 0)
-      //  return;
+      if(linear % vector_size != 0)
+        return;
       // num bytes
       Value *rmw_ptr = ptrs->get_value(idx);
       Value *rmw_msk = msks->get_value(idx);
-      Value *rmw_val = vals->get_value(idx);
-      //if(vector_size == 1)
-      //  rmw_val = builder_->CreateExtractElement(rmw_val, builder_->getInt32(0));
+      Value *rmw_val = packets[id];
+      if(vector_size == 1)
+        rmw_val = builder_->CreateExtractElement(rmw_val, builder_->getInt32(0));
       Type* ty = rmw_val->getType();
       size_t nbits = ty->getScalarSizeInBits();
       // extract pointer offset
