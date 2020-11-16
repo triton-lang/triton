@@ -28,12 +28,14 @@ inline bool is_shmem_res(ir::value* v){
     return true;
   if(i->get_id() == ir::INST_COPY_TO_SHARED)
     return true;
+  if(i->get_id() == ir::INST_MASKED_LOAD_ASYNC)
+    return true;
   return false;
 }
 
 
 // run pass on module
-void add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared) {
+void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared) {
   auto *i = dynamic_cast<ir::instruction*>(x);
   // not an instruction
   if(!i) {

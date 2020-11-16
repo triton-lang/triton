@@ -14,6 +14,12 @@ namespace triton{
 namespace codegen{
 
 // base
+
+
+nvidia_cu_target* target::as_nvidia() { 
+  return dynamic_cast<nvidia_cu_target*>(this); 
+}
+
 bool target::is_gpu() const {
   return is_gpu_;
 }

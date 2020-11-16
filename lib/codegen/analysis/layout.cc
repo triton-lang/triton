@@ -244,7 +244,9 @@ void shared_layout::extract_double_bufferable(ir::value *v, std::shared_ptr<doub
   ir::instruction *i_1 = dynamic_cast<ir::instruction*>(value_1);
   if(!i_0 || !i_1 ||
      !dynamic_cast<ir::copy_to_shared_inst*>(i_0) ||
-     !dynamic_cast<ir::copy_to_shared_inst*>(i_1) )
+     !dynamic_cast<ir::copy_to_shared_inst*>(i_1) ||
+     !dynamic_cast<ir::masked_load_async_inst*>(i_0) ||
+     !dynamic_cast<ir::masked_load_async_inst*>(i_1))
     return;
   if(is_latch_1)
     res.reset(new double_buffer_info_t{value_0, value_1, phi});
@@ -370,13 +372,14 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
   const auto& axes = axes_->get(largest);
   const auto& shapes = largest->get_type()->get_tile_shapes();
   auto it_cts = std::find_if(values.begin(), values.end(), [](ir::value* v) {
-      return dynamic_cast<ir::copy_to_shared_inst*>(v);
+      return dynamic_cast<ir::copy_to_shared_inst*>(v) ||
+             dynamic_cast<ir::masked_load_async_inst*>(v);
   });
   // type
   if(it_hmma_c != values.end())
     layouts_[id] = new mma884_layout(num_warps_, axes, shapes, values, align_);
   else if(it_cts != values.end()){
-    ir::copy_to_shared_inst *cts = (ir::copy_to_shared_inst*)*it_cts;
+    ir::instruction *cts = (ir::instruction*)*it_cts;
     ir::value *arg = cts->get_operand(0);
     create(groups_.at(arg), values_.at(groups_.at(arg)));
     layouts_[id] = new shared_layout(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), align_);

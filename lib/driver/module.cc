@@ -241,8 +241,7 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
   assert(short_ptr);
   short_ptr->setValue(true);
   // compute capability
-  auto _cc = ((driver::cu_device*)device)->compute_capability();
-  int cc = _cc.first*10 + _cc.second;
+  int cc = ((driver::cu_device*)device)->compute_capability();
   cc = std::min(cc, max_nvvm_cc);
   std::string sm = "sm_" + std::to_string(cc);
   // driver version

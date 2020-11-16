@@ -155,6 +155,28 @@ shared_tile::shared_tile(Type *ty, const shapes_t &shapes, const std::vector<int
   }
 }
 
+Value* shared_tile::get_ptr_to(indices_t idx){
+  indices_t non_cst_idx, cst_idx;
+  extract_constant(idx, non_cst_idx, cst_idx);
+  Value *&base_ptr = ptr_cache_[non_cst_idx];
+  unsigned vector_size = vector_size_;
+  Type *ty = ty_;
+  if(ty->isHalfTy() && (vector_size % 2 == 0)){
+    ty = IntegerType::get(ty->getContext(), 32);
+    vector_size = vector_size / 2;
+  }
+  if(base_ptr == nullptr){
+    base_ptr = builder_.CreateGEP(ptr_, shared_offset(builder_, shapes_, perm_, order_, non_cst_idx));
+    if(vector_size_ > 1){
+      Type *vec_ty = VectorType::get(ty, vector_size);
+      Type *vec_ptr_ty = PointerType::get(vec_ty, base_ptr->getType()->getPointerAddressSpace());
+      base_ptr = builder_.CreateBitCast(base_ptr, vec_ptr_ty);
+    }
+  }
+  Value *offset = shared_offset(builder_, shapes_, perm_, order_, cst_idx);
+  return builder_.CreateGEP(base_ptr, offset);
+}
+
 void shared_tile::set_value(indices_t idx, Value *value) {
   Value *ptr = builder_.CreateGEP(ptr_, shared_offset(builder_, shapes_, perm_, order_, idx));
   unsigned addr_space = ptr->getType()->getPointerAddressSpace();
@@ -182,18 +204,12 @@ Value* shared_tile::get_value(indices_t idx) {
     vector_size = vector_size / 2;
   }
   if(base_ptr == nullptr){
-//    BasicBlock* store = builder_.GetInsertBlock();
-//    if(!non_cst_idx.empty())
-//    if(isa<Instruction>(non_cst_idx.front())){
-//      builder_.SetInsertPoint((Instruction*)non_cst_idx.front());
-//    }
     base_ptr = builder_.CreateGEP(ptr_, shared_offset(builder_, shapes_, perm_, order_, non_cst_idx));
     if(vector_size_ > 1){
       Type *vec_ty = VectorType::get(ty, vector_size);
       Type *vec_ptr_ty = PointerType::get(vec_ty, base_ptr->getType()->getPointerAddressSpace());
       base_ptr = builder_.CreateBitCast(base_ptr, vec_ptr_ty);
     }
-//    builder_.SetInsertPoint(store);
   }
   Value *offset = shared_offset(builder_, shapes_, perm_, order_, cst_idx);
   Value *div = offset;

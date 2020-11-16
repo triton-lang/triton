@@ -126,6 +126,7 @@ public:
   void visit_select_inst(ir::select_inst*);
 
   void visit_recoalesce_inst(ir::recoalesce_inst*);
+  void visit_masked_load_async_inst(ir::masked_load_async_inst*);
   void visit_copy_to_shared_inst(ir::copy_to_shared_inst*);
   void visit_copy_from_shared_inst(ir::copy_from_shared_inst*);
   void visit_barrier_inst(ir::barrier_inst*);

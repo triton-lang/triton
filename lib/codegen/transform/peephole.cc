@@ -97,6 +97,24 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
 
 //}
 
+bool peephole::rewrite_load_to_shared(ir::instruction *value, ir::builder& builder){
+  auto copy_to_shared = dynamic_cast<ir::copy_to_shared_inst*>(value);
+  if(!copy_to_shared)
+    return false;
+  ir::value *arg = copy_to_shared->get_operand(0);
+  ir::masked_load_inst* ld = dynamic_cast<ir::masked_load_inst*>(arg);
+  if(!ld)
+    return false;
+  builder.set_insert_point(copy_to_shared);
+  ir::value *ptr = ld->get_pointer_operand();
+  ir::value *msk = ld->get_mask_operand();
+  ir::value *val = ld->get_false_value_operand();
+  ir::value* new_load = builder.create_masked_load_async(ptr, msk, val);
+  copy_to_shared->replace_all_uses_with(new_load);
+  return true;
+
+}
+
 bool peephole::rewrite_unit_red(ir::instruction *value, ir::builder& builder){
   auto x = dynamic_cast<ir::reduce_inst*>(value);
   if(!x)
@@ -197,10 +215,11 @@ void peephole::run(ir::module &mod) {
         continue;
       bool was_modified = false;
       was_modified = was_modified || rewrite_mult(i, builder);
-//      was_modified = was_modified || rewrite_cts_cfs(i, builder);
+      // was_modified = was_modified || rewrite_cts_cfs(i, builder);
       was_modified = was_modified || rewrite_trans_phi(i, builder);
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);
+      was_modified = was_modified || rewrite_load_to_shared(i, builder);
       if(was_modified)
         seen.insert(i);
     }

@@ -263,6 +263,7 @@ value *builder::create_masked_load(value *ptr, value *mask, value *false_value, 
   return insert(masked_load_inst::create(ptr, mask, false_value, name));
 }
 
+
 value *builder::create_masked_store(value *ptr, value *val, value *mask, const std::string &name){
   return insert(masked_store_inst::create(ptr, val, mask, name));
 }
@@ -348,8 +349,13 @@ value *builder::create_copy_to_shared(value *arg, const std::string &name) {
   return insert(copy_to_shared_inst::create(arg, name));
 }
 
+
 value *builder::create_copy_from_shared(value *arg, const std::string &name) {
   return insert(copy_from_shared_inst::create(arg, name));
+}
+
+value *builder::create_masked_load_async(value *ptr, value *mask, value *false_value, const std::string &name) {
+  return insert(masked_load_async_inst::create(ptr, mask, false_value, name));
 }
 
 value *builder::create_barrier(const std::string &name) {

@@ -113,6 +113,7 @@ enum value_id_t: unsigned {
   // io
   INST_UNMASKED_LOAD,
   INST_MASKED_LOAD,
+  INST_MASKED_LOAD_ASYNC,
   INST_UNMASKED_STORE,
   INST_MASKED_STORE,
   // retile

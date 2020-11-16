@@ -431,6 +431,25 @@ public:
   _TRITON_DEFINE_ACCEPT(masked_load_inst)
 };
 
+// masked load async
+class masked_load_async_inst: public load_inst {
+private:
+  std::string repr_impl() const { return "masked_load_async_async"; }
+  masked_load_async_inst(value *ptr, value *mask, value *false_value,
+                   const std::string &name, instruction *next);
+
+public:
+  // accessors
+  value *get_mask_operand() { return get_operand(1); }
+  value *get_false_value_operand() { return get_operand(2); }
+  // factory method
+  static masked_load_async_inst* create(value *ptr, value *mask, value *false_value,
+                                  const std::string &name = "",
+                                  instruction *next = nullptr);
+  _TRITON_DEFINE_CLONE(masked_load_async_inst)
+  _TRITON_DEFINE_ACCEPT(masked_load_async_inst)
+};
+
 // store
 class store_inst: public io_inst {
 protected:
@@ -754,6 +773,7 @@ public:
   _TRITON_DEFINE_CLONE(copy_from_shared_inst)
   _TRITON_DEFINE_ACCEPT(copy_from_shared_inst)
 };
+
 
 class recoalesce_inst: public unary_inst{
 private:

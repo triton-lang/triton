@@ -463,6 +463,20 @@ masked_load_inst* masked_load_inst::create(value *ptr, value *mask, value *false
   return new masked_load_inst(ptr, mask, false_value, name, next);
 }
 
+// masked load async
+masked_load_async_inst::masked_load_async_inst(value *ptr, value *mask, value *false_value,
+                                   const std::string &name, instruction *next)
+  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, name, next) {
+  set_operand(0, ptr);
+  set_operand(1, mask);
+  set_operand(2, false_value);
+}
+
+masked_load_async_inst* masked_load_async_inst::create(value *ptr, value *mask, value *false_value,
+                                           const std::string &name, instruction *next) {
+  return new masked_load_async_inst(ptr, mask, false_value, name, next);
+}
+
 
 store_inst::store_inst(value *ptr, value_id_t id, unsigned num_ops, const std::string &name, instruction *next)
   : io_inst(type::get_void_ty(ptr->get_type()->get_context()), id, num_ops, name, next)

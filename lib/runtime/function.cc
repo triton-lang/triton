@@ -195,9 +195,12 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   // generate llvm code
   llvm::LLVMContext ctx;
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(module.get_name(), ctx));
+  // optimizations
+  bool cts_use_async = target->as_nvidia()->sm() >= 80;
   // create passes
   codegen::analysis::align align;
   codegen::analysis::axes axes;
+  codegen::transform::cts cts(cts_use_async);
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, opt.num_warps, target.get());
   codegen::analysis::liveness liveness(&layouts);
@@ -207,7 +210,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   codegen::transform::peephole peephole;
   codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);
-  codegen::transform::cts cts;
   codegen::generator isel(&axes, &layouts, &align, &allocation, target.get(), opt.num_warps);
   // run passes
   dce.run(module);
@@ -238,7 +240,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     throw std::runtime_error("using too much shared memory");
   barriers.run(module);
-  //ir::print(module, std::cout);
+  ir::print(module, std::cout);
   isel.visit(module, *llvm);
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   return res;

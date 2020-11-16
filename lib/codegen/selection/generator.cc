@@ -1304,6 +1304,39 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   tgt_->add_barrier(mod_, *builder_);
 }
 
+void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* cts){
+  unsigned vector_size = 1;
+  ir::value *arg = cts->get_operand(0);
+  std::cout << arg << std::endl;
+  analysis::shared_layout* out_layout = layouts_->get(cts)->to_shared();
+  analysis::scanline_layout* in_layout = layouts_->get(arg)->to_scanline();
+  std::cout << in_layout << " " << out_layout << std::endl;
+  auto out_order = out_layout->get_order();
+  auto in_order = in_layout->get_order();
+  // tiles
+  if(out_order == in_order)
+    vector_size = in_layout->nts(in_order[0]);
+  std::cout << "0" << std::endl;
+  for_each(arg, [&](indices_t idx){
+    distributed_tile* in = (distributed_tile*)tmap_.at(arg);
+    shared_tile* result = (shared_tile*)tmap_.at(cts);
+    std::cout << "1" << std::endl;
+    unsigned linear = in->get_linear_index(idx);
+    unsigned id = linear / vector_size;
+    Value *in_value = in->get_value(idx);
+    if(linear % vector_size == 0){
+      Value *addr = result->get_ptr_to(idx);
+      GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(addr);
+      assert(gep->getNumIndices() == 1);
+      ConstantInt *cst = dyn_cast<ConstantInt>(gep->idx_begin());
+      std::cout << gep->getNumIndices() << std::endl;
+      std::cout << cst << std::endl;
+      exit(0);
+    }
+  });
+  exit(0);
+}
+
 void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   unsigned vector_size = 1;
   ir::value *arg = cts->get_operand(0);
@@ -1314,7 +1347,7 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   // tiles
   if(out_order == in_order)
     vector_size = in_layout->nts(in_order[0]);
-
+  // default implementation
   std::map<unsigned, Value*> packets;
   for_each(arg, [&](indices_t idx){
     distributed_tile* in = (distributed_tile*)tmap_.at(arg);
