@@ -657,6 +657,7 @@ void UnaryOp::TypeChecking() {
 
   case Token::EXP:
   case Token::LOG:
+  case Token::SQRTF:
     return IntrinsicOpTypeChecking();
 
   default:
