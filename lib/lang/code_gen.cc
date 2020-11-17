@@ -204,6 +204,7 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
     case Token::CAST:        return set_ret(GenSemCastOp(arg, GenIRType(unary->Type(), *ctx_)));
     case Token::EXP:         return set_ret(bld_->create_exp(arg)); //FIXME cast
     case Token::LOG:         return set_ret(bld_->create_log(arg));
+    case Token::SQRTF:       return set_ret(bld_->create_sqrt(arg));
     case Token::REDUCE: {
       int ax, tag;
       UnaryOp::decodeRed(unary->info_, ax, tag);
@@ -286,11 +287,6 @@ void Generator::VisitFuncCall(FuncCall* funcCall) {
     VisitExpr(funcCall->Args()->at(2));
     ir::value* msk = ret_;
     return set_ret(bld_->create_atomic_add(ptr, val, msk));
-  }
-  if(name == "sqrtf"){
-    VisitExpr(funcCall->Args()->at(0));
-    ir::value* ret = ret_;
-    return set_ret(bld_->create_sqrt(ret));
   }
   if(name == "calloc"){
     VisitExpr(funcCall->Args()->at(0));
