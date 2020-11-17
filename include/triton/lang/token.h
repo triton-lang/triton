@@ -168,6 +168,7 @@ public:
     BITCAST,
     EXP,
     LOG,
+    SQRTF,
     // KEYWORD END
 
     IDENTIFIER,
