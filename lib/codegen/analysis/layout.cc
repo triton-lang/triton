@@ -242,11 +242,9 @@ void shared_layout::extract_double_bufferable(ir::value *v, std::shared_ptr<doub
   ir::value *value_1 = phi->get_incoming_value(1);
   ir::instruction *i_0 = dynamic_cast<ir::instruction*>(value_0);
   ir::instruction *i_1 = dynamic_cast<ir::instruction*>(value_1);
-  if(!i_0 || !i_1 ||
-     !dynamic_cast<ir::copy_to_shared_inst*>(i_0) ||
-     !dynamic_cast<ir::copy_to_shared_inst*>(i_1) ||
-     !dynamic_cast<ir::masked_load_async_inst*>(i_0) ||
-     !dynamic_cast<ir::masked_load_async_inst*>(i_1))
+  if(!(i_0 && !i_1) &&
+     !(dynamic_cast<ir::copy_to_shared_inst*>(i_0) && dynamic_cast<ir::copy_to_shared_inst*>(i_1)) &&
+     !(dynamic_cast<ir::masked_load_async_inst*>(i_0) && dynamic_cast<ir::masked_load_async_inst*>(i_1)))
     return;
   if(is_latch_1)
     res.reset(new double_buffer_info_t{value_0, value_1, phi});

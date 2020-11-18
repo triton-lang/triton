@@ -240,7 +240,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     throw std::runtime_error("using too much shared memory");
   barriers.run(module);
-  // ir::print(module, std::cout);
+//  ir::print(module, std::cout);
   isel.visit(module, *llvm);
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   return res;

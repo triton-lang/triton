@@ -127,8 +127,8 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     opt.num_warps = {nwarp};
   }
   if(mode == BENCH) {
-    opt.defines.push_back({"TM", {"64", "128"}});
-    opt.defines.push_back({"TN", {"64", "128"}});
+    opt.defines.push_back({"TM", {"64"}});
+    opt.defines.push_back({"TN", {"64"}});
     opt.defines.push_back({"TK", {"16"}});
     opt.defines.push_back({"TZ", {"1"}});
     opt.num_warps = {4};
@@ -151,17 +151,17 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
     bench.push_back(tflops(triton_ns));
 
-    // cublas
-   if(cublas::cublasinit()){
-     T alpha(static_cast<double>(1));
-     T beta(static_cast<double>(0));
-     cublasGemmAlgo_t fastest;
-     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
-     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
-                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
-                                                                ldc, nullptr, fastest); }, stream);
-     bench.push_back(tflops(cublas_ms));
-   }
+//    // cublas
+//   if(cublas::cublasinit()){
+//     T alpha(static_cast<double>(1));
+//     T beta(static_cast<double>(0));
+//     cublasGemmAlgo_t fastest;
+//     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
+//     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
+//                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
+//                                                                ldc, nullptr, fastest); }, stream);
+//     bench.push_back(tflops(cublas_ms));
+//   }
   }
 
   // test triton

@@ -130,6 +130,7 @@ public:
   void visit_copy_to_shared_inst(ir::copy_to_shared_inst*);
   void visit_copy_from_shared_inst(ir::copy_from_shared_inst*);
   void visit_barrier_inst(ir::barrier_inst*);
+  void visit_async_wait_inst(ir::async_wait_inst*);
   void visit_make_range_dyn(ir::make_range_dyn*);
   void visit_make_range(ir::make_range*);
 

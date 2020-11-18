@@ -242,7 +242,6 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
   short_ptr->setValue(true);
   // compute capability
   int cc = ((driver::cu_device*)device)->compute_capability();
-  cc = std::min(cc, max_nvvm_cc);
   std::string sm = "sm_" + std::to_string(cc);
   // driver version
   int version;
@@ -253,12 +252,11 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
     throw std::runtime_error("Triton requires CUDA 10+");
   // PTX version
   int ptx = vptx.at(version);
-  ptx = std::min(ptx, max_nvvm_ptx);
   int ptx_major = ptx / 10;
   int ptx_minor = ptx % 10;
   // create
   llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(std::move(module), "nvptx64-nvidia-cuda", sm, "", buffer, "+ptx" + std::to_string(ptx), Assembly);
+  module::compile_llvm_module(std::move(module), "nvptx64-nvidia-cuda", "sm_" + std::to_string(std::min(cc, max_nvvm_cc)), "", buffer, "+ptx" + std::to_string(std::min(ptx, max_nvvm_ptx)), Assembly);
   std::string result(buffer.begin(), buffer.end());
   find_and_replace(result, ".version", "\n", ".version " + std::to_string(ptx_major) + "." + std::to_string(ptx_minor) + "\n");
   find_and_replace(result, ".target", "\n", ".target " + sm + "\n");
@@ -272,6 +270,7 @@ cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll
 
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
   cu_context::context_switcher ctx(*context);
+  
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
   unsigned int errbufsize = 8096;

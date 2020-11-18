@@ -1304,37 +1304,46 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   tgt_->add_barrier(mod_, *builder_);
 }
 
-void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* cts){
+void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
   unsigned vector_size = 1;
-  ir::value *arg = cts->get_operand(0);
-  std::cout << arg << std::endl;
-  analysis::shared_layout* out_layout = layouts_->get(cts)->to_shared();
-  analysis::scanline_layout* in_layout = layouts_->get(arg)->to_scanline();
-  std::cout << in_layout << " " << out_layout << std::endl;
+  ir::value *ptrs = x->get_operand(0);
+  analysis::shared_layout* out_layout = layouts_->get(x)->to_shared();
+  analysis::scanline_layout* in_layout = layouts_->get(ptrs)->to_scanline();
   auto out_order = out_layout->get_order();
   auto in_order = in_layout->get_order();
   // tiles
   if(out_order == in_order)
     vector_size = in_layout->nts(in_order[0]);
-  std::cout << "0" << std::endl;
-  for_each(arg, [&](indices_t idx){
-    distributed_tile* in = (distributed_tile*)tmap_.at(arg);
-    shared_tile* result = (shared_tile*)tmap_.at(cts);
-    std::cout << "1" << std::endl;
-    unsigned linear = in->get_linear_index(idx);
+  for_each(ptrs, [&](indices_t idx){
+    distributed_tile* in_ptr = (distributed_tile*)tmap_.at(ptrs);
+    shared_tile* out = (shared_tile*)tmap_.at(x);
+    unsigned linear = in_ptr->get_linear_index(idx);
     unsigned id = linear / vector_size;
-    Value *in_value = in->get_value(idx);
+    Value *in_value = in_ptr->get_value(idx);
     if(linear % vector_size == 0){
-      Value *addr = result->get_ptr_to(idx);
-      GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(addr);
-      assert(gep->getNumIndices() == 1);
-      ConstantInt *cst = dyn_cast<ConstantInt>(gep->idx_begin());
-      std::cout << gep->getNumIndices() << std::endl;
-      std::cout << cst << std::endl;
-      exit(0);
+      // input ptr info
+      GetElementPtrInst *in_gep = dyn_cast<GetElementPtrInst>(in_ptr->get_value(idx));
+      Value *in_base = in_gep->getPointerOperand();
+      ConstantInt *in_off = dyn_cast<ConstantInt>(in_gep->idx_begin());
+      std::string in_off_str = std::to_string(in_off->getValue().getSExtValue()*2*vector_size);
+      // output ptr info
+      Value *out_addr = out->get_ptr_to(idx);
+      GetElementPtrInst *out_gep = dyn_cast<GetElementPtrInst>(out_addr);
+      assert(out_gep->getNumIndices() == 1);
+      Value *out_base = out_gep->getPointerOperand();
+      ConstantInt *out_off = dyn_cast<ConstantInt>(out_gep->idx_begin());
+      std::string out_off_str = std::to_string(out_off->getValue().getSExtValue()*2);
+      // asm
+      FunctionType *ty = FunctionType::get(builder_->getVoidTy(), {out_base->getType(), in_base->getType()}, false);
+      std::string asm_str = "cp.async.ca.shared.global [$0 + " + out_off_str + "], [$1 + " + in_off_str + "], " + std::to_string(vector_size*2) + ";";
+      InlineAsm *iasm = InlineAsm::get(ty, asm_str, "r,l", true);
+      Value *current_result = builder_->CreateCall(iasm, {out_base, in_base});
     }
   });
-  exit(0);
+  std::string asm_str = "cp.async.commit_group;";
+  InlineAsm *iasm = InlineAsm::get(FunctionType::get(builder_->getVoidTy(), {}), asm_str, "", true);
+  builder_->CreateCall(iasm);
+
 }
 
 void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
@@ -1377,6 +1386,12 @@ void generator::visit_copy_from_shared_inst(ir::copy_from_shared_inst* cfs) {
 void generator::visit_barrier_inst(ir::barrier_inst*) {
   Module *module = builder_->GetInsertBlock()->getModule();
   tgt_->add_barrier(module, *builder_);
+}
+
+void generator::visit_async_wait_inst(ir::async_wait_inst*) {
+  std::string asm_str = "cp.async.wait_all;";
+  InlineAsm *iasm = InlineAsm::get(FunctionType::get(builder_->getVoidTy(), {}), asm_str, "", true);
+  builder_->CreateCall(iasm);
 }
 
 void generator::visit_make_range_dyn(ir::make_range_dyn* x) {

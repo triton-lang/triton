@@ -54,7 +54,7 @@ void membar::get_written_intervals(ir::instruction *i, interval_vec_t &res){
     add_reference(i, res);
 }
 
-void membar::insert_barrier(ir::instruction *instr, ir::builder &builder) {
+void membar::insert_barrier(ir::instruction *instr, std::pair<bool, bool> type, ir::builder &builder) {
   if(auto *phi = dynamic_cast<ir::phi_node*>(instr)) {
     std::set<ir::value*> incoming;
     for(unsigned n = 0; n < phi->get_num_incoming(); n++){
@@ -63,7 +63,10 @@ void membar::insert_barrier(ir::instruction *instr, ir::builder &builder) {
       if(incoming.insert(inc_val).second){
         ir::basic_block *block = inc_val->get_parent();
         builder.set_insert_point(block->get_inst_list().back());
-        builder.create_barrier();
+        if(type.first)
+            builder.create_async_wait();
+        if(type.second)
+            builder.create_barrier();
       }
     }
   }
@@ -85,8 +88,9 @@ std::pair<membar::interval_vec_t,
           membar::interval_vec_t> membar::transfer(ir::basic_block *block,
                                             const interval_vec_t &written_to,
                                             const interval_vec_t &read_from,
-                                            std::set<ir::instruction*>& insert_loc,
-                                            std::set<ir::value*>& safe_war) {
+                                            std::map<ir::instruction*, std::pair<bool,bool>>& insert_loc,
+                                            std::set<ir::value*>& safe_war,
+                                            std::vector<ir::instruction*>& to_sync) {
   ir::basic_block::inst_list_t instructions = block->get_inst_list();
   interval_vec_t new_written_to = written_to;
   interval_vec_t new_read_from = read_from;
@@ -95,6 +99,8 @@ std::pair<membar::interval_vec_t,
     interval_vec_t read, written;
     get_read_intervals(i, read);
     get_written_intervals(i, written);
+    if(written.size())
+      to_sync.push_back(i);
     bool read_after_write = intersect(new_written_to, read);
     bool write_after_read = intersect(new_read_from, written);
     // double buffering
@@ -104,9 +110,14 @@ std::pair<membar::interval_vec_t,
     }
     // record hazards
     if(read_after_write || write_after_read) {
-      insert_loc.insert(i);
+      auto is_load_async = [&](ir::instruction *i){ return dynamic_cast<ir::masked_load_async_inst*>(i);};
+      auto is_copy_to_shared = [&](ir::instruction *i){ return dynamic_cast<ir::copy_to_shared_inst*>(i);};
+      bool copy_async_wait = std::any_of(to_sync.begin(), to_sync.end(), is_load_async);
+      bool barrier = std::any_of(to_sync.begin(), to_sync.end(), is_copy_to_shared);
+      insert_loc.insert({i, {copy_async_wait, barrier}});
       new_written_to.clear();
       new_read_from.clear();
+      to_sync.clear();
     }
     std::copy(written.begin(), written.end(), std::back_inserter(new_written_to));
     std::copy(read.begin(), read.end(), std::back_inserter(new_read_from));
@@ -125,17 +136,17 @@ void membar::run(ir::module &mod) {
     if(!layout || !layout->get_double_buffer())
       continue;
     for(ir::value *v: layout->get_values())
-      if(v != layout->get_double_buffer()->phi)
+      if(v != layout->get_double_buffer()->phi){
         safe_war.insert(v);
+      }
   }
-
-
 
   for(ir::function *fn: mod.get_function_list()){
     std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
     std::map<ir::basic_block*, interval_vec_t> written_to;
     std::map<ir::basic_block*, interval_vec_t> read_from;
-    std::set<ir::instruction*> insert_locs;
+    std::vector<ir::instruction*> to_sync;
+    std::map<ir::instruction*, std::pair<bool,bool>> insert_locs;
     size_t n_inserted_im1 = 0;
     bool done = false;
     do{
@@ -150,7 +161,7 @@ void membar::run(ir::module &mod) {
         for(ir::basic_block* pred: block->get_predecessors())
           pred_read_from.push_back(read_from[pred]);
         // apply transfer function
-        auto result = transfer(block, join(pred_written_to), join(pred_read_from), insert_locs, safe_war);
+        auto result = transfer(block, join(pred_written_to), join(pred_read_from), insert_locs, safe_war, to_sync);
         written_to[block] = result.first;
         read_from[block] = result.second;
       }
@@ -158,8 +169,9 @@ void membar::run(ir::module &mod) {
       done = (n_inserted_im1 == n_inserted_i);
       n_inserted_im1 = n_inserted_i;
     }while(!done);
-    for(ir::instruction* i: insert_locs)
-      insert_barrier(i, builder);
+    for(auto x: insert_locs){
+      insert_barrier(x.first, x.second, builder);
+    }
   }
 }
 

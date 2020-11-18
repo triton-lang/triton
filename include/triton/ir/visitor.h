@@ -67,6 +67,7 @@ class copy_to_shared_inst;
 class copy_from_shared_inst;
 class masked_load_async_inst;
 class barrier_inst;
+class async_wait_inst;
 class make_range_dyn;
 class make_range;
 
@@ -142,6 +143,7 @@ public:
   virtual void visit_copy_from_shared_inst(copy_from_shared_inst*) = 0;
   virtual void visit_masked_load_async_inst(masked_load_async_inst*)= 0;
   virtual void visit_barrier_inst(barrier_inst*) = 0;
+  virtual void visit_async_wait_inst(async_wait_inst*) = 0;
   virtual void visit_make_range_dyn(make_range_dyn*) = 0;
   virtual void visit_make_range(make_range*) = 0;
 

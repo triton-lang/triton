@@ -798,6 +798,18 @@ public:
                                             instruction *next = nullptr);
 };
 
+class async_wait_inst: public instruction{
+private:
+  async_wait_inst(context &ctx, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "async_wait"; }
+  _TRITON_DEFINE_CLONE(async_wait_inst)
+  _TRITON_DEFINE_ACCEPT(async_wait_inst)
+
+public:
+  static async_wait_inst* create(context &ctx, const std::string &name = "",
+                                            instruction *next = nullptr);
+};
+
 // On NVIDIA, implementation is such that
 // constant_range = nv_dynamic_program_idx + nv_static_program_idx
 // so as to enable re-association on nv_static_program_idx which is constant
