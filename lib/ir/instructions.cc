@@ -463,6 +463,20 @@ masked_load_inst* masked_load_inst::create(value *ptr, value *mask, value *false
   return new masked_load_inst(ptr, mask, false_value, name, next);
 }
 
+// atomic add
+
+atomic_add_inst::atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name, instruction *next)
+  : io_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_ADD, 3, name, next) {
+  set_operand(0, ptr);
+  set_operand(1, val);
+  set_operand(2, msk);
+}
+
+instruction* atomic_add_inst::create(value *ptr, value *val, value *msk, const std::string &name, instruction *next) {
+  return new atomic_add_inst(ptr, val, msk, name, next);
+}
+
+// store
 
 store_inst::store_inst(value *ptr, value_id_t id, unsigned num_ops, const std::string &name, instruction *next)
   : io_inst(type::get_void_ty(ptr->get_type()->get_context()), id, num_ops, name, next)
@@ -734,18 +748,6 @@ instruction* atomic_exch_inst::create(value *ptr, value *val, const std::string 
   return new atomic_exch_inst(ptr, val, name, next);
 }
 
-// atomic add
-
-atomic_add_inst::atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name, instruction *next)
-  : builtin_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_ADD, 3, name, next) {
-  set_operand(0, ptr);
-  set_operand(1, val);
-  set_operand(2, msk);
-}
-
-instruction* atomic_add_inst::create(value *ptr, value *val, value *msk, const std::string &name, instruction *next) {
-  return new atomic_add_inst(ptr, val, msk, name, next);
-}
 
 // exp
 

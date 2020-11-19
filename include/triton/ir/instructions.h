@@ -431,6 +431,18 @@ public:
   _TRITON_DEFINE_ACCEPT(masked_load_inst)
 };
 
+class atomic_add_inst: public io_inst {
+private:
+  atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "atomic_add"; }
+  _TRITON_DEFINE_CLONE(atomic_add_inst)
+  _TRITON_DEFINE_ACCEPT(atomic_add_inst)
+
+public:
+  static instruction* create(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
+};
+
+
 // store
 class store_inst: public io_inst {
 protected:
@@ -601,16 +613,6 @@ public:
   static instruction* create(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
-class atomic_add_inst: public builtin_inst {
-private:
-  atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
-  std::string repr_impl() const { return "atomic_add"; }
-  _TRITON_DEFINE_CLONE(atomic_add_inst)
-  _TRITON_DEFINE_ACCEPT(atomic_add_inst)
-
-public:
-  static instruction* create(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
-};
 
 class exp_inst: public builtin_inst {
 private:
