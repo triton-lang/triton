@@ -312,6 +312,7 @@ std::vector<unsigned> align::populate_max_contiguous_gep(ir::getelementptr_inst*
     if(rhs_cst_info[d].num_cst)
       rvalue = lhs_max_contiguous[d];
     result[d] = std::max(lvalue, rvalue);
+//    std::cout << "max contiguous: " << x->get_name() << " " << d << " " << result[d] << std::endl;
   }
   return add_to_cache(x, result, max_contiguous_);
 }
@@ -416,8 +417,10 @@ std::vector<unsigned> align::populate_starting_multiple_gep(ir::getelementptr_in
   auto lhs = populate_starting_multiple(x->get_operand(0));
   auto rhs = populate_starting_multiple(x->get_operand(1));
   std::vector<unsigned> result(lhs.size(), 1);
-  for(size_t d = 0; d < lhs.size(); d++)
+  for(size_t d = 0; d < lhs.size(); d++){
     result[d] = gcd(lhs[d], rhs[d]);
+//    std::cout << "starting multiple: " << x->get_name() << " " << d << " " << result[d] << std::endl;
+  }
   return add_to_cache(x, result, starting_multiple_);
 }
 
