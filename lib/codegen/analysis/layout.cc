@@ -108,6 +108,10 @@ data_layout::data_layout(id_t id,
     std::sort(order_.begin(), order_.end(), [&](unsigned a, unsigned b) {
       return max_contiguous[a] > max_contiguous[b];
     });
+//    std::cout << "===" << std::endl;
+//    std::cout << (*largest)->get_name() << std::endl;
+//    for(ir::value* x: ptr)
+//      std::cout << x->get_name() << std::endl;
   }
 }
 
