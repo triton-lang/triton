@@ -25,7 +25,7 @@ class axes;
 class align;
 class layout_visitor;
 class data_layout;
-class mma884_layout;
+class mma_layout;
 class scanline_layout;
 class shared_layout;
 
@@ -33,7 +33,7 @@ class shared_layout;
 class layout_visitor {
 public:
   virtual void visit_layout(data_layout *);
-  virtual void visit_layout_hmma_884(mma884_layout*) = 0;
+  virtual void visit_layout_hmma_884(mma_layout*) = 0;
   virtual void visit_layout_scanline(scanline_layout*) = 0;
   virtual void visit_layout_shared(shared_layout*) = 0;
 };
@@ -68,7 +68,7 @@ public:
   // visitor
   virtual void accept(layout_visitor* vst) = 0;
   // downcast
-  mma884_layout* to_mma884()          { return downcast<mma884_layout>(HMMA_884); }
+  mma_layout* to_mma884()          { return downcast<mma_layout>(HMMA_884); }
   scanline_layout* to_scanline()      { return downcast<scanline_layout>(SCANLINE); }
   shared_layout* to_shared()          { return downcast<shared_layout>(SHARED); }
   // accessors
@@ -92,9 +92,9 @@ protected:
   shape_t shape_;
 };
 
-class mma884_layout: public data_layout {
+class mma_layout: public data_layout {
 public:
-  mma884_layout(size_t num_warps,
+  mma_layout(size_t num_warps,
                 const std::vector<int>& axes,
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values,
@@ -103,9 +103,11 @@ public:
   // accessor
   int fpw(size_t k) { return fpw_.at(k); }
   int wpt(size_t k) { return wpt_.at(k); }
+  int spw(size_t k) { return spw_.at(k); }
 
 private:
   std::vector<int> fpw_;
+  std::vector<int> spw_;
   std::vector<int> wpt_;
 };
 

@@ -144,7 +144,7 @@ public:
   void visit_basic_block(ir::basic_block*);
   void visit_argument(ir::argument*);
 
-  void visit_layout_hmma_884(analysis::mma884_layout*);
+  void visit_layout_hmma_884(analysis::mma_layout*);
   void visit_layout_scanline(analysis::scanline_layout*);
   void visit_layout_shared(analysis::shared_layout*);
 

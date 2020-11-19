@@ -110,18 +110,17 @@ public:
 };
 
 
-class machine_mma884_layout: public machine_distributed_layout {
+class machine_mma_layout: public machine_distributed_layout {
 public:
-  machine_mma884_layout(Module *mod, Builder *builder,
+  machine_mma_layout(Module *mod, Builder *builder,
                         target *tgt,
                         analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
-                        analysis::mma884_layout* layout);
-  Value *offset_a_i_, *offset_a_k_;
-  Value *offset_b_j_, *offset_b_k_;
-  unsigned pack_size_0_;
-  unsigned pack_size_1_;
-  unsigned num_packs_0_;
-  unsigned num_packs_1_;
+                        analysis::mma_layout* layout);
+  Value *offset_a_m_, *offset_a_k_;
+  Value *offset_b_n_, *offset_b_k_;
+  unsigned num_rep_0_;
+  unsigned num_rep_1_;
+  unsigned num_rep_2_;
 };
 
 class machine_scanline_layout: public machine_distributed_layout {

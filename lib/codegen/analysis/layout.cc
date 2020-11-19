@@ -121,7 +121,7 @@ size_t data_layout::find_axis(int to_find) const {
  *           MMA Layout             *
  * -------------------------------- */
 
-mma884_layout::mma884_layout(size_t num_warps,
+mma_layout::mma_layout(size_t num_warps,
                                      const std::vector<int>& axes,
                                      const std::vector<unsigned>& shape,
                                      const std::vector<ir::value *> &values,
@@ -138,6 +138,7 @@ mma884_layout::mma884_layout(size_t num_warps,
     if(fpw_[0]*fpw_[1] < num_fragments)
       fpw_[1] = clamp(fpw_[1]*2, 1, shape_[1] / 8);
   }while(fpw_nm1 != fpw_);
+  spw_ = {fpw_[0]*8, fpw_[1]*8, 1};
 
   /* warps per tile */
   // try to make things as square as possible to maximize data re-use
@@ -146,9 +147,9 @@ mma884_layout::mma884_layout(size_t num_warps,
   do{
     wpt_nm1 = wpt_;
     if(wpt_[0] * wpt_[1] * wpt_[2] < num_warps)
-      wpt_[0] = clamp(wpt_[0]*2, 1, shape_[0] / (fpw_[0]*8));
+      wpt_[0] = clamp(wpt_[0]*2, 1, shape_[0] / spw_[0]);
     if(wpt_[0] * wpt_[1] * wpt_[2] < num_warps)
-      wpt_[1] = clamp(wpt_[1]*2, 1, shape_[1] / (fpw_[1]*8));
+      wpt_[1] = clamp(wpt_[1]*2, 1, shape_[1] / spw_[1]);
   }while(wpt_nm1 != wpt_);
 
   /* sanity check */
@@ -375,7 +376,7 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
   });
   // type
   if(it_hmma_c != values.end())
-    layouts_[id] = new mma884_layout(num_warps_, axes, shapes, values, align_);
+    layouts_[id] = new mma_layout(num_warps_, axes, shapes, values, align_);
   else if(it_cts != values.end()){
     ir::instruction *cts = (ir::instruction*)*it_cts;
     ir::value *arg = cts->get_operand(0);
@@ -417,7 +418,7 @@ void layouts::run(ir::module &mod) {
     }
     if(auto *recoalasce = dynamic_cast<ir::recoalesce_inst*>(i)){
       ir::value *val = recoalasce->get_operand(0);
-      mma884_layout* in_layout = get(val)->to_mma884();
+      mma_layout* in_layout = get(val)->to_mma884();
       scanline_layout* out_layout = get(i)->to_scanline();
       if(!in_layout || !out_layout)
         return;

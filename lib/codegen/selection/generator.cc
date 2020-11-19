@@ -790,11 +790,6 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
 
 void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK) {
   const auto& shapes = dot->get_type()->get_tile_shapes();
-  machine_mma884_layout* hmma = (machine_mma884_layout*)machine_layouts_.at(layouts_->get(dot));
-  TA->set_vector_size(4*hmma->pack_size_0_);
-  TB->set_vector_size(4*hmma->pack_size_1_);
-  TA->set_return_mode(true);
-  TB->set_return_mode(true);
 
   std::map<std::vector<Value*>, std::vector<Value*>> fcs;
 
@@ -804,88 +799,95 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     fcs[key].push_back(TD->get_value(idx));
   });
 
-  Type *fp32_ty = builder_->getFloatTy();
-  Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
-  Type *fp32_pack8_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty});
-  FunctionType *mma_ty = FunctionType::get(fp32_pack8_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
+
+  if(tgt_->as_nvidia()->sm() < 80){
+    machine_mma_layout* mma = (machine_mma_layout*)machine_layouts_.at(layouts_->get(dot));
+    TA->set_vector_size(4);
+    TB->set_vector_size(4);
+    TA->set_return_mode(true);
+    TB->set_return_mode(true);
 
 
-  Value* u_thread_id = tgt_->get_local_id(builder_->GetInsertBlock()->getModule(), *builder_, 0);
-
-  auto ord_a = layouts_->get(dot->get_operand(0))->get_order();
-  auto ord_b = layouts_->get(dot->get_operand(1))->get_order();
-
-  bool is_a_trans = is_trans(dot->get_operand(0));
-  bool is_b_trans = is_trans(dot->get_operand(1));
-  bool is_a_row = is_a_trans ^ (ord_a[0] != 0);
-  bool is_b_row = is_b_trans ^ (ord_b[0] != 0);
-
-  Value *offset_a_i = hmma->offset_a_i_;
-  Value *offset_a_k = hmma->offset_a_k_;
-  if(is_a_row){
-    offset_a_i = builder_->CreateAdd(offset_a_i, builder_->CreateURem(u_thread_id, builder_->getInt32(4)));
-    offset_a_k = builder_->getInt32(0);
-  }
-
-  Value *offset_b_j = hmma->offset_b_j_;
-  Value *offset_b_k = hmma->offset_b_k_;
-  if(!is_b_row){
-    offset_b_j = builder_->CreateAdd(offset_b_j, builder_->CreateURem(u_thread_id, builder_->getInt32(4)));
-    offset_b_k = builder_->getInt32(0);
-  }
-
-  std::string op_a = is_a_row ? "row" : "col";
-  std::string op_b = is_b_row ? "row" : "col";
-
-  InlineAsm *mma_fn = InlineAsm::get(mma_ty, " mma.sync.aligned.m8n8k4." + op_a + "." + op_b + ".f32.f16.f16.f32 "
-                                             "{$0, $1, $2, $3, $4, $5, $6, $7}, "
-                                             "{$8, $9}, "
-                                             "{$10, $11}, "
-                                             "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
-  analysis::mma884_layout* layout = layouts_->get(dot)->to_mma884();
-
-  unsigned fpw_0 = layout->fpw(0);
-  unsigned fpw_1 = layout->fpw(1);
-  unsigned wts_0 = fpw_0 * 8;
-  unsigned wts_1 = fpw_1 * 8;
-  unsigned wpt_0 = layout->wpt(0);
-  unsigned wpt_1 = layout->wpt(1);
-  unsigned stride_rep_i = wpt_0 * wts_0;
-  unsigned stride_rep_j = wpt_1 * wts_1;
-  unsigned num_rep_i = shapes[0] / stride_rep_i;
-  unsigned ld_fc = num_rep_i * 2;
+    Type *fp32_ty = builder_->getFloatTy();
+    Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
+    Type *fp32_pack8_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty});
+    FunctionType *mma_ty = FunctionType::get(fp32_pack8_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
 
 
-  for(auto& x: fcs){
-    std::vector<Value *>& fc = x.second;
-    for(unsigned pack_i = 0; pack_i < hmma->num_packs_0_; pack_i++)
-    for(unsigned pack_j = 0; pack_j < hmma->num_packs_1_; pack_j++){
-    for(unsigned K = 0; K < NK; K += 4){
-      Value *_K = builder_->getInt32(K);
-      Value *current_offset_a_i = builder_->CreateAdd(offset_a_i, builder_->getInt32(pack_i*stride_rep_i*hmma->pack_size_0_));
-      Value *current_offset_b_i = builder_->CreateAdd(offset_b_j, builder_->getInt32(pack_j*stride_rep_j*hmma->pack_size_1_));
-      indices_t idx_a = {current_offset_a_i, builder_->CreateAdd(offset_a_k, _K)};
-      indices_t idx_b = {builder_->CreateAdd(offset_b_k, _K), current_offset_b_i};
-      idx_a.insert(idx_a.end(), x.first.begin(), x.first.end());
-      idx_b.insert(idx_b.end(), x.first.begin(), x.first.end());
-      
-      Value *ha = TA->get_value(idx_a);
-      Value *hb = TB->get_value(idx_b);
-      for(unsigned ii = 0; ii < hmma->pack_size_0_; ii++)
-      for(unsigned jj = 0; jj < hmma->pack_size_1_; jj++){
-        Value *ha0 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(ii*hmma->pack_size_0_ + 0)), fp16x2_ty);
-        Value *ha1 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(ii*hmma->pack_size_0_ + 1)), fp16x2_ty);
-        Value *hb0 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(jj*hmma->pack_size_0_ + 0)), fp16x2_ty);
-        Value *hb1 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(jj*hmma->pack_size_0_ + 1)), fp16x2_ty);
+    Value* u_thread_id = tgt_->get_local_id(builder_->GetInsertBlock()->getModule(), *builder_, 0);
+
+    auto ord_a = layouts_->get(dot->get_operand(0))->get_order();
+    auto ord_b = layouts_->get(dot->get_operand(1))->get_order();
+
+    bool is_a_trans = is_trans(dot->get_operand(0));
+    bool is_b_trans = is_trans(dot->get_operand(1));
+    bool is_a_row = is_a_trans ^ (ord_a[0] != 0);
+    bool is_b_row = is_b_trans ^ (ord_b[0] != 0);
+
+    Value *offset_a_m = mma->offset_a_m_;
+    Value *offset_a_k = mma->offset_a_k_;
+    if(is_a_row){
+      offset_a_m = builder_->CreateAdd(offset_a_m, builder_->CreateURem(u_thread_id, builder_->getInt32(4)));
+      offset_a_k = builder_->getInt32(0);
+    }
+
+    Value *offset_b_n = mma->offset_b_n_;
+    Value *offset_b_k = mma->offset_b_k_;
+    if(!is_b_row){
+      offset_b_n = builder_->CreateAdd(offset_b_n, builder_->CreateURem(u_thread_id, builder_->getInt32(4)));
+      offset_b_k = builder_->getInt32(0);
+    }
+
+    std::string op_a = is_a_row ? "row" : "col";
+    std::string op_b = is_b_row ? "row" : "col";
+
+    InlineAsm *mma_fn = InlineAsm::get(mma_ty, " mma.sync.aligned.m8n8k4." + op_a + "." + op_b + ".f32.f16.f16.f32 "
+                                               "{$0, $1, $2, $3, $4, $5, $6, $7}, "
+                                               "{$8, $9}, "
+                                               "{$10, $11}, "
+                                               "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
+    analysis::mma_layout* layout = layouts_->get(dot)->to_mma884();
+
+    unsigned fpw_0 = layout->fpw(0);
+    unsigned fpw_1 = layout->fpw(1);
+    unsigned wts_0 = fpw_0 * 8;
+    unsigned wts_1 = fpw_1 * 8;
+    unsigned wpt_0 = layout->wpt(0);
+    unsigned wpt_1 = layout->wpt(1);
+    unsigned stride_rep_i = wpt_0 * wts_0;
+    unsigned stride_rep_j = wpt_1 * wts_1;
+    unsigned num_rep_i = shapes[0] / stride_rep_i;
+    unsigned ld_fc = num_rep_i * 2;
+
+
+    for(auto& x: fcs){
+      std::vector<Value *>& fc = x.second;
+      for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
+      for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++){
+      for(unsigned K = 0; K < NK; K += 4){
+        Value *_K = builder_->getInt32(K);
+        Value *current_offset_a_m = builder_->CreateAdd(offset_a_m, builder_->getInt32(pack_i*stride_rep_i));
+        Value *current_offset_b_n = builder_->CreateAdd(offset_b_n, builder_->getInt32(pack_j*stride_rep_j));
+        indices_t idx_a = {current_offset_a_m, builder_->CreateAdd(offset_a_k, _K)};
+        indices_t idx_b = {builder_->CreateAdd(offset_b_k, _K), current_offset_b_n};
+        idx_a.insert(idx_a.end(), x.first.begin(), x.first.end());
+        idx_b.insert(idx_b.end(), x.first.begin(), x.first.end());
+
+        Value *ha = TA->get_value(idx_a);
+        Value *hb = TB->get_value(idx_b);
+        Value *ha0 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(0)), fp16x2_ty);
+        Value *ha1 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(1)), fp16x2_ty);
+        Value *hb0 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(0)), fp16x2_ty);
+        Value *hb1 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(1)), fp16x2_ty);
         std::vector<size_t> idx = {
-          (pack_i*2*hmma->pack_size_0_ + ii*2 + 0) + (pack_j*4*hmma->pack_size_1_ + jj*4 + 0)*ld_fc,
-          (pack_i*2*hmma->pack_size_0_ + ii*2 + 0) + (pack_j*4*hmma->pack_size_1_ + jj*4 + 1)*ld_fc,
-          (pack_i*2*hmma->pack_size_0_ + ii*2 + 1) + (pack_j*4*hmma->pack_size_1_ + jj*4 + 0)*ld_fc,
-          (pack_i*2*hmma->pack_size_0_ + ii*2 + 1) + (pack_j*4*hmma->pack_size_1_ + jj*4 + 1)*ld_fc,
-          (pack_i*2*hmma->pack_size_0_ + ii*2 + 0) + (pack_j*4*hmma->pack_size_1_ + jj*4 + 2)*ld_fc,
-          (pack_i*2*hmma->pack_size_0_ + ii*2 + 0) + (pack_j*4*hmma->pack_size_1_ + jj*4 + 3)*ld_fc,
-          (pack_i*2*hmma->pack_size_0_ + ii*2 + 1) + (pack_j*4*hmma->pack_size_1_ + jj*4 + 2)*ld_fc,
-          (pack_i*2*hmma->pack_size_0_ + ii*2 + 1) + (pack_j*4*hmma->pack_size_1_ + jj*4 + 3)*ld_fc
+          (pack_i*2 + 0) + (pack_j*4 + 0)*ld_fc,
+          (pack_i*2 + 0) + (pack_j*4 + 1)*ld_fc,
+          (pack_i*2 + 1) + (pack_j*4 + 0)*ld_fc,
+          (pack_i*2 + 1) + (pack_j*4 + 1)*ld_fc,
+          (pack_i*2 + 0) + (pack_j*4 + 2)*ld_fc,
+          (pack_i*2 + 0) + (pack_j*4 + 3)*ld_fc,
+          (pack_i*2 + 1) + (pack_j*4 + 2)*ld_fc,
+          (pack_i*2 + 1) + (pack_j*4 + 3)*ld_fc
         };
         Value *nc = builder_->CreateCall(mma_fn,  std::vector<llvm::Value*>{ha0, ha1, hb0, hb1, fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]], fc[idx[4]], fc[idx[5]], fc[idx[6]], fc[idx[7]]});
         fc[idx[0]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{0});
@@ -897,23 +899,55 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
         fc[idx[6]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{6});
         fc[idx[7]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{7});
       }
+      }
     }
-    }
+
+    // write back
+    unsigned i = 0;
+    for_each(dot, [&](indices_t idx){
+      std::vector<Value*> key(idx.size() - 2);
+      std::copy(idx.begin() + 2, idx.end(), key.begin());
+      if(i >= fcs.at(key).size())
+        i = 0;
+      set_value(dot, idx, fcs.at(key)[i++]);
+    });
+
+    TA->set_return_mode(false);
+    TB->set_return_mode(false);
+  }
+  else{
+    machine_mma_layout* mma = (machine_mma_layout*)machine_layouts_.at(layouts_->get(dot));
+
+    Type *fp32_ty = builder_->getFloatTy();
+    Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
+    Type *fp32_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp32_ty, fp32_ty, fp32_ty, fp32_ty});
+
+
+    FunctionType *ld_ty = FunctionType::get(fp16x2_ty, std::vector<llvm::Type*>{PointerType::get(builder_->getHalfTy(), 3)}, false);
+    InlineAsm *ld_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1.shared.b16 "
+                                              "{$0}, [$1];", "=r, r", false);
+
+    FunctionType *mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
+    InlineAsm *mma_fn = InlineAsm::get(mma_ty, "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 "
+                                               "{$0, $1, $2, $3}, "
+                                               "{$4, $5}, "
+                                               "{$6}, "
+                                               "{$7, $8, $9, $10};", "=f,=f,=f,=f,r,r,r,0,1,2,3", false);
+
+    Value *ha0 = builder_->CreateCall(ld_ty, ld_fn, {TA->get_ptr_to({builder_->getInt32(0), builder_->getInt32(0)})});
+    Value *ha1 = builder_->CreateCall(ld_ty, ld_fn, {TA->get_ptr_to({builder_->getInt32(0), builder_->getInt32(0)})});
+    Value *hb0 = builder_->CreateCall(ld_ty, ld_fn, {TA->get_ptr_to({builder_->getInt32(0), builder_->getInt32(0)})});
+    Value *cc = ConstantFP::get(builder_->getFloatTy(), 0);
+    Value *nc = builder_->CreateCall(mma_ty, mma_fn, {ha0,ha1,hb0,cc,cc,cc,cc});
+
+    for_each(dot, [&](indices_t idx){
+      set_value(dot, idx, builder_->CreateExtractValue(nc, std::vector<unsigned>{0}));
+    });
   }
 
-  // write back
-  unsigned i = 0;
-  for_each(dot, [&](indices_t idx){
-    std::vector<Value*> key(idx.size() - 2);
-    std::copy(idx.begin() + 2, idx.end(), key.begin());
-    if(i >= fcs.at(key).size())
-      i = 0;
-    set_value(dot, idx, fcs.at(key)[i++]);
-  });
 
-  TA->set_return_mode(false);
-  TB->set_return_mode(false);
-
+//    std::cout << "visiting hmma dot" << std::endl;
+//    exit(0);
 }
 void generator::visit_scanline_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK,
                                    Type *c_ty, Function *f_mul_add) {
@@ -1205,15 +1239,19 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   // pointer to temporary shared memory
   Type *ty = llvm_type(rc->get_type()->get_scalar_ty(), *ctx_);
   // layouts
-  analysis::mma884_layout* in_layout = layouts_->get(op)->to_mma884();
+  analysis::mma_layout* in_layout = layouts_->get(op)->to_mma884();
   analysis::scanline_layout* out_layout = layouts_->get(rc)->to_scanline();
   // machine tiles
   distributed_tile *in_dt = (distributed_tile*)(tmap_.at(op));
   distributed_tile *out_dt = (distributed_tile*)(tmap_.at(rc));
   // WMMA configuration
-  long wmma_pt[3] = { 2, 4, 1};
-  long wmma[3] = { 8*in_layout->wpt(0)*in_layout->fpw(0),
-                   8*in_layout->wpt(1)*in_layout->fpw(1),
+  std::vector<int> wmma_pt;
+  if(tgt_->as_nvidia()->sm() < 80)
+    wmma_pt = { 2, 4, 1};
+  else
+    wmma_pt = { 2, 2, 1};
+  long wmma[3] = { in_layout->wpt(0)*in_layout->spw(0),
+                   in_layout->wpt(1)*in_layout->spw(1),
                    1};
   // Work per thread for input  layout
   long in_pt[3]  = { shape[0] / wmma[0],
@@ -1240,7 +1278,6 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
       Value *base;
       base = builder_->CreateGEP(sh_mem_ptr_, builder_->getInt32(alloc_->offset(layouts_->get(layouts_->tmp(rc)))));
       base = builder_->CreateBitCast(base, PointerType::get(ty, 3));
-
       // shared memory stride
       Value *stride_0 = builder_->getInt32(tmp->get_shapes()[ord[0]]);
       // indices
@@ -1248,8 +1285,7 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
       // offset
       Value *off = builder_->CreateMul(stride_0, idx_cc);
       if(rank > 2){
-        Value *stride_1 = builder_->CreateMul(stride_0,
-                                              builder_->getInt32(tmp->get_shapes()[ord[1]]));
+        Value *stride_1 = builder_->CreateMul(stride_0, builder_->getInt32(tmp->get_shapes()[ord[1]]));
         Value *idx_zz = axes_.at(a_axes_->get(op, ord[2])).values[in_zz];
         off = builder_->CreateAdd(off, builder_->CreateMul(stride_1, idx_zz));
       }
@@ -1513,8 +1549,8 @@ void generator::visit_function(ir::function* fn) {
 
 
 
-void generator::visit_layout_hmma_884(analysis::mma884_layout* layout) {
-  machine_layouts_[layout] = new machine_mma884_layout(mod_, &*builder_, tgt_, a_axes_, axes_, layout);
+void generator::visit_layout_hmma_884(analysis::mma_layout* layout) {
+  machine_layouts_[layout] = new machine_mma_layout(mod_, &*builder_, tgt_, a_axes_, axes_, layout);
 }
 
 void generator::visit_layout_scanline(analysis::scanline_layout* layout) {
