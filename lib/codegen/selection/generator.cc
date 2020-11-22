@@ -1,4 +1,4 @@
-#include <numeric>
+﻿#include <numeric>
 #include "triton/codegen/selection/generator.h"
 #include "triton/codegen/selection/machine_layout.h"
 #include "triton/codegen/selection/machine_value.h"
@@ -924,8 +924,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
 
     FunctionType *ld_ty = FunctionType::get(fp16x2_ty, std::vector<llvm::Type*>{PointerType::get(builder_->getHalfTy(), 3)}, false);
-    InlineAsm *ld_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1.shared.b16 "
-                                              "{$0}, [$1];", "=r, r", false);
+
+
 
     FunctionType *mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
     InlineAsm *mma_fn = InlineAsm::get(mma_ty, "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 "
@@ -934,14 +934,82 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
                                                "{$6}, "
                                                "{$7, $8, $9, $10};", "=f,=f,=f,=f,r,r,r,0,1,2,3", false);
 
-    Value *ha0 = builder_->CreateCall(ld_ty, ld_fn, {TA->get_ptr_to({builder_->getInt32(0), builder_->getInt32(0)})});
-    Value *ha1 = builder_->CreateCall(ld_ty, ld_fn, {TA->get_ptr_to({builder_->getInt32(0), builder_->getInt32(0)})});
-    Value *hb0 = builder_->CreateCall(ld_ty, ld_fn, {TA->get_ptr_to({builder_->getInt32(0), builder_->getInt32(0)})});
-    Value *cc = ConstantFP::get(builder_->getFloatTy(), 0);
-    Value *nc = builder_->CreateCall(mma_ty, mma_fn, {ha0,ha1,hb0,cc,cc,cc,cc});
 
+
+    Value* warp_size = builder_->getInt32(32);
+    Value* u_thread_id_0 = tgt_->get_local_id(mod_, *builder_, 0);
+    Value *u_thread_id = builder_->CreateURem(u_thread_id_0, warp_size);
+    Value *u_warp_id = builder_->CreateUDiv(u_thread_id_0, warp_size);
+
+    analysis::mma_layout* layout = layouts_->get(dot)->to_mma884();
+
+    Value *warp_id_0 = builder_->CreateURem(u_warp_id, builder_->getInt32(layout->wpt(0)));
+    Value *warp_id_12 = builder_->CreateUDiv(u_warp_id, builder_->getInt32(layout->wpt(0)));
+    Value *warp_id_1 = builder_->CreateURem(warp_id_12, builder_->getInt32(layout->wpt(1)));
+    Value *warp_id_2 = builder_->CreateUDiv(warp_id_12, builder_->getInt32(layout->wpt(1)));
+    Value *warp_offset_i = builder_->CreateMul(warp_id_0, builder_->getInt32(layout->spw(0)));
+    Value *warp_offset_j = builder_->CreateMul(warp_id_1, builder_->getInt32(layout->spw(1)));
+
+    std::vector<Value *>& fc = fcs.begin()->second;
+
+    unsigned ld_fc = mma->num_rep_0_ * 2;
+    // left-hand-side values
+    std::map<std::pair<unsigned, unsigned>, std::pair<Value*, Value*>> ha;
+    int lda = TA->get_shapes()[0];
+    Value *load_a_rows = builder_->CreateURem(u_thread_id, builder_->getInt32(8));
+    Value *pTA = TA->get_pointer();
+    pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(load_a_rows, builder_->getInt32(lda))});
+    pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(warp_offset_i, builder_->getInt32(1))});
+
+    for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
+    for(unsigned K = 0; K < NK; K += 8){
+      InlineAsm *ld_a0_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1.trans.shared.b16 "
+                                                "{$0}, [$1 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2 + K*lda*2) + "];", "=r, r", false);
+      InlineAsm *ld_a1_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1.trans.shared.b16 "
+                                                "{$0}, [$1 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2 + 16 + K*lda*2) + "];", "=r, r", false);
+      Value *ha0 = builder_->CreateCall(ld_ty, ld_a0_fn, {pTA});
+      Value *ha1 = builder_->CreateCall(ld_ty, ld_a1_fn, {pTA});
+      ha[{pack_i, K}] = std::make_pair(ha0, ha1);
+    }
+
+    Value *load_b_rows = builder_->CreateURem(u_thread_id, builder_->getInt32(8));
+    // right-hand-side values
+    std::map<std::pair<unsigned, unsigned>, Value*> hb;
+    int ldb = TB->get_shapes()[1];
+    Value *pTB = TB->get_pointer();
+    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(load_b_rows, builder_->getInt32(ldb))});
+    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(warp_offset_j, builder_->getInt32(1))});
+    for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++)
+    for(unsigned K = 0; K < NK; K += 8){
+      InlineAsm *ld_b_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1.trans.shared.b16 "
+                                                "{$0}, [$1 + " + std::to_string(K*ldb*2 + pack_j*layout->wpt(1)*layout->spw(1)*2) + "];", "=r, r", false);
+      hb[{pack_j, K}] = builder_->CreateCall(ld_ty, ld_b_fn, {pTB});
+    }
+
+    for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
+    for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++)
+    for(unsigned K = 0; K < NK; K += 8){
+      std::vector<size_t> idx = {
+        (pack_i*2 + 0) + (pack_j*2 + 0)*ld_fc,
+        (pack_i*2 + 0) + (pack_j*2 + 1)*ld_fc,
+        (pack_i*2 + 1) + (pack_j*2 + 0)*ld_fc,
+        (pack_i*2 + 1) + (pack_j*2 + 1)*ld_fc
+      };
+      Value *nc = builder_->CreateCall(mma_ty, mma_fn, {ha[{pack_i, K}].first, ha[{pack_i, K}].second, hb[{pack_j, K}], fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]]});
+      fc[idx[0]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{0});
+      fc[idx[1]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{1});
+      fc[idx[2]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{2});
+      fc[idx[3]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{3});
+    }
+
+    // write back
+    unsigned i = 0;
     for_each(dot, [&](indices_t idx){
-      set_value(dot, idx, builder_->CreateExtractValue(nc, std::vector<unsigned>{0}));
+      std::vector<Value*> key(idx.size() - 2);
+      std::copy(idx.begin() + 2, idx.end(), key.begin());
+      if(i >= fcs.at(key).size())
+        i = 0;
+      set_value(dot, idx, fcs.at(key)[i++]);
     });
   }
 
@@ -1425,9 +1493,11 @@ void generator::visit_barrier_inst(ir::barrier_inst*) {
 }
 
 void generator::visit_async_wait_inst(ir::async_wait_inst*) {
+  Module *module = builder_->GetInsertBlock()->getModule();
   std::string asm_str = "cp.async.wait_all;";
   InlineAsm *iasm = InlineAsm::get(FunctionType::get(builder_->getVoidTy(), {}), asm_str, "", true);
   builder_->CreateCall(iasm);
+  tgt_->add_barrier(module, *builder_);
 }
 
 void generator::visit_make_range_dyn(ir::make_range_dyn* x) {

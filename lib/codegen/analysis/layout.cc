@@ -130,15 +130,16 @@ mma_layout::mma_layout(size_t num_warps,
   // try to make things as square as possible to maximize data re-use
   fpw_ = {1, 1, 1};
   std::vector<int> fpw_nm1;
-  unsigned num_fragments = std::min<unsigned>((shape_[0]/8)*(shape_[1]/8), 4);
-  do {
-    fpw_nm1 = fpw_;
-    if(fpw_[0]*fpw_[1] < num_fragments)
-      fpw_[0] = clamp(fpw_[0]*2, 1, shape_[0] / 8);
-    if(fpw_[0]*fpw_[1] < num_fragments)
-      fpw_[1] = clamp(fpw_[1]*2, 1, shape_[1] / 8);
-  }while(fpw_nm1 != fpw_);
-  spw_ = {fpw_[0]*8, fpw_[1]*8, 1};
+//  unsigned num_fragments = std::min<unsigned>((shape_[0]/8)*(shape_[1]/8), 4);
+//  do {
+//    fpw_nm1 = fpw_;
+//    if(fpw_[0]*fpw_[1] < num_fragments)
+//      fpw_[0] = clamp(fpw_[0]*2, 1, shape_[0] / 8);
+//    if(fpw_[0]*fpw_[1] < num_fragments)
+//      fpw_[1] = clamp(fpw_[1]*2, 1, shape_[1] / 8);
+//  }while(fpw_nm1 != fpw_);
+//  spw_ = {fpw_[0]*8, fpw_[1]*8, 1};
+  spw_ = {16, 8, 1};
 
   /* warps per tile */
   // try to make things as square as possible to maximize data re-use
@@ -300,12 +301,12 @@ shared_layout::shared_layout(const data_layout *arg,
   // padding
   size_t pad = 0;
   if(hmma_dot_a){
-    bool row = is_trans(hmma_dot_a) ^ order_[0] != 0;
-    pad = 24 - shape_[row ? 0 : 1] % 32;
+//    bool row = is_trans(hmma_dot_a) ^ order_[0] != 0;
+//    pad = 24 - shape_[row ? 0 : 1] % 32;
   }
   else if(hmma_dot_b){
-    bool row = is_trans(hmma_dot_b) ^ order_[0] != 0;
-    pad = 24 - shape_[row ? 1 : 0] % 32;
+//    bool row = is_trans(hmma_dot_b) ^ order_[0] != 0;
+//    pad = 24 - shape_[row ? 1 : 0] % 32;
   }
   else if(order_ != arg_order) {
     pad = 4;

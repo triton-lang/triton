@@ -267,8 +267,8 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
     offset_b_n_ = builder_->CreateAdd(warp_offset_j, lane_offset_j);
     offset_b_k_ = builder_->getInt32(0);
     // c offset
-    Value *offset_c_i = builder_->CreateUDiv(u_thread_id, _4);
-    Value *offset_c_j = builder_->CreateURem(u_thread_id, _4);
+    Value *offset_c_i = builder_->CreateAdd(builder_->CreateUDiv(u_thread_id, _4), warp_offset_i);
+    Value *offset_c_j = builder_->CreateAdd(builder_->CreateMul(_2, builder_->CreateURem(u_thread_id, _4)), warp_offset_j);
     for(unsigned pack = 0; pack < num_rep_0_; pack++){
       idx_i.push_back(builder_->CreateAdd(offset_c_i, builder_->getInt32(pack*spt_0)));
       idx_i.push_back(builder_->CreateAdd(offset_c_i, builder_->getInt32(pack*spt_0 + 8)));
