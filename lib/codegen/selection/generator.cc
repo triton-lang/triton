@@ -952,21 +952,30 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
     std::vector<Value *>& fc = fcs.begin()->second;
 
+    bool is_a_row = TA->get_order()[0] == 1;
+    bool is_b_row = TB->get_order()[0] == 1;
+    std::string a_trans = is_a_row ? "" : ".trans";
+    std::string b_trans = is_b_row ? ".trans" : "";
+    int stride_a_m = is_a_row ? TA->get_shapes()[1] : 1;
+    int stride_a_k = is_a_row ? 1 : TA->get_shapes()[0];
+    int stride_b_n = is_b_row ? 1 : TB->get_shapes()[0];
+    int stride_b_k = is_b_row ? TB->get_shapes()[1] : 1;
+
+
     unsigned ld_fc = mma->num_rep_0_ * 2;
     // left-hand-side values
     std::map<std::pair<unsigned, unsigned>, std::pair<Value*, Value*>> ha;
-    int lda = TA->get_shapes()[0];
+    int lda = is_a_row ? stride_a_m : stride_a_k;
     Value *load_a_rows = builder_->CreateURem(u_thread_id, builder_->getInt32(8));
     Value *pTA = TA->get_pointer();
     pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(load_a_rows, builder_->getInt32(lda))});
-    pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(warp_offset_i, builder_->getInt32(1))});
-
+    pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(warp_offset_i, builder_->getInt32(stride_a_m))});
     for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
     for(unsigned K = 0; K < NK; K += 8){
-      InlineAsm *ld_a0_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1.trans.shared.b16 "
-                                                "{$0}, [$1 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2 + K*lda*2) + "];", "=r, r", false);
-      InlineAsm *ld_a1_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1.trans.shared.b16 "
-                                                "{$0}, [$1 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2 + 16 + K*lda*2) + "];", "=r, r", false);
+      InlineAsm *ld_a0_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1" + a_trans + ".shared.b16 "
+                                                "{$0}, [$1 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2*stride_a_m + K*stride_a_k*2) + "];", "=r, r", false);
+      InlineAsm *ld_a1_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1" + a_trans + ".shared.b16 "
+                                                "{$0}, [$1 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2*stride_a_m + 16*stride_a_m + K*stride_a_k*2) + "];", "=r, r", false);
       Value *ha0 = builder_->CreateCall(ld_ty, ld_a0_fn, {pTA});
       Value *ha1 = builder_->CreateCall(ld_ty, ld_a1_fn, {pTA});
       ha[{pack_i, K}] = std::make_pair(ha0, ha1);
@@ -975,14 +984,14 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *load_b_rows = builder_->CreateURem(u_thread_id, builder_->getInt32(8));
     // right-hand-side values
     std::map<std::pair<unsigned, unsigned>, Value*> hb;
-    int ldb = TB->get_shapes()[1];
+    int ldb = is_b_row ? stride_b_k : stride_b_n;
     Value *pTB = TB->get_pointer();
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(load_b_rows, builder_->getInt32(ldb))});
-    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(warp_offset_j, builder_->getInt32(1))});
+    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(warp_offset_j, builder_->getInt32(stride_b_n))});
     for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++)
     for(unsigned K = 0; K < NK; K += 8){
-      InlineAsm *ld_b_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1.trans.shared.b16 "
-                                                "{$0}, [$1 + " + std::to_string(K*ldb*2 + pack_j*layout->wpt(1)*layout->spw(1)*2) + "];", "=r, r", false);
+      InlineAsm *ld_b_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1" + b_trans + ".shared.b16 "
+                                                "{$0}, [$1 + " + std::to_string(K*stride_b_k*2 + pack_j*layout->wpt(1)*layout->spw(1)*2*stride_b_n) + "];", "=r, r", false);
       hb[{pack_j, K}] = builder_->CreateCall(ld_ty, ld_b_fn, {pTB});
     }
 
