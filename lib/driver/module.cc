@@ -271,6 +271,7 @@ cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll
 cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
   cu_context::context_switcher ctx(*context);
 //  std::cout << source << std::endl;
+//  exit(0);
 
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};

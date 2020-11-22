@@ -127,9 +127,9 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     opt.num_warps = {nwarp};
   }
   if(mode == BENCH) {
-    opt.defines.push_back({"TM", {"64"}});
-    opt.defines.push_back({"TN", {"64"}});
-    opt.defines.push_back({"TK", {"16"}});
+    opt.defines.push_back({"TM", {"128"}});
+    opt.defines.push_back({"TN", {"128"}});
+    opt.defines.push_back({"TK", {"32"}});
     opt.defines.push_back({"TZ", {"1"}});
     opt.num_warps = {4};
   }

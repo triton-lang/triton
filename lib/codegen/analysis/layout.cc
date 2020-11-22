@@ -301,12 +301,12 @@ shared_layout::shared_layout(const data_layout *arg,
   // padding
   size_t pad = 0;
   if(hmma_dot_a){
-//    bool row = is_trans(hmma_dot_a) ^ order_[0] != 0;
-//    pad = 24 - shape_[row ? 0 : 1] % 32;
+    bool row = is_trans(hmma_dot_a) ^ order_[0] != 0;
+    pad = 8;
   }
   else if(hmma_dot_b){
-//    bool row = is_trans(hmma_dot_b) ^ order_[0] != 0;
-//    pad = 24 - shape_[row ? 1 : 0] % 32;
+    bool row = is_trans(hmma_dot_b) ^ order_[0] != 0;
+    pad = 8;
   }
   else if(order_ != arg_order) {
     pad = 4;
