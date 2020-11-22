@@ -14,6 +14,7 @@
 #include "triton/codegen/transform/peephole.h"
 #include "triton/codegen/transform/membar.h"
 #include "triton/codegen/transform/reassociate.h"
+#include "triton/codegen/transform/reorder.h"
 #include "triton/codegen/transform/cts.h"
 #include "triton/codegen/transform/disassociate.h"
 #include "triton/codegen/selection/generator.h"
@@ -208,10 +209,12 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   codegen::transform::membar barriers(&liveness, &layouts, &allocation);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole;
+  codegen::transform::reorder reorder;
   codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::generator isel(&axes, &layouts, &align, &allocation, target.get(), opt.num_warps);
   // run passes
+  reorder.run(module);
   dce.run(module);
   disassociate.run(module);
   dce.run(module);
@@ -240,7 +243,6 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     throw std::runtime_error("using too much shared memory");
   barriers.run(module);
-//  ir::print(module, std::cout);
   isel.visit(module, *llvm);
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   return res;

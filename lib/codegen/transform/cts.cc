@@ -60,8 +60,9 @@ void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, 
   // copy
   builder.set_insert_point_after(i);
   ir::value *copy;
-  if(to_shared)
+  if(to_shared){
     copy = builder.create_copy_to_shared(x);
+  }
   else
     copy = builder.create_copy_from_shared(x);
   parent->replace_uses_of_with(x, copy);

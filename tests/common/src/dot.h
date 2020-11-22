@@ -44,11 +44,11 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
       // reduction loop
       float acc[TM, TN] = 0;
       for(int k = K; k > 0; k -= TK){
-        acc += USEA @ USEB;
         bool checka[SHAPE_A] = k > TK;
         bool checkb[SHAPE_B] = k > TK;
         pa += TK * STRIDE_AK;
         pb += TK * STRIDE_BK;
+        acc += USEA @ USEB;
         a = *?(checka)pa;
         b = *?(checkb)pb;
       }
