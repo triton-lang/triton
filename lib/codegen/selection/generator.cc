@@ -1419,7 +1419,9 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
 
 void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
   unsigned vector_size = 1;
-  ir::value *ptrs = x->get_operand(0);
+  ir::value *ptrs = x->get_pointer_operand();
+  ir::value *msk = x->get_mask_operand();
+  ir::value *val = x->get_false_value_operand();
   analysis::shared_layout* out_layout = layouts_->get(x)->to_shared();
   analysis::scanline_layout* in_layout = layouts_->get(ptrs)->to_scanline();
   auto out_order = out_layout->get_order();
@@ -1429,6 +1431,8 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
     vector_size = in_layout->nts(in_order[0]);
   for_each(ptrs, [&](indices_t idx){
     distributed_tile* in_ptr = (distributed_tile*)tmap_.at(ptrs);
+    distributed_tile* in_msk = (distributed_tile*)tmap_.at(msk);
+    distributed_tile* in_val = (distributed_tile*)tmap_.at(val);
     shared_tile* out = (shared_tile*)tmap_.at(x);
     unsigned linear = in_ptr->get_linear_index(idx);
     unsigned id = linear / vector_size;
@@ -1448,9 +1452,9 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
       std::string out_off_str = std::to_string(out_off->getValue().getSExtValue()*2);
       // asm
       FunctionType *ty = FunctionType::get(builder_->getVoidTy(), {out_base->getType(), in_base->getType()}, false);
-      std::string asm_str = "cp.async.ca.shared.global [$0 + " + out_off_str + "], [$1 + " + in_off_str + "], " + std::to_string(vector_size*2) + ";";
-      InlineAsm *iasm = InlineAsm::get(ty, asm_str, "r,l", true);
-      Value *current_result = builder_->CreateCall(iasm, {out_base, in_base});
+      std::string asm_str = "@$0 cp.async.ca.shared.global [$1 + " + out_off_str + "], [$2 + " + in_off_str + "], " + std::to_string(vector_size*2) + ";";
+      InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,r,l", true);
+      builder_->CreateCall(iasm, {in_msk->get_value(idx), out_base, in_base});
     }
   });
   std::string asm_str = "cp.async.commit_group;";

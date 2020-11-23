@@ -140,8 +140,8 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
                     1, M, N, K, lda, ldb, ldc, dlocks->addr_as_uintptr_t()};
 
   auto grid = [M, N](const rt::function::options_t& x) {
-    return rt::grid_t{ceil(M, x.D<int>("TM")),
-                      ceil(N, x.D<int>("TN")),
+    return rt::grid_t{ceil(M, x.D<int>("TM"))*ceil(N, x.D<int>("TN")),
+                      (size_t)1,
                       (size_t)x.D<int>("TZ")};
   };
 
@@ -151,17 +151,17 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
     bench.push_back(tflops(triton_ns));
 
-    // cublas
-   if(cublas::cublasinit()){
-     T alpha(static_cast<double>(1));
-     T beta(static_cast<double>(0));
-     cublasGemmAlgo_t fastest;
-//     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
-     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
-                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
-                                                                ldc, nullptr, CUBLAS_GEMM_DEFAULT_TENSOR_OP); }, stream);
-     bench.push_back(tflops(cublas_ms));
-   }
+//    // cublas
+//   if(cublas::cublasinit()){
+//     T alpha(static_cast<double>(1));
+//     T beta(static_cast<double>(0));
+//     cublasGemmAlgo_t fastest;
+////     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
+//     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
+//                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
+//                                                                ldc, nullptr, CUBLAS_GEMM_DEFAULT_TENSOR_OP); }, stream);
+//     bench.push_back(tflops(cublas_ms));
+//   }
   }
 
   // test triton
