@@ -952,12 +952,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
 
 
-    FunctionType *mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
-    InlineAsm *mma_fn = InlineAsm::get(mma_ty, "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 "
-                                               "{$0, $1, $2, $3}, "
-                                               "{$4, $5}, "
-                                               "{$6}, "
-                                               "{$7, $8, $9, $10};", "=f,=f,=f,=f,r,r,r,0,1,2,3", false);
+
 
 
 
@@ -1007,9 +1002,15 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(builder_->CreateURem(builder_->CreateUDiv(u_thread_id, builder_->getInt32(8)), builder_->getInt32(2)), builder_->getInt32(layout->wpt(1)*layout->spw(1)*stride_b_n))});
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(builder_->CreateUDiv(u_thread_id, builder_->getInt32(16)), builder_->getInt32(8*stride_b_k))});
 
+    FunctionType *mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
+    InlineAsm *mma_fn = InlineAsm::get(mma_ty, "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
+                                               "{$0, $1, $2, $3}, "
+                                               "{$4, $5, $6, $7}, "
+                                               "{$8, $9}, "
+                                               "{$10, $11, $12, $13};", "=f,=f,=f,=f,r,r,r,r,r,r,f,f,f,f", false);
     for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
     for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++)
-    for(unsigned K = 0; K < NK; K += 8){
+    for(unsigned K = 0; K < NK; K += 16){
       if(ha.find({pack_i, K}) == ha.end()){
         InlineAsm *ld_a0_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
                                                   "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2*stride_a_m + K*stride_a_k*2) + "];", "=r,=r,=r,=r,r", false);
@@ -1041,7 +1042,9 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
         (pack_i*2 + 1) + (pack_j*2 + 0)*cols_per_thread,
         (pack_i*2 + 1) + (pack_j*2 + 1)*cols_per_thread
       };
-      Value *nc = builder_->CreateCall(mma_ty, mma_fn, {ha[{pack_i, K}].first, ha[{pack_i, K}].second, hb[{pack_j, K}], fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]]});
+      Value *nc = builder_->CreateCall(mma_ty, mma_fn, {ha[{pack_i, K}].first, ha[{pack_i, K}].second,ha[{pack_i, K+8}].first, ha[{pack_i, K+8}].second,
+                                                        hb[{pack_j, K}], hb[{pack_j, K+8}],
+                                                        fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]]});
       fc[idx[0]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{0});
       fc[idx[1]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{1});
       fc[idx[2]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{2});
