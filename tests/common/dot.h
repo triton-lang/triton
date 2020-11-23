@@ -159,7 +159,7 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
 //     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
      double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
                                                                 &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
-                                                                ldc, nullptr, CUBLAS_GEMM_DEFAULT_TENSOR_OP); }, stream);
+                                                                ldc, nullptr, CUBLAS_GEMM_DFALT); }, stream);
      bench.push_back(tflops(cublas_ms));
    }
   }

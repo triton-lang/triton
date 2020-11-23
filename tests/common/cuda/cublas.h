@@ -199,7 +199,7 @@ inline void cublasGemm(cublasDataType_t dtype,
   // get handle
   static cublasHandle_t handle = cublasGetHandle(stream);
   // set math mode
-  if(dtype == CUDA_R_16F)
+//  if(dtype == CUDA_R_16F)
     cublas::cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH);
   // cuda types
   static const std::map<char, cublasOperation_t> cu_op = {
