@@ -1,6 +1,7 @@
 #ifndef TDL_INCLUDE_CODEGEN_OPTIMIZE_TRANS_H
 #define TDL_INCLUDE_CODEGEN_OPTIMIZE_TRANS_H
 
+#include "triton/codegen/target.h"
 
 namespace triton {
 
@@ -32,8 +33,11 @@ private:
 private:
 
 public:
-  peephole() {}
+  peephole(target* tgt): tgt_(tgt) {}
   void run(ir::module &mod);
+
+private:
+  target* tgt_;
 };
 
 

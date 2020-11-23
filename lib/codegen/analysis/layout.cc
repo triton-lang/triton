@@ -125,21 +125,24 @@ mma_layout::mma_layout(size_t num_warps,
                                      const std::vector<int>& axes,
                                      const std::vector<unsigned>& shape,
                                      const std::vector<ir::value *> &values,
-                                     analysis::align* align): data_layout(HMMA_884, axes, shape, values, align) {
+                                     analysis::align* align, target* tgt): data_layout(HMMA_884, axes, shape, values, align) {
   /* fragments per warp */
   // try to make things as square as possible to maximize data re-use
   fpw_ = {1, 1, 1};
   std::vector<int> fpw_nm1;
-//  unsigned num_fragments = std::min<unsigned>((shape_[0]/8)*(shape_[1]/8), 4);
-//  do {
-//    fpw_nm1 = fpw_;
-//    if(fpw_[0]*fpw_[1] < num_fragments)
-//      fpw_[0] = clamp(fpw_[0]*2, 1, shape_[0] / 8);
-//    if(fpw_[0]*fpw_[1] < num_fragments)
-//      fpw_[1] = clamp(fpw_[1]*2, 1, shape_[1] / 8);
-//  }while(fpw_nm1 != fpw_);
-//  spw_ = {fpw_[0]*8, fpw_[1]*8, 1};
-  spw_ = {16, 8, 1};
+//  if(tgt->as_nvidia()->sm() < 80){
+//    unsigned num_fragments = std::min<unsigned>((shape_[0]/8)*(shape_[1]/8), 4);
+//    do {
+//      fpw_nm1 = fpw_;
+//      if(fpw_[0]*fpw_[1] < num_fragments)
+//        fpw_[0] = clamp(fpw_[0]*2, 1, shape_[0] / 8);
+//      if(fpw_[0]*fpw_[1] < num_fragments)
+//        fpw_[1] = clamp(fpw_[1]*2, 1, shape_[1] / 8);
+//    }while(fpw_nm1 != fpw_);
+//    spw_ = {fpw_[0]*8, fpw_[1]*8, 1};
+//  }
+//  else
+    spw_ = {16, 8, 1};
 
   /* warps per tile */
   // try to make things as square as possible to maximize data re-use
@@ -379,7 +382,7 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
   });
   // type
   if(it_hmma_c != values.end())
-    layouts_[id] = new mma_layout(num_warps_, axes, shapes, values, align_);
+    layouts_[id] = new mma_layout(num_warps_, axes, shapes, values, align_, tgt_);
   else if(it_cts != values.end()){
     ir::instruction *cts = (ir::instruction*)*it_cts;
     ir::value *arg = cts->get_operand(0);

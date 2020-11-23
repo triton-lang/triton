@@ -98,7 +98,7 @@ public:
                 const std::vector<int>& axes,
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values,
-                analysis::align* align);
+                analysis::align* align, target *tgt);
   void accept(layout_visitor* vst) { vst->visit_layout_hmma_884(this); }
   // accessor
   int fpw(size_t k) { return fpw_.at(k); }

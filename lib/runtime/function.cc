@@ -208,7 +208,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation);
   codegen::transform::dce dce;
-  codegen::transform::peephole peephole;
+  codegen::transform::peephole peephole(target.get());
   codegen::transform::reorder reorder;
   codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);

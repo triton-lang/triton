@@ -723,7 +723,7 @@ void generator::visit_atomic_exch_inst(ir::atomic_exch_inst* xchg) {
 
 void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
 
-    
+
   if(add->get_type()->is_tile_ty()){
     ir::value* ptr = add->get_operand(0);
     ir::value* val = add->get_operand(1);
@@ -731,7 +731,7 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
     distributed_tile* ptrs = (distributed_tile*)tmap_.at(ptr);
     distributed_tile* vals = (distributed_tile*)tmap_.at(val);
     distributed_tile* msks = (distributed_tile*)tmap_.at(msk);
-    
+
     // vector size
     int vector_size = 1;
     int ld = ptrs->get_order()[0];
@@ -776,7 +776,7 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
       // asm function type
       FunctionType *fn_ty = FunctionType::get(ty, arg_ty, false);
       // asm string
-      std::string suffix = vector_size == 2 ? "x2" : ""; 
+      std::string suffix = vector_size == 2 ? "x2" : "";
       std::string mod = nbits == 32 ? "" : ".noftz";
       std::string asm_str = "@$0 atom.global.gpu.add" + mod + ".f" + std::to_string(nbits) + suffix + " $1, [$2" + offset + "], $3;";
       std::string ty_id = nbits == 32 ? "f" : (vector_size == 1 ? "h" : "r");
@@ -971,7 +971,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *warp_id_0 = builder_->CreateURem(u_warp_id, builder_->getInt32(layout->wpt(0)));
     Value *warp_id_12 = builder_->CreateUDiv(u_warp_id, builder_->getInt32(layout->wpt(0)));
     Value *warp_id_1 = builder_->CreateURem(warp_id_12, builder_->getInt32(layout->wpt(1)));
-    Value *warp_id_2 = builder_->CreateUDiv(warp_id_12, builder_->getInt32(layout->wpt(1)));
     Value *warp_offset_i = builder_->CreateMul(warp_id_0, builder_->getInt32(layout->spw(0)));
     Value *warp_offset_j = builder_->CreateMul(warp_id_1, builder_->getInt32(layout->spw(1)));
 
@@ -986,8 +985,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int stride_b_n = is_b_row ? 1 : TB->get_shapes()[0];
     int stride_b_k = is_b_row ? TB->get_shapes()[1] : 1;
 
-
-    unsigned ld_fc = mma->num_rep_0_ * 2;
     // left-hand-side values
     std::map<std::pair<unsigned, unsigned>, std::pair<Value*, Value*>> ha;
     int lda = is_a_row ? stride_a_m : stride_a_k;
@@ -998,8 +995,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(builder_->CreateURem(builder_->CreateUDiv(u_thread_id, builder_->getInt32(8)), builder_->getInt32(2)), builder_->getInt32(8*stride_a_m))});
     pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(builder_->CreateUDiv(u_thread_id, builder_->getInt32(16)), builder_->getInt32(layout->wpt(0)*layout->spw(0)*stride_a_m))});
 
-    Value *load_b_rows = builder_->CreateURem(u_thread_id, builder_->getInt32(8));
     // right-hand-side values
+    Value *load_b_rows = builder_->CreateURem(u_thread_id, builder_->getInt32(8));
     std::map<std::pair<unsigned, unsigned>, Value*> hb;
     int ldb = is_b_row ? stride_b_k : stride_b_n;
     Value *pTB = TB->get_pointer();
@@ -1030,11 +1027,12 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
         hb[{pack_j, K}] = hb0;
         hb[{pack_j+1, K}] = hb1;
       }
+      unsigned cols_per_thread = mma->num_rep_0_ * 2;
       std::vector<size_t> idx = {
-        (pack_i*2 + 0) + (pack_j*2 + 0)*ld_fc,
-        (pack_i*2 + 0) + (pack_j*2 + 1)*ld_fc,
-        (pack_i*2 + 1) + (pack_j*2 + 0)*ld_fc,
-        (pack_i*2 + 1) + (pack_j*2 + 1)*ld_fc
+        (pack_i*2 + 0) + (pack_j*2 + 0)*cols_per_thread,
+        (pack_i*2 + 0) + (pack_j*2 + 1)*cols_per_thread,
+        (pack_i*2 + 1) + (pack_j*2 + 0)*cols_per_thread,
+        (pack_i*2 + 1) + (pack_j*2 + 1)*cols_per_thread
       };
       Value *nc = builder_->CreateCall(mma_ty, mma_fn, {ha[{pack_i, K}].first, ha[{pack_i, K}].second, hb[{pack_j, K}], fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]]});
       fc[idx[0]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{0});
