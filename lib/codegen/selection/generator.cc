@@ -996,20 +996,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(load_a_rows, builder_->getInt32(lda))});
     pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(warp_offset_i, builder_->getInt32(stride_a_m))});
     pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(builder_->CreateURem(builder_->CreateUDiv(u_thread_id, builder_->getInt32(8)), builder_->getInt32(2)), builder_->getInt32(8*stride_a_m))});
-    pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(builder_->CreateUDiv(u_thread_id, builder_->getInt32(16)), builder_->getInt32(8*stride_a_k))});
-
-    for(unsigned K = 0; K < NK; K += 16)
-    for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++){
-      InlineAsm *ld_a0_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
-                                                "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2*stride_a_m + K*stride_a_k*2) + "];", "=r,=r,=r,=r,r", false);
-      Value *haa = builder_->CreateCall(ld_x4_ty, ld_a0_fn, {pTA});
-      Value *ha0 = builder_->CreateExtractValue(haa, std::vector<unsigned>{0});
-      Value *ha1 = builder_->CreateExtractValue(haa, std::vector<unsigned>{1});
-      Value *ha2 = builder_->CreateExtractValue(haa, std::vector<unsigned>{2});
-      Value *ha3 = builder_->CreateExtractValue(haa, std::vector<unsigned>{3});
-      ha[{pack_i, K}] = std::make_pair(ha0, ha1);
-      ha[{pack_i, K+8}] = std::make_pair(ha2, ha3);
-    }
+    pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(builder_->CreateUDiv(u_thread_id, builder_->getInt32(16)), builder_->getInt32(layout->wpt(0)*layout->spw(0)*stride_a_m))});
 
     Value *load_b_rows = builder_->CreateURem(u_thread_id, builder_->getInt32(8));
     // right-hand-side values
@@ -1018,16 +1005,31 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *pTB = TB->get_pointer();
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(load_b_rows, builder_->getInt32(ldb))});
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(warp_offset_j, builder_->getInt32(stride_b_n))});
-    for(unsigned K = 0; K < NK; K += 8)
-    for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++){
-      InlineAsm *ld_b_fn = InlineAsm::get(ld_x1_ty, "ldmatrix.sync.aligned.m8n8.x1" + b_trans + ".shared.b16 "
-                                                "{$0}, [$1 + " + std::to_string(K*stride_b_k*2 + pack_j*layout->wpt(1)*layout->spw(1)*2*stride_b_n) + "];", "=r, r", false);
-      hb[{pack_j, K}] = builder_->CreateCall(ld_x1_ty, ld_b_fn, {pTB});
-    }
+    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(builder_->CreateUDiv(u_thread_id, builder_->getInt32(8)), builder_->getInt32(layout->wpt(1)*layout->spw(1)*stride_b_n))});
 
     for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
     for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++)
     for(unsigned K = 0; K < NK; K += 8){
+      if(ha.find({pack_i, K}) == ha.end()){
+        InlineAsm *ld_a0_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
+                                                  "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2*stride_a_m + K*stride_a_k*2) + "];", "=r,=r,=r,=r,r", false);
+        Value *haa = builder_->CreateCall(ld_x4_ty, ld_a0_fn, {pTA});
+        Value *ha0 = builder_->CreateExtractValue(haa, std::vector<unsigned>{0});
+        Value *ha1 = builder_->CreateExtractValue(haa, std::vector<unsigned>{1});
+        Value *ha2 = builder_->CreateExtractValue(haa, std::vector<unsigned>{2});
+        Value *ha3 = builder_->CreateExtractValue(haa, std::vector<unsigned>{3});
+        ha[{pack_i, K}] = std::make_pair(ha0, ha1);
+        ha[{pack_i+1, K}] = std::make_pair(ha2, ha3);
+      }
+      if(hb.find({pack_j, K})==hb.end()){
+        InlineAsm *ld_b_fn = InlineAsm::get(ld_x2_ty, "ldmatrix.sync.aligned.m8n8.x2" + b_trans + ".shared.b16 "
+                                                  "{$0, $1}, [$2 + " + std::to_string(K*stride_b_k*2 + pack_j*layout->wpt(1)*layout->spw(1)*2*stride_b_n) + "];", "=r,=r,r", false);
+        Value *hbb = builder_->CreateCall(ld_x2_ty, ld_b_fn, {pTB});
+        Value *hb0 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{0});
+        Value *hb1 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{1});
+        hb[{pack_j, K}] = hb0;
+        hb[{pack_j+1, K}] = hb1;
+      }
       std::vector<size_t> idx = {
         (pack_i*2 + 0) + (pack_j*2 + 0)*ld_fc,
         (pack_i*2 + 0) + (pack_j*2 + 1)*ld_fc,
