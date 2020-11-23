@@ -181,13 +181,13 @@ scanline_layout::scanline_layout(size_t num_warps,
   ir::value *ptr = nullptr;
   for(ir::value *v: values)
     for(ir::user *usr: v->get_users())
-      if(auto *st = dynamic_cast<ir::store_inst*>(usr))
+      if(auto *st = dynamic_cast<ir::io_inst*>(usr))
         ptr = st->get_pointer_operand();
 
   unsigned i = order_[0];
   int contiguous = 4;
   if(ptr){
-    int nbits = ptr->get_type()->get_pointer_element_ty()->get_primitive_size_in_bits();
+    int nbits = ptr->get_type()->get_pointer_element_ty()->get_scalar_ty()->get_primitive_size_in_bits();
     contiguous = std::min<int>(align->contiguous(ptr)[i], 128 / nbits);
   }
 

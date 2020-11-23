@@ -571,7 +571,7 @@ void generator::visit_masked_store_inst(ir::masked_store_inst* st) {
           else {
             curr = UndefValue::get(VectorType::get(ty->getScalarType(), subword_pack));
             for(int i = 0; i < subword_pack; i++)
-              curr = builder_->CreateInsertElement(curr, builder_->CreateExtractElement(elt, builder_->getInt32(0)), builder_->getInt32(i));
+              curr = builder_->CreateInsertElement(curr, builder_->CreateExtractElement(elt, builder_->getInt32(v*subword_pack + i)), builder_->getInt32(i));
           }
           args.push_back(curr);
         }
@@ -941,10 +941,14 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
     Type *fp32_ty = builder_->getFloatTy();
     Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
+    Type *fp16x2_pack2_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty});
+    Type *fp16x2_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
     Type *fp32_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp32_ty, fp32_ty, fp32_ty, fp32_ty});
 
 
-    FunctionType *ld_ty = FunctionType::get(fp16x2_ty, std::vector<llvm::Type*>{PointerType::get(builder_->getHalfTy(), 3)}, false);
+    FunctionType *ld_x4_ty = FunctionType::get(fp16x2_pack4_ty, std::vector<llvm::Type*>{PointerType::get(builder_->getHalfTy(), 3)}, false);
+    FunctionType *ld_x2_ty = FunctionType::get(fp16x2_pack2_ty, std::vector<llvm::Type*>{PointerType::get(builder_->getHalfTy(), 3)}, false);
+    FunctionType *ld_x1_ty = FunctionType::get(fp16x2_ty, std::vector<llvm::Type*>{PointerType::get(builder_->getHalfTy(), 3)}, false);
 
 
 
@@ -991,15 +995,20 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *pTA = TA->get_pointer();
     pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(load_a_rows, builder_->getInt32(lda))});
     pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(warp_offset_i, builder_->getInt32(stride_a_m))});
-    for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
-    for(unsigned K = 0; K < NK; K += 8){
-      InlineAsm *ld_a0_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1" + a_trans + ".shared.b16 "
-                                                "{$0}, [$1 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2*stride_a_m + K*stride_a_k*2) + "];", "=r, r", false);
-      InlineAsm *ld_a1_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1" + a_trans + ".shared.b16 "
-                                                "{$0}, [$1 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2*stride_a_m + 16*stride_a_m + K*stride_a_k*2) + "];", "=r, r", false);
-      Value *ha0 = builder_->CreateCall(ld_ty, ld_a0_fn, {pTA});
-      Value *ha1 = builder_->CreateCall(ld_ty, ld_a1_fn, {pTA});
+    pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(builder_->CreateURem(builder_->CreateUDiv(u_thread_id, builder_->getInt32(8)), builder_->getInt32(2)), builder_->getInt32(8*stride_a_m))});
+    pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(builder_->CreateUDiv(u_thread_id, builder_->getInt32(16)), builder_->getInt32(8*stride_a_k))});
+
+    for(unsigned K = 0; K < NK; K += 16)
+    for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++){
+      InlineAsm *ld_a0_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
+                                                "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2*stride_a_m + K*stride_a_k*2) + "];", "=r,=r,=r,=r,r", false);
+      Value *haa = builder_->CreateCall(ld_x4_ty, ld_a0_fn, {pTA});
+      Value *ha0 = builder_->CreateExtractValue(haa, std::vector<unsigned>{0});
+      Value *ha1 = builder_->CreateExtractValue(haa, std::vector<unsigned>{1});
+      Value *ha2 = builder_->CreateExtractValue(haa, std::vector<unsigned>{2});
+      Value *ha3 = builder_->CreateExtractValue(haa, std::vector<unsigned>{3});
       ha[{pack_i, K}] = std::make_pair(ha0, ha1);
+      ha[{pack_i, K+8}] = std::make_pair(ha2, ha3);
     }
 
     Value *load_b_rows = builder_->CreateURem(u_thread_id, builder_->getInt32(8));
@@ -1009,11 +1018,11 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *pTB = TB->get_pointer();
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(load_b_rows, builder_->getInt32(ldb))});
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(warp_offset_j, builder_->getInt32(stride_b_n))});
-    for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++)
-    for(unsigned K = 0; K < NK; K += 8){
-      InlineAsm *ld_b_fn = InlineAsm::get(ld_ty, "ldmatrix.sync.aligned.m8n8.x1" + b_trans + ".shared.b16 "
+    for(unsigned K = 0; K < NK; K += 8)
+    for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++){
+      InlineAsm *ld_b_fn = InlineAsm::get(ld_x1_ty, "ldmatrix.sync.aligned.m8n8.x1" + b_trans + ".shared.b16 "
                                                 "{$0}, [$1 + " + std::to_string(K*stride_b_k*2 + pack_j*layout->wpt(1)*layout->spw(1)*2*stride_b_n) + "];", "=r, r", false);
-      hb[{pack_j, K}] = builder_->CreateCall(ld_ty, ld_b_fn, {pTB});
+      hb[{pack_j, K}] = builder_->CreateCall(ld_x1_ty, ld_b_fn, {pTB});
     }
 
     for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
@@ -1473,7 +1482,8 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
       std::string out_off_str = std::to_string(out_off->getValue().getSExtValue()*2);
       // asm
       FunctionType *ty = FunctionType::get(builder_->getVoidTy(), {out_base->getType(), in_base->getType()}, false);
-      std::string asm_str = "@$0 cp.async.ca.shared.global [$1 + " + out_off_str + "], [$2 + " + in_off_str + "], " + std::to_string(vector_size*2) + ";";
+      std::string mod = (vector_size*2 == 16) ? ".cg" : ".ca";
+      std::string asm_str = "@$0 cp.async" + mod + ".shared.global [$1 + " + out_off_str + "], [$2 + " + in_off_str + "], " + std::to_string(vector_size*2) + ";";
       InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,r,l", true);
       builder_->CreateCall(iasm, {in_msk->get_value(idx), out_base, in_base});
     }
