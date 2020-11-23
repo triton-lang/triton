@@ -32,8 +32,6 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
       int pidm = stm*STM + lanem;
       int pidn = stn*STN + lanen;
 
-//      int pidm = pid / gridn;
-//      int pidn = pid % gridn;
       int rm[TM] = pidm * TM + 0 ... TM;
       int rn[TN] = pidn * TN + 0 ... TN;
 

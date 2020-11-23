@@ -509,6 +509,14 @@ void generator::visit_masked_store_inst(ir::masked_store_inst* st) {
       // type information
       Type *ty = elt->getType();
       unsigned nbits = ty->getScalarSizeInBits();
+      unsigned subword_pack = 1;
+      int supervec_size = vector_size;
+      if(nbits < 32 && vector_size >= 2){
+        subword_pack = 32 / nbits;
+        supervec_size /= subword_pack;
+        nbits = 32;
+      }
+
       unsigned nbytes = nbits / 8;
       // extract pointer offset
       std::string offset = "";
@@ -522,29 +530,33 @@ void generator::visit_masked_store_inst(ir::masked_store_inst* st) {
       if(tgt_->is_gpu()){
         // asm argument type
         std::vector<Type*> arg_ty = {pred->getType(), ptr->getType()};
-        for(int v = 0; v < vector_size; v++)
-          arg_ty.push_back(ty->getScalarType());
+        for(int v = 0; v < supervec_size; v++){
+          if(subword_pack == 1)
+            arg_ty.push_back(ty->getScalarType());
+          else
+            arg_ty.push_back(VectorType::get(ty->getScalarType(), subword_pack));
+        }
         // asm function type
         FunctionType *fn_ty = FunctionType::get(builder_->getVoidTy(), arg_ty, false);
         // asm string
         std::string asm_str;
         asm_str += "@$0 st.global";
-        if(vector_size > 1)
-          asm_str += ".v" + std::to_string(vector_size);
+        if(supervec_size > 1)
+          asm_str += ".v" + std::to_string(supervec_size);
         asm_str += ".b" + std::to_string(nbits) + " [$1" + offset + "],";
-        if(vector_size > 1)
+        if(supervec_size > 1)
           asm_str += "{";
-        for(int v = 0; v < vector_size; v++){
+        for(int v = 0; v < supervec_size; v++){
           if(v > 0)
             asm_str += ", ";
           asm_str += "$" + std::to_string(2 + v);
         }
-        if(vector_size > 1)
+        if(supervec_size > 1)
           asm_str += "}";
         asm_str += ";";
         // asm constraint
         std::string constraint = "b,l";
-        for(int v = 0; v < vector_size; v++){
+        for(int v = 0; v < supervec_size; v++){
           constraint += ",";
           constraint += (nbits == 32 ? "r" : "h");
         }
@@ -552,12 +564,21 @@ void generator::visit_masked_store_inst(ir::masked_store_inst* st) {
         InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
         // call asm
         std::vector<Value*> args = {pred, ptr};
-        for(int v = 0; v < vector_size; v++)
-          args.push_back(builder_->CreateExtractElement(elt, builder_->getInt32(v)));
+        for(int v = 0; v < supervec_size; v++){
+          Value* curr;
+          if(subword_pack == 1)
+            curr = builder_->CreateExtractElement(elt, builder_->getInt32(v));
+          else {
+            curr = UndefValue::get(VectorType::get(ty->getScalarType(), subword_pack));
+            for(int i = 0; i < subword_pack; i++)
+              curr = builder_->CreateInsertElement(curr, builder_->CreateExtractElement(elt, builder_->getInt32(0)), builder_->getInt32(i));
+          }
+          args.push_back(curr);
+        }
         builder_->CreateCall(iasm, args);
       }
       else{
-        builder_->CreateMaskedStore(elt, ptr, alignment, builder_->CreateVectorSplat(vector_size, pred));
+        builder_->CreateMaskedStore(elt, ptr, alignment, builder_->CreateVectorSplat(supervec_size, pred));
       }
 
     }
