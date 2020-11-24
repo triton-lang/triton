@@ -334,12 +334,13 @@ std::string function::get_asm(asm_mode_t mode, driver::stream* stream, const opt
       // disassemble
       cmd = "cuobjdump --dump-sass " + input + ".o >> " + output;
       err = system(cmd.c_str());
+      std::regex comment(" *\\/\\* 0x[0-9a-f]+ \\*\\/");
       std::string to_delete = "                                                                                           /*";
       std::ifstream ifs(output);
       std::string line;
       std::string sass;
       while(std::getline(ifs, line))
-        if(line.rfind(to_delete, 0) != 0)
+        if(!std::regex_match(line, comment))
           sass += line + "\n";
       return sass;
     }
