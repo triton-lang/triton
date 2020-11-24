@@ -46,9 +46,9 @@ void delete_fn(const map_key_t& key) {
   id_fn_map.erase(key);
 }
 
-std::string get_fn_asm(const map_key_t& key, const rt::function::options_t& opt) {
+std::string get_fn_asm(const map_key_t& key, rt::asm_mode_t mode, const rt::function::options_t& opt) {
   triton::driver::cu_stream stream(torch_get_cuda_stream(key.second), false);
-  return id_fn_map[key]->get_asm(&stream, opt);
+  return id_fn_map[key]->get_asm(mode, &stream, opt);
 }
 
 void cleanup() {
@@ -111,6 +111,10 @@ PYBIND11_MODULE(libtriton, m) {
         .value("float", rt::FLOAT_T)
         .value("double", rt::DOUBLE_T)
         .value("buffer", rt::BUFFER_T);
+    
+    pybind11::enum_<rt::asm_mode_t>(m, "asm_mode")
+        .value("ptx", rt::ASM_NV_PTX)
+        .value("sass", rt::ASM_NV_SASS);
 
     pybind11::class_<options_t>(m, "options")
         .def(pybind11::init<>())

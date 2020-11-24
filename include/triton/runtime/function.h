@@ -56,6 +56,11 @@ template<typename T> inline T convert(const std::string& name);
 template<> inline long convert<long>(const std::string& name) { return std::stol(name); }
 template<> inline int convert<int>(const std::string& name) { return std::stoi(name); }
 
+enum asm_mode_t {
+  ASM_NV_PTX,
+  ASM_NV_SASS
+};
+
 class function {
 public:
   struct options_space_t {
@@ -135,7 +140,7 @@ public:
   void operator()(void** args, size_t args_size, const grid_t& grid, driver::stream* stream);
   void operator()(void** args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
   void set_cst(const char* name, void* data, size_t n_bytes);
-  std::string get_asm(driver::stream *stream, const options_t& opt);
+  std::string get_asm(asm_mode_t mode, driver::stream *stream, const options_t& opt);
 
 private:
   std::map<std::string, std::vector<char>> cst_;
