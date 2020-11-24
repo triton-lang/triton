@@ -135,7 +135,7 @@ public:
   void operator()(void** args, size_t args_size, const grid_t& grid, driver::stream* stream);
   void operator()(void** args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
   void set_cst(const char* name, void* data, size_t n_bytes);
-  std::string ptx(driver::stream *stream, const options_t& opt);
+  std::string get_asm(driver::stream *stream, const options_t& opt);
 
 private:
   std::map<std::string, std::vector<char>> cst_;

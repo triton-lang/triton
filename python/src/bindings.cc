@@ -46,9 +46,9 @@ void delete_fn(const map_key_t& key) {
   id_fn_map.erase(key);
 }
 
-std::string get_fn_ptx(const map_key_t& key, const rt::function::options_t& opt) {
+std::string get_fn_asm(const map_key_t& key, const rt::function::options_t& opt) {
   triton::driver::cu_stream stream(torch_get_cuda_stream(key.second), false);
-  return id_fn_map[key]->ptx(&stream, opt);
+  return id_fn_map[key]->get_asm(&stream, opt);
 }
 
 void cleanup() {
@@ -125,7 +125,7 @@ PYBIND11_MODULE(libtriton, m) {
 
     // hooks into triton constructs since frameworks may not use pybind11
     m.def("get_fn_signature", &get_fn_signature);
-    m.def("get_fn_ptx", &get_fn_ptx);
+    m.def("get_fn_asm", &get_fn_asm);
     m.def("register_grid", &register_grid);
     m.def("delete_grid", &delete_grid);
     m.def("register_fn", &register_fn);

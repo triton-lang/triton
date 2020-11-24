@@ -68,7 +68,7 @@ class kernel:
     size = sum([sizes[x] for x in arg_types])
     self.tys = ''.join([codes[x] for x in arg_types])
 
-  def ptx(self, device, **kwargs):
+  def asm(self, device, **kwargs):
     dev_id = device.index
     libtriton.register_fn((self.op_id, dev_id), self.src, self.opt)
     def _single_value_or_err(x, key):
@@ -86,7 +86,7 @@ class kernel:
     opt = libtriton.options()
     opt.num_warps = _single_value_or_err(self.opt.num_warps, 'num_warps')
     opt.defines = defines
-    return libtriton.get_fn_ptx((self.op_id, dev_id), opt)
+    return libtriton.get_fn_asm((self.op_id, dev_id), opt)
 
   def __call__(self, *args, **kwargs):
     for x in args:

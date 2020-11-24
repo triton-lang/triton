@@ -308,12 +308,31 @@ void function::precompile(driver::stream* stream,
     throw std::runtime_error("could not compile kernel");
 }
 
-std::string function::ptx(driver::stream* stream, const options_t& opt) {
+std::string function::get_asm(driver::stream* stream, const options_t& opt) {
   make(stream, opt);
   const auto& fn = callers_.at(opt);
   if(!fn)
     return "";
-  return ((driver::cu_module*)fn->parent())->source();
+  std::string ptx = ((driver::cu_module*)fn->parent())->source();
+  // SASS
+  std::string input = std::tmpnam(nullptr);
+  std::string output = std::tmpnam(nullptr);
+  std::ofstream ofs(input);
+  ofs << ptx;
+  ofs.close();
+  std::string cmd;
+  int err;
+  // compile ptx
+  driver::cu_device* device = dynamic_cast<driver::cu_device*>(stream->context()->device());
+  cmd = "ptxas --gpu-name=sm_" + std::to_string(device->compute_capability()) + " " + input + " -o " + input + ".o";
+  err = system(cmd.c_str());
+  // disassemble
+  cmd = "cuobjdump --dump-sass " + input + ".o >> " + output;
+  err = system(cmd.c_str());
+  std::ifstream ifs(output);
+  std::ostringstream sass;
+  sass << ifs.rdbuf();
+  return sass.str();
 }
 
 // returns program with best compilation options for given parameter
