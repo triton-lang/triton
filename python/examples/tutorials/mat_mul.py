@@ -118,6 +118,7 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
         M, K = a.shape
         K, N = b.shape
         c = torch.empty([M,N], dtype=dtype, device=a.device)
+        print(kernel.asm('sass', c.device))
         print(kernel.asm('ptx', c.device))
         # enqueue
         grid = lambda opt: [triton.cdiv(M, opt.d('TM'))*triton.cdiv(N, opt.d('TN'))]

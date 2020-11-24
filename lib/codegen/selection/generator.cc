@@ -999,8 +999,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *pTB = TB->get_pointer();
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(load_b_rows, builder_->getInt32(ldb))});
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(warp_offset_j, builder_->getInt32(stride_b_n))});
-    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(builder_->CreateURem(builder_->CreateUDiv(u_thread_id, builder_->getInt32(8)), builder_->getInt32(2)), builder_->getInt32(layout->wpt(1)*layout->spw(1)*stride_b_n))});
-    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(builder_->CreateUDiv(u_thread_id, builder_->getInt32(16)), builder_->getInt32(8*stride_b_k))});
+    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(builder_->CreateURem(builder_->CreateUDiv(u_thread_id, builder_->getInt32(8)), builder_->getInt32(2)), builder_->getInt32(8*stride_b_k))});
+    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(builder_->CreateUDiv(u_thread_id, builder_->getInt32(16)), builder_->getInt32(layout->wpt(1)*layout->spw(1)*stride_b_n))});
 
     FunctionType *mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
     InlineAsm *mma_fn = InlineAsm::get(mma_ty, "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
@@ -1031,8 +1031,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
         Value *hb2 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{2});
         Value *hb3 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{3});
         hb[{pack_j, K}] = hb0;
-        hb[{pack_j+1, K}] = hb1;
-        hb[{pack_j, K+8}] = hb2;
+        hb[{pack_j+1, K}] = hb2;
+        hb[{pack_j, K+8}] = hb1;
         hb[{pack_j+1, K+8}] = hb3;
       }
       unsigned cols_per_thread = mma->num_rep_0_ * 2;
