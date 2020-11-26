@@ -43,32 +43,29 @@ namespace driver
 //         Base             //
 /* ------------------------ */
 
-stream::stream(driver::context *ctx, CUstream cu, bool has_ownership)
-  : polymorphic_resource(cu, has_ownership), ctx_(ctx) {
+stream::stream(CUstream cu, bool has_ownership)
+  : polymorphic_resource(cu, has_ownership) {
 }
 
 
-stream::stream(driver::context *ctx, host_stream_t cl, bool has_ownership)
-  : polymorphic_resource(cl, has_ownership), ctx_(ctx) {
+stream::stream(host_stream_t cl, bool has_ownership)
+  : polymorphic_resource(cl, has_ownership) {
 }
 
-driver::stream* stream::create(driver::context* ctx) {
-  switch(ctx->backend()){
-    case CUDA: return new cu_stream(ctx);
-    case Host: return new host_stream(ctx);
+driver::stream* stream::create(backend_t backend) {
+  switch(backend){
+    case CUDA: return new cu_stream();
+    case Host: return new host_stream();
     default: throw std::runtime_error("unknown backend");
   }
 }
 
-driver::context* stream::context() const {
-  return ctx_;
-}
 
 /* ------------------------ */
 //          Host            //
 /* ------------------------ */
 
-host_stream::host_stream(driver::context *ctx): stream(ctx, host_stream_t(), true) {
+host_stream::host_stream(): stream(host_stream_t(), true) {
   hst_->pool.reset(new ThreadPool(1));
   hst_->futures.reset(new std::vector<std::future<void>>());
 }
@@ -104,28 +101,20 @@ void host_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset
 //         CUDA             //
 /* ------------------------ */
 
-inline CUcontext get_context() {
-  CUcontext result;
-  dispatch::cuCtxGetCurrent(&result);
-  return result;
-}
 
 cu_stream::cu_stream(CUstream str, bool take_ownership):
-  stream(backend::contexts::import(get_context()), str, take_ownership) {
+  stream(str, take_ownership) {
 }
 
-cu_stream::cu_stream(driver::context *context): stream((driver::cu_context*)context, CUstream(), true) {
-  cu_context::context_switcher ctx_switch(*ctx_);
+cu_stream::cu_stream(): stream(CUstream(), true) {
   dispatch::cuStreamCreate(&*cu_, 0);
 }
 
 void cu_stream::synchronize() {
-  cu_context::context_switcher ctx_switch(*ctx_);
   dispatch::cuStreamSynchronize(*cu_);
 }
 
 void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void** args, size_t args_size) {
-  cu_context::context_switcher ctx_switch(*ctx_);
   void *config[] = {
       CU_LAUNCH_PARAM_BUFFER_POINTER, args,
       CU_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
@@ -139,7 +128,6 @@ void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std:
 }
 
 void cu_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
-  cu_context::context_switcher ctx_switch(*ctx_);
   if(blocking)
     dispatch::cuMemcpyHtoD(*buffer->cu() + offset, ptr, size);
   else
@@ -147,7 +135,6 @@ void cu_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset,
 }
 
 void cu_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
-  cu_context::context_switcher ctx_switch(*ctx_);
   if(blocking)
     dispatch::cuMemcpyDtoH(ptr, *buffer->cu() + offset, size);
   else

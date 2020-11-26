@@ -21,6 +21,7 @@ std::map<map_key_t, std::shared_ptr<rt::function::grid_fn_ty>> id_grid_map;
 std::map<map_key_t, std::shared_ptr<rt::function>> id_fn_map;
 
 CUstream torch_get_cuda_stream(int64_t dev_id);
+CUdevice torch_get_cuda_device(int64_t dev_id);
 
 /* Grid utilities */
 
@@ -47,8 +48,8 @@ void delete_fn(const map_key_t& key) {
 }
 
 std::string get_fn_ptx(const map_key_t& key, const rt::function::options_t& opt) {
-  triton::driver::cu_stream stream(torch_get_cuda_stream(key.second), false);
-  return id_fn_map[key]->ptx(&stream, opt);
+  triton::driver::cu_device device(torch_get_cuda_device(key.second), false);
+  return id_fn_map[key]->ptx(&device, opt);
 }
 
 void cleanup() {

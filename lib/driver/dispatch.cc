@@ -154,6 +154,7 @@ CUDA_DEFINE3(CUresult, cuCtxCreate_v2, CUcontext *, unsigned int, CUdevice)
 CUDA_DEFINE3(CUresult, cuModuleGetFunction, CUfunction *, CUmodule, const char *)
 CUDA_DEFINE1(CUresult, cuStreamSynchronize, CUstream)
 CUDA_DEFINE1(CUresult, cuStreamDestroy_v2, CUstream)
+CUDA_DEFINE2(CUresult, cuStreamGetCtx, CUstream, CUcontext*)
 CUDA_DEFINE1(CUresult, cuEventDestroy_v2, CUevent)
 CUDA_DEFINE2(CUresult, cuMemAlloc_v2, CUdeviceptr*, size_t)
 CUDA_DEFINE3(CUresult, cuPointerGetAttribute, void*, CUpointer_attribute, CUdeviceptr)
@@ -223,6 +224,7 @@ void* dispatch::cuCtxCreate_v2_;
 void* dispatch::cuModuleGetFunction_;
 void* dispatch::cuStreamSynchronize_;
 void* dispatch::cuStreamDestroy_v2_;
+void* dispatch::cuStreamGetCtx_;
 void* dispatch::cuEventDestroy_v2_;
 void* dispatch::cuMemAlloc_v2_;
 void* dispatch::cuPointerGetAttribute_;

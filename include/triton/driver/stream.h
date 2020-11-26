@@ -23,10 +23,10 @@ class cu_buffer;
 // Base
 class stream: public polymorphic_resource<CUstream, host_stream_t> {
 public:
-  stream(driver::context *ctx, CUstream, bool has_ownership);
-  stream(driver::context *ctx, host_stream_t, bool has_ownership);
+  stream(CUstream, bool has_ownership);
+  stream(host_stream_t, bool has_ownership);
   // factory
-  static driver::stream* create(driver::context* ctx);
+  static driver::stream* create(backend_t backend);
   // accessors
   driver::context* context() const;
   // methods
@@ -39,16 +39,13 @@ public:
   { write(buf, blocking, offset, x.size()*sizeof(T), x.data()); }
   template<class T> void read(driver::buffer* buf, bool blocking, std::size_t offset, std::vector<T>& x)
   { read(buf, blocking, offset, x.size()*sizeof(T), x.data()); }
-
-protected:
-  driver::context *ctx_;
 };
 
 // Host
 class host_stream: public stream {
 public:
   // Constructors
-  host_stream(driver::context *ctx);
+  host_stream();
 
   // Overridden
   void synchronize();
@@ -62,7 +59,7 @@ class cu_stream: public stream {
 public:
   // Constructors
   cu_stream(CUstream str, bool take_ownership);
-  cu_stream(driver::context* context);
+  cu_stream();
 
   // Overridden
   void synchronize();
