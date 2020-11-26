@@ -121,7 +121,7 @@ cu_context::cu_context(CUcontext context, bool take_ownership): driver::context(
 
 cu_context::cu_context(driver::device* device): context(device, CUcontext(), true){
   dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, *((driver::cu_device*)dev_)->cu());
-  dispatch::cuCtxPopCurrent_v2(NULL);
+//  dispatch::cuCtxPopCurrent_v2(NULL);
 }
 
 

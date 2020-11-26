@@ -79,14 +79,14 @@ template<> struct to_string<double>{
 };
 
 template<class T>
-void triton_dot(drv::stream* stream, bool AT, bool BT,
+void triton_dot(drv::context* context,  drv::stream* stream, bool AT, bool BT,
                 int32_t M, int32_t N, int32_t K,
                 int32_t TM, int32_t TN, int32_t TK, int32_t nwarp,
                 const std::vector<int>& a_order, const std::vector<int>& b_order,
                 run_mode_t mode, std::vector<double>& bench, bool &test){
   std::string ty = to_string<T>::value;
   size_t dt_nbytes = sizeof(T);
-  drv::context* context = stream->context();
+  drv::device* device = context->device();
   int32_t lda = (AT ^ a_order[0]==1) ? K : M;
   int32_t ldb = (BT ^ b_order[0]==1) ? N : K;
   int32_t ldc = N;
@@ -148,20 +148,20 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   // metrics
   if(mode == BENCH){
     auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
-    double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
+    double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream, device);}, stream);
     bench.push_back(tflops(triton_ns));
 
-    // cublas
-   if(cublas::cublasinit()){
-     T alpha(static_cast<double>(1));
-     T beta(static_cast<double>(0));
-     cublasGemmAlgo_t fastest;
-     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
-     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
-                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
-                                                                ldc, nullptr, fastest); }, stream);
-     bench.push_back(tflops(cublas_ms));
-   }
+//    // cublas
+//   if(cublas::cublasinit()){
+//     T alpha(static_cast<double>(1));
+//     T beta(static_cast<double>(0));
+//     cublasGemmAlgo_t fastest;
+//     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
+//     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
+//                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
+//                                                                ldc, nullptr, fastest); }, stream);
+//     bench.push_back(tflops(cublas_ms));
+//   }
   }
 
   // test triton
@@ -179,7 +179,7 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     stream->write(&*da, true, 0, ha);
     stream->write(&*db, true, 0, hb);
     // run kernel
-    function((void**)&args, sizeof(args), grid, stream);
+    function((void**)&args, sizeof(args), grid, stream, device);
     // write back
     stream->synchronize();
     // compare with CPU
@@ -190,21 +190,21 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   }
 }
 
-std::vector<double> bench_dot(drv::stream* stream,
+std::vector<double> bench_dot(drv::context* context, drv::stream* stream,
                dtype_t dtype, bool AT, bool BT,
                int32_t M, int32_t N, int32_t K,
                const std::vector<int>& a_order, const std::vector<int>& b_order) {
   std::vector<double> bench;
   bool test;
   switch(dtype){
-    case HALF:   triton_dot<half_float::half>(stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
-    case FLOAT:  triton_dot<float>(stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
-    case DOUBLE: triton_dot<double>(stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
+    case HALF:   triton_dot<half_float::half>(context, stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
+    case FLOAT:  triton_dot<float>(context, stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
+    case DOUBLE: triton_dot<double>(context, stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
     default: break;
   }
   return bench;
 }
-bool test_dot(drv::stream* stream,
+bool test_dot(drv::context* context, drv::stream* stream,
               dtype_t dtype, bool AT, bool BT,
               int32_t M, int32_t N, int32_t K,
               const std::vector<int>& a_order, const std::vector<int>& b_order,
@@ -212,9 +212,9 @@ bool test_dot(drv::stream* stream,
   std::vector<double> bench;
   bool test = false;
   switch(dtype){
-    case HALF:   triton_dot<half_float::half>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
-    case FLOAT:  triton_dot<float>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
-    case DOUBLE: triton_dot<double>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
+    case HALF:   triton_dot<half_float::half>(context, stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
+    case FLOAT:  triton_dot<float>(context, stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
+    case DOUBLE: triton_dot<double>(context, stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
     default: break;
   }
   return test;
