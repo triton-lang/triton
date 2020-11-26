@@ -66,13 +66,13 @@ template<> struct to_string<double>{
 };
 
 template<class T>
-void triton_conv(drv::stream* stream,
+void triton_conv(drv::context* context, drv::stream* stream,
                 int Z, int CI, int H, int W, int CO, int R, int S,
                 int pad_h, int pad_w, int stride_h, int stride_w,
                 run_mode_t mode, std::vector<double>& bench, bool &test){
   std::string ty = to_string<T>::value;
   size_t dt_nbytes = sizeof(T);
-  drv::context* context = stream->context();
+  drv::device* device = context->device();
 
   int P = (H + 2*pad_h - R)/stride_h + 1;
   int Q = (W + 2*pad_w - S)/stride_w + 1;
@@ -131,19 +131,19 @@ void triton_conv(drv::stream* stream,
                       (size_t)x.D<int>("TZ")};
   };
   auto tflops = [&](double nanosec) { return 2.*Z*P*Q*CI*CO*R*S / nanosec * 1e-3; };
-  double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
+  double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream, device);}, stream);
   bench.push_back(tflops(triton_ns));
 }
 
-std::vector<double> bench_conv(drv::stream* stream, dtype_t dtype,
+std::vector<double> bench_conv(drv::context* context, drv::stream* stream, dtype_t dtype,
                int32_t Z, int32_t H, int32_t W, int32_t CO, int32_t CI, int32_t R, int32_t S,
                int32_t pad_h, int32_t pad_w, int32_t stride_h, int32_t stride_w) {
   std::vector<double> bench;
   bool test;
   switch(dtype){
-    case HALF:   triton_conv<half_float::half>(stream, Z, CI, H, W, CO, R, S, pad_h, pad_w, stride_h, stride_w, BENCH, bench, test); break;
-    case FLOAT:  triton_conv<float>(stream, Z, CI, H, W, CO, R, S, pad_h, pad_w, stride_h, stride_w, BENCH, bench, test); break;
-    case DOUBLE: triton_conv<double>(stream, Z, CI, H, W, CO, R, S, pad_h, pad_w, stride_h, stride_w, BENCH, bench, test); break;
+    case HALF:   triton_conv<half_float::half>(context, stream,  Z, CI, H, W, CO, R, S, pad_h, pad_w, stride_h, stride_w, BENCH, bench, test); break;
+    case FLOAT:  triton_conv<float>(context, stream,  Z, CI, H, W, CO, R, S, pad_h, pad_w, stride_h, stride_w, BENCH, bench, test); break;
+    case DOUBLE: triton_conv<double>(context, stream,  Z, CI, H, W, CO, R, S, pad_h, pad_w, stride_h, stride_w, BENCH, bench, test); break;
     default: break;
   }
   return bench;
