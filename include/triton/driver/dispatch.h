@@ -93,6 +93,7 @@ public:
   static CUresult cuCtxPopCurrent_v2(CUcontext *pctx);
   static CUresult cuModuleGetFunction(CUfunction *hfunc, CUmodule hmod, const char *name);
   static CUresult cuStreamSynchronize(CUstream hStream);
+  static CUresult cuStreamGetCtx(CUstream hStream, CUcontext* pctx);
   static CUresult cuStreamDestroy_v2(CUstream hStream);
   static CUresult cuEventDestroy_v2(CUevent hEvent);
   static CUresult cuMemAlloc_v2(CUdeviceptr *dptr, size_t bytesize);
@@ -154,6 +155,7 @@ private:
   static void* cuModuleGetFunction_;
   static void* cuStreamSynchronize_;
   static void* cuStreamDestroy_v2_;
+  static void* cuStreamGetCtx_;
   static void* cuEventDestroy_v2_;
   static void* cuMemAlloc_v2_;
   static void* cuPointerGetAttribute_;

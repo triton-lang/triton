@@ -134,7 +134,7 @@ std::map<std::tuple<driver::module*, std::string>, driver::kernel*> backend::ker
 void backend::streams::init(std::list<driver::context*> const & contexts){
   for(driver::context* ctx : contexts)
     if(cache_.find(ctx)==cache_.end())
-      cache_.insert(std::make_pair(ctx, std::vector<driver::stream*>{driver::stream::create(ctx)}));
+      cache_.insert(std::make_pair(ctx, std::vector<driver::stream*>{driver::stream::create(ctx->backend())}));
 }
 
 void backend::streams::release(){

@@ -7,7 +7,7 @@
 int main() {
   // initialize default compute device
   auto context = triton::driver::backend::contexts::get_default();
-  triton::driver::stream* stream = triton::driver::stream::create(context);
+  triton::driver::stream* stream = triton::driver::stream::create(context->backend());
   // shapes to benchmark
   typedef std::tuple<std::vector<int>, std::vector<int>, std::vector<int>> config_t;
   std::vector<config_t> configs = {
@@ -29,7 +29,7 @@ int main() {
   for(const auto& c: configs){
     std::tie(shape, ord_x, ord_y) = c;
     std::cout << "// " << c << std::flush;
-    for(auto perf: bench_copy_nd(stream, HALF, shape, ord_x, ord_y))
+    for(auto perf: bench_copy_nd(context, stream, HALF, shape, ord_x, ord_y))
       std::cout << ", " << perf << std::flush;
     std::cout << std::endl;
   }
