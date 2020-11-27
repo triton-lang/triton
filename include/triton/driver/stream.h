@@ -29,7 +29,7 @@ public:
   static driver::stream* create(backend_t backend);
   // methods
   virtual void synchronize() = 0;
-  virtual void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const * = NULL, event *event = NULL, void **args = NULL, size_t args_size = 0) = 0;
+  virtual void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, void **args = NULL, size_t args_size = 0) = 0;
   virtual void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr) = 0;
   virtual void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr) = 0;
   // template helpers
@@ -42,12 +42,9 @@ public:
 // Host
 class host_stream: public stream {
 public:
-  // Constructors
   host_stream();
-
-  // Overridden
   void synchronize();
-  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event *event, void **args, size_t args_size);
+  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, void **args, size_t args_size);
   void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
   void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr);
 };
@@ -55,13 +52,10 @@ public:
 // CUDA
 class cu_stream: public stream {
 public:
-  // Constructors
   cu_stream(CUstream str, bool take_ownership);
   cu_stream();
-
-  // Overridden
   void synchronize();
-  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event *event, void **args, size_t args_size);
+  void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, void **args, size_t args_size);
   void write(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void const* ptr);
   void read(driver::buffer* buf, bool blocking, std::size_t offset, std::size_t size, void* ptr);
 };
