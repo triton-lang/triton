@@ -20,7 +20,6 @@ public:
   buffer(size_t size, host_buffer_t hst, bool take_ownership);
   uintptr_t addr_as_uintptr_t();
   static buffer* create(driver::context* ctx, size_t size);
-  driver::context* context();
   size_t size();
 
 protected:
