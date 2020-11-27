@@ -176,7 +176,7 @@ void function::caller::operator ()(driver::stream *stream, const grid_t& _grid, 
   for(size_t i = 0; i < 3; i++)
     grid[i] = (i < _grid.size()) ? _grid[i] : 1;
   // enqueue
-  stream->enqueue(&*bin_, grid, {opt_.num_warps * 32, 1, 1}, NULL, NULL, args, args_size);
+  stream->enqueue(&*bin_, grid, {opt_.num_warps * 32, 1, 1}, args, args_size);
 }
 
 
