@@ -193,9 +193,6 @@ inline void cublasGemm(cublasDataType_t dtype,
                        triton::driver::buffer* B, int32_t ldb,
                        void* beta, triton::driver::buffer* C, int32_t ldc,
                        cublasGemmAlgo_t* fastest = NULL, cublasGemmAlgo_t algo = CUBLAS_GEMM_DFALT) {
-
-  // switch triton context
-  triton::driver::cu_context::context_switcher scope(*stream->context());
   // get handle
   static cublasHandle_t handle = cublasGetHandle(stream);
   // set math mode
