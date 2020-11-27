@@ -27,8 +27,6 @@ public:
   stream(host_stream_t, bool has_ownership);
   // factory
   static driver::stream* create(backend_t backend);
-  // accessors
-  driver::context* context() const;
   // methods
   virtual void synchronize() = 0;
   virtual void enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const * = NULL, event *event = NULL, void **args = NULL, size_t args_size = 0) = 0;
