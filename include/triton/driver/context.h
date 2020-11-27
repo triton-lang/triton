@@ -36,18 +36,8 @@ public:
 
 // CUDA
 class cu_context: public context {
-public:
-  class context_switcher{
-  public:
-      context_switcher(driver::context const & ctx);
-      ~context_switcher();
-  private:
-      driver::cu_context const & ctx_;
-  };
-
 private:
   static CUdevice get_device_of(CUcontext);
-
 public:
   //Constructors
   cu_context(CUcontext cu, bool take_ownership = true);
