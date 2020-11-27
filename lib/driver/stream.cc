@@ -27,7 +27,6 @@
 #include "triton/driver/stream.h"
 #include "triton/driver/context.h"
 #include "triton/driver/device.h"
-#include "triton/driver/event.h"
 #include "triton/driver/kernel.h"
 #include "triton/driver/buffer.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
@@ -77,7 +76,7 @@ void host_stream::synchronize() {
   hst_->args.clear();
 }
 
-void host_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void **args, size_t args_size) {
+void host_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, void **args, size_t args_size) {
   auto hst = kernel->module()->hst();
   hst_->futures->reserve(hst_->futures->size() + grid[0]*grid[1]*grid[2]);
   char* params = new char[args_size];
@@ -114,17 +113,13 @@ void cu_stream::synchronize() {
   dispatch::cuStreamSynchronize(*cu_);
 }
 
-void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, std::vector<event> const *, event* event, void** args, size_t args_size) {
+void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std::array<size_t, 3> block, void** args, size_t args_size) {
   void *config[] = {
       CU_LAUNCH_PARAM_BUFFER_POINTER, args,
       CU_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
       CU_LAUNCH_PARAM_END
   };
-  if(event)
-    dispatch::cuEventRecord(event->cu()->first, *cu_);
   dispatch::cuLaunchKernel(*kernel->cu(), grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, *cu_, nullptr, config);
-  if(event)
-    dispatch::cuEventRecord(event->cu()->second, *cu_);
 }
 
 void cu_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
