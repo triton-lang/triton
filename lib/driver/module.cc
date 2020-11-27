@@ -276,7 +276,7 @@ cu_module::cu_module(std::string const & source) : module(CUmodule(), true), sou
   void* optval[] = {(void*)(uintptr_t)errbufsize, (void*)errbuf.data()};
   try{
     dispatch::cuModuleLoadDataEx(&*cu_, source_.data(), 2, opt, optval);
-  }catch(exception::cuda::base const &){
+  }catch(exception::cuda::invalid_ptx const &){
 //#ifdef TRITON_LOG_PTX_ERROR
     std::cout << source << std::endl;
     std::cerr << "It appears that Triton produced invalid PTX code:" << std::endl;
