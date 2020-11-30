@@ -161,6 +161,7 @@ if(hc.size() != rc.size())
 for(size_t i = 0; i < hc.size(); i++)
   if(std::isinf(hc[i]) || std::isnan(hc[i]) || std::abs(hc[i] - rc[i])/std::max(hc[i], rc[i]) > 1e-2){
     std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
+//    if(i == 10)
     return false;
   }
 return true;
