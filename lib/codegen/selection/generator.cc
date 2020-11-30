@@ -989,30 +989,34 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *a_phase = builder_->CreateUDiv(a_base, builder_->getInt32(2));
     Value *a_col0 = builder_->CreateUDiv(lane, builder_->getInt32(16));
     Value *a_col1 = builder_->CreateAdd(a_col0, builder_->getInt32(2));
-//    a_col0 = builder_->CreateXor(a_col0, a_phase);
-//    a_col1 = builder_->CreateXor(a_col1, a_phase);
+    a_col0 = builder_->CreateXor(a_col0, a_phase);
+    a_col1 = builder_->CreateXor(a_col1, a_phase);
     pTAs[0] = builder_->CreateGEP(pTA, {builder_->CreateMul(a_col0, builder_->getInt32(8*stride_a_k))});
     pTAs[1] = builder_->CreateGEP(pTA, {builder_->CreateMul(a_col1, builder_->getInt32(8*stride_a_k))});
 
     // right-hand-side values
     std::map<std::pair<unsigned, unsigned>, Value*> hb;
     int ldb = is_b_row ? stride_b_k : stride_b_n;
-    Value *pTB = TB->get_pointer();
+//    Value *pTB = TB->get_pointer();
     Value *b_base = builder_->CreateURem(lane, builder_->getInt32(8));
     std::vector<Value*> pTBs(2);
-    Value *b_col = builder_->CreateUDiv(lane, builder_->getInt32(16));
-    b_col = builder_->CreateAdd(b_col, builder_->CreateMul(warp_id_1, builder_->getInt32(2)));
     Value *b_row0 = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
     Value *b_row1 = builder_->CreateAdd(b_row0, builder_->getInt32(2));
     Value *b_phase = builder_->CreateUDiv(b_base, builder_->getInt32(2));
-//    b_row0 = builder_->CreateXor(b_row0, b_phase);
-//    b_row1 = builder_->CreateXor(b_row1, b_phase);
+    b_row0 = builder_->CreateXor(b_row0, b_phase);
+    b_row1 = builder_->CreateXor(b_row1, b_phase);
+
+    Value *pTB = TB->get_pointer();
+    Value *b_col = builder_->CreateUDiv(lane, builder_->getInt32(16));
     pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(b_base, builder_->getInt32(ldb))});
-    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(b_col, builder_->getInt32(8*stride_b_n))});
+    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(warp_id_1, builder_->getInt32(8*stride_b_n))});
+    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(b_col,     builder_->getInt32(16*stride_b_n))});
+
+
+
     pTBs[0] = builder_->CreateGEP(pTB, {builder_->CreateMul(b_row0, builder_->getInt32(8*stride_b_k))});
     pTBs[1] = builder_->CreateGEP(pTB, {builder_->CreateMul(b_row1, builder_->getInt32(8*stride_b_k))});
 
-//    pTB = builder_->CreateGEP(pTB, {builder_->CreateMul(builder_->CreateUDiv(lane, builder_->getInt32(16)), builder_->getInt32(layout->wpt(1)*layout->spw(1)*stride_b_n))});
 
 
     FunctionType *mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
@@ -1505,7 +1509,7 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
       BinaryOperator* binary = dyn_cast<BinaryOperator>(swizzle[in_order[0]]);
       ConstantInt* off = dyn_cast<ConstantInt>(binary->getOperand(1));
       Value* base = binary->getOperand(0);
-//      base = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(base, builder_->getInt32(vector)), phase), builder_->getInt32(vector));
+      base = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(base, builder_->getInt32(vector)), phase), builder_->getInt32(vector));
       swizzle[in_order[0]] = builder_->CreateAdd(base, off);
       GetElementPtrInst *out_gep = dyn_cast<GetElementPtrInst>(mret->get_ptr_to(swizzle));
       assert(out_gep->getNumIndices() == 1);
