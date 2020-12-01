@@ -411,44 +411,44 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
       ptr = builder_->CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
                                                         ptr->getType()->getPointerAddressSpace()));
 
-      Value *mask = masks->get_value(idx);
-      BasicBlock *current_bb = builder_->GetInsertBlock();
-      Function *parent = builder_->GetInsertBlock()->getParent();
-      BasicBlock *mask_then_bb = BasicBlock::Create(*ctx_, "mask_then", parent);
-      BasicBlock *mask_done_bb = BasicBlock::Create(*ctx_, "mask_done", parent);
-      builder_->CreateCondBr(mask, mask_then_bb, mask_done_bb);
-      builder_->SetInsertPoint(mask_then_bb);
-      Value *result_then = builder_->CreateLoad(ptr);
-      builder_->CreateBr(mask_done_bb);
-      builder_->SetInsertPoint(mask_done_bb);
-      Value *current_result = nullptr;
-      if(false_values){
-        current_result = builder_->CreatePHI(result_then->getType(), 2);
-        ((PHINode*)current_result)->addIncoming(result_then, mask_then_bb);
-        Value *result_false = false_values->get_value(idx);
-        if(result_then->getType()->isVectorTy())
-          result_false = builder_->CreateVectorSplat(vector_size, result_false);
-        ((PHINode*)current_result)->addIncoming(result_false, current_bb);
-      }
-      else
-        current_result = result_then;
+//      Value *mask = masks->get_value(idx);
+//      BasicBlock *current_bb = builder_->GetInsertBlock();
+//      Function *parent = builder_->GetInsertBlock()->getParent();
+//      BasicBlock *mask_then_bb = BasicBlock::Create(*ctx_, "mask_then", parent);
+//      BasicBlock *mask_done_bb = BasicBlock::Create(*ctx_, "mask_done", parent);
+//      builder_->CreateCondBr(mask, mask_then_bb, mask_done_bb);
+//      builder_->SetInsertPoint(mask_then_bb);
+//      Value *result_then = builder_->CreateLoad(ptr);
+//      builder_->CreateBr(mask_done_bb);
+//      builder_->SetInsertPoint(mask_done_bb);
+//      Value *current_result = nullptr;
+//      if(false_values){
+//        current_result = builder_->CreatePHI(result_then->getType(), 2);
+//        ((PHINode*)current_result)->addIncoming(result_then, mask_then_bb);
+//        Value *result_false = false_values->get_value(idx);
+//        if(result_then->getType()->isVectorTy())
+//          result_false = builder_->CreateVectorSplat(vector_size, result_false);
+//        ((PHINode*)current_result)->addIncoming(result_false, current_bb);
+//      }
+//      else
+//        current_result = result_then;
 
-//      ConstantInt *cst = nullptr;
-//      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
-//        if(gep->getNumIndices() == 1)
-//          cst = dyn_cast<ConstantInt>(gep->idx_begin());
-//          llvm::Value* mask = masks->get_value(idx);
-//          std::string offset = "";
-//          if(cst)
-//            offset = " + " + std::to_string(cst->getValue().getSExtValue()*2*vector_size);
-//          Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
-//          Type *fp16x2_pack4_ty = StructType::get(*ctx_, {fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
-//          FunctionType *ty = FunctionType::get(fp16x2_pack4_ty, {mask->getType(), ptr->getType()}, false);
-//          std::string asm_str = "@$0 ld.global.nc.v4.b32 {$1, $2, $3, $4}, [$5" + offset + "];";
-//          if(false_values)
-//            asm_str += "\n\t@!$0 mov.v4.b32 {$1, $2, $3, $4}, {0, 0, 0, 0};";
-//          InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,=r,=r,=r,=r,l", true);
-//          Value *current_result = builder_->CreateCall(iasm, {mask, ptr});
+      ConstantInt *cst = nullptr;
+      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
+        if(gep->getNumIndices() == 1)
+          cst = dyn_cast<ConstantInt>(gep->idx_begin());
+          llvm::Value* mask = masks->get_value(idx);
+          std::string offset = "";
+          if(cst)
+            offset = " + " + std::to_string(cst->getValue().getSExtValue()*2*vector_size);
+          Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
+          Type *fp16x2_pack4_ty = StructType::get(*ctx_, {fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
+          FunctionType *ty = FunctionType::get(fp16x2_pack4_ty, {mask->getType(), ptr->getType()}, false);
+          std::string asm_str = "@$0 ld.global.nc.v4.b32 {$1, $2, $3, $4}, [$5" + offset + "];";
+          if(false_values)
+            asm_str += "\n\t@!$0 mov.v4.b32 {$1, $2, $3, $4}, {0, 0, 0, 0};";
+          InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,=r,=r,=r,=r,l", true);
+          Value *current_result = builder_->CreateCall(iasm, {mask, ptr});
 
       packets[id] = current_result;
     }
@@ -459,10 +459,10 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
     unsigned vector_size = gcd(result->axis(ld).contiguous, alignment);
     unsigned linear = result->get_linear_index(idx);
     unsigned id = linear / vector_size;
-//        Value *tmp = builder_->CreateExtractValue(packets.at(id), {(linear % vector_size) / 2});
-//        Value *res = builder_->CreateExtractElement(tmp, (linear % vector_size) % 2);
-//        result->set_value(idx, res);
-    result->set_value(idx, builder_->CreateExtractElement(packets.at(id), linear % vector_size));
+        Value *tmp = builder_->CreateExtractValue(packets.at(id), {(linear % vector_size) / 2});
+        Value *res = builder_->CreateExtractElement(tmp, (linear % vector_size) % 2);
+        result->set_value(idx, res);
+//    result->set_value(idx, builder_->CreateExtractElement(packets.at(id), linear % vector_size));
   });
 }
 
@@ -1546,13 +1546,35 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
     packets[id] = builder_->CreateInsertElement(packets.at(id), in_value, linear % vector_size);
   });
 
+  Value* thread = tgt_->get_local_id(builder_->GetInsertBlock()->getModule(), *builder_, 0);
+  Value* lane = builder_->CreateURem(thread, builder_->getInt32(32));
+//  int num_per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
+  Value* phase = builder_->CreateUDiv(lane, builder_->getInt32(8));
+
+
+
   for_each(arg, [&](indices_t idx){
     distributed_tile* in = (distributed_tile*)tmap_.at(arg);
     shared_tile* result = (shared_tile*)tmap_.at(cts);
     unsigned linear = in->get_linear_index(idx);
     unsigned id = linear / vector_size;
-    if(linear % vector_size == 0)
-      result->set_value(idx, packets[id]);
+    if(linear % vector_size == 0){
+      // output ptr info
+      indices_t swizzle = idx;
+      swizzle[in_order[1]] = builder_->getInt32(0);
+      swizzle[in_order[0]] = builder_->CreateMul(thread, builder_->getInt32(vector_size));
+//      BinaryOperator* binary = dyn_cast<BinaryOperator>(swizzle[in_order[0]]);
+//      ConstantInt* off = dyn_cast<ConstantInt>(binary->getOperand(1));
+//      Value* base = binary->getOperand(0);
+//      base = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(base, builder_->getInt32(vector_size)), phase), builder_->getInt32(vector_size));
+//      swizzle[in_order[0]] = builder_->CreateAdd(base, off);
+//      GetElementPtrInst *out_gep = dyn_cast<GetElementPtrInst>(result->get_ptr_to(swizzle));
+//      assert(out_gep->getNumIndices() == 1);
+//      Value *out_base = out_gep->getPointerOperand();
+//      size_t out_off = dyn_cast<ConstantInt>(out_gep->idx_begin())->getValue().getSExtValue()*2;
+
+      result->set_value(swizzle, packets[id]);
+    }
   });
 }
 void generator::visit_copy_from_shared_inst(ir::copy_from_shared_inst* cfs) {
@@ -1563,7 +1585,7 @@ void generator::visit_copy_from_shared_inst(ir::copy_from_shared_inst* cfs) {
 
 void generator::visit_barrier_inst(ir::barrier_inst*) {
   Module *module = builder_->GetInsertBlock()->getModule();
-//  tgt_->add_barrier(module, *builder_);
+  tgt_->add_barrier(module, *builder_);
 }
 
 void generator::visit_async_wait_inst(ir::async_wait_inst*) {

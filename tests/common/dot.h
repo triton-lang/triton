@@ -164,11 +164,11 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
 //   }
   }
 
-//  rt::function::options_t opt;
-//  for(auto &x: opts.defines)
-//    opt.defines[x.first] = x.second[0];
-//  opt.num_warps = 4;
-//  std::cout << function.get_asm(rt::ASM_NV_PTX, stream, opt) << std::endl;
+  rt::function::options_t opt;
+  for(auto &x: opts.defines)
+    opt.defines[x.first] = x.second[0];
+  opt.num_warps = 4;
+  std::cout << function.get_asm(rt::ASM_NV_PTX, stream, opt) << std::endl;
 
   // test triton
   if(mode == TEST){
