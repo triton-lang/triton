@@ -1,4 +1,4 @@
-#include <string>
+﻿#include <string>
 #include <mutex>
 #include <regex>
 #include <functional>
@@ -111,41 +111,41 @@ arg_type convert(ir::type *ty) {
   throw std::runtime_error("unknown type");
 }
 
-void function::caller::write(std::ofstream &ofs) {
-  // write name
-  ofs << name_ << std::endl;
-  // write signature
-  for(size_t i = 0; i < param_tys_.size(); i++)
-    ofs << param_tys_[i] << " ";
-  ofs << std::endl;
-  // write module
-  std::string source = ((driver::cu_module*)(&*parent_))->source();
-  ofs << source;
-}
+//void function::caller::write(std::ofstream &ofs) {
+//  // write name
+//  ofs << name_ << std::endl;
+//  // write signature
+//  for(size_t i = 0; i < param_tys_.size(); i++)
+//    ofs << param_tys_[i] << " ";
+//  ofs << std::endl;
+//  // write module
+//  std::string source = ((driver::cu_module*)(&*parent_))->ptx();
+//  ofs << source;
+//}
 
-void function::caller::read(driver::context* ctx, std::ifstream &ifs) {
-  // read name
-  std::getline(ifs, name_);
-  // read signature
-  std::string line;
-  std::getline(ifs, line);
-  std::istringstream current(line);
-  int param;
-  param_tys_.clear();
-  while(current >> param)
-    param_tys_.push_back((arg_type)param);
-  // read module
-  std::string src((std::istreambuf_iterator<char>(ifs)),
-                   std::istreambuf_iterator<char>());
-  parent_.reset(new driver::cu_module(ctx, src));
-  bin_.reset(driver::kernel::create(&*parent_, name_.c_str()));
+//void function::caller::read(driver::context* ctx, std::ifstream &ifs) {
+//  // read name
+//  std::getline(ifs, name_);
+//  // read signature
+//  std::string line;
+//  std::getline(ifs, line);
+//  std::istringstream current(line);
+//  int param;
+//  param_tys_.clear();
+//  while(current >> param)
+//    param_tys_.push_back((arg_type)param);
+//  // read module
+//  std::string src((std::istreambuf_iterator<char>(ifs)),
+//                   std::istreambuf_iterator<char>());
+//  parent_.reset(new driver::cu_module(ctx, src));
+//  bin_.reset(driver::kernel::create(&*parent_, name_.c_str()));
 
-}
+//}
 
-function::caller::caller(driver::context* ctx, std::ifstream &ifs, const options_t& opt)
-  : opt_(opt) {
-  read(ctx, ifs);
-}
+//function::caller::caller(driver::context* ctx, std::ifstream &ifs, const options_t& opt)
+//  : opt_(opt) {
+//  read(ctx, ifs);
+//}
 
 function::caller::caller(ir::function *ir,
                          std::shared_ptr<driver::module> parent, const options_t& opt)
@@ -243,6 +243,9 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     throw std::runtime_error("using too much shared memory");
   barriers.run(module);
+  std::ostringstream oss;
+  ir::print(module, oss);
+//  std::cout << oss.str() << std::endl;
   isel.visit(module, *llvm);
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   return res;
@@ -314,9 +317,12 @@ std::string function::get_asm(asm_mode_t mode, driver::stream* stream, const opt
   if(!fn)
     return "";
   switch(mode){
+    case ASM_LLIR:{
+      return  fn->parent()->llir();
+    }
     case ASM_NV_PTX:
     case ASM_NV_SASS:{
-      std::string ptx = ((driver::cu_module*)fn->parent())->source();
+      std::string ptx = ((driver::cu_module*)fn->parent())->ptx();
       // SASS
       std::string input = std::tmpnam(nullptr);
       std::string output = std::tmpnam(nullptr);

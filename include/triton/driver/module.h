@@ -45,10 +45,11 @@ public:
                            const std::string &features,
                            file_type_t file_type);
   virtual std::unique_ptr<buffer> symbol(const char * name) const = 0;
-
+  const std::string& llir() const { return llir_; }
 
 protected:
   driver::context* ctx_;
+  std::string llir_;
 };
 
 // CPU
@@ -64,12 +65,11 @@ class cu_module: public module {
 
 public:
   cu_module(driver::context* context, std::unique_ptr<llvm::Module> module);
-  cu_module(driver::context* context, const std::string& source);
   std::unique_ptr<buffer> symbol(const char * name) const;
-  const std::string& source() const { return source_; }
+  const std::string& ptx() const { return ptx_; }
 
 private:
-  std::string source_;
+  std::string ptx_;
 };
 
 

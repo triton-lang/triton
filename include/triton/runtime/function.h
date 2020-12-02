@@ -57,6 +57,7 @@ template<> inline long convert<long>(const std::string& name) { return std::stol
 template<> inline int convert<int>(const std::string& name) { return std::stoi(name); }
 
 enum asm_mode_t {
+  ASM_LLIR,
   ASM_NV_PTX,
   ASM_NV_SASS
 };

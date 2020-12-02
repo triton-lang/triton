@@ -89,10 +89,12 @@ void module::compile_llvm_module(std::unique_ptr<llvm::Module> module, const std
                                  file_type_t ft) {
   init_llvm();
 //  // debug
-//  llvm::legacy::PassManager pm;
-//  pm.add(llvm::createPrintModulePass(llvm::outs()));
+  llvm::legacy::PassManager pm;
+  std::string tmp;
+  llvm::raw_string_ostream oss(llir_);
+  pm.add(llvm::createPrintModulePass(oss));
 //  pm.add(llvm::createVerifierPass());
-//  pm.run(*module);
+  pm.run(*module);
   // create machine
   module->setTargetTriple(triple);
   std::string error;
@@ -266,26 +268,20 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
 }
 
 
-cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll_module): cu_module(context, compile_llvm_module(std::move(ll_module), context->device())) { }
-
-cu_module::cu_module(driver::context * context, std::string const & source) : module(context, CUmodule(), true), source_(source){
+cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll_module): module(context, CUmodule(), true){
   cu_context::context_switcher ctx(*context);
-//  std::cout << source << std::endl;
-//  exit(0);
-
+  ptx_ = compile_llvm_module(std::move(ll_module), context->device());
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
   unsigned int errbufsize = 8096;
   std::string errbuf(errbufsize, 0);
   void* optval[] = {(void*)(uintptr_t)errbufsize, (void*)errbuf.data()};
   try{
-    dispatch::cuModuleLoadDataEx(&*cu_, source_.data(), 2, opt, optval);
-  }catch(exception::cuda::base const &){
-//#ifdef TRITON_LOG_PTX_ERROR
-    std::cout << source << std::endl;
+    dispatch::cuModuleLoadDataEx(&*cu_, ptx_.data(), 2, opt, optval);
+  }catch(exception::cuda::invalid_ptx const &){
+    std::cout << ptx_ << std::endl;
     std::cerr << "It appears that Triton produced invalid PTX code:" << std::endl;
     std::cerr << errbuf << std::endl;
-//#endif
     throw;
   }
 }

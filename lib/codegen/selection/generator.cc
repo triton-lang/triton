@@ -399,7 +399,6 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
   unsigned alignment = alignment_->get(ptr, ld);
   distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
   distributed_tile *masks = (distributed_tile*)tmap_.at(x->get_mask_operand());
-  distributed_tile *false_values = (distributed_tile*)tmap_.at(x->get_false_value_operand());
   std::map<unsigned, Value*> packets;
   for_each(x, [&](indices_t idx){
     distributed_tile* result = (distributed_tile*)tmap_.at(x);
@@ -445,7 +444,7 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
           Type *fp16x2_pack4_ty = StructType::get(*ctx_, {fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
           FunctionType *ty = FunctionType::get(fp16x2_pack4_ty, {mask->getType(), ptr->getType()}, false);
           std::string asm_str = "@$0 ld.global.nc.v4.b32 {$1, $2, $3, $4}, [$5" + offset + "];";
-          if(false_values)
+          if(x->get_false_value_operand())
             asm_str += "\n\t@!$0 mov.v4.b32 {$1, $2, $3, $4}, {0, 0, 0, 0};";
           InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,=r,=r,=r,=r,l", true);
           Value *current_result = builder_->CreateCall(iasm, {mask, ptr});
@@ -1561,17 +1560,14 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
     if(linear % vector_size == 0){
       // output ptr info
       indices_t swizzle = idx;
-      swizzle[in_order[1]] = builder_->getInt32(0);
-      swizzle[in_order[0]] = builder_->CreateMul(thread, builder_->getInt32(vector_size));
-//      BinaryOperator* binary = dyn_cast<BinaryOperator>(swizzle[in_order[0]]);
-//      ConstantInt* off = dyn_cast<ConstantInt>(binary->getOperand(1));
-//      Value* base = binary->getOperand(0);
-//      base = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(base, builder_->getInt32(vector_size)), phase), builder_->getInt32(vector_size));
-//      swizzle[in_order[0]] = builder_->CreateAdd(base, off);
-//      GetElementPtrInst *out_gep = dyn_cast<GetElementPtrInst>(result->get_ptr_to(swizzle));
-//      assert(out_gep->getNumIndices() == 1);
-//      Value *out_base = out_gep->getPointerOperand();
-//      size_t out_off = dyn_cast<ConstantInt>(out_gep->idx_begin())->getValue().getSExtValue()*2;
+
+      BinaryOperator* binary = dyn_cast<BinaryOperator>(swizzle[in_order[0]]);
+      ConstantInt* off = dyn_cast<ConstantInt>(binary->getOperand(1));
+      Value* base = binary->getOperand(0);
+      base = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(base, builder_->getInt32(vector_size)), phase), builder_->getInt32(vector_size));
+      swizzle[in_order[0]] = builder_->CreateAdd(base, off);
+      GetElementPtrInst *out_gep = dyn_cast<GetElementPtrInst>(result->get_ptr_to(swizzle));
+      assert(out_gep->getNumIndices() == 1);
 
       result->set_value(swizzle, packets[id]);
     }
