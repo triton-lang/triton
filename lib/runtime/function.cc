@@ -358,14 +358,19 @@ std::string function::preheader() {
 #define DECLARATION(TYPE, TM, TN) extern void atomic_add(TYPE, TM, TN)(TYPE*[TM, TN], TYPE[TM, TN], bool[TM, TN])
 
 DECLARATION(float, 64, 64);
+DECLARATION(float, 64, 128);
+DECLARATION(float, 128, 64);
+DECLARATION(float, 128, 128);
+extern void atomic_add_half_1x1(half*, half, bool);
+
 DECLARATION(half , 64, 64);
 DECLARATION(half , 64, 128);
 DECLARATION(half , 128, 64);
 DECLARATION(half , 128, 128);
+extern void atomic_add_float_1x1(float*, float, bool);
 
 extern int atomic_cas(int*, int, int);
 extern int atomic_xchg(int*, int);
-extern float f32_atomic_add(float*, float);
 extern int get_program_id(int);
 extern int get_num_programs(int);
 extern int select(bool, int, int);
