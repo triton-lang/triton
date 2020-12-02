@@ -767,10 +767,21 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
     });
   }
   else{
-    BasicBlock *current = builder_->GetInsertBlock();
-    Module *module = current->getModule();
     Value *rmw_ptr = vmap_.at(add->get_operand(0));
     Value *rmw_val = vmap_.at(add->get_operand(1));
+    Value *rmw_msk = vmap_.at(add->get_operand(2));
+    Type* ty = rmw_val->getType();
+    size_t nbits = ty->getScalarSizeInBits();
+    std::vector<Type*> arg_ty = {rmw_msk->getType(), rmw_ptr->getType(), rmw_val->getType()};
+    FunctionType *fn_ty = FunctionType::get(ty, arg_ty, false);
+    std::string mod = nbits == 32 ? "" : ".noftz";
+    std::string asm_str = "@$0 atom.global.gpu.add" + mod + ".f" + std::to_string(nbits) + " $1, [$2], $3;";
+    std::string ty_id = nbits == 32 ? "f" : "h";
+    InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, "b,="+ty_id+",l,"+ty_id, true);
+
+    BasicBlock *current = builder_->GetInsertBlock();
+    Module *module = current->getModule();
+
     Value *tid = tgt_->get_local_id(module, *builder_, 0);
     Value *pred = builder_->CreateICmpEQ(tid, builder_->getInt32(0));
     BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
@@ -779,9 +790,7 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
     tgt_->add_barrier(module, *builder_);
     builder_->CreateCondBr(pred, tid_0_bb, tid_0_done_bb);
     builder_->SetInsertPoint(tid_0_bb);
-    builder_->CreateAtomicRMW(AtomicRMWInst::FAdd, rmw_ptr, rmw_val,
-                                            AtomicOrdering::Monotonic,
-                                            SyncScope::System);
+    builder_->CreateCall(iasm, {rmw_msk, rmw_ptr, rmw_val});
     builder_->CreateBr(tid_0_done_bb);
     builder_->SetInsertPoint(tid_0_done_bb);
     tgt_->add_memfence(module, *builder_);
