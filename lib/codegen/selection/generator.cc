@@ -975,23 +975,37 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int stride_b_k = is_b_row ? TB->get_shapes()[1] : 1;
 
 
+    int dtsize = 2;
+    int num_per_phase = TA->get_shapes()[TA->get_order()[0]] == 128 ? 1 : 2;
+    Value *max_phase = builder_->getInt32(8 / num_per_phase);
+
     // left-hand-side values
+    std::map<std::pair<int, int>, Value*> pTAs;
     std::map<std::pair<unsigned, unsigned>, std::pair<Value*, Value*>> ha;
     int lda = is_a_row ? stride_a_m : stride_a_k;
     Value *a_base = builder_->CreateURem(lane, builder_->getInt32(8));
-    Value *a_row = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
-    a_row = builder_->CreateAdd(a_row, builder_->CreateMul(warp_id_0, builder_->getInt32(2)));
-    std::vector<Value*> pTAs(2);
-    Value *a_phase = builder_->CreateUDiv(a_base, builder_->getInt32(2));
-    Value *a_col0 = builder_->CreateUDiv(lane, builder_->getInt32(16));
-    Value *a_col1 = builder_->CreateAdd(a_col0, builder_->getInt32(2));
-    a_col0 = builder_->CreateXor(a_col0, a_phase);
-    a_col1 = builder_->CreateXor(a_col1, a_phase);
+    Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(a_base, builder_->getInt32(num_per_phase)), max_phase);
+    Value *a_outer0 = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
+    a_outer0 = builder_->CreateAdd(a_outer0, builder_->CreateMul(warp_id_0, builder_->getInt32(2)));
+    Value *a_outer1 = builder_->CreateAdd(a_outer0, builder_->getInt32(4));
+    Value *a_inner0 = builder_->CreateUDiv(lane, builder_->getInt32(16));
+    Value *a_inner1 = builder_->CreateAdd(a_inner0, builder_->getInt32(2));
+    if(is_a_row){
+      a_inner0 = builder_->CreateXor(a_inner0, a_phase);
+      a_inner1 = builder_->CreateXor(a_inner1, a_phase);
+    }
+    else{
+      a_outer0  = builder_->CreateXor(a_outer0, a_phase);
+      a_outer1  = builder_->CreateXor(a_outer1, a_phase);
+    }
     Value *pTA = TA->get_pointer();
     pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(a_base, builder_->getInt32(lda))});
-    pTA = builder_->CreateGEP(pTA, {builder_->CreateMul(a_row, builder_->getInt32(8*stride_a_m))});
-    pTAs[0] = builder_->CreateGEP(pTA, {builder_->CreateMul(a_col0, builder_->getInt32(8*stride_a_k))});
-    pTAs[1] = builder_->CreateGEP(pTA, {builder_->CreateMul(a_col1, builder_->getInt32(8*stride_a_k))});
+    Value *pTA0 = builder_->CreateGEP(pTA, {builder_->CreateMul(a_outer0, builder_->getInt32(8*stride_a_m))});
+    pTAs[{0, 0}] = builder_->CreateGEP(pTA0, {builder_->CreateMul(a_inner0, builder_->getInt32(8*stride_a_k))});
+    pTAs[{0, 1}] = builder_->CreateGEP(pTA0, {builder_->CreateMul(a_inner1, builder_->getInt32(8*stride_a_k))});
+    Value *pTA1 = builder_->CreateGEP(pTA, {builder_->CreateMul(a_outer1, builder_->getInt32(8*stride_a_m))});
+    pTAs[{1, 0}] = builder_->CreateGEP(pTA1, {builder_->CreateMul(a_inner0, builder_->getInt32(8*stride_a_k))});
+    pTAs[{1, 1}] = builder_->CreateGEP(pTA1, {builder_->CreateMul(a_inner1, builder_->getInt32(8*stride_a_k))});
 
     // right-hand-side values
     std::map<std::pair<unsigned, unsigned>, Value*> hb;
@@ -1024,8 +1038,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++){
       if(ha.find({pack_i, K}) == ha.end()){
         InlineAsm *ld_a0_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
-                                                  "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_i*layout->wpt(0)*layout->spw(0)*2*stride_a_m) + "];", "=r,=r,=r,=r,r", false);
-        Value *haa = builder_->CreateCall(ld_x4_ty, ld_a0_fn, {pTAs[K/16]});
+                                                  "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_i/2*2*layout->wpt(0)*layout->spw(0)*2*stride_a_m) + "];", "=r,=r,=r,=r,r", false);
+        Value *haa = builder_->CreateCall(ld_x4_ty, ld_a0_fn, {pTAs[{pack_i%2, K/16}]});
         Value *ha0 = builder_->CreateExtractValue(haa, std::vector<unsigned>{0});
         Value *ha1 = builder_->CreateExtractValue(haa, std::vector<unsigned>{1});
         Value *ha2 = builder_->CreateExtractValue(haa, std::vector<unsigned>{2});
@@ -1482,10 +1496,9 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
     vector = in_layout->nts(in_order[0]);
   //
   int dtsize = 2;
-  Value* thread = tgt_->get_local_id(builder_->GetInsertBlock()->getModule(), *builder_, 0);
-  Value* lane = builder_->CreateURem(thread, builder_->getInt32(32));
-//  int num_per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
-  Value* phase = builder_->CreateUDiv(lane, builder_->getInt32(8));
+  int num_per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
+  Value *max_phase = builder_->getInt32(8 / num_per_phase);
+  Value *max_outer = builder_->getInt32(32);
   //
   distributed_tile* mptrs = (distributed_tile*)tmap_.at(ptrs);
   distributed_tile* mmsks = (distributed_tile*)tmap_.at(msks);
@@ -1498,13 +1511,15 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
       GetElementPtrInst *in_gep = dyn_cast<GetElementPtrInst>(mptrs->get_value(idx));
       Value *in_base = in_gep->getPointerOperand();
       size_t in_off = dyn_cast<ConstantInt>(in_gep->idx_begin())->getValue().getSExtValue()*2*vector;
+      // phase
+      Value* phase = builder_->CreateURem(builder_->CreateUDiv(idx[in_order[1]], builder_->getInt32(num_per_phase)), max_phase);
       // output ptr info
       indices_t swizzle = idx;
-      BinaryOperator* binary = dyn_cast<BinaryOperator>(swizzle[in_order[0]]);
-      ConstantInt* off = dyn_cast<ConstantInt>(binary->getOperand(1));
-      Value* base = binary->getOperand(0);
-      base = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(base, builder_->getInt32(vector)), phase), builder_->getInt32(vector));
-      swizzle[in_order[0]] = builder_->CreateAdd(base, off);
+//      BinaryOperator* binary = dyn_cast<BinaryOperator>(swizzle[in_order[0]]);
+//      ConstantInt* off = dyn_cast<ConstantInt>(binary->getOperand(1));
+//      Value* base = binary->getOperand(0);
+//      base = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(base, builder_->getInt32(vector)), phase), builder_->getInt32(vector));
+      swizzle[in_order[0]] = builder_->CreateMul(builder_->CreateURem(builder_->CreateXor(builder_->CreateUDiv(swizzle[in_order[0]], builder_->getInt32(vector)), phase), max_outer), builder_->getInt32(vector));
       GetElementPtrInst *out_gep = dyn_cast<GetElementPtrInst>(mret->get_ptr_to(swizzle));
       assert(out_gep->getNumIndices() == 1);
       Value *out_base = out_gep->getPointerOperand();
