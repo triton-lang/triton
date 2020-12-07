@@ -1007,11 +1007,9 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(b_base, builder_->getInt32(b_num_per_phase)), b_max_phase);
     Value *b_row0 = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
     Value *b_row1 = builder_->CreateAdd(b_row0, builder_->getInt32(2));
-    Value *b_col0 = builder_->CreateUDiv(lane, builder_->getInt32(16));
-//    b_col0 = builder_->CreateAdd(b_col0, builder_->CreateMul(warp_id_1, builder_->getInt32(2)));
-    Value *b_col1 = builder_->CreateAdd(b_col0, builder_->getInt32(2));
-    Value *b_col2 = builder_->CreateAdd(b_col0, builder_->getInt32(4));
-    Value *b_col3 = builder_->CreateAdd(b_col0, builder_->getInt32(6));
+    Value *b_col0 = builder_->CreateMul(builder_->CreateUDiv(lane, builder_->getInt32(16)), builder_->getInt32(2));
+    b_col0 = builder_->CreateAdd(b_col0, builder_->CreateMul(warp_id_1, builder_->getInt32(1)));
+    Value *b_col1 = builder_->CreateAdd(b_col0, builder_->getInt32(4));
     if(!is_b_row){
       b_row0 = builder_->CreateXor(b_row0, b_phase);
       b_row1 = builder_->CreateXor(b_row1, b_phase);
@@ -1019,24 +1017,14 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     else{
       b_col0 = builder_->CreateXor(b_col0, b_phase);
       b_col1 = builder_->CreateXor(b_col1, b_phase);
-      b_col2 = builder_->CreateXor(b_col2, b_phase);
-      b_col3 = builder_->CreateXor(b_col3, b_phase);
     }
     Value *b_off = builder_->CreateMul(b_base, builder_->getInt32(ldb));
-    b_off = builder_->CreateAdd(b_off, builder_->CreateMul(warp_id_1, builder_->getInt32(8*stride_b_n)));
-    Value *b_off0 = builder_->CreateAdd(b_off, builder_->CreateMul(b_col0, builder_->getInt32(16*stride_b_n)));
-    Value *b_off1 = builder_->CreateAdd(b_off, builder_->CreateMul(b_col1, builder_->getInt32(16*stride_b_n)));
-    Value *b_off2 = builder_->CreateAdd(b_off, builder_->CreateMul(b_col2, builder_->getInt32(16*stride_b_n)));
-    Value *b_off3 = builder_->CreateAdd(b_off, builder_->CreateMul(b_col3, builder_->getInt32(16*stride_b_n)));
+    Value *b_off0 = builder_->CreateAdd(b_off, builder_->CreateMul(b_col0, builder_->getInt32(8*stride_b_n)));
+    Value *b_off1 = builder_->CreateAdd(b_off, builder_->CreateMul(b_col1, builder_->getInt32(8*stride_b_n)));
     Value *b_off00 = builder_->CreateAdd(b_off0, builder_->CreateMul(b_row0, builder_->getInt32(8*stride_b_k)));
     Value *b_off10 = builder_->CreateAdd(b_off0, builder_->CreateMul(b_row1, builder_->getInt32(8*stride_b_k)));
     Value *b_off01 = builder_->CreateAdd(b_off1, builder_->CreateMul(b_row0, builder_->getInt32(8*stride_b_k)));
     Value *b_off11 = builder_->CreateAdd(b_off1, builder_->CreateMul(b_row1, builder_->getInt32(8*stride_b_k)));
-    Value *b_off02 = builder_->CreateAdd(b_off2, builder_->CreateMul(b_row0, builder_->getInt32(8*stride_b_k)));
-    Value *b_off12 = builder_->CreateAdd(b_off2, builder_->CreateMul(b_row1, builder_->getInt32(8*stride_b_k)));
-    Value *b_off03 = builder_->CreateAdd(b_off3, builder_->CreateMul(b_row0, builder_->getInt32(8*stride_b_k)));
-    Value *b_off13 = builder_->CreateAdd(b_off3, builder_->CreateMul(b_row1, builder_->getInt32(8*stride_b_k)));
-
 
     builder_->SetInsertPoint(CurrBB);
     Value *pTA = TA->get_pointer();
@@ -1049,10 +1037,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     pTBs[{1, 0}] = builder_->CreateGEP(pTB, {b_off10});
     pTBs[{0, 1}] = builder_->CreateGEP(pTB, {b_off01});
     pTBs[{1, 1}] = builder_->CreateGEP(pTB, {b_off11});
-    pTBs[{0, 2}] = builder_->CreateGEP(pTB, {b_off02});
-    pTBs[{1, 2}] = builder_->CreateGEP(pTB, {b_off12});
-    pTBs[{0, 3}] = builder_->CreateGEP(pTB, {b_off03});
-    pTBs[{1, 3}] = builder_->CreateGEP(pTB, {b_off13});
     FunctionType *mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
     InlineAsm *mma_fn = InlineAsm::get(mma_ty, "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
                                                "{$0, $1, $2, $3}, "
@@ -1075,8 +1059,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
       }
       if(hb.find({pack_j, K})==hb.end()){
         InlineAsm *ld_b_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + b_trans + ".shared.b16 "
-                                                  "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_j/2*2*layout->wpt(1)*layout->spw(1)*2*stride_b_n) + "];", "=r,=r,=r,=r,r", false);
-        Value *hbb = builder_->CreateCall(ld_x4_ty, ld_b_fn, {pTBs[{K/16, pack_j%2}]});
+                                                  "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_j/4*4*layout->wpt(1)*layout->spw(1)*2*stride_b_n) + "];", "=r,=r,=r,=r,r", false);
+        Value *hbb = builder_->CreateCall(ld_x4_ty, ld_b_fn, {pTBs[{K/16, (pack_j%4)/2}]});
         Value *hb0 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{0});
         Value *hb1 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{1});
         Value *hb2 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{2});
