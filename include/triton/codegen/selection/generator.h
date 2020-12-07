@@ -51,6 +51,7 @@ typedef llvm::Function Function;
 typedef std::vector<Value*> indices_t;
 // forward
 class machine_data_layout;
+class machine_shared_layout;
 class tile;
 class shared_tile;
 class distributed_tile;
@@ -166,6 +167,9 @@ private:
   analysis::allocation *alloc_;
   Value *sh_mem_ptr_;
   unsigned num_warps_;
+
+  std::map<machine_shared_layout*, std::map<ir::instruction*, Value*>> read_off;
+  std::map<machine_shared_layout*, std::map<ir::instruction*, Value*>> write_off;
 
   std::set<ir::value*> seen_;
 };

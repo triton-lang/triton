@@ -93,8 +93,8 @@ void module::compile_llvm_module(std::unique_ptr<llvm::Module> module, const std
   std::string tmp;
   llvm::raw_string_ostream oss(llir_);
   pm.add(llvm::createPrintModulePass(oss));
-//  pm.add(llvm::createVerifierPass());
-  pm.run(*module);
+  pm.add(llvm::createVerifierPass());
+//  pm.run(*module);
   // create machine
   module->setTargetTriple(triple);
   std::string error;

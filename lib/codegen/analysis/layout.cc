@@ -130,18 +130,18 @@ mma_layout::mma_layout(size_t num_warps,
   // try to make things as square as possible to maximize data re-use
   fpw_ = {1, 1, 1};
   std::vector<int> fpw_nm1;
-//  if(tgt->as_nvidia()->sm() < 80){
-//    unsigned num_fragments = std::min<unsigned>((shape_[0]/8)*(shape_[1]/8), 4);
-//    do {
-//      fpw_nm1 = fpw_;
-//      if(fpw_[0]*fpw_[1] < num_fragments)
-//        fpw_[0] = clamp(fpw_[0]*2, 1, shape_[0] / 8);
-//      if(fpw_[0]*fpw_[1] < num_fragments)
-//        fpw_[1] = clamp(fpw_[1]*2, 1, shape_[1] / 8);
-//    }while(fpw_nm1 != fpw_);
-//    spw_ = {fpw_[0]*8, fpw_[1]*8, 1};
-//  }
-//  else
+  if(tgt->as_nvidia()->sm() < 80){
+    unsigned num_fragments = std::min<unsigned>((shape_[0]/8)*(shape_[1]/8), 4);
+    do {
+      fpw_nm1 = fpw_;
+      if(fpw_[0]*fpw_[1] < num_fragments)
+        fpw_[0] = clamp(fpw_[0]*2, 1, shape_[0] / 8);
+      if(fpw_[0]*fpw_[1] < num_fragments)
+        fpw_[1] = clamp(fpw_[1]*2, 1, shape_[1] / 8);
+    }while(fpw_nm1 != fpw_);
+    spw_ = {fpw_[0]*8, fpw_[1]*8, 1};
+  }
+  else
     spw_ = {16, 8, 1};
 
   /* warps per tile */
@@ -160,8 +160,6 @@ mma_layout::mma_layout(size_t num_warps,
   unsigned effective_num_warps = 1;
   for(size_t d = 0; d < shape.size(); d++)
     effective_num_warps *= wpt_[d];
-//  if(num_warps != effective_num_warps)
-//    throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
 
 
@@ -211,10 +209,6 @@ scanline_layout::scanline_layout(size_t num_warps,
   unsigned effective_num_threads = 1;
   for(size_t d = 0; d < shape_.size(); d++)
     effective_num_threads *= mts_[d];
-
-//  std::cout <<values.size() << " " << num_warps << " " << effective_num_threads << std::endl;
-//  if(num_warps * 32 != effective_num_threads)
-//    throw std::runtime_error("cannot create a kernel with this amount of warps");
 }
 
 
