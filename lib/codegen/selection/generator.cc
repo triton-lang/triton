@@ -1486,7 +1486,6 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
   unsigned vector = 1;
   ir::value *ptrs = x->get_pointer_operand();
   ir::value *msks = x->get_mask_operand();
-//  ir::value *vals = x->get_false_value_operand();
   analysis::shared_layout* out_layout = layouts_->get(x)->to_shared();
   analysis::scanline_layout* in_layout = layouts_->get(ptrs)->to_scanline();
   auto out_order = out_layout->get_order();
@@ -1498,12 +1497,31 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
   int dtsize = 2;
   int num_per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
   Value *max_phase = builder_->getInt32(8 / num_per_phase);
-  Value *max_outer = builder_->getInt32(32);
   //
   distributed_tile* mptrs = (distributed_tile*)tmap_.at(ptrs);
   distributed_tile* mmsks = (distributed_tile*)tmap_.at(msks);
-//  distributed_tile* mvals = (distributed_tile*)tmap_.at(vals);
   shared_tile*      mret  = (shared_tile*)tmap_.at(x);
+  //
+  int per_thread_ld = in_layout->get_shape()[in_order[0]] / in_layout->mts(in_order[0]);
+  int n_shared = std::max<int>(8 / in_layout->mts(in_order[1]), 1);
+  std::vector<Value*> shared;
+  for(size_t i = 0; i < n_shared; i++){
+    Value* base = mret->get_pointer();
+    indices_t idx = mptrs->get_ordered_indices(i*per_thread_ld);
+    // phase
+    Value* phase = builder_->CreateUDiv(idx[in_order[1]], builder_->getInt32(num_per_phase));
+    phase = builder_->CreateURem(phase, max_phase);
+    // off
+    Value* off  = idx[in_order[0]];
+    off = builder_->CreateUDiv(off, builder_->getInt32(vector));
+    off = builder_->CreateXor(off, phase);
+    off = builder_->CreateMul(off , builder_->getInt32(vector));
+    //
+    base = builder_->CreateGEP(base, {off});
+    base = builder_->CreateGEP(base, {builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]))});
+    shared.push_back(base);
+  }
+  //
   for_each(ptrs, [&](indices_t idx){
     unsigned linear = mptrs->get_linear_index(idx);
     if(linear % vector == 0){
@@ -1511,22 +1529,11 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
       GetElementPtrInst *in_gep = dyn_cast<GetElementPtrInst>(mptrs->get_value(idx));
       Value *in_base = in_gep->getPointerOperand();
       size_t in_off = dyn_cast<ConstantInt>(in_gep->idx_begin())->getValue().getSExtValue()*2*vector;
-      // phase
-      Value* phase = builder_->CreateURem(builder_->CreateUDiv(idx[in_order[1]], builder_->getInt32(num_per_phase)), max_phase);
-      // output ptr info
-      indices_t swizzle = idx;
-//      BinaryOperator* binary = dyn_cast<BinaryOperator>(swizzle[in_order[0]]);
-//      ConstantInt* off = dyn_cast<ConstantInt>(binary->getOperand(1));
-//      Value* base = binary->getOperand(0);
-//      base = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(base, builder_->getInt32(vector)), phase), builder_->getInt32(vector));
-      swizzle[in_order[0]] = builder_->CreateMul(builder_->CreateURem(builder_->CreateXor(builder_->CreateUDiv(swizzle[in_order[0]], builder_->getInt32(vector)), phase), max_outer), builder_->getInt32(vector));
-      GetElementPtrInst *out_gep = dyn_cast<GetElementPtrInst>(mret->get_ptr_to(swizzle));
-      assert(out_gep->getNumIndices() == 1);
-      Value *out_base = out_gep->getPointerOperand();
-      size_t out_off = dyn_cast<ConstantInt>(out_gep->idx_begin())->getValue().getSExtValue()*2;
-
-//      Value *out_base = builder_->CreateGEP(mret->get_pointer(), builder_->CreateMul(lane, builder_->getInt32(8)));
-//      size_t out_off = 0;
+//      // phase
+      Value* out_base = shared[(linear / per_thread_ld) % n_shared];
+      int out_off_0 = (linear / per_thread_ld) / n_shared * n_shared * in_layout->mts(in_order[1]);
+      int out_off_1 = linear % per_thread_ld;
+      int out_off = (out_off_0*mret->get_shapes()[in_order[0]] + out_off_1)*2;
       // asm
       FunctionType *ty = FunctionType::get(builder_->getVoidTy(), {out_base->getType(), in_base->getType()}, false);
       std::string mod = (vector*2 == 16) ? ".cg" : ".ca";
