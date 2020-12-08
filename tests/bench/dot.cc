@@ -10,7 +10,7 @@ int main() {
   typedef std::tuple<std::vector<int>, bool, bool, int, int, int> config_t;
   std::vector<config_t> configs;
   for(auto ord: std::vector<std::vector<int>>{{1, 0}})
-    for(auto x: std::vector<std::array<bool, 2>>{{false, true}, {true, true}}){
+    for(auto x: std::vector<std::array<bool, 2>>{{false, true}, {true, true}, {false, false}, {false, true}}){
     std::vector<config_t> tmp = {
 //      config_t{ord, x[0], x[1], 128, 128, 128},
 //      config_t{ord, x[0], x[1], 256, 256, 256},
