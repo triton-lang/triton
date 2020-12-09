@@ -1434,10 +1434,6 @@ void generator::visit_select_inst(ir::select_inst* select) {
 void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   ir::value *op = rc->get_operand(0);
   ir::tile_type::tile_shapes_t shape = rc->get_type()->get_tile_shapes();
-  size_t rank = shape.size();
-  // temporary layout
-  shared_tile *tmp = (shared_tile*)machine_layouts_.at(layouts_->get(layouts_->tmp(rc)))
-                                   ->create(rc);
   // pointer to temporary shared memory
   Type *ty = llvm_type(rc->get_type()->get_scalar_ty(), *ctx_);
   // layouts
@@ -1446,22 +1442,27 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   // machine tiles
   distributed_tile *in_dt = (distributed_tile*)(tmap_.at(op));
   distributed_tile *out_dt = (distributed_tile*)(tmap_.at(rc));
-//  // WMMA configuration
-//  std::vector<int> wmma_pt;
-//  if(tgt_->as_nvidia()->sm() < 80)
-//    wmma_pt = { 2, 4, 1};
-//  else
-//    wmma_pt = { 2, 2, 1};
-//  long in_pt [2] = { shape[0] / (in_layout->wpt(0)*in_layout->spw(0)), shape[1] / (in_layout->wpt(1)*in_layout->spw(1)) };
-//  long out_pt[2] = { shape[0] / out_layout->mts(0), shape[1] / out_layout->mts(1) };
   // Orders
   auto ord = out_layout->get_order();
   Value *base;
   base = builder_->CreateGEP(sh_mem_ptr_, builder_->getInt32(alloc_->offset(layouts_->get(layouts_->tmp(rc)))));
   base = builder_->CreateBitCast(base, PointerType::get(ty, 3));
 
-  std::cout << in_dt->axis(ord[1]).values.size() << std::endl;
-  exit(1);
+  auto in_ord0 = in_dt->axis(ord[0]).values;
+  auto in_ord1 = in_dt->axis(ord[1]).values;
+  auto out_ord0 = out_dt->axis(ord[0]).values;
+  auto out_ord1 = out_dt->axis(ord[1]).values;
+
+  for(int j = 0; j < out_ord1.size(); j++){
+    for(int i = 0; i < out_ord0.size(); i++){
+      indices_t idx(2);
+      idx[ord[0]] = out_ord0[i];
+      idx[ord[1]] = out_ord1[j];
+      out_dt->set_value(idx, ConstantFP::get(builder_->getHalfTy(), 0));
+    }
+  }
+
+//  exit(1);
 //  // pointer lanes
 //  std::vector<Value*> ptrs;
 //  for(int i = 0; i < wmma_pt[ord[1]]; i++) {
