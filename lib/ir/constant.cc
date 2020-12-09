@@ -43,6 +43,8 @@ constant_int::constant_int(type *ty, uint64_t value)
   : constant(ty, 0), value_(value){ }
 
 constant_int *constant_int::get(type *ty, uint64_t value) {
+  if (!ty->is_integer_ty())
+    throw std::runtime_error("Cannot create constant_int with non integer ty");
   context_impl *impl = ty->get_context().p_impl.get();
   constant_int *& cst = impl->int_constants_[std::make_pair(ty, value)];
   if(cst == nullptr)
