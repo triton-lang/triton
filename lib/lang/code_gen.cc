@@ -203,11 +203,12 @@ ir::value* Generator::GenUnaryInc(UnaryOp* expr, bool is_postfix,
     else 
       instr = bld_->create_sub(arg, _1);
   } else if (arg->get_type()->is_pointer_ty()) {
-    _1 = ir::constant_int::get(arg->get_type(), 1);
+    ir::type *ty = ir::type::get_int64_ty(*ctx_);
+    _1 = ir::constant_int::get(ty, 1);
     if (is_inc) 
       instr = bld_->create_gep(arg, {_1});
     else {
-      ir::value *neg_1 = ir::constant_int::get(arg->get_type(), -1);
+      ir::value *neg_1 = ir::constant_int::get(ty, -1);
       instr = bld_->create_gep(arg, {neg_1});
     }
   } else
