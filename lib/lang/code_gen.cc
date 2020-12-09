@@ -188,27 +188,37 @@ ir::value* Generator::GenUnaryInc(UnaryOp* expr, bool is_postfix,
   ir::value* arg = ret_;
 
   ir::value *_1 = nullptr;
-  if (arg->get_type()->is_half_ty() ||
-      arg->get_type()->is_float_ty() ||
-      arg->get_type()->is_double_ty())
+  ir::value *instr = nullptr;
+
+  if (arg->get_type()->is_floating_point_ty()) {
     _1 = ir::constant_fp::get(arg->get_type(), 1.0);
-  else if (arg->get_type()->is_integer_ty())
+    if (is_inc)
+      instr = bld_->create_fadd(arg, _1);
+    else 
+      instr = bld_->create_fsub(arg, _1);
+  } else if (arg->get_type()->is_integer_ty()) {
     _1 = ir::constant_int::get(arg->get_type(), 1);
-  else 
-    error_not_implemented("data type not supported for unary inc");
-  
-  if (is_postfix) {
-    error_not_implemented("postfix inc not implemented");
-    return nullptr;
-  } else {
-    ir::value *instr = nullptr;
     if (is_inc)
       instr = bld_->create_add(arg, _1);
     else 
       instr = bld_->create_sub(arg, _1);
-    mod_->set_value(arg->get_name(), instr);
+  } else if (arg->get_type()->is_pointer_ty()) {
+    _1 = ir::constant_int::get(arg->get_type(), 1);
+    if (is_inc) 
+      instr = bld_->create_gep(arg, {_1});
+    else {
+      ir::value *neg_1 = ir::constant_int::get(arg->get_type(), -1);
+      instr = bld_->create_gep(arg, {neg_1});
+    }
+  } else
+    error_not_implemented("data type not supported for unary inc");
+
+  mod_->set_value(arg->get_name(), instr);
+
+  if (is_postfix)
+    return arg;
+  else
     return instr;
-  }
 }
 
 void Generator::VisitUnaryOp(UnaryOp* unary) {
