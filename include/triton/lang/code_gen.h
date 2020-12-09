@@ -48,6 +48,7 @@ protected:
 
   void set_ret(ir::value* value);
   ir::value *GenUnaryMinus(ir::value* arg);
+  ir::value *GenUnaryInc(UnaryOp* arg, bool is_postfix, bool is_inc);
 
 public:
   Generator(Parser* parser) : parser_(parser) {}
