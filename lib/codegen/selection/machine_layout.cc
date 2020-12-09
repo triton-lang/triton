@@ -204,6 +204,11 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
   num_rep_0_ = shape[0] / spt_0;
   num_rep_1_ = shape[1] / spt_1;
   num_rep_2_ = is_batched ? shape[2] / spt_2 : 1;
+  // packs
+  pack_size_0_ = 2;
+  pack_size_1_ = 2;
+  num_packs_0_ = num_rep_0_ / pack_size_0_;
+  num_packs_1_ = num_rep_1_ / pack_size_1_;
   int cc = tgt_->as_nvidia()->sm();
 
   /* warp offset */
@@ -211,8 +216,8 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
   Value *warp_id_12 = builder_->CreateUDiv(u_warp_id, builder_->getInt32(wpt_0));
   Value *warp_id_1 = builder_->CreateURem(warp_id_12, builder_->getInt32(wpt_1));
   Value *warp_id_2 = builder_->CreateUDiv(warp_id_12, builder_->getInt32(wpt_1));
-  Value *warp_offset_i = builder_->CreateMul(warp_id_0, builder_->getInt32(spw_0));
-  Value *warp_offset_j = builder_->CreateMul(warp_id_1, builder_->getInt32(spw_1));
+  Value *warp_offset_i = builder_->CreateMul(warp_id_0, builder_->getInt32(spw_0*pack_size_0_));
+  Value *warp_offset_j = builder_->CreateMul(warp_id_1, builder_->getInt32(spw_1*pack_size_1_));
 
   std::vector<Value*> idx_i;
   std::vector<Value*> idx_j;
@@ -221,8 +226,8 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
   /* lane offset */
   if(cc < 80){
     // offset of quad in pair
-    Value *in_pair_off_a = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(u_thread_id, _16), _4), builder_->getInt32(fpw_0));
-    Value *in_pair_off_b = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(u_thread_id, _16), _4), builder_->getInt32(fpw_1));
+    Value *in_pair_off_a = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(u_thread_id, _16), _4), builder_->getInt32(fpw_0*pack_size_0_));
+    Value *in_pair_off_b = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(u_thread_id, _16), _4), builder_->getInt32(fpw_1*pack_size_1_));
     // Quad pair id
     Value *pair_a_id = builder_->CreateUDiv(builder_->CreateURem(u_thread_id, _16), _4);
     Value *pair_b_id = builder_->CreateUDiv(builder_->CreateURem(u_thread_id, _16), _4);
@@ -230,8 +235,8 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
     pair_b_id = builder_->CreateUDiv(pair_b_id, builder_->getInt32(fpw_0));
     pair_b_id = builder_->CreateURem(pair_b_id, builder_->getInt32(fpw_1));
     // Quad pair offset
-    Value *pair_a_off = builder_->CreateMul(pair_a_id, _4);
-    Value *pair_b_off = builder_->CreateMul(pair_b_id, _4);
+    Value *pair_a_off = builder_->CreateMul(pair_a_id, builder_->getInt32(4*pack_size_0_));
+    Value *pair_b_off = builder_->CreateMul(pair_b_id, builder_->getInt32(4*pack_size_1_));
     Value *lane_offset_i = builder_->CreateAdd(pair_a_off, in_pair_off_a);
     Value *lane_offset_j = builder_->CreateAdd(pair_b_off, in_pair_off_b);
     // a offset
@@ -242,16 +247,21 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
     offset_b_k_ = builder_->CreateAnd(u_thread_id, _3);
     Value *offset_c_i = builder_->CreateAdd(builder_->CreateAnd(u_thread_id, _1), offset_a_m_);
     Value *offset_c_j = builder_->CreateAdd(builder_->CreateAnd(u_thread_id, _2), builder_->CreateAdd(warp_offset_j, pair_b_off));
-    for(unsigned pack = 0; pack < num_rep_0_; pack++)
+    // i indices
+    for(unsigned pack = 0; pack < num_packs_0_; pack++)
+    for(unsigned ii = 0; ii < pack_size_0_; ii++)
     for(unsigned i = 0; i < 2; i++){
-      idx_i.push_back(builder_->CreateAdd(offset_c_i, builder_->getInt32(pack*spt_0 + i*2)));
+      idx_i.push_back(builder_->CreateAdd(offset_c_i, builder_->getInt32(pack*spt_0*pack_size_0_ + ii*4 + i*2)));
     }
     // j indices
-    for(unsigned pack = 0; pack < num_rep_1_; pack++)
+    for(unsigned pack = 0; pack < num_packs_1_; pack++)
+    for(unsigned jj = 0; jj < pack_size_1_; jj++)
     for(unsigned j = 0; j < 2; j++){
-      idx_j.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1 + j*4*fpw_1)));
-      idx_j.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1 + j*4*fpw_1 + 1)));
+      idx_j.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1*pack_size_1_ + jj*4 + j*4*fpw_1*pack_size_1_)));
+      idx_j.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1*pack_size_1_ + jj*4 + j*4*fpw_1*pack_size_1_ + 1)));
     }
+
+
     // z indices
     for(unsigned pack = 0; pack < num_rep_2_; pack++)
       idx_z.push_back(builder_->CreateAdd(warp_id_2, builder_->getInt32(pack*spt_2)));
