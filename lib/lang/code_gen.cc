@@ -182,6 +182,46 @@ ir::value* Generator::GenUnaryMinus(ir::value* arg) {
     return bld_->create_sub(_0, arg);
 }
 
+ir::value* Generator::GenUnaryInc(UnaryOp* expr, bool is_postfix,
+                                  bool is_inc) {
+  Visit(expr->operand_);
+  ir::value* arg = ret_;
+
+  ir::value *_1 = nullptr;
+  ir::value *instr = nullptr;
+
+  if (arg->get_type()->is_floating_point_ty()) {
+    _1 = ir::constant_fp::get(arg->get_type(), 1.0);
+    if (is_inc)
+      instr = bld_->create_fadd(arg, _1);
+    else 
+      instr = bld_->create_fsub(arg, _1);
+  } else if (arg->get_type()->is_integer_ty()) {
+    _1 = ir::constant_int::get(arg->get_type(), 1);
+    if (is_inc)
+      instr = bld_->create_add(arg, _1);
+    else 
+      instr = bld_->create_sub(arg, _1);
+  } else if (arg->get_type()->is_pointer_ty()) {
+    ir::type *ty = ir::type::get_int64_ty(*ctx_);
+    _1 = ir::constant_int::get(ty, 1);
+    if (is_inc) 
+      instr = bld_->create_gep(arg, {_1});
+    else {
+      ir::value *neg_1 = ir::constant_int::get(ty, -1);
+      instr = bld_->create_gep(arg, {neg_1});
+    }
+  } else
+    error_not_implemented("data type not supported for unary inc");
+
+  mod_->set_value(arg->get_name(), instr);
+
+  if (is_postfix)
+    return arg;
+  else
+    return instr;
+}
+
 void Generator::VisitUnaryOp(UnaryOp* unary) {
   // recursion
   Visit(unary->operand_);
@@ -190,10 +230,10 @@ void Generator::VisitUnaryOp(UnaryOp* unary) {
   ir::type *arg_scal_ty = arg_ty->get_scalar_ty();
   // return
   switch  (unary->op_) {
-    case Token::PREFIX_INC:  return error_not_implemented("prefix increment not implemented");
-    case Token::PREFIX_DEC:  return error_not_implemented("prefix decrement not implemented");
-    case Token::POSTFIX_INC: return error_not_implemented("postfix increment not implemented");
-    case Token::POSTFIX_DEC: return error_not_implemented("postfix decrement not implemented");
+    case Token::PREFIX_INC:  return set_ret(GenUnaryInc(unary, false, true));
+    case Token::PREFIX_DEC:  return set_ret(GenUnaryInc(unary, false, false));
+    case Token::POSTFIX_INC: return set_ret(GenUnaryInc(unary, true, true));
+    case Token::POSTFIX_DEC: return set_ret(GenUnaryInc(unary, true, false));
     case Token::ADDR:        return error_not_implemented("unary & not implemented");
     case Token::DEREF:       return set_ret(bld_->create_load(arg));
     case Token::PLUS:        return error_not_implemented("unary + not implemented");
