@@ -1436,76 +1436,40 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   ir::tile_type::tile_shapes_t shape = rc->get_type()->get_tile_shapes();
   // pointer to temporary shared memory
   Type *ty = llvm_type(rc->get_type()->get_scalar_ty(), *ctx_);
-  // layouts
-  analysis::mma_layout* in_layout = layouts_->get(op)->to_mma884();
-  analysis::scanline_layout* out_layout = layouts_->get(rc)->to_scanline();
   // machine tiles
   distributed_tile *in_dt = (distributed_tile*)(tmap_.at(op));
   distributed_tile *out_dt = (distributed_tile*)(tmap_.at(rc));
   // Orders
-  auto ord = out_layout->get_order();
+  auto ord = layouts_->get(rc)->to_scanline()->get_order();
   Value *base;
   base = builder_->CreateGEP(sh_mem_ptr_, builder_->getInt32(alloc_->offset(layouts_->get(layouts_->tmp(rc)))));
   base = builder_->CreateBitCast(base, PointerType::get(ty, 3));
-
+  Value *ld = builder_->getInt32(shape[ord[0]]);
   auto in_ord0 = in_dt->axis(ord[0]).values;
   auto in_ord1 = in_dt->axis(ord[1]).values;
   auto out_ord0 = out_dt->axis(ord[0]).values;
   auto out_ord1 = out_dt->axis(ord[1]).values;
-
-  for(int j = 0; j < out_ord1.size(); j++){
-    for(int i = 0; i < out_ord0.size(); i++){
-      indices_t idx(2);
+  indices_t idx(2);
+  for(size_t j = 0; j < in_ord1.size(); j+=4){
+    tgt_->add_barrier(mod_, *builder_);
+    for(size_t k = 0; k < 4; k++)
+    for(size_t i = 0; i < in_ord0.size(); i++){
+      idx[ord[0]] = in_ord0[i];
+      idx[ord[1]] = in_ord1[j + k];
+      Value *off = builder_->CreateAdd(idx[ord[0]], builder_->CreateMul(in_ord1[k], ld));
+      Value *ptr = builder_->CreateGEP(base, off);
+      builder_->CreateStore(in_dt->get_value(idx), ptr);
+    }
+    tgt_->add_barrier(mod_, *builder_);
+    for(size_t k = 0; k < 8; k++)
+    for(size_t i = 0; i < out_ord0.size(); i++){
       idx[ord[0]] = out_ord0[i];
-      idx[ord[1]] = out_ord1[j];
-      out_dt->set_value(idx, ConstantFP::get(builder_->getHalfTy(), 0));
+      idx[ord[1]] = out_ord1[j*out_ord1.size()/in_ord1.size() + k];
+      Value *off = builder_->CreateAdd(idx[ord[0]], builder_->CreateMul(out_ord1[k], ld));
+      Value *ptr  = builder_->CreateGEP(base, off);
+      out_dt->set_value(idx, builder_->CreateLoad(ptr));
     }
   }
-
-//  exit(1);
-//  // pointer lanes
-//  std::vector<Value*> ptrs;
-//  for(int i = 0; i < wmma_pt[ord[1]]; i++) {
-//    Value *base;
-//    base = builder_->CreateGEP(sh_mem_ptr_, builder_->getInt32(alloc_->offset(layouts_->get(layouts_->tmp(rc)))));
-//    base = builder_->CreateBitCast(base, PointerType::get(ty, 3));
-//    Value *stride = builder_->getInt32(tmp->get_shapes()[ord[0]]);
-//    Value *idx = axes_.at(a_axes_->get(op, ord[1])).values[i];
-//    Value *off = builder_->CreateMul(stride, idx);
-//    ptrs.push_back(builder_->CreateGEP(base, off));
-//  }
-//  // Re-coalesce loops
-//  for(int i = 0; i < in_pt[ord[1]]; i++){
-//    // write to shared
-//    tgt_->add_barrier(mod_, *builder_);
-//    for(int ii = 0; ii < wmma_pt[ord[1]]; ii++){
-//      std::vector<int> starts(rank), len(rank);
-//      starts[ord[0]] = 0;
-//      starts[ord[1]] = i*wmma_pt[ord[1]] + ii;
-//      len[ord[0]] = wmma_pt[ord[0]]*in_pt[ord[0]];
-//      len[ord[1]] = 1;
-//      in_dt->for_each([&](indices_t idx){
-//        Value *write_ptr = builder_->CreateGEP(ptrs[ii], idx[ord[0]]);
-//        builder_->CreateStore(in_dt->get_value(idx), write_ptr);
-//      }, starts, len);
-//    }
-//    tgt_->add_barrier(mod_, *builder_);
-//    // load from shared
-//    for(int ii = 0; ii < out_pt[ord[1]] / in_pt[ord[1]]; ii++){
-//      std::vector<int> starts(rank), len(rank);
-//      starts[ord[0]] = 0;
-//      starts[ord[1]] = i*(out_pt[ord[1]] / in_pt[ord[1]]) + ii;
-//      len[ord[0]] = out_pt[ord[0]];
-//      len[ord[1]] = 1;
-//      out_dt->for_each([&](indices_t idx){
-//        indices_t read_idx(rank);
-//        read_idx[ord[0]] = idx[ord[0]];
-//        read_idx[ord[1]] = axes_.at(a_axes_->get(rc, ord[1])).values[ii];
-//        out_dt->set_value(idx, tmp->get_value(read_idx));
-//      }, starts, len);
-//    }
-//  }
-//  tgt_->add_barrier(mod_, *builder_);
 }
 
 void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){

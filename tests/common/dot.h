@@ -178,9 +178,9 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     std::vector<T> ha(M*K);
     std::vector<T> hb(K*N);
     for(size_t i = 0; i < ha.size(); i++)
-      ha[i] = 1;
+      ha[i] = (float)rand()/RAND_MAX;
     for(size_t i = 0; i < hb.size(); i++)
-      hb[i] = 1;
+      hb[i] = (float)rand()/RAND_MAX;
     // copy buffer
     stream->write(&*da, true, 0, ha);
     stream->write(&*db, true, 0, hb);
