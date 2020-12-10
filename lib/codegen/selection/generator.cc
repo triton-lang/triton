@@ -1535,7 +1535,7 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
 }
 
 void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
-  unsigned vector_size = 1;
+  unsigned vector = 1;
   ir::value *arg = cts->get_operand(0);
   analysis::shared_layout* out_layout = layouts_->get(cts)->to_shared();
   analysis::scanline_layout* in_layout = layouts_->get(arg)->to_scanline();
@@ -1543,44 +1543,57 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   auto in_order = in_layout->get_order();
   // tiles
   if(out_order == in_order)
-    vector_size = in_layout->nts(in_order[0]);
-  // default implementation
+    vector = in_layout->nts(in_order[0]);
+  //
+  int dtsize = cts->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
+  int num_per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
+  Value *max_phase = builder_->getInt32(8 / num_per_phase);
+  //
+  distributed_tile* marg = (distributed_tile*)tmap_.at(arg);
+  shared_tile*      mret  = (shared_tile*)tmap_.at(cts);
+  //
+  int per_thread_ld = in_layout->get_shape()[in_order[0]] / in_layout->mts(in_order[0]);
+  int n_shared = std::max<int>(8 / in_layout->mts(in_order[1]), 1);
+  std::vector<Value*> shared;
+  for(size_t i = 0; i < n_shared; i++){
+    Value* base = mret->get_pointer();
+    indices_t idx = marg->get_ordered_indices(i*per_thread_ld);
+    // phase
+    Value* phase = builder_->CreateUDiv(idx[in_order[1]], builder_->getInt32(num_per_phase));
+    phase = builder_->CreateURem(phase, max_phase);
+    // off
+    Value* off_0  = idx[in_order[0]];
+    off_0 = builder_->CreateUDiv(off_0, builder_->getInt32(vector));
+//    off_0 = builder_->CreateXor(off_0, phase);
+    off_0 = builder_->CreateMul(off_0 , builder_->getInt32(vector));
+    Value* off_1 = builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]));
+    Value* off = builder_->CreateAdd(off_0, off_1);
+    //
+    shared.push_back(builder_->CreateGEP(base, {off}));
+  }
+    // default implementation
   std::map<unsigned, Value*> packets;
   for_each(arg, [&](indices_t idx){
     distributed_tile* in = (distributed_tile*)tmap_.at(arg);
     unsigned linear = in->get_linear_index(idx);
-    unsigned id = linear / vector_size;
+    unsigned id = linear / vector;
     Value *in_value = in->get_value(idx);
-    if(linear % vector_size == 0)
-      packets[id] = UndefValue::get(VectorType::get(in_value->getType(), vector_size));
-    packets[id] = builder_->CreateInsertElement(packets.at(id), in_value, linear % vector_size);
+    if(linear % vector == 0)
+      packets[id] = UndefValue::get(VectorType::get(in_value->getType(), vector));
+    packets[id] = builder_->CreateInsertElement(packets.at(id), in_value, linear % vector);
   });
-
-  Value* thread = tgt_->get_local_id(builder_->GetInsertBlock()->getModule(), *builder_, 0);
-  Value* lane = builder_->CreateURem(thread, builder_->getInt32(32));
-//  int num_per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
-  Value* phase = builder_->CreateUDiv(lane, builder_->getInt32(8));
-
-
-
+  //
   for_each(arg, [&](indices_t idx){
-    distributed_tile* in = (distributed_tile*)tmap_.at(arg);
-    shared_tile* result = (shared_tile*)tmap_.at(cts);
-    unsigned linear = in->get_linear_index(idx);
-    unsigned id = linear / vector_size;
-    if(linear % vector_size == 0){
-      // output ptr info
-      indices_t swizzle = idx;
-
-      BinaryOperator* binary = dyn_cast<BinaryOperator>(swizzle[in_order[0]]);
-      ConstantInt* off = dyn_cast<ConstantInt>(binary->getOperand(1));
-      Value* base = binary->getOperand(0);
-      base = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(base, builder_->getInt32(vector_size)), phase), builder_->getInt32(vector_size));
-//      swizzle[in_order[0]] = builder_->CreateAdd(base, off);
-      GetElementPtrInst *out_gep = dyn_cast<GetElementPtrInst>(result->get_ptr_to(swizzle));
-      assert(out_gep->getNumIndices() == 1);
-
-      result->set_value(swizzle, packets[id]);
+    unsigned linear = marg->get_linear_index(idx);
+    if(linear % vector == 0){
+      // input ptr info
+      int out_off_0 = (linear / per_thread_ld) / n_shared * n_shared * in_layout->mts(in_order[1]);
+      int out_off_1 = linear % per_thread_ld;
+      int out_off = (out_off_0*mret->get_shapes()[in_order[0]] + out_off_1);
+      Value* out_base = shared[(linear / per_thread_ld) % n_shared];
+      Value* out_ptr = builder_->CreateGEP(out_base, {builder_->getInt32(out_off)});
+      // asm
+      builder_->CreateStore(packets[linear/vector], out_ptr);
     }
   });
 }
