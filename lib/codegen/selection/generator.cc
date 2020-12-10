@@ -849,6 +849,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
     Value *_3 = builder_->getInt32(3);
     Value *_4 = builder_->getInt32(4);
+    Value *_8 = builder_->getInt32(8);
     Value *_16 = builder_->getInt32(16);
 
     // fragments per warp (fpw)
@@ -921,14 +922,21 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
                                                "{$10, $11}, "
                                                "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
 
-
-
+    int a_num_per_phase = TA->get_shapes()[TA->get_order()[0]] == 128 ? 1 : 2;
+    Value *a_max_phase = builder_->getInt32(4 / a_num_per_phase);
+    Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(offset_a_k, builder_->getInt32(a_num_per_phase)), a_max_phase);
+    offset_a_m = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_a_m, _8), a_phase), _8);
     Value *a_off = builder_->CreateMul(offset_a_m, builder_->getInt32(stride_a_m));
     a_off = builder_->CreateAdd(a_off, builder_->CreateMul(offset_a_k, builder_->getInt32(stride_a_k)));
+    Value *pTA = builder_->CreateGEP(TA->get_pointer(), a_off);
+
+    int b_num_per_phase = TB->get_shapes()[TB->get_order()[0]] == 128 ? 1 : 2;
+    Value *b_max_phase = builder_->getInt32(4 / b_num_per_phase);
+    Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(offset_b_k, builder_->getInt32(b_num_per_phase)), b_max_phase);
+    offset_b_n = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_b_n, _8), b_phase), _8);
     Value *b_off = builder_->CreateMul(offset_b_n, builder_->getInt32(stride_b_n));
     b_off = builder_->CreateAdd(b_off, builder_->CreateMul(offset_b_k, builder_->getInt32(stride_b_k)));
 
-    Value *pTA = builder_->CreateGEP(TA->get_pointer(), a_off);
     Value *pTB = builder_->CreateGEP(TB->get_pointer(), b_off);
 
 
@@ -1547,7 +1555,8 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   //
   int dtsize = cts->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
   int num_per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
-  Value *max_phase = builder_->getInt32(8 / num_per_phase);
+  size_t lim_phase = (tgt_->as_nvidia()->sm() < 80) ? 4 : 8;
+  Value *max_phase = builder_->getInt32(lim_phase / num_per_phase);
   //
   distributed_tile* marg = (distributed_tile*)tmap_.at(arg);
   shared_tile*      mret  = (shared_tile*)tmap_.at(cts);
@@ -1564,7 +1573,7 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
     // off
     Value* off_0  = idx[in_order[0]];
     off_0 = builder_->CreateUDiv(off_0, builder_->getInt32(vector));
-//    off_0 = builder_->CreateXor(off_0, phase);
+    off_0 = builder_->CreateXor(off_0, phase);
     off_0 = builder_->CreateMul(off_0 , builder_->getInt32(vector));
     Value* off_1 = builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]));
     Value* off = builder_->CreateAdd(off_0, off_1);
