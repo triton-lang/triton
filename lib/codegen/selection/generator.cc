@@ -922,17 +922,17 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
                                                "{$10, $11}, "
                                                "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
 
-//    int a_num_per_phase = TA->get_shapes()[TA->get_order()[0]] == 128 ? 1 : 2;
-//    Value *a_max_phase = builder_->getInt32(4 / a_num_per_phase);
-//    Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(offset_a_k, builder_->getInt32(a_num_per_phase)), a_max_phase);
+    int a_num_per_phase = TA->get_shapes()[TA->get_order()[0]] == 128 ? 1 : 2;
+    Value *a_max_phase = builder_->getInt32(4 / a_num_per_phase);
+    Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(offset_a_k, builder_->getInt32(a_num_per_phase)), a_max_phase);
 //    offset_a_m = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_a_m, _8), a_phase), _8);
     Value *a_off = builder_->CreateMul(offset_a_m, builder_->getInt32(stride_a_m));
     a_off = builder_->CreateAdd(a_off, builder_->CreateMul(offset_a_k, builder_->getInt32(stride_a_k)));
     Value *pTA = builder_->CreateGEP(TA->get_pointer(), a_off);
 
-//    int b_num_per_phase = TB->get_shapes()[TB->get_order()[0]] == 128 ? 1 : 2;
-//    Value *b_max_phase = builder_->getInt32(4 / b_num_per_phase);
-//    Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(offset_b_k, builder_->getInt32(b_num_per_phase)), b_max_phase);
+    int b_num_per_phase = TB->get_shapes()[TB->get_order()[0]] == 128 ? 1 : 2;
+    Value *b_max_phase = builder_->getInt32(4 / b_num_per_phase);
+    Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(offset_b_k, builder_->getInt32(b_num_per_phase)), b_max_phase);
 //    offset_b_n = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_b_n, _8), b_phase), _8);
     Value *b_off = builder_->CreateMul(offset_b_n, builder_->getInt32(stride_b_n));
     b_off = builder_->CreateAdd(b_off, builder_->CreateMul(offset_b_k, builder_->getInt32(stride_b_k)));
@@ -940,32 +940,45 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *pTB = builder_->CreateGEP(TB->get_pointer(), b_off);
 
 
+    std::map<std::pair<int, int>, std::pair<Value*, Value*>> has, hbs;
     for(auto& x: fcs){
       std::vector<Value *>& fc = x.second;
-      for(unsigned pack_i = 0; pack_i < mma->num_packs_0_; pack_i++)
-      for(unsigned pack_j = 0; pack_j < mma->num_packs_1_; pack_j++){
+      for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
+      for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++){
       for(unsigned K = 0; K < NK; K += 4){
-        Value* pa =  builder_->CreateGEP(pTA, builder_->getInt32(pack_i*mma->pack_size_0_*stride_rep_i*stride_a_m + K*stride_a_k));
-        Value* pb =  builder_->CreateGEP(pTB, builder_->getInt32(pack_j*mma->pack_size_1_*stride_rep_j*stride_b_n + K*stride_b_k));
-        Value* ha = builder_->CreateLoad(builder_->CreateBitCast(pa, PointerType::get(VectorType::get(fp16x2_ty, 2*mma->pack_size_0_), 3)));
-        Value* hb = builder_->CreateLoad(builder_->CreateBitCast(pb, PointerType::get(VectorType::get(fp16x2_ty, 2*mma->pack_size_1_), 3)));
-        for(unsigned ii = 0; ii < mma->pack_size_0_; ii++)
-        for(unsigned jj = 0; jj < mma->pack_size_1_; jj++){
-          Value *ha0 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(ii*mma->pack_size_0_ + 0)), fp16x2_ty);
-          Value *ha1 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(ii*mma->pack_size_0_ + 1)), fp16x2_ty);
-          Value *hb0 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(jj*mma->pack_size_1_ + 0)), fp16x2_ty);
-          Value *hb1 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(jj*mma->pack_size_1_ + 1)), fp16x2_ty);
-          std::vector<size_t> idx = {
-            (pack_i*2*mma->pack_size_0_ + ii*2 + 0) + (pack_j*4*mma->pack_size_1_ + jj*4 + 0)*ld_fc,
-            (pack_i*2*mma->pack_size_0_ + ii*2 + 0) + (pack_j*4*mma->pack_size_1_ + jj*4 + 1)*ld_fc,
-            (pack_i*2*mma->pack_size_0_ + ii*2 + 1) + (pack_j*4*mma->pack_size_1_ + jj*4 + 0)*ld_fc,
-            (pack_i*2*mma->pack_size_0_ + ii*2 + 1) + (pack_j*4*mma->pack_size_1_ + jj*4 + 1)*ld_fc,
-            (pack_i*2*mma->pack_size_0_ + ii*2 + 0) + (pack_j*4*mma->pack_size_1_ + jj*4 + 2)*ld_fc,
-            (pack_i*2*mma->pack_size_0_ + ii*2 + 0) + (pack_j*4*mma->pack_size_1_ + jj*4 + 3)*ld_fc,
-            (pack_i*2*mma->pack_size_0_ + ii*2 + 1) + (pack_j*4*mma->pack_size_1_ + jj*4 + 2)*ld_fc,
-            (pack_i*2*mma->pack_size_0_ + ii*2 + 1) + (pack_j*4*mma->pack_size_1_ + jj*4 + 3)*ld_fc
+        if(has.find({pack_i, K}) == has.end()){
+          Value* pa =  builder_->CreateGEP(pTA, builder_->getInt32(pack_i*stride_rep_i*stride_a_m + K*stride_a_k));
+          Value* ha = builder_->CreateLoad(builder_->CreateBitCast(pa, PointerType::get(VectorType::get(fp16x2_ty, 2*mma->pack_size_0_), 3)));
+          Value *ha00 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(0)), fp16x2_ty);
+          Value *ha01 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(1)), fp16x2_ty);
+          Value *ha10 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(2)), fp16x2_ty);
+          Value *ha11 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(3)), fp16x2_ty);
+          has[{pack_i, K}]   = {ha00, ha01};
+          has[{pack_i+1, K}] = {ha10, ha11};
+        }
+        if(hbs.find({pack_j, K}) == hbs.end()){
+          Value* pb =  builder_->CreateGEP(pTB, builder_->getInt32(pack_j*stride_rep_j*stride_b_n + K*stride_b_k));
+          Value* hb = builder_->CreateLoad(builder_->CreateBitCast(pb, PointerType::get(VectorType::get(fp16x2_ty, 2*mma->pack_size_1_), 3)));
+          Value *hb00 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(0)), fp16x2_ty);
+          Value *hb01 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(1)), fp16x2_ty);
+          Value *hb10 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(2)), fp16x2_ty);
+          Value *hb11 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(3)), fp16x2_ty);
+          hbs[{pack_j, K}]   = {hb00, hb01};
+          hbs[{pack_j+1, K}] = {hb10, hb11};
+        }
+        std::vector<size_t> idx = {
+            (pack_i*2 + 0) + (pack_j*4 + 0)*ld_fc,
+            (pack_i*2 + 0) + (pack_j*4 + 1)*ld_fc,
+            (pack_i*2 + 1) + (pack_j*4 + 0)*ld_fc,
+            (pack_i*2 + 1) + (pack_j*4 + 1)*ld_fc,
+            (pack_i*2 + 0) + (pack_j*4 + 2)*ld_fc,
+            (pack_i*2 + 0) + (pack_j*4 + 3)*ld_fc,
+            (pack_i*2 + 1) + (pack_j*4 + 2)*ld_fc,
+            (pack_i*2 + 1) + (pack_j*4 + 3)*ld_fc
           };
-          Value *nc = builder_->CreateCall(mma_fn,  std::vector<llvm::Value*>{ha0, ha1, hb0, hb1, fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]], fc[idx[4]], fc[idx[5]], fc[idx[6]], fc[idx[7]]});
+          auto ha = has[{pack_i, K}];
+          auto hb = hbs[{pack_j, K}];
+          Value *nc = builder_->CreateCall(mma_fn,  std::vector<llvm::Value*>{ha.first, ha.second, hb.first, hb.second, fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]], fc[idx[4]], fc[idx[5]], fc[idx[6]], fc[idx[7]]});
           fc[idx[0]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{0});
           fc[idx[1]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{1});
           fc[idx[2]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{2});
@@ -976,9 +989,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
           fc[idx[7]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{7});
         }
       }
-
-      }
-
     }
 
     // write back
