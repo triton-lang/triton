@@ -115,7 +115,7 @@ public:
   machine_mma_layout(Module *mod, Builder *builder,
                         target *tgt,
                         analysis::axes *a_axes, std::map<unsigned, distributed_axis>& axes,
-                        analysis::mma_layout* layout);
+                        analysis::mma_layout* layout, analysis::data_layout* layout_a, analysis::data_layout* layout_b);
   Value *offset_a_m_, *offset_a_k_;
   Value *offset_b_n_, *offset_b_k_;
   unsigned pack_size_0_;

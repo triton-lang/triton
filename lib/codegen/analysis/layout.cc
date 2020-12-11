@@ -155,11 +155,6 @@ mma_layout::mma_layout(size_t num_warps,
     if(wpt_[0] * wpt_[1] * wpt_[2] < num_warps)
       wpt_[1] = clamp(wpt_[1]*2, 1, shape_[1] / spw_[1]);
   }while(wpt_nm1 != wpt_);
-
-  /* sanity check */
-  unsigned effective_num_warps = 1;
-  for(size_t d = 0; d < shape.size(); d++)
-    effective_num_warps *= wpt_[d];
 }
 
 

@@ -830,10 +830,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
 
     analysis::mma_layout* layout = layouts_->get(dot)->to_mma884();
-    Value* thread_id = tgt_->get_local_id(builder_->GetInsertBlock()->getModule(), *builder_, 0);
-    Value *warp_size = builder_->getInt32(32);
-    Value *lane_id = builder_->CreateURem(thread_id, warp_size);
-    Value *warp_id = builder_->CreateUDiv(thread_id, warp_size);
 
     auto ord_a = layouts_->get(dot->get_operand(0))->get_order();
     auto ord_b = layouts_->get(dot->get_operand(1))->get_order();
@@ -847,21 +843,10 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int stride_b_n = is_b_row ? 1 : TB->get_shapes()[0];
     int stride_b_k = is_b_row ? TB->get_shapes()[1] : 1;
 
-    Value *_3 = builder_->getInt32(3);
-    Value *_4 = builder_->getInt32(4);
-    Value *_8 = builder_->getInt32(8);
-    Value *_16 = builder_->getInt32(16);
-
-    // fragments per warp (fpw)
     unsigned fpw_0 = layout->fpw(0);
     unsigned fpw_1 = layout->fpw(1);
-    // warps per tile (wpt)
     unsigned wpt_0 = layout->wpt(0);
     unsigned wpt_1 = layout->wpt(1);
-    // shape per warp (spw)
-    unsigned spw_0 = layout->spw(0);
-    unsigned spw_1 = layout->spw(1);
-    // warp tile size (wts)
     unsigned wts_0 = fpw_0 * 8;
     unsigned wts_1 = fpw_1 * 8;
     unsigned stride_rep_i = wpt_0 * wts_0;
@@ -869,44 +854,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     unsigned num_rep_i = shapes[0] / stride_rep_i;
     unsigned ld_fc = num_rep_i * 2;
 
-    /* warp offset */
-    Value *warp_id_0 = builder_->CreateURem(warp_id, builder_->getInt32(wpt_0));
-    Value *warp_id_12 = builder_->CreateUDiv(warp_id, builder_->getInt32(wpt_0));
-    Value *warp_id_1 = builder_->CreateURem(warp_id_12, builder_->getInt32(wpt_1));
-    Value *warp_offset_i = builder_->CreateMul(warp_id_0, builder_->getInt32(spw_0*mma->pack_size_0_));
-    Value *warp_offset_j = builder_->CreateMul(warp_id_1, builder_->getInt32(spw_1*mma->pack_size_1_));
-
-
-    // offset of quad in pair
-    Value *in_pair_off_a = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(thread_id, _16), _4), builder_->getInt32(fpw_0*mma->pack_size_0_));
-    Value *in_pair_off_b = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(thread_id, _16), _4), builder_->getInt32(fpw_1*mma->pack_size_1_));
-    // Quad pair id
-    Value *pair_a_id = builder_->CreateUDiv(builder_->CreateURem(thread_id, _16), _4);
-    Value *pair_b_id = builder_->CreateUDiv(builder_->CreateURem(thread_id, _16), _4);
-    pair_a_id = builder_->CreateURem(pair_a_id, builder_->getInt32(fpw_0));
-    pair_b_id = builder_->CreateUDiv(pair_b_id, builder_->getInt32(fpw_0));
-    pair_b_id = builder_->CreateURem(pair_b_id, builder_->getInt32(fpw_1));
-    // Quad pair offset
-    Value *pair_a_off = builder_->CreateMul(pair_a_id, builder_->getInt32(4*mma->pack_size_0_));
-    Value *pair_b_off = builder_->CreateMul(pair_b_id, builder_->getInt32(4*mma->pack_size_1_));
-    Value *lane_offset_i = builder_->CreateAdd(pair_a_off, in_pair_off_a);
-    Value *lane_offset_j = builder_->CreateAdd(pair_b_off, in_pair_off_b);
-    // a offset
-    Value *offset_a_m = builder_->CreateAdd(warp_offset_i, lane_offset_i);
-    Value *offset_a_k = builder_->CreateAnd(thread_id, _3);
-    // b offsets
-    Value *offset_b_n = builder_->CreateAdd(warp_offset_j, lane_offset_j);
-    Value *offset_b_k = builder_->CreateAnd(thread_id, _3);
-
-
-    if(is_a_row){
-      offset_a_m = builder_->CreateAdd(offset_a_m, builder_->CreateURem(thread_id, builder_->getInt32(4)));
-      offset_a_k = builder_->getInt32(0);
-    }
-    if(!is_b_row){
-      offset_b_n = builder_->CreateAdd(offset_b_n, builder_->CreateURem(thread_id, builder_->getInt32(4)));
-      offset_b_k = builder_->getInt32(0);
-    }
 
     std::string op_a = is_a_row ? "row" : "col";
     std::string op_b = is_b_row ? "row" : "col";
@@ -921,21 +868,20 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
                                                "{$8, $9}, "
                                                "{$10, $11}, "
                                                "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
-
     int a_num_per_phase = TA->get_shapes()[TA->get_order()[0]] == 128 ? 1 : 2;
     Value *a_max_phase = builder_->getInt32(4 / a_num_per_phase);
-    Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(offset_a_k, builder_->getInt32(a_num_per_phase)), a_max_phase);
+    Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(mma->offset_a_k_, builder_->getInt32(a_num_per_phase)), a_max_phase);
 //    offset_a_m = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_a_m, _8), a_phase), _8);
-    Value *a_off = builder_->CreateMul(offset_a_m, builder_->getInt32(stride_a_m));
-    a_off = builder_->CreateAdd(a_off, builder_->CreateMul(offset_a_k, builder_->getInt32(stride_a_k)));
+    Value *a_off = builder_->CreateMul(mma->offset_a_m_, builder_->getInt32(stride_a_m));
+    a_off = builder_->CreateAdd(a_off, builder_->CreateMul(mma->offset_a_k_, builder_->getInt32(stride_a_k)));
     Value *pTA = builder_->CreateGEP(TA->get_pointer(), a_off);
 
     int b_num_per_phase = TB->get_shapes()[TB->get_order()[0]] == 128 ? 1 : 2;
     Value *b_max_phase = builder_->getInt32(4 / b_num_per_phase);
-    Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(offset_b_k, builder_->getInt32(b_num_per_phase)), b_max_phase);
+    Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(mma->offset_b_k_, builder_->getInt32(b_num_per_phase)), b_max_phase);
 //    offset_b_n = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_b_n, _8), b_phase), _8);
-    Value *b_off = builder_->CreateMul(offset_b_n, builder_->getInt32(stride_b_n));
-    b_off = builder_->CreateAdd(b_off, builder_->CreateMul(offset_b_k, builder_->getInt32(stride_b_k)));
+    Value *b_off = builder_->CreateMul(mma->offset_b_n_, builder_->getInt32(stride_b_n));
+    b_off = builder_->CreateAdd(b_off, builder_->CreateMul(mma->offset_b_k_, builder_->getInt32(stride_b_k)));
 
     Value *pTB = builder_->CreateGEP(TB->get_pointer(), b_off);
 
@@ -943,41 +889,47 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     std::map<std::pair<int, int>, std::pair<Value*, Value*>> has, hbs;
     for(auto& x: fcs){
       std::vector<Value *>& fc = x.second;
-      for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
-      for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++){
+      for(unsigned m = 0; m < mma->num_rep_0_; m++)
+      for(unsigned n = 0; n < mma->num_rep_1_; n++){
       for(unsigned K = 0; K < NK; K += 4){
-        if(has.find({pack_i, K}) == has.end()){
-          Value* pa =  builder_->CreateGEP(pTA, builder_->getInt32(pack_i*stride_rep_i*stride_a_m + K*stride_a_k));
-          Value* ha = builder_->CreateLoad(builder_->CreateBitCast(pa, PointerType::get(VectorType::get(fp16x2_ty, 2*mma->pack_size_0_), 3)));
+        if(has.find({m, K}) == has.end()){
+          Value* pa =  builder_->CreateGEP(pTA, builder_->getInt32(m*stride_rep_i*stride_a_m + K*stride_a_k));
+          Value* ha = builder_->CreateLoad(builder_->CreateBitCast(pa, PointerType::get(VectorType::get(fp16x2_ty, 4), 3)));
           Value *ha00 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(0)), fp16x2_ty);
           Value *ha01 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(1)), fp16x2_ty);
           Value *ha10 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(2)), fp16x2_ty);
           Value *ha11 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(3)), fp16x2_ty);
-          has[{pack_i, K}]   = {ha00, ha01};
-          has[{pack_i+1, K}] = {ha10, ha11};
+          has[{m, K}]   = {ha00, ha01};
+          if(is_a_row)
+            has[{m, K+4}] = {ha10, ha11};
+          else
+            has[{m+1, K}] = {ha10, ha11};
         }
-        if(hbs.find({pack_j, K}) == hbs.end()){
-          Value* pb =  builder_->CreateGEP(pTB, builder_->getInt32(pack_j*stride_rep_j*stride_b_n + K*stride_b_k));
-          Value* hb = builder_->CreateLoad(builder_->CreateBitCast(pb, PointerType::get(VectorType::get(fp16x2_ty, 2*mma->pack_size_1_), 3)));
+        if(hbs.find({n, K}) == hbs.end()){
+          Value* pb =  builder_->CreateGEP(pTB, builder_->getInt32(n*stride_rep_j*stride_b_n + K*stride_b_k));
+          Value* hb = builder_->CreateLoad(builder_->CreateBitCast(pb, PointerType::get(VectorType::get(fp16x2_ty, 4), 3)));
           Value *hb00 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(0)), fp16x2_ty);
           Value *hb01 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(1)), fp16x2_ty);
           Value *hb10 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(2)), fp16x2_ty);
           Value *hb11 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(3)), fp16x2_ty);
-          hbs[{pack_j, K}]   = {hb00, hb01};
-          hbs[{pack_j+1, K}] = {hb10, hb11};
+          hbs[{n, K}]   = {hb00, hb01};
+          if(is_b_row)
+            hbs[{n+1, K}] = {hb10, hb11};
+          else
+            hbs[{n, K+4}] = {hb10, hb11};
         }
         std::vector<size_t> idx = {
-            (pack_i*2 + 0) + (pack_j*4 + 0)*ld_fc,
-            (pack_i*2 + 0) + (pack_j*4 + 1)*ld_fc,
-            (pack_i*2 + 1) + (pack_j*4 + 0)*ld_fc,
-            (pack_i*2 + 1) + (pack_j*4 + 1)*ld_fc,
-            (pack_i*2 + 0) + (pack_j*4 + 2)*ld_fc,
-            (pack_i*2 + 0) + (pack_j*4 + 3)*ld_fc,
-            (pack_i*2 + 1) + (pack_j*4 + 2)*ld_fc,
-            (pack_i*2 + 1) + (pack_j*4 + 3)*ld_fc
+            (m*2 + 0) + (n*4 + 0)*ld_fc,
+            (m*2 + 0) + (n*4 + 1)*ld_fc,
+            (m*2 + 1) + (n*4 + 0)*ld_fc,
+            (m*2 + 1) + (n*4 + 1)*ld_fc,
+            (m*2 + 0) + (n*4 + 2)*ld_fc,
+            (m*2 + 0) + (n*4 + 3)*ld_fc,
+            (m*2 + 1) + (n*4 + 2)*ld_fc,
+            (m*2 + 1) + (n*4 + 3)*ld_fc
           };
-          auto ha = has[{pack_i, K}];
-          auto hb = hbs[{pack_j, K}];
+          auto ha = has[{m, K}];
+          auto hb = hbs[{n, K}];
           Value *nc = builder_->CreateCall(mma_fn,  std::vector<llvm::Value*>{ha.first, ha.second, hb.first, hb.second, fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]], fc[idx[4]], fc[idx[5]], fc[idx[6]], fc[idx[7]]});
           fc[idx[0]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{0});
           fc[idx[1]] = builder_->CreateExtractValue(nc, std::vector<unsigned>{1});
@@ -1755,7 +1707,14 @@ void generator::visit_function(ir::function* fn) {
 
 
 void generator::visit_layout_hmma_884(analysis::mma_layout* layout) {
-  machine_layouts_[layout] = new machine_mma_layout(mod_, &*builder_, tgt_, a_axes_, axes_, layout);
+  ir::value *a = nullptr;
+  ir::value *b = nullptr;
+  for(ir::value* v: layout->get_values())
+    if(ir::dot_inst* dot = dynamic_cast<ir::dot_inst*>(v)){
+      a = dot->get_operand(0);
+      b = dot->get_operand(1);
+    }
+  machine_layouts_[layout] = new machine_mma_layout(mod_, &*builder_, tgt_, a_axes_, axes_, layout, layouts_->get(a), layouts_->get(b));
 }
 
 void generator::visit_layout_scanline(analysis::scanline_layout* layout) {
