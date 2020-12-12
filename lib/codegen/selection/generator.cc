@@ -828,6 +828,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     TA->set_return_mode(true);
     TB->set_return_mode(true);
 
+    Value* _8 = builder_->getInt32(8);
 
     analysis::mma_layout* layout = layouts_->get(dot)->to_mma884();
 
@@ -855,6 +856,11 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     unsigned ld_fc = num_rep_i * 2;
 
 
+    Value* offset_a_m = mma->offset_a_m_;
+    Value* offset_a_k = mma->offset_a_k_;
+    Value* offset_b_n = mma->offset_b_n_;
+    Value* offset_b_k = mma->offset_b_k_;
+
     std::string op_a = is_a_row ? "row" : "col";
     std::string op_b = is_b_row ? "row" : "col";
 
@@ -868,20 +874,32 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
                                                "{$8, $9}, "
                                                "{$10, $11}, "
                                                "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
-    int a_num_per_phase = TA->get_shapes()[TA->get_order()[0]] == 128 ? 1 : 2;
+    int a_num_per_phase = TA->get_shapes()[TA->get_order()[0]] == 128 ? 1 : 4;
     Value *a_max_phase = builder_->getInt32(4 / a_num_per_phase);
-    Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(mma->offset_a_k_, builder_->getInt32(a_num_per_phase)), a_max_phase);
-//    offset_a_m = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_a_m, _8), a_phase), _8);
-    Value *a_off = builder_->CreateMul(mma->offset_a_m_, builder_->getInt32(stride_a_m));
-    a_off = builder_->CreateAdd(a_off, builder_->CreateMul(mma->offset_a_k_, builder_->getInt32(stride_a_k)));
+    if(is_a_row){
+      Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(offset_a_m, builder_->getInt32(a_num_per_phase)), a_max_phase);
+      offset_a_k = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_a_k, _8), a_phase), _8);
+    }
+    else{
+      Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(offset_a_k, builder_->getInt32(a_num_per_phase)), a_max_phase);
+      offset_a_m = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_a_m, _8), a_phase), _8);
+    }
+    Value *a_off = builder_->CreateMul(offset_a_m, builder_->getInt32(stride_a_m));
+    a_off = builder_->CreateAdd(a_off, builder_->CreateMul(offset_a_k, builder_->getInt32(stride_a_k)));
     Value *pTA = builder_->CreateGEP(TA->get_pointer(), a_off);
 
-    int b_num_per_phase = TB->get_shapes()[TB->get_order()[0]] == 128 ? 1 : 2;
+    int b_num_per_phase = TB->get_shapes()[TB->get_order()[0]] == 128 ? 1 : 4;
     Value *b_max_phase = builder_->getInt32(4 / b_num_per_phase);
-    Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(mma->offset_b_k_, builder_->getInt32(b_num_per_phase)), b_max_phase);
-//    offset_b_n = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_b_n, _8), b_phase), _8);
-    Value *b_off = builder_->CreateMul(mma->offset_b_n_, builder_->getInt32(stride_b_n));
-    b_off = builder_->CreateAdd(b_off, builder_->CreateMul(mma->offset_b_k_, builder_->getInt32(stride_b_k)));
+    if(is_b_row){
+      Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(offset_b_k, builder_->getInt32(b_num_per_phase)), b_max_phase);
+      offset_b_n = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_b_n, _8), b_phase), _8);
+    }
+    else{
+      Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(offset_b_n, builder_->getInt32(b_num_per_phase)), b_max_phase);
+      offset_b_k = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(offset_b_k, _8), b_phase), _8);
+    }
+    Value *b_off = builder_->CreateMul(offset_b_n, builder_->getInt32(stride_b_n));
+    b_off = builder_->CreateAdd(b_off, builder_->CreateMul(offset_b_k, builder_->getInt32(stride_b_k)));
 
     Value *pTB = builder_->CreateGEP(TB->get_pointer(), b_off);
 
@@ -1535,7 +1553,7 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
     // off
     Value* off_0  = idx[in_order[0]];
     off_0 = builder_->CreateUDiv(off_0, builder_->getInt32(vector));
-//    off_0 = builder_->CreateXor(off_0, phase);
+    off_0 = builder_->CreateXor(off_0, phase);
     off_0 = builder_->CreateMul(off_0 , builder_->getInt32(vector));
     Value* off_1 = builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]));
     Value* off = builder_->CreateAdd(off_0, off_1);
