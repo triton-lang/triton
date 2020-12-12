@@ -129,7 +129,7 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   if(mode == BENCH) {
     opts.defines.push_back({"TM", {"128"}});
     opts.defines.push_back({"TN", {"128"}});
-    opts.defines.push_back({"TK", {"32"}});
+    opts.defines.push_back({"TK", {"16"}});
     opts.defines.push_back({"TZ", {"1"}});
     opts.num_warps = {4};
   }
@@ -145,30 +145,33 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
                       (size_t)x.D<int>("TZ")};
   };
 
+
+
   // metrics
   if(mode == BENCH){
     auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
     double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
     bench.push_back(tflops(triton_ns));
 
-//    // cublas
-//   if(cublas::cublasinit()){
-//     T alpha(static_cast<double>(1));
-//     T beta(static_cast<double>(0));
-//     cublasGemmAlgo_t fastest;
-////     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
-//     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
-//                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
-//                                                                ldc, nullptr, CUBLAS_GEMM_DFALT); }, stream);
-//     bench.push_back(tflops(cublas_ms));
-//   }
+    // cublas
+   if(cublas::cublasinit()){
+     T alpha(static_cast<double>(1));
+     T beta(static_cast<double>(0));
+     cublasGemmAlgo_t fastest;
+//     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
+     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
+                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
+                                                                ldc, nullptr, CUBLAS_GEMM_DFALT); }, stream);
+     bench.push_back(tflops(cublas_ms));
+   }
   }
+
 
   rt::function::options_t opt;
   for(auto &x: opts.defines)
     opt.defines[x.first] = x.second[0];
   opt.num_warps = 4;
-//  std::cout << function.get_asm(rt::ASM_NV_PTX, stream, opt) << std::endl;
+//  std::cout << function.get_asm(rt::ASM_NV_SASS, stream, opt) << std::endl;
 
   // test triton
   if(mode == TEST){

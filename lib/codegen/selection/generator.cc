@@ -421,10 +421,10 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
 //      builder_->CreateBr(mask_done_bb);
 //      builder_->SetInsertPoint(mask_done_bb);
 //      Value *current_result = nullptr;
-//      if(false_values){
+//      if(x->get_false_value_operand()){
 //        current_result = builder_->CreatePHI(result_then->getType(), 2);
 //        ((PHINode*)current_result)->addIncoming(result_then, mask_then_bb);
-//        Value *result_false = false_values->get_value(idx);
+//        Value *result_false = tmap_.at(x->get_false_value_operand())->get_value(idx);
 //        if(result_then->getType()->isVectorTy())
 //          result_false = builder_->CreateVectorSplat(vector_size, result_false);
 //        ((PHINode*)current_result)->addIncoming(result_false, current_bb);
@@ -436,18 +436,19 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
       if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
         if(gep->getNumIndices() == 1)
           cst = dyn_cast<ConstantInt>(gep->idx_begin());
-          llvm::Value* mask = masks->get_value(idx);
-          std::string offset = "";
-          if(cst)
-            offset = " + " + std::to_string(cst->getValue().getSExtValue()*2*vector_size);
-          Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
-          Type *fp16x2_pack4_ty = StructType::get(*ctx_, {fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
-          FunctionType *ty = FunctionType::get(fp16x2_pack4_ty, {mask->getType(), ptr->getType()}, false);
-          std::string asm_str = "@$0 ld.global.nc.v4.b32 {$1, $2, $3, $4}, [$5" + offset + "];";
-          if(x->get_false_value_operand())
-            asm_str += "\n\t@!$0 mov.v4.b32 {$1, $2, $3, $4}, {0, 0, 0, 0};";
-          InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,=r,=r,=r,=r,l", true);
-          Value *current_result = builder_->CreateCall(iasm, {mask, ptr});
+      llvm::Value* mask = masks->get_value(idx);
+      std::string offset = "";
+      if(cst)
+        offset = " + " + std::to_string(cst->getValue().getSExtValue()*2*vector_size);
+      Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
+      Type *fp16x2_pack4_ty = StructType::get(*ctx_, {fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
+      FunctionType *ty = FunctionType::get(fp16x2_pack4_ty, {mask->getType(), ptr->getType()}, false);
+
+      std::string asm_str = "@$0 ld.global.nc.v4.b32 {$1, $2, $3, $4}, [$5" + offset + "];";
+      if(x->get_false_value_operand())
+        asm_str += "\n\t@!$0 mov.v4.b32 {$1, $2, $3, $4}, {0, 0, 0, 0};";
+      InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,=r,=r,=r,=r,l", true);
+      Value *current_result = builder_->CreateCall(iasm, {mask, ptr});
 
       packets[id] = current_result;
     }
@@ -458,9 +459,11 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
     unsigned vector_size = gcd(result->axis(ld).contiguous, alignment);
     unsigned linear = result->get_linear_index(idx);
     unsigned id = linear / vector_size;
-        Value *tmp = builder_->CreateExtractValue(packets.at(id), {(linear % vector_size) / 2});
-        Value *res = builder_->CreateExtractElement(tmp, (linear % vector_size) % 2);
-        result->set_value(idx, res);
+
+    Value *tmp = builder_->CreateExtractValue(packets.at(id), {(linear % vector_size) / 2});
+    Value *res = builder_->CreateExtractElement(tmp, (linear % vector_size) % 2);
+    result->set_value(idx, res);
+
 //    result->set_value(idx, builder_->CreateExtractElement(packets.at(id), linear % vector_size));
   });
 }
@@ -861,11 +864,18 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value* offset_b_n = mma->offset_b_n_;
     Value* offset_b_k = mma->offset_b_k_;
 
+    Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
+    Value* warp_size = builder_->getInt32(32);
+    Value *lane = builder_->CreateURem(thread, warp_size);
+    Value *warp = builder_->CreateUDiv(thread, warp_size);
+
     std::string op_a = is_a_row ? "row" : "col";
     std::string op_b = is_b_row ? "row" : "col";
 
     Type *fp32_ty = builder_->getFloatTy();
     Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
+    Type *int32_ty = builder_->getInt32Ty();
+
     Type *fp32_pack8_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty});
     FunctionType *mma_ty = FunctionType::get(fp32_pack8_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
 
@@ -887,6 +897,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *a_off = builder_->CreateMul(offset_a_m, builder_->getInt32(stride_a_m));
     a_off = builder_->CreateAdd(a_off, builder_->CreateMul(offset_a_k, builder_->getInt32(stride_a_k)));
     Value *pTA = builder_->CreateGEP(TA->get_pointer(), a_off);
+//    pTA = builder_->CreateGEP(TA->get_pointer(), {builder_->CreateMul(lane, _8)});
 
     int b_num_per_phase = TB->get_shapes()[TB->get_order()[0]] == 128 ? 1 : 4;
     Value *b_max_phase = builder_->getInt32(4 / b_num_per_phase);
@@ -902,6 +913,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     b_off = builder_->CreateAdd(b_off, builder_->CreateMul(offset_b_k, builder_->getInt32(stride_b_k)));
 
     Value *pTB = builder_->CreateGEP(TB->get_pointer(), b_off);
+//        pTB = builder_->CreateGEP(TB->get_pointer(), {builder_->CreateMul(lane, _8)});
 
 
     std::map<std::pair<int, int>, std::pair<Value*, Value*>> has, hbs;
@@ -912,7 +924,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
       for(unsigned K = 0; K < NK; K += 4){
         if(has.find({m, K}) == has.end()){
           Value* pa =  builder_->CreateGEP(pTA, builder_->getInt32(m*stride_rep_i*stride_a_m + K*stride_a_k));
-          Value* ha = builder_->CreateLoad(builder_->CreateBitCast(pa, PointerType::get(VectorType::get(fp16x2_ty, 4), 3)));
+          Value* ha = builder_->CreateLoad(builder_->CreateBitCast(pa, PointerType::get(VectorType::get(int32_ty, 4), 3)));
+
           Value *ha00 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(0)), fp16x2_ty);
           Value *ha01 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(1)), fp16x2_ty);
           Value *ha10 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(2)), fp16x2_ty);
@@ -925,7 +938,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
         }
         if(hbs.find({n, K}) == hbs.end()){
           Value* pb =  builder_->CreateGEP(pTB, builder_->getInt32(n*stride_rep_j*stride_b_n + K*stride_b_k));
-          Value* hb = builder_->CreateLoad(builder_->CreateBitCast(pb, PointerType::get(VectorType::get(fp16x2_ty, 4), 3)));
+          Value* hb = builder_->CreateLoad(builder_->CreateBitCast(pb, PointerType::get(VectorType::get(int32_ty, 4), 3)));
           Value *hb00 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(0)), fp16x2_ty);
           Value *hb01 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(1)), fp16x2_ty);
           Value *hb10 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(2)), fp16x2_ty);
@@ -1540,6 +1553,9 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   //
   distributed_tile* marg = (distributed_tile*)tmap_.at(arg);
   shared_tile*      mret  = (shared_tile*)tmap_.at(cts);
+  Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
+  Value* warp_size = builder_->getInt32(32);
+  Value *lane = builder_->CreateURem(thread, warp_size);
   //
   int per_thread_ld = in_layout->get_shape()[in_order[0]] / in_layout->mts(in_order[0]);
   int n_shared = std::max<int>(8 / in_layout->mts(in_order[1]), 1);
@@ -1557,6 +1573,7 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
     off_0 = builder_->CreateMul(off_0 , builder_->getInt32(vector));
     Value* off_1 = builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]));
     Value* off = builder_->CreateAdd(off_0, off_1);
+//    off = builder_->CreateMul(lane, builder_->getInt32(8));
     //
     shared.push_back(builder_->CreateGEP(base, {off}));
   }
