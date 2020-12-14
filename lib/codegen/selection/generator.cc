@@ -871,17 +871,20 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int step_a1   = is_a_row ? stride_rep_m : stride_rep_k;
     Value* off_a0 = is_a_row ? mma->offset_a_k_ : mma->offset_a_m_;
     Value* off_a1 = is_a_row ? mma->offset_a_m_ : mma->offset_a_k_;
-    std::vector<std::vector<Value*>> off_a = {{}, {}};
-    std::map<std::pair<int, int>, Value*> ptr_a;
-    std::vector<Value*> off_a0s(std::max<int>(step_a0 % max_phase_a, 1));
 
     Value* phase_a = builder_->CreateURem(builder_->CreateUDiv(off_a1, builder_->getInt32(per_phase_a)),
                                           builder_->getInt32(max_phase_a));
-    off_a0s[0] = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(off_a0, _8), phase_a), _8);
-    for(Value* off_a0: off_a0s)
-      ptr_a[{0, 0}] = builder_->CreateGEP(TA->get_pointer(),
-                                         builder_->CreateAdd(builder_->CreateMul(off_a0, builder_->getInt32(stride_a0)),
-                                                             builder_->CreateMul(off_a1, builder_->getInt32(stride_a1))));
+    int num_ptr_a = std::max<int>(max_phase_a / step_a0, 1);
+    std::vector<Value*> ptr_a(num_ptr_a);
+    for(int i = 0; i < num_ptr_a; i++){
+      Value* off_a0i = builder_->CreateUDiv(off_a0, _8);
+      off_a0i = builder_->CreateAdd(off_a0i, builder_->getInt32(i));
+      off_a0i = builder_->CreateXor(off_a0i, phase_a);
+      off_a0i = builder_->CreateMul(off_a0i, _8);
+      ptr_a[i] = builder_->CreateGEP(TA->get_pointer(),
+                                     builder_->CreateAdd(builder_->CreateMul(off_a0i, builder_->getInt32(stride_a0)),
+                                                         builder_->CreateMul(off_a1, builder_->getInt32(stride_a1))));
+    }
 
 
     int per_phase_b = per_phase_.at(layout_b);
@@ -912,7 +915,10 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
       for(unsigned n = 0; n < mma->num_rep_1_; n++){
       for(unsigned K = 0; K < NK; K += 4){
         if(has.find({m, K}) == has.end()){
-          Value* pa =  builder_->CreateGEP(ptr_a[{0, 0}], builder_->getInt32(m*stride_rep_m*stride_am + K*stride_ak));
+          Value* ptra = ptr_a[((is_a_row? K : m)/8) % num_ptr_a];
+          int stepam = is_a_row ? m : m / (num_ptr_a)*(num_ptr_a);
+          int stepak = is_a_row ? K / (num_ptr_a*8)*(num_ptr_a*8) : K;
+          Value* pa =  builder_->CreateGEP(ptra, builder_->getInt32(stepam*stride_rep_m*stride_am + stepak*stride_ak));
           Value* ha = builder_->CreateLoad(builder_->CreateBitCast(pa, PointerType::get(VectorType::get(builder_->getInt32Ty(), 4), 3)));
           Value *ha00 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(0)), fp16x2_ty);
           Value *ha01 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(1)), fp16x2_ty);
