@@ -172,6 +172,10 @@ private:
   std::map<machine_shared_layout*, std::map<ir::instruction*, Value*>> write_off;
 
   std::set<ir::value*> seen_;
+
+  std::map<analysis::shared_layout*, size_t> per_phase_;
+  std::map<analysis::shared_layout*, size_t> max_phase_;
+
 };
 
 }

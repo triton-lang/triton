@@ -292,21 +292,6 @@ shared_layout::shared_layout(const data_layout *arg,
   else if(is_nonhmma_dot_b)
     order_ = is_trans(dot_b) ? col : row;
 
-  // padding
-  size_t pad = 0;
-  if(hmma_dot_a){
-//    bool row = is_trans(hmma_dot_a) ^ order_[0] != 0;
-//    pad = 8;
-  }
-  else if(hmma_dot_b){
-//    bool row = is_trans(hmma_dot_b) ^ order_[0] != 0;
-//    pad = 8;
-  }
-  else if(order_ != arg_order) {
-    pad = 4;
-  }
-  shape_[order_[0]] += pad;
-
   // size
   size_ = ty_->get_primitive_size_in_bits() / 8;
   for(auto s: shape_)
