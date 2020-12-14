@@ -871,7 +871,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int step_a1   = is_a_row ? stride_rep_m : stride_rep_k;
     Value* off_a0 = is_a_row ? mma->offset_a_k_ : mma->offset_a_m_;
     Value* off_a1 = is_a_row ? mma->offset_a_m_ : mma->offset_a_k_;
-
     Value* phase_a = builder_->CreateURem(builder_->CreateUDiv(off_a1, builder_->getInt32(per_phase_a)),
                                           builder_->getInt32(max_phase_a));
     int num_ptr_a = std::max<int>(max_phase_a / step_a0, 1);
@@ -889,23 +888,27 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
     int per_phase_b = per_phase_.at(layout_b);
     int max_phase_b = max_phase_.at(layout_b);
-    std::vector<Value*> off_b = {mma->offset_b_k_, mma->offset_b_n_};
-    // swizzle
-    Value *phase_b = builder_->CreateURem(builder_->CreateUDiv(off_b[ord_b[1]], builder_->getInt32(per_phase_b)),
+    int stride_b0 = is_b_row ? stride_bn : stride_bk;
+    int stride_b1 = is_b_row ? stride_bk : stride_bn;
+    int step_b0   = is_b_row ? stride_rep_n : stride_rep_k;
+    int step_b1   = is_b_row ? stride_rep_k : stride_rep_n;
+    Value* off_b0 = is_b_row ? mma->offset_b_n_ : mma->offset_b_k_;
+    Value* off_b1 = is_b_row ? mma->offset_b_k_ : mma->offset_b_n_;
+    Value* phase_b = builder_->CreateURem(builder_->CreateUDiv(off_b1, builder_->getInt32(per_phase_b)),
                                           builder_->getInt32(max_phase_b));
-    off_b[ord_b[0]] = builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(off_b[ord_b[0]], _8), phase_b), _8);
-    // pointers
-    Value *ptr_b = builder_->CreateGEP(TB->get_pointer(),
-                                     builder_->CreateAdd(builder_->CreateMul(off_b[1], builder_->getInt32(stride_bn)),
-                                                         builder_->CreateMul(off_b[0], builder_->getInt32(stride_bk))));
+    int num_ptr_b = std::max<int>(max_phase_b / step_b0, 1);
+    std::vector<Value*> ptr_b(num_ptr_b);
+    for(int i = 0; i < num_ptr_b; i++){
+      Value* off_b0i = builder_->CreateUDiv(off_b0, _8);
+      off_b0i = builder_->CreateAdd(off_b0i, builder_->getInt32(i));
+      off_b0i = builder_->CreateXor(off_b0i, phase_b);
+      off_b0i = builder_->CreateMul(off_b0i, _8);
+      ptr_b[i] = builder_->CreateGEP(TB->get_pointer(),
+                                     builder_->CreateAdd(builder_->CreateMul(off_b0i, builder_->getInt32(stride_b0)),
+                                                         builder_->CreateMul(off_b1, builder_->getInt32(stride_b1))));
+    }
 
 
-//    Value* warp_size = builder_->getInt32(32);
-//    Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
-//    Value *lane = builder_->CreateURem(thread, warp_size);
-//    Value *warp = builder_->CreateUDiv(thread, warp_size);
-//  ptr_a = builder_->CreateGEP(TA->get_pointer(), {builder_->CreateMul(lane, _8)});
-//  ptr_b = builder_->CreateGEP(TB->get_pointer(), {builder_->CreateMul(lane, _8)});
 
 
     std::map<std::pair<int, int>, std::pair<Value*, Value*>> has, hbs;
@@ -931,7 +934,11 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
             has[{m+1, K}] = {ha10, ha11};
         }
         if(hbs.find({n, K}) == hbs.end()){
-          Value* pb =  builder_->CreateGEP(ptr_b, builder_->getInt32(n*stride_rep_n*stride_bn + K*stride_bk));
+          Value* ptrb = ptr_b[((is_b_row? n : K)/8) % num_ptr_b];
+          int stepbn = is_b_row ? n / (num_ptr_b)*(num_ptr_b) : n;
+          int stepbk = is_b_row ? K : K / (num_ptr_b*8)*(num_ptr_b*8);
+
+          Value* pb =  builder_->CreateGEP(ptrb, builder_->getInt32(stepbn*stride_rep_n*stride_bn + stepbk*stride_bk));
           Value* hb = builder_->CreateLoad(builder_->CreateBitCast(pb, PointerType::get(VectorType::get(builder_->getInt32Ty(), 4), 3)));
           Value *hb00 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(0)), fp16x2_ty);
           Value *hb01 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(1)), fp16x2_ty);

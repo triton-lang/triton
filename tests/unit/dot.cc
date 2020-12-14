@@ -15,7 +15,7 @@ int main() {
   for(int TK: std::vector<int>{32})
   for(int nwarps: std::vector<int>{4})
   for(bool AT: std::vector<bool>{true, false})
-  for(bool BT: std::vector<bool>{true}){
+  for(bool BT: std::vector<bool>{true, false}){
     configs.push_back(config_t{HALF, AT, BT, TM, TN, TK, TM, TN, TK, nwarps});
   }
   // test
