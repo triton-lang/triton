@@ -25,7 +25,7 @@ struct dot_arg_t{
   int ldb;
   int ldc;
   uintptr_t locks;
-};
+} ;
 
 template<class T, bool AT, bool BT>
 static void cc_dot(std::vector<T> &c, const std::vector<T> &a, const std::vector<T> &b,

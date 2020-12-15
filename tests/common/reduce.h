@@ -13,15 +13,6 @@
 namespace drv = triton::driver;
 namespace rt = triton::runtime;
 
-struct reduce_arg_t{
-  CUdeviceptr X;
-  CUdeviceptr Y;
-  int S0;
-  int S1;
-  int S2;
-};
-
-
 template<class T>
 void cc_reduce_nd(std::vector<T> &y, const std::vector<T> &x, reduce_op_t op, size_t axis, const std::vector<int>& shapes) {
   assert(axis <= shapes.size() - 1);
@@ -131,18 +122,23 @@ void triton_reduce_nd(drv::stream* stream, const std::vector<int32_t>& shape_x,
   auto dx = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size_x*dtsize));
   auto dy = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size_y*dtsize));
 
+  // args
+  std::stringstream _args;
+  rt::add_arg(_args, dx->addr_as_uintptr_t());
+  rt::add_arg(_args, dy->addr_as_uintptr_t());
+  rt::add_arg(_args, shape_x[0]);
+  if(shape_x.size() > 1) rt::add_arg(_args, shape_x[1]);
+  if(shape_x.size() > 2) rt::add_arg(_args, shape_x[2]);
+  std::string args = _args.str();
+
   // grid
-  reduce_arg_t args = {dx->addr_as_uintptr_t(), dy->addr_as_uintptr_t(), shape_x[0]};
-  if(shape_x.size() > 1) args.S1 = shape_x[1];
-  if(shape_x.size() > 2) args.S2 = shape_x[2];
   std::vector<std::string> ts = {"TS0", "TS1", "TS2"};
   auto grid = grid_nd(shape_x, ts);
-//  auto grid = [](const rt::function::options_t& x){ return rt::grid_t{1, 1, 1};};
 
   // metrics
   if(mode == BENCH){
     auto gbps = [&](double ns) { return 2 * size_x * dtsize / (ns * 1e-9) * 1e-9; };
-    double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
+    double triton_ns = triton::tools::bench([&]() { function((void**)args.c_str(), args.size(), grid, stream);}, stream);
     bench.push_back(gbps(triton_ns));
   }
 
@@ -154,7 +150,7 @@ void triton_reduce_nd(drv::stream* stream, const std::vector<int32_t>& shape_x,
     init_zeros(hy);
     init_rand(hx);
     stream->write(&*dx, true, 0, hx);
-    function((void**)&args, sizeof(args), grid, stream);
+    function((void**)args.c_str(), args.size(), grid, stream);
     stream->synchronize();
     stream->read(&*dy, true, 0, hy);
     cc_reduce_nd(ry, hx, op, axis, shape_x);

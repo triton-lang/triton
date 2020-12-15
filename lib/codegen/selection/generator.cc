@@ -998,6 +998,10 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
   }
   else{
     machine_mma_layout* mma = (machine_mma_layout*)machine_layouts_.at(layouts_->get(dot));
+    analysis::mma_layout* layout = layouts_->get(dot)->to_mma884();
+    analysis::shared_layout* layout_a = (analysis::shared_layout*)layouts_->get(dot->get_operand(0));
+    analysis::shared_layout* layout_b = (analysis::shared_layout*)layouts_->get(dot->get_operand(1));
+
 
     bool is_a_row = TA->get_order()[0] == 1;
     bool is_b_row = TB->get_order()[0] == 1;
@@ -1028,16 +1032,15 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
     Value *lane = builder_->CreateURem(thread, warp_size);
     Value *warp = builder_->CreateUDiv(thread, warp_size);
-    analysis::mma_layout* layout = layouts_->get(dot)->to_mma884();
     Value *warp_id_0 = builder_->CreateURem(warp, builder_->getInt32(layout->wpt(0)));
     Value *warp_id_12 = builder_->CreateUDiv(warp, builder_->getInt32(layout->wpt(0)));
     Value *warp_id_1 = builder_->CreateURem(warp_id_12, builder_->getInt32(layout->wpt(1)));
     std::vector<Value *>& fc = fcs.begin()->second;
 
-    int a_num_per_phase = TA->get_shapes()[TA->get_order()[0]] == 128 ? 1 : 2;
-    Value *a_max_phase = builder_->getInt32(8 / a_num_per_phase);
+    int per_phase_a = swizzle_->get_per_phase(layout_a);
+    int max_phase_a = swizzle_->get_max_phase(layout_a);
     Value *a_base = builder_->CreateURem(lane, builder_->getInt32(8));
-    Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(a_base, builder_->getInt32(a_num_per_phase)), a_max_phase);
+    Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(a_base, builder_->getInt32(per_phase_a)), builder_->getInt32(max_phase_a));
     Value *a_outer0 = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
     a_outer0 = builder_->CreateAdd(a_outer0, builder_->CreateMul(warp_id_0, builder_->getInt32(2)));
     Value *a_outer1 = builder_->CreateAdd(a_outer0, builder_->getInt32(4));
@@ -1061,10 +1064,10 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
 
     std::map<std::pair<int,int>, Value*> pTBs;
-    int b_num_per_phase = TA->get_shapes()[TB->get_order()[1]] == 128 ? 1 : 2;
-    Value *b_max_phase = builder_->getInt32(8 / b_num_per_phase);
+    int per_phase_b = swizzle_->get_per_phase(layout_b);
+    int max_phase_b = swizzle_->get_max_phase(layout_b);
     Value *b_base = builder_->CreateURem(lane, builder_->getInt32(8));
-    Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(b_base, builder_->getInt32(b_num_per_phase)), b_max_phase);
+    Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(b_base, builder_->getInt32(per_phase_b)), builder_->getInt32(max_phase_b));
     Value *b_row0 = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
     Value *b_row1 = builder_->CreateAdd(b_row0, builder_->getInt32(2));
     Value *b_col0 = builder_->CreateMul(builder_->CreateUDiv(lane, builder_->getInt32(16)), builder_->getInt32(2));

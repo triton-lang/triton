@@ -271,6 +271,7 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
 cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll_module): module(context, CUmodule(), true){
   cu_context::context_switcher ctx(*context);
   ptx_ = compile_llvm_module(std::move(ll_module), context->device());
+//  std::cout << ptx_ << std::endl;
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
   unsigned int errbufsize = 8096;

@@ -6,6 +6,7 @@
 #include <map>
 #include <vector>
 #include <string>
+#include <sstream>
 #include <memory>
 #include <functional>
 #include <set>
@@ -55,6 +56,11 @@ typedef std::map<std::string, size_t> params_t;
 template<typename T> inline T convert(const std::string& name);
 template<> inline long convert<long>(const std::string& name) { return std::stol(name); }
 template<> inline int convert<int>(const std::string& name) { return std::stoi(name); }
+
+template<class T>
+void add_arg(std::stringstream& ss, T arg) {
+  ss.write((char*)&arg, sizeof(T));
+}
 
 enum asm_mode_t {
   ASM_LLIR,

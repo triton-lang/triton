@@ -12,7 +12,7 @@ int main() {
   std::vector<config_t> configs;
   for(int TM: std::vector<int>{128})
   for(int TN: std::vector<int>{128})
-  for(int TK: std::vector<int>{32})
+  for(int TK: std::vector<int>{16, 32})
   for(int nwarps: std::vector<int>{4})
   for(bool AT: std::vector<bool>{true, false})
   for(bool BT: std::vector<bool>{true, false}){
