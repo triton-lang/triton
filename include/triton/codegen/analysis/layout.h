@@ -140,7 +140,7 @@ private:
   static void extract_double_bufferable(ir::value *v, std::shared_ptr<double_buffer_info_t>& res);
 
 public:
-  shared_layout(const data_layout *arg,
+  shared_layout(data_layout *arg,
                 const std::vector<int>& axes,
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values_,
@@ -154,6 +154,7 @@ public:
   size_t get_num_per_phase()                { return num_per_phase_; }
   bool is_hmma_dot_a()                      { return is_hmma_dot_a_; }
   bool is_hmma_dot_b()                      { return is_hmma_dot_b_; }
+  data_layout* get_arg_layout()             { return arg_layout_; }
 
 private:
   size_t size_;
@@ -162,6 +163,7 @@ private:
   size_t num_per_phase_;
   bool is_hmma_dot_a_;
   bool is_hmma_dot_b_;
+  data_layout* arg_layout_;
 };
 
 

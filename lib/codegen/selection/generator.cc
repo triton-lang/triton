@@ -6,6 +6,7 @@
 #include "triton/codegen/analysis/axes.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/align.h"
+#include "triton/codegen/analysis/swizzle.h"
 #include "triton/codegen/transform/coalesce.h"
 #include "triton/ir/context.h"
 #include "triton/ir/module.h"
@@ -202,9 +203,10 @@ generator::generator(analysis::axes *a_axes,
                     analysis::layouts *layouts,
                     analysis::align *alignment,
                     analysis::allocation *alloc,
+                    analysis::swizzle *swizzle,
                      target *tgt,
                     unsigned num_warps)
-  : a_axes_(a_axes), layouts_(layouts), alignment_(alignment), alloc_(alloc),
+  : a_axes_(a_axes), layouts_(layouts), alignment_(alignment), alloc_(alloc), swizzle_(swizzle),
     tgt_(tgt), num_warps_(num_warps) {
 
 }
@@ -871,8 +873,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 //    Value *lane = builder_->CreateURem(thread, warp_size);
 //    Value *warp = builder_->CreateUDiv(thread, warp_size);
 
-    int per_phase_a = per_phase_.at(layout_a);
-    int max_phase_a = max_phase_.at(layout_a);
+    int per_phase_a = swizzle_->get_per_phase(layout_a);
+    int max_phase_a = swizzle_->get_max_phase(layout_a);
     int stride_a0 = is_a_row ? stride_ak : stride_am;
     int stride_a1 = is_a_row ? stride_am : stride_ak;
     int step_a0   = is_a_row ? stride_rep_k : stride_rep_m;
@@ -892,8 +894,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     }
 
 
-    int per_phase_b = per_phase_.at(layout_b);
-    int max_phase_b = max_phase_.at(layout_b);
+    int per_phase_b = swizzle_->get_per_phase(layout_b);
+    int max_phase_b = swizzle_->get_max_phase(layout_b);
     int stride_b0 = is_b_row ? stride_bn : stride_bk;
     int stride_b1 = is_b_row ? stride_bk : stride_bn;
     int step_b0   = is_b_row ? stride_rep_n : stride_rep_k;
@@ -1554,18 +1556,18 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
     vector = in_layout->nts(in_order[0]);
   //
   int dtsize = cts->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
-  int per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
-  int max_phase;
-  if(tgt_->as_nvidia()->sm() < 80){
-    int inner =  (out_layout->is_hmma_dot_a() && out_order[0] == 1
-               || out_layout->is_hmma_dot_b() && out_order[0] == 0) ? 8 : 4;
-    max_phase = inner / per_phase;
-  }
-  else{
-    max_phase = 8 / per_phase;
-  }
-  per_phase_[out_layout] = per_phase;
-  max_phase_[out_layout] = max_phase;
+  int per_phase = swizzle_->get_per_phase(out_layout);
+  int max_phase = swizzle_->get_max_phase(out_layout);
+//  if(tgt_->as_nvidia()->sm() < 80){
+//    int inner =   ((out_layout->is_hmma_dot_a() && out_order[0] == 1)
+//                || (out_layout->is_hmma_dot_b() && out_order[0] == 0)) ? 8 : 4;
+//    max_phase = inner / per_phase;
+//  }
+//  else{
+//    max_phase = 8 / per_phase;
+//  }
+//  per_phase_[out_layout] = per_phase;
+//  max_phase_[out_layout] = max_phase;
   //
   distributed_tile* marg = (distributed_tile*)tmap_.at(arg);
   shared_tile*      mret  = (shared_tile*)tmap_.at(cts);

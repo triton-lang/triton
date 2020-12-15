@@ -62,7 +62,7 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
         a = *?(checka)pa;
         b = *?(checkb)pb;
       }
-//      acc = acc * alpha;
+      acc = acc * alpha;
       TYPE c[TM, TN] = acc;
 
       // epilogue

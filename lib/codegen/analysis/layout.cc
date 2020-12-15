@@ -249,7 +249,7 @@ void shared_layout::extract_double_bufferable(ir::value *v, std::shared_ptr<doub
 }
 
 
-shared_layout::shared_layout(const data_layout *arg,
+shared_layout::shared_layout(data_layout *arg,
                                  const std::vector<int>& axes,
                                  const std::vector<unsigned>& shape,
                                  const std::vector<ir::value *> &values,
@@ -257,6 +257,7 @@ shared_layout::shared_layout(const data_layout *arg,
                                  analysis::align* align): data_layout(SHARED, axes, shape, values, align), ty_(ty) {
 
   size_ = 0;
+  arg_layout_ = arg;
 
   // double-buffering
   for(ir::value *v: values)
@@ -276,8 +277,9 @@ shared_layout::shared_layout(const data_layout *arg,
     extract_hmma_dot_use(v, hmma_dot_a, 0);
     extract_hmma_dot_use(v, hmma_dot_b, 1);
   }
-  is_hmma_dot_a_ = !!hmma_dot_a;
-  is_hmma_dot_b_ = !!hmma_dot_b;
+  is_hmma_dot_a_ = hmma_dot_a != nullptr;
+  is_hmma_dot_b_ = hmma_dot_b != nullptr;
+//  std::cout << is_hmma_dot_a_ << "" << is_hmma_dot_b_ << std::endl;
 
 
   // non-mma ordering

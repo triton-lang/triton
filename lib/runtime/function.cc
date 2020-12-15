@@ -206,7 +206,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, opt.num_warps, target.get());
   codegen::analysis::liveness liveness(&layouts);
-  codegen::analysis::swizzle swizzle(&layouts);
+  codegen::analysis::swizzle swizzle(&layouts, target.get());
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation);
   codegen::transform::dce dce;
@@ -214,7 +214,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   codegen::transform::reorder reorder;
   codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);
-  codegen::generator isel(&axes, &layouts, &align, &allocation, target.get(), opt.num_warps);
+  codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), opt.num_warps);
   // run passes
   reorder.run(module);
   dce.run(module);

@@ -36,6 +36,7 @@ class allocation;
 class cts;
 class axes;
 class layouts;
+class swizzle;
 }
 // typedef
 typedef llvm::IRBuilder<llvm::ConstantFolder,
@@ -84,6 +85,7 @@ public:
             analysis::layouts *layouts,
             analysis::align *alignment,
             analysis::allocation *alloc,
+            analysis::swizzle *swizzle,
             target *tgt,
             unsigned num_warps);
 
@@ -158,6 +160,7 @@ private:
 
   std::map<const analysis::data_layout*, machine_data_layout*> machine_layouts_;
   analysis::axes *a_axes_;
+  analysis::swizzle *swizzle_;
   std::map<unsigned, distributed_axis> axes_;
   std::map<ir::value *, Value *> vmap_;
   std::map<ir::value *, tile *> tmap_;
