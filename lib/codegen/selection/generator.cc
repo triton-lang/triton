@@ -1555,19 +1555,8 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   if(out_order == in_order)
     vector = in_layout->nts(in_order[0]);
   //
-  int dtsize = cts->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
   int per_phase = swizzle_->get_per_phase(out_layout);
   int max_phase = swizzle_->get_max_phase(out_layout);
-//  if(tgt_->as_nvidia()->sm() < 80){
-//    int inner =   ((out_layout->is_hmma_dot_a() && out_order[0] == 1)
-//                || (out_layout->is_hmma_dot_b() && out_order[0] == 0)) ? 8 : 4;
-//    max_phase = inner / per_phase;
-//  }
-//  else{
-//    max_phase = 8 / per_phase;
-//  }
-//  per_phase_[out_layout] = per_phase;
-//  max_phase_[out_layout] = max_phase;
   //
   distributed_tile* marg = (distributed_tile*)tmap_.at(arg);
   shared_tile*      mret  = (shared_tile*)tmap_.at(cts);

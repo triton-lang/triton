@@ -132,11 +132,12 @@ void triton_reduce_nd(drv::stream* stream, const std::vector<int32_t>& shape_x,
   auto dy = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size_y*dtsize));
 
   // grid
-  reduce_arg_t args = {*dx->cu(), *dy->cu(), shape_x[0]};
+  reduce_arg_t args = {dx->addr_as_uintptr_t(), dy->addr_as_uintptr_t(), shape_x[0]};
   if(shape_x.size() > 1) args.S1 = shape_x[1];
   if(shape_x.size() > 2) args.S2 = shape_x[2];
   std::vector<std::string> ts = {"TS0", "TS1", "TS2"};
   auto grid = grid_nd(shape_x, ts);
+//  auto grid = [](const rt::function::options_t& x){ return rt::grid_t{1, 1, 1};};
 
   // metrics
   if(mode == BENCH){
