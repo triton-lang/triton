@@ -39,7 +39,7 @@ inline double bench(std::function<void()> const & op, driver::stream * stream, b
   op();
   stream->synchronize();
   tmr.start();
-  size_t repeat = 1;
+  size_t repeat = 100;
   for(size_t i = 0; i < repeat; i++){
     op();
   }

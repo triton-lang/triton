@@ -408,8 +408,7 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
     if(linear % vector_size == 0) {
       Value *ptr = pointers->get_value(idx);
       ptr = builder_->CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
-                                                        ptr->getType()->getPointerAddressSpace()));
-
+                                                          ptr->getType()->getPointerAddressSpace()));
       Value *mask = masks->get_value(idx);
       BasicBlock *current_bb = builder_->GetInsertBlock();
       Function *parent = builder_->GetInsertBlock()->getParent();
@@ -863,26 +862,33 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
                                                "{$0, $1, $2, $3, $4, $5, $6, $7};", "=f,=f,=f,=f,=f,=f,=f,=f,r,r,r,r,0,1,2,3,4,5,6,7", false);
 
 
+    BasicBlock* CurrBB = builder_->GetInsertBlock();
+    BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
+    builder_->SetInsertPoint(FirstBB->getTerminator());
+
+//    Value* warp_size = builder_->getInt32(32);
+//    Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
+//    Value *lane = builder_->CreateURem(thread, warp_size);
+//    Value *warp = builder_->CreateUDiv(thread, warp_size);
+
     int per_phase_a = per_phase_.at(layout_a);
     int max_phase_a = max_phase_.at(layout_a);
     int stride_a0 = is_a_row ? stride_ak : stride_am;
     int stride_a1 = is_a_row ? stride_am : stride_ak;
     int step_a0   = is_a_row ? stride_rep_k : stride_rep_m;
-    int step_a1   = is_a_row ? stride_rep_m : stride_rep_k;
     Value* off_a0 = is_a_row ? mma->offset_a_k_ : mma->offset_a_m_;
     Value* off_a1 = is_a_row ? mma->offset_a_m_ : mma->offset_a_k_;
     Value* phase_a = builder_->CreateURem(builder_->CreateUDiv(off_a1, builder_->getInt32(per_phase_a)),
                                           builder_->getInt32(max_phase_a));
     int num_ptr_a = std::max<int>(max_phase_a / step_a0, 1);
-    std::vector<Value*> ptr_a(num_ptr_a);
+    std::vector<Value*> off_a(num_ptr_a);
     for(int i = 0; i < num_ptr_a; i++){
       Value* off_a0i = builder_->CreateUDiv(off_a0, _8);
       off_a0i = builder_->CreateAdd(off_a0i, builder_->getInt32(i));
       off_a0i = builder_->CreateXor(off_a0i, phase_a);
       off_a0i = builder_->CreateMul(off_a0i, _8);
-      ptr_a[i] = builder_->CreateGEP(TA->get_pointer(),
-                                     builder_->CreateAdd(builder_->CreateMul(off_a0i, builder_->getInt32(stride_a0)),
-                                                         builder_->CreateMul(off_a1, builder_->getInt32(stride_a1))));
+      off_a[i] = builder_->CreateAdd(builder_->CreateMul(off_a0i, builder_->getInt32(stride_a0)),
+                                     builder_->CreateMul(off_a1, builder_->getInt32(stride_a1)));
     }
 
 
@@ -891,26 +897,28 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int stride_b0 = is_b_row ? stride_bn : stride_bk;
     int stride_b1 = is_b_row ? stride_bk : stride_bn;
     int step_b0   = is_b_row ? stride_rep_n : stride_rep_k;
-    int step_b1   = is_b_row ? stride_rep_k : stride_rep_n;
     Value* off_b0 = is_b_row ? mma->offset_b_n_ : mma->offset_b_k_;
     Value* off_b1 = is_b_row ? mma->offset_b_k_ : mma->offset_b_n_;
     Value* phase_b = builder_->CreateURem(builder_->CreateUDiv(off_b1, builder_->getInt32(per_phase_b)),
                                           builder_->getInt32(max_phase_b));
     int num_ptr_b = std::max<int>(max_phase_b / step_b0, 1);
-    std::vector<Value*> ptr_b(num_ptr_b);
+    std::vector<Value*> off_b(num_ptr_b);
     for(int i = 0; i < num_ptr_b; i++){
       Value* off_b0i = builder_->CreateUDiv(off_b0, _8);
       off_b0i = builder_->CreateAdd(off_b0i, builder_->getInt32(i));
       off_b0i = builder_->CreateXor(off_b0i, phase_b);
       off_b0i = builder_->CreateMul(off_b0i, _8);
-      ptr_b[i] = builder_->CreateGEP(TB->get_pointer(),
-                                     builder_->CreateAdd(builder_->CreateMul(off_b0i, builder_->getInt32(stride_b0)),
-                                                         builder_->CreateMul(off_b1, builder_->getInt32(stride_b1))));
+      off_b[i] = builder_->CreateAdd(builder_->CreateMul(off_b0i, builder_->getInt32(stride_b0)),
+                                     builder_->CreateMul(off_b1, builder_->getInt32(stride_b1)));
     }
+    builder_->SetInsertPoint(CurrBB);
 
-
-
-
+    std::vector<Value*> ptr_a(num_ptr_a);
+    for(int i = 0; i < num_ptr_a; i++)
+      ptr_a[i] = builder_->CreateGEP(TA->get_pointer(), off_a[i]);
+    std::vector<Value*> ptr_b(num_ptr_b);
+    for(int i = 0; i < num_ptr_b; i++)
+      ptr_b[i] = builder_->CreateGEP(TB->get_pointer(), off_b[i]);
     std::map<std::pair<int, int>, std::pair<Value*, Value*>> has, hbs;
     for(auto& x: fcs){
       std::vector<Value *>& fc = x.second;
@@ -1547,8 +1555,15 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   //
   int dtsize = cts->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
   int per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
-  per_phase = (per_phase!=1)?2:1;
-  int max_phase = (tgt_->as_nvidia()->sm() < 80 ? 4 : 8) / per_phase;
+  int max_phase;
+  if(tgt_->as_nvidia()->sm() < 80){
+    int inner =  (out_layout->is_hmma_dot_a() && out_order[0] == 1
+               || out_layout->is_hmma_dot_b() && out_order[0] == 0) ? 8 : 4;
+    max_phase = inner / per_phase;
+  }
+  else{
+    max_phase = 8 / per_phase;
+  }
   per_phase_[out_layout] = per_phase;
   max_phase_[out_layout] = max_phase;
   //
@@ -1571,8 +1586,6 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
     off_0 = builder_->CreateMul(off_0 , builder_->getInt32(vector));
     Value* off_1 = builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]));
     Value* off = builder_->CreateAdd(off_0, off_1);
-//    off = builder_->CreateMul(lane, builder_->getInt32(8));
-    //
     shared.push_back(builder_->CreateGEP(base, {off}));
   }
     // default implementation

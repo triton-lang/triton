@@ -276,6 +276,8 @@ shared_layout::shared_layout(const data_layout *arg,
     extract_hmma_dot_use(v, hmma_dot_a, 0);
     extract_hmma_dot_use(v, hmma_dot_b, 1);
   }
+  is_hmma_dot_a_ = !!hmma_dot_a;
+  is_hmma_dot_b_ = !!hmma_dot_b;
 
 
   // non-mma ordering

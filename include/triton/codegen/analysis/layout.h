@@ -152,12 +152,16 @@ public:
   ir::type* get_type()                      { return ty_; }
   double_buffer_info_t* get_double_buffer() { return double_buffer_.get(); }
   size_t get_num_per_phase()                { return num_per_phase_; }
+  bool is_hmma_dot_a()                      { return is_hmma_dot_a_; }
+  bool is_hmma_dot_b()                      { return is_hmma_dot_b_; }
 
 private:
   size_t size_;
   ir::type *ty_;
   std::shared_ptr<double_buffer_info_t> double_buffer_;
   size_t num_per_phase_;
+  bool is_hmma_dot_a_;
+  bool is_hmma_dot_b_;
 };
 
 

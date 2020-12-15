@@ -9,6 +9,7 @@
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/analysis/liveness.h"
 #include "triton/codegen/analysis/align.h"
+#include "triton/codegen/analysis/swizzle.h"
 #include "triton/codegen/transform/coalesce.h"
 #include "triton/codegen/transform/dce.h"
 #include "triton/codegen/transform/peephole.h"
@@ -205,6 +206,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, opt.num_warps, target.get());
   codegen::analysis::liveness liveness(&layouts);
+  codegen::analysis::swizzle swizzle(&layouts);
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation);
   codegen::transform::dce dce;
@@ -243,9 +245,10 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module,
   if(allocation.allocated_size() > context->device()->max_shared_memory())
     throw std::runtime_error("using too much shared memory");
   barriers.run(module);
-  std::ostringstream oss;
-  ir::print(module, oss);
+//  std::ostringstream oss;
+//  ir::print(module, oss);
 //  std::cout << oss.str() << std::endl;
+  swizzle.run(module);
   isel.visit(module, *llvm);
   std::unique_ptr<driver::module> res(driver::module::create(context, std::move(llvm)));
   return res;
