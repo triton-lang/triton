@@ -189,7 +189,6 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
     auto ord_b = layout_b->get_order();
     bool is_a_row = ord_a[0] != 0;
     bool is_b_row = ord_b[0] != 0;
-
     /* warp offset */
     Value *warp_0 = builder_->CreateURem(warp, builder_->getInt32(L->wpt(0)));
     Value *warp_12 = builder_->CreateUDiv(warp, builder_->getInt32(L->wpt(0)));

@@ -1557,6 +1557,7 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   // tiles
   if(out_order == in_order)
     vector = in_layout->nts(in_order[0]);
+  int s = 8/vector;
   //
   int per_phase = swizzle_->get_per_phase(out_layout);
   int max_phase = swizzle_->get_max_phase(out_layout);
@@ -1576,7 +1577,8 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
     // off
     Value* off_0  = idx[in_order[0]];
     off_0 = builder_->CreateUDiv(off_0, builder_->getInt32(vector));
-    off_0 = builder_->CreateXor(off_0, phase);
+    off_0 = builder_->CreateAdd(builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(off_0, builder_->getInt32(s)), phase), builder_->getInt32(s)),
+                                builder_->CreateURem(off_0, builder_->getInt32(s)));
     off_0 = builder_->CreateMul(off_0 , builder_->getInt32(vector));
     Value* off_1 = builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]));
     Value* off = builder_->CreateAdd(off_0, off_1);
