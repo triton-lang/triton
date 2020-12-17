@@ -168,9 +168,9 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
   : machine_distributed_layout(mod, builder, tgt, a_axes, axes, layout) {
 
   Value *warp_size = builder_->getInt32(32);
-  Value* u_thread_id_0 = tgt_->get_local_id(mod_, *builder_, 0);
-  Value *u_thread_id = builder_->CreateURem(u_thread_id_0, warp_size);
-  Value *u_warp_id = builder_->CreateUDiv(u_thread_id_0, warp_size);
+  Value* thread_id = tgt_->get_local_id(mod_, *builder_, 0);
+  Value *lane = builder_->CreateURem(thread_id, warp_size);
+  Value *warp_id = builder_->CreateUDiv(thread_id, warp_size);
 
   const auto& shape = layout->get_shape();
   if(shape.size() > 3)
@@ -196,20 +196,24 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
   unsigned spw_0 = layout->spw(0);
   unsigned spw_1 = layout->spw(1);
   unsigned spw_2 = is_batched ? fpw_2 : 1;
+  spw_0 = layout->spw(0);
+  spw_1 = layout->spw(1);
+
   // shape per tile
   unsigned spt_0 = spw_0 * wpt_0;
   unsigned spt_1 = spw_1 * wpt_1;
   unsigned spt_2 = is_batched ? spw_2 * wpt_2 : 1;
+  spt_0 = layout->spt(0);
+  spt_1 = layout->spt(1);
+
   // number of repetition
   num_rep_0_ = shape[0] / spt_0;
   num_rep_1_ = shape[1] / spt_1;
   num_rep_2_ = is_batched ? shape[2] / spt_2 : 1;
   int cc = tgt_->as_nvidia()->sm();
 
-
-
-  std::vector<Value*> idx_i;
-  std::vector<Value*> idx_j;
+  std::vector<Value*> idx_m;
+  std::vector<Value*> idx_n;
   std::vector<Value*> idx_z;
   /* lane offset */
   if(cc < 80){
@@ -221,61 +225,63 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
     // packs
     pack_size_0_ = is_a_row ? 1 : 2;
     pack_size_1_ = is_b_row ? 2 : 1;
-    num_packs_0_ = num_rep_0_ / pack_size_0_;
-    num_packs_1_ = num_rep_1_ / pack_size_1_;
-    /* warp offset */
-    Value *warp_id_0 = builder_->CreateURem(u_warp_id, builder_->getInt32(wpt_0));
-    Value *warp_id_12 = builder_->CreateUDiv(u_warp_id, builder_->getInt32(wpt_0));
-    Value *warp_id_1 = builder_->CreateURem(warp_id_12, builder_->getInt32(wpt_1));
-    Value *warp_offset_i = builder_->CreateMul(warp_id_0, builder_->getInt32(spw_0*pack_size_0_));
-    Value *warp_offset_j = builder_->CreateMul(warp_id_1, builder_->getInt32(spw_1*pack_size_1_));
+    num_packs_0_ = num_rep_0_;
+    num_packs_1_ = num_rep_1_;
 
-    // offset of quad in pair
-    Value *in_pair_off_a = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(u_thread_id, _16), _4), builder_->getInt32(fpw_0*pack_size_0_));
-    Value *in_pair_off_b = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(u_thread_id, _16), _4), builder_->getInt32(fpw_1*pack_size_1_));
-    // Quad pair id
-    Value *pair_a_id = builder_->CreateUDiv(builder_->CreateURem(u_thread_id, _16), _4);
-    Value *pair_b_id = builder_->CreateUDiv(builder_->CreateURem(u_thread_id, _16), _4);
-    pair_a_id = builder_->CreateURem(pair_a_id, builder_->getInt32(fpw_0));
-    pair_b_id = builder_->CreateUDiv(pair_b_id, builder_->getInt32(fpw_0));
-    pair_b_id = builder_->CreateURem(pair_b_id, builder_->getInt32(fpw_1));
+    /* warp offset */
+    Value *warp_0 = builder_->CreateURem(warp_id, builder_->getInt32(wpt_0));
+    Value *warp_12 = builder_->CreateUDiv(warp_id, builder_->getInt32(wpt_0));
+    Value *warp_1 = builder_->CreateURem(warp_12, builder_->getInt32(wpt_1));
+    Value *warp_m = builder_->CreateMul(warp_0, builder_->getInt32(spw_0));
+    Value *warp_n = builder_->CreateMul(warp_1, builder_->getInt32(spw_1));
+    // Quad offset
+    Value *quad_m = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(lane, _16), _4), builder_->getInt32(fpw_0));
+    Value *quad_n = builder_->CreateMul(builder_->CreateUDiv(builder_->CreateAnd(lane, _16), _4), builder_->getInt32(fpw_1));
+    // Pair offset
+    Value *pair_m = builder_->CreateUDiv(builder_->CreateURem(lane, _16), _4);
+    pair_m = builder_->CreateURem(pair_m, builder_->getInt32(fpw_0));
+    pair_m = builder_->CreateMul(pair_m, builder_->getInt32(4));
+    Value *pair_n = builder_->CreateUDiv(builder_->CreateURem(lane, _16), _4);
+    pair_n = builder_->CreateUDiv(pair_n, builder_->getInt32(fpw_0));
+    pair_n = builder_->CreateURem(pair_n, builder_->getInt32(fpw_1));
+    pair_n = builder_->CreateMul(pair_n, builder_->getInt32(4));
+    // scale
+    pair_m = builder_->CreateMul(pair_m, builder_->getInt32(layout->rep(0)/2));
+    quad_m = builder_->CreateMul(quad_m, builder_->getInt32(layout->rep(0)/2));
+    pair_n = builder_->CreateMul(pair_n, builder_->getInt32(layout->rep(1)/2));
+    quad_n = builder_->CreateMul(quad_n, builder_->getInt32(layout->rep(1)/2));
     // Quad pair offset
-    Value *pair_a_off = builder_->CreateMul(pair_a_id, builder_->getInt32(4*pack_size_0_));
-    Value *pair_b_off = builder_->CreateMul(pair_b_id, builder_->getInt32(4*pack_size_1_));
-    Value *lane_offset_i = builder_->CreateAdd(pair_a_off, in_pair_off_a);
-    Value *lane_offset_j = builder_->CreateAdd(pair_b_off, in_pair_off_b);
+    Value *lane_m = builder_->CreateAdd(pair_m, quad_m);
+    Value *lane_n = builder_->CreateAdd(pair_n, quad_n);
     // a offset
-    offset_a_m_ = builder_->CreateAdd(warp_offset_i, lane_offset_i);
-    offset_a_k_ = builder_->CreateAnd(u_thread_id, _3);
+    offset_a_m_ = builder_->CreateAdd(warp_m, lane_m);
+    offset_a_k_ = builder_->CreateAnd(lane, _3);
     // b offsets
-    offset_b_n_ = builder_->CreateAdd(warp_offset_j, lane_offset_j);
-    offset_b_k_ = builder_->CreateAnd(u_thread_id, _3);
-    Value *offset_c_i = builder_->CreateAdd(builder_->CreateAnd(u_thread_id, _1), offset_a_m_);
-    Value *offset_c_j = builder_->CreateAdd(builder_->CreateAnd(u_thread_id, _2), builder_->CreateAdd(warp_offset_j, pair_b_off));
+    offset_b_n_ = builder_->CreateAdd(warp_n, lane_n);
+    offset_b_k_ = builder_->CreateAnd(lane, _3);
     // i indices
-    for(unsigned pack = 0; pack < num_packs_0_; pack++)
-    for(unsigned ii = 0; ii < pack_size_0_; ii++)
-    for(unsigned i = 0; i < 2; i++){
-      idx_i.push_back(builder_->CreateAdd(offset_c_i, builder_->getInt32(pack*spt_0*pack_size_0_ + ii*4 + i*2)));
-    }
+    Value *offset_c_m = builder_->CreateAdd(builder_->CreateAnd(lane, _1), offset_a_m_);
+    for(unsigned m = 0; m < shape[0]; m+=spt_0)
+    for(unsigned mm = 0; mm < layout->rep(0); mm++)
+      idx_m.push_back(builder_->CreateAdd(offset_c_m, builder_->getInt32(m + mm*2)));
     // j indices
-    for(unsigned pack = 0; pack < num_packs_1_; pack++)
-    for(unsigned jj = 0; jj < pack_size_1_; jj++)
-    for(unsigned j = 0; j < 2; j++){
-      idx_j.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1*pack_size_1_ + jj*4 + j*4*fpw_1*pack_size_1_)));
-      idx_j.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1*pack_size_1_ + jj*4 + j*4*fpw_1*pack_size_1_ + 1)));
+    Value *offset_c_n = builder_->CreateAdd(builder_->CreateAnd(lane, _2), builder_->CreateAdd(warp_n, pair_n));
+    for(unsigned n = 0; n < shape[1]; n+=spt_1)
+    for(unsigned nn = 0; nn < layout->rep(1); nn++){
+      idx_n.push_back(builder_->CreateAdd(offset_c_n, builder_->getInt32(n + nn/2*4 + (nn%2)*2*fpw_1*layout->rep(1))));
+      idx_n.push_back(builder_->CreateAdd(offset_c_n, builder_->getInt32(n + nn/2*4 + (nn%2)*2*fpw_1*layout->rep(1) + 1)));
     }
     if(is_a_row){
-      offset_a_m_ = builder_->CreateAdd(offset_a_m_, builder_->CreateURem(u_thread_id_0, builder_->getInt32(4)));
+      offset_a_m_ = builder_->CreateAdd(offset_a_m_, builder_->CreateURem(thread_id, builder_->getInt32(4)));
       offset_a_k_ = builder_->getInt32(0);
     }
     if(!is_b_row){
-      offset_b_n_ = builder_->CreateAdd(offset_b_n_, builder_->CreateURem(u_thread_id_0, builder_->getInt32(4)));
+      offset_b_n_ = builder_->CreateAdd(offset_b_n_, builder_->CreateURem(thread_id, builder_->getInt32(4)));
       offset_b_k_ = builder_->getInt32(0);
     }
     /* axes */
-    axes_[layout->get_axis(0)] = distributed_axis{1, idx_i, warp_id_0};
-    axes_[layout->get_axis(1)] = distributed_axis{1, idx_j, warp_id_1};
+    axes_[layout->get_axis(0)] = distributed_axis{1, idx_m, warp_0};
+    axes_[layout->get_axis(1)] = distributed_axis{1, idx_n, warp_1};
   }
   else{
 
@@ -285,15 +291,15 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
     num_packs_0_ = num_rep_0_ / pack_size_0_;
     num_packs_1_ = num_rep_1_ / pack_size_1_;
     /* warp offset */
-    Value *warp_id_0 = builder_->CreateURem(u_warp_id, builder_->getInt32(wpt_0));
-    Value *warp_id_12 = builder_->CreateUDiv(u_warp_id, builder_->getInt32(wpt_0));
+    Value *warp_id_0 = builder_->CreateURem(warp_id, builder_->getInt32(wpt_0));
+    Value *warp_id_12 = builder_->CreateUDiv(warp_id, builder_->getInt32(wpt_0));
     Value *warp_id_1 = builder_->CreateURem(warp_id_12, builder_->getInt32(wpt_1));
     Value *warp_id_2 = builder_->CreateUDiv(warp_id_12, builder_->getInt32(wpt_1));
     Value *warp_offset_i = builder_->CreateMul(warp_id_0, builder_->getInt32(spw_0*pack_size_0_));
     Value *warp_offset_j = builder_->CreateMul(warp_id_1, builder_->getInt32(spw_1*pack_size_1_));
 
-    Value *lane_offset_i = builder_->CreateURem(u_thread_id, _16);
-    Value *lane_offset_j = builder_->CreateURem(u_thread_id, _8);
+    Value *lane_offset_i = builder_->CreateURem(lane, _16);
+    Value *lane_offset_j = builder_->CreateURem(lane, _8);
     /* offsets */
     // a offset
     offset_a_m_ = builder_->CreateAdd(warp_offset_i, lane_offset_i);
@@ -302,22 +308,22 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
     offset_b_n_ = builder_->CreateAdd(warp_offset_j, lane_offset_j);
     offset_b_k_ = builder_->getInt32(0);
     // c offset
-    Value *offset_c_i = builder_->CreateAdd(builder_->CreateUDiv(u_thread_id, _4), warp_offset_i);
-    Value *offset_c_j = builder_->CreateAdd(builder_->CreateMul(_2, builder_->CreateURem(u_thread_id, _4)), warp_offset_j);
+    Value *offset_c_i = builder_->CreateAdd(builder_->CreateUDiv(lane, _4), warp_offset_i);
+    Value *offset_c_j = builder_->CreateAdd(builder_->CreateMul(_2, builder_->CreateURem(lane, _4)), warp_offset_j);
     for(unsigned pack = 0; pack < num_rep_0_; pack++){
-      idx_i.push_back(builder_->CreateAdd(offset_c_i, builder_->getInt32(pack*spt_0)));
-      idx_i.push_back(builder_->CreateAdd(offset_c_i, builder_->getInt32(pack*spt_0 + 8)));
+      idx_m.push_back(builder_->CreateAdd(offset_c_i, builder_->getInt32(pack*spt_0)));
+      idx_m.push_back(builder_->CreateAdd(offset_c_i, builder_->getInt32(pack*spt_0 + 8)));
     }
     for(unsigned pack = 0; pack < num_rep_1_; pack++){
-      idx_j.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1)));
-      idx_j.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1 + 1)));
+      idx_n.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1)));
+      idx_n.push_back(builder_->CreateAdd(offset_c_j, builder_->getInt32(pack*spt_1 + 1)));
     }
     for(unsigned pack = 0; pack < num_rep_2_; pack++)
       idx_z.push_back(builder_->CreateAdd(warp_id_2, builder_->getInt32(pack*spt_2)));
 
     /* axes */
-    axes_[layout->get_axis(0)] = distributed_axis{1, idx_i, warp_id_0};
-    axes_[layout->get_axis(1)] = distributed_axis{1, idx_j, warp_id_1};
+    axes_[layout->get_axis(0)] = distributed_axis{1, idx_m, warp_id_0};
+    axes_[layout->get_axis(1)] = distributed_axis{1, idx_n, warp_id_1};
     if(is_batched)
       axes_[layout->get_axis(2)] = distributed_axis{1, idx_z, warp_id_2};
   }

@@ -868,11 +868,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
     builder_->SetInsertPoint(FirstBB->getTerminator());
 
-//    Value* warp_size = builder_->getInt32(32);
-//    Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
-//    Value *lane = builder_->CreateURem(thread, warp_size);
-//    Value *warp = builder_->CreateUDiv(thread, warp_size);
-
     int per_phase_a = swizzle_->get_per_phase(layout_a);
     int max_phase_a = swizzle_->get_max_phase(layout_a);
     int stride_a0 = is_a_row ? stride_ak : stride_am;
@@ -916,16 +911,16 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     builder_->SetInsertPoint(CurrBB);
 
     std::vector<Value*> ptr_a(num_ptr_a);
+    std::vector<Value*> ptr_b(num_ptr_b);
+    std::map<std::pair<int, int>, std::pair<Value*, Value*>> has, hbs;
     for(int i = 0; i < num_ptr_a; i++)
       ptr_a[i] = builder_->CreateGEP(TA->get_pointer(), off_a[i]);
-    std::vector<Value*> ptr_b(num_ptr_b);
     for(int i = 0; i < num_ptr_b; i++)
       ptr_b[i] = builder_->CreateGEP(TB->get_pointer(), off_b[i]);
-    std::map<std::pair<int, int>, std::pair<Value*, Value*>> has, hbs;
     for(auto& x: fcs){
       std::vector<Value *>& fc = x.second;
-      for(unsigned m = 0; m < mma->num_rep_0_; m++)
-      for(unsigned n = 0; n < mma->num_rep_1_; n++){
+      for(unsigned m = 0; m < mma->num_packs_0_*mma->pack_size_0_; m++)
+      for(unsigned n = 0; n < mma->num_packs_1_*mma->pack_size_1_; n++){
       for(unsigned K = 0; K < NK; K += 4){
         if(has.find({m, K}) == has.end()){
           Value* ptra = ptr_a[((is_a_row? K : m)/8) % num_ptr_a];
@@ -1024,6 +1019,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     std::map<std::pair<int, int>, Value*> pTAs;
     std::map<std::pair<unsigned, unsigned>, std::pair<Value*, Value*>> ha;
     std::map<std::pair<unsigned, unsigned>, Value*> hb;
+
 
     BasicBlock* CurrBB = builder_->GetInsertBlock();
     BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
@@ -1159,10 +1155,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
       set_value(dot, idx, fcs.at(key)[i++]);
     });
   }
-
-
-//    std::cout << "visiting hmma dot" << std::endl;
-//    exit(0);
 }
 void generator::visit_scanline_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *TB, distributed_tile *TD, unsigned NK,
                                    Type *c_ty, Function *f_mul_add) {
@@ -1449,6 +1441,9 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   ir::tile_type::tile_shapes_t shape = rc->get_type()->get_tile_shapes();
   // pointer to temporary shared memory
   Type *ty = llvm_type(rc->get_type()->get_scalar_ty(), *ctx_);
+  // layout
+  analysis::mma_layout* in_layout = layouts_->get(op)->to_mma884();
+  analysis::scanline_layout* out_layout = layouts_->get(rc)->to_scanline();
   // machine tiles
   distributed_tile *in_dt = (distributed_tile*)(tmap_.at(op));
   distributed_tile *out_dt = (distributed_tile*)(tmap_.at(rc));
@@ -1463,9 +1458,12 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   auto out_ord0 = out_dt->axis(ord[0]).values;
   auto out_ord1 = out_dt->axis(ord[1]).values;
   indices_t idx(2);
-  for(size_t j = 0; j < in_ord1.size(); j+=4){
+  int in_outer = in_layout->spt(ord[1]);
+  int in_rep   = in_layout->rep(ord[1]);
+  int out_outer = out_layout->mts(ord[1]) * out_layout->nts(ord[1]);
+  for(size_t j = 0; j < in_ord1.size(); j+=in_rep){
     tgt_->add_barrier(mod_, *builder_);
-    for(size_t k = 0; k < 4; k++)
+    for(size_t k = 0; k < in_rep; k++)
     for(size_t i = 0; i < in_ord0.size(); i++){
       idx[ord[0]] = in_ord0[i];
       idx[ord[1]] = in_ord1[j + k];
@@ -1474,7 +1472,7 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
       builder_->CreateStore(in_dt->get_value(idx), ptr);
     }
     tgt_->add_barrier(mod_, *builder_);
-    for(size_t k = 0; k < 8; k++)
+    for(size_t k = 0; k < in_outer/out_outer; k++)
     for(size_t i = 0; i < out_ord0.size(); i++){
       idx[ord[0]] = out_ord0[i];
       idx[ord[1]] = out_ord1[j*out_ord1.size()/in_ord1.size() + k];

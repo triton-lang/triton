@@ -122,15 +122,16 @@ size_t data_layout::find_axis(int to_find) const {
  * -------------------------------- */
 
 mma_layout::mma_layout(size_t num_warps,
-                                     const std::vector<int>& axes,
-                                     const std::vector<unsigned>& shape,
-                                     const std::vector<ir::value *> &values,
-                                     analysis::align* align, target* tgt): data_layout(HMMA_884, axes, shape, values, align) {
+                       const std::vector<int>& axes,
+                       const std::vector<unsigned>& shape,
+                       const std::vector<ir::value *> &values,
+                       analysis::align* align, target* tgt,
+                       shared_layout *layout_a, shared_layout *layout_b): data_layout(HMMA_884, axes, shape, values, align) {
   /* fragments per warp */
   // try to make things as square as possible to maximize data re-use
-  fpw_ = {1, 1, 1};
-  std::vector<int> fpw_nm1;
   if(tgt->as_nvidia()->sm() < 80){
+    fpw_ = {1, 1, 1};
+    std::vector<int> fpw_nm1;
     unsigned num_fragments = std::min<unsigned>((shape_[0]/8)*(shape_[1]/8), 4);
     do {
       fpw_nm1 = fpw_;
@@ -139,10 +140,21 @@ mma_layout::mma_layout(size_t num_warps,
       if(fpw_[0]*fpw_[1] < num_fragments)
         fpw_[1] = clamp(fpw_[1]*2, 1, shape_[1] / 8);
     }while(fpw_nm1 != fpw_);
-    spw_ = {fpw_[0]*8, fpw_[1]*8, 1};
+    auto ord_a = layout_a->get_order();
+    auto ord_b = layout_b->get_order();
+    bool is_a_row = ord_a[0] != 0;
+    bool is_b_row = ord_b[0] != 0;
+    int pack_size_0 = is_a_row ? 1 : 2;
+    int pack_size_1 = is_b_row ? 2 : 1;
+    rep_ = {2*pack_size_0, 2*pack_size_1, 1};
+    spw_ = {fpw_[0]*8*pack_size_0, fpw_[1]*8*pack_size_1, 1};
+
   }
-  else
+  else{
+    fpw_ = {1, 1, 1};
     spw_ = {16, 8, 1};
+    rep_ = {2,  2, 1};
+  }
 
   /* warps per tile */
   // try to make things as square as possible to maximize data re-use
@@ -155,6 +167,9 @@ mma_layout::mma_layout(size_t num_warps,
     if(wpt_[0] * wpt_[1] * wpt_[2] < num_warps)
       wpt_[1] = clamp(wpt_[1]*2, 1, shape_[1] / spw_[1]);
   }while(wpt_nm1 != wpt_);
+
+  /* shape per block */
+  spt_ = {spw_[0]*wpt_[0], spw_[1]*wpt_[1], 1};
 }
 
 
@@ -343,6 +358,8 @@ void layouts::make_graph(ir::instruction *i) {
 }
 
 void layouts::create(size_t id, const std::vector<ir::value*>& values) {
+//  if(layouts_.find(id) != layouts_.end())
+//    return;
   auto it_hmma_c = std::find_if(values.begin(), values.end(), &is_hmma_c);
   auto cmp = [](ir::value* x, ir::value *y) {
     std::pair<int, int> xx = {x->get_type()->get_tile_rank(), x->get_type()->get_tile_num_elements()};
@@ -359,8 +376,14 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
              dynamic_cast<ir::masked_load_async_inst*>(v);
   });
   // type
-  if(it_hmma_c != values.end())
-    layouts_[id] = new mma_layout(num_warps_, axes, shapes, values, align_, tgt_);
+  if(it_hmma_c != values.end()){
+    ir::instruction *dot = (ir::instruction*)*it_hmma_c;
+    ir::value *a = dot->get_operand(0);
+    ir::value *b = dot->get_operand(1);
+    create(groups_.at(a), values_.at(groups_.at(a)));
+    create(groups_.at(b), values_.at(groups_.at(b)));
+    layouts_[id] = new mma_layout(num_warps_, axes, shapes, values, align_, tgt_, (shared_layout*)layouts_.at(groups_.at(a)), (shared_layout*)layouts_.at(groups_.at(b)));
+  }
   else if(it_cts != values.end()){
     ir::instruction *cts = (ir::instruction*)*it_cts;
     ir::value *arg = cts->get_operand(0);
@@ -413,7 +436,7 @@ void layouts::run(ir::module &mod) {
       shape[ld] = in_shape[ld];
       for(size_t k = 0; k < in_shape.size(); k++)
         if(k != ld)
-          shape[k] = 4*in_layout->to_mma884()->fpw(k)*in_layout->to_mma884()->wpt(k);
+          shape[k] = in_layout->to_mma884()->spt(k);
       // create layout
       layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {recoalasce}, val->get_type()->get_scalar_ty(), align_);
       tmp_[recoalasce] = id;

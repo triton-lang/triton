@@ -98,17 +98,23 @@ public:
                 const std::vector<int>& axes,
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values,
-                analysis::align* align, target *tgt);
+                analysis::align* align, target *tgt,
+             shared_layout* layout_a,
+             shared_layout* layout_b);
   void accept(layout_visitor* vst) { vst->visit_layout_hmma_884(this); }
   // accessor
   int fpw(size_t k) { return fpw_.at(k); }
   int wpt(size_t k) { return wpt_.at(k); }
   int spw(size_t k) { return spw_.at(k); }
+  int spt(size_t k) { return spt_.at(k); }
+  int rep(size_t k) { return rep_.at(k); }
 
 private:
   std::vector<int> fpw_;
   std::vector<int> spw_;
   std::vector<int> wpt_;
+  std::vector<int> spt_;
+  std::vector<int> rep_;
 };
 
 struct scanline_layout: public data_layout {

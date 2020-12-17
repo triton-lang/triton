@@ -176,9 +176,7 @@ private:
 
   std::set<ir::value*> seen_;
 
-  std::map<analysis::shared_layout*, size_t> per_phase_;
-  std::map<analysis::shared_layout*, size_t> max_phase_;
-
+  std::map<analysis::mma_layout*, std::vector<int>> rep_;
 };
 
 }
