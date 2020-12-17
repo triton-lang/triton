@@ -919,11 +919,11 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
       ptr_b[i] = builder_->CreateGEP(TB->get_pointer(), off_b[i]);
     for(auto& x: fcs){
       std::vector<Value *>& fc = x.second;
-      for(unsigned m = 0; m < mma->num_packs_0_*mma->pack_size_0_; m++)
-      for(unsigned n = 0; n < mma->num_packs_1_*mma->pack_size_1_; n++){
+      for(unsigned m = 0; m < layout->rep(0)/2*shapes[0]/layout->spt(0); m++)
+      for(unsigned n = 0; n < layout->rep(1)/2*shapes[1]/layout->spt(1); n++){
       for(unsigned K = 0; K < NK; K += 4){
         if(has.find({m, K}) == has.end()){
-          Value* ptra = ptr_a[((is_a_row? K : m)/8) % num_ptr_a];
+          Value* ptra = ptr_a[((is_a_row ? K : m)/8) % num_ptr_a];
           int stepam = is_a_row ? m : m / (num_ptr_a)*(num_ptr_a);
           int stepak = is_a_row ? K / (num_ptr_a*8)*(num_ptr_a*8) : K;
           Value* pa =  builder_->CreateGEP(ptra, builder_->getInt32(stepam*stride_rep_m*stride_am + stepak*stride_ak));
@@ -1102,9 +1102,11 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
                                                "{$4, $5, $6, $7}, "
                                                "{$8, $9}, "
                                                "{$10, $11, $12, $13};", "=f,=f,=f,=f,r,r,r,r,r,r,0,1,2,3", false);
+    unsigned num_rep_0 = shapes[0] / layout->spt(0);
+    unsigned num_rep_1 = shapes[1] / layout->spt(1);
     for(unsigned K = 0; K < NK; K += 16)
-    for(unsigned pack_i = 0; pack_i < mma->num_rep_0_; pack_i++)
-    for(unsigned pack_j = 0; pack_j < mma->num_rep_1_; pack_j++){
+    for(unsigned pack_i = 0; pack_i < num_rep_0; pack_i++)
+    for(unsigned pack_j = 0; pack_j < num_rep_1; pack_j++){
       if(ha.find({pack_i, K}) == ha.end()){
         InlineAsm *ld_a0_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
                                                   "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_i/2*2*layout->wpt(0)*layout->spw(0)*2*stride_a_m) + "];", "=r,=r,=r,=r,r", false);
@@ -1129,7 +1131,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
         hb[{pack_j, K+8}] = hb1;
         hb[{pack_j+1, K+8}] = hb3;
       }
-      unsigned cols_per_thread = mma->num_rep_0_ * 2;
+      unsigned cols_per_thread = num_rep_0 * 2;
       std::vector<size_t> idx = {
         (pack_i*2 + 0) + (pack_j*2 + 0)*cols_per_thread,
         (pack_i*2 + 0) + (pack_j*2 + 1)*cols_per_thread,

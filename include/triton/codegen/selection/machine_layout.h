@@ -118,13 +118,6 @@ public:
                         analysis::mma_layout* layout, analysis::data_layout* layout_a, analysis::data_layout* layout_b);
   Value *offset_a_m_, *offset_a_k_;
   Value *offset_b_n_, *offset_b_k_;
-  unsigned pack_size_0_;
-  unsigned pack_size_1_;
-  unsigned num_packs_0_;
-  unsigned num_packs_1_;
-  unsigned num_rep_0_;
-  unsigned num_rep_1_;
-  unsigned num_rep_2_;
 };
 
 class machine_scanline_layout: public machine_distributed_layout {
