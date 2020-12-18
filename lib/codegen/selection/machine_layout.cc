@@ -263,13 +263,13 @@ machine_mma_layout::machine_mma_layout(Module *mod, Builder *builder,
     // c offset
     Value *off_c_m = builder_->CreateAdd(builder_->CreateUDiv(lane, _4), off_warp_m);
     Value *off_c_n = builder_->CreateAdd(builder_->CreateMul(_2, builder_->CreateURem(lane, _4)), off_warp_n);
-    for(unsigned pack = 0; pack < shape[0]; pack+=L->spt(0)){
-      idx_m.push_back(builder_->CreateAdd(off_c_m, builder_->getInt32(pack)));
-      idx_m.push_back(builder_->CreateAdd(off_c_m, builder_->getInt32(pack + 8)));
+    for(unsigned m = 0; m < shape[0]; m+=L->spt(0)){
+      idx_m.push_back(builder_->CreateAdd(off_c_m, builder_->getInt32(m)));
+      idx_m.push_back(builder_->CreateAdd(off_c_m, builder_->getInt32(m + 8)));
     }
-    for(unsigned pack = 0; pack < shape[1]; pack+=L->spt(1)){
-      idx_n.push_back(builder_->CreateAdd(off_c_n, builder_->getInt32(pack)));
-      idx_n.push_back(builder_->CreateAdd(off_c_n, builder_->getInt32(pack + 1)));
+    for(unsigned n = 0; n < shape[1]; n+=L->spt(1)){
+      idx_n.push_back(builder_->CreateAdd(off_c_n, builder_->getInt32(n)));
+      idx_n.push_back(builder_->CreateAdd(off_c_n, builder_->getInt32(n + 1)));
     }
     /* axes */
     axes_[L->get_axis(0)] = distributed_axis{1, idx_m, warp_0};

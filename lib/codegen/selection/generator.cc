@@ -1066,9 +1066,9 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(b_base, builder_->getInt32(per_phase_b)), builder_->getInt32(max_phase_b));
     Value *b_row0 = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
     Value *b_row1 = builder_->CreateAdd(b_row0, builder_->getInt32(2));
-    Value *b_col0 = builder_->CreateMul(builder_->CreateUDiv(lane, builder_->getInt32(16)), builder_->getInt32(2));
+    Value *b_col0 = builder_->CreateMul(builder_->CreateUDiv(lane, builder_->getInt32(16)), builder_->getInt32(layout->wpt(1)));
     b_col0 = builder_->CreateAdd(b_col0, builder_->CreateMul(warp_id_1, builder_->getInt32(1)));
-    Value *b_col1 = builder_->CreateAdd(b_col0, builder_->getInt32(4));
+    Value *b_col1 = builder_->CreateAdd(b_col0, builder_->getInt32(2*layout->wpt(1)));
     if(!is_b_row){
       b_row0 = builder_->CreateXor(b_row0, b_phase);
       b_row1 = builder_->CreateXor(b_row1, b_phase);
@@ -1463,12 +1463,14 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   int in_outer = in_layout->spt(ord[1]);
   int in_rep   = in_layout->rep(ord[1]);
   int out_outer = out_layout->mts(ord[1]) * out_layout->nts(ord[1]);
+//  std::cout << in_ord0.size() << " " << out_layout->mts(ord[1]) << " " << out_layout->nts(ord[1]) << std::endl;
+//  std::cout << in_rep << " " << in_outer << " " << out_outer << " " std::endl;
   for(size_t j = 0; j < in_ord1.size(); j+=in_rep){
     tgt_->add_barrier(mod_, *builder_);
     for(size_t k = 0; k < in_rep; k++)
     for(size_t i = 0; i < in_ord0.size(); i++){
       idx[ord[0]] = in_ord0[i];
-      idx[ord[1]] = in_ord1[j + k];
+      idx[ord[1]] = in_ord1[j*in_rep + k];
       Value *off = builder_->CreateAdd(idx[ord[0]], builder_->CreateMul(in_ord1[k], ld));
       Value *ptr = builder_->CreateGEP(base, off);
       builder_->CreateStore(in_dt->get_value(idx), ptr);
@@ -1478,7 +1480,7 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
     for(size_t i = 0; i < out_ord0.size(); i++){
       idx[ord[0]] = out_ord0[i];
       idx[ord[1]] = out_ord1[j*out_ord1.size()/in_ord1.size() + k];
-      Value *off = builder_->CreateAdd(idx[ord[0]], builder_->CreateMul(out_ord1[k], ld));
+      Value *off = builder_->CreateAdd(out_ord0[i], builder_->CreateMul(out_ord1[k], ld));
       Value *ptr  = builder_->CreateGEP(base, off);
       out_dt->set_value(idx, builder_->CreateLoad(ptr));
     }
