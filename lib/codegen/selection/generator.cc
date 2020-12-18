@@ -1463,23 +1463,28 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   int in_outer = in_layout->spt(ord[1]);
   int in_rep   = in_layout->rep(ord[1]);
   int out_outer = out_layout->mts(ord[1]) * out_layout->nts(ord[1]);
+  size_t max_outer = std::max(in_outer, out_outer);
+  size_t min_num_outer = std::min(in_ord1.size(), out_ord1.size());
+  size_t out_ratio = std::max<size_t>(out_outer/in_outer, 1);
+  size_t in_ratio = std::max<size_t>(in_outer/out_outer, 1);
 //  std::cout << in_ord0.size() << " " << out_layout->mts(ord[1]) << " " << out_layout->nts(ord[1]) << std::endl;
-//  std::cout << in_rep << " " << in_outer << " " << out_outer << " " std::endl;
-  for(size_t j = 0; j < in_ord1.size(); j+=in_rep){
+//  std::cout << in_rep << " " << in_outer << " " << out_outer << " " << out_layout->mts(ord[1]) << " " << in_ratio << " " << out_ord0.size() << std::endl;
+//  std::cout << in_ord1.size() << " " << out_ord1.size() << std::endl;
+  for(size_t j = 0; j < shape[ord[1]]/max_outer; j++){
     tgt_->add_barrier(mod_, *builder_);
-    for(size_t k = 0; k < in_rep; k++)
+    for(size_t k = 0; k < in_rep*out_ratio; k++)
     for(size_t i = 0; i < in_ord0.size(); i++){
       idx[ord[0]] = in_ord0[i];
-      idx[ord[1]] = in_ord1[j*in_rep + k];
+      idx[ord[1]] = in_ord1[j*in_rep*out_ratio + k];
       Value *off = builder_->CreateAdd(idx[ord[0]], builder_->CreateMul(in_ord1[k], ld));
       Value *ptr = builder_->CreateGEP(base, off);
       builder_->CreateStore(in_dt->get_value(idx), ptr);
     }
     tgt_->add_barrier(mod_, *builder_);
-    for(size_t k = 0; k < in_outer/out_outer; k++)
+    for(size_t k = 0; k < in_ratio; k++)
     for(size_t i = 0; i < out_ord0.size(); i++){
       idx[ord[0]] = out_ord0[i];
-      idx[ord[1]] = out_ord1[j*out_ord1.size()/in_ord1.size() + k];
+      idx[ord[1]] = out_ord1[j*in_ratio + k];
       Value *off = builder_->CreateAdd(out_ord0[i], builder_->CreateMul(out_ord1[k], ld));
       Value *ptr  = builder_->CreateGEP(base, off);
       out_dt->set_value(idx, builder_->CreateLoad(ptr));
