@@ -1065,7 +1065,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int per_phase_b = swizzle_->get_per_phase(layout_b);
     int max_phase_b = swizzle_->get_max_phase(layout_b);
     int num_ptr_row_b = 2;
-    int num_ptr_col_b = std::max<int>(max_phase_b / layout->wpt(1), 1);
+    int num_ptr_col_b = is_b_row ? std::max<int>(max_phase_b / layout->wpt(1), 1) : 1;
+//    std::cout << num_ptr_row_b << " " << max_phase_b << " " << layout->wpt(0) << std::endl;
 
     Value *b_base = builder_->CreateURem(lane, builder_->getInt32(8));
     Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(b_base, builder_->getInt32(per_phase_b)), builder_->getInt32(max_phase_b));
@@ -1132,7 +1133,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
         InlineAsm *ld_b_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + b_trans + ".shared.b16 "
                                                   "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_j/(2*num_ptr_col_b)*(2*num_ptr_col_b)*layout->wpt(1)*layout->spw(1)*2*stride_b_n
                                                                                               + K/(16*num_ptr_row_b)*(16*num_ptr_row_b)*stride_b_k) + "];", "=r,=r,=r,=r,r", false);
-        Value *hbb = builder_->CreateCall(ld_x4_ty, ld_b_fn, {pTBs[{K/(8*num_ptr_row_b), (pack_j%(2*num_ptr_col_b))/2}]});
+        Value *hbb = builder_->CreateCall(ld_x4_ty, ld_b_fn, {pTBs[{(K/16 % num_ptr_row_b), (pack_j%(2*num_ptr_col_b))/2}]});
         Value *hb0 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{0});
         Value *hb1 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{1});
         Value *hb2 = builder_->CreateExtractValue(hbb, std::vector<unsigned>{2});

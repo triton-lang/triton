@@ -10,10 +10,10 @@ int main() {
   // shapes to test
   typedef std::tuple<dtype_t, bool, bool, int, int, int, int, int, int, int> config_t;
   std::vector<config_t> configs;
-  for(int TM: std::vector<int>{16, 64, 128})
-  for(int TN: std::vector<int>{16, 32, 128})
-  for(int TK: std::vector<int>{16, 32})
-  for(int nwarps: std::vector<int>{2, 4})
+  for(int TM: std::vector<int>{64})
+  for(int TN: std::vector<int>{16})
+  for(int TK: std::vector<int>{16})
+  for(int nwarps: std::vector<int>{1})
   for(bool AT: std::vector<bool>{true, false})
   for(bool BT: std::vector<bool>{true, false}){
     configs.push_back(config_t{HALF, AT, BT, TM, TN, TK, TM, TN, TK, nwarps});
