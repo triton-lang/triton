@@ -1035,30 +1035,41 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
     int per_phase_a = swizzle_->get_per_phase(layout_a);
     int max_phase_a = swizzle_->get_max_phase(layout_a);
-
-
+    int num_ptr_row_a = !is_a_row ? std::min<int>(shapes[0] / layout->spt(0), max_phase_a): 1;
+    int num_ptr_col_a = 2;
     Value *a_base = builder_->CreateURem(lane, builder_->getInt32(8));
     Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(a_base, builder_->getInt32(per_phase_a)), builder_->getInt32(max_phase_a));
-    Value *a_outer0 = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
-    a_outer0 = builder_->CreateAdd(a_outer0, builder_->CreateMul(warp_id_0, builder_->getInt32(2)));
-    Value *a_outer1 = builder_->CreateAdd(a_outer0, builder_->getInt32(4));
-    Value *a_inner0 = builder_->CreateUDiv(lane, builder_->getInt32(16));
-    Value *a_inner1 = builder_->CreateAdd(a_inner0, builder_->getInt32(2));
+    Value *a_row = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
+    a_row = builder_->CreateAdd(a_row, builder_->CreateMul(warp_id_0, builder_->getInt32(2)));
+    Value *a_col = builder_->CreateUDiv(lane, builder_->getInt32(16));
+    std::vector<Value*> a_rows(num_ptr_row_a);
+    for(size_t i = 0; i < num_ptr_row_a; i++)
+      a_rows[i] = builder_->CreateAdd(a_row, builder_->getInt32(2*layout->wpt(0)*i));
+    std::vector<Value*> a_cols(num_ptr_col_a);
+    for(size_t i = 0; i < num_ptr_col_a; i++)
+      a_cols[i] = builder_->CreateAdd(a_col, builder_->getInt32(2*i));
     if(is_a_row){
-      a_inner0 = builder_->CreateXor(a_inner0, a_phase);
-      a_inner1 = builder_->CreateXor(a_inner1, a_phase);
+      for(size_t i = 0; i < num_ptr_col_a; i++)
+        a_cols[i] = builder_->CreateXor(a_cols[i], a_phase);
     }
     else{
-      a_outer0  = builder_->CreateXor(a_outer0, a_phase);
-      a_outer1  = builder_->CreateXor(a_outer1, a_phase);
+      for(size_t i = 0; i < num_ptr_row_a; i++)
+        a_rows[i]  = builder_->CreateXor(a_rows[i], a_phase);
     }
     Value* a_off = builder_->CreateMul(a_base, builder_->getInt32(lda));
-    Value* a_off0 = builder_->CreateAdd(a_off, builder_->CreateMul(a_outer0, builder_->getInt32(8*stride_a_m)));
-    Value* a_off1 = builder_->CreateAdd(a_off, builder_->CreateMul(a_outer1, builder_->getInt32(8*stride_a_m)));
-    Value* a_off00 = builder_->CreateAdd(a_off0, builder_->CreateMul(a_inner0, builder_->getInt32(8*stride_a_k)));
-    Value* a_off01 = builder_->CreateAdd(a_off0, builder_->CreateMul(a_inner1, builder_->getInt32(8*stride_a_k)));
-    Value* a_off10 = builder_->CreateAdd(a_off1, builder_->CreateMul(a_inner0, builder_->getInt32(8*stride_a_k)));
-    Value* a_off11 = builder_->CreateAdd(a_off1, builder_->CreateMul(a_inner1, builder_->getInt32(8*stride_a_k)));
+    std::map<std::pair<int,int>, Value*> a_offs;
+    for(size_t r = 0; r < num_ptr_row_a; r++)
+    for(size_t c = 0; c < num_ptr_col_a; c++)
+      a_offs[{r, c}] = builder_->CreateAdd(a_off,
+                       builder_->CreateAdd(builder_->CreateMul(a_cols[c], builder_->getInt32(8*stride_a_k)),
+                                           builder_->CreateMul(a_rows[r], builder_->getInt32(8*stride_a_m))));
+
+//    Value* a_off0 = builder_->CreateAdd(a_off, builder_->CreateMul(a_rows[0], builder_->getInt32(8*stride_a_m)));
+//    Value* a_off1 = builder_->CreateAdd(a_off, builder_->CreateMul(a_rows[1], builder_->getInt32(8*stride_a_m)));
+//    Value* a_off00 = builder_->CreateAdd(a_off0, builder_->CreateMul(a_cols[0], builder_->getInt32(8*stride_a_k)));
+//    Value* a_off01 = builder_->CreateAdd(a_off0, builder_->CreateMul(a_cols[1], builder_->getInt32(8*stride_a_k)));
+//    Value* a_off10 = builder_->CreateAdd(a_off1, builder_->CreateMul(a_cols[0], builder_->getInt32(8*stride_a_k)));
+//    Value* a_off11 = builder_->CreateAdd(a_off1, builder_->CreateMul(a_cols[1], builder_->getInt32(8*stride_a_k)));
 
 
     std::map<std::pair<int,int>, Value*> pTBs;
@@ -1066,7 +1077,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int max_phase_b = swizzle_->get_max_phase(layout_b);
     int num_ptr_row_b = 2;
     int num_ptr_col_b = is_b_row ? std::max<int>(max_phase_b / layout->wpt(1), 1) : 1;
-//    std::cout << num_ptr_row_b << " " << max_phase_b << " " << layout->wpt(0) << std::endl;
 
     Value *b_base = builder_->CreateURem(lane, builder_->getInt32(8));
     Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(b_base, builder_->getInt32(per_phase_b)), builder_->getInt32(max_phase_b));
@@ -1098,10 +1108,9 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
     builder_->SetInsertPoint(CurrBB);
     Value *pTA = TA->get_pointer();
-    pTAs[{0, 0}] = builder_->CreateGEP(pTA, {a_off00});
-    pTAs[{0, 1}] = builder_->CreateGEP(pTA, {a_off01});
-    pTAs[{1, 0}] = builder_->CreateGEP(pTA, {a_off10});
-    pTAs[{1, 1}] = builder_->CreateGEP(pTA, {a_off11});
+    for(size_t r = 0; r < num_ptr_row_a; r++)
+    for(size_t c = 0; c < num_ptr_col_a; c++)
+      pTAs[{r, c}] = builder_->CreateGEP(pTA, {a_offs[{r,c}]});
     Value *pTB = TB->get_pointer();
     for(size_t r = 0; r < num_ptr_row_b; r++)
     for(size_t c = 0; c < num_ptr_col_b; c++)
@@ -1120,8 +1129,8 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     for(unsigned pack_j = 0; pack_j < num_rep_1; pack_j++){
       if(ha.find({pack_i, K}) == ha.end()){
         InlineAsm *ld_a0_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
-                                                  "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_i/2*2*layout->wpt(0)*layout->spw(0)*2*stride_a_m) + "];", "=r,=r,=r,=r,r", false);
-        Value *haa = builder_->CreateCall(ld_x4_ty, ld_a0_fn, {pTAs[{pack_i%2, K/16}]});
+                                                  "{$0, $1, $2, $3}, [$4 + " + std::to_string(pack_i/num_ptr_row_a*num_ptr_row_a*layout->wpt(0)*layout->spw(0)*2*stride_a_m) + "];", "=r,=r,=r,=r,r", false);
+        Value *haa = builder_->CreateCall(ld_x4_ty, ld_a0_fn, {pTAs[{pack_i % num_ptr_row_a, K/16 % num_ptr_col_a}]});
         Value *ha0 = builder_->CreateExtractValue(haa, std::vector<unsigned>{0});
         Value *ha1 = builder_->CreateExtractValue(haa, std::vector<unsigned>{1});
         Value *ha2 = builder_->CreateExtractValue(haa, std::vector<unsigned>{2});
