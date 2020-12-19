@@ -828,12 +828,14 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
     machine_mma_layout* mma = (machine_mma_layout*)machine_layouts_.at(layouts_->get(dot));
 
-
-    Value* _8 = builder_->getInt32(8);
-
     analysis::mma_layout* layout = layouts_->get(dot)->to_mma884();
     analysis::shared_layout* layout_a = (analysis::shared_layout*)layouts_->get(dot->get_operand(0));
     analysis::shared_layout* layout_b = (analysis::shared_layout*)layouts_->get(dot->get_operand(1));
+
+    size_t a_vec = swizzle_->get_vec(layout_a);
+    size_t b_vec = swizzle_->get_vec(layout_b);
+    Value* _a_vec = builder_->getInt32(a_vec);
+    Value* _b_vec = builder_->getInt32(b_vec);
 
     auto ord_a = layouts_->get(dot->get_operand(0))->get_order();
     auto ord_b = layouts_->get(dot->get_operand(1))->get_order();
@@ -877,13 +879,13 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value* off_a1 = is_a_row ? mma->offset_a_m_ : mma->offset_a_k_;
     Value* phase_a = builder_->CreateURem(builder_->CreateUDiv(off_a1, builder_->getInt32(per_phase_a)),
                                           builder_->getInt32(max_phase_a));
-    int num_ptr_a = std::max<int>(max_phase_a / step_a0, 1);
+    int num_ptr_a = std::max<int>(2*per_phase_a*max_phase_a / step_a0, 1);
     std::vector<Value*> off_a(num_ptr_a);
     for(int i = 0; i < num_ptr_a; i++){
-      Value* off_a0i = builder_->CreateUDiv(off_a0, _8);
-      off_a0i = builder_->CreateAdd(off_a0i, builder_->getInt32(i));
+      Value* off_a0i = builder_->CreateAdd(off_a0, builder_->getInt32(i*(is_a_row?4:stride_rep_m)));
+      off_a0i = builder_->CreateExactUDiv(off_a0i, _a_vec);
       off_a0i = builder_->CreateXor(off_a0i, phase_a);
-      off_a0i = builder_->CreateMul(off_a0i, _8);
+      off_a0i = builder_->CreateMul(off_a0i, _a_vec);
       off_a[i] = builder_->CreateAdd(builder_->CreateMul(off_a0i, builder_->getInt32(stride_a0)),
                                      builder_->CreateMul(off_a1, builder_->getInt32(stride_a1)));
     }
@@ -898,13 +900,13 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     Value* off_b1 = is_b_row ? mma->offset_b_k_ : mma->offset_b_n_;
     Value* phase_b = builder_->CreateURem(builder_->CreateUDiv(off_b1, builder_->getInt32(per_phase_b)),
                                           builder_->getInt32(max_phase_b));
-    int num_ptr_b = std::max<int>(max_phase_b / step_b0, 1);
+    int num_ptr_b = std::max<int>(2*per_phase_b*max_phase_b / step_b0, 1);
     std::vector<Value*> off_b(num_ptr_b);
     for(int i = 0; i < num_ptr_b; i++){
-      Value* off_b0i = builder_->CreateUDiv(off_b0, _8);
-      off_b0i = builder_->CreateAdd(off_b0i, builder_->getInt32(i));
+      Value* off_b0i = builder_->CreateAdd(off_b0, builder_->getInt32(i*(is_b_row?stride_rep_n:4)));
+      off_b0i = builder_->CreateExactUDiv(off_b0i, _b_vec);
       off_b0i = builder_->CreateXor(off_b0i, phase_b);
-      off_b0i = builder_->CreateMul(off_b0i, _8);
+      off_b0i = builder_->CreateMul(off_b0i, _b_vec);
       off_b[i] = builder_->CreateAdd(builder_->CreateMul(off_b0i, builder_->getInt32(stride_b0)),
                                      builder_->CreateMul(off_b1, builder_->getInt32(stride_b1)));
     }
@@ -923,37 +925,41 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
       for(unsigned n = 0; n < layout->rep(1)/2*shapes[1]/layout->spt(1); n++){
       for(unsigned K = 0; K < NK; K += 4){
         if(has.find({m, K}) == has.end()){
-          Value* ptra = ptr_a[((is_a_row ? K : m)/8) % num_ptr_a];
+          Value* ptra = ptr_a[(is_a_row ? K/4 : m) % num_ptr_a];
           int stepam = is_a_row ? m : m / (num_ptr_a)*(num_ptr_a);
-          int stepak = is_a_row ? K / (num_ptr_a*8)*(num_ptr_a*8) : K;
+          int stepak = is_a_row ? K / (num_ptr_a*a_vec)*(num_ptr_a*a_vec) : K;
           Value* pa =  builder_->CreateGEP(ptra, builder_->getInt32(stepam*stride_rep_m*stride_am + stepak*stride_ak));
-          Value* ha = builder_->CreateLoad(builder_->CreateBitCast(pa, PointerType::get(VectorType::get(builder_->getInt32Ty(), 4), 3)));
+          Value* ha = builder_->CreateLoad(builder_->CreateBitCast(pa, PointerType::get(VectorType::get(builder_->getInt32Ty(), a_vec/2), 3)));
           Value *ha00 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(0)), fp16x2_ty);
           Value *ha01 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(1)), fp16x2_ty);
-          Value *ha10 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(2)), fp16x2_ty);
-          Value *ha11 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(3)), fp16x2_ty);
           has[{m, K}]   = {ha00, ha01};
-          if(is_a_row)
-            has[{m, K+4}] = {ha10, ha11};
-          else
-            has[{m+1, K}] = {ha10, ha11};
+          if(a_vec > 4){
+            Value *ha10 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(2)), fp16x2_ty);
+            Value *ha11 = builder_->CreateBitCast(builder_->CreateExtractElement(ha, builder_->getInt32(3)), fp16x2_ty);
+            if(is_a_row)
+              has[{m, K+4}] = {ha10, ha11};
+            else
+              has[{m+1, K}] = {ha10, ha11};
+          }
         }
         if(hbs.find({n, K}) == hbs.end()){
-          Value* ptrb = ptr_b[((is_b_row? n : K)/8) % num_ptr_b];
+          Value* ptrb = ptr_b[(is_b_row? n : K/4) % num_ptr_b];
           int stepbn = is_b_row ? n / (num_ptr_b)*(num_ptr_b) : n;
-          int stepbk = is_b_row ? K : K / (num_ptr_b*8)*(num_ptr_b*8);
+          int stepbk = is_b_row ? K : K / (num_ptr_b*b_vec)*(num_ptr_b*b_vec);
 
           Value* pb =  builder_->CreateGEP(ptrb, builder_->getInt32(stepbn*stride_rep_n*stride_bn + stepbk*stride_bk));
-          Value* hb = builder_->CreateLoad(builder_->CreateBitCast(pb, PointerType::get(VectorType::get(builder_->getInt32Ty(), 4), 3)));
+          Value* hb = builder_->CreateLoad(builder_->CreateBitCast(pb, PointerType::get(VectorType::get(builder_->getInt32Ty(), b_vec/2), 3)));
           Value *hb00 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(0)), fp16x2_ty);
           Value *hb01 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(1)), fp16x2_ty);
-          Value *hb10 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(2)), fp16x2_ty);
-          Value *hb11 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(3)), fp16x2_ty);
           hbs[{n, K}]   = {hb00, hb01};
-          if(is_b_row)
-            hbs[{n+1, K}] = {hb10, hb11};
-          else
-            hbs[{n, K+4}] = {hb10, hb11};
+          if(b_vec > 4){
+            Value *hb10 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(2)), fp16x2_ty);
+            Value *hb11 = builder_->CreateBitCast(builder_->CreateExtractElement(hb, builder_->getInt32(3)), fp16x2_ty);
+            if(is_b_row)
+              hbs[{n+1, K}] = {hb10, hb11};
+            else
+              hbs[{n, K+4}] = {hb10, hb11};
+          }
         }
         std::vector<size_t> idx = {
             (m*2 + 0) + (n*4 + 0)*ld_fc,
@@ -1059,7 +1065,7 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int per_phase_b = swizzle_->get_per_phase(layout_b);
     int max_phase_b = swizzle_->get_max_phase(layout_b);
     int num_ptr_row_b = 2;
-    int num_ptr_col_b = is_b_row ? std::max<int>(max_phase_b / layout->wpt(1), 1) : 1;
+    int num_ptr_col_b = is_b_row ? std::min<int>(shapes[1] / layout->spt(1), max_phase_b) : 1;
     Value *b_base = builder_->CreateURem(lane, builder_->getInt32(8));
     Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(b_base, builder_->getInt32(per_phase_b)), builder_->getInt32(max_phase_b));
     Value *b_row0 = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
@@ -1239,8 +1245,7 @@ void generator::visit_sqrt_inst(ir::sqrt_inst* sqt) {
   for_each(sqt, [&](indices_t idx){
     Value *val = get_value(sqt->get_operand(0), idx);
     Module* module = builder_->GetInsertBlock()->getModule();
-    Value *sqrt = Intrinsic::getDeclaration(module, Intrinsic::sqrt, std::vector<llvm::Type*>{val->getType()});
-    Value *ret = builder_->CreateCall(sqrt, std::vector<llvm::Value*>{val});
+    Value *ret = builder_->CreateIntrinsic(Intrinsic::sqrt, std::vector<llvm::Type*>{val->getType()}, std::vector<llvm::Value*>{val});
     set_value(sqt, idx, ret);
   });
 }
@@ -1545,7 +1550,7 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
 }
 
 void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
-  unsigned vector = 1;
+  unsigned in_vec = 1;
   ir::value *arg = cts->get_operand(0);
   analysis::shared_layout* out_layout = layouts_->get(cts)->to_shared();
   analysis::scanline_layout* in_layout = layouts_->get(arg)->to_scanline();
@@ -1553,8 +1558,10 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   auto in_order = in_layout->get_order();
   // tiles
   if(out_order == in_order)
-    vector = in_layout->nts(in_order[0]);
-  int s = 8/vector;
+    in_vec = in_layout->nts(in_order[0]);
+  int out_vec = swizzle_->get_vec(out_layout);
+  int min_vec = std::min<int>(out_vec, in_vec);
+  int s = std::max<int>(out_vec / in_vec, 1);
   //
   int per_phase = swizzle_->get_per_phase(out_layout);
   int max_phase = swizzle_->get_max_phase(out_layout);
@@ -1562,48 +1569,56 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   distributed_tile* marg = (distributed_tile*)tmap_.at(arg);
   shared_tile*      mret  = (shared_tile*)tmap_.at(cts);
   //
-  int per_thread_ld = in_layout->get_shape()[in_order[0]] / in_layout->mts(in_order[0]);
-  int n_shared = std::max<int>(8 / in_layout->mts(in_order[1]), 1);
-  std::vector<Value*> shared;
-  for(size_t i = 0; i < n_shared; i++){
+  int in_ld = in_layout->get_shape()[in_order[0]] / in_layout->mts(in_order[0]);
+  int n_shared_1 = std::max<int>(per_phase*max_phase / in_layout->mts(in_order[1]), 1);
+  int n_shared_0 = std::max<int>(in_vec    / out_vec, 1);
+  std::vector<std::vector<Value*>> shared(n_shared_1);
+  for(size_t i = 0; i < n_shared_1; i++){
     Value* base = mret->get_pointer();
-    indices_t idx = marg->get_ordered_indices(i*per_thread_ld);
+    indices_t idx = marg->get_ordered_indices(i*in_ld);
     // phase
     Value* phase = builder_->CreateUDiv(idx[in_order[1]], builder_->getInt32(per_phase));
     phase = builder_->CreateURem(phase, builder_->getInt32(max_phase));
-    // off
-    Value* off_0  = idx[in_order[0]];
-    off_0 = builder_->CreateUDiv(off_0, builder_->getInt32(vector));
-    off_0 = builder_->CreateAdd(builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(off_0, builder_->getInt32(s)), phase), builder_->getInt32(s)),
-                                builder_->CreateURem(off_0, builder_->getInt32(s)));
-    off_0 = builder_->CreateMul(off_0 , builder_->getInt32(vector));
     Value* off_1 = builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]));
-    Value* off = builder_->CreateAdd(off_0, off_1);
-    shared.push_back(builder_->CreateGEP(base, {off}));
+    // off
+    for(size_t j = 0; j < n_shared_0; j++){
+      Value* off_0  = builder_->CreateAdd(idx[in_order[0]], builder_->getInt32(j*out_vec));
+      off_0 = builder_->CreateExactUDiv(off_0, builder_->getInt32(min_vec));
+      off_0 = builder_->CreateAdd(builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(off_0, builder_->getInt32(s)),
+                                                                          phase),
+                                                      builder_->getInt32(s)),
+                                  builder_->CreateURem(off_0, builder_->getInt32(s)));
+      off_0 = builder_->CreateMul(off_0 , builder_->getInt32(min_vec));
+      Value* off = builder_->CreateAdd(off_0, off_1);
+      shared[i].push_back(builder_->CreateGEP(base, {off}));
+    }
   }
     // default implementation
   std::map<unsigned, Value*> packets;
   for_each(arg, [&](indices_t idx){
-    distributed_tile* in = (distributed_tile*)tmap_.at(arg);
-    unsigned linear = in->get_linear_index(idx);
-    unsigned id = linear / vector;
-    Value *in_value = in->get_value(idx);
-    if(linear % vector == 0)
-      packets[id] = UndefValue::get(VectorType::get(in_value->getType(), vector));
-    packets[id] = builder_->CreateInsertElement(packets.at(id), in_value, linear % vector);
+    unsigned linear = marg->get_linear_index(idx);
+    unsigned id = linear / min_vec;
+    Value *in_value = marg->get_value(idx);
+    if(linear % min_vec == 0)
+      packets[id] = UndefValue::get(VectorType::get(in_value->getType(), min_vec));
+    packets[id] = builder_->CreateInsertElement(packets.at(id), in_value, linear % min_vec);
   });
   //
   for_each(arg, [&](indices_t idx){
     unsigned linear = marg->get_linear_index(idx);
-    if(linear % vector == 0){
+    if(linear % min_vec == 0){
+      unsigned id = linear / min_vec;
       // input ptr info
-      int out_off_0 = (linear / per_thread_ld) / n_shared * n_shared * in_layout->mts(in_order[1]);
-      int out_off_1 = linear % per_thread_ld;
-      int out_off = (out_off_0*mret->get_shapes()[in_order[0]] + out_off_1);
-      Value* out_base = shared[(linear / per_thread_ld) % n_shared];
-      Value* out_ptr = builder_->CreateGEP(out_base, {builder_->getInt32(out_off)});
+      int id_0 = id % (in_ld/min_vec);
+      int id_1 = id / (in_ld/min_vec);
+      int off_0 = id_0 / n_shared_0 * n_shared_0 * in_layout->mts(in_order[0]);
+      int off_1 = id_1 / n_shared_1 * n_shared_1 * in_layout->mts(in_order[1]);
+      int off = (off_1*mret->get_shapes()[in_order[0]] + off_0);
+      Value* base = shared[id_1  % n_shared_1][id_0 % n_shared_0];
+      Value* ptr = builder_->CreateGEP(base, {builder_->getInt32(off)});
+      ptr = builder_->CreateBitCast(ptr, packets[0]->getType()->getPointerTo(3));
       // asm
-      builder_->CreateStore(packets[linear/vector], out_ptr);
+      builder_->CreateStore(packets[id], ptr);
     }
   });
 }

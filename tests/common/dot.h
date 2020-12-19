@@ -1,5 +1,6 @@
 #include <iomanip>
 #include <cstring>
+#include <unistd.h>
 #include <sstream>
 #include <cstdio>
 #include <tuple>
@@ -136,8 +137,22 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
 
   // kernels
   rt::function function(src::dot, opts);
-  dot_arg_t args = {da->addr_as_uintptr_t(), db->addr_as_uintptr_t(), dc->addr_as_uintptr_t(),
-                    1, M, N, K, lda, ldb, ldc, dlocks->addr_as_uintptr_t()};
+//  dot_arg_t args = {da->addr_as_uintptr_t(), db->addr_as_uintptr_t(), dc->addr_as_uintptr_t(),
+//                    1, M, N, K, lda, ldb, ldc, dlocks->addr_as_uintptr_t()};
+
+  std::stringstream _args;
+  rt::add_arg(_args, da->addr_as_uintptr_t());
+  rt::add_arg(_args, db->addr_as_uintptr_t());
+  rt::add_arg(_args, dc->addr_as_uintptr_t());
+  rt::add_arg(_args, (float)1);
+  rt::add_arg(_args, (int32_t)M);
+  rt::add_arg(_args, (int32_t)N);
+  rt::add_arg(_args, (int32_t)K);
+  rt::add_arg(_args, (int32_t)lda);
+  rt::add_arg(_args, (int32_t)ldb);
+  rt::add_arg(_args, (int32_t)ldc);
+  rt::add_arg(_args, dlocks->addr_as_uintptr_t());
+  std::string args = _args.str();
 
   auto grid = [M, N](const rt::function::options_t& x) {
     return rt::grid_t{ceil(M, x.D<int>("TM"))*ceil(N, x.D<int>("TN")),
@@ -150,7 +165,7 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   // metrics
   if(mode == BENCH){
     auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
-    double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream);}, stream);
+    double triton_ns = triton::tools::bench([&]() { function((void**)args.c_str(), args.size(), grid, stream);}, stream);
     bench.push_back(tflops(triton_ns));
 
     // cublas
@@ -170,9 +185,9 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   rt::function::options_t opt;
   for(auto &x: opts.defines)
     opt.defines[x.first] = x.second[0];
-  opt.num_warps = 4;
-//  std::cout << function.get_asm(rt::ASM_NV_SASS, stream, opt) << std::endl;
-
+  opt.num_warps = opts.num_warps[0];
+//  std::cout << function.get_asm(rt::ASM_NV_PTX, stream, opt) << std::endl;
+//  sleep(1);
   // test triton
   if(mode == TEST){
     srand(0);
@@ -188,7 +203,7 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     stream->write(&*da, true, 0, ha);
     stream->write(&*db, true, 0, hb);
     // run kernel
-    function((void**)&args, sizeof(args), grid, stream);
+    function((void**)args.c_str(), args.size(), grid, stream);
     // write back
     stream->synchronize();
     // compare with CPU

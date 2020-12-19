@@ -94,7 +94,7 @@ void module::compile_llvm_module(std::unique_ptr<llvm::Module> module, const std
   llvm::raw_string_ostream oss(llir_);
   pm.add(llvm::createPrintModulePass(oss));
 //  pm.add(llvm::createVerifierPass());
-//  pm.run(*module);
+  pm.run(*module);
   // create machine
   module->setTargetTriple(triple);
   std::string error;
@@ -181,7 +181,7 @@ host_module::host_module(driver::context * context, std::unique_ptr<llvm::Module
 
 //   create execution engine
   for(llvm::Function& fn: src->functions())
-    hst_->functions[fn.getName()] = &fn;
+    hst_->functions[fn.getName().str()] = &fn;
 
 //  llvm::orc::JITTargetMachineBuilder JTMB = *llvm::orc::JITTargetMachineBuilder::detectHost();
 //  auto DL = JTMB.getDefaultDataLayoutForTarget();

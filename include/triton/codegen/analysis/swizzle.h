@@ -24,6 +24,7 @@ public:
   // accessors
   int get_per_phase(data_layout* layout) { return per_phase_.at(layout); }
   int get_max_phase(data_layout* layout) { return max_phase_.at(layout); }
+  int get_vec  (data_layout* layout)     { return vec_.at(layout); }
   // run
   void run(ir::module &mod);
 private:
@@ -31,6 +32,7 @@ private:
   target* tgt_;
   std::map<data_layout*, int> per_phase_;
   std::map<data_layout*, int> max_phase_;
+  std::map<data_layout*, int> vec_;
 };
 
 }
