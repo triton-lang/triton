@@ -992,7 +992,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
 
   }
   else{
-    machine_mma_layout* mma = (machine_mma_layout*)machine_layouts_.at(layouts_->get(dot));
     analysis::mma_layout* layout = layouts_->get(dot)->to_mma884();
     analysis::shared_layout* layout_a = (analysis::shared_layout*)layouts_->get(dot->get_operand(0));
     analysis::shared_layout* layout_b = (analysis::shared_layout*)layouts_->get(dot->get_operand(1));
@@ -1039,72 +1038,46 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
     int num_ptr_col_a = 2;
     Value *a_base = builder_->CreateURem(lane, builder_->getInt32(8));
     Value *a_phase = builder_->CreateURem(builder_->CreateUDiv(a_base, builder_->getInt32(per_phase_a)), builder_->getInt32(max_phase_a));
-    Value *a_row = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
-    a_row = builder_->CreateAdd(a_row, builder_->CreateMul(warp_id_0, builder_->getInt32(2)));
-    Value *a_col = builder_->CreateUDiv(lane, builder_->getInt32(16));
-    std::vector<Value*> a_rows(num_ptr_row_a);
-    for(size_t i = 0; i < num_ptr_row_a; i++)
-      a_rows[i] = builder_->CreateAdd(a_row, builder_->getInt32(2*layout->wpt(0)*i));
-    std::vector<Value*> a_cols(num_ptr_col_a);
-    for(size_t i = 0; i < num_ptr_col_a; i++)
-      a_cols[i] = builder_->CreateAdd(a_col, builder_->getInt32(2*i));
-    if(is_a_row){
-      for(size_t i = 0; i < num_ptr_col_a; i++)
-        a_cols[i] = builder_->CreateXor(a_cols[i], a_phase);
-    }
-    else{
-      for(size_t i = 0; i < num_ptr_row_a; i++)
-        a_rows[i]  = builder_->CreateXor(a_rows[i], a_phase);
-    }
+    Value *a_row0 = builder_->CreateAdd(builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2)),
+                                        builder_->CreateMul(warp_id_0, builder_->getInt32(2)));
+    Value *a_col0 = builder_->CreateUDiv(lane, builder_->getInt32(16));
     Value* a_off = builder_->CreateMul(a_base, builder_->getInt32(lda));
     std::map<std::pair<int,int>, Value*> a_offs;
-    for(size_t r = 0; r < num_ptr_row_a; r++)
-    for(size_t c = 0; c < num_ptr_col_a; c++)
-      a_offs[{r, c}] = builder_->CreateAdd(a_off,
-                       builder_->CreateAdd(builder_->CreateMul(a_cols[c], builder_->getInt32(8*stride_a_k)),
-                                           builder_->CreateMul(a_rows[r], builder_->getInt32(8*stride_a_m))));
-
-//    Value* a_off0 = builder_->CreateAdd(a_off, builder_->CreateMul(a_rows[0], builder_->getInt32(8*stride_a_m)));
-//    Value* a_off1 = builder_->CreateAdd(a_off, builder_->CreateMul(a_rows[1], builder_->getInt32(8*stride_a_m)));
-//    Value* a_off00 = builder_->CreateAdd(a_off0, builder_->CreateMul(a_cols[0], builder_->getInt32(8*stride_a_k)));
-//    Value* a_off01 = builder_->CreateAdd(a_off0, builder_->CreateMul(a_cols[1], builder_->getInt32(8*stride_a_k)));
-//    Value* a_off10 = builder_->CreateAdd(a_off1, builder_->CreateMul(a_cols[0], builder_->getInt32(8*stride_a_k)));
-//    Value* a_off11 = builder_->CreateAdd(a_off1, builder_->CreateMul(a_cols[1], builder_->getInt32(8*stride_a_k)));
-
+    for(size_t r = 0; r < num_ptr_row_a; r++){
+      Value *off_a_m = builder_->CreateAdd(a_row0, builder_->getInt32(2*layout->wpt(0)*r));
+      off_a_m = is_a_row ? off_a_m : builder_->CreateXor(off_a_m, a_phase);
+      for(size_t c = 0; c < num_ptr_col_a; c++){
+        Value *off_a_k = builder_->CreateAdd(a_col0, builder_->getInt32(2*c));
+        off_a_k = is_a_row ? builder_->CreateXor(off_a_k, a_phase) : off_a_k;
+        a_offs[{r, c}] = builder_->CreateAdd(a_off,
+                         builder_->CreateAdd(builder_->CreateMul(off_a_k, builder_->getInt32(8*stride_a_k)),
+                                             builder_->CreateMul(off_a_m, builder_->getInt32(8*stride_a_m))));
+      }
+    }
 
     std::map<std::pair<int,int>, Value*> pTBs;
     int per_phase_b = swizzle_->get_per_phase(layout_b);
     int max_phase_b = swizzle_->get_max_phase(layout_b);
     int num_ptr_row_b = 2;
     int num_ptr_col_b = is_b_row ? std::max<int>(max_phase_b / layout->wpt(1), 1) : 1;
-
     Value *b_base = builder_->CreateURem(lane, builder_->getInt32(8));
     Value *b_phase = builder_->CreateURem(builder_->CreateUDiv(b_base, builder_->getInt32(per_phase_b)), builder_->getInt32(max_phase_b));
-    Value *b_row = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
-    Value *b_col = builder_->CreateMul(builder_->CreateUDiv(lane, builder_->getInt32(16)), builder_->getInt32(layout->wpt(1)));
-    b_col = builder_->CreateAdd(b_col, builder_->CreateMul(warp_id_1, builder_->getInt32(1)));
-    std::vector<Value*> b_rows(num_ptr_row_b);
-    for(size_t i = 0; i < num_ptr_row_b; i++)
-      b_rows[i] = builder_->CreateAdd(b_row, builder_->getInt32(i*2));
-    std::vector<Value*> b_cols(num_ptr_col_b);
-    for(size_t i = 0; i < num_ptr_col_b; i++)
-      b_cols[i] = builder_->CreateAdd(b_col, builder_->getInt32(i*2*layout->wpt(1)));
-    if(!is_b_row){
-      for(size_t i = 0; i < num_ptr_row_b; i++)
-        b_rows[i] = builder_->CreateXor(b_rows[i], b_phase);
-    }
-    else{
-      for(size_t i = 0; i < num_ptr_col_b; i++)
-        b_cols[i] = builder_->CreateXor(b_cols[i], b_phase);
-    }
-    Value *b_off = builder_->CreateMul(b_base, builder_->getInt32(ldb));
+    Value *b_row0 = builder_->CreateURem(builder_->CreateUDiv(lane, builder_->getInt32(8)), builder_->getInt32(2));
+    Value *b_col0 = builder_->CreateAdd(builder_->CreateMul(builder_->CreateUDiv(lane, builder_->getInt32(16)), builder_->getInt32(layout->wpt(1))),
+                                        builder_->CreateMul(warp_id_1, builder_->getInt32(1)));
+    Value *off_b = builder_->CreateMul(b_base, builder_->getInt32(ldb));
     std::map<std::pair<int,int>, Value*> b_offs;
-    for(size_t r = 0; r < num_ptr_row_b; r++)
-    for(size_t c = 0; c < num_ptr_col_b; c++)
-      b_offs[{r, c}] = builder_->CreateAdd(b_off,
-                       builder_->CreateAdd(builder_->CreateMul(b_cols[c], builder_->getInt32(8*stride_b_n)),
-                                           builder_->CreateMul(b_rows[r], builder_->getInt32(8*stride_b_k))));
-
+    for(size_t r = 0; r < num_ptr_row_b; r++){
+      Value *off_b_k = builder_->CreateAdd(b_row0, builder_->getInt32(r*2));
+      off_b_k = is_b_row ? off_b_k : builder_->CreateXor(off_b_k, b_phase);
+      for(size_t c = 0; c < num_ptr_col_b; c++){
+        Value *off_b_n = builder_->CreateAdd(b_col0, builder_->getInt32(c*2*layout->wpt(1)));
+        off_b_n = is_b_row ? builder_->CreateXor(off_b_n, b_phase) : off_b_n;
+        b_offs[{r, c}] = builder_->CreateAdd(off_b,
+                         builder_->CreateAdd(builder_->CreateMul(off_b_n, builder_->getInt32(8*stride_b_n)),
+                                             builder_->CreateMul(off_b_k, builder_->getInt32(8*stride_b_k))));
+      }
+    }
 
     builder_->SetInsertPoint(CurrBB);
     Value *pTA = TA->get_pointer();
