@@ -351,6 +351,8 @@ std::string function::preheader() {
 #define F32_INFINITY bitcast<float>(0x7F800000)
 #define F16_INFINITY bitcast<half>((int16)0x7C00)
 
+#define min(a,b) (((a)<(b))?(a):(b))
+#define max(a,b) (((a)>(b))?(a):(b))
 
 #define PASTER(a, b, _) a ## _ ## b
 #define EVALUATOR(a, b, _)  PASTER(a, b, _)
