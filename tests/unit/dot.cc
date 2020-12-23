@@ -10,13 +10,13 @@ int main() {
   // shapes to test
   typedef std::tuple<dtype_t, bool, bool, int, int, int, int, int, int, int> config_t;
   std::vector<config_t> configs;
-  for(int TM: std::vector<int>{32, 64, 128})
-  for(int TN: std::vector<int>{32, 64, 128})
+  for(int TM: std::vector<int>{128})
+  for(int TN: std::vector<int>{128})
   for(int TK: std::vector<int>{16})
   for(int nwarps: std::vector<int>{4})
-  for(bool AT: std::array<bool, 2>{false, true})
-  for(bool BT: std::array<bool, 2>{false, true}){
-    configs.push_back(config_t{FLOAT, AT, BT, TM, TN, TK, TM, TN, TK, nwarps});
+  for(bool AT: std::array<bool, 2>{false})
+  for(bool BT: std::array<bool, 2>{false}){
+    configs.push_back(config_t{HALF, AT, BT, TM, TN, TK, TM, TN, TK, nwarps});
   }
   // test
   dtype_t dtype;

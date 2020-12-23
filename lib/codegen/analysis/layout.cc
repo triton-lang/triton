@@ -202,7 +202,9 @@ scanline_layout::scanline_layout(size_t num_warps,
   int contiguous = 4;
   if(ptr){
     int nbits = ptr->get_type()->get_pointer_element_ty()->get_scalar_ty()->get_primitive_size_in_bits();
-    contiguous = std::min<int>(align->contiguous(ptr)[i], 128 / nbits);
+//    contiguous = std::min<int>(align->contiguous(ptr)[i], 128 / nbits);
+    contiguous = 8;
+    //TODO
   }
 
   nts_[i] = clamp(size / num_threads, 1, std::min<int>(contiguous, shape_[i]));
@@ -393,8 +395,9 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
     create(groups_.at(arg), values_.at(groups_.at(arg)));
     layouts_[id] = new shared_layout(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), align_);
   }
-  else
+  else{
     layouts_[id] = new scanline_layout(num_warps_, axes, shapes, values, align_, tgt_);
+  }
 }
 
 void layouts::run(ir::module &mod) {
