@@ -94,17 +94,6 @@ host_context::host_context(driver::device* dev): context(dev, host_context_t(), 
 //         CUDA             //
 /* ------------------------ */
 
-// RAII context switcher
-cu_context::context_switcher::context_switcher(const context &ctx): ctx_((const cu_context&)ctx) {
-  dispatch::cuCtxPushCurrent_v2(*ctx_.cu());
-}
-
-cu_context::context_switcher::~context_switcher() {
-  CUcontext tmp;
-  dispatch::cuCtxPopCurrent_v2(&tmp);
-  assert(tmp==*ctx_.cu() && "Switching back to invalid context!");
-}
-
 // import CUdevice
 CUdevice cu_context::get_device_of(CUcontext context){
   dispatch::cuCtxPushCurrent_v2(context);
@@ -121,7 +110,7 @@ cu_context::cu_context(CUcontext context, bool take_ownership): driver::context(
 
 cu_context::cu_context(driver::device* device): context(device, CUcontext(), true){
   dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, *((driver::cu_device*)dev_)->cu());
-  dispatch::cuCtxPopCurrent_v2(NULL);
+//  dispatch::cuCtxPopCurrent_v2(NULL);
 }
 
 

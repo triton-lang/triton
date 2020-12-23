@@ -7,6 +7,9 @@
 #include "triton/tools/bench.hpp"
 #include "torch/script.h"
 #include "ATen/cuda/CUDAContext.h"
+#include <c10/cuda/CUDAException.h>
+#include <cuda_runtime_api.h>
+
 
 namespace rt = triton::runtime;
 namespace drv = triton::driver;
@@ -31,12 +34,18 @@ void init_host_stream() {
   if(!host_stream){
     host_device.reset(new drv::host_device());
     host_context.reset(drv::context::create(&*host_device));
-    host_stream.reset(drv::stream::create(&*host_context));
+    host_stream.reset(drv::stream::create(host_context->backend()));
   }
 }
 
 CUstream torch_get_cuda_stream(int64_t dev_id) {
-  return (CUstream)at::cuda::getCurrentCUDAStream(dev_id).stream();
+  return (CUstream)c10::cuda::getCurrentCUDAStream(dev_id).stream();
+}
+
+CUdeviceptr torch_get_cuda_device(int64_t dev_id) {
+  CUdevice ret;
+  triton::driver::dispatch::cuDeviceGet(&ret, dev_id);
+  return ret;
 }
 
 void synchronize(int64_t dev_id) {
@@ -60,12 +69,13 @@ void launch_kernel(int64_t op_id, int64_t dev_id, const std::string& args,
   }
   if(dev_id == -1){
     init_host_stream();
-    (*fn)((void**)args.c_str(), args.size(), *id_grid_map.at({op_id, dev_id}), &*host_stream);
+    (*fn)((void**)args.c_str(), args.size(), *id_grid_map.at({op_id, dev_id}), &*host_stream, &*host_device);
   }
   else{
+    C10_CUDA_CHECK(cudaSetDevice(dev_id));
     triton::driver::cu_stream stream(torch_get_cuda_stream(dev_id), false);
-    triton::driver::context* ctx = stream.context();
-    (*fn)((void**)args.c_str(), args.size(), *id_grid_map.at({op_id, dev_id}), &stream);
+    triton::driver::cu_device device(torch_get_cuda_device(dev_id), false);
+    (*fn)((void**)args.c_str(), args.size(), *id_grid_map.at({op_id, dev_id}), &stream, &device);
   }
 }
 

@@ -21,6 +21,7 @@ std::map<map_key_t, std::shared_ptr<rt::function::grid_fn_ty>> id_grid_map;
 std::map<map_key_t, std::shared_ptr<rt::function>> id_fn_map;
 
 CUstream torch_get_cuda_stream(int64_t dev_id);
+CUdevice torch_get_cuda_device(int64_t dev_id);
 
 /* Grid utilities */
 

@@ -62,22 +62,19 @@ void module::init_llvm() {
   }
 }
 
-module::module(driver::context* ctx, CUmodule mod, bool has_ownership)
-  : polymorphic_resource(mod, has_ownership), ctx_(ctx) {
+module::module(CUmodule mod, bool has_ownership)
+  : polymorphic_resource(mod, has_ownership) {
 }
 
-module::module(driver::context* ctx, host_module_t mod, bool has_ownership)
-  : polymorphic_resource(mod, has_ownership), ctx_(ctx) {
+module::module(host_module_t mod, bool has_ownership)
+  : polymorphic_resource(mod, has_ownership) {
 }
 
-driver::context* module::context() const {
-  return ctx_;
-}
 
-module* module::create(driver::context* ctx, std::unique_ptr<llvm::Module> src) {
-  switch(ctx->backend()){
-    case CUDA: return new cu_module(ctx, std::move(src));
-    case Host: return new host_module(ctx, std::move(src));
+module* module::create(driver::device* device, std::unique_ptr<llvm::Module> src) {
+  switch(device->backend()){
+    case CUDA: return new cu_module(device, std::move(src));
+    case Host: return new host_module(std::move(src));
     default: throw std::runtime_error("unknown backend");
   }
 }
@@ -132,7 +129,7 @@ void module::compile_llvm_module(std::unique_ptr<llvm::Module> module, const std
 //        Host              //
 /* ------------------------ */
 
-host_module::host_module(driver::context * context, std::unique_ptr<llvm::Module> src): module(context, host_module_t(), true) {
+host_module::host_module(std::unique_ptr<llvm::Module> src): module(host_module_t(), true) {
   init_llvm();
   // create kernel wrapper
   llvm::LLVMContext &ctx = src->getContext();
@@ -269,10 +266,9 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
 }
 
 
-cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll_module): module(context, CUmodule(), true){
-  cu_context::context_switcher ctx(*context);
-  ptx_ = compile_llvm_module(std::move(ll_module), context->device());
-//  std::cout << ptx_ << std::endl;
+cu_module::cu_module(driver::device* device, std::unique_ptr<llvm::Module> ll_module): cu_module(compile_llvm_module(std::move(ll_module), device)) { }
+
+cu_module::cu_module(std::string const & source) : module(CUmodule(), true), ptx_(source){
   // JIT compile source-code
   CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER};
   unsigned int errbufsize = 8096;
@@ -281,9 +277,12 @@ cu_module::cu_module(driver::context * context, std::unique_ptr<llvm::Module> ll
   try{
     dispatch::cuModuleLoadDataEx(&*cu_, ptx_.data(), 2, opt, optval);
   }catch(exception::cuda::invalid_ptx const &){
-    std::cout << ptx_ << std::endl;
+//#ifdef TRITON_LOG_PTX_ERROR
+    std::cout << source << std::endl;
     std::cerr << "It appears that Triton produced invalid PTX code:" << std::endl;
     std::cerr << errbuf << std::endl;
+//    exit(1);
+//#endif
     throw;
   }
 }
@@ -292,7 +291,7 @@ std::unique_ptr<buffer> cu_module::symbol(const char *name) const{
   CUdeviceptr handle;
   size_t size;
   dispatch::cuModuleGetGlobal_v2(&handle, &size, *cu_, name);
-  std::unique_ptr<buffer> res(new cu_buffer(ctx_, size, handle, false));
+  std::unique_ptr<buffer> res(new cu_buffer(size, handle, false));
   return std::move(res);
 }
 

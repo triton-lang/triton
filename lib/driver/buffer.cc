@@ -35,16 +35,11 @@ namespace driver
 
 //
 
-buffer::buffer(driver::context* ctx, size_t size, CUdeviceptr cu, bool take_ownership)
-  : polymorphic_resource(cu, take_ownership), context_(ctx), size_(size) { }
+buffer::buffer(size_t size, CUdeviceptr cu, bool take_ownership)
+  : polymorphic_resource(cu, take_ownership), size_(size) { }
 
-buffer::buffer(driver::context* ctx, size_t size, host_buffer_t hst, bool take_ownership)
-  : polymorphic_resource(hst, take_ownership), context_(ctx), size_(size) { }
-
-
-driver::context* buffer::context() {
-  return context_;
-}
+buffer::buffer(size_t size, host_buffer_t hst, bool take_ownership)
+  : polymorphic_resource(hst, take_ownership), size_(size) { }
 
 size_t buffer::size() {
   return size_;
@@ -61,35 +56,32 @@ uintptr_t buffer::addr_as_uintptr_t() {
 
 buffer* buffer::create(driver::context* ctx, size_t size) {
   switch(ctx->backend()){
-  case CUDA: return new cu_buffer(ctx, size);
-  case Host: return new host_buffer(ctx, size);
+  case CUDA: return new cu_buffer(size);
+  case Host: return new host_buffer(size);
   default: throw std::runtime_error("unknown backend");
   }
 }
 
 //
 
-host_buffer::host_buffer(driver::context *context, size_t size)
-  :  buffer(context, size, host_buffer_t(), true){
+host_buffer::host_buffer(size_t size)
+  :  buffer(size, host_buffer_t(), true){
   hst_->data = new char[size];
 }
 
 
 //
 
-cu_buffer::cu_buffer(driver::context* context, size_t size)
-  : buffer(context, size, CUdeviceptr(), true) {
-  cu_context::context_switcher ctx_switch(*context_);
+cu_buffer::cu_buffer(size_t size)
+  : buffer(size, CUdeviceptr(), true) {
   dispatch::cuMemAlloc(&*cu_, size);
 }
 
-cu_buffer::cu_buffer(driver::context* context, size_t size, CUdeviceptr cu, bool take_ownership)
-  : buffer(context, size, cu, take_ownership){
+cu_buffer::cu_buffer(size_t size, CUdeviceptr cu, bool take_ownership)
+  : buffer(size, cu, take_ownership){
 }
 
-void cu_buffer::set_zero(driver::stream* queue, size_t size)
-{
-  cu_context::context_switcher ctx_switch(*context_);
+void cu_buffer::set_zero(driver::stream* queue, size_t size){
   dispatch::cuMemsetD8Async(*cu_, 0, size, *queue->cu());
 }
 

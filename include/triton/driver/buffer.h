@@ -16,15 +16,13 @@ class stream;
 // Base
 class buffer : public polymorphic_resource<CUdeviceptr, host_buffer_t> {
 public:
-  buffer(driver::context* ctx, size_t size, CUdeviceptr cl, bool take_ownership);
-  buffer(driver::context* ctx, size_t size, host_buffer_t hst, bool take_ownership);
+  buffer(size_t size, CUdeviceptr cl, bool take_ownership);
+  buffer(size_t size, host_buffer_t hst, bool take_ownership);
   uintptr_t addr_as_uintptr_t();
   static buffer* create(driver::context* ctx, size_t size);
-  driver::context* context();
   size_t size();
 
 protected:
-  driver::context* context_;
   size_t size_;
 };
 
@@ -32,15 +30,15 @@ protected:
 class host_buffer: public buffer
 {
 public:
-  host_buffer(driver::context* context, size_t size);
+  host_buffer(size_t size);
 };
 
 // CUDA
 class cu_buffer: public buffer
 {
 public:
-  cu_buffer(driver::context* context, size_t size);
-  cu_buffer(driver::context* context, size_t size, CUdeviceptr cu, bool take_ownership);
+  cu_buffer(size_t size);
+  cu_buffer(size_t size, CUdeviceptr cu, bool take_ownership);
   void set_zero(triton::driver::stream *queue, size_t size);
 };
 

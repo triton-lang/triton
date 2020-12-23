@@ -99,11 +99,11 @@ private:
   class caller {
   public:
     // constructors
-    caller(driver::context* ctx, std::ifstream& ifs, const options_t& opt);
+    caller(std::ifstream& ifs, const options_t& opt);
     caller(ir::function *ir, std::shared_ptr<driver::module> program, const options_t& opt);
     // serialization
     void write(std::ofstream& ofs);
-    void read(driver::context* ctx, std::ifstream& ifs);
+    void read(std::ifstream& ifs);
     // accessors
     const options_t opt() const { return opt_; }
     const driver::module* parent() const { return &*parent_; }
@@ -113,7 +113,7 @@ private:
 
     std::vector<int> retune() const { return retune_; }
     // entry points
-    void operator()(driver::stream *stream, const grid_t& grid, void **args, size_t args_size) const;
+    void operator()(driver::stream *stream, const grid_t& grid, void **args, size_t args_size, const std::map<std::string, std::vector<char>>& = {}) const;
 
   private:
     std::shared_ptr<driver::kernel> bin_;
@@ -133,9 +133,9 @@ private:
   // make
   triton::lang::translation_unit *make_ast(const std::string &src);
   std::unique_ptr<ir::module> make_ir(Parser &parser);
-  std::unique_ptr<driver::module> make_bin(ir::module &function, driver::context *context, const options_t &opt);
-  void make(driver::stream *stream, options_t opt);
-  void precompile(driver::stream *stream, const options_space_t& tuning_space);
+  std::unique_ptr<driver::module> make_bin(ir::module &function, driver::device *device, const options_t &opt);
+  void make(driver::device *device, options_t opt);
+  void precompile(driver::device *device, const options_space_t& tuning_space);
   // autotune
   caller* autotune(driver::stream *stream, const grid_fn_ty& grid, void **args, size_t args_size);
 
@@ -144,10 +144,10 @@ public:
 
 public:
   function(const std::string& src, const options_space_t& opt, const std::string &cache_ref = "");
-  void operator()(void** args, size_t args_size, const grid_t& grid, driver::stream* stream);
-  void operator()(void** args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
+  void operator()(void** args, size_t args_size, const grid_t& grid, driver::stream* stream, driver::device* device);
+  void operator()(void** args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream, driver::device* device);
   void set_cst(const char* name, void* data, size_t n_bytes);
-  std::string get_asm(asm_mode_t mode, driver::stream *stream, const options_t& opt);
+  std::string get_asm(asm_mode_t mode, driver::device *device, const options_t& opt);
 
 private:
   std::map<std::string, std::vector<char>> cst_;

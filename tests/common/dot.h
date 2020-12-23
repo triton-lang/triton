@@ -1,6 +1,5 @@
 #include <iomanip>
 #include <cstring>
-#include <unistd.h>
 #include <sstream>
 #include <cstdio>
 #include <tuple>
@@ -26,7 +25,7 @@ struct dot_arg_t{
   int ldb;
   int ldc;
   uintptr_t locks;
-} ;
+};
 
 template<class T, bool AT, bool BT>
 static void cc_dot(std::vector<T> &c, const std::vector<T> &a, const std::vector<T> &b,
@@ -80,14 +79,14 @@ template<> struct to_string<double>{
 };
 
 template<class T>
-void triton_dot(drv::stream* stream, bool AT, bool BT,
+void triton_dot(drv::context* context,  drv::stream* stream, bool AT, bool BT,
                 int32_t M, int32_t N, int32_t K,
                 int32_t TM, int32_t TN, int32_t TK, int32_t nwarp,
                 const std::vector<int>& a_order, const std::vector<int>& b_order,
                 run_mode_t mode, std::vector<double>& bench, bool &test){
   std::string ty = to_string<T>::value;
   size_t dt_nbytes = sizeof(T);
-  drv::context* context = stream->context();
+  drv::device* device = context->device();
   int32_t lda = (AT ^ a_order[0]==1) ? K : M;
   int32_t ldb = (BT ^ b_order[0]==1) ? N : K;
   int32_t ldc = N;
@@ -95,99 +94,76 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   std::vector<std::string> sb = { "1", "ldb" };
 
   // inputs
-  auto dc     = std::shared_ptr<drv::buffer>(drv::buffer::create(context, M*N*dt_nbytes*2));
+  auto dc     = std::shared_ptr<drv::buffer>(drv::buffer::create(context, M*N*dt_nbytes));
   auto da     = std::shared_ptr<drv::buffer>(drv::buffer::create(context, M*K*dt_nbytes));
   auto db     = std::shared_ptr<drv::buffer>(drv::buffer::create(context, K*N*dt_nbytes));
   auto dlocks = std::shared_ptr<drv::buffer>(drv::buffer::create(context, 1024*1024*2*4));
 //  ((drv::cu_buffer*)dlocks.get())->set_zero(stream, dlocks->size());
 
   // macros
-  rt::function::options_space_t opts;
+  rt::function::options_space_t opt;
   // A access patterns
-  opts.defines.push_back({"USEA",         {AT? "a"    : "a"            }});
-  opts.defines.push_back({"BROADCAST_AK", {AT? "newaxis, :"   : "newaxis, :"   }});
-  opts.defines.push_back({"BROADCAST_AM", {AT? ":, newaxis"   : ":, newaxis"   }});
-  opts.defines.push_back({"SHAPE_A",      {AT? "TM, TK"       : "TM, TK"       }});
-  opts.defines.push_back({"STRIDE_AK",    {AT? sa[a_order[0]] : sa[a_order[1]] }});
-  opts.defines.push_back({"STRIDE_AM",    {AT? sa[a_order[1]] : sa[a_order[0]] }});
+  opt.defines.push_back({"USEA",         {AT? "a"    : "a"            }});
+  opt.defines.push_back({"BROADCAST_AK", {AT? "newaxis, :"   : "newaxis, :"   }});
+  opt.defines.push_back({"BROADCAST_AM", {AT? ":, newaxis"   : ":, newaxis"   }});
+  opt.defines.push_back({"SHAPE_A",      {AT? "TM, TK"       : "TM, TK"       }});
+  opt.defines.push_back({"STRIDE_AK",    {AT? sa[a_order[0]] : sa[a_order[1]] }});
+  opt.defines.push_back({"STRIDE_AM",    {AT? sa[a_order[1]] : sa[a_order[0]] }});
   // B access patterns
-  opts.defines.push_back({"USEB",         {BT? "b"    : "b"            }});
-  opts.defines.push_back({"BROADCAST_BK", {BT? ":, newaxis"   : ":, newaxis"   }});
-  opts.defines.push_back({"BROADCAST_BN", {BT? "newaxis, :"   : "newaxis, :"   }});
-  opts.defines.push_back({"SHAPE_B",      {BT? "TK, TN"       : "TK, TN"       }});
-  opts.defines.push_back({"STRIDE_BK",    {BT? sb[b_order[1]] : sb[b_order[0]] }});
-  opts.defines.push_back({"STRIDE_BN",    {BT? sb[b_order[0]] : sb[b_order[1]] }});
+  opt.defines.push_back({"USEB",         {BT? "b"    : "b"            }});
+  opt.defines.push_back({"BROADCAST_BK", {BT? ":, newaxis"   : ":, newaxis"   }});
+  opt.defines.push_back({"BROADCAST_BN", {BT? "newaxis, :"   : "newaxis, :"   }});
+  opt.defines.push_back({"SHAPE_B",      {BT? "TK, TN"       : "TK, TN"       }});
+  opt.defines.push_back({"STRIDE_BK",    {BT? sb[b_order[1]] : sb[b_order[0]] }});
+  opt.defines.push_back({"STRIDE_BN",    {BT? sb[b_order[0]] : sb[b_order[1]] }});
   // data-type
-  opts.defines.push_back({"TYPE", {ty}});
+  opt.defines.push_back({"TYPE", {ty}});
   // tile sizes
   if(mode == TEST) {
-    opts.defines.push_back({"TM", {std::to_string(TM)}});
-    opts.defines.push_back({"TN", {std::to_string(TN)}});
-    opts.defines.push_back({"TK", {std::to_string(TK)}});
-    opts.defines.push_back({"TZ", {"1"}});
-    opts.num_warps = {nwarp};
+    opt.defines.push_back({"TM", {std::to_string(TM)}});
+    opt.defines.push_back({"TN", {std::to_string(TN)}});
+    opt.defines.push_back({"TK", {std::to_string(TK)}});
+    opt.defines.push_back({"TZ", {"1"}});
+    opt.num_warps = {nwarp};
   }
   if(mode == BENCH) {
-    opts.defines.push_back({"TM", {"128"}});
-    opts.defines.push_back({"TN", {"128"}});
-    opts.defines.push_back({"TK", {"32"}});
-    opts.defines.push_back({"TZ", {"1"}});
-    opts.num_warps = {4};
+    opt.defines.push_back({"TM", {"64", "128"}});
+    opt.defines.push_back({"TN", {"64", "128"}});
+    opt.defines.push_back({"TK", {"16"}});
+    opt.defines.push_back({"TZ", {"1"}});
+    opt.num_warps = {4};
   }
 
   // kernels
-  rt::function function(src::dot, opts);
-//  dot_arg_t args = {da->addr_as_uintptr_t(), db->addr_as_uintptr_t(), dc->addr_as_uintptr_t(),
-//                    1, M, N, K, lda, ldb, ldc, dlocks->addr_as_uintptr_t()};
-
-  std::stringstream _args;
-  rt::add_arg(_args, da->addr_as_uintptr_t());
-  rt::add_arg(_args, db->addr_as_uintptr_t());
-  rt::add_arg(_args, dc->addr_as_uintptr_t());
-  rt::add_arg(_args, (float)1);
-  rt::add_arg(_args, (int32_t)M);
-  rt::add_arg(_args, (int32_t)N);
-  rt::add_arg(_args, (int32_t)K);
-  rt::add_arg(_args, (int32_t)lda);
-  rt::add_arg(_args, (int32_t)ldb);
-  rt::add_arg(_args, (int32_t)ldc);
-  rt::add_arg(_args, dlocks->addr_as_uintptr_t());
-  std::string args = _args.str();
+  rt::function function(src::dot, opt);
+  dot_arg_t args = {da->addr_as_uintptr_t(), db->addr_as_uintptr_t(), dc->addr_as_uintptr_t(),
+                    1, M, N, K, lda, ldb, ldc, dlocks->addr_as_uintptr_t()};
 
   auto grid = [M, N](const rt::function::options_t& x) {
-    return rt::grid_t{ceil(M, x.D<int>("TM"))*ceil(N, x.D<int>("TN")),
-                      (size_t)1,
+    return rt::grid_t{ceil(M, x.D<int>("TM")),
+                      ceil(N, x.D<int>("TN")),
                       (size_t)x.D<int>("TZ")};
   };
-
-
 
   // metrics
   if(mode == BENCH){
     auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
-    double triton_ns = triton::tools::bench([&]() { function((void**)args.c_str(), args.size(), grid, stream);}, stream);
+    double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream, device);}, stream);
     bench.push_back(tflops(triton_ns));
 
-    // cublas
-   if(cublas::cublasinit()){
-     T alpha(static_cast<double>(1));
-     T beta(static_cast<double>(0));
-     cublasGemmAlgo_t fastest;
+//    // cublas
+//   if(cublas::cublasinit()){
+//     T alpha(static_cast<double>(1));
+//     T beta(static_cast<double>(0));
+//     cublasGemmAlgo_t fastest;
 //     cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K, &alpha, &*da, lda, &*db, ldb, &beta, &*dc, ldc, &fastest);
-     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
-                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
-                                                                ldc, nullptr, CUBLAS_GEMM_DFALT); }, stream);
-     bench.push_back(tflops(cublas_ms));
-   }
+//     double cublas_ms = triton::tools::bench([&]() { cublasGemm(CUDA_R_16F, stream, AT, BT, M, N, K,
+//                                                                &alpha, &*da, lda, &*db, ldb, &beta, &*dc,
+//                                                                ldc, nullptr, fastest); }, stream);
+//     bench.push_back(tflops(cublas_ms));
+//   }
   }
 
-
-  rt::function::options_t opt;
-  for(auto &x: opts.defines)
-    opt.defines[x.first] = x.second[0];
-  opt.num_warps = opts.num_warps[0];
-//  std::cout << function.get_asm(rt::ASM_NV_PTX, stream, opt) << std::endl;
-//  sleep(1);
   // test triton
   if(mode == TEST){
     srand(0);
@@ -203,7 +179,7 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
     stream->write(&*da, true, 0, ha);
     stream->write(&*db, true, 0, hb);
     // run kernel
-    function((void**)args.c_str(), args.size(), grid, stream);
+    function((void**)&args, sizeof(args), grid, stream, device);
     // write back
     stream->synchronize();
     // compare with CPU
@@ -214,21 +190,21 @@ void triton_dot(drv::stream* stream, bool AT, bool BT,
   }
 }
 
-std::vector<double> bench_dot(drv::stream* stream,
+std::vector<double> bench_dot(drv::context* context, drv::stream* stream,
                dtype_t dtype, bool AT, bool BT,
                int32_t M, int32_t N, int32_t K,
                const std::vector<int>& a_order, const std::vector<int>& b_order) {
   std::vector<double> bench;
   bool test;
   switch(dtype){
-    case HALF:   triton_dot<half_float::half>(stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
-    case FLOAT:  triton_dot<float>(stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
-    case DOUBLE: triton_dot<double>(stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
+    case HALF:   triton_dot<half_float::half>(context, stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
+    case FLOAT:  triton_dot<float>(context, stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
+    case DOUBLE: triton_dot<double>(context, stream, AT, BT, M, N, K, 0, 0, 0, 0, a_order, b_order, BENCH, bench, test); break;
     default: break;
   }
   return bench;
 }
-bool test_dot(drv::stream* stream,
+bool test_dot(drv::context* context, drv::stream* stream,
               dtype_t dtype, bool AT, bool BT,
               int32_t M, int32_t N, int32_t K,
               const std::vector<int>& a_order, const std::vector<int>& b_order,
@@ -236,9 +212,9 @@ bool test_dot(drv::stream* stream,
   std::vector<double> bench;
   bool test = false;
   switch(dtype){
-    case HALF:   triton_dot<half_float::half>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
-    case FLOAT:  triton_dot<float>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
-    case DOUBLE: triton_dot<double>(stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
+    case HALF:   triton_dot<half_float::half>(context, stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
+    case FLOAT:  triton_dot<float>(context, stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
+    case DOUBLE: triton_dot<double>(context, stream, AT, BT, M, N, K, TM, TN, TK, nwarp, a_order, b_order, TEST, bench, test); break;
     default: break;
   }
   return test;
