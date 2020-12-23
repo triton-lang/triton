@@ -48,9 +48,8 @@ void delete_fn(const map_key_t& key) {
 }
 
 std::string get_fn_asm(const map_key_t& key, rt::asm_mode_t mode, const rt::function::options_t& opt) {
-  return "";
-  //triton::driver::cu_stream stream(torch_get_cuda_stream(key.second), false);
-  //return id_fn_map[key]->get_asm(mode, &stream, opt);
+  triton::driver::cu_device device(key.second, false);
+  return id_fn_map[key]->get_asm(mode, &device, opt);
 }
 
 void cleanup() {
