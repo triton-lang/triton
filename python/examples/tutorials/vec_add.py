@@ -14,7 +14,7 @@ __global__ void add(float* z, float* x, float* y, int N) {
 
     bool check[TILE] = offset < N;
 
-    *?(check)pz = *?(check)px + *?(check)py;
+    *pz = *px + *py;
 }
     """
 
@@ -32,9 +32,8 @@ add = _add.apply
 
 # test
 torch.manual_seed(0)
-x = torch.rand(98432).cuda()
-y = torch.rand(98432).cuda()
+x = torch.rand(900).cuda()
+y = torch.rand(900).cuda()
 za = x + y
 zb = add(x, y)
-
 print(torch.allclose(za,zb))
