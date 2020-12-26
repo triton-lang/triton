@@ -89,6 +89,12 @@ class kernel:
     return libtriton.get_fn_ptx((self.op_id, dev_id), opt)
 
   def __call__(self, *args, **kwargs):
+    if 'TRITON_DEBUG_MODE' in os.environ:
+      _args = args
+      args = [x for x in args]
+      for i in range(len(args)):
+        if isinstance(args[i], torch.Tensor):
+          args[i] = torch.ops.triton.raw_like(args[i])
     for x in args:
       if isinstance(x, torch.Tensor):
         device = x.device.index
@@ -109,3 +115,7 @@ class kernel:
     names     = list(kwargs['constants'].keys()) if 'constants' in kwargs else []
     constants = list(kwargs['constants'].values()) if 'constants' in kwargs else []
     torch.ops.triton.launch_kernel(self.op_id, device, params, names, constants)
+    if 'TRITON_DEBUG_MODE' in os.environ:
+      for i in range(len(args)):
+        if isinstance(args[i], torch.Tensor):
+          _args[i].copy_(args[i])
