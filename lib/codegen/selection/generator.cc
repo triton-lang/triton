@@ -17,6 +17,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 namespace triton{
 namespace codegen{
@@ -397,7 +398,6 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
     if(ld < x->get_type()->get_tile_rank())
       break;
   }
-  //size_t ld = layouts_->get(ptr)->get_order(0);
   unsigned alignment = alignment_->get(ptr, ld);
   distributed_tile *pointers = (distributed_tile*)tmap_.at(ptr);
   distributed_tile *masks = (distributed_tile*)tmap_.at(x->get_mask_operand());
@@ -406,66 +406,50 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
     distributed_tile* result = (distributed_tile*)tmap_.at(x);
     unsigned vector_size = gcd(result->axis(ld).contiguous, alignment);
     unsigned linear = result->get_linear_index(idx);
-    unsigned id = linear / vector_size;
     if(linear % vector_size == 0) {
       Value *ptr = pointers->get_value(idx);
       ptr = builder_->CreateBitCast(ptr, PointerType::get(VectorType::get(result->get_ty(), vector_size),
                                                           ptr->getType()->getPointerAddressSpace()));
-      Value *mask = masks->get_value(idx);
-      BasicBlock *current_bb = builder_->GetInsertBlock();
-      Function *parent = builder_->GetInsertBlock()->getParent();
-      BasicBlock *mask_then_bb = BasicBlock::Create(*ctx_, "mask_then", parent);
-      BasicBlock *mask_done_bb = BasicBlock::Create(*ctx_, "mask_done", parent);
-      builder_->CreateCondBr(mask, mask_then_bb, mask_done_bb);
-      builder_->SetInsertPoint(mask_then_bb);
-      Value *result_then = builder_->CreateLoad(ptr);
-      builder_->CreateBr(mask_done_bb);
-      builder_->SetInsertPoint(mask_done_bb);
-      Value *current_result = nullptr;
-      if(x->get_false_value_operand()){
-        current_result = builder_->CreatePHI(result_then->getType(), 2);
-        ((PHINode*)current_result)->addIncoming(result_then, mask_then_bb);
-        Value *result_false = tmap_.at(x->get_false_value_operand())->get_value(idx);
-        if(result_then->getType()->isVectorTy())
-          result_false = builder_->CreateVectorSplat(vector_size, result_false);
-        ((PHINode*)current_result)->addIncoming(result_false, current_bb);
+      llvm::Value* mask = masks->get_value(idx);
+
+      PHINode *ret = builder_->CreatePHI(ptr->getType()->getPointerElementType(), 2);
+      Instruction *then_term;
+      Instruction *else_term;
+      llvm::SplitBlockAndInsertIfThenElse(mask, ret, &then_term, &else_term);
+      builder_->SetInsertPoint(then_term);
+      Value* then_ret = builder_->CreateLoad(ptr);
+      builder_->SetInsertPoint(else_term);
+      Value *ret_false = tmap_.at(x->get_false_value_operand())->get_value(idx);
+      Value* else_ret = builder_->CreateVectorSplat(vector_size, ret_false);
+      builder_->SetInsertPoint(ret->getParent());
+      ret->addIncoming(then_ret, then_term->getParent());
+      ret->addIncoming(else_ret, else_term->getParent());
+      for(int i = 0; i < vector_size; i++){
+        Value *v = builder_->CreateExtractElement(ret, i);
+        result->set_value(result->get_ordered_indices(linear + i), v);
       }
-      else
-        current_result = result_then;
 
 //      ConstantInt *cst = nullptr;
 //      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(ptr))
 //        if(gep->getNumIndices() == 1)
 //          cst = dyn_cast<ConstantInt>(gep->idx_begin());
-//      llvm::Value* mask = masks->get_value(idx);
 //      std::string offset = "";
 //      if(cst)
 //        offset = " + " + std::to_string(cst->getValue().getSExtValue()*2*vector_size);
 //      Type *fp16x2_ty = VectorType::get(builder_->getHalfTy(), 2);
 //      Type *fp16x2_pack4_ty = StructType::get(*ctx_, {fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
 //      FunctionType *ty = FunctionType::get(fp16x2_pack4_ty, {mask->getType(), ptr->getType()}, false);
-
-//      std::string asm_str = "@$0 ld.global.nc.v4.b32 {$1, $2, $3, $4}, [$5" + offset + "];";
-//      if(x->get_false_value_operand())
-//        asm_str += "\n\t@!$0 mov.v4.b32 {$1, $2, $3, $4}, {0, 0, 0, 0};";
+//      std::string asm_str;
+//      asm_str += "mov.v4.b32 {$1, $2, $3, $4}, {0, 0, 0, 0};\n";
+//      asm_str += "@$0 ld.global.nc.v4.b32 {$1, $2, $3, $4}, [$5" + offset + "];";
 //      InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,=r,=r,=r,=r,l", true);
 //      Value *current_result = builder_->CreateCall(iasm, {mask, ptr});
-
-      packets[id] = current_result;
+//      for(unsigned i = 0; i < vector_size; i++){
+//        Value *tmp = builder_->CreateExtractValue(current_result, {i / 2});
+//        Value *v = builder_->CreateExtractElement(tmp, i % 2);
+//        result->set_value(result->get_ordered_indices(linear + i), v);
+//      }
     }
-  });
-  // extract result element
-  for_each(x, [&](indices_t idx){
-    distributed_tile* result = (distributed_tile*)tmap_.at(x);
-    unsigned vector_size = gcd(result->axis(ld).contiguous, alignment);
-    unsigned linear = result->get_linear_index(idx);
-    unsigned id = linear / vector_size;
-
-//    Value *tmp = builder_->CreateExtractValue(packets.at(id), {(linear % vector_size) / 2});
-//    Value *res = builder_->CreateExtractElement(tmp, (linear % vector_size) % 2);
-//    result->set_value(idx, res);
-
-    result->set_value(idx, builder_->CreateExtractElement(packets.at(id), linear % vector_size));
   });
 }
 
@@ -1888,7 +1872,7 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
     ArrayType *array_ty = ArrayType::get(int_32_ty, alloc_size/4);
     Type *ptr_ty = PointerType::get(int_8_ty, 3);
     GlobalVariable *sh_mem_array =
-      new GlobalVariable(*mod_, array_ty, false, GlobalVariable::ExternalLinkage,
+      new GlobalVariable(*mod_, array_ty, false, GlobalVariable::ExternalWeakLinkage,
                          nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
     sh_mem_ptr_ = builder_->CreateBitCast(sh_mem_array, ptr_ty);
   }

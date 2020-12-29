@@ -14,6 +14,7 @@
 #include "triton/ir/context.h"
 #include "triton/codegen/target.h"
 #include "triton/runtime/arg.h"
+#include "triton/runtime/error.h"
 
 namespace llvm {
   class Module;
@@ -68,32 +69,31 @@ enum asm_mode_t {
   ASM_NV_SASS
 };
 
+struct options_space_t {
+  typedef std::pair<std::string, std::vector<std::string>> define_t;
+  std::vector<define_t> defines;
+  std::vector<int> num_warps;
+  std::vector<int> recompile_key;
+};
+
+struct options_t {
+  template<class T>
+  T D(const std::string& name) const {
+    return convert<T>(defines.at(name));
+  }
+  bool operator<(const options_t& other) const {
+    return std::make_pair(defines, num_warps) <
+           std::make_pair(other.defines, other.num_warps);
+  }
+  std::string to_str() const;
+
+  std::map<std::string, std::string> defines;
+  size_t num_warps;
+};
+
 class function {
 public:
-  struct options_space_t {
-    typedef std::pair<std::string, std::vector<std::string>> define_t;
-    std::vector<define_t> defines;
-    std::vector<int> num_warps;
-    std::vector<int> recompile_key;
-  };
-
-  struct options_t {
-    template<class T>
-    T D(const std::string& name) const {
-      return convert<T>(defines.at(name));
-    }
-    bool operator<(const options_t& other) const {
-      return std::make_pair(defines, num_warps) <
-             std::make_pair(other.defines, other.num_warps);
-    }
-    std::string to_str() const;
-
-    std::map<std::string, std::string> defines;
-    size_t num_warps;
-  };
-
   typedef std::function<grid_t(const options_t&)> grid_fn_ty;
-
 
 private:
   class caller {

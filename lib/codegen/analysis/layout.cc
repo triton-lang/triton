@@ -148,8 +148,8 @@ mma_layout::mma_layout(size_t num_warps,
     auto ord_b = layout_b->get_order();
     bool is_a_row = ord_a[0] != 0;
     bool is_b_row = ord_b[0] != 0;
-    int pack_size_0 = is_a_row ? 1 : 2;
-    int pack_size_1 = is_b_row ? 2 : 1;
+    int pack_size_0 = is_a_row ? 1 : 1;
+    int pack_size_1 = is_b_row ? 1 : 1;
     rep_ = {2*pack_size_0, 2*pack_size_1, 1};
     spw_ = {fpw_[0]*8*pack_size_0, fpw_[1]*8*pack_size_1, 1};
   }
@@ -202,9 +202,7 @@ scanline_layout::scanline_layout(size_t num_warps,
   int contiguous = 4;
   if(ptr){
     int nbits = ptr->get_type()->get_pointer_element_ty()->get_scalar_ty()->get_primitive_size_in_bits();
-//    contiguous = std::min<int>(align->contiguous(ptr)[i], 128 / nbits);
-    contiguous = 8;
-    //TODO
+    contiguous = std::min<int>(align->contiguous(ptr)[i], 128 / nbits);
   }
 
   nts_[i] = clamp(size / num_threads, 1, std::min<int>(contiguous, shape_[i]));

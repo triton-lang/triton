@@ -45,9 +45,12 @@ public:
                            file_type_t file_type);
   virtual std::unique_ptr<buffer> symbol(const char * name) const = 0;
   std::string llir() const { return llir_; }
+  int spilled() const { return spilled_; }
 
 private:
   std::string llir_;
+protected:
+  int spilled_;
 };
 
 // CPU
@@ -63,7 +66,7 @@ class cu_module: public module {
 
 public:
   cu_module(driver::device* device, std::unique_ptr<llvm::Module> module);
-  cu_module(const std::string& source);
+  cu_module(driver::device* device, const std::string& source);
   std::unique_ptr<buffer> symbol(const char * name) const;
   const std::string& ptx() const { return ptx_; }
 

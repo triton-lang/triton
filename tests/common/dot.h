@@ -101,46 +101,46 @@ void triton_dot(drv::context* context,  drv::stream* stream, bool AT, bool BT,
 //  ((drv::cu_buffer*)dlocks.get())->set_zero(stream, dlocks->size());
 
   // macros
-  rt::function::options_space_t opt;
+  rt::options_space_t opts;
   // A access patterns
-  opt.defines.push_back({"USEA",         {AT? "a"    : "a"            }});
-  opt.defines.push_back({"BROADCAST_AK", {AT? "newaxis, :"   : "newaxis, :"   }});
-  opt.defines.push_back({"BROADCAST_AM", {AT? ":, newaxis"   : ":, newaxis"   }});
-  opt.defines.push_back({"SHAPE_A",      {AT? "TM, TK"       : "TM, TK"       }});
-  opt.defines.push_back({"STRIDE_AK",    {AT? sa[a_order[0]] : sa[a_order[1]] }});
-  opt.defines.push_back({"STRIDE_AM",    {AT? sa[a_order[1]] : sa[a_order[0]] }});
+  opts.defines.push_back({"USEA",         {AT? "a"    : "a"            }});
+  opts.defines.push_back({"BROADCAST_AK", {AT? "newaxis, :"   : "newaxis, :"   }});
+  opts.defines.push_back({"BROADCAST_AM", {AT? ":, newaxis"   : ":, newaxis"   }});
+  opts.defines.push_back({"SHAPE_A",      {AT? "TM, TK"       : "TM, TK"       }});
+  opts.defines.push_back({"STRIDE_AK",    {AT? sa[a_order[0]] : sa[a_order[1]] }});
+  opts.defines.push_back({"STRIDE_AM",    {AT? sa[a_order[1]] : sa[a_order[0]] }});
   // B access patterns
-  opt.defines.push_back({"USEB",         {BT? "b"    : "b"            }});
-  opt.defines.push_back({"BROADCAST_BK", {BT? ":, newaxis"   : ":, newaxis"   }});
-  opt.defines.push_back({"BROADCAST_BN", {BT? "newaxis, :"   : "newaxis, :"   }});
-  opt.defines.push_back({"SHAPE_B",      {BT? "TK, TN"       : "TK, TN"       }});
-  opt.defines.push_back({"STRIDE_BK",    {BT? sb[b_order[1]] : sb[b_order[0]] }});
-  opt.defines.push_back({"STRIDE_BN",    {BT? sb[b_order[0]] : sb[b_order[1]] }});
+  opts.defines.push_back({"USEB",         {BT? "b"    : "b"            }});
+  opts.defines.push_back({"BROADCAST_BK", {BT? ":, newaxis"   : ":, newaxis"   }});
+  opts.defines.push_back({"BROADCAST_BN", {BT? "newaxis, :"   : "newaxis, :"   }});
+  opts.defines.push_back({"SHAPE_B",      {BT? "TK, TN"       : "TK, TN"       }});
+  opts.defines.push_back({"STRIDE_BK",    {BT? sb[b_order[1]] : sb[b_order[0]] }});
+  opts.defines.push_back({"STRIDE_BN",    {BT? sb[b_order[0]] : sb[b_order[1]] }});
   // data-type
-  opt.defines.push_back({"TYPE", {ty}});
+  opts.defines.push_back({"TYPE", {ty}});
   // tile sizes
   if(mode == TEST) {
-    opt.defines.push_back({"TM", {std::to_string(TM)}});
-    opt.defines.push_back({"TN", {std::to_string(TN)}});
-    opt.defines.push_back({"TK", {std::to_string(TK)}});
-    opt.defines.push_back({"TZ", {"1"}});
-    opt.num_warps = {nwarp};
+    opts.defines.push_back({"TM", {std::to_string(TM)}});
+    opts.defines.push_back({"TN", {std::to_string(TN)}});
+    opts.defines.push_back({"TK", {std::to_string(TK)}});
+    opts.defines.push_back({"TZ", {"1"}});
+    opts.num_warps = {nwarp};
   }
   if(mode == BENCH) {
-    opt.defines.push_back({"TM", {"128"}});
-    opt.defines.push_back({"TN", {"128"}});
-    opt.defines.push_back({"TK", {"32"}});
-    opt.defines.push_back({"TZ", {"1"}});
-    opt.num_warps = {4};
+    opts.defines.push_back({"TM", {"128"}});
+    opts.defines.push_back({"TN", {"128"}});
+    opts.defines.push_back({"TK", {"16"}});
+    opts.defines.push_back({"TZ", {"1"}});
+    opts.num_warps = {4};
   }
 
   // kernels
-  rt::function function(src::dot, opt);
+  rt::function function(src::dot, opts);
   dot_arg_t args = {da->addr_as_uintptr_t(), db->addr_as_uintptr_t(), dc->addr_as_uintptr_t(),
                     1, M, N, K, lda, ldb, ldc, dlocks->addr_as_uintptr_t()};
 
-  auto grid = [M, N](const rt::function::options_t& x) {
-    return rt::grid_t{ceil(M, x.D<int>("TM")),
+  auto grid = [M, N](const rt::options_t& x) {
+    return rt::grid_t{ceil(M, x.D<int>("TM"))*
                       ceil(N, x.D<int>("TN")),
                       (size_t)x.D<int>("TZ")};
   };
@@ -163,6 +163,12 @@ void triton_dot(drv::context* context,  drv::stream* stream, bool AT, bool BT,
 //     bench.push_back(tflops(cublas_ms));
 //   }
   }
+
+//  rt::options_t opt;
+//  for(auto &x: opts.defines)
+//    opt.defines[x.first] = x.second[0];
+//  opt.num_warps = 1;
+//  std::cout << function.get_asm(rt::ASM_NV_PTX, device, opt) << std::endl;
 
   // test triton
   if(mode == TEST){
