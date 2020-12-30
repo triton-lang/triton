@@ -33,13 +33,15 @@ private:
 inline double bench(std::function<void()> const & op, driver::stream * stream, bool normalize = false)
 {
 //  const driver::device * device = stream->context()->device();
+  size_t warmup = 10;
+  size_t repeat = 50;
   timer tmr;
   std::vector<size_t> times;
   double total_time = 0;
-  op();
+  for(size_t i = 0; i < warmup; i++)
+    op();
   stream->synchronize();
   tmr.start();
-  size_t repeat = 200;
   for(size_t i = 0; i < repeat; i++){
     op();
   }

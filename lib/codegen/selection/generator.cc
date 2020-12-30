@@ -883,7 +883,6 @@ void generator::visit_hmma_dot(ir::dot_inst* dot, shared_tile *TA, shared_tile *
                                      builder_->CreateMul(off_a1, builder_->getInt32(stride_a1)));
     }
 
-
     int per_phase_b = swizzle_->get_per_phase(layout_b);
     int max_phase_b = swizzle_->get_max_phase(layout_b);
     int stride_b0 = is_b_row ? stride_bn : stride_bk;
