@@ -19,13 +19,13 @@ inline size_t ceil(size_t x, size_t y) {
 }
 
 inline rt::function::grid_fn_ty grid1d(size_t N) {
-  return [N](const rt::function::options_t& x) {
+  return [N](const rt::options_t& x) {
     return rt::grid_t{ceil(N, x.D<int>("TN"))};
   };
 }
 
 inline rt::function::grid_fn_ty grid2d(size_t M, size_t N) {
-  return [M, N](const rt::function::options_t& x) {
+  return [M, N](const rt::options_t& x) {
     return rt::grid_t{ceil(M, x.D<int>("TM")),
                       ceil(N, x.D<int>("TN"))};
   };
@@ -33,7 +33,7 @@ inline rt::function::grid_fn_ty grid2d(size_t M, size_t N) {
 
 inline rt::function::grid_fn_ty grid_nd(const std::vector<int32_t> &shape,
                                        const std::vector<std::string>& ts) {
-  return [&shape, &ts](const rt::function::options_t& x) {
+  return [&shape, &ts](const rt::options_t& x) {
     rt::grid_t ret;
     for(size_t d = 0; d < shape.size(); d++)
       ret.push_back(ceil(shape[d], x.D<int>(ts[d])));
@@ -163,7 +163,7 @@ for(size_t i = 0; i < hc.size(); i++)
     std::cout << i << " " << hc[i] << " " << rc[i] << std::endl;
     return false;
   }
-return true;
+  return true;
 }
 
 }

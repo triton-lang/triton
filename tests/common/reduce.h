@@ -95,7 +95,7 @@ void triton_reduce_nd(drv::context* context, drv::stream* stream, const std::vec
     y_strides.push_back(y_strides[d] + " * " + y_shapename[y_order[d]]);
 
   // options
-  rt::function::options_space_t opt;
+  rt::options_space_t opt;
   opt.defines.push_back({"TYPE", {ty}});
   for(int d = 0; d < rank_x; d++)
     opt.defines.push_back({"STRIDE_XS" + std::to_string(x_order[d]), {x_strides[d]}});

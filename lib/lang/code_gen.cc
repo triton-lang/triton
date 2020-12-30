@@ -56,10 +56,13 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
       return set_ret(bld_->create_dot(lhs, rhs, _0));
     }
     case Token::MASKED_DEREF: {
+      // TODO: FIXME
       ir::type* ret_ty = GenIRType(binary->Type(), *ctx_);
       ir::value* false_value = ir::undef_value::get(ret_ty->get_scalar_ty());
+      auto it = bld_->get_insert_block();
       if(ret_ty->is_tile_ty())
         false_value = bld_->create_splat(false_value, ret_ty->get_tile_shapes());
+      bld_->set_insert_point(it);
       return set_ret(bld_->create_masked_load(rhs, lhs, false_value));
     }
     case Token::ELLIPSIS: {
@@ -468,10 +471,10 @@ void Generator::VisitForStmt(ForStmt *forStmt) {
   });
   if(init_)
     VisitStmt(init_);
-//  VisitExpr(cond_);
-//  ir::value *cond = ret_;
-//  bld_->create_cond_br(cond, loop_bb, next_bb);
-  bld_->create_br(loop_bb);
+  VisitExpr(cond_);
+  ir::value *cond = ret_;
+  bld_->create_cond_br(cond, loop_bb, next_bb);
+//  bld_->create_br(loop_bb);
   bld_->set_insert_point(loop_bb);
   if(body_)
     VisitStmt(body_);

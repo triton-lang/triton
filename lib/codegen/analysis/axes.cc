@@ -79,7 +79,7 @@ void axes::update_graph_dot(ir::instruction *i) {
     graph_.add_edge({dot, d}, {D, d});
 }
 
-void axes::update_graph_elementwise(ir::instruction *i) {
+void axes::update_graph_elementwise(ir::instruction *i, bool connect_ret) {
   if(i->get_num_operands() == 0)
     return;
   ir::value *op = i->get_operand(0);
@@ -89,7 +89,7 @@ void axes::update_graph_elementwise(ir::instruction *i) {
   for(unsigned d = 0; d < rank; d++)
   for(ir::value* opx: i->ops())
   for(ir::value* opy: i->ops()){
-    if(!i->get_type()->is_void_ty())
+    if(connect_ret && !i->get_type()->is_void_ty())
       graph_.add_edge({i, d}, {opx, d});
     graph_.add_edge({opx, d}, {opy, d});
   }
@@ -111,7 +111,8 @@ void axes::update_graph(ir::instruction *i) {
     case ir::INST_TRANS:            return update_graph_trans(i);
     case ir::INST_BROADCAST:        return update_graph_broadcast(i);
     case ir::INST_DOT:              return update_graph_dot(i);
-    case ir::INST_COPY_TO_SHARED:   return update_graph_no_edge(i);;
+    case ir::INST_COPY_TO_SHARED:   return update_graph_no_edge(i);
+    case ir::INST_MASKED_LOAD_ASYNC:return update_graph_elementwise(i, false);
     case ir::INST_COPY_FROM_SHARED: return update_graph_no_edge(i);
     case ir::INST_RECOALESCE:       return update_graph_no_edge(i);
     default:                        return update_graph_elementwise(i);

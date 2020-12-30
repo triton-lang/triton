@@ -72,6 +72,7 @@ public:
       case noalias: return ".noalias";
       case aligned: return ".aligned(" + std::to_string(value_) + ")";
       case multiple_of: return ".readonly";
+      case retune: return ".retunr";
       default: break;
     }
     assert(false);

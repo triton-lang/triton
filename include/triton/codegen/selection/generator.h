@@ -36,6 +36,7 @@ class allocation;
 class cts;
 class axes;
 class layouts;
+class swizzle;
 }
 // typedef
 typedef llvm::IRBuilder<llvm::ConstantFolder,
@@ -51,6 +52,7 @@ typedef llvm::Function Function;
 typedef std::vector<Value*> indices_t;
 // forward
 class machine_data_layout;
+class machine_shared_layout;
 class tile;
 class shared_tile;
 class distributed_tile;
@@ -83,6 +85,7 @@ public:
             analysis::layouts *layouts,
             analysis::align *alignment,
             analysis::allocation *alloc,
+            analysis::swizzle *swizzle,
             target *tgt,
             unsigned num_warps);
 
@@ -126,9 +129,11 @@ public:
   void visit_select_inst(ir::select_inst*);
 
   void visit_recoalesce_inst(ir::recoalesce_inst*);
+  void visit_masked_load_async_inst(ir::masked_load_async_inst*);
   void visit_copy_to_shared_inst(ir::copy_to_shared_inst*);
   void visit_copy_from_shared_inst(ir::copy_from_shared_inst*);
   void visit_barrier_inst(ir::barrier_inst*);
+  void visit_async_wait_inst(ir::async_wait_inst*);
   void visit_make_range_dyn(ir::make_range_dyn*);
   void visit_make_range(ir::make_range*);
 
@@ -142,7 +147,7 @@ public:
   void visit_basic_block(ir::basic_block*);
   void visit_argument(ir::argument*);
 
-  void visit_layout_hmma_884(analysis::mma884_layout*);
+  void visit_layout_hmma_884(analysis::mma_layout*);
   void visit_layout_scanline(analysis::scanline_layout*);
   void visit_layout_shared(analysis::shared_layout*);
 
@@ -155,6 +160,7 @@ private:
 
   std::map<const analysis::data_layout*, machine_data_layout*> machine_layouts_;
   analysis::axes *a_axes_;
+  analysis::swizzle *swizzle_;
   std::map<unsigned, distributed_axis> axes_;
   std::map<ir::value *, Value *> vmap_;
   std::map<ir::value *, tile *> tmap_;
@@ -165,7 +171,12 @@ private:
   Value *sh_mem_ptr_;
   unsigned num_warps_;
 
+  std::map<machine_shared_layout*, std::map<ir::instruction*, Value*>> read_off;
+  std::map<machine_shared_layout*, std::map<ir::instruction*, Value*>> write_off;
+
   std::set<ir::value*> seen_;
+
+  std::map<analysis::mma_layout*, std::vector<int>> rep_;
 };
 
 }

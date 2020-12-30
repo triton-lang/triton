@@ -48,46 +48,6 @@ std::unique_ptr<codegen::target> host_device::make_target() const {
 //         CUDA             //
 /* ------------------------ */
 
-// architecture
-cu_device::Architecture cu_device::nv_arch(std::pair<unsigned int, unsigned int> sm) const {
-  switch(sm.first) {
-   case 7:
-     switch(sm.second){
-     case 0: return Architecture::SM_7_0;
-     }
-
-  case 6:
-    switch(sm.second){
-    case 0: return Architecture::SM_6_0;
-    case 1: return Architecture::SM_6_1;
-    }
-
-  case 5:
-    switch(sm.second){
-    case 0: return Architecture::SM_5_0;
-    case 2: return Architecture::SM_5_2;
-    default: return Architecture::UNKNOWN;
-    }
-
-  case 3:
-    switch(sm.second){
-    case 0: return Architecture::SM_3_0;
-    case 5: return Architecture::SM_3_5;
-    case 7: return Architecture::SM_3_7;
-    default: return Architecture::UNKNOWN;
-    }
-
-  case 2:
-    switch(sm.second){
-    case 0: return Architecture::SM_2_0;
-    case 1: return Architecture::SM_2_1;
-    default: return Architecture::UNKNOWN;
-    }
-
-  default: return Architecture::UNKNOWN;
-  }
-}
-
 // information query
 template<CUdevice_attribute attr>
 int cu_device::cuGetInfo() const{
@@ -106,11 +66,6 @@ nvmlDevice_t cu_device::nvml_device() const{
     return map.insert(std::make_pair(key, device)).first->second;
   }
   return map.at(key);
-}
-
-// architecture
-cu_device::Architecture cu_device::architecture() const{
-  return nv_arch(compute_capability());
 }
 
 // number of address bits
@@ -133,17 +88,17 @@ std::string cu_device::pci_bus_id() const{
 }
 
 // force the device to be interpreted as a particular cc
-void cu_device::interpret_as(std::pair<size_t, size_t> cc){
-  interpreted_as_ = std::make_shared<std::pair<size_t, size_t>>(cc);
+void cu_device::interpret_as(int cc){
+  interpreted_as_ = std::make_shared<int>(cc);
 }
 
 // compute capability
-std::pair<size_t, size_t> cu_device::compute_capability() const {
+int cu_device::compute_capability() const {
   if(interpreted_as_)
     return *interpreted_as_;
-  size_t _major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>();
-  size_t _minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>();
-  return std::make_pair(_major, _minor);
+  size_t major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>();
+  size_t minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>();
+  return major*10 + minor;
 }
 
 // maximum number of threads per block
@@ -218,7 +173,7 @@ std::string cu_device::infos() const{
 
 // target
 std::unique_ptr<codegen::target> cu_device::make_target() const {
-  return std::unique_ptr<codegen::nvidia_cu_target>(new codegen::nvidia_cu_target());
+  return std::unique_ptr<codegen::nvidia_cu_target>(new codegen::nvidia_cu_target(compute_capability()));
 }
 
 

@@ -68,8 +68,17 @@ class kernel:
     size = sum([sizes[x] for x in arg_types])
     self.tys = ''.join([codes[x] for x in arg_types])
 
-  def ptx(self, device, **kwargs):
+  def asm(self, mode, device, **kwargs):
     dev_id = device.index
+    # assembly mode
+    supported = {
+      'ptx': libtriton.asm_mode.ptx,
+      'sass': libtriton.asm_mode.sass,
+    }
+    if mode not in supported:
+      raise('ASM mode must be in ', supported.keys())
+    mode = supported[mode]
+    # disambiguates #defines
     libtriton.register_fn((self.op_id, dev_id), self.src, self.opt)
     def _single_value_or_err(x, key):
       if isinstance(x, list) and len(x) == 1:
@@ -86,7 +95,8 @@ class kernel:
     opt = libtriton.options()
     opt.num_warps = _single_value_or_err(self.opt.num_warps, 'num_warps')
     opt.defines = defines
-    return libtriton.get_fn_ptx((self.op_id, dev_id), opt)
+    # run
+    return libtriton.get_fn_asm((self.op_id, dev_id), mode, opt)
 
   def __call__(self, *args, **kwargs):
     if 'TRITON_DEBUG_MODE' in os.environ:
