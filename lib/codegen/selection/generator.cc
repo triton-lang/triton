@@ -1565,41 +1565,20 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   int in_ld = in_layout->get_shape()[in_order[0]] / in_layout->mts(in_order[0]);
   int n_shared_1 = std::max<int>(per_phase*max_phase / in_layout->mts(in_order[1]), 1);
   int n_shared_0 = std::max<int>(in_vec    / out_vec, 1);
-  std::vector<std::vector<Value*>> shared(n_shared_1);
-  for(size_t i = 0; i < n_shared_1; i++){
-    Value* base = mret->get_pointer();
-    indices_t idx = marg->get_ordered_indices(i*in_ld);
-    // phase
-    Value* phase = builder_->CreateUDiv(idx[in_order[1]], builder_->getInt32(per_phase));
-    phase = builder_->CreateURem(phase, builder_->getInt32(max_phase));
-    Value* off_1 = builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]));
-    // off
-    for(size_t j = 0; j < n_shared_0; j++){
-      Value* off_0  = builder_->CreateAdd(idx[in_order[0]], builder_->getInt32(j*out_vec));
-      off_0 = builder_->CreateExactUDiv(off_0, builder_->getInt32(min_vec));
-      off_0 = builder_->CreateAdd(builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(off_0, builder_->getInt32(s)),
-                                                                          phase),
-                                                      builder_->getInt32(s)),
-                                  builder_->CreateURem(off_0, builder_->getInt32(s)));
-      off_0 = builder_->CreateMul(off_0 , builder_->getInt32(min_vec));
-      Value* off = builder_->CreateAdd(off_0, off_1);
-      shared[i].push_back(builder_->CreateGEP(base, {off}));
-    }
-  }
-    // default implementation
-  std::map<unsigned, Value*> packets;
+
+  BasicBlock* CurrBB = builder_->GetInsertBlock();
+  BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
+
+  // default implementation
+  Value *current = nullptr;
+  std::map<std::pair<int, int>, Value*> ptrs;
   for_each(arg, [&](indices_t idx){
-    unsigned linear = marg->get_linear_index(idx);
-    unsigned id = linear / min_vec;
+    int linear = marg->get_linear_index(idx);
     Value *in_value = marg->get_value(idx);
     if(linear % min_vec == 0)
-      packets[id] = UndefValue::get(VectorType::get(in_value->getType(), min_vec));
-    packets[id] = builder_->CreateInsertElement(packets.at(id), in_value, linear % min_vec);
-  });
-  //
-  for_each(arg, [&](indices_t idx){
-    unsigned linear = marg->get_linear_index(idx);
-    if(linear % min_vec == 0){
+      current = UndefValue::get(VectorType::get(in_value->getType(), min_vec));
+    current = builder_->CreateInsertElement(current, in_value, linear % min_vec);
+    if(linear % min_vec == min_vec - 1){
       unsigned id = linear / min_vec;
       // input ptr info
       int id_0 = id % (in_ld/min_vec);
@@ -1607,11 +1586,28 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
       int off_0 = id_0 / n_shared_0 * n_shared_0 * in_layout->mts(in_order[0]);
       int off_1 = id_1 / n_shared_1 * n_shared_1 * in_layout->mts(in_order[1]);
       int off = (off_1*mret->get_shapes()[in_order[0]] + off_0);
-      Value* base = shared[id_1  % n_shared_1][id_0 % n_shared_0];
-      Value* ptr = builder_->CreateGEP(base, {builder_->getInt32(off)});
-      ptr = builder_->CreateBitCast(ptr, packets[0]->getType()->getPointerTo(3));
+      std::pair<int, int> key = {id_1  % n_shared_1, id_0 % n_shared_0};
+      if(ptrs.find(key) == ptrs.end()){
+        builder_->SetInsertPoint(FirstBB->getTerminator());
+        indices_t idx = marg->get_ordered_indices(key.first*in_ld);
+        Value* phase = builder_->CreateUDiv(idx[in_order[1]], builder_->getInt32(per_phase));
+        phase = builder_->CreateURem(phase, builder_->getInt32(max_phase));
+        Value* off_1 = builder_->CreateMul(idx[in_order[1]], builder_->getInt32(mret->get_shapes()[in_order[0]]));
+        Value* off_0  = builder_->CreateAdd(idx[in_order[0]], builder_->getInt32(key.second*out_vec));
+        off_0 = builder_->CreateExactUDiv(off_0, builder_->getInt32(min_vec));
+        off_0 = builder_->CreateAdd(builder_->CreateMul(builder_->CreateXor(builder_->CreateUDiv(off_0, builder_->getInt32(s)),
+                                                                            phase),
+                                                        builder_->getInt32(s)),
+                                    builder_->CreateURem(off_0, builder_->getInt32(s)));
+        off_0 = builder_->CreateMul(off_0 , builder_->getInt32(min_vec));
+        Value* off = builder_->CreateAdd(off_0, off_1);
+        builder_->SetInsertPoint(CurrBB);
+        ptrs[key] = builder_->CreateGEP(mret->get_pointer(), {off});
+      }
+      Value* ptr = builder_->CreateGEP(ptrs[key], {builder_->getInt32(off)});
+      ptr = builder_->CreateBitCast(ptr, current->getType()->getPointerTo(3));
       // asm
-      builder_->CreateStore(packets[id], ptr);
+      builder_->CreateStore(current, ptr);
     }
   });
 }

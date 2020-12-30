@@ -331,6 +331,7 @@ cu_module::cu_module(driver::device* device, std::string const & source) : modul
     std::string err(_err);
     std::string log(_log);
 
+//    std::cout << log << std::endl;
     std::smatch match;
     std::regex expr ("\\b([0-9]+) bytes spill");
     spilled_ = 0;

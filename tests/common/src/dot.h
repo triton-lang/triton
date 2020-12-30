@@ -21,9 +21,8 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
       int pidz = get_program_id(2);
       int gridm = M / TM;
       int gridn = N / TN;
-      int pidn = pid % gridn;
-      int pidm = pid / gridn;
-      /*
+      //int pidn = pid % gridn;
+      //int pidm = pid / gridn;
       int stgridm = (gridm + STM - 1) / STM;
       int stgridn = (gridn + STN - 1) / STN;
       int stid = pid / (STM * STN);
@@ -34,7 +33,7 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
       int lanen = laneid % STN;
       int pidm = stm*STM + lanem;
       int pidn = stn*STN + lanen;
-      */
+
 
       int rm[TM] = pidm * TM + 0 ... TM;
       int rn[TN] = pidn * TN + 0 ... TN;

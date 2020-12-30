@@ -250,7 +250,7 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::d
   swizzle.run(module);
   isel.visit(module, *llvm);
   std::unique_ptr<driver::module> res(driver::module::create(device, std::move(llvm)));
-  if(res->spilled() > 128)
+  if(res->spilled() > 256)
     throw exception::out_of_registers();
   return res;
 }

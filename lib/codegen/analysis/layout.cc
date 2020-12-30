@@ -148,8 +148,8 @@ mma_layout::mma_layout(size_t num_warps,
     auto ord_b = layout_b->get_order();
     bool is_a_row = ord_a[0] != 0;
     bool is_b_row = ord_b[0] != 0;
-    int pack_size_0 = is_a_row ? 1 : 1;
-    int pack_size_1 = is_b_row ? 1 : 1;
+    int pack_size_0 = is_a_row ? 1 : 2;
+    int pack_size_1 = is_b_row ? 2 : 1;
     rep_ = {2*pack_size_0, 2*pack_size_1, 1};
     spw_ = {fpw_[0]*8*pack_size_0, fpw_[1]*8*pack_size_1, 1};
   }
