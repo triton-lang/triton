@@ -25,7 +25,7 @@ void swizzle::run(ir::module &mod) {
         per_phase_[layout] = std::max<int>(128 / (in_layout->mts(ord[0])*in_layout->nts(ord[0])*dtsize), 1);
         int inner = layout->is_hmma_dot_a() ? 0 : 1;
         vec_[layout] = 8;
-        max_phase_[layout] = 8 / per_phase_[layout];
+        max_phase_[layout] = (ord[inner] == 1 ? 8 : 4) / per_phase_[layout];
       }
       else{
         per_phase_[layout] = std::max<int>(128 / (in_layout->mts(ord[0])*in_layout->nts(ord[0])*dtsize), 1);

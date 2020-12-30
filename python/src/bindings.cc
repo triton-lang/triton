@@ -38,7 +38,7 @@ void delete_grid(const map_key_t& key) {
 
 void register_fn(const map_key_t& key,
                  const std::string& src,
-                 const rt::function::options_space_t& opt) {
+                 const rt::options_space_t& opt) {
   if(id_fn_map.find(key) == id_fn_map.end())
     id_fn_map[key].reset(new rt::function(src, opt, ""));
 }
@@ -47,7 +47,7 @@ void delete_fn(const map_key_t& key) {
   id_fn_map.erase(key);
 }
 
-std::string get_fn_asm(const map_key_t& key, rt::asm_mode_t mode, const rt::function::options_t& opt) {
+std::string get_fn_asm(const map_key_t& key, rt::asm_mode_t mode, const rt::options_t& opt) {
   triton::driver::cu_device device(key.second, false);
   return id_fn_map[key]->get_asm(mode, &device, opt);
 }
@@ -63,7 +63,7 @@ size_t make_op_id() {
 
 /* Function signature */
 void make_module(const std::string& src, ir::module* ir,
-                 const runtime::function::options_space_t& opt) {
+                 const runtime::options_space_t& opt) {
   std::string copy = triton::runtime::function::preheader() + src;
   // pre-process
   TokenSequence tokens;
@@ -80,7 +80,7 @@ void make_module(const std::string& src, ir::module* ir,
 }
 
 std::vector<rt::arg_type> get_fn_signature(const std::string& src,
-                                           const runtime::function::options_space_t& opt) {
+                                           const runtime::options_space_t& opt) {
   // triton-ir code-gen
   ir::context ctx;
   auto ir = std::shared_ptr<ir::module>(new ir::module("", ctx));
@@ -95,8 +95,8 @@ std::vector<rt::arg_type> get_fn_signature(const std::string& src,
   return ret;
 }
 
-typedef triton::runtime::function::options_t options_t;
-typedef triton::runtime::function::options_space_t options_space_t;
+typedef triton::runtime::options_t options_t;
+typedef triton::runtime::options_space_t options_space_t;
 
 PYBIND11_MODULE(libtriton, m) {
     m.doc() = "Python bindings to the C++ Triton API";

@@ -2,8 +2,8 @@ namespace src {
 
     const char *dot =
 R"(
-#define STM 4
-#define STN 4
+#define STM 8
+#define STN 8
 
 __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
                     TYPE * B __noalias __readonly __aligned(16),
@@ -19,67 +19,62 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
       // prologue
       int pid = get_program_id(0);
       int pidz = get_program_id(2);
-      int gridm = M / TM;
-      int gridn = N / TN;
-      //int pidn = pid % gridn;
-      //int pidm = pid / gridn;
-      int stgridm = (gridm + STM - 1) / STM;
-      int stgridn = (gridn + STN - 1) / STN;
-      int stid = pid / (STM * STN);
-      int laneid = pid % (STM * STN);
-      int stm = stid / stgridn;
-      int stn = stid % stgridn;
-      int lanem = laneid / STN;
-      int lanen = laneid % STN;
+      int gridm = (M + TM - 1) / TM;
+      int gridn = (N + TN - 1) / TN;
+      int width = STM*gridn;
+      int stm = pid / width;
+      int RSTM  = min(gridm - stm*STM, STM);
+      int stn =  (pid % width) / (RSTM*STN);
+      int RSTN = min(gridn - stn*STN, STN);
+      int laneid = pid % (RSTM * RSTN);
+      int lanem = laneid / RSTN;
+      int lanen = laneid % RSTN;
       int pidm = stm*STM + lanem;
       int pidn = stn*STN + lanen;
-
-
       int rm[TM] = pidm * TM + 0 ... TM;
       int rn[TN] = pidn * TN + 0 ... TN;
 
       // reduction splitting
       K           = K / TZ;
       int rk[TK]  = pidz * K + 0 ... TK;
-
       // pointers to operands
-      int offa[SHAPE_A] = rk[BROADCAST_AK] * STRIDE_AK + rm[BROADCAST_AM] * STRIDE_AM;
-      int offb[SHAPE_B] = rk[BROADCAST_BK] * STRIDE_BK + rn[BROADCAST_BN] * STRIDE_BN;
-      TYPE* pa[SHAPE_A] = A + offa;
-      TYPE* pb[SHAPE_B] = B + offb;
-
+      int offa[TM, TK] = rk[newaxis, :] * STRIDE_AK + rm[:, newaxis] * STRIDE_AM;
+      int offb[TK, TN] = rk[:, newaxis] * STRIDE_BK + rn[newaxis, :] * STRIDE_BN;
+      TYPE* pa[TM, TK] = A + offa;
+      TYPE* pb[TK, TN] = B + offb;
       // prefetches operands
-      bool checka[SHAPE_A] = rk[BROADCAST_AK] < K;
-      bool checkb[SHAPE_B] = rk[BROADCAST_BK] < K;
-      TYPE a[SHAPE_A] = checka ? *pa : 0;
-      TYPE b[SHAPE_B] = checkb ? *pb : 0;
-
+      bool checka[TM, TK] = rk[newaxis, :] < K;
+      bool checkb[TK, TN] = rk[:, newaxis] < K;
+      TYPE a[TM, TK] = checka ? *pa : 0;
+      TYPE b[TK, TN] = checkb ? *pb : 0;
+      pa += TK * STRIDE_AK;
+      pb += TK * STRIDE_BK;
       // reduction loop
       float acc[TM, TN] = 0;
       for(int k = K; k > 0; k -= TK){
-        bool checka[SHAPE_A] = k > TK;
-        bool checkb[SHAPE_B] = k > TK;
-        pa += TK * STRIDE_AK;
-        pb += TK * STRIDE_BK;
-        acc += USEA @ USEB;
+        bool checka[TM, TK] = k > TK;
+        bool checkb[TK, TN] = k > TK;
+        acc += a @ b;
         a = *?(checka)pa;
         b = *?(checkb)pb;
+        pa += TK * STRIDE_AK;
+        pb += TK * STRIDE_BK;
       }
       acc = acc * alpha;
       TYPE c[TM, TN] = acc;
 
       // epilogue
-      int rxm[TM] = pidm * TM + 0 ... TM;
-      int rxn[TN] = pidn * TN + 0 ... TN;
-      int offc[TM, TN] = rxm[:, newaxis] * ldc + rxn[newaxis, :];
+      int rcm[TM] = pidm * TM + 0 ... TM;
+      int rcn[TN] = pidn * TN + 0 ... TN;
+      int offc[TM, TN] = rcm[:, newaxis] * ldc + rcn[newaxis, :];
       TYPE* pc[TM, TN] = C + offc;
-      bool checkc[TM, TN] = (rxm[:, newaxis] < M) && (rxn[newaxis, :] < N);
-
+      bool checkc[TM, TN] = rcm[:, newaxis] < M &&
+                            rcn[newaxis, :] < N;
 #if (TZ==1)
       *?(checkc) pc = c;
 #else
       // accumulate partial result using spin-locks
-      int *plock  = locks + pid;
+      int *plock  = locks + rid;
       int *pcount = plock + get_num_programs(0) * get_num_programs(1);
       for(int repeat = 1; repeat == 1; repeat = atomic_cas(plock, 0, 1));
       int count = *pcount;
