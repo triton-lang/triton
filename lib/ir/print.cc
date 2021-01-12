@@ -65,7 +65,12 @@ void print(module &mod, std::ostream& os) {
             os << get_name(ops[i], cnt++);
           os << (i < num_ops - 1?", ":"");
         }
-        os << ";" << std::endl;
+        os << ";";
+//        os << " (";
+//        for(ir::user* usr: inst->get_users())
+//          os << get_name(usr, cnt++) << ", " ;
+//        os << " )";
+        os << std::endl;
       }
     }
     os << "}" << std::endl;

@@ -6,6 +6,7 @@
 #include <map>
 #include <vector>
 #include <string>
+#include <sstream>
 #include <memory>
 #include <functional>
 #include <set>
@@ -13,6 +14,7 @@
 #include "triton/ir/context.h"
 #include "triton/codegen/target.h"
 #include "triton/runtime/arg.h"
+#include "triton/runtime/error.h"
 
 namespace llvm {
   class Module;
@@ -56,32 +58,42 @@ template<typename T> inline T convert(const std::string& name);
 template<> inline long convert<long>(const std::string& name) { return std::stol(name); }
 template<> inline int convert<int>(const std::string& name) { return std::stoi(name); }
 
+template<class T>
+void add_arg(std::stringstream& ss, T arg) {
+  ss.write((char*)&arg, sizeof(T));
+}
+
+enum asm_mode_t {
+  ASM_LLIR,
+  ASM_NV_PTX,
+  ASM_NV_SASS
+};
+
+struct options_space_t {
+  typedef std::pair<std::string, std::vector<std::string>> define_t;
+  std::vector<define_t> defines;
+  std::vector<int> num_warps;
+  std::vector<int> recompile_key;
+};
+
+struct options_t {
+  template<class T>
+  T D(const std::string& name) const {
+    return convert<T>(defines.at(name));
+  }
+  bool operator<(const options_t& other) const {
+    return std::make_pair(defines, num_warps) <
+           std::make_pair(other.defines, other.num_warps);
+  }
+  std::string to_str() const;
+
+  std::map<std::string, std::string> defines;
+  size_t num_warps;
+};
+
 class function {
 public:
-  struct options_space_t {
-    typedef std::pair<std::string, std::vector<std::string>> define_t;
-    std::vector<define_t> defines;
-    std::vector<int> num_warps;
-    std::vector<int> recompile_key;
-  };
-
-  struct options_t {
-    template<class T>
-    T D(const std::string& name) const {
-      return convert<T>(defines.at(name));
-    }
-    bool operator<(const options_t& other) const {
-      return std::make_pair(defines, num_warps) <
-             std::make_pair(other.defines, other.num_warps);
-    }
-    std::string to_str() const;
-
-    std::map<std::string, std::string> defines;
-    size_t num_warps;
-  };
-
   typedef std::function<grid_t(const options_t&)> grid_fn_ty;
-
 
 private:
   class caller {
@@ -135,7 +147,7 @@ public:
   void operator()(void** args, size_t args_size, const grid_t& grid, driver::stream* stream, driver::device* device);
   void operator()(void** args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream, driver::device* device);
   void set_cst(const char* name, void* data, size_t n_bytes);
-  std::string ptx(driver::device *device, const options_t& opt);
+  std::string get_asm(asm_mode_t mode, driver::device *device, const options_t& opt);
 
 private:
   std::map<std::string, std::vector<char>> cst_;
