@@ -7,7 +7,7 @@ namespace triton{
 namespace ir{
 
 
-enum binary_op_t {
+enum binary_op_t: unsigned int{
   Add,
   FAdd,
   Sub,
@@ -28,7 +28,7 @@ enum binary_op_t {
   Xor
 };
 
-enum cast_op_t {
+enum cast_op_t: unsigned int {
   Trunc,
   ZExt,
   SExt,
@@ -44,7 +44,7 @@ enum cast_op_t {
   AddrSpaceCast
 };
 
-enum cmp_pred_t {
+enum cmp_pred_t: unsigned int {
   FIRST_FCMP_PREDICATE,
   FCMP_FALSE,
   FCMP_OEQ,
@@ -113,6 +113,7 @@ enum value_id_t: unsigned {
   // io
   INST_UNMASKED_LOAD,
   INST_MASKED_LOAD,
+  INST_MASKED_LOAD_ASYNC,
   INST_UNMASKED_STORE,
   INST_MASKED_STORE,
   // retile
@@ -139,6 +140,7 @@ enum value_id_t: unsigned {
   INST_COPY_FROM_SHARED,
   INST_RECOALESCE,
   INST_BARRIER,
+  INST_ASYNC_WAIT,
   INST_MAKE_RANGE_DYN,
   INST_MAKE_RANGE_STA,
   INST_MAKE_RANGE

@@ -1,7 +1,4 @@
 from .kernel import *
-import triton.ops
-#import triton.nn
-
 
 # clean-up libtriton resources
 import atexit

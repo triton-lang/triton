@@ -68,9 +68,10 @@ unsigned user::get_num_hidden() const {
 
 value::users_t::iterator user::replace_uses_of_with(value *before, value *after) {
   for(size_t i = 0; i < ops_.size(); i++)
-    if(ops_[i] == before)
+    if(ops_[i] == before){
       ops_[i] = after;
-  after->add_use(this);
+      after->add_use(this);
+    }
   return before->erase_use(this);
 }
 

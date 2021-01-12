@@ -35,6 +35,8 @@ namespace codegen{
 namespace triton{
 namespace codegen{
 
+class nvidia_cu_target;
+
 class target {
 public:
   target(bool is_gpu): is_gpu_(is_gpu){}
@@ -47,6 +49,7 @@ public:
   virtual Value* get_block_id(Module *module, Builder& builder, unsigned ax) = 0;
   virtual Value* get_num_blocks(Module *module, Builder& builder, unsigned ax) = 0;
   virtual unsigned guaranteed_alignment() = 0;
+  nvidia_cu_target* as_nvidia();
   bool is_gpu() const;
 
 private:
@@ -68,7 +71,7 @@ public:
 
 class nvidia_cu_target: public target {
 public:
-  nvidia_cu_target(): target(true){}
+  nvidia_cu_target(int sm): target(true), sm_(sm){}
   void set_kernel(Builder& builder, LLVMContext &ctx, Module *module, Function* fn);
   Instruction* add_barrier(Module *module, Builder& builder);
   Instruction* add_memfence(Module *module, Builder& builder);
@@ -76,7 +79,11 @@ public:
   Value* get_local_id(Module *module, Builder& builder, unsigned ax);
   Value* get_block_id(Module *module, Builder& builder, unsigned ax);
   Value* get_num_blocks(Module *module, Builder& builder, unsigned ax);
+  int sm() { return sm_; }
   unsigned guaranteed_alignment() { return 16; }
+
+private:
+  int sm_;
 };
 
 class cpu_target: public target {

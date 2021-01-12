@@ -66,7 +66,7 @@ void coalesce::run(ir::module &mod) {
 
 
   for(size_t id = 0; id < num_groups; id++) {
-    if(!layout_->get(id)->to_mma884())
+    if(!layout_->get(id)->to_mma())
       continue;
     // extract memory stores
     const auto& values = layout_->values_of(id);

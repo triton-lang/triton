@@ -1,6 +1,7 @@
 #ifndef TDL_INCLUDE_CODEGEN_OPTIMIZE_TRANS_H
 #define TDL_INCLUDE_CODEGEN_OPTIMIZE_TRANS_H
 
+#include "triton/codegen/target.h"
 
 namespace triton {
 
@@ -27,12 +28,16 @@ private:
   bool rewrite_mult(ir::instruction *value, ir::builder& builder);
   bool rewrite_unit_red(ir::instruction *value, ir::builder& builder);
   bool rewrite_gep_ptr_min_off_plus_off(ir::instruction *value, ir::builder& builder);
+  bool rewrite_load_to_shared(ir::instruction *value, ir::builder& builder);
 
 private:
 
 public:
-  peephole() {}
+  peephole(target* tgt): tgt_(tgt) {}
   void run(ir::module &mod);
+
+private:
+  target* tgt_;
 };
 
 

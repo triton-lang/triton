@@ -25,7 +25,7 @@ class axes;
 class align;
 class layout_visitor;
 class data_layout;
-class mma884_layout;
+class mma_layout;
 class scanline_layout;
 class shared_layout;
 
@@ -33,7 +33,7 @@ class shared_layout;
 class layout_visitor {
 public:
   virtual void visit_layout(data_layout *);
-  virtual void visit_layout_hmma_884(mma884_layout*) = 0;
+  virtual void visit_layout_mma(mma_layout*) = 0;
   virtual void visit_layout_scanline(scanline_layout*) = 0;
   virtual void visit_layout_shared(shared_layout*) = 0;
 };
@@ -41,7 +41,7 @@ public:
 class data_layout {
 protected:
   enum id_t {
-    HMMA_884,
+    MMA,
     SCANLINE,
     SHARED
   };
@@ -68,7 +68,7 @@ public:
   // visitor
   virtual void accept(layout_visitor* vst) = 0;
   // downcast
-  mma884_layout* to_mma884()          { return downcast<mma884_layout>(HMMA_884); }
+  mma_layout* to_mma()          { return downcast<mma_layout>(MMA); }
   scanline_layout* to_scanline()      { return downcast<scanline_layout>(SCANLINE); }
   shared_layout* to_shared()          { return downcast<shared_layout>(SHARED); }
   // accessors
@@ -77,9 +77,10 @@ public:
   const order_t& get_order() const    { return order_; }
   const values_t& get_values() const  { return values_;}
   int get_axis(size_t k) const        { return axes_.at(k); }
+  std::vector<int> get_axes() const		{ return axes_; }
   const int get_order(size_t k) const { return order_.at(k); }
   // find the position of given axis
-  size_t find_axis(int to_find) const;
+  int find_axis(int to_find) const;
 
 
 private:
@@ -92,21 +93,29 @@ protected:
   shape_t shape_;
 };
 
-class mma884_layout: public data_layout {
+class mma_layout: public data_layout {
 public:
-  mma884_layout(size_t num_warps,
+  mma_layout(size_t num_warps,
                 const std::vector<int>& axes,
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values,
-                analysis::align* align);
-  void accept(layout_visitor* vst) { vst->visit_layout_hmma_884(this); }
+                analysis::align* align, target *tgt,
+             shared_layout* layout_a,
+             shared_layout* layout_b);
+  void accept(layout_visitor* vst) { vst->visit_layout_mma(this); }
   // accessor
   int fpw(size_t k) { return fpw_.at(k); }
   int wpt(size_t k) { return wpt_.at(k); }
+  int spw(size_t k) { return spw_.at(k); }
+  int spt(size_t k) { return spt_.at(k); }
+  int rep(size_t k) { return rep_.at(k); }
 
 private:
   std::vector<int> fpw_;
+  std::vector<int> spw_;
   std::vector<int> wpt_;
+  std::vector<int> spt_;
+  std::vector<int> rep_;
 };
 
 struct scanline_layout: public data_layout {
@@ -138,7 +147,7 @@ private:
   static void extract_double_bufferable(ir::value *v, std::shared_ptr<double_buffer_info_t>& res);
 
 public:
-  shared_layout(const data_layout *arg,
+  shared_layout(data_layout *arg,
                 const std::vector<int>& axes,
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values_,
@@ -149,11 +158,22 @@ public:
   size_t get_size()                         { return size_; }
   ir::type* get_type()                      { return ty_; }
   double_buffer_info_t* get_double_buffer() { return double_buffer_.get(); }
+  size_t get_num_per_phase()                { return num_per_phase_; }
+  ir::value* hmma_dot_a()                      { return hmma_dot_a_; }
+  ir::value* hmma_dot_b()                      { return hmma_dot_b_; }
+  void set_mma_vec(int mma_vec)             { mma_vec_ = mma_vec; }
+  int  get_mma_vec()                        { return mma_vec_;}
+  data_layout* get_arg_layout()             { return arg_layout_; }
 
 private:
   size_t size_;
   ir::type *ty_;
   std::shared_ptr<double_buffer_info_t> double_buffer_;
+  size_t num_per_phase_;
+  ir::value* hmma_dot_a_;
+  ir::value* hmma_dot_b_;
+  data_layout* arg_layout_;
+  int mma_vec_;
 };
 
 

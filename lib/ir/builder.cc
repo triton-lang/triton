@@ -1,5 +1,6 @@
 #include <string>
 #include <algorithm>
+#include <iostream>
 #include "triton/ir/basic_block.h"
 #include "triton/ir/builder.h"
 #include "triton/ir/constant.h"
@@ -253,6 +254,15 @@ DEFINE_FCMP_INSTR(ONE, cmp_pred_t::FCMP_ONE)
 
 value *builder::create_load(value *ptr, const std::string &name){
   return insert(unmasked_load_inst::create(ptr, name));
+//  type  *ty  = ptr->get_type()->get_pointer_element_ty();
+//  value *mask   = constant_int::get(get_int1_ty(), 1);
+//  value *undef  = undef_value::get(ty);
+//  if(ptr->get_type()->is_tile_ty()){
+//    auto shapes = ptr->get_type()->get_tile_shapes();
+//    return insert(masked_load_inst::create(ptr, create_splat(mask, shapes), create_splat(undef, shapes), name));
+//  }
+//  return insert(masked_load_inst::create(ptr, mask, undef, name));
+
 }
 
 value *builder::create_store(value *ptr, value *val, const std::string &name){
@@ -262,6 +272,7 @@ value *builder::create_store(value *ptr, value *val, const std::string &name){
 value *builder::create_masked_load(value *ptr, value *mask, value *false_value, const std::string &name){
   return insert(masked_load_inst::create(ptr, mask, false_value, name));
 }
+
 
 value *builder::create_masked_store(value *ptr, value *val, value *mask, const std::string &name){
   return insert(masked_store_inst::create(ptr, val, mask, name));
@@ -348,12 +359,21 @@ value *builder::create_copy_to_shared(value *arg, const std::string &name) {
   return insert(copy_to_shared_inst::create(arg, name));
 }
 
+
 value *builder::create_copy_from_shared(value *arg, const std::string &name) {
   return insert(copy_from_shared_inst::create(arg, name));
 }
 
+value *builder::create_masked_load_async(value *ptr, value *mask, value *false_value, const std::string &name) {
+  return insert(masked_load_async_inst::create(ptr, mask, false_value, name));
+}
+
 value *builder::create_barrier(const std::string &name) {
   return insert(barrier_inst::create(ctx_, name));
+}
+
+value *builder::create_async_wait() {
+  return insert(async_wait_inst::create(ctx_));
 }
 
 }
