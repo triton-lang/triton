@@ -14,6 +14,12 @@ namespace triton{
 namespace codegen{
 
 // base
+
+
+nvidia_cu_target* target::as_nvidia() { 
+  return dynamic_cast<nvidia_cu_target*>(this); 
+}
+
 bool target::is_gpu() const {
   return is_gpu_;
 }
@@ -25,7 +31,7 @@ void amd_cl_target::set_kernel(IRBuilder<>& builder, LLVMContext &ctx, Module *m
 
 Instruction* amd_cl_target::add_barrier(Module *module, IRBuilder<>& builder) {
   Function *barrier = Intrinsic::getDeclaration(module, Intrinsic::amdgcn_s_barrier);
-  return builder.CreateCall(barrier, {});
+  return builder.CreateIntrinsic(Intrinsic::amdgcn_s_barrier, {}, {});
 }
 
 Value* amd_cl_target::get_global_offset(Module *module, IRBuilder<>& builder, unsigned stride, unsigned ax) {
@@ -45,8 +51,7 @@ Value* amd_cl_target::get_block_id(Module *module, IRBuilder<>& builder, unsigne
     Intrinsic::amdgcn_workgroup_id_y,
     Intrinsic::amdgcn_workgroup_id_z
   };
-  Value* get_group_id = Intrinsic::getDeclaration(module, ids[ax]);
-  Value* group_id = builder.CreateCall(get_group_id, {});
+  Value* group_id = builder.CreateIntrinsic(ids[ax], {}, {});
   return group_id;
 }
 
@@ -99,8 +104,7 @@ Value* nvidia_cu_target::get_block_id(Module *module, IRBuilder<>& builder, unsi
     Intrinsic::nvvm_read_ptx_sreg_ctaid_y,
     Intrinsic::nvvm_read_ptx_sreg_ctaid_z
   };
-  Value* get_cta_id = Intrinsic::getDeclaration(module, cta_ids[ax]);
-  Value* cta_id = builder.CreateCall(get_cta_id, {});
+  Value* cta_id = builder.CreateIntrinsic(cta_ids[ax], {}, {});
   return cta_id;
 }
 
@@ -120,8 +124,7 @@ Value* nvidia_cu_target::get_num_blocks(Module *module, IRBuilder<>& builder, un
     Intrinsic::nvvm_read_ptx_sreg_nctaid_y,
     Intrinsic::nvvm_read_ptx_sreg_nctaid_z
   };
-  Value* get_nctaid = Intrinsic::getDeclaration(module, ids[ax]);
-  return builder.CreateCall(get_nctaid, {});
+  return builder.CreateIntrinsic(ids[ax], {}, {});
 }
 
 // CPU

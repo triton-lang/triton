@@ -107,7 +107,7 @@ void triton_copy_nd(drv::context* context, drv::stream* stream, const std::vecto
   auto dx = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size*dtsize));
   auto dy = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size*dtsize));
   // create options
-  rt::function::options_space_t opt;
+  rt::options_space_t opt;
 
 
   // macros

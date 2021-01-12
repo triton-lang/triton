@@ -39,43 +39,23 @@ public:
 
 // CUDA device
 class cu_device: public device {
-public:
-  //Supported architectures
-  enum class Architecture{
-    //NVidia
-    SM_2_0,
-    SM_2_1,
-    SM_3_0,
-    SM_3_5,
-    SM_3_7,
-    SM_5_0,
-    SM_5_2,
-    SM_6_0,
-    SM_6_1,
-    SM_7_0,
-    UNKNOWN
-  };
-
 private:
   //Metaprogramming elper to get cuda info from attribute
   template<CUdevice_attribute attr>
   int cuGetInfo() const;
 
-  inline Architecture nv_arch(std::pair<unsigned int, unsigned int> sm) const;
   inline nvmlDevice_t nvml_device() const;
 
 public:
   cu_device(CUdevice cu = CUdevice(), bool take_ownership = true): device(cu, take_ownership){}
-  // Accessors
-  Architecture architecture() const;
   // Informations
   std::string infos() const;
   size_t address_bits() const;
   std::vector<size_t> max_block_dim() const;
   size_t warp_size() const;
   // Compute Capability
-  void interpret_as(std::pair<size_t, size_t> cc);
-  std::pair<size_t, size_t> compute_capability() const;
+  void interpret_as(int cc);
+  int compute_capability() const;
   // Identifier
   std::string name() const;
   std::string pci_bus_id() const;
@@ -91,7 +71,7 @@ public:
   std::unique_ptr<codegen::target> make_target() const;
 
 private:
-  std::shared_ptr<std::pair<size_t, size_t>> interpreted_as_;
+  std::shared_ptr<int> interpreted_as_;
 };
 
 }

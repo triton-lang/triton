@@ -21,7 +21,7 @@ int main() {
 //      config_t{ord, x[0], x[1], 1280, 1280, 1280},
 //      config_t{ord, x[0], x[1], 1536, 1536, 1536},
 //      config_t{ord, x[0], x[1], 2048, 2048, 2048},
-     config_t{ord, x[0], x[1], 4096, 4096, 4096},
+     config_t{ord, x[0], x[1], 8192, 8192, 8192},
 
 //      config_t{ord, x[0], x[1], 256, 16, 256},
 //      config_t{ord, x[0], x[1], 512, 16, 512},
