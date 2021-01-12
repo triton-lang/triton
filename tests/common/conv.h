@@ -11,34 +11,6 @@
 #include "cuda/cublas.h"
 #include "util.h"
 
-
-struct conv_arg_t{
-  CUdeviceptr a;
-  CUdeviceptr b;
-  CUdeviceptr c;
-  float alpha;
-  int M;
-  int N;
-  int K;
-  int pad_h;
-  int pad_w;
-  int stride_h;
-  int stride_w;
-  CUdeviceptr adelta;
-  int lda_z;
-  int lda_ci;
-  int lda_h;
-  int lda_w;
-  int ldb_ci;
-  int ldb_r;
-  int ldb_s;
-  int ldb_co;
-  int ldc_z;
-  int ldc_co;
-  int ldc_p;
-  int ldc_q;
-};
-
 enum run_mode_t {
   BENCH,
   TEST
@@ -104,8 +76,8 @@ void triton_conv(drv::context* context, drv::stream* stream,
   // macros
   rt::options_space_t opt;
   opt.defines.push_back({"TYPE", {ty}});
-  opt.defines.push_back({"TM", {"128"}});
-  opt.defines.push_back({"TN", {"128"}});
+  opt.defines.push_back({"TM", {"64", "128"}});
+  opt.defines.push_back({"TN", {"64", "128"}});
   opt.defines.push_back({"TK", {std::to_string(TK)}});
   opt.defines.push_back({"TZ", {"1"}});
   opt.defines.push_back({"RR", {std::to_string(R)}});
@@ -114,24 +86,42 @@ void triton_conv(drv::context* context, drv::stream* stream,
   opt.defines.push_back({"QQ", {std::to_string(Q)}});
   opt.defines.push_back({"HH", {std::to_string(H)}});
   opt.defines.push_back({"WW", {std::to_string(W)}});
-
-  opt.num_warps = {2, 4};
-
+  opt.num_warps = {4};
+  // arguments
+  std::stringstream oss;
+  rt::add_arg(oss, *da->cu());
+  rt::add_arg(oss, *db->cu());
+  rt::add_arg(oss, *dc->cu());
+  rt::add_arg(oss, (float)1);
+  rt::add_arg(oss, Z*P*Q);
+  rt::add_arg(oss, CO);
+  rt::add_arg(oss, CI*R*S);
+  rt::add_arg(oss, pad_h);
+  rt::add_arg(oss, pad_w);
+  rt::add_arg(oss, stride_h);
+  rt::add_arg(oss, stride_w);
+  rt::add_arg(oss, *ddelta->cu());
+  rt::add_arg(oss, W*H*CI);
+  rt::add_arg(oss, W*H);
+  rt::add_arg(oss, W);
+  rt::add_arg(oss, 1);
+  rt::add_arg(oss, CO*S*R);
+  rt::add_arg(oss, CO*S);
+  rt::add_arg(oss, CO);
+  rt::add_arg(oss, 1);
+  rt::add_arg(oss, Q*P*CO);
+  rt::add_arg(oss, Q*P);
+  rt::add_arg(oss, Q);
+  rt::add_arg(oss, 1);
   // kernels
   rt::function function(src::conv, opt);
-  conv_arg_t args{*da->cu(), *db->cu(), *dc->cu(), 1, Z*P*Q, CO, CI*R*S,
-                  pad_h, pad_w, stride_h, stride_w,
-                  *ddelta->cu(),
-                  W*H*CI, W*H, W, 1,
-                  CO*S*R , CO*S, CO, 1,
-                  Q*P*CO, Q*P, Q, 1};
   auto grid = [Z,P,Q,CO](const rt::options_t& x) {
     return rt::grid_t{ceil(Z*P*Q, x.D<int>("TM")),
                       ceil(CO   , x.D<int>("TN")),
                       (size_t)x.D<int>("TZ")};
   };
   auto tflops = [&](double nanosec) { return 2.*Z*P*Q*CI*CO*R*S / nanosec * 1e-3; };
-  double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream, device);}, stream);
+  double triton_ns = triton::tools::bench([&]() { function((void**)oss.str().data(), oss.str().size(), grid, stream, device);}, stream);
   bench.push_back(tflops(triton_ns));
 }
 

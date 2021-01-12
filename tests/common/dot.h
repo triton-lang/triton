@@ -12,21 +12,6 @@
 #include "cuda/cublas.h"
 #include "util.h"
 
-
-struct dot_arg_t{
-  uintptr_t a;
-  uintptr_t b;
-  uintptr_t c;
-  float alpha;
-  int M;
-  int N;
-  int K;
-  int lda;
-  int ldb;
-  int ldc;
-  uintptr_t locks;
-};
-
 template<class T, bool AT, bool BT>
 static void cc_dot(std::vector<T> &c, const std::vector<T> &a, const std::vector<T> &b,
                     size_t M, size_t N, size_t K){
@@ -126,11 +111,22 @@ void triton_dot(drv::context* context,  drv::stream* stream, bool AT, bool BT,
     opts.num_warps = {4};
   }
 
-  // kernels
+  // arguments
+  std::stringstream oss;
+  rt::add_arg(oss, *da->cu());
+  rt::add_arg(oss, *db->cu());
+  rt::add_arg(oss, *dc->cu());
+  rt::add_arg(oss, (float)1);
+  rt::add_arg(oss, M);
+  rt::add_arg(oss, N);
+  rt::add_arg(oss, K);
+  rt::add_arg(oss, lda);
+  rt::add_arg(oss, ldb);
+  rt::add_arg(oss, ldc);
+  rt::add_arg(oss, *dlocks->cu());
+  // kernel
   rt::function function(src::dot, opts);
-  dot_arg_t args = {da->addr_as_uintptr_t(), db->addr_as_uintptr_t(), dc->addr_as_uintptr_t(),
-                    1, M, N, K, lda, ldb, ldc, dlocks->addr_as_uintptr_t()};
-
+  // grid
   auto grid = [M, N](const rt::options_t& x) {
     return rt::grid_t{ceil(M, x.D<int>("TM"))*
                       ceil(N, x.D<int>("TN")),
@@ -140,7 +136,7 @@ void triton_dot(drv::context* context,  drv::stream* stream, bool AT, bool BT,
   // metrics
   if(mode == BENCH){
     auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
-    double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream, device);}, stream);
+    double triton_ns = triton::tools::bench([&]() { function((void**)oss.str().data(), oss.str().size(), grid, stream, device);}, stream);
     bench.push_back(tflops(triton_ns));
 
     // cublas
@@ -177,7 +173,7 @@ void triton_dot(drv::context* context,  drv::stream* stream, bool AT, bool BT,
     stream->write(&*da, true, 0, ha);
     stream->write(&*db, true, 0, hb);
     // run kernel
-    function((void**)&args, sizeof(args), grid, stream, device);
+    function((void**)oss.str().data(), oss.str().size(), grid, stream, device);
     // write back
     stream->synchronize();
     // compare with CPU
