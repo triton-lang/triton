@@ -59,16 +59,12 @@ void synchronize(int64_t dev_id) {
   }
 }
 
-torch::Tensor raw_like(torch::Tensor x){
+torch::Tensor cuda_empty_like(torch::Tensor x){
   if(x.nbytes() == 0)
     return torch::empty_like(x);
-  C10_CUDA_CHECK(cudaSetDevice(x.device().index()));
-  auto shape = x.sizes();
-  CUdeviceptr data;
-  triton::driver::dispatch::cuMemAlloc(&data, x.nbytes());
-  auto deleter = [data](void* ptr) { triton::driver::dispatch::cuMemFree_v2(data); };
-  auto ret = torch::from_blob((void*)data, shape, deleter, x.options());
-  ret.copy_(x);
+  void* data;
+  cudaMalloc(&data, x.nbytes());
+  auto ret = torch::from_blob((void*)data, x.sizes(), x.strides(), [data](void* ptr) { cudaFree(data); }, x.options());
   return ret;
 }
 
@@ -94,6 +90,6 @@ void launch_kernel(int64_t op_id, int64_t dev_id, const std::string& args,
 
 static auto registry = torch::RegisterOperators()
                        .op("triton::launch_kernel", &launch_kernel)
-                       .op("triton::raw_like", &raw_like)
+                       .op("triton::cuda_empty_like", &cuda_empty_like)
                        .op("triton::cdiv_sum", &cdiv_sum)
                        .op("triton::synchronize", &synchronize);

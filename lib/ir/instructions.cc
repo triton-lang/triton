@@ -463,6 +463,20 @@ masked_load_inst* masked_load_inst::create(value *ptr, value *mask, value *false
   return new masked_load_inst(ptr, mask, false_value, name, next);
 }
 
+// masked load async
+masked_load_async_inst::masked_load_async_inst(value *ptr, value *mask, value *false_value,
+                                   const std::string &name, instruction *next)
+  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, name, next) {
+  set_operand(0, ptr);
+  set_operand(1, mask);
+  set_operand(2, false_value);
+}
+
+masked_load_async_inst* masked_load_async_inst::create(value *ptr, value *mask, value *false_value,
+                                           const std::string &name, instruction *next) {
+  return new masked_load_async_inst(ptr, mask, false_value, name, next);
+}
+
 // atomic add
 
 atomic_add_inst::atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name, instruction *next)
@@ -802,6 +816,14 @@ barrier_inst::barrier_inst(context &ctx, const std::string &name,
 
 barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instruction *next) {
   return new barrier_inst(ctx, name, next);
+}
+
+async_wait_inst::async_wait_inst(context &ctx, const std::string &name,
+                                                       instruction *next)
+  : instruction(type::get_void_ty(ctx), INST_ASYNC_WAIT, 0, name, next) { }
+
+async_wait_inst* async_wait_inst::create(context &ctx, const std::string &name, instruction *next) {
+  return new async_wait_inst(ctx, name, next);
 }
 
 

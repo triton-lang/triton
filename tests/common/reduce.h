@@ -95,25 +95,25 @@ void triton_reduce_nd(drv::context* context, drv::stream* stream, const std::vec
     y_strides.push_back(y_strides[d] + " * " + y_shapename[y_order[d]]);
 
   // options
-  rt::function::options_space_t opt;
-  opt.defines.push_back({"TYPE", {ty}});
+  rt::options_space_t opts;
+  opts.defines.push_back({"TYPE", {ty}});
   for(int d = 0; d < rank_x; d++)
-    opt.defines.push_back({"STRIDE_XS" + std::to_string(x_order[d]), {x_strides[d]}});
+    opts.defines.push_back({"STRIDE_XS" + std::to_string(x_order[d]), {x_strides[d]}});
   for(int d = 0; d < rank_y; d++)
-    opt.defines.push_back({"STRIDE_YS" + std::to_string(y_order[d]), {y_strides[d]}});
+    opts.defines.push_back({"STRIDE_YS" + std::to_string(y_order[d]), {y_strides[d]}});
   if(TS.empty())
     TS = tile_nd(rank_x);
   for(int d = 0; d < rank_x; d++)
-    opt.defines.push_back({"TS" + std::to_string(d), TS[d]});
+    opts.defines.push_back({"TS" + std::to_string(d), TS[d]});
 
   std::vector<size_t> axy;
   for(int d = 0; d < rank_x; d++)
     if(d != axis)
       axy.push_back(d);
   for(int d = 0; d < rank_y; d++)
-    opt.defines.push_back({"TY" + std::to_string(d), {std::to_string(shape_x[axy[d]])}});
+    opts.defines.push_back({"TY" + std::to_string(d), {std::to_string(shape_x[axy[d]])}});
   for(int d = 0; d < rank_y; d++)
-    opt.defines.push_back({"RY" + std::to_string(d), {"rs" + std::to_string(axy[d])}});
+    opts.defines.push_back({"RY" + std::to_string(d), {"rs" + std::to_string(axy[d])}});
 
   std::string RED = "";
   for(int n = 0; n < rank_x; n++){
@@ -121,29 +121,39 @@ void triton_reduce_nd(drv::context* context, drv::stream* stream, const std::vec
       RED += ", ";
     RED += (n==axis) ? to_str(op) : ":";
   }
-  opt.defines.push_back({"RED", {RED}});
-  opt.num_warps = {1};
+  opts.defines.push_back({"RED", {RED}});
+  opts.num_warps = {2};
 
   // kernel
-  rt::function function(src::reduce_nd[rank_x - 1], opt);
+  rt::function function(src::reduce_nd[rank_x - 1], opts);
 
   // input buffers
   auto dx = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size_x*dtsize));
   auto dy = std::unique_ptr<drv::buffer>(drv::buffer::create(context, size_y*dtsize));
 
   // grid
-  reduce_arg_t args = {*dx->cu(), *dy->cu(), shape_x[0]};
-  if(shape_x.size() > 1) args.S1 = shape_x[1];
-  if(shape_x.size() > 2) args.S2 = shape_x[2];
+  std::stringstream oss;
+  rt::add_arg(oss, *dx->cu());
+  rt::add_arg(oss, *dy->cu());
+  rt::add_arg(oss, (uint32_t)shape_x[0]);
+  if(shape_x.size() > 1) rt::add_arg(oss, (uint32_t)shape_x[1]);
+  if(shape_x.size() > 2) rt::add_arg(oss, (uint32_t)shape_x[2]);
   std::vector<std::string> ts = {"TS0", "TS1", "TS2"};
   auto grid = grid_nd(shape_x, ts);
 
   // metrics
   if(mode == BENCH){
     auto gbps = [&](double ns) { return 2 * size_x * dtsize / (ns * 1e-9) * 1e-9; };
-    double triton_ns = triton::tools::bench([&]() { function((void**)&args, sizeof(args), grid, stream, device);}, stream);
+    double triton_ns = triton::tools::bench([&]() { function((void**)oss.str().data(), oss.str().size(), grid, stream, device);}, stream);
     bench.push_back(gbps(triton_ns));
   }
+
+//    rt::options_t opt;
+//    for(auto &x: opts.defines)
+//      opt.defines[x.first] = x.second[0];
+//    opt.num_warps = 1;
+//    std::cout << function.get_asm(rt::ASM_NV_PTX, device, opt) << std::endl;
+
 
   // test triton
   if(mode == TEST){
@@ -153,7 +163,7 @@ void triton_reduce_nd(drv::context* context, drv::stream* stream, const std::vec
     init_zeros(hy);
     init_rand(hx);
     stream->write(&*dx, true, 0, hx);
-    function((void**)&args, sizeof(args), grid, stream, device);
+    function((void**)oss.str().data(), oss.str().size(), grid, stream, device);
     stream->synchronize();
     stream->read(&*dy, true, 0, hy);
     cc_reduce_nd(ry, hx, op, axis, shape_x);

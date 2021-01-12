@@ -102,7 +102,7 @@ void triton_conv(drv::context* context, drv::stream* stream,
   stream->write(&*ddelta, true, 0, hdelta);
 
   // macros
-  rt::function::options_space_t opt;
+  rt::options_space_t opt;
   opt.defines.push_back({"TYPE", {ty}});
   opt.defines.push_back({"TM", {"128"}});
   opt.defines.push_back({"TN", {"128"}});
@@ -125,7 +125,7 @@ void triton_conv(drv::context* context, drv::stream* stream,
                   W*H*CI, W*H, W, 1,
                   CO*S*R , CO*S, CO, 1,
                   Q*P*CO, Q*P, Q, 1};
-  auto grid = [Z,P,Q,CO](const rt::function::options_t& x) {
+  auto grid = [Z,P,Q,CO](const rt::options_t& x) {
     return rt::grid_t{ceil(Z*P*Q, x.D<int>("TM")),
                       ceil(CO   , x.D<int>("TN")),
                       (size_t)x.D<int>("TZ")};

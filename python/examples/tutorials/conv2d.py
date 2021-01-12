@@ -171,7 +171,7 @@ class _conv(torch.autograd.Function):
           _conv.kernel[dtype] = (delta, triton.kernel(_conv.src, num_warps=[2, 4], defines=defines))
       delta, kernel = _conv.kernel[dtype]
       # allocate output
-      c = triton.empty([Z, CO, P, Q], dtype=dtype)
+      c = torch.empty([Z, CO, P, Q], dtype=dtype)
       # enqueue
       grid = lambda opt: [triton.cdiv(Z*P*Q, opt.d('TM')), 
                           triton.cdiv(CO, opt.d('TN'))]

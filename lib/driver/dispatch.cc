@@ -93,6 +93,7 @@ namespace driver
 
 bool dispatch::cuinit(){
   if(cuda_==nullptr){
+    putenv((char*)"CUDA_CACHE_DISABLE=1");
     std::string libcuda = tools::getenv("TRITON_LIBCUDA");
     if(libcuda.empty())
       cuda_ = dlopen("libcuda.so", RTLD_LAZY);

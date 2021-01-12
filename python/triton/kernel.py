@@ -68,8 +68,17 @@ class kernel:
     size = sum([sizes[x] for x in arg_types])
     self.tys = ''.join([codes[x] for x in arg_types])
 
-  def ptx(self, device, **kwargs):
+  def asm(self, mode, device, **kwargs):
     dev_id = device.index
+    # assembly mode
+    supported = {
+      'ptx': libtriton.asm_mode.ptx,
+      'sass': libtriton.asm_mode.sass,
+    }
+    if mode not in supported:
+      raise('ASM mode must be in ', supported.keys())
+    mode = supported[mode]
+    # disambiguates #defines
     libtriton.register_fn((self.op_id, dev_id), self.src, self.opt)
     def _single_value_or_err(x, key):
       if isinstance(x, list) and len(x) == 1:
@@ -86,15 +95,18 @@ class kernel:
     opt = libtriton.options()
     opt.num_warps = _single_value_or_err(self.opt.num_warps, 'num_warps')
     opt.defines = defines
-    return libtriton.get_fn_ptx((self.op_id, dev_id), opt)
+    # run
+    return libtriton.get_fn_asm((self.op_id, dev_id), mode, opt)
 
   def __call__(self, *args, **kwargs):
     if 'TRITON_DEBUG_MODE' in os.environ:
       _args = args
-      args = [x for x in args]
+      args = [x.clone() if isinstance(x, torch.Tensor) else x for x in _args]
       for i in range(len(args)):
         if isinstance(args[i], torch.Tensor):
-          args[i] = torch.ops.triton.raw_like(args[i])
+          args[i] = torch.ops.triton.cuda_empty_like(args[i])
+          args[i].copy_(_args[i])
+      torch.cuda.synchronize()
     for x in args:
       if isinstance(x, torch.Tensor):
         device = x.device.index
@@ -116,6 +128,8 @@ class kernel:
     constants = list(kwargs['constants'].values()) if 'constants' in kwargs else []
     torch.ops.triton.launch_kernel(self.op_id, device, params, names, constants)
     if 'TRITON_DEBUG_MODE' in os.environ:
+      torch.cuda.synchronize()
       for i in range(len(args)):
         if isinstance(args[i], torch.Tensor):
-          _args[i].copy_(args[i])
+          _args[i].copy_(args[i].clone())
+      args = _args
