@@ -13,15 +13,6 @@
 namespace drv = triton::driver;
 namespace rt = triton::runtime;
 
-struct reduce_arg_t{
-  CUdeviceptr X;
-  CUdeviceptr Y;
-  int S0;
-  int S1;
-  int S2;
-};
-
-
 template<class T>
 void cc_reduce_nd(std::vector<T> &y, const std::vector<T> &x, reduce_op_t op, size_t axis, const std::vector<int>& shapes) {
   assert(axis <= shapes.size() - 1);
