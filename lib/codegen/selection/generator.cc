@@ -442,7 +442,7 @@ void generator::visit_store_inst(ir::store_inst * x){
   // vector size
   size_t vec = 1;
   if(val_op->get_type()->is_tile_ty()){
-    auto ord = layouts_->get(x->get_pointer_operand())->get_order();
+    auto ord = ords_.at(x->get_pointer_operand());
     size_t aln = alignment_->get(ptr_op, ord[0]);
     size_t nts = axes_.at(a_axes_->get(x->get_pointer_operand(), ord[0])).contiguous;
     vec  = std::min(nts, aln);
@@ -628,7 +628,7 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
 
     // vector size
     int vec = 1;
-    int ld = layouts_->get(ptr)->get_order()[0];
+    int ld = ords_.at(ptr)[0];
     unsigned alignment = alignment_->get(ptr, ld);
     vec = std::min<int>(layouts_->get(ptr)->to_scanline()->nts(ld), alignment);
     vec = std::min(vec, val->get_type()->get_tile_element_ty()->is_half_ty() ? 2 : 1);
