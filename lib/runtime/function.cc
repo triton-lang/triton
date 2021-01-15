@@ -251,8 +251,8 @@ std::unique_ptr<driver::module> function::make_bin(ir::module &module, driver::d
 //  ir::print(module, std::cout);
   isel.visit(module, *llvm);
   std::unique_ptr<driver::module> res(driver::module::create(device, std::move(llvm)));
-  if(res->spilled() > 256)
-    throw exception::out_of_registers();
+//  if(res->spilled() > 256)
+//    throw exception::out_of_registers();
   return res;
 }
 
