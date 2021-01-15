@@ -330,15 +330,13 @@ cu_module::cu_module(driver::device* device, std::string const & source) : modul
     dispatch::cuModuleLoadDataEx(&*cu_, ptx_.data(), 5, opt, optval);
     std::string err(_err);
     std::string log(_log);
-
-//    std::cout << log << std::endl;
-    std::smatch match;
-    std::regex expr ("\\b([0-9]+) bytes spill");
-    spilled_ = 0;
-    while (std::regex_search(log,match,expr)){
-      spilled_ += std::stoi(match[1]);
-      log = match.suffix();
-    }
+//    std::smatch match;
+//    std::regex expr ("\\b([0-9]+) bytes spill");
+//    spilled_ = 0;
+//    while (std::regex_search(log,match,expr)){
+//      spilled_ += std::stoi(match[1]);
+//      log = match.suffix();
+//    }
   }
   catch(exception::cuda::invalid_ptx const &){
 //#ifdef TRITON_LOG_PTX_ERROR
