@@ -1386,29 +1386,29 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   auto in_ord1 = axes_.at(a_axes_->get(op, ord[1])).values;
   auto out_ord0 = axes_.at(a_axes_->get(rc, ord[0])).values;
   auto out_ord1 = axes_.at(a_axes_->get(rc, ord[1])).values;
-  int in_outer = in_layout->spt(ord[1]);
-  int in_rep   = in_layout->rep(ord[1]);
-  int out_outer = out_layout->mts(ord[1]) * out_layout->nts(ord[1]);
-  int max_outer = std::max(in_outer, out_outer);
-  int out_ratio = std::max(out_outer/in_outer, 1);
-  int in_ratio = std::max(in_outer/out_outer, 1);
+  int in_spt0  = in_layout->spt(ord[0]);
+  int in_spt1  = in_layout->spt(ord[1]);
+  int out_spt0 = out_layout->mts(ord[0])*out_layout->nts(ord[0]);
+  int out_spt1 = out_layout->mts(ord[1])*out_layout->nts(ord[1]);
+  int max_spt1 = std::max(in_spt1, out_spt1);
   indices_t idx(2);
-  for(size_t j = 0; j < shape[ord[1]]/max_outer; j++){
+  int num_packs = shape[ord[1]]/max_spt1;
+  for(size_t j = 0; j < num_packs; j++){
     add_barrier();
-    for(size_t k = 0; k < in_rep*out_ratio; k++)
+    for(size_t k = 0; k < in_ord1.size()/num_packs; k++)
     for(size_t i = 0; i < in_ord0.size(); i++){
       idx[ord[0]] = in_ord0[i];
-      idx[ord[1]] = in_ord1[j*in_rep*out_ratio + k];
+      idx[ord[1]] = in_ord1[j*in_ord1.size()/num_packs + k];
       Value *off = add(idx[ord[0]], mul(in_ord1[k], ld));
       Value *ptr = gep(base, off);
       store(vals_[op][idx], ptr);
     }
     add_barrier();
-    for(size_t k = 0; k < in_ratio; k++)
+    for(size_t k = 0; k < out_ord1.size()/num_packs; k++)
     for(size_t i = 0; i < out_ord0.size(); i++){
       idx[ord[0]] = out_ord0[i];
-      idx[ord[1]] = out_ord1[j*in_ratio + k];
-      Value *off = add(out_ord0[i], mul(out_ord1[k], ld));
+      idx[ord[1]] = out_ord1[j*out_ord1.size()/num_packs + k];
+      Value *off = add(idx[ord[0]], mul(out_ord1[k], ld));
       Value *ptr  = gep(base, off);
       vals_[rc][idx] = load(ptr);
     }
