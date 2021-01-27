@@ -1,9 +1,6 @@
 import os
-
 import torch
-
 import triton
-from belt.torch_utils import CudaTimer
 
 
 class _softmax_xent_loss(torch.autograd.Function):
@@ -18,7 +15,7 @@ class _softmax_xent_loss(torch.autograd.Function):
     def forward(cls, ctx, logits, indices):
         n_vocab = logits.shape[-1]
         assert indices.dtype == torch.int64
-        # assert n_vocab % 16 == 0, "Number of logit options must be divisible by 16."
+        assert n_vocab % 16 == 0, "Number of logit options must be divisible by 16."
 
         if not (logits.dtype, n_vocab) in cls.input_config_to_kernel_fwd:
             cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)] = triton.kernel(
@@ -32,6 +29,7 @@ class _softmax_xent_loss(torch.autograd.Function):
         result = torch.empty_like(indices, dtype=logits.dtype).cuda()
         grid = lambda opt: (triton.cdiv(N, opt.d("TILE")),)
         kernel_fwd(logits, indices, result, grid=grid)
+        # logits -> neg_logprobs via an in place modification by kernel_fwd
         ctx.save_for_backward(logits, indices)
 
         return result
@@ -120,29 +118,6 @@ def test_grad(num_seq=4, n_vocab=512):
 
         torch.testing.assert_allclose(torch_logit.grad, triton_logit.grad)
 
-
-def time_softmax(repeat=10, num_seq=256):
-    dtype = torch.float16
-    x = torch.randn(num_seq, 50_000).to(dtype)
-    indices = 4 + torch.ones(num_seq).long()
-    triton_input = x.cuda()
-    triton_indices = indices.cuda()
-    triton_result = triton_softmax(triton_input, triton_indices)
-
-    with CudaTimer() as timer:
-        for _ in range(repeat):
-            triton_result = triton_softmax(triton_input, triton_indices)
-    print("Triton", timer.elapsed_seconds())
-
-    torch_input = x.cuda()
-    torch_indices = indices.cuda()
-    torch_xent_fn = torch.nn.CrossEntropyLoss(reduction="none")
-    torch_result = torch_xent_fn(torch_input, torch_indices)
-
-    with CudaTimer() as timer:
-        for _ in range(repeat):
-            torch_result = torch_xent_fn(torch_input, torch_indices)
-    print("Torch", timer.elapsed_seconds())
 
 
 if __name__ == "__main__":
