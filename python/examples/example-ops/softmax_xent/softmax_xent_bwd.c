@@ -1,6 +1,5 @@
 __global__ void softmax_bwd(TYPE* neg_logprobs __aligned(16),
                     long* indices,
-                    int* useful_int,
                     TYPE* dneg_logprobs __aligned(16)) {
 
         int token_idx = get_program_id(0);
@@ -9,7 +8,7 @@ __global__ void softmax_bwd(TYPE* neg_logprobs __aligned(16),
         int offset[TILE] = token_idx * TILE + local_offset;
         TYPE* px[TILE]  = neg_logprobs + offset;
         long local_ind = *(indices + token_idx);
-        float local_dn = *(dneg_logprobs + token_idx);
+        TYPE local_dn = *(dneg_logprobs + token_idx);
 
         // We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
         // and we have -log(p[k]) stored, so this is easy
