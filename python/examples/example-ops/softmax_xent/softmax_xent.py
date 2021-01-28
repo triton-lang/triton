@@ -1,9 +1,13 @@
 import os
+
 import torch
+
 import triton
 
 
 class _softmax_xent_loss(torch.autograd.Function):
+    """ This makes one copy of the logits. """
+
     fwd_src = open(os.path.join(os.path.dirname(__file__), "softmax_xent_fwd.c")).read()
     bwd_src = open(os.path.join(os.path.dirname(__file__), "softmax_xent_bwd.c")).read()
 
@@ -13,9 +17,16 @@ class _softmax_xent_loss(torch.autograd.Function):
 
     @classmethod
     def forward(cls, ctx, logits, indices):
+        """ expects logits in the shape (..., n_vocab) """
+        initial_logit_shape = logits.shape
         n_vocab = logits.shape[-1]
         assert indices.dtype == torch.int64
-        assert n_vocab % 16 == 0, "Number of logit options must be divisible by 16."
+        assert (n_vocab == 512) or (
+            n_vocab % 1024 == 0
+        ), "Triton softmax op won't work unless n_vocab is 512 or is divisible by 1024."
+
+        logits = logits.reshape((-1, n_vocab))
+        indices = indices.reshape((-1,))
 
         if not (logits.dtype, n_vocab) in cls.input_config_to_kernel_fwd:
             cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)] = triton.kernel(
@@ -26,11 +37,12 @@ class _softmax_xent_loss(torch.autograd.Function):
         kernel_fwd = cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)]
 
         N = logits.numel()
-        result = torch.empty_like(indices, dtype=logits.dtype).cuda()
+        neg_logprobs = torch.zeros_like(logits, dtype=logits.dtype).cuda()
+        result = torch.zeros_like(indices, dtype=logits.dtype).cuda()
         grid = lambda opt: (triton.cdiv(N, opt.d("TILE")),)
-        kernel_fwd(logits, indices, result, grid=grid)
-        # logits -> neg_logprobs via an in place modification by kernel_fwd
-        ctx.save_for_backward(logits, indices)
+        kernel_fwd(logits, indices, result, neg_logprobs, grid=grid)
+        # logits should be unmodified, but now neg_logprobs are full
+        ctx.save_for_backward(neg_logprobs, indices)
 
         return result
 
@@ -43,9 +55,11 @@ class _softmax_xent_loss(torch.autograd.Function):
         """
         neg_logprobs, indices = ctx.saved_tensors
         assert indices.dtype == torch.int64
+        assert (
+            dneg_logprobs.dtype == neg_logprobs.dtype
+        ), f"Backward flowing derivatives of type {dneg_logprobs.dtype} != logits type {neg_logprobs.dtype}"
         n_vocab = neg_logprobs.shape[-1]
         N = neg_logprobs.numel()
-        useful_int = torch.zeros_like(indices).int()
 
         if not (neg_logprobs.dtype, n_vocab) in cls.input_config_to_kernel_bwd:
             cls.input_config_to_kernel_bwd[
@@ -53,7 +67,7 @@ class _softmax_xent_loss(torch.autograd.Function):
             ] = triton.kernel(
                 cls.bwd_src,
                 defines={"TILE": n_vocab, "TYPE": neg_logprobs.dtype},
-                num_warps=[16],
+                num_warps=[4],
             )
         kernel_bwd = cls.input_config_to_kernel_bwd[(neg_logprobs.dtype, n_vocab)]
         grid = lambda opt: (triton.cdiv(N, opt.d("TILE")),)
@@ -62,7 +76,6 @@ class _softmax_xent_loss(torch.autograd.Function):
         kernel_bwd(
             neg_logprobs,
             indices,
-            useful_int,
             dneg_logprobs,
             grid=grid,
         )
@@ -71,54 +84,3 @@ class _softmax_xent_loss(torch.autograd.Function):
 
 
 triton_softmax = _softmax_xent_loss.apply
-
-
-def test_softmax(num_seq=16, n_vocab=32 * 1024):
-    for dtype in [torch.float32, torch.float16]:
-        x = torch.randn(num_seq, n_vocab).to(dtype)
-        indices = 4 + torch.ones(num_seq).long()
-
-        triton_input = x.cuda()
-        triton_indices = indices.cuda()
-        triton_result = triton_softmax(triton_input, triton_indices)
-        print("Triton:", triton_result)
-
-        torch_input = x.cuda()
-        torch_indices = indices.cuda()
-        torch_xent_fn = torch.nn.CrossEntropyLoss(reduction="none")
-        torch_result = torch_xent_fn(torch_input, torch_indices)
-        print("Torch:", torch_result)
-        torch.testing.assert_allclose(torch_result, triton_result)
-
-
-def test_grad(num_seq=4, n_vocab=512):
-    print(num_seq, n_vocab)
-    for dtype in [torch.float32, torch.float16]:
-        logit = torch.randn(num_seq, n_vocab, requires_grad=True, device="cuda").to(
-            dtype
-        )
-        indices = torch.arange(num_seq).long()
-
-        triton_logit = torch.nn.Parameter(
-            logit.clone().detach().cuda(), requires_grad=True
-        )
-        triton_indices = indices.clone().detach().cuda()
-        triton_result = triton_softmax(triton_logit, triton_indices)
-        triton_result.mean().backward()
-        print("Triton grad:\n", (triton_logit.grad[:, :6]))
-
-        torch_logit = torch.nn.Parameter(
-            logit.clone().detach().cuda(), requires_grad=True
-        )
-        torch_indices = indices.clone().detach().cuda()
-        torch_xent_fn = torch.nn.CrossEntropyLoss(reduction="none")
-        torch_result = torch_xent_fn(torch_logit, torch_indices)
-        torch_result.mean().backward()
-        print("Torch grad:\n", (torch_logit.grad[:, :6]))
-
-        torch.testing.assert_allclose(torch_logit.grad, triton_logit.grad)
-
-
-
-if __name__ == "__main__":
-    test_grad()
