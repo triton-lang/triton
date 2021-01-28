@@ -129,7 +129,6 @@ def repr_weird_repeat(num_seq=512):
     triton_result3, _ = current_softmax(z, triton_indices)
     print(triton_result3.mean())
     print("Zeros or Negatives?", len([z for z in triton_result3 if z < 0.1]))
-    breakpoint()
 
 
 if __name__ == "__main__":
