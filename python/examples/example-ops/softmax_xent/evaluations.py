@@ -2,8 +2,6 @@ import torch
 from softmax_xent import triton_softmax
 from softmax_xent_in_place import triton_softmax_in_place
 
-from belt.torch_utils import CudaTimer
-
 # WHICH SOFTMAX SHOULD WE TEST?
 current_softmax = triton_softmax
 
@@ -109,34 +107,6 @@ def test_many_settings(
                     )
     print(results)
     return results
-
-
-def time_softmax(repeat=3, num_seq=16 * 512):
-    dtype = torch.float32
-    x = torch.randn(num_seq, 51200, requires_grad=True).to(dtype)
-    indices = torch.arange(num_seq).long()
-    triton_input = x.cuda()
-    triton_indices = indices.cuda()
-    triton_result = current_softmax(triton_input, triton_indices)
-    triton_result.mean().backward()
-
-    with CudaTimer() as timer:
-        for _ in range(repeat):
-            triton_result = current_softmax(triton_input, triton_indices)
-            triton_result.mean().backward()
-    print("Triton", timer.elapsed_seconds() / repeat)
-
-    torch_input = x.cuda()
-    torch_indices = indices.cuda()
-    torch_xent_fn = torch.nn.CrossEntropyLoss(reduction="none")
-    torch_result = torch_xent_fn(torch_input, torch_indices)
-    torch_result.mean().backward()
-
-    with CudaTimer() as timer:
-        for _ in range(repeat):
-            torch_result = torch_xent_fn(torch_input, torch_indices)
-            torch_result.mean().backward()
-    print("Torch", timer.elapsed_seconds() / repeat)
 
 
 def repr_weird_repeat(num_seq=512):
