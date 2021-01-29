@@ -1,0 +1,6 @@
+foreach(PROG 01-matmul)
+     set(TARGET ${PROG})
+     add_executable(${TARGET} ${PROG}.cc)
+     set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME ${TARGET})
+     target_link_libraries(${TARGET} triton dl)
+endforeach(PROG)
