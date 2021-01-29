@@ -168,7 +168,6 @@ mma_layout::mma_layout(size_t num_warps,
     bool is_b_vec4 =  is_b_row && (layout_b->get_shape()[ord_b[0]] <= 16);
     int pack_size_0 = (is_a_row ||  is_a_vec4) ? 1 : 2;
     int pack_size_1 = (is_b_row && !is_b_vec4) ? 2 : 1;
-    pack_size_0 = pack_size_1 = 1;
     rep_ = {2*pack_size_0, 2*pack_size_1, 1};
     spw_ = {fpw_[0]*4*rep_[0], fpw_[1]*4*rep_[1], 1};
   }

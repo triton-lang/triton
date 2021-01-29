@@ -108,11 +108,9 @@ void Parser::ParseTranslationUnit() {
 
 FuncDef* Parser::ParseFuncDef(Identifier* ident) {
   auto funcDef = EnterFunc(ident);
-
   if (funcDef->FuncType()->Complete()) {
     Error(ident, "redefinition of '%s'", funcDef->Name().c_str());
   }
-
   // TODO(wgtdkp): param checking
   auto funcType = ident->Type()->ToFunc();
   funcType->SetComplete(true);
