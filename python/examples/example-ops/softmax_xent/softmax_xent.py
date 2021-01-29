@@ -1,7 +1,13 @@
 import os
+import warnings
 
+import lazy_import
 import torch
+from sympy.utilities.exceptions import SymPyDeprecationWarning
 
+# Ignore an annoying warning printed when we import triton
+warnings.simplefilter("ignore", SymPyDeprecationWarning)
+lazy_import.lazy_module("triton")
 import triton
 
 
@@ -32,7 +38,7 @@ class _softmax_xent_loss(torch.autograd.Function):
             cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)] = triton.kernel(
                 cls.fwd_src,
                 defines={"TILE": n_vocab, "TYPE": logits.dtype},
-                num_warps=[2, 4, 8, 16],
+                num_warps=[8],
             )
         kernel_fwd = cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)]
 
@@ -67,7 +73,7 @@ class _softmax_xent_loss(torch.autograd.Function):
             ] = triton.kernel(
                 cls.bwd_src,
                 defines={"TILE": n_vocab, "TYPE": neg_logprobs.dtype},
-                num_warps=[4],
+                num_warps=[8],
             )
         kernel_bwd = cls.input_config_to_kernel_bwd[(neg_logprobs.dtype, n_vocab)]
         grid = lambda opt: (triton.cdiv(N, opt.d("TILE")),)
