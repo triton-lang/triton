@@ -1,6 +1,0 @@
-foreach(PROG dot copy conv)
-     set(TARGET bench_${PROG})
-     add_executable(${TARGET} ${PROG}.cc)
-     set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME ${TARGET})
-     target_link_libraries(${TARGET} triton dl)
-endforeach(PROG)

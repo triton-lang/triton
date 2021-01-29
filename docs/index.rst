@@ -11,7 +11,6 @@ Welcome to Triton's documentation!
    :caption: Contents:
 
    installation/index
-   tutorials/index
 
 
 Indices and tables
