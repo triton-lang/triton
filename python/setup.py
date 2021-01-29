@@ -95,25 +95,18 @@ class CMakeBuild(build_ext):
         subprocess.check_call(['cmake', '--build', '.'] + build_args, cwd=self.build_temp)
 
 
-find_llvm()
-
-directories = [x[0] for x in os.walk(os.path.join('src', 'include'))]
-data = []
-for d in directories:
-    for htype in ['h', 'hpp']:
-        files = glob.glob(os.path.join(d, f'*.{htype}'), recursive=False)
-        data += [os.path.relpath(f, 'src') for f in files]
-
 setup(
     name='triton',
-    version='0.3.0',
+    version='1.0.0',
     author='Philippe Tillet',
-    author_email='ptillet@g.harvard.edu',
+    author_email='phil@openai.com',
     description='A language and compiler for custom Deep Learning operations',
     long_description='',
-    packages=['triton', 'triton/_C'],
-    install_requires=['numpy', 'torch', 'sympy'],
-    package_data={'': data},
+    packages=['triton', 'triton/_C', 'triton/ops', 'triton/ops/blocksparse'],
+    install_requires=['numpy', 'torch'],
+    package_data={'triton/ops': ['*.c'],
+                  'triton/ops/blocksparse': ['*.c']},
+    include_package_data=True,
     ext_modules=[CMakeExtension('triton', 'triton/_C/')],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
@@ -122,7 +115,7 @@ setup(
     url='https://github.com/ptillet/triton/',
     download_url='https://github.com/ptillet/triton/archive/v0.1.tar.gz',
     classifiers=[
-    'Development Status :: 4 - Beta',      # Chose either "3 - Alpha", "4 - Beta" or "5 - Production/Stable" as the current state of your package
+    'Development Status :: 3 - Alpha',      # Chose either "3 - Alpha", "4 - Beta" or "5 - Production/Stable" as the current state of your package
     'Intended Audience :: Developers',      # Define that your audience are developers
     'Topic :: Software Development :: Build Tools',
     'License :: OSI Approved :: MIT License',   # Again, pick a license

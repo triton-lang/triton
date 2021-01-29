@@ -4,7 +4,7 @@ include(CTest)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # Options
-option(BUILD_TESTS "Build C++ Triton tests" ON)
+option(BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 
 # LLVM
@@ -25,16 +25,17 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS -fvisibility=defa
 
 # Tests
 if(BUILD_TESTS)
-  message(STATUS "Adding C++ tests")
-  add_subdirectory(tests)
+  message(STATUS "Adding C++ tutorials")
+  add_subdirectory(tutorials)
 endif() 
 
 # Python module
 if(BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
     # PyBind11 wrapper source file
-    set(PYTHON_SRC bindings.cc launch.cc)
-    set_source_files_properties(launch.cc PROPERTIES COMPILE_FLAGS "-std=c++14 -D_GLIBCXX_USE_CXX11_ABI=${TORCH_CXX11_ABI}")
+    set(TORCH_SRC torch/launch.cc torch/superblock.cc)
+    set(PYTHON_SRC bindings.cc ${TORCH_SRC})
+    set_source_files_properties(${TORCH_SRC} PROPERTIES COMPILE_FLAGS "-std=c++14 -D_GLIBCXX_USE_CXX11_ABI=${TORCH_CXX11_ABI}")
     include_directories("." ${PYTHON_INCLUDE_DIRS})
     link_directories(${PYTHON_LINK_DIRS})
 endif()
