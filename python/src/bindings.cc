@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/functional.h>
 #include <string>
+#include <regex>
 #include "triton/driver/stream.h"
 #include "triton/runtime/function.h"
 #include "triton/runtime/arg.h"
@@ -15,6 +16,7 @@
 using namespace triton;
 namespace rt = triton::runtime;
 namespace drv = triton::driver;
+namespace lng = triton::lang;
 
 typedef std::pair<int, int> map_key_t;
 
@@ -114,6 +116,63 @@ pybind11::object autotune(int64_t op_id, int64_t dev_id, const std::string& args
 }
 
 
+std::string extract_kernels(const std::string& str, const std::vector<std::string>& names) {
+  if(names.empty())
+    return str;
+  // search for all regex matches of kernel_regex in str
+  std::smatch matches;
+  std::regex regex(" *__global__ +void +([_a-zA-Z][_a-zA-Z0-9]{0,30})");
+  std::sregex_iterator it(str.begin(), str.end(), regex);
+  std::sregex_iterator end;
+  std::vector<std::tuple<std::string, int, int>> kernels;
+  for (; it != end; ++it) {
+    int pos = it->position();
+    int len = it->length();
+    std::string name = it->str(1);
+    kernels.push_back(std::make_tuple(name, pos, len));
+  }
+
+  for(const std::string& name: names) {
+    // check that str matches any string in kernels using std::any_of
+    auto pred = [&name](const std::tuple<std::string, int, int>& t) { return std::get<0>(t) == name; };
+    bool found = std::any_of(kernels.begin(), kernels.end(), pred);
+    if(!found) throw std::runtime_error("Unable to find kernel `" + name + "` in provided source code:\n" + str);
+  }
+
+
+  // extract functions
+  std::string ret;
+  for(const auto& k: kernels) {
+    std::string name;
+    int pos, len;
+    std::tie(name, pos, len) = k;
+    if(std::find(names.begin(), names.end(), name) != names.end()){
+      std::string def = str.substr(pos, str.size() - pos);
+      int count, pos;
+      // skip over declaration
+      count = 1;
+      pos = def.find('(');
+      while(!(def[pos++] == ')' && count == 0) && pos < def.size()){
+        count += def[pos] == '(';
+        count -= def[pos] == ')';
+      }
+      // skip over definition
+      count = 1;
+      pos = def.find('{', pos);
+      while(!(def[pos++] == '}' && count == 0) && pos < def.size()){
+        count += def[pos] == '{';
+        count -= def[pos] == '}';
+      }
+      ret += def.substr(0, pos);
+      ret += '\n';
+    }
+  }
+
+  return ret;
+}
+
+
+
 void init_superblocking(pybind11::module &m);
 void init_launch(pybind11::module &m);
 
@@ -146,8 +205,8 @@ PYBIND11_MODULE(libtriton, m) {
         .def_readwrite("defines"  , &rt::options_space_t::defines);
 
     // hooks into triton constructs since frameworks may not use pybind11
+    m.def("extract_kernels", &extract_kernels);
     m.def("get_fn_signature", &get_fn_signature);
-    // m.def("get_fn_asm", &get_fn_asm);
     m.def("register_grid", &register_grid);
     m.def("delete_grid", &delete_grid);
     m.def("register_fn", &register_fn);

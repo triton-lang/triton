@@ -5,4 +5,4 @@ __global__ void forward(TYPE* X, TYPE* Y) {
     float shifted[BLOCK] = exp(x - x[max]);
     float sum = shifted[+];
     *(Y + off) = shifted / sum;
-} 
+}

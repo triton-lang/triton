@@ -227,7 +227,7 @@ public:
   FuncDef* CurFunc() { return curFunc_; }
   const TokenSequence& ts() const { return ts_; }
 
-private:
+protected:
   static bool IsBuiltin(FuncType* type);
   static bool IsBuiltin(const std::string& name);
   static Identifier* GetBuiltin(const Token* tok);
