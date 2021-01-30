@@ -39,15 +39,20 @@ def synchronize(device):
     dev_id = -1 if dev_id is None else dev_id
     libtriton.synchronize(dev_id)
 
-def read(path):
+def read(path, kernel_names=[]):
   with open(path, 'r') as f:
     source = f.read()
+    source = libtriton.extract_kernels(source, kernel_names)
   return source
+
 
 
 class kernel:
 
   def __init__(self, src, device, defines = dict(), num_warps = [4]):
+    # check if src is empty
+    if src == '':
+      raise ValueError('Kernel source code is empty')
     self.src = src
     self.opt = libtriton.options_space()
     self.opt.defines = [(k, th_to_triton(v)) for k, v in defines.items()]
