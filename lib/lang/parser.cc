@@ -225,7 +225,6 @@ Encoding Parser::ParseLiteral(std::string& str, const Token* tok) {
 
 Constant* Parser::ParseConstant(const Token* tok) {
   assert(tok->IsConstant());
-
   if (tok->tag_ == Token::I_CONSTANT) {
     return ParseInteger(tok);
   } else if (tok->tag_ == Token::C_CONSTANT) {
@@ -401,7 +400,16 @@ Expr* Parser::ParsePostfixExpr() {
     return ParsePostfixExprTail(anony);
   }
 
-  auto primExpr = ParsePrimaryExpr();
+  Expr* primExpr;
+  //FIXME: merge into generic array functions
+  if(ts_.Try(Token::EXP))
+    primExpr = ParseUnaryIntrinsicOp(Token::EXP);
+  else if(ts_.Try(Token::SQRTF))
+    primExpr = ParseUnaryIntrinsicOp(Token::SQRTF);
+  else if(ts_.Try(Token::LOG))
+    primExpr = ParseUnaryIntrinsicOp(Token::LOG);
+  else
+    primExpr = ParsePrimaryExpr();
   return ParsePostfixExprTail(primExpr);
 }
 
@@ -458,11 +466,9 @@ Expr* Parser::ParseSubScripting(Expr* lhs) {
       case ':':
         shape.push_back(lhsShape[i++]);
         break;
-
       case Token::NEWAXIS:
         shape.push_back(1);
         break;
-
       case Token::ADD:
       case Token::SUB:
       case Token::MAX:
@@ -472,7 +478,6 @@ Expr* Parser::ParseSubScripting(Expr* lhs) {
         shape.push_back(lhsShape[i++]);
         break;
       }
-
       case '^':{
         Expr* expr = ParseConditionalExpr();
         EnsureInteger(expr);
@@ -556,7 +561,6 @@ FuncCall* Parser::ParseFuncCall(Expr* designator) {
     if (!ts_.Test(')'))
       ts_.Expect(',');
   }
-
   return FuncCall::New(designator, args);
 }
 
@@ -568,9 +572,6 @@ Expr* Parser::ParseUnaryExpr() {
   case Token::SIZEOF: return ParseSizeof();
   case Token::INC: return ParsePrefixIncDec(tok);
   case Token::DEC: return ParsePrefixIncDec(tok);
-  case Token::EXP: return ParseUnaryIntrinsicOp(tok, Token::EXP); //FIXME: merge into generic array functions
-  case Token::SQRTF: return ParseUnaryIntrinsicOp(tok, Token::SQRTF);
-  case Token::LOG: return ParseUnaryIntrinsicOp(tok, Token::LOG); //FIXME: merge into generic array functions
   case '&': return ParseUnaryOp(tok, Token::ADDR);
   case '*': return ParseDerefOp(tok);
   case '+': return ParseUnaryOp(tok, Token::PLUS);
@@ -634,11 +635,12 @@ UnaryOp* Parser::ParsePrefixIncDec(const Token* tok) {
   return UnaryOp::New(op, operand);
 }
 
-UnaryOp* Parser::ParseUnaryIntrinsicOp(const Token* tok, int op) {
+UnaryOp* Parser::ParseUnaryIntrinsicOp(int op) {
   ts_.Expect('(');
   auto operand = ParseExpr();
   ts_.Expect(')');
-  return UnaryOp::New(op, operand);
+  auto ret = UnaryOp::New(op, operand);
+  return ret;
 }
 
 UnaryOp* Parser::ParseUnaryOp(const Token* tok, int op) {
@@ -876,7 +878,6 @@ Expr* Parser::ParseConditionalExpr() {
 
     return ConditionalOp::New(tok, cond, exprTrue, exprFalse);
   }
-
   return cond;
 }
 
