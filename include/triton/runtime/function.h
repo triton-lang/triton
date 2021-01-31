@@ -82,6 +82,7 @@ public:
   void operator()(void* args, size_t args_size, driver::stream *stream, const std::vector<size_t>& grid) const;
   // getters
   const std::vector<arg_type>& get_sig() const { return sig_; }
+  std::string get_asm(asm_mode_t mode);
 
 private:
   void init_ir (const std::string &src);

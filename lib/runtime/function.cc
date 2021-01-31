@@ -224,6 +224,45 @@ void kernel::operator()(void *args, size_t args_size, driver::stream *stream, co
   stream->enqueue(&*ker_, grid, {opt.num_warps * 32, 1, 1}, args, args_size);
 }
 
+std::string kernel::get_asm(asm_mode_t mode) {
+  switch(mode){
+      case ASM_LLIR:{
+        return  ((driver::cu_module*)mod_.get())->llir();
+      }
+      case ASM_NV_PTX:
+      case ASM_NV_SASS:{
+        std::string ptx = ((driver::cu_module*)mod_.get())->ptx();
+        // SASS
+        std::string input = std::tmpnam(nullptr);
+        std::string output = std::tmpnam(nullptr);
+        std::ofstream ofs(input);
+        ofs << ptx;
+        ofs.close();
+        if(mode == ASM_NV_PTX)
+          return ptx;
+        std::string cmd;
+        int err;
+        // compile ptx
+        driver::cu_device* cu_device = (driver::cu_device*)dev_;
+        cmd = "ptxas --gpu-name=sm_" + std::to_string(cu_device->compute_capability()) + " " + input + " -o " + input + ".o";
+        err = system(cmd.c_str());
+        // disassemble
+        cmd = "cuobjdump --dump-sass " + input + ".o >> " + output;
+        err = system(cmd.c_str());
+        std::regex comment(" *\\/\\* 0x[0-9a-f]+ \\*\\/");
+        std::string to_delete = "                                                                                           /*";
+        std::ifstream ifs(output);
+        std::string line;
+        std::string sass;
+        while(std::getline(ifs, line))
+          if(!std::regex_match(line, comment))
+            sass += line + "\n";
+        return sass;
+      }
+      default:
+        return "";
+    }
+}
 /* --------------------------------- */
 /* --------------------------------- */
 /* --------------------------------- */
