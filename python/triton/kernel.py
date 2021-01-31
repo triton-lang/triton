@@ -49,7 +49,7 @@ def read(path, kernel_names=[]):
 
 class kernel:
 
-  def __init__(self, src, device, defines = dict(), num_warps = [4]):
+  def __init__(self, src, device, defines = dict(), num_warps = [4], autotune_key = []):
     # check if src is empty
     if src == '':
       raise ValueError('Kernel source code is empty')
@@ -65,7 +65,7 @@ class kernel:
       self.device = -1
     # C++ function wrapper
     self.op_id = libtriton.make_op_id()
-    libtriton.register_fn(self.op_id, self.device, self.src, self.opt)
+    libtriton.register_fn(self.op_id, self.device, self.src, self.opt, autotune_key)
     # debug mode
     self.is_debug = 'TRITON_DEBUG' in os.environ
     # signature

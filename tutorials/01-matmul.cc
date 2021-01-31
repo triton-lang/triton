@@ -173,7 +173,6 @@ float triton_dot(drv::context* context,  drv::stream* stream,
   opts.defines.push_back({"TK", {"32"}});
   opts.defines.push_back({"TZ", {"1"}});
   opts.num_warps = {4};
-
   // arguments
   std::stringstream oss;
   rt::add_arg(oss, *da->cu());
