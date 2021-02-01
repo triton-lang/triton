@@ -111,12 +111,15 @@ public:
   typedef std::function<grid_t(const options_t&)> grid_fn_ty;
   typedef std::pair<options_t, std::shared_ptr<kernel>> kernel_pair_t;
   typedef std::map<std::vector<uint64_t>, kernel*> cache_t;
+  typedef std::vector<std::pair<std::map<std::string, std::string>, int>> autotune_vals_t;
 
 private:
   static void do_loop_nest(std::vector<size_t> const & ranges,
                            std::function<void(std::vector<size_t> const &)> const & f);
 public:
-  function(const std::string& src, const options_space_t& opt, driver::device *device, const std::vector<std::string> &autotune_key = {});
+  function(const std::string& src, const options_space_t& opt, driver::device *device,
+           const autotune_vals_t& autotune_vals = {},
+           const std::vector<std::string> &autotune_key = {});
   void operator()(void* args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
   void operator()(void* args, size_t args_size, const grid_t& grid, driver::stream *stream);
   // auto-tuning
@@ -131,6 +134,7 @@ private:
 private:
   std::vector<kernel_pair_t> kernels_;
   std::map<std::vector<uint64_t>, kernel*> cache_;
+  autotune_vals_t autotune_vals_;
   std::vector<int> key_idxs_;
   std::vector<int> arg_size_;
   std::vector<int> arg_off_;

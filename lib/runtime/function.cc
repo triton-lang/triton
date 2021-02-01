@@ -358,8 +358,12 @@ kernel* function::autotune(void* args, size_t args_size, const grid_fn_ty& grid_
 }
 
 function::function(const std::string& src, const options_space_t& opt,
-                   driver::device *device, const std::vector<std::string>& autotune_key) {
+                   driver::device *device,
+                   const autotune_vals_t& autotune_vals,const std::vector<std::string>& autotune_key)
+  : autotune_vals_(autotune_vals) {
+  // pre-compile all kernels
   init_kernels(src, opt, device);
+  // find indices of autotune keys
   auto arg_names = kernels_.at(0).second->get_arg_names();
   for(const std::string& name: autotune_key){
     auto it = std::find(arg_names.begin(), arg_names.end(), name);

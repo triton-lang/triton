@@ -46,6 +46,7 @@ void register_fn(int op_id,
                  int dev_id,
                  const std::string& src,
                  const rt::options_space_t& opt,
+                 const rt::function::autotune_vals_t& autotune_vals,
                  const std::vector<std::string>& autotune_key) {
   if(tt_devices.find(dev_id) == tt_devices.end()) {
     driver::device* device;
@@ -62,7 +63,7 @@ void register_fn(int op_id,
     tt_streams[dev_id].reset(stream);
   }
   if(id_fn_map.find(op_id) == id_fn_map.end()){
-    id_fn_map[op_id].reset(new rt::function(src, opt, &*tt_devices[dev_id], autotune_key));
+    id_fn_map[op_id].reset(new rt::function(src, opt, &*tt_devices[dev_id], autotune_vals, autotune_key));
   }
   for(const auto& k: id_fn_map[op_id]->get_kernels()){
     const rt::options_t* opt = &k.first;

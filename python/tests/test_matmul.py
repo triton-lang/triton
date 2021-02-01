@@ -87,8 +87,8 @@ def perf_op(dtype=th.float16, warmup=10, rep=50):
     AT, BT = False, False
     has_cutlass = 'CUTLASS_PROFILER' in os.environ
     df = pd.DataFrame(columns=['AT', 'BT', 'N', 'TRITON', 'TORCH', 'CUTLASS'])
-    Ns = [128, 256, 512, 1024, 2048, 3072, 4096, 6144]
-    configs = [(AT, BT, N, N, N) for AT in [False, True] for BT in [False, True] for N in Ns]
+    Ns = [128, 256, 512, 1024]
+    configs = [(AT, BT, N, N, N) for AT in [False] for BT in [False] for N in Ns]
     for AT, BT, M, N, K in configs:
         a = th.randn((K, M) if AT else (M, K), device='cuda', dtype=dtype) / K**.5
         b = th.randn((N, K) if BT else (K, N), device='cuda', dtype=dtype) / K**.5

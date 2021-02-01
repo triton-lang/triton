@@ -53,13 +53,14 @@ class _matmul(torch.autograd.Function):
                 'LDA_POW2_DIV': lda_pow2_div,
                 'LDB_POW2_DIV': ldb_pow2_div,
                 'LDC_POW2_DIV': ldc_pow2_div,
-                'TM'          : _matmul.TM,
-                'TN'          : _matmul.TN,
-                'TK'          : _matmul.TK,
-                'TZ'          : _matmul.TZ,
                 'IS_TK_DIV_K' : int(is_tk_div_k)
             }
-            _matmul._kernels[key] = triton.kernel(_matmul.src, device, num_warps=_matmul.num_warps, defines=defines, autotune_key=['M', 'N', 'K'])
+            autotune_vals = [
+                ({'TM': '128', 'TN': '128', 'TK': '32', 'TZ': '1'}, 4),
+                ({'TM': '64' , 'TN': '64' , 'TK': '64', 'TZ': '1'}, 4)
+            ]
+            _matmul._kernels[key] = triton.kernel(_matmul.src, device, num_warps=_matmul.num_warps, defines=defines, 
+                                                  autotune_vals = autotune_vals, autotune_key=['M', 'N', 'K'])
         kernel = _matmul._kernels[key]
         # # locks for split-k
         if device not in _matmul._locks:
