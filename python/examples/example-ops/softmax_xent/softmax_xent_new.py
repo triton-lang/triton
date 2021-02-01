@@ -12,17 +12,17 @@ lazy_import.lazy_module("triton")
 import triton
 
 
-class _softmax_xent_loss_in_place(torch.autograd.Function):
+class _softmax_xent_loss_new(torch.autograd.Function):
     """This modifies logits in place, turning them into negative logprobs
     on the forward pass.  It should not copy the logits at all.
     """
 
     fwd_src = triton.read(
-        os.path.join(os.path.dirname(__file__), "softmax_xent_kernels_in_place.c"),
+        os.path.join(os.path.dirname(__file__), "softmax_xent_kernels_new.c"),
         kernel_names=["softmax_fwd"],
     )
     bwd_src = triton.read(
-        os.path.join(os.path.dirname(__file__), "softmax_xent_kernels_in_place.c"),
+        os.path.join(os.path.dirname(__file__), "softmax_xent_kernels_new.c"),
         kernel_names=["softmax_bwd"],
     )
 
@@ -49,11 +49,19 @@ class _softmax_xent_loss_in_place(torch.autograd.Function):
         kernel_fwd = cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)]
 
         N = logits.numel()
-        result = torch.zeros_like(indices, dtype=logits.dtype).cuda()
+        result = torch.empty_like(indices, dtype=logits.dtype).cuda()
+        neg_logprobs = torch.empty_like(logits, dtype=logits.dtype).cuda()
         grid = lambda opt: (triton.cdiv(N, opt.TILE),)
-        kernel_fwd(logits.data_ptr(), indices.data_ptr(), result.data_ptr(), grid=grid)
+        kernel_fwd(
+            logits.data_ptr(),
+            neg_logprobs.data_ptr(),
+            # neg_logprobs.data_ptr(),
+            indices.data_ptr(),
+            result.data_ptr(),
+            grid=grid,
+        )
         # logits -> neg_logprobs via an in place modification by kernel_fwd
-        ctx.save_for_backward(logits, indices)
+        ctx.save_for_backward(neg_logprobs, indices)
 
         return result
 
@@ -95,4 +103,4 @@ class _softmax_xent_loss_in_place(torch.autograd.Function):
         return neg_logprobs, torch.zeros_like(indices)
 
 
-triton_softmax_in_place = _softmax_xent_loss_in_place.apply
+triton_softmax_new = _softmax_xent_loss_new.apply

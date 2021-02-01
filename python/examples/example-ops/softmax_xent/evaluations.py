@@ -1,11 +1,11 @@
 import torch
-from softmax_xent import triton_softmax
+from softmax_xent_new import triton_softmax_new
 from softmax_xent_in_place import triton_softmax_in_place
 
 from belt.torch_utils import CudaTimer
 
 # WHICH SOFTMAX SHOULD WE TEST?
-current_softmax = triton_softmax_in_place
+current_softmax = triton_softmax_new
 
 
 def test_softmax(
@@ -43,7 +43,7 @@ def test_grad(
         logit = torch.randn(num_seq, n_vocab, requires_grad=True, device="cuda").to(
             dtype
         )
-        indices = torch.arange(num_seq).long()
+        indices = torch.ones(num_seq).long()
 
         triton_logit = torch.nn.Parameter(
             logit.clone().detach().cuda(), requires_grad=True
@@ -78,10 +78,10 @@ def test_grad(
 
 
 def test_many_settings(
-    seq_settings=[8, 64, 256, 512],  # FAIL sometimes 2048, 16 * 1024],
-    vocab_settings=[512, 1024, 2048, 8192, 100 * 512],  # 3*512, 99*512 FAILS
+    seq_settings=[8, 7, 64, 256, 512, 16 * 1024],  # FAIL sometimes 2048, 16 * 1024],
+    vocab_settings=[128, 512, 1024, 2048, 8192, 100 * 512],  # 3*512, 99*512 FAILS
     verbose=True,
-    test_backwards=True,
+    test_backwards=False,
     dtypes=[torch.float32],  # torch.float16],
 ):
     if test_backwards:
@@ -142,7 +142,7 @@ def time_softmax(repeat=3, num_seq=16 * 512):
 def repr_weird_repeat(num_seq=32 * 512, n_vocab=1024):
     dtype = torch.float32
     x = torch.randn(num_seq, n_vocab, requires_grad=True).to(dtype)
-    indices = torch.arange(num_seq).long()
+    indices = torch.ones(num_seq).long()
     triton_input = x.cuda()
     triton_indices = indices.cuda()
     triton_result = current_softmax(triton_input, triton_indices)
@@ -162,4 +162,4 @@ def repr_weird_repeat(num_seq=32 * 512, n_vocab=1024):
 
 
 if __name__ == "__main__":
-    repr_weird_repeat()
+    test_many_settings()
