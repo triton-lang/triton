@@ -1,20 +1,23 @@
 __global__ void softmax_fwd(TYPE *logit,
                         TYPE *modified_logit,
                         long *indices __readonly,
-                        TYPE *result) {
+                        TYPE *result,
+                        int n_vocab) {
 
             int pid = get_program_id(0);
 
-            int offset[TILE] = pid * TILE + 0 ... TILE;
+            bool check[TILE] = ((0 ... TILE) < n_vocab);
+            int offset[TILE] = pid * n_vocab + 0 ... TILE;
             TYPE* px[TILE]  = logit + offset;
-            TYPE* pmodified[TILE] = logit + offset;
+            TYPE* pmodified[TILE] = modified_logit + offset;
             long local_ind = *(indices + pid);
 
-            TYPE F16[TILE] = *px;
+            TYPE F16[TILE] = check ? *px : -INFINITY;
             float shifted_logit[TILE] = F16 - F16[max];
             float neg_logprob[TILE] = log(exp(shifted_logit)[+]) - shifted_logit;
-            *pmodified = neg_logprob;
-            *(result + pid) = *(modified_logit + (local_ind + TILE * pid));
+            *?(check)pmodified = neg_logprob;
+            __debug_barrier();
+            *(result + pid) = *(modified_logit + (local_ind + n_vocab * pid));
         }
 
 
@@ -32,17 +35,12 @@ __global__ void softmax_bwd(TYPE *neg_logprobs,
         // We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
         // and we have -log(p[k]) stored, so this is easy
 
-        // TYPE F16[TILE] = *px;
-        // float probs[TILE] = exp(-F16);
-        // TYPE result[TILE] = probs;
-        *px = exp(-(float[TILE]) *px);  // result;
+        *px = exp(-(float[TILE]) *px);
 
         // Do one hot
 
         // selected_logit_idx is selected logit index for our token
         bool find_one[TILE] = ((0 ... TILE) == local_ind);
-        //__debug_barrier();
-        //TYPE one_hot[TILE] = find_one;
         *px = *px - (TYPE[TILE]) find_one;
 
         // multiply by dneg_logprobs

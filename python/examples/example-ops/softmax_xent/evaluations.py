@@ -29,7 +29,19 @@ def test_softmax(
         if verbose:
             print("Torch:", torch_result)
             torch.testing.assert_allclose(torch_result, triton_result)
-        did_it_work = did_it_work and torch.allclose(torch_result, triton_result)
+        did_it_work = did_it_work and torch.allclose(
+            torch_result, triton_result, rtol=1e-3
+        )
+        if not did_it_work:
+            print(
+                min(
+                    [
+                        i
+                        for i, x in enumerate(abs(torch_result - triton_result))
+                        if x > 0.001
+                    ]
+                )
+            )
     return did_it_work
 
 
@@ -78,11 +90,11 @@ def test_grad(
 
 
 def test_many_settings(
-    seq_settings=[8, 7, 64, 256, 512, 16 * 1024],  # FAIL sometimes 2048, 16 * 1024],
-    vocab_settings=[128, 512, 1024, 2048, 8192, 100 * 512],  # 3*512, 99*512 FAILS
+    seq_settings=[8, 7, 32 * 1024],  # FAIL sometimes 2048, 16 * 1024],
+    vocab_settings=[128, 512, 3 * 512, 237, 51200],  # 3*512, 99*512 FAILS
     verbose=True,
     test_backwards=False,
-    dtypes=[torch.float32],  # torch.float16],
+    dtypes=[torch.float32],  # , torch.float16],
 ):
     if test_backwards:
         print("Testing gradients...")
