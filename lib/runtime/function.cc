@@ -102,6 +102,7 @@ extern void atomic_add_float_1x1(float*, float, bool);
 extern int atomic_cas(int*, int, int);
 extern int atomic_xchg(int*, int);
 extern int get_program_id(int);
+extern void __debug_barrier();
 extern int get_num_programs(int);
 extern int select(bool, int, int);
 extern char __constant__ * calloc(int);
