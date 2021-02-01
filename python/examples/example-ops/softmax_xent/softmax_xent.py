@@ -8,14 +8,24 @@ from sympy.utilities.exceptions import SymPyDeprecationWarning
 # Ignore an annoying warning printed when we import triton
 warnings.simplefilter("ignore", SymPyDeprecationWarning)
 lazy_import.lazy_module("triton")
+
 import triton
 
 
 class _softmax_xent_loss(torch.autograd.Function):
     """ This makes one copy of the logits. """
 
-    fwd_src = open(os.path.join(os.path.dirname(__file__), "softmax_xent_fwd.c")).read()
-    bwd_src = open(os.path.join(os.path.dirname(__file__), "softmax_xent_bwd.c")).read()
+    fwd_src = triton.read(
+        os.path.join(os.path.dirname(__file__), "softmax_xent_kernels.c"),
+        kernel_names=["softmax_fwd"],
+    )
+    bwd_src = triton.read(
+        os.path.join(os.path.dirname(__file__), "softmax_xent_kernels.c"),
+        kernel_names=["softmax_bwd"],
+    )
+
+    # fwd_src = open(os.path.join(os.path.dirname(__file__), "softmax_xent_fwd.c")).read()
+    # bwd_src = open(os.path.join(os.path.dirname(__file__), "softmax_xent_bwd.c")).read()
 
     # Need TILE = n_vocab for this approach to work:
     input_config_to_kernel_fwd = {}
@@ -37,16 +47,23 @@ class _softmax_xent_loss(torch.autograd.Function):
         if not (logits.dtype, n_vocab) in cls.input_config_to_kernel_fwd:
             cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)] = triton.kernel(
                 cls.fwd_src,
+                device=logits.device,
                 defines={"TILE": n_vocab, "TYPE": logits.dtype},
-                num_warps=[8],
+                num_warps=[2, 4, 8, 16],
             )
         kernel_fwd = cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)]
 
         N = logits.numel()
         neg_logprobs = torch.zeros_like(logits, dtype=logits.dtype).cuda()
         result = torch.zeros_like(indices, dtype=logits.dtype).cuda()
-        grid = lambda opt: (triton.cdiv(N, opt.d("TILE")),)
-        kernel_fwd(logits, indices, result, neg_logprobs, grid=grid)
+        grid = lambda opt: (triton.cdiv(N, opt.TILE),)
+        kernel_fwd(
+            logits.data_ptr(),
+            indices.data_ptr(),
+            result.data_ptr(),
+            neg_logprobs.data_ptr(),
+            grid=grid,
+        )
         # logits should be unmodified, but now neg_logprobs are full
         ctx.save_for_backward(neg_logprobs, indices)
 
@@ -72,17 +89,18 @@ class _softmax_xent_loss(torch.autograd.Function):
                 (neg_logprobs.dtype, n_vocab)
             ] = triton.kernel(
                 cls.bwd_src,
+                device=neg_logprobs.device,
                 defines={"TILE": n_vocab, "TYPE": neg_logprobs.dtype},
-                num_warps=[8],
+                num_warps=[2, 4, 8, 16],
             )
         kernel_bwd = cls.input_config_to_kernel_bwd[(neg_logprobs.dtype, n_vocab)]
-        grid = lambda opt: (triton.cdiv(N, opt.d("TILE")),)
+        grid = lambda opt: (triton.cdiv(N, opt.TILE),)
 
         # neg_logprobs will be modified in place to become our gradient:
         kernel_bwd(
-            neg_logprobs,
-            indices,
-            dneg_logprobs,
+            neg_logprobs.data_ptr(),
+            indices.data_ptr(),
+            dneg_logprobs.data_ptr(),
             grid=grid,
         )
 
