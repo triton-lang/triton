@@ -348,6 +348,10 @@ void Generator::VisitFuncCall(FuncCall* funcCall) {
     ir::value* false_val = ret_;
     return set_ret(bld_->create_select(cond, true_val, false_val));
   }
+  if(name == "__debug_barrier"){
+    bld_->create_barrier();
+    return;
+  }
   return error_not_implemented("function calls not implemented");
 }
 
