@@ -4,12 +4,17 @@ import warnings
 import lazy_import
 import torch
 from sympy.utilities.exceptions import SymPyDeprecationWarning
+import numpy as np
 
 # Ignore an annoying warning printed when we import triton
 warnings.simplefilter("ignore", SymPyDeprecationWarning)
 lazy_import.lazy_module("triton")
 
 import triton
+
+
+def make_power_of_two(x):
+    return int(2 ** (np.ceil(np.log(x) / np.log(2.0))))
 
 
 class _softmax_xent_loss_new(torch.autograd.Function):
@@ -34,15 +39,17 @@ class _softmax_xent_loss_new(torch.autograd.Function):
     def forward(cls, ctx, logits, indices):
         n_vocab = logits.shape[-1]
         assert indices.dtype == torch.int64
-        assert n_vocab % 16 == 0, "Number of logit options must be divisible by 16."
+        # assert n_vocab % 16 == 0, "Number of logit options must be divisible by 16."
 
         if not (logits.dtype, n_vocab) in cls.input_config_to_kernel_fwd:
+            infinities = {torch.float16: "F16_INFINITY", torch.float32: "F32_INFINITY"}
             cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)] = triton.kernel(
                 cls.fwd_src,
                 device=logits.device,
                 defines={
-                    "TILE": n_vocab,
+                    "TILE": make_power_of_two(n_vocab),
                     "TYPE": logits.dtype,
+                    "INFINITY": infinities[logits.dtype],
                 },
                 num_warps=[4],
             )
@@ -55,9 +62,9 @@ class _softmax_xent_loss_new(torch.autograd.Function):
         kernel_fwd(
             logits.data_ptr(),
             neg_logprobs.data_ptr(),
-            # neg_logprobs.data_ptr(),
             indices.data_ptr(),
             result.data_ptr(),
+            n_vocab,
             grid=grid,
         )
         # logits -> neg_logprobs via an in place modification by kernel_fwd
