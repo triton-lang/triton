@@ -224,7 +224,7 @@ void kernel::operator()(void *args, size_t args_size, driver::stream *stream, co
   for(size_t i = 0; i < 3; i++)
     grid[i] = (i < _grid.size()) ? _grid[i] : 1;
   // enqueue
-  stream->enqueue(&*ker_, grid, {opt.num_warps * 32, 1, 1}, args, args_size);
+  stream->enqueue(&*ker_, grid, {(size_t)opt.num_warps * 32, 1, 1}, args, args_size);
 }
 
 std::string kernel::get_asm(asm_mode_t mode) {
@@ -282,35 +282,29 @@ void function::do_loop_nest(std::vector<size_t> const & ranges,
         return;
       values[i--] = 0;
     }
-    i = D - 1;
+    i = D - 1;    options_t opt;
+
   }
 }
 
 
-void function::init_kernels(const std::string& src, const options_space_t& opts, driver::device *device) {
-  // all ranges
-  std::vector<size_t> ranges;
-  ranges.push_back(opts.num_warps.size());
-  for(const auto& x: opts.defines)
-    ranges.push_back(x.second.size());
-  // functor for source with given option
+void function::init_kernels(const std::string& src, const options_space_t& opts, const autotune_vals_t &autotune_vals, driver::device *device) {
+  // compile all
   std::vector<std::pair<options_t, std::string>> err;
-  auto do_make = [&](std::vector<size_t> params) {
-    // compilation options
-    unsigned i = 0;
-    options_t opt;
-    opt.num_warps = opts.num_warps[params[i++]];
-    for(auto D: opts.defines)
-      opt.defines[D.first] = D.second[params[i++]];
-    // compile
+  for(const auto&val : autotune_vals){
+    std::unordered_map<std::string, std::string> defines;
+    for(const auto& x: opts.defines)
+      defines[x.first] = x.second[0];
+    for(const auto& x: val.first)
+      defines[x.first] = x.second;
+    options_t opt { defines, val.second };
     try{
       kernels_.push_back({opt, std::make_shared<kernel>(src, opt, device)});
     }catch(const exception::base& e){
       err.push_back({opt, e.what()});
     }
-  };
-  // multi-threaded compilation
-  do_loop_nest(ranges, do_make);
+  }
+  // error if no kernel could be compiled
   if(kernels_.empty()){
     std::ostringstream dbg;
     dbg << "Auto-Tuner could not find any valid configuration:" << std::endl;
@@ -357,12 +351,10 @@ kernel* function::autotune(void* args, size_t args_size, const grid_fn_ty& grid_
   return it->second;
 }
 
-function::function(const std::string& src, const options_space_t& opt,
-                   driver::device *device,
-                   const autotune_vals_t& autotune_vals,const std::vector<std::string>& autotune_key)
-  : autotune_vals_(autotune_vals) {
+function::function(const std::string& src, const options_space_t& opt, driver::device *device,
+                   const autotune_vals_t& autotune_vals,const std::vector<std::string>& autotune_key)  {
   // pre-compile all kernels
-  init_kernels(src, opt, device);
+  init_kernels(src, opt, autotune_vals, device);
   // find indices of autotune keys
   auto arg_names = kernels_.at(0).second->get_arg_names();
   for(const std::string& name: autotune_key){

@@ -66,7 +66,7 @@ struct options_t {
     return convert<T>(defines.at(name));
   }
   std::unordered_map<std::string, std::string> defines;
-  size_t num_warps;
+  int num_warps;
 };
 
 
@@ -129,12 +129,11 @@ public:
   const std::vector<kernel_pair_t> get_kernels() { return kernels_; }
 
 private:
-  void init_kernels(const std::string& src, const options_space_t& opt, driver::device *device);
+  void init_kernels(const std::string& src, const options_space_t& opt, const autotune_vals_t& autotune_vals, driver::device *device);
 
 private:
   std::vector<kernel_pair_t> kernels_;
   std::map<std::vector<uint64_t>, kernel*> cache_;
-  autotune_vals_t autotune_vals_;
   std::vector<int> key_idxs_;
   std::vector<int> arg_size_;
   std::vector<int> arg_off_;
