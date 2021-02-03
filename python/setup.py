@@ -64,7 +64,7 @@ class CMakeBuild(build_ext):
         torch_library_dirs = library_paths(True)
         cxx11abi = str(int(torch._C._GLIBCXX_USE_CXX11_ABI))
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
-                      '-DBUILD_TESTS=OFF',
+                      '-DBUILD_TUTORIALS=OFF',
                       '-DBUILD_PYTHON_MODULE=ON',
                       #'-DPYTHON_EXECUTABLE=' + sys.executable,
                       #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON,

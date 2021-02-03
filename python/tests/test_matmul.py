@@ -78,19 +78,48 @@ def do_bench(fn, flops = 0, warmup = 10, rep = 50):
     end_event.record()
     th.cuda.synchronize()
     time_ms = start_event.elapsed_time(end_event) / rep
-    return time_ms, flops/time_ms*1e-9, ret
+    return time_ms
 
 
 def perf_op(dtype=th.float16, warmup=10, rep=50):
+    import pandas as pd
+    import os
     AT, BT = False, False
-    configs = [(N, N, N) for N in [128, 8192]]
-    for M, N, K in configs:
+    has_cutlass = 'CUTLASS_PROFILER' in os.environ
+    df = pd.DataFrame(columns=['AT', 'BT', 'N', 'TRITON', 'TORCH', 'CUTLASS'])
+    Ns = [128, 256, 512, 1024, 2048, 3072, 4096, 6144]
+    configs = [(AT, BT, N, N, N) for AT in [False, True] for BT in [False, True] for N in Ns]
+    for AT, BT, M, N, K in configs:
         a = th.randn((K, M) if AT else (M, K), device='cuda', dtype=dtype) / K**.5
         b = th.randn((N, K) if BT else (K, N), device='cuda', dtype=dtype) / K**.5
         if AT: a = a.t()
         if BT: b = b.t()
-        a = a[::,::]
-        b = b[::,::]
-        TH_MS, TH_TFLOPS, _ = do_bench(lambda: th.matmul(a, b), flops = M*N*K*2, warmup = warmup, rep = rep)
-        TT_MS, TT_TFLOPS, _ = do_bench(lambda: tt.ops.matmul(a, b), flops = M*N*K*2, warmup = warmup, rep = rep)
-        print((M, N, K), TH_MS, TT_MS)
+        # benchmarks
+        torch_ms = do_bench(lambda: th.matmul(a, b), warmup = warmup, rep = rep)
+        triton_ms = do_bench(lambda: tt.ops.matmul(a, b), warmup = warmup, rep = rep)
+        # store result
+        num_flops = 2*M*N*K
+        torch_tflops  = num_flops / torch_ms  * 1e-9
+        triton_tflops = num_flops / triton_ms * 1e-9
+        if 'CUTLASS_PROFILER' in os.environ:
+            import subprocess
+            # run program specified by CUTLASS_PROFILER env variable
+            layout_a = 'column' if AT else 'row'
+            layout_b = 'column' if BT else 'row'
+            # create temporary file name
+            import tempfile
+            fd, fname = tempfile.mkstemp()
+            # run program and gets its output
+            cmd = [os.environ['CUTLASS_PROFILER'], f'--m={M}', f'--n={N}', f'--k={K}', f'--A=f16:{layout_a}', f'--B=f16:{layout_b}', \
+                   '--C=f16:column', '--accum=f32', '--operation=gemm', '--verification-enabled=false',  '--warmup-iterations=10', \
+                   '--profiling-iterations=50', f'--output={fname}', '--verbose=false']
+            # run cmd
+            subprocess.run(cmd, stdout=subprocess.PIPE)
+            # read CSV output
+            df_c = pd.read_csv(f'{fname}.gemm.csv')
+            cutlass_tflops = max(df_c['GFLOPs'])/1e3
+        else:
+            cutlass_tflops = None
+        df = df.append({'AT': AT, 'BT': BT, 'N': N, 'TRITON': triton_tflops, 'TORCH': torch_tflops, 'CUTLASS': cutlass_tflops}, ignore_index=True)
+    pd.options.display.float_format = lambda x: '{:.2f}'.format(x)
+    print(df)
