@@ -5,11 +5,21 @@ import os
 class _matmul(torch.autograd.Function):
     src = triton.read(os.path.join(os.path.dirname(__file__), 'matmul.c'))
 
-    TM = [128]
-    TN = [128]
-    TK = [32]
-    TZ = 1
-    num_warps = [4]
+    _DEFAULT_CONFIGS = [
+        ({'TM': '128', 'TN': '128', 'TK': '32', 'TZ': '1'}, 4),
+        ({'TM': '64',  'TN': '128', 'TK': '32', 'TZ': '1'}, 4),
+        ({'TM': '128', 'TN': '64' , 'TK': '32', 'TZ': '1'}, 4),
+        ({'TM': '64' , 'TN': '64' , 'TK': '64', 'TZ': '1'}, 4),
+        ({'TM': '32' , 'TN': '128', 'TK': '64', 'TZ': '1'}, 4),
+        ({'TM': '128', 'TN': '32' , 'TK': '64', 'TZ': '1'}, 4),
+        ({'TM': '64' , 'TN': '32' , 'TK': '64', 'TZ': '1'}, 2),
+        ({'TM': '32' , 'TN': '64' , 'TK': '64', 'TZ': '1'}, 2),
+        ({'TM': '32' , 'TN': '128', 'TK': '32', 'TZ': '2'}, 4),
+        ({'TM': '32' , 'TN': '128', 'TK': '32', 'TZ': '2'}, 4),
+        ({'TM': '128' , 'TN': '32', 'TK': '32', 'TZ': '4'}, 4),
+        ({'TM': '128' , 'TN': '32', 'TK': '32', 'TZ': '4'}, 4),
+    ]
+    _CONFIGS = _DEFAULT_CONFIGS
 
     @staticmethod
     def largest_pow2_divisor(N):
@@ -41,7 +51,7 @@ class _matmul(torch.autograd.Function):
         lda_pow2_div = _matmul.largest_pow2_divisor(lda)
         ldb_pow2_div = _matmul.largest_pow2_divisor(ldb)
         ldc_pow2_div = _matmul.largest_pow2_divisor(ldc)
-        is_tk_div_k  = K % 32 == 0
+        is_tk_div_k  = K % 64 == 0
         key = (device, dtype, is_a_row, is_b_row, lda_pow2_div, ldb_pow2_div, ldc_pow2_div, is_tk_div_k)
         if key not in _matmul._kernels:
             defines = {
@@ -53,13 +63,10 @@ class _matmul(torch.autograd.Function):
                 'LDA_POW2_DIV': lda_pow2_div,
                 'LDB_POW2_DIV': ldb_pow2_div,
                 'LDC_POW2_DIV': ldc_pow2_div,
-                'TM'          : _matmul.TM,
-                'TN'          : _matmul.TN,
-                'TK'          : _matmul.TK,
-                'TZ'          : _matmul.TZ,
                 'IS_TK_DIV_K' : int(is_tk_div_k)
             }
-            _matmul._kernels[key] = triton.kernel(_matmul.src, device, num_warps=_matmul.num_warps, defines=defines, autotune_key=['M', 'N', 'K'])
+            _matmul._kernels[key] = triton.kernel(_matmul.src, device, defines=defines, 
+                                                  autotune_vals = _matmul._CONFIGS, autotune_key=['M', 'N', 'K'])
         kernel = _matmul._kernels[key]
         # # locks for split-k
         if device not in _matmul._locks:
@@ -68,7 +75,7 @@ class _matmul(torch.autograd.Function):
         # enqueue
         alpha = 1.
         args = [a.data_ptr(), b.data_ptr(), c.data_ptr(), alpha, M, N, K, lda, ldb, ldc, locks.data_ptr()]
-        grid = lambda opt: [triton.cdiv(M, opt.TM) * triton.cdiv(N, opt.TN), 1, 1]
+        grid = lambda opt: [triton.cdiv(M, opt.TM) * triton.cdiv(N, opt.TN), 1, opt.TZ]
         kernel(*args, grid=grid)
         return c
 
