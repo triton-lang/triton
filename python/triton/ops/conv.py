@@ -29,10 +29,10 @@ class _conv(torch.autograd.Function):
           TK = 16
           defines = {
               'TYPE' : dtype,
-              'TM'   : [32, 64, 128],
-              'TN'   : [32, 64, 128],
-              'TK'   : [TK],
-              'TZ'   : [1],
+              'TM'   : 64,
+              'TN'   : 64,
+              'TK'   : TK,
+              'TZ'   : 1,
               'HH': H, 'WW': W, 'PP': P, 'QQ': Q, 'SS': S, 'RR': R,
           }
           idx = torch.arange(CI*R*S)
@@ -40,7 +40,7 @@ class _conv(torch.autograd.Function):
           nci, nr, ns = _conv.unpack(idx + TK, CI, R, S)
           delta = (nci - ci)*a.stride(1) + (nr - r)*a.stride(2) + (ns - s)*a.stride(3)
           delta = delta.type(torch.int32).cuda()
-          _conv.kernel[dtype] = (delta, triton.kernel(_conv.src, device=device, num_warps=[4], defines=defines))
+          _conv.kernel[dtype] = (delta, triton.kernel(_conv.src, device=device, defines=defines))
       delta, kernel = _conv.kernel[dtype]
       # allocate output
       c = torch.empty([Z, CO, P, Q], dtype=dtype, device=device)
