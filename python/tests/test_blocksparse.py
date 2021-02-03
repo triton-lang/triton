@@ -15,6 +15,12 @@ def mask_tensor(x, mask, block, value = 0):
     ret[:, h, i*block: (i+1)*block, j*block: (j+1)*block] = value
   return ret
 
+
+
+## -----------------------------------------------------------------------------
+## Unit Tests
+## -----------------------------------------------------------------------------
+
 @pytest.mark.parametrize("MODE, TRANS_A, TRANS_B, BLOCK", 
     [
     (mode, at, bt, block) for mode in ['sdd', 'dsd', 'dds']\
@@ -87,3 +93,41 @@ def test_softmax(BLOCK, WIDTH, DTYPE = torch.float16):
   rtol, atol = {torch.float32: (1e-4, 1e-5),
                 torch.float16: (1e-2, 1e-3)}[DTYPE]
   assert torch.allclose(ry , ty, rtol=rtol, atol=atol)
+
+
+## -----------------------------------------------------------------------------
+## Performance Tests
+## -----------------------------------------------------------------------------
+
+def do_bench(fn, warmup = 10, rep = 50):
+    import torch as th
+    start_event = th.cuda.Event(enable_timing=True)
+    end_event   = th.cuda.Event(enable_timing=True)
+    ret = fn()
+    for i in range(warmup):
+        fn()
+    th.cuda.synchronize()
+    start_event.record()
+    for i in range(rep):
+        fn()
+    end_event.record()
+    th.cuda.synchronize()
+    time_ms = start_event.elapsed_time(end_event) / rep
+    return time_ms
+
+def perf_matmul(BLOCK=32, LAYOUT_MODE = 'tril', OP_MODE = 'sdd', TRANS_A=False, TRANS_B=False, DTYPE = torch.float16, warmup=10, rep=50):
+  Z, H = 2, 4
+  K = 512
+  for N in [128, 256, 512, 1024, 2048, 4096]:
+      # create layout
+      M, N = N, N
+      shape = {'sdd': (M, N), 
+               'dsd': (K, M) if TRANS_A else (M, K), 
+               'dds': (N, K) if TRANS_B else (K, N)}[OP_MODE]
+      layout = torch.tril(torch.ones((H, shape[0]//BLOCK, shape[1]//BLOCK), dtype=torch.int64))
+      # create op
+      op = tt.ops.blocksparse.matmul(layout, BLOCK, OP_MODE, trans_a=TRANS_A, trans_b=TRANS_B)
+      # inputs
+      a = torch.randn((Z, int(layout.sum()), BLOCK, BLOCK), dtype=DTYPE, device='cuda')
+      b = torch.randn((Z, int(layout.sum()), BLOCK, BLOCK), dtype=DTYPE, device='cuda')
+      ms = do_bench(lambda: op(a, b), warmup=warmup, rep=rep)

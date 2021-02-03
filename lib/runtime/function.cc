@@ -288,23 +288,29 @@ void function::do_loop_nest(std::vector<size_t> const & ranges,
 }
 
 
-void function::init_kernels(const std::string& src, const options_space_t& opts, const autotune_vals_t &autotune_vals, driver::device *device) {
-  // compile all
+void function::init_kernels(const std::string& src, const options_t& opt,
+                            const autotune_vals_t& confs, driver::device *device) {
+  // list of all possible configs
+  // just augment `opt` with each define of `confs`
+  // and override warp count
+  size_t num_opts = std::max(confs.size(), (size_t)1);
+  std::vector<options_t> opts(num_opts, opt);
+  for(size_t i = 0; i < confs.size(); i++){
+    opts[i].defines.insert(confs[i].first.begin(), confs[i].first.end());
+    opts[i].num_warps = confs[i].second;
+  }
+  // compile all possible configs
+  // compilation errors (e.g., too much shared mem)
+  // will populate `err`
   std::vector<std::pair<options_t, std::string>> err;
-  for(const auto&val : autotune_vals){
-    std::unordered_map<std::string, std::string> defines;
-    for(const auto& x: opts.defines)
-      defines[x.first] = x.second[0];
-    for(const auto& x: val.first)
-      defines[x.first] = x.second;
-    options_t opt { defines, val.second };
+  for(const options_t& opt: opts) {
     try{
       kernels_.push_back({opt, std::make_shared<kernel>(src, opt, device)});
     }catch(const exception::base& e){
       err.push_back({opt, e.what()});
     }
   }
-  // error if no kernel could be compiled
+  // throw an exception if `err` is not empty
   if(kernels_.empty()){
     std::ostringstream dbg;
     dbg << "Auto-Tuner could not find any valid configuration:" << std::endl;
@@ -351,8 +357,8 @@ kernel* function::autotune(void* args, size_t args_size, const grid_fn_ty& grid_
   return it->second;
 }
 
-function::function(const std::string& src, const options_space_t& opt, driver::device *device,
-                   const autotune_vals_t& autotune_vals,const std::vector<std::string>& autotune_key)  {
+function::function(const std::string& src, const options_t &opt, driver::device *device,
+                   const autotune_vals_t& autotune_vals, const std::vector<std::string>& autotune_key)  {
   // pre-compile all kernels
   init_kernels(src, opt, autotune_vals, device);
   // find indices of autotune keys

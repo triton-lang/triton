@@ -54,12 +54,6 @@ enum asm_mode_t {
   ASM_NV_SASS
 };
 
-struct options_space_t {
-  typedef std::pair<std::string, std::vector<std::string>> define_t;
-  std::vector<define_t> defines;
-  std::vector<int> num_warps;  
-};
-
 struct options_t {
   template<class T>
   T D(const std::string& name) const {
@@ -117,9 +111,8 @@ private:
   static void do_loop_nest(std::vector<size_t> const & ranges,
                            std::function<void(std::vector<size_t> const &)> const & f);
 public:
-  function(const std::string& src, const options_space_t& opt, driver::device *device,
-           const autotune_vals_t& autotune_vals = {},
-           const std::vector<std::string> &autotune_key = {});
+  function(const std::string& src, const options_t& opt, driver::device *device,
+           const autotune_vals_t& autotune_vals = {}, const std::vector<std::string> &autotune_key = {});
   void operator()(void* args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
   void operator()(void* args, size_t args_size, const grid_t& grid, driver::stream *stream);
   // auto-tuning
@@ -129,7 +122,7 @@ public:
   const std::vector<kernel_pair_t> get_kernels() { return kernels_; }
 
 private:
-  void init_kernels(const std::string& src, const options_space_t& opt, const autotune_vals_t& autotune_vals, driver::device *device);
+  void init_kernels(const std::string& src, const options_t& opt, const autotune_vals_t& autotune_vals, driver::device *device);
 
 private:
   std::vector<kernel_pair_t> kernels_;

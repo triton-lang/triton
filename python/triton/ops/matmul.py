@@ -8,16 +8,16 @@ class _matmul(torch.autograd.Function):
     _DEFAULT_CONFIGS = [
         ({'TM': '128', 'TN': '128', 'TK': '32', 'TZ': '1'}, 4),
         ({'TM': '64',  'TN': '128', 'TK': '32', 'TZ': '1'}, 4),
-        ({'TM': '128', 'TN': '64',  'TK': '32', 'TZ': '1'}, 4),
+        ({'TM': '128', 'TN': '64' , 'TK': '32', 'TZ': '1'}, 4),
         ({'TM': '64' , 'TN': '64' , 'TK': '64', 'TZ': '1'}, 4),
         ({'TM': '32' , 'TN': '128', 'TK': '64', 'TZ': '1'}, 4),
         ({'TM': '128', 'TN': '32' , 'TK': '64', 'TZ': '1'}, 4),
         ({'TM': '64' , 'TN': '32' , 'TK': '64', 'TZ': '1'}, 2),
         ({'TM': '32' , 'TN': '64' , 'TK': '64', 'TZ': '1'}, 2),
-        ({'TM': '32' , 'TN': '128' , 'TK': '32', 'TZ': '2'}, 4),
-        ({'TM': '32' , 'TN': '128' , 'TK': '32', 'TZ': '2'}, 4),
-        ({'TM': '128' , 'TN': '32' , 'TK': '32', 'TZ': '4'}, 4),
-        ({'TM': '128' , 'TN': '32' , 'TK': '32', 'TZ': '4'}, 4),
+        ({'TM': '32' , 'TN': '128', 'TK': '32', 'TZ': '2'}, 4),
+        ({'TM': '32' , 'TN': '128', 'TK': '32', 'TZ': '2'}, 4),
+        ({'TM': '128' , 'TN': '32', 'TK': '32', 'TZ': '4'}, 4),
+        ({'TM': '128' , 'TN': '32', 'TK': '32', 'TZ': '4'}, 4),
     ]
     _CONFIGS = _DEFAULT_CONFIGS
 
@@ -65,7 +65,7 @@ class _matmul(torch.autograd.Function):
                 'LDC_POW2_DIV': ldc_pow2_div,
                 'IS_TK_DIV_K' : int(is_tk_div_k)
             }
-            _matmul._kernels[key] = triton.kernel(_matmul.src, device, num_warps=[4], defines=defines, 
+            _matmul._kernels[key] = triton.kernel(_matmul.src, device, defines=defines, 
                                                   autotune_vals = _matmul._CONFIGS, autotune_key=['M', 'N', 'K'])
         kernel = _matmul._kernels[key]
         # # locks for split-k

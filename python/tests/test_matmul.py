@@ -82,12 +82,12 @@ def do_bench(fn, flops = 0, warmup = 10, rep = 50):
     return time_ms
 
 
-def perf_op(dtype=th.float16, warmup=10, rep=50):
+def perf_op(AT=False, BT=False, MODE='square', dtype=th.float16, warmup=10, rep=50):
     import pandas as pd
     import matplotlib.pyplot as plt
     import os
     has_cutlass = 'CUTLASS_PROFILER' in os.environ
-    df = pd.DataFrame(columns=['AT', 'BT', 'N', 'Triton', 'Torch', 'CUTLASS'])
+    df = pd.DataFrame(columns=['N', 'Triton', 'Torch', 'CUTLASS'])
     Ns = [128, 256, 512, 1024, 1536, 2048, 2560, 3072, 4096, 5120, 6144]
     configs = [(AT, BT, N, N, N) for AT in [False, True] for BT in [False, True] for N in Ns]
     for AT, BT, M, N, K in configs:
@@ -121,12 +121,10 @@ def perf_op(dtype=th.float16, warmup=10, rep=50):
             cutlass_tflops = max(df_c['GFLOPs'])/1e3
         else:
             cutlass_tflops = None
-        df = df.append({'AT': AT, 'BT': BT, 'N': N, 'Triton': triton_tflops, 'Torch': torch_tflops, 'CUTLASS': cutlass_tflops}, ignore_index=True)
-    # plot df for all values of N in a 2x2 grid corresponding to all possible congigurations of AT and BT
-    fig, ax = plt.subplots(2, 2, figsize=(10, 10))
-    df[(df['AT']==False) & (df['BT']==False)].plot.line(x='N', y=['Triton', 'Torch', 'CUTLASS'], title = 'NN', ax=ax[0,0], color=['purple', 'blue', 'green'])
-    df[(df['AT']==False) & (df['BT']==True )].plot.line(x='N', y=['Triton', 'Torch', 'CUTLASS'], title = 'NT', ax=ax[0,1], color=['purple', 'blue', 'green'])
-    df[(df['AT']==True ) & (df['BT']==False)].plot.line(x='N', y=['Triton', 'Torch', 'CUTLASS'], title = 'TN', ax=ax[1,0], color=['purple', 'blue', 'green'])
-    df[(df['AT']==True ) & (df['BT']==True )].plot.line(x='N', y=['Triton', 'Torch', 'CUTLASS'], title = 'TT', ax=ax[1,1], color=['purple', 'blue', 'green'])
-    # save plt to pdf
-    plt.savefig('matmul-perf-square.pdf')
+        df = df.append({'N': N, 'Triton': triton_tflops, 'Torch': torch_tflops, 'CUTLASS': cutlass_tflops}, ignore_index=True)
+    # name
+    AT = {True: 'T', False: 'N'}[AT]
+    BT = {True: 'T', False: 'N'}[BT]
+    name = f'{AT}{BT}'
+    df.plot.line(x='N', y=['Triton', 'Torch', 'CUTLASS'], title = f'{AT}{BT}', ax=ax[0,0], color=['purple', 'blue', 'green'])
+    plt.savefig(f'matmul-{mode}-{name}.pdf')
