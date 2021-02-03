@@ -48,7 +48,7 @@ class _softmax(torch.autograd.Function):
         # just-in-time compile kernel
         key = (block, device, dtype, num_warps, TN, apply_scale, apply_rpe, apply_kp_mask, apply_attn_mask, kp_mask_mode, attn_mask_mode)
         if key not in cache:
-            defines = {'TM': [1], 'TN': [TN], 'TYPE': dtype, 'BLOCK': block,
+            defines = {'TM': 1, 'TN': TN, 'TYPE': dtype, 'BLOCK': block,
                        'INFINITY': {torch.float32: 'F32_INFINITY',
                                     torch.float16: 'F16_INFINITY'}[dtype]}
             if apply_scale:
@@ -63,7 +63,7 @@ class _softmax(torch.autograd.Function):
                 defines['APPLY_ATTN_MASK'] = True
                 if attn_mask_mode == 'mul':
                     defines['ATTN_MASK_MUL'] = True
-            kernel  = triton.kernel(src, device=device, defines=defines, num_warps=[num_warps])
+            kernel  = triton.kernel(src, device=device, defines=defines, num_warps=num_warps)
             cache[key] = kernel
         return cache[key]
 

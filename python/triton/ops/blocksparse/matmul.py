@@ -81,7 +81,7 @@ class _matmul(torch.autograd.Function):
 
   @staticmethod
   def make_sdd_lut(layout, block, dtype, device):
-    start_width = 64 // block
+    start_width = 128 // block
     superblocks = libtriton.superblock(layout.type(torch.int32), start_width)
     luts, widths, packs = [], [], []
     for size, nnz in superblocks:
@@ -126,22 +126,18 @@ class _matmul(torch.autograd.Function):
       num_lock = 1
       key = (block, device, a.dtype, b.dtype, trans_a, trans_b, trans_c, pack, is_32_multiple, is_64_multiple)
       if key not in _matmul.sdd_cache:
-        F32TK  = [8, 16]
-        #F16TK  = [16]
-        #F16TK += [32] if is_32_multiple else []
-        #F16TK += [64] if is_64_multiple else []
-        F16TK = [64]
-        TK = {torch.float32: F32TK,
-              torch.float16: F16TK}[dtype]
-        defines =  {'TM': block*pack, 'TN': block*pack, 'TMN': block*block*pack*pack, 'BLOCK': block, 
-                    'TK': TK, 'TYPE': dtype,
+        defines =  {'TM': block*pack, 'TN': block*pack, 
+                    'TMN': block*block*pack*pack, 
+                    'BLOCK': block, 
+                    'TK': 32, 
+                    'TYPE': dtype,
                     'STRIDE_AM': '1'    if trans_a else 'lda', 
                     'STRIDE_AK': 'lda'  if trans_a else '1',
                     'STRIDE_BN': 'ldb'  if trans_b else '1', 
                     'STRIDE_BK': '1'    if trans_b else 'ldb',
                     'STRIDE_CM': 'ldc', 'STRIDE_CN': '1',
                     'SDD': True, 'TZ': 1, 'NAME': 'sdd_kernel'}
-        _matmul.sdd_cache[key] = triton.kernel(src, device=device, defines=defines, num_warps=[1, 2, 4])
+        _matmul.sdd_cache[key] = triton.kernel(src, device=device, defines=defines)
 
       kernel = _matmul.sdd_cache[key]
       # create output
@@ -270,9 +266,9 @@ class _matmul(torch.autograd.Function):
     # kernel
     key = (block, a.device, a.dtype, b.dtype, trans_a, trans_b, trans_c)
     if key not in _matmul.dds_cache:
-      TM = [64, 128] if dtype == torch.float32 else [64, 128, 256]
-      TK = [8]       if dtype == torch.float32 else [16]
-      defines = {'TM': TM, 'TN': block, 'TK': TK, 
+      defines = {'TM': 128, 
+                 'TN': block, 
+                 'TK': 16, 
                  'BLOCK': block,
                  'TYPE': dtype,
                  'STRIDE_AM': 1 if trans_a else 'lda',
@@ -283,7 +279,7 @@ class _matmul(torch.autograd.Function):
                  'STRIDE_CN': 'ldc' if trans_c else '1',
                  'NAME': 'dds_kernel',
                  'DDS': True}
-      _matmul.dds_cache[key] = triton.kernel(src, device=a.device, defines=defines, num_warps=[4])
+      _matmul.dds_cache[key] = triton.kernel(src, device=a.device, defines=defines)
     kernel = _matmul.dds_cache[key]
     # output
     CS0 = AS0
@@ -315,9 +311,9 @@ class _matmul(torch.autograd.Function):
     # kernel
     key = (block, a.device, a.dtype, b.dtype, trans_a, trans_b, trans_c)
     if key not in _matmul.dsd_cache:
-      TN = [64, 128] if dtype == torch.float32 else [64, 128]
-      TK = [8]       if dtype == torch.float32 else [16]
-      defines = {'TM': block, 'TN': TN, 'TK': TK, 
+      defines = {'TM': block, 
+                 'TN': 128, 
+                 'TK': 16, 
                  'BLOCK': block,
                  'TYPE': dtype,
                  'STRIDE_AM': 1 if trans_a else block, 
@@ -328,7 +324,7 @@ class _matmul(torch.autograd.Function):
                  'STRIDE_CN': 'ldc' if trans_c else '1',
                  'NAME': 'dsd_kernel',
                  'DSD': True}
-      _matmul.dsd_cache[key] = triton.kernel(src, device=a.device, defines=defines, num_warps=[4])
+      _matmul.dsd_cache[key] = triton.kernel(src, device=a.device, defines=defines)
     kernel = _matmul.dsd_cache[key]
     # output
     CS0 = BS0
