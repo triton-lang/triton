@@ -11,3 +11,6 @@ def cleanup():
 
 from .kernel import *
 from . import ops
+
+# version
+__version__ = '1.0.0'
