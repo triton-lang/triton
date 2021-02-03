@@ -26,10 +26,8 @@ def th_to_triton(obj):
     torch.float64: 'double'
   }
   if isinstance(obj, torch.dtype):
-    return [tys[obj]]
-  if isinstance(obj, list):
-    return [th_to_triton(x)[0] for x in obj]
-  return [str(obj)]
+    return tys[obj]
+  return str(obj)
 
 def cdiv(a, b):
     return libtriton.cdiv(a, b)
@@ -45,17 +43,15 @@ def read(path, kernel_names=[]):
     source = libtriton.extract_kernels(source, kernel_names)
   return source
 
-
-
 class kernel:
 
-  def __init__(self, src, device, defines = dict(), num_warps = [4], autotune_key = []):
+  def __init__(self, src, device, defines = dict(), num_warps = 4, autotune_vals = [], autotune_key = []):
     # check if src is empty
     if src == '':
       raise ValueError('Kernel source code is empty')
     self.src = src
-    self.opt = libtriton.options_space()
-    self.opt.defines = [(k, th_to_triton(v)) for k, v in defines.items()]
+    self.opt = libtriton.options()
+    self.opt.defines = {k: th_to_triton(v) for k, v in defines.items()}
     self.opt.num_warps = num_warps
     # device
     assert device.type in ['cuda', 'cpu']
@@ -65,7 +61,7 @@ class kernel:
       self.device = -1
     # C++ function wrapper
     self.op_id = libtriton.make_op_id()
-    libtriton.register_fn(self.op_id, self.device, self.src, self.opt, autotune_key)
+    libtriton.register_fn(self.op_id, self.device, self.src, self.opt, autotune_vals, autotune_key)
     # debug mode
     self.is_debug = 'TRITON_DEBUG' in os.environ
     # signature
