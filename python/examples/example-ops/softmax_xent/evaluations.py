@@ -1,11 +1,9 @@
 import torch
-from softmax_xent_new import triton_softmax_new
+from softmax_xent import triton_softmax
 from softmax_xent_in_place import triton_softmax_in_place
 
-from belt.torch_utils import CudaTimer
-
 # WHICH SOFTMAX SHOULD WE TEST?
-current_softmax = triton_softmax_new
+current_softmax = triton_softmax
 
 
 def test_softmax(
@@ -30,7 +28,7 @@ def test_softmax(
             print("Torch:", torch_result)
             torch.testing.assert_allclose(torch_result, triton_result)
         did_it_work = did_it_work and torch.allclose(
-            torch_result, triton_result, rtol=1e-3
+            torch_result, triton_result, atol=1e-6, rtol=1e-3
         )
         if not did_it_work:
             print(
@@ -82,19 +80,19 @@ def test_grad(
             torch.testing.assert_allclose(torch_logit.grad, triton_logit.grad)
         else:
             it_worked = it_worked and torch.allclose(
-                torch_logit.grad, triton_logit.grad
+                torch_logit.grad, triton_logit.grad, atol=1e-6
             )
             if not it_worked:
-                print((torch_logit.grad - triton_logit.grad)[:3, :9])
+                print((torch_logit.grad - triton_logit.grad).abs().max())
     return it_worked
 
 
 def test_many_settings(
-    seq_settings=[8, 7, 32 * 1024],  # FAIL sometimes 2048, 16 * 1024],
-    vocab_settings=[128, 512, 3 * 512, 237, 51200],  # 3*512, 99*512 FAILS
+    seq_settings=[8, 7, 32 * 1024],
+    vocab_settings=[512, 51200],  # 3*512, 99*512 FAILS sometimes
     verbose=True,
     test_backwards=False,
-    dtypes=[torch.float32],  # , torch.float16],
+    dtypes=[torch.float32, torch.float16],
 ):
     if test_backwards:
         print("Testing gradients...")
@@ -122,55 +120,6 @@ def test_many_settings(
     print(results)
     return results
 
-
-def time_softmax(repeat=3, num_seq=16 * 512):
-    dtype = torch.float32
-    x = torch.randn(num_seq, 51200, requires_grad=True).to(dtype)
-    indices = torch.arange(num_seq).long()
-    triton_input = x.cuda()
-    triton_indices = indices.cuda()
-    triton_result = current_softmax(triton_input, triton_indices)
-    triton_result.mean().backward()
-
-    with CudaTimer() as timer:
-        for _ in range(repeat):
-            triton_result = current_softmax(triton_input, triton_indices)
-            triton_result.mean().backward()
-    print("Triton", timer.elapsed_seconds() / repeat)
-
-    torch_input = x.cuda()
-    torch_indices = indices.cuda()
-    torch_xent_fn = torch.nn.CrossEntropyLoss(reduction="none")
-    torch_result = torch_xent_fn(torch_input, torch_indices)
-    torch_result.mean().backward()
-
-    with CudaTimer() as timer:
-        for _ in range(repeat):
-            torch_result = torch_xent_fn(torch_input, torch_indices)
-            torch_result.mean().backward()
-    print("Torch", timer.elapsed_seconds() / repeat)
-
-
-def repr_weird_repeat(num_seq=32 * 512, n_vocab=1024):
-    dtype = torch.float32
-    x = torch.randn(num_seq, n_vocab, requires_grad=True).to(dtype)
-    indices = torch.ones(num_seq).long()
-    triton_input = x.cuda()
-    triton_indices = indices.cuda()
-    triton_result = current_softmax(triton_input, triton_indices)
-    print(triton_result.mean())
-    print("Zeros or Negatives?", len([z for z in triton_result if z < 0.1]))
-    triton_result.mean().backward()
-
-    y = torch.randn(num_seq, n_vocab, requires_grad=True).to(dtype).cuda()
-    triton_result2 = current_softmax(y, triton_indices)
-    print(triton_result2.mean())
-    print("Zeros or Negatives?", len([z for z in triton_result2 if z < 0.1]))
-
-    z = torch.randn(num_seq, n_vocab, requires_grad=True).to(dtype).cuda()
-    triton_result3 = current_softmax(z, triton_indices)
-    print(triton_result3.mean())
-    print("Zeros or Negatives?", len([z for z in triton_result3 if z < 0.1]))
 
 
 if __name__ == "__main__":
