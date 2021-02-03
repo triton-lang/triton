@@ -83,8 +83,8 @@ __global__ void matmul(TYPE * A __noalias __readonly __aligned(16),
       *?(checkc) pc = c;
 #else
       // accumulate partial result using spin-locks
-      int *plock  = locks + rid;
-      int *pcount = plock + get_num_programs(0) * get_num_programs(1);
+      int *plock  = locks + pid;
+      int *pcount = plock + get_num_programs(0);
       for(int repeat = 1; repeat == 1; repeat = atomic_cas(plock, 0, 1));
       int count = *pcount;
       if(count == 0)
