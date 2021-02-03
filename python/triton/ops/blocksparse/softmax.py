@@ -153,7 +153,7 @@ class _softmax(torch.autograd.Function):
         M = x.shape[0]
         grid = lambda opt: [triton.cdiv(ctx.spdims[0] * ctx.spdims[1] * ctx.block, opt.TM), M]
         kernel(x.data_ptr(), ctx.scale, dx.data_ptr(), lut.data_ptr(), ctx.maxlut, x.stride(0), dx.stride(0), grid=grid)
-        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return dx, None, dx / ctx.scale, None, None, None, None, None, None, None, None, None, None, None, None
 
 class softmax:
 
