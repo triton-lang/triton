@@ -16,6 +16,17 @@ class _softmax(torch.autograd.Function):
 
 
     @staticmethod
+    def next_power_of_2(n): 
+        n -= 1
+        n |= n >> 1
+        n |= n >> 2
+        n |= n >> 4
+        n |= n >> 8
+        n |= n >> 16
+        n += 1
+        return n 
+
+    @staticmethod
     def make_lut(layout, block, device):
         _empty = torch.tensor([], dtype=torch.int64, device=layout.device)
         sizes = _empty.clone()
@@ -43,8 +54,7 @@ class _softmax(torch.autograd.Function):
           raise NotImplementedError('Reductions larger than 32768 elements '\
                                     'are not yet implemented')
         num_warps = 4 if max_k < 512 else (8 if max_k < 2048 else 16)
-        pad = num_warps * 32 * 2
-        TN = (int(max_k) + pad-1)//pad * pad
+        TN = _softmax.next_power_of_2(max_k)
         # just-in-time compile kernel
         key = (block, device, dtype, num_warps, TN, apply_scale, apply_rpe, apply_kp_mask, apply_attn_mask, kp_mask_mode, attn_mask_mode)
         if key not in cache:
@@ -108,12 +118,9 @@ class _softmax(torch.autograd.Function):
         grid = lambda opt: [triton.cdiv(spdims[0] * spdims[1] * block, opt.TM), M]
 
         # run kernel
-        time[0] = kernel(x.data_ptr(), scale, lut.data_ptr(), rpe.data_ptr(), key_padding_mask.data_ptr(), attn_mask.data_ptr(),\
-                         maxlut,\
-                         x.stride(0),\
-                         stride_zrpe, stride_hrpe, stride_srpe,\
-                         stride_zkpm, stride_zattnm,\
-                         grid=grid)
+        kernel(x.data_ptr(), scale, lut.data_ptr(), rpe.data_ptr(), key_padding_mask.data_ptr(), attn_mask.data_ptr(),
+               maxlut, x.stride(0), stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm,
+               grid=grid)
         # save to context
         ctx.mark_dirty(x)
         ctx.save_for_backward(x, lut)

@@ -58,8 +58,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE = torch.float16, Z = 3, H =
 
 @pytest.mark.parametrize("BLOCK, WIDTH", 
   [
-    (block, width) for block in [16]\
-                   for width in [256, 576]
+    (block, width) for block in [32]\
+                   for width in [256, 576, 1024, 2048, 4096]
   ]
 )
 def test_softmax(BLOCK, WIDTH, DTYPE = torch.float16):
@@ -78,15 +78,15 @@ def test_softmax(BLOCK, WIDTH, DTYPE = torch.float16):
   # triton result
   op = tt.ops.blocksparse.softmax(layout, BLOCK)
   tx = sparsify_tensor(x, layout, BLOCK)
-  ty  = op(tx, scale=scale, key_padding_mask=kp_mask, key_padding_mask_mode='add', attn_mask=at_mask.to(DTYPE), attn_mask_mode='mul')
+  ty  = op(tx, scale=scale)
   # torch result
   rx = mask_tensor(x, layout, BLOCK, value=float('-inf'))
-  if at_mask is not None:
-    # broadcast at_mask to the same shape as rx
-    M = at_mask[None, None, :, :] + torch.zeros_like(rx)
-    rx[M == 0] = float('-inf')
-  if kp_mask is not None:
-    rx += kp_mask[:, None, None, :]
+  # if at_mask is not None:
+  #   # broadcast at_mask to the same shape as rx
+  #   M = at_mask[None, None, :, :] + torch.zeros_like(rx)
+  #   rx[M == 0] = float('-inf')
+  # if kp_mask is not None:
+  #   rx += kp_mask[:, None, None, :]
   ry = torch.softmax(rx*scale, -1)
   ry = sparsify_tensor(ry, layout, BLOCK)
   # compare
