@@ -331,7 +331,6 @@ public:
   using ShapeInt = std::vector<int>;
 
 public:
-  static TileType* New(const ShapeExpr& expr, QualType eleType);
   static TileType* New(const ShapeInt& shape, QualType eleType);
   virtual ~TileType() { }
 
@@ -345,6 +344,7 @@ public:
   }
 
   ShapeInt Shape() { return shape_; }
+
   int NumEle() const {
     int ret = 1;
     for(int s: shape_)
@@ -352,24 +352,13 @@ public:
     return ret;
   }
 
-protected:
-  TileType(MemPool* pool, const ShapeExpr& expr, QualType derived)
-    : DerivedType(pool, derived),
-      shapeExpr_(expr) {
-    bool isComplete = true;
-    for(Expr* s: shapeExpr_)
-      isComplete = isComplete && !s;
-    SetComplete(isComplete);
+  bool CheckPow2NumEl() const {
+    int n = NumEle();
+    return n && !(n & (n - 1));
   }
 
-  TileType(MemPool* pool, const ShapeInt& shape, QualType derived)
-    : DerivedType(pool, derived),
-      shape_(shape) {
-    bool isComplete = true;
-    for(int s: shape_)
-      isComplete = isComplete && (s>=0);
-    SetComplete(isComplete);
-  }
+protected:
+  TileType(MemPool* pool, const ShapeInt& shape, QualType derived);
 
 protected:
   ShapeExpr shapeExpr_;

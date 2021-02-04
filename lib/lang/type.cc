@@ -110,11 +110,6 @@ ArrayType* ArrayType::New(Expr* expr, QualType eleType) {
          ArrayType(&arrayTypePool, expr, eleType);
 }
 
-TileType* TileType::New(const ShapeExpr &expr, QualType eleType) {
-  return new (tileTypePool.Alloc())
-         TileType(&tileTypePool, expr, eleType);
-}
-
 TileType* TileType::New(const ShapeInt &shape, QualType eleType) {
   return new (tileTypePool.Alloc())
          TileType(&tileTypePool, shape, eleType);
@@ -314,6 +309,15 @@ bool ArrayType::Compatible(const Type& other) const {
   if (complete_ && otherArray->complete_)
     return len_ == otherArray->len_;
   return true;
+}
+
+TileType::TileType(MemPool* pool, const ShapeInt& shape, QualType derived)
+    : DerivedType(pool, derived),
+      shape_(shape) {
+    bool isComplete = true;
+    for(int s: shape_)
+      isComplete = isComplete && (s>=0);
+    SetComplete(isComplete);
 }
 
 bool TileType::Compatible(const Type& other) const {
