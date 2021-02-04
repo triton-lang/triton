@@ -1787,8 +1787,10 @@ QualType Parser::ParseArrayFuncDeclarator(const Token* ident, QualType base) {
       Error(ident, "'%s' has incomplete element type", ident->str_.c_str());
     }
     // return a pointer for tiles in constant memory:
-    return TileType::New(shape, base);
-
+    TileType* ret = TileType::New(shape, base);
+    if(!ret->CheckPow2NumEl())
+      Error(ts_.Peek(), "tile must have power of 2 number of elements");
+    return ret;
   } else if (ts_.Try('(')) {	// Function declaration
     if (base->ToFunc()) {
       Error(ts_.Peek(),
