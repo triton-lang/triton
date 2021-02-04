@@ -448,7 +448,10 @@ void BinaryOp::RangeOpTypeChecking() {
   int len = static_cast<int>(end - begin);
   if(len < 0)
     Error(this, "range cannot be negative");
-  type_ = TileType::New(TileType::ShapeInt{len}, lhs_->Type());
+  TileType* ret = TileType::New(TileType::ShapeInt{len}, lhs_->Type());
+  if(!ret->CheckPow2NumEl())
+    Error(this, "range must have power of 2 number of elements");
+  type_ = ret;
 }
 
 void BinaryOp::MaskedDerefOpTypeChecking() {
@@ -751,6 +754,8 @@ void UnaryOp::CastOpTypeChecking() {
     if(type_->IsScalar() && operandType->ToTile()->NumEle() != 1)
       Error(this, "tile with more than one element cannot be casted to scalar");
     if(type_->IsTile() && operandType->IsTile()){
+      if(!type_->ToTile()->CheckPow2NumEl())
+        Error(this, "tile must have power of 2 number of elements");
       auto operandShape = operandType->ToTile()->Shape();
       auto shape = type_->ToTile()->Shape();
       // this is a shape downcast
