@@ -37,7 +37,7 @@ __global__ void softmax_bwd(TYPE *neg_logprobs,
         // We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
         // and we have -log(p[k]) stored, so this is easy
 
-        TYPE intermediate[TILE] = check ? exp(-(float[TILE]) *px) : 0;
+        TYPE intermediate[TILE] = check ? exp(-(float[TILE]) *?(check)px) : 0;
 
         // Do one hot
 
