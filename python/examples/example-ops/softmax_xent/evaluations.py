@@ -28,7 +28,7 @@ def test_softmax(
             print("Torch:", torch_result)
             torch.testing.assert_allclose(torch_result, triton_result)
         did_it_work = did_it_work and torch.allclose(
-            torch_result, triton_result, atol=1e-6, rtol=1e-3
+            torch_result, triton_result, atol=1e-5, rtol=1e-3
         )
         if not did_it_work:
             print(
@@ -53,7 +53,7 @@ def test_grad(
         logit = torch.randn(num_seq, n_vocab, requires_grad=True, device="cuda").to(
             dtype
         )
-        indices = torch.ones(num_seq).long()
+        indices = 3 + torch.ones(num_seq).long()
 
         triton_logit = torch.nn.Parameter(
             logit.clone().detach().cuda(), requires_grad=True
@@ -88,10 +88,15 @@ def test_grad(
 
 
 def test_many_settings(
-    seq_settings=[8, 7, 32 * 1024],
-    vocab_settings=[512, 51200],  # 3*512, 99*512 FAILS sometimes
+    seq_settings=[32 * 512],  # [8, 7, 32 * 1024],, 32 * 1024
+    vocab_settings=[
+        # 1024,
+        # 32 * 1024,
+        64 * 1024,
+        50304,
+    ],  # 512,  3*512, 99*512 FAILS sometimes
     verbose=True,
-    test_backwards=False,
+    test_backwards=True,
     dtypes=[torch.float32, torch.float16],
 ):
     if test_backwards:
@@ -120,6 +125,27 @@ def test_many_settings(
     print(results)
     return results
 
+
+def repr_weird_repeat(num_seq=32 * 512, n_vocab=51200):
+    dtype = torch.float32
+    x = torch.randn(num_seq, n_vocab, requires_grad=True).to(dtype)
+    indices = torch.ones(num_seq).long()
+    triton_input = x.cuda()
+    triton_indices = indices.cuda()
+    triton_result = current_softmax(triton_input, triton_indices)
+    print(triton_result.mean())
+    print("Zeros or Negatives?", len([z for z in triton_result if z < 0.1]))
+    triton_result.mean().backward()
+
+    y = torch.randn(num_seq, n_vocab, requires_grad=True).to(dtype).cuda()
+    triton_result2 = current_softmax(y, triton_indices)
+    print(triton_result2.mean())
+    print("Zeros or Negatives?", len([z for z in triton_result2 if z < 0.1]))
+
+    z = torch.randn(num_seq, n_vocab, requires_grad=True).to(dtype).cuda()
+    triton_result3 = current_softmax(z, triton_indices)
+    print(triton_result3.mean())
+    print("Zeros or Negatives?", len([z for z in triton_result3 if z < 0.1]))
 
 
 if __name__ == "__main__":

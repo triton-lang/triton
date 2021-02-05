@@ -47,12 +47,13 @@ if platform.system() != "Darwin":
 
         @classmethod
         def forward(cls, ctx, logits, indices):
+            # make sure we can use triton
             n_vocab = logits.shape[-1]
-            assert indices.dtype == torch.int64
             assert (
-                n_vocab % 512 == 0
-            ), "Number of logit options must be divisible by 512."
+                indices.dtype == torch.int64
+            ), "Indices are expected to be of type long."
 
+            # compile a new kernel if needed; otherwise load from a cache
             if not (logits.dtype, n_vocab) in cls.input_config_to_kernel_fwd:
                 infinities = {
                     torch.float16: "F16_INFINITY",
@@ -62,14 +63,20 @@ if platform.system() != "Darwin":
                     cls.fwd_src,
                     device=logits.device,
                     defines={
-                        "TILE": n_vocab,
+                        "TILE": make_power_of_two(n_vocab),
                         "TYPE": logits.dtype,
                         "INFINITY": infinities[logits.dtype],
                     },
-                    # num_warps=[4],
                 )
             kernel_fwd = cls.input_config_to_kernel_fwd[(logits.dtype, n_vocab)]
 
+            # flatten logits and be prepared to restore them to their original shape
+            original_logits_shape = logits.shape
+            if len(original_logits_shape) > 2:
+                logits = logits.reshape((-1, n_vocab))
+                indices = indices.reshape((-1,))
+
+            # run the kernel and assign the result in place
             result = torch.empty_like(indices, dtype=logits.dtype).cuda()
             neg_logprobs = torch.empty_like(logits, dtype=logits.dtype).cuda()
             grid = lambda opt: (logits.shape[0],)
@@ -81,8 +88,13 @@ if platform.system() != "Darwin":
                 n_vocab,
                 grid=grid,
             )
-            # logits -> neg_logprobs via an in place modification by kernel_fwd
+
+            if len(original_logits_shape) > 2:
+                logits = logits.reshape(original_logits_shape)
+                indices = indices.reshape(*original_logits_shape[:-1])
+
             ctx.save_for_backward(neg_logprobs, indices)
+            ctx.original_logits_shape = original_logits_shape
 
             return result
 
@@ -93,33 +105,41 @@ if platform.system() != "Darwin":
             to get p[k], which is most of what we need...  neg_logprobs will be
             modified in place to become the gradient we want
             """
+            # load saved tensors and ensure correct types
             neg_logprobs, indices = ctx.saved_tensors
-            assert indices.dtype == torch.int64
+            original_logits_shape = ctx.original_logits_shape
             assert (
                 dneg_logprobs.dtype == neg_logprobs.dtype
             ), f"Backward flowing derivatives of type {dneg_logprobs.dtype} != logits type {neg_logprobs.dtype}"
             n_vocab = neg_logprobs.shape[-1]
-            N = neg_logprobs.numel()
 
+            # generate or load kernel
             if not (neg_logprobs.dtype, n_vocab) in cls.input_config_to_kernel_bwd:
                 cls.input_config_to_kernel_bwd[
                     (neg_logprobs.dtype, n_vocab)
                 ] = triton.kernel(
                     cls.bwd_src,
                     device=neg_logprobs.device,
-                    defines={"TILE": n_vocab, "TYPE": neg_logprobs.dtype},
-                    # num_warps=[4],
+                    defines={
+                        "TILE": make_power_of_two(n_vocab),
+                        "TYPE": neg_logprobs.dtype,
+                    },
                 )
             kernel_bwd = cls.input_config_to_kernel_bwd[(neg_logprobs.dtype, n_vocab)]
-            grid = lambda opt: (triton.cdiv(N, opt.TILE),)
+            grid = lambda opt: (neg_logprobs.shape[0],)
 
             # neg_logprobs will be modified in place to become our gradient:
             kernel_bwd(
                 neg_logprobs.data_ptr(),
                 indices.data_ptr(),
                 dneg_logprobs.data_ptr(),
+                n_vocab,
                 grid=grid,
             )
+
+            # reshape results based on shape of original logits passed to forward
+            if len(original_logits_shape) > 2:
+                neg_logprobs = neg_logprobs.reshape(original_logits_shape)
 
             return neg_logprobs, torch.zeros_like(indices)
 
