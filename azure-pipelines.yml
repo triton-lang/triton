@@ -23,8 +23,8 @@ steps:
   displayName: 'Use Python $(python.version)'
 
 - script: |
-    mkdir $(venv)
-    python -m virtualenv $(venv)
+    mkdir venv
+    python -m virtualenv venv
     displayName: setup virtual environment
 
 - script: |
