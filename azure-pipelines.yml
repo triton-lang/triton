@@ -6,6 +6,9 @@
 trigger:
 - master
 
+pool:
+  name: default
+
 steps:
 - task: UsePythonVersion@0
   inputs:
