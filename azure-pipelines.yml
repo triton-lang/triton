@@ -13,7 +13,7 @@ strategy:
   matrix:
     Python37:
       python.version: '3.7'
-  maxParallel: 2
+  maxParallel: 1
 
 steps:
 - task: UsePythonVersion@0
@@ -24,7 +24,7 @@ steps:
 
 - script: |
     mkdir $(venv)
-    $(buildPython.pythonLocation)/python -m virtualenv $(venv)
+    python -m virtualenv $(venv)
     displayName: setup virtual environment
 
 - script: |
