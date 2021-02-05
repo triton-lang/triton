@@ -34,8 +34,12 @@ steps:
 
 - script: |
     python -m pip install --upgrade pip
-    cd triton
-    ls
+    cd python
     pip install torch
-    pip install -e .
+    python setup.py install
   displayName: 'Install dependencies'
+
+- script: |
+    cd tests
+    pytest .
+  displayName: 'Python Unit Tests'
