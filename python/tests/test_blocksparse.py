@@ -30,7 +30,6 @@ def mask_tensor(x, mask, block, value = 0):
     ]
 )
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE = torch.float16, Z = 3, H = 2, M = 128, N = 256, K = 384):
-  assert False
   # set seed
   torch.random.manual_seed(0)
   # create inputs
