@@ -9,6 +9,10 @@ trigger:
 pool:
   name: default
 
+variables:
+- name: venv
+  value: venv
+
 strategy:
   matrix:
     Python37:
@@ -23,9 +27,9 @@ steps:
   displayName: 'Use Python $(python.version)'
 
 - script: |
-    mkdir venv
-    python -m virtualenv venv
-    displayName: setup virtual environment
+    mkdir $(venv)
+    python -m virtualenv $(venv)
+  displayName: setup virtual environment
 
 - script: |
     source $(venv)/bin/activate
