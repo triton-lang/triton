@@ -6,13 +6,6 @@
 trigger:
 - master
 
-pool:
-  vmImage: ubuntu-default
-strategy:
-  matrix:
-    Python36:
-      python.version: '3.6'
-
 steps:
 - task: UsePythonVersion@0
   inputs:
