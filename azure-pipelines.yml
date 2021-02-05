@@ -29,12 +29,13 @@ steps:
 - script: |
     mkdir $(venv)
     python -m virtualenv $(venv)
+    source $(venv)/bin/activate
   displayName: setup virtual environment
 
 - script: |
-    source $(venv)/bin/activate
     python -m pip install --upgrade pip
     cd triton
+    ls
     pip install torch
     pip install -e .
   displayName: 'Install dependencies'
