@@ -9,18 +9,28 @@ trigger:
 pool:
   name: default
 
+strategy:
+  matrix:
+    Python37:
+      python.version: '3.7'
+  maxParallel: 2
+
 steps:
 - task: UsePythonVersion@0
   inputs:
     versionSpec: '$(python.version)'
+    architecture: 'x64'
   displayName: 'Use Python $(python.version)'
 
 - script: |
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt
-  displayName: 'Install dependencies'
+    mkdir $(venv)
+    $(buildPython.pythonLocation)/python -m virtualenv $(venv)
+    displayName: setup virtual environment
 
 - script: |
-    pip install pytest pytest-azurepipelines
-    pytest
-  displayName: 'pytest'
+    source $(venv)/bin/activate
+    python -m pip install --upgrade pip
+    cd triton
+    pip install torch
+    pip install -e .
+  displayName: 'Install dependencies'
