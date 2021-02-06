@@ -1,17 +1,19 @@
 name: CI
 
+# Controls when the action will run. 
 on:
-  pull_request:
-    types:
-    - '*'
+  # Triggers the workflow on push or pull request events but only for the master branch
   push:
-    branches:
-    - master
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  # Triggers the workflow on pull request events Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
     build:
         name: Call Azure Pipeline
-        runs-on: ubuntu-latest
+        #runs-on: ubuntu-latest
         steps:
         - name: Azure Pipelines Action
           uses: Azure/pipelines@v1
