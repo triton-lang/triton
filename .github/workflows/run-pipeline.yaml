@@ -7,9 +7,10 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
-- name: Azure Pipelines Action
-  uses: Azure/pipelines@v1
-  with:
-    azure-devops-project-url: https://dev.azure.com/phil0342
-    azure-pipeline-name: 'ptillet.triton'
-    azure-devops-token: ${{secrets.AZURE_DEVOPS_TOKEN}}
+
+name: 'Azure Pipelines Action' 
+description: 'Trigger a run in Azure pipelines' 
+inputs:
+  azure-devops-project-url: https://dev.azure.com/phil0342
+  azure-pipeline-name: 'ptillet.triton'
+  azure-devops-token: ${{secrets.AZURE_DEVOPS_TOKEN}}
