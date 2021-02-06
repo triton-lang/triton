@@ -30,7 +30,6 @@ steps:
     mkdir $(venv)
     python -m virtualenv $(venv)
     source $(venv)/bin/activate
-    which python
   displayName: setup virtual environment
 
 - script: |
@@ -40,6 +39,7 @@ steps:
 
 - script: |
     cd python
+    which python
     python setup.py install
   displayName: 'Install Triton'
 
