@@ -33,11 +33,13 @@ steps:
   displayName: setup virtual environment
 
 - script: |
+    source $(venv)/bin/activate
     python -m pip install --upgrade pip
     pip install torch
   displayName: 'Install dependencies'
 
 - script: |
+    source $(venv)/bin/activate
     cd python
     which python
     python setup.py install
