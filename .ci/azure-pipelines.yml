@@ -26,24 +26,15 @@ steps:
     architecture: 'x64'
   displayName: 'Use Python $(python.version)'
 
-- script: |
-    mkdir $(venv)
-    python -m virtualenv $(venv)
-    source $(venv)/bin/activate
-    echo $(python)
-  displayName: setup virtual environment
 
 - script: |
-    source $(venv)/bin/activate
-    python -m pip install --upgrade pip
+    $(python) -m pip install --upgrade pip
     pip install torch
   displayName: 'Install dependencies'
 
 - script: |
-    source $(venv)/bin/activate
     cd python
-    which python
-    python setup.py install
+    $(python) setup.py install
   displayName: 'Install Triton'
 
 - script: |
