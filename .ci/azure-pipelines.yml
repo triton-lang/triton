@@ -26,17 +26,16 @@ steps:
     architecture: 'x64'
   displayName: 'Use Python $(python.version)'
 
+- script: |
+    mkdir $(venv)
+    python -m virtualenv $(venv)
+  displayName: setup virtual environment
 
 - script: |
-    $(python) -m pip install --upgrade pip
-    pip install torch
-  displayName: 'Install dependencies'
-
-- script: |
+    source $(venv)/bin/activate
+    python -m pip install --upgrade pip
+    pip install torch pytest
     cd python
-    $(python) setup.py install
-  displayName: 'Install Triton'
-
-- script: |
+    python setup.py install
     pytest .
-  displayName: 'Python Unit Tests'
+  displayName: 'Run Python tests'
