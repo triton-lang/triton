@@ -30,6 +30,7 @@ steps:
     mkdir $(venv)
     python -m virtualenv $(venv)
     source $(venv)/bin/activate
+    echo $(python)
   displayName: setup virtual environment
 
 - script: |
