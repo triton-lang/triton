@@ -26,11 +26,11 @@ steps:
     architecture: 'x64'
   displayName: 'Use Python $(python.version)'
 
-- script: |
-    mkdir $(venv)
-    python -m virtualenv $(venv)
-    source $(venv)/bin/activate
-  displayName: setup virtual environment
+#- script: |
+#    mkdir $(venv)
+#    python -m virtualenv $(venv)
+#    source $(venv)/bin/activate
+#  displayName: setup virtual environment
 
 - script: |
     python -m pip install --upgrade pip
