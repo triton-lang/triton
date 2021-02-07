@@ -2,7 +2,8 @@
 #include "triton/driver/device.h"
 #include "triton/driver/stream.h"
 #include <ATen/cuda/CUDAContext.h>
-#include <pybind11/pybind11.h>
+#include <cuda_runtime_api.h>
+#include <torch/extension.h>
 
 std::map<int, std::shared_ptr<triton::driver::device>> tt_devices;
 std::map<int, std::shared_ptr<triton::driver::stream>> tt_streams;
@@ -43,6 +44,16 @@ void set_device(int64_t dev_id) {
     C10_CUDA_CHECK(cudaSetDevice(dev_id));
 }
 
+torch::Tensor move_out_of_pool(torch::Tensor x) {
+  if (x.nbytes() == 0)
+    return torch::empty_like(x);
+  void *data;
+  cudaMalloc(&data, x.nbytes());
+  auto ret = torch::from_blob((void *)data, x.sizes(), x.strides(), [data](void *ptr) { cudaFree(data); }, x.options());
+  ret.copy_(x);
+  return ret;
+}
+
 } // namespace torch_utils
 
 void init_torch_utils(pybind11::module &m) {
@@ -51,4 +62,5 @@ void init_torch_utils(pybind11::module &m) {
   subm.def("register_stream", &torch_utils::register_stream);
   subm.def("set_device", &torch_utils::set_device);
   subm.def("synchronize", &torch_utils::synchronize);
+  subm.def("move_out_of_pool", &torch_utils::move_out_of_pool);
 }
