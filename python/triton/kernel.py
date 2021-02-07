@@ -12,25 +12,14 @@ def cleanup():
     _triton.cleanup()
 
 codes = {
-    _triton.arg_type.int1: 'B',
-    _triton.arg_type.int8: 'B',
-    _triton.arg_type.int32: 'I',
-    _triton.arg_type.int64: 'Q',
-    _triton.arg_type.half: 'H',
-    _triton.arg_type.float: 'f',
-    _triton.arg_type.double: 'd',
-    _triton.arg_type.buffer: 'P'
+    _triton.arg_type.int1: 'B', _triton.arg_type.int8: 'B', _triton.arg_type.int32: 'I', _triton.arg_type.int64: 'Q',
+    _triton.arg_type.half: 'H', _triton.arg_type.float: 'f', _triton.arg_type.double: 'd', _triton.arg_type.buffer: 'P'
 }
 
 def th_to_triton(obj):
     tys = {
-        torch.int8: 'char',
-        torch.int16: 'short',
-        torch.int32: 'int',
-        torch.int64: 'long',
-        torch.float16: 'half',
-        torch.float32: 'float',
-        torch.float64: 'double'
+        torch.int8: 'char', torch.int16: 'short', torch.int32: 'int', torch.int64: 'long', torch.float16: 'half',
+        torch.float32: 'float', torch.float64: 'double'
     }
     if isinstance(obj, torch.dtype):
         return tys[obj]
@@ -69,6 +58,7 @@ class kernel:
         _torch_utils.register_stream(self.device)
         # C++ function wrapper
         self.op_id = _triton.make_op_id()
+        _torch_utils.set_device(self.device)
         _triton.register_fn(self.op_id, self.device, self.src, self.opt, autotune_vals, autotune_key)
         # debug mode
         self.is_debug = 'TRITON_DEBUG' in os.environ
