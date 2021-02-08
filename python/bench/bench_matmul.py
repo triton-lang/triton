@@ -19,7 +19,7 @@ square_confs = [
 ]
 
 @triton.testing.perf_report(square_confs)
-def bench_op(M, N, K, AT, BT, dtype, provider, warmup=10, rep=50):
+def bench_op(M, N, K, AT, BT, dtype, provider, warmup=5, rep=5):
     import os
     a = torch.randn((K, M) if AT else (M, K), device='cuda', dtype=dtype) / K**.5
     b = torch.randn((N, K) if BT else (K, N), device='cuda', dtype=dtype) / K**.5

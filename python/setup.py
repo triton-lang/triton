@@ -115,13 +115,22 @@ class BenchCommand(distutils.cmd.Command):
         bench_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bench')
         sys.path.append(bench_dir)
         for mod in os.listdir(bench_dir):
+            # skip non python files
             if not mod.endswith('.py'):
+                continue
+            # skip files that don't start with 'bench_'
+            if not mod.startswith('bench_'):
                 continue
             print(f'running {mod}...')
             mod = __import__(os.path.splitext(mod)[0])
             benchmarks = inspect.getmembers(mod, lambda x: isinstance(x, triton.testing.Mark))
-            for _, bench in benchmarks:
-                bench.run(self.result_dir, self.with_plots)
+            for name, bench in benchmarks:
+                result_dir = os.path.join(self.result_dir, mod.__name__.replace('bench_', ''))
+                if len(benchmarks) > 1:
+                    result_dir = os.path.join(result_dir, name.replace('bench_', ''))
+                if not os.path.exists(result_dir):
+                    os.makedirs(result_dir)
+                bench.run(result_dir, self.with_plots)
 
 setup(
     name='triton',

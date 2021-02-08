@@ -1,5 +1,17 @@
 import torch
 
+def sparsify_tensor(x, mask, block):
+    ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
+    for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
+        ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]
+    return ret
+
+def mask_tensor(x, mask, block, value=0):
+    ret = x.clone()
+    for h, i, j in zip(*(mask == 0).nonzero(as_tuple=True)):
+        ret[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block] = value
+    return ret
+
 def allclose(x, y):
     assert x.dtype == y.dtype
     rtol, atol = {torch.float32: (1e-4, 1e-5), torch.float16: (1e-2, 1e-3)}[x.dtype]
