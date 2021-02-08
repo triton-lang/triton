@@ -37,15 +37,16 @@ class Mark:
         self.fn = fn
         self.benchmarks = benchmarks
 
-    def _run(self, bench):
+    def _run(self, bench, result_path, with_plot):
         import matplotlib.pyplot as plt
         import pandas as pd
+        import os
         df = pd.DataFrame(columns=[bench.x_names[0]] + bench.y_lines)
         for x in bench.x_vals:
             x_args = {x_name: x for x_name in bench.x_names}
             row = [self.fn(**x_args, **{bench.y_name: y}, **bench.args) for y in bench.y_vals]
             df.loc[len(df)] = [x] + row
-        if bench.plot_name:
+        if with_plot and bench.plot_name:
             xlabel = ' = '.join(bench.x_names)
             plot = df.plot(x=bench.x_names[0], y=bench.y_lines)
             plot.set_xlabel(xlabel)
@@ -53,13 +54,12 @@ class Mark:
             plot.set_title(bench.plot_name)
             plot.set_xscale('log' if bench.loglog else 'linear')
             plot.set_yscale('log' if bench.loglog else 'linear')
-            plt.savefig(f'{bench.plot_name}.pdf')
-        print(df)
-        return df
+            plt.savefig(os.path.join(result_path, f'{bench.plot_name}.png'))
+        df.to_csv(os.path.join(result_path, f'{bench.plot_name}.csv'))
 
-    def run(self):
+    def run(self, result_path, with_plot):
         for bench in self.benchmarks:
-            self._run(bench)
+            self._run(bench, result_path, with_plot)
 
 def perf_report(benchmarks):
     wrapper = lambda fn: Mark(fn, benchmarks)
