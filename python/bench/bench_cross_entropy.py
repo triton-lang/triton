@@ -1,32 +1,37 @@
 import torch
 import triton
 
-@pytest.mark.parametrize("M, N, dtype, mode",
-    [
-    (M, N, dtype, mode) for M in [1024, 821]
-                        for N in [512, 857, 1871, 2089, 8573, 31000]
-                        for dtype in ['float16', 'float32']\
-                        for mode  in ['forward', 'backward']
-    ]
-                         )
-def bench_op(M, N, dtype, mode):
-    dtype = {'float16': torch.float16, 'float32': torch.float32}[dtype]
+confs = [
+    triton.testing.Benchmark(
+              x_names = ['N'],
+              x_vals  = [128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192],
+              y_name  = 'provider',
+              y_vals  = ['triton', 'torch'],
+              y_lines = ['Triton', 'Torch'],
+              ylabel  = 'GBPS',
+              loglog  = False,
+              plot_name = f'{mode}-2048',
+              args = {'M': 2048, 'dtype': torch.float16, 'mode': mode}
+    )\
+    for mode in ['forward', 'backward']
+]
+
+@triton.testing.perf_report(confs)
+def bench_op(M, N, dtype, mode, provider):
     # create inputs
     x = torch.randn(M, N, dtype=dtype, device='cuda', requires_grad=True)
     idx = 4 + torch.ones(M, dtype=torch.int64, device='cuda')
+    num_gb = (2 * x.numel() * x.element_size() * 1e-9)
     # forward pass
-    tt_y = triton.ops.cross_entropy(x, idx)
-    th_y = torch.nn.CrossEntropyLoss(reduction="none")(x, idx)
+    op = {'torch': torch.nn.CrossEntropyLoss(reduction='none'), \
+         'triton': triton.ops.cross_entropy}[provider]
     if mode == 'forward':
-        assert torch.allclose(th_y, tt_y, atol=1e-3, rtol=1e-2)
-    # backward pass
-    elif mode == 'backward':
-        dy = torch.randn_like(tt_y)
-        # triton backward
-        tt_y.backward(dy)
-        tt_dx = x.grad.clone()
-        # torch backward
-        x.grad.zero_()
-        th_y.backward(dy)
-        th_dx = x.grad.clone()
-        assert torch.allclose(th_dx, tt_dx, atol=1e-3, rtol=1e-2)
+        ms = triton.testing.do_bench(lambda: op(x, idx))
+    if mode == 'backward':
+        y = op(x, idx)
+        dy = torch.randn_like(y)
+        ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True))
+    return num_gb / ms * 1e3
+
+if __name__ == '__main__':
+    bench_op.run('tmp', False)
