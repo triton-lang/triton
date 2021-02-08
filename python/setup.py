@@ -96,12 +96,14 @@ class BenchCommand(distutils.cmd.Command):
 
     description = 'run benchmark suite'
     user_options = [
-        ('result-dir=', None, 'path to output benchmark results'),
-        ('with-plots', None, 'plot benchmark results'),
+        ('result-dir=', None, 'path to output benchmark results'),\
+        ('with-plots', None, 'plot benchmark results'),\
+        ('filter=' , None, 'filter benchmarks by name')
     ]
 
     def initialize_options(self):
         self.result_dir = 'results'
+        self.filter = ''
         self.with_plots = False
 
     def finalize_options(self):
@@ -117,6 +119,9 @@ class BenchCommand(distutils.cmd.Command):
         for mod in os.listdir(bench_dir):
             # skip non python files
             if not mod.endswith('.py'):
+                continue
+            # skip file not in provided filter
+            if self.filter and self.filter not in mod:
                 continue
             # skip files that don't start with 'bench_'
             if not mod.startswith('bench_'):
