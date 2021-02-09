@@ -54,7 +54,7 @@ namespace sha1
             }
         }
 
-        void innerHash(unsigned int* result, unsigned int* w)
+        inline void innerHash(unsigned int* result, unsigned int* w)
         {
             unsigned int a = result[0];
             unsigned int b = result[1];
@@ -114,7 +114,7 @@ namespace sha1
         }
     } // namespace
 
-    void calc(const void* src, const int bytelength, unsigned char* hash)
+    inline void calc(const void* src, const int bytelength, unsigned char* hash)
     {
         // Init the result array.
         unsigned int result[5] = { 0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0 };
@@ -170,7 +170,7 @@ namespace sha1
         }
     }
 
-    void toHexString(const unsigned char* hash, char* hexstring)
+    inline void toHexString(const unsigned char* hash, char* hexstring)
     {
         const char hexDigits[] = { "0123456789abcdef" };
 
