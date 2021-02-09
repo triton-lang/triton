@@ -26,6 +26,9 @@
 #include "triton/driver/module.h"
 #include "triton/driver/context.h"
 #include "triton/driver/error.h"
+#include "triton/tools/sha1.hpp"
+#include "triton/tools/sys/getenv.hpp"
+#include "triton/tools/sys/mkdir.hpp"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/IRPrintingPasses.h"
@@ -346,7 +349,31 @@ cu_module::cu_module(driver::device* device, std::unique_ptr<llvm::Module> ll_mo
   llvm::raw_string_ostream oss(llir_);
   oss << *ll_module;
   oss.flush();
-  ptx_ = compile_llvm_module(std::move(ll_module), device);
+  std::string cache_path = tools::getenv("TRITON_DEBUG_CACHE_PATH");
+  if(cache_path.empty())
+    ptx_ = compile_llvm_module(std::move(ll_module), device);
+  else{
+    tools::mkdir(cache_path);
+    // update cache path to PTX file
+    unsigned char hash[20];
+    sha1::calc((void*)llir_.data(), llir_.size(), hash);
+    char _hex[40];
+    sha1::toHexString(hash, _hex);
+    std::string hex(_hex, _hex + 40);
+    cache_path += "/" + hex;
+    // read
+    std::ifstream ifs(cache_path);
+    std::ostringstream _ptx;
+    if(ifs)
+      _ptx << ifs.rdbuf();
+    ptx_ = _ptx.str();
+    // compile and write-back if read empty
+    if(ptx_.empty()){
+      ptx_ = compile_llvm_module(std::move(ll_module), device);
+      std::ofstream ofs(cache_path);
+      ofs << ptx_;
+    }
+  }
   init_from_ptx(ptx_);
 }
 
