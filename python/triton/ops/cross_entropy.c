@@ -1,8 +1,8 @@
-__global__ void forward(TYPE *logit,
-                        TYPE *modified_logit,
+__global__ void forward(TYPE *logit __aligned(16),
+                        TYPE *modified_logit __aligned(16),
                         long *indices __readonly,
-                        TYPE *result,
-                        int n_cols) {
+                        TYPE *result __aligned(16),
+                        int n_cols __multipleof(N_COLS_MULT)) {
   int row = get_program_id(0);
 
   bool check[TILE] = ((0 ... TILE) < n_cols);
@@ -19,10 +19,10 @@ __global__ void forward(TYPE *logit,
   *(result + row) = *(modified_logit + (local_ind + n_cols * row));
 }
 
-__global__ void backward(TYPE *neg_logprobs,
-                         long *indices,
-                         TYPE *dneg_logprobs,
-                         int n_cols) {
+__global__ void backward(TYPE *neg_logprobs __aligned(16),
+                         long *indices __aligned(16),
+                         TYPE *dneg_logprobs __aligned(16),
+                         int n_cols __multipleof(N_COLS_MULT)) {
 
   int row = get_program_id(0);
   // pointer arithmetic
