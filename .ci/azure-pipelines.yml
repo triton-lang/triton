@@ -23,6 +23,7 @@ strategy:
 # Pipeline
 steps:
 - script: |
+    which python
     mkdir $(venv)
     python -m virtualenv $(venv)
     source $(venv)/bin/activate
