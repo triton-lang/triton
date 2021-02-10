@@ -13,18 +13,11 @@ trigger: [ master ]
 pr:
 - master
 
-# Python version
-strategy:
-  matrix:
-    Python37:
-      python.version: '3.7'
-  maxParallel: 1
-
 # Pipeline
 steps:
 - script: |
     mkdir $(venv)
-    python -m virtualenv $(venv)
+    python -m virtualenv --python=python3 $(venv)
     source $(venv)/bin/activate
     python -m pip install --upgrade pip
     pip install torch==1.7.1+cu110 torchvision==0.8.2+cu110 torchaudio===0.7.2 \
@@ -32,6 +25,15 @@ steps:
     cd python
     python setup.py install
   displayName: Setup python environment
+
+- script: |
+    source $(venv)/bin/activate
+    pip install matplotlib pandas
+    cd python/bench
+    python -m run
+
+- publish: python/bench/results
+  artifact: Benchmarks
 
 - script: |
     source $(venv)/bin/activate

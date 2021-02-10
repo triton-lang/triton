@@ -92,51 +92,6 @@ class CMakeBuild(build_ext):
         subprocess.check_call(['cmake', sourcedir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(['cmake', '--build', '.'] + build_args, cwd=self.build_temp)
 
-class BenchCommand(distutils.cmd.Command):
-
-    description = 'run benchmark suite'
-    user_options = [
-        ('result-dir=', None, 'path to output benchmark results'),\
-        ('with-plots', None, 'plot benchmark results'),\
-        ('filter=' , None, 'filter benchmarks by name')
-    ]
-
-    def initialize_options(self):
-        self.result_dir = 'results'
-        self.filter = ''
-        self.with_plots = False
-
-    def finalize_options(self):
-        if not os.path.exists(self.result_dir):
-            os.makedirs(self.result_dir)
-
-    def run(self):
-        import sys
-        import inspect
-        import triton
-        bench_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bench')
-        sys.path.append(bench_dir)
-        for mod in os.listdir(bench_dir):
-            # skip non python files
-            if not mod.endswith('.py'):
-                continue
-            # skip file not in provided filter
-            if self.filter and self.filter not in mod:
-                continue
-            # skip files that don't start with 'bench_'
-            if not mod.startswith('bench_'):
-                continue
-            print(f'running {mod}...')
-            mod = __import__(os.path.splitext(mod)[0])
-            benchmarks = inspect.getmembers(mod, lambda x: isinstance(x, triton.testing.Mark))
-            for name, bench in benchmarks:
-                result_dir = os.path.join(self.result_dir, mod.__name__.replace('bench_', ''))
-                if len(benchmarks) > 1:
-                    result_dir = os.path.join(result_dir, name.replace('bench_', ''))
-                if not os.path.exists(result_dir):
-                    os.makedirs(result_dir)
-                bench.run(result_dir, self.with_plots)
-
 setup(
     name='triton',
     version='1.0.0',
@@ -149,7 +104,7 @@ setup(
     package_data={'triton/ops': ['*.c'], 'triton/ops/blocksparse': ['*.c']},
     include_package_data=True,
     ext_modules=[CMakeExtension('triton', 'triton/_C/')],
-    cmdclass={'build_ext': CMakeBuild, 'bench': BenchCommand},
+    cmdclass={'build_ext': CMakeBuild},
     zip_safe=False,
     # for PyPI
     keywords=['Compiler', 'Deep Learning'],
