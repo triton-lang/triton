@@ -21,12 +21,12 @@ def run_all(result_dir, with_plots, names):
         mod = __import__(os.path.splitext(mod)[0])
         benchmarks = inspect.getmembers(mod, lambda x: isinstance(x, triton.testing.Mark))
         for name, bench in benchmarks:
-            result_dir = os.path.join(result_dir, mod.__name__.replace('bench_', ''))
+            curr_dir = os.path.join(result_dir, mod.__name__.replace('bench_', ''))
             if len(benchmarks) > 1:
-                result_dir = os.path.join(result_dir, name.replace('bench_', ''))
-            if not os.path.exists(result_dir):
-                os.makedirs(result_dir)
-            bench.run(result_dir, with_plots)
+                curr_dir = os.path.join(curr_dir, name.replace('bench_', ''))
+            if not os.path.exists(curr_dir):
+                os.makedirs(curr_dir)
+            bench.run(curr_dir, with_plots)
 
 def main(args):
     parser = argparse.ArgumentParser(description="Run the benchmark suite.")
