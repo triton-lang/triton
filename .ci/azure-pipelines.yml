@@ -28,10 +28,10 @@ steps:
 
 - script: |
     source $(venv)/bin/activate
-    cd python
-    python setup.py bench
+    cd python/bench
+    python -m run
 
-- publish: results
+- publish: python/bench/results
   artifact: Benchmarks
 
 - script: |
