@@ -28,6 +28,7 @@ steps:
 
 - script: |
     source $(venv)/bin/activate
+    cd python
     python setup.py bench
 
 - publish: results
