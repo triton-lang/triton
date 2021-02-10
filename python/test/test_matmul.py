@@ -32,9 +32,9 @@ import torch
             (128, 32, 64, 1, 4, None, None, None, AT, BT, DTYPE),
             (32, 128, 64, 1, 4, None, None, None, AT, BT, DTYPE),
             # 8 warp
-            (128, 256, 16, 1, 8, None, None, None, AT, BT, DTYPE),
-            (256, 128, 16, 1, 8, None, None, None, AT, BT, DTYPE),
-            (256, 128, 32, 1, 8, None, None, None, AT, BT, DTYPE),
+            # (128, 256, 16, 1, 8, None, None, None, AT, BT, DTYPE),
+            # (256, 128, 16, 1, 8, None, None, None, AT, BT, DTYPE),
+            # (256, 128, 32, 1, 8, None, None, None, AT, BT, DTYPE),
             # split-k
             (64, 64, 16, 2, 4, None, None, None, AT, BT, DTYPE),
             (64, 64, 16, 4, 4, None, None, None, AT, BT, DTYPE),
