@@ -16,7 +16,6 @@ pr:
 # Pipeline
 steps:
 - script: |
-    which python
     mkdir $(venv)
     python -m virtualenv --python=python3 $(venv)
     source $(venv)/bin/activate
@@ -26,6 +25,13 @@ steps:
     cd python
     python setup.py install
   displayName: Setup python environment
+
+- script: |
+    source $(venv)/bin/activate
+    python setup.py bench
+
+- publish: results
+  artifact: Benchmarks
 
 - script: |
     source $(venv)/bin/activate
