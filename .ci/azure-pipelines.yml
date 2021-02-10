@@ -28,6 +28,7 @@ steps:
 
 - script: |
     source $(venv)/bin/activate
+    pip install matplotlib pandas
     cd python/bench
     python -m run
 
