@@ -1553,10 +1553,9 @@ void generator::visit_barrier_inst(ir::barrier_inst*) {
 }
 
 void generator::visit_async_wait_inst(ir::async_wait_inst* i) {
-  std::string asm_str = "cp.async.wait_group 2;";
+  std::string asm_str = "cp.async.wait_group " + std::to_string(i->get_N()) + ";";
   InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
   call(iasm);
-  add_barrier();
 }
 
 void generator::visit_make_range_dyn(ir::make_range_dyn* x) {
