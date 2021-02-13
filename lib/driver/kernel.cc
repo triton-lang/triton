@@ -70,7 +70,7 @@ host_kernel::host_kernel(driver::module* program, const char *name): kernel(prog
 
 cu_kernel::cu_kernel(driver::module *program, const char * name) : kernel(program, CUfunction(), true) {
   dispatch::cuModuleGetFunction(&*cu_, *program->cu(), name);
-//  dispatch::cuFuncSetCacheConfig(*cu_, CU_FUNC_CACHE_PREFER_SHARED);
+  dispatch::cuFuncSetCacheConfig(*cu_, CU_FUNC_CACHE_PREFER_SHARED);
 }
 
 }

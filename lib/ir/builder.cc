@@ -372,8 +372,8 @@ value *builder::create_barrier(const std::string &name) {
   return insert(barrier_inst::create(ctx_, name));
 }
 
-value *builder::create_async_wait() {
-  return insert(async_wait_inst::create(ctx_));
+value *builder::create_async_wait(int N) {
+  return insert(async_wait_inst::create(ctx_, N));
 }
 
 }

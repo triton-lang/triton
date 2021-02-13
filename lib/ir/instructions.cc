@@ -818,12 +818,11 @@ barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instru
   return new barrier_inst(ctx, name, next);
 }
 
-async_wait_inst::async_wait_inst(context &ctx, const std::string &name,
-                                                       instruction *next)
-  : instruction(type::get_void_ty(ctx), INST_ASYNC_WAIT, 0, name, next) { }
+async_wait_inst::async_wait_inst(context &ctx, int N, const std::string &name, instruction *next)
+  : instruction(type::get_void_ty(ctx), INST_ASYNC_WAIT, 0, name, next), N_(N) { }
 
-async_wait_inst* async_wait_inst::create(context &ctx, const std::string &name, instruction *next) {
-  return new async_wait_inst(ctx, name, next);
+async_wait_inst* async_wait_inst::create(context &ctx, int N, const std::string &name, instruction *next) {
+  return new async_wait_inst(ctx, N, name, next);
 }
 
 

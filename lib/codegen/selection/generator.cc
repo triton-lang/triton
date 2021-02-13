@@ -1463,12 +1463,15 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
     int out_off_1 = i % per_thread_ld;
     int out_off = (out_off_0*shapes[in_order[0]] + out_off_1)*2;
     // asm
-    FunctionType *ty = FunctionType::get(void_ty, {out_base->getType(), in_base->getType()}, false);
+    FunctionType *ty = FunctionType::get(void_ty, {builder_->getInt1Ty(), out_base->getType(), in_base->getType()}, false);
     std::string mod = (vector*2 == 16) ? ".cg" : ".ca";
     std::string asm_str = "@$0 cp.async" + mod + ".shared.global [$1 + " + std::to_string(out_off) + "], [$2 + " + std::to_string(in_off) + "], " + std::to_string(vector*2) + ";";
     InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,r,l", true);
     call(iasm, {vals_[msks][idx], out_base, in_base});
   }
+  std::string asm_str = "cp.async.commit_group;";
+  InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
+  call(iasm);
 }
 
 void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
@@ -1549,8 +1552,8 @@ void generator::visit_barrier_inst(ir::barrier_inst*) {
   add_barrier();
 }
 
-void generator::visit_async_wait_inst(ir::async_wait_inst*) {
-  std::string asm_str = "cp.async.wait_all;";
+void generator::visit_async_wait_inst(ir::async_wait_inst* i) {
+  std::string asm_str = "cp.async.wait_group 2;";
   InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
   call(iasm);
   add_barrier();

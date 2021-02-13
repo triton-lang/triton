@@ -50,30 +50,18 @@ void membar::get_read_intervals(ir::instruction *i, interval_vec_t &res){
 }
 
 void membar::get_written_intervals(ir::instruction *i, interval_vec_t &res){
-  if(!dynamic_cast<ir::phi_node*>(i) && !dynamic_cast<ir::trans_inst*>(i))
+  if(!dynamic_cast<ir::phi_node*>(i))
     add_reference(i, res);
 }
 
-void membar::insert_barrier(ir::instruction *instr, std::pair<bool, bool> type, ir::builder &builder) {
-  if(auto *phi = dynamic_cast<ir::phi_node*>(instr)) {
-    std::set<ir::value*> incoming;
-    for(unsigned n = 0; n < phi->get_num_incoming(); n++){
-      ir::instruction *inc_val = dynamic_cast<ir::instruction*>(phi->get_incoming_value(n));
-      assert(inc_val);
-      if(incoming.insert(inc_val).second){
-        ir::basic_block *block = inc_val->get_parent();
-        builder.set_insert_point(block->get_inst_list().back());
-        if(type.first)
-            builder.create_async_wait();
-        if(type.second)
-            builder.create_barrier();
-      }
-    }
-  }
-  else {
+void membar::insert_barrier(ir::instruction *instr, bool is_raw, ir::builder &builder) {
     builder.set_insert_point(instr);
-    builder.create_barrier();
-  }
+    if(is_raw){
+      builder.create_async_wait(2);
+    }
+    else{
+      builder.create_barrier();
+    }
 }
 
 membar::interval_vec_t membar::join(const std::vector<interval_vec_t>& intervals) {
@@ -88,7 +76,7 @@ std::pair<membar::interval_vec_t,
           membar::interval_vec_t> membar::transfer(ir::basic_block *block,
                                             const interval_vec_t &written_to,
                                             const interval_vec_t &read_from,
-                                            std::map<ir::instruction*, std::pair<bool,bool>>& insert_loc,
+                                            std::map<ir::instruction*, bool>& insert_loc,
                                             std::set<ir::value*>& safe_war,
                                             std::vector<ir::instruction*>& to_sync) {
   ir::basic_block::inst_list_t instructions = block->get_inst_list();
@@ -96,6 +84,8 @@ std::pair<membar::interval_vec_t,
   interval_vec_t new_read_from = read_from;
 
   for(ir::instruction *i: instructions){
+    if(dynamic_cast<ir::phi_node*>(i))
+      continue;
     interval_vec_t read, written;
     get_read_intervals(i, read);
     get_written_intervals(i, written);
@@ -110,11 +100,7 @@ std::pair<membar::interval_vec_t,
     }
     // record hazards
     if(read_after_write || write_after_read) {
-      auto is_load_async = [&](ir::instruction *i){ return dynamic_cast<ir::masked_load_async_inst*>(i);};
-      auto is_copy_to_shared = [&](ir::instruction *i){ return dynamic_cast<ir::copy_to_shared_inst*>(i);};
-      bool copy_async_wait = std::any_of(to_sync.begin(), to_sync.end(), is_load_async);
-      bool barrier = std::any_of(to_sync.begin(), to_sync.end(), is_copy_to_shared);
-      insert_loc.insert({i, {copy_async_wait, barrier}});
+      insert_loc.insert({i, read_after_write});
       new_written_to.clear();
       new_read_from.clear();
       to_sync.clear();
@@ -146,7 +132,7 @@ void membar::run(ir::module &mod) {
     std::map<ir::basic_block*, interval_vec_t> written_to;
     std::map<ir::basic_block*, interval_vec_t> read_from;
     std::vector<ir::instruction*> to_sync;
-    std::map<ir::instruction*, std::pair<bool,bool>> insert_locs;
+    std::map<ir::instruction*, bool> insert_locs;
     size_t n_inserted_im1 = 0;
     bool done = false;
     do{

@@ -66,18 +66,18 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
       bool checkb[TK, TN] = rk[:, newaxis] < K;
       TYPE a[TM, TK] = checka ? *pa : 0;
       TYPE b[TK, TN] = checkb ? *pb : 0;
-      pa += TK * STRIDE_AK;
-      pb += TK * STRIDE_BK;
       // reduction loop
       float acc[TM, TN] = 0;
       for(int k = K; k > 0; k -= TK){
         bool checka[TM, TK] = k > TK;
         bool checkb[TK, TN] = k > TK;
-        acc += a @ b;
-        a = *?(checka)pa;
-        b = *?(checkb)pb;
         pa += TK * STRIDE_AK;
         pb += TK * STRIDE_BK;
+        TYPE anext[TM, TK] = *?(checka)pa;
+        TYPE bnext[TK, TN] = *?(checkb)pb;
+        acc += a @ b;
+        a = anext;
+        b = bnext;
       }
       acc = acc * alpha;
       TYPE c[TM, TN] = acc;
