@@ -1995,10 +1995,10 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
   if(unsigned alloc_size = alloc_->allocated_size()){
     Type *int_8_ty = Type::getInt8Ty(*ctx_);
     Type *int_32_ty = Type::getInt32Ty(*ctx_);
-    ArrayType *array_ty = ArrayType::get(int_32_ty, alloc_size/4);
+    ArrayType *array_ty = ArrayType::get(int_32_ty, 0);
     Type *ptr_ty = ptr_ty(int_8_ty, 3);
     GlobalVariable *sh_mem_array =
-      new GlobalVariable(*mod_, array_ty, false, GlobalVariable::ExternalWeakLinkage,
+      new GlobalVariable(*mod_, array_ty, false, GlobalVariable::ExternalLinkage,
                          nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
     shmem_ = bit_cast(sh_mem_array, ptr_ty);
   }

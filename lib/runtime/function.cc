@@ -187,6 +187,7 @@ void kernel::init_ker(){
   swizzle.run(*ir_);
   liveness.run(*ir_);
   allocation.run(*ir_);
+  shared_mem_ = allocation.allocated_size();
 //  std::cout << allocation.allocated_size() << " " << dev_->max_shared_memory() << std::endl;
 //  if(allocation.allocated_size() > dev_->max_shared_memory())
 //    throw exception::out_of_shared_memory();
@@ -227,7 +228,7 @@ void kernel::operator()(void *args, size_t args_size, driver::stream *stream, co
   for(size_t i = 0; i < 3; i++)
     grid[i] = (i < _grid.size()) ? _grid[i] : 1;
   // enqueue
-  stream->enqueue(&*ker_, grid, {(size_t)opt.num_warps * 32, 1, 1}, args, args_size);
+  stream->enqueue(&*ker_, grid, {(size_t)opt.num_warps * 32, 1, 1}, args, args_size, shared_mem_);
 }
 
 std::string kernel::get_asm(asm_mode_t mode) {

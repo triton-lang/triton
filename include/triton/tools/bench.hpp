@@ -30,11 +30,8 @@ private:
     high_resolution_clock::time_point _start;
 };
 
-inline double bench(std::function<void()> const & op, driver::stream * stream, bool normalize = false)
+inline double bench(std::function<void()> const & op, driver::stream * stream, size_t warmup = 10, size_t repeat = 200)
 {
-//  const driver::device * device = stream->context()->device();
-  size_t warmup = 10;
-  size_t repeat = 50;
   timer tmr;
   std::vector<size_t> times;
   double total_time = 0;

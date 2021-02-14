@@ -6,7 +6,7 @@ nt = {False: "n", True: "t"}
 square_confs = [
     triton.testing.Benchmark(
         x_names=["M", "N", "K"],
-        x_vals=[512, 1024, 2048, 3072, 4096, 6144, 8192],
+        x_vals=[8192],
         y_name="provider",
         y_vals=["torch", "triton", "cutlass"],
         y_lines=["Torch", "Triton", "CUTLASS"],
