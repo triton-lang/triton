@@ -37,14 +37,8 @@ private:
   typedef std::vector<ir::value*> val_vec_t;
 
 private:
-  val_set_t join(const std::vector<val_set_t>& intervals);
-  void insert_barrier(ir::instruction *instr, bool type, ir::builder &builder);
-  bool intersect(const val_set_t &X, interval_t x);
   bool intersect(const val_set_t &X, const val_set_t &Y);
-  void add_reference(ir::value *v, val_set_t &res);
-  void get_read_intervals(ir::instruction *i, val_set_t &res);
-  void get_written_intervals(ir::instruction *i, val_set_t &res);
-  int get_req_group_id(triton::ir::value *i, std::vector<triton::ir::value *> &async_write);
+  int group_of(triton::ir::value *i, std::vector<triton::ir::value *> &async_write);
   val_set_t intersect_with(const val_set_t& as, const val_set_t& bs);
   void transfer(ir::basic_block *block, val_vec_t &async_write, val_set_t &sync_write, val_set_t &sync_read,
                 std::set<triton::ir::value *> &safe_war, bool &inserted, ir::builder &builder);

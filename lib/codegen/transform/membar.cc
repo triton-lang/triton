@@ -16,28 +16,16 @@ namespace codegen{
 namespace transform{
 
 
-void membar::insert_barrier(ir::instruction *instr, bool read_after_write, ir::builder &builder) {
-    builder.set_insert_point(instr);
-    if(read_after_write){
-      builder.create_async_wait(2);
-    }
-    else
-      builder.create_barrier();
-}
 
-
-int membar::get_req_group_id(ir::value* v, std::vector<ir::value *> &async_write) {
-  analysis::shared_layout* layout = layouts_->get(v)->to_shared();
-  if(!layout)
-    return -1;
+int membar::group_of(ir::value* v, std::vector<ir::value*> &async_write) {
   if(ir::phi_node* phi = dynamic_cast<ir::phi_node*>(v)){
+    analysis::shared_layout* layout = layouts_->get(v)->to_shared();
     analysis::double_buffer_info_t* info = layout->get_double_buffer();
     if(info)
-      return get_req_group_id(info->first, async_write);
-    int ret = -1;
-    for(ir::value* op: phi->ops())
-      ret = std::max(ret, get_req_group_id(op, async_write));
-    return ret;
+      return group_of(info->first, async_write);
+    std::vector<int> groups(phi->get_num_operands());
+    std::transform(phi->op_begin(), phi->op_end(), groups.begin(), [&](ir::value* v){ return group_of(v, async_write);});
+    return *std::max_element(groups.begin(), groups.end());
   }
   else{
     auto it = std::find(async_write.begin(), async_write.end(), v);
@@ -81,7 +69,8 @@ void membar::transfer(ir::basic_block *block,
   for(ir::instruction *i: instructions){
     if(dynamic_cast<ir::phi_node*>(i))
       continue;
-    if(std::find(async_write.begin(), async_write.end(), i) == async_write.end() && dynamic_cast<ir::masked_load_async_inst*>(i)){
+    if(std::find(async_write.begin(), async_write.end(), i) == async_write.end() &&
+       dynamic_cast<ir::masked_load_async_inst*>(i)){
       async_write.push_back(i);
     }
     if(dynamic_cast<ir::copy_to_shared_inst*>(i))
@@ -100,10 +89,9 @@ void membar::transfer(ir::basic_block *block,
     val_set_t tmp;
     std::copy(async_write.begin(), async_write.end(), std::inserter(tmp, tmp.begin()));
     if(intersect_with(read, tmp).size()){
-      int N = -1;
-      for(ir::value* i: read)
-        N = std::max(N, get_req_group_id(i, async_write));
-      assert(N >= 0);
+      std::vector<int> groups(read.size());
+      std::transform(read.begin(), read.end(), groups.begin(), [&](ir::value* v){ return group_of(v, async_write);});
+      int N = *std::max_element(groups.begin(), groups.end());
       if(N < async_write.size()){
         builder.set_insert_point(i);
         async_wait = (ir::async_wait_inst*)builder.create_async_wait(async_write.size() - 1 - N);
