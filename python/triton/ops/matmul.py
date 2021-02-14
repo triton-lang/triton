@@ -7,7 +7,7 @@ class _matmul(torch.autograd.Function):
     src = triton.read(os.path.join(os.path.dirname(__file__), "matmul.c"))
 
     _DEFAULT_CONFIGS = [
-        ({"TM": "128", "TN": "128", "TK": "64", "TZ": "1"}, 4),
+        ({"TM": "128", "TN": "128", "TK": "32", "TZ": "1"}, 4),
         # ({'TM': '64', 'TN': '128', 'TK': '32', 'TZ': '1'}, 4),
         # ({'TM': '128', 'TN': '64', 'TK': '32', 'TZ': '1'}, 4),
         # ({'TM': '64', 'TN': '64', 'TK': '64', 'TZ': '1'}, 4),

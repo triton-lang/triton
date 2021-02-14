@@ -166,7 +166,7 @@ float triton_dot(drv::context* context,  drv::stream* stream,
   opt.defines["TYPE"] = ty;
   opt.defines["TM"] = "128";
   opt.defines["TN"] = "128";
-  opt.defines["TK"] = "32" ;
+  opt.defines["TK"] = "64" ;
   opt.defines["TZ"] = "1";
   opt.num_warps = 4;
   // arguments
@@ -184,7 +184,7 @@ float triton_dot(drv::context* context,  drv::stream* stream,
   rt::add_arg(oss, *dlocks->cu());
   // function
   rt::function function(src::dot, opt, device);
-//  std::cout << function.get_kernels()[0].second->get_asm(rt::ASM_NV_PTX) << std::endl;
+//  std::cout << function.get_kernels()[0].second->get_asm(rt::ASM_NV_SASS) << std::endl;
   // grid
   auto ceil = [](size_t x, size_t y) { return (x + y - 1) / y; };
   auto grid = [ceil, M, N](const rt::options_t& x) {

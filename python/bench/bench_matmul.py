@@ -13,7 +13,7 @@ square_confs = [
         ylabel="TFLOPS",
         loglog=False,
         plot_name=f"matmul-square-{nt[AT]}{nt[BT]}",
-        args={"AT": False, "BT": False, "dtype": torch.float16},
+        args={"AT": AT, "BT": BT, "dtype": torch.float16},
     )
     for AT in [False, True]
     for BT in [False, True]
@@ -24,8 +24,8 @@ square_confs = [
 def bench_op(M, N, K, AT, BT, dtype, provider, warmup=10, rep=100):
     import os
 
-    a = torch.randn((K, M) if AT else (M, K), device="cuda", dtype=dtype) / K ** 0.5
-    b = torch.randn((N, K) if BT else (K, N), device="cuda", dtype=dtype) / K ** 0.5
+    a = torch.rand((K, M) if AT else (M, K), device="cuda", dtype=dtype)
+    b = torch.rand((N, K) if BT else (K, N), device="cuda", dtype=dtype)
     if AT:
         a = a.t()
     if BT:
