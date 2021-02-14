@@ -190,9 +190,9 @@ void kernel::init_ker(){
 //  std::cout << allocation.allocated_size() << " " << dev_->max_shared_memory() << std::endl;
 //  if(allocation.allocated_size() > dev_->max_shared_memory())
 //    throw exception::out_of_shared_memory();
-//  ir::print(*ir_, std::cout);
+  ir::print(*ir_, std::cout);
   barriers.run(*ir_);
-//  ir::print(*ir_, std::cout);
+  ir::print(*ir_, std::cout);
   isel.visit(*ir_, *llvm);
   //if(res->spilled() > 256)
   //  throw exception::out_of_registers();
