@@ -78,6 +78,7 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
         acc += a @ b;
         a = anext;
         b = bnext;
+//        __debug_barrier();
       }
       acc = acc * alpha;
       TYPE c[TM, TN] = acc;
@@ -184,7 +185,7 @@ float triton_dot(drv::context* context,  drv::stream* stream,
   rt::add_arg(oss, *dlocks->cu());
   // function
   rt::function function(src::dot, opt, device);
-//  std::cout << function.get_kernels()[0].second->get_asm(rt::ASM_NV_SASS) << std::endl;
+//  std::cout << function.get_kernels()[0].second->get_asm(rt::ASM_NV_PTX) << std::endl;
   // grid
   auto ceil = [](size_t x, size_t y) { return (x + y - 1) / y; };
   auto grid = [ceil, M, N](const rt::options_t& x) {

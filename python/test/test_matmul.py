@@ -9,16 +9,16 @@ import torch
     itertools.chain(
         *[
             [
-                # 1 warp
-                (16, 16, 16, 1, 1, None, None, None, AT, BT, DTYPE),
-                (32, 16, 16, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 32, 16, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 16, 32, 1, 1, None, None, None, AT, BT, DTYPE),
-                (32, 16, 32, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 32, 32, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 16, 64, 1, 1, None, None, None, AT, BT, DTYPE),
-                (64, 16, 64, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 64, 64, 1, 1, None, None, None, AT, BT, DTYPE),
+                # # 1 warp
+                # (16, 16, 16, 1, 1, None, None, None, AT, BT, DTYPE),
+                # (32, 16, 16, 1, 1, None, None, None, AT, BT, DTYPE),
+                # (16, 32, 16, 1, 1, None, None, None, AT, BT, DTYPE),
+                # (16, 16, 32, 1, 1, None, None, None, AT, BT, DTYPE),
+                # (32, 16, 32, 1, 1, None, None, None, AT, BT, DTYPE),
+                # (16, 32, 32, 1, 1, None, None, None, AT, BT, DTYPE),
+                # (16, 16, 64, 1, 1, None, None, None, AT, BT, DTYPE),
+                # (64, 16, 64, 1, 1, None, None, None, AT, BT, DTYPE),
+                # (16, 64, 64, 1, 1, None, None, None, AT, BT, DTYPE),
                 # # 2 warp
                 # (64, 32, 64, 1, 2, None, None, None, AT, BT, DTYPE),
                 # (32, 64, 64, 1, 2, None, None, None, AT, BT, DTYPE),

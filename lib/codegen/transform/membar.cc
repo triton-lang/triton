@@ -81,10 +81,6 @@ void membar::transfer(ir::basic_block *block,
     std::set<ir::value*> read;
     std::copy_if(i->op_begin(), i->op_end(), std::inserter(read, read.begin()),
                  [&](ir::value* i){ return i->get_type()->is_tile_ty() && layouts_->get(i)->to_shared();});
-    sync_read.insert(read.begin(), read.end());
-    // Conflicts can be ignored for variables that are marked safe_war
-    if(safe_war.find(i) != safe_war.end())
-      continue;
     // RAW (async)
     val_set_t tmp;
     std::copy(async_write.begin(), async_write.end(), std::inserter(tmp, tmp.begin()));
@@ -98,7 +94,6 @@ void membar::transfer(ir::basic_block *block,
         barrier = (ir::barrier_inst*)builder.create_barrier();
         inserted = true;
       }
-
     }
     // RAW, WAR
     if(intersect_with(read, sync_write).size() || intersect_with({i}, sync_read).size()){
@@ -116,6 +111,7 @@ void membar::transfer(ir::basic_block *block,
       sync_write.clear();
       sync_read.clear();
     }
+    sync_read.insert(read.begin(), read.end());
 
   }
 }
