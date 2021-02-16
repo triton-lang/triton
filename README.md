@@ -33,4 +33,4 @@ make -j8;
 
 ## Getting Started
 
-You can find tutorials for Triton for [Python](https://github.com/ptillet/triton/tree/master/tutorials) and [C++](https://github.com/ptillet/triton/tree/master/python/tutorials).
+You can find tutorials for Triton for [Python](https://github.com/ptillet/triton/tree/master/python/tutorials) and [C++](https://github.com/ptillet/triton/tree/master/tutorials).
