@@ -19,6 +19,7 @@
 #include "triton/codegen/transform/cts.h"
 #include "triton/codegen/transform/disassociate.h"
 #include "triton/codegen/selection/generator.h"
+#include "triton/codegen/transform/pipeline.h"
 #include "triton/runtime/function.h"
 #include "triton/lang/cpp.h"
 #include "triton/lang/parser.h"
@@ -149,6 +150,7 @@ void kernel::init_ker(){
   codegen::analysis::align align;
   codegen::analysis::axes axes;
   codegen::transform::cts cts(cts_use_async);
+  codegen::transform::pipeline pipeline;
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, opt.num_warps, target.get());
   codegen::analysis::liveness liveness(&layouts);
@@ -162,6 +164,11 @@ void kernel::init_ker(){
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), opt.num_warps);
   // run passes
   dce.run(*ir_);
+//  ir::print(*ir_, std::cout);
+//  pipeline.run(*ir_);
+//  dce.run(*ir_);
+//  ir::print(*ir_, std::cout);
+//  exit(1);
   disassociate.run(*ir_);
   dce.run(*ir_);
   peephole.run(*ir_);

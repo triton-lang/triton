@@ -45,6 +45,9 @@ void builder::set_insert_point(basic_block *block){
 //                               convenience functions
 //===----------------------------------------------------------------------===//
 
+value *builder::get_int1(bool val)
+{ return constant_int::get(type::get_int1_ty(ctx_), val); }
+
 value *builder::get_int32(int32_t val)
 { return constant_int::get(type::get_int32_ty(ctx_), val);}
 

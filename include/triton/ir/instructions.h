@@ -90,6 +90,7 @@ private:
   std::string repr_impl() const { return "phi"; }
 
 public:
+  size_t find_incoming(basic_block* block);
   void set_incoming_value(unsigned i, value *v);
   void set_incoming_block(unsigned i, basic_block *block);
   value *get_incoming_value(unsigned i) { return get_operand(i); }

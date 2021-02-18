@@ -35,6 +35,7 @@ public:
   basic_block* get_insert_block() { return block_; }
   iterator get_insert_point() { return insert_point_;}
   // Constants
+  value *get_int1(bool val);
   value *get_int32(int32_t val);
   value *get_int64(int64_t val);
   // Types

@@ -46,31 +46,18 @@ __global__ void matmul(TYPE *A __noalias __readonly __aligned(16),
   bool checkb[TK, TN] = rk[:, newaxis] < K;
   TYPE a[TM, TK] = checka ? *pa : 0;
   TYPE b[TK, TN] = checkb ? *pb : 0;
-  pa += TK * STRIDE_AK;
-  pb += TK * STRIDE_BK;
 
   // reduction loop
   float acc[TM, TN] = 0;
   for (int k = K; k > 0; k -= TK) {
-#if (IS_TK_DIV_K == 1)
     bool checkk[TK] = k > TK;
-#else
-    bool checkk[TK] = rk < k - TK;
-#endif
     bool checka[TM, TK] = checkk [newaxis, :];
     bool checkb[TK, TN] = checkk[:, newaxis];
-#if (IS_TK_DIV_K == 1)
-    TYPE anext[TM, TK] = *? (checka)pa;
-    TYPE bnext[TK, TN] = *? (checkb)pb;
-#else
-    TYPE anext[TM, TK] = checka ? *pa : 0;
-    TYPE bnext[TK, TN] = checkb ? *pb : 0;
-#endif
+    acc += a @b;
     pa += TK * STRIDE_AK;
     pb += TK * STRIDE_BK;
-    acc += a @b;
-    a = anext;
-    b = bnext;
+    a = *? (checka)pa;
+    b = *? (checkb)pb;
   }
   acc = acc * alpha;
   TYPE c[TM, TN] = acc;
