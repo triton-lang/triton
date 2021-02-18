@@ -1,0 +1,42 @@
+name: Triton CI
+pool:
+  name: default
+
+# Some variables
+variables:
+- name: venv
+  value: venv
+
+# Run CI when something pushed to master
+trigger: [ master ]
+# Run CI when a PR is created or updated from master
+pr:
+- master
+
+# Pipeline
+steps:
+- script: |
+    mkdir $(venv)
+    python -m virtualenv --python=python3 $(venv)
+    source $(venv)/bin/activate
+    python -m pip install --upgrade pip
+    pip install torch==1.7.1+cu110 torchvision==0.8.2+cu110 torchaudio===0.7.2 \
+                -f https://download.pytorch.org/whl/torch_stable.html
+    cd python
+    python setup.py install
+  displayName: Setup python environment
+
+- script: |
+    source $(venv)/bin/activate
+    pip install matplotlib pandas
+    cd python/bench
+    python -m run --with-plots
+
+- publish: python/bench/results
+  artifact: Benchmarks
+
+- script: |
+    source $(venv)/bin/activate
+    pip install pytest
+    pytest .
+  displayName: 'Run Python tests'

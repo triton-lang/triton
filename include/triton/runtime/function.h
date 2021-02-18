@@ -4,27 +4,19 @@
 #define _TRITON_RUNTIME_FUNCTION_H_
 
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <string>
 #include <sstream>
 #include <memory>
 #include <functional>
-#include <set>
 // codegen
 #include "triton/ir/context.h"
-#include "triton/codegen/target.h"
 #include "triton/runtime/arg.h"
 #include "triton/runtime/error.h"
 
-namespace llvm {
-  class Module;
-  class LLVMContext;
-}
-
-class Parser;
-
+// driver forward declaration
 namespace triton {
-
 namespace driver{
   class module;
   class stream;
@@ -32,25 +24,18 @@ namespace driver{
   class context;
   class device;
 }
-
-namespace lang{
-class translation_unit;
 }
-
-namespace codegen{
-namespace analysis{
-class tiles;
-}
-}
-
+// ir forward declaration
+namespace triton{
 namespace ir {
 class module;
 class function;
 class context;
 }
+}
 
+namespace triton{
 namespace runtime{
-
 
 typedef std::vector<size_t> grid_t;
 typedef std::map<std::string, size_t> params_t;
@@ -69,100 +54,82 @@ enum asm_mode_t {
   ASM_NV_SASS
 };
 
-struct options_space_t {
-  typedef std::pair<std::string, std::vector<std::string>> define_t;
-  std::vector<define_t> defines;
-  std::vector<int> num_warps;
-  std::vector<int> recompile_key;
-};
-
 struct options_t {
   template<class T>
   T D(const std::string& name) const {
     return convert<T>(defines.at(name));
   }
-  bool operator<(const options_t& other) const {
-    return std::make_pair(defines, num_warps) <
-           std::make_pair(other.defines, other.num_warps);
-  }
-  std::string to_str() const;
+  std::unordered_map<std::string, std::string> defines;
+  int num_warps;
+};
 
-  std::map<std::string, std::string> defines;
-  size_t num_warps;
+
+/* ------------------------- */
+
+class kernel{
+private:
+  static std::string preheader();
+  static arg_type convert(ir::type *ty);
+
+public:
+  kernel(const std::string& src, const options_t& opt, driver::device *device);
+  void operator()(void* args, size_t args_size, driver::stream *stream, const std::vector<size_t>& grid) const;
+  // getters
+  const std::vector<arg_type>& get_sig() const { return sig_; }
+  const std::vector<std::string>& get_arg_names() const { return arg_names_; }
+  std::string get_asm(asm_mode_t mode);
+
+private:
+  void init_ir (const std::string &src);
+  void init_ker();
+  void init_sig();
+
+public:
+  const options_t opt;
+
+private:
+  driver::device* dev_;
+  // signature
+  std::vector<arg_type> sig_;
+  std::vector<std::string> arg_names_;
+  // triton context for parsing
+  ir::context ctx_;
+  // handles
+  std::shared_ptr<ir::module> ir_;
+  std::shared_ptr<driver::module> mod_;
+  std::shared_ptr<driver::kernel> ker_;
 };
 
 class function {
 public:
   typedef std::function<grid_t(const options_t&)> grid_fn_ty;
+  typedef std::pair<options_t, std::shared_ptr<kernel>> kernel_pair_t;
+  typedef std::map<std::vector<uint64_t>, kernel*> cache_t;
+  typedef std::vector<std::pair<std::map<std::string, std::string>, int>> autotune_vals_t;
 
 private:
-  class caller {
-  public:
-    // constructors
-    caller(std::ifstream& ifs, const options_t& opt);
-    caller(ir::function *ir, std::shared_ptr<driver::module> program, const options_t& opt);
-    // serialization
-    void write(std::ofstream& ofs);
-    void read(std::ifstream& ifs);
-    // accessors
-    const options_t opt() const { return opt_; }
-    const driver::module* parent() const { return &*parent_; }
-    const driver::kernel* bin() const { return &*bin_; }
-    arg_type param_ty(size_t i) const { return param_tys_.at(i);}
-    const std::vector<arg_type>& param_tys() const { return param_tys_; }
-
-    std::vector<int> retune() const { return retune_; }
-    // entry points
-    void operator()(driver::stream *stream, const grid_t& grid, void **args, size_t args_size, const std::map<std::string, std::vector<char>>& = {}) const;
-
-  private:
-    std::shared_ptr<driver::kernel> bin_;
-    std::shared_ptr<driver::module> parent_;
-    std::vector<arg_type> param_tys_;
-    std::vector<int> retune_;
-    options_t opt_;
-    std::string name_;
-  };
-
-private:
-  typedef std::pair<driver::device*, std::vector<int32_t>> cache_key_t;
-
-private:
-  // cache
-  static std::string get_cache_prefix();
-  // make
-  triton::lang::translation_unit *make_ast(const std::string &src);
-  std::unique_ptr<ir::module> make_ir(Parser &parser);
-  std::unique_ptr<driver::module> make_bin(ir::module &function, driver::device *device, const options_t &opt);
-  void make(driver::device *device, options_t opt);
-  void precompile(driver::device *device, const options_space_t& tuning_space);
-  // autotune
-  caller* autotune(driver::stream *stream, const grid_fn_ty& grid, void **args, size_t args_size);
-
+  static void do_loop_nest(std::vector<size_t> const & ranges,
+                           std::function<void(std::vector<size_t> const &)> const & f);
 public:
-  static std::string preheader();
-
-public:
-  function(const std::string& src, const options_space_t& opt, const std::string &cache_ref = "");
-  void operator()(void** args, size_t args_size, const grid_t& grid, driver::stream* stream, driver::device* device);
-  void operator()(void** args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream, driver::device* device);
-  void set_cst(const char* name, void* data, size_t n_bytes);
-  std::string get_asm(asm_mode_t mode, driver::device *device, const options_t& opt);
+  function(const std::string& src, const options_t& opt, driver::device *device,
+           const autotune_vals_t& autotune_vals = {}, const std::vector<std::string> &autotune_key = {});
+  void operator()(void* args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
+  void operator()(void* args, size_t args_size, const grid_t& grid, driver::stream *stream);
+  // auto-tuning
+  cache_t::iterator find_in_cache(void* args, size_t args_size);
+  kernel* autotune(void* args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
+  // getters
+  const std::vector<kernel_pair_t> get_kernels() { return kernels_; }
 
 private:
-  std::map<std::string, std::vector<char>> cst_;
-  // pre-compilation
-  ir::context ctx_;
-  std::string src_;
-  options_space_t opt_;
-  std::set<options_t> compiled_;
-  std::map<options_t, std::unique_ptr<caller>> callers_;
-  std::vector<int> args_off_;
-  size_t args_size_;
-  // caching
-  std::string cache_ref_;
-  std::string cache_path_;
-  std::map<cache_key_t, caller*> cache_;
+  void init_kernels(const std::string& src, const options_t& opt, const autotune_vals_t& autotune_vals, driver::device *device);
+
+private:
+  std::vector<kernel_pair_t> kernels_;
+  std::map<std::vector<uint64_t>, kernel*> cache_;
+  std::vector<int> key_idxs_;
+  std::vector<int> arg_size_;
+  std::vector<int> arg_off_;
 };
 
 }

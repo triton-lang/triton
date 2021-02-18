@@ -1,8 +1,12 @@
+# TODO: torch needs to be imported first
+# or pybind11 shows `munmap_chunk(): invalid pointer`
+import torch
+# submodules
+from . import testing
 from .kernel import *
+from . import ops
+# C bindings
+import triton._C.libtriton.torch_utils as _torch_utils
 
-# clean-up libtriton resources
-import atexit
-import triton._C.libtriton as libtriton
-@atexit.register
-def cleanup():
-  libtriton.cleanup()
+# version
+__version__ = '1.0.0'

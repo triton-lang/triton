@@ -83,7 +83,7 @@ public:
   Constant* ParseSizeof();
   Constant* ParseAlignof();
   UnaryOp* ParsePrefixIncDec(const Token* tok);
-  UnaryOp* ParseUnaryIntrinsicOp(const Token* tok, int op);
+  UnaryOp* ParseUnaryIntrinsicOp(int op);
   UnaryOp* ParseUnaryOp(const Token* tok, int op);
   Expr* ParseDerefOp(const Token* tok);
 
@@ -227,7 +227,7 @@ public:
   FuncDef* CurFunc() { return curFunc_; }
   const TokenSequence& ts() const { return ts_; }
 
-private:
+protected:
   static bool IsBuiltin(FuncType* type);
   static bool IsBuiltin(const std::string& name);
   static Identifier* GetBuiltin(const Token* tok);

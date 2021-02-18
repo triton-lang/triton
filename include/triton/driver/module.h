@@ -44,11 +44,8 @@ public:
                            const std::string &features,
                            file_type_t file_type);
   virtual std::unique_ptr<buffer> symbol(const char * name) const = 0;
-  std::string llir() const { return llir_; }
   int spilled() const { return spilled_; }
 
-private:
-  std::string llir_;
 protected:
   int spilled_;
 };
@@ -63,15 +60,18 @@ public:
 // CUDA
 class cu_module: public module {
   std::string compile_llvm_module(std::unique_ptr<llvm::Module> module, driver::device* device);
+  void init_from_ptx(const std::string& ptx);
 
 public:
   cu_module(driver::device* device, std::unique_ptr<llvm::Module> module);
   cu_module(driver::device* device, const std::string& source);
   std::unique_ptr<buffer> symbol(const char * name) const;
+  std::string llir() const { return llir_; }
   const std::string& ptx() const { return ptx_; }
 
 private:
   std::string ptx_;
+  std::string llir_;
 };
 
 

@@ -26,6 +26,9 @@
 #include "triton/driver/module.h"
 #include "triton/driver/context.h"
 #include "triton/driver/error.h"
+#include "triton/tools/sha1.hpp"
+#include "triton/tools/sys/getenv.hpp"
+#include "triton/tools/sys/mkdir.hpp"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/IRPrintingPasses.h"
@@ -99,44 +102,7 @@ void module::compile_llvm_module(std::unique_ptr<llvm::Module> module, const std
                                  llvm::SmallVectorImpl<char> &buffer,
                                  const std::string& features,
                                  file_type_t ft) {
-  init_llvm();
-//  // debug
-  llvm::legacy::PassManager pm;
-  std::string tmp;
-//  llvm::raw_string_ostream oss(llir_);
-//  pm.add(llvm::createPrintModulePass(llvm::outs()));
-  pm.add(llvm::createVerifierPass());
-  pm.run(*module);
-  // create machine
-  module->setTargetTriple(triple);
-  std::string error;
-  auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
-  llvm::TargetOptions opt;
-  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
-  opt.UnsafeFPMath = false;
-  opt.NoInfsFPMath = false;
-  opt.NoNaNsFPMath = true;
-  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
-                                                             llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
-  // set data layout
-  if(layout.empty())
-    module->setDataLayout(machine->createDataLayout());
-  else
-    module->setDataLayout(layout);
-  // emit machine code
-  for (llvm::Function &f : module->functions())
-    f.addFnAttr(llvm::Attribute::AlwaysInline);
-  llvm::legacy::PassManager pass;
-  llvm::raw_svector_ostream stream(buffer);
-  // convert triton file type to llvm file type
-  auto ll_file_type = [&](module::file_type_t type){
-    if(type == Object)
-      return llvm::CodeGenFileType::CGFT_ObjectFile;
-    return llvm::CodeGenFileType::CGFT_AssemblyFile;
-  };
-  // emit
-  machine->addPassesToEmitFile(pass, stream, nullptr, ll_file_type(ft));
-  pass.run(*module);
+
 }
 
 
@@ -271,7 +237,41 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
   int ptx_minor = ptx % 10;
   // create
   llvm::SmallVector<char, 0> buffer;
-  module::compile_llvm_module(std::move(module), "nvptx64-nvidia-cuda", "sm_" + std::to_string(std::min(cc, max_nvvm_cc)), "", buffer, "+ptx" + std::to_string(std::min(ptx, max_nvvm_ptx)), Assembly);
+  std::string triple = "nvptx64-nvidia-cuda";
+  std::string proc = "sm_" + std::to_string(std::min(cc, max_nvvm_cc));
+  std::string layout = "";
+  std::string features = "+ptx" + std::to_string(std::min(ptx, max_nvvm_ptx));
+  init_llvm();
+  // verify and store llvm
+  llvm::legacy::PassManager pm;
+  pm.add(llvm::createVerifierPass());
+  pm.run(*module);
+  // create machine
+  module->setTargetTriple(triple);
+  std::string error;
+  auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
+  llvm::TargetOptions opt;
+  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+  opt.UnsafeFPMath = false;
+  opt.NoInfsFPMath = false;
+  opt.NoNaNsFPMath = true;
+  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
+                                                             llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
+  // set data layout
+  if(layout.empty())
+    module->setDataLayout(machine->createDataLayout());
+  else
+    module->setDataLayout(layout);
+  // emit machine code
+  for (llvm::Function &f : module->functions())
+    f.addFnAttr(llvm::Attribute::AlwaysInline);
+  llvm::legacy::PassManager pass;
+  llvm::raw_svector_ostream stream(buffer);
+  // emit
+  machine->addPassesToEmitFile(pass, stream, nullptr, llvm::CodeGenFileType::CGFT_AssemblyFile);
+  pass.run(*module);
+
+  // post-process
   std::string result(buffer.begin(), buffer.end());
   find_and_replace(result, ".version", "\n", ".version " + std::to_string(ptx_major) + "." + std::to_string(ptx_minor) + "\n");
   find_and_replace(result, ".target", "\n", ".target " + sm + "\n");
@@ -280,10 +280,7 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
   return result;
 }
 
-
-cu_module::cu_module(driver::device* device, std::unique_ptr<llvm::Module> ll_module): cu_module(device, compile_llvm_module(std::move(ll_module), device)) { }
-
-cu_module::cu_module(driver::device* device, std::string const & source) : module(CUmodule(), true), ptx_(source){
+void cu_module::init_from_ptx(const std::string& ptx) {
   // JIT compile source-code
 
   try{
@@ -295,7 +292,7 @@ cu_module::cu_module(driver::device* device, std::string const & source) : modul
 //    std::string fsrc = _fsrc;
 //    std::string flog = _flog;
 //    std::ofstream ofs(fsrc);
-//    ofs << source;
+//    ofs << ptx;
 //    ofs.close();
 //    std::string cmd;
 //    int err;
@@ -340,12 +337,48 @@ cu_module::cu_module(driver::device* device, std::string const & source) : modul
   }
   catch(exception::cuda::invalid_ptx const &){
 //#ifdef TRITON_LOG_PTX_ERROR
-    std::cout << source << std::endl;
+    std::cout << ptx << std::endl;
     std::cerr << "It appears that Triton produced invalid PTX code:" << std::endl;
 //    exit(1);
 //#endif
     throw;
   }
+}
+
+cu_module::cu_module(driver::device* device, std::unique_ptr<llvm::Module> ll_module): module(CUmodule(), true) {
+  llvm::raw_string_ostream oss(llir_);
+  oss << *ll_module;
+  oss.flush();
+  std::string cache_path = tools::getenv("TRITON_DEBUG_CACHE_PATH");
+  if(cache_path.empty())
+    ptx_ = compile_llvm_module(std::move(ll_module), device);
+  else{
+    tools::mkdir(cache_path);
+    // update cache path to PTX file
+    unsigned char hash[20];
+    sha1::calc((void*)llir_.data(), llir_.size(), hash);
+    char _hex[40];
+    sha1::toHexString(hash, _hex);
+    std::string hex(_hex, _hex + 40);
+    cache_path += "/" + hex;
+    // read
+    std::ifstream ifs(cache_path);
+    std::ostringstream _ptx;
+    if(ifs)
+      _ptx << ifs.rdbuf();
+    ptx_ = _ptx.str();
+    // compile and write-back if read empty
+    if(ptx_.empty()){
+      ptx_ = compile_llvm_module(std::move(ll_module), device);
+      std::ofstream ofs(cache_path);
+      ofs << ptx_;
+    }
+  }
+  init_from_ptx(ptx_);
+}
+
+cu_module::cu_module(driver::device*, std::string const & source) : module(CUmodule(), true), ptx_(source){
+  init_from_ptx(ptx_);
 }
 
 std::unique_ptr<buffer> cu_module::symbol(const char *name) const{
