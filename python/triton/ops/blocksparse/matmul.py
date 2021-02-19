@@ -126,7 +126,7 @@ class _matmul(torch.autograd.Function):
       num_lock = 1
       key = (block, device, a.dtype, b.dtype, trans_a, trans_b, trans_c, pack, is_32_multiple, is_64_multiple)
       if key not in _matmul.sdd_cache:
-        defines =  {'TM': block*pack, 'TN': block*pack, 
+        defines = {'TM': block*pack, 'TN': block*pack,
                     'TMN': block*block*pack*pack, 
                     'BLOCK': block, 
                     'TK': 32, 
