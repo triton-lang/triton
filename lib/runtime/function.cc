@@ -164,9 +164,8 @@ void kernel::init_ker(){
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), opt.num_warps);
   // run passes
   dce.run(*ir_);
-//  ir::print(*ir_, std::cout);
-//  pipeline.run(*ir_);
-//  dce.run(*ir_);
+  pipeline.run(*ir_);
+  dce.run(*ir_);
 //  ir::print(*ir_, std::cout);
 //  exit(1);
   disassociate.run(*ir_);

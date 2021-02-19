@@ -41,23 +41,12 @@ __global__ void matmul(TYPE *A __noalias __readonly __aligned(16),
   TYPE *pa[TM, TK] = A + offa;
   TYPE *pb[TK, TN] = B + offb;
 
-  // prefetches operands
-  bool checka[TM, TK] = rk [newaxis, :] < K;
-  bool checkb[TK, TN] = rk[:, newaxis] < K;
-  TYPE a[TM, TK] = checka ? *pa : 0;
-  TYPE b[TK, TN] = checkb ? *pb : 0;
-
   // reduction loop
   float acc[TM, TN] = 0;
   for (int k = K; k > 0; k -= TK) {
-    bool checkk[TK] = k > TK;
-    bool checka[TM, TK] = checkk [newaxis, :];
-    bool checkb[TK, TN] = checkk[:, newaxis];
-    acc += a @b;
+    acc += (*pa) @(*pb);
     pa += TK * STRIDE_AK;
     pb += TK * STRIDE_BK;
-    a = *? (checka)pa;
-    b = *? (checkb)pb;
   }
   acc = acc * alpha;
   TYPE c[TM, TN] = acc;

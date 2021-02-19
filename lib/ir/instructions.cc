@@ -45,8 +45,10 @@ phi_node::phi_node(type *ty, unsigned num_reserved, std::string const &name, ins
   blocks_.reserve(num_reserved);
 }
 
-size_t phi_node::find_incoming(basic_block* block) {
-  return std::distance(blocks_.begin(), std::find(blocks_.begin(), blocks_.end(), block));
+value* phi_node::get_value_for_block(basic_block * block) {
+  auto it = std::find(blocks_.begin(), blocks_.end(), block);
+  size_t n = std::distance(blocks_.begin(), it);
+  return get_incoming_value(n);
 }
 
 // Set incoming value
