@@ -110,7 +110,7 @@ class _softmax(torch.autograd.Function):
         kernel = _softmax.make_kernel(fwd_kernels, fwd_src, maxlut * block, x.device, x.dtype, block, apply_scale,
                                       apply_rpe, apply_kp_mask, apply_attn_mask, kp_mask_mode, attn_mask_mode)
         M = x.shape[0]
-        grid = lambda opt: [triton.cdiv(spdims[0] * spdims[1] * block, opt.TM), M]
+        grid = lambda opt: [spdims[0] * spdims[1] * block, M]
 
         # run kernel
         kernel(x.data_ptr(),
@@ -151,7 +151,7 @@ class _softmax(torch.autograd.Function):
                                       ctx.apply_scale, ctx.apply_rpe, ctx.apply_kp_mask, ctx.apply_attn_mask,
                                       ctx.kp_mask_mode, ctx.attn_mask_mode)
         M = x.shape[0]
-        grid = lambda opt: [triton.cdiv(ctx.spdims[0] * ctx.spdims[1] * ctx.block, opt.TM), M]
+        grid = lambda opt: [ctx.spdims[0] * ctx.spdims[1] * ctx.block, M]
         kernel(x.data_ptr(), ctx.scale, dx.data_ptr(), lut.data_ptr(), ctx.maxlut, x.stride(0), dx.stride(0), grid=grid)
         return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
