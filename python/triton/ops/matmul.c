@@ -49,7 +49,7 @@ __global__ void matmul(TYPE *A __noalias __readonly __aligned(16),
     pb += TK * STRIDE_BK;
   }
   acc = acc * alpha;
-  TYPE c[TM, TN] = acc;
+  TYPE c[TM, TN] = acc * alpha;
 
   // epilogue
   int rcm[TM] = pidm * TM + 0 ... TM;

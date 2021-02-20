@@ -165,7 +165,7 @@ void kernel::init_ker(){
   // run passes
   dce.run(*ir_);
 //  ir::print(*ir_, std::cout);
-//  pipeline.run(*ir_);
+  pipeline.run(*ir_);
   dce.run(*ir_);
 //  ir::print(*ir_, std::cout);
 //  ir::print(*ir_, std::cout);
