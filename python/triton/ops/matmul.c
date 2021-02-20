@@ -7,7 +7,7 @@ __global__ void matmul(TYPE *A __noalias __readonly __aligned(16),
                        float alpha,
                        int M,
                        int N,
-                       int K __multipleof(16),
+                       int K,
                        int lda __multipleof(LDA_POW2_DIV),
                        int ldb __multipleof(LDB_POW2_DIV),
                        int ldc __multipleof(LDC_POW2_DIV),
@@ -17,7 +17,6 @@ __global__ void matmul(TYPE *A __noalias __readonly __aligned(16),
   int pidz = get_program_id(2);
   int gridm = (M + TM - 1) / TM;
   int gridn = (N + TN - 1) / TN;
-
   // swizzle for better L2 performance
   int width = STM * gridn;
   int stm = pid / width;
@@ -31,33 +30,25 @@ __global__ void matmul(TYPE *A __noalias __readonly __aligned(16),
   int pidn = stn * STN + lanen;
   int rm[TM] = pidm * TM + 0 ... TM;
   int rn[TN] = pidn * TN + 0 ... TN;
-
-  // split-k for better parrallelism
-  K = K / TZ;
   int rk[TK] = 0 ... TK;
-  // pointers to operands
-  int offa[TM, TK] = (pidz * K + rk [newaxis, :]) * STRIDE_AK + rm[:, newaxis] * STRIDE_AM;
-  int offb[TK, TN] = (pidz * K + rk[:, newaxis]) * STRIDE_BK + rn [newaxis, :] * STRIDE_BN;
-  TYPE *pa[TM, TK] = A + offa;
-  TYPE *pb[TK, TN] = B + offb;
-
+  K = K / 1;
   // reduction loop
   float acc[TM, TN] = 0;
-  for (int k = K; k > 0; k -= TK) {
+  int offa[TM, TK] = (pidz * TK + rk [newaxis, :]) * STRIDE_AK + rm[:, newaxis] * STRIDE_AM;
+  int offb[TK, TN] = (pidz * TK + rk[:, newaxis]) * STRIDE_BK + rn [newaxis, :] * STRIDE_BN;
+  TYPE *pa[TM, TK] = A + offa;
+  TYPE *pb[TK, TN] = B + offb;
+  for (int k = K; k > 0; k -= TK * SPLITK) {
     acc += (*pa) @(*pb);
-    pa += TK * STRIDE_AK;
-    pb += TK * STRIDE_BK;
+    pa += TK * SPLITK * STRIDE_AK;
+    pb += TK * SPLITK * STRIDE_BK;
   }
-  acc = acc * alpha;
-  TYPE c[TM, TN] = acc * alpha;
-
   // epilogue
-  int rcm[TM] = pidm * TM + 0 ... TM;
-  int rcn[TN] = pidn * TN + 0 ... TN;
-  int offc[TM, TN] = rcm[:, newaxis] * ldc + rcn [newaxis, :];
+  int offc[TM, TN] = rm[:, newaxis] * ldc + rn [newaxis, :];
   TYPE *pc[TM, TN] = C + offc;
-  bool checkc[TM, TN] = rcm[:, newaxis] < M && rcn [newaxis, :] < N;
-#if (TZ == 1)
+  bool checkc[TM, TN] = rm[:, newaxis] < M && rn [newaxis, :] < N;
+  TYPE c[TM, TN] = acc * alpha;
+#if (SPLITK == 1)
   *? (checkc)pc = c;
 #else
   // accumulate partial result using spin-locks
@@ -70,7 +61,7 @@ __global__ void matmul(TYPE *A __noalias __readonly __aligned(16),
     *? (checkc)pc = c;
   else
     *? (checkc)pc = c + *? (checkc)pc;
-  atomic_xchg(pcount, (count + 1) % TZ);
+  atomic_xchg(pcount, (count + 1) % SPLITK);
   atomic_xchg(plock, 0);
 #endif
 }

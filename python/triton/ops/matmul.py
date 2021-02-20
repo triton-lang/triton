@@ -7,18 +7,18 @@ class _matmul(torch.autograd.Function):
     src = triton.read(os.path.join(os.path.dirname(__file__), "matmul.c"))
 
     _DEFAULT_CONFIGS = [
-        ({"TM": "128", "TN": "128", "TK": "32", "TZ": "1"}, 4),
-        # ({'TM': '64', 'TN': '128', 'TK': '32', 'TZ': '1'}, 4),
-        # ({'TM': '128', 'TN': '64', 'TK': '32', 'TZ': '1'}, 4),
-        # ({'TM': '64', 'TN': '64', 'TK': '64', 'TZ': '1'}, 4),
-        # ({'TM': '32', 'TN': '128', 'TK': '64', 'TZ': '1'}, 4),
-        # ({'TM': '128', 'TN': '32', 'TK': '64', 'TZ': '1'}, 4),
-        # ({'TM': '64', 'TN': '32', 'TK': '64', 'TZ': '1'}, 2),
-        # ({'TM': '32', 'TN': '64', 'TK': '64', 'TZ': '1'}, 2),
-        # ({'TM': '32', 'TN': '128', 'TK': '32', 'TZ': '2'}, 4),
-        # ({'TM': '32', 'TN': '128', 'TK': '32', 'TZ': '2'}, 4),
-        # ({'TM': '128', 'TN': '32', 'TK': '32', 'TZ': '4'}, 4),
-        # ({'TM': '128', 'TN': '32', 'TK': '32', 'TZ': '4'}, 4),
+        ({"TM": "128", "TN": "128", "TK": "32", "SPLITK": "1"}, 4),
+        # ({'TM': '64', 'TN': '128', 'TK': '32', 'SPLITK': '1'}, 4),
+        # ({'TM': '128', 'TN': '64', 'TK': '32', 'SPLITK': '1'}, 4),
+        # ({'TM': '64', 'TN': '64', 'TK': '64', 'SPLITK': '1'}, 4),
+        # ({'TM': '32', 'TN': '128', 'TK': '64', 'SPLITK': '1'}, 4),
+        # ({'TM': '128', 'TN': '32', 'TK': '64', 'SPLITK': '1'}, 4),
+        # ({'TM': '64', 'TN': '32', 'TK': '64', 'SPLITK': '1'}, 2),
+        # ({'TM': '32', 'TN': '64', 'TK': '64', 'SPLITK': '1'}, 2),
+        # ({'TM': '32', 'TN': '128', 'TK': '32', 'SPLITK': '2'}, 4),
+        # ({'TM': '32', 'TN': '128', 'TK': '32', 'SPLITK': '2'}, 4),
+        # ({'TM': '128', 'TN': '32', 'TK': '32', 'SPLITK': '4'}, 4),
+        # ({'TM': '128', 'TN': '32', 'TK': '32', 'SPLITK': '4'}, 4),
     ]
     _CONFIGS = _DEFAULT_CONFIGS
 
@@ -109,7 +109,11 @@ class _matmul(torch.autograd.Function):
             ldc,
             locks.data_ptr(),
         ]
-        grid = lambda opt: [triton.cdiv(M, opt.TM) * triton.cdiv(N, opt.TN), 1, opt.TZ]
+        grid = lambda opt: [
+            triton.cdiv(M, opt.TM) * triton.cdiv(N, opt.TN),
+            1,
+            opt.SPLITK,
+        ]
         kernel(*args, grid=grid)
         return c
 

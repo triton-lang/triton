@@ -14,7 +14,11 @@ namespace transform {
 
 class pipeline {
 public:
+  pipeline(bool has_copy_async): has_copy_async_(has_copy_async) {}
   void run(ir::module &module);
+
+private:
+  bool has_copy_async_;
 };
 
 } // namespace transform

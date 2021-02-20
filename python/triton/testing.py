@@ -24,8 +24,9 @@ def allclose(x, y):
     diff = abs(x - y)
     x_max = torch.max(x)
     y_max = torch.max(y)
-    tol = 1e-3
-    return torch.max(diff) / torch.max(x_max, y_max) < tol
+    tol = 1e-2
+    err = torch.max(diff) / torch.max(x_max, y_max)
+    return err < tol
 
 
 def do_bench(fn, flops=0, warmup=10, rep=50):

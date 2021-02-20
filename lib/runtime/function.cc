@@ -150,7 +150,7 @@ void kernel::init_ker(){
   codegen::analysis::align align;
   codegen::analysis::axes axes;
   codegen::transform::cts cts(cts_use_async);
-  codegen::transform::pipeline pipeline;
+  codegen::transform::pipeline pipeline(cts_use_async);
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, opt.num_warps, target.get());
   codegen::analysis::liveness liveness(&layouts);
