@@ -201,7 +201,7 @@ void kernel::init_ker(){
 //    throw exception::out_of_shared_memory();
 //  ir::print(*ir_, std::cout);
   barriers.run(*ir_);
-  ir::print(*ir_, std::cout);
+//  ir::print(*ir_, std::cout);
   isel.visit(*ir_, *llvm);
 //  ir::print(*ir_, std::cout);
   //if(res->spilled() > 256)
