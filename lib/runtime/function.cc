@@ -164,10 +164,10 @@ void kernel::init_ker(){
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), opt.num_warps);
   // run passes
   dce.run(*ir_);
-  ir::print(*ir_, std::cout);
-  pipeline.run(*ir_);
+//  ir::print(*ir_, std::cout);
+//  pipeline.run(*ir_);
   dce.run(*ir_);
-  ir::print(*ir_, std::cout);
+//  ir::print(*ir_, std::cout);
 //  ir::print(*ir_, std::cout);
 //  exit(1);
   disassociate.run(*ir_);
@@ -201,8 +201,9 @@ void kernel::init_ker(){
 //    throw exception::out_of_shared_memory();
 //  ir::print(*ir_, std::cout);
   barriers.run(*ir_);
-//  ir::print(*ir_, std::cout);
+  ir::print(*ir_, std::cout);
   isel.visit(*ir_, *llvm);
+//  ir::print(*ir_, std::cout);
   //if(res->spilled() > 256)
   //  throw exception::out_of_registers();
   mod_.reset(driver::module::create(dev_, std::move(llvm)));

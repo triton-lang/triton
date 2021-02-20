@@ -14,38 +14,31 @@ namespace transform{
 
 void recursive_deps(ir::value* v, ir::basic_block* block, std::vector<ir::instruction*>& ret){
  ir::instruction* i = dynamic_cast<ir::instruction*>(v);
- if(!i || i->get_parent() != block);
-  ret.push_back(i);
+ if(!i || i->get_parent() != block)
+   return;
  if(i->get_id()==ir::INST_PHI)
    return;
+ ret.push_back(i);
  for(ir::user* u: i->get_users())
    recursive_deps(u, block, ret);
 }
 
 void pipeline::run(ir::module &mod) {
-  // Crude conservative heuristics for pre-fetching.
+  // *Very* conservative heuristics for pre-fetching.
   // A load instruction can be pipelined if:
   //   - the pointer is a phi node that references a value
   //     in its basic block (i.e., pointer induction variable)
-  //   - it is not used as an incoming value for a phi-node in the same block
+  //   - the load has only  a single use in a dot instruction
+  // As more use cases become apparent, this pass will be improved
   std::vector<std::pair<ir::load_inst*, ir::phi_node*>> to_pipeline;
   ir::for_each_instruction(mod, [&](ir::instruction *i){
     if(auto* load = dynamic_cast<ir::load_inst*>(i)){
       ir::phi_node* ptr = dynamic_cast<ir::phi_node*>(load->get_pointer_operand());
-      if(!ptr) return;
-      std::vector<ir::instruction*> users;
-      recursive_deps(load, load->get_parent(), users);
-      auto it = std::find_if(users.begin(), users.end(), [&](ir::instruction* i) {
-          return i->get_id() == ir::INST_PHI;
-      });
-      if(it != users.end())
-        return;
-      to_pipeline.push_back({load, ptr});
+      auto users = load->get_users();
+      if(ptr && ptr->get_incoming_block(1) == ptr->get_parent()
+         && users.size() == 1 && dynamic_cast<ir::dot_inst*>(*users.begin()))
+        to_pipeline.push_back({load, ptr});
     }});
-
-  for(auto x: to_pipeline)
-    std::cout << x.second->get_name() << std::endl;
-
   // do the pipelining
   std::vector<ir::phi_node*> new_loads;
   ir::builder &builder = mod.get_builder();
@@ -86,6 +79,34 @@ void pipeline::run(ir::module &mod) {
     load->replace_all_uses_with(new_load);
     new_loads.push_back(new_load);
   }
+
+
+  // try to move dot_inst after loads
+  // for better overlap of io and compute
+  struct move_config_t{
+    std::vector<ir::instruction*> insts;
+    ir::load_inst* dst;
+  };
+  std::map<ir::basic_block*, move_config_t> to_move;
+
+  for(ir::function* fn: mod.get_function_list())
+  for(ir::basic_block* bb: fn->blocks())
+  for(ir::instruction* inst: bb->get_inst_list()){
+    if(auto* i = dynamic_cast<ir::dot_inst*>(inst))
+      recursive_deps(i, bb, to_move[bb].insts);
+    if(auto* i = dynamic_cast<ir::load_inst*>(inst))
+      to_move[bb].dst = i;
+  }
+
+  for(auto& x: to_move){
+    builder.set_insert_point_after(x.second.dst);
+    for(ir::instruction* i: x.second.insts){
+      x.first->erase(i);
+      builder.insert(i);
+    }
+  }
+
+
 }
 
 }
