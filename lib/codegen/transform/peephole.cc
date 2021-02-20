@@ -216,7 +216,7 @@ void peephole::run(ir::module &mod) {
       bool was_modified = false;
       was_modified = was_modified || rewrite_mult(i, builder);
       // was_modified = was_modified || rewrite_cts_cfs(i, builder);
-      was_modified = was_modified || rewrite_trans_phi(i, builder);
+//      was_modified = was_modified || rewrite_trans_phi(i, builder);
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);
       if(tgt_->as_nvidia()->sm() >= 80)

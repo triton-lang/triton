@@ -1426,6 +1426,7 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
   // tiles
   if(out_order == in_order)
     vector = in_layout->nts(in_order[0]);
+//  std::cout << in_layout->nts(0) << " " << in_layout->nts(1) << " " << in_order[0] << " " << in_order[1] << " " << out_order[0] << " " << out_order[1] << std::endl;
   //
   int dtsize = x->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
   int num_per_phase = std::max<int>(128 / (in_layout->mts(in_order[0])*vector*dtsize), 1);
@@ -1452,12 +1453,22 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
     shared.push_back(gep(shmems_[x], {off}));
   }
   //
+//  std::cout << vector << std::endl;
+//  exit(1);
   for(size_t i = 0; i < idxs_.at(ptrs).size(); i += vector){
     auto idx = idxs_[ptrs][i];
     // input ptr info
     GetElementPtrInst *in_gep = dyn_cast<GetElementPtrInst>(vals_[ptrs][idx]);
     Value *in_base = in_gep->getPointerOperand();
-    size_t in_off = dyn_cast<ConstantInt>(in_gep->idx_begin())->getValue().getSExtValue()*2*vector;
+    ConstantInt* cst = dyn_cast<ConstantInt>(in_gep->idx_begin());
+    size_t in_off;
+    if(cst){
+      in_off = cst->getValue().getSExtValue()*2*vector;
+    }
+    else{
+      in_off = 0;
+      in_base = in_gep;
+    }
     Value* out_base = shared[(i / per_thread_ld) % n_shared];
     int out_off_0 = (i / per_thread_ld) / n_shared * n_shared * in_layout->mts(in_order[1]);
     int out_off_1 = i % per_thread_ld;

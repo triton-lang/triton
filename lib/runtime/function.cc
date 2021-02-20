@@ -15,7 +15,6 @@
 #include "triton/codegen/transform/peephole.h"
 #include "triton/codegen/transform/membar.h"
 #include "triton/codegen/transform/reassociate.h"
-#include "triton/codegen/transform/reorder.h"
 #include "triton/codegen/transform/cts.h"
 #include "triton/codegen/transform/disassociate.h"
 #include "triton/codegen/selection/generator.h"
@@ -164,12 +163,8 @@ void kernel::init_ker(){
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), opt.num_warps);
   // run passes
   dce.run(*ir_);
-//  ir::print(*ir_, std::cout);
   pipeline.run(*ir_);
-  dce.run(*ir_);
-//  ir::print(*ir_, std::cout);
-//  ir::print(*ir_, std::cout);
-//  exit(1);
+//  dce.run(*ir_);
   disassociate.run(*ir_);
   dce.run(*ir_);
   peephole.run(*ir_);
@@ -183,10 +178,10 @@ void kernel::init_ker(){
   dce.run(*ir_);
   align.run(*ir_);
   dce.run(*ir_);
-  if(target->is_gpu()){
-    reassociate.run(*ir_);
-    cts.run(*ir_);
-  }
+//  if(target->is_gpu()){
+//    reassociate.run(*ir_);
+//    cts.run(*ir_);
+//  }
   peephole.run(*ir_);
   dce.run(*ir_);
   align.run(*ir_);
