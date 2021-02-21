@@ -2,29 +2,16 @@ import torch
 import triton
 import pytest
 
-
 @pytest.mark.parametrize(
     "MODE, TRANS_A, TRANS_B, BLOCK",
-    [
-        (mode, at, bt, block)
-        for mode in ["sdd"]
-        for at in [False]
-        for bt in [False]
-        for block in [16, 32, 64]
-    ],
+    [(mode, at, bt, block) for mode in ["sdd"] for at in [False] for bt in [False] for block in [16]],
 )
-def test_matmul(
-    MODE, TRANS_A, TRANS_B, BLOCK, DTYPE=torch.float16, Z=3, H=2, M=128, N=256, K=384
-):
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE=torch.float16, Z=3, H=2, M=128, N=256, K=384):
     # set seed
     torch.random.manual_seed(0)
     # create inputs
-    a = torch.randn(
-        (Z, H, K, M) if TRANS_A else (Z, H, M, K), dtype=DTYPE, device="cuda"
-    )
-    b = torch.randn(
-        (Z, H, N, K) if TRANS_B else (Z, H, K, N), dtype=DTYPE, device="cuda"
-    )
+    a = torch.randn((Z, H, K, M) if TRANS_A else (Z, H, M, K), dtype=DTYPE, device="cuda")
+    b = torch.randn((Z, H, N, K) if TRANS_B else (Z, H, K, N), dtype=DTYPE, device="cuda")
     shape = {
         "sdd": (M, N),
         "dsd": (a.shape[2], a.shape[3]),
@@ -32,9 +19,7 @@ def test_matmul(
     }[MODE]
     layout = torch.randint(2, (H, shape[0] // BLOCK, shape[1] // BLOCK))
     # triton result
-    op = triton.ops.blocksparse.matmul(
-        layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B
-    )
+    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B)
     ra = triton.testing.sparsify_tensor(a, layout, BLOCK) if MODE == "dsd" else a
     rb = triton.testing.sparsify_tensor(b, layout, BLOCK) if MODE == "dds" else b
     rc = op(ra, rb)
@@ -49,7 +34,6 @@ def test_matmul(
     # compare
     assert triton.testing.allclose(rc, tc)
 
-
 @pytest.mark.parametrize(
     "BLOCK, WIDTH",
     [(block, width) for block in [32] for width in [256, 576, 1024, 1792]],
@@ -62,12 +46,8 @@ def test_softmax(BLOCK, WIDTH, DTYPE=torch.float16):
     # create inputs
     layout = torch.randint(2, (H, M // BLOCK, N // BLOCK))
     x = torch.randn((Z, H, M, N), dtype=DTYPE, requires_grad=True, device="cuda")
-    at_mask = torch.randint(
-        low=0, high=2, size=(N, N), dtype=torch.bool, requires_grad=False, device="cuda"
-    )
-    kp_mask = torch.randint(
-        low=0, high=2, size=(Z, N), dtype=DTYPE, requires_grad=False, device="cuda"
-    )
+    at_mask = torch.randint(low=0, high=2, size=(N, N), dtype=torch.bool, requires_grad=False, device="cuda")
+    kp_mask = torch.randint(low=0, high=2, size=(Z, N), dtype=DTYPE, requires_grad=False, device="cuda")
     kp_mask[kp_mask == 1.0] = float("-inf")
     # triton result
     op = triton.ops.blocksparse.softmax(layout, BLOCK)
