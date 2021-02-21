@@ -22,6 +22,8 @@ inline ir::instruction* reassociate::is_bin_add(ir::value *x) {
 inline bool is_cst(ir::value *x) {
   if(dynamic_cast<ir::constant*>(x))
     return true;
+  if(dynamic_cast<ir::make_range*>(x))
+    return true;
   if(auto *v = dynamic_cast<ir::retile_inst*>(x))
     return is_cst(v->get_operand(0));
   return false;

@@ -312,7 +312,6 @@ std::vector<unsigned> align::populate_max_contiguous_gep(ir::getelementptr_inst*
     if(rhs_cst_info[d].num_cst)
       rvalue = lhs_max_contiguous[d];
     result[d] = std::max(lvalue, rvalue);
-//    std::cout << "max contiguous: " << x->get_name() << " " << d << " " << result[d] << std::endl;
   }
   return add_to_cache(x, result, max_contiguous_);
 }
@@ -527,8 +526,7 @@ void align::run(ir::module &mod) {
   ir::for_each_value(mod, [this](ir::value* v) { populate(v); } );
 //  ir::for_each_value(mod, [this](ir::value* v) {
 //      if(dynamic_cast<ir::cast_inst*>(v) || dynamic_cast<ir::getelementptr_inst*>(v))
-//        std::cout << "ALIGN: " << v->get_name() << " " << starting_multiple_.at(v)[0] << " " << max_contiguous_.at(v)[0]
-//                                   << " " << starting_multiple_.at(v)[1] << " " << max_contiguous_.at(v)[1] << std::endl;
+//        std::cout << "ALIGN: " << v->get_name() << " " << max_contiguous_.at(v)[0] << " " << max_contiguous_.at(v)[1] << std::endl;
 //  });
 }
 
