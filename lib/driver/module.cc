@@ -282,6 +282,7 @@ std::string cu_module::compile_llvm_module(std::unique_ptr<llvm::Module> module,
 
 void cu_module::init_from_ptx(const std::string& ptx) {
   // JIT compile source-code
+//  std::cout << ptx << std::endl;
 
   try{
 //    // compile ptx with ptxas

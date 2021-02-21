@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <iostream>
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/codegen/transform/peephole.h"
+#include "triton/codegen/analysis/layout.h"
 
 namespace triton {
 namespace codegen{
@@ -109,9 +111,18 @@ bool peephole::rewrite_load_to_shared(ir::instruction *value, ir::builder& build
   ir::value *ptr = ld->get_pointer_operand();
   ir::value *msk = ld->get_mask_operand();
   ir::value *val = ld->get_false_value_operand();
-  ir::value* new_load = builder.create_masked_load_async(ptr, msk, val);
-  copy_to_shared->replace_all_uses_with(new_load);
-  return true;
+  analysis::scanline_layout* layout = layouts_->get(ptr)->to_scanline();
+  int nts = layout->nts(layout->get_order()[0]);
+  int dtsize = value->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
+  if(nts*dtsize >= 4){
+    ir::value* new_load = builder.create_masked_load_async(ptr, msk, val);
+    copy_to_shared->replace_all_uses_with(new_load);
+    return true;
+  }
+  return false;
+//  analysis::scanline_layout* layout = layouts_->get(ptr)->to_scanline();
+//  std::cout << layout->nts(layout->get_order(0)) << std::endl;
+//  return true;
 
 }
 
@@ -216,11 +227,11 @@ void peephole::run(ir::module &mod) {
       bool was_modified = false;
       was_modified = was_modified || rewrite_mult(i, builder);
       // was_modified = was_modified || rewrite_cts_cfs(i, builder);
-      was_modified = was_modified || rewrite_trans_phi(i, builder);
+//      was_modified = was_modified || rewrite_trans_phi(i, builder);
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);
-//      if(tgt_->as_nvidia()->sm() >= 80)
-//        was_modified = was_modified || rewrite_load_to_shared(i, builder);
+      if(tgt_->as_nvidia()->sm() >= 80)
+        was_modified = was_modified || rewrite_load_to_shared(i, builder);
       if(was_modified)
         seen.insert(i);
     }

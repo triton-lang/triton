@@ -92,6 +92,7 @@ private:
 public:
   void set_incoming_value(unsigned i, value *v);
   void set_incoming_block(unsigned i, basic_block *block);
+  value *get_value_for_block(basic_block *block);
   value *get_incoming_value(unsigned i) { return get_operand(i); }
   basic_block *get_incoming_block(unsigned i) { return blocks_[i]; }
   unsigned get_num_incoming() { return get_num_operands(); }
@@ -803,14 +804,18 @@ public:
 
 class async_wait_inst: public instruction{
 private:
-  async_wait_inst(context &ctx, const std::string &name, instruction *next);
-  std::string repr_impl() const { return "async_wait"; }
+  async_wait_inst(context &ctx, int N, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "async_wait_group " + std::to_string(N_) ; }
   _TRITON_DEFINE_CLONE(async_wait_inst)
   _TRITON_DEFINE_ACCEPT(async_wait_inst)
 
 public:
-  static async_wait_inst* create(context &ctx, const std::string &name = "",
-                                            instruction *next = nullptr);
+  static async_wait_inst* create(context &ctx, int N,
+                                 const std::string &name = "", instruction *next = nullptr);
+  int get_N() { return N_; }
+
+private:
+  int N_;
 };
 
 // On NVIDIA, implementation is such that
