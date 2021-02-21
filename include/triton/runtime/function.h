@@ -98,6 +98,8 @@ private:
   std::shared_ptr<ir::module> ir_;
   std::shared_ptr<driver::module> mod_;
   std::shared_ptr<driver::kernel> ker_;
+  // shared mem
+  size_t shared_mem_;
 };
 
 class function {
