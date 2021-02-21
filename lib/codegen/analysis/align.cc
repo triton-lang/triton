@@ -527,8 +527,7 @@ void align::run(ir::module &mod) {
   ir::for_each_value(mod, [this](ir::value* v) { populate(v); } );
 //  ir::for_each_value(mod, [this](ir::value* v) {
 //      if(dynamic_cast<ir::cast_inst*>(v) || dynamic_cast<ir::getelementptr_inst*>(v))
-//        std::cout << "ALIGN: " << v->get_name() << " " << starting_multiple_.at(v)[0] << " " << max_contiguous_.at(v)[0]
-//                                   << " " << starting_multiple_.at(v)[1] << " " << max_contiguous_.at(v)[1] << std::endl;
+//        std::cout << "ALIGN: " << v->get_name() << " " << max_contiguous_.at(v)[0] << " " << max_contiguous_.at(v)[1] << std::endl;
 //  });
 }
 

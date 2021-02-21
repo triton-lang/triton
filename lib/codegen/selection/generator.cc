@@ -1462,13 +1462,13 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
     Value *in_base = in_gep->getPointerOperand();
     ConstantInt* cst = dyn_cast<ConstantInt>(in_gep->idx_begin());
     size_t in_off;
-    if(cst){
+//    if(cst){
       in_off = cst->getValue().getSExtValue()*2*vector;
-    }
-    else{
-      in_off = 0;
-      in_base = in_gep;
-    }
+//    }
+//    else{
+//      in_off = 0;
+//      in_base = in_gep;
+//    }
     Value* out_base = shared[(i / per_thread_ld) % n_shared];
     int out_off_0 = (i / per_thread_ld) / n_shared * n_shared * in_layout->mts(in_order[1]);
     int out_off_1 = i % per_thread_ld;

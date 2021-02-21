@@ -9,12 +9,12 @@ import pytest
         (mode, at, bt, block)
         for mode in ["sdd"]
         for at in [False]
-        for bt in [True]
-        for block in [32]
+        for bt in [False]
+        for block in [16, 32, 64]
     ],
 )
 def test_matmul(
-    MODE, TRANS_A, TRANS_B, BLOCK, DTYPE=torch.float16, Z=3, H=2, M=128, N=256, K=32
+    MODE, TRANS_A, TRANS_B, BLOCK, DTYPE=torch.float16, Z=3, H=2, M=128, N=256, K=384
 ):
     # set seed
     torch.random.manual_seed(0)

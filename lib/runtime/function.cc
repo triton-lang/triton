@@ -176,14 +176,18 @@ void kernel::init_ker(){
   layouts.run(*ir_);
   coalesce.run(*ir_);
   dce.run(*ir_);
+//  ir::print(*ir_, std::cout);
   align.run(*ir_);
   dce.run(*ir_);
-//  if(target->is_gpu()){
-//    reassociate.run(*ir_);
-//    cts.run(*ir_);
-//  }
+  if(target->is_gpu()){
+    reassociate.run(*ir_);
+    cts.run(*ir_);
+  }
+  dce.run(*ir_);
+
   peephole.run(*ir_);
   dce.run(*ir_);
+//  ir::print(*ir_, std::cout);
   align.run(*ir_);
   axes.run(*ir_);
   layouts.run(*ir_);
