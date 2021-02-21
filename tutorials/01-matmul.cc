@@ -66,18 +66,19 @@ __global__ void dot(TYPE * A __noalias __readonly __aligned(16),
       bool checkb[TK, TN] = rk[:, newaxis] < K;
       TYPE a[TM, TK] = checka ? *pa : 0;
       TYPE b[TK, TN] = checkb ? *pb : 0;
-      pa += TK * STRIDE_AK;
-      pb += TK * STRIDE_BK;
       // reduction loop
       float acc[TM, TN] = 0;
       for(int k = K; k > 0; k -= TK){
         bool checka[TM, TK] = k > TK;
         bool checkb[TK, TN] = k > TK;
-        acc += a @ b;
-        a = *?(checka)pa;
-        b = *?(checkb)pb;
         pa += TK * STRIDE_AK;
         pb += TK * STRIDE_BK;
+        TYPE anext[TM, TK] = *?(checka)pa;
+        TYPE bnext[TK, TN] = *?(checkb)pb;
+        acc += a @ b;
+        a = anext;
+        b = bnext;
+//        __debug_barrier();
       }
       acc = acc * alpha;
       TYPE c[TM, TN] = acc;
@@ -166,7 +167,7 @@ float triton_dot(drv::context* context,  drv::stream* stream,
   opt.defines["TYPE"] = ty;
   opt.defines["TM"] = "128";
   opt.defines["TN"] = "128";
-  opt.defines["TK"] = "32" ;
+  opt.defines["TK"] = "64" ;
   opt.defines["TZ"] = "1";
   opt.num_warps = 4;
   // arguments

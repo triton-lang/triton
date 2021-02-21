@@ -118,15 +118,6 @@ data_layout::data_layout(id_t id,
 //    std::cout << max_contiguous[0] << " " << max_contiguous[1] << std::endl;
 //    std::cout << order_[0] << " " << order_[1] << std::endl;
   }
-  if(is_recoalesce){
-    if(ptr.size() > 0){
-//      std::cout << "recoalesce: " << order_[0] << " " << order_[1] << " " << ptr.size() << std::endl;
-//      std::cout << max_contiguous[0] << " " << max_contiguous[1] << std::endl;
-//      if(order_[0] == 0)
-//        exit(1);
-    }
-  }
-//  std::cout << "---" << std::endl;
 }
 
 int data_layout::find_axis(int to_find) const {
@@ -213,14 +204,16 @@ scanline_layout::scanline_layout(size_t num_warps,
   ir::value *ptr = nullptr;
   for(ir::value *v: values)
     for(ir::user *usr: v->get_users())
-      if(auto *st = dynamic_cast<ir::io_inst*>(usr))
-        ptr = st->get_pointer_operand();
+      if(auto *io = dynamic_cast<ir::io_inst*>(usr)){
+        if(!ptr || ptr->get_type()->get_tile_rank() < io->get_pointer_operand()->get_type()->get_tile_rank())
+        ptr = io->get_pointer_operand();
+      }
 
   unsigned i = order_[0];
   int contiguous = 1;
   if(ptr){
     int nbits = ptr->get_type()->get_pointer_element_ty()->get_scalar_ty()->get_primitive_size_in_bits();
-    contiguous = std::min<int>(align->contiguous(ptr)[i], 128 / nbits);
+    contiguous = std::min<int>(align->get(ptr, i), 128 / nbits);
   }
 
   nts_[i] = clamp(size / num_threads, 1, std::min<int>(contiguous, shape_[i]));

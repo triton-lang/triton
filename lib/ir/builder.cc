@@ -45,6 +45,9 @@ void builder::set_insert_point(basic_block *block){
 //                               convenience functions
 //===----------------------------------------------------------------------===//
 
+value *builder::get_int1(bool val)
+{ return constant_int::get(type::get_int1_ty(ctx_), val); }
+
 value *builder::get_int32(int32_t val)
 { return constant_int::get(type::get_int32_ty(ctx_), val);}
 
@@ -372,8 +375,8 @@ value *builder::create_barrier(const std::string &name) {
   return insert(barrier_inst::create(ctx_, name));
 }
 
-value *builder::create_async_wait() {
-  return insert(async_wait_inst::create(ctx_));
+value *builder::create_async_wait(int N) {
+  return insert(async_wait_inst::create(ctx_, N));
 }
 
 }

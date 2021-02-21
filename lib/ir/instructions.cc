@@ -45,6 +45,12 @@ phi_node::phi_node(type *ty, unsigned num_reserved, std::string const &name, ins
   blocks_.reserve(num_reserved);
 }
 
+value* phi_node::get_value_for_block(basic_block * block) {
+  auto it = std::find(blocks_.begin(), blocks_.end(), block);
+  size_t n = std::distance(blocks_.begin(), it);
+  return get_incoming_value(n);
+}
+
 // Set incoming value
 void phi_node::set_incoming_value(unsigned i, value *v){
   assert(v && "PHI node got a null value!");
@@ -818,12 +824,11 @@ barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instru
   return new barrier_inst(ctx, name, next);
 }
 
-async_wait_inst::async_wait_inst(context &ctx, const std::string &name,
-                                                       instruction *next)
-  : instruction(type::get_void_ty(ctx), INST_ASYNC_WAIT, 0, name, next) { }
+async_wait_inst::async_wait_inst(context &ctx, int N, const std::string &name, instruction *next)
+  : instruction(type::get_void_ty(ctx), INST_ASYNC_WAIT, 0, name, next), N_(N) { }
 
-async_wait_inst* async_wait_inst::create(context &ctx, const std::string &name, instruction *next) {
-  return new async_wait_inst(ctx, name, next);
+async_wait_inst* async_wait_inst::create(context &ctx, int N, const std::string &name, instruction *next) {
+  return new async_wait_inst(ctx, N, name, next);
 }
 
 

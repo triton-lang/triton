@@ -35,6 +35,7 @@ public:
   basic_block* get_insert_block() { return block_; }
   iterator get_insert_point() { return insert_point_;}
   // Constants
+  value *get_int1(bool val);
   value *get_int32(int32_t val);
   value *get_int64(int64_t val);
   // Types
@@ -149,7 +150,7 @@ public:
   value *create_masked_load_async(value *arg, value *mask, value *false_value, const std::string &name = "");
   value *create_copy_from_shared(value *arg, const std::string &name = "");
   value *create_barrier(const std::string &name = "");
-  value *create_async_wait();
+  value *create_async_wait(int N);
 
 private:
   context &ctx_;

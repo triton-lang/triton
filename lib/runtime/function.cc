@@ -15,10 +15,10 @@
 #include "triton/codegen/transform/peephole.h"
 #include "triton/codegen/transform/membar.h"
 #include "triton/codegen/transform/reassociate.h"
-#include "triton/codegen/transform/reorder.h"
 #include "triton/codegen/transform/cts.h"
 #include "triton/codegen/transform/disassociate.h"
 #include "triton/codegen/selection/generator.h"
+#include "triton/codegen/transform/pipeline.h"
 #include "triton/runtime/function.h"
 #include "triton/lang/cpp.h"
 #include "triton/lang/parser.h"
@@ -149,6 +149,7 @@ void kernel::init_ker(){
   codegen::analysis::align align;
   codegen::analysis::axes axes;
   codegen::transform::cts cts(cts_use_async);
+  codegen::transform::pipeline pipeline(cts_use_async);
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, opt.num_warps, target.get());
   codegen::analysis::liveness liveness(&layouts);
@@ -156,19 +157,24 @@ void kernel::init_ker(){
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation);
   codegen::transform::dce dce;
-  codegen::transform::peephole peephole(target.get());
+  codegen::transform::peephole peephole(target.get(), &layouts);
   codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), opt.num_warps);
   // run passes
   dce.run(*ir_);
+  pipeline.run(*ir_);
+  dce.run(*ir_);
   disassociate.run(*ir_);
   dce.run(*ir_);
+  align.run(*ir_);
+  axes.run(*ir_);
+  layouts.run(*ir_);
   peephole.run(*ir_);
   dce.run(*ir_);
-  align.run(*ir_);
   if(target->is_gpu())
     cts.run(*ir_);
+  align.run(*ir_);
   axes.run(*ir_);
   layouts.run(*ir_);
   coalesce.run(*ir_);
@@ -179,6 +185,11 @@ void kernel::init_ker(){
     reassociate.run(*ir_);
     cts.run(*ir_);
   }
+  dce.run(*ir_);
+//  ir::print(*ir_, std::cout);
+  align.run(*ir_);
+  axes.run(*ir_);
+  layouts.run(*ir_);
   peephole.run(*ir_);
   dce.run(*ir_);
   align.run(*ir_);
@@ -187,8 +198,9 @@ void kernel::init_ker(){
   swizzle.run(*ir_);
   liveness.run(*ir_);
   allocation.run(*ir_);
-  if(allocation.allocated_size() > dev_->max_shared_memory())
-    throw exception::out_of_shared_memory();
+  shared_mem_ = allocation.allocated_size();
+//  if(allocation.allocated_size() > dev_->max_shared_memory())
+//    throw exception::out_of_shared_memory();
   barriers.run(*ir_);
   isel.visit(*ir_, *llvm);
   //if(res->spilled() > 256)
@@ -224,7 +236,7 @@ void kernel::operator()(void *args, size_t args_size, driver::stream *stream, co
   for(size_t i = 0; i < 3; i++)
     grid[i] = (i < _grid.size()) ? _grid[i] : 1;
   // enqueue
-  stream->enqueue(&*ker_, grid, {(size_t)opt.num_warps * 32, 1, 1}, args, args_size);
+  stream->enqueue(&*ker_, grid, {(size_t)opt.num_warps * 32, 1, 1}, args, args_size, shared_mem_);
 }
 
 std::string kernel::get_asm(asm_mode_t mode) {
@@ -348,7 +360,7 @@ kernel* function::autotune(void* args, size_t args_size, const grid_fn_ty& grid_
     while(grid.size() < 3)
       grid.push_back(1);
     double ts = tools::bench([&]() { (*current)(args, args_size, stream, grid); },
-                                     stream, true);
+                                     stream, 5, 20);
     ret = (ts < best_ts) ? current : ret;
     best_ts = std::min(ts, best_ts);
   }
