@@ -360,7 +360,7 @@ kernel* function::autotune(void* args, size_t args_size, const grid_fn_ty& grid_
     while(grid.size() < 3)
       grid.push_back(1);
     double ts = tools::bench([&]() { (*current)(args, args_size, stream, grid); },
-                                     stream, true);
+                                     stream, 5, 20);
     ret = (ts < best_ts) ? current : ret;
     best_ts = std::min(ts, best_ts);
   }

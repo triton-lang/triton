@@ -6,7 +6,7 @@ nt = {False: "n", True: "t"}
 square_confs = [
     triton.testing.Benchmark(
         x_names=["M", "N", "K"],
-        x_vals=[8192],
+        x_vals=[512 * i for i in range(1, 16)],
         y_name="provider",
         y_vals=["torch", "triton", "cutlass"],
         y_lines=["Torch", "Triton", "CUTLASS"],
@@ -14,14 +14,11 @@ square_confs = [
         loglog=False,
         plot_name=f"matmul-square-{nt[AT]}{nt[BT]}",
         args={"AT": AT, "BT": BT, "dtype": torch.float16},
-    )
-    for AT in [False, True]
-    for BT in [False, True]
+    ) for AT in [False, True] for BT in [False, True]
 ]
 
-
 @triton.testing.perf_report(square_confs)
-def bench_op(M, N, K, AT, BT, dtype, provider, warmup=10, rep=100):
+def bench_op(M, N, K, AT, BT, dtype, provider, warmup=5, rep=20):
     import os
 
     a = torch.rand((K, M) if AT else (M, K), device="cuda", dtype=dtype)
@@ -32,15 +29,11 @@ def bench_op(M, N, K, AT, BT, dtype, provider, warmup=10, rep=100):
         b = b.t()
     num_flops = 2 * M * N * K
     if provider == "torch":
-        torch_ms = triton.testing.do_bench(
-            lambda: torch.matmul(a, b), warmup=warmup, rep=rep
-        )
+        torch_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), warmup=warmup, rep=rep)
         torch_tflops = num_flops / torch_ms * 1e-9
         return torch_tflops
     if provider == "triton":
-        triton_ms = triton.testing.do_bench(
-            lambda: triton.ops.matmul(a, b), warmup=warmup, rep=rep
-        )
+        triton_ms = triton.testing.do_bench(lambda: triton.ops.matmul(a, b), warmup=warmup, rep=rep)
         triton_tflops = num_flops / triton_ms * 1e-9
         return triton_tflops
     if provider == "cutlass" and "CUTLASS_PROFILER" in os.environ:
@@ -77,7 +70,6 @@ def bench_op(M, N, K, AT, BT, dtype, provider, warmup=10, rep=100):
         cutlass_tflops = max(df_c["GFLOPs"]) / 1e3
         return cutlass_tflops
     return None
-
 
 if __name__ == "__main__":
     bench_op.run()

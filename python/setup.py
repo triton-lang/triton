@@ -14,7 +14,6 @@ from setuptools.command.test import test as TestCommand
 import distutils.spawn
 import torch
 
-
 def find_llvm():
     versions = ["-10", "-10.0", ""]
     supported = ["llvm-config{v}".format(v=v) for v in versions]
@@ -29,28 +28,22 @@ def find_llvm():
     version = os.popen("{config} --version".format(config=config)).read()
     raise RuntimeError("Version {v} not supported. ".format(v=version) + instructions)
 
-
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=""):
         Extension.__init__(self, name, sources=[])
         self.sourcedir = os.path.abspath(sourcedir)
         self.path = path
 
-
 class CMakeBuild(build_ext):
     def run(self):
         try:
             out = subprocess.check_output(["cmake", "--version"])
         except OSError:
-            raise RuntimeError(
-                "CMake must be installed to build the following extensions: "
-                + ", ".join(e.name for e in self.extensions)
-            )
+            raise RuntimeError("CMake must be installed to build the following extensions: " +
+                               ", ".join(e.name for e in self.extensions))
 
         if platform.system() == "Windows":
-            cmake_version = LooseVersion(
-                re.search(r"version\s*([\d.]+)", out.decode()).group(1)
-            )
+            cmake_version = LooseVersion(re.search(r"version\s*([\d.]+)", out.decode()).group(1))
             if cmake_version < "3.1.0":
                 raise RuntimeError("CMake >= 3.1.0 is required on Windows")
 
@@ -59,7 +52,7 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         # self.debug = True
-        self.debug = True
+        self.debug = False
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # python directories
         python_include_dirs = distutils.sysconfig.get_python_inc()
@@ -73,8 +66,7 @@ class CMakeBuild(build_ext):
             "-DBUILD_PYTHON_MODULE=ON",
             #'-DPYTHON_EXECUTABLE=' + sys.executable,
             #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON,
-            "-DPYTHON_INCLUDE_DIRS="
-            + ";".join([python_include_dirs] + include_paths(True)),
+            "-DPYTHON_INCLUDE_DIRS=" + ";".join([python_include_dirs] + include_paths(True)),
             "-DPYTHON_LINK_DIRS=" + ";".join(library_paths(True)),
             "-DTORCH_CXX11_ABI=" + cxx11abi,
             "-DTORCH_LIBRARIES=c10;c10_cuda;torch;torch_cuda;torch_cpu;torch_python;triton",
@@ -85,10 +77,8 @@ class CMakeBuild(build_ext):
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
-            cmake_args += [
-                "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{}={}".format(cfg.upper(), extdir)
-            ]
-            if sys.maxsize > 2 ** 32:
+            cmake_args += ["-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{}={}".format(cfg.upper(), extdir)]
+            if sys.maxsize > 2**32:
                 cmake_args += ["-A", "x64"]
             build_args += ["--", "/m"]
         else:
@@ -99,13 +89,8 @@ class CMakeBuild(build_ext):
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         sourcedir = os.path.abspath(os.path.join(os.path.dirname(__file__), "src"))
-        subprocess.check_call(
-            ["cmake", sourcedir] + cmake_args, cwd=self.build_temp, env=env
-        )
-        subprocess.check_call(
-            ["cmake", "--build", "."] + build_args, cwd=self.build_temp
-        )
-
+        subprocess.check_call(["cmake", sourcedir] + cmake_args, cwd=self.build_temp, env=env)
+        subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
 setup(
     name="triton",
