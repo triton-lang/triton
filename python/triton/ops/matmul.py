@@ -2,12 +2,11 @@ import torch
 import triton
 import os
 
-
 class _matmul(torch.autograd.Function):
     src = triton.read(os.path.join(os.path.dirname(__file__), "matmul.c"))
 
     _DEFAULT_CONFIGS = [
-        ({"TM": "128", "TN": "128", "TK": "32", "SPLITK": "1"}, 4),
+        ({"TM": "128", "TN": "128", "TK": "64", "SPLITK": "1"}, 4),
         # ({'TM': '64', 'TN': '128', 'TK': '32', 'SPLITK': '1'}, 4),
         # ({'TM': '128', 'TN': '64', 'TK': '32', 'SPLITK': '1'}, 4),
         # ({'TM': '64', 'TN': '64', 'TK': '64', 'SPLITK': '1'}, 4),
@@ -90,9 +89,7 @@ class _matmul(torch.autograd.Function):
         kernel = _matmul._kernels[key]
         # # locks for split-k
         if device not in _matmul._locks:
-            _matmul._locks[device] = torch.zeros(
-                1024 * 1024, dtype=torch.int32, device=device
-            )
+            _matmul._locks[device] = torch.zeros(1024 * 1024, dtype=torch.int32, device=device)
         locks = _matmul._locks[device]
         # enqueue
         alpha = 1.0
@@ -121,6 +118,5 @@ class _matmul(torch.autograd.Function):
     def forward(ctx, a, b):
         c = _matmul._call(a, b)
         return c
-
 
 matmul = _matmul.apply

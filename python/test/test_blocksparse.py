@@ -4,7 +4,8 @@ import pytest
 
 @pytest.mark.parametrize(
     "MODE, TRANS_A, TRANS_B, BLOCK",
-    [(mode, at, bt, block) for mode in ["sdd"] for at in [False] for bt in [False] for block in [16]],
+    [(mode, at, bt, block) for mode in ["sdd", "dsd", "dds"] for at in [False, True] for bt in [False, True]
+     for block in [16, 32, 64]],
 )
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE=torch.float16, Z=3, H=2, M=128, N=256, K=384):
     # set seed

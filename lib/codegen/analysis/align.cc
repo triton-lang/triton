@@ -312,7 +312,6 @@ std::vector<unsigned> align::populate_max_contiguous_gep(ir::getelementptr_inst*
     if(rhs_cst_info[d].num_cst)
       rvalue = lhs_max_contiguous[d];
     result[d] = std::max(lvalue, rvalue);
-//    std::cout << "max contiguous: " << x->get_name() << " " << d << " " << result[d] << std::endl;
   }
   return add_to_cache(x, result, max_contiguous_);
 }

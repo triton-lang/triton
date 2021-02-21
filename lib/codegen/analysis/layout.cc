@@ -213,7 +213,7 @@ scanline_layout::scanline_layout(size_t num_warps,
   int contiguous = 1;
   if(ptr){
     int nbits = ptr->get_type()->get_pointer_element_ty()->get_scalar_ty()->get_primitive_size_in_bits();
-    contiguous = std::min<int>(align->contiguous(ptr)[i], 128 / nbits);
+    contiguous = std::min<int>(align->get(ptr, i), 128 / nbits);
   }
 
   nts_[i] = clamp(size / num_threads, 1, std::min<int>(contiguous, shape_[i]));

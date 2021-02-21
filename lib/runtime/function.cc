@@ -157,26 +157,28 @@ void kernel::init_ker(){
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation);
   codegen::transform::dce dce;
-  codegen::transform::peephole peephole(target.get());
+  codegen::transform::peephole peephole(target.get(), &layouts);
   codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), opt.num_warps);
   // run passes
   dce.run(*ir_);
   pipeline.run(*ir_);
-//  dce.run(*ir_);
+  dce.run(*ir_);
   disassociate.run(*ir_);
   dce.run(*ir_);
+  align.run(*ir_);
+  axes.run(*ir_);
+  layouts.run(*ir_);
   peephole.run(*ir_);
   dce.run(*ir_);
-  align.run(*ir_);
   if(target->is_gpu())
     cts.run(*ir_);
+  align.run(*ir_);
   axes.run(*ir_);
   layouts.run(*ir_);
   coalesce.run(*ir_);
   dce.run(*ir_);
-//  ir::print(*ir_, std::cout);
   align.run(*ir_);
   dce.run(*ir_);
   if(target->is_gpu()){
@@ -184,10 +186,12 @@ void kernel::init_ker(){
     cts.run(*ir_);
   }
   dce.run(*ir_);
-
+//  ir::print(*ir_, std::cout);
+  align.run(*ir_);
+  axes.run(*ir_);
+  layouts.run(*ir_);
   peephole.run(*ir_);
   dce.run(*ir_);
-//  ir::print(*ir_, std::cout);
   align.run(*ir_);
   axes.run(*ir_);
   layouts.run(*ir_);
@@ -195,14 +199,10 @@ void kernel::init_ker(){
   liveness.run(*ir_);
   allocation.run(*ir_);
   shared_mem_ = allocation.allocated_size();
-//  std::cout << allocation.allocated_size() << " " << dev_->max_shared_memory() << std::endl;
 //  if(allocation.allocated_size() > dev_->max_shared_memory())
 //    throw exception::out_of_shared_memory();
-//  ir::print(*ir_, std::cout);
   barriers.run(*ir_);
-//  ir::print(*ir_, std::cout);
   isel.visit(*ir_, *llvm);
-//  ir::print(*ir_, std::cout);
   //if(res->spilled() > 256)
   //  throw exception::out_of_registers();
   mod_.reset(driver::module::create(dev_, std::move(llvm)));

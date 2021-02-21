@@ -16,6 +16,10 @@ namespace ir {
 }
 
 namespace codegen{
+namespace analysis{
+class layouts;
+}
+
 namespace transform{
 
 class peephole {
@@ -33,11 +37,12 @@ private:
 private:
 
 public:
-  peephole(target* tgt): tgt_(tgt) {}
+  peephole(target* tgt, analysis::layouts* layouts): tgt_(tgt), layouts_(layouts) {}
   void run(ir::module &mod);
 
 private:
   target* tgt_;
+  analysis::layouts* layouts_;
 };
 
 
