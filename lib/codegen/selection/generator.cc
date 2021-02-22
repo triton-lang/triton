@@ -1480,11 +1480,16 @@ void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
     Value* out_base = shared[i].first;
     int out_off = shared[i].second*2;
     // asm
-    FunctionType *ty = FunctionType::get(void_ty, {builder_->getInt1Ty(), out_base->getType(), in_base->getType()}, false);
     std::string mod = (in_vec*2 == 16) ? ".cg" : ".ca";
-    std::string asm_str = "@$0 cp.async" + mod + ".shared.global [$1 + " + std::to_string(out_off) + "], [$2 + " + std::to_string(in_off) + "], " + std::to_string(in_vec*2) + ";";
-    InlineAsm *iasm = InlineAsm::get(ty, asm_str, "b,r,l", true);
-    call(iasm, {vals_[x->get_mask_operand()][idx], out_base, in_base});
+//    Value* false_value = vals_[x->get_false_value_operand()][idx];
+//    bool is_zero_false_value = false;
+//    if(Constant* cst = dyn_cast<Constant>(false_value))
+//      is_zero_false_value = cst->isZeroValue();
+    Value* src_size = builder_->CreateSelect(vals_[x->get_mask_operand()][idx], i32(in_vec*2), i32(0));
+    std::string asm_str = "cp.async" + mod + ".shared.global [$0 + " + std::to_string(out_off) + "], [$1 + " + std::to_string(in_off) + "], " + std::to_string(in_vec*2) + ", $2;";
+    FunctionType *ty = FunctionType::get(void_ty, {out_base->getType(), in_base->getType(), builder_->getInt32Ty()}, false);
+    InlineAsm *iasm = InlineAsm::get(ty, asm_str, "r,l,r", true);
+    call(iasm, {out_base, in_base, src_size});
   }
 
   std::string asm_str = "cp.async.commit_group;";
