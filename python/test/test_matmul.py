@@ -44,7 +44,7 @@ import torch
             (128, 128, 32, 1, 4, 384, 128, 640, AT, BT, DTYPE),
             (128, 128, 32, 1, 4, 107, 233, 256, AT, BT, DTYPE),
             (128, 128, 32, 1, 4, 107, 233, 311, AT, BT, DTYPE),
-        ] for DTYPE in ["float16"] for AT in [False, True] for BT in [False, True]
+        ] for DTYPE in ["float16", "float32"] for AT in [False, True] for BT in [False, True]
     ]),
 )
 def test_op(TM, TN, TK, SPLITK, NWARP, M, N, K, AT, BT, DTYPE):

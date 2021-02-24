@@ -3,11 +3,12 @@ import triton
 import pytest
 
 @pytest.mark.parametrize(
-    "MODE, TRANS_A, TRANS_B, BLOCK",
-    [(mode, at, bt, block) for mode in ["sdd", "dsd", "dds"] for at in [False, True] for bt in [False, True]
-     for block in [16, 32, 64]],
+    "MODE, TRANS_A, TRANS_B, BLOCK, DTYPE",
+    [(mode, at, bt, block, dtype) for dtype in ["float16", "float32"] for mode in ["sdd", "dsd", "dds"]
+     for at in [False, True] for bt in [False, True] for block in [16, 32, 64]],
 )
-def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE=torch.float16, Z=3, H=2, M=128, N=256, K=384):
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=128, N=256, K=384):
+    DTYPE = {"float16": torch.float16, "float32": torch.float32}[DTYPE]
     # set seed
     torch.random.manual_seed(0)
     # create inputs
