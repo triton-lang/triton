@@ -1,23 +1,16 @@
 import torch
 
-
 def sparsify_tensor(x, mask, block):
-    ret = torch.empty(
-        (x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device
-    )
+    ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
     for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
-        ret[:, idx, :, :] = x[
-            :, h, i * block : (i + 1) * block, j * block : (j + 1) * block
-        ]
+        ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]
     return ret
-
 
 def mask_tensor(x, mask, block, value=0):
     ret = x.clone()
     for h, i, j in zip(*(mask == 0).nonzero(as_tuple=True)):
-        ret[:, h, i * block : (i + 1) * block, j * block : (j + 1) * block] = value
+        ret[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block] = value
     return ret
-
 
 def allclose(x, y):
     assert x.dtype == y.dtype
@@ -28,8 +21,7 @@ def allclose(x, y):
     err = torch.max(diff) / torch.max(x_max, y_max)
     return err < tol
 
-
-def do_bench(fn, flops=0, warmup=10, rep=50):
+def do_bench(fn, flops=0, warmup=10, rep=50, grad_to_none=None):
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
     ret = fn()
@@ -38,17 +30,16 @@ def do_bench(fn, flops=0, warmup=10, rep=50):
     torch.cuda.synchronize()
     start_event.record()
     for i in range(rep):
+        if grad_to_none is not None:
+            grad_to_none.grad = None
         fn()
     end_event.record()
     torch.cuda.synchronize()
     time_ms = start_event.elapsed_time(end_event) / rep
     return time_ms
 
-
 class Benchmark:
-    def __init__(
-        self, x_names, x_vals, y_name, y_vals, y_lines, ylabel, loglog, plot_name, args
-    ):
+    def __init__(self, x_names, x_vals, y_name, y_vals, y_lines, ylabel, loglog, plot_name, args):
         self.x_names = x_names
         self.x_vals = x_vals
         self.y_name = y_name
@@ -58,7 +49,6 @@ class Benchmark:
         self.loglog = loglog
         self.plot_name = plot_name
         self.args = args
-
 
 class Mark:
     def __init__(self, fn, benchmarks):
@@ -73,10 +63,7 @@ class Mark:
         df = pd.DataFrame(columns=[bench.x_names[0]] + bench.y_lines)
         for x in bench.x_vals:
             x_args = {x_name: x for x_name in bench.x_names}
-            row = [
-                self.fn(**x_args, **{bench.y_name: y}, **bench.args)
-                for y in bench.y_vals
-            ]
+            row = [self.fn(**x_args, **{bench.y_name: y}, **bench.args) for y in bench.y_vals]
             df.loc[len(df)] = [x] + row
         if with_plot and bench.plot_name:
             xlabel = " = ".join(bench.x_names)
@@ -92,7 +79,6 @@ class Mark:
     def run(self, result_path, with_plot):
         for bench in self.benchmarks:
             self._run(bench, result_path, with_plot)
-
 
 def perf_report(benchmarks):
     wrapper = lambda fn: Mark(fn, benchmarks)
