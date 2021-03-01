@@ -1,17 +1,10 @@
 import os
 import struct
 from typing import Optional, Dict, List
-
 import torch
 # C bindings
 import triton._C.libtriton.triton as _triton
 import triton._C.libtriton.torch_utils as _torch_utils
-# Make sure internal C resources are cleaned up upon exit
-import atexit
-
-@atexit.register
-def cleanup():
-    _triton.cleanup()
 
 codes = {
     _triton.arg_type.int1: 'B', _triton.arg_type.int8: 'B', _triton.arg_type.int32: 'I', _triton.arg_type.int64: 'Q',
@@ -51,9 +44,6 @@ class kernel:
         if src == '':
             raise ValueError('Kernel source code is empty')
         self.src = src
-        self.opt = _triton.options()
-        self.opt.defines = {k: th_to_triton(v) for k, v in defines.items()}
-        self.opt.num_warps = num_warps
         # device
         assert device.type in ['cuda', 'cpu']
         if device.type == 'cuda':
@@ -66,6 +56,9 @@ class kernel:
             self.device = _triton.host_stream()
         _torch_utils.set_device(self.device_id)
         # function
+        self.opt = _triton.options()
+        self.opt.defines = {k: th_to_triton(v) for k, v in defines.items()}
+        self.opt.num_warps = num_warps
         self.fn = _triton.function(self.src, self.opt, self.device, autotune_vals, autotune_key)
         self.tys = ''.join([codes[x] for x in self.fn.signature()])
 
@@ -73,10 +66,10 @@ class kernel:
         _torch_utils.set_device(self.device_id)
         # pack parameters into a byte buffer
         params = struct.pack(self.tys, *args)
-        opt = self.fn.autotune(self.stream, params, grid)
+        kernel = self.fn.autotune(self.stream, params, grid)
         # run kernel
-        grid = grid(opt)
+        grid = grid(kernel.opt)
         grid_0 = grid[0]
         grid_1 = 1 if len(grid) < 2 else grid[1]
         grid_2 = 1 if len(grid) < 3 else grid[2]
-        self.fn.run(self.stream, params, grid_0, grid_1, grid_2)
+        kernel.run(self.stream, params, grid_0, grid_1, grid_2)

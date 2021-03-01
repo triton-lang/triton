@@ -28,7 +28,10 @@ _kernels = dict()
 def make_add_kernel(device):
     if device not in _kernels:
         defines = {'BLOCK': 1024}
-        _kernels[device] = triton.kernel(_src, device=device, defines=defines)
+        autotune_vals = [({'BLOCK': '1024'}, 4), ({'BLOCK': '2048'}, 4)]
+        autotune_key = ["N"]
+        _kernels[device] = triton.kernel(_src, device=device, defines=defines, autotune_vals=autotune_vals,
+                                         autotune_key=autotune_key)
     return _kernels[device]
 
 # This is a standard torch custom autograd Function

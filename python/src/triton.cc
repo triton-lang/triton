@@ -18,20 +18,8 @@ namespace rt = triton::runtime;
 namespace drv = triton::driver;
 namespace lng = triton::lang;
 
-// stuff
-std::unordered_map<const rt::options_t *, pybind11::object> opt_cache_;
-void cleanup() {
-  opt_cache_.clear();
-}
-
 std::vector<rt::arg_type> signature(rt::function *fn) {
   return fn->get_kernels()[0].second->get_sig();
-}
-
-// Thanks to Scott Gray (OpenAI) for the idea to pass the arguments
-// as a string constructed with struct.pack in python
-void launch_kernel(rt::function *fn, driver::stream *stream, const std::string &args, size_t grid_0, size_t grid_1, size_t grid_2) {
-  (*fn)((void **)args.c_str(), args.size(), {grid_0, grid_1, grid_2}, stream);
 }
 
 /*!
@@ -40,7 +28,7 @@ void launch_kernel(rt::function *fn, driver::stream *stream, const std::string &
   This essentially only contains logic that allows users to treat rt::options_t* object as if
   they had an attribute for each integer preprocessor macro.
 */
-pybind11::object autotune(rt::function *fn, driver::stream *stream, const std::string &args, const rt::function::grid_fn_ty &grid) {
+rt::kernel *autotune(rt::function *fn, driver::stream *stream, const std::string &args, const rt::function::grid_fn_ty &grid) {
   // new grid function that accepts option in the aforementioned form
   auto wrapper = [&grid](const rt::options_t &opt) {
     pybind11::object obj = pybind11::cast(&opt, pybind11::return_value_policy::reference);
@@ -51,17 +39,7 @@ pybind11::object autotune(rt::function *fn, driver::stream *stream, const std::s
   };
   // run c++ auto-tuner
   rt::kernel *kernel = fn->autotune((void **)args.c_str(), args.size(), wrapper, stream);
-  // return the compilation options of the fastest kernel
-  // still in the aforementioned form
-  const rt::options_t *opt = &kernel->opt;
-  if (opt_cache_.find(opt) == opt_cache_.end()) {
-    pybind11::object obj = pybind11::cast(opt, pybind11::return_value_policy::reference);
-    for (auto x : opt->defines)
-      if (std::all_of(x.second.begin(), x.second.end(), ::isdigit))
-        obj.attr(x.first.c_str()) = std::stoi(x.second);
-    opt_cache_[opt] = obj;
-  }
-  return opt_cache_.at(opt);
+  return kernel;
 }
 
 /*!
@@ -147,12 +125,28 @@ void init_triton(pybind11::module &m) {
       .def(pybind11::init<>())
       .def_readwrite("defines", &rt::options_t::defines)
       .def_readwrite("num_warps", &rt::options_t::num_warps);
-  // callable function
+  //  kernel
+  pybind11::class_<rt::kernel>(subm, "kernel", pybind11::dynamic_attr())
+      .def("run", [](rt::kernel *self, driver::stream *stream, const std::string &args, size_t grid_0, size_t grid_1, size_t grid_2) {
+        (*self)((void **)args.c_str(), args.size(), stream, {grid_0, grid_1, grid_2});
+      })
+      .def_property_readonly("opt", [](pybind11::object self) {
+        if (!pybind11::hasattr(self, "_opt")) {
+          const rt::options_t *opt = &self.cast<rt::kernel *>()->opt;
+          pybind11::object obj = pybind11::cast(opt);
+          for (auto x : opt->defines)
+            if (std::all_of(x.second.begin(), x.second.end(), ::isdigit))
+              obj.attr(x.first.c_str()) = std::stoi(x.second);
+          pybind11::setattr(self, "_opt", obj);
+        }
+        return pybind11::getattr(self, "_opt");
+      });
+
+  // function
   pybind11::class_<rt::function>(subm, "function")
       .def(pybind11::init<std::string, rt::options_t, driver::device *,
                           rt::function::autotune_vals_t, std::vector<std::string>>())
-      .def("autotune", &autotune)
-      .def("run", &launch_kernel)
+      .def("autotune", &autotune, pybind11::return_value_policy::reference_internal)
       .def("signature", &signature);
 
   // device
@@ -170,8 +164,5 @@ void init_triton(pybind11::module &m) {
         return std::unique_ptr<driver::cu_stream>(new driver::cu_stream((CUstream)handle, take_ownership));
       }));
 
-  // hooks into triton constructs since frameworks may not use pybind11
-  // !! to deprecate !!
-  subm.def("cleanup", &cleanup);
   subm.def("extract_kernels", &extract_kernels);
 }
