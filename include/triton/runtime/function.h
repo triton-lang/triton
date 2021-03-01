@@ -73,7 +73,7 @@ private:
 
 public:
   kernel(const std::string& src, const options_t& opt, driver::device *device);
-  void operator()(void* args, size_t args_size, driver::stream *stream, const std::vector<size_t>& grid) const;
+  void operator()(const std::string& args, driver::stream *stream, const std::vector<size_t>& grid) const;
   // getters
   const std::vector<arg_type>& get_sig() const { return sig_; }
   const std::vector<std::string>& get_arg_names() const { return arg_names_; }
@@ -115,13 +115,14 @@ private:
 public:
   function(const std::string& src, const options_t& opt, driver::device *device,
            const autotune_vals_t& autotune_vals = {}, const std::vector<std::string> &autotune_key = {});
-  void operator()(void* args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
-  void operator()(void* args, size_t args_size, const grid_t& grid, driver::stream *stream);
+  void operator()(const std::string& args, const grid_fn_ty& grid, driver::stream *stream);
+  void operator()(const std::string& args, const grid_t& grid, driver::stream *stream);
   // auto-tuning
   cache_t::iterator find_in_cache(void* args, size_t args_size);
-  kernel* autotune(void* args, size_t args_size, const grid_fn_ty& grid, driver::stream *stream);
+  kernel* autotune(const std::string& args, const grid_fn_ty& grid, driver::stream *stream);
   // getters
   const std::vector<kernel_pair_t> get_kernels() { return kernels_; }
+  const std::vector<arg_type> get_signature() { return kernels_[0].second->get_sig(); }
 
 private:
   void init_kernels(const std::string& src, const options_t& opt, const autotune_vals_t& autotune_vals, driver::device *device);

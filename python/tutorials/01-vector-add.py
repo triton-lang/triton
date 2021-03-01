@@ -49,13 +49,12 @@ class _add(torch.autograd.Function):
         # as input and returns a tuple of int (i.e., launch grid) for the kernel.
         # triton.cdiv is a shortcut for ceil division:
         # triton.cdiv(a, b) = (a + b - 1) // b
-        N = z.shape[0]
-        grid = lambda opt: (triton.cdiv(N, opt.BLOCK), )
+        grid = lambda opt: (triton.cdiv(z.shape[0], opt.BLOCK), )
         # *launch kernel*:
         # pointer to the data of torch tensors can be retrieved with
         # the `.data_ptr()` method
         kernel = make_add_kernel(z.device)
-        kernel(z.data_ptr(), x.data_ptr(), y.data_ptr(), N, grid=grid)
+        kernel(z.data_ptr(), x.data_ptr(), y.data_ptr(), z.shape[0], grid=grid)
         return z
 
 # Just like we standard PyTorch ops
@@ -64,10 +63,14 @@ class _add(torch.autograd.Function):
 add = _add.apply
 
 torch.manual_seed(0)
-x = torch.rand(98432, device='cuda')
-y = torch.rand(98432, device='cuda')
+x = torch.rand(32, device='cuda')
+y = torch.rand(32, device='cuda')
 za = x + y
 zb = add(x, y)
 print(za)
 print(zb)
 print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.abs(za - zb))}')
+
+th_ms = triton.testing.do_bench(lambda: x + y)
+tr_ms = triton.testing.do_bench(lambda: add(x, y))
+print(th_ms, tr_ms)

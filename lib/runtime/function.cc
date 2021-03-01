@@ -228,15 +228,15 @@ kernel::kernel(const std::string& src, const options_t& opt, driver::device *dev
     arg_names_.push_back(arg->get_name());
 }
 
-void kernel::operator()(void *args, size_t args_size, driver::stream *stream, const std::vector<size_t>& _grid) const{
+void kernel::operator()(const std::string& args, driver::stream *stream, const std::vector<size_t>& _grid) const{
   // set grid
   if(_grid.size() > 3)
     throw std::runtime_error("grid size must be no greater than 3");
   std::array<size_t, 3> grid;
   for(size_t i = 0; i < 3; i++)
     grid[i] = (i < _grid.size()) ? _grid[i] : 1;
-  // enqueue
-  stream->enqueue(&*ker_, grid, {(size_t)opt.num_warps * 32, 1, 1}, args, args_size, shared_mem_);
+//   enqueue
+  stream->enqueue(&*ker_, grid, {(size_t)opt.num_warps * 32, 1, 1}, (void*)args.data(), args.size(), shared_mem_);
 }
 
 std::string kernel::get_asm(asm_mode_t mode) {
@@ -338,7 +338,7 @@ void function::init_kernels(const std::string& src, const options_t& opt,
   }
 }
 
-kernel* function::autotune(void* args, size_t args_size, const grid_fn_ty& grid_fn, driver::stream* stream) {
+kernel* function::autotune(const std::string &args, const grid_fn_ty& grid_fn, driver::stream* stream) {
   // fast path -- no autotuning necessary
   if(kernels_.size() == 1)
     return &*kernels_.begin()->second;
@@ -346,7 +346,7 @@ kernel* function::autotune(void* args, size_t args_size, const grid_fn_ty& grid_
   std::vector<uint64_t> key(key_idxs_.size());
   for(size_t i = 0; i < key.size(); i++){
     int idx = key_idxs_[i];
-    std::memcpy((void*)&key[i], (void*)((char*)args + arg_off_[idx]), arg_size_[idx]);
+    std::memcpy((void*)&key[i], (void*)((char*)args.data() + arg_off_[idx]), arg_size_[idx]);
   }
   auto it = cache_.find(key);
   if(it != cache_.end())
@@ -359,7 +359,7 @@ kernel* function::autotune(void* args, size_t args_size, const grid_fn_ty& grid_
     auto grid = grid_fn(x.first);
     while(grid.size() < 3)
       grid.push_back(1);
-    double ts = tools::bench([&]() { (*current)(args, args_size, stream, grid); },
+    double ts = tools::bench([&]() { (*current)(args, stream, grid); },
                                      stream, 5, 20);
     ret = (ts < best_ts) ? current : ret;
     best_ts = std::min(ts, best_ts);
@@ -391,13 +391,13 @@ function::function(const std::string& src, const options_t &opt, driver::device 
   }
 }
 
-void function::operator()(void* args, size_t args_size, const grid_fn_ty& grid_fn, driver::stream *stream) {
-  runtime::kernel* fn = autotune(args, args_size, grid_fn, stream);
-  (*fn)(args, args_size, stream, grid_fn(fn->opt));
+void function::operator()(const std::string& args, const grid_fn_ty& grid_fn, driver::stream *stream) {
+  runtime::kernel* fn = autotune(args, grid_fn, stream);
+  (*fn)(args, stream, grid_fn(fn->opt));
 }
 
-void function::operator()(void* args, size_t args_size, const grid_t& grid, driver::stream* stream) {
-  return this->operator()(args, args_size, [&grid](const options_t&){ return grid; }, stream);
+void function::operator()(const std::string& args, const grid_t& grid, driver::stream* stream) {
+  return this->operator()(args, [&grid](const options_t&){ return grid; }, stream);
 }
 
 
