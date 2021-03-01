@@ -389,8 +389,6 @@ function::function(const std::string& src, const options_t &opt, driver::device 
     arg_off_.push_back(curr);
     curr += arg_size_.back();
   }
-
-
 }
 
 void function::operator()(void* args, size_t args_size, const grid_fn_ty& grid_fn, driver::stream *stream) {

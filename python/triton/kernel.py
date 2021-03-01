@@ -35,7 +35,7 @@ def synchronize(device):
     dev_id = -1 if dev_id is None else dev_id
     _torch_utils.synchronize(dev_id)
 
-def read(path, kernel_names:Optional[List]=None):
+def read(path, kernel_names: Optional[List] = None):
     if kernel_names is None:
         kernel_names = []
     with open(path, 'r') as f:
@@ -44,22 +44,14 @@ def read(path, kernel_names:Optional[List]=None):
     return source
 
 class kernel:
-    def __init__(self,
-                 src,
-                 device,
-                 defines: Optional[Dict]=None,
-                 num_warps:int=4,
-                 autotune_vals:Optional[List]=None,
-                 autotune_key:Optional[List]=None):
-
+    def __init__(self, src, device, defines: Optional[Dict] = None, num_warps: int = 4,
+                 autotune_vals: Optional[List] = None, autotune_key: Optional[List] = None):
         if defines is None:
             defines = {}
         if autotune_vals is None:
             autotune_vals = []
         if autotune_key is None:
             autotune_key = []
-
-
         # check if src is empty
         if src == '':
             raise ValueError('Kernel source code is empty')
@@ -73,12 +65,13 @@ class kernel:
             self.device = torch.cuda.current_device() if device.index is None else device.index
         if device.type == 'cpu':
             self.device = -1
-        _torch_utils.register_device(self.device)
+        handle = _torch_utils.register_device(self.device)
         _torch_utils.register_stream(self.device)
         # C++ function wrapper
         self.op_id = _triton.make_op_id()
         _torch_utils.set_device(self.device)
         _triton.register_fn(self.op_id, self.device, self.src, self.opt, autotune_vals, autotune_key)
+        self.handle = _triton.function(self.src, self.opt, handle, autotune_vals, autotune_key)
         # debug mode
         self.is_debug = 'TRITON_DEBUG' in os.environ
         # signature

@@ -18,8 +18,8 @@ namespace rt = triton::runtime;
 namespace drv = triton::driver;
 namespace lng = triton::lang;
 
-std::unordered_map<const rt::options_t *, pybind11::object> opt_cache_;
 std::map<int, std::shared_ptr<rt::function>> id_fn_map;
+std::unordered_map<const rt::options_t *, pybind11::object> opt_cache_;
 extern std::map<int, std::shared_ptr<triton::driver::device>> tt_devices;
 extern std::map<int, std::shared_ptr<triton::driver::stream>> tt_streams;
 
@@ -29,17 +29,8 @@ void register_fn(int op_id, int dev_id,
                  const std::string &src, const rt::options_t &opt,
                  const rt::function::autotune_vals_t &autotune_vals,
                  const std::vector<std::string> &autotune_key) {
-  if (id_fn_map.find(op_id) == id_fn_map.end()) {
+  if (id_fn_map.find(op_id) == id_fn_map.end())
     id_fn_map[op_id].reset(new rt::function(src, opt, &*tt_devices[dev_id], autotune_vals, autotune_key));
-  }
-  for (const auto &k : id_fn_map[op_id]->get_kernels()) {
-    const rt::options_t *opt = &k.first;
-    pybind11::object obj = pybind11::cast(opt, pybind11::return_value_policy::reference);
-    for (auto x : opt->defines)
-      if (std::all_of(x.second.begin(), x.second.end(), ::isdigit))
-        obj.attr(x.first.c_str()) = std::stoi(x.second);
-    opt_cache_[&k.second->opt] = obj;
-  }
 }
 
 void delete_fn(int op_id) {
@@ -66,8 +57,14 @@ void launch_kernel(int64_t op_id, int64_t dev_id, const std::string &args, size_
   (*fn)((void **)args.c_str(), args.size(), {grid_0, grid_1, grid_2}, &*tt_streams[dev_id]);
 }
 
+/*!
+  @brief Function for auto-tuning a given op
+
+  This essentially only contains logic that allows users to treat rt::options_t* object as if
+  they had an attribute for each integer preprocessor macro.
+*/
 pybind11::object autotune(int64_t op_id, int64_t dev_id, const std::string &args, const rt::function::grid_fn_ty &grid) {
-  rt::function *fn = id_fn_map.at(op_id).get();
+  // new grid function that accepts option in the aforementioned form
   auto wrapper = [&grid](const rt::options_t &opt) {
     pybind11::object obj = pybind11::cast(&opt, pybind11::return_value_policy::reference);
     for (auto x : opt.defines)
@@ -75,10 +72,27 @@ pybind11::object autotune(int64_t op_id, int64_t dev_id, const std::string &args
         obj.attr(x.first.c_str()) = std::stoi(x.second);
     return grid(*obj.cast<rt::options_t *>());
   };
-  rt::kernel *kernel = fn->autotune((void **)args.c_str(), args.size(), wrapper, &*tt_streams[dev_id]);
-  return opt_cache_.at(&kernel->opt);
+  // run c++ auto-tuner
+  rt::kernel *kernel = id_fn_map.at(op_id)->autotune((void **)args.c_str(), args.size(), wrapper, &*tt_streams[dev_id]);
+  // return the compilation options of the fastest kernel
+  // still in the aforementioned form
+  const rt::options_t *opt = &kernel->opt;
+  if (opt_cache_.find(opt) == opt_cache_.end()) {
+    pybind11::object obj = pybind11::cast(opt, pybind11::return_value_policy::reference);
+    for (auto x : opt->defines)
+      if (std::all_of(x.second.begin(), x.second.end(), ::isdigit))
+        obj.attr(x.first.c_str()) = std::stoi(x.second);
+    opt_cache_[opt] = obj;
+  }
+  return opt_cache_.at(opt);
 }
 
+/*!
+  @brief Function for extracting kernels out of a given source-string
+
+  This can be important to enable pre-processor macros (or tunable parameters) that should only
+  be defined within the scope of a single kernel function
+*/
 std::string extract_kernels(const std::string &str, const std::vector<std::string> &names) {
   if (names.empty())
     return str;
@@ -94,16 +108,14 @@ std::string extract_kernels(const std::string &str, const std::vector<std::strin
     std::string name = it->str(1);
     kernels.push_back(std::make_tuple(name, pos, len));
   }
-
+  // check that all the kernels provided actually exist
   for (const std::string &name : names) {
-    // check that str matches any string in kernels using std::any_of
     auto pred = [&name](const std::tuple<std::string, int, int> &t) { return std::get<0>(t) == name; };
     bool found = std::any_of(kernels.begin(), kernels.end(), pred);
     if (!found)
       throw std::runtime_error("Unable to find kernel `" + name + "` in provided source code:\n" + str);
   }
-
-  // extract functions
+  // simple parsing logic to extract the declaration and body of each specified kernel
   std::string ret;
   for (const auto &k : kernels) {
     std::string name;
@@ -113,6 +125,7 @@ std::string extract_kernels(const std::string &str, const std::vector<std::strin
       std::string def = str.substr(pos, str.size() - pos);
       int count, pos;
       // skip over declaration
+      // by finding matching ')' for first '('
       count = 1;
       pos = def.find('(');
       while (!(def[pos++] == ')' && count == 0) && pos < def.size()) {
@@ -120,6 +133,7 @@ std::string extract_kernels(const std::string &str, const std::vector<std::strin
         count -= def[pos] == ')';
       }
       // skip over definition
+      // by finding matching '{' for first '}'
       count = 1;
       pos = def.find('{', pos);
       while (!(def[pos++] == '}' && count == 0) && pos < def.size()) {
@@ -130,7 +144,6 @@ std::string extract_kernels(const std::string &str, const std::vector<std::strin
       ret += '\n';
     }
   }
-
   return ret;
 }
 
@@ -156,6 +169,12 @@ void init_triton(pybind11::module &m) {
       .def(pybind11::init<>())
       .def_readwrite("defines", &rt::options_t::defines)
       .def_readwrite("num_warps", &rt::options_t::num_warps);
+
+  pybind11::class_<rt::function>(subm, "function")
+      .def(pybind11::init<std::string, rt::options_t, driver::device *,
+                          rt::function::autotune_vals_t, std::vector<std::string>>());
+
+  pybind11::class_<triton::driver::device>(subm, "device");
 
   // hooks into triton constructs since frameworks may not use pybind11
   subm.def("extract_kernels", &extract_kernels);
