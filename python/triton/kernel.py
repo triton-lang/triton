@@ -30,11 +30,6 @@ def th_to_triton(obj):
 def cdiv(a, b):
     return (a + b - 1) // b
 
-def synchronize(device):
-    dev_id = device.index
-    dev_id = -1 if dev_id is None else dev_id
-    _torch_utils.synchronize(dev_id)
-
 def read(path, kernel_names: Optional[List] = None):
     if kernel_names is None:
         kernel_names = []
@@ -62,30 +57,26 @@ class kernel:
         # device
         assert device.type in ['cuda', 'cpu']
         if device.type == 'cuda':
-            self.device = torch.cuda.current_device() if device.index is None else device.index
+            self.device_id = torch.cuda.current_device() if device.index is None else device.index
+            self.device = _triton.cu_device(_torch_utils.cu_device(self.device_id), False)
+            self.stream = _triton.cu_stream(_torch_utils.cu_stream(self.device_id), False)
         if device.type == 'cpu':
-            self.device = -1
-        handle = _torch_utils.register_device(self.device)
-        _torch_utils.register_stream(self.device)
-        # C++ function wrapper
-        self.op_id = _triton.make_op_id()
-        _torch_utils.set_device(self.device)
-        _triton.register_fn(self.op_id, self.device, self.src, self.opt, autotune_vals, autotune_key)
-        self.handle = _triton.function(self.src, self.opt, handle, autotune_vals, autotune_key)
-        # debug mode
-        self.is_debug = 'TRITON_DEBUG' in os.environ
-        # signature
-        arg_types = _triton.get_fn_signature(self.op_id)
-        self.tys = ''.join([codes[x] for x in arg_types])
+            self.device_id = -1
+            self.device = _triton.host_device()
+            self.device = _triton.host_stream()
+        _torch_utils.set_device(self.device_id)
+        # function
+        self.fn = _triton.function(self.src, self.opt, self.device, autotune_vals, autotune_key)
+        self.tys = ''.join([codes[x] for x in self.fn.signature()])
 
     def __call__(self, *args, grid):
-        _torch_utils.set_device(self.device)
+        _torch_utils.set_device(self.device_id)
         # pack parameters into a byte buffer
         params = struct.pack(self.tys, *args)
-        opt = _triton.autotune(self.op_id, self.device, params, grid)
+        opt = self.fn.autotune(self.stream, params, grid)
         # run kernel
         grid = grid(opt)
         grid_0 = grid[0]
         grid_1 = 1 if len(grid) < 2 else grid[1]
         grid_2 = 1 if len(grid) < 3 else grid[2]
-        _triton.launch_kernel(self.op_id, self.device, params, grid_0, grid_1, grid_2)
+        self.fn.run(self.stream, params, grid_0, grid_1, grid_2)

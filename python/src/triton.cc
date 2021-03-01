@@ -18,43 +18,20 @@ namespace rt = triton::runtime;
 namespace drv = triton::driver;
 namespace lng = triton::lang;
 
-std::map<int, std::shared_ptr<rt::function>> id_fn_map;
+// stuff
 std::unordered_map<const rt::options_t *, pybind11::object> opt_cache_;
-extern std::map<int, std::shared_ptr<triton::driver::device>> tt_devices;
-extern std::map<int, std::shared_ptr<triton::driver::stream>> tt_streams;
-
-/* Function utilities */
-
-void register_fn(int op_id, int dev_id,
-                 const std::string &src, const rt::options_t &opt,
-                 const rt::function::autotune_vals_t &autotune_vals,
-                 const std::vector<std::string> &autotune_key) {
-  if (id_fn_map.find(op_id) == id_fn_map.end())
-    id_fn_map[op_id].reset(new rt::function(src, opt, &*tt_devices[dev_id], autotune_vals, autotune_key));
-}
-
-void delete_fn(int op_id) {
-  id_fn_map.erase(op_id);
-}
-
 void cleanup() {
-  id_fn_map.clear();
   opt_cache_.clear();
 }
 
-size_t make_op_id() {
-  return id_fn_map.size();
-}
-
-std::vector<rt::arg_type> get_fn_signature(size_t op_id) {
-  return id_fn_map[op_id]->get_kernels()[0].second->get_sig();
+std::vector<rt::arg_type> signature(rt::function *fn) {
+  return fn->get_kernels()[0].second->get_sig();
 }
 
 // Thanks to Scott Gray (OpenAI) for the idea to pass the arguments
 // as a string constructed with struct.pack in python
-void launch_kernel(int64_t op_id, int64_t dev_id, const std::string &args, size_t grid_0, size_t grid_1, size_t grid_2) {
-  rt::function *fn = id_fn_map.at(op_id).get();
-  (*fn)((void **)args.c_str(), args.size(), {grid_0, grid_1, grid_2}, &*tt_streams[dev_id]);
+void launch_kernel(rt::function *fn, driver::stream *stream, const std::string &args, size_t grid_0, size_t grid_1, size_t grid_2) {
+  (*fn)((void **)args.c_str(), args.size(), {grid_0, grid_1, grid_2}, stream);
 }
 
 /*!
@@ -63,7 +40,7 @@ void launch_kernel(int64_t op_id, int64_t dev_id, const std::string &args, size_
   This essentially only contains logic that allows users to treat rt::options_t* object as if
   they had an attribute for each integer preprocessor macro.
 */
-pybind11::object autotune(int64_t op_id, int64_t dev_id, const std::string &args, const rt::function::grid_fn_ty &grid) {
+pybind11::object autotune(rt::function *fn, driver::stream *stream, const std::string &args, const rt::function::grid_fn_ty &grid) {
   // new grid function that accepts option in the aforementioned form
   auto wrapper = [&grid](const rt::options_t &opt) {
     pybind11::object obj = pybind11::cast(&opt, pybind11::return_value_policy::reference);
@@ -73,7 +50,7 @@ pybind11::object autotune(int64_t op_id, int64_t dev_id, const std::string &args
     return grid(*obj.cast<rt::options_t *>());
   };
   // run c++ auto-tuner
-  rt::kernel *kernel = id_fn_map.at(op_id)->autotune((void **)args.c_str(), args.size(), wrapper, &*tt_streams[dev_id]);
+  rt::kernel *kernel = fn->autotune((void **)args.c_str(), args.size(), wrapper, stream);
   // return the compilation options of the fastest kernel
   // still in the aforementioned form
   const rt::options_t *opt = &kernel->opt;
@@ -149,7 +126,8 @@ std::string extract_kernels(const std::string &str, const std::vector<std::strin
 
 void init_triton(pybind11::module &m) {
   pybind11::module subm = m.def_submodule("triton");
-  // bindings for triton classes
+
+  // argument type
   pybind11::enum_<rt::arg_type>(subm, "arg_type")
       .value("int1", rt::INT1_T)
       .value("int8", rt::INT8_T)
@@ -160,29 +138,40 @@ void init_triton(pybind11::module &m) {
       .value("float", rt::FLOAT_T)
       .value("double", rt::DOUBLE_T)
       .value("buffer", rt::BUFFER_T);
-
+  // assembly mode
   pybind11::enum_<rt::asm_mode_t>(subm, "asm_mode")
       .value("ptx", rt::ASM_NV_PTX)
       .value("sass", rt::ASM_NV_SASS);
-
+  // compilation options
   pybind11::class_<rt::options_t>(subm, "options", pybind11::dynamic_attr())
       .def(pybind11::init<>())
       .def_readwrite("defines", &rt::options_t::defines)
       .def_readwrite("num_warps", &rt::options_t::num_warps);
-
+  // callable function
   pybind11::class_<rt::function>(subm, "function")
       .def(pybind11::init<std::string, rt::options_t, driver::device *,
-                          rt::function::autotune_vals_t, std::vector<std::string>>());
+                          rt::function::autotune_vals_t, std::vector<std::string>>())
+      .def("autotune", &autotune)
+      .def("run", &launch_kernel)
+      .def("signature", &signature);
 
+  // device
   pybind11::class_<triton::driver::device>(subm, "device");
+  pybind11::class_<triton::driver::cu_device, driver::device>(subm, "cu_device")
+      .def(pybind11::init<CUdevice, bool>());
+  pybind11::class_<triton::driver::host_device, driver::device>(subm, "host_device")
+      .def(pybind11::init<>());
+  // stream
+  pybind11::class_<triton::driver::stream>(subm, "stream");
+  pybind11::class_<triton::driver::host_stream, triton::driver::stream>(subm, "host_stream")
+      .def(pybind11::init<>());
+  pybind11::class_<triton::driver::cu_stream, triton::driver::stream>(subm, "cu_stream")
+      .def(pybind11::init([](uint64_t handle, bool take_ownership) {
+        return std::unique_ptr<driver::cu_stream>(new driver::cu_stream((CUstream)handle, take_ownership));
+      }));
 
   // hooks into triton constructs since frameworks may not use pybind11
-  subm.def("extract_kernels", &extract_kernels);
-  subm.def("get_fn_signature", &get_fn_signature);
-  subm.def("register_fn", &register_fn);
-  subm.def("delete_fn", &delete_fn);
-  subm.def("make_op_id", &make_op_id);
+  // !! to deprecate !!
   subm.def("cleanup", &cleanup);
-  subm.def("autotune", &autotune, pybind11::return_value_policy::reference);
-  subm.def("launch_kernel", &launch_kernel);
+  subm.def("extract_kernels", &extract_kernels);
 }
