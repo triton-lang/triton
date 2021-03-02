@@ -64,6 +64,7 @@ class kernel:
         self.tys = ''.join([codes[x] for x in self.fn.signature()])
 
     def __call__(self, *args, grid):
+        # make sure that the executing thread is on the right device
         _torch_utils.set_device(self.device_id)
         # pack parameters into a byte buffer
         params = struct.pack(self.tys, *args)

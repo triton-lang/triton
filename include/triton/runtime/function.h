@@ -116,7 +116,6 @@ public:
   function(const std::string& src, const options_t& opt, driver::device *device,
            const autotune_vals_t& autotune_vals = {}, const std::vector<std::string> &autotune_key = {});
   void operator()(const std::string& args, const grid_fn_ty& grid, driver::stream *stream);
-  void operator()(const std::string& args, const grid_t& grid, driver::stream *stream);
   // auto-tuning
   cache_t::iterator find_in_cache(void* args, size_t args_size);
   kernel* autotune(const std::string& args, const grid_fn_ty& grid, driver::stream *stream);

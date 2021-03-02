@@ -338,6 +338,29 @@ void function::init_kernels(const std::string& src, const options_t& opt,
   }
 }
 
+
+function::function(const std::string& src, const options_t &opt, driver::device *device,
+                   const autotune_vals_t& autotune_vals, const std::vector<std::string>& autotune_key)  {
+  // pre-compile all kernels
+  init_kernels(src, opt, autotune_vals, device);
+  // find indices of autotune keys
+  auto arg_names = kernels_.at(0).second->get_arg_names();
+  for(const std::string& name: autotune_key){
+    auto it = std::find(arg_names.begin(), arg_names.end(), name);
+    if(it == arg_names.end())
+      throw std::runtime_error(name + " is not a valid argument name");
+    key_idxs_.push_back(std::distance(arg_names.begin(), it));
+  }
+  // argument size and offset
+  auto tys = kernels_.at(0).second->get_sig();
+  size_t curr = 0;
+  for(arg_type ty: tys){
+    arg_size_.push_back(size_of(ty));
+    arg_off_.push_back(curr);
+    curr += arg_size_.back();
+  }
+}
+
 kernel* function::autotune(const std::string &args, const grid_fn_ty& grid_fn, driver::stream* stream) {
   // fast path -- no autotuning necessary
   if(kernels_.size() == 1)
@@ -369,35 +392,9 @@ kernel* function::autotune(const std::string &args, const grid_fn_ty& grid_fn, d
   return it->second;
 }
 
-function::function(const std::string& src, const options_t &opt, driver::device *device,
-                   const autotune_vals_t& autotune_vals, const std::vector<std::string>& autotune_key)  {
-  // pre-compile all kernels
-  init_kernels(src, opt, autotune_vals, device);
-  // find indices of autotune keys
-  auto arg_names = kernels_.at(0).second->get_arg_names();
-  for(const std::string& name: autotune_key){
-    auto it = std::find(arg_names.begin(), arg_names.end(), name);
-    if(it == arg_names.end())
-      throw std::runtime_error(name + " is not a valid argument name");
-    key_idxs_.push_back(std::distance(arg_names.begin(), it));
-  }
-  // argument size and offset
-  auto tys = kernels_.at(0).second->get_sig();
-  size_t curr = 0;
-  for(arg_type ty: tys){
-    arg_size_.push_back(size_of(ty));
-    arg_off_.push_back(curr);
-    curr += arg_size_.back();
-  }
-}
-
 void function::operator()(const std::string& args, const grid_fn_ty& grid_fn, driver::stream *stream) {
   runtime::kernel* fn = autotune(args, grid_fn, stream);
   (*fn)(args, stream, grid_fn(fn->opt));
-}
-
-void function::operator()(const std::string& args, const grid_t& grid, driver::stream* stream) {
-  return this->operator()(args, [&grid](const options_t&){ return grid; }, stream);
 }
 
 
