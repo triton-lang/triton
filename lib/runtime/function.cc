@@ -40,7 +40,6 @@
 #include <mutex>
 #include <fstream>
 
-std::mutex mut;
 
 namespace triton{
 namespace runtime {
@@ -49,22 +48,9 @@ namespace runtime {
 /* --------------------------------- */
 /* --------------------------------- */
 
-arg_type kernel::convert(ir::type *ty) {
-  if(ty->is_integer_ty(1))  return INT1_T;
-  if(ty->is_integer_ty(8))  return INT8_T;
-  if(ty->is_integer_ty(16)) return INT16_T;
-  if(ty->is_integer_ty(32)) return INT32_T;
-  if(ty->is_integer_ty(64)) return INT64_T;
-  if(ty->is_half_ty())      return HALF_T;
-  if(ty->is_float_ty())     return FLOAT_T;
-  if(ty->is_double_ty())    return DOUBLE_T;
-  if(ty->is_pointer_ty())   return BUFFER_T;
-  throw std::runtime_error("unknown type");
-}
-
-
-std::string kernel::preheader() {
-  return  R"(
+std::shared_ptr<ir::module> kernel::src_to_ir(const std::string& _src, const options_t& opt) {
+  std::string src =
+R"(
 #define bool _Bool
 #define true 1
 #define false 0
@@ -116,9 +102,7 @@ typedef short int16;
 typedef int int32;
 typedef long int64;
 )";
-}
-
-void kernel::init_ir(const std::string& src) {
+  src += _src;
   // pre-process
   TokenSequence tokens;
   Preprocessor cpp(&src, true);
@@ -129,21 +113,21 @@ void kernel::init_ir(const std::string& src) {
   Parser parser(tokens);
   parser.Parse();
   // ast -> triton-ir
-  ir::module* module = new ir::module("", ctx_);
+  auto ret = std::make_shared<ir::module>("");
   Generator gen(&parser);
-  gen.Gen(module);
-  ir_.reset(module);
+  gen.Gen(&*ret);
+  return ret;
 }
 
-void kernel::init_ker(){
-  // triton-ir -> binary
-  std::unique_ptr<driver::module> bin;
-  std::unique_ptr<codegen::target> target = dev_->make_target();
+std::tuple<std::shared_ptr<driver::module>,
+           std::shared_ptr<driver::kernel>,
+           size_t> kernel::ir_to_bin(ir::module &ir, driver::device* dev, const options_t& opt) {
   // generate llvm code
   llvm::LLVMContext ctx;
-  std::string name = ir_->get_function_list()[0]->get_name();
+  std::string name = ir.get_function_list()[0]->get_name();
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(name, ctx));
   // optimizations
+  std::unique_ptr<codegen::target> target = dev->make_target();
   bool cts_use_async = target->as_nvidia()->sm() >= 80;
   // create passes
   codegen::analysis::align align;
@@ -162,70 +146,53 @@ void kernel::init_ker(){
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), opt.num_warps);
   // run passes
-  dce.run(*ir_);
-  pipeline.run(*ir_);
-  dce.run(*ir_);
-  disassociate.run(*ir_);
-  dce.run(*ir_);
-  align.run(*ir_);
-  axes.run(*ir_);
-  layouts.run(*ir_);
-  peephole.run(*ir_);
-  dce.run(*ir_);
+  dce.run(ir);
+  pipeline.run(ir);
+  dce.run(ir);
+  disassociate.run(ir);
+  dce.run(ir);
+  align.run(ir);
+  axes.run(ir);
+  layouts.run(ir);
+  peephole.run(ir);
+  dce.run(ir);
   if(target->is_gpu())
-    cts.run(*ir_);
-  align.run(*ir_);
-  axes.run(*ir_);
-  layouts.run(*ir_);
-  coalesce.run(*ir_);
-  dce.run(*ir_);
-  align.run(*ir_);
-  dce.run(*ir_);
+    cts.run(ir);
+  align.run(ir);
+  axes.run(ir);
+  layouts.run(ir);
+  coalesce.run(ir);
+  dce.run(ir);
+  align.run(ir);
+  dce.run(ir);
   if(target->is_gpu()){
-    reassociate.run(*ir_);
-    cts.run(*ir_);
+    reassociate.run(ir);
+    cts.run(ir);
   }
-  dce.run(*ir_);
-//  ir::print(*ir_, std::cout);
-  align.run(*ir_);
-  axes.run(*ir_);
-  layouts.run(*ir_);
-  peephole.run(*ir_);
-  dce.run(*ir_);
-  align.run(*ir_);
-  axes.run(*ir_);
-  layouts.run(*ir_);
-  swizzle.run(*ir_);
-  liveness.run(*ir_);
-  allocation.run(*ir_);
-  shared_mem_ = allocation.allocated_size();
-//  if(allocation.allocated_size() > dev_->max_shared_memory())
-//    throw exception::out_of_shared_memory();
-  barriers.run(*ir_);
-  isel.visit(*ir_, *llvm);
-  //if(res->spilled() > 256)
-  //  throw exception::out_of_registers();
-  mod_.reset(driver::module::create(dev_, std::move(llvm)));
-  ker_.reset(driver::kernel::create(&*mod_, name.c_str()));
-}
-
-void kernel::init_sig() {
-  ir::function* fn = ir_->get_function_list()[0];
-  ir::function_type* ty = fn->get_fn_type();
-  for(size_t i = 0; i < ty->get_num_params(); i++){
-    sig_.push_back(convert(ty->get_param_ty(i)));
-    if(!fn->has_attr(i+1))
-      continue;
-  }
+  dce.run(ir);
+  align.run(ir);
+  axes.run(ir);
+  layouts.run(ir);
+  peephole.run(ir);
+  dce.run(ir);
+  align.run(ir);
+  axes.run(ir);
+  layouts.run(ir);
+  swizzle.run(ir);
+  liveness.run(ir);
+  allocation.run(ir);
+  barriers.run(ir);
+  isel.visit(ir, *llvm);
+  std::shared_ptr<driver::module> mod(driver::module::create(dev, std::move(llvm)));
+  std::shared_ptr<driver::kernel> ker(driver::kernel::create(&*mod, name.c_str()));
+  size_t shared_mem = allocation.allocated_size();
+  return std::make_tuple(mod, ker, shared_mem);
 }
 
 kernel::kernel(const std::string& src, const options_t& opt, driver::device *dev):
   opt(opt), dev_(dev) {
-  init_ir(preheader() + src);
-  init_ker();
-  init_sig();
-  for(auto arg: ir_->get_function_list()[0]->args())
-    arg_names_.push_back(arg->get_name());
+  ir_ = src_to_ir(src, opt);
+  std::tie(mod_, ker_, shared_mem_) = ir_to_bin(*ir_, dev, opt);
 }
 
 void kernel::operator()(const std::string& args, driver::stream *stream, const std::vector<size_t>& _grid) const{
@@ -235,7 +202,7 @@ void kernel::operator()(const std::string& args, driver::stream *stream, const s
   std::array<size_t, 3> grid;
   for(size_t i = 0; i < 3; i++)
     grid[i] = (i < _grid.size()) ? _grid[i] : 1;
-//   enqueue
+  // enqueue
   stream->enqueue(&*ker_, grid, {(size_t)opt.num_warps * 32, 1, 1}, (void*)args.data(), args.size(), shared_mem_);
 }
 
@@ -282,23 +249,6 @@ std::string kernel::get_asm(asm_mode_t mode) {
 /* --------------------------------- */
 /* --------------------------------- */
 
-void function::do_loop_nest(std::vector<size_t> const & ranges,
-                       std::function<void(std::vector<size_t> const &)> const & f){
-  size_t D = ranges.size();
-  std::vector<size_t> values(D, 0);
-  size_t i = D - 1;
-  while(true){
-    f(values);
-    while(values[i]++ == ranges[i] - 1){
-      if(i == 0)
-        return;
-      values[i--] = 0;
-    }
-    i = D - 1;    options_t opt;
-
-  }
-}
-
 
 void function::init_kernels(const std::string& src, const options_t& opt,
                             const autotune_vals_t& confs, driver::device *device) {
@@ -339,26 +289,44 @@ void function::init_kernels(const std::string& src, const options_t& opt,
 }
 
 
+
 function::function(const std::string& src, const options_t &opt, driver::device *device,
-                   const autotune_vals_t& autotune_vals, const std::vector<std::string>& autotune_key)  {
-  // pre-compile all kernels
-  init_kernels(src, opt, autotune_vals, device);
+                   const autotune_vals_t& autotune_vals, const std::vector<std::string>& autotune_key)  {  
+
+  std::shared_ptr<ir::module> ir = kernel::src_to_ir(src, opt);
+  std::vector<ir::argument*> args = ir->get_function_list()[0]->args();
   // find indices of autotune keys
-  auto arg_names = kernels_.at(0).second->get_arg_names();
   for(const std::string& name: autotune_key){
-    auto it = std::find(arg_names.begin(), arg_names.end(), name);
-    if(it == arg_names.end())
+    auto pred = [&](ir::argument* arg) { return arg->get_name() == name; };
+    auto it = std::find_if(args.begin(), args.end(), pred);
+    if(it == args.end())
       throw std::runtime_error(name + " is not a valid argument name");
-    key_idxs_.push_back(std::distance(arg_names.begin(), it));
+    key_idxs_.push_back(std::distance(args.begin(), it));
   }
+  // signature
+  auto convert = [](ir::type *ty) {
+    if(ty->is_integer_ty(1))  return INT1_T;
+    if(ty->is_integer_ty(8))  return INT8_T;
+    if(ty->is_integer_ty(16)) return INT16_T;
+    if(ty->is_integer_ty(32)) return INT32_T;
+    if(ty->is_integer_ty(64)) return INT64_T;
+    if(ty->is_half_ty())      return HALF_T;
+    if(ty->is_float_ty())     return FLOAT_T;
+    if(ty->is_double_ty())    return DOUBLE_T;
+    if(ty->is_pointer_ty())   return BUFFER_T;
+    throw std::runtime_error("unknown type");
+  };
+  for(ir::argument* arg: args)
+    sig_.push_back(convert(arg->get_type()));
   // argument size and offset
-  auto tys = kernels_.at(0).second->get_sig();
   size_t curr = 0;
-  for(arg_type ty: tys){
+  for(arg_type ty: sig_){
     arg_size_.push_back(size_of(ty));
     arg_off_.push_back(curr);
     curr += arg_size_.back();
   }
+  // pre-compile all kernels
+  init_kernels(src, opt, autotune_vals, device);
 }
 
 kernel* function::autotune(const std::string &args, const grid_fn_ty& grid_fn, driver::stream* stream) {

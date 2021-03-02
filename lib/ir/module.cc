@@ -10,8 +10,8 @@ namespace triton{
 namespace ir{
 
 /* Module */
-module::module(const std::string &name, context &ctx)
-  : name_(name), context_(ctx), builder_(ctx) {
+module::module(const std::string &name)
+  : name_(name), builder_(context_) {
   sealed_blocks_.insert(nullptr);
 }
 
