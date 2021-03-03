@@ -189,9 +189,12 @@ std::tuple<std::shared_ptr<driver::module>,
   return std::make_tuple(mod, ker, shared_mem);
 }
 
-kernel::kernel(const std::string& src, const options_t& opt, driver::device *dev):
+kernel::kernel(const std::string& src, const options_t& opt, driver::device *dev, const std::map<int, int> &attrs):
   opt(opt), dev_(dev) {
   ir_ = src_to_ir(src, opt);
+  ir::function* fn = ir_->get_function_list()[0];
+  for(const auto&x: attrs)
+    fn->add_attr(x.first + 1, ir::attribute(ir::multiple_of, x.second));
   std::tie(mod_, ker_, shared_mem_) = ir_to_bin(*ir_, dev, opt);
 }
 
@@ -250,59 +253,21 @@ std::string kernel::get_asm(asm_mode_t mode) {
 /* --------------------------------- */
 
 
-void function::init_kernels(const std::string& src, const options_t& opt,
-                            const autotune_vals_t& confs, driver::device *device) {
-  // list of all possible configs
-  // just augment `opt` with each define of `confs`
-  // and override warp count
-  size_t num_opts = std::max(confs.size(), (size_t)1);
-  std::vector<options_t> opts(num_opts, opt);
-  for(size_t i = 0; i < confs.size(); i++){
-    opts[i].defines.insert(confs[i].first.begin(), confs[i].first.end());
-    opts[i].num_warps = confs[i].second;
-  }
-  // compile all possible configs
-  // compilation errors (e.g., too much shared mem)
-  // will populate `err`
-  std::vector<std::pair<options_t, std::string>> err;
-  for(const options_t& opt: opts) {
-    try{
-      kernels_.push_back({opt, std::make_shared<kernel>(src, opt, device)});
-    }catch(const exception::base& e){
-      err.push_back({opt, e.what()});
-    }
-  }
-  // throw an exception if `err` is not empty
-  if(kernels_.empty()){
-    std::ostringstream dbg;
-    dbg << "Auto-Tuner could not find any valid configuration:" << std::endl;
-    for(auto x: err){
-      dbg << "[ ";
-      dbg << x.first.num_warps << ", ";
-      dbg << "{ ";
-      for(const auto& y: x.first.defines)
-        dbg << '"' << y.first << "\"= \"" << y.second << "\", ";
-      dbg << " } ] -> " << x.second << std::endl;
-    }
-    throw exception::no_valid_configuration(dbg.str());
-  }
-}
-
 
 
 function::function(const std::string& src, const options_t &opt, driver::device *device,
-                   const autotune_vals_t& autotune_vals, const std::vector<std::string>& autotune_key)  {  
+                   const autotune_vals_t& autotune_vals, const std::vector<std::string>& autotune_key)
+  : src_(src), device_(device) {
 
-  std::shared_ptr<ir::module> ir = kernel::src_to_ir(src, opt);
-  std::vector<ir::argument*> args = ir->get_function_list()[0]->args();
-  // find indices of autotune keys
-  for(const std::string& name: autotune_key){
-    auto pred = [&](ir::argument* arg) { return arg->get_name() == name; };
-    auto it = std::find_if(args.begin(), args.end(), pred);
-    if(it == args.end())
-      throw std::runtime_error(name + " is not a valid argument name");
-    key_idxs_.push_back(std::distance(args.begin(), it));
+  // kernel options
+  size_t num_opts = std::max(autotune_vals.size(), (size_t)1);
+  opts_ = std::vector<options_t>(num_opts, opt);
+  for(size_t i = 0; i < opts_.size(); i++){
+    opts_[i].defines.insert(autotune_vals[i].first.begin(), autotune_vals[i].first.end());
+    opts_[i].num_warps = autotune_vals[i].second;
   }
+  std::shared_ptr<ir::module> ir = kernel::src_to_ir(src, opts_[0]);
+  std::vector<ir::argument*> args = ir->get_function_list()[0]->args();
   // signature
   auto convert = [](ir::type *ty) {
     if(ty->is_integer_ty(1))  return INT1_T;
@@ -318,6 +283,19 @@ function::function(const std::string& src, const options_t &opt, driver::device 
   };
   for(ir::argument* arg: args)
     sig_.push_back(convert(arg->get_type()));
+  // find indices of autotune keys
+  for(const std::string& name: autotune_key){
+    auto pred = [&](ir::argument* arg) { return arg->get_name() == name; };
+    auto it = std::find_if(args.begin(), args.end(), pred);
+    if(it == args.end())
+      throw std::runtime_error(name + " is not a valid argument name");
+    key_idxs_.push_back(std::distance(args.begin(), it));
+  }
+  // find indices of pointer
+  for(size_t i = 0; i < args.size(); i++)
+    if(args[i]->get_type()->is_pointer_ty() ||
+       args[i]->get_type()->is_integer_ty())
+      align_idxs_.push_back(i);
   // argument size and offset
   size_t curr = 0;
   for(arg_type ty: sig_){
@@ -325,38 +303,62 @@ function::function(const std::string& src, const options_t &opt, driver::device 
     arg_off_.push_back(curr);
     curr += arg_size_.back();
   }
-  // pre-compile all kernels
-  init_kernels(src, opt, autotune_vals, device);
+}
+
+uint64_t pow2_divisor(uint64_t N){
+  if(N % 16 == 0) return 16;
+  if(N % 8 == 0) return 8;
+  if(N % 4 == 0) return 4;
+  if(N % 2 == 0) return 2;
+  return 1;
 }
 
 kernel* function::autotune(const std::string &args, const grid_fn_ty& grid_fn, driver::stream* stream) {
-  // fast path -- no autotuning necessary
-  if(kernels_.size() == 1)
-    return &*kernels_.begin()->second;
-  // auto-tuning key
-  std::vector<uint64_t> key(key_idxs_.size());
-  for(size_t i = 0; i < key.size(); i++){
-    int idx = key_idxs_[i];
-    std::memcpy((void*)&key[i], (void*)((char*)args.data() + arg_off_[idx]), arg_size_[idx]);
+  // align key
+  std::vector<uint64_t> rt_key(align_idxs_.size(), 0);
+  for(size_t i = 0; i < align_idxs_.size(); i++){
+    int idx = align_idxs_[i];
+    uint64_t tmp = 0;
+    std::memcpy((void*)&tmp, (void*)((char*)args.data() + arg_off_[idx]), arg_size_[idx]);
+    rt_key[i] = pow2_divisor(tmp);
   }
-  auto it = cache_.find(key);
+  // auto-tuning key
+  std::vector<uint64_t> at_key(key_idxs_.size(), 0);
+  for(size_t i = 0; i < at_key.size(); i++){
+    int idx = key_idxs_[i];
+    std::memcpy((void*)&at_key[i], (void*)((char*)args.data() + arg_off_[idx]), arg_size_[idx]);
+  }
+  // cache key
+  std::vector<uint64_t> cache_key;
+  cache_key.reserve(rt_key.size() + at_key.size());
+  cache_key.insert(cache_key.end(), rt_key.begin(), rt_key.end());
+  cache_key.insert(cache_key.end(), at_key.begin(), at_key.end());
+  auto it = cache_.find(cache_key);
   if(it != cache_.end())
     return it->second;
+  // compile kernels
+  if(kernels_.find(rt_key) == kernels_.end()){
+    std::map<int, int> align;
+    for(size_t i = 0; i < align_idxs_.size(); i++){
+      align[align_idxs_[i]] = rt_key[i];
+    }
+    for(const options_t& opt: opts_)
+      kernels_[rt_key].emplace_back(new kernel(src_, opt, device_, align));
+  }
   // run auto-tuner
   double best_ts = INFINITY;
   kernel* ret = nullptr;
-  for(auto &x : kernels_){
-    kernel* current = &*x.second;
-    auto grid = grid_fn(x.first);
+  for(auto &current : kernels_.at(rt_key)){
+    auto grid = grid_fn(current->opt);
     while(grid.size() < 3)
       grid.push_back(1);
     double ts = tools::bench([&]() { (*current)(args, stream, grid); },
                                      stream, 5, 20);
-    ret = (ts < best_ts) ? current : ret;
+    ret = (ts < best_ts) ? &*current : ret;
     best_ts = std::min(ts, best_ts);
   }
   stream->synchronize();
-  it = cache_.insert({key, ret}).first;
+  it = cache_.insert({cache_key, ret}).first;
   return it->second;
 }
 

@@ -108,7 +108,7 @@ public:
                     size_t> ir_to_bin(ir::module& ir, driver::device *dev, const options_t &opt);
 
 public:
-  kernel(const std::string& src, const options_t& opt, driver::device *device);
+  kernel(const std::string& src, const options_t& opt, driver::device *device, const std::map<int, int>& attrs = {});
   void operator()(const std::string& args, driver::stream *stream, const grid_t& grid) const;
   std::string get_asm(asm_mode_t mode);
 
@@ -137,19 +137,23 @@ public:
            const autotune_vals_t& autotune_vals = {}, const std::vector<std::string> &autotune_key = {});
   void operator()(const std::string& args, const grid_fn_ty& grid, driver::stream *stream);
   kernel* autotune(const std::string& args, const grid_fn_ty& grid, driver::stream *stream);
-  const std::vector<kernel_pair_t> get_kernels() { return kernels_; }
   const std::vector<arg_type> get_signature() { return sig_; }
 
 private:
-  void init_kernels(const std::string& src, const options_t& opt, const autotune_vals_t& autotune_vals, driver::device *device);
+  void init_kernels(const std::string& src, const std::vector<options_t> &opts, const autotune_vals_t& autotune_vals, driver::device *device);
 
 private:
-  std::vector<kernel_pair_t> kernels_;
+  std::map<std::vector<uint64_t>, std::vector<std::shared_ptr<kernel>>> kernels_;
   std::map<std::vector<uint64_t>, kernel*> cache_;
   std::vector<arg_type> sig_;
+  std::vector<int> align_idxs_;
+  std::vector<int> int_idxs_;
   std::vector<int> key_idxs_;
   std::vector<int> arg_size_;
   std::vector<int> arg_off_;
+  std::vector<options_t> opts_;
+  std::string src_;
+  driver::device* device_;
 };
 
 }

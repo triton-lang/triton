@@ -529,8 +529,6 @@ void Generator::VisitFuncDef(FuncDef* funcDef) {
   for(Object* obj: type->Params()){
     std::string name = obj->Name();
     args[i]->set_name(name);
-    if(obj->Type()->ToPointer())
-      fn->add_attr(i + 1, ir::attribute(ir::aligned, 16));
     for(ASTNode::Attr attr: obj->GetAttrList()){
       fn->add_attr(i + 1, GenIRAttr(attr));
     }
