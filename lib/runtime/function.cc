@@ -194,8 +194,8 @@ kernel::kernel(const std::string& src, const options_t& opt, driver::device *dev
   // compile to Triton IR
   ir_ = src_to_ir(src, opt);
   // add attributes
-//  for(const auto&x: attrs)
-//    ir_->get_function_list()[0]->add_attr(x.first, x.second);
+  for(const auto&x: attrs)
+    ir_->get_function_list()[0]->add_attr(x.first, x.second);
   // compile to binary
   std::tie(mod_, ker_, shared_mem_) = ir_to_bin(*ir_, dev, opt);
 }
