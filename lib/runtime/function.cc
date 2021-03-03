@@ -347,17 +347,22 @@ kernel* function::autotune(const std::string &args, const grid_fn_ty& grid_fn, d
   }
   // run auto-tuner
   double best_ts = INFINITY;
+  auto& kernels = kernels_.at(rt_key);
   kernel* ret = nullptr;
-  for(auto &current : kernels_.at(rt_key)){
-    auto grid = grid_fn(current->opt);
-    while(grid.size() < 3)
-      grid.push_back(1);
-    double ts = tools::bench([&]() { (*current)(args, stream, grid); },
-                                     stream, 5, 20);
-    ret = (ts < best_ts) ? &*current : ret;
-    best_ts = std::min(ts, best_ts);
+  if(kernels.size() == 1)
+    ret = &*kernels.back();
+  else{
+    for(auto &current : kernels_.at(rt_key)){
+      auto grid = grid_fn(current->opt);
+      while(grid.size() < 3)
+        grid.push_back(1);
+      double ts = tools::bench([&]() { (*current)(args, stream, grid); },
+                                       stream, 5, 20);
+      ret = (ts < best_ts) ? &*current : ret;
+      best_ts = std::min(ts, best_ts);
+    }
+    stream->synchronize();
   }
-  stream->synchronize();
   it = cache_.insert({cache_key, ret}).first;
   return it->second;
 }
