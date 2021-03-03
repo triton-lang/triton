@@ -463,7 +463,7 @@ std::vector<unsigned> align::populate_starting_multiple_default(ir::value* v) {
         ir::type* ty = x->get_type()->get_pointer_element_ty();
         int nbits  = ty->get_primitive_size_in_bits();
         int nbytes = nbits / 8;
-        return add_to_cache(x, {attr.get_value() * nbytes}, starting_multiple_);
+        return add_to_cache(x, {attr.get_value() / nbytes}, starting_multiple_);
       }
     }
   }
@@ -505,12 +505,9 @@ std::vector<unsigned> align::populate_starting_multiple(ir::value *v){
 
 
 unsigned align::get(ir::value *v, unsigned ax) const {
-  ir::type* ty = v->get_type()->get_scalar_ty()->get_pointer_element_ty();
-  int nbits  = ty->get_primitive_size_in_bits();
-  int nbytes = nbits / 8;
   unsigned starting_multiple = starting_multiple_.at(v)[ax];
   unsigned max_contiguous = max_contiguous_.at(v)[ax];
-  return std::max<int>(std::min(starting_multiple, max_contiguous)/nbytes, 1);
+  return std::min(starting_multiple, max_contiguous);
 }
 
 std::vector<unsigned> align::contiguous(ir::value* v) const {
