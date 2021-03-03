@@ -11,8 +11,8 @@
 
 #include "common.h"
 
-NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
-NAMESPACE_BEGIN(detail)
+PYBIND11_NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
+PYBIND11_NAMESPACE_BEGIN(detail)
 
 #if !defined(_MSC_VER)
 #  define PYBIND11_DESCR_CONSTEXPR static constexpr
@@ -96,5 +96,5 @@ constexpr descr<N + 2, Ts...> type_descr(const descr<N, Ts...> &descr) {
     return _("{") + descr + _("}");
 }
 
-NAMESPACE_END(detail)
-NAMESPACE_END(PYBIND11_NAMESPACE)
+PYBIND11_NAMESPACE_END(detail)
+PYBIND11_NAMESPACE_END(PYBIND11_NAMESPACE)

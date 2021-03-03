@@ -11,8 +11,8 @@
 
 #include "class.h"
 
-NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
-NAMESPACE_BEGIN(detail)
+PYBIND11_NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
+PYBIND11_NAMESPACE_BEGIN(detail)
 
 template <>
 class type_caster<value_and_holder> {
@@ -30,7 +30,7 @@ private:
     value_and_holder *value = nullptr;
 };
 
-NAMESPACE_BEGIN(initimpl)
+PYBIND11_NAMESPACE_BEGIN(initimpl)
 
 inline void no_nullptr(void *ptr) {
     if (!ptr) throw type_error("pybind11::init(): factory function returned nullptr");
@@ -132,6 +132,7 @@ void construct(value_and_holder &v_h, Alias<Class> *alias_ptr, bool) {
 template <typename Class>
 void construct(value_and_holder &v_h, Holder<Class> holder, bool need_alias) {
     auto *ptr = holder_helper<Holder<Class>>::get(holder);
+    no_nullptr(ptr);
     // If we need an alias, check that the held pointer is actually an alias instance
     if (Class::has_alias && need_alias && !is_alias<Class>(ptr))
         throw type_error("pybind11::init(): construction failed: returned holder-wrapped instance "
@@ -330,6 +331,6 @@ struct pickle_factory<Get, Set, RetState(Self), NewInstance(ArgState)> {
     }
 };
 
-NAMESPACE_END(initimpl)
-NAMESPACE_END(detail)
-NAMESPACE_END(pybind11)
+PYBIND11_NAMESPACE_END(initimpl)
+PYBIND11_NAMESPACE_END(detail)
+PYBIND11_NAMESPACE_END(pybind11)

@@ -189,12 +189,14 @@ std::tuple<std::shared_ptr<driver::module>,
   return std::make_tuple(mod, ker, shared_mem);
 }
 
-kernel::kernel(const std::string& src, const options_t& opt, driver::device *dev, const std::map<int, int> &attrs):
+kernel::kernel(const std::string& src, const options_t& opt, driver::device *dev, const std::map<int, ir::attribute> &attrs):
   opt(opt), dev_(dev) {
+  // compile to Triton IR
   ir_ = src_to_ir(src, opt);
-  ir::function* fn = ir_->get_function_list()[0];
-  for(const auto&x: attrs)
-    fn->add_attr(x.first + 1, ir::attribute(ir::multiple_of, x.second));
+  // add attributes
+//  for(const auto&x: attrs)
+//    ir_->get_function_list()[0]->add_attr(x.first, x.second);
+  // compile to binary
   std::tie(mod_, ker_, shared_mem_) = ir_to_bin(*ir_, dev, opt);
 }
 
@@ -256,15 +258,14 @@ std::string kernel::get_asm(asm_mode_t mode) {
 
 
 function::function(const std::string& src, const options_t &opt, driver::device *device,
-                   const autotune_vals_t& autotune_vals, const std::vector<std::string>& autotune_key)
+                   const std::vector<config> &tune_confs, const std::vector<std::string>& tune_key)
   : src_(src), device_(device) {
-
   // kernel options
-  size_t num_opts = std::max(autotune_vals.size(), (size_t)1);
+  size_t num_opts = std::max(tune_confs.size(), (size_t)1);
   opts_ = std::vector<options_t>(num_opts, opt);
-  for(size_t i = 0; i < opts_.size(); i++){
-    opts_[i].defines.insert(autotune_vals[i].first.begin(), autotune_vals[i].first.end());
-    opts_[i].num_warps = autotune_vals[i].second;
+  for(size_t i = 0; i < tune_confs.size(); i++){
+    opts_[i].defines.insert(tune_confs[i].defines.begin(), tune_confs[i].defines.end());
+    opts_[i].num_warps = tune_confs[i].num_warps;
   }
   std::shared_ptr<ir::module> ir = kernel::src_to_ir(src, opts_[0]);
   std::vector<ir::argument*> args = ir->get_function_list()[0]->args();
@@ -284,7 +285,7 @@ function::function(const std::string& src, const options_t &opt, driver::device 
   for(ir::argument* arg: args)
     sig_.push_back(convert(arg->get_type()));
   // find indices of autotune keys
-  for(const std::string& name: autotune_key){
+  for(const std::string& name: tune_key){
     auto pred = [&](ir::argument* arg) { return arg->get_name() == name; };
     auto it = std::find_if(args.begin(), args.end(), pred);
     if(it == args.end())
@@ -338,12 +339,11 @@ kernel* function::autotune(const std::string &args, const grid_fn_ty& grid_fn, d
     return it->second;
   // compile kernels
   if(kernels_.find(rt_key) == kernels_.end()){
-    std::map<int, int> align;
-    for(size_t i = 0; i < align_idxs_.size(); i++){
-      align[align_idxs_[i]] = rt_key[i];
-    }
+    std::map<int, ir::attribute> attrs;
+    for(size_t i = 0; i < align_idxs_.size(); i++)
+      attrs.insert({align_idxs_[i] + 1, ir::attribute(ir::multiple_of, rt_key[i])});
     for(const options_t& opt: opts_)
-      kernels_[rt_key].emplace_back(new kernel(src_, opt, device_, align));
+      kernels_[rt_key].emplace_back(new kernel(src_, opt, device_, attrs));
   }
   // run auto-tuner
   double best_ts = INFINITY;

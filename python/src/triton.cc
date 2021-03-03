@@ -1,5 +1,6 @@
 ﻿#include "triton/driver/stream.h"
 #include "triton/runtime/function.h"
+#include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -138,9 +139,15 @@ void init_triton_runtime(py::module &&m) {
   py::class_<rt::kernel>(m, "kernel")
       .def("__call__", &rt::kernel::operator())
       .def_readonly("opt", &rt::kernel::opt);
+  // tune conf
+  py::class_<rt::config>(m, "config")
+      .def(py::init<std::map<std::string, std::string>, int>(),
+           py::arg("defines") = std::map<std::string, std::string>(),
+           py::arg("num_warps"));
+
   // function
   py::class_<rt::function>(m, "function")
-      .def(py::init<std::string, rt::options_t, driver::device *, rt::function::autotune_vals_t, std::vector<std::string>>())
+      .def(py::init<const std::string &, const rt::options_t &, driver::device *, const std::vector<rt::config> &, const std::vector<std::string> &>())
       .def("autotune", &rt::function::autotune, py::return_value_policy::reference_internal)
       .def("signature", &rt::function::get_signature);
 }

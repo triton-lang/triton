@@ -12,8 +12,8 @@
 #include "pybind11.h"
 #include <functional>
 
-NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
-NAMESPACE_BEGIN(detail)
+PYBIND11_NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
+PYBIND11_NAMESPACE_BEGIN(detail)
 
 template <typename Return, typename... Args>
 struct type_caster<std::function<Return(Args...)>> {
@@ -58,20 +58,17 @@ public:
         struct func_handle {
             function f;
             func_handle(function&& f_) : f(std::move(f_)) {}
-            func_handle(const func_handle&) = default;
+            func_handle(const func_handle& f_) {
+                gil_scoped_acquire acq;
+                f = f_.f;
+            }
             ~func_handle() {
                 gil_scoped_acquire acq;
                 function kill_f(std::move(f));
             }
         };
 
-        // value = [hfunc = func_handle(std::move(func))](Args... args) -> Return {
-        //     gil_scoped_acquire acq;
-        //     object retval(hfunc.f(std::forward<Args>(args)...));
-        //     /* Visual studio 2015 parser issue: need parentheses around this expression */
-        //     return (retval.template cast<Return>());
-        // };
-
+        // to emulate 'move initialization capture' in C++11
         struct func_wrapper {
             func_handle hfunc;
             func_wrapper(func_handle&& hf): hfunc(std::move(hf)) {}
@@ -84,7 +81,6 @@ public:
         };
 
         value = func_wrapper(func_handle(std::move(func)));
-
         return true;
     }
 
@@ -104,5 +100,5 @@ public:
                                + make_caster<retval_type>::name + _("]"));
 };
 
-NAMESPACE_END(detail)
-NAMESPACE_END(PYBIND11_NAMESPACE)
+PYBIND11_NAMESPACE_END(detail)
+PYBIND11_NAMESPACE_END(PYBIND11_NAMESPACE)

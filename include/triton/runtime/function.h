@@ -11,6 +11,7 @@
 #include <memory>
 #include <functional>
 // codegen
+#include "triton/ir/function.h"
 #include "triton/ir/context.h"
 #include "triton/runtime/arg.h"
 #include "triton/runtime/error.h"
@@ -108,7 +109,7 @@ public:
                     size_t> ir_to_bin(ir::module& ir, driver::device *dev, const options_t &opt);
 
 public:
-  kernel(const std::string& src, const options_t& opt, driver::device *device, const std::map<int, int>& attrs = {});
+  kernel(const std::string& src, const options_t& opt, driver::device *device, const std::map<int, triton::ir::attribute> &attrs = {});
   void operator()(const std::string& args, driver::stream *stream, const grid_t& grid) const;
   std::string get_asm(asm_mode_t mode);
 
@@ -125,22 +126,24 @@ private:
   size_t shared_mem_;
 };
 
+struct config {
+  std::map<std::string, std::string> defines;
+  int num_warps;
+};
+
 class function {
 public:
   typedef std::function<kernel::grid_t(const options_t&)> grid_fn_ty;
   typedef std::pair<options_t, std::shared_ptr<kernel>> kernel_pair_t;
   typedef std::map<std::vector<uint64_t>, kernel*> cache_t;
-  typedef std::vector<std::pair<std::map<std::string, std::string>, int>> autotune_vals_t;
+  typedef std::vector<config> autotune_confs_t;
 
 public:
   function(const std::string& src, const options_t& opt, driver::device *device,
-           const autotune_vals_t& autotune_vals = {}, const std::vector<std::string> &autotune_key = {});
-  void operator()(const std::string& args, const grid_fn_ty& grid, driver::stream *stream);
+           const std::vector<config>& tune_confs = {}, const std::vector<std::string> &tune_key = {});
   kernel* autotune(const std::string& args, const grid_fn_ty& grid, driver::stream *stream);
+  void operator()(const std::string& args, const grid_fn_ty& grid, driver::stream *stream);
   const std::vector<arg_type> get_signature() { return sig_; }
-
-private:
-  void init_kernels(const std::string& src, const std::vector<options_t> &opts, const autotune_vals_t& autotune_vals, driver::device *device);
 
 private:
   std::map<std::vector<uint64_t>, std::vector<std::shared_ptr<kernel>>> kernels_;

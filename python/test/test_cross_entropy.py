@@ -7,7 +7,7 @@ import pytest
     (M, N, dtype, mode) for M in [1024, 821]
                         for N in [512, 857, 1871, 2089, 8573, 31000]
                         for dtype in ['float16', 'float32']\
-                        for mode  in ['forward', 'backward']
+                        for mode  in ['backward']
     ]
                          )
 def test_op(M, N, dtype, mode):

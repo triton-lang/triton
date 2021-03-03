@@ -32,6 +32,8 @@ def read(path, kernel_names: Optional[List] = None):
         source = _triton.tools.extract_kernels(source, kernel_names)
     return source
 
+config = _triton.runtime.config
+
 class kernel:
     def __init__(self, src, device, defines: Optional[Dict] = None, num_warps: int = 4,
                  autotune_vals: Optional[List] = None, autotune_key: Optional[List] = None):
@@ -60,6 +62,7 @@ class kernel:
         self.opt = _triton.runtime.options()
         self.opt.defines = {k: th_to_triton(v) for k, v in defines.items()}
         self.opt.num_warps = num_warps
+        # autotune_vals = [({}, 4)]
         self.fn = _triton.runtime.function(self.src, self.opt, self.device, autotune_vals, autotune_key)
         self.tys = ''.join([codes[x] for x in self.fn.signature()])
 

@@ -510,7 +510,7 @@ unsigned align::get(ir::value *v, unsigned ax) const {
   int nbytes = nbits / 8;
   unsigned starting_multiple = starting_multiple_.at(v)[ax];
   unsigned max_contiguous = max_contiguous_.at(v)[ax];
-  return std::min(starting_multiple, max_contiguous) / nbytes;
+  return std::max<int>(std::min(starting_multiple, max_contiguous)/nbytes, 1);
 }
 
 std::vector<unsigned> align::contiguous(ir::value* v) const {
