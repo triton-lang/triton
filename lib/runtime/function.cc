@@ -341,7 +341,7 @@ kernel* function::autotune(const std::string &args, const grid_fn_ty& grid_fn, d
   if(kernels_.find(rt_key) == kernels_.end()){
     std::map<int, ir::attribute> attrs;
     for(size_t i = 0; i < align_idxs_.size(); i++){
-      bool is_ptr = sig_[i] == BUFFER_T;
+      bool is_ptr = sig_[align_idxs_[i]] == BUFFER_T;
       attrs.insert({align_idxs_[i] + 1, ir::attribute(is_ptr ? ir::aligned : ir::multiple_of, rt_key[i])});
     }
     for(const options_t& opt: opts_)
