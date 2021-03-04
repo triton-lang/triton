@@ -50,8 +50,9 @@ import torch
 def test_op(TM, TN, TK, SPLITK, NWARP, M, N, K, AT, BT, DTYPE):
     DTYPE = {"float16": torch.float16, "float32": torch.float32}[DTYPE]
     torch.manual_seed(0)
+    defines = {"TM": str(TM), "TN": str(TN), "TK": str(TK), "SPLITK": str(SPLITK)}
     triton.ops._matmul._kernels = dict()
-    triton.ops._matmul._CONFIGS = [({"TM": str(TM), "TN": str(TN), "TK": str(TK), "SPLITK": str(SPLITK)}, NWARP)]
+    triton.ops._matmul._CONFIGS = [triton.config(defines=defines, num_warps=NWARP)]
     if M is None:
         M = TM
     if N is None:

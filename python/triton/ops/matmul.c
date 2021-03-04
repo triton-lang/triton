@@ -1,16 +1,12 @@
 #define STM 8
 #define STN 8
 
-__global__ void matmul(TYPE *A __noalias __readonly __aligned(16),
-                       TYPE *B __noalias __readonly __aligned(16),
-                       TYPE *C __noalias __aligned(16),
+__global__ void matmul(TYPE *A __noalias __readonly,
+                       TYPE *B __noalias __readonly,
+                       TYPE *C __noalias,
                        float alpha,
-                       int M,
-                       int N,
-                       int K __multipleof(16),
-                       int lda __multipleof(LDA_POW2_DIV),
-                       int ldb __multipleof(LDB_POW2_DIV),
-                       int ldc __multipleof(LDC_POW2_DIV),
+                       int M, int N, int K,
+                       int lda, int ldb, int ldc,
                        int *locks) {
   // prologue
   int pid = get_program_id(0);
