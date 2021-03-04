@@ -10,6 +10,7 @@
 #include <functional>
 #include "triton/ir/builder.h"
 #include "triton/ir/metadata.h"
+#include "triton/ir/context.h"
 
 namespace triton{
 
@@ -60,7 +61,7 @@ private:
   void push_function(function *fn) { functions_.push_back(fn); }
 
 public:
-  module(const std::string &name, context &ctx);
+  module(const std::string &name);
   context& get_context();
   builder& get_builder();
   // Setters
@@ -94,7 +95,7 @@ public:
 
 private:
   std::string name_;
-  context &context_;
+  context context_;
   builder builder_;
   std::map<val_key_t, value*> values_;
   std::map<val_key_t, type*> types_;

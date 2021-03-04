@@ -1,4 +1,5 @@
 import torch
+import os
 
 def sparsify_tensor(x, mask, block):
     ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
@@ -77,8 +78,12 @@ class Mark:
         df.to_csv(os.path.join(result_path, f"{bench.plot_name}.csv"))
 
     def run(self, result_path, with_plot):
-        for bench in self.benchmarks:
-            self._run(bench, result_path, with_plot)
+        with open(os.path.join(result_path, "results.html"), "w") as html:
+            html.write("<html><body>\n")
+            for bench in self.benchmarks:
+                self._run(bench, result_path, with_plot)
+                html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
+            html.write("</body></html>\n")
 
 def perf_report(benchmarks):
     wrapper = lambda fn: Mark(fn, benchmarks)
