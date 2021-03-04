@@ -11,7 +11,7 @@
 
 #include "detail/common.h"
 
-PYBIND11_NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
+NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
 
 class options {
 public:
@@ -62,4 +62,4 @@ private:
     state previous_state;
 };
 
-PYBIND11_NAMESPACE_END(PYBIND11_NAMESPACE)
+NAMESPACE_END(PYBIND11_NAMESPACE)
