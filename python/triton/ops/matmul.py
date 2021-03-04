@@ -6,18 +6,18 @@ class _matmul(torch.autograd.Function):
     src = triton.read(os.path.join(os.path.dirname(__file__), "matmul.c"))
 
     _DEFAULT_CONFIGS = [
-        ({"TM": "128", "TN": "128", "TK": "32", "SPLITK": "1"}, 4),
-        ({'TM': '64', 'TN': '128', 'TK': '32', 'SPLITK': '1'}, 4),
-        ({'TM': '128', 'TN': '64', 'TK': '32', 'SPLITK': '1'}, 4),
-        ({'TM': '64', 'TN': '64', 'TK': '64', 'SPLITK': '1'}, 4),
-        ({'TM': '32', 'TN': '128', 'TK': '64', 'SPLITK': '1'}, 4),
-        ({'TM': '128', 'TN': '32', 'TK': '64', 'SPLITK': '1'}, 4),
-        ({'TM': '64', 'TN': '32', 'TK': '64', 'SPLITK': '1'}, 2),
-        ({'TM': '32', 'TN': '64', 'TK': '64', 'SPLITK': '1'}, 2),
-        # ({'TM': '32', 'TN': '128', 'TK': '32', 'SPLITK': '2'}, 4),
-        # ({'TM': '32', 'TN': '128', 'TK': '32', 'SPLITK': '2'}, 4),
-        # ({'TM': '128', 'TN': '32', 'TK': '32', 'SPLITK': '4'}, 4),
-        # ({'TM': '128', 'TN': '32', 'TK': '32', 'SPLITK': '4'}, 4),
+        triton.config(defines={"TM": "128", "TN": "128", "TK": "32", "SPLITK": "1"}, num_warps=4),
+        triton.config(defines={'TM': '64', 'TN': '128', 'TK': '32', 'SPLITK': '1'}, num_warps=4),
+        triton.config(defines={'TM': '128', 'TN': '64', 'TK': '32', 'SPLITK': '1'}, num_warps=4),
+        triton.config(defines={'TM': '64', 'TN': '64', 'TK': '64', 'SPLITK': '1'}, num_warps=4),
+        triton.config(defines={'TM': '32', 'TN': '128', 'TK': '64', 'SPLITK': '1'}, num_warps=4),
+        triton.config(defines={'TM': '128', 'TN': '32', 'TK': '64', 'SPLITK': '1'}, num_warps=4),
+        triton.config(defines={'TM': '64', 'TN': '32', 'TK': '64', 'SPLITK': '1'}, num_warps=2),
+        triton.config(defines={'TM': '32', 'TN': '64', 'TK': '64', 'SPLITK': '1'}, num_warps=2),
+        triton.config(defines={'TM': '32', 'TN': '128', 'TK': '32', 'SPLITK': '2'}, num_warps=4),
+        triton.config(defines={'TM': '32', 'TN': '128', 'TK': '32', 'SPLITK': '2'}, num_warps=4),
+        triton.config(defines={'TM': '128', 'TN': '32', 'TK': '32', 'SPLITK': '4'}, num_warps=4),
+        triton.config(defines={'TM': '128', 'TN': '32', 'TK': '32', 'SPLITK': '4'}, num_warps=4),
     ]
     _CONFIGS = _DEFAULT_CONFIGS
 

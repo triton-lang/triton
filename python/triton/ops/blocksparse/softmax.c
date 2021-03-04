@@ -1,17 +1,16 @@
-__global__ void forward(TYPE *X __readonly __noalias __aligned(16),
+__global__ void forward(TYPE *X __readonly __noalias,
                         float scale,
-                        int *LUT __readonly __noalias __aligned(16),
-                        TYPE *RPE __readonly __noalias __aligned(16),
-                        TYPE *KP_M __readonly __noalias __aligned(16),
-                        TYPE *ATTN_M __readonly __noalias __aligned(16),
+                        int *LUT __readonly __noalias,
+                        TYPE *RPE __readonly __noalias,
+                        TYPE *KP_M __readonly __noalias,
+                        TYPE *ATTN_M __readonly __noalias,
                         int sizemax,
-                        long stride_zx __multipleof(4),
-                        long stride_zrpe __multipleof(BLOCK),
-                        int stride_hrpe __multipleof(BLOCK),
-                        int stride_srpe __multipleof(BLOCK),
-                        int stride_zkpm __multipleof(BLOCK),
-                        int stride_zattnm __multipleof(BLOCK))
-{
+                        long stride_zx,
+                        long stride_zrpe,
+                        int stride_hrpe,
+                        int stride_srpe,
+                        int stride_zkpm,
+                        int stride_zattnm) {
   int pidhm = get_program_id(0);
   int pidz = get_program_id(1);
   // create index ranges
@@ -97,14 +96,13 @@ __global__ void forward(TYPE *X __readonly __noalias __aligned(16),
   *? (check)px = y / ysum;
 }
 
-__global__ void backward(TYPE *X __readonly __noalias __aligned(16),
+__global__ void backward(TYPE *X __readonly __noalias,
                          float scale,
-                         TYPE *DX __readonly __noalias __aligned(16),
+                         TYPE *DX __readonly __noalias,
                          int *LUT,
                          int sizemax,
-                         long stride_zx __multipleof(BLOCK),
-                         long stride_zdx __multipleof(BLOCK))
-{
+                         long stride_zx,
+                         long stride_zdx) {
   int pidhm = get_program_id(0);
   int pidz = get_program_id(1);
   // create index ranges
