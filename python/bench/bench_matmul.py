@@ -1,8 +1,6 @@
 import triton
 import torch
 import os
-import torch_bst
-from torch_bst.jit.matmul import linear
 
 def rounded_linspace(low, high, steps, div):
     ret = torch.linspace(low, high, steps)
