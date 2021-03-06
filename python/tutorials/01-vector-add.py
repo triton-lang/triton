@@ -1,14 +1,15 @@
 """
 Vector Addition
 =================
-In this tutorial, we will see how to construct a simple, high-performance vector addition using Triton. You will learn:
-* The basic syntax of the Triton programming language
-* The best practices for creating PyTorch custom operators using the `triton.kernel` Python API
-* The best practices for validating and benchmarking custom ops against native reference implementations
+In this tutorial, you will write a simple, high-performance vector addition using Triton and learn about:
+
+- The basic syntax of the Triton programming language
+- The best practices for creating PyTorch custom operators using the :code:`triton.kernel` Python API
+- The best practices for validating and benchmarking custom ops against native reference implementations
 """
 
 # %%
-# Writing the Compute Kernel
+# Compute Kernel
 # --------------------------
 #
 # Each compute kernel is declared using the :code:`__global__` attribute, and executed many times in parallel
@@ -49,23 +50,20 @@ In this tutorial, we will see how to construct a simple, high-performance vector
 # The existence of arrays as a primitive data-type for Triton comes with a number of advantages that are highlighted in the `MAPL'2019 Triton paper <http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf>`_.
 
 # %%
-# Writing the Torch bindings
+# Torch bindings
 # --------------------------
-# The only thing that matters when it comes to Triton and Torch is the `triton.kernel` class. This allows you to transform the above C-like function into a callable python object that can be used to modify `torch.tensor` objects.
+# The only thing that matters when it comes to Triton and Torch is the :code:`triton.kernel` class. This allows you to transform the above C-like function into a callable python object that can be used to modify :code:`torch.tensor` objects. To create a :code:`triton.kernel`, you only need three things:
 #
-# To create a `triton.kernel`, you only need three things:
-# - `source: string`: the source-code of the kernel you want to create
-# - `device: torch.device`: the device you want to compile this code for
-# - `defines: dict`: the set of macros that you want the pre-processor to `#define` for you
+# - :code:`source: string`: the source-code of the kernel you want to create
+# - :code:`device: torch.device`: the device you want to compile this code for
+# - :code:`defines: dict`: the set of macros that you want the pre-processor to `#define` for you
 
 import torch
 import triton
 
-# %%
 # source-code for Triton compute kernel
 # here we just copy-paste the above code without the extensive comments.
 # you may prefer to store it in a .c file and load it from there instead.
-
 _src = """
 __global__ void add(float* z, float* x, float* y, int N){
     // program id
@@ -82,13 +80,10 @@ __global__ void add(float* z, float* x, float* y, int N){
 }
     """
 
-# %%
-# This function returns a callable `triton.kernel` object
-# created from the above source code.
+
+# This function returns a callable `triton.kernel` object created from the above source code.
 # For portability, we maintain a cache of kernels for different `torch.device`
 # We compile the kernel with -DBLOCK=1024
-
-
 def make_add_kernel(device):
     cache = make_add_kernel.cache
     if device not in cache:
@@ -99,12 +94,9 @@ def make_add_kernel(device):
 
 make_add_kernel.cache = dict()
 
-# %%
-# This is a standard torch custom autograd Function
-# The only difference is that we can now use the above kernel
-# in the `forward` and `backward` functions.`
 
-
+# This is a standard torch custom autograd Function;
+# The only difference is that we can now use the above kernel in the `forward` and `backward` functions.`
 class _add(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, y):
@@ -127,11 +119,11 @@ class _add(torch.autograd.Function):
         return z
 
 
-# Just like we standard PyTorch ops We use the `.apply` method to create a callable object for our function
+# Just like we standard PyTorch ops We use the :code:`.apply` method to create a callable object for our function
 add = _add.apply
 
 # %%
-# Writing a Unit Test
+# Unit Test
 # --------------------------
 torch.manual_seed(0)
 x = torch.rand(98432, device='cuda')
@@ -143,7 +135,7 @@ print(zb)
 print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.abs(za - zb))}')
 
 # %%
-# Writing a Benchmark
+# Benchmarking
 # --------------------------
 # We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does
 

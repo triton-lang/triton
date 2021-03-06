@@ -1,16 +1,23 @@
 """
 Fused Softmax
 =================
+In this tutorial, you will write a fused softmax layer that outperform's PyTorch implementation and learn about:
+
+- The benefits of kernel fusion for bandwidth-bound operations.
+- The syntax and usage of reduction operators in Triton.
+- The automatic vectorization capabilities of the Triton compiler.
 """
 
 # %%
+# Motivations
+# ------------
 # Custom GPU kernels for elementwise additions are educationally valuable but won't get you very far in practice.
 # Let us consider instead the case of a simple (numerically stabilized) softmax operation:
 
 import torch
 
 
-# Compute the row-wise softmax of x \in R^{M \times N}
+# Compute the row-wise softmax of x
 def naive_softmax(x):
     # read  MN elements ; write M  elements
     x_max = torch.max(x, axis=1)[0]
@@ -27,11 +34,13 @@ def naive_softmax(x):
 
 
 # %%
-# When implemented naively in pytorch, computing :math:`y` requires reading :math:`7MN` elements from DRAM and writing back :math:`3MN + 2M` elements.
-# Instead, we want to write a custom "fused" pytorch operators that only reads X once and does all the necessary computations on-chip. This would require reading and writing back only :math:`MN` bytes, so we could expect a theoretical speed-up of 5x. In practice, though, we expect less because our kernel will spend some time computing exponentials and moving data around in shared memory.
+# When implemented naively in pytorch, computing :code:`y = naive_softmax(x)` for :math:`x \in R^{M \times N}` requires reading :math:`7MN` elements from DRAM and writing back :math:`3MN + 2M` elements.
+# Instead, we want to write a custom "fused" pytorch operators that only reads X once and does all the necessary computations on-chip.
+# This would require reading and writing back only :math:`MN` bytes, so we could expect a theoretical speed-up of 5x.
+# In practice, though, we expect less because our kernel will spend some time computing exponentials and moving data around in shared memory.
 
 # %%
-# Writing the Compute Kernel
+# Compute Kernel
 # ----------------------------
 # Our softmax kernel works as follows: each program loads a row of X and writes back a normalized row of Y. Note that one important limitation of Triton is that each block must have a power-of-two number of elements, which means that we need to guard the memory operations properly if we want to handle any possible input shapes:
 #
@@ -69,14 +78,16 @@ def naive_softmax(x):
 #    }
 
 # %%
-# Writing the Compute Kernel
+# Torch Bindings
 # ----------------------------
+# We need to make sure that BLOCK is the smallest power of two
+# greater than the number of rows N of the input matrix.
+# Different values of BLOCK will result in different kernels
 
 import torch
 import triton
 
-# %%
-# source-code for Triton compute kernel
+# Source code for the Triton kernel
 _src = """
 __global__ void softmax(float* Y, float* X, int stride_ym, int stride_xm, int M, int N){
     int    m             = get_program_id(0);
@@ -94,12 +105,6 @@ __global__ void softmax(float* Y, float* X, int stride_ym, int stride_xm, int M,
 """
 
 
-# %%
-# Writing the Torch bindings
-# ----------------------------
-# We need to make sure that BLOCK is the smallest power of two
-# greater than the number of rows N of the input matrix.
-# Different values of BLOCK will result in different kernels
 def next_power_of_2(n):
     n -= 1
     n |= n >> 1
@@ -156,7 +161,7 @@ print(torch.allclose(y_tri, y_ref))
 # Seems to work!
 
 # %%
-# Benchmark
+# Benchmarking
 # ----------
 
 import matplotlib.pyplot as plt
