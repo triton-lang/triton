@@ -1,0 +1,14 @@
+
+:orphan:
+
+.. _sphx_glr_getting-started_tutorials_sg_execution_times:
+
+Computation times
+=================
+**00:08.983** total execution time for **getting-started_tutorials** files:
+
++-----------------------------------------------------------------------------------------+-----------+--------+
+| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``) | 00:05.758 | 0.0 MB |
++-----------------------------------------------------------------------------------------+-----------+--------+
+| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)       | 00:03.225 | 0.0 MB |
++-----------------------------------------------------------------------------------------+-----------+--------+
