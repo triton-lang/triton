@@ -15,7 +15,6 @@ Welcome to Triton's documentation!
 
 .. toctree::
    :maxdepth: 1
-   :caption: Tutorials
-   
-   Vector Addition <tutorials/01-vector-add.ipynb>
-   Fused Softmax <tutorials/02-fused-softmax.ipynb>
+   :caption: Installation Instructions
+
+   tutorials/index
