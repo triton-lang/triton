@@ -30,8 +30,17 @@
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['nbsphinx', 'sphinx.ext.autosectionlabel']
+extensions = ['sphinx.ext.autosectionlabel']
 autosectionlabel_prefix_document = True
+
+# Sphinx gallery
+extensions += ['sphinx_gallery.gen_gallery']
+sphinx_gallery_conf = {
+    'examples_dirs': '../python/tutorials/',
+    'gallery_dirs': 'tutorials',
+    'filename_pattern': '',
+    'ignore_pattern': r'__init__\.py',
+}
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -69,7 +78,7 @@ language = None
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', '**.ipynb_checkpoints']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
