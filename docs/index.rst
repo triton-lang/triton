@@ -8,14 +8,14 @@ Welcome to Triton's documentation!
 
 .. toctree::
    :maxdepth: 1
-   :caption: Contents:
+   :caption: Installation Instructions
 
-   installation/index
+   installation/packaged-binaries
+   installation/from-source
 
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+.. toctree::
+   :maxdepth: 1
+   :caption: Tutorials
+   
+   Vector Addition <https://github.com/ptillet/triton/blob/master/python/tutorials/01-vector-add.ipynb>
+   Fused Softmax <https://github.com/ptillet/triton/blob/master/python/tutorials/02-fused-softmax.ipynb>
