@@ -1,21 +1,18 @@
-.. Triton documentation master file, created by
-   sphinx-quickstart on Mon Feb 10 01:01:37 2020.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
 Welcome to Triton's documentation!
 ==================================
 
+Triton is an imperative language and compiler for parallel programming. It aims to provide a programming environment for productively writing custom DNN compute kernels capable of running at maximal throughput on modern GPU hardware.
+
+Getting Started
+---------------
+
+- Follow the :doc:`installation instructions <getting-started/installation>` for your platform of choice.
+- Take a look at the :doc:`tutorials <getting-started/tutorials/index>` to learn how to write your first Triton program.
+
 .. toctree::
    :maxdepth: 1
-   :caption: Installation Instructions
+   :caption: Getting Started
+   :hidden:
 
-   installation/packaged-binaries
-   installation/from-source
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Tutorials
-   
-   Vector Addition <tutorials/01-vector-add.ipynb>
-   Fused Softmax <tutorials/02-fused-softmax.ipynb>
+   getting-started/installation
+   getting-started/tutorials/index
