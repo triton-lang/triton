@@ -17,5 +17,5 @@ Welcome to Triton's documentation!
    :maxdepth: 1
    :caption: Tutorials
    
-   Vector Addition <https://github.com/ptillet/triton/blob/master/python/tutorials/01-vector-add.ipynb>
-   Fused Softmax <https://github.com/ptillet/triton/blob/master/python/tutorials/02-fused-softmax.ipynb>
+   Vector Addition <tutorials/01-vector-add.ipynb>
+   Fused Softmax <tutorials/02-fused-softmax.ipynb>
