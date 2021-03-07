@@ -1,7 +1,7 @@
 """
 Vector Addition
 =================
-In this tutorial, you will write a simple, high-performance vector addition using Triton and learn about:
+In this tutorial, you will write a simple vector addition using Triton and learn about:
 
 - The basic syntax of the Triton programming language
 - The best practices for creating PyTorch custom operators using the :code:`triton.kernel` Python API
@@ -123,8 +123,14 @@ class _add(torch.autograd.Function):
 add = _add.apply
 
 # %%
+# We can now use the above function to compute the sum of two `torch.tensor` objects:
+
+# %%
 # Unit Test
 # --------------------------
+#
+# Of course, the first thing that we should check is that whether kernel is correct. This is pretty easy to test, as shown below:
+
 torch.manual_seed(0)
 x = torch.rand(98432, device='cuda')
 y = torch.rand(98432, device='cuda')
@@ -135,16 +141,39 @@ print(zb)
 print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.abs(za - zb))}')
 
 # %%
+# Seems like we're good to go!
+
+# %%
 # Benchmarking
 # --------------------------
-# We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does
+# We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
 
-warmup = 10
-rep = 200
-for N in [2**i for i in range(17, 26, 1)]:
-    x = torch.rand(N, device='cuda')
-    y = torch.rand(N, device='cuda')
-    triton_ms = triton.testing.do_bench(lambda: add(x, y), warmup=warmup, rep=rep)
-    torch_ms = triton.testing.do_bench(lambda: x + y, warmup=warmup, rep=rep)
-    # print the performance of triton and torch as well as the achieved bandwidth
-    print(f'{N} {triton_ms:.3f} {torch_ms:.3f}')
+import matplotlib.pyplot as plt
+
+# There are three tensors of 4N bytes each. So the bandwidth of a given kernel
+# is 12N / time_ms * 1e-6 GB/s
+gbps = lambda N, ms: 12 * N / ms * 1e-6
+# We want to benchmark small and large vector alike
+sizes = [2**i for i in range(12, 25, 1)]
+triton_bw = []
+torch_bw = []
+for N in sizes:
+    x = torch.rand(N, device='cuda', dtype=torch.float32)
+    y = torch.rand(N, device='cuda', dtype=torch.float32)
+    # Triton provide a do_bench utility function that can be used to benchmark
+    # arbitrary workloads. It supports a `warmup` parameter that is used to stabilize
+    # GPU clock speeds as well as a `rep` parameter that controls the number of times
+    # the benchmark is repeated. Importantly, we set `clear_l2 = True` to make sure
+    # that the L2 cache does not contain any element of x before each kernel call when
+    # N is small.
+    do_bench = lambda fn: gbps(N, triton.testing.do_bench(fn, warmup=10, rep=100, clear_l2=True))
+    triton_bw += [do_bench(lambda: add(x, y))]
+    torch_bw += [do_bench(lambda: x + y)]
+# We plot the results as a semi-log
+plt.semilogx(sizes, triton_bw, label='Triton')
+plt.semilogx(sizes, torch_bw, label='Torch')
+plt.legend()
+plt.show()
+
+# %%
+# Seems like our simple element-wise operation operates at peak bandwidth. While this is a fairly low bar for a custom GPU programming language, this is a good start before we move to more advanced operations.
