@@ -156,6 +156,7 @@ std::tuple<std::shared_ptr<driver::module>,
   layouts.run(ir);
   peephole.run(ir);
   dce.run(ir);
+//  ir::print(ir, std::cout);
   if(target->is_gpu())
     cts.run(ir);
   align.run(ir);
