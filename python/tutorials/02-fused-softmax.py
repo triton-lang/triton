@@ -1,7 +1,7 @@
 """
 Fused Softmax
 =================
-In this tutorial, you will write a fused softmax layer that outperform's PyTorch implementation and learn about:
+In this tutorial, you will write a fused softmax operation (that outperforms PyTorch) and learn about:
 
 - The benefits of kernel fusion for bandwidth-bound operations.
 - The syntax and usage of reduction operators in Triton.
@@ -35,14 +35,16 @@ def naive_softmax(x):
 
 # %%
 # When implemented naively in pytorch, computing :code:`y = naive_softmax(x)` for :math:`x \in R^{M \times N}` requires reading :math:`7MN` elements from DRAM and writing back :math:`3MN + 2M` elements.
-# Instead, we want to write a custom "fused" pytorch operators that only reads X once and does all the necessary computations on-chip.
-# This would require reading and writing back only :math:`MN` bytes, so we could expect a theoretical speed-up of 5x.
-# In practice, though, we expect less because our kernel will spend some time computing exponentials and moving data around in shared memory.
+# This is obviously wasteful; we'd prefer to have a custom "fused" kernel that only reads X once and does all the necessary computations on-chip.
+# In this case, we would be reading and writing back only :math:`MN` bytes, so we could expect a theoretical speed-up of ~5x (i.e., :math:`(10MN + 2M) / 2MN`).
+# In practice, though, we would be getting a bit less as our kernel computes exponentials and internally moves data around in shared memory.
 
 # %%
 # Compute Kernel
-# ----------------------------
-# Our softmax kernel works as follows: each program loads a row of X and writes back a normalized row of Y. Note that one important limitation of Triton is that each block must have a power-of-two number of elements, which means that we need to guard the memory operations properly if we want to handle any possible input shapes:
+# ----------------
+# Our softmax kernel works as follows: each program loads a row of the input X, normalizes it and writes back the result to the output Y.
+# Note that one important limitation of Triton is that each block must have a power-of-two number of elements,
+# so we need to internally "pad" tiles and guard the memory operations properly if we want to handle any possible input shapes:
 #
 #  .. code-block:: C
 #
@@ -61,13 +63,14 @@ def naive_softmax(x):
 #      bool   check[BLOCK] = n < N;
 #      float  x    [BLOCK] = check ? *px : -F32_INFINITY;
 #      // syntax for reduction in Triton is:
-#      // x[..., OPERATOR, ...]
+#      // x[:, :, OPERATOR, :, :]
 #      //            ^
 #      //           index
-#      // The operators currently supported are {min, max, +}
+#      // where operator is in {min, max, +}
+#      // for 1D vectors, this is just x[OPERATOR].
 #      float  z    [BLOCK] = x - x[max];
-#      // The exponential in Triton is fast but approximate
-#      // (i.e., like __expf in CUDA)
+#      // Note that exponentials in Triton are fast
+#      // but approximate (i.e., think __expf in CUDA)
 #      float  num  [BLOCK] = exp(z);
 #      float  denom         = num[+];
 #      // The result of the reduction is now stored in y
@@ -79,10 +82,10 @@ def naive_softmax(x):
 
 # %%
 # Torch Bindings
-# ----------------------------
-# We need to make sure that BLOCK is the smallest power of two
-# greater than the number of rows N of the input matrix.
-# Different values of BLOCK will result in different kernels
+# ---------------
+# Here our torch bindings is quite similar to that of the vector addition mentioned in the previous tutorial.
+# We just need to make sure that BLOCK is the smallest power of two greater than the number of columns N of the input matrix.
+# This means that different values of BLOCK will result in different kernels
 
 import torch
 import triton
@@ -105,6 +108,7 @@ __global__ void softmax(float* Y, float* X, int stride_ym, int stride_xm, int M,
 """
 
 
+# helper function to get the smaller power-of-two larger than a given number
 def next_power_of_2(n):
     n -= 1
     n |= n >> 1
@@ -116,16 +120,20 @@ def next_power_of_2(n):
     return n
 
 
-_kernels = dict()
-
-
+# kernel caching mechanism
 def make_kernel(N, device):
+    cache = make_kernel.cache
+    # Now are kernels are indexed not only by the provided device but also
+    # by the rounded number of columns in the input matrix
     BLOCK = next_power_of_2(N)
     key = (BLOCK, device)
-    if key not in _kernels:
+    if key not in cache:
         defines = {'BLOCK': BLOCK}
-        _kernels[key] = triton.kernel(_src, device=device, defines=defines)
-    return _kernels[key]
+        cache[key] = triton.kernel(_src, device=device, defines=defines)
+    return cache[key]
+
+
+make_kernel.cache = dict()
 
 
 class _softmax(torch.autograd.Function):
@@ -134,11 +142,10 @@ class _softmax(torch.autograd.Function):
         # constraints of the op
         assert x.dtype == torch.float32
         y = torch.empty_like(x)
-        # *create launch grid*:
-        # here we just launch a grid of M programs
+        # The launch grid is simple: we have one kernel instance per row of the input matrix
         M, N = y.shape
         grid = lambda opt: (M, )
-        # *launch kernel*:
+        # Launch kernel
         kernel = make_kernel(N, y.device)
         kernel(y.data_ptr(), x.data_ptr(), y.stride(0), x.stride(0), M, N, grid=grid)
         return y
@@ -147,40 +154,57 @@ class _softmax(torch.autograd.Function):
 softmax = _softmax.apply
 
 # %%
+# We can use the above softmax function to compute the row-wise softmax of a given matrix.
+
+# %%
 # Unit Test
 # ----------
 
+# %%
+# We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
+# This will allow us to verify that our padding mechanism works.
+
+torch.manual_seed(0)
 x = torch.randn(1823, 781, device='cuda')
 y_tri = softmax(x)
 y_ref = torch.softmax(x, axis=1)
-print(y_tri)
-print(y_ref)
 print(torch.allclose(y_tri, y_ref))
 
-# %%
-# Seems to work!
+#%%
+# As expected, the results are identical.
 
 # %%
 # Benchmarking
-# ----------
+# -------------
+# Here we will benchmark our operation as a function of the number of columns in the input matrix -- assuming 4096 rows.
+# We will then compare its performance against (1) :code:`torch.softmax` and (2) the :code:`naive_softmax` defined above.
 
 import matplotlib.pyplot as plt
 
 M = 4096
-Ns = [128 * i for i in range(2, 50)]
-tri_ms = []
-ref_ms = []
-def_ms = []
+Ns = [256 * i for i in range(2, 50)]
+tri_bw = []
+ref_bw = []
+def_bw = []
 for N in Ns:
     x = torch.randn(M, N, device='cuda', dtype=torch.float32)
     gbps = lambda ms: x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
-    tri_ms += [gbps(triton.testing.do_bench(lambda: softmax(x)))]
-    ref_ms += [gbps(triton.testing.do_bench(lambda: torch.softmax(x, axis=1)))]
-    def_ms += [gbps(triton.testing.do_bench(lambda: naive_softmax(x)))]
+    do_bench = lambda fn: gbps(triton.testing.do_bench(fn, warmup=10, rep=100, clear_l2=True))
+    tri_bw += [do_bench(lambda: softmax(x))]
+    ref_bw += [do_bench(lambda: torch.softmax(x, axis=1))]
+    def_bw += [do_bench(lambda: naive_softmax(x))]
 plt.xlabel('N')
 plt.ylabel('Bandwidth (GB/s)')
-plt.plot(Ns, tri_ms, label='Triton')
-plt.plot(Ns, ref_ms, label='Torch')
-plt.plot(Ns, def_ms, label='Naive')
+plt.plot(Ns, tri_bw, label='Triton')
+plt.plot(Ns, ref_bw, label='Torch')
+plt.plot(Ns, def_bw, label='Naive')
 plt.legend()
 plt.show()
+
+# %%
+# In the above plot, we can see that:
+#
+#  - Triton is 4-5x faster than the naive implementation, which is consistent with our theoretical predictions.
+#  - Triton is significantly faster than :code:`torch.softmax` for very large input matrices. My guess from looking at the source-code of the `PyTorch kernel <https://github.com/pytorch/pytorch/blob/9409a3a39b7149bb2d833a89e0c944109bef7c27/caffe2/operators/softmax_ops.cu#L240>`_ is that PyTorch only partially fuses the computation of the softmax.
+#    This means that -- when temporary data is too large to fit entirely in the GPU's cache -- it transfers almost twice the amount of data necessary.
+#    Note that our Triton kernel is not only faster than PyTorch's CUDA kernel, it is also **easier to read, understand and maintain**.
