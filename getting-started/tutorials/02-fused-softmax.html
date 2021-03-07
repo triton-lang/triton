@@ -179,7 +179,7 @@ to download the full example code</p>
 </div>
 <div class="sphx-glr-example-title section" id="fused-softmax">
 <span id="sphx-glr-getting-started-tutorials-02-fused-softmax-py"></span><h1>Fused Softmax<a class="headerlink" href="#fused-softmax" title="Permalink to this headline">¶</a></h1>
-<p>In this tutorial, you will write a fused softmax layer that outperform’s PyTorch implementation and learn about:</p>
+<p>In this tutorial, you will write a fused softmax operation (that outperforms PyTorch) and learn about:</p>
 <ul class="simple">
 <li><p>The benefits of kernel fusion for bandwidth-bound operations.</p></li>
 <li><p>The syntax and usage of reduction operators in Triton.</p></li>
@@ -209,13 +209,15 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
 </pre></div>
 </div>
 <p>When implemented naively in pytorch, computing <code class="code docutils literal notranslate"><span class="pre">y</span> <span class="pre">=</span> <span class="pre">naive_softmax(x)</span></code> for <span class="math notranslate nohighlight">\(x \in R^{M \times N}\)</span> requires reading <span class="math notranslate nohighlight">\(7MN\)</span> elements from DRAM and writing back <span class="math notranslate nohighlight">\(3MN + 2M\)</span> elements.
-Instead, we want to write a custom “fused” pytorch operators that only reads X once and does all the necessary computations on-chip.
-This would require reading and writing back only <span class="math notranslate nohighlight">\(MN\)</span> bytes, so we could expect a theoretical speed-up of 5x.
-In practice, though, we expect less because our kernel will spend some time computing exponentials and moving data around in shared memory.</p>
+This is obviously wasteful; we’d prefer to have a custom “fused” kernel that only reads X once and does all the necessary computations on-chip.
+In this case, we would be reading and writing back only <span class="math notranslate nohighlight">\(MN\)</span> bytes, so we could expect a theoretical speed-up of ~5x (i.e., <span class="math notranslate nohighlight">\((10MN + 2M) / 2MN\)</span>).
+In practice, though, we would be getting a bit less as our kernel computes exponentials and internally moves data around in shared memory.</p>
 </div>
 <div class="section" id="compute-kernel">
 <h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Permalink to this headline">¶</a></h2>
-<p>Our softmax kernel works as follows: each program loads a row of X and writes back a normalized row of Y. Note that one important limitation of Triton is that each block must have a power-of-two number of elements, which means that we need to guard the memory operations properly if we want to handle any possible input shapes:</p>
+<p>Our softmax kernel works as follows: each program loads a row of the input X, normalizes it and writes back the result to the output Y.
+Note that one important limitation of Triton is that each block must have a power-of-two number of elements,
+so we need to internally “pad” tiles and guard the memory operations properly if we want to handle any possible input shapes:</p>
 <blockquote>
 <div><div class="highlight-C notranslate"><div class="highlight"><pre><span></span><span class="n">__global__</span> <span class="kt">void</span> <span class="n">softmax</span><span class="p">(</span><span class="kt">float</span><span class="o">*</span> <span class="n">Y</span><span class="p">,</span> <span class="kt">float</span><span class="o">*</span> <span class="n">X</span><span class="p">,</span> <span class="kt">int</span> <span class="n">stride_xm</span><span class="p">,</span> <span class="kt">int</span> <span class="n">stride_ym</span><span class="p">,</span> <span class="kt">int</span> <span class="n">M</span><span class="p">,</span> <span class="kt">int</span> <span class="n">N</span><span class="p">){</span>
   <span class="c1">// row index</span>
@@ -232,13 +234,14 @@ In practice, though, we expect less because our kernel will spend some time comp
   <span class="kt">bool</span>   <span class="n">check</span><span class="p">[</span><span class="n">BLOCK</span><span class="p">]</span> <span class="o">=</span> <span class="n">n</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">;</span>
   <span class="kt">float</span>  <span class="n">x</span>    <span class="p">[</span><span class="n">BLOCK</span><span class="p">]</span> <span class="o">=</span> <span class="n">check</span> <span class="o">?</span> <span class="o">*</span><span class="nl">px</span> <span class="p">:</span> <span class="o">-</span><span class="n">F32_INFINITY</span><span class="p">;</span>
   <span class="c1">// syntax for reduction in Triton is:</span>
-  <span class="c1">// x[..., OPERATOR, ...]</span>
+  <span class="c1">// x[:, :, OPERATOR, :, :]</span>
   <span class="c1">//            ^</span>
   <span class="c1">//           index</span>
-  <span class="c1">// The operators currently supported are {min, max, +}</span>
+  <span class="c1">// where operator is in {min, max, +}</span>
+  <span class="c1">// for 1D vectors, this is just x[OPERATOR].</span>
   <span class="kt">float</span>  <span class="n">z</span>    <span class="p">[</span><span class="n">BLOCK</span><span class="p">]</span> <span class="o">=</span> <span class="n">x</span> <span class="o">-</span> <span class="n">x</span><span class="p">[</span><span class="n">max</span><span class="p">];</span>
-  <span class="c1">// The exponential in Triton is fast but approximate</span>
-  <span class="c1">// (i.e., like __expf in CUDA)</span>
+  <span class="c1">// Note that exponentials in Triton are fast</span>
+  <span class="c1">// but approximate (i.e., think __expf in CUDA)</span>
   <span class="kt">float</span>  <span class="n">num</span>  <span class="p">[</span><span class="n">BLOCK</span><span class="p">]</span> <span class="o">=</span> <span class="n">exp</span><span class="p">(</span><span class="n">z</span><span class="p">);</span>
   <span class="kt">float</span>  <span class="n">denom</span>         <span class="o">=</span> <span class="n">num</span><span class="p">[</span><span class="o">+</span><span class="p">];</span>
   <span class="c1">// The result of the reduction is now stored in y</span>
@@ -253,9 +256,9 @@ In practice, though, we expect less because our kernel will spend some time comp
 </div>
 <div class="section" id="torch-bindings">
 <h2>Torch Bindings<a class="headerlink" href="#torch-bindings" title="Permalink to this headline">¶</a></h2>
-<p>We need to make sure that BLOCK is the smallest power of two
-greater than the number of rows N of the input matrix.
-Different values of BLOCK will result in different kernels</p>
+<p>Here our torch bindings is quite similar to that of the vector addition mentioned in the previous tutorial.
+We just need to make sure that BLOCK is the smallest power of two greater than the number of columns N of the input matrix.
+This means that different values of BLOCK will result in different kernels</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
 <span class="kn">import</span> <span class="nn">triton</span>
 
@@ -277,6 +280,7 @@ Different values of BLOCK will result in different kernels</p>
 <span class="s2">&quot;&quot;&quot;</span>
 
 
+<span class="c1"># helper function to get the smaller power-of-two larger than a given number</span>
 <span class="k">def</span> <span class="nf">next_power_of_2</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
     <span class="n">n</span> <span class="o">-=</span> <span class="mi">1</span>
     <span class="n">n</span> <span class="o">|=</span> <span class="n">n</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span>
@@ -288,16 +292,20 @@ Different values of BLOCK will result in different kernels</p>
     <span class="k">return</span> <span class="n">n</span>
 
 
-<span class="n">_kernels</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
-
-
+<span class="c1"># kernel caching mechanism</span>
 <span class="k">def</span> <span class="nf">make_kernel</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+    <span class="n">cache</span> <span class="o">=</span> <span class="n">make_kernel</span><span class="o">.</span><span class="n">cache</span>
+    <span class="c1"># Now are kernels are indexed not only by the provided device but also</span>
+    <span class="c1"># by the rounded number of columns in the input matrix</span>
     <span class="n">BLOCK</span> <span class="o">=</span> <span class="n">next_power_of_2</span><span class="p">(</span><span class="n">N</span><span class="p">)</span>
     <span class="n">key</span> <span class="o">=</span> <span class="p">(</span><span class="n">BLOCK</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_kernels</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">cache</span><span class="p">:</span>
         <span class="n">defines</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;BLOCK&#39;</span><span class="p">:</span> <span class="n">BLOCK</span><span class="p">}</span>
-        <span class="n">_kernels</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">kernel</span><span class="p">(</span><span class="n">_src</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">defines</span><span class="o">=</span><span class="n">defines</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">_kernels</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+        <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">kernel</span><span class="p">(</span><span class="n">_src</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">defines</span><span class="o">=</span><span class="n">defines</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+
+
+<span class="n">make_kernel</span><span class="o">.</span><span class="n">cache</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
 
 
 <span class="k">class</span> <span class="nc">_softmax</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
@@ -306,11 +314,10 @@ Different values of BLOCK will result in different kernels</p>
         <span class="c1"># constraints of the op</span>
         <span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span>
         <span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-        <span class="c1"># *create launch grid*:</span>
-        <span class="c1"># here we just launch a grid of M programs</span>
+        <span class="c1"># The launch grid is simple: we have one kernel instance per row of the input matrix</span>
         <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">y</span><span class="o">.</span><span class="n">shape</span>
         <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">opt</span><span class="p">:</span> <span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="p">)</span>
-        <span class="c1"># *launch kernel*:</span>
+        <span class="c1"># Launch kernel</span>
         <span class="n">kernel</span> <span class="o">=</span> <span class="n">make_kernel</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">y</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
         <span class="n">kernel</span><span class="p">(</span><span class="n">y</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span> <span class="n">x</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span> <span class="n">y</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">x</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">grid</span><span class="o">=</span><span class="n">grid</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">y</span>
@@ -319,75 +326,63 @@ Different values of BLOCK will result in different kernels</p>
 <span class="n">softmax</span> <span class="o">=</span> <span class="n">_softmax</span><span class="o">.</span><span class="n">apply</span>
 </pre></div>
 </div>
+<p>We can use the above softmax function to compute the row-wise softmax of a given matrix.</p>
 </div>
 <div class="section" id="unit-test">
 <h2>Unit Test<a class="headerlink" href="#unit-test" title="Permalink to this headline">¶</a></h2>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1823</span><span class="p">,</span> <span class="mi">781</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">)</span>
+<p>We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
+This will allow us to verify that our padding mechanism works.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1823</span><span class="p">,</span> <span class="mi">781</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">)</span>
 <span class="n">y_tri</span> <span class="o">=</span> <span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 <span class="n">y_ref</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">y_tri</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">y_ref</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">y_tri</span><span class="p">,</span> <span class="n">y_ref</span><span class="p">))</span>
 </pre></div>
 </div>
 <p class="sphx-glr-script-out">Out:</p>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>tensor([[2.0935e-03, 6.4551e-04, 9.8605e-05,  ..., 3.3981e-04, 2.7386e-03,
-         9.1986e-05],
-        [7.0923e-04, 6.7521e-04, 5.1366e-04,  ..., 9.8392e-04, 2.6547e-04,
-         6.9062e-04],
-        [1.4032e-04, 5.8826e-04, 1.1694e-03,  ..., 6.6423e-04, 1.8178e-04,
-         6.7049e-04],
-        ...,
-        [1.1767e-03, 4.2703e-03, 6.0596e-04,  ..., 9.5274e-04, 1.1681e-03,
-         6.4924e-04],
-        [1.0772e-04, 7.4854e-04, 3.1912e-03,  ..., 2.4980e-04, 1.9012e-03,
-         5.2567e-04],
-        [2.8518e-03, 8.1899e-04, 7.7046e-04,  ..., 1.3403e-03, 5.3167e-04,
-         4.3268e-04]], device=&#39;cuda:0&#39;)
-tensor([[2.0935e-03, 6.4551e-04, 9.8605e-05,  ..., 3.3981e-04, 2.7386e-03,
-         9.1986e-05],
-        [7.0923e-04, 6.7521e-04, 5.1366e-04,  ..., 9.8392e-04, 2.6547e-04,
-         6.9062e-04],
-        [1.4032e-04, 5.8826e-04, 1.1694e-03,  ..., 6.6423e-04, 1.8178e-04,
-         6.7049e-04],
-        ...,
-        [1.1767e-03, 4.2703e-03, 6.0596e-04,  ..., 9.5274e-04, 1.1681e-03,
-         6.4924e-04],
-        [1.0772e-04, 7.4854e-04, 3.1912e-03,  ..., 2.4980e-04, 1.9012e-03,
-         5.2567e-04],
-        [2.8518e-03, 8.1899e-04, 7.7046e-04,  ..., 1.3403e-03, 5.3167e-04,
-         4.3268e-04]], device=&#39;cuda:0&#39;)
-True
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>True
 </pre></div>
 </div>
-<p>Seems to work!</p>
+<p>As expected, the results are identical.</p>
 </div>
 <div class="section" id="benchmarking">
 <h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Permalink to this headline">¶</a></h2>
+<p>Here we will benchmark our operation as a function of the number of columns in the input matrix – assuming 4096 rows.
+We will then compare its performance against (1) <code class="code docutils literal notranslate"><span class="pre">torch.softmax</span></code> and (2) the <code class="code docutils literal notranslate"><span class="pre">naive_softmax</span></code> defined above.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">M</span> <span class="o">=</span> <span class="mi">4096</span>
-<span class="n">Ns</span> <span class="o">=</span> <span class="p">[</span><span class="mi">128</span> <span class="o">*</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">50</span><span class="p">)]</span>
-<span class="n">tri_ms</span> <span class="o">=</span> <span class="p">[]</span>
-<span class="n">ref_ms</span> <span class="o">=</span> <span class="p">[]</span>
-<span class="n">def_ms</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">Ns</span> <span class="o">=</span> <span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">50</span><span class="p">)]</span>
+<span class="n">tri_bw</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">ref_bw</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">def_bw</span> <span class="o">=</span> <span class="p">[]</span>
 <span class="k">for</span> <span class="n">N</span> <span class="ow">in</span> <span class="n">Ns</span><span class="p">:</span>
     <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">gbps</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">ms</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">nelement</span><span class="p">()</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="o">*</span> <span class="mf">1e-9</span> <span class="o">/</span> <span class="p">(</span><span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-3</span><span class="p">)</span>
-    <span class="n">tri_ms</span> <span class="o">+=</span> <span class="p">[</span><span class="n">gbps</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">)))]</span>
-    <span class="n">ref_ms</span> <span class="o">+=</span> <span class="p">[</span><span class="n">gbps</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)))]</span>
-    <span class="n">def_ms</span> <span class="o">+=</span> <span class="p">[</span><span class="n">gbps</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">naive_softmax</span><span class="p">(</span><span class="n">x</span><span class="p">)))]</span>
+    <span class="n">do_bench</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">fn</span><span class="p">:</span> <span class="n">gbps</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="n">fn</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">rep</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">clear_l2</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+    <span class="n">tri_bw</span> <span class="o">+=</span> <span class="p">[</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">))]</span>
+    <span class="n">ref_bw</span> <span class="o">+=</span> <span class="p">[</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">))]</span>
+    <span class="n">def_bw</span> <span class="o">+=</span> <span class="p">[</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">naive_softmax</span><span class="p">(</span><span class="n">x</span><span class="p">))]</span>
 <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s1">&#39;N&#39;</span><span class="p">)</span>
 <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s1">&#39;Bandwidth (GB/s)&#39;</span><span class="p">)</span>
-<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">Ns</span><span class="p">,</span> <span class="n">tri_ms</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;Triton&#39;</span><span class="p">)</span>
-<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">Ns</span><span class="p">,</span> <span class="n">ref_ms</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;Torch&#39;</span><span class="p">)</span>
-<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">Ns</span><span class="p">,</span> <span class="n">def_ms</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;Naive&#39;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">Ns</span><span class="p">,</span> <span class="n">tri_bw</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;Triton&#39;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">Ns</span><span class="p">,</span> <span class="n">ref_bw</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;Torch&#39;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">Ns</span><span class="p">,</span> <span class="n">def_bw</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;Naive&#39;</span><span class="p">)</span>
 <span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
 <img alt="02 fused softmax" class="sphx-glr-single-img" src="../../_images/sphx_glr_02-fused-softmax_001.png" />
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  5.758 seconds)</p>
+<p>In the above plot, we can see that:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>Triton is 4-5x faster than the naive implementation, which is consistent with our theoretical predictions.</p></li>
+<li><p>Triton is significantly faster than <code class="code docutils literal notranslate"><span class="pre">torch.softmax</span></code> for very large input matrices. My guess from looking at the source-code of the <a class="reference external" href="https://github.com/pytorch/pytorch/blob/9409a3a39b7149bb2d833a89e0c944109bef7c27/caffe2/operators/softmax_ops.cu#L240">PyTorch kernel</a> is that PyTorch only partially fuses the computation of the softmax.
+This means that – when temporary data is too large to fit entirely in the GPU’s cache – it transfers almost twice the amount of data necessary.
+Note that our Triton kernel is not only faster than PyTorch’s CUDA kernel, it is also <strong>easier to read, understand and maintain</strong>.</p></li>
+</ul>
+</div></blockquote>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  33.773 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>

@@ -20,7 +20,7 @@
 
 Vector Addition
 =================
-In this tutorial, you will write a simple, high-performance vector addition using Triton and learn about:
+In this tutorial, you will write a simple vector addition using Triton and learn about:
 
 - The basic syntax of the Triton programming language
 - The best practices for creating PyTorch custom operators using the :code:`triton.kernel` Python API
@@ -154,14 +154,21 @@ The only thing that matters when it comes to Triton and Torch is the :code:`trit
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 126-128
+.. GENERATED FROM PYTHON SOURCE LINES 126-127
+
+We can now use the above function to compute the sum of two `torch.tensor` objects:
+
+.. GENERATED FROM PYTHON SOURCE LINES 129-133
 
 Unit Test
 --------------------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 128-137
+Of course, the first thing that we should check is that whether kernel is correct. This is pretty easy to test, as shown below:
+
+.. GENERATED FROM PYTHON SOURCE LINES 133-143
 
 .. code-block:: default
+
 
     torch.manual_seed(0)
     x = torch.rand(98432, device='cuda')
@@ -189,52 +196,67 @@ Unit Test
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 138-141
+.. GENERATED FROM PYTHON SOURCE LINES 144-145
+
+Seems like we're good to go!
+
+.. GENERATED FROM PYTHON SOURCE LINES 147-150
 
 Benchmarking
 --------------------------
-We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does
+We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
 
-.. GENERATED FROM PYTHON SOURCE LINES 141-150
+.. GENERATED FROM PYTHON SOURCE LINES 150-178
 
 .. code-block:: default
 
 
-    warmup = 10
-    rep = 200
-    for N in [2**i for i in range(17, 26, 1)]:
-        x = torch.rand(N, device='cuda')
-        y = torch.rand(N, device='cuda')
-        triton_ms = triton.testing.do_bench(lambda: add(x, y), warmup=warmup, rep=rep)
-        torch_ms = triton.testing.do_bench(lambda: x + y, warmup=warmup, rep=rep)
-        # print the performance of triton and torch as well as the achieved bandwidth
-        print(f'{N} {triton_ms:.3f} {torch_ms:.3f}')
+    import matplotlib.pyplot as plt
+
+    # There are three tensors of 4N bytes each. So the bandwidth of a given kernel
+    # is 12N / time_ms * 1e-6 GB/s
+    gbps = lambda N, ms: 12 * N / ms * 1e-6
+    # We want to benchmark small and large vector alike
+    sizes = [2**i for i in range(12, 25, 1)]
+    triton_bw = []
+    torch_bw = []
+    for N in sizes:
+        x = torch.rand(N, device='cuda', dtype=torch.float32)
+        y = torch.rand(N, device='cuda', dtype=torch.float32)
+        # Triton provide a do_bench utility function that can be used to benchmark
+        # arbitrary workloads. It supports a `warmup` parameter that is used to stabilize
+        # GPU clock speeds as well as a `rep` parameter that controls the number of times
+        # the benchmark is repeated. Importantly, we set `clear_l2 = True` to make sure
+        # that the L2 cache does not contain any element of x before each kernel call when
+        # N is small.
+        do_bench = lambda fn: gbps(N, triton.testing.do_bench(fn, warmup=10, rep=100, clear_l2=True))
+        triton_bw += [do_bench(lambda: add(x, y))]
+        torch_bw += [do_bench(lambda: x + y)]
+    # We plot the results as a semi-log
+    plt.semilogx(sizes, triton_bw, label='Triton')
+    plt.semilogx(sizes, torch_bw, label='Torch')
+    plt.legend()
+    plt.show()
 
 
 
-.. rst-class:: sphx-glr-script-out
 
- Out:
-
- .. code-block:: none
-
-    131072 0.022 0.006
-    262144 0.021 0.005
-    524288 0.022 0.017
-    1048576 0.037 0.037
-    2097152 0.074 0.073
-    4194304 0.144 0.143
-    8388608 0.289 0.285
-    16777216 0.566 0.562
-    33554432 1.131 1.121
+.. image:: /getting-started/tutorials/images/sphx_glr_01-vector-add_001.png
+    :alt: 01 vector add
+    :class: sphx-glr-single-img
 
 
 
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 179-179
+
+Seems like our simple element-wise operation operates at peak bandwidth. While this is a fairly low bar for a custom GPU programming language, this is a good start before we move to more advanced operations.
 
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  3.225 seconds)
+   **Total running time of the script:** ( 0 minutes  4.784 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_01-vector-add.py:
