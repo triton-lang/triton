@@ -1616,20 +1616,22 @@ void generator::visit_make_range(ir::make_range* x) {
   }
 }
 
-
-
-void generator::visit_undef_value(ir::undef_value *ud) {
-  vals_[ud][{}] = llvm::UndefValue::get(cvt(ud->get_type()));
+void generator::visit_undef_value(ir::undef_value *x) {
+  Type* ty = cvt(x->get_type()->get_scalar_ty());
+  for(indices_t idx: idxs_.at(x))
+    vals_[x][idx] = llvm::UndefValue::get(ty);
 }
 
-void generator::visit_constant_int(ir::constant_int *cst){
-  Type *ty = cvt(cst->get_type()->get_scalar_ty());
-  vals_[cst][{}] = ConstantInt::get(ty, cst->get_value());
+void generator::visit_constant_int(ir::constant_int *x){
+  Type *ty = cvt(x->get_type()->get_scalar_ty());
+  for(indices_t idx: idxs_.at(x))
+    vals_[x][idx] = ConstantInt::get(ty, x->get_value());
 }
 
-void generator::visit_constant_fp(ir::constant_fp *cst){
-  Type *ty = cvt(cst->get_type()->get_scalar_ty());
-  vals_[cst][{}] = ConstantFP::get(ty, cst->get_value());
+void generator::visit_constant_fp(ir::constant_fp *x){
+  Type *ty = cvt(x->get_type()->get_scalar_ty());
+  for(indices_t idx: idxs_.at(x))
+    vals_[x][idx] = ConstantFP::get(ty, x->get_value());
 }
 
 void generator::visit_alloc_const(ir::alloc_const *alloc) {

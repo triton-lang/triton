@@ -267,23 +267,56 @@ void Generator::VisitTransOp(TransOp *trans) {
 }
 
 void Generator::VisitConditionalOp(ConditionalOp* condOp) {
-//  auto &instructions = bld_->get_insert_block()->get_inst_list();
+  auto &instructions = bld_->get_insert_block()->get_inst_list();
   VisitExpr(condOp->cond_);
-  ir::value* cond = ret_;
+  ir::value* true_cond = ret_;
+  ir::instruction* start = instructions.back();
   VisitExpr(condOp->exprTrue_);
   ir::value* true_val = ret_;
   VisitExpr(condOp->exprFalse_);
   ir::value* false_val = ret_;
-  if(ir::unmasked_load_inst* ld = dynamic_cast<ir::unmasked_load_inst*>(true_val)) {
-    if(true_val->get_type()->is_tile_ty() && !false_val->get_type()->is_tile_ty())
-      false_val = bld_->create_splat(false_val, cond->get_type()->get_tile_shapes());
-    ir::value* new_ld = bld_->create_masked_load(ld->get_pointer_operand(),  cond, false_val);
-    ld->replace_all_uses_with(new_ld);
-    ld->erase_from_parent();
-    return set_ret(new_ld);
+  auto begin = std::find(instructions.begin(), instructions.end(), start);
+  bool is_in_true_cond = true;
+  for(auto it = begin; it != instructions.end(); it++){
+    ir::instruction* instr = *it;
+    // we mask load with `cond` when used to compute true_value
+    // we mask load with `!cond` when used to compute false_value
+    if(auto ld = dynamic_cast<ir::unmasked_load_inst*>(instr)){
+      bld_->set_insert_point(ld);
+      ir::type* ty = ld->get_type();
+      ir::value* cond = is_in_true_cond ? true_cond : true_cond;
+      ir::value* ptr = ld->get_pointer_operand();
+      ir::value* else_val = ir::undef_value::get(ty);
+      ir::value* masked_ld = bld_->create_masked_load(ptr, cond, else_val);
+      ld->replace_all_uses_with(masked_ld);
+      ld->erase_from_parent();
+      if(true_val == ld)
+          true_val = masked_ld;
+      if(false_val == ld)
+          false_val = masked_ld;
+      it = std::find(instructions.begin(), instructions.end(), masked_ld);
+    }
+    if(instr == true_val)
+        is_in_true_cond = false;
   }
-  return set_ret(bld_->create_select(cond, true_val, false_val));
-//  return error_not_implemented();
+  bld_->set_insert_point(bld_->get_insert_block());
+  return set_ret(bld_->create_select(true_cond, true_val, false_val));
+
+//    VisitExpr(condOp->cond_);
+//    ir::value* cond = ret_;
+//    VisitExpr(condOp->exprTrue_);
+//    ir::value* true_val = ret_;
+//    VisitExpr(condOp->exprFalse_);
+//    ir::value* false_val = ret_;
+//    if(ir::unmasked_load_inst* ld = dynamic_cast<ir::unmasked_load_inst*>(true_val)) {
+//      if(true_val->get_type()->is_tile_ty() && !false_val->get_type()->is_tile_ty())
+//        false_val = bld_->create_splat(false_val, cond->get_type()->get_tile_shapes());
+//      ir::value* new_ld = bld_->create_masked_load(ld->get_pointer_operand(),  cond, false_val);
+//      ld->replace_all_uses_with(new_ld);
+//      ld->erase_from_parent();
+//      return set_ret(new_ld);
+//    }
+//    return set_ret(bld_->create_select(cond, true_val, false_val));
 }
 
 void Generator::VisitFuncCall(FuncCall* funcCall) {

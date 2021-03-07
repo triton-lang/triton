@@ -32,6 +32,7 @@ private:
   bool rewrite_mult(ir::instruction *value, ir::builder& builder);
   bool rewrite_unit_red(ir::instruction *value, ir::builder& builder);
   bool rewrite_gep_ptr_min_off_plus_off(ir::instruction *value, ir::builder& builder);
+  bool rewrite_select_masked_load(ir::instruction *value, ir::builder& builder);
   bool rewrite_load_to_shared(ir::instruction *value, ir::builder& builder);
 
 private:

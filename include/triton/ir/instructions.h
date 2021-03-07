@@ -748,6 +748,9 @@ private:
 
 public:
   static instruction* create(value *pred, value *if_value, value *else_value, const std::string &name = "", instruction *next = nullptr);
+  value* get_pred_op() { return get_operand(0); }
+  value* get_if_value_op() { return get_operand(1); }
+  value* get_else_value_op() { return get_operand(2); }
 };
 
 //===----------------------------------------------------------------------===//
