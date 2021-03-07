@@ -26,7 +26,7 @@ __global__ void backward(TYPE *neg_logprobs, long *indices, TYPE *dneg_logprobs,
   TYPE local_dn = *(dneg_logprobs + row);
   // We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
   // and we have -log(p[k]) stored, so this is easy
-  TYPE intermediate[TILE] = check ? exp(-(float[TILE]) * ? (check)px) : 0;
+  TYPE intermediate[TILE] = check ? exp(-(float[TILE]) * px) : 0;
   // selected_logit_idx is selected logit index for our token
   bool find_one[TILE] = ((0 ... TILE) == local_ind);
   intermediate = intermediate - ((TYPE[TILE])find_one);

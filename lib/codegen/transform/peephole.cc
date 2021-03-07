@@ -193,6 +193,22 @@ bool peephole::rewrite_gep_ptr_min_off_plus_off(ir::instruction *value, ir::buil
   return false;
 }
 
+bool peephole::rewrite_select_masked_load(ir::instruction *value, ir::builder& builder){
+  auto select = dynamic_cast<ir::select_inst*>(value);
+  if(!select)
+    return false;
+  auto if_value = dynamic_cast<ir::masked_load_inst*>(select->get_if_value_op());
+  if(!if_value)
+    return false;
+  if(select->get_pred_op() != if_value->get_mask_operand())
+    return false;
+  builder.set_insert_point(select);
+  ir::value* new_load = builder.create_masked_load(if_value->get_pointer_operand(),
+                                                   if_value->get_mask_operand(),
+                                                   select->get_else_value_op());
+  select->replace_all_uses_with(new_load);
+  return true;
+}
 
 void peephole::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
@@ -230,6 +246,7 @@ void peephole::run(ir::module &mod) {
 //      was_modified = was_modified || rewrite_trans_phi(i, builder);
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);
+      was_modified = was_modified || rewrite_select_masked_load(i, builder);
       if(tgt_->as_nvidia()->sm() >= 80)
         was_modified = was_modified || rewrite_load_to_shared(i, builder);
       if(was_modified)
