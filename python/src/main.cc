@@ -10,7 +10,7 @@ PYBIND11_MODULE(libtriton, m) {
   init_triton(m);
   init_torch_utils(m);
   init_superblocking(m);
-#ifdef WITH_CUTLASS_BINDINGS
+  //#ifdef WITH_CUTLASS_BINDINGS
   init_cutlass(m);
-#endif
+  //#endif
 }

@@ -9,6 +9,17 @@ def sparsify_tensor(x, mask, block):
     return ret
 
 
+def cutlass_matmul(a, b):
+    try:
+        import triton._C.libtriton.cutlass as _cutlass
+    except:
+        return None
+    M, N = a.shape[0], b.shape[1]
+    c = torch.empty_strided((M, N), (1, M), dtype=a.dtype, device=a.device)
+    _cutlass.matmul(a, b, c)
+    return c
+
+
 def mask_tensor(x, mask, block, value=0):
     ret = x.clone()
     for h, i, j in zip(*(mask == 0).nonzero(as_tuple=True)):

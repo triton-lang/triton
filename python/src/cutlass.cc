@@ -41,7 +41,14 @@ void run(int M, int N, int K,
          const Operation *operation,
          cudaStream_t stream) {
 
-  GemmConfiguration configuration{{M, N, K}, lda, ldb, ldc, ldd, 1};
+  GemmUniversalConfiguration configuration{
+      GemmUniversalMode::kGemm,
+      {M, N, K},
+      1,
+      lda,
+      ldb,
+      ldc,
+      ldd};
 
   // host workspace size
   uint64_t host_workspace_size_needed = operation->get_host_workspace_size(&configuration);
@@ -92,7 +99,7 @@ const Operation *autotune(int M, int N, int K,
   // index operation table with functional key
   GemmFunctionalKey key(
       Provider::kCUTLASS,
-      GemmKind::kGemm,
+      GemmKind::kUniversal,
       element_compute,
       element_scalar,
       element_A,
@@ -102,28 +109,29 @@ const Operation *autotune(int M, int N, int K,
       layout_B,
       transform_B,
       element_C);
+
   auto operators_it = Singleton::get().operation_table.gemm_operations.find(key);
   if (operators_it == Singleton::get().operation_table.gemm_operations.end())
-    throw std::runtime_error("Unable to find gemm operation");
+    throw std::runtime_error("Unable to find gemm operation 0");
   if (operators_it->second.empty())
-    throw std::runtime_error("Unable to find gemm operation");
+    throw std::runtime_error("Unable to find gemm operation 1");
 
   cudaDeviceProp device_prop;
   cudaError_t error = cudaGetDeviceProperties(&device_prop, device_id);
   if (error != cudaSuccess)
-    throw std::runtime_error("Unable to get device properties");
+    throw std::runtime_error("Unable to get device properties 2");
   int cc = device_prop.major * 10 + device_prop.minor;
 
   // index operation table with preference key
-  // assume 16-bytes aligned memory pointers
-  int alignment = 16;
+  // assume 8-bytes aligned memory pointers
+  int alignment = 8;
   GemmPreferenceKey preference_key(cc, alignment);
   auto autotune_it = operators_it->second.find(preference_key);
   if (autotune_it == operators_it->second.end())
-    throw std::runtime_error("Unable to find gemm operation");
+    throw std::runtime_error("Unable to find gemm operation 3");
   const std::vector<const Operation *> &operations = autotune_it->second;
   if (operations.empty())
-    throw std::runtime_error("Unable to find gemm operation");
+    throw std::runtime_error("Unable to find gemm operation 4");
 
   // check if configuration was already autotuned
   tune_key_t tune_key{key, preference_key, M, N, K};
@@ -159,8 +167,8 @@ void cutlass_matmul(torch::Tensor A, torch::Tensor B, torch::Tensor C) {
   size_t K = A.size(1);
   size_t lda = A.stride(0);
   size_t ldb = B.stride(0);
-  size_t ldc = C.stride(0);
-  size_t ldd = C.stride(0);
+  size_t ldc = C.stride(1);
+  size_t ldd = C.stride(1);
   void *ptr_A = A.data_ptr();
   void *ptr_B = B.data_ptr();
   void *ptr_C = C.data_ptr();
@@ -206,9 +214,11 @@ void cutlass_matmul(torch::Tensor A, torch::Tensor B, torch::Tensor C) {
                                  element_B, layout_B, transform_B, ptr_B, ldb,
                                  &beta, element_C, ptr_C, ldc, ptr_D, ldd, scalar_mode,
                                  dev_id, stream);
+  run(M, N, K, lda, ldb, ldc, ldd, ptr_A, ptr_B, ptr_C, ptr_D, &alpha, &beta,
+      scalar_mode, op, stream);
 }
 
 void init_cutlass(pybind11::module &m) {
   pybind11::module subm = m.def_submodule("cutlass");
-  m.def("matmul", &cutlass_matmul, "matrix multiplication");
+  subm.def("matmul", &cutlass_matmul, "matrix multiplication");
 }
