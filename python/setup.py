@@ -14,6 +14,7 @@ from setuptools.command.test import test as TestCommand
 import distutils.spawn
 import torch
 
+
 def find_llvm():
     versions = ["-10", "-10.0", ""]
     supported = ["llvm-config{v}".format(v=v) for v in versions]
@@ -28,19 +29,23 @@ def find_llvm():
     version = os.popen("{config} --version".format(config=config)).read()
     raise RuntimeError("Version {v} not supported. ".format(v=version) + instructions)
 
+
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=""):
         Extension.__init__(self, name, sources=[])
         self.sourcedir = os.path.abspath(sourcedir)
         self.path = path
 
+
 class CMakeBuild(build_ext):
     def run(self):
         try:
             out = subprocess.check_output(["cmake", "--version"])
         except OSError:
-            raise RuntimeError("CMake must be installed to build the following extensions: " +
-                               ", ".join(e.name for e in self.extensions))
+            raise RuntimeError(
+                "CMake must be installed to build the following extensions: " +
+                ", ".join(e.name for e in self.extensions)
+            )
 
         if platform.system() == "Windows":
             cmake_version = LooseVersion(re.search(r"version\s*([\d.]+)", out.decode()).group(1))
@@ -92,6 +97,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", sourcedir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
+
 setup(
     name="triton",
     version="1.0.0",
@@ -101,7 +107,10 @@ setup(
     long_description="",
     packages=["triton", "triton/_C", "triton/ops", "triton/ops/blocksparse"],
     install_requires=["numpy", "torch"],
-    package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
+    package_data={
+        "triton/ops": ["*.c"],
+        "triton/ops/blocksparse": ["*.c"]
+    },
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},
