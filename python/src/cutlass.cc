@@ -4,6 +4,7 @@
 #include "cutlass/library/singleton.h"
 #include "pybind11/pybind11.h"
 #include "triton/tools/bench.hpp"
+#include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 
 using namespace cutlass;
@@ -38,7 +39,7 @@ void run(int M, int N, int K,
          void const *alpha, void const *beta,
          ScalarPointerMode scalar_mode,
          const Operation *operation,
-         triton::driver::stream *stream) {
+         cudaStream_t stream) {
 
   GemmConfiguration configuration{{M, N, K}, lda, ldb, ldc, ldd, 1};
 
@@ -54,15 +55,14 @@ void run(int M, int N, int K,
     throw std::runtime_error("Unable to find gemm operation");
   static void *device_workspace;
 
-  cudaStream_t cudaStream = (cudaStream_t)*stream->cu();
   // Initialize host and device workspaces
-  Status status = operation->initialize(&configuration, host_workspace, device_workspace, cudaStream);
+  Status status = operation->initialize(&configuration, host_workspace, device_workspace, stream);
   if (status != cutlass::Status::kSuccess)
     throw std::runtime_error("Unable to initialize workspace");
 
   // Run the operator
   GemmArguments arguments{ptr_A, ptr_B, ptr_C, ptr_D, alpha, beta, scalar_mode};
-  operation->run(&arguments, host_workspace, device_workspace, cudaStream);
+  operation->run(&arguments, host_workspace, device_workspace, stream);
 }
 
 const Operation *autotune(int M, int N, int K,
@@ -87,7 +87,7 @@ const Operation *autotune(int M, int N, int K,
                           int ldd,
                           ScalarPointerMode scalar_mode,
                           int device_id,
-                          triton::driver::stream *stream) {
+                          cudaStream_t stream) {
 
   // index operation table with functional key
   GemmFunctionalKey key(
@@ -136,7 +136,8 @@ const Operation *autotune(int M, int N, int K,
   for (const Operation *op : operations) {
     auto fn = [&]() { run(M, N, K, lda, ldb, ldc, ldd, ptr_A, ptr_B, ptr_C, ptr_D,
                           alpha, beta, scalar_mode, op, stream); };
-    double ms = triton::tools::bench(fn, stream, 10, 25);
+    triton::driver::cu_stream tt_stream((CUstream)stream, false);
+    double ms = triton::tools::bench(fn, &tt_stream, 10, 25);
     if (ms < best_ms) {
       best_ms = ms;
       best = op;
@@ -152,7 +153,7 @@ std::map<caffe2::TypeIdentifier, NumericTypeID> type_map = {
     {caffe2::TypeMeta::Id<float>(), NumericTypeID::kF32},
     {caffe2::TypeMeta::Id<double>(), NumericTypeID::kF64}};
 
-void cutlass_gemm(torch::Tensor A, torch::Tensor B, torch::Tensor C) {
+void cutlass_matmul(torch::Tensor A, torch::Tensor B, torch::Tensor C) {
   size_t M = A.size(0);
   size_t N = B.size(1);
   size_t K = A.size(1);
@@ -160,9 +161,9 @@ void cutlass_gemm(torch::Tensor A, torch::Tensor B, torch::Tensor C) {
   size_t ldb = B.stride(0);
   size_t ldc = C.stride(0);
   size_t ldd = C.stride(0);
-  void *ptr_A = A.data_ptr<void>();
-  void *ptr_B = B.data_ptr<void>();
-  void *ptr_C = C.data_ptr<void>();
+  void *ptr_A = A.data_ptr();
+  void *ptr_B = B.data_ptr();
+  void *ptr_C = C.data_ptr();
   void *ptr_D = ptr_C;
   float alpha = 1.0f;
   float beta = 0.0f;
@@ -196,4 +197,18 @@ void cutlass_gemm(torch::Tensor A, torch::Tensor B, torch::Tensor C) {
   NumericTypeID element_scalar = NumericTypeID::kF32;
   ComplexTransform transform_A = ComplexTransform::kNone;
   ComplexTransform transform_B = ComplexTransform::kNone;
+  // runtime flags
+  int dev_id = C.device().index();
+  cudaStream_t stream = c10::cuda::getCurrentCUDAStream(dev_id).stream();
+  // compute
+  const Operation *op = autotune(M, N, K, element_compute, element_scalar, &alpha,
+                                 element_A, layout_A, transform_A, ptr_A, lda,
+                                 element_B, layout_B, transform_B, ptr_B, ldb,
+                                 &beta, element_C, ptr_C, ldc, ptr_D, ldd, scalar_mode,
+                                 dev_id, stream);
+}
+
+void init_cutlass(pybind11::module &m) {
+  pybind11::module subm = m.def_submodule("cutlass");
+  m.def("matmul", &cutlass_matmul, "matrix multiplication");
 }
