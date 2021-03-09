@@ -1,6 +1,11 @@
 import torch
 import os
 
+try:
+    import triton._C.libtriton.cutlass as _cutlass
+except ImportError:
+    _cutlass = None
+
 
 def sparsify_tensor(x, mask, block):
     ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
@@ -10,10 +15,8 @@ def sparsify_tensor(x, mask, block):
 
 
 def cutlass_matmul(a, b):
-    try:
-        import triton._C.libtriton.cutlass as _cutlass
-    except:
-        return None
+    if _cutlass is None:
+        raise RuntimeError("Cannot find cutlass library")
     M, N = a.shape[0], b.shape[1]
     c = torch.empty_strided((M, N), (1, M), dtype=a.dtype, device=a.device)
     _cutlass.matmul(a, b, c)

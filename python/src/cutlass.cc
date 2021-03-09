@@ -10,25 +10,7 @@
 using namespace cutlass;
 using namespace cutlass::library;
 
-typedef std::tuple<GemmFunctionalKey, GemmPreferenceKey, int, int, int> tune_key_t;
-
-struct hash {
-  size_t operator()(const tune_key_t &t) const {
-    size_t seed = 0;
-    auto update_seed = [&](int v) {
-      seed ^= v + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    };
-    update_seed(GemmFunctionalKeyHasher()(std::get<0>(t)));
-    update_seed(std::hash<int>()(std::get<1>(t).compute_capability));
-    update_seed(std::hash<int>()(std::get<1>(t).alignment));
-    update_seed(std::hash<int>()(std::get<2>(t)));
-    update_seed(std::hash<int>()(std::get<3>(t)));
-    update_seed(std::hash<int>()(std::get<4>(t)));
-  }
-};
-
-std::unordered_map<tune_key_t, const Operation *, hash>
-    op_cache;
+std::map<std::vector<size_t>, const Operation *> op_cache_;
 
 static int const kHostWorkspaceSize = (4 << 10);
 static int const kDeviceWorkspaceSize = (4 << 20);
@@ -112,14 +94,14 @@ const Operation *autotune(int M, int N, int K,
 
   auto operators_it = Singleton::get().operation_table.gemm_operations.find(key);
   if (operators_it == Singleton::get().operation_table.gemm_operations.end())
-    throw std::runtime_error("Unable to find gemm operation 0");
+    throw std::runtime_error("Unable to find gemm operation");
   if (operators_it->second.empty())
-    throw std::runtime_error("Unable to find gemm operation 1");
+    throw std::runtime_error("Unable to find gemm operation");
 
   cudaDeviceProp device_prop;
   cudaError_t error = cudaGetDeviceProperties(&device_prop, device_id);
   if (error != cudaSuccess)
-    throw std::runtime_error("Unable to get device properties 2");
+    throw std::runtime_error("Unable to get device properties");
   int cc = device_prop.major * 10 + device_prop.minor;
 
   // index operation table with preference key
@@ -128,15 +110,10 @@ const Operation *autotune(int M, int N, int K,
   GemmPreferenceKey preference_key(cc, alignment);
   auto autotune_it = operators_it->second.find(preference_key);
   if (autotune_it == operators_it->second.end())
-    throw std::runtime_error("Unable to find gemm operation 3");
+    throw std::runtime_error("Unable to find gemm operation");
   const std::vector<const Operation *> &operations = autotune_it->second;
   if (operations.empty())
-    throw std::runtime_error("Unable to find gemm operation 4");
-
-  // check if configuration was already autotuned
-  tune_key_t tune_key{key, preference_key, M, N, K};
-  if (op_cache.find(tune_key) != op_cache.end())
-    return op_cache[tune_key];
+    throw std::runtime_error("Unable to find gemm operation");
 
   // auto-tune
   const Operation *best = nullptr;
@@ -151,7 +128,6 @@ const Operation *autotune(int M, int N, int K,
       best = op;
     }
   }
-  op_cache[tune_key] = best;
   return best;
 }
 
@@ -206,16 +182,22 @@ void cutlass_matmul(torch::Tensor A, torch::Tensor B, torch::Tensor C) {
   ComplexTransform transform_A = ComplexTransform::kNone;
   ComplexTransform transform_B = ComplexTransform::kNone;
   // runtime flags
-  int dev_id = C.device().index();
+  size_t dev_id = C.device().index();
   cudaStream_t stream = c10::cuda::getCurrentCUDAStream(dev_id).stream();
-  // compute
-  const Operation *op = autotune(M, N, K, element_compute, element_scalar, &alpha,
-                                 element_A, layout_A, transform_A, ptr_A, lda,
-                                 element_B, layout_B, transform_B, ptr_B, ldb,
-                                 &beta, element_C, ptr_C, ldc, ptr_D, ldd, scalar_mode,
-                                 dev_id, stream);
+  // auto-tune
+  std::vector<size_t> tune_key = {M, N, K, (size_t)element_A, (size_t)element_B, (size_t)element_C,
+                                  dev_id, (size_t)element_compute, (size_t)scalar_mode};
+  auto it = op_cache_.find(tune_key);
+  if (it == op_cache_.end()) {
+    const Operation *op = autotune(M, N, K, element_compute, element_scalar, &alpha,
+                                   element_A, layout_A, transform_A, ptr_A, lda,
+                                   element_B, layout_B, transform_B, ptr_B, ldb,
+                                   &beta, element_C, ptr_C, ldc, ptr_D, ldd, scalar_mode,
+                                   dev_id, stream);
+    it = op_cache_.insert({tune_key, op}).first;
+  }
   run(M, N, K, lda, ldb, ldc, ldd, ptr_A, ptr_B, ptr_C, ptr_D, &alpha, &beta,
-      scalar_mode, op, stream);
+      scalar_mode, it->second, stream);
 }
 
 void init_cutlass(pybind11::module &m) {
