@@ -23,6 +23,7 @@ square_confs = [
     for op_mode in ['sdd', 'dsd', 'dds']  for layout_mode in ['tril', 'dense']
 ]
 
+
 @triton.testing.perf_report(square_confs)
 def bench_matmul(M, N, K, block, layout_mode, op_mode, AT, BT, dtype, provider, warmup=5, rep=5):
     Z, H = 1, 1
@@ -37,19 +38,20 @@ def bench_matmul(M, N, K, block, layout_mode, op_mode, AT, BT, dtype, provider, 
     a = torch.randn((Z, H, K, M) if AT else (Z, H, M, K), dtype=dtype, device='cuda')
     b = torch.randn((Z, H, N, K) if BT else (Z, H, K, N), dtype=dtype, device='cuda')
     # create op
+    tflops = lambda ms: num_flops / ms * 1e3
     if provider == 'triton':
         op = triton.ops.blocksparse.matmul(layout, block, op_mode, trans_a=AT, trans_b=BT)
         # inputs
         a = triton.testing.sparsify_tensor(a, layout, block) if op_mode == 'dsd' else a
         b = triton.testing.sparsify_tensor(b, layout, block) if op_mode == 'dds' else b
-        ms = triton.testing.do_bench(lambda: op(a, b), warmup=warmup, rep=rep)
+        mean_ms, min_ms, max_ms = triton.testing.do_bench(lambda: op(a, b), warmup=warmup, rep=rep)
         num_flops = {
             'sdd': 2 * Z * K * float(layout.sum()) * block * block,\
             'dsd': 2 * Z * N * float(layout.sum()) * block * block,\
             'dds': 2 * Z * M * float(layout.sum()) * block * block
         }[op_mode]*1e-12
-        triton_tflops = num_flops / ms * 1e3
-        return triton_tflops
+        return tflops(mean_ms), tflops(min_ms), tflops(max_ms)
+
 
 # -------------------------------
 # Softmax
@@ -70,6 +72,7 @@ square_confs = [
     for layout_mode in ['dense', 'tril']
 ]
 
+
 @triton.testing.perf_report(square_confs)
 def bench_softmax(M, N, block, layout_mode, dtype, provider, warmup=10, rep=50):
     Z, H = 1, 1
@@ -82,6 +85,6 @@ def bench_softmax(M, N, block, layout_mode, dtype, provider, warmup=10, rep=50):
     if provider == 'triton':
         a = triton.testing.sparsify_tensor(a, layout, block)
         op = triton.ops.blocksparse.softmax(layout, block)
-        ms = triton.testing.do_bench(lambda: op(a), warmup=warmup, rep=rep)
-        gbps = (2 * a.numel() * a.element_size() * 1e-9) / (ms * 1e-3)
-        return gbps
+        gbps = lambda ms: (2 * a.numel() * a.element_size() * 1e-9) / (ms * 1e-3)
+        mean_ms, min_ms, max_ms = triton.testing.do_bench(lambda: op(a), warmup=warmup, rep=rep)
+        return gbps(mean_ms), gbps(min_ms), gbps(max_ms)
