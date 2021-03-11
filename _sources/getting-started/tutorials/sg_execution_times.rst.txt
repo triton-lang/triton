@@ -5,10 +5,10 @@
 
 Computation times
 =================
-**00:33.773** total execution time for **getting-started_tutorials** files:
+**00:27.420** total execution time for **getting-started_tutorials** files:
 
 +-----------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``) | 00:33.773 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``) | 00:21.653 | 0.0 MB |
 +-----------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)       | 00:00.000 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)       | 00:05.768 | 0.0 MB |
 +-----------------------------------------------------------------------------------------+-----------+--------+
