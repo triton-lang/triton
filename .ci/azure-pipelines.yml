@@ -30,7 +30,7 @@ steps:
     source $(venv)/bin/activate
     pip install matplotlib pandas
     cd python/bench
-    python -m run --with-plots
+    python -m run 
 
 - publish: python/bench/results
   artifact: Benchmarks

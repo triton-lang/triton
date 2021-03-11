@@ -147,33 +147,35 @@ print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.
 # Benchmarking
 # --------------------------
 # We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
+# To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of our custom op.
+# for different problem sizes.
 
-import matplotlib.pyplot as plt
 
-# There are three tensors of 4N bytes each. So the bandwidth of a given kernel
-# is 12N / time_ms * 1e-6 GB/s
-gbps = lambda N, ms: 12 * N / ms * 1e-6
-# We want to benchmark small and large vector alike
-sizes = [2**i for i in range(12, 25, 1)]
-triton_bw = []
-torch_bw = []
-for N in sizes:
-    x = torch.rand(N, device='cuda', dtype=torch.float32)
-    y = torch.rand(N, device='cuda', dtype=torch.float32)
-    # Triton provide a do_bench utility function that can be used to benchmark
-    # arbitrary workloads. It supports a `warmup` parameter that is used to stabilize
-    # GPU clock speeds as well as a `rep` parameter that controls the number of times
-    # the benchmark is repeated. Importantly, we set `clear_l2 = True` to make sure
-    # that the L2 cache does not contain any element of x before each kernel call when
-    # N is small.
-    do_bench = lambda fn: gbps(N, triton.testing.do_bench(fn, warmup=10, rep=100, clear_l2=True))
-    triton_bw += [do_bench(lambda: add(x, y))]
-    torch_bw += [do_bench(lambda: x + y)]
-# We plot the results as a semi-log
-plt.semilogx(sizes, triton_bw, label='Triton')
-plt.semilogx(sizes, torch_bw, label='Torch')
-plt.legend()
-plt.show()
+@triton.testing.perf_report(
+    triton.testing.Benchmark(
+        x_names=['size'],  # argument names to use as an x-axis for the plot
+        x_vals=[2**i for i in range(12, 28, 1)],  # different possible values for `x_name`
+        x_log=True,  # x axis is logarithmic
+        y_name='provider',  # argument name whose value corresponds to a different line in the plot
+        y_vals=['torch', 'triton'],  # possible keys for `y_name`
+        y_lines=["Torch", "Triton"],  # label name for the lines
+        ylabel="GB/s",  # label name for the y-axis
+        plot_name="vector-add-performance",  # name for the plot. Used also as a file name for saving the plot.
+        args={}  # values for function arguments not in `x_names` and `y_name`
+    )
+)
+def benchmark(size, provider):
+    x = torch.rand(size, device='cuda', dtype=torch.float32)
+    y = torch.rand(size, device='cuda', dtype=torch.float32)
+    if provider == 'torch':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: x + y)
+    if provider == 'triton':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y))
+    gbps = lambda ms: 12 * size / ms * 1e-6
+    return gbps(ms), gbps(max_ms), gbps(min_ms)
+
 
 # %%
-# Seems like our simple element-wise operation operates at peak bandwidth. While this is a fairly low bar for a custom GPU programming language, this is a good start before we move to more advanced operations.
+# We can now run the decorated function above. Pass `show_plots=True` to see the plots and/or
+# `save_path='/path/to/results/' to save them to disk along with raw CSV data
+benchmark.run(show_plots=True)

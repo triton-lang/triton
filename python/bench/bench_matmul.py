@@ -20,7 +20,6 @@ square_confs = [
         y_vals=["torch", "triton", "cutlass"],
         y_lines=["Torch", "Triton", "CUTLASS"],
         ylabel="TFLOPS",
-        loglog=False,
         plot_name=f"matmul-square-{nt[AT]}{nt[BT]}",
         args={
             "AT": AT,
@@ -39,17 +38,16 @@ transformer_confs = [
         y_vals=["torch", "triton", "cutlass"],
         y_lines=["Torch", "Triton", "CUTLASS"],
         ylabel="TFLOPS",
-        loglog=False,
         plot_name=f"matmul-M{M}-{'NK'.replace(x, '')}{NK}",
         args= {"M": M, 'NK'.replace(x,''): NK, "AT": False, "BT": False, "dtype": torch.float16}
-    ) for NK in [8192]\
+    ) for NK in [12288]\
       for i, x in enumerate(["N", "K"])\
       for M in [2048]
 ]
 
 
-@triton.testing.perf_report(square_confs)
-def bench_op(M, N, K, AT, BT, dtype, provider, warmup=10, rep=50):
+@triton.testing.perf_report(transformer_confs)
+def bench_op(M, N, K, AT, BT, dtype, provider, warmup=25, rep=75):
     a = torch.rand((K, M) if AT else (M, K), device="cuda", dtype=dtype)
     b = torch.rand((N, K) if BT else (K, N), device="cuda", dtype=dtype)
     if AT: a = a.t()

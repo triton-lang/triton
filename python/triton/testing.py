@@ -40,14 +40,29 @@ def allclose(x, y):
     return err < tol
 
 
-def do_bench(fn, warmup=10, rep=50, grad_to_none=None):
+def do_bench(fn, warmup=50, rep=50, grad_to_none=None, percentiles=[0.2, 0.8]):
+    # Estimate the runtime of the function
+    fn()
+    torch.cuda.synchronize()
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(5):
+        fn()
+    end_event.record()
+    torch.cuda.synchronize()
+    estimate_ms = start_event.elapsed_time(end_event) / 5
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(rep)]
     end_event = [torch.cuda.Event(enable_timing=True) for i in range(rep)]
     cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
-    for i in range(warmup + rep):
+    # Warm-up
+    for _ in range(int(warmup / estimate_ms)):
+        fn()
+    # Benchmark
+    for i in range(rep):
         # we don't want `fn` to accumulate gradient values
         # if it contains a backward pass. So we clear the
         # provided gradients
@@ -56,29 +71,41 @@ def do_bench(fn, warmup=10, rep=50, grad_to_none=None):
         # we clear the L2 cache before each run
         cache.zero_()
         # record time of `fn`
-        if i >= warmup:
-            start_event[i - warmup].record()
+        start_event[i].record()
         fn()
-        if i >= warmup:
-            end_event[i - warmup].record()
+        end_event[i].record()
     torch.cuda.synchronize()
     times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)])
-    q = torch.quantile(times, torch.tensor([0.1, 0.5, 0.9]))
-    min_ms = q[0].item()
-    mean_ms = q[1].item()
-    max_ms = q[2].item()
-    return mean_ms, min_ms, max_ms
+    percentiles = torch.quantile(times, torch.tensor(percentiles)).tolist()
+    med_ms = torch.median(times).item()
+    if percentiles:
+        return tuple([med_ms] + percentiles)
+    else:
+        return med_ms
 
 
 class Benchmark:
-    def __init__(self, x_names, x_vals, y_name, y_vals, y_lines, ylabel, loglog, plot_name, args):
+    def __init__(
+        self,
+        x_names,
+        x_vals,
+        y_name,
+        y_vals,
+        y_lines,
+        ylabel,
+        plot_name,
+        args,
+        x_log=False,
+        y_log=False,
+    ):
         self.x_names = x_names
         self.x_vals = x_vals
+        self.x_log = x_log
         self.y_name = y_name
         self.y_vals = y_vals
         self.y_lines = y_lines
+        self.y_log = y_log
         self.ylabel = ylabel
-        self.loglog = loglog
         self.plot_name = plot_name
         self.args = args
 
@@ -88,7 +115,7 @@ class Mark:
         self.fn = fn
         self.benchmarks = benchmarks
 
-    def _run(self, bench, result_path, with_plot):
+    def _run(self, bench, save_path, show_plots):
         import matplotlib.pyplot as plt
         import pandas as pd
         import os
@@ -109,7 +136,7 @@ class Mark:
                 row_min += [y_min]
                 row_max += [y_max]
             df.loc[len(df)] = [x] + row_mean + row_min + row_max
-        if with_plot and bench.plot_name:
+        if bench.plot_name:
             plt.figure()
             ax = plt.subplot()
             xlabel = " = ".join(bench.x_names)
@@ -123,18 +150,27 @@ class Mark:
             ax.set_xlabel(xlabel)
             ax.set_ylabel(bench.ylabel)
             ax.set_title(bench.plot_name)
-            ax.set_xscale("log" if bench.loglog else "linear")
-            ax.set_yscale("log" if bench.loglog else "linear")
-            plt.savefig(os.path.join(result_path, f"{bench.plot_name}.png"))
-        df = df[[bench.x_names[0]] + bench.y_lines]
-        df.to_csv(os.path.join(result_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
+            ax.set_xscale("log" if bench.x_log else "linear")
+            ax.set_yscale("log" if bench.y_log else "linear")
+            if show_plots:
+                plt.show()
+            if save_path:
+                plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
+        if save_path:
+            df = df[[bench.x_names[0]] + bench.y_lines]
+            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
 
-    def run(self, result_path, with_plot):
-        with open(os.path.join(result_path, "results.html"), "w") as html:
+    def run(self, show_plots=False, save_path=''):
+        has_single_bench = isinstance(self.benchmarks, Benchmark)
+        benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
+        if save_path:
+            html = open(os.path.join(save_path, "results.html"), "w")
             html.write("<html><body>\n")
-            for bench in self.benchmarks:
-                self._run(bench, result_path, with_plot)
+        for bench in benchmarks:
+            self._run(bench, save_path, show_plots)
+            if save_path:
                 html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
+        if save_path:
             html.write("</body></html>\n")
 
 
