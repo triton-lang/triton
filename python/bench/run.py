@@ -4,7 +4,8 @@ import os
 import inspect
 import triton
 
-def run_all(result_dir, with_plots, names):
+
+def run_all(result_dir, names):
     if not os.path.exists(result_dir):
         os.makedirs(result_dir)
     for mod in os.listdir(os.path.dirname(os.path.realpath(__file__))):
@@ -26,16 +27,17 @@ def run_all(result_dir, with_plots, names):
                 curr_dir = os.path.join(curr_dir, name.replace('bench_', ''))
             if not os.path.exists(curr_dir):
                 os.makedirs(curr_dir)
-            bench.run(curr_dir, with_plots)
+            bench.run(save_path=curr_dir)
+
 
 def main(args):
     parser = argparse.ArgumentParser(description="Run the benchmark suite.")
     parser.add_argument("-r", "--result-dir", type=str, default='results', required=False)
     parser.add_argument("-n", "--names", type=str, default='', required=False)
-    parser.add_argument("-p", "--with-plots", dest='with_plots', action='store_true')
     parser.set_defaults(feature=False)
     args = parser.parse_args(args)
-    run_all(args.result_dir, args.with_plots, args.names)
+    run_all(args.result_dir, args.names)
+
 
 if __name__ == '__main__':
     main(sys.argv[1:])

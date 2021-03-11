@@ -9,7 +9,6 @@ confs = [
               y_vals  = ['triton', 'torch'],
               y_lines = ['Triton', 'Torch'],
               ylabel  = 'GBPS',
-              loglog  = False,
               plot_name = f'{mode}-2048',
               args = {'M': 2048, 'dtype': torch.float16, 'mode': mode}
     )\
