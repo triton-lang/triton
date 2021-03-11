@@ -14,7 +14,6 @@ square_confs = [
               y_vals  = [16, 32, 64],
               y_lines = ['Block16', 'Block32', 'Block64'],
               ylabel  = 'TFLOPS',
-              loglog  = False,
               plot_name = f'{op_mode}-{layout_mode}-square-{nt[AT]}{nt[BT]}',
               args = {'layout_mode': layout_mode, 'op_mode': op_mode,
                       'AT': AT, 'BT': BT, 'dtype': torch.float16, 'provider': 'triton'}
@@ -65,7 +64,6 @@ square_confs = [
               y_vals  = [16, 32, 64],
               y_lines = ['Block16', 'Block32', 'Block64'],
               ylabel  = 'GBPS',
-              loglog  = False,
               plot_name = f'{layout_mode}-square',
               args = {'layout_mode': layout_mode, 'dtype': torch.float16, 'provider': 'triton'}
     )\
