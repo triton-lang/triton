@@ -1,5 +1,5 @@
-#define STM 8
-#define STN 8
+#define STM 1
+#define STN 1
 
 __global__ void matmul(TYPE *A __noalias __readonly,
                        TYPE *B __noalias __readonly,

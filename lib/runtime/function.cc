@@ -288,6 +288,9 @@ function::function(const std::string& src, const options_t &opt, driver::device 
   // find indices of autotune keys
   for(const std::string& name: tune_key){
     auto pred = [&](ir::argument* arg) { return arg->get_name() == name; };
+//    std::cout << "----" << std::endl;
+//    for(ir::argument* arg: args)
+//        std::cout << arg->get_name() << std::endl;
     auto it = std::find_if(args.begin(), args.end(), pred);
     if(it == args.end())
       throw std::runtime_error(name + " is not a valid argument name");

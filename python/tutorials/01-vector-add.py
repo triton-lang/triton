@@ -50,7 +50,7 @@ In this tutorial, you will write a simple vector addition using Triton and learn
 # The existence of arrays as a primitive data-type for Triton comes with a number of advantages that are highlighted in the `MAPL'2019 Triton paper <http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf>`_.
 
 # %%
-# Torch bindings
+# Torch Bindings
 # --------------------------
 # The only thing that matters when it comes to Triton and Torch is the :code:`triton.kernel` class. This allows you to transform the above C-like function into a callable python object that can be used to modify :code:`torch.tensor` objects. To create a :code:`triton.kernel`, you only need three things:
 #
@@ -127,7 +127,7 @@ add = _add.apply
 
 # %%
 # Unit Test
-# --------------------------
+# -----------
 #
 # Of course, the first thing that we should check is that whether kernel is correct. This is pretty easy to test, as shown below:
 
@@ -144,8 +144,8 @@ print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.
 # Seems like we're good to go!
 
 # %%
-# Benchmarking
-# --------------------------
+# Benchmark
+# -----------
 # We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
 # To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of our custom op.
 # for different problem sizes.

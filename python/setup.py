@@ -43,8 +43,7 @@ class CMakeBuild(build_ext):
             out = subprocess.check_output(["cmake", "--version"])
         except OSError:
             raise RuntimeError(
-                "CMake must be installed to build the following extensions: " +
-                ", ".join(e.name for e in self.extensions)
+                "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
             )
 
         if platform.system() == "Windows":
@@ -107,10 +106,7 @@ setup(
     long_description="",
     packages=["triton", "triton/_C", "triton/ops", "triton/ops/blocksparse"],
     install_requires=["numpy", "torch"],
-    package_data={
-        "triton/ops": ["*.c"],
-        "triton/ops/blocksparse": ["*.c"]
-    },
+    package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},

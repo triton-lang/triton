@@ -30,7 +30,7 @@ void module::set_value(const std::string& name, ir::basic_block *block, ir::valu
   if(it != metadatas_.end()){
     x->set_metadata(it->second.first, it->second.second);
   }
-  value->set_name(name);
+//  value->set_name(name);
 }
 
 void module::set_value(const std::string& name, ir::value *value){
