@@ -70,7 +70,7 @@ The existence of arrays as a primitive data-type for Triton comes with a number 
 
 .. GENERATED FROM PYTHON SOURCE LINES 53-60
 
-Torch bindings
+Torch Bindings
 --------------------------
 The only thing that matters when it comes to Triton and Torch is the :code:`triton.kernel` class. This allows you to transform the above C-like function into a callable python object that can be used to modify :code:`torch.tensor` objects. To create a :code:`triton.kernel`, you only need three things:
 
@@ -161,7 +161,7 @@ We can now use the above function to compute the sum of two `torch.tensor` objec
 .. GENERATED FROM PYTHON SOURCE LINES 129-133
 
 Unit Test
---------------------------
+-----------
 
 Of course, the first thing that we should check is that whether kernel is correct. This is pretty easy to test, as shown below:
 
@@ -189,8 +189,8 @@ Of course, the first thing that we should check is that whether kernel is correc
 
  .. code-block:: none
 
-    tensor([1.3713, 1.3076, 0.4940,  ..., 0.6682, 1.1984, 1.2696], device='cuda:0')
-    tensor([1.3713, 1.3076, 0.4940,  ..., 0.6682, 1.1984, 1.2696], device='cuda:0')
+    tensor([1.3713, 1.3076, 0.4940,  ..., 0.6724, 1.2141, 0.9733], device='cuda:0')
+    tensor([1.3713, 1.3076, 0.4940,  ..., 0.6724, 1.2141, 0.9733], device='cuda:0')
     The maximum difference between torch and triton is 0.0
 
 
@@ -202,8 +202,8 @@ Seems like we're good to go!
 
 .. GENERATED FROM PYTHON SOURCE LINES 147-152
 
-Benchmarking
---------------------------
+Benchmark
+-----------
 We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
 To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of our custom op.
 for different problem sizes.
@@ -268,7 +268,7 @@ We can now run the decorated function above. Pass `show_plots=True` to see the p
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  5.901 seconds)
+   **Total running time of the script:** ( 0 minutes  7.521 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_01-vector-add.py:

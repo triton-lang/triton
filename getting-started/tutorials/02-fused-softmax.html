@@ -43,6 +43,7 @@
     
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Matrix Multiplication" href="03-matrix-multiplication.html" />
     <link rel="prev" title="Vector Addition" href="01-vector-add.html" /> 
 </head>
 
@@ -98,9 +99,10 @@
 <li class="toctree-l3"><a class="reference internal" href="#compute-kernel">Compute Kernel</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#torch-bindings">Torch Bindings</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#unit-test">Unit Test</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#benchmarking">Benchmarking</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#benchmark">Benchmark</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="03-matrix-multiplication.html">Matrix Multiplication</a></li>
 </ul>
 </li>
 </ul>
@@ -298,10 +300,19 @@ This means that different values of BLOCK will result in different kernels</p>
     <span class="c1"># Now are kernels are indexed not only by the provided device but also</span>
     <span class="c1"># by the rounded number of columns in the input matrix</span>
     <span class="n">BLOCK</span> <span class="o">=</span> <span class="n">next_power_of_2</span><span class="p">(</span><span class="n">N</span><span class="p">)</span>
-    <span class="n">key</span> <span class="o">=</span> <span class="p">(</span><span class="n">BLOCK</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+    <span class="c1"># Another trick we can use is to ask the compiler to parallelize each</span>
+    <span class="c1"># row-normalization more aggressively -- i.e., with more warps -- vectors</span>
+    <span class="c1"># that are longer</span>
+    <span class="c1"># You will see in the next tutorial how to auto-tune this value in a more natural</span>
+    <span class="c1"># way so you don&#39;t have to come up with manual heuristics yourself</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="k">if</span> <span class="n">BLOCK</span> <span class="o">&gt;=</span> <span class="mi">2048</span><span class="p">:</span> <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="k">if</span> <span class="n">BLOCK</span> <span class="o">&gt;=</span> <span class="mi">4096</span><span class="p">:</span> <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">16</span>
+    <span class="c1"># Each (BLOCK, num_warps, device) results in a different kernel</span>
+    <span class="n">key</span> <span class="o">=</span> <span class="p">(</span><span class="n">BLOCK</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">cache</span><span class="p">:</span>
         <span class="n">defines</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;BLOCK&#39;</span><span class="p">:</span> <span class="n">BLOCK</span><span class="p">}</span>
-        <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">kernel</span><span class="p">(</span><span class="n">_src</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">defines</span><span class="o">=</span><span class="n">defines</span><span class="p">)</span>
+        <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">kernel</span><span class="p">(</span><span class="n">_src</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">defines</span><span class="o">=</span><span class="n">defines</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 
 
@@ -345,8 +356,8 @@ This will allow us to verify that our padding mechanism works.</p>
 </div>
 <p>As expected, the results are identical.</p>
 </div>
-<div class="section" id="benchmarking">
-<h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="benchmark">
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Permalink to this headline">¶</a></h2>
 <p>Here we will benchmark our operation as a function of the number of columns in the input matrix – assuming 4096 rows.
 We will then compare its performance against (1) <code class="code docutils literal notranslate"><span class="pre">torch.softmax</span></code> and (2) the <code class="code docutils literal notranslate"><span class="pre">naive_softmax</span></code> defined above.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span>
@@ -386,7 +397,7 @@ This means that – when temporary data is too large to fit entirely in the GPU�
 Note that our Triton kernel is not only faster than PyTorch’s CUDA kernel, it is also <strong>easier to read, understand and maintain</strong>.</p></li>
 </ul>
 </div></blockquote>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  21.805 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  19.896 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>
@@ -405,6 +416,7 @@ Note that our Triton kernel is not only faster than PyTorch’s CUDA kernel, it 
           </div>
           <footer>
     <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+        <a href="03-matrix-multiplication.html" class="btn btn-neutral float-right" title="Matrix Multiplication" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
         <a href="01-vector-add.html" class="btn btn-neutral float-left" title="Vector Addition" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
     </div>
 

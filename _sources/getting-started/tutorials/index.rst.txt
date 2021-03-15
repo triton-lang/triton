@@ -51,6 +51,27 @@ Below is a gallery of tutorials for writing various basic operations with Triton
    :hidden:
 
    /getting-started/tutorials/02-fused-softmax
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="- The block-level matrix multiplication operator @ - Multi-dimensional pointer arithmetic - Pro...">
+
+.. only:: html
+
+ .. figure:: /getting-started/tutorials/images/thumb/sphx_glr_03-matrix-multiplication_thumb.png
+     :alt: Matrix Multiplication
+
+     :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /getting-started/tutorials/03-matrix-multiplication
 .. raw:: html
 
     <div class="sphx-glr-clear"></div>

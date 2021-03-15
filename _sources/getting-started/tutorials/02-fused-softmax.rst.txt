@@ -121,7 +121,7 @@ Here our torch bindings is quite similar to that of the vector addition mentione
 We just need to make sure that BLOCK is the smallest power of two greater than the number of columns N of the input matrix.
 This means that different values of BLOCK will result in different kernels
 
-.. GENERATED FROM PYTHON SOURCE LINES 89-156
+.. GENERATED FROM PYTHON SOURCE LINES 89-165
 
 .. code-block:: default
 
@@ -165,10 +165,19 @@ This means that different values of BLOCK will result in different kernels
         # Now are kernels are indexed not only by the provided device but also
         # by the rounded number of columns in the input matrix
         BLOCK = next_power_of_2(N)
-        key = (BLOCK, device)
+        # Another trick we can use is to ask the compiler to parallelize each
+        # row-normalization more aggressively -- i.e., with more warps -- vectors
+        # that are longer
+        # You will see in the next tutorial how to auto-tune this value in a more natural
+        # way so you don't have to come up with manual heuristics yourself
+        num_warps = 4
+        if BLOCK >= 2048: num_warps = 8
+        if BLOCK >= 4096: num_warps = 16
+        # Each (BLOCK, num_warps, device) results in a different kernel
+        key = (BLOCK, num_warps, device)
         if key not in cache:
             defines = {'BLOCK': BLOCK}
-            cache[key] = triton.kernel(_src, device=device, defines=defines)
+            cache[key] = triton.kernel(_src, device=device, defines=defines, num_warps=num_warps)
         return cache[key]
 
 
@@ -199,21 +208,21 @@ This means that different values of BLOCK will result in different kernels
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 157-158
+.. GENERATED FROM PYTHON SOURCE LINES 166-167
 
 We can use the above softmax function to compute the row-wise softmax of a given matrix.
 
-.. GENERATED FROM PYTHON SOURCE LINES 160-162
+.. GENERATED FROM PYTHON SOURCE LINES 169-171
 
 Unit Test
 ----------
 
-.. GENERATED FROM PYTHON SOURCE LINES 164-166
+.. GENERATED FROM PYTHON SOURCE LINES 173-175
 
 We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
 This will allow us to verify that our padding mechanism works.
 
-.. GENERATED FROM PYTHON SOURCE LINES 166-173
+.. GENERATED FROM PYTHON SOURCE LINES 175-182
 
 .. code-block:: default
 
@@ -239,18 +248,18 @@ This will allow us to verify that our padding mechanism works.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 174-175
+.. GENERATED FROM PYTHON SOURCE LINES 183-184
 
 As expected, the results are identical.
 
-.. GENERATED FROM PYTHON SOURCE LINES 177-181
+.. GENERATED FROM PYTHON SOURCE LINES 186-190
 
-Benchmarking
+Benchmark
 -------------
 Here we will benchmark our operation as a function of the number of columns in the input matrix -- assuming 4096 rows.
 We will then compare its performance against (1) :code:`torch.softmax` and (2) the :code:`naive_softmax` defined above.
 
-.. GENERATED FROM PYTHON SOURCE LINES 181-209
+.. GENERATED FROM PYTHON SOURCE LINES 190-218
 
 .. code-block:: default
 
@@ -293,7 +302,7 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 210-215
+.. GENERATED FROM PYTHON SOURCE LINES 219-224
 
 In the above plot, we can see that:
 
@@ -305,7 +314,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  21.805 seconds)
+   **Total running time of the script:** ( 0 minutes  19.896 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:
