@@ -36,7 +36,6 @@
         <script src="../../_static/jquery.js"></script>
         <script src="../../_static/underscore.js"></script>
         <script src="../../_static/doctools.js"></script>
-        <script async="async" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/latest.js?config=TeX-AMS-MML_HTMLorMML"></script>
     
     <script type="text/javascript" src="../../_static/js/theme.js"></script>
 
@@ -95,12 +94,13 @@
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Vector Addition</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#compute-kernel">Compute Kernel</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#torch-bindings">Torch bindings</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#torch-bindings">Torch Bindings</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#unit-test">Unit Test</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#benchmarking">Benchmarking</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#benchmark">Benchmark</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="02-fused-softmax.html">Fused Softmax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="03-matrix-multiplication.html">Matrix Multiplication</a></li>
 </ul>
 </li>
 </ul>
@@ -225,7 +225,7 @@ programming model for more details).</p>
 <p>The existence of arrays as a primitive data-type for Triton comes with a number of advantages that are highlighted in the <a class="reference external" href="http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf">MAPL’2019 Triton paper</a>.</p>
 </div>
 <div class="section" id="torch-bindings">
-<h2>Torch bindings<a class="headerlink" href="#torch-bindings" title="Permalink to this headline">¶</a></h2>
+<h2>Torch Bindings<a class="headerlink" href="#torch-bindings" title="Permalink to this headline">¶</a></h2>
 <p>The only thing that matters when it comes to Triton and Torch is the <code class="code docutils literal notranslate"><span class="pre">triton.kernel</span></code> class. This allows you to transform the above C-like function into a callable python object that can be used to modify <code class="code docutils literal notranslate"><span class="pre">torch.tensor</span></code> objects. To create a <code class="code docutils literal notranslate"><span class="pre">triton.kernel</span></code>, you only need three things:</p>
 <ul class="simple">
 <li><p><code class="code docutils literal notranslate"><span class="pre">source:</span> <span class="pre">string</span></code>: the source-code of the kernel you want to create</p></li>
@@ -313,15 +313,15 @@ programming model for more details).</p>
 </pre></div>
 </div>
 <p class="sphx-glr-script-out">Out:</p>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>tensor([1.3713, 1.3076, 0.4940,  ..., 0.6682, 1.1984, 1.2696], device=&#39;cuda:0&#39;)
-tensor([1.3713, 1.3076, 0.4940,  ..., 0.6682, 1.1984, 1.2696], device=&#39;cuda:0&#39;)
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>tensor([1.3713, 1.3076, 0.4940,  ..., 0.6724, 1.2141, 0.9733], device=&#39;cuda:0&#39;)
+tensor([1.3713, 1.3076, 0.4940,  ..., 0.6724, 1.2141, 0.9733], device=&#39;cuda:0&#39;)
 The maximum difference between torch and triton is 0.0
 </pre></div>
 </div>
 <p>Seems like we’re good to go!</p>
 </div>
-<div class="section" id="benchmarking">
-<h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="benchmark">
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Permalink to this headline">¶</a></h2>
 <p>We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
 To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of our custom op.
 for different problem sizes.</p>
@@ -355,7 +355,7 @@ for different problem sizes.</p>
 </pre></div>
 </div>
 <img alt="vector-add-performance" class="sphx-glr-single-img" src="../../_images/sphx_glr_01-vector-add_001.png" />
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  5.901 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  7.521 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-01-vector-add-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/62d97d49a32414049819dd8bb8378080/01-vector-add.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">01-vector-add.py</span></code></a></p>
