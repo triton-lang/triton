@@ -30,19 +30,21 @@
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['sphinx.ext.autosectionlabel']
-autosectionlabel_prefix_document = True
+extensions = []
+
+# Math Jax
+extensions += ['sphinx.ext.mathjax']
 
 # Sphinx gallery
-extensions += ['sphinx_gallery.gen_gallery']
-from sphinx_gallery.sorting import FileNameSortKey
-sphinx_gallery_conf = {
-    'examples_dirs': '../python/tutorials/',
-    'gallery_dirs': 'getting-started/tutorials',
-    'filename_pattern': '',
-    'ignore_pattern': r'__init__\.py',
-    'within_subsection_order': FileNameSortKey,
-}
+# extensions += ['sphinx_gallery.gen_gallery']
+# from sphinx_gallery.sorting import FileNameSortKey
+# sphinx_gallery_conf = {
+#     'examples_dirs': '../python/tutorials/',
+#     'gallery_dirs': 'getting-started/tutorials',
+#     'filename_pattern': '',
+#     'ignore_pattern': r'__init__\.py',
+#     'within_subsection_order': FileNameSortKey,
+# }
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -107,6 +109,9 @@ html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
+html_css_files = [
+    'css/custom.css',
+]
 
 # Custom sidebar templates, must be a dictionary that maps document names
 # to template names.
@@ -164,8 +169,5 @@ man_pages = [(master_doc, 'triton', 'Triton Documentation', [author], 1)]
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (
-        master_doc, 'Triton', 'Triton Documentation', author, 'Triton', 'One line description of project.',
-        'Miscellaneous'
-    ),
+    (master_doc, 'Triton', 'Triton Documentation', author, 'Triton', 'One line description of project.', 'Miscellaneous'),
 ]

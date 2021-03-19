@@ -7,3 +7,12 @@ This is the development repository of Triton, a language and compiler for writin
 The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing us if you use our work!
 
 The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.
+
+# Compatibility
+
+Supported Platforms:
+  * Linux
+
+Supported Hardware:
+  * NVIDIA GPUs (Compute Capability 7.0+)
+  * Under development: AMD GPUs, CPUs
