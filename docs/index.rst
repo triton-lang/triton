@@ -17,10 +17,14 @@ Getting Started
    getting-started/installation
    getting-started/tutorials/index
 
-Going Further
+Programming Guide
 --------------
 
-- Check out the :doc:`programming guide <programming-guide/index>` to learn more about Triton and how it compares against other DSLs for DNNs.
+Check out the following documents to learn more about Triton and how it compares against other DSLs for DNNs:
+
+- Chapter 1: :doc:`Introduction <programming-guide/introduction>`
+- Chapter 2: :doc:`Related Work <programming-guide/related-work>`
+- Chapter 3: :doc:`The Triton-C Kernel Language <programming-guide/triton-c>`
 
 .. toctree::
    :maxdepth: 1
@@ -29,3 +33,4 @@ Going Further
 
    programming-guide/introduction
    programming-guide/related-work
+   programming-guide/triton-c
