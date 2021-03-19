@@ -172,14 +172,46 @@ import torch
 import triton
 
 autotune_configs = [
-    triton.config(defines={"MB": "128", "NB": "128", "KB": "32"}, num_warps=4),
-    triton.config(defines={'MB': '64', 'NB': '128', 'KB': '32'}, num_warps=4),
-    triton.config(defines={'MB': '128', 'NB': '64', 'KB': '32'}, num_warps=4),
-    triton.config(defines={'MB': '64', 'NB': '64', 'KB': '64'}, num_warps=4),
-    triton.config(defines={'MB': '32', 'NB': '128', 'KB': '64'}, num_warps=4),
-    triton.config(defines={'MB': '128', 'NB': '32', 'KB': '64'}, num_warps=4),
-    triton.config(defines={'MB': '64', 'NB': '32', 'KB': '64'}, num_warps=2),
-    triton.config(defines={'MB': '32', 'NB': '64', 'KB': '64'}, num_warps=2)
+    triton.config(defines={
+        "MB": "128",
+        "NB": "128",
+        "KB": "32"
+    }, num_warps=4),
+    triton.config(defines={
+        'MB': '64',
+        'NB': '128',
+        'KB': '32'
+    }, num_warps=4),
+    triton.config(defines={
+        'MB': '128',
+        'NB': '64',
+        'KB': '32'
+    }, num_warps=4),
+    triton.config(defines={
+        'MB': '64',
+        'NB': '64',
+        'KB': '64'
+    }, num_warps=4),
+    triton.config(defines={
+        'MB': '32',
+        'NB': '128',
+        'KB': '64'
+    }, num_warps=4),
+    triton.config(defines={
+        'MB': '128',
+        'NB': '32',
+        'KB': '64'
+    }, num_warps=4),
+    triton.config(defines={
+        'MB': '64',
+        'NB': '32',
+        'KB': '64'
+    }, num_warps=2),
+    triton.config(defines={
+        'MB': '32',
+        'NB': '64',
+        'KB': '64'
+    }, num_warps=2)
 ]
 
 # %%
@@ -290,7 +322,7 @@ print(torch.allclose(c_0, c_1, rtol=1e-3, atol=1e-3))
 #
 #  .. code-block:: bash
 #
-#    cd /path/to/cutlass/
+#    cd /tmp/
 #    git clone https://github.com/NVIDIA/cutlass.git
 #    cd cutlass
 #    mkdir build
@@ -319,7 +351,7 @@ print(torch.allclose(c_0, c_1, rtol=1e-3, atol=1e-3))
 # .. code-block:: bash
 #
 #    export CUTLASS_INCLUDE_DIR=/tmp/cutlass/build/install/include/
-#    export CUTLASS_LIBRARY_DIR=/tmp/cutlass/build/install/lib/a
+#    export CUTLASS_LIBRARY_DIR=/tmp/cutlass/build/install/lib/
 #    pip uninstall -y triton
 #    pip install -e "git+https://github.com/ptillet/triton.git#egg=triton&subdirectory=python"
 #
