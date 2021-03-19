@@ -16,3 +16,16 @@ Getting Started
 
    getting-started/installation
    getting-started/tutorials/index
+
+Going Further
+--------------
+
+- Check out the :doc:`programming guide <programming-guide/index>` to learn more about Triton and how it compares against other DSLs for DNNs.
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Programming Guide
+   :hidden:
+
+   programming-guide/introduction
+   programming-guide/related-work
