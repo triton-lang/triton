@@ -36,15 +36,15 @@ extensions = []
 extensions += ['sphinx.ext.mathjax']
 
 # Sphinx gallery
-# extensions += ['sphinx_gallery.gen_gallery']
-# from sphinx_gallery.sorting import FileNameSortKey
-# sphinx_gallery_conf = {
-#     'examples_dirs': '../python/tutorials/',
-#     'gallery_dirs': 'getting-started/tutorials',
-#     'filename_pattern': '',
-#     'ignore_pattern': r'__init__\.py',
-#     'within_subsection_order': FileNameSortKey,
-# }
+extensions += ['sphinx_gallery.gen_gallery']
+from sphinx_gallery.sorting import FileNameSortKey
+sphinx_gallery_conf = {
+    'examples_dirs': '../python/tutorials/',
+    'gallery_dirs': 'getting-started/tutorials',
+    'filename_pattern': '',
+    'ignore_pattern': r'__init__\.py',
+    'within_subsection_order': FileNameSortKey,
+}
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
