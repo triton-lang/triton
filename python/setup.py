@@ -15,21 +15,6 @@ import distutils.spawn
 import torch
 
 
-def find_llvm():
-    versions = ["-10", "-10.0", ""]
-    supported = ["llvm-config{v}".format(v=v) for v in versions]
-    paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
-    paths = [p for p in paths if p is not None]
-    if paths:
-        return paths[0]
-    config = distutils.spawn.find_executable("llvm-config")
-    instructions = "Please install llvm-10-dev"
-    if config is None:
-        raise RuntimeError("Could not find llvm-config. " + instructions)
-    version = os.popen("{config} --version".format(config=config)).read()
-    raise RuntimeError("Version {v} not supported. ".format(v=version) + instructions)
-
-
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=""):
         Extension.__init__(self, name, sources=[])
@@ -74,7 +59,6 @@ class CMakeBuild(build_ext):
             "-DPYTHON_LINK_DIRS=" + ";".join(library_paths(True)),
             "-DTORCH_CXX11_ABI=" + cxx11abi,
             "-DTORCH_LIBRARIES=c10;c10_cuda;torch;torch_cuda;torch_cpu;torch_python;triton",
-            "-DLLVM_CONFIG=" + find_llvm(),
         ]
         # configuration
         cfg = "Debug" if self.debug else "Release"
@@ -87,7 +71,7 @@ class CMakeBuild(build_ext):
             build_args += ["--", "/m"]
         else:
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ["--", "-j4"]
+            build_args += ["--", "-j8"]
 
         env = os.environ.copy()
         if not os.path.exists(self.build_temp):
@@ -106,7 +90,10 @@ setup(
     long_description="",
     packages=["triton", "triton/_C", "triton/ops", "triton/ops/blocksparse"],
     install_requires=["numpy", "torch"],
-    package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
+    package_data={
+        "triton/ops": ["*.c"],
+        "triton/ops/blocksparse": ["*.c"]
+    },
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},
