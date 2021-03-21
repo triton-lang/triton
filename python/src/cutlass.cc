@@ -4,7 +4,6 @@
 #include "cutlass/library/singleton.h"
 #include "pybind11/pybind11.h"
 #include "triton/tools/bench.hpp"
-#include <ATen/cuda/CUDAContext.h>
 
 using namespace cutlass;
 using namespace cutlass::library;

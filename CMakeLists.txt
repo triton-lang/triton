@@ -64,21 +64,18 @@ include_directories("${CMAKE_CURRENT_BINARY_DIR}/llvm-build/include/"
 # Python module
 if(BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
-    # PyBind11 wrapper source file
-    file(GLOB_RECURSE TORCH_SRC torch/superblock.cc)
     # Build CUTLASS python wrapper if requested
     set(CUTLASS_INCLUDE_DIR "$ENV{CUTLASS_INCLUDE_DIR}")
     set(CUTLASS_LIBRARY_DIR "$ENV{CUTLASS_LIBRARY_DIR}")
     if(NOT("${CUTLASS_INCLUDE_DIR}" STREQUAL "") AND NOT("${CUTLASS_LIBRARY_DIR}" STREQUAL ""))
-        set(TORCH_SRC ${TORCH_SRC} cutlass.cc)
+        set(CUTLASS_SRC cutlass.cc)
         add_definitions(-DWITH_CUTLASS_BINDINGS)
         set(CUTLASS_LIBRARIES "cutlass.a")
     endif()
     message(STATUS ${CUTLASS_INCLUDE_PATH})
-    set(PYTHON_SRC main.cc triton.cc ${TORCH_SRC})
-    set_source_files_properties(${TORCH_SRC} PROPERTIES COMPILE_FLAGS "-std=c++14 -D_GLIBCXX_USE_CXX11_ABI=${TORCH_CXX11_ABI} ${CUTLASS_OPT}")
     include_directories("." ${PYTHON_INCLUDE_DIRS} ${CUTLASS_INCLUDE_DIR})
     link_directories(${PYTHON_LINK_DIRS} ${CUTLASS_LIBRARY_DIR})
+    set(PYTHON_SRC main.cc triton.cc superblock.cc ${CUTLASS_SRC})
 endif()
 
 
