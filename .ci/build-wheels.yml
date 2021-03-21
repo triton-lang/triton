@@ -1,13 +1,11 @@
 jobs:
 - job: linux
-
-  pool:
-    name: default
+  pool: {vmImage: 'Ubuntu-18.04'}
 
   strategy:
     matrix:
       Python36:
-        python.version: '3.7'
+        python.version: '3.6'
 
   steps:
     - task: UsePythonVersion@0
@@ -17,7 +15,7 @@ jobs:
         pip3 install cibuildwheel==1.10.0
       displayName: Install dependencies
     - bash: |
-        python3 -m cibuildwheel --output-dir wheelhouse python
+        cibuildwheel --output-dir wheelhouse python
       displayName: Build wheels
     - task: PublishBuildArtifacts@1
       inputs: {pathtoPublish: 'wheelhouse'}
