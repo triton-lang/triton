@@ -72,6 +72,8 @@ class CMakeBuild(build_ext):
         print(os.path.dirname(__file__))
         os.system('ls')
         os.system('ls ../')
+        print('---')
+        os.system('ls /project')
         print(sourcedir)
         subprocess.check_call(["cmake", sourcedir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
