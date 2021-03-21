@@ -2,12 +2,15 @@ import torch
 import triton
 import pytest
 
+
 @pytest.mark.parametrize(
     "MODE, TRANS_A, TRANS_B, BLOCK, DTYPE",
-    [(mode, at, bt, block, dtype) for dtype in ["float16", "float32"] for mode in ["sdd", "dsd", "dds"]
-     for at in [False, True] for bt in [False, True] for block in [16, 32, 64]],
+    [
+        (mode, at, bt, block, dtype) for dtype in ["float16", "float32"] for mode in ["sdd", "dsd", "dds"]
+        for at in [False, True] for bt in [False, True] for block in [16, 32, 64]
+    ],
 )
-def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=128, N=256, K=384):
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
     DTYPE = {"float16": torch.float16, "float32": torch.float32}[DTYPE]
     # set seed
     torch.random.manual_seed(0)
@@ -35,6 +38,7 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=128, N=256, K=
     tc = triton.testing.sparsify_tensor(tc, layout, BLOCK) if MODE == "sdd" else tc
     # compare
     assert triton.testing.allclose(rc, tc)
+
 
 @pytest.mark.parametrize(
     "BLOCK, WIDTH",
@@ -76,6 +80,7 @@ def test_softmax(BLOCK, WIDTH, DTYPE=torch.float16):
     # compare
     assert triton.testing.allclose(ry, ty)
 
+
 def test_attention_fwd_bwd(
     input_scale=1.0,
     tol=2e-2,
@@ -88,9 +93,7 @@ def test_attention_fwd_bwd(
 ):
     # inputs
     qkv_shape = (batch_size, n_heads, n_ctx, 64)
-    qkvs = [
-        torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True).to(dtype).cuda() for _ in range(3)
-    ]
+    qkvs = [torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True).to(dtype).cuda() for _ in range(3)]
     attn_mask = torch.tril(
         torch.ones(
             [n_ctx, n_ctx],
@@ -133,6 +136,7 @@ def test_attention_fwd_bwd(
     torch.testing.assert_allclose(loss, torch_loss, rtol=tol, atol=tol)
     for g1, g2 in zip(grads, torch_grads):
         torch.testing.assert_allclose(g1, g2, rtol=tol, atol=tol)
+
 
 def triton_attention(
     layout,

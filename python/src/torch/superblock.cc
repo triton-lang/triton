@@ -1,4 +1,7 @@
-#include <torch/extension.h>
+#include <iostream>
+#include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -6,111 +9,110 @@
 #include <omp.h>
 #endif
 
-typedef std::vector<std::tuple<int, torch::Tensor>> ret_t;
+// row-major 3d tensor
+class tensor_3d {
+public:
+  tensor_3d(int size_0, int size_1, int size_2, int *data = nullptr) : data_(size_0 * size_1 * size_2, 0) {
+    if (data)
+      std::copy(data, data + data_.size(), data_.begin());
+    stride_0_ = size_1 * size_2;
+    stride_1_ = size_2;
+    stride_2_ = 1;
+  }
 
-void segment_blocks(torch::Tensor layout, torch::Tensor idx, torch::Tensor scratch, int max_width, ret_t& ret){
-  size_t H = layout.size(0);
-  size_t M = layout.size(1);
-  size_t N = layout.size(2);
-  torch::Tensor tmp = torch::zeros_like(layout);
-  auto _tmp     = tmp.accessor    <int, 3>();
-  auto _layout  = layout.accessor <int, 3>();
-  auto _idx     = idx.accessor    <int, 3>();
-  auto _scratch = scratch.accessor<int, 3>();
+  int &operator()(int i, int j, int k) {
+    return data_[i * stride_0_ + j * stride_1_ + k];
+  }
+
+private:
+  std::vector<int> data_;
+  int stride_0_;
+  int stride_1_;
+  int stride_2_;
+};
+
+std::vector<int> segment_blocks(tensor_3d &layout, tensor_3d &idx, int max_width, int H, int M, int N) {
+  tensor_3d tmp(H, M, N);
   std::vector<int> current(H, 0);
-  #ifdef _OPENMP
-  #pragma omp parallel for
-  #endif
-  for(size_t h = 0; h < H; h++){
+  int num = 0;
+  std::vector<int> lut(H * M * N * 4);
+  for (size_t h = 0; h < H; h++) {
     // surrounding indices
-    std::vector<int>              ii_left(max_width, -1);
+    std::vector<int> ii_left(max_width, -1);
     std::vector<std::vector<int>> ii_top(max_width, std::vector<int>(N, -1));
-
-    for(size_t m = 0; m < M; m++){
-      for(size_t n = 0; n < N; n++){
-        int v     = _layout[h][m][n];
-        if(v == 0)
+    // start the dynamic programming algorithm
+    for (size_t m = 0; m < M; m++) {
+      for (size_t n = 0; n < N; n++) {
+        int v = layout(h, m, n);
+        if (v == 0)
           continue;
-        int n_left= ii_left[max_width-1];
-        int m_top = ii_top [max_width-1][n];
-        int top      = (m_top >= 0)               ? _tmp[h][m_top][n]      : 0;
-        int left     = (n_left >= 0)              ? _tmp[h][m][n_left]     : 0;
-        int topleft  = (m_top >=0 && n_left >= 0) ? _tmp[h][m_top][n_left] : 0;
-        int width    = std::min(left, std::min(top, topleft)) + 1;
-
-        // reset width if blocks cannot be 
+        int n_left = ii_left[max_width - 1];
+        int m_top = ii_top[max_width - 1][n];
+        int top = (m_top >= 0) ? tmp(h, m_top, n) : 0;
+        int left = (n_left >= 0) ? tmp(h, m, n_left) : 0;
+        int topleft = (m_top >= 0 && n_left >= 0) ? tmp(h, m_top, n_left) : 0;
+        int width = std::min(left, std::min(top, topleft)) + 1;
+        // reset width if blocks cannot be
         // packed together (i.e., there's a 1 "in the middle")
-        for(int nn = n_left + 1; nn < n; nn++)
-          if(ii_top[max_width-1][nn] > ii_top[max_width-1][n])
+        for (int nn = n_left + 1; nn < n; nn++)
+          if (ii_top[max_width - 1][nn] > ii_top[max_width - 1][n])
             width = 1;
-        _tmp[h][m][n] = width;
-
+        tmp(h, m, n) = width;
         // update n_left ring buffer
-        for(int k = 0; k < max_width-1; k++)
-          ii_left[k] = ii_left[k+1];
-        ii_left[max_width-1] = n;
-
+        for (int k = 0; k < max_width - 1; k++)
+          ii_left[k] = ii_left[k + 1];
+        ii_left[max_width - 1] = n;
         // update ii_top ring buffer
-        for(int k = 0; k < max_width-1; k++)
-          ii_top[k][n] = ii_top[k+1][n];
-        ii_top[max_width-1][n] = m;
-
+        for (int k = 0; k < max_width - 1; k++)
+          ii_top[k][n] = ii_top[k + 1][n];
+        ii_top[max_width - 1][n] = m;
         // block is too small -- skip
-        if(width != max_width)
+        if (width != max_width)
           continue;
-
         // retained blocks are set to zeros
-        for(size_t km = 0; km < max_width; km++)
-        for(size_t kn = 0; kn < max_width; kn++)
-        {
-          int mm = ii_top[km][n];
-          int nn = ii_left[kn];
-          if(mm < 0 || nn < 0)
-            continue;
-          _layout[h][mm][nn] = 0;
-          _tmp[h][mm][nn] = 0;
-          _scratch[h][current[h]][0] = (int)h;
-          _scratch[h][current[h]][1] = (int)mm;
-          _scratch[h][current[h]][2] = (int)nn;
-          _scratch[h][current[h]][3] = _idx[h][mm][nn];
-          current[h]++;
-        }
+        for (size_t km = 0; km < max_width; km++)
+          for (size_t kn = 0; kn < max_width; kn++) {
+            int mm = ii_top[km][n];
+            int nn = ii_left[kn];
+            if (mm < 0 || nn < 0)
+              continue;
+            layout(h, mm, nn) = 0;
+            tmp(h, mm, nn) = 0;
+            lut[num++] = (int)h;
+            lut[num++] = (int)mm;
+            lut[num++] = (int)nn;
+            lut[num++] = idx(h, mm, nn);
+          }
       }
     }
   }
-  std::vector<torch::Tensor> to_cat;
-  for(size_t h = 0; h < H; h++)
-    if(current[h] > 0)
-      to_cat.push_back(scratch[h].slice(0, 0, current[h]));
-  if(!to_cat.empty())
-    ret.push_back(std::make_tuple(max_width, torch::cat(to_cat)));
+  lut.resize(num);
+  return lut;
 }
 
+typedef std::pair<int, pybind11::array_t<int>> lut_t;
 
-ret_t superblock(torch::Tensor layout, int start_width) {
-  ret_t ret;
-  // block index
-  torch::Tensor idx = torch::zeros_like(layout);
+std::vector<lut_t> superblock(uintptr_t LAYOUT, int H, int M, int N, int start_width) {
+  std::vector<lut_t> ret;
   int current = 0;
-  int64_t H = layout.size(0);
-  int64_t M = layout.size(1);
-  int64_t N = layout.size(2);
-  auto _layout  = layout.accessor <int, 3>();
-  auto _idx = idx.accessor<int, 3>();
-  for(int64_t h = 0; h < H; h++)
-  for(int64_t m = 0; m < M; m++)
-  for(int64_t n = 0; n < N; n++){
-    if(_layout[h][m][n] == 0)
+  tensor_3d layout(H, M, N, (int *)LAYOUT);
+  tensor_3d idx(H, M, N);
+  for (int64_t h = 0; h < H; h++)
+    for (int64_t m = 0; m < M; m++)
+      for (int64_t n = 0; n < N; n++) {
+        if (layout(h, m, n) == 0)
+          continue;
+        idx(h, m, n) = current++;
+      }
+  // create lut
+  for (int max_width = start_width; max_width > 0; max_width /= 2) {
+    auto lut = segment_blocks(layout, idx, max_width, H, M, N);
+    if (lut.size() == 0)
       continue;
-    _idx[h][m][n] = current++;
+    ret.push_back(std::make_pair(max_width, pybind11::array_t<int>(lut.size(), lut.data())));
   }
-  // scratch memory
-  torch::Tensor scratch = torch::empty({H, layout.sum().item<int>(), 4}, layout.dtype());
-  for(int max_width = start_width; max_width > 0; max_width /= 2)
-    segment_blocks(layout, idx, scratch, max_width, ret);
   return ret;
 }
-
 
 void init_superblocking(pybind11::module &m) {
   m.def("superblock", &superblock, "super-blocking for block-sparse matrix multiplication");

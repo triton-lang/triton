@@ -89,7 +89,11 @@ void init_triton_driver(py::module &&m) {
   py::class_<drv::device>(m, "device");
   // cuda device
   py::class_<drv::cu_device, driver::device>(m, "cu_device")
-      .def(py::init<CUdevice, bool>());
+      .def(py::init([](int dev_id, bool take_ownership) {
+        CUdevice handle;
+        drv::dispatch::cuDeviceGet(&handle, dev_id);
+        return new drv::cu_device(handle, take_ownership);
+      }));
   // host device
   py::class_<drv::host_device, driver::device>(m, "host_device")
       .def(py::init<>());
