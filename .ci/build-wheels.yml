@@ -15,7 +15,8 @@ jobs:
         pip3 install cibuildwheel==1.10.0
       displayName: Install dependencies
     - bash: |
-        cibuildwheel python --output-dir wheelhouse
+        ln -s python/setup.py setup.py
+        cibuildwheel --output-dir wheelhouse
       displayName: Build wheels
     - task: PublishBuildArtifacts@1
       inputs: {pathtoPublish: 'wheelhouse'}
