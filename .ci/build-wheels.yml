@@ -1,6 +1,12 @@
 jobs:
 - job: linux
   pool: {vmImage: 'Ubuntu-18.04'}
+
+  strategy:
+    matrix:
+      Python36:
+        python.version: '3.6'
+
   steps:
     - task: UsePythonVersion@0
     - bash: |
@@ -10,6 +16,10 @@ jobs:
       displayName: Install dependencies
     - bash: |
         cd python
+        cp ../CMakeLists.txt src/
+        cp -r ../cmake src/
+        cp -r ../include src/
+        cp -r ../lib src/
         cibuildwheel --output-dir wheelhouse .
       displayName: Build wheels
     - task: PublishBuildArtifacts@1
