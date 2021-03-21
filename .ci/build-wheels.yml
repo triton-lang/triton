@@ -16,10 +16,6 @@ jobs:
       displayName: Install dependencies
     - bash: |
         cd python
-        cp ../CMakeLists.txt src/
-        cp -r ../cmake src/
-        cp -r ../include src/
-        cp -r ../lib src/
         cibuildwheel --output-dir wheelhouse .
       displayName: Build wheels
     - task: PublishBuildArtifacts@1

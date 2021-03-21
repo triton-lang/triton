@@ -65,17 +65,18 @@ include_directories("${CMAKE_CURRENT_BINARY_DIR}/llvm-build/include/"
 if(BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
     # Build CUTLASS python wrapper if requested
+    set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
     set(CUTLASS_INCLUDE_DIR "$ENV{CUTLASS_INCLUDE_DIR}")
     set(CUTLASS_LIBRARY_DIR "$ENV{CUTLASS_LIBRARY_DIR}")
     if(NOT("${CUTLASS_INCLUDE_DIR}" STREQUAL "") AND NOT("${CUTLASS_LIBRARY_DIR}" STREQUAL ""))
-        set(CUTLASS_SRC cutlass.cc)
+        set(CUTLASS_SRC ${PYTHON_SRC_PATH}/cutlass.cc)
         add_definitions(-DWITH_CUTLASS_BINDINGS)
         set(CUTLASS_LIBRARIES "cutlass.a")
     endif()
     message(STATUS ${CUTLASS_INCLUDE_PATH})
-    include_directories("." ${PYTHON_INCLUDE_DIRS} ${CUTLASS_INCLUDE_DIR})
+    include_directories("." ${PYTHON_SRC_PATH} ${PYTHON_INCLUDE_DIRS} ${CUTLASS_INCLUDE_DIR})
     link_directories(${PYTHON_LINK_DIRS} ${CUTLASS_LIBRARY_DIR})
-    set(PYTHON_SRC main.cc triton.cc superblock.cc ${CUTLASS_SRC})
+    set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc  ${PYTHON_SRC_PATH}/superblock.cc ${CUTLASS_SRC})
 endif()
 
 
