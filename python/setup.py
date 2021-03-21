@@ -69,6 +69,10 @@ class CMakeBuild(build_ext):
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         sourcedir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        print(os.path.dirname(__file__))
+        os.system('ls')
+        os.system('ls ../')
+        print(sourcedir)
         subprocess.check_call(["cmake", sourcedir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
