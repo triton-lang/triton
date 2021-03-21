@@ -18,7 +18,8 @@ jobs:
         echo "import os, sys" >> setup.py
         echo "os.chdir('python')" >> setup.py
         echo "os.system('python ' + ' '.join(sys.argv))" >> setup.py
-        cibuildwheel --output-dir wheelhouse
+        cat setup.py
+        python3 -m cibuildwheel --output-dir wheelhouse
       displayName: Build wheels
     - task: PublishBuildArtifacts@1
       inputs: {pathtoPublish: 'wheelhouse'}
