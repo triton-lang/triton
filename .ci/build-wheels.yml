@@ -1,0 +1,14 @@
+jobs:
+- job: linux
+  pool: {vmImage: 'Ubuntu-18.04'}
+  steps:
+    - task: UsePythonVersion@0
+    - bash: |
+        set -o errexit
+        python3 -m pip install --upgrade pip
+        pip3 install cibuildwheel==1.10.0
+      displayName: Install dependencies
+    - bash: cibuildwheel --output-dir wheelhouse .
+      displayName: Build wheels
+    - task: PublishBuildArtifacts@1
+      inputs: {pathtoPublish: 'wheelhouse'}
