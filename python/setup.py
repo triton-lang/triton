@@ -51,6 +51,12 @@ class CMakeBuild(build_ext):
         # self.debug = True
         self.debug = False
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
+        # create build directories
+        llvm_build_dir = os.path.abspath(os.path.join(self.build_temp, os.pardir, "llvm"))
+        if not os.path.exists(self.build_temp):
+            os.makedirs(self.build_temp)
+        if not os.path.exists(llvm_build_dir):
+            os.makedirs(llvm_build_dir)
         # python directories
         python_include_dirs = distutils.sysconfig.get_python_inc()
         python_lib_dirs = distutils.sysconfig.get_config_var("LIBDIR")
@@ -60,6 +66,7 @@ class CMakeBuild(build_ext):
             "-DBUILD_PYTHON_MODULE=ON",
             #'-DPYTHON_EXECUTABLE=' + sys.executable,
             #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON,
+            "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
             "-DPYTHON_INCLUDE_DIRS=" + ";".join([python_include_dirs])
         ]
         # configuration
@@ -76,8 +83,7 @@ class CMakeBuild(build_ext):
             build_args += ["--", "-j8"]
 
         env = os.environ.copy()
-        if not os.path.exists(self.build_temp):
-            os.makedirs(self.build_temp)
+        print(self.build_temp)
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 

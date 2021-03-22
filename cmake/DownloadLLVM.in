@@ -6,8 +6,8 @@ include(ExternalProject)
 
 ExternalProject_Add(llvm
     URL "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.0/llvm-11.0.0.src.tar.xz"
-    SOURCE_DIR "${CMAKE_BINARY_DIR}/llvm-src"
-    BINARY_DIR "${CMAKE_BINARY_DIR}/llvm-build"
+    SOURCE_DIR "${TRITON_LLVM_BUILD_DIR}/llvm-src"
+    BINARY_DIR "${TRITON_LLVM_BUILD_DIR}/llvm-build"
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND ""
