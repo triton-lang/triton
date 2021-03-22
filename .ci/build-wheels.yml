@@ -15,6 +15,7 @@ jobs:
         python3 --version
         python3 -m pip install --upgrade pip
         pip3 install cibuildwheel==1.10.0
+        pip3 install twine
       displayName: Install dependencies
     - bash: |
         sed -i 's/name\=\"triton\"/name="triton-nightly"/g' python/setup.py
