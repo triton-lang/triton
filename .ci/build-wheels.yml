@@ -3,6 +3,10 @@ jobs:
 
   timeoutInMinutes: 180
 
+  schedules:
+    - cron: "0 0 * * *"
+      displayName: Daily nightly builds
+
   pool: default
 
   strategy:
