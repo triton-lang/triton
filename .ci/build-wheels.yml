@@ -1,6 +1,7 @@
 jobs:
 - job: linux
-  pool: {vmImage: 'Ubuntu-20.04'}
+
+  pool: default
 
   strategy:
     matrix:
