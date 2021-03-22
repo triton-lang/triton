@@ -6,6 +6,7 @@ import platform
 import subprocess
 import distutils
 import glob
+import tempfile
 from distutils.version import LooseVersion
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
@@ -52,7 +53,7 @@ class CMakeBuild(build_ext):
         self.debug = False
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
-        llvm_build_dir = os.path.abspath(os.path.join(self.build_temp, os.pardir, "llvm"))
+        llvm_build_dir = os.path.join(tempfile.gettempdir(), "llvm")
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         if not os.path.exists(llvm_build_dir):
@@ -83,7 +84,6 @@ class CMakeBuild(build_ext):
             build_args += ["--", "-j8"]
 
         env = os.environ.copy()
-        print(self.build_temp)
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
