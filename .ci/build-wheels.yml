@@ -11,14 +11,16 @@ jobs:
     - task: UsePythonVersion@0
     - bash: |
         set -o errexit
-        #python3 -m pip install --upgrade pip
-        #pip3 install cibuildwheel==1.10.0
+        python3 --version
+        python3 -m pip install --upgrade pip
+        pip3 install cibuildwheel==1.10.0
       displayName: Install dependencies
     - bash: |
         echo "" >> python/setup.cfg
         echo "[build_ext]" >> python/setup.cfg
         echo "base-dir=/project" >> python/setup.cfg
         export CIBW_BEFORE_BUILD="pip install cmake"
+        export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
         cibuildwheel python --output-dir wheelhouse
       displayName: Build wheels
     - task: PublishBuildArtifacts@1
