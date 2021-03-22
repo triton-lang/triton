@@ -24,7 +24,7 @@ jobs:
         echo "[build_ext]" >> python/setup.cfg
         echo "base-dir=/project" >> python/setup.cfg
       displayName: Patch setup.py
-   - bash: |
+    - bash: |
        export CIBW_BEFORE_BUILD="pip install cmake"
        export CIBW_BUILD="cp36-manylinux_x86_64"
        python3 -m cibuildwheel python --output-dir wheelhouse
