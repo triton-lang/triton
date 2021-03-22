@@ -22,7 +22,7 @@ jobs:
         echo "base-dir=/project" >> python/setup.cfg
         export CIBW_BEFORE_BUILD="pip install cmake"
         export CIBW_BUILD="cp37-manylinux_x86_64"
-        cibuildwheel python --output-dir wheelhouse
+        python3 -m cibuildwheel python --output-dir wheelhouse
       displayName: Build wheels
     - task: PublishBuildArtifacts@1
       inputs: {pathtoPublish: 'wheelhouse'}
