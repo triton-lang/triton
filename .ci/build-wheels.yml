@@ -32,5 +32,5 @@ jobs:
 #    - task: PublishBuildArtifacts@1
 #      inputs: {pathtoPublish: 'wheelhouse'}
     - bash: |
-        twine upload wheelhouse/*
+        python3 -m twine upload wheelhouse/*
       displayName: Upload wheels to PyPI
