@@ -12,13 +12,7 @@ jobs:
 
   pool: default
 
-  strategy:
-    matrix:
-      Python36:
-        python.version: '3.6'
-
   steps:
-    - task: UsePythonVersion@0
     - bash: |
         set -o errexit
         python3 --version
