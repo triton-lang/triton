@@ -15,6 +15,7 @@ jobs:
         pip3 install cibuildwheel==1.10.0
       displayName: Install dependencies
     - bash: |
+        echo "" >> python/setup.cfg
         echo "[build_ext]" >> python/setup.cfg
         echo "base-dir=/project" >> python/setup.cfg
         cibuildwheel python --output-dir wheelhouse
