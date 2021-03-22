@@ -29,8 +29,8 @@ jobs:
 #        export CIBW_BUILD="cp36-manylinux_x86_64"
 #        python3 -m cibuildwheel python --output-dir wheelhouse
 #      displayName: Build wheels
-    - task: PublishBuildArtifacts@1
-      inputs: {pathtoPublish: 'wheelhouse'}
+#    - task: PublishBuildArtifacts@1
+#      inputs: {pathtoPublish: 'wheelhouse'}
     - bash: |
         python3 -m twine -u $(PYPI_USERNAME) -p $(PYPI_PASSWORD) upload wheelhouse/*
       displayName: Upload wheels to PyPI
