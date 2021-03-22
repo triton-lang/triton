@@ -1,6 +1,6 @@
 jobs:
 - job: linux
-  pool: {vmImage: 'Ubuntu-18.04'}
+  pool: {vmImage: 'Ubuntu-20.04'}
 
   strategy:
     matrix:

@@ -75,8 +75,6 @@ class CMakeBuild(build_ext):
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
             build_args += ["--", "-j8"]
 
-        os.system('cat setup.cfg')
-        print(self.base_dir)
         env = os.environ.copy()
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
