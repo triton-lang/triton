@@ -24,13 +24,13 @@ jobs:
         echo "[build_ext]" >> python/setup.cfg
         echo "base-dir=/project" >> python/setup.cfg
       displayName: Patch setup.py
-    - bash: |
-        export CIBW_BEFORE_BUILD="pip install cmake"
-        export CIBW_BUILD="cp36-manylinux_x86_64"
-        python3 -m cibuildwheel python --output-dir wheelhouse
-      displayName: Build wheels
-    - task: PublishBuildArtifacts@1
-      inputs: {pathtoPublish: 'wheelhouse'}
+#    - bash: |
+#        export CIBW_BEFORE_BUILD="pip install cmake"
+#        export CIBW_BUILD="cp36-manylinux_x86_64"
+#        python3 -m cibuildwheel python --output-dir wheelhouse
+#      displayName: Build wheels
+#    - task: PublishBuildArtifacts@1
+#      inputs: {pathtoPublish: 'wheelhouse'}
     - bash: |
         twine upload -u $(PYPI_USERNAME) -p $(PYPI_PASSWORD) wheelhouse/*
       displayName: Upload wheels to PyPI
