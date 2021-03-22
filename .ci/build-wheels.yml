@@ -1,5 +1,5 @@
 trigger: none
-#pr: none
+pr: none
 
 jobs:
 - job: linux
