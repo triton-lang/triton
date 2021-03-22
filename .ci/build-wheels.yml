@@ -11,8 +11,8 @@ jobs:
     - task: UsePythonVersion@0
     - bash: |
         set -o errexit
-        python3 -m pip install --upgrade pip
-        pip3 install cibuildwheel==1.10.0
+        #python3 -m pip install --upgrade pip
+        #pip3 install cibuildwheel==1.10.0
       displayName: Install dependencies
     - bash: |
         echo "" >> python/setup.cfg
