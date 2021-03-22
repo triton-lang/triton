@@ -1,6 +1,9 @@
 schedules:
   - cron: "0 0 * * *"
     displayName: Daily nightly builds
+    branches:
+        include:
+        - master
 
 jobs:
 - job: linux
