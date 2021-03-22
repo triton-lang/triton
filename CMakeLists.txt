@@ -83,7 +83,6 @@ endif()
 # Triton
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-add_dependencies(triton llvm)
 target_link_libraries(triton ${LLVM_LIBRARIES})
 
 if(BUILD_PYTHON_MODULE)
