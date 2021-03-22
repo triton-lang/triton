@@ -1,6 +1,8 @@
 jobs:
 - job: linux
 
+  timeoutInMinutes: 180
+
   pool: default
 
   strategy:
