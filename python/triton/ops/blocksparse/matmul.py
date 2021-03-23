@@ -6,6 +6,7 @@ import math
 
 src = triton.read(os.path.join(os.path.dirname(__file__), 'matmul.c'))
 
+
 ##############
 #  MAIN API  #
 ##############
@@ -82,16 +83,13 @@ class _matmul(torch.autograd.Function):
     @staticmethod
     def make_sdd_lut(layout, block, dtype, device):
         start_width = 128 // block
-        superblocks = libtriton.superblock(layout.type(torch.int32), start_width)
+        layout = layout.type(torch.int32)
+        superblocks = libtriton.superblock(layout.data_ptr(), layout.shape[0], layout.shape[1], layout.shape[2], start_width)
         luts, widths, packs = [], [], []
         for size, nnz in superblocks:
+            nnz = nnz.reshape(-1, 4)
             width = nnz.shape[0] // (size * size)
-            h = nnz[:, 0]
-            i = nnz[:, 1]
-            j = nnz[:, 2]
-            b = nnz[:, 3]
-            lut = torch.stack((h, i, j, b), dim=1).view(-1).contiguous()
-            luts.append(lut.type(torch.int32).to(device))
+            luts.append(torch.from_numpy(nnz).type(torch.int32).to(device))
             widths.append(width)
             packs.append(size)
         # create locks
@@ -126,10 +124,21 @@ class _matmul(torch.autograd.Function):
             key = (block, device, a.dtype, b.dtype, trans_a, trans_b, trans_c, pack, is_32_multiple, is_64_multiple)
             if key not in _matmul.sdd_cache:
                 defines = {
-                    'TM': block * pack, 'TN': block * pack, 'TMN': block * block * pack * pack, 'BLOCK': block, 'TK':
-                    32, 'TYPE': dtype, 'STRIDE_AM': '1' if trans_a else 'lda', 'STRIDE_AK': 'lda' if trans_a else '1',
-                    'STRIDE_BN': 'ldb' if trans_b else '1', 'STRIDE_BK': '1' if trans_b else 'ldb', 'STRIDE_CM': 'ldc',
-                    'STRIDE_CN': '1', 'SDD': True, 'TZ': 1, 'NAME': 'sdd_kernel'
+                    'TM': block * pack,
+                    'TN': block * pack,
+                    'TMN': block * block * pack * pack,
+                    'BLOCK': block,
+                    'TK': 32,
+                    'TYPE': dtype,
+                    'STRIDE_AM': '1' if trans_a else 'lda',
+                    'STRIDE_AK': 'lda' if trans_a else '1',
+                    'STRIDE_BN': 'ldb' if trans_b else '1',
+                    'STRIDE_BK': '1' if trans_b else 'ldb',
+                    'STRIDE_CM': 'ldc',
+                    'STRIDE_CN': '1',
+                    'SDD': True,
+                    'TZ': 1,
+                    'NAME': 'sdd_kernel'
                 }
                 _matmul.sdd_cache[key] = triton.kernel(src, device=device, defines=defines)
 
@@ -141,10 +150,28 @@ class _matmul(torch.autograd.Function):
             # kernel calls
             max_width = 49152
             for off_width in range(0, width, max_width):
-                kernel(a.data_ptr(), b.data_ptr(), c.data_ptr(), a.stride(2), b.stride(2), block, a.stride(0),
-                       b.stride(0), c.stride(0), a.stride(1), b.stride(1), c.stride(0), AS2, AS2, AS3, off_width,
-                       lut.data_ptr(), locks.data_ptr(), num_lock,
-                       grid=lambda opt: [opt.TZ, min(max_width, width - off_width), AS0])
+                kernel(
+                    a.data_ptr(),
+                    b.data_ptr(),
+                    c.data_ptr(),
+                    a.stride(2),
+                    b.stride(2),
+                    block,
+                    a.stride(0),
+                    b.stride(0),
+                    c.stride(0),
+                    a.stride(1),
+                    b.stride(1),
+                    c.stride(0),
+                    AS2,
+                    AS2,
+                    AS3,
+                    off_width,
+                    lut.data_ptr(),
+                    locks.data_ptr(),
+                    num_lock,
+                    grid=lambda opt: [opt.TZ, min(max_width, width - off_width), AS0]
+                )
         # save for backward pass
         return c
 
@@ -258,10 +285,19 @@ class _matmul(torch.autograd.Function):
         key = (block, a.device, a.dtype, b.dtype, trans_a, trans_b, trans_c)
         if key not in _matmul.dds_cache:
             defines = {
-                'TM': 128, 'TN': block, 'TK': 16, 'BLOCK': block, 'TYPE': dtype, 'STRIDE_AM': 1 if trans_a else 'lda',
-                'STRIDE_AK': 'lda' if trans_a else 1, 'STRIDE_BN': block if trans_b else 1, 'STRIDE_BK':
-                1 if trans_b else block, 'STRIDE_CM': '1' if trans_c else 'ldc', 'STRIDE_CN': 'ldc' if trans_c else '1',
-                'NAME': 'dds_kernel', 'DDS': True
+                'TM': 128,
+                'TN': block,
+                'TK': 16,
+                'BLOCK': block,
+                'TYPE': dtype,
+                'STRIDE_AM': 1 if trans_a else 'lda',
+                'STRIDE_AK': 'lda' if trans_a else 1,
+                'STRIDE_BN': block if trans_b else 1,
+                'STRIDE_BK': 1 if trans_b else block,
+                'STRIDE_CM': '1' if trans_c else 'ldc',
+                'STRIDE_CN': 'ldc' if trans_c else '1',
+                'NAME': 'dds_kernel',
+                'DDS': True
             }
             _matmul.dds_cache[key] = triton.kernel(src, device=a.device, defines=defines)
         kernel = _matmul.dds_cache[key]
@@ -272,9 +308,28 @@ class _matmul(torch.autograd.Function):
         CS3 = AS2 if trans_c else BS2
         locks = _matmul.get_locks(2 * AS0 * AS2 // 32 * num_locks, a.device)
         c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
-        kernel(a.data_ptr(), b.data_ptr(), c.data_ptr(), a.stride(2), block, c.stride(2), a.stride(0), b.stride(0),
-               c.stride(0), a.stride(1), b.stride(1), c.stride(1), AS2, BS2, 0, 0, lut.data_ptr(), locks.data_ptr(),
-               num_locks, grid=lambda opt: [width, triton.cdiv(AS2, opt.TM), AS0])
+        kernel(
+            a.data_ptr(),
+            b.data_ptr(),
+            c.data_ptr(),
+            a.stride(2),
+            block,
+            c.stride(2),
+            a.stride(0),
+            b.stride(0),
+            c.stride(0),
+            a.stride(1),
+            b.stride(1),
+            c.stride(1),
+            AS2,
+            BS2,
+            0,
+            0,
+            lut.data_ptr(),
+            locks.data_ptr(),
+            num_locks,
+            grid=lambda opt: [width, triton.cdiv(AS2, opt.TM), AS0]
+        )
         return c
 
     @staticmethod
@@ -292,10 +347,19 @@ class _matmul(torch.autograd.Function):
         key = (block, a.device, a.dtype, b.dtype, trans_a, trans_b, trans_c)
         if key not in _matmul.dsd_cache:
             defines = {
-                'TM': block, 'TN': 128, 'TK': 16, 'BLOCK': block, 'TYPE': dtype, 'STRIDE_AM': 1 if trans_a else block,
-                'STRIDE_AK': block if trans_a else 1, 'STRIDE_BN': 'ldb' if trans_b else '1', 'STRIDE_BK':
-                '1' if trans_b else 'ldb', 'STRIDE_CM': '1' if trans_c else 'ldc', 'STRIDE_CN':
-                'ldc' if trans_c else '1', 'NAME': 'dsd_kernel', 'DSD': True
+                'TM': block,
+                'TN': 128,
+                'TK': 16,
+                'BLOCK': block,
+                'TYPE': dtype,
+                'STRIDE_AM': 1 if trans_a else block,
+                'STRIDE_AK': block if trans_a else 1,
+                'STRIDE_BN': 'ldb' if trans_b else '1',
+                'STRIDE_BK': '1' if trans_b else 'ldb',
+                'STRIDE_CM': '1' if trans_c else 'ldc',
+                'STRIDE_CN': 'ldc' if trans_c else '1',
+                'NAME': 'dsd_kernel',
+                'DSD': True
             }
             _matmul.dsd_cache[key] = triton.kernel(src, device=a.device, defines=defines)
         kernel = _matmul.dsd_cache[key]
@@ -306,16 +370,37 @@ class _matmul(torch.autograd.Function):
         CS3 = AS1 if trans_c else BS3
         locks = _matmul.get_locks(2 * BS0 * BS3 // 32 * num_locks, a.device)
         c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
-        kernel(a.data_ptr(), b.data_ptr(), c.data_ptr(), block, b.stride(2), c.stride(2), a.stride(0), b.stride(0),
-               c.stride(0), a.stride(1), b.stride(1), c.stride(1), BS3, AS1, 0, 0, lut.data_ptr(), locks.data_ptr(),
-               num_locks, grid=lambda opt: [width, triton.cdiv(BS3, opt.TN), BS0])
+        kernel(
+            a.data_ptr(),
+            b.data_ptr(),
+            c.data_ptr(),
+            block,
+            b.stride(2),
+            c.stride(2),
+            a.stride(0),
+            b.stride(0),
+            c.stride(0),
+            a.stride(1),
+            b.stride(1),
+            c.stride(1),
+            BS3,
+            AS1,
+            0,
+            0,
+            lut.data_ptr(),
+            locks.data_ptr(),
+            num_locks,
+            grid=lambda opt: [width, triton.cdiv(BS3, opt.TN), BS0]
+        )
         return c
 
     fn = {'sdd': _sdd_matmul.__get__(object), 'dsd': _dsd_matmul.__get__(object), 'dds': _dds_matmul.__get__(object)}
 
     @staticmethod
-    def forward(ctx, a, b, trans_a, trans_b, trans_c, mode, spdims, block, c_lut, c_num_locks, c_width, c_packs, da_lut,
-                da_num_locks, da_width, da_packs, db_lut, db_num_locks, db_width, db_packs):
+    def forward(
+        ctx, a, b, trans_a, trans_b, trans_c, mode, spdims, block, c_lut, c_num_locks, c_width, c_packs, da_lut, da_num_locks,
+        da_width, da_packs, db_lut, db_num_locks, db_width, db_packs
+    ):
         c = _matmul.fn[mode](a, b, trans_a, trans_b, trans_c, spdims, block, c_lut, c_num_locks, c_width, c_packs)
         # save for backward
         ctx.save_for_backward(a, b)
@@ -342,18 +427,23 @@ class _matmul(torch.autograd.Function):
         # gradients w.r.t. a
         if ctx.needs_input_grad[0]:
             mode_da = mode[1] + mode[0] + mode[2]
-            da = _matmul.fn[mode_da](dc, b, False, not ctx.trans_b, ctx.trans_a, ctx.spdims, ctx.block, ctx.da_lut,
-                                     ctx.da_num_locks, ctx.da_width, ctx.da_packs)
+            da = _matmul.fn[mode_da](
+                dc, b, False, not ctx.trans_b, ctx.trans_a, ctx.spdims, ctx.block, ctx.da_lut, ctx.da_num_locks, ctx.da_width,
+                ctx.da_packs
+            )
         # gradients w.r.t. b
         if ctx.needs_input_grad[1]:
             mode_db = mode[2] + mode[1] + mode[0]
-            db = _matmul.fn[mode_db](a, dc, not ctx.trans_a, False, ctx.trans_b, ctx.spdims, ctx.block, ctx.db_lut,
-                                     ctx.db_num_locks, ctx.db_width, ctx.db_packs)
+            db = _matmul.fn[mode_db](
+                a, dc, not ctx.trans_a, False, ctx.trans_b, ctx.spdims, ctx.block, ctx.db_lut, ctx.db_num_locks, ctx.db_width,
+                ctx.db_packs
+            )
         return da, db, None, None, None,\
                None, None, None, None,\
                None, None, None, None, None, None,\
                None, None, None, None, None, None,\
                None, None, None, None, None, None
+
 
 class matmul:
     def make_lut(self, dtype, device):
@@ -375,8 +465,7 @@ class matmul:
         elif self.mode == 'dsd':
             da_lut, da_num_locks, da_width, da_packs = _matmul.make_sdd_lut(layout, block, dtype, device)
         elif self.mode == 'dds':
-            da_lut, da_num_locks, da_width, da_packs = _matmul.make_dxx_lut(layout, block, step, not self.trans_b,
-                                                                            device)
+            da_lut, da_num_locks, da_width, da_packs = _matmul.make_dxx_lut(layout, block, step, not self.trans_b, device)
         # DB look-up table
         if self.mode == 'sdd':
             db_lut, db_num_locks, db_width, db_packs = _matmul.make_dxx_lut(layout, block, step, False, device)
@@ -419,7 +508,8 @@ class matmul:
         a = matmul._pad_shape(a, self.mode == 'dsd')
         b = matmul._pad_shape(b, self.mode == 'dds')
         # execute
-        c = _matmul.apply(a, b, self.trans_a, self.trans_b, False, self.mode, self.spdims, self.block, c_lut,
-                          c_num_locks, c_width, c_packs, da_lut, da_num_locks, da_width, da_packs, db_lut, db_num_locks,
-                          db_width, db_packs)
+        c = _matmul.apply(
+            a, b, self.trans_a, self.trans_b, False, self.mode, self.spdims, self.block, c_lut, c_num_locks, c_width, c_packs,
+            da_lut, da_num_locks, da_width, da_packs, db_lut, db_num_locks, db_width, db_packs
+        )
         return c

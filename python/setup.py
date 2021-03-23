@@ -6,28 +6,12 @@ import platform
 import subprocess
 import distutils
 import glob
+import tempfile
 from distutils.version import LooseVersion
 from setuptools import setup, Extension, find_packages
-from torch.utils.cpp_extension import include_paths, library_paths
 from setuptools.command.build_ext import build_ext
 from setuptools.command.test import test as TestCommand
 import distutils.spawn
-import torch
-
-
-def find_llvm():
-    versions = ["-10", "-10.0", ""]
-    supported = ["llvm-config{v}".format(v=v) for v in versions]
-    paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
-    paths = [p for p in paths if p is not None]
-    if paths:
-        return paths[0]
-    config = distutils.spawn.find_executable("llvm-config")
-    instructions = "Please install llvm-10-dev"
-    if config is None:
-        raise RuntimeError("Could not find llvm-config. " + instructions)
-    version = os.popen("{config} --version".format(config=config)).read()
-    raise RuntimeError("Version {v} not supported. ".format(v=version) + instructions)
 
 
 class CMakeExtension(Extension):
@@ -38,6 +22,16 @@ class CMakeExtension(Extension):
 
 
 class CMakeBuild(build_ext):
+
+    user_options = build_ext.user_options + [('base-dir=', None, 'base directory of Triton')]
+
+    def initialize_options(self):
+        build_ext.initialize_options(self)
+        self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+
+    def finalize_options(self):
+        build_ext.finalize_options(self)
+
     def run(self):
         try:
             out = subprocess.check_output(["cmake", "--version"])
@@ -58,23 +52,23 @@ class CMakeBuild(build_ext):
         # self.debug = True
         self.debug = False
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
+        # create build directories
+        llvm_build_dir = os.path.join(tempfile.gettempdir(), "llvm")
+        if not os.path.exists(self.build_temp):
+            os.makedirs(self.build_temp)
+        if not os.path.exists(llvm_build_dir):
+            os.makedirs(llvm_build_dir)
         # python directories
         python_include_dirs = distutils.sysconfig.get_python_inc()
         python_lib_dirs = distutils.sysconfig.get_config_var("LIBDIR")
-        torch_include_dirs = include_paths(True)
-        torch_library_dirs = library_paths(True)
-        cxx11abi = str(int(torch._C._GLIBCXX_USE_CXX11_ABI))
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DBUILD_TUTORIALS=OFF",
             "-DBUILD_PYTHON_MODULE=ON",
             #'-DPYTHON_EXECUTABLE=' + sys.executable,
             #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON,
-            "-DPYTHON_INCLUDE_DIRS=" + ";".join([python_include_dirs] + include_paths(True)),
-            "-DPYTHON_LINK_DIRS=" + ";".join(library_paths(True)),
-            "-DTORCH_CXX11_ABI=" + cxx11abi,
-            "-DTORCH_LIBRARIES=c10;c10_cuda;torch;torch_cuda;torch_cpu;torch_python;triton",
-            "-DLLVM_CONFIG=" + find_llvm(),
+            "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
+            "-DPYTHON_INCLUDE_DIRS=" + ";".join([python_include_dirs])
         ]
         # configuration
         cfg = "Debug" if self.debug else "Release"
@@ -87,13 +81,10 @@ class CMakeBuild(build_ext):
             build_args += ["--", "/m"]
         else:
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ["--", "-j4"]
+            build_args += ["--", "-j8"]
 
         env = os.environ.copy()
-        if not os.path.exists(self.build_temp):
-            os.makedirs(self.build_temp)
-        sourcedir = os.path.abspath(os.path.join(os.path.dirname(__file__), "src"))
-        subprocess.check_call(["cmake", sourcedir] + cmake_args, cwd=self.build_temp, env=env)
+        subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
 
@@ -106,7 +97,10 @@ setup(
     long_description="",
     packages=["triton", "triton/_C", "triton/ops", "triton/ops/blocksparse"],
     install_requires=["numpy", "torch"],
-    package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
+    package_data={
+        "triton/ops": ["*.c"],
+        "triton/ops/blocksparse": ["*.c"]
+    },
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},
@@ -116,10 +110,10 @@ setup(
     url="https://github.com/ptillet/triton/",
     download_url="https://github.com/ptillet/triton/archive/v0.1.tar.gz",
     classifiers=[
-        "Development Status :: 3 - Alpha",  # Chose either "3 - Alpha", "4 - Beta" or "5 - Production/Stable" as the current state of your package
-        "Intended Audience :: Developers",  # Define that your audience are developers
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
-        "License :: OSI Approved :: MIT License",  # Again, pick a license
+        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3.6",
     ],
 )

@@ -5,8 +5,6 @@ import torch
 from . import testing
 from .kernel import *
 from . import ops
-# C bindings
-import triton._C.libtriton.torch_utils as _torch_utils
 
 # version
 __version__ = '1.0.0'
