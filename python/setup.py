@@ -90,17 +90,14 @@ class CMakeBuild(build_ext):
 
 setup(
     name="triton",
-    version="1.0.0-dev20210323",
+    version="1.0.0",
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     packages=["triton", "triton/_C", "triton/ops", "triton/ops/blocksparse"],
     install_requires=["numpy", "torch"],
-    package_data={
-        "triton/ops": ["*.c"],
-        "triton/ops/blocksparse": ["*.c"]
-    },
+    package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},
