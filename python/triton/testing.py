@@ -18,8 +18,22 @@ def cutlass_matmul(a, b):
     if _cutlass is None:
         raise RuntimeError("Cannot find cutlass library")
     M, N = a.shape[0], b.shape[1]
+    Ka, Kb = a.shape[1], b.shape[0]
+    assert Ka == Kb
+    assert a.dtype == b.dtype
+    assert a.device == b.device
+    # allocate output
     c = torch.empty_strided((M, N), (1, M), dtype=a.dtype, device=a.device)
-    _cutlass.matmul(a, b, c)
+    # run function
+    dtype = str(a.dtype).split('.')[-1]
+    _cutlass.matmul(a.data_ptr(), b.data_ptr(), c.data_ptr(), \
+                    M, N, Ka,\
+                    a.stride(0), a.stride(1),\
+                    b.stride(0), b.stride(1),\
+                    c.stride(0), c.stride(1),\
+                    dtype, dtype, dtype,
+                    a.device.index, torch.cuda.current_stream(a.device).cuda_stream)
+
     return c
 
 
