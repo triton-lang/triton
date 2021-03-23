@@ -22,15 +22,17 @@ Programming Guide
 
 Check out the following documents to learn more about Triton and how it compares against other DSLs for DNNs:
 
-- Chapter 1: :doc:`Introduction <programming-guide/introduction>`
-- Chapter 2: :doc:`Related Work <programming-guide/related-work>`
-- Chapter 3: :doc:`The Triton-C Kernel Language <programming-guide/triton-c>`
+- Chapter 1: :doc:`<programming-guide/chapter1/introduction>`
+- Chapter 2: :doc:`<programming-guide/chapter2/related-work>`
+- Chapter 3: :doc:`<programming-guide/chapter3/triton-c>`
+- Chapter 4: :doc:`<programming-guide/chapter4/triton-ir>`
 
 .. toctree::
    :maxdepth: 1
    :caption: Programming Guide
    :hidden:
 
-   programming-guide/introduction
-   programming-guide/related-work
-   programming-guide/triton-c
+   programming-guide/chapter1/introduction
+   programming-guide/chapter2/related-work
+   programming-guide/chapter3/triton-c
+   programming-guide/chapter4/triton-ir
