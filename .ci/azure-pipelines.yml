@@ -8,7 +8,7 @@ variables:
   value: venv
 
 # Run CI when something pushed to master
-# trigger: [ master ]
+trigger: none
 # Run CI when a PR is created or updated from master
 pr:
 - master
