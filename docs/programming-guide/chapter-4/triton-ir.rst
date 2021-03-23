@@ -63,13 +63,13 @@ In Triton-IR, operations on block variables are atomic: they execute either in f
 
 This could be potentially solved through the use of the Predicated SSA (PSSA) [CARTER99]_ [STOUTCHININ01]_ form for Triton-IR. However, this would create a lot of unnecessary complexity for GPUs, where the benefits of PSSA are close to none as divergent program paths  within warps are  serialized anyway. Therefore, recent versions of Triton handle intra-block control flow in a much simpler way, using conditional instructions such as  :code:`select`, :code:`masked_load` and :code:`masked_store`:
 
-.. code-block:: llvm
+.. code-block:: C
 
-  ; For all indices [idx], return cond[idx] ? true_value[idx] : false_value[idx];
+  // For all indices [idx], return cond[idx] ? true_value[idx] : false_value[idx];
   select       TYPE<TS1, ..., TSN> cond, true_value, false_value;
-  ; For all indices [idx], return cond[idx] ? *true_addr[idx] : false_value[idx];
+  // For all indices [idx], return cond[idx] ? *true_addr[idx] : false_value[idx];
   masked_load  TYPE<TS1, ..., TSN> cond, true_addr, false_value;
-  ; For all indices [idx], execute *true_addr[idx] = true_value[idx] if cond[idx]
+  // For all indices [idx], execute *true_addr[idx] = true_value[idx] if cond[idx]
   masked_store TYPE<TS1, ..., TSN> cond, true_addr, true_value;
 
 
