@@ -189,14 +189,14 @@ float triton_dot(drv::context* context,  drv::stream* stream,
   // grid
   auto ceil = [](size_t x, size_t y) { return (x + y - 1) / y; };
   auto grid = [ceil, M, N](const rt::options_t& x) {
-    return rt::grid_t{ceil(M, x.D<int>("TM"))*
-                      ceil(N, x.D<int>("TN")),
-                      (size_t)x.D<int>("TZ")};
+    return rt::kernel::grid_t{ceil(M, x.D<int>("TM"))*
+                              ceil(N, x.D<int>("TN")),
+                              (size_t)x.D<int>("TZ")};
   };
 
   // metrics
   auto tflops = [&](double nanosec) { return 2.*M*N*K / nanosec * 1e-3; };
-  double triton_ns = triton::tools::bench([&]() { function((void**)oss.str().data(), oss.str().size(), grid, stream);}, stream);
+  double triton_ns = triton::tools::bench([&]() { function(oss.str(), grid, stream);}, stream);
   return tflops(triton_ns);
 }
 
