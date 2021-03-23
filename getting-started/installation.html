@@ -92,6 +92,7 @@
               <p class="caption"><span class="caption-text">Getting Started</span></p>
 <ul class="current">
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Installation</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#binary-distributions">Binary Distributions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#from-source">From Source</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#python-package">Python Package</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#c-package">C++ Package</a></li>
@@ -103,9 +104,10 @@
 </ul>
 <p class="caption"><span class="caption-text">Programming Guide</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../programming-guide/introduction.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../programming-guide/related-work.html">Related Work</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../programming-guide/triton-c.html">The Triton-C Language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../programming-guide/chapter-3/triton-c.html">The Triton-C Language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../programming-guide/chapter-4/triton-ir.html">The Triton-IR Intermediate Representation</a></li>
 </ul>
 
             
@@ -175,17 +177,24 @@
             
   <div class="section" id="installation">
 <h1>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">¶</a></h1>
+<div class="section" id="binary-distributions">
+<h2>Binary Distributions<a class="headerlink" href="#binary-distributions" title="Permalink to this headline">¶</a></h2>
+<p>You can install the latest nightly release of Triton from pip:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip install -U --pre triton
+</pre></div>
+</div>
+</div>
 <div class="section" id="from-source">
 <h2>From Source<a class="headerlink" href="#from-source" title="Permalink to this headline">¶</a></h2>
 <div class="section" id="python-package">
 <h3>Python Package<a class="headerlink" href="#python-package" title="Permalink to this headline">¶</a></h3>
 <p>You can install the Python package from source by running the following commands:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo apt-get install llvm-10-dev
-git clone https://github.com/ptillet/triton.git<span class="p">;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git clone https://github.com/ptillet/triton.git<span class="p">;</span>
 <span class="nb">cd</span> triton/python<span class="p">;</span>
 pip install -e .
 </pre></div>
 </div>
+<p>This may take a while (10-20 minutes) as it will download and compile LLVM from source.</p>
 <p>You can then test your installation by running the unit tests:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pytest -vs .
 </pre></div>
@@ -199,16 +208,11 @@ python -m run --with-plots --result-dir /tmp/triton-bench
 <div class="section" id="c-package">
 <h3>C++ Package<a class="headerlink" href="#c-package" title="Permalink to this headline">¶</a></h3>
 <p>Those not interested in Python integration may want to use the internals of Triton (i.e, runtime, parser, codegen, driver, intermediate representation) directly. This can be done by running the following commands:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo apt-get install llvm-10-dev
-git clone https://github.com/ptillet/triton.git<span class="p">;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git clone https://github.com/ptillet/triton.git<span class="p">;</span>
 mkdir build<span class="p">;</span>
 <span class="nb">cd</span> build<span class="p">;</span>
 cmake ../<span class="p">;</span>
 make -j8<span class="p">;</span>
-</pre></div>
-</div>
-<p>A custom llvm-config binary can also be provided:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cmake ../ -DLLVM_CONFIG<span class="o">=</span>/path/to/llvm-config
 </pre></div>
 </div>
 <p>Note that while direct usage of the C++ API is not officially supported, a usage tutorial can be found  <a class="reference external" href="https://github.com/ptillet/triton/blob/master/tutorials/01-matmul.cc">here</a></p>

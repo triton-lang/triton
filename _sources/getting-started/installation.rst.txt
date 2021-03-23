@@ -2,6 +2,17 @@
 Installation
 ==============
 
+---------------------
+Binary Distributions
+---------------------
+
+You can install the latest nightly release of Triton from pip:
+
+.. code-block:: bash
+  
+      pip install -U --pre triton
+
+
 --------------
 From Source
 --------------
@@ -14,10 +25,11 @@ You can install the Python package from source by running the following commands
 
 .. code-block:: bash
 
-      sudo apt-get install llvm-10-dev
       git clone https://github.com/ptillet/triton.git;
       cd triton/python;
       pip install -e .
+
+This may take a while (10-20 minutes) as it will download and compile LLVM from source.
 
 You can then test your installation by running the unit tests:
 
@@ -40,17 +52,10 @@ Those not interested in Python integration may want to use the internals of Trit
 
 .. code-block:: bash
 
-      sudo apt-get install llvm-10-dev
       git clone https://github.com/ptillet/triton.git;
       mkdir build;
       cd build;
       cmake ../;
       make -j8;
-
-A custom llvm-config binary can also be provided:
-
-.. code-block:: bash
-      
-      cmake ../ -DLLVM_CONFIG=/path/to/llvm-config
 
 Note that while direct usage of the C++ API is not officially supported, a usage tutorial can be found  `here <https://github.com/ptillet/triton/blob/master/tutorials/01-matmul.cc>`_
