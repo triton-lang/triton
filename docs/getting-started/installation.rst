@@ -10,7 +10,7 @@ You can install the latest nightly release of Triton from pip:
 
 .. code-block:: bash
   
-      pip install triton-nightly
+      pip install -U --pre triton
 
 
 --------------
