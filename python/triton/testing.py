@@ -3,8 +3,10 @@ import os
 
 try:
     import triton._C.libtriton.cutlass as _cutlass
+    has_cutlass = True
 except ImportError:
     _cutlass = None
+    has_cutlass = False
 
 
 def sparsify_tensor(x, mask, block):
@@ -44,7 +46,7 @@ def mask_tensor(x, mask, block, value=0):
     return ret
 
 
-def allclose(x, y):
+def allclose(x, y, tol=1e-2):
     assert x.dtype == y.dtype
     diff = abs(x - y)
     x_max = torch.max(x)
