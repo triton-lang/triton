@@ -28,7 +28,7 @@ using namespace llvm;
 #define f16_ty               builder_->getHalfTy()
 #define f32_ty               builder_->getFloatTy()
 #define i32_ty               builder_->getInt32Ty()
-#define vec_ty(...)          VectorType::get(__VA_ARGS__)
+#define vec_ty(type, num_el) VectorType::get(type, num_el, false)
 #define ptr_ty(...)          PointerType::get(__VA_ARGS__)
 // constants
 #define i32(...)             builder_->getInt32(__VA_ARGS__)

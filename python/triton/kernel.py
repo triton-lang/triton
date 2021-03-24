@@ -6,14 +6,9 @@ import torch
 import triton._C.libtriton.triton as _triton
 
 codes = {
-    _triton.runtime.arg_type.int1: 'B',
-    _triton.runtime.arg_type.int8: 'B',
-    _triton.runtime.arg_type.int32: 'I',
-    _triton.runtime.arg_type.int64: 'Q',
-    _triton.runtime.arg_type.half: 'H',
-    _triton.runtime.arg_type.float: 'f',
-    _triton.runtime.arg_type.double: 'd',
-    _triton.runtime.arg_type.buffer: 'P'
+    _triton.runtime.arg_type.int1: 'B', _triton.runtime.arg_type.int8: 'B', _triton.runtime.arg_type.int32: 'I',
+    _triton.runtime.arg_type.int64: 'Q', _triton.runtime.arg_type.half: 'H', _triton.runtime.arg_type.float: 'f',
+    _triton.runtime.arg_type.double: 'd', _triton.runtime.arg_type.buffer: 'P'
 }
 
 
