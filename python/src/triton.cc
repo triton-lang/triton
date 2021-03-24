@@ -127,10 +127,6 @@ void init_triton_runtime(py::module &&m) {
       .value("float", rt::FLOAT_T)
       .value("double", rt::DOUBLE_T)
       .value("buffer", rt::BUFFER_T);
-  // assembly mode
-  py::enum_<rt::asm_mode_t>(m, "asm_mode")
-      .value("ptx", rt::ASM_NV_PTX)
-      .value("sass", rt::ASM_NV_SASS);
   // compilation options
   py::class_<rt::options_t>(m, "options", py::dynamic_attr())
       .def(py::init<>())
@@ -142,7 +138,8 @@ void init_triton_runtime(py::module &&m) {
   //  kernel
   py::class_<rt::kernel>(m, "kernel")
       .def("__call__", &rt::kernel::operator())
-      .def_readonly("opt", &rt::kernel::opt);
+      .def_readonly("opt", &rt::kernel::opt)
+      .def("asm", &rt::kernel::get_asm);
   // tune conf
   py::class_<rt::config>(m, "config")
       .def(py::init<std::map<std::string, std::string>, int>(),

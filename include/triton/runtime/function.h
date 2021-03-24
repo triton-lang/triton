@@ -92,12 +92,6 @@ void add_arg(std::stringstream& ss, T arg) {
 /* ------------------------- */
 /* ------------------------- */
 
-enum asm_mode_t {
-  ASM_LLIR,
-  ASM_NV_PTX,
-  ASM_NV_SASS
-};
-
 class kernel{
 public:
   typedef std::vector<size_t> grid_t;
@@ -111,7 +105,7 @@ public:
 public:
   kernel(const std::string& src, const options_t& opt, driver::device *device, const std::map<int, triton::ir::attribute> &attrs = {});
   void operator()(const std::string& args, driver::stream *stream, const grid_t& grid) const;
-  std::string get_asm(asm_mode_t mode);
+  std::string get_asm(const std::string &mode);
 
 public:
   const options_t opt;
