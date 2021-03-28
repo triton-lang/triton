@@ -147,6 +147,8 @@ std::tuple<std::shared_ptr<driver::module>,
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), opt.num_warps);
   // run passes
   dce.run(ir);
+  peephole.run(ir);
+  dce.run(ir);
   pipeline.run(ir);
   dce.run(ir);
   disassociate.run(ir);
