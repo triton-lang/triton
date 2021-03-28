@@ -59,7 +59,7 @@ class CMakeBuild(build_ext):
         if not os.path.exists(llvm_build_dir):
             os.makedirs(llvm_build_dir)
         # python directories
-        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include/']
+        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
         python_lib_dirs = distutils.sysconfig.get_config_var("LIBDIR")
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
