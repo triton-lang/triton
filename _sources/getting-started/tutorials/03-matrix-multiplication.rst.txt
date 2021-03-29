@@ -238,7 +238,7 @@ Here, we want to re-tune our kernel only when the shape of input matrices change
 
 We can now create an auto-tuned kernel by passing the `autotune_configs` and `autotune_key` lists to the constructor of the :code:`triton.kernel` class.
 
-.. GENERATED FROM PYTHON SOURCE LINES 193-238
+.. GENERATED FROM PYTHON SOURCE LINES 193-244
 
 .. code-block:: default
 
@@ -281,7 +281,13 @@ We can now create an auto-tuned kernel by passing the `autotune_configs` and `au
         cache = make_kernel.cache
         if key not in cache:
             defines = {'TYPE': dtype}
-            cache[key] = triton.kernel(src, device=device, defines=defines, autotune_vals=autotune_configs, autotune_key=autotune_key)
+            cache[key] = triton.kernel(
+                src,
+                device=device,
+                defines=defines,
+                autotune_configs=autotune_configs,
+                autotune_key=autotune_key,
+            )
         return cache[key]
 
 
@@ -294,7 +300,7 @@ We can now create an auto-tuned kernel by passing the `autotune_configs` and `au
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 239-244
+.. GENERATED FROM PYTHON SOURCE LINES 245-250
 
 Autograd Function
 ~~~~~~~~~~~~~~~~~~
@@ -302,7 +308,7 @@ Autograd Function
 Now we are ready to expose our auto-tuned kernel as a `torch.autograd.Function`.
 To do so, we just need to define a `forward` function that takes a two tensors as input and returns a tensor as output.
 
-.. GENERATED FROM PYTHON SOURCE LINES 244-265
+.. GENERATED FROM PYTHON SOURCE LINES 250-271
 
 .. code-block:: default
 
@@ -334,7 +340,7 @@ To do so, we just need to define a `forward` function that takes a two tensors a
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 266-271
+.. GENERATED FROM PYTHON SOURCE LINES 272-277
 
 Unit Test
 -----------
@@ -342,7 +348,7 @@ Unit Test
 We can test our custom matrix multiplication operation against cuBLAS (i.e., :code:`torch.matmul`).
 Note that we need to modify the :code`atol` and :code:`rtol` parameters of `torch.allclose` to account for the fact that we are comparing FP16 tensors.
 
-.. GENERATED FROM PYTHON SOURCE LINES 271-280
+.. GENERATED FROM PYTHON SOURCE LINES 277-286
 
 .. code-block:: default
 
@@ -386,7 +392,7 @@ Note that we need to modify the :code`atol` and :code:`rtol` parameters of `torc
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 281-327
+.. GENERATED FROM PYTHON SOURCE LINES 287-333
 
 Benchmark
 --------------
@@ -429,13 +435,13 @@ To re-install Triton with the updated CUTLASS bindings, run the following comman
 .. code-block:: bash
 
    export CUTLASS_INCLUDE_DIR=/tmp/cutlass/build/install/include/
-   export CUTLASS_LIBRARY_DIR=/tmp/cutlass/build/install/lib/a
+   export CUTLASS_LIBRARY_DIR=/tmp/cutlass/build/install/lib/
    pip uninstall -y triton
    pip install -e "git+https://github.com/ptillet/triton.git#egg=triton&subdirectory=python"
 
 Which we can test as follows:
 
-.. GENERATED FROM PYTHON SOURCE LINES 327-333
+.. GENERATED FROM PYTHON SOURCE LINES 333-339
 
 .. code-block:: default
 
@@ -468,7 +474,7 @@ Which we can test as follows:
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 334-339
+.. GENERATED FROM PYTHON SOURCE LINES 340-345
 
 Note that this wrapper for CUTLASS was written for benchmarking purposes and is probably not production-ready.
 
@@ -476,7 +482,7 @@ Square Matrix Performance
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 We can now compare the performance of our kernel against CUTLASS. Here we focus on square matrices, but feel free to arrange the script as you wish to compare any other matrix shape.#
 
-.. GENERATED FROM PYTHON SOURCE LINES 339-368
+.. GENERATED FROM PYTHON SOURCE LINES 345-374
 
 .. code-block:: default
 
@@ -487,8 +493,8 @@ We can now compare the performance of our kernel against CUTLASS. Here we focus 
             x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
             x_vals=[256 * i for i in range(2, 33)],  # different possible values for `x_name`
             y_name='provider',  # argument name whose value corresponds to a different line in the plot
-            y_vals=['torch', 'triton', 'cutlass'],  # possible keys for `y_name`
-            y_lines=["Torch", "Triton", 'CUTLASS'],  # label name for the lines
+            y_vals=['cublas', 'triton', 'cutlass'],  # possible keys for `y_name`
+            y_lines=["cuBLAS", "Triton", 'CUTLASS'],  # label name for the lines
             ylabel="TFLOPS",  # label name for the y-axis
             plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
             args={}
@@ -497,7 +503,7 @@ We can now compare the performance of our kernel against CUTLASS. Here we focus 
     def benchmark(M, N, K, provider):
         a = torch.randn((M, K), device='cuda', dtype=torch.float16)
         b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-        if provider == 'torch':
+        if provider == 'cublas':
             ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b))
         if provider == 'triton':
             ms, min_ms, max_ms = triton.testing.do_bench(lambda: dot(a, b))
@@ -513,21 +519,21 @@ We can now compare the performance of our kernel against CUTLASS. Here we focus 
 
 
 .. image:: /getting-started/tutorials/images/sphx_glr_03-matrix-multiplication_001.png
-    :alt: matmul-performance
+    :alt: 03 matrix multiplication
     :class: sphx-glr-single-img
 
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 369-369
+.. GENERATED FROM PYTHON SOURCE LINES 375-375
 
 As we can see, the performance of our kernel is pretty good. It is in fact faster than CUTLASS, and therefore probably comparable to the absolute best CUDA code an expert could write.
 
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 1 minutes  6.502 seconds)
+   **Total running time of the script:** ( 1 minutes  5.861 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:

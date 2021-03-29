@@ -295,7 +295,7 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
 
 
 .. image:: /getting-started/tutorials/images/sphx_glr_02-fused-softmax_001.png
-    :alt: softmax-performance
+    :alt: 02 fused softmax
     :class: sphx-glr-single-img
 
 
@@ -314,7 +314,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  19.933 seconds)
+   **Total running time of the script:** ( 0 minutes  25.654 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:
