@@ -17,15 +17,11 @@ square_confs = [
         x_names=["M", "N", "K"],
         x_vals=rounded_linspace(512, 8192, 32, 128),
         y_name="provider",
-        y_vals=["torch", "triton", "cutlass"],
-        y_lines=["Torch", "Triton", "CUTLASS"],
+        y_vals=["cublas", "triton", "cutlass"],
+        y_lines=["cuBLAS", "Triton", "CUTLASS"],
         ylabel="TFLOPS",
         plot_name=f"matmul-square-{nt[AT]}{nt[BT]}",
-        args={
-            "AT": AT,
-            "BT": BT,
-            "dtype": torch.float16
-        },
+        args={"AT": AT, "BT": BT, "dtype": torch.float16},
     ) for AT in [False] for BT in [False]
 ]
 
@@ -35,8 +31,8 @@ transformer_confs = [
         x_names=[x],
         x_vals = rounded_linspace(NK//16, NK, 32, 128),
         y_name="provider",
-        y_vals=["torch", "triton", "cutlass"],
-        y_lines=["Torch", "Triton", "CUTLASS"],
+        y_vals=["cublas", "triton", "cutlass"],
+        y_lines=["cuBLAS", "Triton", "CUTLASS"],
         ylabel="TFLOPS",
         plot_name=f"matmul-M{M}-{'NK'.replace(x, '')}{NK}",
         args= {"M": M, 'NK'.replace(x,''): NK, "AT": False, "BT": False, "dtype": torch.float16}
@@ -46,7 +42,7 @@ transformer_confs = [
 ]
 
 
-@triton.testing.perf_report(transformer_confs)
+@triton.testing.perf_report(square_confs)
 def bench_op(M, N, K, AT, BT, dtype, provider, warmup=25, rep=75):
     a = torch.rand((K, M) if AT else (M, K), device="cuda", dtype=dtype)
     b = torch.rand((N, K) if BT else (K, N), device="cuda", dtype=dtype)
@@ -54,7 +50,7 @@ def bench_op(M, N, K, AT, BT, dtype, provider, warmup=25, rep=75):
     if BT: b = b.t()
     num_flops = 2 * M * N * K
     tflops = lambda ms: 2. * M * N * K / ms * 1e-9
-    if provider == "torch":
+    if provider == "cublas":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), warmup=warmup, rep=rep)
         return tflops(ms), tflops(max_ms), tflops(min_ms)
     if provider == "triton":

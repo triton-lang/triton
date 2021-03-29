@@ -2,6 +2,7 @@ import torch
 import triton
 import os
 
+
 class _matmul(torch.autograd.Function):
     src = triton.read(os.path.join(os.path.dirname(__file__), "matmul.c"))
 
@@ -83,7 +84,7 @@ class _matmul(torch.autograd.Function):
                 _matmul.src,
                 device,
                 defines=defines,
-                autotune_vals=_matmul._CONFIGS,
+                autotune_configs=_matmul._CONFIGS,
                 autotune_key=["M", "N", "K"],
             )
         kernel = _matmul._kernels[key]
@@ -93,24 +94,8 @@ class _matmul(torch.autograd.Function):
         locks = _matmul._locks[device]
         # enqueue
         alpha = 1.0
-        args = [
-            a.data_ptr(),
-            b.data_ptr(),
-            c.data_ptr(),
-            alpha,
-            M,
-            N,
-            K,
-            lda,
-            ldb,
-            ldc,
-            locks.data_ptr(),
-        ]
-        grid = lambda opt: [
-            triton.cdiv(M, opt.TM) * triton.cdiv(N, opt.TN),
-            1,
-            opt.SPLITK,
-        ]
+        args = [a.data_ptr(), b.data_ptr(), c.data_ptr(), alpha, M, N, K, lda, ldb, ldc, locks.data_ptr()]
+        grid = lambda opt: [triton.cdiv(M, opt.TM) * triton.cdiv(N, opt.TN), 1, opt.SPLITK]
         kernel(*args, grid=grid)
         return c
 
@@ -118,5 +103,6 @@ class _matmul(torch.autograd.Function):
     def forward(ctx, a, b):
         c = _matmul._call(a, b)
         return c
+
 
 matmul = _matmul.apply

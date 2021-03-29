@@ -25,6 +25,7 @@ Extensions
 **Masked pointer dereferencement**: Block-level operations in Triton-C are "atomic", in the sense that they execute either completely or not at all. Basic element-wise control-flow for block-level operations can nonetheless be achieved using ternary operators and the *masked pointer dereferencement* operator exemplified below:
 
 .. code-block:: C
+  :force:
 
   // create mask
   bool mask[16, 16] = ...;

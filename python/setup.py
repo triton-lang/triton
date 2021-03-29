@@ -59,7 +59,7 @@ class CMakeBuild(build_ext):
         if not os.path.exists(llvm_build_dir):
             os.makedirs(llvm_build_dir)
         # python directories
-        python_include_dirs = distutils.sysconfig.get_python_inc()
+        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
         python_lib_dirs = distutils.sysconfig.get_config_var("LIBDIR")
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
@@ -68,7 +68,7 @@ class CMakeBuild(build_ext):
             #'-DPYTHON_EXECUTABLE=' + sys.executable,
             #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON,
             "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
-            "-DPYTHON_INCLUDE_DIRS=" + ";".join([python_include_dirs])
+            "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
         ]
         # configuration
         cfg = "Debug" if self.debug else "Release"
