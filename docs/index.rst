@@ -18,19 +18,21 @@ Getting Started
    getting-started/tutorials/index
 
 Programming Guide
---------------
+------------------
 
 Check out the following documents to learn more about Triton and how it compares against other DSLs for DNNs:
 
-- Chapter 1: :doc:`Introduction <programming-guide/introduction>`
-- Chapter 2: :doc:`Related Work <programming-guide/related-work>`
-- Chapter 3: :doc:`The Triton-C Kernel Language <programming-guide/triton-c>`
+- Chapter 1: :doc:`Introduction <programming-guide/chapter-1/introduction>`
+- Chapter 2: :doc:`Related Work <programming-guide/chapter-2/related-work>`
+- Chapter 3: :doc:`The Triton-C Language <programming-guide/chapter-3/triton-c>`
+- Chapter 4: :doc:`The Triton-IR Intermediate Representation <programming-guide/chapter-4/triton-ir>`
 
 .. toctree::
    :maxdepth: 1
    :caption: Programming Guide
    :hidden:
 
-   programming-guide/introduction
-   programming-guide/related-work
-   programming-guide/triton-c
+   programming-guide/chapter-1/introduction
+   programming-guide/chapter-2/related-work
+   programming-guide/chapter-3/triton-c
+   programming-guide/chapter-4/triton-ir
