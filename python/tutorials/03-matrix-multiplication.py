@@ -229,7 +229,13 @@ def make_kernel(device, dtype):
     cache = make_kernel.cache
     if key not in cache:
         defines = {'TYPE': dtype}
-        cache[key] = triton.kernel(src, device=device, defines=defines, autotune_vals=autotune_configs, autotune_key=autotune_key)
+        cache[key] = triton.kernel(
+            src,
+            device=device,
+            defines=defines,
+            autotune_configs=autotune_configs,
+            autotune_key=autotune_key,
+        )
     return cache[key]
 
 
