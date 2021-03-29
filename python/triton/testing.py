@@ -108,9 +108,10 @@ class Benchmark:
         y_name,
         y_vals,
         y_lines,
-        ylabel,
         plot_name,
         args,
+        xlabel='',
+        ylabel='',
         x_log=False,
         y_log=False,
     ):
@@ -121,6 +122,8 @@ class Benchmark:
         self.y_vals = y_vals
         self.y_lines = y_lines
         self.y_log = y_log
+        # plot info
+        self.xlabel = xlabel
         self.ylabel = ylabel
         self.plot_name = plot_name
         self.args = args
@@ -131,7 +134,7 @@ class Mark:
         self.fn = fn
         self.benchmarks = benchmarks
 
-    def _run(self, bench, save_path, show_plots):
+    def _run(self, bench, save_path, show_plots, print_data):
         import matplotlib.pyplot as plt
         import pandas as pd
         import os
@@ -155,7 +158,6 @@ class Mark:
         if bench.plot_name:
             plt.figure()
             ax = plt.subplot()
-            xlabel = " = ".join(bench.x_names)
             x = bench.x_names[0]
             for y in bench.y_lines:
                 y_min, y_max = df[y + '-min'], df[y + '-max']
@@ -163,27 +165,30 @@ class Mark:
                 if y_min is not None and y_max is not None:
                     ax.fill_between(df[x], y_min, y_max, alpha=0.5)
             ax.legend()
+            xlabel = bench.xlabel if bench.xlabel else " = ".join(bench.x_names)
             ax.set_xlabel(xlabel)
             ax.set_ylabel(bench.ylabel)
-            ax.set_title(bench.plot_name)
+            #ax.set_title(bench.plot_name)
             ax.set_xscale("log" if bench.x_log else "linear")
             ax.set_yscale("log" if bench.y_log else "linear")
             if show_plots:
                 plt.show()
             if save_path:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
+        df = df[[bench.x_names[0]] + bench.y_lines]
+        if print_data:
+            print(df)
         if save_path:
-            df = df[[bench.x_names[0]] + bench.y_lines]
             df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
 
-    def run(self, show_plots=False, save_path=''):
+    def run(self, show_plots=False, print_data=False, save_path=''):
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         if save_path:
             html = open(os.path.join(save_path, "results.html"), "w")
             html.write("<html><body>\n")
         for bench in benchmarks:
-            self._run(bench, save_path, show_plots)
+            self._run(bench, save_path, show_plots, print_data)
             if save_path:
                 html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
         if save_path:
