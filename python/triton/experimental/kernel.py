@@ -161,6 +161,17 @@ def as_ir_type(module, obj):
     return type_map[suffixes[obj.__class__]](ctx)
 
 
+class binary:
+    def __init__(self, module, kernel, num_warps, shared_mem):
+        self.module = module
+        self.kernel = kernel
+        self.shared_mem = shared_mem
+        self.num_warps = num_warps
+
+    def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
+        stream.enqueue(self.kernel, grid_0, grid_1, grid_2, self.num_warps * 32, 1, 1, args, self.shared_mem)
+
+
 def kernel(fn):
     num_warps = 4
 
@@ -202,21 +213,20 @@ def kernel(fn):
             module.pop_scope()
             # generate binary module from Triton-IR
             tt_device = _triton.driver.cu_device(device.index, False)
-            _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
-            print('done!')
-            exit()
             # Compile to machine code
-            kernel.cache[fn][key] = _triton.rt.kernel(ctx.module, device)
+            mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
+            caller = binary(mod, ker, num_warps, shared_mem)
+            kernel.cache[fn][key] = caller
         # create callable kernel from IR
         caller = kernel.cache[fn][key]
         # pack arguments
-        fmt = ['P' if i in tensor_idxs else suffixes[arg.__class__] for i, arg in enumerate(args)]
+        fmt = ''.join(['P' if i in tensor_idxs else suffixes[arg.__class__] for i, arg in enumerate(wargs)])
         params = struct.pack(fmt, *wargs)
         # run function
         cu_stream = torch.cuda.current_stream(device.index).cuda_stream
         stream = _triton.driver.cu_stream(cu_stream, False)
-        grid = (1, )
-        caller(params, stream, grid)
+        grid = (1, 1, 1)
+        caller(stream, params, *grid)
 
     return wrapper
 
@@ -236,3 +246,4 @@ def add(ctx, X, Y):
 x = torch.tensor(128, device='cuda')
 y = torch.tensor(128, device='cuda')
 add(x, y)
+print(x)

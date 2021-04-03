@@ -115,7 +115,15 @@ void init_triton_driver(py::module &&m) {
       // we assume it has been converted to uint64_t
       .def(py::init([](uint64_t handle, bool take_ownership) {
         return std::unique_ptr<driver::cu_stream>(new driver::cu_stream((CUstream)handle, take_ownership));
-      }));
+      }))
+      .def("enqueue", [](driver::cu_stream *self, driver::kernel *kernel,
+                         size_t grid_0, size_t grid_1, size_t grid_2,
+                         size_t block_0, size_t block_1, size_t block_2,
+                         const std::string &args,
+                         size_t shared_mem) {
+        return self->enqueue(kernel, {grid_0, grid_1, grid_2}, {block_0, block_1, block_2},
+                             (void *)args.data(), args.size(), shared_mem);
+      });
 
   py::class_<drv::module>(m, "module");
   //py::class_<drv::cu_module, drv::module>(m, "cu_module");
