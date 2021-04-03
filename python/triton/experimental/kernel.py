@@ -221,7 +221,8 @@ def kernel(fn):
         caller = kernel.cache[fn][key]
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else suffixes[arg.__class__] for i, arg in enumerate(wargs)])
-        params = struct.pack(fmt, *wargs)
+        args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
+        params = struct.pack(fmt, *args)
         # run function
         cu_stream = torch.cuda.current_stream(device.index).cuda_stream
         stream = _triton.driver.cu_stream(cu_stream, False)
@@ -236,14 +237,13 @@ kernel.cache = dict()
 
 @kernel
 def add(ctx, X, Y):
-    pass
-    #ctx.pid = get_program_id(0)
-    #ctx.off = pid * BLOCK + arange(0, BLOCK)
+    ctx.pid = get_program_id(0)
+    ctx.off = arange(0, 128)
     #ctx.val = load(X + ctx.off)
     #store(Y + ctx.off, ctx.val)
 
 
-x = torch.tensor(128, device='cuda')
-y = torch.tensor(128, device='cuda')
+x = torch.rand(128, device='cuda')
+y = torch.rand(128, device='cuda')
 add(x, y)
 print(x)
