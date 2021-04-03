@@ -275,6 +275,7 @@ void init_triton_ir(py::module &&m) {
 void init_triton(py::module &m) {
   py::module subm = m.def_submodule("triton");
   init_triton_driver(std::move(subm.def_submodule("driver")));
+  init_triton_ir(std::move(subm.def_submodule("ir")));
   init_triton_runtime(std::move(subm.def_submodule("runtime")));
   init_triton_tools(std::move(subm.def_submodule("tools")));
 }

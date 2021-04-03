@@ -1,5 +1,7 @@
 import inspect
+import struct
 import torch
+import triton._C.libtriton.triton as _triton
 
 
 class value:
@@ -78,7 +80,7 @@ def make_arange(ctx):
 
 class context:
     def __init__(self):
-        self.module = _triton.ir.module()
+        self.module = _triton.ir.module("")
 
     def __setattr__(self, name, value):
         self.module.set_value(name, value)
@@ -118,16 +120,17 @@ def finalize_function(module):
     module.builder.ret_void()
 
 
-suffix = {
+suffixes = {
     int: 'I', float: 'f', bool: 'B',\
     torch.float16: 'f16', torch.float32: 'f32', torch.float64: 'f64',
     torch.bool: 'i1', \
-    torch.int8: 'i8', torch.int16: 'i16', torch.int32: 'i32', torch.int64: 'i64', \
-    torch.uint8: 'u8', torch.uint16: 'u16', torch.uint32: 'u32', torch.uint64: 'u64'
+    torch.int8: 'i8', torch.int16: 'i16', torch.int32: 'i32', torch.int64: 'i64',
 }
 
 
 def kernel(fn):
+    kernel.cache[fn] = dict()
+
     def wrapper(*wargs):
         # device inference
         tensor_idxs = [i for i, arg in enumerate(wargs) if isinstance(arg, torch.Tensor)]
@@ -135,10 +138,12 @@ def kernel(fn):
             raise ValueError("No Tensor argument found. Please specify device.")
         device = wargs[tensor_idxs[0]].device
         # type inference
-        tys = [type(arg) for arg in wargs]
-        prefix = ['P' if i in tensor_idxs else '' for i, arg in enumerate(wargs)]
-        suffix = [suffix[arg.type] if i in tensor_idxs else suffix[ty] for i, ty in enumerate(tys)]
-        types = '_'.join([pre + suf for pre, suf in zip(prefix, suffix)])
+        types = [None] * len(wargs)
+        for i, arg in enumerate(wargs):
+            prefix = 'P' if i in tensor_idxs else ''
+            suffix = suffixes[arg.dtype] if i in tensor_idxs else suffixes[arg.__class__]
+            types[i] = prefix + suffix
+        types = '_'.join(types)
         # retrieve from cache
         key = f'{device.type}_{device.index}_{types}'
         if key not in kernel.cache[fn]:
@@ -151,13 +156,14 @@ def kernel(fn):
             init_function(module, fn.__name__, arg_names, prototype)
             fn(ctx, *params)
             finalize_function(module)
+            exit()
             # Compile to machine code
             kernel.cache[fn][key] = _triton.rt.kernel(ctx.module, device)
         # create callable kernel from IR
         caller = kernel.cache[fn][key]
         # pack arguments
-        fmt = ['P' if i in tensor_idxs else suffix[ty] for i, ty in enumerate(tys)]
-        params = struct.pack(fmt, *args)
+        fmt = ['P' if i in tensor_idxs else suffixes[arg.__class__] for i, arg in enumerate(args)]
+        params = struct.pack(fmt, *wargs)
         # run function
         cu_stream = torch.cuda.current_stream(device.index).cuda_stream
         stream = _triton.driver.cu_stream(cu_stream, False)
@@ -171,8 +177,13 @@ kernel.cache = dict()
 
 
 @kernel
-def add(ctx, X, Y, N):
+def add(ctx, X, Y):
     ctx.pid = get_program_id(0)
     ctx.off = pid * BLOCK + arange(0, BLOCK)
     ctx.val = load(X + ctx.off)
     store(Y + ctx.off, ctx.val)
+
+
+x = torch.tensor(128, device='cuda')
+y = torch.tensor(128, device='cuda')
+add(x, y)
