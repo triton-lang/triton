@@ -102,7 +102,7 @@ private:
 
 public:
   // accessors
-  const args_t &args() { return args_; }
+  const args_t &args() const { return args_; }
   function_type* get_fn_type() { return fn_ty_; }
 
   // factory methods

@@ -1,5 +1,6 @@
 import inspect
 import struct
+import types
 import torch
 import triton._C.libtriton.triton as _triton
 
@@ -7,7 +8,7 @@ import triton._C.libtriton.triton as _triton
 class value:
     def __init__(self, ctx, handle):
         self.ctx = ctx
-        self.builder = ctx.builder
+        self.builder = ctx.module.builder
         self.handle = handle
         self.type = handle.type
 
@@ -56,6 +57,34 @@ class value:
         return value(self.ctx, handle)
 
 
+class context:
+    def __init__(self):
+        self.__dict__['module'] = _triton.ir.module("")
+
+    def __setattr__(self, name, value):
+        self.module.set_value(name, value.handle)
+
+    def __getattr__(self, name):
+        ret = self.module.get_value(name)
+        return ret
+
+
+class For:
+    def __enter__(self):
+        pass
+
+    def __exit__(self):
+        pass
+
+
+class If:
+    def __enter__(self):
+        pass
+
+    def __exit__(self):
+        pass
+
+
 def load(ptr):
     handle = ptr.builder.load(ptr)
     return value(ptr.ctx, handle)
@@ -78,31 +107,12 @@ def make_arange(ctx):
     return arange
 
 
-class context:
-    def __init__(self):
-        self.module = _triton.ir.module("")
+def make_get_program_id(ctx):
+    def get_program_id(i):
+        handle = ctx.module.builder.get_program_id(i)
+        return value(ctx, handle)
 
-    def __setattr__(self, name, value):
-        self.module.set_value(name, value)
-
-    def __getattr__(self, name):
-        return self.module.get_value(name)
-
-
-class For:
-    def __enter__(self):
-        pass
-
-    def __exit__(self):
-        pass
-
-
-class If:
-    def __enter__(self):
-        pass
-
-    def __exit__(self):
-        pass
+    return get_program_id
 
 
 def init_function(module, name, arg_names, prototype):
@@ -111,9 +121,10 @@ def init_function(module, name, arg_names, prototype):
         fn.args[i].name = arg_name
         module.set_value(arg_name, fn.args[i])
         module.get_scope().types[arg_name] = fn.args[i].type
-    entry = _triton.ir.basic_block.create(module.ctx, "entry", fn)
+    entry = _triton.ir.basic_block.create(module.get_context(), "entry", fn)
     module.seal_block(entry)
-    module.builder.set_block(entry)
+    module.builder.set_insert_block(entry)
+    return fn
 
 
 def finalize_function(module):
@@ -127,6 +138,28 @@ suffixes = {
     torch.int8: 'i8', torch.int16: 'i16', torch.int32: 'i32', torch.int64: 'i64',
 }
 
+type_map = {
+    'I': _triton.ir.type.get_int32,
+    'f': _triton.ir.type.get_fp32,
+    'B': _triton.ir.type.get_int1,
+    'f16': _triton.ir.type.get_fp16,
+    'f32': _triton.ir.type.get_fp32,
+    'f64': _triton.ir.type.get_fp64,
+    'i1': _triton.ir.type.get_int1,
+    'i8': _triton.ir.type.get_int8,
+    'i16': _triton.ir.type.get_int16,
+    'i32': _triton.ir.type.get_int32,
+    'i64': _triton.ir.type.get_int64,
+}
+
+
+def as_ir_type(module, obj):
+    ctx = module.get_context()
+    if isinstance(obj, torch.Tensor):
+        ty = type_map[suffixes[obj.dtype]](ctx)
+        return _triton.ir.type.make_ptr(ty, 1)
+    return type_map[suffixes[obj.__class__]](ctx)
+
 
 def kernel(fn):
     kernel.cache[fn] = dict()
@@ -138,24 +171,33 @@ def kernel(fn):
             raise ValueError("No Tensor argument found. Please specify device.")
         device = wargs[tensor_idxs[0]].device
         # type inference
-        types = [None] * len(wargs)
+        types_key = [None] * len(wargs)
         for i, arg in enumerate(wargs):
             prefix = 'P' if i in tensor_idxs else ''
             suffix = suffixes[arg.dtype] if i in tensor_idxs else suffixes[arg.__class__]
-            types[i] = prefix + suffix
-        types = '_'.join(types)
+            types_key[i] = prefix + suffix
+        types_key = '_'.join(types_key)
         # retrieve from cache
-        key = f'{device.type}_{device.index}_{types}'
+        key = f'{device.type}_{device.index}_{types_key}'
         if key not in kernel.cache[fn]:
             # create IR module
             ctx = context()
             module = ctx.module
             # Generate Triton IR
-            arg_names = inspect.getfullargspec(fn).args
-            params = []
-            init_function(module, fn.__name__, arg_names, prototype)
-            fn(ctx, *params)
+            arg_names = inspect.getfullargspec(fn).args[1:]
+            arg_types = [as_ir_type(module, arg) for arg in wargs]
+            ret_type = _triton.ir.type.get_void(module.get_context())
+            prototype = _triton.ir.type.make_function(ret_type, arg_types)
+            module.add_new_scope()
+            handle = init_function(module, fn.__name__, arg_names, prototype)
+            # inject Triton built-in functions into the scope
+            # of the kernel by creating a new function on-the-fly
+            _globals = fn.__globals__.copy()
+            _globals['get_program_id'] = make_get_program_id(ctx)
+            wrapper = types.FunctionType(fn.__code__, _globals, fn.__name__, fn.__defaults__, fn.__closure__)
+            wrapper(ctx, *handle.args)
             finalize_function(module)
+            module.pop_scope()
             exit()
             # Compile to machine code
             kernel.cache[fn][key] = _triton.rt.kernel(ctx.module, device)
@@ -179,9 +221,9 @@ kernel.cache = dict()
 @kernel
 def add(ctx, X, Y):
     ctx.pid = get_program_id(0)
-    ctx.off = pid * BLOCK + arange(0, BLOCK)
-    ctx.val = load(X + ctx.off)
-    store(Y + ctx.off, ctx.val)
+    #ctx.off = pid * BLOCK + arange(0, BLOCK)
+    #ctx.val = load(X + ctx.off)
+    #store(Y + ctx.off, ctx.val)
 
 
 x = torch.tensor(128, device='cuda')

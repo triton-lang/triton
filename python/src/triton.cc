@@ -163,12 +163,29 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::context>(m, "context")
       .def(py::init<>());
 
-  py::class_<ir::value>(m, "value");
+  py::class_<ir::value>(m, "value")
+      .def_property("name", &ir::value::get_name, &ir::value::set_name)
+      .def_property_readonly("type", &ir::value::get_type);
 
   py::class_<ir::type>(m, "type")
       .def("is_ptr", &ir::type::is_pointer_ty)
       .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
-      .def("is_floating", &ir::type::is_floating_point_ty);
+      .def("is_floating", &ir::type::is_floating_point_ty)
+      .def("make_ptr", &ir::pointer_type::get)
+      .def("make_function", &ir::function_type::get)
+      .def("get_void", &ir::type::get_void_ty, py::return_value_policy::reference_internal)
+      .def("get_fp16", &ir::type::get_half_ty, py::return_value_policy::reference_internal)
+      .def("get_fp32", &ir::type::get_float_ty, py::return_value_policy::reference_internal)
+      .def("get_fp64", &ir::type::get_double_ty, py::return_value_policy::reference_internal)
+      .def("get_int1", &ir::type::get_int1_ty, py::return_value_policy::reference_internal)
+      .def("get_int8", &ir::type::get_int8_ty, py::return_value_policy::reference_internal)
+      .def("get_int16", &ir::type::get_int16_ty, py::return_value_policy::reference_internal)
+      .def("get_int32", &ir::type::get_int32_ty, py::return_value_policy::reference_internal)
+      .def("get_int64", &ir::type::get_int64_ty, py::return_value_policy::reference_internal);
+
+  py::class_<ir::pointer_type, ir::type>(m, "pointer_type");
+  py::class_<ir::function_type, ir::type>(m, "function_type");
+  py::class_<ir::integer_type, ir::type>(m, "integer_type");
 
   py::class_<ir::scope>(m, "scope")
       .def(py::init<>())
@@ -180,9 +197,20 @@ void init_triton_ir(py::module &&m) {
       .def("get_or_insert_function", &ir::module::get_or_insert_function)
       .def("add_new_scope", &ir::module::add_new_scope)
       .def("seal_block", &ir::module::seal_block)
+      .def("set_value", (void (ir::module::*)(const std::string &, ir::value *)) & ir::module::set_value)
+      .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value)
       .def("pop_scope", &ir::module::pop_scope)
       .def("get_scope", &ir::module::get_scope)
-      .def("get_builder", &ir::module::get_builder);
+      .def("get_context", &ir::module::get_context)
+      .def_property_readonly("builder", &ir::module::get_builder);
+
+  py::class_<ir::function>(m, "function")
+      .def_property_readonly("args", &ir::function::args);
+
+  py::class_<ir::argument, ir::value>(m, "argument");
+
+  py::class_<ir::basic_block, ir::value>(m, "basic_block")
+      .def("create", &ir::basic_block::create);
 
   py::class_<ir::builder>(m, "builder")
       .def(py::init<ir::context &>())
@@ -258,7 +286,7 @@ void init_triton_ir(py::module &&m) {
       .def("reshape", &ir::builder::create_reshape)
       .def("broadcast", &ir::builder::create_broadcast)
       // Built-in instruction
-      .def("get_program_id", &ir::builder::create_get_program_id)
+      .def("get_program_id", &ir::builder::create_get_program_id, py::arg("axis"), py::arg("name") = "")
       .def("get_num_program", &ir::builder::create_get_num_program)
       .def("atomic_cas", &ir::builder::create_atomic_cas)
       .def("atomic_exch", &ir::builder::create_atomic_exch)
@@ -269,7 +297,9 @@ void init_triton_ir(py::module &&m) {
       .def("trans", &ir::builder::create_trans)
       .def("sqrt", &ir::builder::create_sqrt)
       .def("reduce", &ir::builder::create_reduce)
-      .def("select", &ir::builder::create_select);
+      .def("select", &ir::builder::create_select)
+      //
+      .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point);
 }
 
 void init_triton(py::module &m) {
