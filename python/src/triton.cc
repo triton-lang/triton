@@ -176,19 +176,24 @@ void init_triton_runtime(py::module &&m) {
 /* Python bindings for triton::codegen                                       */
 /*****************************************************************************/
 void init_triton_codegen(py::module &&m) {
-  m.def("add_passes_to_emit_bin", [](ir::module &ir, driver::device *dev, int num_warps) {
-    driver::module *mod;
-    driver::kernel *ker;
-    size_t shared_mem;
-    triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, mod, ker, shared_mem);
-    return std::make_tuple(mod, ker, shared_mem);
-  });
+  m.def(
+      "add_passes_to_emit_bin", [](ir::module &ir, driver::device *dev, int num_warps) {
+        driver::module *mod;
+        driver::kernel *ker;
+        size_t shared_mem;
+        triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, mod, ker, shared_mem);
+        return std::make_tuple(mod, ker, shared_mem);
+      },
+      py::return_value_policy::take_ownership);
 }
 
 /*****************************************************************************/
 /* Python bindings for triton::ir                                            */
 /*****************************************************************************/
 void init_triton_ir(py::module &&m) {
+  using ret = py::return_value_policy;
+  using namespace pybind11::literals;
+
   py::class_<ir::context>(m, "context")
       .def(py::init<>());
 
@@ -200,21 +205,25 @@ void init_triton_ir(py::module &&m) {
       .def("is_ptr", &ir::type::is_pointer_ty)
       .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
       .def("is_floating", &ir::type::is_floating_point_ty)
-      .def("make_ptr", &ir::pointer_type::get)
-      .def("make_function", &ir::function_type::get)
-      .def("get_void", &ir::type::get_void_ty, py::return_value_policy::reference_internal)
-      .def("get_fp16", &ir::type::get_half_ty, py::return_value_policy::reference_internal)
-      .def("get_fp32", &ir::type::get_float_ty, py::return_value_policy::reference_internal)
-      .def("get_fp64", &ir::type::get_double_ty, py::return_value_policy::reference_internal)
-      .def("get_int1", &ir::type::get_int1_ty, py::return_value_policy::reference_internal)
-      .def("get_int8", &ir::type::get_int8_ty, py::return_value_policy::reference_internal)
-      .def("get_int16", &ir::type::get_int16_ty, py::return_value_policy::reference_internal)
-      .def("get_int32", &ir::type::get_int32_ty, py::return_value_policy::reference_internal)
-      .def("get_int64", &ir::type::get_int64_ty, py::return_value_policy::reference_internal);
+      .def("is_block", &ir::type::is_block_ty)
+      .def("make_ptr", &ir::pointer_type::get, ret::reference_internal)
+      .def("make_function", &ir::function_type::get, ret::reference_internal)
+      .def("get_void", &ir::type::get_void_ty, ret::reference)
+      .def("get_fp16", &ir::type::get_half_ty, ret::reference)
+      .def("get_fp32", &ir::type::get_float_ty, ret::reference)
+      .def("get_fp64", &ir::type::get_double_ty, ret::reference)
+      .def("get_int1", &ir::type::get_int1_ty, ret::reference)
+      .def("get_int8", &ir::type::get_int8_ty, ret::reference)
+      .def("get_int16", &ir::type::get_int16_ty, ret::reference)
+      .def("get_int32", &ir::type::get_int32_ty, ret::reference)
+      .def("get_int64", &ir::type::get_int64_ty, ret::reference)
+      .def_property_readonly("scalar", &ir::type::get_scalar_ty);
 
   py::class_<ir::pointer_type, ir::type>(m, "pointer_type");
   py::class_<ir::function_type, ir::type>(m, "function_type");
   py::class_<ir::integer_type, ir::type>(m, "integer_type");
+  py::class_<ir::block_type, ir::type>(m, "block_type")
+      .def_property_readonly("shape", &ir::block_type::get_shapes);
 
   py::class_<ir::scope>(m, "scope")
       .def(py::init<>())
@@ -223,14 +232,14 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string>())
-      .def("get_or_insert_function", &ir::module::get_or_insert_function)
-      .def("add_new_scope", &ir::module::add_new_scope)
+      .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
+      .def("add_new_scope", &ir::module::add_new_scope, ret::reference)
       .def("seal_block", &ir::module::seal_block)
       .def("set_value", (void (ir::module::*)(const std::string &, ir::value *)) & ir::module::set_value)
-      .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value)
+      .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value, ret::reference)
       .def("pop_scope", &ir::module::pop_scope)
-      .def("get_scope", &ir::module::get_scope)
-      .def("get_context", &ir::module::get_context)
+      .def("get_scope", &ir::module::get_scope, ret::reference)
+      .def("get_context", &ir::module::get_context, ret::reference)
       .def_property_readonly("builder", &ir::module::get_builder);
 
   py::class_<ir::function>(m, "function")
@@ -239,95 +248,98 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::argument, ir::value>(m, "argument");
 
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
-      .def("create", &ir::basic_block::create, py::return_value_policy::reference_internal);
+      .def("create", &ir::basic_block::create, ret::reference);
 
   py::class_<ir::builder>(m, "builder")
       .def(py::init<ir::context &>())
       // terminator instructions
-      .def("br", &ir::builder::create_br)
-      .def("cond_br", &ir::builder::create_cond_br)
-      .def("ret_void", &ir::builder::create_ret_void, py::return_value_policy::reference_internal)
+      .def("br", &ir::builder::create_br, ret::reference)
+      .def("cond_br", &ir::builder::create_cond_br, ret::reference)
+      .def("ret_void", &ir::builder::create_ret_void, ret::reference)
       // Cast instructions
-      .def("cast", &ir::builder::create_cast)
-      .def("ptr_to_int", &ir::builder::create_ptr_to_int)
-      .def("si_to_fp", &ir::builder::create_si_to_fp)
-      .def("ui_to_fp", &ir::builder::create_ui_to_fp)
-      .def("fp_to_si", &ir::builder::create_fp_to_si)
-      .def("fp_to_ui", &ir::builder::create_fp_to_ui)
-      .def("fp_ext", &ir::builder::create_fp_ext)
-      .def("fp_trunc", &ir::builder::create_fp_trunc)
-      .def("int_cast", &ir::builder::create_int_cast)
-      .def("downcast", &ir::builder::create_downcast)
+      .def("cast", &ir::builder::create_cast, ret::reference)
+      .def("ptr_to_int", &ir::builder::create_ptr_to_int, ret::reference)
+      .def("si_to_fp", &ir::builder::create_si_to_fp, ret::reference)
+      .def("ui_to_fp", &ir::builder::create_ui_to_fp, ret::reference)
+      .def("fp_to_si", &ir::builder::create_fp_to_si, ret::reference)
+      .def("fp_to_ui", &ir::builder::create_fp_to_ui, ret::reference)
+      .def("fp_ext", &ir::builder::create_fp_ext, ret::reference)
+      .def("fp_trunc", &ir::builder::create_fp_trunc, ret::reference)
+      .def("int_cast", &ir::builder::create_int_cast, ret::reference)
+      .def("downcast", &ir::builder::create_downcast, ret::reference)
       // Binary instructions
-      .def("insert_nuwnswb_binop", &ir::builder::create_insert_nuwnswb_binop)
-      .def("fmul", &ir::builder::create_fmul)
-      .def("fdiv", &ir::builder::create_fdiv)
-      .def("frem", &ir::builder::create_frem)
-      .def("fadd", &ir::builder::create_fadd)
-      .def("fsub", &ir::builder::create_fsub)
-      .def("mul", &ir::builder::create_mul)
-      .def("sdiv", &ir::builder::create_sdiv)
-      .def("udiv", &ir::builder::create_udiv)
-      .def("srem", &ir::builder::create_srem)
-      .def("urem", &ir::builder::create_urem)
-      .def("add", &ir::builder::create_add)
-      .def("sub", &ir::builder::create_sub)
-      .def("shl", &ir::builder::create_shl)
-      .def("lshr", &ir::builder::create_lshr)
-      .def("ashr", &ir::builder::create_ashr)
+      .def("insert_nuwnswb_binop", &ir::builder::create_insert_nuwnswb_binop, ret::reference)
+      .def("fmul", &ir::builder::create_fmul, ret::reference)
+      .def("fdiv", &ir::builder::create_fdiv, ret::reference)
+      .def("frem", &ir::builder::create_frem, ret::reference)
+      .def("fadd", &ir::builder::create_fadd, ret::reference, "lhs"_a, "rhs"_a, "name"_a = "")
+      .def("fsub", &ir::builder::create_fsub, ret::reference)
+      .def("mul", &ir::builder::create_mul, ret::reference)
+      .def("sdiv", &ir::builder::create_sdiv, ret::reference)
+      .def("udiv", &ir::builder::create_udiv, ret::reference)
+      .def("srem", &ir::builder::create_srem, ret::reference)
+      .def("urem", &ir::builder::create_urem, ret::reference)
+      .def("add", &ir::builder::create_add, ret::reference, "lhs"_a, "rhs"_a, "name"_a = "", "has_nuw"_a = false, "has_nsw"_a = false)
+      .def("sub", &ir::builder::create_sub, ret::reference)
+      .def("shl", &ir::builder::create_shl, ret::reference)
+      .def("lshr", &ir::builder::create_lshr, ret::reference)
+      .def("ashr", &ir::builder::create_ashr, ret::reference)
       // GEP
-      .def("gep", &ir::builder::create_gep)
-      // Comparison (int)
-      .def("icmp", &ir::builder::create_icmp)
-      .def("icmpSLE", &ir::builder::create_icmpSLE)
-      .def("icmpSLT", &ir::builder::create_icmpSLT)
-      .def("icmpSGE", &ir::builder::create_icmpSGE)
-      .def("icmpSGT", &ir::builder::create_icmpSGT)
-      .def("icmpULE", &ir::builder::create_icmpULE)
-      .def("icmpULT", &ir::builder::create_icmpULT)
-      .def("icmpUGE", &ir::builder::create_icmpUGE)
-      .def("icmpUGT", &ir::builder::create_icmpUGT)
-      .def("icmpEQ", &ir::builder::create_icmpEQ)
-      .def("icmpNE", &ir::builder::create_icmpNE)
-      // Comparison (float)
-      .def("fcmp", &ir::builder::create_fcmp)
-      .def("fcmpOLT", &ir::builder::create_fcmpOLT)
-      .def("fcmpOGT", &ir::builder::create_fcmpOGT)
-      .def("fcmpOLE", &ir::builder::create_fcmpOLE)
-      .def("fcmpOGE", &ir::builder::create_fcmpOGE)
-      .def("fcmpOEQ", &ir::builder::create_fcmpOEQ)
-      .def("fcmpONE", &ir::builder::create_fcmpONE)
+      .def("gep", &ir::builder::create_gep, ret::reference, "ptr"_a, "idxs"_a, "name"_a = "")
+      // Comparison (int, ret::reference)
+      .def("icmp", &ir::builder::create_icmp, ret::reference)
+      .def("icmpSLE", &ir::builder::create_icmpSLE, ret::reference)
+      .def("icmpSLT", &ir::builder::create_icmpSLT, ret::reference)
+      .def("icmpSGE", &ir::builder::create_icmpSGE, ret::reference)
+      .def("icmpSGT", &ir::builder::create_icmpSGT, ret::reference)
+      .def("icmpULE", &ir::builder::create_icmpULE, ret::reference)
+      .def("icmpULT", &ir::builder::create_icmpULT, ret::reference)
+      .def("icmpUGE", &ir::builder::create_icmpUGE, ret::reference)
+      .def("icmpUGT", &ir::builder::create_icmpUGT, ret::reference)
+      .def("icmpEQ", &ir::builder::create_icmpEQ, ret::reference)
+      .def("icmpNE", &ir::builder::create_icmpNE, ret::reference)
+      // Comparison (float, ret::reference)
+      .def("fcmp", &ir::builder::create_fcmp, ret::reference)
+      .def("fcmpOLT", &ir::builder::create_fcmpOLT, ret::reference)
+      .def("fcmpOGT", &ir::builder::create_fcmpOGT, ret::reference)
+      .def("fcmpOLE", &ir::builder::create_fcmpOLE, ret::reference)
+      .def("fcmpOGE", &ir::builder::create_fcmpOGE, ret::reference)
+      .def("fcmpOEQ", &ir::builder::create_fcmpOEQ, ret::reference)
+      .def("fcmpONE", &ir::builder::create_fcmpONE, ret::reference)
       // Logical
-      .def("and", &ir::builder::create_and)
-      .def("xor", &ir::builder::create_xor)
-      .def("or", &ir::builder::create_or)
+      .def("and", &ir::builder::create_and, ret::reference)
+      .def("xor", &ir::builder::create_xor, ret::reference)
+      .def("or", &ir::builder::create_or, ret::reference)
       // Unary
-      //  .def("fneg", &ir::builder::create_fneg)
-      //  .def("neg", &ir::builder::create_neg)
-      //  .def("not", &ir::builder::create_not)
+      //  .def("fneg", &ir::builder::create_fneg, ret::reference)
+      //  .def("neg", &ir::builder::create_neg, ret::reference)
+      //  .def("not", &ir::builder::create_not, ret::reference)
       // Input/Output
-      .def("load", &ir::builder::create_load)
-      .def("store", &ir::builder::create_store)
-      .def("masked_load", &ir::builder::create_masked_load)
-      .def("masked_store", &ir::builder::create_masked_store)
+      .def("load", &ir::builder::create_load, ret::reference, "ptr"_a, "name"_a = "")
+      .def("store", &ir::builder::create_store, ret::reference, "ptr"_a, "val"_a, "name"_a = "")
+      .def("masked_load", &ir::builder::create_masked_load, ret::reference)
+      .def("masked_store", &ir::builder::create_masked_store, ret::reference)
       // Tile instruction
-      .def("splat", &ir::builder::create_splat)
-      .def("reshape", &ir::builder::create_reshape)
-      .def("broadcast", &ir::builder::create_broadcast)
+      .def("splat", &ir::builder::create_splat, ret::reference, "arg"_a, "shapes"_a, "name"_a = "")
+      .def("reshape", &ir::builder::create_reshape, ret::reference)
+      .def("broadcast", &ir::builder::create_broadcast, ret::reference)
       // Built-in instruction
-      .def("get_program_id", &ir::builder::create_get_program_id, py::return_value_policy::reference_internal, py::arg("axis"), py::arg("name") = "")
-      .def("get_num_program", &ir::builder::create_get_num_program)
-      .def("atomic_cas", &ir::builder::create_atomic_cas)
-      .def("atomic_exch", &ir::builder::create_atomic_exch)
-      .def("atomic_add", &ir::builder::create_atomic_add)
-      .def("exp", &ir::builder::create_exp)
-      .def("log", &ir::builder::create_log)
-      .def("dot", &ir::builder::create_dot)
-      .def("trans", &ir::builder::create_trans)
-      .def("sqrt", &ir::builder::create_sqrt)
-      .def("reduce", &ir::builder::create_reduce)
-      .def("select", &ir::builder::create_select)
-      //
+      .def("get_program_id", &ir::builder::create_get_program_id, ret::reference, "axis"_a, "name"_a = "")
+      .def("get_num_program", &ir::builder::create_get_num_program, ret::reference)
+      .def("atomic_cas", &ir::builder::create_atomic_cas, ret::reference)
+      .def("atomic_exch", &ir::builder::create_atomic_exch, ret::reference)
+      .def("atomic_add", &ir::builder::create_atomic_add, ret::reference)
+      .def("exp", &ir::builder::create_exp, ret::reference)
+      .def("log", &ir::builder::create_log, ret::reference)
+      .def("dot", &ir::builder::create_dot, ret::reference)
+      .def("trans", &ir::builder::create_trans, ret::reference)
+      .def("sqrt", &ir::builder::create_sqrt, ret::reference)
+      .def("reduce", &ir::builder::create_reduce, ret::reference)
+      .def("select", &ir::builder::create_select, ret::reference)
+      // constants
+      .def("get_int32", &ir::builder::get_int32, ret::reference)
+      .def("get_range", &ir::builder::get_range, ret::reference)
+      // control-flow
       .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point);
 }
 

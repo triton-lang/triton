@@ -55,19 +55,19 @@ void pipeline::run(ir::module &mod) {
     // pre-fetch first iteration
     builder.set_insert_point(header->get_inst_list().back());
     ir::value* first_ptr = ptr->get_value_for_block(header);
-    ir::value* first_mask = builder.create_splat(header_br->get_cond(), ty->get_tile_shapes());
+    ir::value* first_mask = builder.create_splat(header_br->get_cond(), ty->get_block_shapes());
     ir::value* false_value;
     if(auto* masked_load = dynamic_cast<ir::masked_load_inst*>(load)){
       first_mask = builder.create_and(first_mask, masked_load->get_mask_operand());
       false_value = masked_load->get_false_value_operand();
     }
     else
-      false_value = builder.create_splat(ir::undef_value::get(ty->get_scalar_ty()), ty->get_tile_shapes());
+      false_value = builder.create_splat(ir::undef_value::get(ty->get_scalar_ty()), ty->get_block_shapes());
     ir::value* first_load = builder.create_masked_load(first_ptr, first_mask, false_value);
     // pre-fetch next iteration
     builder.set_insert_point(block->get_inst_list().back());
     ir::value* next_ptr = ptr->get_value_for_block(block);
-    ir::value* next_mask = builder.create_splat(block_br->get_cond(), ty->get_tile_shapes());
+    ir::value* next_mask = builder.create_splat(block_br->get_cond(), ty->get_block_shapes());
     if(auto* masked_load = dynamic_cast<ir::masked_load_inst*>(load))
       next_mask = builder.create_and(next_mask, masked_load->get_mask_operand());
     ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value);

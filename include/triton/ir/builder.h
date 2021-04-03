@@ -38,6 +38,7 @@ public:
   value *get_int1(bool val);
   value *get_int32(int32_t val);
   value *get_int64(int64_t val);
+  value *get_range(int32_t lo, int32_t hi);
   // Types
   type *get_void_ty();
   type *get_int1_ty();
@@ -128,10 +129,10 @@ public:
   value *create_store(value *ptr, value *val, const std::string &name = "");
   value *create_masked_load(value *arg, value *mask, value *false_value, const std::string &name = "");
   value *create_masked_store(value *ptr, value *val, value *mask, const std::string &name = "");
-  // Tile instruction
-  value *create_splat(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");
-  value *create_reshape(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");
-  value *create_broadcast(value *arg, const type::tile_shapes_t &shapes, const std::string &name = "");
+  // Block instruction
+  value *create_splat(value *arg, const type::block_shapes_t &shapes, const std::string &name = "");
+  value *create_reshape(value *arg, const type::block_shapes_t &shapes, const std::string &name = "");
+  value *create_broadcast(value *arg, const type::block_shapes_t &shapes, const std::string &name = "");
   // Built-in instruction
   value *create_get_program_id(unsigned axis, const std::string &name = "");
   value *create_get_num_program(unsigned axis, const std::string &name = "");

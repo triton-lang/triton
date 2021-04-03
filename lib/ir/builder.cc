@@ -54,6 +54,12 @@ value *builder::get_int32(int32_t val)
 value *builder::get_int64(int64_t val)
 { return constant_int::get(type::get_int64_ty(ctx_), val);}
 
+value *builder::get_range(int32_t _lo, int32_t _hi) {
+  constant_int* lo = static_cast<constant_int*>(get_int32(_lo));
+  constant_int* hi = static_cast<constant_int*>(get_int32(_hi));
+  return insert(make_range::create(lo, hi));
+}
+
 type *builder::get_void_ty()
 { return type::get_void_ty(ctx_); }
 
@@ -282,18 +288,18 @@ value *builder::create_masked_store(value *ptr, value *val, value *mask, const s
 }
 
 //===----------------------------------------------------------------------===//
-//                               tile instructions
+//                               block instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_reshape(value *arg, const type::tile_shapes_t &shapes, const std::string &name) {
+value *builder::create_reshape(value *arg, const type::block_shapes_t &shapes, const std::string &name) {
   return insert(reshape_inst::create(arg, shapes, name));
 }
 
-value *builder::create_splat(value *arg, const type::tile_shapes_t &shapes, const std::string &name) {
+value *builder::create_splat(value *arg, const type::block_shapes_t &shapes, const std::string &name) {
   return insert(splat_inst::create(arg, shapes, name));
 }
 
-value *builder::create_broadcast(value *arg, const type::tile_shapes_t &shapes, const std::string &name) {
+value *builder::create_broadcast(value *arg, const type::block_shapes_t &shapes, const std::string &name) {
   return insert(broadcast_inst::create(arg, shapes, name));
 }
 

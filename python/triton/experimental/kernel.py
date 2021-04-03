@@ -5,6 +5,21 @@ import torch
 import triton._C.libtriton.triton as _triton
 
 
+def broadcast(builder, lhs, rhs):
+    lhs_ty = lhs.type
+    rhs_ty = rhs.type
+    # op(block, scalar)
+    if lhs_ty.is_block() and not rhs_ty.is_block():
+        rhs = builder.splat(rhs, lhs_ty.shape)
+    # op(scalar, block)
+    elif rhs_ty.is_block() and not lhs_ty.is_block():
+        lhs = builder.splat(lhs, rhs_ty.shape)
+    # op(block, block)
+    elif lhs_ty.is_block() and rhs_ty.is_block() and lhs_ty.shape != rhs_ty.shape:
+        raise NotImplementedError("Blocks must have the same shape")
+    return lhs, rhs
+
+
 class value:
     def __init__(self, ctx, handle):
         self.ctx = ctx
@@ -13,12 +28,14 @@ class value:
         self.type = handle.type
 
     def __add__(self, other):
-        if self.type.is_ptr():
-            handle = self.builder.gep(self.handle, other.handle)
-        elif self.type.is_floating():
-            handle = self.builder.fadd(self.handle, other.handle)
+        # implicit broadcast
+        lhs, rhs = broadcast(self.builder, self.handle, other.handle)
+        if self.type.scalar.is_ptr():
+            handle = self.builder.gep(lhs, [rhs])
+        elif self.type.scalar.is_floating():
+            handle = self.builder.fadd(lhs, rhs)
         else:
-            handle = self.builder.add(self.handle, other.handle)
+            handle = self.builder.add(lhs, rhs)
         return value(self.ctx, handle)
 
     def __sub__(self, other):
@@ -66,7 +83,19 @@ class context:
 
     def __getattr__(self, name):
         ret = self.module.get_value(name)
-        return ret
+        return value(self, ret)
+
+    def arange(self, start, end):
+        assert isinstance(start, int), "start must be int"
+        assert isinstance(end, int), "end must be int"
+        builder = self.module.builder
+        handle = builder.get_range(start, end)
+        return value(self, handle)
+
+    def get_program_id(self, axis):
+        builder = self.module.builder
+        handle = builder.get_program_id(axis)
+        return value(self, handle)
 
 
 class For:
@@ -86,33 +115,13 @@ class If:
 
 
 def load(ptr):
-    handle = ptr.builder.load(ptr)
+    handle = ptr.builder.load(ptr.handle)
     return value(ptr.ctx, handle)
 
 
 def store(ptr, arg):
-    handle = ptr.builder.store(arg.handle, ptr)
+    handle = ptr.builder.store(ptr.handle, arg.handle)
     return value(ptr.ctx, handle)
-
-
-def make_arange(ctx):
-    def arange(start, end):
-        assert isinstance(start, int), "start must be int"
-        assert isinstance(end, int), "end must be int"
-        lhs = ctx.buidler.get_int32(start)
-        rhs = ctx.builder.get_int32(end)
-        handle = ctx.builder.create_range(lhs, rhs)
-        return value(ctx, handle)
-
-    return arange
-
-
-def make_get_program_id(ctx):
-    def get_program_id(i):
-        handle = ctx.module.builder.get_program_id(i)
-        return value(ctx, handle)
-
-    return get_program_id
 
 
 def init_function(module, name, arg_names, prototype):
@@ -203,17 +212,15 @@ def kernel(fn):
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
             module.add_new_scope()
             handle = init_function(module, fn.__name__, arg_names, prototype)
-            # inject Triton built-in functions into the scope
-            # of the kernel by creating a new function on-the-fly
-            _globals = fn.__globals__.copy()
-            _globals['get_program_id'] = make_get_program_id(ctx)
-            wrapper = types.FunctionType(fn.__code__, _globals, fn.__name__, fn.__defaults__, fn.__closure__)
-            wrapper(ctx, *handle.args)
+            # Call decorated function
+            params = [value(ctx, h) for h in handle.args]
+            fn(ctx, *params)
             finalize_function(module)
             module.pop_scope()
             # generate binary module from Triton-IR
             tt_device = _triton.driver.cu_device(device.index, False)
             # Compile to machine code
+            print('emitting bin')
             mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
             caller = binary(mod, ker, num_warps, shared_mem)
             kernel.cache[fn][key] = caller
@@ -236,14 +243,18 @@ kernel.cache = dict()
 
 
 @kernel
-def add(ctx, X, Y):
-    ctx.pid = get_program_id(0)
-    ctx.off = arange(0, 128)
-    #ctx.val = load(X + ctx.off)
-    #store(Y + ctx.off, ctx.val)
+def add(ctx, Xptr, Yptr, Zptr):
+    ctx.pid = ctx.get_program_id(0)
+    ctx.off = ctx.arange(0, 128)
+    ctx.x = load(Xptr + ctx.off)
+    ctx.y = load(Yptr + ctx.off)
+    store(Zptr + ctx.off, ctx.x + ctx.y)
 
 
 x = torch.rand(128, device='cuda')
 y = torch.rand(128, device='cuda')
-add(x, y)
-print(x)
+z = torch.empty_like(x)
+add(x, y, z)
+print(z)
+
+print(x + y)

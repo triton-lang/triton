@@ -50,7 +50,7 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         # self.debug = True
-        self.debug = False
+        self.debug = True
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         llvm_build_dir = os.path.join(tempfile.gettempdir(), "llvm")

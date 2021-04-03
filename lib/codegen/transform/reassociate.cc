@@ -40,7 +40,7 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
 
   // handle retiling
   if(ir::instruction* op = dynamic_cast<ir::retile_inst*>(old_value)){
-    auto shapes = op->get_type()->get_tile_shapes();
+    auto shapes = op->get_type()->get_block_shapes();
     ir::value *old_arg = op->get_operand(0);
     ir::value *new_arg = reassociate_idx(old_arg, builder, noncst, cst);
     // retile(x + y) = retile(x) + retile(y)
@@ -166,7 +166,7 @@ void reassociate::run(ir::module &mod) {
           ir::value* dyn = infos.at(op).dyn_ptr;
           ir::value* cst = *sta->idx_begin();
           if(dynamic_cast<ir::broadcast_inst*>(rt)) {
-            auto shapes = rt->get_type()->get_tile_shapes();
+            auto shapes = rt->get_type()->get_block_shapes();
             ir::value* ndyn = builder.create_broadcast(dyn, shapes);
             ir::value* broadcast = builder.create_broadcast(cst, shapes);
             ir::getelementptr_inst* nsta = (ir::getelementptr_inst*)builder.create_gep(ndyn, {broadcast});
@@ -245,8 +245,8 @@ void reassociate::run(ir::module &mod) {
             builder.set_insert_point(*it);
           }
           ir::value *_0 = builder.get_int32(0);
-          if(off->get_type()->is_tile_ty())
-            _0 = builder.create_splat(_0, off->get_type()->get_tile_shapes());
+          if(off->get_type()->is_block_ty())
+            _0 = builder.create_splat(_0, off->get_type()->get_block_shapes());
           ir::value *neg_off = builder.create_sub(_0, off);
           ir::value *pz_dyn = builder.create_gep(pz, {neg_off});
           phi_dyn->add_incoming(pz_dyn, phi->get_incoming_block(idx_z));

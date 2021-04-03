@@ -52,7 +52,7 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
         _0 = ir::constant_fp::get(ret_scal_ty, 0);
       else
         _0 = ir::constant_int::get(ret_scal_ty, 0);
-      _0 = bld_->create_splat(_0, ret_ty->get_tile_shapes());
+      _0 = bld_->create_splat(_0, ret_ty->get_block_shapes());
       return set_ret(bld_->create_dot(lhs, rhs, _0));
     }
     case Token::MASKED_DEREF: {
@@ -60,8 +60,8 @@ void Generator::VisitBinaryOp(BinaryOp* binary) {
       ir::type* ret_ty = GenIRType(binary->Type(), *ctx_);
       ir::value* false_value = ir::undef_value::get(ret_ty->get_scalar_ty());
       auto it = bld_->get_insert_block();
-      if(ret_ty->is_tile_ty())
-        false_value = bld_->create_splat(false_value, ret_ty->get_tile_shapes());
+      if(ret_ty->is_block_ty())
+        false_value = bld_->create_splat(false_value, ret_ty->get_block_shapes());
       bld_->set_insert_point(it);
       return set_ret(bld_->create_masked_load(rhs, lhs, false_value));
     }
@@ -177,8 +177,8 @@ ir::value* Generator::GenUnaryMinus(ir::value* arg) {
   ir::type *ty = arg->get_type();
   ir::type *sca_ty = ty->get_scalar_ty();
   ir::value *_0 = ir::constant_fp::get_zero_value_for_negation(sca_ty);
-  if(ty->is_tile_ty())
-    _0 = bld_->create_splat(_0, ty->get_tile_shapes());
+  if(ty->is_block_ty())
+    _0 = bld_->create_splat(_0, ty->get_block_shapes());
   if(sca_ty->is_floating_point_ty())
     return bld_->create_fsub(_0, arg);
   else
@@ -603,12 +603,12 @@ void Generator::Gen(ir::module *mod) {
 ir::value* Generator::GenBroadcastOp(ir::value* src, ir::type* dst_ty) {
   if(src->get_type() == dst_ty)
     return src;
-  if(dst_ty->is_tile_ty()) {
+  if(dst_ty->is_block_ty()) {
     ir::type *src_ty = src->get_type();
-    auto dst_shapes = dst_ty->get_tile_shapes();
-    if(!src_ty->is_tile_ty())
+    auto dst_shapes = dst_ty->get_block_shapes();
+    if(!src_ty->is_block_ty())
       return bld_->create_splat(src, dst_shapes);
-    auto src_shapes = src_ty->get_tile_shapes();
+    auto src_shapes = src_ty->get_block_shapes();
     if(src_shapes.size() != dst_shapes.size()){
       unsigned src_numel = 1;
       for(unsigned s: src_shapes)
@@ -637,7 +637,7 @@ ir::value* Generator::GenBroadcastOp(ir::value* src, ir::type* dst_ty) {
       return bld_->create_broadcast(src, dst_shapes);
     }
   }
-  else if(src->get_type()->is_tile_ty() && src->get_type()->get_tile_num_elements() == 1){
+  else if(src->get_type()->is_block_ty() && src->get_type()->get_tile_num_elements() == 1){
     return bld_->create_downcast(src);
   }
   return src;
@@ -646,15 +646,15 @@ ir::value* Generator::GenBroadcastOp(ir::value* src, ir::type* dst_ty) {
 ir::value* Generator::GenNumcastOp(ir::value*src, ir::type* dst_ty) {
   ir::type *src_scalar_ty = src->get_type()->get_scalar_ty();
   ir::type *dst_scalar_ty = dst_ty->get_scalar_ty();
-  if(src->get_type()->is_tile_ty())
-    dst_ty = ir::tile_type::get_same_shapes(dst_scalar_ty, src->get_type());
+  if(src->get_type()->is_block_ty())
+    dst_ty = ir::block_type::get_same_shapes(dst_scalar_ty, src->get_type());
   bool src_signed = false;
   bool dst_signed = false;
   if(src_scalar_ty == dst_scalar_ty)
     return src;
   else if(src_scalar_ty->is_pointer_ty() && dst_scalar_ty->is_bool_ty())
-    return bld_->create_icmpNE(bld_->create_ptr_to_int(src, ir::tile_type::get_same_shapes(bld_->get_int64_ty(), src->get_type())),
-                               bld_->create_splat(bld_->get_int64(0), src->get_type()->get_tile_shapes()));
+    return bld_->create_icmpNE(bld_->create_ptr_to_int(src, ir::block_type::get_same_shapes(bld_->get_int64_ty(), src->get_type())),
+                               bld_->create_splat(bld_->get_int64(0), src->get_type()->get_block_shapes()));
   else if(src_scalar_ty->is_integer_ty() && src_signed && dst_scalar_ty->is_floating_point_ty())
     return bld_->create_si_to_fp(src, dst_ty);
   else if(src_scalar_ty->is_integer_ty() && !src_signed && dst_scalar_ty->is_floating_point_ty())
@@ -772,10 +772,10 @@ ir::type* Generator::GenIRArrayType(ArrayType* type, ir::context& ctx) {
 ir::type* Generator::GenIRTileType(TileType* type, ir::context& ctx) {
   ir::type* ele_ty = GenIRType(type->Derived().GetPtr(), ctx);
   auto _shape = type->Shape();
-  ir::tile_type::tile_shapes_t shape;
+  ir::block_type::block_shapes_t shape;
   for(int s: _shape)
     shape.push_back(static_cast<unsigned>(s));
-  return ir::tile_type::get(ele_ty, shape);
+  return ir::block_type::get(ele_ty, shape);
 }
 
 ir::type* Generator::GenIRFuncType(FuncType* type, ir::context& ctx) {

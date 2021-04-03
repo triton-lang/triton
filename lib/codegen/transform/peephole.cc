@@ -131,10 +131,10 @@ bool peephole::rewrite_unit_red(ir::instruction *value, ir::builder& builder){
   if(!x)
     return false;
   ir::value *arg = x->get_operand(0);
-  auto shapes = arg->get_type()->get_tile_shapes();
+  auto shapes = arg->get_type()->get_block_shapes();
   if(shapes[x->get_axis()] == 1){
     builder.set_insert_point(x);
-    ir::value* new_red = builder.create_reshape(arg, x->get_type()->get_tile_shapes());
+    ir::value* new_red = builder.create_reshape(arg, x->get_type()->get_block_shapes());
     x->replace_all_uses_with(new_red);
     return true;
   }
