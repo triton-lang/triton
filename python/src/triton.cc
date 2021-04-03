@@ -1,4 +1,6 @@
 ﻿#include "triton/driver/stream.h"
+#include "triton/ir/builder.h"
+#include "triton/ir/module.h"
 #include "triton/runtime/function.h"
 #include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
@@ -10,6 +12,7 @@
 namespace py = pybind11;
 
 using namespace triton;
+namespace ir = triton::ir;
 namespace rt = triton::runtime;
 namespace drv = triton::driver;
 
@@ -151,6 +154,122 @@ void init_triton_runtime(py::module &&m) {
       .def(py::init<const std::string &, const rt::options_t &, driver::device *, const std::vector<rt::config> &, const std::vector<std::string> &>())
       .def("autotune", &rt::function::autotune, py::return_value_policy::reference_internal)
       .def("signature", &rt::function::get_signature);
+}
+
+/*****************************************************************************/
+/* Python bindings for triton::ir                                            */
+/*****************************************************************************/
+void init_triton_ir(py::module &&m) {
+  py::class_<ir::context>(m, "context")
+      .def(py::init<>());
+
+  py::class_<ir::value>(m, "value");
+
+  py::class_<ir::type>(m, "type")
+      .def("is_ptr", &ir::type::is_pointer_ty)
+      .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
+      .def("is_floating", &ir::type::is_floating_point_ty);
+
+  py::class_<ir::scope>(m, "scope")
+      .def(py::init<>())
+      .def_readwrite("types", &ir::scope::types)
+      .def_readwrite("values", &ir::scope::values);
+
+  py::class_<ir::module>(m, "module")
+      .def(py::init<std::string>())
+      .def("get_or_insert_function", &ir::module::get_or_insert_function)
+      .def("add_new_scope", &ir::module::add_new_scope)
+      .def("seal_block", &ir::module::seal_block)
+      .def("pop_scope", &ir::module::pop_scope)
+      .def("get_scope", &ir::module::get_scope)
+      .def("get_builder", &ir::module::get_builder);
+
+  py::class_<ir::builder>(m, "builder")
+      .def(py::init<ir::context &>())
+      // terminator instructions
+      .def("br", &ir::builder::create_br)
+      .def("cond_br", &ir::builder::create_cond_br)
+      .def("ret_void", &ir::builder::create_ret_void)
+      // Cast instructions
+      .def("cast", &ir::builder::create_cast)
+      .def("ptr_to_int", &ir::builder::create_ptr_to_int)
+      .def("si_to_fp", &ir::builder::create_si_to_fp)
+      .def("ui_to_fp", &ir::builder::create_ui_to_fp)
+      .def("fp_to_si", &ir::builder::create_fp_to_si)
+      .def("fp_to_ui", &ir::builder::create_fp_to_ui)
+      .def("fp_ext", &ir::builder::create_fp_ext)
+      .def("fp_trunc", &ir::builder::create_fp_trunc)
+      .def("int_cast", &ir::builder::create_int_cast)
+      .def("downcast", &ir::builder::create_downcast)
+      // Binary instructions
+      .def("insert_nuwnswb_binop", &ir::builder::create_insert_nuwnswb_binop)
+      .def("fmul", &ir::builder::create_fmul)
+      .def("fdiv", &ir::builder::create_fdiv)
+      .def("frem", &ir::builder::create_frem)
+      .def("fadd", &ir::builder::create_fadd)
+      .def("fsub", &ir::builder::create_fsub)
+      .def("mul", &ir::builder::create_mul)
+      .def("sdiv", &ir::builder::create_sdiv)
+      .def("udiv", &ir::builder::create_udiv)
+      .def("srem", &ir::builder::create_srem)
+      .def("urem", &ir::builder::create_urem)
+      .def("add", &ir::builder::create_add)
+      .def("sub", &ir::builder::create_sub)
+      .def("shl", &ir::builder::create_shl)
+      .def("lshr", &ir::builder::create_lshr)
+      .def("ashr", &ir::builder::create_ashr)
+      // GEP
+      .def("gep", &ir::builder::create_gep)
+      // Comparison (int)
+      .def("icmp", &ir::builder::create_icmp)
+      .def("icmpSLE", &ir::builder::create_icmpSLE)
+      .def("icmpSLT", &ir::builder::create_icmpSLT)
+      .def("icmpSGE", &ir::builder::create_icmpSGE)
+      .def("icmpSGT", &ir::builder::create_icmpSGT)
+      .def("icmpULE", &ir::builder::create_icmpULE)
+      .def("icmpULT", &ir::builder::create_icmpULT)
+      .def("icmpUGE", &ir::builder::create_icmpUGE)
+      .def("icmpUGT", &ir::builder::create_icmpUGT)
+      .def("icmpEQ", &ir::builder::create_icmpEQ)
+      .def("icmpNE", &ir::builder::create_icmpNE)
+      // Comparison (float)
+      .def("fcmp", &ir::builder::create_fcmp)
+      .def("fcmpOLT", &ir::builder::create_fcmpOLT)
+      .def("fcmpOGT", &ir::builder::create_fcmpOGT)
+      .def("fcmpOLE", &ir::builder::create_fcmpOLE)
+      .def("fcmpOGE", &ir::builder::create_fcmpOGE)
+      .def("fcmpOEQ", &ir::builder::create_fcmpOEQ)
+      .def("fcmpONE", &ir::builder::create_fcmpONE)
+      // Logical
+      .def("and", &ir::builder::create_and)
+      .def("xor", &ir::builder::create_xor)
+      .def("or", &ir::builder::create_or)
+      // Unary
+      //  .def("fneg", &ir::builder::create_fneg)
+      //  .def("neg", &ir::builder::create_neg)
+      //  .def("not", &ir::builder::create_not)
+      // Input/Output
+      .def("load", &ir::builder::create_load)
+      .def("store", &ir::builder::create_store)
+      .def("masked_load", &ir::builder::create_masked_load)
+      .def("masked_store", &ir::builder::create_masked_store)
+      // Tile instruction
+      .def("splat", &ir::builder::create_splat)
+      .def("reshape", &ir::builder::create_reshape)
+      .def("broadcast", &ir::builder::create_broadcast)
+      // Built-in instruction
+      .def("get_program_id", &ir::builder::create_get_program_id)
+      .def("get_num_program", &ir::builder::create_get_num_program)
+      .def("atomic_cas", &ir::builder::create_atomic_cas)
+      .def("atomic_exch", &ir::builder::create_atomic_exch)
+      .def("atomic_add", &ir::builder::create_atomic_add)
+      .def("exp", &ir::builder::create_exp)
+      .def("log", &ir::builder::create_log)
+      .def("dot", &ir::builder::create_dot)
+      .def("trans", &ir::builder::create_trans)
+      .def("sqrt", &ir::builder::create_sqrt)
+      .def("reduce", &ir::builder::create_reduce)
+      .def("select", &ir::builder::create_select);
 }
 
 void init_triton(py::module &m) {
